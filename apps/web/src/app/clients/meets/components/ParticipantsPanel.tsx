@@ -14,7 +14,7 @@ import {
   X,
   UserMinus,
 } from "lucide-react";
-import { useState } from "react";
+import { memo, useState } from "react";
 import type { Socket } from "socket.io-client";
 import type { RoomInfo } from "@/lib/sfu-types";
 import type { Participant } from "../types";
@@ -41,7 +41,7 @@ interface ParticipantsPanelProps {
   };
 }
 
-export default function ParticipantsPanel({
+function ParticipantsPanel({
   participants,
   currentUserId,
   onClose,
@@ -378,3 +378,5 @@ export default function ParticipantsPanel({
     </div>
   );
 }
+
+export default memo(ParticipantsPanel);

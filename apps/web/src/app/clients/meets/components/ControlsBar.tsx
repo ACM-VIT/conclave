@@ -12,7 +12,7 @@ import {
   Video,
   VideoOff,
 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import type { ReactionOption } from "../types";
 
 interface ControlsBarProps {
@@ -38,7 +38,7 @@ interface ControlsBarProps {
   pendingUsersCount?: number;
 }
 
-export default function ControlsBar({
+function ControlsBar({
   isMuted,
   isCameraOff,
   isScreenSharing,
@@ -268,3 +268,5 @@ export default function ControlsBar({
     </div>
   );
 }
+
+export default memo(ControlsBar);

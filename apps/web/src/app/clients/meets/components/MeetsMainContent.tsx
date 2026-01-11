@@ -2,6 +2,7 @@
 
 import { RefreshCw, UserX } from "lucide-react";
 import Image from "next/image";
+import { useCallback } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import type { Socket } from "socket.io-client";
 import type { RoomInfo } from "@/lib/sfu-types";
@@ -87,6 +88,7 @@ interface MeetsMainContentProps {
   getRoomsForRedirect?: ParticipantsPanelGetRooms;
   onUserChange: (user: { id: string; email: string; name: string } | null) => void;
   onIsAdminChange: (isAdmin: boolean) => void;
+  onPendingUserStale?: (userId: string) => void;
 }
 
 export default function MeetsMainContent({
@@ -150,7 +152,29 @@ export default function MeetsMainContent({
   getRoomsForRedirect,
   onUserChange,
   onIsAdminChange,
+  onPendingUserStale,
 }: MeetsMainContentProps) {
+  const handleToggleParticipants = useCallback(
+    () => setIsParticipantsOpen((prev) => !prev),
+    [setIsParticipantsOpen]
+  );
+
+  const handleCloseParticipants = useCallback(
+    () => setIsParticipantsOpen(false),
+    [setIsParticipantsOpen]
+  );
+
+  const handlePendingUserStale = useCallback(
+    (staleUserId: string) => {
+      setPendingUsers((prev) => {
+        const next = new Map(prev);
+        next.delete(staleUserId);
+        return next;
+      });
+      onPendingUserStale?.(staleUserId);
+    },
+    [onPendingUserStale, setPendingUsers]
+  );
   return (
     <div className="flex-1 flex flex-col p-4 overflow-hidden relative">
       {isJoined && reactions.length > 0 && (
@@ -247,7 +271,7 @@ export default function MeetsMainContent({
               isAdmin={isAdmin}
               isGhostMode={ghostEnabled}
               isParticipantsOpen={isParticipantsOpen}
-              onToggleParticipants={() => setIsParticipantsOpen((prev) => !prev)}
+              onToggleParticipants={handleToggleParticipants}
               pendingUsersCount={isAdmin ? pendingUsers.size : 0}
             />
           </div>
@@ -310,29 +334,23 @@ export default function MeetsMainContent({
       )}
 
       {isJoined && isParticipantsOpen && (
-        <ParticipantsPanel
-          participants={participants}
-          currentUserId={currentUserId}
-          onClose={() => setIsParticipantsOpen(false)}
-          socket={socket}
-          isAdmin={isAdmin}
-          pendingUsers={pendingUsers}
-          roomId={roomId}
-          localState={{
-            isMuted,
-            isCameraOff,
+          <ParticipantsPanel
+            participants={participants}
+            currentUserId={currentUserId}
+            onClose={handleCloseParticipants}
+            socket={socket}
+            isAdmin={isAdmin}
+            pendingUsers={pendingUsers}
+            roomId={roomId}
+            localState={{
+              isMuted,
+              isCameraOff,
             isHandRaised,
             isScreenSharing,
           }}
           getRooms={getRoomsForRedirect}
-          getDisplayName={resolveDisplayName}
-          onPendingUserStale={(staleUserId) => {
-            setPendingUsers((prev) => {
-              const next = new Map(prev);
-              next.delete(staleUserId);
-              return next;
-            });
-          }}
+              getDisplayName={resolveDisplayName}
+              onPendingUserStale={handlePendingUserStale}
         />
       )}
 

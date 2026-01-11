@@ -333,18 +333,17 @@ export default function MeetsClient({
     socket.cleanup();
   }, [playNotificationSound, socket.cleanup]);
 
-  // ============================================
-  // Render Helpers
-  // ============================================
-
-  if (!mounted) return null;
-
-  // Determine presentation mode
   const screenTrack = refs.screenProducerRef.current?.track;
   const localScreenShareStream = useMemo(() => {
     if (!screenTrack) return null;
     return new MediaStream([screenTrack]);
   }, [screenTrack]);
+
+  // ============================================
+  // Render Helpers
+  // ============================================
+
+  if (!mounted) return null;
 
   let presentationStream: MediaStream | null = null;
   let presenterName = "";

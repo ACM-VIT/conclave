@@ -1,7 +1,7 @@
 "use client";
 
 import { Ghost, Hand, MicOff } from "lucide-react";
-import { useEffect, useRef } from "react";
+import { memo, useEffect, useRef } from "react";
 import type { Participant } from "../types";
 import { getSpeakerHighlightClasses } from "../utils";
 import ParticipantVideo from "./ParticipantVideo";
@@ -24,7 +24,7 @@ interface GridLayoutProps {
   getDisplayName: (userId: string) => string;
 }
 
-export default function GridLayout({
+function GridLayout({
   localStream,
   isCameraOff,
   isMuted,
@@ -142,3 +142,5 @@ export default function GridLayout({
     </div>
   );
 }
+
+export default memo(GridLayout);

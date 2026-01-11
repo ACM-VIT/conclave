@@ -1,7 +1,7 @@
 "use client";
 
 import { Ghost, Hand, Info, MicOff } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import type { Participant } from "../types";
 import { getSpeakerHighlightClasses } from "../utils";
 
@@ -16,7 +16,7 @@ interface ParticipantVideoProps {
   onAdminClick?: (userId: string) => void;
 }
 
-export default function ParticipantVideo({
+function ParticipantVideo({
   participant,
   displayName,
   compact = false,
@@ -186,3 +186,5 @@ export default function ParticipantVideo({
     </div>
   );
 }
+
+export default memo(ParticipantVideo);

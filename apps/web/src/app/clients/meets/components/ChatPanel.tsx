@@ -1,7 +1,7 @@
 "use client";
 
 import { Send, X } from "lucide-react";
-import { useEffect, useRef } from "react";
+import { memo, useEffect, useRef } from "react";
 import type { ChatMessage } from "../types";
 import { formatDisplayName } from "../utils";
 
@@ -15,7 +15,7 @@ interface ChatPanelProps {
   isGhostMode?: boolean;
 }
 
-export default function ChatPanel({
+function ChatPanel({
   messages,
   chatInput,
   onInputChange,
@@ -156,3 +156,5 @@ export default function ChatPanel({
     </div>
   );
 }
+
+export default memo(ChatPanel);

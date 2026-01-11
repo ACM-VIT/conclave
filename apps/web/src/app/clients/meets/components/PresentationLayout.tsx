@@ -1,7 +1,7 @@
 "use client";
 
 import { Ghost, Hand } from "lucide-react";
-import { useEffect, useRef } from "react";
+import { memo, useEffect, useRef } from "react";
 import type { Participant } from "../types";
 import { getSpeakerHighlightClasses } from "../utils";
 import ParticipantVideo from "./ParticipantVideo";
@@ -22,7 +22,7 @@ interface PresentationLayoutProps {
   getDisplayName: (userId: string) => string;
 }
 
-export default function PresentationLayout({
+function PresentationLayout({
   presentationStream,
   presenterName,
   localStream,
@@ -133,3 +133,5 @@ export default function PresentationLayout({
     </div>
   );
 }
+
+export default memo(PresentationLayout);

@@ -2,7 +2,7 @@
 
 import { Copy } from "lucide-react";
 import Image from "next/image";
-import { useEffect, useState } from "react";
+import { memo, useEffect, useState } from "react";
 import VideoSettings from "./video-settings";
 
 interface MeetsHeaderProps {
@@ -27,7 +27,7 @@ interface MeetsHeaderProps {
   showShareLink?: boolean;
 }
 
-export default function MeetsHeader({
+function MeetsHeader({
   isJoined,
   isAdmin,
   roomId,
@@ -197,3 +197,5 @@ export default function MeetsHeader({
     </header>
   );
 }
+
+export default memo(MeetsHeader);

@@ -1,5 +1,6 @@
 "use client";
 
+import { memo } from "react";
 import { MessageSquare, X } from "lucide-react";
 import type { ChatMessage } from "../types";
 
@@ -8,7 +9,7 @@ interface ChatOverlayProps {
   onDismiss: (id: string) => void;
 }
 
-export default function ChatOverlay({ messages, onDismiss }: ChatOverlayProps) {
+function ChatOverlay({ messages, onDismiss }: ChatOverlayProps) {
   return (
     <div className="fixed bottom-24 left-4 z-40 flex flex-col gap-2 max-w-sm">
       {messages.slice(-3).map((message) => (
@@ -38,3 +39,5 @@ export default function ChatOverlay({ messages, onDismiss }: ChatOverlayProps) {
     </div>
   );
 }
+
+export default memo(ChatOverlay);

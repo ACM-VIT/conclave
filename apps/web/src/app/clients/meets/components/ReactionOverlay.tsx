@@ -1,5 +1,6 @@
 "use client";
 
+import { memo } from "react";
 import type { ReactionEvent } from "../types";
 
 interface ReactionOverlayProps {
@@ -7,7 +8,7 @@ interface ReactionOverlayProps {
   getDisplayName: (userId: string) => string;
 }
 
-export default function ReactionOverlay({
+function ReactionOverlay({
   reactions,
   getDisplayName,
 }: ReactionOverlayProps) {
@@ -43,3 +44,5 @@ export default function ReactionOverlay({
     </div>
   );
 }
+
+export default memo(ReactionOverlay);

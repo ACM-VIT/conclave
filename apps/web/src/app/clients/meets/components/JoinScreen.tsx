@@ -13,7 +13,7 @@ import {
   ArrowRight,
   RefreshCw,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { signIn, useSession } from "@/lib/auth-client";
 import type { RoomInfo } from "@/lib/sfu-types";
 import type { ConnectionState } from "../types";
@@ -47,7 +47,7 @@ interface JoinScreenProps {
   onIsAdminChange: (isAdmin: boolean) => void;
 }
 
-export default function JoinScreen({
+function JoinScreen({
   roomId,
   onRoomIdChange,
   onJoin,
@@ -627,3 +627,5 @@ export default function JoinScreen({
     </div>
   );
 }
+
+export default memo(JoinScreen);
