@@ -1,6 +1,6 @@
 "use client";
 
-import { Ghost, Hand, MicOff } from "lucide-react";
+import { Ghost, Hand, Info, MicOff } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Participant } from "../types";
 import { getSpeakerHighlightClasses } from "../utils";
@@ -11,6 +11,9 @@ interface ParticipantVideoProps {
   compact?: boolean;
   isActiveSpeaker?: boolean;
   audioOutputDeviceId?: string;
+  isAdmin?: boolean;
+  isSelected?: boolean;
+  onAdminClick?: (userId: string) => void;
 }
 
 export default function ParticipantVideo({
@@ -19,6 +22,9 @@ export default function ParticipantVideo({
   compact = false,
   isActiveSpeaker = false,
   audioOutputDeviceId,
+  isAdmin = false,
+  isSelected = false,
+  onAdminClick,
 }: ParticipantVideoProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -85,8 +91,15 @@ export default function ParticipantVideo({
 
   const showPlaceholder = !participant.videoStream || participant.isCameraOff;
 
+  const handleClick = () => {
+    if (isAdmin && onAdminClick) {
+      onAdminClick(participant.userId);
+    }
+  };
+
   return (
     <div
+      onClick={handleClick}
       className={`relative bg-[#111] border rounded-lg overflow-hidden ${
         compact ? "h-36 shrink-0" : "w-full h-full"
       } ${
@@ -97,7 +110,9 @@ export default function ParticipantVideo({
           : ""
       } transition-all duration-200 ${getSpeakerHighlightClasses(
         isActiveSpeaker
-      )} border-white/10`}
+      )} border-white/10 ${
+        isAdmin && onAdminClick ? "cursor-pointer hover:border-white/20" : ""
+      }`}
     >
       <video
         ref={setVideoRef}
@@ -159,6 +174,11 @@ export default function ParticipantVideo({
         <span style={{ fontWeight: 500 }}>{displayName}</span>
         {participant.isMuted && <MicOff className="w-3 h-3 text-red-500" />}
       </div>
+      {isAdmin && onAdminClick && (
+        <div className="absolute top-2 right-2 p-1.5 bg-black/60 rounded-full transition-opacity">
+          <Info className="w-4 h-4 text-white/70" />
+        </div>
+      )}
     </div>
   );
 }

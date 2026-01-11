@@ -10,3 +10,9 @@ Required props for `MeetsClient` in `src/app/clients/meets-client.tsx`:
 - `user`, `isAdmin`: current user metadata.
 
 For Next.js, avoid passing raw functions from a Server Component. Use a client wrapper like `src/app/clients/meets-client-page.tsx` to provide the functions.
+
+## Integration notes
+
+- Provide `getJoinInfo` in `src/app/clients/meets-client-page.tsx` (client wrapper) or wire your own wrapper in your app shell.
+- Optionally provide `getRooms` and `getRoomsForRedirect` to populate the admin room list and redirect modal.
+- Reaction assets are served from `public/reactions` and passed via `reactionAssets` (filenames only, without `/reactions/`).

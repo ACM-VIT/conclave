@@ -18,6 +18,9 @@ interface GridLayoutProps {
   activeSpeakerId: string | null;
   currentUserId: string;
   audioOutputDeviceId?: string;
+  isAdmin?: boolean;
+  selectedParticipantId?: string | null;
+  onParticipantClick?: (userId: string) => void;
   getDisplayName: (userId: string) => string;
 }
 
@@ -33,6 +36,9 @@ export default function GridLayout({
   activeSpeakerId,
   currentUserId,
   audioOutputDeviceId,
+  isAdmin = false,
+  selectedParticipantId,
+  onParticipantClick,
   getDisplayName,
 }: GridLayoutProps) {
   const localVideoRef = useRef<HTMLVideoElement>(null);
@@ -122,6 +128,9 @@ export default function GridLayout({
           displayName={getDisplayName(participant.userId)}
           isActiveSpeaker={activeSpeakerId === participant.userId}
           audioOutputDeviceId={audioOutputDeviceId}
+          isAdmin={isAdmin}
+          isSelected={selectedParticipantId === participant.userId}
+          onAdminClick={onParticipantClick}
         />
       ))}
     </div>
