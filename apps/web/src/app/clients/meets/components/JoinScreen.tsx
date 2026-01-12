@@ -102,9 +102,20 @@ function JoinScreen({
   };
   
   const { data: session, isPending: isSessionLoading } = useSession();
+  const lastAppliedSessionUserIdRef = useRef<string | null>(null);
   
   useEffect(() => {
-    if (session?.user && !user) {
+    if (!session?.user) {
+      lastAppliedSessionUserIdRef.current = null;
+      return;
+    }
+
+    if (user && !lastAppliedSessionUserIdRef.current) {
+      lastAppliedSessionUserIdRef.current = session.user.id;
+      return;
+    }
+
+    if (!user && lastAppliedSessionUserIdRef.current !== session.user.id) {
       const sessionUser = {
         id: session.user.id,
         email: session.user.email || "",
@@ -112,6 +123,7 @@ function JoinScreen({
       };
       onUserChange(sessionUser);
       setPhase("join");
+      lastAppliedSessionUserIdRef.current = session.user.id;
     }
   }, [session, user, onUserChange]);
 
@@ -446,7 +458,10 @@ function JoinScreen({
                 </button>
               </div>
 
-              <div className="absolute top-3 left-3 px-2.5 py-1 bg-black/50 backdrop-blur-sm rounded-full text-[11px] text-[#FEFCD9]/70" style={{ fontFamily: "'PolySans Mono', monospace" }}>
+              <div
+                className="absolute top-3 left-3 px-2.5 py-1 bg-black/50 backdrop-blur-sm rounded-full text-[11px] text-[#FEFCD9]/70"
+                style={{ fontFamily: "'PolySans Mono', monospace" }}
+              >
                 {userEmail}
               </div>
             </div>

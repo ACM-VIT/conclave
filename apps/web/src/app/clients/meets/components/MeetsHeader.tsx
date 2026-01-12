@@ -25,6 +25,9 @@ interface MeetsHeaderProps {
   onAudioInputDeviceChange: (deviceId: string) => void;
   onAudioOutputDeviceChange: (deviceId: string) => void;
   showShareLink?: boolean;
+  canSignOut: boolean;
+  isSigningOut: boolean;
+  onSignOut: () => void;
 }
 
 function MeetsHeader({
@@ -47,6 +50,9 @@ function MeetsHeader({
   onAudioInputDeviceChange,
   onAudioOutputDeviceChange,
   showShareLink,
+  canSignOut,
+  isSigningOut,
+  onSignOut,
 }: MeetsHeaderProps) {
   const [shareUrl, setShareUrl] = useState("");
   const [isCopied, setIsCopied] = useState(false);
@@ -178,19 +184,31 @@ function MeetsHeader({
         )}
 
         <div className="flex items-center gap-4">
-          <div className="flex flex-col items-end">
-            <span 
-              className="text-sm text-[#FEFCD9]"
-              style={{ fontFamily: "'PolySans Bulky Wide', sans-serif" }}
-            >
-              c0nclav3
-            </span>
-            <span 
-              className="text-[9px] uppercase tracking-[0.15em] text-[#FEFCD9]/40"
-              style={{ fontFamily: "'PolySans Mono', monospace" }}
-            >
-              by acm-vit
-            </span>
+          <div className="flex items-center gap-3">
+            {canSignOut && (
+              <button
+                onClick={onSignOut}
+                disabled={isSigningOut}
+                className="px-2.5 py-1 rounded-full bg-[#1a1a1a]/80 border border-[#FEFCD9]/10 text-[10px] uppercase tracking-widest text-[#FEFCD9]/70 hover:text-[#FEFCD9] hover:border-[#FEFCD9]/30 transition-colors disabled:opacity-50"
+                style={{ fontFamily: "'PolySans Mono', monospace" }}
+              >
+                {isSigningOut ? "Signing out..." : "Sign out"}
+              </button>
+            )}
+            <div className="flex flex-col items-end">
+              <span
+                className="text-sm text-[#FEFCD9]"
+                style={{ fontFamily: "'PolySans Bulky Wide', sans-serif" }}
+              >
+                c0nclav3
+              </span>
+              <span
+                className="text-[9px] uppercase tracking-[0.15em] text-[#FEFCD9]/40"
+                style={{ fontFamily: "'PolySans Mono', monospace" }}
+              >
+                by acm-vit
+              </span>
+            </div>
           </div>
         </div>
       </div>

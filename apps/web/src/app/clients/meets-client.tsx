@@ -3,6 +3,7 @@
 import { Roboto } from "next/font/google";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { RoomInfo } from "@/lib/sfu-types";
+import { signOut } from "@/lib/auth-client";
 import {
   MeetsErrorBanner,
   MeetsHeader,
@@ -78,6 +79,7 @@ export default function MeetsClient({
 }: MeetsClientProps) {
   const [currentUser, setCurrentUser] = useState(user);
   const [currentIsAdmin, setCurrentIsAdmin] = useState(isAdmin);
+  const [isSigningOut, setIsSigningOut] = useState(false);
 
   const refs = useMeetRefs();
   const {
@@ -144,6 +146,9 @@ export default function MeetsClient({
 
   const isAdminFlag = Boolean(currentIsAdmin);
   const ghostEnabled = allowGhostMode && isAdminFlag && isGhostMode;
+  const canSignOut = Boolean(
+    currentUser && !currentUser.id?.startsWith("guest-")
+  );
 
   const userEmail = currentUser?.name || currentUser?.email || currentUser?.id || "guest";
   const userKey = currentUser?.email || currentUser?.id || "guest";
@@ -333,6 +338,20 @@ export default function MeetsClient({
   const joinRoom = socket.joinRoom;
   const joinRoomById = socket.joinRoomById;
 
+  const handleSignOut = useCallback(async () => {
+    if (isSigningOut) return;
+    setIsSigningOut(true);
+    try {
+      await signOut();
+      setCurrentUser(undefined);
+      setCurrentIsAdmin(false);
+    } catch (error) {
+      console.error("Sign out error:", error);
+    } finally {
+      setIsSigningOut(false);
+    }
+  }, [isSigningOut]);
+
   const leaveRoom = useCallback(() => {
     playNotificationSound("leave");
     socket.cleanup();
@@ -488,6 +507,9 @@ export default function MeetsClient({
         onAudioInputDeviceChange={handleAudioInputDeviceChange}
         onAudioOutputDeviceChange={handleAudioOutputDeviceChange}
         showShareLink={enableRoomRouting || forceJoinOnly}
+        canSignOut={canSignOut}
+        isSigningOut={isSigningOut}
+        onSignOut={handleSignOut}
       />
       {meetError && (
         <MeetsErrorBanner

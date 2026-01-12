@@ -11,7 +11,7 @@ import {
   VideoOff,
 } from "lucide-react";
 import { memo, useEffect, useRef, useState } from "react";
-import { signIn, useSession } from "@/lib/auth-client";
+import { signIn, signOut, useSession } from "@/lib/auth-client";
 import type { ConnectionState } from "../../types";
 
 interface MobileJoinScreenProps {
@@ -81,6 +81,7 @@ function MobileJoinScreen({
   });
   const [guestName, setGuestName] = useState("");
   const [isSigningIn, setIsSigningIn] = useState(false);
+  const [isSigningOut, setIsSigningOut] = useState(false);
 
   const generateMeetingCode = () => {
     const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789";
@@ -92,9 +93,23 @@ function MobileJoinScreen({
   };
 
   const { data: session, isPending: isSessionLoading } = useSession();
+  const canSignOut = Boolean(
+    session?.user || (user?.id && !user?.id?.startsWith("guest-"))
+  );
+  const lastAppliedSessionUserIdRef = useRef<string | null>(null);
 
   useEffect(() => {
-    if (session?.user && !user) {
+    if (!session?.user) {
+      lastAppliedSessionUserIdRef.current = null;
+      return;
+    }
+
+    if (user && !lastAppliedSessionUserIdRef.current) {
+      lastAppliedSessionUserIdRef.current = session.user.id;
+      return;
+    }
+
+    if (!user && lastAppliedSessionUserIdRef.current !== session.user.id) {
       const sessionUser = {
         id: session.user.id,
         email: session.user.email || "",
@@ -102,6 +117,7 @@ function MobileJoinScreen({
       };
       onUserChange(sessionUser);
       setPhase("join");
+      lastAppliedSessionUserIdRef.current = session.user.id;
     }
   }, [session, user, onUserChange]);
 
@@ -217,6 +233,21 @@ function MobileJoinScreen({
       console.error("Sign in error:", error);
     } finally {
       setIsSigningIn(false);
+    }
+  };
+
+  const handleSignOut = async () => {
+    if (isSigningOut) return;
+    setIsSigningOut(true);
+    try {
+      await signOut();
+      onUserChange(null);
+      onIsAdminChange(false);
+      setPhase("welcome");
+    } catch (error) {
+      console.error("Sign out error:", error);
+    } finally {
+      setIsSigningOut(false);
     }
   };
 
@@ -426,11 +457,23 @@ function MobileJoinScreen({
         </div>
 
         {/* User email */}
-        <div 
-          className="absolute top-4 left-4 px-3 py-1.5 bg-black/50 backdrop-blur-sm rounded-full text-xs text-[#FEFCD9]/70 max-w-[60%] truncate"
-          style={{ fontFamily: "'PolySans Mono', monospace" }}
-        >
-          {userEmail}
+        <div className="absolute top-4 left-4 flex items-center gap-2 max-w-[70%]">
+          <div
+            className="min-w-0 px-3 py-1.5 bg-black/50 backdrop-blur-sm rounded-full text-xs text-[#FEFCD9]/70 truncate"
+            style={{ fontFamily: "'PolySans Mono', monospace" }}
+          >
+            {userEmail}
+          </div>
+          {canSignOut && (
+            <button
+              onClick={handleSignOut}
+              disabled={isSigningOut}
+              className="shrink-0 px-2.5 py-1 bg-black/50 backdrop-blur-sm rounded-full text-[9px] uppercase tracking-widest text-[#FEFCD9]/70 active:bg-black/70 disabled:opacity-50"
+              style={{ fontFamily: "'PolySans Mono', monospace" }}
+            >
+              {isSigningOut ? "Signing out..." : "Sign out"}
+            </button>
+          )}
         </div>
 
         {showPermissionHint && (
