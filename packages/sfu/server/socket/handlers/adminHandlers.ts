@@ -158,4 +158,30 @@ export const registerAdminHandlers = (
       cb({ error: "User not found in waiting room" });
     }
   });
+
+  socket.on("lockRoom", ({ locked }: { locked: boolean }, cb) => {
+    if (!context.currentRoom) return;
+
+    context.currentRoom.setLocked(locked);
+    Logger.info(
+      `Room ${context.currentRoom.id} ${locked ? "locked" : "unlocked"} by admin`,
+    );
+
+    socket.to(context.currentRoom.channelId).emit("roomLockChanged", {
+      locked,
+      roomId: context.currentRoom.id,
+    });
+
+    socket.emit("roomLockChanged", {
+      locked,
+      roomId: context.currentRoom.id,
+    });
+
+    cb({ success: true, locked });
+  });
+
+  socket.on("getRoomLockStatus", (cb) => {
+    if (!context.currentRoom) return;
+    cb({ locked: context.currentRoom.isLocked });
+  });
 };

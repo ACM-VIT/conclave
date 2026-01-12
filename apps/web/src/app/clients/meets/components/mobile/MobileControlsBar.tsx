@@ -2,6 +2,8 @@
 
 import {
   Hand,
+  Lock,
+  LockOpen,
   MessageSquare,
   Mic,
   MicOff,
@@ -34,9 +36,12 @@ interface MobileControlsBarProps {
   onSendReaction: (reaction: ReactionOption) => void;
   onLeave: () => void;
   isGhostMode?: boolean;
+  isAdmin?: boolean;
   isParticipantsOpen?: boolean;
   onToggleParticipants?: () => void;
   pendingUsersCount?: number;
+  isRoomLocked?: boolean;
+  onToggleLock?: () => void;
 }
 
 function MobileControlsBar({
@@ -56,9 +61,12 @@ function MobileControlsBar({
   onSendReaction,
   onLeave,
   isGhostMode = false,
+  isAdmin = false,
   isParticipantsOpen,
   onToggleParticipants,
   pendingUsersCount = 0,
+  isRoomLocked = false,
+  onToggleLock,
 }: MobileControlsBarProps) {
   const [isMoreMenuOpen, setIsMoreMenuOpen] = useState(false);
   const [isReactionMenuOpen, setIsReactionMenuOpen] = useState(false);
@@ -153,13 +161,12 @@ function MobileControlsBar({
                 setIsMoreMenuOpen(false);
               }}
               disabled={isGhostMode}
-              className={`w-full flex items-center gap-3 px-4 py-3 ${
-                isGhostMode
+              className={`w-full flex items-center gap-3 px-4 py-3 ${isGhostMode
                   ? "opacity-30"
                   : isHandRaised
-                  ? "text-amber-400"
-                  : "text-[#FEFCD9]"
-              } hover:bg-[#FEFCD9]/5 active:bg-[#FEFCD9]/10`}
+                    ? "text-amber-400"
+                    : "text-[#FEFCD9]"
+                } hover:bg-[#FEFCD9]/5 active:bg-[#FEFCD9]/10`}
             >
               <Hand className="w-5 h-5" />
               <span className="text-sm font-medium">{isHandRaised ? "Lower hand" : "Raise hand"}</span>
@@ -170,17 +177,35 @@ function MobileControlsBar({
                 setIsMoreMenuOpen(false);
               }}
               disabled={isGhostMode || !canStartScreenShare}
-              className={`w-full flex items-center gap-3 px-4 py-3 ${
-                isGhostMode || !canStartScreenShare
+              className={`w-full flex items-center gap-3 px-4 py-3 ${isGhostMode || !canStartScreenShare
                   ? "opacity-30"
                   : isScreenSharing
-                  ? "text-[#F95F4A]"
-                  : "text-[#FEFCD9]"
-              } hover:bg-[#FEFCD9]/5 active:bg-[#FEFCD9]/10`}
+                    ? "text-[#F95F4A]"
+                    : "text-[#FEFCD9]"
+                } hover:bg-[#FEFCD9]/5 active:bg-[#FEFCD9]/10`}
             >
               <Monitor className="w-5 h-5" />
               <span className="text-sm font-medium">{isScreenSharing ? "Stop sharing" : "Share screen"}</span>
             </button>
+            {isAdmin && (
+              <button
+                onClick={() => {
+                  onToggleLock?.();
+                  setIsMoreMenuOpen(false);
+                }}
+                className={`w-full flex items-center gap-3 px-4 py-3 ${isRoomLocked
+                    ? "text-amber-400"
+                    : "text-[#FEFCD9]"
+                  } hover:bg-[#FEFCD9]/5 active:bg-[#FEFCD9]/10`}
+              >
+                {isRoomLocked ? (
+                  <Lock className="w-5 h-5" />
+                ) : (
+                  <LockOpen className="w-5 h-5" />
+                )}
+                <span className="text-sm font-medium">{isRoomLocked ? "Unlock meeting" : "Lock meeting"}</span>
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -196,8 +221,8 @@ function MobileControlsBar({
               isGhostMode
                 ? ghostDisabledClass
                 : isMuted
-                ? mutedButtonClass
-                : defaultButtonClass
+                  ? mutedButtonClass
+                  : defaultButtonClass
             }
           >
             {isMuted ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
@@ -211,8 +236,8 @@ function MobileControlsBar({
               isGhostMode
                 ? ghostDisabledClass
                 : isCameraOff
-                ? mutedButtonClass
-                : defaultButtonClass
+                  ? mutedButtonClass
+                  : defaultButtonClass
             }
           >
             {isCameraOff ? <VideoOff className="w-5 h-5" /> : <Video className="w-5 h-5" />}

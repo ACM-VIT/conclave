@@ -113,6 +113,8 @@ export default function MeetsClient({
     setPendingUsers,
     isParticipantsOpen,
     setIsParticipantsOpen,
+    isRoomLocked,
+    setIsRoomLocked,
   } = useMeetState({ initialRoomId });
 
   useEffect(() => {
@@ -282,6 +284,7 @@ export default function MeetsClient({
     setIsCameraOff,
     setIsScreenSharing,
     setIsHandRaised,
+    setIsRoomLocked,
     setActiveScreenShareId,
     setVideoQuality,
     updateVideoQualityRef,
@@ -476,6 +479,8 @@ export default function MeetsClient({
           reactions={reactionEvents}
           onUserChange={(user) => setCurrentUser(user ?? undefined)}
           onIsAdminChange={setCurrentIsAdmin}
+          isRoomLocked={isRoomLocked}
+          onToggleLock={() => socket.toggleRoomLock(!isRoomLocked)}
         />
       </div>
     );
@@ -517,18 +522,18 @@ export default function MeetsClient({
           onDismiss={() => setMeetError(null)}
         />
       )}
-    <MeetsMainContent
-      isJoined={isJoined}
-      connectionState={connectionState}
-      isLoading={isLoading}
-      roomId={roomId}
-      setRoomId={setRoomId}
-      joinRoom={joinRoom}
-      joinRoomById={joinRoomById}
-      enableRoomRouting={enableRoomRouting}
-      forceJoinOnly={forceJoinOnly}
-      allowGhostMode={allowGhostMode}
-      user={currentUser}
+      <MeetsMainContent
+        isJoined={isJoined}
+        connectionState={connectionState}
+        isLoading={isLoading}
+        roomId={roomId}
+        setRoomId={setRoomId}
+        joinRoom={joinRoom}
+        joinRoomById={joinRoomById}
+        enableRoomRouting={enableRoomRouting}
+        forceJoinOnly={forceJoinOnly}
+        allowGhostMode={allowGhostMode}
+        user={currentUser}
         userEmail={userEmail}
         isAdmin={isAdminFlag}
         showPermissionHint={showPermissionHint}
@@ -578,6 +583,8 @@ export default function MeetsClient({
         getRoomsForRedirect={getRoomsForRedirect}
         onUserChange={(user) => setCurrentUser(user ?? undefined)}
         onIsAdminChange={setCurrentIsAdmin}
+        isRoomLocked={isRoomLocked}
+        onToggleLock={() => socket.toggleRoomLock(!isRoomLocked)}
       />
     </div>
   );

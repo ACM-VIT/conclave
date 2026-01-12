@@ -32,6 +32,7 @@ export function useMeetState({ initialRoomId }: UseMeetStateOptions) {
     new Map()
   );
   const [isParticipantsOpen, setIsParticipantsOpen] = useState(false);
+  const [isRoomLocked, setIsRoomLocked] = useState(false);
 
   return {
     connectionState,
@@ -64,5 +65,7 @@ export function useMeetState({ initialRoomId }: UseMeetStateOptions) {
     setPendingUsers,
     isParticipantsOpen,
     setIsParticipantsOpen,
+    isRoomLocked,
+    setIsRoomLocked,
   };
 }

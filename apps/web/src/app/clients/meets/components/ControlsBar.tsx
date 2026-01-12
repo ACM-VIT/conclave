@@ -2,6 +2,8 @@
 
 import {
   Hand,
+  Lock,
+  LockOpen,
   MessageSquare,
   Mic,
   MicOff,
@@ -36,6 +38,8 @@ interface ControlsBarProps {
   isParticipantsOpen?: boolean;
   onToggleParticipants?: () => void;
   pendingUsersCount?: number;
+  isRoomLocked?: boolean;
+  onToggleLock?: () => void;
 }
 
 function ControlsBar({
@@ -59,13 +63,15 @@ function ControlsBar({
   isParticipantsOpen,
   onToggleParticipants,
   pendingUsersCount = 0,
+  isRoomLocked = false,
+  onToggleLock,
 }: ControlsBarProps) {
   const canStartScreenShare = !activeScreenShareId || isScreenSharing;
   const [isReactionMenuOpen, setIsReactionMenuOpen] = useState(false);
   const reactionMenuRef = useRef<HTMLDivElement>(null);
   const lastReactionTimeRef = useRef<number>(0);
   const REACTION_COOLDOWN_MS = 150;
-  
+
   const baseButtonClass = "w-11 h-11 rounded-full flex items-center justify-center transition-all text-[#FEFCD9]/80 hover:text-[#FEFCD9] hover:bg-[#FEFCD9]/10";
   const defaultButtonClass = baseButtonClass;
   const activeButtonClass = `${baseButtonClass} !bg-[#F95F4A] !text-white`;
@@ -118,6 +124,23 @@ function ControlsBar({
         )}
       </button>
 
+      {isAdmin && (
+        <button
+          onClick={onToggleLock}
+          className={isRoomLocked
+            ? `${baseButtonClass} !bg-amber-400 !text-black`
+            : defaultButtonClass
+          }
+          title={isRoomLocked ? "Unlock meeting" : "Lock meeting"}
+        >
+          {isRoomLocked ? (
+            <Lock className="w-4 h-4" />
+          ) : (
+            <LockOpen className="w-4 h-4" />
+          )}
+        </button>
+      )}
+
       <button
         onClick={onToggleMute}
         disabled={isGhostMode}
@@ -125,8 +148,8 @@ function ControlsBar({
           isGhostMode
             ? ghostDisabledClass
             : isMuted
-            ? mutedButtonClass
-            : defaultButtonClass
+              ? mutedButtonClass
+              : defaultButtonClass
         }
         title={isGhostMode ? "Ghost mode: mic locked" : isMuted ? "Unmute" : "Mute"}
       >
@@ -140,15 +163,15 @@ function ControlsBar({
           isGhostMode
             ? ghostDisabledClass
             : isCameraOff
-            ? mutedButtonClass
-            : defaultButtonClass
+              ? mutedButtonClass
+              : defaultButtonClass
         }
         title={
           isGhostMode
             ? "Ghost mode: camera locked"
             : isCameraOff
-            ? "Turn on camera"
-            : "Turn off camera"
+              ? "Turn on camera"
+              : "Turn off camera"
         }
       >
         {isCameraOff ? (
@@ -165,17 +188,17 @@ function ControlsBar({
           isScreenSharing
             ? activeButtonClass
             : screenShareDisabled
-            ? ghostDisabledClass
-            : defaultButtonClass
+              ? ghostDisabledClass
+              : defaultButtonClass
         }
         title={
           isGhostMode
             ? "Ghost mode: screen share locked"
             : !canStartScreenShare
-            ? "Someone else is presenting"
-            : isScreenSharing
-            ? "Stop sharing"
-            : "Share screen"
+              ? "Someone else is presenting"
+              : isScreenSharing
+                ? "Stop sharing"
+                : "Share screen"
         }
       >
         <Monitor className="w-4 h-4" />
@@ -188,15 +211,15 @@ function ControlsBar({
           isGhostMode
             ? ghostDisabledClass
             : isHandRaised
-            ? `${baseButtonClass} !bg-amber-400 !text-black`
-            : defaultButtonClass
+              ? `${baseButtonClass} !bg-amber-400 !text-black`
+              : defaultButtonClass
         }
         title={
           isGhostMode
             ? "Ghost mode: hand raise locked"
             : isHandRaised
-            ? "Lower hand"
-            : "Raise hand"
+              ? "Lower hand"
+              : "Raise hand"
         }
       >
         <Hand className="w-4 h-4" />
@@ -210,8 +233,8 @@ function ControlsBar({
             isGhostMode
               ? ghostDisabledClass
               : isReactionMenuOpen
-              ? activeButtonClass
-              : defaultButtonClass
+                ? activeButtonClass
+                : defaultButtonClass
           }
           title={isGhostMode ? "Ghost mode: reactions locked" : "Reactions"}
         >

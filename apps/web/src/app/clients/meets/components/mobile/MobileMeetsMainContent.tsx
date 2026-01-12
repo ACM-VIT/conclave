@@ -82,6 +82,8 @@ interface MobileMeetsMainContentProps {
   reactions: ReactionEvent[];
   onUserChange: (user: { id: string; email: string; name: string } | null) => void;
   onIsAdminChange: (isAdmin: boolean) => void;
+  isRoomLocked: boolean;
+  onToggleLock: () => void;
 }
 
 function MobileMeetsMainContent({
@@ -141,6 +143,8 @@ function MobileMeetsMainContent({
   reactions,
   onUserChange,
   onIsAdminChange,
+  isRoomLocked,
+  onToggleLock,
 }: MobileMeetsMainContentProps) {
   const handleToggleParticipants = useCallback(
     () => setIsParticipantsOpen((prev) => !prev),
@@ -184,7 +188,7 @@ function MobileMeetsMainContent({
       <div className="safe-area-pt bg-[#0d0e0d]" />
 
       {/* Header with room info */}
-      <div 
+      <div
         className="flex items-center justify-between px-4 py-2 bg-[#0d0e0d]"
         style={{ fontFamily: "'PolySans Mono', monospace" }}
       >
@@ -290,6 +294,9 @@ function MobileMeetsMainContent({
         isParticipantsOpen={isParticipantsOpen}
         onToggleParticipants={handleToggleParticipants}
         pendingUsersCount={isAdmin ? pendingUsers.size : 0}
+        isAdmin={isAdmin}
+        isRoomLocked={isRoomLocked}
+        onToggleLock={onToggleLock}
       />
 
       {/* Full-screen chat panel */}

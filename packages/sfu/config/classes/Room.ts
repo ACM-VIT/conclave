@@ -34,6 +34,7 @@ export class Room {
   public handRaisedByUserId: Set<string> = new Set();
   public cleanupTimer: NodeJS.Timeout | null = null;
   public hostUserKey: string | null = null;
+  private _isLocked: boolean = false;
 
   constructor(options: RoomOptions) {
     this.id = options.id;
@@ -211,6 +212,14 @@ export class Room {
 
   isEmpty(): boolean {
     return this.clients.size === 0 && this.pendingClients.size === 0;
+  }
+
+  get isLocked(): boolean {
+    return this._isLocked;
+  }
+
+  setLocked(locked: boolean): void {
+    this._isLocked = locked;
   }
 
   getAdmins(): Admin[] {

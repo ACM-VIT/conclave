@@ -89,6 +89,8 @@ interface MeetsMainContentProps {
   onUserChange: (user: { id: string; email: string; name: string } | null) => void;
   onIsAdminChange: (isAdmin: boolean) => void;
   onPendingUserStale?: (userId: string) => void;
+  isRoomLocked: boolean;
+  onToggleLock: () => void;
 }
 
 export default function MeetsMainContent({
@@ -153,6 +155,8 @@ export default function MeetsMainContent({
   onUserChange,
   onIsAdminChange,
   onPendingUserStale,
+  isRoomLocked,
+  onToggleLock,
 }: MeetsMainContentProps) {
   const handleToggleParticipants = useCallback(
     () => setIsParticipantsOpen((prev) => !prev),
@@ -273,6 +277,8 @@ export default function MeetsMainContent({
               isParticipantsOpen={isParticipantsOpen}
               onToggleParticipants={handleToggleParticipants}
               pendingUsersCount={isAdmin ? pendingUsers.size : 0}
+              isRoomLocked={isRoomLocked}
+              onToggleLock={onToggleLock}
             />
           </div>
           <div className="flex items-center gap-4">
@@ -334,23 +340,23 @@ export default function MeetsMainContent({
       )}
 
       {isJoined && isParticipantsOpen && (
-          <ParticipantsPanel
-            participants={participants}
-            currentUserId={currentUserId}
-            onClose={handleCloseParticipants}
-            socket={socket}
-            isAdmin={isAdmin}
-            pendingUsers={pendingUsers}
-            roomId={roomId}
-            localState={{
-              isMuted,
-              isCameraOff,
+        <ParticipantsPanel
+          participants={participants}
+          currentUserId={currentUserId}
+          onClose={handleCloseParticipants}
+          socket={socket}
+          isAdmin={isAdmin}
+          pendingUsers={pendingUsers}
+          roomId={roomId}
+          localState={{
+            isMuted,
+            isCameraOff,
             isHandRaised,
             isScreenSharing,
           }}
           getRooms={getRoomsForRedirect}
-              getDisplayName={resolveDisplayName}
-              onPendingUserStale={handlePendingUserStale}
+          getDisplayName={resolveDisplayName}
+          onPendingUserStale={handlePendingUserStale}
         />
       )}
 

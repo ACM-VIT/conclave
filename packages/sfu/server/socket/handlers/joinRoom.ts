@@ -92,6 +92,11 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         const isGhost = Boolean(data?.ghost) && Boolean(isHost);
         context.currentUserKey = userKey;
 
+        if (!isHost && room.isLocked) {
+          callback({ error: "This meeting is locked by the host." });
+          return;
+        }
+
         if (clientPolicy.useWaitingRoom && !isHost && !room.isAllowed(userKey)) {
           Logger.info(`User ${userKey} added to waiting room ${roomId}`);
           room.addPendingClient(userKey, userId, socket, displayName);
@@ -231,8 +236,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         const existingProducers = context.currentRoom.getAllProducers(userId);
 
         Logger.debug(
-          `User ${userId} joined room ${roomId} as ${
-            isHost ? "Host" : "Client"
+          `User ${userId} joined room ${roomId} as ${isHost ? "Host" : "Client"
           }`,
         );
 
