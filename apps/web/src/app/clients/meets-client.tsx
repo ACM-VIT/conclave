@@ -9,6 +9,7 @@ import {
   MeetsMainContent,
   MeetsWaitingScreen,
 } from "./meets/components";
+import { MobileMeetsMainContent } from "./meets/components/mobile";
 import { useMeetAudioActivity } from "./meets/hooks/useMeetAudioActivity";
 import { useMeetChat } from "./meets/hooks/useMeetChat";
 import { useMeetDisplayName } from "./meets/hooks/useMeetDisplayName";
@@ -22,6 +23,7 @@ import { useMeetRefs } from "./meets/hooks/useMeetRefs";
 import { useMeetRooms } from "./meets/hooks/useMeetRooms";
 import { useMeetSocket } from "./meets/hooks/useMeetSocket";
 import { useMeetState } from "./meets/hooks/useMeetState";
+import { useIsMobile } from "./meets/hooks/useIsMobile";
 import type { ParticipantsPanelGetRooms } from "./meets/components/ParticipantsPanel";
 
 const roboto = Roboto({
@@ -319,6 +321,8 @@ export default function MeetsClient({
     abortControllerRef: refs.abortControllerRef,
   });
 
+  const isMobile = useIsMobile();
+
   useEffect(() => {
     if (isAdminFlag && connectionState !== "joined") {
       refreshRooms();
@@ -383,6 +387,81 @@ export default function MeetsClient({
     );
   }
 
+  if (isMobile) {
+    return (
+      <div
+        className={`flex flex-col h-dvh w-full bg-[#0d0e0d] text-white ${roboto.className}`}
+        style={{ fontFamily: "'Roboto', sans-serif" }}
+      >
+        {meetError && (
+          <MeetsErrorBanner
+            meetError={meetError}
+            onDismiss={() => setMeetError(null)}
+          />
+        )}
+        <MobileMeetsMainContent
+          isJoined={isJoined}
+          connectionState={connectionState}
+          isLoading={isLoading}
+          roomId={roomId}
+          setRoomId={setRoomId}
+          joinRoom={joinRoom}
+          joinRoomById={joinRoomById}
+          enableRoomRouting={enableRoomRouting}
+          forceJoinOnly={forceJoinOnly}
+          allowGhostMode={allowGhostMode}
+          user={currentUser}
+          userEmail={userEmail}
+          isAdmin={isAdminFlag}
+          showPermissionHint={showPermissionHint}
+          displayNameInput={displayNameInput}
+          setDisplayNameInput={setDisplayNameInput}
+          ghostEnabled={ghostEnabled}
+          setIsGhostMode={setIsGhostMode}
+          presentationStream={presentationStream}
+          presenterName={presenterName}
+          localStream={localStream}
+          isCameraOff={isCameraOff}
+          isMuted={isMuted}
+          isHandRaised={isHandRaised}
+          participants={participants}
+          isMirrorCamera={isMirrorCamera}
+          activeSpeakerId={activeSpeakerId}
+          currentUserId={userId}
+          audioOutputDeviceId={selectedAudioOutputDeviceId}
+          activeScreenShareId={activeScreenShareId}
+          isScreenSharing={isScreenSharing}
+          isChatOpen={isChatOpen}
+          unreadCount={unreadCount}
+          reactionOptions={reactionOptions}
+          toggleMute={toggleMute}
+          toggleCamera={toggleCamera}
+          toggleScreenShare={toggleScreenShare}
+          toggleChat={toggleChat}
+          toggleHandRaised={toggleHandRaised}
+          sendReaction={sendReaction}
+          leaveRoom={leaveRoom}
+          isParticipantsOpen={isParticipantsOpen}
+          setIsParticipantsOpen={setIsParticipantsOpen}
+          pendingUsers={pendingUsers}
+          chatMessages={chatMessages}
+          chatInput={chatInput}
+          setChatInput={setChatInput}
+          sendChat={sendChat}
+          chatOverlayMessages={chatOverlayMessages}
+          setChatOverlayMessages={setChatOverlayMessages}
+          socket={refs.socketRef.current}
+          setPendingUsers={setPendingUsers}
+          resolveDisplayName={resolveDisplayName}
+          reactions={reactionEvents}
+          onUserChange={(user) => setCurrentUser(user ?? undefined)}
+          onIsAdminChange={setCurrentIsAdmin}
+        />
+      </div>
+    );
+  }
+
+  // Desktop layout
   return (
     <div
       className={`flex flex-col h-full w-full bg-[#1a1a1a] text-white ${roboto.className}`}

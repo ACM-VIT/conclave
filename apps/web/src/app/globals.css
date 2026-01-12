@@ -1,7 +1,5 @@
 @import "tailwindcss";
 
-@tailwind utilities;
-
 /* ============================================================
    ACM-VIT CONCLAVE DESIGN SYSTEM
    Based on ACM-VIT Official Website
@@ -613,4 +611,41 @@ input:focus, textarea:focus, select:focus {
 
 ::-webkit-scrollbar-thumb:hover {
   background: rgba(254, 252, 217, 0.25);
+}
+
+/* ============================================================
+   MOBILE SAFE AREA UTILITIES
+   ============================================================ */
+.safe-area-pt {
+  padding-top: env(safe-area-inset-top, 0px);
+}
+
+.safe-area-pb {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+.safe-area-pl {
+  padding-left: env(safe-area-inset-left, 0px);
+}
+
+.safe-area-pr {
+  padding-right: env(safe-area-inset-right, 0px);
+}
+
+/* Hide scrollbar but allow scrolling */
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* Mobile touch feedback */
+@media (hover: none) and (pointer: coarse) {
+  .touch-feedback:active {
+    transform: scale(0.97);
+    opacity: 0.8;
+  }
 }
