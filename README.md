@@ -3,9 +3,9 @@
 ![Forktober GIF](https://raw.githubusercontent.com/ACM-VIT/.github/master/profile/acm_gif_banner.gif)
 
 <!-- Project Title -->
-<h2>PROJECT TITLE</h2>
+<h2>conclave</h2>
 
-<p>Short description about the project. One or two lines that explain what it does and who it’s for.</p>
+<p>Our in-house implementation for meetings</p>
 
 <p>
   <a href="https://acmvit.in/" target="_blank">
