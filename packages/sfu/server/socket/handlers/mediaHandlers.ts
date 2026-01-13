@@ -8,6 +8,7 @@ import type {
 } from "../../../types.js";
 import { Logger } from "../../../utilities/loggers.js";
 import type { ConnectionContext } from "../context.js";
+import { respond } from "./ack.js";
 
 export const registerMediaHandlers = (context: ConnectionContext): void => {
   const { socket, state } = context;
@@ -20,11 +21,11 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
     ) => {
       try {
         if (!context.currentRoom || !context.currentClient?.producerTransport) {
-          callback({ error: "Not ready to produce" });
+          respond(callback, { error: "Not ready to produce" });
           return;
         }
         if (context.currentClient.isGhost) {
-          callback({ error: "Ghost mode cannot produce media" });
+          respond(callback, { error: "Ghost mode cannot produce media" });
           return;
         }
 
@@ -35,7 +36,7 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
         if (type === "screen") {
           const existingScreenShare = context.currentRoom.screenShareProducerId;
           if (existingScreenShare) {
-            callback({ error: "Screen is already being shared" });
+            respond(callback, { error: "Screen is already being shared" });
             return;
           }
         }
@@ -90,10 +91,10 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
           `User ${context.currentClient.id} started producing ${kind} (${type}): ${producer.id}`,
         );
 
-        callback({ producerId: producer.id });
+        respond(callback, { producerId: producer.id });
       } catch (error) {
         Logger.error("Error producing:", error);
-        callback({ error: (error as Error).message });
+        respond(callback, { error: (error as Error).message });
       }
     },
   );
@@ -106,14 +107,14 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
     ) => {
       try {
         if (!context.currentRoom || !context.currentClient?.consumerTransport) {
-          callback({ error: "Not ready to consume" });
+          respond(callback, { error: "Not ready to consume" });
           return;
         }
 
         const { producerId, rtpCapabilities } = data;
 
         if (!context.currentRoom.canConsume(producerId, rtpCapabilities)) {
-          callback({ error: "Cannot consume this producer" });
+          respond(callback, { error: "Cannot consume this producer" });
           return;
         }
 
@@ -134,7 +135,7 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
           socket.emit("producerClosed", { producerId });
         });
 
-        callback({
+        respond(callback, {
           id: consumer.id,
           producerId: consumer.producerId,
           kind: consumer.kind,
@@ -142,7 +143,7 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
         });
       } catch (error) {
         Logger.error("Error consuming:", error);
-        callback({ error: (error as Error).message });
+        respond(callback, { error: (error as Error).message });
       }
     },
   );
@@ -156,16 +157,16 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
     ) => {
       try {
         if (!context.currentRoom || !context.currentClient) {
-          callback({ error: "Not in a room" });
+          respond(callback, { error: "Not in a room" });
           return;
         }
 
         const producers = context.currentRoom.getAllProducers(
           context.currentClient.id,
         );
-        callback({ producers });
+        respond(callback, { producers });
       } catch (error) {
-        callback({ error: (error as Error).message });
+        respond(callback, { error: (error as Error).message });
       }
     },
   );
@@ -178,21 +179,21 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
     ) => {
       try {
         if (!context.currentClient) {
-          callback({ error: "Not in a room" });
+          respond(callback, { error: "Not in a room" });
           return;
         }
 
         for (const consumer of context.currentClient.consumers.values()) {
           if (consumer.id === data.consumerId) {
             await consumer.resume();
-            callback({ success: true });
+            respond(callback, { success: true });
             return;
           }
         }
 
-        callback({ error: "Consumer not found" });
+        respond(callback, { error: "Consumer not found" });
       } catch (error) {
-        callback({ error: (error as Error).message });
+        respond(callback, { error: (error as Error).message });
       }
     },
   );
@@ -205,11 +206,11 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
     ) => {
       try {
         if (!context.currentClient || !context.currentRoom) {
-          callback({ error: "Not in a room" });
+          respond(callback, { error: "Not in a room" });
           return;
         }
         if (context.currentClient.isGhost) {
-          callback({ error: "Ghost mode cannot unmute" });
+          respond(callback, { error: "Ghost mode cannot unmute" });
           return;
         }
 
@@ -220,9 +221,9 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
           muted: data.paused,
         });
 
-        callback({ success: true });
+        respond(callback, { success: true });
       } catch (error) {
-        callback({ error: (error as Error).message });
+        respond(callback, { error: (error as Error).message });
       }
     },
   );
@@ -235,11 +236,11 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
     ) => {
       try {
         if (!context.currentClient || !context.currentRoom) {
-          callback({ error: "Not in a room" });
+          respond(callback, { error: "Not in a room" });
           return;
         }
         if (context.currentClient.isGhost) {
-          callback({ error: "Ghost mode cannot enable camera" });
+          respond(callback, { error: "Ghost mode cannot enable camera" });
           return;
         }
 
@@ -250,9 +251,9 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
           cameraOff: data.paused,
         });
 
-        callback({ success: true });
+        respond(callback, { success: true });
       } catch (error) {
-        callback({ error: (error as Error).message });
+        respond(callback, { error: (error as Error).message });
       }
     },
   );
@@ -265,7 +266,7 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
     ) => {
       try {
         if (!context.currentClient || !context.currentRoom) {
-          callback({ error: "Not in a room" });
+          respond(callback, { error: "Not in a room" });
           return;
         }
         const removed = context.currentClient.removeProducerById(
@@ -281,13 +282,13 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
             producerUserId: context.currentClient.id,
           });
 
-          callback({ success: true });
+          respond(callback, { success: true });
           return;
         }
 
-        callback({ error: "Producer not found" });
+        respond(callback, { error: "Producer not found" });
       } catch (error) {
-        callback({ error: (error as Error).message });
+        respond(callback, { error: (error as Error).message });
       }
     },
   );

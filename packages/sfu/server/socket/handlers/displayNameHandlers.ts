@@ -2,6 +2,7 @@ import { Admin } from "../../../config/classes/Admin.js";
 import { MAX_DISPLAY_NAME_LENGTH } from "../../constants.js";
 import { normalizeDisplayName } from "../../identity.js";
 import type { ConnectionContext } from "../context.js";
+import { respond } from "./ack.js";
 
 export const registerDisplayNameHandlers = (
   context: ConnectionContext,
@@ -20,28 +21,28 @@ export const registerDisplayNameHandlers = (
     ) => {
       try {
         if (!context.currentClient || !context.currentRoom) {
-          callback({ error: "Not in a room" });
+          respond(callback, { error: "Not in a room" });
           return;
         }
 
         if (!(context.currentClient instanceof Admin)) {
-          callback({ error: "Only admins can update display name" });
+          respond(callback, { error: "Only admins can update display name" });
           return;
         }
 
         const displayName = normalizeDisplayName(data.displayName);
         if (!displayName) {
-          callback({ error: "Display name cannot be empty" });
+          respond(callback, { error: "Display name cannot be empty" });
           return;
         }
 
         if (displayName.length > MAX_DISPLAY_NAME_LENGTH) {
-          callback({ error: "Display name too long" });
+          respond(callback, { error: "Display name too long" });
           return;
         }
 
         if (!context.currentUserKey) {
-          callback({ error: "Missing user identity" });
+          respond(callback, { error: "Missing user identity" });
           return;
         }
 
@@ -58,9 +59,9 @@ export const registerDisplayNameHandlers = (
           });
         }
 
-        callback({ success: true, displayName });
+        respond(callback, { success: true, displayName });
       } catch (error) {
-        callback({ error: (error as Error).message });
+        respond(callback, { error: (error as Error).message });
       }
     },
   );

@@ -1,5 +1,6 @@
 import type { HandRaisedNotification, SetHandRaisedData } from "../../../types.js";
 import type { ConnectionContext } from "../context.js";
+import { respond } from "./ack.js";
 
 export const registerHandHandlers = (context: ConnectionContext): void => {
   const { socket, io } = context;
@@ -12,11 +13,11 @@ export const registerHandHandlers = (context: ConnectionContext): void => {
     ) => {
       try {
         if (!context.currentClient || !context.currentRoom) {
-          callback({ error: "Not in a room" });
+          respond(callback, { error: "Not in a room" });
           return;
         }
         if (context.currentClient.isGhost) {
-          callback({ error: "Ghost mode cannot raise a hand" });
+          respond(callback, { error: "Ghost mode cannot raise a hand" });
           return;
         }
 
@@ -30,9 +31,9 @@ export const registerHandHandlers = (context: ConnectionContext): void => {
         };
 
         io.to(context.currentRoom.channelId).emit("handRaised", notification);
-        callback({ success: true });
+        respond(callback, { success: true });
       } catch (error) {
-        callback({ error: (error as Error).message });
+        respond(callback, { error: (error as Error).message });
       }
     },
   );

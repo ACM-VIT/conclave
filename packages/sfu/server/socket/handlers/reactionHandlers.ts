@@ -2,6 +2,7 @@ import type { ReactionNotification, SendReactionData } from "../../../types.js";
 import { allowedEmojiReactions } from "../../constants.js";
 import { isValidReactionAssetPath } from "../../reactions.js";
 import type { ConnectionContext } from "../context.js";
+import { respond } from "./ack.js";
 
 export const registerReactionHandlers = (
   context: ConnectionContext,
@@ -16,17 +17,17 @@ export const registerReactionHandlers = (
     ) => {
       try {
         if (!context.currentClient || !context.currentRoom) {
-          callback({ error: "Not in a room" });
+          respond(callback, { error: "Not in a room" });
           return;
         }
         if (context.currentClient.isGhost) {
-          callback({ error: "Ghost mode cannot send reactions" });
+          respond(callback, { error: "Ghost mode cannot send reactions" });
           return;
         }
 
         if (data.kind === "asset" && typeof data.value === "string") {
           if (!isValidReactionAssetPath(data.value)) {
-            callback({ error: "Invalid reaction asset" });
+            respond(callback, { error: "Invalid reaction asset" });
             return;
           }
 
@@ -39,7 +40,7 @@ export const registerReactionHandlers = (
           };
 
           socket.to(context.currentRoom.channelId).emit("reaction", reaction);
-          callback({ success: true });
+          respond(callback, { success: true });
           return;
         }
 
@@ -49,7 +50,7 @@ export const registerReactionHandlers = (
             : data.emoji?.trim();
 
         if (!emoji || !allowedEmojiReactions.has(emoji)) {
-          callback({ error: "Invalid reaction" });
+          respond(callback, { error: "Invalid reaction" });
           return;
         }
 
@@ -62,9 +63,9 @@ export const registerReactionHandlers = (
         };
 
         socket.to(context.currentRoom.channelId).emit("reaction", reaction);
-        callback({ success: true });
+        respond(callback, { success: true });
       } catch (error) {
-        callback({ error: (error as Error).message });
+        respond(callback, { error: (error as Error).message });
       }
     },
   );

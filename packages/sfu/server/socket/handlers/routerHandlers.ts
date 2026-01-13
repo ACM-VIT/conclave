@@ -1,4 +1,5 @@
 import type { ConnectionContext } from "../context.js";
+import { respond } from "./ack.js";
 
 export const registerRouterHandlers = (context: ConnectionContext): void => {
   const { socket } = context;
@@ -12,12 +13,12 @@ export const registerRouterHandlers = (context: ConnectionContext): void => {
     ) => {
       try {
         if (!context.currentRoom) {
-          callback({ error: "Not in a room" });
+          respond(callback, { error: "Not in a room" });
           return;
         }
-        callback({ rtpCapabilities: context.currentRoom.rtpCapabilities });
+        respond(callback, { rtpCapabilities: context.currentRoom.rtpCapabilities });
       } catch (error) {
-        callback({ error: (error as Error).message });
+        respond(callback, { error: (error as Error).message });
       }
     },
   );

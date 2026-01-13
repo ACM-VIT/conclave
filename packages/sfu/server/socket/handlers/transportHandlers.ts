@@ -1,6 +1,7 @@
 import type { CreateTransportResponse, ConnectTransportData } from "../../../types.js";
 import { Logger } from "../../../utilities/loggers.js";
 import type { ConnectionContext } from "../context.js";
+import { respond } from "./ack.js";
 
 export const registerTransportHandlers = (context: ConnectionContext): void => {
   const { socket } = context;
@@ -12,14 +13,14 @@ export const registerTransportHandlers = (context: ConnectionContext): void => {
     ) => {
       try {
         if (!context.currentRoom || !context.currentClient) {
-          callback({ error: "Not in a room" });
+          respond(callback, { error: "Not in a room" });
           return;
         }
 
         const transport = await context.currentRoom.createWebRtcTransport();
         context.currentClient.producerTransport = transport;
 
-        callback({
+        respond(callback, {
           id: transport.id,
           iceParameters: transport.iceParameters,
           iceCandidates: transport.iceCandidates as any,
@@ -27,7 +28,7 @@ export const registerTransportHandlers = (context: ConnectionContext): void => {
         });
       } catch (error) {
         Logger.error("Error creating producer transport:", error);
-        callback({ error: (error as Error).message });
+        respond(callback, { error: (error as Error).message });
       }
     },
   );
@@ -39,14 +40,14 @@ export const registerTransportHandlers = (context: ConnectionContext): void => {
     ) => {
       try {
         if (!context.currentRoom || !context.currentClient) {
-          callback({ error: "Not in a room" });
+          respond(callback, { error: "Not in a room" });
           return;
         }
 
         const transport = await context.currentRoom.createWebRtcTransport();
         context.currentClient.consumerTransport = transport;
 
-        callback({
+        respond(callback, {
           id: transport.id,
           iceParameters: transport.iceParameters,
           iceCandidates: transport.iceCandidates as any,
@@ -54,7 +55,7 @@ export const registerTransportHandlers = (context: ConnectionContext): void => {
         });
       } catch (error) {
         Logger.error("Error creating consumer transport:", error);
-        callback({ error: (error as Error).message });
+        respond(callback, { error: (error as Error).message });
       }
     },
   );
@@ -67,7 +68,7 @@ export const registerTransportHandlers = (context: ConnectionContext): void => {
     ) => {
       try {
         if (!context.currentClient?.producerTransport) {
-          callback({ error: "Producer transport not found" });
+          respond(callback, { error: "Producer transport not found" });
           return;
         }
 
@@ -75,10 +76,10 @@ export const registerTransportHandlers = (context: ConnectionContext): void => {
           dtlsParameters: data.dtlsParameters,
         });
 
-        callback({ success: true });
+        respond(callback, { success: true });
       } catch (error) {
         Logger.error("Error connecting producer transport:", error);
-        callback({ error: (error as Error).message });
+        respond(callback, { error: (error as Error).message });
       }
     },
   );
@@ -91,7 +92,7 @@ export const registerTransportHandlers = (context: ConnectionContext): void => {
     ) => {
       try {
         if (!context.currentClient?.consumerTransport) {
-          callback({ error: "Consumer transport not found" });
+          respond(callback, { error: "Consumer transport not found" });
           return;
         }
 
@@ -99,10 +100,10 @@ export const registerTransportHandlers = (context: ConnectionContext): void => {
           dtlsParameters: data.dtlsParameters,
         });
 
-        callback({ success: true });
+        respond(callback, { success: true });
       } catch (error) {
         Logger.error("Error connecting consumer transport:", error);
-        callback({ error: (error as Error).message });
+        respond(callback, { error: (error as Error).message });
       }
     },
   );

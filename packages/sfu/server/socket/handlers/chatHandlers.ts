@@ -1,6 +1,7 @@
 import type { ChatMessage, SendChatData } from "../../../types.js";
 import { Logger } from "../../../utilities/loggers.js";
 import type { ConnectionContext } from "../context.js";
+import { respond } from "./ack.js";
 
 export const registerChatHandlers = (context: ConnectionContext): void => {
   const { socket } = context;
@@ -17,22 +18,22 @@ export const registerChatHandlers = (context: ConnectionContext): void => {
     ) => {
       try {
         if (!context.currentClient || !context.currentRoom) {
-          callback({ error: "Not in a room" });
+          respond(callback, { error: "Not in a room" });
           return;
         }
         if (context.currentClient.isGhost) {
-          callback({ error: "Ghost mode cannot send chat messages" });
+          respond(callback, { error: "Ghost mode cannot send chat messages" });
           return;
         }
 
         const content = data.content?.trim();
         if (!content || content.length === 0) {
-          callback({ error: "Message cannot be empty" });
+          respond(callback, { error: "Message cannot be empty" });
           return;
         }
 
         if (content.length > 1000) {
-          callback({ error: "Message too long (max 1000 characters)" });
+          respond(callback, { error: "Message too long (max 1000 characters)" });
           return;
         }
 
@@ -57,9 +58,9 @@ export const registerChatHandlers = (context: ConnectionContext): void => {
           )}`,
         );
 
-        callback({ success: true, message });
+        respond(callback, { success: true, message });
       } catch (error) {
-        callback({ error: (error as Error).message });
+        respond(callback, { error: (error as Error).message });
       }
     },
   );

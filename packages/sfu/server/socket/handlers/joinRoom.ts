@@ -13,6 +13,7 @@ import { emitUserJoined, emitUserLeft } from "../../notifications.js";
 import { cleanupRoom, getOrCreateRoom, getRoomChannelId } from "../../rooms.js";
 import type { ConnectionContext } from "../context.js";
 import { registerAdminHandlers } from "./adminHandlers.js";
+import { respond } from "./ack.js";
 
 export const registerJoinRoomHandler = (context: ConnectionContext): void => {
   const { socket, io, state } = context;
@@ -36,16 +37,16 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           displayNameCandidate &&
           displayNameCandidate.length > MAX_DISPLAY_NAME_LENGTH
         ) {
-          callback({ error: "Display name too long" });
+          respond(callback, { error: "Display name too long" });
           return;
         }
         const identity = buildUserIdentity(user, sessionId, socket.id);
         if (!identity) {
-          callback({ error: "Authentication error: Invalid token payload" });
+          respond(callback, { error: "Authentication error: Invalid token payload" });
           return;
         }
         if (user?.sessionId && sessionId && user.sessionId !== sessionId) {
-          callback({ error: "Session mismatch" });
+          respond(callback, { error: "Session mismatch" });
           return;
         }
         const { userKey, userId } = identity;
@@ -55,13 +56,13 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
 
         if (!room) {
           if (state.isDraining) {
-            callback({
+            respond(callback, {
               error: "Meeting server is draining. Try again shortly.",
             });
             return;
           }
           if (!hostRequested && !clientPolicy.allowNonHostRoomCreation) {
-            callback({ error: "No room found." });
+            respond(callback, { error: "No room found." });
             return;
           }
           room = await getOrCreateRoom(state, clientId, roomId);
@@ -114,7 +115,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             });
           }
 
-          callback({
+          respond(callback, {
             rtpCapabilities: room.rtpCapabilities,
             existingProducers: [],
             status: "waiting",
@@ -145,7 +146,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             });
           }
 
-          callback({
+          respond(callback, {
             rtpCapabilities: room.rtpCapabilities,
             existingProducers: [],
             status: "waiting",
@@ -269,14 +270,14 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           registerAdminHandlers(context, { roomId });
         }
 
-        callback({
+        respond(callback, {
           rtpCapabilities: context.currentRoom.rtpCapabilities,
           existingProducers,
           status: "joined",
         });
       } catch (error) {
         Logger.error("Error joining room:", error);
-        callback({ error: (error as Error).message });
+        respond(callback, { error: (error as Error).message });
       }
     },
   );

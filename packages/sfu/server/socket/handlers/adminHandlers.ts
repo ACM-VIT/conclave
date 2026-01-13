@@ -2,17 +2,13 @@ import { Admin } from "../../../config/classes/Admin.js";
 import type { RedirectData } from "../../../types.js";
 import { Logger } from "../../../utilities/loggers.js";
 import type { ConnectionContext } from "../context.js";
+import { respond } from "./ack.js";
 
 export const registerAdminHandlers = (
   context: ConnectionContext,
   options: { roomId: string },
 ): void => {
   const { socket, state } = context;
-  const respond = (cb: unknown, payload: Record<string, unknown>) => {
-    if (typeof cb === "function") {
-      cb(payload);
-    }
-  };
 
   socket.on(
     "kickUser",
