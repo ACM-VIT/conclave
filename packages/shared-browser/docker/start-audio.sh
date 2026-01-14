@@ -8,8 +8,16 @@ fi
 
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp/pulse}"
 mkdir -p "${XDG_RUNTIME_DIR}"
+chmod 700 "${XDG_RUNTIME_DIR}"
 
-pulseaudio -D --exit-idle-time=-1 --disallow-exit --log-target=stderr
+export PULSE_RUNTIME_PATH="${XDG_RUNTIME_DIR}"
+export PULSE_STATE_PATH="${XDG_RUNTIME_DIR}/state"
+export PULSE_SERVER="unix:${XDG_RUNTIME_DIR}/native"
+
+pulseaudio -n --daemonize=yes --exit-idle-time=-1 --disallow-exit --log-target=stderr \
+  --load="module-native-protocol-unix socket=${XDG_RUNTIME_DIR}/native auth-anonymous=1" \
+  --load="module-null-sink sink_name=browser_sink sink_properties=device.description=BrowserSink" \
+  --load="module-always-sink"
 
 for i in {1..20}; do
   if pactl info >/dev/null 2>&1; then
@@ -18,7 +26,6 @@ for i in {1..20}; do
   sleep 0.2
 done
 
-pactl load-module module-null-sink sink_name=browser_sink sink_properties=device.description=BrowserSink >/dev/null || true
 pactl set-default-sink browser_sink >/dev/null || true
 
 BITRATE="${AUDIO_BITRATE:-128k}"

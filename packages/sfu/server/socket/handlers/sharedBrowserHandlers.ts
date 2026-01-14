@@ -52,8 +52,8 @@ const createBrowserAudioProducer = async (
     context: ConnectionContext,
     channelId: string
 ): Promise<{
-    targetIp: string;
-    targetPort: number;
+    ip: string;
+    port: number;
     payloadType: number;
     ssrc: number;
 } | null> => {
@@ -62,11 +62,11 @@ const createBrowserAudioProducer = async (
     const existing = roomBrowserAudio.get(channelId);
     if (existing) {
         return {
-            targetIp:
+            ip:
                 config.plainTransport.announcedIp ||
                 config.webRtcTransport.listenIps[0]?.announcedIp ||
                 existing.transport.tuple.localIp,
-            targetPort: existing.transport.tuple.localPort,
+            port: existing.transport.tuple.localPort,
             payloadType: existing.payloadType,
             ssrc: existing.ssrc,
         };
@@ -118,8 +118,8 @@ const createBrowserAudioProducer = async (
         transport.tuple.localIp;
 
     return {
-        targetIp,
-        targetPort: transport.tuple.localPort,
+        ip: targetIp,
+        port: transport.tuple.localPort,
         payloadType: BROWSER_AUDIO_PAYLOAD_TYPE,
         ssrc,
     };

@@ -9,6 +9,7 @@ start_chromium() {
         --disable-dev-shm-usage \
         --no-first-run \
         --autoplay-policy=no-user-gesture-required \
+        --enable-features=UsePulseAudio \
         --disable-background-networking \
         --disable-sync \
         --disable-translate \
@@ -16,7 +17,6 @@ start_chromium() {
         --disable-default-apps \
         --disable-features=TranslateUI \
         --no-zygote \
-        --single-process \
         --window-size=1280,720 \
         "${START_URL:-about:blank}"
 }

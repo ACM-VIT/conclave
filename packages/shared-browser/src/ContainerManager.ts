@@ -122,7 +122,14 @@ export class ContainerManager {
             ];
 
             if (audioTarget?.ip && audioTarget?.port) {
-                containerEnv.push(`AUDIO_TARGET_IP=${audioTarget.ip}`);
+                const isLoopback =
+                    audioTarget.ip === "127.0.0.1" ||
+                    audioTarget.ip === "0.0.0.0" ||
+                    audioTarget.ip === "::1" ||
+                    audioTarget.ip === "localhost";
+                const overrideHost = process.env.BROWSER_AUDIO_TARGET_HOST;
+                const targetIp = overrideHost || (isLoopback ? "host.docker.internal" : audioTarget.ip);
+                containerEnv.push(`AUDIO_TARGET_IP=${targetIp}`);
                 containerEnv.push(`AUDIO_TARGET_PORT=${audioTarget.port}`);
                 containerEnv.push(`AUDIO_PAYLOAD_TYPE=${audioTarget.payloadType}`);
                 containerEnv.push(`AUDIO_SSRC=${audioTarget.ssrc}`);
@@ -137,6 +144,7 @@ export class ContainerManager {
                         "6080/tcp": [{ HostPort: port.toString() }],
                     },
                     AutoRemove: true,
+                    ExtraHosts: ["host.docker.internal:host-gateway"],
                 },
                 ExposedPorts: {
                     "6080/tcp": {},
