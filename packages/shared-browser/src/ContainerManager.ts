@@ -118,7 +118,7 @@ export class ContainerManager {
             const containerName = `conclave-browser-${this.sanitizeContainerName(roomId)}`;
             const containerEnv = [
                 `START_URL=${url}`,
-                "RESOLUTION=1024x576x24",
+                "RESOLUTION=1280x720x24",
             ];
 
             if (audioTarget?.ip && audioTarget?.port) {
@@ -161,9 +161,6 @@ export class ContainerManager {
                     },
                     AutoRemove: true,
                     ExtraHosts: ["host.docker.internal:host-gateway"],
-                    NanoCpus: 1_000_000_000,
-                    Memory: 512 * 1024 * 1024,
-                    MemorySwap: 768 * 1024 * 1024,
                 },
                 ExposedPorts: {
                     "6080/tcp": {},
