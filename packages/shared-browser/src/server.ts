@@ -28,7 +28,7 @@ app.get("/sessions/:roomId", (req, res) => {
 });
 
 app.post("/launch", async (req, res) => {
-    const { roomId, url, controllerUserId, audioTarget } = req.body;
+    const { roomId, url, controllerUserId, audioTarget, videoTarget } = req.body;
 
     if (!roomId || !url) {
         res.status(400).json({ error: "roomId and url are required" });
@@ -40,6 +40,7 @@ app.post("/launch", async (req, res) => {
         url,
         controllerUserId,
         audioTarget,
+        videoTarget,
     });
 
     if (result.success) {
@@ -50,14 +51,14 @@ app.post("/launch", async (req, res) => {
 });
 
 app.post("/navigate", async (req, res) => {
-    const { roomId, url, audioTarget } = req.body;
+    const { roomId, url, audioTarget, videoTarget } = req.body;
 
     if (!roomId || !url) {
         res.status(400).json({ error: "roomId and url are required" });
         return;
     }
 
-    const result = await containerManager.navigateTo({ roomId, url, audioTarget });
+    const result = await containerManager.navigateTo({ roomId, url, audioTarget, videoTarget });
 
     if (result.success) {
         res.json(result);

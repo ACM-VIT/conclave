@@ -6,6 +6,7 @@ export interface BrowserSession {
     createdAt: Date;
     controllerUserId?: string;
     audioTarget?: AudioTarget;
+    videoTarget?: VideoTarget;
 }
 
 export interface AudioTarget {
@@ -15,11 +16,14 @@ export interface AudioTarget {
     ssrc: number;
 }
 
+export type VideoTarget = AudioTarget;
+
 export interface LaunchBrowserOptions {
     roomId: string;
     url: string;
     controllerUserId?: string;
     audioTarget?: AudioTarget | null;
+    videoTarget?: VideoTarget | null;
 }
 
 export interface LaunchBrowserResult {
@@ -32,6 +36,7 @@ export interface NavigateOptions {
     roomId: string;
     url: string;
     audioTarget?: AudioTarget | null;
+    videoTarget?: VideoTarget | null;
 }
 
 export interface BrowserServiceConfig {

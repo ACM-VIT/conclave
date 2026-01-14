@@ -255,10 +255,19 @@ export function normalizeBrowserUrl(
   return { url: parsed.toString() };
 }
 
-const SYSTEM_USER_PREFIX = "shared-browser:";
+const SYSTEM_USER_AUDIO_PREFIX = "shared-browser:";
+const SYSTEM_USER_VIDEO_PREFIX = "shared-browser-video:";
 
 export function isSystemUserId(userId: string): boolean {
-  return userId.startsWith(SYSTEM_USER_PREFIX);
+  return userId.startsWith(SYSTEM_USER_AUDIO_PREFIX) || userId.startsWith(SYSTEM_USER_VIDEO_PREFIX);
+}
+
+export function isBrowserVideoUserId(userId: string): boolean {
+  return userId.startsWith(SYSTEM_USER_VIDEO_PREFIX);
+}
+
+export function isBrowserAudioUserId(userId: string): boolean {
+  return userId.startsWith(SYSTEM_USER_AUDIO_PREFIX);
 }
 
 export function resolveNoVncUrl(noVncUrl: string): string {

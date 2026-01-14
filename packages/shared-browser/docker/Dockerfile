@@ -5,6 +5,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y \
     xvfb \
     x11vnc \
+    x11-xserver-utils \
     chromium \
     novnc \
     websockify \
@@ -34,6 +35,9 @@ RUN chmod +x /opt/scripts/run_chromium.sh
 
 COPY start-audio.sh /opt/scripts/start-audio.sh
 RUN chmod +x /opt/scripts/start-audio.sh
+
+COPY start-video.sh /opt/scripts/start-video.sh
+RUN chmod +x /opt/scripts/start-video.sh
 
 COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 

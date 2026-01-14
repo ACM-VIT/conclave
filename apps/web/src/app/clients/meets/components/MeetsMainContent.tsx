@@ -27,7 +27,7 @@ import type {
   ReactionEvent,
   ReactionOption,
 } from "../types";
-import { isSystemUserId } from "../utils";
+import { isBrowserVideoUserId, isSystemUserId } from "../utils";
 
 interface MeetsMainContentProps {
   isJoined: boolean;
@@ -232,6 +232,13 @@ export default function MeetsMainContent({
       ),
     [participants]
   );
+  const browserVideoStream = useMemo(() => {
+    const videoParticipant = Array.from(participants.values()).find(
+      (participant) =>
+        isBrowserVideoUserId(participant.userId) && participant.videoStream
+    );
+    return videoParticipant?.videoStream ?? null;
+  }, [participants]);
   return (
     <div className="flex-1 flex flex-col p-4 overflow-hidden relative">
       {isJoined && <ConnectionBanner state={connectionState} />}
@@ -294,6 +301,7 @@ export default function MeetsMainContent({
           isAdmin={isAdmin}
           isBrowserLaunching={isBrowserLaunching}
           onNavigateBrowser={onNavigateBrowser}
+          browserVideoStream={browserVideoStream}
         />
       ) : presentationStream ? (
         <PresentationLayout

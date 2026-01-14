@@ -97,7 +97,7 @@ export class ContainerManager {
     }
 
     async launchBrowser(options: LaunchBrowserOptions): Promise<LaunchBrowserResult> {
-        const { roomId, url, controllerUserId, audioTarget } = options;
+        const { roomId, url, controllerUserId, audioTarget, videoTarget } = options;
 
         if (this.sessions.has(roomId)) {
             return {
@@ -135,6 +135,20 @@ export class ContainerManager {
                 containerEnv.push(`AUDIO_SSRC=${audioTarget.ssrc}`);
             }
 
+            if (videoTarget?.ip && videoTarget?.port) {
+                const isLoopback =
+                    videoTarget.ip === "127.0.0.1" ||
+                    videoTarget.ip === "0.0.0.0" ||
+                    videoTarget.ip === "::1" ||
+                    videoTarget.ip === "localhost";
+                const overrideHost = process.env.BROWSER_VIDEO_TARGET_HOST || process.env.BROWSER_AUDIO_TARGET_HOST;
+                const targetIp = overrideHost || (isLoopback ? "host.docker.internal" : videoTarget.ip);
+                containerEnv.push(`VIDEO_TARGET_IP=${targetIp}`);
+                containerEnv.push(`VIDEO_TARGET_PORT=${videoTarget.port}`);
+                containerEnv.push(`VIDEO_PAYLOAD_TYPE=${videoTarget.payloadType}`);
+                containerEnv.push(`VIDEO_SSRC=${videoTarget.ssrc}`);
+            }
+
             const container = await this.docker.createContainer({
                 Image: this.config.dockerImageName,
                 name: containerName,
@@ -163,6 +177,7 @@ export class ContainerManager {
                 createdAt: new Date(),
                 controllerUserId,
                 audioTarget: audioTarget ?? undefined,
+                videoTarget: videoTarget ?? undefined,
             };
 
             this.sessions.set(roomId, session);
@@ -185,7 +200,7 @@ export class ContainerManager {
     }
 
     async navigateTo(options: NavigateOptions): Promise<LaunchBrowserResult> {
-        const { roomId, url, audioTarget } = options;
+        const { roomId, url, audioTarget, videoTarget } = options;
         const session = this.sessions.get(roomId);
 
         if (!session) {
@@ -198,7 +213,7 @@ export class ContainerManager {
         const controllerUserId = session.controllerUserId;
 
         await this.closeBrowser(roomId);
-        return this.launchBrowser({ roomId, url, controllerUserId, audioTarget });
+        return this.launchBrowser({ roomId, url, controllerUserId, audioTarget, videoTarget });
     }
 
     async closeBrowser(roomId: string): Promise<{ success: boolean; error?: string }> {

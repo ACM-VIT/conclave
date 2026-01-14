@@ -17,6 +17,10 @@ const BROWSER_AUDIO_PAYLOAD_TYPE = 111;
 const BROWSER_AUDIO_CLOCK_RATE = 48000;
 const BROWSER_AUDIO_CHANNELS = 2;
 
+const BROWSER_VIDEO_USER_ID_PREFIX = "shared-browser-video";
+const BROWSER_VIDEO_PAYLOAD_TYPE = 96;
+const BROWSER_VIDEO_CLOCK_RATE = 90000;
+
 interface RoomBrowserState {
     active: boolean;
     url?: string;
@@ -26,6 +30,17 @@ interface RoomBrowserState {
 
 const roomBrowserStates: Map<string, RoomBrowserState> = new Map();
 const roomBrowserAudio: Map<
+    string,
+    {
+        transport: PlainTransport;
+        producer: Producer;
+        userId: string;
+        payloadType: number;
+        ssrc: number;
+    }
+> = new Map();
+
+const roomBrowserVideo: Map<
     string,
     {
         transport: PlainTransport;
@@ -156,6 +171,113 @@ const cleanupBrowserAudio = async (
     roomBrowserAudio.delete(channelId);
 };
 
+const createBrowserVideoProducer = async (
+    context: ConnectionContext,
+    channelId: string
+): Promise<{
+    ip: string;
+    port: number;
+    payloadType: number;
+    ssrc: number;
+} | null> => {
+    if (!context.currentRoom) return null;
+
+    const existing = roomBrowserVideo.get(channelId);
+    if (existing) {
+        return {
+            ip:
+                config.plainTransport.announcedIp ||
+                config.webRtcTransport.listenIps[0]?.announcedIp ||
+                existing.transport.tuple.localIp,
+            port: existing.transport.tuple.localPort,
+            payloadType: existing.payloadType,
+            ssrc: existing.ssrc,
+        };
+    }
+
+    const transport = await context.currentRoom.createPlainTransport();
+    const ssrc = Math.floor(Math.random() * 0xffffffff);
+    const rtpParameters: RtpParameters = {
+        codecs: [
+            {
+                mimeType: "video/VP8",
+                payloadType: BROWSER_VIDEO_PAYLOAD_TYPE,
+                clockRate: BROWSER_VIDEO_CLOCK_RATE,
+            },
+        ],
+        encodings: [{ ssrc }],
+        rtcp: { cname: `browser-video-${channelId}` },
+    };
+
+    const producer = await transport.produce({
+        kind: "video",
+        rtpParameters,
+        appData: { type: "screen" },
+    });
+
+    const userId = `${BROWSER_VIDEO_USER_ID_PREFIX}:${channelId}`;
+    context.currentRoom.addSystemProducer(producer, userId, "screen");
+
+    roomBrowserVideo.set(channelId, {
+        transport,
+        producer,
+        userId,
+        payloadType: BROWSER_VIDEO_PAYLOAD_TYPE,
+        ssrc,
+    });
+
+    context.io.to(channelId).emit("newProducer", {
+        producerId: producer.id,
+        producerUserId: userId,
+        kind: "video",
+        type: "screen",
+        paused: producer.paused,
+    });
+
+    const targetIp =
+        config.plainTransport.announcedIp ||
+        config.webRtcTransport.listenIps[0]?.announcedIp ||
+        transport.tuple.localIp;
+
+    return {
+        ip: targetIp,
+        port: transport.tuple.localPort,
+        payloadType: BROWSER_VIDEO_PAYLOAD_TYPE,
+        ssrc,
+    };
+};
+
+const cleanupBrowserVideo = async (
+    channelId: string,
+    context?: ConnectionContext
+): Promise<void> => {
+    const video = roomBrowserVideo.get(channelId);
+    if (!video) return;
+
+    try {
+        video.producer.close();
+    } catch {
+    }
+
+    try {
+        video.transport.close();
+    } catch {
+    }
+
+    if (context?.currentRoom) {
+        context.currentRoom.removeSystemProducerById(video.producer.id);
+    }
+
+    if (context?.io) {
+        context.io.to(channelId).emit("producerClosed", {
+            producerId: video.producer.id,
+            producerUserId: video.userId,
+        });
+    }
+
+    roomBrowserVideo.delete(channelId);
+};
+
 export const registerSharedBrowserHandlers = (context: ConnectionContext): void => {
     const { socket } = context;
 
@@ -192,6 +314,13 @@ export const registerSharedBrowserHandlers = (context: ConnectionContext): void 
                     Logger.error("[SharedBrowser] Failed to setup browser audio:", error);
                 }
 
+                let videoTarget = null;
+                try {
+                    videoTarget = await createBrowserVideoProducer(context, channelId);
+                } catch (error) {
+                    Logger.error("[SharedBrowser] Failed to setup browser video:", error);
+                }
+
                 const response = await fetch(`${BROWSER_SERVICE_URL}/launch`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
@@ -200,6 +329,7 @@ export const registerSharedBrowserHandlers = (context: ConnectionContext): void 
                         url: data.url,
                         controllerUserId: userId,
                         audioTarget,
+                        videoTarget,
                     }),
                 });
 
@@ -266,6 +396,13 @@ export const registerSharedBrowserHandlers = (context: ConnectionContext): void 
                     Logger.error("[SharedBrowser] Failed to setup browser audio:", error);
                 }
 
+                let videoTarget = null;
+                try {
+                    videoTarget = await createBrowserVideoProducer(context, channelId);
+                } catch (error) {
+                    Logger.error("[SharedBrowser] Failed to setup browser video:", error);
+                }
+
                 const response = await fetch(`${BROWSER_SERVICE_URL}/navigate`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
@@ -273,6 +410,7 @@ export const registerSharedBrowserHandlers = (context: ConnectionContext): void 
                         roomId: channelId,
                         url: data.url,
                         audioTarget,
+                        videoTarget,
                     }),
                 });
 
@@ -334,6 +472,7 @@ export const registerSharedBrowserHandlers = (context: ConnectionContext): void 
                 clearBrowserState(channelId);
 
                 await cleanupBrowserAudio(channelId, context);
+                await cleanupBrowserVideo(channelId, context);
 
                 socket.to(channelId).emit("browser:closed", { closedBy: context.currentClient.id });
 
@@ -394,6 +533,7 @@ export const cleanupRoomBrowser = async (channelId: string): Promise<void> => {
     }
 
     await cleanupBrowserAudio(channelId);
+    await cleanupBrowserVideo(channelId);
 
     clearBrowserState(channelId);
 };

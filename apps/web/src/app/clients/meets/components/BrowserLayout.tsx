@@ -29,6 +29,7 @@ interface BrowserLayoutProps {
     isAdmin?: boolean;
     isBrowserLaunching?: boolean;
     onNavigateBrowser?: (url: string) => Promise<boolean>;
+    browserVideoStream?: MediaStream | null;
 }
 
 function BrowserLayout({
@@ -49,8 +50,10 @@ function BrowserLayout({
     isAdmin,
     isBrowserLaunching = false,
     onNavigateBrowser,
+    browserVideoStream,
 }: BrowserLayoutProps) {
     const localVideoRef = useRef<HTMLVideoElement>(null);
+    const browserVideoRef = useRef<HTMLVideoElement>(null);
     const isLocalActiveSpeaker = activeSpeakerId === currentUserId;
     const [isReady, setIsReady] = useState(false);
     const [navInput, setNavInput] = useState(browserUrl);
@@ -77,6 +80,18 @@ function BrowserLayout({
             });
         }
     }, [localStream]);
+
+    useEffect(() => {
+        const video = browserVideoRef.current;
+        if (video && browserVideoStream) {
+            video.srcObject = browserVideoStream;
+            video.play().catch((err) => {
+                if (err.name !== "AbortError") {
+                    console.error("[Meets] Browser video play error:", err);
+                }
+            });
+        }
+    }, [browserVideoStream]);
 
     useEffect(() => {
         setNavInput(browserUrl);
@@ -143,7 +158,26 @@ function BrowserLayout({
                     </div>
                 )}
                 <div className="flex-1 min-h-0 relative bg-black">
-                    {isReady ? (
+                    {browserVideoStream ? (
+                        <>
+                            <video
+                                ref={browserVideoRef}
+                                autoPlay
+                                playsInline
+                                muted
+                                className="absolute inset-0 w-full h-full object-contain bg-black"
+                            />
+                            {isReady && (
+                                <iframe
+                                    src={resolvedNoVncUrl}
+                                    className="absolute inset-0 w-full h-full border-0 opacity-0"
+                                    style={{ pointerEvents: "auto" }}
+                                    allow="clipboard-read; clipboard-write"
+                                    title="Shared Browser Input"
+                                />
+                            )}
+                        </>
+                    ) : isReady ? (
                         <iframe
                             src={resolvedNoVncUrl}
                             className="absolute inset-0 w-full h-full border-0"
@@ -235,15 +269,15 @@ function BrowserLayout({
                 {Array.from(participants.values())
                     .filter((participant) => !isSystemUserId(participant.userId))
                     .map((participant) => (
-                    <ParticipantVideo
-                        key={participant.userId}
-                        participant={participant}
-                        displayName={getDisplayName(participant.userId)}
-                        isActiveSpeaker={activeSpeakerId === participant.userId}
-                        compact
-                        audioOutputDeviceId={audioOutputDeviceId}
-                    />
-                ))}
+                        <ParticipantVideo
+                            key={participant.userId}
+                            participant={participant}
+                            displayName={getDisplayName(participant.userId)}
+                            isActiveSpeaker={activeSpeakerId === participant.userId}
+                            compact
+                            audioOutputDeviceId={audioOutputDeviceId}
+                        />
+                    ))}
             </div>
         </div>
     );
