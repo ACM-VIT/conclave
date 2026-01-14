@@ -127,7 +127,7 @@ export class ContainerManager {
                     audioTarget.ip === "0.0.0.0" ||
                     audioTarget.ip === "::1" ||
                     audioTarget.ip === "localhost";
-                const overrideHost = process.env.BROWSER_AUDIO_TARGET_HOST;
+                const overrideHost = process.env.SFU_HOST || process.env.BROWSER_AUDIO_TARGET_HOST;
                 const targetIp = overrideHost || (isLoopback ? "host.docker.internal" : audioTarget.ip);
                 containerEnv.push(`AUDIO_TARGET_IP=${targetIp}`);
                 containerEnv.push(`AUDIO_TARGET_PORT=${audioTarget.port}`);
@@ -142,7 +142,7 @@ export class ContainerManager {
                     videoTarget.ip === "0.0.0.0" ||
                     videoTarget.ip === "::1" ||
                     videoTarget.ip === "localhost";
-                const overrideHost = process.env.BROWSER_VIDEO_TARGET_HOST || process.env.BROWSER_AUDIO_TARGET_HOST;
+                const overrideHost = process.env.SFU_HOST || process.env.BROWSER_VIDEO_TARGET_HOST || process.env.BROWSER_AUDIO_TARGET_HOST;
                 const targetIp = overrideHost || (isLoopback ? "host.docker.internal" : videoTarget.ip);
                 containerEnv.push(`VIDEO_TARGET_IP=${targetIp}`);
                 containerEnv.push(`VIDEO_TARGET_PORT=${videoTarget.port}`);
@@ -162,8 +162,8 @@ export class ContainerManager {
                     AutoRemove: true,
                     ExtraHosts: ["host.docker.internal:host-gateway"],
                     NanoCpus: 1_000_000_000,
-                    Memory: 512 * 1024 * 1024,
-                    MemorySwap: 768 * 1024 * 1024,
+                    Memory: 1024 * 1024 * 1024,
+                    MemorySwap: 1024 * 1024 * 1024,
                 },
                 ExposedPorts: {
                     "6080/tcp": {},
