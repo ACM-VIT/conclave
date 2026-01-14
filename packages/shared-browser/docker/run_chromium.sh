@@ -26,6 +26,8 @@ start_chromium() {
         --disable-default-apps \
         --disable-features=TranslateUI \
         --no-zygote \
+        --renderer-process-limit=2 \
+        --js-flags="--max-old-space-size=256" \
         --window-size=1280,720 \
         "${START_URL:-about:blank}"
 }

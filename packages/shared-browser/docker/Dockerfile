@@ -2,9 +2,9 @@ FROM debian:bookworm-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     xvfb \
-    tigervnc-standalone-server \
+    x11vnc \
     x11-xserver-utils \
     chromium \
     novnc \
@@ -19,7 +19,8 @@ RUN apt-get update && apt-get install -y \
     ffmpeg \
     supervisor \
     procps \
-    && rm -rf /var/lib/apt/lists/*
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
 RUN useradd -m -s /bin/bash browser && \
     mkdir -p /home/browser/.config/chromium && \

@@ -161,6 +161,9 @@ export class ContainerManager {
                     },
                     AutoRemove: true,
                     ExtraHosts: ["host.docker.internal:host-gateway"],
+                    NanoCpus: 1_000_000_000,
+                    Memory: 512 * 1024 * 1024,
+                    MemorySwap: 768 * 1024 * 1024,
                 },
                 ExposedPorts: {
                     "6080/tcp": {},
