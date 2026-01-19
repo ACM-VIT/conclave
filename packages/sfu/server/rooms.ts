@@ -3,6 +3,9 @@ import { Room } from "../config/classes/Room.js";
 import { config } from "../config/config.js";
 import getWorker from "../utilities/getWorker.js";
 import { Logger } from "../utilities/loggers.js";
+import { stopRoomTranscriber } from "./recording/roomTranscriber.js";
+import { summarizeTranscript } from "./recording/summarizeTranscript.js";
+import { buildMinutesPdf } from "./recording/minutesPdf.js";
 import { cleanupRoomBrowser } from "./socket/handlers/sharedBrowserHandlers.js";
 import type { SfuState } from "./state.js";
 
@@ -36,6 +39,28 @@ export const getOrCreateRoom = async (
 export const cleanupRoom = (state: SfuState, channelId: string): boolean => {
   const room = state.rooms.get(channelId);
   if (room && room.isEmpty()) {
+    const transcript = stopRoomTranscriber(channelId);
+    if (transcript.length) {
+      void summarizeTranscript(transcript)
+        .then(async (summary) => {
+          Logger.info(`Room ${room.id} summary`, summary);
+          // Cache PDF in memory for quick retrieval if needed shortly after cleanup
+          // add feature that allows access to earlier MOMs later REMEMVERRR
+          try {
+            const pdf = await buildMinutesPdf({
+              roomId: room.id,
+              summary,
+              transcript,
+            });
+            RoomMinutesCache.set(channelId, { pdf, createdAt: Date.now() });
+          } catch (err) {
+            Logger.warn("Failed to build minutes PDF", err);
+          }
+        })
+        .catch((err) => {
+          Logger.warn("Failed to summarize transcript", err);
+        });
+    }
     room.close();
     state.rooms.delete(channelId);
     Logger.info(`Closed empty room: ${room.id} (${room.clientId})`);
@@ -43,4 +68,14 @@ export const cleanupRoom = (state: SfuState, channelId: string): boolean => {
     return true;
   }
   return false;
+};
+
+type CachedMinutes = { pdf: Buffer; createdAt: number };
+const RoomMinutesCache = new Map<string, CachedMinutes>();
+
+export const popCachedMinutes = (channelId: string): Buffer | null => {
+  const entry = RoomMinutesCache.get(channelId);
+  if (!entry) return null;
+  RoomMinutesCache.delete(channelId);
+  return entry.pdf;
 };

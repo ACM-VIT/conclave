@@ -384,10 +384,46 @@ export default function MeetsClient({
     }
   }, [isSigningOut]);
 
+  const [showMinutesPrompt, setShowMinutesPrompt] = useState(false);
+  const [minutesBusy, setMinutesBusy] = useState(false);
+  const [minutesError, setMinutesError] = useState<string | null>(null);
+
   const leaveRoom = useCallback(() => {
     playNotificationSound("leave");
     socket.cleanup();
   }, [playNotificationSound, socket.cleanup]);
+
+  const requestMinutesAndLeave = useCallback(async () => {
+    setMinutesError(null);
+    setMinutesBusy(true);
+    try {
+      const res = await fetch("/api/minutes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ roomId }),
+      });
+
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || "failed to generate minutes");
+      }
+
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `minutes-${roomId}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      leaveRoom();
+    } catch (err) {
+      setMinutesError((err as Error).message);
+    } finally {
+      setMinutesBusy(false);
+    }
+  }, [roomId, leaveRoom]);
 
   const toggleBrowserAudio = useCallback(() => {
     setBrowserAudioNeedsGesture(false);
@@ -433,6 +469,43 @@ export default function MeetsClient({
     connectionState === "reconnecting" ||
     connectionState === "waiting"; // Waiting is a kind of loading state visually, or handled separately
 
+  const renderMinutesPrompt = showMinutesPrompt && (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4">
+      <div className="w-full max-w-md rounded-lg bg-[#0b1021] p-5 shadow-xl border border-white/10">
+        <h3 className="text-lg font-semibold text-white mb-2">
+          Generate meeting minutes?
+        </h3>
+        <p className="text-sm text-white/80 mb-4">
+          Before ending the meet, do you want to generate minutes (PDF) with the transcript summary?
+        </p>
+        {minutesError && (
+          <div className="mb-3 rounded bg-red-500/10 text-red-200 text-sm px-3 py-2">
+            {minutesError}
+          </div>
+        )}
+        <div className="flex justify-end gap-2">
+          <button
+            onClick={() => {
+              setShowMinutesPrompt(false);
+              leaveRoom();
+            }}
+            className="px-3 py-2 text-sm rounded bg-white/10 text-white hover:bg-white/20"
+            disabled={minutesBusy}
+          >
+            No, just leave
+          </button>
+          <button
+            onClick={requestMinutesAndLeave}
+            className="px-3 py-2 text-sm rounded bg-green-500 text-white hover:bg-green-600 disabled:opacity-60"
+            disabled={minutesBusy}
+          >
+            {minutesBusy ? "generating..." : "yes, generate"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+
   if (connectionState === "waiting") {
     const waitingTitle = waitingMessage ?? "Waiting for host to let you in";
     const isLockedRoom = waitingMessage?.toLowerCase().includes("locked");
@@ -457,6 +530,7 @@ export default function MeetsClient({
         className={`flex flex-col h-dvh w-full bg-[#0d0e0d] text-white ${roboto.className}`}
         style={{ fontFamily: "'Roboto', sans-serif" }}
       >
+        {renderMinutesPrompt}
         {isJoined && meetError && (
           <MeetsErrorBanner
             meetError={meetError}
@@ -516,7 +590,7 @@ export default function MeetsClient({
           toggleChat={toggleChat}
           toggleHandRaised={toggleHandRaised}
           sendReaction={sendReaction}
-          leaveRoom={leaveRoom}
+          leaveRoom={() => setShowMinutesPrompt(true)}
           isParticipantsOpen={isParticipantsOpen}
           setIsParticipantsOpen={setIsParticipantsOpen}
           pendingUsers={pendingUsers}
@@ -560,6 +634,7 @@ export default function MeetsClient({
       className={`flex flex-col h-full w-full bg-[#1a1a1a] text-white ${roboto.className}`}
       style={{ fontFamily: "'Roboto', sans-serif" }}
     >
+      {renderMinutesPrompt}
       <MeetsHeader
         isJoined={isJoined}
         isAdmin={isAdminFlag}
@@ -646,7 +721,7 @@ export default function MeetsClient({
         toggleChat={toggleChat}
         toggleHandRaised={toggleHandRaised}
         sendReaction={sendReaction}
-        leaveRoom={leaveRoom}
+        leaveRoom={() => setShowMinutesPrompt(true)}
         isParticipantsOpen={isParticipantsOpen}
         setIsParticipantsOpen={setIsParticipantsOpen}
         pendingUsers={pendingUsers}

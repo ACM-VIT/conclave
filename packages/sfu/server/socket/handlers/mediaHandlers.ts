@@ -7,6 +7,7 @@ import type {
   ToggleMediaData,
 } from "../../../types.js";
 import { Logger } from "../../../utilities/loggers.js";
+import { ensureRoomTranscriber } from "../../recording/roomTranscriber.js";
 import type { ConnectionContext } from "../context.js";
 import { respond } from "./ack.js";
 
@@ -47,6 +48,20 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
           appData: { type },
           paused,
         });
+
+        if (kind === "audio" && type === "webcam") {
+          const channelId = context.currentRoom.channelId;
+          const transcriber = ensureRoomTranscriber(
+            channelId,
+            context.currentRoom.router,
+          );
+          void transcriber.start(producer, {
+            sttUrl: process.env.STT_WS_URL || "",
+            sttHeaders: process.env.STT_API_KEY
+              ? { Authorization: `Bearer ${process.env.STT_API_KEY}` }
+              : undefined,
+          });
+        }
 
         if (type === "screen") {
           context.currentRoom.setScreenShareProducer(producer.id);
