@@ -1,40 +1,26 @@
-import WebSocket from "ws";
+import WebSocket from 'ws';
 
-const WS_URL = process.env.STT_WS_URL || "ws://localhost:2700";
-
+const WS_URL = 'ws://localhost:2700';
 const ws = new WebSocket(WS_URL);
 
-ws.on("open", () => {
-  console.log(`✅ Connected to Vosk Server at ${WS_URL}`);
-  ws.send(
-    JSON.stringify({
-      config: {
-        sample_rate: 16000,
-      },
-    }),
-  );
-  console.log("Sent config. Standing by for transcription...");
+ws.on('open', () => {
+    console.log('✅ Connected! Sending config...');
+    
+    // 1. Send Config
+    ws.send(JSON.stringify({ config: { sample_rate: 16000 } }));
+
+    // 2. Send some "silence" to keep it alive (1 second of 16-bit PCM)
+    console.log('Sending 1 second of silence to keep connection open...');
+    const silence = Buffer.alloc(32000); // 16000 samples * 2 bytes
+    ws.send(silence);
 });
 
-ws.on("message", (data) => {
-  try {
-    const response = JSON.parse(data.toString());
-    if (response.text) {
-      console.log(`📝 Transcribed: ${response.text}`);
-    } else if (response.partial) {
-      console.log(`⏱️ Thinking: ${response.partial}`);
-    } else {
-      console.log("ℹ️", response);
-    }
-  } catch (err) {
-    console.error("❌ Parse error:", err);
-  }
+ws.on('message', (data) => {
+    console.log('📝 Received from Vosk:', data.toString());
 });
 
-ws.on("error", (err) => {
-  console.error("❌ Connection Error:", err.message);
+ws.on('close', (code, reason) => {
+    console.log(`🔌 Connection closed (Code: ${code}, Reason: ${reason || 'None'})`);
 });
 
-ws.on("close", () => {
-  console.log("🔌 Connection closed");
-});
+ws.on('error', (err) => console.error('❌ Error:', err));
