@@ -27,7 +27,6 @@ import skip.foundation.JSONDecoder
 import skip.foundation.JSONEncoder
 import skip.foundation.ProcessInfo
 import skip.lib.*
-import kotlin.reflect.KClass
 import kotlinx.coroutines.runBlocking
 
 internal class VideoTrackWrapper(
@@ -349,7 +348,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         val socket = socketManager ?: return
         runBlocking {
             try {
-                val params = decodeJSONString(dtlsParameters, DtlsParameters::class)
+                val params = decodeJSONString<DtlsParameters>(dtlsParameters) ?: return@runBlocking
                 if (transport.id == sendTransportId) {
                     socket.connectProducerTransport(transport.id, params)
                 } else {
@@ -367,8 +366,8 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         val socket = socketManager ?: return ""
         return runBlocking {
             try {
-                val params = decodeJSONString(rtpParameters, RtpParameters::class)
-                val appDataPayload = decodeJSONString(appData, ProducerAppData::class, allowFailure = true)
+                val params = decodeJSONString<RtpParameters>(rtpParameters) ?: return@runBlocking ""
+                val appDataPayload = decodeJSONString<ProducerAppData>(appData, allowFailure = true)
                 val type = ProducerType(rawValue = appDataPayload?.type ?: "webcam") ?: ProducerType.webcam
                 socket.produce(
                     transportId = transport.id,
@@ -452,10 +451,10 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         return data.platformValue.toString(Charsets.UTF_8)
     }
 
-    private fun <T : Any> decodeJSONString(raw: String, type: KClass<T>, allowFailure: Boolean = false): T? {
+    private inline fun <reified T : Any> decodeJSONString(raw: String, allowFailure: Boolean = false): T? {
         val data = Data(platformValue = raw.toByteArray(Charsets.UTF_8))
         return try {
-            JSONDecoder().decode(type, from = data)
+            JSONDecoder().decode(T::class, from = data)
         } catch (error: Throwable) {
             if (allowFailure) null else throw error
         }

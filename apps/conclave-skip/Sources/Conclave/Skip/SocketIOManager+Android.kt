@@ -11,7 +11,6 @@ import skip.lib.Error
 import skip.lib.ErrorException
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
-import kotlin.reflect.KClass
 import kotlinx.coroutines.suspendCancellableCoroutine
 
 internal object SocketEvent {
@@ -150,7 +149,7 @@ internal class SocketIOManager {
                 }
             })
 
-            socket.on(Socket.EVENT_ERROR, Emitter.Listener { args ->
+            manager?.on(Manager.EVENT_ERROR, Emitter.Listener { args ->
                 val error = ErrorException(args.firstOrNull()?.toString() ?: "Socket error")
                 connectionError = error
                 onError?.invoke(error)
@@ -394,10 +393,10 @@ internal class SocketIOManager {
         return null
     }
 
-    private fun <T : Any> decode(type: KClass<T>, value: Any?): T? {
+    private inline fun <reified T : Any> decode(value: Any?): T? {
         val data = jsonData(value) ?: return null
         return try {
-            JSONDecoder().decode(type, from = data)
+            JSONDecoder().decode(T::class, from = data)
         } catch (_: Throwable) {
             null
         }
@@ -405,27 +404,27 @@ internal class SocketIOManager {
 
     private fun registerEventHandlers(socket: Socket) {
         socket.on(SocketEvent.userJoined, Emitter.Listener { args ->
-            val notification = decode(UserJoinedNotification::class, args.firstOrNull()) ?: return@Listener
+            val notification = decode<UserJoinedNotification>( args.firstOrNull()) ?: return@Listener
             onUserJoined?.invoke(notification)
         })
 
         socket.on(SocketEvent.userLeft, Emitter.Listener { args ->
-            val notification = decode(UserLeftNotification::class, args.firstOrNull()) ?: return@Listener
+            val notification = decode<UserLeftNotification>( args.firstOrNull()) ?: return@Listener
             onUserLeft?.invoke(notification.userId)
         })
 
         socket.on(SocketEvent.displayNameSnapshot, Emitter.Listener { args ->
-            val notification = decode(DisplayNameSnapshotNotification::class, args.firstOrNull()) ?: return@Listener
+            val notification = decode<DisplayNameSnapshotNotification>( args.firstOrNull()) ?: return@Listener
             onDisplayNameSnapshot?.invoke(notification)
         })
 
         socket.on(SocketEvent.displayNameUpdated, Emitter.Listener { args ->
-            val notification = decode(DisplayNameUpdatedNotification::class, args.firstOrNull()) ?: return@Listener
+            val notification = decode<DisplayNameUpdatedNotification>( args.firstOrNull()) ?: return@Listener
             onDisplayNameUpdated?.invoke(notification)
         })
 
         socket.on(SocketEvent.newProducer, Emitter.Listener { args ->
-            val notification = decode(NewProducerNotification::class, args.firstOrNull()) ?: return@Listener
+            val notification = decode<NewProducerNotification>( args.firstOrNull()) ?: return@Listener
             val info = ProducerInfo(
                 producerId = notification.producerId,
                 producerUserId = notification.producerUserId,
@@ -437,12 +436,12 @@ internal class SocketIOManager {
         })
 
         socket.on(SocketEvent.producerClosed, Emitter.Listener { args ->
-            val notification = decode(ProducerClosedNotification::class, args.firstOrNull()) ?: return@Listener
+            val notification = decode<ProducerClosedNotification>( args.firstOrNull()) ?: return@Listener
             onProducerClosed?.invoke(notification)
         })
 
         socket.on(SocketEvent.chatMessage, Emitter.Listener { args ->
-            val notification = decode(ChatMessageNotification::class, args.firstOrNull()) ?: return@Listener
+            val notification = decode<ChatMessageNotification>( args.firstOrNull()) ?: return@Listener
             val message = ChatMessage(
                 id = notification.id,
                 userId = notification.userId,
@@ -454,7 +453,7 @@ internal class SocketIOManager {
         })
 
         socket.on(SocketEvent.reaction, Emitter.Listener { args ->
-            val notification = decode(ReactionNotification::class, args.firstOrNull()) ?: return@Listener
+            val notification = decode<ReactionNotification>( args.firstOrNull()) ?: return@Listener
             val reaction = Reaction(
                 userId = notification.userId,
                 kind = ReactionKind(rawValue = notification.kind) ?: ReactionKind.emoji,
@@ -466,42 +465,42 @@ internal class SocketIOManager {
         })
 
         socket.on(SocketEvent.handRaised, Emitter.Listener { args ->
-            val notification = decode(HandRaisedNotification::class, args.firstOrNull()) ?: return@Listener
+            val notification = decode<HandRaisedNotification>( args.firstOrNull()) ?: return@Listener
             onHandRaised?.invoke(notification.userId, notification.raised)
         })
 
         socket.on(SocketEvent.handRaisedSnapshot, Emitter.Listener { args ->
-            val notification = decode(HandRaisedSnapshotNotification::class, args.firstOrNull()) ?: return@Listener
+            val notification = decode<HandRaisedSnapshotNotification>( args.firstOrNull()) ?: return@Listener
             onHandRaisedSnapshot?.invoke(notification)
         })
 
         socket.on(SocketEvent.roomLockChanged, Emitter.Listener { args ->
-            val notification = decode(RoomLockChangedNotification::class, args.firstOrNull()) ?: return@Listener
+            val notification = decode<RoomLockChangedNotification>( args.firstOrNull()) ?: return@Listener
             onRoomLockChanged?.invoke(notification.locked)
         })
 
         socket.on(SocketEvent.userRequestedJoin, Emitter.Listener { args ->
-            val notification = decode(UserRequestedJoinNotification::class, args.firstOrNull()) ?: return@Listener
+            val notification = decode<UserRequestedJoinNotification>( args.firstOrNull()) ?: return@Listener
             onUserRequestedJoin?.invoke(notification)
         })
 
         socket.on(SocketEvent.pendingUsersSnapshot, Emitter.Listener { args ->
-            val notification = decode(PendingUsersSnapshotNotification::class, args.firstOrNull()) ?: return@Listener
+            val notification = decode<PendingUsersSnapshotNotification>( args.firstOrNull()) ?: return@Listener
             onPendingUsersSnapshot?.invoke(notification)
         })
 
         socket.on(SocketEvent.userAdmitted, Emitter.Listener { args ->
-            val notification = decode(PendingUserChangedNotification::class, args.firstOrNull()) ?: return@Listener
+            val notification = decode<PendingUserChangedNotification>( args.firstOrNull()) ?: return@Listener
             onPendingUserChanged?.invoke(notification)
         })
 
         socket.on(SocketEvent.userRejected, Emitter.Listener { args ->
-            val notification = decode(PendingUserChangedNotification::class, args.firstOrNull()) ?: return@Listener
+            val notification = decode<PendingUserChangedNotification>( args.firstOrNull()) ?: return@Listener
             onPendingUserChanged?.invoke(notification)
         })
 
         socket.on(SocketEvent.pendingUserLeft, Emitter.Listener { args ->
-            val notification = decode(PendingUserChangedNotification::class, args.firstOrNull()) ?: return@Listener
+            val notification = decode<PendingUserChangedNotification>( args.firstOrNull()) ?: return@Listener
             onPendingUserChanged?.invoke(notification)
         })
 
@@ -514,7 +513,7 @@ internal class SocketIOManager {
         })
 
         socket.on(SocketEvent.waitingRoomStatus, Emitter.Listener { args ->
-            val notification = decode(WaitingRoomStatusNotification::class, args.firstOrNull()) ?: return@Listener
+            val notification = decode<WaitingRoomStatusNotification>( args.firstOrNull()) ?: return@Listener
             onWaitingRoomStatus?.invoke(notification.message)
         })
 
@@ -523,22 +522,22 @@ internal class SocketIOManager {
         })
 
         socket.on(SocketEvent.participantMuted, Emitter.Listener { args ->
-            val notification = decode(ParticipantMutedNotification::class, args.firstOrNull()) ?: return@Listener
+            val notification = decode<ParticipantMutedNotification>( args.firstOrNull()) ?: return@Listener
             onParticipantMuted?.invoke(notification)
         })
 
         socket.on(SocketEvent.participantCameraOff, Emitter.Listener { args ->
-            val notification = decode(ParticipantCameraOffNotification::class, args.firstOrNull()) ?: return@Listener
+            val notification = decode<ParticipantCameraOffNotification>( args.firstOrNull()) ?: return@Listener
             onParticipantCameraOff?.invoke(notification)
         })
 
         socket.on(SocketEvent.setVideoQuality, Emitter.Listener { args ->
-            val notification = decode(SetVideoQualityNotification::class, args.firstOrNull()) ?: return@Listener
+            val notification = decode<SetVideoQualityNotification>( args.firstOrNull()) ?: return@Listener
             onSetVideoQuality?.invoke(notification)
         })
 
         socket.on(SocketEvent.redirect, Emitter.Listener { args ->
-            val notification = decode(RedirectNotification::class, args.firstOrNull()) ?: return@Listener
+            val notification = decode<RedirectNotification>( args.firstOrNull()) ?: return@Listener
             onRedirect?.invoke(notification)
         })
 
