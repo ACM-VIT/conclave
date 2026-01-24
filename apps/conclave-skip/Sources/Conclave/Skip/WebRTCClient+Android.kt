@@ -451,7 +451,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         return data.platformValue.toString(Charsets.UTF_8)
     }
 
-    private inline fun <reified T : Any> decodeJSONString(raw: String, allowFailure: Boolean = false): T? {
+    private inline fun <reified T : Decodable> decodeJSONString(raw: String, allowFailure: Boolean = false): T? {
         val data = Data(platformValue = raw.toByteArray(Charsets.UTF_8))
         return try {
             JSONDecoder().decode(T::class, from = data)

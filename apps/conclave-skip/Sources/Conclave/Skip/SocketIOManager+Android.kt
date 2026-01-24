@@ -7,6 +7,7 @@ import io.socket.emitter.Emitter
 import org.json.JSONArray
 import org.json.JSONObject
 import skip.foundation.*
+import skip.lib.Decodable
 import skip.lib.Error
 import skip.lib.ErrorException
 import kotlin.coroutines.resume
@@ -393,7 +394,7 @@ internal class SocketIOManager {
         return null
     }
 
-    private inline fun <reified T : Any> decode(value: Any?): T? {
+    private inline fun <reified T : Decodable> decode(value: Any?): T? {
         val data = jsonData(value) ?: return null
         return try {
             JSONDecoder().decode(T::class, from = data)
