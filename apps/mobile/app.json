@@ -1,15 +1,53 @@
 {
   "expo": {
-    "scheme": "acme",
+    "scheme": "conclave",
     "userInterfaceStyle": "automatic",
+    "icon": "./assets/logo.png",
+    "splash": {
+      "image": "./assets/logo.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0d0e0d"
+    },
     "orientation": "default",
     "web": {
+      "bundler": "metro",
       "output": "static"
     },
     "plugins": [
-      "expo-router"
+      "expo-router",
+      "expo-font"
     ],
-    "name": "mobile",
-    "slug": "mobile"
+    "version": "1.0.0",
+    "ios": {
+      "infoPlist": {
+        "UIBackgroundModes": [
+          "audio",
+          "voip"
+        ],
+        "NSMicrophoneUsageDescription": "Conclave uses the microphone for calls.",
+        "NSCameraUsageDescription": "Conclave uses the camera for video calls.",
+        "NSBluetoothAlwaysUsageDescription": "Conclave uses Bluetooth for audio routing."
+      },
+      "bundleIdentifier": "com.acmvit.conclave",
+      "buildNumber": "1"
+    },
+    "android": {
+      "permissions": [
+        "POST_NOTIFICATIONS",
+        "RECORD_AUDIO",
+        "CAMERA",
+        "MODIFY_AUDIO_SETTINGS",
+        "READ_PHONE_STATE",
+        "FOREGROUND_SERVICE",
+        "FOREGROUND_SERVICE_MEDIA_PROJECTION",
+        "FOREGROUND_SERVICE_MICROPHONE",
+        "BLUETOOTH_CONNECT",
+        "MANAGE_OWN_CALLS"
+      ],
+      "package": "com.acmvit.conclave",
+      "versionCode": 1
+    },
+    "name": "Conclave",
+    "slug": "conclave"
   }
 }

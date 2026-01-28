@@ -1,15 +1,10 @@
-import { useCssElement } from "react-native-css";
-
 import React from "react";
 import { StyleSheet } from "react-native";
-
 import Animated from "react-native-reanimated";
-
 import { Image as RNImage } from "expo-image";
+import { cssInterop } from "nativewind";
 
 const AnimatedExpoImage = Animated.createAnimatedComponent(RNImage);
-
-export type ImageProps = React.ComponentProps<typeof Image>;
 
 function CSSImage(props: React.ComponentProps<typeof AnimatedExpoImage>) {
   // @ts-expect-error: Remap objectFit style to contentFit property
@@ -30,14 +25,6 @@ function CSSImage(props: React.ComponentProps<typeof AnimatedExpoImage>) {
   );
 }
 
-export const Image = (
-  props: React.ComponentProps<typeof CSSImage> & {
-    className?: string;
-  }
-) => {
-  return useCssElement(CSSImage, props, {
-    className: "style",
-  });
-};
+export const Image = cssInterop(CSSImage, { className: "style" });
 
-Image.displayName = "CSS(Image)";
+export type ImageProps = React.ComponentProps<typeof Image>;

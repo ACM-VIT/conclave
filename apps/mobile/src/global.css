@@ -1,11 +1,17 @@
-
-@import "tailwindcss/theme.css" layer(theme);
-@import "tailwindcss/preflight.css" layer(base);
-@import "tailwindcss/utilities.css";
-@import "nativewind/theme";
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
 
 @layer theme {
   @theme {
+    --color-primary-orange: #F95F4A;
+    --color-primary-pink: #FF007A;
+    --color-acm-cream: #FEFCD9;
+    --color-acm-dark: #060606;
+    --color-acm-dark-alt: #0d0e0d;
+    --color-acm-surface: #1a1a1a;
+    --color-acm-surface-light: #252525;
+
     /* Fonts */
     --font-rounded: "SF Pro Rounded", "Hiragino Maru Gothic ProN", Meiryo,
       "MS PGothic", sans-serif;

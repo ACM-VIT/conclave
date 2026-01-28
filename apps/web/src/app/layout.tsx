@@ -27,7 +27,7 @@ export const metadata: Metadata = {
     siteName: "c0nclav3",
     images: [
       {
-        url: "/og.svg",
+        url: "/og.png",
         width: 1200,
         height: 630,
         alt: "c0nclav3",
@@ -39,7 +39,7 @@ export const metadata: Metadata = {
     card: "summary_large_image",
     title: "ACM-VIT | c0nclav3",
     description: "ACM-VIT's in-house video conferencing platform.",
-    images: ["/og.svg"],
+    images: ["/og.png"],
   },
   robots: {
     index: true,
