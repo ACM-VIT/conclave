@@ -307,254 +307,252 @@ export function JoinScreen({
               ]}
               keyboardShouldPersistTaps="handled"
             >
-              {meetError ? (
-                <ErrorBanner
-                  meetError={meetError}
-                  onDismiss={onDismissMeetError}
-                  primaryActionLabel={onRetryMedia ? "Retry Permissions" : undefined}
-                  onPrimaryAction={onRetryMedia}
-                />
-              ) : null}
+              <View style={styles.joinContentInner}>
+                {meetError ? (
+                  <ErrorBanner
+                    meetError={meetError}
+                    onDismiss={onDismissMeetError}
+                    primaryActionLabel={onRetryMedia ? "Retry Permissions" : undefined}
+                    onPrimaryAction={onRetryMedia}
+                  />
+                ) : null}
 
-              {/* Two-column layout wrapper for iPad */}
-              <View style={isIpadLayout ? styles.twoColumnLayout : undefined}>
-                {/* Video Preview Column */}
-                <Animated.View
-                  entering={FadeIn.duration(400)}
-                  style={isIpadLayout ? { flex: videoPreviewFlex } : undefined}
-                >
-                  <Text style={[styles.sectionLabel, { color: COLORS.creamLight }]}>
-                    Preview
-                  </Text>
-                  <View style={[
-                    styles.videoPreview,
-                    {
-                      backgroundColor: COLORS.surface,
-                      borderColor: COLORS.creamDim,
-                    },
-                    isIpadLayout && styles.videoPreviewTablet,
-                  ]}>
-                    {localStream && !isCameraOff ? (
-                      <RTCView
-                        streamURL={localStream.toURL()}
-                        style={styles.rtcView}
-                        mirror
-                      />
-                    ) : (
-                      <View style={styles.noVideoContainer}>
-                        <View style={[styles.userAvatar, {
-                          backgroundColor: COLORS.orangeDim,
-                          borderColor: COLORS.creamDim,
-                        }]}>
-                          <Text style={[styles.userInitial, { color: COLORS.cream }]}>
-                            {userInitial}
-                          </Text>
+                <View style={isIpadLayout ? styles.twoColumnLayout : undefined}>
+                  <Animated.View
+                    entering={FadeIn.duration(400)}
+                    style={isIpadLayout ? { flex: videoPreviewFlex } : undefined}
+                  >
+                    <Text style={[styles.sectionLabel, { color: COLORS.creamLight }]}>
+                      Preview
+                    </Text>
+                    <View style={[
+                      styles.videoPreview,
+                      {
+                        backgroundColor: COLORS.surface,
+                        borderColor: COLORS.creamDim,
+                      },
+                      isIpadLayout && styles.videoPreviewTablet,
+                    ]}>
+                      {localStream && !isCameraOff ? (
+                        <RTCView
+                          streamURL={localStream.toURL()}
+                          style={styles.rtcView}
+                          mirror
+                        />
+                      ) : (
+                        <View style={styles.noVideoContainer}>
+                          <View style={[styles.userAvatar, {
+                            backgroundColor: COLORS.orangeDim,
+                            borderColor: COLORS.creamDim,
+                          }]}>
+                            <Text style={[styles.userInitial, { color: COLORS.cream }]}>
+                              {userInitial}
+                            </Text>
+                          </View>
                         </View>
+                      )}
+
+                      <View style={styles.nameOverlay}>
+                        <Text style={styles.overlayText}>
+                          {displayNameInput || "Guest"}
+                        </Text>
+                      </View>
+
+                      <View style={styles.mediaControlsContainer}>
+                        <View style={styles.mediaControlsPill}>
+                          <Pressable
+                            onPress={() => {
+                              haptic();
+                              onToggleMute();
+                            }}
+                            style={[
+                              styles.mediaButton,
+                              isMuted && styles.mediaButtonActive,
+                            ]}
+                          >
+                            {isMuted ? (
+                              <MicOff size={18} color="#FFFFFF" />
+                            ) : (
+                              <Mic size={18} color="#FFFFFF" />
+                            )}
+                          </Pressable>
+                          <Pressable
+                            onPress={() => {
+                              haptic();
+                              onToggleCamera();
+                            }}
+                            style={[
+                              styles.mediaButton,
+                              isCameraOff && styles.mediaButtonActive,
+                            ]}
+                          >
+                            {isCameraOff ? (
+                              <VideoOff size={18} color="#FFFFFF" />
+                            ) : (
+                              <Video size={18} color="#FFFFFF" />
+                            )}
+                          </Pressable>
+                        </View>
+                      </View>
+                    </View>
+
+                    <View style={styles.preflightRow}>
+                      <Text style={[styles.preflightLabel, { color: COLORS.creamLight }]}>
+                        Preflight
+                      </Text>
+                      <View style={[styles.statusPill, { borderColor: COLORS.creamDim }]}>
+                        <View
+                          style={[
+                            styles.statusDot,
+                            { backgroundColor: !isMuted ? "#34d399" : COLORS.primaryOrange },
+                          ]}
+                        />
+                        <Text style={styles.statusText}>
+                          Mic {!isMuted ? "On" : "Off"}
+                        </Text>
+                      </View>
+                      <View style={[styles.statusPill, { borderColor: COLORS.creamDim }]}>
+                        <View
+                          style={[
+                            styles.statusDot,
+                            { backgroundColor: !isCameraOff ? "#34d399" : COLORS.primaryOrange },
+                          ]}
+                        />
+                        <Text style={styles.statusText}>
+                          Camera {!isCameraOff ? "On" : "Off"}
+                        </Text>
+                      </View>
+                    </View>
+                  </Animated.View>
+
+                  <Animated.View
+                    entering={FadeInUp.delay(100).duration(400)}
+                    style={[
+                      styles.joinCard,
+                      { borderColor: COLORS.creamDim },
+                      isIpadLayout && { flex: joinCardFlex, marginTop: 0, marginLeft: spacing.lg },
+                    ]}
+                  >
+                    {!forceJoinOnly && (
+                      <View style={[styles.tabContainer, { backgroundColor: COLORS.surface }]}>
+                        <Pressable
+                          onPress={() => {
+                            haptic();
+                            setActiveTab("new");
+                          }}
+                          style={[
+                            styles.tab,
+                            activeTab === "new" && { backgroundColor: COLORS.primaryOrange },
+                          ]}
+                        >
+                          <Text
+                            style={[
+                              styles.tabText,
+                              { color: activeTab === "new" ? "#FFFFFF" : COLORS.creamLight },
+                            ]}
+                          >
+                            New Meeting
+                          </Text>
+                        </Pressable>
+                        <Pressable
+                          onPress={() => {
+                            haptic();
+                            setActiveTab("join");
+                          }}
+                          style={[
+                            styles.tab,
+                            activeTab === "join" && { backgroundColor: COLORS.primaryOrange },
+                          ]}
+                        >
+                          <Text
+                            style={[
+                              styles.tabText,
+                              { color: activeTab === "join" ? "#FFFFFF" : COLORS.creamLight },
+                            ]}
+                          >
+                            Join
+                          </Text>
+                        </Pressable>
                       </View>
                     )}
 
-                    <View style={styles.nameOverlay}>
-                      <Text style={styles.overlayText}>
-                        {displayNameInput || "Guest"}
-                      </Text>
-                    </View>
-
-                    <View style={styles.mediaControlsContainer}>
-                      <View style={styles.mediaControlsPill}>
+                    {activeTab === "new" && !forceJoinOnly ? (
+                      <View style={styles.actionContainer}>
                         <Pressable
-                          onPress={() => {
-                            haptic();
-                            onToggleMute();
-                          }}
+                          onPress={handleCreateRoom}
+                          disabled={isLoading}
                           style={[
-                            styles.mediaButton,
-                            isMuted && styles.mediaButtonActive,
-                          ]}
-                        >
-                          {isMuted ? (
-                            <MicOff size={18} color="#FFFFFF" />
-                          ) : (
-                            <Mic size={18} color="#FFFFFF" />
-                          )}
-                        </Pressable>
-                        <Pressable
-                          onPress={() => {
-                            haptic();
-                            onToggleCamera();
-                          }}
-                          style={[
-                            styles.mediaButton,
-                            isCameraOff && styles.mediaButtonActive,
-                          ]}
-                        >
-                          {isCameraOff ? (
-                            <VideoOff size={18} color="#FFFFFF" />
-                          ) : (
-                            <Video size={18} color="#FFFFFF" />
-                          )}
-                        </Pressable>
-                      </View>
-                    </View>
-                  </View>
-
-                  <View style={styles.preflightRow}>
-                    <Text style={[styles.preflightLabel, { color: COLORS.creamLight }]}>
-                      Preflight
-                    </Text>
-                    <View style={[styles.statusPill, { borderColor: COLORS.creamDim }]}>
-                      <View
-                        style={[
-                          styles.statusDot,
-                          { backgroundColor: !isMuted ? "#34d399" : COLORS.primaryOrange },
-                        ]}
-                      />
-                      <Text style={styles.statusText}>
-                        Mic {!isMuted ? "On" : "Off"}
-                      </Text>
-                    </View>
-                    <View style={[styles.statusPill, { borderColor: COLORS.creamDim }]}>
-                      <View
-                        style={[
-                          styles.statusDot,
-                          { backgroundColor: !isCameraOff ? "#34d399" : COLORS.primaryOrange },
-                        ]}
-                      />
-                      <Text style={styles.statusText}>
-                        Camera {!isCameraOff ? "On" : "Off"}
-                      </Text>
-                    </View>
-                  </View>
-                </Animated.View>
-
-                {/* Join Card Column */}
-                <Animated.View
-                  entering={FadeInUp.delay(100).duration(400)}
-                  style={[
-                    styles.joinCard,
-                    { borderColor: COLORS.creamDim },
-                    isIpadLayout && { flex: joinCardFlex, marginTop: 0, marginLeft: spacing.lg },
-                  ]}
-                >
-                  {!forceJoinOnly && (
-                    <View style={[styles.tabContainer, { backgroundColor: COLORS.surface }]}>
-                      <Pressable
-                        onPress={() => {
-                          haptic();
-                          setActiveTab("new");
-                        }}
-                        style={[
-                          styles.tab,
-                          activeTab === "new" && { backgroundColor: COLORS.primaryOrange },
-                        ]}
-                      >
-                        <Text
-                          style={[
-                            styles.tabText,
-                            { color: activeTab === "new" ? "#FFFFFF" : COLORS.creamLight },
-                          ]}
-                        >
-                          New Meeting
-                        </Text>
-                      </Pressable>
-                      <Pressable
-                        onPress={() => {
-                          haptic();
-                          setActiveTab("join");
-                        }}
-                        style={[
-                          styles.tab,
-                          activeTab === "join" && { backgroundColor: COLORS.primaryOrange },
-                        ]}
-                      >
-                        <Text
-                          style={[
-                            styles.tabText,
-                            { color: activeTab === "join" ? "#FFFFFF" : COLORS.creamLight },
-                          ]}
-                        >
-                          Join
-                        </Text>
-                      </Pressable>
-                    </View>
-                  )}
-
-                  {activeTab === "new" && !forceJoinOnly ? (
-                    <View style={styles.actionContainer}>
-                      <Pressable
-                        onPress={handleCreateRoom}
-                        disabled={isLoading}
-                        style={[
-                          styles.actionButton,
-                          {
-                            backgroundColor: COLORS.primaryOrange,
-                            opacity: isLoading ? 0.5 : 1,
-                          },
-                        ]}
-                      >
-                        <Plus size={18} color="#FFFFFF" />
-                        <Text style={styles.actionButtonText}>
-                          {isLoading ? "Starting..." : "Start Meeting"}
-                        </Text>
-                      </Pressable>
-                    </View>
-                  ) : (
-                    <View style={styles.actionContainer}>
-                      <View style={styles.inputGroup}>
-                        <Text style={[styles.inputLabel, { color: COLORS.creamLight }]}>
-                          Room Name
-                        </Text>
-                        <TextInput
-                          style={[styles.textInput, {
-                            backgroundColor: COLORS.surface,
-                            borderColor: COLORS.creamDim,
-                            color: COLORS.cream,
-                          }]}
-                          placeholder="Paste room link or code"
-                          placeholderTextColor={COLORS.creamLighter}
-                          value={roomId}
-                          onChangeText={handleRoomChange}
-                          autoCapitalize="none"
-                          autoCorrect={false}
-                          returnKeyType="join"
-                          onSubmitEditing={handleJoin}
-                        />
-                      </View>
-
-                      <Pressable
-                        onPress={handleJoin}
-                        disabled={!canJoin || isLoading}
-                        style={[
-                          styles.actionButton,
-                          {
-                            backgroundColor:
-                              canJoin && !isLoading
-                                ? COLORS.primaryOrange
-                                : COLORS.creamDim,
-                          },
-                        ]}
-                      >
-                        <Text
-                          style={[
-                            styles.actionButtonText,
+                            styles.actionButton,
                             {
-                              color:
-                                canJoin && !isLoading
-                                  ? "#FFFFFF"
-                                  : COLORS.creamLighter,
+                              backgroundColor: COLORS.primaryOrange,
+                              opacity: isLoading ? 0.5 : 1,
                             },
                           ]}
                         >
-                          {isLoading ? "Connecting..." : "Join Meeting"}
-                        </Text>
-                        {!isLoading && canJoin && (
-                          <ArrowRight size={18} color="#FFFFFF" />
-                        )}
-                      </Pressable>
-                    </View>
-                  )}
-                </Animated.View>
-              </View> {/* End two-column layout wrapper */}
+                          <Plus size={18} color="#FFFFFF" />
+                          <Text style={styles.actionButtonText}>
+                            {isLoading ? "Starting..." : "Start Meeting"}
+                          </Text>
+                        </Pressable>
+                      </View>
+                    ) : (
+                      <View style={styles.actionContainer}>
+                        <View style={styles.inputGroup}>
+                          <Text style={[styles.inputLabel, { color: COLORS.creamLight }]}>
+                            Room Name
+                          </Text>
+                          <TextInput
+                            style={[styles.textInput, {
+                              backgroundColor: COLORS.surface,
+                              borderColor: COLORS.creamDim,
+                              color: COLORS.cream,
+                            }]}
+                            placeholder="Paste room link or code"
+                            placeholderTextColor={COLORS.creamLighter}
+                            value={roomId}
+                            onChangeText={handleRoomChange}
+                            autoCapitalize="none"
+                            autoCorrect={false}
+                            returnKeyType="join"
+                            onSubmitEditing={handleJoin}
+                          />
+                        </View>
 
+                        <Pressable
+                          onPress={handleJoin}
+                          disabled={!canJoin || isLoading}
+                          style={[
+                            styles.actionButton,
+                            {
+                              backgroundColor:
+                                canJoin && !isLoading
+                                  ? COLORS.primaryOrange
+                                  : COLORS.creamDim,
+                            },
+                          ]}
+                        >
+                          <Text
+                            style={[
+                              styles.actionButtonText,
+                              {
+                                color:
+                                  canJoin && !isLoading
+                                    ? "#FFFFFF"
+                                    : COLORS.creamLighter,
+                              },
+                            ]}
+                          >
+                            {isLoading ? "Connecting..." : "Join Meeting"}
+                          </Text>
+                          {!isLoading && canJoin && (
+                            <ArrowRight size={18} color="#FFFFFF" />
+                          )}
+                        </Pressable>
+                      </View>
+                    )}
+                  </Animated.View>
+                </View>
+              </View>
             </ScrollView>
 
             {!forceJoinOnly && (
@@ -722,6 +720,8 @@ const styles = StyleSheet.create({
   joinContent: {
     paddingHorizontal: 20,
     paddingVertical: 24,
+  },
+  joinContentInner: {
     gap: 20,
   },
   sectionLabel: {
