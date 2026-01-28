@@ -1,12 +1,17 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import * as AppleAuthentication from "expo-apple-authentication";
+import * as Google from "expo-auth-session/providers/google";
 import * as Haptics from "expo-haptics";
+import * as WebBrowser from "expo-web-browser";
 import { RTCView } from "react-native-webrtc";
 import {
+  ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
   StyleSheet,
   useWindowDimensions,
 } from "react-native";
+import Svg, { Path } from "react-native-svg";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Animated, { FadeIn, FadeInDown, FadeInUp } from "react-native-reanimated";
 import {
@@ -54,11 +59,60 @@ const COLORS = {
 
 type Phase = "welcome" | "auth" | "join";
 
+const GoogleIcon = ({ size = 18 }: { size?: number }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24">
+    <Path
+      fill="#4285F4"
+      d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
+    />
+    <Path
+      fill="#34A853"
+      d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
+    />
+    <Path
+      fill="#FBBC05"
+      d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"
+    />
+    <Path
+      fill="#EA4335"
+      d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"
+    />
+  </Svg>
+);
+
+const AppleIcon = ({ size = 18, color = COLORS.cream }: { size?: number; color?: string }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24">
+    <Path
+      fill={color}
+      d="M16.365 1.43c0 1.14-.462 2.06-1.12 2.78-.74.8-1.94 1.41-3.06 1.32-.14-1.1.35-2.22 1.05-2.98.78-.82 2.12-1.45 3.13-1.12ZM20.39 17.3c-.33.77-.49 1.11-.91 1.79-.58.94-1.4 2.11-2.42 2.12-.91.01-1.14-.6-2.38-.6s-1.5.59-2.41.61c-1.02.01-1.79-1.08-2.37-2.02-1.64-2.65-1.82-5.75-.8-7.33.72-1.11 1.87-1.77 2.95-1.77.92 0 1.5.63 2.38.63.85 0 1.38-.64 2.37-.64 1.02 0 2.1.56 2.82 1.52-2.48 1.36-2.08 4.93.77 5.69Z"
+    />
+  </Svg>
+);
+
+const authBaseUrl =
+  process.env.EXPO_PUBLIC_APP_URL ||
+  process.env.EXPO_PUBLIC_API_URL ||
+  process.env.EXPO_PUBLIC_SFU_BASE_URL ||
+  "";
+
+const googleClientConfig = {
+  iosClientId: process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID,
+  androidClientId: process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID,
+  webClientId: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID,
+  expoClientId: process.env.EXPO_PUBLIC_GOOGLE_EXPO_CLIENT_ID,
+  scopes: ["openid", "profile", "email"],
+};
+
+WebBrowser.maybeCompleteAuthSession();
+
 interface JoinScreenProps {
   roomId: string;
   onRoomIdChange: (value: string) => void;
   onJoinRoom: (roomId: string, options?: { isHost?: boolean }) => void;
   onIsAdminChange?: (isAdmin: boolean) => void;
+  onUserChange?: (
+    user: { id?: string; email?: string | null; name?: string | null } | null
+  ) => void;
   isLoading: boolean;
   displayNameInput: string;
   onDisplayNameInputChange: (value: string) => void;
@@ -79,6 +133,7 @@ export function JoinScreen({
   onRoomIdChange,
   onJoinRoom,
   onIsAdminChange,
+  onUserChange,
   isLoading,
   displayNameInput,
   onDisplayNameInputChange,
@@ -100,6 +155,29 @@ export function JoinScreen({
   const [activeTab, setActiveTab] = useState<"new" | "join">(
     forceJoinOnly ? "join" : "new"
   );
+  const [authProvider, setAuthProvider] = useState<"google" | "apple" | null>(
+    null
+  );
+  const [isAppleAvailable, setIsAppleAvailable] = useState(false);
+  const isAuthLoading = authProvider !== null;
+  const googleRedirectUri = useMemo(() => {
+    const clientId = Platform.select({
+      ios: googleClientConfig.iosClientId,
+      android: googleClientConfig.androidClientId,
+    });
+    if (!clientId) return undefined;
+    const prefix = clientId.replace(".apps.googleusercontent.com", "");
+    return `com.googleusercontent.apps.${prefix}:/oauthredirect`;
+  }, [googleClientConfig.androidClientId, googleClientConfig.iosClientId]);
+
+  const [googleRequest, googleResponse, googlePromptAsync] =
+    Google.useAuthRequest(
+      {
+        ...googleClientConfig,
+        ...(googleRedirectUri ? { redirectUri: googleRedirectUri } : {}),
+      },
+      googleRedirectUri ? { native: googleRedirectUri } : {}
+    );
 
   const haptic = useCallback(() => {
     Haptics.selectionAsync().catch(() => { });
@@ -123,6 +201,83 @@ export function JoinScreen({
     setPhase("join");
   }, [guestName, haptic, onDisplayNameInputChange]);
 
+  const completeSocialSignIn = useCallback(
+    async (provider: "google" | "apple", idToken?: string, nonce?: string, accessToken?: string) => {
+      const trimmedBase = authBaseUrl.replace(/\/$/, "");
+      if (!trimmedBase) {
+        throw new Error("Missing EXPO_PUBLIC_APP_URL or EXPO_PUBLIC_API_URL");
+      }
+      if (!idToken) {
+        throw new Error("Missing identity token");
+      }
+      const response = await fetch(`${trimmedBase}/api/auth/sign-in/social`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          provider,
+          callbackURL: trimmedBase,
+          idToken: {
+            token: idToken,
+            nonce,
+            accessToken,
+          },
+        }),
+      });
+      if (!response.ok) {
+        const text = await response.text().catch(() => "");
+        throw new Error(text || "Sign in request failed");
+      }
+      const data = (await response.json().catch(() => null)) as
+        | {
+            user?: { id?: string; email?: string | null; name?: string | null };
+          }
+        | null;
+      if (data?.user) {
+        onUserChange?.(data.user);
+        if (!displayNameInput.trim()) {
+          const resolvedName = data.user.name || data.user.email || "User";
+          onDisplayNameInputChange(resolvedName);
+        }
+        setPhase("join");
+      }
+    },
+    [displayNameInput, onDisplayNameInputChange, onUserChange]
+  );
+
+  const handleGoogleSignIn = useCallback(async () => {
+    if (isAuthLoading) return;
+    haptic();
+    setAuthProvider("google");
+    try {
+      await googlePromptAsync();
+    } catch (error) {
+      console.log("[JoinScreen] Google sign-in error", error);
+      setAuthProvider(null);
+    }
+  }, [googlePromptAsync, haptic, isAuthLoading]);
+
+  const handleAppleSignIn = useCallback(async () => {
+    if (isAuthLoading) return;
+    haptic();
+    setAuthProvider("apple");
+    try {
+      const credential = await AppleAuthentication.signInAsync({
+        requestedScopes: [
+          AppleAuthentication.AppleAuthenticationScope.FULL_NAME,
+          AppleAuthentication.AppleAuthenticationScope.EMAIL,
+        ],
+      });
+      await completeSocialSignIn(
+        "apple",
+        credential.identityToken ?? undefined
+      );
+    } catch (error) {
+      console.log("[JoinScreen] Apple sign-in error", error);
+    } finally {
+      setAuthProvider(null);
+    }
+  }, [completeSocialSignIn, haptic, isAuthLoading]);
+
   const handleCreateRoom = useCallback(() => {
     haptic();
     onIsAdminChange?.(true);
@@ -139,6 +294,37 @@ export function JoinScreen({
   }, [canJoin, isLoading, haptic, onIsAdminChange, onJoinRoom, roomId]);
 
   const userInitial = displayNameInput?.[0]?.toUpperCase() || "?";
+
+  useEffect(() => {
+    if (Platform.OS !== "ios") return;
+    AppleAuthentication.isAvailableAsync()
+      .then((available) => setIsAppleAvailable(available))
+      .catch(() => setIsAppleAvailable(false));
+  }, []);
+
+  useEffect(() => {
+    if (!googleResponse) return;
+    if (googleResponse.type !== "success") {
+      if (authProvider === "google") {
+        setAuthProvider(null);
+      }
+      return;
+    }
+    const idToken =
+      googleResponse.authentication?.idToken ||
+      (googleResponse.params as { id_token?: string } | undefined)?.id_token;
+    const accessToken =
+      googleResponse.authentication?.accessToken ||
+      (googleResponse.params as { access_token?: string } | undefined)
+        ?.access_token;
+    completeSocialSignIn("google", idToken, undefined, accessToken)
+      .catch((error) => {
+        console.log("[JoinScreen] Google sign-in error", error);
+      })
+      .finally(() => {
+        setAuthProvider(null);
+      });
+  }, [authProvider, completeSocialSignIn, googleResponse]);
 
   useEffect(() => {
     if (forceJoinOnly) return;
@@ -214,6 +400,58 @@ export function JoinScreen({
                   <Text style={[styles.authSubtitle, { color: COLORS.creamLight }]}>
                     choose how to continue
                   </Text>
+                </View>
+
+                <View style={styles.socialGroup}>
+                  <Pressable
+                    onPress={handleGoogleSignIn}
+                    disabled={!googleRequest || isAuthLoading}
+                    style={[
+                      styles.socialButton,
+                      { borderColor: COLORS.creamDim },
+                      (isAuthLoading || !googleRequest) && styles.socialButtonDisabled,
+                    ]}
+                  >
+                    <View style={[styles.socialIcon, { backgroundColor: "#ffffff" }]}>
+                      <GoogleIcon size={16} />
+                    </View>
+                    <Text style={[styles.socialButtonText, { color: COLORS.cream }]}>
+                      Continue with Google
+                    </Text>
+                    {authProvider === "google" && (
+                      <ActivityIndicator size="small" color={COLORS.cream} />
+                    )}
+                  </Pressable>
+
+                  {Platform.OS === "ios" && isAppleAvailable ? (
+                    <Pressable
+                      onPress={handleAppleSignIn}
+                      disabled={isAuthLoading}
+                      style={[
+                        styles.socialButton,
+                        { borderColor: COLORS.creamDim, backgroundColor: "#111111" },
+                        isAuthLoading && styles.socialButtonDisabled,
+                      ]}
+                    >
+                      <View style={[styles.socialIcon, { backgroundColor: "#1a1a1a" }]}>
+                        <AppleIcon size={16} />
+                      </View>
+                      <Text style={[styles.socialButtonText, { color: COLORS.cream }]}>
+                        Continue with Apple
+                      </Text>
+                      {authProvider === "apple" && (
+                        <ActivityIndicator size="small" color={COLORS.cream} />
+                      )}
+                    </Pressable>
+                  ) : null}
+                </View>
+
+                <View style={styles.dividerRow}>
+                  <View style={[styles.dividerLine, { backgroundColor: COLORS.creamDim }]} />
+                  <Text style={[styles.dividerText, { color: COLORS.creamLighter }]}>
+                    or
+                  </Text>
+                  <View style={[styles.dividerLine, { backgroundColor: COLORS.creamDim }]} />
                 </View>
 
                 <View style={styles.inputGroup}>
@@ -669,6 +907,61 @@ const styles = StyleSheet.create({
   },
   authSubtitle: {
     fontSize: 12,
+    letterSpacing: 2,
+    textTransform: "uppercase",
+    fontFamily: "PolySans-Mono",
+  },
+  socialGroup: {
+    gap: 12,
+    marginBottom: 20,
+  },
+  socialButton: {
+    width: "100%",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderRadius: 12,
+    borderWidth: 1,
+    backgroundColor: "#1a1a1a",
+  },
+  socialButtonDisabled: {
+    opacity: 0.6,
+  },
+  socialIcon: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    borderColor: "rgba(254, 252, 217, 0.2)",
+  },
+  socialIconText: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: "#FEFCD9",
+    fontFamily: "PolySans-Mono",
+  },
+  socialButtonText: {
+    fontSize: 14,
+    fontWeight: "500",
+    flex: 1,
+    fontFamily: "PolySans-Regular",
+  },
+  dividerRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    marginBottom: 16,
+  },
+  dividerLine: {
+    flex: 1,
+    height: 1,
+  },
+  dividerText: {
+    fontSize: 11,
     letterSpacing: 2,
     textTransform: "uppercase",
     fontFamily: "PolySans-Mono",

@@ -104,6 +104,14 @@ android {
             keyAlias 'androiddebugkey'
             keyPassword 'android'
         }
+        release {
+            if (project.hasProperty('ACM_UPLOAD_STORE_FILE')) {
+                storeFile file(ACM_UPLOAD_STORE_FILE)
+                storePassword ACM_UPLOAD_STORE_PASSWORD
+                keyAlias ACM_UPLOAD_KEY_ALIAS
+                keyPassword ACM_UPLOAD_KEY_PASSWORD
+            }
+        }
     }
     buildTypes {
         debug {
@@ -112,7 +120,10 @@ android {
         release {
             // Caution! In production, you need to generate your own keystore file.
             // see https://reactnative.dev/docs/signed-apk-android.
-            signingConfig signingConfigs.debug
+            signingConfig signingConfigs.release
+            if (!project.hasProperty('ACM_UPLOAD_STORE_FILE')) {
+                signingConfig signingConfigs.debug
+            }
             def enableShrinkResources = findProperty('android.enableShrinkResourcesInReleaseBuilds') ?: 'false'
             shrinkResources enableShrinkResources.toBoolean()
             minifyEnabled enableMinifyInReleaseBuilds

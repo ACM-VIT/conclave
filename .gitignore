@@ -56,3 +56,4 @@ xcuserdata
 *.xcworkspace/xcuserdata
 apps/conclave-skip/.deps
 .xcode-packages
+apps/mobile/config/GoogleOAuth.plist

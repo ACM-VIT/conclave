@@ -123,7 +123,15 @@ export function MeetScreen() {
     }),
     [guestSessionId]
   );
-  const user = guestIdentity;
+  const [currentUser, setCurrentUser] = useState<
+    { id?: string; email?: string | null; name?: string | null } | null
+  >(guestIdentity);
+  useEffect(() => {
+    if (!currentUser || currentUser.id?.startsWith("guest-")) {
+      setCurrentUser(guestIdentity);
+    }
+  }, [currentUser, guestIdentity]);
+  const user = currentUser ?? guestIdentity;
   const [isAdmin, setIsAdmin] = useState(false);
 
   const userKey = user?.email || user?.id || `guest-${guestSessionId}`;
@@ -562,6 +570,7 @@ export function MeetScreen() {
           onRoomIdChange={setRoomId}
           onJoinRoom={handleJoin}
           onIsAdminChange={setIsAdmin}
+          onUserChange={setCurrentUser}
           isLoading={isLoading}
           displayNameInput={displayNameInput}
           onDisplayNameInputChange={setDisplayNameInput}

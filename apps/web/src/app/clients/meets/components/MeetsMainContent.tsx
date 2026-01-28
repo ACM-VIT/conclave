@@ -256,7 +256,9 @@ export default function MeetsMainContent({
     return videoParticipant?.screenShareStream ?? null;
   }, [participantsArray]);
   return (
-    <div className="flex-1 flex flex-col p-4 overflow-hidden relative">
+    <div
+      className={`flex-1 flex flex-col overflow-hidden relative ${isJoined ? "p-4" : "p-0"}`}
+    >
       {isJoined && <ConnectionBanner state={connectionState} />}
       <SystemAudioPlayers
         participants={participants}

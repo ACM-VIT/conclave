@@ -496,10 +496,6 @@ select:focus {
     transform: translate3d(10px, -180px, 0) scale(1.1);
   }
 }
-
-/* ============================================================
-   ACM-VIT INPUT STYLES
-   ============================================================ */
 .acm-input {
   background: rgba(0, 0, 0, 0.5);
   border: 1px solid rgba(254, 252, 217, 0.15);
@@ -521,9 +517,6 @@ select:focus {
   box-shadow: 0 0 0 3px rgba(249, 95, 74, 0.15);
 }
 
-/* ============================================================
-   ACM-VIT TYPOGRAPHY
-   ============================================================ */
 .acm-heading-display {
   font-family: "PolySans Bulky Wide", sans-serif;
   font-weight: 700;
@@ -552,9 +545,6 @@ select:focus {
   line-height: 1.6;
 }
 
-/* ============================================================
-   ACM-VIT BACKGROUND PATTERNS
-   ============================================================ */
 .acm-bg-pattern {
   background-image: url("/assets/background_pattern.svg");
   background-repeat: repeat;
@@ -563,20 +553,23 @@ select:focus {
 }
 
 .acm-bg-dot-grid {
-  background-image: url("/assets/background_pattern.svg");
+  background-image:
+    radial-gradient(circle, rgba(254, 252, 217, 0.12) 1px, transparent 1px),
+    url("/assets/background_pattern.svg");
   background-repeat: repeat;
+  background-size: 26px 26px, auto;
+  opacity: 0.22;
 }
 
 .acm-bg-radial {
   background: radial-gradient(ellipse at 30% 20%,
-      rgba(249, 95, 74, 0.08) 0%,
+      rgba(249, 95, 74, 0.12) 0%,
       transparent 50%),
     radial-gradient(ellipse at 70% 80%,
-      rgba(255, 0, 122, 0.06) 0%,
+      rgba(255, 0, 122, 0.09) 0%,
       transparent 50%);
 }
 
-/* Glow ball decorations */
 .acm-glow-ball {
   position: absolute;
   width: 300px;
@@ -591,9 +584,6 @@ select:focus {
   background: radial-gradient(circle, rgba(255, 0, 122, 0.25) 0%, transparent 70%);
 }
 
-/* ============================================================
-   ACM-VIT VIDEO TILE
-   ============================================================ */
 .acm-video-tile {
   position: relative;
   background: #0d0e0d;
@@ -612,9 +602,6 @@ select:focus {
   box-shadow: 0 0 0 2px rgba(249, 95, 74, 0.3), 0 0 30px rgba(249, 95, 74, 0.2);
 }
 
-/* ============================================================
-   SCROLLBAR STYLES
-   ============================================================ */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -633,9 +620,6 @@ select:focus {
   background: rgba(254, 252, 217, 0.25);
 }
 
-/* ============================================================
-   ACCESSIBILITY
-   ============================================================ */
 :where(button, [role="button"], a, input, textarea, select):focus-visible {
   outline: 2px solid rgba(249, 95, 74, 0.75);
   outline-offset: 2px;
@@ -650,9 +634,6 @@ select:focus {
   }
 }
 
-/* ============================================================
-   MOBILE SAFE AREA UTILITIES
-   ============================================================ */
 .safe-area-pt {
   padding-top: env(safe-area-inset-top, 0px);
 }
@@ -669,7 +650,6 @@ select:focus {
   padding-right: env(safe-area-inset-right, 0px);
 }
 
-/* Hide scrollbar but allow scrolling */
 .no-scrollbar {
   -ms-overflow-style: none;
   scrollbar-width: none;
@@ -679,7 +659,6 @@ select:focus {
   display: none;
 }
 
-/* Mobile touch feedback */
 @media (hover: none) and (pointer: coarse) {
   .touch-feedback:active {
     transform: scale(0.97);
@@ -687,10 +666,6 @@ select:focus {
   }
 }
 
-
-/* ============================================================
-   GENERIC ANIMATIONS
-   ============================================================ */
 @keyframes acm-fade-in {
   from {
     opacity: 0;
