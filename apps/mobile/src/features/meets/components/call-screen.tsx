@@ -1,14 +1,16 @@
-import React, { useMemo } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { StyleSheet, useWindowDimensions, View as RNView } from "react-native";
+import { Share, StyleSheet, useWindowDimensions, View as RNView } from "react-native";
 import { RTCView } from "react-native-webrtc";
+import * as Clipboard from "expo-clipboard";
+import * as Haptics from "expo-haptics";
 import type { ConnectionState, Participant } from "../types";
 import { isSystemUserId } from "../utils";
 import { useDeviceLayout, getGridColumns } from "../hooks/use-device-layout";
 import { ControlsBar } from "./controls-bar";
 import { ParticipantTile } from "./participant-tile";
 import { FlatList, Text, Pressable } from "@/tw";
-import { Lock, Users, MicOff, VenetianMask } from "lucide-react-native";
+import { Lock, Settings, Users, MicOff, VenetianMask } from "lucide-react-native";
 import { GlassPill } from "./glass-pill";
 
 const COLORS = {
@@ -21,6 +23,9 @@ const COLORS = {
   amberDim: "rgba(251, 191, 36, 0.2)",
   amberBorder: "rgba(251, 191, 36, 0.3)",
 } as const;
+
+const MEETING_LINK_BASE = "https://conclave.acmvit.in";
+const COPY_RESET_DELAY_MS = 1500;
 
 interface CallScreenProps {
   roomId: string;
@@ -46,7 +51,7 @@ interface CallScreenProps {
   onToggleParticipants: () => void;
   onToggleRoomLock?: (locked: boolean) => void;
   onSendReaction: (emoji: string) => void;
-  onOpenAudio: () => void;
+  onOpenSettings: () => void;
   onLeave: () => void;
   participantCount?: number;
   isRoomLocked?: boolean;
@@ -79,7 +84,7 @@ export function CallScreen({
   onToggleParticipants,
   onToggleRoomLock,
   onSendReaction,
-  onOpenAudio,
+  onOpenSettings,
   onLeave,
   participantCount,
   isRoomLocked = false,
@@ -90,7 +95,51 @@ export function CallScreen({
 }: CallScreenProps) {
   const insets = useSafeAreaInsets();
   const { width, height } = useWindowDimensions();
-  const { layout, isTablet, spacing } = useDeviceLayout();
+  const { layout, isTablet } = useDeviceLayout();
+  const [copied, setCopied] = useState(false);
+  const copyResetRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const meetingLink = useMemo(
+    () => (roomId ? `${MEETING_LINK_BASE}/${roomId}` : ""),
+    [roomId]
+  );
+
+  const meetingCopyText = useMemo(() => {
+    if (!meetingLink) return "";
+    return `Join my Conclave meeting: ${meetingLink}`;
+  }, [meetingLink]);
+
+  const handleCopyMeeting = useCallback(async () => {
+    if (!meetingCopyText) return;
+    await Clipboard.setStringAsync(meetingCopyText);
+    Haptics.selectionAsync().catch(() => { });
+    setCopied(true);
+    if (copyResetRef.current) {
+      clearTimeout(copyResetRef.current);
+    }
+    copyResetRef.current = setTimeout(() => {
+      setCopied(false);
+    }, COPY_RESET_DELAY_MS);
+  }, [meetingCopyText]);
+
+  const handleShareMeeting = useCallback(async () => {
+    if (!meetingCopyText) return;
+    try {
+      await Share.share({
+        message: meetingCopyText,
+      });
+    } catch (err) {
+      console.warn("[Meet] Share failed", err);
+    }
+  }, [meetingCopyText]);
+
+  useEffect(() => {
+    return () => {
+      if (copyResetRef.current) {
+        clearTimeout(copyResetRef.current);
+      }
+    };
+  }, []);
 
   const participantList = useMemo(() => {
     const list = Array.from(participants.values()).filter(
@@ -159,21 +208,44 @@ export function CallScreen({
       >
         {/* Header */}
         <RNView style={styles.header}>
-          <GlassPill style={styles.pillGlass}>
-            <RNView style={styles.roomPill}>
-              {isRoomLocked ? (
-                <Lock size={12} color={COLORS.primaryOrange} />
-              ) : null}
-              <Text style={styles.roomId} numberOfLines={1}>
-                {roomId.toUpperCase()}
-              </Text>
-            </RNView>
-          </GlassPill>
+          <Pressable
+            onPress={handleShareMeeting}
+            onLongPress={handleCopyMeeting}
+            accessibilityRole="button"
+            accessibilityLabel={`Share meeting link for room ${roomId}`}
+            accessibilityHint="Tap to share. Long press to copy."
+            style={({ pressed }) => [pressed && styles.roomPressed]}
+          >
+            <GlassPill style={[styles.pillGlass, copied && styles.pillCopied]}>
+              <RNView style={styles.roomPill}>
+                {isRoomLocked ? (
+                  <Lock size={12} color={COLORS.primaryOrange} />
+                ) : null}
+                <Text style={[styles.roomId, copied && styles.roomIdCopied]} numberOfLines={1}>
+                  {roomId.toUpperCase()}
+                </Text>
+              </RNView>
+            </GlassPill>
+          </Pressable>
 
-          {connectionLabel ? (
-            <RNView style={styles.statusPill}>
-              <Text style={styles.statusText}>{connectionLabel}</Text>
-            </RNView>
+        {connectionLabel ? (
+          <RNView style={styles.statusPill}>
+            <Text style={styles.statusText}>{connectionLabel}</Text>
+          </RNView>
+        ) : (
+          !isTablet ? (
+            <GlassPill style={[styles.pillGlass, styles.headerPill]}>
+              <Pressable onPress={onOpenSettings} style={styles.headerPillIconButton}>
+                <Settings size={14} color={COLORS.cream} />
+              </Pressable>
+              <RNView style={styles.headerPillDivider} />
+              <Pressable onPress={onToggleParticipants} style={styles.headerPillButton}>
+                <RNView style={styles.participantsPill}>
+                  <Users size={12} color={COLORS.cream} />
+                  <Text style={styles.participantsCount}>{displayParticipantCount}</Text>
+                </RNView>
+              </Pressable>
+            </GlassPill>
           ) : (
             <Pressable onPress={onToggleParticipants}>
               <GlassPill style={styles.pillGlass}>
@@ -183,8 +255,9 @@ export function CallScreen({
                 </RNView>
               </GlassPill>
             </Pressable>
-          )}
-        </RNView>
+          )
+        )}
+      </RNView>
 
         {isPresenting && presentationStream ? (
           <RNView
@@ -202,7 +275,9 @@ export function CallScreen({
               />
               <RNView style={styles.presenterBadge}>
                 <Text style={styles.presenterText}>
-                  {presenterName || "Presenter"} is presenting
+                  {presenterName === "You"
+                    ? "You're presenting"
+                    : `${presenterName || "Presenter"} is presenting`}
                 </Text>
               </RNView>
             </RNView>
@@ -306,7 +381,6 @@ export function CallScreen({
         onToggleParticipants={onToggleParticipants}
         onToggleRoomLock={onToggleRoomLock}
         onSendReaction={onSendReaction}
-        onOpenAudio={onOpenAudio}
         onLeave={onLeave}
       />
     </RNView>
@@ -334,11 +408,19 @@ const styles = StyleSheet.create({
     gap: 6,
     paddingHorizontal: 12,
     paddingVertical: 8,
+    position: "relative",
+  },
+  roomPressed: {
+    opacity: 0.75,
+    transform: [{ scale: 0.98 }],
   },
   pillGlass: {
     borderRadius: 50,
     borderWidth: 1,
     borderColor: COLORS.creamFaint,
+  },
+  pillCopied: {
+    borderColor: "rgba(249, 95, 74, 0.5)",
   },
   roomId: {
     fontSize: 12,
@@ -346,6 +428,11 @@ const styles = StyleSheet.create({
     color: COLORS.cream,
     letterSpacing: 1,
     fontFamily: "PolySans-Mono",
+  },
+  roomIdCopied: {
+    textDecorationLine: "underline",
+    textDecorationStyle: "solid",
+    textDecorationColor: "rgba(249, 95, 74, 0.85)",
   },
   statusPill: {
     paddingHorizontal: 12,
@@ -365,8 +452,27 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 4,
-    paddingHorizontal: 12,
+    paddingLeft: 8,
+    paddingRight: 12,
     paddingVertical: 8,
+  },
+  headerPill: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  headerPillButton: {
+    paddingHorizontal: 0,
+    paddingVertical: 4,
+  },
+  headerPillIconButton: {
+    paddingLeft: 12,
+    paddingRight: 8,
+    paddingVertical: 6,
+  },
+  headerPillDivider: {
+    width: 1,
+    height: 18,
+    backgroundColor: COLORS.creamFaint,
   },
   participantsCount: {
     fontSize: 12,
@@ -413,9 +519,10 @@ const styles = StyleSheet.create({
     borderColor: "rgba(254, 252, 217, 0.12)",
   },
   presenterText: {
-    fontSize: 10,
+    fontSize: 11,
     color: COLORS.cream,
-    letterSpacing: 1,
+    letterSpacing: 2,
+    fontWeight: "500",
     textTransform: "uppercase",
     fontFamily: "PolySans-Mono",
   },

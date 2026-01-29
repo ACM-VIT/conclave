@@ -1,0 +1,13 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.acmvit.conclave",
+      "sha256_cert_fingerprints": [
+        "91:92:9B:89:E1:A9:35:67:4A:9F:F7:7C:9B:36:BD:B9:D4:21:07:41:D6:21:55:38:52:D3:AB:BF:08:80:E9:00",
+        "FA:C6:17:45:DC:09:03:78:6F:B9:ED:E6:2A:96:2B:39:9F:73:48:F0:BB:6F:89:9B:83:32:66:75:91:03:3B:9C"
+      ]
+    }
+  }
+]

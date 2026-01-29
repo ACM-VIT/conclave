@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as AppleAuthentication from "expo-apple-authentication";
 import * as Google from "expo-auth-session/providers/google";
 import * as Haptics from "expo-haptics";
@@ -7,12 +7,14 @@ import { RTCView } from "react-native-webrtc";
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
+  PanResponder,
   Platform,
   StyleSheet,
   useWindowDimensions,
 } from "react-native";
 import Svg, { Path } from "react-native-svg";
 import Animated, { FadeIn, FadeInDown, FadeInUp } from "react-native-reanimated";
+import { LinearGradient } from "expo-linear-gradient";
 import {
   ArrowLeft,
   ArrowRight,
@@ -29,7 +31,8 @@ import {
   ROOM_CODE_MAX_LENGTH,
 } from "../utils";
 import { useDeviceLayout } from "../hooks/use-device-layout";
-import { ErrorBanner } from "./error-banner";
+import { ErrorSheet } from "./error-sheet";
+import { GlassPill } from "./glass-pill";
 import {
   Image,
   Pressable,
@@ -61,6 +64,8 @@ const textLineHeight = (fontSize: number, multiplier = 1.2) =>
   Math.round(fontSize * multiplier);
 
 type Phase = "welcome" | "auth" | "join";
+
+const isIos = Platform.OS === "ios";
 
 const GoogleIcon = ({ size = 18 }: { size?: number }) => (
   <Svg width={size} height={size} viewBox="0 0 24 24">
@@ -161,7 +166,35 @@ export function JoinScreen({
     null
   );
   const [isAppleAvailable, setIsAppleAvailable] = useState(false);
+  const [isEditingName, setIsEditingName] = useState(false);
+  const nameInputRef = useRef<React.ElementRef<typeof TextInput>>(null);
   const isAuthLoading = authProvider !== null;
+  const phases = useMemo<Phase[]>(
+    () => (forceJoinOnly ? ["join"] : ["welcome", "auth", "join"]),
+    [forceJoinOnly]
+  );
+  const panResponder = useMemo(() => {
+    if (phases.length <= 1) {
+      return null;
+    }
+
+    const index = phases.indexOf(phase);
+    return PanResponder.create({
+      onMoveShouldSetPanResponder: (_evt, gesture) => {
+        const { dx, dy } = gesture;
+        return Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 12;
+      },
+      onPanResponderRelease: (_evt, gesture) => {
+        const { dx, vx } = gesture;
+        if (index < 0) return;
+        if (dx <= -60 && vx <= -0.2 && index < phases.length - 1) {
+          setPhase(phases[index + 1]);
+        } else if (dx >= 60 && vx >= 0.2 && index > 0) {
+          setPhase(phases[index - 1]);
+        }
+      },
+    });
+  }, [phase, phases]);
   const googleRedirectUri = useMemo(() => {
     const clientId = Platform.select({
       ios: googleClientConfig.iosClientId,
@@ -202,6 +235,17 @@ export function JoinScreen({
     onDisplayNameInputChange(guestName.trim());
     setPhase("join");
   }, [guestName, haptic, onDisplayNameInputChange]);
+
+  const handleNamePress = useCallback(() => {
+    setIsEditingName(true);
+    requestAnimationFrame(() => {
+      nameInputRef.current?.focus();
+    });
+  }, []);
+
+  const handleNameBlur = useCallback(() => {
+    setIsEditingName(false);
+  }, []);
 
   const completeSocialSignIn = useCallback(
     async (provider: "google" | "apple", idToken?: string, nonce?: string, accessToken?: string) => {
@@ -351,51 +395,53 @@ export function JoinScreen({
     return (
       <DotGridBackground>
         <SafeAreaView style={styles.flex1} edges={["top", "bottom"]}>
-          <ScrollView
-            contentContainerStyle={styles.centerContent}
-            showsVerticalScrollIndicator={false}
-            keyboardShouldPersistTaps="handled"
-            contentInsetAdjustmentBehavior="never"
-          >
-            <Animated.View entering={FadeIn.duration(600)} style={styles.centerItems}>
-              <Text
-                numberOfLines={1}
-                ellipsizeMode="clip"
-                style={[styles.welcomeLabel, { color: COLORS.creamLight }]}
-              >
-                welcome to
-              </Text>
+          <View style={styles.flex1} {...(panResponder?.panHandlers ?? {})}>
+            <ScrollView
+              contentContainerStyle={styles.centerContent}
+              showsVerticalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
+              contentInsetAdjustmentBehavior="never"
+            >
+              <Animated.View entering={FadeIn.duration(600)} style={styles.centerItems}>
+                <Text
+                  numberOfLines={1}
+                  ellipsizeMode="clip"
+                  style={[styles.welcomeLabel, { color: COLORS.creamLight }]}
+                >
+                  welcome to
+                </Text>
 
-              <View style={styles.brandingRow}>
-                <Text style={[styles.bracket, { color: COLORS.orangeLight }]}>
-                  [
-                </Text>
-                <Text style={[styles.brandTitle, { color: COLORS.cream }]}>
-                  c0nclav3
-                </Text>
-                <Text style={[styles.bracket, { color: COLORS.orangeLight }]}>
-                  ]
-                </Text>
-              </View>
+                <View style={styles.brandingRow}>
+                  <Text style={[styles.bracket, { color: COLORS.orangeLight }]}>
+                    [
+                  </Text>
+                  <Text style={[styles.brandTitle, { color: COLORS.cream }]}>
+                    c0nclav3
+                  </Text>
+                  <Text style={[styles.bracket, { color: COLORS.orangeLight }]}>
+                    ]
+                  </Text>
+                </View>
 
-              <Text style={[styles.tagline, { color: COLORS.creamLighter }]}>
-                ACM-VIT's in-house video conferencing platform
-              </Text>
-
-              <Pressable
-                onPress={() => {
-                  haptic();
-                  setPhase("auth");
-                }}
-                style={[styles.primaryButton, { backgroundColor: COLORS.primaryOrange }]}
-              >
-                <Text numberOfLines={1} ellipsizeMode="clip" style={styles.primaryButtonText}>
-                  LET'S GO
+                <Text style={[styles.tagline, { color: COLORS.creamLighter }]}>
+                  ACM-VIT's in-house video conferencing platform
                 </Text>
-                <ArrowRight size={16} color="#FFFFFF" />
-              </Pressable>
-            </Animated.View>
-          </ScrollView>
+
+                <Pressable
+                  onPress={() => {
+                    haptic();
+                    setPhase("auth");
+                  }}
+                  style={[styles.primaryButton, { backgroundColor: COLORS.primaryOrange }]}
+                >
+                  <Text numberOfLines={1} ellipsizeMode="clip" style={styles.primaryButtonText}>
+                    LET'S GO
+                  </Text>
+                  <ArrowRight size={16} color="#FFFFFF" />
+                </Pressable>
+              </Animated.View>
+            </ScrollView>
+          </View>
         </SafeAreaView>
       </DotGridBackground>
     );
@@ -409,40 +455,41 @@ export function JoinScreen({
             behavior={Platform.OS === "ios" ? "padding" : "height"}
             style={styles.flex1}
           >
-            <ScrollView
-              style={styles.flex1}
-              contentContainerStyle={[
-                styles.authContent,
-                isIpadLayout && styles.authContentTablet,
-              ]}
-              keyboardShouldPersistTaps="handled"
-              contentInsetAdjustmentBehavior="never"
-            >
-              <Animated.View
-                entering={FadeInDown.duration(400)}
-                style={[styles.authCard, isIpadLayout && styles.authCardTablet]}
+            <View style={styles.flex1} {...(panResponder?.panHandlers ?? {})}>
+              <ScrollView
+                style={styles.flex1}
+                contentContainerStyle={[
+                  styles.authContent,
+                  isIpadLayout && styles.authContentTablet,
+                ]}
+                keyboardShouldPersistTaps="handled"
+                contentInsetAdjustmentBehavior="never"
               >
-                <View style={styles.authHeader}>
-                  <Text style={[styles.authTitle, { color: COLORS.cream }]}>
-                    Join
-                  </Text>
-                  <Text style={[styles.authSubtitle, { color: COLORS.creamLight }]}>
-                    choose how to continue
-                  </Text>
-                </View>
+                <Animated.View
+                  entering={FadeInDown.duration(400)}
+                  style={[styles.authCard, isIpadLayout && styles.authCardTablet]}
+                >
+                  <View style={styles.authHeader}>
+                    <Text style={[styles.authTitle, { color: COLORS.cream }]}>
+                      Join
+                    </Text>
+                    <Text style={[styles.authSubtitle, { color: COLORS.creamLight }]}>
+                      choose how to continue
+                    </Text>
+                  </View>
 
-                <View style={styles.socialGroup}>
-                  <Pressable
-                    onPress={handleGoogleSignIn}
-                    disabled={!googleRequest || isAuthLoading}
-                    style={({ pressed }) => [
-                      styles.socialButton,
-                      pressed && styles.socialButtonPressed,
-                      (isAuthLoading || !googleRequest) && styles.socialButtonDisabled,
-                    ]}
-                  >
-                    <View style={styles.socialButtonContent}>
-                      <View style={styles.socialIcon}>
+                  <View style={styles.socialGroup}>
+                  <GlassPill style={styles.socialPill}>
+                    <Pressable
+                      onPress={handleGoogleSignIn}
+                      disabled={!googleRequest || isAuthLoading}
+                      style={({ pressed }) => [
+                        styles.socialButton,
+                        pressed && styles.socialButtonPressed,
+                        (isAuthLoading || !googleRequest) && styles.socialButtonDisabled,
+                      ]}
+                    >
+                      <View style={styles.socialIconLeft}>
                         {authProvider === "google" ? (
                           <ActivityIndicator size="small" color={COLORS.cream} />
                         ) : (
@@ -450,21 +497,21 @@ export function JoinScreen({
                         )}
                       </View>
                       <Text style={styles.socialButtonText}>Continue with Google</Text>
-                    </View>
-                  </Pressable>
+                    </Pressable>
+                  </GlassPill>
 
                   {Platform.OS === "ios" && isAppleAvailable ? (
-                    <Pressable
-                      onPress={handleAppleSignIn}
-                      disabled={isAuthLoading}
-                      style={({ pressed }) => [
-                        styles.socialButton,
-                        pressed && styles.socialButtonPressed,
-                        isAuthLoading && styles.socialButtonDisabled,
-                      ]}
-                    >
-                      <View style={styles.socialButtonContent}>
-                        <View style={styles.socialIcon}>
+                    <GlassPill style={styles.socialPill}>
+                      <Pressable
+                        onPress={handleAppleSignIn}
+                        disabled={isAuthLoading}
+                        style={({ pressed }) => [
+                          styles.socialButton,
+                          pressed && styles.socialButtonPressed,
+                          isAuthLoading && styles.socialButtonDisabled,
+                        ]}
+                      >
+                        <View style={styles.socialIconLeft}>
                           {authProvider === "apple" ? (
                             <ActivityIndicator size="small" color={COLORS.cream} />
                           ) : (
@@ -476,81 +523,283 @@ export function JoinScreen({
                           )}
                         </View>
                         <Text style={styles.socialButtonText}>Continue with Apple</Text>
-                      </View>
-                    </Pressable>
+                      </Pressable>
+                    </GlassPill>
                   ) : null}
-                </View>
+                  </View>
 
-                <View style={styles.dividerRow}>
-                  <View style={[styles.dividerLine, { backgroundColor: COLORS.creamDim }]} />
-                  <Text style={[styles.dividerText, { color: COLORS.creamLighter }]}>
-                    or
-                  </Text>
-                  <View style={[styles.dividerLine, { backgroundColor: COLORS.creamDim }]} />
-                </View>
+                  <View style={styles.dividerRow}>
+                    <View style={[styles.dividerLine, { backgroundColor: COLORS.creamDim }]} />
+                    <Text style={[styles.dividerText, { color: COLORS.creamLighter }]}>
+                      or
+                    </Text>
+                    <View style={[styles.dividerLine, { backgroundColor: COLORS.creamDim }]} />
+                  </View>
 
-                <View style={styles.inputGroup}>
-                  <Text style={[styles.inputLabel, { color: COLORS.creamLight }]}>
-                    Your name
-                  </Text>
-                  <TextInput
-                    style={[styles.textInput, {
-                      backgroundColor: COLORS.surface,
-                      borderColor: COLORS.creamDim,
-                      color: COLORS.cream,
-                    }]}
-                    placeholder="Enter your name"
-                    placeholderTextColor={COLORS.creamLighter}
-                    value={guestName}
-                    onChangeText={setGuestName}
-                    autoCapitalize="words"
-                    returnKeyType="done"
-                    onSubmitEditing={handleContinueAsGuest}
-                  />
+                  <View style={styles.inputGroup}>
+                    <Text style={[styles.inputLabel, { color: COLORS.creamLight }]}>
+                      Your name
+                    </Text>
+                    <GlassPill style={styles.authInputPill}>
+                      <TextInput
+                        style={styles.authTextInput}
+                        placeholder="Enter your name"
+                        placeholderTextColor={COLORS.creamLighter}
+                        value={guestName}
+                        onChangeText={setGuestName}
+                        autoCapitalize="words"
+                        returnKeyType="done"
+                        onSubmitEditing={handleContinueAsGuest}
+                      />
+                    </GlassPill>
+
+                    <GlassPill style={styles.authActionPill}>
+                      <Pressable
+                        onPress={handleContinueAsGuest}
+                        disabled={!guestName.trim()}
+                        style={[
+                          styles.secondaryButton,
+                          !guestName.trim() && styles.secondaryButtonDisabled,
+                        ]}
+                      >
+                        <Text
+                          style={[
+                            styles.secondaryButtonText,
+                            {
+                              color: guestName.trim()
+                                ? "#FFFFFF"
+                                : COLORS.creamLighter,
+                            },
+                          ]}
+                        >
+                          Continue as Guest
+                        </Text>
+                      </Pressable>
+                    </GlassPill>
+                  </View>
 
                   <Pressable
-                    onPress={handleContinueAsGuest}
-                    disabled={!guestName.trim()}
-                    style={[
-                      styles.secondaryButton,
-                      {
-                        backgroundColor: guestName.trim()
-                          ? COLORS.primaryOrange
-                          : COLORS.creamDim,
-                      },
-                    ]}
+                    onPress={() => {
+                      haptic();
+                      setPhase("welcome");
+                    }}
+                    style={styles.backButton}
                   >
-                    <Text
-                      style={[
-                        styles.secondaryButtonText,
-                        {
-                          color: guestName.trim()
-                            ? "#FFFFFF"
-                            : COLORS.creamLighter,
-                        },
-                      ]}
-                    >
-                      Continue as Guest
-                    </Text>
+                    <View style={styles.backRow}>
+                      <ArrowLeft size={14} color={COLORS.creamLighter} />
+                      <Text style={[styles.backButtonText, { color: COLORS.creamLighter }]}>
+                        back
+                      </Text>
+                    </View>
                   </Pressable>
-                </View>
+                </Animated.View>
+              </ScrollView>
+            </View>
+          </KeyboardAvoidingView>
+        </SafeAreaView>
+      </DotGridBackground>
+    );
+  }
 
-                <Pressable
-                  onPress={() => {
-                    haptic();
-                    setPhase("welcome");
-                  }}
-                  style={styles.backButton}
-                >
-                  <View style={styles.backRow}>
-                    <ArrowLeft size={14} color={COLORS.creamLighter} />
-                    <Text style={[styles.backButtonText, { color: COLORS.creamLighter }]}>
-                      back
-                    </Text>
+  if (!isIpadLayout) {
+    return (
+      <DotGridBackground>
+        <SafeAreaView style={styles.flex1} edges={["top", "bottom"]}>
+          <KeyboardAvoidingView
+            behavior={Platform.OS === "ios" ? "padding" : "height"}
+            style={styles.flex1}
+          >
+            <View style={styles.flex1} {...(panResponder?.panHandlers ?? {})}>
+              {meetError ? (
+                <ErrorSheet
+                  visible={!!meetError}
+                  meetError={meetError}
+                  onDismiss={onDismissMeetError}
+                  autoDismissMs={6000}
+                  primaryActionLabel={onRetryMedia ? "Retry Permissions" : undefined}
+                  onPrimaryAction={onRetryMedia}
+                />
+              ) : null}
+
+              <View style={styles.fullPreviewWrap}>
+                <View style={styles.fullPreviewFrame}>
+                  {localStream && !isCameraOff ? (
+                    <RTCView
+                      streamURL={localStream.toURL()}
+                      style={styles.rtcView}
+                      mirror
+                    />
+                  ) : (
+                    <View style={styles.noVideoContainer}>
+                      <LinearGradient
+                        colors={["rgba(249, 95, 74, 0.2)", "rgba(255, 0, 122, 0.1)"]}
+                        style={styles.previewGradient}
+                      />
+                      <View style={styles.userAvatar}>
+                        <View style={styles.userAvatarBorder} />
+                        <Text style={[styles.userInitial, { color: COLORS.cream }]}>
+                          {userInitial}
+                        </Text>
+                      </View>
+                    </View>
+                  )}
+
+                  {isEditingName ? (
+                    <View style={styles.nameOverlay}>
+                      <TextInput
+                        ref={nameInputRef}
+                        style={styles.nameInput}
+                        value={displayNameInput}
+                        placeholder="Your name"
+                        placeholderTextColor="rgba(254, 252, 217, 0.6)"
+                        onChangeText={onDisplayNameInputChange}
+                        onBlur={handleNameBlur}
+                        returnKeyType="done"
+                        onSubmitEditing={handleNameBlur}
+                        autoCorrect={false}
+                      />
+                    </View>
+                  ) : (
+                    <Pressable onPress={handleNamePress} style={styles.nameOverlay}>
+                      <Text style={styles.overlayText}>
+                        {displayNameInput || "Guest"}
+                      </Text>
+                    </Pressable>
+                  )}
+
+                  <View style={styles.mediaControlsContainer}>
+                    <View style={styles.mediaControlsPill}>
+                      <Pressable
+                        onPress={() => {
+                          haptic();
+                          onToggleMute();
+                        }}
+                        style={[
+                          styles.mediaButton,
+                          isMuted && styles.mediaButtonActive,
+                        ]}
+                      >
+                        {isMuted ? (
+                          <MicOff size={18} color="#FFFFFF" />
+                        ) : (
+                          <Mic size={18} color="#FFFFFF" />
+                        )}
+                      </Pressable>
+                      <Pressable
+                        onPress={() => {
+                          haptic();
+                          onToggleCamera();
+                        }}
+                        style={[
+                          styles.mediaButton,
+                          isCameraOff && styles.mediaButtonActive,
+                        ]}
+                      >
+                        {isCameraOff ? (
+                          <VideoOff size={18} color="#FFFFFF" />
+                        ) : (
+                          <Video size={18} color="#FFFFFF" />
+                        )}
+                      </Pressable>
+                    </View>
                   </View>
-                </Pressable>
-              </Animated.View>
-            </ScrollView>
+
+                  <View style={styles.previewStatusOverlay}>
+                  
+                  </View>
+                </View>
+              </View>
+
+              <View style={styles.joinDock} pointerEvents="box-none">
+                <View style={styles.joinDockInner}>
+                  {!forceJoinOnly ? (
+                    <GlassPill style={styles.joinDockTabs}>
+                      <Pressable
+                        onPress={() => {
+                          haptic();
+                          setActiveTab("new");
+                        }}
+                        style={[
+                          styles.joinDockTab,
+                          activeTab === "new" && styles.joinDockTabActive,
+                        ]}
+                      >
+                        <Text
+                          style={[
+                            styles.joinDockTabText,
+                            { color: activeTab === "new" ? "#FFFFFF" : COLORS.creamLight },
+                          ]}
+                        >
+                          Create
+                        </Text>
+                      </Pressable>
+                      <Pressable
+                        onPress={() => {
+                          haptic();
+                          setActiveTab("join");
+                        }}
+                        style={[
+                          styles.joinDockTab,
+                          activeTab === "join" && styles.joinDockTabActive,
+                        ]}
+                      >
+                        <Text
+                          style={[
+                            styles.joinDockTabText,
+                            { color: activeTab === "join" ? "#FFFFFF" : COLORS.creamLight },
+                          ]}
+                        >
+                          Join
+                        </Text>
+                      </Pressable>
+                    </GlassPill>
+                  ) : null}
+
+                  {activeTab === "join" ? (
+                    <GlassPill style={styles.joinDockAction}>
+                      <View style={styles.joinDockInputRow}>
+                        <TextInput
+                          style={styles.joinDockInputField}
+                          placeholder="Room code or link"
+                          placeholderTextColor={COLORS.creamLighter}
+                          value={roomId}
+                          onChangeText={handleRoomChange}
+                          autoCapitalize="none"
+                          autoCorrect={false}
+                          returnKeyType="join"
+                          onSubmitEditing={handleJoin}
+                        />
+                        <Pressable
+                          onPress={handleJoin}
+                          disabled={!canJoin || isLoading}
+                          style={[
+                            styles.joinDockArrow,
+                            (!canJoin || isLoading) && styles.joinDockButtonDisabled,
+                          ]}
+                        >
+                          <ArrowRight size={18} color="#FFFFFF" />
+                        </Pressable>
+                      </View>
+                    </GlassPill>
+                  ) : (
+                    <GlassPill style={styles.joinDockAction}>
+                      <Pressable
+                        onPress={handleCreateRoom}
+                        disabled={isLoading}
+                        style={[
+                          styles.joinDockButton,
+                          isLoading && styles.joinDockButtonDisabled,
+                        ]}
+                      >
+                        <Text style={styles.joinDockButtonText}>
+                          {isLoading ? "Starting..." : "Start Meeting"}
+                        </Text>
+                      </Pressable>
+                    </GlassPill>
+                  )}
+                </View>
+              </View>
+            </View>
           </KeyboardAvoidingView>
         </SafeAreaView>
       </DotGridBackground>
@@ -569,7 +818,7 @@ export function JoinScreen({
           behavior={Platform.OS === "ios" ? "padding" : "height"}
           style={styles.flex1}
         >
-          <View style={styles.flex1}>
+          <View style={styles.flex1} {...(panResponder?.panHandlers ?? {})}>
             <ScrollView
               style={styles.flex1}
               contentContainerStyle={[
@@ -582,9 +831,11 @@ export function JoinScreen({
             >
               <View style={styles.joinContentInner}>
                 {meetError ? (
-                  <ErrorBanner
+                  <ErrorSheet
+                    visible={!!meetError}
                     meetError={meetError}
                     onDismiss={onDismissMeetError}
+                    autoDismissMs={6000}
                     primaryActionLabel={onRetryMedia ? "Retry Permissions" : undefined}
                     onPrimaryAction={onRetryMedia}
                   />
@@ -598,14 +849,18 @@ export function JoinScreen({
                     <Text style={[styles.sectionLabel, { color: COLORS.creamLight }]}>
                       Preview
                     </Text>
-                    <View style={[
-                      styles.videoPreview,
-                      {
-                        backgroundColor: COLORS.surface,
-                        borderColor: COLORS.creamDim,
-                      },
-                      isIpadLayout && styles.videoPreviewTablet,
-                    ]}>
+                    <View
+                      style={[
+                        styles.videoPreview,
+                        {
+                          backgroundColor: isIos
+                            ? "rgba(13, 14, 13, 0.35)"
+                            : "#0d0e0d",
+                          borderColor: "rgba(254, 252, 217, 0.1)",
+                        },
+                        isIpadLayout && styles.videoPreviewTablet,
+                      ]}
+                    >
                       {localStream && !isCameraOff ? (
                         <RTCView
                           streamURL={localStream.toURL()}
@@ -614,10 +869,12 @@ export function JoinScreen({
                         />
                       ) : (
                         <View style={styles.noVideoContainer}>
-                          <View style={[styles.userAvatar, {
-                            backgroundColor: COLORS.orangeDim,
-                            borderColor: COLORS.creamDim,
-                          }]}>
+                          <LinearGradient
+                            colors={["rgba(249, 95, 74, 0.2)", "rgba(255, 0, 122, 0.1)"]}
+                            style={styles.previewGradient}
+                          />
+                          <View style={styles.userAvatar}>
+                            <View style={styles.userAvatarBorder} />
                             <Text style={[styles.userInitial, { color: COLORS.cream }]}>
                               {userInitial}
                             </Text>
@@ -625,11 +882,28 @@ export function JoinScreen({
                         </View>
                       )}
 
-                      <View style={styles.nameOverlay}>
-                        <Text style={styles.overlayText}>
-                          {displayNameInput || "Guest"}
-                        </Text>
-                      </View>
+                  {isEditingName ? (
+                    <View style={styles.nameOverlay}>
+                      <TextInput
+                        ref={nameInputRef}
+                        style={styles.nameInput}
+                        value={displayNameInput}
+                        placeholder="Your name"
+                        placeholderTextColor="rgba(254, 252, 217, 0.6)"
+                        onChangeText={onDisplayNameInputChange}
+                        onBlur={handleNameBlur}
+                        returnKeyType="done"
+                        onSubmitEditing={handleNameBlur}
+                        autoCorrect={false}
+                      />
+                    </View>
+                  ) : (
+                    <Pressable onPress={handleNamePress} style={styles.nameOverlay}>
+                      <Text style={styles.overlayText}>
+                        {displayNameInput || "Guest"}
+                      </Text>
+                    </Pressable>
+                  )}
 
                       <View style={styles.mediaControlsContainer}>
                         <View style={styles.mediaControlsPill}>
@@ -668,44 +942,20 @@ export function JoinScreen({
                         </View>
                       </View>
                     </View>
-
-                    <View style={styles.preflightRow}>
-                      <Text style={[styles.preflightLabel, { color: COLORS.creamLight }]}>
-                        Preflight
-                      </Text>
-                      <View style={[styles.statusPill, { borderColor: COLORS.creamDim }]}>
-                        <View
-                          style={[
-                            styles.statusDot,
-                            { backgroundColor: !isMuted ? "#34d399" : COLORS.primaryOrange },
-                          ]}
-                        />
-                        <Text style={styles.statusText}>
-                          Mic {!isMuted ? "On" : "Off"}
-                        </Text>
-                      </View>
-                      <View style={[styles.statusPill, { borderColor: COLORS.creamDim }]}>
-                        <View
-                          style={[
-                            styles.statusDot,
-                            { backgroundColor: !isCameraOff ? "#34d399" : COLORS.primaryOrange },
-                          ]}
-                        />
-                        <Text style={styles.statusText}>
-                          Camera {!isCameraOff ? "On" : "Off"}
-                        </Text>
-                      </View>
-                    </View>
                   </Animated.View>
 
                   <Animated.View
                     entering={FadeInUp.delay(100).duration(400)}
                     style={[
-                      styles.joinCard,
-                      { borderColor: COLORS.creamDim },
                       isIpadLayout && { flex: joinCardFlex, marginTop: 0, marginLeft: spacing.lg },
                     ]}
                   >
+                    <View
+                      style={[
+                        styles.joinCard,
+                        { borderColor: COLORS.creamDim },
+                      ]}
+                    >
                     {!forceJoinOnly && (
                       <View style={[styles.tabContainer, { backgroundColor: COLORS.surface }]}>
                         <Pressable
@@ -840,6 +1090,7 @@ export function JoinScreen({
                         </View>
                       </Pressable>
                     )}
+                    </View>
                   </Animated.View>
                 </View>
               </View>
@@ -854,6 +1105,111 @@ export function JoinScreen({
 const styles = StyleSheet.create({
   flex1: {
     flex: 1,
+  },
+  fullPreviewWrap: {
+    flex: 1,
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 140,
+  },
+  fullPreviewFrame: {
+    flex: 1,
+    borderRadius: 28,
+    overflow: "hidden",
+    backgroundColor: "#0d0e0d",
+    borderWidth: 1,
+    borderColor: "rgba(254, 252, 217, 0.1)",
+  },
+  previewStatusOverlay: {
+    position: "absolute",
+    bottom: 16,
+    left: 16,
+  },
+  preflightRowOverlay: {
+    marginTop: 0,
+  },
+  joinDock: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    bottom: 0,
+    paddingHorizontal: 16,
+    paddingBottom: 12,
+  },
+  joinDockInner: {
+    gap: 12,
+  },
+  joinDockTabs: {
+    flexDirection: "row",
+    padding: 6,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: "rgba(254, 252, 217, 0.12)",
+    backgroundColor: isIos ? "rgba(12, 12, 12, 0.4)" : "rgba(12, 12, 12, 0.8)",
+  },
+  joinDockTab: {
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: 999,
+    alignItems: "center",
+  },
+  joinDockTabActive: {
+    backgroundColor: "rgba(249, 95, 74, 0.85)",
+  },
+  joinDockTabText: {
+    fontSize: 12,
+    lineHeight: textLineHeight(12, 1.2),
+    letterSpacing: 1,
+    textTransform: "uppercase",
+    fontFamily: "PolySans-Mono",
+  },
+  joinDockInputRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    height: "100%",
+    paddingHorizontal: 14,
+  },
+  joinDockInputField: {
+    flex: 1,
+    color: COLORS.cream,
+    fontSize: 14,
+    fontFamily: "PolySans-Regular",
+    includeFontPadding: false,
+  },
+  joinDockArrow: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(249, 95, 74, 0.85)",
+  },
+  joinDockAction: {
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: "rgba(254, 252, 217, 0.12)",
+    backgroundColor: isIos ? "rgba(20, 20, 20, 0.35)" : "rgba(20, 20, 20, 0.85)",
+    height: 52,
+  },
+  joinDockButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    height: "100%",
+    paddingHorizontal: 18,
+    borderRadius: 999,
+  },
+  joinDockButtonDisabled: {
+    opacity: 0.6,
+  },
+  joinDockButtonText: {
+    fontSize: 14,
+    lineHeight: textLineHeight(14, 1.25),
+    fontWeight: "600",
+    color: "#FFFFFF",
+    fontFamily: "PolySans-Regular",
   },
   centerContent: {
     flex: 1,
@@ -931,15 +1287,19 @@ const styles = StyleSheet.create({
   },
   authCard: {
     width: "100%",
+    alignSelf: "center",
+    maxWidth: 420,
+    padding: 0,
+    borderRadius: 0,
+    borderWidth: 0,
+    backgroundColor: "transparent",
   },
   authCardTablet: {
     maxWidth: 520,
-    alignSelf: "center",
-    padding: 24,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: "rgba(254, 252, 217, 0.12)",
-    backgroundColor: "rgba(20, 20, 20, 0.8)",
+    padding: 0,
+    borderRadius: 0,
+    borderWidth: 0,
+    backgroundColor: "transparent",
   },
   authHeader: {
     alignItems: "center",
@@ -963,35 +1323,37 @@ const styles = StyleSheet.create({
     gap: 12,
     marginBottom: 20,
   },
+  socialPill: {
+    alignSelf: "center",
+    width: "100%",
+    maxWidth: 360,
+    height: 54,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: "rgba(254, 252, 217, 0.12)",
+    backgroundColor: isIos ? "rgba(20, 20, 20, 0.35)" : "rgba(20, 20, 20, 0.85)",
+  },
   socialButton: {
     width: "100%",
     flexDirection: "row",
     alignItems: "center",
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    minHeight: 48,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: "rgba(254, 252, 217, 0.2)",
-    backgroundColor: "rgba(26, 26, 26, 0.9)",
+    height: "100%",
+    paddingVertical: 0,
+    paddingHorizontal: 18,
+    borderRadius: 999,
     justifyContent: "center",
   },
   socialButtonPressed: {
-    borderColor: "rgba(254, 252, 217, 0.3)",
-    backgroundColor: "rgba(26, 26, 26, 0.8)",
+    opacity: 0.85,
   },
   socialButtonDisabled: {
     opacity: 0.5,
   },
-  socialButtonContent: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 12,
-  },
-  socialIcon: {
-    width: 20,
-    height: 20,
+  socialIconLeft: {
+    position: "absolute",
+    left: 80,
+    width: 24,
+    height: 50,
     alignItems: "center",
     justifyContent: "center",
   },
@@ -1008,13 +1370,18 @@ const styles = StyleSheet.create({
     fontFamily: "PolySans-Mono",
   },
   socialButtonText: {
-    fontSize: 13,
-    fontWeight: "500",
+    fontSize: 14,
+    fontWeight: "600",
     letterSpacing: -0.2,
     fontFamily: "PolySans-Regular",
     color: COLORS.cream,
     lineHeight: textLineHeight(13, 1.25),
     includeFontPadding: false,
+    paddingLeft: 50,
+    width: "100%",
+    textAlign: "center",
+    marginTop: 5,
+    paddingTop: 13,
   },
   dividerRow: {
     flexDirection: "row",
@@ -1036,6 +1403,26 @@ const styles = StyleSheet.create({
   inputGroup: {
     gap: 12,
   },
+  authInputPill: {
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: "rgba(254, 252, 217, 0.12)",
+    backgroundColor: isIos ? "rgba(20, 20, 20, 0.35)" : "rgba(20, 20, 20, 0.85)",
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  authTextInput: {
+    color: COLORS.cream,
+    fontSize: 14,
+    fontFamily: "PolySans-Regular",
+    includeFontPadding: false,
+  },
+  authActionPill: {
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: "rgba(254, 252, 217, 0.12)",
+    backgroundColor: isIos ? "rgba(20, 20, 20, 0.35)" : "rgba(20, 20, 20, 0.85)",
+  },
   inputLabel: {
     fontSize: 12,
     lineHeight: textLineHeight(12, 1.25),
@@ -1054,9 +1441,13 @@ const styles = StyleSheet.create({
   },
   secondaryButton: {
     width: "100%",
-    paddingVertical: 16,
-    borderRadius: 12,
+    paddingVertical: 14,
+    borderRadius: 999,
     alignItems: "center",
+    backgroundColor: COLORS.primaryOrange,
+  },
+  secondaryButtonDisabled: {
+    backgroundColor: "rgba(254, 252, 217, 0.1)",
   },
   secondaryButtonText: {
     fontSize: 15,
@@ -1112,13 +1503,23 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
+  previewGradient: {
+    ...StyleSheet.absoluteFillObject,
+  },
   userAvatar: {
     width: 64,
     height: 64,
     borderRadius: 32,
     alignItems: "center",
     justifyContent: "center",
+    backgroundColor: "rgba(249, 95, 74, 0.15)",
+    position: "relative",
+  },
+  userAvatarBorder: {
+    ...StyleSheet.absoluteFillObject,
+    borderRadius: 32,
     borderWidth: 1,
+    borderColor: "rgba(254, 252, 217, 0.2)",
   },
   userInitial: {
     fontSize: 24,
@@ -1130,16 +1531,25 @@ const styles = StyleSheet.create({
     position: "absolute",
     top: 12,
     left: 12,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
     borderRadius: 20,
-    backgroundColor: "rgba(0, 0, 0, 0.5)",
+    backgroundColor: "rgba(0, 0, 0, 0.7)",
+    borderWidth: 1,
+    borderColor: "rgba(254, 252, 217, 0.2)",
   },
   overlayText: {
     fontSize: 12,
     lineHeight: textLineHeight(12, 1.25),
-    color: "rgba(254, 252, 217, 0.7)",
+    color: "rgba(254, 252, 217, 0.9)",
     fontFamily: "PolySans-Mono",
+  },
+  nameInput: {
+    minWidth: 96,
+    color: "rgba(254, 252, 217, 0.95)",
+    fontSize: 12,
+    fontFamily: "PolySans-Mono",
+    includeFontPadding: false,
   },
   mediaControlsContainer: {
     position: "absolute",
@@ -1193,6 +1603,7 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     backgroundColor: "rgba(0, 0, 0, 0.4)",
     borderWidth: 1,
+    borderColor: "rgba(254, 252, 217, 0.1)",
   },
   statusDot: {
     width: 6,
@@ -1208,7 +1619,9 @@ const styles = StyleSheet.create({
   joinCard: {
     borderRadius: 16,
     padding: 20,
-    backgroundColor: "rgba(20, 20, 20, 0.8)",
+    backgroundColor: isIos
+      ? "rgba(20, 20, 20, 0.35)"
+      : "rgba(20, 20, 20, 0.8)",
     borderWidth: 1,
   },
   tabContainer: {

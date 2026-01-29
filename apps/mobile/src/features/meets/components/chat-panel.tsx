@@ -1,5 +1,7 @@
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  Animated,
+  Easing,
   FlatList as RNFlatList,
   KeyboardAvoidingView,
   Platform,
@@ -23,6 +25,85 @@ const ChatHeader = memo(function ChatHeader({ onClose }: { onClose: () => void }
         <Text style={styles.closeText}>Done</Text>
       </Pressable>
     </View>
+  );
+});
+
+const MessageRow = memo(function MessageRow({
+  item,
+  isOwn,
+  isNew,
+  displayName,
+  actionText,
+  timestamp,
+}: {
+  item: ChatMessage;
+  isOwn: boolean;
+  isNew: boolean;
+  displayName: string;
+  actionText: string | null;
+  timestamp: string;
+}) {
+  const scale = useRef(new Animated.Value(isNew ? 0.94 : 1)).current;
+  const translateY = useRef(new Animated.Value(isNew ? 8 : 0)).current;
+  const opacity = useRef(new Animated.Value(isNew ? 0 : 1)).current;
+
+  useEffect(() => {
+    if (!isNew) return;
+    scale.setValue(0.94);
+    translateY.setValue(8);
+    opacity.setValue(0);
+    Animated.parallel([
+      Animated.spring(scale, {
+        toValue: 1,
+        speed: 18,
+        bounciness: 8,
+        useNativeDriver: true,
+      }),
+      Animated.spring(translateY, {
+        toValue: 0,
+        speed: 18,
+        bounciness: 6,
+        useNativeDriver: true,
+      }),
+      Animated.timing(opacity, {
+        toValue: 1,
+        duration: 180,
+        easing: Easing.out(Easing.quad),
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, [isNew, opacity, scale, translateY]);
+
+  return (
+    <Animated.View style={{ opacity, transform: [{ translateY }, { scale }] }}>
+      {actionText ? (
+        <Text style={styles.actionText}>
+          <Text style={styles.actionName}>{displayName}</Text> {actionText}
+        </Text>
+      ) : (
+        <View
+          style={[
+            styles.messageRow,
+            isOwn ? styles.messageRowRight : styles.messageRowLeft,
+          ]}
+        >
+          {!isOwn ? (
+            <Text style={styles.messageName}>{displayName}</Text>
+          ) : null}
+          <View
+            style={[
+              styles.messageBubble,
+              isOwn ? styles.bubbleOwn : styles.bubbleOther,
+            ]}
+          >
+            <Text style={[styles.messageText, isOwn && styles.messageTextOwn]}>
+              {item.content}
+            </Text>
+          </View>
+          <Text style={styles.messageTimestamp}>{timestamp}</Text>
+        </View>
+      )}
+    </Animated.View>
   );
 });
 
@@ -134,6 +215,8 @@ export function ChatPanel({
   const listRef = useRef<RNFlatList<ChatMessage> | null>(null);
   const hasPresented = useRef(false);
   const [activeCommandIndex, setActiveCommandIndex] = useState(0);
+  const hasInitializedRef = useRef(false);
+  const prevMessageIdsRef = useRef<Set<string>>(new Set());
 
   const handleDismiss = useCallback(() => {
     void sheetRef.current?.dismiss();
@@ -176,6 +259,24 @@ export function ChatPanel({
       listRef.current?.scrollToEnd({ animated: true });
     });
   }, [messages.length]);
+
+  useEffect(() => {
+    hasInitializedRef.current = true;
+  }, []);
+
+  const newMessageIds = useMemo(() => {
+    const prevIds = prevMessageIdsRef.current;
+    const currentIds = new Set<string>();
+    const newIds = new Set<string>();
+    messages.forEach((message) => {
+      currentIds.add(message.id);
+      if (!prevIds.has(message.id)) {
+        newIds.add(message.id);
+      }
+    });
+    prevMessageIdsRef.current = currentIds;
+    return newIds;
+  }, [messages]);
 
   useEffect(() => {
     if (visible) {
@@ -231,52 +332,29 @@ export function ChatPanel({
             data={messages}
             keyExtractor={(item: ChatMessage) => item.id}
             contentContainerStyle={styles.listContent}
-            renderItem={({ item }: ListRenderItemInfo<ChatMessage>) => (
-              (() => {
-                const isOwn = item.userId === currentUserId;
-                const actionText = getActionText(item.content);
-                const displayName = isOwn
-                  ? "You"
-                  : resolveDisplayName(item.userId) || item.displayName;
-                const timestamp = new Date(item.timestamp).toLocaleTimeString(
-                  [],
-                  { hour: "2-digit", minute: "2-digit" }
-                );
+            renderItem={({ item }: ListRenderItemInfo<ChatMessage>) => {
+              const isOwn = item.userId === currentUserId;
+              const actionText = getActionText(item.content);
+              const displayName = isOwn
+                ? "You"
+                : resolveDisplayName(item.userId) || item.displayName;
+              const timestamp = new Date(item.timestamp).toLocaleTimeString(
+                [],
+                { hour: "2-digit", minute: "2-digit" }
+              );
+              const isNew = hasInitializedRef.current && newMessageIds.has(item.id);
 
-                if (actionText) {
-                  return (
-                    <Text style={styles.actionText}>
-                      <Text style={styles.actionName}>{displayName}</Text>{" "}
-                      {actionText}
-                    </Text>
-                  );
-                }
-
-                return (
-                  <View
-                    style={[
-                      styles.messageRow,
-                      isOwn ? styles.messageRowRight : styles.messageRowLeft,
-                    ]}
-                  >
-                    {!isOwn ? (
-                      <Text style={styles.messageName}>{displayName}</Text>
-                    ) : null}
-                    <View
-                      style={[
-                        styles.messageBubble,
-                        isOwn ? styles.bubbleOwn : styles.bubbleOther,
-                      ]}
-                    >
-                      <Text style={[styles.messageText, isOwn && styles.messageTextOwn]}>
-                        {item.content}
-                      </Text>
-                    </View>
-                    <Text style={styles.messageTimestamp}>{timestamp}</Text>
-                  </View>
-                );
-              })()
-            )}
+              return (
+                <MessageRow
+                  item={item}
+                  isOwn={isOwn}
+                  isNew={isNew}
+                  displayName={displayName}
+                  actionText={actionText}
+                  timestamp={timestamp}
+                />
+              );
+            }}
             ListEmptyComponent={
               <View style={styles.emptyState}>
                 <Text style={styles.emptyText}>

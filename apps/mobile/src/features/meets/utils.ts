@@ -140,7 +140,21 @@ export function createMeetError(
   error: unknown,
   defaultCode: MeetError["code"] = "UNKNOWN"
 ): MeetError {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = (() => {
+    if (error instanceof Error) return error.message;
+    if (typeof error === "string") return error;
+    if (error && typeof error === "object") {
+      const errObj = error as { message?: unknown; error?: unknown };
+      if (typeof errObj.message === "string") return errObj.message;
+      if (typeof errObj.error === "string") return errObj.error;
+      try {
+        return JSON.stringify(error);
+      } catch {
+        return String(error);
+      }
+    }
+    return String(error);
+  })();
 
   if (
     message.includes("Permission denied") ||

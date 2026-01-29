@@ -1,4 +1,13 @@
-export const allowedEmojiReactions = new Set(["👍", "👏", "😂", "❤️", "🎉", "😮"]);
+export const allowedEmojiReactions = new Set([
+  "👍",
+  "👏",
+  "😂",
+  "❤️",
+  "🎉",
+  "😮",
+  "😢",
+  "🤔",
+]);
 
 export const allowedAssetExtensions = new Set([
   ".gif",

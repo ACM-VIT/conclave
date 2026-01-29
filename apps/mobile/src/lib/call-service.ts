@@ -5,6 +5,7 @@ import InCallManager from "react-native-incall-manager";
 let callKeepReady = false;
 let currentCallId: string | null = null;
 let callKeepModule: typeof import("react-native-callkeep") | null = null;
+let foregroundServiceModule: unknown | null = null;
 
 const getCallKeep = () => {
   if (Platform.OS !== "ios") return null;
@@ -12,6 +13,19 @@ const getCallKeep = () => {
     callKeepModule = require("react-native-callkeep");
   }
   return callKeepModule;
+};
+
+const getForegroundService = (): any | null => {
+  if (Platform.OS !== "android") return null;
+  if (!foregroundServiceModule) {
+    try {
+      foregroundServiceModule = require("@supersami/rn-foreground-service");
+    } catch (error) {
+      console.warn("[ForegroundService] module not available", error);
+      return null;
+    }
+  }
+  return (foregroundServiceModule as any)?.default ?? foregroundServiceModule;
 };
 
 const CALLKEEP_OPTIONS: IOptions = {
@@ -75,6 +89,40 @@ export function startInCall() {
 
 export function stopInCall() {
   InCallManager.stop();
+}
+
+export async function startForegroundCallService() {
+  const ForegroundService = getForegroundService();
+  if (!ForegroundService) return;
+  try {
+    if (typeof ForegroundService.start !== "function") return;
+    await ForegroundService.start({
+      id: 4242,
+      title: "Conclave",
+      message: "Meeting in progress",
+      importance: "high",
+      visibility: "public",
+      vibration: false,
+    });
+  } catch (error) {
+    console.warn("[ForegroundService] start failed", error);
+  }
+}
+
+export async function stopForegroundCallService() {
+  const ForegroundService = getForegroundService();
+  if (!ForegroundService) return;
+  try {
+    if (typeof ForegroundService.stop === "function") {
+      await ForegroundService.stop();
+      return;
+    }
+    if (typeof ForegroundService.stopAll === "function") {
+      await ForegroundService.stopAll();
+    }
+  } catch (error) {
+    console.warn("[ForegroundService] stop failed", error);
+  }
 }
 
 export function setAudioRoute(route: "speaker" | "earpiece") {

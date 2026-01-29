@@ -9,7 +9,16 @@ export const SPEAKER_THRESHOLD = 0.03;
 export const ACTIVE_SPEAKER_HOLD_MS = 900;
 export const REACTION_LIFETIME_MS = 3800;
 export const MAX_REACTIONS = 30;
-export const EMOJI_REACTIONS = ["👍", "👏", "😂", "❤️", "🎉", "😮"] as const;
+export const EMOJI_REACTIONS = [
+  "👍",
+  "👏",
+  "😂",
+  "❤️",
+  "🎉",
+  "😮",
+  "😢",
+  "🤔",
+] as const;
 
 export const STANDARD_QUALITY_CONSTRAINTS = {
   width: { ideal: 1280, max: 1280 },

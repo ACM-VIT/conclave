@@ -1,0 +1,11 @@
+{
+  "applinks": {
+    "apps": [],
+    "details": [
+      {
+        "appID": "RZGK9VX3KX.com.acmvit.conclave",
+        "paths": ["/*"]
+      }
+    ]
+  }
+}

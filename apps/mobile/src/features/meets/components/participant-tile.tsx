@@ -61,7 +61,11 @@ export function ParticipantTile({
   const namePillFontSize = isTablet ? 12 : 11;
 
   return (
-    <RNView style={[styles.container, isActiveSpeaker && styles.activeSpeaker]}>
+    <RNView style={[styles.outer, isActiveSpeaker && styles.outerActive]}>
+      {isActiveSpeaker ? (
+        <RNView pointerEvents="none" style={styles.activeSpeakerRing} />
+      ) : null}
+      <RNView style={[styles.container, isActiveSpeaker && styles.activeSpeaker]}>
       {hasVideo ? (
         <RTCView
           streamURL={videoStream.toURL()}
@@ -103,7 +107,7 @@ export function ParticipantTile({
             styles.handRaisedBadge,
             { width: handBadgeSize, height: handBadgeSize, borderRadius: handBadgeSize / 2 }
           ]}>
-            <Hand size={isTablet ? 16 : 14} color="#000000" strokeWidth={2} />
+            <Hand size={isTablet ? 16 : 14} color={COLORS.cream} strokeWidth={2} />
           </RNView>
         </RNView>
       )}
@@ -122,11 +126,33 @@ export function ParticipantTile({
           )}
         </RNView>
       </RNView>
+      </RNView>
     </RNView>
   );
 }
 
 const styles = StyleSheet.create({
+  outer: {
+    flex: 1,
+    borderRadius: 18,
+  },
+  outerActive: {
+    shadowColor: COLORS.primaryOrange,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.35,
+    shadowRadius: 18,
+    elevation: 8,
+  },
+  activeSpeakerRing: {
+    ...StyleSheet.absoluteFillObject,
+    top: -2,
+    right: -2,
+    bottom: -2,
+    left: -2,
+    borderRadius: 20,
+    borderWidth: 2,
+    borderColor: "rgba(249, 95, 74, 0.3)",
+  },
   container: {
     flex: 1,
     borderRadius: 16,
@@ -136,12 +162,7 @@ const styles = StyleSheet.create({
     borderColor: "rgba(254, 252, 217, 0.1)",
   },
   activeSpeaker: {
-    borderWidth: 2,
     borderColor: COLORS.primaryOrange,
-    shadowColor: COLORS.speakerGlow,
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 1,
-    shadowRadius: 15,
   },
   video: {
     width: "100%",

@@ -2,6 +2,8 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { StatusBar } from "expo-status-bar";
 import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
 import {
+  AppState,
+  Linking,
   NativeModules,
   Platform,
   StyleSheet,
@@ -15,11 +17,13 @@ import {
   registerCallKeepHandlers,
   setAudioRoute,
   startCallSession,
+  startForegroundCallService,
   startInCall,
+  stopForegroundCallService,
   stopInCall,
 } from "@/lib/call-service";
 import { ensureWebRTCGlobals } from "@/lib/webrtc";
-import { View } from "@/tw";
+import { Text, View } from "@/tw";
 import { reactionAssetList } from "../reaction-assets";
 import { useMeetAudioActivity } from "../hooks/use-meet-audio-activity";
 import { useMeetChat } from "../hooks/use-meet-chat";
@@ -32,17 +36,18 @@ import { useMeetReactions } from "../hooks/use-meet-reactions";
 import { useMeetRefs } from "../hooks/use-meet-refs";
 import { useMeetSocket } from "../hooks/use-meet-socket";
 import { useMeetState } from "../hooks/use-meet-state";
+import { useDeviceLayout } from "../hooks/use-device-layout";
 import type { Participant } from "../types";
 import { createMeetError } from "../utils";
 import { getCachedUser, hydrateCachedUser, setCachedUser } from "../auth-session";
 import { CallScreen } from "./call-screen";
 import { ChatPanel } from "./chat-panel";
-import { ErrorBanner } from "./error-banner";
+import { ErrorSheet } from "./error-sheet";
 import { JoinScreen } from "./join-screen";
 import { ParticipantsPanel } from "./participants-panel";
 import { ReactionOverlay } from "./reaction-overlay";
 import { ReactionSheet } from "./reaction-sheet";
-import { AudioRouteSheet, type AudioRoute } from "./audio-route-sheet";
+import { SettingsSheet } from "./settings-sheet";
 
 const clientId = process.env.EXPO_PUBLIC_SFU_CLIENT_ID || "public";
 const apiBaseUrl =
@@ -63,12 +68,16 @@ const readError = async (response: Response) => {
   return response.statusText || "Request failed";
 };
 
-export function MeetScreen() {
+export function MeetScreen({ initialRoomId }: { initialRoomId?: string } = {}) {
   if (process.env.EXPO_OS !== "web") {
     ensureWebRTCGlobals();
   }
 
+  const { isTablet } = useDeviceLayout();
   const refs = useMeetRefs();
+  const isAppActiveRef = useRef(AppState.currentState === "active");
+  const wasCameraOnBeforeBackgroundRef = useRef(false);
+  const wasMutedBeforeBackgroundRef = useRef(true);
   const {
     connectionState,
     setConnectionState,
@@ -103,7 +112,8 @@ export function MeetScreen() {
     pendingUsers,
     isRoomLocked,
     setIsRoomLocked,
-  } = useMeetState({ initialRoomId: "" });
+  } = useMeetState({ initialRoomId });
+  const shouldKeepAliveInBackground = isScreenSharing || !!activeScreenShareId;
 
   const {
     videoQuality,
@@ -213,10 +223,13 @@ export function MeetScreen() {
     toggleMute,
     toggleCamera,
     toggleScreenShare,
+    stopScreenShare,
     stopLocalTrack,
     handleLocalTrackEnded,
     playNotificationSound,
     primeAudioOutput,
+    startAudioKeepAlive,
+    stopAudioKeepAlive,
   } = useMeetMedia({
     ghostEnabled: isGhostMode,
     connectionState,
@@ -249,6 +262,67 @@ export function MeetScreen() {
     permissionHintTimeoutRef: refs.permissionHintTimeoutRef,
     audioContextRef: refs.audioContextRef,
   });
+
+  const isJoined = connectionState === "joined";
+  const isLoading =
+    connectionState === "connecting" ||
+    connectionState === "joining" ||
+    connectionState === "reconnecting" ||
+    connectionState === "waiting";
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener("change", (state) => {
+      const isActive = state === "active";
+      isAppActiveRef.current = isActive;
+      if (!isJoined) return;
+
+      if (!isActive) {
+        wasCameraOnBeforeBackgroundRef.current = !isCameraOff;
+        wasMutedBeforeBackgroundRef.current = isMuted;
+        if (Platform.OS === "ios" && shouldKeepAliveInBackground) {
+          startAudioKeepAlive();
+        } else if (Platform.OS === "ios") {
+          stopAudioKeepAlive();
+        }
+        return;
+      }
+
+      if (Platform.OS === "ios") {
+        stopAudioKeepAlive();
+      }
+      if (wasCameraOnBeforeBackgroundRef.current && isCameraOff) {
+        void toggleCamera();
+      }
+      if (!wasMutedBeforeBackgroundRef.current && isMuted) {
+        void toggleMute();
+      }
+    });
+    return () => {
+      subscription.remove();
+    };
+  }, [
+    isJoined,
+    isCameraOff,
+    isMuted,
+    toggleCamera,
+    toggleMute,
+    startAudioKeepAlive,
+    stopAudioKeepAlive,
+    shouldKeepAliveInBackground,
+  ]);
+
+  useEffect(() => {
+    if (Platform.OS !== "ios") return;
+    if (!isJoined || isAppActiveRef.current) {
+      stopAudioKeepAlive();
+      return;
+    }
+    if (shouldKeepAliveInBackground) {
+      startAudioKeepAlive();
+    } else {
+      stopAudioKeepAlive();
+    }
+  }, [isJoined, shouldKeepAliveInBackground, startAudioKeepAlive, stopAudioKeepAlive]);
 
   const { toggleHandRaised, setHandRaisedState } = useMeetHandRaise({
     isHandRaised,
@@ -352,6 +426,7 @@ export function MeetScreen() {
       setUnreadCount,
       isChatOpenRef,
     },
+    isAppActiveRef,
   });
 
   useMeetAudioActivity({
@@ -369,13 +444,6 @@ export function MeetScreen() {
     cleanup: socket.cleanup,
     abortControllerRef: refs.abortControllerRef,
   });
-
-  const isJoined = connectionState === "joined";
-  const isLoading =
-    connectionState === "connecting" ||
-    connectionState === "joining" ||
-    connectionState === "reconnecting" ||
-    connectionState === "waiting";
 
   const roomIdRef = useRef(roomId);
   roomIdRef.current = roomId;
@@ -401,8 +469,12 @@ export function MeetScreen() {
   const playNotificationSoundRef = useRef(playNotificationSound);
   playNotificationSoundRef.current = playNotificationSound;
 
+  const stopScreenShareRef = useRef(stopScreenShare);
+  stopScreenShareRef.current = stopScreenShare;
+
   const handleLeave = useCallback(() => {
     playNotificationSoundRef.current("leave");
+    stopScreenShareRef.current({ notify: true });
     socketCleanupRef.current();
     if (callIdRef.current) endCallSession(callIdRef.current);
     stopInCall();
@@ -411,11 +483,15 @@ export function MeetScreen() {
   useEffect(() => {
     if (process.env.EXPO_OS === "web") return;
     if (!isJoined) return;
-    if (__DEV__) return;
     let cleanupHandlers: (() => void) | undefined;
     let activeCallId: string | null = null;
+    let foregroundStarted = false;
 
     (async () => {
+      if (Platform.OS === "android") {
+        await startForegroundCallService();
+        foregroundStarted = true;
+      }
       await ensureCallKeep();
       activeCallId = startCallSession(
         roomIdRef.current || "Conclave",
@@ -423,19 +499,34 @@ export function MeetScreen() {
       );
       callIdRef.current = activeCallId;
       startInCall();
-      setAudioRoute(audioRoute);
+      setAudioRoute("speaker");
       cleanupHandlers = registerCallKeepHandlers(() => {
         handleLeave();
       });
     })();
 
     return () => {
+      if (foregroundStarted) {
+        void stopForegroundCallService();
+      }
       if (cleanupHandlers) cleanupHandlers();
       if (activeCallId) endCallSession(activeCallId);
       callIdRef.current = null;
       stopInCall();
     };
   }, [isJoined, handleLeave]);
+
+  const handleRetryPermissions = useCallback(async () => {
+    if (Platform.OS === "ios") {
+      Linking.openSettings().catch(() => {});
+      return;
+    }
+    try {
+      await requestMediaPermissions({ forceVideo: true });
+    } catch (err) {
+      setMeetError(createMeetError(err));
+    }
+  }, [requestMediaPermissions, setMeetError]);
 
   const handleJoin = useCallback(
     (value: string, options?: { isHost?: boolean }) => {
@@ -453,15 +544,26 @@ export function MeetScreen() {
   );
 
   const [isReactionSheetOpen, setIsReactionSheetOpen] = useState(false);
-  const [isAudioSheetOpen, setIsAudioSheetOpen] = useState(false);
-  const [audioRoute, setAudioRouteState] = useState<AudioRoute>("speaker");
+  const [isSettingsSheetOpen, setIsSettingsSheetOpen] = useState(false);
 
   const handleToggleChat = useCallback(() => {
     setIsParticipantsOpen(false);
     setIsReactionSheetOpen(false);
-    setIsAudioSheetOpen(false);
+    setIsSettingsSheetOpen(false);
     toggleChat();
-  }, [toggleChat, setIsParticipantsOpen, setIsReactionSheetOpen, setIsAudioSheetOpen]);
+  }, [toggleChat, setIsParticipantsOpen, setIsReactionSheetOpen, setIsSettingsSheetOpen]);
+
+  useEffect(() => {
+    if (initialRoomId && !roomId) {
+      setRoomId(initialRoomId);
+    }
+  }, [initialRoomId, roomId, setRoomId]);
+
+  useEffect(() => {
+    if (isTablet && isSettingsSheetOpen) {
+      setIsSettingsSheetOpen(false);
+    }
+  }, [isTablet, isSettingsSheetOpen]);
 
   type ScreenSharePickerHandle = React.Component<any, any>;
   const ScreenSharePicker =
@@ -561,6 +663,23 @@ export function MeetScreen() {
 
     if (activeScreenShareId) {
       for (const participant of participants.values()) {
+        if (
+          participant.screenShareStream &&
+          participant.screenShareProducerId === activeScreenShareId
+        ) {
+          const track = participant.screenShareStream.getVideoTracks()[0];
+          if (track && track.readyState === "live") {
+            return {
+              presentationStream: participant.screenShareStream,
+              presenterName: resolveDisplayName(participant.userId),
+            };
+          }
+        }
+      }
+    }
+
+    if (activeScreenShareId) {
+      for (const participant of participants.values()) {
         if (participant.screenShareStream) {
           return {
             presentationStream: participant.screenShareStream,
@@ -584,12 +703,16 @@ export function MeetScreen() {
     <View className="flex-1 bg-[#0d0e0d]">
       <StatusBar style="light" />
       {isJoined && meetError ? (
-        <ErrorBanner
+        <ErrorSheet
+          visible={!!meetError}
           meetError={meetError}
           onDismiss={() => setMeetError(null)}
+          autoDismissMs={6000}
           primaryActionLabel={
             meetError.code === "PERMISSION_DENIED"
-              ? "Retry Permissions"
+              ? Platform.OS === "ios"
+                ? "Open Settings"
+                : "Retry Permissions"
               : meetError.code === "MEDIA_ERROR"
                 ? "Retry Devices"
                 : undefined
@@ -597,13 +720,15 @@ export function MeetScreen() {
           onPrimaryAction={
             meetError.code === "PERMISSION_DENIED" ||
               meetError.code === "MEDIA_ERROR"
-              ? async () => {
-                try {
-                  await requestMediaPermissions();
-                } catch (err) {
-                  setMeetError(createMeetError(err));
+              ? meetError.code === "PERMISSION_DENIED"
+                ? handleRetryPermissions
+                : async () => {
+                  try {
+                    await requestMediaPermissions({ forceVideo: true });
+                  } catch (err) {
+                    setMeetError(createMeetError(err));
+                  }
                 }
-              }
               : undefined
           }
         />
@@ -628,13 +753,7 @@ export function MeetScreen() {
           showPermissionHint={showPermissionHint}
           meetError={meetError}
           onDismissMeetError={() => setMeetError(null)}
-          onRetryMedia={async () => {
-            try {
-              await requestMediaPermissions();
-            } catch (err) {
-              setMeetError(createMeetError(err));
-            }
-          }}
+          onRetryMedia={handleRetryPermissions}
         />
       ) : (
         <CallScreen
@@ -661,7 +780,7 @@ export function MeetScreen() {
           onToggleParticipants={() => {
             if (isChatOpen) toggleChat();
             setIsReactionSheetOpen(false);
-            setIsAudioSheetOpen(false);
+            setIsSettingsSheetOpen(false);
             setIsParticipantsOpen((prev) => !prev);
           }}
           onToggleRoomLock={(locked) => {
@@ -670,11 +789,12 @@ export function MeetScreen() {
           onSendReaction={(emoji) => {
             sendReaction({ kind: "emoji", id: emoji, value: emoji, label: emoji });
           }}
-          onOpenAudio={() => {
+          onOpenSettings={() => {
+            if (isTablet) return;
             if (isChatOpen) toggleChat();
             setIsParticipantsOpen(false);
             setIsReactionSheetOpen(false);
-            setIsAudioSheetOpen(true);
+            setIsSettingsSheetOpen(true);
           }}
           onLeave={handleLeave}
           isAdmin={isAdmin}
@@ -683,7 +803,13 @@ export function MeetScreen() {
         />
       )}
 
-      {isJoined ? <ReactionOverlay reactions={reactions} /> : null}
+      {isJoined ? (
+        <ReactionOverlay
+          reactions={reactions}
+          currentUserId={userId}
+          resolveDisplayName={resolveDisplayName}
+        />
+      ) : null}
 
       {isJoined ? (
         <ChatPanel
@@ -731,16 +857,20 @@ export function MeetScreen() {
         />
       ) : null}
 
-      {isJoined ? (
-        <AudioRouteSheet
-          visible={isAudioSheetOpen}
-          currentRoute={audioRoute}
-          onSelect={(route) => {
-            setAudioRouteState(route);
-            setAudioRoute(route);
-            setIsAudioSheetOpen(false);
+      {isJoined && !isTablet ? (
+        <SettingsSheet
+          visible={isSettingsSheetOpen}
+          isScreenSharing={isScreenSharing}
+          isHandRaised={isHandRaised}
+          onToggleScreenShare={() => {
+            setIsSettingsSheetOpen(false);
+            handleToggleScreenShare();
           }}
-          onClose={() => setIsAudioSheetOpen(false)}
+          onToggleHandRaised={() => {
+            setIsSettingsSheetOpen(false);
+            toggleHandRaised();
+          }}
+          onClose={() => setIsSettingsSheetOpen(false)}
         />
       ) : null}
 
@@ -748,13 +878,14 @@ export function MeetScreen() {
         <View className="absolute inset-0 bg-black/70 items-center justify-center px-6">
           <View className="bg-neutral-900 border border-white/10 rounded-3xl px-6 py-5">
             <View className="gap-2">
-              <ErrorBanner
-                meetError={{
-                  code: "UNKNOWN",
-                  message: waitingMessage,
-                  recoverable: true,
-                }}
-              />
+              <View className="gap-2">
+                <Text className="text-base font-semibold text-[#FEFCD9]" selectable>
+                  {waitingMessage}
+                </Text>
+                <Text className="text-xs text-[#FEFCD9]/60">
+                  We’ll let you in as soon as the host admits you.
+                </Text>
+              </View>
             </View>
           </View>
         </View>

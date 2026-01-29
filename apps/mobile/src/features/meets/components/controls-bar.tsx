@@ -13,12 +13,12 @@ import {
   MicOff,
   PhoneOff,
   ScreenShare,
-  Settings,
   Smile,
   Users,
   Video,
   VideoOff,
 } from "lucide-react-native";
+import { EMOJI_REACTIONS } from "../constants";
 import { useDeviceLayout, TOUCH_TARGETS } from "../hooks/use-device-layout";
 import { GlassPill } from "./glass-pill";
 
@@ -37,7 +37,7 @@ const COLORS = {
   redDim: "rgba(239, 68, 68, 0.15)",
 } as const;
 
-const QUICK_REACTIONS = ["👍", "👏", "❤️", "🎉", "😂", "😮", "😢", "🤔"];
+const QUICK_REACTIONS = EMOJI_REACTIONS;
 
 interface ControlsBarProps {
   isMuted: boolean;
@@ -58,12 +58,13 @@ interface ControlsBarProps {
   onToggleParticipants: () => void;
   onToggleRoomLock?: (locked: boolean) => void;
   onSendReaction: (emoji: string) => void;
-  onOpenAudio: () => void;
   onLeave: () => void;
 }
 
 interface ControlButtonProps {
   icon: React.ComponentType<{ color?: string; size?: number; strokeWidth?: number }>;
+  size?: number;
+  iconSize?: number;
   isActive?: boolean;
   isMuted?: boolean;
   isHandRaised?: boolean;
@@ -75,6 +76,8 @@ interface ControlButtonProps {
 
 function ControlButton({
   icon,
+  size,
+  iconSize,
   isActive = false,
   isMuted = false,
   isHandRaised = false,
@@ -102,7 +105,7 @@ function ControlButton({
     iconColor = "rgba(255, 0, 0, 0.9)";
   } else if (isHandRaised || isWarningActive) {
     buttonBg = styles.buttonHandRaised;
-    iconColor = "#000000";
+    iconColor = COLORS.cream;
   } else if (isMuted) {
     buttonBg = styles.buttonMuted;
     iconColor = COLORS.primaryOrange;
@@ -112,17 +115,24 @@ function ControlButton({
   }
 
   const Icon = icon;
+  const buttonSize = size ?? TOUCH_TARGETS.MIN;
+  const resolvedIconSize = iconSize ?? 16;
 
   return (
     <Pressable
       onPress={handlePress}
       style={({ pressed }) => [
         styles.controlButton,
+        {
+          width: buttonSize,
+          height: buttonSize,
+          borderRadius: buttonSize / 2,
+        },
         buttonBg,
         pressed && styles.buttonPressed,
       ]}
     >
-      <Icon color={iconColor} size={16} strokeWidth={2} />
+      <Icon color={iconColor} size={resolvedIconSize} strokeWidth={2} />
       {typeof badge === "number" && badge > 0 ? (
         <RNView style={styles.badge}>
           <Text style={styles.badgeText}>
@@ -192,7 +202,6 @@ export function ControlsBar({
   onToggleParticipants,
   onToggleRoomLock,
   onSendReaction,
-  onOpenAudio,
   onLeave,
 }: ControlsBarProps) {
   const insets = useSafeAreaInsets();
@@ -207,8 +216,10 @@ export function ControlsBar({
       ? Math.min(800, availableWidth - 80)
       : availableWidth - 40;
 
-  // Button size - use comfortable size on iPad per HIG
-  const buttonSize = isTablet ? TOUCH_TARGETS.COMFORTABLE : TOUCH_TARGETS.MIN;
+  const buttonSize = Math.max(touchTargetSize, TOUCH_TARGETS.MIN);
+  const iconSize = isTablet ? 18 : 16;
+  const showInlineToggles = isTablet;
+  const pillGap = isCompact ? 12 : Math.max(8, Math.round(buttonSize * 0.2));
 
   const handleReactionSelect = (emoji: string) => {
     onSendReaction(emoji);
@@ -243,7 +254,7 @@ export function ControlsBar({
             style={[
               styles.controlsPill,
               {
-                gap: isCompact ? 12 : 4,
+                gap: pillGap,
               },
             ]}
           >
@@ -252,6 +263,8 @@ export function ControlsBar({
                 <ControlButton
                   icon={Users}
                   badge={pendingUsersCount}
+                  size={buttonSize}
+                  iconSize={iconSize}
                   onPress={onToggleParticipants}
                 />
 
@@ -260,6 +273,8 @@ export function ControlsBar({
                     icon={isRoomLocked ? Lock : LockOpen}
                     isActive={isRoomLocked}
                     activeColor={COLORS.amber}
+                    size={buttonSize}
+                    iconSize={iconSize}
                     onPress={() => onToggleRoomLock?.(!isRoomLocked)}
                   />
                 ) : null}
@@ -269,43 +284,54 @@ export function ControlsBar({
             <ControlButton
               icon={isMuted ? MicOff : Mic}
               isMuted={isMuted}
+              size={buttonSize}
+              iconSize={iconSize}
               onPress={onToggleMute}
             />
 
             <ControlButton
               icon={isCameraOff ? VideoOff : Video}
               isMuted={isCameraOff}
+              size={buttonSize}
+              iconSize={iconSize}
               onPress={onToggleCamera}
             />
 
-            <ControlButton
-              icon={ScreenShare}
-              isActive={isScreenSharing}
-              onPress={onToggleScreenShare}
-            />
+            {showInlineToggles ? (
+              <>
+                <ControlButton
+                  icon={ScreenShare}
+                  isActive={isScreenSharing}
+                  size={buttonSize}
+                  iconSize={iconSize}
+                  onPress={onToggleScreenShare}
+                />
 
-            <ControlButton
-              icon={Hand}
-              isHandRaised={isHandRaised}
-              onPress={onToggleHand}
-            />
-
-            <ControlButton
-              icon={Smile}
-              isActive={showReactionPicker}
-              onPress={toggleReactionPicker}
-            />
+                <ControlButton
+                  icon={Hand}
+                  isHandRaised={isHandRaised}
+                  size={buttonSize}
+                  iconSize={iconSize}
+                  onPress={onToggleHand}
+                />
+              </>
+            ) : null}
 
             <ControlButton
               icon={MessageCircle}
               isActive={isChatOpen}
               badge={unreadCount}
+              size={buttonSize}
+              iconSize={iconSize}
               onPress={onToggleChat}
             />
 
             <ControlButton
-              icon={Settings}
-              onPress={onOpenAudio}
+              icon={Smile}
+              isActive={showReactionPicker}
+              size={buttonSize}
+              iconSize={iconSize}
+              onPress={toggleReactionPicker}
             />
 
             <RNView style={[styles.divider, { marginHorizontal: isCompact ? 2 : 4 }]} />
@@ -313,6 +339,8 @@ export function ControlsBar({
             <ControlButton
               icon={PhoneOff}
               isDanger
+              size={buttonSize}
+              iconSize={iconSize}
               onPress={onLeave}
             />
           </RNView>
@@ -356,9 +384,6 @@ const styles = StyleSheet.create({
     marginHorizontal: 6,
   },
   controlButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
     alignItems: "center",
     justifyContent: "center",
     position: "relative",
