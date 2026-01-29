@@ -57,6 +57,9 @@ const COLORS = {
   orangeDim: "rgba(249, 95, 74, 0.2)",
 } as const;
 
+const textLineHeight = (fontSize: number, multiplier = 1.2) =>
+  Math.round(fontSize * multiplier);
+
 type Phase = "welcome" | "auth" | "join";
 
 const GoogleIcon = ({ size = 18 }: { size?: number }) => (
@@ -144,6 +147,7 @@ export function JoinScreen({
   forceJoinOnly = false,
 }: JoinScreenProps) {
   const { layout, isTablet, spacing, width: screenWidth } = useDeviceLayout();
+  const isIpadLayout = isTablet && layout !== "compact";
   const isSignedInUser = Boolean(user && !user.id?.startsWith("guest-"));
   const [phase, setPhase] = useState<Phase>(() => {
     if (forceJoinOnly) return "join";
@@ -407,11 +411,17 @@ export function JoinScreen({
           >
             <ScrollView
               style={styles.flex1}
-              contentContainerStyle={styles.authContent}
+              contentContainerStyle={[
+                styles.authContent,
+                isIpadLayout && styles.authContentTablet,
+              ]}
               keyboardShouldPersistTaps="handled"
               contentInsetAdjustmentBehavior="never"
             >
-              <Animated.View entering={FadeInDown.duration(400)} style={styles.authCard}>
+              <Animated.View
+                entering={FadeInDown.duration(400)}
+                style={[styles.authCard, isIpadLayout && styles.authCardTablet]}
+              >
                 <View style={styles.authHeader}>
                   <Text style={[styles.authTitle, { color: COLORS.cream }]}>
                     Join
@@ -548,7 +558,6 @@ export function JoinScreen({
   }
 
   // iPad-specific layout calculations
-  const isIpadLayout = isTablet && layout !== "compact";
   const maxContentWidth = isIpadLayout ? 1200 : undefined;
   const videoPreviewFlex = isIpadLayout ? 1.15 : undefined;
   const joinCardFlex = isIpadLayout ? 0.85 : undefined;
@@ -857,6 +866,7 @@ const styles = StyleSheet.create({
   },
   welcomeLabel: {
     fontSize: 18,
+    lineHeight: textLineHeight(18, 1.2),
     marginBottom: 8,
     fontWeight: "500",
     fontFamily: "PolySans-BulkyWide",
@@ -868,11 +878,13 @@ const styles = StyleSheet.create({
   },
   bracket: {
     fontSize: 32,
+    lineHeight: textLineHeight(32, 1.15),
     fontWeight: "300",
     fontFamily: "PolySans-Mono",
   },
   brandTitle: {
     fontSize: 40,
+    lineHeight: textLineHeight(40, 1.12),
     fontWeight: "700",
     letterSpacing: -1,
     marginHorizontal: 8,
@@ -897,6 +909,7 @@ const styles = StyleSheet.create({
   primaryButtonText: {
     color: "#FFFFFF",
     fontSize: 11,
+    lineHeight: textLineHeight(11, 1.3),
     fontWeight: "500",
     letterSpacing: 2,
     textTransform: "uppercase",
@@ -907,12 +920,26 @@ const styles = StyleSheet.create({
     fontSize: 18,
   },
   authContent: {
-    flex: 1,
+    flexGrow: 1,
     justifyContent: "center",
     paddingHorizontal: 24,
   },
+  authContentTablet: {
+    paddingHorizontal: 48,
+    paddingVertical: 40,
+    alignItems: "center",
+  },
   authCard: {
     width: "100%",
+  },
+  authCardTablet: {
+    maxWidth: 520,
+    alignSelf: "center",
+    padding: 24,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "rgba(254, 252, 217, 0.12)",
+    backgroundColor: "rgba(20, 20, 20, 0.8)",
   },
   authHeader: {
     alignItems: "center",
@@ -920,12 +947,14 @@ const styles = StyleSheet.create({
   },
   authTitle: {
     fontSize: 28,
+    lineHeight: textLineHeight(28, 1.2),
     fontWeight: "700",
     marginBottom: 8,
     fontFamily: "PolySans-BulkyWide",
   },
   authSubtitle: {
     fontSize: 12,
+    lineHeight: textLineHeight(12, 1.25),
     letterSpacing: 2,
     textTransform: "uppercase",
     fontFamily: "PolySans-Mono",
@@ -973,6 +1002,7 @@ const styles = StyleSheet.create({
   },
   socialIconText: {
     fontSize: 12,
+    lineHeight: textLineHeight(12, 1.25),
     fontWeight: "600",
     color: "#FEFCD9",
     fontFamily: "PolySans-Mono",
@@ -983,7 +1013,7 @@ const styles = StyleSheet.create({
     letterSpacing: -0.2,
     fontFamily: "PolySans-Regular",
     color: COLORS.cream,
-    lineHeight: 13,
+    lineHeight: textLineHeight(13, 1.25),
     includeFontPadding: false,
   },
   dividerRow: {
@@ -998,6 +1028,7 @@ const styles = StyleSheet.create({
   },
   dividerText: {
     fontSize: 11,
+    lineHeight: textLineHeight(11, 1.3),
     letterSpacing: 2,
     textTransform: "uppercase",
     fontFamily: "PolySans-Mono",
@@ -1007,6 +1038,7 @@ const styles = StyleSheet.create({
   },
   inputLabel: {
     fontSize: 12,
+    lineHeight: textLineHeight(12, 1.25),
     letterSpacing: 2,
     textTransform: "uppercase",
     fontFamily: "PolySans-Mono",
@@ -1028,6 +1060,7 @@ const styles = StyleSheet.create({
   },
   secondaryButtonText: {
     fontSize: 15,
+    lineHeight: textLineHeight(15, 1.25),
     fontWeight: "500",
     fontFamily: "PolySans-Regular",
   },
@@ -1042,6 +1075,7 @@ const styles = StyleSheet.create({
   },
   backButtonText: {
     fontSize: 12,
+    lineHeight: textLineHeight(12, 1.25),
     letterSpacing: 2,
     textTransform: "uppercase",
     fontFamily: "PolySans-Mono",
@@ -1056,6 +1090,7 @@ const styles = StyleSheet.create({
   },
   sectionLabel: {
     fontSize: 12,
+    lineHeight: textLineHeight(12, 1.25),
     letterSpacing: 2,
     textTransform: "uppercase",
     marginBottom: 8,
@@ -1087,6 +1122,7 @@ const styles = StyleSheet.create({
   },
   userInitial: {
     fontSize: 24,
+    lineHeight: textLineHeight(24, 1.2),
     fontWeight: "700",
     fontFamily: "PolySans-BulkyWide",
   },
@@ -1101,6 +1137,7 @@ const styles = StyleSheet.create({
   },
   overlayText: {
     fontSize: 12,
+    lineHeight: textLineHeight(12, 1.25),
     color: "rgba(254, 252, 217, 0.7)",
     fontFamily: "PolySans-Mono",
   },
@@ -1142,6 +1179,7 @@ const styles = StyleSheet.create({
   },
   preflightLabel: {
     fontSize: 12,
+    lineHeight: textLineHeight(12, 1.25),
     letterSpacing: 1,
     textTransform: "uppercase",
     fontFamily: "PolySans-Mono",
@@ -1163,6 +1201,7 @@ const styles = StyleSheet.create({
   },
   statusText: {
     fontSize: 12,
+    lineHeight: textLineHeight(12, 1.25),
     color: "rgba(254, 252, 217, 0.7)",
     fontFamily: "PolySans-Mono",
   },
@@ -1186,6 +1225,7 @@ const styles = StyleSheet.create({
   },
   tabText: {
     fontSize: 12,
+    lineHeight: textLineHeight(12, 1.25),
     letterSpacing: 1,
     textTransform: "uppercase",
     fontWeight: "500",
@@ -1209,6 +1249,7 @@ const styles = StyleSheet.create({
   },
   actionButtonText: {
     fontSize: 15,
+    lineHeight: textLineHeight(15, 1.25),
     fontWeight: "500",
     color: "#FFFFFF",
     fontFamily: "PolySans-Regular",
@@ -1225,6 +1266,7 @@ const styles = StyleSheet.create({
   },
   suggestionText: {
     fontSize: 12,
+    lineHeight: textLineHeight(12, 1.25),
     fontFamily: "PolySans-Regular",
   },
   quickActionsRow: {
@@ -1238,6 +1280,7 @@ const styles = StyleSheet.create({
   },
   quickActionText: {
     fontSize: 12,
+    lineHeight: textLineHeight(12, 1.25),
     fontFamily: "PolySans-Mono",
   },
   backButtonJoin: {

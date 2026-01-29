@@ -34,7 +34,7 @@ import { useMeetSocket } from "../hooks/use-meet-socket";
 import { useMeetState } from "../hooks/use-meet-state";
 import type { Participant } from "../types";
 import { createMeetError } from "../utils";
-import { getCachedUser, setCachedUser } from "../auth-session";
+import { getCachedUser, hydrateCachedUser, setCachedUser } from "../auth-session";
 import { CallScreen } from "./call-screen";
 import { ChatPanel } from "./chat-panel";
 import { ErrorBanner } from "./error-banner";
@@ -128,18 +128,39 @@ export function MeetScreen() {
   const [currentUser, setCurrentUser] = useState<
     { id?: string; email?: string | null; name?: string | null } | null
   >(cachedUser ?? guestIdentity);
+  const [authHydrated, setAuthHydrated] = useState(false);
+
   useEffect(() => {
+    let isMounted = true;
+    hydrateCachedUser()
+      .then((user) => {
+        if (!isMounted) return;
+        if (user && !user.id?.startsWith("guest-")) {
+          setCurrentUser(user);
+        }
+        setAuthHydrated(true);
+      })
+      .catch(() => {
+        if (!isMounted) return;
+        setAuthHydrated(true);
+      });
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+  useEffect(() => {
+    if (!authHydrated) return;
     if (!currentUser || currentUser.id?.startsWith("guest-")) {
       setCurrentUser(guestIdentity);
     }
-  }, [currentUser, guestIdentity]);
+  }, [authHydrated, currentUser, guestIdentity]);
   const handleUserChange = useCallback(
     (nextUser: { id?: string; email?: string | null; name?: string | null } | null) => {
       setCurrentUser(nextUser);
       if (nextUser && !nextUser.id?.startsWith("guest-")) {
-        setCachedUser(nextUser);
+        void setCachedUser(nextUser);
       } else {
-        setCachedUser(null);
+        void setCachedUser(null);
       }
     },
     []
@@ -356,6 +377,12 @@ export function MeetScreen() {
     connectionState === "reconnecting" ||
     connectionState === "waiting";
 
+  const roomIdRef = useRef(roomId);
+  roomIdRef.current = roomId;
+
+  const displayNameRef = useRef(displayNameInput);
+  displayNameRef.current = displayNameInput;
+
   useEffect(() => {
     if (isJoined) {
       void activateKeepAwakeAsync("conclave-call");
@@ -368,13 +395,18 @@ export function MeetScreen() {
   }, [isJoined]);
 
   const callIdRef = useRef<string | null>(null);
+  const socketCleanupRef = useRef(socket.cleanup);
+  socketCleanupRef.current = socket.cleanup;
+
+  const playNotificationSoundRef = useRef(playNotificationSound);
+  playNotificationSoundRef.current = playNotificationSound;
 
   const handleLeave = useCallback(() => {
-    playNotificationSound("leave");
-    socket.cleanup();
+    playNotificationSoundRef.current("leave");
+    socketCleanupRef.current();
     if (callIdRef.current) endCallSession(callIdRef.current);
     stopInCall();
-  }, [playNotificationSound, socket]);
+  }, []);
 
   useEffect(() => {
     if (process.env.EXPO_OS === "web") return;
@@ -386,8 +418,8 @@ export function MeetScreen() {
     (async () => {
       await ensureCallKeep();
       activeCallId = startCallSession(
-        roomId || "Conclave",
-        displayNameInput || "Conclave"
+        roomIdRef.current || "Conclave",
+        displayNameRef.current || "Conclave"
       );
       callIdRef.current = activeCallId;
       startInCall();
@@ -403,7 +435,7 @@ export function MeetScreen() {
       callIdRef.current = null;
       stopInCall();
     };
-  }, [isJoined, roomId, displayNameInput, handleLeave]);
+  }, [isJoined, handleLeave]);
 
   const handleJoin = useCallback(
     (value: string, options?: { isHost?: boolean }) => {

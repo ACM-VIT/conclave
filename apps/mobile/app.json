@@ -19,6 +19,7 @@
     ],
     "version": "1.0.0",
     "ios": {
+      "supportsTablet": true,
       "infoPlist": {
         "UIBackgroundModes": [
           "audio",
