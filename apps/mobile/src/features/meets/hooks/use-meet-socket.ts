@@ -775,6 +775,9 @@ export function useMeetSocket({
 
   const consumeProducer = useCallback(
     async (producerInfo: ProducerInfo): Promise<void> => {
+      if (producerInfo.producerUserId === userId) {
+        return;
+      }
       if (consumersRef.current.has(producerInfo.producerId)) {
         return;
       }
@@ -919,6 +922,7 @@ export function useMeetSocket({
       dispatchParticipants,
       handleProducerClosed,
       setActiveScreenShareId,
+      userId,
     ]
   );
 

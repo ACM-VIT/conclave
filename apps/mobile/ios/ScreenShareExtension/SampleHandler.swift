@@ -7,16 +7,20 @@ final class SampleHandler: RPBroadcastSampleHandler {
   private let imageContext = CIContext()
   private var socketConnection: ScreenShareSocketConnection?
   private var isConnected = false
+  private var lastConnectionAttempt: TimeInterval = 0
+  private let connectionRetryInterval: TimeInterval = 0.75
 
   override func broadcastStarted(withSetupInfo setupInfo: [String: NSObject]?) {
     socketConnection = ScreenShareSocketConnection(appGroupIdentifier: appGroupIdentifier)
     isConnected = socketConnection?.open() ?? false
+    lastConnectionAttempt = Date().timeIntervalSince1970
   }
 
   override func broadcastFinished() {
     socketConnection?.close()
     socketConnection = nil
     isConnected = false
+    lastConnectionAttempt = 0
   }
 
   override func processSampleBuffer(
@@ -24,6 +28,16 @@ final class SampleHandler: RPBroadcastSampleHandler {
     with sampleBufferType: RPSampleBufferType
   ) {
     guard sampleBufferType == .video else { return }
+    if !isConnected {
+      let now = Date().timeIntervalSince1970
+      if now - lastConnectionAttempt >= connectionRetryInterval {
+        lastConnectionAttempt = now
+        if socketConnection == nil {
+          socketConnection = ScreenShareSocketConnection(appGroupIdentifier: appGroupIdentifier)
+        }
+        isConnected = socketConnection?.open() ?? false
+      }
+    }
     guard isConnected else { return }
     guard let imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
 

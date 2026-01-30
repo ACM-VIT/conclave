@@ -1236,6 +1236,7 @@ export function useMeetMedia({
   const stopScreenShare = useCallback(
     (options?: { notify?: boolean }) => {
       const producer = screenProducerRef.current;
+      const producerId = producer?.id ?? null;
       const shouldNotify = options?.notify !== false;
 
       if (producer) {
@@ -1276,15 +1277,21 @@ export function useMeetMedia({
         screenShareStreamRef.current = null;
       }
 
+      if (producerId && activeScreenShareId === producerId) {
+        setActiveScreenShareId(null);
+      }
+
       setScreenShareStream(null);
       setIsScreenSharing(false);
     },
     [
+      activeScreenShareId,
       screenProducerRef,
       screenShareStreamRef,
       socketRef,
       setScreenShareStream,
       setIsScreenSharing,
+      setActiveScreenShareId,
       stopLocalTrack,
     ]
   );
@@ -1398,6 +1405,39 @@ export function useMeetMedia({
     stopLocalTrack,
     stopScreenShare,
   ]);
+
+  useEffect(() => {
+    if (!isScreenSharing) return;
+    const streamTrack = screenShareStreamRef.current?.getVideoTracks()[0];
+    const producerTrack = screenProducerRef.current?.track;
+    const track = streamTrack ?? producerTrack;
+    if (!track) return;
+
+    let cancelled = false;
+    const previousOnEnded = track.onended;
+
+    const handleEnded = () => {
+      if (cancelled) return;
+      stopScreenShare({ notify: true });
+    };
+
+    const interval = setInterval(() => {
+      if (cancelled) return;
+      if (track.readyState === "ended") {
+        handleEnded();
+      }
+    }, 1000);
+
+    track.onended = handleEnded;
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+      if (track.onended === handleEnded) {
+        track.onended = previousOnEnded ?? null;
+      }
+    };
+  }, [isScreenSharing, screenShareStreamRef, screenProducerRef, stopScreenShare]);
 
   useEffect(() => {
     if (isScreenSharing) return;
