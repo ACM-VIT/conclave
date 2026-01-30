@@ -2,6 +2,7 @@ import React from "react";
 import { StyleSheet, View as RNView } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Pressable, Text } from "@/tw";
+import { GlassPill } from "./glass-pill";
 
 interface PendingJoinToastProps {
   visible: boolean;
@@ -27,7 +28,7 @@ export function PendingJoinToast({
       pointerEvents="box-none"
       style={[styles.container, { bottom: insets.bottom + 96 }]}
     >
-      <RNView style={styles.toast}>
+      <GlassPill style={styles.toast}>
         <Text style={styles.label}>Waiting</Text>
         <Text style={styles.name} numberOfLines={1}>
           {displayName}
@@ -59,7 +60,7 @@ export function PendingJoinToast({
         >
           <Text style={styles.admitIcon}>✓</Text>
         </Pressable>
-      </RNView>
+      </GlassPill>
     </RNView>
   );
 }
