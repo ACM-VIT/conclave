@@ -1252,6 +1252,11 @@ export function useMeetMedia({
         if (producer.track) {
           producer.track.onended = null;
           stopLocalTrack(producer.track);
+          if (Platform.OS === "ios" && "release" in producer.track) {
+            try {
+              (producer.track as MediaStreamTrack & { release?: () => void }).release?.();
+            } catch {}
+          }
         }
       }
 
@@ -1260,7 +1265,14 @@ export function useMeetMedia({
       if (screenShareStreamRef.current) {
         screenShareStreamRef.current
           .getTracks()
-          .forEach((track) => stopLocalTrack(track));
+          .forEach((track) => {
+            stopLocalTrack(track);
+            if (Platform.OS === "ios" && "release" in track) {
+              try {
+                (track as MediaStreamTrack & { release?: () => void }).release?.();
+              } catch {}
+            }
+          });
         screenShareStreamRef.current = null;
       }
 
