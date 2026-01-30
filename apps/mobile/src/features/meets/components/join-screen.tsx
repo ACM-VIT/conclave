@@ -124,9 +124,13 @@ interface JoinScreenProps {
   onToggleMute: () => void;
   onToggleCamera: () => void;
   showPermissionHint: boolean;
+  hasAudioPermission: boolean;
+  hasVideoPermission: boolean;
+  permissionsReady: boolean;
   meetError?: MeetError | null;
   onDismissMeetError?: () => void;
   onRetryMedia?: () => void;
+  onRequestMedia?: () => void;
   forceJoinOnly?: boolean;
 }
 
@@ -146,9 +150,13 @@ export function JoinScreen({
   onToggleMute,
   onToggleCamera,
   showPermissionHint,
+  hasAudioPermission,
+  hasVideoPermission,
+  permissionsReady,
   meetError,
   onDismissMeetError,
   onRetryMedia,
+  onRequestMedia,
   forceJoinOnly = false,
 }: JoinScreenProps) {
   const { layout, isTablet, spacing, width: screenWidth } = useDeviceLayout();
@@ -217,6 +225,13 @@ export function JoinScreen({
   const haptic = useCallback(() => {
     Haptics.selectionAsync().catch(() => { });
   }, []);
+
+  const shouldShowPermissionPrompt =
+    phase === "join" &&
+    Platform.OS === "android" &&
+    !!onRequestMedia &&
+    permissionsReady &&
+    (!hasAudioPermission || !hasVideoPermission);
 
   const canJoin = roomId.trim().length > 0;
 
@@ -641,6 +656,30 @@ export function JoinScreen({
                           {userInitial}
                         </Text>
                       </View>
+                      {shouldShowPermissionPrompt ? (
+                        <View style={styles.permissionFallback}>
+                          <Text style={styles.permissionTitle}>
+                            Camera and microphone access needed
+                          </Text>
+                          <Text style={styles.permissionText}>
+                            Grant access to preview and join.
+                          </Text>
+                          <Pressable
+                            onPress={onRequestMedia}
+                            disabled={showPermissionHint}
+                            style={[
+                              styles.permissionButton,
+                              showPermissionHint && styles.permissionButtonDisabled,
+                            ]}
+                          >
+                            {showPermissionHint ? (
+                              <ActivityIndicator size="small" color="#FFFFFF" />
+                            ) : (
+                              <Text style={styles.permissionButtonText}>Grant access</Text>
+                            )}
+                          </Pressable>
+                        </View>
+                      ) : null}
                     </View>
                   )}
 
@@ -704,9 +743,6 @@ export function JoinScreen({
                     </View>
                   </View>
 
-                  <View style={styles.previewStatusOverlay}>
-                  
-                  </View>
                 </View>
               </View>
 
@@ -879,6 +915,32 @@ export function JoinScreen({
                               {userInitial}
                             </Text>
                           </View>
+                          {shouldShowPermissionPrompt ? (
+                            <View style={styles.permissionFallback}>
+                              <Text style={styles.permissionTitle}>
+                                Camera and microphone access needed
+                              </Text>
+                              <Text style={styles.permissionText}>
+                                Grant access to preview and join.
+                              </Text>
+                              <Pressable
+                                onPress={onRequestMedia}
+                                disabled={showPermissionHint}
+                                style={[
+                                  styles.permissionButton,
+                                  showPermissionHint && styles.permissionButtonDisabled,
+                                ]}
+                              >
+                                {showPermissionHint ? (
+                                  <ActivityIndicator size="small" color="#FFFFFF" />
+                                ) : (
+                                  <Text style={styles.permissionButtonText}>
+                                    Grant access
+                                  </Text>
+                                )}
+                              </Pressable>
+                            </View>
+                          ) : null}
                         </View>
                       )}
 
@@ -1120,10 +1182,42 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "rgba(254, 252, 217, 0.1)",
   },
-  previewStatusOverlay: {
-    position: "absolute",
-    bottom: 16,
-    left: 16,
+  permissionFallback: {
+    marginTop: 16,
+    paddingHorizontal: 24,
+    alignItems: "center",
+    gap: 6,
+  },
+  permissionTitle: {
+    fontSize: 13,
+    lineHeight: textLineHeight(13, 1.2),
+    fontWeight: "600",
+    color: COLORS.cream,
+    fontFamily: "PolySans-Regular",
+  },
+  permissionText: {
+    fontSize: 12,
+    lineHeight: textLineHeight(12, 1.35),
+    color: COLORS.creamLight,
+    fontFamily: "PolySans-Regular",
+  },
+  permissionButton: {
+    alignSelf: "flex-start",
+    marginTop: 4,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: "rgba(249, 95, 74, 0.9)",
+  },
+  permissionButtonDisabled: {
+    opacity: 0.7,
+  },
+  permissionButtonText: {
+    fontSize: 12,
+    lineHeight: textLineHeight(12, 1.2),
+    color: "#FFFFFF",
+    fontFamily: "PolySans-Regular",
+    letterSpacing: 0.2,
   },
   preflightRowOverlay: {
     marginTop: 0,

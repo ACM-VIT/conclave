@@ -137,6 +137,7 @@ export interface ProducerMapEntry {
 export interface MediaState {
   hasAudioPermission: boolean;
   hasVideoPermission: boolean;
+  permissionsReady: boolean;
   audioDeviceId?: string;
   videoDeviceId?: string;
 }

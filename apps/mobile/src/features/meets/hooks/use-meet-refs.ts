@@ -43,7 +43,9 @@ export function useMeetRefs() {
   const handleRedirectRef = useRef<(roomId: string) => Promise<void>>(
     async () => {}
   );
-  const handleReconnectRef = useRef<() => void>(async () => {});
+  const handleReconnectRef = useRef<
+    (options?: { immediate?: boolean }) => void
+  >(async () => {});
   const audioContextRef = useRef<AudioContext | null>(null);
   const audioAnalyserMapRef = useRef<Map<string, AudioAnalyserEntry>>(
     new Map()

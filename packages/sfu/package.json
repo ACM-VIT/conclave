@@ -16,16 +16,16 @@
   "license": "ISC",
   "type": "module",
   "dependencies": {
-    "cors": "^2.8.5",
+    "cors": "^2.8.6",
     "dotenv": "^17.2.3",
     "express": "^5.2.1",
     "jsonwebtoken": "^9.0.3",
-    "mediasoup": "^3.19.14",
+    "mediasoup": "^3.19.15",
     "socket.io": "^4.8.3"
   },
   "devDependencies": {
     "@types/cors": "^2.8.19",
-    "@types/express": "^5.0.0",
+    "@types/express": "^5.0.6",
     "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^20",
     "tsx": "^4.20.6",

@@ -1,5 +1,6 @@
 import React, { useEffect } from "react";
 import "../global.css";
+import "../lib/notifee-foreground";
 import { Stack } from "expo-router";
 import { LogBox } from 'react-native';
 import { useFonts } from "expo-font";

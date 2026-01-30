@@ -12,8 +12,8 @@
   "dependencies": {
     "@expo/ui": "~0.2.0-beta.9",
     "@lodev09/react-native-true-sheet": "^3.8.1",
+    "@notifee/react-native": "9.1.8",
     "@react-native-async-storage/async-storage": "2.2.0",
-    "@supersami/rn-foreground-service": "2.2.5",
     "@tailwindcss/postcss": "^4.1.18",
     "expo": "^54.0.1",
     "expo-apple-authentication": "8.0.8",
@@ -52,6 +52,7 @@
   },
   "devDependencies": {
     "@types/react": "~19.1.10",
+    "patch-package": "^8.0.0",
     "prettier-plugin-tailwindcss": "^0.5.11",
     "react-native-svg-transformer": "^1.5.3",
     "tailwindcss": "^3.4.19",

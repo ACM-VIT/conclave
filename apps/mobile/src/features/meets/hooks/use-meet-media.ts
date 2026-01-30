@@ -92,6 +92,7 @@ export function useMeetMedia({
   const [mediaState, setMediaState] = useState<MediaState>({
     hasAudioPermission: false,
     hasVideoPermission: false,
+    permissionsReady: false,
   });
   const [showPermissionHint, setShowPermissionHint] = useState(false);
   const updateVideoQualityRef = useRef<
@@ -99,6 +100,41 @@ export function useMeetMedia({
   >(async () => {});
   const keepAliveOscRef = useRef<OscillatorNode | null>(null);
   const keepAliveGainRef = useRef<GainNode | null>(null);
+  const syncPermissionState = useCallback(async () => {
+    if (Platform.OS !== "android") {
+      setMediaState((prev) => ({
+        ...prev,
+        hasAudioPermission: true,
+        hasVideoPermission: true,
+        permissionsReady: true,
+      }));
+      return { audioGranted: true, videoGranted: true };
+    }
+
+    try {
+      const [audioGranted, videoGranted] = await Promise.all([
+        PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.RECORD_AUDIO),
+        PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.CAMERA),
+      ]);
+      setMediaState((prev) => ({
+        ...prev,
+        hasAudioPermission: audioGranted,
+        hasVideoPermission: videoGranted,
+        permissionsReady: true,
+      }));
+      return { audioGranted, videoGranted };
+    } catch {
+      setMediaState((prev) => ({
+        ...prev,
+        permissionsReady: true,
+      }));
+      return { audioGranted: false, videoGranted: false };
+    }
+  }, []);
+
+  useEffect(() => {
+    void syncPermissionState();
+  }, [syncPermissionState]);
   const buildAudioConstraints = useCallback(
     (deviceId?: string): MediaTrackConstraints => ({
       ...DEFAULT_AUDIO_CONSTRAINTS,
@@ -557,10 +593,7 @@ export function useMeetMedia({
         video: needsVideo && videoAllowed ? videoConstraints : false,
       });
 
-      setMediaState({
-        hasAudioPermission: stream.getAudioTracks().length > 0,
-        hasVideoPermission: stream.getVideoTracks().length > 0,
-      });
+      await syncPermissionState();
 
       stream.getTracks().forEach((track) => {
         track.onended = () => {
@@ -611,10 +644,7 @@ export function useMeetMedia({
               handleLocalTrackEnded("audio", audioTrack);
             };
           }
-          setMediaState({
-            hasAudioPermission: true,
-            hasVideoPermission: false,
-          });
+          await syncPermissionState();
           setIsCameraOff(true);
           return audioStream;
         } catch {
@@ -640,6 +670,7 @@ export function useMeetMedia({
     setIsCameraOff,
     setIsMuted,
     requestAndroidPermissions,
+    syncPermissionState,
   ]);
 
   const handleAudioInputDeviceChange = useCallback(
@@ -1354,6 +1385,21 @@ export function useMeetMedia({
     setMeetError,
     stopLocalTrack,
     stopScreenShare,
+  ]);
+
+  useEffect(() => {
+    if (isScreenSharing) return;
+    if (!screenShareStreamRef.current) return;
+    screenShareStreamRef.current
+      .getTracks()
+      .forEach((track) => stopLocalTrack(track));
+    screenShareStreamRef.current = null;
+    setScreenShareStream(null);
+  }, [
+    isScreenSharing,
+    screenShareStreamRef,
+    setScreenShareStream,
+    stopLocalTrack,
   ]);
 
   useEffect(() => {

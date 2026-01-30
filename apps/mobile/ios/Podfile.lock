@@ -1840,6 +1840,11 @@ PODS:
     - ReactCommon/turbomodule/core
     - ReactNativeDependencies
     - Yoga
+  - RNNotifee (9.1.8):
+    - React-Core
+    - RNNotifee/NotifeeCore (= 9.1.8)
+  - RNNotifee/NotifeeCore (9.1.8):
+    - React-Core
   - RNReanimated (4.1.6):
     - hermes-engine
     - RCTRequired
@@ -2206,6 +2211,7 @@ DEPENDENCIES:
   - ReactNativeIncallManager (from `../node_modules/react-native-incall-manager`)
   - RNCallKeep (from `../node_modules/react-native-callkeep`)
   - "RNCAsyncStorage (from `../node_modules/@react-native-async-storage/async-storage`)"
+  - "RNNotifee (from `../node_modules/@notifee/react-native`)"
   - RNReanimated (from `../node_modules/react-native-reanimated`)
   - RNScreens (from `../node_modules/react-native-screens`)
   - RNSVG (from `../node_modules/react-native-svg`)
@@ -2410,6 +2416,8 @@ EXTERNAL SOURCES:
     :path: "../node_modules/react-native-callkeep"
   RNCAsyncStorage:
     :path: "../node_modules/@react-native-async-storage/async-storage"
+  RNNotifee:
+    :path: "../node_modules/@notifee/react-native"
   RNReanimated:
     :path: "../node_modules/react-native-reanimated"
   RNScreens:
@@ -2520,6 +2528,7 @@ SPEC CHECKSUMS:
   ReactNativeIncallManager: dccd3e7499caa3bb73d3acfedf4fb0360f1a87d5
   RNCallKeep: 1930a01d8caf48f018be4f2db0c9f03405c2f977
   RNCAsyncStorage: 3a4f5e2777dae1688b781a487923a08569e27fe4
+  RNNotifee: 5e3b271e8ea7456a36eec994085543c9adca9168
   RNReanimated: e5c702a3e24cc1c68b2de67671713f35461678f4
   RNScreens: d8d6f1792f6e7ac12b0190d33d8d390efc0c1845
   RNSVG: 31d6639663c249b7d5abc9728dde2041eb2a3c34

@@ -162,6 +162,7 @@ export function useMeetSocket({
     audioProducerRef,
     videoProducerRef,
     screenProducerRef,
+    screenShareStreamRef,
     consumersRef,
     producerMapRef,
     pendingProducersRef,
@@ -221,6 +222,13 @@ export function useMeetSocket({
       videoProducerRef.current = null;
       screenProducerRef.current = null;
 
+      if (screenShareStreamRef.current) {
+        screenShareStreamRef.current
+          .getTracks()
+          .forEach((track) => stopLocalTrack(track));
+        screenShareStreamRef.current = null;
+      }
+
       try {
         producerTransportRef.current?.close();
       } catch { }
@@ -257,12 +265,14 @@ export function useMeetSocket({
       producerMapRef,
       producerTransportRef,
       screenProducerRef,
+      screenShareStreamRef,
       setActiveScreenShareId,
       setDisplayNames,
       setIsHandRaised,
       setIsScreenSharing,
       setPendingUsers,
       clearReactions,
+      stopLocalTrack,
       videoProducerRef,
       producerTransportDisconnectTimeoutRef,
       consumerTransportDisconnectTimeoutRef,
@@ -1256,6 +1266,12 @@ export function useMeetSocket({
                   setIsScreenSharing(false);
                   screenProducerRef.current.close();
                   screenProducerRef.current = null;
+                  if (screenShareStreamRef.current) {
+                    screenShareStreamRef.current
+                      .getTracks()
+                      .forEach((track) => stopLocalTrack(track));
+                    screenShareStreamRef.current = null;
+                  }
                   setActiveScreenShareId(null);
                 }
               }
@@ -1722,7 +1738,7 @@ export function useMeetSocket({
     ]
   );
 
-  const handleReconnect = useCallback(async () => {
+  const handleReconnect = useCallback(async (options?: { immediate?: boolean }) => {
     if (reconnectInFlightRef.current) return;
     reconnectInFlightRef.current = true;
 
@@ -1734,8 +1750,9 @@ export function useMeetSocket({
         }
         setConnectionState("reconnecting");
         reconnectAttemptsRef.current++;
-        const delay =
-          RECONNECT_DELAY_MS * 2 ** (reconnectAttemptsRef.current - 1);
+        const delay = options?.immediate
+          ? 0
+          : RECONNECT_DELAY_MS * 2 ** (reconnectAttemptsRef.current - 1);
 
         console.log(
           `[Meets] Reconnecting in ${delay}ms (attempt ${reconnectAttemptsRef.current})`
