@@ -1,8 +1,5 @@
-#if SKIP
+#if os(macOS) && !SKIP
 import SwiftUI
-#if SKIP
-import org.webrtc.__
-#endif
 
 struct LocalVideoView: View {
     let captureSession: Any?
@@ -65,10 +62,8 @@ struct VideoGridItem: View {
     var videoContent: some View {
         if isCameraOff {
             avatarView
-        } else if isLocal, let wrapper = localVideoTrack as? VideoTrackWrapper {
-            AndroidVideoView(trackWrapper: wrapper, isMirrored: true)
-        } else if let wrapper = trackWrapper {
-            AndroidVideoView(trackWrapper: wrapper, isMirrored: false)
+        } else if isLocal {
+            Color.black
         } else {
             Color.black
         }
@@ -88,7 +83,7 @@ struct VideoGridItem: View {
                 }
                 .overlay {
                     Text(String(displayName.prefix(1)).uppercased())
-                        .font(ACMFont.trial(24, weight: .bold))
+                        .font(.system(size: 24, weight: .bold))
                         .foregroundStyle(ACMColors.cream)
                 }
         }
@@ -113,7 +108,7 @@ struct VideoGridItem: View {
             ACMColors.blackOverlay(0.4)
 
             VStack(spacing: 8) {
-                ACMSystemIcon.image("theatermasks.fill", androidName: "Icons.Filled.Face")
+                Image(systemName: "theatermasks.fill")
                     .font(.system(size: 48))
                     .foregroundStyle(ACMColors.primaryPink)
                     .shadow(color: ACMColors.primaryPinkSoft, radius: 16.0)
@@ -138,7 +133,7 @@ struct VideoGridItem: View {
     var handRaisedBadge: some View {
         VStack {
             HStack {
-                ACMSystemIcon.image("hand.raised.fill", androidName: "Icons.Filled.ThumbUp")
+                Image(systemName: "hand.raised.fill")
                     .font(.system(size: 14))
                     .foregroundStyle(ACMColors.handRaised)
                     .padding(8)
@@ -178,7 +173,7 @@ struct VideoGridItem: View {
                     }
 
                     if isMuted {
-                        ACMSystemIcon.image("mic.slash.fill", androidName: "Icons.Filled.Close")
+                        Image(systemName: "mic.slash.fill")
                             .font(.system(size: 10))
                             .foregroundStyle(ACMColors.primaryOrange)
                     }
@@ -197,21 +192,6 @@ struct VideoGridItem: View {
                 Spacer()
             }
             .padding(12)
-        }
-    }
-}
-
-struct AndroidVideoView: View {
-    let trackWrapper: VideoTrackWrapper
-    var isMirrored: Bool
-
-    var body: some View {
-        ComposeView { _ in
-            #if SKIP
-            VideoTrackView(track: trackWrapper.rtcVideoTrack as? org.webrtc.VideoTrack, mirror: isMirrored)
-            #else
-            VideoTrackView(track: nil, mirror: isMirrored)
-            #endif
         }
     }
 }

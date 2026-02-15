@@ -281,15 +281,15 @@ struct JoinView: View {
                 .padding(.horizontal, 40)
                 .padding(.vertical, 24)
             } else {
-                ScrollView {
-                    VStack(spacing: 24) {
-                        cameraPreviewSection
-                            .frame(height: geometry.size.height * 0.4)
-                        
-                        joinFormSection
-                    }
-                    .padding(.horizontal, 20)
-                    .padding(.vertical, 24)
+                ZStack(alignment: .bottom) {
+                    cameraPreviewSection
+                        .padding(.horizontal, 16)
+                        .padding(.top, 16)
+                        .padding(.bottom, 180)
+                    
+                    joinFormSection
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 16)
                 }
             }
         }
@@ -298,137 +298,88 @@ struct JoinView: View {
     // MARK: - Camera Preview Section
     
     private var cameraPreviewSection: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            // Video preview container
-            ZStack {
-                // Background
-                RoundedRectangle(cornerRadius: 16)
-                    .fill(ACMColors.surface)
-                
-                // Camera feed or avatar
-                if isCameraOn, let session = captureSession {
-                    CameraPreviewRepresentable(session: session)
-                        .clipShape(RoundedRectangle(cornerRadius: 16))
-                        .scaleEffect(x: -1, y: 1) // Mirror
-                } else {
-                    // Avatar when camera off
-                    VStack {
-                        Circle()
-                            .fill(ACMGradients.avatarBackground)
-                            .frame(width: 80, height: 80)
-                            .overlay(
-                                Circle()
-                                    .strokeBorder(ACMColors.creamSubtle, lineWidth: 1)
-                            )
-                            .overlay {
-                                Text(userInitial)
-                                    .font(.system(size: 32, weight: .bold))
-                                    .foregroundStyle(ACMColors.cream)
-                            }
-                    }
-                }
-                
-                // User email badge (top left)
+        ZStack {
+            RoundedRectangle(cornerRadius: 28)
+                .fill(ACMColors.surface)
+            
+            // Camera feed or avatar
+            if isCameraOn, let session = captureSession {
+                CameraPreviewRepresentable(session: session)
+                    .clipShape(RoundedRectangle(cornerRadius: 28))
+                    .scaleEffect(x: -1, y: 1) // Mirror
+            } else {
+                // Avatar when camera off
                 VStack {
-                    HStack {
-                        Text(userEmail)
-                            .font(ACMFont.mono(11))
-                            .foregroundStyle(ACMColors.cream.opacity(0.7))
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 6)
-                            .background(.black.opacity(0.5))
-                            .background(.ultraThinMaterial.opacity(0.3))
-                            .clipShape(Capsule())
-                        
-                        Spacer()
-                    }
-                    .padding(12)
+                    Circle()
+                        .fill(ACMGradients.avatarBackground)
+                        .frame(width: 80, height: 80)
+                        .overlay(
+                            Circle()
+                                .strokeBorder(ACMColors.creamSubtle, lineWidth: 1)
+                        )
+                        .overlay {
+                            Text(userInitial)
+                                .font(.system(size: 32, weight: .bold))
+                                .foregroundStyle(ACMColors.cream)
+                        }
+                }
+            }
+            
+            // User email badge (top left)
+            VStack {
+                HStack {
+                    Text(userEmail)
+                        .font(ACMFont.mono(11))
+                        .foregroundStyle(ACMColors.cream.opacity(0.7))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(.black.opacity(0.5))
+                        .background(.ultraThinMaterial.opacity(0.3))
+                        .clipShape(Capsule())
                     
                     Spacer()
-                    
-                    // Media controls (bottom center)
-                    HStack(spacing: 8) {
-                        // Mic toggle
-                        Button {
-                            toggleMic()
-                        } label: {
-                            Image(systemName: isMicOn ? "mic.fill" : "mic.slash.fill")
-                                .font(.system(size: 16))
-                                .foregroundStyle(.white)
-                                .frame(width: 36, height: 36)
-                                .background(isMicOn ? .white.opacity(0.1) : .red)
-                                .clipShape(Circle())
-                        }
-                        
-                        // Camera toggle
-                        Button {
-                            toggleCamera()
-                        } label: {
-                            Image(systemName: isCameraOn ? "video.fill" : "video.slash.fill")
-                                .font(.system(size: 16))
-                                .foregroundStyle(.white)
-                                .frame(width: 36, height: 36)
-                                .background(isCameraOn ? .white.opacity(0.1) : .red)
-                                .clipShape(Circle())
-                        }
+                }
+                .padding(12)
+                
+                Spacer()
+                
+                // Media controls (bottom center)
+                HStack(spacing: 8) {
+                    // Mic toggle
+                    Button {
+                        toggleMic()
+                    } label: {
+                        Image(systemName: isMicOn ? "mic.fill" : "mic.slash.fill")
+                            .font(.system(size: 16))
+                            .foregroundStyle(.white)
+                            .frame(width: 36, height: 36)
+                            .background(isMicOn ? .white.opacity(0.1) : .red)
+                            .clipShape(Circle())
                     }
-                    .padding(8)
-                    .background(.black.opacity(0.5))
-                    .background(.ultraThinMaterial.opacity(0.3))
-                    .clipShape(Capsule())
-                    .padding(.bottom, 12)
-                }
-            }
-            .aspectRatio(16/10, contentMode: .fit)
-            .overlay(
-                RoundedRectangle(cornerRadius: 16)
-                    .strokeBorder(ACMColors.creamFaint, lineWidth: 1)
-            )
-            
-            // Preflight status indicators
-            HStack(spacing: 8) {
-                Text("PREFLIGHT")
-                    .font(ACMFont.mono(10))
-                    .tracking(2)
-                    .foregroundStyle(ACMColors.cream.opacity(0.4))
-                
-                // Mic status
-                HStack(spacing: 6) {
-                    Circle()
-                        .fill(isMicOn ? Color.green : ACMColors.primaryOrange)
-                        .frame(width: 6, height: 6)
                     
-                    Text("Mic \(isMicOn ? "On" : "Off")")
-                        .font(ACMFont.mono(10))
-                        .foregroundStyle(ACMColors.cream.opacity(0.7))
+                    // Camera toggle
+                    Button {
+                        toggleCamera()
+                    } label: {
+                        Image(systemName: isCameraOn ? "video.fill" : "video.slash.fill")
+                            .font(.system(size: 16))
+                            .foregroundStyle(.white)
+                            .frame(width: 36, height: 36)
+                            .background(isCameraOn ? .white.opacity(0.1) : .red)
+                            .clipShape(Circle())
+                    }
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .background(.black.opacity(0.4))
-                .overlay(
-                    Capsule().strokeBorder(ACMColors.creamFaint, lineWidth: 1)
-                )
+                .padding(8)
+                .background(.black.opacity(0.5))
+                .background(.ultraThinMaterial.opacity(0.3))
                 .clipShape(Capsule())
-                
-                // Camera status
-                HStack(spacing: 6) {
-                    Circle()
-                        .fill(isCameraOn ? Color.green : ACMColors.primaryOrange)
-                        .frame(width: 6, height: 6)
-                    
-                    Text("Camera \(isCameraOn ? "On" : "Off")")
-                        .font(ACMFont.mono(10))
-                        .foregroundStyle(ACMColors.cream.opacity(0.7))
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .background(.black.opacity(0.4))
-                .overlay(
-                    Capsule().strokeBorder(ACMColors.creamFaint, lineWidth: 1)
-                )
-                .clipShape(Capsule())
+                .padding(.bottom, 12)
             }
         }
+        .overlay(
+            RoundedRectangle(cornerRadius: 28)
+                .strokeBorder(ACMColors.creamFaint, lineWidth: 1)
+        )
     }
     
     // MARK: - Join Form Section

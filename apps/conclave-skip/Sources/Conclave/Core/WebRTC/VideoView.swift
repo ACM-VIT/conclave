@@ -1,4 +1,4 @@
-#if !SKIP && canImport(WebRTC)
+#if os(iOS) && !SKIP && canImport(WebRTC)
 //
 //  VideoView.swift
 //  Conclave
@@ -221,9 +221,9 @@ struct VideoGridItem: View {
             overlays
         }
         .aspectRatio(16.0 / 9.0, contentMode: .fit)
-        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .clipShape(RoundedRectangle(cornerRadius: ACMRadius.lg))
         .overlay {
-            RoundedRectangle(cornerRadius: 16)
+            RoundedRectangle(cornerRadius: ACMRadius.lg)
                 .strokeBorder(lineWidth: isSpeaking ? 2.0 : 1.0)
                 .foregroundStyle(isSpeaking ? ACMColors.primaryOrange : ACMColors.creamFaint)
         }
@@ -288,21 +288,21 @@ struct VideoGridItem: View {
     
     var ghostOverlay: some View {
         ZStack {
-            acmColor01(red: 0.0, green: 0.0, blue: 0.0, opacity: 0.4)
-            
+            ACMColors.blackOverlay(0.4)
+
             VStack(spacing: 8) {
                 Image(systemName: "theatermasks.fill")
                     .font(.system(size: 48))
                     .foregroundStyle(ACMColors.primaryPink)
                     .shadow(color: ACMColors.primaryPinkSoft, radius: 16.0)
-                
+
                 Text("GHOST")
                     .font(ACMFont.mono(10))
                     .tracking(2)
                     .foregroundStyle(ACMColors.primaryPink)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 4)
-                    .acmColorBackground(Color(red: 0, green: 0, blue: 0, opacity: 0.6))
+                    .acmColorBackground(ACMColors.blackOverlay(0.6))
                     .overlay {
                         Capsule()
                             .strokeBorder(lineWidth: 1)
@@ -318,17 +318,17 @@ struct VideoGridItem: View {
             HStack {
                 Image(systemName: "hand.raised.fill")
                     .font(.system(size: 14))
-                    .foregroundStyle(acmColor01(red: 1.0, green: 0.5, blue: 0.0, opacity: 0.9))
+                    .foregroundStyle(ACMColors.handRaised)
                     .padding(8)
-                    .acmColorBackground(acmColor01(red: 1.0, green: 0.5, blue: 0.0, opacity: 0.2))
+                    .acmColorBackground(ACMColors.handRaisedBackground)
                     .overlay {
                         Circle()
                             .strokeBorder(lineWidth: 1)
-                            .foregroundStyle(acmColor01(red: 1.0, green: 0.5, blue: 0.0, opacity: 0.4))
+                            .foregroundStyle(ACMColors.handRaisedBorder)
                     }
                     .clipShape(Circle())
-                    .shadow(color: acmColor01(red: 1.0, green: 0.5, blue: 0.0, opacity: 0.3), radius: 8.0)
-                
+                    .shadow(color: ACMColors.handRaisedShadow, radius: 8.0)
+
                 Spacer()
             }
             Spacer()
@@ -363,7 +363,7 @@ struct VideoGridItem: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
-            .acmColorBackground(Color(red: 0, green: 0, blue: 0, opacity: 0.7))
+            .acmColorBackground(ACMColors.blackOverlay(0.7))
             .acmMaterialBackground(opacity: 0.3)
             .overlay {
                 Capsule()
@@ -406,7 +406,6 @@ struct VideoGridItem: View {
     .frame(width: 300, height: 169)
     .background(Color.black)
 }
-#endif
 
 #Preview("Video Grid Item - Ghost") {
     VideoGridItem(
@@ -421,3 +420,4 @@ struct VideoGridItem: View {
     .frame(width: 300, height: 169)
     .background(Color.black)
 }
+#endif

@@ -12,7 +12,19 @@ struct MeetingView: View {
     @Bindable var viewModel: MeetingViewModel
     @State var showParticipantsSheet = false
     @State var showSettingsSheet = false
-    
+
+#if !os(macOS)
+    @Environment(\.horizontalSizeClass) var horizontalSizeClass
+#endif
+
+    private var isRegularSizeClass: Bool {
+#if os(macOS)
+        return true
+#else
+        return horizontalSizeClass == UserInterfaceSizeClass.regular
+#endif
+    }
+
     var body: some View {
         GeometryReader { geometry in
             ZStack {
@@ -74,7 +86,7 @@ struct MeetingView: View {
                             Spacer()
 
                             ChatOverlayView(viewModel: viewModel)
-                                .frame(width: min(340.0, geometry.size.width * 0.85))
+                                .frame(width: isRegularSizeClass ? 380.0 : min(340.0, geometry.size.width * 0.85))
                                 .transition(.move(edge: .trailing).combined(with: AnyTransition.opacity))
                         }
                     }
@@ -120,7 +132,7 @@ struct MeetingHeaderView: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
-            .acmColorBackground(Color(red: 0, green: 0, blue: 0, opacity: 0.5))
+            .acmColorBackground(ACMColors.overlay50)
             .acmMaterialBackground(opacity: 0.3)
             .overlay {
                 Capsule()
@@ -142,7 +154,7 @@ struct MeetingHeaderView: View {
                 .foregroundStyle(ACMColors.cream)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
-                .acmColorBackground(Color(red: 0, green: 0, blue: 0, opacity: 0.5))
+                .acmColorBackground(ACMColors.overlay50)
                 .acmMaterialBackground(opacity: 0.3)
                 .overlay {
                     Capsule()
@@ -544,9 +556,21 @@ struct ControlsBarView: View {
     let onParticipantsPressed: () -> Void
     let onSettingsPressed: () -> Void
     @State var showReactionPicker = false
-    
+
+#if !os(macOS)
+    @Environment(\.horizontalSizeClass) var horizontalSizeClass
+#endif
+
+    private var isRegularSizeClass: Bool {
+#if os(macOS)
+        return true
+#else
+        return horizontalSizeClass == UserInterfaceSizeClass.regular
+#endif
+    }
+
     var body: some View {
-        let isCompact = availableWidth < 420
+        let isCompact = !isRegularSizeClass
         let participantsIcon: String = {
             #if SKIP
             return "Icons.Filled.Person"
@@ -739,6 +763,8 @@ struct ControlButton: View {
     var activeColor: Color = ACMColors.primaryOrange
     var isGhostDisabled: Bool = false
     var badge: Int? = nil
+    var accessibilityLabel: String? = nil
+    var accessibilityHint: String? = nil
     let action: () -> Void
     
     var body: some View {
@@ -764,6 +790,10 @@ struct ControlButton: View {
             isGhostDisabled: isGhostDisabled,
             isHandRaised: isActive && activeColor == acmColor01(red: 1.0, green: 1.0, blue: 0.0, opacity: 0.9)
         )
+        #if !SKIP
+        .accessibilityLabel(accessibilityLabel ?? "")
+        .accessibilityHint(accessibilityHint ?? "")
+        #endif
     }
 }
 
@@ -851,16 +881,20 @@ struct ChatOverlayView: View {
             
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 12) {
-                        ForEach(viewModel.state.chatMessages) { message in
-                            ChatBubbleView(
-                                message: message,
-                                isFromCurrentUser: message.userId == viewModel.state.userId
-                            )
-                            .id(message.id)
+                    if viewModel.state.chatMessages.isEmpty {
+                        ChatEmptyStateView()
+                    } else {
+                        LazyVStack(alignment: .leading, spacing: 12) {
+                            ForEach(viewModel.state.chatMessages) { message in
+                                ChatBubbleView(
+                                    message: message,
+                                    isFromCurrentUser: message.userId == viewModel.state.userId
+                                )
+                                .id(message.id)
+                            }
                         }
+                        .padding()
                     }
-                    .padding()
                 }
                 .onChange(of: viewModel.state.chatMessages.count) { _, _ in
                     if let lastMessage = viewModel.state.chatMessages.last {
@@ -946,6 +980,34 @@ struct ChatBubbleView: View {
                 .foregroundStyle(ACMColors.creamMuted)
         }
         .frame(maxWidth: .infinity, alignment: isFromCurrentUser ? .trailing : .leading)
+    }
+}
+
+// MARK: - Chat Empty State
+
+struct ChatEmptyStateView: View {
+    var body: some View {
+        VStack(spacing: 16) {
+            Spacer()
+            
+            ACMSystemIcon.image("bubble.left", androidName: "Icons.Outlined.ChatBubble")
+                .font(.system(size: 48))
+                .foregroundStyle(ACMColors.creamMuted)
+            
+            VStack(spacing: 8) {
+                Text("No messages yet")
+                    .font(ACMFont.trial(16, weight: .medium))
+                    .foregroundStyle(ACMColors.cream)
+                
+                Text("Start the conversation...")
+                    .font(ACMFont.trial(14))
+                    .foregroundStyle(ACMColors.creamMuted)
+            }
+            
+            Spacer()
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 40)
     }
 }
 
@@ -1064,7 +1126,9 @@ struct ParticipantsSheetView: View {
                 }
             }
             .navigationTitle("Participants")
+            #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
+            #endif
             .toolbar {
                 #if os(iOS)
                 ToolbarItem(placement: .navigationBarTrailing) {
@@ -1156,7 +1220,9 @@ struct SettingsSheetView: View {
                 }
             }
             .navigationTitle("Settings")
+            #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
+            #endif
             .toolbar {
                 #if os(iOS)
                 ToolbarItem(placement: .navigationBarTrailing) {

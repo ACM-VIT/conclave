@@ -44,6 +44,47 @@ enum ACMColors {
     static let primaryPinkSoft = acmColor(red: 255.0, green: 0.0, blue: 122.0, opacity: 0.5)
     static let primaryPinkFaint = acmColor(red: 255.0, green: 0.0, blue: 122.0, opacity: 0.3)
     static let primaryPinkGhost = acmColor(red: 255.0, green: 0.0, blue: 122.0, opacity: 0.2)
+
+    static let creamLight = acmColor(red: 254.0, green: 252.0, blue: 217.0, opacity: 0.7)
+    static let error = acmColor(red: 239.0, green: 68.0, blue: 68.0)
+    static let errorDim = acmColor(red: 239.0, green: 68.0, blue: 68.0, opacity: 0.6)
+    static let success = acmColor(red: 34.0, green: 197.0, blue: 94.0)
+    static let black = acmColor(red: 0.0, green: 0.0, blue: 0.0)
+    static let white = acmColor(red: 255.0, green: 255.0, blue: 255.0)
+    static let overlay50 = acmColor(red: 0.0, green: 0.0, blue: 0.0, opacity: 0.5)
+
+    static func blackOverlay(_ opacity: Double) -> Color {
+        acmColor(red: 0.0, green: 0.0, blue: 0.0, opacity: opacity)
+    }
+
+    // MARK: - Hand Raised Colors (Orange accent)
+    static let handRaised = acmColor01(red: 1.0, green: 0.5, blue: 0.0, opacity: 0.9)
+    static let handRaisedBackground = acmColor01(red: 1.0, green: 0.5, blue: 0.0, opacity: 0.2)
+    static let handRaisedBorder = acmColor01(red: 1.0, green: 0.5, blue: 0.0, opacity: 0.4)
+    static let handRaisedShadow = acmColor01(red: 1.0, green: 0.5, blue: 0.0, opacity: 0.3)
+}
+
+// MARK: - Spacing Scale (4pt grid system)
+
+enum ACMSpacing {
+    static let xxs: CGFloat = 4
+    static let xs: CGFloat = 8
+    static let sm: CGFloat = 12
+    static let md: CGFloat = 16
+    static let lg: CGFloat = 20
+    static let xl: CGFloat = 24
+    static let xxl: CGFloat = 32
+    static let xxxl: CGFloat = 48
+}
+
+// MARK: - Corner Radius Scale
+
+enum ACMRadius {
+    static let sm: CGFloat = 8
+    static let md: CGFloat = 12
+    static let lg: CGFloat = 16
+    static let xl: CGFloat = 28
+    static let full: CGFloat = 999
 }
 
 // MARK: - Gradients
@@ -57,13 +98,13 @@ enum ACMGradients {
 // MARK: - Typography
 
 enum ACMFont {
-    static let regular = "PolySansTrial-Neutral"
-    static let medium = "PolySansTrial-Median"
-    static let bold = "PolySansTrial-Bulky"
-    static let wideBold = "PolySansTrial-BulkyWide"
-    static let monoRegular = "PolySansTrial-NeutralMono"
-    static let monoMedium = "PolySansTrial-MedianMono"
-    static let monoBold = "PolySansTrial-BulkyMono"
+    static let regular = "PolySans Trial Neutral"
+    static let medium = "PolySans Trial Median"
+    static let bold = "PolySans Trial Bulky"
+    static let wideBold = "PolySans Trial Bulky Wide"
+    static let monoRegular = "PolySans Trial Neutral Mono"
+    static let monoMedium = "PolySans Trial Median Mono"
+    static let monoBold = "PolySans Trial Bulky Mono"
 
     static func trial(_ size: CGFloat, weight: Font.Weight = .regular) -> Font {
         let name: String

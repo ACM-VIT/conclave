@@ -81,6 +81,9 @@ final class MeetingViewModel {
             Task { @MainActor in
                 guard let self = self else { return }
                 self.state.errorMessage = error.localizedDescription
+                #if !SKIP
+                HapticManager.shared.trigger(.error)
+                #endif
             }
         }
 
@@ -140,10 +143,13 @@ final class MeetingViewModel {
                 } catch {
                     debugLog("[Meeting] WebRTC setup error: \(error)")
                     self.state.errorMessage = error.localizedDescription
+                    #if !SKIP
+                    HapticManager.shared.trigger(.error)
+                    #endif
                 }
             }
         }
-        
+
         socketManager.onWaitingForAdmission = { [weak self] in
             Task { @MainActor in
                 guard let self = self else { return }
@@ -174,10 +180,13 @@ final class MeetingViewModel {
                 guard let self = self else { return }
                 self.state.connectionState = ConnectionState.error
                 self.state.errorMessage = "The host has denied your request to join."
+                #if !SKIP
+                HapticManager.shared.trigger(.error)
+                #endif
                 await self.cleanup()
             }
         }
-        
+
         socketManager.onHostAssigned = { [weak self] in
             Task { @MainActor in
                 guard let self = self else { return }
@@ -190,10 +199,13 @@ final class MeetingViewModel {
                 guard let self = self else { return }
                 self.state.connectionState = ConnectionState.disconnected
                 self.state.errorMessage = reason ?? "You were removed from the meeting"
+                #if !SKIP
+                HapticManager.shared.trigger(.error)
+                #endif
                 await self.cleanup()
             }
         }
-        
+
         socketManager.onUserJoined = { [weak self] notification in
             Task { @MainActor in
                 guard let self = self else { return }
@@ -278,8 +290,11 @@ final class MeetingViewModel {
                 let producerId = notification.producerId
                 let userId = notification.producerUserId
                 
-                if let userId, self.state.activeScreenShareUserId == userId {
-                    self.state.activeScreenShareUserId = nil
+                if let userId {
+                    if self.state.activeScreenShareUserId == userId {
+                        self.state.activeScreenShareUserId = nil
+                    }
+                    self.state.participants[userId]?.isScreenSharing = false
                 }
                 
                 self.webRTCClient.closeConsumer(producerId: producerId, userId: userId ?? "")
@@ -430,6 +445,9 @@ final class MeetingViewModel {
             state.participants[producer.producerUserId]?.isMuted = producer.paused ?? false
         } else if producer.kind == "video" {
             if producer.type == "screen" {
+                if let previous = state.activeScreenShareUserId, previous != producer.producerUserId {
+                    state.participants[previous]?.isScreenSharing = false
+                }
                 state.participants[producer.producerUserId]?.isScreenSharing = true
                 state.activeScreenShareUserId = producer.producerUserId
             } else {
@@ -507,6 +525,9 @@ final class MeetingViewModel {
             } catch {
                 state.connectionState = ConnectionState.error
                 state.errorMessage = error.localizedDescription
+                #if !SKIP
+                HapticManager.shared.trigger(.error)
+                #endif
             }
         }
     }
@@ -557,6 +578,9 @@ final class MeetingViewModel {
     }
     
     func leaveRoom() {
+        #if !SKIP
+        HapticManager.shared.trigger(.light)
+        #endif
         Task {
             isIntentionalLeave = true
             shouldRejoinAfterReconnect = false
@@ -567,6 +591,9 @@ final class MeetingViewModel {
     }
     
     func cleanup() async {
+        #if canImport(ReplayKit) && !SKIP
+        await ScreenCaptureManager.shared.stopCapture()
+        #endif
         await webRTCClient.cleanup()
         
         state.participants.removeAll()
@@ -595,7 +622,9 @@ final class MeetingViewModel {
     func toggleMute() {
         let newState = !state.isMuted
         state.isMuted = newState
-        
+        #if !SKIP
+        HapticManager.shared.trigger(.light)
+        #endif
         Task {
             if newState {
                 // Muting - just pause the producer
@@ -620,7 +649,9 @@ final class MeetingViewModel {
     func toggleCamera() {
         let newState = !state.isCameraOff
         state.isCameraOff = newState
-        
+        #if !SKIP
+        HapticManager.shared.trigger(.light)
+        #endif
         Task {
             if newState {
                 // Turning off camera
@@ -643,17 +674,45 @@ final class MeetingViewModel {
     }
     
     func toggleScreenShare() {
-        // iOS screen sharing requires ReplayKit Broadcast Extension
-        // This is a significant feature that requires:
-        // 1. A separate Broadcast Upload Extension target
-        // 2. App Groups for communication between app and extension
-        // 3. ReplayKit permission handling
-        debugLog("[Meeting] Screen sharing requires ReplayKit Broadcast Extension - not yet implemented")
+        #if canImport(UIKit) && !SKIP
+        Task {
+            do {
+                if state.isScreenSharing {
+                    // Stop screen sharing
+                    await ScreenCaptureManager.shared.stopCapture()
+                    await webRTCClient.stopScreenSharing()
+                    state.isScreenSharing = false
+                    if state.activeScreenShareUserId == state.userId {
+                        state.activeScreenShareUserId = nil
+                    }
+                    debugLog("[Meeting] Screen sharing stopped")
+                } else {
+                    try await webRTCClient.startScreenSharing()
+                    // Start screen sharing
+                    try await ScreenCaptureManager.shared.startCapture(webRTCClient: webRTCClient)
+                    state.isScreenSharing = true
+                    state.activeScreenShareUserId = state.userId
+                    debugLog("[Meeting] Screen sharing started")
+                }
+            } catch {
+                await ScreenCaptureManager.shared.stopCapture()
+                await webRTCClient.stopScreenSharing()
+                state.isScreenSharing = false
+                state.activeScreenShareUserId = nil
+                state.errorMessage = "Failed to toggle screen sharing: \(error.localizedDescription)"
+                debugLog("[Meeting] Screen sharing error: \(error)")
+            }
+        }
+        #else
+        debugLog("[Meeting] Screen sharing not supported on this platform")
+        #endif
     }
     
     func toggleHandRaise() {
         let newState = !state.isHandRaised
-        
+        #if !SKIP
+        HapticManager.shared.trigger(.medium)
+        #endif
         Task {
             do {
                 try await socketManager.setHandRaised(newState)
@@ -669,15 +728,119 @@ final class MeetingViewModel {
         webRTCClient.updateVideoQuality(quality)
     }
     
+    // MARK: - Chat Commands
+    
+    func executeChatCommand(_ parsedCommand: ParsedCommand) {
+        #if !SKIP
+        HapticManager.shared.trigger(.medium)
+        #endif
+        
+        Task {
+            do {
+                switch parsedCommand.command {
+                case .raise:
+                    if !state.isHandRaised {
+                        try await socketManager.setHandRaised(true)
+                        state.isHandRaised = true
+                        addSystemMessage(.commandExecuted(command: .raise, userName: state.displayName))
+                    }
+                    
+                case .lower:
+                    if state.isHandRaised {
+                        try await socketManager.setHandRaised(false)
+                        state.isHandRaised = false
+                        addSystemMessage(.commandExecuted(command: .lower, userName: state.displayName))
+                    }
+                    
+                case .mute:
+                    if !state.isMuted {
+                        await setMuted(true)
+                        addSystemMessage(.commandExecuted(command: .mute, userName: state.displayName))
+                    }
+                    
+                case .unmute:
+                    if state.isMuted {
+                        await setMuted(false)
+                        addSystemMessage(.commandExecuted(command: .unmute, userName: state.displayName))
+                    }
+                    
+                case .cameraOn:
+                    if state.isCameraOff {
+                        await setCameraOff(false)
+                        addSystemMessage(.commandExecuted(command: .cameraOn, userName: state.displayName))
+                    }
+                    
+                case .cameraOff:
+                    if !state.isCameraOff {
+                        await setCameraOff(true)
+                        addSystemMessage(.commandExecuted(command: .cameraOff, userName: state.displayName))
+                    }
+                }
+            } catch {
+                addSystemMessage(.commandFailed(command: parsedCommand.command, reason: error.localizedDescription))
+            }
+        }
+    }
+    
+    private func addSystemMessage(_ type: SystemMessageType) {
+        let message = SystemMessage(type: type)
+        state.systemMessages.append(message)
+    }
+    
+    private func setMuted(_ muted: Bool) async {
+        state.isMuted = muted
+        if muted {
+            await webRTCClient.setAudioEnabled(false)
+        } else {
+            if webRTCClient.localAudioEnabled {
+                await webRTCClient.setAudioEnabled(true)
+            } else {
+                do {
+                    try await webRTCClient.startProducingAudio()
+                } catch {
+                    state.isMuted = true
+                    state.errorMessage = error.localizedDescription
+                }
+            }
+        }
+    }
+    
+    private func setCameraOff(_ cameraOff: Bool) async {
+        state.isCameraOff = cameraOff
+        if cameraOff {
+            await webRTCClient.setVideoEnabled(false)
+        } else {
+            if webRTCClient.localVideoEnabled {
+                await webRTCClient.setVideoEnabled(true)
+            } else {
+                do {
+                    try await webRTCClient.startProducingVideo()
+                } catch {
+                    state.isCameraOff = true
+                    state.errorMessage = error.localizedDescription
+                }
+            }
+        }
+    }
+    
     // MARK: - Chat
     
     func sendChatMessage(_ content: String) {
         guard !content.isEmpty else { return }
         
+        // Check if it's a command
+        if let parsedCommand = ChatCommandParser.parse(content) {
+            executeChatCommand(parsedCommand)
+            return
+        }
+        
+        #if !SKIP
+        HapticManager.shared.trigger(.light)
+        #endif
         Task {
             do {
                 try await socketManager.sendChat(content: content)
-                
+
                 // Add locally for immediate feedback
                 let message = ChatMessage(
                     userId: state.userId,
@@ -685,7 +848,7 @@ final class MeetingViewModel {
                     content: content
                 )
                 state.chatMessages.append(message)
-                
+
             } catch {
                 state.errorMessage = "Failed to send message"
             }
@@ -702,13 +865,16 @@ final class MeetingViewModel {
     // MARK: - Reactions
     
     func sendReaction(emoji: String) {
+        #if !SKIP
+        HapticManager.shared.trigger(.medium)
+        #endif
         Task {
             do {
                 try await socketManager.sendReaction(emoji: emoji, kind: "emoji", value: emoji, label: nil)
-                
+
                 let reaction = Reaction(userId: state.userId, kind: .emoji, value: emoji)
                 handleReaction(reaction)
-                
+
             } catch {
             }
         }
