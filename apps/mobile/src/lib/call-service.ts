@@ -5,6 +5,7 @@ import notifee, {
   AndroidImportance,
   AndroidVisibility,
 } from "@notifee/react-native";
+import * as Device from "expo-device";
 import type { IOptions } from "react-native-callkeep";
 import InCallManager from "react-native-incall-manager";
 import {
@@ -27,9 +28,10 @@ const FOREGROUND_COLOR = "#F95F4A";
 const IOS_CATEGORY_MUTED = "conclave-call-muted";
 const IOS_CATEGORY_UNMUTED = "conclave-call-unmuted";
 let iosCategoriesConfigured = false;
+const isIOSSimulator = Platform.OS === "ios" && !Device.isDevice;
 
 const getCallKeep = () => {
-  if (Platform.OS !== "ios") return null;
+  if (Platform.OS !== "ios" || isIOSSimulator) return null;
   if (!callKeepModule) {
     callKeepModule = require("react-native-callkeep");
   }
@@ -116,11 +118,13 @@ export function setCallMuted(muted: boolean) {
 }
 
 export function startInCall() {
+  if (isIOSSimulator) return;
   InCallManager.start({ media: "video" });
   InCallManager.setForceSpeakerphoneOn?.(true);
 }
 
 export function stopInCall() {
+  if (isIOSSimulator) return;
   InCallManager.stop();
 }
 
@@ -245,6 +249,7 @@ export function registerForegroundCallServiceHandlers(handlers: {
 }
 
 export function setAudioRoute(route: "speaker" | "earpiece") {
+  if (isIOSSimulator) return;
   if (route === "speaker") {
     InCallManager.setForceSpeakerphoneOn?.(true);
   } else {

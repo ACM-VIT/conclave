@@ -22,8 +22,20 @@ const eventTargetShimPath =
     fs.existsSync(path.join(candidate, "index.js"))
   ) ?? eventTargetShimCandidates[0];
 const eventTargetShimIndexPath = path.join(eventTargetShimPath, "index.js");
-const yjsPath = path.resolve(workspaceNodeModulesPath, "yjs");
+const yjsCjsPath = path.resolve(workspaceNodeModulesPath, "yjs/dist/yjs.cjs");
 const yProtocolsPath = path.resolve(workspaceNodeModulesPath, "y-protocols");
+const yProtocolsAwarenessCjsPath = path.resolve(
+  workspaceNodeModulesPath,
+  "y-protocols/dist/awareness.cjs"
+);
+const yProtocolsSyncCjsPath = path.resolve(
+  workspaceNodeModulesPath,
+  "y-protocols/dist/sync.cjs"
+);
+const yProtocolsAuthCjsPath = path.resolve(
+  workspaceNodeModulesPath,
+  "y-protocols/dist/auth.cjs"
+);
 const lib0Path = path.resolve(workspaceNodeModulesPath, "lib0");
 
 config.transformer = {
@@ -39,8 +51,13 @@ config.resolver = {
     "event-target-shim": eventTargetShimPath,
     "event-target-shim/index": eventTargetShimIndexPath,
     "isomorphic-webcrypto": isomorphicWebcryptoShimPackagePath,
-    yjs: yjsPath,
+    yjs: yjsCjsPath,
+    "yjs/dist/yjs.mjs": yjsCjsPath,
+    "yjs/dist/yjs.cjs": yjsCjsPath,
     "y-protocols": yProtocolsPath,
+    "y-protocols/awareness": yProtocolsAwarenessCjsPath,
+    "y-protocols/sync": yProtocolsSyncCjsPath,
+    "y-protocols/auth": yProtocolsAuthCjsPath,
     lib0: lib0Path,
   },
   nodeModulesPaths: [
