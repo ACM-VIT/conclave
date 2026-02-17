@@ -5,6 +5,21 @@
     "paths": {
       "@/*": [
         "./src/*"
+      ],
+      "@conclave/apps-sdk": [
+        "../../packages/apps-sdk/src/index.ts"
+      ],
+      "@conclave/apps-sdk/*": [
+        "../../packages/apps-sdk/src/*"
+      ],
+      "@conclave/apps-sdk/whiteboard/native": [
+        "../../packages/apps-sdk/src/apps/whiteboard/native/index.ts"
+      ],
+      "@conclave/apps-sdk/whiteboard/web": [
+        "../../packages/apps-sdk/src/apps/whiteboard/web/index.ts"
+      ],
+      "@conclave/apps-sdk/whiteboard/core": [
+        "../../packages/apps-sdk/src/apps/whiteboard/core/index.ts"
       ]
     }
   },

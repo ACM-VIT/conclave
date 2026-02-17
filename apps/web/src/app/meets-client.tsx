@@ -1,8 +1,16 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { Socket } from "socket.io-client";
 import type { RoomInfo } from "@/lib/sfu-types";
 import { signOut } from "@/lib/auth-client";
+import type { AssetUploadHandler } from "@conclave/apps-sdk";
+import {
+  AppsProvider,
+  createAssetUploadHandler,
+  registerApps,
+} from "@conclave/apps-sdk";
+import { whiteboardApp } from "@conclave/apps-sdk/whiteboard/web";
 import MeetsErrorBanner from "./components/MeetsErrorBanner";
 import MeetsHeader from "./components/MeetsHeader";
 import MeetsMainContent from "./components/MeetsMainContent";
@@ -18,6 +26,7 @@ import { useMeetLifecycle } from "./hooks/useMeetLifecycle";
 import { useMeetMedia } from "./hooks/useMeetMedia";
 import { useMeetMediaSettings } from "./hooks/useMeetMediaSettings";
 import { useMeetPictureInPicture } from "./hooks/useMeetPictureInPicture";
+import { useMeetPopout } from "./hooks/useMeetPopout";
 import { useMeetReactions } from "./hooks/useMeetReactions";
 import { useMeetRefs } from "./hooks/useMeetRefs";
 import { useMeetRooms } from "./hooks/useMeetRooms";
@@ -77,6 +86,15 @@ export default function MeetsClient({
   const [currentUser, setCurrentUser] = useState(user);
   const [currentIsAdmin, setCurrentIsAdmin] = useState(isAdmin);
   const [isSigningOut, setIsSigningOut] = useState(false);
+  const [appsSocket, setAppsSocket] = useState<Socket | null>(null);
+  const uploadAsset: AssetUploadHandler = useMemo(
+    () => createAssetUploadHandler(),
+    []
+  );
+
+  useEffect(() => {
+    registerApps([whiteboardApp]);
+  }, []);
 
   const prewarm = usePrewarmSocket();
 
@@ -194,6 +212,19 @@ export default function MeetsClient({
     socketRef: refs.socketRef,
     joinOptionsRef: refs.joinOptionsRef,
   });
+  const appsUser = useMemo(
+    () => ({
+      id: userId,
+      name:
+        displayNameInput ||
+        currentUser?.name ||
+        currentUser?.email ||
+        currentUser?.id ||
+        "Guest",
+      email: currentUser?.email ?? null,
+    }),
+    [userId, displayNameInput, currentUser]
+  );
 
   const { availableRooms, roomsStatus, refreshRooms } = useMeetRooms({
     isAdmin: isAdminFlag,
@@ -363,6 +394,7 @@ export default function MeetsClient({
     },
     onTtsMessage: handleTtsMessage,
     prewarm,
+    onSocketReady: setAppsSocket,
   });
 
   useMeetAudioActivity({
@@ -528,6 +560,27 @@ export default function MeetsClient({
     getDisplayName: resolveDisplayName,
   });
 
+  // Document PiP popout for mini meeting view
+  const {
+    isPopoutActive,
+    isPopoutSupported,
+    openPopout,
+    closePopout,
+  } = useMeetPopout({
+    isJoined: connectionState === "joined",
+    localStream,
+    participants,
+    activeSpeakerId: effectiveActiveSpeakerId,
+    currentUserId: userId,
+    isCameraOff,
+    isMuted,
+    userEmail,
+    getDisplayName: resolveDisplayName,
+    onToggleMute: toggleMute,
+    onToggleCamera: toggleCamera,
+    onLeave: leaveRoom,
+  });
+
   // ============================================
   // Render Helpers
   // ============================================
@@ -541,6 +594,17 @@ export default function MeetsClient({
     connectionState === "reconnecting" ||
     connectionState === "waiting"; // Waiting is a kind of loading state visually, or handled separately
 
+  const renderWithApps = (content: React.ReactNode) => (
+    <AppsProvider
+      socket={appsSocket}
+      user={appsUser}
+      isAdmin={isAdminFlag}
+      uploadAsset={uploadAsset}
+    >
+      {content}
+    </AppsProvider>
+  );
+
   if (connectionState === "waiting") {
     const waitingTitle = waitingMessage ?? "Waiting for host to let you in";
     const isLockedRoom = waitingMessage?.toLowerCase().includes("locked");
@@ -549,7 +613,7 @@ export default function MeetsClient({
       : waitingMessage
         ? "The host left the room, so there is no one available to admit you right now."
         : "Hang tight.";
-    return (
+    return renderWithApps(
       <MeetsWaitingScreen
         waitingTitle={waitingTitle}
         waitingIntro={waitingIntro}
@@ -560,7 +624,7 @@ export default function MeetsClient({
   }
 
   if (isMobile) {
-    return (
+    return renderWithApps(
       <div
         className={`flex flex-col h-dvh w-full bg-[#0d0e0d] text-white ${fontClassName ?? ""}`}
       >
@@ -663,7 +727,7 @@ export default function MeetsClient({
   }
 
   // Desktop layout
-  return (
+  return renderWithApps(
     <div
       className={`flex flex-col h-full w-full bg-[#1a1a1a] text-white ${fontClassName ?? ""}`}
     >
@@ -788,6 +852,10 @@ export default function MeetsClient({
         onDismissMeetError={() => setMeetError(null)}
         onRetryMedia={handleRetryMedia}
         onTestSpeaker={handleTestSpeaker}
+        isPopoutActive={isPopoutActive}
+        isPopoutSupported={isPopoutSupported}
+        onOpenPopout={openPopout}
+        onClosePopout={closePopout}
       />
     </div>
   );

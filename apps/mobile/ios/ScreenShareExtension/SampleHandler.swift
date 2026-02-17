@@ -65,7 +65,12 @@ final class SampleHandler: RPBroadcastSampleHandler {
       return
     }
 
-    socketConnection?.write(messageData)
+    guard socketConnection?.write(messageData) == true else {
+      socketConnection?.close()
+      socketConnection = nil
+      isConnected = false
+      return
+    }
   }
 }
 

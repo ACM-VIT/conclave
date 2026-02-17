@@ -8,8 +8,14 @@
 import SwiftUI
 import Foundation
 import Observation
+#if !SKIP
+import OSLog
+#endif
 #if canImport(UIKit)
 import UIKit
+#endif
+#if !SKIP
+import AuthenticationServices
 #endif
 #if SKIP
 import androidx.compose.foundation.layout.__
@@ -21,7 +27,11 @@ import AVFoundation
 struct JoinView: View {
     @Bindable var viewModel: MeetingViewModel
     @Bindable var appState: AppState
-    
+
+#if !os(macOS)
+    @Environment(\.horizontalSizeClass) var horizontalSizeClass
+#endif
+
     @State private var phase: JoinPhase = .welcome
     @State private var roomCode = ""
     @State private var guestName = ""
@@ -31,10 +41,19 @@ struct JoinView: View {
     @State private var isCameraOn = false
     @State private var isMicOn = false
     @State private var isSigningIn = false
+    @State private var signingInProvider: AppState.AuthProvider = .none
 #if SKIP
 #else
     @State private var captureSession: AVCaptureSession?
 #endif
+
+    private var isRegularSizeClass: Bool {
+#if os(macOS)
+        return true
+#else
+        return horizontalSizeClass == UserInterfaceSizeClass.regular
+#endif
+    }
     
     enum JoinPhase {
         case welcome, auth, join
@@ -119,7 +138,7 @@ struct JoinView: View {
             HStack(spacing: 0) {
                 Text("[")
                     .font(ACMFont.mono(32, weight: .regular))
-                    .foregroundStyle(acmColor(red: 249.0, green: 95.0, blue: 74.0, opacity: 0.35))
+                    .foregroundStyle(ACMColors.primaryOrangeGhost)
                 
                 Text("c0nclav3")
                     .font(ACMFont.wide(40))
@@ -128,7 +147,7 @@ struct JoinView: View {
                 
                 Text("]")
                     .font(ACMFont.mono(32, weight: .regular))
-                    .foregroundStyle(acmColor(red: 249.0, green: 95.0, blue: 74.0, opacity: 0.35))
+                    .foregroundStyle(ACMColors.primaryOrangeGhost)
             }
             
             Text("ACM-VIT's in-house video conferencing platform")
@@ -153,7 +172,7 @@ struct JoinView: View {
                 .foregroundStyle(Color.white)
                 .padding(EdgeInsets(top: 14, leading: 32, bottom: 14, trailing: 32))
                 .acmColorBackground(ACMColors.primaryOrange)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .clipShape(RoundedRectangle(cornerRadius: ACMRadius.sm))
             }
             
             Spacer()
@@ -181,38 +200,64 @@ struct JoinView: View {
                 .padding(EdgeInsets(top: 0, leading: 0, bottom: 16, trailing: 0))
                 
                 if isGoogleSignInEnabled {
-                    Button {
-                        handleGoogleSignIn()
-                    } label: {
-                        HStack(spacing: 12) {
-                            if isSigningIn {
-                                ProgressView()
+                    VStack(spacing: 12) {
+                        // Google Sign-In Button
+                        Button {
+                            handleGoogleSignIn()
+                        } label: {
+                            HStack(spacing: 12) {
+                                if isSigningIn && signingInProvider == .google {
+                                    ProgressView()
 #if !SKIP
-                                    .progressViewStyle(CircularProgressViewStyle(tint: ACMColors.cream))
+                                        .progressViewStyle(CircularProgressViewStyle(tint: ACMColors.cream))
 #endif
-                                    .scaleEffect(0.8)
-                            } else {
-                                ACMSystemIcon.image("globe", androidName: "Icons.Outlined.AccountCircle")
-                                    .font(.system(size: 16))
-                            }
+                                        .scaleEffect(0.8)
+                                } else {
+                                    ACMSystemIcon.image("globe", androidName: "Icons.Outlined.AccountCircle")
+                                        .font(.system(size: 16))
+                                }
 
-                            Text("Continue with Google")
-                                .font(ACMFont.trial(14))
+                                Text("Continue with Google")
+                                    .font(ACMFont.trial(14))
+                            }
+                            .foregroundStyle(ACMColors.cream)
+                            .frame(maxWidth: .infinity)
+                            .frame(minHeight: 48)
+                            .padding(.vertical, 12)
+                            .padding(.horizontal, 16)
+                            .acmColorBackground(ACMColors.surface.opacity(0.9))
+                            .overlay {
+                                RoundedRectangle(cornerRadius: ACMRadius.sm)
+                                    .strokeBorder(lineWidth: 1)
+                                    .foregroundStyle(ACMColors.creamDim)
+                            }
+                            .clipShape(RoundedRectangle(cornerRadius: ACMRadius.sm))
                         }
-                        .foregroundStyle(ACMColors.cream)
-                        .frame(maxWidth: .infinity)
-                        .frame(minHeight: 48)
-                        .padding(.vertical, 12)
-                        .padding(.horizontal, 16)
-                        .acmColorBackground(acmColor(red: 26.0, green: 26.0, blue: 26.0, opacity: 0.9))
+                        .disabled(isSigningIn)
+
+#if !SKIP
+                        // Apple Sign-In Button (iOS only)
+                        SignInWithAppleButton(.continue) { request in
+                            request.requestedScopes = [.fullName, .email]
+                        } onCompletion: { result in
+                            handleAppleSignIn(result: result)
+                        }
+                        .signInWithAppleButtonStyle(.whiteOutline)
+                        .frame(height: 48)
+                        .disabled(isSigningIn)
                         .overlay {
-                            RoundedRectangle(cornerRadius: 8)
-                                .strokeBorder(lineWidth: 1)
-                                .foregroundStyle(ACMColors.creamDim)
+                            if isSigningIn && signingInProvider == .apple {
+                                RoundedRectangle(cornerRadius: ACMRadius.sm)
+                                    .fill(ACMColors.surface.opacity(0.9))
+                                    .overlay {
+                                        ProgressView()
+                                            .progressViewStyle(CircularProgressViewStyle(tint: ACMColors.cream))
+                                            .scaleEffect(0.8)
+                                    }
+                            }
                         }
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
+#endif
                     }
-                    .disabled(isSigningIn)
 
                     HStack(spacing: 16) {
                         Rectangle()
@@ -228,7 +273,7 @@ struct JoinView: View {
                             .fill(ACMColors.creamFaint)
                             .frame(height: 1)
                     }
-                .padding(EdgeInsets(top: 8, leading: 0, bottom: 8, trailing: 0))
+                    .padding(EdgeInsets(top: 8, leading: 0, bottom: 8, trailing: 0))
                 }
                 
                 VStack(alignment: .leading, spacing: 8) {
@@ -237,7 +282,7 @@ struct JoinView: View {
                         .tracking(2)
                         .foregroundStyle(ACMColors.creamDim)
                     
-                    TextField("", text: $guestName, prompt: Text("Enter your name").foregroundStyle(acmColor(red: 254.0, green: 252.0, blue: 217.0, opacity: 0.25)))
+                    TextField("", text: $guestName, prompt: Text("Enter your name").foregroundStyle(ACMColors.creamFaint))
                         .textFieldStyle(.plain)
                         .font(ACMFont.trial(15))
                         .foregroundStyle(ACMColors.cream)
@@ -245,11 +290,11 @@ struct JoinView: View {
                         .padding(.horizontal, 16)
                         .acmColorBackground(ACMColors.surface)
                         .overlay {
-                            RoundedRectangle(cornerRadius: 12)
+                            RoundedRectangle(cornerRadius: ACMRadius.md)
                                 .strokeBorder(lineWidth: 1)
                                 .foregroundStyle(ACMColors.creamDim)
                         }
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                        .clipShape(RoundedRectangle(cornerRadius: ACMRadius.md))
                         .onSubmit {
                             if !trimWhitespace(guestName).isEmpty {
                                 handleGuest()
@@ -266,8 +311,8 @@ struct JoinView: View {
                             .frame(minHeight: 48)
                             .padding(.vertical, 16)
                             .padding(.horizontal, 12)
-                            .acmColorBackground(ACMColors.primaryOrange)
-                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                .acmColorBackground(ACMColors.primaryOrange)
+                .clipShape(RoundedRectangle(cornerRadius: ACMRadius.md))
                     }
                 }
                 
@@ -289,16 +334,14 @@ struct JoinView: View {
     }
     
     // MARK: - Join Phase (Camera preview + Form)
-    
+
     private func joinPhase(geometry: GeometryProxy) -> some View {
-        let isWide = geometry.size.width > 700
-        
-        return Group {
-            if isWide {
+        Group {
+            if isRegularSizeClass {
                 HStack(alignment: .top, spacing: 40) {
                     cameraPreviewSection
                         .frame(maxWidth: 600)
-                    
+
                     joinFormSection
                         .frame(maxWidth: 400)
                 }
@@ -309,7 +352,7 @@ struct JoinView: View {
                     VStack(spacing: 24) {
                         cameraPreviewSection
                             .frame(height: geometry.size.height * 0.4)
-                        
+
                         joinFormSection
                     }
                 .padding(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20))
@@ -332,22 +375,22 @@ struct JoinView: View {
             // Video preview container
             ZStack(alignment: .topLeading) {
                 // Background
-                RoundedRectangle(cornerRadius: 16)
+                RoundedRectangle(cornerRadius: ACMRadius.lg)
                     .fill(ACMColors.surface)
                 
                 // Camera feed or avatar
                 if isCameraOn {
 #if SKIP
                     Color.black
-                        .clipShape(RoundedRectangle(cornerRadius: 16))
+                        .clipShape(RoundedRectangle(cornerRadius: ACMRadius.lg))
 #else
                     if let session = captureSession {
                         CameraPreviewRepresentable(session: session)
-                            .clipShape(RoundedRectangle(cornerRadius: 16))
+                            .clipShape(RoundedRectangle(cornerRadius: ACMRadius.lg))
                             .scaleEffect(x: -1, y: 1) // Mirror
                     } else {
                         Color.black
-                            .clipShape(RoundedRectangle(cornerRadius: 16))
+                            .clipShape(RoundedRectangle(cornerRadius: ACMRadius.lg))
                     }
 #endif
                 } else {
@@ -374,11 +417,11 @@ struct JoinView: View {
                     HStack {
                         Text(displayNameInput.isEmpty ? (appState.currentUser?.name ?? "Guest") : displayNameInput)
                             .font(ACMFont.mono(11))
-                            .foregroundStyle(acmColor(red: 254.0, green: 252.0, blue: 217.0, opacity: 0.7))
+                            .foregroundStyle(ACMColors.creamLight)
                             .lineLimit(1)
                             .padding(.horizontal, 10)
                             .padding(.vertical, 4)
-                            .acmColorBackground(Color(red: 0, green: 0, blue: 0, opacity: 0.5))
+                            .acmColorBackground(ACMColors.blackOverlay(0.5))
                             .clipShape(Capsule())
                         
                         Spacer()
@@ -400,7 +443,7 @@ struct JoinView: View {
                                 .font(.system(size: 16))
                                 .foregroundStyle(Color.white)
                                 .frame(width: 36, height: 36)
-                                .acmColorBackground(isMicOn ? Color.clear : acmColor(red: 239.0, green: 68.0, blue: 68.0))
+                                .acmColorBackground(isMicOn ? Color.clear : ACMColors.error)
                                 .clipShape(Circle())
                         }
                         
@@ -415,20 +458,20 @@ struct JoinView: View {
                                 .font(.system(size: 16))
                                 .foregroundStyle(Color.white)
                                 .frame(width: 36, height: 36)
-                                .acmColorBackground(isCameraOn ? Color.clear : acmColor(red: 239.0, green: 68.0, blue: 68.0))
+                                .acmColorBackground(isCameraOn ? Color.clear : ACMColors.error)
                                 .clipShape(Circle())
                         }
                     }
                     .padding(.horizontal, 8)
                     .padding(.vertical, 6)
-                    .acmColorBackground(Color(red: 0, green: 0, blue: 0, opacity: 0.5))
+                    .acmColorBackground(ACMColors.blackOverlay(0.5))
                     .clipShape(Capsule())
                     .padding(.bottom, 12)
                 }
             }
             .aspectRatio(16.0 / 10.0, contentMode: .fit)
             .overlay {
-                RoundedRectangle(cornerRadius: 16)
+                RoundedRectangle(cornerRadius: ACMRadius.lg)
                     .strokeBorder(lineWidth: 1)
                     .foregroundStyle(ACMColors.creamDim)
             }
@@ -449,11 +492,11 @@ struct JoinView: View {
                     
                     Text("Mic \(isMicOn ? "On" : "Off")")
                         .font(ACMFont.mono(11))
-                        .foregroundStyle(acmColor(red: 254.0, green: 252.0, blue: 217.0, opacity: 0.7))
+                        .foregroundStyle(ACMColors.creamLight)
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 4)
-                .acmColorBackground(Color(red: 0, green: 0, blue: 0, opacity: 0.4))
+                .acmColorBackground(ACMColors.blackOverlay(0.4))
                 .overlay {
                     Capsule().strokeBorder(lineWidth: 1)
                         .foregroundStyle(ACMColors.creamDim)
@@ -468,11 +511,11 @@ struct JoinView: View {
                     
                     Text("Camera \(isCameraOn ? "On" : "Off")")
                         .font(ACMFont.mono(11))
-                        .foregroundStyle(acmColor(red: 254.0, green: 252.0, blue: 217.0, opacity: 0.7))
+                        .foregroundStyle(ACMColors.creamLight)
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 4)
-                .acmColorBackground(Color(red: 0, green: 0, blue: 0, opacity: 0.4))
+                .acmColorBackground(ACMColors.blackOverlay(0.4))
                 .overlay {
                     Capsule().strokeBorder(lineWidth: 1)
                         .foregroundStyle(ACMColors.creamDim)
@@ -486,190 +529,208 @@ struct JoinView: View {
     
     private var joinFormSection: some View {
         VStack(spacing: 0) {
-            // Tab switcher (New Meeting / Join)
-            HStack(spacing: 0) {
-                Button {
-                    activeTab = .new
-                } label: {
-                    Text("NEW MEETING")
-                        .font(ACMFont.mono(12))
-                        .tracking(1)
-                        .foregroundStyle(activeTab == .new ? Color.white : acmColor(red: 254.0, green: 252.0, blue: 217.0, opacity: 0.5))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 10)
-                        .acmColorBackground(activeTab == .new ? ACMColors.primaryOrange : Color.clear)
-                        .clipShape(RoundedRectangle(cornerRadius: 6))
-                }
-                
-                Button {
-                    activeTab = .join
-                } label: {
-                    Text("JOIN")
-                        .font(ACMFont.mono(12))
-                        .tracking(1)
-                        .foregroundStyle(activeTab == .join ? Color.white : acmColor(red: 254.0, green: 252.0, blue: 217.0, opacity: 0.5))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 10)
-                        .acmColorBackground(activeTab == .join ? ACMColors.primaryOrange : Color.clear)
-                        .clipShape(RoundedRectangle(cornerRadius: 6))
-                }
-            }
-                .padding(4)
-            .acmColorBackground(ACMColors.surface)
-            .clipShape(RoundedRectangle(cornerRadius: 8))
-                .padding(EdgeInsets(top: 0, leading: 0, bottom: 24, trailing: 0))
+            tabSwitcher
             
-            // Form content based on tab
-            if activeTab == .new {
-                // New Meeting form
-                VStack(spacing: 16) {
-                    // Display name input
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Display Name")
-                            .font(ACMFont.mono(11))
-                            .tracking(2)
-                            .foregroundStyle(ACMColors.creamDim)
-                        
-                        TextField("", text: $displayNameInput, prompt: Text("Your name").foregroundStyle(ACMColors.creamMuted))
-                            .textFieldStyle(.plain)
-                            .font(ACMFont.trial(15))
-                            .foregroundStyle(ACMColors.cream)
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 14)
-                            .acmColorBackground(ACMColors.surface)
-                            .overlay {
-                                RoundedRectangle(cornerRadius: 12)
-                                    .strokeBorder(lineWidth: 1)
-                                    .foregroundStyle(ACMColors.creamDim)
-                            }
-                            .clipShape(RoundedRectangle(cornerRadius: 12))
-                    }
-                    
-                    // Start Meeting button
-                    Button {
-                        handleCreateRoom()
-                    } label: {
-                        HStack(spacing: 8) {
-            if viewModel.state.connectionState == ConnectionState.connecting {
-                                ProgressView()
-#if !SKIP
-                                    .progressViewStyle(CircularProgressViewStyle(tint: Color.white))
-#endif
-                                    .scaleEffect(0.8)
-                            } else {
-                                ACMSystemIcon.image("plus", androidName: "Icons.Filled.Add")
-                                    .font(.system(size: 14, weight: .medium))
-                            }
-                            
-                            Text("Start Meeting")
-                                .font(ACMFont.trial(15))
-                        }
-                        .foregroundStyle(Color.white)
-                        .frame(maxWidth: .infinity)
-                        .frame(minHeight: 48)
-                        .padding(.vertical, 16)
-                        .acmColorBackground(ACMColors.primaryOrange)
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
-                    }
-                .disabled(viewModel.state.connectionState == ConnectionState.connecting)
-                }
-            } else {
-                // Join Meeting form
-                VStack(spacing: 16) {
-                    // Room name input
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Room Name")
-                            .font(ACMFont.mono(11))
-                            .tracking(2)
-                            .foregroundStyle(ACMColors.creamDim)
-                        
-                        TextField("", text: sanitizedRoomCodeBinding, prompt: Text("Paste room link or code").foregroundStyle(ACMColors.creamMuted))
-                            .textFieldStyle(.plain)
-                            .font(ACMFont.trial(15))
-                            .foregroundStyle(Color.white)
-#if !SKIP
-                            .autocapitalization(.none)
-                            .autocorrectionDisabled(true)
-#endif
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 14)
-                            .acmColorBackground(ACMColors.surface)
-                            .overlay {
-                                RoundedRectangle(cornerRadius: 12)
-                                    .strokeBorder(lineWidth: 1)
-                                    .foregroundStyle(ACMColors.creamDim)
-                            }
-                            .clipShape(RoundedRectangle(cornerRadius: 12))
-                            .onSubmit {
-                                if !roomCode.isEmpty {
-                                    handleJoinRoom()
-                                }
-                            }
-                    }
-                    
-                    // Display name input
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Display Name")
-                            .font(ACMFont.mono(11))
-                            .tracking(2)
-                            .foregroundStyle(ACMColors.creamDim)
-                        
-                        TextField("", text: $displayNameInput, prompt: Text("Your name").foregroundStyle(ACMColors.creamMuted))
-                            .textFieldStyle(.plain)
-                            .font(ACMFont.trial(15))
-                            .foregroundStyle(ACMColors.cream)
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 14)
-                            .acmColorBackground(ACMColors.surface)
-                            .overlay {
-                                RoundedRectangle(cornerRadius: 12)
-                                    .strokeBorder(lineWidth: 1)
-                                    .foregroundStyle(ACMColors.creamDim)
-                            }
-                            .clipShape(RoundedRectangle(cornerRadius: 12))
-                    }
-                    
-                    // Join button
-                    Button {
-                        handleJoinRoom()
-                    } label: {
-                        HStack(spacing: 8) {
-                            if viewModel.state.connectionState == ConnectionState.connecting {
-                                ProgressView()
-#if !SKIP
-                                    .progressViewStyle(CircularProgressViewStyle(tint: Color.white))
-#endif
-                                    .scaleEffect(0.8)
-                            } else {
-                                ACMSystemIcon.image("arrow.forward", androidName: "Icons.Filled.ArrowForward")
-                                    .font(.system(size: 14, weight: .medium))
-                            }
-                            
-                            Text("Join Meeting")
-                                .font(ACMFont.trial(15))
-                        }
-                            .foregroundStyle(Color.white)
-                        .frame(maxWidth: .infinity)
-                        .frame(minHeight: 48)
-                        .padding(.vertical, 16)
-                        .acmColorBackground(ACMColors.primaryOrange)
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
-                    }
-                    .disabled(roomCode.isEmpty || viewModel.state.connectionState == ConnectionState.connecting)
-                    .opacity(roomCode.isEmpty ? 0.3 : 1.0)
-                }
-            }
+            formContent
         }
                 .padding(20)
         .background(
-            RoundedRectangle(cornerRadius: 16)
-                .fill(acmColor(red: 20.0, green: 20.0, blue: 20.0, opacity: 0.8))
+            RoundedRectangle(cornerRadius: ACMRadius.lg)
+                .fill(ACMColors.darkAlt.opacity(0.8))
         )
         .overlay {
-            RoundedRectangle(cornerRadius: 16)
+            RoundedRectangle(cornerRadius: ACMRadius.lg)
                 .strokeBorder(lineWidth: 1)
                 .foregroundStyle(ACMColors.creamDim)
         }
+    }
+    
+    // MARK: - Tab Switcher
+    
+    private var tabSwitcher: some View {
+        HStack(spacing: 0) {
+            newMeetingTabButton
+            joinTabButton
+        }
+        .padding(4)
+        .acmColorBackground(ACMColors.surface)
+        .clipShape(RoundedRectangle(cornerRadius: ACMRadius.sm))
+        .padding(EdgeInsets(top: 0, leading: 0, bottom: 24, trailing: 0))
+    }
+    
+    private var newMeetingTabButton: some View {
+        Button {
+            activeTab = .new
+        } label: {
+            Text("NEW MEETING")
+                .font(ACMFont.mono(12))
+                .tracking(1)
+                .foregroundStyle(activeTab == .new ? Color.white : ACMColors.cream.opacity(0.5))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 10)
+                .acmColorBackground(activeTab == .new ? ACMColors.primaryOrange : Color.clear)
+                .clipShape(RoundedRectangle(cornerRadius: ACMRadius.sm))
+        }
+    }
+    
+    private var joinTabButton: some View {
+        Button {
+            activeTab = .join
+        } label: {
+            Text("JOIN")
+                .font(ACMFont.mono(12))
+                .tracking(1)
+                .foregroundStyle(activeTab == .join ? Color.white : ACMColors.cream.opacity(0.5))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 10)
+                .acmColorBackground(activeTab == .join ? ACMColors.primaryOrange : Color.clear)
+                .clipShape(RoundedRectangle(cornerRadius: ACMRadius.sm))
+        }
+    }
+    
+    // MARK: - Form Components
+    
+    private var newMeetingForm: some View {
+        VStack(spacing: 16) {
+            displayNameInputSection
+            startMeetingButton
+        }
+    }
+    
+    private var displayNameInputSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Display Name")
+                .font(ACMFont.mono(11))
+                .tracking(2)
+                .foregroundStyle(ACMColors.creamDim)
+            
+            TextField("", text: $displayNameInput, prompt: Text("Your name").foregroundStyle(ACMColors.creamMuted))
+                .textFieldStyle(.plain)
+                .font(ACMFont.trial(15))
+                .foregroundStyle(ACMColors.cream)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 14)
+                .acmColorBackground(ACMColors.surface)
+                .overlay {
+                    RoundedRectangle(cornerRadius: ACMRadius.md)
+                        .strokeBorder(lineWidth: 1)
+                        .foregroundStyle(ACMColors.creamDim)
+                }
+                .clipShape(RoundedRectangle(cornerRadius: ACMRadius.md))
+        }
+    }
+
+    private var displayNameInputSection2: some View {
+        displayNameInputSection
+    }
+    
+    private var startMeetingButton: some View {
+        Button {
+            handleCreateRoom()
+        } label: {
+            HStack(spacing: 8) {
+                if viewModel.state.connectionState == ConnectionState.connecting {
+                    ProgressView()
+#if !SKIP
+                        .progressViewStyle(CircularProgressViewStyle(tint: Color.white))
+#endif
+                        .scaleEffect(0.8)
+                } else {
+                    ACMSystemIcon.image("plus", androidName: "Icons.Filled.Add")
+                        .font(.system(size: 14, weight: .medium))
+                }
+                
+                Text("Start Meeting")
+                    .font(ACMFont.trial(15))
+            }
+            .foregroundStyle(Color.white)
+            .frame(maxWidth: .infinity)
+            .frame(minHeight: 48)
+            .padding(.vertical, 16)
+            .acmColorBackground(ACMColors.primaryOrange)
+            .clipShape(RoundedRectangle(cornerRadius: ACMRadius.md))
+        }
+        .disabled(viewModel.state.connectionState == ConnectionState.connecting)
+    }
+    
+    private var formContent: some View {
+        Group {
+            if activeTab == .new {
+                newMeetingForm
+            } else {
+                joinMeetingForm
+            }
+        }
+    }
+    
+    private var joinMeetingForm: some View {
+        VStack(spacing: 16) {
+            roomNameInputSection
+            displayNameInputSection2
+            joinMeetingButton
+        }
+    }
+    
+    private var roomNameInputSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Room Name")
+                .font(ACMFont.mono(11))
+                .tracking(2)
+                .foregroundStyle(ACMColors.creamDim)
+            
+            TextField("", text: sanitizedRoomCodeBinding, prompt: Text("Paste room link or code").foregroundStyle(ACMColors.creamMuted))
+                .textFieldStyle(.plain)
+                .font(ACMFont.trial(15))
+                .foregroundStyle(Color.white)
+#if os(iOS)
+                .autocapitalization(.none)
+                .autocorrectionDisabled(true)
+#endif
+                .padding(.horizontal, 16)
+                .padding(.vertical, 14)
+                .acmColorBackground(ACMColors.surface)
+                .overlay {
+                    RoundedRectangle(cornerRadius: ACMRadius.md)
+                        .strokeBorder(lineWidth: 1)
+                        .foregroundStyle(ACMColors.creamDim)
+                }
+                .clipShape(RoundedRectangle(cornerRadius: ACMRadius.md))
+                .onSubmit {
+                    if !roomCode.isEmpty {
+                        handleJoinRoom()
+                    }
+                }
+        }
+    }
+    
+    private var joinMeetingButton: some View {
+        Button {
+            handleJoinRoom()
+        } label: {
+            HStack(spacing: 8) {
+                if viewModel.state.connectionState == ConnectionState.connecting {
+                    ProgressView()
+#if !SKIP
+                        .progressViewStyle(CircularProgressViewStyle(tint: Color.white))
+#endif
+                        .scaleEffect(0.8)
+                } else {
+                    ACMSystemIcon.image("arrow.forward", androidName: "Icons.Filled.ArrowForward")
+                        .font(.system(size: 14, weight: .medium))
+                }
+                
+                Text("Join Meeting")
+                    .font(ACMFont.trial(15))
+            }
+            .foregroundStyle(Color.white)
+            .frame(maxWidth: .infinity)
+            .frame(minHeight: 48)
+            .padding(.vertical, 16)
+            .acmColorBackground(ACMColors.primaryOrange)
+            .clipShape(RoundedRectangle(cornerRadius: ACMRadius.md))
+        }
+        .disabled(roomCode.isEmpty || viewModel.state.connectionState == ConnectionState.connecting)
+        .opacity(roomCode.isEmpty ? 0.3 : 1.0)
     }
     
     // MARK: - Loading Overlay
@@ -689,7 +750,7 @@ struct JoinView: View {
                 Text(viewModel.state.connectionState == ConnectionState.reconnecting ? "RECONNECTING..." : "JOINING...")
                     .font(ACMFont.mono(12))
                     .tracking(2)
-                    .foregroundStyle(acmColor(red: 254.0, green: 252.0, blue: 217.0, opacity: 0.6))
+                    .foregroundStyle(ACMColors.cream.opacity(0.6))
             }
         }
     }
@@ -735,7 +796,7 @@ struct JoinView: View {
                         )
                         context.fill(
                             Path(ellipseIn: rect),
-                            with: GraphicsContext.Shading.color(acmColor(red: 254.0, green: 252.0, blue: 217.0, opacity: 0.06))
+                            with: GraphicsContext.Shading.color(ACMColors.cream.opacity(0.06))
                         )
                     }
                 }
@@ -763,33 +824,105 @@ struct JoinView: View {
     
     private func handleGoogleSignIn() {
         isSigningIn = true
+        signingInProvider = .google
         // In production, implement proper OAuth flow
         // For now, simulate sign-in
 #if SKIP
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 1_000_000_000)
             isSigningIn = false
+            signingInProvider = .none
         }
 #else
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
             isSigningIn = false
+            signingInProvider = .none
             // TODO: Implement actual Google Sign-In
+            // When implemented, follow this pattern:
+            // appState.currentUser = AppState.User(
+            //     id: "google-\(googleUserId)",
+            //     name: googleUserName,
+            //     email: googleUserEmail,
+            //     provider: .google
+            // )
+            // appState.authProvider = .google
+            // appState.isAuthenticated = true
+            // displayNameInput = googleUserName
+            // phase = .join
         }
 #endif
     }
-    
+
+#if !SKIP
+    private func handleAppleSignIn(result: Result<ASAuthorization, Error>) {
+        isSigningIn = true
+        signingInProvider = .apple
+
+        switch result {
+        case .success(let authorization):
+            guard let credential = authorization.credential as? ASAuthorizationAppleIDCredential else {
+                isSigningIn = false
+                signingInProvider = .none
+                return
+            }
+
+            // Extract user information
+            let userId = credential.user
+            let email = credential.email
+            let fullName = credential.fullName
+
+            // Build display name from full name components
+            var displayName: String?
+            if let givenName = fullName?.givenName, let familyName = fullName?.familyName {
+                displayName = "\(givenName) \(familyName)"
+            } else if let givenName = fullName?.givenName {
+                displayName = givenName
+            }
+
+            // In production, send the identity token to your backend for verification
+            // let identityToken = credential.identityToken
+            // let authorizationCode = credential.authorizationCode
+
+            // Create user and update state
+            appState.currentUser = AppState.User(
+                id: "apple-\(userId)",
+                name: displayName ?? email?.components(separatedBy: "@").first ?? "Apple User",
+                email: email ?? "\(userId)@apple.private",
+                provider: .apple
+            )
+            appState.authProvider = .apple
+            appState.isAuthenticated = true
+
+            displayNameInput = appState.currentUser?.name ?? ""
+            isSigningIn = false
+            signingInProvider = .none
+            phase = .join
+
+        case .failure(let error):
+            logger.error("Apple Sign-In failed: \(error.localizedDescription)")
+            isSigningIn = false
+            signingInProvider = .none
+        }
+    }
+#endif
+
     private func handleGuest() {
         let trimmedName = resolvedGuestName
         appState.currentUser = AppState.User(
             id: "guest-\(Int(Date().timeIntervalSince1970 * 1000))",
             name: trimmedName,
-            email: "\(trimmedName)@guest.local"
+            email: "\(trimmedName)@guest.local",
+            provider: .guest
         )
+        appState.authProvider = .guest
         displayNameInput = trimmedName
         phase = .join
     }
     
     private func handleCreateRoom() {
+        #if !SKIP
+        HapticManager.shared.trigger(.success)
+        #endif
         viewModel.state.isAdmin = true
         let roomId = generateRoomCode()
         viewModel.state.displayName = displayNameInput.isEmpty ? (appState.currentUser?.name ?? "Host") : displayNameInput
@@ -808,8 +941,11 @@ struct JoinView: View {
             isHost: true
         )
     }
-    
+
     private func handleJoinRoom() {
+        #if !SKIP
+        HapticManager.shared.trigger(.success)
+        #endif
         let extractedCode = extractRoomCode(from: roomCode)
         guard !extractedCode.isEmpty else { return }
         if extractedCode != roomCode {
@@ -1000,8 +1136,7 @@ struct JoinView: View {
     #endif
 }
 
-#if SKIP
-#else
+#if os(iOS)
 // MARK: - Camera Preview UIViewRepresentable
 
 struct CameraPreviewRepresentable: UIViewRepresentable {
@@ -1036,6 +1171,27 @@ struct CameraPreviewRepresentable: UIViewRepresentable {
 }
 #endif
 
+#if os(macOS)
+// MARK: - macOS Camera Preview Stub
+
+struct CameraPreviewRepresentable: NSViewRepresentable {
+    let session: Any?
+    
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        view.wantsLayer = true
+        view.layer?.backgroundColor = NSColor.black.cgColor
+        return view
+    }
+    
+    func updateNSView(_ nsView: NSView, context: Context) {
+        // No-op for macOS
+    }
+}
+#endif
+
+#if os(iOS)
 #Preview {
     JoinView(viewModel: MeetingViewModel(), appState: AppState())
 }
+#endif

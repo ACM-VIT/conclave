@@ -4,12 +4,13 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev --webpack",
     "build": "next build",
     "start": "next start",
     "lint": "next lint"
   },
   "dependencies": {
+    "@conclave/apps-sdk": "workspace:*",
     "better-auth": "^1.4.10",
     "jose": "^6.1.3",
     "jsonwebtoken": "^9.0.3",

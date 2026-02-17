@@ -1,4 +1,4 @@
-#if !SKIP && canImport(WebRTC)
+#if os(iOS) && !SKIP && canImport(WebRTC)
 //
 //  WebRTCClient.swift
 //  Conclave
@@ -674,6 +674,88 @@ private struct IceServer: Encodable {
 }
 
 // MARK: - Errors
+
+// MARK: - Screen Sharing
+
+extension WebRTCClient {
+    var screenCapturer: RTCVideoCapturer? {
+        return screenVideoCapturer
+    }
+    
+    private var screenVideoCapturer: RTCVideoCapturer? {
+        get { objc_getAssociatedObject(self, &screenCapturerKey) as? RTCVideoCapturer }
+        set { objc_setAssociatedObject(self, &screenCapturerKey, newValue, .OBJC_ASSOCIATION_RETAIN) }
+    }
+    
+    func startScreenSharing() async throws {
+        guard let sendTransport = sendTransport else {
+            throw WebRTCError.noTransport
+        }
+        
+        // Create screen video source and capturer
+        let screenSource = Self.factory.videoSource()
+        self.screenVideoSource = screenSource
+        self.screenVideoCapturer = RTCVideoCapturer(delegate: screenSource)
+        
+        // Create video track from source
+        let screenTrack = Self.factory.videoTrack(with: screenSource, trackId: "screen0")
+        screenTrack.isEnabled = true
+        self.rtcScreenTrack = screenTrack
+        
+        // Create producer for screen
+        let appData = try encodeJSONString(ProducerAppData(type: ProducerType.screen.rawValue, paused: false))
+        let producer = try sendTransport.createProducer(
+            for: screenTrack,
+            encodings: [
+                RTCRtpEncodingParameters() // HD quality for screen
+            ],
+            codecOptions: nil,
+            codec: nil,
+            appData: appData
+        )
+        producer.delegate = self
+        producer.resume()
+        
+        screenProducer = producer
+        
+        debugLog("[WebRTC] Screen sharing producer created: \(producer.id)")
+    }
+    
+    func stopScreenSharing() async {
+        guard let producer = screenProducer else { return }
+        
+        producer.close()
+        screenProducer = nil
+        
+        rtcScreenTrack?.isEnabled = false
+        rtcScreenTrack = nil
+        screenVideoSource = nil
+        screenVideoCapturer = nil
+        
+        debugLog("[WebRTC] Screen sharing stopped")
+    }
+    
+    /// Feed a video frame from screen capture to WebRTC
+    func feedScreenFrame(_ frame: RTCVideoFrame) {
+        guard let source = screenVideoSource,
+              let capturer = screenVideoCapturer else { return }
+        source.capturer(capturer, didCapture: frame)
+    }
+    
+    private var screenVideoSource: RTCVideoSource? {
+        get { objc_getAssociatedObject(self, &screenSourceKey) as? RTCVideoSource }
+        set { objc_setAssociatedObject(self, &screenSourceKey, newValue, .OBJC_ASSOCIATION_RETAIN) }
+    }
+    
+    private var rtcScreenTrack: RTCVideoTrack? {
+        get { objc_getAssociatedObject(self, &screenTrackKey) as? RTCVideoTrack }
+        set { objc_setAssociatedObject(self, &screenTrackKey, newValue, .OBJC_ASSOCIATION_RETAIN) }
+    }
+}
+
+private var screenCapturerKey: UInt8 = 0
+private var screenSourceKey: UInt8 = 0
+private var screenTrackKey: UInt8 = 0
 
 enum WebRTCError: Error {
     case notConfigured

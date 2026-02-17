@@ -17,6 +17,23 @@ export type ParticipantAction =
   | { type: "UPDATE_HAND_RAISED"; userId: string; raised: boolean }
   | { type: "CLEAR_ALL" };
 
+const createEmptyParticipant = (
+  userId: string,
+  isGhost = false
+): Participant => ({
+  userId,
+  videoStream: null,
+  audioStream: null,
+  screenShareStream: null,
+  audioProducerId: null,
+  videoProducerId: null,
+  screenShareProducerId: null,
+  isMuted: false,
+  isCameraOff: false,
+  isHandRaised: false,
+  isGhost,
+});
+
 export function participantReducer(
   state: Map<string, Participant>,
   action: ParticipantAction
@@ -34,19 +51,10 @@ export function participantReducer(
         });
         return newState;
       }
-      newState.set(action.userId, {
-        userId: action.userId,
-        videoStream: null,
-        audioStream: null,
-        screenShareStream: null,
-        audioProducerId: null,
-        videoProducerId: null,
-        screenShareProducerId: null,
-        isMuted: false,
-        isCameraOff: false,
-        isHandRaised: false,
-        isGhost: action.isGhost ?? false,
-      });
+      newState.set(
+        action.userId,
+        createEmptyParticipant(action.userId, action.isGhost ?? false)
+      );
       return newState;
     }
     case "REMOVE_PARTICIPANT": {
@@ -61,19 +69,8 @@ export function participantReducer(
       return newState;
     }
     case "UPDATE_STREAM": {
-      const participant = newState.get(action.userId) || {
-        userId: action.userId,
-        videoStream: null,
-        audioStream: null,
-        screenShareStream: null,
-        isMuted: false,
-        isCameraOff: false,
-        isHandRaised: false,
-        isGhost: false,
-        audioProducerId: null,
-        videoProducerId: null,
-        screenShareProducerId: null,
-      };
+      const participant =
+        newState.get(action.userId) || createEmptyParticipant(action.userId);
 
       const updated = { ...participant };
 
@@ -96,36 +93,23 @@ export function participantReducer(
       return newState;
     }
     case "UPDATE_MUTED": {
-      const participant = newState.get(action.userId);
-      if (participant) {
-        newState.set(action.userId, { ...participant, isMuted: action.muted });
-      }
+      const participant =
+        newState.get(action.userId) || createEmptyParticipant(action.userId);
+      newState.set(action.userId, { ...participant, isMuted: action.muted });
       return newState;
     }
     case "UPDATE_CAMERA_OFF": {
-      const participant = newState.get(action.userId);
-      if (participant) {
-        newState.set(action.userId, {
-          ...participant,
-          isCameraOff: action.cameraOff,
-        });
-      }
+      const participant =
+        newState.get(action.userId) || createEmptyParticipant(action.userId);
+      newState.set(action.userId, {
+        ...participant,
+        isCameraOff: action.cameraOff,
+      });
       return newState;
     }
     case "UPDATE_HAND_RAISED": {
-      const participant = newState.get(action.userId) || {
-        userId: action.userId,
-        videoStream: null,
-        audioStream: null,
-        screenShareStream: null,
-        isMuted: false,
-        isCameraOff: false,
-        isHandRaised: false,
-        isGhost: false,
-        audioProducerId: null,
-        videoProducerId: null,
-        screenShareProducerId: null,
-      };
+      const participant =
+        newState.get(action.userId) || createEmptyParticipant(action.userId);
       newState.set(action.userId, {
         ...participant,
         isHandRaised: action.raised,

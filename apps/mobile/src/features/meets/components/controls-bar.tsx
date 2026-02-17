@@ -17,6 +17,7 @@ import {
   Users,
   Video,
   VideoOff,
+  StickyNote,
 } from "lucide-react-native";
 import { EMOJI_REACTIONS } from "../constants";
 import { useDeviceLayout, TOUCH_TARGETS } from "../hooks/use-device-layout";
@@ -50,6 +51,8 @@ interface ControlsBarProps {
   pendingUsersCount: number;
   unreadCount: number;
   availableWidth: number;
+  isWhiteboardActive?: boolean;
+  isAppsLocked?: boolean;
   onToggleMute: () => void;
   onToggleCamera: () => void;
   onToggleScreenShare: () => void;
@@ -57,6 +60,8 @@ interface ControlsBarProps {
   onToggleChat: () => void;
   onToggleParticipants: () => void;
   onToggleRoomLock?: (locked: boolean) => void;
+  onToggleWhiteboard?: () => void;
+  onToggleAppsLock?: (locked: boolean) => void;
   onSendReaction: (emoji: string) => void;
   onLeave: () => void;
 }
@@ -194,6 +199,8 @@ export function ControlsBar({
   pendingUsersCount,
   unreadCount,
   availableWidth,
+  isWhiteboardActive = false,
+  isAppsLocked = false,
   onToggleMute,
   onToggleCamera,
   onToggleScreenShare,
@@ -201,6 +208,8 @@ export function ControlsBar({
   onToggleChat,
   onToggleParticipants,
   onToggleRoomLock,
+  onToggleWhiteboard,
+  onToggleAppsLock,
   onSendReaction,
   onLeave,
 }: ControlsBarProps) {
@@ -279,6 +288,16 @@ export function ControlsBar({
                     onPress={() => onToggleRoomLock?.(!isRoomLocked)}
                   />
                 ) : null}
+                {isAdmin && onToggleAppsLock && isWhiteboardActive ? (
+                  <ControlButton
+                    icon={isAppsLocked ? Lock : LockOpen}
+                    isActive={isAppsLocked}
+                    activeColor={COLORS.amber}
+                    size={buttonSize}
+                    iconSize={iconSize}
+                    onPress={() => onToggleAppsLock(!isAppsLocked)}
+                  />
+                ) : null}
               </>
             ) : null}
 
@@ -326,6 +345,16 @@ export function ControlsBar({
               iconSize={iconSize}
               onPress={onToggleChat}
             />
+
+            {onToggleWhiteboard ? (
+              <ControlButton
+                icon={StickyNote}
+                isActive={isWhiteboardActive}
+                size={buttonSize}
+                iconSize={iconSize}
+                onPress={onToggleWhiteboard}
+              />
+            ) : null}
 
             <ControlButton
               icon={Smile}

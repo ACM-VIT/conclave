@@ -1,17 +1,27 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { Share, StyleSheet, useWindowDimensions, View as RNView } from "react-native";
+import {
+  LayoutAnimation,
+  Platform,
+  Share,
+  StyleSheet,
+  UIManager,
+  useWindowDimensions,
+  View as RNView,
+} from "react-native";
 import { RTCView } from "react-native-webrtc";
 import * as Clipboard from "expo-clipboard";
 import * as Haptics from "expo-haptics";
 import type { ConnectionState, Participant } from "../types";
 import { isSystemUserId } from "../utils";
-import { useDeviceLayout, getGridColumns } from "../hooks/use-device-layout";
+import { useDeviceLayout, type DeviceLayout } from "../hooks/use-device-layout";
 import { ControlsBar } from "./controls-bar";
 import { ParticipantTile } from "./participant-tile";
 import { FlatList, Text, Pressable } from "@/tw";
 import { Lock, Settings, Users, MicOff, VenetianMask } from "lucide-react-native";
 import { GlassPill } from "./glass-pill";
+import { useApps } from "@conclave/apps-sdk";
+import { WhiteboardNativeApp } from "@conclave/apps-sdk/whiteboard/native";
 
 const COLORS = {
   primaryOrange: "#F95F4A",
@@ -26,6 +36,21 @@ const COLORS = {
 
 const MEETING_LINK_BASE = "https://conclave.acmvit.in";
 const COPY_RESET_DELAY_MS = 1500;
+const GRID_HORIZONTAL_PADDING = 32;
+
+const getMaxGridColumns = (layout: DeviceLayout, participantCount: number) => {
+  if (layout === "large") {
+    if (participantCount >= 9) return 4;
+    return 3;
+  }
+  if (layout === "regular") {
+    return 3;
+  }
+  if (participantCount >= 7) {
+    return 3;
+  }
+  return 2;
+};
 
 interface CallScreenProps {
   roomId: string;
@@ -93,10 +118,23 @@ export function CallScreen({
   presentationStream = null,
   presenterName = "",
 }: CallScreenProps) {
+  const { state: appsState, openApp, closeApp, setLocked, refreshState } = useApps();
+  const isWhiteboardActive = appsState.activeAppId === "whiteboard";
+  const handleOpenWhiteboard = useCallback(() => openApp("whiteboard"), [openApp]);
+  const handleCloseWhiteboard = useCallback(() => closeApp(), [closeApp]);
+  const handleToggleAppsLock = useCallback(
+    () => setLocked(!appsState.locked),
+    [appsState.locked, setLocked]
+  );
+  const handleToggleWhiteboard = useCallback(
+    () => (isWhiteboardActive ? handleCloseWhiteboard() : handleOpenWhiteboard()),
+    [isWhiteboardActive, handleCloseWhiteboard, handleOpenWhiteboard]
+  );
   const insets = useSafeAreaInsets();
   const { width, height } = useWindowDimensions();
   const { layout, isTablet } = useDeviceLayout();
   const [copied, setCopied] = useState(false);
+  const [gridViewportHeight, setGridViewportHeight] = useState(0);
   const copyResetRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const meetingLink = useMemo(
@@ -141,6 +179,12 @@ export function CallScreen({
     };
   }, []);
 
+  useEffect(() => {
+    if (connectionState === "joined") {
+      refreshState();
+    }
+  }, [connectionState, refreshState]);
+
   const participantList = useMemo(() => {
     const list = Array.from(participants.values()).filter(
       (participant) => !isSystemUserId(participant.userId)
@@ -161,26 +205,103 @@ export function CallScreen({
     return hasLocal ? list : [localParticipant, ...list];
   }, [participants, localParticipant]);
 
-  // Use responsive grid columns based on device layout
-  const columns = useMemo(
-    () => getGridColumns(participantList.length, layout),
-    [participantList.length, layout]
-  );
-  const isTwoUp = layout === "compact" && participantList.length === 2;
-
   const safePaddingLeft = Math.max(isTablet ? 12 : 6, insets.left);
   const safePaddingRight = Math.max(isTablet ? 12 : 6, insets.right);
   const availableWidth = width - safePaddingLeft - safePaddingRight;
   const gridGap = isTablet ? 16 : 12;
-  const tileWidth = Math.floor((availableWidth - 32 - (columns - 1) * gridGap) / columns);
+  const participantCountForLayout = Math.max(participantList.length, 1);
+  const controlsReservedHeight = 140 + insets.bottom;
+  const gridTopPadding =
+    layout === "compact" && participantCountForLayout === 2 ? 16 : 8;
+  const estimatedGridHeight = Math.max(
+    0,
+    height - insets.top - controlsReservedHeight - (isTablet ? 108 : 96)
+  );
+  const measuredGridHeight =
+    gridViewportHeight > 0 ? gridViewportHeight : estimatedGridHeight;
+  const usableGridHeight = Math.max(
+    0,
+    measuredGridHeight - controlsReservedHeight - gridTopPadding
+  );
+  const gridWidthForTiles = Math.max(0, availableWidth - GRID_HORIZONTAL_PADDING);
+
+  const optimalGrid = useMemo(() => {
+    const maxColumns = Math.max(
+      1,
+      Math.min(
+        participantCountForLayout,
+        getMaxGridColumns(layout, participantCountForLayout)
+      )
+    );
+    const targetAspect = layout === "compact" ? 1.1 : 0.9;
+
+    let best = {
+      columns: 1,
+      rows: participantCountForLayout,
+      tileWidth: Math.floor(gridWidthForTiles),
+      tileHeight: Math.max(
+        1,
+        Math.floor(usableGridHeight / participantCountForLayout)
+      ),
+      score: Number.NEGATIVE_INFINITY,
+    };
+
+    for (let candidateColumns = 1; candidateColumns <= maxColumns; candidateColumns += 1) {
+      const candidateRows = Math.ceil(participantCountForLayout / candidateColumns);
+      const candidateWidth = Math.floor(
+        (gridWidthForTiles - (candidateColumns - 1) * gridGap) / candidateColumns
+      );
+      const candidateHeight = Math.floor(
+        (usableGridHeight - (candidateRows - 1) * gridGap) / candidateRows
+      );
+
+      if (candidateWidth <= 0 || candidateHeight <= 0) continue;
+
+      const capacity = candidateColumns * candidateRows;
+      const emptySlots = capacity - participantCountForLayout;
+      const fillRatio = participantCountForLayout / capacity;
+      const area = candidateWidth * candidateHeight;
+      const aspectPenalty = Math.abs(candidateHeight / candidateWidth - targetAspect);
+
+      let score = area;
+      score += area * fillRatio * 0.25;
+      score -= emptySlots * area * 0.08;
+      score -= aspectPenalty * area * 0.18;
+
+      if (layout === "compact" && participantCountForLayout <= 2 && candidateColumns === 1) {
+        score += area * 0.15;
+      }
+
+      if (score > best.score) {
+        best = {
+          columns: candidateColumns,
+          rows: candidateRows,
+          tileWidth: candidateWidth,
+          tileHeight: candidateHeight,
+          score,
+        };
+      }
+    }
+
+    return best;
+  }, [
+    participantCountForLayout,
+    layout,
+    gridWidthForTiles,
+    usableGridHeight,
+    gridGap,
+  ]);
+
+  const columns = optimalGrid.columns;
+  const isTwoUp =
+    layout === "compact" && participantCountForLayout === 2 && columns === 1;
+
   const tileStyle = useMemo(
     () => ({
-      width: tileWidth,
-      height: Math.round(
-        tileWidth * (isTwoUp ? 12 / 16 : isTablet ? 10 / 16 : 9 / 16)
-      ),
+      width: optimalGrid.tileWidth,
+      height: Math.max(isTablet ? 92 : 76, optimalGrid.tileHeight),
     }),
-    [tileWidth, isTablet, isTwoUp]
+    [optimalGrid.tileWidth, optimalGrid.tileHeight, isTablet]
   );
 
   // Strip tile size for presentation mode - larger on iPad
@@ -196,6 +317,16 @@ export function CallScreen({
           : null;
 
   const isPresenting = Boolean(presentationStream);
+
+  useEffect(() => {
+    if (Platform.OS === "android") {
+      UIManager.setLayoutAnimationEnabledExperimental?.(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+  }, [participantList.length, columns, tileStyle.height, tileStyle.width]);
 
   return (
     <RNView style={styles.container}>
@@ -262,7 +393,11 @@ export function CallScreen({
         )}
       </RNView>
 
-        {isPresenting && presentationStream ? (
+        {isWhiteboardActive ? (
+          <RNView style={[styles.whiteboardContainer, { paddingBottom: 140 + insets.bottom }]}>
+            <WhiteboardNativeApp />
+          </RNView>
+        ) : isPresenting && presentationStream ? (
           <RNView
             style={[
               styles.presentationContainer,
@@ -338,30 +473,40 @@ export function CallScreen({
           </RNView>
         ) : (
           /* Video Grid */
-          <FlatList
-            data={participantList}
-            key={`${columns}`}
-            numColumns={columns}
-            keyExtractor={(item) => item.userId}
-            style={styles.grid}
-            contentContainerStyle={[
-              styles.gridContent,
-              { paddingBottom: 140 + insets.bottom },
-              isTwoUp && styles.gridContentTwoUp,
-            ]}
-            columnWrapperStyle={columns > 1 ? (isTablet ? columnWrapperStyleTablet : columnWrapperStyle) : undefined}
-            renderItem={({ item }) => (
-              <RNView style={tileStyle}>
-                <ParticipantTile
-                  participant={item}
-                  displayName={resolveDisplayName(item.userId)}
-                  isLocal={item.userId === localParticipant.userId}
-                  mirror={item.userId === localParticipant.userId ? isMirrorCamera : false}
-                  isActiveSpeaker={activeSpeakerId === item.userId}
-                />
-              </RNView>
-            )}
-          />
+          <RNView
+            style={styles.gridViewport}
+            onLayout={(event) => {
+              const nextHeight = Math.round(event.nativeEvent.layout.height);
+              if (nextHeight > 0 && nextHeight !== gridViewportHeight) {
+                setGridViewportHeight(nextHeight);
+              }
+            }}
+          >
+            <FlatList
+              data={participantList}
+              key={`${columns}`}
+              numColumns={columns}
+              keyExtractor={(item) => item.userId}
+              style={styles.grid}
+              contentContainerStyle={[
+                styles.gridContent,
+                { paddingBottom: controlsReservedHeight },
+                isTwoUp && styles.gridContentTwoUp,
+              ]}
+              columnWrapperStyle={columns > 1 ? (isTablet ? columnWrapperStyleTablet : columnWrapperStyle) : undefined}
+              renderItem={({ item }) => (
+                <RNView style={tileStyle}>
+                  <ParticipantTile
+                    participant={item}
+                    displayName={resolveDisplayName(item.userId)}
+                    isLocal={item.userId === localParticipant.userId}
+                    mirror={item.userId === localParticipant.userId ? isMirrorCamera : false}
+                    isActiveSpeaker={activeSpeakerId === item.userId}
+                  />
+                </RNView>
+              )}
+            />
+          </RNView>
         )}
       </RNView>
 
@@ -384,6 +529,10 @@ export function CallScreen({
         onToggleChat={onToggleChat}
         onToggleParticipants={onToggleParticipants}
         onToggleRoomLock={onToggleRoomLock}
+        isWhiteboardActive={isWhiteboardActive}
+        isAppsLocked={appsState.locked}
+        onToggleWhiteboard={handleToggleWhiteboard}
+        onToggleAppsLock={handleToggleAppsLock}
         onSendReaction={onSendReaction}
         onLeave={onLeave}
       />
@@ -487,6 +636,10 @@ const styles = StyleSheet.create({
   grid: {
     flex: 1,
   },
+  gridViewport: {
+    flex: 1,
+    minHeight: 0,
+  },
   gridContent: {
     paddingHorizontal: 16,
     paddingTop: 8,
@@ -501,6 +654,11 @@ const styles = StyleSheet.create({
   presentationContainer: {
     flex: 1,
     gap: 12,
+    paddingHorizontal: 12,
+    paddingTop: 8,
+  },
+  whiteboardContainer: {
+    flex: 1,
     paddingHorizontal: 12,
     paddingTop: 8,
   },

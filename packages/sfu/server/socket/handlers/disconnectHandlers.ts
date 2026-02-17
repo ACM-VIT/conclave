@@ -1,6 +1,7 @@
 import { Admin } from "../../../config/classes/Admin.js";
 import type { Room } from "../../../config/classes/Room.js";
 import { config } from "../../../config/config.js";
+import type { AppsAwarenessData } from "../../../types.js";
 import { Logger } from "../../../utilities/loggers.js";
 import { cleanupRoom } from "../../rooms.js";
 import { emitUserLeft } from "../../notifications.js";
@@ -54,6 +55,14 @@ export const registerDisconnectHandlers = (
 
         const wasAdmin = activeClient instanceof Admin;
         const isGhost = activeClient.isGhost;
+        const awarenessRemovals = activeRoom.clearUserAwareness(userId);
+
+        for (const removal of awarenessRemovals) {
+          io.to(roomChannelId).emit("apps:awareness", {
+            appId: removal.appId,
+            awarenessUpdate: removal.awarenessUpdate,
+          } satisfies AppsAwarenessData);
+        }
 
         activeRoom.removeClient(userId);
         if (isGhost) {

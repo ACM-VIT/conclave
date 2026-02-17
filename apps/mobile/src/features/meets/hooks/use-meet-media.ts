@@ -5,10 +5,8 @@ import { mediaDevices } from "react-native-webrtc";
 import {
   DEFAULT_AUDIO_CONSTRAINTS,
   LOW_QUALITY_CONSTRAINTS,
-  LOW_VIDEO_MAX_BITRATE,
   OPUS_MAX_AVERAGE_BITRATE,
   STANDARD_QUALITY_CONSTRAINTS,
-  STANDARD_VIDEO_MAX_BITRATE,
 } from "../constants";
 import type {
   MediaState,
@@ -19,6 +17,10 @@ import type {
   VideoQuality,
 } from "../types";
 import { createMeetError } from "../utils";
+import {
+  buildWebcamSimulcastEncodings,
+  buildWebcamSingleLayerEncoding,
+} from "../video-encodings";
 
 interface UseMeetMediaOptions {
   ghostEnabled: boolean;
@@ -1196,15 +1198,25 @@ export function useMeetMedia({
           return new MediaStream([videoTrack]);
         });
 
-        const maxBitrate =
-          videoQualityRef.current === "low"
-            ? LOW_VIDEO_MAX_BITRATE
-            : STANDARD_VIDEO_MAX_BITRATE;
-        const videoProducer = await transport.produce({
-          track: videoTrack,
-          encodings: [{ maxBitrate }],
-          appData: { type: "webcam" as ProducerType, paused: false },
-        });
+        const quality = videoQualityRef.current;
+        let videoProducer;
+        try {
+          videoProducer = await transport.produce({
+            track: videoTrack,
+            encodings: buildWebcamSimulcastEncodings(quality),
+            appData: { type: "webcam" as ProducerType, paused: false },
+          });
+        } catch (simulcastError) {
+          console.warn(
+            "[Meets] Simulcast video restart failed, retrying single-layer:",
+            simulcastError
+          );
+          videoProducer = await transport.produce({
+            track: videoTrack,
+            encodings: [buildWebcamSingleLayerEncoding(quality)],
+            appData: { type: "webcam" as ProducerType, paused: false },
+          });
+        }
 
         videoProducerRef.current = videoProducer;
         videoProducer.on("transportclose", () => {
@@ -1228,8 +1240,6 @@ export function useMeetMedia({
     videoQualityRef,
     setIsCameraOff,
     setMeetError,
-    LOW_VIDEO_MAX_BITRATE,
-    STANDARD_VIDEO_MAX_BITRATE,
     requestAndroidPermissions,
   ]);
 

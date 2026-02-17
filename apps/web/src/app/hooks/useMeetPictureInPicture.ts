@@ -53,8 +53,12 @@ export function useMeetPictureInPicture({
     }, [activeSpeakerId, currentUserId]);
 
     // Check PiP support on mount
+    // Disable legacy canvas PiP if Document PiP is available (the new popout is better)
     useEffect(() => {
+        const hasDocumentPiP =
+            typeof window !== "undefined" && "documentPictureInPicture" in window;
         const supported =
+            !hasDocumentPiP &&
             typeof document !== "undefined" &&
             "pictureInPictureEnabled" in document &&
             document.pictureInPictureEnabled;

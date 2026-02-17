@@ -55,6 +55,11 @@ interface MobileControlsBarProps {
   hasBrowserAudio?: boolean;
   isBrowserAudioMuted?: boolean;
   onToggleBrowserAudio?: () => void;
+  isWhiteboardActive?: boolean;
+  onOpenWhiteboard?: () => void;
+  onCloseWhiteboard?: () => void;
+  isAppsLocked?: boolean;
+  onToggleAppsLock?: () => void;
 }
 
 function MobileControlsBar({
@@ -89,6 +94,11 @@ function MobileControlsBar({
   hasBrowserAudio = false,
   isBrowserAudioMuted = false,
   onToggleBrowserAudio,
+  isWhiteboardActive = false,
+  onOpenWhiteboard,
+  onCloseWhiteboard,
+  isAppsLocked = false,
+  onToggleAppsLock,
 }: MobileControlsBarProps) {
   const [isMoreMenuOpen, setIsMoreMenuOpen] = useState(false);
   const [isReactionMenuOpen, setIsReactionMenuOpen] = useState(false);
@@ -266,6 +276,33 @@ function MobileControlsBar({
                 </span>
               </button>
             )}
+            {(onOpenWhiteboard || onCloseWhiteboard) && (
+              <button
+                onClick={() => {
+                  if (isWhiteboardActive) {
+                    onCloseWhiteboard?.();
+                  } else {
+                    onOpenWhiteboard?.();
+                  }
+                  setIsMoreMenuOpen(false);
+                }}
+                className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-[#FEFCD9] hover:bg-[#FEFCD9]/5 active:bg-[#FEFCD9]/10 transition-transform duration-150 touch-feedback"
+              >
+                <div className="h-9 w-9 rounded-xl bg-[#2b2b2b] border border-white/5 flex items-center justify-center">
+                  <Globe className="w-4.5 h-4.5" />
+                </div>
+                <span className="text-sm font-medium">
+                  {isWhiteboardActive ? "Close whiteboard" : "Open whiteboard"}
+                </span>
+                <span
+                  className={`ml-auto text-[10px] uppercase tracking-[0.2em] ${
+                    isWhiteboardActive ? "text-emerald-300" : "text-[#FEFCD9]/40"
+                  }`}
+                >
+                  {isWhiteboardActive ? "Live" : "Off"}
+                </span>
+              </button>
+            )}
             {showBrowserControls &&
               (hasBrowserAudio || isBrowserActive) &&
               onToggleBrowserAudio && (
@@ -292,6 +329,28 @@ function MobileControlsBar({
                 <span className="text-sm font-medium">Shared browser audio</span>
                 <span className="ml-auto text-[10px] uppercase tracking-[0.2em] text-[#FEFCD9]/40">
                   {isBrowserAudioMuted ? "Muted" : "On"}
+                </span>
+              </button>
+            )}
+            {isAdmin && onToggleAppsLock && (
+              <button
+                onClick={() => {
+                  onToggleAppsLock();
+                  setIsMoreMenuOpen(false);
+                }}
+                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-transform duration-150 touch-feedback ${
+                  isAppsLocked ? "text-amber-400" : "text-[#FEFCD9]"
+                } hover:bg-[#FEFCD9]/5 active:bg-[#FEFCD9]/10`}
+              >
+                <div
+                  className={`h-9 w-9 rounded-xl border border-white/5 flex items-center justify-center ${
+                    isAppsLocked ? "bg-amber-500/20" : "bg-[#2b2b2b]"
+                  }`}
+                >
+                  {isAppsLocked ? <Lock className="w-4.5 h-4.5" /> : <LockOpen className="w-4.5 h-4.5" />}
+                </div>
+                <span className="text-sm font-medium">
+                  {isAppsLocked ? "Unlock whiteboard" : "Lock whiteboard"}
                 </span>
               </button>
             )}

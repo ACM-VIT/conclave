@@ -1,4 +1,4 @@
-#if !SKIP && canImport(SocketIO)
+#if os(iOS) && !SKIP && canImport(SocketIO)
 //
 //  SocketIOManager.swift
 //  Conclave

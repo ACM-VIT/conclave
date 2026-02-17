@@ -2,6 +2,7 @@ import { Admin } from "../../../config/classes/Admin.js";
 import { Client } from "../../../config/classes/Client.js";
 import { config } from "../../../config/config.js";
 import type {
+  AppsAwarenessData,
   HandRaisedSnapshot,
   JoinRoomData,
   JoinRoomResponse,
@@ -76,6 +77,13 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         const wasReconnecting = room.clearPendingDisconnect(userId);
         if (room.getClient(userId)) {
           Logger.warn(`User ${userId} re-joining room ${roomId}`);
+          const awarenessRemovals = room.clearUserAwareness(userId);
+          for (const removal of awarenessRemovals) {
+            io.to(roomChannelId).emit("apps:awareness", {
+              appId: removal.appId,
+              awarenessUpdate: removal.awarenessUpdate,
+            } satisfies AppsAwarenessData);
+          }
           room.removeClient(userId);
         }
 
@@ -186,26 +194,37 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           context.currentRoom.channelId !== roomChannelId &&
           context.currentClient
         ) {
+          const previousRoom = context.currentRoom;
+          const previousChannelId = previousRoom.channelId;
+          const previousClientId = context.currentClient.id;
           Logger.info(
-            `User ${userId} switching from ${context.currentRoom.id} to ${roomId}`,
+            `User ${userId} switching from ${previousRoom.id} to ${roomId}`,
           );
 
-          context.currentRoom.removeClient(context.currentClient.id);
-
-          if (context.currentClient.isGhost) {
-            emitUserLeft(context.currentRoom, context.currentClient.id, {
-              ghostOnly: true,
-              excludeUserId: context.currentClient.id,
-            });
-          } else {
-            socket
-              .to(context.currentRoom.channelId)
-              .emit("userLeft", { userId: context.currentClient.id });
+          const awarenessRemovals = previousRoom.clearUserAwareness(
+            previousClientId,
+          );
+          for (const removal of awarenessRemovals) {
+            socket.to(previousChannelId).emit("apps:awareness", {
+              appId: removal.appId,
+              awarenessUpdate: removal.awarenessUpdate,
+            } satisfies AppsAwarenessData);
           }
 
-          socket.leave(context.currentRoom.channelId);
-          if (cleanupRoom(state, context.currentRoom.channelId)) {
-            void cleanupRoomBrowser(context.currentRoom.channelId);
+          previousRoom.removeClient(previousClientId);
+
+          if (context.currentClient.isGhost) {
+            emitUserLeft(previousRoom, previousClientId, {
+              ghostOnly: true,
+              excludeUserId: previousClientId,
+            });
+          } else {
+            socket.to(previousChannelId).emit("userLeft", { userId: previousClientId });
+          }
+
+          socket.leave(previousChannelId);
+          if (cleanupRoom(state, previousChannelId)) {
+            void cleanupRoomBrowser(previousChannelId);
           }
 
           context.currentRoom = null;
@@ -288,6 +307,11 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         socket.emit("roomLockChanged", {
           locked: context.currentRoom.isLocked,
           roomId: context.currentRoom.id,
+        });
+
+        socket.emit("apps:state", {
+          activeAppId: context.currentRoom.appsState.activeAppId,
+          locked: context.currentRoom.appsState.locked,
         });
 
         const newQuality = context.currentRoom.updateVideoQuality();

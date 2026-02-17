@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { Socket } from "socket.io-client";
 import { StatusBar } from "expo-status-bar";
 import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
 import {
@@ -54,6 +55,12 @@ import { ParticipantsPanel } from "./participants-panel";
 import { ReactionOverlay } from "./reaction-overlay";
 import { ReactionSheet } from "./reaction-sheet";
 import { SettingsSheet } from "./settings-sheet";
+import {
+  AppsProvider,
+  createAssetUploadHandler,
+  registerApps,
+} from "@conclave/apps-sdk";
+import { whiteboardApp } from "@conclave/apps-sdk/whiteboard/native";
 
 const clientId = process.env.EXPO_PUBLIC_SFU_CLIENT_ID || "public";
 const apiBaseUrl =
@@ -81,6 +88,14 @@ export function MeetScreen({ initialRoomId }: { initialRoomId?: string } = {}) {
 
   const { isTablet } = useDeviceLayout();
   const refs = useMeetRefs();
+  const [appsSocket, setAppsSocket] = useState<Socket | null>(null);
+  const uploadAsset = useMemo(
+    () =>
+      createAssetUploadHandler({
+        baseUrl: apiBaseUrl || undefined,
+      }),
+    []
+  );
   const isAppActiveRef = useRef(AppState.currentState === "active");
   const wasCameraOnBeforeBackgroundRef = useRef(false);
   const wasMutedBeforeBackgroundRef = useRef(true);
@@ -119,6 +134,10 @@ export function MeetScreen({ initialRoomId }: { initialRoomId?: string } = {}) {
     isRoomLocked,
     setIsRoomLocked,
   } = useMeetState({ initialRoomId });
+
+  useEffect(() => {
+    registerApps([whiteboardApp]);
+  }, []);
   const isCameraOffRef = useRef(isCameraOff);
   const isMutedRef = useRef(isMuted);
   const shouldKeepAliveInBackground = isScreenSharing || !!activeScreenShareId;
@@ -216,6 +235,14 @@ export function MeetScreen({ initialRoomId }: { initialRoomId?: string } = {}) {
     socketRef: refs.socketRef,
     joinOptionsRef: refs.joinOptionsRef,
   });
+  const appsUser = useMemo(
+    () => ({
+      id: userId,
+      name: displayNameInput || user?.name || user?.email || user?.id || "Guest",
+      email: user?.email ?? null,
+    }),
+    [userId, displayNameInput, user]
+  );
 
   const joinUser = useMemo(
     () => ({
@@ -498,6 +525,7 @@ export function MeetScreen({ initialRoomId }: { initialRoomId?: string } = {}) {
       isChatOpenRef,
     },
     isAppActiveRef,
+    onSocketReady: setAppsSocket,
   });
 
   const dismissPendingToast = useCallback(() => {
@@ -882,8 +910,14 @@ export function MeetScreen({ initialRoomId }: { initialRoomId?: string } = {}) {
   if (!mounted) return null;
 
   return (
-    <View className="flex-1 bg-[#0d0e0d]">
-      <StatusBar style="light" />
+    <AppsProvider
+      socket={appsSocket}
+      user={appsUser}
+      isAdmin={isAdmin}
+      uploadAsset={uploadAsset}
+    >
+      <View className="flex-1 bg-[#0d0e0d]">
+        <StatusBar style="light" />
       {isJoined && meetError ? (
         <ErrorSheet
           visible={!!meetError}
@@ -1143,7 +1177,8 @@ export function MeetScreen({ initialRoomId }: { initialRoomId?: string } = {}) {
           </View>
         </View>
       ) : null}
-    </View>
+      </View>
+    </AppsProvider>
   );
 }
 

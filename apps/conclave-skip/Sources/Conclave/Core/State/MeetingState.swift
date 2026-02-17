@@ -3,6 +3,9 @@ import Observation
 #if !SKIP
 import SkipFuse
 #endif
+#if canImport(ReplayKit)
+import ReplayKit
+#endif
 
 @MainActor
 @Observable
@@ -41,6 +44,7 @@ final class MeetingState {
 
     // Chat
     var chatMessages: [ChatMessage] = []
+    var systemMessages: [SystemMessage] = []
     var unreadChatCount: Int = 0
     var isChatOpen: Bool = false
 
@@ -74,7 +78,11 @@ final class MeetingState {
     }
 
     var isScreenShareSupported: Bool {
-        false
+        #if os(iOS) && canImport(ReplayKit) && !SKIP
+        return RPScreenRecorder.shared().isAvailable
+        #else
+        return false
+        #endif
     }
 
     func displayName(for id: String) -> String {

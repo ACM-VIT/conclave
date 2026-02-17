@@ -14,6 +14,26 @@ const appleProvider =
       }
     : {};
 
+const robloxProvider =
+  process.env.ROBLOX_CLIENT_ID && process.env.ROBLOX_CLIENT_SECRET
+    ? {
+        roblox: {
+          clientId: process.env.ROBLOX_CLIENT_ID,
+          clientSecret: process.env.ROBLOX_CLIENT_SECRET,
+        },
+      }
+    : {};
+
+const vercelProvider =
+  process.env.VERCEL_CLIENT_ID && process.env.VERCEL_CLIENT_SECRET
+    ? {
+        vercel: {
+          clientId: process.env.VERCEL_CLIENT_ID,
+          clientSecret: process.env.VERCEL_CLIENT_SECRET,
+        },
+      }
+    : {};
+
 const googleJwks = createRemoteJWKSet(
   new URL("https://www.googleapis.com/oauth2/v3/certs")
 );
@@ -56,6 +76,8 @@ export const auth = betterAuth({
       },
     },
     ...appleProvider,
+    ...robloxProvider,
+    ...vercelProvider,
   },
   
   trustedOrigins: [

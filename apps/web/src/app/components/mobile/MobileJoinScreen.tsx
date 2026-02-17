@@ -117,7 +117,9 @@ function MobileJoinScreen({
       inlineSuggestion.startsWith(currentSegment)
       ? inlineSuggestion.slice(currentSegment.length)
       : "";
-  const [signInProvider, setSignInProvider] = useState<"google" | "apple" | null>(
+  const [signInProvider, setSignInProvider] = useState<
+    "google" | "apple" | "roblox" | "vercel" | null
+  >(
     null
   );
   const isSigningIn = signInProvider !== null;
@@ -257,7 +259,9 @@ function MobileJoinScreen({
     onJoinRoom(id);
   };
 
-  const handleSocialSignIn = async (provider: "google" | "apple") => {
+  const handleSocialSignIn = async (
+    provider: "google" | "apple" | "roblox" | "vercel"
+  ) => {
     setSignInProvider(provider);
     try {
       await signIn.social({
@@ -443,6 +447,45 @@ function MobileJoinScreen({
               )}
               <span className="text-[13px] leading-none whitespace-nowrap tracking-tight" style={{ fontFamily: "'PolySans Trial', sans-serif" }}>
                 Continue with Apple
+              </span>
+            </button>
+            <button
+              onClick={() => handleSocialSignIn("roblox")}
+              disabled={isSigningIn}
+              className="w-full flex items-center justify-center gap-3 px-4 py-3 bg-[#1a1a1a] border border-[#FEFCD9]/10 text-[#FEFCD9] rounded-lg hover:border-[#FEFCD9]/25 hover:bg-[#1a1a1a]/80 transition-all disabled:opacity-50"
+            >
+              {signInProvider === "roblox" ? (
+                <Loader2 className="w-5 h-5 animate-spin text-[#FEFCD9]" />
+              ) : (
+                <img
+                  src="/roblox-logo.png"
+                  alt=""
+                  aria-hidden="true"
+                  className="w-5 h-5 shrink-0 object-contain invert"
+                />
+              )}
+              <span className="text-[13px] leading-none whitespace-nowrap tracking-tight" style={{ fontFamily: "'PolySans Trial', sans-serif" }}>
+                Continue with Roblox
+              </span>
+            </button>
+            <button
+              onClick={() => handleSocialSignIn("vercel")}
+              disabled={isSigningIn}
+              className="w-full flex items-center justify-center gap-3 px-4 py-3 bg-[#1a1a1a] border border-[#FEFCD9]/10 text-[#FEFCD9] rounded-lg hover:border-[#FEFCD9]/25 hover:bg-[#1a1a1a]/80 transition-all disabled:opacity-50"
+            >
+              {signInProvider === "vercel" ? (
+                <Loader2 className="w-5 h-5 animate-spin text-[#FEFCD9]" />
+              ) : (
+                <svg
+                  className="w-5 h-5 shrink-0"
+                  viewBox="0 0 24 24"
+                  aria-hidden="true"
+                >
+                  <path fill="#fff" d="M12 4l8 14H4z" />
+                </svg>
+              )}
+              <span className="text-[13px] leading-none whitespace-nowrap tracking-tight" style={{ fontFamily: "'PolySans Trial', sans-serif" }}>
+                Continue with Vercel
               </span>
             </button>
           </div>

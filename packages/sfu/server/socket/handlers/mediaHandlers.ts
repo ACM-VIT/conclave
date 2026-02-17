@@ -216,9 +216,14 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
 
         await context.currentClient.toggleMute(data.paused);
 
+        const audioProducer = context.currentClient.getProducer("audio", "webcam");
+        const muted = audioProducer ? audioProducer.paused : true;
+        context.currentClient.isMuted = muted;
+
         socket.to(context.currentRoom.channelId).emit("participantMuted", {
           userId: context.currentClient.id,
-          muted: data.paused,
+          muted,
+          roomId: context.currentRoom.id,
         });
 
         respond(callback, { success: true });
@@ -246,9 +251,14 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
 
         await context.currentClient.toggleCamera(data.paused);
 
+        const videoProducer = context.currentClient.getProducer("video", "webcam");
+        const cameraOff = videoProducer ? videoProducer.paused : true;
+        context.currentClient.isCameraOff = cameraOff;
+
         socket.to(context.currentRoom.channelId).emit("participantCameraOff", {
           userId: context.currentClient.id,
-          cameraOff: data.paused,
+          cameraOff,
+          roomId: context.currentRoom.id,
         });
 
         respond(callback, { success: true });
@@ -275,6 +285,20 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
         if (removed) {
           if (removed.type === "screen") {
             context.currentRoom.clearScreenShareProducer(data.producerId);
+          } else if (removed.kind === "audio") {
+            context.currentClient.isMuted = true;
+            socket.to(context.currentRoom.channelId).emit("participantMuted", {
+              userId: context.currentClient.id,
+              muted: true,
+              roomId: context.currentRoom.id,
+            });
+          } else if (removed.kind === "video") {
+            context.currentClient.isCameraOff = true;
+            socket.to(context.currentRoom.channelId).emit("participantCameraOff", {
+              userId: context.currentClient.id,
+              cameraOff: true,
+              roomId: context.currentRoom.id,
+            });
           }
 
           socket.to(context.currentRoom.channelId).emit("producerClosed", {

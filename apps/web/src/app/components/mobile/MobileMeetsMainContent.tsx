@@ -1,7 +1,7 @@
 "use client";
 
 import { Ghost, RefreshCw } from "lucide-react";
-import { memo, useCallback, useMemo } from "react";
+import { memo, useCallback, useEffect, useMemo } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import type { Socket } from "socket.io-client";
 import type {
@@ -25,6 +25,8 @@ import MobileParticipantsPanel from "./MobileParticipantsPanel";
 import MobilePresentationLayout from "./MobilePresentationLayout";
 import SystemAudioPlayers from "../SystemAudioPlayers";
 import { isSystemUserId } from "../../lib/utils";
+import { useApps } from "@conclave/apps-sdk";
+import WhiteboardLayout from "../WhiteboardLayout";
 
 interface MobileMeetsMainContentProps {
   isJoined: boolean;
@@ -181,6 +183,19 @@ function MobileMeetsMainContent({
   onRetryMedia,
   onTestSpeaker,
 }: MobileMeetsMainContentProps) {
+  const { state: appsState, openApp, closeApp, setLocked, refreshState } = useApps();
+  const isWhiteboardActive = appsState.activeAppId === "whiteboard";
+  const handleOpenWhiteboard = useCallback(() => openApp("whiteboard"), [openApp]);
+  const handleCloseWhiteboard = useCallback(() => closeApp(), [closeApp]);
+  const handleToggleAppsLock = useCallback(
+    () => setLocked(!appsState.locked),
+    [appsState.locked, setLocked]
+  );
+  useEffect(() => {
+    if (connectionState === "joined") {
+      refreshState();
+    }
+  }, [connectionState, refreshState]);
   const handleToggleParticipants = useCallback(
     () =>
       setIsParticipantsOpen((prev) => {
@@ -304,7 +319,22 @@ function MobileMeetsMainContent({
 
       {/* Main content area - with padding for controls */}
       <div className="flex-1 min-h-0 pb-20">
-        {browserState?.active && browserState.noVncUrl ? (
+        {isWhiteboardActive ? (
+          <WhiteboardLayout
+            localStream={localStream}
+            isCameraOff={isCameraOff}
+            isMuted={isMuted}
+            isHandRaised={isHandRaised}
+            isGhost={ghostEnabled}
+            participants={participants}
+            userEmail={userEmail}
+            isMirrorCamera={isMirrorCamera}
+            activeSpeakerId={activeSpeakerId}
+            currentUserId={currentUserId}
+            audioOutputDeviceId={audioOutputDeviceId}
+            getDisplayName={resolveDisplayName}
+          />
+        ) : browserState?.active && browserState.noVncUrl ? (
           <MobileBrowserLayout
             browserUrl={browserState.url || ""}
             noVncUrl={browserState.noVncUrl}
@@ -428,6 +458,11 @@ function MobileMeetsMainContent({
         hasBrowserAudio={hasBrowserAudio}
         isBrowserAudioMuted={isBrowserAudioMuted}
         onToggleBrowserAudio={onToggleBrowserAudio}
+        isWhiteboardActive={isWhiteboardActive}
+        onOpenWhiteboard={handleOpenWhiteboard}
+        onCloseWhiteboard={handleCloseWhiteboard}
+        isAppsLocked={appsState.locked}
+        onToggleAppsLock={isAdmin ? handleToggleAppsLock : undefined}
       />
 
       {/* Full-screen chat panel */}
