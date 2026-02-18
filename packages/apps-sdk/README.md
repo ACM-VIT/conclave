@@ -2,6 +2,10 @@
 
 Conclave in-meeting app SDK (shared web + native).
 
+## Guides
+
+- [Add a New App Integration](./docs/add-a-new-app-integration.md)
+
 ## Quick Start
 
 ```tsx
