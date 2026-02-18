@@ -419,7 +419,6 @@ export function useMeetMedia({
             newAudioTrack.onended = () => {
               handleLocalTrackEnded("audio", newAudioTrack);
             };
-            newAudioTrack.enabled = true;
 
             const producer = audioProducerRef.current;
             if (producer) {
@@ -690,7 +689,6 @@ export function useMeetMedia({
             newAudioTrack.onended = () => {
               handleLocalTrackEnded("audio", newAudioTrack);
             };
-            newAudioTrack.enabled = !isMuted;
             const oldAudioTrack = localStream?.getAudioTracks()[0];
 
             if (audioProducerRef.current) {
@@ -720,7 +718,6 @@ export function useMeetMedia({
     },
     [
       connectionState,
-      isMuted,
       localStream,
       handleLocalTrackEnded,
       stopLocalTrack,
