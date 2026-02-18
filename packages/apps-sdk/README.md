@@ -51,6 +51,18 @@ Preview changes only:
 pnpm -C packages/apps-sdk run new:app polls --dry-run
 ```
 
+Validate app wiring (exports + mobile aliases):
+
+```bash
+pnpm -C packages/apps-sdk run check:apps
+```
+
+Auto-fix JSON wiring drift:
+
+```bash
+pnpm -C packages/apps-sdk run check:apps:fix
+```
+
 ## Core Concepts
 
 - `defineApp(app)`
@@ -75,6 +87,10 @@ pnpm -C packages/apps-sdk run new:app polls --dry-run
   - Cross-platform file upload helper for app assets.
   - Supports `File`, `Blob`, and native `{ uri, name, type }` inputs.
   - Defaults to `POST /api/apps` with no config.
+
+- `createAppDoc(rootKey, initializer?)`
+  - Small helper to initialize app Yjs docs consistently.
+  - Combine with `getAppRoot`, `ensureAppMap`, `ensureAppArray`, `ensureAppText`.
 
 ## Whiteboard Export Paths
 

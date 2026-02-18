@@ -80,7 +80,14 @@ Non-admin clients should still receive state and sync updates.
 4. `locked` blocks edits for non-admin users.
 5. Yjs updates replicate across clients.
 6. Reconnect and `refreshState()` behave correctly.
-7. Added docs/screenshots for major UX changes.
+7. `pnpm -C packages/apps-sdk run check:apps` passes.
+8. Added docs/screenshots for major UX changes.
+
+Tip: if exports/path aliases drift, run:
+
+```bash
+pnpm -C packages/apps-sdk run check:apps:fix
+```
 
 ## Related docs
 

@@ -147,20 +147,22 @@ const scaffoldFiles = ({
   files.push({
     path: path.join(appDir, "core", "doc", "index.ts"),
     content: `import * as Y from "yjs";
+import {
+  createAppDoc,
+  ensureAppMap,
+  getAppRoot,
+} from "../../../../sdk/doc/createAppDoc";
 
 const ROOT_KEY = "${appId}";
 
 export const create${pascal}Doc = (): Y.Doc => {
-  const doc = new Y.Doc();
-  const root = doc.getMap<unknown>(ROOT_KEY);
-  if (!root.has("meta")) {
-    root.set("meta", new Y.Map<unknown>());
-  }
-  return doc;
+  return createAppDoc(ROOT_KEY, (root) => {
+    ensureAppMap(root, "meta");
+  });
 };
 
 export const get${pascal}Root = (doc: Y.Doc): Y.Map<unknown> => {
-  return doc.getMap<unknown>(ROOT_KEY);
+  return getAppRoot(doc, ROOT_KEY);
 };
 `,
   });
@@ -425,6 +427,7 @@ const main = () => {
   console.log("2. Add open/close controls in meeting UI via useApps().");
   console.log("3. Render the app when appsState.activeAppId matches your id.");
   console.log("4. Follow packages/apps-sdk/docs/add-a-new-app-integration.md for full wiring.");
+  console.log("5. Run pnpm -C packages/apps-sdk run check:apps before opening a PR.");
   console.log("");
 };
 

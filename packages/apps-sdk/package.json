@@ -4,7 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "new:app": "node ./scripts/create-app-integration.mjs"
+    "new:app": "node ./scripts/create-app-integration.mjs",
+    "check:apps": "node ./scripts/check-app-integrations.mjs",
+    "check:apps:fix": "node ./scripts/check-app-integrations.mjs --fix"
   },
   "main": "src/index.ts",
   "types": "src/index.ts",

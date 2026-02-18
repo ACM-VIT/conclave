@@ -61,6 +61,17 @@ export const createPollsDoc = () => {
 };
 ```
 
+Or use the built-in helper:
+
+```ts
+import { createAppDoc, ensureAppMap } from "@conclave/apps-sdk";
+
+export const createPollsDoc = () =>
+  createAppDoc("polls", (root) => {
+    ensureAppMap(root, "meta");
+  });
+```
+
 Define app entries (web and native) with the same `id`:
 
 ```ts
@@ -234,6 +245,9 @@ Keep `registerAppsHandlers(context)` wired in `packages/sfu/server/socket/regist
 5. Lock mode prevents edits for non-admins.
 6. Reconnect preserves current app state (`refreshState` + sync path).
 7. Asset upload path works (if used).
+8. `pnpm -C packages/apps-sdk run check:apps` passes.
+
+If exports/paths drift, run `pnpm -C packages/apps-sdk run check:apps:fix`.
 
 ## Common pitfalls
 
