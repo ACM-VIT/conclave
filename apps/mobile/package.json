@@ -15,7 +15,7 @@
     "@lodev09/react-native-true-sheet": "^3.8.1",
     "@notifee/react-native": "9.1.8",
     "@react-native-async-storage/async-storage": "2.2.0",
-    "@react-native/virtualized-lists": "^0.84.0",
+    "@react-native/virtualized-lists": "0.81.5",
     "@shopify/react-native-skia": "2.4.18",
     "@tailwindcss/postcss": "^4.1.18",
     "expo": "^54.0.1",
