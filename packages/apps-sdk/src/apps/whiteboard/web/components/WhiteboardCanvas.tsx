@@ -17,7 +17,7 @@ import { renderCanvas } from "../renderer/renderCanvas";
 import type { AppUser } from "../../../../sdk/types/index";
 import { getColorForUser } from "../../core/presence/colors";
 import type { StickyElement, TextElement, WhiteboardElement } from "../../core/model/types";
-import { getBoundsForElement, hitTestElement } from "../../core/model/geometry";
+import { getBoundsForElement, hitTestElement, type Bounds } from "../../core/model/geometry";
 
 export type WhiteboardCanvasProps = {
   doc: Y.Doc;
@@ -46,6 +46,8 @@ const isEditableElement = (element: WhiteboardElement): element is EditableEleme
   element.type === "text" || element.type === "sticky";
 
 const FONT_STACK = 'Virgil, "Segoe Print", "Comic Sans MS", "Marker Felt", cursive';
+const STICKY_TEXT_INSET = 8;
+const RESIZE_HANDLE_HIT_RADIUS = 8;
 
 const measureTextBounds = (text: string, fontSize: number) => {
   const lines = text.split("\n");
@@ -72,6 +74,131 @@ const measureTextBounds = (text: string, fontSize: number) => {
   };
 };
 
+const getStickyTextHeight = (element: StickyElement) => {
+  const lines = element.text.split("\n");
+  return Math.max(element.fontSize * 1.3, lines.length * element.fontSize * 1.3);
+};
+
+const getStickyViewportHeight = (element: StickyElement) => {
+  return Math.max(0, element.height - STICKY_TEXT_INSET * 2);
+};
+
+const getMaxStickyScroll = (element: StickyElement) => {
+  return Math.max(0, Math.ceil(getStickyTextHeight(element) - getStickyViewportHeight(element)));
+};
+
+type ResizeHandle = "nw" | "ne" | "sw" | "se";
+type ResizableElement = Extract<WhiteboardElement, { type: "shape" | "sticky" | "image" }>;
+
+type ResizeSession = {
+  elementId: string;
+  handle: ResizeHandle;
+  startBounds: Bounds;
+  startElement: ResizableElement;
+};
+
+const isResizableElement = (
+  element: WhiteboardElement | null
+): element is ResizableElement =>
+  Boolean(
+    element &&
+      (element.type === "shape" || element.type === "sticky" || element.type === "image")
+  );
+
+const getResizeHandleAtPoint = (
+  bounds: Bounds,
+  point: { x: number; y: number }
+): ResizeHandle | null => {
+  const corners: Array<{ handle: ResizeHandle; x: number; y: number }> = [
+    { handle: "nw", x: bounds.x, y: bounds.y },
+    { handle: "ne", x: bounds.x + bounds.width, y: bounds.y },
+    { handle: "sw", x: bounds.x, y: bounds.y + bounds.height },
+    { handle: "se", x: bounds.x + bounds.width, y: bounds.y + bounds.height },
+  ];
+  for (const corner of corners) {
+    if (
+      Math.abs(point.x - corner.x) <= RESIZE_HANDLE_HIT_RADIUS &&
+      Math.abs(point.y - corner.y) <= RESIZE_HANDLE_HIT_RADIUS
+    ) {
+      return corner.handle;
+    }
+  }
+  return null;
+};
+
+const getResizeMinimums = (element: ResizeSession["startElement"]) => {
+  if (element.type === "sticky") {
+    return { minWidth: 60, minHeight: 40 };
+  }
+  if (element.type === "image") {
+    return { minWidth: 16, minHeight: 16 };
+  }
+  if (element.type === "shape" && element.shape === "line") {
+    return { minWidth: 8, minHeight: 8 };
+  }
+  return { minWidth: 12, minHeight: 12 };
+};
+
+const getResizedBounds = (
+  startBounds: Bounds,
+  handle: ResizeHandle,
+  point: { x: number; y: number },
+  minWidth: number,
+  minHeight: number
+): Bounds => {
+  const left = startBounds.x;
+  const top = startBounds.y;
+  const right = startBounds.x + startBounds.width;
+  const bottom = startBounds.y + startBounds.height;
+
+  if (handle === "nw") {
+    const x = Math.min(point.x, right - minWidth);
+    const y = Math.min(point.y, bottom - minHeight);
+    return { x, y, width: right - x, height: bottom - y };
+  }
+
+  if (handle === "ne") {
+    const x = Math.max(point.x, left + minWidth);
+    const y = Math.min(point.y, bottom - minHeight);
+    return { x: left, y, width: x - left, height: bottom - y };
+  }
+
+  if (handle === "sw") {
+    const x = Math.min(point.x, right - minWidth);
+    const y = Math.max(point.y, top + minHeight);
+    return { x, y: top, width: right - x, height: y - top };
+  }
+
+  const x = Math.max(point.x, left + minWidth);
+  const y = Math.max(point.y, top + minHeight);
+  return { x: left, y: top, width: x - left, height: y - top };
+};
+
+const applyResizedBounds = (
+  element: ResizeSession["startElement"],
+  bounds: Bounds
+): ResizeSession["startElement"] => {
+  if (element.type === "shape") {
+    const widthDirection = element.width === 0 ? 1 : Math.sign(element.width);
+    const heightDirection = element.height === 0 ? 1 : Math.sign(element.height);
+    return {
+      ...element,
+      x: widthDirection >= 0 ? bounds.x : bounds.x + bounds.width,
+      y: heightDirection >= 0 ? bounds.y : bounds.y + bounds.height,
+      width: bounds.width * widthDirection,
+      height: bounds.height * heightDirection,
+    };
+  }
+
+  return {
+    ...element,
+    x: bounds.x,
+    y: bounds.y,
+    width: bounds.width,
+    height: bounds.height,
+  };
+};
+
 export function WhiteboardCanvas({
   doc,
   awareness,
@@ -90,11 +217,13 @@ export function WhiteboardCanvas({
   const elements = useWhiteboardElements(doc, pageId);
   const imageCacheRef = useRef<Map<string, HTMLImageElement>>(new Map());
   const latestCursorRef = useRef<{ x: number; y: number } | null>(null);
+  const resizeSessionRef = useRef<ResizeSession | null>(null);
   const textEditorRef = useRef<HTMLTextAreaElement>(null);
   const [imageVersion, setImageVersion] = useState(0);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [editingElementId, setEditingElementId] = useState<string | null>(null);
   const [editingText, setEditingText] = useState("");
+  const [stickyScrollOffsets, setStickyScrollOffsets] = useState<Record<string, number>>({});
 
   useEffect(() => {
     if (!engineRef.current) {
@@ -119,6 +248,30 @@ export function WhiteboardCanvas({
       setEditingText("");
     }
   }, [elements, editingElementId]);
+
+  useEffect(() => {
+    setStickyScrollOffsets((prev) => {
+      const next: Record<string, number> = {};
+      for (const element of elements) {
+        if (element.type !== "sticky") continue;
+        const offset = prev[element.id] ?? 0;
+        const maxScroll = getMaxStickyScroll(element);
+        const clamped = Math.min(Math.max(offset, 0), maxScroll);
+        if (clamped > 0) {
+          next[element.id] = clamped;
+        }
+      }
+      const prevKeys = Object.keys(prev);
+      const nextKeys = Object.keys(next);
+      if (
+        prevKeys.length === nextKeys.length &&
+        prevKeys.every((key) => prev[key] === next[key])
+      ) {
+        return prev;
+      }
+      return next;
+    });
+  }, [elements]);
 
   useEffect(() => {
     setEditingElementId(null);
@@ -316,13 +469,27 @@ export function WhiteboardCanvas({
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
     ctx.setTransform(scale, 0, 0, scale, 0, 0);
-    // Hide the element being edited so the textarea overlays it cleanly
-    const filteredElements = editingElementId
-      ? elements.filter((el) => el.id !== editingElementId)
+    // Keep sticky background visible while editing by only hiding sticky text.
+    // For plain text elements, hide the element entirely under the editor.
+    const renderedElements = editingElementId
+      ? elements.flatMap((element) => {
+          if (element.id !== editingElementId) return [element];
+          if (element.type === "sticky") {
+            return [{ ...element, text: "" }];
+          }
+          return [];
+        })
       : elements;
-    const renderList = buildRenderList(filteredElements);
+    const renderList = buildRenderList(renderedElements).map((element) => {
+      if (element.type !== "sticky") return element;
+      const maxScroll = getMaxStickyScroll(element);
+      const offset = stickyScrollOffsets[element.id] ?? 0;
+      const clamped = Math.min(Math.max(offset, 0), maxScroll);
+      if (clamped === 0) return element;
+      return { ...element, stickyScrollOffset: clamped };
+    });
     renderCanvas(ctx, renderList, rect.width, rect.height, imageCacheRef.current);
-  }, [elements, editingElementId, imageVersion]);
+  }, [elements, editingElementId, imageVersion, stickyScrollOffsets]);
 
   useResizeObserver(containerRef, render);
 
@@ -339,6 +506,25 @@ export function WhiteboardCanvas({
       const point = { x: event.clientX - rect.left, y: event.clientY - rect.top, pressure: event.pressure };
       event.currentTarget.setPointerCapture(event.pointerId);
       if (!locked) {
+        if (tool === "select" && selectedId) {
+          const selectedElement = elements.find((element) => element.id === selectedId) ?? null;
+          if (isResizableElement(selectedElement)) {
+            const selectedBounds = getBoundsForElement(selectedElement);
+            const handle = getResizeHandleAtPoint(selectedBounds, point);
+            if (handle) {
+              event.preventDefault();
+              resizeSessionRef.current = {
+                elementId: selectedElement.id,
+                handle,
+                startBounds: selectedBounds,
+                startElement: selectedElement,
+              };
+              scheduleCursorSync(point.x, point.y);
+              return;
+            }
+          }
+        }
+
         engineRef.current?.onPointerDown(point);
         const nextSelectedId = engineRef.current?.getSelectedId() ?? null;
         setSelectedId(nextSelectedId);
@@ -353,7 +539,17 @@ export function WhiteboardCanvas({
       }
       scheduleCursorSync(point.x, point.y);
     },
-    [commitEditing, editingElementId, locked, onToolChange, scheduleCursorSync, startEditingById, tool]
+    [
+      commitEditing,
+      editingElementId,
+      elements,
+      locked,
+      onToolChange,
+      scheduleCursorSync,
+      selectedId,
+      startEditingById,
+      tool,
+    ]
   );
 
   const handlePointerMove = useCallback(
@@ -361,16 +557,40 @@ export function WhiteboardCanvas({
       const rect = event.currentTarget.getBoundingClientRect();
       const point = { x: event.clientX - rect.left, y: event.clientY - rect.top, pressure: event.pressure };
       if (!locked && event.buttons) {
+        const resizeSession = resizeSessionRef.current;
+        if (resizeSession) {
+          event.preventDefault();
+          const { minWidth, minHeight } = getResizeMinimums(resizeSession.startElement);
+          const nextBounds = getResizedBounds(
+            resizeSession.startBounds,
+            resizeSession.handle,
+            point,
+            minWidth,
+            minHeight
+          );
+          const nextElement = applyResizedBounds(resizeSession.startElement, nextBounds);
+          updateElement(doc, pageId, nextElement);
+          setSelectedId(resizeSession.elementId);
+          scheduleCursorSync(point.x, point.y);
+          return;
+        }
         engineRef.current?.onPointerMove(point);
       }
       scheduleCursorSync(point.x, point.y);
     },
-    [locked, scheduleCursorSync]
+    [doc, locked, pageId, scheduleCursorSync]
   );
 
   const handlePointerUp = useCallback((event: React.PointerEvent<HTMLCanvasElement>) => {
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    const resizeSession = resizeSessionRef.current;
+    if (resizeSession) {
+      resizeSessionRef.current = null;
+      setSelectedId(resizeSession.elementId);
+      clearCursor();
+      return;
     }
     if (!locked) {
       engineRef.current?.onPointerUp();
@@ -384,6 +604,33 @@ export function WhiteboardCanvas({
       handlePointerUp(event);
     },
     [handlePointerUp]
+  );
+
+  const handleWheel = useCallback(
+    (event: React.WheelEvent<HTMLCanvasElement>) => {
+      if (editingElementId) return;
+      const rect = event.currentTarget.getBoundingClientRect();
+      const point = { x: event.clientX - rect.left, y: event.clientY - rect.top };
+      const sticky = [...elements]
+        .reverse()
+        .find(
+          (element): element is StickyElement =>
+            element.type === "sticky" && hitTestElement(element, point, 0)
+        );
+      if (!sticky) return;
+      const maxScroll = getMaxStickyScroll(sticky);
+      if (maxScroll <= 0) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      setStickyScrollOffsets((prev) => {
+        const current = prev[sticky.id] ?? 0;
+        const next = Math.min(Math.max(current + event.deltaY, 0), maxScroll);
+        if (Math.abs(next - current) < 0.5) return prev;
+        return { ...prev, [sticky.id]: next };
+      });
+    },
+    [editingElementId, elements]
   );
 
   const handleDoubleClick = useCallback(
@@ -494,11 +741,19 @@ export function WhiteboardCanvas({
       outline: "none",
       zIndex: 100,
       caretColor: editingElement.textColor,
+      overflowY: "auto",
+      overflowX: "hidden",
+      whiteSpace: "pre-wrap",
+      wordBreak: "break-word",
     };
   }, [editingElement, editingTextBounds]);
 
   const selectionBounds = useMemo(
     () => (selectedElement ? getBoundsForElement(selectedElement) : null),
+    [selectedElement]
+  );
+  const canResizeSelectedElement = useMemo(
+    () => isResizableElement(selectedElement),
     [selectedElement]
   );
 
@@ -511,6 +766,7 @@ export function WhiteboardCanvas({
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
         onPointerLeave={handlePointerLeave}
+        onWheel={handleWheel}
         onDoubleClick={handleDoubleClick}
       />
       {selectionBounds && tool === "select" && !editingElement ? (
@@ -525,25 +781,27 @@ export function WhiteboardCanvas({
             borderRadius: 4,
           }}
         >
-          {[
-            { left: -4, top: -4 },
-            { right: -4, top: -4 },
-            { left: -4, bottom: -4 },
-            { right: -4, bottom: -4 },
-          ].map((position, index) => (
-            <div
-              key={index}
-              className="absolute"
-              style={{
-                ...position,
-                width: 7,
-                height: 7,
-                borderRadius: 1,
-                backgroundColor: "#fff",
-                border: "1.5px solid #6965db",
-              }}
-            />
-          ))}
+          {canResizeSelectedElement
+            ? [
+                { left: -4, top: -4 },
+                { right: -4, top: -4 },
+                { left: -4, bottom: -4 },
+                { right: -4, bottom: -4 },
+              ].map((position, index) => (
+                <div
+                  key={index}
+                  className="absolute"
+                  style={{
+                    ...position,
+                    width: 7,
+                    height: 7,
+                    borderRadius: 1,
+                    backgroundColor: "#fff",
+                    border: "1.5px solid #6965db",
+                  }}
+                />
+              ))
+            : null}
         </div>
       ) : null}
       {editingElement && editorStyle ? (
@@ -570,6 +828,7 @@ export function WhiteboardCanvas({
             ref={textEditorRef}
             value={editingText}
             onChange={(event) => setEditingText(event.target.value)}
+            onWheel={(event) => event.stopPropagation()}
             onBlur={() => commitEditing()}
             onKeyDown={(event) => {
               if (event.key === "Escape") {

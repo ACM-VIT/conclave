@@ -299,6 +299,12 @@ const renderStickyNote = (
 ) => {
   const { x, y, width: w, height: h } = element;
   const r = 3;
+  const textInset = 8;
+  const contentX = x + textInset;
+  const contentY = y + textInset;
+  const contentW = Math.max(0, w - textInset * 2);
+  const contentH = Math.max(0, h - textInset * 2);
+  const scrollOffset = Math.max(0, element.stickyScrollOffset ?? 0);
 
   ctx.save();
 
@@ -337,9 +343,15 @@ const renderStickyNote = (
   ctx.globalAlpha = 0.95;
   const lines = element.text.split("\n");
   const lh = element.fontSize * 1.3;
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(contentX, contentY, contentW, contentH);
+  ctx.clip();
   lines.forEach((line, i) => {
-    ctx.fillText(line, x + 10, y + element.fontSize + 8 + i * lh);
+    const baseline = contentY + element.fontSize + i * lh - scrollOffset;
+    ctx.fillText(line, contentX + 2, baseline, Math.max(0, contentW - 4));
   });
+  ctx.restore();
 
   ctx.restore();
 };

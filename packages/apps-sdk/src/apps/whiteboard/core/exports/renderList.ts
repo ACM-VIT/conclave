@@ -2,6 +2,7 @@ import type { WhiteboardElement } from "../model/types";
 
 export type RenderCommand = WhiteboardElement & {
   opacity?: number;
+  stickyScrollOffset?: number;
 };
 
 export const buildRenderList = (elements: WhiteboardElement[]): RenderCommand[] => {

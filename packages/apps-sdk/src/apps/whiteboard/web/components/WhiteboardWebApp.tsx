@@ -28,15 +28,35 @@ export function WhiteboardWebApp() {
 
   useEffect(() => {
     const toolsByKey: Record<string, typeof tool> = {
-      v: "select",
-      p: "pen",
-      h: "highlighter",
-      e: "eraser",
-      r: "rect",
-      o: "ellipse",
-      l: "line",
-      t: "text",
-      n: "sticky",
+      "1": "select",
+      "2": "pen",
+      "3": "highlighter",
+      "4": "eraser",
+      "5": "rect",
+      "6": "ellipse",
+      "7": "line",
+      "8": "text",
+      "9": "sticky",
+    };
+    const toolsByCode: Record<string, typeof tool> = {
+      Digit1: "select",
+      Digit2: "pen",
+      Digit3: "highlighter",
+      Digit4: "eraser",
+      Digit5: "rect",
+      Digit6: "ellipse",
+      Digit7: "line",
+      Digit8: "text",
+      Digit9: "sticky",
+      Numpad1: "select",
+      Numpad2: "pen",
+      Numpad3: "highlighter",
+      Numpad4: "eraser",
+      Numpad5: "rect",
+      Numpad6: "ellipse",
+      Numpad7: "line",
+      Numpad8: "text",
+      Numpad9: "sticky",
     };
 
     const widthSteps = [2, 3, 5, 8, 12];
@@ -47,8 +67,9 @@ export function WhiteboardWebApp() {
         return;
       }
 
-      const key = event.key.toLowerCase();
-      const mapped = toolsByKey[key];
+      const rawKey = event.key;
+      const key = rawKey.toLowerCase();
+      const mapped = toolsByCode[event.code] ?? toolsByKey[rawKey] ?? toolsByKey[key];
       if (mapped) {
         event.preventDefault();
         setTool(mapped);
@@ -73,9 +94,9 @@ export function WhiteboardWebApp() {
       }
     };
 
-    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keydown", onKeyDown, { capture: true });
     return () => {
-      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keydown", onKeyDown, { capture: true });
     };
   }, [setTool, setSettings, settings]);
 
