@@ -20,10 +20,18 @@ const VOICE_QUALITY_KEYWORDS = [
   "microsoft",
   "siri",
 ];
+const MOBILE_USER_AGENT = /android|iphone|ipad|ipod|mobile/i;
 
 function getPreferredLanguage(): string {
   if (typeof navigator === "undefined") return "en-US";
   return navigator.language || "en-US";
+}
+
+function shouldGateSpeechUntilGesture(): boolean {
+  if (typeof navigator === "undefined") return false;
+  return (
+    navigator.maxTouchPoints > 0 || MOBILE_USER_AGENT.test(navigator.userAgent)
+  );
 }
 
 function isLanguageMatch(voiceLanguage: string, targetLanguage: string): boolean {
@@ -76,7 +84,11 @@ export function useMeetTts() {
   const [ttsSpeakerId, setTtsSpeakerId] = useState<string | null>(null);
   const activeTokenRef = useRef<number | null>(null);
   const fallbackTimeoutRef = useRef<number | null>(null);
+  const unlockTimeoutRef = useRef<number | null>(null);
   const voiceRef = useRef<SpeechSynthesisVoice | null>(null);
+  const pendingPayloadRef = useRef<TtsPayload | null>(null);
+  const isSpeechUnlockedRef = useRef(false);
+  const shouldGateSpeechRef = useRef(false);
   const preferredLanguageRef = useRef<string>(getPreferredLanguage());
 
   const clearHighlight = useCallback((token: number) => {
@@ -91,7 +103,7 @@ export function useMeetTts() {
     voiceRef.current = pickBestVoice(voices, preferredLanguageRef.current);
   }, []);
 
-  const handleTtsMessage = useCallback((payload: TtsPayload) => {
+  const speakPayload = useCallback((payload: TtsPayload) => {
     const text = payload.text?.trim();
     if (!text) return;
 
@@ -115,7 +127,10 @@ export function useMeetTts() {
 
     try {
       const synth = window.speechSynthesis;
-      synth.cancel();
+      if (synth.speaking || synth.pending) {
+        synth.cancel();
+      }
+      synth.resume();
       if (!voiceRef.current) {
         refreshPreferredVoice();
       }
@@ -123,6 +138,7 @@ export function useMeetTts() {
       const utterance = new SpeechSynthesisUtterance(text);
       utterance.rate = TTS_RATE;
       utterance.pitch = TTS_PITCH;
+      utterance.volume = 1;
       const selectedVoice = voiceRef.current;
       if (selectedVoice) {
         utterance.voice = selectedVoice;
@@ -130,6 +146,9 @@ export function useMeetTts() {
       } else {
         utterance.lang = preferredLanguageRef.current;
       }
+      utterance.onstart = () => {
+        isSpeechUnlockedRef.current = true;
+      };
       utterance.onend = () => clearHighlight(token);
       utterance.onerror = () => clearHighlight(token);
 
@@ -139,16 +158,85 @@ export function useMeetTts() {
     }
   }, [clearHighlight, refreshPreferredVoice]);
 
+  const flushPendingPayload = useCallback(() => {
+    const pendingPayload = pendingPayloadRef.current;
+    if (!pendingPayload) return;
+    pendingPayloadRef.current = null;
+    speakPayload(pendingPayload);
+  }, [speakPayload]);
+
+  const unlockSpeech = useCallback(() => {
+    if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
+    if (isSpeechUnlockedRef.current) {
+      flushPendingPayload();
+      return;
+    }
+
+    try {
+      const synth = window.speechSynthesis;
+      const primer = new SpeechSynthesisUtterance(" ");
+      primer.volume = 0;
+      primer.rate = 1;
+      primer.pitch = 1;
+      primer.lang = preferredLanguageRef.current;
+      primer.onend = () => {
+        isSpeechUnlockedRef.current = true;
+        flushPendingPayload();
+      };
+      primer.onerror = () => {
+        isSpeechUnlockedRef.current = true;
+        flushPendingPayload();
+      };
+      synth.speak(primer);
+
+      if (unlockTimeoutRef.current) {
+        window.clearTimeout(unlockTimeoutRef.current);
+      }
+      unlockTimeoutRef.current = window.setTimeout(() => {
+        isSpeechUnlockedRef.current = true;
+        flushPendingPayload();
+      }, 150);
+    } catch {
+      isSpeechUnlockedRef.current = true;
+      flushPendingPayload();
+    }
+  }, [flushPendingPayload]);
+
+  const handleTtsMessage = useCallback((payload: TtsPayload) => {
+    if (shouldGateSpeechRef.current && !isSpeechUnlockedRef.current) {
+      pendingPayloadRef.current = payload;
+      return;
+    }
+    speakPayload(payload);
+  }, [speakPayload]);
+
   useEffect(() => {
     if (typeof window !== "undefined" && "speechSynthesis" in window) {
       const synth = window.speechSynthesis;
+      const handleUserGesture = () => {
+        unlockSpeech();
+      };
+
+      shouldGateSpeechRef.current = shouldGateSpeechUntilGesture();
+      isSpeechUnlockedRef.current = !shouldGateSpeechRef.current;
       refreshPreferredVoice();
       synth.addEventListener("voiceschanged", refreshPreferredVoice);
+      if (shouldGateSpeechRef.current) {
+        window.addEventListener("pointerdown", handleUserGesture);
+        window.addEventListener("touchstart", handleUserGesture);
+        window.addEventListener("keydown", handleUserGesture);
+      }
 
       return () => {
         if (fallbackTimeoutRef.current) {
           window.clearTimeout(fallbackTimeoutRef.current);
         }
+        if (unlockTimeoutRef.current) {
+          window.clearTimeout(unlockTimeoutRef.current);
+        }
+        window.removeEventListener("pointerdown", handleUserGesture);
+        window.removeEventListener("touchstart", handleUserGesture);
+        window.removeEventListener("keydown", handleUserGesture);
         synth.removeEventListener("voiceschanged", refreshPreferredVoice);
         synth.cancel();
       };
@@ -158,8 +246,11 @@ export function useMeetTts() {
       if (fallbackTimeoutRef.current) {
         window.clearTimeout(fallbackTimeoutRef.current);
       }
+      if (unlockTimeoutRef.current) {
+        window.clearTimeout(unlockTimeoutRef.current);
+      }
     };
-  }, [refreshPreferredVoice]);
+  }, [refreshPreferredVoice, unlockSpeech]);
 
   return { ttsSpeakerId, handleTtsMessage };
 }

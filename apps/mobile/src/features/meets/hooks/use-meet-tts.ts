@@ -110,18 +110,42 @@ export function useMeetTts() {
       }, estimatedMs);
 
       try {
-        Speech.stop();
+        void Speech.stop().catch(() => {});
         if (!voiceRef.current) {
           void refreshPreferredVoice();
         }
-        Speech.speak(text, {
+        const selectedVoice = voiceRef.current;
+        const sharedOptions = {
           rate: TTS_RATE,
           pitch: TTS_PITCH,
-          language: voiceRef.current?.language ?? preferredLanguageRef.current,
-          voice: voiceRef.current?.identifier,
+          useApplicationAudioSession: false,
           onDone: () => clearHighlight(token),
           onStopped: () => clearHighlight(token),
-          onError: () => clearHighlight(token),
+        };
+
+        const speakFallback = () => {
+          Speech.speak(text, {
+            ...sharedOptions,
+            language: preferredLanguageRef.current,
+            onError: () => clearHighlight(token),
+          });
+        };
+
+        Speech.speak(text, {
+          ...sharedOptions,
+          language: selectedVoice?.language ?? preferredLanguageRef.current,
+          voice: selectedVoice?.identifier,
+          onError: () => {
+            if (selectedVoice?.identifier) {
+              try {
+                speakFallback();
+              } catch {
+                clearHighlight(token);
+              }
+              return;
+            }
+            clearHighlight(token);
+          },
         });
       } catch (_err) {
         clearHighlight(token);
@@ -137,7 +161,7 @@ export function useMeetTts() {
       if (fallbackTimeoutRef.current) {
         clearTimeout(fallbackTimeoutRef.current);
       }
-      Speech.stop();
+      void Speech.stop().catch(() => {});
     };
   }, [refreshPreferredVoice]);
 
