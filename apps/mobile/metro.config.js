@@ -4,6 +4,7 @@ const fs = require("fs");
 const path = require("path");
 
 const config = getDefaultConfig(__dirname);
+const isCI = process.env.CI === "1" || process.env.CI === "true";
 const workspaceRoot = path.resolve(__dirname, "../..");
 const appsSdkPath = path.resolve(workspaceRoot, "packages/apps-sdk");
 const workspaceNodeModulesPath = path.resolve(workspaceRoot, "node_modules");
@@ -69,4 +70,7 @@ config.resolver = {
 
 config.watchFolders = [appsSdkPath, workspaceNodeModulesPath];
 
-module.exports = withNativeWind(config, { input: './src/global.css' });
+module.exports = withNativeWind(config, {
+  input: "./src/global.css",
+  forceWriteFileSystem: isCI,
+});
