@@ -17,6 +17,15 @@ It exists to answer one question quickly: "How do I build a real app on top of t
 
 The app is registered only when `NODE_ENV === "development"` so production users do not see an unfinished sandbox in the apps menu.
 
+## What To Learn From It
+
+Use this app as a safe scratchpad for:
+
+- wiring a new doc schema quickly
+- trying awareness patterns before production rollout
+- validating lock-aware UX behavior
+- testing host controls without modifying whiteboard
+
 ## What It Demonstrates
 
 1. `defineApp` with a stable `id` (`dev-playground`)
@@ -44,6 +53,14 @@ Source: `packages/apps-sdk/src/apps/dev-playground/core/doc/index.ts`.
 3. Open `Apps` menu
 4. Toggle `Dev Playground`
 
+## Suggested Debug Flow
+
+1. Open app on one client and confirm `activeAppId`.
+2. Join from a second client and verify sync convergence.
+3. Toggle lock and verify non-admin read-only behavior.
+4. Add presence metadata and verify awareness state updates.
+5. Close and reopen app to validate lifecycle assumptions.
+
 ## Suggested Contributor Exercises
 
 1. Add a second shared list (for example, "decisions")
@@ -52,3 +69,13 @@ Source: `packages/apps-sdk/src/apps/dev-playground/core/doc/index.ts`.
 4. Add a native renderer (`native/index.ts`) and wire mobile host registration
 
 Use this app as a safe scratchpad before creating a production app integration.
+
+## Related docs
+
+- [Docs Home](../README.md)
+- [Core Concepts](../reference/core-concepts.md)
+- [Runtime APIs and Hooks](../reference/runtime-apis.md)
+- [Socket Events and Sync](../reference/socket-events-and-sync.md)
+- [Troubleshooting](./troubleshooting.md)
+- [App Cookbook](./app-cookbook.md)
+- [Add a New App Integration](./add-a-new-app-integration.md)

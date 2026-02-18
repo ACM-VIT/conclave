@@ -29,6 +29,8 @@ You need to wire the app in five places:
 4. Meeting controls/layouts: open, close, and lock the app via `useApps()`.
 5. SFU socket handlers (`packages/sfu`): already generic, usually no per-app code needed.
 
+Before starting, confirm your app id and keep it unchanged. Most integration bugs are id mismatch issues.
+
 ## 1. Add app files in `packages/apps-sdk`
 
 Follow the same structure whiteboard uses:
@@ -236,6 +238,8 @@ No app-specific SFU handler is typically required. The handlers in `packages/sfu
 
 Keep `registerAppsHandlers(context)` wired in `packages/sfu/server/socket/registerConnectionHandlers.ts`.
 
+You only need server customization if your app requires behavior beyond generic state/sync/awareness relay (for example, custom media control arbitration).
+
 ## 9. Verification checklist
 
 1. Admin can open and close the new app on web and mobile.
@@ -255,3 +259,14 @@ If exports/paths drift, run `pnpm -C packages/apps-sdk run check:apps:fix`.
 - Forgetting mobile TS path aliases for new package subpaths.
 - Using `useApps`/`useAppDoc` outside `AppsProvider`.
 - Registering app only on one platform and expecting it on both.
+- Treating awareness as persistent data.
+
+## Related docs
+
+- [Docs Home](../README.md)
+- [Core Concepts](../reference/core-concepts.md)
+- [Runtime APIs and Hooks](../reference/runtime-apis.md)
+- [Permissions and Locking](../reference/permissions-and-locking.md)
+- [Socket Events and Sync](../reference/socket-events-and-sync.md)
+- [Troubleshooting](./troubleshooting.md)
+- [App Cookbook](./app-cookbook.md)
