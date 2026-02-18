@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-DEPLOY_BROWSER="false"
+DEPLOY_BROWSER_LOCAL="false"
 for arg in "$@"; do
   case $arg in
-    --with-browser)
-      DEPLOY_BROWSER="true"
-      shift
+    --with-browser|--with-browser-local)
+      DEPLOY_BROWSER_LOCAL="true"
       ;;
   esac
 done
@@ -46,6 +45,10 @@ if [[ "$HAS_UPSTASH" != "true" && -z "${REDIS_PASSWORD:-}" ]]; then
 fi
 
 COMPOSE=(docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE")
+HAS_REDIS_SERVICE="false"
+if "${COMPOSE[@]}" config --services | rg -x "redis" >/dev/null 2>&1; then
+  HAS_REDIS_SERVICE="true"
+fi
 
 trim() {
   local value="$1"
@@ -97,16 +100,13 @@ git -C "$ROOT_DIR" pull
 echo "Installing SFU dependencies..."
 npm -C "${ROOT_DIR}/packages/sfu" install
 
-if [[ "$DEPLOY_BROWSER" == "true" ]]; then
-  echo "Installing Browser Service dependencies..."
-  npm -C "${ROOT_DIR}/packages/shared-browser" install
-fi
-
 if [[ "$HAS_UPSTASH" == "true" ]]; then
   echo "Using Upstash Redis; skipping local Redis container."
-else
+elif [[ "$HAS_REDIS_SERVICE" == "true" ]]; then
   echo "Ensuring Redis is running..."
   "${COMPOSE[@]}" up -d redis
+else
+  echo "Redis service not present in ${COMPOSE_FILE}; skipping local Redis container."
 fi
 
 STATUS_A="$(status_json "$SFU_A_URL")"
@@ -219,24 +219,14 @@ fi
 echo "Rebuilding and starting ${ACTIVE_SERVICE}..."
 "${COMPOSE[@]}" up -d --build "$ACTIVE_SERVICE"
 
-if [[ "$DEPLOY_BROWSER" == "true" ]]; then
+if [[ "$DEPLOY_BROWSER_LOCAL" == "true" ]]; then
   echo ""
-  echo "=== Deploying Browser Service ==="
-  
-  BROWSER_DOCKER_DIR="${ROOT_DIR}/packages/shared-browser/docker"
-  if [[ -d "$BROWSER_DOCKER_DIR" ]]; then
-    echo "Building browser container image..."
-    docker build -t conclave-browser:latest "$BROWSER_DOCKER_DIR"
-  fi
-  
-  echo "Building and starting browser-service..."
-  "${COMPOSE[@]}" up -d --build browser-service
-  
-  echo "Browser service deployed."
+  echo "=== Deploying Browser Service (local) ==="
+  "${ROOT_DIR}/scripts/deploy-browser-service.sh"
 fi
 
 echo ""
 echo "SFU deploy complete."
-if [[ "$DEPLOY_BROWSER" == "true" ]]; then
+if [[ "$DEPLOY_BROWSER_LOCAL" == "true" ]]; then
   echo "Browser service deploy complete."
 fi

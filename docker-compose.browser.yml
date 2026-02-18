@@ -1,0 +1,21 @@
+services:
+  browser-service:
+    build:
+      context: ./packages/shared-browser
+    network_mode: "host"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      BROWSER_SERVICE_PORT: ${BROWSER_SERVICE_PORT:-3040}
+      NOVNC_PORT_START: ${NOVNC_PORT_START:-6080}
+      NOVNC_PORT_END: ${NOVNC_PORT_END:-6100}
+      BROWSER_HOST_ADDRESS: ${BROWSER_HOST_ADDRESS:-localhost}
+      BROWSER_PUBLIC_BASE_URL: ${BROWSER_PUBLIC_BASE_URL:-}
+      BROWSER_IMAGE_NAME: ${BROWSER_IMAGE_NAME:-conclave-browser:latest}
+      BROWSER_RTP_TARGET_HOST: ${BROWSER_RTP_TARGET_HOST:-}
+      BROWSER_AUDIO_TARGET_HOST: ${BROWSER_AUDIO_TARGET_HOST:-}
+      BROWSER_VIDEO_TARGET_HOST: ${BROWSER_VIDEO_TARGET_HOST:-}
+      SFU_HOST: ${SFU_HOST:-}
+      BROWSER_SERVICE_TOKEN: ${BROWSER_SERVICE_TOKEN:-}
+      CONTAINER_IDLE_TIMEOUT: ${CONTAINER_IDLE_TIMEOUT:-1800000}
+    restart: unless-stopped

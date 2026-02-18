@@ -24,6 +24,34 @@ export class ContainerManager {
         return roomId.replace(/[^a-zA-Z0-9_.-]/g, "-");
     }
 
+    private isLoopbackTarget(ip: string): boolean {
+        return (
+            ip === "127.0.0.1" ||
+            ip === "0.0.0.0" ||
+            ip === "::1" ||
+            ip === "localhost"
+        );
+    }
+
+    private resolveRtpTargetIp(kind: "audio" | "video", ip: string): string {
+        const overrideHost =
+            kind === "audio"
+                ? this.config.audioTargetHost || this.config.rtpTargetHost
+                : this.config.videoTargetHost ||
+                    this.config.rtpTargetHost ||
+                    this.config.audioTargetHost;
+
+        if (overrideHost) {
+            return overrideHost;
+        }
+
+        if (this.isLoopbackTarget(ip)) {
+            return "host.docker.internal";
+        }
+
+        return ip;
+    }
+
     private getAvailablePort(): number | null {
         for (let port = this.config.noVncPortStart; port <= this.config.noVncPortEnd; port++) {
             if (!this.usedPorts.has(port)) {
@@ -120,7 +148,7 @@ export class ContainerManager {
             try {
                 const existingContainer = this.docker.getContainer(containerName);
                 await existingContainer.remove({ force: true });
-            } catch (e) {
+            } catch {
             }
 
             const containerEnv = [
@@ -129,13 +157,7 @@ export class ContainerManager {
             ];
 
             if (audioTarget?.ip && audioTarget?.port) {
-                const isLoopback =
-                    audioTarget.ip === "127.0.0.1" ||
-                    audioTarget.ip === "0.0.0.0" ||
-                    audioTarget.ip === "::1" ||
-                    audioTarget.ip === "localhost";
-                const overrideHost = process.env.SFU_HOST || process.env.BROWSER_AUDIO_TARGET_HOST;
-                const targetIp = overrideHost || (isLoopback ? "host.docker.internal" : audioTarget.ip);
+                const targetIp = this.resolveRtpTargetIp("audio", audioTarget.ip);
                 containerEnv.push(`AUDIO_TARGET_IP=${targetIp}`);
                 containerEnv.push(`AUDIO_TARGET_PORT=${audioTarget.port}`);
                 containerEnv.push(`AUDIO_RTCP_PORT=${audioTarget.rtcpPort}`);
@@ -144,13 +166,7 @@ export class ContainerManager {
             }
 
             if (videoTarget?.ip && videoTarget?.port) {
-                const isLoopback =
-                    videoTarget.ip === "127.0.0.1" ||
-                    videoTarget.ip === "0.0.0.0" ||
-                    videoTarget.ip === "::1" ||
-                    videoTarget.ip === "localhost";
-                const overrideHost = process.env.SFU_HOST || process.env.BROWSER_VIDEO_TARGET_HOST || process.env.BROWSER_AUDIO_TARGET_HOST;
-                const targetIp = overrideHost || (isLoopback ? "host.docker.internal" : videoTarget.ip);
+                const targetIp = this.resolveRtpTargetIp("video", videoTarget.ip);
                 containerEnv.push(`VIDEO_TARGET_IP=${targetIp}`);
                 containerEnv.push(`VIDEO_TARGET_PORT=${videoTarget.port}`);
                 containerEnv.push(`VIDEO_RTCP_PORT=${videoTarget.rtcpPort}`);
