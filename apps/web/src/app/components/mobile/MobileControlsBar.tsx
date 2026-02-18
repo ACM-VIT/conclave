@@ -276,7 +276,7 @@ function MobileControlsBar({
                 </span>
               </button>
             )}
-            {(onOpenWhiteboard || onCloseWhiteboard) && (
+            {isAdmin && (onOpenWhiteboard || onCloseWhiteboard) && (
               <button
                 onClick={() => {
                   if (isWhiteboardActive) {

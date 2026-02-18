@@ -304,7 +304,6 @@ export function CallScreen({
     [optimalGrid.tileWidth, optimalGrid.tileHeight, isTablet]
   );
 
-  // Strip tile size for presentation mode - larger on iPad
   const stripTileSize = isTablet ? 120 : 88;
 
   const connectionLabel =
@@ -342,7 +341,6 @@ export function CallScreen({
           },
         ]}
       >
-        {/* Header */}
         <RNView style={styles.header}>
           <Pressable
             onPress={handleShareMeeting}
@@ -533,9 +531,9 @@ export function CallScreen({
         onToggleParticipants={onToggleParticipants}
         onToggleRoomLock={onToggleRoomLock}
         isWhiteboardActive={isWhiteboardActive}
-        showWhiteboardControl={isTablet}
+        showWhiteboardControl={isTablet && isAdmin}
         isAppsLocked={appsState.locked}
-        onToggleWhiteboard={handleToggleWhiteboard}
+        onToggleWhiteboard={isAdmin ? handleToggleWhiteboard : undefined}
         onToggleAppsLock={handleToggleAppsLock}
         onSendReaction={onSendReaction}
         onLeave={onLeave}

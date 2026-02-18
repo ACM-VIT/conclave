@@ -80,36 +80,36 @@ export function SettingsSheet({
       {...SHEET_THEME}
     >
       <View style={styles.sheetContent}>
-        {/* Drag Handle */}
         <RNView style={styles.dragHandle} />
 
-        {/* Icon Grid */}
         <RNView style={styles.grid}>
-          <Pressable
-            onPress={() =>
-              trigger(() => {
-                handleToggleWhiteboard();
-                handleDismiss();
-              })
-            }
-            style={({ pressed }) => [
-              styles.gridItem,
-              isWhiteboardActive && styles.gridItemActive,
-              pressed && styles.gridItemPressed,
-            ]}
-            accessibilityRole="button"
-            accessibilityLabel={
-              isWhiteboardActive ? "Close whiteboard" : "Open whiteboard"
-            }
-            accessibilityState={{ selected: isWhiteboardActive }}
-          >
-            <StickyNote
-              size={28}
-              color={SHEET_COLORS.text}
-              fill={isWhiteboardActive ? "rgba(254, 252, 217, 0.35)" : "transparent"}
-              strokeWidth={1.5}
-            />
-          </Pressable>
+          {isAdmin ? (
+            <Pressable
+              onPress={() =>
+                trigger(() => {
+                  handleToggleWhiteboard();
+                  handleDismiss();
+                })
+              }
+              style={({ pressed }) => [
+                styles.gridItem,
+                isWhiteboardActive && styles.gridItemActive,
+                pressed && styles.gridItemPressed,
+              ]}
+              accessibilityRole="button"
+              accessibilityLabel={
+                isWhiteboardActive ? "Close whiteboard" : "Open whiteboard"
+              }
+              accessibilityState={{ selected: isWhiteboardActive }}
+            >
+              <StickyNote
+                size={28}
+                color={SHEET_COLORS.text}
+                fill={isWhiteboardActive ? "rgba(254, 252, 217, 0.35)" : "transparent"}
+                strokeWidth={1.5}
+              />
+            </Pressable>
+          ) : null}
 
           <Pressable
             onPress={() => trigger(onToggleHandRaised)}

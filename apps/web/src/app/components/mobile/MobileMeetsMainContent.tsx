@@ -459,8 +459,8 @@ function MobileMeetsMainContent({
         isBrowserAudioMuted={isBrowserAudioMuted}
         onToggleBrowserAudio={onToggleBrowserAudio}
         isWhiteboardActive={isWhiteboardActive}
-        onOpenWhiteboard={handleOpenWhiteboard}
-        onCloseWhiteboard={handleCloseWhiteboard}
+        onOpenWhiteboard={isAdmin ? handleOpenWhiteboard : undefined}
+        onCloseWhiteboard={isAdmin ? handleCloseWhiteboard : undefined}
         isAppsLocked={appsState.locked}
         onToggleAppsLock={isAdmin ? handleToggleAppsLock : undefined}
       />
