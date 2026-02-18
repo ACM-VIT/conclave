@@ -445,7 +445,7 @@ export function JoinScreen({
                   }}
                   style={[styles.primaryButton, { backgroundColor: COLORS.primaryOrange }]}
                 >
-                  <Text numberOfLines={1} ellipsizeMode="tail" style={styles.primaryButtonText}>
+                  <Text numberOfLines={1} ellipsizeMode="clip" style={styles.primaryButtonText}>
                     LET'S GO
                   </Text>
                   <ArrowRight size={16} color="#FFFFFF" />
@@ -1265,8 +1265,7 @@ const styles = StyleSheet.create({
     color: COLORS.cream,
     fontSize: 14,
     fontFamily: "PolySans-Regular",
-    lineHeight: textLineHeight(14, 1.3),
-    paddingVertical: 0,
+    includeFontPadding: false,
   },
   joinDockArrow: {
     width: 36,
@@ -1281,7 +1280,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "rgba(254, 252, 217, 0.12)",
     backgroundColor: isIos ? "rgba(20, 20, 20, 0.35)" : "rgba(20, 20, 20, 0.85)",
-    minHeight: 52,
+    height: 52,
   },
   joinDockButton: {
     flexDirection: "row",
@@ -1419,7 +1418,7 @@ const styles = StyleSheet.create({
     alignSelf: "center",
     width: "100%",
     maxWidth: 360,
-    minHeight: 54,
+    height: 54,
     borderRadius: 999,
     borderWidth: 1,
     borderColor: "rgba(254, 252, 217, 0.12)",
@@ -1429,8 +1428,8 @@ const styles = StyleSheet.create({
     width: "100%",
     flexDirection: "row",
     alignItems: "center",
-    minHeight: 54,
-    paddingVertical: 8,
+    height: "100%",
+    paddingVertical: 0,
     paddingHorizontal: 18,
     borderRadius: 999,
     justifyContent: "center",
@@ -1443,9 +1442,9 @@ const styles = StyleSheet.create({
   },
   socialIconLeft: {
     position: "absolute",
-    left: 18,
+    left: 80,
     width: 24,
-    height: 24,
+    height: 50,
     alignItems: "center",
     justifyContent: "center",
   },
@@ -1467,11 +1466,13 @@ const styles = StyleSheet.create({
     letterSpacing: -0.2,
     fontFamily: "PolySans-Regular",
     color: COLORS.cream,
-    lineHeight: textLineHeight(14, 1.3),
-    paddingLeft: 36,
-    paddingRight: 12,
+    lineHeight: textLineHeight(13, 1.25),
+    includeFontPadding: false,
+    paddingLeft: 50,
     width: "100%",
     textAlign: "center",
+    marginTop: 5,
+    paddingTop: 13,
   },
   dividerRow: {
     flexDirection: "row",
@@ -1505,8 +1506,7 @@ const styles = StyleSheet.create({
     color: COLORS.cream,
     fontSize: 14,
     fontFamily: "PolySans-Regular",
-    lineHeight: textLineHeight(14, 1.3),
-    paddingVertical: 0,
+    includeFontPadding: false,
   },
   authActionPill: {
     borderRadius: 999,
@@ -1640,8 +1640,7 @@ const styles = StyleSheet.create({
     color: "rgba(254, 252, 217, 0.95)",
     fontSize: 12,
     fontFamily: "PolySans-Mono",
-    lineHeight: textLineHeight(12, 1.3),
-    paddingVertical: 0,
+    includeFontPadding: false,
   },
   mediaControlsContainer: {
     position: "absolute",
