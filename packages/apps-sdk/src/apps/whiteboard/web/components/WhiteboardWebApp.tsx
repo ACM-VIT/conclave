@@ -1,10 +1,10 @@
-import React, { useEffect, useMemo, useRef } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAppDoc } from "../../../../sdk/hooks/useAppDoc";
 import { useAppPresence } from "../../../../sdk/hooks/useAppPresence";
 import { useApps } from "../../../../sdk/hooks/useApps";
 import { useToolState } from "../../shared/hooks/useToolState";
 import { WhiteboardToolbar } from "./WhiteboardToolbar";
-import { WhiteboardCanvas } from "./WhiteboardCanvas";
+import { WhiteboardCanvas, type WhiteboardStressResult } from "./WhiteboardCanvas";
 import { useWhiteboardPages } from "../../shared/hooks/useWhiteboardPages";
 
 export function WhiteboardWebApp() {
@@ -21,10 +21,42 @@ export function WhiteboardWebApp() {
     deletePage,
   } = useWhiteboardPages(doc, { readOnly: isReadOnly });
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [stressToolsEnabled, setStressToolsEnabled] = useState(false);
+  const [stressTestRequestId, setStressTestRequestId] = useState<number | null>(null);
+  const [stressTestRunning, setStressTestRunning] = useState(false);
+  const [stressTestResult, setStressTestResult] = useState<WhiteboardStressResult | null>(null);
 
   const activePage = useMemo(() => {
     return pages.find((page) => page.id === activePageId) ?? pages[0];
   }, [pages, activePageId]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const mode = params.get("wbStress");
+    const enableViaQuery = Boolean(mode);
+    const enableInDev = process.env.NODE_ENV !== "production";
+    const shouldEnable = enableViaQuery || enableInDev;
+    if (!shouldEnable) return;
+
+    setStressToolsEnabled(true);
+    if (mode === "run" && !isReadOnly) {
+      setStressTestRunning(true);
+      setStressTestRequestId((value) => (value ?? 0) + 1);
+    }
+  }, [isReadOnly]);
+
+  const triggerStressTest = useCallback(() => {
+    if (isReadOnly || stressTestRunning) return;
+    setStressTestRunning(true);
+    setStressTestResult(null);
+    setStressTestRequestId((value) => (value ?? 0) + 1);
+  }, [isReadOnly, stressTestRunning]);
+
+  const handleStressTestComplete = useCallback((result: WhiteboardStressResult) => {
+    setStressTestResult(result);
+    setStressTestRunning(false);
+  }, []);
 
   useEffect(() => {
     const toolsByKey: Record<string, typeof tool> = {
@@ -151,6 +183,8 @@ export function WhiteboardWebApp() {
             user={user}
             canvasRef={canvasRef}
             onToolChange={setTool}
+            stressTestRequestId={stressTestRequestId}
+            onStressTestComplete={handleStressTestComplete}
           />
         </div>
 
@@ -184,6 +218,33 @@ export function WhiteboardWebApp() {
                   </svg>
                   Locked
                 </div>
+              ) : null}
+              {stressToolsEnabled ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={triggerStressTest}
+                    disabled={isReadOnly || stressTestRunning}
+                    className="rounded-lg px-3 py-2 text-[11px] font-medium text-[#d8d8d8] transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer hover:text-white"
+                    style={{
+                      backgroundColor: "#2b2b33",
+                      boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.08)",
+                    }}
+                  >
+                    {stressTestRunning ? "Running stress..." : "Run stress test"}
+                  </button>
+                  {stressTestResult ? (
+                    <div
+                      className="rounded-lg px-3 py-2 text-[10px] text-[#b8b8b8] whitespace-nowrap"
+                      style={{
+                        backgroundColor: "#232329",
+                        boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.04)",
+                      }}
+                    >
+                      {`${Math.round(stressTestResult.durationMs)}ms · ${stressTestResult.strokeCount} strokes · ${stressTestResult.queuedMoveEvents} moves`}
+                    </div>
+                  ) : null}
+                </>
               ) : null}
             </div>
 

@@ -29,6 +29,15 @@ export type WhiteboardCanvasProps = {
   user?: AppUser;
   canvasRef?: React.RefObject<HTMLCanvasElement | null>;
   onToolChange?: (tool: ToolKind) => void;
+  stressTestRequestId?: number | null;
+  onStressTestComplete?: (result: WhiteboardStressResult) => void;
+};
+
+export type WhiteboardStressResult = {
+  durationMs: number;
+  strokeCount: number;
+  frameCount: number;
+  queuedMoveEvents: number;
 };
 
 const useResizeObserver = (ref: React.RefObject<HTMLDivElement | null>, onResize: () => void) => {
@@ -342,11 +351,24 @@ export function WhiteboardCanvas({
   user,
   canvasRef,
   onToolChange,
+  stressTestRequestId,
+  onStressTestComplete,
 }: WhiteboardCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const internalCanvasRef = useRef<HTMLCanvasElement>(null);
   const resolvedCanvasRef = canvasRef ?? internalCanvasRef;
   const engineRef = useRef<ToolEngine | null>(null);
+  const cursorRafRef = useRef<number | null>(null);
+  const moveRafRef = useRef<number | null>(null);
+  const pendingMoveRef = useRef<{ x: number; y: number; pressure?: number } | null>(null);
+  const renderFrameRef = useRef<number | null>(null);
+  const renderQueuedRef = useRef(false);
+  const drawRef = useRef<() => void>(() => {});
+  const stressRunningRef = useRef(false);
+  const lastStressRequestRef = useRef<number | null>(null);
+  const canvasMetricsRef = useRef<{ pixelWidth: number; pixelHeight: number; scale: number } | null>(
+    null
+  );
   const elements = useWhiteboardElements(doc, pageId);
   const imageCacheRef = useRef<Map<string, HTMLImageElement>>(new Map());
   const latestCursorRef = useRef<{ x: number; y: number } | null>(null);
@@ -455,19 +477,38 @@ export function WhiteboardCanvas({
   const scheduleCursorSync = useCallback(
     (x: number, y: number) => {
       latestCursorRef.current = { x, y };
-      // Sync immediately — no RAF batching. Awareness is already lightweight.
-      awareness.setLocalStateField("cursor", { x, y });
+      if (cursorRafRef.current !== null) return;
+      cursorRafRef.current = requestAnimationFrame(() => {
+        cursorRafRef.current = null;
+        const cursor = latestCursorRef.current;
+        if (!cursor) return;
+        awareness.setLocalStateField("cursor", cursor);
+      });
     },
     [awareness]
   );
 
   const clearCursor = useCallback(() => {
+    if (cursorRafRef.current !== null) {
+      cancelAnimationFrame(cursorRafRef.current);
+      cursorRafRef.current = null;
+    }
     latestCursorRef.current = null;
     awareness.setLocalStateField("cursor", null);
   }, [awareness]);
 
   useEffect(() => {
     return () => {
+      if (moveRafRef.current !== null) {
+        cancelAnimationFrame(moveRafRef.current);
+        moveRafRef.current = null;
+      }
+      pendingMoveRef.current = null;
+      if (renderFrameRef.current !== null) {
+        cancelAnimationFrame(renderFrameRef.current);
+        renderFrameRef.current = null;
+      }
+      renderQueuedRef.current = false;
       clearCursor();
     };
   }, [clearCursor]);
@@ -585,16 +626,44 @@ export function WhiteboardCanvas({
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [locked, editingElementId, selectedId, tool, elements, startEditingById, doc, pageId]);
 
-  const render = useCallback(() => {
+  const flushPendingMove = useCallback(() => {
+    const point = pendingMoveRef.current;
+    pendingMoveRef.current = null;
+    moveRafRef.current = null;
+    if (!point || locked) return;
+    engineRef.current?.onPointerMove(point);
+  }, [locked]);
+
+  const queuePointerMove = useCallback(
+    (point: { x: number; y: number; pressure?: number }) => {
+      pendingMoveRef.current = point;
+      if (moveRafRef.current !== null) return;
+      moveRafRef.current = requestAnimationFrame(flushPendingMove);
+    },
+    [flushPendingMove]
+  );
+
+  const drawCanvas = useCallback(() => {
     const canvas = resolvedCanvasRef.current;
     const container = containerRef.current;
     if (!canvas || !container) return;
     const rect = container.getBoundingClientRect();
     const scale = window.devicePixelRatio || 1;
-    canvas.width = rect.width * scale;
-    canvas.height = rect.height * scale;
-    canvas.style.width = `${rect.width}px`;
-    canvas.style.height = `${rect.height}px`;
+    const pixelWidth = Math.max(1, Math.round(rect.width * scale));
+    const pixelHeight = Math.max(1, Math.round(rect.height * scale));
+    const previousMetrics = canvasMetricsRef.current;
+    if (
+      !previousMetrics ||
+      previousMetrics.pixelWidth !== pixelWidth ||
+      previousMetrics.pixelHeight !== pixelHeight ||
+      previousMetrics.scale !== scale
+    ) {
+      canvas.width = pixelWidth;
+      canvas.height = pixelHeight;
+      canvas.style.width = `${rect.width}px`;
+      canvas.style.height = `${rect.height}px`;
+      canvasMetricsRef.current = { pixelWidth, pixelHeight, scale };
+    }
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
     ctx.setTransform(scale, 0, 0, scale, 0, 0);
@@ -620,11 +689,116 @@ export function WhiteboardCanvas({
     renderCanvas(ctx, renderList, rect.width, rect.height, imageCacheRef.current);
   }, [elements, editingElementId, imageVersion, stickyScrollOffsets]);
 
-  useResizeObserver(containerRef, render);
+  useEffect(() => {
+    drawRef.current = drawCanvas;
+  }, [drawCanvas]);
+
+  const flushScheduledRender = useCallback(() => {
+    renderFrameRef.current = null;
+    if (!renderQueuedRef.current) return;
+    renderQueuedRef.current = false;
+    drawRef.current();
+  }, []);
+
+  const scheduleRender = useCallback(() => {
+    renderQueuedRef.current = true;
+    if (renderFrameRef.current !== null) return;
+    renderFrameRef.current = requestAnimationFrame(flushScheduledRender);
+  }, [flushScheduledRender]);
+
+  useResizeObserver(containerRef, scheduleRender);
 
   useEffect(() => {
-    render();
-  }, [render]);
+    scheduleRender();
+  }, [scheduleRender, drawCanvas]);
+
+  const runStressTest = useCallback(async () => {
+    if (stressRunningRef.current || locked) return;
+    const engine = engineRef.current;
+    const container = containerRef.current;
+    if (!engine || !container) return;
+
+    stressRunningRef.current = true;
+    const previousTool = tool;
+    const strokeCount = 8;
+    const framesPerStroke = 16;
+    const movesPerFrame = 14;
+    let queuedMoveEvents = 0;
+    const startTime = performance.now();
+
+    try {
+      engine.setTool("pen");
+      const rect = container.getBoundingClientRect();
+      const centerX = rect.width * 0.5;
+      const centerY = rect.height * 0.5;
+      const radius = Math.max(24, Math.min(rect.width, rect.height) * 0.22);
+
+      for (let strokeIndex = 0; strokeIndex < strokeCount; strokeIndex += 1) {
+        const startAngle = (Math.PI * 2 * strokeIndex) / strokeCount;
+        const startPoint = {
+          x: centerX + Math.cos(startAngle) * radius,
+          y: centerY + Math.sin(startAngle) * radius,
+          pressure: 0.6,
+        };
+        engine.onPointerDown(startPoint);
+        scheduleCursorSync(startPoint.x, startPoint.y);
+
+        for (let frame = 0; frame < framesPerStroke; frame += 1) {
+          for (let burst = 0; burst < movesPerFrame; burst += 1) {
+            const moveIndex = frame * movesPerFrame + burst + 1;
+            const t = moveIndex / (framesPerStroke * movesPerFrame);
+            const angle = startAngle + t * Math.PI * 3.6;
+            const wobble = Math.sin((strokeIndex + 1) * t * Math.PI * 4) * 12;
+            const point = {
+              x: centerX + Math.cos(angle) * (radius + wobble),
+              y: centerY + Math.sin(angle) * (radius - wobble * 0.4),
+              pressure: 0.25 + ((moveIndex + strokeIndex) % 5) * 0.15,
+            };
+            queuePointerMove(point);
+            queuedMoveEvents += 1;
+          }
+
+          await new Promise<void>((resolve) => {
+            requestAnimationFrame(() => resolve());
+          });
+        }
+
+        flushPendingMove();
+        engine.onPointerUp();
+      }
+
+      engine.setTool(previousTool);
+      setSelectedId(engine.getSelectedId() ?? null);
+      clearCursor();
+      scheduleRender();
+
+      onStressTestComplete?.({
+        durationMs: performance.now() - startTime,
+        strokeCount,
+        frameCount: strokeCount * framesPerStroke,
+        queuedMoveEvents,
+      });
+    } finally {
+      engine.setTool(previousTool);
+      stressRunningRef.current = false;
+    }
+  }, [
+    clearCursor,
+    flushPendingMove,
+    locked,
+    onStressTestComplete,
+    queuePointerMove,
+    scheduleCursorSync,
+    scheduleRender,
+    tool,
+  ]);
+
+  useEffect(() => {
+    if (stressTestRequestId == null) return;
+    if (stressTestRequestId === lastStressRequestRef.current) return;
+    lastStressRequestRef.current = stressTestRequestId;
+    void runStressTest();
+  }, [runStressTest, stressTestRequestId]);
 
   const handlePointerDown = useCallback(
     (event: React.PointerEvent<HTMLCanvasElement>) => {
@@ -634,6 +808,11 @@ export function WhiteboardCanvas({
       const rect = event.currentTarget.getBoundingClientRect();
       const point = { x: event.clientX - rect.left, y: event.clientY - rect.top, pressure: event.pressure };
       event.currentTarget.setPointerCapture(event.pointerId);
+      pendingMoveRef.current = null;
+      if (moveRafRef.current !== null) {
+        cancelAnimationFrame(moveRafRef.current);
+        moveRafRef.current = null;
+      }
       if (!locked) {
         if (tool === "select" && selectedId) {
           const selectedElement = elements.find((element) => element.id === selectedId) ?? null;
@@ -748,11 +927,11 @@ export function WhiteboardCanvas({
           scheduleCursorSync(point.x, point.y);
           return;
         }
-        engineRef.current?.onPointerMove(point);
+        queuePointerMove(point);
       }
       scheduleCursorSync(point.x, point.y);
     },
-    [doc, locked, pageId, scheduleCursorSync]
+    [doc, locked, pageId, queuePointerMove, scheduleCursorSync]
   );
 
   const handlePointerUp = useCallback((event: React.PointerEvent<HTMLCanvasElement>) => {
@@ -774,11 +953,12 @@ export function WhiteboardCanvas({
       return;
     }
     if (!locked) {
+      flushPendingMove();
       engineRef.current?.onPointerUp();
       setSelectedId(engineRef.current?.getSelectedId() ?? null);
     }
     clearCursor();
-  }, [locked, clearCursor]);
+  }, [locked, clearCursor, flushPendingMove]);
 
   const handlePointerLeave = useCallback(
     (event: React.PointerEvent<HTMLCanvasElement>) => {
