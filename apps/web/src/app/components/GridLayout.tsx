@@ -2,7 +2,6 @@
 
 import { Ghost, Hand, MicOff } from "lucide-react";
 import { memo, useEffect, useRef } from "react";
-import { useSmartParticipantOrder } from "../hooks/useSmartParticipantOrder";
 import type { Participant } from "../lib/types";
 import { isSystemUserId } from "../lib/utils";
 import ParticipantVideo from "./ParticipantVideo";
@@ -57,11 +56,8 @@ function GridLayout({
     }
   }, [localStream]);
 
-  const visibleParticipants = useSmartParticipantOrder(
-    Array.from(participants.values()).filter(
-      (participant) => !isSystemUserId(participant.userId)
-    ),
-    activeSpeakerId
+  const visibleParticipants = Array.from(participants.values()).filter(
+    (participant) => !isSystemUserId(participant.userId)
   );
   const totalParticipants = visibleParticipants.length + 1;
 
