@@ -31,6 +31,8 @@ function MobileParticipantsPanel({
     (participant) => !isSystemUserId(participant.userId)
   );
   const pendingArray = Array.from(pendingUsers.entries());
+  const effectiveHostUserId =
+    hostUserId ?? (isAdmin ? currentUserId : null);
   const formatName = (value: string, maxLength = 18) =>
     truncateDisplayName(value, maxLength);
 
@@ -118,7 +120,7 @@ function MobileParticipantsPanel({
                     {formatName(getDisplayName(currentUserId), 16)}
                   </span>
                   <span className="text-[9px] text-[#F95F4A]/60 uppercase">(You)</span>
-                  {hostUserId === currentUserId && (
+                  {effectiveHostUserId === currentUserId && (
                     <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-amber-300/30 bg-amber-400/10 px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-amber-200">
                       <Crown className="h-2.5 w-2.5" />
                       Host
@@ -147,7 +149,7 @@ function MobileParticipantsPanel({
                     <span className="text-sm text-[#FEFCD9] truncate block">
                       {formatName(getDisplayName(participant.userId), 16)}
                     </span>
-                    {hostUserId === participant.userId && (
+                    {effectiveHostUserId === participant.userId && (
                       <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-amber-300/30 bg-amber-400/10 px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-amber-200">
                         <Crown className="h-2.5 w-2.5" />
                         Host

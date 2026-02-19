@@ -203,9 +203,10 @@ export default function MeetsClient({
     currentUser && !currentUser.id?.startsWith("guest-")
   );
 
+  const sessionId = refs.sessionIdRef.current;
   const userEmail = currentUser?.name || currentUser?.email || currentUser?.id || "guest";
-  const userKey = currentUser?.email || currentUser?.id || "guest";
-  const userId = `${userKey}#${refs.sessionIdRef.current}`;
+  const userKey = currentUser?.email || currentUser?.id || `guest-${sessionId}`;
+  const userId = `${userKey}#${sessionId}`;
 
   const {
     setDisplayNames,

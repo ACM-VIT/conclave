@@ -90,6 +90,8 @@ function ParticipantsPanel({
     useState<string | null>(null);
   const [isPendingExpanded, setIsPendingExpanded] = useState(true);
   const filteredRooms = availableRooms.filter((room) => room.id !== roomId);
+  const effectiveHostUserId =
+    hostUserId ?? (isAdmin ? currentUserId : null);
 
   const getEmailFromUserId = (userId: string): string => {
     return userId.split("#")[0] || userId;
@@ -265,7 +267,9 @@ function ParticipantsPanel({
       <div className="flex-1 min-h-0 overflow-y-auto px-2 py-2 space-y-0.5">
         {displayParticipants.map((p) => {
           const isMe = p.userId === currentUserId;
-          const isHost = Boolean(hostUserId && p.userId === hostUserId);
+          const isHost = Boolean(
+            effectiveHostUserId && p.userId === effectiveHostUserId
+          );
           const displayName = getDisplayName(p.userId);
           const userEmail = getEmailFromUserId(p.userId);
           const hasScreenShare =
