@@ -35,6 +35,7 @@ export function WhiteboardWebApp() {
       "5": "rect",
       "6": "ellipse",
       "7": "line",
+      a: "arrow",
       "8": "text",
       "9": "sticky",
     };
@@ -46,6 +47,7 @@ export function WhiteboardWebApp() {
       Digit5: "rect",
       Digit6: "ellipse",
       Digit7: "line",
+      KeyA: "arrow",
       Digit8: "text",
       Digit9: "sticky",
       Numpad1: "select",

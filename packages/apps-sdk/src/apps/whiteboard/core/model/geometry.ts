@@ -1,6 +1,7 @@
 import type { Point, WhiteboardElement } from "./types";
 
 export type Bounds = { x: number; y: number; width: number; height: number };
+const ROTATION_EPSILON = 0.0001;
 
 export const getBoundsForElement = (element: WhiteboardElement): Bounds => {
   switch (element.type) {
@@ -60,6 +61,43 @@ const normalizeBounds = (
   };
 };
 
+const getRotatedBounds = (bounds: Bounds, rotation: number): Bounds => {
+  if (Math.abs(rotation) < ROTATION_EPSILON) return bounds;
+  const centerX = bounds.x + bounds.width / 2;
+  const centerY = bounds.y + bounds.height / 2;
+  const corners = [
+    { x: bounds.x, y: bounds.y },
+    { x: bounds.x + bounds.width, y: bounds.y },
+    { x: bounds.x, y: bounds.y + bounds.height },
+    { x: bounds.x + bounds.width, y: bounds.y + bounds.height },
+  ].map((corner) => {
+    const dx = corner.x - centerX;
+    const dy = corner.y - centerY;
+    return {
+      x: centerX + dx * Math.cos(rotation) - dy * Math.sin(rotation),
+      y: centerY + dx * Math.sin(rotation) + dy * Math.cos(rotation),
+    };
+  });
+
+  const xs = corners.map((corner) => corner.x);
+  const ys = corners.map((corner) => corner.y);
+  const minX = Math.min(...xs);
+  const maxX = Math.max(...xs);
+  const minY = Math.min(...ys);
+  const maxY = Math.max(...ys);
+  return {
+    x: minX,
+    y: minY,
+    width: maxX - minX,
+    height: maxY - minY,
+  };
+};
+
+const getElementRotation = (element: WhiteboardElement) => {
+  if (!("rotation" in element)) return 0;
+  return element.rotation ?? 0;
+};
+
 export const containsPoint = (bounds: Bounds, point: Point, padding = 0) => {
   return (
     point.x >= bounds.x - padding &&
@@ -75,7 +113,9 @@ export const hitTestElement = (
   padding = 8
 ): boolean => {
   const bounds = getBoundsForElement(element);
-  return containsPoint(bounds, point, padding);
+  const rotation = getElementRotation(element);
+  const hitBounds = getRotatedBounds(bounds, rotation);
+  return containsPoint(hitBounds, point, padding);
 };
 
 export const translateElement = (

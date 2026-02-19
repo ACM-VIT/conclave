@@ -66,6 +66,13 @@ const LineIcon = () => (
   </Icon>
 );
 
+const ArrowIcon = () => (
+  <Icon>
+    <line x1="4" y1="19" x2="20" y2="3" />
+    <polyline points="13 3 20 3 20 10" />
+  </Icon>
+);
+
 const TextIcon = () => (
   <Icon>
     <polyline points="4 7 4 4 20 4 20 7" />
@@ -97,6 +104,7 @@ const TOOL_ICONS: Record<ToolKind, React.FC> = {
   rect: RectIcon,
   ellipse: EllipseIcon,
   line: LineIcon,
+  arrow: ArrowIcon,
   text: TextIcon,
   sticky: StickyIcon,
 };
@@ -109,6 +117,7 @@ const TOOL_KEYS: Record<ToolKind, string> = {
   rect: "5",
   ellipse: "6",
   line: "7",
+  arrow: "A",
   text: "8",
   sticky: "9",
 };
@@ -121,6 +130,7 @@ const TOOL_ORDER: ToolKind[] = [
   "rect",
   "ellipse",
   "line",
+  "arrow",
   "text",
   "sticky",
 ];
@@ -356,7 +366,7 @@ export function WhiteboardToolbar({
 }) {
   const pointerTools: ToolKind[] = ["select"];
   const drawTools: ToolKind[] = ["pen", "highlighter", "eraser"];
-  const shapeTools: ToolKind[] = ["rect", "ellipse", "line"];
+  const shapeTools: ToolKind[] = ["rect", "ellipse", "line", "arrow"];
   const insertTools: ToolKind[] = ["text", "sticky"];
 
   return (

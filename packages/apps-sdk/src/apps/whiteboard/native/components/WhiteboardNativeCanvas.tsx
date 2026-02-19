@@ -90,7 +90,10 @@ const getResizeMinimums = (element: ResizableElement) => {
   if (element.type === "image") {
     return { minWidth: 16, minHeight: 16 };
   }
-  if (element.type === "shape" && element.shape === "line") {
+  if (
+    element.type === "shape" &&
+    (element.shape === "line" || element.shape === "arrow")
+  ) {
     return { minWidth: 8, minHeight: 8 };
   }
   return { minWidth: 12, minHeight: 12 };
@@ -342,6 +345,83 @@ const renderElement = (element: WhiteboardElement) => {
               opacity={0.62}
               strokeWidth={Math.max(1, element.strokeWidth * 0.85)}
             />
+          </React.Fragment>
+        );
+      }
+
+      if (element.shape === "arrow") {
+        const start = { x: element.x, y: element.y };
+        const end = { x: element.x + element.width, y: element.y + element.height };
+        const dx = end.x - start.x;
+        const dy = end.y - start.y;
+        const length = Math.hypot(dx, dy);
+        const angle = Math.atan2(dy, dx);
+        const targetHeadLength = Math.min(38, Math.max(12, element.strokeWidth * 3.6));
+        const headLength = Math.min(length * 0.45, targetHeadLength);
+        const spread = Math.PI / 5.8;
+        const left = {
+          x: end.x - headLength * Math.cos(angle - spread),
+          y: end.y - headLength * Math.sin(angle - spread),
+        };
+        const right = {
+          x: end.x - headLength * Math.cos(angle + spread),
+          y: end.y - headLength * Math.sin(angle + spread),
+        };
+        const roughStart = { x: start.x + rough.x, y: start.y + rough.y };
+        const roughEnd = { x: end.x + rough.x, y: end.y + rough.y };
+        const roughLeft = { x: left.x + rough.x, y: left.y + rough.y };
+        const roughRight = { x: right.x + rough.x, y: right.y + rough.y };
+
+        return (
+          <React.Fragment key={element.id}>
+            <Line
+              p1={start}
+              p2={end}
+              color={element.strokeColor}
+              strokeWidth={element.strokeWidth}
+            />
+            {length > 0 ? (
+              <>
+                <Line
+                  p1={end}
+                  p2={left}
+                  color={element.strokeColor}
+                  strokeWidth={element.strokeWidth}
+                />
+                <Line
+                  p1={end}
+                  p2={right}
+                  color={element.strokeColor}
+                  strokeWidth={element.strokeWidth}
+                />
+              </>
+            ) : null}
+
+            <Line
+              p1={roughStart}
+              p2={roughEnd}
+              color={element.strokeColor}
+              opacity={0.62}
+              strokeWidth={Math.max(1, element.strokeWidth * 0.85)}
+            />
+            {length > 0 ? (
+              <>
+                <Line
+                  p1={roughEnd}
+                  p2={roughLeft}
+                  color={element.strokeColor}
+                  opacity={0.62}
+                  strokeWidth={Math.max(1, element.strokeWidth * 0.85)}
+                />
+                <Line
+                  p1={roughEnd}
+                  p2={roughRight}
+                  color={element.strokeColor}
+                  opacity={0.62}
+                  strokeWidth={Math.max(1, element.strokeWidth * 0.85)}
+                />
+              </>
+            ) : null}
           </React.Fragment>
         );
       }

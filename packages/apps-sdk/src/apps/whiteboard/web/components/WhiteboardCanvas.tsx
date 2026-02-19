@@ -48,6 +48,9 @@ const isEditableElement = (element: WhiteboardElement): element is EditableEleme
 const FONT_STACK = 'Virgil, "Segoe Print", "Comic Sans MS", "Marker Felt", cursive';
 const STICKY_TEXT_INSET = 8;
 const RESIZE_HANDLE_HIT_RADIUS = 8;
+const ROTATE_HANDLE_OFFSET = 26;
+const ROTATE_HANDLE_HIT_RADIUS = 10;
+const ROTATION_EPSILON = 0.0001;
 
 const measureTextBounds = (text: string, fontSize: number) => {
   const lines = text.split("\n");
@@ -88,7 +91,14 @@ const getMaxStickyScroll = (element: StickyElement) => {
 };
 
 type ResizeHandle = "nw" | "ne" | "sw" | "se";
-type ResizableElement = Extract<WhiteboardElement, { type: "shape" | "sticky" | "image" }>;
+type ResizableElement = Extract<
+  WhiteboardElement,
+  { type: "shape" | "sticky" | "image" | "text" | "stroke" }
+>;
+type RotatableElement = Extract<
+  WhiteboardElement,
+  { type: "shape" | "sticky" | "image" | "text" | "stroke" }
+>;
 
 type ResizeSession = {
   elementId: string;
@@ -97,13 +107,91 @@ type ResizeSession = {
   startElement: ResizableElement;
 };
 
+type RotateSession = {
+  elementId: string;
+  center: { x: number; y: number };
+  startPointerAngle: number;
+  startRotation: number;
+  startElement: RotatableElement;
+};
+
 const isResizableElement = (
   element: WhiteboardElement | null
 ): element is ResizableElement =>
   Boolean(
     element &&
-      (element.type === "shape" || element.type === "sticky" || element.type === "image")
+      (element.type === "shape" ||
+        element.type === "sticky" ||
+        element.type === "image" ||
+        element.type === "text" ||
+        element.type === "stroke")
   );
+
+const isRotatableElement = (
+  element: WhiteboardElement | null
+): element is RotatableElement =>
+  Boolean(
+    element &&
+      (element.type === "shape" ||
+        element.type === "sticky" ||
+        element.type === "image" ||
+        element.type === "text" ||
+        element.type === "stroke")
+  );
+
+const normalizeRotation = (rotation: number) => Math.atan2(Math.sin(rotation), Math.cos(rotation));
+
+const getElementRotation = (element: WhiteboardElement | null) => {
+  if (!element || !("rotation" in element)) return 0;
+  return element.rotation ?? 0;
+};
+
+const getRotatedBounds = (bounds: Bounds, rotation: number): Bounds => {
+  if (Math.abs(rotation) < ROTATION_EPSILON) return bounds;
+  const centerX = bounds.x + bounds.width / 2;
+  const centerY = bounds.y + bounds.height / 2;
+  const corners = [
+    { x: bounds.x, y: bounds.y },
+    { x: bounds.x + bounds.width, y: bounds.y },
+    { x: bounds.x, y: bounds.y + bounds.height },
+    { x: bounds.x + bounds.width, y: bounds.y + bounds.height },
+  ].map((corner) => {
+    const dx = corner.x - centerX;
+    const dy = corner.y - centerY;
+    return {
+      x: centerX + dx * Math.cos(rotation) - dy * Math.sin(rotation),
+      y: centerY + dx * Math.sin(rotation) + dy * Math.cos(rotation),
+    };
+  });
+  const xs = corners.map((corner) => corner.x);
+  const ys = corners.map((corner) => corner.y);
+  const minX = Math.min(...xs);
+  const maxX = Math.max(...xs);
+  const minY = Math.min(...ys);
+  const maxY = Math.max(...ys);
+  return {
+    x: minX,
+    y: minY,
+    width: maxX - minX,
+    height: maxY - minY,
+  };
+};
+
+const getSelectionBoundsForElement = (element: WhiteboardElement): Bounds => {
+  const bounds = getBoundsForElement(element);
+  if (!isRotatableElement(element)) return bounds;
+  return getRotatedBounds(bounds, getElementRotation(element));
+};
+
+const getRotateHandlePoint = (bounds: Bounds) => ({
+  x: bounds.x + bounds.width / 2,
+  y: bounds.y - ROTATE_HANDLE_OFFSET,
+});
+
+const isPointOnRotateHandle = (bounds: Bounds, point: { x: number; y: number }) => {
+  const handle = getRotateHandlePoint(bounds);
+  return Math.hypot(point.x - handle.x, point.y - handle.y) <= ROTATE_HANDLE_HIT_RADIUS;
+};
 
 const getResizeHandleAtPoint = (
   bounds: Bounds,
@@ -127,13 +215,22 @@ const getResizeHandleAtPoint = (
 };
 
 const getResizeMinimums = (element: ResizeSession["startElement"]) => {
+  if (element.type === "text") {
+    return { minWidth: 24, minHeight: Math.max(12, Math.round(element.fontSize * 0.8)) };
+  }
+  if (element.type === "stroke") {
+    return { minWidth: 8, minHeight: 8 };
+  }
   if (element.type === "sticky") {
     return { minWidth: 60, minHeight: 40 };
   }
   if (element.type === "image") {
     return { minWidth: 16, minHeight: 16 };
   }
-  if (element.type === "shape" && element.shape === "line") {
+  if (
+    element.type === "shape" &&
+    (element.shape === "line" || element.shape === "arrow")
+  ) {
     return { minWidth: 8, minHeight: 8 };
   }
   return { minWidth: 12, minHeight: 12 };
@@ -176,6 +273,7 @@ const getResizedBounds = (
 
 const applyResizedBounds = (
   element: ResizeSession["startElement"],
+  startBounds: Bounds,
   bounds: Bounds
 ): ResizeSession["startElement"] => {
   if (element.type === "shape") {
@@ -187,6 +285,41 @@ const applyResizedBounds = (
       y: heightDirection >= 0 ? bounds.y : bounds.y + bounds.height,
       width: bounds.width * widthDirection,
       height: bounds.height * heightDirection,
+    };
+  }
+
+  if (element.type === "text") {
+    const widthScale = startBounds.width > 0 ? bounds.width / startBounds.width : 1;
+    const heightScale = startBounds.height > 0 ? bounds.height / startBounds.height : 1;
+    const fontScale = Math.max(0.2, (widthScale + heightScale) / 2);
+    const nextFontSize = Math.max(8, Math.round(element.fontSize * fontScale));
+    const measured = measureTextBounds(element.text.length > 0 ? element.text : " ", nextFontSize);
+    return {
+      ...element,
+      x: bounds.x,
+      y: bounds.y,
+      fontSize: nextFontSize,
+      width: measured.width,
+      height: measured.height,
+    };
+  }
+
+  if (element.type === "stroke") {
+    const sourceWidth = startBounds.width;
+    const sourceHeight = startBounds.height;
+    return {
+      ...element,
+      points: element.points.map((point) => {
+        const normalizedX =
+          sourceWidth > 0 ? (point.x - startBounds.x) / sourceWidth : 0.5;
+        const normalizedY =
+          sourceHeight > 0 ? (point.y - startBounds.y) / sourceHeight : 0.5;
+        return {
+          ...point,
+          x: bounds.x + normalizedX * bounds.width,
+          y: bounds.y + normalizedY * bounds.height,
+        };
+      }),
     };
   }
 
@@ -218,6 +351,7 @@ export function WhiteboardCanvas({
   const imageCacheRef = useRef<Map<string, HTMLImageElement>>(new Map());
   const latestCursorRef = useRef<{ x: number; y: number } | null>(null);
   const resizeSessionRef = useRef<ResizeSession | null>(null);
+  const rotateSessionRef = useRef<RotateSession | null>(null);
   const textEditorRef = useRef<HTMLTextAreaElement>(null);
   const [imageVersion, setImageVersion] = useState(0);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -272,11 +406,6 @@ export function WhiteboardCanvas({
       return next;
     });
   }, [elements]);
-
-  useEffect(() => {
-    setEditingElementId(null);
-    setEditingText("");
-  }, [pageId]);
 
   useEffect(() => {
     const state = awareness.getLocalState() ?? {};
@@ -508,19 +637,39 @@ export function WhiteboardCanvas({
       if (!locked) {
         if (tool === "select" && selectedId) {
           const selectedElement = elements.find((element) => element.id === selectedId) ?? null;
-          if (isResizableElement(selectedElement)) {
-            const selectedBounds = getBoundsForElement(selectedElement);
-            const handle = getResizeHandleAtPoint(selectedBounds, point);
-            if (handle) {
+          if (selectedElement) {
+            const selectedBounds = getSelectionBoundsForElement(selectedElement);
+            if (isRotatableElement(selectedElement) && isPointOnRotateHandle(selectedBounds, point)) {
+              const center = {
+                x: selectedBounds.x + selectedBounds.width / 2,
+                y: selectedBounds.y + selectedBounds.height / 2,
+              };
               event.preventDefault();
-              resizeSessionRef.current = {
+              rotateSessionRef.current = {
                 elementId: selectedElement.id,
-                handle,
-                startBounds: selectedBounds,
+                center,
+                startPointerAngle: Math.atan2(point.y - center.y, point.x - center.x),
+                startRotation: getElementRotation(selectedElement),
                 startElement: selectedElement,
               };
               scheduleCursorSync(point.x, point.y);
               return;
+            }
+
+            const canResize = isResizableElement(selectedElement);
+            if (canResize) {
+              const handle = getResizeHandleAtPoint(selectedBounds, point);
+              if (handle) {
+                event.preventDefault();
+                resizeSessionRef.current = {
+                  elementId: selectedElement.id,
+                  handle,
+                  startBounds: selectedBounds,
+                  startElement: selectedElement,
+                };
+                scheduleCursorSync(point.x, point.y);
+                return;
+              }
             }
           }
         }
@@ -557,6 +706,27 @@ export function WhiteboardCanvas({
       const rect = event.currentTarget.getBoundingClientRect();
       const point = { x: event.clientX - rect.left, y: event.clientY - rect.top, pressure: event.pressure };
       if (!locked && event.buttons) {
+        const rotateSession = rotateSessionRef.current;
+        if (rotateSession) {
+          event.preventDefault();
+          const pointerAngle = Math.atan2(
+            point.y - rotateSession.center.y,
+            point.x - rotateSession.center.x
+          );
+          const delta = pointerAngle - rotateSession.startPointerAngle;
+          const unsnappedRotation = normalizeRotation(rotateSession.startRotation + delta);
+          const snapStep = Math.PI / 12;
+          const nextRotation = event.shiftKey
+            ? Math.round(unsnappedRotation / snapStep) * snapStep
+            : unsnappedRotation;
+          updateElement(doc, pageId, {
+            ...rotateSession.startElement,
+            rotation: normalizeRotation(nextRotation),
+          });
+          setSelectedId(rotateSession.elementId);
+          scheduleCursorSync(point.x, point.y);
+          return;
+        }
         const resizeSession = resizeSessionRef.current;
         if (resizeSession) {
           event.preventDefault();
@@ -568,7 +738,11 @@ export function WhiteboardCanvas({
             minWidth,
             minHeight
           );
-          const nextElement = applyResizedBounds(resizeSession.startElement, nextBounds);
+          const nextElement = applyResizedBounds(
+            resizeSession.startElement,
+            resizeSession.startBounds,
+            nextBounds
+          );
           updateElement(doc, pageId, nextElement);
           setSelectedId(resizeSession.elementId);
           scheduleCursorSync(point.x, point.y);
@@ -584,6 +758,13 @@ export function WhiteboardCanvas({
   const handlePointerUp = useCallback((event: React.PointerEvent<HTMLCanvasElement>) => {
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    const rotateSession = rotateSessionRef.current;
+    if (rotateSession) {
+      rotateSessionRef.current = null;
+      setSelectedId(rotateSession.elementId);
+      clearCursor();
+      return;
     }
     const resizeSession = resizeSessionRef.current;
     if (resizeSession) {
@@ -749,13 +930,31 @@ export function WhiteboardCanvas({
   }, [editingElement, editingTextBounds]);
 
   const selectionBounds = useMemo(
-    () => (selectedElement ? getBoundsForElement(selectedElement) : null),
+    () => (selectedElement ? getSelectionBoundsForElement(selectedElement) : null),
+    [selectedElement]
+  );
+  const selectedRotation = useMemo(
+    () => getElementRotation(selectedElement),
     [selectedElement]
   );
   const canResizeSelectedElement = useMemo(
     () => isResizableElement(selectedElement),
     [selectedElement]
   );
+  const canRotateSelectedElement = useMemo(
+    () => isRotatableElement(selectedElement),
+    [selectedElement]
+  );
+  const rotateHandleOffsetTop = 4 - ROTATE_HANDLE_OFFSET;
+  const rotateHandleCenterX = selectionBounds
+    ? (Math.max(1, selectionBounds.width) + 8) / 2
+    : 0;
+  const rotateHandleConnectorTop = rotateHandleOffsetTop + 6;
+  const rotateHandleConnectorHeight = Math.max(8, -rotateHandleConnectorTop);
+  const rotateHandleCenterY = rotateHandleOffsetTop;
+  const rotateHandleVisible = Boolean(selectionBounds && canRotateSelectedElement);
+  const rotationDegrees = (selectedRotation * 180) / Math.PI;
+  const rotationLabel = `${Math.round(rotationDegrees)}deg`;
 
   return (
     <div ref={containerRef} className="w-full h-full relative">
@@ -802,6 +1001,33 @@ export function WhiteboardCanvas({
                 />
               ))
             : null}
+          {rotateHandleVisible ? (
+            <>
+              <div
+                className="absolute"
+                style={{
+                  left: rotateHandleCenterX - 1,
+                  top: rotateHandleConnectorTop,
+                  width: 2,
+                  height: rotateHandleConnectorHeight,
+                  backgroundColor: "#6965db",
+                }}
+              />
+              <div
+                className="absolute"
+                style={{
+                  left: rotateHandleCenterX - 6,
+                  top: rotateHandleCenterY - 6,
+                  width: 12,
+                  height: 12,
+                  borderRadius: 999,
+                  backgroundColor: "#fff",
+                  border: "1.5px solid #6965db",
+                }}
+                title={`Rotation: ${rotationLabel}`}
+              />
+            </>
+          ) : null}
         </div>
       ) : null}
       {editingElement && editorStyle ? (

@@ -14,6 +14,7 @@ import {
   Square,
   Circle,
   Minus,
+  ArrowRight,
   Baseline,
   StickyNote,
   Download,
@@ -33,6 +34,7 @@ const TOOLS: { id: ToolKind; icon: LucideIcon }[] = [
   { id: "rect", icon: Square },
   { id: "ellipse", icon: Circle },
   { id: "line", icon: Minus },
+  { id: "arrow", icon: ArrowRight },
   { id: "text", icon: Baseline },
   { id: "sticky", icon: StickyNote },
 ];

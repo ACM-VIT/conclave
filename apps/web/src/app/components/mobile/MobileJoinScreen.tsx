@@ -92,12 +92,13 @@ function MobileJoinScreen({
   const [activeTab, setActiveTab] = useState<"new" | "join">(() =>
     isRoutedRoom ? "join" : "new"
   );
-  const [phase, setPhase] = useState<"welcome" | "auth" | "join">(() => {
-    if (user && user.id && !user.id.startsWith("guest-")) {
-      return "join";
-    }
-    return "welcome";
-  });
+  const [manualPhase, setManualPhase] = useState<"welcome" | "auth" | "join" | null>(
+    null
+  );
+  const phase =
+    user && user.id && !user.id.startsWith("guest-")
+      ? "join"
+      : (manualPhase ?? "welcome");
   const [guestName, setGuestName] = useState("");
   const normalizedSegments = useMemo(
     () => normalizedRoomId.split("-"),
@@ -149,31 +150,14 @@ function MobileJoinScreen({
         name: session.user.name || session.user.email || "User",
       };
       onUserChange(sessionUser);
-      setPhase("join");
       lastAppliedSessionUserIdRef.current = session.user.id;
     }
   }, [session, user, onUserChange]);
 
-  const prevUserRef = useRef(user);
   useEffect(() => {
-    const prevUser = prevUserRef.current;
-    prevUserRef.current = user;
-
-    if (!prevUser && user && user.id && !user.id.startsWith("guest-")) {
-      setPhase("join");
-    }
-    if (prevUser && !user) {
-      setPhase("welcome");
-    }
-  }, [user]);
-
-  useEffect(() => {
-    if (phase !== "join") {
-      if (localStream) {
-        localStream.getTracks().forEach((t) => t.stop());
-        setLocalStream(null);
-      }
-      return;
+    if (phase !== "join" && localStream) {
+      localStream.getTracks().forEach((t) => t.stop());
+      setLocalStream(null);
     }
 
     return () => {
@@ -181,7 +165,7 @@ function MobileJoinScreen({
         localStream.getTracks().forEach((t) => t.stop());
       }
     };
-  }, [phase]);
+  }, [localStream, phase]);
 
   useEffect(() => {
     if (videoRef.current && localStream) videoRef.current.srcObject = localStream;
@@ -196,12 +180,13 @@ function MobileJoinScreen({
       }
       setIsCameraOn(false);
     } else {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
+      await navigator.mediaDevices
+        .getUserMedia({
           video: STANDARD_QUALITY_CONSTRAINTS,
-        });
-        const videoTrack = stream.getVideoTracks()[0];
-        if (videoTrack) {
+        })
+        .then((stream) => {
+          const videoTrack = stream.getVideoTracks()[0];
+          if (!videoTrack) return;
           if ("contentHint" in videoTrack) {
             videoTrack.contentHint = "motion";
           }
@@ -214,10 +199,10 @@ function MobileJoinScreen({
             videoRef.current.srcObject = localStream || stream;
           }
           setIsCameraOn(true);
-        }
-      } catch (err) {
-        console.log("[MobileJoinScreen] Camera access denied");
-      }
+        })
+        .catch(() => {
+          console.log("[MobileJoinScreen] Camera access denied");
+        });
     }
   };
 
@@ -230,22 +215,23 @@ function MobileJoinScreen({
       }
       setIsMicOn(false);
     } else {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
+      await navigator.mediaDevices
+        .getUserMedia({
           audio: DEFAULT_AUDIO_CONSTRAINTS,
-        });
-        const audioTrack = stream.getAudioTracks()[0];
-        if (audioTrack) {
+        })
+        .then((stream) => {
+          const audioTrack = stream.getAudioTracks()[0];
+          if (!audioTrack) return;
           if (localStream) {
             localStream.addTrack(audioTrack);
           } else {
             setLocalStream(stream);
           }
           setIsMicOn(true);
-        }
-      } catch (err) {
-        console.log("[MobileJoinScreen] Microphone access denied");
-      }
+        })
+        .catch(() => {
+          console.log("[MobileJoinScreen] Microphone access denied");
+        });
     }
   };
 
@@ -263,31 +249,30 @@ function MobileJoinScreen({
     provider: "google" | "apple" | "roblox" | "vercel"
   ) => {
     setSignInProvider(provider);
-    try {
-      await signIn.social({
+    await signIn
+      .social({
         provider,
         callbackURL: window.location.href,
+      })
+      .catch((error) => {
+        console.error("Sign in error:", error);
       });
-    } catch (error) {
-      console.error("Sign in error:", error);
-    } finally {
-      setSignInProvider(null);
-    }
+    setSignInProvider(null);
   };
 
   const handleSignOut = async () => {
     if (isSigningOut) return;
     setIsSigningOut(true);
-    try {
-      await signOut();
-      onUserChange(null);
-      onIsAdminChange(false);
-      setPhase("welcome");
-    } catch (error) {
-      console.error("Sign out error:", error);
-    } finally {
-      setIsSigningOut(false);
-    }
+    await signOut()
+      .then(() => {
+        onUserChange(null);
+        onIsAdminChange(false);
+        setManualPhase("welcome");
+      })
+      .catch((error) => {
+        console.error("Sign out error:", error);
+      });
+    setIsSigningOut(false);
   };
 
   const handleGuest = () => {
@@ -298,7 +283,7 @@ function MobileJoinScreen({
     };
     onUserChange(guestUser);
     onIsAdminChange(false);
-    setPhase("join");
+    setManualPhase("join");
   };
 
   const handleJoin = () => {
@@ -325,11 +310,8 @@ function MobileJoinScreen({
 
   useEffect(() => {
     if (!isRoutedRoom) return;
-    if (activeTab !== "join") {
-      setActiveTab("join");
-    }
     onIsAdminChange(false);
-  }, [activeTab, isRoutedRoom, onIsAdminChange]);
+  }, [isRoutedRoom, onIsAdminChange]);
 
   // Welcome phase
   if (phase === "welcome") {
@@ -359,7 +341,7 @@ function MobileJoinScreen({
         </p>
 
         <button
-          onClick={() => setPhase("auth")}
+          onClick={() => setManualPhase("auth")}
           className="relative z-10 flex items-center gap-3 px-8 py-3 bg-[#F95F4A] text-white text-xs uppercase tracking-widest rounded-lg active:scale-95 transition-all hover:bg-[#e8553f]"
           style={{ fontFamily: "'PolySans Mono', monospace" }}
         >
@@ -377,7 +359,7 @@ function MobileJoinScreen({
         <div className="absolute inset-0 acm-bg-radial pointer-events-none" />
         <div className="absolute inset-0 acm-bg-dot-grid pointer-events-none" />
         <button
-          onClick={() => setPhase("welcome")}
+          onClick={() => setManualPhase("welcome")}
           className="relative z-10 text-[11px] text-[#FEFCD9]/30 uppercase tracking-widest mb-8"
           style={{ fontFamily: "'PolySans Mono', monospace" }}
         >
