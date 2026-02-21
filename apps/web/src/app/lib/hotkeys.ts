@@ -29,7 +29,7 @@ export const HOTKEYS: Record<HotkeyAction, HotkeyDefinition> = {
     description: "Toggle your camera on or off.",
   },
   toggleHandRaise: {
-    keys: "Mod+H",
+    keys: "Mod+Alt+H",
     label: "Raise / Lower hand",
     description: "Raise or lower your hand to get the presenter's attention.",
   },
