@@ -370,6 +370,13 @@ final class MeetingViewModel {
                 self.state.isRoomLocked = locked
             }
         }
+
+        socketManager.onChatLockChanged = { [weak self] locked in
+            Task { @MainActor in
+                guard let self = self else { return }
+                self.state.isChatLocked = locked
+            }
+        }
         
         socketManager.onUserRequestedJoin = { [weak self] notification in
             Task { @MainActor in
@@ -827,6 +834,10 @@ final class MeetingViewModel {
     
     func sendChatMessage(_ content: String) {
         guard !content.isEmpty else { return }
+        if state.isChatLocked && !state.isAdmin {
+            state.errorMessage = "Chat is locked by the host."
+            return
+        }
         
         // Check if it's a command
         if let parsedCommand = ChatCommandParser.parse(content) {
@@ -905,6 +916,20 @@ final class MeetingViewModel {
                 let nextLocked = !state.isRoomLocked
                 try await socketManager.lockRoom(nextLocked)
                 state.isRoomLocked = nextLocked
+            } catch {
+                state.errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    func toggleChatLock() {
+        guard state.isAdmin else { return }
+
+        Task {
+            do {
+                let nextLocked = !state.isChatLocked
+                try await socketManager.lockChat(nextLocked)
+                state.isChatLocked = nextLocked
             } catch {
                 state.errorMessage = error.localizedDescription
             }

@@ -731,6 +731,7 @@ struct ChatOverlayView: View {
     @FocusState private var isInputFocused: Bool
     
     var body: some View {
+        let isChatDisabled = viewModel.isChatLocked && !viewModel.isAdmin
         VStack(spacing: 0) {
             HStack {
                 Text("Chat")
@@ -773,7 +774,7 @@ struct ChatOverlayView: View {
             }
             
             HStack(spacing: 12) {
-                TextField("Type a message...", text: $messageText)
+                TextField(isChatDisabled ? "Chat locked by host" : "Type a message...", text: $messageText)
                     .textFieldStyle(.plain)
                     .font(ACMFont.trial(14))
                     .foregroundStyle(ACMColors.cream)
@@ -785,6 +786,7 @@ struct ChatOverlayView: View {
                     .onSubmit {
                         sendMessage()
                     }
+                    .disabled(isChatDisabled)
                 
                 Button {
                     sendMessage()
@@ -793,7 +795,7 @@ struct ChatOverlayView: View {
                         .font(.system(size: 28))
                         .foregroundStyle(messageText.isEmpty ? ACMColors.cream.opacity(0.3) : ACMColors.primaryOrange)
                 }
-                .disabled(messageText.isEmpty)
+                .disabled(messageText.isEmpty || isChatDisabled)
             }
             .padding()
             .background(Color.black.opacity(0.8))
@@ -993,6 +995,14 @@ struct SettingsSheetView: View {
                             set: { next in
                                 if next != viewModel.isRoomLocked {
                                     viewModel.toggleRoomLock()
+                                }
+                            }
+                        ))
+                        Toggle("Lock chat", isOn: Binding(
+                            get: { viewModel.isChatLocked },
+                            set: { next in
+                                if next != viewModel.isChatLocked {
+                                    viewModel.toggleChatLock()
                                 }
                             }
                         ))

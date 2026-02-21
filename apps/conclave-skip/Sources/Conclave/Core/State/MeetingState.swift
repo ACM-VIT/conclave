@@ -18,6 +18,7 @@ final class MeetingState {
     // Room State
     var roomId: String = ""
     var isRoomLocked: Bool = false
+    var isChatLocked: Bool = false
 
     // User State
     var userId: String

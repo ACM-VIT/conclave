@@ -31,6 +31,7 @@ internal object SocketEvent {
     const val setHandRaised = "setHandRaised"
     const val updateDisplayName = "updateDisplayName"
     const val lockRoom = "lockRoom"
+    const val lockChat = "lockChat"
     const val admitUser = "admitUser"
     const val rejectUser = "rejectUser"
     const val kickUser = "kickUser"
@@ -46,6 +47,7 @@ internal object SocketEvent {
     const val handRaised = "handRaised"
     const val handRaisedSnapshot = "handRaisedSnapshot"
     const val roomLockChanged = "roomLockChanged"
+    const val chatLockChanged = "chatLockChanged"
     const val userRequestedJoin = "userRequestedJoin"
     const val pendingUsersSnapshot = "pendingUsersSnapshot"
     const val userAdmitted = "userAdmitted"
@@ -100,6 +102,7 @@ internal class SocketIOManager {
     internal var onHandRaisedSnapshot: ((HandRaisedSnapshotNotification) -> Unit)? = null
 
     internal var onRoomLockChanged: ((Boolean) -> Unit)? = null
+    internal var onChatLockChanged: ((Boolean) -> Unit)? = null
     internal var onPendingUsersSnapshot: ((PendingUsersSnapshotNotification) -> Unit)? = null
     internal var onUserRequestedJoin: ((UserRequestedJoinNotification) -> Unit)? = null
     internal var onPendingUserChanged: ((PendingUserChangedNotification) -> Unit)? = null
@@ -316,6 +319,10 @@ internal class SocketIOManager {
         emit(SocketEvent.lockRoom, mapOf("locked" to locked))
     }
 
+    internal suspend fun lockChat(locked: Boolean) {
+        emit(SocketEvent.lockChat, mapOf("locked" to locked))
+    }
+
     internal suspend fun admitUser(userId: String) {
         emit(SocketEvent.admitUser, mapOf("userId" to userId))
     }
@@ -485,6 +492,11 @@ internal class SocketIOManager {
         socket.on(SocketEvent.roomLockChanged, Emitter.Listener { args ->
             val notification = decode<RoomLockChangedNotification>( args.firstOrNull()) ?: return@Listener
             onRoomLockChanged?.invoke(notification.locked)
+        })
+
+        socket.on(SocketEvent.chatLockChanged, Emitter.Listener { args ->
+            val notification = decode<ChatLockChangedNotification>( args.firstOrNull()) ?: return@Listener
+            onChatLockChanged?.invoke(notification.locked)
         })
 
         socket.on(SocketEvent.userRequestedJoin, Emitter.Listener { args ->

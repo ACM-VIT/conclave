@@ -187,6 +187,11 @@ struct RoomLockChangedNotification: Codable {
     let roomId: String?
 }
 
+struct ChatLockChangedNotification: Codable {
+    let locked: Bool
+    let roomId: String?
+}
+
 struct UserRequestedJoinNotification: Codable {
     let userId: String
     let displayName: String

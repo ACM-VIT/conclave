@@ -39,6 +39,7 @@ final class SocketIOManager {
     var onHandRaisedSnapshot: ((HandRaisedSnapshotNotification) -> Void)?
 
     var onRoomLockChanged: ((Bool) -> Void)?
+    var onChatLockChanged: ((Bool) -> Void)?
     var onPendingUsersSnapshot: ((PendingUsersSnapshotNotification) -> Void)?
     var onUserRequestedJoin: ((UserRequestedJoinNotification) -> Void)?
     var onPendingUserChanged: ((PendingUserChangedNotification) -> Void)?
@@ -80,6 +81,7 @@ final class SocketIOManager {
     func updateDisplayName(_ name: String) async throws { fatalError() }
 
     func lockRoom(_ locked: Bool) async throws { fatalError() }
+    func lockChat(_ locked: Bool) async throws { fatalError() }
     func admitUser(userId: String) async throws { fatalError() }
     func rejectUser(userId: String) async throws { fatalError() }
     func kickUser(userId: String) async throws { fatalError() }
