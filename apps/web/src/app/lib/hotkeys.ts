@@ -51,7 +51,7 @@ export const HOTKEYS: Record<HotkeyAction, HotkeyDefinition> = {
   toggleScreenShare: {
     keys: "Mod+Shift+S",
     label: "Share Screen",
-    description: "Open or close the participants panel.",
+    description: "Start or stop sharing your screen.",
   },
   toggleReactions: {
     keys: "",
