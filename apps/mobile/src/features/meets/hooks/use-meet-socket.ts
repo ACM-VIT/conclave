@@ -74,7 +74,10 @@ interface UseMeetSocketOptions {
   setIsScreenSharing: (value: boolean) => void;
   setIsHandRaised: (value: boolean) => void;
   setIsRoomLocked: (value: boolean) => void;
+  setIsNoGuests: (value: boolean) => void;
   setIsChatLocked: (value: boolean) => void;
+  isTtsDisabled: boolean;
+  setIsTtsDisabled: (value: boolean) => void;
   setActiveScreenShareId: (value: string | null) => void;
   setVideoQuality: (value: VideoQuality) => void;
   videoQualityRef: React.MutableRefObject<VideoQuality>;
@@ -135,7 +138,10 @@ export function useMeetSocket({
   setIsScreenSharing,
   setIsHandRaised,
   setIsRoomLocked,
+  setIsNoGuests,
   setIsChatLocked,
+  isTtsDisabled,
+  setIsTtsDisabled,
   setActiveScreenShareId,
   setVideoQuality,
   videoQualityRef,
@@ -154,6 +160,7 @@ export function useMeetSocket({
   onSocketReady,
 }: UseMeetSocketOptions) {
   const participantIdsRef = useRef<Set<string>>(new Set([userId]));
+  const isTtsDisabledRef = useRef(isTtsDisabled);
 
   const now = useCallback(
     () =>
@@ -166,6 +173,10 @@ export function useMeetSocket({
   useEffect(() => {
     participantIdsRef.current = new Set([userId]);
   }, [userId]);
+
+  useEffect(() => {
+    isTtsDisabledRef.current = isTtsDisabled;
+  }, [isTtsDisabled]);
 
   const shouldPlayJoinLeaveSound = useCallback(
     (type: "join" | "leave", targetUserId: string) => {
@@ -280,6 +291,8 @@ export function useMeetSocket({
       setIsScreenSharing(false);
       setActiveScreenShareId(null);
       setIsHandRaised(false);
+      setIsNoGuests(false);
+      setIsTtsDisabled(false);
       if (resetRoomId) {
         currentRoomIdRef.current = null;
       }
@@ -299,8 +312,10 @@ export function useMeetSocket({
       setActiveScreenShareId,
       setDisplayNames,
       setIsHandRaised,
+      setIsNoGuests,
       setIsScreenSharing,
       setPendingUsers,
+      setIsTtsDisabled,
       clearReactions,
       stopLocalTrack,
       videoProducerRef,
@@ -1075,6 +1090,7 @@ export function useMeetSocket({
             if (response.status === "waiting") {
               setConnectionState("waiting");
               currentRoomIdRef.current = targetRoomId;
+              setIsTtsDisabled(response.isTtsDisabled ?? false);
               resolve("waiting");
               return;
             }
@@ -1086,6 +1102,8 @@ export function useMeetSocket({
                 response.existingProducers
               );
               currentRoomIdRef.current = targetRoomId;
+              setIsRoomLocked(response.isLocked ?? false);
+              setIsTtsDisabled(response.isTtsDisabled ?? false);
 
               // Use pre-warmed Device if available, otherwise dynamic import
               const DeviceClass = prewarm?.Device
@@ -1139,6 +1157,8 @@ export function useMeetSocket({
       sessionIdRef,
       setWaitingMessage,
       setConnectionState,
+      setIsRoomLocked,
+      setIsTtsDisabled,
       currentRoomIdRef,
       deviceRef,
       createProducerTransport,
@@ -1553,7 +1573,7 @@ export function useMeetSocket({
                   );
                 }, 5000);
               }
-              if (ttsText) {
+              if (ttsText && !isTtsDisabledRef.current) {
                 onTtsMessage?.({
                   userId: normalized.userId,
                   displayName: normalized.displayName,
@@ -1767,6 +1787,36 @@ export function useMeetSocket({
                 if (!isRoomEvent(eventRoomId)) return;
                 console.log("[Meets] Room lock changed:", locked);
                 setIsRoomLocked(locked);
+              }
+            );
+
+            socket.on(
+              "ttsDisabledChanged",
+              ({
+                disabled,
+                roomId: eventRoomId,
+              }: {
+                disabled: boolean;
+                roomId?: string;
+              }) => {
+                if (!isRoomEvent(eventRoomId)) return;
+                console.log("[Meets] Room TTS disabled changed:", disabled);
+                setIsTtsDisabled(disabled);
+              }
+            );
+
+            socket.on(
+              "noGuestsChanged",
+              ({
+                noGuests,
+                roomId: eventRoomId,
+              }: {
+                noGuests: boolean;
+                roomId?: string;
+              }) => {
+                if (!isRoomEvent(eventRoomId)) return;
+                console.log("[Meets] No-guests changed:", noGuests);
+                setIsNoGuests(noGuests);
               }
             );
 
@@ -2084,6 +2134,52 @@ export function useMeetSocket({
     [socketRef]
   );
 
+  const toggleNoGuests = useCallback(
+    (noGuests: boolean): Promise<boolean> => {
+      const socket = socketRef.current;
+      if (!socket) return Promise.resolve(false);
+
+      return new Promise((resolve) => {
+        socket.emit(
+          "setNoGuests",
+          { noGuests },
+          (response: { success: boolean; noGuests?: boolean } | { error: string }) => {
+            if ("error" in response) {
+              console.error("[Meets] Failed to toggle no-guests:", response.error);
+              resolve(false);
+            } else {
+              resolve(response.success);
+            }
+          }
+        );
+      });
+    },
+    [socketRef]
+  );
+
+  const toggleTtsDisabled = useCallback(
+    (disabled: boolean): Promise<boolean> => {
+      const socket = socketRef.current;
+      if (!socket) return Promise.resolve(false);
+
+      return new Promise((resolve) => {
+        socket.emit(
+          "setTtsDisabled",
+          { disabled },
+          (response: { success: boolean; disabled?: boolean } | { error: string }) => {
+            if ("error" in response) {
+              console.error("[Meets] Failed to toggle TTS:", response.error);
+              resolve(false);
+            } else {
+              resolve(response.success);
+            }
+          }
+        );
+      });
+    },
+    [socketRef]
+  );
+
   const admitUser = useCallback(
     (targetUserId: string): Promise<boolean> => {
       const socket = socketRef.current;
@@ -2138,6 +2234,8 @@ export function useMeetSocket({
     joinRoomById,
     toggleRoomLock,
     toggleChatLock,
+    toggleNoGuests,
+    toggleTtsDisabled,
     admitUser,
     rejectUser,
   };

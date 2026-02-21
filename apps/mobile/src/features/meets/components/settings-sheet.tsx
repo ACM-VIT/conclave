@@ -10,6 +10,8 @@ import {
   LockOpen,
   MessageSquareLock,
   StickyNote,
+  UserMinus,
+  VolumeX,
 } from "lucide-react-native";
 import { useApps } from "@conclave/apps-sdk";
 import { SHEET_COLORS, SHEET_THEME } from "./true-sheet-theme";
@@ -18,12 +20,16 @@ interface SettingsSheetProps {
   visible: boolean;
   isHandRaised: boolean;
   isRoomLocked: boolean;
+  isNoGuests: boolean;
   isChatLocked: boolean;
+  isTtsDisabled: boolean;
   isAdmin?: boolean;
   onOpenDisplayName?: () => void;
   onToggleHandRaised: () => void;
   onToggleRoomLock?: (locked: boolean) => void;
+  onToggleNoGuests?: (noGuests: boolean) => void;
   onToggleChatLock?: (locked: boolean) => void;
+  onToggleTtsDisabled?: (disabled: boolean) => void;
   onClose: () => void;
 }
 
@@ -31,12 +37,16 @@ export function SettingsSheet({
   visible,
   isHandRaised,
   isRoomLocked,
+  isNoGuests,
   isChatLocked,
+  isTtsDisabled,
   isAdmin = false,
   onOpenDisplayName,
   onToggleHandRaised,
   onToggleRoomLock,
+  onToggleNoGuests,
   onToggleChatLock,
+  onToggleTtsDisabled,
   onClose,
 }: SettingsSheetProps) {
   const { state: appsState, openApp, closeApp } = useApps();
@@ -189,6 +199,24 @@ export function SettingsSheet({
           {isAdmin ? (
             <Pressable
               onPress={() => {
+                if (!onToggleNoGuests) return;
+                trigger(() => onToggleNoGuests(!isNoGuests));
+              }}
+              style={({ pressed }) => [
+                styles.gridItem,
+                isNoGuests && styles.gridItemHandActive,
+                pressed && styles.gridItemPressed,
+              ]}
+              accessibilityRole="button"
+              accessibilityLabel={isNoGuests ? "Allow guests" : "Block guests"}
+              accessibilityState={{ selected: isNoGuests }}
+            >
+              <UserMinus size={28} color={SHEET_COLORS.text} strokeWidth={1.5} />
+            </Pressable>
+          ) : null}
+          {isAdmin ? (
+            <Pressable
+              onPress={() => {
                 if (!onToggleChatLock) return;
                 trigger(() => onToggleChatLock(!isChatLocked));
               }}
@@ -206,6 +234,24 @@ export function SettingsSheet({
                 color={SHEET_COLORS.text}
                 strokeWidth={1.5}
               />
+            </Pressable>
+          ) : null}
+          {isAdmin ? (
+            <Pressable
+              onPress={() => {
+                if (!onToggleTtsDisabled) return;
+                trigger(() => onToggleTtsDisabled(!isTtsDisabled));
+              }}
+              style={({ pressed }) => [
+                styles.gridItem,
+                isTtsDisabled && styles.gridItemActive,
+                pressed && styles.gridItemPressed,
+              ]}
+              accessibilityRole="button"
+              accessibilityLabel={isTtsDisabled ? "Enable text to speech" : "Disable text to speech"}
+              accessibilityState={{ selected: isTtsDisabled }}
+            >
+              <VolumeX size={28} color={SHEET_COLORS.text} strokeWidth={1.5} />
             </Pressable>
           ) : null}
         </RNView>

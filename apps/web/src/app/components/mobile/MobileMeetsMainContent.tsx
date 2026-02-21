@@ -93,6 +93,8 @@ interface MobileMeetsMainContentProps {
   onIsAdminChange: (isAdmin: boolean) => void;
   isRoomLocked: boolean;
   onToggleLock: () => void;
+  isNoGuests: boolean;
+  onToggleNoGuests: () => void;
   isChatLocked: boolean;
   onToggleChatLock: () => void;
   browserState?: BrowserState;
@@ -174,6 +176,8 @@ function MobileMeetsMainContent({
   onIsAdminChange,
   isRoomLocked,
   onToggleLock,
+  isNoGuests,
+  onToggleNoGuests,
   isChatLocked,
   onToggleChatLock,
   browserState,
@@ -247,6 +251,19 @@ function MobileMeetsMainContent({
     }
     toggleChat();
   }, [isChatOpen, isParticipantsOpen, setIsParticipantsOpen, toggleChat]);
+
+  const handleToggleTtsDisabled = useCallback(() => {
+    if (!socket) return;
+    socket.emit(
+      "setTtsDisabled",
+      { disabled: !isTtsDisabled },
+      (res: { error?: string }) => {
+        if (res?.error) {
+          console.error("Failed to toggle TTS:", res.error);
+        }
+      },
+    );
+  }, [socket, isTtsDisabled]);
   const participantsArray = useMemo(
     () => Array.from(participants.values()),
     [participants],
@@ -492,8 +509,12 @@ function MobileMeetsMainContent({
         isAdmin={isAdmin}
         isRoomLocked={isRoomLocked}
         onToggleLock={onToggleLock}
+        isNoGuests={isNoGuests}
+        onToggleNoGuests={onToggleNoGuests}
         isChatLocked={isChatLocked}
         onToggleChatLock={onToggleChatLock}
+        isTtsDisabled={isTtsDisabled}
+        onToggleTtsDisabled={handleToggleTtsDisabled}
         isBrowserActive={browserState?.active ?? false}
         isBrowserLaunching={isBrowserLaunching}
         showBrowserControls={showBrowserControls}
@@ -541,7 +562,6 @@ function MobileMeetsMainContent({
           pendingUsers={pendingUsers}
           getDisplayName={resolveDisplayName}
           hostUserId={hostUserId}
-          isTtsDisabled={isTtsDisabled}
         />
       )}
     </div>

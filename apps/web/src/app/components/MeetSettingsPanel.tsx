@@ -1,6 +1,6 @@
 "use client";
 
-import { Lock, MessageSquareLock, ShieldBan, X } from "lucide-react";
+import { Lock, MessageSquareLock, ShieldBan, VolumeX, X } from "lucide-react";
 
 interface MeetSettingsPanelProps {
   isRoomLocked: boolean;
@@ -9,6 +9,8 @@ interface MeetSettingsPanelProps {
   onToggleNoGuests?: () => void;
   isChatLocked: boolean;
   onToggleChatLock?: () => void;
+  isTtsDisabled: boolean;
+  onToggleTtsDisabled?: () => void;
   onClose: () => void;
 }
 
@@ -19,6 +21,8 @@ export default function MeetSettingsPanel({
   onToggleNoGuests,
   isChatLocked,
   onToggleChatLock,
+  isTtsDisabled,
+  onToggleTtsDisabled,
   onClose,
 }: MeetSettingsPanelProps) {
   return (
@@ -118,6 +122,31 @@ export default function MeetSettingsPanel({
             }`}
           >
             {isChatLocked ? "On" : "Off"}
+          </span>
+        </button>
+        <button
+          type="button"
+          onClick={onToggleTtsDisabled}
+          disabled={!onToggleTtsDisabled}
+          aria-pressed={isTtsDisabled}
+          className="flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-left text-sm text-[#FEFCD9]/80 transition hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          <div className="flex items-center gap-2">
+            <VolumeX
+              className={`h-4 w-4 ${
+                isTtsDisabled ? "text-amber-300" : "text-[#FEFCD9]/60"
+              }`}
+            />
+            <span className="text-[#FEFCD9]">Disable text-to-speech</span>
+          </div>
+          <span
+            className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${
+              isTtsDisabled
+                ? "border-amber-300/40 bg-amber-300/10 text-amber-200"
+                : "border-white/10 text-[#FEFCD9]/40"
+            }`}
+          >
+            {isTtsDisabled ? "On" : "Off"}
           </span>
         </button>
       </div>

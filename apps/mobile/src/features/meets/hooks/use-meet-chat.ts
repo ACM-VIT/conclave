@@ -26,6 +26,7 @@ interface UseMeetChatOptions {
     displayName: string;
     text: string;
   }) => void;
+  isTtsDisabled?: boolean;
 }
 
 export function useMeetChat({
@@ -40,6 +41,7 @@ export function useMeetChat({
   onSetHandRaised,
   onLeaveRoom,
   onTtsMessage,
+  isTtsDisabled,
 }: UseMeetChatOptions) {
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatOverlayMessages, setChatOverlayMessages] = useState<ChatMessage[]>(
@@ -83,7 +85,7 @@ export function useMeetChat({
           if (response.message) {
             const { message, ttsText } = normalizeChatMessage(response.message);
             setChatMessages((prev) => [...prev, message]);
-            if (ttsText) {
+            if (ttsText && !isTtsDisabled) {
               onTtsMessage?.({
                 userId: message.userId,
                 displayName: message.displayName,
@@ -94,7 +96,7 @@ export function useMeetChat({
         }
       );
     },
-    [socketRef, onTtsMessage]
+    [socketRef, onTtsMessage, isTtsDisabled]
   );
 
   const toggleChat = useCallback(() => {
@@ -130,6 +132,10 @@ export function useMeetChat({
           return;
         }
         if (command.id === "tts") {
+          if (isTtsDisabled) {
+            appendLocalMessage("TTS is disabled by the host in this room.");
+            return;
+          }
           if (!args) {
             appendLocalMessage("Usage: /tts <text>");
             return;
@@ -203,6 +209,7 @@ export function useMeetChat({
       ghostEnabled,
       isChatLocked,
       isAdmin,
+      isTtsDisabled,
       appendLocalMessage,
       clearChat,
       sendChatInternal,

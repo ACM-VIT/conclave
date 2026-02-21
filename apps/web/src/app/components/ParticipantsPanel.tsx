@@ -38,7 +38,6 @@ interface ParticipantsPanelProps {
     isScreenSharing: boolean;
   };
   hostUserId?: string | null;
-  isTtsDisabled?: boolean;
 }
 
 function ParticipantsPanel({
@@ -54,7 +53,6 @@ function ParticipantsPanel({
   getRooms,
   localState,
   hostUserId,
-  isTtsDisabled,
 }: ParticipantsPanelProps & {
   socket: Socket | null;
   isAdmin?: boolean | null;
@@ -166,35 +164,6 @@ function ParticipantsPanel({
 
       {isAdmin && (
         <div className="px-3 py-2 flex flex-col gap-2 border-b border-[#FEFCD9]/5">
-          <div className="flex items-center justify-between px-1">
-            <span className="text-[10px] text-[#FEFCD9]/60 uppercase tracking-wider">
-              Disable Text-to-Speech
-            </span>
-            <button
-              onClick={() => {
-                socket?.emit(
-                  "setTtsDisabled",
-                  { disabled: !isTtsDisabled },
-                  (res: any) => {
-                    if (res.error)
-                      console.error("Failed to toggle TTS:", res.error);
-                  },
-                );
-              }}
-              className={`relative inline-flex h-3.5 w-6 shrink-0 cursor-pointer items-center justify-center rounded-full transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-[#F95F4A] focus:ring-offset-1 focus:ring-offset-[#0d0e0d] ${
-                isTtsDisabled ? "bg-[#F95F4A]" : "bg-[#FEFCD9]/20"
-              }`}
-              role="switch"
-              aria-checked={isTtsDisabled}
-            >
-              <span className="sr-only">Toggle Disable Text-to-Speech</span>
-              <span
-                className={`pointer-events-none inline-block h-2.5 w-2.5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
-                  isTtsDisabled ? "translate-x-1" : "-translate-x-1"
-                }`}
-              />
-            </button>
-          </div>
           <div className="flex gap-1.5">
             <button
               onClick={() =>

@@ -15,7 +15,6 @@ interface MobileParticipantsPanelProps {
   pendingUsers: Map<string, string>;
   getDisplayName: (userId: string) => string;
   hostUserId?: string | null;
-  isTtsDisabled?: boolean;
 }
 
 function MobileParticipantsPanel({
@@ -27,7 +26,6 @@ function MobileParticipantsPanel({
   pendingUsers,
   getDisplayName,
   hostUserId,
-  isTtsDisabled,
 }: MobileParticipantsPanelProps) {
   const participantArray = Array.from(participants.values()).filter(
     (participant) => !isSystemUserId(participant.userId),
@@ -64,44 +62,6 @@ function MobileParticipantsPanel({
       </div>
 
       <div className="flex-1 overflow-y-auto">
-        {/* Host Controls */}
-        {isAdmin && (
-          <div className="px-4 py-3 border-b border-[#FEFCD9]/10">
-            <p className="text-[10px] text-[#FEFCD9]/40 uppercase tracking-widest mb-3">
-              Host Controls
-            </p>
-            <div className="flex items-center justify-between bg-[#252525] rounded-xl p-3">
-              <span className="text-sm text-[#FEFCD9]">
-                Disable Text-to-Speech
-              </span>
-              <button
-                onClick={() => {
-                  socket?.emit(
-                    "setTtsDisabled",
-                    { disabled: !isTtsDisabled },
-                    (res: any) => {
-                      if (res.error)
-                        console.error("Failed to toggle TTS:", res.error);
-                    },
-                  );
-                }}
-                className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center justify-center rounded-full transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-[#F95F4A] focus:ring-offset-2 focus:ring-offset-[#0d0e0d] ${
-                  isTtsDisabled ? "bg-[#F95F4A]" : "bg-[#FEFCD9]/20"
-                }`}
-                role="switch"
-                aria-checked={isTtsDisabled}
-              >
-                <span className="sr-only">Toggle Disable Text-to-Speech</span>
-                <span
-                  className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
-                    isTtsDisabled ? "translate-x-2" : "-translate-x-2"
-                  }`}
-                />
-              </button>
-            </div>
-          </div>
-        )}
-
         {/* Waiting room section (for admins) */}
         {isAdmin && pendingArray.length > 0 && (
           <div className="px-4 py-3 border-b border-[#FEFCD9]/10">

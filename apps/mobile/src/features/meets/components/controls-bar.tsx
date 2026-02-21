@@ -19,6 +19,8 @@ import {
   Video,
   VideoOff,
   StickyNote,
+  UserMinus,
+  VolumeX,
 } from "lucide-react-native";
 import { EMOJI_REACTIONS } from "../constants";
 import { useDeviceLayout, TOUCH_TARGETS } from "../hooks/use-device-layout";
@@ -49,7 +51,9 @@ interface ControlsBarProps {
   isScreenShareAvailable?: boolean;
   isChatOpen: boolean;
   isRoomLocked: boolean;
+  isNoGuests: boolean;
   isChatLocked: boolean;
+  isTtsDisabled: boolean;
   isAdmin: boolean;
   pendingUsersCount: number;
   unreadCount: number;
@@ -64,7 +68,9 @@ interface ControlsBarProps {
   onToggleChat: () => void;
   onToggleParticipants: () => void;
   onToggleRoomLock?: (locked: boolean) => void;
+  onToggleNoGuests?: (noGuests: boolean) => void;
   onToggleChatLock?: (locked: boolean) => void;
+  onToggleTtsDisabled?: (disabled: boolean) => void;
   onToggleWhiteboard?: () => void;
   onToggleAppsLock?: (locked: boolean) => void;
   onSendReaction: (emoji: string) => void;
@@ -201,7 +207,9 @@ export function ControlsBar({
   isScreenShareAvailable = true,
   isChatOpen,
   isRoomLocked,
+  isNoGuests,
   isChatLocked,
+  isTtsDisabled,
   isAdmin,
   pendingUsersCount,
   unreadCount,
@@ -216,7 +224,9 @@ export function ControlsBar({
   onToggleChat,
   onToggleParticipants,
   onToggleRoomLock,
+  onToggleNoGuests,
   onToggleChatLock,
+  onToggleTtsDisabled,
   onToggleWhiteboard,
   onToggleAppsLock,
   onSendReaction,
@@ -298,6 +308,16 @@ export function ControlsBar({
                     onPress={() => onToggleRoomLock?.(!isRoomLocked)}
                   />
                 ) : null}
+                {isAdmin && onToggleNoGuests ? (
+                  <ControlButton
+                    icon={UserMinus}
+                    isActive={isNoGuests}
+                    activeColor={COLORS.amber}
+                    size={buttonSize}
+                    iconSize={iconSize}
+                    onPress={() => onToggleNoGuests(!isNoGuests)}
+                  />
+                ) : null}
                 {isAdmin && onToggleChatLock ? (
                   <ControlButton
                     icon={MessageSquareLock}
@@ -306,6 +326,16 @@ export function ControlsBar({
                     size={buttonSize}
                     iconSize={iconSize}
                     onPress={() => onToggleChatLock(!isChatLocked)}
+                  />
+                ) : null}
+                {isAdmin && onToggleTtsDisabled ? (
+                  <ControlButton
+                    icon={VolumeX}
+                    isActive={isTtsDisabled}
+                    activeColor={COLORS.primaryOrange}
+                    size={buttonSize}
+                    iconSize={iconSize}
+                    onPress={() => onToggleTtsDisabled(!isTtsDisabled)}
                   />
                 ) : null}
                 {isAdmin && onToggleAppsLock && isWhiteboardActive ? (

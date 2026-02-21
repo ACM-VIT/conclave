@@ -60,6 +60,8 @@ interface ControlsBarProps {
   onToggleNoGuests?: () => void;
   isChatLocked?: boolean;
   onToggleChatLock?: () => void;
+  isTtsDisabled?: boolean;
+  onToggleTtsDisabled?: () => void;
   isBrowserActive?: boolean;
   isBrowserLaunching?: boolean;
   showBrowserControls?: boolean;
@@ -176,6 +178,8 @@ function ControlsBar({
   onToggleNoGuests,
   isChatLocked = false,
   onToggleChatLock,
+  isTtsDisabled = false,
+  onToggleTtsDisabled,
   isBrowserActive = false,
   isBrowserLaunching = false,
   showBrowserControls = true,
@@ -337,6 +341,8 @@ function ControlsBar({
               onToggleNoGuests={onToggleNoGuests}
               isChatLocked={isChatLocked}
               onToggleChatLock={onToggleChatLock}
+              isTtsDisabled={isTtsDisabled}
+              onToggleTtsDisabled={onToggleTtsDisabled}
               onClose={() => setIsSettingsOpen(false)}
             />
           )}

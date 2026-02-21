@@ -935,6 +935,8 @@ export default function MeetsClient({
           onUserChange={(user) => setCurrentUser(user ?? undefined)}
           onIsAdminChange={setCurrentIsAdmin}
           isRoomLocked={isRoomLocked}
+          isNoGuests={isNoGuests}
+          onToggleNoGuests={() => socket.toggleNoGuests(!isNoGuests)}
           isTtsDisabled={isTtsDisabled}
           onToggleLock={() => socket.toggleRoomLock(!isRoomLocked)}
           isChatLocked={isChatLocked}

@@ -278,6 +278,19 @@ export default function MeetsMainContent({
     () => setIsParticipantsOpen(false),
     [setIsParticipantsOpen],
   );
+
+  const handleToggleTtsDisabled = useCallback(() => {
+    if (!socket) return;
+    socket.emit(
+      "setTtsDisabled",
+      { disabled: !isTtsDisabled },
+      (res: { error?: string }) => {
+        if (res?.error) {
+          console.error("Failed to toggle TTS:", res.error);
+        }
+      },
+    );
+  }, [socket, isTtsDisabled]);
   const handleToggleChat = useCallback(() => {
     if (!isChatOpen && isParticipantsOpen) {
       setIsParticipantsOpen(false);
@@ -507,6 +520,8 @@ export default function MeetsMainContent({
               onToggleNoGuests={onToggleNoGuests}
               isChatLocked={isChatLocked}
               onToggleChatLock={onToggleChatLock}
+              isTtsDisabled={isTtsDisabled}
+              onToggleTtsDisabled={handleToggleTtsDisabled}
               isBrowserActive={browserState?.active ?? false}
               isBrowserLaunching={isBrowserLaunching}
               showBrowserControls={showBrowserControls}
@@ -625,7 +640,6 @@ export default function MeetsMainContent({
           getDisplayName={resolveDisplayName}
           onPendingUserStale={handlePendingUserStale}
           hostUserId={hostUserId}
-          isTtsDisabled={isTtsDisabled}
         />
       )}
 

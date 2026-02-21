@@ -108,6 +108,8 @@ export interface JoinRoomResponse {
   rtpCapabilities: RtpCapabilities;
   existingProducers: ProducerInfo[];
   status?: "waiting" | "joined";
+  isLocked?: boolean;
+  isTtsDisabled?: boolean;
 }
 
 export interface TransportResponse {

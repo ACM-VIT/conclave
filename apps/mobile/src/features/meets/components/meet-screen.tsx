@@ -135,8 +135,12 @@ export function MeetScreen({ initialRoomId }: { initialRoomId?: string } = {}) {
     pendingUsers,
     isRoomLocked,
     setIsRoomLocked,
+    isNoGuests,
+    setIsNoGuests,
     isChatLocked,
     setIsChatLocked,
+    isTtsDisabled,
+    setIsTtsDisabled,
   } = useMeetState({ initialRoomId });
 
   useEffect(() => {
@@ -511,6 +515,7 @@ export function MeetScreen({ initialRoomId }: { initialRoomId?: string } = {}) {
     ghostEnabled: isGhostMode,
     isChatLocked,
     isAdmin,
+    isTtsDisabled,
     isMuted,
     isCameraOff,
     onToggleMute: toggleMute,
@@ -573,7 +578,10 @@ export function MeetScreen({ initialRoomId }: { initialRoomId?: string } = {}) {
     setIsScreenSharing,
     setIsHandRaised,
     setIsRoomLocked,
+    setIsNoGuests,
     setIsChatLocked,
+    isTtsDisabled,
+    setIsTtsDisabled,
     setActiveScreenShareId,
     setVideoQuality,
     videoQualityRef: refs.videoQualityRef,
@@ -1199,8 +1207,14 @@ export function MeetScreen({ initialRoomId }: { initialRoomId?: string } = {}) {
           onToggleRoomLock={(locked) => {
             socket.toggleRoomLock?.(locked);
           }}
+          onToggleNoGuests={(noGuests) => {
+            socket.toggleNoGuests?.(noGuests);
+          }}
           onToggleChatLock={(locked) => {
             socket.toggleChatLock?.(locked);
+          }}
+          onToggleTtsDisabled={(disabled) => {
+            socket.toggleTtsDisabled?.(disabled);
           }}
           onSendReaction={(emoji) => {
             sendReaction({ kind: "emoji", id: emoji, value: emoji, label: emoji });
@@ -1215,7 +1229,9 @@ export function MeetScreen({ initialRoomId }: { initialRoomId?: string } = {}) {
           onLeave={handleLeave}
           isAdmin={isAdmin}
           isRoomLocked={isRoomLocked}
+          isNoGuests={isNoGuests}
           isChatLocked={isChatLocked}
+          isTtsDisabled={isTtsDisabled}
           pendingUsersCount={pendingUsers.size}
         />
       )}
@@ -1299,7 +1315,9 @@ export function MeetScreen({ initialRoomId }: { initialRoomId?: string } = {}) {
           visible={isSettingsSheetOpen}
           isHandRaised={isHandRaised}
           isRoomLocked={isRoomLocked}
+          isNoGuests={isNoGuests}
           isChatLocked={isChatLocked}
+          isTtsDisabled={isTtsDisabled}
           isAdmin={isAdmin}
           onOpenDisplayName={() => {
             setIsSettingsSheetOpen(false);
@@ -1313,9 +1331,17 @@ export function MeetScreen({ initialRoomId }: { initialRoomId?: string } = {}) {
             setIsSettingsSheetOpen(false);
             socket.toggleRoomLock?.(locked);
           }}
+          onToggleNoGuests={(noGuests) => {
+            setIsSettingsSheetOpen(false);
+            socket.toggleNoGuests?.(noGuests);
+          }}
           onToggleChatLock={(locked) => {
             setIsSettingsSheetOpen(false);
             socket.toggleChatLock?.(locked);
+          }}
+          onToggleTtsDisabled={(disabled) => {
+            setIsSettingsSheetOpen(false);
+            socket.toggleTtsDisabled?.(disabled);
           }}
           onClose={() => setIsSettingsSheetOpen(false)}
         />
