@@ -5,6 +5,7 @@ import getWorker from "../utilities/getWorker.js";
 import { Logger } from "../utilities/loggers.js";
 import { cleanupRoomBrowser } from "./socket/handlers/sharedBrowserHandlers.js";
 import type { SfuState } from "./state.js";
+import { clearWebinarLinkSlug } from "./webinar.js";
 
 export const getRoomChannelId = (clientId: string, roomId: string): string =>
   `${clientId}:${roomId}`;
@@ -36,6 +37,15 @@ export const getOrCreateRoom = async (
 export const cleanupRoom = (state: SfuState, channelId: string): boolean => {
   const room = state.rooms.get(channelId);
   if (room && room.isEmpty()) {
+    const webinarConfig = state.webinarConfigs.get(channelId);
+    if (webinarConfig) {
+      clearWebinarLinkSlug({
+        webinarConfig,
+        webinarLinks: state.webinarLinks,
+        roomChannelId: channelId,
+      });
+      state.webinarConfigs.delete(channelId);
+    }
     room.close();
     state.rooms.delete(channelId);
     Logger.info(`Closed empty room: ${room.id} (${room.clientId})`);

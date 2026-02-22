@@ -11,7 +11,10 @@ import {
   getWebinarLinkResponse,
 } from "../../webinarNotifications.js";
 import {
+  clearWebinarLinkSlug,
   getOrCreateWebinarRoomConfig,
+  rotateWebinarLinkSlug,
+  setCustomWebinarLinkSlug,
   updateWebinarRoomConfig,
 } from "../../webinar.js";
 import type { ConnectionContext } from "../context.js";
@@ -74,7 +77,40 @@ export const registerWebinarHandlers = (context: ConnectionContext): void => {
       );
 
       try {
-        const { changed } = updateWebinarRoomConfig(webinarConfig, data ?? {});
+        const update = data ?? {};
+        const { changed: baseChanged } = updateWebinarRoomConfig(
+          webinarConfig,
+          update,
+        );
+        let changed = baseChanged;
+
+        if (Object.prototype.hasOwnProperty.call(update, "linkSlug")) {
+          const rawLinkSlug =
+            typeof update.linkSlug === "string" ? update.linkSlug.trim() : "";
+
+          if (!rawLinkSlug) {
+            const cleared = clearWebinarLinkSlug({
+              webinarConfig,
+              webinarLinks: state.webinarLinks,
+              roomChannelId: room.channelId,
+            });
+            changed = changed || cleared;
+            if (cleared) {
+              webinarConfig.linkVersion += 1;
+            }
+          } else {
+            const { changed: slugChanged } = setCustomWebinarLinkSlug({
+              webinarConfig,
+              webinarLinks: state.webinarLinks,
+              room,
+              slug: rawLinkSlug,
+            });
+            changed = changed || slugChanged;
+            if (slugChanged) {
+              webinarConfig.linkVersion += 1;
+            }
+          }
+        }
 
         if (changed) {
           emitWebinarConfigChanged(io, state, room);
@@ -112,13 +148,18 @@ export const registerWebinarHandlers = (context: ConnectionContext): void => {
         room.channelId,
       );
 
+      rotateWebinarLinkSlug({
+        webinarConfig,
+        webinarLinks: state.webinarLinks,
+        room,
+      });
       webinarConfig.linkVersion += 1;
       emitWebinarConfigChanged(io, state, room);
 
       if (callback) {
         respond(
           callback,
-          getWebinarLinkResponse(room, {
+          getWebinarLinkResponse(state, room, {
             linkVersion: webinarConfig.linkVersion,
             publicAccess: webinarConfig.publicAccess,
           }),
@@ -153,7 +194,7 @@ export const registerWebinarHandlers = (context: ConnectionContext): void => {
 
       respond(
         callback,
-        getWebinarLinkResponse(room, {
+        getWebinarLinkResponse(state, room, {
           linkVersion: webinarConfig.linkVersion,
           publicAccess: webinarConfig.publicAccess,
         }),

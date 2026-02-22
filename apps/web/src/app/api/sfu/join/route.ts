@@ -7,7 +7,6 @@ type JoinRequestBody = {
   roomId?: string;
   sessionId?: string;
   joinMode?: "meeting" | "webinar_attendee";
-  webinarSignedToken?: string;
   user?: {
     id?: string | null;
     email?: string | null;
@@ -17,13 +16,6 @@ type JoinRequestBody = {
   isAdmin?: boolean;
   allowRoomCreation?: boolean;
   clientId?: string;
-};
-
-type WebinarLinkProof = {
-  typ: "webinar_link";
-  roomId: string;
-  clientId: string;
-  linkVersion: number;
 };
 
 const resolveSfuUrl = () =>
@@ -39,38 +31,6 @@ const resolveClientId = (request: Request, body?: JoinRequestBody) => {
   const headerClientId = request.headers.get("x-sfu-client")?.trim() || "";
   const bodyClientId = body?.clientId?.trim() || "";
   return headerClientId || bodyClientId || "default";
-};
-
-const verifyWebinarSignedToken = (options: {
-  token: string;
-  roomId: string;
-  clientId: string;
-}): Omit<WebinarLinkProof, "typ"> | null => {
-  try {
-    const decoded = jwt.verify(
-      options.token,
-      process.env.SFU_SECRET || "development-secret"
-    );
-    if (!decoded || typeof decoded !== "object") {
-      return null;
-    }
-    const payload = decoded as Partial<WebinarLinkProof>;
-    if (
-      payload.typ !== "webinar_link" ||
-      payload.roomId !== options.roomId ||
-      payload.clientId !== options.clientId ||
-      typeof payload.linkVersion !== "number"
-    ) {
-      return null;
-    }
-    return {
-      roomId: payload.roomId,
-      clientId: payload.clientId,
-      linkVersion: payload.linkVersion,
-    };
-  } catch {
-    return null;
-  }
 };
 
 export async function POST(request: Request) {
@@ -95,24 +55,10 @@ export async function POST(request: Request) {
   const clientId = resolveClientId(request, body);
   const joinMode =
     body?.joinMode === "webinar_attendee" ? "webinar_attendee" : "meeting";
-  const webinarSignedToken = body?.webinarSignedToken?.trim() || undefined;
   const email = body?.user?.email?.trim() || undefined;
   const name = body?.user?.name?.trim() || undefined;
   const providedId = body?.user?.id?.trim() || undefined;
   const baseUserId = email || providedId || `guest-${sessionId}`;
-  const webinarLinkProof = webinarSignedToken
-    ? verifyWebinarSignedToken({
-        token: webinarSignedToken,
-        roomId,
-        clientId,
-      })
-    : null;
-  if (webinarSignedToken && !webinarLinkProof) {
-    return NextResponse.json(
-      { error: "Invalid webinar link token" },
-      { status: 401 }
-    );
-  }
   const isWebinarAttendeeJoin = joinMode === "webinar_attendee";
   const isHost = isWebinarAttendeeJoin
     ? false
@@ -132,7 +78,6 @@ export async function POST(request: Request) {
       clientId,
       sessionId,
       joinMode,
-      webinarLinkProof: webinarLinkProof ?? undefined,
     },
     process.env.SFU_SECRET || "development-secret",
     { expiresIn: "1h" }

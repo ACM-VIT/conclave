@@ -106,14 +106,12 @@ export type MeetsClientProps = {
       user?: { id?: string; email?: string | null; name?: string | null };
       isHost?: boolean;
       joinMode?: JoinMode;
-      webinarSignedToken?: string;
     },
   ) => Promise<{
     token: string;
     sfuUrl: string;
   }>;
   joinMode?: JoinMode;
-  webinarSignedToken?: string;
   autoJoinOnMount?: boolean;
   hideJoinUI?: boolean;
   getRooms?: () => Promise<RoomInfo[]>;
@@ -132,7 +130,6 @@ export default function MeetsClient({
   isAdmin = false,
   getJoinInfo,
   joinMode = "meeting",
-  webinarSignedToken,
   autoJoinOnMount = false,
   hideJoinUI = false,
   getRooms,
@@ -606,7 +603,6 @@ export default function MeetsClient({
     userId,
     getJoinInfo,
     joinMode,
-    webinarSignedToken,
     requestWebinarInviteCode,
     ghostEnabled,
     displayNameInput,

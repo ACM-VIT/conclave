@@ -29,7 +29,6 @@ type MeetsClientPageProps = {
   forceJoinOnly?: boolean;
   bypassMediaPermissions?: boolean;
   joinMode?: JoinMode;
-  webinarSignedToken?: string;
   autoJoinOnMount?: boolean;
   hideJoinUI?: boolean;
   fontClassName?: string;
@@ -40,7 +39,6 @@ export default function MeetsClientPage({
   forceJoinOnly = false,
   bypassMediaPermissions = false,
   joinMode = "meeting",
-  webinarSignedToken,
   autoJoinOnMount = false,
   hideJoinUI = false,
   fontClassName,
@@ -57,14 +55,11 @@ export default function MeetsClientPage({
         user?: { id?: string; email?: string | null; name?: string | null };
         isHost?: boolean;
         joinMode?: JoinMode;
-        webinarSignedToken?: string;
       }
     ) => {
       const resolvedUser = options?.user ?? user;
       const isHost = Boolean(options?.isHost);
       const resolvedJoinMode = options?.joinMode ?? joinMode;
-      const resolvedWebinarSignedToken =
-        options?.webinarSignedToken ?? webinarSignedToken;
       const response = await fetch("/api/sfu/join", {
         method: "POST",
         headers: {
@@ -79,7 +74,6 @@ export default function MeetsClientPage({
           allowRoomCreation: forceJoinOnly,
           clientId,
           joinMode: resolvedJoinMode,
-          webinarSignedToken: resolvedWebinarSignedToken,
         }),
       });
 
@@ -89,7 +83,7 @@ export default function MeetsClientPage({
 
       return response.json();
     },
-    [forceJoinOnly, joinMode, user, webinarSignedToken]
+    [forceJoinOnly, joinMode, user]
   );
 
   const getRooms = useCallback(async () => {
@@ -121,7 +115,6 @@ export default function MeetsClientPage({
         allowGhostMode={!isPublicClient}
         bypassMediaPermissions={bypassMediaPermissions}
         joinMode={joinMode}
-        webinarSignedToken={webinarSignedToken}
         autoJoinOnMount={autoJoinOnMount}
         hideJoinUI={hideJoinUI}
         getJoinInfo={getJoinInfo}

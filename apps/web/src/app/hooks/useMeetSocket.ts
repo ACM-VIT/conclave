@@ -60,14 +60,12 @@ interface UseMeetSocketOptions {
       user?: { id?: string; email?: string | null; name?: string | null };
       isHost?: boolean;
       joinMode?: JoinMode;
-      webinarSignedToken?: string;
     },
   ) => Promise<{
     token: string;
     sfuUrl: string;
   }>;
   joinMode?: JoinMode;
-  webinarSignedToken?: string;
   requestWebinarInviteCode?: () => Promise<string | null>;
   ghostEnabled: boolean;
   displayNameInput: string;
@@ -144,7 +142,6 @@ export function useMeetSocket({
   userId,
   getJoinInfo,
   joinMode = "meeting",
-  webinarSignedToken,
   requestWebinarInviteCode,
   ghostEnabled,
   displayNameInput,
@@ -188,6 +185,7 @@ export function useMeetSocket({
   bypassMediaPermissions = false,
 }: UseMeetSocketOptions) {
   const participantIdsRef = useRef<Set<string>>(new Set([userId]));
+  const serverRoomIdRef = useRef<string | null>(null);
 
   const {
     socketRef,
@@ -268,6 +266,7 @@ export function useMeetSocket({
       setHostUserId(null);
       setWebinarRole(null);
       participantIdsRef.current = new Set([userId]);
+      serverRoomIdRef.current = null;
 
       try {
         audioProducerRef.current?.close();
@@ -319,6 +318,7 @@ export function useMeetSocket({
       pendingProducersRef,
       producerMapRef,
       producerTransportRef,
+      serverRoomIdRef,
       screenProducerRef,
       setActiveScreenShareId,
       setDisplayNames,
@@ -397,10 +397,13 @@ export function useMeetSocket({
   const isRoomEvent = useCallback(
     (eventRoomId?: string) => {
       if (!eventRoomId) return true;
-      if (!currentRoomIdRef.current) return true;
-      return eventRoomId === currentRoomIdRef.current;
+      if (!currentRoomIdRef.current && !serverRoomIdRef.current) return true;
+      return (
+        eventRoomId === currentRoomIdRef.current ||
+        eventRoomId === serverRoomIdRef.current
+      );
     },
-    [currentRoomIdRef],
+    [currentRoomIdRef, serverRoomIdRef],
   );
 
   const handleProducerClosed = useCallback(
@@ -791,9 +794,12 @@ export function useMeetSocket({
           }
 
           audioProducerRef.current = audioProducer;
+          const audioProducerId = audioProducer.id;
 
           audioProducer.on("transportclose", () => {
-            audioProducerRef.current = null;
+            if (audioProducerRef.current?.id === audioProducerId) {
+              audioProducerRef.current = null;
+            }
           });
         } catch (err) {
           console.error("[Meets] Failed to produce audio:", err);
@@ -828,9 +834,12 @@ export function useMeetSocket({
           }
 
           videoProducerRef.current = videoProducer;
+          const videoProducerId = videoProducer.id;
 
           videoProducer.on("transportclose", () => {
-            videoProducerRef.current = null;
+            if (videoProducerRef.current?.id === videoProducerId) {
+              videoProducerRef.current = null;
+            }
           });
         } catch (err) {
           console.error("[Meets] Failed to produce video:", err);
@@ -849,6 +858,9 @@ export function useMeetSocket({
 
   const consumeProducer = useCallback(
     async (producerInfo: ProducerInfo): Promise<void> => {
+      if (producerInfo.producerUserId === userId) {
+        return;
+      }
       if (consumersRef.current.has(producerInfo.producerId)) {
         return;
       }
@@ -980,6 +992,7 @@ export function useMeetSocket({
       dispatchParticipants,
       handleProducerClosed,
       setActiveScreenShareId,
+      userId,
     ],
   );
 
@@ -1142,9 +1155,11 @@ export function useMeetSocket({
                   response.webinarRequiresInviteCode ??
                   previous?.requiresInviteCode ??
                   false,
+                linkSlug: previous?.linkSlug ?? null,
                 feedMode: previous?.feedMode ?? "active-speaker",
               }));
               currentRoomIdRef.current = targetRoomId;
+              serverRoomIdRef.current = response.roomId ?? targetRoomId;
               setIsTtsDisabled(response.isTtsDisabled ?? false);
               resolve("waiting");
               return;
@@ -1157,6 +1172,7 @@ export function useMeetSocket({
                 response.existingProducers,
               );
               currentRoomIdRef.current = targetRoomId;
+              serverRoomIdRef.current = response.roomId ?? targetRoomId;
               setIsRoomLocked(response.isLocked ?? false);
               setIsTtsDisabled(response.isTtsDisabled ?? false);
               setWebinarRole(response.webinarRole ?? null);
@@ -1176,6 +1192,7 @@ export function useMeetSocket({
                   response.webinarRequiresInviteCode ??
                   previous?.requiresInviteCode ??
                   false,
+                linkSlug: previous?.linkSlug ?? null,
                 feedMode: previous?.feedMode ?? "active-speaker",
               }));
 
@@ -1278,12 +1295,11 @@ export function useMeetSocket({
             const cachedToken = prewarm?.getCachedToken?.(roomIdForJoin);
             const tokenPromise = cachedToken
               ? Promise.resolve(cachedToken)
-              : getJoinInfo(roomIdForJoin, sessionIdRef.current, {
-                  user,
-                  isHost: isAdmin,
-                  joinMode,
-                  webinarSignedToken,
-                });
+                : getJoinInfo(roomIdForJoin, sessionIdRef.current, {
+                    user,
+                    isHost: isAdmin,
+                    joinMode,
+                  });
 
             const [{ token, sfuUrl }, { io }] = await Promise.all([
               tokenPromise,
@@ -1379,6 +1395,9 @@ export function useMeetSocket({
 
             socket.on("newProducer", async (data: ProducerInfo) => {
               console.log("[Meets] New producer:", data);
+              if (data.producerUserId === userId) {
+                return;
+              }
               if (joinMode === "webinar_attendee") {
                 void syncProducers();
                 return;
@@ -1388,39 +1407,63 @@ export function useMeetSocket({
 
             socket.on(
               "producerClosed",
-              ({ producerId }: { producerId: string }) => {
+              ({
+                producerId,
+                producerUserId,
+              }: {
+                producerId: string;
+                producerUserId?: string;
+              }) => {
                 console.log("[Meets] Producer closed:", producerId);
-                handleProducerClosed(producerId);
+                const localAudioProducer = audioProducerRef.current;
+                const localVideoProducer = videoProducerRef.current;
+                const localScreenProducer = screenProducerRef.current;
+                const matchesLocalProducer =
+                  localAudioProducer?.id === producerId ||
+                  localVideoProducer?.id === producerId ||
+                  localScreenProducer?.id === producerId;
 
-                if (audioProducerRef.current?.id === producerId) {
-                  setIsMuted(true);
-                  audioProducerRef.current.close();
-                  audioProducerRef.current = null;
-                } else if (videoProducerRef.current?.id === producerId) {
-                  setIsCameraOff(true);
-                  videoProducerRef.current.close();
-                  videoProducerRef.current = null;
-                  const track = localStream?.getVideoTracks()[0];
-                  if (track) {
-                    stopLocalTrack(track);
-                    track.enabled = false;
+                if (
+                  producerUserId === userId ||
+                  (producerUserId == null && matchesLocalProducer)
+                ) {
+                  if (localAudioProducer?.id === producerId) {
+                    try {
+                      localAudioProducer.close();
+                    } catch {}
+                    if (audioProducerRef.current?.id === producerId) {
+                      audioProducerRef.current = null;
+                    }
+                    return;
                   }
-                  setLocalStream((prev) => {
-                    if (!prev) return prev;
-                    const remaining = prev
-                      .getTracks()
-                      .filter((item) => item.kind !== "video");
-                    return new MediaStream(remaining);
-                  });
-                } else if (screenProducerRef.current?.id === producerId) {
-                  if (screenProducerRef.current.track) {
-                    screenProducerRef.current.track.stop();
+
+                  if (localVideoProducer?.id === producerId) {
+                    try {
+                      localVideoProducer.close();
+                    } catch {}
+                    if (videoProducerRef.current?.id === producerId) {
+                      videoProducerRef.current = null;
+                    }
+                    return;
                   }
-                  setIsScreenSharing(false);
-                  screenProducerRef.current.close();
-                  screenProducerRef.current = null;
-                  setActiveScreenShareId(null);
+
+                  if (localScreenProducer?.id === producerId) {
+                    if (localScreenProducer.track) {
+                      localScreenProducer.track.stop();
+                    }
+                    try {
+                      localScreenProducer.close();
+                    } catch {}
+                    if (screenProducerRef.current?.id === producerId) {
+                      screenProducerRef.current = null;
+                    }
+                    setIsScreenSharing(false);
+                    setActiveScreenShareId(null);
+                    return;
+                  }
                 }
+
+                handleProducerClosed(producerId);
               },
             );
 
@@ -1962,6 +2005,7 @@ export function useMeetSocket({
                   attendeeCount:
                     attendeeCount ?? previous?.attendeeCount ?? 0,
                   requiresInviteCode: previous?.requiresInviteCode ?? false,
+                  linkSlug: previous?.linkSlug ?? null,
                   feedMode: previous?.feedMode ?? "active-speaker",
                 }));
               },
@@ -2005,7 +2049,6 @@ export function useMeetSocket({
       handleReconnectRef,
       getJoinInfo,
       joinMode,
-      webinarSignedToken,
       isAdmin,
       setIsAdmin,
       isRoomEvent,
@@ -2174,6 +2217,7 @@ export function useMeetSocket({
       setConnectionState("connecting");
       primeAudioOutput();
       refs.intentionalDisconnectRef.current = false;
+      serverRoomIdRef.current = null;
       setRoomId(targetRoomId);
       if (joinMode === "webinar_attendee") {
         setIsAdmin(false);

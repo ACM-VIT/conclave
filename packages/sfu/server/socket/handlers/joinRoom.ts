@@ -22,6 +22,7 @@ import {
 } from "../../webinarNotifications.js";
 import {
   getOrCreateWebinarRoomConfig,
+  resolveWebinarLinkTarget,
   toWebinarConfigSnapshot,
   verifyInviteCode,
 } from "../../webinar.js";
@@ -34,27 +35,6 @@ import {
   getBrowserState,
 } from "./sharedBrowserHandlers.js";
 
-type WebinarLinkProof = {
-  roomId: string;
-  clientId: string;
-  linkVersion: number;
-};
-
-const isValidWebinarLinkProof = (
-  value: unknown,
-): value is WebinarLinkProof => {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return false;
-  }
-
-  const proof = value as Partial<WebinarLinkProof>;
-  return (
-    typeof proof.roomId === "string" &&
-    typeof proof.clientId === "string" &&
-    typeof proof.linkVersion === "number"
-  );
-};
-
 export const registerJoinRoomHandler = (context: ConnectionContext): void => {
   const { socket, io, state } = context;
 
@@ -65,16 +45,19 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
       callback: (response: JoinRoomResponse | { error: string }) => void,
     ) => {
       try {
-        const { roomId, sessionId } = data;
+        const requestedRoomId =
+          typeof data?.roomId === "string" ? data.roomId.trim() : "";
+        const { sessionId } = data;
         const user = (socket as any).user;
+        if (!requestedRoomId) {
+          respond(callback, { error: "Missing room ID" });
+          return;
+        }
         const joinMode =
           user?.joinMode === "webinar_attendee"
             ? "webinar_attendee"
             : "meeting";
         const isWebinarAttendeeJoin = joinMode === "webinar_attendee";
-        const webinarLinkProof = isValidWebinarLinkProof(user?.webinarLinkProof)
-          ? user.webinarLinkProof
-          : null;
 
         const hostRequested =
           !isWebinarAttendeeJoin && Boolean(user?.isHost ?? user?.isAdmin);
@@ -82,6 +65,19 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           !isWebinarAttendeeJoin && Boolean(user?.allowRoomCreation);
         const clientId =
           typeof user?.clientId === "string" ? user.clientId : "default";
+        let roomId = requestedRoomId;
+        if (isWebinarAttendeeJoin) {
+          const webinarTarget = resolveWebinarLinkTarget(
+            state.webinarLinks,
+            requestedRoomId,
+            clientId,
+          );
+          if (!webinarTarget) {
+            respond(callback, { error: "Webinar is not live." });
+            return;
+          }
+          roomId = webinarTarget.roomId;
+        }
         const clientPolicy =
           config.clientPolicies[clientId] ?? config.clientPolicies.default;
         const displayNameCandidate = normalizeDisplayName(data?.displayName);
@@ -144,16 +140,11 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             return;
           }
 
-          if (!webinarConfig.publicAccess) {
-            if (
-              !webinarLinkProof ||
-              webinarLinkProof.roomId !== roomId ||
-              webinarLinkProof.clientId !== clientId ||
-              webinarLinkProof.linkVersion !== webinarConfig.linkVersion
-            ) {
-              respond(callback, { error: "Invalid webinar link." });
-              return;
-            }
+          if (!webinarConfig.publicAccess && !webinarConfig.inviteCodeHash) {
+            respond(callback, {
+              error: "Host must set an invite code before disabling public access.",
+            });
+            return;
           }
 
           if (webinarConfig.inviteCodeHash) {
@@ -284,6 +275,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           }
 
           respond(callback, {
+            roomId,
             rtpCapabilities: room.rtpCapabilities,
             existingProducers: [],
             status: "waiting",
@@ -324,6 +316,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           }
 
           respond(callback, {
+            roomId,
             rtpCapabilities: room.rtpCapabilities,
             existingProducers: [],
             status: "waiting",
@@ -533,6 +526,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         }
 
         respond(callback, {
+          roomId,
           rtpCapabilities: context.currentRoom.rtpCapabilities,
           existingProducers,
           status: "joined",

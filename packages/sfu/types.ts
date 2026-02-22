@@ -51,6 +51,7 @@ export interface JoinRoomData {
 }
 
 export interface JoinRoomResponse {
+  roomId?: string;
   rtpCapabilities: RtpCapabilities;
   existingProducers: ProducerInfo[];
   status?: "waiting" | "joined";
@@ -125,6 +126,7 @@ export interface WebinarConfigSnapshot {
   maxAttendees: number;
   attendeeCount: number;
   requiresInviteCode: boolean;
+  linkSlug: string | null;
   feedMode: WebinarFeedMode;
 }
 
@@ -134,11 +136,12 @@ export interface WebinarUpdateRequest {
   locked?: boolean;
   maxAttendees?: number;
   inviteCode?: string | null;
+  linkSlug?: string | null;
 }
 
 export interface WebinarLinkResponse {
+  slug: string;
   link: string;
-  signedToken?: string;
   publicAccess: boolean;
   linkVersion: number;
 }

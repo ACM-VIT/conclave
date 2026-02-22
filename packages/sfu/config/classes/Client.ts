@@ -67,15 +67,33 @@ export class Client {
   addProducer(producer: Producer): void {
     const type = (producer.appData.type as ProducerType) || "webcam";
     const key = createProducerKey(producer.kind, type);
+    const previousProducer = this.producers.get(key);
 
     this.producers.set(key, producer);
 
     const cleanup = () => {
-      this.producers.delete(key);
+      const activeProducer = this.producers.get(key);
+      if (activeProducer?.id === producer.id) {
+        this.producers.delete(key);
+      }
     };
 
     producer.on("transportclose", cleanup);
     producer.observer.on("close", cleanup);
+
+    if (previousProducer && previousProducer.id !== producer.id) {
+      try {
+        previousProducer.close();
+      } catch {}
+    }
+
+    if (type === "webcam") {
+      if (producer.kind === "audio") {
+        this.isMuted = producer.paused;
+      } else if (producer.kind === "video") {
+        this.isCameraOff = producer.paused;
+      }
+    }
   }
 
   addConsumer(consumer: Consumer): void {

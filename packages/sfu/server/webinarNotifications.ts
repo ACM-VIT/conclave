@@ -8,7 +8,7 @@ import type {
 } from "../types.js";
 import type { SfuState } from "./state.js";
 import {
-  createWebinarLinkToken,
+  ensureWebinarLinkSlug,
   getOrCreateWebinarRoomConfig,
   getWebinarBaseUrl,
   toWebinarConfigSnapshot,
@@ -71,33 +71,29 @@ export const emitWebinarFeedChanged = (
 };
 
 export const getWebinarLinkResponse = (
+  state: SfuState,
   room: Room,
   options: {
     linkVersion: number;
     publicAccess: boolean;
   },
 ): WebinarLinkResponse => {
-  const base = getWebinarBaseUrl();
-  const path = `${base}/w/${encodeURIComponent(room.id)}`;
-
-  if (options.publicAccess) {
-    return {
-      link: path,
-      publicAccess: true,
-      linkVersion: options.linkVersion,
-    };
-  }
-
-  const signedToken = createWebinarLinkToken({
-    roomId: room.id,
-    clientId: room.clientId,
-    linkVersion: options.linkVersion,
+  const webinarConfig = getOrCreateWebinarRoomConfig(
+    state.webinarConfigs,
+    room.channelId,
+  );
+  const slug = ensureWebinarLinkSlug({
+    webinarConfig,
+    webinarLinks: state.webinarLinks,
+    room,
   });
+  const base = getWebinarBaseUrl();
+  const path = `${base}/w/${encodeURIComponent(slug)}`;
 
   return {
-    link: `${path}?wt=${encodeURIComponent(signedToken)}`,
-    signedToken,
-    publicAccess: false,
+    slug,
+    link: path,
+    publicAccess: options.publicAccess,
     linkVersion: options.linkVersion,
   };
 };

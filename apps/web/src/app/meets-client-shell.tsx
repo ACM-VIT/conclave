@@ -13,7 +13,6 @@ type MeetsClientShellProps = {
   forceJoinOnly?: boolean;
   bypassMediaPermissions?: boolean;
   joinMode?: JoinMode;
-  webinarSignedToken?: string;
   autoJoinOnMount?: boolean;
   hideJoinUI?: boolean;
 };
@@ -23,7 +22,6 @@ export default function MeetsClientShell({
   forceJoinOnly,
   bypassMediaPermissions,
   joinMode,
-  webinarSignedToken,
   autoJoinOnMount,
   hideJoinUI,
 }: MeetsClientShellProps) {
@@ -33,7 +31,6 @@ export default function MeetsClientShell({
       forceJoinOnly={forceJoinOnly}
       bypassMediaPermissions={bypassMediaPermissions}
       joinMode={joinMode}
-      webinarSignedToken={webinarSignedToken}
       autoJoinOnMount={autoJoinOnMount}
       hideJoinUI={hideJoinUI}
       fontClassName={roboto.className}

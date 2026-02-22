@@ -1,6 +1,8 @@
 "use client";
 
 import {
+  ChevronLeft,
+  ChevronRight,
   Globe,
   Link2,
   Lock,
@@ -11,7 +13,7 @@ import {
   VolumeX,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import type {
   WebinarConfigSnapshot,
   WebinarLinkResponse,
@@ -21,6 +23,17 @@ import type {
 const DEFAULT_WEBINAR_CAP = 500;
 const MIN_WEBINAR_CAP = 1;
 const MAX_WEBINAR_CAP = 5000;
+const WEBINAR_LINK_CODE_PATTERN = /^[a-z0-9-]{3,32}$/;
+const normalizeWebinarLinkCodeInput = (value: string): string =>
+  value.toLowerCase().replace(/[^a-z0-9-]+/g, "").slice(0, 32);
+
+const monoFontStyle = { fontFamily: "'PolySans Mono', monospace" };
+const rowButtonClass =
+  "flex w-full items-center justify-between gap-3 rounded-md bg-transparent px-3 py-2 text-left text-sm text-[#FEFCD9]/90 transition hover:bg-[#FEFCD9]/5 disabled:cursor-not-allowed disabled:opacity-45";
+const inputClass =
+  "w-full rounded-md border border-[#FEFCD9]/10 bg-black/40 px-3 py-1.5 text-xs text-[#FEFCD9] outline-none placeholder:text-[#FEFCD9]/30 focus:border-[#FEFCD9]/25";
+const actionButtonClass =
+  "inline-flex items-center justify-center rounded-md border border-[#FEFCD9]/10 px-3 py-1.5 text-[11px] text-[#FEFCD9]/85 transition hover:border-[#FEFCD9]/25 hover:bg-[#FEFCD9]/10 disabled:cursor-not-allowed disabled:opacity-40";
 
 interface MeetSettingsPanelProps {
   isRoomLocked: boolean;
@@ -43,6 +56,8 @@ interface MeetSettingsPanelProps {
   onRotateWebinarLink?: () => Promise<WebinarLinkResponse | null>;
   onClose: () => void;
 }
+
+type ToggleTone = "warning" | "success";
 
 const parseAttendeeCap = (value: string): number | null => {
   const parsed = Number.parseInt(value, 10);
@@ -67,6 +82,61 @@ const copyToClipboard = async (value: string): Promise<boolean> => {
   return false;
 };
 
+function StatusBadge({
+  isOn,
+  tone,
+}: {
+  isOn: boolean;
+  tone: ToggleTone;
+}) {
+  const activeClass =
+    tone === "success"
+      ? "border-emerald-300/40 bg-emerald-300/10 text-emerald-200"
+      : "border-amber-300/40 bg-amber-300/10 text-amber-200";
+
+  return (
+    <span
+      className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${
+        isOn ? activeClass : "border-[#FEFCD9]/10 text-[#FEFCD9]/40"
+      }`}
+    >
+      {isOn ? "On" : "Off"}
+    </span>
+  );
+}
+
+function ToggleRow({
+  label,
+  icon,
+  isOn,
+  tone,
+  onClick,
+  disabled = false,
+}: {
+  label: string;
+  icon: ReactNode;
+  isOn: boolean;
+  tone: ToggleTone;
+  onClick?: () => void;
+  disabled?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      aria-pressed={isOn}
+      className={rowButtonClass}
+    >
+      <span className="inline-flex items-center gap-2 text-[#FEFCD9]">
+        {icon}
+        <span>{label}</span>
+      </span>
+      <StatusBadge isOn={isOn} tone={tone} />
+    </button>
+  );
+}
+
 export default function MeetSettingsPanel({
   isRoomLocked,
   onToggleLock,
@@ -86,12 +156,12 @@ export default function MeetSettingsPanel({
   onRotateWebinarLink,
   onClose,
 }: MeetSettingsPanelProps) {
+  const [activeView, setActiveView] = useState<"main" | "webinar">("main");
   const [inviteCodeInput, setInviteCodeInput] = useState("");
   const [maxAttendeesInput, setMaxAttendeesInput] = useState(
     String(webinarConfig?.maxAttendees ?? DEFAULT_WEBINAR_CAP),
   );
-  const [webinarNotice, setWebinarNotice] = useState<string | null>(null);
-  const [webinarError, setWebinarError] = useState<string | null>(null);
+  const [customLinkCodeInput, setCustomLinkCodeInput] = useState("");
   const [isWebinarWorking, setIsWebinarWorking] = useState(false);
 
   useEffect(() => {
@@ -99,6 +169,10 @@ export default function MeetSettingsPanel({
       String(webinarConfig?.maxAttendees ?? DEFAULT_WEBINAR_CAP),
     );
   }, [webinarConfig?.maxAttendees]);
+
+  useEffect(() => {
+    setCustomLinkCodeInput(webinarConfig?.linkSlug ?? "");
+  }, [webinarConfig?.linkSlug]);
 
   const refreshWebinarConfig = useCallback(async () => {
     if (!onGetWebinarConfig) return;
@@ -112,23 +186,16 @@ export default function MeetSettingsPanel({
   const withWebinarTask = useCallback(
     async (
       task: () => Promise<void>,
-      options?: { successMessage?: string; clearInviteInput?: boolean },
+      options?: { clearInviteInput?: boolean },
     ) => {
-      setWebinarError(null);
-      setWebinarNotice(null);
       setIsWebinarWorking(true);
       try {
         await task();
         if (options?.clearInviteInput) {
           setInviteCodeInput("");
         }
-        if (options?.successMessage) {
-          setWebinarNotice(options.successMessage);
-        }
       } catch (error) {
-        setWebinarError(
-          error instanceof Error ? error.message : "Webinar update failed.",
-        );
+        console.error("Webinar action failed:", error);
       } finally {
         setIsWebinarWorking(false);
       }
@@ -150,13 +217,13 @@ export default function MeetSettingsPanel({
   );
 
   const applyWebinarLink = useCallback(
-    async (response: WebinarLinkResponse | null, label: string) => {
-      if (!response?.link) {
+    async (response: WebinarLinkResponse | null) => {
+      if (!response?.link || !response.slug) {
         throw new Error("Webinar link unavailable.");
       }
       onSetWebinarLink?.(response.link);
-      const copied = await copyToClipboard(response.link);
-      setWebinarNotice(copied ? `${label} copied.` : `${label} ready.`);
+      setCustomLinkCodeInput(response.slug);
+      await copyToClipboard(response.link);
     },
     [onSetWebinarLink],
   );
@@ -165,21 +232,24 @@ export default function MeetSettingsPanel({
   const attendeeCapCandidate = parseAttendeeCap(maxAttendeesInput);
   const attendeeCount = webinarConfig?.attendeeCount ?? 0;
   const attendeeCap = webinarConfig?.maxAttendees ?? DEFAULT_WEBINAR_CAP;
+  const isWebinarEnabled = Boolean(webinarConfig?.enabled);
+  const normalizedCustomLinkCode = customLinkCodeInput.trim().toLowerCase();
+  const isCustomLinkCodeValid = WEBINAR_LINK_CODE_PATTERN.test(
+    normalizedCustomLinkCode,
+  );
 
   return (
     <div
-      className="absolute bottom-14 left-1/2 z-50 max-h-[70vh] w-[320px] -translate-x-1/2 overflow-y-auto rounded-xl border border-white/10 bg-[#0f0f0f]/95 p-2.5 shadow-xl backdrop-blur-md"
+      className="absolute bottom-14 left-1/2 z-50 max-h-[70vh] w-[320px] max-w-[calc(100vw-1.5rem)] -translate-x-1/2 overflow-y-auto rounded-xl border border-[#FEFCD9]/10 bg-[#0d0e0d]/95 p-2.5 shadow-2xl backdrop-blur-md"
       style={{ fontFamily: "'PolySans Trial', sans-serif" }}
     >
-      <div className="mb-2 flex items-center justify-between px-1">
-        <div>
-          <p
-            className="text-[10px] uppercase tracking-[0.18em] text-[#FEFCD9]/45"
-            style={{ fontFamily: "'PolySans Mono', monospace" }}
-          >
-            Meeting settings
-          </p>
-        </div>
+      <div className="mb-2 flex items-center justify-between border-b border-[#FEFCD9]/10 px-1 pb-2">
+        <p
+          className="text-[10px] uppercase tracking-[0.16em] text-[#FEFCD9]/45"
+          style={monoFontStyle}
+        >
+          {activeView === "webinar" ? "Webinar settings" : "Meeting settings"}
+        </p>
         <button
           onClick={onClose}
           className="flex h-6 w-6 items-center justify-center rounded-md text-[#FEFCD9]/45 transition hover:bg-[#FEFCD9]/10 hover:text-[#FEFCD9]"
@@ -189,410 +259,354 @@ export default function MeetSettingsPanel({
         </button>
       </div>
 
-      <div className="space-y-1">
-        <button
-          type="button"
-          onClick={onToggleLock}
-          disabled={!onToggleLock}
-          aria-pressed={isRoomLocked}
-          className="flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-left text-sm text-[#FEFCD9]/80 transition hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          <div className="flex items-center gap-2">
-            <Lock
-              className={`h-4 w-4 ${
-                isRoomLocked ? "text-amber-300" : "text-[#FEFCD9]/60"
-              }`}
+      {activeView === "main" ? (
+        <div className="rounded-lg border border-[#FEFCD9]/10 bg-black/25">
+          <div className="divide-y divide-[#FEFCD9]/10">
+            <ToggleRow
+              label="Lock meeting"
+              icon={
+                <Lock
+                  className={`h-4 w-4 ${isRoomLocked ? "text-amber-300" : "text-[#FEFCD9]/65"}`}
+                />
+              }
+              isOn={isRoomLocked}
+              tone="warning"
+              onClick={onToggleLock}
+              disabled={!onToggleLock}
             />
-            <span className="text-[#FEFCD9]">Lock meeting</span>
-          </div>
-          <span
-            className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${
-              isRoomLocked
-                ? "border-amber-300/40 bg-amber-300/10 text-amber-200"
-                : "border-white/10 text-[#FEFCD9]/40"
-            }`}
-          >
-            {isRoomLocked ? "On" : "Off"}
-          </span>
-        </button>
-        <button
-          type="button"
-          onClick={onToggleNoGuests}
-          disabled={!onToggleNoGuests}
-          aria-pressed={isNoGuests}
-          className="flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-left text-sm text-[#FEFCD9]/80 transition hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          <div className="flex items-center gap-2">
-            <ShieldBan
-              className={`h-4 w-4 ${
-                isNoGuests ? "text-amber-300" : "text-[#FEFCD9]/60"
-              }`}
+            <ToggleRow
+              label="Block guests"
+              icon={
+                <ShieldBan
+                  className={`h-4 w-4 ${isNoGuests ? "text-amber-300" : "text-[#FEFCD9]/65"}`}
+                />
+              }
+              isOn={isNoGuests}
+              tone="warning"
+              onClick={onToggleNoGuests}
+              disabled={!onToggleNoGuests}
             />
-            <span className="text-[#FEFCD9]">Block guests</span>
-          </div>
-          <span
-            className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${
-              isNoGuests
-                ? "border-amber-300/40 bg-amber-300/10 text-amber-200"
-                : "border-white/10 text-[#FEFCD9]/40"
-            }`}
-          >
-            {isNoGuests ? "On" : "Off"}
-          </span>
-        </button>
-        <button
-          type="button"
-          onClick={onToggleChatLock}
-          disabled={!onToggleChatLock}
-          aria-pressed={isChatLocked}
-          className="flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-left text-sm text-[#FEFCD9]/80 transition hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          <div className="flex items-center gap-2">
-            <MessageSquareLock
-              className={`h-4 w-4 ${
-                isChatLocked ? "text-amber-300" : "text-[#FEFCD9]/60"
-              }`}
+            <ToggleRow
+              label="Lock chat"
+              icon={
+                <MessageSquareLock
+                  className={`h-4 w-4 ${isChatLocked ? "text-amber-300" : "text-[#FEFCD9]/65"}`}
+                />
+              }
+              isOn={isChatLocked}
+              tone="warning"
+              onClick={onToggleChatLock}
+              disabled={!onToggleChatLock}
             />
-            <span className="text-[#FEFCD9]">Lock chat</span>
-          </div>
-          <span
-            className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${
-              isChatLocked
-                ? "border-amber-300/40 bg-amber-300/10 text-amber-200"
-                : "border-white/10 text-[#FEFCD9]/40"
-            }`}
-          >
-            {isChatLocked ? "On" : "Off"}
-          </span>
-        </button>
-        <button
-          type="button"
-          onClick={onToggleTtsDisabled}
-          disabled={!onToggleTtsDisabled}
-          aria-pressed={isTtsDisabled}
-          className="flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-left text-sm text-[#FEFCD9]/80 transition hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          <div className="flex items-center gap-2">
-            <VolumeX
-              className={`h-4 w-4 ${
-                isTtsDisabled ? "text-amber-300" : "text-[#FEFCD9]/60"
-              }`}
-            />
-            <span className="text-[#FEFCD9]">Disable TTS</span>
-          </div>
-          <span
-            className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${
-              isTtsDisabled
-                ? "border-amber-300/40 bg-amber-300/10 text-amber-200"
-                : "border-white/10 text-[#FEFCD9]/40"
-            }`}
-          >
-            {isTtsDisabled ? "On" : "Off"}
-          </span>
-        </button>
-      </div>
-
-      <div className="my-3 h-px bg-white/10" />
-
-      <div className="space-y-2">
-        <div className="flex items-center justify-between">
-          <p
-            className="text-[10px] uppercase tracking-[0.18em] text-[#FEFCD9]/45"
-            style={{ fontFamily: "'PolySans Mono', monospace" }}
-          >
-            Webinar mode
-          </p>
-          {webinarRole ? (
-            <span className="rounded-full border border-white/10 px-2 py-0.5 text-[10px] uppercase tracking-wide text-[#FEFCD9]/50">
-              {webinarRole}
-            </span>
-          ) : null}
-        </div>
-
-        <button
-          type="button"
-          onClick={() =>
-            void withWebinarTask(
-              async () => {
-                await updateWebinarConfig({
-                  enabled: !Boolean(webinarConfig?.enabled),
-                });
-              },
-              {
-                successMessage: webinarConfig?.enabled
-                  ? "Webinar disabled."
-                  : "Webinar enabled.",
-              },
-            )
-          }
-          disabled={isWebinarWorking}
-          className="flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-left text-sm text-[#FEFCD9]/80 transition hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          <div className="flex items-center gap-2">
-            <Users
-              className={`h-4 w-4 ${
-                webinarConfig?.enabled ? "text-emerald-300" : "text-[#FEFCD9]/60"
-              }`}
-            />
-            <span className="text-[#FEFCD9]">Enable webinar</span>
-          </div>
-          <span
-            className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${
-              webinarConfig?.enabled
-                ? "border-emerald-300/40 bg-emerald-300/10 text-emerald-200"
-                : "border-white/10 text-[#FEFCD9]/40"
-            }`}
-          >
-            {webinarConfig?.enabled ? "On" : "Off"}
-          </span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() =>
-            void withWebinarTask(
-              async () => {
-                await updateWebinarConfig({
-                  publicAccess: !Boolean(webinarConfig?.publicAccess),
-                });
-              },
-              {
-                successMessage: webinarConfig?.publicAccess
-                  ? "Public access disabled."
-                  : "Public access enabled.",
-              },
-            )
-          }
-          disabled={isWebinarWorking || !webinarConfig?.enabled}
-          className="flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-left text-sm text-[#FEFCD9]/80 transition hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          <div className="flex items-center gap-2">
-            <Globe
-              className={`h-4 w-4 ${
-                webinarConfig?.publicAccess
-                  ? "text-emerald-300"
-                  : "text-[#FEFCD9]/60"
-              }`}
-            />
-            <span className="text-[#FEFCD9]">Public webinar access</span>
-          </div>
-          <span
-            className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${
-              webinarConfig?.publicAccess
-                ? "border-emerald-300/40 bg-emerald-300/10 text-emerald-200"
-                : "border-white/10 text-[#FEFCD9]/40"
-            }`}
-          >
-            {webinarConfig?.publicAccess ? "On" : "Off"}
-          </span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() =>
-            void withWebinarTask(
-              async () => {
-                await updateWebinarConfig({
-                  locked: !Boolean(webinarConfig?.locked),
-                });
-              },
-              {
-                successMessage: webinarConfig?.locked
-                  ? "Webinar unlocked."
-                  : "Webinar locked.",
-              },
-            )
-          }
-          disabled={isWebinarWorking || !webinarConfig?.enabled}
-          className="flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-left text-sm text-[#FEFCD9]/80 transition hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          <div className="flex items-center gap-2">
-            <Lock
-              className={`h-4 w-4 ${
-                webinarConfig?.locked ? "text-amber-300" : "text-[#FEFCD9]/60"
-              }`}
-            />
-            <span className="text-[#FEFCD9]">Lock webinar attendees</span>
-          </div>
-          <span
-            className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${
-              webinarConfig?.locked
-                ? "border-amber-300/40 bg-amber-300/10 text-amber-200"
-                : "border-white/10 text-[#FEFCD9]/40"
-            }`}
-          >
-            {webinarConfig?.locked ? "On" : "Off"}
-          </span>
-        </button>
-
-        <div className="rounded-lg border border-white/10 bg-black/30 p-2.5">
-          <p className="text-[11px] text-[#FEFCD9]/60">
-            Attendees: <span className="text-[#FEFCD9]">{attendeeCount}</span> /{" "}
-            <span className="text-[#FEFCD9]">{attendeeCap}</span>
-          </p>
-          <div className="mt-2 flex items-center gap-2">
-            <input
-              type="number"
-              min={MIN_WEBINAR_CAP}
-              max={MAX_WEBINAR_CAP}
-              value={maxAttendeesInput}
-              onChange={(event) => setMaxAttendeesInput(event.target.value)}
-              className="w-full rounded-lg border border-white/10 bg-black/40 px-3 py-1.5 text-xs text-[#FEFCD9] outline-none placeholder:text-[#FEFCD9]/30 focus:border-[#FEFCD9]/30"
-              placeholder="Attendee cap"
+            <ToggleRow
+              label="Disable TTS"
+              icon={
+                <VolumeX
+                  className={`h-4 w-4 ${isTtsDisabled ? "text-amber-300" : "text-[#FEFCD9]/65"}`}
+                />
+              }
+              isOn={isTtsDisabled}
+              tone="warning"
+              onClick={onToggleTtsDisabled}
+              disabled={!onToggleTtsDisabled}
             />
             <button
               type="button"
-              disabled={
-                isWebinarWorking ||
-                !webinarConfig?.enabled ||
-                attendeeCapCandidate == null
-              }
-              onClick={() =>
-                void withWebinarTask(
-                  async () => {
-                    if (attendeeCapCandidate == null) {
-                      throw new Error("Enter a valid attendee cap.");
-                    }
-                    await updateWebinarConfig({
-                      maxAttendees: attendeeCapCandidate,
-                    });
-                  },
-                  { successMessage: "Attendee cap updated." },
-                )
-              }
-              className="rounded-lg border border-white/10 px-3 py-1.5 text-xs text-[#FEFCD9] transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
+              onClick={() => setActiveView("webinar")}
+              className={rowButtonClass}
             >
-              Save
-            </button>
-          </div>
-        </div>
-
-        <div className="rounded-lg border border-white/10 bg-black/30 p-2.5">
-          <p className="text-[11px] text-[#FEFCD9]/60">
-            Invite code:{" "}
-            <span className="text-[#FEFCD9]">
-              {webinarConfig?.requiresInviteCode ? "Required" : "Not required"}
-            </span>
-          </p>
-          <div className="mt-2 flex items-center gap-2">
-            <input
-              type="text"
-              value={inviteCodeInput}
-              onChange={(event) => setInviteCodeInput(event.target.value)}
-              className="w-full rounded-lg border border-white/10 bg-black/40 px-3 py-1.5 text-xs text-[#FEFCD9] outline-none placeholder:text-[#FEFCD9]/30 focus:border-[#FEFCD9]/30"
-              placeholder="Set invite code"
-            />
-            <button
-              type="button"
-              disabled={
-                isWebinarWorking ||
-                !webinarConfig?.enabled ||
-                !inviteCodeInput.trim()
-              }
-              onClick={() =>
-                void withWebinarTask(
-                  async () => {
-                    await updateWebinarConfig({
-                      inviteCode: inviteCodeInput.trim(),
-                    });
-                  },
-                  { successMessage: "Invite code saved.", clearInviteInput: true },
-                )
-              }
-              className="rounded-lg border border-white/10 px-3 py-1.5 text-xs text-[#FEFCD9] transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              Save
-            </button>
-            <button
-              type="button"
-              disabled={isWebinarWorking || !webinarConfig?.requiresInviteCode}
-              onClick={() =>
-                void withWebinarTask(
-                  async () => {
-                    await updateWebinarConfig({ inviteCode: null });
-                  },
-                  { successMessage: "Invite code cleared." },
-                )
-              }
-              className="rounded-lg border border-white/10 px-3 py-1.5 text-xs text-[#FEFCD9]/70 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              Clear
-            </button>
-          </div>
-        </div>
-
-        <div className="rounded-lg border border-white/10 bg-black/30 p-2.5">
-          <div className="flex items-center gap-2">
-            <Link2 className="h-4 w-4 text-[#FEFCD9]/60" />
-            <input
-              type="text"
-              readOnly
-              value={currentLink}
-              placeholder="Generate webinar link"
-              className="w-full rounded-lg border border-white/10 bg-black/40 px-3 py-1.5 text-xs text-[#FEFCD9] outline-none placeholder:text-[#FEFCD9]/30"
-            />
-          </div>
-          <div className="mt-2 flex items-center gap-2">
-            <button
-              type="button"
-              disabled={isWebinarWorking || !webinarConfig?.enabled}
-              onClick={() =>
-                void withWebinarTask(async () => {
-                  if (!onGenerateWebinarLink) {
-                    throw new Error("Link generation is unavailable.");
-                  }
-                  const response = await onGenerateWebinarLink();
-                  await applyWebinarLink(response, "Webinar link");
-                })
-              }
-              className="rounded-lg border border-white/10 px-3 py-1.5 text-xs text-[#FEFCD9] transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              Generate
-            </button>
-            <button
-              type="button"
-              disabled={isWebinarWorking || !webinarConfig?.enabled}
-              onClick={() =>
-                void withWebinarTask(async () => {
-                  if (!onRotateWebinarLink) {
-                    throw new Error("Link rotation is unavailable.");
-                  }
-                  const response = await onRotateWebinarLink();
-                  await applyWebinarLink(response, "Rotated webinar link");
-                })
-              }
-              className="rounded-lg border border-white/10 px-3 py-1.5 text-xs text-[#FEFCD9] transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              <span className="inline-flex items-center gap-1">
-                <RotateCw className="h-3 w-3" />
-                Rotate
+              <span className="inline-flex items-center gap-2 text-[#FEFCD9]">
+                <Users className={`h-4 w-4 ${isWebinarEnabled ? "text-emerald-300" : "text-[#FEFCD9]/65"}`} />
+                <span>Webinar settings</span>
+              </span>
+              <span className="inline-flex items-center gap-2">
+                <StatusBadge isOn={isWebinarEnabled} tone="success" />
+                <ChevronRight className="h-4 w-4 text-[#FEFCD9]/45" />
               </span>
             </button>
-            <button
-              type="button"
-              disabled={isWebinarWorking || !currentLink}
-              onClick={() =>
-                void withWebinarTask(async () => {
-                  const copied = await copyToClipboard(currentLink);
-                  if (!copied) {
-                    throw new Error("Clipboard access failed.");
-                  }
-                }, { successMessage: "Webinar link copied." })
-              }
-              className="rounded-lg border border-white/10 px-3 py-1.5 text-xs text-[#FEFCD9] transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              Copy
-            </button>
           </div>
         </div>
+      ) : (
+        <div className="space-y-2">
+          <button
+            type="button"
+            onClick={() => setActiveView("main")}
+            className="inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-[11px] text-[#FEFCD9]/55 transition hover:bg-[#FEFCD9]/10 hover:text-[#FEFCD9]"
+          >
+            <ChevronLeft className="h-3.5 w-3.5" />
+            Back
+          </button>
 
-        {webinarNotice ? (
-          <p className="text-[11px] text-emerald-300/90">{webinarNotice}</p>
-        ) : null}
-        {webinarError ? (
-          <p className="text-[11px] text-[#F95F4A]">{webinarError}</p>
-        ) : null}
-      </div>
+          <div className="rounded-lg border border-[#FEFCD9]/10 bg-black/25">
+            <div className="divide-y divide-[#FEFCD9]/10">
+              <ToggleRow
+                label="Enable webinar"
+                icon={
+                  <Users
+                    className={`h-4 w-4 ${isWebinarEnabled ? "text-emerald-300" : "text-[#FEFCD9]/65"}`}
+                  />
+                }
+                isOn={isWebinarEnabled}
+                tone="success"
+              onClick={() =>
+                void withWebinarTask(
+                  async () => {
+                    await updateWebinarConfig({
+                      enabled: !Boolean(webinarConfig?.enabled),
+                    });
+                  },
+                )
+              }
+              disabled={isWebinarWorking}
+              />
+              <ToggleRow
+                label="Public access"
+                icon={
+                  <Globe
+                    className={`h-4 w-4 ${
+                      webinarConfig?.publicAccess
+                        ? "text-emerald-300"
+                        : "text-[#FEFCD9]/65"
+                    }`}
+                  />
+                }
+                isOn={Boolean(webinarConfig?.publicAccess)}
+                tone="success"
+              onClick={() =>
+                void withWebinarTask(
+                  async () => {
+                    await updateWebinarConfig({
+                      publicAccess: !Boolean(webinarConfig?.publicAccess),
+                    });
+                  },
+                )
+              }
+              disabled={isWebinarWorking || !isWebinarEnabled}
+              />
+              <ToggleRow
+                label="Lock attendees"
+                icon={
+                  <Lock
+                    className={`h-4 w-4 ${
+                      webinarConfig?.locked ? "text-amber-300" : "text-[#FEFCD9]/65"
+                    }`}
+                  />
+                }
+                isOn={Boolean(webinarConfig?.locked)}
+                tone="warning"
+              onClick={() =>
+                void withWebinarTask(
+                  async () => {
+                    await updateWebinarConfig({
+                      locked: !Boolean(webinarConfig?.locked),
+                    });
+                  },
+                )
+              }
+              disabled={isWebinarWorking || !isWebinarEnabled}
+              />
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-[#FEFCD9]/10 bg-black/25 p-2.5">
+            <div className="mb-2 flex items-center justify-between text-[11px] text-[#FEFCD9]/60">
+              <span>Attendees</span>
+              <span>
+                <span className="text-[#FEFCD9]">{attendeeCount}</span> /{" "}
+                <span className="text-[#FEFCD9]">{attendeeCap}</span>
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <input
+                type="number"
+                min={MIN_WEBINAR_CAP}
+                max={MAX_WEBINAR_CAP}
+                value={maxAttendeesInput}
+                onChange={(event) => setMaxAttendeesInput(event.target.value)}
+                className={inputClass}
+                placeholder="Max attendees"
+              />
+              <button
+                type="button"
+                disabled={
+                  isWebinarWorking || !isWebinarEnabled || attendeeCapCandidate == null
+                }
+                onClick={() =>
+                  void withWebinarTask(
+                    async () => {
+                      if (attendeeCapCandidate == null) {
+                        throw new Error("Enter a valid attendee cap.");
+                      }
+                      await updateWebinarConfig({
+                        maxAttendees: attendeeCapCandidate,
+                      });
+                    },
+                  )
+                }
+                className={actionButtonClass}
+              >
+                Save
+              </button>
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-[#FEFCD9]/10 bg-black/25 p-2.5">
+            <div className="mb-2 flex items-center justify-between text-[11px] text-[#FEFCD9]/60">
+              <span>Invite code</span>
+              {webinarRole ? (
+                <span className="rounded-full border border-[#FEFCD9]/10 px-2 py-0.5 text-[10px] uppercase tracking-wide text-[#FEFCD9]/50">
+                  {webinarRole}
+                </span>
+              ) : null}
+            </div>
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                value={inviteCodeInput}
+                onChange={(event) => setInviteCodeInput(event.target.value)}
+                className={inputClass}
+                placeholder="Set invite code"
+              />
+              <button
+                type="button"
+                disabled={isWebinarWorking || !isWebinarEnabled || !inviteCodeInput.trim()}
+                onClick={() =>
+                  void withWebinarTask(
+                    async () => {
+                      await updateWebinarConfig({
+                        inviteCode: inviteCodeInput.trim(),
+                      });
+                    },
+                    { clearInviteInput: true },
+                  )
+                }
+                className={actionButtonClass}
+              >
+                Save
+              </button>
+              <button
+                type="button"
+                disabled={
+                  isWebinarWorking || !isWebinarEnabled || !webinarConfig?.requiresInviteCode
+                }
+                onClick={() =>
+                  void withWebinarTask(
+                    async () => {
+                      await updateWebinarConfig({ inviteCode: null });
+                    },
+                  )
+                }
+                className={actionButtonClass}
+              >
+                Clear
+              </button>
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-[#FEFCD9]/10 bg-black/25 p-2.5">
+            <div className="mb-2 flex items-center gap-2">
+              <input
+                type="text"
+                value={customLinkCodeInput}
+                onChange={(event) =>
+                  setCustomLinkCodeInput(
+                    normalizeWebinarLinkCodeInput(event.target.value),
+                  )
+                }
+                className={inputClass}
+                placeholder="Custom link code"
+              />
+              <button
+                type="button"
+                disabled={
+                  isWebinarWorking || !isWebinarEnabled || !isCustomLinkCodeValid
+                }
+                onClick={() =>
+                  void withWebinarTask(async () => {
+                    if (!onGenerateWebinarLink) {
+                      throw new Error("Link generation is unavailable.");
+                    }
+
+                    await updateWebinarConfig({
+                      linkSlug: normalizedCustomLinkCode,
+                    });
+                    const response = await onGenerateWebinarLink();
+                    await applyWebinarLink(response);
+                  })
+                }
+                className={actionButtonClass}
+              >
+                Save
+              </button>
+            </div>
+            <div className="mb-2 flex items-center gap-2">
+              <Link2 className="h-4 w-4 text-[#FEFCD9]/55" />
+              <input
+                type="text"
+                readOnly
+                value={currentLink}
+                placeholder="Generate webinar link"
+                className={inputClass}
+              />
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              <button
+                type="button"
+                disabled={isWebinarWorking || !isWebinarEnabled}
+                onClick={() =>
+                  void withWebinarTask(async () => {
+                    if (!onGenerateWebinarLink) {
+                      throw new Error("Link generation is unavailable.");
+                    }
+                    const response = await onGenerateWebinarLink();
+                    await applyWebinarLink(response);
+                  })
+                }
+                className={`${actionButtonClass} w-full`}
+              >
+                Generate
+              </button>
+              <button
+                type="button"
+                disabled={isWebinarWorking || !isWebinarEnabled}
+                onClick={() =>
+                  void withWebinarTask(async () => {
+                    if (!onRotateWebinarLink) {
+                      throw new Error("Link rotation is unavailable.");
+                    }
+                    const response = await onRotateWebinarLink();
+                    await applyWebinarLink(response);
+                  })
+                }
+                className={`${actionButtonClass} w-full`}
+              >
+                <span className="inline-flex items-center gap-1">
+                  <RotateCw className="h-3 w-3" />
+                  Rotate
+                </span>
+              </button>
+              <button
+                type="button"
+                disabled={isWebinarWorking || !currentLink}
+                onClick={() =>
+                  void withWebinarTask(
+                    async () => {
+                      const copied = await copyToClipboard(currentLink);
+                      if (!copied) {
+                        throw new Error("Clipboard access failed.");
+                      }
+                    },
+                  )
+                }
+                className={`${actionButtonClass} w-full`}
+              >
+                Copy
+              </button>
+            </div>
+          </div>
+
+        </div>
+      )}
     </div>
   );
 }

@@ -945,22 +945,10 @@ export function useMeetMedia({
         }
 
         const transport = producerTransportRef.current;
-        const currentProducer = videoProducerRef.current;
+        const previousProducer = videoProducerRef.current;
 
-        if (!transport || !currentProducer || !nextVideoTrack) {
+        if (!transport || !nextVideoTrack) {
           return;
-        }
-
-        socketRef.current?.emit(
-          "closeProducer",
-          { producerId: currentProducer.id },
-          () => {}
-        );
-        try {
-          currentProducer.close();
-        } catch {}
-        if (videoProducerRef.current?.id === currentProducer.id) {
-          videoProducerRef.current = null;
         }
 
         let nextProducer: Producer;
@@ -983,11 +971,26 @@ export function useMeetMedia({
         }
 
         videoProducerRef.current = nextProducer;
+        const nextProducerId = nextProducer.id;
         nextProducer.on("transportclose", () => {
-          if (videoProducerRef.current?.id === nextProducer.id) {
+          if (videoProducerRef.current?.id === nextProducerId) {
             videoProducerRef.current = null;
           }
         });
+
+        if (
+          previousProducer &&
+          previousProducer.id !== nextProducerId
+        ) {
+          socketRef.current?.emit(
+            "closeProducer",
+            { producerId: previousProducer.id },
+            () => {}
+          );
+          try {
+            previousProducer.close();
+          } catch {}
+        }
       } catch (err) {
         console.error("[Meets] Failed to update video quality:", err);
       }
@@ -1189,8 +1192,11 @@ export function useMeetMedia({
         });
 
         audioProducerRef.current = audioProducer;
+        const audioProducerId = audioProducer.id;
         audioProducer.on("transportclose", () => {
-          audioProducerRef.current = null;
+          if (audioProducerRef.current?.id === audioProducerId) {
+            audioProducerRef.current = null;
+          }
         });
       }
     } catch (err) {
@@ -1417,8 +1423,11 @@ export function useMeetMedia({
         }
 
         videoProducerRef.current = videoProducer;
+        const videoProducerId = videoProducer.id;
         videoProducer.on("transportclose", () => {
-          videoProducerRef.current = null;
+          if (videoProducerRef.current?.id === videoProducerId) {
+            videoProducerRef.current = null;
+          }
         });
       } catch (err) {
         console.error("[Meets] Failed to restart video:", err);

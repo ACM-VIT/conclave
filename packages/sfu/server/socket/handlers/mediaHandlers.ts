@@ -231,10 +231,19 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
           return;
         }
 
-        await context.currentClient.toggleMute(data.paused);
-
         const audioProducer = context.currentClient.getProducer("audio", "webcam");
-        const muted = audioProducer ? audioProducer.paused : true;
+        if (!audioProducer) {
+          respond(callback, { error: "Microphone producer not found" });
+          return;
+        }
+
+        if (data.paused) {
+          await audioProducer.pause();
+        } else {
+          await audioProducer.resume();
+        }
+
+        const muted = audioProducer.paused;
         context.currentClient.isMuted = muted;
 
         socket.to(context.currentRoom.channelId).emit("participantMuted", {
@@ -269,10 +278,19 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
           return;
         }
 
-        await context.currentClient.toggleCamera(data.paused);
-
         const videoProducer = context.currentClient.getProducer("video", "webcam");
-        const cameraOff = videoProducer ? videoProducer.paused : true;
+        if (!videoProducer) {
+          respond(callback, { error: "Camera producer not found" });
+          return;
+        }
+
+        if (data.paused) {
+          await videoProducer.pause();
+        } else {
+          await videoProducer.resume();
+        }
+
+        const cameraOff = videoProducer.paused;
         context.currentClient.isCameraOff = cameraOff;
 
         socket.to(context.currentRoom.channelId).emit("participantCameraOff", {
@@ -343,7 +361,12 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
           return;
         }
 
-        respond(callback, { error: "Producer not found" });
+        if (context.currentRoom.screenShareProducerId === data.producerId) {
+          context.currentRoom.clearScreenShareProducer(data.producerId);
+          emitWebinarFeedChanged(io, context.currentRoom);
+        }
+
+        respond(callback, { success: true });
       } catch (error) {
         respond(callback, { error: (error as Error).message });
       }

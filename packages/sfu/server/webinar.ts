@@ -1,6 +1,6 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
-import jwt from "jsonwebtoken";
 import { config } from "../config/config.js";
+import type { Room } from "../config/classes/Room.js";
 import type {
   WebinarConfigSnapshot,
   WebinarFeedMode,
@@ -11,6 +11,12 @@ export const DEFAULT_WEBINAR_MAX_ATTENDEES = 500;
 export const MIN_WEBINAR_MAX_ATTENDEES = 1;
 export const MAX_WEBINAR_MAX_ATTENDEES = 5000;
 
+const RANDOM_WEBINAR_LINK_LENGTH = 5;
+const MIN_WEBINAR_LINK_LENGTH = 3;
+const MAX_WEBINAR_LINK_LENGTH = 32;
+const WEBINAR_LINK_PATTERN = /^[a-z0-9-]+$/;
+const RANDOM_WEBINAR_LINK_ALPHABET = "abcdefghijklmnopqrstuvwxyz";
+
 export type WebinarRoomConfig = {
   enabled: boolean;
   publicAccess: boolean;
@@ -18,14 +24,14 @@ export type WebinarRoomConfig = {
   locked: boolean;
   inviteCodeHash: string | null;
   linkVersion: number;
+  linkSlug: string | null;
   feedMode: WebinarFeedMode;
 };
 
-export type WebinarLinkTokenPayload = {
-  typ: "webinar_link";
+export type WebinarLinkTarget = {
+  roomChannelId: string;
   roomId: string;
   clientId: string;
-  linkVersion: number;
 };
 
 export const createDefaultWebinarRoomConfig = (): WebinarRoomConfig => ({
@@ -35,6 +41,7 @@ export const createDefaultWebinarRoomConfig = (): WebinarRoomConfig => ({
   locked: false,
   inviteCodeHash: null,
   linkVersion: 1,
+  linkSlug: null,
   feedMode: "active-speaker",
 });
 
@@ -52,9 +59,7 @@ export const getOrCreateWebinarRoomConfig = (
   return created;
 };
 
-export const normalizeWebinarMaxAttendees = (
-  value: number,
-): number => {
+export const normalizeWebinarMaxAttendees = (value: number): number => {
   if (!Number.isFinite(value)) {
     throw new Error("Invalid webinar attendee cap");
   }
@@ -91,6 +96,170 @@ export const verifyInviteCode = (
   }
 
   return timingSafeEqual(expected, candidate);
+};
+
+export const normalizeWebinarLinkSlug = (value: string): string => {
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) {
+    throw new Error("Webinar link code cannot be empty.");
+  }
+  if (normalized.length < MIN_WEBINAR_LINK_LENGTH) {
+    throw new Error(
+      `Webinar link code must be at least ${MIN_WEBINAR_LINK_LENGTH} characters.`,
+    );
+  }
+  if (normalized.length > MAX_WEBINAR_LINK_LENGTH) {
+    throw new Error(
+      `Webinar link code must be at most ${MAX_WEBINAR_LINK_LENGTH} characters.`,
+    );
+  }
+  if (!WEBINAR_LINK_PATTERN.test(normalized)) {
+    throw new Error("Use only lowercase letters, numbers, or hyphens in the link code.");
+  }
+  return normalized;
+};
+
+const randomWebinarLinkSlug = (length = RANDOM_WEBINAR_LINK_LENGTH): string => {
+  let value = "";
+  for (let index = 0; index < length; index += 1) {
+    const pickIndex = Math.floor(
+      Math.random() * RANDOM_WEBINAR_LINK_ALPHABET.length,
+    );
+    value += RANDOM_WEBINAR_LINK_ALPHABET[pickIndex];
+  }
+  return value;
+};
+
+const upsertWebinarLinkTarget = (
+  webinarLinks: Map<string, WebinarLinkTarget>,
+  slug: string,
+  room: Pick<Room, "channelId" | "id" | "clientId">,
+): void => {
+  webinarLinks.set(slug, {
+    roomChannelId: room.channelId,
+    roomId: room.id,
+    clientId: room.clientId,
+  });
+};
+
+export const clearWebinarLinkSlug = (options: {
+  webinarConfig: WebinarRoomConfig;
+  webinarLinks: Map<string, WebinarLinkTarget>;
+  roomChannelId: string;
+}): boolean => {
+  const { webinarConfig, webinarLinks, roomChannelId } = options;
+  const currentSlug = webinarConfig.linkSlug;
+  if (!currentSlug) {
+    return false;
+  }
+
+  const currentTarget = webinarLinks.get(currentSlug);
+  if (currentTarget?.roomChannelId === roomChannelId) {
+    webinarLinks.delete(currentSlug);
+  }
+
+  webinarConfig.linkSlug = null;
+  return true;
+};
+
+export const setCustomWebinarLinkSlug = (options: {
+  webinarConfig: WebinarRoomConfig;
+  webinarLinks: Map<string, WebinarLinkTarget>;
+  room: Pick<Room, "channelId" | "id" | "clientId">;
+  slug: string;
+}): { slug: string; changed: boolean } => {
+  const { webinarConfig, webinarLinks, room } = options;
+  const normalizedSlug = normalizeWebinarLinkSlug(options.slug);
+  const currentSlug = webinarConfig.linkSlug;
+
+  const existingTarget = webinarLinks.get(normalizedSlug);
+  if (existingTarget && existingTarget.roomChannelId !== room.channelId) {
+    throw new Error("This webinar link code is already in use.");
+  }
+
+  if (currentSlug && currentSlug !== normalizedSlug) {
+    const currentTarget = webinarLinks.get(currentSlug);
+    if (currentTarget?.roomChannelId === room.channelId) {
+      webinarLinks.delete(currentSlug);
+    }
+  }
+
+  webinarConfig.linkSlug = normalizedSlug;
+  upsertWebinarLinkTarget(webinarLinks, normalizedSlug, room);
+
+  return {
+    slug: normalizedSlug,
+    changed: currentSlug !== normalizedSlug,
+  };
+};
+
+export const rotateWebinarLinkSlug = (options: {
+  webinarConfig: WebinarRoomConfig;
+  webinarLinks: Map<string, WebinarLinkTarget>;
+  room: Pick<Room, "channelId" | "id" | "clientId">;
+}): string => {
+  const { webinarConfig, webinarLinks, room } = options;
+  const previousSlug = webinarConfig.linkSlug;
+
+  for (let attempt = 0; attempt < 128; attempt += 1) {
+    const candidate = randomWebinarLinkSlug();
+    const existingTarget = webinarLinks.get(candidate);
+    const isConflict =
+      existingTarget != null && existingTarget.roomChannelId !== room.channelId;
+
+    if (isConflict || candidate === previousSlug) {
+      continue;
+    }
+
+    setCustomWebinarLinkSlug({
+      webinarConfig,
+      webinarLinks,
+      room,
+      slug: candidate,
+    });
+    return candidate;
+  }
+
+  throw new Error("Unable to generate a unique webinar link code.");
+};
+
+export const ensureWebinarLinkSlug = (options: {
+  webinarConfig: WebinarRoomConfig;
+  webinarLinks: Map<string, WebinarLinkTarget>;
+  room: Pick<Room, "channelId" | "id" | "clientId">;
+}): string => {
+  const { webinarConfig, webinarLinks, room } = options;
+  const existingSlug = webinarConfig.linkSlug;
+
+  if (!existingSlug) {
+    return rotateWebinarLinkSlug(options);
+  }
+
+  const existingTarget = webinarLinks.get(existingSlug);
+  if (existingTarget && existingTarget.roomChannelId !== room.channelId) {
+    return rotateWebinarLinkSlug(options);
+  }
+
+  upsertWebinarLinkTarget(webinarLinks, existingSlug, room);
+  return existingSlug;
+};
+
+export const resolveWebinarLinkTarget = (
+  webinarLinks: Map<string, WebinarLinkTarget>,
+  slug: string,
+  clientId: string,
+): WebinarLinkTarget | null => {
+  let normalizedSlug = "";
+  try {
+    normalizedSlug = normalizeWebinarLinkSlug(slug);
+  } catch {
+    return null;
+  }
+  const target = webinarLinks.get(normalizedSlug);
+  if (!target || target.clientId !== clientId) {
+    return null;
+  }
+  return target;
 };
 
 export const updateWebinarRoomConfig = (
@@ -155,49 +324,9 @@ export const toWebinarConfigSnapshot = (
   maxAttendees: webinarConfig.maxAttendees,
   attendeeCount,
   requiresInviteCode: Boolean(webinarConfig.inviteCodeHash),
+  linkSlug: webinarConfig.linkSlug,
   feedMode: webinarConfig.feedMode,
 });
-
-export const createWebinarLinkToken = (payload: {
-  roomId: string;
-  clientId: string;
-  linkVersion: number;
-}): string => {
-  return jwt.sign(
-    {
-      typ: "webinar_link",
-      roomId: payload.roomId,
-      clientId: payload.clientId,
-      linkVersion: payload.linkVersion,
-    } satisfies WebinarLinkTokenPayload,
-    config.sfuSecret,
-  );
-};
-
-export const verifyWebinarLinkToken = (
-  token: string,
-): WebinarLinkTokenPayload | null => {
-  try {
-    const decoded = jwt.verify(token, config.sfuSecret);
-    if (!decoded || typeof decoded !== "object") {
-      return null;
-    }
-
-    const payload = decoded as Partial<WebinarLinkTokenPayload>;
-    if (
-      payload.typ !== "webinar_link" ||
-      typeof payload.roomId !== "string" ||
-      typeof payload.clientId !== "string" ||
-      typeof payload.linkVersion !== "number"
-    ) {
-      return null;
-    }
-
-    return payload as WebinarLinkTokenPayload;
-  } catch {
-    return null;
-  }
-};
 
 export const getWebinarBaseUrl = (): string => {
   const configured = process.env.WEBINAR_BASE_URL?.trim();

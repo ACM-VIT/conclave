@@ -796,9 +796,12 @@ export function useMeetSocket({
           }
 
           audioProducerRef.current = audioProducer;
+          const audioProducerId = audioProducer.id;
 
           audioProducer.on("transportclose", () => {
-            audioProducerRef.current = null;
+            if (audioProducerRef.current?.id === audioProducerId) {
+              audioProducerRef.current = null;
+            }
           });
         } catch (err) {
           console.error("[Meets] Failed to produce audio:", err);
@@ -836,9 +839,12 @@ export function useMeetSocket({
           }
 
           videoProducerRef.current = videoProducer;
+          const videoProducerId = videoProducer.id;
 
           videoProducer.on("transportclose", () => {
-            videoProducerRef.current = null;
+            if (videoProducerRef.current?.id === videoProducerId) {
+              videoProducerRef.current = null;
+            }
           });
         } catch (err) {
           console.error("[Meets] Failed to produce video:", err);
@@ -1401,50 +1407,77 @@ export function useMeetSocket({
 
             socket.on("newProducer", async (data: ProducerInfo) => {
               console.log("[Meets] New producer:", data);
+              if (data.producerUserId === userId) {
+                return;
+              }
               await consumeProducer(data);
             });
 
             socket.on(
               "producerClosed",
-              ({ producerId }: { producerId: string }) => {
+              ({
+                producerId,
+                producerUserId,
+              }: {
+                producerId: string;
+                producerUserId?: string;
+              }) => {
                 console.log("[Meets] Producer closed:", producerId);
-                handleProducerClosed(producerId);
+                const localAudioProducer = audioProducerRef.current;
+                const localVideoProducer = videoProducerRef.current;
+                const localScreenProducer = screenProducerRef.current;
+                const matchesLocalProducer =
+                  localAudioProducer?.id === producerId ||
+                  localVideoProducer?.id === producerId ||
+                  localScreenProducer?.id === producerId;
 
-                if (audioProducerRef.current?.id === producerId) {
-                  setIsMuted(true);
-                  audioProducerRef.current.close();
-                  audioProducerRef.current = null;
-                } else if (videoProducerRef.current?.id === producerId) {
-                  setIsCameraOff(true);
-                  videoProducerRef.current.close();
-                  videoProducerRef.current = null;
-                  const track = localStream?.getVideoTracks()[0];
-                  if (track) {
-                    stopLocalTrack(track);
-                    track.enabled = false;
+                if (
+                  producerUserId === userId ||
+                  (producerUserId == null && matchesLocalProducer)
+                ) {
+                  if (localAudioProducer?.id === producerId) {
+                    try {
+                      localAudioProducer.close();
+                    } catch {}
+                    if (audioProducerRef.current?.id === producerId) {
+                      audioProducerRef.current = null;
+                    }
+                    return;
                   }
-                  setLocalStream((prev) => {
-                    if (!prev) return prev;
-                    const remaining = prev
-                      .getTracks()
-                      .filter((item) => item.kind !== "video");
-                    return new MediaStream(remaining);
-                  });
-                } else if (screenProducerRef.current?.id === producerId) {
-                  if (screenProducerRef.current.track) {
-                    screenProducerRef.current.track.stop();
+
+                  if (localVideoProducer?.id === producerId) {
+                    try {
+                      localVideoProducer.close();
+                    } catch {}
+                    if (videoProducerRef.current?.id === producerId) {
+                      videoProducerRef.current = null;
+                    }
+                    return;
                   }
-                  setIsScreenSharing(false);
-                  screenProducerRef.current.close();
-                  screenProducerRef.current = null;
-                  if (screenShareStreamRef.current) {
-                    screenShareStreamRef.current
-                      .getTracks()
-                      .forEach((track) => stopLocalTrack(track));
-                    screenShareStreamRef.current = null;
+
+                  if (localScreenProducer?.id === producerId) {
+                    if (localScreenProducer.track) {
+                      localScreenProducer.track.stop();
+                    }
+                    try {
+                      localScreenProducer.close();
+                    } catch {}
+                    if (screenProducerRef.current?.id === producerId) {
+                      screenProducerRef.current = null;
+                    }
+                    if (screenShareStreamRef.current) {
+                      screenShareStreamRef.current
+                        .getTracks()
+                        .forEach((track) => stopLocalTrack(track));
+                      screenShareStreamRef.current = null;
+                    }
+                    setIsScreenSharing(false);
+                    setActiveScreenShareId(null);
+                    return;
                   }
-                  setActiveScreenShareId(null);
                 }
+
+                handleProducerClosed(producerId);
               }
             );
 
