@@ -354,19 +354,10 @@ function MobileControlsBar({
       <div className="sticky bottom-0 z-40 border-t border-white/10 bg-[#121212]/95 p-3 backdrop-blur-md">
         <div className="mx-auto flex max-w-sm items-center justify-between rounded-2xl border border-white/10 bg-[#0d0e0d]/90 px-4 py-3">
           <div>
-            <p className="text-xs uppercase tracking-[0.2em] text-[#FEFCD9]/45">
-              Webinar viewer
-            </p>
             <p className="text-[11px] text-[#FEFCD9]/70">
               {webinarConfig?.attendeeCount ?? 0} attendees watching
             </p>
           </div>
-          <button
-            onClick={onLeave}
-            className="h-10 rounded-full bg-red-500/90 px-4 text-xs font-medium uppercase tracking-[0.16em] text-white transition hover:bg-red-500"
-          >
-            Leave
-          </button>
         </div>
       </div>
     );

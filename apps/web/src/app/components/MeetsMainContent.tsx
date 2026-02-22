@@ -546,19 +546,10 @@ export default function MeetsMainContent({
         (isWebinarAttendee ? (
           <div className="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-black/30 px-4 py-3">
             <div>
-              <p className="text-[10px] uppercase tracking-[0.2em] text-[#FEFCD9]/45">
-                Webinar viewer
-              </p>
               <p className="text-xs text-[#FEFCD9]/70">
                 {webinarConfig?.attendeeCount ?? 0} attendees watching
               </p>
             </div>
-            <button
-              onClick={leaveRoom}
-              className="rounded-full bg-red-500 px-4 py-2 text-xs uppercase tracking-[0.16em] text-white"
-            >
-              Leave
-            </button>
           </div>
         ) : (
           <div className="flex items-center justify-between gap-3">

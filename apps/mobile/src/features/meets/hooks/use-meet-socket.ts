@@ -2258,10 +2258,13 @@ export function useMeetSocket({
             joinError instanceof Error
               ? joinError.message
               : String(joinError ?? "");
+          const isInviteCodeValidationError =
+            /webinar invite code required/i.test(joinMessage) ||
+            /invalid webinar invite code/i.test(joinMessage);
           const shouldPromptInviteCode =
             joinOptions.joinMode === "webinar_attendee" &&
             !joinOptions.webinarInviteCode &&
-            /invite code/i.test(joinMessage) &&
+            isInviteCodeValidationError &&
             typeof requestWebinarInviteCode === "function";
 
           if (!shouldPromptInviteCode) {
