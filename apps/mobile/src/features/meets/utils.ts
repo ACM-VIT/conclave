@@ -204,6 +204,22 @@ export function formatDisplayName(raw: string): string {
   return words.length > 0 ? words.join(" ") : handle || raw;
 }
 
+const VIT_STUDENT_DOMAIN = "vitstudent.ac.in";
+//need the whitespace lol
+const VIT_REGISTRATION_NUMBER_PATTERN = /\s+\d{2}[A-Za-z]{3}\d{3,4}[A-Za-z]?\s*$/;
+
+export function sanitizeInstitutionDisplayName(
+  name: string,
+  email?: string | null
+): string {
+  const normalizedEmail = email?.trim().toLowerCase();
+  if (!normalizedEmail || !normalizedEmail.endsWith(`@${VIT_STUDENT_DOMAIN}`)) {
+    return name;
+  }
+  const sanitized = name.replace(VIT_REGISTRATION_NUMBER_PATTERN, "").trim();
+  return sanitized || name.trim();
+}
+
 export function truncateDisplayName(value: string, maxLength = 16): string {
   const trimmed = value.trim();
   if (trimmed.length <= maxLength) return trimmed;

@@ -1,7 +1,12 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Socket } from "socket.io-client";
-import { formatDisplayName, isSystemUserId, normalizeDisplayName } from "../utils";
+import {
+  formatDisplayName,
+  isSystemUserId,
+  normalizeDisplayName,
+  sanitizeInstitutionDisplayName,
+} from "../utils";
 
 interface UseMeetDisplayNameOptions {
   user?: {
@@ -59,7 +64,9 @@ export function useMeetDisplayName({
   }, [displayNameInput, currentUserDisplayName]);
 
   useEffect(() => {
-    const baseName = user?.name || user?.email;
+    const baseName = user?.name
+      ? sanitizeInstitutionDisplayName(user.name, user.email)
+      : user?.email;
     if (!baseName) return;
     setDisplayNames((prev) => {
       if (prev.get(userId) === baseName) return prev;
