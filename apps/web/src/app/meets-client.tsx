@@ -132,6 +132,7 @@ export default function MeetsClient({
   const [currentIsAdmin, setCurrentIsAdmin] = useState(isAdmin);
   const [guestStorageReady, setGuestStorageReady] = useState(false);
   const [isSigningOut, setIsSigningOut] = useState(false);
+  const [joinAuthRequestToken, setJoinAuthRequestToken] = useState(0);
   const [appsSocket, setAppsSocket] = useState<Socket | null>(null);
   const uploadAsset: AssetUploadHandler = useMemo(
     () => createAssetUploadHandler(),
@@ -678,6 +679,10 @@ export default function MeetsClient({
     }
   }, [isSigningOut]);
 
+  const handleOpenJoinAuth = useCallback(() => {
+    setJoinAuthRequestToken((prev) => prev + 1);
+  }, []);
+
   const leaveRoom = useCallback(() => {
     playNotificationSoundForEvents("leave");
     socket.cleanup();
@@ -992,6 +997,7 @@ export default function MeetsClient({
         canSignOut={canSignOut}
         isSigningOut={isSigningOut}
         onSignOut={handleSignOut}
+        onLogin={handleOpenJoinAuth}
       />
       {isJoined && meetError && (
         <MeetsErrorBanner
@@ -1108,6 +1114,7 @@ export default function MeetsClient({
         onClosePopout={closePopout}
         hostUserId={hostUserId}
         isNetworkOffline={isNetworkOffline}
+        joinAuthRequestToken={joinAuthRequestToken}
       />
     </div>,
   );

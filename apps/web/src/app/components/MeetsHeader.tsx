@@ -28,6 +28,7 @@ interface MeetsHeaderProps {
   canSignOut: boolean;
   isSigningOut: boolean;
   onSignOut: () => void;
+  onLogin?: () => void;
 }
 
 function MeetsHeader({
@@ -53,6 +54,7 @@ function MeetsHeader({
   canSignOut,
   isSigningOut,
   onSignOut,
+  onLogin,
 }: MeetsHeaderProps) {
   const [shareUrl, setShareUrl] = useState("");
   const [isCopied, setIsCopied] = useState(false);
@@ -147,65 +149,61 @@ function MeetsHeader({
           />
         </a>
 
-        {isJoined && (
-          <div className="absolute left-1/2 -translate-x-1/2 flex items-center gap-3">
-            {roomId.trim() && (
-              <span
-                className="text-[12px] text-[#FEFCD9]/50"
-                style={{ fontFamily: "'PolySans Mono', monospace" }}
-              >
-                <span className="text-[#FEFCD9]/30">room</span>{" "}
-                <span className="text-[#F95F4A]">{roomId}</span>
-              </span>
-            )}
-            <VideoSettings
-              isMirrorCamera={isMirrorCamera}
-              isOpen={isVideoSettingsOpen}
-              onToggleOpen={onToggleVideoSettings}
-              onToggleMirror={onToggleMirror}
-              isCameraOff={isCameraOff}
-              isAdmin={isAdmin}
-              displayNameInput={displayNameInput}
-              displayNameStatus={displayNameStatus}
-              isDisplayNameUpdating={isDisplayNameUpdating}
-              canUpdateDisplayName={canUpdateDisplayName}
-              onDisplayNameInputChange={onDisplayNameInputChange}
-              onDisplayNameSubmit={onDisplayNameSubmit}
-              selectedAudioInputDeviceId={selectedAudioInputDeviceId}
-              selectedAudioOutputDeviceId={selectedAudioOutputDeviceId}
-              onAudioInputDeviceChange={onAudioInputDeviceChange}
-              onAudioOutputDeviceChange={onAudioOutputDeviceChange}
-            />
-          </div>
-        )}
-
         <div className="flex items-center gap-4">
-          <div className="flex items-center gap-3">
-            {canSignOut && (
-              <button
-                onClick={onSignOut}
-                disabled={isSigningOut}
-                className="px-2.5 py-1 rounded-full bg-[#1a1a1a]/80 border border-[#FEFCD9]/10 text-[10px] uppercase tracking-widest text-[#FEFCD9]/70 hover:text-[#FEFCD9] hover:border-[#FEFCD9]/30 transition-colors disabled:opacity-50"
-                style={{ fontFamily: "'PolySans Mono', monospace" }}
-              >
-                {isSigningOut ? "Signing out..." : "Sign out"}
-              </button>
-            )}
-            <div className="flex flex-col items-end">
-              <span
-                className="text-sm text-[#FEFCD9]"
-                style={{ fontFamily: "'PolySans Bulky Wide', sans-serif" }}
-              >
-                c0nclav3
-              </span>
-              <span
-                className="text-[9px] uppercase tracking-[0.15em] text-[#FEFCD9]/40"
-                style={{ fontFamily: "'PolySans Mono', monospace" }}
-              >
-                by acm-vit
-              </span>
-            </div>
-          </div>
+          <VideoSettings
+            isMirrorCamera={isMirrorCamera}
+            isOpen={isVideoSettingsOpen}
+            onToggleOpen={onToggleVideoSettings}
+            onToggleMirror={onToggleMirror}
+            isCameraOff={isCameraOff}
+            isAdmin={isAdmin}
+            displayNameInput={displayNameInput}
+            displayNameStatus={displayNameStatus}
+            isDisplayNameUpdating={isDisplayNameUpdating}
+            canUpdateDisplayName={canUpdateDisplayName}
+            onDisplayNameInputChange={onDisplayNameInputChange}
+            onDisplayNameSubmit={onDisplayNameSubmit}
+            selectedAudioInputDeviceId={selectedAudioInputDeviceId}
+            selectedAudioOutputDeviceId={selectedAudioOutputDeviceId}
+            onAudioInputDeviceChange={onAudioInputDeviceChange}
+            onAudioOutputDeviceChange={onAudioOutputDeviceChange}
+          />
+          {canSignOut ? (
+            <button
+              onClick={onSignOut}
+              disabled={isSigningOut}
+              className="px-3 py-1.5 rounded-full bg-[#1a1a1a]/80 border border-[#FEFCD9]/10 text-[10px] uppercase tracking-widest text-[#FEFCD9]/70 hover:text-[#FEFCD9] hover:border-[#FEFCD9]/30 transition-colors disabled:opacity-50"
+              style={{ fontFamily: "'PolySans Mono', monospace" }}
+            >
+              {isSigningOut ? "Signing out..." : "Sign out"}
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={onLogin}
+              className="px-4 py-2 rounded-full bg-[#1a1a1a]/80 border border-[#FEFCD9]/10 text-[11px] uppercase tracking-widest text-[#FEFCD9]/70 hover:text-[#FEFCD9] hover:border-[#FEFCD9]/30 transition-colors"
+              style={{ fontFamily: "'PolySans Mono', monospace" }}
+            >
+              Log in
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div className="fixed left-5 bottom-4 pointer-events-none">
+        <div className="flex flex-col items-start">
+          <span
+            className="text-sm text-[#FEFCD9]"
+            style={{ fontFamily: "'PolySans Bulky Wide', sans-serif" }}
+          >
+            c0nclav3
+          </span>
+          <span
+            className="text-[9px] uppercase tracking-[0.15em] text-[#FEFCD9]/40"
+            style={{ fontFamily: "'PolySans Mono', monospace" }}
+          >
+            by acm-vit
+          </span>
         </div>
       </div>
     </header>

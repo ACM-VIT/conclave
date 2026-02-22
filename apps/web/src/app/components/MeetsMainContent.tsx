@@ -128,6 +128,7 @@ interface MeetsMainContentProps {
   hostUserId: string | null;
   isNetworkOffline: boolean;
   isTtsDisabled: boolean;
+  joinAuthRequestToken?: number;
 }
 
 export default function MeetsMainContent({
@@ -220,6 +221,7 @@ export default function MeetsMainContent({
   hostUserId,
   isNetworkOffline,
   isTtsDisabled,
+  joinAuthRequestToken,
 }: MeetsMainContentProps) {
   const {
     state: appsState,
@@ -375,6 +377,7 @@ export default function MeetsMainContent({
           onDismissMeetError={onDismissMeetError}
           onRetryMedia={onRetryMedia}
           onTestSpeaker={onTestSpeaker}
+          authRequestToken={joinAuthRequestToken}
         />
       ) : isWhiteboardActive ? (
         <WhiteboardLayout
