@@ -140,16 +140,22 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             return;
           }
 
-          if (webinarConfig.inviteCodeHash) {
-            const inviteCode = data?.webinarInviteCode?.trim() || "";
-            if (!inviteCode) {
-              respond(callback, { error: "Webinar invite code required." });
-              return;
-            }
-            if (!verifyInviteCode(inviteCode, webinarConfig.inviteCodeHash)) {
-              respond(callback, { error: "Invalid webinar invite code." });
-              return;
-            }
+          const inviteCode = data?.webinarInviteCode?.trim() || "";
+          const inviteCodeHash = webinarConfig.inviteCodeHash;
+          const hasInviteCodeConfig = Boolean(inviteCodeHash);
+
+          if (hasInviteCodeConfig && webinarConfig.publicAccess && !inviteCode) {
+            respond(callback, { error: "Webinar invite code required." });
+            return;
+          }
+
+          if (
+            inviteCodeHash &&
+            inviteCode &&
+            !verifyInviteCode(inviteCode, inviteCodeHash)
+          ) {
+            respond(callback, { error: "Invalid webinar invite code." });
+            return;
           }
 
           if (webinarConfig.locked) {
