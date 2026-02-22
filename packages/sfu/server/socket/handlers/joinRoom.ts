@@ -163,15 +163,15 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             respond(callback, { error: "Webinar is locked." });
             return;
           }
-
-          if (room.getWebinarAttendeeCount() >= webinarConfig.maxAttendees) {
-            respond(callback, { error: "Webinar is full." });
-            return;
-          }
         }
 
         const wasReconnecting = room.clearPendingDisconnect(userId);
-        if (room.getClient(userId)) {
+        const existingClient = room.getClient(userId);
+        const reclaimingWebinarSeat = existingClient
+          ? Boolean(existingClient.isWebinarAttendee)
+          : false;
+
+        if (existingClient) {
           Logger.warn(`User ${userId} re-joining room ${roomId}`);
           const awarenessRemovals = room.clearUserAwareness(userId);
           for (const removal of awarenessRemovals) {
@@ -181,6 +181,15 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             } satisfies AppsAwarenessData);
           }
           room.removeClient(userId);
+        }
+
+        if (
+          isWebinarAttendeeJoin &&
+          !reclaimingWebinarSeat &&
+          room.getWebinarAttendeeCount() >= webinarConfig.maxAttendees
+        ) {
+          respond(callback, { error: "Webinar is full." });
+          return;
         }
 
         const browserState = getBrowserState(roomChannelId);

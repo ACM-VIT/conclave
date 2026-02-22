@@ -186,6 +186,25 @@ export function generateSessionId(): string {
   return `${Date.now()}-${Math.random().toString(36).substring(2, 11)}`;
 }
 
+const SESSION_ID_STORAGE_KEY = "conclave:session-id";
+
+export function getOrCreateSessionId(): string {
+  if (typeof window === "undefined") {
+    return generateSessionId();
+  }
+
+  try {
+    const existing = window.sessionStorage.getItem(SESSION_ID_STORAGE_KEY);
+    if (existing) return existing;
+
+    const next = generateSessionId();
+    window.sessionStorage.setItem(SESSION_ID_STORAGE_KEY, next);
+    return next;
+  } catch {
+    return generateSessionId();
+  }
+}
+
 export function formatDisplayName(raw: string): string {
   const base = raw.split("#")[0] || raw;
   const handle = base.split("@")[0] || base;

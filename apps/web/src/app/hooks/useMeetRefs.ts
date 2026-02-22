@@ -13,7 +13,7 @@ import type {
   Transport,
   VideoQuality,
 } from "../lib/types";
-import { generateSessionId } from "../lib/utils";
+import { getOrCreateSessionId } from "../lib/utils";
 
 export function useMeetRefs() {
   const socketRef = useRef<Socket | null>(null);
@@ -60,7 +60,7 @@ export function useMeetRefs() {
   });
   const isChatOpenRef = useRef(false);
   const localStreamRef = useRef<MediaStream | null>(null);
-  const sessionIdRef = useRef<string>(generateSessionId());
+  const sessionIdRef = useRef<string>(getOrCreateSessionId());
   const isHandRaisedRef = useRef(false);
   const producerTransportDisconnectTimeoutRef = useRef<number | null>(null);
   const consumerTransportDisconnectTimeoutRef = useRef<number | null>(null);
