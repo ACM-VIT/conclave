@@ -287,6 +287,41 @@ export default function MeetsMainContent({
       ),
     [participantsArray],
   );
+  const webinarFocusedParticipant = useMemo(() => {
+    if (!nonSystemParticipants.length) {
+      return null;
+    }
+
+    const byScreenShareId = activeScreenShareId
+      ? nonSystemParticipants.find(
+          (participant) =>
+            participant.screenShareProducerId === activeScreenShareId &&
+            participant.screenShareStream,
+        )
+      : null;
+    const byAnyScreenShare = nonSystemParticipants.find(
+      (participant) => participant.screenShareStream,
+    );
+
+    const sourceParticipant =
+      byScreenShareId ?? byAnyScreenShare ?? nonSystemParticipants[0];
+    const videoStream =
+      sourceParticipant.screenShareStream ?? sourceParticipant.videoStream;
+    const fallbackAudioStream = nonSystemParticipants.find(
+      (participant) => participant.audioStream,
+    )?.audioStream;
+    const audioStream = sourceParticipant.audioStream ?? fallbackAudioStream ?? null;
+
+    return {
+      participant: {
+        ...sourceParticipant,
+        videoStream,
+        audioStream,
+        isCameraOff: !videoStream,
+      },
+      displayName: resolveDisplayName(sourceParticipant.userId),
+    };
+  }, [activeScreenShareId, nonSystemParticipants, resolveDisplayName]);
   const visibleParticipantCount = nonSystemParticipants.length;
   const handleToggleParticipants = useCallback(
     () =>
@@ -417,12 +452,14 @@ export default function MeetsMainContent({
         )
       ) : isWebinarAttendee ? (
         <div className="flex flex-1 items-center justify-center p-4">
-          {nonSystemParticipants.length > 0 ? (
+          {webinarFocusedParticipant ? (
             <div className="h-[72vh] w-full max-w-6xl">
               <ParticipantVideo
-                participant={nonSystemParticipants[0]}
-                displayName={resolveDisplayName(nonSystemParticipants[0].userId)}
-                isActiveSpeaker={activeSpeakerId === nonSystemParticipants[0].userId}
+                participant={webinarFocusedParticipant.participant}
+                displayName={webinarFocusedParticipant.displayName}
+                isActiveSpeaker={
+                  activeSpeakerId === webinarFocusedParticipant.participant.userId
+                }
                 audioOutputDeviceId={audioOutputDeviceId}
               />
             </div>

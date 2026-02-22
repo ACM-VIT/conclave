@@ -98,6 +98,7 @@ interface CallScreenProps {
 
 const columnWrapperStyle = { gap: 12 } as const;
 const columnWrapperStyleTablet = { gap: 16 } as const;
+const observerAudioStyle = { width: 1, height: 1, opacity: 0 };
 
 export function CallScreen({
   roomId,
@@ -222,6 +223,40 @@ export function CallScreen({
       ),
     [participants]
   );
+  const webinarFocusedParticipant = useMemo(() => {
+    if (!webinarParticipants.length) {
+      return null;
+    }
+
+    const byPresentedScreen = presentationStream
+      ? webinarParticipants.find(
+          (participant) =>
+            participant.screenShareStream?.id === presentationStream.id
+        )
+      : null;
+    const byAnyScreenShare = webinarParticipants.find(
+      (participant) => participant.screenShareStream
+    );
+
+    const sourceParticipant =
+      byPresentedScreen ?? byAnyScreenShare ?? webinarParticipants[0];
+    const videoStream =
+      presentationStream ??
+      sourceParticipant.screenShareStream ??
+      sourceParticipant.videoStream;
+    const fallbackAudioStream = webinarParticipants.find(
+      (participant) => participant.audioStream
+    )?.audioStream;
+    const audioStream = sourceParticipant.audioStream ?? fallbackAudioStream ?? null;
+
+    return {
+      participant: sourceParticipant,
+      videoStream,
+      audioStream,
+      displayName:
+        presenterName || resolveDisplayName(sourceParticipant.userId),
+    };
+  }, [presentationStream, presenterName, resolveDisplayName, webinarParticipants]);
 
   const displayParticipantCount = isObserverMode
     ? webinarConfig?.attendeeCount ?? 0
@@ -453,9 +488,9 @@ export function CallScreen({
             ]}
           >
             <RNView style={styles.presentationStage}>
-              {webinarParticipants[0]?.videoStream ? (
+              {webinarFocusedParticipant?.videoStream ? (
                 <RTCView
-                  streamURL={webinarParticipants[0].videoStream!.toURL()}
+                  streamURL={webinarFocusedParticipant.videoStream.toURL()}
                   style={styles.presentationVideo}
                   mirror={false}
                   objectFit="contain"
@@ -467,10 +502,18 @@ export function CallScreen({
                   </Text>
                 </RNView>
               )}
-              {webinarParticipants[0] ? (
+              {webinarFocusedParticipant?.audioStream ? (
+                <RTCView
+                  streamURL={webinarFocusedParticipant.audioStream.toURL()}
+                  style={styles.observerAudio}
+                  mirror={false}
+                  objectFit="contain"
+                />
+              ) : null}
+              {webinarFocusedParticipant ? (
                 <RNView style={styles.presenterBadge}>
                   <Text style={styles.presenterText}>
-                    {resolveDisplayName(webinarParticipants[0].userId)}
+                    {webinarFocusedParticipant.displayName}
                   </Text>
                 </RNView>
               ) : null}
@@ -791,6 +834,7 @@ const styles = StyleSheet.create({
     textTransform: "uppercase",
     fontFamily: "PolySans-Mono",
   },
+  observerAudio: observerAudioStyle,
   stripContent: {
     paddingHorizontal: 4,
     gap: 10,

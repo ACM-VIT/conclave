@@ -432,6 +432,31 @@ export class Room {
     return producers;
   }
 
+  private getScreenShareOwnerUserId(): string | null {
+    const screenShareProducerId = this.currentScreenShareProducerId;
+    if (!screenShareProducerId) {
+      return null;
+    }
+
+    for (const [userId, client] of this.clients.entries()) {
+      if (client.isGhost || client.isWebinarAttendee) {
+        continue;
+      }
+
+      const ownsScreenShare = client
+        .getProducerInfos()
+        .some(
+          (info) => info.producerId === screenShareProducerId && info.type === "screen",
+        );
+
+      if (ownsScreenShare) {
+        return userId;
+      }
+    }
+
+    return null;
+  }
+
   private selectWebinarActiveSpeakerUserId(): string | null {
     const candidates = Array.from(this.clients.entries()).filter(
       ([, client]) => !client.isGhost && !client.isWebinarAttendee,
@@ -484,6 +509,18 @@ export class Room {
     speakerUserId: string | null;
     producers: ProducerInfo[];
   } {
+    const screenShareOwnerUserId = this.getScreenShareOwnerUserId();
+    if (screenShareOwnerUserId) {
+      const screenShareFeedProducers =
+        this.getClientFeedProducers(screenShareOwnerUserId);
+      if (screenShareFeedProducers.length > 0) {
+        return {
+          speakerUserId: screenShareOwnerUserId,
+          producers: screenShareFeedProducers,
+        };
+      }
+    }
+
     const speakerUserId = this.selectWebinarActiveSpeakerUserId();
     const producers = this.getClientFeedProducers(speakerUserId);
     return { speakerUserId, producers };
