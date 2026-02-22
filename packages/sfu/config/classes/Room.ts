@@ -13,7 +13,7 @@ import {
   removeAwarenessStates,
 } from "y-protocols/awareness";
 import * as Y from "yjs";
-import type { VideoQuality } from "../../types.js";
+import type { ProducerInfo, VideoQuality } from "../../types.js";
 import { Logger } from "../../utilities/loggers.js";
 import { config } from "../config.js";
 import { Admin } from "./Admin.js";
@@ -86,6 +86,8 @@ export class Room {
     string,
     { producer: Producer; userId: string; type: ProducerType }
   > = new Map();
+  private webinarActiveSpeakerUserId: string | null = null;
+  private webinarFeedProducerIds: string[] = [];
 
   constructor(options: RoomOptions) {
     this.id = options.id;
@@ -122,10 +124,14 @@ export class Room {
 
   getDisplayNameSnapshot(options?: {
     includeGhosts?: boolean;
+    includeWebinarAttendees?: boolean;
   }): { userId: string; displayName: string }[] {
     const snapshot: { userId: string; displayName: string }[] = [];
     for (const [userId, client] of this.clients.entries()) {
       if (client.isGhost && !options?.includeGhosts) continue;
+      if (client.isWebinarAttendee && !options?.includeWebinarAttendees) {
+        continue;
+      }
       const displayName = this.getDisplayNameForUser(userId) || userId;
       snapshot.push({ userId, displayName });
     }
@@ -193,6 +199,27 @@ export class Room {
     return this.clients.size;
   }
 
+  getWebinarAttendeeCount(): number {
+    let count = 0;
+    for (const client of this.clients.values()) {
+      if (client.isWebinarAttendee) {
+        count += 1;
+      }
+    }
+    return count;
+  }
+
+  getMeetingParticipantCount(): number {
+    let count = 0;
+    for (const client of this.clients.values()) {
+      if (client.isWebinarAttendee) {
+        continue;
+      }
+      count += 1;
+    }
+    return count;
+  }
+
   async createWebRtcTransport(): Promise<WebRtcTransport> {
     const transport = await this.router.createWebRtcTransport({
       listenIps: config.webRtcTransport.listenIps,
@@ -239,26 +266,14 @@ export class Room {
     }
   }
 
-  getAllProducers(excludeClientId?: string): {
-    producerId: string;
-    producerUserId: string;
-    kind: MediaKind;
-    type: "webcam" | "screen";
-    paused: boolean;
-  }[] {
-    const producers: {
-      producerId: string;
-      producerUserId: string;
-      kind: MediaKind;
-      type: "webcam" | "screen";
-      paused: boolean;
-    }[] = [];
+  getAllProducers(excludeClientId?: string): ProducerInfo[] {
+    const producers: ProducerInfo[] = [];
 
     for (const [clientId, client] of this.clients) {
       if (excludeClientId && clientId === excludeClientId) {
         continue;
       }
-      if (client.isGhost) {
+      if (client.isGhost || client.isWebinarAttendee) {
         continue;
       }
       for (const info of client.getProducerInfos()) {
@@ -381,15 +396,131 @@ export class Room {
     return false;
   }
 
+  private clientHasUnpausedWebcamAudio(client: Client): boolean {
+    for (const info of client.getProducerInfos()) {
+      if (info.kind === "audio" && info.type === "webcam" && !info.paused) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private getClientFeedProducers(userId: string | null): ProducerInfo[] {
+    if (!userId) return [];
+    const client = this.clients.get(userId);
+    if (!client || client.isGhost || client.isWebinarAttendee) {
+      return [];
+    }
+
+    const producers: ProducerInfo[] = client.getProducerInfos().map((info) => ({
+      producerId: info.producerId,
+      producerUserId: userId,
+      kind: info.kind,
+      type: info.type,
+      paused: info.paused,
+    }));
+
+    producers.sort((a, b) => {
+      const aKind = a.kind === "audio" ? 0 : 1;
+      const bKind = b.kind === "audio" ? 0 : 1;
+      if (aKind !== bKind) return aKind - bKind;
+      const aType = a.type === "webcam" ? 0 : 1;
+      const bType = b.type === "webcam" ? 0 : 1;
+      return aType - bType;
+    });
+
+    return producers;
+  }
+
+  private selectWebinarActiveSpeakerUserId(): string | null {
+    const candidates = Array.from(this.clients.entries()).filter(
+      ([, client]) => !client.isGhost && !client.isWebinarAttendee,
+    );
+
+    if (!candidates.length) {
+      return null;
+    }
+
+    if (this.webinarActiveSpeakerUserId) {
+      const current = this.clients.get(this.webinarActiveSpeakerUserId);
+      if (
+        current &&
+        !current.isGhost &&
+        !current.isWebinarAttendee &&
+        this.clientHasUnpausedWebcamAudio(current)
+      ) {
+        return this.webinarActiveSpeakerUserId;
+      }
+    }
+
+    for (const [userId, client] of candidates) {
+      if (this.clientHasUnpausedWebcamAudio(client)) {
+        return userId;
+      }
+    }
+
+    if (this.webinarActiveSpeakerUserId) {
+      const current = this.clients.get(this.webinarActiveSpeakerUserId);
+      if (
+        current &&
+        !current.isGhost &&
+        !current.isWebinarAttendee &&
+        current.getProducerInfos().length > 0
+      ) {
+        return this.webinarActiveSpeakerUserId;
+      }
+    }
+
+    for (const [userId, client] of candidates) {
+      if (client.getProducerInfos().length > 0) {
+        return userId;
+      }
+    }
+
+    return null;
+  }
+
+  getWebinarFeedSnapshot(): {
+    speakerUserId: string | null;
+    producers: ProducerInfo[];
+  } {
+    const speakerUserId = this.selectWebinarActiveSpeakerUserId();
+    const producers = this.getClientFeedProducers(speakerUserId);
+    return { speakerUserId, producers };
+  }
+
+  refreshWebinarFeedSnapshot(): {
+    changed: boolean;
+    speakerUserId: string | null;
+    producers: ProducerInfo[];
+  } {
+    const snapshot = this.getWebinarFeedSnapshot();
+    const producerIds = snapshot.producers
+      .map((producer) => producer.producerId)
+      .sort();
+    const changed =
+      this.webinarActiveSpeakerUserId !== snapshot.speakerUserId ||
+      this.webinarFeedProducerIds.length !== producerIds.length ||
+      this.webinarFeedProducerIds.some((producerId, index) => {
+        return producerId !== producerIds[index];
+      });
+
+    this.webinarActiveSpeakerUserId = snapshot.speakerUserId;
+    this.webinarFeedProducerIds = producerIds;
+
+    return { changed, ...snapshot };
+  }
+
   getTargetVideoQuality(): VideoQuality {
     const { lowThreshold, standardThreshold } = config.videoQuality;
+    const participantCount = this.getMeetingParticipantCount();
 
     if (this.currentQuality === "standard") {
-      if (this.clients.size >= lowThreshold) {
+      if (participantCount >= lowThreshold) {
         return "low";
       }
     } else {
-      if (this.clients.size <= standardThreshold) {
+      if (participantCount <= standardThreshold) {
         return "standard";
       }
     }
@@ -594,6 +725,8 @@ export class Room {
     this.router.close();
     this.userKeysById.clear();
     this.displayNamesByKey.clear();
+    this.webinarActiveSpeakerUserId = null;
+    this.webinarFeedProducerIds = [];
   }
 
   scheduleDisconnect(

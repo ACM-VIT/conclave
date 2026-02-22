@@ -55,6 +55,7 @@ interface ControlsBarProps {
   isChatLocked: boolean;
   isTtsDisabled: boolean;
   isAdmin: boolean;
+  isObserverMode?: boolean;
   pendingUsersCount: number;
   unreadCount: number;
   availableWidth: number;
@@ -211,6 +212,7 @@ export function ControlsBar({
   isChatLocked,
   isTtsDisabled,
   isAdmin,
+  isObserverMode = false,
   pendingUsersCount,
   unreadCount,
   availableWidth,
@@ -260,6 +262,43 @@ export function ControlsBar({
     Haptics.selectionAsync().catch(() => { });
     setShowReactionPicker(!showReactionPicker);
   };
+
+  if (isObserverMode) {
+    return (
+      <RNView style={styles.container}>
+        <LinearGradient
+          colors={["rgba(0, 0, 0, 0)", "rgba(0, 0, 0, 0.95)"]}
+          style={styles.gradient}
+          pointerEvents="none"
+        />
+        <RNView
+          style={[styles.pillContainer, { paddingBottom: Math.max(insets.bottom, 12) }]}
+        >
+          <GlassPill style={[styles.controlsGlass, { maxWidth: pillMaxWidth }]}>
+            <RNView
+              style={[
+                styles.controlsPill,
+                {
+                  gap: pillGap,
+                  justifyContent: "space-between",
+                  minWidth: Math.min(pillMaxWidth, 320),
+                },
+              ]}
+            >
+              <Text style={styles.observerLabel}>Watching webinar</Text>
+              <ControlButton
+                icon={PhoneOff}
+                isDanger
+                size={buttonSize}
+                iconSize={iconSize}
+                onPress={onLeave}
+              />
+            </RNView>
+          </GlassPill>
+        </RNView>
+      </RNView>
+    );
+  }
 
   return (
     <RNView style={styles.container}>
@@ -578,5 +617,12 @@ const styles = StyleSheet.create({
   },
   reactionEmoji: {
     fontSize: 22,
+  },
+  observerLabel: {
+    fontSize: 12,
+    color: COLORS.creamMuted,
+    textTransform: "uppercase",
+    letterSpacing: 1.8,
+    fontFamily: "PolySans-Mono",
   },
 });

@@ -11,6 +11,9 @@ import type {
   Participant,
   ReactionEvent,
   ReactionOption,
+  WebinarConfigSnapshot,
+  WebinarLinkResponse,
+  WebinarUpdateRequest,
 } from "../../lib/types";
 import type { BrowserState } from "../../hooks/useSharedBrowser";
 import ChatOverlay from "../ChatOverlay";
@@ -28,6 +31,7 @@ import SystemAudioPlayers from "../SystemAudioPlayers";
 import { isSystemUserId } from "../../lib/utils";
 import { useApps } from "@conclave/apps-sdk";
 import DevPlaygroundLayout from "../DevPlaygroundLayout";
+import ParticipantVideo from "../ParticipantVideo";
 
 interface MobileMeetsMainContentProps {
   isJoined: boolean;
@@ -36,6 +40,8 @@ interface MobileMeetsMainContentProps {
   roomId: string;
   setRoomId: Dispatch<SetStateAction<string>>;
   joinRoomById: (roomId: string) => void;
+  hideJoinUI?: boolean;
+  isWebinarAttendee?: boolean;
   enableRoomRouting: boolean;
   forceJoinOnly: boolean;
   allowGhostMode: boolean;
@@ -61,7 +67,10 @@ interface MobileMeetsMainContentProps {
   isMirrorCamera: boolean;
   activeSpeakerId: string | null;
   currentUserId: string;
+  selectedAudioInputDeviceId?: string;
   audioOutputDeviceId?: string;
+  onAudioInputDeviceChange: (deviceId: string) => void;
+  onAudioOutputDeviceChange: (deviceId: string) => void;
   activeScreenShareId: string | null;
   isScreenSharing: boolean;
   isChatOpen: boolean;
@@ -116,6 +125,16 @@ interface MobileMeetsMainContentProps {
   hostUserId: string | null;
   isNetworkOffline: boolean;
   isTtsDisabled: boolean;
+  webinarConfig?: WebinarConfigSnapshot | null;
+  webinarRole?: "attendee" | "participant" | "host" | null;
+  webinarLink?: string | null;
+  onSetWebinarLink?: (link: string | null) => void;
+  onGetWebinarConfig?: () => Promise<WebinarConfigSnapshot | null>;
+  onUpdateWebinarConfig?: (
+    update: WebinarUpdateRequest,
+  ) => Promise<WebinarConfigSnapshot | null>;
+  onGenerateWebinarLink?: () => Promise<WebinarLinkResponse | null>;
+  onRotateWebinarLink?: () => Promise<WebinarLinkResponse | null>;
 }
 
 function MobileMeetsMainContent({
@@ -125,6 +144,8 @@ function MobileMeetsMainContent({
   roomId,
   setRoomId,
   joinRoomById,
+  hideJoinUI = false,
+  isWebinarAttendee = false,
   enableRoomRouting,
   forceJoinOnly,
   allowGhostMode,
@@ -146,7 +167,10 @@ function MobileMeetsMainContent({
   isMirrorCamera,
   activeSpeakerId,
   currentUserId,
+  selectedAudioInputDeviceId,
   audioOutputDeviceId,
+  onAudioInputDeviceChange,
+  onAudioOutputDeviceChange,
   activeScreenShareId,
   isScreenSharing,
   isChatOpen,
@@ -199,6 +223,14 @@ function MobileMeetsMainContent({
   hostUserId,
   isNetworkOffline,
   isTtsDisabled,
+  webinarConfig,
+  webinarRole,
+  webinarLink,
+  onSetWebinarLink,
+  onGetWebinarConfig,
+  onUpdateWebinarConfig,
+  onGenerateWebinarLink,
+  onRotateWebinarLink,
 }: MobileMeetsMainContentProps) {
   const {
     state: appsState,
@@ -284,8 +316,29 @@ function MobileMeetsMainContent({
       ),
     [participantsArray],
   );
+  const webinarParticipants = useMemo(
+    () =>
+      participantsArray.filter(
+        (participant) => !isSystemUserId(participant.userId),
+      ),
+    [participantsArray],
+  );
 
   if (!isJoined) {
+    if (hideJoinUI) {
+      return (
+        <div className="flex flex-1 items-center justify-center px-5">
+          <div className="rounded-xl border border-white/10 bg-black/40 px-6 py-4 text-center">
+            <p className="text-sm text-[#FEFCD9]">
+              {isLoading ? "Joining webinar..." : "Preparing webinar..."}
+            </p>
+            {meetError ? (
+              <p className="mt-2 text-xs text-[#F95F4A]">{meetError.message}</p>
+            ) : null}
+          </div>
+        </div>
+      );
+    }
     return (
       <MobileJoinScreen
         roomId={roomId}
@@ -342,7 +395,10 @@ function MobileMeetsMainContent({
             {roomId.toUpperCase()}
           </span>
           <span className="text-[10px] text-[#FEFCD9]/40 uppercase tracking-wide">
-            • {visibleParticipantCount + 1} in call
+            •{" "}
+            {isWebinarAttendee
+              ? `${webinarConfig?.attendeeCount ?? 0} watching`
+              : `${visibleParticipantCount + 1} in call`}
           </span>
         </div>
         <div className="flex items-center gap-2">
@@ -366,7 +422,7 @@ function MobileMeetsMainContent({
       </div>
 
       {/* Reactions overlay */}
-      {reactions.length > 0 && (
+      {!isWebinarAttendee && reactions.length > 0 && (
         <ReactionOverlay
           reactions={reactions}
           getDisplayName={resolveDisplayName}
@@ -375,7 +431,26 @@ function MobileMeetsMainContent({
 
       {/* Main content area - with padding for controls */}
       <div className="flex-1 min-h-0 pb-20">
-        {isWhiteboardActive ? (
+        {isWebinarAttendee ? (
+          <div className="flex h-full items-center justify-center px-4">
+            {webinarParticipants.length > 0 ? (
+              <div className="h-[66vh] w-full max-w-3xl">
+                <ParticipantVideo
+                  participant={webinarParticipants[0]}
+                  displayName={resolveDisplayName(webinarParticipants[0].userId)}
+                  isActiveSpeaker={activeSpeakerId === webinarParticipants[0].userId}
+                  audioOutputDeviceId={audioOutputDeviceId}
+                />
+              </div>
+            ) : (
+              <div className="rounded-xl border border-white/10 bg-black/40 px-5 py-4 text-center">
+                <p className="text-sm text-[#FEFCD9]">
+                  Waiting for the host to start speaking...
+                </p>
+              </div>
+            )}
+          </div>
+        ) : isWhiteboardActive ? (
           <MobileWhiteboardLayout />
         ) : isDevPlaygroundEnabled && isDevPlaygroundActive ? (
           <DevPlaygroundLayout
@@ -449,7 +524,7 @@ function MobileMeetsMainContent({
       </div>
 
       {/* Chat overlay messages */}
-      {chatOverlayMessages.length > 0 && (
+      {!isWebinarAttendee && chatOverlayMessages.length > 0 && (
         <div className="absolute top-16 left-4 right-4 z-30 pointer-events-none">
           <ChatOverlay
             messages={chatOverlayMessages}
@@ -460,7 +535,7 @@ function MobileMeetsMainContent({
         </div>
       )}
 
-      {isJoined && browserLaunchError && (
+      {isJoined && !isWebinarAttendee && browserLaunchError && (
         <div className="absolute top-16 left-4 right-4 z-40 rounded-xl border border-[#F95F4A]/30 bg-[#0d0e0d]/95 px-3 py-2 text-xs text-[#FEFCD9]/90 shadow-2xl">
           <div className="flex items-start gap-2">
             <span className="font-medium text-[#F95F4A]">Browser error</span>
@@ -481,7 +556,7 @@ function MobileMeetsMainContent({
       )}
 
       {/* Controls bar */}
-      {browserAudioNeedsGesture && (
+      {!isWebinarAttendee && browserAudioNeedsGesture && (
         <div className="px-4 mt-2 text-[11px] text-[#F95F4A]/70 text-center uppercase tracking-[0.4em]">
           Tap “Shared browser audio” to unlock the system sound.
         </div>
@@ -533,10 +608,23 @@ function MobileMeetsMainContent({
         onCloseDevPlayground={isAdmin ? handleCloseDevPlayground : undefined}
         isAppsLocked={appsState.locked}
         onToggleAppsLock={isAdmin ? handleToggleAppsLock : undefined}
+        audioInputDeviceId={selectedAudioInputDeviceId}
+        audioOutputDeviceId={audioOutputDeviceId}
+        onAudioInputDeviceChange={onAudioInputDeviceChange}
+        onAudioOutputDeviceChange={onAudioOutputDeviceChange}
+        isObserverMode={isWebinarAttendee}
+        webinarConfig={webinarConfig}
+        webinarRole={webinarRole}
+        webinarLink={webinarLink}
+        onSetWebinarLink={onSetWebinarLink}
+        onGetWebinarConfig={onGetWebinarConfig}
+        onUpdateWebinarConfig={onUpdateWebinarConfig}
+        onGenerateWebinarLink={onGenerateWebinarLink}
+        onRotateWebinarLink={onRotateWebinarLink}
       />
 
       {/* Full-screen chat panel */}
-      {isChatOpen && (
+      {!isWebinarAttendee && isChatOpen && (
         <MobileChatPanel
           messages={chatMessages}
           chatInput={chatInput}
@@ -552,7 +640,7 @@ function MobileMeetsMainContent({
       )}
 
       {/* Full-screen participants panel */}
-      {isParticipantsOpen && (
+      {!isWebinarAttendee && isParticipantsOpen && (
         <MobileParticipantsPanel
           participants={participants}
           currentUserId={currentUserId}

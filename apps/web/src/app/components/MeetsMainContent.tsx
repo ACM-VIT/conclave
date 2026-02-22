@@ -19,6 +19,7 @@ import BrowserLayout from "./BrowserLayout";
 import DevPlaygroundLayout from "./DevPlaygroundLayout";
 import SystemAudioPlayers from "./SystemAudioPlayers";
 import WhiteboardLayout from "./WhiteboardLayout";
+import ParticipantVideo from "./ParticipantVideo";
 import type { BrowserState } from "../hooks/useSharedBrowser";
 import type { ParticipantsPanelGetRooms } from "./ParticipantsPanel";
 import type {
@@ -28,6 +29,9 @@ import type {
   Participant,
   ReactionEvent,
   ReactionOption,
+  WebinarConfigSnapshot,
+  WebinarLinkResponse,
+  WebinarUpdateRequest,
 } from "../lib/types";
 import { isBrowserVideoUserId, isSystemUserId } from "../lib/utils";
 import { useApps } from "@conclave/apps-sdk";
@@ -39,6 +43,8 @@ interface MeetsMainContentProps {
   roomId: string;
   setRoomId: Dispatch<SetStateAction<string>>;
   joinRoomById: (roomId: string) => void;
+  hideJoinUI?: boolean;
+  isWebinarAttendee?: boolean;
   enableRoomRouting: boolean;
   forceJoinOnly: boolean;
   allowGhostMode: boolean;
@@ -128,6 +134,16 @@ interface MeetsMainContentProps {
   hostUserId: string | null;
   isNetworkOffline: boolean;
   isTtsDisabled: boolean;
+  webinarConfig?: WebinarConfigSnapshot | null;
+  webinarRole?: "attendee" | "participant" | "host" | null;
+  webinarLink?: string | null;
+  onSetWebinarLink?: (link: string | null) => void;
+  onGetWebinarConfig?: () => Promise<WebinarConfigSnapshot | null>;
+  onUpdateWebinarConfig?: (
+    update: WebinarUpdateRequest,
+  ) => Promise<WebinarConfigSnapshot | null>;
+  onGenerateWebinarLink?: () => Promise<WebinarLinkResponse | null>;
+  onRotateWebinarLink?: () => Promise<WebinarLinkResponse | null>;
 }
 
 export default function MeetsMainContent({
@@ -137,6 +153,8 @@ export default function MeetsMainContent({
   roomId,
   setRoomId,
   joinRoomById,
+  hideJoinUI = false,
+  isWebinarAttendee = false,
   enableRoomRouting,
   forceJoinOnly,
   allowGhostMode,
@@ -220,6 +238,14 @@ export default function MeetsMainContent({
   hostUserId,
   isNetworkOffline,
   isTtsDisabled,
+  webinarConfig,
+  webinarRole,
+  webinarLink,
+  onSetWebinarLink,
+  onGetWebinarConfig,
+  onUpdateWebinarConfig,
+  onGenerateWebinarLink,
+  onRotateWebinarLink,
 }: MeetsMainContentProps) {
   const {
     state: appsState,
@@ -330,7 +356,7 @@ export default function MeetsMainContent({
     <div
       className={`flex-1 flex flex-col overflow-hidden relative ${isJoined ? "p-4" : "p-0"}`}
     >
-      {isJoined && (
+      {isJoined && !isWebinarAttendee && (
         <ConnectionBanner
           state={connectionState}
           isOffline={isNetworkOffline}
@@ -349,33 +375,65 @@ export default function MeetsMainContent({
         />
       )}
       {!isJoined ? (
-        <JoinScreen
-          roomId={roomId}
-          onRoomIdChange={setRoomId}
-          isLoading={isLoading}
-          user={user}
-          userEmail={userEmail}
-          connectionState={connectionState}
-          isAdmin={isAdmin}
-          enableRoomRouting={enableRoomRouting}
-          forceJoinOnly={forceJoinOnly}
-          allowGhostMode={allowGhostMode}
-          showPermissionHint={showPermissionHint}
-          rooms={availableRooms}
-          roomsStatus={roomsStatus}
-          onRefreshRooms={refreshRooms}
-          onJoinRoom={joinRoomById}
-          displayNameInput={displayNameInput}
-          onDisplayNameInputChange={setDisplayNameInput}
-          isGhostMode={ghostEnabled}
-          onGhostModeChange={setIsGhostMode}
-          onUserChange={onUserChange}
-          onIsAdminChange={onIsAdminChange}
-          meetError={meetError}
-          onDismissMeetError={onDismissMeetError}
-          onRetryMedia={onRetryMedia}
-          onTestSpeaker={onTestSpeaker}
-        />
+        hideJoinUI ? (
+          <div className="flex flex-1 items-center justify-center">
+            <div className="rounded-xl border border-white/10 bg-black/40 px-6 py-4 text-center">
+              <p className="text-sm text-[#FEFCD9]">
+                {isLoading ? "Joining webinar..." : "Preparing webinar..."}
+              </p>
+              {meetError ? (
+                <p className="mt-2 text-xs text-[#F95F4A]">{meetError.message}</p>
+              ) : null}
+            </div>
+          </div>
+        ) : (
+          <JoinScreen
+            roomId={roomId}
+            onRoomIdChange={setRoomId}
+            isLoading={isLoading}
+            user={user}
+            userEmail={userEmail}
+            connectionState={connectionState}
+            isAdmin={isAdmin}
+            enableRoomRouting={enableRoomRouting}
+            forceJoinOnly={forceJoinOnly}
+            allowGhostMode={allowGhostMode}
+            showPermissionHint={showPermissionHint}
+            rooms={availableRooms}
+            roomsStatus={roomsStatus}
+            onRefreshRooms={refreshRooms}
+            onJoinRoom={joinRoomById}
+            displayNameInput={displayNameInput}
+            onDisplayNameInputChange={setDisplayNameInput}
+            isGhostMode={ghostEnabled}
+            onGhostModeChange={setIsGhostMode}
+            onUserChange={onUserChange}
+            onIsAdminChange={onIsAdminChange}
+            meetError={meetError}
+            onDismissMeetError={onDismissMeetError}
+            onRetryMedia={onRetryMedia}
+            onTestSpeaker={onTestSpeaker}
+          />
+        )
+      ) : isWebinarAttendee ? (
+        <div className="flex flex-1 items-center justify-center p-4">
+          {nonSystemParticipants.length > 0 ? (
+            <div className="h-[72vh] w-full max-w-6xl">
+              <ParticipantVideo
+                participant={nonSystemParticipants[0]}
+                displayName={resolveDisplayName(nonSystemParticipants[0].userId)}
+                isActiveSpeaker={activeSpeakerId === nonSystemParticipants[0].userId}
+                audioOutputDeviceId={audioOutputDeviceId}
+              />
+            </div>
+          ) : (
+            <div className="rounded-xl border border-white/10 bg-black/40 px-6 py-4 text-center">
+              <p className="text-sm text-[#FEFCD9]">
+                Waiting for the host to start speaking...
+              </p>
+            </div>
+          )}
+        </div>
       ) : isWhiteboardActive ? (
         <WhiteboardLayout
           localStream={localStream}
@@ -484,132 +542,158 @@ export default function MeetsMainContent({
         </div>
       )}
 
-      {isJoined && (
-        <div className="flex items-center justify-between gap-3">
-          <a href="/" className="flex items-center">
-            <Image
-              src="/assets/acm_topleft.svg"
-              alt="ACM Logo"
-              width={129}
-              height={129}
-            />
-          </a>
-          <div className="flex-1 flex justify-center">
-            <ControlsBar
-              isMuted={isMuted}
-              isCameraOff={isCameraOff}
-              isScreenSharing={isScreenSharing}
-              activeScreenShareId={activeScreenShareId}
-              isChatOpen={isChatOpen}
-              unreadCount={unreadCount}
-              isHandRaised={isHandRaised}
-              reactionOptions={reactionOptions}
-              onToggleMute={toggleMute}
-              onToggleCamera={toggleCamera}
-              onToggleScreenShare={toggleScreenShare}
-              onToggleChat={handleToggleChat}
-              onToggleHandRaised={toggleHandRaised}
-              onSendReaction={sendReaction}
-              onLeave={leaveRoom}
-              isAdmin={isAdmin}
-              isGhostMode={ghostEnabled}
-              isParticipantsOpen={isParticipantsOpen}
-              onToggleParticipants={handleToggleParticipants}
-              pendingUsersCount={isAdmin ? pendingUsers.size : 0}
-              isRoomLocked={isRoomLocked}
-              onToggleLock={onToggleLock}
-              isNoGuests={isNoGuests}
-              onToggleNoGuests={onToggleNoGuests}
-              isChatLocked={isChatLocked}
-              onToggleChatLock={onToggleChatLock}
-              isTtsDisabled={isTtsDisabled}
-              onToggleTtsDisabled={handleToggleTtsDisabled}
-              isBrowserActive={browserState?.active ?? false}
-              isBrowserLaunching={isBrowserLaunching}
-              showBrowserControls={showBrowserControls}
-              onLaunchBrowser={onLaunchBrowser}
-              onCloseBrowser={onCloseBrowser}
-              hasBrowserAudio={hasBrowserAudio}
-              isBrowserAudioMuted={isBrowserAudioMuted}
-              onToggleBrowserAudio={onToggleBrowserAudio}
-              isWhiteboardActive={isWhiteboardActive}
-              onOpenWhiteboard={isAdmin ? handleOpenWhiteboard : undefined}
-              onCloseWhiteboard={isAdmin ? handleCloseWhiteboard : undefined}
-              isDevPlaygroundEnabled={isDevPlaygroundEnabled}
-              isDevPlaygroundActive={isDevPlaygroundActive}
-              onOpenDevPlayground={
-                isAdmin ? handleOpenDevPlayground : undefined
-              }
-              onCloseDevPlayground={
-                isAdmin ? handleCloseDevPlayground : undefined
-              }
-              isAppsLocked={appsState.locked}
-              onToggleAppsLock={isAdmin ? handleToggleAppsLock : undefined}
-              isPopoutActive={isPopoutActive}
-              isPopoutSupported={isPopoutSupported}
-              onOpenPopout={onOpenPopout}
-              onClosePopout={onClosePopout}
-            />
-          </div>
-          <div className="flex items-center gap-4">
-            {isScreenSharing && (
-              <div
-                className="flex items-center gap-1.5 text-[#F95F4A] text-[10px] uppercase tracking-wider"
-                style={{ fontFamily: "'PolySans Mono', monospace" }}
-              >
-                <span className="w-1.5 h-1.5 rounded-full bg-[#F95F4A]"></span>
-                Sharing
-              </div>
-            )}
-            {ghostEnabled && (
-              <div
-                className="flex items-center gap-1.5 text-[#FF007A] text-[10px] uppercase tracking-wider"
-                style={{ fontFamily: "'PolySans Mono', monospace" }}
-              >
-                <UserX className="w-3 h-3" />
-                Ghost
-              </div>
-            )}
-            {connectionState === "reconnecting" && (
-              <div
-                className="flex items-center gap-1.5 text-amber-400 text-[10px] uppercase tracking-wider"
-                style={{ fontFamily: "'PolySans Mono', monospace" }}
-              >
-                <RefreshCw className="w-3 h-3 animate-spin" />
-                Reconnecting
-              </div>
-            )}
-            <div
-              className="flex items-center gap-1 text-[#FEFCD9]/60 text-[10px] uppercase tracking-wider"
-              style={{ fontFamily: "'PolySans Mono', monospace" }}
+      {isJoined &&
+        (isWebinarAttendee ? (
+          <div className="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-black/30 px-4 py-3">
+            <div>
+              <p className="text-[10px] uppercase tracking-[0.2em] text-[#FEFCD9]/45">
+                Webinar viewer
+              </p>
+              <p className="text-xs text-[#FEFCD9]/70">
+                {webinarConfig?.attendeeCount ?? 0} attendees watching
+              </p>
+            </div>
+            <button
+              onClick={leaveRoom}
+              className="rounded-full bg-red-500 px-4 py-2 text-xs uppercase tracking-[0.16em] text-white"
             >
-              <span className="inline-flex h-1.5 w-1.5 rounded-full bg-emerald-400" />
-              {visibleParticipantCount + 1} in call
+              Leave
+            </button>
+          </div>
+        ) : (
+          <div className="flex items-center justify-between gap-3">
+            <a href="/" className="flex items-center">
+              <Image
+                src="/assets/acm_topleft.svg"
+                alt="ACM Logo"
+                width={129}
+                height={129}
+              />
+            </a>
+            <div className="flex-1 flex justify-center">
+              <ControlsBar
+                isMuted={isMuted}
+                isCameraOff={isCameraOff}
+                isScreenSharing={isScreenSharing}
+                activeScreenShareId={activeScreenShareId}
+                isChatOpen={isChatOpen}
+                unreadCount={unreadCount}
+                isHandRaised={isHandRaised}
+                reactionOptions={reactionOptions}
+                onToggleMute={toggleMute}
+                onToggleCamera={toggleCamera}
+                onToggleScreenShare={toggleScreenShare}
+                onToggleChat={handleToggleChat}
+                onToggleHandRaised={toggleHandRaised}
+                onSendReaction={sendReaction}
+                onLeave={leaveRoom}
+                isAdmin={isAdmin}
+                isGhostMode={ghostEnabled}
+                isParticipantsOpen={isParticipantsOpen}
+                onToggleParticipants={handleToggleParticipants}
+                pendingUsersCount={isAdmin ? pendingUsers.size : 0}
+                isRoomLocked={isRoomLocked}
+                onToggleLock={onToggleLock}
+                isNoGuests={isNoGuests}
+                onToggleNoGuests={onToggleNoGuests}
+                isChatLocked={isChatLocked}
+                onToggleChatLock={onToggleChatLock}
+                isTtsDisabled={isTtsDisabled}
+                onToggleTtsDisabled={handleToggleTtsDisabled}
+                isBrowserActive={browserState?.active ?? false}
+                isBrowserLaunching={isBrowserLaunching}
+                showBrowserControls={showBrowserControls}
+                onLaunchBrowser={onLaunchBrowser}
+                onCloseBrowser={onCloseBrowser}
+                hasBrowserAudio={hasBrowserAudio}
+                isBrowserAudioMuted={isBrowserAudioMuted}
+                onToggleBrowserAudio={onToggleBrowserAudio}
+                isWhiteboardActive={isWhiteboardActive}
+                onOpenWhiteboard={isAdmin ? handleOpenWhiteboard : undefined}
+                onCloseWhiteboard={isAdmin ? handleCloseWhiteboard : undefined}
+                isDevPlaygroundEnabled={isDevPlaygroundEnabled}
+                isDevPlaygroundActive={isDevPlaygroundActive}
+                onOpenDevPlayground={
+                  isAdmin ? handleOpenDevPlayground : undefined
+                }
+                onCloseDevPlayground={
+                  isAdmin ? handleCloseDevPlayground : undefined
+                }
+                isAppsLocked={appsState.locked}
+                onToggleAppsLock={isAdmin ? handleToggleAppsLock : undefined}
+                isPopoutActive={isPopoutActive}
+                isPopoutSupported={isPopoutSupported}
+                onOpenPopout={onOpenPopout}
+                onClosePopout={onClosePopout}
+                webinarConfig={webinarConfig}
+                webinarRole={webinarRole}
+                webinarLink={webinarLink}
+                onSetWebinarLink={onSetWebinarLink}
+                onGetWebinarConfig={onGetWebinarConfig}
+                onUpdateWebinarConfig={onUpdateWebinarConfig}
+                onGenerateWebinarLink={onGenerateWebinarLink}
+                onRotateWebinarLink={onRotateWebinarLink}
+              />
             </div>
-            <div className="flex flex-col items-end">
-              <span
-                className="text-sm text-[#FEFCD9]"
-                style={{ fontFamily: "'PolySans Bulky Wide', sans-serif" }}
-              >
-                c0nclav3
-              </span>
-              <span
-                className="text-[9px] uppercase tracking-[0.15em] text-[#FEFCD9]/40"
+            <div className="flex items-center gap-4">
+              {isScreenSharing && (
+                <div
+                  className="flex items-center gap-1.5 text-[#F95F4A] text-[10px] uppercase tracking-wider"
+                  style={{ fontFamily: "'PolySans Mono', monospace" }}
+                >
+                  <span className="w-1.5 h-1.5 rounded-full bg-[#F95F4A]"></span>
+                  Sharing
+                </div>
+              )}
+              {ghostEnabled && (
+                <div
+                  className="flex items-center gap-1.5 text-[#FF007A] text-[10px] uppercase tracking-wider"
+                  style={{ fontFamily: "'PolySans Mono', monospace" }}
+                >
+                  <UserX className="w-3 h-3" />
+                  Ghost
+                </div>
+              )}
+              {connectionState === "reconnecting" && (
+                <div
+                  className="flex items-center gap-1.5 text-amber-400 text-[10px] uppercase tracking-wider"
+                  style={{ fontFamily: "'PolySans Mono', monospace" }}
+                >
+                  <RefreshCw className="w-3 h-3 animate-spin" />
+                  Reconnecting
+                </div>
+              )}
+              <div
+                className="flex items-center gap-1 text-[#FEFCD9]/60 text-[10px] uppercase tracking-wider"
                 style={{ fontFamily: "'PolySans Mono', monospace" }}
               >
-                by acm-vit
-              </span>
+                <span className="inline-flex h-1.5 w-1.5 rounded-full bg-emerald-400" />
+                {visibleParticipantCount + 1} in call
+              </div>
+              <div className="flex flex-col items-end">
+                <span
+                  className="text-sm text-[#FEFCD9]"
+                  style={{ fontFamily: "'PolySans Bulky Wide', sans-serif" }}
+                >
+                  c0nclav3
+                </span>
+                <span
+                  className="text-[9px] uppercase tracking-[0.15em] text-[#FEFCD9]/40"
+                  style={{ fontFamily: "'PolySans Mono', monospace" }}
+                >
+                  by acm-vit
+                </span>
+              </div>
             </div>
+            {browserAudioNeedsGesture && (
+              <div className="w-full mt-2 text-center text-[11px] text-[#F95F4A]/70 uppercase tracking-[0.3em]">
+                Click “Shared browser audio” to unlock the system sound.
+              </div>
+            )}
           </div>
-          {browserAudioNeedsGesture && (
-            <div className="w-full mt-2 text-center text-[11px] text-[#F95F4A]/70 uppercase tracking-[0.3em]">
-              Click “Shared browser audio” to unlock the system sound.
-            </div>
-          )}
-        </div>
-      )}
+        ))}
 
-      {isJoined && isChatOpen && (
+      {isJoined && !isWebinarAttendee && isChatOpen && (
         <ChatPanel
           messages={chatMessages}
           chatInput={chatInput}
@@ -623,7 +707,7 @@ export default function MeetsMainContent({
         />
       )}
 
-      {isJoined && isParticipantsOpen && (
+      {isJoined && !isWebinarAttendee && isParticipantsOpen && (
         <ParticipantsPanel
           participants={participants}
           currentUserId={currentUserId}
@@ -645,7 +729,7 @@ export default function MeetsMainContent({
         />
       )}
 
-      {isJoined && chatOverlayMessages.length > 0 && (
+      {isJoined && !isWebinarAttendee && chatOverlayMessages.length > 0 && (
         <ChatOverlay
           messages={chatOverlayMessages}
           onDismiss={(id) =>

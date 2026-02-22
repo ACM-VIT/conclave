@@ -29,6 +29,7 @@ import MeetsErrorBanner from "../MeetsErrorBanner";
 
 const normalizeGuestName = (value: string): string =>
   value.trim().replace(/\s+/g, " ");
+const GUEST_USER_STORAGE_KEY = "conclave:guest-user";
 
 const createGuestId = (): string => {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
@@ -154,9 +155,7 @@ function MobileJoinScreen({
   const [isSigningOut, setIsSigningOut] = useState(false);
 
   const { data: session } = useSession();
-  const canSignOut = Boolean(
-    session?.user || (user?.id && !user?.id?.startsWith("guest-"))
-  );
+  const canSignOut = Boolean(session?.user || user?.id || user?.email);
   const lastAppliedSessionUserIdRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -302,8 +301,23 @@ function MobileJoinScreen({
   const handleSignOut = async () => {
     if (isSigningOut) return;
     setIsSigningOut(true);
+    const clearGuestStorage = () => {
+      if (typeof window === "undefined") return;
+      window.localStorage.removeItem(GUEST_USER_STORAGE_KEY);
+    };
+
+    if (!session?.user) {
+      clearGuestStorage();
+      onUserChange(null);
+      onIsAdminChange(false);
+      setManualPhase("welcome");
+      setIsSigningOut(false);
+      return;
+    }
+
     await signOut()
       .then(() => {
+        clearGuestStorage();
         onUserChange(null);
         onIsAdminChange(false);
         setManualPhase("welcome");

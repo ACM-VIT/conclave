@@ -2,7 +2,12 @@
 
 import { useReducer, useState } from "react";
 import { participantReducer } from "../lib/participant-reducer";
-import type { ConnectionState, MeetError, Participant } from "../lib/types";
+import type {
+  ConnectionState,
+  MeetError,
+  Participant,
+  WebinarConfigSnapshot,
+} from "../lib/types";
 
 interface UseMeetStateOptions {
   initialRoomId?: string;
@@ -39,6 +44,12 @@ export function useMeetState({ initialRoomId }: UseMeetStateOptions) {
   const [isBrowserAudioMuted, setIsBrowserAudioMuted] = useState(false);
   const [hostUserId, setHostUserId] = useState<string | null>(null);
   const [isNetworkOffline, setIsNetworkOffline] = useState(false);
+  const [webinarConfig, setWebinarConfig] =
+    useState<WebinarConfigSnapshot | null>(null);
+  const [webinarRole, setWebinarRole] = useState<
+    "attendee" | "participant" | "host" | null
+  >(null);
+  const [webinarLink, setWebinarLink] = useState<string | null>(null);
 
   return {
     connectionState,
@@ -85,5 +96,11 @@ export function useMeetState({ initialRoomId }: UseMeetStateOptions) {
     setHostUserId,
     isNetworkOffline,
     setIsNetworkOffline,
+    webinarConfig,
+    setWebinarConfig,
+    webinarRole,
+    setWebinarRole,
+    webinarLink,
+    setWebinarLink,
   };
 }

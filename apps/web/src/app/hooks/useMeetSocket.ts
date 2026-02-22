@@ -19,6 +19,7 @@ import type {
   ConsumeResponse,
   HandRaisedNotification,
   HandRaisedSnapshot,
+  JoinMode,
   JoinRoomResponse,
   MeetError,
   ProducerInfo,
@@ -30,6 +31,10 @@ import type {
   TransportResponse,
   RestartIceResponse,
   VideoQuality,
+  WebinarConfigSnapshot,
+  WebinarFeedChangedNotification,
+  WebinarLinkResponse,
+  WebinarUpdateRequest,
 } from "../lib/types";
 import type { ParticipantAction } from "../lib/participant-reducer";
 import { createMeetError, isSystemUserId, normalizeDisplayName } from "../lib/utils";
@@ -54,11 +59,14 @@ interface UseMeetSocketOptions {
     options?: {
       user?: { id?: string; email?: string | null; name?: string | null };
       isHost?: boolean;
+      joinMode?: JoinMode;
     },
   ) => Promise<{
     token: string;
     sfuUrl: string;
   }>;
+  joinMode?: JoinMode;
+  requestWebinarInviteCode?: () => Promise<string | null>;
   ghostEnabled: boolean;
   displayNameInput: string;
   localStream: MediaStream | null;
@@ -70,6 +78,10 @@ interface UseMeetSocketOptions {
   setMeetError: (error: MeetError | null) => void;
   setWaitingMessage: (message: string | null) => void;
   setHostUserId: (userId: string | null) => void;
+  setWebinarConfig: React.Dispatch<
+    React.SetStateAction<WebinarConfigSnapshot | null>
+  >;
+  setWebinarRole: (role: "attendee" | "participant" | "host" | null) => void;
   isMuted: boolean;
   setIsMuted: (value: boolean) => void;
   isCameraOff: boolean;
@@ -129,6 +141,8 @@ export function useMeetSocket({
   user,
   userId,
   getJoinInfo,
+  joinMode = "meeting",
+  requestWebinarInviteCode,
   ghostEnabled,
   displayNameInput,
   localStream,
@@ -140,6 +154,8 @@ export function useMeetSocket({
   setMeetError,
   setWaitingMessage,
   setHostUserId,
+  setWebinarConfig,
+  setWebinarRole,
   isMuted,
   setIsMuted,
   isCameraOff,
@@ -169,6 +185,7 @@ export function useMeetSocket({
   bypassMediaPermissions = false,
 }: UseMeetSocketOptions) {
   const participantIdsRef = useRef<Set<string>>(new Set([userId]));
+  const serverRoomIdRef = useRef<string | null>(null);
 
   const {
     socketRef,
@@ -247,7 +264,9 @@ export function useMeetSocket({
       setPendingUsers(new Map());
       setDisplayNames(new Map());
       setHostUserId(null);
+      setWebinarRole(null);
       participantIdsRef.current = new Set([userId]);
+      serverRoomIdRef.current = null;
 
       try {
         audioProducerRef.current?.close();
@@ -284,6 +303,7 @@ export function useMeetSocket({
       setActiveScreenShareId(null);
       setIsHandRaised(false);
       setIsTtsDisabled(false);
+      setWebinarConfig(null);
       if (resetRoomId) {
         currentRoomIdRef.current = null;
       }
@@ -298,6 +318,7 @@ export function useMeetSocket({
       pendingProducersRef,
       producerMapRef,
       producerTransportRef,
+      serverRoomIdRef,
       screenProducerRef,
       setActiveScreenShareId,
       setDisplayNames,
@@ -305,7 +326,9 @@ export function useMeetSocket({
       setIsScreenSharing,
       setPendingUsers,
       setHostUserId,
+      setWebinarRole,
       setIsTtsDisabled,
+      setWebinarConfig,
       clearReactions,
       videoProducerRef,
       userId,
@@ -374,10 +397,13 @@ export function useMeetSocket({
   const isRoomEvent = useCallback(
     (eventRoomId?: string) => {
       if (!eventRoomId) return true;
-      if (!currentRoomIdRef.current) return true;
-      return eventRoomId === currentRoomIdRef.current;
+      if (!currentRoomIdRef.current && !serverRoomIdRef.current) return true;
+      return (
+        eventRoomId === currentRoomIdRef.current ||
+        eventRoomId === serverRoomIdRef.current
+      );
     },
-    [currentRoomIdRef],
+    [currentRoomIdRef, serverRoomIdRef],
   );
 
   const handleProducerClosed = useCallback(
@@ -768,9 +794,12 @@ export function useMeetSocket({
           }
 
           audioProducerRef.current = audioProducer;
+          const audioProducerId = audioProducer.id;
 
           audioProducer.on("transportclose", () => {
-            audioProducerRef.current = null;
+            if (audioProducerRef.current?.id === audioProducerId) {
+              audioProducerRef.current = null;
+            }
           });
         } catch (err) {
           console.error("[Meets] Failed to produce audio:", err);
@@ -805,9 +834,12 @@ export function useMeetSocket({
           }
 
           videoProducerRef.current = videoProducer;
+          const videoProducerId = videoProducer.id;
 
           videoProducer.on("transportclose", () => {
-            videoProducerRef.current = null;
+            if (videoProducerRef.current?.id === videoProducerId) {
+              videoProducerRef.current = null;
+            }
           });
         } catch (err) {
           console.error("[Meets] Failed to produce video:", err);
@@ -826,6 +858,9 @@ export function useMeetSocket({
 
   const consumeProducer = useCallback(
     async (producerInfo: ProducerInfo): Promise<void> => {
+      if (producerInfo.producerUserId === userId) {
+        return;
+      }
       if (consumersRef.current.has(producerInfo.producerId)) {
         return;
       }
@@ -957,6 +992,7 @@ export function useMeetSocket({
       dispatchParticipants,
       handleProducerClosed,
       setActiveScreenShareId,
+      userId,
     ],
   );
 
@@ -1070,7 +1106,12 @@ export function useMeetSocket({
     async (
       targetRoomId: string,
       stream: MediaStream | null,
-      joinOptions: { displayName?: string; isGhost: boolean },
+      joinOptions: {
+        displayName?: string;
+        isGhost: boolean;
+        joinMode: JoinMode;
+        webinarInviteCode?: string;
+      },
     ): Promise<"joined" | "waiting"> => {
       const socket = socketRef.current;
       if (!socket) throw new Error("Socket not connected");
@@ -1086,6 +1127,7 @@ export function useMeetSocket({
             sessionId: sessionIdRef.current,
             displayName: joinOptions.displayName,
             ghost: joinOptions.isGhost,
+            webinarInviteCode: joinOptions.webinarInviteCode,
           },
           async (response: JoinRoomResponse | { error: string }) => {
             if ("error" in response) {
@@ -1096,7 +1138,28 @@ export function useMeetSocket({
             if (response.status === "waiting") {
               setConnectionState("waiting");
               setHostUserId(response.hostUserId ?? null);
+              setWebinarRole(response.webinarRole ?? null);
+              setWebinarConfig((previous) => ({
+                enabled: response.isWebinarEnabled ?? previous?.enabled ?? false,
+                publicAccess: previous?.publicAccess ?? false,
+                locked: response.webinarLocked ?? previous?.locked ?? false,
+                maxAttendees:
+                  response.webinarMaxAttendees ??
+                  previous?.maxAttendees ??
+                  500,
+                attendeeCount:
+                  response.webinarAttendeeCount ??
+                  previous?.attendeeCount ??
+                  0,
+                requiresInviteCode:
+                  response.webinarRequiresInviteCode ??
+                  previous?.requiresInviteCode ??
+                  false,
+                linkSlug: previous?.linkSlug ?? null,
+                feedMode: previous?.feedMode ?? "active-speaker",
+              }));
               currentRoomIdRef.current = targetRoomId;
+              serverRoomIdRef.current = response.roomId ?? targetRoomId;
               setIsTtsDisabled(response.isTtsDisabled ?? false);
               resolve("waiting");
               return;
@@ -1109,8 +1172,29 @@ export function useMeetSocket({
                 response.existingProducers,
               );
               currentRoomIdRef.current = targetRoomId;
+              serverRoomIdRef.current = response.roomId ?? targetRoomId;
               setIsRoomLocked(response.isLocked ?? false);
               setIsTtsDisabled(response.isTtsDisabled ?? false);
+              setWebinarRole(response.webinarRole ?? null);
+              setWebinarConfig((previous) => ({
+                enabled: response.isWebinarEnabled ?? previous?.enabled ?? false,
+                publicAccess: previous?.publicAccess ?? false,
+                locked: response.webinarLocked ?? previous?.locked ?? false,
+                maxAttendees:
+                  response.webinarMaxAttendees ??
+                  previous?.maxAttendees ??
+                  500,
+                attendeeCount:
+                  response.webinarAttendeeCount ??
+                  previous?.attendeeCount ??
+                  0,
+                requiresInviteCode:
+                  response.webinarRequiresInviteCode ??
+                  previous?.requiresInviteCode ??
+                  false,
+                linkSlug: previous?.linkSlug ?? null,
+                feedMode: previous?.feedMode ?? "active-speaker",
+              }));
 
               // Use pre-warmed Device if available, otherwise dynamic import
               const DeviceClass = prewarm?.Device
@@ -1126,7 +1210,10 @@ export function useMeetSocket({
                 `[Meets] Device loaded in ${(performance.now() - joinedTime).toFixed(0)}ms`,
               );
 
-              const shouldProduce = !!stream && !joinOptions.isGhost;
+              const shouldProduce =
+                !!stream &&
+                !joinOptions.isGhost &&
+                joinOptions.joinMode !== "webinar_attendee";
 
               await Promise.all([
                 shouldProduce
@@ -1164,6 +1251,8 @@ export function useMeetSocket({
       setWaitingMessage,
       setConnectionState,
       setHostUserId,
+      setWebinarConfig,
+      setWebinarRole,
       currentRoomIdRef,
       deviceRef,
       createProducerTransport,
@@ -1206,10 +1295,11 @@ export function useMeetSocket({
             const cachedToken = prewarm?.getCachedToken?.(roomIdForJoin);
             const tokenPromise = cachedToken
               ? Promise.resolve(cachedToken)
-              : getJoinInfo(roomIdForJoin, sessionIdRef.current, {
-                  user,
-                  isHost: isAdmin,
-                });
+                : getJoinInfo(roomIdForJoin, sessionIdRef.current, {
+                    user,
+                    isHost: isAdmin,
+                    joinMode,
+                  });
 
             const [{ token, sfuUrl }, { io }] = await Promise.all([
               tokenPromise,
@@ -1305,44 +1395,75 @@ export function useMeetSocket({
 
             socket.on("newProducer", async (data: ProducerInfo) => {
               console.log("[Meets] New producer:", data);
+              if (data.producerUserId === userId) {
+                return;
+              }
+              if (joinMode === "webinar_attendee") {
+                void syncProducers();
+                return;
+              }
               await consumeProducer(data);
             });
 
             socket.on(
               "producerClosed",
-              ({ producerId }: { producerId: string }) => {
+              ({
+                producerId,
+                producerUserId,
+              }: {
+                producerId: string;
+                producerUserId?: string;
+              }) => {
                 console.log("[Meets] Producer closed:", producerId);
-                handleProducerClosed(producerId);
+                const localAudioProducer = audioProducerRef.current;
+                const localVideoProducer = videoProducerRef.current;
+                const localScreenProducer = screenProducerRef.current;
+                const matchesLocalProducer =
+                  localAudioProducer?.id === producerId ||
+                  localVideoProducer?.id === producerId ||
+                  localScreenProducer?.id === producerId;
 
-                if (audioProducerRef.current?.id === producerId) {
-                  setIsMuted(true);
-                  audioProducerRef.current.close();
-                  audioProducerRef.current = null;
-                } else if (videoProducerRef.current?.id === producerId) {
-                  setIsCameraOff(true);
-                  videoProducerRef.current.close();
-                  videoProducerRef.current = null;
-                  const track = localStream?.getVideoTracks()[0];
-                  if (track) {
-                    stopLocalTrack(track);
-                    track.enabled = false;
+                if (
+                  producerUserId === userId ||
+                  (producerUserId == null && matchesLocalProducer)
+                ) {
+                  if (localAudioProducer?.id === producerId) {
+                    try {
+                      localAudioProducer.close();
+                    } catch {}
+                    if (audioProducerRef.current?.id === producerId) {
+                      audioProducerRef.current = null;
+                    }
+                    return;
                   }
-                  setLocalStream((prev) => {
-                    if (!prev) return prev;
-                    const remaining = prev
-                      .getTracks()
-                      .filter((item) => item.kind !== "video");
-                    return new MediaStream(remaining);
-                  });
-                } else if (screenProducerRef.current?.id === producerId) {
-                  if (screenProducerRef.current.track) {
-                    screenProducerRef.current.track.stop();
+
+                  if (localVideoProducer?.id === producerId) {
+                    try {
+                      localVideoProducer.close();
+                    } catch {}
+                    if (videoProducerRef.current?.id === producerId) {
+                      videoProducerRef.current = null;
+                    }
+                    return;
                   }
-                  setIsScreenSharing(false);
-                  screenProducerRef.current.close();
-                  screenProducerRef.current = null;
-                  setActiveScreenShareId(null);
+
+                  if (localScreenProducer?.id === producerId) {
+                    if (localScreenProducer.track) {
+                      localScreenProducer.track.stop();
+                    }
+                    try {
+                      localScreenProducer.close();
+                    } catch {}
+                    if (screenProducerRef.current?.id === producerId) {
+                      screenProducerRef.current = null;
+                    }
+                    setIsScreenSharing(false);
+                    setActiveScreenShareId(null);
+                    return;
+                  }
                 }
+
+                handleProducerClosed(producerId);
               },
             );
 
@@ -1735,7 +1856,9 @@ export function useMeetSocket({
               const joinOptions = joinOptionsRef.current;
               let stream = localStreamRef.current;
               const shouldRequestMedia =
-                !joinOptions.isGhost && !bypassMediaPermissions;
+                !joinOptions.isGhost &&
+                joinOptions.joinMode !== "webinar_attendee" &&
+                !bypassMediaPermissions;
 
               if (!stream && shouldRequestMedia) {
                 stream = await requestMediaPermissions();
@@ -1746,7 +1869,10 @@ export function useMeetSocket({
               }
               if (
                 currentRoomIdRef.current &&
-                (stream || joinOptions.isGhost || bypassMediaPermissions)
+                (stream ||
+                  joinOptions.isGhost ||
+                  joinOptions.joinMode === "webinar_attendee" ||
+                  bypassMediaPermissions)
               ) {
                 joinRoomInternal(
                   currentRoomIdRef.current,
@@ -1852,6 +1978,48 @@ export function useMeetSocket({
               }
             );
 
+            socket.on(
+              "webinar:configChanged",
+              (nextConfig: WebinarConfigSnapshot) => {
+                setWebinarConfig(nextConfig);
+              },
+            );
+
+            socket.on(
+              "webinar:attendeeCountChanged",
+              ({
+                attendeeCount,
+                maxAttendees,
+                roomId: eventRoomId,
+              }: {
+                attendeeCount: number;
+                maxAttendees: number;
+                roomId?: string;
+              }) => {
+                if (!isRoomEvent(eventRoomId)) return;
+                setWebinarConfig((previous) => ({
+                  enabled: previous?.enabled ?? false,
+                  publicAccess: previous?.publicAccess ?? false,
+                  locked: previous?.locked ?? false,
+                  maxAttendees: maxAttendees ?? previous?.maxAttendees ?? 500,
+                  attendeeCount:
+                    attendeeCount ?? previous?.attendeeCount ?? 0,
+                  requiresInviteCode: previous?.requiresInviteCode ?? false,
+                  linkSlug: previous?.linkSlug ?? null,
+                  feedMode: previous?.feedMode ?? "active-speaker",
+                }));
+              },
+            );
+
+            socket.on(
+              "webinar:feedChanged",
+              (notification: WebinarFeedChangedNotification) => {
+                if (joinMode !== "webinar_attendee") return;
+                if (!isRoomEvent(notification.roomId)) return;
+                void syncProducers();
+              },
+            );
+
             socketRef.current = socket;
             onSocketReady?.(socket);
           } catch (err) {
@@ -1880,6 +2048,7 @@ export function useMeetSocket({
       handleRedirectRef,
       handleReconnectRef,
       getJoinInfo,
+      joinMode,
       isAdmin,
       setIsAdmin,
       isRoomEvent,
@@ -1904,6 +2073,8 @@ export function useMeetSocket({
       setIsRoomLocked,
       setIsTtsDisabled,
       setHostUserId,
+      setWebinarRole,
+      setWebinarConfig,
       setLocalStream,
       setMeetError,
       setPendingUsers,
@@ -1912,6 +2083,7 @@ export function useMeetSocket({
       socketRef,
       stopLocalTrack,
       requestMediaPermissions,
+      syncProducers,
       updateVideoQualityRef,
       user,
       userId,
@@ -1952,7 +2124,10 @@ export function useMeetSocket({
           const stream = localStreamRef.current || localStream;
           if (
             reconnectRoomId &&
-            (stream || joinOptions.isGhost || bypassMediaPermissions)
+            (stream ||
+              joinOptions.isGhost ||
+              joinOptions.joinMode === "webinar_attendee" ||
+              bypassMediaPermissions)
           ) {
             await joinRoomInternal(reconnectRoomId, stream, joinOptions);
           }
@@ -2042,15 +2217,27 @@ export function useMeetSocket({
       setConnectionState("connecting");
       primeAudioOutput();
       refs.intentionalDisconnectRef.current = false;
+      serverRoomIdRef.current = null;
       setRoomId(targetRoomId);
+      if (joinMode === "webinar_attendee") {
+        setIsAdmin(false);
+      }
       const normalizedDisplayName = normalizeDisplayName(displayNameInput);
-      const joinOptions = {
+      const joinOptions: {
+        displayName?: string;
+        isGhost: boolean;
+        joinMode: JoinMode;
+        webinarInviteCode?: string;
+      } = {
         displayName: isAdmin ? normalizedDisplayName || undefined : undefined,
         isGhost: ghostEnabled,
+        joinMode,
       };
       joinOptionsRef.current = joinOptions;
       const shouldRequestMedia =
-        !joinOptions.isGhost && !bypassMediaPermissions;
+        !joinOptions.isGhost &&
+        joinOptions.joinMode !== "webinar_attendee" &&
+        !bypassMediaPermissions;
 
       try {
         const [, stream] = await Promise.all([
@@ -2068,7 +2255,35 @@ export function useMeetSocket({
         localStreamRef.current = stream;
         setLocalStream(stream);
 
-        await joinRoomInternal(targetRoomId, stream, joinOptions);
+        try {
+          await joinRoomInternal(targetRoomId, stream, joinOptions);
+        } catch (joinError) {
+          const joinMessage =
+            joinError instanceof Error
+              ? joinError.message
+              : String(joinError ?? "");
+          const shouldPromptInviteCode =
+            joinOptions.joinMode === "webinar_attendee" &&
+            !joinOptions.webinarInviteCode &&
+            /invite code/i.test(joinMessage) &&
+            typeof requestWebinarInviteCode === "function";
+
+          if (!shouldPromptInviteCode) {
+            throw joinError;
+          }
+
+          const inviteCode = await requestWebinarInviteCode();
+          if (!inviteCode || !inviteCode.trim()) {
+            throw joinError;
+          }
+
+          const webinarJoinOptions = {
+            ...joinOptions,
+            webinarInviteCode: inviteCode.trim(),
+          };
+          joinOptionsRef.current = webinarJoinOptions;
+          await joinRoomInternal(targetRoomId, stream, webinarJoinOptions);
+        }
       } catch (err) {
         console.error("[Meets] Error joining room:", err);
         const stream = localStreamRef.current;
@@ -2084,12 +2299,14 @@ export function useMeetSocket({
       connectSocket,
       displayNameInput,
       ghostEnabled,
+      joinMode,
       isAdmin,
       joinOptionsRef,
       joinRoomInternal,
       localStreamRef,
       primeAudioOutput,
       requestMediaPermissions,
+      requestWebinarInviteCode,
       bypassMediaPermissions,
       refs.abortControllerRef,
       refs.intentionalDisconnectRef,
@@ -2200,6 +2417,95 @@ export function useMeetSocket({
     [socketRef]
   );
 
+  const getWebinarConfig = useCallback((): Promise<WebinarConfigSnapshot | null> => {
+    const socket = socketRef.current;
+    if (!socket) return Promise.resolve(null);
+
+    return new Promise((resolve) => {
+      socket.emit(
+        "webinar:getConfig",
+        (response: WebinarConfigSnapshot | { error: string }) => {
+          if ("error" in response) {
+            console.error("[Meets] Failed to fetch webinar config:", response.error);
+            resolve(null);
+            return;
+          }
+          setWebinarConfig(response);
+          resolve(response);
+        },
+      );
+    });
+  }, [setWebinarConfig, socketRef]);
+
+  const updateWebinarConfig = useCallback(
+    (update: WebinarUpdateRequest): Promise<WebinarConfigSnapshot | null> => {
+      const socket = socketRef.current;
+      if (!socket) return Promise.resolve(null);
+
+      return new Promise((resolve) => {
+        socket.emit(
+          "webinar:updateConfig",
+          update,
+          (
+            response:
+              | { success: boolean; config: WebinarConfigSnapshot }
+              | { error: string },
+          ) => {
+            if ("error" in response) {
+              console.error("[Meets] Failed to update webinar config:", response.error);
+              resolve(null);
+              return;
+            }
+            setWebinarConfig(response.config);
+            resolve(response.config);
+          },
+        );
+      });
+    },
+    [setWebinarConfig, socketRef],
+  );
+
+  const rotateWebinarLink = useCallback((): Promise<WebinarLinkResponse | null> => {
+    const socket = socketRef.current;
+    if (!socket) return Promise.resolve(null);
+
+    return new Promise((resolve) => {
+      socket.emit(
+        "webinar:rotateLink",
+        (response: WebinarLinkResponse | { error: string }) => {
+          if ("error" in response) {
+            console.error("[Meets] Failed to rotate webinar link:", response.error);
+            resolve(null);
+            return;
+          }
+          resolve(response);
+        },
+      );
+    });
+  }, [socketRef]);
+
+  const generateWebinarLink = useCallback(
+    (): Promise<WebinarLinkResponse | null> => {
+      const socket = socketRef.current;
+      if (!socket) return Promise.resolve(null);
+
+      return new Promise((resolve) => {
+        socket.emit(
+          "webinar:generateLink",
+          (response: WebinarLinkResponse | { error: string }) => {
+            if ("error" in response) {
+              console.error("[Meets] Failed to generate webinar link:", response.error);
+              resolve(null);
+              return;
+            }
+            resolve(response);
+          },
+        );
+      });
+    },
+    [socketRef],
+  );
+
   return {
     cleanup,
     cleanupRoomResources,
@@ -2209,5 +2515,9 @@ export function useMeetSocket({
     toggleRoomLock,
     toggleNoGuests,
     toggleChatLock,
+    getWebinarConfig,
+    updateWebinarConfig,
+    rotateWebinarLink,
+    generateWebinarLink,
   };
 }

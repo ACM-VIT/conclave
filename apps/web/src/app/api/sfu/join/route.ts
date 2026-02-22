@@ -6,6 +6,7 @@ export const runtime = "nodejs";
 type JoinRequestBody = {
   roomId?: string;
   sessionId?: string;
+  joinMode?: "meeting" | "webinar_attendee";
   user?: {
     id?: string | null;
     email?: string | null;
@@ -52,12 +53,19 @@ export async function POST(request: Request) {
   }
 
   const clientId = resolveClientId(request, body);
+  const joinMode =
+    body?.joinMode === "webinar_attendee" ? "webinar_attendee" : "meeting";
   const email = body?.user?.email?.trim() || undefined;
   const name = body?.user?.name?.trim() || undefined;
   const providedId = body?.user?.id?.trim() || undefined;
   const baseUserId = email || providedId || `guest-${sessionId}`;
-  const isHost = Boolean(body?.isHost ?? body?.isAdmin);
-  const allowRoomCreation = Boolean(body?.allowRoomCreation);
+  const isWebinarAttendeeJoin = joinMode === "webinar_attendee";
+  const isHost = isWebinarAttendeeJoin
+    ? false
+    : Boolean(body?.isHost ?? body?.isAdmin);
+  const allowRoomCreation = isWebinarAttendeeJoin
+    ? false
+    : Boolean(body?.allowRoomCreation);
 
   const token = jwt.sign(
     {
@@ -69,6 +77,7 @@ export async function POST(request: Request) {
       allowRoomCreation,
       clientId,
       sessionId,
+      joinMode,
     },
     process.env.SFU_SECRET || "development-secret",
     { expiresIn: "1h" }

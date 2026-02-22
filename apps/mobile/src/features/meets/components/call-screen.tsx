@@ -12,7 +12,11 @@ import {
 import { RTCView } from "react-native-webrtc";
 import * as Clipboard from "expo-clipboard";
 import * as Haptics from "expo-haptics";
-import type { ConnectionState, Participant } from "../types";
+import type {
+  ConnectionState,
+  Participant,
+  WebinarConfigSnapshot,
+} from "../types";
 import { isSystemUserId } from "../utils";
 import { useDeviceLayout, type DeviceLayout } from "../hooks/use-device-layout";
 import { ControlsBar } from "./controls-bar";
@@ -88,6 +92,8 @@ interface CallScreenProps {
   isTtsDisabled?: boolean;
   isAdmin?: boolean;
   pendingUsersCount?: number;
+  isObserverMode?: boolean;
+  webinarConfig?: WebinarConfigSnapshot | null;
 }
 
 const columnWrapperStyle = { gap: 12 } as const;
@@ -127,6 +133,8 @@ export function CallScreen({
   isTtsDisabled = false,
   isAdmin = false,
   pendingUsersCount = 0,
+  isObserverMode = false,
+  webinarConfig,
   presentationStream = null,
   presenterName = "",
 }: CallScreenProps) {
@@ -150,8 +158,11 @@ export function CallScreen({
   const copyResetRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const meetingLink = useMemo(
-    () => (roomId ? `${MEETING_LINK_BASE}/${roomId}` : ""),
-    [roomId]
+    () =>
+      roomId
+        ? `${MEETING_LINK_BASE}/${isObserverMode ? `w/${roomId}` : roomId}`
+        : "",
+    [isObserverMode, roomId]
   );
 
   const meetingCopyText = useMemo(() => {
@@ -204,8 +215,17 @@ export function CallScreen({
     const hasLocal = list.some((participant) => participant.userId === localParticipant.userId);
     return hasLocal ? list : [localParticipant, ...list];
   }, [participants, localParticipant]);
+  const webinarParticipants = useMemo(
+    () =>
+      Array.from(participants.values()).filter(
+        (participant) => !isSystemUserId(participant.userId)
+      ),
+    [participants]
+  );
 
-  const displayParticipantCount = participantCount ?? participantList.length;
+  const displayParticipantCount = isObserverMode
+    ? webinarConfig?.attendeeCount ?? 0
+    : participantCount ?? participantList.length;
 
   const stripParticipants = useMemo(() => {
     const list = Array.from(participants.values()).filter(
@@ -354,32 +374,52 @@ export function CallScreen({
         ]}
       >
         <RNView style={styles.header}>
-          <Pressable
-            onPress={handleShareMeeting}
-            onLongPress={handleCopyMeeting}
-            accessibilityRole="button"
-            accessibilityLabel={`Share meeting link for room ${roomId}`}
-            accessibilityHint="Tap to share. Long press to copy."
-            style={({ pressed }) => [pressed && styles.roomPressed]}
-          >
-            <GlassPill style={[styles.pillGlass, copied && styles.pillCopied]}>
+          {isObserverMode ? (
+            <GlassPill style={styles.pillGlass}>
               <RNView style={styles.roomPill}>
-                {isRoomLocked ? (
-                  <Lock size={12} color={COLORS.primaryOrange} />
-                ) : null}
-                <Text style={[styles.roomId, copied && styles.roomIdCopied]} numberOfLines={1}>
-                  {roomId.toUpperCase()}
+                <Text style={styles.roomId} numberOfLines={1}>
+                  WEBINAR
                 </Text>
               </RNView>
             </GlassPill>
-          </Pressable>
+          ) : (
+            <Pressable
+              onPress={handleShareMeeting}
+              onLongPress={handleCopyMeeting}
+              accessibilityRole="button"
+              accessibilityLabel={`Share meeting link for room ${roomId}`}
+              accessibilityHint="Tap to share. Long press to copy."
+              style={({ pressed }) => [pressed && styles.roomPressed]}
+            >
+              <GlassPill style={[styles.pillGlass, copied && styles.pillCopied]}>
+                <RNView style={styles.roomPill}>
+                  {isRoomLocked ? (
+                    <Lock size={12} color={COLORS.primaryOrange} />
+                  ) : null}
+                  <Text
+                    style={[styles.roomId, copied && styles.roomIdCopied]}
+                    numberOfLines={1}
+                  >
+                    {roomId.toUpperCase()}
+                  </Text>
+                </RNView>
+              </GlassPill>
+            </Pressable>
+          )}
 
         {connectionLabel ? (
           <RNView style={styles.statusPill}>
             <Text style={styles.statusText}>{connectionLabel}</Text>
           </RNView>
         ) : (
-          !isTablet ? (
+          isObserverMode ? (
+            <GlassPill style={styles.pillGlass}>
+              <RNView style={styles.participantsPill}>
+                <Users size={12} color={COLORS.cream} />
+                <Text style={styles.participantsCount}>{displayParticipantCount}</Text>
+              </RNView>
+            </GlassPill>
+          ) : !isTablet ? (
             <GlassPill style={[styles.pillGlass, styles.headerPill]}>
               <Pressable onPress={onOpenSettings} style={styles.headerPillIconButton}>
                 <Settings size={14} color={COLORS.cream} />
@@ -405,7 +445,38 @@ export function CallScreen({
         )}
       </RNView>
 
-        {isWhiteboardActive ? (
+        {isObserverMode ? (
+          <RNView
+            style={[
+              styles.presentationContainer,
+              { paddingBottom: 140 + insets.bottom },
+            ]}
+          >
+            <RNView style={styles.presentationStage}>
+              {webinarParticipants[0]?.videoStream ? (
+                <RTCView
+                  streamURL={webinarParticipants[0].videoStream!.toURL()}
+                  style={styles.presentationVideo}
+                  mirror={false}
+                  objectFit="contain"
+                />
+              ) : (
+                <RNView style={styles.observerFallback}>
+                  <Text style={styles.presenterText}>
+                    Waiting for the host to start speaking...
+                  </Text>
+                </RNView>
+              )}
+              {webinarParticipants[0] ? (
+                <RNView style={styles.presenterBadge}>
+                  <Text style={styles.presenterText}>
+                    {resolveDisplayName(webinarParticipants[0].userId)}
+                  </Text>
+                </RNView>
+              ) : null}
+            </RNView>
+          </RNView>
+        ) : isWhiteboardActive ? (
           <RNView style={[styles.whiteboardContainer, { paddingBottom: 140 + insets.bottom }]}>
             <WhiteboardNativeApp />
           </RNView>
@@ -535,6 +606,7 @@ export function CallScreen({
         isChatLocked={isChatLocked}
         isTtsDisabled={isTtsDisabled}
         isAdmin={isAdmin}
+        isObserverMode={isObserverMode}
         pendingUsersCount={pendingUsersCount}
         unreadCount={unreadCount}
         availableWidth={availableWidth}
@@ -693,6 +765,12 @@ const styles = StyleSheet.create({
   presentationVideo: {
     width: "100%",
     height: "100%",
+  },
+  observerFallback: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 24,
   },
   presenterBadge: {
     position: "absolute",

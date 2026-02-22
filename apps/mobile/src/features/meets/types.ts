@@ -20,6 +20,7 @@ export type ConnectionState =
   | "error";
 
 export type ProducerType = "webcam" | "screen";
+export type JoinMode = "meeting" | "webinar_attendee";
 
 export type ReactionKind = "emoji" | "asset";
 
@@ -105,11 +106,50 @@ export interface ProducerInfo {
 export type VideoQuality = "low" | "standard";
 
 export interface JoinRoomResponse {
+  roomId?: string;
   rtpCapabilities: RtpCapabilities;
   existingProducers: ProducerInfo[];
   status?: "waiting" | "joined";
+  hostUserId?: string | null;
   isLocked?: boolean;
   isTtsDisabled?: boolean;
+  webinarRole?: "attendee" | "participant" | "host";
+  isWebinarEnabled?: boolean;
+  webinarLocked?: boolean;
+  webinarRequiresInviteCode?: boolean;
+  webinarAttendeeCount?: number;
+  webinarMaxAttendees?: number;
+}
+
+export interface WebinarConfigSnapshot {
+  enabled: boolean;
+  publicAccess: boolean;
+  locked: boolean;
+  maxAttendees: number;
+  attendeeCount: number;
+  requiresInviteCode: boolean;
+  feedMode: "active-speaker";
+}
+
+export interface WebinarUpdateRequest {
+  enabled?: boolean;
+  publicAccess?: boolean;
+  locked?: boolean;
+  maxAttendees?: number;
+  inviteCode?: string | null;
+}
+
+export interface WebinarLinkResponse {
+  link: string;
+  signedToken?: string;
+  publicAccess: boolean;
+  linkVersion: number;
+}
+
+export interface WebinarFeedChangedNotification {
+  roomId: string;
+  speakerUserId: string | null;
+  producers: ProducerInfo[];
 }
 
 export interface TransportResponse {

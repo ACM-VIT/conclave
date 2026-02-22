@@ -24,6 +24,7 @@ import {
 
 interface UseMeetMediaOptions {
   ghostEnabled: boolean;
+  isObserverMode?: boolean;
   connectionState: string;
   isMuted: boolean;
   setIsMuted: (value: boolean) => void;
@@ -57,6 +58,7 @@ interface UseMeetMediaOptions {
 
 export function useMeetMedia({
   ghostEnabled,
+  isObserverMode = false,
   connectionState,
   isMuted,
   setIsMuted,
@@ -491,22 +493,10 @@ export function useMeetMedia({
         }
 
         const transport = producerTransportRef.current;
-        const currentProducer = videoProducerRef.current;
+        const previousProducer = videoProducerRef.current;
 
-        if (!transport || !currentProducer || !nextVideoTrack) {
+        if (!transport || !nextVideoTrack) {
           return;
-        }
-
-        socketRef.current?.emit(
-          "closeProducer",
-          { producerId: currentProducer.id },
-          () => {}
-        );
-        try {
-          currentProducer.close();
-        } catch {}
-        if (videoProducerRef.current?.id === currentProducer.id) {
-          videoProducerRef.current = null;
         }
 
         let nextProducer: Producer;
@@ -529,11 +519,26 @@ export function useMeetMedia({
         }
 
         videoProducerRef.current = nextProducer;
+        const nextProducerId = nextProducer.id;
         nextProducer.on("transportclose", () => {
-          if (videoProducerRef.current?.id === nextProducer.id) {
+          if (videoProducerRef.current?.id === nextProducerId) {
             videoProducerRef.current = null;
           }
         });
+
+        if (
+          previousProducer &&
+          previousProducer.id !== nextProducerId
+        ) {
+          socketRef.current?.emit(
+            "closeProducer",
+            { producerId: previousProducer.id },
+            () => {}
+          );
+          try {
+            previousProducer.close();
+          } catch {}
+        }
       } catch (err) {
         console.error("[Meets] Failed to update video quality:", err);
       }
@@ -555,7 +560,7 @@ export function useMeetMedia({
   }, [updateVideoQuality]);
 
   const toggleMute = useCallback(async () => {
-    if (ghostEnabled) return;
+    if (ghostEnabled || isObserverMode) return;
     const previousMuted = isMuted;
     const nextMuted = !previousMuted;
     let producer = audioProducerRef.current;
@@ -666,8 +671,11 @@ export function useMeetMedia({
         });
 
         audioProducerRef.current = audioProducer;
+        const audioProducerId = audioProducer.id;
         audioProducer.on("transportclose", () => {
-          audioProducerRef.current = null;
+          if (audioProducerRef.current?.id === audioProducerId) {
+            audioProducerRef.current = null;
+          }
         });
       }
       setIsMuted(false);
@@ -688,6 +696,7 @@ export function useMeetMedia({
     }
   }, [
     ghostEnabled,
+    isObserverMode,
     isMuted,
     selectedAudioInputDeviceId,
     handleLocalTrackEnded,
@@ -704,7 +713,7 @@ export function useMeetMedia({
   ]);
 
   useEffect(() => {
-    if (ghostEnabled) return;
+    if (ghostEnabled || isObserverMode) return;
     if (connectionState !== "joined") return;
     if (isMuted) return;
     if (audioProducerRef.current) return;
@@ -805,6 +814,7 @@ export function useMeetMedia({
     };
   }, [
     ghostEnabled,
+    isObserverMode,
     connectionState,
     isMuted,
     selectedAudioInputDeviceId,
@@ -821,7 +831,7 @@ export function useMeetMedia({
   ]);
 
   const toggleCamera = useCallback(async () => {
-    if (ghostEnabled) return;
+    if (ghostEnabled || isObserverMode) return;
     const producer = videoProducerRef.current;
 
     if (producer) {
@@ -943,8 +953,11 @@ export function useMeetMedia({
         }
 
         videoProducerRef.current = videoProducer;
+        const videoProducerId = videoProducer.id;
         videoProducer.on("transportclose", () => {
-          videoProducerRef.current = null;
+          if (videoProducerRef.current?.id === videoProducerId) {
+            videoProducerRef.current = null;
+          }
         });
         setIsCameraOff(false);
       } catch (err) {
@@ -965,6 +978,7 @@ export function useMeetMedia({
     }
   }, [
     ghostEnabled,
+    isObserverMode,
     isCameraOff,
     handleLocalTrackEnded,
     stopLocalTrack,
@@ -978,7 +992,7 @@ export function useMeetMedia({
   ]);
 
   useEffect(() => {
-    if (ghostEnabled) return;
+    if (ghostEnabled || isObserverMode) return;
     if (connectionState !== "joined") return;
     if (isCameraOff) return;
     if (videoProducerRef.current) return;
@@ -1094,6 +1108,7 @@ export function useMeetMedia({
     };
   }, [
     ghostEnabled,
+    isObserverMode,
     connectionState,
     isCameraOff,
     handleLocalTrackEnded,
@@ -1108,7 +1123,7 @@ export function useMeetMedia({
   ]);
 
   const toggleScreenShare = useCallback(async () => {
-    if (ghostEnabled) return;
+    if (ghostEnabled || isObserverMode) return;
     if (isScreenSharing) {
       const producer = screenProducerRef.current;
       if (producer) {
@@ -1191,6 +1206,7 @@ export function useMeetMedia({
     }
   }, [
     ghostEnabled,
+    isObserverMode,
     isScreenSharing,
     activeScreenShareId,
     setIsScreenSharing,

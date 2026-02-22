@@ -13,6 +13,7 @@ import { registerRouterHandlers } from "./handlers/routerHandlers.js";
 import { registerSharedBrowserHandlers } from "./handlers/sharedBrowserHandlers.js";
 import { registerTransportHandlers } from "./handlers/transportHandlers.js";
 import { registerAppsHandlers } from "./handlers/appsHandlers.js";
+import { registerWebinarHandlers } from "./handlers/webinarHandlers.js";
 
 export const registerConnectionHandlers = (
   io: SocketIOServer,
@@ -33,6 +34,7 @@ export const registerConnectionHandlers = (
     registerReactionHandlers(context);
     registerHandHandlers(context);
     registerAppsHandlers(context);
+    registerWebinarHandlers(context);
     registerSharedBrowserHandlers(context);
     registerDisconnectHandlers(context);
   });

@@ -27,7 +27,12 @@ import {
   X,
 } from "lucide-react";
 import { memo, useCallback, useEffect, useRef, useState, type FormEvent } from "react";
-import type { ReactionOption } from "../lib/types";
+import type {
+  ReactionOption,
+  WebinarConfigSnapshot,
+  WebinarLinkResponse,
+  WebinarUpdateRequest,
+} from "../lib/types";
 import { normalizeBrowserUrl } from "../lib/utils";
 import { HOTKEYS } from "../lib/hotkeys";
 import HotkeyTooltip from "./HotkeyTooltip";
@@ -83,6 +88,16 @@ interface ControlsBarProps {
   isPopoutSupported?: boolean;
   onOpenPopout?: () => void;
   onClosePopout?: () => void;
+  webinarConfig?: WebinarConfigSnapshot | null;
+  webinarRole?: "attendee" | "participant" | "host" | null;
+  webinarLink?: string | null;
+  onSetWebinarLink?: (link: string | null) => void;
+  onGetWebinarConfig?: () => Promise<WebinarConfigSnapshot | null>;
+  onUpdateWebinarConfig?: (
+    update: WebinarUpdateRequest,
+  ) => Promise<WebinarConfigSnapshot | null>;
+  onGenerateWebinarLink?: () => Promise<WebinarLinkResponse | null>;
+  onRotateWebinarLink?: () => Promise<WebinarLinkResponse | null>;
 }
 
 const BROWSER_APPS = [
@@ -201,6 +216,14 @@ function ControlsBar({
   isPopoutSupported = false,
   onOpenPopout,
   onClosePopout,
+  webinarConfig,
+  webinarRole,
+  webinarLink,
+  onSetWebinarLink,
+  onGetWebinarConfig,
+  onUpdateWebinarConfig,
+  onGenerateWebinarLink,
+  onRotateWebinarLink,
 }: ControlsBarProps) {
   const canStartScreenShare = !activeScreenShareId || isScreenSharing;
   const [isReactionMenuOpen, setIsReactionMenuOpen] = useState(false);
@@ -343,6 +366,14 @@ function ControlsBar({
               onToggleChatLock={onToggleChatLock}
               isTtsDisabled={isTtsDisabled}
               onToggleTtsDisabled={onToggleTtsDisabled}
+              webinarConfig={webinarConfig}
+              webinarRole={webinarRole}
+              webinarLink={webinarLink}
+              onSetWebinarLink={onSetWebinarLink}
+              onGetWebinarConfig={onGetWebinarConfig}
+              onUpdateWebinarConfig={onUpdateWebinarConfig}
+              onGenerateWebinarLink={onGenerateWebinarLink}
+              onRotateWebinarLink={onRotateWebinarLink}
               onClose={() => setIsSettingsOpen(false)}
             />
           )}

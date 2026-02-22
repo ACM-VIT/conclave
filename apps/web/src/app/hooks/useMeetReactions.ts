@@ -14,6 +14,7 @@ interface UseMeetReactionsOptions {
   userId: string;
   socketRef: React.MutableRefObject<Socket | null>;
   ghostEnabled: boolean;
+  isObserverMode?: boolean;
   reactionAssets?: string[];
 }
 
@@ -21,6 +22,7 @@ export function useMeetReactions({
   userId,
   socketRef,
   ghostEnabled,
+  isObserverMode = false,
   reactionAssets,
 }: UseMeetReactionsOptions) {
   const [reactions, setReactions] = useState<ReactionEvent[]>([]);
@@ -80,7 +82,7 @@ export function useMeetReactions({
 
   const sendReaction = useCallback(
     (reaction: ReactionOption) => {
-      if (ghostEnabled) return;
+      if (ghostEnabled || isObserverMode) return;
       const now = Date.now();
       if (now - lastReactionSentRef.current < 100) {
         return;
@@ -125,7 +127,7 @@ export function useMeetReactions({
         }
       );
     },
-    [addReaction, userId, ghostEnabled, socketRef]
+    [addReaction, userId, ghostEnabled, isObserverMode, socketRef]
   );
 
   useEffect(() => {

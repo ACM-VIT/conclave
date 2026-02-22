@@ -4,9 +4,7 @@ import { sanitizeRoomCode } from "../lib/utils";
 
 type MeetRoomPageProps = {
   params: Promise<{ code: string }>;
-  searchParams?:
-    | Promise<Record<string, string | string[] | undefined>>
-    | Record<string, string | string[] | undefined>;
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
 };
 
 const isTruthyParam = (value: string | string[] | undefined): boolean => {
@@ -20,9 +18,10 @@ const isTruthyParam = (value: string | string[] | undefined): boolean => {
 
 export default function MeetRoomPage({ params, searchParams }: MeetRoomPageProps) {
   const { code } = use(params);
-  const resolvedSearchParams = use(
-    Promise.resolve(searchParams ?? {})
-  ) as Record<string, string | string[] | undefined>;
+  const resolvedSearchParams = use(searchParams ?? Promise.resolve({})) as Record<
+    string,
+    string | string[] | undefined
+  >;
   const rawCode = typeof code === "string" ? code : "";
   const roomCode = decodeURIComponent(rawCode);
   const resolvedRoomCode =

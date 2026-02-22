@@ -6,30 +6,14 @@ import type { Device } from "mediasoup-client";
 import type {
   AudioAnalyserEntry,
   Consumer,
+  JoinMode,
   Producer,
   ProducerInfo,
   ProducerMapEntry,
   Transport,
   VideoQuality,
 } from "../lib/types";
-import { generateSessionId } from "../lib/utils";
-
-const SESSION_ID_STORAGE_KEY = "conclave:session-id";
-
-const getOrCreateSessionId = (): string => {
-  const fallback = generateSessionId();
-  if (typeof window === "undefined") return fallback;
-  try {
-    const existing = window.sessionStorage.getItem(SESSION_ID_STORAGE_KEY);
-    if (existing) {
-      return existing;
-    }
-    window.sessionStorage.setItem(SESSION_ID_STORAGE_KEY, fallback);
-    return fallback;
-  } catch {
-    return fallback;
-  }
-};
+import { getOrCreateSessionId } from "../lib/utils";
 
 export function useMeetRefs() {
   const socketRef = useRef<Socket | null>(null);
@@ -64,9 +48,15 @@ export function useMeetRefs() {
   );
   const lastActiveSpeakerRef = useRef<{ id: string; ts: number } | null>(null);
   const shouldAutoJoinRef = useRef(false);
-  const joinOptionsRef = useRef<{ displayName?: string; isGhost: boolean }>({
+  const joinOptionsRef = useRef<{
+    displayName?: string;
+    isGhost: boolean;
+    joinMode: JoinMode;
+    webinarInviteCode?: string;
+  }>({
     displayName: undefined,
     isGhost: false,
+    joinMode: "meeting",
   });
   const isChatOpenRef = useRef(false);
   const localStreamRef = useRef<MediaStream | null>(null);

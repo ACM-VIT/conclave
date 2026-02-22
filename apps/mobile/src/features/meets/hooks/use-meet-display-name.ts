@@ -7,6 +7,7 @@ import {
   normalizeDisplayName,
   sanitizeInstitutionDisplayName,
 } from "../utils";
+import type { JoinMode } from "../types";
 
 interface UseMeetDisplayNameOptions {
   user?: {
@@ -20,6 +21,8 @@ interface UseMeetDisplayNameOptions {
   joinOptionsRef: React.MutableRefObject<{
     displayName?: string;
     isGhost: boolean;
+    joinMode: JoinMode;
+    webinarInviteCode?: string;
   }>;
 }
 
@@ -83,6 +86,7 @@ export function useMeetDisplayName({
   useEffect(() => {
     const normalized = normalizeDisplayName(displayNameInput);
     joinOptionsRef.current = {
+      ...joinOptionsRef.current,
       displayName: normalized || undefined,
       isGhost: ghostEnabled,
     };

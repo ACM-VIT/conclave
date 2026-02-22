@@ -1,6 +1,7 @@
 import { Admin } from "../../../config/classes/Admin.js";
 import type { RedirectData } from "../../../types.js";
 import { Logger } from "../../../utilities/loggers.js";
+import { emitWebinarFeedChanged } from "../../webinarNotifications.js";
 import type { ConnectionContext } from "../context.js";
 import { respond } from "./ack.js";
 
@@ -32,10 +33,16 @@ export const registerAdminHandlers = (
     }
     for (const client of context.currentRoom.clients.values()) {
       if (client.removeProducerById(producerId)) {
-        socket.to(context.currentRoom.channelId).emit("producerClosed", {
-          producerId,
-          producerUserId: client.id,
-        });
+        for (const [targetClientId, targetClient] of context.currentRoom.clients) {
+          if (targetClientId === client.id || targetClient.isWebinarAttendee) {
+            continue;
+          }
+          targetClient.socket.emit("producerClosed", {
+            producerId,
+            producerUserId: client.id,
+          });
+        }
+        emitWebinarFeedChanged(context.io, context.currentRoom);
         respond(cb, { success: true });
         return;
       }
@@ -56,14 +63,20 @@ export const registerAdminHandlers = (
       const audioProducer = client.getProducer("audio");
       if (audioProducer) {
         if (client.removeProducerById(audioProducer.id)) {
-          socket.to(context.currentRoom.channelId).emit("producerClosed", {
-            producerId: audioProducer.id,
-            producerUserId: client.id,
-          });
+          for (const [targetClientId, targetClient] of context.currentRoom.clients) {
+            if (targetClientId === client.id || targetClient.isWebinarAttendee) {
+              continue;
+            }
+            targetClient.socket.emit("producerClosed", {
+              producerId: audioProducer.id,
+              producerUserId: client.id,
+            });
+          }
           count++;
         }
       }
     }
+    emitWebinarFeedChanged(context.io, context.currentRoom);
     respond(cb, { success: true, count });
   });
 
@@ -80,14 +93,20 @@ export const registerAdminHandlers = (
       const videoProducer = client.getProducer("video");
       if (videoProducer) {
         if (client.removeProducerById(videoProducer.id)) {
-          socket.to(context.currentRoom.channelId).emit("producerClosed", {
-            producerId: videoProducer.id,
-            producerUserId: client.id,
-          });
+          for (const [targetClientId, targetClient] of context.currentRoom.clients) {
+            if (targetClientId === client.id || targetClient.isWebinarAttendee) {
+              continue;
+            }
+            targetClient.socket.emit("producerClosed", {
+              producerId: videoProducer.id,
+              producerUserId: client.id,
+            });
+          }
           count++;
         }
       }
     }
+    emitWebinarFeedChanged(context.io, context.currentRoom);
     respond(cb, { success: true, count });
   });
 

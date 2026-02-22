@@ -2,6 +2,7 @@
 
 import { useCallback } from "react";
 import MeetsClient from "./meets-client";
+import type { JoinMode } from "./lib/types";
 
 const reactionAssets = [
   "aura.gif",
@@ -27,6 +28,9 @@ type MeetsClientPageProps = {
   initialRoomId?: string;
   forceJoinOnly?: boolean;
   bypassMediaPermissions?: boolean;
+  joinMode?: JoinMode;
+  autoJoinOnMount?: boolean;
+  hideJoinUI?: boolean;
   fontClassName?: string;
 };
 
@@ -34,6 +38,9 @@ export default function MeetsClientPage({
   initialRoomId,
   forceJoinOnly = false,
   bypassMediaPermissions = false,
+  joinMode = "meeting",
+  autoJoinOnMount = false,
+  hideJoinUI = false,
   fontClassName,
 }: MeetsClientPageProps) {
   const user = undefined;
@@ -47,10 +54,12 @@ export default function MeetsClientPage({
       options?: {
         user?: { id?: string; email?: string | null; name?: string | null };
         isHost?: boolean;
+        joinMode?: JoinMode;
       }
     ) => {
       const resolvedUser = options?.user ?? user;
       const isHost = Boolean(options?.isHost);
+      const resolvedJoinMode = options?.joinMode ?? joinMode;
       const response = await fetch("/api/sfu/join", {
         method: "POST",
         headers: {
@@ -64,6 +73,7 @@ export default function MeetsClientPage({
           isHost,
           allowRoomCreation: forceJoinOnly,
           clientId,
+          joinMode: resolvedJoinMode,
         }),
       });
 
@@ -73,7 +83,7 @@ export default function MeetsClientPage({
 
       return response.json();
     },
-    [forceJoinOnly, user]
+    [forceJoinOnly, joinMode, user]
   );
 
   const getRooms = useCallback(async () => {
@@ -104,6 +114,9 @@ export default function MeetsClientPage({
         forceJoinOnly={forceJoinOnly}
         allowGhostMode={!isPublicClient}
         bypassMediaPermissions={bypassMediaPermissions}
+        joinMode={joinMode}
+        autoJoinOnMount={autoJoinOnMount}
+        hideJoinUI={hideJoinUI}
         getJoinInfo={getJoinInfo}
         getRooms={getRooms}
         getRoomsForRedirect={getRoomsForRedirect}

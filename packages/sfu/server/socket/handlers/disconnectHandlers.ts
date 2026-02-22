@@ -5,13 +5,19 @@ import type { AppsAwarenessData } from "../../../types.js";
 import { Logger } from "../../../utilities/loggers.js";
 import { cleanupRoom } from "../../rooms.js";
 import { emitUserLeft } from "../../notifications.js";
+import {
+  emitWebinarAttendeeCountChanged,
+  emitWebinarFeedChanged,
+} from "../../webinarNotifications.js";
 import type { ConnectionContext } from "../context.js";
 import { registerAdminHandlers } from "./adminHandlers.js";
 import { cleanupRoomBrowser } from "./sharedBrowserHandlers.js";
 
 const promoteNextAdmin = (room: Room): Admin | null => {
   for (const client of room.clients.values()) {
-    if (client instanceof Admin || client.isGhost) continue;
+    if (client instanceof Admin || client.isGhost || client.isWebinarAttendee) {
+      continue;
+    }
     Object.setPrototypeOf(client, Admin.prototype);
     return client as Admin;
   }
@@ -55,6 +61,7 @@ export const registerDisconnectHandlers = (
 
         const wasAdmin = activeClient instanceof Admin;
         const isGhost = activeClient.isGhost;
+        const isWebinarAttendee = activeClient.isWebinarAttendee;
         const awarenessRemovals = activeRoom.clearUserAwareness(userId);
 
         for (const removal of awarenessRemovals) {
@@ -70,9 +77,11 @@ export const registerDisconnectHandlers = (
             ghostOnly: true,
             excludeUserId: userId,
           });
-        } else {
+        } else if (!isWebinarAttendee) {
           io.to(roomChannelId).emit("userLeft", { userId });
         }
+        emitWebinarAttendeeCountChanged(io, state, activeRoom);
+        emitWebinarFeedChanged(io, activeRoom);
 
         if (wasAdmin) {
           if (!activeRoom.hasActiveAdmin()) {

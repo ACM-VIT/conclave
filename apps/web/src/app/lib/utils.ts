@@ -70,6 +70,7 @@ const ROOM_WORD_MAX_LENGTH = ROOM_WORDS.reduce(
 const ROOM_WORD_SEPARATOR = "-";
 export const ROOM_CODE_MAX_LENGTH =
   ROOM_WORDS_PER_CODE * ROOM_WORD_MAX_LENGTH + (ROOM_WORDS_PER_CODE - 1);
+export const WEBINAR_LINK_CODE_MAX_LENGTH = 32;
 
 export function generateRoomCode(): string {
   const words: string[] = [];
@@ -101,6 +102,14 @@ export function sanitizeRoomCodeInput(value: string): string {
     .replace(/[^a-z]+/g, ROOM_WORD_SEPARATOR)
     .replace(/-+/g, ROOM_WORD_SEPARATOR)
     .replace(/^-+/g, "");
+}
+
+export function sanitizeWebinarLinkCode(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, "")
+    .slice(0, WEBINAR_LINK_CODE_MAX_LENGTH);
 }
 
 export function getRoomWordSuggestions(
@@ -175,6 +184,25 @@ export function createMeetError(
 
 export function generateSessionId(): string {
   return `${Date.now()}-${Math.random().toString(36).substring(2, 11)}`;
+}
+
+const SESSION_ID_STORAGE_KEY = "conclave:session-id";
+
+export function getOrCreateSessionId(): string {
+  if (typeof window === "undefined") {
+    return generateSessionId();
+  }
+
+  try {
+    const existing = window.sessionStorage.getItem(SESSION_ID_STORAGE_KEY);
+    if (existing) return existing;
+
+    const next = generateSessionId();
+    window.sessionStorage.setItem(SESSION_ID_STORAGE_KEY, next);
+    return next;
+  } catch {
+    return generateSessionId();
+  }
 }
 
 export function formatDisplayName(raw: string): string {

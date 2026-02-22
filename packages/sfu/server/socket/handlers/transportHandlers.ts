@@ -21,6 +21,12 @@ export const registerTransportHandlers = (context: ConnectionContext): void => {
           respond(callback, { error: "Not in a room" });
           return;
         }
+        if (context.currentClient.isObserver) {
+          respond(callback, {
+            error: "Watch-only attendees cannot create producer transports",
+          });
+          return;
+        }
 
         const transport = await context.currentRoom.createWebRtcTransport();
         context.currentClient.producerTransport = transport;
@@ -73,6 +79,12 @@ export const registerTransportHandlers = (context: ConnectionContext): void => {
     ) => {
       try {
         if (!context.currentClient?.producerTransport) {
+          if (context.currentClient?.isObserver) {
+            respond(callback, {
+              error: "Watch-only attendees cannot connect producer transports",
+            });
+            return;
+          }
           respond(callback, { error: "Producer transport not found" });
           return;
         }
@@ -129,6 +141,13 @@ export const registerTransportHandlers = (context: ConnectionContext): void => {
           data.transport === "producer"
             ? context.currentClient.producerTransport
             : context.currentClient.consumerTransport;
+
+        if (data.transport === "producer" && context.currentClient.isObserver) {
+          respond(callback, {
+            error: "Watch-only attendees cannot restart producer ICE",
+          });
+          return;
+        }
 
         if (!transport) {
           respond(callback, { error: "Transport not found" });

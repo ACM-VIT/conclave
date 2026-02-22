@@ -40,6 +40,7 @@ import { useMeetTts } from "./hooks/useMeetTts";
 import { useIsMobile } from "./hooks/useIsMobile";
 import { usePrewarmSocket } from "./hooks/usePrewarmSocket";
 import { useSharedBrowser } from "./hooks/useSharedBrowser";
+import type { JoinMode } from "./lib/types";
 import {
   isSystemUserId,
   sanitizeInstitutionDisplayName,
@@ -108,11 +109,15 @@ export type MeetsClientProps = {
     options?: {
       user?: { id?: string; email?: string | null; name?: string | null };
       isHost?: boolean;
+      joinMode?: JoinMode;
     },
   ) => Promise<{
     token: string;
     sfuUrl: string;
   }>;
+  joinMode?: JoinMode;
+  autoJoinOnMount?: boolean;
+  hideJoinUI?: boolean;
   getRooms?: () => Promise<RoomInfo[]>;
   getRoomsForRedirect?: ParticipantsPanelGetRooms;
   reactionAssets?: string[];
@@ -128,6 +133,9 @@ export default function MeetsClient({
   user,
   isAdmin = false,
   getJoinInfo,
+  joinMode = "meeting",
+  autoJoinOnMount = false,
+  hideJoinUI = false,
   getRooms,
   getRoomsForRedirect,
   reactionAssets,
@@ -166,6 +174,11 @@ export default function MeetsClient({
     }
     window.localStorage.removeItem(GUEST_USER_STORAGE_KEY);
   }, [currentUser, guestStorageReady]);
+
+  const clearGuestStorage = useCallback(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.removeItem(GUEST_USER_STORAGE_KEY);
+  }, []);
 
   useEffect(() => {
     if (process.env.NODE_ENV === "development") {
@@ -223,6 +236,12 @@ export default function MeetsClient({
     setHostUserId,
     isNetworkOffline,
     setIsNetworkOffline,
+    webinarConfig,
+    setWebinarConfig,
+    webinarRole,
+    setWebinarRole,
+    webinarLink,
+    setWebinarLink,
   } = useMeetState({ initialRoomId });
 
   const [browserAudioNeedsGesture, setBrowserAudioNeedsGesture] =
@@ -275,6 +294,12 @@ export default function MeetsClient({
     setRoomId(sanitized);
   }, [enableRoomRouting, forceJoinOnly, roomId, setRoomId]);
 
+  useEffect(() => {
+    if (!autoJoinOnMount) return;
+    if (!roomId || roomId.trim().length === 0) return;
+    refs.shouldAutoJoinRef.current = true;
+  }, [autoJoinOnMount, roomId, refs.shouldAutoJoinRef]);
+
   const {
     videoQuality,
     setVideoQuality,
@@ -289,6 +314,8 @@ export default function MeetsClient({
   } = useMeetMediaSettings({ videoQualityRef: refs.videoQualityRef });
 
   const isAdminFlag = Boolean(currentIsAdmin);
+  const isWebinarAttendee =
+    joinMode === "webinar_attendee" || webinarRole === "attendee";
   const ghostEnabled = allowGhostMode && isAdminFlag && isGhostMode;
   const canSignOut = Boolean(
     currentUser && !currentUser.id?.startsWith("guest-"),
@@ -370,6 +397,7 @@ export default function MeetsClient({
     userId,
     socketRef: refs.socketRef,
     ghostEnabled,
+    isObserverMode: isWebinarAttendee,
     reactionAssets,
   });
 
@@ -392,6 +420,7 @@ export default function MeetsClient({
   } = useMeetChat({
     socketRef: refs.socketRef,
     ghostEnabled,
+    isObserverMode: isWebinarAttendee,
     isChatLocked,
     isAdmin: isAdminFlag,
     isMuted,
@@ -419,6 +448,7 @@ export default function MeetsClient({
     primeAudioOutput,
   } = useMeetMedia({
     ghostEnabled,
+    isObserverMode: isWebinarAttendee,
     connectionState,
     isMuted,
     setIsMuted,
@@ -514,6 +544,7 @@ export default function MeetsClient({
     setIsHandRaised,
     isHandRaisedRef: refs.isHandRaisedRef,
     ghostEnabled,
+    isObserverMode: isWebinarAttendee,
     socketRef: refs.socketRef,
   });
 
@@ -567,6 +598,54 @@ export default function MeetsClient({
     ignoreInputs: true,
   });
 
+  const inviteCodeResolverRef = useRef<((value: string | null) => void) | null>(
+    null,
+  );
+  const [isInviteCodePromptOpen, setIsInviteCodePromptOpen] = useState(false);
+  const [inviteCodeInput, setInviteCodeInput] = useState("");
+  const [inviteCodePromptError, setInviteCodePromptError] = useState<
+    string | null
+  >(null);
+
+  const resolveInviteCodePrompt = useCallback((value: string | null) => {
+    inviteCodeResolverRef.current?.(value);
+    inviteCodeResolverRef.current = null;
+    setIsInviteCodePromptOpen(false);
+    setInviteCodeInput("");
+    setInviteCodePromptError(null);
+  }, []);
+
+  const requestWebinarInviteCode = useCallback(async () => {
+    return new Promise<string | null>((resolve) => {
+      inviteCodeResolverRef.current = resolve;
+      setInviteCodeInput("");
+      setInviteCodePromptError(null);
+      setIsInviteCodePromptOpen(true);
+    });
+  }, []);
+
+  const handleSubmitInviteCodePrompt = useCallback(() => {
+    const trimmed = inviteCodeInput.trim();
+    if (!trimmed) {
+      setInviteCodePromptError("Invite code is required.");
+      return;
+    }
+    resolveInviteCodePrompt(trimmed);
+  }, [inviteCodeInput, resolveInviteCodePrompt]);
+
+  const handleCancelInviteCodePrompt = useCallback(() => {
+    resolveInviteCodePrompt(null);
+  }, [resolveInviteCodePrompt]);
+
+  useEffect(() => {
+    return () => {
+      if (inviteCodeResolverRef.current) {
+        inviteCodeResolverRef.current(null);
+        inviteCodeResolverRef.current = null;
+      }
+    };
+  }, []);
+
   const socket = useMeetSocket({
     refs,
     roomId,
@@ -576,6 +655,8 @@ export default function MeetsClient({
     user: currentUser,
     userId,
     getJoinInfo,
+    joinMode,
+    requestWebinarInviteCode,
     ghostEnabled,
     displayNameInput,
     localStream,
@@ -587,6 +668,8 @@ export default function MeetsClient({
     setMeetError,
     setWaitingMessage,
     setHostUserId,
+    setWebinarConfig,
+    setWebinarRole,
     isMuted,
     setIsMuted,
     isCameraOff,
@@ -672,14 +755,29 @@ export default function MeetsClient({
     }
   }, [isAdminFlag, connectionState, refreshRooms]);
 
-  const joinRoom = socket.joinRoom;
   const joinRoomById = socket.joinRoomById;
+  const getWebinarConfig = socket.getWebinarConfig;
+
+  useEffect(() => {
+    if (connectionState !== "joined") return;
+    if (!isAdminFlag) return;
+    void getWebinarConfig?.();
+  }, [connectionState, isAdminFlag, getWebinarConfig]);
 
   const handleSignOut = useCallback(async () => {
     if (isSigningOut) return;
     setIsSigningOut(true);
+    if (isGuestUser(currentUser)) {
+      clearGuestStorage();
+      setCurrentUser(undefined);
+      setCurrentIsAdmin(false);
+      setIsSigningOut(false);
+      return;
+    }
+
     try {
       await signOut();
+      clearGuestStorage();
       setCurrentUser(undefined);
       setCurrentIsAdmin(false);
     } catch (error) {
@@ -687,7 +785,7 @@ export default function MeetsClient({
     } finally {
       setIsSigningOut(false);
     }
-  }, [isSigningOut]);
+  }, [clearGuestStorage, currentUser, isSigningOut]);
 
   const leaveRoom = useCallback(() => {
     playNotificationSoundForEvents("leave");
@@ -846,6 +944,62 @@ export default function MeetsClient({
       {content}
     </AppsProvider>
   );
+  const inviteCodePrompt = isInviteCodePromptOpen ? (
+    <div className="fixed inset-0 z-[140] flex items-center justify-center bg-black/75 px-4">
+      <div className="w-full max-w-sm rounded-2xl border border-white/10 bg-[#111111] p-5 shadow-2xl">
+        <h2 className="text-sm font-semibold text-[#FEFCD9]">
+          Webinar Invite Code
+        </h2>
+        <p className="mt-1 text-xs text-[#FEFCD9]/60">
+          Enter the invite code to join this webinar.
+        </p>
+        <input
+          value={inviteCodeInput}
+          onChange={(event) => {
+            setInviteCodeInput(event.target.value);
+            if (inviteCodePromptError) {
+              setInviteCodePromptError(null);
+            }
+          }}
+          autoFocus
+          autoCapitalize="none"
+          autoCorrect="off"
+          spellCheck={false}
+          placeholder="Invite code"
+          className="mt-4 w-full rounded-xl border border-white/10 bg-black/40 px-3 py-2.5 text-sm text-[#FEFCD9] outline-none focus:border-[#FEFCD9]/35"
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              handleSubmitInviteCodePrompt();
+            }
+            if (event.key === "Escape") {
+              event.preventDefault();
+              handleCancelInviteCodePrompt();
+            }
+          }}
+        />
+        {inviteCodePromptError ? (
+          <p className="mt-2 text-xs text-[#F95F4A]">{inviteCodePromptError}</p>
+        ) : null}
+        <div className="mt-4 flex items-center justify-end gap-2">
+          <button
+            type="button"
+            onClick={handleCancelInviteCodePrompt}
+            className="rounded-xl border border-white/15 px-3 py-2 text-[11px] uppercase tracking-[0.14em] text-[#FEFCD9]/70 transition-colors hover:border-white/25 hover:text-[#FEFCD9]"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={handleSubmitInviteCodePrompt}
+            className="rounded-xl bg-[#F95F4A] px-3 py-2 text-[11px] uppercase tracking-[0.14em] text-white transition-opacity hover:opacity-90"
+          >
+            Continue
+          </button>
+        </div>
+      </div>
+    </div>
+  ) : null;
 
   if (connectionState === "waiting") {
     const waitingTitle = waitingMessage ?? "Waiting for host to let you in";
@@ -896,6 +1050,8 @@ export default function MeetsClient({
           roomId={roomId}
           setRoomId={setRoomId}
           joinRoomById={joinRoomById}
+          hideJoinUI={hideJoinUI || joinMode === "webinar_attendee"}
+          isWebinarAttendee={isWebinarAttendee}
           enableRoomRouting={enableRoomRouting}
           forceJoinOnly={forceJoinOnly}
           allowGhostMode={allowGhostMode}
@@ -917,7 +1073,10 @@ export default function MeetsClient({
           isMirrorCamera={isMirrorCamera}
           activeSpeakerId={effectiveActiveSpeakerId}
           currentUserId={userId}
+          selectedAudioInputDeviceId={selectedAudioInputDeviceId}
           audioOutputDeviceId={selectedAudioOutputDeviceId}
+          onAudioInputDeviceChange={handleAudioInputDeviceChange}
+          onAudioOutputDeviceChange={handleAudioOutputDeviceChange}
           activeScreenShareId={activeScreenShareId}
           isScreenSharing={isScreenSharing}
           isChatOpen={isChatOpen}
@@ -970,7 +1129,16 @@ export default function MeetsClient({
           onTestSpeaker={handleTestSpeaker}
           hostUserId={hostUserId}
           isNetworkOffline={isNetworkOffline}
+          webinarConfig={webinarConfig}
+          webinarRole={webinarRole}
+          webinarLink={webinarLink}
+          onSetWebinarLink={setWebinarLink}
+          onGetWebinarConfig={socket.getWebinarConfig}
+          onUpdateWebinarConfig={socket.updateWebinarConfig}
+          onGenerateWebinarLink={socket.generateWebinarLink}
+          onRotateWebinarLink={socket.rotateWebinarLink}
         />
+        {inviteCodePrompt}
       </div>,
     );
   }
@@ -1030,6 +1198,8 @@ export default function MeetsClient({
         roomId={roomId}
         setRoomId={setRoomId}
         joinRoomById={joinRoomById}
+        hideJoinUI={hideJoinUI || joinMode === "webinar_attendee"}
+        isWebinarAttendee={isWebinarAttendee}
         enableRoomRouting={enableRoomRouting}
         forceJoinOnly={forceJoinOnly}
         allowGhostMode={allowGhostMode}
@@ -1119,7 +1289,16 @@ export default function MeetsClient({
         onClosePopout={closePopout}
         hostUserId={hostUserId}
         isNetworkOffline={isNetworkOffline}
+        webinarConfig={webinarConfig}
+        webinarRole={webinarRole}
+        webinarLink={webinarLink}
+        onSetWebinarLink={setWebinarLink}
+        onGetWebinarConfig={socket.getWebinarConfig}
+        onUpdateWebinarConfig={socket.updateWebinarConfig}
+        onGenerateWebinarLink={socket.generateWebinarLink}
+        onRotateWebinarLink={socket.rotateWebinarLink}
       />
+      {inviteCodePrompt}
     </div>,
   );
 }

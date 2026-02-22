@@ -28,8 +28,9 @@ import {
   registerForegroundCallServiceHandlers,
 } from "@/lib/call-service";
 import { ensureWebRTCGlobals } from "@/lib/webrtc";
-import { Text, View } from "@/tw";
+import { Pressable, Text, TextInput, View } from "@/tw";
 import { reactionAssetList } from "../reaction-assets";
+import { claimMeetingSession, registerMeetingSession } from "../meeting-session-coordinator";
 import { useMeetAudioActivity } from "../hooks/use-meet-audio-activity";
 import { useMeetChat } from "../hooks/use-meet-chat";
 import { useMeetDisplayName } from "../hooks/use-meet-display-name";
@@ -43,7 +44,7 @@ import { useMeetSocket } from "../hooks/use-meet-socket";
 import { useMeetState } from "../hooks/use-meet-state";
 import { useMeetTts } from "../hooks/use-meet-tts";
 import { useDeviceLayout } from "../hooks/use-device-layout";
-import type { Participant } from "../types";
+import type { JoinMode, Participant } from "../types";
 import { createMeetError, isSystemUserId } from "../utils";
 import { getCachedUser, hydrateCachedUser, setCachedUser } from "../auth-session";
 import { CallScreen } from "./call-screen";
@@ -82,13 +83,28 @@ const readError = async (response: Response) => {
   return response.statusText || "Request failed";
 };
 
-export function MeetScreen({ initialRoomId }: { initialRoomId?: string } = {}) {
+interface MeetScreenProps {
+  initialRoomId?: string;
+  joinMode?: JoinMode;
+  webinarSignedToken?: string;
+  autoJoinOnMount?: boolean;
+  hideJoinUI?: boolean;
+}
+
+export function MeetScreen({
+  initialRoomId,
+  joinMode = "meeting",
+  webinarSignedToken,
+  autoJoinOnMount = false,
+  hideJoinUI = false,
+}: MeetScreenProps = {}) {
   if (process.env.EXPO_OS !== "web") {
     ensureWebRTCGlobals();
   }
 
   const { isTablet } = useDeviceLayout();
   const refs = useMeetRefs();
+  const meetingSessionIdRef = useRef(`meet-screen:${refs.sessionIdRef.current}`);
   const [appsSocket, setAppsSocket] = useState<Socket | null>(null);
   const uploadAsset = useMemo(
     () =>
@@ -141,7 +157,18 @@ export function MeetScreen({ initialRoomId }: { initialRoomId?: string } = {}) {
     setIsChatLocked,
     isTtsDisabled,
     setIsTtsDisabled,
+    hostUserId,
+    setHostUserId,
+    webinarConfig,
+    setWebinarConfig,
+    webinarRole,
+    setWebinarRole,
+    webinarLink,
+    setWebinarLink,
   } = useMeetState({ initialRoomId });
+  const isWebinarAttendee =
+    joinMode === "webinar_attendee" || webinarRole === "attendee";
+  const effectiveGhostMode = isGhostMode || isWebinarAttendee;
 
   useEffect(() => {
     registerApps([whiteboardApp]);
@@ -276,7 +303,7 @@ export function MeetScreen({ initialRoomId }: { initialRoomId?: string } = {}) {
   } = useMeetReactions({
     userId,
     socketRef: refs.socketRef,
-    ghostEnabled: isGhostMode,
+    ghostEnabled: effectiveGhostMode,
     reactionAssets: reactionAssetList.slice(),
   });
 
@@ -286,6 +313,8 @@ export function MeetScreen({ initialRoomId }: { initialRoomId?: string } = {}) {
     mediaState,
     showPermissionHint,
     requestMediaPermissions,
+    handleAudioInputDeviceChange,
+    handleAudioOutputDeviceChange,
     updateVideoQualityRef,
     toggleMute,
     toggleCamera,
@@ -298,7 +327,7 @@ export function MeetScreen({ initialRoomId }: { initialRoomId?: string } = {}) {
     startAudioKeepAlive,
     stopAudioKeepAlive,
   } = useMeetMedia({
-    ghostEnabled: isGhostMode,
+    ghostEnabled: effectiveGhostMode,
     connectionState,
     isMuted,
     setIsMuted,
@@ -493,7 +522,7 @@ export function MeetScreen({ initialRoomId }: { initialRoomId?: string } = {}) {
     isHandRaised,
     setIsHandRaised,
     isHandRaisedRef: refs.isHandRaisedRef,
-    ghostEnabled: isGhostMode,
+    ghostEnabled: effectiveGhostMode,
     socketRef: refs.socketRef,
   });
 
@@ -512,7 +541,7 @@ export function MeetScreen({ initialRoomId }: { initialRoomId?: string } = {}) {
     isChatOpenRef,
   } = useMeetChat({
     socketRef: refs.socketRef,
-    ghostEnabled: isGhostMode,
+    ghostEnabled: effectiveGhostMode,
     isChatLocked,
     isAdmin,
     isTtsDisabled,
@@ -523,6 +552,94 @@ export function MeetScreen({ initialRoomId }: { initialRoomId?: string } = {}) {
     onSetHandRaised: setHandRaisedState,
     onTtsMessage: handleTtsMessage,
   });
+
+  const inviteCodeResolverRef = useRef<((value: string | null) => void) | null>(
+    null,
+  );
+  const takeoverResolverRef = useRef<((value: boolean) => void) | null>(null);
+  const [isInviteCodePromptOpen, setIsInviteCodePromptOpen] = useState(false);
+  const [inviteCodeInput, setInviteCodeInput] = useState("");
+  const [inviteCodePromptError, setInviteCodePromptError] = useState<
+    string | null
+  >(null);
+  const [isTakeoverPromptOpen, setIsTakeoverPromptOpen] = useState(false);
+  const [takeoverPromptRoomLabel, setTakeoverPromptRoomLabel] = useState(
+    "your current meeting"
+  );
+
+  const resolveInviteCodePrompt = useCallback((value: string | null) => {
+    inviteCodeResolverRef.current?.(value);
+    inviteCodeResolverRef.current = null;
+    setIsInviteCodePromptOpen(false);
+    setInviteCodeInput("");
+    setInviteCodePromptError(null);
+  }, []);
+
+  const requestWebinarInviteCode = useCallback(async () => {
+    return new Promise<string | null>((resolve) => {
+      inviteCodeResolverRef.current = resolve;
+      setInviteCodeInput("");
+      setInviteCodePromptError(null);
+      setIsInviteCodePromptOpen(true);
+    });
+  }, []);
+
+  const handleSubmitInviteCodePrompt = useCallback(() => {
+    const trimmed = inviteCodeInput.trim();
+    if (!trimmed) {
+      setInviteCodePromptError("Invite code is required.");
+      return;
+    }
+    resolveInviteCodePrompt(trimmed);
+  }, [inviteCodeInput, resolveInviteCodePrompt]);
+
+  const handleCancelInviteCodePrompt = useCallback(() => {
+    resolveInviteCodePrompt(null);
+  }, [resolveInviteCodePrompt]);
+
+  const resolveTakeoverPrompt = useCallback((value: boolean) => {
+    takeoverResolverRef.current?.(value);
+    takeoverResolverRef.current = null;
+    setIsTakeoverPromptOpen(false);
+    setTakeoverPromptRoomLabel("your current meeting");
+  }, []);
+
+  const handleTakeoverPromptStay = useCallback(() => {
+    resolveTakeoverPrompt(false);
+  }, [resolveTakeoverPrompt]);
+
+  const handleTakeoverPromptJoin = useCallback(() => {
+    resolveTakeoverPrompt(true);
+  }, [resolveTakeoverPrompt]);
+
+  const confirmMeetingHandoff = useCallback((currentRoomId: string | null) => {
+    return new Promise<boolean>((resolve) => {
+      if (takeoverResolverRef.current) {
+        takeoverResolverRef.current(false);
+        takeoverResolverRef.current = null;
+      }
+      takeoverResolverRef.current = resolve;
+      setTakeoverPromptRoomLabel(
+        currentRoomId?.trim()
+          ? currentRoomId.toUpperCase()
+          : "your current meeting"
+      );
+      setIsTakeoverPromptOpen(true);
+    });
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (inviteCodeResolverRef.current) {
+        inviteCodeResolverRef.current(null);
+        inviteCodeResolverRef.current = null;
+      }
+      if (takeoverResolverRef.current) {
+        takeoverResolverRef.current(false);
+        takeoverResolverRef.current = null;
+      }
+    };
+  }, []);
 
   const socket = useMeetSocket({
     refs,
@@ -537,6 +654,9 @@ export function MeetScreen({ initialRoomId }: { initialRoomId?: string } = {}) {
         if (!apiBaseUrl) {
           throw new Error("Missing EXPO_PUBLIC_SFU_BASE_URL for mobile API");
         }
+        const resolvedJoinMode = options?.joinMode ?? joinMode;
+        const resolvedWebinarSignedToken =
+          options?.webinarSignedToken ?? webinarSignedToken;
         const response = await fetch(buildApiUrl("/api/sfu/join"), {
           method: "POST",
           headers: {
@@ -550,6 +670,8 @@ export function MeetScreen({ initialRoomId }: { initialRoomId?: string } = {}) {
             isHost: options?.isHost,
             isAdmin: options?.isHost,
             clientId,
+            joinMode: resolvedJoinMode,
+            webinarSignedToken: resolvedWebinarSignedToken,
           }),
         });
 
@@ -559,8 +681,10 @@ export function MeetScreen({ initialRoomId }: { initialRoomId?: string } = {}) {
 
         return response.json();
       },
-      []
+      [joinMode, webinarSignedToken]
     ),
+    joinMode,
+    webinarSignedToken,
     ghostEnabled: isGhostMode,
     displayNameInput,
     localStream,
@@ -571,6 +695,9 @@ export function MeetScreen({ initialRoomId }: { initialRoomId?: string } = {}) {
     setConnectionState,
     setMeetError,
     setWaitingMessage,
+    setHostUserId,
+    setWebinarConfig,
+    setWebinarRole,
     isMuted,
     setIsMuted,
     isCameraOff,
@@ -600,6 +727,7 @@ export function MeetScreen({ initialRoomId }: { initialRoomId?: string } = {}) {
       setUnreadCount,
       isChatOpenRef,
     },
+    requestWebinarInviteCode,
     isAppActiveRef,
     onSocketReady: setAppsSocket,
   });
@@ -719,16 +847,41 @@ export function MeetScreen({ initialRoomId }: { initialRoomId?: string } = {}) {
     setIsScreenSharePending(false);
   }, []);
 
-  const handleLeave = useCallback(() => {
+  const exitCurrentMeeting = useCallback((options?: { playLeaveSound?: boolean }) => {
+    const playLeaveSound = options?.playLeaveSound !== false;
     setHasActiveCall(false);
     hasActiveCallRef.current = false;
-    playNotificationSoundRef.current("leave");
+    if (playLeaveSound) {
+      playNotificationSoundRef.current("leave");
+    }
     cancelPendingScreenShareStart();
     stopScreenShareRef.current({ notify: true });
     socketCleanupRef.current();
-    if (callIdRef.current) endCallSession(callIdRef.current);
+    if (callIdRef.current) {
+      endCallSession(callIdRef.current);
+      callIdRef.current = null;
+    }
     stopInCall();
   }, [cancelPendingScreenShareStart]);
+
+  const handleLeave = useCallback(() => {
+    exitCurrentMeeting({ playLeaveSound: true });
+  }, [exitCurrentMeeting]);
+
+  useEffect(() => {
+    const unregister = registerMeetingSession(meetingSessionIdRef.current, {
+      getSnapshot: () => ({
+        roomId: refs.currentRoomIdRef.current ?? roomIdRef.current ?? null,
+        connectionState: connectionStateRef.current,
+        hasActiveCall: hasActiveCallRef.current,
+      }),
+      relinquish: async () => {
+        exitCurrentMeeting({ playLeaveSound: false });
+      },
+    });
+
+    return unregister;
+  }, [exitCurrentMeeting, refs.currentRoomIdRef]);
 
   useEffect(() => {
     if (Platform.OS !== "ios") return;
@@ -844,14 +997,40 @@ export function MeetScreen({ initialRoomId }: { initialRoomId?: string } = {}) {
         );
         return;
       }
-      setIsAdmin(!!options?.isHost);
-      socket.joinRoomById(value.trim(), options);
+      const normalizedRoomId = value.trim();
+      const claimed = await claimMeetingSession(meetingSessionIdRef.current, {
+        confirmTakeover: async (owner) => {
+          if (
+            owner.roomId &&
+            owner.roomId.trim().toLowerCase() ===
+              normalizedRoomId.toLowerCase()
+          ) {
+            return false;
+          }
+          return confirmMeetingHandoff(owner.roomId);
+        },
+      });
+      if (!claimed) {
+        if (hideJoinUI) {
+          setMeetError({
+            code: "UNKNOWN",
+            message: "Stayed in your current meeting.",
+            recoverable: true,
+          });
+        }
+        return;
+      }
+      const resolvedIsHost =
+        joinMode === "webinar_attendee" ? false : Boolean(options?.isHost);
+      setIsAdmin(resolvedIsHost);
+      socket.joinRoomById(normalizedRoomId, { isHost: resolvedIsHost });
     },
-    [socket, setMeetError, setIsAdmin]
+    [confirmMeetingHandoff, hideJoinUI, joinMode, socket, setMeetError, setIsAdmin]
   );
 
   const [isReactionSheetOpen, setIsReactionSheetOpen] = useState(false);
   const [isSettingsSheetOpen, setIsSettingsSheetOpen] = useState(false);
+  const hasAutoJoinedRef = useRef(false);
 
   const handleToggleChat = useCallback(() => {
     setIsParticipantsOpen(false);
@@ -870,6 +1049,11 @@ export function MeetScreen({ initialRoomId }: { initialRoomId?: string } = {}) {
 
       if (isDisplayNameSheetOpen) {
         setIsDisplayNameSheetOpen(false);
+        return true;
+      }
+
+      if (isTakeoverPromptOpen) {
+        resolveTakeoverPrompt(false);
         return true;
       }
 
@@ -912,10 +1096,12 @@ export function MeetScreen({ initialRoomId }: { initialRoomId?: string } = {}) {
   }, [
     blockBackNavigation,
     isDisplayNameSheetOpen,
+    isTakeoverPromptOpen,
     isSettingsSheetOpen,
     isReactionSheetOpen,
     isParticipantsOpen,
     isChatOpen,
+    resolveTakeoverPrompt,
     toggleChat,
     meetError,
     setMeetError,
@@ -927,6 +1113,14 @@ export function MeetScreen({ initialRoomId }: { initialRoomId?: string } = {}) {
       setRoomId(initialRoomId);
     }
   }, [initialRoomId, roomId, setRoomId]);
+
+  useEffect(() => {
+    if (!autoJoinOnMount || hasAutoJoinedRef.current) return;
+    const targetRoomId = (initialRoomId ?? roomId).trim();
+    if (!targetRoomId) return;
+    hasAutoJoinedRef.current = true;
+    void handleJoin(targetRoomId, { isHost: false });
+  }, [autoJoinOnMount, handleJoin, initialRoomId, roomId]);
 
   useEffect(() => {
     if (isTablet && isSettingsSheetOpen) {
@@ -1152,30 +1346,46 @@ export function MeetScreen({ initialRoomId }: { initialRoomId?: string } = {}) {
       ) : null}
 
       {!isJoined && !hasActiveCall ? (
-        <JoinScreen
-          roomId={roomId}
-          onRoomIdChange={setRoomId}
-          onJoinRoom={handleJoin}
-          onIsAdminChange={setIsAdmin}
-          user={currentUser}
-          onUserChange={handleUserChange}
-          isLoading={isLoading}
-          displayNameInput={displayNameInput}
-          onDisplayNameInputChange={setDisplayNameInput}
-          isMuted={isMuted}
-          isCameraOff={isCameraOff}
-          localStream={localStream}
-          onToggleMute={toggleMute}
-          onToggleCamera={toggleCamera}
-          showPermissionHint={showPermissionHint}
-          hasAudioPermission={mediaState.hasAudioPermission}
-          hasVideoPermission={mediaState.hasVideoPermission}
-          permissionsReady={mediaState.permissionsReady}
-          meetError={meetError}
-          onDismissMeetError={() => setMeetError(null)}
-          onRetryMedia={handleRetryPermissions}
-          onRequestMedia={handleRequestPermissions}
-        />
+        hideJoinUI ? (
+          <View className="flex-1 items-center justify-center px-6">
+            <View className="rounded-2xl border border-white/10 bg-black/50 px-6 py-5">
+              <Text className="text-sm font-medium text-[#FEFCD9]">
+                {isLoading ? "Joining webinar..." : "Preparing webinar..."}
+              </Text>
+              {meetError ? (
+                <Text className="mt-2 text-xs text-[#F95F4A]">
+                  {meetError.message}
+                </Text>
+              ) : null}
+            </View>
+          </View>
+        ) : (
+          <JoinScreen
+            roomId={roomId}
+            onRoomIdChange={setRoomId}
+            onJoinRoom={handleJoin}
+            onIsAdminChange={setIsAdmin}
+            user={currentUser}
+            onUserChange={handleUserChange}
+            isLoading={isLoading}
+            displayNameInput={displayNameInput}
+            onDisplayNameInputChange={setDisplayNameInput}
+            isMuted={isMuted}
+            isCameraOff={isCameraOff}
+            localStream={localStream}
+            onToggleMute={toggleMute}
+            onToggleCamera={toggleCamera}
+            showPermissionHint={showPermissionHint}
+            hasAudioPermission={mediaState.hasAudioPermission}
+            hasVideoPermission={mediaState.hasVideoPermission}
+            permissionsReady={mediaState.permissionsReady}
+            meetError={meetError}
+            onDismissMeetError={() => setMeetError(null)}
+            onRetryMedia={handleRetryPermissions}
+            onRequestMedia={handleRequestPermissions}
+            forceJoinOnly={hideJoinUI || joinMode === "webinar_attendee"}
+          />
+        )
       ) : (
         <CallScreen
           roomId={roomId}
@@ -1228,11 +1438,13 @@ export function MeetScreen({ initialRoomId }: { initialRoomId?: string } = {}) {
           }}
           onLeave={handleLeave}
           isAdmin={isAdmin}
+          isObserverMode={isWebinarAttendee}
           isRoomLocked={isRoomLocked}
           isNoGuests={isNoGuests}
           isChatLocked={isChatLocked}
           isTtsDisabled={isTtsDisabled}
           pendingUsersCount={pendingUsers.size}
+          webinarConfig={webinarConfig}
         />
       )}
 
@@ -1244,7 +1456,7 @@ export function MeetScreen({ initialRoomId }: { initialRoomId?: string } = {}) {
         />
       ) : null}
 
-      {isJoined ? (
+      {isJoined && !isWebinarAttendee ? (
         <ChatPanel
           visible={isChatOpen}
           messages={chatMessages}
@@ -1255,7 +1467,7 @@ export function MeetScreen({ initialRoomId }: { initialRoomId?: string } = {}) {
             if (isChatOpen) toggleChat();
           }}
           currentUserId={userId}
-          isGhostMode={isGhostMode}
+          isGhostMode={effectiveGhostMode}
           isChatLocked={isChatLocked}
           isAdmin={isAdmin}
           resolveDisplayName={resolveDisplayName}
@@ -1269,7 +1481,7 @@ export function MeetScreen({ initialRoomId }: { initialRoomId?: string } = {}) {
         />
       ) : null}
 
-      {isJoined ? (
+      {isJoined && !isWebinarAttendee ? (
         <ParticipantsPanel
           visible={isParticipantsOpen}
           localParticipant={localParticipant}
@@ -1298,7 +1510,7 @@ export function MeetScreen({ initialRoomId }: { initialRoomId?: string } = {}) {
         />
       ) : null}
 
-      {isJoined ? (
+      {isJoined && !isWebinarAttendee ? (
         <ReactionSheet
           visible={isReactionSheetOpen}
           options={reactionOptions}
@@ -1310,7 +1522,7 @@ export function MeetScreen({ initialRoomId }: { initialRoomId?: string } = {}) {
         />
       ) : null}
 
-      {isJoined && !isTablet ? (
+      {isJoined && !isTablet && !isWebinarAttendee ? (
         <SettingsSheet
           visible={isSettingsSheetOpen}
           isHandRaised={isHandRaised}
@@ -1319,6 +1531,15 @@ export function MeetScreen({ initialRoomId }: { initialRoomId?: string } = {}) {
           isChatLocked={isChatLocked}
           isTtsDisabled={isTtsDisabled}
           isAdmin={isAdmin}
+          selectedAudioInputDeviceId={selectedAudioInputDeviceId}
+          selectedAudioOutputDeviceId={selectedAudioOutputDeviceId}
+          webinarConfig={webinarConfig}
+          webinarLink={webinarLink}
+          onSetWebinarLink={setWebinarLink}
+          onGetWebinarConfig={socket.getWebinarConfig}
+          onUpdateWebinarConfig={socket.updateWebinarConfig}
+          onGenerateWebinarLink={socket.generateWebinarLink}
+          onRotateWebinarLink={socket.rotateWebinarLink}
           onOpenDisplayName={() => {
             setIsSettingsSheetOpen(false);
             setIsDisplayNameSheetOpen(true);
@@ -1343,6 +1564,8 @@ export function MeetScreen({ initialRoomId }: { initialRoomId?: string } = {}) {
             setIsSettingsSheetOpen(false);
             socket.toggleTtsDisabled?.(disabled);
           }}
+          onAudioInputDeviceChange={handleAudioInputDeviceChange}
+          onAudioOutputDeviceChange={handleAudioOutputDeviceChange}
           onClose={() => setIsSettingsSheetOpen(false)}
         />
       ) : null}
@@ -1398,6 +1621,90 @@ export function MeetScreen({ initialRoomId }: { initialRoomId?: string } = {}) {
                   We’ll let you in as soon as the host admits you.
                 </Text>
               </View>
+            </View>
+          </View>
+        </View>
+      ) : null}
+
+      {isInviteCodePromptOpen ? (
+        <View className="absolute inset-0 bg-black/75 items-center justify-center px-6">
+          <View className="w-full max-w-sm rounded-3xl border border-white/10 bg-[#111111] p-5">
+            <Text className="text-base font-semibold text-[#FEFCD9]">
+              Enter invite code
+            </Text>
+            <Text className="mt-1 text-xs text-[#FEFCD9]/60">
+              This webinar requires an invite code.
+            </Text>
+            <TextInput
+              value={inviteCodeInput}
+              onChangeText={(value) => {
+                setInviteCodeInput(value);
+                if (inviteCodePromptError) {
+                  setInviteCodePromptError(null);
+                }
+              }}
+              autoFocus
+              autoCapitalize="none"
+              autoCorrect={false}
+              placeholder="Invite code"
+              placeholderTextColor="rgba(254,252,217,0.35)"
+              className="mt-4 rounded-xl border border-white/10 bg-black/40 px-3 py-3 text-[#FEFCD9]"
+              onSubmitEditing={handleSubmitInviteCodePrompt}
+              returnKeyType="done"
+            />
+            {inviteCodePromptError ? (
+              <Text className="mt-2 text-xs text-[#F95F4A]">
+                {inviteCodePromptError}
+              </Text>
+            ) : null}
+            <View className="mt-4 flex-row items-center justify-end gap-2">
+              <Pressable
+                onPress={handleCancelInviteCodePrompt}
+                className="rounded-xl border border-white/15 px-3 py-2"
+              >
+                <Text className="text-xs uppercase tracking-[0.14em] text-[#FEFCD9]/70">
+                  Cancel
+                </Text>
+              </Pressable>
+              <Pressable
+                onPress={handleSubmitInviteCodePrompt}
+                className="rounded-xl bg-[#F95F4A] px-3 py-2"
+              >
+                <Text className="text-xs uppercase tracking-[0.14em] text-white">
+                  Continue
+                </Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      ) : null}
+
+      {isTakeoverPromptOpen ? (
+        <View className="absolute inset-0 bg-black/75 items-center justify-center px-6">
+          <View className="w-full max-w-sm rounded-3xl border border-white/10 bg-[#111111] p-5">
+            <Text className="text-base font-semibold text-[#FEFCD9]">
+              Join new meeting?
+            </Text>
+            <Text className="mt-1 text-xs text-[#FEFCD9]/60">
+              You are currently in {takeoverPromptRoomLabel}. Leave it and join this one?
+            </Text>
+            <View className="mt-4 flex-row items-center justify-end gap-2">
+              <Pressable
+                onPress={handleTakeoverPromptStay}
+                className="rounded-xl border border-white/15 px-3 py-2"
+              >
+                <Text className="text-xs uppercase tracking-[0.14em] text-[#FEFCD9]/70">
+                  Stay
+                </Text>
+              </Pressable>
+              <Pressable
+                onPress={handleTakeoverPromptJoin}
+                className="rounded-xl bg-[#F95F4A] px-3 py-2"
+              >
+                <Text className="text-xs uppercase tracking-[0.14em] text-white">
+                  Leave & Join
+                </Text>
+              </Pressable>
             </View>
           </View>
         </View>

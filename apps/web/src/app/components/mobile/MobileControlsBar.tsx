@@ -12,6 +12,7 @@ import {
   MicOff,
   MoreVertical,
   Phone,
+  Settings,
   Smile,
   Users,
   Video,
@@ -22,9 +23,19 @@ import {
   X,
   ShieldBan,
 } from "lucide-react";
-import { memo, useCallback, useRef, useState } from "react";
-import type { ReactionOption } from "../../lib/types";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
+import type {
+  ReactionOption,
+  WebinarConfigSnapshot,
+  WebinarLinkResponse,
+  WebinarUpdateRequest,
+} from "../../lib/types";
 import { normalizeBrowserUrl } from "../../lib/utils";
+
+interface MediaDeviceOption {
+  deviceId: string;
+  label: string;
+}
 
 interface MobileControlsBarProps {
   isMuted: boolean;
@@ -73,6 +84,21 @@ interface MobileControlsBarProps {
   onCloseDevPlayground?: () => void;
   isAppsLocked?: boolean;
   onToggleAppsLock?: () => void;
+  audioInputDeviceId?: string;
+  audioOutputDeviceId?: string;
+  onAudioInputDeviceChange?: (deviceId: string) => void;
+  onAudioOutputDeviceChange?: (deviceId: string) => void;
+  isObserverMode?: boolean;
+  webinarConfig?: WebinarConfigSnapshot | null;
+  webinarRole?: "attendee" | "participant" | "host" | null;
+  webinarLink?: string | null;
+  onSetWebinarLink?: (link: string | null) => void;
+  onGetWebinarConfig?: () => Promise<WebinarConfigSnapshot | null>;
+  onUpdateWebinarConfig?: (
+    update: WebinarUpdateRequest,
+  ) => Promise<WebinarConfigSnapshot | null>;
+  onGenerateWebinarLink?: () => Promise<WebinarLinkResponse | null>;
+  onRotateWebinarLink?: () => Promise<WebinarLinkResponse | null>;
 }
 
 function MobileControlsBar({
@@ -122,14 +148,45 @@ function MobileControlsBar({
   onCloseDevPlayground,
   isAppsLocked = false,
   onToggleAppsLock,
+  audioInputDeviceId,
+  audioOutputDeviceId,
+  onAudioInputDeviceChange,
+  onAudioOutputDeviceChange,
+  isObserverMode = false,
+  webinarConfig,
+  webinarRole,
+  webinarLink,
+  onSetWebinarLink,
+  onGetWebinarConfig,
+  onUpdateWebinarConfig,
+  onGenerateWebinarLink,
+  onRotateWebinarLink,
 }: MobileControlsBarProps) {
   const [isMoreMenuOpen, setIsMoreMenuOpen] = useState(false);
   const [isReactionMenuOpen, setIsReactionMenuOpen] = useState(false);
   const [isBrowserSheetOpen, setIsBrowserSheetOpen] = useState(false);
+  const [isSettingsSheetOpen, setIsSettingsSheetOpen] = useState(false);
   const [browserUrlInput, setBrowserUrlInput] = useState("");
   const [browserUrlError, setBrowserUrlError] = useState<string | null>(null);
+  const [isLoadingAudioDevices, setIsLoadingAudioDevices] = useState(false);
+  const [audioDevicesError, setAudioDevicesError] = useState<string | null>(
+    null,
+  );
+  const [audioInputDevices, setAudioInputDevices] = useState<
+    MediaDeviceOption[]
+  >([]);
+  const [audioOutputDevices, setAudioOutputDevices] = useState<
+    MediaDeviceOption[]
+  >([]);
   const lastReactionTimeRef = useRef<number>(0);
   const REACTION_COOLDOWN_MS = 150;
+  const [webinarInviteCodeInput, setWebinarInviteCodeInput] = useState("");
+  const [webinarCapInput, setWebinarCapInput] = useState(
+    String(webinarConfig?.maxAttendees ?? 500),
+  );
+  const [webinarNotice, setWebinarNotice] = useState<string | null>(null);
+  const [webinarError, setWebinarError] = useState<string | null>(null);
+  const [isWebinarWorking, setIsWebinarWorking] = useState(false);
 
   const canStartScreenShare = !activeScreenShareId || isScreenSharing;
 
@@ -143,6 +200,7 @@ function MobileControlsBar({
 
   const handleReactionClick = useCallback(
     (reaction: ReactionOption) => {
+      if (isObserverMode) return;
       const now = Date.now();
       if (now - lastReactionTimeRef.current < REACTION_COOLDOWN_MS) {
         return;
@@ -151,8 +209,168 @@ function MobileControlsBar({
       onSendReaction(reaction);
       setIsReactionMenuOpen(false);
     },
-    [onSendReaction]
+    [isObserverMode, onSendReaction]
   );
+
+  const fetchAudioDevices = useCallback(async () => {
+    if (
+      typeof navigator === "undefined" ||
+      !navigator.mediaDevices?.enumerateDevices
+    ) {
+      setAudioDevicesError("Device selection is not supported here.");
+      setAudioInputDevices([]);
+      setAudioOutputDevices([]);
+      return;
+    }
+
+    setIsLoadingAudioDevices(true);
+    setAudioDevicesError(null);
+
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+
+      const nextAudioInputDevices = devices
+        .filter((device) => device.kind === "audioinput")
+        .map((device, index) => ({
+          deviceId: device.deviceId,
+          label: device.label || `Microphone ${index + 1}`,
+        }));
+
+      const nextAudioOutputDevices = devices
+        .filter((device) => device.kind === "audiooutput")
+        .map((device, index) => ({
+          deviceId: device.deviceId,
+          label: device.label || `Speaker ${index + 1}`,
+        }));
+
+      setAudioInputDevices(nextAudioInputDevices);
+      setAudioOutputDevices(nextAudioOutputDevices);
+    } catch (error) {
+      console.error("[MobileControlsBar] Failed to enumerate devices:", error);
+      setAudioDevicesError("Unable to load available devices.");
+      setAudioInputDevices([]);
+      setAudioOutputDevices([]);
+    } finally {
+      setIsLoadingAudioDevices(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!isSettingsSheetOpen) return;
+    void fetchAudioDevices();
+  }, [fetchAudioDevices, isSettingsSheetOpen]);
+
+  useEffect(() => {
+    if (
+      typeof navigator === "undefined" ||
+      !navigator.mediaDevices?.addEventListener
+    ) {
+      return;
+    }
+
+    const handleDeviceChange = () => {
+      if (!isSettingsSheetOpen) return;
+      void fetchAudioDevices();
+    };
+
+    navigator.mediaDevices.addEventListener("devicechange", handleDeviceChange);
+    return () =>
+      navigator.mediaDevices.removeEventListener(
+        "devicechange",
+        handleDeviceChange,
+      );
+  }, [fetchAudioDevices, isSettingsSheetOpen]);
+
+  useEffect(() => {
+    setWebinarCapInput(String(webinarConfig?.maxAttendees ?? 500));
+  }, [webinarConfig?.maxAttendees]);
+
+  useEffect(() => {
+    if (!isSettingsSheetOpen || !isAdmin || isObserverMode) return;
+    void onGetWebinarConfig?.();
+  }, [isAdmin, isObserverMode, isSettingsSheetOpen, onGetWebinarConfig]);
+
+  const runWebinarTask = useCallback(
+    async (
+      task: () => Promise<void>,
+      options?: { successMessage?: string; clearInviteInput?: boolean },
+    ) => {
+      setWebinarError(null);
+      setWebinarNotice(null);
+      setIsWebinarWorking(true);
+      try {
+        await task();
+        if (options?.clearInviteInput) {
+          setWebinarInviteCodeInput("");
+        }
+        if (options?.successMessage) {
+          setWebinarNotice(options.successMessage);
+        }
+      } catch (error) {
+        setWebinarError(
+          error instanceof Error ? error.message : "Webinar update failed.",
+        );
+      } finally {
+        setIsWebinarWorking(false);
+      }
+    },
+    [],
+  );
+
+  const copyLink = useCallback(async (value: string) => {
+    if (!value.trim()) {
+      throw new Error("No webinar link generated yet.");
+    }
+    if (
+      typeof navigator !== "undefined" &&
+      navigator.clipboard &&
+      typeof navigator.clipboard.writeText === "function"
+    ) {
+      await navigator.clipboard.writeText(value);
+      return;
+    }
+    throw new Error("Clipboard is unavailable in this browser.");
+  }, []);
+
+  const selectedAudioInputValue = audioInputDevices.some(
+    (device) => device.deviceId === audioInputDeviceId,
+  )
+    ? audioInputDeviceId
+    : audioInputDevices[0]?.deviceId;
+
+  const selectedAudioOutputValue = audioOutputDevices.some(
+    (device) => device.deviceId === audioOutputDeviceId,
+  )
+    ? audioOutputDeviceId
+    : audioOutputDevices[0]?.deviceId;
+
+  const parsedWebinarCap = Number.parseInt(webinarCapInput, 10);
+  const webinarCapValue = Number.isFinite(parsedWebinarCap)
+    ? Math.max(1, Math.min(5000, parsedWebinarCap))
+    : null;
+
+  if (isObserverMode) {
+    return (
+      <div className="sticky bottom-0 z-40 border-t border-white/10 bg-[#121212]/95 p-3 backdrop-blur-md">
+        <div className="mx-auto flex max-w-sm items-center justify-between rounded-2xl border border-white/10 bg-[#0d0e0d]/90 px-4 py-3">
+          <div>
+            <p className="text-xs uppercase tracking-[0.2em] text-[#FEFCD9]/45">
+              Webinar viewer
+            </p>
+            <p className="text-[11px] text-[#FEFCD9]/70">
+              {webinarConfig?.attendeeCount ?? 0} attendees watching
+            </p>
+          </div>
+          <button
+            onClick={onLeave}
+            className="h-10 rounded-full bg-red-500/90 px-4 text-xs font-medium uppercase tracking-[0.16em] text-white transition hover:bg-red-500"
+          >
+            Leave
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <>
@@ -231,6 +449,19 @@ function MobileControlsBar({
                   {pendingUsersCount}
                 </span>
               )}
+            </button>
+            <button
+              onClick={() => {
+                setIsMoreMenuOpen(false);
+                setIsSettingsSheetOpen(true);
+                void fetchAudioDevices();
+              }}
+              className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-[#FEFCD9] hover:bg-[#FEFCD9]/5 active:bg-[#FEFCD9]/10 transition-transform duration-150 touch-feedback"
+            >
+              <div className="h-9 w-9 rounded-xl bg-[#2b2b2b] border border-white/5 flex items-center justify-center">
+                <Settings className="w-4.5 h-4.5" />
+              </div>
+              <span className="text-sm font-medium">Settings</span>
             </button>
             <button
               onClick={() => {
@@ -500,6 +731,444 @@ function MobileControlsBar({
                 </span>
               </button>
             )}
+          </div>
+        </div>
+      )}
+
+      {isSettingsSheetOpen && (
+        <div
+          className="fixed inset-0 bg-black/50 z-50 animate-fade-in"
+          onClick={() => setIsSettingsSheetOpen(false)}
+        >
+          <div
+            className="absolute bottom-0 left-0 right-0 bg-[#121212] border-t border-[#FEFCD9]/10 rounded-t-3xl p-4 pb-6 max-h-[70vh] overflow-y-auto touch-pan-y shadow-[0_-18px_45px_rgba(0,0,0,0.35)] animate-slide-up"
+            style={{ fontFamily: "'PolySans Trial', sans-serif" }}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Meeting settings"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="relative px-1 pb-2">
+              <div className="mx-auto h-1 w-10 rounded-full bg-[#FEFCD9]/20" />
+              <button
+                onClick={() => setIsSettingsSheetOpen(false)}
+                className="absolute right-0 top-0 h-7 w-7 rounded-full flex items-center justify-center text-[#FEFCD9]/50 hover:text-[#FEFCD9] hover:bg-[#FEFCD9]/10"
+                aria-label="Close settings"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+
+            <div className="flex items-center gap-3 text-[#FEFCD9] px-1">
+              <div className="h-10 w-10 rounded-2xl bg-[#2b2b2b] border border-white/5 flex items-center justify-center">
+                <Settings className="w-5 h-5" />
+              </div>
+              <div className="flex flex-col">
+                <span className="text-base font-medium">Meeting settings</span>
+                <span className="text-[11px] text-[#FEFCD9]/45 uppercase tracking-[0.2em]">
+                  Audio & webinar
+                </span>
+              </div>
+            </div>
+
+            <div className="mt-4 space-y-4">
+              <section className="space-y-2">
+                <label
+                  className="text-[10px] text-[#FEFCD9]/45 uppercase tracking-[0.18em]"
+                  style={{ fontFamily: "'PolySans Mono', monospace" }}
+                >
+                  Microphone
+                </label>
+                <select
+                  value={selectedAudioInputValue ?? ""}
+                  onChange={(event) =>
+                    onAudioInputDeviceChange?.(event.target.value)
+                  }
+                  disabled={
+                    !onAudioInputDeviceChange || audioInputDevices.length === 0
+                  }
+                  className="w-full bg-black/40 border border-[#FEFCD9]/10 rounded-xl px-3 py-2 text-sm text-[#FEFCD9] focus:outline-none focus:border-[#FEFCD9]/25 disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  {audioInputDevices.length === 0 ? (
+                    <option value="">No microphones found</option>
+                  ) : (
+                    audioInputDevices.map((device, index) => (
+                      <option
+                        key={`${device.deviceId || "audio-input"}-${index}`}
+                        value={device.deviceId}
+                      >
+                        {device.label}
+                      </option>
+                    ))
+                  )}
+                </select>
+              </section>
+
+              <section className="space-y-2">
+                <label
+                  className="text-[10px] text-[#FEFCD9]/45 uppercase tracking-[0.18em]"
+                  style={{ fontFamily: "'PolySans Mono', monospace" }}
+                >
+                  Speaker
+                </label>
+                <select
+                  value={selectedAudioOutputValue ?? ""}
+                  onChange={(event) =>
+                    onAudioOutputDeviceChange?.(event.target.value)
+                  }
+                  disabled={
+                    !onAudioOutputDeviceChange ||
+                    audioOutputDevices.length === 0
+                  }
+                  className="w-full bg-black/40 border border-[#FEFCD9]/10 rounded-xl px-3 py-2 text-sm text-[#FEFCD9] focus:outline-none focus:border-[#FEFCD9]/25 disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  {audioOutputDevices.length === 0 ? (
+                    <option value="">No speakers found</option>
+                  ) : (
+                    audioOutputDevices.map((device, index) => (
+                      <option
+                        key={`${device.deviceId || "audio-output"}-${index}`}
+                        value={device.deviceId}
+                      >
+                        {device.label}
+                      </option>
+                    ))
+                  )}
+                </select>
+              </section>
+
+              {isLoadingAudioDevices && (
+                <p className="text-[11px] text-[#FEFCD9]/55">
+                  Loading devices...
+                </p>
+              )}
+
+              {audioDevicesError && (
+                <p className="text-[11px] text-[#F95F4A]">{audioDevicesError}</p>
+              )}
+
+              {audioOutputDevices.length === 0 && !audioDevicesError && (
+                <p className="text-[11px] text-[#FEFCD9]/45">
+                  Speaker selection may be limited in this mobile browser.
+                </p>
+              )}
+
+              {isAdmin ? (
+                <section className="space-y-2 rounded-xl border border-[#FEFCD9]/10 bg-black/30 p-3">
+                  <div className="flex items-center justify-between">
+                    <label
+                      className="text-[10px] text-[#FEFCD9]/45 uppercase tracking-[0.18em]"
+                      style={{ fontFamily: "'PolySans Mono', monospace" }}
+                    >
+                      Webinar
+                    </label>
+                    {webinarRole ? (
+                      <span className="rounded-full border border-white/10 px-2 py-0.5 text-[10px] uppercase tracking-wide text-[#FEFCD9]/50">
+                        {webinarRole}
+                      </span>
+                    ) : null}
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() =>
+                      void runWebinarTask(
+                        async () => {
+                          if (!onUpdateWebinarConfig) {
+                            throw new Error("Webinar controls unavailable.");
+                          }
+                          const next = await onUpdateWebinarConfig({
+                            enabled: !Boolean(webinarConfig?.enabled),
+                          });
+                          if (!next) {
+                            throw new Error("Webinar update rejected.");
+                          }
+                        },
+                        {
+                          successMessage: webinarConfig?.enabled
+                            ? "Webinar disabled."
+                            : "Webinar enabled.",
+                        },
+                      )
+                    }
+                    disabled={isWebinarWorking || !onUpdateWebinarConfig}
+                    className="w-full rounded-lg border border-white/10 px-3 py-2 text-left text-sm text-[#FEFCD9] transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    Enable webinar: {webinarConfig?.enabled ? "On" : "Off"}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() =>
+                      void runWebinarTask(
+                        async () => {
+                          if (!onUpdateWebinarConfig) {
+                            throw new Error("Webinar controls unavailable.");
+                          }
+                          const next = await onUpdateWebinarConfig({
+                            publicAccess: !Boolean(webinarConfig?.publicAccess),
+                          });
+                          if (!next) {
+                            throw new Error("Webinar update rejected.");
+                          }
+                        },
+                        {
+                          successMessage: webinarConfig?.publicAccess
+                            ? "Public access disabled."
+                            : "Public access enabled.",
+                        },
+                      )
+                    }
+                    disabled={
+                      isWebinarWorking ||
+                      !onUpdateWebinarConfig ||
+                      !webinarConfig?.enabled
+                    }
+                    className="w-full rounded-lg border border-white/10 px-3 py-2 text-left text-sm text-[#FEFCD9] transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    Public access: {webinarConfig?.publicAccess ? "On" : "Off"}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() =>
+                      void runWebinarTask(
+                        async () => {
+                          if (!onUpdateWebinarConfig) {
+                            throw new Error("Webinar controls unavailable.");
+                          }
+                          const next = await onUpdateWebinarConfig({
+                            locked: !Boolean(webinarConfig?.locked),
+                          });
+                          if (!next) {
+                            throw new Error("Webinar update rejected.");
+                          }
+                        },
+                        {
+                          successMessage: webinarConfig?.locked
+                            ? "Webinar unlocked."
+                            : "Webinar locked.",
+                        },
+                      )
+                    }
+                    disabled={
+                      isWebinarWorking ||
+                      !onUpdateWebinarConfig ||
+                      !webinarConfig?.enabled
+                    }
+                    className="w-full rounded-lg border border-white/10 px-3 py-2 text-left text-sm text-[#FEFCD9] transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    Webinar lock: {webinarConfig?.locked ? "On" : "Off"}
+                  </button>
+
+                  <p className="text-[11px] text-[#FEFCD9]/60">
+                    Attendees:{" "}
+                    <span className="text-[#FEFCD9]">
+                      {webinarConfig?.attendeeCount ?? 0}
+                    </span>{" "}
+                    /{" "}
+                    <span className="text-[#FEFCD9]">
+                      {webinarConfig?.maxAttendees ?? 500}
+                    </span>
+                  </p>
+
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="number"
+                      min={1}
+                      max={5000}
+                      value={webinarCapInput}
+                      onChange={(event) => setWebinarCapInput(event.target.value)}
+                      placeholder="Attendee cap"
+                      className="w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-xs text-[#FEFCD9] outline-none placeholder:text-[#FEFCD9]/30 focus:border-[#FEFCD9]/25"
+                    />
+                    <button
+                      type="button"
+                      onClick={() =>
+                        void runWebinarTask(
+                          async () => {
+                            if (!onUpdateWebinarConfig) {
+                              throw new Error("Webinar controls unavailable.");
+                            }
+                            if (webinarCapValue == null) {
+                              throw new Error("Enter a valid attendee cap.");
+                            }
+                            const next = await onUpdateWebinarConfig({
+                              maxAttendees: webinarCapValue,
+                            });
+                            if (!next) {
+                              throw new Error("Webinar update rejected.");
+                            }
+                          },
+                          { successMessage: "Attendee cap updated." },
+                        )
+                      }
+                      disabled={
+                        isWebinarWorking ||
+                        !onUpdateWebinarConfig ||
+                        !webinarConfig?.enabled ||
+                        webinarCapValue == null
+                      }
+                      className="rounded-lg border border-white/10 px-3 py-2 text-xs text-[#FEFCD9] transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      Save
+                    </button>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      value={webinarInviteCodeInput}
+                      onChange={(event) =>
+                        setWebinarInviteCodeInput(event.target.value)
+                      }
+                      placeholder="Invite code (optional)"
+                      className="w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-xs text-[#FEFCD9] outline-none placeholder:text-[#FEFCD9]/30 focus:border-[#FEFCD9]/25"
+                    />
+                    <button
+                      type="button"
+                      onClick={() =>
+                        void runWebinarTask(
+                          async () => {
+                            if (!onUpdateWebinarConfig) {
+                              throw new Error("Webinar controls unavailable.");
+                            }
+                            const code = webinarInviteCodeInput.trim();
+                            if (!code) {
+                              throw new Error("Enter an invite code.");
+                            }
+                            const next = await onUpdateWebinarConfig({
+                              inviteCode: code,
+                            });
+                            if (!next) {
+                              throw new Error("Webinar update rejected.");
+                            }
+                          },
+                          {
+                            successMessage: "Invite code saved.",
+                            clearInviteInput: true,
+                          },
+                        )
+                      }
+                      disabled={
+                        isWebinarWorking ||
+                        !onUpdateWebinarConfig ||
+                        !webinarConfig?.enabled ||
+                        !webinarInviteCodeInput.trim()
+                      }
+                      className="rounded-lg border border-white/10 px-3 py-2 text-xs text-[#FEFCD9] transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      Save
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        void runWebinarTask(
+                          async () => {
+                            if (!onUpdateWebinarConfig) {
+                              throw new Error("Webinar controls unavailable.");
+                            }
+                            const next = await onUpdateWebinarConfig({
+                              inviteCode: null,
+                            });
+                            if (!next) {
+                              throw new Error("Webinar update rejected.");
+                            }
+                          },
+                          { successMessage: "Invite code cleared." },
+                        )
+                      }
+                      disabled={
+                        isWebinarWorking ||
+                        !onUpdateWebinarConfig ||
+                        !webinarConfig?.requiresInviteCode
+                      }
+                      className="rounded-lg border border-white/10 px-3 py-2 text-xs text-[#FEFCD9]/70 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      Clear
+                    </button>
+                  </div>
+
+                  <input
+                    readOnly
+                    value={webinarLink ?? ""}
+                    placeholder="Generate webinar link"
+                    className="w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-xs text-[#FEFCD9] outline-none placeholder:text-[#FEFCD9]/30"
+                  />
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        void runWebinarTask(async () => {
+                          if (!onGenerateWebinarLink) {
+                            throw new Error("Webinar link generation unavailable.");
+                          }
+                          const linkResponse = await onGenerateWebinarLink();
+                          if (!linkResponse?.link) {
+                            throw new Error("Webinar link unavailable.");
+                          }
+                          onSetWebinarLink?.(linkResponse.link);
+                          await copyLink(linkResponse.link);
+                        }, { successMessage: "Webinar link copied." })
+                      }
+                      disabled={
+                        isWebinarWorking ||
+                        !onGenerateWebinarLink ||
+                        !webinarConfig?.enabled
+                      }
+                      className="rounded-lg border border-white/10 px-3 py-2 text-xs text-[#FEFCD9] transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      Generate
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        void runWebinarTask(async () => {
+                          if (!onRotateWebinarLink) {
+                            throw new Error("Webinar link rotation unavailable.");
+                          }
+                          const linkResponse = await onRotateWebinarLink();
+                          if (!linkResponse?.link) {
+                            throw new Error("Webinar link unavailable.");
+                          }
+                          onSetWebinarLink?.(linkResponse.link);
+                          await copyLink(linkResponse.link);
+                        }, { successMessage: "Webinar link rotated and copied." })
+                      }
+                      disabled={
+                        isWebinarWorking ||
+                        !onRotateWebinarLink ||
+                        !webinarConfig?.enabled
+                      }
+                      className="rounded-lg border border-white/10 px-3 py-2 text-xs text-[#FEFCD9] transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      Rotate
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        void runWebinarTask(async () => {
+                          await copyLink(webinarLink ?? "");
+                        }, { successMessage: "Webinar link copied." })
+                      }
+                      disabled={isWebinarWorking || !webinarLink}
+                      className="rounded-lg border border-white/10 px-3 py-2 text-xs text-[#FEFCD9] transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      Copy
+                    </button>
+                  </div>
+
+                  {webinarNotice ? (
+                    <p className="text-[11px] text-emerald-300/90">
+                      {webinarNotice}
+                    </p>
+                  ) : null}
+                  {webinarError ? (
+                    <p className="text-[11px] text-[#F95F4A]">{webinarError}</p>
+                  ) : null}
+                </section>
+              ) : null}
+            </div>
           </div>
         </div>
       )}
