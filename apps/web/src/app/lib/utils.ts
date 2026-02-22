@@ -190,6 +190,45 @@ export function formatDisplayName(raw: string): string {
   return words.length > 0 ? words.join(" ") : handle || raw;
 }
 
+const CHAT_URL_PATTERN =
+  /((?:https?:\/\/|www\.)[^\s]+|(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}(?:\/[^\s]*)?)/gi;
+
+//fancy single pass regex linkeifer codex gave me
+// ts is actually agi holly fuck
+export function getChatMessageSegments(
+  content: string
+): Array<{ text: string; href?: string }> {
+  const segments: Array<{ text: string; href?: string }> = [];
+  let lastIndex = 0;
+
+  for (const match of content.matchAll(CHAT_URL_PATTERN)) {
+    const matched = match[0];
+    const index = match.index ?? -1;
+    if (index < 0) continue;
+
+    if (index > lastIndex) {
+      segments.push({ text: content.slice(lastIndex, index) });
+    }
+
+    const display = matched.replace(/[),.!?;:]+$/, "");
+    if (!display || display.includes("@")) {
+      segments.push({ text: matched });
+    } else {
+      const href = /^https?:\/\//i.test(display) ? display : `https://${display}`;
+      segments.push({ text: display, href });
+      const trailing = matched.slice(display.length);
+      if (trailing) segments.push({ text: trailing });
+    }
+    lastIndex = index + matched.length;
+  }
+
+  if (lastIndex < content.length) {
+    segments.push({ text: content.slice(lastIndex) });
+  }
+
+  return segments.length > 0 ? segments : [{ text: content }];
+}
+
 export function truncateDisplayName(value: string, maxLength = 16): string {
   const trimmed = value.trim();
   if (trimmed.length <= maxLength) return trimmed;

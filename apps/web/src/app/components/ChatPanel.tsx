@@ -4,7 +4,7 @@ import { Send, X } from "lucide-react";
 import { memo, useEffect, useRef, useState } from "react";
 import type { ChatMessage } from "../lib/types";
 import { getActionText, getCommandSuggestions } from "../lib/chat-commands";
-import { formatDisplayName } from "../lib/utils";
+import { formatDisplayName, getChatMessageSegments } from "../lib/utils";
 
 interface ChatPanelProps {
   messages: ChatMessage[];
@@ -107,13 +107,30 @@ function ChatPanel({
     }
   };
 
+  const renderMessageContent = (content: string) =>
+    getChatMessageSegments(content).map((segment, index) =>
+      segment.href ? (
+        <a
+          key={`${segment.href}-${index}`}
+          href={segment.href}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="underline decoration-[#FEFCD9]/50 underline-offset-2 hover:decoration-[#FEFCD9]"
+        >
+          {segment.text}
+        </a>
+      ) : (
+        <span key={`${segment.text}-${index}`}>{segment.text}</span>
+      )
+    );
+
   return (
     <div
       className="fixed right-4 top-16 bottom-20 w-72 bg-[#0d0e0d]/95 backdrop-blur-md border border-[#FEFCD9]/10 rounded-xl flex flex-col z-40 shadow-2xl"
       style={{ fontFamily: "'PolySans Trial', sans-serif" }}
     >
       <div className="flex items-center justify-between px-3 py-2.5 border-b border-[#FEFCD9]/10">
-        <span 
+        <span
           className="text-[10px] uppercase tracking-[0.12em] text-[#FEFCD9]/60"
           style={{ fontFamily: "'PolySans Mono', monospace" }}
         >
@@ -170,7 +187,9 @@ function ChatPanel({
                   {!isOwn && (
                     <p className="text-[9px] text-[#F95F4A]/80 mb-0.5">{displayName}</p>
                   )}
-                  <p className="text-xs break-words leading-relaxed">{msg.content}</p>
+                  <p className="text-xs break-words leading-relaxed">
+                    {renderMessageContent(msg.content)}
+                  </p>
                 </div>
                 <span className="text-[9px] text-[#FEFCD9]/20 mt-0.5 tabular-nums">
                   {new Date(msg.timestamp).toLocaleTimeString([], {

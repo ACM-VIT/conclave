@@ -4,6 +4,7 @@ import { Send, X } from "lucide-react";
 import { memo, useEffect, useRef, useState } from "react";
 import type { ChatMessage } from "../../lib/types";
 import { getActionText, getCommandSuggestions } from "../../lib/chat-commands";
+import { getChatMessageSegments } from "../../lib/utils";
 
 interface MobileChatPanelProps {
   messages: ChatMessage[];
@@ -103,10 +104,27 @@ function MobileChatPanel({
     });
   };
 
+  const renderMessageContent = (content: string) =>
+    getChatMessageSegments(content).map((segment, index) =>
+      segment.href ? (
+        <a
+          key={`${segment.href}-${index}`}
+          href={segment.href}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="underline decoration-[#FEFCD9]/50 underline-offset-2 hover:decoration-[#FEFCD9]"
+        >
+          {segment.text}
+        </a>
+      ) : (
+        <span key={`${segment.text}-${index}`}>{segment.text}</span>
+      )
+    );
+
   return (
     <div className="fixed inset-0 bg-[#1a1a1a] z-50 flex flex-col safe-area-pt safe-area-pb">
       {/* Header */}
-      <div 
+      <div
         className="flex items-center justify-between px-4 py-3 border-b border-[#FEFCD9]/10"
         style={{ fontFamily: "'PolySans Mono', monospace" }}
       >
@@ -163,7 +181,9 @@ function MobileChatPanel({
                       : "bg-[#2a2a2a] text-[#FEFCD9] rounded-bl-sm selection:bg-[#F95F4A]/40 selection:text-white"
                   }`}
                 >
-                  <p className="text-sm break-words">{message.content}</p>
+                  <p className="text-sm break-words">
+                    {renderMessageContent(message.content)}
+                  </p>
                 </div>
                 <span className="text-[9px] text-[#FEFCD9]/30 mt-0.5 px-1">
                   {formatTime(message.timestamp)}
