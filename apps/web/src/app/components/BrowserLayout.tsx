@@ -1,6 +1,6 @@
 "use client";
 
-import { Ghost, Globe, Hand, Loader2 } from "lucide-react";
+import { Ghost, Globe, Hand, Loader2, Mic, MicOff } from "lucide-react";
 import { memo, useEffect, useRef, useState, type FormEvent } from "react";
 import { useSmartParticipantOrder } from "../hooks/useSmartParticipantOrder";
 import type { Participant } from "../lib/types";
@@ -18,6 +18,7 @@ interface BrowserLayoutProps {
     controllerName: string;
     localStream: MediaStream | null;
     isCameraOff: boolean;
+    isMuted: boolean;
     isHandRaised: boolean;
     isGhost: boolean;
     participants: Map<string, Participant>;
@@ -39,6 +40,7 @@ function BrowserLayout({
     controllerName,
     localStream,
     isCameraOff,
+    isMuted,
     isHandRaised,
     isGhost,
     participants,
@@ -277,6 +279,11 @@ function BrowserLayout({
                         style={{ fontFamily: "'PolySans Mono', monospace" }}
                     >
                         <span className="font-medium text-[#FEFCD9] uppercase tracking-wide">You</span>
+                        {isMuted ? (
+                            <MicOff className="w-3 h-3 text-[#F95F4A]" />
+                        ) : (
+                            <Mic className="w-3 h-3 text-emerald-300" />
+                        )}
                     </div>
                 </div>
 

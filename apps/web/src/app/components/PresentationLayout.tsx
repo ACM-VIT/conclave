@@ -1,6 +1,6 @@
 "use client";
 
-import { Ghost, Hand } from "lucide-react";
+import { Ghost, Hand, Mic, MicOff } from "lucide-react";
 import { memo, useEffect, useRef } from "react";
 import { useSmartParticipantOrder } from "../hooks/useSmartParticipantOrder";
 import type { Participant } from "../lib/types";
@@ -12,6 +12,7 @@ interface PresentationLayoutProps {
   presenterName: string;
   localStream: MediaStream | null;
   isCameraOff: boolean;
+  isMuted: boolean;
   isHandRaised: boolean;
   isGhost: boolean;
   participants: Map<string, Participant>;
@@ -28,6 +29,7 @@ function PresentationLayout({
   presenterName,
   localStream,
   isCameraOff,
+  isMuted,
   isHandRaised,
   isGhost,
   participants,
@@ -136,6 +138,11 @@ function PresentationLayout({
             style={{ fontFamily: "'PolySans Mono', monospace" }}
           >
             <span className="font-medium text-[#FEFCD9] uppercase tracking-wide">You</span>
+            {isMuted ? (
+              <MicOff className="w-3 h-3 text-[#F95F4A]" />
+            ) : (
+              <Mic className="w-3 h-3 text-emerald-300" />
+            )}
           </div>
         </div>
 
