@@ -137,6 +137,15 @@ interface MobileMeetsMainContentProps {
   onRotateWebinarLink?: () => Promise<WebinarLinkResponse | null>;
 }
 
+const getLiveVideoStream = (stream: MediaStream | null): MediaStream | null => {
+  if (!stream) return null;
+  const [track] = stream.getVideoTracks();
+  if (!track || track.readyState === "ended") {
+    return null;
+  }
+  return stream;
+};
+
 function MobileMeetsMainContent({
   isJoined,
   connectionState,
@@ -323,7 +332,7 @@ function MobileMeetsMainContent({
       ),
     [participantsArray],
   );
-  const webinarFocusedParticipant = useMemo(() => {
+  const webinarStage = useMemo(() => {
     if (!webinarParticipants.length) {
       return null;
     }
@@ -332,30 +341,83 @@ function MobileMeetsMainContent({
       ? webinarParticipants.find(
           (participant) =>
             participant.screenShareProducerId === activeScreenShareId &&
-            participant.screenShareStream,
+            getLiveVideoStream(participant.screenShareStream),
         )
       : null;
     const byAnyScreenShare = webinarParticipants.find(
-      (participant) => participant.screenShareStream,
+      (participant) => getLiveVideoStream(participant.screenShareStream),
     );
+    const fallbackAudioStream =
+      webinarParticipants.find((participant) => participant.audioStream)
+        ?.audioStream ?? null;
+    const screenShareParticipant = byScreenShareId ?? byAnyScreenShare;
 
-    const sourceParticipant =
-      byScreenShareId ?? byAnyScreenShare ?? webinarParticipants[0];
-    const videoStream =
-      sourceParticipant.screenShareStream ?? sourceParticipant.videoStream;
-    const fallbackAudioStream = webinarParticipants.find(
-      (participant) => participant.audioStream,
-    )?.audioStream;
-    const audioStream = sourceParticipant.audioStream ?? fallbackAudioStream ?? null;
+    if (screenShareParticipant) {
+      const screenShareStream = getLiveVideoStream(
+        screenShareParticipant.screenShareStream,
+      );
+      if (screenShareStream) {
+        const mainAudioStream =
+          screenShareParticipant.audioStream ?? fallbackAudioStream;
+        const presenterCameraStream = getLiveVideoStream(
+          screenShareParticipant.videoStream,
+        );
+
+        return {
+          main: {
+            participant: {
+              ...screenShareParticipant,
+              videoStream: screenShareStream,
+              audioStream: mainAudioStream,
+              isCameraOff: false,
+            },
+            displayName: resolveDisplayName(screenShareParticipant.userId),
+          },
+          pip: presenterCameraStream
+            ? {
+                participant: {
+                  ...screenShareParticipant,
+                  videoStream: presenterCameraStream,
+                  screenShareStream: null,
+                  audioStream: null,
+                  isMuted: true,
+                  isCameraOff: false,
+                },
+                displayName: resolveDisplayName(screenShareParticipant.userId),
+              }
+            : null,
+          isScreenShare: true,
+        };
+      }
+    }
+
+    const cameraParticipant =
+      webinarParticipants.find(
+        (participant) =>
+          !participant.isCameraOff &&
+          getLiveVideoStream(participant.videoStream),
+      ) ??
+      webinarParticipants.find((participant) =>
+        getLiveVideoStream(participant.videoStream),
+      ) ??
+      webinarParticipants.find((participant) => participant.audioStream) ??
+      webinarParticipants[0];
+    const cameraStream = getLiveVideoStream(cameraParticipant.videoStream);
+    const mainAudioStream = cameraParticipant.audioStream ?? fallbackAudioStream;
 
     return {
-      participant: {
-        ...sourceParticipant,
-        videoStream,
-        audioStream,
-        isCameraOff: !videoStream,
+      main: {
+        participant: {
+          ...cameraParticipant,
+          videoStream: cameraStream,
+          screenShareStream: null,
+          audioStream: mainAudioStream,
+          isCameraOff: !cameraStream,
+        },
+        displayName: resolveDisplayName(cameraParticipant.userId),
       },
-      displayName: resolveDisplayName(sourceParticipant.userId),
+      pip: null,
+      isScreenShare: false,
     };
   }, [activeScreenShareId, resolveDisplayName, webinarParticipants]);
 
@@ -468,16 +530,25 @@ function MobileMeetsMainContent({
       <div className="flex-1 min-h-0 pb-20">
         {isWebinarAttendee ? (
           <div className="flex h-full items-center justify-center px-4">
-            {webinarFocusedParticipant ? (
-              <div className="h-[66vh] w-full max-w-3xl">
+            {webinarStage ? (
+              <div className="relative h-[66vh] w-full max-w-3xl">
                 <ParticipantVideo
-                  participant={webinarFocusedParticipant.participant}
-                  displayName={webinarFocusedParticipant.displayName}
+                  participant={webinarStage.main.participant}
+                  displayName={webinarStage.main.displayName}
                   isActiveSpeaker={
-                    activeSpeakerId === webinarFocusedParticipant.participant.userId
+                    activeSpeakerId === webinarStage.main.participant.userId
                   }
                   audioOutputDeviceId={audioOutputDeviceId}
+                  videoObjectFit={webinarStage.isScreenShare ? "contain" : "cover"}
                 />
+                {webinarStage.pip ? (
+                  <div className="pointer-events-none absolute bottom-3 right-3 h-24 w-36 overflow-hidden rounded-xl border border-[#FEFCD9]/20 bg-black/75 shadow-[0_12px_24px_rgba(0,0,0,0.45)]">
+                    <ParticipantVideo
+                      participant={webinarStage.pip.participant}
+                      displayName={webinarStage.pip.displayName}
+                    />
+                  </div>
+                ) : null}
               </div>
             ) : (
               <div className="rounded-xl border border-white/10 bg-black/40 px-5 py-4 text-center">

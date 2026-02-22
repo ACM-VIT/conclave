@@ -146,6 +146,15 @@ interface MeetsMainContentProps {
   onRotateWebinarLink?: () => Promise<WebinarLinkResponse | null>;
 }
 
+const getLiveVideoStream = (stream: MediaStream | null): MediaStream | null => {
+  if (!stream) return null;
+  const [track] = stream.getVideoTracks();
+  if (!track || track.readyState === "ended") {
+    return null;
+  }
+  return stream;
+};
+
 export default function MeetsMainContent({
   isJoined,
   connectionState,
@@ -287,7 +296,8 @@ export default function MeetsMainContent({
       ),
     [participantsArray],
   );
-  const webinarFocusedParticipant = useMemo(() => {
+
+  const webinarStage = useMemo(() => {
     if (!nonSystemParticipants.length) {
       return null;
     }
@@ -296,30 +306,82 @@ export default function MeetsMainContent({
       ? nonSystemParticipants.find(
           (participant) =>
             participant.screenShareProducerId === activeScreenShareId &&
-            participant.screenShareStream,
+            getLiveVideoStream(participant.screenShareStream),
         )
       : null;
     const byAnyScreenShare = nonSystemParticipants.find(
-      (participant) => participant.screenShareStream,
+      (participant) => getLiveVideoStream(participant.screenShareStream),
     );
+    const fallbackAudioStream =
+      nonSystemParticipants.find((participant) => participant.audioStream)
+        ?.audioStream ?? null;
+    const screenShareParticipant = byScreenShareId ?? byAnyScreenShare;
 
-    const sourceParticipant =
-      byScreenShareId ?? byAnyScreenShare ?? nonSystemParticipants[0];
-    const videoStream =
-      sourceParticipant.screenShareStream ?? sourceParticipant.videoStream;
-    const fallbackAudioStream = nonSystemParticipants.find(
-      (participant) => participant.audioStream,
-    )?.audioStream;
-    const audioStream = sourceParticipant.audioStream ?? fallbackAudioStream ?? null;
+    if (screenShareParticipant) {
+      const screenShareStream =
+        getLiveVideoStream(screenShareParticipant.screenShareStream);
+      if (screenShareStream) {
+        const mainAudioStream =
+          screenShareParticipant.audioStream ?? fallbackAudioStream;
+        const presenterCameraStream = getLiveVideoStream(
+          screenShareParticipant.videoStream,
+        );
+
+        return {
+          main: {
+            participant: {
+              ...screenShareParticipant,
+              videoStream: screenShareStream,
+              audioStream: mainAudioStream,
+              isCameraOff: false,
+            },
+            displayName: resolveDisplayName(screenShareParticipant.userId),
+          },
+          pip: presenterCameraStream
+            ? {
+                participant: {
+                  ...screenShareParticipant,
+                  videoStream: presenterCameraStream,
+                  screenShareStream: null,
+                  audioStream: null,
+                  isMuted: true,
+                  isCameraOff: false,
+                },
+                displayName: resolveDisplayName(screenShareParticipant.userId),
+              }
+            : null,
+          isScreenShare: true,
+        };
+      }
+    }
+
+    const cameraParticipant =
+      nonSystemParticipants.find(
+        (participant) =>
+          !participant.isCameraOff &&
+          getLiveVideoStream(participant.videoStream),
+      ) ??
+      nonSystemParticipants.find((participant) =>
+        getLiveVideoStream(participant.videoStream),
+      ) ??
+      nonSystemParticipants.find((participant) => participant.audioStream) ??
+      nonSystemParticipants[0];
+    const cameraStream = getLiveVideoStream(cameraParticipant.videoStream);
+    const mainAudioStream = cameraParticipant.audioStream ?? fallbackAudioStream;
 
     return {
-      participant: {
-        ...sourceParticipant,
-        videoStream,
-        audioStream,
-        isCameraOff: !videoStream,
+      main: {
+        participant: {
+          ...cameraParticipant,
+          videoStream: cameraStream,
+          screenShareStream: null,
+          audioStream: mainAudioStream,
+          isCameraOff: !cameraStream,
+        },
+        displayName: resolveDisplayName(cameraParticipant.userId),
       },
-      displayName: resolveDisplayName(sourceParticipant.userId),
+      pip: null,
+      isScreenShare: false,
     };
   }, [activeScreenShareId, nonSystemParticipants, resolveDisplayName]);
   const visibleParticipantCount = nonSystemParticipants.length;
@@ -452,16 +514,25 @@ export default function MeetsMainContent({
         )
       ) : isWebinarAttendee ? (
         <div className="flex flex-1 items-center justify-center p-4">
-          {webinarFocusedParticipant ? (
-            <div className="h-[72vh] w-full max-w-6xl">
+          {webinarStage ? (
+            <div className="relative h-[72vh] w-full max-w-6xl">
               <ParticipantVideo
-                participant={webinarFocusedParticipant.participant}
-                displayName={webinarFocusedParticipant.displayName}
+                participant={webinarStage.main.participant}
+                displayName={webinarStage.main.displayName}
                 isActiveSpeaker={
-                  activeSpeakerId === webinarFocusedParticipant.participant.userId
+                  activeSpeakerId === webinarStage.main.participant.userId
                 }
                 audioOutputDeviceId={audioOutputDeviceId}
+                videoObjectFit={webinarStage.isScreenShare ? "contain" : "cover"}
               />
+              {webinarStage.pip ? (
+                <div className="pointer-events-none absolute bottom-4 right-4 h-28 w-44 overflow-hidden rounded-xl border border-[#FEFCD9]/20 bg-black/75 shadow-[0_16px_36px_rgba(0,0,0,0.5)] sm:h-32 sm:w-56">
+                  <ParticipantVideo
+                    participant={webinarStage.pip.participant}
+                    displayName={webinarStage.pip.displayName}
+                  />
+                </div>
+              ) : null}
             </div>
           ) : (
             <div className="rounded-xl border border-white/10 bg-black/40 px-6 py-4 text-center">

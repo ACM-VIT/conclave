@@ -99,6 +99,14 @@ interface CallScreenProps {
 const columnWrapperStyle = { gap: 12 } as const;
 const columnWrapperStyleTablet = { gap: 16 } as const;
 const observerAudioStyle = { width: 1, height: 1, opacity: 0 };
+const getLiveVideoStream = (stream: MediaStream | null): MediaStream | null => {
+  if (!stream) return null;
+  const [track] = stream.getVideoTracks();
+  if (!track || track.readyState === "ended") {
+    return null;
+  }
+  return stream;
+};
 
 export function CallScreen({
   roomId,
@@ -223,7 +231,7 @@ export function CallScreen({
       ),
     [participants]
   );
-  const webinarFocusedParticipant = useMemo(() => {
+  const webinarStage = useMemo(() => {
     if (!webinarParticipants.length) {
       return null;
     }
@@ -231,30 +239,56 @@ export function CallScreen({
     const byPresentedScreen = presentationStream
       ? webinarParticipants.find(
           (participant) =>
-            participant.screenShareStream?.id === presentationStream.id
+            participant.screenShareStream?.id === presentationStream.id &&
+            getLiveVideoStream(participant.screenShareStream)
         )
       : null;
     const byAnyScreenShare = webinarParticipants.find(
-      (participant) => participant.screenShareStream
+      (participant) => getLiveVideoStream(participant.screenShareStream)
     );
+    const fallbackAudioStream =
+      webinarParticipants.find((participant) => participant.audioStream)
+        ?.audioStream ?? null;
+    const screenShareParticipant = byPresentedScreen ?? byAnyScreenShare;
 
-    const sourceParticipant =
-      byPresentedScreen ?? byAnyScreenShare ?? webinarParticipants[0];
-    const videoStream =
-      presentationStream ??
-      sourceParticipant.screenShareStream ??
-      sourceParticipant.videoStream;
-    const fallbackAudioStream = webinarParticipants.find(
-      (participant) => participant.audioStream
-    )?.audioStream;
-    const audioStream = sourceParticipant.audioStream ?? fallbackAudioStream ?? null;
+    if (screenShareParticipant) {
+      const mainVideoStream =
+        getLiveVideoStream(presentationStream) ??
+        getLiveVideoStream(screenShareParticipant.screenShareStream);
+      if (mainVideoStream) {
+        return {
+          mainVideoStream,
+          mainAudioStream:
+            screenShareParticipant.audioStream ?? fallbackAudioStream,
+          displayName:
+            presenterName || resolveDisplayName(screenShareParticipant.userId),
+          pipVideoStream: getLiveVideoStream(screenShareParticipant.videoStream),
+          pipDisplayName: resolveDisplayName(screenShareParticipant.userId),
+          isScreenShare: true,
+        };
+      }
+    }
+
+    const cameraParticipant =
+      webinarParticipants.find(
+        (participant) =>
+          !participant.isCameraOff &&
+          getLiveVideoStream(participant.videoStream)
+      ) ??
+      webinarParticipants.find((participant) =>
+        getLiveVideoStream(participant.videoStream)
+      ) ??
+      webinarParticipants.find((participant) => participant.audioStream) ??
+      webinarParticipants[0];
+    const cameraStream = getLiveVideoStream(cameraParticipant.videoStream);
 
     return {
-      participant: sourceParticipant,
-      videoStream,
-      audioStream,
-      displayName:
-        presenterName || resolveDisplayName(sourceParticipant.userId),
+      mainVideoStream: cameraStream,
+      mainAudioStream: cameraParticipant.audioStream ?? fallbackAudioStream,
+      displayName: presenterName || resolveDisplayName(cameraParticipant.userId),
+      pipVideoStream: null,
+      pipDisplayName: "",
+      isScreenShare: false,
     };
   }, [presentationStream, presenterName, resolveDisplayName, webinarParticipants]);
 
@@ -488,12 +522,12 @@ export function CallScreen({
             ]}
           >
             <RNView style={styles.presentationStage}>
-              {webinarFocusedParticipant?.videoStream ? (
+              {webinarStage?.mainVideoStream ? (
                 <RTCView
-                  streamURL={webinarFocusedParticipant.videoStream.toURL()}
+                  streamURL={webinarStage.mainVideoStream.toURL()}
                   style={styles.presentationVideo}
                   mirror={false}
-                  objectFit="contain"
+                  objectFit={webinarStage.isScreenShare ? "contain" : "cover"}
                 />
               ) : (
                 <RNView style={styles.observerFallback}>
@@ -502,19 +536,34 @@ export function CallScreen({
                   </Text>
                 </RNView>
               )}
-              {webinarFocusedParticipant?.audioStream ? (
+              {webinarStage?.mainAudioStream ? (
                 <RTCView
-                  streamURL={webinarFocusedParticipant.audioStream.toURL()}
+                  streamURL={webinarStage.mainAudioStream.toURL()}
                   style={styles.observerAudio}
                   mirror={false}
                   objectFit="contain"
                 />
               ) : null}
-              {webinarFocusedParticipant ? (
+              {webinarStage ? (
                 <RNView style={styles.presenterBadge}>
                   <Text style={styles.presenterText}>
-                    {webinarFocusedParticipant.displayName}
+                    {webinarStage.displayName}
                   </Text>
+                </RNView>
+              ) : null}
+              {webinarStage?.isScreenShare && webinarStage.pipVideoStream ? (
+                <RNView style={styles.observerPip}>
+                  <RTCView
+                    streamURL={webinarStage.pipVideoStream.toURL()}
+                    style={styles.observerPipVideo}
+                    mirror={false}
+                    objectFit="cover"
+                  />
+                  <RNView style={styles.observerPipBadge}>
+                    <Text style={styles.observerPipText}>
+                      {webinarStage.pipDisplayName}
+                    </Text>
+                  </RNView>
                 </RNView>
               ) : null}
             </RNView>
@@ -831,6 +880,41 @@ const styles = StyleSheet.create({
     color: COLORS.cream,
     letterSpacing: 2,
     fontWeight: "500",
+    textTransform: "uppercase",
+    fontFamily: "PolySans-Mono",
+  },
+  observerPip: {
+    position: "absolute",
+    right: 12,
+    bottom: 12,
+    width: 132,
+    height: 84,
+    borderRadius: 12,
+    overflow: "hidden",
+    borderWidth: 1,
+    borderColor: "rgba(254, 252, 217, 0.2)",
+    backgroundColor: "rgba(0, 0, 0, 0.75)",
+  },
+  observerPipVideo: {
+    width: "100%",
+    height: "100%",
+  },
+  observerPipBadge: {
+    position: "absolute",
+    left: 6,
+    right: 6,
+    bottom: 6,
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+    borderRadius: 999,
+    backgroundColor: "rgba(0, 0, 0, 0.62)",
+    borderWidth: 1,
+    borderColor: "rgba(254, 252, 217, 0.16)",
+  },
+  observerPipText: {
+    fontSize: 9,
+    color: COLORS.cream,
+    letterSpacing: 1.2,
     textTransform: "uppercase",
     fontFamily: "PolySans-Mono",
   },

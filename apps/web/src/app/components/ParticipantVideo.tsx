@@ -14,6 +14,7 @@ interface ParticipantVideoProps {
   isAdmin?: boolean;
   isSelected?: boolean;
   onAdminClick?: (userId: string) => void;
+  videoObjectFit?: "cover" | "contain";
 }
 
 function ParticipantVideo({
@@ -25,6 +26,7 @@ function ParticipantVideo({
   isAdmin = false,
   isSelected = false,
   onAdminClick,
+  videoObjectFit = "cover",
 }: ParticipantVideoProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -153,7 +155,9 @@ function ParticipantVideo({
         ref={videoRef}
         autoPlay
         playsInline
-        className={`w-full h-full object-cover ${
+        className={`w-full h-full ${
+          videoObjectFit === "contain" ? "object-contain bg-black" : "object-cover"
+        } ${
           showPlaceholder ? "hidden" : ""
         }`}
       />

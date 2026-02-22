@@ -405,6 +405,15 @@ export class Room {
     return false;
   }
 
+  private clientHasUnpausedWebcamVideo(client: Client): boolean {
+    for (const info of client.getProducerInfos()) {
+      if (info.kind === "video" && info.type === "webcam" && !info.paused) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   private getClientFeedProducers(userId: string | null): ProducerInfo[] {
     if (!userId) return [];
     const client = this.clients.get(userId);
@@ -480,6 +489,24 @@ export class Room {
 
     for (const [userId, client] of candidates) {
       if (this.clientHasUnpausedWebcamAudio(client)) {
+        return userId;
+      }
+    }
+
+    if (this.webinarActiveSpeakerUserId) {
+      const current = this.clients.get(this.webinarActiveSpeakerUserId);
+      if (
+        current &&
+        !current.isGhost &&
+        !current.isWebinarAttendee &&
+        this.clientHasUnpausedWebcamVideo(current)
+      ) {
+        return this.webinarActiveSpeakerUserId;
+      }
+    }
+
+    for (const [userId, client] of candidates) {
+      if (this.clientHasUnpausedWebcamVideo(client)) {
         return userId;
       }
     }
