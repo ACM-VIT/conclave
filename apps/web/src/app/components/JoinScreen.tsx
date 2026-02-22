@@ -26,6 +26,7 @@ import {
   ROOM_CODE_MAX_LENGTH,
   extractRoomCode,
   getRoomWordSuggestions,
+  sanitizeInstitutionDisplayName,
   sanitizeRoomCodeInput,
   sanitizeRoomCode,
 } from "../lib/utils";
@@ -181,7 +182,10 @@ function JoinScreen({
       const sessionUser = {
         id: session.user.id,
         email: session.user.email || "",
-        name: session.user.name || session.user.email || "User",
+        name: sanitizeInstitutionDisplayName(
+          session.user.name || session.user.email || "User",
+          session.user.email || ""
+        ),
       };
       onUserChange(sessionUser);
       setPhase("join");
