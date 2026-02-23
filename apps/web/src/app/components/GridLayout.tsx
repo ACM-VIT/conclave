@@ -1,7 +1,7 @@
 "use client";
 
 import { Ghost, Hand, MicOff } from "lucide-react";
-import { memo, useEffect, useMemo, useRef } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef } from "react";
 import type { Participant } from "../lib/types";
 import { isSystemUserId, reorderOverflowActiveSpeakers } from "../lib/utils";
 import ParticipantVideo from "./ParticipantVideo";
@@ -57,17 +57,33 @@ function GridLayout({
   const overflowSpeakerHistoryRef = useRef<string[]>([]);
   const isLocalActiveSpeaker = activeSpeakerId === currentUserId;
 
-  useEffect(() => {
-    const video = localVideoRef.current;
-    if (video && localStream) {
+  const syncLocalVideoStream = useCallback(
+    (video: HTMLVideoElement | null) => {
+      if (!video) return;
+
       video.srcObject = localStream;
+      if (!localStream) return;
+
       video.play().catch((err) => {
         if (err.name !== "AbortError") {
           console.error("[Meets] Grid local video play error:", err);
         }
       });
-    }
-  }, [localStream]);
+    },
+    [localStream]
+  );
+
+  const setLocalVideoRef = useCallback(
+    (video: HTMLVideoElement | null) => {
+      localVideoRef.current = video;
+      syncLocalVideoStream(video);
+    },
+    [syncLocalVideoStream]
+  );
+
+  useEffect(() => {
+    syncLocalVideoStream(localVideoRef.current);
+  }, [syncLocalVideoStream]);
 
   const remoteParticipants = useMemo(
     () =>
@@ -149,7 +165,7 @@ function GridLayout({
               style={{ fontFamily: "'PolySans Trial', sans-serif" }}
             >
               <video
-                ref={localVideoRef}
+                ref={setLocalVideoRef}
                 autoPlay
                 muted
                 playsInline
