@@ -56,6 +56,11 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
         }
 
         context.currentClient.addProducer(producer);
+        await context.currentRoom.registerWebinarAudioProducer(
+          context.currentClient.id,
+          producer,
+          type,
+        );
 
         for (const [clientId, client] of context.currentRoom.clients) {
           if (clientId === context.currentClient.id || client.isWebinarAttendee) {

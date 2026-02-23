@@ -410,6 +410,9 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         }
 
         context.currentRoom = room;
+        context.currentRoom.setWebinarFeedRefreshNotifier((targetRoom) => {
+          emitWebinarFeedChanged(io, targetRoom);
+        });
         context.pendingRoomId = null;
         context.pendingRoomChannelId = null;
         context.pendingUserKey = null;

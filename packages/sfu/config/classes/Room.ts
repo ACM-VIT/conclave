@@ -1,4 +1,5 @@
 import type {
+  AudioLevelObserver,
   MediaKind,
   PlainTransport,
   Producer,
@@ -31,6 +32,9 @@ type AppAwarenessRemoval = {
   appId: string;
   awarenessUpdate: Uint8Array;
 };
+
+const WEBINAR_AUDIO_LEVEL_THRESHOLD = -70;
+const WEBINAR_AUDIO_LEVEL_INTERVAL_MS = 350;
 
 const getAwarenessStateUserId = (state: unknown): string | null => {
   if (!state || typeof state !== "object" || Array.isArray(state)) {
@@ -107,7 +111,12 @@ export class Room {
     { producer: Producer; userId: string; type: ProducerType }
   > = new Map();
   private webinarActiveSpeakerUserId: string | null = null;
+  private webinarDominantSpeakerUserId: string | null = null;
   private webinarFeedProducerIds: string[] = [];
+  private webinarAudioLevelObserver: AudioLevelObserver | null = null;
+  private webinarAudioLevelObserverInit: Promise<void> | null = null;
+  private webinarWebcamAudioProducerOwners: Map<string, string> = new Map();
+  private webinarFeedRefreshNotifier: ((room: Room) => void) | null = null;
 
   constructor(options: RoomOptions) {
     this.id = options.id;
@@ -177,11 +186,18 @@ export class Room {
       this.pendingDisconnects.delete(clientId);
     }
     if (client) {
+      this.clearWebinarAudioProducersForUser(clientId);
       client.close();
       this.clients.delete(clientId);
     }
     this.userKeysById.delete(clientId);
     this.handRaisedByUserId.delete(clientId);
+    if (this.webinarActiveSpeakerUserId === clientId) {
+      this.webinarActiveSpeakerUserId = null;
+    }
+    if (this.webinarDominantSpeakerUserId === clientId) {
+      this.webinarDominantSpeakerUserId = null;
+    }
     return client;
   }
 
@@ -257,6 +273,186 @@ export class Room {
     }
 
     return transport;
+  }
+
+  setWebinarFeedRefreshNotifier(
+    notifier: ((room: Room) => void) | null,
+  ): void {
+    this.webinarFeedRefreshNotifier = notifier;
+  }
+
+  private requestWebinarFeedRefresh(): void {
+    try {
+      this.webinarFeedRefreshNotifier?.(this);
+    } catch (error) {
+      Logger.error(
+        `Room ${this.id}: Failed to notify webinar feed refresh`,
+        error,
+      );
+    }
+  }
+
+  private async ensureWebinarAudioLevelObserver(): Promise<void> {
+    if (this.webinarAudioLevelObserver) {
+      return;
+    }
+
+    if (!this.webinarAudioLevelObserverInit) {
+      this.webinarAudioLevelObserverInit = (async () => {
+        try {
+          const observer = await this.router.createAudioLevelObserver({
+            maxEntries: 1,
+            threshold: WEBINAR_AUDIO_LEVEL_THRESHOLD,
+            interval: WEBINAR_AUDIO_LEVEL_INTERVAL_MS,
+          });
+
+          observer.on("volumes", (volumes) => {
+            const loudestProducer = volumes[0]?.producer;
+            if (!loudestProducer) {
+              return;
+            }
+
+            const ownerUserId = this.webinarWebcamAudioProducerOwners.get(
+              loudestProducer.id,
+            );
+            if (!ownerUserId) {
+              return;
+            }
+
+            const ownerClient = this.clients.get(ownerUserId);
+            if (
+              !ownerClient ||
+              ownerClient.isGhost ||
+              ownerClient.isWebinarAttendee ||
+              !this.clientHasUnpausedWebcamAudio(ownerClient)
+            ) {
+              return;
+            }
+
+            if (this.webinarDominantSpeakerUserId === ownerUserId) {
+              return;
+            }
+
+            this.webinarDominantSpeakerUserId = ownerUserId;
+            this.requestWebinarFeedRefresh();
+          });
+
+          observer.on("silence", () => {
+            if (!this.webinarDominantSpeakerUserId) {
+              return;
+            }
+
+            const dominantClient = this.clients.get(
+              this.webinarDominantSpeakerUserId,
+            );
+            if (
+              dominantClient &&
+              !dominantClient.isGhost &&
+              !dominantClient.isWebinarAttendee &&
+              this.clientHasUnpausedWebcamAudio(dominantClient)
+            ) {
+              return;
+            }
+
+            this.webinarDominantSpeakerUserId = null;
+            this.requestWebinarFeedRefresh();
+          });
+
+          this.webinarAudioLevelObserver = observer;
+        } catch (error) {
+          Logger.warn(
+            `Room ${this.id}: Failed to initialize audio level observer`,
+            error,
+          );
+        } finally {
+          this.webinarAudioLevelObserverInit = null;
+        }
+      })();
+    }
+
+    await this.webinarAudioLevelObserverInit;
+  }
+
+  async registerWebinarAudioProducer(
+    userId: string,
+    producer: Producer,
+    type: ProducerType,
+  ): Promise<void> {
+    if (type !== "webcam" || producer.kind !== "audio") {
+      return;
+    }
+
+    await this.ensureWebinarAudioLevelObserver();
+    if (!this.webinarAudioLevelObserver) {
+      return;
+    }
+
+    this.webinarWebcamAudioProducerOwners.set(producer.id, userId);
+
+    try {
+      await this.webinarAudioLevelObserver.addProducer({
+        producerId: producer.id,
+      });
+    } catch (error) {
+      this.webinarWebcamAudioProducerOwners.delete(producer.id);
+      Logger.warn(
+        `Room ${this.id}: Failed to observe webinar audio producer ${producer.id}`,
+        error,
+      );
+      return;
+    }
+
+    let cleaned = false;
+    const cleanup = () => {
+      if (cleaned) return;
+      cleaned = true;
+      void this.unregisterWebinarAudioProducer(producer.id);
+    };
+
+    producer.on("transportclose", cleanup);
+    producer.observer.on("close", cleanup);
+  }
+
+  private async unregisterWebinarAudioProducer(
+    producerId: string,
+  ): Promise<void> {
+    const ownerUserId = this.webinarWebcamAudioProducerOwners.get(producerId);
+    this.webinarWebcamAudioProducerOwners.delete(producerId);
+
+    if (this.webinarAudioLevelObserver) {
+      try {
+        await this.webinarAudioLevelObserver.removeProducer({ producerId });
+      } catch {
+        // Ignore remove races when producer already disappeared.
+      }
+    }
+
+    if (
+      ownerUserId &&
+      this.webinarDominantSpeakerUserId === ownerUserId &&
+      !Array.from(this.webinarWebcamAudioProducerOwners.values()).some(
+        (value) => value === ownerUserId,
+      )
+    ) {
+      this.webinarDominantSpeakerUserId = null;
+      this.requestWebinarFeedRefresh();
+    }
+  }
+
+  private clearWebinarAudioProducersForUser(userId: string): void {
+    const producerIds = Array.from(
+      this.webinarWebcamAudioProducerOwners.entries(),
+    )
+      .filter(([, ownerUserId]) => ownerUserId === userId)
+      .map(([producerId]) => producerId);
+
+    for (const producerId of producerIds) {
+      void this.unregisterWebinarAudioProducer(producerId);
+    }
+
+    if (this.webinarDominantSpeakerUserId === userId) {
+      this.webinarDominantSpeakerUserId = null;
+    }
   }
 
   async createPlainTransport(): Promise<PlainTransport> {
@@ -524,6 +720,19 @@ export class Room {
 
     if (!candidates.length) {
       return null;
+    }
+
+    if (this.webinarDominantSpeakerUserId) {
+      const dominant = this.clients.get(this.webinarDominantSpeakerUserId);
+      if (
+        dominant &&
+        !dominant.isGhost &&
+        !dominant.isWebinarAttendee &&
+        this.clientHasUnpausedWebcamAudio(dominant)
+      ) {
+        return this.webinarDominantSpeakerUserId;
+      }
+      this.webinarDominantSpeakerUserId = null;
     }
 
     if (this.webinarActiveSpeakerUserId) {
@@ -837,10 +1046,22 @@ export class Room {
     }
     this.clients.clear();
     this.clearApps();
+    if (this.webinarAudioLevelObserver) {
+      try {
+        this.webinarAudioLevelObserver.close();
+      } catch {
+        // ignore
+      }
+      this.webinarAudioLevelObserver = null;
+    }
+    this.webinarAudioLevelObserverInit = null;
+    this.webinarWebcamAudioProducerOwners.clear();
+    this.webinarFeedRefreshNotifier = null;
     this.router.close();
     this.userKeysById.clear();
     this.displayNamesByKey.clear();
     this.webinarActiveSpeakerUserId = null;
+    this.webinarDominantSpeakerUserId = null;
     this.webinarFeedProducerIds = [];
     this._meetingInviteCodeHash = null;
   }
