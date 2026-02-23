@@ -368,25 +368,39 @@ function MobileJoinScreen({
   // Welcome phase
   if (phase === "welcome") {
     return (
-      <div className="flex-1 flex flex-col items-center justify-center px-6 bg-gradient-to-b from-[#101010] via-[#0d0e0d] to-[#0b0c0c] safe-area-pt relative overflow-hidden">
+      <div className="flex-1 flex flex-col items-center justify-center px-6 bg-[#060606] safe-area-pt relative overflow-hidden">
         <div className="absolute inset-0 acm-bg-radial pointer-events-none" />
         <div className="absolute inset-0 acm-bg-dot-grid pointer-events-none" />
         <div className="relative z-10 text-center mb-8">
           <div
-            className="text-xs text-[#FEFCD9]/40 uppercase tracking-widest mb-3"
+            className="text-[11px] text-[#FEFCD9]/40 uppercase tracking-[0.4em] mb-4"
             style={{ fontFamily: "'PolySans Mono', monospace" }}
           >
             welcome to
           </div>
-          <h1
-            className="text-4xl text-[#FEFCD9] tracking-tight"
-            style={{ fontFamily: "'PolySans Bulky Wide', sans-serif" }}
-          >
-            c0nclav3
-          </h1>
+          <div className="flex items-center justify-center gap-2">
+            <span
+              className="text-3xl text-[#F95F4A]/70"
+              style={{ fontFamily: "'PolySans Mono', monospace" }}
+            >
+              [
+            </span>
+            <h1
+              className="text-5xl text-[#FEFCD9] tracking-tight"
+              style={{ fontFamily: "'PolySans Bulky Wide', sans-serif" }}
+            >
+              c0nclav3
+            </h1>
+            <span
+              className="text-3xl text-[#F95F4A]/70"
+              style={{ fontFamily: "'PolySans Mono', monospace" }}
+            >
+              ]
+            </span>
+          </div>
         </div>
         <p
-          className="relative z-10 text-sm text-[#FEFCD9]/30 mb-10 text-center"
+          className="relative z-10 text-sm text-[#FEFCD9]/40 mb-10 text-center max-w-[320px]"
           style={{ fontFamily: "'PolySans Trial', sans-serif" }}
         >
           ACM-VIT's in-house video conferencing platform
@@ -394,7 +408,7 @@ function MobileJoinScreen({
 
         <button
           onClick={() => setManualPhase("auth")}
-          className="relative z-10 flex items-center gap-3 px-8 py-3 bg-[#F95F4A] text-white text-xs uppercase tracking-widest rounded-lg active:scale-95 transition-all hover:bg-[#e8553f]"
+          className="relative z-10 flex items-center gap-3 px-8 py-3 bg-[#F95F4A] text-white text-[11px] uppercase tracking-[0.3em] rounded-full active:scale-95 transition-all hover:bg-[#e8553f]"
           style={{ fontFamily: "'PolySans Mono', monospace" }}
         >
           <span>LET'S GO</span>
@@ -407,12 +421,12 @@ function MobileJoinScreen({
   // Auth phase
   if (phase === "auth") {
     return (
-      <div className="flex-1 flex flex-col px-6 py-8 bg-gradient-to-b from-[#101010] via-[#0d0e0d] to-[#0b0c0c] safe-area-pt relative overflow-hidden">
+      <div className="flex-1 flex flex-col px-6 py-8 bg-[#060606] safe-area-pt relative overflow-hidden">
         <div className="absolute inset-0 acm-bg-radial pointer-events-none" />
         <div className="absolute inset-0 acm-bg-dot-grid pointer-events-none" />
         <button
           onClick={() => setManualPhase("welcome")}
-          className="relative z-10 text-[11px] text-[#FEFCD9]/30 uppercase tracking-widest mb-8"
+          className="relative z-10 text-[10px] text-[#FEFCD9]/60 uppercase tracking-[0.3em] mb-8 mobile-glass-soft mobile-pill px-3 py-1 self-start"
           style={{ fontFamily: "'PolySans Mono', monospace" }}
         >
           ← back
@@ -436,7 +450,7 @@ function MobileJoinScreen({
             <button
               onClick={() => handleSocialSignIn("google")}
               disabled={isSigningIn}
-              className="w-full flex items-center justify-center gap-3 px-4 py-3 bg-[#1a1a1a] border border-[#FEFCD9]/10 text-[#FEFCD9] rounded-lg hover:border-[#FEFCD9]/25 hover:bg-[#1a1a1a]/80 transition-all disabled:opacity-50"
+              className="w-full flex items-center justify-center gap-3 px-4 py-3 mobile-glass mobile-pill text-[#FEFCD9] hover:border-[#FEFCD9]/25 hover:bg-black/40 transition-all disabled:opacity-50"
             >
               {signInProvider === "google" ? (
                 <Loader2 className="w-5 h-5 animate-spin text-[#FEFCD9]" />
@@ -467,7 +481,7 @@ function MobileJoinScreen({
             <button
               onClick={() => handleSocialSignIn("apple")}
               disabled={isSigningIn}
-              className="w-full flex items-center justify-center gap-3 px-4 py-3 bg-[#1a1a1a] border border-[#FEFCD9]/10 text-[#FEFCD9] rounded-lg hover:border-[#FEFCD9]/25 hover:bg-[#1a1a1a]/80 transition-all disabled:opacity-50"
+              className="w-full flex items-center justify-center gap-3 px-4 py-3 mobile-glass mobile-pill text-[#FEFCD9] hover:border-[#FEFCD9]/25 hover:bg-black/40 transition-all disabled:opacity-50"
             >
               {signInProvider === "apple" ? (
                 <Loader2 className="w-5 h-5 animate-spin text-[#FEFCD9]" />
@@ -486,7 +500,7 @@ function MobileJoinScreen({
             <button
               onClick={() => handleSocialSignIn("roblox")}
               disabled={isSigningIn}
-              className="w-full flex items-center justify-center gap-3 px-4 py-3 bg-[#1a1a1a] border border-[#FEFCD9]/10 text-[#FEFCD9] rounded-lg hover:border-[#FEFCD9]/25 hover:bg-[#1a1a1a]/80 transition-all disabled:opacity-50"
+              className="w-full flex items-center justify-center gap-3 px-4 py-3 mobile-glass mobile-pill text-[#FEFCD9] hover:border-[#FEFCD9]/25 hover:bg-black/40 transition-all disabled:opacity-50"
             >
               {signInProvider === "roblox" ? (
                 <Loader2 className="w-5 h-5 animate-spin text-[#FEFCD9]" />
@@ -505,7 +519,7 @@ function MobileJoinScreen({
             <button
               onClick={() => handleSocialSignIn("vercel")}
               disabled={isSigningIn}
-              className="w-full flex items-center justify-center gap-3 px-4 py-3 bg-[#1a1a1a] border border-[#FEFCD9]/10 text-[#FEFCD9] rounded-lg hover:border-[#FEFCD9]/25 hover:bg-[#1a1a1a]/80 transition-all disabled:opacity-50"
+              className="w-full flex items-center justify-center gap-3 px-4 py-3 mobile-glass mobile-pill text-[#FEFCD9] hover:border-[#FEFCD9]/25 hover:bg-black/40 transition-all disabled:opacity-50"
             >
               {signInProvider === "vercel" ? (
                 <Loader2 className="w-5 h-5 animate-spin text-[#FEFCD9]" />
@@ -540,7 +554,7 @@ function MobileJoinScreen({
             value={guestName}
             onChange={(e) => setGuestName(e.target.value)}
             placeholder="Enter your name"
-            className="w-full px-3 py-2.5 bg-[#1a1a1a] border border-[#FEFCD9]/10 rounded-lg text-sm text-[#FEFCD9] placeholder:text-[#FEFCD9]/25 focus:border-[#F95F4A]/50 focus:outline-none mb-3"
+            className="w-full px-4 py-2.5 mobile-glass mobile-pill text-sm text-[#FEFCD9] placeholder:text-[#FEFCD9]/25 focus:border-[#F95F4A]/50 focus:outline-none mb-3"
             style={{ fontFamily: "'PolySans Trial', sans-serif" }}
             onKeyDown={(e) => {
               if (e.key === "Enter" && guestName.trim()) handleGuest();
@@ -549,7 +563,7 @@ function MobileJoinScreen({
           <button
             onClick={handleGuest}
             disabled={!guestName.trim()}
-            className="w-full px-4 py-3 bg-[#F95F4A] text-white text-sm rounded-lg hover:bg-[#e8553f] transition-colors disabled:opacity-30"
+            className="w-full px-4 py-3 bg-[#F95F4A] text-white text-sm rounded-full hover:bg-[#e8553f] transition-colors disabled:opacity-30"
             style={{ fontFamily: "'PolySans Trial', sans-serif" }}
           >
             Continue as Guest
@@ -561,114 +575,106 @@ function MobileJoinScreen({
 
   // Join phase
   return (
-    <div className="flex-1 flex flex-col bg-gradient-to-b from-[#101010] via-[#0d0e0d] to-[#0b0c0c] safe-area-pt overflow-hidden relative">
+    <div className="flex-1 flex flex-col bg-[#060606] safe-area-pt overflow-hidden relative">
       <div className="absolute inset-0 acm-bg-radial pointer-events-none" />
       <div className="absolute inset-0 acm-bg-dot-grid pointer-events-none" />
       {/* Video preview */}
-      <div className="relative flex-1 bg-[#0d0e0d] overflow-hidden border border-[#FEFCD9]/10 rounded-xl mx-3 mt-3 shadow-2xl">
-        {isCameraOn && localStream ? (
-          <video
-            ref={videoRef}
-            autoPlay
-            muted
-            playsInline
-            className="w-full h-full object-cover scale-x-[-1]"
-          />
-        ) : (
-          <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-[#1a1a1a] to-[#0d0e0d]">
-            <div className="w-20 h-20 rounded-full bg-gradient-to-br from-[#F95F4A]/20 to-[#FF007A]/20 border border-[#FEFCD9]/20 flex items-center justify-center">
-              <span className="text-4xl text-[#FEFCD9] font-bold">
-                {userEmail[0]?.toUpperCase() || "?"}
-              </span>
+      <div className="relative flex-1 px-4 pt-3 pb-36 flex flex-col min-h-0">
+        <div className="relative flex-1 rounded-[28px] border border-[#FEFCD9]/10 bg-[#0d0e0d] overflow-hidden">
+          {isCameraOn && localStream ? (
+            <video
+              ref={videoRef}
+              autoPlay
+              muted
+              playsInline
+              className="w-full h-full object-cover scale-x-[-1]"
+            />
+          ) : (
+            <div className="absolute inset-0 flex items-center justify-center bg-[#0d0e0d]">
+              <div className="absolute inset-0 bg-gradient-to-br from-[#F95F4A]/15 to-[#FF007A]/10" />
+              <div className="relative w-20 h-20 rounded-full mobile-avatar flex items-center justify-center">
+                <span
+                  className="text-4xl text-[#FEFCD9] font-bold"
+                  style={{ fontFamily: "'PolySans Bulky Wide', sans-serif" }}
+                >
+                  {userEmail[0]?.toUpperCase() || "?"}
+                </span>
+              </div>
             </div>
-          </div>
-        )}
+          )}
 
-        {/* Camera/mic controls */}
-        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-2 bg-black/50 backdrop-blur-sm rounded-full px-2.5 py-2">
-          <button
-            onClick={toggleMic}
-            className={`w-10 h-10 rounded-full flex items-center justify-center transition-all active:scale-95 ${isMicOn ? "text-[#FEFCD9] hover:bg-white/10" : "bg-red-500 text-white"
-              }`}
-          >
-            {isMicOn ? <Mic className="w-4 h-4" /> : <MicOff className="w-4 h-4" />}
-          </button>
-          <button
-            onClick={toggleCamera}
-            className={`w-10 h-10 rounded-full flex items-center justify-center transition-all active:scale-95 ${isCameraOn ? "text-[#FEFCD9] hover:bg-white/10" : "bg-red-500 text-white"
-              }`}
-          >
-            {isCameraOn ? <Video className="w-4 h-4" /> : <VideoOff className="w-4 h-4" />}
-          </button>
-        </div>
-
-        {/* User email */}
-        <div className="absolute top-4 left-4 flex items-center gap-2 max-w-[70%]">
-          <div
-            className="min-w-0 px-3 py-1.5 bg-black/50 backdrop-blur-sm rounded-full text-xs text-[#FEFCD9]/70 truncate"
-            style={{ fontFamily: "'PolySans Mono', monospace" }}
-          >
-            {userEmail}
-          </div>
-          {canSignOut && (
+          {/* Camera/mic controls */}
+          <div className="absolute bottom-4 left-1/2 -translate-x-1/2 mobile-glass mobile-pill px-2.5 py-2 flex items-center gap-2">
             <button
-              onClick={handleSignOut}
-              disabled={isSigningOut}
-              className="shrink-0 px-2.5 py-1 bg-black/50 backdrop-blur-sm rounded-full text-[9px] uppercase tracking-widest text-[#FEFCD9]/70 active:bg-black/70 disabled:opacity-50"
+              onClick={toggleMic}
+              className={`w-9 h-9 rounded-full flex items-center justify-center transition-colors ${
+                isMicOn
+                  ? "text-white"
+                  : "bg-[#ef4444] text-white shadow-[0_0_12px_rgba(239,68,68,0.35)]"
+              }`}
+            >
+              {isMicOn ? (
+                <Mic className="w-[18px] h-[18px]" />
+              ) : (
+                <MicOff className="w-[18px] h-[18px]" />
+              )}
+            </button>
+            <button
+              onClick={toggleCamera}
+              className={`w-9 h-9 rounded-full flex items-center justify-center transition-colors ${
+                isCameraOn
+                  ? "text-white"
+                  : "bg-[#ef4444] text-white shadow-[0_0_12px_rgba(239,68,68,0.35)]"
+              }`}
+            >
+              {isCameraOn ? (
+                <Video className="w-[18px] h-[18px]" />
+              ) : (
+                <VideoOff className="w-[18px] h-[18px]" />
+              )}
+            </button>
+          </div>
+
+          {/* User email */}
+          <div className="absolute top-4 left-4 flex items-center gap-2 max-w-[70%]">
+            <div
+              className="min-w-0 px-3 py-1.5 mobile-glass mobile-pill text-xs text-[#FEFCD9]/70 truncate"
               style={{ fontFamily: "'PolySans Mono', monospace" }}
             >
-              {isSigningOut ? "Signing out..." : "Sign out"}
-            </button>
+              {userEmail}
+            </div>
+            {canSignOut && (
+              <button
+                onClick={handleSignOut}
+                disabled={isSigningOut}
+                className="shrink-0 px-2.5 py-1 mobile-glass-soft mobile-pill text-[9px] uppercase tracking-[0.2em] text-[#FEFCD9]/70 disabled:opacity-50"
+                style={{ fontFamily: "'PolySans Mono', monospace" }}
+              >
+                {isSigningOut ? "Signing out..." : "Sign out"}
+              </button>
+            )}
+          </div>
+
+          {showPermissionHint && (
+            <div className="absolute top-4 right-4 flex items-center gap-2 px-3 py-2 mobile-glass-soft rounded-full text-xs text-[#FEFCD9]/70">
+              <AlertCircle className="w-3.5 h-3.5 text-[#F95F4A]" />
+              Allow access
+            </div>
           )}
         </div>
-
-        {showPermissionHint && (
-          <div className="absolute top-4 right-4 flex items-center gap-2 px-3 py-2 rounded-lg bg-[#F95F4A]/10 border border-[#F95F4A]/20 text-xs text-[#FEFCD9]/70">
-            <AlertCircle className="w-3.5 h-3.5 text-[#F95F4A]" />
-            Allow access
-          </div>
-        )}
       </div>
 
       {/* Bottom controls */}
-      <div className="relative z-10 bg-[#0f0f0f]/95 px-4 pt-4 pb-[calc(1rem+env(safe-area-inset-bottom))] space-y-4 backdrop-blur-sm">
-        <div
-          className="flex flex-wrap items-center gap-2 text-[10px] uppercase tracking-wider"
-          style={{ fontFamily: "'PolySans Mono', monospace" }}
-        >
-          <span className="text-[#FEFCD9]/40">Preflight</span>
-          <div className="flex items-center gap-2 bg-black/40 border border-[#FEFCD9]/10 rounded-full px-3 py-1 text-[#FEFCD9]/70">
-            <span
-              className={`w-1.5 h-1.5 rounded-full ${isMicOn ? "bg-emerald-400" : "bg-[#F95F4A]"
-                }`}
-            />
-            Mic {isMicOn ? "On" : "Off"}
-          </div>
-          <div className="flex items-center gap-2 bg-black/40 border border-[#FEFCD9]/10 rounded-full px-3 py-1 text-[#FEFCD9]/70">
-            <span
-              className={`w-1.5 h-1.5 rounded-full ${isCameraOn ? "bg-emerald-400" : "bg-[#F95F4A]"
-                }`}
-            />
-            Camera {isCameraOn ? "On" : "Off"}
-          </div>
-          {onTestSpeaker && (
-            <button
-              type="button"
-              onClick={onTestSpeaker}
-              className="ml-auto flex items-center gap-2 bg-[#1a1a1a] border border-[#FEFCD9]/10 rounded-full px-3 py-1 text-[#FEFCD9]/70 hover:text-[#FEFCD9] hover:border-[#FEFCD9]/30 transition-colors"
-            >
-              Test speaker
-            </button>
-          )}
-        </div>
+      <div className="absolute bottom-0 left-0 right-0 z-10 px-4 pb-[calc(12px+env(safe-area-inset-bottom))]">
+        <div className="flex flex-col gap-3">
         {!isRoutedRoom && (
-          <div className="flex bg-[#1a1a1a] rounded-lg p-1">
+          <div className="flex mobile-glass mobile-pill p-1">
             <button
               onClick={() => {
                 setActiveTab("new");
                 onIsAdminChange(true);
               }}
-              className={`flex-1 py-2.5 text-xs uppercase tracking-wider rounded-md transition-all ${activeTab === "new"
+              className={`flex-1 py-2.5 text-xs uppercase tracking-[0.25em] rounded-full transition-all ${activeTab === "new"
                 ? "bg-[#F95F4A] text-white"
                 : "text-[#FEFCD9]/50"
                 }`}
@@ -681,7 +687,7 @@ function MobileJoinScreen({
                 setActiveTab("join");
                 onIsAdminChange(false);
               }}
-              className={`flex-1 py-2.5 text-xs uppercase tracking-wider rounded-md transition-all ${activeTab === "join"
+              className={`flex-1 py-2.5 text-xs uppercase tracking-[0.25em] rounded-full transition-all ${activeTab === "join"
                 ? "bg-[#F95F4A] text-white"
                 : "text-[#FEFCD9]/50"
                 }`}
@@ -692,82 +698,83 @@ function MobileJoinScreen({
           </div>
         )}
 
-        {activeTab === "new" && !isRoutedRoom ? (
-          <button
-            onClick={handleCreateRoom}
-            disabled={isLoading}
-            className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-[#F95F4A] text-white rounded-lg hover:bg-[#e8553f] transition-colors disabled:opacity-50"
-          >
-            {isLoading ? (
-              <Loader2 className="w-5 h-5 animate-spin" />
-            ) : (
-              <Plus className="w-5 h-5" />
-            )}
-            <span className="text-sm font-medium" style={{ fontFamily: "'PolySans Trial', sans-serif" }}>Start Meeting</span>
-          </button>
-        ) : (
-          <div className="space-y-3">
-            <div className="relative">
-              {suggestionSuffix && (
-                <div
-                  className="pointer-events-none absolute inset-0 px-3 py-2.5 text-sm text-[#FEFCD9]/30 truncate"
+        <div className="mobile-glass-soft mobile-pill p-1 h-[52px]">
+          {activeTab === "join" || isRoutedRoom ? (
+            <div className="flex items-center gap-2 h-full px-2">
+              <div className="relative flex-1 h-full">
+                {suggestionSuffix && (
+                  <div
+                    className="pointer-events-none absolute inset-0 px-2 flex items-center text-sm text-[#FEFCD9]/30 truncate"
+                    style={{ fontFamily: "'PolySans Trial', sans-serif" }}
+                  >
+                    <span className="text-transparent">{normalizedRoomId}</span>
+                    <span>{suggestionSuffix}</span>
+                  </div>
+                )}
+                <input
+                  type="text"
+                  value={normalizedRoomId}
+                  onChange={(e) =>
+                    onRoomIdChange(
+                      enforceShortCode
+                        ? sanitizeRoomCodeInput(e.target.value)
+                        : e.target.value
+                    )
+                  }
+                  placeholder="Paste room link or code"
+                  maxLength={enforceShortCode ? ROOM_CODE_MAX_LENGTH : undefined}
+                  disabled={isLoading}
+                  readOnly={isRoutedRoom}
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  className="relative w-full h-full bg-transparent px-2 text-sm text-[#FEFCD9] placeholder:text-[#FEFCD9]/30 focus:outline-none"
                   style={{ fontFamily: "'PolySans Trial', sans-serif" }}
-                >
-                  <span className="text-transparent">{normalizedRoomId}</span>
-                  <span>{suggestionSuffix}</span>
-                </div>
-              )}
-              <input
-                type="text"
-                value={normalizedRoomId}
-                onChange={(e) =>
-                  onRoomIdChange(
-                    enforceShortCode
-                      ? sanitizeRoomCodeInput(e.target.value)
-                      : e.target.value
-                  )
-                }
-                placeholder="Paste room link or code"
-                maxLength={enforceShortCode ? ROOM_CODE_MAX_LENGTH : undefined}
-                disabled={isLoading}
-                readOnly={isRoutedRoom}
-                autoCapitalize="none"
-                autoCorrect="off"
-                spellCheck={false}
-                className="relative w-full px-3 py-2.5 bg-[#1a1a1a] border border-[#FEFCD9]/10 rounded-lg text-sm text-[#FEFCD9] placeholder:text-[#FEFCD9]/30 focus:border-[#F95F4A]/50 focus:outline-none"
-                style={{ fontFamily: "'PolySans Trial', sans-serif" }}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && canJoin) handleJoin();
-                  if (e.key === "Tab" && suggestionSuffix) {
-                    e.preventDefault();
-                    applySuggestion(inlineSuggestion);
-                  }
-                }}
-                onPaste={(event) => {
-                  const text = event.clipboardData.getData("text");
-                  if (!text) return;
-                  const extracted = extractRoomCode(text);
-                  if (extracted) {
-                    event.preventDefault();
-                    onRoomIdChange(extracted);
-                  }
-                }}
-              />
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && canJoin) handleJoin();
+                    if (e.key === "Tab" && suggestionSuffix) {
+                      e.preventDefault();
+                      applySuggestion(inlineSuggestion);
+                    }
+                  }}
+                  onPaste={(event) => {
+                    const text = event.clipboardData.getData("text");
+                    if (!text) return;
+                    const extracted = extractRoomCode(text);
+                    if (extracted) {
+                      event.preventDefault();
+                      onRoomIdChange(extracted);
+                    }
+                  }}
+                />
+              </div>
+              <button
+                onClick={handleJoin}
+                disabled={!canJoin || isLoading}
+                className="w-9 h-9 rounded-full bg-[#F95F4A] text-white flex items-center justify-center disabled:opacity-40 transition-colors"
+              >
+                {isLoading ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <ArrowRight className="w-4 h-4" />
+                )}
+              </button>
             </div>
+          ) : (
             <button
-              onClick={handleJoin}
-              disabled={!canJoin || isLoading}
-              className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-[#F95F4A] text-white rounded-lg hover:bg-[#e8553f] transition-colors disabled:opacity-30"
+              onClick={handleCreateRoom}
+              disabled={isLoading}
+              className="w-full h-full flex items-center justify-center gap-2 px-4 bg-[#F95F4A] text-white rounded-full hover:bg-[#e8553f] transition-colors disabled:opacity-50"
             >
               {isLoading ? (
                 <Loader2 className="w-5 h-5 animate-spin" />
               ) : (
-                <ArrowRight className="w-5 h-5" />
+                <Plus className="w-5 h-5" />
               )}
-              <span className="text-sm font-medium" style={{ fontFamily: "'PolySans Trial', sans-serif" }}>Join Meeting</span>
+              <span className="text-sm font-medium" style={{ fontFamily: "'PolySans Trial', sans-serif" }}>Start Meeting</span>
             </button>
-          </div>
-        )}
+          )}
+        </div>
 
         {meetError && onDismissMeetError && (
           <div className="mt-4">
@@ -790,6 +797,7 @@ function MobileJoinScreen({
             />
           </div>
         )}
+        </div>
       </div>
 
       {isLoading && (

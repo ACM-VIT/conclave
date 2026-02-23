@@ -4,7 +4,6 @@ import {
   AlertCircle,
   ArrowRight,
   ChevronDown,
-  Crown,
   Hand,
   Mic,
   MicOff,
@@ -18,7 +17,6 @@ import {
 import { memo, useState } from "react";
 import type { Socket } from "socket.io-client";
 import type { RoomInfo } from "@/lib/sfu-types";
-import HostPromotionDialog from "./HostPromotionDialog";
 import type { Participant } from "../lib/types";
 import { formatDisplayName, isSystemUserId } from "../lib/utils";
 
@@ -199,13 +197,13 @@ function ParticipantsPanel({
     );
   };
 
-  const openPromoteHostDialog = (targetUserId: string) => {
+  const beginHostPromotion = (targetUserId: string) => {
     if (!canManageHost || effectiveHostUserIds.has(targetUserId)) return;
     setHostActionError(null);
     setPendingHostPromotionUserId(targetUserId);
   };
 
-  const closePromoteHostDialog = () => {
+  const cancelHostPromotion = () => {
     if (promotingHostUserId) return;
     setPendingHostPromotionUserId(null);
   };
@@ -362,6 +360,8 @@ function ParticipantsPanel({
           );
           const canPromoteParticipant =
             canManageHost && !isHost && !participant.isGhost && !isWebinarAttendee;
+          const isPendingPromotion =
+            pendingHostPromotionUserId === participant.userId;
           const displayName = formatDisplayName(
             getDisplayName(participant.userId),
           );
@@ -408,18 +408,46 @@ function ParticipantsPanel({
                 {isAdmin && !isMe && (
                   <>
                     {canPromoteParticipant && (
-                      <button
-                        onClick={() => openPromoteHostDialog(participant.userId)}
-                        disabled={promotingHostUserId === participant.userId}
-                        className="p-0.5 text-amber-300/70 hover:text-amber-300 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                        title={
-                          promotingHostUserId === participant.userId
-                            ? "Promoting..."
-                            : "Add as host"
-                        }
-                      >
-                        <Crown className="w-2.5 h-2.5" />
-                      </button>
+                      <div className="flex items-center gap-1">
+                        {isPendingPromotion ? (
+                          <>
+                            <button
+                              onClick={() =>
+                                handlePromoteHost(participant.userId)
+                              }
+                              disabled={
+                                promotingHostUserId === participant.userId
+                              }
+                              className="rounded-full border border-amber-300/35 px-2 py-0.5 text-[9px] uppercase tracking-[0.2em] text-amber-200/90 transition-colors hover:border-amber-300/60 hover:text-amber-200 disabled:cursor-not-allowed disabled:opacity-40"
+                            >
+                              {promotingHostUserId === participant.userId
+                                ? "Promoting"
+                                : "Confirm"}
+                            </button>
+                            <button
+                              onClick={cancelHostPromotion}
+                              disabled={
+                                promotingHostUserId === participant.userId
+                              }
+                              className="rounded-full border border-[#FEFCD9]/15 px-2 py-0.5 text-[9px] uppercase tracking-[0.2em] text-[#FEFCD9]/55 transition-colors hover:border-[#FEFCD9]/35 hover:text-[#FEFCD9] disabled:cursor-not-allowed disabled:opacity-40"
+                            >
+                              Cancel
+                            </button>
+                          </>
+                        ) : (
+                          <button
+                            onClick={() =>
+                              beginHostPromotion(participant.userId)
+                            }
+                            disabled={
+                              promotingHostUserId === participant.userId
+                            }
+                            className="rounded-full border border-[#FEFCD9]/15 px-2 py-0.5 text-[9px] uppercase tracking-[0.2em] text-[#FEFCD9]/60 transition-colors hover:border-[#FEFCD9]/35 hover:text-[#FEFCD9] disabled:cursor-not-allowed disabled:opacity-40"
+                          >
+                            Host
+                          </button>
+                        )}
+                      </div>
                     )}
                     {participant.videoProducerId && !participant.isCameraOff && (
                       <button
@@ -514,25 +542,6 @@ function ParticipantsPanel({
           </div>
         </div>
       )}
-
-      <HostPromotionDialog
-        isOpen={Boolean(pendingHostPromotionUserId)}
-        targetName={
-          pendingHostPromotionUserId
-            ? formatDisplayName(getDisplayName(pendingHostPromotionUserId))
-            : ""
-        }
-        isSubmitting={Boolean(
-          promotingHostUserId &&
-            pendingHostPromotionUserId &&
-            promotingHostUserId === pendingHostPromotionUserId,
-        )}
-        onCancel={closePromoteHostDialog}
-        onConfirm={() => {
-          if (!pendingHostPromotionUserId) return;
-          handlePromoteHost(pendingHostPromotionUserId);
-        }}
-      />
     </div>
   );
 }

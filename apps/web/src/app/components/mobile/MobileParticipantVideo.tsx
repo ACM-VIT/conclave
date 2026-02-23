@@ -1,6 +1,6 @@
 "use client";
 
-import { Ghost, Hand, MicOff } from "lucide-react";
+import { Hand, MicOff, VenetianMask } from "lucide-react";
 import { memo, useEffect, useRef } from "react";
 import type { Participant } from "../../lib/types";
 import { truncateDisplayName } from "../../lib/utils";
@@ -123,9 +123,7 @@ function MobileParticipantVideo({
     featured: "w-20 h-20 text-3xl",
   };
 
-  const speakerRing = isActiveSpeaker
-    ? "ring-2 ring-[#F95F4A] ring-offset-2 ring-offset-[#1a1a1a]"
-    : "";
+  const speakerRing = isActiveSpeaker ? "mobile-tile-active" : "";
   const displayLabel = truncateDisplayName(
     displayName,
     size === "featured" ? 16 : size === "large" ? 14 : 12
@@ -133,7 +131,7 @@ function MobileParticipantVideo({
 
   return (
     <div
-      className={`relative bg-[#252525] rounded-xl overflow-hidden ${sizeClasses[size]} ${speakerRing}`}
+      className={`mobile-tile ${sizeClasses[size]} ${speakerRing}`}
     >
       <video
         ref={videoRef}
@@ -142,30 +140,43 @@ function MobileParticipantVideo({
         className={`w-full h-full object-cover ${showPlaceholder ? "hidden" : ""}`}
       />
       {showPlaceholder && (
-        <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-[#1a1a1a] to-[#0d0e0d]">
+        <div className="absolute inset-0 flex items-center justify-center bg-[#0d0e0d]">
+          <div className="absolute inset-0 bg-gradient-to-br from-[#F95F4A]/15 to-[#FF007A]/10" />
           <div
-            className={`rounded-full bg-gradient-to-br from-[#F95F4A]/20 to-[#FF007A]/20 border border-[#FEFCD9]/20 flex items-center justify-center text-[#FEFCD9] font-bold ${avatarSizes[size]}`}
+            className={`relative rounded-full mobile-avatar flex items-center justify-center text-[#FEFCD9] font-bold ${avatarSizes[size]}`}
+            style={{ fontFamily: "'PolySans Bulky Wide', sans-serif" }}
           >
             {displayName[0]?.toUpperCase() || "?"}
           </div>
         </div>
       )}
       {participant.isGhost && (
-        <div className="absolute inset-0 flex items-center justify-center pointer-events-none bg-black/40">
-          <Ghost className="w-8 h-8 text-[#FF007A] drop-shadow-[0_0_15px_rgba(255,0,122,0.5)]" />
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none mobile-ghost-overlay">
+          <div className="flex flex-col items-center gap-2">
+            <VenetianMask className="w-10 h-10 text-[#FF007A]" />
+            <span
+              className="mobile-ghost-badge rounded-full px-3 py-1 text-[10px] tracking-[0.25em] text-[#FF007A]"
+              style={{ fontFamily: "'PolySans Mono', monospace" }}
+            >
+              GHOST
+            </span>
+          </div>
         </div>
       )}
       {participant.isHandRaised && (
-        <div className="absolute top-1.5 left-1.5 p-1 rounded-full bg-amber-500/20 border border-amber-400/40 text-amber-300">
-          <Hand className="w-3 h-3" />
+        <div className="absolute top-2 left-2 p-2 rounded-full mobile-hand-badge text-amber-200">
+          <Hand className="w-3.5 h-3.5" />
         </div>
       )}
       <audio ref={audioRef} autoPlay />
       {size !== "small" && (
         <div className="absolute bottom-1.5 left-1.5 right-1.5 flex items-center justify-between">
-          <div className="bg-black/70 backdrop-blur-sm rounded-full px-2 py-0.5 flex items-center gap-1.5 max-w-[80%]">
+          <div
+            className="mobile-name-pill px-2.5 py-1 flex items-center gap-2 max-w-[85%] backdrop-blur-md"
+            style={{ fontFamily: "'PolySans Mono', monospace" }}
+          >
             <span
-              className="text-[10px] text-[#FEFCD9] font-medium truncate uppercase tracking-wide"
+              className="text-[10px] text-[#FEFCD9] font-medium truncate uppercase tracking-[0.18em]"
               title={displayName}
             >
               {displayLabel}

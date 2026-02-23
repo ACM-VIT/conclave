@@ -1,6 +1,6 @@
 "use client";
 
-import { Ghost, Hand, MicOff } from "lucide-react";
+import { Hand, MicOff, VenetianMask } from "lucide-react";
 import { memo, useEffect, useRef } from "react";
 import { useSmartParticipantOrder } from "../../hooks/useSmartParticipantOrder";
 import type { Participant } from "../../lib/types";
@@ -56,6 +56,10 @@ function MobileGridLayout({
     activeSpeakerId
   );
   const totalCount = participantArray.length + 1;
+  const localDisplayName = truncateDisplayName(
+    getDisplayName(currentUserId) || userEmail || "You",
+    totalCount <= 2 ? 16 : totalCount <= 4 ? 12 : 10
+  );
 
   // Determine grid layout based on participant count
   const getGridClass = () => {
@@ -68,14 +72,14 @@ function MobileGridLayout({
   };
 
   const speakerRing = (isActive: boolean) =>
-    isActive ? "ring-2 ring-[#F95F4A]" : "";
+    isActive ? "mobile-tile-active" : "";
   const maxLabelLength = totalCount <= 2 ? 16 : totalCount <= 4 ? 12 : 10;
 
   return (
-    <div className={`w-full h-full grid ${getGridClass()} gap-1.5 p-2 auto-rows-fr`}>
+    <div className={`w-full h-full grid ${getGridClass()} gap-3 p-3 auto-rows-fr`}>
       {/* Local video tile */}
       <div
-        className={`relative bg-[#1a1a1a] rounded-xl overflow-hidden ${speakerRing(isLocalActiveSpeaker)}`}
+        className={`mobile-tile ${speakerRing(isLocalActiveSpeaker)}`}
       >
         <video
           ref={localVideoRef}
@@ -85,30 +89,47 @@ function MobileGridLayout({
           className={`w-full h-full object-cover ${isCameraOff ? "hidden" : ""} ${isMirrorCamera ? "scale-x-[-1]" : ""}`}
         />
         {isCameraOff && (
-          <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-[#1a1a1a] to-[#0d0e0d]">
-            <div className={`rounded-full bg-gradient-to-br from-[#F95F4A]/20 to-[#FF007A]/20 border border-[#FEFCD9]/20 flex items-center justify-center text-[#FEFCD9] font-bold ${totalCount <= 2 ? "w-20 h-20 text-3xl" : totalCount <= 4 ? "w-14 h-14 text-xl" : "w-10 h-10 text-lg"}`}>
+          <div className="absolute inset-0 flex items-center justify-center bg-[#0d0e0d]">
+            <div className="absolute inset-0 bg-gradient-to-br from-[#F95F4A]/15 to-[#FF007A]/10" />
+            <div
+              className={`relative rounded-full mobile-avatar flex items-center justify-center text-[#FEFCD9] font-bold ${totalCount <= 2 ? "w-20 h-20 text-3xl" : totalCount <= 4 ? "w-14 h-14 text-xl" : "w-10 h-10 text-lg"}`}
+              style={{ fontFamily: "'PolySans Bulky Wide', sans-serif" }}
+            >
               {userEmail[0]?.toUpperCase() || "?"}
             </div>
           </div>
         )}
         {isGhost && (
-          <div className="absolute inset-0 flex items-center justify-center pointer-events-none bg-black/40">
-            <Ghost className={`text-[#FF007A] drop-shadow-[0_0_20px_rgba(255,0,122,0.5)] ${totalCount <= 2 ? "w-12 h-12" : "w-8 h-8"}`} />
+          <div className="absolute inset-0 flex items-center justify-center pointer-events-none mobile-ghost-overlay">
+            <div className="flex flex-col items-center gap-2">
+              <VenetianMask
+                className={`text-[#FF007A] ${totalCount <= 2 ? "w-10 h-10" : "w-8 h-8"}`}
+              />
+              <span
+                className="mobile-ghost-badge rounded-full px-3 py-1 text-[10px] tracking-[0.25em] text-[#FF007A]"
+                style={{ fontFamily: "'PolySans Mono', monospace" }}
+              >
+                GHOST
+              </span>
+            </div>
           </div>
         )}
         {isHandRaised && (
-          <div className="absolute top-2 left-2 p-1.5 rounded-full bg-amber-500/20 border border-amber-400/40 text-amber-300 shadow-[0_0_15px_rgba(251,191,36,0.3)]">
-            <Hand className="w-4 h-4" />
+          <div className="absolute top-2 left-2 p-2 rounded-full mobile-hand-badge text-amber-200">
+            <Hand className="w-3.5 h-3.5" />
           </div>
         )}
         {/* Name label */}
         <div className="absolute bottom-1.5 left-1.5 right-1.5 flex items-center">
           <div 
-            className="bg-black/70 backdrop-blur-sm border border-[#FEFCD9]/10 rounded-full px-2 py-1 flex items-center gap-1.5"
+            className="mobile-name-pill px-2.5 py-1 flex items-center gap-2 backdrop-blur-md"
             style={{ fontFamily: "'PolySans Mono', monospace" }}
           >
-            <span className={`text-[#FEFCD9] font-medium uppercase tracking-wide truncate ${totalCount <= 4 ? "text-xs" : "text-[10px]"}`}>
-              You
+            <span className={`text-[#FEFCD9] font-medium uppercase tracking-[0.18em] truncate ${totalCount <= 4 ? "text-xs" : "text-[10px]"}`}>
+              {localDisplayName}
+            </span>
+            <span className="text-[9px] uppercase tracking-[0.25em] text-[#F95F4A]/70">
+              YOU
             </span>
             {isMuted && <MicOff className="w-3 h-3 text-[#F95F4A] shrink-0" />}
           </div>
@@ -208,11 +229,11 @@ const ParticipantTile = memo(function ParticipantTile({
   }, [participant.audioStream, participant.audioProducerId, participant.isMuted]);
 
   const showPlaceholder = !participant.videoStream || participant.isCameraOff;
-  const speakerRing = isActiveSpeaker ? "ring-2 ring-[#F95F4A]" : "";
+  const speakerRing = isActiveSpeaker ? "mobile-tile-active" : "";
 
   return (
     <div
-      className={`relative bg-[#1a1a1a] rounded-xl overflow-hidden ${speakerRing}`}
+      className={`mobile-tile ${speakerRing}`}
     >
       <video
         ref={videoRef}
@@ -221,30 +242,44 @@ const ParticipantTile = memo(function ParticipantTile({
         className={`w-full h-full object-cover ${showPlaceholder ? "hidden" : ""}`}
       />
       {showPlaceholder && (
-        <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-[#1a1a1a] to-[#0d0e0d]">
-          <div className={`rounded-full bg-gradient-to-br from-[#F95F4A]/20 to-[#FF007A]/20 border border-[#FEFCD9]/20 flex items-center justify-center text-[#FEFCD9] font-bold ${totalCount <= 2 ? "w-20 h-20 text-3xl" : totalCount <= 4 ? "w-14 h-14 text-xl" : "w-10 h-10 text-lg"}`}>
+        <div className="absolute inset-0 flex items-center justify-center bg-[#0d0e0d]">
+          <div className="absolute inset-0 bg-gradient-to-br from-[#F95F4A]/15 to-[#FF007A]/10" />
+          <div
+            className={`relative rounded-full mobile-avatar flex items-center justify-center text-[#FEFCD9] font-bold ${totalCount <= 2 ? "w-20 h-20 text-3xl" : totalCount <= 4 ? "w-14 h-14 text-xl" : "w-10 h-10 text-lg"}`}
+            style={{ fontFamily: "'PolySans Bulky Wide', sans-serif" }}
+          >
             {displayName[0]?.toUpperCase() || "?"}
           </div>
         </div>
       )}
       {participant.isGhost && (
-        <div className="absolute inset-0 flex items-center justify-center pointer-events-none bg-black/40">
-          <Ghost className={`text-[#FF007A] drop-shadow-[0_0_20px_rgba(255,0,122,0.5)] ${totalCount <= 2 ? "w-12 h-12" : "w-8 h-8"}`} />
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none mobile-ghost-overlay">
+          <div className="flex flex-col items-center gap-2">
+            <VenetianMask
+              className={`text-[#FF007A] ${totalCount <= 2 ? "w-10 h-10" : "w-8 h-8"}`}
+            />
+            <span
+              className="mobile-ghost-badge rounded-full px-3 py-1 text-[10px] tracking-[0.25em] text-[#FF007A]"
+              style={{ fontFamily: "'PolySans Mono', monospace" }}
+            >
+              GHOST
+            </span>
+          </div>
         </div>
       )}
       {participant.isHandRaised && (
-        <div className="absolute top-2 left-2 p-1.5 rounded-full bg-amber-500/20 border border-amber-400/40 text-amber-300 shadow-[0_0_15px_rgba(251,191,36,0.3)]">
-          <Hand className="w-4 h-4" />
+        <div className="absolute top-2 left-2 p-2 rounded-full mobile-hand-badge text-amber-200">
+          <Hand className="w-3.5 h-3.5" />
         </div>
       )}
       <audio ref={audioRef} autoPlay />
       {/* Name label */}
       <div className="absolute bottom-1.5 left-1.5 right-1.5 flex items-center">
         <div 
-          className="bg-black/70 backdrop-blur-sm border border-[#FEFCD9]/10 rounded-full px-2 py-1 flex items-center gap-1.5 max-w-full"
+          className="mobile-name-pill px-2.5 py-1 flex items-center gap-2 max-w-full backdrop-blur-md"
           style={{ fontFamily: "'PolySans Mono', monospace" }}
         >
-          <span className={`text-[#FEFCD9] font-medium uppercase tracking-wide truncate ${totalCount <= 4 ? "text-xs" : "text-[10px]"}`}>
+          <span className={`text-[#FEFCD9] font-medium uppercase tracking-[0.18em] truncate ${totalCount <= 4 ? "text-xs" : "text-[10px]"}`}>
             {displayName}
           </span>
           {participant.isMuted && <MicOff className="w-3 h-3 text-[#F95F4A] shrink-0" />}

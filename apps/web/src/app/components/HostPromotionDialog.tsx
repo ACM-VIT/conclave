@@ -1,6 +1,6 @@
 "use client";
 
-import { Crown, X } from "lucide-react";
+import { X } from "lucide-react";
 
 interface HostPromotionDialogProps {
   isOpen: boolean;
@@ -20,54 +20,57 @@ export default function HostPromotionDialog({
   if (!isOpen) return null;
 
   return (
-    <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/65 px-4 backdrop-blur-sm">
+    <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/70 px-4 backdrop-blur-md animate-fade-in">
       <div
-        className="w-full max-w-sm rounded-2xl border border-[#FEFCD9]/15 bg-[#131413] p-4 shadow-2xl"
+        className="relative w-full max-w-sm animate-scale-in"
         style={{ fontFamily: "'PolySans Trial', sans-serif" }}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Host promotion confirmation"
       >
-        <div className="mb-3 flex items-start justify-between gap-3">
-          <div className="flex items-start gap-2.5">
-            <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-amber-300/30 bg-amber-400/10 text-amber-200">
-              <Crown className="h-4 w-4" />
-            </span>
-            <div>
-              <h3 className="text-sm font-medium text-[#FEFCD9]">
-                Add Host Privileges
+        <div className="relative overflow-hidden rounded-2xl border border-[#FEFCD9]/12 bg-[#0d0e0d]/95 p-5 shadow-2xl">
+          <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0">
+              <p className="text-[10px] uppercase tracking-[0.28em] text-[#FEFCD9]/40">
+                Host privileges
+              </p>
+              <h3 className="mt-1 text-[15px] font-medium text-[#FEFCD9]">
+                Promote{" "}
+                <span className="text-[#FEFCD9] break-words">{targetName}</span>
               </h3>
-              <p className="mt-1 text-xs leading-relaxed text-[#FEFCD9]/60">
-                Promote <span className="text-[#FEFCD9]">{targetName}</span> to
-                host? They will gain host controls immediately.
+              <p className="mt-1.5 text-xs leading-relaxed text-[#FEFCD9]/60">
+                Grants immediate host controls (admit, mute, remove).
               </p>
             </div>
+            <button
+              type="button"
+              onClick={onCancel}
+              disabled={isSubmitting}
+              className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-transparent text-[#FEFCD9]/45 transition-colors hover:border-[#FEFCD9]/15 hover:bg-[#FEFCD9]/10 hover:text-[#FEFCD9] disabled:cursor-not-allowed disabled:opacity-40"
+              aria-label="Close host promotion dialog"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
           </div>
-          <button
-            type="button"
-            onClick={onCancel}
-            disabled={isSubmitting}
-            className="inline-flex h-6 w-6 items-center justify-center rounded-md text-[#FEFCD9]/45 transition-colors hover:bg-[#FEFCD9]/10 hover:text-[#FEFCD9] disabled:cursor-not-allowed disabled:opacity-40"
-            aria-label="Close host promotion dialog"
-          >
-            <X className="h-3.5 w-3.5" />
-          </button>
-        </div>
 
-        <div className="flex items-center justify-end gap-2">
-          <button
-            type="button"
-            onClick={onCancel}
-            disabled={isSubmitting}
-            className="rounded-md border border-[#FEFCD9]/15 px-3 py-1.5 text-xs text-[#FEFCD9]/70 transition-all hover:border-[#FEFCD9]/30 hover:bg-[#FEFCD9]/10 hover:text-[#FEFCD9] disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            onClick={onConfirm}
-            disabled={isSubmitting}
-            className="rounded-md border border-[#F95F4A]/35 bg-[#F95F4A]/15 px-3 py-1.5 text-xs text-[#FEFCD9] transition-all hover:border-[#F95F4A]/55 hover:bg-[#F95F4A]/25 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            {isSubmitting ? "Promoting..." : "Add Host"}
-          </button>
+          <div className="mt-4 flex items-center justify-end gap-2.5">
+            <button
+              type="button"
+              onClick={onCancel}
+              disabled={isSubmitting}
+              className="rounded-full border border-[#FEFCD9]/15 px-4 py-2 text-xs uppercase tracking-[0.18em] text-[#FEFCD9]/60 transition-all hover:border-[#FEFCD9]/35 hover:bg-[#FEFCD9]/10 hover:text-[#FEFCD9] disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={onConfirm}
+              disabled={isSubmitting}
+              className="rounded-full border border-[#F95F4A]/45 bg-[#F95F4A]/20 px-4 py-2 text-xs uppercase tracking-[0.18em] text-[#FEFCD9] transition-all hover:border-[#F95F4A]/70 hover:bg-[#F95F4A]/35 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {isSubmitting ? "Promoting..." : "Add Host"}
+            </button>
+          </div>
         </div>
       </div>
     </div>

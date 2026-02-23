@@ -50,6 +50,28 @@ config.resolver = {
   sourceExts: [...config.resolver.sourceExts, "svg"],
   extraNodeModules: {
     ...(config.resolver.extraNodeModules ?? {}),
+    "@conclave/apps-sdk": path.join(appsSdkPath, "src/index.ts"),
+    "@conclave/meeting-core": path.join(meetingCorePath, "src/index.ts"),
+    "@conclave/meeting-core/chat-commands": path.join(
+      meetingCorePath,
+      "src/chat-commands.ts"
+    ),
+    "@conclave/meeting-core/participant-reducer": path.join(
+      meetingCorePath,
+      "src/participant-reducer.ts"
+    ),
+    "@conclave/meeting-core/sfu-types": path.join(
+      meetingCorePath,
+      "src/sfu-types.ts"
+    ),
+    "@conclave/meeting-core/types": path.join(
+      meetingCorePath,
+      "src/types.ts"
+    ),
+    "@conclave/meeting-core/video-encodings": path.join(
+      meetingCorePath,
+      "src/video-encodings.ts"
+    ),
     "event-target-shim": eventTargetShimPath,
     "event-target-shim/index": eventTargetShimIndexPath,
     "isomorphic-webcrypto": isomorphicWebcryptoShimPackagePath,

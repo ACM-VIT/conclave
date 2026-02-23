@@ -88,6 +88,7 @@ interface UseMeetSocketOptions {
   setMeetError: (error: MeetError | null) => void;
   setWaitingMessage: (message: string | null) => void;
   setHostUserId: (userId: string | null) => void;
+  setHostUserIds: React.Dispatch<React.SetStateAction<string[]>>;
   setServerRestartNotice: (notice: string | null) => void;
   setWebinarConfig: React.Dispatch<
     React.SetStateAction<WebinarConfigSnapshot | null>
@@ -164,6 +165,7 @@ export function useMeetSocket({
   setMeetError,
   setWaitingMessage,
   setHostUserId,
+  setHostUserIds,
   setServerRestartNotice,
   setWebinarConfig,
   setWebinarRole,
@@ -308,6 +310,7 @@ export function useMeetSocket({
       setPendingUsers(new Map());
       setDisplayNames(new Map());
       setHostUserId(null);
+      setHostUserIds([]);
       setWebinarRole(null);
       setWebinarSpeakerUserId(null);
       participantIdsRef.current = new Set([userId]);
@@ -1262,6 +1265,10 @@ export function useMeetSocket({
             if (response.status === "waiting") {
               setConnectionState("waiting");
               setHostUserId(response.hostUserId ?? null);
+              setHostUserIds(
+                response.hostUserIds ??
+                  (response.hostUserId ? [response.hostUserId] : [])
+              );
               setMeetingRequiresInviteCode(
                 response.meetingRequiresInviteCode ?? false
               );
@@ -1308,6 +1315,10 @@ export function useMeetSocket({
               );
               setIsTtsDisabled(response.isTtsDisabled ?? false);
               setHostUserId(response.hostUserId ?? null);
+              setHostUserIds(
+                response.hostUserIds ??
+                  (response.hostUserId ? [response.hostUserId] : [])
+              );
               setWebinarRole(response.webinarRole ?? null);
               setWebinarSpeakerUserId(
                 response.existingProducers?.[0]?.producerUserId ?? null
@@ -1393,6 +1404,7 @@ export function useMeetSocket({
       setWebinarRole,
       setWebinarSpeakerUserId,
       setWebinarConfig,
+      setHostUserIds,
       currentRoomIdRef,
       serverRoomIdRef,
       deviceRef,
@@ -1551,10 +1563,36 @@ export function useMeetSocket({
 
             socket.on(
               "hostAssigned",
-              ({ roomId: eventRoomId }: { roomId?: string }) => {
+              ({
+                roomId: eventRoomId,
+                hostUserId,
+              }: {
+                roomId?: string;
+                hostUserId?: string | null;
+              }) => {
                 if (!isRoomEvent(eventRoomId)) return;
                 setIsAdmin(true);
+                setHostUserId(hostUserId ?? userId);
+                setHostUserIds((prev) => {
+                  const next = new Set(prev);
+                  next.add(hostUserId ?? userId);
+                  return Array.from(next);
+                });
                 setWaitingMessage(null);
+              }
+            );
+
+            socket.on(
+              "adminUsersChanged",
+              ({
+                roomId: eventRoomId,
+                hostUserIds,
+              }: {
+                roomId?: string;
+                hostUserIds?: string[];
+              }) => {
+                if (!isRoomEvent(eventRoomId)) return;
+                setHostUserIds(Array.isArray(hostUserIds) ? hostUserIds : []);
               }
             );
 
@@ -2251,6 +2289,8 @@ export function useMeetSocket({
       setLocalStream,
       setMeetError,
       setPendingUsers,
+      setHostUserId,
+      setHostUserIds,
       setWebinarSpeakerUserId,
       setWebinarConfig,
       setServerRestartNotice,
@@ -2790,6 +2830,37 @@ export function useMeetSocket({
     [socketRef]
   );
 
+  const promoteHost = useCallback(
+    (targetUserId: string): Promise<boolean> => {
+      const socket = socketRef.current;
+      if (!socket) return Promise.resolve(false);
+
+      return new Promise((resolve) => {
+        socket.emit(
+          "promoteHost",
+          { userId: targetUserId },
+          (response: {
+            success?: boolean;
+            hostUserId?: string;
+            hostUserIds?: string[];
+            error?: string;
+          }) => {
+            if (response?.error || response?.success === false) {
+              console.error("[Meets] Failed to promote host:", response?.error);
+              resolve(false);
+              return;
+            }
+            if (Array.isArray(response?.hostUserIds)) {
+              setHostUserIds(response.hostUserIds);
+            }
+            resolve(true);
+          }
+        );
+      });
+    },
+    [setHostUserIds, socketRef]
+  );
+
   const rejectUser = useCallback(
     (targetUserId: string): Promise<boolean> => {
       const socket = socketRef.current;
@@ -2829,6 +2900,7 @@ export function useMeetSocket({
     updateWebinarConfig,
     rotateWebinarLink,
     generateWebinarLink,
+    promoteHost,
     admitUser,
     rejectUser,
   };

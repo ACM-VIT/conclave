@@ -7,14 +7,18 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
+  Hand,
+  Lock,
   Mic,
   Radio,
   ShieldCheck,
+  Unlock,
+  User,
   Volume2,
 } from "lucide-react-native";
 import { mediaDevices } from "react-native-webrtc";
 import { useApps } from "@conclave/apps-sdk";
-import { Pressable, Text, TextInput, View } from "@/tw";
+import { Pressable, ScrollView, Text, TextInput, View } from "@/tw";
 import { SHEET_COLORS, SHEET_THEME } from "./true-sheet-theme";
 import type {
   MeetingConfigSnapshot,
@@ -495,7 +499,11 @@ export function SettingsSheet({
       onDidDismiss={handleDidDismiss}
       {...SHEET_THEME}
     >
-      <View style={styles.sheetContent}>
+      <ScrollView
+        contentContainerStyle={styles.sheetContent}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+      >
         <View style={styles.headerRow}>
           <Text style={styles.headerText}>Settings</Text>
           <Pressable onPress={handleDismiss} style={styles.closeButton}>
@@ -503,24 +511,64 @@ export function SettingsSheet({
           </Pressable>
         </View>
 
-        <SectionLabel label="You" />
-        <View style={styles.listContent}>
-          <SettingRow
-            title="Raise hand"
-            subtitle="Signal to the host"
-            value={isHandRaised ? "Raised" : "Off"}
-            active={isHandRaised}
-            accent="amber"
+        <View style={styles.quickActionsRow}>
+          <Pressable
             onPress={() => trigger(onToggleHandRaised)}
-          />
-          <SettingRow
-            title="Display name"
-            subtitle="Update what others see"
-            value="Edit"
-            showChevron
+            style={({ pressed }) => [
+              styles.quickActionButton,
+              isHandRaised ? styles.quickActionActiveAmber : null,
+              pressed && styles.quickActionPressed,
+            ]}
+            accessibilityRole="button"
+            accessibilityLabel={isHandRaised ? "Lower hand" : "Raise hand"}
+          >
+            <Hand
+              size={18}
+              color={isHandRaised ? ACCENT.amber.fg : SHEET_COLORS.textMuted}
+              strokeWidth={2}
+            />
+          </Pressable>
+
+          {isAdmin && onToggleRoomLock ? (
+            <Pressable
+              onPress={() => trigger(() => onToggleRoomLock(!isRoomLocked))}
+              style={({ pressed }) => [
+                styles.quickActionButton,
+                isRoomLocked ? styles.quickActionActiveBlue : null,
+                pressed && styles.quickActionPressed,
+              ]}
+              accessibilityRole="button"
+              accessibilityLabel={isRoomLocked ? "Unlock room" : "Lock room"}
+            >
+              {isRoomLocked ? (
+                <Lock
+                  size={18}
+                  color={ACCENT.blue.fg}
+                  strokeWidth={2}
+                />
+              ) : (
+                <Unlock
+                  size={18}
+                  color={SHEET_COLORS.textMuted}
+                  strokeWidth={2}
+                />
+              )}
+            </Pressable>
+          ) : null}
+
+          <Pressable
             onPress={onOpenDisplayName ? () => trigger(onOpenDisplayName) : undefined}
             disabled={!onOpenDisplayName}
-          />
+            style={({ pressed }) => [
+              styles.quickActionButton,
+              !onOpenDisplayName ? styles.rowDisabled : null,
+              pressed && onOpenDisplayName && styles.quickActionPressed,
+            ]}
+            accessibilityRole="button"
+            accessibilityLabel="Change display name"
+          >
+            <User size={18} color={SHEET_COLORS.textMuted} strokeWidth={2} />
+          </Pressable>
         </View>
 
         {isAdmin ? (
@@ -541,15 +589,6 @@ export function SettingsSheet({
                     else openApp("whiteboard");
                   })
                 }
-              />
-              <SettingRow
-                title="Lock room"
-                subtitle="Prevent new joins"
-                value={isRoomLocked ? "Locked" : "Open"}
-                active={isRoomLocked}
-                accent="blue"
-                onPress={onToggleRoomLock ? () => trigger(() => onToggleRoomLock(!isRoomLocked)) : undefined}
-                disabled={!onToggleRoomLock}
               />
               <SettingRow
                 title="Block guests"
@@ -1039,7 +1078,7 @@ export function SettingsSheet({
         {audioDevicesError ? (
           <Text style={styles.errorText}>{audioDevicesError}</Text>
         ) : null}
-      </View>
+      </ScrollView>
     </TrueSheet>
   );
 }
@@ -1072,6 +1111,33 @@ const styles = StyleSheet.create({
   closeText: {
     fontSize: 12,
     color: SHEET_COLORS.text,
+  },
+  quickActionsRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  quickActionButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: SHEET_COLORS.border,
+    backgroundColor: "rgba(254, 252, 217, 0.04)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  quickActionPressed: {
+    opacity: 0.75,
+    transform: [{ scale: 0.98 }],
+  },
+  quickActionActiveAmber: {
+    borderColor: ACCENT.amber.bd,
+    backgroundColor: ACCENT.amber.bg,
+  },
+  quickActionActiveBlue: {
+    borderColor: ACCENT.blue.bd,
+    backgroundColor: ACCENT.blue.bg,
   },
   sectionLabelRow: {
     flexDirection: "row",

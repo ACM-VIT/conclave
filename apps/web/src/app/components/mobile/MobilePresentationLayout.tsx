@@ -1,6 +1,6 @@
 "use client";
 
-import { Ghost, MicOff } from "lucide-react";
+import { MicOff, VenetianMask } from "lucide-react";
 import { memo, useEffect, useRef } from "react";
 import { useSmartParticipantOrder } from "../../hooks/useSmartParticipantOrder";
 import type { Participant } from "../../lib/types";
@@ -72,9 +72,9 @@ function MobilePresentationLayout({
   );
 
   return (
-    <div className="flex flex-col w-full h-full p-2 gap-2">
+    <div className="flex flex-col w-full h-full p-3 gap-3">
       {/* Presentation video - takes most space */}
-      <div className="flex-1 relative bg-black rounded-xl overflow-hidden min-h-0">
+      <div className="flex-1 relative mobile-tile min-h-0 bg-[#0b0b0b]">
         <video
           ref={presentationVideoRef}
           autoPlay
@@ -82,15 +82,19 @@ function MobilePresentationLayout({
           className="w-full h-full object-contain"
         />
         {/* Presenter badge */}
-        <div className="absolute top-2 left-2 bg-black/70 backdrop-blur-md px-2.5 py-1 rounded-full text-[10px] text-[#FEFCD9] font-medium uppercase tracking-wide border border-[#FEFCD9]/10">
+        <div
+          className="absolute top-2 left-2 mobile-name-pill px-3 py-1 text-[10px] text-[#FEFCD9] font-medium uppercase tracking-[0.18em] backdrop-blur-md truncate max-w-[80%]"
+          style={{ fontFamily: "'PolySans Mono', monospace" }}
+          title={`${presenterName} is presenting`}
+        >
           {presenterName} is presenting
         </div>
       </div>
 
       {/* Participant thumbnails - fixed height strip */}
-      <div className="h-24 shrink-0 flex gap-2 overflow-x-auto no-scrollbar touch-pan-x">
+      <div className="h-24 shrink-0 flex gap-3 overflow-x-auto no-scrollbar touch-pan-x">
         {/* Local video thumbnail */}
-        <div className="relative w-24 h-24 shrink-0 bg-[#1a1a1a] rounded-xl overflow-hidden border border-[#FEFCD9]/10">
+        <div className="relative w-24 h-24 shrink-0 mobile-tile">
           <video
             ref={localVideoRef}
             autoPlay
@@ -99,23 +103,35 @@ function MobilePresentationLayout({
             className={`w-full h-full object-cover ${isCameraOff ? "hidden" : ""} ${isMirrorCamera ? "scale-x-[-1]" : ""}`}
           />
           {isCameraOff && (
-            <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-[#1a1a1a] to-[#0d0e0d]">
-              <div className="w-10 h-10 rounded-full bg-gradient-to-br from-[#F95F4A]/20 to-[#FF007A]/20 border border-[#FEFCD9]/20 flex items-center justify-center text-lg text-[#FEFCD9] font-bold">
+            <div className="absolute inset-0 flex items-center justify-center bg-[#0d0e0d]">
+              <div className="absolute inset-0 bg-gradient-to-br from-[#F95F4A]/15 to-[#FF007A]/10" />
+              <div
+                className="relative w-10 h-10 rounded-full mobile-avatar flex items-center justify-center text-lg text-[#FEFCD9] font-bold"
+                style={{ fontFamily: "'PolySans Bulky Wide', sans-serif" }}
+              >
                 {userEmail[0]?.toUpperCase() || "?"}
               </div>
             </div>
           )}
           {isGhost && (
-            <div className="absolute inset-0 flex items-center justify-center pointer-events-none bg-black/40">
-              <Ghost className="w-6 h-6 text-[#FF007A] drop-shadow-[0_0_15px_rgba(255,0,122,0.5)]" />
+            <div className="absolute inset-0 flex items-center justify-center pointer-events-none mobile-ghost-overlay">
+              <div className="flex flex-col items-center gap-1">
+                <VenetianMask className="w-6 h-6 text-[#FF007A]" />
+                <span
+                  className="mobile-ghost-badge rounded-full px-2 py-0.5 text-[8px] tracking-[0.2em] text-[#FF007A]"
+                  style={{ fontFamily: "'PolySans Mono', monospace" }}
+                >
+                  GHOST
+                </span>
+              </div>
             </div>
           )}
           <div 
             className="absolute bottom-1 left-1 right-1 flex items-center justify-center"
             style={{ fontFamily: "'PolySans Mono', monospace" }}
           >
-            <span className="bg-black/70 border border-[#FEFCD9]/10 rounded-full px-1.5 py-0.5 text-[10px] text-[#FEFCD9] font-medium uppercase tracking-wide flex items-center gap-1">
-              You
+            <span className="mobile-name-pill px-1.5 py-0.5 text-[10px] text-[#FEFCD9] font-medium uppercase tracking-[0.18em] flex items-center gap-1 backdrop-blur-md">
+              YOU
               {isMuted && <MicOff className="w-2.5 h-2.5 text-[#F95F4A]" />}
             </span>
           </div>
@@ -125,10 +141,10 @@ function MobilePresentationLayout({
         {participantArray.map((participant) => (
           <div 
             key={participant.userId} 
-            className={`relative w-24 h-24 shrink-0 bg-[#1a1a1a] rounded-xl overflow-hidden border ${
+            className={`relative w-24 h-24 shrink-0 mobile-tile ${
               participant.userId === activeSpeakerId
-                ? "border-[#F95F4A]/70 ring-1 ring-[#F95F4A]/40"
-                : "border-[#FEFCD9]/10"
+                ? "mobile-tile-active"
+                : ""
             }`}
           >
             {participant.videoStream && !participant.isCameraOff ? (
@@ -137,22 +153,34 @@ function MobilePresentationLayout({
                 isCameraOff={participant.isCameraOff}
               />
             ) : (
-              <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-[#1a1a1a] to-[#0d0e0d]">
-                <div className="w-10 h-10 rounded-full bg-gradient-to-br from-[#F95F4A]/20 to-[#FF007A]/20 border border-[#FEFCD9]/20 flex items-center justify-center text-lg text-[#FEFCD9] font-bold">
+              <div className="absolute inset-0 flex items-center justify-center bg-[#0d0e0d]">
+                <div className="absolute inset-0 bg-gradient-to-br from-[#F95F4A]/15 to-[#FF007A]/10" />
+                <div
+                  className="relative w-10 h-10 rounded-full mobile-avatar flex items-center justify-center text-lg text-[#FEFCD9] font-bold"
+                  style={{ fontFamily: "'PolySans Bulky Wide', sans-serif" }}
+                >
                   {getDisplayName(participant.userId)[0]?.toUpperCase() || "?"}
                 </div>
               </div>
             )}
             {participant.isGhost && (
-              <div className="absolute inset-0 flex items-center justify-center pointer-events-none bg-black/40">
-                <Ghost className="w-6 h-6 text-[#FF007A] drop-shadow-[0_0_15px_rgba(255,0,122,0.5)]" />
+              <div className="absolute inset-0 flex items-center justify-center pointer-events-none mobile-ghost-overlay">
+                <div className="flex flex-col items-center gap-1">
+                  <VenetianMask className="w-6 h-6 text-[#FF007A]" />
+                  <span
+                    className="mobile-ghost-badge rounded-full px-2 py-0.5 text-[8px] tracking-[0.2em] text-[#FF007A]"
+                    style={{ fontFamily: "'PolySans Mono', monospace" }}
+                  >
+                    GHOST
+                  </span>
+                </div>
               </div>
             )}
             <div 
               className="absolute bottom-1 left-1 right-1 flex items-center justify-center"
               style={{ fontFamily: "'PolySans Mono', monospace" }}
             >
-              <span className="bg-black/70 border border-[#FEFCD9]/10 rounded-full px-1.5 py-0.5 text-[10px] text-[#FEFCD9] font-medium uppercase tracking-wide truncate max-w-full flex items-center gap-1">
+              <span className="mobile-name-pill px-1.5 py-0.5 text-[10px] text-[#FEFCD9] font-medium uppercase tracking-[0.18em] truncate max-w-full flex items-center gap-1 backdrop-blur-md">
                 {truncateDisplayName(getDisplayName(participant.userId), 10)}
                 {participant.isMuted && <MicOff className="w-2.5 h-2.5 text-[#F95F4A]" />}
               </span>
@@ -168,7 +196,6 @@ function MobilePresentationLayout({
   );
 }
 
-// Separate video thumbnail component for participants
 const VideoThumbnail = memo(function VideoThumbnail({
   participant,
   isCameraOff,

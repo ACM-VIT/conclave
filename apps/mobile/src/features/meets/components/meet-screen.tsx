@@ -161,6 +161,8 @@ export function MeetScreen({
     setIsTtsDisabled,
     hostUserId,
     setHostUserId,
+    hostUserIds,
+    setHostUserIds,
     meetingRequiresInviteCode,
     setMeetingRequiresInviteCode,
     webinarConfig,
@@ -719,6 +721,7 @@ export function MeetScreen({
     setMeetError,
     setWaitingMessage,
     setHostUserId,
+    setHostUserIds,
     setServerRestartNotice,
     setWebinarConfig,
     setWebinarRole,
@@ -1531,6 +1534,8 @@ export function MeetScreen({
           onClose={() => setIsParticipantsOpen(false)}
           pendingUsers={pendingUsers}
           isAdmin={isAdmin}
+          hostUserId={hostUserId}
+          hostUserIds={hostUserIds}
           onAdmitPendingUser={(pendingUserId) => {
             socket.admitUser?.(pendingUserId);
             setPendingUsers((prev) => {
@@ -1547,6 +1552,9 @@ export function MeetScreen({
               return next;
             });
           }}
+          onPromoteHost={(targetUserId) =>
+            socket.promoteHost?.(targetUserId) ?? Promise.resolve(false)
+          }
         />
       ) : null}
 

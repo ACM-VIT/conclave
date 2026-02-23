@@ -605,7 +605,7 @@ function MobileMeetsMainContent({
     if (hideJoinUI) {
       return (
         <div className="flex flex-1 items-center justify-center px-5">
-          <div className="rounded-xl border border-white/10 bg-black/40 px-6 py-4 text-center">
+          <div className="mobile-sheet-card px-6 py-4 text-center">
             <p className="text-sm text-[#FEFCD9]">
               {isLoading ? "Joining webinar..." : "Preparing webinar..."}
             </p>
@@ -645,7 +645,7 @@ function MobileMeetsMainContent({
   }
 
   return (
-    <div className="flex-1 flex flex-col bg-[#0d0e0d] overflow-hidden relative h-full">
+    <div className="flex-1 flex flex-col bg-[#060606] overflow-hidden relative h-full">
       {isJoined && (
         <ConnectionBanner
           state={connectionState}
@@ -665,40 +665,46 @@ function MobileMeetsMainContent({
         audioOutputDeviceId={audioOutputDeviceId}
       />
       {/* Status bar area */}
-      <div className="safe-area-pt bg-[#0d0e0d]" />
+      <div className="safe-area-pt bg-[#060606]" />
 
       {/* Header with room info */}
-      <div
-        className="flex items-center justify-between px-4 py-2 bg-[#0d0e0d]"
-        style={{ fontFamily: "'PolySans Mono', monospace" }}
-      >
+      <div className="flex items-center justify-between px-4 py-3">
         <div className="flex items-center gap-2">
-          <span className="text-sm font-medium text-[#FEFCD9] uppercase tracking-wide">
-            {roomId.toUpperCase()}
-          </span>
-          <span className="text-[10px] text-[#FEFCD9]/40 uppercase tracking-wide">
-            •{" "}
-            {isWebinarAttendee
-              ? `${webinarConfig?.attendeeCount ?? 0} watching`
-              : `${visibleParticipantCount + 1} in call`}
-          </span>
+          <div className="mobile-glass mobile-pill px-3 py-2 flex items-center gap-2">
+            <span
+              className="text-[11px] font-medium text-[#FEFCD9] uppercase tracking-[0.2em]"
+              style={{ fontFamily: "'PolySans Mono', monospace" }}
+            >
+              {roomId.toUpperCase()}
+            </span>
+          </div>
+          <div className="mobile-glass-soft mobile-pill px-3 py-1">
+            <span
+              className="text-[10px] text-[#FEFCD9]/55 uppercase tracking-[0.2em]"
+              style={{ fontFamily: "'PolySans Mono', monospace" }}
+            >
+              {isWebinarAttendee
+                ? `${webinarConfig?.attendeeCount ?? 0} watching`
+                : `${visibleParticipantCount + 1} in call`}
+            </span>
+          </div>
         </div>
         <div className="flex items-center gap-2">
           {isScreenSharing && (
-            <div className="flex items-center gap-1 text-[#F95F4A] text-[9px] uppercase tracking-wider font-medium">
+            <div className="mobile-glass-soft mobile-pill px-2.5 py-1 flex items-center gap-1 text-[#F95F4A] text-[9px] uppercase tracking-[0.2em] font-medium">
               <span className="w-1.5 h-1.5 rounded-full bg-[#F95F4A] animate-pulse" />
               Sharing
             </div>
           )}
           {ghostEnabled && (
-            <div className="flex items-center gap-1 text-[#FF007A] text-[9px] uppercase tracking-wider font-medium">
+            <div className="mobile-glass-soft mobile-pill px-2.5 py-1 flex items-center gap-1 text-[#FF007A] text-[9px] uppercase tracking-[0.2em] font-medium">
               <Ghost className="w-3 h-3" />
             </div>
           )}
           {(connectionState === "reconnecting" ||
             (serverRestartNotice &&
               !["error", "disconnected"].includes(connectionState))) && (
-            <div className="flex items-center gap-1 text-amber-400 text-[9px] uppercase tracking-wider font-medium">
+            <div className="mobile-glass-soft mobile-pill px-2.5 py-1 flex items-center gap-1 text-amber-300 text-[9px] uppercase tracking-[0.2em] font-medium">
               <RefreshCw className="w-3 h-3 animate-spin" />
             </div>
           )}
@@ -714,7 +720,7 @@ function MobileMeetsMainContent({
       )}
 
       {/* Main content area - with padding for controls */}
-      <div className="flex-1 min-h-0 pb-20">
+      <div className="flex-1 min-h-0 pb-24">
         {isWebinarAttendee ? (
           <div className="flex h-full items-center justify-center px-4">
             {webinarStage ? (
@@ -763,7 +769,7 @@ function MobileMeetsMainContent({
                 ) : null}
               </div>
             ) : (
-              <div className="rounded-xl border border-white/10 bg-black/40 px-5 py-4 text-center">
+              <div className="mobile-sheet-card px-5 py-4 text-center">
                 <p className="text-sm text-[#FEFCD9]">
                   Waiting for the host to start speaking...
                 </p>
@@ -856,7 +862,7 @@ function MobileMeetsMainContent({
       )}
 
       {isJoined && !isWebinarAttendee && browserLaunchError && (
-        <div className="absolute top-16 left-4 right-4 z-40 rounded-xl border border-[#F95F4A]/30 bg-[#0d0e0d]/95 px-3 py-2 text-xs text-[#FEFCD9]/90 shadow-2xl">
+        <div className="absolute top-16 left-4 right-4 z-40 mobile-sheet-card border border-[#F95F4A]/30 px-3 py-2 text-xs text-[#FEFCD9]/90 shadow-2xl">
           <div className="flex items-start gap-2">
             <span className="font-medium text-[#F95F4A]">Browser error</span>
             {onClearBrowserError && (
@@ -947,13 +953,14 @@ function MobileMeetsMainContent({
       />
 
       {/* Full-screen chat panel */}
-      {!isWebinarAttendee && isChatOpen && (
+      {!isWebinarAttendee && (
         <MobileChatPanel
           messages={chatMessages}
           chatInput={chatInput}
           onInputChange={setChatInput}
           onSend={sendChat}
           onClose={handleToggleChat}
+          isOpen={isChatOpen}
           currentUserId={currentUserId}
           isGhostMode={ghostEnabled}
           isChatLocked={isChatLocked}
@@ -963,11 +970,12 @@ function MobileMeetsMainContent({
       )}
 
       {/* Full-screen participants panel */}
-      {!isWebinarAttendee && isParticipantsOpen && (
+      {!isWebinarAttendee && (
         <MobileParticipantsPanel
           participants={participants}
           currentUserId={currentUserId}
           onClose={handleCloseParticipants}
+          isOpen={isParticipantsOpen}
           socket={socket}
           isAdmin={isAdmin}
           pendingUsers={pendingUsers}
