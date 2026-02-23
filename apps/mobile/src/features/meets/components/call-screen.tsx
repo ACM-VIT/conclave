@@ -20,6 +20,7 @@ import type {
 } from "../types";
 import { isSystemUserId } from "../utils";
 import { useDeviceLayout, type DeviceLayout } from "../hooks/use-device-layout";
+import { useSmartParticipantOrder } from "../hooks/use-smart-participant-order";
 import { ControlsBar } from "./controls-bar";
 import { ParticipantTile } from "./participant-tile";
 import { FlatList, Text, Pressable } from "@/tw";
@@ -264,13 +265,18 @@ export function CallScreen({
     }
   }, [connectionState, refreshState]);
 
-  const participantList = useMemo(() => {
+  const baseParticipantList = useMemo(() => {
     const list = Array.from(participants.values()).filter(
       (participant) => !isSystemUserId(participant.userId)
     );
     const hasLocal = list.some((participant) => participant.userId === localParticipant.userId);
     return hasLocal ? list : [localParticipant, ...list];
   }, [participants, localParticipant]);
+  const participantList = useSmartParticipantOrder(baseParticipantList, activeSpeakerId);
+  const participantOrderKey = useMemo(
+    () => participantList.map((participant) => participant.userId).join("|"),
+    [participantList]
+  );
   const webinarParticipants = useMemo(
     () =>
       Array.from(participants.values()).filter(
@@ -486,15 +492,7 @@ export function CallScreen({
   const isWebinarSession = isObserverMode || Boolean(webinarConfig?.enabled);
   const webinarTextStyle = isWebinarSession ? styles.webinarRegularText : null;
 
-  const stripParticipants = useMemo(() => {
-    const list = Array.from(participants.values()).filter(
-      (participant) => !isSystemUserId(participant.userId)
-    );
-    const hasLocal = list.some(
-      (participant) => participant.userId === localParticipant.userId
-    );
-    return hasLocal ? list : [localParticipant, ...list];
-  }, [participants, localParticipant]);
+  const stripParticipants = participantList;
 
   const safePaddingLeft = Math.max(isTablet ? 12 : 6, insets.left);
   const safePaddingRight = Math.max(isTablet ? 12 : 6, insets.right);
@@ -623,8 +621,27 @@ export function CallScreen({
   }, []);
 
   useEffect(() => {
-    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-  }, [participantList.length, columns, tileStyle.height, tileStyle.width]);
+    LayoutAnimation.configureNext({
+      duration: 220,
+      create: {
+        type: LayoutAnimation.Types.easeInEaseOut,
+        property: LayoutAnimation.Properties.opacity,
+      },
+      update: {
+        type: LayoutAnimation.Types.easeInEaseOut,
+      },
+      delete: {
+        type: LayoutAnimation.Types.easeInEaseOut,
+        property: LayoutAnimation.Properties.opacity,
+      },
+    });
+  }, [
+    participantOrderKey,
+    participantList.length,
+    columns,
+    tileStyle.height,
+    tileStyle.width,
+  ]);
 
   return (
     <RNView style={styles.container}>
@@ -757,7 +774,11 @@ export function CallScreen({
               ) : (
                 <RNView style={styles.observerFallback}>
                   <Text style={[styles.presenterText, webinarTextStyle]}>
-                    Waiting for the host to start speaking...
+                    {webinarStage?.mainAudioStream
+                      ? `Listening to ${
+                          webinarStage.displayName?.trim() || "the speaker"
+                        }. Video is currently off.`
+                      : "Waiting for the host to start speaking..."}
                   </Text>
                 </RNView>
               )}
@@ -825,6 +846,7 @@ export function CallScreen({
 
             <FlatList
               data={stripParticipants}
+              extraData={participantOrderKey}
               keyExtractor={(item) => item.userId}
               horizontal
               showsHorizontalScrollIndicator={false}
@@ -890,6 +912,7 @@ export function CallScreen({
           >
             <FlatList
               data={participantList}
+              extraData={participantOrderKey}
               key={`${columns}`}
               numColumns={columns}
               keyExtractor={(item) => item.userId}
@@ -916,7 +939,6 @@ export function CallScreen({
         )}
       </RNView>
 
-      {/* Controls Bar - positioned absolutely at bottom */}
       <ControlsBar
         isMuted={isMuted}
         isCameraOff={isCameraOff}

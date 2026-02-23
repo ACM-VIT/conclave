@@ -2183,6 +2183,7 @@ export function useMeetSocket({
             socket.on(
               "webinar:feedChanged",
               (payload: WebinarFeedChangedNotification) => {
+                if (joinMode !== "webinar_attendee") return;
                 if (!isRoomEvent(payload.roomId)) return;
                 setWebinarSpeakerUserId(
                   payload.speakerUserId ??

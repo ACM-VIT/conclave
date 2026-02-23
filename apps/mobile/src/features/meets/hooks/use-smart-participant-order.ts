@@ -1,13 +1,11 @@
-"use client";
-
 import { useEffect, useMemo, useRef, useState } from "react";
 
-interface ParticipantWithMediaHints {
+interface ParticipantLike {
   userId: string;
-  videoStream?: MediaStream | null;
-  audioStream?: MediaStream | null;
-  isCameraOff?: boolean;
-  isMuted?: boolean;
+  videoStream: MediaStream | null;
+  audioStream: MediaStream | null;
+  isCameraOff: boolean;
+  isMuted: boolean;
 }
 
 interface UseSmartParticipantOrderOptions {
@@ -16,7 +14,7 @@ interface UseSmartParticipantOrderOptions {
 }
 
 const hasLiveTrack = (
-  stream: MediaStream | null | undefined,
+  stream: MediaStream | null,
   kind: "audio" | "video"
 ): boolean => {
   if (!stream) return false;
@@ -24,7 +22,7 @@ const hasLiveTrack = (
   return Boolean(track && track.enabled && track.readyState === "live");
 };
 
-const getMediaPriority = (participant: ParticipantWithMediaHints): number => {
+const getMediaPriority = (participant: ParticipantLike): number => {
   const hasVideo = !participant.isCameraOff && hasLiveTrack(participant.videoStream, "video");
   if (hasVideo) return 2;
   const hasAudio = !participant.isMuted && hasLiveTrack(participant.audioStream, "audio");
@@ -32,7 +30,7 @@ const getMediaPriority = (participant: ParticipantWithMediaHints): number => {
   return 0;
 };
 
-export function useSmartParticipantOrder<T extends ParticipantWithMediaHints>(
+export function useSmartParticipantOrder<T extends ParticipantLike>(
   participants: readonly T[],
   activeSpeakerId: string | null,
   options: UseSmartParticipantOrderOptions = {}
@@ -48,12 +46,12 @@ export function useSmartParticipantOrder<T extends ParticipantWithMediaHints>(
   const candidateIdRef = useRef<string | null>(null);
   const candidateSinceRef = useRef(0);
   const lastSwitchAtRef = useRef(0);
-  const promoteTimeoutRef = useRef<number | null>(null);
+  const promoteTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const previousOrderRef = useRef<Map<string, number>>(new Map());
 
   const clearPromoteTimeout = () => {
     if (promoteTimeoutRef.current) {
-      window.clearTimeout(promoteTimeoutRef.current);
+      clearTimeout(promoteTimeoutRef.current);
       promoteTimeoutRef.current = null;
     }
   };
@@ -115,7 +113,7 @@ export function useSmartParticipantOrder<T extends ParticipantWithMediaHints>(
       const nowMs = Date.now();
       const elapsedSinceSwitch = nowMs - lastSwitchAtRef.current;
       if (elapsedSinceSwitch < minSwitchIntervalMs) {
-        promoteTimeoutRef.current = window.setTimeout(
+        promoteTimeoutRef.current = setTimeout(
           attemptPromotion,
           minSwitchIntervalMs - elapsedSinceSwitch
         );
@@ -129,7 +127,7 @@ export function useSmartParticipantOrder<T extends ParticipantWithMediaHints>(
 
     const elapsedForCandidate = now - candidateSinceRef.current;
     const waitMs = Math.max(0, promoteDelayMs - elapsedForCandidate);
-    promoteTimeoutRef.current = window.setTimeout(attemptPromotion, waitMs);
+    promoteTimeoutRef.current = setTimeout(attemptPromotion, waitMs);
 
     return () => {
       clearPromoteTimeout();

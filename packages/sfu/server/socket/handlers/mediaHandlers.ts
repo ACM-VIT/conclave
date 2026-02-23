@@ -21,11 +21,14 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
       callback: (response: ProduceResponse | { error: string }) => void,
     ) => {
       try {
-        if (!context.currentRoom || !context.currentClient?.producerTransport) {
+        const room = context.currentRoom;
+        const currentClient = context.currentClient;
+
+        if (!room || !currentClient?.producerTransport) {
           respond(callback, { error: "Not ready to produce" });
           return;
         }
-        if (context.currentClient.isObserver) {
+        if (currentClient.isObserver) {
           respond(callback, {
             error: "Watch-only attendees cannot produce media",
           });
@@ -37,73 +40,94 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
         const paused = !!appData.paused;
 
         if (type === "screen") {
-          const existingScreenShare = context.currentRoom.screenShareProducerId;
+          const existingScreenShare = room.screenShareProducerId;
           if (existingScreenShare) {
             respond(callback, { error: "Screen is already being shared" });
             return;
           }
         }
 
-        const producer = await context.currentClient.producerTransport.produce({
+        const producer = await currentClient.producerTransport.produce({
           kind,
           rtpParameters,
           appData: { type },
           paused,
         });
 
-        if (type === "screen") {
-          context.currentRoom.setScreenShareProducer(producer.id);
-        }
-
-        context.currentClient.addProducer(producer);
-
-        for (const [clientId, client] of context.currentRoom.clients) {
-          if (clientId === context.currentClient.id || client.isWebinarAttendee) {
-            continue;
-          }
-          client.socket.emit("newProducer", {
-            producerId: producer.id,
-            producerUserId: context.currentClient.id,
-            kind,
-            type,
-            paused: producer.paused,
-          });
-        }
-        emitWebinarFeedChanged(io, context.currentRoom);
-
-        const roomChannelId = context.currentRoom.channelId;
-        const clientId = context.currentClient.id;
-
+        const roomChannelId = room.channelId;
+        const clientId = currentClient.id;
         let producerClosed = false;
+        let producerAdvertised = false;
         const notifyProducerClosed = () => {
           if (producerClosed) return;
           producerClosed = true;
 
           Logger.info(`Producer closed: ${producer.id}`);
-          const room = state.rooms.get(roomChannelId);
-          if (!room) return;
+          const activeRoom = state.rooms.get(roomChannelId);
+          if (!activeRoom) return;
 
           if (type === "screen") {
-            room.clearScreenShareProducer(producer.id);
+            activeRoom.clearScreenShareProducer(producer.id);
           }
 
-          for (const [targetClientId, targetClient] of room.clients) {
-            if (targetClientId === clientId || targetClient.isWebinarAttendee) {
-              continue;
+          if (producerAdvertised) {
+            for (const [targetClientId, targetClient] of activeRoom.clients) {
+              if (targetClientId === clientId || targetClient.isWebinarAttendee) {
+                continue;
+              }
+              targetClient.socket.emit("producerClosed", {
+                producerId: producer.id,
+                producerUserId: clientId,
+              });
             }
-            targetClient.socket.emit("producerClosed", {
-              producerId: producer.id,
-              producerUserId: clientId,
-            });
           }
-          emitWebinarFeedChanged(io, room);
+
+          emitWebinarFeedChanged(io, activeRoom);
         };
 
         producer.on("transportclose", notifyProducerClosed);
         producer.observer.on("close", notifyProducerClosed);
 
+        if (type === "screen") {
+          room.setScreenShareProducer(producer.id);
+        }
+
+        currentClient.addProducer(producer);
+        await room.registerWebinarAudioProducer(
+          currentClient.id,
+          producer,
+          type,
+        );
+
+        const activeRoom = state.rooms.get(roomChannelId);
+        const activeClient = activeRoom?.getClient(clientId);
+        const producerStillActive = Boolean(
+          activeClient?.getProducerInfos().some((info) => info.producerId === producer.id),
+        );
+
+        if (producer.closed || producerClosed || !activeRoom || !producerStillActive) {
+          notifyProducerClosed();
+          respond(callback, { error: "Producer closed during setup" });
+          return;
+        }
+
+        producerAdvertised = true;
+        for (const [targetClientId, client] of activeRoom.clients) {
+          if (targetClientId === clientId || client.isWebinarAttendee) {
+            continue;
+          }
+          client.socket.emit("newProducer", {
+            producerId: producer.id,
+            producerUserId: clientId,
+            kind,
+            type,
+            paused: producer.paused,
+          });
+        }
+        emitWebinarFeedChanged(io, activeRoom);
+
         Logger.info(
-          `User ${context.currentClient.id} started producing ${kind} (${type}): ${producer.id}`,
+          `User ${clientId} started producing ${kind} (${type}): ${producer.id}`,
         );
 
         respond(callback, { producerId: producer.id });

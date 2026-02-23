@@ -66,66 +66,72 @@ function ParticipantTileComponent({
         <RNView pointerEvents="none" style={styles.activeSpeakerRing} />
       ) : null}
       <RNView style={[styles.container, isActiveSpeaker && styles.activeSpeaker]}>
-      {hasVideo ? (
-        <RTCView
-          streamURL={videoStream.toURL()}
-          style={styles.video}
-          mirror={mirror}
-        />
-      ) : (
-        <RNView style={styles.avatarContainer}>
-          <LinearGradient
-            colors={["rgba(249, 95, 74, 0.2)", "rgba(255, 0, 122, 0.1)"]}
-            style={styles.avatarGradient}
+        {hasVideo ? (
+          <RTCView
+            streamURL={videoStream.toURL()}
+            style={styles.video}
+            mirror={mirror}
           />
-          <RNView style={[
-            styles.avatar,
-            { width: avatarSize, height: avatarSize, borderRadius: avatarSize / 2 }
-          ]}>
-            <RNView style={[styles.avatarBorder, { borderRadius: avatarSize / 2 }]} />
-            <Text style={[styles.avatarText, { fontSize: avatarFontSize }]}>{initials}</Text>
+        ) : (
+          <RNView style={styles.avatarContainer}>
+            <LinearGradient
+              colors={["rgba(249, 95, 74, 0.2)", "rgba(255, 0, 122, 0.1)"]}
+              style={styles.avatarGradient}
+            />
+            <RNView
+              style={[
+                styles.avatar,
+                { width: avatarSize, height: avatarSize, borderRadius: avatarSize / 2 },
+              ]}
+            >
+              <RNView style={[styles.avatarBorder, { borderRadius: avatarSize / 2 }]} />
+              <Text style={[styles.avatarText, { fontSize: avatarFontSize }]}>
+                {initials}
+              </Text>
+            </RNView>
+          </RNView>
+        )}
+
+        {shouldRenderAudioView ? (
+          <RTCView streamURL={audioStream.toURL()} style={hiddenAudioStyle} />
+        ) : null}
+
+        {participant.isGhost && (
+          <RNView style={styles.ghostOverlay}>
+            <VenetianMask size={ghostIconSize} color={COLORS.primaryPink} strokeWidth={1.6} />
+            <RNView style={styles.ghostBadge}>
+              <Text style={styles.ghostBadgeText}>GHOST</Text>
+            </RNView>
+          </RNView>
+        )}
+
+        {participant.isHandRaised && (
+          <RNView style={styles.handRaisedContainer}>
+            <RNView
+              style={[
+                styles.handRaisedBadge,
+                { width: handBadgeSize, height: handBadgeSize, borderRadius: handBadgeSize / 2 },
+              ]}
+            >
+              <Hand size={isTablet ? 16 : 14} color={COLORS.cream} strokeWidth={2} />
+            </RNView>
+          </RNView>
+        )}
+
+        {/* Name overlay at bottom */}
+        <RNView style={styles.nameOverlay}>
+          <RNView style={[styles.namePill, isTablet && styles.namePillTablet]}>
+            <Text style={[styles.nameText, { fontSize: namePillFontSize }]} numberOfLines={1}>
+              {displayNameUpper}
+            </Text>
+            {isLocal && (
+              <Text style={[styles.youLabel, isTablet && { fontSize: 10 }]}>YOU</Text>
+            )}
+            {participant.isMuted && (
+              <MicOff size={isTablet ? 14 : 12} color={COLORS.primaryOrange} strokeWidth={2} />
+            )}
           </RNView>
         </RNView>
-      )}
-
-      {shouldRenderAudioView ? (
-        <RTCView streamURL={audioStream.toURL()} style={hiddenAudioStyle} />
-      ) : null}
-
-      {participant.isGhost && (
-        <RNView style={styles.ghostOverlay}>
-          <VenetianMask size={ghostIconSize} color={COLORS.primaryPink} strokeWidth={1.6} />
-          <RNView style={styles.ghostBadge}>
-            <Text style={styles.ghostBadgeText}>GHOST</Text>
-          </RNView>
-        </RNView>
-      )}
-
-      {participant.isHandRaised && (
-        <RNView style={styles.handRaisedContainer}>
-          <RNView style={[
-            styles.handRaisedBadge,
-            { width: handBadgeSize, height: handBadgeSize, borderRadius: handBadgeSize / 2 }
-          ]}>
-            <Hand size={isTablet ? 16 : 14} color={COLORS.cream} strokeWidth={2} />
-          </RNView>
-        </RNView>
-      )}
-
-      {/* Name overlay at bottom */}
-      <RNView style={styles.nameOverlay}>
-        <RNView style={[styles.namePill, isTablet && styles.namePillTablet]}>
-          <Text style={[styles.nameText, { fontSize: namePillFontSize }]} numberOfLines={1}>
-            {displayNameUpper}
-          </Text>
-          {isLocal && (
-            <Text style={[styles.youLabel, isTablet && { fontSize: 10 }]}>YOU</Text>
-          )}
-          {participant.isMuted && (
-            <MicOff size={isTablet ? 14 : 12} color={COLORS.primaryOrange} strokeWidth={2} />
-          )}
-        </RNView>
-      </RNView>
       </RNView>
     </RNView>
   );
