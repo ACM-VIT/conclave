@@ -60,6 +60,7 @@ const getMaxGridColumns = (layout: DeviceLayout, participantCount: number) => {
 interface CallScreenProps {
   roomId: string;
   connectionState: ConnectionState;
+  serverRestartNotice?: string | null;
   participants: Map<string, Participant>;
   localParticipant: Participant;
   presentationStream?: MediaStream | null;
@@ -155,6 +156,7 @@ const getLiveVideoStream = (stream: MediaStream | null): MediaStream | null => {
 export function CallScreen({
   roomId,
   connectionState,
+  serverRestartNotice = null,
   participants,
   localParticipant,
   isMuted,
@@ -594,9 +596,15 @@ export function CallScreen({
   );
 
   const stripTileSize = isTablet ? 120 : 88;
+  const hasTerminalConnectionState =
+    connectionState === "disconnected" || connectionState === "error";
+  const showServerRestartNotice =
+    Boolean(serverRestartNotice) && !hasTerminalConnectionState;
 
   const connectionLabel =
-    connectionState === "reconnecting"
+    showServerRestartNotice
+      ? "Server restarting, reconnecting"
+      : connectionState === "reconnecting"
       ? "Reconnecting"
       : connectionState === "connecting"
         ? "Connecting"

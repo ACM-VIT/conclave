@@ -53,6 +53,9 @@ export function useMeetState({ initialRoomId }: UseMeetStateOptions) {
   const [webinarSpeakerUserId, setWebinarSpeakerUserId] = useState<string | null>(
     null
   );
+  const [serverRestartNotice, setServerRestartNotice] = useState<string | null>(
+    null
+  );
 
   return {
     connectionState,
@@ -107,5 +110,7 @@ export function useMeetState({ initialRoomId }: UseMeetStateOptions) {
     setWebinarLink,
     webinarSpeakerUserId,
     setWebinarSpeakerUserId,
+    serverRestartNotice,
+    setServerRestartNotice,
   };
 }

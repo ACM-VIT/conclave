@@ -13,6 +13,9 @@ importers:
       '@conclave/apps-sdk':
         specifier: workspace:*
         version: link:../../packages/apps-sdk
+      '@conclave/meeting-core':
+        specifier: workspace:*
+        version: link:../../packages/meeting-core
       '@tanstack/react-hotkeys':
         specifier: ^0.1.1
         version: 0.1.1(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
@@ -98,6 +101,12 @@ importers:
       yjs:
         specifier: ^13.6.19
         version: 13.6.29
+
+  packages/meeting-core:
+    dependencies:
+      mediasoup-client:
+        specifier: ^3.18.3
+        version: 3.18.3
 
   packages/sfu:
     dependencies:

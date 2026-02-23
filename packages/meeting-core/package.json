@@ -1,0 +1,19 @@
+{
+  "name": "@conclave/meeting-core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./chat-commands": "./src/chat-commands.ts",
+    "./participant-reducer": "./src/participant-reducer.ts",
+    "./sfu-types": "./src/sfu-types.ts",
+    "./types": "./src/types.ts",
+    "./video-encodings": "./src/video-encodings.ts"
+  },
+  "peerDependencies": {
+    "mediasoup-client": "^3.18.3"
+  }
+}

@@ -7,20 +7,33 @@ interface ConnectionBannerProps {
   state: ConnectionState;
   compact?: boolean;
   isOffline?: boolean;
+  serverRestartNotice?: string | null;
 }
 
 export default function ConnectionBanner({
   state,
   compact = false,
   isOffline = false,
+  serverRestartNotice = null,
 }: ConnectionBannerProps) {
-  if (!isOffline && !["reconnecting", "disconnected", "error"].includes(state)) {
+  const hasServerRestartNotice = Boolean(serverRestartNotice);
+  const hasTerminalConnectionState =
+    state === "disconnected" || state === "error";
+  const showServerRestartNotice =
+    hasServerRestartNotice && !hasTerminalConnectionState && !isOffline;
+  if (
+    !isOffline &&
+    !showServerRestartNotice &&
+    !["reconnecting", "disconnected", "error"].includes(state)
+  ) {
     return null;
   }
 
-  const isReconnecting = state === "reconnecting";
+  const isReconnecting = state === "reconnecting" || showServerRestartNotice;
   const message = isOffline
     ? "You’re offline. Reconnect your internet to restore call audio/video."
+    : showServerRestartNotice
+      ? serverRestartNotice
     : isReconnecting
       ? "Reconnecting… we’ll keep trying."
       : "Connection lost. Refresh to rejoin.";
@@ -47,7 +60,7 @@ export default function ConnectionBanner({
         <span className={`${compact ? "text-[11px]" : "text-xs"}`}>
           {message}
         </span>
-        {!isOffline && !isReconnecting && (
+        {!isOffline && !isReconnecting && !showServerRestartNotice && (
           <button
             onClick={handleReload}
             className="ml-1 text-[10px] uppercase tracking-widest text-[#F95F4A] hover:text-[#f97b6a] transition-colors"

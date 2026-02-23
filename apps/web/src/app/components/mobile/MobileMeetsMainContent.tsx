@@ -126,6 +126,7 @@ interface MobileMeetsMainContentProps {
   onTestSpeaker?: () => void;
   hostUserId: string | null;
   isNetworkOffline: boolean;
+  serverRestartNotice?: string | null;
   isTtsDisabled: boolean;
   meetingRequiresInviteCode: boolean;
   webinarConfig?: WebinarConfigSnapshot | null;
@@ -271,6 +272,7 @@ function MobileMeetsMainContent({
   onTestSpeaker,
   hostUserId,
   isNetworkOffline,
+  serverRestartNotice = null,
   isTtsDisabled,
   meetingRequiresInviteCode,
   webinarConfig,
@@ -646,6 +648,7 @@ function MobileMeetsMainContent({
           state={connectionState}
           compact
           isOffline={isNetworkOffline}
+          serverRestartNotice={serverRestartNotice}
         />
       )}
       <SystemAudioPlayers
@@ -685,7 +688,9 @@ function MobileMeetsMainContent({
               <Ghost className="w-3 h-3" />
             </div>
           )}
-          {connectionState === "reconnecting" && (
+          {(connectionState === "reconnecting" ||
+            (serverRestartNotice &&
+              !["error", "disconnected"].includes(connectionState))) && (
             <div className="flex items-center gap-1 text-amber-400 text-[9px] uppercase tracking-wider font-medium">
               <RefreshCw className="w-3 h-3 animate-spin" />
             </div>

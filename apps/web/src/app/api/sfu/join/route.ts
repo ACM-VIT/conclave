@@ -1,5 +1,6 @@
 import jwt from "jsonwebtoken";
 import { NextResponse } from "next/server";
+import { auth } from "@/lib/auth";
 
 export const runtime = "nodejs";
 
@@ -40,6 +41,30 @@ const firstNonEmpty = (...values: Array<string | undefined>): string | undefined
   }
   return undefined;
 };
+
+const normalizeEmail = (
+  value: string | null | undefined,
+): string | undefined => {
+  const normalized = value?.trim().toLowerCase();
+  return normalized || undefined;
+};
+
+const parseEmailList = (value: string | undefined): Set<string> =>
+  new Set(
+    (value ?? "")
+      .split(",")
+      .map((entry) => normalizeEmail(entry))
+      .filter((entry): entry is string => Boolean(entry)),
+  );
+
+const alwaysHostEmails = parseEmailList(
+  firstNonEmpty(
+    process.env.SFU_ALWAYS_HOST_EMAILS,
+    process.env.SFU_ALWAYS_HOST_EMAIL,
+    process.env.ALWAYS_HOST_EMAILS,
+    process.env.ALWAYS_HOST_EMAIL,
+  ),
+);
 
 let turnCredentialWarningLogged = false;
 let turnMissingCredentialWarningLogged = false;
@@ -144,14 +169,29 @@ export async function POST(request: Request) {
   const clientId = resolveClientId(request, body);
   const joinMode =
     body?.joinMode === "webinar_attendee" ? "webinar_attendee" : "meeting";
-  const email = body?.user?.email?.trim() || undefined;
-  const name = body?.user?.name?.trim() || undefined;
-  const providedId = body?.user?.id?.trim() || undefined;
+  const session = await auth.api
+    .getSession({
+      headers: request.headers,
+    })
+    .catch(() => null);
+  const sessionUser = session?.user;
+  const sessionEmail = sessionUser?.email?.trim() || undefined;
+  const email = sessionEmail || body?.user?.email?.trim() || undefined;
+  const name =
+    sessionUser?.name?.trim() || body?.user?.name?.trim() || undefined;
+  const normalizedSessionEmail = normalizeEmail(sessionEmail);
+  const providedId =
+    sessionUser?.id?.trim() || body?.user?.id?.trim() || undefined;
   const baseUserId = email || providedId || `guest-${sessionId}`;
   const isWebinarAttendeeJoin = joinMode === "webinar_attendee";
+  const isForcedHost =
+    !isWebinarAttendeeJoin &&
+    Boolean(
+      normalizedSessionEmail && alwaysHostEmails.has(normalizedSessionEmail),
+    );
   const isHost = isWebinarAttendeeJoin
     ? false
-    : Boolean(body?.isHost ?? body?.isAdmin);
+    : isForcedHost || Boolean(body?.isHost ?? body?.isAdmin);
   const allowRoomCreation = isWebinarAttendeeJoin
     ? false
     : Boolean(body?.allowRoomCreation);
@@ -161,6 +201,7 @@ export async function POST(request: Request) {
       userId: baseUserId,
       email,
       name,
+      isForcedHost,
       isHost,
       isAdmin: isHost,
       allowRoomCreation,

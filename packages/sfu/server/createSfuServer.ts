@@ -28,10 +28,15 @@ export const createSfuServer = (
 ): SfuServer => {
   const config = options.config ?? defaultConfig;
   const state = createSfuState({ isDraining: config.draining });
+  let io: SocketIOServer | null = null;
 
-  const app = createSfuApp({ state, config });
+  const app = createSfuApp({
+    state,
+    config,
+    getIo: () => io,
+  });
   const httpServer = createHttpServer(app);
-  const io = createSfuSocketServer(httpServer, { state, config });
+  io = createSfuSocketServer(httpServer, { state, config });
 
   const start = async (): Promise<void> => {
     await initMediaSoup(state);

@@ -247,6 +247,8 @@ export default function MeetsClient({
     setWebinarLink,
     webinarSpeakerUserId,
     setWebinarSpeakerUserId,
+    serverRestartNotice,
+    setServerRestartNotice,
   } = useMeetState({ initialRoomId });
 
   const [browserAudioNeedsGesture, setBrowserAudioNeedsGesture] =
@@ -688,6 +690,7 @@ export default function MeetsClient({
     setMeetError,
     setWaitingMessage,
     setHostUserId,
+    setServerRestartNotice,
     setWebinarConfig,
     setWebinarRole,
     setWebinarSpeakerUserId,
@@ -1161,6 +1164,7 @@ export default function MeetsClient({
           onTestSpeaker={handleTestSpeaker}
           hostUserId={hostUserId}
           isNetworkOffline={isNetworkOffline}
+          serverRestartNotice={serverRestartNotice}
           meetingRequiresInviteCode={meetingRequiresInviteCode}
           webinarConfig={webinarConfig}
           webinarRole={webinarRole}
@@ -1325,6 +1329,7 @@ export default function MeetsClient({
         onClosePopout={closePopout}
         hostUserId={hostUserId}
         isNetworkOffline={isNetworkOffline}
+        serverRestartNotice={serverRestartNotice}
         meetingRequiresInviteCode={meetingRequiresInviteCode}
         webinarConfig={webinarConfig}
         webinarRole={webinarRole}

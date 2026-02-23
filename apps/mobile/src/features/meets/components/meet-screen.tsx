@@ -171,6 +171,8 @@ export function MeetScreen({
     setWebinarLink,
     webinarSpeakerUserId,
     setWebinarSpeakerUserId,
+    serverRestartNotice,
+    setServerRestartNotice,
   } = useMeetState({ initialRoomId });
   const isWebinarAttendee =
     joinMode === "webinar_attendee" || webinarRole === "attendee";
@@ -717,6 +719,7 @@ export function MeetScreen({
     setMeetError,
     setWaitingMessage,
     setHostUserId,
+    setServerRestartNotice,
     setWebinarConfig,
     setWebinarRole,
     setWebinarSpeakerUserId,
@@ -1422,6 +1425,7 @@ export function MeetScreen({
         <CallScreen
           roomId={roomId}
           connectionState={connectionState}
+          serverRestartNotice={serverRestartNotice}
           participants={participants}
           localParticipant={localParticipant}
           presentationStream={presentationStream}

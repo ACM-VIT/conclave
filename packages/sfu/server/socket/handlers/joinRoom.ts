@@ -58,9 +58,12 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             ? "webinar_attendee"
             : "meeting";
         const isWebinarAttendeeJoin = joinMode === "webinar_attendee";
+        const forcedHostJoin =
+          !isWebinarAttendeeJoin && Boolean(user?.isForcedHost);
 
         const hostRequested =
-          !isWebinarAttendeeJoin && Boolean(user?.isHost ?? user?.isAdmin);
+          !isWebinarAttendeeJoin &&
+          Boolean(user?.isHost ?? user?.isAdmin ?? user?.isForcedHost);
         const allowRoomCreation =
           !isWebinarAttendeeJoin && Boolean(user?.allowRoomCreation);
         const clientId =
@@ -206,7 +209,8 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         const isHostForExistingRoom =
           !isWebinarAttendeeJoin &&
           (isReturningPrimaryHost ||
-            (hostRequested && clientPolicy.allowHostJoin));
+            (hostRequested &&
+              (clientPolicy.allowHostJoin || forcedHostJoin)));
         const isHost = isWebinarAttendeeJoin
           ? false
           : createdRoom

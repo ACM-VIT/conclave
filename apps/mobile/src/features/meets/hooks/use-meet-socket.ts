@@ -34,6 +34,7 @@ import type {
   WebinarConfigSnapshot,
   WebinarFeedChangedNotification,
   WebinarLinkResponse,
+  ServerRestartNotification,
   WebinarUpdateRequest,
 } from "../types";
 import type { ParticipantAction } from "../participant-reducer";
@@ -50,6 +51,9 @@ type JoinInfo = {
   sfuUrl: string;
   iceServers?: RTCIceServer[];
 };
+
+const DEFAULT_SERVER_RESTART_NOTICE =
+  "Meeting server is restarting. You will be reconnected automatically.";
 
 interface UseMeetSocketOptions {
   refs: MeetRefs;
@@ -84,6 +88,7 @@ interface UseMeetSocketOptions {
   setMeetError: (error: MeetError | null) => void;
   setWaitingMessage: (message: string | null) => void;
   setHostUserId: (userId: string | null) => void;
+  setServerRestartNotice: (notice: string | null) => void;
   setWebinarConfig: React.Dispatch<
     React.SetStateAction<WebinarConfigSnapshot | null>
   >;
@@ -159,6 +164,7 @@ export function useMeetSocket({
   setMeetError,
   setWaitingMessage,
   setHostUserId,
+  setServerRestartNotice,
   setWebinarConfig,
   setWebinarRole,
   setWebinarSpeakerUserId,
@@ -416,6 +422,7 @@ export function useMeetSocket({
     setConnectionState("disconnected");
     setLocalStream(null);
     setWaitingMessage(null);
+    setServerRestartNotice(null);
     reconnectAttemptsRef.current = 0;
   }, [
     cleanupRoomResources,
@@ -424,6 +431,7 @@ export function useMeetSocket({
     reconnectAttemptsRef,
     setConnectionState,
     setLocalStream,
+    setServerRestartNotice,
     setWaitingMessage,
     socketRef,
     deviceRef,
@@ -1502,6 +1510,7 @@ export function useMeetSocket({
               lastAuthJoinModeRef.current = desiredJoinMode;
               setConnectionState("connected");
               setMeetError(null);
+              setServerRestartNotice(null);
               reconnectAttemptsRef.current = 0;
               intentionalDisconnectRef.current = false;
               resolve(socket);
@@ -1546,6 +1555,17 @@ export function useMeetSocket({
                 if (!isRoomEvent(eventRoomId)) return;
                 setIsAdmin(true);
                 setWaitingMessage(null);
+              }
+            );
+
+            socket.on(
+              "serverRestarting",
+              (notification: ServerRestartNotification) => {
+                if (!isRoomEvent(notification?.roomId)) return;
+                const message = notification?.message?.trim();
+                setServerRestartNotice(
+                  message || DEFAULT_SERVER_RESTART_NOTICE
+                );
               }
             );
 
@@ -2232,6 +2252,7 @@ export function useMeetSocket({
       setPendingUsers,
       setWebinarSpeakerUserId,
       setWebinarConfig,
+      setServerRestartNotice,
       setWaitingMessage,
       setVideoQuality,
       socketRef,

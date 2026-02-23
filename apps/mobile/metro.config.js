@@ -7,6 +7,7 @@ const config = getDefaultConfig(__dirname);
 const isCI = process.env.CI === "1" || process.env.CI === "true";
 const workspaceRoot = path.resolve(__dirname, "../..");
 const appsSdkPath = path.resolve(workspaceRoot, "packages/apps-sdk");
+const meetingCorePath = path.resolve(workspaceRoot, "packages/meeting-core");
 const workspaceNodeModulesPath = path.resolve(workspaceRoot, "node_modules");
 const isomorphicWebcryptoShimPackagePath = path.resolve(
   __dirname,
@@ -68,7 +69,7 @@ config.resolver = {
   disableHierarchicalLookup: true,
 };
 
-config.watchFolders = [appsSdkPath, workspaceNodeModulesPath];
+config.watchFolders = [appsSdkPath, meetingCorePath, workspaceNodeModulesPath];
 
 module.exports = withNativeWind(config, {
   input: "./src/global.css",

@@ -135,6 +135,7 @@ interface MeetsMainContentProps {
   onClosePopout?: () => void;
   hostUserId: string | null;
   isNetworkOffline: boolean;
+  serverRestartNotice?: string | null;
   isTtsDisabled: boolean;
   meetingRequiresInviteCode: boolean;
   webinarConfig?: WebinarConfigSnapshot | null;
@@ -286,6 +287,7 @@ export default function MeetsMainContent({
   onClosePopout,
   hostUserId,
   isNetworkOffline,
+  serverRestartNotice = null,
   isTtsDisabled,
   meetingRequiresInviteCode,
   webinarConfig,
@@ -628,10 +630,11 @@ export default function MeetsMainContent({
     <div
       className={`flex-1 flex flex-col overflow-hidden relative ${isJoined ? "p-4" : "p-0"}`}
     >
-      {isJoined && !isWebinarAttendee && (
+      {isJoined && (!isWebinarAttendee || serverRestartNotice) && (
         <ConnectionBanner
           state={connectionState}
           isOffline={isNetworkOffline}
+          serverRestartNotice={serverRestartNotice}
         />
       )}
       <SystemAudioPlayers
@@ -953,13 +956,18 @@ export default function MeetsMainContent({
                   Ghost
                 </div>
               )}
-              {connectionState === "reconnecting" && (
+              {(connectionState === "reconnecting" ||
+                (serverRestartNotice &&
+                  !["error", "disconnected"].includes(connectionState))) && (
                 <div
                   className="flex items-center gap-1.5 text-amber-400 text-[10px] uppercase tracking-wider"
                   style={{ fontFamily: "'PolySans Mono', monospace" }}
                 >
                   <RefreshCw className="w-3 h-3 animate-spin" />
-                  Reconnecting
+                  {serverRestartNotice &&
+                  !["error", "disconnected"].includes(connectionState)
+                    ? "Restarting"
+                    : "Reconnecting"}
                 </div>
               )}
               <div

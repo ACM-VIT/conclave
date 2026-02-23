@@ -12,6 +12,12 @@
       "@conclave/apps-sdk/*": [
         "../../packages/apps-sdk/src/*"
       ],
+      "@conclave/meeting-core": [
+        "../../packages/meeting-core/src/index.ts"
+      ],
+      "@conclave/meeting-core/*": [
+        "../../packages/meeting-core/src/*"
+      ],
       "@conclave/apps-sdk/whiteboard/native": [
         "../../packages/apps-sdk/src/apps/whiteboard/native/index.ts"
       ],

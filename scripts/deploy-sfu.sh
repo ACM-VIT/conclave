@@ -2,13 +2,27 @@
 set -euo pipefail
 
 DEPLOY_BROWSER_LOCAL="false"
+FORCE_DRAIN="false"
+FORCE_DRAIN_NOTICE_MS="${FORCE_DRAIN_NOTICE_MS:-4000}"
 for arg in "$@"; do
   case $arg in
     --with-browser|--with-browser-local)
       DEPLOY_BROWSER_LOCAL="true"
       ;;
+    --force-drain)
+      FORCE_DRAIN="true"
+      ;;
+    --force-drain-notice-ms=*)
+      FORCE_DRAIN="true"
+      FORCE_DRAIN_NOTICE_MS="${arg#*=}"
+      ;;
   esac
 done
+
+if ! [[ "$FORCE_DRAIN_NOTICE_MS" =~ ^[0-9]+$ ]]; then
+  echo "FORCE_DRAIN_NOTICE_MS must be a non-negative integer (milliseconds)." >&2
+  exit 1
+fi
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE="${ROOT_DIR}/.env"
@@ -165,9 +179,11 @@ fi
 if [[ "$ACTIVE_SERVICE" == "sfu-a" ]]; then
   INACTIVE_SERVICE="sfu-b"
   INACTIVE_URL="$SFU_B_URL"
+  ACTIVE_ROOMS="$ROOMS_A"
 else
   INACTIVE_SERVICE="sfu-a"
   INACTIVE_URL="$SFU_A_URL"
+  ACTIVE_ROOMS="$ROOMS_B"
 fi
 
 echo "Active service: ${ACTIVE_SERVICE}"
@@ -176,16 +192,36 @@ echo "Inactive service: ${INACTIVE_SERVICE}"
 echo "Building and starting ${INACTIVE_SERVICE}..."
 "${COMPOSE[@]}" up -d --build "$INACTIVE_SERVICE"
 
+FORCED_DRAIN_ACTIVE="false"
 if [[ "$ACTIVE_SERVICE" == "sfu-a" && "$HAS_STATUS_A" != "true" ]]; then
   echo "Active SFU not reachable; skipping drain."
 elif [[ "$ACTIVE_SERVICE" == "sfu-b" && "$HAS_STATUS_B" != "true" ]]; then
   echo "Active SFU not reachable; skipping drain."
 elif [[ -n "$ACTIVE_URL" ]]; then
   echo "Draining ${ACTIVE_SERVICE}..."
-  if ! curl -sS -X POST "${ACTIVE_URL}/drain" \
+  DRAIN_PAYLOAD='{"draining": true}'
+  if [[ "$FORCE_DRAIN" == "true" ]]; then
+    if [[ "$ACTIVE_ROOMS" =~ ^[0-9]+$ && "$ACTIVE_ROOMS" -gt 0 ]]; then
+      echo "Force drain enabled; notifying clients before disconnecting active rooms."
+    else
+      echo "Force drain enabled; no active rooms detected at pre-check."
+    fi
+    DRAIN_PAYLOAD="{\"draining\": true, \"force\": true, \"noticeMs\": ${FORCE_DRAIN_NOTICE_MS}}"
+  fi
+  DRAIN_RESPONSE=""
+  if DRAIN_RESPONSE="$(curl -fsS -X POST "${ACTIVE_URL}/drain" \
     -H "x-sfu-secret: ${SFU_SECRET}" \
     -H "content-type: application/json" \
-    -d '{"draining": true}' >/dev/null; then
+    -d "${DRAIN_PAYLOAD}")"; then
+    if [[ "$FORCE_DRAIN" == "true" ]]; then
+      forced_result="$(printf "%s" "$DRAIN_RESPONSE" | json_field forced || echo "false")"
+      if [[ "$forced_result" == "true" ]]; then
+        FORCED_DRAIN_ACTIVE="true"
+      else
+        echo "Force drain was requested but was not applied by ${ACTIVE_SERVICE}."
+      fi
+    fi
+  else
     echo "Failed to drain ${ACTIVE_SERVICE}; continuing." >&2
   fi
 fi
@@ -193,7 +229,9 @@ fi
 DRAIN_TIMEOUT_SECONDS="${DRAIN_TIMEOUT_SECONDS:-3600}"
 DRAIN_POLL_SECONDS="${DRAIN_POLL_SECONDS:-10}"
 
-if [[ -n "$ACTIVE_URL" && "$HAS_STATUS_A" == "true" && "$ACTIVE_SERVICE" == "sfu-a" ]] || \
+if [[ "$FORCED_DRAIN_ACTIVE" == "true" ]]; then
+  echo "Force drain requested; skipping room-drain wait."
+elif [[ -n "$ACTIVE_URL" && "$HAS_STATUS_A" == "true" && "$ACTIVE_SERVICE" == "sfu-a" ]] || \
    [[ -n "$ACTIVE_URL" && "$HAS_STATUS_B" == "true" && "$ACTIVE_SERVICE" == "sfu-b" ]]; then
   echo "Waiting for ${ACTIVE_SERVICE} rooms to drain..."
   start_ts="$(date +%s)"
