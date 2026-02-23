@@ -117,6 +117,15 @@ export const registerAdminHandlers = (
     }
 
     const currentRoom = context.currentRoom;
+    const isActiveAdmin = context.currentClient instanceof Admin;
+    const hasPersistedAdminRole = Boolean(
+      context.currentUserKey && currentRoom.isAdminUserKey(context.currentUserKey),
+    );
+    if (!isActiveAdmin && !hasPersistedAdminRole) {
+      respond(cb, { error: "Only hosts can promote another host." });
+      return;
+    }
+
     const targetClient = currentRoom.getClient(targetId);
     if (!targetClient) {
       respond(cb, { error: "User not found" });
