@@ -344,6 +344,82 @@ export function prioritizeActiveSpeaker<T extends { userId: string }>(
   return ordered;
 }
 
+const ACTIVE_SPEAKER_PROMOTION_THRESHOLD = 16;
+const FIRST_PAGE_REMOTE_COUNT = ACTIVE_SPEAKER_PROMOTION_THRESHOLD - 1;
+
+export function reorderOverflowActiveSpeakers<T extends { userId: string }>(
+  canonicalRemoteParticipants: readonly T[],
+  orderedRemoteParticipants: readonly T[],
+  activeSpeakerId: string | null,
+  localUserId: string,
+  overflowSpeakerHistory: readonly string[]
+): { orderedParticipants: T[]; nextOverflowSpeakerHistory: string[] } {
+  const totalParticipants = canonicalRemoteParticipants.length + 1;
+  if (totalParticipants <= ACTIVE_SPEAKER_PROMOTION_THRESHOLD) {
+    return {
+      orderedParticipants: [...orderedRemoteParticipants],
+      nextOverflowSpeakerHistory: [],
+    };
+  }
+
+  const canonicalParticipantById = new Map(
+    canonicalRemoteParticipants.map((participant) => [
+      participant.userId,
+      participant,
+    ])
+  );
+  const orderedParticipantById = new Map(
+    orderedRemoteParticipants.map((participant) => [participant.userId, participant])
+  );
+  const firstPageRemoteIds = new Set(
+    canonicalRemoteParticipants
+      .slice(0, FIRST_PAGE_REMOTE_COUNT)
+      .map((participant) => participant.userId)
+  );
+
+  let nextHistory = overflowSpeakerHistory.filter(
+    (userId) =>
+      canonicalParticipantById.has(userId) && !firstPageRemoteIds.has(userId)
+  );
+
+  if (activeSpeakerId && activeSpeakerId !== localUserId) {
+    const activeSpeakerIndex = canonicalRemoteParticipants.findIndex(
+      (participant) => participant.userId === activeSpeakerId
+    );
+    if (activeSpeakerIndex >= FIRST_PAGE_REMOTE_COUNT) {
+      nextHistory = [
+        activeSpeakerId,
+        ...nextHistory.filter((userId) => userId !== activeSpeakerId),
+      ];
+    }
+  }
+
+  if (!nextHistory.length) {
+    return {
+      orderedParticipants: [...orderedRemoteParticipants],
+      nextOverflowSpeakerHistory: [],
+    };
+  }
+
+  const promotedIds = new Set(nextHistory);
+  const promotedParticipants = nextHistory
+    .map(
+      (userId) =>
+        orderedParticipantById.get(userId) ?? canonicalParticipantById.get(userId)
+    )
+    .filter((participant): participant is T => Boolean(participant));
+  const remainingParticipants = orderedRemoteParticipants.filter(
+    (participant) => !promotedIds.has(participant.userId)
+  );
+
+  return {
+    orderedParticipants: [...promotedParticipants, ...remainingParticipants],
+    nextOverflowSpeakerHistory: promotedParticipants.map(
+      (participant) => participant.userId
+    ),
+  };
+}
+
 export function normalizeBrowserUrl(
   raw: string
 ): { url?: string; error?: string } {

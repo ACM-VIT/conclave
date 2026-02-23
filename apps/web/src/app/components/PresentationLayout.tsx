@@ -1,10 +1,14 @@
 "use client";
 
 import { Ghost, Hand, Mic, MicOff } from "lucide-react";
-import { memo, useEffect, useRef } from "react";
+import { memo, useEffect, useMemo, useRef } from "react";
 import { useSmartParticipantOrder } from "../hooks/useSmartParticipantOrder";
 import type { Participant } from "../lib/types";
-import { getSpeakerHighlightClasses, isSystemUserId } from "../lib/utils";
+import {
+  getSpeakerHighlightClasses,
+  isSystemUserId,
+  reorderOverflowActiveSpeakers,
+} from "../lib/utils";
 import ParticipantVideo from "./ParticipantVideo";
 
 interface PresentationLayoutProps {
@@ -42,6 +46,7 @@ function PresentationLayout({
 }: PresentationLayoutProps) {
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const presentationVideoRef = useRef<HTMLVideoElement>(null);
+  const overflowSpeakerHistoryRef = useRef<string[]>([]);
   const isLocalActiveSpeaker = activeSpeakerId === currentUserId;
 
   useEffect(() => {
@@ -70,12 +75,26 @@ function PresentationLayout({
     }
   }, [presentationStream]);
 
-  const remoteParticipants = useSmartParticipantOrder(
-    Array.from(participants.values()).filter(
-      (participant) => !isSystemUserId(participant.userId)
-    ),
+  const participantArray = Array.from(participants.values()).filter(
+    (participant) =>
+      !isSystemUserId(participant.userId) && participant.userId !== currentUserId
+  );
+  const smartOrderedParticipants = useSmartParticipantOrder(
+    participantArray,
     activeSpeakerId
   );
+  const remoteParticipants = useMemo(() => {
+    const { orderedParticipants, nextOverflowSpeakerHistory } =
+      reorderOverflowActiveSpeakers(
+        participantArray,
+        smartOrderedParticipants,
+        activeSpeakerId,
+        currentUserId,
+        overflowSpeakerHistoryRef.current
+      );
+    overflowSpeakerHistoryRef.current = nextOverflowSpeakerHistory;
+    return orderedParticipants;
+  }, [activeSpeakerId, currentUserId, participantArray, smartOrderedParticipants]);
 
   return (
     <div className="flex flex-1 gap-4 overflow-hidden mt-5">

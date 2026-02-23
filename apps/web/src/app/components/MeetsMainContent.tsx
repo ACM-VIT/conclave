@@ -1,6 +1,6 @@
 "use client";
 
-import { RefreshCw, UserX } from "lucide-react";
+import { ChevronLeft, ChevronRight, RefreshCw, UserX } from "lucide-react";
 import Image from "next/image";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Dispatch, PointerEvent, SetStateAction } from "react";
@@ -349,6 +349,8 @@ export default function MeetsMainContent({
     x: number;
     y: number;
   } | null>(null);
+  const [gridPageIndex, setGridPageIndex] = useState(0);
+  const [gridTotalPages, setGridTotalPages] = useState(1);
 
   const webinarStage = useMemo(() => {
     if (!nonSystemParticipants.length) {
@@ -562,6 +564,20 @@ export default function MeetsMainContent({
     setPipDragPosition(null);
   }, []);
   const visibleParticipantCount = nonSystemParticipants.length;
+  const isGridMode =
+    isJoined &&
+    !isWebinarAttendee &&
+    !isWhiteboardActive &&
+    !(isDevPlaygroundEnabled && isDevPlaygroundActive) &&
+    !(browserState?.active && browserState.noVncUrl) &&
+    !presentationStream;
+
+  useEffect(() => {
+    if (!isGridMode) {
+      setGridPageIndex(0);
+      setGridTotalPages(1);
+    }
+  }, [isGridMode]);
   const handleToggleParticipants = useCallback(
     () =>
       setIsParticipantsOpen((prev) => {
@@ -827,6 +843,9 @@ export default function MeetsMainContent({
           currentUserId={currentUserId}
           audioOutputDeviceId={audioOutputDeviceId}
           getDisplayName={resolveDisplayName}
+          pageIndex={gridPageIndex}
+          onPageIndexChange={setGridPageIndex}
+          onTotalPagesChange={setGridTotalPages}
         />
       )}
 
@@ -968,6 +987,40 @@ export default function MeetsMainContent({
                   !["error", "disconnected"].includes(connectionState)
                     ? "Restarting"
                     : "Reconnecting"}
+                </div>
+              )}
+              {isGridMode && gridTotalPages > 1 && (
+                <div
+                  className="flex items-center gap-2 rounded-full border border-[#FEFCD9]/15 bg-black/60 px-2 py-1"
+                  style={{ fontFamily: "'PolySans Mono', monospace" }}
+                >
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setGridPageIndex((prev) => Math.max(0, prev - 1))
+                    }
+                    disabled={gridPageIndex === 0}
+                    className="rounded-full p-1 text-[#FEFCD9] transition-opacity disabled:opacity-35"
+                    aria-label="Previous participants page"
+                  >
+                    <ChevronLeft className="h-3.5 w-3.5" />
+                  </button>
+                  <span className="px-1 text-[10px] uppercase tracking-wide text-[#FEFCD9]/75">
+                    {gridPageIndex + 1}/{gridTotalPages}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setGridPageIndex((prev) =>
+                        Math.min(gridTotalPages - 1, prev + 1),
+                      )
+                    }
+                    disabled={gridPageIndex >= gridTotalPages - 1}
+                    className="rounded-full p-1 text-[#FEFCD9] transition-opacity disabled:opacity-35"
+                    aria-label="Next participants page"
+                  >
+                    <ChevronRight className="h-3.5 w-3.5" />
+                  </button>
                 </div>
               )}
               <div

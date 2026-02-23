@@ -1,11 +1,15 @@
 "use client";
 
 import { Ghost, Hand } from "lucide-react";
-import { memo, useEffect, useRef } from "react";
+import { memo, useEffect, useMemo, useRef } from "react";
 import { WhiteboardWebApp } from "@conclave/apps-sdk/whiteboard/web";
 import { useSmartParticipantOrder } from "../hooks/useSmartParticipantOrder";
 import type { Participant } from "../lib/types";
-import { getSpeakerHighlightClasses, isSystemUserId } from "../lib/utils";
+import {
+  getSpeakerHighlightClasses,
+  isSystemUserId,
+  reorderOverflowActiveSpeakers,
+} from "../lib/utils";
 import ParticipantVideo from "./ParticipantVideo";
 
 interface WhiteboardLayoutProps {
@@ -38,6 +42,7 @@ function WhiteboardLayout({
   getDisplayName,
 }: WhiteboardLayoutProps) {
   const localVideoRef = useRef<HTMLVideoElement>(null);
+  const overflowSpeakerHistoryRef = useRef<string[]>([]);
   const isLocalActiveSpeaker = activeSpeakerId === currentUserId;
 
   useEffect(() => {
@@ -52,14 +57,27 @@ function WhiteboardLayout({
     }
   }, [localStream]);
 
-  const participantsList = useSmartParticipantOrder(
-    Array.from(participants.values()).filter(
-      (participant) =>
-        !isSystemUserId(participant.userId) &&
-        participant.userId !== currentUserId
-    ),
+  const participantArray = Array.from(participants.values()).filter(
+    (participant) =>
+      !isSystemUserId(participant.userId) &&
+      participant.userId !== currentUserId
+  );
+  const smartOrderedParticipants = useSmartParticipantOrder(
+    participantArray,
     activeSpeakerId
   );
+  const participantsList = useMemo(() => {
+    const { orderedParticipants, nextOverflowSpeakerHistory } =
+      reorderOverflowActiveSpeakers(
+        participantArray,
+        smartOrderedParticipants,
+        activeSpeakerId,
+        currentUserId,
+        overflowSpeakerHistoryRef.current
+      );
+    overflowSpeakerHistoryRef.current = nextOverflowSpeakerHistory;
+    return orderedParticipants;
+  }, [activeSpeakerId, currentUserId, participantArray, smartOrderedParticipants]);
 
   return (
     <div className="flex flex-1 min-h-0 min-w-0 gap-4 overflow-hidden mt-5">

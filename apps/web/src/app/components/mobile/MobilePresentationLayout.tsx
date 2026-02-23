@@ -1,10 +1,14 @@
 "use client";
 
 import { Ghost, MicOff } from "lucide-react";
-import { memo, useEffect, useRef } from "react";
+import { memo, useEffect, useMemo, useRef } from "react";
 import { useSmartParticipantOrder } from "../../hooks/useSmartParticipantOrder";
 import type { Participant } from "../../lib/types";
-import { isSystemUserId, truncateDisplayName } from "../../lib/utils";
+import {
+  isSystemUserId,
+  reorderOverflowActiveSpeakers,
+  truncateDisplayName,
+} from "../../lib/utils";
 
 interface MobilePresentationLayoutProps {
   presentationStream: MediaStream;
@@ -33,10 +37,12 @@ function MobilePresentationLayout({
   userEmail,
   isMirrorCamera,
   activeSpeakerId,
+  currentUserId,
   getDisplayName,
 }: MobilePresentationLayoutProps) {
   const presentationVideoRef = useRef<HTMLVideoElement>(null);
   const localVideoRef = useRef<HTMLVideoElement>(null);
+  const overflowSpeakerHistoryRef = useRef<string[]>([]);
 
   useEffect(() => {
     const video = presentationVideoRef.current;
@@ -64,12 +70,26 @@ function MobilePresentationLayout({
     }
   }, [localStream]);
 
-  const participantArray = useSmartParticipantOrder(
-    Array.from(participants.values()).filter(
-      (participant) => !isSystemUserId(participant.userId)
-    ),
+  const participantArray = Array.from(participants.values()).filter(
+    (participant) =>
+      !isSystemUserId(participant.userId) && participant.userId !== currentUserId
+  );
+  const smartOrderedParticipants = useSmartParticipantOrder(
+    participantArray,
     activeSpeakerId
   );
+  const orderedParticipants = useMemo(() => {
+    const { orderedParticipants: nextParticipants, nextOverflowSpeakerHistory } =
+      reorderOverflowActiveSpeakers(
+        participantArray,
+        smartOrderedParticipants,
+        activeSpeakerId,
+        currentUserId,
+        overflowSpeakerHistoryRef.current
+      );
+    overflowSpeakerHistoryRef.current = nextOverflowSpeakerHistory;
+    return nextParticipants;
+  }, [activeSpeakerId, currentUserId, participantArray, smartOrderedParticipants]);
 
   return (
     <div className="flex flex-col w-full h-full p-2 gap-2">
@@ -122,7 +142,7 @@ function MobilePresentationLayout({
         </div>
 
         {/* Other participants - thumbnails with audio */}
-        {participantArray.map((participant) => (
+        {orderedParticipants.map((participant) => (
           <div 
             key={participant.userId} 
             className={`relative w-24 h-24 shrink-0 bg-[#1a1a1a] rounded-xl overflow-hidden border ${

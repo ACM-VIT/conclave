@@ -1,10 +1,14 @@
 "use client";
 
 import { Ghost, Hand, MicOff } from "lucide-react";
-import { memo, useEffect, useRef } from "react";
+import { memo, useEffect, useMemo, useRef } from "react";
 import { useSmartParticipantOrder } from "../../hooks/useSmartParticipantOrder";
 import type { Participant } from "../../lib/types";
-import { isSystemUserId, truncateDisplayName } from "../../lib/utils";
+import {
+  isSystemUserId,
+  reorderOverflowActiveSpeakers,
+  truncateDisplayName,
+} from "../../lib/utils";
 
 interface MobileGridLayoutProps {
   localStream: MediaStream | null;
@@ -35,6 +39,7 @@ function MobileGridLayout({
   getDisplayName,
 }: MobileGridLayoutProps) {
   const localVideoRef = useRef<HTMLVideoElement>(null);
+  const overflowSpeakerHistoryRef = useRef<string[]>([]);
   const isLocalActiveSpeaker = activeSpeakerId === currentUserId;
 
   useEffect(() => {
@@ -49,12 +54,26 @@ function MobileGridLayout({
     }
   }, [localStream]);
 
-  const participantArray = useSmartParticipantOrder(
-    Array.from(participants.values()).filter(
-      (participant) => !isSystemUserId(participant.userId)
-    ),
+  const participantArray = Array.from(participants.values()).filter(
+    (participant) =>
+      !isSystemUserId(participant.userId) && participant.userId !== currentUserId
+  );
+  const smartOrderedParticipants = useSmartParticipantOrder(
+    participantArray,
     activeSpeakerId
   );
+  const orderedParticipants = useMemo(() => {
+    const { orderedParticipants: nextParticipants, nextOverflowSpeakerHistory } =
+      reorderOverflowActiveSpeakers(
+        participantArray,
+        smartOrderedParticipants,
+        activeSpeakerId,
+        currentUserId,
+        overflowSpeakerHistoryRef.current
+      );
+    overflowSpeakerHistoryRef.current = nextOverflowSpeakerHistory;
+    return nextParticipants;
+  }, [activeSpeakerId, currentUserId, participantArray, smartOrderedParticipants]);
   const totalCount = participantArray.length + 1;
 
   // Determine grid layout based on participant count
@@ -116,7 +135,7 @@ function MobileGridLayout({
       </div>
 
       {/* Participant tiles */}
-      {participantArray.map((participant) => (
+      {orderedParticipants.map((participant) => (
         <ParticipantTile
           key={participant.userId}
           participant={participant}
