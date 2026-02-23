@@ -1140,7 +1140,8 @@ export function WhiteboardCanvas({
     <div ref={containerRef} className="w-full h-full relative">
       <canvas
         ref={resolvedCanvasRef}
-        className="w-full h-full touch-none"
+        className="w-full h-full"
+        style={{ touchAction: "manipulation" }}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}

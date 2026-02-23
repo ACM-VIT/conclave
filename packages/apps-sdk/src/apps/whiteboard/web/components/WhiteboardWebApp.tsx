@@ -147,17 +147,12 @@ export function WhiteboardWebApp() {
     return (
       <div className="w-full h-full flex items-center justify-center text-[#b8b8b8]">
         <div className="flex flex-col items-center gap-3">
-          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="animate-pulse">
-            <path d="M12 19l7-7 3 3-7 7-3-3z" />
-            <path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z" />
-          </svg>
           <span className="text-sm">Loading whiteboard…</span>
         </div>
       </div>
     );
   }
 
-  // Remote cursors: filter out self (local user) from awareness states
   const remoteCursors = states.filter(
     (state) =>
       state.cursor &&
@@ -189,21 +184,11 @@ export function WhiteboardWebApp() {
         </div>
 
         {/* ── Floating UI overlay ── */}
-        <div className="absolute inset-0 pointer-events-none p-3">
+        <div className="absolute inset-0 pointer-events-none p-3 sm:p-4">
           {/* Top bar */}
-          <div className="flex items-start justify-between gap-2 w-full">
+          <div className="flex w-full flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
             {/* Left: status */}
-            <div className="pointer-events-auto flex items-center gap-2 shrink-0">
-              <div
-                className="flex items-center gap-2 rounded-lg px-3 py-2 text-[11px] text-[#b8b8b8]"
-                style={{
-                  backgroundColor: "#232329",
-                  boxShadow: "0 2px 8px rgba(0,0,0,0.3)",
-                }}
-              >
-                <span className="inline-flex h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                {/* <span className="font-medium">{states.length} online</span> */}
-              </div>
+            <div className="pointer-events-auto flex flex-wrap items-center gap-2 shrink-0">
               {locked ? (
                 <div
                   className="flex items-center gap-1.5 rounded-lg px-3 py-2 text-[11px] font-medium text-amber-300"
@@ -249,15 +234,26 @@ export function WhiteboardWebApp() {
             </div>
 
             {/* Center: toolbar */}
-            <div className="pointer-events-auto flex justify-center flex-1 min-w-0 overflow-x-auto">
-              <WhiteboardToolbar
-                tool={tool}
-                onToolChange={setTool}
-                settings={settings}
-                onSettingsChange={setSettings}
-                locked={isReadOnly}
-                onExport={handleExport}
-              />
+            <div className="pointer-events-auto order-2 w-full sm:order-none sm:flex sm:flex-1 sm:justify-center">
+              <div
+                className="mx-auto max-w-full overflow-x-auto overflow-y-hidden"
+                style={{
+                  WebkitOverflowScrolling: "touch",
+                  touchAction: "pan-x",
+                  overscrollBehaviorX: "contain",
+                }}
+              >
+                <div className="inline-flex min-w-max justify-center">
+                  <WhiteboardToolbar
+                    tool={tool}
+                    onToolChange={setTool}
+                    settings={settings}
+                    onSettingsChange={setSettings}
+                    locked={isReadOnly}
+                    onExport={handleExport}
+                  />
+                </div>
+              </div>
             </div>
 
             {/* Right: spacer for balance */}
@@ -301,8 +297,14 @@ export function WhiteboardWebApp() {
 
       {/* ── Bottom page bar ── */}
       <div
-        className="flex items-center gap-1 px-3 py-1.5 border-t border-white/5 shrink-0 overflow-x-auto"
-        style={{ backgroundColor: "#1a1a1f" }}
+        className="flex items-center gap-1 px-3 py-1.5 border-t border-white/5 shrink-0 overflow-x-auto overflow-y-hidden"
+        style={{
+          backgroundColor: "#1a1a1f",
+          paddingBottom: "calc(6px + env(safe-area-inset-bottom))",
+          WebkitOverflowScrolling: "touch",
+          touchAction: "pan-x",
+          overscrollBehaviorX: "contain",
+        }}
       >
         {pages.map((page) => (
           <button
@@ -310,7 +312,7 @@ export function WhiteboardWebApp() {
             type="button"
             onClick={() => setActive(page.id)}
             className={`
-              px-3 py-1 rounded text-[11px] font-medium transition-all duration-100 cursor-pointer
+              px-3 py-1.5 rounded text-[11px] font-medium transition-all duration-100 cursor-pointer
               ${
                 page.id === activePage.id
                   ? "bg-[#2e2d39] text-[#e0dfff] shadow-[inset_0_0_0_1px_rgba(169,165,255,0.3)]"

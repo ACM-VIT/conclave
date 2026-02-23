@@ -707,7 +707,7 @@ function MobileMeetsMainContent({
           )}
           {isScreenSharing && (
             <div className="mobile-glass-soft mobile-pill px-2.5 py-1 flex items-center gap-1 text-[#F95F4A] text-[9px] uppercase tracking-[0.2em] font-medium">
-              <span className="w-1.5 h-1.5 rounded-full bg-[#F95F4A] animate-pulse" />
+              <span className="w-1.5 h-1.5 rounded-full bg-[#F95F4A]" />
               Sharing
             </div>
           )}
