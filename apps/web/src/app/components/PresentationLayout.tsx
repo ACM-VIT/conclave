@@ -58,16 +58,91 @@ function PresentationLayout({
 
   useEffect(() => {
     const video = presentationVideoRef.current;
-    if (video && presentationStream) {
-      if (video.srcObject !== presentationStream) {
-        video.srcObject = presentationStream;
-        video.play().catch((err) => {
-          if (err.name !== "AbortError") {
-            console.error("[Meets] Presentation video play error:", err);
-          }
-        });
-      }
+    if (!video || !presentationStream) return;
+
+    if (video.srcObject !== presentationStream) {
+      video.srcObject = presentationStream;
     }
+
+    let cancelled = false;
+    const replayTimeouts: number[] = [];
+    let replayRafId: number | null = null;
+
+    const playVideo = () => {
+      if (cancelled) return;
+      video.play().catch((err) => {
+        if (err.name === "NotAllowedError") {
+          video.muted = true;
+          video.play().catch(() => {});
+          return;
+        }
+        if (err.name !== "AbortError") {
+          console.error("[Meets] Presentation video play error:", err);
+        }
+      });
+    };
+
+    const scheduleReplay = () => {
+      playVideo();
+      if (typeof window !== "undefined") {
+        for (const delay of [80, 220, 480, 900, 1500]) {
+          replayTimeouts.push(window.setTimeout(playVideo, delay));
+        }
+        let frameAttempts = 0;
+        const replayOnFrame = () => {
+          if (cancelled) return;
+          if (video.paused || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+            playVideo();
+          }
+          frameAttempts += 1;
+          if (frameAttempts < 24) {
+            replayRafId = window.requestAnimationFrame(replayOnFrame);
+          }
+        };
+        replayRafId = window.requestAnimationFrame(replayOnFrame);
+      }
+    };
+
+    scheduleReplay();
+
+    const videoTrack = presentationStream.getVideoTracks()[0];
+    const handleTrackUnmuted = () => {
+      scheduleReplay();
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        scheduleReplay();
+      }
+    };
+
+    if (videoTrack) {
+      videoTrack.addEventListener("unmute", handleTrackUnmuted);
+    }
+    video.addEventListener("loadedmetadata", scheduleReplay);
+    video.addEventListener("loadeddata", scheduleReplay);
+    video.addEventListener("canplay", scheduleReplay);
+    video.addEventListener("stalled", scheduleReplay);
+    video.addEventListener("suspend", scheduleReplay);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      cancelled = true;
+      if (videoTrack) {
+        videoTrack.removeEventListener("unmute", handleTrackUnmuted);
+      }
+      video.removeEventListener("loadedmetadata", scheduleReplay);
+      video.removeEventListener("loadeddata", scheduleReplay);
+      video.removeEventListener("canplay", scheduleReplay);
+      video.removeEventListener("stalled", scheduleReplay);
+      video.removeEventListener("suspend", scheduleReplay);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      for (const timeoutId of replayTimeouts) {
+        window.clearTimeout(timeoutId);
+      }
+      if (replayRafId !== null) {
+        window.cancelAnimationFrame(replayRafId);
+      }
+    };
   }, [presentationStream]);
 
   const remoteParticipants = useSmartParticipantOrder(
@@ -83,6 +158,7 @@ function PresentationLayout({
         <video
           ref={presentationVideoRef}
           autoPlay
+          muted
           playsInline
           className="max-w-full max-h-full"
         />
