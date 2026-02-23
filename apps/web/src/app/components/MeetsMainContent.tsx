@@ -37,7 +37,11 @@ import type {
   WebinarLinkResponse,
   WebinarUpdateRequest,
 } from "../lib/types";
-import { isBrowserVideoUserId, isSystemUserId } from "../lib/utils";
+import {
+  formatDisplayName,
+  isBrowserVideoUserId,
+  isSystemUserId,
+} from "../lib/utils";
 import { useApps } from "@conclave/apps-sdk";
 
 interface MeetsMainContentProps {
@@ -139,6 +143,7 @@ interface MeetsMainContentProps {
   isNetworkOffline: boolean;
   serverRestartNotice?: string | null;
   isTtsDisabled: boolean;
+  isDmEnabled: boolean;
   meetingRequiresInviteCode: boolean;
   webinarConfig?: WebinarConfigSnapshot | null;
   webinarRole?: "attendee" | "participant" | "host" | null;
@@ -169,6 +174,23 @@ const getLiveVideoStream = (stream: MediaStream | null): MediaStream | null => {
 const getVideoTrackId = (stream: MediaStream | null): string => {
   const [track] = stream?.getVideoTracks() ?? [];
   return track?.id ?? "none";
+};
+
+const normalizeMentionToken = (value: string): string =>
+  value.trim().toLowerCase().replace(/[^a-z0-9._-]/g, "");
+
+const getMentionTokenForParticipant = (
+  userId: string,
+  displayName: string,
+): string => {
+  const displayNameToken = normalizeMentionToken(displayName);
+  if (displayNameToken) {
+    return displayNameToken;
+  }
+
+  const base = userId.split("#")[0] || userId;
+  const handle = base.split("@")[0] || base;
+  return normalizeMentionToken(handle) || normalizeMentionToken(base);
 };
 
 type PipCorner = "top-left" | "top-right" | "bottom-left" | "bottom-right";
@@ -291,6 +313,7 @@ export default function MeetsMainContent({
   isNetworkOffline,
   serverRestartNotice = null,
   isTtsDisabled,
+  isDmEnabled,
   meetingRequiresInviteCode,
   webinarConfig,
   webinarRole,
@@ -565,6 +588,26 @@ export default function MeetsMainContent({
     setPipDragPosition(null);
   }, []);
   const visibleParticipantCount = nonSystemParticipants.length;
+  const mentionableParticipants = useMemo(
+    () =>
+      nonSystemParticipants
+        .filter((participant) => participant.userId !== currentUserId)
+        .map((participant) => {
+          const displayName = formatDisplayName(
+            resolveDisplayName(participant.userId),
+          );
+          return {
+            userId: participant.userId,
+            displayName,
+            mentionToken: getMentionTokenForParticipant(
+              participant.userId,
+              displayName,
+            ),
+          };
+        })
+        .sort((left, right) => left.displayName.localeCompare(right.displayName)),
+    [nonSystemParticipants, currentUserId, resolveDisplayName],
+  );
   const handleToggleParticipants = useCallback(
     () =>
       setIsParticipantsOpen((prev) => {
@@ -601,6 +644,19 @@ export default function MeetsMainContent({
       },
     );
   }, [socket, isTtsDisabled]);
+
+  const handleToggleDmEnabled = useCallback(() => {
+    if (!socket) return;
+    socket.emit(
+      "setDmEnabled",
+      { enabled: !isDmEnabled },
+      (res: { error?: string }) => {
+        if (res?.error) {
+          console.error("Failed to toggle direct messages:", res.error);
+        }
+      },
+    );
+  }, [socket, isDmEnabled]);
   const handleToggleChat = useCallback(() => {
     if (!isChatOpen && isParticipantsOpen) {
       setIsParticipantsOpen(false);
@@ -917,6 +973,8 @@ export default function MeetsMainContent({
                 onToggleChatLock={onToggleChatLock}
                 isTtsDisabled={isTtsDisabled}
                 onToggleTtsDisabled={handleToggleTtsDisabled}
+                isDmEnabled={isDmEnabled}
+                onToggleDmEnabled={handleToggleDmEnabled}
                 isBrowserActive={browserState?.active ?? false}
                 isBrowserLaunching={isBrowserLaunching}
                 showBrowserControls={showBrowserControls}
@@ -1029,6 +1087,7 @@ export default function MeetsMainContent({
           isGhostMode={ghostEnabled}
           isChatLocked={isChatLocked}
           isAdmin={isAdmin}
+          mentionableParticipants={mentionableParticipants}
         />
       )}
 

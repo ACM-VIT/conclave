@@ -34,6 +34,7 @@ const MessageRow = memo(function MessageRow({
   isNew,
   displayName,
   actionText,
+  directMessageLabel,
   timestamp,
 }: {
   item: ChatMessage;
@@ -41,6 +42,7 @@ const MessageRow = memo(function MessageRow({
   isNew: boolean;
   displayName: string;
   actionText: string | null;
+  directMessageLabel: string | null;
   timestamp: string;
 }) {
   const scale = useRef(new Animated.Value(isNew ? 0.94 : 1)).current;
@@ -77,9 +79,14 @@ const MessageRow = memo(function MessageRow({
   return (
     <Animated.View style={{ opacity, transform: [{ translateY }, { scale }] }}>
       {actionText ? (
-        <Text style={styles.actionText}>
-          <Text style={styles.actionName}>{displayName}</Text> {actionText}
-        </Text>
+        <View style={styles.actionWrap}>
+          {directMessageLabel ? (
+            <Text style={styles.dmLabel}>{directMessageLabel}</Text>
+          ) : null}
+          <Text style={styles.actionText}>
+            <Text style={styles.actionName}>{displayName}</Text> {actionText}
+          </Text>
+        </View>
       ) : (
         <View
           style={[
@@ -96,6 +103,9 @@ const MessageRow = memo(function MessageRow({
               isOwn ? styles.bubbleOwn : styles.bubbleOther,
             ]}
           >
+            {directMessageLabel ? (
+              <Text style={styles.dmLabel}>{directMessageLabel}</Text>
+            ) : null}
             <Text style={[styles.messageText, isOwn && styles.messageTextOwn]}>
               {item.content}
             </Text>
@@ -358,6 +368,14 @@ export function ChatPanel({
               const displayName = isOwn
                 ? "You"
                 : resolveDisplayName(item.userId) || item.displayName;
+              const directMessageLabel = item.isDirect
+                ? isOwn
+                  ? `Private to ${
+                      item.dmTargetDisplayName ||
+                      resolveDisplayName(item.dmTargetUserId || item.userId)
+                    }`
+                  : "Private message"
+                : null;
               const timestamp = new Date(item.timestamp).toLocaleTimeString(
                 [],
                 { hour: "2-digit", minute: "2-digit" }
@@ -371,6 +389,7 @@ export function ChatPanel({
                   isNew={isNew}
                   displayName={displayName}
                   actionText={actionText}
+                  directMessageLabel={directMessageLabel}
                   timestamp={timestamp}
                 />
               );
@@ -494,8 +513,19 @@ const styles = StyleSheet.create({
     color: SHEET_COLORS.textMuted,
     paddingHorizontal: 4,
   },
+  actionWrap: {
+    gap: 2,
+    paddingHorizontal: 4,
+  },
   actionName: {
     color: "rgba(249, 95, 74, 0.8)",
+  },
+  dmLabel: {
+    fontSize: 9,
+    textTransform: "uppercase",
+    letterSpacing: 0.7,
+    color: "rgba(251, 191, 36, 0.85)",
+    marginBottom: 2,
   },
   commandContainer: {
     maxHeight: 320,

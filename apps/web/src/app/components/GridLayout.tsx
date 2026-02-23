@@ -49,6 +49,7 @@ function GridLayout({
   const stableOrderRef = useRef<string[]>([]);
   const [isOverflowOpen, setIsOverflowOpen] = useState(false);
   const isLocalActiveSpeaker = activeSpeakerId === currentUserId;
+  const maxRemoteWithoutOverflow = Math.max(0, MAX_GRID_TILES - 1);
 
   useEffect(() => {
     const video = localVideoRef.current;
@@ -72,7 +73,7 @@ function GridLayout({
     [participants, currentUserId]
   );
 
-  const stableRemoteParticipants = useMemo(() => {
+  const orderedRemoteParticipants = useMemo(() => {
     const participantMap = new Map(
       remoteParticipants.map((participant) => [participant.userId, participant])
     );
@@ -98,13 +99,41 @@ function GridLayout({
       .filter((participant): participant is Participant => Boolean(participant));
   }, [remoteParticipants]);
 
+  const stableRemoteParticipants = useMemo(() => {
+    if (
+      !activeSpeakerId ||
+      activeSpeakerId === currentUserId ||
+      maxRemoteWithoutOverflow <= 0
+    ) {
+      return orderedRemoteParticipants;
+    }
+
+    const activeSpeakerIndex = orderedRemoteParticipants.findIndex(
+      (participant) => participant.userId === activeSpeakerId
+    );
+    if (activeSpeakerIndex < 0 || activeSpeakerIndex < maxRemoteWithoutOverflow) {
+      return orderedRemoteParticipants;
+    }
+
+    // If the active speaker is in the overflow panel, promote them into the top-16 band.
+    const nextParticipants = [...orderedRemoteParticipants];
+    const [activeSpeaker] = nextParticipants.splice(activeSpeakerIndex, 1);
+    if (!activeSpeaker) return orderedRemoteParticipants;
+    nextParticipants.splice(maxRemoteWithoutOverflow - 1, 0, activeSpeaker);
+    return nextParticipants;
+  }, [
+    orderedRemoteParticipants,
+    activeSpeakerId,
+    currentUserId,
+    maxRemoteWithoutOverflow,
+  ]);
+
   useEffect(() => {
     stableOrderRef.current = stableRemoteParticipants.map(
       (participant) => participant.userId
     );
   }, [stableRemoteParticipants]);
 
-  const maxRemoteWithoutOverflow = Math.max(0, MAX_GRID_TILES - 1);
   const hasOverflow = stableRemoteParticipants.length > maxRemoteWithoutOverflow;
   const maxVisibleRemoteParticipants = hasOverflow
     ? isOverflowOpen

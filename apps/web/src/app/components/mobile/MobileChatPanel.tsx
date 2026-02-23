@@ -1,10 +1,16 @@
 "use client";
 
 import { Send, X } from "lucide-react";
-import { memo, useEffect, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import type { ChatMessage } from "../../lib/types";
 import { getActionText, getCommandSuggestions } from "../../lib/chat-commands";
-import { getChatMessageSegments } from "../../lib/utils";
+import { formatDisplayName, getChatMessageSegments } from "../../lib/utils";
+
+interface MentionableParticipant {
+  userId: string;
+  displayName: string;
+  mentionToken: string;
+}
 
 interface MobileChatPanelProps {
   messages: ChatMessage[];
@@ -17,6 +23,7 @@ interface MobileChatPanelProps {
   isChatLocked?: boolean;
   isAdmin?: boolean;
   getDisplayName?: (userId: string) => string;
+  mentionableParticipants?: MentionableParticipant[];
 }
 
 function MobileChatPanel({
@@ -30,10 +37,12 @@ function MobileChatPanel({
   isChatLocked = false,
   isAdmin = false,
   getDisplayName,
+  mentionableParticipants = [],
 }: MobileChatPanelProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const [activeCommandIndex, setActiveCommandIndex] = useState(0);
+  const [activeMentionIndex, setActiveMentionIndex] = useState(0);
   const isChatDisabled = isGhostMode || (isChatLocked && !isAdmin);
 
   const commandSuggestions = getCommandSuggestions(chatInput);
@@ -42,12 +51,53 @@ function MobileChatPanel({
   const isPickingCommand =
     showCommandSuggestions && !chatInput.slice(1).includes(" ");
 
+  const mentionQuery = useMemo(() => {
+    if (isChatDisabled || !chatInput.startsWith("@")) return null;
+    const raw = chatInput.slice(1);
+    if (!raw || /\s/.test(raw)) {
+      return raw.length === 0 ? "" : null;
+    }
+    return raw.toLowerCase();
+  }, [chatInput, isChatDisabled]);
+
+  const mentionSuggestions = useMemo(() => {
+    if (mentionQuery === null) return [];
+    const normalizedMentionQuery = mentionQuery.replace(/[^a-z0-9._-]/g, "");
+    return mentionableParticipants
+      .filter((participant) => {
+        if (!mentionQuery) return true;
+        const displayNameMatch = participant.displayName
+          .toLowerCase()
+          .includes(mentionQuery);
+        const mentionTokenMatch = participant.mentionToken
+          .toLowerCase()
+          .includes(normalizedMentionQuery);
+        return displayNameMatch || mentionTokenMatch;
+      })
+      .sort((left, right) => {
+        const leftStartsWith = left.mentionToken
+          .toLowerCase()
+          .startsWith(normalizedMentionQuery);
+        const rightStartsWith = right.mentionToken
+          .toLowerCase()
+          .startsWith(normalizedMentionQuery);
+        if (leftStartsWith !== rightStartsWith) {
+          return leftStartsWith ? -1 : 1;
+        }
+        return left.displayName.localeCompare(right.displayName);
+      });
+  }, [mentionQuery, mentionableParticipants]);
+
+  const showMentionSuggestions =
+    !showCommandSuggestions && mentionQuery !== null && mentionSuggestions.length > 0;
+
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
   useEffect(() => {
     setActiveCommandIndex(0);
+    setActiveMentionIndex(0);
   }, [chatInput]);
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -58,7 +108,33 @@ function MobileChatPanel({
     }
   };
 
+  const applyMentionSuggestion = (index: number) => {
+    const suggestion = mentionSuggestions[index];
+    if (!suggestion) return;
+    onInputChange(`@${suggestion.mentionToken} `);
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (showMentionSuggestions) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setActiveMentionIndex((prev) => (prev + 1) % mentionSuggestions.length);
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setActiveMentionIndex((prev) =>
+          (prev - 1 + mentionSuggestions.length) % mentionSuggestions.length
+        );
+        return;
+      }
+      if (e.key === "Tab" || e.key === "Enter") {
+        e.preventDefault();
+        applyMentionSuggestion(activeMentionIndex);
+        return;
+      }
+    }
+
     if (showCommandSuggestions) {
       if (e.key === "ArrowDown") {
         e.preventDefault();
@@ -93,8 +169,8 @@ function MobileChatPanel({
 
   const resolveDisplayName = (userId: string) => {
     if (userId === currentUserId) return "You";
-    if (getDisplayName) return getDisplayName(userId);
-    return userId;
+    if (getDisplayName) return formatDisplayName(getDisplayName(userId));
+    return formatDisplayName(userId);
   };
 
   const formatTime = (timestamp: number) => {
@@ -151,12 +227,25 @@ function MobileChatPanel({
           messages.map((message) => {
             const isOwn = message.userId === currentUserId;
             const actionText = getActionText(message.content);
+            const directMessageLabel = message.isDirect
+              ? isOwn
+                ? `Private to ${
+                    message.dmTargetDisplayName ||
+                    resolveDisplayName(message.dmTargetUserId || message.userId)
+                  }`
+                : "Private message"
+              : null;
             if (actionText) {
               return (
                 <div
                   key={message.id}
                   className="text-[11px] text-[#FEFCD9]/70 italic px-1"
                 >
+                  {directMessageLabel ? (
+                    <p className="mb-0.5 text-[9px] not-italic uppercase tracking-[0.14em] text-amber-300/80">
+                      {directMessageLabel}
+                    </p>
+                  ) : null}
                   <span className="text-[#F95F4A]/80">
                     {isOwn ? "You" : resolveDisplayName(message.userId)}
                   </span>{" "}
@@ -181,8 +270,15 @@ function MobileChatPanel({
                       : "bg-[#2a2a2a] text-[#FEFCD9] rounded-bl-sm selection:bg-[#F95F4A]/40 selection:text-white"
                   }`}
                 >
-                  <p className="text-sm break-words">
+                    <p className="text-sm break-words">
+                    {directMessageLabel ? (
+                      <span className="mb-1 block text-[9px] uppercase tracking-[0.14em] text-amber-300/80">
+                        {directMessageLabel}
+                      </span>
+                    ) : null}
+                    <span>
                     {renderMessageContent(message.content)}
+                    </span>
                   </p>
                 </div>
                 <span className="text-[9px] text-[#FEFCD9]/30 mt-0.5 px-1">
@@ -200,6 +296,29 @@ function MobileChatPanel({
         onSubmit={handleSubmit}
         className="relative flex items-center gap-2 px-4 py-3 border-t border-[#FEFCD9]/10 bg-[#1a1a1a]"
       >
+        {showMentionSuggestions && (
+          <div className="absolute bottom-full mb-2 left-0 right-0 max-h-40 overflow-y-auto rounded-2xl border border-[#FEFCD9]/10 bg-[#0d0e0d]/95 shadow-xl">
+            {mentionSuggestions.map((participant, index) => {
+              const isActive = index === activeMentionIndex;
+              return (
+                <button
+                  key={participant.userId}
+                  type="button"
+                  onClick={() => applyMentionSuggestion(index)}
+                  className={`w-full px-3 py-2 text-left text-sm transition-colors ${
+                    isActive
+                      ? "bg-[#F95F4A]/20 text-[#FEFCD9]"
+                      : "text-[#FEFCD9]/70 hover:bg-[#FEFCD9]/10"
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-medium">{participant.displayName}</span>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        )}
         {showCommandSuggestions && (
           <div className="absolute bottom-full mb-2 left-0 right-0 max-h-40 overflow-y-auto rounded-2xl border border-[#FEFCD9]/10 bg-[#0d0e0d]/95 shadow-xl">
             {commandSuggestions.map((command, index) => {

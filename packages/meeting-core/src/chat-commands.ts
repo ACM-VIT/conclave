@@ -153,6 +153,9 @@ export function normalizeChatMessage(message: ChatMessage): {
   message: ChatMessage;
   ttsText?: string;
 } {
+  if (message.isDirect) {
+    return { message };
+  }
   const ttsText = getTtsText(message.content);
   if (!ttsText) return { message };
   return {

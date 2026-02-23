@@ -10,11 +10,14 @@ import {
   parseChatCommand,
 } from "../chat-commands";
 
+const DIRECT_MESSAGE_INTENT_PATTERN = /^@\S+\s+[\s\S]+$/;
+
 interface UseMeetChatOptions {
   socketRef: React.MutableRefObject<Socket | null>;
   ghostEnabled: boolean;
   isChatLocked?: boolean;
   isAdmin?: boolean;
+  isDmEnabled?: boolean;
   isMuted?: boolean;
   isCameraOff?: boolean;
   onToggleMute?: () => void;
@@ -34,6 +37,7 @@ export function useMeetChat({
   ghostEnabled,
   isChatLocked = false,
   isAdmin = false,
+  isDmEnabled = true,
   isMuted,
   isCameraOff,
   onToggleMute,
@@ -80,6 +84,7 @@ export function useMeetChat({
         ) => {
           if ("error" in response) {
             console.error("[Meets] Chat error:", response.error);
+            appendLocalMessage(response.error);
             return;
           }
           if (response.message) {
@@ -96,7 +101,7 @@ export function useMeetChat({
         }
       );
     },
-    [socketRef, onTtsMessage, isTtsDisabled]
+    [socketRef, onTtsMessage, isTtsDisabled, appendLocalMessage]
   );
 
   const toggleChat = useCallback(() => {
@@ -119,6 +124,10 @@ export function useMeetChat({
       }
       const trimmed = content.trim();
       if (!trimmed) return;
+      if (DIRECT_MESSAGE_INTENT_PATTERN.test(trimmed) && !isDmEnabled) {
+        appendLocalMessage("Private messages are disabled by the host.");
+        return;
+      }
 
       const parsed = parseChatCommand(trimmed);
       if (parsed) {
@@ -209,6 +218,7 @@ export function useMeetChat({
       ghostEnabled,
       isChatLocked,
       isAdmin,
+      isDmEnabled,
       isTtsDisabled,
       appendLocalMessage,
       clearChat,

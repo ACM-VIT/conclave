@@ -231,6 +231,8 @@ export default function MeetsClient({
     setIsChatLocked,
     isTtsDisabled,
     setIsTtsDisabled,
+    isDmEnabled,
+    setIsDmEnabled,
     isBrowserAudioMuted,
     setIsBrowserAudioMuted,
     hostUserId,
@@ -430,6 +432,7 @@ export default function MeetsClient({
     isObserverMode: isWebinarAttendee,
     isChatLocked,
     isAdmin: isAdminFlag,
+    isDmEnabled,
     isMuted,
     isCameraOff,
     onToggleMute: handleToggleMuteCommand,
@@ -707,6 +710,7 @@ export default function MeetsClient({
     setMeetingRequiresInviteCode,
     isTtsDisabled,
     setIsTtsDisabled,
+    setIsDmEnabled,
     setActiveScreenShareId,
     setVideoQuality,
     videoQualityRef: refs.videoQualityRef,
@@ -1144,6 +1148,7 @@ export default function MeetsClient({
           isNoGuests={isNoGuests}
           onToggleNoGuests={() => socket.toggleNoGuests(!isNoGuests)}
           isTtsDisabled={isTtsDisabled}
+          isDmEnabled={isDmEnabled}
           onToggleLock={() => socket.toggleRoomLock(!isRoomLocked)}
           isChatLocked={isChatLocked}
           onToggleChatLock={() => socket.toggleChatLock(!isChatLocked)}
@@ -1303,6 +1308,7 @@ export default function MeetsClient({
         }}
         isRoomLocked={isRoomLocked}
         isTtsDisabled={isTtsDisabled}
+        isDmEnabled={isDmEnabled}
         onToggleLock={() => socket.toggleRoomLock(!isRoomLocked)}
         isNoGuests={isNoGuests}
         onToggleNoGuests={() => socket.toggleNoGuests(!isNoGuests)}

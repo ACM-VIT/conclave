@@ -106,6 +106,7 @@ interface UseMeetSocketOptions {
   setMeetingRequiresInviteCode: (value: boolean) => void;
   isTtsDisabled: boolean;
   setIsTtsDisabled: (value: boolean) => void;
+  setIsDmEnabled: (value: boolean) => void;
   setActiveScreenShareId: (value: string | null) => void;
   setVideoQuality: (value: VideoQuality) => void;
   videoQualityRef: React.MutableRefObject<VideoQuality>;
@@ -180,6 +181,7 @@ export function useMeetSocket({
   setMeetingRequiresInviteCode,
   isTtsDisabled,
   setIsTtsDisabled,
+  setIsDmEnabled,
   setActiveScreenShareId,
   setVideoQuality,
   videoQualityRef,
@@ -356,6 +358,7 @@ export function useMeetSocket({
       setIsHandRaised(false);
       setIsNoGuests(false);
       setIsTtsDisabled(false);
+      setIsDmEnabled(true);
       setMeetingRequiresInviteCode(false);
       setWebinarConfig(null);
       if (resetRoomId) {
@@ -385,6 +388,7 @@ export function useMeetSocket({
       setWebinarRole,
       setWebinarSpeakerUserId,
       setIsTtsDisabled,
+      setIsDmEnabled,
       setMeetingRequiresInviteCode,
       setWebinarConfig,
       clearReactions,
@@ -1290,6 +1294,7 @@ export function useMeetSocket({
               currentRoomIdRef.current = targetRoomId;
               serverRoomIdRef.current = response.roomId ?? targetRoomId;
               setIsTtsDisabled(response.isTtsDisabled ?? false);
+              setIsDmEnabled(response.isDmEnabled ?? true);
               resolve("waiting");
               return;
             }
@@ -1307,6 +1312,7 @@ export function useMeetSocket({
                 response.meetingRequiresInviteCode ?? false
               );
               setIsTtsDisabled(response.isTtsDisabled ?? false);
+              setIsDmEnabled(response.isDmEnabled ?? true);
               setHostUserId(response.hostUserId ?? null);
               setWebinarRole(response.webinarRole ?? null);
               setWebinarSpeakerUserId(
@@ -1388,6 +1394,7 @@ export function useMeetSocket({
       setConnectionState,
       setIsRoomLocked,
       setIsTtsDisabled,
+      setIsDmEnabled,
       setHostUserId,
       setMeetingRequiresInviteCode,
       setWebinarRole,
@@ -2106,6 +2113,21 @@ export function useMeetSocket({
             );
 
             socket.on(
+              "dmStateChanged",
+              ({
+                enabled,
+                roomId: eventRoomId,
+              }: {
+                enabled: boolean;
+                roomId?: string;
+              }) => {
+                if (!isRoomEvent(eventRoomId)) return;
+                console.log("[Meets] Room DM state changed:", enabled);
+                setIsDmEnabled(enabled);
+              }
+            );
+
+            socket.on(
               "noGuestsChanged",
               ({
                 noGuests,
@@ -2248,6 +2270,7 @@ export function useMeetSocket({
       setIsScreenSharing,
       setIsHandRaised,
       setMeetingRequiresInviteCode,
+      setIsDmEnabled,
       setLocalStream,
       setMeetError,
       setPendingUsers,
@@ -2624,6 +2647,29 @@ export function useMeetSocket({
     [socketRef]
   );
 
+  const toggleDmEnabled = useCallback(
+    (enabled: boolean): Promise<boolean> => {
+      const socket = socketRef.current;
+      if (!socket) return Promise.resolve(false);
+
+      return new Promise((resolve) => {
+        socket.emit(
+          "setDmEnabled",
+          { enabled },
+          (response: { success: boolean; enabled?: boolean } | { error: string }) => {
+            if ("error" in response) {
+              console.error("[Meets] Failed to toggle DM state:", response.error);
+              resolve(false);
+            } else {
+              resolve(response.success);
+            }
+          }
+        );
+      });
+    },
+    [socketRef]
+  );
+
   const getMeetingConfig = useCallback(
     (): Promise<MeetingConfigSnapshot | null> => {
       const socket = socketRef.current;
@@ -2823,6 +2869,7 @@ export function useMeetSocket({
     toggleChatLock,
     toggleNoGuests,
     toggleTtsDisabled,
+    toggleDmEnabled,
     getMeetingConfig,
     updateMeetingConfig,
     getWebinarConfig,
