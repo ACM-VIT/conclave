@@ -578,6 +578,50 @@ export default function MeetsMainContent({
       setGridTotalPages(1);
     }
   }, [isGridMode]);
+
+  useEffect(() => {
+    if (!isGridMode) return;
+
+    const handleGridPageShortcut = (event: KeyboardEvent) => {
+      if (!event.ctrlKey || !event.altKey || event.metaKey || event.shiftKey) {
+        return;
+      }
+
+      const target = event.target as HTMLElement | null;
+      if (target) {
+        const tag = target.tagName;
+        if (
+          target.isContentEditable ||
+          tag === "INPUT" ||
+          tag === "TEXTAREA" ||
+          tag === "SELECT"
+        ) {
+          return;
+        }
+      }
+
+      const pageFromKey =
+        event.key === "1"
+          ? 1
+          : event.key === "2"
+            ? 2
+            : event.key === "3"
+              ? 3
+              : null;
+      if (!pageFromKey) return;
+
+      const nextPageIndex = pageFromKey - 1;
+      if (nextPageIndex >= gridTotalPages) return;
+
+      event.preventDefault();
+      setGridPageIndex(nextPageIndex);
+    };
+
+    window.addEventListener("keydown", handleGridPageShortcut);
+    return () => {
+      window.removeEventListener("keydown", handleGridPageShortcut);
+    };
+  }, [gridTotalPages, isGridMode]);
   const handleToggleParticipants = useCallback(
     () =>
       setIsParticipantsOpen((prev) => {
@@ -993,6 +1037,7 @@ export default function MeetsMainContent({
                 <div
                   className="flex items-center gap-2 rounded-full border border-[#FEFCD9]/15 bg-black/60 px-2 py-1"
                   style={{ fontFamily: "'PolySans Mono', monospace" }}
+                  title="Shortcuts: Ctrl+Alt+1, Ctrl+Alt+2, Ctrl+Alt+3"
                 >
                   <button
                     type="button"
@@ -1002,12 +1047,36 @@ export default function MeetsMainContent({
                     disabled={gridPageIndex === 0}
                     className="rounded-full p-1 text-[#FEFCD9] transition-opacity disabled:opacity-35"
                     aria-label="Previous participants page"
+                    title="Previous page (Shortcuts: Ctrl+Alt+1/2/3)"
                   >
                     <ChevronLeft className="h-3.5 w-3.5" />
                   </button>
                   <span className="px-1 text-[10px] uppercase tracking-wide text-[#FEFCD9]/75">
                     {gridPageIndex + 1}/{gridTotalPages}
                   </span>
+                  {Array.from(
+                    { length: Math.min(3, gridTotalPages) },
+                    (_, index) => index + 1,
+                  ).map((pageNumber) => {
+                    const page = pageNumber - 1;
+                    const isActivePage = gridPageIndex === page;
+                    return (
+                      <button
+                        key={`grid-page-${pageNumber}`}
+                        type="button"
+                        onClick={() => setGridPageIndex(page)}
+                        className={`h-5 min-w-5 rounded border px-1 text-[9px] transition-colors ${
+                          isActivePage
+                            ? "border-[#FEFCD9]/45 bg-[#FEFCD9]/20 text-[#FEFCD9]"
+                            : "border-[#FEFCD9]/20 text-[#FEFCD9]/75 hover:border-[#FEFCD9]/35 hover:text-[#FEFCD9]"
+                        }`}
+                        aria-label={`Go to participants page ${pageNumber}`}
+                        title={`Go to page ${pageNumber} (Ctrl+Alt+${pageNumber})`}
+                      >
+                        {pageNumber}
+                      </button>
+                    );
+                  })}
                   <button
                     type="button"
                     onClick={() =>
@@ -1018,6 +1087,7 @@ export default function MeetsMainContent({
                     disabled={gridPageIndex >= gridTotalPages - 1}
                     className="rounded-full p-1 text-[#FEFCD9] transition-opacity disabled:opacity-35"
                     aria-label="Next participants page"
+                    title="Next page (Shortcuts: Ctrl+Alt+1/2/3)"
                   >
                     <ChevronRight className="h-3.5 w-3.5" />
                   </button>
