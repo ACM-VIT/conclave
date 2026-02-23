@@ -23,6 +23,7 @@ export function useMeetRefs() {
   const audioProducerRef = useRef<Producer | null>(null);
   const videoProducerRef = useRef<Producer | null>(null);
   const screenProducerRef = useRef<Producer | null>(null);
+  const screenAudioProducerRef = useRef<Producer | null>(null);
   const consumersRef = useRef<Map<string, Consumer>>(new Map());
   const producerMapRef = useRef<Map<string, ProducerMapEntry>>(new Map());
   const pendingProducersRef = useRef<Map<string, ProducerInfo>>(new Map());
@@ -80,6 +81,7 @@ export function useMeetRefs() {
     audioProducerRef,
     videoProducerRef,
     screenProducerRef,
+    screenAudioProducerRef,
     consumersRef,
     producerMapRef,
     pendingProducersRef,

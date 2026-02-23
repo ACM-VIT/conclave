@@ -17,6 +17,7 @@ import PresentationLayout from "./PresentationLayout";
 import ReactionOverlay from "./ReactionOverlay";
 import BrowserLayout from "./BrowserLayout";
 import DevPlaygroundLayout from "./DevPlaygroundLayout";
+import ScreenShareAudioPlayers from "./ScreenShareAudioPlayers";
 import SystemAudioPlayers from "./SystemAudioPlayers";
 import WhiteboardLayout from "./WhiteboardLayout";
 import ParticipantVideo from "./ParticipantVideo";
@@ -649,6 +650,10 @@ export default function MeetsMainContent({
         audioOutputDeviceId={audioOutputDeviceId}
         muted={isBrowserAudioMuted}
         onAutoplayBlocked={onBrowserAudioAutoplayBlocked}
+      />
+      <ScreenShareAudioPlayers
+        participants={participants}
+        audioOutputDeviceId={audioOutputDeviceId}
       />
       {isJoined && reactions.length > 0 && (
         <ReactionOverlay

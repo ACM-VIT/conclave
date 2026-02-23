@@ -49,6 +49,7 @@ interface UseMeetMediaOptions {
   audioProducerRef: React.MutableRefObject<Producer | null>;
   videoProducerRef: React.MutableRefObject<Producer | null>;
   screenProducerRef: React.MutableRefObject<Producer | null>;
+  screenAudioProducerRef: React.MutableRefObject<Producer | null>;
   localStreamRef: React.MutableRefObject<MediaStream | null>;
   intentionalTrackStopsRef: React.MutableRefObject<
     WeakSet<MediaStreamTrack>
@@ -83,6 +84,7 @@ export function useMeetMedia({
   audioProducerRef,
   videoProducerRef,
   screenProducerRef,
+  screenAudioProducerRef,
   localStreamRef,
   intentionalTrackStopsRef,
   permissionHintTimeoutRef,
@@ -1192,6 +1194,7 @@ export function useMeetMedia({
     if (ghostEnabled || isObserverMode) return;
     if (isScreenSharing) {
       const producer = screenProducerRef.current;
+      const audioProducer = screenAudioProducerRef.current;
       if (producer) {
         socketRef.current?.emit(
           "closeProducer",
@@ -1206,6 +1209,20 @@ export function useMeetMedia({
         }
       }
       screenProducerRef.current = null;
+      if (audioProducer) {
+        socketRef.current?.emit(
+          "closeProducer",
+          { producerId: audioProducer.id },
+          () => {}
+        );
+        try {
+          audioProducer.close();
+        } catch {}
+        if (audioProducer.track) {
+          audioProducer.track.onended = null;
+        }
+      }
+      screenAudioProducerRef.current = null;
       setIsScreenSharing(false);
       return;
     }
@@ -1250,6 +1267,46 @@ export function useMeetMedia({
       screenProducerRef.current = producer;
       setIsScreenSharing(true);
 
+      const audioTrack = stream.getAudioTracks()[0];
+      if (audioTrack && audioTrack.readyState === "live") {
+        try {
+          const audioProducer = await transport.produce({
+            track: audioTrack,
+            codecOptions: {
+              opusStereo: true,
+              opusFec: true,
+              opusDtx: true,
+              opusMaxAverageBitrate: OPUS_MAX_AVERAGE_BITRATE,
+            },
+            appData: { type: "screen" as ProducerType },
+          });
+
+          screenAudioProducerRef.current = audioProducer;
+          const audioProducerId = audioProducer.id;
+          audioProducer.on("transportclose", () => {
+            if (screenAudioProducerRef.current?.id === audioProducerId) {
+              screenAudioProducerRef.current = null;
+            }
+          });
+
+          audioTrack.onended = () => {
+            socketRef.current?.emit(
+              "closeProducer",
+              { producerId: audioProducer.id },
+              () => {}
+            );
+            try {
+              audioProducer.close();
+            } catch {}
+            if (screenAudioProducerRef.current?.id === audioProducer.id) {
+              screenAudioProducerRef.current = null;
+            }
+          };
+        } catch (audioErr) {
+          console.warn("[Meets] Failed to share screen audio:", audioErr);
+        }
+      }
+
       track.onended = () => {
         socketRef.current?.emit(
           "closeProducer",
@@ -1260,6 +1317,21 @@ export function useMeetMedia({
           producer.close();
         } catch {}
         screenProducerRef.current = null;
+        const currentAudioProducer = screenAudioProducerRef.current;
+        if (currentAudioProducer) {
+          socketRef.current?.emit(
+            "closeProducer",
+            { producerId: currentAudioProducer.id },
+            () => {}
+          );
+          try {
+            currentAudioProducer.close();
+          } catch {}
+          if (currentAudioProducer.track) {
+            currentAudioProducer.track.onended = null;
+          }
+          screenAudioProducerRef.current = null;
+        }
         setIsScreenSharing(false);
       };
     } catch (err) {
@@ -1278,8 +1350,10 @@ export function useMeetMedia({
     setIsScreenSharing,
     producerTransportRef,
     screenProducerRef,
+    screenAudioProducerRef,
     socketRef,
     setMeetError,
+    OPUS_MAX_AVERAGE_BITRATE,
   ]);
 
   useEffect(() => {

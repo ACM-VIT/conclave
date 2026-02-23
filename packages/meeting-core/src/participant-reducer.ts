@@ -25,9 +25,11 @@ const createEmptyParticipant = (
   videoStream: null,
   audioStream: null,
   screenShareStream: null,
+  screenShareAudioStream: null,
   audioProducerId: null,
   videoProducerId: null,
   screenShareProducerId: null,
+  screenShareAudioProducerId: null,
   isMuted: false,
   isCameraOff: false,
   isHandRaised: false,
@@ -75,10 +77,17 @@ export function participantReducer(
       const updated = { ...participant };
 
       if (action.streamType === "screen") {
-        updated.screenShareStream = action.stream;
-        updated.screenShareProducerId = action.stream
-          ? action.producerId
-          : null;
+        if (action.kind === "video") {
+          updated.screenShareStream = action.stream;
+          updated.screenShareProducerId = action.stream
+            ? action.producerId
+            : null;
+        } else if (action.kind === "audio") {
+          updated.screenShareAudioStream = action.stream;
+          updated.screenShareAudioProducerId = action.stream
+            ? action.producerId
+            : null;
+        }
       } else if (action.kind === "video") {
         updated.videoStream = action.stream;
         updated.videoProducerId = action.stream ? action.producerId : null;

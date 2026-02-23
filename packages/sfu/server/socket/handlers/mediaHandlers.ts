@@ -39,10 +39,21 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
         const type = (appData.type as "webcam" | "screen") || "webcam";
         const paused = !!appData.paused;
 
-        if (type === "screen") {
+        const isScreenShareVideo = type === "screen" && kind === "video";
+        const isScreenShareAudio = type === "screen" && kind === "audio";
+
+        if (isScreenShareVideo) {
           const existingScreenShare = room.screenShareProducerId;
           if (existingScreenShare) {
             respond(callback, { error: "Screen is already being shared" });
+            return;
+          }
+        } else if (isScreenShareAudio) {
+          const existingScreenVideo = currentClient.getProducer("video", "screen");
+          if (!existingScreenVideo) {
+            respond(callback, {
+              error: "Screen share audio requires an active screen share",
+            });
             return;
           }
         }
@@ -66,7 +77,7 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
           const activeRoom = state.rooms.get(roomChannelId);
           if (!activeRoom) return;
 
-          if (type === "screen") {
+          if (producer.id === activeRoom.screenShareProducerId) {
             activeRoom.clearScreenShareProducer(producer.id);
           }
 
@@ -88,7 +99,7 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
         producer.on("transportclose", notifyProducerClosed);
         producer.observer.on("close", notifyProducerClosed);
 
-        if (type === "screen") {
+        if (isScreenShareVideo) {
           room.setScreenShareProducer(producer.id);
         }
 

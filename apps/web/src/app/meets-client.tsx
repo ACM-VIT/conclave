@@ -479,6 +479,7 @@ export default function MeetsClient({
     audioProducerRef: refs.audioProducerRef,
     videoProducerRef: refs.videoProducerRef,
     screenProducerRef: refs.screenProducerRef,
+    screenAudioProducerRef: refs.screenAudioProducerRef,
     localStreamRef: refs.localStreamRef,
     intentionalTrackStopsRef: refs.intentionalTrackStopsRef,
     permissionHintTimeoutRef: refs.permissionHintTimeoutRef,

@@ -78,9 +78,11 @@ export interface Participant {
   videoStream: MediaStream | null;
   audioStream: MediaStream | null;
   screenShareStream: MediaStream | null;
+  screenShareAudioStream: MediaStream | null;
   audioProducerId: string | null;
   videoProducerId: string | null;
   screenShareProducerId: string | null;
+  screenShareAudioProducerId: string | null;
   isMuted: boolean;
   isCameraOff: boolean;
   isHandRaised: boolean;

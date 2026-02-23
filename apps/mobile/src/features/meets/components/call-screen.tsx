@@ -284,6 +284,13 @@ export function CallScreen({
       ),
     [participants]
   );
+  const screenShareAudioParticipants = useMemo(
+    () =>
+      Array.from(participants.values()).filter(
+        (participant) => participant.screenShareAudioStream
+      ),
+    [participants]
+  );
   const webinarStage = useMemo(() => {
     if (!webinarParticipants.length) {
       return null;
@@ -645,6 +652,17 @@ export function CallScreen({
 
   return (
     <RNView style={styles.container}>
+      {screenShareAudioParticipants.map((participant) =>
+        participant.screenShareAudioStream ? (
+          <RTCView
+            key={`${participant.userId}-screen-share-audio`}
+            streamURL={participant.screenShareAudioStream.toURL()}
+            style={styles.observerAudio}
+            mirror={false}
+            objectFit="contain"
+          />
+        ) : null
+      )}
       <RNView
         style={[
           styles.content,

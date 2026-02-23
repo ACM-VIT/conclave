@@ -29,6 +29,7 @@ import MobileJoinScreen from "./MobileJoinScreen";
 import MobileParticipantsPanel from "./MobileParticipantsPanel";
 import MobilePresentationLayout from "./MobilePresentationLayout";
 import MobileWhiteboardLayout from "./MobileWhiteboardLayout";
+import ScreenShareAudioPlayers from "../ScreenShareAudioPlayers";
 import SystemAudioPlayers from "../SystemAudioPlayers";
 import { isSystemUserId } from "../../lib/utils";
 import { useApps } from "@conclave/apps-sdk";
@@ -656,6 +657,10 @@ function MobileMeetsMainContent({
         audioOutputDeviceId={audioOutputDeviceId}
         muted={isBrowserAudioMuted}
         onAutoplayBlocked={onBrowserAudioAutoplayBlocked}
+      />
+      <ScreenShareAudioPlayers
+        participants={participants}
+        audioOutputDeviceId={audioOutputDeviceId}
       />
       {/* Status bar area */}
       <div className="safe-area-pt bg-[#0d0e0d]" />

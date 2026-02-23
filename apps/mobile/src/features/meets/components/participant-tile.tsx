@@ -154,7 +154,8 @@ const isSameParticipant = (left: Participant, right: Participant) =>
   left.isGhost === right.isGhost &&
   hasSameStream(left.videoStream, right.videoStream) &&
   hasSameStream(left.audioStream, right.audioStream) &&
-  hasSameStream(left.screenShareStream, right.screenShareStream);
+  hasSameStream(left.screenShareStream, right.screenShareStream) &&
+  hasSameStream(left.screenShareAudioStream, right.screenShareAudioStream);
 
 export const ParticipantTile = React.memo(
   ParticipantTileComponent,
