@@ -574,6 +574,13 @@ export default function MeetsMainContent({
     [isChatOpen, setIsParticipantsOpen, toggleChat],
   );
 
+  const handleOpenParticipants = useCallback(() => {
+    if (isChatOpen) {
+      toggleChat();
+    }
+    setIsParticipantsOpen(true);
+  }, [isChatOpen, toggleChat, setIsParticipantsOpen]);
+
   const handleCloseParticipants = useCallback(
     () => setIsParticipantsOpen(false),
     [setIsParticipantsOpen],
@@ -826,6 +833,7 @@ export default function MeetsMainContent({
           activeSpeakerId={activeSpeakerId}
           currentUserId={currentUserId}
           audioOutputDeviceId={audioOutputDeviceId}
+          onOpenParticipantsPanel={handleOpenParticipants}
           getDisplayName={resolveDisplayName}
         />
       )}
