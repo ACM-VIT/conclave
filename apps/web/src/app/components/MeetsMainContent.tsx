@@ -17,6 +17,7 @@ import PresentationLayout from "./PresentationLayout";
 import ReactionOverlay from "./ReactionOverlay";
 import BrowserLayout from "./BrowserLayout";
 import DevPlaygroundLayout from "./DevPlaygroundLayout";
+import DevMeetToolsPanel from "./DevMeetToolsPanel";
 import ScreenShareAudioPlayers from "./ScreenShareAudioPlayers";
 import SystemAudioPlayers from "./SystemAudioPlayers";
 import WhiteboardLayout from "./WhiteboardLayout";
@@ -310,7 +311,8 @@ export default function MeetsMainContent({
     setLocked,
     refreshState,
   } = useApps();
-  const isDevPlaygroundEnabled = process.env.NODE_ENV === "development";
+  const isDevToolsEnabled = process.env.NODE_ENV === "development";
+  const isDevPlaygroundEnabled = isDevToolsEnabled;
   const isWhiteboardActive = appsState.activeAppId === "whiteboard";
   const isDevPlaygroundActive = appsState.activeAppId === "dev-playground";
   const handleOpenWhiteboard = useCallback(
@@ -661,12 +663,15 @@ export default function MeetsMainContent({
           getDisplayName={resolveDisplayName}
         />
       )}
+      {isDevToolsEnabled && isJoined && !isWebinarAttendee && (
+        <DevMeetToolsPanel roomId={roomId} />
+      )}
       {!isJoined ? (
         hideJoinUI ? (
           <div className="flex flex-1 items-center justify-center">
             <div className="rounded-xl border border-white/10 bg-black/40 px-6 py-4 text-center">
               <p className="text-sm text-[#FEFCD9]">
-                {isLoading ? "Joining webinar..." : "Preparing webinar..."}
+                {isLoading ? "Joining..." : "Preparing..."}
               </p>
               {meetError ? (
                 <p className="mt-2 text-xs text-[#F95F4A]">{meetError.message}</p>

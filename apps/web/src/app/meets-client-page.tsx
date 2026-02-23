@@ -32,6 +32,12 @@ type MeetsClientPageProps = {
   autoJoinOnMount?: boolean;
   hideJoinUI?: boolean;
   fontClassName?: string;
+  user?: {
+    id?: string;
+    email?: string | null;
+    name?: string | null;
+  };
+  isAdmin?: boolean;
 };
 
 export default function MeetsClientPage({
@@ -42,10 +48,11 @@ export default function MeetsClientPage({
   autoJoinOnMount = false,
   hideJoinUI = false,
   fontClassName,
+  user,
+  isAdmin = false,
 }: MeetsClientPageProps) {
-  const user = undefined;
-
-  const isAdmin = false;
+  const defaultUser = user;
+  const resolvedIsAdmin = isAdmin;
 
   const getJoinInfo = useCallback(
     async (
@@ -57,7 +64,7 @@ export default function MeetsClientPage({
         joinMode?: JoinMode;
       }
     ) => {
-      const resolvedUser = options?.user ?? user;
+      const resolvedUser = options?.user ?? defaultUser;
       const isHost = Boolean(options?.isHost);
       const resolvedJoinMode = options?.joinMode ?? joinMode;
       const response = await fetch("/api/sfu/join", {
@@ -83,7 +90,7 @@ export default function MeetsClientPage({
 
       return response.json();
     },
-    [forceJoinOnly, joinMode, user]
+    [forceJoinOnly, joinMode, defaultUser]
   );
 
   const getRooms = useCallback(async () => {
@@ -121,8 +128,8 @@ export default function MeetsClientPage({
         getRooms={getRooms}
         getRoomsForRedirect={getRoomsForRedirect}
         reactionAssets={reactionAssets}
-        user={user}
-        isAdmin={isAdmin}
+        user={defaultUser}
+        isAdmin={resolvedIsAdmin}
         fontClassName={fontClassName}
       />
     </div>

@@ -15,6 +15,12 @@ type MeetsClientShellProps = {
   joinMode?: JoinMode;
   autoJoinOnMount?: boolean;
   hideJoinUI?: boolean;
+  user?: {
+    id?: string;
+    email?: string | null;
+    name?: string | null;
+  };
+  isAdmin?: boolean;
 };
 
 export default function MeetsClientShell({
@@ -24,6 +30,8 @@ export default function MeetsClientShell({
   joinMode,
   autoJoinOnMount,
   hideJoinUI,
+  user,
+  isAdmin,
 }: MeetsClientShellProps) {
   return (
     <MeetsClientPage
@@ -33,6 +41,8 @@ export default function MeetsClientShell({
       joinMode={joinMode}
       autoJoinOnMount={autoJoinOnMount}
       hideJoinUI={hideJoinUI}
+      user={user}
+      isAdmin={isAdmin}
       fontClassName={roboto.className}
     />
   );

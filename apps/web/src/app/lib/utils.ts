@@ -194,6 +194,12 @@ export function getOrCreateSessionId(): string {
   }
 
   try {
+    if (process.env.NODE_ENV === "development") {
+      const override = new URL(window.location.href).searchParams.get("session");
+      if (override) {
+        return override;
+      }
+    }
     const existing = window.sessionStorage.getItem(SESSION_ID_STORAGE_KEY);
     if (existing) return existing;
 
