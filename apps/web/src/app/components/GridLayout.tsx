@@ -48,6 +48,12 @@ function GridLayout({
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const stableOrderRef = useRef<string[]>([]);
   const [isOverflowOpen, setIsOverflowOpen] = useState(false);
+  const [copyStatus, setCopyStatus] = useState<"idle" | "copied">("idle");
+  const [inviteStatus, setInviteStatus] = useState<"idle" | "shared" | "copied">(
+    "idle"
+  );
+  const copyTimeoutRef = useRef<number | null>(null);
+  const inviteTimeoutRef = useRef<number | null>(null);
   const isLocalActiveSpeaker = activeSpeakerId === currentUserId;
 
   useEffect(() => {
@@ -61,6 +67,17 @@ function GridLayout({
       });
     }
   }, [localStream]);
+
+  useEffect(() => {
+    return () => {
+      if (copyTimeoutRef.current) {
+        window.clearTimeout(copyTimeoutRef.current);
+      }
+      if (inviteTimeoutRef.current) {
+        window.clearTimeout(inviteTimeoutRef.current);
+      }
+    };
+  }, []);
 
   const remoteParticipants = useMemo(
     () =>
@@ -106,6 +123,7 @@ function GridLayout({
 
   const maxRemoteWithoutOverflow = Math.max(0, MAX_GRID_TILES - 1);
   const hasOverflow = stableRemoteParticipants.length > maxRemoteWithoutOverflow;
+  const isSolo = stableRemoteParticipants.length === 0;
   const maxVisibleRemoteParticipants = hasOverflow
     ? isOverflowOpen
       ? maxRemoteWithoutOverflow
@@ -201,6 +219,64 @@ function GridLayout({
     ? "speaking" 
     : "";
 
+  const copyToClipboard = async (value: string) => {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(value);
+      return true;
+    }
+    const textarea = document.createElement("textarea");
+    textarea.value = value;
+    textarea.setAttribute("readonly", "");
+    textarea.style.position = "fixed";
+    textarea.style.opacity = "0";
+    document.body.appendChild(textarea);
+    textarea.select();
+    const copied = document.execCommand("copy");
+    document.body.removeChild(textarea);
+    return copied;
+  };
+
+  const handleCopyLink = async () => {
+    if (copyTimeoutRef.current) {
+      window.clearTimeout(copyTimeoutRef.current);
+    }
+    try {
+      await copyToClipboard(window.location.href);
+      setCopyStatus("copied");
+    } catch (error) {
+      console.error("[Meets] Failed to copy meeting link:", error);
+      setCopyStatus("copied");
+    }
+    copyTimeoutRef.current = window.setTimeout(() => {
+      setCopyStatus("idle");
+    }, 2000);
+  };
+
+  const handleInvite = async () => {
+    if (inviteTimeoutRef.current) {
+      window.clearTimeout(inviteTimeoutRef.current);
+    }
+    const meetingLink = window.location.href;
+    try {
+      if (navigator.share) {
+        await navigator.share({
+          title: "Conclave meeting",
+          text: "Join me in this Conclave room.",
+          url: meetingLink,
+        });
+        setInviteStatus("shared");
+      } else {
+        await copyToClipboard(meetingLink);
+        setInviteStatus("copied");
+      }
+    } catch (error) {
+      return;
+    }
+    inviteTimeoutRef.current = window.setTimeout(() => {
+      setInviteStatus("idle");
+    }, 2400);
+  };
+
   return (
     <div className="relative flex flex-1 min-h-0 flex-col">
       <div className={`flex-1 min-h-0 grid ${gridClass} gap-3 overflow-hidden p-4`}>
@@ -259,6 +335,42 @@ function GridLayout({
             </div>
             {isMuted && <MicOff className="w-3 h-3 text-[#F95F4A]" />}
           </div>
+          {isSolo ? (
+            <div className="absolute bottom-3 right-3 w-[280px] rounded-xl border border-[#FEFCD9]/10 bg-black/70 backdrop-blur-sm px-4 py-3 text-[#FEFCD9]">
+              <p
+                className="text-sm font-semibold"
+                style={{ fontFamily: "'PolySans Trial', sans-serif" }}
+              >
+                You are the only person here
+              </p>
+              <p
+                className="mt-1 text-xs text-[#FEFCD9]/60"
+                style={{ fontFamily: "'PolySans Trial', sans-serif" }}
+              >
+                Invite people to join this room.
+              </p>
+              <div className="mt-3 flex gap-2">
+                <button
+                  type="button"
+                  onClick={handleInvite}
+                  className="flex-1 rounded-lg border border-[#FEFCD9]/10 bg-[#1a1a1a] px-3 py-2 text-xs font-medium text-[#FEFCD9] transition-all hover:border-[#FEFCD9]/25 hover:bg-[#1a1a1a]/80"
+                >
+                  {inviteStatus === "shared"
+                    ? "Invite sent"
+                    : inviteStatus === "copied"
+                    ? "Link copied"
+                    : "Invite people"}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleCopyLink}
+                  className="flex-1 rounded-lg border border-[#FEFCD9]/10 bg-black/40 px-3 py-2 text-xs font-medium text-[#FEFCD9]/85 transition-all hover:border-[#FEFCD9]/25 hover:text-[#FEFCD9]"
+                >
+                  {copyStatus === "copied" ? "Link copied" : "Copy link"}
+                </button>
+              </div>
+            </div>
+          ) : null}
         </div>
 
         {visibleParticipants.map((participant) => (
