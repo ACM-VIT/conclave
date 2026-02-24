@@ -229,7 +229,6 @@ function ToolButton({
           }
         }}
       >
-        {/* {keyHint} */}
       </span>
     </button>
   );

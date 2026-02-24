@@ -592,8 +592,6 @@ export function WhiteboardCanvas({
     editor.setSelectionRange(end, end);
   }, [editingElementId]);
 
-  // Enter key on selected text/sticky element → enter editing mode
-  // Delete/Backspace on selected element → delete it
   useEffect(() => {
     if (locked || editingElementId) return;
 
@@ -857,9 +855,7 @@ export function WhiteboardCanvas({
         const nextSelectedId = engineRef.current?.getSelectedId() ?? null;
         setSelectedId(nextSelectedId);
         if (tool === "text" || tool === "sticky") {
-          // Use setTimeout so the Yjs element is flushed before we try to read it
           setTimeout(() => startEditingById(nextSelectedId), 0);
-          // Auto-switch back to select tool after placing text
           if (onToolChange) {
             setTimeout(() => onToolChange("select"), 10);
           }
@@ -1002,18 +998,15 @@ export function WhiteboardCanvas({
         x: event.clientX - rect.left,
         y: event.clientY - rect.top,
       };
-      // Double-click on any text/sticky element starts editing (from any tool)
       const hit = [...elements]
         .reverse()
         .find((element) => isEditableElement(element) && hitTestElement(element, point));
       if (hit && isEditableElement(hit)) {
         startEditingById(hit.id);
-        // Switch to select tool so selection UI works
         if (tool !== "select" && onToolChange) {
           onToolChange("select");
         }
       } else if (tool === "select") {
-        // Double-click on empty space creates a new text element
         const id = engineRef.current ? (() => {
           engineRef.current.setTool("text");
           engineRef.current.onPointerDown(point);

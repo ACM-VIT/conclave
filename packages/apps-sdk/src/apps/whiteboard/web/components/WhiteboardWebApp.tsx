@@ -36,7 +36,9 @@ export function WhiteboardWebApp() {
     const mode = params.get("wbStress");
     const enableViaQuery = Boolean(mode);
     const enableInDev = process.env.NODE_ENV !== "production";
-    const shouldEnable = enableViaQuery || enableInDev;
+    const shouldEnable =
+      enableViaQuery ||
+      (enableInDev && window.matchMedia("(min-width: 768px)").matches);
     if (!shouldEnable) return;
 
     setStressToolsEnabled(true);
@@ -165,7 +167,6 @@ export function WhiteboardWebApp() {
       className="w-full h-full relative overflow-hidden flex flex-col"
       style={{ backgroundColor: "#121212" }}
     >
-      {/* ── Canvas area ── */}
       <div className="flex-1 relative min-h-0">
         <div className="absolute inset-0">
           <WhiteboardCanvas
@@ -183,12 +184,10 @@ export function WhiteboardWebApp() {
           />
         </div>
 
-        {/* ── Floating UI overlay ── */}
         <div className="absolute inset-0 pointer-events-none p-3 sm:p-4">
-          {/* Top bar */}
-          <div className="flex w-full flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-            {/* Left: status */}
-            <div className="pointer-events-auto flex flex-wrap items-center gap-2 shrink-0">
+          <div className="pointer-events-auto w-full rounded-2xl border border-white/5 bg-black/60 backdrop-blur-md px-2.5 py-2 shadow-[0_10px_24px_rgba(0,0,0,0.35)]">
+            <div className="flex w-full flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+              <div className="flex flex-wrap items-center gap-2 shrink-0">
               {locked ? (
                 <div
                   className="flex items-center gap-1.5 rounded-lg px-3 py-2 text-[11px] font-medium text-amber-300"
@@ -231,37 +230,35 @@ export function WhiteboardWebApp() {
                   ) : null}
                 </>
               ) : null}
-            </div>
+              </div>
 
-            {/* Center: toolbar */}
-            <div className="pointer-events-auto order-2 w-full sm:order-none sm:flex sm:flex-1 sm:justify-center">
-              <div
-                className="mx-auto max-w-full overflow-x-auto overflow-y-hidden"
-                style={{
-                  WebkitOverflowScrolling: "touch",
-                  touchAction: "pan-x",
-                  overscrollBehaviorX: "contain",
-                }}
-              >
-                <div className="inline-flex min-w-max justify-center">
-                  <WhiteboardToolbar
-                    tool={tool}
-                    onToolChange={setTool}
-                    settings={settings}
-                    onSettingsChange={setSettings}
-                    locked={isReadOnly}
-                    onExport={handleExport}
-                  />
+              <div className="order-2 w-full sm:order-none sm:flex sm:flex-1 sm:justify-center">
+                <div
+                  className="mx-auto max-w-full overflow-x-auto overflow-y-hidden"
+                  style={{
+                    WebkitOverflowScrolling: "touch",
+                    touchAction: "pan-x",
+                    overscrollBehaviorX: "contain",
+                  }}
+                >
+                  <div className="inline-flex min-w-max justify-center">
+                    <WhiteboardToolbar
+                      tool={tool}
+                      onToolChange={setTool}
+                      settings={settings}
+                      onSettingsChange={setSettings}
+                      locked={isReadOnly}
+                      onExport={handleExport}
+                    />
+                  </div>
                 </div>
               </div>
-            </div>
 
-            {/* Right: spacer for balance */}
-            <div className="hidden sm:block w-24 shrink-0" />
+              <div className="hidden sm:block w-24 shrink-0" />
+            </div>
           </div>
         </div>
 
-        {/* ── Remote cursors ── */}
         {remoteCursors.map((state) => (
           <div
             key={state.clientId}
@@ -295,7 +292,6 @@ export function WhiteboardWebApp() {
         ))}
       </div>
 
-      {/* ── Bottom page bar ── */}
       <div
         className="flex items-center gap-1 px-3 py-1.5 border-t border-white/5 shrink-0 overflow-x-auto overflow-y-hidden"
         style={{
