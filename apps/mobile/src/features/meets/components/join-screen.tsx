@@ -1322,7 +1322,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   welcomeLabel: {
-    fontSize: 18,
+    fontSize: 14,
     lineHeight: textLineHeight(18, 1.2),
     marginBottom: 8,
     fontWeight: "500",

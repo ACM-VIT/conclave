@@ -63,7 +63,13 @@
           "data": [
             {
               "scheme": "https",
-              "host": "conclave.acmvit.in"
+              "host": "conclave.acmvit.in",
+              "pathPrefix": "/w/"
+            },
+            {
+              "scheme": "https",
+              "host": "conclave.acmvit.in",
+              "pathPattern": "/.*-.*-.*"
             }
           ]
         }
