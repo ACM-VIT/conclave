@@ -25,6 +25,12 @@ export const registerDisplayNameHandlers = (
           respond(callback, { error: "Not in a room" });
           return;
         }
+        if (context.currentClient.isObserver) {
+          respond(callback, {
+            error: "Watch-only attendees cannot update display names",
+          });
+          return;
+        }
 
         const user = (socket as any).user;
         const clientId =

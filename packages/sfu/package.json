@@ -17,14 +17,14 @@
   "type": "module",
   "dependencies": {
     "cors": "^2.8.6",
-    "dotenv": "^17.2.3",
+    "dotenv": "^17.3.1",
     "express": "^5.2.1",
     "jsonwebtoken": "^9.0.3",
-    "lib0": "^0.2.85",
-    "mediasoup": "^3.19.15",
+    "lib0": "^0.2.117",
+    "mediasoup": "^3.19.17",
     "socket.io": "^4.8.3",
-    "y-protocols": "^1.0.6",
-    "yjs": "^13.6.19"
+    "y-protocols": "^1.0.7",
+    "yjs": "^13.6.29"
   },
   "devDependencies": {
     "@types/cors": "^2.8.19",

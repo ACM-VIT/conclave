@@ -12,12 +12,13 @@ export type StrokeElement = {
   color: string;
   width: number;
   opacity?: number;
+  rotation?: number;
 };
 
 export type ShapeElement = {
   id: string;
   type: "shape";
-  shape: "rect" | "ellipse" | "line";
+  shape: "rect" | "ellipse" | "line" | "arrow";
   x: number;
   y: number;
   width: number;
@@ -25,6 +26,7 @@ export type ShapeElement = {
   strokeColor: string;
   fillColor?: string;
   strokeWidth: number;
+  rotation?: number;
 };
 
 export type TextElement = {
@@ -37,6 +39,7 @@ export type TextElement = {
   fontSize: number;
   width?: number;
   height?: number;
+  rotation?: number;
 };
 
 export type StickyElement = {
@@ -50,6 +53,7 @@ export type StickyElement = {
   color: string;
   textColor: string;
   fontSize: number;
+  rotation?: number;
 };
 
 export type ImageElement = {
@@ -60,6 +64,7 @@ export type ImageElement = {
   width: number;
   height: number;
   src: string;
+  rotation?: number;
 };
 
 export type WhiteboardElement =

@@ -8,7 +8,7 @@ interface UseMeetMediaSettingsOptions {
 export function useMeetMediaSettings({
   videoQualityRef,
 }: UseMeetMediaSettingsOptions) {
-  const [videoQuality, setVideoQuality] = useState<VideoQuality>("standard");
+  const [videoQuality, setVideoQuality] = useState<VideoQuality>("low");
   const [isMirrorCamera, setIsMirrorCamera] = useState(true);
   const [selectedAudioInputDeviceId, setSelectedAudioInputDeviceId] =
     useState<string>();

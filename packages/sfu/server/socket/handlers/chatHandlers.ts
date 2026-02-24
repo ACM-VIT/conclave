@@ -1,4 +1,5 @@
 import type { ChatMessage, SendChatData } from "../../../types.js";
+import { Admin } from "../../../config/classes/Admin.js";
 import { Logger } from "../../../utilities/loggers.js";
 import type { ConnectionContext } from "../context.js";
 import { respond } from "./ack.js";
@@ -21,8 +22,17 @@ export const registerChatHandlers = (context: ConnectionContext): void => {
           respond(callback, { error: "Not in a room" });
           return;
         }
-        if (context.currentClient.isGhost) {
-          respond(callback, { error: "Ghost mode cannot send chat messages" });
+        if (context.currentClient.isObserver) {
+          respond(callback, {
+            error: "Watch-only attendees cannot send chat messages",
+          });
+          return;
+        }
+        if (
+          context.currentRoom.isChatLocked &&
+          !(context.currentClient instanceof Admin)
+        ) {
+          respond(callback, { error: "Chat is locked by the host" });
           return;
         }
 
@@ -32,8 +42,22 @@ export const registerChatHandlers = (context: ConnectionContext): void => {
           return;
         }
 
+        if (
+          content.toLowerCase().startsWith("/tts ") ||
+          content.toLowerCase() === "/tts"
+        ) {
+          if (context.currentRoom.isTtsDisabled) {
+            respond(callback, {
+              error: "TTS is disabled by the host in this room.",
+            });
+            return;
+          }
+        }
+
         if (content.length > 1000) {
-          respond(callback, { error: "Message too long (max 1000 characters)" });
+          respond(callback, {
+            error: "Message too long (max 1000 characters)",
+          });
           return;
         }
 

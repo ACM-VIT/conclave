@@ -1,5 +1,6 @@
 import { Roboto } from "next/font/google";
 import MeetsClientPage from "./meets-client-page";
+import type { JoinMode } from "./lib/types";
 
 const roboto = Roboto({
   subsets: ["latin"],
@@ -10,16 +11,38 @@ const roboto = Roboto({
 type MeetsClientShellProps = {
   initialRoomId?: string;
   forceJoinOnly?: boolean;
+  bypassMediaPermissions?: boolean;
+  joinMode?: JoinMode;
+  autoJoinOnMount?: boolean;
+  hideJoinUI?: boolean;
+  user?: {
+    id?: string;
+    email?: string | null;
+    name?: string | null;
+  };
+  isAdmin?: boolean;
 };
 
 export default function MeetsClientShell({
   initialRoomId,
   forceJoinOnly,
+  bypassMediaPermissions,
+  joinMode,
+  autoJoinOnMount,
+  hideJoinUI,
+  user,
+  isAdmin,
 }: MeetsClientShellProps) {
   return (
     <MeetsClientPage
       initialRoomId={initialRoomId}
       forceJoinOnly={forceJoinOnly}
+      bypassMediaPermissions={bypassMediaPermissions}
+      joinMode={joinMode}
+      autoJoinOnMount={autoJoinOnMount}
+      hideJoinUI={hideJoinUI}
+      user={user}
+      isAdmin={isAdmin}
       fontClassName={roboto.className}
     />
   );

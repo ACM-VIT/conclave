@@ -5,15 +5,23 @@ import type { AppsAwarenessData } from "../../../types.js";
 import { Logger } from "../../../utilities/loggers.js";
 import { cleanupRoom } from "../../rooms.js";
 import { emitUserLeft } from "../../notifications.js";
+import {
+  emitWebinarAttendeeCountChanged,
+  emitWebinarFeedChanged,
+} from "../../webinarNotifications.js";
 import type { ConnectionContext } from "../context.js";
 import { registerAdminHandlers } from "./adminHandlers.js";
 import { cleanupRoomBrowser } from "./sharedBrowserHandlers.js";
 
 const promoteNextAdmin = (room: Room): Admin | null => {
   for (const client of room.clients.values()) {
-    if (client instanceof Admin || client.isGhost) continue;
-    Object.setPrototypeOf(client, Admin.prototype);
-    return client as Admin;
+    if (client instanceof Admin || client.isGhost || client.isWebinarAttendee) {
+      continue;
+    }
+    const promoted = room.promoteClientToAdmin(client.id);
+    if (promoted) {
+      return promoted;
+    }
   }
   return null;
 };
@@ -55,6 +63,7 @@ export const registerDisconnectHandlers = (
 
         const wasAdmin = activeClient instanceof Admin;
         const isGhost = activeClient.isGhost;
+        const isWebinarAttendee = activeClient.isWebinarAttendee;
         const awarenessRemovals = activeRoom.clearUserAwareness(userId);
 
         for (const removal of awarenessRemovals) {
@@ -70,9 +79,11 @@ export const registerDisconnectHandlers = (
             ghostOnly: true,
             excludeUserId: userId,
           });
-        } else {
+        } else if (!isWebinarAttendee) {
           io.to(roomChannelId).emit("userLeft", { userId });
         }
+        emitWebinarAttendeeCountChanged(io, state, activeRoom);
+        emitWebinarFeedChanged(io, activeRoom);
 
         if (wasAdmin) {
           if (!activeRoom.hasActiveAdmin()) {
@@ -105,7 +116,10 @@ export const registerDisconnectHandlers = (
                 locked: activeRoom.isLocked,
                 roomId,
               });
-              promoted.socket.emit("hostAssigned", { roomId });
+              promoted.socket.emit("hostAssigned", {
+                roomId,
+                hostUserId: promoted.id,
+              });
               if (activeRoom.pendingClients.size > 0) {
                 for (const pending of activeRoom.pendingClients.values()) {
                   pending.socket.emit("waitingRoomStatus", {
@@ -159,6 +173,15 @@ export const registerDisconnectHandlers = (
           } else {
             Logger.info(`Admin left room ${roomId}, but other admins remain.`);
           }
+
+          io.to(roomChannelId).emit("hostChanged", {
+            roomId,
+            hostUserId: activeRoom.getHostUserId(),
+          });
+          io.to(roomChannelId).emit("adminUsersChanged", {
+            roomId,
+            hostUserIds: activeRoom.getAdminUserIds(),
+          });
         }
 
         if (state.rooms.has(roomChannelId)) {

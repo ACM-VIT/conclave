@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import {
   LayoutAnimation,
+  PanResponder,
   Platform,
   Share,
   StyleSheet,
@@ -12,7 +13,11 @@ import {
 import { RTCView } from "react-native-webrtc";
 import * as Clipboard from "expo-clipboard";
 import * as Haptics from "expo-haptics";
-import type { ConnectionState, Participant } from "../types";
+import type {
+  ConnectionState,
+  Participant,
+  WebinarConfigSnapshot,
+} from "../types";
 import { isSystemUserId } from "../utils";
 import { useDeviceLayout, type DeviceLayout } from "../hooks/use-device-layout";
 import { ControlsBar } from "./controls-bar";
@@ -37,6 +42,7 @@ const COLORS = {
 const MEETING_LINK_BASE = "https://conclave.acmvit.in";
 const COPY_RESET_DELAY_MS = 1500;
 const GRID_HORIZONTAL_PADDING = 32;
+const MAX_GRID_TILES = 16;
 
 const getMaxGridColumns = (layout: DeviceLayout, participantCount: number) => {
   if (layout === "large") {
@@ -55,6 +61,7 @@ const getMaxGridColumns = (layout: DeviceLayout, participantCount: number) => {
 interface CallScreenProps {
   roomId: string;
   connectionState: ConnectionState;
+  serverRestartNotice?: string | null;
   participants: Map<string, Participant>;
   localParticipant: Participant;
   presentationStream?: MediaStream | null;
@@ -75,21 +82,93 @@ interface CallScreenProps {
   onToggleChat: () => void;
   onToggleParticipants: () => void;
   onToggleRoomLock?: (locked: boolean) => void;
+  onToggleNoGuests?: (noGuests: boolean) => void;
+  onToggleChatLock?: (locked: boolean) => void;
+  onToggleTtsDisabled?: (disabled: boolean) => void;
   onSendReaction: (emoji: string) => void;
   onOpenSettings: () => void;
   onLeave: () => void;
   participantCount?: number;
   isRoomLocked?: boolean;
+  isNoGuests?: boolean;
+  isChatLocked?: boolean;
+  isTtsDisabled?: boolean;
   isAdmin?: boolean;
   pendingUsersCount?: number;
+  isObserverMode?: boolean;
+  webinarConfig?: WebinarConfigSnapshot | null;
+  webinarSpeakerUserId?: string | null;
 }
 
 const columnWrapperStyle = { gap: 12 } as const;
 const columnWrapperStyleTablet = { gap: 16 } as const;
+const observerAudioStyle = { width: 1, height: 1, opacity: 0 };
+type PipCorner = "top-left" | "top-right" | "bottom-left" | "bottom-right";
+const OBSERVER_PIP_MARGIN = 12;
+const OBSERVER_PIP_WIDTH = 132;
+const OBSERVER_PIP_HEIGHT = 84;
+
+type OverflowGridItem = {
+  itemType: "overflow";
+  id: string;
+  hiddenCount: number;
+};
+
+type GridItem = Participant | OverflowGridItem;
+
+const isOverflowItem = (item: GridItem): item is OverflowGridItem =>
+  "itemType" in item && item.itemType === "overflow";
+
+const clamp = (value: number, min: number, max: number) =>
+  Math.min(Math.max(value, min), max);
+
+const getObserverPipCornerPosition = (
+  corner: PipCorner,
+  stageWidth: number,
+  stageHeight: number
+) => {
+  const minX = OBSERVER_PIP_MARGIN;
+  const minY = OBSERVER_PIP_MARGIN;
+  const maxX = Math.max(minX, stageWidth - OBSERVER_PIP_WIDTH - OBSERVER_PIP_MARGIN);
+  const maxY = Math.max(minY, stageHeight - OBSERVER_PIP_HEIGHT - OBSERVER_PIP_MARGIN);
+
+  switch (corner) {
+    case "top-left":
+      return { x: minX, y: minY };
+    case "top-right":
+      return { x: maxX, y: minY };
+    case "bottom-left":
+      return { x: minX, y: maxY };
+    case "bottom-right":
+    default:
+      return { x: maxX, y: maxY };
+  }
+};
+
+const resolveObserverPipCorner = (
+  x: number,
+  y: number,
+  stageWidth: number,
+  stageHeight: number
+): PipCorner => {
+  const horizontal = x + OBSERVER_PIP_WIDTH / 2 <= stageWidth / 2 ? "left" : "right";
+  const vertical = y + OBSERVER_PIP_HEIGHT / 2 <= stageHeight / 2 ? "top" : "bottom";
+  return `${vertical}-${horizontal}` as PipCorner;
+};
+
+const getLiveVideoStream = (stream: MediaStream | null): MediaStream | null => {
+  if (!stream) return null;
+  const [track] = stream.getVideoTracks();
+  if (!track || track.readyState === "ended") {
+    return null;
+  }
+  return stream;
+};
 
 export function CallScreen({
   roomId,
   connectionState,
+  serverRestartNotice = null,
   participants,
   localParticipant,
   isMuted,
@@ -108,13 +187,22 @@ export function CallScreen({
   onToggleChat,
   onToggleParticipants,
   onToggleRoomLock,
+  onToggleNoGuests,
+  onToggleChatLock,
+  onToggleTtsDisabled,
   onSendReaction,
   onOpenSettings,
   onLeave,
   participantCount,
   isRoomLocked = false,
+  isNoGuests = false,
+  isChatLocked = false,
+  isTtsDisabled = false,
   isAdmin = false,
   pendingUsersCount = 0,
+  isObserverMode = false,
+  webinarConfig,
+  webinarSpeakerUserId,
   presentationStream = null,
   presenterName = "",
 }: CallScreenProps) {
@@ -138,8 +226,11 @@ export function CallScreen({
   const copyResetRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const meetingLink = useMemo(
-    () => (roomId ? `${MEETING_LINK_BASE}/${roomId}` : ""),
-    [roomId]
+    () =>
+      roomId
+        ? `${MEETING_LINK_BASE}/${isObserverMode ? `w/${roomId}` : roomId}`
+        : "",
+    [isObserverMode, roomId]
   );
 
   const meetingCopyText = useMemo(() => {
@@ -185,7 +276,7 @@ export function CallScreen({
     }
   }, [connectionState, refreshState]);
 
-  const participantList = useMemo(() => {
+  const baseParticipantList = useMemo(() => {
     const list = Array.from(participants.values()).filter(
       (participant) => !isSystemUserId(participant.userId)
     );
@@ -193,23 +284,354 @@ export function CallScreen({
     return hasLocal ? list : [localParticipant, ...list];
   }, [participants, localParticipant]);
 
-  const displayParticipantCount = participantCount ?? participantList.length;
+  const stableOrderRef = useRef<string[]>([]);
+  const resolvedLocalParticipant = useMemo(
+    () =>
+      baseParticipantList.find(
+        (participant) => participant.userId === localParticipant.userId
+      ) ?? localParticipant,
+    [baseParticipantList, localParticipant]
+  );
+  const remoteParticipants = useMemo(
+    () =>
+      baseParticipantList.filter(
+        (participant) => participant.userId !== resolvedLocalParticipant.userId
+      ),
+    [baseParticipantList, resolvedLocalParticipant.userId]
+  );
+  const stableRemoteParticipants = useMemo(() => {
+    const participantMap = new Map(
+      remoteParticipants.map((participant) => [participant.userId, participant])
+    );
+    const nextOrder: string[] = [];
+    const seen = new Set<string>();
 
-  const stripParticipants = useMemo(() => {
-    const list = Array.from(participants.values()).filter(
-      (participant) => !isSystemUserId(participant.userId)
+    for (const userId of stableOrderRef.current) {
+      if (participantMap.has(userId)) {
+        nextOrder.push(userId);
+        seen.add(userId);
+      }
+    }
+
+    for (const participant of remoteParticipants) {
+      if (!seen.has(participant.userId)) {
+        nextOrder.push(participant.userId);
+        seen.add(participant.userId);
+      }
+    }
+
+    return nextOrder
+      .map((userId) => participantMap.get(userId))
+      .filter((participant): participant is Participant => Boolean(participant));
+  }, [remoteParticipants]);
+
+  useEffect(() => {
+    stableOrderRef.current = stableRemoteParticipants.map(
+      (participant) => participant.userId
     );
-    const hasLocal = list.some(
-      (participant) => participant.userId === localParticipant.userId
+  }, [stableRemoteParticipants]);
+
+  const participantList = useMemo(
+    () => [resolvedLocalParticipant, ...stableRemoteParticipants],
+    [resolvedLocalParticipant, stableRemoteParticipants]
+  );
+  const participantOrderKey = useMemo(
+    () => participantList.map((participant) => participant.userId).join("|"),
+    [participantList]
+  );
+
+  const maxRemoteWithoutOverflow = Math.max(0, MAX_GRID_TILES - 1);
+  const hasOverflow = stableRemoteParticipants.length > maxRemoteWithoutOverflow;
+  const maxVisibleRemoteParticipants = hasOverflow
+    ? Math.max(0, MAX_GRID_TILES - 2)
+    : maxRemoteWithoutOverflow;
+  const visibleRemoteParticipants = useMemo(() => {
+    if (maxVisibleRemoteParticipants <= 0) {
+      return [];
+    }
+
+    if (stableRemoteParticipants.length <= maxVisibleRemoteParticipants) {
+      return stableRemoteParticipants;
+    }
+
+    const baseVisible = stableRemoteParticipants.slice(0, maxVisibleRemoteParticipants);
+
+    if (!activeSpeakerId || activeSpeakerId === resolvedLocalParticipant.userId) {
+      return baseVisible;
+    }
+
+    if (baseVisible.some((participant) => participant.userId === activeSpeakerId)) {
+      return baseVisible;
+    }
+
+    const activeParticipant = stableRemoteParticipants.find(
+      (participant) => participant.userId === activeSpeakerId
     );
-    return hasLocal ? list : [localParticipant, ...list];
-  }, [participants, localParticipant]);
+    if (!activeParticipant) {
+      return baseVisible;
+    }
+
+    const nextVisible = baseVisible.slice(0, maxVisibleRemoteParticipants - 1);
+    nextVisible.push(activeParticipant);
+    return nextVisible;
+  }, [
+    stableRemoteParticipants,
+    activeSpeakerId,
+    resolvedLocalParticipant.userId,
+    maxVisibleRemoteParticipants,
+  ]);
+  const hiddenRemoteCount = Math.max(
+    0,
+    stableRemoteParticipants.length - visibleRemoteParticipants.length
+  );
+  const showOverflowTile = hiddenRemoteCount > 0;
+  const gridItems = useMemo<GridItem[]>(() => {
+    const items: GridItem[] = [resolvedLocalParticipant, ...visibleRemoteParticipants];
+    if (showOverflowTile) {
+      items.push({
+        itemType: "overflow",
+        id: "overflow",
+        hiddenCount: hiddenRemoteCount,
+      });
+    }
+    return items;
+  }, [resolvedLocalParticipant, visibleRemoteParticipants, showOverflowTile, hiddenRemoteCount]);
+  const gridOrderKey = useMemo(
+    () =>
+      gridItems
+        .map((item) => (isOverflowItem(item) ? item.id : item.userId))
+        .join("|"),
+    [gridItems]
+  );
+  const webinarParticipants = useMemo(
+    () =>
+      Array.from(participants.values()).filter(
+        (participant) => !isSystemUserId(participant.userId)
+      ),
+    [participants]
+  );
+  const screenShareAudioParticipants = useMemo(
+    () =>
+      Array.from(participants.values()).filter(
+        (participant) => participant.screenShareAudioStream
+      ),
+    [participants]
+  );
+  const webinarStage = useMemo(() => {
+    if (!webinarParticipants.length) {
+      return null;
+    }
+
+    const byPresentedScreen = presentationStream
+      ? webinarParticipants.find(
+          (participant) =>
+            participant.screenShareStream?.id === presentationStream.id &&
+            getLiveVideoStream(participant.screenShareStream)
+        )
+      : null;
+    const byAnyScreenShare = webinarParticipants.find(
+      (participant) => getLiveVideoStream(participant.screenShareStream)
+    );
+    const fallbackAudioStream =
+      webinarParticipants.find((participant) => participant.audioStream)
+        ?.audioStream ?? null;
+    const screenShareParticipant = byPresentedScreen ?? byAnyScreenShare;
+
+    if (screenShareParticipant) {
+      const mainVideoStream =
+        getLiveVideoStream(presentationStream) ??
+        getLiveVideoStream(screenShareParticipant.screenShareStream);
+      if (mainVideoStream) {
+        return {
+          mainVideoStream,
+          mainAudioStream:
+            screenShareParticipant.audioStream ?? fallbackAudioStream,
+          displayName:
+            presenterName || resolveDisplayName(screenShareParticipant.userId),
+          pipVideoStream: getLiveVideoStream(screenShareParticipant.videoStream),
+          pipDisplayName: resolveDisplayName(screenShareParticipant.userId),
+          isScreenShare: true,
+        };
+      }
+    }
+
+    const preferredIds = [
+      webinarSpeakerUserId ?? null,
+      activeSpeakerId ?? null,
+    ].filter((value, index, list): value is string => {
+      return Boolean(value) && list.indexOf(value) === index;
+    });
+    const preferredParticipant = preferredIds
+      .map((userId) =>
+        webinarParticipants.find((participant) => participant.userId === userId)
+      )
+      .find((participant) => participant !== undefined);
+    const preferredVideoParticipant =
+      preferredParticipant &&
+      getLiveVideoStream(preferredParticipant.videoStream)
+        ? preferredParticipant
+        : null;
+    const preferredAudioParticipant =
+      preferredParticipant && preferredParticipant.audioStream
+        ? preferredParticipant
+        : null;
+
+    const cameraParticipant =
+      preferredVideoParticipant ??
+      webinarParticipants.find(
+        (participant) =>
+          !participant.isCameraOff &&
+          getLiveVideoStream(participant.videoStream)
+      ) ??
+      webinarParticipants.find((participant) =>
+        getLiveVideoStream(participant.videoStream)
+      ) ??
+      preferredAudioParticipant ??
+      webinarParticipants.find((participant) => participant.audioStream) ??
+      webinarParticipants[0];
+    const cameraStream = getLiveVideoStream(cameraParticipant.videoStream);
+
+    return {
+      mainVideoStream: cameraStream,
+      mainAudioStream: cameraParticipant.audioStream ?? fallbackAudioStream,
+      displayName: presenterName || resolveDisplayName(cameraParticipant.userId),
+      pipVideoStream: null,
+      pipDisplayName: "",
+      isScreenShare: false,
+    };
+  }, [
+    activeSpeakerId,
+    presentationStream,
+    presenterName,
+    resolveDisplayName,
+    webinarParticipants,
+    webinarSpeakerUserId,
+  ]);
+  const [observerPipCorner, setObserverPipCorner] = useState<PipCorner>("bottom-right");
+  const [observerPipDragPosition, setObserverPipDragPosition] = useState<{
+    x: number;
+    y: number;
+  } | null>(null);
+  const observerPipDragOriginRef = useRef<{
+    x: number;
+    y: number;
+    stageWidth: number;
+    stageHeight: number;
+  } | null>(null);
+  const [observerStageSize, setObserverStageSize] = useState({
+    width: 0,
+    height: 0,
+  });
+  const observerPipPanResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => true,
+        onMoveShouldSetPanResponder: () => true,
+        onPanResponderGrant: () => {
+          if (observerStageSize.width <= 0 || observerStageSize.height <= 0) {
+            return;
+          }
+          const origin = getObserverPipCornerPosition(
+            observerPipCorner,
+            observerStageSize.width,
+            observerStageSize.height
+          );
+          observerPipDragOriginRef.current = {
+            x: origin.x,
+            y: origin.y,
+            stageWidth: observerStageSize.width,
+            stageHeight: observerStageSize.height,
+          };
+          setObserverPipDragPosition(origin);
+        },
+        onPanResponderMove: (_, gestureState) => {
+          const origin = observerPipDragOriginRef.current;
+          if (!origin) return;
+          const minX = OBSERVER_PIP_MARGIN;
+          const minY = OBSERVER_PIP_MARGIN;
+          const maxX = Math.max(
+            minX,
+            origin.stageWidth - OBSERVER_PIP_WIDTH - OBSERVER_PIP_MARGIN
+          );
+          const maxY = Math.max(
+            minY,
+            origin.stageHeight - OBSERVER_PIP_HEIGHT - OBSERVER_PIP_MARGIN
+          );
+          const nextX = clamp(origin.x + gestureState.dx, minX, maxX);
+          const nextY = clamp(origin.y + gestureState.dy, minY, maxY);
+          setObserverPipDragPosition({ x: nextX, y: nextY });
+        },
+        onPanResponderRelease: (_, gestureState) => {
+          const origin = observerPipDragOriginRef.current;
+          if (!origin) return;
+
+          const minX = OBSERVER_PIP_MARGIN;
+          const minY = OBSERVER_PIP_MARGIN;
+          const maxX = Math.max(
+            minX,
+            origin.stageWidth - OBSERVER_PIP_WIDTH - OBSERVER_PIP_MARGIN
+          );
+          const maxY = Math.max(
+            minY,
+            origin.stageHeight - OBSERVER_PIP_HEIGHT - OBSERVER_PIP_MARGIN
+          );
+          const fallbackX = clamp(origin.x + gestureState.dx, minX, maxX);
+          const fallbackY = clamp(origin.y + gestureState.dy, minY, maxY);
+          const resolvedX = observerPipDragPosition?.x ?? fallbackX;
+          const resolvedY = observerPipDragPosition?.y ?? fallbackY;
+          setObserverPipCorner(
+            resolveObserverPipCorner(
+              resolvedX,
+              resolvedY,
+              origin.stageWidth,
+              origin.stageHeight
+            )
+          );
+          setObserverPipDragPosition(null);
+          observerPipDragOriginRef.current = null;
+        },
+        onPanResponderTerminate: () => {
+          setObserverPipDragPosition(null);
+          observerPipDragOriginRef.current = null;
+        },
+      }),
+    [observerPipCorner, observerPipDragPosition, observerStageSize]
+  );
+  const observerPipPositionStyle = useMemo(() => {
+    if (observerPipDragPosition) {
+      return {
+        left: observerPipDragPosition.x,
+        top: observerPipDragPosition.y,
+        right: undefined,
+        bottom: undefined,
+      };
+    }
+    const position = getObserverPipCornerPosition(
+      observerPipCorner,
+      observerStageSize.width,
+      observerStageSize.height
+    );
+    return {
+      left: position.x,
+      top: position.y,
+      right: undefined,
+      bottom: undefined,
+    };
+  }, [observerPipCorner, observerPipDragPosition, observerStageSize]);
+
+  const displayParticipantCount = isObserverMode
+    ? webinarConfig?.attendeeCount ?? 0
+    : participantCount ?? participantList.length;
+  const isWebinarSession = isObserverMode || Boolean(webinarConfig?.enabled);
+  const webinarTextStyle = isWebinarSession ? styles.webinarRegularText : null;
+
+  const stripParticipants = participantList;
 
   const safePaddingLeft = Math.max(isTablet ? 12 : 6, insets.left);
   const safePaddingRight = Math.max(isTablet ? 12 : 6, insets.right);
   const availableWidth = width - safePaddingLeft - safePaddingRight;
   const gridGap = isTablet ? 16 : 12;
-  const participantCountForLayout = Math.max(participantList.length, 1);
+  const participantCountForLayout = Math.max(gridItems.length, 1);
   const controlsReservedHeight = 140 + insets.bottom;
   const gridTopPadding =
     layout === "compact" && participantCountForLayout === 2 ? 16 : 8;
@@ -304,11 +726,16 @@ export function CallScreen({
     [optimalGrid.tileWidth, optimalGrid.tileHeight, isTablet]
   );
 
-  // Strip tile size for presentation mode - larger on iPad
   const stripTileSize = isTablet ? 120 : 88;
+  const hasTerminalConnectionState =
+    connectionState === "disconnected" || connectionState === "error";
+  const showServerRestartNotice =
+    Boolean(serverRestartNotice) && !hasTerminalConnectionState;
 
   const connectionLabel =
-    connectionState === "reconnecting"
+    showServerRestartNotice
+      ? "Server restarting, reconnecting"
+      : connectionState === "reconnecting"
       ? "Reconnecting"
       : connectionState === "connecting"
         ? "Connecting"
@@ -327,11 +754,42 @@ export function CallScreen({
   }, []);
 
   useEffect(() => {
-    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-  }, [participantList.length, columns, tileStyle.height, tileStyle.width]);
+    LayoutAnimation.configureNext({
+      duration: 220,
+      create: {
+        type: LayoutAnimation.Types.easeInEaseOut,
+        property: LayoutAnimation.Properties.opacity,
+      },
+      update: {
+        type: LayoutAnimation.Types.easeInEaseOut,
+      },
+      delete: {
+        type: LayoutAnimation.Types.easeInEaseOut,
+        property: LayoutAnimation.Properties.opacity,
+      },
+    });
+  }, [
+    participantOrderKey,
+    gridOrderKey,
+    gridItems.length,
+    columns,
+    tileStyle.height,
+    tileStyle.width,
+  ]);
 
   return (
     <RNView style={styles.container}>
+      {screenShareAudioParticipants.map((participant) =>
+        participant.screenShareAudioStream ? (
+          <RTCView
+            key={`${participant.userId}-screen-share-audio`}
+            streamURL={participant.screenShareAudioStream.toURL()}
+            style={styles.observerAudio}
+            mirror={false}
+            objectFit="contain"
+          />
+        ) : null
+      )}
       <RNView
         style={[
           styles.content,
@@ -342,52 +800,82 @@ export function CallScreen({
           },
         ]}
       >
-        {/* Header */}
         <RNView style={styles.header}>
-          <Pressable
-            onPress={handleShareMeeting}
-            onLongPress={handleCopyMeeting}
-            accessibilityRole="button"
-            accessibilityLabel={`Share meeting link for room ${roomId}`}
-            accessibilityHint="Tap to share. Long press to copy."
-            style={({ pressed }) => [pressed && styles.roomPressed]}
-          >
-            <GlassPill style={[styles.pillGlass, copied && styles.pillCopied]}>
+          {isObserverMode ? (
+            <GlassPill style={styles.pillGlass}>
               <RNView style={styles.roomPill}>
-                {isRoomLocked ? (
-                  <Lock size={12} color={COLORS.primaryOrange} />
-                ) : null}
-                <Text style={[styles.roomId, copied && styles.roomIdCopied]} numberOfLines={1}>
-                  {roomId.toUpperCase()}
+                <Text style={[styles.roomId, webinarTextStyle]} numberOfLines={1}>
+                  WEBINAR
                 </Text>
               </RNView>
             </GlassPill>
-          </Pressable>
+          ) : (
+            <Pressable
+              onPress={handleShareMeeting}
+              onLongPress={handleCopyMeeting}
+              accessibilityRole="button"
+              accessibilityLabel={`Share meeting link for room ${roomId}`}
+              accessibilityHint="Tap to share. Long press to copy."
+              style={({ pressed }) => [pressed && styles.roomPressed]}
+            >
+              <GlassPill style={[styles.pillGlass, copied && styles.pillCopied]}>
+                <RNView style={styles.roomPill}>
+                  {isRoomLocked ? (
+                    <Lock size={12} color={COLORS.primaryOrange} />
+                  ) : null}
+                  <Text
+                    style={[
+                      styles.roomId,
+                      webinarTextStyle,
+                      copied && styles.roomIdCopied,
+                    ]}
+                    numberOfLines={1}
+                  >
+                    {roomId.toUpperCase()}
+                  </Text>
+                </RNView>
+              </GlassPill>
+            </Pressable>
+          )}
 
         {connectionLabel ? (
           <RNView style={styles.statusPill}>
-            <Text style={styles.statusText}>{connectionLabel}</Text>
+            <Text style={[styles.statusText, webinarTextStyle]}>
+              {connectionLabel}
+            </Text>
           </RNView>
         ) : (
-          !isTablet ? (
-            <GlassPill style={[styles.pillGlass, styles.headerPill]}>
-              <Pressable onPress={onOpenSettings} style={styles.headerPillIconButton}>
-                <Settings size={14} color={COLORS.cream} />
-              </Pressable>
-              <RNView style={styles.headerPillDivider} />
-              <Pressable onPress={onToggleParticipants} style={styles.headerPillButton}>
-                <RNView style={styles.participantsPill}>
-                  <Users size={12} color={COLORS.cream} />
-                  <Text style={styles.participantsCount}>{displayParticipantCount}</Text>
-                </RNView>
-              </Pressable>
-            </GlassPill>
-          ) : (
+          isObserverMode ? null : !isTablet ? (
+            isWebinarSession ? (
+              <GlassPill style={styles.pillGlass}>
+                <Pressable onPress={onOpenSettings} style={styles.headerPillIconButtonOnly}>
+                  <Settings size={14} color={COLORS.cream} />
+                </Pressable>
+              </GlassPill>
+            ) : (
+              <GlassPill style={[styles.pillGlass, styles.headerPill]}>
+                <Pressable onPress={onOpenSettings} style={styles.headerPillIconButton}>
+                  <Settings size={14} color={COLORS.cream} />
+                </Pressable>
+                <RNView style={styles.headerPillDivider} />
+                <Pressable onPress={onToggleParticipants} style={styles.headerPillButton}>
+                  <RNView style={styles.participantsPill}>
+                    <Users size={12} color={COLORS.cream} />
+                    <Text style={[styles.participantsCount, webinarTextStyle]}>
+                      {displayParticipantCount}
+                    </Text>
+                  </RNView>
+                </Pressable>
+              </GlassPill>
+            )
+          ) : isWebinarSession ? null : (
             <Pressable onPress={onToggleParticipants}>
               <GlassPill style={styles.pillGlass}>
                 <RNView style={styles.participantsPill}>
                   <Users size={12} color={COLORS.cream} />
-                  <Text style={styles.participantsCount}>{displayParticipantCount}</Text>
+                  <Text style={[styles.participantsCount, webinarTextStyle]}>
+                    {displayParticipantCount}
+                  </Text>
                 </RNView>
               </GlassPill>
             </Pressable>
@@ -395,7 +883,86 @@ export function CallScreen({
         )}
       </RNView>
 
-        {isWhiteboardActive ? (
+        {isObserverMode ? (
+          <RNView
+            style={[
+              styles.presentationContainer,
+              { paddingBottom: 140 + insets.bottom },
+            ]}
+          >
+            <RNView
+              style={styles.presentationStage}
+              onLayout={(event) => {
+                const { width: nextWidth, height: nextHeight } =
+                  event.nativeEvent.layout;
+                if (
+                  nextWidth <= 0 ||
+                  nextHeight <= 0 ||
+                  (observerStageSize.width === nextWidth &&
+                    observerStageSize.height === nextHeight)
+                ) {
+                  return;
+                }
+                setObserverStageSize({
+                  width: nextWidth,
+                  height: nextHeight,
+                });
+              }}
+            >
+              {webinarStage?.mainVideoStream ? (
+                <RTCView
+                  streamURL={webinarStage.mainVideoStream.toURL()}
+                  style={styles.presentationVideo}
+                  mirror={false}
+                  objectFit={webinarStage.isScreenShare ? "contain" : "cover"}
+                />
+              ) : (
+                <RNView style={styles.observerFallback}>
+                  <Text style={[styles.presenterText, webinarTextStyle]}>
+                    {webinarStage?.mainAudioStream
+                      ? `Listening to ${
+                          webinarStage.displayName?.trim() || "the speaker"
+                        }. Video is currently off.`
+                      : "Waiting for the host to start speaking..."}
+                  </Text>
+                </RNView>
+              )}
+              {webinarStage?.mainAudioStream ? (
+                <RTCView
+                  streamURL={webinarStage.mainAudioStream.toURL()}
+                  style={styles.observerAudio}
+                  mirror={false}
+                  objectFit="contain"
+                />
+              ) : null}
+              {webinarStage ? (
+                <RNView style={styles.presenterBadge}>
+                  <Text style={[styles.presenterText, webinarTextStyle]}>
+                    {webinarStage.displayName}
+                  </Text>
+                </RNView>
+              ) : null}
+              {webinarStage?.isScreenShare && webinarStage.pipVideoStream ? (
+                <RNView
+                  style={[styles.observerPip, observerPipPositionStyle]}
+                  {...observerPipPanResponder.panHandlers}
+                >
+                  <RTCView
+                    streamURL={webinarStage.pipVideoStream.toURL()}
+                    style={styles.observerPipVideo}
+                    mirror={false}
+                    objectFit="cover"
+                  />
+                  <RNView style={styles.observerPipBadge}>
+                    <Text style={[styles.observerPipText, webinarTextStyle]}>
+                      {webinarStage.pipDisplayName}
+                    </Text>
+                  </RNView>
+                </RNView>
+              ) : null}
+            </RNView>
+          </RNView>
+        ) : isWhiteboardActive ? (
           <RNView style={[styles.whiteboardContainer, { paddingBottom: 140 + insets.bottom }]}>
             <WhiteboardNativeApp />
           </RNView>
@@ -414,7 +981,7 @@ export function CallScreen({
                 objectFit="contain"
               />
               <RNView style={styles.presenterBadge}>
-                <Text style={styles.presenterText}>
+                <Text style={[styles.presenterText, webinarTextStyle]}>
                   {presenterName === "You"
                     ? "You're presenting"
                     : `${presenterName || "Presenter"} is presenting`}
@@ -424,6 +991,7 @@ export function CallScreen({
 
             <FlatList
               data={stripParticipants}
+              extraData={participantOrderKey}
               keyExtractor={(item) => item.userId}
               horizontal
               showsHorizontalScrollIndicator={false}
@@ -461,7 +1029,10 @@ export function CallScreen({
                     )}
 
                     <RNView style={styles.stripLabel}>
-                      <Text style={styles.stripLabelText} numberOfLines={1}>
+                      <Text
+                        style={[styles.stripLabelText, webinarTextStyle]}
+                        numberOfLines={1}
+                      >
                         {label}
                       </Text>
                       {item.isMuted && (
@@ -485,10 +1056,13 @@ export function CallScreen({
             }}
           >
             <FlatList
-              data={participantList}
+              data={gridItems}
+              extraData={gridOrderKey}
               key={`${columns}`}
               numColumns={columns}
-              keyExtractor={(item) => item.userId}
+              keyExtractor={(item) =>
+                isOverflowItem(item) ? item.id : item.userId
+              }
               style={styles.grid}
               contentContainerStyle={[
                 styles.gridContent,
@@ -496,23 +1070,40 @@ export function CallScreen({
                 isTwoUp && styles.gridContentTwoUp,
               ]}
               columnWrapperStyle={columns > 1 ? (isTablet ? columnWrapperStyleTablet : columnWrapperStyle) : undefined}
-              renderItem={({ item }) => (
-                <RNView style={tileStyle}>
-                  <ParticipantTile
-                    participant={item}
-                    displayName={resolveDisplayName(item.userId)}
-                    isLocal={item.userId === localParticipant.userId}
-                    mirror={item.userId === localParticipant.userId ? isMirrorCamera : false}
-                    isActiveSpeaker={activeSpeakerId === item.userId}
-                  />
-                </RNView>
-              )}
+              renderItem={({ item }) => {
+                if (isOverflowItem(item)) {
+                  return (
+                    <RNView style={tileStyle}>
+                      <Pressable
+                        onPress={onToggleParticipants}
+                        style={styles.overflowTile}
+                      >
+                        <Text style={styles.overflowCount}>
+                          +{item.hiddenCount}
+                        </Text>
+                        <Text style={styles.overflowLabel}>MORE</Text>
+                      </Pressable>
+                    </RNView>
+                  );
+                }
+
+                return (
+                  <RNView style={tileStyle}>
+                    <ParticipantTile
+                      participant={item}
+                      displayName={resolveDisplayName(item.userId)}
+                      isLocal={item.userId === localParticipant.userId}
+                      mirror={item.userId === localParticipant.userId ? isMirrorCamera : false}
+                      isActiveSpeaker={activeSpeakerId === item.userId}
+                    />
+                  </RNView>
+                );
+              }}
             />
           </RNView>
         )}
       </RNView>
 
-      {/* Controls Bar - positioned absolutely at bottom */}
       <ControlsBar
         isMuted={isMuted}
         isCameraOff={isCameraOff}
@@ -521,10 +1112,15 @@ export function CallScreen({
         isScreenShareAvailable={isScreenShareAvailable}
         isChatOpen={isChatOpen}
         isRoomLocked={isRoomLocked}
+        isNoGuests={isNoGuests}
+        isChatLocked={isChatLocked}
+        isTtsDisabled={isTtsDisabled}
         isAdmin={isAdmin}
+        isObserverMode={isObserverMode}
         pendingUsersCount={pendingUsersCount}
         unreadCount={unreadCount}
         availableWidth={availableWidth}
+        showParticipantsControl={!isWebinarSession}
         onToggleMute={onToggleMute}
         onToggleCamera={onToggleCamera}
         onToggleScreenShare={onToggleScreenShare}
@@ -532,10 +1128,13 @@ export function CallScreen({
         onToggleChat={onToggleChat}
         onToggleParticipants={onToggleParticipants}
         onToggleRoomLock={onToggleRoomLock}
+        onToggleNoGuests={onToggleNoGuests}
+        onToggleChatLock={onToggleChatLock}
+        onToggleTtsDisabled={onToggleTtsDisabled}
         isWhiteboardActive={isWhiteboardActive}
-        showWhiteboardControl={isTablet}
+        showWhiteboardControl={isTablet && isAdmin}
         isAppsLocked={appsState.locked}
-        onToggleWhiteboard={handleToggleWhiteboard}
+        onToggleWhiteboard={isAdmin ? handleToggleWhiteboard : undefined}
         onToggleAppsLock={handleToggleAppsLock}
         onSendReaction={onSendReaction}
         onLeave={onLeave}
@@ -626,6 +1225,10 @@ const styles = StyleSheet.create({
     paddingRight: 8,
     paddingVertical: 6,
   },
+  headerPillIconButtonOnly: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
   headerPillDivider: {
     width: 1,
     height: 18,
@@ -655,6 +1258,30 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     paddingTop: 16,
   },
+  overflowTile: {
+    flex: 1,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderStyle: "dashed",
+    borderColor: COLORS.creamFaint,
+    backgroundColor: "#0d0e0d",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  overflowCount: {
+    fontSize: 22,
+    fontWeight: "600",
+    color: COLORS.cream,
+    fontFamily: "PolySans",
+  },
+  overflowLabel: {
+    marginTop: 6,
+    fontSize: 10,
+    letterSpacing: 2.6,
+    textTransform: "uppercase",
+    color: COLORS.creamMuted,
+    fontFamily: "PolySans-Mono",
+  },
   presentationContainer: {
     flex: 1,
     gap: 12,
@@ -678,6 +1305,12 @@ const styles = StyleSheet.create({
     width: "100%",
     height: "100%",
   },
+  observerFallback: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 24,
+  },
   presenterBadge: {
     position: "absolute",
     top: 12,
@@ -697,6 +1330,40 @@ const styles = StyleSheet.create({
     textTransform: "uppercase",
     fontFamily: "PolySans-Mono",
   },
+  observerPip: {
+    position: "absolute",
+    width: 132,
+    height: 84,
+    borderRadius: 12,
+    overflow: "hidden",
+    borderWidth: 1,
+    borderColor: "rgba(254, 252, 217, 0.2)",
+    backgroundColor: "rgba(0, 0, 0, 0.75)",
+  },
+  observerPipVideo: {
+    width: "100%",
+    height: "100%",
+  },
+  observerPipBadge: {
+    position: "absolute",
+    left: 6,
+    right: 6,
+    bottom: 6,
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+    borderRadius: 999,
+    backgroundColor: "rgba(0, 0, 0, 0.62)",
+    borderWidth: 1,
+    borderColor: "rgba(254, 252, 217, 0.16)",
+  },
+  observerPipText: {
+    fontSize: 9,
+    color: COLORS.cream,
+    letterSpacing: 1.2,
+    textTransform: "uppercase",
+    fontFamily: "PolySans-Mono",
+  },
+  observerAudio: observerAudioStyle,
   stripContent: {
     paddingHorizontal: 4,
     gap: 10,
@@ -759,5 +1426,10 @@ const styles = StyleSheet.create({
     textTransform: "uppercase",
     letterSpacing: 1,
     fontFamily: "PolySans-Mono",
+  },
+  webinarRegularText: {
+    fontFamily: "PolySans-Regular",
+    letterSpacing: 0,
+    textTransform: "none",
   },
 });

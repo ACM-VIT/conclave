@@ -3,7 +3,7 @@
 This UI is framework-agnostic in behavior but expects you to provide SFU integration.
 
 Required props for `MeetsClient` in `src/app/meets-client.tsx`:
-- `getJoinInfo(roomId, sessionId, options?)`: return `{ token, sfuUrl }` for socket auth. `options` may include `{ user, isHost }`.
+- `getJoinInfo(roomId, sessionId, options?)`: return `{ token, sfuUrl, iceServers? }` for socket auth. `options` may include `{ user, isHost }`.
 - `getRooms()`: return `RoomInfo[]` for the host room list (optional).
 - `getRoomsForRedirect(roomId)`: optional room list for host redirects (receives current room id).
 - `reactionAssets`: optional array of reaction asset filenames (without `/reactions/`).

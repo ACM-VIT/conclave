@@ -27,8 +27,19 @@ const FOREGROUND_ACTION_TOGGLE_MUTE = "toggle-mute";
 const FOREGROUND_COLOR = "#F95F4A";
 const IOS_CATEGORY_MUTED = "conclave-call-muted";
 const IOS_CATEGORY_UNMUTED = "conclave-call-unmuted";
+const IOS_AUDIO_SESSION_ALLOW_BLUETOOTH = 4;
+const IOS_AUDIO_SESSION_ALLOW_BLUETOOTH_A2DP = 32;
 let iosCategoriesConfigured = false;
 const isIOSSimulator = Platform.OS === "ios" && !Device.isDevice;
+type AudioRoute = "speaker" | "earpiece" | "auto";
+
+const setForceSpeakerphone = (flag: boolean | null) => {
+  (
+    InCallManager as unknown as {
+      setForceSpeakerphoneOn?: (nextFlag: boolean | null) => void;
+    }
+  ).setForceSpeakerphoneOn?.(flag);
+};
 
 const getCallKeep = () => {
   if (Platform.OS !== "ios" || isIOSSimulator) return null;
@@ -54,6 +65,12 @@ const CALLKEEP_OPTIONS: IOptions = {
   ios: {
     appName: "Conclave",
     supportsVideo: true,
+    audioSession: {
+      categoryOptions:
+        IOS_AUDIO_SESSION_ALLOW_BLUETOOTH |
+        IOS_AUDIO_SESSION_ALLOW_BLUETOOTH_A2DP,
+      mode: "AVAudioSessionModeVideoChat",
+    },
   },
   android: {
     alertTitle: "Phone account required",
@@ -119,12 +136,16 @@ export function setCallMuted(muted: boolean) {
 
 export function startInCall() {
   if (isIOSSimulator) return;
-  InCallManager.start({ media: "video" });
-  InCallManager.setForceSpeakerphoneOn?.(true);
+  // iOS call audio is managed by CallKeep/WebRTC to preserve Bluetooth routing.
+  if (Platform.OS === "ios") return;
+  InCallManager.start({ media: "video", auto: true });
+  setAudioRoute("auto");
 }
 
 export function stopInCall() {
   if (isIOSSimulator) return;
+  // Keep iOS teardown with CallKeep/WebRTC session handling.
+  if (Platform.OS === "ios") return;
   InCallManager.stop();
 }
 
@@ -248,13 +269,19 @@ export function registerForegroundCallServiceHandlers(handlers: {
   };
 }
 
-export function setAudioRoute(route: "speaker" | "earpiece") {
+export function setAudioRoute(route: AudioRoute) {
   if (isIOSSimulator) return;
+  // Keep iOS on system-managed routing unless an explicit manual route is requested.
+  if (Platform.OS === "ios" && route === "auto") return;
   if (route === "speaker") {
-    InCallManager.setForceSpeakerphoneOn?.(true);
-  } else {
-    InCallManager.setForceSpeakerphoneOn?.(false);
+    setForceSpeakerphone(true);
+    return;
   }
+  if (route === "earpiece") {
+    setForceSpeakerphone(false);
+    return;
+  }
+  setForceSpeakerphone(null);
 }
 
 export function registerCallKeepHandlers(onHangup: () => void) {

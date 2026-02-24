@@ -66,6 +66,13 @@ const LineIcon = () => (
   </Icon>
 );
 
+const ArrowIcon = () => (
+  <Icon>
+    <line x1="4" y1="19" x2="20" y2="3" />
+    <polyline points="13 3 20 3 20 10" />
+  </Icon>
+);
+
 const TextIcon = () => (
   <Icon>
     <polyline points="4 7 4 4 20 4 20 7" />
@@ -97,20 +104,22 @@ const TOOL_ICONS: Record<ToolKind, React.FC> = {
   rect: RectIcon,
   ellipse: EllipseIcon,
   line: LineIcon,
+  arrow: ArrowIcon,
   text: TextIcon,
   sticky: StickyIcon,
 };
 
 const TOOL_KEYS: Record<ToolKind, string> = {
-  select: "V",
-  pen: "P",
-  highlighter: "H",
-  eraser: "E",
-  rect: "R",
-  ellipse: "O",
-  line: "L",
-  text: "T",
-  sticky: "N",
+  select: "1",
+  pen: "2",
+  highlighter: "3",
+  eraser: "4",
+  rect: "5",
+  ellipse: "6",
+  line: "7",
+  arrow: "A",
+  text: "8",
+  sticky: "9",
 };
 
 const TOOL_ORDER: ToolKind[] = [
@@ -121,6 +130,7 @@ const TOOL_ORDER: ToolKind[] = [
   "rect",
   "ellipse",
   "line",
+  "arrow",
   "text",
   "sticky",
 ];
@@ -153,7 +163,7 @@ function Island({
 }
 
 function ToolDivider() {
-  return <div className="w-px h-6 mx-0.5 bg-white/10" />;
+  return <div className="w-px h-10 mt-0.5 mx-0.5 bg-white/10" />;
 }
 
 function ToolButton({
@@ -169,30 +179,56 @@ function ToolButton({
 }) {
   const IconComponent = TOOL_ICONS[toolId];
   const keyHint = TOOL_KEYS[toolId];
+  const buttonStyle: React.CSSProperties = active
+    ? {
+        backgroundColor: "rgba(254, 252, 217, 0.12)",
+        border: "1px solid rgba(254, 252, 217, 0.38)",
+        color: "#FEFCD9",
+      }
+    : {
+        backgroundColor: "transparent",
+        border: "1px solid transparent",
+        color: "rgba(254, 252, 217, 0.7)",
+      };
 
   return (
     <button
       type="button"
       disabled={disabled}
       onClick={onClick}
+      aria-pressed={active}
       title={`${toolId.charAt(0).toUpperCase() + toolId.slice(1)} (${keyHint})`}
       className={`
-        relative flex items-center justify-center rounded-lg transition-all duration-150 ease-in-out
-        w-9 h-9
-        ${
-          active
-            ? "bg-[#403e6a] text-[#e0dfff] shadow-[inset_0_0_0_1px_rgba(169,165,255,0.5)]"
-            : "text-[#b8b8b8] hover:bg-[#2e2d39] hover:text-[#e3e3e8]"
-        }
+        group flex w-9 flex-col items-center gap-0.5 rounded-md transition-all duration-150 ease-in-out
         ${disabled ? "opacity-30 cursor-not-allowed" : "cursor-pointer"}
       `}
     >
-      <IconComponent />
       <span
-        className="absolute bottom-[1px] right-[3px] text-[9px] font-medium leading-none"
-        style={{ color: active ? "rgba(224,223,255,0.5)" : "rgba(184,184,184,0.4)" }}
+        className={`relative flex h-9 w-9 items-center justify-center rounded-lg transition-all duration-150 ${
+          active ? "" : "group-hover:bg-white/5"
+        }`}
+        style={buttonStyle}
       >
-        {keyHint}
+        <IconComponent />
+      </span>
+      <span
+        className="select-none"
+        style={{
+          color: active ? "rgba(254,252,217,0.36)" : "rgba(254,252,217,0.18)",
+          fontSize: 7,
+          lineHeight: "7px",
+          fontWeight: 400,
+          letterSpacing: "0.02em",
+          fontFamily: "'PolySans Mono', monospace",
+        }}
+        onClick={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          if (!disabled) {
+            onClick();
+          }
+        }}
+      >
       </span>
     </button>
   );
@@ -329,12 +365,12 @@ export function WhiteboardToolbar({
 }) {
   const pointerTools: ToolKind[] = ["select"];
   const drawTools: ToolKind[] = ["pen", "highlighter", "eraser"];
-  const shapeTools: ToolKind[] = ["rect", "ellipse", "line"];
+  const shapeTools: ToolKind[] = ["rect", "ellipse", "line", "arrow"];
   const insertTools: ToolKind[] = ["text", "sticky"];
 
   return (
-    <Island padding={1}>
-      <div className="flex items-center gap-0.5">
+    <Island padding={1} className="shrink-0">
+      <div className="flex items-start gap-0.5">
         {pointerTools.map((id) => (
           <ToolButton
             key={id}

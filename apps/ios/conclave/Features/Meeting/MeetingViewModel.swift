@@ -22,6 +22,7 @@ final class MeetingViewModel: ObservableObject {
     
     @Published var roomId: String = ""
     @Published var isRoomLocked: Bool = false
+    @Published var isChatLocked: Bool = false
     
     // MARK: - User State
     
@@ -409,6 +410,12 @@ final class MeetingViewModel: ObservableObject {
                 self?.isRoomLocked = locked
             }
         }
+
+        socketManager.onChatLockChanged = { [weak self] locked in
+            Task { @MainActor in
+                self?.isChatLocked = locked
+            }
+        }
         
         socketManager.onUserRequestedJoin = { [weak self] notification in
             Task { @MainActor in
@@ -723,6 +730,10 @@ final class MeetingViewModel: ObservableObject {
     
     func sendChatMessage(_ content: String) {
         guard !content.isEmpty else { return }
+        if isChatLocked && !isAdmin {
+            errorMessage = "Chat is locked by the host."
+            return
+        }
         
         Task {
             do {
@@ -789,6 +800,20 @@ final class MeetingViewModel: ObservableObject {
                 let nextLocked = !isRoomLocked
                 try await socketManager.lockRoom(nextLocked)
                 isRoomLocked = nextLocked
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    func toggleChatLock() {
+        guard isAdmin else { return }
+
+        Task {
+            do {
+                let nextLocked = !isChatLocked
+                try await socketManager.lockChat(nextLocked)
+                isChatLocked = nextLocked
             } catch {
                 errorMessage = error.localizedDescription
             }

@@ -1,16 +1,21 @@
 "use client";
 
-import { Ghost, RefreshCw } from "lucide-react";
-import { memo, useCallback, useEffect, useMemo } from "react";
-import type { Dispatch, SetStateAction } from "react";
+import { Ghost, RefreshCw, Users } from "lucide-react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { Dispatch, PointerEvent, SetStateAction } from "react";
 import type { Socket } from "socket.io-client";
 import type {
   ChatMessage,
   ConnectionState,
   MeetError,
+  MeetingConfigSnapshot,
+  MeetingUpdateRequest,
   Participant,
   ReactionEvent,
   ReactionOption,
+  WebinarConfigSnapshot,
+  WebinarLinkResponse,
+  WebinarUpdateRequest,
 } from "../../lib/types";
 import type { BrowserState } from "../../hooks/useSharedBrowser";
 import ChatOverlay from "../ChatOverlay";
@@ -23,10 +28,15 @@ import MobileGridLayout from "./MobileGridLayout";
 import MobileJoinScreen from "./MobileJoinScreen";
 import MobileParticipantsPanel from "./MobileParticipantsPanel";
 import MobilePresentationLayout from "./MobilePresentationLayout";
+import MobileWhiteboardLayout from "./MobileWhiteboardLayout";
+import AndroidUpsellSheet from "./AndroidUpsellSheet";
+import ScreenShareAudioPlayers from "../ScreenShareAudioPlayers";
 import SystemAudioPlayers from "../SystemAudioPlayers";
 import { isSystemUserId } from "../../lib/utils";
 import { useApps } from "@conclave/apps-sdk";
-import WhiteboardLayout from "../WhiteboardLayout";
+import DevPlaygroundLayout from "../DevPlaygroundLayout";
+import DevMeetToolsPanel from "../DevMeetToolsPanel";
+import ParticipantVideo from "../ParticipantVideo";
 
 interface MobileMeetsMainContentProps {
   isJoined: boolean;
@@ -35,6 +45,8 @@ interface MobileMeetsMainContentProps {
   roomId: string;
   setRoomId: Dispatch<SetStateAction<string>>;
   joinRoomById: (roomId: string) => void;
+  hideJoinUI?: boolean;
+  isWebinarAttendee?: boolean;
   enableRoomRouting: boolean;
   forceJoinOnly: boolean;
   allowGhostMode: boolean;
@@ -60,7 +72,10 @@ interface MobileMeetsMainContentProps {
   isMirrorCamera: boolean;
   activeSpeakerId: string | null;
   currentUserId: string;
+  selectedAudioInputDeviceId?: string;
   audioOutputDeviceId?: string;
+  onAudioInputDeviceChange: (deviceId: string) => void;
+  onAudioOutputDeviceChange: (deviceId: string) => void;
   activeScreenShareId: string | null;
   isScreenSharing: boolean;
   isChatOpen: boolean;
@@ -86,10 +101,16 @@ interface MobileMeetsMainContentProps {
   setPendingUsers: Dispatch<SetStateAction<Map<string, string>>>;
   resolveDisplayName: (userId: string) => string;
   reactions: ReactionEvent[];
-  onUserChange: (user: { id: string; email: string; name: string } | null) => void;
+  onUserChange: (
+    user: { id: string; email: string; name: string } | null,
+  ) => void;
   onIsAdminChange: (isAdmin: boolean) => void;
   isRoomLocked: boolean;
   onToggleLock: () => void;
+  isNoGuests: boolean;
+  onToggleNoGuests: () => void;
+  isChatLocked: boolean;
+  onToggleChatLock: () => void;
   browserState?: BrowserState;
   isBrowserLaunching?: boolean;
   browserLaunchError?: string | null;
@@ -106,7 +127,69 @@ interface MobileMeetsMainContentProps {
   onDismissMeetError?: () => void;
   onRetryMedia?: () => void;
   onTestSpeaker?: () => void;
+  hostUserId: string | null;
+  hostUserIds: string[];
+  isNetworkOffline: boolean;
+  serverRestartNotice?: string | null;
+  isTtsDisabled: boolean;
+  meetingRequiresInviteCode: boolean;
+  webinarConfig?: WebinarConfigSnapshot | null;
+  webinarRole?: "attendee" | "participant" | "host" | null;
+  webinarSpeakerUserId?: string | null;
+  webinarLink?: string | null;
+  onSetWebinarLink?: (link: string | null) => void;
+  onGetMeetingConfig?: () => Promise<MeetingConfigSnapshot | null>;
+  onUpdateMeetingConfig?: (
+    update: MeetingUpdateRequest,
+  ) => Promise<MeetingConfigSnapshot | null>;
+  onGetWebinarConfig?: () => Promise<WebinarConfigSnapshot | null>;
+  onUpdateWebinarConfig?: (
+    update: WebinarUpdateRequest,
+  ) => Promise<WebinarConfigSnapshot | null>;
+  onGenerateWebinarLink?: () => Promise<WebinarLinkResponse | null>;
+  onRotateWebinarLink?: () => Promise<WebinarLinkResponse | null>;
 }
+
+const getLiveVideoStream = (stream: MediaStream | null): MediaStream | null => {
+  if (!stream) return null;
+  const [track] = stream.getVideoTracks();
+  if (!track || track.readyState === "ended") {
+    return null;
+  }
+  return stream;
+};
+
+const getVideoTrackId = (stream: MediaStream | null): string => {
+  const [track] = stream?.getVideoTracks() ?? [];
+  return track?.id ?? "none";
+};
+
+type PipCorner = "top-left" | "top-right" | "bottom-left" | "bottom-right";
+type PipDragMeta = {
+  pointerId: number;
+  stageRect: DOMRect;
+  pipWidth: number;
+  pipHeight: number;
+  offsetX: number;
+  offsetY: number;
+};
+
+const clamp = (value: number, min: number, max: number) =>
+  Math.min(Math.max(value, min), max);
+
+const getPipCornerClass = (corner: PipCorner): string => {
+  switch (corner) {
+    case "top-left":
+      return "top-3 left-3";
+    case "top-right":
+      return "top-3 right-3";
+    case "bottom-left":
+      return "bottom-3 left-3";
+    case "bottom-right":
+    default:
+      return "bottom-3 right-3";
+  }
+};
 
 function MobileMeetsMainContent({
   isJoined,
@@ -115,6 +198,8 @@ function MobileMeetsMainContent({
   roomId,
   setRoomId,
   joinRoomById,
+  hideJoinUI = false,
+  isWebinarAttendee = false,
   enableRoomRouting,
   forceJoinOnly,
   allowGhostMode,
@@ -136,7 +221,10 @@ function MobileMeetsMainContent({
   isMirrorCamera,
   activeSpeakerId,
   currentUserId,
+  selectedAudioInputDeviceId,
   audioOutputDeviceId,
+  onAudioInputDeviceChange,
+  onAudioOutputDeviceChange,
   activeScreenShareId,
   isScreenSharing,
   isChatOpen,
@@ -166,6 +254,10 @@ function MobileMeetsMainContent({
   onIsAdminChange,
   isRoomLocked,
   onToggleLock,
+  isNoGuests,
+  onToggleNoGuests,
+  isChatLocked,
+  onToggleChatLock,
   browserState,
   isBrowserLaunching,
   browserLaunchError,
@@ -182,20 +274,67 @@ function MobileMeetsMainContent({
   onDismissMeetError,
   onRetryMedia,
   onTestSpeaker,
+  hostUserId,
+  hostUserIds,
+  isNetworkOffline,
+  serverRestartNotice = null,
+  isTtsDisabled,
+  meetingRequiresInviteCode,
+  webinarConfig,
+  webinarRole,
+  webinarSpeakerUserId,
+  webinarLink,
+  onSetWebinarLink,
+  onGetMeetingConfig,
+  onUpdateMeetingConfig,
+  onGetWebinarConfig,
+  onUpdateWebinarConfig,
+  onGenerateWebinarLink,
+  onRotateWebinarLink,
 }: MobileMeetsMainContentProps) {
-  const { state: appsState, openApp, closeApp, setLocked, refreshState } = useApps();
+  const {
+    state: appsState,
+    openApp,
+    closeApp,
+    setLocked,
+    refreshState,
+  } = useApps();
+  const isDevPlaygroundEnabled = process.env.NODE_ENV === "development";
   const isWhiteboardActive = appsState.activeAppId === "whiteboard";
-  const handleOpenWhiteboard = useCallback(() => openApp("whiteboard"), [openApp]);
+  const isDevPlaygroundActive = appsState.activeAppId === "dev-playground";
+  const handleOpenWhiteboard = useCallback(
+    () => openApp("whiteboard"),
+    [openApp],
+  );
   const handleCloseWhiteboard = useCallback(() => closeApp(), [closeApp]);
+  const handleOpenDevPlayground = useCallback(
+    () => openApp("dev-playground"),
+    [openApp],
+  );
+  const handleCloseDevPlayground = useCallback(() => closeApp(), [closeApp]);
   const handleToggleAppsLock = useCallback(
     () => setLocked(!appsState.locked),
-    [appsState.locked, setLocked]
+    [appsState.locked, setLocked],
   );
   useEffect(() => {
     if (connectionState === "joined") {
       refreshState();
     }
   }, [connectionState, refreshState]);
+  useEffect(() => {
+    if (typeof navigator === "undefined" || typeof window === "undefined") return;
+    const isAndroid = /android/i.test(navigator.userAgent);
+    const dismissed = window.localStorage.getItem("conclave_android_upsell_dismissed");
+    if (isAndroid && !dismissed) {
+      setShowAndroidUpsell(true);
+    }
+  }, []);
+  const dismissAndroidUpsell = useCallback(() => {
+    setShowAndroidUpsell(false);
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem("conclave_android_upsell_dismissed", "1");
+    }
+  }, []);
   const handleToggleParticipants = useCallback(
     () =>
       setIsParticipantsOpen((prev) => {
@@ -205,12 +344,18 @@ function MobileMeetsMainContent({
         }
         return next;
       }),
-    [isChatOpen, setIsParticipantsOpen, toggleChat]
+    [isChatOpen, setIsParticipantsOpen, toggleChat],
   );
+  const handleOpenParticipants = useCallback(() => {
+    setIsParticipantsOpen(true);
+    if (isChatOpen) {
+      toggleChat();
+    }
+  }, [isChatOpen, setIsParticipantsOpen, toggleChat]);
 
   const handleCloseParticipants = useCallback(
     () => setIsParticipantsOpen(false),
-    [setIsParticipantsOpen]
+    [setIsParticipantsOpen],
   );
   const handleToggleChat = useCallback(() => {
     if (!isChatOpen && isParticipantsOpen) {
@@ -218,27 +363,282 @@ function MobileMeetsMainContent({
     }
     toggleChat();
   }, [isChatOpen, isParticipantsOpen, setIsParticipantsOpen, toggleChat]);
+
+  const handleToggleTtsDisabled = useCallback(() => {
+    if (!socket) return;
+    socket.emit(
+      "setTtsDisabled",
+      { disabled: !isTtsDisabled },
+      (res: { error?: string }) => {
+        if (res?.error) {
+          console.error("Failed to toggle TTS:", res.error);
+        }
+      },
+    );
+  }, [socket, isTtsDisabled]);
   const participantsArray = useMemo(
     () => Array.from(participants.values()),
-    [participants]
+    [participants],
   );
   const visibleParticipantCount = useMemo(
     () =>
       participantsArray.filter(
-        (participant) => !isSystemUserId(participant.userId)
+        (participant) => !isSystemUserId(participant.userId),
       ).length,
-    [participantsArray]
+    [participantsArray],
   );
   const hasBrowserAudio = useMemo(
     () =>
       participantsArray.some(
         (participant) =>
-          isSystemUserId(participant.userId) && Boolean(participant.audioStream)
+          isSystemUserId(participant.userId) &&
+          Boolean(participant.audioStream),
       ),
-    [participantsArray]
+    [participantsArray],
   );
+  const webinarParticipants = useMemo(
+    () =>
+      participantsArray.filter(
+        (participant) => !isSystemUserId(participant.userId),
+      ),
+    [participantsArray],
+  );
+  const webinarStageRef = useRef<HTMLDivElement>(null);
+  const pipDragRef = useRef<PipDragMeta | null>(null);
+  const [pipCorner, setPipCorner] = useState<PipCorner>("bottom-right");
+  const [pipDragPosition, setPipDragPosition] = useState<{
+    x: number;
+    y: number;
+  } | null>(null);
+  const [showAndroidUpsell, setShowAndroidUpsell] = useState(false);
+  const webinarStage = useMemo(() => {
+    if (!webinarParticipants.length) {
+      return null;
+    }
+
+    const byScreenShareId = activeScreenShareId
+      ? webinarParticipants.find(
+          (participant) =>
+            participant.screenShareProducerId === activeScreenShareId &&
+            getLiveVideoStream(participant.screenShareStream),
+        )
+      : null;
+    const byAnyScreenShare = webinarParticipants.find(
+      (participant) => getLiveVideoStream(participant.screenShareStream),
+    );
+    const fallbackAudioStream =
+      webinarParticipants.find((participant) => participant.audioStream)
+        ?.audioStream ?? null;
+    const screenShareParticipant = byScreenShareId ?? byAnyScreenShare;
+
+    if (screenShareParticipant) {
+      const screenShareStream = getLiveVideoStream(
+        screenShareParticipant.screenShareStream,
+      );
+      if (screenShareStream) {
+        const mainAudioStream =
+          screenShareParticipant.audioStream ?? fallbackAudioStream;
+        const presenterCameraStream = getLiveVideoStream(
+          screenShareParticipant.videoStream,
+        );
+
+        return {
+          main: {
+            participant: {
+              ...screenShareParticipant,
+              videoStream: screenShareStream,
+              audioStream: mainAudioStream,
+              isCameraOff: false,
+            },
+            displayName: resolveDisplayName(screenShareParticipant.userId),
+          },
+          pip: presenterCameraStream
+            ? {
+                participant: {
+                  ...screenShareParticipant,
+                  videoStream: presenterCameraStream,
+                  screenShareStream: null,
+                  audioStream: null,
+                  isMuted: true,
+                  isCameraOff: false,
+                },
+                displayName: resolveDisplayName(screenShareParticipant.userId),
+              }
+            : null,
+          isScreenShare: true,
+        };
+      }
+    }
+
+    const preferredIds = [
+      webinarSpeakerUserId ?? null,
+      activeSpeakerId ?? null,
+    ].filter((value, index, list): value is string => {
+      return Boolean(value) && list.indexOf(value) === index;
+    });
+    const preferredParticipant = preferredIds
+      .map((userId) =>
+        webinarParticipants.find((participant) => participant.userId === userId),
+      )
+      .find((participant) => participant !== undefined);
+    const preferredVideoParticipant =
+      preferredParticipant &&
+      getLiveVideoStream(preferredParticipant.videoStream)
+        ? preferredParticipant
+        : null;
+    const preferredAudioParticipant =
+      preferredParticipant && preferredParticipant.audioStream
+        ? preferredParticipant
+        : null;
+
+    const cameraParticipant =
+      preferredVideoParticipant ??
+      webinarParticipants.find(
+        (participant) =>
+          !participant.isCameraOff &&
+          getLiveVideoStream(participant.videoStream),
+      ) ??
+      webinarParticipants.find((participant) =>
+        getLiveVideoStream(participant.videoStream),
+      ) ??
+      preferredAudioParticipant ??
+      webinarParticipants.find((participant) => participant.audioStream) ??
+      webinarParticipants[0];
+    const cameraStream = getLiveVideoStream(cameraParticipant.videoStream);
+    const mainAudioStream = cameraParticipant.audioStream ?? fallbackAudioStream;
+
+    return {
+      main: {
+        participant: {
+          ...cameraParticipant,
+          videoStream: cameraStream,
+          screenShareStream: null,
+          audioStream: mainAudioStream,
+          isCameraOff: !cameraStream,
+        },
+        displayName: resolveDisplayName(cameraParticipant.userId),
+      },
+      pip: null,
+      isScreenShare: false,
+    };
+  }, [
+    activeScreenShareId,
+    activeSpeakerId,
+    resolveDisplayName,
+    webinarParticipants,
+    webinarSpeakerUserId,
+  ]);
+  const pipCornerClass = useMemo(() => getPipCornerClass(pipCorner), [pipCorner]);
+  const handlePipPointerDown = useCallback(
+    (event: PointerEvent<HTMLDivElement>) => {
+      const stage = webinarStageRef.current;
+      if (!stage) return;
+
+      const stageRect = stage.getBoundingClientRect();
+      const pipRect = event.currentTarget.getBoundingClientRect();
+
+      pipDragRef.current = {
+        pointerId: event.pointerId,
+        stageRect,
+        pipWidth: pipRect.width,
+        pipHeight: pipRect.height,
+        offsetX: event.clientX - pipRect.left,
+        offsetY: event.clientY - pipRect.top,
+      };
+
+      setPipDragPosition({
+        x: pipRect.left - stageRect.left,
+        y: pipRect.top - stageRect.top,
+      });
+
+      event.currentTarget.setPointerCapture(event.pointerId);
+      event.preventDefault();
+    },
+    [],
+  );
+  const handlePipPointerMove = useCallback(
+    (event: PointerEvent<HTMLDivElement>) => {
+      const drag = pipDragRef.current;
+      if (!drag || drag.pointerId !== event.pointerId) return;
+
+      const minX = 8;
+      const minY = 8;
+      const maxX = Math.max(minX, drag.stageRect.width - drag.pipWidth - 8);
+      const maxY = Math.max(minY, drag.stageRect.height - drag.pipHeight - 8);
+      const nextX = clamp(
+        event.clientX - drag.stageRect.left - drag.offsetX,
+        minX,
+        maxX,
+      );
+      const nextY = clamp(
+        event.clientY - drag.stageRect.top - drag.offsetY,
+        minY,
+        maxY,
+      );
+
+      setPipDragPosition({ x: nextX, y: nextY });
+      event.preventDefault();
+    },
+    [],
+  );
+  const handlePipPointerUp = useCallback(
+    (event: PointerEvent<HTMLDivElement>) => {
+      const drag = pipDragRef.current;
+      if (!drag || drag.pointerId !== event.pointerId) return;
+
+      const minX = 8;
+      const minY = 8;
+      const maxX = Math.max(minX, drag.stageRect.width - drag.pipWidth - 8);
+      const maxY = Math.max(minY, drag.stageRect.height - drag.pipHeight - 8);
+      const finalX = pipDragPosition
+        ? pipDragPosition.x
+        : clamp(
+            event.clientX - drag.stageRect.left - drag.offsetX,
+            minX,
+            maxX,
+          );
+      const finalY = pipDragPosition
+        ? pipDragPosition.y
+        : clamp(
+            event.clientY - drag.stageRect.top - drag.offsetY,
+            minY,
+            maxY,
+          );
+      const horizontal =
+        finalX + drag.pipWidth / 2 <= drag.stageRect.width / 2 ? "left" : "right";
+      const vertical =
+        finalY + drag.pipHeight / 2 <= drag.stageRect.height / 2 ? "top" : "bottom";
+      setPipCorner(`${vertical}-${horizontal}` as PipCorner);
+      setPipDragPosition(null);
+      pipDragRef.current = null;
+
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      }
+      event.preventDefault();
+    },
+    [pipDragPosition],
+  );
+  const handlePipPointerCancel = useCallback(() => {
+    pipDragRef.current = null;
+    setPipDragPosition(null);
+  }, []);
 
   if (!isJoined) {
+    if (hideJoinUI) {
+      return (
+        <div className="flex flex-1 items-center justify-center px-5">
+          <div className="mobile-sheet-card px-6 py-4 text-center">
+            <p className="text-sm text-[#FEFCD9]">
+              {isLoading ? "Joining webinar..." : "Preparing webinar..."}
+            </p>
+            {meetError ? (
+              <p className="mt-2 text-xs text-[#F95F4A]">{meetError.message}</p>
+            ) : null}
+          </div>
+        </div>
+      );
+    }
     return (
       <MobileJoinScreen
         roomId={roomId}
@@ -268,59 +668,159 @@ function MobileMeetsMainContent({
   }
 
   return (
-    <div className="flex-1 flex flex-col bg-[#0d0e0d] overflow-hidden relative h-full">
-      {isJoined && <ConnectionBanner state={connectionState} compact />}
+    <div className="flex-1 flex flex-col bg-[#060606] overflow-hidden relative h-full">
+      {isJoined && (
+        <ConnectionBanner
+          state={connectionState}
+          compact
+          isOffline={isNetworkOffline}
+          serverRestartNotice={serverRestartNotice}
+        />
+      )}
       <SystemAudioPlayers
         participants={participants}
         audioOutputDeviceId={audioOutputDeviceId}
         muted={isBrowserAudioMuted}
         onAutoplayBlocked={onBrowserAudioAutoplayBlocked}
       />
+      <ScreenShareAudioPlayers
+        participants={participants}
+        audioOutputDeviceId={audioOutputDeviceId}
+      />
       {/* Status bar area */}
-      <div className="safe-area-pt bg-[#0d0e0d]" />
+      <div className="safe-area-pt bg-[#060606]" />
 
       {/* Header with room info */}
-      <div
-        className="flex items-center justify-between px-4 py-2 bg-[#0d0e0d]"
-        style={{ fontFamily: "'PolySans Mono', monospace" }}
-      >
+      <div className="flex items-center justify-between px-4 py-3">
         <div className="flex items-center gap-2">
-          <span className="text-sm font-medium text-[#FEFCD9] uppercase tracking-wide">
-            {roomId.toUpperCase()}
-          </span>
-          <span className="text-[10px] text-[#FEFCD9]/40 uppercase tracking-wide">
-            • {visibleParticipantCount + 1} in call
-          </span>
+          <div className="mobile-glass mobile-pill px-3 py-2 flex items-center gap-2">
+            <span
+              className="text-[11px] font-medium text-[#FEFCD9] uppercase tracking-[0.2em]"
+              style={{ fontFamily: "'PolySans Mono', monospace" }}
+            >
+              {roomId.toUpperCase()}
+            </span>
+          </div>
         </div>
         <div className="flex items-center gap-2">
+          {!isWebinarAttendee && (
+            <button
+              type="button"
+              onClick={handleOpenParticipants}
+              className="mobile-glass mobile-pill px-3 py-2 flex items-center gap-2 text-[#FEFCD9]"
+              aria-label="Open participants panel"
+            >
+              <Users className="w-3.5 h-3.5 text-[#FEFCD9]/70" />
+              <span
+                className="text-[11px] font-medium text-[#FEFCD9] uppercase tracking-[0.2em]"
+                style={{ fontFamily: "'PolySans Mono', monospace" }}
+              >
+                {isWebinarAttendee
+                  ? `${webinarConfig?.attendeeCount ?? 0}`
+                  : `${visibleParticipantCount + 1}`}
+              </span>
+            </button>
+          )}
           {isScreenSharing && (
-            <div className="flex items-center gap-1 text-[#F95F4A] text-[9px] uppercase tracking-wider font-medium">
-              <span className="w-1.5 h-1.5 rounded-full bg-[#F95F4A] animate-pulse" />
+            <div className="mobile-glass-soft mobile-pill px-2.5 py-1 flex items-center gap-1 text-[#F95F4A] text-[9px] uppercase tracking-[0.2em] font-medium">
+              <span className="w-1.5 h-1.5 rounded-full bg-[#F95F4A]" />
               Sharing
             </div>
           )}
           {ghostEnabled && (
-            <div className="flex items-center gap-1 text-[#FF007A] text-[9px] uppercase tracking-wider font-medium">
+            <div className="mobile-glass-soft mobile-pill px-2.5 py-1 flex items-center gap-1 text-[#FF007A] text-[9px] uppercase tracking-[0.2em] font-medium">
               <Ghost className="w-3 h-3" />
             </div>
           )}
-          {connectionState === "reconnecting" && (
-            <div className="flex items-center gap-1 text-amber-400 text-[9px] uppercase tracking-wider font-medium">
+          {(connectionState === "reconnecting" ||
+            (serverRestartNotice &&
+              !["error", "disconnected"].includes(connectionState))) && (
+            <div className="mobile-glass-soft mobile-pill px-2.5 py-1 flex items-center gap-1 text-amber-300 text-[9px] uppercase tracking-[0.2em] font-medium">
               <RefreshCw className="w-3 h-3 animate-spin" />
             </div>
           )}
         </div>
       </div>
 
+      {!isWebinarAttendee && (
+        <AndroidUpsellSheet
+          isOpen={showAndroidUpsell}
+          onClose={dismissAndroidUpsell}
+        />
+      )}
+
       {/* Reactions overlay */}
-      {reactions.length > 0 && (
-        <ReactionOverlay reactions={reactions} getDisplayName={resolveDisplayName} />
+      {!isWebinarAttendee && reactions.length > 0 && (
+        <ReactionOverlay
+          reactions={reactions}
+          getDisplayName={resolveDisplayName}
+        />
+      )}
+      {isDevPlaygroundEnabled && !isWebinarAttendee && (
+        <DevMeetToolsPanel roomId={roomId} />
       )}
 
       {/* Main content area - with padding for controls */}
-      <div className="flex-1 min-h-0 pb-20">
-        {isWhiteboardActive ? (
-          <WhiteboardLayout
+      <div className="flex-1 min-h-0 pb-24">
+        {isWebinarAttendee ? (
+          <div className="flex h-full items-center justify-center px-4">
+            {webinarStage ? (
+              <div
+                ref={webinarStageRef}
+                className="relative h-[66vh] w-full max-w-3xl"
+              >
+                <ParticipantVideo
+                  key={`${webinarStage.main.participant.userId}:${getVideoTrackId(
+                    webinarStage.main.participant.videoStream,
+                  )}:${webinarStage.isScreenShare ? "screen" : "camera"}`}
+                  participant={webinarStage.main.participant}
+                  displayName={webinarStage.main.displayName}
+                  isActiveSpeaker={
+                    activeSpeakerId === webinarStage.main.participant.userId
+                  }
+                  audioOutputDeviceId={audioOutputDeviceId}
+                  videoObjectFit={webinarStage.isScreenShare ? "contain" : "cover"}
+                />
+                {webinarStage.pip ? (
+                  <div
+                    className={`absolute h-24 w-36 overflow-hidden rounded-xl border border-[#FEFCD9]/20 bg-black/75 shadow-[0_12px_24px_rgba(0,0,0,0.45)] ${pipDragPosition ? "" : pipCornerClass} cursor-grab active:cursor-grabbing touch-none select-none`}
+                    style={
+                      pipDragPosition
+                        ? {
+                            left: `${pipDragPosition.x}px`,
+                            top: `${pipDragPosition.y}px`,
+                            right: "auto",
+                            bottom: "auto",
+                          }
+                        : undefined
+                    }
+                    onPointerDown={handlePipPointerDown}
+                    onPointerMove={handlePipPointerMove}
+                    onPointerUp={handlePipPointerUp}
+                    onPointerCancel={handlePipPointerCancel}
+                  >
+                    <ParticipantVideo
+                      key={`${webinarStage.pip.participant.userId}:${getVideoTrackId(
+                        webinarStage.pip.participant.videoStream,
+                      )}:pip`}
+                      participant={webinarStage.pip.participant}
+                      displayName={webinarStage.pip.displayName}
+                    />
+                  </div>
+                ) : null}
+              </div>
+            ) : (
+              <div className="mobile-sheet-card px-5 py-4 text-center">
+                <p className="text-sm text-[#FEFCD9]">
+                  Waiting for the host to start speaking...
+                </p>
+              </div>
+            )}
+          </div>
+        ) : isWhiteboardActive ? (
+          <MobileWhiteboardLayout />
+        ) : isDevPlaygroundEnabled && isDevPlaygroundActive ? (
+          <DevPlaygroundLayout
             localStream={localStream}
             isCameraOff={isCameraOff}
             isMuted={isMuted}
@@ -338,7 +838,9 @@ function MobileMeetsMainContent({
           <MobileBrowserLayout
             browserUrl={browserState.url || ""}
             noVncUrl={browserState.noVncUrl}
-            controllerName={resolveDisplayName(browserState.controllerUserId || "")}
+            controllerName={resolveDisplayName(
+              browserState.controllerUserId || "",
+            )}
             localStream={localStream}
             isCameraOff={isCameraOff}
             isMuted={isMuted}
@@ -383,13 +885,14 @@ function MobileMeetsMainContent({
             activeSpeakerId={activeSpeakerId}
             currentUserId={currentUserId}
             audioOutputDeviceId={audioOutputDeviceId}
+            onOpenParticipantsPanel={handleOpenParticipants}
             getDisplayName={resolveDisplayName}
           />
         )}
       </div>
 
       {/* Chat overlay messages */}
-      {chatOverlayMessages.length > 0 && (
+      {!isWebinarAttendee && chatOverlayMessages.length > 0 && (
         <div className="absolute top-16 left-4 right-4 z-30 pointer-events-none">
           <ChatOverlay
             messages={chatOverlayMessages}
@@ -400,8 +903,8 @@ function MobileMeetsMainContent({
         </div>
       )}
 
-      {isJoined && browserLaunchError && (
-        <div className="absolute top-16 left-4 right-4 z-40 rounded-xl border border-[#F95F4A]/30 bg-[#0d0e0d]/95 px-3 py-2 text-xs text-[#FEFCD9]/90 shadow-2xl">
+      {isJoined && !isWebinarAttendee && browserLaunchError && (
+        <div className="absolute top-16 left-4 right-4 z-40 mobile-sheet-card border border-[#F95F4A]/30 px-3 py-2 text-xs text-[#FEFCD9]/90 shadow-2xl">
           <div className="flex items-start gap-2">
             <span className="font-medium text-[#F95F4A]">Browser error</span>
             {onClearBrowserError && (
@@ -421,7 +924,7 @@ function MobileMeetsMainContent({
       )}
 
       {/* Controls bar */}
-      {browserAudioNeedsGesture && (
+      {!isWebinarAttendee && browserAudioNeedsGesture && (
         <div className="px-4 mt-2 text-[11px] text-[#F95F4A]/70 text-center uppercase tracking-[0.4em]">
           Tap “Shared browser audio” to unlock the system sound.
         </div>
@@ -449,6 +952,12 @@ function MobileMeetsMainContent({
         isAdmin={isAdmin}
         isRoomLocked={isRoomLocked}
         onToggleLock={onToggleLock}
+        isNoGuests={isNoGuests}
+        onToggleNoGuests={onToggleNoGuests}
+        isChatLocked={isChatLocked}
+        onToggleChatLock={onToggleChatLock}
+        isTtsDisabled={isTtsDisabled}
+        onToggleTtsDisabled={handleToggleTtsDisabled}
         isBrowserActive={browserState?.active ?? false}
         isBrowserLaunching={isBrowserLaunching}
         showBrowserControls={showBrowserControls}
@@ -459,36 +968,62 @@ function MobileMeetsMainContent({
         isBrowserAudioMuted={isBrowserAudioMuted}
         onToggleBrowserAudio={onToggleBrowserAudio}
         isWhiteboardActive={isWhiteboardActive}
-        onOpenWhiteboard={handleOpenWhiteboard}
-        onCloseWhiteboard={handleCloseWhiteboard}
+        onOpenWhiteboard={isAdmin ? handleOpenWhiteboard : undefined}
+        onCloseWhiteboard={isAdmin ? handleCloseWhiteboard : undefined}
+        isDevPlaygroundEnabled={isDevPlaygroundEnabled}
+        isDevPlaygroundActive={isDevPlaygroundActive}
+        onOpenDevPlayground={isAdmin ? handleOpenDevPlayground : undefined}
+        onCloseDevPlayground={isAdmin ? handleCloseDevPlayground : undefined}
         isAppsLocked={appsState.locked}
         onToggleAppsLock={isAdmin ? handleToggleAppsLock : undefined}
+        audioInputDeviceId={selectedAudioInputDeviceId}
+        audioOutputDeviceId={audioOutputDeviceId}
+        onAudioInputDeviceChange={onAudioInputDeviceChange}
+        onAudioOutputDeviceChange={onAudioOutputDeviceChange}
+        isObserverMode={isWebinarAttendee}
+        meetingRequiresInviteCode={meetingRequiresInviteCode}
+        webinarConfig={webinarConfig}
+        webinarRole={webinarRole}
+        webinarLink={webinarLink}
+        onSetWebinarLink={onSetWebinarLink}
+        onGetMeetingConfig={onGetMeetingConfig}
+        onUpdateMeetingConfig={onUpdateMeetingConfig}
+        onGetWebinarConfig={onGetWebinarConfig}
+        onUpdateWebinarConfig={onUpdateWebinarConfig}
+        onGenerateWebinarLink={onGenerateWebinarLink}
+        onRotateWebinarLink={onRotateWebinarLink}
       />
 
       {/* Full-screen chat panel */}
-      {isChatOpen && (
+      {!isWebinarAttendee && (
         <MobileChatPanel
           messages={chatMessages}
           chatInput={chatInput}
           onInputChange={setChatInput}
           onSend={sendChat}
           onClose={handleToggleChat}
+          isOpen={isChatOpen}
           currentUserId={currentUserId}
           isGhostMode={ghostEnabled}
+          isChatLocked={isChatLocked}
+          isAdmin={isAdmin}
           getDisplayName={resolveDisplayName}
         />
       )}
 
       {/* Full-screen participants panel */}
-      {isParticipantsOpen && (
+      {!isWebinarAttendee && (
         <MobileParticipantsPanel
           participants={participants}
           currentUserId={currentUserId}
           onClose={handleCloseParticipants}
+          isOpen={isParticipantsOpen}
           socket={socket}
           isAdmin={isAdmin}
           pendingUsers={pendingUsers}
           getDisplayName={resolveDisplayName}
+          hostUserId={hostUserId}
+          hostUserIds={hostUserIds}
         />
       )}
     </div>

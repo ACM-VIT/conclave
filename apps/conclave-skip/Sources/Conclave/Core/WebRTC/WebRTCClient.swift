@@ -386,7 +386,6 @@ final class WebRTCClient: NSObject, ObservableObject {
                 producer.pause()
             }
             try await socket.toggleMute(producerId: producer.id, paused: !enabled)
-            rtcLocalAudioTrack?.isEnabled = enabled
             localAudioEnabled = enabled
         } catch {
             debugLog("[WebRTC] Failed to toggle audio: \(error)")

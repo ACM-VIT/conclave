@@ -17,7 +17,7 @@
       "expo-router",
       "expo-font"
     ],
-    "version": "1.0.1",
+    "version": "1.0.5",
     "ios": {
       "supportsTablet": true,
       "associatedDomains": [
@@ -47,6 +47,8 @@
         "FOREGROUND_SERVICE_MICROPHONE",
         "FOREGROUND_SERVICE_CAMERA",
         "WAKE_LOCK",
+        "BLUETOOTH",
+        "BLUETOOTH_ADMIN",
         "BLUETOOTH_CONNECT",
         "MANAGE_OWN_CALLS"
       ],
@@ -67,7 +69,7 @@
         }
       ],
       "package": "com.acmvit.conclave",
-      "versionCode": 5
+      "versionCode": 18
     },
     "name": "Conclave",
     "slug": "conclave"

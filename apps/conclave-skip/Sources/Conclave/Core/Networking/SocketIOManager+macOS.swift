@@ -38,6 +38,7 @@ final class SocketIOManager {
     var onHandRaisedSnapshot: ((HandRaisedSnapshotNotification) -> Void)?
 
     var onRoomLockChanged: ((Bool) -> Void)?
+    var onChatLockChanged: ((Bool) -> Void)?
     var onPendingUsersSnapshot: ((PendingUsersSnapshotNotification) -> Void)?
     var onUserRequestedJoin: ((UserRequestedJoinNotification) -> Void)?
     var onPendingUserChanged: ((PendingUserChangedNotification) -> Void)?
@@ -87,6 +88,7 @@ final class SocketIOManager {
     func updateDisplayName(_ name: String) async throws { }
 
     func lockRoom(_ locked: Bool) async throws { }
+    func lockChat(_ locked: Bool) async throws { }
     func admitUser(userId: String) async throws { }
     func rejectUser(userId: String) async throws { }
     func kickUser(userId: String) async throws { }

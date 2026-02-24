@@ -11,7 +11,15 @@ import { Logger } from "../../../utilities/loggers.js";
 import type { ConnectionContext } from "../context.js";
 import { respond } from "./ack.js";
 
-const BROWSER_SERVICE_URL = process.env.BROWSER_SERVICE_URL || "http://localhost:3040";
+const BROWSER_SERVICE_URL = (process.env.BROWSER_SERVICE_URL || "http://localhost:3040").replace(
+    /\/+$/,
+    ""
+);
+const BROWSER_SERVICE_TOKEN = process.env.BROWSER_SERVICE_TOKEN || "";
+const BROWSER_SERVICE_TIMEOUT_MS = (() => {
+    const parsed = Number(process.env.BROWSER_SERVICE_TIMEOUT_MS || "5000");
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 5000;
+})();
 const BROWSER_AUDIO_USER_ID_PREFIX = "shared-browser";
 const BROWSER_AUDIO_PAYLOAD_TYPE = 111;
 const BROWSER_AUDIO_CLOCK_RATE = 48000;
@@ -26,6 +34,14 @@ interface RoomBrowserState {
     url?: string;
     noVncUrl?: string;
     controllerUserId?: string;
+}
+
+interface BrowserServiceSessionResponse {
+    success: boolean;
+    error?: string;
+    session?: {
+        noVncUrl?: string;
+    };
 }
 
 const roomBrowserStates: Map<string, RoomBrowserState> = new Map();
@@ -50,6 +66,43 @@ const roomBrowserVideo: Map<
         ssrc: number;
     }
 > = new Map();
+
+const callBrowserService = async <T>(
+    path: string,
+    payload: Record<string, unknown>
+): Promise<T> => {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), BROWSER_SERVICE_TIMEOUT_MS);
+    const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+    };
+
+    if (BROWSER_SERVICE_TOKEN) {
+        headers["x-browser-service-token"] = BROWSER_SERVICE_TOKEN;
+    }
+
+    try {
+        const response = await fetch(`${BROWSER_SERVICE_URL}${path}`, {
+            method: "POST",
+            headers,
+            body: JSON.stringify(payload),
+            signal: controller.signal,
+        });
+
+        const result = (await response.json().catch(() => ({}))) as T & {
+            error?: string;
+        };
+
+        if (!response.ok) {
+            const message = result.error || `Browser service request failed with HTTP ${response.status}`;
+            throw new Error(message);
+        }
+
+        return result;
+    } finally {
+        clearTimeout(timeout);
+    }
+};
 
 export const getBrowserState = (channelId: string): RoomBrowserState => {
     return roomBrowserStates.get(channelId) || { active: false };
@@ -327,19 +380,16 @@ export const registerSharedBrowserHandlers = (context: ConnectionContext): void 
                     Logger.error("[SharedBrowser] Failed to setup browser video:", error);
                 }
 
-                const response = await fetch(`${BROWSER_SERVICE_URL}/launch`, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
+                const result = await callBrowserService<BrowserServiceSessionResponse>(
+                    "/launch",
+                    {
                         roomId: channelId,
                         url: data.url,
                         controllerUserId: userId,
                         audioTarget,
                         videoTarget,
-                    }),
-                });
-
-                const result = await response.json();
+                    }
+                );
 
                 if (!result.success) {
                     respond(callback, { error: result.error || "Failed to launch browser" });
@@ -409,18 +459,15 @@ export const registerSharedBrowserHandlers = (context: ConnectionContext): void 
                     Logger.error("[SharedBrowser] Failed to setup browser video:", error);
                 }
 
-                const response = await fetch(`${BROWSER_SERVICE_URL}/navigate`, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
+                const result = await callBrowserService<BrowserServiceSessionResponse>(
+                    "/navigate",
+                    {
                         roomId: channelId,
                         url: data.url,
                         audioTarget,
                         videoTarget,
-                    }),
-                });
-
-                const result = await response.json();
+                    }
+                );
 
                 if (!result.success) {
                     respond(callback, { error: result.error || "Failed to navigate" });
@@ -469,10 +516,8 @@ export const registerSharedBrowserHandlers = (context: ConnectionContext): void 
                     return;
                 }
 
-                await fetch(`${BROWSER_SERVICE_URL}/close`, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ roomId: channelId }),
+                await callBrowserService<{ success: boolean; error?: string }>("/close", {
+                    roomId: channelId,
                 });
 
                 clearBrowserState(channelId);
@@ -514,10 +559,8 @@ export const registerSharedBrowserHandlers = (context: ConnectionContext): void 
         if (!state.active) return;
 
         try {
-            await fetch(`${BROWSER_SERVICE_URL}/activity`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ roomId: channelId }),
+            await callBrowserService<{ success: boolean; error?: string }>("/activity", {
+                roomId: channelId,
             });
         } catch {
         }
@@ -529,10 +572,8 @@ export const cleanupRoomBrowser = async (channelId: string): Promise<void> => {
     if (!state.active) return;
 
     try {
-        await fetch(`${BROWSER_SERVICE_URL}/close`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ roomId: channelId }),
+        await callBrowserService<{ success: boolean; error?: string }>("/close", {
+            roomId: channelId,
         });
     } catch (error) {
         Logger.error("[SharedBrowser] Failed to cleanup on room close:", error);

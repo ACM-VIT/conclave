@@ -7,6 +7,7 @@ import {
 import type { AudioAnalyserEntry, Participant } from "../types";
 
 interface UseMeetAudioActivityOptions {
+  enabled: boolean;
   participants: Map<string, Participant>;
   localStream: MediaStream | null;
   isMuted: boolean;
@@ -22,6 +23,7 @@ interface UseMeetAudioActivityOptions {
 }
 
 export function useMeetAudioActivity({
+  enabled,
   participants,
   localStream,
   isMuted,
@@ -32,6 +34,22 @@ export function useMeetAudioActivity({
   lastActiveSpeakerRef,
 }: UseMeetAudioActivityOptions) {
   useEffect(() => {
+    const analyserMap = audioAnalyserMapRef.current;
+    const clearAnalyserMap = () => {
+      analyserMap.forEach((entry) => {
+        entry.source.disconnect();
+        entry.analyser.disconnect();
+      });
+      analyserMap.clear();
+    };
+
+    if (!enabled) {
+      clearAnalyserMap();
+      lastActiveSpeakerRef.current = null;
+      setActiveSpeakerId((prev) => (prev ? null : prev));
+      return;
+    }
+
     const sources = new Map<string, MediaStream>();
     const localAudioTrack = localStream?.getAudioTracks()[0];
 
@@ -52,8 +70,6 @@ export function useMeetAudioActivity({
       sources.set(participant.userId, participant.audioStream);
     }
 
-    const analyserMap = audioAnalyserMapRef.current;
-
     for (const [id, entry] of analyserMap) {
       if (!sources.has(id)) {
         entry.source.disconnect();
@@ -62,12 +78,8 @@ export function useMeetAudioActivity({
       }
     }
 
-    if (!sources.size) {
-      analyserMap.forEach((entry) => {
-        entry.source.disconnect();
-        entry.analyser.disconnect();
-      });
-      analyserMap.clear();
+    if (sources.size < 2) {
+      clearAnalyserMap();
       lastActiveSpeakerRef.current = null;
       setActiveSpeakerId((prev) => (prev ? null : prev));
       return;
@@ -161,6 +173,7 @@ export function useMeetAudioActivity({
       clearInterval(interval);
     };
   }, [
+    enabled,
     participants,
     localStream,
     isMuted,

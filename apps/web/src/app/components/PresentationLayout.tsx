@@ -1,7 +1,8 @@
 "use client";
 
-import { Ghost, Hand } from "lucide-react";
+import { Ghost, Hand, Mic, MicOff } from "lucide-react";
 import { memo, useEffect, useRef } from "react";
+import { useSmartParticipantOrder } from "../hooks/useSmartParticipantOrder";
 import type { Participant } from "../lib/types";
 import { getSpeakerHighlightClasses, isSystemUserId } from "../lib/utils";
 import ParticipantVideo from "./ParticipantVideo";
@@ -11,6 +12,7 @@ interface PresentationLayoutProps {
   presenterName: string;
   localStream: MediaStream | null;
   isCameraOff: boolean;
+  isMuted: boolean;
   isHandRaised: boolean;
   isGhost: boolean;
   participants: Map<string, Participant>;
@@ -27,6 +29,7 @@ function PresentationLayout({
   presenterName,
   localStream,
   isCameraOff,
+  isMuted,
   isHandRaised,
   isGhost,
   participants,
@@ -55,24 +58,107 @@ function PresentationLayout({
 
   useEffect(() => {
     const video = presentationVideoRef.current;
-    if (video && presentationStream) {
-      if (video.srcObject !== presentationStream) {
-        video.srcObject = presentationStream;
-        video.play().catch((err) => {
-          if (err.name !== "AbortError") {
-            console.error("[Meets] Presentation video play error:", err);
-          }
-        });
-      }
+    if (!video || !presentationStream) return;
+
+    if (video.srcObject !== presentationStream) {
+      video.srcObject = presentationStream;
     }
+
+    let cancelled = false;
+    const replayTimeouts: number[] = [];
+    let replayRafId: number | null = null;
+
+    const playVideo = () => {
+      if (cancelled) return;
+      video.play().catch((err) => {
+        if (err.name === "NotAllowedError") {
+          video.muted = true;
+          video.play().catch(() => {});
+          return;
+        }
+        if (err.name !== "AbortError") {
+          console.error("[Meets] Presentation video play error:", err);
+        }
+      });
+    };
+
+    const scheduleReplay = () => {
+      playVideo();
+      if (typeof window !== "undefined") {
+        for (const delay of [80, 220, 480, 900, 1500]) {
+          replayTimeouts.push(window.setTimeout(playVideo, delay));
+        }
+        let frameAttempts = 0;
+        const replayOnFrame = () => {
+          if (cancelled) return;
+          if (video.paused || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+            playVideo();
+          }
+          frameAttempts += 1;
+          if (frameAttempts < 24) {
+            replayRafId = window.requestAnimationFrame(replayOnFrame);
+          }
+        };
+        replayRafId = window.requestAnimationFrame(replayOnFrame);
+      }
+    };
+
+    scheduleReplay();
+
+    const videoTrack = presentationStream.getVideoTracks()[0];
+    const handleTrackUnmuted = () => {
+      scheduleReplay();
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        scheduleReplay();
+      }
+    };
+
+    if (videoTrack) {
+      videoTrack.addEventListener("unmute", handleTrackUnmuted);
+    }
+    video.addEventListener("loadedmetadata", scheduleReplay);
+    video.addEventListener("loadeddata", scheduleReplay);
+    video.addEventListener("canplay", scheduleReplay);
+    video.addEventListener("stalled", scheduleReplay);
+    video.addEventListener("suspend", scheduleReplay);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      cancelled = true;
+      if (videoTrack) {
+        videoTrack.removeEventListener("unmute", handleTrackUnmuted);
+      }
+      video.removeEventListener("loadedmetadata", scheduleReplay);
+      video.removeEventListener("loadeddata", scheduleReplay);
+      video.removeEventListener("canplay", scheduleReplay);
+      video.removeEventListener("stalled", scheduleReplay);
+      video.removeEventListener("suspend", scheduleReplay);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      for (const timeoutId of replayTimeouts) {
+        window.clearTimeout(timeoutId);
+      }
+      if (replayRafId !== null) {
+        window.cancelAnimationFrame(replayRafId);
+      }
+    };
   }, [presentationStream]);
 
+  const remoteParticipants = useSmartParticipantOrder(
+    Array.from(participants.values()).filter(
+      (participant) => !isSystemUserId(participant.userId)
+    ),
+    activeSpeakerId
+  );
+
   return (
-    <div className="flex flex-1 gap-4 overflow-hidden">
+    <div className="flex flex-1 gap-4 overflow-hidden mt-5">
       <div className="flex-1 bg-[#252525] border border-white/5 rounded-lg overflow-hidden relative flex items-center justify-center">
         <video
           ref={presentationVideoRef}
           autoPlay
+          muted
           playsInline
           className="max-w-full max-h-full"
         />
@@ -128,12 +214,15 @@ function PresentationLayout({
             style={{ fontFamily: "'PolySans Mono', monospace" }}
           >
             <span className="font-medium text-[#FEFCD9] uppercase tracking-wide">You</span>
+            {isMuted ? (
+              <MicOff className="w-3 h-3 text-[#F95F4A]" />
+            ) : (
+              <Mic className="w-3 h-3 text-emerald-300" />
+            )}
           </div>
         </div>
 
-        {Array.from(participants.values())
-          .filter((participant) => !isSystemUserId(participant.userId))
-          .map((participant) => (
+        {remoteParticipants.map((participant) => (
             <ParticipantVideo
               key={participant.userId}
               participant={participant}

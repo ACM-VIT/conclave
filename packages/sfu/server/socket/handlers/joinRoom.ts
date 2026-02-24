@@ -9,9 +9,23 @@ import type {
 } from "../../../types.js";
 import { Logger } from "../../../utilities/loggers.js";
 import { MAX_DISPLAY_NAME_LENGTH } from "../../constants.js";
-import { buildUserIdentity, normalizeDisplayName } from "../../identity.js";
+import {
+  buildUserIdentity,
+  isGuestUserKey,
+  normalizeDisplayName,
+} from "../../identity.js";
 import { emitUserJoined, emitUserLeft } from "../../notifications.js";
 import { cleanupRoom, getOrCreateRoom, getRoomChannelId } from "../../rooms.js";
+import {
+  emitWebinarAttendeeCountChanged,
+  emitWebinarFeedChanged,
+} from "../../webinarNotifications.js";
+import {
+  getOrCreateWebinarRoomConfig,
+  resolveWebinarLinkTarget,
+  toWebinarConfigSnapshot,
+  verifyInviteCode,
+} from "../../webinar.js";
 import type { ConnectionContext } from "../context.js";
 import { registerAdminHandlers } from "./adminHandlers.js";
 import { respond } from "./ack.js";
@@ -31,11 +45,42 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
       callback: (response: JoinRoomResponse | { error: string }) => void,
     ) => {
       try {
-        const { roomId, sessionId } = data;
+        const requestedRoomId =
+          typeof data?.roomId === "string" ? data.roomId.trim() : "";
+        const { sessionId } = data;
         const user = (socket as any).user;
-        const hostRequested = Boolean(user?.isHost ?? user?.isAdmin);
+        if (!requestedRoomId) {
+          respond(callback, { error: "Missing room ID" });
+          return;
+        }
+        const joinMode =
+          user?.joinMode === "webinar_attendee"
+            ? "webinar_attendee"
+            : "meeting";
+        const isWebinarAttendeeJoin = joinMode === "webinar_attendee";
+        const forcedHostJoin =
+          !isWebinarAttendeeJoin && Boolean(user?.isForcedHost);
+
+        const hostRequested =
+          !isWebinarAttendeeJoin &&
+          Boolean(user?.isHost ?? user?.isAdmin ?? user?.isForcedHost);
+        const allowRoomCreation =
+          !isWebinarAttendeeJoin && Boolean(user?.allowRoomCreation);
         const clientId =
           typeof user?.clientId === "string" ? user.clientId : "default";
+        let roomId = requestedRoomId;
+        if (isWebinarAttendeeJoin) {
+          const webinarTarget = resolveWebinarLinkTarget(
+            state.webinarLinks,
+            requestedRoomId,
+            clientId,
+          );
+          if (!webinarTarget) {
+            respond(callback, { error: "Webinar is not live." });
+            return;
+          }
+          roomId = webinarTarget.roomId;
+        }
         const clientPolicy =
           config.clientPolicies[clientId] ?? config.clientPolicies.default;
         const displayNameCandidate = normalizeDisplayName(data?.displayName);
@@ -46,36 +91,89 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           respond(callback, { error: "Display name too long" });
           return;
         }
+
         const identity = buildUserIdentity(user, sessionId, socket.id);
         if (!identity) {
-          respond(callback, { error: "Authentication error: Invalid token payload" });
+          respond(callback, {
+            error: "Authentication error: Invalid token payload",
+          });
           return;
         }
         if (user?.sessionId && sessionId && user.sessionId !== sessionId) {
           respond(callback, { error: "Session mismatch" });
           return;
         }
+
         const { userKey, userId } = identity;
         const roomChannelId = getRoomChannelId(clientId, roomId);
         let room = state.rooms.get(roomChannelId);
         let createdRoom = false;
 
         if (!room) {
+          if (isWebinarAttendeeJoin) {
+            respond(callback, { error: "Webinar is not live." });
+            return;
+          }
           if (state.isDraining) {
             respond(callback, {
               error: "Meeting server is draining. Try again shortly.",
             });
             return;
           }
-          if (!hostRequested && !clientPolicy.allowNonHostRoomCreation) {
+          if (
+            !hostRequested &&
+            !allowRoomCreation &&
+            !clientPolicy.allowNonHostRoomCreation
+          ) {
             respond(callback, { error: "No room found." });
             return;
           }
           room = await getOrCreateRoom(state, clientId, roomId);
           createdRoom = true;
         }
+
+        const webinarConfig = getOrCreateWebinarRoomConfig(
+          state.webinarConfigs,
+          roomChannelId,
+        );
+
+        if (isWebinarAttendeeJoin) {
+          if (!webinarConfig.enabled) {
+            respond(callback, { error: "Webinar is not enabled." });
+            return;
+          }
+
+          const inviteCode = data?.webinarInviteCode?.trim() || "";
+          const inviteCodeHash = webinarConfig.inviteCodeHash;
+          const hasInviteCodeConfig = Boolean(inviteCodeHash);
+
+          if (hasInviteCodeConfig && webinarConfig.publicAccess && !inviteCode) {
+            respond(callback, { error: "Webinar invite code required." });
+            return;
+          }
+
+          if (
+            inviteCodeHash &&
+            inviteCode &&
+            !verifyInviteCode(inviteCode, inviteCodeHash)
+          ) {
+            respond(callback, { error: "Invalid webinar invite code." });
+            return;
+          }
+
+          if (webinarConfig.locked) {
+            respond(callback, { error: "Webinar is locked." });
+            return;
+          }
+        }
+
         const wasReconnecting = room.clearPendingDisconnect(userId);
-        if (room.getClient(userId)) {
+        const existingClient = room.getClient(userId);
+        const reclaimingWebinarSeat = existingClient
+          ? Boolean(existingClient.isWebinarAttendee)
+          : false;
+
+        if (existingClient) {
           Logger.warn(`User ${userId} re-joining room ${roomId}`);
           const awarenessRemovals = room.clearUserAwareness(userId);
           for (const removal of awarenessRemovals) {
@@ -87,6 +185,15 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           room.removeClient(userId);
         }
 
+        if (
+          isWebinarAttendeeJoin &&
+          !reclaimingWebinarSeat &&
+          room.getWebinarAttendeeCount() >= webinarConfig.maxAttendees
+        ) {
+          respond(callback, { error: "Webinar is full." });
+          return;
+        }
+
         const browserState = getBrowserState(roomChannelId);
         if (browserState.active && room.clients.size === 0) {
           Logger.info(
@@ -96,32 +203,96 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         }
 
         const isReturningPrimaryHost =
-          Boolean(room.hostUserKey) && room.hostUserKey === userKey;
-        const isHostForExistingRoom =
-          hostRequested &&
-          (clientPolicy.allowHostJoin || isReturningPrimaryHost);
-        const isHost = createdRoom ? true : isHostForExistingRoom;
+          !isWebinarAttendeeJoin &&
+          Boolean(room.hostUserKey) &&
+          room.hostUserKey === userKey;
+        const isPersistedAdminForExistingRoom =
+          !isWebinarAttendeeJoin && room.isAdminUserKey(userKey);
+        const isAdminForExistingRoom =
+          !isWebinarAttendeeJoin &&
+          (isReturningPrimaryHost ||
+            isPersistedAdminForExistingRoom ||
+            (hostRequested &&
+              (clientPolicy.allowHostJoin || forcedHostJoin)));
+        const isAdminJoin = isWebinarAttendeeJoin
+          ? false
+          : createdRoom
+            ? true
+            : isAdminForExistingRoom;
 
-        if (isHost && !room.hostUserKey) {
+        const meetingInviteCode = data?.meetingInviteCode?.trim() || "";
+        const requiresMeetingInviteCode = room.requiresMeetingInviteCode;
+        const shouldValidateMeetingInviteCode =
+          !isWebinarAttendeeJoin &&
+          !isAdminJoin &&
+          requiresMeetingInviteCode &&
+          !wasReconnecting &&
+          !existingClient;
+
+        if (shouldValidateMeetingInviteCode && !meetingInviteCode) {
+          respond(callback, { error: "Meeting invite code required." });
+          return;
+        }
+
+        if (
+          shouldValidateMeetingInviteCode &&
+          !room.verifyMeetingInviteCode(meetingInviteCode)
+        ) {
+          respond(callback, { error: "Invalid meeting invite code." });
+          return;
+        }
+
+        if (isAdminJoin) {
+          room.registerAdminUserKey(userKey);
+        }
+        if (isAdminJoin && !room.hostUserKey) {
           room.hostUserKey = userKey;
         }
         const isPrimaryHost = room.hostUserKey === userKey;
 
-        if (isHostForExistingRoom && room.cleanupTimer) {
+        if (
+          !isWebinarAttendeeJoin &&
+          room.noGuests &&
+          !isAdminJoin &&
+          isGuestUserKey(userKey)
+        ) {
+          Logger.info(
+            `Guest ${userKey} blocked from room ${roomId} (no guests allowed).`,
+          );
+          respond(callback, { error: "Guests are not allowed in this meeting." });
+          return;
+        }
+
+        if (isAdminJoin) {
+          socket.emit("hostAssigned", {
+            roomId,
+            hostUserId: room.getHostUserId() ?? (isPrimaryHost ? userId : null),
+          });
+        }
+
+        if (isAdminForExistingRoom && room.cleanupTimer) {
           Logger.info(`Host returning to room ${roomId}, cleanup cancelled.`);
           room.stopCleanupTimer();
         }
+
         const canSetDisplayName = Boolean(
-          clientPolicy.allowDisplayNameUpdate || isHost,
+          !isWebinarAttendeeJoin &&
+            (clientPolicy.allowDisplayNameUpdate || isAdminJoin),
         );
         const requestedDisplayName =
           canSetDisplayName && displayNameCandidate ? displayNameCandidate : "";
         const displayName = requestedDisplayName || identity.displayName;
         const hasDisplayNameOverride = Boolean(requestedDisplayName);
-        const isGhost = Boolean(data?.ghost) && Boolean(isHost);
+        const isGhost =
+          !isWebinarAttendeeJoin && Boolean(data?.ghost) && Boolean(isAdminJoin);
         context.currentUserKey = userKey;
 
-        if (room.isLocked && !isPrimaryHost && !room.isLockedAllowed(userKey)) {
+        if (
+          !isWebinarAttendeeJoin &&
+          room.isLocked &&
+          !isAdminJoin &&
+          !room.isLockedAllowed(userKey)
+        ) {
           Logger.info(
             `User ${userKey} trying to join locked room ${roomId}, adding to waiting room`,
           );
@@ -131,7 +302,8 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           context.pendingUserKey = userKey;
 
           socket.emit("waitingRoomStatus", {
-            message: "This meeting is locked. Waiting for the host to let you in.",
+            message:
+              "This meeting is locked. Waiting for the host to let you in.",
             roomId,
           });
 
@@ -146,16 +318,23 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           }
 
           respond(callback, {
+            roomId,
             rtpCapabilities: room.rtpCapabilities,
             existingProducers: [],
             status: "waiting",
+            hostUserId: room.getHostUserId(),
+            hostUserIds: room.getAdminUserIds(),
+            isLocked: room.isLocked,
+            isTtsDisabled: room.isTtsDisabled,
+            meetingRequiresInviteCode: room.requiresMeetingInviteCode,
           });
           return;
         }
 
         if (
+          !isWebinarAttendeeJoin &&
           clientPolicy.useWaitingRoom &&
-          !isHost &&
+          !isAdminJoin &&
           !room.isAllowed(userKey) &&
           !(room.isLocked && room.isLockedAllowed(userKey))
         ) {
@@ -182,9 +361,15 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           }
 
           respond(callback, {
+            roomId,
             rtpCapabilities: room.rtpCapabilities,
             existingProducers: [],
             status: "waiting",
+            hostUserId: room.getHostUserId(),
+            hostUserIds: room.getAdminUserIds(),
+            isLocked: room.isLocked,
+            isTtsDisabled: room.isTtsDisabled,
+            meetingRequiresInviteCode: room.requiresMeetingInviteCode,
           });
           return;
         }
@@ -201,9 +386,8 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             `User ${userId} switching from ${previousRoom.id} to ${roomId}`,
           );
 
-          const awarenessRemovals = previousRoom.clearUserAwareness(
-            previousClientId,
-          );
+          const awarenessRemovals =
+            previousRoom.clearUserAwareness(previousClientId);
           for (const removal of awarenessRemovals) {
             socket.to(previousChannelId).emit("apps:awareness", {
               appId: removal.appId,
@@ -218,9 +402,14 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
               ghostOnly: true,
               excludeUserId: previousClientId,
             });
-          } else {
-            socket.to(previousChannelId).emit("userLeft", { userId: previousClientId });
+          } else if (!context.currentClient.isWebinarAttendee) {
+            socket
+              .to(previousChannelId)
+              .emit("userLeft", { userId: previousClientId });
           }
+
+          emitWebinarAttendeeCountChanged(io, state, previousRoom);
+          emitWebinarFeedChanged(io, previousRoom);
 
           socket.leave(previousChannelId);
           if (cleanupRoom(state, previousChannelId)) {
@@ -232,14 +421,31 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         }
 
         context.currentRoom = room;
+        context.currentRoom.setWebinarFeedRefreshNotifier((targetRoom) => {
+          emitWebinarFeedChanged(io, targetRoom);
+        });
         context.pendingRoomId = null;
         context.pendingRoomChannelId = null;
         context.pendingUserKey = null;
 
-        if (isHost) {
-          context.currentClient = new Admin({ id: userId, socket, isGhost });
+        if (isAdminJoin) {
+          context.currentClient = new Admin({
+            id: userId,
+            socket,
+            mode: isGhost ? "ghost" : "participant",
+          });
+        } else if (isWebinarAttendeeJoin) {
+          context.currentClient = new Client({
+            id: userId,
+            socket,
+            mode: "webinar_attendee",
+          });
         } else {
-          context.currentClient = new Client({ id: userId, socket, isGhost });
+          context.currentClient = new Client({
+            id: userId,
+            socket,
+            mode: isGhost ? "ghost" : "participant",
+          });
         }
 
         context.currentRoom.setUserIdentity(userId, userKey, displayName, {
@@ -248,6 +454,15 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         context.currentRoom.addClient(context.currentClient);
 
         socket.join(roomChannelId);
+
+        io.to(roomChannelId).emit("hostChanged", {
+          roomId: context.currentRoom.id,
+          hostUserId: context.currentRoom.getHostUserId(),
+        });
+        io.to(roomChannelId).emit("adminUsersChanged", {
+          roomId: context.currentRoom.id,
+          hostUserIds: context.currentRoom.getAdminUserIds(),
+        });
 
         if (context.currentClient instanceof Admin) {
           const pendingUsers = Array.from(
@@ -281,11 +496,16 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
                 isGhost: true,
               });
             }
-          } else {
-            socket.to(roomChannelId).emit("userJoined", {
-              userId,
-              displayName: resolvedDisplayName,
-            });
+          } else if (!context.currentClient.isWebinarAttendee) {
+            for (const [clientId, client] of context.currentRoom.clients) {
+              if (clientId === userId || client.isWebinarAttendee) {
+                continue;
+              }
+              client.socket.emit("userJoined", {
+                userId,
+                displayName: resolvedDisplayName,
+              });
+            }
           }
         } else {
           Logger.info(`User ${userId} reconnected to room ${roomId}.`);
@@ -293,6 +513,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
 
         const displayNameSnapshot = context.currentRoom.getDisplayNameSnapshot({
           includeGhosts: context.currentClient.isGhost,
+          includeWebinarAttendees: false,
         });
         socket.emit("displayNameSnapshot", {
           users: displayNameSnapshot,
@@ -309,6 +530,16 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           roomId: context.currentRoom.id,
         });
 
+        socket.emit("noGuestsChanged", {
+          noGuests: context.currentRoom.noGuests,
+          roomId: context.currentRoom.id,
+        });
+
+        socket.emit("chatLockChanged", {
+          locked: context.currentRoom.isChatLocked,
+          roomId: context.currentRoom.id,
+        });
+
         socket.emit("apps:state", {
           activeAppId: context.currentRoom.appsState.activeAppId,
           locked: context.currentRoom.appsState.locked,
@@ -321,10 +552,26 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           socket.emit("setVideoQuality", { quality: "low" });
         }
 
-        const existingProducers = context.currentRoom.getAllProducers(userId);
+        const feedSnapshot = context.currentRoom.refreshWebinarFeedSnapshot();
+        const existingProducers = context.currentClient.isWebinarAttendee
+          ? feedSnapshot.producers
+          : context.currentRoom.getAllProducers(userId);
+
+        emitWebinarAttendeeCountChanged(io, state, context.currentRoom);
+        emitWebinarFeedChanged(io, context.currentRoom);
+
+        const webinarSnapshot = toWebinarConfigSnapshot(
+          webinarConfig,
+          context.currentRoom.getWebinarAttendeeCount(),
+        );
 
         Logger.debug(
-          `User ${userId} joined room ${roomId} as ${isHost ? "Host" : "Client"
+          `User ${userId} joined room ${roomId} as ${
+            isAdminJoin
+              ? "Host"
+              : context.currentClient.isWebinarAttendee
+                ? "WebinarAttendee"
+                : "Client"
           }`,
         );
 
@@ -333,9 +580,25 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         }
 
         respond(callback, {
+          roomId,
           rtpCapabilities: context.currentRoom.rtpCapabilities,
           existingProducers,
           status: "joined",
+          hostUserId: context.currentRoom.getHostUserId(),
+          hostUserIds: context.currentRoom.getAdminUserIds(),
+          isLocked: context.currentRoom.isLocked,
+          isTtsDisabled: context.currentRoom.isTtsDisabled,
+          meetingRequiresInviteCode: context.currentRoom.requiresMeetingInviteCode,
+          webinarRole: context.currentClient.isWebinarAttendee
+            ? "attendee"
+            : isAdminJoin
+              ? "host"
+              : "participant",
+          isWebinarEnabled: webinarSnapshot.enabled,
+          webinarLocked: webinarSnapshot.locked,
+          webinarRequiresInviteCode: webinarSnapshot.requiresInviteCode,
+          webinarAttendeeCount: webinarSnapshot.attendeeCount,
+          webinarMaxAttendees: webinarSnapshot.maxAttendees,
         });
       } catch (error) {
         Logger.error("Error joining room:", error);

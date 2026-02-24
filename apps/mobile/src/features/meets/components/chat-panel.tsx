@@ -112,6 +112,8 @@ const ChatFooter = memo(function ChatFooter({
   onInputChange,
   onSend,
   isGhostMode,
+  isChatLocked,
+  isAdmin,
   inputDockPaddingBottom,
   showCommandSuggestions,
   commandSuggestions,
@@ -122,12 +124,15 @@ const ChatFooter = memo(function ChatFooter({
   onInputChange: (value: string) => void;
   onSend: () => void;
   isGhostMode: boolean;
+  isChatLocked: boolean;
+  isAdmin: boolean;
   inputDockPaddingBottom: number;
   showCommandSuggestions: boolean;
   commandSuggestions: CommandSuggestion[];
   activeCommandIndex: number;
   onPickCommand: (text: string) => void;
 }) {
+  const isChatDisabled = isGhostMode || (isChatLocked && !isAdmin);
   return (
     <KeyboardAvoidingView
       behavior={Platform.OS === "ios" ? "padding" : "height"}
@@ -167,7 +172,11 @@ const ChatFooter = memo(function ChatFooter({
         <TextInput
           style={styles.input}
           placeholder={
-            isGhostMode ? "Ghost mode: chat disabled" : "Type a message or /..."
+            isGhostMode
+              ? "Ghost mode: chat disabled"
+              : isChatLocked && !isAdmin
+                ? "Chat locked by host"
+                : "Type a message or /..."
           }
           placeholderTextColor={SHEET_COLORS.textFaint}
           value={inputValue}
@@ -175,9 +184,13 @@ const ChatFooter = memo(function ChatFooter({
           onSubmitEditing={onSend}
           returnKeyType="send"
           autoCorrect
-          editable={!isGhostMode}
+          editable={!isChatDisabled}
         />
-        <Pressable style={styles.sendButton} onPress={onSend}>
+        <Pressable
+          style={styles.sendButton}
+          onPress={onSend}
+          disabled={isChatDisabled || !inputValue.trim()}
+        >
           <Text style={styles.sendText}>Send</Text>
         </Pressable>
       </View>
@@ -193,6 +206,8 @@ interface ChatPanelProps {
   onClose: () => void;
   currentUserId: string;
   isGhostMode: boolean;
+  isChatLocked: boolean;
+  isAdmin: boolean;
   resolveDisplayName: (userId: string) => string;
   visible?: boolean;
 }
@@ -205,6 +220,8 @@ export function ChatPanel({
   onClose,
   currentUserId,
   isGhostMode,
+  isChatLocked,
+  isAdmin,
   resolveDisplayName,
   visible = true,
 }: ChatPanelProps) {
@@ -217,6 +234,7 @@ export function ChatPanel({
   const [activeCommandIndex, setActiveCommandIndex] = useState(0);
   const hasInitializedRef = useRef(false);
   const prevMessageIdsRef = useRef<Set<string>>(new Set());
+  const isChatDisabled = isGhostMode || (isChatLocked && !isAdmin);
 
   const handleDismiss = useCallback(() => {
     void sheetRef.current?.dismiss();
@@ -228,11 +246,11 @@ export function ChatPanel({
   }, [onClose]);
 
   const handleSend = useCallback(() => {
-    if (!localValue.trim() || isGhostMode) return;
+    if (!localValue.trim() || isChatDisabled) return;
     onSend(localValue);
     setLocalValue("");
     onInputChange("");
-  }, [localValue, onSend, onInputChange, isGhostMode]);
+  }, [localValue, onSend, onInputChange, isChatDisabled]);
 
   useEffect(() => {
     if (input !== localValue) {
@@ -245,7 +263,7 @@ export function ChatPanel({
     [localValue]
   );
   const showCommandSuggestions =
-    !isGhostMode && localValue.startsWith("/") && commandSuggestions.length > 0;
+    !isChatDisabled && localValue.startsWith("/") && commandSuggestions.length > 0;
   const isPickingCommand =
     showCommandSuggestions && !localValue.slice(1).includes(" ");
 
@@ -311,6 +329,8 @@ export function ChatPanel({
           }}
           onSend={handleSend}
           isGhostMode={isGhostMode}
+          isChatLocked={isChatLocked}
+          isAdmin={isAdmin}
           inputDockPaddingBottom={inputDockPaddingBottom}
           showCommandSuggestions={showCommandSuggestions}
           commandSuggestions={commandSuggestions}

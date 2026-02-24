@@ -1,15 +1,18 @@
 "use client";
 
 import {
+  Code2,
   Hand,
   Globe,
   Lock,
   LockOpen,
   MessageSquare,
+  MessageSquareLock,
   Mic,
   MicOff,
   MoreVertical,
   Phone,
+  Settings,
   Smile,
   Users,
   Video,
@@ -18,10 +21,23 @@ import {
   Volume2,
   VolumeX,
   X,
+  ShieldBan,
 } from "lucide-react";
-import { memo, useCallback, useRef, useState } from "react";
-import type { ReactionOption } from "../../lib/types";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
+import type {
+  MeetingConfigSnapshot,
+  MeetingUpdateRequest,
+  ReactionOption,
+  WebinarConfigSnapshot,
+  WebinarLinkResponse,
+  WebinarUpdateRequest,
+} from "../../lib/types";
 import { normalizeBrowserUrl } from "../../lib/utils";
+
+interface MediaDeviceOption {
+  deviceId: string;
+  label: string;
+}
 
 interface MobileControlsBarProps {
   isMuted: boolean;
@@ -46,6 +62,12 @@ interface MobileControlsBarProps {
   pendingUsersCount?: number;
   isRoomLocked?: boolean;
   onToggleLock?: () => void;
+  isNoGuests?: boolean;
+  onToggleNoGuests?: () => void;
+  isChatLocked?: boolean;
+  onToggleChatLock?: () => void;
+  isTtsDisabled?: boolean;
+  onToggleTtsDisabled?: () => void;
   isBrowserActive?: boolean;
   isBrowserLaunching?: boolean;
   showBrowserControls?: boolean;
@@ -58,8 +80,32 @@ interface MobileControlsBarProps {
   isWhiteboardActive?: boolean;
   onOpenWhiteboard?: () => void;
   onCloseWhiteboard?: () => void;
+  isDevPlaygroundEnabled?: boolean;
+  isDevPlaygroundActive?: boolean;
+  onOpenDevPlayground?: () => void;
+  onCloseDevPlayground?: () => void;
   isAppsLocked?: boolean;
   onToggleAppsLock?: () => void;
+  audioInputDeviceId?: string;
+  audioOutputDeviceId?: string;
+  onAudioInputDeviceChange?: (deviceId: string) => void;
+  onAudioOutputDeviceChange?: (deviceId: string) => void;
+  isObserverMode?: boolean;
+  meetingRequiresInviteCode?: boolean;
+  onGetMeetingConfig?: () => Promise<MeetingConfigSnapshot | null>;
+  onUpdateMeetingConfig?: (
+    update: MeetingUpdateRequest,
+  ) => Promise<MeetingConfigSnapshot | null>;
+  webinarConfig?: WebinarConfigSnapshot | null;
+  webinarRole?: "attendee" | "participant" | "host" | null;
+  webinarLink?: string | null;
+  onSetWebinarLink?: (link: string | null) => void;
+  onGetWebinarConfig?: () => Promise<WebinarConfigSnapshot | null>;
+  onUpdateWebinarConfig?: (
+    update: WebinarUpdateRequest,
+  ) => Promise<WebinarConfigSnapshot | null>;
+  onGenerateWebinarLink?: () => Promise<WebinarLinkResponse | null>;
+  onRotateWebinarLink?: () => Promise<WebinarLinkResponse | null>;
 }
 
 function MobileControlsBar({
@@ -85,6 +131,12 @@ function MobileControlsBar({
   pendingUsersCount = 0,
   isRoomLocked = false,
   onToggleLock,
+  isNoGuests = false,
+  onToggleNoGuests,
+  isChatLocked = false,
+  onToggleChatLock,
+  isTtsDisabled = false,
+  onToggleTtsDisabled,
   isBrowserActive = false,
   isBrowserLaunching = false,
   showBrowserControls = true,
@@ -97,119 +149,390 @@ function MobileControlsBar({
   isWhiteboardActive = false,
   onOpenWhiteboard,
   onCloseWhiteboard,
+  isDevPlaygroundEnabled = false,
+  isDevPlaygroundActive = false,
+  onOpenDevPlayground,
+  onCloseDevPlayground,
   isAppsLocked = false,
   onToggleAppsLock,
+  audioInputDeviceId,
+  audioOutputDeviceId,
+  onAudioInputDeviceChange,
+  onAudioOutputDeviceChange,
+  isObserverMode = false,
+  meetingRequiresInviteCode = false,
+  onGetMeetingConfig,
+  onUpdateMeetingConfig,
+  webinarConfig,
+  webinarRole,
+  webinarLink,
+  onSetWebinarLink,
+  onGetWebinarConfig,
+  onUpdateWebinarConfig,
+  onGenerateWebinarLink,
+  onRotateWebinarLink,
 }: MobileControlsBarProps) {
   const [isMoreMenuOpen, setIsMoreMenuOpen] = useState(false);
   const [isReactionMenuOpen, setIsReactionMenuOpen] = useState(false);
   const [isBrowserSheetOpen, setIsBrowserSheetOpen] = useState(false);
+  const [isSettingsSheetOpen, setIsSettingsSheetOpen] = useState(false);
   const [browserUrlInput, setBrowserUrlInput] = useState("");
   const [browserUrlError, setBrowserUrlError] = useState<string | null>(null);
+  const [isLoadingAudioDevices, setIsLoadingAudioDevices] = useState(false);
+  const [audioDevicesError, setAudioDevicesError] = useState<string | null>(
+    null,
+  );
+  const [audioInputDevices, setAudioInputDevices] = useState<
+    MediaDeviceOption[]
+  >([]);
+  const [audioOutputDevices, setAudioOutputDevices] = useState<
+    MediaDeviceOption[]
+  >([]);
   const lastReactionTimeRef = useRef<number>(0);
   const REACTION_COOLDOWN_MS = 150;
+  const [webinarInviteCodeInput, setWebinarInviteCodeInput] = useState("");
+  const [meetingInviteCodeInput, setMeetingInviteCodeInput] = useState("");
+  const [meetingNotice, setMeetingNotice] = useState<string | null>(null);
+  const [meetingError, setMeetingError] = useState<string | null>(null);
+  const [isMeetingWorking, setIsMeetingWorking] = useState(false);
+  const [webinarCapInput, setWebinarCapInput] = useState(
+    String(webinarConfig?.maxAttendees ?? 500),
+  );
+  const [webinarNotice, setWebinarNotice] = useState<string | null>(null);
+  const [webinarError, setWebinarError] = useState<string | null>(null);
+  const [isWebinarWorking, setIsWebinarWorking] = useState(false);
 
   const canStartScreenShare = !activeScreenShareId || isScreenSharing;
 
   const baseButtonClass =
-    "w-12 h-12 rounded-full flex items-center justify-center transition-all active:scale-95";
-  const defaultButtonClass = `${baseButtonClass} bg-[#2a2a2a] text-[#FEFCD9]/80`;
-  const activeButtonClass = `${baseButtonClass} bg-[#F95F4A] text-white`;
-  const mutedButtonClass = `${baseButtonClass} bg-[#F95F4A]/15 text-[#F95F4A]`;
-  const ghostDisabledClass = `${baseButtonClass} bg-[#2a2a2a] opacity-30`;
-  const leaveButtonClass = `${baseButtonClass} bg-red-500 text-white`;
+    "mobile-control-btn w-12 h-12 rounded-full flex items-center justify-center active:scale-95";
+  const defaultButtonClass = `${baseButtonClass}`;
+  const activeButtonClass = `${baseButtonClass} is-active`;
+  const mutedButtonClass = `${baseButtonClass} is-muted`;
+  const ghostDisabledClass = `${baseButtonClass} is-disabled`;
+  const leaveButtonClass = `${baseButtonClass} is-danger`;
 
   const handleReactionClick = useCallback(
     (reaction: ReactionOption) => {
+      if (isObserverMode) return;
       const now = Date.now();
       if (now - lastReactionTimeRef.current < REACTION_COOLDOWN_MS) {
         return;
       }
       lastReactionTimeRef.current = now;
       onSendReaction(reaction);
-      setIsReactionMenuOpen(false);
     },
-    [onSendReaction]
+    [isObserverMode, onSendReaction]
   );
+
+  const fetchAudioDevices = useCallback(async () => {
+    if (
+      typeof navigator === "undefined" ||
+      !navigator.mediaDevices?.enumerateDevices
+    ) {
+      setAudioDevicesError("Device selection is not supported here.");
+      setAudioInputDevices([]);
+      setAudioOutputDevices([]);
+      return;
+    }
+
+    setIsLoadingAudioDevices(true);
+    setAudioDevicesError(null);
+
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+
+      const nextAudioInputDevices = devices
+        .filter((device) => device.kind === "audioinput")
+        .map((device, index) => ({
+          deviceId: device.deviceId,
+          label: device.label || `Microphone ${index + 1}`,
+        }));
+
+      const nextAudioOutputDevices = devices
+        .filter((device) => device.kind === "audiooutput")
+        .map((device, index) => ({
+          deviceId: device.deviceId,
+          label: device.label || `Speaker ${index + 1}`,
+        }));
+
+      setAudioInputDevices(nextAudioInputDevices);
+      setAudioOutputDevices(nextAudioOutputDevices);
+    } catch (error) {
+      console.error("[MobileControlsBar] Failed to enumerate devices:", error);
+      setAudioDevicesError("Unable to load available devices.");
+      setAudioInputDevices([]);
+      setAudioOutputDevices([]);
+    } finally {
+      setIsLoadingAudioDevices(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!isSettingsSheetOpen) return;
+    void fetchAudioDevices();
+  }, [fetchAudioDevices, isSettingsSheetOpen]);
+
+  useEffect(() => {
+    if (
+      typeof navigator === "undefined" ||
+      !navigator.mediaDevices?.addEventListener
+    ) {
+      return;
+    }
+
+    const handleDeviceChange = () => {
+      if (!isSettingsSheetOpen) return;
+      void fetchAudioDevices();
+    };
+
+    navigator.mediaDevices.addEventListener("devicechange", handleDeviceChange);
+    return () =>
+      navigator.mediaDevices.removeEventListener(
+        "devicechange",
+        handleDeviceChange,
+      );
+  }, [fetchAudioDevices, isSettingsSheetOpen]);
+
+  useEffect(() => {
+    setWebinarCapInput(String(webinarConfig?.maxAttendees ?? 500));
+  }, [webinarConfig?.maxAttendees]);
+
+  useEffect(() => {
+    if (!isSettingsSheetOpen || !isAdmin || isObserverMode) return;
+    void onGetMeetingConfig?.();
+    void onGetWebinarConfig?.();
+  }, [
+    isAdmin,
+    isObserverMode,
+    isSettingsSheetOpen,
+    onGetMeetingConfig,
+    onGetWebinarConfig,
+  ]);
+
+  const runMeetingTask = useCallback(
+    async (
+      task: () => Promise<void>,
+      options?: { successMessage?: string; clearInviteInput?: boolean },
+    ) => {
+      setMeetingError(null);
+      setMeetingNotice(null);
+      setIsMeetingWorking(true);
+      try {
+        await task();
+        if (options?.clearInviteInput) {
+          setMeetingInviteCodeInput("");
+        }
+        if (options?.successMessage) {
+          setMeetingNotice(options.successMessage);
+        }
+      } catch (error) {
+        setMeetingError(
+          error instanceof Error ? error.message : "Meeting update failed.",
+        );
+      } finally {
+        setIsMeetingWorking(false);
+      }
+    },
+    [],
+  );
+
+  const runWebinarTask = useCallback(
+    async (
+      task: () => Promise<void>,
+      options?: { successMessage?: string; clearInviteInput?: boolean },
+    ) => {
+      setWebinarError(null);
+      setWebinarNotice(null);
+      setIsWebinarWorking(true);
+      try {
+        await task();
+        if (options?.clearInviteInput) {
+          setWebinarInviteCodeInput("");
+        }
+        if (options?.successMessage) {
+          setWebinarNotice(options.successMessage);
+        }
+      } catch (error) {
+        setWebinarError(
+          error instanceof Error ? error.message : "Webinar update failed.",
+        );
+      } finally {
+        setIsWebinarWorking(false);
+      }
+    },
+    [],
+  );
+
+  const copyLink = useCallback(async (value: string) => {
+    if (!value.trim()) {
+      throw new Error("No webinar link generated yet.");
+    }
+    if (
+      typeof navigator !== "undefined" &&
+      navigator.clipboard &&
+      typeof navigator.clipboard.writeText === "function"
+    ) {
+      await navigator.clipboard.writeText(value);
+      return;
+    }
+    throw new Error("Clipboard is unavailable in this browser.");
+  }, []);
+
+  const selectedAudioInputValue = audioInputDevices.some(
+    (device) => device.deviceId === audioInputDeviceId,
+  )
+    ? audioInputDeviceId
+    : audioInputDevices[0]?.deviceId;
+
+  const selectedAudioOutputValue = audioOutputDevices.some(
+    (device) => device.deviceId === audioOutputDeviceId,
+  )
+    ? audioOutputDeviceId
+    : audioOutputDevices[0]?.deviceId;
+
+  const parsedWebinarCap = Number.parseInt(webinarCapInput, 10);
+  const webinarCapValue = Number.isFinite(parsedWebinarCap)
+    ? Math.max(1, Math.min(5000, parsedWebinarCap))
+    : null;
+
+  if (isObserverMode) {
+    return (
+      <div className="fixed inset-x-0 bottom-0 z-40">
+        <div className="absolute inset-x-0 bottom-0 h-28 bg-gradient-to-t from-black/95 via-black/70 to-transparent pointer-events-none" />
+        <div className="relative flex items-center justify-center px-4 pb-[calc(12px+env(safe-area-inset-bottom))] pt-4">
+          <div className="mobile-glass mobile-pill flex items-center gap-3 px-4 py-3">
+            <span
+              className="text-[11px] text-[#FEFCD9]/70 uppercase tracking-[0.18em]"
+              style={{ fontFamily: "'PolySans Mono', monospace" }}
+            >
+              {webinarConfig?.attendeeCount ?? 0} watching
+            </span>
+            <button
+              onClick={onLeave}
+              className="mobile-control-btn is-danger w-10 h-10 rounded-full flex items-center justify-center"
+              aria-label="Leave webinar"
+            >
+              <Phone className="rotate-[135deg] w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <>
-      {/* Reaction menu overlay */}
-      {isReactionMenuOpen && (
+      <div
+        className="mobile-sheet-root z-50"
+        data-state={isReactionMenuOpen ? "open" : "closed"}
+        aria-hidden={!isReactionMenuOpen}
+      >
         <div
-          className="fixed inset-0 bg-black/50 z-40 animate-fade-in"
+          className="mobile-sheet-overlay"
           onClick={() => setIsReactionMenuOpen(false)}
-        >
+        />
+        <div className="mobile-sheet-panel">
           <div
-            className="absolute bottom-20 left-4 right-4 flex items-center justify-center gap-3 rounded-2xl bg-[#1a1a1a] border border-[#FEFCD9]/10 px-4 py-4 overflow-x-auto touch-pan-x animate-scale-in"
+            className="mobile-sheet w-full px-4 pb-[calc(18px+env(safe-area-inset-bottom))] pt-3"
             role="dialog"
             aria-modal="true"
             aria-label="Reactions"
             onClick={(e) => e.stopPropagation()}
           >
-            {reactionOptions.map((reaction) => (
+            <div className="relative px-1 pt-1 pb-3">
+              <div className="mx-auto mobile-sheet-grabber" />
               <button
-                key={reaction.id}
-                onClick={() => handleReactionClick(reaction)}
-                className="w-12 h-12 shrink-0 rounded-full text-2xl hover:bg-[#FEFCD9]/10 active:scale-110 flex items-center justify-center transition-transform duration-150"
-                aria-label={`React ${reaction.label}`}
+                onClick={() => setIsReactionMenuOpen(false)}
+                className="absolute right-0 top-0 h-7 w-7 mobile-pill mobile-glass-soft flex items-center justify-center text-[#FEFCD9]/70 hover:text-[#FEFCD9]"
+                aria-label="Close reactions"
               >
-                {reaction.kind === "emoji" ? (
-                  reaction.value
-                ) : (
-                  <img
-                    src={reaction.value}
-                    alt={reaction.label}
-                    className="w-8 h-8 object-contain"
-                  />
-                )}
+                <X className="h-3.5 w-3.5" />
               </button>
-            ))}
+            </div>
+            <div className="mt-3 grid grid-cols-6 gap-2 max-h-[40vh] overflow-y-auto no-scrollbar px-2">
+              {reactionOptions.map((reaction) => (
+                <button
+                  key={reaction.id}
+                  onClick={() => handleReactionClick(reaction)}
+                  className="h-11 w-11 sm:h-12 sm:w-12 rounded-full bg-[#141414]/70 border border-[#FEFCD9]/10 text-xl sm:text-2xl flex items-center justify-center transition-transform duration-150 active:scale-95 hover:bg-[#FEFCD9]/10"
+                  aria-label={`React ${reaction.label}`}
+                >
+                  {reaction.kind === "emoji" ? (
+                    reaction.value
+                  ) : (
+                    <img
+                      src={reaction.value}
+                      alt={reaction.label}
+                      className="w-7 h-7 sm:w-8 sm:h-8 object-contain"
+                    />
+                  )}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
-      )}
+      </div>
 
-      {/* More menu drawer */}
-      {isMoreMenuOpen && (
+      <div
+        className="mobile-sheet-root z-40"
+        data-state={isMoreMenuOpen ? "open" : "closed"}
+        aria-hidden={!isMoreMenuOpen}
+      >
         <div
-          className="fixed inset-0 bg-black/50 z-40 animate-fade-in"
+          className="mobile-sheet-overlay"
           onClick={() => setIsMoreMenuOpen(false)}
-        >
+        />
+        <div className="mobile-sheet-panel">
           <div
-            className="absolute bottom-0 left-0 right-0 bg-[#121212] border-t border-[#FEFCD9]/10 rounded-t-3xl p-3 pb-6 max-h-[70vh] overflow-y-auto touch-pan-y shadow-[0_-18px_45px_rgba(0,0,0,0.35)] animate-slide-up"
+            className="mobile-sheet mobile-sheet-scroll w-full p-4 pb-6 max-h-[75vh] touch-pan-y"
             style={{ fontFamily: "'PolySans Trial', sans-serif" }}
             role="dialog"
             aria-modal="true"
             aria-label="More actions"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="relative px-3 pt-1 pb-2">
-              <div className="mx-auto h-1 w-10 rounded-full bg-[#FEFCD9]/20" />
-              <button
-                onClick={() => setIsMoreMenuOpen(false)}
-                className="absolute right-2 top-0 h-7 w-7 rounded-full flex items-center justify-center text-[#FEFCD9]/50 hover:text-[#FEFCD9] hover:bg-[#FEFCD9]/10"
-                aria-label="Close menu"
-              >
-                <X className="h-3.5 w-3.5" />
-              </button>
-            </div>
+          <div className="relative px-1 pt-1 pb-3">
+            <div className="mx-auto mobile-sheet-grabber" />
             <button
-              onClick={() => {
-                onToggleParticipants?.();
-                setIsMoreMenuOpen(false);
-              }}
-              className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-[#FEFCD9] hover:bg-[#FEFCD9]/5 active:bg-[#FEFCD9]/10 transition-transform duration-150 touch-feedback"
+              onClick={() => setIsMoreMenuOpen(false)}
+              className="absolute right-0 top-0 h-7 w-7 mobile-pill mobile-glass-soft flex items-center justify-center text-[#FEFCD9]/70 hover:text-[#FEFCD9]"
+              aria-label="Close menu"
             >
-              <div className="h-9 w-9 rounded-xl bg-[#2b2b2b] border border-white/5 flex items-center justify-center">
-                <Users className="w-4.5 h-4.5" />
-              </div>
-              <span className="text-sm font-medium">Participants</span>
-              {pendingUsersCount > 0 && (
-                <span className="ml-auto text-xs bg-[#F95F4A] text-white px-2 py-0.5 rounded-full font-bold">
-                  {pendingUsersCount}
-                </span>
-              )}
+              <X className="h-3.5 w-3.5" />
             </button>
-            <button
+          </div>
+          <button
+            onClick={() => {
+              onToggleParticipants?.();
+              setIsMoreMenuOpen(false);
+            }}
+            className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-[#FEFCD9] hover:bg-[#FEFCD9]/5 active:bg-[#FEFCD9]/10 transition-transform duration-150 touch-feedback"
+          >
+            <div className="h-9 w-9 rounded-xl bg-[#2b2b2b] border border-white/5 flex items-center justify-center">
+              <Users className="w-4.5 h-4.5" />
+            </div>
+            <span className="text-sm font-medium">Participants</span>
+            {pendingUsersCount > 0 && (
+              <span className="ml-auto text-xs bg-[#F95F4A] text-white px-2 py-0.5 rounded-full font-bold">
+                {pendingUsersCount}
+              </span>
+            )}
+          </button>
+          <button
+            onClick={() => {
+              setIsMoreMenuOpen(false);
+              setIsSettingsSheetOpen(true);
+              void fetchAudioDevices();
+            }}
+            className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-[#FEFCD9] hover:bg-[#FEFCD9]/5 active:bg-[#FEFCD9]/10 transition-transform duration-150 touch-feedback"
+          >
+            <div className="h-9 w-9 rounded-xl bg-[#2b2b2b] border border-white/5 flex items-center justify-center">
+              <Settings className="w-4.5 h-4.5" />
+            </div>
+            <span className="text-sm font-medium">Settings</span>
+          </button>
+          <button
               onClick={() => {
                 onToggleHandRaised();
                 setIsMoreMenuOpen(false);
@@ -276,7 +599,7 @@ function MobileControlsBar({
                 </span>
               </button>
             )}
-            {(onOpenWhiteboard || onCloseWhiteboard) && (
+            {isAdmin && (onOpenWhiteboard || onCloseWhiteboard) && (
               <button
                 onClick={() => {
                   if (isWhiteboardActive) {
@@ -300,6 +623,39 @@ function MobileControlsBar({
                   }`}
                 >
                   {isWhiteboardActive ? "Live" : "Off"}
+                </span>
+              </button>
+            )}
+            {isAdmin &&
+              isDevPlaygroundEnabled &&
+              (onOpenDevPlayground || onCloseDevPlayground) && (
+              <button
+                onClick={() => {
+                  if (isDevPlaygroundActive) {
+                    onCloseDevPlayground?.();
+                  } else {
+                    onOpenDevPlayground?.();
+                  }
+                  setIsMoreMenuOpen(false);
+                }}
+                className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-[#FEFCD9] hover:bg-[#FEFCD9]/5 active:bg-[#FEFCD9]/10 transition-transform duration-150 touch-feedback"
+              >
+                <div className="h-9 w-9 rounded-xl bg-[#2b2b2b] border border-white/5 flex items-center justify-center">
+                  <Code2 className="w-4.5 h-4.5" />
+                </div>
+                <span className="text-sm font-medium">
+                  {isDevPlaygroundActive
+                    ? "Close dev playground"
+                    : "Open dev playground"}
+                </span>
+                <span
+                  className={`ml-auto text-[10px] uppercase tracking-[0.2em] ${
+                    isDevPlaygroundActive
+                      ? "text-emerald-300"
+                      : "text-[#FEFCD9]/40"
+                  }`}
+                >
+                  {isDevPlaygroundActive ? "Live" : "Off"}
                 </span>
               </button>
             )}
@@ -379,47 +735,651 @@ function MobileControlsBar({
                 <span className="text-sm font-medium">{isRoomLocked ? "Unlock meeting" : "Lock meeting"}</span>
               </button>
             )}
+            {isAdmin && onToggleNoGuests && (
+              <button
+                onClick={() => {
+                  onToggleNoGuests();
+                  setIsMoreMenuOpen(false);
+                }}
+                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-transform duration-150 touch-feedback ${
+                  isNoGuests ? "text-amber-400" : "text-[#FEFCD9]"
+                } hover:bg-[#FEFCD9]/5 active:bg-[#FEFCD9]/10`}
+              >
+                <div
+                  className={`h-9 w-9 rounded-xl border border-white/5 flex items-center justify-center ${
+                    isNoGuests ? "bg-amber-500/20" : "bg-[#2b2b2b]"
+                  }`}
+                >
+                  <ShieldBan className="w-4.5 h-4.5" />
+                </div>
+                <span className="text-sm font-medium">
+                  {isNoGuests ? "Allow guests" : "Block guests"}
+                </span>
+              </button>
+            )}
+            {isAdmin && onToggleChatLock && (
+              <button
+                onClick={() => {
+                  onToggleChatLock();
+                  setIsMoreMenuOpen(false);
+                }}
+                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-transform duration-150 touch-feedback ${isChatLocked
+                    ? "text-amber-400"
+                    : "text-[#FEFCD9]"
+                  } hover:bg-[#FEFCD9]/5 active:bg-[#FEFCD9]/10`}
+              >
+                <div
+                  className={`h-9 w-9 rounded-xl border border-white/5 flex items-center justify-center ${
+                    isChatLocked ? "bg-amber-500/20" : "bg-[#2b2b2b]"
+                  }`}
+                >
+                  <MessageSquareLock className="w-4.5 h-4.5" />
+                </div>
+                <span className="text-sm font-medium">{isChatLocked ? "Unlock chat" : "Lock chat"}</span>
+              </button>
+            )}
+            {isAdmin && onToggleTtsDisabled && (
+              <button
+                onClick={() => {
+                  onToggleTtsDisabled();
+                  setIsMoreMenuOpen(false);
+                }}
+                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-transform duration-150 touch-feedback ${
+                  isTtsDisabled ? "text-amber-400" : "text-[#FEFCD9]"
+                } hover:bg-[#FEFCD9]/5 active:bg-[#FEFCD9]/10`}
+              >
+                <div
+                  className={`h-9 w-9 rounded-xl border border-white/5 flex items-center justify-center ${
+                    isTtsDisabled ? "bg-amber-500/20" : "bg-[#2b2b2b]"
+                  }`}
+                >
+                  <VolumeX className="w-4.5 h-4.5" />
+                </div>
+                <span className="text-sm font-medium">
+                  {isTtsDisabled ? "Enable TTS" : "Disable TTS"}
+                </span>
+              </button>
+            )}
           </div>
         </div>
-      )}
+      </div>
 
-      {showBrowserControls && isBrowserSheetOpen && (
+      <div
+        className="mobile-sheet-root z-50"
+        data-state={isSettingsSheetOpen ? "open" : "closed"}
+        aria-hidden={!isSettingsSheetOpen}
+      >
         <div
-          className="fixed inset-0 bg-black/50 z-50 animate-fade-in"
-          onClick={() => {
-            setIsBrowserSheetOpen(false);
-            setBrowserUrlError(null);
-          }}
-        >
+          className="mobile-sheet-overlay"
+          onClick={() => setIsSettingsSheetOpen(false)}
+        />
+        <div className="mobile-sheet-panel">
           <div
-            className="absolute bottom-0 left-0 right-0 bg-[#121212] border-t border-[#FEFCD9]/10 rounded-t-3xl p-4 pb-6 max-h-[70vh] overflow-y-auto touch-pan-y shadow-[0_-18px_45px_rgba(0,0,0,0.35)] animate-slide-up"
+            className="mobile-sheet mobile-sheet-scroll w-full p-4 pb-6 max-h-[75vh] touch-pan-y"
             style={{ fontFamily: "'PolySans Trial', sans-serif" }}
             role="dialog"
             aria-modal="true"
-            aria-label="Shared browser"
+            aria-label="Meeting settings"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="relative px-1 pb-2">
-              <div className="mx-auto h-1 w-10 rounded-full bg-[#FEFCD9]/20" />
-              <button
-                onClick={() => setIsBrowserSheetOpen(false)}
-                className="absolute right-0 top-0 h-7 w-7 rounded-full flex items-center justify-center text-[#FEFCD9]/50 hover:text-[#FEFCD9] hover:bg-[#FEFCD9]/10"
-                aria-label="Close shared browser"
-              >
-                <X className="h-3.5 w-3.5" />
-              </button>
+          <div className="relative px-1 pb-3">
+            <div className="mx-auto mobile-sheet-grabber" />
+            <button
+              onClick={() => setIsSettingsSheetOpen(false)}
+              className="absolute right-0 top-0 h-7 w-7 mobile-pill mobile-glass-soft flex items-center justify-center text-[#FEFCD9]/70 hover:text-[#FEFCD9]"
+              aria-label="Close settings"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+
+            <div className="px-1">
+              <h2 className="text-lg font-medium text-[#FEFCD9]">
+                Meeting settings
+              </h2>
+              <p className="mt-1 text-xs text-[#FEFCD9]/55">
+                Audio, access, and webinar controls.
+              </p>
             </div>
-            <div className="flex items-center gap-3 text-[#FEFCD9] px-1">
-              <div className="h-10 w-10 rounded-2xl bg-[#2b2b2b] border border-white/5 flex items-center justify-center">
-                <Globe className="w-5 h-5" />
-              </div>
-              <div className="flex flex-col">
-                <span className="text-base font-medium">Shared browser</span>
-                <span className="text-[11px] text-[#FEFCD9]/45 uppercase tracking-[0.2em]">
-                  {isBrowserActive ? "Live" : "Offline"}
-                </span>
-              </div>
+
+            <div className="mt-5 space-y-5">
+              <section className="space-y-3">
+                <h3 className="text-sm font-semibold text-[#FEFCD9]">Audio</h3>
+                <div className="space-y-2">
+                  <label className="text-xs text-[#FEFCD9]/70">
+                    Microphone
+                  </label>
+                  <select
+                    value={selectedAudioInputValue ?? ""}
+                    onChange={(event) =>
+                      onAudioInputDeviceChange?.(event.target.value)
+                    }
+                    disabled={
+                      !onAudioInputDeviceChange || audioInputDevices.length === 0
+                    }
+                    className="w-full bg-black/40 border border-[#FEFCD9]/10 rounded-xl px-3 py-2 text-sm text-[#FEFCD9] focus:outline-none focus:border-[#FEFCD9]/25 disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    {audioInputDevices.length === 0 ? (
+                      <option value="">No microphones found</option>
+                    ) : (
+                      audioInputDevices.map((device, index) => (
+                        <option
+                          key={`${device.deviceId || "audio-input"}-${index}`}
+                          value={device.deviceId}
+                        >
+                          {device.label}
+                        </option>
+                      ))
+                    )}
+                  </select>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-xs text-[#FEFCD9]/70">Speaker</label>
+                  <select
+                    value={selectedAudioOutputValue ?? ""}
+                    onChange={(event) =>
+                      onAudioOutputDeviceChange?.(event.target.value)
+                    }
+                    disabled={
+                      !onAudioOutputDeviceChange ||
+                      audioOutputDevices.length === 0
+                    }
+                    className="w-full bg-black/40 border border-[#FEFCD9]/10 rounded-xl px-3 py-2 text-sm text-[#FEFCD9] focus:outline-none focus:border-[#FEFCD9]/25 disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    {audioOutputDevices.length === 0 ? (
+                      <option value="">No speakers found</option>
+                    ) : (
+                      audioOutputDevices.map((device, index) => (
+                        <option
+                          key={`${device.deviceId || "audio-output"}-${index}`}
+                          value={device.deviceId}
+                        >
+                          {device.label}
+                        </option>
+                      ))
+                    )}
+                  </select>
+                </div>
+
+                {isLoadingAudioDevices && (
+                  <p className="text-xs text-[#FEFCD9]/55">
+                    Loading devices...
+                  </p>
+                )}
+
+                {audioDevicesError && (
+                  <p className="text-xs text-[#F95F4A]">{audioDevicesError}</p>
+                )}
+
+                {audioOutputDevices.length === 0 && !audioDevicesError && (
+                  <p className="text-xs text-[#FEFCD9]/45">
+                    Speaker selection may be limited in this mobile browser.
+                  </p>
+                )}
+              </section>
+
+              {isAdmin ? (
+                <>
+                  <section className="space-y-3">
+                    <h3 className="text-sm font-semibold text-[#FEFCD9]">
+                      Meeting access
+                    </h3>
+                    <p className="text-xs text-[#FEFCD9]/60">
+                      {meetingRequiresInviteCode
+                        ? "Invite code required to join."
+                        : "Open meeting. Add a code to protect it."}
+                    </p>
+                    <div className="flex flex-col gap-2">
+                      <input
+                        type="text"
+                        value={meetingInviteCodeInput}
+                        onChange={(event) =>
+                          setMeetingInviteCodeInput(event.target.value)
+                        }
+                        placeholder="Invite code"
+                        className="w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-[#FEFCD9] outline-none placeholder:text-[#FEFCD9]/30 focus:border-[#FEFCD9]/25"
+                      />
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void runMeetingTask(
+                              async () => {
+                                if (!onUpdateMeetingConfig) {
+                                  throw new Error("Meeting controls unavailable.");
+                                }
+                                const code = meetingInviteCodeInput.trim();
+                                if (!code) {
+                                  throw new Error("Enter an invite code.");
+                                }
+                                const next = await onUpdateMeetingConfig({
+                                  inviteCode: code,
+                                });
+                                if (!next) {
+                                  throw new Error("Meeting update rejected.");
+                                }
+                              },
+                              {
+                                successMessage: "Meeting invite code saved.",
+                                clearInviteInput: true,
+                              },
+                            )
+                          }
+                          disabled={
+                            isMeetingWorking ||
+                            !onUpdateMeetingConfig ||
+                            !meetingInviteCodeInput.trim()
+                          }
+                          className="flex-1 rounded-lg bg-[#F95F4A] px-3 py-2 text-sm font-medium text-white transition hover:bg-[#F95F4A]/90 disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                          Save
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void runMeetingTask(
+                              async () => {
+                                if (!onUpdateMeetingConfig) {
+                                  throw new Error("Meeting controls unavailable.");
+                                }
+                                const next = await onUpdateMeetingConfig({
+                                  inviteCode: null,
+                                });
+                                if (!next) {
+                                  throw new Error("Meeting update rejected.");
+                                }
+                              },
+                              { successMessage: "Meeting invite code cleared." },
+                            )
+                          }
+                          disabled={
+                            isMeetingWorking ||
+                            !onUpdateMeetingConfig ||
+                            !meetingRequiresInviteCode
+                          }
+                          className="flex-1 rounded-lg bg-white/10 px-3 py-2 text-sm text-[#FEFCD9]/80 transition hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                          Clear
+                        </button>
+                      </div>
+                    </div>
+                    {meetingNotice ? (
+                      <p className="text-xs text-emerald-300/90">
+                        {meetingNotice}
+                      </p>
+                    ) : null}
+                    {meetingError ? (
+                      <p className="text-xs text-[#F95F4A]">{meetingError}</p>
+                    ) : null}
+                  </section>
+
+                  <section className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-sm font-semibold text-[#FEFCD9]">
+                        Webinar
+                      </h3>
+                      {webinarRole ? (
+                        <span className="text-xs text-[#FEFCD9]/60">
+                          Role: {webinarRole}
+                        </span>
+                      ) : null}
+                    </div>
+
+                    <div className="flex flex-col gap-2">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void runWebinarTask(
+                            async () => {
+                              if (!onUpdateWebinarConfig) {
+                                throw new Error("Webinar controls unavailable.");
+                              }
+                              const next = await onUpdateWebinarConfig({
+                                enabled: !Boolean(webinarConfig?.enabled),
+                              });
+                              if (!next) {
+                                throw new Error("Webinar update rejected.");
+                              }
+                            },
+                            {
+                              successMessage: webinarConfig?.enabled
+                                ? "Webinar disabled."
+                                : "Webinar enabled.",
+                            },
+                          )
+                        }
+                        disabled={isWebinarWorking || !onUpdateWebinarConfig}
+                        className="w-full rounded-lg border border-white/10 px-3 py-2 text-left text-sm text-[#FEFCD9] transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        Webinar: {webinarConfig?.enabled ? "On" : "Off"}
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void runWebinarTask(
+                            async () => {
+                              if (!onUpdateWebinarConfig) {
+                                throw new Error("Webinar controls unavailable.");
+                              }
+                              const next = await onUpdateWebinarConfig({
+                                publicAccess: !Boolean(webinarConfig?.publicAccess),
+                              });
+                              if (!next) {
+                                throw new Error("Webinar update rejected.");
+                              }
+                            },
+                            {
+                              successMessage: webinarConfig?.publicAccess
+                                ? "Public access disabled."
+                                : "Public access enabled.",
+                            },
+                          )
+                        }
+                        disabled={
+                          isWebinarWorking ||
+                          !onUpdateWebinarConfig ||
+                          !webinarConfig?.enabled
+                        }
+                        className="w-full rounded-lg border border-white/10 px-3 py-2 text-left text-sm text-[#FEFCD9] transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        Public access: {webinarConfig?.publicAccess ? "On" : "Off"}
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void runWebinarTask(
+                            async () => {
+                              if (!onUpdateWebinarConfig) {
+                                throw new Error("Webinar controls unavailable.");
+                              }
+                              const next = await onUpdateWebinarConfig({
+                                locked: !Boolean(webinarConfig?.locked),
+                              });
+                              if (!next) {
+                                throw new Error("Webinar update rejected.");
+                              }
+                            },
+                            {
+                              successMessage: webinarConfig?.locked
+                                ? "Webinar unlocked."
+                                : "Webinar locked.",
+                            },
+                          )
+                        }
+                        disabled={
+                          isWebinarWorking ||
+                          !onUpdateWebinarConfig ||
+                          !webinarConfig?.enabled
+                        }
+                        className="w-full rounded-lg border border-white/10 px-3 py-2 text-left text-sm text-[#FEFCD9] transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        Webinar lock: {webinarConfig?.locked ? "On" : "Off"}
+                      </button>
+                    </div>
+
+                    <p className="text-xs text-[#FEFCD9]/60">
+                      Attendees:{" "}
+                      <span className="text-[#FEFCD9]">
+                        {webinarConfig?.attendeeCount ?? 0}
+                      </span>{" "}
+                      /{" "}
+                      <span className="text-[#FEFCD9]">
+                        {webinarConfig?.maxAttendees ?? 500}
+                      </span>
+                    </p>
+
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="number"
+                        min={1}
+                        max={5000}
+                        value={webinarCapInput}
+                        onChange={(event) => setWebinarCapInput(event.target.value)}
+                        placeholder="Attendee cap"
+                        className="w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-[#FEFCD9] outline-none placeholder:text-[#FEFCD9]/30 focus:border-[#FEFCD9]/25"
+                      />
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void runWebinarTask(
+                            async () => {
+                              if (!onUpdateWebinarConfig) {
+                                throw new Error("Webinar controls unavailable.");
+                              }
+                              if (webinarCapValue == null) {
+                                throw new Error("Enter a valid attendee cap.");
+                              }
+                              const next = await onUpdateWebinarConfig({
+                                maxAttendees: webinarCapValue,
+                              });
+                              if (!next) {
+                                throw new Error("Webinar update rejected.");
+                              }
+                            },
+                            { successMessage: "Attendee cap updated." },
+                          )
+                        }
+                        disabled={
+                          isWebinarWorking ||
+                          !onUpdateWebinarConfig ||
+                          !webinarConfig?.enabled ||
+                          webinarCapValue == null
+                        }
+                        className="rounded-lg bg-white/10 px-3 py-2 text-sm text-[#FEFCD9] transition hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        Save
+                      </button>
+                    </div>
+
+                    <div className="flex flex-col gap-2">
+                      <input
+                        type="text"
+                        value={webinarInviteCodeInput}
+                        onChange={(event) =>
+                          setWebinarInviteCodeInput(event.target.value)
+                        }
+                        placeholder="Invite code"
+                        className="w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-[#FEFCD9] outline-none placeholder:text-[#FEFCD9]/30 focus:border-[#FEFCD9]/25"
+                      />
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void runWebinarTask(
+                              async () => {
+                                if (!onUpdateWebinarConfig) {
+                                  throw new Error("Webinar controls unavailable.");
+                                }
+                                const code = webinarInviteCodeInput.trim();
+                                if (!code) {
+                                  throw new Error("Enter an invite code.");
+                                }
+                                const next = await onUpdateWebinarConfig({
+                                  inviteCode: code,
+                                });
+                                if (!next) {
+                                  throw new Error("Webinar update rejected.");
+                                }
+                              },
+                              {
+                                successMessage: "Invite code saved.",
+                                clearInviteInput: true,
+                              },
+                            )
+                          }
+                          disabled={
+                            isWebinarWorking ||
+                            !onUpdateWebinarConfig ||
+                            !webinarConfig?.enabled ||
+                            !webinarInviteCodeInput.trim()
+                          }
+                          className="flex-1 rounded-lg bg-[#F95F4A] px-3 py-2 text-sm font-medium text-white transition hover:bg-[#F95F4A]/90 disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                          Save
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void runWebinarTask(
+                              async () => {
+                                if (!onUpdateWebinarConfig) {
+                                  throw new Error("Webinar controls unavailable.");
+                                }
+                                const next = await onUpdateWebinarConfig({
+                                  inviteCode: null,
+                                });
+                                if (!next) {
+                                  throw new Error("Webinar update rejected.");
+                                }
+                              },
+                              { successMessage: "Invite code cleared." },
+                            )
+                          }
+                          disabled={
+                            isWebinarWorking ||
+                            !onUpdateWebinarConfig ||
+                            !webinarConfig?.requiresInviteCode
+                          }
+                          className="flex-1 rounded-lg bg-white/10 px-3 py-2 text-sm text-[#FEFCD9]/80 transition hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                          Clear
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <input
+                        readOnly
+                        value={webinarLink ?? ""}
+                        placeholder="Generate webinar link"
+                        className="w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-[#FEFCD9] outline-none placeholder:text-[#FEFCD9]/30"
+                      />
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void runWebinarTask(async () => {
+                              if (!onGenerateWebinarLink) {
+                                throw new Error("Webinar link generation unavailable.");
+                              }
+                              const linkResponse = await onGenerateWebinarLink();
+                              if (!linkResponse?.link) {
+                                throw new Error("Webinar link unavailable.");
+                              }
+                              onSetWebinarLink?.(linkResponse.link);
+                              await copyLink(linkResponse.link);
+                            }, { successMessage: "Webinar link copied." })
+                          }
+                          disabled={
+                            isWebinarWorking ||
+                            !onGenerateWebinarLink ||
+                            !webinarConfig?.enabled
+                          }
+                          className="flex-1 rounded-lg bg-white/10 px-3 py-2 text-sm text-[#FEFCD9] transition hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                          Generate
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void runWebinarTask(async () => {
+                              if (!onRotateWebinarLink) {
+                                throw new Error("Webinar link rotation unavailable.");
+                              }
+                              const linkResponse = await onRotateWebinarLink();
+                              if (!linkResponse?.link) {
+                                throw new Error("Webinar link unavailable.");
+                              }
+                              onSetWebinarLink?.(linkResponse.link);
+                              await copyLink(linkResponse.link);
+                            }, { successMessage: "Webinar link rotated and copied." })
+                          }
+                          disabled={
+                            isWebinarWorking ||
+                            !onRotateWebinarLink ||
+                            !webinarConfig?.enabled
+                          }
+                          className="flex-1 rounded-lg bg-white/10 px-3 py-2 text-sm text-[#FEFCD9] transition hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                          Rotate
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void runWebinarTask(async () => {
+                              await copyLink(webinarLink ?? "");
+                            }, { successMessage: "Webinar link copied." })
+                          }
+                          disabled={isWebinarWorking || !webinarLink}
+                          className="flex-1 rounded-lg bg-white/10 px-3 py-2 text-sm text-[#FEFCD9] transition hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                          Copy
+                        </button>
+                      </div>
+                    </div>
+
+                    {webinarNotice ? (
+                      <p className="text-xs text-emerald-300/90">
+                        {webinarNotice}
+                      </p>
+                    ) : null}
+                    {webinarError ? (
+                      <p className="text-xs text-[#F95F4A]">{webinarError}</p>
+                    ) : null}
+                  </section>
+                </>
+              ) : null}
             </div>
+          </div>
+        </div>
+      </div>
+
+      {showBrowserControls && (
+        <div
+          className="mobile-sheet-root z-50"
+          data-state={isBrowserSheetOpen ? "open" : "closed"}
+          aria-hidden={!isBrowserSheetOpen}
+        >
+          <div
+            className="mobile-sheet-overlay"
+            onClick={() => {
+              setIsBrowserSheetOpen(false);
+              setBrowserUrlError(null);
+            }}
+          />
+          <div className="mobile-sheet-panel">
+            <div
+              className="mobile-sheet mobile-sheet-scroll w-full p-4 pb-6 max-h-[75vh] touch-pan-y"
+              style={{ fontFamily: "'PolySans Trial', sans-serif" }}
+              role="dialog"
+              aria-modal="true"
+              aria-label="Shared browser"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="relative px-1 pb-3">
+                <div className="mx-auto mobile-sheet-grabber" />
+                <button
+                  onClick={() => setIsBrowserSheetOpen(false)}
+                  className="absolute right-0 top-0 h-7 w-7 mobile-pill mobile-glass-soft flex items-center justify-center text-[#FEFCD9]/70 hover:text-[#FEFCD9]"
+                  aria-label="Close shared browser"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+              <div className="flex items-center gap-3 text-[#FEFCD9] px-1">
+                <div className="h-10 w-10 rounded-2xl bg-[#2b2b2b] border border-white/5 flex items-center justify-center">
+                  <Globe className="w-5 h-5" />
+                </div>
+                <div className="flex flex-col">
+                  <span className="text-base font-medium">Shared browser</span>
+                  <span className="text-[11px] text-[#FEFCD9]/45 uppercase tracking-[0.2em]">
+                    {isBrowserActive ? "Live" : "Offline"}
+                  </span>
+                </div>
+              </div>
 
             <form
               onSubmit={async (event) => {
@@ -480,80 +1440,106 @@ function MobileControlsBar({
             )}
           </div>
         </div>
+      </div>
       )}
 
       {/* Main controls bar */}
-      <div className="fixed bottom-0 left-0 right-0 safe-area-pb bg-gradient-to-t from-black via-black/95 to-transparent pt-6 pb-6 px-4">
-        <div className="flex items-center justify-between max-w-md mx-auto">
-          {/* Mute button */}
-          <button
-            onClick={onToggleMute}
-            disabled={isGhostMode}
-            className={
-              isGhostMode
-                ? ghostDisabledClass
-                : isMuted
-                  ? mutedButtonClass
-                  : defaultButtonClass
-            }
-            aria-label={isGhostMode ? "Microphone locked" : isMuted ? "Unmute" : "Mute"}
-          >
-            {isMuted ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
-          </button>
+      <div className="fixed inset-x-0 bottom-0 z-40">
+        <div className="absolute inset-x-0 bottom-0 h-32 bg-gradient-to-t from-black/95 via-black/70 to-transparent pointer-events-none" />
+        <div className="relative flex items-center justify-center px-4 pb-[calc(12px+env(safe-area-inset-bottom))] pt-4">
+          <div className="mobile-glass mobile-pill flex items-center gap-3 px-4 py-3">
+            {/* Mute button */}
+            <button
+              onClick={onToggleMute}
+              disabled={isGhostMode}
+              className={
+                isGhostMode
+                  ? ghostDisabledClass
+                  : isMuted
+                    ? mutedButtonClass
+                    : defaultButtonClass
+              }
+              aria-label={
+                isGhostMode ? "Microphone locked" : isMuted ? "Unmute" : "Mute"
+              }
+            >
+              {isMuted ? (
+                <MicOff className="w-5 h-5" />
+              ) : (
+                <Mic className="w-5 h-5" />
+              )}
+            </button>
 
-          {/* Camera button */}
-          <button
-            onClick={onToggleCamera}
-            disabled={isGhostMode}
-            className={
-              isGhostMode
-                ? ghostDisabledClass
-                : isCameraOff
-                  ? mutedButtonClass
-                  : defaultButtonClass
-            }
-            aria-label={isGhostMode ? "Camera locked" : isCameraOff ? "Turn on camera" : "Turn off camera"}
-          >
-            {isCameraOff ? <VideoOff className="w-5 h-5" /> : <Video className="w-5 h-5" />}
-          </button>
+            {/* Camera button */}
+            <button
+              onClick={onToggleCamera}
+              disabled={isGhostMode}
+              className={
+                isGhostMode
+                  ? ghostDisabledClass
+                  : isCameraOff
+                    ? mutedButtonClass
+                    : defaultButtonClass
+              }
+              aria-label={
+                isGhostMode
+                  ? "Camera locked"
+                  : isCameraOff
+                    ? "Turn on camera"
+                    : "Turn off camera"
+              }
+            >
+              {isCameraOff ? (
+                <VideoOff className="w-5 h-5" />
+              ) : (
+                <Video className="w-5 h-5" />
+              )}
+            </button>
 
-          {/* Reactions button */}
-          <button
-            onClick={() => setIsReactionMenuOpen(true)}
-            disabled={isGhostMode}
-            className={isGhostMode ? ghostDisabledClass : defaultButtonClass}
-            aria-label={isGhostMode ? "Reactions locked" : "Reactions"}
-          >
-            <Smile className="w-5 h-5" />
-          </button>
+            {/* Reactions button */}
+            <button
+              onClick={() => setIsReactionMenuOpen(true)}
+              disabled={isGhostMode}
+              className={isGhostMode ? ghostDisabledClass : defaultButtonClass}
+              aria-label={isGhostMode ? "Reactions locked" : "Reactions"}
+            >
+              <Smile className="w-5 h-5" />
+            </button>
 
-          {/* Chat button */}
-          <button
-            onClick={onToggleChat}
-            className={`relative ${isChatOpen ? activeButtonClass : defaultButtonClass}`}
-            aria-label="Chat"
-          >
-            <MessageSquare className="w-5 h-5" />
-            {unreadCount > 0 && (
-              <span className="absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] px-1 text-[10px] font-bold bg-[#F95F4A] text-white rounded-full flex items-center justify-center">
-                {unreadCount > 9 ? "9+" : unreadCount}
-              </span>
-            )}
-          </button>
+            {/* Chat button */}
+            <button
+              onClick={onToggleChat}
+              className={`relative ${isChatOpen ? activeButtonClass : defaultButtonClass}`}
+              aria-label="Chat"
+            >
+              <MessageSquare className="w-5 h-5" />
+              {unreadCount > 0 && (
+                <span className="absolute -top-1 -right-1 mobile-control-badge">
+                  {unreadCount > 9 ? "9+" : unreadCount}
+                </span>
+              )}
+            </button>
 
-          {/* More button */}
-          <button
-            onClick={() => setIsMoreMenuOpen(true)}
-            className={defaultButtonClass}
-            aria-label="More actions"
-          >
-            <MoreVertical className="w-5 h-5" />
-          </button>
+            {/* More button */}
+            <button
+              onClick={() => setIsMoreMenuOpen(true)}
+              className={defaultButtonClass}
+              aria-label="More actions"
+            >
+              <MoreVertical className="w-5 h-5" />
+            </button>
 
-          {/* Leave button */}
-          <button onClick={onLeave} className={leaveButtonClass} aria-label="Leave meeting">
-            <Phone className="rotate-[135deg] w-5 h-5" />
-          </button>
+            <div className="w-px h-6 bg-[#FEFCD9]/10" />
+
+            {/* Leave button */}
+            <button
+              onClick={onLeave}
+              className={leaveButtonClass}
+              aria-label="Leave meeting"
+            >
+              <Phone className="rotate-[135deg] w-5 h-5" />
+            </button>
+          </div>
         </div>
       </div>
     </>

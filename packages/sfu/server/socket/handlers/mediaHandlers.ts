@@ -7,11 +7,12 @@ import type {
   ToggleMediaData,
 } from "../../../types.js";
 import { Logger } from "../../../utilities/loggers.js";
+import { emitWebinarFeedChanged } from "../../webinarNotifications.js";
 import type { ConnectionContext } from "../context.js";
 import { respond } from "./ack.js";
 
 export const registerMediaHandlers = (context: ConnectionContext): void => {
-  const { socket, state } = context;
+  const { socket, state, io } = context;
 
   socket.on(
     "produce",
@@ -20,12 +21,17 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
       callback: (response: ProduceResponse | { error: string }) => void,
     ) => {
       try {
-        if (!context.currentRoom || !context.currentClient?.producerTransport) {
+        const room = context.currentRoom;
+        const currentClient = context.currentClient;
+
+        if (!room || !currentClient?.producerTransport) {
           respond(callback, { error: "Not ready to produce" });
           return;
         }
-        if (context.currentClient.isGhost) {
-          respond(callback, { error: "Ghost mode cannot produce media" });
+        if (currentClient.isObserver) {
+          respond(callback, {
+            error: "Watch-only attendees cannot produce media",
+          });
           return;
         }
 
@@ -33,62 +39,106 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
         const type = (appData.type as "webcam" | "screen") || "webcam";
         const paused = !!appData.paused;
 
-        if (type === "screen") {
-          const existingScreenShare = context.currentRoom.screenShareProducerId;
+        const isScreenShareVideo = type === "screen" && kind === "video";
+        const isScreenShareAudio = type === "screen" && kind === "audio";
+
+        if (isScreenShareVideo) {
+          const existingScreenShare = room.screenShareProducerId;
           if (existingScreenShare) {
             respond(callback, { error: "Screen is already being shared" });
             return;
           }
+        } else if (isScreenShareAudio) {
+          const existingScreenVideo = currentClient.getProducer("video", "screen");
+          if (!existingScreenVideo) {
+            respond(callback, {
+              error: "Screen share audio requires an active screen share",
+            });
+            return;
+          }
         }
 
-        const producer = await context.currentClient.producerTransport.produce({
+        const producer = await currentClient.producerTransport.produce({
           kind,
           rtpParameters,
           appData: { type },
           paused,
         });
 
-        if (type === "screen") {
-          context.currentRoom.setScreenShareProducer(producer.id);
-        }
-
-        context.currentClient.addProducer(producer);
-
-        socket.to(context.currentRoom.channelId).emit("newProducer", {
-          producerId: producer.id,
-          producerUserId: context.currentClient.id,
-          kind,
-          type,
-          paused: producer.paused,
-        });
-
-        const roomChannelId = context.currentRoom.channelId;
-        const clientId = context.currentClient.id;
-
+        const roomChannelId = room.channelId;
+        const clientId = currentClient.id;
         let producerClosed = false;
+        let producerAdvertised = false;
         const notifyProducerClosed = () => {
           if (producerClosed) return;
           producerClosed = true;
 
           Logger.info(`Producer closed: ${producer.id}`);
-          const room = state.rooms.get(roomChannelId);
-          if (!room) return;
+          const activeRoom = state.rooms.get(roomChannelId);
+          if (!activeRoom) return;
 
-          if (type === "screen") {
-            room.clearScreenShareProducer(producer.id);
+          if (producer.id === activeRoom.screenShareProducerId) {
+            activeRoom.clearScreenShareProducer(producer.id);
           }
 
-          socket.to(roomChannelId).emit("producerClosed", {
-            producerId: producer.id,
-            producerUserId: clientId,
-          });
+          if (producerAdvertised) {
+            for (const [targetClientId, targetClient] of activeRoom.clients) {
+              if (targetClientId === clientId || targetClient.isWebinarAttendee) {
+                continue;
+              }
+              targetClient.socket.emit("producerClosed", {
+                producerId: producer.id,
+                producerUserId: clientId,
+              });
+            }
+          }
+
+          emitWebinarFeedChanged(io, activeRoom);
         };
 
         producer.on("transportclose", notifyProducerClosed);
         producer.observer.on("close", notifyProducerClosed);
 
+        if (isScreenShareVideo) {
+          room.setScreenShareProducer(producer.id);
+        }
+
+        currentClient.addProducer(producer);
+        await room.registerWebinarAudioProducer(
+          currentClient.id,
+          producer,
+          type,
+        );
+
+        const activeRoom = state.rooms.get(roomChannelId);
+        const activeClient = activeRoom?.getClient(clientId);
+        const producerStillActive = Boolean(
+          activeClient?.getProducerInfos().some((info) => info.producerId === producer.id),
+        );
+
+        if (producer.closed || producerClosed || !activeRoom || !producerStillActive) {
+          notifyProducerClosed();
+          respond(callback, { error: "Producer closed during setup" });
+          return;
+        }
+
+        producerAdvertised = true;
+        for (const [targetClientId, client] of activeRoom.clients) {
+          if (targetClientId === clientId || client.isWebinarAttendee) {
+            continue;
+          }
+          client.socket.emit("newProducer", {
+            producerId: producer.id,
+            producerUserId: clientId,
+            kind,
+            type,
+            paused: producer.paused,
+          });
+        }
+        emitWebinarFeedChanged(io, activeRoom);
+
         Logger.info(
-          `User ${context.currentClient.id} started producing ${kind} (${type}): ${producer.id}`,
+          `User ${clientId} started producing ${kind} (${type}): ${producer.id}`,
         );
 
         respond(callback, { producerId: producer.id });
@@ -161,9 +211,9 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
           return;
         }
 
-        const producers = context.currentRoom.getAllProducers(
-          context.currentClient.id,
-        );
+        const producers = context.currentClient.isWebinarAttendee
+          ? context.currentRoom.getWebinarFeedSnapshot().producers
+          : context.currentRoom.getAllProducers(context.currentClient.id);
         respond(callback, { producers });
       } catch (error) {
         respond(callback, { error: (error as Error).message });
@@ -209,15 +259,26 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
           respond(callback, { error: "Not in a room" });
           return;
         }
-        if (context.currentClient.isGhost) {
-          respond(callback, { error: "Ghost mode cannot unmute" });
+        if (context.currentClient.isObserver) {
+          respond(callback, {
+            error: "Watch-only attendees cannot control microphones",
+          });
           return;
         }
 
-        await context.currentClient.toggleMute(data.paused);
-
         const audioProducer = context.currentClient.getProducer("audio", "webcam");
-        const muted = audioProducer ? audioProducer.paused : true;
+        if (!audioProducer) {
+          respond(callback, { error: "Microphone producer not found" });
+          return;
+        }
+
+        if (data.paused) {
+          await audioProducer.pause();
+        } else {
+          await audioProducer.resume();
+        }
+
+        const muted = audioProducer.paused;
         context.currentClient.isMuted = muted;
 
         socket.to(context.currentRoom.channelId).emit("participantMuted", {
@@ -225,6 +286,7 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
           muted,
           roomId: context.currentRoom.id,
         });
+        emitWebinarFeedChanged(io, context.currentRoom);
 
         respond(callback, { success: true });
       } catch (error) {
@@ -244,15 +306,26 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
           respond(callback, { error: "Not in a room" });
           return;
         }
-        if (context.currentClient.isGhost) {
-          respond(callback, { error: "Ghost mode cannot enable camera" });
+        if (context.currentClient.isObserver) {
+          respond(callback, {
+            error: "Watch-only attendees cannot control cameras",
+          });
           return;
         }
 
-        await context.currentClient.toggleCamera(data.paused);
-
         const videoProducer = context.currentClient.getProducer("video", "webcam");
-        const cameraOff = videoProducer ? videoProducer.paused : true;
+        if (!videoProducer) {
+          respond(callback, { error: "Camera producer not found" });
+          return;
+        }
+
+        if (data.paused) {
+          await videoProducer.pause();
+        } else {
+          await videoProducer.resume();
+        }
+
+        const cameraOff = videoProducer.paused;
         context.currentClient.isCameraOff = cameraOff;
 
         socket.to(context.currentRoom.channelId).emit("participantCameraOff", {
@@ -260,6 +333,7 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
           cameraOff,
           roomId: context.currentRoom.id,
         });
+        emitWebinarFeedChanged(io, context.currentRoom);
 
         respond(callback, { success: true });
       } catch (error) {
@@ -277,6 +351,12 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
       try {
         if (!context.currentClient || !context.currentRoom) {
           respond(callback, { error: "Not in a room" });
+          return;
+        }
+        if (context.currentClient.isObserver) {
+          respond(callback, {
+            error: "Watch-only attendees cannot close producers",
+          });
           return;
         }
         const removed = context.currentClient.removeProducerById(
@@ -301,16 +381,27 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
             });
           }
 
-          socket.to(context.currentRoom.channelId).emit("producerClosed", {
-            producerId: data.producerId,
-            producerUserId: context.currentClient.id,
-          });
+          for (const [clientId, client] of context.currentRoom.clients) {
+            if (clientId === context.currentClient.id || client.isWebinarAttendee) {
+              continue;
+            }
+            client.socket.emit("producerClosed", {
+              producerId: data.producerId,
+              producerUserId: context.currentClient.id,
+            });
+          }
+          emitWebinarFeedChanged(io, context.currentRoom);
 
           respond(callback, { success: true });
           return;
         }
 
-        respond(callback, { error: "Producer not found" });
+        if (context.currentRoom.screenShareProducerId === data.producerId) {
+          context.currentRoom.clearScreenShareProducer(data.producerId);
+          emitWebinarFeedChanged(io, context.currentRoom);
+        }
+
+        respond(callback, { success: true });
       } catch (error) {
         respond(callback, { error: (error as Error).message });
       }

@@ -34,6 +34,8 @@ export const DEFAULT_AUDIO_CONSTRAINTS: MediaTrackConstraints = {
 
 export const STANDARD_VIDEO_MAX_BITRATE = 1200000;
 export const LOW_VIDEO_MAX_BITRATE = 350000;
+export const SCREEN_SHARE_MAX_BITRATE = 1800000;
+export const SCREEN_SHARE_MAX_FRAMERATE = 24;
 export const OPUS_MAX_AVERAGE_BITRATE = 64000;
 
 export const MEETS_ICE_SERVERS: RTCIceServer[] = (() => {
@@ -54,7 +56,15 @@ export const MEETS_ICE_SERVERS: RTCIceServer[] = (() => {
   const username = process.env.NEXT_PUBLIC_TURN_USERNAME;
   const credential = process.env.NEXT_PUBLIC_TURN_PASSWORD;
 
-  if (username && credential) {
+  if ((username && !credential) || (!username && credential)) {
+    console.warn(
+      "[Meets] TURN credentials are partially configured. Set both NEXT_PUBLIC_TURN_USERNAME and NEXT_PUBLIC_TURN_PASSWORD.",
+    );
+  } else if (!username && !credential && urls.some((url) => /^turns?:/i.test(url))) {
+    console.warn(
+      "[Meets] TURN URLs are configured without credentials. Relay candidates may fail if your TURN server requires auth.",
+    );
+  } else if (username && credential) {
     iceServer.username = username;
     iceServer.credential = credential;
   }

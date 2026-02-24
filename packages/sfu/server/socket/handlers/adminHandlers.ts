@@ -1,6 +1,7 @@
 import { Admin } from "../../../config/classes/Admin.js";
 import type { RedirectData } from "../../../types.js";
 import { Logger } from "../../../utilities/loggers.js";
+import { emitWebinarFeedChanged } from "../../webinarNotifications.js";
 import type { ConnectionContext } from "../context.js";
 import { respond } from "./ack.js";
 
@@ -10,23 +11,20 @@ export const registerAdminHandlers = (
 ): void => {
   const { socket, state } = context;
 
-  socket.on(
-    "kickUser",
-    ({ userId: targetId }: { userId: string }, cb) => {
-      if (!context.currentRoom) {
-        respond(cb, { error: "Room not found" });
-        return;
-      }
-      const target = context.currentRoom.getClient(targetId);
-      if (target) {
-        target.socket.emit("kicked");
-        target.socket.disconnect(true);
-        respond(cb, { success: true });
-      } else {
-        respond(cb, { error: "User not found" });
-      }
-    },
-  );
+  socket.on("kickUser", ({ userId: targetId }: { userId: string }, cb) => {
+    if (!context.currentRoom) {
+      respond(cb, { error: "Room not found" });
+      return;
+    }
+    const target = context.currentRoom.getClient(targetId);
+    if (target) {
+      target.socket.emit("kicked");
+      target.socket.disconnect(true);
+      respond(cb, { success: true });
+    } else {
+      respond(cb, { error: "User not found" });
+    }
+  });
 
   socket.on("closeRemoteProducer", ({ producerId }, cb) => {
     if (!context.currentRoom) {
@@ -35,10 +33,16 @@ export const registerAdminHandlers = (
     }
     for (const client of context.currentRoom.clients.values()) {
       if (client.removeProducerById(producerId)) {
-        socket.to(context.currentRoom.channelId).emit("producerClosed", {
-          producerId,
-          producerUserId: client.id,
-        });
+        for (const [targetClientId, targetClient] of context.currentRoom.clients) {
+          if (targetClientId === client.id || targetClient.isWebinarAttendee) {
+            continue;
+          }
+          targetClient.socket.emit("producerClosed", {
+            producerId,
+            producerUserId: client.id,
+          });
+        }
+        emitWebinarFeedChanged(context.io, context.currentRoom);
         respond(cb, { success: true });
         return;
       }
@@ -59,14 +63,20 @@ export const registerAdminHandlers = (
       const audioProducer = client.getProducer("audio");
       if (audioProducer) {
         if (client.removeProducerById(audioProducer.id)) {
-          socket.to(context.currentRoom.channelId).emit("producerClosed", {
-            producerId: audioProducer.id,
-            producerUserId: client.id,
-          });
+          for (const [targetClientId, targetClient] of context.currentRoom.clients) {
+            if (targetClientId === client.id || targetClient.isWebinarAttendee) {
+              continue;
+            }
+            targetClient.socket.emit("producerClosed", {
+              producerId: audioProducer.id,
+              producerUserId: client.id,
+            });
+          }
           count++;
         }
       }
     }
+    emitWebinarFeedChanged(context.io, context.currentRoom);
     respond(cb, { success: true, count });
   });
 
@@ -83,15 +93,99 @@ export const registerAdminHandlers = (
       const videoProducer = client.getProducer("video");
       if (videoProducer) {
         if (client.removeProducerById(videoProducer.id)) {
-          socket.to(context.currentRoom.channelId).emit("producerClosed", {
-            producerId: videoProducer.id,
-            producerUserId: client.id,
-          });
+          for (const [targetClientId, targetClient] of context.currentRoom.clients) {
+            if (targetClientId === client.id || targetClient.isWebinarAttendee) {
+              continue;
+            }
+            targetClient.socket.emit("producerClosed", {
+              producerId: videoProducer.id,
+              producerUserId: client.id,
+            });
+          }
           count++;
         }
       }
     }
+    emitWebinarFeedChanged(context.io, context.currentRoom);
     respond(cb, { success: true, count });
+  });
+
+  socket.on("promoteHost", ({ userId: targetId }: { userId: string }, cb) => {
+    if (!context.currentRoom || !context.currentClient) {
+      respond(cb, { error: "Room not found" });
+      return;
+    }
+
+    const currentRoom = context.currentRoom;
+    const isActiveAdmin = context.currentClient instanceof Admin;
+    const hasPersistedAdminRole = Boolean(
+      context.currentUserKey && currentRoom.isAdminUserKey(context.currentUserKey),
+    );
+    if (!isActiveAdmin && !hasPersistedAdminRole) {
+      respond(cb, { error: "Only hosts can promote another host." });
+      return;
+    }
+
+    const targetClient = currentRoom.getClient(targetId);
+    if (!targetClient) {
+      respond(cb, { error: "User not found" });
+      return;
+    }
+    if (targetClient.isGhost || targetClient.isWebinarAttendee) {
+      respond(cb, { error: "User cannot be promoted to host." });
+      return;
+    }
+
+    const targetUserKey = currentRoom.userKeysById.get(targetId);
+    if (!targetUserKey) {
+      respond(cb, { error: "User identity not found" });
+      return;
+    }
+
+    const alreadyAdmin = targetClient instanceof Admin;
+    const promoted = currentRoom.promoteClientToAdmin(targetId);
+    if (!promoted) {
+      respond(cb, { error: "Failed to promote user" });
+      return;
+    }
+
+    const promotedContext = (promoted.socket as any).data?.context as
+      | ConnectionContext
+      | undefined;
+    if (!alreadyAdmin && promotedContext) {
+      promotedContext.currentClient = promoted;
+      promotedContext.currentRoom = currentRoom;
+      registerAdminHandlers(promotedContext, { roomId: currentRoom.id });
+      const pendingUsers = Array.from(currentRoom.pendingClients.values()).map(
+        (pending) => ({
+          userId: pending.userKey,
+          displayName: pending.displayName || pending.userKey,
+        }),
+      );
+      promoted.socket.emit("pendingUsersSnapshot", {
+        users: pendingUsers,
+        roomId: currentRoom.id,
+      });
+    }
+
+    promoted.socket.emit("hostAssigned", {
+      roomId: currentRoom.id,
+      hostUserId: currentRoom.getHostUserId() ?? promoted.id,
+    });
+
+    context.io.to(currentRoom.channelId).emit("adminUsersChanged", {
+      roomId: currentRoom.id,
+      hostUserIds: currentRoom.getAdminUserIds(),
+    });
+
+    Logger.info(
+      `Host privileges granted in room ${currentRoom.id}: ${context.currentClient.id} -> ${promoted.id}`,
+    );
+    respond(cb, {
+      success: true,
+      hostUserId: currentRoom.getHostUserId() ?? null,
+      hostUserIds: currentRoom.getAdminUserIds(),
+    });
   });
 
   socket.on("getRooms", (cb) => {
@@ -213,11 +307,99 @@ export const registerAdminHandlers = (
     respond(cb, { success: true, locked });
   });
 
+  socket.on("setNoGuests", ({ noGuests }: { noGuests: boolean }, cb) => {
+    if (!context.currentRoom) {
+      respond(cb, { error: "Room not found" });
+      return;
+    }
+
+    context.currentRoom.setNoGuests(noGuests);
+    Logger.info(
+      `Room ${context.currentRoom.id} ${noGuests ? "blocking" : "allowing"} guests`,
+    );
+
+    socket.to(context.currentRoom.channelId).emit("noGuestsChanged", {
+      noGuests,
+      roomId: context.currentRoom.id,
+    });
+
+    socket.emit("noGuestsChanged", {
+      noGuests,
+      roomId: context.currentRoom.id,
+    });
+
+    respond(cb, { success: true, noGuests });
+  });
+
+  socket.on("lockChat", ({ locked }: { locked: boolean }, cb) => {
+    if (!context.currentRoom) {
+      respond(cb, { error: "Room not found" });
+      return;
+    }
+
+    context.currentRoom.setChatLocked(locked);
+    Logger.info(
+      `Chat in room ${context.currentRoom.id} ${locked ? "locked" : "unlocked"} by admin`,
+    );
+
+    socket.to(context.currentRoom.channelId).emit("chatLockChanged", {
+      locked,
+      roomId: context.currentRoom.id,
+    });
+
+    socket.emit("chatLockChanged", {
+      locked,
+      roomId: context.currentRoom.id,
+    });
+
+    respond(cb, { success: true, locked });
+  });
+
   socket.on("getRoomLockStatus", (cb) => {
     if (!context.currentRoom) {
       respond(cb, { error: "Room not found" });
       return;
     }
     respond(cb, { locked: context.currentRoom.isLocked });
+  });
+
+  socket.on("getChatLockStatus", (cb) => {
+    if (!context.currentRoom) {
+      respond(cb, { error: "Room not found" });
+      return;
+    }
+    respond(cb, { locked: context.currentRoom.isChatLocked });
+  });
+
+  socket.on("setTtsDisabled", ({ disabled }: { disabled: boolean }, cb) => {
+    if (!context.currentRoom) {
+      respond(cb, { error: "Room not found" });
+      return;
+    }
+
+    context.currentRoom.setTtsDisabled(disabled);
+    Logger.info(
+      `Room ${context.currentRoom.id} TTS ${disabled ? "disabled" : "enabled"} by admin`,
+    );
+
+    socket.to(context.currentRoom.channelId).emit("ttsDisabledChanged", {
+      disabled,
+      roomId: context.currentRoom.id,
+    });
+
+    socket.emit("ttsDisabledChanged", {
+      disabled,
+      roomId: context.currentRoom.id,
+    });
+
+    respond(cb, { success: true, disabled });
+  });
+
+  socket.on("getTtsDisabledStatus", (cb) => {
+    if (!context.currentRoom) {
+      respond(cb, { error: "Room not found" });
+      return;
+    }
+    respond(cb, { disabled: context.currentRoom.isTtsDisabled });
   });
 };

@@ -33,7 +33,7 @@ const hiddenAudioStyle = {
   opacity: 0,
 };
 
-export function ParticipantTile({
+function ParticipantTileComponent({
   participant,
   displayName,
   isLocal = false,
@@ -66,70 +66,106 @@ export function ParticipantTile({
         <RNView pointerEvents="none" style={styles.activeSpeakerRing} />
       ) : null}
       <RNView style={[styles.container, isActiveSpeaker && styles.activeSpeaker]}>
-      {hasVideo ? (
-        <RTCView
-          streamURL={videoStream.toURL()}
-          style={styles.video}
-          mirror={mirror}
-        />
-      ) : (
-        <RNView style={styles.avatarContainer}>
-          <LinearGradient
-            colors={["rgba(249, 95, 74, 0.2)", "rgba(255, 0, 122, 0.1)"]}
-            style={styles.avatarGradient}
+        {hasVideo ? (
+          <RTCView
+            streamURL={videoStream.toURL()}
+            style={styles.video}
+            mirror={mirror}
           />
-          <RNView style={[
-            styles.avatar,
-            { width: avatarSize, height: avatarSize, borderRadius: avatarSize / 2 }
-          ]}>
-            <RNView style={[styles.avatarBorder, { borderRadius: avatarSize / 2 }]} />
-            <Text style={[styles.avatarText, { fontSize: avatarFontSize }]}>{initials}</Text>
+        ) : (
+          <RNView style={styles.avatarContainer}>
+            <LinearGradient
+              colors={["rgba(249, 95, 74, 0.2)", "rgba(255, 0, 122, 0.1)"]}
+              style={styles.avatarGradient}
+            />
+            <RNView
+              style={[
+                styles.avatar,
+                { width: avatarSize, height: avatarSize, borderRadius: avatarSize / 2 },
+              ]}
+            >
+              <RNView style={[styles.avatarBorder, { borderRadius: avatarSize / 2 }]} />
+              <Text style={[styles.avatarText, { fontSize: avatarFontSize }]}>
+                {initials}
+              </Text>
+            </RNView>
+          </RNView>
+        )}
+
+        {shouldRenderAudioView ? (
+          <RTCView streamURL={audioStream.toURL()} style={hiddenAudioStyle} />
+        ) : null}
+
+        {participant.isGhost && (
+          <RNView style={styles.ghostOverlay}>
+            <VenetianMask size={ghostIconSize} color={COLORS.primaryPink} strokeWidth={1.6} />
+            <RNView style={styles.ghostBadge}>
+              <Text style={styles.ghostBadgeText}>GHOST</Text>
+            </RNView>
+          </RNView>
+        )}
+
+        {participant.isHandRaised && (
+          <RNView style={styles.handRaisedContainer}>
+            <RNView
+              style={[
+                styles.handRaisedBadge,
+                { width: handBadgeSize, height: handBadgeSize, borderRadius: handBadgeSize / 2 },
+              ]}
+            >
+              <Hand size={isTablet ? 16 : 14} color={COLORS.cream} strokeWidth={2} />
+            </RNView>
+          </RNView>
+        )}
+
+        {/* Name overlay at bottom */}
+        <RNView style={styles.nameOverlay}>
+          <RNView style={[styles.namePill, isTablet && styles.namePillTablet]}>
+            <Text style={[styles.nameText, { fontSize: namePillFontSize }]} numberOfLines={1}>
+              {displayNameUpper}
+            </Text>
+            {isLocal && (
+              <Text style={[styles.youLabel, isTablet && { fontSize: 10 }]}>YOU</Text>
+            )}
+            {participant.isMuted && (
+              <MicOff size={isTablet ? 14 : 12} color={COLORS.primaryOrange} strokeWidth={2} />
+            )}
           </RNView>
         </RNView>
-      )}
-
-      {shouldRenderAudioView ? (
-        <RTCView streamURL={audioStream.toURL()} style={hiddenAudioStyle} />
-      ) : null}
-
-      {participant.isGhost && (
-        <RNView style={styles.ghostOverlay}>
-          <VenetianMask size={ghostIconSize} color={COLORS.primaryPink} strokeWidth={1.6} />
-          <RNView style={styles.ghostBadge}>
-            <Text style={styles.ghostBadgeText}>GHOST</Text>
-          </RNView>
-        </RNView>
-      )}
-
-      {participant.isHandRaised && (
-        <RNView style={styles.handRaisedContainer}>
-          <RNView style={[
-            styles.handRaisedBadge,
-            { width: handBadgeSize, height: handBadgeSize, borderRadius: handBadgeSize / 2 }
-          ]}>
-            <Hand size={isTablet ? 16 : 14} color={COLORS.cream} strokeWidth={2} />
-          </RNView>
-        </RNView>
-      )}
-
-      {/* Name overlay at bottom */}
-      <RNView style={styles.nameOverlay}>
-        <RNView style={[styles.namePill, isTablet && styles.namePillTablet]}>
-          <Text style={[styles.nameText, { fontSize: namePillFontSize }]} numberOfLines={1}>
-            {displayNameUpper}
-          </Text>
-          {isLocal && (
-            <Text style={[styles.youLabel, isTablet && { fontSize: 10 }]}>YOU</Text>
-          )}
-          {participant.isMuted && (
-            <MicOff size={isTablet ? 14 : 12} color={COLORS.primaryOrange} strokeWidth={2} />
-          )}
-        </RNView>
-      </RNView>
       </RNView>
     </RNView>
   );
 }
+
+const hasSameStream = (
+  left: MediaStream | null | undefined,
+  right: MediaStream | null | undefined
+) => {
+  if (left === right) return true;
+  if (!left || !right) return false;
+  return left.id === right.id;
+};
+
+const isSameParticipant = (left: Participant, right: Participant) =>
+  left.userId === right.userId &&
+  left.isMuted === right.isMuted &&
+  left.isCameraOff === right.isCameraOff &&
+  left.isHandRaised === right.isHandRaised &&
+  left.isGhost === right.isGhost &&
+  hasSameStream(left.videoStream, right.videoStream) &&
+  hasSameStream(left.audioStream, right.audioStream) &&
+  hasSameStream(left.screenShareStream, right.screenShareStream) &&
+  hasSameStream(left.screenShareAudioStream, right.screenShareAudioStream);
+
+export const ParticipantTile = React.memo(
+  ParticipantTileComponent,
+  (prevProps, nextProps) =>
+    prevProps.displayName === nextProps.displayName &&
+    prevProps.isLocal === nextProps.isLocal &&
+    prevProps.isActiveSpeaker === nextProps.isActiveSpeaker &&
+    prevProps.mirror === nextProps.mirror &&
+    isSameParticipant(prevProps.participant, nextProps.participant)
+);
 
 const styles = StyleSheet.create({
   outer: {

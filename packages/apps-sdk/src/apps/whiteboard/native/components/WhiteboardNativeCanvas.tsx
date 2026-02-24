@@ -17,12 +17,13 @@ import { Check, X } from "lucide-react-native";
 import { buildRenderList } from "../../core/exports/renderList";
 import type { ToolKind, ToolSettings } from "../../core/tools/engine";
 import { ToolEngine } from "../../core/tools/engine";
+import { updateElement } from "../../core/doc/index";
 import { useWhiteboardElements } from "../../shared/hooks/useWhiteboardElements";
 import type { AppUser } from "../../../../sdk/types/index";
 import { getColorForUser } from "../../core/presence/colors";
 import type { StickyElement, TextElement, WhiteboardElement } from "../../core/model/types";
 import type { PresenceState } from "../../../../sdk/hooks/useAppPresence";
-import { getBoundsForElement, hitTestElement } from "../../core/model/geometry";
+import { getBoundsForElement, hitTestElement, type Bounds } from "../../core/model/geometry";
 
 type EditableElement = TextElement | StickyElement;
 
@@ -38,6 +39,125 @@ const DEFAULT_SCENE_BOUNDS = {
 
 const EXTRA_SCENE_PADDING = 120;
 const WHITEBOARD_FONT_FAMILY = "Virgil";
+const HANDLE_HIT_RADIUS = 12;
+
+type ResizeHandle = "nw" | "ne" | "sw" | "se";
+type ResizableElement = Extract<WhiteboardElement, { type: "shape" | "sticky" | "image" }>;
+
+type ResizeSession = {
+  elementId: string;
+  handle: ResizeHandle;
+  startBounds: Bounds;
+  startElement: ResizableElement;
+};
+
+const isResizableElement = (
+  element: WhiteboardElement | null
+): element is ResizableElement =>
+  Boolean(
+    element &&
+      (element.type === "shape" || element.type === "sticky" || element.type === "image")
+  );
+
+const getResizeHandleAtPoint = (
+  bounds: Bounds,
+  touch: { x: number; y: number },
+  viewport: { x: number; y: number; scale: number }
+): ResizeHandle | null => {
+  const corners: Array<{ handle: ResizeHandle; x: number; y: number }> = [
+    { handle: "nw", x: bounds.x, y: bounds.y },
+    { handle: "ne", x: bounds.x + bounds.width, y: bounds.y },
+    { handle: "sw", x: bounds.x, y: bounds.y + bounds.height },
+    { handle: "se", x: bounds.x + bounds.width, y: bounds.y + bounds.height },
+  ];
+  for (const corner of corners) {
+    const screenX = corner.x * viewport.scale + viewport.x;
+    const screenY = corner.y * viewport.scale + viewport.y;
+    if (
+      Math.abs(touch.x - screenX) <= HANDLE_HIT_RADIUS &&
+      Math.abs(touch.y - screenY) <= HANDLE_HIT_RADIUS
+    ) {
+      return corner.handle;
+    }
+  }
+  return null;
+};
+
+const getResizeMinimums = (element: ResizableElement) => {
+  if (element.type === "sticky") {
+    return { minWidth: 60, minHeight: 40 };
+  }
+  if (element.type === "image") {
+    return { minWidth: 16, minHeight: 16 };
+  }
+  if (
+    element.type === "shape" &&
+    (element.shape === "line" || element.shape === "arrow")
+  ) {
+    return { minWidth: 8, minHeight: 8 };
+  }
+  return { minWidth: 12, minHeight: 12 };
+};
+
+const getResizedBounds = (
+  startBounds: Bounds,
+  handle: ResizeHandle,
+  point: { x: number; y: number },
+  minWidth: number,
+  minHeight: number
+): Bounds => {
+  const left = startBounds.x;
+  const top = startBounds.y;
+  const right = startBounds.x + startBounds.width;
+  const bottom = startBounds.y + startBounds.height;
+
+  if (handle === "nw") {
+    const x = Math.min(point.x, right - minWidth);
+    const y = Math.min(point.y, bottom - minHeight);
+    return { x, y, width: right - x, height: bottom - y };
+  }
+
+  if (handle === "ne") {
+    const x = Math.max(point.x, left + minWidth);
+    const y = Math.min(point.y, bottom - minHeight);
+    return { x: left, y, width: x - left, height: bottom - y };
+  }
+
+  if (handle === "sw") {
+    const x = Math.min(point.x, right - minWidth);
+    const y = Math.max(point.y, top + minHeight);
+    return { x, y: top, width: right - x, height: y - top };
+  }
+
+  const x = Math.max(point.x, left + minWidth);
+  const y = Math.max(point.y, top + minHeight);
+  return { x: left, y: top, width: x - left, height: y - top };
+};
+
+const applyResizedBounds = (
+  element: ResizableElement,
+  bounds: Bounds
+): ResizableElement => {
+  if (element.type === "shape") {
+    const widthDirection = element.width === 0 ? 1 : Math.sign(element.width);
+    const heightDirection = element.height === 0 ? 1 : Math.sign(element.height);
+    return {
+      ...element,
+      x: widthDirection >= 0 ? bounds.x : bounds.x + bounds.width,
+      y: heightDirection >= 0 ? bounds.y : bounds.y + bounds.height,
+      width: bounds.width * widthDirection,
+      height: bounds.height * heightDirection,
+    };
+  }
+
+  return {
+    ...element,
+    x: bounds.x,
+    y: bounds.y,
+    width: bounds.width,
+    height: bounds.height,
+  };
+};
 
 export type WhiteboardNativeCanvasProps = {
   doc: Y.Doc;
@@ -229,6 +349,83 @@ const renderElement = (element: WhiteboardElement) => {
         );
       }
 
+      if (element.shape === "arrow") {
+        const start = { x: element.x, y: element.y };
+        const end = { x: element.x + element.width, y: element.y + element.height };
+        const dx = end.x - start.x;
+        const dy = end.y - start.y;
+        const length = Math.hypot(dx, dy);
+        const angle = Math.atan2(dy, dx);
+        const targetHeadLength = Math.min(38, Math.max(12, element.strokeWidth * 3.6));
+        const headLength = Math.min(length * 0.45, targetHeadLength);
+        const spread = Math.PI / 5.8;
+        const left = {
+          x: end.x - headLength * Math.cos(angle - spread),
+          y: end.y - headLength * Math.sin(angle - spread),
+        };
+        const right = {
+          x: end.x - headLength * Math.cos(angle + spread),
+          y: end.y - headLength * Math.sin(angle + spread),
+        };
+        const roughStart = { x: start.x + rough.x, y: start.y + rough.y };
+        const roughEnd = { x: end.x + rough.x, y: end.y + rough.y };
+        const roughLeft = { x: left.x + rough.x, y: left.y + rough.y };
+        const roughRight = { x: right.x + rough.x, y: right.y + rough.y };
+
+        return (
+          <React.Fragment key={element.id}>
+            <Line
+              p1={start}
+              p2={end}
+              color={element.strokeColor}
+              strokeWidth={element.strokeWidth}
+            />
+            {length > 0 ? (
+              <>
+                <Line
+                  p1={end}
+                  p2={left}
+                  color={element.strokeColor}
+                  strokeWidth={element.strokeWidth}
+                />
+                <Line
+                  p1={end}
+                  p2={right}
+                  color={element.strokeColor}
+                  strokeWidth={element.strokeWidth}
+                />
+              </>
+            ) : null}
+
+            <Line
+              p1={roughStart}
+              p2={roughEnd}
+              color={element.strokeColor}
+              opacity={0.62}
+              strokeWidth={Math.max(1, element.strokeWidth * 0.85)}
+            />
+            {length > 0 ? (
+              <>
+                <Line
+                  p1={roughEnd}
+                  p2={roughLeft}
+                  color={element.strokeColor}
+                  opacity={0.62}
+                  strokeWidth={Math.max(1, element.strokeWidth * 0.85)}
+                />
+                <Line
+                  p1={roughEnd}
+                  p2={roughRight}
+                  color={element.strokeColor}
+                  opacity={0.62}
+                  strokeWidth={Math.max(1, element.strokeWidth * 0.85)}
+                />
+              </>
+            ) : null}
+          </React.Fragment>
+        );
+      }
+
       return null;
     }
     default:
@@ -293,6 +490,7 @@ export function WhiteboardNativeCanvas({
   const pendingMoveRef = useRef<{ x: number; y: number; pressure?: number } | null>(null);
   const suppressNextBlurCommitRef = useRef(false);
   const latestCursorRef = useRef<{ x: number; y: number } | null>(null);
+  const resizeSessionRef = useRef<ResizeSession | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 });
   const [hasUserViewportTransform, setHasUserViewportTransform] = useState(false);
@@ -428,6 +626,7 @@ export function WhiteboardNativeCanvas({
   }, [clearCursor]);
 
   useEffect(() => {
+    resizeSessionRef.current = null;
     setHasUserViewportTransform(false);
     setAutoFitSignature(null);
   }, [pageId]);
@@ -499,6 +698,7 @@ export function WhiteboardNativeCanvas({
           const { force } = event.nativeEvent;
 
           if (touches.length >= 2) {
+            resizeSessionRef.current = null;
             flushPendingMove();
             const dist = getDistance(touches[0], touches[1]);
             const midX = (touches[0].x + touches[1].x) / 2;
@@ -515,6 +715,30 @@ export function WhiteboardNativeCanvas({
             setHasUserViewportTransform(true);
           } else {
             const pt = toCanvas(touches[0].x, touches[0].y);
+
+            if (!locked && tool === "select" && selectedId) {
+              const selectedElement =
+                elements.find((element) => element.id === selectedId) ?? null;
+              if (isResizableElement(selectedElement)) {
+                const selectedBounds = getBoundsForElement(selectedElement);
+                const handle = getResizeHandleAtPoint(
+                  selectedBounds,
+                  touches[0],
+                  viewport,
+                );
+                if (handle) {
+                  resizeSessionRef.current = {
+                    elementId: selectedElement.id,
+                    handle,
+                    startBounds: selectedBounds,
+                    startElement: selectedElement,
+                  };
+                  scheduleCursorSync(pt.x, pt.y);
+                  pinchRef.current = null;
+                  return;
+                }
+              }
+            }
 
             // In text tools, tapping an existing text/sticky should edit it instead of creating a new element.
             if (!locked && onRequestTextEdit && (tool === "text" || tool === "sticky")) {
@@ -564,6 +788,7 @@ export function WhiteboardNativeCanvas({
           const { force } = event.nativeEvent;
 
           if (touches.length >= 2) {
+            resizeSessionRef.current = null;
             const dist = getDistance(touches[0], touches[1]);
             const midX = (touches[0].x + touches[1].x) / 2;
             const midY = (touches[0].y + touches[1].y) / 2;
@@ -603,6 +828,27 @@ export function WhiteboardNativeCanvas({
           } else if (!pinchRef.current) {
             // Single finger draw
             const pt = toCanvas(touches[0].x, touches[0].y);
+            const resizeSession = resizeSessionRef.current;
+            if (!locked && resizeSession) {
+              const { minWidth, minHeight } = getResizeMinimums(
+                resizeSession.startElement,
+              );
+              const nextBounds = getResizedBounds(
+                resizeSession.startBounds,
+                resizeSession.handle,
+                pt,
+                minWidth,
+                minHeight,
+              );
+              const nextElement = applyResizedBounds(
+                resizeSession.startElement,
+                nextBounds,
+              );
+              updateElement(doc, pageId, nextElement);
+              setSelectedId(resizeSession.elementId);
+              scheduleCursorSync(pt.x, pt.y);
+              return;
+            }
             if (!locked) {
               queuePointerMove({ x: pt.x, y: pt.y, pressure: force });
             }
@@ -611,6 +857,13 @@ export function WhiteboardNativeCanvas({
         },
         onPanResponderRelease: () => {
           flushPendingMove();
+          const resizeSession = resizeSessionRef.current;
+          if (resizeSession) {
+            resizeSessionRef.current = null;
+            setSelectedId(resizeSession.elementId);
+            clearCursor();
+            return;
+          }
           if (!pinchRef.current) {
             if (!locked) {
               engineRef.current?.onPointerUp();
@@ -622,6 +875,13 @@ export function WhiteboardNativeCanvas({
         },
         onPanResponderTerminate: () => {
           flushPendingMove();
+          const resizeSession = resizeSessionRef.current;
+          if (resizeSession) {
+            resizeSessionRef.current = null;
+            setSelectedId(resizeSession.elementId);
+            clearCursor();
+            return;
+          }
           if (!pinchRef.current) {
             if (!locked) {
               engineRef.current?.onPointerUp();
@@ -640,6 +900,9 @@ export function WhiteboardNativeCanvas({
       toCanvas,
       tool,
       elements,
+      selectedId,
+      doc,
+      pageId,
       onRequestTextEdit,
       flushPendingMove,
       queuePointerMove,
@@ -663,6 +926,10 @@ export function WhiteboardNativeCanvas({
 
   const selectionBounds = useMemo(
     () => (selectedElement ? getBoundsForElement(selectedElement) : null),
+    [selectedElement],
+  );
+  const canResizeSelectedElement = useMemo(
+    () => isResizableElement(selectedElement),
     [selectedElement],
   );
 
@@ -1023,10 +1290,14 @@ export function WhiteboardNativeCanvas({
             },
           ]}
         >
-          <View style={[styles.selectionHandle, styles.handleTopLeft]} />
-          <View style={[styles.selectionHandle, styles.handleTopRight]} />
-          <View style={[styles.selectionHandle, styles.handleBottomLeft]} />
-          <View style={[styles.selectionHandle, styles.handleBottomRight]} />
+          {canResizeSelectedElement ? (
+            <>
+              <View style={[styles.selectionHandle, styles.handleTopLeft]} />
+              <View style={[styles.selectionHandle, styles.handleTopRight]} />
+              <View style={[styles.selectionHandle, styles.handleBottomLeft]} />
+              <View style={[styles.selectionHandle, styles.handleBottomRight]} />
+            </>
+          ) : null}
         </View>
       ) : null}
 

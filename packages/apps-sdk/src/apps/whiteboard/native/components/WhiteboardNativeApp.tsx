@@ -109,10 +109,10 @@ export function WhiteboardNativeApp() {
 
       <View style={styles.topFloat} pointerEvents="box-none">
         <View style={styles.topBar}>
-          <View style={styles.statusPill}>
+          {/* <View style={styles.statusPill}>
             <View style={styles.headerDot} />
             <Text style={styles.headerMeta}>{states.length}</Text>
-          </View>
+          </View> */}
           {locked ? (
             <View style={styles.lockedPill}>
               <Lock size={11} color="rgba(253,230,138,0.95)" strokeWidth={2} />

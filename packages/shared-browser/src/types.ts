@@ -48,6 +48,10 @@ export interface BrowserServiceConfig {
     hostAddress: string;
     publicBaseUrl?: string;
     containerIdleTimeoutMs: number;
+    rtpTargetHost?: string;
+    audioTargetHost?: string;
+    videoTargetHost?: string;
+    serviceToken?: string;
 }
 
 export const defaultConfig: BrowserServiceConfig = {
@@ -61,4 +65,17 @@ export const defaultConfig: BrowserServiceConfig = {
         process.env.BROWSER_PUBLIC_URL ||
         undefined,
     containerIdleTimeoutMs: parseInt(process.env.CONTAINER_IDLE_TIMEOUT || "1800000", 10), // 30 min default
+    rtpTargetHost: process.env.BROWSER_RTP_TARGET_HOST || process.env.SFU_HOST || undefined,
+    audioTargetHost:
+        process.env.BROWSER_AUDIO_TARGET_HOST ||
+        process.env.BROWSER_RTP_TARGET_HOST ||
+        process.env.SFU_HOST ||
+        undefined,
+    videoTargetHost:
+        process.env.BROWSER_VIDEO_TARGET_HOST ||
+        process.env.BROWSER_RTP_TARGET_HOST ||
+        process.env.BROWSER_AUDIO_TARGET_HOST ||
+        process.env.SFU_HOST ||
+        undefined,
+    serviceToken: process.env.BROWSER_SERVICE_TOKEN || undefined,
 };

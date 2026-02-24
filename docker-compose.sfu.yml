@@ -13,6 +13,9 @@ services:
       ANNOUNCED_IP: ${ANNOUNCED_IP}
       PLAIN_TRANSPORT_ANNOUNCED_IP: ${PLAIN_TRANSPORT_ANNOUNCED_IP:-${ANNOUNCED_IP}}
       SFU_VERSION: "v1"
+      BROWSER_SERVICE_URL: ${BROWSER_SERVICE_URL:-http://localhost:3040}
+      BROWSER_SERVICE_TOKEN: ${BROWSER_SERVICE_TOKEN:-}
+      BROWSER_SERVICE_TIMEOUT_MS: ${BROWSER_SERVICE_TIMEOUT_MS:-5000}
     restart: unless-stopped
 
   sfu-b:
@@ -29,20 +32,7 @@ services:
       ANNOUNCED_IP: ${ANNOUNCED_IP}
       PLAIN_TRANSPORT_ANNOUNCED_IP: ${PLAIN_TRANSPORT_ANNOUNCED_IP:-${ANNOUNCED_IP}}
       SFU_VERSION: "v2"
-    restart: unless-stopped
-
-  browser-service:
-    build:
-      context: ./packages/shared-browser
-    network_mode: "host"
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-    environment:
-      BROWSER_SERVICE_PORT: "3040"
-      NOVNC_PORT_START: "6080"
-      NOVNC_PORT_END: "6100"
-      BROWSER_HOST_ADDRESS: ${BROWSER_HOST_ADDRESS:-localhost}
-      BROWSER_PUBLIC_BASE_URL: ${BROWSER_PUBLIC_BASE_URL:-}
-      BROWSER_IMAGE_NAME: "conclave-browser:latest"
-      BROWSER_AUDIO_TARGET_HOST: "172.17.0.1"
+      BROWSER_SERVICE_URL: ${BROWSER_SERVICE_URL:-http://localhost:3040}
+      BROWSER_SERVICE_TOKEN: ${BROWSER_SERVICE_TOKEN:-}
+      BROWSER_SERVICE_TIMEOUT_MS: ${BROWSER_SERVICE_TIMEOUT_MS:-5000}
     restart: unless-stopped

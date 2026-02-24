@@ -8,10 +8,17 @@ type PrewarmState = {
   isReady: boolean;
 };
 
+type JoinInfo = {
+  token: string;
+  sfuUrl: string;
+  iceServers?: RTCIceServer[];
+};
+
 type TokenCache = {
   roomId: string;
   token: string;
   sfuUrl: string;
+  iceServers?: RTCIceServer[];
   timestamp: number;
 };
 
@@ -28,10 +35,10 @@ export type PrewarmModules = {
       roomId: string,
       sessionId: string,
       options?: { user?: { id?: string; email?: string | null; name?: string | null }; isHost?: boolean }
-    ) => Promise<{ token: string; sfuUrl: string }>,
+    ) => Promise<JoinInfo>,
     options?: { user?: { id?: string; email?: string | null; name?: string | null }; isHost?: boolean }
   ) => void;
-  getCachedToken: (roomId: string) => { token: string; sfuUrl: string } | null;
+  getCachedToken: (roomId: string) => JoinInfo | null;
 };
 
 export function usePrewarmSocket(): PrewarmModules {
@@ -80,7 +87,7 @@ export function usePrewarmSocket(): PrewarmModules {
         roomId: string,
         sessionId: string,
         options?: { user?: { id?: string; email?: string | null; name?: string | null }; isHost?: boolean }
-      ) => Promise<{ token: string; sfuUrl: string }>,
+      ) => Promise<JoinInfo>,
       options?: { user?: { id?: string; email?: string | null; name?: string | null }; isHost?: boolean }
     ) => {
       if (!roomId.trim()) return;
@@ -100,7 +107,7 @@ export function usePrewarmSocket(): PrewarmModules {
       const startTime = performance.now();
 
       getJoinInfo(roomId, sessionId, options)
-        .then(({ token, sfuUrl }) => {
+        .then(({ token, sfuUrl, iceServers }) => {
           const duration = performance.now() - startTime;
           console.log(`[Meets] Pre-fetched token in ${duration.toFixed(0)}ms`);
 
@@ -108,6 +115,7 @@ export function usePrewarmSocket(): PrewarmModules {
             roomId,
             token,
             sfuUrl,
+            iceServers,
             timestamp: Date.now(),
           };
         })
@@ -124,7 +132,7 @@ export function usePrewarmSocket(): PrewarmModules {
   );
 
   const getCachedToken = useCallback(
-    (roomId: string): { token: string; sfuUrl: string } | null => {
+    (roomId: string): JoinInfo | null => {
       const cached = tokenCacheRef.current;
       if (!cached) return null;
       if (cached.roomId !== roomId) return null;
@@ -133,7 +141,11 @@ export function usePrewarmSocket(): PrewarmModules {
         return null;
       }
       console.log("[Meets] Using cached token");
-      return { token: cached.token, sfuUrl: cached.sfuUrl };
+      return {
+        token: cached.token,
+        sfuUrl: cached.sfuUrl,
+        iceServers: cached.iceServers,
+      };
     },
     []
   );

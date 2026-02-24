@@ -47,12 +47,26 @@ export interface JoinRoomData {
   sessionId?: string;
   displayName?: string;
   ghost?: boolean;
+  webinarInviteCode?: string;
+  meetingInviteCode?: string;
 }
 
 export interface JoinRoomResponse {
+  roomId?: string;
   rtpCapabilities: RtpCapabilities;
   existingProducers: ProducerInfo[];
   status?: "waiting" | "joined";
+  hostUserId?: string | null;
+  hostUserIds?: string[];
+  isLocked?: boolean;
+  isTtsDisabled?: boolean;
+  meetingRequiresInviteCode?: boolean;
+  webinarRole?: "attendee" | "participant" | "host";
+  isWebinarEnabled?: boolean;
+  webinarLocked?: boolean;
+  webinarRequiresInviteCode?: boolean;
+  webinarAttendeeCount?: number;
+  webinarMaxAttendees?: number;
 }
 
 export interface CreateTransportResponse {
@@ -106,6 +120,55 @@ export interface ProducerInfo {
   paused?: boolean;
 }
 
+export type WebinarFeedMode = "active-speaker";
+
+export interface WebinarConfigSnapshot {
+  enabled: boolean;
+  publicAccess: boolean;
+  locked: boolean;
+  maxAttendees: number;
+  attendeeCount: number;
+  requiresInviteCode: boolean;
+  linkSlug: string | null;
+  feedMode: WebinarFeedMode;
+}
+
+export interface WebinarUpdateRequest {
+  enabled?: boolean;
+  publicAccess?: boolean;
+  locked?: boolean;
+  maxAttendees?: number;
+  inviteCode?: string | null;
+  linkSlug?: string | null;
+}
+
+export interface MeetingConfigSnapshot {
+  requiresInviteCode: boolean;
+}
+
+export interface MeetingUpdateRequest {
+  inviteCode?: string | null;
+}
+
+export interface WebinarLinkResponse {
+  slug: string;
+  link: string;
+  publicAccess: boolean;
+  linkVersion: number;
+}
+
+export interface WebinarFeedChangedNotification {
+  roomId: string;
+  speakerUserId: string | null;
+  producers: ProducerInfo[];
+}
+
+export interface WebinarAttendeeCountChangedNotification {
+  roomId: string;
+  attendeeCount: number;
+  maxAttendees: number;
+}
+
 export interface ToggleMediaData {
   producerId: string;
   paused: boolean;
@@ -153,7 +216,7 @@ export interface SendChatData {
   content: string;
 }
 
-export interface ChatMessageNotification extends ChatMessage { }
+export interface ChatMessageNotification extends ChatMessage {}
 
 // ============================================
 // Reactions

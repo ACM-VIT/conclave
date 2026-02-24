@@ -20,8 +20,10 @@ export const registerReactionHandlers = (
           respond(callback, { error: "Not in a room" });
           return;
         }
-        if (context.currentClient.isGhost) {
-          respond(callback, { error: "Ghost mode cannot send reactions" });
+        if (context.currentClient.isObserver) {
+          respond(callback, {
+            error: "Watch-only attendees cannot send reactions",
+          });
           return;
         }
 

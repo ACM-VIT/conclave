@@ -4,7 +4,7 @@ import { Send, X } from "lucide-react";
 import { memo, useEffect, useRef, useState } from "react";
 import type { ChatMessage } from "../lib/types";
 import { getActionText, getCommandSuggestions } from "../lib/chat-commands";
-import { formatDisplayName } from "../lib/utils";
+import { formatDisplayName, getChatMessageSegments } from "../lib/utils";
 
 interface ChatPanelProps {
   messages: ChatMessage[];
@@ -14,6 +14,8 @@ interface ChatPanelProps {
   onClose: () => void;
   currentUserId: string;
   isGhostMode?: boolean;
+  isChatLocked?: boolean;
+  isAdmin?: boolean;
 }
 
 function ChatPanel({
@@ -24,15 +26,18 @@ function ChatPanel({
   onClose,
   currentUserId,
   isGhostMode = false,
+  isChatLocked = false,
+  isAdmin = false,
 }: ChatPanelProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const shouldAutoScrollRef = useRef(true);
   const [activeCommandIndex, setActiveCommandIndex] = useState(0);
+  const isChatDisabled = isGhostMode || (isChatLocked && !isAdmin);
 
   const commandSuggestions = getCommandSuggestions(chatInput);
   const showCommandSuggestions =
-    !isGhostMode && chatInput.startsWith("/") && commandSuggestions.length > 0;
+    !isChatDisabled && chatInput.startsWith("/") && commandSuggestions.length > 0;
   const isPickingCommand =
     showCommandSuggestions && !chatInput.slice(1).includes(" ");
 
@@ -57,7 +62,7 @@ function ChatPanel({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (isGhostMode) return;
+    if (isChatDisabled) return;
     if (chatInput.trim()) {
       onSend(chatInput);
       onInputChange("");
@@ -102,13 +107,30 @@ function ChatPanel({
     }
   };
 
+  const renderMessageContent = (content: string) =>
+    getChatMessageSegments(content).map((segment, index) =>
+      segment.href ? (
+        <a
+          key={`${segment.href}-${index}`}
+          href={segment.href}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="underline decoration-[#FEFCD9]/50 underline-offset-2 hover:decoration-[#FEFCD9]"
+        >
+          {segment.text}
+        </a>
+      ) : (
+        <span key={`${segment.text}-${index}`}>{segment.text}</span>
+      )
+    );
+
   return (
     <div
       className="fixed right-4 top-16 bottom-20 w-72 bg-[#0d0e0d]/95 backdrop-blur-md border border-[#FEFCD9]/10 rounded-xl flex flex-col z-40 shadow-2xl"
       style={{ fontFamily: "'PolySans Trial', sans-serif" }}
     >
       <div className="flex items-center justify-between px-3 py-2.5 border-b border-[#FEFCD9]/10">
-        <span 
+        <span
           className="text-[10px] uppercase tracking-[0.12em] text-[#FEFCD9]/60"
           style={{ fontFamily: "'PolySans Mono', monospace" }}
         >
@@ -165,7 +187,9 @@ function ChatPanel({
                   {!isOwn && (
                     <p className="text-[9px] text-[#F95F4A]/80 mb-0.5">{displayName}</p>
                   )}
-                  <p className="text-xs break-words leading-relaxed">{msg.content}</p>
+                  <p className="text-xs break-words leading-relaxed">
+                    {renderMessageContent(msg.content)}
+                  </p>
                 </div>
                 <span className="text-[9px] text-[#FEFCD9]/20 mt-0.5 tabular-nums">
                   {new Date(msg.timestamp).toLocaleTimeString([], {
@@ -220,14 +244,20 @@ function ChatPanel({
             value={chatInput}
             onChange={(e) => onInputChange(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Message... (type / for commands)"
+            placeholder={
+              isGhostMode
+                ? "Ghost mode: chat disabled"
+                : isChatLocked && !isAdmin
+                  ? "Chat locked by host"
+                  : "Message... (type / for commands)"
+            }
             maxLength={1000}
-            disabled={isGhostMode}
+            disabled={isChatDisabled}
             className="flex-1 px-2.5 py-1.5 bg-black/30 border border-[#FEFCD9]/10 rounded-md text-xs text-[#FEFCD9] placeholder:text-[#FEFCD9]/30 focus:outline-none focus:border-[#FEFCD9]/20 disabled:opacity-50"
           />
           <button
             type="submit"
-            disabled={isGhostMode || !chatInput.trim()}
+            disabled={isChatDisabled || !chatInput.trim()}
             className="w-8 h-8 rounded-md flex items-center justify-center text-[#FEFCD9]/60 hover:text-[#FEFCD9] hover:bg-[#FEFCD9]/10 disabled:opacity-30 transition-all"
           >
             <Send className="w-3.5 h-3.5" />
@@ -236,6 +266,11 @@ function ChatPanel({
         {isGhostMode && (
           <div className="mt-1.5 text-[9px] text-[#FF007A]/60 text-center">
             Ghost mode
+          </div>
+        )}
+        {!isGhostMode && isChatLocked && !isAdmin && (
+          <div className="mt-1.5 text-[9px] text-amber-200/70 text-center">
+            Chat locked by host
           </div>
         )}
       </form>

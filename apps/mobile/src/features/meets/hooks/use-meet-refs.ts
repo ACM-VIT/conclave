@@ -4,6 +4,7 @@ import type { Device } from "mediasoup-client";
 import type {
   AudioAnalyserEntry,
   Consumer,
+  JoinMode,
   Producer,
   ProducerInfo,
   ProducerMapEntry,
@@ -52,9 +53,16 @@ export function useMeetRefs() {
   );
   const lastActiveSpeakerRef = useRef<{ id: string; ts: number } | null>(null);
   const shouldAutoJoinRef = useRef(false);
-  const joinOptionsRef = useRef<{ displayName?: string; isGhost: boolean }>({
+  const joinOptionsRef = useRef<{
+    displayName?: string;
+    isGhost: boolean;
+    joinMode: JoinMode;
+    webinarInviteCode?: string;
+    meetingInviteCode?: string;
+  }>({
     displayName: undefined,
     isGhost: false,
+    joinMode: "meeting",
   });
   const isChatOpenRef = useRef(false);
   const localStreamRef = useRef<MediaStream | null>(null);
@@ -64,6 +72,9 @@ export function useMeetRefs() {
     ReturnType<typeof setTimeout> | null
   >(null);
   const consumerTransportDisconnectTimeoutRef = useRef<
+    ReturnType<typeof setTimeout> | null
+  >(null);
+  const pendingProducerRetryTimeoutRef = useRef<
     ReturnType<typeof setTimeout> | null
   >(null);
   const iceRestartInFlightRef = useRef({
@@ -109,6 +120,7 @@ export function useMeetRefs() {
     isHandRaisedRef,
     producerTransportDisconnectTimeoutRef,
     consumerTransportDisconnectTimeoutRef,
+    pendingProducerRetryTimeoutRef,
     iceRestartInFlightRef,
     producerSyncIntervalRef,
   };

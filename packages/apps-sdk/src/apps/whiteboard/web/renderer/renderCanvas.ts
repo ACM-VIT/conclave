@@ -4,6 +4,7 @@ type Point = { x: number; y: number };
 
 const FONT_STACK =
   'Virgil, "Segoe Print", "Comic Sans MS", "Marker Felt", cursive';
+const ROTATION_EPSILON = 0.0001;
 
 /* ── deterministic RNG ── */
 
@@ -27,12 +28,26 @@ const createRng = (seed: number) => {
 const jitter = (rng: () => number, amount: number): number =>
   (rng() * 2 - 1) * amount;
 
-/* ── Excalidraw-style hand-drawn path helpers ── */
+const applyRotation = (
+  ctx: CanvasRenderingContext2D,
+  rotation: number,
+  center: Point,
+  draw: () => void,
+) => {
+  if (Math.abs(rotation) < ROTATION_EPSILON) {
+    draw();
+    return;
+  }
 
-/**
- * Draws a hand-drawn (sketchy) path through an ordered list of points.
- * Uses quadratic Bézier curves between midpoints for smooth wobble.
- */
+  ctx.save();
+  ctx.translate(center.x, center.y);
+  ctx.rotate(rotation);
+  ctx.translate(-center.x, -center.y);
+  draw();
+  ctx.restore();
+};
+
+
 const drawSketchyPath = (
   ctx: CanvasRenderingContext2D,
   points: Point[],
@@ -75,9 +90,6 @@ const drawSketchyPath = (
   );
 };
 
-/**
- * Renders a hand-drawn stroke — single clean pass like Excalidraw.
- */
 const renderStroke = (
   ctx: CanvasRenderingContext2D,
   points: Point[],
@@ -103,9 +115,6 @@ const renderStroke = (
   ctx.restore();
 };
 
-/**
- * Renders a hand-drawn line segment.
- */
 const renderLine = (
   ctx: CanvasRenderingContext2D,
   from: Point,
@@ -129,10 +138,58 @@ const renderLine = (
   ctx.restore();
 };
 
-/**
- * Renders a hand-drawn rounded rectangle — Excalidraw-style.
- * Subtle wobble, rounded corners, clean single-pass stroke.
- */
+const renderArrow = (
+  ctx: CanvasRenderingContext2D,
+  from: Point,
+  to: Point,
+  color: string,
+  width: number,
+  seed: number,
+) => {
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  const length = Math.hypot(dx, dy);
+  if (length < 1) {
+    renderLine(ctx, from, to, color, width, seed);
+    return;
+  }
+
+  const wobble = Math.max(0.3, Math.min(1.0, width * 0.2));
+  const rng = createRng(seed + 17);
+  const angle = Math.atan2(dy, dx);
+  const targetHeadLength = Math.min(38, Math.max(12, width * 3.6));
+  const headLength = Math.min(length * 0.45, targetHeadLength);
+  const spread = Math.PI / 5.8;
+  const left = {
+    x: to.x - headLength * Math.cos(angle - spread),
+    y: to.y - headLength * Math.sin(angle - spread),
+  };
+  const right = {
+    x: to.x - headLength * Math.cos(angle + spread),
+    y: to.y - headLength * Math.sin(angle + spread),
+  };
+
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = width;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+
+  ctx.beginPath();
+  ctx.moveTo(from.x + jitter(rng, wobble), from.y + jitter(rng, wobble));
+  ctx.lineTo(to.x + jitter(rng, wobble), to.y + jitter(rng, wobble));
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.moveTo(to.x + jitter(rng, wobble), to.y + jitter(rng, wobble));
+  ctx.lineTo(left.x + jitter(rng, wobble), left.y + jitter(rng, wobble));
+  ctx.moveTo(to.x + jitter(rng, wobble), to.y + jitter(rng, wobble));
+  ctx.lineTo(right.x + jitter(rng, wobble), right.y + jitter(rng, wobble));
+  ctx.stroke();
+
+  ctx.restore();
+};
+
 const renderRect = (
   ctx: CanvasRenderingContext2D,
   x: number,
@@ -150,7 +207,6 @@ const renderRect = (
 
   ctx.save();
 
-  // Solid fill only — no hatch/hachure
   if (fillColor && fillColor !== "transparent") {
     ctx.beginPath();
     ctx.roundRect(x, y, w, h, r);
@@ -160,7 +216,6 @@ const renderRect = (
     ctx.globalAlpha = 1;
   }
 
-  // Hand-drawn stroke
   ctx.strokeStyle = color;
   ctx.lineWidth = strokeWidth;
   ctx.lineCap = "round";
@@ -234,7 +289,6 @@ const renderEllipse = (
 
   ctx.save();
 
-  // Solid fill only
   if (fillColor && fillColor !== "transparent") {
     ctx.beginPath();
     ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
@@ -244,7 +298,6 @@ const renderEllipse = (
     ctx.globalAlpha = 1;
   }
 
-  // Hand-drawn stroke
   ctx.strokeStyle = color;
   ctx.lineWidth = strokeWidth;
   ctx.lineCap = "round";
@@ -256,7 +309,6 @@ const renderEllipse = (
   ctx.restore();
 };
 
-/* ── Grid ── */
 
 const renderGrid = (
   ctx: CanvasRenderingContext2D,
@@ -266,7 +318,6 @@ const renderGrid = (
   ctx.fillStyle = "#121212";
   ctx.fillRect(0, 0, width, height);
 
-  // Dot grid
   const step = 20;
   const dotR = 0.6;
   ctx.fillStyle = "rgba(255, 255, 255, 0.06)";
@@ -279,7 +330,6 @@ const renderGrid = (
     }
   }
 
-  // Major dots
   const major = step * 5;
   ctx.fillStyle = "rgba(169, 165, 255, 0.05)";
   for (let x = major; x < width; x += major) {
@@ -291,7 +341,6 @@ const renderGrid = (
   }
 };
 
-/* ── Sticky note ── */
 
 const renderStickyNote = (
   ctx: CanvasRenderingContext2D,
@@ -299,6 +348,12 @@ const renderStickyNote = (
 ) => {
   const { x, y, width: w, height: h } = element;
   const r = 3;
+  const textInset = 8;
+  const contentX = x + textInset;
+  const contentY = y + textInset;
+  const contentW = Math.max(0, w - textInset * 2);
+  const contentH = Math.max(0, h - textInset * 2);
+  const scrollOffset = Math.max(0, element.stickyScrollOffset ?? 0);
 
   ctx.save();
 
@@ -321,7 +376,6 @@ const renderStickyNote = (
   ctx.lineWidth = 0.5;
   ctx.stroke();
 
-  // Fold
   const fold = 10;
   ctx.beginPath();
   ctx.moveTo(x + w - fold, y + h);
@@ -331,20 +385,24 @@ const renderStickyNote = (
   ctx.fillStyle = "rgba(0,0,0,0.06)";
   ctx.fill();
 
-  // Text
   ctx.fillStyle = element.textColor;
   ctx.font = `${element.fontSize}px ${FONT_STACK}`;
   ctx.globalAlpha = 0.95;
   const lines = element.text.split("\n");
   const lh = element.fontSize * 1.3;
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(contentX, contentY, contentW, contentH);
+  ctx.clip();
   lines.forEach((line, i) => {
-    ctx.fillText(line, x + 10, y + element.fontSize + 8 + i * lh);
+    const baseline = contentY + element.fontSize + i * lh - scrollOffset;
+    ctx.fillText(line, contentX + 2, baseline, Math.max(0, contentW - 4));
   });
+  ctx.restore();
 
   ctx.restore();
 };
 
-/* ── Main render ── */
 
 export const renderCanvas = (
   ctx: CanvasRenderingContext2D,
@@ -363,14 +421,35 @@ export const renderCanvas = (
 
     switch (element.type) {
       case "stroke": {
-        renderStroke(
-          ctx,
-          element.points,
-          element.color,
-          element.width,
-          element.opacity ?? 1,
-          seed,
-        );
+        const rotation = element.rotation ?? 0;
+        if (Math.abs(rotation) < ROTATION_EPSILON || element.points.length === 0) {
+          renderStroke(
+            ctx,
+            element.points,
+            element.color,
+            element.width,
+            element.opacity ?? 1,
+            seed,
+          );
+          break;
+        }
+
+        const xs = element.points.map((point) => point.x);
+        const ys = element.points.map((point) => point.y);
+        const center = {
+          x: (Math.min(...xs) + Math.max(...xs)) / 2,
+          y: (Math.min(...ys) + Math.max(...ys)) / 2,
+        };
+        applyRotation(ctx, rotation, center, () => {
+          renderStroke(
+            ctx,
+            element.points,
+            element.color,
+            element.width,
+            element.opacity ?? 1,
+            seed,
+          );
+        });
         break;
       }
 
@@ -379,58 +458,116 @@ export const renderCanvas = (
         const y = Math.min(element.y, element.y + element.height);
         const w = Math.abs(element.width);
         const h = Math.abs(element.height);
-
-        if (element.shape === "rect") {
-          renderRect(ctx, x, y, w, h, element.strokeColor, element.strokeWidth, element.fillColor, seed);
-        } else if (element.shape === "ellipse") {
-          renderEllipse(ctx, x, y, w, h, element.strokeColor, element.strokeWidth, element.fillColor, seed);
-        } else if (element.shape === "line") {
-          renderLine(
-            ctx,
-            { x: element.x, y: element.y },
-            { x: element.x + element.width, y: element.y + element.height },
-            element.strokeColor,
-            element.strokeWidth,
-            seed,
-          );
-        }
+        const rotation = element.rotation ?? 0;
+        const center = { x: x + w / 2, y: y + h / 2 };
+        applyRotation(ctx, rotation, center, () => {
+          if (element.shape === "rect") {
+            renderRect(
+              ctx,
+              x,
+              y,
+              w,
+              h,
+              element.strokeColor,
+              element.strokeWidth,
+              element.fillColor,
+              seed,
+            );
+          } else if (element.shape === "ellipse") {
+            renderEllipse(
+              ctx,
+              x,
+              y,
+              w,
+              h,
+              element.strokeColor,
+              element.strokeWidth,
+              element.fillColor,
+              seed,
+            );
+          } else if (element.shape === "line") {
+            renderLine(
+              ctx,
+              { x: element.x, y: element.y },
+              { x: element.x + element.width, y: element.y + element.height },
+              element.strokeColor,
+              element.strokeWidth,
+              seed,
+            );
+          } else if (element.shape === "arrow") {
+            renderArrow(
+              ctx,
+              { x: element.x, y: element.y },
+              { x: element.x + element.width, y: element.y + element.height },
+              element.strokeColor,
+              element.strokeWidth,
+              seed,
+            );
+          }
+        });
         break;
       }
 
       case "text": {
         if (element.text.trim().length === 0) break;
 
-        ctx.save();
-        ctx.fillStyle = element.color;
-        ctx.font = `${element.fontSize}px ${FONT_STACK}`;
-        ctx.globalAlpha = 1;
-
         const lines = element.text.split("\n");
+        const longest = lines.reduce((max, line) => Math.max(max, line.length), 0);
+        const textWidth = Math.max(40, element.width ?? longest * element.fontSize * 0.62);
         const lineHeight = element.fontSize * 1.3;
-        lines.forEach((line, index) => {
-          if (line.length === 0) return;
-          ctx.fillText(line, element.x, element.y + element.fontSize + index * lineHeight);
+        const textHeight = Math.max(
+          element.fontSize * 1.4,
+          element.height ?? lines.length * lineHeight
+        );
+        const rotation = element.rotation ?? 0;
+        const center = {
+          x: element.x + textWidth / 2,
+          y: element.y + textHeight / 2,
+        };
+
+        applyRotation(ctx, rotation, center, () => {
+          ctx.save();
+          ctx.fillStyle = element.color;
+          ctx.font = `${element.fontSize}px ${FONT_STACK}`;
+          ctx.globalAlpha = 1;
+          lines.forEach((line, index) => {
+            if (line.length === 0) return;
+            ctx.fillText(line, element.x, element.y + element.fontSize + index * lineHeight);
+          });
+          ctx.restore();
         });
-        ctx.restore();
         break;
       }
 
       case "sticky": {
-        renderStickyNote(ctx, element);
+        const rotation = element.rotation ?? 0;
+        const center = {
+          x: element.x + element.width / 2,
+          y: element.y + element.height / 2,
+        };
+        applyRotation(ctx, rotation, center, () => {
+          renderStickyNote(ctx, element);
+        });
         break;
       }
 
       case "image": {
         const img = imageCache?.get(element.src);
         if (!img) break;
-
-        ctx.save();
-        ctx.shadowColor = "rgba(0, 0, 0, 0.2)";
-        ctx.shadowBlur = 8;
-        ctx.shadowOffsetX = 1;
-        ctx.shadowOffsetY = 2;
-        ctx.drawImage(img, element.x, element.y, element.width, element.height);
-        ctx.restore();
+        const rotation = element.rotation ?? 0;
+        const center = {
+          x: element.x + element.width / 2,
+          y: element.y + element.height / 2,
+        };
+        applyRotation(ctx, rotation, center, () => {
+          ctx.save();
+          ctx.shadowColor = "rgba(0, 0, 0, 0.2)";
+          ctx.shadowBlur = 8;
+          ctx.shadowOffsetX = 1;
+          ctx.shadowOffsetY = 2;
+          ctx.drawImage(img, element.x, element.y, element.width, element.height);
+          ctx.restore();
+        });
         break;
       }
     }

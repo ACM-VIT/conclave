@@ -30,6 +30,7 @@ enum SocketEvent {
     static let setHandRaised = "setHandRaised"
     static let updateDisplayName = "updateDisplayName"
     static let lockRoom = "lockRoom"
+    static let lockChat = "lockChat"
     static let admitUser = "admitUser"
     static let rejectUser = "rejectUser"
     static let kickUser = "kickUser"
@@ -46,6 +47,7 @@ enum SocketEvent {
     static let handRaised = "handRaised"
     static let handRaisedSnapshot = "handRaisedSnapshot"
     static let roomLockChanged = "roomLockChanged"
+    static let chatLockChanged = "chatLockChanged"
     static let userRequestedJoin = "userRequestedJoin"
     static let pendingUsersSnapshot = "pendingUsersSnapshot"
     static let userAdmitted = "userAdmitted"
@@ -112,6 +114,7 @@ final class SocketIOManager: ObservableObject {
 
     // Room state
     var onRoomLockChanged: ((Bool) -> Void)?
+    var onChatLockChanged: ((Bool) -> Void)?
     var onPendingUsersSnapshot: ((PendingUsersSnapshotNotification) -> Void)?
     var onUserRequestedJoin: ((UserRequestedJoinNotification) -> Void)?
     var onPendingUserChanged: ((PendingUserChangedNotification) -> Void)?
@@ -352,6 +355,10 @@ final class SocketIOManager: ObservableObject {
         _ = try await emit(event: SocketEvent.lockRoom, payload: ["locked": locked])
     }
 
+    func lockChat(_ locked: Bool) async throws {
+        _ = try await emit(event: SocketEvent.lockChat, payload: ["locked": locked])
+    }
+
     func admitUser(userId: String) async throws {
         _ = try await emit(event: SocketEvent.admitUser, payload: ["userId": userId])
     }
@@ -530,6 +537,12 @@ final class SocketIOManager: ObservableObject {
             guard let self, let first = data.first,
                   let notification = self.decode(RoomLockChangedNotification.self, from: first) else { return }
             self.onRoomLockChanged?(notification.locked)
+        }
+
+        socket.on(SocketEvent.chatLockChanged) { [weak self] data, _ in
+            guard let self, let first = data.first,
+                  let notification = self.decode(ChatLockChangedNotification.self, from: first) else { return }
+            self.onChatLockChanged?(notification.locked)
         }
 
         socket.on(SocketEvent.userRequestedJoin) { [weak self] data, _ in

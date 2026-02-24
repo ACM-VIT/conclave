@@ -82,6 +82,23 @@ const clientPolicies = normalizeClientPolicies(
   process.env.SFU_CLIENT_POLICIES,
 );
 
+const resolveAnnouncedIp = (): string => {
+  const announcedIp = process.env.ANNOUNCED_IP?.trim();
+  if (announcedIp) return announcedIp;
+
+  if (process.env.NODE_ENV === "production") {
+    console.warn(
+      "[SFU] ANNOUNCED_IP is not set. Falling back to 127.0.0.1, which is not reachable for remote clients.",
+    );
+  }
+
+  return "127.0.0.1";
+};
+
+const announcedIp = resolveAnnouncedIp();
+const plainTransportAnnouncedIp =
+  process.env.PLAIN_TRANSPORT_ANNOUNCED_IP?.trim() || announcedIp;
+
 export const config = {
   port: toNumber(process.env.SFU_PORT || process.env.PORT, 3031),
   instanceId: process.env.SFU_INSTANCE_ID || `sfu-${process.pid}`,
@@ -144,7 +161,7 @@ export const config = {
     listenIps: [
       {
         ip: "0.0.0.0",
-        announcedIp: process.env.ANNOUNCED_IP || "172.16.22.196",
+        announcedIp,
       },
     ],
     maxIncomingBitrate: 1500000,
@@ -152,8 +169,7 @@ export const config = {
   },
   plainTransport: {
     listenIp: process.env.PLAIN_TRANSPORT_LISTEN_IP || "0.0.0.0",
-    announcedIp:
-      process.env.PLAIN_TRANSPORT_ANNOUNCED_IP || process.env.ANNOUNCED_IP,
+    announcedIp: plainTransportAnnouncedIp,
   },
 };
 

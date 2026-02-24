@@ -6,13 +6,14 @@ import type { Device } from "mediasoup-client";
 import type {
   AudioAnalyserEntry,
   Consumer,
+  JoinMode,
   Producer,
   ProducerInfo,
   ProducerMapEntry,
   Transport,
   VideoQuality,
 } from "../lib/types";
-import { generateSessionId } from "../lib/utils";
+import { getOrCreateSessionId } from "../lib/utils";
 
 export function useMeetRefs() {
   const socketRef = useRef<Socket | null>(null);
@@ -22,6 +23,7 @@ export function useMeetRefs() {
   const audioProducerRef = useRef<Producer | null>(null);
   const videoProducerRef = useRef<Producer | null>(null);
   const screenProducerRef = useRef<Producer | null>(null);
+  const screenAudioProducerRef = useRef<Producer | null>(null);
   const consumersRef = useRef<Map<string, Consumer>>(new Map());
   const producerMapRef = useRef<Map<string, ProducerMapEntry>>(new Map());
   const pendingProducersRef = useRef<Map<string, ProducerInfo>>(new Map());
@@ -47,16 +49,24 @@ export function useMeetRefs() {
   );
   const lastActiveSpeakerRef = useRef<{ id: string; ts: number } | null>(null);
   const shouldAutoJoinRef = useRef(false);
-  const joinOptionsRef = useRef<{ displayName?: string; isGhost: boolean }>({
+  const joinOptionsRef = useRef<{
+    displayName?: string;
+    isGhost: boolean;
+    joinMode: JoinMode;
+    webinarInviteCode?: string;
+    meetingInviteCode?: string;
+  }>({
     displayName: undefined,
     isGhost: false,
+    joinMode: "meeting",
   });
   const isChatOpenRef = useRef(false);
   const localStreamRef = useRef<MediaStream | null>(null);
-  const sessionIdRef = useRef<string>(generateSessionId());
+  const sessionIdRef = useRef<string>(getOrCreateSessionId());
   const isHandRaisedRef = useRef(false);
   const producerTransportDisconnectTimeoutRef = useRef<number | null>(null);
   const consumerTransportDisconnectTimeoutRef = useRef<number | null>(null);
+  const pendingProducerRetryTimeoutRef = useRef<number | null>(null);
   const iceRestartInFlightRef = useRef({
     producer: false,
     consumer: false,
@@ -71,6 +81,7 @@ export function useMeetRefs() {
     audioProducerRef,
     videoProducerRef,
     screenProducerRef,
+    screenAudioProducerRef,
     consumersRef,
     producerMapRef,
     pendingProducersRef,
@@ -97,6 +108,7 @@ export function useMeetRefs() {
     isHandRaisedRef,
     producerTransportDisconnectTimeoutRef,
     consumerTransportDisconnectTimeoutRef,
+    pendingProducerRetryTimeoutRef,
     iceRestartInFlightRef,
     producerSyncIntervalRef,
   };

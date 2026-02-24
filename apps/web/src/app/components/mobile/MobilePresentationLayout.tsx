@@ -1,7 +1,8 @@
 "use client";
 
-import { Ghost, MicOff } from "lucide-react";
+import { MicOff, VenetianMask } from "lucide-react";
 import { memo, useEffect, useRef } from "react";
+import { useSmartParticipantOrder } from "../../hooks/useSmartParticipantOrder";
 import type { Participant } from "../../lib/types";
 import { isSystemUserId, truncateDisplayName } from "../../lib/utils";
 
@@ -31,6 +32,7 @@ function MobilePresentationLayout({
   participants,
   userEmail,
   isMirrorCamera,
+  activeSpeakerId,
   getDisplayName,
 }: MobilePresentationLayoutProps) {
   const presentationVideoRef = useRef<HTMLVideoElement>(null);
@@ -38,16 +40,91 @@ function MobilePresentationLayout({
 
   useEffect(() => {
     const video = presentationVideoRef.current;
-    if (video && presentationStream) {
-      if (video.srcObject !== presentationStream) {
-        video.srcObject = presentationStream;
-        video.play().catch((err) => {
-          if (err.name !== "AbortError") {
-            console.error("[Meets] Mobile presentation video play error:", err);
-          }
-        });
-      }
+    if (!video || !presentationStream) return;
+
+    if (video.srcObject !== presentationStream) {
+      video.srcObject = presentationStream;
     }
+
+    let cancelled = false;
+    const replayTimeouts: number[] = [];
+    let replayRafId: number | null = null;
+
+    const playVideo = () => {
+      if (cancelled) return;
+      video.play().catch((err) => {
+        if (err.name === "NotAllowedError") {
+          video.muted = true;
+          video.play().catch(() => {});
+          return;
+        }
+        if (err.name !== "AbortError") {
+          console.error("[Meets] Mobile presentation video play error:", err);
+        }
+      });
+    };
+
+    const scheduleReplay = () => {
+      playVideo();
+      if (typeof window !== "undefined") {
+        for (const delay of [80, 220, 480, 900, 1500]) {
+          replayTimeouts.push(window.setTimeout(playVideo, delay));
+        }
+        let frameAttempts = 0;
+        const replayOnFrame = () => {
+          if (cancelled) return;
+          if (video.paused || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+            playVideo();
+          }
+          frameAttempts += 1;
+          if (frameAttempts < 24) {
+            replayRafId = window.requestAnimationFrame(replayOnFrame);
+          }
+        };
+        replayRafId = window.requestAnimationFrame(replayOnFrame);
+      }
+    };
+
+    scheduleReplay();
+
+    const videoTrack = presentationStream.getVideoTracks()[0];
+    const handleTrackUnmuted = () => {
+      scheduleReplay();
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        scheduleReplay();
+      }
+    };
+
+    if (videoTrack) {
+      videoTrack.addEventListener("unmute", handleTrackUnmuted);
+    }
+    video.addEventListener("loadedmetadata", scheduleReplay);
+    video.addEventListener("loadeddata", scheduleReplay);
+    video.addEventListener("canplay", scheduleReplay);
+    video.addEventListener("stalled", scheduleReplay);
+    video.addEventListener("suspend", scheduleReplay);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      cancelled = true;
+      if (videoTrack) {
+        videoTrack.removeEventListener("unmute", handleTrackUnmuted);
+      }
+      video.removeEventListener("loadedmetadata", scheduleReplay);
+      video.removeEventListener("loadeddata", scheduleReplay);
+      video.removeEventListener("canplay", scheduleReplay);
+      video.removeEventListener("stalled", scheduleReplay);
+      video.removeEventListener("suspend", scheduleReplay);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      for (const timeoutId of replayTimeouts) {
+        window.clearTimeout(timeoutId);
+      }
+      if (replayRafId !== null) {
+        window.cancelAnimationFrame(replayRafId);
+      }
+    };
   }, [presentationStream]);
 
   useEffect(() => {
@@ -62,30 +139,38 @@ function MobilePresentationLayout({
     }
   }, [localStream]);
 
-  const participantArray = Array.from(participants.values()).filter(
-    (participant) => !isSystemUserId(participant.userId)
+  const participantArray = useSmartParticipantOrder(
+    Array.from(participants.values()).filter(
+      (participant) => !isSystemUserId(participant.userId)
+    ),
+    activeSpeakerId
   );
 
   return (
-    <div className="flex flex-col w-full h-full p-2 gap-2">
+    <div className="flex flex-col w-full h-full p-3 gap-3">
       {/* Presentation video - takes most space */}
-      <div className="flex-1 relative bg-black rounded-xl overflow-hidden min-h-0">
+      <div className="flex-1 relative mobile-tile min-h-0 bg-[#0b0b0b]">
         <video
           ref={presentationVideoRef}
           autoPlay
+          muted
           playsInline
           className="w-full h-full object-contain"
         />
         {/* Presenter badge */}
-        <div className="absolute top-2 left-2 bg-black/70 backdrop-blur-md px-2.5 py-1 rounded-full text-[10px] text-[#FEFCD9] font-medium uppercase tracking-wide border border-[#FEFCD9]/10">
+        <div
+          className="absolute top-2 left-2 mobile-name-pill px-3 py-1 text-[10px] text-[#FEFCD9] font-medium uppercase tracking-[0.18em] backdrop-blur-md truncate max-w-[80%]"
+          style={{ fontFamily: "'PolySans Mono', monospace" }}
+          title={`${presenterName} is presenting`}
+        >
           {presenterName} is presenting
         </div>
       </div>
 
       {/* Participant thumbnails - fixed height strip */}
-      <div className="h-24 shrink-0 flex gap-2 overflow-x-auto no-scrollbar touch-pan-x">
+      <div className="h-24 shrink-0 flex gap-3 overflow-x-auto no-scrollbar touch-pan-x">
         {/* Local video thumbnail */}
-        <div className="relative w-24 h-24 shrink-0 bg-[#1a1a1a] rounded-xl overflow-hidden border border-[#FEFCD9]/10">
+        <div className="relative w-24 h-24 shrink-0 mobile-tile">
           <video
             ref={localVideoRef}
             autoPlay
@@ -94,23 +179,35 @@ function MobilePresentationLayout({
             className={`w-full h-full object-cover ${isCameraOff ? "hidden" : ""} ${isMirrorCamera ? "scale-x-[-1]" : ""}`}
           />
           {isCameraOff && (
-            <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-[#1a1a1a] to-[#0d0e0d]">
-              <div className="w-10 h-10 rounded-full bg-gradient-to-br from-[#F95F4A]/20 to-[#FF007A]/20 border border-[#FEFCD9]/20 flex items-center justify-center text-lg text-[#FEFCD9] font-bold">
+            <div className="absolute inset-0 flex items-center justify-center bg-[#0d0e0d]">
+              <div className="absolute inset-0 bg-gradient-to-br from-[#F95F4A]/15 to-[#FF007A]/10" />
+              <div
+                className="relative w-10 h-10 rounded-full mobile-avatar flex items-center justify-center text-lg text-[#FEFCD9] font-bold"
+                style={{ fontFamily: "'PolySans Bulky Wide', sans-serif" }}
+              >
                 {userEmail[0]?.toUpperCase() || "?"}
               </div>
             </div>
           )}
           {isGhost && (
-            <div className="absolute inset-0 flex items-center justify-center pointer-events-none bg-black/40">
-              <Ghost className="w-6 h-6 text-[#FF007A] drop-shadow-[0_0_15px_rgba(255,0,122,0.5)]" />
+            <div className="absolute inset-0 flex items-center justify-center pointer-events-none mobile-ghost-overlay">
+              <div className="flex flex-col items-center gap-1">
+                <VenetianMask className="w-6 h-6 text-[#FF007A]" />
+                <span
+                  className="mobile-ghost-badge rounded-full px-2 py-0.5 text-[8px] tracking-[0.2em] text-[#FF007A]"
+                  style={{ fontFamily: "'PolySans Mono', monospace" }}
+                >
+                  GHOST
+                </span>
+              </div>
             </div>
           )}
           <div 
             className="absolute bottom-1 left-1 right-1 flex items-center justify-center"
             style={{ fontFamily: "'PolySans Mono', monospace" }}
           >
-            <span className="bg-black/70 border border-[#FEFCD9]/10 rounded-full px-1.5 py-0.5 text-[10px] text-[#FEFCD9] font-medium uppercase tracking-wide flex items-center gap-1">
-              You
+            <span className="mobile-name-pill px-1.5 py-0.5 text-[10px] text-[#FEFCD9] font-medium uppercase tracking-[0.18em] flex items-center gap-1 backdrop-blur-md">
+              YOU
               {isMuted && <MicOff className="w-2.5 h-2.5 text-[#F95F4A]" />}
             </span>
           </div>
@@ -120,27 +217,46 @@ function MobilePresentationLayout({
         {participantArray.map((participant) => (
           <div 
             key={participant.userId} 
-            className="relative w-24 h-24 shrink-0 bg-[#1a1a1a] rounded-xl overflow-hidden border border-[#FEFCD9]/10"
+            className={`relative w-24 h-24 shrink-0 mobile-tile ${
+              participant.userId === activeSpeakerId
+                ? "mobile-tile-active"
+                : ""
+            }`}
           >
             {participant.videoStream && !participant.isCameraOff ? (
-              <VideoThumbnail participant={participant} />
+              <VideoThumbnail
+                participant={participant}
+                isCameraOff={participant.isCameraOff}
+              />
             ) : (
-              <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-[#1a1a1a] to-[#0d0e0d]">
-                <div className="w-10 h-10 rounded-full bg-gradient-to-br from-[#F95F4A]/20 to-[#FF007A]/20 border border-[#FEFCD9]/20 flex items-center justify-center text-lg text-[#FEFCD9] font-bold">
+              <div className="absolute inset-0 flex items-center justify-center bg-[#0d0e0d]">
+                <div className="absolute inset-0 bg-gradient-to-br from-[#F95F4A]/15 to-[#FF007A]/10" />
+                <div
+                  className="relative w-10 h-10 rounded-full mobile-avatar flex items-center justify-center text-lg text-[#FEFCD9] font-bold"
+                  style={{ fontFamily: "'PolySans Bulky Wide', sans-serif" }}
+                >
                   {getDisplayName(participant.userId)[0]?.toUpperCase() || "?"}
                 </div>
               </div>
             )}
             {participant.isGhost && (
-              <div className="absolute inset-0 flex items-center justify-center pointer-events-none bg-black/40">
-                <Ghost className="w-6 h-6 text-[#FF007A] drop-shadow-[0_0_15px_rgba(255,0,122,0.5)]" />
+              <div className="absolute inset-0 flex items-center justify-center pointer-events-none mobile-ghost-overlay">
+                <div className="flex flex-col items-center gap-1">
+                  <VenetianMask className="w-6 h-6 text-[#FF007A]" />
+                  <span
+                    className="mobile-ghost-badge rounded-full px-2 py-0.5 text-[8px] tracking-[0.2em] text-[#FF007A]"
+                    style={{ fontFamily: "'PolySans Mono', monospace" }}
+                  >
+                    GHOST
+                  </span>
+                </div>
               </div>
             )}
             <div 
               className="absolute bottom-1 left-1 right-1 flex items-center justify-center"
               style={{ fontFamily: "'PolySans Mono', monospace" }}
             >
-              <span className="bg-black/70 border border-[#FEFCD9]/10 rounded-full px-1.5 py-0.5 text-[10px] text-[#FEFCD9] font-medium uppercase tracking-wide truncate max-w-full flex items-center gap-1">
+              <span className="mobile-name-pill px-1.5 py-0.5 text-[10px] text-[#FEFCD9] font-medium uppercase tracking-[0.18em] truncate max-w-full flex items-center gap-1 backdrop-blur-md">
                 {truncateDisplayName(getDisplayName(participant.userId), 10)}
                 {participant.isMuted && <MicOff className="w-2.5 h-2.5 text-[#F95F4A]" />}
               </span>
@@ -156,17 +272,44 @@ function MobilePresentationLayout({
   );
 }
 
-// Separate video thumbnail component for participants
-const VideoThumbnail = memo(function VideoThumbnail({ participant }: { participant: Participant }) {
+const VideoThumbnail = memo(function VideoThumbnail({
+  participant,
+  isCameraOff,
+}: {
+  participant: Participant;
+  isCameraOff: boolean;
+}) {
   const videoRef = useRef<HTMLVideoElement>(null);
   
   useEffect(() => {
     const video = videoRef.current;
-    if (video && participant.videoStream) {
-      video.srcObject = participant.videoStream;
-      video.play().catch(() => {});
+    if (!video) return;
+
+    if (!participant.videoStream || isCameraOff) {
+      if (video.srcObject) {
+        video.srcObject = null;
+      }
+      return;
     }
-  }, [participant.videoStream]);
+
+    if (video.srcObject !== participant.videoStream) {
+      video.srcObject = participant.videoStream;
+    }
+
+    const playVideo = () => {
+      video.play().catch(() => {});
+    };
+
+    playVideo();
+
+    const videoTrack = participant.videoStream.getVideoTracks()[0];
+    if (!videoTrack) return;
+    videoTrack.addEventListener("unmute", playVideo);
+
+    return () => {
+      videoTrack.removeEventListener("unmute", playVideo);
+    };
+  }, [participant.videoStream, participant.videoProducerId, isCameraOff]);
   
   return (
     <video

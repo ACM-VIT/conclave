@@ -12,6 +12,12 @@
       "@conclave/apps-sdk/*": [
         "../../packages/apps-sdk/src/*"
       ],
+      "@conclave/meeting-core": [
+        "../../packages/meeting-core/src/index.ts"
+      ],
+      "@conclave/meeting-core/*": [
+        "../../packages/meeting-core/src/*"
+      ],
       "@conclave/apps-sdk/whiteboard/native": [
         "../../packages/apps-sdk/src/apps/whiteboard/native/index.ts"
       ],
@@ -20,6 +26,12 @@
       ],
       "@conclave/apps-sdk/whiteboard/core": [
         "../../packages/apps-sdk/src/apps/whiteboard/core/index.ts"
+      ],
+      "@conclave/apps-sdk/dev-playground/web": [
+        "../../packages/apps-sdk/src/apps/dev-playground/web/index.ts"
+      ],
+      "@conclave/apps-sdk/dev-playground/core": [
+        "../../packages/apps-sdk/src/apps/dev-playground/core/index.ts"
       ]
     }
   },

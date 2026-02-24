@@ -16,8 +16,10 @@ export const registerHandHandlers = (context: ConnectionContext): void => {
           respond(callback, { error: "Not in a room" });
           return;
         }
-        if (context.currentClient.isGhost) {
-          respond(callback, { error: "Ghost mode cannot raise a hand" });
+        if (context.currentClient.isObserver) {
+          respond(callback, {
+            error: "Watch-only attendees cannot raise a hand",
+          });
           return;
         }
 

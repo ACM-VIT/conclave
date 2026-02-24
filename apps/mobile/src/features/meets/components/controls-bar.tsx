@@ -9,6 +9,7 @@ import {
   Lock,
   LockOpen,
   MessageCircle,
+  MessageSquareLock,
   Mic,
   MicOff,
   PhoneOff,
@@ -18,6 +19,8 @@ import {
   Video,
   VideoOff,
   StickyNote,
+  UserMinus,
+  VolumeX,
 } from "lucide-react-native";
 import { EMOJI_REACTIONS } from "../constants";
 import { useDeviceLayout, TOUCH_TARGETS } from "../hooks/use-device-layout";
@@ -48,10 +51,15 @@ interface ControlsBarProps {
   isScreenShareAvailable?: boolean;
   isChatOpen: boolean;
   isRoomLocked: boolean;
+  isNoGuests: boolean;
+  isChatLocked: boolean;
+  isTtsDisabled: boolean;
   isAdmin: boolean;
+  isObserverMode?: boolean;
   pendingUsersCount: number;
   unreadCount: number;
   availableWidth: number;
+  showParticipantsControl?: boolean;
   isWhiteboardActive?: boolean;
   showWhiteboardControl?: boolean;
   isAppsLocked?: boolean;
@@ -62,6 +70,9 @@ interface ControlsBarProps {
   onToggleChat: () => void;
   onToggleParticipants: () => void;
   onToggleRoomLock?: (locked: boolean) => void;
+  onToggleNoGuests?: (noGuests: boolean) => void;
+  onToggleChatLock?: (locked: boolean) => void;
+  onToggleTtsDisabled?: (disabled: boolean) => void;
   onToggleWhiteboard?: () => void;
   onToggleAppsLock?: (locked: boolean) => void;
   onSendReaction: (emoji: string) => void;
@@ -198,10 +209,15 @@ export function ControlsBar({
   isScreenShareAvailable = true,
   isChatOpen,
   isRoomLocked,
+  isNoGuests,
+  isChatLocked,
+  isTtsDisabled,
   isAdmin,
+  isObserverMode = false,
   pendingUsersCount,
   unreadCount,
   availableWidth,
+  showParticipantsControl = true,
   isWhiteboardActive = false,
   showWhiteboardControl = true,
   isAppsLocked = false,
@@ -212,6 +228,9 @@ export function ControlsBar({
   onToggleChat,
   onToggleParticipants,
   onToggleRoomLock,
+  onToggleNoGuests,
+  onToggleChatLock,
+  onToggleTtsDisabled,
   onToggleWhiteboard,
   onToggleAppsLock,
   onSendReaction,
@@ -246,6 +265,43 @@ export function ControlsBar({
     setShowReactionPicker(!showReactionPicker);
   };
 
+  if (isObserverMode) {
+    return (
+      <RNView style={styles.container}>
+        <LinearGradient
+          colors={["rgba(0, 0, 0, 0)", "rgba(0, 0, 0, 0.95)"]}
+          style={styles.gradient}
+          pointerEvents="none"
+        />
+        <RNView
+          style={[styles.pillContainer, { paddingBottom: Math.max(insets.bottom, 12) }]}
+        >
+          <GlassPill style={[styles.controlsGlass, { maxWidth: pillMaxWidth }]}>
+            <RNView
+              style={[
+                styles.controlsPill,
+                {
+                  gap: pillGap,
+                  justifyContent: "space-between",
+                  minWidth: Math.min(pillMaxWidth, 320),
+                },
+              ]}
+            >
+              <Text style={styles.observerLabel}>Watching webinar</Text>
+              <ControlButton
+                icon={PhoneOff}
+                isDanger
+                size={buttonSize}
+                iconSize={iconSize}
+                onPress={onLeave}
+              />
+            </RNView>
+          </GlassPill>
+        </RNView>
+      </RNView>
+    );
+  }
+
   return (
     <RNView style={styles.container}>
       {/* Gradient fade at top */}
@@ -275,13 +331,15 @@ export function ControlsBar({
           >
             {!isCompact ? (
               <>
-                <ControlButton
-                  icon={Users}
-                  badge={pendingUsersCount}
-                  size={buttonSize}
-                  iconSize={iconSize}
-                  onPress={onToggleParticipants}
-                />
+                {showParticipantsControl ? (
+                  <ControlButton
+                    icon={Users}
+                    badge={pendingUsersCount}
+                    size={buttonSize}
+                    iconSize={iconSize}
+                    onPress={onToggleParticipants}
+                  />
+                ) : null}
 
                 {isAdmin ? (
                   <ControlButton
@@ -291,6 +349,36 @@ export function ControlsBar({
                     size={buttonSize}
                     iconSize={iconSize}
                     onPress={() => onToggleRoomLock?.(!isRoomLocked)}
+                  />
+                ) : null}
+                {isAdmin && onToggleNoGuests ? (
+                  <ControlButton
+                    icon={UserMinus}
+                    isActive={isNoGuests}
+                    activeColor={COLORS.amber}
+                    size={buttonSize}
+                    iconSize={iconSize}
+                    onPress={() => onToggleNoGuests(!isNoGuests)}
+                  />
+                ) : null}
+                {isAdmin && onToggleChatLock ? (
+                  <ControlButton
+                    icon={MessageSquareLock}
+                    isActive={isChatLocked}
+                    activeColor={COLORS.amber}
+                    size={buttonSize}
+                    iconSize={iconSize}
+                    onPress={() => onToggleChatLock(!isChatLocked)}
+                  />
+                ) : null}
+                {isAdmin && onToggleTtsDisabled ? (
+                  <ControlButton
+                    icon={VolumeX}
+                    isActive={isTtsDisabled}
+                    activeColor={COLORS.primaryOrange}
+                    size={buttonSize}
+                    iconSize={iconSize}
+                    onPress={() => onToggleTtsDisabled(!isTtsDisabled)}
                   />
                 ) : null}
                 {isAdmin && onToggleAppsLock && isWhiteboardActive ? (
@@ -533,5 +621,11 @@ const styles = StyleSheet.create({
   },
   reactionEmoji: {
     fontSize: 22,
+  },
+  observerLabel: {
+    fontSize: 12,
+    color: COLORS.creamMuted,
+    letterSpacing: 0.2,
+    fontFamily: "PolySans-Regular",
   },
 });

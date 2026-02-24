@@ -14,6 +14,9 @@ import {
 interface UseMeetChatOptions {
   socketRef: React.MutableRefObject<Socket | null>;
   ghostEnabled: boolean;
+  isObserverMode?: boolean;
+  isChatLocked?: boolean;
+  isAdmin?: boolean;
   isMuted?: boolean;
   isCameraOff?: boolean;
   onToggleMute?: () => void;
@@ -25,11 +28,15 @@ interface UseMeetChatOptions {
     displayName: string;
     text: string;
   }) => void;
+  isTtsDisabled?: boolean;
 }
 
 export function useMeetChat({
   socketRef,
   ghostEnabled,
+  isObserverMode = false,
+  isChatLocked = false,
+  isAdmin = false,
   isMuted,
   isCameraOff,
   onToggleMute,
@@ -37,10 +44,11 @@ export function useMeetChat({
   onSetHandRaised,
   onLeaveRoom,
   onTtsMessage,
+  isTtsDisabled,
 }: UseMeetChatOptions) {
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatOverlayMessages, setChatOverlayMessages] = useState<ChatMessage[]>(
-    []
+    [],
   );
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
@@ -51,7 +59,7 @@ export function useMeetChat({
     (content: string) => {
       setChatMessages((prev) => [...prev, createLocalChatMessage(content)]);
     },
-    [setChatMessages]
+    [setChatMessages],
   );
 
   const clearChat = useCallback(() => {
@@ -71,7 +79,7 @@ export function useMeetChat({
         (
           response:
             | { success: boolean; message?: ChatMessage }
-            | { error: string }
+            | { error: string },
         ) => {
           if ("error" in response) {
             console.error("[Meets] Chat error:", response.error);
@@ -80,7 +88,7 @@ export function useMeetChat({
           if (response.message) {
             const { message, ttsText } = normalizeChatMessage(response.message);
             setChatMessages((prev) => [...prev, message]);
-            if (ttsText) {
+            if (ttsText && !isTtsDisabled) {
               onTtsMessage?.({
                 userId: message.userId,
                 displayName: message.displayName,
@@ -88,10 +96,10 @@ export function useMeetChat({
               });
             }
           }
-        }
+        },
       );
     },
-    [socketRef, onTtsMessage]
+    [socketRef, onTtsMessage, isTtsDisabled],
   );
 
   const toggleChat = useCallback(() => {
@@ -107,7 +115,11 @@ export function useMeetChat({
 
   const sendChat = useCallback(
     (content: string) => {
-      if (ghostEnabled) return;
+      if (ghostEnabled || isObserverMode) return;
+      if (isChatLocked && !isAdmin) {
+        appendLocalMessage("Chat is locked by the host.");
+        return;
+      }
       const trimmed = content.trim();
       if (!trimmed) return;
 
@@ -123,6 +135,10 @@ export function useMeetChat({
           return;
         }
         if (command.id === "tts") {
+          if (isTtsDisabled) {
+            appendLocalMessage("TTS is disabled by the host in this room.");
+            return;
+          }
           if (!args) {
             appendLocalMessage("Usage: /tts <text>");
             return;
@@ -194,6 +210,9 @@ export function useMeetChat({
     },
     [
       ghostEnabled,
+      isObserverMode,
+      isChatLocked,
+      isAdmin,
       appendLocalMessage,
       clearChat,
       sendChatInternal,
@@ -203,7 +222,8 @@ export function useMeetChat({
       onToggleCamera,
       onSetHandRaised,
       onLeaveRoom,
-    ]
+      isTtsDisabled,
+    ],
   );
 
   return {

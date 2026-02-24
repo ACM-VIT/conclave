@@ -2,6 +2,7 @@
 
 import { useCallback } from "react";
 import MeetsClient from "./meets-client";
+import type { JoinMode } from "./lib/types";
 
 const reactionAssets = [
   "aura.gif",
@@ -26,17 +27,32 @@ const isPublicClient = clientId === "public";
 type MeetsClientPageProps = {
   initialRoomId?: string;
   forceJoinOnly?: boolean;
+  bypassMediaPermissions?: boolean;
+  joinMode?: JoinMode;
+  autoJoinOnMount?: boolean;
+  hideJoinUI?: boolean;
   fontClassName?: string;
+  user?: {
+    id?: string;
+    email?: string | null;
+    name?: string | null;
+  };
+  isAdmin?: boolean;
 };
 
 export default function MeetsClientPage({
   initialRoomId,
   forceJoinOnly = false,
+  bypassMediaPermissions = false,
+  joinMode = "meeting",
+  autoJoinOnMount = false,
+  hideJoinUI = false,
   fontClassName,
+  user,
+  isAdmin = false,
 }: MeetsClientPageProps) {
-  const user = undefined;
-
-  const isAdmin = false;
+  const defaultUser = user;
+  const resolvedIsAdmin = isAdmin;
 
   const getJoinInfo = useCallback(
     async (
@@ -45,10 +61,12 @@ export default function MeetsClientPage({
       options?: {
         user?: { id?: string; email?: string | null; name?: string | null };
         isHost?: boolean;
+        joinMode?: JoinMode;
       }
     ) => {
-      const resolvedUser = options?.user ?? user;
+      const resolvedUser = options?.user ?? defaultUser;
       const isHost = Boolean(options?.isHost);
+      const resolvedJoinMode = options?.joinMode ?? joinMode;
       const response = await fetch("/api/sfu/join", {
         method: "POST",
         headers: {
@@ -60,7 +78,9 @@ export default function MeetsClientPage({
           sessionId,
           user: resolvedUser,
           isHost,
+          allowRoomCreation: forceJoinOnly,
           clientId,
+          joinMode: resolvedJoinMode,
         }),
       });
 
@@ -70,7 +90,7 @@ export default function MeetsClientPage({
 
       return response.json();
     },
-    [user]
+    [forceJoinOnly, joinMode, defaultUser]
   );
 
   const getRooms = useCallback(async () => {
@@ -85,10 +105,6 @@ export default function MeetsClientPage({
     return Array.isArray(data?.rooms) ? data.rooms : [];
   }, []);
 
-  const getRoomsForRedirect = useCallback(
-    async (_roomId: string) => getRooms(),
-    [getRooms]
-  );
 
   const resolvedInitialRoomId =
     initialRoomId ?? (isPublicClient ? "" : "default-room");
@@ -100,12 +116,15 @@ export default function MeetsClientPage({
         enableRoomRouting={isPublicClient}
         forceJoinOnly={forceJoinOnly}
         allowGhostMode={!isPublicClient}
+        bypassMediaPermissions={bypassMediaPermissions}
+        joinMode={joinMode}
+        autoJoinOnMount={autoJoinOnMount}
+        hideJoinUI={hideJoinUI}
         getJoinInfo={getJoinInfo}
         getRooms={getRooms}
-        getRoomsForRedirect={getRoomsForRedirect}
         reactionAssets={reactionAssets}
-        user={user}
-        isAdmin={isAdmin}
+        user={defaultUser}
+        isAdmin={resolvedIsAdmin}
         fontClassName={fontClassName}
       />
     </div>

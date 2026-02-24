@@ -1,19 +1,15 @@
-<div align="center">  
+<div align="center">
 
 ![Forktober GIF](https://raw.githubusercontent.com/ACM-VIT/.github/master/profile/acm_gif_banner.gif)
 
-<!-- Project Title -->
-<h2>conclave</h2>
+<h2>Conclave</h2>
 
-<p>Our in-house implementation for meetings</p>
+<p>Real-time meetings platform with web/mobile clients, SFU, and an apps SDK</p>
 
 <p>
   <a href="https://acmvit.in/" target="_blank">
     <img alt="made-by-acm" src="https://img.shields.io/badge/MADE%20BY-ACM%20VIT-orange?style=flat-square&logo=acm&link=acmvit.in" />
   </a>
-  <!-- Uncomment the below line to add the license badge. Make sure the right license badge is reflected. -->
-  <!-- <img alt="license" src="https://img.shields.io/badge/License-MIT-green.svg?style=for-the-badge" /> -->
-  <!-- Add forks/stars/tech stack badges from https://shields.io/ as needed -->
 </p>
 
 </div>
@@ -21,129 +17,154 @@
 ---
 
 ## Table of Contents
+
 - [About](#about)
+- [Monorepo Layout](#monorepo-layout)
 - [Quick Start](#quick-start)
-- [Usage](#usage)
+- [Mobile Development](#mobile-development)
+- [Apps SDK Docs](#apps-sdk-docs)
+- [Optional Services](#optional-services)
 - [Contributing](#contributing)
-- [Hacktoberfest](#hacktoberfest)
-- [Submitting a Pull Request](#submitting-a-pull-request)
-- [Guidelines for Pull Request](#guidelines-for-pull-request)
-- [Authors](#authors)
+- [Community & Conduct](#community--conduct)
 
 ---
 
 ## About
-Write a compelling overview about the project: the problem it solves, the motivation, and what makes it unique. Include a short roadmap or key features if helpful.
+
+Conclave is a real-time meetings platform with:
+
+- `apps/web`: Next.js web client and API routes
+- `apps/mobile`: Expo/React Native mobile client
+- `apps/conclave-skip`: Skip.dev project for native clients
+- `packages/sfu`: mediasoup SFU and real-time socket handlers
+- `packages/apps-sdk`: in-meeting apps runtime SDK (registry, provider, Yjs sync, awareness, uploads)
+- `packages/shared-browser`: optional VNC-based shared browser service
+
+---
+
+## Monorepo Layout
+
+```text
+apps/
+  web/
+  mobile/
+packages/
+  sfu/
+  apps-sdk/
+  shared-browser/
+scripts/
+```
+
+Prerequisites:
+
+- Node.js 20+
+- `pnpm` 9+
+- Docker (optional, for deploy scripts and shared browser runtime image)
 
 ---
 
 ## Quick Start
 
+1. Install dependencies:
+
 ```bash
-# 1) Fork and clone
-# Click Fork on GitHub, then:
- git clone https://github.com/<your-username>/<repo>.git
- cd <repo>
+pnpm install
+```
 
-# 2) Create a branch
- git checkout -b feat/your-feature
+2. Start SFU:
 
-# 3) Install dependencies
-# paste your install command(s) here
+```bash
+pnpm -C packages/sfu run dev
+```
 
-# 4) Run the project
-# paste your run command(s) here
+3. Start web in another terminal:
+
+```bash
+pnpm -C apps/web run dev
+```
+
+4. Open `http://localhost:3000`.
+
+Notes:
+
+- Web defaults to `http://localhost:3031` SFU if `SFU_URL`/`NEXT_PUBLIC_SFU_URL` is unset.
+- SFU has development defaults; production must set secrets and announced IPs.
+
+---
+
+## Mobile Development
+
+`apps/mobile` is intentionally excluded from workspace lockstep due to native tooling constraints.
+
+```bash
+pnpm -C apps/mobile install
+pnpm -C apps/mobile run start
+```
+
+Useful targets:
+
+```bash
+pnpm -C apps/mobile run ios
+pnpm -C apps/mobile run android
 ```
 
 ---
 
-## Usage
-Provide examples and code snippets showing how to use the project. Add screenshots or GIFs if applicable.
+## Apps SDK Docs
 
-```console
-# examples
-<your-cli> init
-<your-cli> run
+- package README: [`packages/apps-sdk/README.md`](./packages/apps-sdk/README.md)
+- docs home: [`packages/apps-sdk/docs/README.md`](./packages/apps-sdk/docs/README.md)
+- add app integration: [`packages/apps-sdk/docs/guides/add-a-new-app-integration.md`](./packages/apps-sdk/docs/guides/add-a-new-app-integration.md)
+- app cookbook: [`packages/apps-sdk/docs/guides/app-cookbook.md`](./packages/apps-sdk/docs/guides/app-cookbook.md)
+- troubleshooting: [`packages/apps-sdk/docs/guides/troubleshooting.md`](./packages/apps-sdk/docs/guides/troubleshooting.md)
+
+Contributor commands:
+
+```bash
+pnpm -C packages/apps-sdk run new:app polls
+pnpm -C packages/apps-sdk run check:apps
+pnpm -C packages/apps-sdk run check:apps:fix
+```
+
+---
+
+## Optional Services
+
+Run shared browser service locally:
+
+```bash
+pnpm -C packages/shared-browser run dev
+```
+
+Deploy SFU pair (Docker Compose):
+
+```bash
+./scripts/deploy-sfu.sh
+```
+
+Deploy shared browser service (Docker Compose):
+
+```bash
+./scripts/deploy-browser-service.sh
 ```
 
 ---
 
 ## Contributing
-We welcome contributions of all kinds! Please read our [Contributing Guidelines](contributing.md) to get started quickly and make your PRs count.
 
----
-
-## Hacktoberfest
-
-<p>
-  <a href="https://hacktoberfest.com/" target="_blank">
-<img alt="hactoberfest" src="https://img.shields.io/github/hacktoberfest/2025/tmrowco/tmrowapp-contrib?style=flat-square&logo=acm&labelColor=indigo&link=hacktoberfest.com"/>
-  </a>
-
-<!-- Badge Format 
-https://img.shields.io/github/hacktoberfest/:year/:user/:repo
--->
-
-Join us for Hacktoberfest! Quality > quantity.
-- Aim for meaningful, well‑scoped PR/MRs that solve real issues.
-- Non‑code contributions (docs, design, tutorials) are welcome via PR.
-- Full participation details: https://hacktoberfest.com/participation
-
----
-
-## Submitting a Pull Request
-
-1. Fork the repository (top‑right on GitHub)
-2. Clone your fork locally:
-   ```bash
-   git clone <HTTPS-ADDRESS>
-   cd <NAME-OF-REPO>
-   ```
-3. Create a new branch:
-   ```bash
-   git checkout -b <your-branch-name>
-   ```
-4. Make your changes and stage them:
-   ```bash
-   git add .
-   ```
-5. Commit your changes:
-   ```bash
-   git commit -m "feat: your message"
-   ```
-6. Push to your fork:
-   ```bash
-   git push origin <your-branch-name>
-   ```
-7. Open a Pull Request and clearly describe what you changed and why. Link related issues (e.g., “Fixes #123”).
-
-<!-- <img src="https://img.shields.io/github/:variant/:user/:repo?style=flat-square&labelColor=orange" alt="Open a Pull Request" /> -->
-
----
-
-## Guidelines for Pull Request
-- Avoid PRs that are automated/scripted or plagiarized from someone else’s work.
-- Don’t spam; keep each PR focused and meaningful.
-- The project maintainer’s decision on PR validity is final.
-- For more, see our [Contributing Guidelines](contributing.md) and the Hacktoberfest [participation rules](https://hacktoberfest.com/participation).
-
----
-
-## Authors
-
-**Authors:** <!-- [author1's name](link), [author2's name](link) -->  
-**Contributors:** <!-- Generate contributors list using https://contributors-img.web.app/preview -->
+Read [`CONTRIBUTING.md`](./CONTRIBUTING.md) before opening a PR.
 
 ---
 
 ## Community & Conduct
-By participating in this project, you agree to abide by our [Code of Conduct](CODE_OF_CONDUCT.md).
+
+By participating in this project, you agree to follow [`CODE_OF_CONDUCT.md`](./CODE_OF_CONDUCT.md).
 
 ---
 
 <div align="center">
-  
-🤍 Crafted with love by <a href="https://acmvit.in/" target="_blank">ACM‑VIT</a>
+
+🤍 Crafted with love by <a href="https://acmvit.in/" target="_blank">ACM-VIT</a>
 
 ![Footer GIF](https://raw.githubusercontent.com/ACM-VIT/.github/master/profile/domains.gif)
 

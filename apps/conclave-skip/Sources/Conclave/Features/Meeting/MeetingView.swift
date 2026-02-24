@@ -860,6 +860,7 @@ struct ChatOverlayView: View {
     @FocusState var isInputFocused: Bool
     
     var body: some View {
+        let isChatDisabled = viewModel.state.isChatLocked && !viewModel.state.isAdmin
         VStack(spacing: 0) {
             HStack {
                 Text("Chat")
@@ -906,7 +907,7 @@ struct ChatOverlayView: View {
             }
             
             HStack(spacing: 12) {
-                TextField("Type a message...", text: $messageText)
+                TextField(isChatDisabled ? "Chat locked by host" : "Type a message...", text: $messageText)
                     .textFieldStyle(.plain)
                     .font(ACMFont.trial(14))
                     .foregroundStyle(ACMColors.cream)
@@ -920,6 +921,7 @@ struct ChatOverlayView: View {
                     .onSubmit {
                         sendMessage()
                     }
+                    .disabled(isChatDisabled)
                 
                 Button {
                     sendMessage()
@@ -928,7 +930,7 @@ struct ChatOverlayView: View {
                         .font(.system(size: 28))
                         .foregroundStyle(messageText.isEmpty ? ACMColors.creamMuted : ACMColors.primaryOrange)
                 }
-                .disabled(messageText.isEmpty)
+                .disabled(messageText.isEmpty || isChatDisabled)
             }
             .padding()
             .acmColorBackground(Color(red: 0, green: 0, blue: 0, opacity: 0.8))
@@ -1161,6 +1163,14 @@ struct SettingsSheetView: View {
                             set: { next in
                                 if next != viewModel.state.isRoomLocked {
                                     viewModel.toggleRoomLock()
+                                }
+                            }
+                        ))
+                        Toggle("Lock chat", isOn: Binding(
+                            get: { viewModel.state.isChatLocked },
+                            set: { next in
+                                if next != viewModel.state.isChatLocked {
+                                    viewModel.toggleChatLock()
                                 }
                             }
                         ))

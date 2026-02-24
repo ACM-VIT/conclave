@@ -9,6 +9,33 @@ const containerManager = new ContainerManager();
 app.use(cors());
 app.use(express.json());
 
+app.use((req, res, next) => {
+    const expectedToken = defaultConfig.serviceToken;
+    if (!expectedToken) {
+        next();
+        return;
+    }
+
+    if (req.path === "/health" || req.path === "/health/") {
+        next();
+        return;
+    }
+
+    const tokenFromHeader = req.headers["x-browser-service-token"];
+    const headerToken = Array.isArray(tokenFromHeader) ? tokenFromHeader[0] : tokenFromHeader;
+    const authHeader = req.headers.authorization;
+    const bearerToken = authHeader?.startsWith("Bearer ")
+        ? authHeader.slice("Bearer ".length)
+        : undefined;
+
+    if (headerToken === expectedToken || bearerToken === expectedToken) {
+        next();
+        return;
+    }
+
+    res.status(401).json({ error: "Unauthorized" });
+});
+
 app.get("/health", (_req, res) => {
     res.json({ status: "ok", sessions: containerManager.getAllSessions().length });
 });

@@ -1,58 +1,70 @@
+import { createVideoEncodingHelpers } from "@conclave/meeting-core/video-encodings";
 import {
   LOW_VIDEO_MAX_BITRATE,
+  SCREEN_SHARE_MAX_BITRATE,
+  SCREEN_SHARE_MAX_FRAMERATE,
   STANDARD_VIDEO_MAX_BITRATE,
 } from "./constants";
-import type { VideoQuality } from "./types";
 
-const floorBitrate = (value: number, min: number) => Math.max(min, Math.floor(value));
-
-export function buildWebcamSimulcastEncodings(quality: VideoQuality) {
-  const maxBitrate =
-    quality === "low" ? LOW_VIDEO_MAX_BITRATE : STANDARD_VIDEO_MAX_BITRATE;
-
-  if (quality === "low") {
-    return [
-      {
-        rid: "q",
-        scaleResolutionDownBy: 2,
-        maxBitrate: floorBitrate(maxBitrate * 0.35, 90000),
-        maxFramerate: 15,
-      },
-      {
-        rid: "f",
-        scaleResolutionDownBy: 1,
-        maxBitrate,
-        maxFramerate: 24,
-      },
-    ];
-  }
-
-  return [
-    {
-      rid: "q",
-      scaleResolutionDownBy: 4,
-      maxBitrate: floorBitrate(maxBitrate * 0.15, 90000),
-      maxFramerate: 15,
+const {
+  buildWebcamSimulcastEncodings,
+  buildWebcamSingleLayerEncoding,
+  buildScreenShareEncoding,
+} = createVideoEncodingHelpers({
+  bitrates: {
+    maxBitrate: {
+      low: LOW_VIDEO_MAX_BITRATE,
+      standard: STANDARD_VIDEO_MAX_BITRATE,
     },
-    {
-      rid: "h",
-      scaleResolutionDownBy: 2,
-      maxBitrate: floorBitrate(maxBitrate * 0.45, 220000),
-      maxFramerate: 24,
+    screenShare: {
+      maxBitrate: SCREEN_SHARE_MAX_BITRATE,
+      maxFramerate: SCREEN_SHARE_MAX_FRAMERATE,
     },
-    {
-      rid: "f",
-      scaleResolutionDownBy: 1,
-      maxBitrate,
-      maxFramerate: 30,
+  },
+  profile: {
+    simulcast: {
+      low: [
+        {
+          rid: "q",
+          scaleResolutionDownBy: 2,
+          bitrateRatio: 0.35,
+          minBitrate: 90000,
+          maxFramerate: 15,
+        },
+        {
+          rid: "f",
+          scaleResolutionDownBy: 1,
+          bitrateRatio: 1,
+          minBitrate: 0,
+          maxFramerate: 24,
+        },
+      ],
+      standard: [
+        {
+          rid: "h",
+          scaleResolutionDownBy: 2,
+          bitrateRatio: 0.35,
+          minBitrate: 160000,
+          maxFramerate: 15,
+        },
+        {
+          rid: "f",
+          scaleResolutionDownBy: 1,
+          bitrateRatio: 1,
+          minBitrate: 0,
+          maxFramerate: 24,
+        },
+      ],
     },
-  ];
-}
+    singleLayerMaxFramerate: {
+      low: 20,
+      standard: 24,
+    },
+  },
+});
 
-export function buildWebcamSingleLayerEncoding(quality: VideoQuality) {
-  return {
-    maxBitrate:
-      quality === "low" ? LOW_VIDEO_MAX_BITRATE : STANDARD_VIDEO_MAX_BITRATE,
-    maxFramerate: quality === "low" ? 24 : 30,
-  };
-}
+export {
+  buildScreenShareEncoding,
+  buildWebcamSimulcastEncodings,
+  buildWebcamSingleLayerEncoding,
+};

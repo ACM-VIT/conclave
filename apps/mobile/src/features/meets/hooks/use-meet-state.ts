@@ -1,6 +1,11 @@
 import { useReducer, useState } from "react";
 import { participantReducer } from "../participant-reducer";
-import type { ConnectionState, MeetError, Participant } from "../types";
+import type {
+  ConnectionState,
+  MeetError,
+  Participant,
+  WebinarConfigSnapshot,
+} from "../types";
 
 interface UseMeetStateOptions {
   initialRoomId?: string;
@@ -33,6 +38,25 @@ export function useMeetState({ initialRoomId }: UseMeetStateOptions) {
   );
   const [isParticipantsOpen, setIsParticipantsOpen] = useState(false);
   const [isRoomLocked, setIsRoomLocked] = useState(false);
+  const [isNoGuests, setIsNoGuests] = useState(false);
+  const [isChatLocked, setIsChatLocked] = useState(false);
+  const [isTtsDisabled, setIsTtsDisabled] = useState(false);
+  const [hostUserId, setHostUserId] = useState<string | null>(null);
+  const [hostUserIds, setHostUserIds] = useState<string[]>([]);
+  const [meetingRequiresInviteCode, setMeetingRequiresInviteCode] =
+    useState(false);
+  const [webinarConfig, setWebinarConfig] =
+    useState<WebinarConfigSnapshot | null>(null);
+  const [webinarRole, setWebinarRole] = useState<
+    "attendee" | "participant" | "host" | null
+  >(null);
+  const [webinarLink, setWebinarLink] = useState<string | null>(null);
+  const [webinarSpeakerUserId, setWebinarSpeakerUserId] = useState<string | null>(
+    null
+  );
+  const [serverRestartNotice, setServerRestartNotice] = useState<string | null>(
+    null
+  );
 
   return {
     connectionState,
@@ -69,5 +93,27 @@ export function useMeetState({ initialRoomId }: UseMeetStateOptions) {
     setIsParticipantsOpen,
     isRoomLocked,
     setIsRoomLocked,
+    isNoGuests,
+    setIsNoGuests,
+    isChatLocked,
+    setIsChatLocked,
+    isTtsDisabled,
+    setIsTtsDisabled,
+    hostUserId,
+    setHostUserId,
+    hostUserIds,
+    setHostUserIds,
+    meetingRequiresInviteCode,
+    setMeetingRequiresInviteCode,
+    webinarConfig,
+    setWebinarConfig,
+    webinarRole,
+    setWebinarRole,
+    webinarLink,
+    setWebinarLink,
+    webinarSpeakerUserId,
+    setWebinarSpeakerUserId,
+    serverRestartNotice,
+    setServerRestartNotice,
   };
 }

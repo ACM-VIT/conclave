@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useSmartParticipantOrder } from "./useSmartParticipantOrder";
 import type { Participant } from "../lib/types";
 import { isSystemUserId } from "../lib/utils";
 
@@ -331,6 +332,21 @@ export function useMeetPopout({
   const isPopoutSupported =
     typeof window !== "undefined" && "documentPictureInPicture" in window;
 
+  const remoteParticipants = useSmartParticipantOrder(
+    Array.from(participants.entries())
+      .filter(([userId]) => userId !== currentUserId && !isSystemUserId(userId))
+      .map(([userId, participant]) => ({
+        userId,
+        displayName: getDisplayName(userId),
+        videoStream: participant.videoStream ?? null,
+        isCameraOff: participant.isCameraOff,
+        isMuted: participant.isMuted,
+        isLocal: false,
+        isActiveSpeaker: activeSpeakerId === userId,
+      })),
+    activeSpeakerId
+  );
+
   const getVisibleParticipants = useCallback(() => {
     const visible: Array<{
       userId: string;
@@ -352,18 +368,7 @@ export function useMeetPopout({
       isActiveSpeaker: activeSpeakerId === currentUserId,
     });
 
-    for (const [userId, participant] of participants) {
-      if (userId === currentUserId || isSystemUserId(userId)) continue;
-      visible.push({
-        userId,
-        displayName: getDisplayName(userId),
-        videoStream: participant.videoStream ?? null,
-        isCameraOff: participant.isCameraOff,
-        isMuted: participant.isMuted,
-        isLocal: false,
-        isActiveSpeaker: activeSpeakerId === userId,
-      });
-    }
+    visible.push(...remoteParticipants);
 
     return visible;
   }, [
@@ -372,8 +377,7 @@ export function useMeetPopout({
     isCameraOff,
     isMuted,
     activeSpeakerId,
-    participants,
-    getDisplayName,
+    remoteParticipants,
   ]);
 
   const updatePopoutContent = useCallback(() => {
@@ -458,9 +462,9 @@ export function useMeetPopout({
         avatar.style.display = "none";
         if (video.srcObject !== participant.videoStream) {
           video.srcObject = participant.videoStream;
-          video.play().catch(() => {});
           videoElementsRef.current.set(participant.userId, video);
         }
+        video.play().catch(() => {});
         if (participant.isLocal) {
           video.style.transform = "scaleX(-1)";
         }

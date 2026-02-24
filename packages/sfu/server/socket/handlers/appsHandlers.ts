@@ -156,6 +156,10 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
         respond(callback, { error: "Not in a room" });
         return;
       }
+      if (context.currentClient?.isObserver) {
+        respond(callback, { error: "Watch-only attendees cannot use shared apps" });
+        return;
+      }
 
       const appId = data?.appId?.trim();
       if (!appId) {
@@ -188,6 +192,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
 
   socket.on("apps:yjs:update", (data: AppsUpdateData) => {
     if (!context.currentRoom || !context.currentClient) return;
+    if (context.currentClient.isObserver) return;
 
     const appId = data?.appId?.trim();
     if (!appId) return;
@@ -216,6 +221,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
 
   socket.on("apps:awareness", (data: AppsAwarenessData) => {
     if (!context.currentRoom || !context.currentClient) return;
+    if (context.currentClient.isObserver) return;
 
     const appId = data?.appId?.trim();
     if (!appId) return;

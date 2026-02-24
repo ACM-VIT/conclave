@@ -70,6 +70,7 @@ const ROOM_WORD_MAX_LENGTH = ROOM_WORDS.reduce(
 const ROOM_WORD_SEPARATOR = "-";
 export const ROOM_CODE_MAX_LENGTH =
   ROOM_WORDS_PER_CODE * ROOM_WORD_MAX_LENGTH + (ROOM_WORDS_PER_CODE - 1);
+export const WEBINAR_LINK_CODE_MAX_LENGTH = 32;
 
 export function generateRoomCode(): string {
   const words: string[] = [];
@@ -101,6 +102,14 @@ export function sanitizeRoomCodeInput(value: string): string {
     .replace(/[^a-z]+/g, ROOM_WORD_SEPARATOR)
     .replace(/-+/g, ROOM_WORD_SEPARATOR)
     .replace(/^-+/g, "");
+}
+
+export function sanitizeWebinarLinkCode(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, "")
+    .slice(0, WEBINAR_LINK_CODE_MAX_LENGTH);
 }
 
 export function getRoomWordSuggestions(
@@ -177,6 +186,31 @@ export function generateSessionId(): string {
   return `${Date.now()}-${Math.random().toString(36).substring(2, 11)}`;
 }
 
+const SESSION_ID_STORAGE_KEY = "conclave:session-id";
+
+export function getOrCreateSessionId(): string {
+  if (typeof window === "undefined") {
+    return generateSessionId();
+  }
+
+  try {
+    if (process.env.NODE_ENV === "development") {
+      const override = new URL(window.location.href).searchParams.get("session");
+      if (override) {
+        return override;
+      }
+    }
+    const existing = window.sessionStorage.getItem(SESSION_ID_STORAGE_KEY);
+    if (existing) return existing;
+
+    const next = generateSessionId();
+    window.sessionStorage.setItem(SESSION_ID_STORAGE_KEY, next);
+    return next;
+  } catch {
+    return generateSessionId();
+  }
+}
+
 export function formatDisplayName(raw: string): string {
   const base = raw.split("#")[0] || raw;
   const handle = base.split("@")[0] || base;
@@ -188,6 +222,60 @@ export function formatDisplayName(raw: string): string {
     .map((word) => word[0]?.toUpperCase() + word.slice(1).toLowerCase());
 
   return words.length > 0 ? words.join(" ") : handle || raw;
+}
+
+const VIT_STUDENT_DOMAIN = "vitstudent.ac.in";
+const VIT_REGISTRATION_NUMBER_PATTERN = /\s+\d{2}[A-Za-z]{3}\d{3,4}[A-Za-z]?\s*$/;
+
+export function sanitizeInstitutionDisplayName(
+  name: string,
+  email?: string | null
+): string {
+  const normalizedEmail = email?.trim().toLowerCase();
+  if (!normalizedEmail || !normalizedEmail.endsWith(`@${VIT_STUDENT_DOMAIN}`)) {
+    return name;
+  }
+  const sanitized = name.replace(VIT_REGISTRATION_NUMBER_PATTERN, "").trim();
+  return sanitized || name.trim();
+}
+
+const CHAT_URL_PATTERN =
+  /((?:https?:\/\/|www\.)[^\s]+|(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}(?:\/[^\s]*)?)/gi;
+
+//fancy single pass regex linkeifer codex gave me
+// ts is actually agi holly fuck
+export function getChatMessageSegments(
+  content: string
+): Array<{ text: string; href?: string }> {
+  const segments: Array<{ text: string; href?: string }> = [];
+  let lastIndex = 0;
+
+  for (const match of content.matchAll(CHAT_URL_PATTERN)) {
+    const matched = match[0];
+    const index = match.index ?? -1;
+    if (index < 0) continue;
+
+    if (index > lastIndex) {
+      segments.push({ text: content.slice(lastIndex, index) });
+    }
+
+    const display = matched.replace(/[),.!?;:]+$/, "");
+    if (!display || display.includes("@")) {
+      segments.push({ text: matched });
+    } else {
+      const href = /^https?:\/\//i.test(display) ? display : `https://${display}`;
+      segments.push({ text: display, href });
+      const trailing = matched.slice(display.length);
+      if (trailing) segments.push({ text: trailing });
+    }
+    lastIndex = index + matched.length;
+  }
+
+  if (lastIndex < content.length) {
+    segments.push({ text: content.slice(lastIndex) });
+  }
+
+  return segments.length > 0 ? segments : [{ text: content }];
 }
 
 export function truncateDisplayName(value: string, maxLength = 16): string {
@@ -242,6 +330,24 @@ export function getSpeakerHighlightClasses(isActive: boolean): string {
   return isActive
     ? "border-emerald-300/90 ring-4 ring-emerald-400/45 shadow-[0_0_26px_rgba(16,185,129,0.28)]"
     : "";
+}
+
+export function prioritizeActiveSpeaker<T extends { userId: string }>(
+  participants: readonly T[],
+  activeSpeakerId: string | null
+): T[] {
+  if (!activeSpeakerId) return [...participants];
+  const activeIndex = participants.findIndex(
+    (participant) => participant.userId === activeSpeakerId
+  );
+  if (activeIndex <= 0) return [...participants];
+
+  const ordered = [...participants];
+  const [activeParticipant] = ordered.splice(activeIndex, 1);
+  if (activeParticipant) {
+    ordered.unshift(activeParticipant);
+  }
+  return ordered;
 }
 
 export function normalizeBrowserUrl(

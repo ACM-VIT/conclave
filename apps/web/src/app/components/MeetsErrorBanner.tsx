@@ -16,14 +16,18 @@ export default function MeetsErrorBanner({
   primaryActionLabel,
   onPrimaryAction,
 }: MeetsErrorBannerProps) {
+  const isGuestBlockedError =
+    meetError.message === "Guests are not allowed in this meeting.";
   const helperText =
-    meetError.code === "PERMISSION_DENIED"
+    isGuestBlockedError
+      ? "This room only allows signed-in users. Sign in with an account to join."
+      : meetError.code === "PERMISSION_DENIED"
       ? "Check browser permissions, then try again."
       : meetError.code === "MEDIA_ERROR"
       ? "Make sure your camera/mic are available."
       : null;
   return (
-    <div 
+    <div
       className="px-6 py-4 bg-[#F95F4A]/10 border-b border-[#F95F4A]/30 flex items-center justify-between backdrop-blur-sm"
       style={{ fontFamily: "'PolySans Trial', sans-serif" }}
     >

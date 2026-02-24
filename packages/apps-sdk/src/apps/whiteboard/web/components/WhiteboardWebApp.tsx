@@ -1,10 +1,10 @@
-import React, { useEffect, useMemo, useRef } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAppDoc } from "../../../../sdk/hooks/useAppDoc";
 import { useAppPresence } from "../../../../sdk/hooks/useAppPresence";
 import { useApps } from "../../../../sdk/hooks/useApps";
 import { useToolState } from "../../shared/hooks/useToolState";
 import { WhiteboardToolbar } from "./WhiteboardToolbar";
-import { WhiteboardCanvas } from "./WhiteboardCanvas";
+import { WhiteboardCanvas, type WhiteboardStressResult } from "./WhiteboardCanvas";
 import { useWhiteboardPages } from "../../shared/hooks/useWhiteboardPages";
 
 export function WhiteboardWebApp() {
@@ -21,22 +21,78 @@ export function WhiteboardWebApp() {
     deletePage,
   } = useWhiteboardPages(doc, { readOnly: isReadOnly });
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [stressToolsEnabled, setStressToolsEnabled] = useState(false);
+  const [stressTestRequestId, setStressTestRequestId] = useState<number | null>(null);
+  const [stressTestRunning, setStressTestRunning] = useState(false);
+  const [stressTestResult, setStressTestResult] = useState<WhiteboardStressResult | null>(null);
 
   const activePage = useMemo(() => {
     return pages.find((page) => page.id === activePageId) ?? pages[0];
   }, [pages, activePageId]);
 
   useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const mode = params.get("wbStress");
+    const enableViaQuery = Boolean(mode);
+    const enableInDev = process.env.NODE_ENV !== "production";
+    const shouldEnable =
+      enableViaQuery ||
+      (enableInDev && window.matchMedia("(min-width: 768px)").matches);
+    if (!shouldEnable) return;
+
+    setStressToolsEnabled(true);
+    if (mode === "run" && !isReadOnly) {
+      setStressTestRunning(true);
+      setStressTestRequestId((value) => (value ?? 0) + 1);
+    }
+  }, [isReadOnly]);
+
+  const triggerStressTest = useCallback(() => {
+    if (isReadOnly || stressTestRunning) return;
+    setStressTestRunning(true);
+    setStressTestResult(null);
+    setStressTestRequestId((value) => (value ?? 0) + 1);
+  }, [isReadOnly, stressTestRunning]);
+
+  const handleStressTestComplete = useCallback((result: WhiteboardStressResult) => {
+    setStressTestResult(result);
+    setStressTestRunning(false);
+  }, []);
+
+  useEffect(() => {
     const toolsByKey: Record<string, typeof tool> = {
-      v: "select",
-      p: "pen",
-      h: "highlighter",
-      e: "eraser",
-      r: "rect",
-      o: "ellipse",
-      l: "line",
-      t: "text",
-      n: "sticky",
+      "1": "select",
+      "2": "pen",
+      "3": "highlighter",
+      "4": "eraser",
+      "5": "rect",
+      "6": "ellipse",
+      "7": "line",
+      a: "arrow",
+      "8": "text",
+      "9": "sticky",
+    };
+    const toolsByCode: Record<string, typeof tool> = {
+      Digit1: "select",
+      Digit2: "pen",
+      Digit3: "highlighter",
+      Digit4: "eraser",
+      Digit5: "rect",
+      Digit6: "ellipse",
+      Digit7: "line",
+      KeyA: "arrow",
+      Digit8: "text",
+      Digit9: "sticky",
+      Numpad1: "select",
+      Numpad2: "pen",
+      Numpad3: "highlighter",
+      Numpad4: "eraser",
+      Numpad5: "rect",
+      Numpad6: "ellipse",
+      Numpad7: "line",
+      Numpad8: "text",
+      Numpad9: "sticky",
     };
 
     const widthSteps = [2, 3, 5, 8, 12];
@@ -47,8 +103,9 @@ export function WhiteboardWebApp() {
         return;
       }
 
-      const key = event.key.toLowerCase();
-      const mapped = toolsByKey[key];
+      const rawKey = event.key;
+      const key = rawKey.toLowerCase();
+      const mapped = toolsByCode[event.code] ?? toolsByKey[rawKey] ?? toolsByKey[key];
       if (mapped) {
         event.preventDefault();
         setTool(mapped);
@@ -73,9 +130,9 @@ export function WhiteboardWebApp() {
       }
     };
 
-    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keydown", onKeyDown, { capture: true });
     return () => {
-      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keydown", onKeyDown, { capture: true });
     };
   }, [setTool, setSettings, settings]);
 
@@ -92,17 +149,12 @@ export function WhiteboardWebApp() {
     return (
       <div className="w-full h-full flex items-center justify-center text-[#b8b8b8]">
         <div className="flex flex-col items-center gap-3">
-          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="animate-pulse">
-            <path d="M12 19l7-7 3 3-7 7-3-3z" />
-            <path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z" />
-          </svg>
           <span className="text-sm">Loading whiteboard…</span>
         </div>
       </div>
     );
   }
 
-  // Remote cursors: filter out self (local user) from awareness states
   const remoteCursors = states.filter(
     (state) =>
       state.cursor &&
@@ -115,7 +167,6 @@ export function WhiteboardWebApp() {
       className="w-full h-full relative overflow-hidden flex flex-col"
       style={{ backgroundColor: "#121212" }}
     >
-      {/* ── Canvas area ── */}
       <div className="flex-1 relative min-h-0">
         <div className="absolute inset-0">
           <WhiteboardCanvas
@@ -128,25 +179,15 @@ export function WhiteboardWebApp() {
             user={user}
             canvasRef={canvasRef}
             onToolChange={setTool}
+            stressTestRequestId={stressTestRequestId}
+            onStressTestComplete={handleStressTestComplete}
           />
         </div>
 
-        {/* ── Floating UI overlay ── */}
-        <div className="absolute inset-0 pointer-events-none p-3">
-          {/* Top bar */}
-          <div className="flex items-start justify-between gap-3 w-full">
-            {/* Left: status */}
-            <div className="pointer-events-auto flex items-center gap-2 shrink-0">
-              <div
-                className="flex items-center gap-2 rounded-lg px-3 py-2 text-[11px] text-[#b8b8b8]"
-                style={{
-                  backgroundColor: "#232329",
-                  boxShadow: "0 2px 8px rgba(0,0,0,0.3)",
-                }}
-              >
-                <span className="inline-flex h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                <span className="font-medium">{states.length} online</span>
-              </div>
+        <div className="absolute inset-0 pointer-events-none p-3 sm:p-4">
+          <div className="pointer-events-auto w-full rounded-2xl border border-white/5 bg-[#0b0b0f]/90 backdrop-blur-md px-2.5 py-2 shadow-[0_10px_24px_rgba(0,0,0,0.35)]">
+            <div className="flex w-full flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+              <div className="flex flex-wrap items-center gap-2 shrink-0">
               {locked ? (
                 <div
                   className="flex items-center gap-1.5 rounded-lg px-3 py-2 text-[11px] font-medium text-amber-300"
@@ -162,26 +203,62 @@ export function WhiteboardWebApp() {
                   Locked
                 </div>
               ) : null}
-            </div>
+              {stressToolsEnabled ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={triggerStressTest}
+                    disabled={isReadOnly || stressTestRunning}
+                    className="rounded-lg px-3 py-2 text-[11px] font-medium text-[#d8d8d8] transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer hover:text-white"
+                    style={{
+                      backgroundColor: "#2b2b33",
+                      boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.08)",
+                    }}
+                  >
+                    {stressTestRunning ? "Running stress..." : "Run stress test"}
+                  </button>
+                  {stressTestResult ? (
+                    <div
+                      className="rounded-lg px-3 py-2 text-[10px] text-[#b8b8b8] whitespace-nowrap"
+                      style={{
+                        backgroundColor: "#232329",
+                        boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.04)",
+                      }}
+                    >
+                      {`${Math.round(stressTestResult.durationMs)}ms · ${stressTestResult.strokeCount} strokes · ${stressTestResult.queuedMoveEvents} moves`}
+                    </div>
+                  ) : null}
+                </>
+              ) : null}
+              </div>
 
-            {/* Center: toolbar */}
-            <div className="pointer-events-auto flex justify-center flex-1 min-w-0">
-              <WhiteboardToolbar
-                tool={tool}
-                onToolChange={setTool}
-                settings={settings}
-                onSettingsChange={setSettings}
-                locked={isReadOnly}
-                onExport={handleExport}
-              />
-            </div>
+              <div className="order-2 w-full sm:order-none sm:flex sm:flex-1 sm:justify-center">
+                <div
+                  className="mx-auto max-w-full overflow-x-auto overflow-y-hidden"
+                  style={{
+                    WebkitOverflowScrolling: "touch",
+                    touchAction: "pan-x",
+                    overscrollBehaviorX: "contain",
+                  }}
+                >
+                  <div className="inline-flex min-w-max justify-center">
+                    <WhiteboardToolbar
+                      tool={tool}
+                      onToolChange={setTool}
+                      settings={settings}
+                      onSettingsChange={setSettings}
+                      locked={isReadOnly}
+                      onExport={handleExport}
+                    />
+                  </div>
+                </div>
+              </div>
 
-            {/* Right: spacer for balance */}
-            <div className="w-24 shrink-0" />
+              <div className="hidden sm:block w-24 shrink-0" />
+            </div>
           </div>
         </div>
 
-        {/* ── Remote cursors ── */}
         {remoteCursors.map((state) => (
           <div
             key={state.clientId}
@@ -215,10 +292,15 @@ export function WhiteboardWebApp() {
         ))}
       </div>
 
-      {/* ── Bottom page bar ── */}
       <div
-        className="flex items-center gap-1 px-3 py-1.5 border-t border-white/5 shrink-0"
-        style={{ backgroundColor: "#1a1a1f" }}
+        className="flex items-center gap-1 px-3 py-1.5 border-t border-white/5 shrink-0 overflow-x-auto overflow-y-hidden"
+        style={{
+          backgroundColor: "#1a1a1f",
+          paddingBottom: "calc(6px + env(safe-area-inset-bottom))",
+          WebkitOverflowScrolling: "touch",
+          touchAction: "pan-x",
+          overscrollBehaviorX: "contain",
+        }}
       >
         {pages.map((page) => (
           <button
@@ -226,7 +308,7 @@ export function WhiteboardWebApp() {
             type="button"
             onClick={() => setActive(page.id)}
             className={`
-              px-3 py-1 rounded text-[11px] font-medium transition-all duration-100 cursor-pointer
+              px-3 py-1.5 rounded text-[11px] font-medium transition-all duration-100 cursor-pointer
               ${
                 page.id === activePage.id
                   ? "bg-[#2e2d39] text-[#e0dfff] shadow-[inset_0_0_0_1px_rgba(169,165,255,0.3)]"

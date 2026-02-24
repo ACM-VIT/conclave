@@ -43,6 +43,38 @@ const ensureMetaMap = (root: Y.Map<unknown>): MetaMap => {
   return meta;
 };
 
+const normalizePageOrder = (doc: Y.Doc): string[] => {
+  const pages = getPagesMap(doc);
+  const order = getPageOrder(doc);
+  const rawOrder = order.toArray();
+  const seen = new Set<string>();
+  const indexesToDelete: number[] = [];
+  const normalizedOrder: string[] = [];
+
+  for (let index = 0; index < rawOrder.length; index += 1) {
+    const pageId = rawOrder[index];
+    if (!pages.has(pageId) || seen.has(pageId)) {
+      indexesToDelete.push(index);
+      continue;
+    }
+    seen.add(pageId);
+    normalizedOrder.push(pageId);
+  }
+
+  for (let index = indexesToDelete.length - 1; index >= 0; index -= 1) {
+    order.delete(indexesToDelete[index], 1);
+  }
+
+  pages.forEach((_page, pageId) => {
+    if (seen.has(pageId)) return;
+    order.push([pageId]);
+    seen.add(pageId);
+    normalizedOrder.push(pageId);
+  });
+
+  return normalizedOrder;
+};
+
 const ensureRoot = (doc: Y.Doc): Y.Map<unknown> => {
   const root = doc.getMap<unknown>(ROOT_KEY);
   ensurePagesMap(root);
@@ -68,18 +100,19 @@ export const createWhiteboardDoc = (): Y.Doc => {
 };
 
 export const ensureDefaultPage = (doc: Y.Doc) => {
-  ensureRoot(doc);
-  const pages = getPagesMap(doc);
-  const order = getPageOrder(doc);
-  if (!pages.has(DEFAULT_PAGE_ID)) {
-    addPage(doc, { id: DEFAULT_PAGE_ID, name: DEFAULT_PAGE_NAME });
-  } else if (!order.toArray().includes(DEFAULT_PAGE_ID)) {
-    order.push([DEFAULT_PAGE_ID]);
-  }
-  const active = getActivePageId(doc);
-  if (!active || !pages.has(active)) {
-    setActivePageId(doc, DEFAULT_PAGE_ID);
-  }
+  doc.transact(() => {
+    ensureRoot(doc);
+    const pages = getPagesMap(doc);
+    if (!pages.has(DEFAULT_PAGE_ID)) {
+      addPage(doc, { id: DEFAULT_PAGE_ID, name: DEFAULT_PAGE_NAME });
+    }
+
+    const orderedPages = normalizePageOrder(doc);
+    const active = getActivePageId(doc);
+    if (!active || !pages.has(active)) {
+      setActivePageId(doc, orderedPages[0] ?? DEFAULT_PAGE_ID);
+    }
+  });
 };
 
 export const getPagesMap = (doc: Y.Doc): PagesMap => {
@@ -105,13 +138,18 @@ export const getActivePageId = (doc: Y.Doc): string | null => {
 
 export const setActivePageId = (doc: Y.Doc, pageId: string) => {
   const pages = getPagesMap(doc);
+  const meta = getMetaMap(doc);
   if (!pages.has(pageId)) {
-    const firstPage = getPageOrder(doc).toArray()[0];
+    const firstPage = normalizePageOrder(doc)[0];
     if (!firstPage) return;
-    getMetaMap(doc).set("activePageId", firstPage);
+    if (meta.get("activePageId") === firstPage) return;
+    meta.set("activePageId", firstPage);
     return;
   }
-  const meta = getMetaMap(doc);
+
+  if (meta.get("activePageId") === pageId) {
+    return;
+  }
   meta.set("activePageId", pageId);
 };
 
@@ -147,7 +185,9 @@ export const addPage = (doc: Y.Doc, page: { id: string; name: string }) => {
   pageMap.set("elements", new Y.Array<WhiteboardElement>());
   pages.set(page.id, pageMap);
   const order = getPageOrder(doc);
-  order.push([page.id]);
+  if (!order.toArray().includes(page.id)) {
+    order.push([page.id]);
+  }
 };
 
 export const removePage = (doc: Y.Doc, pageId: string) => {
@@ -160,14 +200,16 @@ export const removePage = (doc: Y.Doc, pageId: string) => {
   }
 
   pages.delete(pageId);
-  const index = order.toArray().indexOf(pageId);
-  if (index >= 0) {
-    order.delete(index, 1);
+  const orderedPages = order.toArray();
+  for (let index = orderedPages.length - 1; index >= 0; index -= 1) {
+    if (orderedPages[index] === pageId) {
+      order.delete(index, 1);
+    }
   }
 
   const active = getActivePageId(doc);
   if (active === pageId) {
-    const next = order.toArray()[0] ?? null;
+    const next = normalizePageOrder(doc)[0] ?? null;
     if (next) {
       setActivePageId(doc, next);
     }

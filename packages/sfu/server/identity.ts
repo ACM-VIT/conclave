@@ -3,6 +3,11 @@ export const normalizeDisplayName = (value?: string): string => {
   return value.trim().replace(/\s+/g, " ");
 };
 
+export const isGuestUserKey = (userKey?: string | null): boolean => {
+  if (!userKey) return false;
+  return userKey.startsWith("guest-");
+};
+
 export const buildUserIdentity = (
   user: { email?: string; userId?: string; name?: string; sessionId?: string },
   sessionId: string | undefined,
