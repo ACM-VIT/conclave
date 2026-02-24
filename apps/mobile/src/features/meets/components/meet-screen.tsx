@@ -46,7 +46,13 @@ import { useMeetState } from "../hooks/use-meet-state";
 import { useMeetTts } from "../hooks/use-meet-tts";
 import { useDeviceLayout } from "../hooks/use-device-layout";
 import type { JoinMode, Participant } from "../types";
-import { createMeetError, isSystemUserId } from "../utils";
+import {
+  createMeetError,
+  isSystemUserId,
+  parseJoinInput,
+  sanitizeRoomCodeInput,
+  ROOM_CODE_MAX_LENGTH,
+} from "../utils";
 import { getCachedUser, hydrateCachedUser, setCachedUser } from "../auth-session";
 import { CallScreen } from "./call-screen";
 import { ChatPanel } from "./chat-panel";
@@ -115,6 +121,21 @@ export function MeetScreen({
       }),
     []
   );
+  const initialJoinTarget = useMemo(() => {
+    if (joinMode === "webinar_attendee") {
+      return {
+        roomId: (initialRoomId ?? "").trim(),
+        joinMode,
+        webinarToken: webinarSignedToken ?? null,
+      };
+    }
+    return parseJoinInput(initialRoomId ?? "");
+  }, [initialRoomId, joinMode, webinarSignedToken]);
+  const prefillRoomId =
+    joinMode === "webinar_attendee" ||
+    initialJoinTarget.joinMode === "webinar_attendee"
+      ? ""
+      : initialJoinTarget.roomId;
   const [isAppActive, setIsAppActive] = useState(AppState.currentState === "active");
   const isAppActiveRef = useRef(AppState.currentState === "active");
   const wasCameraOnBeforeBackgroundRef = useRef(false);
@@ -175,12 +196,21 @@ export function MeetScreen({
     setWebinarSpeakerUserId,
     serverRestartNotice,
     setServerRestartNotice,
-  } = useMeetState({ initialRoomId });
+  } = useMeetState({ initialRoomId: initialJoinTarget.roomId });
   const isWebinarAttendee =
     joinMode === "webinar_attendee" || webinarRole === "attendee";
   const isWebinarSession = isWebinarAttendee || Boolean(webinarConfig?.enabled);
   const effectiveGhostMode = isGhostMode || isWebinarAttendee;
   const [isScreenSharePending, setIsScreenSharePending] = useState(false);
+
+  useEffect(() => {
+    if (joinMode === "webinar_attendee") return;
+    if (initialJoinTarget.joinMode !== "webinar_attendee") return;
+    if (!initialJoinTarget.roomId) return;
+    const token = initialJoinTarget.webinarToken;
+    const query = token ? `?wt=${encodeURIComponent(token)}` : "";
+    router.replace(`/w/${encodeURIComponent(initialJoinTarget.roomId)}${query}`);
+  }, [initialJoinTarget, joinMode, router]);
 
   useEffect(() => {
     registerApps([whiteboardApp]);
@@ -217,6 +247,9 @@ export function MeetScreen({
     { id?: string; email?: string | null; name?: string | null } | null
   >(cachedUser ?? guestIdentity);
   const [authHydrated, setAuthHydrated] = useState(false);
+  const sessionUserRef = useRef<
+    { id?: string; email?: string | null; name?: string | null } | null
+  >(cachedUser ?? guestIdentity);
 
   useEffect(() => {
     let isMounted = true;
@@ -242,6 +275,11 @@ export function MeetScreen({
       setCurrentUser(guestIdentity);
     }
   }, [authHydrated, currentUser, guestIdentity]);
+  const isSessionLocked = connectionState !== "disconnected";
+  useEffect(() => {
+    if (isSessionLocked) return;
+    sessionUserRef.current = currentUser ?? guestIdentity;
+  }, [currentUser, guestIdentity, isSessionLocked]);
   const handleUserChange = useCallback(
     (nextUser: { id?: string; email?: string | null; name?: string | null } | null) => {
       setCurrentUser(nextUser);
@@ -253,7 +291,9 @@ export function MeetScreen({
     },
     []
   );
-  const user = currentUser ?? guestIdentity;
+  const user = isSessionLocked
+    ? sessionUserRef.current ?? guestIdentity
+    : currentUser ?? guestIdentity;
   const [isAdmin, setIsAdmin] = useState(false);
   const [hasActiveCall, setHasActiveCall] = useState(false);
   const [isDisplayNameSheetOpen, setIsDisplayNameSheetOpen] = useState(false);
@@ -1028,9 +1068,86 @@ export function MeetScreen({
     }
   }, [requestMediaPermissions, setMeetError]);
 
-  const handleJoin = useCallback(
+  const pendingJoinRef = useRef<{
+    roomId: string;
+    options?: { isHost?: boolean };
+  } | null>(null);
+  const pendingJoinTargetRef = useRef<{
+    roomId: string;
+    joinMode: JoinMode;
+    webinarToken?: string | null;
+  } | null>(null);
+
+  const handleRoomInputChange = useCallback(
+    (value: string) => {
+      if (joinMode === "webinar_attendee") {
+        setRoomId(value.trim());
+        return;
+      }
+
+      const trimmed = value.trim();
+      if (!trimmed) {
+        setRoomId("");
+        pendingJoinTargetRef.current = null;
+        return;
+      }
+
+      const looksLikeLink =
+        value.includes("/") ||
+        value.includes("://") ||
+        value.includes("conclave.acmvit.in");
+
+      if (looksLikeLink) {
+        const parsed = parseJoinInput(value);
+        setRoomId(parsed.roomId);
+        pendingJoinTargetRef.current =
+          parsed.joinMode === "webinar_attendee" && parsed.roomId
+            ? parsed
+            : null;
+        return;
+      }
+
+      setRoomId(
+        sanitizeRoomCodeInput(value).slice(0, ROOM_CODE_MAX_LENGTH)
+      );
+      pendingJoinTargetRef.current = null;
+    },
+    [joinMode, setRoomId]
+  );
+
+  const resolveJoinTarget = useCallback(
+    (value: string) => {
+      if (joinMode === "webinar_attendee") {
+        return {
+          roomId: value.trim(),
+          joinMode,
+          webinarToken: webinarSignedToken ?? null,
+        };
+      }
+
+      const trimmed = value.trim();
+      if (!trimmed) {
+        return { roomId: "", joinMode: "meeting" as JoinMode };
+      }
+
+      const pending = pendingJoinTargetRef.current;
+      if (
+        pending &&
+        pending.joinMode === "webinar_attendee" &&
+        pending.roomId === trimmed
+      ) {
+        return pending;
+      }
+
+      return parseJoinInput(trimmed);
+    },
+    [joinMode, webinarSignedToken]
+  );
+
+  const performJoin = useCallback(
     async (value: string, options?: { isHost?: boolean }) => {
       if (!value.trim()) return;
+      sessionUserRef.current = currentUser ?? guestIdentity;
       if (!apiBaseUrl) {
         setMeetError(
           createMeetError("Missing EXPO_PUBLIC_SFU_BASE_URL for mobile")
@@ -1065,8 +1182,59 @@ export function MeetScreen({
       setIsAdmin(resolvedIsHost);
       socket.joinRoomById(normalizedRoomId, { isHost: resolvedIsHost });
     },
-    [confirmMeetingHandoff, hideJoinUI, joinMode, socket, setMeetError, setIsAdmin]
+    [
+      confirmMeetingHandoff,
+      currentUser,
+      guestIdentity,
+      hideJoinUI,
+      joinMode,
+      setIsAdmin,
+      setMeetError,
+      socket,
+    ]
   );
+
+  const handleJoin = useCallback(
+    async (value: string, options?: { isHost?: boolean }) => {
+      const resolved = resolveJoinTarget(value);
+      if (!resolved.roomId) return;
+
+      if (
+        joinMode !== "webinar_attendee" &&
+        resolved.joinMode === "webinar_attendee"
+      ) {
+        const token = resolved.webinarToken;
+        const query = token ? `?wt=${encodeURIComponent(token)}` : "";
+        pendingJoinTargetRef.current = null;
+        router.replace(`/w/${encodeURIComponent(resolved.roomId)}${query}`);
+        return;
+      }
+
+      if (!authHydrated) {
+        pendingJoinRef.current = { roomId: resolved.roomId, options };
+        setRoomId(resolved.roomId);
+        return;
+      }
+
+      await performJoin(resolved.roomId, options);
+    },
+    [
+      authHydrated,
+      joinMode,
+      performJoin,
+      resolveJoinTarget,
+      router,
+      setRoomId,
+    ]
+  );
+
+  useEffect(() => {
+    if (!authHydrated) return;
+    const pending = pendingJoinRef.current;
+    if (!pending) return;
+    pendingJoinRef.current = null;
+    void performJoin(pending.roomId, pending.options);
+  }, [authHydrated, performJoin]);
 
   const [isReactionSheetOpen, setIsReactionSheetOpen] = useState(false);
   const [isSettingsSheetOpen, setIsSettingsSheetOpen] = useState(false);
@@ -1149,10 +1317,24 @@ export function MeetScreen({
   ]);
 
   useEffect(() => {
-    if (initialRoomId && !roomId) {
-      setRoomId(initialRoomId);
+    if (roomId) return;
+
+    if (joinMode === "webinar_attendee") {
+      const resolved = (initialRoomId ?? "").trim();
+      if (resolved) {
+        setRoomId(resolved);
+      }
+      return;
     }
-  }, [initialRoomId, roomId, setRoomId]);
+
+    if (initialJoinTarget.joinMode === "webinar_attendee") {
+      return;
+    }
+
+    if (initialJoinTarget.roomId) {
+      setRoomId(initialJoinTarget.roomId);
+    }
+  }, [initialJoinTarget, initialRoomId, joinMode, roomId, setRoomId]);
 
   useEffect(() => {
     if (!autoJoinOnMount || hasAutoJoinedRef.current) return;
@@ -1427,10 +1609,11 @@ export function MeetScreen({
         ) : (
           <JoinScreen
             roomId={roomId}
-            onRoomIdChange={setRoomId}
+            prefillRoomId={prefillRoomId}
+            onRoomIdChange={handleRoomInputChange}
             onJoinRoom={handleJoin}
             onIsAdminChange={setIsAdmin}
-            user={currentUser}
+            user={user}
             onUserChange={handleUserChange}
             isLoading={isLoading}
             displayNameInput={displayNameInput}
