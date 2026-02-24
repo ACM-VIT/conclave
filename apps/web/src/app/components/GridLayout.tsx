@@ -336,7 +336,7 @@ function GridLayout({
             {isMuted && <MicOff className="w-3 h-3 text-[#F95F4A]" />}
           </div>
           {isSolo ? (
-            <div className="absolute bottom-3 right-3 w-[280px] rounded-xl border border-[#FEFCD9]/10 bg-black/70 backdrop-blur-sm px-4 py-3 text-[#FEFCD9]">
+            <div className="absolute top-3 left-3 w-[280px] rounded-xl border border-[#FEFCD9]/10 bg-black/70 backdrop-blur-sm px-4 py-3 text-[#FEFCD9]">
               <p
                 className="text-sm font-semibold"
                 style={{ fontFamily: "'PolySans Trial', sans-serif" }}
