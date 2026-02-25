@@ -15,6 +15,16 @@ const FFMPEG_BIN = process.env.FFMPEG_PATH || "ffmpeg";
 const FFMPEG_FORCE_KILL_TIMEOUT_MS = Number(
   process.env.FFMPEG_FORCE_KILL_TIMEOUT_MS || 2000,
 );
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+const normalizeSpeakerLabel = (value?: string): string => {
+  const next = (value || "").trim().replace(/\s+/g, " ");
+  if (!next) return "";
+  if (/^unknown$/i.test(next)) return "";
+  if (UUID_PATTERN.test(next)) return "";
+  return next.length > 48 ? next.slice(0, 48) : next;
+};
 
 type VoskWord = { start?: number; end?: number };
 type VoskMessage = {
@@ -122,6 +132,7 @@ class RoomTranscriber {
   private transcript: TranscriptChunk[] = [];
   private lastPartialText = "";
   private sessionStartedAtMs = Date.now();
+  private speakerLabel = "Speaker";
   private stopSubscriptions: Array<() => void> = [];
   private ffmpegForceKillTimer?: ReturnType<typeof setTimeout>;
   private stopped = true;
@@ -142,7 +153,11 @@ class RoomTranscriber {
 
   async start(
     producer: Producer,
-    opts: { sttUrl: string; sttHeaders?: Record<string, string> },
+    opts: {
+      sttUrl: string;
+      sttHeaders?: Record<string, string>;
+      speakerLabel?: string;
+    },
   ): Promise<void> {
     if (!opts.sttUrl) {
       Logger.warn("STT_WS_URL not set; transcriber not started");
@@ -155,6 +170,10 @@ class RoomTranscriber {
 
     this.stopped = false;
     this.producerId = producer.id;
+    this.speakerLabel =
+      normalizeSpeakerLabel(opts.speakerLabel) ||
+      normalizeSpeakerLabel(producer.id) ||
+      "Speaker";
     this.sessionStartedAtMs = Date.now();
     this.forwardedAudioBytes = 0;
     this.sttMessageCount = 0;
@@ -203,7 +222,7 @@ class RoomTranscriber {
       );
 
       Logger.info(
-        `Transcriber starting: producer=${producer.id} stt=${opts.sttUrl} ffmpeg=${FFMPEG_BIN} rtpPort=${rtpPort}`,
+        `Transcriber starting: producer=${producer.id} speaker=${this.speakerLabel} stt=${opts.sttUrl} ffmpeg=${FFMPEG_BIN} rtpPort=${rtpPort}`,
       );
 
       this.ffmpegOnError = (err) => {
@@ -310,7 +329,7 @@ class RoomTranscriber {
           startMs,
           endMs,
           text: finalText,
-          speaker: msg.speaker || msg.channel || producerId,
+          speaker: this.resolveSpeakerLabel(msg, producerId),
         });
         this.lastPartialText = "";
         return;
@@ -323,6 +342,16 @@ class RoomTranscriber {
     } catch (err) {
       Logger.warn("STT parse error", err);
     }
+  }
+
+  private resolveSpeakerLabel(msg: VoskMessage, producerId: string): string {
+    const fromMessage = normalizeSpeakerLabel(msg.speaker || msg.channel);
+    if (fromMessage) return fromMessage;
+    return (
+      this.speakerLabel ||
+      normalizeSpeakerLabel(producerId) ||
+      "Speaker"
+    );
   }
 
   private extractFinalText(msg: VoskMessage): string {
@@ -441,7 +470,7 @@ class RoomTranscriber {
         startMs: now,
         endMs: now,
         text: this.lastPartialText,
-        speaker: this.producerId || "unknown",
+        speaker: this.speakerLabel || "Speaker",
       });
       this.lastPartialText = "";
     }

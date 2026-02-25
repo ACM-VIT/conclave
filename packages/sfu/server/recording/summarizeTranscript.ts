@@ -47,11 +47,7 @@ const STOPWORDS = new Set([
 const ACTION_TERMS = /\b(action|owner|deadline|due|follow[- ]?up|next step|todo|decide|decision|approve|ship|deliver)\b/i;
 
 const buildPrompt = (chunks: TranscriptChunk[]): string => {
-  const lines = chunks.map((c) => {
-    const start = new Date(c.startMs).toISOString();
-    const speaker = c.speaker || "unknown";
-    return `[${start}] ${speaker}: ${c.text}`;
-  });
+  const lines = chunks.map((c) => c.text.trim()).filter(Boolean);
   const text = lines.join("\n");
   return text.length > MAX_TEXT_LENGTH
     ? text.slice(0, MAX_TEXT_LENGTH)
@@ -59,12 +55,15 @@ const buildPrompt = (chunks: TranscriptChunk[]): string => {
 };
 
 const tokenize = (text: string): string[] =>
-  (text.toLowerCase().match(/[a-z][a-z'-]{2,}/g) || []).filter(
+  (text.toLowerCase().match(/[a-z]{3,}/g) || []).filter(
     (token) => !STOPWORDS.has(token),
   );
 
 const stripMetadata = (sentence: string): string =>
-  sentence.replace(/\[[^\]]+\]\s*/g, "").replace(/^\w+:\s*/, "").trim();
+  sentence
+    .replace(/\[[^\]]+\]\s*/g, "")
+    .replace(/^[A-Za-z0-9._@#-]{2,64}:\s*/, "")
+    .trim();
 
 const localFallbackSummary = (text: string): string => {
   const normalized = text.replace(/\s+/g, " ").trim();

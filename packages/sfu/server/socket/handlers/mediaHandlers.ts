@@ -53,6 +53,9 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
 
         if (kind === "audio" && type === "webcam") {
           const channelId = context.currentRoom.channelId;
+          const speakerLabel =
+            context.currentRoom.getDisplayNameForUser(context.currentClient.id) ||
+            context.currentClient.id;
           const transcriber = ensureRoomTranscriber(
             channelId,
             context.currentRoom.router,
@@ -71,6 +74,7 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
             sttHeaders: process.env.STT_API_KEY
               ? { Authorization: `Bearer ${process.env.STT_API_KEY}` }
               : undefined,
+            speakerLabel,
           });
         }
 
