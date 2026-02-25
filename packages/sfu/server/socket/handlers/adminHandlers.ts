@@ -42,7 +42,7 @@ export const registerAdminHandlers = (
             producerUserId: client.id,
           });
         }
-        emitWebinarFeedChanged(context.io, context.currentRoom);
+        emitWebinarFeedChanged(context.io, state, context.currentRoom);
         respond(cb, { success: true });
         return;
       }
@@ -76,7 +76,7 @@ export const registerAdminHandlers = (
         }
       }
     }
-    emitWebinarFeedChanged(context.io, context.currentRoom);
+    emitWebinarFeedChanged(context.io, state, context.currentRoom);
     respond(cb, { success: true, count });
   });
 
@@ -106,7 +106,7 @@ export const registerAdminHandlers = (
         }
       }
     }
-    emitWebinarFeedChanged(context.io, context.currentRoom);
+    emitWebinarFeedChanged(context.io, state, context.currentRoom);
     respond(cb, { success: true, count });
   });
 

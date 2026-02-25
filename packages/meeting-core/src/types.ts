@@ -160,7 +160,6 @@ export interface MeetingUpdateRequest {
 export interface WebinarLinkResponse {
   slug?: string;
   link: string;
-  signedToken?: string;
   publicAccess: boolean;
   linkVersion: number;
 }

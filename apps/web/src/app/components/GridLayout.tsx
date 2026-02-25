@@ -365,24 +365,18 @@ function GridLayout({
             {isMuted && <MicOff className="w-3 h-3 text-[#F95F4A]" />}
           </div>
           {isSolo ? (
-            <div className="absolute top-3 left-3 w-[280px] rounded-xl border border-[#FEFCD9]/10 bg-black/70 backdrop-blur-sm px-4 py-3 text-[#FEFCD9]">
-              <p
-                className="text-sm font-semibold"
-                style={{ fontFamily: "'PolySans Trial', sans-serif" }}
-              >
+            <div className="absolute top-3 left-3 w-[304px] rounded-xl border border-[#FEFCD9]/10 bg-black/60 px-4 py-3 text-[#FEFCD9] shadow-[0_10px_28px_rgba(0,0,0,0.35)] backdrop-blur-sm">
+              <p className="text-[15px] font-semibold leading-tight">
                 You are the only person here
               </p>
-              <p
-                className="mt-1 text-xs text-[#FEFCD9]/60"
-                style={{ fontFamily: "'PolySans Trial', sans-serif" }}
-              >
+              <p className="mt-1 text-xs text-[#FEFCD9]/60">
                 Invite people to join this room.
               </p>
               <div className="mt-3 flex gap-2">
                 <button
                   type="button"
                   onClick={handleInvite}
-                  className="flex-1 rounded-lg border border-[#FEFCD9]/10 bg-[#1a1a1a] px-3 py-2 text-xs font-medium text-[#FEFCD9] transition-all hover:border-[#FEFCD9]/25 hover:bg-[#1a1a1a]/80"
+                  className="flex-1 rounded-lg border border-[#FEFCD9]/18 bg-white/[0.05] px-3 py-2 text-xs font-medium text-[#FEFCD9] transition-colors hover:bg-white/[0.09] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#FEFCD9]/20"
                 >
                   {inviteStatus === "shared"
                     ? "Invite sent"
@@ -393,7 +387,7 @@ function GridLayout({
                 <button
                   type="button"
                   onClick={handleCopyLink}
-                  className="flex-1 rounded-lg border border-[#FEFCD9]/10 bg-black/40 px-3 py-2 text-xs font-medium text-[#FEFCD9]/85 transition-all hover:border-[#FEFCD9]/25 hover:text-[#FEFCD9]"
+                  className="flex-1 rounded-lg border border-[#FEFCD9]/14 bg-transparent px-3 py-2 text-xs font-medium text-[#FEFCD9]/85 transition-colors hover:bg-white/[0.04] hover:text-[#FEFCD9] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#FEFCD9]/20"
                 >
                   {copyStatus === "copied" ? "Link copied" : "Copy link"}
                 </button>

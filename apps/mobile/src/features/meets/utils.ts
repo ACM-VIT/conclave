@@ -147,14 +147,12 @@ export function extractRoomCode(input: string): string {
 }
 
 const buildJoinTarget = (
-  segments: string[],
-  searchParams?: URLSearchParams | null
-): { roomId: string; joinMode: JoinMode; webinarToken?: string | null } => {
+  segments: string[]
+): { roomId: string; joinMode: JoinMode } => {
   if (segments.length >= 2 && segments[0]?.toLowerCase() === "w") {
     return {
       roomId: sanitizeWebinarLinkCode(segments[1] ?? ""),
       joinMode: "webinar_attendee",
-      webinarToken: searchParams?.get("wt") ?? null,
     };
   }
 
@@ -167,7 +165,7 @@ const buildJoinTarget = (
 
 export function parseJoinInput(
   input: string
-): { roomId: string; joinMode: JoinMode; webinarToken?: string | null } {
+): { roomId: string; joinMode: JoinMode } {
   const trimmed = input.trim();
   if (!trimmed) {
     return { roomId: "", joinMode: "meeting" };
@@ -183,20 +181,17 @@ export function parseJoinInput(
     const url = new URL(normalizedInput);
     const segments = url.pathname.split("/").filter(Boolean);
     if (segments.length > 0) {
-      return buildJoinTarget(segments, url.searchParams);
+      return buildJoinTarget(segments);
     }
   } catch {
     // Fall through to non-URL parsing.
   }
 
   if (trimmed.includes("/")) {
-    const [path, query] = trimmed.split("?");
+    const [path] = trimmed.split("?");
     const segments = path.split("/").filter(Boolean);
     if (segments.length > 0) {
-      return buildJoinTarget(
-        segments,
-        query ? new URLSearchParams(query) : null
-      );
+      return buildJoinTarget(segments);
     }
   }
 

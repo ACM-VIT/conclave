@@ -376,6 +376,10 @@ function MobileMeetsMainContent({
     () => setIsParticipantsOpen(false),
     [setIsParticipantsOpen],
   );
+  useEffect(() => {
+    if (!isChatOpen || chatOverlayMessages.length === 0) return;
+    setChatOverlayMessages([]);
+  }, [isChatOpen, chatOverlayMessages.length, setChatOverlayMessages]);
   const handleToggleChat = useCallback(() => {
     if (!isChatOpen && isParticipantsOpen) {
       setIsParticipantsOpen(false);
@@ -944,7 +948,7 @@ function MobileMeetsMainContent({
       </div>
 
       {/* Chat overlay messages */}
-      {!isWebinarAttendee && chatOverlayMessages.length > 0 && (
+      {!isWebinarAttendee && !isChatOpen && chatOverlayMessages.length > 0 && (
         <div className="absolute top-16 left-4 right-4 z-30 pointer-events-none">
           <ChatOverlay
             messages={chatOverlayMessages}

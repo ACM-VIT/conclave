@@ -648,6 +648,10 @@ export default function MeetsMainContent({
     () => setIsParticipantsOpen(false),
     [setIsParticipantsOpen],
   );
+  useEffect(() => {
+    if (!isChatOpen || chatOverlayMessages.length === 0) return;
+    setChatOverlayMessages([]);
+  }, [isChatOpen, chatOverlayMessages.length, setChatOverlayMessages]);
 
   const handleToggleTtsDisabled = useCallback(() => {
     if (!socket) return;
@@ -1168,7 +1172,10 @@ export default function MeetsMainContent({
         />
       )}
 
-      {isJoined && !isWebinarAttendee && chatOverlayMessages.length > 0 && (
+      {isJoined &&
+        !isWebinarAttendee &&
+        !isChatOpen &&
+        chatOverlayMessages.length > 0 && (
         <ChatOverlay
           messages={chatOverlayMessages}
           onDismiss={(id) =>
