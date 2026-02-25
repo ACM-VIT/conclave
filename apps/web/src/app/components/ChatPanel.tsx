@@ -28,6 +28,98 @@ interface ChatPanelProps {
   mentionableParticipants?: MentionableParticipant[];
 }
 
+const areMessagesEqual = (
+  previousMessages: ChatMessage[],
+  nextMessages: ChatMessage[],
+): boolean => {
+  if (previousMessages === nextMessages) return true;
+  if (previousMessages.length !== nextMessages.length) return false;
+
+  for (let index = 0; index < previousMessages.length; index += 1) {
+    const previousMessage = previousMessages[index];
+    const nextMessage = nextMessages[index];
+    if (previousMessage === nextMessage) continue;
+
+    if (
+      previousMessage.id !== nextMessage.id ||
+      previousMessage.userId !== nextMessage.userId ||
+      previousMessage.displayName !== nextMessage.displayName ||
+      previousMessage.content !== nextMessage.content ||
+      previousMessage.timestamp !== nextMessage.timestamp ||
+      (previousMessage.isDirect ?? false) !== (nextMessage.isDirect ?? false) ||
+      (previousMessage.dmTargetUserId ?? "") !==
+        (nextMessage.dmTargetUserId ?? "") ||
+      (previousMessage.dmTargetDisplayName ?? "") !==
+        (nextMessage.dmTargetDisplayName ?? "")
+    ) {
+      return false;
+    }
+  }
+
+  return true;
+};
+
+const areMentionableParticipantsEqual = (
+  previousParticipants: MentionableParticipant[],
+  nextParticipants: MentionableParticipant[],
+): boolean => {
+  if (previousParticipants === nextParticipants) return true;
+  if (previousParticipants.length !== nextParticipants.length) return false;
+
+  for (let index = 0; index < previousParticipants.length; index += 1) {
+    const previousParticipant = previousParticipants[index];
+    const nextParticipant = nextParticipants[index];
+    if (previousParticipant === nextParticipant) continue;
+
+    if (
+      previousParticipant.userId !== nextParticipant.userId ||
+      previousParticipant.displayName !== nextParticipant.displayName ||
+      previousParticipant.mentionToken !== nextParticipant.mentionToken
+    ) {
+      return false;
+    }
+  }
+
+  return true;
+};
+
+const areChatPanelPropsEqual = (
+  previousProps: ChatPanelProps,
+  nextProps: ChatPanelProps,
+): boolean => {
+  const previousIsGhostMode = previousProps.isGhostMode ?? false;
+  const nextIsGhostMode = nextProps.isGhostMode ?? false;
+  const previousIsChatLocked = previousProps.isChatLocked ?? false;
+  const nextIsChatLocked = nextProps.isChatLocked ?? false;
+  const previousIsDmEnabled = previousProps.isDmEnabled ?? true;
+  const nextIsDmEnabled = nextProps.isDmEnabled ?? true;
+  const previousIsAdmin = previousProps.isAdmin ?? false;
+  const nextIsAdmin = nextProps.isAdmin ?? false;
+
+  if (
+    previousProps.chatInput !== nextProps.chatInput ||
+    previousProps.currentUserId !== nextProps.currentUserId ||
+    previousIsGhostMode !== nextIsGhostMode ||
+    previousIsChatLocked !== nextIsChatLocked ||
+    previousIsDmEnabled !== nextIsDmEnabled ||
+    previousIsAdmin !== nextIsAdmin ||
+    previousProps.onInputChange !== nextProps.onInputChange ||
+    previousProps.onSend !== nextProps.onSend ||
+    previousProps.onClose !== nextProps.onClose
+  ) {
+    return false;
+  }
+
+  if (!areMessagesEqual(previousProps.messages, nextProps.messages)) {
+    return false;
+  }
+
+  return areMentionableParticipantsEqual(
+    previousProps.mentionableParticipants ?? [],
+    nextProps.mentionableParticipants ?? [],
+  );
+};
+
 function ChatPanel({
   messages,
   chatInput,
@@ -547,4 +639,4 @@ function ChatPanel({
   );
 }
 
-export default memo(ChatPanel);
+export default memo(ChatPanel, areChatPanelPropsEqual);

@@ -665,6 +665,14 @@ export default function MeetsMainContent({
     setChatOverlayMessages([]);
   }, [isChatOpen, chatOverlayMessages.length, setChatOverlayMessages]);
 
+  const sendChatRef = useRef(sendChat);
+  useEffect(() => {
+    sendChatRef.current = sendChat;
+  }, [sendChat]);
+  const handleSendChat = useCallback((content: string) => {
+    sendChatRef.current(content);
+  }, []);
+
   const handleToggleTtsDisabled = useCallback(() => {
     if (!socket) return;
     socket.emit(
@@ -1175,7 +1183,7 @@ export default function MeetsMainContent({
           messages={chatMessages}
           chatInput={chatInput}
           onInputChange={setChatInput}
-          onSend={sendChat}
+          onSend={handleSendChat}
           onClose={handleToggleChat}
           currentUserId={currentUserId}
           isGhostMode={ghostEnabled}
