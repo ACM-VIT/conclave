@@ -308,6 +308,7 @@ export function ChatPanel({
   const [activeCommandIndex, setActiveCommandIndex] = useState(0);
   const hasInitializedRef = useRef(false);
   const prevMessageIdsRef = useRef<Set<string>>(new Set());
+  const wasVisibleRef = useRef(visible);
   const isChatDisabled = isGhostMode || (isChatLocked && !isAdmin);
 
   const handleDismiss = useCallback(() => {
@@ -394,11 +395,17 @@ export function ChatPanel({
   }, [localValue]);
 
   useEffect(() => {
-    if (!messages.length) return;
+    if (!messages.length || !visible) {
+      wasVisibleRef.current = visible;
+      return;
+    }
+
+    const wasVisible = wasVisibleRef.current;
+    wasVisibleRef.current = visible;
     requestAnimationFrame(() => {
-      listRef.current?.scrollToEnd({ animated: true });
+      listRef.current?.scrollToEnd({ animated: wasVisible });
     });
-  }, [messages.length]);
+  }, [messages.length, visible]);
 
   useEffect(() => {
     hasInitializedRef.current = true;
@@ -417,7 +424,6 @@ export function ChatPanel({
     prevMessageIdsRef.current = currentIds;
     return newIds;
   }, [messages]);
-
 
   useEffect(() => {
     if (visible) {

@@ -880,8 +880,12 @@ export function MeetScreen({
     isJoined,
     isAdmin,
     isMuted,
+    activeSpeakerId,
+    localUserId: userId,
     localStream,
     participants,
+    recentMessages: chatMessages,
+    resolveDisplayName,
   });
   const voiceAgentApiKeyRef = useRef("");
   const [hasVoiceAgentApiKey, setHasVoiceAgentApiKey] = useState(false);

@@ -237,6 +237,14 @@ function ChatPanel({
   );
 
   useEffect(() => {
+    requestAnimationFrame(() => {
+      shouldAutoScrollRef.current = true;
+      setUnseenCount(0);
+      messagesEndRef.current?.scrollIntoView({ behavior: "auto" });
+    });
+  }, []);
+
+  useEffect(() => {
     hasInitializedRef.current = true;
   }, []);
 
