@@ -3,8 +3,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Socket } from "socket.io-client";
 import type { Device as MediasoupDevice, Producer, Transport } from "mediasoup-client/types";
-import type { DtlsParameters, JoinRoomResponse, RtpParameters, TransportResponse } from "../lib/types";
-import { DEFAULT_AUDIO_CONSTRAINTS, OPUS_MAX_AVERAGE_BITRATE } from "../lib/constants";
+import type {
+  DtlsParameters,
+  JoinRoomResponse,
+  Participant,
+  RtpParameters,
+  TransportResponse,
+} from "../lib/types";
+import { OPUS_MAX_AVERAGE_BITRATE } from "../lib/constants";
 
 type VoiceAgentStatus = "idle" | "starting" | "running" | "error";
 
@@ -18,6 +24,9 @@ type JoinInfo = {
 type RuntimeState = {
   openAiPc: RTCPeerConnection | null;
   openAiMicStream: MediaStream | null;
+  openAiMixContext: AudioContext | null;
+  openAiMixDestination: MediaStreamAudioDestinationNode | null;
+  openAiMixSources: MediaStreamAudioSourceNode[];
   openAiDataChannel: RTCDataChannel | null;
   sfuSocket: Socket | null;
   producerTransport: Transport | null;
@@ -28,6 +37,9 @@ type UseVoiceAgentParticipantOptions = {
   roomId: string;
   isJoined: boolean;
   isAdmin: boolean;
+  isMuted: boolean;
+  localStream: MediaStream | null;
+  participants: Map<string, Participant>;
   instructions?: string;
   model?: string;
   voice?: string;
@@ -54,11 +66,23 @@ type RealtimeClientSecretResponse = {
 const createRuntimeState = (): RuntimeState => ({
   openAiPc: null,
   openAiMicStream: null,
+  openAiMixContext: null,
+  openAiMixDestination: null,
+  openAiMixSources: [],
   openAiDataChannel: null,
   sfuSocket: null,
   producerTransport: null,
   producer: null,
 });
+
+const disconnectMixSources = (runtime: RuntimeState) => {
+  for (const source of runtime.openAiMixSources) {
+    try {
+      source.disconnect();
+    } catch {}
+  }
+  runtime.openAiMixSources = [];
+};
 
 const closeRuntimeState = (runtime: RuntimeState) => {
   if (runtime.producer && !runtime.producer.closed) {
@@ -86,6 +110,14 @@ const closeRuntimeState = (runtime: RuntimeState) => {
       runtime.openAiPc.close();
     } catch {}
   }
+  disconnectMixSources(runtime);
+  if (runtime.openAiMixContext) {
+    try {
+      void runtime.openAiMixContext.close();
+    } catch {}
+  }
+  runtime.openAiMixContext = null;
+  runtime.openAiMixDestination = null;
   if (runtime.openAiMicStream) {
     runtime.openAiMicStream.getTracks().forEach((track) => {
       try {
@@ -100,6 +132,19 @@ const buildRandomId = (prefix: string): string => {
     return `${prefix}-${crypto.randomUUID()}`;
   }
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+};
+
+const hasLiveAudioTrack = (stream: MediaStream | null): boolean =>
+  Boolean(
+    stream?.getAudioTracks().some((track) => track.readyState !== "ended"),
+  );
+
+const isVoiceAgentUserId = (userId: string): boolean => {
+  const normalized = userId.toLowerCase();
+  return (
+    normalized.includes("@agent.conclave") ||
+    normalized.startsWith("voice-agent-")
+  );
 };
 
 const createSocketConnection = async (
@@ -246,6 +291,9 @@ export function useVoiceAgentParticipant({
   roomId,
   isJoined,
   isAdmin,
+  isMuted,
+  localStream,
+  participants,
   instructions = DEFAULT_INSTRUCTIONS,
   model = DEFAULT_MODEL,
   voice = DEFAULT_VOICE,
@@ -296,6 +344,44 @@ export function useVoiceAgentParticipant({
     runtime.producer = producer;
   }, []);
 
+  const rebuildOpenAiMix = useCallback(
+    async (runtime: RuntimeState) => {
+      const context = runtime.openAiMixContext;
+      const destination = runtime.openAiMixDestination;
+      if (!context || !destination) {
+        return;
+      }
+
+      disconnectMixSources(runtime);
+
+      const connectStream = (stream: MediaStream | null) => {
+        if (!stream || !hasLiveAudioTrack(stream)) {
+          return;
+        }
+        try {
+          const source = context.createMediaStreamSource(stream);
+          source.connect(destination);
+          runtime.openAiMixSources.push(source);
+        } catch {}
+      };
+
+      if (!isMuted) {
+        connectStream(localStream);
+      }
+
+      for (const participant of participants.values()) {
+        if (participant.isMuted) continue;
+        if (isVoiceAgentUserId(participant.userId)) continue;
+        connectStream(participant.audioStream);
+      }
+
+      if (context.state === "suspended") {
+        await context.resume().catch(() => undefined);
+      }
+    },
+    [isMuted, localStream, participants],
+  );
+
   const start = useCallback(async (providedApiKey?: string) => {
     if (!isAdmin) {
       setSafeError("Only admins can start the voice agent.");
@@ -326,9 +412,11 @@ export function useVoiceAgentParticipant({
     pendingRemoteTrackRef.current = null;
 
     try {
-      runtime.openAiMicStream = await navigator.mediaDevices.getUserMedia({
-        audio: DEFAULT_AUDIO_CONSTRAINTS,
-      });
+      runtime.openAiMixContext = new AudioContext();
+      runtime.openAiMixDestination =
+        runtime.openAiMixContext.createMediaStreamDestination();
+      runtime.openAiMicStream = runtime.openAiMixDestination.stream;
+      await rebuildOpenAiMix(runtime);
 
       const sessionPayload = {
         session: {
@@ -400,7 +488,7 @@ export function useVoiceAgentParticipant({
 
       const micTrack = runtime.openAiMicStream.getAudioTracks()[0];
       if (!micTrack) {
-        throw new Error("No microphone track available.");
+        throw new Error("No available meeting audio track for the voice agent input.");
       }
       runtime.openAiPc.addTrack(micTrack, runtime.openAiMicStream);
 
@@ -511,6 +599,7 @@ export function useVoiceAgentParticipant({
     isJoined,
     model,
     producePendingTrack,
+    rebuildOpenAiMix,
     roomId,
     setSafeError,
     setSafeStatus,
@@ -542,6 +631,20 @@ export function useVoiceAgentParticipant({
       stop();
     }
   }, [isJoined, status, stop]);
+
+  useEffect(() => {
+    if (status !== "starting" && status !== "running") return;
+    const runtime = runtimeRef.current;
+    if (!runtime.openAiMixContext || !runtime.openAiMixDestination) return;
+    void rebuildOpenAiMix(runtime).catch((mixError) => {
+      const message =
+        mixError instanceof Error
+          ? mixError.message
+          : "Failed to refresh voice agent audio input.";
+      setSafeError(message);
+      setSafeStatus("error");
+    });
+  }, [rebuildOpenAiMix, setSafeError, setSafeStatus, status]);
 
   return {
     status,

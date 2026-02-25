@@ -784,6 +784,9 @@ export default function MeetsClient({
     roomId,
     isJoined: connectionState === "joined",
     isAdmin: isAdminFlag,
+    isMuted,
+    localStream,
+    participants,
   });
 
   const openVoiceAgentKeyPrompt = useCallback(() => {
