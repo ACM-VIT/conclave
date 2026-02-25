@@ -34,23 +34,48 @@ export const getOrCreateRoom = async (
   return room;
 };
 
+const cleanupRoomState = (state: SfuState, channelId: string): Room | null => {
+  const room = state.rooms.get(channelId);
+  if (!room) {
+    return null;
+  }
+
+  const webinarConfig = state.webinarConfigs.get(channelId);
+  if (webinarConfig) {
+    clearWebinarLinkSlug({
+      webinarConfig,
+      webinarLinks: state.webinarLinks,
+      roomChannelId: channelId,
+    });
+    state.webinarConfigs.delete(channelId);
+  }
+
+  room.close();
+  state.rooms.delete(channelId);
+  void cleanupRoomBrowser(channelId);
+  return room;
+};
+
+export const forceCloseRoom = (state: SfuState, channelId: string): boolean => {
+  const room = cleanupRoomState(state, channelId);
+  if (!room) {
+    return false;
+  }
+  Logger.info(`Force closed room: ${room.id} (${room.clientId})`);
+  return true;
+};
+
 export const cleanupRoom = (state: SfuState, channelId: string): boolean => {
   const room = state.rooms.get(channelId);
-  if (room && room.isEmpty()) {
-    const webinarConfig = state.webinarConfigs.get(channelId);
-    if (webinarConfig) {
-      clearWebinarLinkSlug({
-        webinarConfig,
-        webinarLinks: state.webinarLinks,
-        roomChannelId: channelId,
-      });
-      state.webinarConfigs.delete(channelId);
-    }
-    room.close();
-    state.rooms.delete(channelId);
-    Logger.info(`Closed empty room: ${room.id} (${room.clientId})`);
-    void cleanupRoomBrowser(channelId);
-    return true;
+  if (!room || !room.isEmpty()) {
+    return false;
   }
-  return false;
+
+  const closedRoom = cleanupRoomState(state, channelId);
+  if (!closedRoom) {
+    return false;
+  }
+
+  Logger.info(`Closed empty room: ${closedRoom.id} (${closedRoom.clientId})`);
+  return true;
 };

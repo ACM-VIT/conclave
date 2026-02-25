@@ -220,6 +220,12 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             ? true
             : isAdminForExistingRoom;
 
+        if (!isAdminJoin && room.isBlocked(userKey)) {
+          Logger.info(`Blocked identity ${userKey} denied access to room ${roomId}`);
+          respond(callback, { error: "You are not allowed to join this meeting." });
+          return;
+        }
+
         const meetingInviteCode = data?.meetingInviteCode?.trim() || "";
         const requiresMeetingInviteCode = room.requiresMeetingInviteCode;
         const shouldValidateMeetingInviteCode =
