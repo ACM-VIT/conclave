@@ -25,11 +25,7 @@ import {
   VideoOff,
 } from "lucide-react-native";
 import type { MeetError } from "../types";
-import {
-  generateRoomCode,
-  sanitizeRoomCodeInput,
-  ROOM_CODE_MAX_LENGTH,
-} from "../utils";
+import { generateRoomCode } from "../utils";
 import { useDeviceLayout } from "../hooks/use-device-layout";
 import { ErrorSheet } from "./error-sheet";
 import { GlassPill } from "./glass-pill";
@@ -108,6 +104,7 @@ WebBrowser.maybeCompleteAuthSession();
 
 interface JoinScreenProps {
   roomId: string;
+  prefillRoomId?: string;
   onRoomIdChange: (value: string) => void;
   onJoinRoom: (roomId: string, options?: { isHost?: boolean }) => void;
   onIsAdminChange?: (isAdmin: boolean) => void;
@@ -136,6 +133,7 @@ interface JoinScreenProps {
 
 export function JoinScreen({
   roomId,
+  prefillRoomId,
   onRoomIdChange,
   onJoinRoom,
   onIsAdminChange,
@@ -164,12 +162,17 @@ export function JoinScreen({
   const isSignedInUser = Boolean(user && !user.id?.startsWith("guest-"));
   const [phase, setPhase] = useState<Phase>(() => {
     if (forceJoinOnly) return "join";
-    return isSignedInUser ? "join" : "welcome";
+    if (isSignedInUser) return "join";
+    if (prefillRoomId?.trim()) return "auth";
+    return "welcome";
   });
   const [guestName, setGuestName] = useState("");
-  const [activeTab, setActiveTab] = useState<"new" | "join">(
-    forceJoinOnly ? "join" : "new"
-  );
+  const [activeTab, setActiveTab] = useState<"new" | "join">(() => {
+    if (forceJoinOnly) return "join";
+    if (prefillRoomId?.trim()) return "join";
+    return "new";
+  });
+  const lastPrefillRef = useRef("");
   const [authProvider, setAuthProvider] = useState<"google" | "apple" | null>(
     null
   );
@@ -237,12 +240,26 @@ export function JoinScreen({
 
   const handleRoomChange = useCallback(
     (value: string) => {
-      onRoomIdChange(
-        sanitizeRoomCodeInput(value).slice(0, ROOM_CODE_MAX_LENGTH)
-      );
+      onRoomIdChange(value);
     },
     [onRoomIdChange]
   );
+
+  useEffect(() => {
+    const prefillValue = prefillRoomId?.trim() ?? "";
+    if (!prefillValue || prefillValue === lastPrefillRef.current) return;
+    lastPrefillRef.current = prefillValue;
+    setActiveTab("join");
+    if (forceJoinOnly) {
+      setPhase("join");
+      return;
+    }
+    if (isSignedInUser) {
+      setPhase("join");
+    } else if (phase === "welcome") {
+      setPhase("auth");
+    }
+  }, [forceJoinOnly, isSignedInUser, phase, prefillRoomId]);
 
   const handleContinueAsGuest = useCallback(() => {
     if (!guestName.trim()) return;

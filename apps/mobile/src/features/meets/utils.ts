@@ -1,5 +1,5 @@
 import { EMOJI_REACTIONS, type ReactionEmoji } from "./constants";
-import type { MeetError, ReactionOption } from "./types";
+import type { JoinMode, MeetError, ReactionOption } from "./types";
 
 export const ROOM_WORDS = [
   "aloe",
@@ -103,6 +103,16 @@ export function sanitizeRoomCodeInput(value: string): string {
     .replace(/^-+/g, "");
 }
 
+export const WEBINAR_LINK_CODE_MAX_LENGTH = 32;
+
+export function sanitizeWebinarLinkCode(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, "")
+    .slice(0, WEBINAR_LINK_CODE_MAX_LENGTH);
+}
+
 export function getRoomWordSuggestions(
   prefix: string,
   exclude: string[] = [],
@@ -134,6 +144,63 @@ export function extractRoomCode(input: string): string {
   }
 
   return sanitizeRoomCode(trimmed);
+}
+
+const buildJoinTarget = (
+  segments: string[],
+  searchParams?: URLSearchParams | null
+): { roomId: string; joinMode: JoinMode; webinarToken?: string | null } => {
+  if (segments.length >= 2 && segments[0]?.toLowerCase() === "w") {
+    return {
+      roomId: sanitizeWebinarLinkCode(segments[1] ?? ""),
+      joinMode: "webinar_attendee",
+      webinarToken: searchParams?.get("wt") ?? null,
+    };
+  }
+
+  const lastSegment = segments[segments.length - 1] ?? "";
+  return {
+    roomId: sanitizeRoomCode(lastSegment),
+    joinMode: "meeting",
+  };
+};
+
+export function parseJoinInput(
+  input: string
+): { roomId: string; joinMode: JoinMode; webinarToken?: string | null } {
+  const trimmed = input.trim();
+  if (!trimmed) {
+    return { roomId: "", joinMode: "meeting" };
+  }
+
+  const normalizedInput = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)
+    ? trimmed
+    : trimmed.startsWith("conclave.acmvit.in")
+      ? `https://${trimmed}`
+      : trimmed;
+
+  try {
+    const url = new URL(normalizedInput);
+    const segments = url.pathname.split("/").filter(Boolean);
+    if (segments.length > 0) {
+      return buildJoinTarget(segments, url.searchParams);
+    }
+  } catch {
+    // Fall through to non-URL parsing.
+  }
+
+  if (trimmed.includes("/")) {
+    const [path, query] = trimmed.split("?");
+    const segments = path.split("/").filter(Boolean);
+    if (segments.length > 0) {
+      return buildJoinTarget(
+        segments,
+        query ? new URLSearchParams(query) : null
+      );
+    }
+  }
+
+  return { roomId: sanitizeRoomCode(trimmed), joinMode: "meeting" };
 }
 
 export function createMeetError(
