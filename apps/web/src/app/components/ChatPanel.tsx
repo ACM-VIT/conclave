@@ -289,12 +289,10 @@ function ChatPanel({
               >
                 <div
                   className={`max-w-[85%] rounded-lg px-2.5 py-1.5 ${
-                    msg.isDirect
-                      ? "bg-[#3B2B12] border border-amber-400/25 text-[#FEFCD9] selection:bg-amber-300/35 selection:text-white"
-                      : isOwn
-                        ? "bg-[#F95F4A] text-white selection:bg-white/90 selection:text-[#0d0e0d]"
-                        : "bg-[#1a1a1a] text-[#FEFCD9]/90 selection:bg-[#F95F4A]/40 selection:text-white"
-                  }`}
+                    isOwn
+                      ? "bg-[#F95F4A] text-white selection:bg-white/90 selection:text-[#0d0e0d]"
+                      : "bg-[#1a1a1a] text-[#FEFCD9]/90 selection:bg-[#F95F4A]/40 selection:text-white"
+                  } ${msg.isDirect ? "ring-1 ring-amber-300/30" : ""}`}
                 >
                   {!isOwn && (
                     <p className="text-[9px] text-[#F95F4A]/80 mb-0.5">{displayName}</p>

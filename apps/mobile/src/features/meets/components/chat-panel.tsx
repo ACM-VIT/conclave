@@ -620,7 +620,6 @@ const styles = StyleSheet.create({
   bubbleDm: {
     borderLeftWidth: 2,
     borderLeftColor: "rgba(251, 191, 36, 0.5)",
-    backgroundColor: "rgba(59, 43, 18, 0.92)",
     borderWidth: 1,
     borderColor: "rgba(251, 191, 36, 0.25)",
   },

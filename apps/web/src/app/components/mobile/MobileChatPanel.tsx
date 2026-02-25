@@ -343,12 +343,10 @@ function MobileChatPanel({
                     )}
                     <div
                       className={`max-w-[80%] rounded-[18px] px-3 py-2 ${
-                        message.isDirect
-                          ? "bg-[#3B2B12] border border-amber-400/25 text-[#FEFCD9] selection:bg-amber-300/35 selection:text-white"
-                          : isOwn
-                            ? "bg-[#F95F4A] text-white rounded-br-md selection:bg-white/90 selection:text-[#0d0e0d]"
-                            : "bg-[#2a2a2a]/90 text-[#FEFCD9] rounded-bl-md selection:bg-[#F95F4A]/40 selection:text-white"
-                      }`}
+                        isOwn
+                          ? "bg-[#F95F4A] text-white rounded-br-md selection:bg-white/90 selection:text-[#0d0e0d]"
+                          : "bg-[#2a2a2a]/90 text-[#FEFCD9] rounded-bl-md selection:bg-[#F95F4A]/40 selection:text-white"
+                      } ${message.isDirect ? "ring-1 ring-amber-300/30" : ""}`}
                     >
                       <p className="text-sm break-words">
                         {directMessageLabel ? (
