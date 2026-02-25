@@ -132,6 +132,12 @@ interface MeetsMainContentProps {
   onDismissMeetError?: () => void;
   browserAudioNeedsGesture: boolean;
   onBrowserAudioAutoplayBlocked: () => void;
+  isVoiceAgentRunning?: boolean;
+  isVoiceAgentStarting?: boolean;
+  voiceAgentError?: string | null;
+  onStartVoiceAgent?: () => void;
+  onStopVoiceAgent?: () => void;
+  onClearVoiceAgentError?: () => void;
   onRetryMedia?: () => void;
   onTestSpeaker?: () => void;
   isPopoutActive?: boolean;
@@ -300,6 +306,12 @@ export default function MeetsMainContent({
   onToggleBrowserAudio,
   browserAudioNeedsGesture,
   onBrowserAudioAutoplayBlocked,
+  isVoiceAgentRunning = false,
+  isVoiceAgentStarting = false,
+  voiceAgentError = null,
+  onStartVoiceAgent,
+  onStopVoiceAgent,
+  onClearVoiceAgentError,
   meetError,
   onDismissMeetError,
   onRetryMedia,
@@ -982,6 +994,25 @@ export default function MeetsMainContent({
           </p>
         </div>
       )}
+      {isJoined && voiceAgentError && (
+        <div className="absolute top-4 left-4 max-w-[340px] rounded-lg border border-[#F95F4A]/30 bg-[#0d0e0d]/95 px-4 py-3 text-xs text-[#FEFCD9]/90 shadow-2xl">
+          <div className="flex items-start gap-3">
+            <span className="font-medium text-[#F95F4A]">
+              Voice agent error
+            </span>
+            {onClearVoiceAgentError && (
+              <button
+                onClick={onClearVoiceAgentError}
+                className="ml-auto text-[#FEFCD9]/50 hover:text-[#FEFCD9]"
+                aria-label="Dismiss voice agent error"
+              >
+                X
+              </button>
+            )}
+          </div>
+          <p className="mt-1 text-[11px] text-[#FEFCD9]/70">{voiceAgentError}</p>
+        </div>
+      )}
 
       {isJoined &&
         (isWebinarAttendee ? (
@@ -1055,6 +1086,10 @@ export default function MeetsMainContent({
                 }
                 isAppsLocked={appsState.locked}
                 onToggleAppsLock={isAdmin ? handleToggleAppsLock : undefined}
+                isVoiceAgentRunning={isVoiceAgentRunning}
+                isVoiceAgentStarting={isVoiceAgentStarting}
+                onStartVoiceAgent={isAdmin ? onStartVoiceAgent : undefined}
+                onStopVoiceAgent={isAdmin ? onStopVoiceAgent : undefined}
                 isPopoutActive={isPopoutActive}
                 isPopoutSupported={isPopoutSupported}
                 onOpenPopout={onOpenPopout}
