@@ -7,9 +7,12 @@ import type {
   ToggleMediaData,
 } from "../../../types.js";
 import { Logger } from "../../../utilities/loggers.js";
+import { ensureRoomTranscriber } from "../../recording/roomTranscriber.js";
 import { emitWebinarFeedChanged } from "../../webinarNotifications.js";
 import type { ConnectionContext } from "../context.js";
 import { respond } from "./ack.js";
+
+const DEFAULT_LOCAL_VOSK_WS_URL = "ws://127.0.0.1:2800";
 
 export const registerMediaHandlers = (context: ConnectionContext): void => {
   const { socket, state, io } = context;
@@ -64,6 +67,29 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
           appData: { type },
           paused,
         });
+
+        if (kind === "audio" && type === "webcam") {
+          const channelId = room.channelId;
+          const speakerLabel =
+            room.getDisplayNameForUser(currentClient.id) || currentClient.id;
+          const transcriber = ensureRoomTranscriber(channelId, room.router);
+          const sttUrl =
+            process.env.STT_WS_URL ||
+            process.env.VOSK_WS_URL ||
+            (process.env.NODE_ENV === "production"
+              ? ""
+              : DEFAULT_LOCAL_VOSK_WS_URL);
+          Logger.info(
+            `Starting room transcriber for channel=${channelId} producer=${producer.id} stt=${sttUrl || "unset"}`,
+          );
+          void transcriber.start(producer, {
+            sttUrl,
+            sttHeaders: process.env.STT_API_KEY
+              ? { Authorization: `Bearer ${process.env.STT_API_KEY}` }
+              : undefined,
+            speakerLabel,
+          });
+        }
 
         const roomChannelId = room.channelId;
         const clientId = currentClient.id;

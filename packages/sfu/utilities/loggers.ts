@@ -1,3 +1,7 @@
+import fs from "fs";
+import path from "path";
+import { inspect } from "util";
+
 export const colors = {
   reset: "\x1b[0m",
   bright: "\x1b[1m",
@@ -35,6 +39,29 @@ const getTimestamp = () => {
 };
 
 const PREFIX = `${colors.fg.magenta}[SFU]${colors.reset}`;
+const LOG_FILE_PATH = process.env.SFU_LOG_FILE
+  ? path.resolve(process.env.SFU_LOG_FILE)
+  : path.resolve(process.cwd(), ".sfu.runtime.log");
+
+const stripAnsi = (value: string): string =>
+  value.replace(/\x1b\[[0-9;]*m/g, "");
+
+const writeLogFile = (level: LogLevel, message: string, args: any[]): void => {
+  const argsText = args
+    .map((arg) =>
+      typeof arg === "string"
+        ? arg
+        : inspect(arg, { depth: 5, breakLength: 120, compact: true }),
+    )
+    .join(" ");
+  const suffix = argsText ? ` ${argsText}` : "";
+  const line = `${new Date().toISOString()} [${level.toUpperCase()}] ${stripAnsi(message)}${suffix}\n`;
+  try {
+    fs.appendFileSync(LOG_FILE_PATH, line, "utf8");
+  } catch {
+    // File logging should never break runtime logging.
+  }
+};
 
 type LogLevel = "error" | "warn" | "info" | "debug";
 
@@ -66,6 +93,7 @@ const shouldLog = (level: LogLevel) => {
 export const Logger = {
   info: (message: string, ...args: any[]) => {
     if (!shouldLog("info")) return;
+    writeLogFile("info", message, args);
     console.log(
       `${colors.dim}${getTimestamp()}${colors.reset} ${PREFIX} ${
         colors.fg.cyan
@@ -76,6 +104,7 @@ export const Logger = {
 
   success: (message: string, ...args: any[]) => {
     if (!shouldLog("info")) return;
+    writeLogFile("info", message, args);
     console.log(
       `${colors.dim}${getTimestamp()}${colors.reset} ${PREFIX} ${
         colors.fg.green
@@ -86,6 +115,7 @@ export const Logger = {
 
   warn: (message: string, ...args: any[]) => {
     if (!shouldLog("warn")) return;
+    writeLogFile("warn", message, args);
     console.warn(
       `${colors.dim}${getTimestamp()}${colors.reset} ${PREFIX} ${
         colors.fg.yellow
@@ -96,6 +126,7 @@ export const Logger = {
 
   error: (message: string, ...args: any[]) => {
     if (!shouldLog("error")) return;
+    writeLogFile("error", message, args);
     console.error(
       `${colors.dim}${getTimestamp()}${colors.reset} ${PREFIX} ${
         colors.fg.red
@@ -106,6 +137,7 @@ export const Logger = {
 
   debug: (message: string, ...args: any[]) => {
     if (!shouldLog("debug")) return;
+    writeLogFile("debug", message, args);
     console.log(
       `${colors.dim}${getTimestamp()}${colors.reset} ${PREFIX} ${
         colors.fg.gray

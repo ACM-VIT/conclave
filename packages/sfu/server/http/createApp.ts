@@ -5,6 +5,14 @@ import type { Server as SocketIOServer } from "socket.io";
 import { config as defaultConfig } from "../../config/config.js";
 import { Logger } from "../../utilities/loggers.js";
 import type { SfuState } from "../state.js";
+import {
+  getRoomChannelId,
+  popCachedMinutes,
+  popCachedTranscript,
+} from "../rooms.js";
+import { stopRoomTranscriber } from "../recording/roomTranscriber.js";
+import { summarizeTranscript } from "../recording/summarizeTranscript.js";
+import { buildMinutesPdf } from "../recording/minutesPdf.js";
 
 export type CreateSfuAppOptions = {
   state: SfuState;
@@ -193,6 +201,78 @@ export const createSfuApp = ({
       clients: connectedClients,
       noticeMs: restartNoticeMs,
     });
+  });
+
+  app.post("/minutes", async (req, res) => {
+    if (!hasValidSecret(req, config.sfuSecret)) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    const { roomId, clientId = "default" } = req.body ?? {};
+    if (!roomId || typeof roomId !== "string") {
+      return res.status(400).json({ error: "roomId required" });
+    }
+
+    const channelId = getRoomChannelId(clientId, roomId);
+    // Try cached minutes first
+    const cached = popCachedMinutes(channelId);
+    if (cached) {
+      Logger.info(`Minutes cache hit for channel=${channelId}`);
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="minutes-${roomId}.pdf"`,
+      );
+      return res.end(cached);
+    }
+
+    let transcript = stopRoomTranscriber(channelId);
+    Logger.info(
+      `Minutes request: channel=${channelId} transcriptAfterStop=${transcript.length}`,
+    );
+    if (!transcript.length) {
+      transcript = popCachedTranscript(channelId);
+      Logger.info(
+        `Minutes request: channel=${channelId} transcriptAfterCache=${transcript.length}`,
+      );
+    }
+
+    if (!transcript.length) {
+      const summary =
+        "No transcript available. Speech-to-text was not configured or no audio was captured.";
+      Logger.warn(`Minutes request has empty transcript for channel=${channelId}`);
+      try {
+        const pdf = await buildMinutesPdf({ roomId, summary, transcript: [] });
+        res.setHeader("Content-Type", "application/pdf");
+        res.setHeader(
+          "Content-Disposition",
+          `attachment; filename="minutes-${roomId}.pdf"`,
+        );
+        return res.end(pdf);
+      } catch (err) {
+        Logger.warn("Failed to build empty minutes PDF", err);
+        return res
+          .status(500)
+          .json({ error: "Failed to generate minutes (no transcript)" });
+      }
+    }
+
+    try {
+      const summary = await summarizeTranscript(transcript);
+      const pdf = await buildMinutesPdf({ roomId, summary, transcript });
+      Logger.info(
+        `Minutes generated for channel=${channelId} transcriptChunks=${transcript.length}`,
+      );
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="minutes-${roomId}.pdf"`,
+      );
+      return res.end(pdf);
+    } catch (err) {
+      Logger.warn("Failed to build minutes PDF", err);
+      return res.status(500).json({ error: "Failed to generate minutes" });
+    }
   });
 
   return app;

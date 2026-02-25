@@ -159,7 +159,8 @@ export default function DevMeetToolsPanel({ roomId }: DevMeetToolsPanelProps) {
       };
       const { io } = await import("socket.io-client");
       const socket = io(data.sfuUrl, {
-        transports: ["websocket", "polling"],
+        transports: ["polling", "websocket"],
+        tryAllTransports: true,
         timeout: 10000,
         reconnection: false,
         forceNew: true,

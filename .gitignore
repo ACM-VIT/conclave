@@ -29,6 +29,12 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
+.sfu*.log
+.web*.log
+
+# local tooling
+.corepack/
+.tmp/
 
 # env files (can opt-in for committing if needed)
 .env*
