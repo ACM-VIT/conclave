@@ -44,7 +44,7 @@ import { useMeetRefs } from "../hooks/use-meet-refs";
 import { useMeetSocket } from "../hooks/use-meet-socket";
 import { useMeetState } from "../hooks/use-meet-state";
 import { useMeetTts } from "../hooks/use-meet-tts";
-import { useDeviceLayout } from "../hooks/use-device-layout";
+import { useVoiceAgentParticipant } from "../hooks/use-voice-agent-participant";
 import type { JoinMode, Participant } from "../types";
 import {
   createMeetError,
@@ -108,7 +108,6 @@ export function MeetScreen({
   }
 
   const router = useRouter();
-  const { isTablet } = useDeviceLayout();
   const refs = useMeetRefs();
   const meetingSessionIdRef = useRef(`meet-screen:${refs.sessionIdRef.current}`);
   const [appsSocket, setAppsSocket] = useState<Socket | null>(null);
@@ -876,6 +875,83 @@ export function MeetScreen({
     lastActiveSpeakerRef: refs.lastActiveSpeakerRef,
   });
 
+  const voiceAgent = useVoiceAgentParticipant({
+    roomId,
+    isJoined,
+    isAdmin,
+    isMuted,
+    localStream,
+    participants,
+  });
+  const voiceAgentApiKeyRef = useRef("");
+  const [hasVoiceAgentApiKey, setHasVoiceAgentApiKey] = useState(false);
+  const [voiceAgentApiKeyInput, setVoiceAgentApiKeyInput] = useState("");
+  const [voiceAgentApiKeyError, setVoiceAgentApiKeyError] = useState<
+    string | null
+  >(null);
+
+  const handleVoiceAgentApiKeyChange = useCallback(
+    (value: string) => {
+      setVoiceAgentApiKeyInput(value);
+      if (voiceAgentApiKeyError) {
+        setVoiceAgentApiKeyError(null);
+      }
+    },
+    [voiceAgentApiKeyError]
+  );
+
+  const handleStartVoiceAgent = useCallback(() => {
+    if (!isAdmin) {
+      setVoiceAgentApiKeyError("Only hosts can start the voice agent.");
+      return;
+    }
+    const typedKey = voiceAgentApiKeyInput.trim();
+    const apiKey = typedKey || voiceAgentApiKeyRef.current.trim();
+    if (!apiKey) {
+      setVoiceAgentApiKeyError("Enter your OpenAI API key.");
+      return;
+    }
+    if (!apiKey.startsWith("sk-")) {
+      setVoiceAgentApiKeyError(
+        "OpenAI API keys usually start with \"sk-\"."
+      );
+      return;
+    }
+    voiceAgentApiKeyRef.current = apiKey;
+    setHasVoiceAgentApiKey(true);
+    setVoiceAgentApiKeyInput("");
+    setVoiceAgentApiKeyError(null);
+    void voiceAgent.start(apiKey);
+  }, [isAdmin, voiceAgent, voiceAgentApiKeyInput]);
+
+  useEffect(() => {
+    if (!voiceAgent.error) return;
+    const lower = voiceAgent.error.toLowerCase();
+    const isApiKeyError =
+      lower.includes("api key") ||
+      lower.includes("unauthorized") ||
+      lower.includes("401");
+    if (!isApiKeyError) return;
+    voiceAgentApiKeyRef.current = "";
+    setHasVoiceAgentApiKey(false);
+    setVoiceAgentApiKeyInput("");
+    setVoiceAgentApiKeyError("API key rejected. Enter a valid key.");
+  }, [voiceAgent.error]);
+
+  const handleStopVoiceAgent = useCallback(() => {
+    voiceAgentApiKeyRef.current = "";
+    setHasVoiceAgentApiKey(false);
+    setVoiceAgentApiKeyInput("");
+    setVoiceAgentApiKeyError(null);
+    voiceAgent.stop();
+  }, [voiceAgent]);
+
+  useEffect(() => {
+    return () => {
+      voiceAgentApiKeyRef.current = "";
+    };
+  }, []);
+
   const { mounted } = useMeetLifecycle({
     cleanup: socket.cleanup,
     abortControllerRef: refs.abortControllerRef,
@@ -921,6 +997,7 @@ export function MeetScreen({
     const playLeaveSound = options?.playLeaveSound !== false;
     setHasActiveCall(false);
     hasActiveCallRef.current = false;
+    handleStopVoiceAgent();
     if (playLeaveSound) {
       playNotificationSoundRef.current("leave");
     }
@@ -932,7 +1009,7 @@ export function MeetScreen({
       callIdRef.current = null;
     }
     stopInCall();
-  }, [cancelPendingScreenShareStart]);
+  }, [cancelPendingScreenShareStart, handleStopVoiceAgent]);
 
   const handleLeave = useCallback(() => {
     exitCurrentMeeting({ playLeaveSound: true });
@@ -1338,12 +1415,6 @@ export function MeetScreen({
     void handleJoin(targetRoomId, { isHost: false });
   }, [autoJoinOnMount, handleJoin, initialRoomId, roomId]);
 
-  useEffect(() => {
-    if (isTablet && isSettingsSheetOpen) {
-      setIsSettingsSheetOpen(false);
-    }
-  }, [isTablet, isSettingsSheetOpen]);
-
   type ScreenSharePickerHandle = React.Component<any, any>;
   const ScreenSharePicker =
     ScreenCapturePickerView as unknown as React.ComponentType<
@@ -1677,7 +1748,6 @@ export function MeetScreen({
             sendReaction({ kind: "emoji", id: emoji, value: emoji, label: emoji });
           }}
           onOpenSettings={() => {
-            if (isTablet) return;
             if (isChatOpen) toggleChat();
             setIsParticipantsOpen(false);
             setIsReactionSheetOpen(false);
@@ -1778,7 +1848,7 @@ export function MeetScreen({
         />
       ) : null}
 
-      {isJoined && !isTablet && !isWebinarAttendee ? (
+      {isJoined && !isWebinarAttendee ? (
         <SettingsSheet
           visible={isSettingsSheetOpen}
           isHandRaised={isHandRaised}
@@ -1794,6 +1864,15 @@ export function MeetScreen({
           webinarConfig={webinarConfig}
           webinarLink={webinarLink}
           onSetWebinarLink={setWebinarLink}
+          isVoiceAgentRunning={voiceAgent.isRunning}
+          isVoiceAgentStarting={voiceAgent.isStarting}
+          voiceAgentError={voiceAgent.error}
+          voiceAgentApiKeyInput={voiceAgentApiKeyInput}
+          hasVoiceAgentApiKey={hasVoiceAgentApiKey}
+          voiceAgentApiKeyError={voiceAgentApiKeyError}
+          onVoiceAgentApiKeyChange={handleVoiceAgentApiKeyChange}
+          onStartVoiceAgent={handleStartVoiceAgent}
+          onStopVoiceAgent={handleStopVoiceAgent}
           onGetMeetingConfig={socket.getMeetingConfig}
           onUpdateMeetingConfig={socket.updateMeetingConfig}
           onGetWebinarConfig={socket.getWebinarConfig}

@@ -67,6 +67,15 @@ interface SettingsSheetProps {
   webinarConfig?: WebinarConfigSnapshot | null;
   webinarLink?: string | null;
   onSetWebinarLink?: (link: string | null) => void;
+  isVoiceAgentRunning?: boolean;
+  isVoiceAgentStarting?: boolean;
+  voiceAgentError?: string | null;
+  voiceAgentApiKeyInput?: string;
+  hasVoiceAgentApiKey?: boolean;
+  voiceAgentApiKeyError?: string | null;
+  onVoiceAgentApiKeyChange?: (value: string) => void;
+  onStartVoiceAgent?: () => void;
+  onStopVoiceAgent?: () => void;
   onGetWebinarConfig?: () => Promise<WebinarConfigSnapshot | null>;
   onUpdateWebinarConfig?: (
     update: WebinarUpdateRequest
@@ -255,6 +264,15 @@ export function SettingsSheet({
   webinarConfig,
   webinarLink,
   onSetWebinarLink,
+  isVoiceAgentRunning = false,
+  isVoiceAgentStarting = false,
+  voiceAgentError = null,
+  voiceAgentApiKeyInput = "",
+  hasVoiceAgentApiKey = false,
+  voiceAgentApiKeyError = null,
+  onVoiceAgentApiKeyChange,
+  onStartVoiceAgent,
+  onStopVoiceAgent,
   onGetWebinarConfig,
   onUpdateWebinarConfig,
   onGenerateWebinarLink,
@@ -494,6 +512,23 @@ export function SettingsSheet({
     }
     await Clipboard.setStringAsync(link);
   }, []);
+  const canStartVoiceAgent =
+    Boolean(onStartVoiceAgent) &&
+    !isVoiceAgentStarting &&
+    (hasVoiceAgentApiKey || voiceAgentApiKeyInput.trim().length > 0);
+  const voiceAgentStateLabel = isVoiceAgentRunning
+    ? "Live"
+    : isVoiceAgentStarting
+      ? "Starting"
+      : hasVoiceAgentApiKey
+        ? "Ready"
+        : "Off";
+  const voiceAgentActionLabel = isVoiceAgentRunning
+    ? "Stop"
+    : isVoiceAgentStarting
+      ? "Starting..."
+      : "Start";
+  const voiceAgentErrorText = voiceAgentApiKeyError || voiceAgentError;
 
   return (
     <TrueSheet
@@ -577,6 +612,64 @@ export function SettingsSheet({
 
         {isAdmin ? (
           <>
+            <View style={styles.voiceAgentCard}>
+              <View style={styles.voiceAgentHeaderRow}>
+                <Text style={styles.voiceAgentTitle}>Voice agent</Text>
+                <View
+                  style={[
+                    styles.voiceAgentStatePill,
+                    isVoiceAgentRunning
+                      ? styles.voiceAgentStatePillLive
+                      : hasVoiceAgentApiKey
+                        ? styles.voiceAgentStatePillReady
+                        : null,
+                  ]}
+                >
+                  <Text style={styles.voiceAgentStateText}>{voiceAgentStateLabel}</Text>
+                </View>
+              </View>
+              <View style={styles.voiceAgentControlsRow}>
+                <TextInput
+                  value={voiceAgentApiKeyInput}
+                  onChangeText={onVoiceAgentApiKeyChange}
+                  placeholder={hasVoiceAgentApiKey ? "Key loaded" : "OpenAI key"}
+                  placeholderTextColor={SHEET_COLORS.textFaint}
+                  secureTextEntry
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  style={[styles.input, styles.voiceAgentInput]}
+                />
+                <Pressable
+                  onPress={() =>
+                    trigger(() => {
+                      if (isVoiceAgentRunning) {
+                        onStopVoiceAgent?.();
+                        return;
+                      }
+                      onStartVoiceAgent?.();
+                    })
+                  }
+                  disabled={
+                    isVoiceAgentRunning ? !onStopVoiceAgent : !canStartVoiceAgent
+                  }
+                  style={({ pressed }) => [
+                    styles.voiceAgentAction,
+                    isVoiceAgentRunning
+                      ? styles.voiceAgentActionStop
+                      : styles.voiceAgentActionStart,
+                    (isVoiceAgentRunning ? !onStopVoiceAgent : !canStartVoiceAgent) &&
+                      styles.voiceAgentActionDisabled,
+                    pressed && styles.quickActionPressed,
+                  ]}
+                >
+                  <Text style={styles.voiceAgentActionText}>{voiceAgentActionLabel}</Text>
+                </Pressable>
+              </View>
+              {voiceAgentErrorText ? (
+                <Text style={styles.errorText}>{voiceAgentErrorText}</Text>
+              ) : null}
+            </View>
+
             <SectionLabel
               label="Host controls"
               icon={<ShieldCheck size={12} color={SHEET_COLORS.textMuted} strokeWidth={2} />}
@@ -1230,6 +1323,84 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 12,
     gap: 8,
+  },
+  voiceAgentCard: {
+    width: "100%",
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: SHEET_COLORS.border,
+    backgroundColor: "rgba(254, 252, 217, 0.03)",
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    gap: 10,
+  },
+  voiceAgentHeaderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8,
+  },
+  voiceAgentTitle: {
+    color: SHEET_COLORS.text,
+    fontSize: 13,
+    fontWeight: "600",
+  },
+  voiceAgentStatePill: {
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: SHEET_COLORS.border,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    backgroundColor: "rgba(254, 252, 217, 0.03)",
+  },
+  voiceAgentStatePillLive: {
+    borderColor: "rgba(52, 211, 153, 0.45)",
+    backgroundColor: "rgba(52, 211, 153, 0.15)",
+  },
+  voiceAgentStatePillReady: {
+    borderColor: "rgba(249, 95, 74, 0.45)",
+    backgroundColor: "rgba(249, 95, 74, 0.12)",
+  },
+  voiceAgentStateText: {
+    color: SHEET_COLORS.textMuted,
+    fontSize: 11,
+    textTransform: "uppercase",
+    letterSpacing: 0.6,
+  },
+  voiceAgentControlsRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  voiceAgentInput: {
+    minWidth: 0,
+    paddingVertical: 8,
+    fontSize: 12,
+  },
+  voiceAgentAction: {
+    minWidth: 74,
+    borderRadius: 11,
+    borderWidth: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  voiceAgentActionStart: {
+    borderColor: "rgba(249, 95, 74, 0.65)",
+    backgroundColor: "rgba(249, 95, 74, 0.16)",
+  },
+  voiceAgentActionStop: {
+    borderColor: "rgba(96, 165, 250, 0.6)",
+    backgroundColor: "rgba(96, 165, 250, 0.15)",
+  },
+  voiceAgentActionDisabled: {
+    opacity: 0.45,
+  },
+  voiceAgentActionText: {
+    color: SHEET_COLORS.text,
+    fontSize: 12,
+    fontWeight: "600",
   },
   fieldHeaderText: {
     color: SHEET_COLORS.textMuted,

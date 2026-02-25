@@ -63,6 +63,10 @@ type RealtimeClientSecretResponse = {
   };
 };
 
+type AudioContextCtor = new (
+  contextOptions?: AudioContextOptions,
+) => AudioContext;
+
 const createRuntimeState = (): RuntimeState => ({
   openAiPc: null,
   openAiMicStream: null,
@@ -132,6 +136,18 @@ const buildRandomId = (prefix: string): string => {
     return `${prefix}-${crypto.randomUUID()}`;
   }
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+};
+
+const getAudioContextCtor = (): AudioContextCtor | null => {
+  if (typeof window === "undefined") return null;
+  const nativeCtor = window.AudioContext as AudioContextCtor | undefined;
+  if (nativeCtor) return nativeCtor;
+  const webkitCtor = (
+    window as Window & {
+      webkitAudioContext?: AudioContextCtor;
+    }
+  ).webkitAudioContext;
+  return webkitCtor ?? null;
 };
 
 const hasLiveAudioTrack = (stream: MediaStream | null): boolean =>
@@ -353,15 +369,20 @@ export function useVoiceAgentParticipant({
       }
 
       disconnectMixSources(runtime);
+      const connectedStreamIds = new Set<string>();
 
       const connectStream = (stream: MediaStream | null) => {
         if (!stream || !hasLiveAudioTrack(stream)) {
+          return;
+        }
+        if (connectedStreamIds.has(stream.id)) {
           return;
         }
         try {
           const source = context.createMediaStreamSource(stream);
           source.connect(destination);
           runtime.openAiMixSources.push(source);
+          connectedStreamIds.add(stream.id);
         } catch {}
       };
 
@@ -373,6 +394,7 @@ export function useVoiceAgentParticipant({
         if (participant.isMuted) continue;
         if (isVoiceAgentUserId(participant.userId)) continue;
         connectStream(participant.audioStream);
+        connectStream(participant.screenShareAudioStream);
       }
 
       if (context.state === "suspended") {
@@ -412,7 +434,15 @@ export function useVoiceAgentParticipant({
     pendingRemoteTrackRef.current = null;
 
     try {
-      runtime.openAiMixContext = new AudioContext();
+      const AudioContextImpl = getAudioContextCtor();
+      if (!AudioContextImpl) {
+        throw new Error(
+          "This browser does not support the audio APIs needed for the voice agent.",
+        );
+      }
+      runtime.openAiMixContext = new AudioContextImpl({
+        latencyHint: "interactive",
+      });
       runtime.openAiMixDestination =
         runtime.openAiMixContext.createMediaStreamDestination();
       runtime.openAiMicStream = runtime.openAiMixDestination.stream;
