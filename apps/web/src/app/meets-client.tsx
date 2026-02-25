@@ -531,7 +531,8 @@ export default function MeetsClient({
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
-      link.download = `minutes-${roomId}.pdf`;
+      const ts = new Date().toISOString().replace(/[:.]/g, "-");
+      link.download = `minutes-${roomId}-${ts}.pdf`;
       document.body.appendChild(link);
       link.click();
       link.remove();
