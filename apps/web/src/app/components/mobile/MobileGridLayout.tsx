@@ -22,6 +22,9 @@ interface MobileGridLayoutProps {
 }
 
 const MAX_GRID_TILES = 8;
+const isParticipantVideoOn = (participant: Participant) =>
+  !participant.isCameraOff &&
+  Boolean(participant.videoProducerId || participant.videoStream);
 
 function MobileGridLayout({
   localStream,
@@ -89,6 +92,21 @@ function MobileGridLayout({
       .filter((participant): participant is Participant => Boolean(participant));
   }, [remoteParticipants]);
 
+  const prioritizedRemoteParticipants = useMemo(() => {
+    const withVideo: Participant[] = [];
+    const withoutVideo: Participant[] = [];
+
+    for (const participant of stableRemoteParticipants) {
+      if (isParticipantVideoOn(participant)) {
+        withVideo.push(participant);
+      } else {
+        withoutVideo.push(participant);
+      }
+    }
+
+    return withVideo.concat(withoutVideo);
+  }, [stableRemoteParticipants]);
+
   useEffect(() => {
     stableOrderRef.current = stableRemoteParticipants.map(
       (participant) => participant.userId
@@ -96,18 +114,18 @@ function MobileGridLayout({
   }, [stableRemoteParticipants]);
 
   const maxRemoteWithoutOverflow = Math.max(0, MAX_GRID_TILES - 1);
-  const hasOverflow = stableRemoteParticipants.length > maxRemoteWithoutOverflow;
+  const hasOverflow = prioritizedRemoteParticipants.length > maxRemoteWithoutOverflow;
   const maxVisibleRemoteParticipants = maxRemoteWithoutOverflow;
   const visibleParticipants = useMemo(() => {
     if (maxVisibleRemoteParticipants <= 0) {
       return [];
     }
 
-    if (stableRemoteParticipants.length <= maxVisibleRemoteParticipants) {
-      return stableRemoteParticipants;
+    if (prioritizedRemoteParticipants.length <= maxVisibleRemoteParticipants) {
+      return prioritizedRemoteParticipants;
     }
 
-    const baseVisible = stableRemoteParticipants.slice(0, maxVisibleRemoteParticipants);
+    const baseVisible = prioritizedRemoteParticipants.slice(0, maxVisibleRemoteParticipants);
 
     if (!activeSpeakerId || activeSpeakerId === currentUserId) {
       return baseVisible;
@@ -117,10 +135,10 @@ function MobileGridLayout({
       return baseVisible;
     }
 
-    const activeParticipant = stableRemoteParticipants.find(
+    const activeParticipant = prioritizedRemoteParticipants.find(
       (participant) => participant.userId === activeSpeakerId
     );
-    if (!activeParticipant) {
+    if (!activeParticipant || !isParticipantVideoOn(activeParticipant)) {
       return baseVisible;
     }
 
@@ -128,14 +146,14 @@ function MobileGridLayout({
     nextVisible.push(activeParticipant);
     return nextVisible;
   }, [
-    stableRemoteParticipants,
+    prioritizedRemoteParticipants,
     activeSpeakerId,
     currentUserId,
     maxVisibleRemoteParticipants,
   ]);
   const hiddenParticipantsCount = Math.max(
     0,
-    stableRemoteParticipants.length - visibleParticipants.length
+    prioritizedRemoteParticipants.length - visibleParticipants.length
   );
   const showOverflowTile = hiddenParticipantsCount > 0;
   const totalCount = visibleParticipants.length + 1 + (showOverflowTile ? 1 : 0);

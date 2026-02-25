@@ -26,6 +26,9 @@ interface GridLayoutProps {
 }
 
 const MAX_GRID_TILES = 16;
+const isParticipantVideoOn = (participant: Participant) =>
+  !participant.isCameraOff &&
+  Boolean(participant.videoProducerId || participant.videoStream);
 
 function GridLayout({
   localStream,
@@ -116,30 +119,50 @@ function GridLayout({
       .filter((participant): participant is Participant => Boolean(participant));
   }, [remoteParticipants]);
 
+  const prioritizedRemoteParticipants = useMemo(() => {
+    const withVideo: Participant[] = [];
+    const withoutVideo: Participant[] = [];
+
+    for (const participant of orderedRemoteParticipants) {
+      if (isParticipantVideoOn(participant)) {
+        withVideo.push(participant);
+      } else {
+        withoutVideo.push(participant);
+      }
+    }
+
+    return withVideo.concat(withoutVideo);
+  }, [orderedRemoteParticipants]);
+
   const stableRemoteParticipants = useMemo(() => {
     if (
       !activeSpeakerId ||
       activeSpeakerId === currentUserId ||
       maxRemoteWithoutOverflow <= 0
     ) {
-      return orderedRemoteParticipants;
+      return prioritizedRemoteParticipants;
     }
 
-    const activeSpeakerIndex = orderedRemoteParticipants.findIndex(
+    const activeSpeakerIndex = prioritizedRemoteParticipants.findIndex(
       (participant) => participant.userId === activeSpeakerId
     );
     if (activeSpeakerIndex < 0 || activeSpeakerIndex < maxRemoteWithoutOverflow) {
-      return orderedRemoteParticipants;
+      return prioritizedRemoteParticipants;
+    }
+
+    const activeSpeaker = prioritizedRemoteParticipants[activeSpeakerIndex];
+    if (!activeSpeaker || !isParticipantVideoOn(activeSpeaker)) {
+      return prioritizedRemoteParticipants;
     }
 
     // If the active speaker is in the overflow panel, promote them into the top-16 band.
-    const nextParticipants = [...orderedRemoteParticipants];
-    const [activeSpeaker] = nextParticipants.splice(activeSpeakerIndex, 1);
-    if (!activeSpeaker) return orderedRemoteParticipants;
-    nextParticipants.splice(maxRemoteWithoutOverflow - 1, 0, activeSpeaker);
+    const nextParticipants = [...prioritizedRemoteParticipants];
+    const [speakerToPromote] = nextParticipants.splice(activeSpeakerIndex, 1);
+    if (!speakerToPromote) return prioritizedRemoteParticipants;
+    nextParticipants.splice(maxRemoteWithoutOverflow - 1, 0, speakerToPromote);
     return nextParticipants;
   }, [
-    orderedRemoteParticipants,
+    prioritizedRemoteParticipants,
     activeSpeakerId,
     currentUserId,
     maxRemoteWithoutOverflow,
@@ -180,7 +203,7 @@ function GridLayout({
     const activeParticipant = stableRemoteParticipants.find(
       (participant) => participant.userId === activeSpeakerId
     );
-    if (!activeParticipant) {
+    if (!activeParticipant || !isParticipantVideoOn(activeParticipant)) {
       return baseVisible;
     }
 
