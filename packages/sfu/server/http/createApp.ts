@@ -4,11 +4,14 @@ import type { Express, Request } from "express";
 import { config as defaultConfig } from "../../config/config.js";
 import { Logger } from "../../utilities/loggers.js";
 import type { SfuState } from "../state.js";
-import { getRoomChannelId, popCachedTranscript } from "../rooms.js";
+import {
+  getRoomChannelId,
+  popCachedMinutes,
+  popCachedTranscript,
+} from "../rooms.js";
 import { stopRoomTranscriber } from "../recording/roomTranscriber.js";
 import { summarizeTranscript } from "../recording/summarizeTranscript.js";
 import { buildMinutesPdf } from "../recording/minutesPdf.js";
-import { popCachedMinutes } from "../rooms.js";
 
 export type CreateSfuAppOptions = {
   state: SfuState;

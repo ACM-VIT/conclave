@@ -14,6 +14,9 @@ import type { SfuState } from "./state.js";
 
 export const getRoomChannelId = (clientId: string, roomId: string): string =>
   `${clientId}:${roomId}`;
+const MINUTES_CACHE_TTL_MS = Number(
+  process.env.MINUTES_CACHE_TTL_MS || 30 * 60 * 1000,
+);
 
 export const getOrCreateRoom = async (
   state: SfuState,
@@ -79,11 +82,15 @@ const RoomMinutesCache = new Map<string, CachedMinutes>();
 type CachedTranscript = { transcript: TranscriptChunk[]; createdAt: number };
 const RoomTranscriptCache = new Map<string, CachedTranscript>();
 
+const isFreshEntry = (createdAt: number): boolean =>
+  Date.now() - createdAt <= MINUTES_CACHE_TTL_MS;
+
 export const popCachedMinutes = (channelId: string): Buffer | null => {
   const entry = RoomMinutesCache.get(channelId);
   if (!entry) return null;
   RoomMinutesCache.delete(channelId);
   RoomTranscriptCache.delete(channelId);
+  if (!isFreshEntry(entry.createdAt)) return null;
   return entry.pdf;
 };
 
@@ -91,5 +98,6 @@ export const popCachedTranscript = (channelId: string): TranscriptChunk[] => {
   const entry = RoomTranscriptCache.get(channelId);
   if (!entry) return [];
   RoomTranscriptCache.delete(channelId);
+  if (!isFreshEntry(entry.createdAt)) return [];
   return entry.transcript;
 };
