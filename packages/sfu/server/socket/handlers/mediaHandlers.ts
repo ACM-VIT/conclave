@@ -11,6 +11,8 @@ import { ensureRoomTranscriber } from "../../recording/roomTranscriber.js";
 import type { ConnectionContext } from "../context.js";
 import { respond } from "./ack.js";
 
+const DEFAULT_LOCAL_VOSK_WS_URL = "ws://127.0.0.1:2800";
+
 export const registerMediaHandlers = (context: ConnectionContext): void => {
   const { socket, state } = context;
 
@@ -55,8 +57,14 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
             channelId,
             context.currentRoom.router,
           );
+          const sttUrl =
+            process.env.STT_WS_URL ||
+            process.env.VOSK_WS_URL ||
+            (process.env.NODE_ENV === "production"
+              ? ""
+              : DEFAULT_LOCAL_VOSK_WS_URL);
           void transcriber.start(producer, {
-            sttUrl: process.env.STT_WS_URL || "",
+            sttUrl,
             sttHeaders: process.env.STT_API_KEY
               ? { Authorization: `Bearer ${process.env.STT_API_KEY}` }
               : undefined,
