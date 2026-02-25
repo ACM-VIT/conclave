@@ -6,11 +6,16 @@ import { config as defaultConfig } from "../../config/config.js";
 import { Logger } from "../../utilities/loggers.js";
 import type { SfuState } from "../state.js";
 import {
+  getCachedMinutes,
+  getCachedTranscript,
   getRoomChannelId,
-  popCachedMinutes,
-  popCachedTranscript,
+  setCachedMinutes,
+  setCachedTranscript,
 } from "../rooms.js";
-import { stopRoomTranscriber } from "../recording/roomTranscriber.js";
+import {
+  getRoomTranscriptSnapshot,
+  stopRoomTranscriber,
+} from "../recording/roomTranscriber.js";
 import { summarizeTranscript } from "../recording/summarizeTranscript.js";
 import { buildMinutesPdf } from "../recording/minutesPdf.js";
 
@@ -54,6 +59,7 @@ export const createSfuApp = ({
   getIo,
 }: CreateSfuAppOptions): Express => {
   const app = express();
+  const minutesGenerationInFlight = new Map<string, Promise<Buffer>>();
   app.use(cors());
   app.use(express.json());
 
@@ -214,35 +220,30 @@ export const createSfuApp = ({
     }
 
     const channelId = getRoomChannelId(clientId, roomId);
-    // Try cached minutes first
-    const cached = popCachedMinutes(channelId);
-    if (cached) {
-      Logger.info(`Minutes cache hit for channel=${channelId}`);
-      res.setHeader("Content-Type", "application/pdf");
-      res.setHeader(
-        "Content-Disposition",
-        `attachment; filename="minutes-${roomId}.pdf"`,
-      );
-      return res.end(cached);
+    const activeRoom = state.rooms.get(channelId);
+    const isRoomActive = Boolean(activeRoom && !activeRoom.isEmpty());
+
+    // For finalized rooms, serve pre-generated cache.
+    if (!isRoomActive) {
+      const cached = getCachedMinutes(channelId);
+      if (cached) {
+        Logger.info(`Minutes cache hit for channel=${channelId}`);
+        res.setHeader("Content-Type", "application/pdf");
+        res.setHeader(
+          "Content-Disposition",
+          `attachment; filename="minutes-${roomId}.pdf"`,
+        );
+        return res.end(cached);
+      }
     }
 
-    let transcript = stopRoomTranscriber(channelId);
-    Logger.info(
-      `Minutes request: channel=${channelId} transcriptAfterStop=${transcript.length}`,
-    );
-    if (!transcript.length) {
-      transcript = popCachedTranscript(channelId);
+    const inFlight = minutesGenerationInFlight.get(channelId);
+    if (inFlight) {
       Logger.info(
-        `Minutes request: channel=${channelId} transcriptAfterCache=${transcript.length}`,
+        `Minutes request joined existing generation for channel=${channelId}`,
       );
-    }
-
-    if (!transcript.length) {
-      const summary =
-        "No transcript available. Speech-to-text was not configured or no audio was captured.";
-      Logger.warn(`Minutes request has empty transcript for channel=${channelId}`);
       try {
-        const pdf = await buildMinutesPdf({ roomId, summary, transcript: [] });
+        const pdf = await inFlight;
         res.setHeader("Content-Type", "application/pdf");
         res.setHeader(
           "Content-Disposition",
@@ -250,19 +251,56 @@ export const createSfuApp = ({
         );
         return res.end(pdf);
       } catch (err) {
-        Logger.warn("Failed to build empty minutes PDF", err);
-        return res
-          .status(500)
-          .json({ error: "Failed to generate minutes (no transcript)" });
+        Logger.warn("Joined minutes generation failed", err);
+        return res.status(500).json({ error: "Failed to generate minutes" });
       }
     }
 
-    try {
+    const generation = (async (): Promise<Buffer> => {
+      let transcript = isRoomActive
+        ? getRoomTranscriptSnapshot(channelId)
+        : stopRoomTranscriber(channelId);
+      Logger.info(
+        `Minutes request: channel=${channelId} transcriptAfter${
+          isRoomActive ? "Snapshot" : "Stop"
+        }=${transcript.length}`,
+      );
+      if (!transcript.length && !isRoomActive) {
+        transcript = getCachedTranscript(channelId);
+        Logger.info(
+          `Minutes request: channel=${channelId} transcriptAfterCache=${transcript.length}`,
+        );
+      }
+
+      if (!transcript.length) {
+        const summary =
+          "No transcript available. Speech-to-text was not configured or no audio was captured.";
+        Logger.warn(
+          `Minutes request has empty transcript for channel=${channelId}`,
+        );
+        const pdf = await buildMinutesPdf({ roomId, summary, transcript: [] });
+        if (!isRoomActive) {
+          setCachedMinutes(channelId, pdf);
+        }
+        return pdf;
+      }
+
       const summary = await summarizeTranscript(transcript);
       const pdf = await buildMinutesPdf({ roomId, summary, transcript });
+      if (!isRoomActive) {
+        setCachedTranscript(channelId, transcript);
+        setCachedMinutes(channelId, pdf);
+      }
       Logger.info(
         `Minutes generated for channel=${channelId} transcriptChunks=${transcript.length}`,
       );
+      return pdf;
+    })();
+
+    minutesGenerationInFlight.set(channelId, generation);
+
+    try {
+      const pdf = await generation;
       res.setHeader("Content-Type", "application/pdf");
       res.setHeader(
         "Content-Disposition",
@@ -270,8 +308,21 @@ export const createSfuApp = ({
       );
       return res.end(pdf);
     } catch (err) {
+      const fallbackPdf = isRoomActive ? null : getCachedMinutes(channelId);
+      if (fallbackPdf) {
+        res.setHeader("Content-Type", "application/pdf");
+        res.setHeader(
+          "Content-Disposition",
+          `attachment; filename="minutes-${roomId}.pdf"`,
+        );
+        return res.end(fallbackPdf);
+      }
       Logger.warn("Failed to build minutes PDF", err);
       return res.status(500).json({ error: "Failed to generate minutes" });
+    } finally {
+      if (minutesGenerationInFlight.get(channelId) === generation) {
+        minutesGenerationInFlight.delete(channelId);
+      }
     }
   });
 

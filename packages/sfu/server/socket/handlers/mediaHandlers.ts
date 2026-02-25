@@ -7,7 +7,7 @@ import type {
   ToggleMediaData,
 } from "../../../types.js";
 import { Logger } from "../../../utilities/loggers.js";
-import { ensureRoomTranscriber } from "../../recording/roomTranscriber.js";
+import { ensureProducerTranscriber } from "../../recording/roomTranscriber.js";
 import { emitWebinarFeedChanged } from "../../webinarNotifications.js";
 import type { ConnectionContext } from "../context.js";
 import { respond } from "./ack.js";
@@ -72,23 +72,33 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
           const channelId = room.channelId;
           const speakerLabel =
             room.getDisplayNameForUser(currentClient.id) || currentClient.id;
-          const transcriber = ensureRoomTranscriber(channelId, room.router);
           const sttUrl =
             process.env.STT_WS_URL ||
             process.env.VOSK_WS_URL ||
             (process.env.NODE_ENV === "production"
               ? ""
               : DEFAULT_LOCAL_VOSK_WS_URL);
-          Logger.info(
-            `Starting room transcriber for channel=${channelId} producer=${producer.id} stt=${sttUrl || "unset"}`,
-          );
-          void transcriber.start(producer, {
-            sttUrl,
-            sttHeaders: process.env.STT_API_KEY
-              ? { Authorization: `Bearer ${process.env.STT_API_KEY}` }
-              : undefined,
-            speakerLabel,
-          });
+          if (!sttUrl) {
+            Logger.warn(
+              `Skipping transcriber start for channel=${channelId} producer=${producer.id}: STT URL is not configured`,
+            );
+          } else {
+            const transcriber = ensureProducerTranscriber(
+              channelId,
+              producer.id,
+              room.router,
+            );
+            Logger.info(
+              `Starting room transcriber for channel=${channelId} producer=${producer.id} stt=${sttUrl}`,
+            );
+            void transcriber.start(producer, {
+              sttUrl,
+              sttHeaders: process.env.STT_API_KEY
+                ? { Authorization: `Bearer ${process.env.STT_API_KEY}` }
+                : undefined,
+              speakerLabel,
+            });
+          }
         }
 
         const roomChannelId = room.channelId;

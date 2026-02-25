@@ -825,7 +825,19 @@ export default function MeetsClient({
     socket.cleanup();
   }, [playNotificationSound, socket.cleanup]);
 
+  const requestLeaveRoom = useCallback(() => {
+    if (isAdminFlag) {
+      setShowMinutesPrompt(true);
+      return;
+    }
+    leaveRoom();
+  }, [isAdminFlag, leaveRoom]);
+
   const requestMinutesAndLeave = useCallback(async () => {
+    if (!isAdminFlag) {
+      leaveRoom();
+      return;
+    }
     setMinutesError(null);
     setMinutesBusy(true);
     try {
@@ -856,7 +868,7 @@ export default function MeetsClient({
     } finally {
       setMinutesBusy(false);
     }
-  }, [roomId, leaveRoom]);
+  }, [isAdminFlag, roomId, leaveRoom]);
 
   useEffect(() => {
     leaveRoomCommandRef.current = leaveRoom;
@@ -1000,7 +1012,7 @@ export default function MeetsClient({
     connectionState === "reconnecting" ||
     connectionState === "waiting"; // Waiting is a kind of loading state visually, or handled separately
 
-  const renderMinutesPrompt = showMinutesPrompt && (
+  const renderMinutesPrompt = showMinutesPrompt && isAdminFlag && (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4">
       <div className="w-full max-w-md rounded-lg bg-[#0b1021] p-5 shadow-xl border border-white/10">
         <h3 className="text-lg font-semibold text-white mb-2">
@@ -1200,7 +1212,7 @@ export default function MeetsClient({
           toggleChat={toggleChat}
           toggleHandRaised={toggleHandRaised}
           sendReaction={sendReaction}
-          leaveRoom={() => setShowMinutesPrompt(true)}
+          leaveRoom={requestLeaveRoom}
           isParticipantsOpen={isParticipantsOpen}
           setIsParticipantsOpen={setIsParticipantsOpen}
           pendingUsers={pendingUsers}
@@ -1355,7 +1367,7 @@ export default function MeetsClient({
         toggleChat={toggleChat}
         toggleHandRaised={toggleHandRaised}
         sendReaction={sendReaction}
-        leaveRoom={() => setShowMinutesPrompt(true)}
+        leaveRoom={requestLeaveRoom}
         isParticipantsOpen={isParticipantsOpen}
         setIsParticipantsOpen={setIsParticipantsOpen}
         pendingUsers={pendingUsers}

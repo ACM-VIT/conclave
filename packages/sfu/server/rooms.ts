@@ -29,6 +29,7 @@ export const getOrCreateRoom = async (
   if (room) {
     return room;
   }
+  clearCachedMinutesArtifacts(channelId);
 
   const worker = await getWorker(state.workers as Worker[]);
 
@@ -48,7 +49,7 @@ export const cleanupRoom = (state: SfuState, channelId: string): boolean => {
   if (room && room.isEmpty()) {
     const transcript = stopRoomTranscriber(channelId);
     if (transcript.length) {
-      RoomTranscriptCache.set(channelId, { transcript, createdAt: Date.now() });
+      setCachedTranscript(channelId, transcript);
       void summarizeTranscript(transcript)
         .then(async (summary) => {
           Logger.info(`Room ${room.id} summary`, summary);
@@ -60,7 +61,7 @@ export const cleanupRoom = (state: SfuState, channelId: string): boolean => {
               summary,
               transcript,
             });
-            RoomMinutesCache.set(channelId, { pdf, createdAt: Date.now() });
+            setCachedMinutes(channelId, pdf);
           } catch (err) {
             Logger.warn("Failed to build minutes PDF", err);
           }
@@ -95,19 +96,44 @@ const RoomTranscriptCache = new Map<string, CachedTranscript>();
 const isFreshEntry = (createdAt: number): boolean =>
   Date.now() - createdAt <= MINUTES_CACHE_TTL_MS;
 
-export const popCachedMinutes = (channelId: string): Buffer | null => {
-  const entry = RoomMinutesCache.get(channelId);
-  if (!entry) return null;
-  RoomMinutesCache.delete(channelId);
-  RoomTranscriptCache.delete(channelId);
-  if (!isFreshEntry(entry.createdAt)) return null;
-  return entry.pdf;
+const cloneTranscript = (transcript: TranscriptChunk[]): TranscriptChunk[] =>
+  transcript.map((chunk) => ({ ...chunk }));
+
+export const setCachedMinutes = (channelId: string, pdf: Buffer): void => {
+  RoomMinutesCache.set(channelId, { pdf: Buffer.from(pdf), createdAt: Date.now() });
 };
 
-export const popCachedTranscript = (channelId: string): TranscriptChunk[] => {
+export const setCachedTranscript = (
+  channelId: string,
+  transcript: TranscriptChunk[],
+): void => {
+  RoomTranscriptCache.set(channelId, {
+    transcript: cloneTranscript(transcript),
+    createdAt: Date.now(),
+  });
+};
+
+export const clearCachedMinutesArtifacts = (channelId: string): void => {
+  RoomMinutesCache.delete(channelId);
+  RoomTranscriptCache.delete(channelId);
+};
+
+export const getCachedMinutes = (channelId: string): Buffer | null => {
+  const entry = RoomMinutesCache.get(channelId);
+  if (!entry) return null;
+  if (!isFreshEntry(entry.createdAt)) {
+    RoomMinutesCache.delete(channelId);
+    return null;
+  }
+  return Buffer.from(entry.pdf);
+};
+
+export const getCachedTranscript = (channelId: string): TranscriptChunk[] => {
   const entry = RoomTranscriptCache.get(channelId);
   if (!entry) return [];
-  RoomTranscriptCache.delete(channelId);
-  if (!isFreshEntry(entry.createdAt)) return [];
-  return entry.transcript;
+  if (!isFreshEntry(entry.createdAt)) {
+    RoomTranscriptCache.delete(channelId);
+    return [];
+  }
+  return cloneTranscript(entry.transcript);
 };

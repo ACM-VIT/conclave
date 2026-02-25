@@ -124,6 +124,7 @@ const buildConsumerSdp = (rtpPort: number, consumer: Consumer): string => {
 
 class RoomTranscriber {
   private router: Router;
+  private onStop?: (transcript: TranscriptChunk[]) => void;
   private ffmpeg?: ReturnType<typeof spawn>;
   private sttSocket?: WebSocket;
   private transport?: PlainTransport;
@@ -147,8 +148,12 @@ class RoomTranscriber {
   private sttOnError?: (err: Error) => void;
   private sttOnMessage?: (data: WebSocket.RawData) => void;
 
-  constructor(router: Router) {
+  constructor(
+    router: Router,
+    onStop?: (transcript: TranscriptChunk[]) => void,
+  ) {
     this.router = router;
+    this.onStop = onStop;
   }
 
   async start(
@@ -164,7 +169,7 @@ class RoomTranscriber {
       return;
     }
     if (this.transport || this.consumer || this.ffmpeg || this.sttSocket) {
-      Logger.info("Transcriber already active for this room; skipping");
+      Logger.info("Transcriber already active for this producer; skipping");
       return;
     }
 
@@ -520,27 +525,87 @@ class RoomTranscriber {
     this.sttSocket = undefined;
     this.ffmpeg = undefined;
     this.producerId = undefined;
+    this.onStop?.(this.getTranscript());
   }
 }
 
 const transcribers = new Map<string, RoomTranscriber>();
+const TRANSCRIBER_KEY_SEPARATOR = "::";
+const roomTranscriptHistory = new Map<string, TranscriptChunk[]>();
 
-export const ensureRoomTranscriber = (
+const cloneTranscript = (chunks: TranscriptChunk[]): TranscriptChunk[] =>
+  chunks.map((chunk) => ({ ...chunk }));
+
+const sortTranscript = (chunks: TranscriptChunk[]): TranscriptChunk[] =>
+  cloneTranscript(chunks).sort((a, b) => {
+    if (a.startMs !== b.startMs) return a.startMs - b.startMs;
+    return a.endMs - b.endMs;
+  });
+
+const mergeRoomTranscript = (
   channelId: string,
+  chunks: TranscriptChunk[],
+): void => {
+  if (!chunks.length) return;
+  const existing = roomTranscriptHistory.get(channelId);
+  if (!existing) {
+    roomTranscriptHistory.set(channelId, cloneTranscript(chunks));
+    return;
+  }
+  existing.push(...cloneTranscript(chunks));
+};
+
+const getTranscriberKey = (channelId: string, producerId: string): string =>
+  `${channelId}${TRANSCRIBER_KEY_SEPARATOR}${producerId}`;
+
+const getChannelPrefix = (channelId: string): string =>
+  `${channelId}${TRANSCRIBER_KEY_SEPARATOR}`;
+
+export const ensureProducerTranscriber = (
+  channelId: string,
+  producerId: string,
   router: Router,
 ): RoomTranscriber => {
-  let transcriber = transcribers.get(channelId);
+  const key = getTranscriberKey(channelId, producerId);
+  let transcriber = transcribers.get(key);
   if (!transcriber) {
-    transcriber = new RoomTranscriber(router);
-    transcribers.set(channelId, transcriber);
+    let createdTranscriber: RoomTranscriber;
+    createdTranscriber = new RoomTranscriber(router, (transcript) => {
+      mergeRoomTranscript(channelId, transcript);
+      if (transcribers.get(key) === createdTranscriber) {
+        transcribers.delete(key);
+      }
+    });
+    transcriber = createdTranscriber;
+    transcribers.set(key, transcriber);
   }
   return transcriber;
 };
 
+export const getRoomTranscriptSnapshot = (channelId: string): TranscriptChunk[] => {
+  const channelPrefix = getChannelPrefix(channelId);
+  const combined: TranscriptChunk[] = [];
+  const history = roomTranscriptHistory.get(channelId);
+  if (history?.length) {
+    combined.push(...cloneTranscript(history));
+  }
+
+  for (const [key, transcriber] of transcribers.entries()) {
+    if (!key.startsWith(channelPrefix)) continue;
+    combined.push(...transcriber.getTranscript());
+  }
+
+  return sortTranscript(combined);
+};
+
 export const stopRoomTranscriber = (channelId: string): TranscriptChunk[] => {
-  const transcriber = transcribers.get(channelId);
-  if (!transcriber) return [];
-  transcriber.stop();
-  transcribers.delete(channelId);
-  return transcriber.getTranscript();
+  const channelPrefix = getChannelPrefix(channelId);
+  for (const [key, transcriber] of transcribers.entries()) {
+    if (!key.startsWith(channelPrefix)) continue;
+    transcriber.stop();
+    transcribers.delete(key);
+  }
+  const history = roomTranscriptHistory.get(channelId) || [];
+  roomTranscriptHistory.delete(channelId);
+  return sortTranscript(history);
 };
