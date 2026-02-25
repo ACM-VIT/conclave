@@ -436,6 +436,13 @@ export default function MeetsClient({
   } = useMeetChat({
     socketRef: refs.socketRef,
     ghostEnabled,
+    currentUserId: userId,
+    currentUserDisplayName:
+      displayNameInput ||
+      normalizedCurrentUserName ||
+      currentUser?.email ||
+      currentUser?.id ||
+      "You",
     isObserverMode: isWebinarAttendee,
     isChatLocked,
     isAdmin: isAdminFlag,

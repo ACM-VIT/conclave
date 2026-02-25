@@ -592,6 +592,9 @@ export function MeetScreen({
   } = useMeetChat({
     socketRef: refs.socketRef,
     ghostEnabled: effectiveGhostMode,
+    currentUserId: userId,
+    currentUserDisplayName:
+      displayNameInput || user?.name || user?.email || user?.id || "You",
     isChatLocked,
     isAdmin,
     isDmEnabled,

@@ -16,6 +16,8 @@ const DIRECT_MESSAGE_INTENT_PATTERN =
 interface UseMeetChatOptions {
   socketRef: React.MutableRefObject<Socket | null>;
   ghostEnabled: boolean;
+  currentUserId?: string;
+  currentUserDisplayName?: string;
   isChatLocked?: boolean;
   isAdmin?: boolean;
   isDmEnabled?: boolean;
@@ -36,6 +38,8 @@ interface UseMeetChatOptions {
 export function useMeetChat({
   socketRef,
   ghostEnabled,
+  currentUserId = "local-user",
+  currentUserDisplayName = "You",
   isChatLocked = false,
   isAdmin = false,
   isDmEnabled = true,
@@ -64,6 +68,18 @@ export function useMeetChat({
     [setChatMessages]
   );
 
+  const buildOptimisticMessage = useCallback(
+    (content: string): ChatMessage =>
+      normalizeChatMessage({
+        id: `optimistic-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        userId: currentUserId,
+        displayName: currentUserDisplayName,
+        content,
+        timestamp: Date.now(),
+      }).message,
+    [currentUserDisplayName, currentUserId]
+  );
+
   const clearChat = useCallback(() => {
     setChatMessages([]);
     setChatOverlayMessages([]);
@@ -73,11 +89,15 @@ export function useMeetChat({
   const sendChatInternal = useCallback(
     (content: string) => {
       const socket = socketRef.current;
-      if (!socket || !content.trim()) return;
+      const trimmedContent = content.trim();
+      if (!socket || !trimmedContent) return;
+
+      const optimisticMessage = buildOptimisticMessage(trimmedContent);
+      setChatMessages((prev) => [...prev, optimisticMessage]);
 
       socket.emit(
         "sendChat",
-        { content: content.trim() },
+        { content: trimmedContent },
         (
           response:
             | { success: boolean; message?: ChatMessage }
@@ -85,12 +105,28 @@ export function useMeetChat({
         ) => {
           if ("error" in response) {
             console.error("[Meets] Chat error:", response.error);
+            setChatMessages((prev) =>
+              prev.filter((message) => message.id !== optimisticMessage.id)
+            );
             appendLocalMessage(response.error);
             return;
           }
           if (response.message) {
             const { message, ttsText } = normalizeChatMessage(response.message);
-            setChatMessages((prev) => [...prev, message]);
+            setChatMessages((prev) => {
+              const optimisticIndex = prev.findIndex(
+                (item) => item.id === optimisticMessage.id
+              );
+              if (optimisticIndex === -1) {
+                if (prev.some((item) => item.id === message.id)) {
+                  return prev;
+                }
+                return [...prev, message];
+              }
+              const next = [...prev];
+              next[optimisticIndex] = message;
+              return next;
+            });
             if (ttsText && !isTtsDisabled) {
               onTtsMessage?.({
                 userId: message.userId,
@@ -98,11 +134,21 @@ export function useMeetChat({
                 text: ttsText,
               });
             }
+            return;
           }
+          setChatMessages((prev) =>
+            prev.filter((message) => message.id !== optimisticMessage.id)
+          );
         }
       );
     },
-    [socketRef, onTtsMessage, isTtsDisabled, appendLocalMessage]
+    [
+      socketRef,
+      onTtsMessage,
+      isTtsDisabled,
+      appendLocalMessage,
+      buildOptimisticMessage,
+    ]
   );
 
   const toggleChat = useCallback(() => {
