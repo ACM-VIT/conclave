@@ -85,6 +85,7 @@ interface CallScreenProps {
   onToggleNoGuests?: (noGuests: boolean) => void;
   onToggleChatLock?: (locked: boolean) => void;
   onToggleTtsDisabled?: (disabled: boolean) => void;
+  onToggleDmEnabled?: (enabled: boolean) => void;
   onSendReaction: (emoji: string) => void;
   onOpenSettings: () => void;
   onLeave: () => void;
@@ -93,6 +94,7 @@ interface CallScreenProps {
   isNoGuests?: boolean;
   isChatLocked?: boolean;
   isTtsDisabled?: boolean;
+  isDmEnabled?: boolean;
   isAdmin?: boolean;
   pendingUsersCount?: number;
   isObserverMode?: boolean;
@@ -190,6 +192,7 @@ export function CallScreen({
   onToggleNoGuests,
   onToggleChatLock,
   onToggleTtsDisabled,
+  onToggleDmEnabled,
   onSendReaction,
   onOpenSettings,
   onLeave,
@@ -198,6 +201,7 @@ export function CallScreen({
   isNoGuests = false,
   isChatLocked = false,
   isTtsDisabled = false,
+  isDmEnabled = true,
   isAdmin = false,
   pendingUsersCount = 0,
   isObserverMode = false,
@@ -1115,6 +1119,7 @@ export function CallScreen({
         isNoGuests={isNoGuests}
         isChatLocked={isChatLocked}
         isTtsDisabled={isTtsDisabled}
+        isDmEnabled={isDmEnabled}
         isAdmin={isAdmin}
         isObserverMode={isObserverMode}
         pendingUsersCount={pendingUsersCount}
@@ -1131,6 +1136,7 @@ export function CallScreen({
         onToggleNoGuests={onToggleNoGuests}
         onToggleChatLock={onToggleChatLock}
         onToggleTtsDisabled={onToggleTtsDisabled}
+        onToggleDmEnabled={onToggleDmEnabled}
         isWhiteboardActive={isWhiteboardActive}
         showWhiteboardControl={isTablet && isAdmin}
         isAppsLocked={appsState.locked}

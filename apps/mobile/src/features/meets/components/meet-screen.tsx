@@ -93,7 +93,6 @@ const readError = async (response: Response) => {
 interface MeetScreenProps {
   initialRoomId?: string;
   joinMode?: JoinMode;
-  webinarSignedToken?: string;
   autoJoinOnMount?: boolean;
   hideJoinUI?: boolean;
 }
@@ -101,7 +100,6 @@ interface MeetScreenProps {
 export function MeetScreen({
   initialRoomId,
   joinMode = "meeting",
-  webinarSignedToken,
   autoJoinOnMount = false,
   hideJoinUI = false,
 }: MeetScreenProps = {}) {
@@ -126,11 +124,10 @@ export function MeetScreen({
       return {
         roomId: (initialRoomId ?? "").trim(),
         joinMode,
-        webinarToken: webinarSignedToken ?? null,
       };
     }
     return parseJoinInput(initialRoomId ?? "");
-  }, [initialRoomId, joinMode, webinarSignedToken]);
+  }, [initialRoomId, joinMode]);
   const prefillRoomId =
     joinMode === "webinar_attendee" ||
     initialJoinTarget.joinMode === "webinar_attendee"
@@ -180,6 +177,8 @@ export function MeetScreen({
     setIsChatLocked,
     isTtsDisabled,
     setIsTtsDisabled,
+    isDmEnabled,
+    setIsDmEnabled,
     hostUserId,
     setHostUserId,
     hostUserIds,
@@ -207,9 +206,7 @@ export function MeetScreen({
     if (joinMode === "webinar_attendee") return;
     if (initialJoinTarget.joinMode !== "webinar_attendee") return;
     if (!initialJoinTarget.roomId) return;
-    const token = initialJoinTarget.webinarToken;
-    const query = token ? `?wt=${encodeURIComponent(token)}` : "";
-    router.replace(`/w/${encodeURIComponent(initialJoinTarget.roomId)}${query}`);
+    router.replace(`/w/${encodeURIComponent(initialJoinTarget.roomId)}`);
   }, [initialJoinTarget, joinMode, router]);
 
   useEffect(() => {
@@ -597,6 +594,7 @@ export function MeetScreen({
     ghostEnabled: effectiveGhostMode,
     isChatLocked,
     isAdmin,
+    isDmEnabled,
     isTtsDisabled,
     isMuted,
     isCameraOff,
@@ -722,8 +720,6 @@ export function MeetScreen({
           throw new Error("Missing EXPO_PUBLIC_SFU_BASE_URL for mobile API");
         }
         const resolvedJoinMode = options?.joinMode ?? joinMode;
-        const resolvedWebinarSignedToken =
-          options?.webinarSignedToken ?? webinarSignedToken;
         const response = await fetch(buildApiUrl("/api/sfu/join"), {
           method: "POST",
           headers: {
@@ -738,7 +734,6 @@ export function MeetScreen({
             isAdmin: options?.isHost,
             clientId,
             joinMode: resolvedJoinMode,
-            webinarSignedToken: resolvedWebinarSignedToken,
           }),
         });
 
@@ -748,10 +743,9 @@ export function MeetScreen({
 
         return response.json();
       },
-      [joinMode, webinarSignedToken]
+      [joinMode]
     ),
     joinMode,
-    webinarSignedToken,
     ghostEnabled: isGhostMode,
     displayNameInput,
     localStream,
@@ -780,6 +774,7 @@ export function MeetScreen({
     setMeetingRequiresInviteCode,
     isTtsDisabled,
     setIsTtsDisabled,
+    setIsDmEnabled,
     setActiveScreenShareId,
     setVideoQuality,
     videoQualityRef: refs.videoQualityRef,
@@ -1075,7 +1070,6 @@ export function MeetScreen({
   const pendingJoinTargetRef = useRef<{
     roomId: string;
     joinMode: JoinMode;
-    webinarToken?: string | null;
   } | null>(null);
 
   const handleRoomInputChange = useCallback(
@@ -1121,7 +1115,6 @@ export function MeetScreen({
         return {
           roomId: value.trim(),
           joinMode,
-          webinarToken: webinarSignedToken ?? null,
         };
       }
 
@@ -1141,7 +1134,7 @@ export function MeetScreen({
 
       return parseJoinInput(trimmed);
     },
-    [joinMode, webinarSignedToken]
+    [joinMode]
   );
 
   const performJoin = useCallback(
@@ -1203,10 +1196,8 @@ export function MeetScreen({
         joinMode !== "webinar_attendee" &&
         resolved.joinMode === "webinar_attendee"
       ) {
-        const token = resolved.webinarToken;
-        const query = token ? `?wt=${encodeURIComponent(token)}` : "";
         pendingJoinTargetRef.current = null;
-        router.replace(`/w/${encodeURIComponent(resolved.roomId)}${query}`);
+        router.replace(`/w/${encodeURIComponent(resolved.roomId)}`);
         return;
       }
 
@@ -1676,6 +1667,9 @@ export function MeetScreen({
           onToggleTtsDisabled={(disabled) => {
             socket.toggleTtsDisabled?.(disabled);
           }}
+          onToggleDmEnabled={(enabled) => {
+            socket.toggleDmEnabled?.(enabled);
+          }}
           onSendReaction={(emoji) => {
             sendReaction({ kind: "emoji", id: emoji, value: emoji, label: emoji });
           }}
@@ -1693,6 +1687,7 @@ export function MeetScreen({
           isNoGuests={isNoGuests}
           isChatLocked={isChatLocked}
           isTtsDisabled={isTtsDisabled}
+          isDmEnabled={isDmEnabled}
           pendingUsersCount={pendingUsers.size}
           webinarConfig={webinarConfig}
           webinarSpeakerUserId={webinarSpeakerUserId}
@@ -1720,8 +1715,10 @@ export function MeetScreen({
           currentUserId={userId}
           isGhostMode={effectiveGhostMode}
           isChatLocked={isChatLocked}
+          isDmEnabled={isDmEnabled}
           isAdmin={isAdmin}
           resolveDisplayName={resolveDisplayName}
+          participants={Array.from(participants.values())}
         />
       ) : null}
 
@@ -1786,6 +1783,7 @@ export function MeetScreen({
           isNoGuests={isNoGuests}
           isChatLocked={isChatLocked}
           isTtsDisabled={isTtsDisabled}
+          isDmEnabled={isDmEnabled}
           isAdmin={isAdmin}
           selectedAudioInputDeviceId={selectedAudioInputDeviceId}
           selectedAudioOutputDeviceId={selectedAudioOutputDeviceId}
@@ -1822,6 +1820,10 @@ export function MeetScreen({
           onToggleTtsDisabled={(disabled) => {
             setIsSettingsSheetOpen(false);
             socket.toggleTtsDisabled?.(disabled);
+          }}
+          onToggleDmEnabled={(enabled) => {
+            setIsSettingsSheetOpen(false);
+            socket.toggleDmEnabled?.(enabled);
           }}
           onAudioInputDeviceChange={handleAudioInputDeviceChange}
           onAudioOutputDeviceChange={handleAudioOutputDeviceChange}

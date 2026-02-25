@@ -119,7 +119,7 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
             }
           }
 
-          emitWebinarFeedChanged(io, activeRoom);
+          emitWebinarFeedChanged(io, state, activeRoom);
         };
 
         producer.on("transportclose", notifyProducerClosed);
@@ -161,7 +161,7 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
             paused: producer.paused,
           });
         }
-        emitWebinarFeedChanged(io, activeRoom);
+        emitWebinarFeedChanged(io, state, activeRoom);
 
         Logger.info(
           `User ${clientId} started producing ${kind} (${type}): ${producer.id}`,
@@ -312,7 +312,7 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
           muted,
           roomId: context.currentRoom.id,
         });
-        emitWebinarFeedChanged(io, context.currentRoom);
+        emitWebinarFeedChanged(io, state, context.currentRoom);
 
         respond(callback, { success: true });
       } catch (error) {
@@ -359,7 +359,7 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
           cameraOff,
           roomId: context.currentRoom.id,
         });
-        emitWebinarFeedChanged(io, context.currentRoom);
+        emitWebinarFeedChanged(io, state, context.currentRoom);
 
         respond(callback, { success: true });
       } catch (error) {
@@ -416,7 +416,7 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
               producerUserId: context.currentClient.id,
             });
           }
-          emitWebinarFeedChanged(io, context.currentRoom);
+          emitWebinarFeedChanged(io, state, context.currentRoom);
 
           respond(callback, { success: true });
           return;
@@ -424,7 +424,7 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
 
         if (context.currentRoom.screenShareProducerId === data.producerId) {
           context.currentRoom.clearScreenShareProducer(data.producerId);
-          emitWebinarFeedChanged(io, context.currentRoom);
+          emitWebinarFeedChanged(io, state, context.currentRoom);
         }
 
         respond(callback, { success: true });

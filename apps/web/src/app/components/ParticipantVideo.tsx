@@ -1,7 +1,7 @@
 "use client";
 
 import { Ghost, Hand, Info, MicOff } from "lucide-react";
-import { memo, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import type { Participant } from "../lib/types";
 import { truncateDisplayName } from "../lib/utils";
 
@@ -15,6 +15,9 @@ interface ParticipantVideoProps {
   isSelected?: boolean;
   onAdminClick?: (userId: string) => void;
   videoObjectFit?: "cover" | "contain";
+  onAudioAutoplayBlocked?: () => void;
+  onAudioPlaybackStarted?: () => void;
+  audioPlaybackAttemptToken?: number;
 }
 
 function ParticipantVideo({
@@ -27,6 +30,9 @@ function ParticipantVideo({
   isSelected = false,
   onAdminClick,
   videoObjectFit = "cover",
+  onAudioAutoplayBlocked,
+  onAudioPlaybackStarted,
+  audioPlaybackAttemptToken,
 }: ParticipantVideoProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -38,6 +44,24 @@ function ParticipantVideo({
     const timer = setTimeout(() => setIsNew(false), 800);
     return () => clearTimeout(timer);
   }, []);
+
+  const attemptAudioPlayback = useCallback(() => {
+    const audio = audioRef.current;
+    if (!audio || !participant.audioStream) return;
+    audio.play()
+      .then(() => {
+        onAudioPlaybackStarted?.();
+      })
+      .catch((err) => {
+        if (err.name === "NotAllowedError") {
+          onAudioAutoplayBlocked?.();
+          return;
+        }
+        if (err.name !== "AbortError") {
+          console.error("[Meets] Audio play error:", err);
+        }
+      });
+  }, [onAudioAutoplayBlocked, onAudioPlaybackStarted, participant.audioStream]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -160,15 +184,7 @@ function ParticipantVideo({
       audio.srcObject = participant.audioStream;
     }
 
-    const playAudio = () => {
-      audio.play().catch((err) => {
-        if (err.name !== "AbortError") {
-          console.error("[Meets] Audio play error:", err);
-        }
-      });
-    };
-
-    playAudio();
+    attemptAudioPlayback();
 
     if (audioOutputDeviceId) {
       const audioElement = audio as HTMLAudioElement & {
@@ -183,17 +199,23 @@ function ParticipantVideo({
 
     const audioTrack = participant.audioStream.getAudioTracks()[0];
     if (!audioTrack) return;
-    audioTrack.addEventListener("unmute", playAudio);
+    audioTrack.addEventListener("unmute", attemptAudioPlayback);
 
     return () => {
-      audioTrack.removeEventListener("unmute", playAudio);
+      audioTrack.removeEventListener("unmute", attemptAudioPlayback);
     };
   }, [
     participant.audioStream,
     participant.audioProducerId,
     participant.isMuted,
     audioOutputDeviceId,
+    attemptAudioPlayback,
   ]);
+
+  useEffect(() => {
+    if (audioPlaybackAttemptToken == null || audioPlaybackAttemptToken < 1) return;
+    attemptAudioPlayback();
+  }, [audioPlaybackAttemptToken, attemptAudioPlayback]);
 
   const showPlaceholder = !participant.videoStream || participant.isCameraOff;
 

@@ -55,6 +55,7 @@ function GridLayout({
   const copyTimeoutRef = useRef<number | null>(null);
   const inviteTimeoutRef = useRef<number | null>(null);
   const isLocalActiveSpeaker = activeSpeakerId === currentUserId;
+  const maxRemoteWithoutOverflow = Math.max(0, MAX_GRID_TILES - 1);
 
   useEffect(() => {
     const video = localVideoRef.current;
@@ -89,7 +90,7 @@ function GridLayout({
     [participants, currentUserId]
   );
 
-  const stableRemoteParticipants = useMemo(() => {
+  const orderedRemoteParticipants = useMemo(() => {
     const participantMap = new Map(
       remoteParticipants.map((participant) => [participant.userId, participant])
     );
@@ -115,13 +116,41 @@ function GridLayout({
       .filter((participant): participant is Participant => Boolean(participant));
   }, [remoteParticipants]);
 
+  const stableRemoteParticipants = useMemo(() => {
+    if (
+      !activeSpeakerId ||
+      activeSpeakerId === currentUserId ||
+      maxRemoteWithoutOverflow <= 0
+    ) {
+      return orderedRemoteParticipants;
+    }
+
+    const activeSpeakerIndex = orderedRemoteParticipants.findIndex(
+      (participant) => participant.userId === activeSpeakerId
+    );
+    if (activeSpeakerIndex < 0 || activeSpeakerIndex < maxRemoteWithoutOverflow) {
+      return orderedRemoteParticipants;
+    }
+
+    // If the active speaker is in the overflow panel, promote them into the top-16 band.
+    const nextParticipants = [...orderedRemoteParticipants];
+    const [activeSpeaker] = nextParticipants.splice(activeSpeakerIndex, 1);
+    if (!activeSpeaker) return orderedRemoteParticipants;
+    nextParticipants.splice(maxRemoteWithoutOverflow - 1, 0, activeSpeaker);
+    return nextParticipants;
+  }, [
+    orderedRemoteParticipants,
+    activeSpeakerId,
+    currentUserId,
+    maxRemoteWithoutOverflow,
+  ]);
+
   useEffect(() => {
     stableOrderRef.current = stableRemoteParticipants.map(
       (participant) => participant.userId
     );
   }, [stableRemoteParticipants]);
 
-  const maxRemoteWithoutOverflow = Math.max(0, MAX_GRID_TILES - 1);
   const hasOverflow = stableRemoteParticipants.length > maxRemoteWithoutOverflow;
   const isSolo = stableRemoteParticipants.length === 0;
   const maxVisibleRemoteParticipants = hasOverflow
@@ -336,24 +365,18 @@ function GridLayout({
             {isMuted && <MicOff className="w-3 h-3 text-[#F95F4A]" />}
           </div>
           {isSolo ? (
-            <div className="absolute top-3 left-3 w-[280px] rounded-xl border border-[#FEFCD9]/10 bg-black/70 backdrop-blur-sm px-4 py-3 text-[#FEFCD9]">
-              <p
-                className="text-sm font-semibold"
-                style={{ fontFamily: "'PolySans Trial', sans-serif" }}
-              >
+            <div className="absolute top-3 left-3 w-[304px] rounded-xl border border-[#FEFCD9]/10 bg-black/60 px-4 py-3 text-[#FEFCD9] shadow-[0_10px_28px_rgba(0,0,0,0.35)] backdrop-blur-sm">
+              <p className="text-[15px] font-semibold leading-tight">
                 You are the only person here
               </p>
-              <p
-                className="mt-1 text-xs text-[#FEFCD9]/60"
-                style={{ fontFamily: "'PolySans Trial', sans-serif" }}
-              >
+              <p className="mt-1 text-xs text-[#FEFCD9]/60">
                 Invite people to join this room.
               </p>
               <div className="mt-3 flex gap-2">
                 <button
                   type="button"
                   onClick={handleInvite}
-                  className="flex-1 rounded-lg border border-[#FEFCD9]/10 bg-[#1a1a1a] px-3 py-2 text-xs font-medium text-[#FEFCD9] transition-all hover:border-[#FEFCD9]/25 hover:bg-[#1a1a1a]/80"
+                  className="flex-1 rounded-lg border border-[#FEFCD9]/18 bg-white/[0.05] px-3 py-2 text-xs font-medium text-[#FEFCD9] transition-colors hover:bg-white/[0.09] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#FEFCD9]/20"
                 >
                   {inviteStatus === "shared"
                     ? "Invite sent"
@@ -364,7 +387,7 @@ function GridLayout({
                 <button
                   type="button"
                   onClick={handleCopyLink}
-                  className="flex-1 rounded-lg border border-[#FEFCD9]/10 bg-black/40 px-3 py-2 text-xs font-medium text-[#FEFCD9]/85 transition-all hover:border-[#FEFCD9]/25 hover:text-[#FEFCD9]"
+                  className="flex-1 rounded-lg border border-[#FEFCD9]/14 bg-transparent px-3 py-2 text-xs font-medium text-[#FEFCD9]/85 transition-colors hover:bg-white/[0.04] hover:text-[#FEFCD9] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#FEFCD9]/20"
                 >
                   {copyStatus === "copied" ? "Link copied" : "Copy link"}
                 </button>

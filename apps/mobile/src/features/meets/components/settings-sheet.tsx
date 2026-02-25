@@ -46,6 +46,7 @@ interface SettingsSheetProps {
   isNoGuests: boolean;
   isChatLocked: boolean;
   isTtsDisabled: boolean;
+  isDmEnabled: boolean;
   isAdmin?: boolean;
   selectedAudioInputDeviceId?: string;
   selectedAudioOutputDeviceId?: string;
@@ -55,6 +56,7 @@ interface SettingsSheetProps {
   onToggleNoGuests?: (noGuests: boolean) => void;
   onToggleChatLock?: (locked: boolean) => void;
   onToggleTtsDisabled?: (disabled: boolean) => void;
+  onToggleDmEnabled?: (enabled: boolean) => void;
   onAudioInputDeviceChange?: (deviceId: string) => void;
   onAudioOutputDeviceChange?: (deviceId: string) => void;
   meetingRequiresInviteCode?: boolean;
@@ -234,6 +236,7 @@ export function SettingsSheet({
   isNoGuests,
   isChatLocked,
   isTtsDisabled,
+  isDmEnabled,
   isAdmin = false,
   selectedAudioInputDeviceId,
   selectedAudioOutputDeviceId,
@@ -243,6 +246,7 @@ export function SettingsSheet({
   onToggleNoGuests,
   onToggleChatLock,
   onToggleTtsDisabled,
+  onToggleDmEnabled,
   onAudioInputDeviceChange,
   onAudioOutputDeviceChange,
   meetingRequiresInviteCode = false,
@@ -305,7 +309,7 @@ export function SettingsSheet({
     : availableAudioOutputDevices[0]?.deviceId;
 
   const trigger = useCallback((action: () => void) => {
-    Haptics.selectionAsync().catch(() => {});
+    Haptics.selectionAsync().catch(() => { });
     action();
   }, []);
 
@@ -620,6 +624,19 @@ export function SettingsSheet({
                     : undefined
                 }
                 disabled={!onToggleTtsDisabled}
+              />
+              <SettingRow
+                title="Direct messages"
+                subtitle="Allow private @messages"
+                value={isDmEnabled ? "Enabled" : "Disabled"}
+                active={!isDmEnabled}
+                accent="amber"
+                onPress={
+                  onToggleDmEnabled
+                    ? () => trigger(() => onToggleDmEnabled(!isDmEnabled))
+                    : undefined
+                }
+                disabled={!onToggleDmEnabled}
               />
             </View>
 

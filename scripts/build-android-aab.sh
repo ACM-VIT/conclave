@@ -37,6 +37,7 @@ KEY_PASSWORD="${ANDROID_KEY_PASSWORD}"
 APP_JSON="${ROOT}/apps/mobile/app.json"
 GRADLE_FILE="${ROOT}/apps/mobile/android/app/build.gradle"
 ANDROID_DIR="${ROOT}/apps/mobile/android"
+MOBILE_DIR="${ROOT}/apps/mobile"
 
 if [[ ! -f "${KEYSTORE_PATH}" ]]; then
   echo "Keystore not found at ${KEYSTORE_PATH}" >&2
@@ -64,6 +65,8 @@ with open(app_json, "w", encoding="utf-8") as f:
     json.dump(data, f, indent=2)
     f.write("\n")
 PY
+
+(cd "${MOBILE_DIR}" && npx expo prebuild --platform android)
 
 python3 - <<'PY'
 import os
