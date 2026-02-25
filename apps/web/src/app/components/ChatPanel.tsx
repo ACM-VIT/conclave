@@ -44,8 +44,12 @@ function ChatPanel({
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const shouldAutoScrollRef = useRef(true);
+  const sendAnimationTimeoutRef = useRef<number | null>(null);
+  const prevMessageIdsRef = useRef<Set<string>>(new Set());
+  const hasInitializedRef = useRef(false);
   const [activeCommandIndex, setActiveCommandIndex] = useState(0);
   const [activeMentionIndex, setActiveMentionIndex] = useState(0);
+  const [isSendAnimating, setIsSendAnimating] = useState(false);
   const isChatDisabled = isGhostMode || (isChatLocked && !isAdmin);
 
   const commandSuggestions = getCommandSuggestions(chatInput);
@@ -119,6 +123,19 @@ function ChatPanel({
     }
   }, [messages]);
 
+  useEffect(
+    () => () => {
+      if (sendAnimationTimeoutRef.current !== null) {
+        window.clearTimeout(sendAnimationTimeoutRef.current);
+      }
+    },
+    []
+  );
+
+  useEffect(() => {
+    hasInitializedRef.current = true;
+  }, []);
+
   const handleScroll = () => {
     const container = scrollContainerRef.current;
     if (!container) return;
@@ -132,6 +149,13 @@ function ChatPanel({
     e.preventDefault();
     if (isChatDisabled) return;
     if (chatInput.trim()) {
+      setIsSendAnimating(true);
+      if (sendAnimationTimeoutRef.current !== null) {
+        window.clearTimeout(sendAnimationTimeoutRef.current);
+      }
+      sendAnimationTimeoutRef.current = window.setTimeout(() => {
+        setIsSendAnimating(false);
+      }, 240);
       onSend(chatInput);
       onInputChange("");
     }
@@ -222,6 +246,22 @@ function ChatPanel({
       )
     );
 
+  const newMessageIds = useMemo(() => {
+    const prevIds = prevMessageIdsRef.current;
+    const currentIds = new Set<string>();
+    const nextNewIds = new Set<string>();
+
+    messages.forEach((message) => {
+      currentIds.add(message.id);
+      if (!prevIds.has(message.id)) {
+        nextNewIds.add(message.id);
+      }
+    });
+
+    prevMessageIdsRef.current = currentIds;
+    return nextNewIds;
+  }, [messages]);
+
   return (
     <div
       className="fixed right-4 top-16 bottom-20 w-72 bg-[#0d0e0d]/95 backdrop-blur-md border border-[#FEFCD9]/10 rounded-xl flex flex-col z-40 shadow-2xl"
@@ -255,6 +295,8 @@ function ChatPanel({
         ) : (
           messages.map((msg) => {
             const isOwn = msg.userId === currentUserId;
+            const isNew =
+              hasInitializedRef.current && newMessageIds.has(msg.id);
             const displayName = formatDisplayName(msg.displayName || msg.userId);
             const actionText = getActionText(msg.content);
             const directMessageLabel = msg.isDirect
@@ -268,7 +310,7 @@ function ChatPanel({
               return (
                 <div
                   key={msg.id}
-                  className="text-[11px] text-[#FEFCD9]/70 italic px-1"
+                  className={`${isNew ? "web-chat-action-new" : ""} text-[11px] text-[#FEFCD9]/70 italic px-1`}
                 >
                   {directMessageLabel ? (
                     <p className="mb-0.5 text-[9px] not-italic uppercase tracking-[0.14em] text-amber-300/80">
@@ -285,7 +327,15 @@ function ChatPanel({
             return (
               <div
                 key={msg.id}
-                className={`flex flex-col ${isOwn ? "items-end" : "items-start"}`}
+                className={`flex flex-col ${
+                  isOwn ? "items-end" : "items-start"
+                } ${
+                  isNew
+                    ? isOwn
+                      ? "web-chat-message-new-self"
+                      : "web-chat-message-new-peer"
+                    : ""
+                }`}
               >
                 <div
                   className={`max-w-[85%] rounded-lg px-2.5 py-1.5 ${
@@ -306,7 +356,9 @@ function ChatPanel({
                     {renderMessageContent(msg.content)}
                   </p>
                 </div>
-                <span className="text-[9px] text-[#FEFCD9]/20 mt-0.5 tabular-nums">
+                <span
+                  className={`${isNew ? "web-chat-meta-new" : ""} text-[9px] text-[#FEFCD9]/20 mt-0.5 tabular-nums`}
+                >
                   {new Date(msg.timestamp).toLocaleTimeString([], {
                     hour: "2-digit",
                     minute: "2-digit",
@@ -397,7 +449,9 @@ function ChatPanel({
             <button
               type="submit"
               disabled={isChatDisabled || !chatInput.trim()}
-              className="w-8 h-8 rounded-md flex items-center justify-center text-[#FEFCD9]/60 hover:text-[#FEFCD9] hover:bg-[#FEFCD9]/10 disabled:opacity-30 transition-all"
+              className={`w-8 h-8 rounded-md flex items-center justify-center text-[#FEFCD9]/60 hover:text-[#FEFCD9] hover:bg-[#FEFCD9]/10 disabled:opacity-30 transition-all ${
+                isSendAnimating ? "web-chat-send-active" : ""
+              }`}
             >
               <Send className="w-3.5 h-3.5" />
             </button>

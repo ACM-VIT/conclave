@@ -770,6 +770,100 @@ select:focus {
   will-change: transform, opacity;
 }
 
+@keyframes web-chat-pop-peer {
+  from {
+    opacity: 0;
+    transform: translate3d(-8px, 6px, 0) scale(0.985);
+  }
+
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+@keyframes web-chat-pop-self {
+  from {
+    opacity: 0;
+    transform: translate3d(8px, 6px, 0) scale(0.985);
+  }
+
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+@keyframes web-chat-action-fade {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes web-chat-meta-fade {
+  from {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes web-chat-send-tap {
+  0% {
+    transform: scale(1);
+  }
+
+  50% {
+    transform: scale(0.92);
+  }
+
+  100% {
+    transform: scale(1);
+  }
+}
+
+.web-chat-message-new-peer {
+  animation: web-chat-pop-peer 0.22s cubic-bezier(0.2, 0.75, 0.15, 1) both;
+  will-change: transform, opacity;
+}
+
+.web-chat-message-new-self {
+  animation: web-chat-pop-self 0.22s cubic-bezier(0.2, 0.75, 0.15, 1) both;
+  will-change: transform, opacity;
+}
+
+.web-chat-action-new {
+  animation: web-chat-action-fade 0.18s ease-out both;
+}
+
+.web-chat-meta-new {
+  animation: web-chat-meta-fade 0.22s ease-out both;
+}
+
+.web-chat-send-active {
+  animation: web-chat-send-tap 0.18s ease-out both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .web-chat-message-new-peer,
+  .web-chat-message-new-self,
+  .web-chat-action-new,
+  .web-chat-meta-new,
+  .web-chat-send-active {
+    animation: none;
+  }
+}
+
 .animate-delay-75 {
   animation-delay: 75ms;
 }
