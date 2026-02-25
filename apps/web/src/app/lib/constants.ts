@@ -93,6 +93,6 @@ export const MEETS_TURN_ICE_SERVERS: RTCIceServer[] = (() => {
   return [iceServer];
 })();
 
-export const MEETS_ICE_SERVERS = [...MEETS_STUN_ICE_SERVERS, ...MEETS_TURN_ICE_SERVERS];
+export const MEETS_ICE_SERVERS = MEETS_STUN_ICE_SERVERS;
 
 export type ReactionEmoji = (typeof EMOJI_REACTIONS)[number];
