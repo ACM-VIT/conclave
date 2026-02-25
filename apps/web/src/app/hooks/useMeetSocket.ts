@@ -1625,6 +1625,11 @@ export function useMeetSocket({
               resolve(socketRef.current);
               return;
             }
+            if (socketRef.current) {
+              socketRef.current.disconnect();
+              socketRef.current = null;
+              onSocketReady?.(null);
+            }
 
             setConnectionState("connecting");
 
@@ -1665,6 +1670,7 @@ export function useMeetSocket({
 
             const socket = io(sfuUrl, {
               transports: ["websocket", "polling"],
+              tryAllTransports: true,
               timeout: SOCKET_TIMEOUT_MS,
               reconnection: false,
               auth: { token },
