@@ -58,7 +58,7 @@ const AGENT_DISPLAY_NAME = "Voice Agent";
 const SOCKET_CONNECT_TIMEOUT_MS = 8000;
 const SFU_CLIENT_ID = process.env.NEXT_PUBLIC_SFU_CLIENT_ID || "public";
 const TURN_URL_PATTERN = /^turns?:/i;
-const ACTIVE_SPEAKER_HOLD_MS = 450;
+const ACTIVE_SPEAKER_HOLD_MS = 50;
 
 const normalizeIceServerUrls = (
   urls: RTCIceServer["urls"] | undefined,
