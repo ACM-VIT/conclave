@@ -1,13 +1,5 @@
 @import "tailwindcss";
 
-/* ============================================================
-   ACM-VIT CONCLAVE DESIGN SYSTEM
-   Based on ACM-VIT Official Website
-   ============================================================ */
-
-/* ============================================================
-   FONT DEFINITIONS - Virgil (Excalidraw hand-drawn font)
-   ============================================================ */
 @font-face {
   font-family: "Virgil";
   src: url("/assets/fonts/Virgil-Regular.woff2") format("woff2");
@@ -16,11 +8,6 @@
   font-display: swap;
 }
 
-/* ============================================================
-   FONT DEFINITIONS - PolySans Trial
-   ============================================================ */
-
-/* Standard Weights */
 @font-face {
   font-family: "PolySans Trial";
   src: url("/assets/fonts/PolySans-trial/PolySans-trial/Standard/PolySansTrial-Slim.otf") format("opentype");
@@ -86,7 +73,6 @@
   font-display: swap;
 }
 
-/* Wide Weights - for bold display text */
 @font-face {
   font-family: "PolySans Bulky Wide";
   src: url("/assets/fonts/PolySans-trial/PolySans-trial/Wide/PolySansTrial-BulkyWide.otf") format("opentype");
@@ -95,9 +81,6 @@
   font-display: swap;
 }
 
-/* ============================================================
-   THEME COLORS
-   ============================================================ */
 @theme {
   --color-primary-orange: #F95F4A;
   --color-primary-pink: #FF007A;
@@ -116,11 +99,7 @@
   --font-polysans-wide: "PolySans Bulky Wide", sans-serif;
 }
 
-/* ============================================================
-   GLOBAL STYLES
-   ============================================================ */
 
-/* Global Selection Style - ACM Orange */
 ::selection {
   background: #f95f4a;
   color: white;
@@ -142,7 +121,6 @@ body {
   color: #FEFCD9;
 }
 
-/* ACM-VIT Style Input Focus */
 input:focus,
 textarea:focus,
 select:focus {
@@ -150,7 +128,6 @@ select:focus {
   outline: none;
 }
 
-/* Pill Button Style */
 .acm-pill {
   border-radius: 41px;
   border: 1px solid #FEFCD9;
@@ -158,7 +135,6 @@ select:focus {
   backdrop-filter: blur(4px);
 }
 
-/* Glowing accent */
 .acm-glow {
   box-shadow: 0 0 20px rgba(249, 95, 74, 0.3);
 }
@@ -167,7 +143,6 @@ select:focus {
   box-shadow: 0 0 20px rgba(255, 0, 122, 0.3);
 }
 
-/* Blinking cursor animation */
 @keyframes blink {
 
   0%,
@@ -180,7 +155,6 @@ select:focus {
   }
 }
 
-/* Status indicator pulse */
 @keyframes acm-pulse {
 
   0%,
