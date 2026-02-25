@@ -152,8 +152,8 @@ const ChatFooter = memo(function ChatFooter({
   activeCommandIndex: number;
   onPickCommand: (text: string) => void;
   showMentionSuggestions: boolean;
-  mentionSuggestions: { userId: string; displayName: string }[];
-  onPickMention: (displayName: string) => void;
+  mentionSuggestions: { userId: string; displayName: string; mentionToken: string }[];
+  onPickMention: (mentionToken: string) => void;
   isDmEnabled: boolean;
 }) {
   const isChatDisabled = isGhostMode || (isChatLocked && !isAdmin);
@@ -162,84 +162,86 @@ const ChatFooter = memo(function ChatFooter({
       behavior={Platform.OS === "ios" ? "padding" : "height"}
       style={[styles.inputDock, { paddingBottom: inputDockPaddingBottom }]}
     >
-      {showCommandSuggestions ? (
-        <View style={styles.commandContainer}>
-          <RNFlatList
-            data={commandSuggestions}
-            keyExtractor={(item) => item.id}
-            keyboardShouldPersistTaps="handled"
-            showsVerticalScrollIndicator={false}
-            renderItem={({ item, index }) => {
-              const isActive = index === activeCommandIndex;
-              return (
-                <Pressable
-                  onPress={() => onPickCommand(item.insertText)}
-                  style={[
-                    styles.commandRow,
-                    isActive && styles.commandRowActive,
-                  ]}
-                >
-                  <View style={styles.commandHeader}>
-                    <Text style={styles.commandLabel}>/{item.label}</Text>
-                    <Text style={styles.commandUsage}>{item.usage}</Text>
-                  </View>
-                  <Text style={styles.commandDescription}>
-                    {item.description}
-                  </Text>
-                </Pressable>
-              );
-            }}
-          />
-        </View>
-      ) : null}
-      {showMentionSuggestions && isDmEnabled ? (
-        <View style={styles.commandContainer}>
-          <View style={styles.mentionHeader}>
-            <Text style={styles.mentionHeaderText}>💬 Private message to...</Text>
+      <View style={styles.inputShell}>
+        {showCommandSuggestions ? (
+          <View style={[styles.commandContainer, styles.commandOverlay]}>
+            <RNFlatList
+              data={commandSuggestions}
+              keyExtractor={(item) => item.id}
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}
+              renderItem={({ item, index }) => {
+                const isActive = index === activeCommandIndex;
+                return (
+                  <Pressable
+                    onPress={() => onPickCommand(item.insertText)}
+                    style={[
+                      styles.commandRow,
+                      isActive && styles.commandRowActive,
+                    ]}
+                  >
+                    <View style={styles.commandHeader}>
+                      <Text style={styles.commandLabel}>/{item.label}</Text>
+                      <Text style={styles.commandUsage}>{item.usage}</Text>
+                    </View>
+                    <Text style={styles.commandDescription}>
+                      {item.description}
+                    </Text>
+                  </Pressable>
+                );
+              }}
+            />
           </View>
-          <RNFlatList
-            data={mentionSuggestions}
-            keyExtractor={(item) => item.userId}
-            keyboardShouldPersistTaps="handled"
-            showsVerticalScrollIndicator={false}
-            renderItem={({ item }) => (
-              <Pressable
-                onPress={() => onPickMention(item.displayName)}
-                style={styles.commandRow}
-              >
-                <Text style={styles.commandLabel}>{item.displayName}</Text>
-              </Pressable>
-            )}
+        ) : null}
+        {showMentionSuggestions && isDmEnabled ? (
+          <View style={[styles.commandContainer, styles.commandOverlay]}>
+            <View style={styles.mentionHeader}>
+              <Text style={styles.mentionHeaderText}>💬 Private message to...</Text>
+            </View>
+            <RNFlatList
+              data={mentionSuggestions}
+              keyExtractor={(item) => item.userId}
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}
+              renderItem={({ item }) => (
+                <Pressable
+                  onPress={() => onPickMention(item.mentionToken)}
+                  style={styles.commandRow}
+                >
+                  <Text style={styles.commandLabel}>{item.displayName}</Text>
+                </Pressable>
+              )}
+            />
+          </View>
+        ) : null}
+        <View style={styles.inputRow}>
+          <TextInput
+            style={styles.input}
+            placeholder={
+              isGhostMode
+                ? "Ghost mode: chat disabled"
+                : isChatLocked && !isAdmin
+                  ? "Chat locked by host"
+                  : isDmEnabled
+                    ? "Message or @name for DM..."
+                    : "Type a message or /..."
+            }
+            placeholderTextColor={SHEET_COLORS.textFaint}
+            value={inputValue}
+            onChangeText={onInputChange}
+            onSubmitEditing={onSend}
+            returnKeyType="send"
+            autoCorrect
+            editable={!isChatDisabled}
           />
+          <Pressable
+            style={styles.sendButton}
+            onPress={onSend}
+            disabled={isChatDisabled || !inputValue.trim()}
+          >
+            <Text style={styles.sendText}>Send</Text>
+          </Pressable>
         </View>
-      ) : null}
-      <View style={styles.inputRow}>
-        <TextInput
-          style={styles.input}
-          placeholder={
-            isGhostMode
-              ? "Ghost mode: chat disabled"
-              : isChatLocked && !isAdmin
-                ? "Chat locked by host"
-                : isDmEnabled
-                  ? "Message or @name for DM..."
-                  : "Type a message or /..."
-          }
-          placeholderTextColor={SHEET_COLORS.textFaint}
-          value={inputValue}
-          onChangeText={onInputChange}
-          onSubmitEditing={onSend}
-          returnKeyType="send"
-          autoCorrect
-          editable={!isChatDisabled}
-        />
-        <Pressable
-          style={styles.sendButton}
-          onPress={onSend}
-          disabled={isChatDisabled || !inputValue.trim()}
-        >
-          <Text style={styles.sendText}>Send</Text>
-        </Pressable>
       </View>
     </KeyboardAvoidingView>
   );
@@ -265,6 +267,22 @@ interface ChatPanelProps {
 // is always resolvable server-side.
 const normalizeMentionToken = (displayName: string): string =>
   displayName.trim().toLowerCase().replace(/[^a-z0-9._-]/g, "");
+
+const getMentionTokenForUser = (userId: string, displayName: string): string => {
+  const displayNameToken = normalizeMentionToken(displayName);
+  if (displayNameToken) {
+    return displayNameToken;
+  }
+  const normalizedUserId = normalizeMentionToken(userId);
+  if (normalizedUserId) {
+    return normalizedUserId;
+  }
+  const base = userId.split("#")[0] || userId;
+  const handle = base.split("@")[0] || base;
+  return normalizeMentionToken(handle) || normalizeMentionToken(base);
+};
+
+type MentionInputMode = "at" | "dm";
 
 export function ChatPanel({
   messages,
@@ -324,34 +342,52 @@ export function ChatPanel({
   const isPickingCommand =
     showCommandSuggestions && !localValue.slice(1).includes(" ");
 
-  // @mention DM autocomplete
-  const mentionQuery = useMemo(() => {
-    if (!localValue.startsWith("@")) return null;
-    const afterAt = localValue.slice(1);
-    if (afterAt.includes(" ")) return null; // already picked, now typing message
-    return afterAt.toLowerCase();
-  }, [localValue]);
+  // @mention and /dm target autocomplete
+  const mentionContext = useMemo(() => {
+    if (isChatDisabled || !isDmEnabled) return null;
+    const value = localValue.trimStart();
+
+    if (value.startsWith("@")) {
+      const afterAt = value.slice(1);
+      if (afterAt.includes(" ")) return null;
+      return {
+        mode: "at" as MentionInputMode,
+        query: afterAt.toLowerCase(),
+      };
+    }
+
+    const dmTargetMatch = value.match(/^\/dm\s*([^\s]*)$/i);
+    if (!dmTargetMatch) return null;
+    return {
+      mode: "dm" as MentionInputMode,
+      query: (dmTargetMatch[1] || "").toLowerCase(),
+    };
+  }, [isChatDisabled, isDmEnabled, localValue]);
+  const mentionMode = mentionContext?.mode ?? null;
+  const mentionQuery = mentionContext?.query ?? null;
 
   const mentionSuggestions = useMemo(() => {
     if (mentionQuery === null) return [];
+    const normalizedMentionQuery = normalizeMentionToken(mentionQuery);
     return participants
       .filter((p) => p.userId !== currentUserId)
-      .map((p) => ({
-        userId: p.userId,
-        displayName: resolveDisplayName(p.userId),
-      }))
+      .map((p) => {
+        const displayName = resolveDisplayName(p.userId);
+        return {
+          userId: p.userId,
+          displayName,
+          mentionToken: getMentionTokenForUser(p.userId, displayName),
+        };
+      })
       .filter((p) =>
         mentionQuery === ""
           ? true
-          : p.displayName.toLowerCase().includes(mentionQuery)
+          : p.displayName.toLowerCase().includes(mentionQuery) ||
+            p.mentionToken.toLowerCase().includes(normalizedMentionQuery)
       );
   }, [mentionQuery, participants, currentUserId, resolveDisplayName]);
 
-  const showMentionSuggestions =
-    !isChatDisabled &&
-    isDmEnabled &&
-    mentionQuery !== null &&
-    mentionSuggestions.length > 0;
+  const showMentionSuggestions = mentionQuery !== null && mentionSuggestions.length > 0;
 
   useEffect(() => {
     setActiveCommandIndex(0);
@@ -429,9 +465,9 @@ export function ChatPanel({
           }}
           showMentionSuggestions={showMentionSuggestions}
           mentionSuggestions={mentionSuggestions}
-          onPickMention={(name) => {
-            const token = normalizeMentionToken(name);
-            const next = `@${token} `;
+          onPickMention={(token) => {
+            const next =
+              mentionMode === "dm" ? `/dm ${token} ` : `@${token} `;
             setLocalValue(next);
             onInputChange(next);
           }}
@@ -635,12 +671,19 @@ const styles = StyleSheet.create({
     borderColor: "rgba(255, 255, 255, 0.08)",
     backgroundColor: "rgba(28, 28, 30, 0.96)",
     overflow: "hidden",
-    marginBottom: 8,
     shadowColor: "#000",
     shadowOpacity: 0.35,
     shadowRadius: 12,
     shadowOffset: { width: 0, height: 6 },
     elevation: 8,
+  },
+  commandOverlay: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    bottom: "100%",
+    marginBottom: 8,
+    zIndex: 20,
   },
   commandRow: {
     paddingHorizontal: 12,
@@ -678,6 +721,9 @@ const styles = StyleSheet.create({
     paddingTop: 8,
     paddingBottom: 4,
   },
+  inputShell: {
+    position: "relative",
+  },
   input: {
     flex: 1,
     paddingHorizontal: 12,
@@ -700,4 +746,3 @@ const styles = StyleSheet.create({
     color: "#FFFFFF",
   },
 });
-

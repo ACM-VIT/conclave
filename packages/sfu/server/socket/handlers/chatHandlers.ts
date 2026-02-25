@@ -5,8 +5,11 @@ import type Room from "../../../config/classes/Room.js";
 import type { ConnectionContext } from "../context.js";
 import { respond } from "./ack.js";
 
-const DIRECT_MESSAGE_PATTERN = /^@(\S+)\s+([\s\S]+)$/;
+const AT_DIRECT_MESSAGE_PATTERN = /^@(\S+)\s+([\s\S]+)$/;
+const DM_COMMAND_PATTERN = /^\/dm\s+(\S+)\s+([\s\S]+)$/i;
 const TRAILING_MENTION_PUNCTUATION_PATTERN = /[,:;.!?]+$/;
+const DIRECT_MESSAGE_USAGE_ERROR =
+  "Use private messages as @username <message> or /dm <username> <message>.";
 
 const fallbackDisplayNameFromUserId = (userId: string): string =>
   userId.split("#")[0]?.split("@")[0] || userId;
@@ -30,24 +33,30 @@ const parseDirectMessageIntent = (
   | { error: string }
   | null => {
   const trimmed = content.trim();
-  if (!trimmed.startsWith("@")) {
+  const isAtDirectMessage = trimmed.startsWith("@");
+  const isDmCommand = /^\/dm\b/i.test(trimmed);
+  if (!isAtDirectMessage && !isDmCommand) {
     return null;
   }
 
-  const match = trimmed.match(DIRECT_MESSAGE_PATTERN);
+  const match = isAtDirectMessage
+    ? trimmed.match(AT_DIRECT_MESSAGE_PATTERN)
+    : trimmed.match(DM_COMMAND_PATTERN);
   if (!match) {
     return {
-      error: "Use private messages as @username <message>.",
+      error: DIRECT_MESSAGE_USAGE_ERROR,
     };
   }
 
   const rawTarget = match[1]?.trim() || "";
   const messageBody = match[2]?.trim() || "";
-  const targetToken = rawTarget.replace(TRAILING_MENTION_PUNCTUATION_PATTERN, "");
+  const targetToken = rawTarget
+    .replace(/^@+/, "")
+    .replace(TRAILING_MENTION_PUNCTUATION_PATTERN, "");
 
   if (!targetToken || !messageBody) {
     return {
-      error: "Use private messages as @username <message>.",
+      error: DIRECT_MESSAGE_USAGE_ERROR,
     };
   }
 
@@ -126,20 +135,6 @@ const resolveDirectMessageTarget = (
     };
   }
 
-  const byHandle = resolveUniqueMatch(
-    (candidate) => candidate.normalizedHandle === normalizedTargetToken,
-  );
-  if (byHandle && "error" in byHandle) return byHandle;
-  if (byHandle) {
-    if (byHandle.normalizedBaseUserId === senderBaseUserId) {
-      return { error: "You cannot private message yourself." };
-    }
-    return {
-      userId: byHandle.userId,
-      displayName: byHandle.displayName,
-    };
-  }
-
   const byDisplayName = resolveUniqueMatch(
     (candidate) => candidate.normalizedDisplayName === normalizedTargetToken,
   );
@@ -151,6 +146,20 @@ const resolveDirectMessageTarget = (
     return {
       userId: byDisplayName.userId,
       displayName: byDisplayName.displayName,
+    };
+  }
+
+  const byHandle = resolveUniqueMatch(
+    (candidate) => candidate.normalizedHandle === normalizedTargetToken,
+  );
+  if (byHandle && "error" in byHandle) return byHandle;
+  if (byHandle) {
+    if (byHandle.normalizedBaseUserId === senderBaseUserId) {
+      return { error: "You cannot private message yourself." };
+    }
+    return {
+      userId: byHandle.userId,
+      displayName: byHandle.displayName,
     };
   }
 

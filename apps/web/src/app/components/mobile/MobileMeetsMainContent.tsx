@@ -1060,6 +1060,7 @@ function MobileMeetsMainContent({
           currentUserId={currentUserId}
           isGhostMode={ghostEnabled}
           isChatLocked={isChatLocked}
+          isDmEnabled={isDmEnabled}
           isAdmin={isAdmin}
           getDisplayName={resolveDisplayName}
           mentionableParticipants={mentionableParticipants}

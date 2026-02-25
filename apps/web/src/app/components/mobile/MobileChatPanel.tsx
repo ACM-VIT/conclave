@@ -12,6 +12,8 @@ interface MentionableParticipant {
   mentionToken: string;
 }
 
+type MentionInputMode = "at" | "dm";
+
 interface MobileChatPanelProps {
   messages: ChatMessage[];
   chatInput: string;
@@ -22,6 +24,7 @@ interface MobileChatPanelProps {
   currentUserId: string;
   isGhostMode?: boolean;
   isChatLocked?: boolean;
+  isDmEnabled?: boolean;
   isAdmin?: boolean;
   getDisplayName?: (userId: string) => string;
   mentionableParticipants?: MentionableParticipant[];
@@ -37,6 +40,7 @@ function MobileChatPanel({
   currentUserId,
   isGhostMode = false,
   isChatLocked = false,
+  isDmEnabled = true,
   isAdmin = false,
   getDisplayName,
   mentionableParticipants = [],
@@ -56,14 +60,28 @@ function MobileChatPanel({
   const isPickingCommand =
     showCommandSuggestions && !localValue.slice(1).includes(" ");
 
-  const mentionQuery = useMemo(() => {
-    if (isChatDisabled || !localValue.startsWith("@")) return null;
-    const raw = localValue.slice(1);
-    if (!raw || /\s/.test(raw)) {
-      return raw.length === 0 ? "" : null;
+  const mentionContext = useMemo(() => {
+    if (isChatDisabled || !isDmEnabled) return null;
+    const value = localValue.trimStart();
+
+    if (value.startsWith("@")) {
+      const raw = value.slice(1);
+      if (/\s/.test(raw)) return null;
+      return {
+        mode: "at" as MentionInputMode,
+        query: raw.toLowerCase(),
+      };
     }
-    return raw.toLowerCase();
-  }, [isChatDisabled, localValue]);
+
+    const dmTargetMatch = value.match(/^\/dm\s*([^\s]*)$/i);
+    if (!dmTargetMatch) return null;
+    return {
+      mode: "dm" as MentionInputMode,
+      query: (dmTargetMatch[1] || "").toLowerCase(),
+    };
+  }, [isChatDisabled, isDmEnabled, localValue]);
+  const mentionMode = mentionContext?.mode ?? null;
+  const mentionQuery = mentionContext?.query ?? null;
 
   const mentionSuggestions = useMemo(() => {
     if (mentionQuery === null) return [];
@@ -129,8 +147,11 @@ function MobileChatPanel({
 
   const applyMentionSuggestion = (index: number) => {
     const suggestion = mentionSuggestions[index];
-    if (!suggestion) return;
-    const nextValue = `@${suggestion.mentionToken} `;
+    if (!suggestion || !mentionMode) return;
+    const nextValue =
+      mentionMode === "dm"
+        ? `/dm ${suggestion.mentionToken} `
+        : `@${suggestion.mentionToken} `;
     setLocalValue(nextValue);
     onInputChange(nextValue);
   };

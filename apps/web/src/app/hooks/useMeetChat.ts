@@ -11,7 +11,8 @@ import {
   parseChatCommand,
 } from "../lib/chat-commands";
 
-const DIRECT_MESSAGE_INTENT_PATTERN = /^@\S+\s+[\s\S]+$/;
+const DIRECT_MESSAGE_INTENT_PATTERN =
+  /^(?:@\S+\s+[\s\S]+|\/dm\s+\S+\s+[\s\S]+)$/i;
 
 interface UseMeetChatOptions {
   socketRef: React.MutableRefObject<Socket | null>;

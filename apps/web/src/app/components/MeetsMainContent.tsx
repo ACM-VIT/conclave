@@ -1141,6 +1141,7 @@ export default function MeetsMainContent({
           currentUserId={currentUserId}
           isGhostMode={ghostEnabled}
           isChatLocked={isChatLocked}
+          isDmEnabled={isDmEnabled}
           isAdmin={isAdmin}
           mentionableParticipants={mentionableParticipants}
         />

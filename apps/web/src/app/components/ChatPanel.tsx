@@ -12,6 +12,8 @@ interface MentionableParticipant {
   mentionToken: string;
 }
 
+type MentionInputMode = "at" | "dm";
+
 interface ChatPanelProps {
   messages: ChatMessage[];
   chatInput: string;
@@ -21,6 +23,7 @@ interface ChatPanelProps {
   currentUserId: string;
   isGhostMode?: boolean;
   isChatLocked?: boolean;
+  isDmEnabled?: boolean;
   isAdmin?: boolean;
   mentionableParticipants?: MentionableParticipant[];
 }
@@ -34,6 +37,7 @@ function ChatPanel({
   currentUserId,
   isGhostMode = false,
   isChatLocked = false,
+  isDmEnabled = true,
   isAdmin = false,
   mentionableParticipants = [],
 }: ChatPanelProps) {
@@ -50,14 +54,28 @@ function ChatPanel({
   const isPickingCommand =
     showCommandSuggestions && !chatInput.slice(1).includes(" ");
 
-  const mentionQuery = useMemo(() => {
-    if (isChatDisabled || !chatInput.startsWith("@")) return null;
-    const raw = chatInput.slice(1);
-    if (!raw || /\s/.test(raw)) {
-      return raw.length === 0 ? "" : null;
+  const mentionContext = useMemo(() => {
+    if (isChatDisabled || !isDmEnabled) return null;
+    const value = chatInput.trimStart();
+
+    if (value.startsWith("@")) {
+      const raw = value.slice(1);
+      if (/\s/.test(raw)) return null;
+      return {
+        mode: "at" as MentionInputMode,
+        query: raw.toLowerCase(),
+      };
     }
-    return raw.toLowerCase();
-  }, [chatInput, isChatDisabled]);
+
+    const dmTargetMatch = value.match(/^\/dm\s*([^\s]*)$/i);
+    if (!dmTargetMatch) return null;
+    return {
+      mode: "dm" as MentionInputMode,
+      query: (dmTargetMatch[1] || "").toLowerCase(),
+    };
+  }, [chatInput, isChatDisabled, isDmEnabled]);
+  const mentionMode = mentionContext?.mode ?? null;
+  const mentionQuery = mentionContext?.query ?? null;
 
   const mentionSuggestions = useMemo(() => {
     if (mentionQuery === null) return [];
@@ -121,8 +139,12 @@ function ChatPanel({
 
   const applyMentionSuggestion = (index: number) => {
     const suggestion = mentionSuggestions[index];
-    if (!suggestion) return;
-    onInputChange(`@${suggestion.mentionToken} `);
+    if (!suggestion || !mentionMode) return;
+    const nextValue =
+      mentionMode === "dm"
+        ? `/dm ${suggestion.mentionToken} `
+        : `@${suggestion.mentionToken} `;
+    onInputChange(nextValue);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -302,82 +324,84 @@ function ChatPanel({
         onSubmit={handleSubmit}
         className="p-2 border-t border-[#FEFCD9]/5"
       >
-        {showMentionSuggestions && (
-          <div className="mb-1.5 max-h-40 overflow-y-auto rounded-md border border-[#FEFCD9]/10 bg-[#0d0e0d]/95">
-            {mentionSuggestions.map((participant, index) => {
-              const isActive = index === activeMentionIndex;
-              return (
-                <button
-                  key={participant.userId}
-                  type="button"
-                  onClick={() => applyMentionSuggestion(index)}
-                  className={`w-full px-2.5 py-1.5 text-left text-xs transition-colors ${
-                    isActive
-                      ? "bg-[#F95F4A]/20 text-[#FEFCD9]"
-                      : "text-[#FEFCD9]/70 hover:bg-[#FEFCD9]/10"
-                  }`}
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="font-medium">{participant.displayName}</span>
-                  </div>
-                </button>
-              );
-            })}
+        <div className="relative">
+          {showMentionSuggestions && (
+            <div className="absolute bottom-full mb-1.5 left-0 right-0 z-10 max-h-40 overflow-y-auto rounded-md border border-[#FEFCD9]/10 bg-[#0d0e0d]/95">
+              {mentionSuggestions.map((participant, index) => {
+                const isActive = index === activeMentionIndex;
+                return (
+                  <button
+                    key={participant.userId}
+                    type="button"
+                    onClick={() => applyMentionSuggestion(index)}
+                    className={`w-full px-2.5 py-1.5 text-left text-xs transition-colors ${
+                      isActive
+                        ? "bg-[#F95F4A]/20 text-[#FEFCD9]"
+                        : "text-[#FEFCD9]/70 hover:bg-[#FEFCD9]/10"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-medium">{participant.displayName}</span>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+          {showCommandSuggestions && (
+            <div className="absolute bottom-full mb-1.5 left-0 right-0 z-10 max-h-40 overflow-y-auto rounded-md border border-[#FEFCD9]/10 bg-[#0d0e0d]/95">
+              {commandSuggestions.map((command, index) => {
+                const isActive = index === activeCommandIndex;
+                return (
+                  <button
+                    key={command.id}
+                    type="button"
+                    onClick={() => onInputChange(command.insertText)}
+                    className={`w-full px-2.5 py-1.5 text-left text-xs transition-colors ${
+                      isActive
+                        ? "bg-[#F95F4A]/20 text-[#FEFCD9]"
+                        : "text-[#FEFCD9]/70 hover:bg-[#FEFCD9]/10"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-medium">/{command.label}</span>
+                      <span className="text-[10px] text-[#FEFCD9]/40">
+                        {command.usage}
+                      </span>
+                    </div>
+                    <p className="text-[10px] text-[#FEFCD9]/45">
+                      {command.description}
+                    </p>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+          <div className="flex gap-1.5">
+            <input
+              type="text"
+              value={chatInput}
+              onChange={(e) => onInputChange(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder={
+                isGhostMode
+                  ? "Ghost mode: chat disabled"
+                  : isChatLocked && !isAdmin
+                    ? "Chat locked by host"
+                    : "Message... (type / for commands)"
+              }
+              maxLength={1000}
+              disabled={isChatDisabled}
+              className="flex-1 px-2.5 py-1.5 bg-black/30 border border-[#FEFCD9]/10 rounded-md text-xs text-[#FEFCD9] placeholder:text-[#FEFCD9]/30 focus:outline-none focus:border-[#FEFCD9]/20 disabled:opacity-50"
+            />
+            <button
+              type="submit"
+              disabled={isChatDisabled || !chatInput.trim()}
+              className="w-8 h-8 rounded-md flex items-center justify-center text-[#FEFCD9]/60 hover:text-[#FEFCD9] hover:bg-[#FEFCD9]/10 disabled:opacity-30 transition-all"
+            >
+              <Send className="w-3.5 h-3.5" />
+            </button>
           </div>
-        )}
-        {showCommandSuggestions && (
-          <div className="mb-1.5 max-h-40 overflow-y-auto rounded-md border border-[#FEFCD9]/10 bg-[#0d0e0d]/95">
-            {commandSuggestions.map((command, index) => {
-              const isActive = index === activeCommandIndex;
-              return (
-                <button
-                  key={command.id}
-                  type="button"
-                  onClick={() => onInputChange(command.insertText)}
-                  className={`w-full px-2.5 py-1.5 text-left text-xs transition-colors ${
-                    isActive
-                      ? "bg-[#F95F4A]/20 text-[#FEFCD9]"
-                      : "text-[#FEFCD9]/70 hover:bg-[#FEFCD9]/10"
-                  }`}
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="font-medium">/{command.label}</span>
-                    <span className="text-[10px] text-[#FEFCD9]/40">
-                      {command.usage}
-                    </span>
-                  </div>
-                  <p className="text-[10px] text-[#FEFCD9]/45">
-                    {command.description}
-                  </p>
-                </button>
-              );
-            })}
-          </div>
-        )}
-        <div className="flex gap-1.5">
-          <input
-            type="text"
-            value={chatInput}
-            onChange={(e) => onInputChange(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder={
-              isGhostMode
-                ? "Ghost mode: chat disabled"
-                : isChatLocked && !isAdmin
-                  ? "Chat locked by host"
-                  : "Message... (type / for commands)"
-            }
-            maxLength={1000}
-            disabled={isChatDisabled}
-            className="flex-1 px-2.5 py-1.5 bg-black/30 border border-[#FEFCD9]/10 rounded-md text-xs text-[#FEFCD9] placeholder:text-[#FEFCD9]/30 focus:outline-none focus:border-[#FEFCD9]/20 disabled:opacity-50"
-          />
-          <button
-            type="submit"
-            disabled={isChatDisabled || !chatInput.trim()}
-            className="w-8 h-8 rounded-md flex items-center justify-center text-[#FEFCD9]/60 hover:text-[#FEFCD9] hover:bg-[#FEFCD9]/10 disabled:opacity-30 transition-all"
-          >
-            <Send className="w-3.5 h-3.5" />
-          </button>
         </div>
         {isGhostMode && (
           <div className="mt-1.5 text-[9px] text-[#FF007A]/60 text-center">

@@ -2,6 +2,7 @@ import type { ChatMessage } from "./types";
 
 export type ChatCommandId =
   | "help"
+  | "dm"
   | "tts"
   | "me"
   | "action"
@@ -28,6 +29,13 @@ export const CHAT_COMMANDS: ChatCommand[] = [
     description: "Show available commands",
     usage: "/help",
     insertText: "/help",
+  },
+  {
+    id: "dm",
+    label: "dm",
+    description: "Send a private message",
+    usage: "/dm <username> <message>",
+    insertText: "/dm ",
   },
   {
     id: "tts",
