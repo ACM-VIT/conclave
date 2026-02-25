@@ -107,6 +107,7 @@ interface UseMeetSocketOptions {
   setMeetingRequiresInviteCode: (value: boolean) => void;
   isTtsDisabled: boolean;
   setIsTtsDisabled: (value: boolean) => void;
+  setIsDmEnabled: (value: boolean) => void;
   setActiveScreenShareId: (value: string | null) => void;
   setVideoQuality: (value: VideoQuality) => void;
   videoQualityRef: React.MutableRefObject<VideoQuality>;
@@ -184,6 +185,7 @@ export function useMeetSocket({
   setMeetingRequiresInviteCode,
   isTtsDisabled,
   setIsTtsDisabled,
+  setIsDmEnabled,
   setActiveScreenShareId,
   setVideoQuality,
   videoQualityRef,
@@ -341,6 +343,7 @@ export function useMeetSocket({
       setActiveScreenShareId(null);
       setIsHandRaised(false);
       setIsTtsDisabled(false);
+      setIsDmEnabled(true);
       setMeetingRequiresInviteCode(false);
       setWebinarConfig(null);
       if (resetRoomId) {
@@ -369,6 +372,7 @@ export function useMeetSocket({
       setWebinarRole,
       setWebinarSpeakerUserId,
       setIsTtsDisabled,
+      setIsDmEnabled,
       setMeetingRequiresInviteCode,
       setWebinarConfig,
       clearReactions,
@@ -1302,6 +1306,7 @@ export function useMeetSocket({
               currentRoomIdRef.current = targetRoomId;
               serverRoomIdRef.current = response.roomId ?? targetRoomId;
               setIsTtsDisabled(response.isTtsDisabled ?? false);
+              setIsDmEnabled(response.isDmEnabled ?? true);
               resolve("waiting");
               return;
             }
@@ -1319,6 +1324,7 @@ export function useMeetSocket({
                 response.meetingRequiresInviteCode ?? false,
               );
               setIsTtsDisabled(response.isTtsDisabled ?? false);
+              setIsDmEnabled(response.isDmEnabled ?? true);
               setWebinarRole(response.webinarRole ?? null);
               setWebinarSpeakerUserId(
                 response.existingProducers?.[0]?.producerUserId ?? null,
@@ -1419,6 +1425,7 @@ export function useMeetSocket({
       syncProducers,
       setIsRoomLocked,
       setIsTtsDisabled,
+      setIsDmEnabled,
     ],
   );
 
@@ -2139,6 +2146,21 @@ export function useMeetSocket({
             );
 
             socket.on(
+              "dmStateChanged",
+              ({
+                enabled,
+                roomId: eventRoomId,
+              }: {
+                enabled: boolean;
+                roomId?: string;
+              }) => {
+                if (!isRoomEvent(eventRoomId)) return;
+                console.log("[Meets] Room DM state changed:", enabled);
+                setIsDmEnabled(enabled);
+              },
+            );
+
+            socket.on(
               "noGuestsChanged",
               ({
                 noGuests,
@@ -2280,6 +2302,7 @@ export function useMeetSocket({
       setIsRoomLocked,
       setMeetingRequiresInviteCode,
       setIsTtsDisabled,
+      setIsDmEnabled,
       setHostUserId,
       setWebinarRole,
       setWebinarSpeakerUserId,

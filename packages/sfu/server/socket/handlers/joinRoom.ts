@@ -326,6 +326,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             hostUserIds: room.getAdminUserIds(),
             isLocked: room.isLocked,
             isTtsDisabled: room.isTtsDisabled,
+            isDmEnabled: room.isDmEnabled,
             meetingRequiresInviteCode: room.requiresMeetingInviteCode,
           });
           return;
@@ -369,6 +370,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             hostUserIds: room.getAdminUserIds(),
             isLocked: room.isLocked,
             isTtsDisabled: room.isTtsDisabled,
+            isDmEnabled: room.isDmEnabled,
             meetingRequiresInviteCode: room.requiresMeetingInviteCode,
           });
           return;
@@ -540,6 +542,11 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           roomId: context.currentRoom.id,
         });
 
+        socket.emit("dmStateChanged", {
+          enabled: context.currentRoom.isDmEnabled,
+          roomId: context.currentRoom.id,
+        });
+
         socket.emit("apps:state", {
           activeAppId: context.currentRoom.appsState.activeAppId,
           locked: context.currentRoom.appsState.locked,
@@ -588,6 +595,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           hostUserIds: context.currentRoom.getAdminUserIds(),
           isLocked: context.currentRoom.isLocked,
           isTtsDisabled: context.currentRoom.isTtsDisabled,
+          isDmEnabled: context.currentRoom.isDmEnabled,
           meetingRequiresInviteCode: context.currentRoom.requiresMeetingInviteCode,
           webinarRole: context.currentClient.isWebinarAttendee
             ? "attendee"

@@ -180,6 +180,8 @@ export function MeetScreen({
     setIsChatLocked,
     isTtsDisabled,
     setIsTtsDisabled,
+    isDmEnabled,
+    setIsDmEnabled,
     hostUserId,
     setHostUserId,
     hostUserIds,
@@ -597,6 +599,7 @@ export function MeetScreen({
     ghostEnabled: effectiveGhostMode,
     isChatLocked,
     isAdmin,
+    isDmEnabled,
     isTtsDisabled,
     isMuted,
     isCameraOff,
@@ -780,6 +783,7 @@ export function MeetScreen({
     setMeetingRequiresInviteCode,
     isTtsDisabled,
     setIsTtsDisabled,
+    setIsDmEnabled,
     setActiveScreenShareId,
     setVideoQuality,
     videoQualityRef: refs.videoQualityRef,
@@ -1676,6 +1680,9 @@ export function MeetScreen({
           onToggleTtsDisabled={(disabled) => {
             socket.toggleTtsDisabled?.(disabled);
           }}
+          onToggleDmEnabled={(enabled) => {
+            socket.toggleDmEnabled?.(enabled);
+          }}
           onSendReaction={(emoji) => {
             sendReaction({ kind: "emoji", id: emoji, value: emoji, label: emoji });
           }}
@@ -1693,6 +1700,7 @@ export function MeetScreen({
           isNoGuests={isNoGuests}
           isChatLocked={isChatLocked}
           isTtsDisabled={isTtsDisabled}
+          isDmEnabled={isDmEnabled}
           pendingUsersCount={pendingUsers.size}
           webinarConfig={webinarConfig}
           webinarSpeakerUserId={webinarSpeakerUserId}
@@ -1720,8 +1728,10 @@ export function MeetScreen({
           currentUserId={userId}
           isGhostMode={effectiveGhostMode}
           isChatLocked={isChatLocked}
+          isDmEnabled={isDmEnabled}
           isAdmin={isAdmin}
           resolveDisplayName={resolveDisplayName}
+          participants={Array.from(participants.values())}
         />
       ) : null}
 
@@ -1786,6 +1796,7 @@ export function MeetScreen({
           isNoGuests={isNoGuests}
           isChatLocked={isChatLocked}
           isTtsDisabled={isTtsDisabled}
+          isDmEnabled={isDmEnabled}
           isAdmin={isAdmin}
           selectedAudioInputDeviceId={selectedAudioInputDeviceId}
           selectedAudioOutputDeviceId={selectedAudioOutputDeviceId}
@@ -1822,6 +1833,10 @@ export function MeetScreen({
           onToggleTtsDisabled={(disabled) => {
             setIsSettingsSheetOpen(false);
             socket.toggleTtsDisabled?.(disabled);
+          }}
+          onToggleDmEnabled={(enabled) => {
+            setIsSettingsSheetOpen(false);
+            socket.toggleDmEnabled?.(enabled);
           }}
           onAudioInputDeviceChange={handleAudioInputDeviceChange}
           onAudioOutputDeviceChange={handleAudioOutputDeviceChange}

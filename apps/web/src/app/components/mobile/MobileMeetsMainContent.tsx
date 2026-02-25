@@ -32,7 +32,7 @@ import MobileWhiteboardLayout from "./MobileWhiteboardLayout";
 import AndroidUpsellSheet from "./AndroidUpsellSheet";
 import ScreenShareAudioPlayers from "../ScreenShareAudioPlayers";
 import SystemAudioPlayers from "../SystemAudioPlayers";
-import { isSystemUserId } from "../../lib/utils";
+import { formatDisplayName, isSystemUserId } from "../../lib/utils";
 import { useApps } from "@conclave/apps-sdk";
 import DevPlaygroundLayout from "../DevPlaygroundLayout";
 import DevMeetToolsPanel from "../DevMeetToolsPanel";
@@ -132,6 +132,7 @@ interface MobileMeetsMainContentProps {
   isNetworkOffline: boolean;
   serverRestartNotice?: string | null;
   isTtsDisabled: boolean;
+  isDmEnabled: boolean;
   meetingRequiresInviteCode: boolean;
   webinarConfig?: WebinarConfigSnapshot | null;
   webinarRole?: "attendee" | "participant" | "host" | null;
@@ -162,6 +163,23 @@ const getLiveVideoStream = (stream: MediaStream | null): MediaStream | null => {
 const getVideoTrackId = (stream: MediaStream | null): string => {
   const [track] = stream?.getVideoTracks() ?? [];
   return track?.id ?? "none";
+};
+
+const normalizeMentionToken = (value: string): string =>
+  value.trim().toLowerCase().replace(/[^a-z0-9._-]/g, "");
+
+const getMentionTokenForParticipant = (
+  userId: string,
+  displayName: string,
+): string => {
+  const displayNameToken = normalizeMentionToken(displayName);
+  if (displayNameToken) {
+    return displayNameToken;
+  }
+
+  const base = userId.split("#")[0] || userId;
+  const handle = base.split("@")[0] || base;
+  return normalizeMentionToken(handle) || normalizeMentionToken(base);
 };
 
 type PipCorner = "top-left" | "top-right" | "bottom-left" | "bottom-right";
@@ -279,6 +297,7 @@ function MobileMeetsMainContent({
   isNetworkOffline,
   serverRestartNotice = null,
   isTtsDisabled,
+  isDmEnabled,
   meetingRequiresInviteCode,
   webinarConfig,
   webinarRole,
@@ -376,6 +395,19 @@ function MobileMeetsMainContent({
       },
     );
   }, [socket, isTtsDisabled]);
+
+  const handleToggleDmEnabled = useCallback(() => {
+    if (!socket) return;
+    socket.emit(
+      "setDmEnabled",
+      { enabled: !isDmEnabled },
+      (res: { error?: string }) => {
+        if (res?.error) {
+          console.error("Failed to toggle direct messages:", res.error);
+        }
+      },
+    );
+  }, [socket, isDmEnabled]);
   const participantsArray = useMemo(
     () => Array.from(participants.values()),
     [participants],
@@ -402,6 +434,26 @@ function MobileMeetsMainContent({
         (participant) => !isSystemUserId(participant.userId),
       ),
     [participantsArray],
+  );
+  const mentionableParticipants = useMemo(
+    () =>
+      webinarParticipants
+        .filter((participant) => participant.userId !== currentUserId)
+        .map((participant) => {
+          const displayName = formatDisplayName(
+            resolveDisplayName(participant.userId),
+          );
+          return {
+            userId: participant.userId,
+            displayName,
+            mentionToken: getMentionTokenForParticipant(
+              participant.userId,
+              displayName,
+            ),
+          };
+        })
+        .sort((left, right) => left.displayName.localeCompare(right.displayName)),
+    [webinarParticipants, currentUserId, resolveDisplayName],
   );
   const webinarStageRef = useRef<HTMLDivElement>(null);
   const pipDragRef = useRef<PipDragMeta | null>(null);
@@ -926,7 +978,7 @@ function MobileMeetsMainContent({
       {/* Controls bar */}
       {!isWebinarAttendee && browserAudioNeedsGesture && (
         <div className="px-4 mt-2 text-[11px] text-[#F95F4A]/70 text-center uppercase tracking-[0.4em]">
-          Tap “Shared browser audio” to unlock the system sound.
+          Tap "Shared browser audio" to unlock the system sound.
         </div>
       )}
       <MobileControlsBar
@@ -958,6 +1010,8 @@ function MobileMeetsMainContent({
         onToggleChatLock={onToggleChatLock}
         isTtsDisabled={isTtsDisabled}
         onToggleTtsDisabled={handleToggleTtsDisabled}
+        isDmEnabled={isDmEnabled}
+        onToggleDmEnabled={handleToggleDmEnabled}
         isBrowserActive={browserState?.active ?? false}
         isBrowserLaunching={isBrowserLaunching}
         showBrowserControls={showBrowserControls}
@@ -1006,8 +1060,10 @@ function MobileMeetsMainContent({
           currentUserId={currentUserId}
           isGhostMode={ghostEnabled}
           isChatLocked={isChatLocked}
+          isDmEnabled={isDmEnabled}
           isAdmin={isAdmin}
           getDisplayName={resolveDisplayName}
+          mentionableParticipants={mentionableParticipants}
         />
       )}
 

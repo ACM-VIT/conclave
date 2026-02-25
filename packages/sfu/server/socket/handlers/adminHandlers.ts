@@ -402,4 +402,48 @@ export const registerAdminHandlers = (
     }
     respond(cb, { disabled: context.currentRoom.isTtsDisabled });
   });
+
+  socket.on("setDmEnabled", ({ enabled }: { enabled: boolean }, cb) => {
+    if (!context.currentRoom) {
+      respond(cb, { error: "Room not found" });
+      return;
+    }
+    if (!(context.currentClient instanceof Admin)) {
+      respond(cb, { error: "Admin privileges required" });
+      return;
+    }
+    if (typeof enabled !== "boolean") {
+      respond(cb, { error: "Invalid DM state" });
+      return;
+    }
+
+    context.currentRoom.setDmEnabled(enabled);
+    Logger.info(
+      `Room ${context.currentRoom.id} direct messages ${enabled ? "enabled" : "disabled"} by admin`,
+    );
+
+    socket.to(context.currentRoom.channelId).emit("dmStateChanged", {
+      enabled,
+      roomId: context.currentRoom.id,
+    });
+
+    socket.emit("dmStateChanged", {
+      enabled,
+      roomId: context.currentRoom.id,
+    });
+
+    respond(cb, { success: true, enabled });
+  });
+
+  socket.on("getDmEnabledStatus", (cb) => {
+    if (!context.currentRoom) {
+      respond(cb, { error: "Room not found" });
+      return;
+    }
+    if (!(context.currentClient instanceof Admin)) {
+      respond(cb, { error: "Admin privileges required" });
+      return;
+    }
+    respond(cb, { enabled: context.currentRoom.isDmEnabled });
+  });
 };

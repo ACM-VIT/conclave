@@ -98,6 +98,7 @@ export class Room {
   private _isChatLocked: boolean = false;
   private _noGuests: boolean = false;
   private _isTtsDisabled: boolean = false;
+  private _isDmEnabled: boolean = true;
   private _meetingInviteCodeHash: string | null = null;
   public appsState: { activeAppId: string | null; locked: boolean } = {
     activeAppId: null,
@@ -577,6 +578,14 @@ export class Room {
 
   setTtsDisabled(disabled: boolean): void {
     this._isTtsDisabled = disabled;
+  }
+
+  get isDmEnabled(): boolean {
+    return this._isDmEnabled;
+  }
+
+  setDmEnabled(enabled: boolean): void {
+    this._isDmEnabled = enabled;
   }
 
   get requiresMeetingInviteCode(): boolean {

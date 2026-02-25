@@ -60,6 +60,7 @@ export interface JoinRoomResponse {
   hostUserIds?: string[];
   isLocked?: boolean;
   isTtsDisabled?: boolean;
+  isDmEnabled?: boolean;
   meetingRequiresInviteCode?: boolean;
   webinarRole?: "attendee" | "participant" | "host";
   isWebinarEnabled?: boolean;
@@ -210,6 +211,9 @@ export interface ChatMessage {
   displayName: string;
   content: string;
   timestamp: number;
+  isDirect?: boolean;
+  dmTargetUserId?: string;
+  dmTargetDisplayName?: string;
 }
 
 export interface SendChatData {
