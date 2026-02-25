@@ -43,6 +43,7 @@ import {
   isSystemUserId,
 } from "../lib/utils";
 import { useApps } from "@conclave/apps-sdk";
+import { useStableSpeakerId } from "../hooks/useStableSpeakerId";
 
 interface MeetsMainContentProps {
   isJoined: boolean;
@@ -212,6 +213,9 @@ type PipDragMeta = {
 const clamp = (value: number, min: number, max: number) =>
   Math.min(Math.max(value, min), max);
 
+const WEBINAR_SPEAKER_PROMOTE_DELAY_MS = 450;
+const WEBINAR_SPEAKER_MIN_SWITCH_INTERVAL_MS = 1800;
+
 const getPipCornerClass = (corner: PipCorner): string => {
   switch (corner) {
     case "top-left":
@@ -380,6 +384,17 @@ export default function MeetsMainContent({
       ),
     [participantsArray],
   );
+  const webinarParticipantIds = useMemo(
+    () => nonSystemParticipants.map((participant) => participant.userId),
+    [nonSystemParticipants],
+  );
+  const stableWebinarSpeakerId = useStableSpeakerId({
+    primarySpeakerId: webinarSpeakerUserId,
+    secondarySpeakerId: activeSpeakerId,
+    participantIds: webinarParticipantIds,
+    promoteDelayMs: WEBINAR_SPEAKER_PROMOTE_DELAY_MS,
+    minSwitchIntervalMs: WEBINAR_SPEAKER_MIN_SWITCH_INTERVAL_MS,
+  });
   const webinarStageRef = useRef<HTMLDivElement>(null);
   const pipDragRef = useRef<PipDragMeta | null>(null);
   const [pipCorner, setPipCorner] = useState<PipCorner>("bottom-right");
@@ -449,6 +464,7 @@ export default function MeetsMainContent({
     }
 
     const preferredIds = [
+      stableWebinarSpeakerId ?? null,
       webinarSpeakerUserId ?? null,
       activeSpeakerId ?? null,
     ].filter((value, index, list): value is string => {
@@ -504,6 +520,7 @@ export default function MeetsMainContent({
     activeSpeakerId,
     nonSystemParticipants,
     resolveDisplayName,
+    stableWebinarSpeakerId,
     webinarSpeakerUserId,
   ]);
   const pipCornerClass = useMemo(() => getPipCornerClass(pipCorner), [pipCorner]);

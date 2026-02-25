@@ -37,6 +37,7 @@ import { useApps } from "@conclave/apps-sdk";
 import DevPlaygroundLayout from "../DevPlaygroundLayout";
 import DevMeetToolsPanel from "../DevMeetToolsPanel";
 import ParticipantVideo from "../ParticipantVideo";
+import { useStableSpeakerId } from "../../hooks/useStableSpeakerId";
 
 interface MobileMeetsMainContentProps {
   isJoined: boolean;
@@ -200,6 +201,9 @@ type PipDragMeta = {
 
 const clamp = (value: number, min: number, max: number) =>
   Math.min(Math.max(value, min), max);
+
+const WEBINAR_SPEAKER_PROMOTE_DELAY_MS = 450;
+const WEBINAR_SPEAKER_MIN_SWITCH_INTERVAL_MS = 1800;
 
 const getPipCornerClass = (corner: PipCorner): string => {
   switch (corner) {
@@ -451,6 +455,17 @@ function MobileMeetsMainContent({
       ),
     [participantsArray],
   );
+  const webinarParticipantIds = useMemo(
+    () => webinarParticipants.map((participant) => participant.userId),
+    [webinarParticipants],
+  );
+  const stableWebinarSpeakerId = useStableSpeakerId({
+    primarySpeakerId: webinarSpeakerUserId,
+    secondarySpeakerId: activeSpeakerId,
+    participantIds: webinarParticipantIds,
+    promoteDelayMs: WEBINAR_SPEAKER_PROMOTE_DELAY_MS,
+    minSwitchIntervalMs: WEBINAR_SPEAKER_MIN_SWITCH_INTERVAL_MS,
+  });
   const mentionableParticipants = useMemo(
     () =>
       webinarParticipants
@@ -539,6 +554,7 @@ function MobileMeetsMainContent({
     }
 
     const preferredIds = [
+      stableWebinarSpeakerId ?? null,
       webinarSpeakerUserId ?? null,
       activeSpeakerId ?? null,
     ].filter((value, index, list): value is string => {
@@ -593,6 +609,7 @@ function MobileMeetsMainContent({
     activeScreenShareId,
     activeSpeakerId,
     resolveDisplayName,
+    stableWebinarSpeakerId,
     webinarParticipants,
     webinarSpeakerUserId,
   ]);
