@@ -33,10 +33,15 @@ function ParticipantAudio({
           return;
         }
         if (err.name !== "AbortError") {
-          console.error("[Meets] Audio play error:", err);
+          console.error("[Meets] Audio play error:", participant.userId, err);
         }
       });
-  }, [onAudioAutoplayBlocked, onAudioPlaybackStarted, participant.audioStream]);
+  }, [
+    onAudioAutoplayBlocked,
+    onAudioPlaybackStarted,
+    participant.audioStream,
+    participant.userId,
+  ]);
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -53,7 +58,20 @@ function ParticipantAudio({
       audio.srcObject = participant.audioStream;
     }
 
-    attemptAudioPlayback();
+    let cancelled = false;
+    const replayTimeouts: number[] = [];
+
+    const scheduleReplay = () => {
+      if (cancelled) return;
+      attemptAudioPlayback();
+      if (typeof window !== "undefined") {
+        for (const delay of [80, 220, 480, 900, 1500]) {
+          replayTimeouts.push(window.setTimeout(attemptAudioPlayback, delay));
+        }
+      }
+    };
+
+    scheduleReplay();
 
     if (audioOutputDeviceId) {
       const audioElement = audio as HTMLAudioElement & {
@@ -67,11 +85,41 @@ function ParticipantAudio({
     }
 
     const audioTrack = participant.audioStream.getAudioTracks()[0];
-    if (!audioTrack) return;
-    audioTrack.addEventListener("unmute", attemptAudioPlayback);
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        scheduleReplay();
+      }
+    };
+    const handlePlaybackEvent = () => {
+      scheduleReplay();
+    };
+
+    if (audioTrack) {
+      audioTrack.addEventListener("unmute", scheduleReplay);
+    }
+    audio.addEventListener("loadedmetadata", handlePlaybackEvent);
+    audio.addEventListener("loadeddata", handlePlaybackEvent);
+    audio.addEventListener("canplay", handlePlaybackEvent);
+    audio.addEventListener("stalled", handlePlaybackEvent);
+    audio.addEventListener("suspend", handlePlaybackEvent);
+    audio.addEventListener("pause", handlePlaybackEvent);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
 
     return () => {
-      audioTrack.removeEventListener("unmute", attemptAudioPlayback);
+      cancelled = true;
+      if (audioTrack) {
+        audioTrack.removeEventListener("unmute", scheduleReplay);
+      }
+      audio.removeEventListener("loadedmetadata", handlePlaybackEvent);
+      audio.removeEventListener("loadeddata", handlePlaybackEvent);
+      audio.removeEventListener("canplay", handlePlaybackEvent);
+      audio.removeEventListener("stalled", handlePlaybackEvent);
+      audio.removeEventListener("suspend", handlePlaybackEvent);
+      audio.removeEventListener("pause", handlePlaybackEvent);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      for (const timeoutId of replayTimeouts) {
+        window.clearTimeout(timeoutId);
+      }
     };
   }, [
     participant.audioStream,
