@@ -70,11 +70,9 @@ interface UseMeetSocketOptions {
       user?: { id?: string; email?: string | null; name?: string | null };
       isHost?: boolean;
       joinMode?: JoinMode;
-      webinarSignedToken?: string;
     }
   ) => Promise<JoinInfo>;
   joinMode?: JoinMode;
-  webinarSignedToken?: string;
   requestWebinarInviteCode?: () => Promise<string | null>;
   requestMeetingInviteCode?: () => Promise<string | null>;
   ghostEnabled: boolean;
@@ -152,7 +150,6 @@ export function useMeetSocket({
   userId,
   getJoinInfo,
   joinMode = "meeting",
-  webinarSignedToken,
   requestWebinarInviteCode,
   requestMeetingInviteCode,
   ghostEnabled,
@@ -1469,12 +1466,11 @@ export function useMeetSocket({
               desiredJoinMode === "webinar_attendee" ? false : desiredIsHost;
             const tokenPromise = cachedToken
               ? Promise.resolve(cachedToken)
-              : getJoinInfo(roomIdForJoin, sessionIdRef.current, {
-                  user,
-                  isHost,
-                  joinMode: desiredJoinMode,
-                  webinarSignedToken,
-                });
+                : getJoinInfo(roomIdForJoin, sessionIdRef.current, {
+                    user,
+                    isHost,
+                    joinMode: desiredJoinMode,
+                  });
 
             const [{ token, sfuUrl, iceServers }, socketIoModule] = await Promise.all([
               tokenPromise,
@@ -2326,7 +2322,6 @@ export function useMeetSocket({
       updateVideoQualityRef,
       user,
       userId,
-      webinarSignedToken,
       onTtsMessage,
       lastAuthIsHostRef,
       lastAuthJoinModeRef,
@@ -2492,53 +2487,54 @@ export function useMeetSocket({
         localStreamRef.current = stream;
         setLocalStream(stream);
 
-        try {
-          await joinRoomInternal(targetRoomId, stream, joinOptions);
-        } catch (joinError) {
-          const joinMessage =
-            joinError instanceof Error
-              ? joinError.message
-              : String(joinError ?? "");
-          const isMeetingInviteCodeValidationError =
-            /meeting invite code required/i.test(joinMessage) ||
-            /invalid meeting invite code/i.test(joinMessage);
-          const shouldPromptMeetingInviteCode =
-            joinOptions.joinMode !== "webinar_attendee" &&
-            !joinOptions.meetingInviteCode &&
-            isMeetingInviteCodeValidationError &&
-            typeof requestMeetingInviteCode === "function";
+        let nextJoinOptions = joinOptions;
+        while (true) {
+          try {
+            await joinRoomInternal(targetRoomId, stream, nextJoinOptions);
+            break;
+          } catch (joinError) {
+            const joinMessage =
+              joinError instanceof Error
+                ? joinError.message
+                : String(joinError ?? "");
+            const isMeetingInviteCodeValidationError =
+              /meeting invite code required/i.test(joinMessage) ||
+              /invalid meeting invite code/i.test(joinMessage);
+            const shouldPromptMeetingInviteCode =
+              nextJoinOptions.joinMode !== "webinar_attendee" &&
+              isMeetingInviteCodeValidationError &&
+              typeof requestMeetingInviteCode === "function";
 
-          const isWebinarInviteCodeValidationError =
-            /webinar invite code required/i.test(joinMessage) ||
-            /invalid webinar invite code/i.test(joinMessage);
-          const shouldPromptWebinarInviteCode =
-            joinOptions.joinMode === "webinar_attendee" &&
-            !joinOptions.webinarInviteCode &&
-            isWebinarInviteCodeValidationError &&
-            typeof requestWebinarInviteCode === "function";
+            const isWebinarInviteCodeValidationError =
+              /webinar invite code required/i.test(joinMessage) ||
+              /invalid webinar invite code/i.test(joinMessage);
+            const shouldPromptWebinarInviteCode =
+              nextJoinOptions.joinMode === "webinar_attendee" &&
+              isWebinarInviteCodeValidationError &&
+              typeof requestWebinarInviteCode === "function";
 
-          if (!shouldPromptMeetingInviteCode && !shouldPromptWebinarInviteCode) {
-            throw joinError;
+            if (!shouldPromptMeetingInviteCode && !shouldPromptWebinarInviteCode) {
+              throw joinError;
+            }
+
+            const inviteCode = shouldPromptMeetingInviteCode
+              ? await requestMeetingInviteCode!()
+              : await requestWebinarInviteCode!();
+            if (!inviteCode || !inviteCode.trim()) {
+              throw joinError;
+            }
+
+            nextJoinOptions = shouldPromptMeetingInviteCode
+              ? {
+                  ...nextJoinOptions,
+                  meetingInviteCode: inviteCode.trim(),
+                }
+              : {
+                  ...nextJoinOptions,
+                  webinarInviteCode: inviteCode.trim(),
+                };
+            joinOptionsRef.current = nextJoinOptions;
           }
-
-          const inviteCode = shouldPromptMeetingInviteCode
-            ? await requestMeetingInviteCode!()
-            : await requestWebinarInviteCode!();
-          if (!inviteCode || !inviteCode.trim()) {
-            throw joinError;
-          }
-
-          const retryJoinOptions = shouldPromptMeetingInviteCode
-            ? {
-                ...joinOptions,
-                meetingInviteCode: inviteCode.trim(),
-              }
-            : {
-                ...joinOptions,
-                webinarInviteCode: inviteCode.trim(),
-              };
-          joinOptionsRef.current = retryJoinOptions;
-          await joinRoomInternal(targetRoomId, stream, retryJoinOptions);
         }
       } catch (err) {
         console.error("[Meets] Error joining room:", err);

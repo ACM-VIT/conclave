@@ -411,7 +411,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           }
 
           emitWebinarAttendeeCountChanged(io, state, previousRoom);
-          emitWebinarFeedChanged(io, previousRoom);
+          emitWebinarFeedChanged(io, state, previousRoom);
 
           socket.leave(previousChannelId);
           if (cleanupRoom(state, previousChannelId)) {
@@ -424,7 +424,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
 
         context.currentRoom = room;
         context.currentRoom.setWebinarFeedRefreshNotifier((targetRoom) => {
-          emitWebinarFeedChanged(io, targetRoom);
+          emitWebinarFeedChanged(io, state, targetRoom);
         });
         context.pendingRoomId = null;
         context.pendingRoomChannelId = null;
@@ -565,7 +565,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           : context.currentRoom.getAllProducers(userId);
 
         emitWebinarAttendeeCountChanged(io, state, context.currentRoom);
-        emitWebinarFeedChanged(io, context.currentRoom);
+        emitWebinarFeedChanged(io, state, context.currentRoom);
 
         const webinarSnapshot = toWebinarConfigSnapshot(
           webinarConfig,

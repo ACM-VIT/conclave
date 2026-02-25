@@ -93,7 +93,6 @@ const readError = async (response: Response) => {
 interface MeetScreenProps {
   initialRoomId?: string;
   joinMode?: JoinMode;
-  webinarSignedToken?: string;
   autoJoinOnMount?: boolean;
   hideJoinUI?: boolean;
 }
@@ -101,7 +100,6 @@ interface MeetScreenProps {
 export function MeetScreen({
   initialRoomId,
   joinMode = "meeting",
-  webinarSignedToken,
   autoJoinOnMount = false,
   hideJoinUI = false,
 }: MeetScreenProps = {}) {
@@ -126,11 +124,10 @@ export function MeetScreen({
       return {
         roomId: (initialRoomId ?? "").trim(),
         joinMode,
-        webinarToken: webinarSignedToken ?? null,
       };
     }
     return parseJoinInput(initialRoomId ?? "");
-  }, [initialRoomId, joinMode, webinarSignedToken]);
+  }, [initialRoomId, joinMode]);
   const prefillRoomId =
     joinMode === "webinar_attendee" ||
     initialJoinTarget.joinMode === "webinar_attendee"
@@ -209,9 +206,7 @@ export function MeetScreen({
     if (joinMode === "webinar_attendee") return;
     if (initialJoinTarget.joinMode !== "webinar_attendee") return;
     if (!initialJoinTarget.roomId) return;
-    const token = initialJoinTarget.webinarToken;
-    const query = token ? `?wt=${encodeURIComponent(token)}` : "";
-    router.replace(`/w/${encodeURIComponent(initialJoinTarget.roomId)}${query}`);
+    router.replace(`/w/${encodeURIComponent(initialJoinTarget.roomId)}`);
   }, [initialJoinTarget, joinMode, router]);
 
   useEffect(() => {
@@ -725,8 +720,6 @@ export function MeetScreen({
           throw new Error("Missing EXPO_PUBLIC_SFU_BASE_URL for mobile API");
         }
         const resolvedJoinMode = options?.joinMode ?? joinMode;
-        const resolvedWebinarSignedToken =
-          options?.webinarSignedToken ?? webinarSignedToken;
         const response = await fetch(buildApiUrl("/api/sfu/join"), {
           method: "POST",
           headers: {
@@ -741,7 +734,6 @@ export function MeetScreen({
             isAdmin: options?.isHost,
             clientId,
             joinMode: resolvedJoinMode,
-            webinarSignedToken: resolvedWebinarSignedToken,
           }),
         });
 
@@ -751,10 +743,9 @@ export function MeetScreen({
 
         return response.json();
       },
-      [joinMode, webinarSignedToken]
+      [joinMode]
     ),
     joinMode,
-    webinarSignedToken,
     ghostEnabled: isGhostMode,
     displayNameInput,
     localStream,
@@ -1079,7 +1070,6 @@ export function MeetScreen({
   const pendingJoinTargetRef = useRef<{
     roomId: string;
     joinMode: JoinMode;
-    webinarToken?: string | null;
   } | null>(null);
 
   const handleRoomInputChange = useCallback(
@@ -1125,7 +1115,6 @@ export function MeetScreen({
         return {
           roomId: value.trim(),
           joinMode,
-          webinarToken: webinarSignedToken ?? null,
         };
       }
 
@@ -1145,7 +1134,7 @@ export function MeetScreen({
 
       return parseJoinInput(trimmed);
     },
-    [joinMode, webinarSignedToken]
+    [joinMode]
   );
 
   const performJoin = useCallback(
@@ -1207,10 +1196,8 @@ export function MeetScreen({
         joinMode !== "webinar_attendee" &&
         resolved.joinMode === "webinar_attendee"
       ) {
-        const token = resolved.webinarToken;
-        const query = token ? `?wt=${encodeURIComponent(token)}` : "";
         pendingJoinTargetRef.current = null;
-        router.replace(`/w/${encodeURIComponent(resolved.roomId)}${query}`);
+        router.replace(`/w/${encodeURIComponent(resolved.roomId)}`);
         return;
       }
 
