@@ -68,7 +68,7 @@ type UseVoiceAgentParticipantOptions = {
   voice?: string;
 };
 
-const DEFAULT_MODEL = "gpt-realtime";
+const DEFAULT_MODEL = "gpt-realtime-1.5";
 const DEFAULT_VOICE = "marin";
 const DEFAULT_INSTRUCTIONS =
   "You are a concise, helpful voice assistant in a live meeting. Keep responses short and practical.";

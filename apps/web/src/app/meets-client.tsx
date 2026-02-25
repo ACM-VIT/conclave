@@ -792,8 +792,12 @@ export default function MeetsClient({
     isJoined: connectionState === "joined",
     isAdmin: isAdminFlag,
     isMuted,
+    activeSpeakerId,
+    localUserId: userId,
     localStream,
     participants,
+    recentMessages: chatMessages,
+    resolveDisplayName,
   });
 
   const openVoiceAgentKeyPrompt = useCallback(() => {
