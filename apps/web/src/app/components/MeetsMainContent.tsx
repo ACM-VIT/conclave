@@ -375,6 +375,8 @@ export default function MeetsMainContent({
     x: number;
     y: number;
   } | null>(null);
+  const [webinarAudioBlocked, setWebinarAudioBlocked] = useState(false);
+  const [webinarAudioPlaybackAttempt, setWebinarAudioPlaybackAttempt] = useState(0);
 
   const webinarStage = useMemo(() => {
     if (!nonSystemParticipants.length) {
@@ -587,6 +589,21 @@ export default function MeetsMainContent({
     pipDragRef.current = null;
     setPipDragPosition(null);
   }, []);
+  const handleWebinarAudioAutoplayBlocked = useCallback(() => {
+    setWebinarAudioBlocked(true);
+  }, []);
+  const handleWebinarAudioPlaybackStarted = useCallback(() => {
+    setWebinarAudioBlocked(false);
+  }, []);
+  const handlePlayWebinarAudio = useCallback(() => {
+    setWebinarAudioBlocked(false);
+    setWebinarAudioPlaybackAttempt((attempt) => attempt + 1);
+  }, []);
+  useEffect(() => {
+    if (isJoined && isWebinarAttendee) return;
+    setWebinarAudioBlocked(false);
+    setWebinarAudioPlaybackAttempt(0);
+  }, [isJoined, isWebinarAttendee]);
   const visibleParticipantCount = nonSystemParticipants.length;
   const mentionableParticipants = useMemo(
     () =>
@@ -712,6 +729,15 @@ export default function MeetsMainContent({
       <ScreenShareAudioPlayers
         participants={participants}
         audioOutputDeviceId={audioOutputDeviceId}
+        onAutoplayBlocked={
+          isWebinarAttendee ? handleWebinarAudioAutoplayBlocked : undefined
+        }
+        onPlaybackStarted={
+          isWebinarAttendee ? handleWebinarAudioPlaybackStarted : undefined
+        }
+        playbackAttemptToken={
+          isWebinarAttendee ? webinarAudioPlaybackAttempt : undefined
+        }
       />
       {isJoined && reactions.length > 0 && (
         <ReactionOverlay
@@ -764,7 +790,7 @@ export default function MeetsMainContent({
           />
         )
       ) : isWebinarAttendee ? (
-        <div className="flex flex-1 items-center justify-center p-4">
+        <div className="relative flex flex-1 items-center justify-center p-4">
           {webinarStage ? (
             <div ref={webinarStageRef} className="relative h-[72vh] w-full max-w-6xl">
               <ParticipantVideo
@@ -778,6 +804,9 @@ export default function MeetsMainContent({
                 }
                 audioOutputDeviceId={audioOutputDeviceId}
                 videoObjectFit={webinarStage.isScreenShare ? "contain" : "cover"}
+                onAudioAutoplayBlocked={handleWebinarAudioAutoplayBlocked}
+                onAudioPlaybackStarted={handleWebinarAudioPlaybackStarted}
+                audioPlaybackAttemptToken={webinarAudioPlaybackAttempt}
               />
               {webinarStage.pip ? (
                 <div
@@ -803,6 +832,9 @@ export default function MeetsMainContent({
                     )}:pip`}
                     participant={webinarStage.pip.participant}
                     displayName={webinarStage.pip.displayName}
+                    onAudioAutoplayBlocked={handleWebinarAudioAutoplayBlocked}
+                    onAudioPlaybackStarted={handleWebinarAudioPlaybackStarted}
+                    audioPlaybackAttemptToken={webinarAudioPlaybackAttempt}
                   />
                 </div>
               ) : null}
@@ -812,6 +844,29 @@ export default function MeetsMainContent({
               <p className="text-sm text-[#FEFCD9]">
                 Waiting for the host to start speaking...
               </p>
+            </div>
+          )}
+          {webinarAudioBlocked && (
+            <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/65 p-4 backdrop-blur-sm">
+              <div className="w-full max-w-sm rounded-2xl border border-[#FEFCD9]/20 bg-[#0d0e0d]/95 p-6 text-center shadow-2xl">
+                <p
+                  className="text-sm uppercase tracking-[0.2em] text-[#FEFCD9]"
+                  style={{ fontFamily: "'PolySans Mono', monospace" }}
+                >
+                  Webinar audio is blocked
+                </p>
+                <p className="mt-3 text-xs text-[#FEFCD9]/70">
+                  Your browser needs a click before playback can start.
+                </p>
+                <button
+                  type="button"
+                  onClick={handlePlayWebinarAudio}
+                  className="mt-5 inline-flex items-center justify-center rounded-full border border-[#F95F4A]/60 bg-[#F95F4A]/15 px-5 py-2 text-xs uppercase tracking-[0.2em] text-[#FEFCD9] transition hover:bg-[#F95F4A]/25"
+                  style={{ fontFamily: "'PolySans Mono', monospace" }}
+                >
+                  Play webinar
+                </button>
+              </div>
             </div>
           )}
         </div>
