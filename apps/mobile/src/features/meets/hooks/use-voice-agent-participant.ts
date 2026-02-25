@@ -72,6 +72,48 @@ const SOCKET_CONNECT_TIMEOUT_MS = 8000;
 const SFU_CLIENT_ID = process.env.EXPO_PUBLIC_SFU_CLIENT_ID || "public";
 const SFU_BASE_URL =
   process.env.EXPO_PUBLIC_SFU_BASE_URL || process.env.EXPO_PUBLIC_API_URL || "";
+const TURN_URL_PATTERN = /^turns?:/i;
+
+const normalizeIceServerUrls = (
+  urls: RTCIceServer["urls"] | undefined
+): string[] => {
+  if (!urls) return [];
+  return (Array.isArray(urls) ? urls : [urls])
+    .map((value) => value.trim())
+    .filter(Boolean);
+};
+
+const buildIceServerWithUrls = (
+  iceServer: RTCIceServer,
+  urls: string[]
+): RTCIceServer => ({
+  ...iceServer,
+  urls: urls.length === 1 ? urls[0] : urls,
+});
+
+const splitIceServersByType = (
+  iceServers: RTCIceServer[] | null | undefined
+): { stunIceServers: RTCIceServer[]; turnIceServers: RTCIceServer[] } => {
+  const stunIceServers: RTCIceServer[] = [];
+  const turnIceServers: RTCIceServer[] = [];
+
+  for (const iceServer of iceServers ?? []) {
+    const urls = normalizeIceServerUrls(iceServer.urls);
+    if (urls.length === 0) continue;
+
+    const turnUrls = urls.filter((url) => TURN_URL_PATTERN.test(url));
+    const stunUrls = urls.filter((url) => !TURN_URL_PATTERN.test(url));
+
+    if (stunUrls.length > 0) {
+      stunIceServers.push(buildIceServerWithUrls(iceServer, stunUrls));
+    }
+    if (turnUrls.length > 0) {
+      turnIceServers.push(buildIceServerWithUrls(iceServer, turnUrls));
+    }
+  }
+
+  return { stunIceServers, turnIceServers };
+};
 
 const createRuntimeState = (): RuntimeState => ({
   openAiPc: null,
@@ -649,11 +691,36 @@ export function useVoiceAgentParticipant({
           routerRtpCapabilities: joinRoomResponse.rtpCapabilities,
         });
 
-        runtime.producerTransport = await createProducerTransport(
-          runtime.sfuSocket,
-          device,
+        const { stunIceServers, turnIceServers } = splitIceServersByType(
           Array.isArray(joinInfo?.iceServers) ? joinInfo.iceServers : undefined
         );
+        const stunOnlyIceServers =
+          stunIceServers.length > 0 ? stunIceServers : undefined;
+        const turnFallbackIceServers =
+          turnIceServers.length > 0
+            ? [...(stunIceServers.length > 0 ? stunIceServers : []), ...turnIceServers]
+            : undefined;
+
+        try {
+          runtime.producerTransport = await createProducerTransport(
+            runtime.sfuSocket,
+            device,
+            stunOnlyIceServers
+          );
+        } catch (stunTransportError) {
+          if (!turnFallbackIceServers) {
+            throw stunTransportError;
+          }
+          console.warn(
+            "[Voice Agent] STUN-only transport failed. Retrying with TURN fallback.",
+            stunTransportError
+          );
+          runtime.producerTransport = await createProducerTransport(
+            runtime.sfuSocket,
+            device,
+            turnFallbackIceServers
+          );
+        }
 
         await producePendingTrack();
         if (runtimeRef.current !== runtime || !runtime.sfuSocket?.connected) {

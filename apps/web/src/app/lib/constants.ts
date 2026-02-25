@@ -38,15 +38,36 @@ export const SCREEN_SHARE_MAX_BITRATE = 1800000;
 export const SCREEN_SHARE_MAX_FRAMERATE = 24;
 export const OPUS_MAX_AVERAGE_BITRATE = 64000;
 
-export const MEETS_ICE_SERVERS: RTCIceServer[] = (() => {
-  const urls = (
-    process.env.NEXT_PUBLIC_TURN_URLS ??
-    process.env.NEXT_PUBLIC_TURN_URL ??
-    ""
-  )
+const DEFAULT_PUBLIC_STUN_URLS = [
+  "stun:stun.l.google.com:19302",
+  "stun:stun1.l.google.com:19302",
+  "stun:stun2.l.google.com:19302",
+];
+
+const splitIceUrls = (value: string): string[] =>
+  value
     .split(",")
-    .map((value) => value.trim())
+    .map((entry) => entry.trim())
     .filter(Boolean);
+
+export const MEETS_STUN_ICE_SERVERS: RTCIceServer[] = (() => {
+  const configuredStunUrls = splitIceUrls(
+    process.env.NEXT_PUBLIC_STUN_URLS ?? process.env.NEXT_PUBLIC_STUN_URL ?? "",
+  );
+  const urls =
+    configuredStunUrls.length > 0 ? configuredStunUrls : DEFAULT_PUBLIC_STUN_URLS;
+
+  return [
+    {
+      urls: urls.length === 1 ? urls[0] : urls,
+    },
+  ];
+})();
+
+export const MEETS_TURN_ICE_SERVERS: RTCIceServer[] = (() => {
+  const urls = splitIceUrls(
+    process.env.NEXT_PUBLIC_TURN_URLS ?? process.env.NEXT_PUBLIC_TURN_URL ?? "",
+  );
 
   if (!urls.length) return [];
 
@@ -71,5 +92,7 @@ export const MEETS_ICE_SERVERS: RTCIceServer[] = (() => {
 
   return [iceServer];
 })();
+
+export const MEETS_ICE_SERVERS = [...MEETS_STUN_ICE_SERVERS, ...MEETS_TURN_ICE_SERVERS];
 
 export type ReactionEmoji = (typeof EMOJI_REACTIONS)[number];

@@ -6,6 +6,7 @@ import type { Device } from "mediasoup-client";
 import {
   MAX_RECONNECT_ATTEMPTS,
   MEETS_ICE_SERVERS,
+  MEETS_TURN_ICE_SERVERS,
   OPUS_MAX_AVERAGE_BITRATE,
   RECONNECT_DELAY_MS,
   SOCKET_TIMEOUT_MS,
@@ -57,6 +58,48 @@ type JoinInfo = {
 const DEFAULT_SERVER_RESTART_NOTICE =
   "Meeting server is restarting. You will be reconnected automatically.";
 const VIDEO_STALL_KEYFRAME_REQUEST_DELAY_MS = 2500;
+const TURN_URL_PATTERN = /^turns?:/i;
+
+const normalizeIceServerUrls = (
+  urls: RTCIceServer["urls"] | undefined,
+): string[] => {
+  if (!urls) return [];
+  return (Array.isArray(urls) ? urls : [urls])
+    .map((value) => value.trim())
+    .filter(Boolean);
+};
+
+const buildIceServerWithUrls = (
+  iceServer: RTCIceServer,
+  urls: string[],
+): RTCIceServer => ({
+  ...iceServer,
+  urls: urls.length === 1 ? urls[0] : urls,
+});
+
+const splitIceServersByType = (
+  iceServers: RTCIceServer[] | null | undefined,
+): { stunIceServers: RTCIceServer[]; turnIceServers: RTCIceServer[] } => {
+  const stunIceServers: RTCIceServer[] = [];
+  const turnIceServers: RTCIceServer[] = [];
+
+  for (const iceServer of iceServers ?? []) {
+    const urls = normalizeIceServerUrls(iceServer.urls);
+    if (urls.length === 0) continue;
+
+    const turnUrls = urls.filter((url) => TURN_URL_PATTERN.test(url));
+    const stunUrls = urls.filter((url) => !TURN_URL_PATTERN.test(url));
+
+    if (stunUrls.length > 0) {
+      stunIceServers.push(buildIceServerWithUrls(iceServer, stunUrls));
+    }
+    if (turnUrls.length > 0) {
+      turnIceServers.push(buildIceServerWithUrls(iceServer, turnUrls));
+    }
+  }
+
+  return { stunIceServers, turnIceServers };
+};
 
 interface UseMeetSocketOptions {
   refs: MeetRefs;
@@ -206,7 +249,9 @@ export function useMeetSocket({
 }: UseMeetSocketOptions) {
   const participantIdsRef = useRef<Set<string>>(new Set([userId]));
   const serverRoomIdRef = useRef<string | null>(null);
-  const runtimeIceServersRef = useRef<RTCIceServer[] | null>(null);
+  const runtimeStunIceServersRef = useRef<RTCIceServer[] | null>(null);
+  const runtimeTurnIceServersRef = useRef<RTCIceServer[] | null>(null);
+  const useTurnFallbackRef = useRef(false);
   const consumeRetryAttemptsRef = useRef<Map<string, number>>(new Map());
   const videoStallRecoveryTimeoutsRef = useRef<Map<string, number>>(new Map());
   const consumeProducerRef = useRef<
@@ -266,12 +311,39 @@ export function useMeetSocket({
     isTtsDisabledRef.current = isTtsDisabled;
   }, [isTtsDisabled]);
 
+  const enableTurnFallback = useCallback((reason: string): boolean => {
+    if (useTurnFallbackRef.current) return false;
+
+    const turnIceServers =
+      runtimeTurnIceServersRef.current && runtimeTurnIceServersRef.current.length > 0
+        ? runtimeTurnIceServersRef.current
+        : MEETS_TURN_ICE_SERVERS;
+    if (turnIceServers.length === 0) return false;
+
+    useTurnFallbackRef.current = true;
+    console.warn(`[Meets] ${reason}. Retrying with TURN fallback.`);
+    return true;
+  }, []);
+
   const resolveIceServers = useCallback((): RTCIceServer[] | undefined => {
-    const runtimeIceServers = runtimeIceServersRef.current;
-    if (runtimeIceServers && runtimeIceServers.length > 0) {
-      return runtimeIceServers;
+    const stunIceServers =
+      runtimeStunIceServersRef.current && runtimeStunIceServersRef.current.length > 0
+        ? runtimeStunIceServersRef.current
+        : MEETS_ICE_SERVERS;
+    const resolvedIceServers =
+      stunIceServers.length > 0 ? [...stunIceServers] : [];
+
+    if (useTurnFallbackRef.current) {
+      const turnIceServers =
+        runtimeTurnIceServersRef.current && runtimeTurnIceServersRef.current.length > 0
+          ? runtimeTurnIceServersRef.current
+          : MEETS_TURN_ICE_SERVERS;
+      if (turnIceServers.length > 0) {
+        resolvedIceServers.push(...turnIceServers);
+      }
     }
-    return MEETS_ICE_SERVERS.length > 0 ? MEETS_ICE_SERVERS : undefined;
+
+    return resolvedIceServers.length > 0 ? resolvedIceServers : undefined;
   }, []);
 
   const cleanupRoomResources = useCallback(
@@ -354,6 +426,9 @@ export function useMeetSocket({
       setWebinarConfig(null);
       if (resetRoomId) {
         currentRoomIdRef.current = null;
+        runtimeStunIceServersRef.current = null;
+        runtimeTurnIceServersRef.current = null;
+        useTurnFallbackRef.current = false;
       }
     },
     [
@@ -384,6 +459,9 @@ export function useMeetSocket({
       clearReactions,
       videoProducerRef,
       userId,
+      runtimeStunIceServersRef,
+      runtimeTurnIceServersRef,
+      useTurnFallbackRef,
       producerTransportDisconnectTimeoutRef,
       consumerTransportDisconnectTimeoutRef,
       pendingProducerRetryTimeoutRef,
@@ -700,6 +778,13 @@ export function useMeetSocket({
                       ) {
                         attemptIceRestart("producer").then((restarted) => {
                           if (!restarted) {
+                            const enabledTurnFallback = enableTurnFallback(
+                              "Producer transport could not recover with STUN-only ICE",
+                            );
+                            if (enabledTurnFallback) {
+                              handleReconnectRef.current?.();
+                              return;
+                            }
                             setMeetError({
                               code: "TRANSPORT_ERROR",
                               message: "Producer transport interrupted",
@@ -725,6 +810,13 @@ export function useMeetSocket({
                 if (!intentionalDisconnectRef.current) {
                   attemptIceRestart("producer").then((restarted) => {
                     if (!restarted) {
+                      const enabledTurnFallback = enableTurnFallback(
+                        "Producer transport failed with STUN-only ICE",
+                      );
+                      if (enabledTurnFallback) {
+                        handleReconnectRef.current?.();
+                        return;
+                      }
                       setMeetError({
                         code: "TRANSPORT_ERROR",
                         message: "Producer transport failed",
@@ -758,6 +850,7 @@ export function useMeetSocket({
       intentionalDisconnectRef,
       producerTransportDisconnectTimeoutRef,
       attemptIceRestart,
+      enableTurnFallback,
       resolveIceServers,
     ],
   );
@@ -822,6 +915,13 @@ export function useMeetSocket({
                       ) {
                         attemptIceRestart("consumer").then((restarted) => {
                           if (!restarted) {
+                            const enabledTurnFallback = enableTurnFallback(
+                              "Consumer transport could not recover with STUN-only ICE",
+                            );
+                            if (enabledTurnFallback) {
+                              handleReconnectRef.current?.();
+                              return;
+                            }
                             handleReconnectRef.current?.();
                           }
                         });
@@ -842,6 +942,13 @@ export function useMeetSocket({
                 if (!intentionalDisconnectRef.current) {
                   attemptIceRestart("consumer").then((restarted) => {
                     if (!restarted) {
+                      const enabledTurnFallback = enableTurnFallback(
+                        "Consumer transport failed with STUN-only ICE",
+                      );
+                      if (enabledTurnFallback) {
+                        handleReconnectRef.current?.();
+                        return;
+                      }
                       handleReconnectRef.current?.();
                     }
                   });
@@ -861,6 +968,7 @@ export function useMeetSocket({
       intentionalDisconnectRef,
       consumerTransportDisconnectTimeoutRef,
       attemptIceRestart,
+      enableTurnFallback,
       resolveIceServers,
     ],
   );
@@ -1547,8 +1655,12 @@ export function useMeetSocket({
             ]);
 
             if (Array.isArray(iceServers)) {
-              runtimeIceServersRef.current =
-                iceServers.length > 0 ? iceServers : null;
+              const { stunIceServers, turnIceServers } =
+                splitIceServersByType(iceServers);
+              runtimeStunIceServersRef.current =
+                stunIceServers.length > 0 ? stunIceServers : null;
+              runtimeTurnIceServersRef.current =
+                turnIceServers.length > 0 ? turnIceServers : null;
             }
 
             const socket = io(sfuUrl, {
@@ -2530,6 +2642,9 @@ export function useMeetSocket({
       primeAudioOutput();
       refs.intentionalDisconnectRef.current = false;
       serverRoomIdRef.current = null;
+      runtimeStunIceServersRef.current = null;
+      runtimeTurnIceServersRef.current = null;
+      useTurnFallbackRef.current = false;
       setRoomId(targetRoomId);
       if (joinMode === "webinar_attendee") {
         setIsAdmin(false);

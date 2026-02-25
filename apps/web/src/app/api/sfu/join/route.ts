@@ -25,6 +25,12 @@ type IceServer = {
   credential?: string;
 };
 
+const DEFAULT_PUBLIC_STUN_URLS = [
+  "stun:stun.l.google.com:19302",
+  "stun:stun1.l.google.com:19302",
+  "stun:stun2.l.google.com:19302",
+];
+
 const resolveSfuUrl = () =>
   process.env.SFU_URL || process.env.NEXT_PUBLIC_SFU_URL || "http://localhost:3031";
 
@@ -72,7 +78,7 @@ let turnMissingCredentialWarningLogged = false;
 const resolveIceServers = (): IceServer[] => {
   const servers: IceServer[] = [];
 
-  const stunUrls = splitUrls(
+  const configuredStunUrls = splitUrls(
     firstNonEmpty(
       process.env.STUN_URLS,
       process.env.STUN_URL,
@@ -80,6 +86,8 @@ const resolveIceServers = (): IceServer[] => {
       process.env.NEXT_PUBLIC_STUN_URL,
     ),
   );
+  const stunUrls =
+    configuredStunUrls.length > 0 ? configuredStunUrls : DEFAULT_PUBLIC_STUN_URLS;
 
   if (stunUrls.length > 0) {
     servers.push({
