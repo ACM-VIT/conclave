@@ -3,7 +3,10 @@ import { Room } from "../config/classes/Room.js";
 import { config } from "../config/config.js";
 import getWorker from "../utilities/getWorker.js";
 import { Logger } from "../utilities/loggers.js";
-import { stopRoomTranscriber } from "./recording/roomTranscriber.js";
+import {
+  stopRoomTranscriber,
+  type TranscriptChunk,
+} from "./recording/roomTranscriber.js";
 import { summarizeTranscript } from "./recording/summarizeTranscript.js";
 import { buildMinutesPdf } from "./recording/minutesPdf.js";
 import { cleanupRoomBrowser } from "./socket/handlers/sharedBrowserHandlers.js";
@@ -41,6 +44,7 @@ export const cleanupRoom = (state: SfuState, channelId: string): boolean => {
   if (room && room.isEmpty()) {
     const transcript = stopRoomTranscriber(channelId);
     if (transcript.length) {
+      RoomTranscriptCache.set(channelId, { transcript, createdAt: Date.now() });
       void summarizeTranscript(transcript)
         .then(async (summary) => {
           Logger.info(`Room ${room.id} summary`, summary);
@@ -72,10 +76,20 @@ export const cleanupRoom = (state: SfuState, channelId: string): boolean => {
 
 type CachedMinutes = { pdf: Buffer; createdAt: number };
 const RoomMinutesCache = new Map<string, CachedMinutes>();
+type CachedTranscript = { transcript: TranscriptChunk[]; createdAt: number };
+const RoomTranscriptCache = new Map<string, CachedTranscript>();
 
 export const popCachedMinutes = (channelId: string): Buffer | null => {
   const entry = RoomMinutesCache.get(channelId);
   if (!entry) return null;
   RoomMinutesCache.delete(channelId);
+  RoomTranscriptCache.delete(channelId);
   return entry.pdf;
+};
+
+export const popCachedTranscript = (channelId: string): TranscriptChunk[] => {
+  const entry = RoomTranscriptCache.get(channelId);
+  if (!entry) return [];
+  RoomTranscriptCache.delete(channelId);
+  return entry.transcript;
 };

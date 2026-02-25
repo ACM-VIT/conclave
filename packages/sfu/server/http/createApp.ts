@@ -4,7 +4,7 @@ import type { Express, Request } from "express";
 import { config as defaultConfig } from "../../config/config.js";
 import { Logger } from "../../utilities/loggers.js";
 import type { SfuState } from "../state.js";
-import { getRoomChannelId } from "../rooms.js";
+import { getRoomChannelId, popCachedTranscript } from "../rooms.js";
 import { stopRoomTranscriber } from "../recording/roomTranscriber.js";
 import { summarizeTranscript } from "../recording/summarizeTranscript.js";
 import { buildMinutesPdf } from "../recording/minutesPdf.js";
@@ -119,9 +119,11 @@ export const createSfuApp = ({
       return res.end(cached);
     }
 
-    const transcript = stopRoomTranscriber(channelId);
+    let transcript = stopRoomTranscriber(channelId);
+    if (!transcript.length) {
+      transcript = popCachedTranscript(channelId);
+    }
 
-    
     if (!transcript.length) {
       const summary =
         "No transcript available. Speech-to-text was not configured or no audio was captured.";
