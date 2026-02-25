@@ -6,6 +6,7 @@ import {
   Globe,
   Link2,
   Lock,
+  MessageSquare,
   MessageSquareLock,
   RotateCw,
   ShieldBan,
@@ -46,6 +47,8 @@ interface MeetSettingsPanelProps {
   onToggleChatLock?: () => void;
   isTtsDisabled: boolean;
   onToggleTtsDisabled?: () => void;
+  isDmEnabled: boolean;
+  onToggleDmEnabled?: () => void;
   meetingRequiresInviteCode: boolean;
   onGetMeetingConfig?: () => Promise<MeetingConfigSnapshot | null>;
   onUpdateMeetingConfig?: (
@@ -153,6 +156,8 @@ export default function MeetSettingsPanel({
   onToggleChatLock,
   isTtsDisabled,
   onToggleTtsDisabled,
+  isDmEnabled,
+  onToggleDmEnabled,
   meetingRequiresInviteCode,
   onGetMeetingConfig,
   onUpdateMeetingConfig,
@@ -342,7 +347,7 @@ export default function MeetSettingsPanel({
                 disabled={!onToggleNoGuests}
               />
               <ToggleRow
-                label="Lock chat"
+                label="Disable chat"
                 icon={
                   <MessageSquareLock
                     className={`h-4 w-4 ${isChatLocked ? "text-amber-300" : "text-[#FEFCD9]/65"}`}
@@ -352,6 +357,18 @@ export default function MeetSettingsPanel({
                 tone="warning"
                 onClick={onToggleChatLock}
                 disabled={!onToggleChatLock}
+              />
+              <ToggleRow
+                label="Enable DMs"
+                icon={
+                  <MessageSquare
+                    className={`h-4 w-4 ${isDmEnabled ? "text-amber-300" : "text-[#FEFCD9]/65"}`}
+                  />
+                }
+                isOn={isDmEnabled}
+                tone="warning"
+                onClick={onToggleDmEnabled}
+                disabled={!onToggleDmEnabled}
               />
               <ToggleRow
                 label="Disable TTS"

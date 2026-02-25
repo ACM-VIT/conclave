@@ -69,6 +69,8 @@ interface ControlsBarProps {
   onToggleChatLock?: () => void;
   isTtsDisabled?: boolean;
   onToggleTtsDisabled?: () => void;
+  isDmEnabled?: boolean;
+  onToggleDmEnabled?: () => void;
   isBrowserActive?: boolean;
   isBrowserLaunching?: boolean;
   showBrowserControls?: boolean;
@@ -202,6 +204,8 @@ function ControlsBar({
   onToggleChatLock,
   isTtsDisabled = false,
   onToggleTtsDisabled,
+  isDmEnabled = true,
+  onToggleDmEnabled,
   isBrowserActive = false,
   isBrowserLaunching = false,
   showBrowserControls = true,
@@ -376,6 +380,8 @@ function ControlsBar({
               onToggleChatLock={onToggleChatLock}
               isTtsDisabled={isTtsDisabled}
               onToggleTtsDisabled={onToggleTtsDisabled}
+              isDmEnabled={isDmEnabled}
+              onToggleDmEnabled={onToggleDmEnabled}
               meetingRequiresInviteCode={meetingRequiresInviteCode}
               onGetMeetingConfig={onGetMeetingConfig}
               onUpdateMeetingConfig={onUpdateMeetingConfig}

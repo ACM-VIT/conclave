@@ -70,11 +70,9 @@ interface UseMeetSocketOptions {
       user?: { id?: string; email?: string | null; name?: string | null };
       isHost?: boolean;
       joinMode?: JoinMode;
-      webinarSignedToken?: string;
     }
   ) => Promise<JoinInfo>;
   joinMode?: JoinMode;
-  webinarSignedToken?: string;
   requestWebinarInviteCode?: () => Promise<string | null>;
   requestMeetingInviteCode?: () => Promise<string | null>;
   ghostEnabled: boolean;
@@ -107,6 +105,7 @@ interface UseMeetSocketOptions {
   setMeetingRequiresInviteCode: (value: boolean) => void;
   isTtsDisabled: boolean;
   setIsTtsDisabled: (value: boolean) => void;
+  setIsDmEnabled: (value: boolean) => void;
   setActiveScreenShareId: (value: string | null) => void;
   setVideoQuality: (value: VideoQuality) => void;
   videoQualityRef: React.MutableRefObject<VideoQuality>;
@@ -151,7 +150,6 @@ export function useMeetSocket({
   userId,
   getJoinInfo,
   joinMode = "meeting",
-  webinarSignedToken,
   requestWebinarInviteCode,
   requestMeetingInviteCode,
   ghostEnabled,
@@ -182,6 +180,7 @@ export function useMeetSocket({
   setMeetingRequiresInviteCode,
   isTtsDisabled,
   setIsTtsDisabled,
+  setIsDmEnabled,
   setActiveScreenShareId,
   setVideoQuality,
   videoQualityRef,
@@ -359,6 +358,7 @@ export function useMeetSocket({
       setIsHandRaised(false);
       setIsNoGuests(false);
       setIsTtsDisabled(false);
+      setIsDmEnabled(true);
       setMeetingRequiresInviteCode(false);
       setWebinarConfig(null);
       if (resetRoomId) {
@@ -388,6 +388,7 @@ export function useMeetSocket({
       setWebinarRole,
       setWebinarSpeakerUserId,
       setIsTtsDisabled,
+      setIsDmEnabled,
       setMeetingRequiresInviteCode,
       setWebinarConfig,
       clearReactions,
@@ -1297,6 +1298,7 @@ export function useMeetSocket({
               currentRoomIdRef.current = targetRoomId;
               serverRoomIdRef.current = response.roomId ?? targetRoomId;
               setIsTtsDisabled(response.isTtsDisabled ?? false);
+              setIsDmEnabled(response.isDmEnabled ?? true);
               resolve("waiting");
               return;
             }
@@ -1314,6 +1316,7 @@ export function useMeetSocket({
                 response.meetingRequiresInviteCode ?? false
               );
               setIsTtsDisabled(response.isTtsDisabled ?? false);
+              setIsDmEnabled(response.isDmEnabled ?? true);
               setHostUserId(response.hostUserId ?? null);
               setHostUserIds(
                 response.hostUserIds ??
@@ -1399,6 +1402,7 @@ export function useMeetSocket({
       setConnectionState,
       setIsRoomLocked,
       setIsTtsDisabled,
+      setIsDmEnabled,
       setHostUserId,
       setMeetingRequiresInviteCode,
       setWebinarRole,
@@ -1462,12 +1466,11 @@ export function useMeetSocket({
               desiredJoinMode === "webinar_attendee" ? false : desiredIsHost;
             const tokenPromise = cachedToken
               ? Promise.resolve(cachedToken)
-              : getJoinInfo(roomIdForJoin, sessionIdRef.current, {
-                  user,
-                  isHost,
-                  joinMode: desiredJoinMode,
-                  webinarSignedToken,
-                });
+                : getJoinInfo(roomIdForJoin, sessionIdRef.current, {
+                    user,
+                    isHost,
+                    joinMode: desiredJoinMode,
+                  });
 
             const [{ token, sfuUrl, iceServers }, socketIoModule] = await Promise.all([
               tokenPromise,
@@ -2144,6 +2147,21 @@ export function useMeetSocket({
             );
 
             socket.on(
+              "dmStateChanged",
+              ({
+                enabled,
+                roomId: eventRoomId,
+              }: {
+                enabled: boolean;
+                roomId?: string;
+              }) => {
+                if (!isRoomEvent(eventRoomId)) return;
+                console.log("[Meets] Room DM state changed:", enabled);
+                setIsDmEnabled(enabled);
+              }
+            );
+
+            socket.on(
               "noGuestsChanged",
               ({
                 noGuests,
@@ -2286,6 +2304,7 @@ export function useMeetSocket({
       setIsScreenSharing,
       setIsHandRaised,
       setMeetingRequiresInviteCode,
+      setIsDmEnabled,
       setLocalStream,
       setMeetError,
       setPendingUsers,
@@ -2303,7 +2322,6 @@ export function useMeetSocket({
       updateVideoQualityRef,
       user,
       userId,
-      webinarSignedToken,
       onTtsMessage,
       lastAuthIsHostRef,
       lastAuthJoinModeRef,
@@ -2469,53 +2487,54 @@ export function useMeetSocket({
         localStreamRef.current = stream;
         setLocalStream(stream);
 
-        try {
-          await joinRoomInternal(targetRoomId, stream, joinOptions);
-        } catch (joinError) {
-          const joinMessage =
-            joinError instanceof Error
-              ? joinError.message
-              : String(joinError ?? "");
-          const isMeetingInviteCodeValidationError =
-            /meeting invite code required/i.test(joinMessage) ||
-            /invalid meeting invite code/i.test(joinMessage);
-          const shouldPromptMeetingInviteCode =
-            joinOptions.joinMode !== "webinar_attendee" &&
-            !joinOptions.meetingInviteCode &&
-            isMeetingInviteCodeValidationError &&
-            typeof requestMeetingInviteCode === "function";
+        let nextJoinOptions = joinOptions;
+        while (true) {
+          try {
+            await joinRoomInternal(targetRoomId, stream, nextJoinOptions);
+            break;
+          } catch (joinError) {
+            const joinMessage =
+              joinError instanceof Error
+                ? joinError.message
+                : String(joinError ?? "");
+            const isMeetingInviteCodeValidationError =
+              /meeting invite code required/i.test(joinMessage) ||
+              /invalid meeting invite code/i.test(joinMessage);
+            const shouldPromptMeetingInviteCode =
+              nextJoinOptions.joinMode !== "webinar_attendee" &&
+              isMeetingInviteCodeValidationError &&
+              typeof requestMeetingInviteCode === "function";
 
-          const isWebinarInviteCodeValidationError =
-            /webinar invite code required/i.test(joinMessage) ||
-            /invalid webinar invite code/i.test(joinMessage);
-          const shouldPromptWebinarInviteCode =
-            joinOptions.joinMode === "webinar_attendee" &&
-            !joinOptions.webinarInviteCode &&
-            isWebinarInviteCodeValidationError &&
-            typeof requestWebinarInviteCode === "function";
+            const isWebinarInviteCodeValidationError =
+              /webinar invite code required/i.test(joinMessage) ||
+              /invalid webinar invite code/i.test(joinMessage);
+            const shouldPromptWebinarInviteCode =
+              nextJoinOptions.joinMode === "webinar_attendee" &&
+              isWebinarInviteCodeValidationError &&
+              typeof requestWebinarInviteCode === "function";
 
-          if (!shouldPromptMeetingInviteCode && !shouldPromptWebinarInviteCode) {
-            throw joinError;
+            if (!shouldPromptMeetingInviteCode && !shouldPromptWebinarInviteCode) {
+              throw joinError;
+            }
+
+            const inviteCode = shouldPromptMeetingInviteCode
+              ? await requestMeetingInviteCode!()
+              : await requestWebinarInviteCode!();
+            if (!inviteCode || !inviteCode.trim()) {
+              throw joinError;
+            }
+
+            nextJoinOptions = shouldPromptMeetingInviteCode
+              ? {
+                  ...nextJoinOptions,
+                  meetingInviteCode: inviteCode.trim(),
+                }
+              : {
+                  ...nextJoinOptions,
+                  webinarInviteCode: inviteCode.trim(),
+                };
+            joinOptionsRef.current = nextJoinOptions;
           }
-
-          const inviteCode = shouldPromptMeetingInviteCode
-            ? await requestMeetingInviteCode!()
-            : await requestWebinarInviteCode!();
-          if (!inviteCode || !inviteCode.trim()) {
-            throw joinError;
-          }
-
-          const retryJoinOptions = shouldPromptMeetingInviteCode
-            ? {
-                ...joinOptions,
-                meetingInviteCode: inviteCode.trim(),
-              }
-            : {
-                ...joinOptions,
-                webinarInviteCode: inviteCode.trim(),
-              };
-          joinOptionsRef.current = retryJoinOptions;
-          await joinRoomInternal(targetRoomId, stream, retryJoinOptions);
         }
       } catch (err) {
         console.error("[Meets] Error joining room:", err);
@@ -2653,6 +2672,29 @@ export function useMeetSocket({
           (response: { success: boolean; disabled?: boolean } | { error: string }) => {
             if ("error" in response) {
               console.error("[Meets] Failed to toggle TTS:", response.error);
+              resolve(false);
+            } else {
+              resolve(response.success);
+            }
+          }
+        );
+      });
+    },
+    [socketRef]
+  );
+
+  const toggleDmEnabled = useCallback(
+    (enabled: boolean): Promise<boolean> => {
+      const socket = socketRef.current;
+      if (!socket) return Promise.resolve(false);
+
+      return new Promise((resolve) => {
+        socket.emit(
+          "setDmEnabled",
+          { enabled },
+          (response: { success: boolean; enabled?: boolean } | { error: string }) => {
+            if ("error" in response) {
+              console.error("[Meets] Failed to toggle DM state:", response.error);
               resolve(false);
             } else {
               resolve(response.success);
@@ -2894,6 +2936,7 @@ export function useMeetSocket({
     toggleChatLock,
     toggleNoGuests,
     toggleTtsDisabled,
+    toggleDmEnabled,
     getMeetingConfig,
     updateMeetingConfig,
     getWebinarConfig,

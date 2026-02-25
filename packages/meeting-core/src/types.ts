@@ -30,6 +30,9 @@ export interface ChatMessage {
   displayName: string;
   content: string;
   timestamp: number;
+  isDirect?: boolean;
+  dmTargetUserId?: string;
+  dmTargetDisplayName?: string;
 }
 
 export interface ReactionNotification {
@@ -116,6 +119,7 @@ export interface JoinRoomResponse {
   hostUserIds?: string[];
   isLocked?: boolean;
   isTtsDisabled?: boolean;
+  isDmEnabled?: boolean;
   meetingRequiresInviteCode?: boolean;
   webinarRole?: "attendee" | "participant" | "host";
   isWebinarEnabled?: boolean;
@@ -156,7 +160,6 @@ export interface MeetingUpdateRequest {
 export interface WebinarLinkResponse {
   slug?: string;
   link: string;
-  signedToken?: string;
   publicAccess: boolean;
   linkVersion: number;
 }

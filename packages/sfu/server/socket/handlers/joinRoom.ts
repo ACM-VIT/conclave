@@ -326,6 +326,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             hostUserIds: room.getAdminUserIds(),
             isLocked: room.isLocked,
             isTtsDisabled: room.isTtsDisabled,
+            isDmEnabled: room.isDmEnabled,
             meetingRequiresInviteCode: room.requiresMeetingInviteCode,
           });
           return;
@@ -369,6 +370,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             hostUserIds: room.getAdminUserIds(),
             isLocked: room.isLocked,
             isTtsDisabled: room.isTtsDisabled,
+            isDmEnabled: room.isDmEnabled,
             meetingRequiresInviteCode: room.requiresMeetingInviteCode,
           });
           return;
@@ -409,7 +411,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           }
 
           emitWebinarAttendeeCountChanged(io, state, previousRoom);
-          emitWebinarFeedChanged(io, previousRoom);
+          emitWebinarFeedChanged(io, state, previousRoom);
 
           socket.leave(previousChannelId);
           if (cleanupRoom(state, previousChannelId)) {
@@ -422,7 +424,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
 
         context.currentRoom = room;
         context.currentRoom.setWebinarFeedRefreshNotifier((targetRoom) => {
-          emitWebinarFeedChanged(io, targetRoom);
+          emitWebinarFeedChanged(io, state, targetRoom);
         });
         context.pendingRoomId = null;
         context.pendingRoomChannelId = null;
@@ -540,6 +542,11 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           roomId: context.currentRoom.id,
         });
 
+        socket.emit("dmStateChanged", {
+          enabled: context.currentRoom.isDmEnabled,
+          roomId: context.currentRoom.id,
+        });
+
         socket.emit("apps:state", {
           activeAppId: context.currentRoom.appsState.activeAppId,
           locked: context.currentRoom.appsState.locked,
@@ -558,7 +565,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           : context.currentRoom.getAllProducers(userId);
 
         emitWebinarAttendeeCountChanged(io, state, context.currentRoom);
-        emitWebinarFeedChanged(io, context.currentRoom);
+        emitWebinarFeedChanged(io, state, context.currentRoom);
 
         const webinarSnapshot = toWebinarConfigSnapshot(
           webinarConfig,
@@ -588,6 +595,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           hostUserIds: context.currentRoom.getAdminUserIds(),
           isLocked: context.currentRoom.isLocked,
           isTtsDisabled: context.currentRoom.isTtsDisabled,
+          isDmEnabled: context.currentRoom.isDmEnabled,
           meetingRequiresInviteCode: context.currentRoom.requiresMeetingInviteCode,
           webinarRole: context.currentClient.isWebinarAttendee
             ? "attendee"

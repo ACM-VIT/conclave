@@ -1,13 +1,5 @@
 @import "tailwindcss";
 
-/* ============================================================
-   ACM-VIT CONCLAVE DESIGN SYSTEM
-   Based on ACM-VIT Official Website
-   ============================================================ */
-
-/* ============================================================
-   FONT DEFINITIONS - Virgil (Excalidraw hand-drawn font)
-   ============================================================ */
 @font-face {
   font-family: "Virgil";
   src: url("/assets/fonts/Virgil-Regular.woff2") format("woff2");
@@ -16,11 +8,6 @@
   font-display: swap;
 }
 
-/* ============================================================
-   FONT DEFINITIONS - PolySans Trial
-   ============================================================ */
-
-/* Standard Weights */
 @font-face {
   font-family: "PolySans Trial";
   src: url("/assets/fonts/PolySans-trial/PolySans-trial/Standard/PolySansTrial-Slim.otf") format("opentype");
@@ -86,7 +73,6 @@
   font-display: swap;
 }
 
-/* Wide Weights - for bold display text */
 @font-face {
   font-family: "PolySans Bulky Wide";
   src: url("/assets/fonts/PolySans-trial/PolySans-trial/Wide/PolySansTrial-BulkyWide.otf") format("opentype");
@@ -95,9 +81,6 @@
   font-display: swap;
 }
 
-/* ============================================================
-   THEME COLORS
-   ============================================================ */
 @theme {
   --color-primary-orange: #F95F4A;
   --color-primary-pink: #FF007A;
@@ -116,11 +99,7 @@
   --font-polysans-wide: "PolySans Bulky Wide", sans-serif;
 }
 
-/* ============================================================
-   GLOBAL STYLES
-   ============================================================ */
 
-/* Global Selection Style - ACM Orange */
 ::selection {
   background: #f95f4a;
   color: white;
@@ -142,7 +121,6 @@ body {
   color: #FEFCD9;
 }
 
-/* ACM-VIT Style Input Focus */
 input:focus,
 textarea:focus,
 select:focus {
@@ -150,7 +128,6 @@ select:focus {
   outline: none;
 }
 
-/* Pill Button Style */
 .acm-pill {
   border-radius: 41px;
   border: 1px solid #FEFCD9;
@@ -158,7 +135,6 @@ select:focus {
   backdrop-filter: blur(4px);
 }
 
-/* Glowing accent */
 .acm-glow {
   box-shadow: 0 0 20px rgba(249, 95, 74, 0.3);
 }
@@ -167,7 +143,6 @@ select:focus {
   box-shadow: 0 0 20px rgba(255, 0, 122, 0.3);
 }
 
-/* Blinking cursor animation */
 @keyframes blink {
 
   0%,
@@ -180,7 +155,6 @@ select:focus {
   }
 }
 
-/* Status indicator pulse */
 @keyframes acm-pulse {
 
   0%,
@@ -768,6 +742,118 @@ select:focus {
 .mobile-chat-message-new {
   animation: mobile-chat-pop 0.24s cubic-bezier(0.22, 1, 0.36, 1);
   will-change: transform, opacity;
+}
+
+@keyframes web-chat-pop-peer {
+  from {
+    opacity: 0;
+    transform: translate3d(-4px, 4px, 0) scale(0.99);
+  }
+
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+@keyframes web-chat-pop-self {
+  from {
+    opacity: 0;
+    transform: translate3d(4px, 4px, 0) scale(0.99);
+  }
+
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+@keyframes web-chat-action-fade {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes web-chat-meta-fade {
+  from {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes web-chat-send-tap {
+  0% {
+    transform: scale(1);
+  }
+
+  50% {
+    transform: scale(0.92);
+  }
+
+  100% {
+    transform: scale(1);
+  }
+}
+
+.web-chat-message-new-peer {
+  animation: web-chat-pop-peer 0.22s cubic-bezier(0.2, 0.75, 0.15, 1) both;
+  will-change: transform, opacity;
+}
+
+.web-chat-message-new-self {
+  animation: web-chat-pop-self 0.22s cubic-bezier(0.2, 0.75, 0.15, 1) both;
+  will-change: transform, opacity;
+}
+
+.web-chat-action-new {
+  animation: web-chat-action-fade 0.18s ease-out both;
+}
+
+.web-chat-meta-new {
+  animation: web-chat-meta-fade 0.22s ease-out both;
+}
+
+.web-chat-send-active {
+  animation: web-chat-send-tap 0.18s ease-out both;
+}
+
+.web-chat-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(254, 252, 217, 0.18) transparent;
+}
+
+.web-chat-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+
+.web-chat-scroll::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(254, 252, 217, 0.2);
+}
+
+.web-chat-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .web-chat-message-new-peer,
+  .web-chat-message-new-self,
+  .web-chat-action-new,
+  .web-chat-meta-new,
+  .web-chat-send-active {
+    animation: none;
+  }
 }
 
 .animate-delay-75 {

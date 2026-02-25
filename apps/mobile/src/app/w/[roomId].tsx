@@ -3,9 +3,8 @@ import { Stack, useLocalSearchParams } from "expo-router";
 import { MeetScreen } from "@/features/meets/components/meet-screen";
 
 export default function WebinarRoomPage() {
-  const { roomId, wt } = useLocalSearchParams<{ roomId?: string; wt?: string }>();
+  const { roomId } = useLocalSearchParams<{ roomId?: string }>();
   const resolvedRoomId = Array.isArray(roomId) ? roomId[0] : roomId;
-  const resolvedToken = Array.isArray(wt) ? wt[0] : wt;
 
   return (
     <>
@@ -13,7 +12,6 @@ export default function WebinarRoomPage() {
       <MeetScreen
         initialRoomId={resolvedRoomId ?? ""}
         joinMode="webinar_attendee"
-        webinarSignedToken={resolvedToken}
         autoJoinOnMount
         hideJoinUI
       />
