@@ -4,6 +4,7 @@ import { Ghost, Hand, MicOff } from "lucide-react";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import type { Participant } from "../lib/types";
 import { isSystemUserId, truncateDisplayName } from "../lib/utils";
+import ParticipantAudio from "./ParticipantAudio";
 import ParticipantVideo from "./ParticipantVideo";
 
 interface GridLayoutProps {
@@ -331,6 +332,19 @@ function GridLayout({
 
   return (
     <div className="relative flex flex-1 min-h-0 flex-col">
+      <div
+        className="pointer-events-none h-0 w-0 overflow-hidden"
+        aria-hidden={true}
+      >
+        {stableRemoteParticipants.map((participant) => (
+          <ParticipantAudio
+            key={`audio-${participant.userId}`}
+            participant={participant}
+            audioOutputDeviceId={audioOutputDeviceId}
+          />
+        ))}
+      </div>
+
       <div className={`flex-1 min-h-0 grid ${gridClass} gap-3 overflow-hidden p-4`}>
         <div
           className={`acm-video-tile ${localSpeakerHighlight}`}
@@ -426,6 +440,7 @@ function GridLayout({
             displayName={getDisplayName(participant.userId)}
             isActiveSpeaker={activeSpeakerId === participant.userId}
             audioOutputDeviceId={audioOutputDeviceId}
+            disableAudio
             isAdmin={isAdmin}
             isSelected={selectedParticipantId === participant.userId}
             onAdminClick={onParticipantClick}
