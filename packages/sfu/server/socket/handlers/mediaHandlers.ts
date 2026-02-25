@@ -171,7 +171,7 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
         const consumer = await context.currentClient.consumerTransport.consume({
           producerId,
           rtpCapabilities,
-          paused: false,
+          paused: true,
         });
 
         context.currentClient.addConsumer(consumer);
@@ -224,7 +224,7 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
   socket.on(
     "resumeConsumer",
     async (
-      data: { consumerId: string },
+      data: { consumerId: string; requestKeyFrame?: boolean },
       callback: (response: { success: boolean } | { error: string }) => void,
     ) => {
       try {
@@ -235,7 +235,25 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
 
         for (const consumer of context.currentClient.consumers.values()) {
           if (consumer.id === data.consumerId) {
-            await consumer.resume();
+            const wasPaused = consumer.paused;
+            if (wasPaused) {
+              await consumer.resume();
+            }
+
+            if (
+              consumer.kind === "video" &&
+              (data.requestKeyFrame === true || wasPaused)
+            ) {
+              try {
+                await consumer.requestKeyFrame();
+              } catch (error) {
+                Logger.warn(
+                  `Failed to request keyframe for consumer ${consumer.id}:`,
+                  error,
+                );
+              }
+            }
+
             respond(callback, { success: true });
             return;
           }

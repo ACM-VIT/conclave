@@ -54,6 +54,7 @@ type JoinInfo = {
 
 const DEFAULT_SERVER_RESTART_NOTICE =
   "Meeting server is restarting. You will be reconnected automatically.";
+const VIDEO_STALL_KEYFRAME_REQUEST_DELAY_MS = 2500;
 
 interface UseMeetSocketOptions {
   refs: MeetRefs;
@@ -204,6 +205,9 @@ export function useMeetSocket({
   const isTtsDisabledRef = useRef(isTtsDisabled);
   const lastAuthJoinModeRef = useRef<JoinMode | null>(null);
   const consumeRetryAttemptsRef = useRef<Map<string, number>>(new Map());
+  const videoStallRecoveryTimeoutsRef = useRef<
+    Map<string, ReturnType<typeof setTimeout>>
+  >(new Map());
   const consumeProducerRef = useRef<
     (producerInfo: ProducerInfo) => Promise<void>
   >(async () => {});
@@ -298,6 +302,10 @@ export function useMeetSocket({
         } catch { }
       });
       consumersRef.current.clear();
+      for (const timeoutId of videoStallRecoveryTimeoutsRef.current.values()) {
+        clearTimeout(timeoutId);
+      }
+      videoStallRecoveryTimeoutsRef.current.clear();
       producerMapRef.current.clear();
       pendingProducersRef.current.clear();
       consumeRetryAttemptsRef.current.clear();
@@ -400,6 +408,7 @@ export function useMeetSocket({
       pendingProducerRetryTimeoutRef,
       producerSyncIntervalRef,
       consumeRetryAttemptsRef,
+      videoStallRecoveryTimeoutsRef,
     ]
   );
 
@@ -477,6 +486,12 @@ export function useMeetSocket({
     (producerId: string) => {
       pendingProducersRef.current.delete(producerId);
       consumeRetryAttemptsRef.current.delete(producerId);
+      const scheduledRecoveryTimeout =
+        videoStallRecoveryTimeoutsRef.current.get(producerId);
+      if (scheduledRecoveryTimeout != null) {
+        clearTimeout(scheduledRecoveryTimeout);
+        videoStallRecoveryTimeoutsRef.current.delete(producerId);
+      }
       const consumer = consumersRef.current.get(producerId);
       if (consumer) {
         try {
@@ -525,6 +540,7 @@ export function useMeetSocket({
       dispatchParticipants,
       pendingProducersRef,
       consumeRetryAttemptsRef,
+      videoStallRecoveryTimeoutsRef,
       producerMapRef,
       setActiveScreenShareId,
     ]
@@ -1056,6 +1072,42 @@ export function useMeetSocket({
                 } else if (isWebcamVideo) {
                   updateCameraState(true);
                 }
+                if (response.kind === "video") {
+                  const existingTimeout = videoStallRecoveryTimeoutsRef.current.get(
+                    producerInfo.producerId,
+                  );
+                  if (existingTimeout != null) {
+                    clearTimeout(existingTimeout);
+                  }
+                  const timeoutId = setTimeout(() => {
+                    const activeConsumer = consumersRef.current.get(
+                      producerInfo.producerId,
+                    );
+                    if (
+                      !activeConsumer ||
+                      activeConsumer.closed ||
+                      activeConsumer.id !== consumer.id
+                    ) {
+                      return;
+                    }
+                    const track = activeConsumer.track;
+                    if (!track || track.readyState !== "live" || !track.muted) {
+                      return;
+                    }
+                    socket.emit(
+                      "resumeConsumer",
+                      {
+                        consumerId: activeConsumer.id,
+                        requestKeyFrame: true,
+                      },
+                      () => { },
+                    );
+                  }, VIDEO_STALL_KEYFRAME_REQUEST_DELAY_MS);
+                  videoStallRecoveryTimeoutsRef.current.set(
+                    producerInfo.producerId,
+                    timeoutId,
+                  );
+                }
               };
 
               const handleTrackUnmuted = () => {
@@ -1064,9 +1116,27 @@ export function useMeetSocket({
                 } else if (isWebcamVideo) {
                   updateCameraState(false);
                 }
+                const existingTimeout = videoStallRecoveryTimeoutsRef.current.get(
+                  producerInfo.producerId,
+                );
+                if (existingTimeout != null) {
+                  clearTimeout(existingTimeout);
+                  videoStallRecoveryTimeoutsRef.current.delete(
+                    producerInfo.producerId,
+                  );
+                }
               };
 
               consumer.on("trackended", () => {
+                const existingTimeout = videoStallRecoveryTimeoutsRef.current.get(
+                  producerInfo.producerId,
+                );
+                if (existingTimeout != null) {
+                  clearTimeout(existingTimeout);
+                  videoStallRecoveryTimeoutsRef.current.delete(
+                    producerInfo.producerId,
+                  );
+                }
                 handleProducerClosed(producerInfo.producerId);
               });
               consumer.track.onmute = handleTrackMuted;
@@ -1095,7 +1165,10 @@ export function useMeetSocket({
 
               socket.emit(
                 "resumeConsumer",
-                { consumerId: consumer.id },
+                {
+                  consumerId: consumer.id,
+                  requestKeyFrame: response.kind === "video",
+                },
                 () => { }
               );
               resolve();
@@ -1121,6 +1194,7 @@ export function useMeetSocket({
       joinMode,
       queueProducerConsumeRetry,
       setActiveScreenShareId,
+      videoStallRecoveryTimeoutsRef,
       userId,
     ]
   );
@@ -1150,6 +1224,17 @@ export function useMeetSocket({
         producers.map((producer) => producer.producerId),
       );
 
+      const staleConsumerIds: string[] = [];
+      for (const [producerId, consumer] of consumersRef.current.entries()) {
+        if (consumer.closed || consumer.track?.readyState === "ended") {
+          staleConsumerIds.push(producerId);
+        }
+      }
+
+      for (const producerId of staleConsumerIds) {
+        handleProducerClosed(producerId);
+      }
+
       for (const producerInfo of producers) {
         if (producerInfo.type !== "webcam") continue;
         if (producerInfo.kind === "audio") {
@@ -1171,6 +1256,28 @@ export function useMeetSocket({
         if (!serverProducerIds.has(producerId)) {
           handleProducerClosed(producerId);
         }
+      }
+
+      for (const producerInfo of producers) {
+        const consumer = consumersRef.current.get(producerInfo.producerId);
+        if (consumer) {
+          if (!producerInfo.paused) {
+            const shouldRequestKeyFrame =
+              consumer.kind === "video" &&
+              consumer.track?.readyState === "live" &&
+              consumer.track.muted;
+            socket.emit(
+              "resumeConsumer",
+              {
+                consumerId: consumer.id,
+                requestKeyFrame: shouldRequestKeyFrame,
+              },
+              () => { },
+            );
+          }
+          continue;
+        }
+        if (pendingProducersRef.current.has(producerInfo.producerId)) continue;
       }
 
       const consumeTasks: Promise<void>[] = [];
