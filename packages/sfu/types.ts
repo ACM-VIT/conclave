@@ -84,6 +84,7 @@ export interface ConnectTransportData {
 
 export interface RestartIceData {
   transport: "producer" | "consumer";
+  transportId?: string;
 }
 
 export interface RestartIceResponse {
@@ -102,6 +103,7 @@ export interface ProduceResponse {
 }
 
 export interface ConsumeData {
+  transportId?: string;
   producerId: string;
   rtpCapabilities: RtpCapabilities;
 }

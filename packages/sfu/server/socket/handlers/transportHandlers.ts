@@ -29,6 +29,12 @@ export const registerTransportHandlers = (context: ConnectionContext): void => {
         }
 
         const transport = await context.currentRoom.createWebRtcTransport();
+        const previousTransport = context.currentClient.producerTransport;
+        if (previousTransport && previousTransport.id !== transport.id) {
+          try {
+            previousTransport.close();
+          } catch {}
+        }
         context.currentClient.producerTransport = transport;
 
         respond(callback, {
@@ -56,6 +62,12 @@ export const registerTransportHandlers = (context: ConnectionContext): void => {
         }
 
         const transport = await context.currentRoom.createWebRtcTransport();
+        const previousTransport = context.currentClient.consumerTransport;
+        if (previousTransport && previousTransport.id !== transport.id) {
+          try {
+            previousTransport.close();
+          } catch {}
+        }
         context.currentClient.consumerTransport = transport;
 
         respond(callback, {
@@ -78,7 +90,8 @@ export const registerTransportHandlers = (context: ConnectionContext): void => {
       callback: (response: { success: boolean } | { error: string }) => void,
     ) => {
       try {
-        if (!context.currentClient?.producerTransport) {
+        const producerTransport = context.currentClient?.producerTransport;
+        if (!producerTransport) {
           if (context.currentClient?.isObserver) {
             respond(callback, {
               error: "Watch-only attendees cannot connect producer transports",
@@ -89,7 +102,16 @@ export const registerTransportHandlers = (context: ConnectionContext): void => {
           return;
         }
 
-        await context.currentClient.producerTransport.connect({
+        if (
+          data.transportId &&
+          data.transportId.trim() &&
+          producerTransport.id !== data.transportId
+        ) {
+          respond(callback, { error: "Stale producer transport" });
+          return;
+        }
+
+        await producerTransport.connect({
           dtlsParameters: data.dtlsParameters,
         });
 
@@ -108,12 +130,22 @@ export const registerTransportHandlers = (context: ConnectionContext): void => {
       callback: (response: { success: boolean } | { error: string }) => void,
     ) => {
       try {
-        if (!context.currentClient?.consumerTransport) {
+        const consumerTransport = context.currentClient?.consumerTransport;
+        if (!consumerTransport) {
           respond(callback, { error: "Consumer transport not found" });
           return;
         }
 
-        await context.currentClient.consumerTransport.connect({
+        if (
+          data.transportId &&
+          data.transportId.trim() &&
+          consumerTransport.id !== data.transportId
+        ) {
+          respond(callback, { error: "Stale consumer transport" });
+          return;
+        }
+
+        await consumerTransport.connect({
           dtlsParameters: data.dtlsParameters,
         });
 
@@ -151,6 +183,15 @@ export const registerTransportHandlers = (context: ConnectionContext): void => {
 
         if (!transport) {
           respond(callback, { error: "Transport not found" });
+          return;
+        }
+
+        if (
+          data.transportId &&
+          data.transportId.trim() &&
+          transport.id !== data.transportId
+        ) {
+          respond(callback, { error: "Stale transport" });
           return;
         }
 

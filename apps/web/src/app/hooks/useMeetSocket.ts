@@ -657,7 +657,7 @@ export function useMeetSocket({
           (resolve, reject) => {
             socket.emit(
               "restartIce",
-              { transport: transportKind },
+              { transport: transportKind, transportId: transport.id },
               (res: RestartIceResponse | { error: string }) => {
                 if ("error" in res) {
                   reject(new Error(res.error));
@@ -977,6 +977,7 @@ export function useMeetSocket({
     async (stream: MediaStream): Promise<void> => {
       const transport = producerTransportRef.current;
       if (!transport) return;
+      const publicationErrors: string[] = [];
 
       const audioTrack = stream.getAudioTracks()[0];
       if (audioTrack) {
@@ -1006,7 +1007,12 @@ export function useMeetSocket({
           });
         } catch (err) {
           console.error("[Meets] Failed to produce audio:", err);
+          if (!isMuted) {
+            publicationErrors.push("microphone publish failed");
+          }
         }
+      } else if (!isMuted) {
+        publicationErrors.push("microphone track missing");
       }
 
       const videoTrack = stream.getVideoTracks()[0];
@@ -1046,7 +1052,18 @@ export function useMeetSocket({
           });
         } catch (err) {
           console.error("[Meets] Failed to produce video:", err);
+          if (!isCameraOff) {
+            publicationErrors.push("camera publish failed");
+          }
         }
+      } else if (!isCameraOff) {
+        publicationErrors.push("camera track missing");
+      }
+
+      if (publicationErrors.length > 0) {
+        throw new Error(
+          `[Meets] Failed to publish local media: ${publicationErrors.join(", ")}`
+        );
       }
     },
     [
@@ -1082,6 +1099,7 @@ export function useMeetSocket({
         socket.emit(
           "consume",
           {
+            transportId: transport.id,
             producerId: producerInfo.producerId,
             rtpCapabilities: device.rtpCapabilities,
           },
@@ -1828,6 +1846,10 @@ export function useMeetSocket({
                     if (audioProducerRef.current?.id === producerId) {
                       audioProducerRef.current = null;
                     }
+                    localStreamRef.current?.getAudioTracks().forEach((track) => {
+                      track.enabled = false;
+                    });
+                    setIsMuted(true);
                     return;
                   }
 
@@ -1838,6 +1860,7 @@ export function useMeetSocket({
                     if (videoProducerRef.current?.id === producerId) {
                       videoProducerRef.current = null;
                     }
+                    setIsCameraOff(true);
                     return;
                   }
 
@@ -2054,6 +2077,119 @@ export function useMeetSocket({
                   type: "UPDATE_CAMERA_OFF",
                   userId: camUserId,
                   cameraOff,
+                });
+              },
+            );
+
+            socket.on(
+              "admin:mediaEnforced",
+              (payload: {
+                roomId?: string;
+                userId?: string;
+                reason?: string;
+                kind?: "audio" | "video";
+                type?: ProducerType;
+                producerId?: string;
+                producers?: Array<{
+                  producerId: string;
+                  kind: "audio" | "video";
+                  type: ProducerType;
+                }>;
+              }) => {
+                if (!isRoomEvent(payload?.roomId)) return;
+                if (payload?.userId !== userId) return;
+
+                const enforced =
+                  payload?.producers && payload.producers.length > 0
+                    ? payload.producers
+                    : payload?.producerId && payload.kind && payload.type
+                      ? [
+                          {
+                            producerId: payload.producerId,
+                            kind: payload.kind,
+                            type: payload.type,
+                          },
+                        ]
+                      : [];
+
+                for (const entry of enforced) {
+                  if (entry.kind === "audio" && entry.type === "webcam") {
+                    const producer = audioProducerRef.current;
+                    if (producer?.id === entry.producerId) {
+                      try {
+                        producer.close();
+                      } catch {}
+                      if (audioProducerRef.current?.id === entry.producerId) {
+                        audioProducerRef.current = null;
+                      }
+                    }
+                    localStreamRef.current?.getAudioTracks().forEach((track) => {
+                      track.enabled = false;
+                    });
+                    setIsMuted(true);
+                  } else if (entry.kind === "video" && entry.type === "webcam") {
+                    const producer = videoProducerRef.current;
+                    if (producer?.id === entry.producerId) {
+                      try {
+                        producer.close();
+                      } catch {}
+                      if (videoProducerRef.current?.id === entry.producerId) {
+                        videoProducerRef.current = null;
+                      }
+                    }
+                    localStreamRef.current?.getVideoTracks().forEach((track) => {
+                      stopLocalTrack(track);
+                    });
+                    setLocalStream((prev) => {
+                      if (!prev) return prev;
+                      const remaining = prev
+                        .getTracks()
+                        .filter((track) => track.kind !== "video");
+                      return new MediaStream(remaining);
+                    });
+                    setIsCameraOff(true);
+                  } else if (entry.type === "screen" && entry.kind === "video") {
+                    const producer = screenProducerRef.current;
+                    if (producer?.id === entry.producerId) {
+                      try {
+                        producer.close();
+                      } catch {}
+                      if (screenProducerRef.current?.id === entry.producerId) {
+                        screenProducerRef.current = null;
+                      }
+                    }
+                    setIsScreenSharing(false);
+                    setActiveScreenShareId(null);
+                  }
+                }
+
+                if (enforced.length > 0) {
+                  setMeetError({
+                    code: "TRANSPORT_ERROR",
+                    message:
+                      payload.reason?.trim() ||
+                      "Your media was changed by host moderation.",
+                    recoverable: true,
+                  });
+                }
+              },
+            );
+
+            socket.on(
+              "admin:bulkMediaEnforced",
+              (payload: {
+                roomId?: string;
+                reason?: string;
+                users?: string[];
+              }) => {
+                if (!isRoomEvent(payload?.roomId)) return;
+                if (!payload?.users?.includes(userId)) return;
+                setMeetError({
+                  code: "TRANSPORT_ERROR",
+                  message:
+                    payload.reason?.trim() ||
+                    "Your media was changed by host moderation.",
+                  recoverable: true,
                 });
               },
             );
