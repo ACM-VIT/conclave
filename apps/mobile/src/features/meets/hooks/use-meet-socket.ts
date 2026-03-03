@@ -55,6 +55,49 @@ type JoinInfo = {
 const DEFAULT_SERVER_RESTART_NOTICE =
   "Meeting server is restarting. You will be reconnected automatically.";
 
+const normalizeIceServerUrls = (
+  urls: RTCIceServer["urls"],
+): string[] => {
+  const normalizedUrls = (Array.isArray(urls) ? urls : [urls])
+    .map((value) => value.trim())
+    .filter(Boolean);
+
+  return Array.from(new Set(normalizedUrls));
+};
+
+const mergeIceServers = (
+  ...lists: Array<RTCIceServer[] | null | undefined>
+): RTCIceServer[] | undefined => {
+  const merged: RTCIceServer[] = [];
+  const seen = new Set<string>();
+
+  for (const list of lists) {
+    if (!Array.isArray(list)) continue;
+
+    for (const server of list) {
+      const urls = normalizeIceServerUrls(server.urls);
+      if (!urls.length) continue;
+
+      const key = JSON.stringify({
+        urls: [...urls].sort(),
+        username: server.username?.trim() ?? "",
+        credential:
+          typeof server.credential === "string" ? server.credential : "",
+      });
+
+      if (seen.has(key)) continue;
+      seen.add(key);
+
+      merged.push({
+        ...server,
+        urls: urls.length === 1 ? urls[0] : urls,
+      });
+    }
+  }
+
+  return merged.length > 0 ? merged : undefined;
+};
+
 interface UseMeetSocketOptions {
   refs: MeetRefs;
   roomId: string;
@@ -225,11 +268,7 @@ export function useMeetSocket({
   }, [isTtsDisabled]);
 
   const resolveIceServers = useCallback((): RTCIceServer[] | undefined => {
-    const runtimeIceServers = runtimeIceServersRef.current;
-    if (runtimeIceServers && runtimeIceServers.length > 0) {
-      return runtimeIceServers;
-    }
-    return MEETS_ICE_SERVERS.length > 0 ? MEETS_ICE_SERVERS : undefined;
+    return mergeIceServers(runtimeIceServersRef.current, MEETS_ICE_SERVERS);
   }, []);
 
   const shouldPlayJoinLeaveSound = useCallback(
