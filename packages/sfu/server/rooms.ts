@@ -4,11 +4,39 @@ import { config } from "../config/config.js";
 import getWorker from "../utilities/getWorker.js";
 import { Logger } from "../utilities/loggers.js";
 import { cleanupRoomBrowser } from "./socket/handlers/sharedBrowserHandlers.js";
-import type { SfuState } from "./state.js";
+import type { EndedRoom, SfuState } from "./state.js";
 import { clearWebinarLinkSlug } from "./webinar.js";
 
 export const getRoomChannelId = (clientId: string, roomId: string): string =>
   `${clientId}:${roomId}`;
+
+export const getEndedRoom = (
+  state: SfuState,
+  channelId: string,
+): EndedRoom | null => state.endedRooms.get(channelId) ?? null;
+
+export const markRoomEnded = (
+  state: SfuState,
+  room: Pick<Room, "id" | "clientId" | "channelId">,
+  options: {
+    message: string;
+    endedBy: string;
+  },
+): EndedRoom => {
+  const endedRoom: EndedRoom = {
+    roomId: room.id,
+    clientId: room.clientId,
+    message: options.message,
+    endedAt: Date.now(),
+    endedBy: options.endedBy,
+  };
+
+  state.endedRooms.set(room.channelId, endedRoom);
+  return endedRoom;
+};
+
+export const clearEndedRoom = (state: SfuState, channelId: string): boolean =>
+  state.endedRooms.delete(channelId);
 
 export const getOrCreateRoom = async (
   state: SfuState,

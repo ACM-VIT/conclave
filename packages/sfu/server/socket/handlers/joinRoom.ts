@@ -15,7 +15,13 @@ import {
   normalizeDisplayName,
 } from "../../identity.js";
 import { emitUserJoined, emitUserLeft } from "../../notifications.js";
-import { cleanupRoom, getOrCreateRoom, getRoomChannelId } from "../../rooms.js";
+import {
+  cleanupRoom,
+  clearEndedRoom,
+  getEndedRoom,
+  getOrCreateRoom,
+  getRoomChannelId,
+} from "../../rooms.js";
 import {
   emitWebinarAttendeeCountChanged,
   emitWebinarFeedChanged,
@@ -108,6 +114,18 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         const roomChannelId = getRoomChannelId(clientId, roomId);
         let room = state.rooms.get(roomChannelId);
         let createdRoom = false;
+        const endedRoom = getEndedRoom(state, roomChannelId);
+        const canReopenEndedRoom =
+          Boolean(endedRoom) &&
+          !room &&
+          !isWebinarAttendeeJoin &&
+          (hostRequested || allowRoomCreation);
+
+        if (endedRoom && !canReopenEndedRoom) {
+          Logger.info(`Join denied for ended room ${roomId} (${clientId})`);
+          respond(callback, { error: endedRoom.message });
+          return;
+        }
 
         if (!room) {
           if (isWebinarAttendeeJoin) {
@@ -129,6 +147,12 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             return;
           }
           room = await getOrCreateRoom(state, clientId, roomId);
+          if (canReopenEndedRoom) {
+            clearEndedRoom(state, roomChannelId);
+            Logger.info(
+              `Re-opened ended room ${roomId} (${clientId}) for ${userId}`,
+            );
+          }
           createdRoom = true;
         }
 

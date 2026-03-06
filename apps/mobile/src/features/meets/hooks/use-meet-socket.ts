@@ -1014,7 +1014,7 @@ export function useMeetSocket({
     async (stream: MediaStream): Promise<void> => {
       const transport = producerTransportRef.current;
       if (!transport) return;
-      const publicationErrors: string[] = [];
+      const publicationWarnings: string[] = [];
 
       const audioTrack = stream.getAudioTracks()[0];
       if (audioTrack && audioTrack.readyState === "live") {
@@ -1045,14 +1045,16 @@ export function useMeetSocket({
         } catch (err) {
           console.error("[Meets] Failed to produce audio:", err);
           if (!isMuted) {
-            publicationErrors.push("microphone publish failed");
+            publicationWarnings.push("microphone publish failed");
+            setIsMuted(true);
           }
         }
       } else if (audioTrack) {
         console.warn("[Meets] Skipping ended audio track before produce");
         setIsMuted(true);
       } else if (!isMuted) {
-        publicationErrors.push("microphone track missing");
+        publicationWarnings.push("microphone track missing");
+        setIsMuted(true);
       }
 
       const videoTrack = stream.getVideoTracks()[0];
@@ -1093,19 +1095,21 @@ export function useMeetSocket({
         } catch (err) {
           console.error("[Meets] Failed to produce video:", err);
           if (!isCameraOff) {
-            publicationErrors.push("camera publish failed");
+            publicationWarnings.push("camera publish failed");
+            setIsCameraOff(true);
           }
         }
       } else if (videoTrack) {
         console.warn("[Meets] Skipping ended video track before produce");
         setIsCameraOff(true);
       } else if (!isCameraOff) {
-        publicationErrors.push("camera track missing");
+        publicationWarnings.push("camera track missing");
+        setIsCameraOff(true);
       }
 
-      if (publicationErrors.length > 0) {
-        throw new Error(
-          `[Meets] Failed to publish local media: ${publicationErrors.join(", ")}`
+      if (publicationWarnings.length > 0) {
+        console.warn(
+          `[Meets] Continuing join without some local media: ${publicationWarnings.join(", ")}`
         );
       }
     },
@@ -2228,13 +2232,21 @@ export function useMeetSocket({
                     setIsCameraOff(true);
                   } else if (entry.type === "screen" && entry.kind === "video") {
                     const producer = screenProducerRef.current;
+                    const track = producer?.track ?? null;
                     if (producer?.id === entry.producerId) {
+                      stopLocalTrack(track);
                       try {
                         producer.close();
                       } catch {}
                       if (screenProducerRef.current?.id === entry.producerId) {
                         screenProducerRef.current = null;
                       }
+                    }
+                    if (screenShareStreamRef.current) {
+                      screenShareStreamRef.current
+                        .getTracks()
+                        .forEach((screenTrack) => stopLocalTrack(screenTrack));
+                      screenShareStreamRef.current = null;
                     }
                     setIsScreenSharing(false);
                     setActiveScreenShareId(null);

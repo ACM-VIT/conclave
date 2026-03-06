@@ -21,7 +21,7 @@ import {
   toRoomSnapshot,
   toWorkerSnapshots,
 } from "../admin/controlPlane.js";
-import { forceCloseRoom } from "../rooms.js";
+import { forceCloseRoom, markRoomEnded } from "../rooms.js";
 import type { SfuState } from "../state.js";
 
 export type CreateSfuAppOptions = {
@@ -1178,6 +1178,11 @@ export const createSfuApp = ({
               typeof pendingSocket.emit === "function",
           ),
       );
+
+    markRoomEnded(state, room, {
+      message,
+      endedBy: "operator",
+    });
 
     io.to(roomChannelId).emit("roomEnded", {
       roomId: room.id,
