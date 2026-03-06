@@ -47,20 +47,20 @@
 
 /* Begin PBXFileReference section */
 		00F3799D623049394D54094D /* ScreenShareExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = ScreenShareExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
-		052F60451D09219937096E64 /* ScreenShareExtension.entitlements */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.entitlements; name = ScreenShareExtension.entitlements; path = ScreenShareExtension.entitlements; sourceTree = "<group>"; };
-		07FD23BDDFB44975B472C347 /* SampleHandler.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = SampleHandler.swift; path = SampleHandler.swift; sourceTree = "<group>"; };
+		052F60451D09219937096E64 /* ScreenShareExtension.entitlements */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.entitlements; path = ScreenShareExtension.entitlements; sourceTree = "<group>"; };
+		07FD23BDDFB44975B472C347 /* SampleHandler.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SampleHandler.swift; sourceTree = "<group>"; };
 		13B07F961A680F5B00A75B9A /* Conclave.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Conclave.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		13B07FB51A68108700A75B9A /* Images.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; name = Images.xcassets; path = mobile/Images.xcassets; sourceTree = "<group>"; };
 		13B07FB61A68108700A75B9A /* Info.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; name = Info.plist; path = mobile/Info.plist; sourceTree = "<group>"; };
 		54A037343E38F657B979FE62 /* Pods-Conclave.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Conclave.debug.xcconfig"; path = "Target Support Files/Pods-Conclave/Pods-Conclave.debug.xcconfig"; sourceTree = "<group>"; };
-		606D9ED534BD9EA6966C37A7 /* ScreenShareSocketConnection.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = ScreenShareSocketConnection.swift; path = ScreenShareSocketConnection.swift; sourceTree = "<group>"; };
-		6C248531DBCC5834AEBA54BD /* Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; name = Info.plist; path = Info.plist; sourceTree = "<group>"; };
+		606D9ED534BD9EA6966C37A7 /* ScreenShareSocketConnection.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ScreenShareSocketConnection.swift; sourceTree = "<group>"; };
+		6C248531DBCC5834AEBA54BD /* Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		80BFBE6A9166C13714E33EBE /* ReplayKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = ReplayKit.framework; path = System/Library/Frameworks/ReplayKit.framework; sourceTree = SDKROOT; };
 		85F40FD60B4D05C012DBEF6B /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
 		AA286B85B6C04FC6940260E9 /* SplashScreen.storyboard */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = file.storyboard; name = SplashScreen.storyboard; path = mobile/SplashScreen.storyboard; sourceTree = "<group>"; };
 		BB2F792C24A3F905000567C9 /* Expo.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; path = Expo.plist; sourceTree = "<group>"; };
 		C30D27515594F6D64FC24D8D /* libPods-Conclave.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = "libPods-Conclave.a"; sourceTree = BUILT_PRODUCTS_DIR; };
-		CB379510D71C5B7FFAB96C7F /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; includeInIndex = 1; name = PrivacyInfo.xcprivacy; path = mobile/PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
+		CB379510D71C5B7FFAB96C7F /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xml; name = PrivacyInfo.xcprivacy; path = mobile/PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		D1572D5BDD7B7FF4151D3A21 /* ExpoModulesProvider.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = ExpoModulesProvider.swift; path = "Pods/Target Support Files/Pods-Conclave/ExpoModulesProvider.swift"; sourceTree = "<group>"; };
 		E5DDDE65A5689E86746760EE /* Pods-Conclave.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Conclave.release.xcconfig"; path = "Target Support Files/Pods-Conclave/Pods-Conclave.release.xcconfig"; sourceTree = "<group>"; };
 		ED297162215061F000B7C4FE /* JavaScriptCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = JavaScriptCore.framework; path = System/Library/Frameworks/JavaScriptCore.framework; sourceTree = SDKROOT; };
@@ -109,7 +109,6 @@
 				54A037343E38F657B979FE62 /* Pods-Conclave.debug.xcconfig */,
 				E5DDDE65A5689E86746760EE /* Pods-Conclave.release.xcconfig */,
 			);
-			name = Pods;
 			path = Pods;
 			sourceTree = "<group>";
 		};
@@ -189,7 +188,6 @@
 				6C248531DBCC5834AEBA54BD /* Info.plist */,
 				052F60451D09219937096E64 /* ScreenShareExtension.entitlements */,
 			);
-			name = ScreenShareExtension;
 			path = ScreenShareExtension;
 			sourceTree = "<group>";
 		};
@@ -254,7 +252,6 @@
 				LastUpgradeCheck = 1130;
 				TargetAttributes = {
 					13B07F861A680F5B00A75B9A = {
-						DevelopmentTeam = P4S5YMK26B;
 						LastSwiftMigration = 1250;
 						ProvisioningStyle = Automatic;
 					};
@@ -506,7 +503,7 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = P4S5YMK26B;
+				DEVELOPMENT_TEAM = RZGK9VX3KX;
 				INFOPLIST_FILE = mobile/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.1;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -537,7 +534,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 20;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
-				DEVELOPMENT_TEAM = P4S5YMK26B;
+				DEVELOPMENT_TEAM = RZGK9VX3KX;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = ScreenShareExtension/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.1;
