@@ -21,7 +21,7 @@
     <key>CFBundlePackageType</key>
     <string>$(PRODUCT_BUNDLE_PACKAGE_TYPE)</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.0.7</string>
+    <string>1.0</string>
     <key>CFBundleSignature</key>
     <string>????</string>
     <key>CFBundleURLTypes</key>
@@ -29,13 +29,12 @@
       <dict>
         <key>CFBundleURLSchemes</key>
         <array>
-          <string>conclave</string>
-          <string>com.acmvit.conclave</string>
+          <string>com.googleusercontent.apps.354185850500-1gkdpp7t44asr02ac39j63fe57fn14if</string>
         </array>
       </dict>
     </array>
     <key>CFBundleVersion</key>
-    <string>20</string>
+    <string>21</string>
     <key>LSMinimumSystemVersion</key>
     <string>12.0</string>
     <key>LSRequiresIPhoneOS</key>
@@ -59,6 +58,10 @@
     </array>
     <key>RCTNewArchEnabled</key>
     <true/>
+    <key>RTCAppGroupIdentifier</key>
+    <string>group.com.acmvit.conclave.screenshare</string>
+    <key>RTCScreenSharingExtension</key>
+    <string>com.acmvit.conclave.ScreenShareExtension</string>
     <key>UIBackgroundModes</key>
     <array>
       <string>audio</string>
@@ -92,9 +95,5 @@
     <string>Automatic</string>
     <key>UIViewControllerBasedStatusBarAppearance</key>
     <false/>
-    <key>RTCAppGroupIdentifier</key>
-    <string>group.com.acmvit.conclave.screenshare</string>
-    <key>RTCScreenSharingExtension</key>
-    <string>com.acmvit.conclave.ScreenShareExtension</string>
   </dict>
 </plist>
