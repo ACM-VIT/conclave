@@ -56,8 +56,14 @@ export const emitWebinarAttendeeCountChanged = (
 
 export const emitWebinarFeedChanged = (
   io: SocketIOServer,
+  state: SfuState,
   room: Room,
 ): void => {
+  const webinarConfig = state.webinarConfigs.get(room.channelId);
+  if (!webinarConfig?.enabled) {
+    return;
+  }
+
   const snapshot = room.refreshWebinarFeedSnapshot();
   if (!snapshot.changed) {
     return;

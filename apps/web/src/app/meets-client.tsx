@@ -40,6 +40,7 @@ import { useMeetTts } from "./hooks/useMeetTts";
 import { useIsMobile } from "./hooks/useIsMobile";
 import { usePrewarmSocket } from "./hooks/usePrewarmSocket";
 import { useSharedBrowser } from "./hooks/useSharedBrowser";
+import { useVoiceAgentParticipant } from "./hooks/useVoiceAgentParticipant";
 import type { JoinMode } from "./lib/types";
 import {
   isSystemUserId,
@@ -229,6 +230,8 @@ export default function MeetsClient({
     setIsChatLocked,
     isTtsDisabled,
     setIsTtsDisabled,
+    isDmEnabled,
+    setIsDmEnabled,
     isBrowserAudioMuted,
     setIsBrowserAudioMuted,
     hostUserId,
@@ -255,6 +258,12 @@ export default function MeetsClient({
     useState(false);
   const [isBrowserServiceAvailable, setIsBrowserServiceAvailable] =
     useState(false);
+  const [isVoiceAgentKeyPromptOpen, setIsVoiceAgentKeyPromptOpen] =
+    useState(false);
+  const [voiceAgentKeyInput, setVoiceAgentKeyInput] = useState("");
+  const [voiceAgentKeyPromptError, setVoiceAgentKeyPromptError] =
+    useState<string | null>(null);
+  const voiceAgentApiKeyRef = useRef("");
   const toggleMuteCommandRef = useRef<(() => void) | null>(null);
   const toggleCameraCommandRef = useRef<(() => void) | null>(null);
   const setHandRaisedCommandRef = useRef<((raised: boolean) => void) | null>(
@@ -427,9 +436,17 @@ export default function MeetsClient({
   } = useMeetChat({
     socketRef: refs.socketRef,
     ghostEnabled,
+    currentUserId: userId,
+    currentUserDisplayName:
+      displayNameInput ||
+      normalizedCurrentUserName ||
+      currentUser?.email ||
+      currentUser?.id ||
+      "You",
     isObserverMode: isWebinarAttendee,
     isChatLocked,
     isAdmin: isAdminFlag,
+    isDmEnabled,
     isMuted,
     isCameraOff,
     onToggleMute: handleToggleMuteCommand,
@@ -708,6 +725,7 @@ export default function MeetsClient({
     setMeetingRequiresInviteCode,
     isTtsDisabled,
     setIsTtsDisabled,
+    setIsDmEnabled,
     setActiveScreenShareId,
     setVideoQuality,
     videoQualityRef: refs.videoQualityRef,
@@ -769,6 +787,79 @@ export default function MeetsClient({
     browserState?.active || isBrowserServiceAvailable,
   );
 
+  const voiceAgent = useVoiceAgentParticipant({
+    roomId,
+    isJoined: connectionState === "joined",
+    isAdmin: isAdminFlag,
+    isMuted,
+    activeSpeakerId,
+    localUserId: userId,
+    localStream,
+    participants,
+    recentMessages: chatMessages,
+    resolveDisplayName,
+  });
+
+  const openVoiceAgentKeyPrompt = useCallback(() => {
+    setVoiceAgentKeyPromptError(null);
+    setVoiceAgentKeyInput("");
+    setIsVoiceAgentKeyPromptOpen(true);
+  }, []);
+
+  const closeVoiceAgentKeyPrompt = useCallback(() => {
+    setVoiceAgentKeyPromptError(null);
+    setVoiceAgentKeyInput("");
+    setIsVoiceAgentKeyPromptOpen(false);
+  }, []);
+
+  const handleStartVoiceAgent = useCallback(() => {
+    const apiKey = voiceAgentApiKeyRef.current.trim();
+    if (!apiKey) {
+      openVoiceAgentKeyPrompt();
+      return;
+    }
+    void voiceAgent.start(apiKey);
+  }, [openVoiceAgentKeyPrompt, voiceAgent]);
+
+  const handleSubmitVoiceAgentKeyPrompt = useCallback(() => {
+    const apiKey = voiceAgentKeyInput.trim();
+    if (!apiKey) {
+      setVoiceAgentKeyPromptError("Enter your OpenAI API key.");
+      return;
+    }
+    if (!apiKey.startsWith("sk-")) {
+      setVoiceAgentKeyPromptError("OpenAI API keys usually start with \"sk-\".");
+      return;
+    }
+    voiceAgentApiKeyRef.current = apiKey;
+    setVoiceAgentKeyPromptError(null);
+    setVoiceAgentKeyInput("");
+    setIsVoiceAgentKeyPromptOpen(false);
+    void voiceAgent.start(apiKey);
+  }, [voiceAgent, voiceAgentKeyInput]);
+
+  useEffect(() => {
+    if (!voiceAgent.error) return;
+    const lower = voiceAgent.error.toLowerCase();
+    const isApiKeyError =
+      lower.includes("api key") ||
+      lower.includes("unauthorized") ||
+      lower.includes("401");
+    if (!isApiKeyError) return;
+    voiceAgentApiKeyRef.current = "";
+    setVoiceAgentKeyInput("");
+    setVoiceAgentKeyPromptError("API key rejected. Enter a valid key.");
+    setIsVoiceAgentKeyPromptOpen(true);
+  }, [voiceAgent.error]);
+
+  const handleStopVoiceAgent = useCallback(() => {
+    voiceAgentApiKeyRef.current = "";
+    setVoiceAgentKeyInput("");
+    setVoiceAgentKeyPromptError(null);
+    setIsVoiceAgentKeyPromptOpen(false);
+    voiceAgent.stop();
+  }, [voiceAgent]);
+
   const { mounted } = useMeetLifecycle({
     cleanup: socket.cleanup,
     abortControllerRef: refs.abortControllerRef,
@@ -817,13 +908,20 @@ export default function MeetsClient({
   }, [clearGuestStorage, currentUser, isSigningOut]);
 
   const leaveRoom = useCallback(() => {
+    handleStopVoiceAgent();
     playNotificationSoundForEvents("leave");
     socket.cleanup();
-  }, [playNotificationSoundForEvents, socket.cleanup]);
+  }, [handleStopVoiceAgent, playNotificationSoundForEvents, socket.cleanup]);
 
   useEffect(() => {
     leaveRoomCommandRef.current = leaveRoom;
   }, [leaveRoom]);
+
+  useEffect(() => {
+    return () => {
+      voiceAgentApiKeyRef.current = "";
+    };
+  }, []);
 
   const toggleBrowserAudio = useCallback(() => {
     setBrowserAudioNeedsGesture(false);
@@ -1037,6 +1135,65 @@ export default function MeetsClient({
       </div>
     </div>
   ) : null;
+  const voiceAgentKeyPrompt = isVoiceAgentKeyPromptOpen ? (
+    <div className="fixed inset-0 z-[145] flex items-center justify-center bg-black/75 px-4">
+      <div className="w-full max-w-sm rounded-2xl border border-white/10 bg-[#111111] p-5 shadow-2xl">
+        <h2 className="text-sm font-semibold text-[#FEFCD9]">
+          Voice Agent API Key
+        </h2>
+        <p className="mt-1 text-xs text-[#FEFCD9]/60">
+          Enter your own OpenAI API key. It stays in-memory in this tab and is
+          sent directly to OpenAI, never to this server.
+        </p>
+        <input
+          type="password"
+          value={voiceAgentKeyInput}
+          onChange={(event) => {
+            setVoiceAgentKeyInput(event.target.value);
+            if (voiceAgentKeyPromptError) {
+              setVoiceAgentKeyPromptError(null);
+            }
+          }}
+          autoFocus
+          autoCapitalize="none"
+          autoCorrect="off"
+          spellCheck={false}
+          autoComplete="off"
+          placeholder="sk-..."
+          className="mt-4 w-full rounded-xl border border-white/10 bg-black/40 px-3 py-2.5 text-sm text-[#FEFCD9] outline-none focus:border-[#FEFCD9]/35"
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              handleSubmitVoiceAgentKeyPrompt();
+            }
+            if (event.key === "Escape") {
+              event.preventDefault();
+              closeVoiceAgentKeyPrompt();
+            }
+          }}
+        />
+        {voiceAgentKeyPromptError ? (
+          <p className="mt-2 text-xs text-[#F95F4A]">{voiceAgentKeyPromptError}</p>
+        ) : null}
+        <div className="mt-4 flex items-center justify-end gap-2">
+          <button
+            type="button"
+            onClick={closeVoiceAgentKeyPrompt}
+            className="rounded-xl border border-white/15 px-3 py-2 text-[11px] uppercase tracking-[0.14em] text-[#FEFCD9]/70 transition-colors hover:border-white/25 hover:text-[#FEFCD9]"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={handleSubmitVoiceAgentKeyPrompt}
+            className="rounded-xl bg-[#F95F4A] px-3 py-2 text-[11px] uppercase tracking-[0.14em] text-white transition-opacity hover:opacity-90"
+          >
+            Save & Start
+          </button>
+        </div>
+      </div>
+    </div>
+  ) : null;
 
   if (connectionState === "waiting") {
     const waitingTitle = waitingMessage ?? "Waiting for host to let you in";
@@ -1145,6 +1302,7 @@ export default function MeetsClient({
           isNoGuests={isNoGuests}
           onToggleNoGuests={() => socket.toggleNoGuests(!isNoGuests)}
           isTtsDisabled={isTtsDisabled}
+          isDmEnabled={isDmEnabled}
           onToggleLock={() => socket.toggleRoomLock(!isRoomLocked)}
           isChatLocked={isChatLocked}
           onToggleChatLock={() => socket.toggleChatLock(!isChatLocked)}
@@ -1180,8 +1338,15 @@ export default function MeetsClient({
           onUpdateWebinarConfig={socket.updateWebinarConfig}
           onGenerateWebinarLink={socket.generateWebinarLink}
           onRotateWebinarLink={socket.rotateWebinarLink}
+          isVoiceAgentRunning={voiceAgent.isRunning}
+          isVoiceAgentStarting={voiceAgent.isStarting}
+          voiceAgentError={voiceAgent.error}
+          onStartVoiceAgent={handleStartVoiceAgent}
+          onStopVoiceAgent={handleStopVoiceAgent}
+          onClearVoiceAgentError={voiceAgent.clearError}
         />
         {inviteCodePrompt}
+        {voiceAgentKeyPrompt}
       </div>,
     );
   }
@@ -1304,6 +1469,7 @@ export default function MeetsClient({
         }}
         isRoomLocked={isRoomLocked}
         isTtsDisabled={isTtsDisabled}
+        isDmEnabled={isDmEnabled}
         onToggleLock={() => socket.toggleRoomLock(!isRoomLocked)}
         isNoGuests={isNoGuests}
         onToggleNoGuests={() => socket.toggleNoGuests(!isNoGuests)}
@@ -1345,8 +1511,15 @@ export default function MeetsClient({
         onUpdateWebinarConfig={socket.updateWebinarConfig}
         onGenerateWebinarLink={socket.generateWebinarLink}
         onRotateWebinarLink={socket.rotateWebinarLink}
+        isVoiceAgentRunning={voiceAgent.isRunning}
+        isVoiceAgentStarting={voiceAgent.isStarting}
+        voiceAgentError={voiceAgent.error}
+        onStartVoiceAgent={handleStartVoiceAgent}
+        onStopVoiceAgent={handleStopVoiceAgent}
+        onClearVoiceAgentError={voiceAgent.clearError}
       />
       {inviteCodePrompt}
+      {voiceAgentKeyPrompt}
     </div>,
   );
 }

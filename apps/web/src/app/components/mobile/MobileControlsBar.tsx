@@ -68,6 +68,8 @@ interface MobileControlsBarProps {
   onToggleChatLock?: () => void;
   isTtsDisabled?: boolean;
   onToggleTtsDisabled?: () => void;
+  isDmEnabled?: boolean;
+  onToggleDmEnabled?: () => void;
   isBrowserActive?: boolean;
   isBrowserLaunching?: boolean;
   showBrowserControls?: boolean;
@@ -86,6 +88,10 @@ interface MobileControlsBarProps {
   onCloseDevPlayground?: () => void;
   isAppsLocked?: boolean;
   onToggleAppsLock?: () => void;
+  isVoiceAgentRunning?: boolean;
+  isVoiceAgentStarting?: boolean;
+  onStartVoiceAgent?: () => void;
+  onStopVoiceAgent?: () => void;
   audioInputDeviceId?: string;
   audioOutputDeviceId?: string;
   onAudioInputDeviceChange?: (deviceId: string) => void;
@@ -137,6 +143,8 @@ function MobileControlsBar({
   onToggleChatLock,
   isTtsDisabled = false,
   onToggleTtsDisabled,
+  isDmEnabled = true,
+  onToggleDmEnabled,
   isBrowserActive = false,
   isBrowserLaunching = false,
   showBrowserControls = true,
@@ -155,6 +163,10 @@ function MobileControlsBar({
   onCloseDevPlayground,
   isAppsLocked = false,
   onToggleAppsLock,
+  isVoiceAgentRunning = false,
+  isVoiceAgentStarting = false,
+  onStartVoiceAgent,
+  onStopVoiceAgent,
   audioInputDeviceId,
   audioOutputDeviceId,
   onAudioInputDeviceChange,
@@ -626,6 +638,42 @@ function MobileControlsBar({
                 </span>
               </button>
             )}
+            {isAdmin && (onStartVoiceAgent || onStopVoiceAgent) && (
+              <button
+                onClick={() => {
+                  if (isVoiceAgentRunning) {
+                    onStopVoiceAgent?.();
+                  } else {
+                    onStartVoiceAgent?.();
+                  }
+                  setIsMoreMenuOpen(false);
+                }}
+                className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-[#FEFCD9] hover:bg-[#FEFCD9]/5 active:bg-[#FEFCD9]/10 transition-transform duration-150 touch-feedback"
+                disabled={isVoiceAgentStarting}
+              >
+                <div className="h-9 w-9 rounded-xl bg-[#2b2b2b] border border-white/5 flex items-center justify-center">
+                  {isVoiceAgentStarting ? (
+                    <Settings className="w-4.5 h-4.5 animate-spin" />
+                  ) : (
+                    <Mic className="w-4.5 h-4.5" />
+                  )}
+                </div>
+                <span className="text-sm font-medium">
+                  {isVoiceAgentRunning ? "Stop voice agent" : "Start voice agent"}
+                </span>
+                <span
+                  className={`ml-auto text-[10px] uppercase tracking-[0.2em] ${
+                    isVoiceAgentRunning ? "text-emerald-300" : "text-[#FEFCD9]/40"
+                  }`}
+                >
+                  {isVoiceAgentStarting
+                    ? "Starting"
+                    : isVoiceAgentRunning
+                      ? "Live"
+                      : "Off"}
+                </span>
+              </button>
+            )}
             {isAdmin &&
               isDevPlaygroundEnabled &&
               (onOpenDevPlayground || onCloseDevPlayground) && (
@@ -775,7 +823,7 @@ function MobileControlsBar({
                 >
                   <MessageSquareLock className="w-4.5 h-4.5" />
                 </div>
-                <span className="text-sm font-medium">{isChatLocked ? "Unlock chat" : "Lock chat"}</span>
+                <span className="text-sm font-medium">{isChatLocked ? "Enable chat" : "Disable chat"}</span>
               </button>
             )}
             {isAdmin && onToggleTtsDisabled && (
@@ -797,6 +845,28 @@ function MobileControlsBar({
                 </div>
                 <span className="text-sm font-medium">
                   {isTtsDisabled ? "Enable TTS" : "Disable TTS"}
+                </span>
+              </button>
+            )}
+            {isAdmin && onToggleDmEnabled && (
+              <button
+                onClick={() => {
+                  onToggleDmEnabled();
+                  setIsMoreMenuOpen(false);
+                }}
+                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-transform duration-150 touch-feedback ${
+                  isDmEnabled ? "text-amber-300" : "text-[#FEFCD9]"
+                } hover:bg-[#FEFCD9]/5 active:bg-[#FEFCD9]/10`}
+              >
+                <div
+                  className={`h-9 w-9 rounded-xl border border-white/5 flex items-center justify-center ${
+                    isDmEnabled ? "bg-amber-500/20" : "bg-[#2b2b2b]"
+                  }`}
+                >
+                  <MessageSquare className="w-4.5 h-4.5" />
+                </div>
+                <span className="text-sm font-medium">
+                  {isDmEnabled ? "Disable DMs" : "Enable DMs"}
                 </span>
               </button>
             )}

@@ -4,6 +4,7 @@ import { memo } from "react";
 import { MessageSquare, X } from "lucide-react";
 import type { ChatMessage } from "../lib/types";
 import { getActionText } from "../lib/chat-commands";
+import { formatDisplayName } from "../lib/utils";
 
 interface ChatOverlayProps {
   messages: ChatMessage[];
@@ -27,8 +28,13 @@ function ChatOverlay({ messages, onDismiss }: ChatOverlayProps) {
             </div>
             <div className="flex-1 min-w-0">
               <p className="truncate text-[11px] text-[#FEFCD9]/55">
-                {message.displayName}
+                {formatDisplayName(message.displayName || message.userId)}
               </p>
+              {message.isDirect ? (
+                <p className="text-[9px] uppercase tracking-[0.14em] text-amber-300/80">
+                  Private message
+                </p>
+              ) : null}
               {(() => {
                 const actionText = getActionText(message.content);
                 if (!actionText) {

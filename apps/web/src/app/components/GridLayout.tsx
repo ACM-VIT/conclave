@@ -4,6 +4,7 @@ import { Ghost, Hand, MicOff } from "lucide-react";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import type { Participant } from "../lib/types";
 import { isSystemUserId, truncateDisplayName } from "../lib/utils";
+import ParticipantAudio from "./ParticipantAudio";
 import ParticipantVideo from "./ParticipantVideo";
 
 interface GridLayoutProps {
@@ -26,6 +27,9 @@ interface GridLayoutProps {
 }
 
 const MAX_GRID_TILES = 16;
+const isParticipantVideoOn = (participant: Participant) =>
+  !participant.isCameraOff &&
+  Boolean(participant.videoProducerId || participant.videoStream);
 
 function GridLayout({
   localStream,
@@ -55,6 +59,7 @@ function GridLayout({
   const copyTimeoutRef = useRef<number | null>(null);
   const inviteTimeoutRef = useRef<number | null>(null);
   const isLocalActiveSpeaker = activeSpeakerId === currentUserId;
+  const maxRemoteWithoutOverflow = Math.max(0, MAX_GRID_TILES - 1);
 
   useEffect(() => {
     const video = localVideoRef.current;
@@ -89,7 +94,7 @@ function GridLayout({
     [participants, currentUserId]
   );
 
-  const stableRemoteParticipants = useMemo(() => {
+  const orderedRemoteParticipants = useMemo(() => {
     const participantMap = new Map(
       remoteParticipants.map((participant) => [participant.userId, participant])
     );
@@ -115,13 +120,61 @@ function GridLayout({
       .filter((participant): participant is Participant => Boolean(participant));
   }, [remoteParticipants]);
 
+  const prioritizedRemoteParticipants = useMemo(() => {
+    const withVideo: Participant[] = [];
+    const withoutVideo: Participant[] = [];
+
+    for (const participant of orderedRemoteParticipants) {
+      if (isParticipantVideoOn(participant)) {
+        withVideo.push(participant);
+      } else {
+        withoutVideo.push(participant);
+      }
+    }
+
+    return withVideo.concat(withoutVideo);
+  }, [orderedRemoteParticipants]);
+
+  const stableRemoteParticipants = useMemo(() => {
+    if (
+      !activeSpeakerId ||
+      activeSpeakerId === currentUserId ||
+      maxRemoteWithoutOverflow <= 0
+    ) {
+      return prioritizedRemoteParticipants;
+    }
+
+    const activeSpeakerIndex = prioritizedRemoteParticipants.findIndex(
+      (participant) => participant.userId === activeSpeakerId
+    );
+    if (activeSpeakerIndex < 0 || activeSpeakerIndex < maxRemoteWithoutOverflow) {
+      return prioritizedRemoteParticipants;
+    }
+
+    const activeSpeaker = prioritizedRemoteParticipants[activeSpeakerIndex];
+    if (!activeSpeaker || !isParticipantVideoOn(activeSpeaker)) {
+      return prioritizedRemoteParticipants;
+    }
+
+    // If the active speaker is in the overflow panel, promote them into the top-16 band.
+    const nextParticipants = [...prioritizedRemoteParticipants];
+    const [speakerToPromote] = nextParticipants.splice(activeSpeakerIndex, 1);
+    if (!speakerToPromote) return prioritizedRemoteParticipants;
+    nextParticipants.splice(maxRemoteWithoutOverflow - 1, 0, speakerToPromote);
+    return nextParticipants;
+  }, [
+    prioritizedRemoteParticipants,
+    activeSpeakerId,
+    currentUserId,
+    maxRemoteWithoutOverflow,
+  ]);
+
   useEffect(() => {
     stableOrderRef.current = stableRemoteParticipants.map(
       (participant) => participant.userId
     );
   }, [stableRemoteParticipants]);
 
-  const maxRemoteWithoutOverflow = Math.max(0, MAX_GRID_TILES - 1);
   const hasOverflow = stableRemoteParticipants.length > maxRemoteWithoutOverflow;
   const isSolo = stableRemoteParticipants.length === 0;
   const maxVisibleRemoteParticipants = hasOverflow
@@ -151,7 +204,7 @@ function GridLayout({
     const activeParticipant = stableRemoteParticipants.find(
       (participant) => participant.userId === activeSpeakerId
     );
-    if (!activeParticipant) {
+    if (!activeParticipant || !isParticipantVideoOn(activeParticipant)) {
       return baseVisible;
     }
 
@@ -279,6 +332,19 @@ function GridLayout({
 
   return (
     <div className="relative flex flex-1 min-h-0 flex-col">
+      <div
+        className="pointer-events-none h-0 w-0 overflow-hidden"
+        aria-hidden={true}
+      >
+        {stableRemoteParticipants.map((participant) => (
+          <ParticipantAudio
+            key={`audio-${participant.userId}`}
+            participant={participant}
+            audioOutputDeviceId={audioOutputDeviceId}
+          />
+        ))}
+      </div>
+
       <div className={`flex-1 min-h-0 grid ${gridClass} gap-3 overflow-hidden p-4`}>
         <div
           className={`acm-video-tile ${localSpeakerHighlight}`}
@@ -336,24 +402,18 @@ function GridLayout({
             {isMuted && <MicOff className="w-3 h-3 text-[#F95F4A]" />}
           </div>
           {isSolo ? (
-            <div className="absolute top-3 left-3 w-[280px] rounded-xl border border-[#FEFCD9]/10 bg-black/70 backdrop-blur-sm px-4 py-3 text-[#FEFCD9]">
-              <p
-                className="text-sm font-semibold"
-                style={{ fontFamily: "'PolySans Trial', sans-serif" }}
-              >
+            <div className="absolute top-3 left-3 w-[304px] rounded-xl border border-[#FEFCD9]/10 bg-black/60 px-4 py-3 text-[#FEFCD9] shadow-[0_10px_28px_rgba(0,0,0,0.35)] backdrop-blur-sm">
+              <p className="text-[15px] font-semibold leading-tight">
                 You are the only person here
               </p>
-              <p
-                className="mt-1 text-xs text-[#FEFCD9]/60"
-                style={{ fontFamily: "'PolySans Trial', sans-serif" }}
-              >
+              <p className="mt-1 text-xs text-[#FEFCD9]/60">
                 Invite people to join this room.
               </p>
               <div className="mt-3 flex gap-2">
                 <button
                   type="button"
                   onClick={handleInvite}
-                  className="flex-1 rounded-lg border border-[#FEFCD9]/10 bg-[#1a1a1a] px-3 py-2 text-xs font-medium text-[#FEFCD9] transition-all hover:border-[#FEFCD9]/25 hover:bg-[#1a1a1a]/80"
+                  className="flex-1 rounded-lg border border-[#FEFCD9]/18 bg-white/[0.05] px-3 py-2 text-xs font-medium text-[#FEFCD9] transition-colors hover:bg-white/[0.09] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#FEFCD9]/20"
                 >
                   {inviteStatus === "shared"
                     ? "Invite sent"
@@ -364,7 +424,7 @@ function GridLayout({
                 <button
                   type="button"
                   onClick={handleCopyLink}
-                  className="flex-1 rounded-lg border border-[#FEFCD9]/10 bg-black/40 px-3 py-2 text-xs font-medium text-[#FEFCD9]/85 transition-all hover:border-[#FEFCD9]/25 hover:text-[#FEFCD9]"
+                  className="flex-1 rounded-lg border border-[#FEFCD9]/14 bg-transparent px-3 py-2 text-xs font-medium text-[#FEFCD9]/85 transition-colors hover:bg-white/[0.04] hover:text-[#FEFCD9] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#FEFCD9]/20"
                 >
                   {copyStatus === "copied" ? "Link copied" : "Copy link"}
                 </button>
@@ -380,6 +440,7 @@ function GridLayout({
             displayName={getDisplayName(participant.userId)}
             isActiveSpeaker={activeSpeakerId === participant.userId}
             audioOutputDeviceId={audioOutputDeviceId}
+            disableAudio
             isAdmin={isAdmin}
             isSelected={selectedParticipantId === participant.userId}
             onAdminClick={onParticipantClick}

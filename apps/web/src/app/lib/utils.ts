@@ -216,7 +216,7 @@ export function formatDisplayName(raw: string): string {
   const handle = base.split("@")[0] || base;
   const tokens = handle.split(/[^A-Za-z0-9]+/).filter(Boolean);
   const words = tokens
-    .map((token) => token.match(/^[A-Za-z]+/)?.[0] || "")
+    .map((token) => token.match(/^[A-Za-z0-9]+/)?.[0] || "")
     .filter(Boolean)
     .slice(0, 2)
     .map((word) => word[0]?.toUpperCase() + word.slice(1).toLowerCase());

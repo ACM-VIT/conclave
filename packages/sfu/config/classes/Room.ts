@@ -92,12 +92,14 @@ export class Room {
   public displayNamesByKey: Map<string, string> = new Map();
   public handRaisedByUserId: Set<string> = new Set();
   public lockedAllowedUsers: Set<string> = new Set();
+  public blockedUsers: Set<string> = new Set();
   public cleanupTimer: NodeJS.Timeout | null = null;
   public hostUserKey: string | null = null;
   private _isLocked: boolean = false;
   private _isChatLocked: boolean = false;
   private _noGuests: boolean = false;
   private _isTtsDisabled: boolean = false;
+  private _isDmEnabled: boolean = true;
   private _meetingInviteCodeHash: string | null = null;
   public appsState: { activeAppId: string | null; locked: boolean } = {
     activeAppId: null,
@@ -577,6 +579,14 @@ export class Room {
 
   setTtsDisabled(disabled: boolean): void {
     this._isTtsDisabled = disabled;
+  }
+
+  get isDmEnabled(): boolean {
+    return this._isDmEnabled;
+  }
+
+  setDmEnabled(enabled: boolean): void {
+    this._isDmEnabled = enabled;
   }
 
   get requiresMeetingInviteCode(): boolean {
@@ -1095,6 +1105,7 @@ export class Room {
     this.userKeysById.clear();
     this.adminUserKeys.clear();
     this.displayNamesByKey.clear();
+    this.blockedUsers.clear();
     this.webinarActiveSpeakerUserId = null;
     this.webinarDominantSpeakerUserId = null;
     this.webinarFeedProducerIds = [];
@@ -1168,6 +1179,7 @@ export class Room {
   }
 
   allowUser(userKey: string) {
+    this.blockedUsers.delete(userKey);
     this.allowedUsers.add(userKey);
     this.pendingClients.delete(userKey);
   }
@@ -1176,13 +1188,37 @@ export class Room {
     return this.allowedUsers.has(userKey);
   }
 
+  revokeAllowedUser(userKey: string) {
+    this.allowedUsers.delete(userKey);
+  }
+
   allowLockedUser(userKey: string) {
+    this.blockedUsers.delete(userKey);
     this.lockedAllowedUsers.add(userKey);
     this.pendingClients.delete(userKey);
   }
 
   isLockedAllowed(userKey: string): boolean {
     return this.lockedAllowedUsers.has(userKey);
+  }
+
+  revokeLockedAllowedUser(userKey: string) {
+    this.lockedAllowedUsers.delete(userKey);
+  }
+
+  blockUser(userKey: string) {
+    this.blockedUsers.add(userKey);
+    this.allowedUsers.delete(userKey);
+    this.lockedAllowedUsers.delete(userKey);
+    this.pendingClients.delete(userKey);
+  }
+
+  unblockUser(userKey: string) {
+    this.blockedUsers.delete(userKey);
+  }
+
+  isBlocked(userKey: string): boolean {
+    return this.blockedUsers.has(userKey);
   }
 }
 

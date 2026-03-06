@@ -698,7 +698,7 @@ function MobileJoinScreen({
                 ? "bg-[#F95F4A] text-white"
                 : "text-[#FEFCD9]/50"
             }`}
-            style={{ fontFamily: "'PolySans Mono', monospace" }}
+            style={{ fontFamily: "'PolySans Trial', sans-serif" }}
             disabled={isRoutedRoom}
             aria-disabled={isRoutedRoom}
           >
@@ -714,7 +714,7 @@ function MobileJoinScreen({
                 ? "bg-[#F95F4A] text-white"
                 : "text-[#FEFCD9]/50"
             } ${isRoutedRoom ? "opacity-60" : ""}`}
-            style={{ fontFamily: "'PolySans Mono', monospace" }}
+            style={{ fontFamily: "'PolySans Trial', sans-serif" }}
           >
             Join
           </button>

@@ -41,6 +41,7 @@ export function useMeetState({ initialRoomId }: UseMeetStateOptions) {
   const [isNoGuests, setIsNoGuests] = useState(false);
   const [isChatLocked, setIsChatLocked] = useState(false);
   const [isTtsDisabled, setIsTtsDisabled] = useState(false);
+  const [isDmEnabled, setIsDmEnabled] = useState(true);
   const [hostUserId, setHostUserId] = useState<string | null>(null);
   const [hostUserIds, setHostUserIds] = useState<string[]>([]);
   const [meetingRequiresInviteCode, setMeetingRequiresInviteCode] =
@@ -99,6 +100,8 @@ export function useMeetState({ initialRoomId }: UseMeetStateOptions) {
     setIsChatLocked,
     isTtsDisabled,
     setIsTtsDisabled,
+    isDmEnabled,
+    setIsDmEnabled,
     hostUserId,
     setHostUserId,
     hostUserIds,

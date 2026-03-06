@@ -32,6 +32,28 @@ const shouldRequestBluetoothConnectPermission = () =>
   typeof Platform.Version === "number" &&
   Platform.Version >= 31;
 
+const describeTrack = (track?: MediaStreamTrack | null) => {
+  if (!track) return null;
+  return {
+    id: track.id,
+    kind: track.kind,
+    enabled: track.enabled,
+    muted: track.muted,
+    readyState: track.readyState,
+    label: track.label,
+  };
+};
+
+const describeStream = (stream?: MediaStream | null) => {
+  if (!stream) return null;
+  return {
+    id: stream.id,
+    active: stream.active,
+    trackCount: stream.getTracks().length,
+    tracks: stream.getTracks().map((track) => describeTrack(track)),
+  };
+};
+
 interface UseMeetMediaOptions {
   ghostEnabled: boolean;
   connectionState: string;
@@ -112,6 +134,9 @@ export function useMeetMedia({
   >(async () => {});
   const keepAliveOscRef = useRef<OscillatorNode | null>(null);
   const keepAliveGainRef = useRef<GainNode | null>(null);
+  const screenShareStartInFlightRef = useRef(false);
+  const screenShareStartTokenRef = useRef(0);
+  const toggleMuteInFlightRef = useRef(false);
   const syncPermissionState = useCallback(async () => {
     if (Platform.OS !== "android") {
       setMediaState((prev) => ({
@@ -229,10 +254,46 @@ export function useMeetMedia({
   const getDisplayMedia = useCallback(async () => {
     const display = mediaDevices?.getDisplayMedia;
     if (display) {
-      return display.call(mediaDevices);
+      const stream = await display.call(mediaDevices);
+      console.log("[Meets][ScreenShare] getDisplayMedia resolved", {
+        platform: Platform.OS,
+        stream: describeStream(stream),
+      });
+      return stream;
     }
+    console.warn("[Meets][ScreenShare] getDisplayMedia unavailable");
     return null;
   }, []);
+
+  const getDisplayMediaWithTimeout = useCallback(
+    async (timeoutMs: number) => {
+      if (Platform.OS !== "ios") {
+        return getDisplayMedia();
+      }
+
+      console.log("[Meets][ScreenShare] Awaiting getDisplayMedia (iOS)", {
+        timeoutMs,
+      });
+
+      const displayPromise = getDisplayMedia();
+      const timeoutPromise = new Promise<null>((_, reject) => {
+        setTimeout(() => {
+          reject(
+            new Error(
+              `getDisplayMedia timed out after ${timeoutMs}ms (ReplayKit broadcast likely not started)`
+            )
+          );
+        }, timeoutMs);
+      });
+
+      const stream = await Promise.race([displayPromise, timeoutPromise]);
+      console.log("[Meets][ScreenShare] getDisplayMedia completed before timeout", {
+        hasStream: Boolean(stream),
+      });
+      return stream;
+    },
+    [getDisplayMedia]
+  );
 
   const collectRtcStatsEntries = useCallback((report: RTCStatsReport) => {
     const entries: Array<{
@@ -300,7 +361,7 @@ export function useMeetMedia({
 
   const waitForOutgoingScreenFrames = useCallback(
     async (producer: Producer) => {
-      const timeoutMs = Platform.OS === "ios" ? 7000 : 4500;
+      const timeoutMs = Platform.OS === "ios" ? 10000 : 4500;
       const pollMs = 350;
       const deadline = Date.now() + timeoutMs;
       let seenOutboundStats = false;
@@ -339,6 +400,12 @@ export function useMeetMedia({
       }
 
       if (seenOutboundStats) {
+        if (Platform.OS === "ios") {
+          console.warn(
+            "[Meets] No screen frames observed yet; continuing on iOS."
+          );
+          return;
+        }
         throw new Error("No screen frames were captured.");
       }
       console.warn(
@@ -1012,74 +1079,115 @@ export function useMeetMedia({
     updateVideoQualityRef.current = updateVideoQuality;
   }, [updateVideoQuality]);
 
+  const emitToggleMute = useCallback(
+    (producerId: string, paused: boolean) => {
+      const socket = socketRef.current;
+      if (!socket || !socket.connected) {
+        return Promise.resolve({
+          ok: false,
+          error: "Socket not connected",
+        });
+      }
+
+      return new Promise<{ ok: boolean; error?: string }>((resolve) => {
+        let settled = false;
+        const timeout = setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          resolve({ ok: false, error: "toggleMute timeout" });
+        }, 1500);
+
+        socket.emit(
+          "toggleMute",
+          { producerId, paused },
+          (response: { success: boolean } | { error: string }) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timeout);
+            if ("error" in response) {
+              resolve({ ok: false, error: response.error });
+              return;
+            }
+            resolve({ ok: true });
+          }
+        );
+      });
+    },
+    [socketRef]
+  );
+
   const toggleMute = useCallback(async () => {
     if (ghostEnabled) return;
+    if (toggleMuteInFlightRef.current) return;
+    toggleMuteInFlightRef.current = true;
     const previousMuted = isMuted;
     const nextMuted = !previousMuted;
-    setIsMuted(nextMuted);
 
     let producer = audioProducerRef.current;
     const transport = producerTransportRef.current;
 
-    if (!transport) {
-      if (nextMuted) {
-        const currentTrack = localStreamRef.current?.getAudioTracks()[0];
-        if (currentTrack) {
-          stopLocalTrack(currentTrack);
-        }
-        setLocalStream((prev) => {
-          if (!prev) return prev;
-          const remaining = prev
-            .getTracks()
-            .filter((track) => track.kind !== "audio");
-          return new MediaStream(remaining);
-        });
-        return;
-      }
-
-      try {
-        const permissionState = await requestAndroidPermissions({
-          audio: true,
-        });
-        if (!permissionState.audio) {
-          setIsMuted(previousMuted);
-          setMeetError({
-            code: "PERMISSION_DENIED",
-            message: "Microphone permission denied",
-            recoverable: true,
+    try {
+      if (!transport) {
+        if (nextMuted) {
+          const currentTrack = localStreamRef.current?.getAudioTracks()[0];
+          if (currentTrack) {
+            stopLocalTrack(currentTrack);
+          }
+          setLocalStream((prev) => {
+            if (!prev) return prev;
+            const remaining = prev
+              .getTracks()
+              .filter((track) => track.kind !== "audio");
+            return new MediaStream(remaining);
           });
+          setIsMuted(true);
           return;
         }
 
-        const stream = await getUserMedia({
-          audio: buildAudioConstraints(selectedAudioInputDeviceId),
-        });
-        const audioTrack = stream.getAudioTracks()[0];
-        if (!audioTrack) throw new Error("No audio track obtained");
-
-        audioTrack.onended = () => {
-          handleLocalTrackEnded("audio", audioTrack);
-        };
-
-        setLocalStream((prev) => {
-          if (prev) {
-            const newStream = new MediaStream(prev.getTracks());
-            newStream.getAudioTracks().forEach((t) => {
-              stopLocalTrack(t);
-              newStream.removeTrack(t);
+        try {
+          const permissionState = await requestAndroidPermissions({
+            audio: true,
+          });
+          if (!permissionState.audio) {
+            setIsMuted(previousMuted);
+            setMeetError({
+              code: "PERMISSION_DENIED",
+              message: "Microphone permission denied",
+              recoverable: true,
             });
-            newStream.addTrack(audioTrack);
-            return newStream;
+            return;
           }
-          return new MediaStream([audioTrack]);
-        });
-      } catch (err) {
-        console.error("[Meets] Failed to enable audio preview:", err);
-        setIsMuted(previousMuted);
-        setMeetError(createMeetError(err, "MEDIA_ERROR"));
+
+          const stream = await getUserMedia({
+            audio: buildAudioConstraints(selectedAudioInputDeviceId),
+          });
+          const audioTrack = stream.getAudioTracks()[0];
+          if (!audioTrack) throw new Error("No audio track obtained");
+
+          audioTrack.onended = () => {
+            handleLocalTrackEnded("audio", audioTrack);
+          };
+
+          setLocalStream((prev) => {
+            if (prev) {
+              const newStream = new MediaStream(prev.getTracks());
+              newStream.getAudioTracks().forEach((t) => {
+                stopLocalTrack(t);
+                newStream.removeTrack(t);
+              });
+              newStream.addTrack(audioTrack);
+              return newStream;
+            }
+            return new MediaStream([audioTrack]);
+          });
+          setIsMuted(false);
+        } catch (err) {
+          console.error("[Meets] Failed to enable audio preview:", err);
+          setIsMuted(previousMuted);
+          setMeetError(createMeetError(err, "MEDIA_ERROR"));
+        }
+        return;
       }
-      return;
-    }
 
     if (producer && producer.track?.readyState !== "live") {
       socketRef.current?.emit(
@@ -1104,17 +1212,30 @@ export function useMeetMedia({
         try {
           producer.pause();
         } catch {}
-        socketRef.current?.emit(
-          "toggleMute",
-          { producerId: producer.id, paused: true },
-          () => {}
-        );
+        const toggleResult = await emitToggleMute(producer.id, true);
+        if (!toggleResult.ok) {
+          console.warn(
+            "[Meets] toggleMute failed, rolling back mute:",
+            toggleResult.error
+          );
+          if (currentTrack && currentTrack.readyState === "live") {
+            currentTrack.enabled = true;
+          }
+          try {
+            producer.resume();
+          } catch {}
+          setIsMuted(false);
+          setMeetError({
+            code: "TRANSPORT_ERROR",
+            message: toggleResult.error || "Failed to mute microphone",
+            recoverable: true,
+          });
+          return;
+        }
       }
+      setIsMuted(true);
       return;
     }
-
-    try {
-      if (!transport) return;
 
       let audioTrack = localStreamRef.current?.getAudioTracks()[0] ?? null;
 
@@ -1175,11 +1296,20 @@ export function useMeetMedia({
         try {
           producer.resume();
         } catch {}
-        socketRef.current?.emit(
-          "toggleMute",
-          { producerId: producer.id, paused: false },
-          () => {}
-        );
+        const toggleResult = await emitToggleMute(producer.id, false);
+        if (!toggleResult.ok) {
+          console.warn(
+            "[Meets] toggleMute failed, recreating audio producer:",
+            toggleResult.error
+          );
+          try {
+            producer.close();
+          } catch {}
+          if (audioProducerRef.current?.id === producer.id) {
+            audioProducerRef.current = null;
+          }
+          producer = null;
+        }
       } else {
         const audioProducer = await transport.produce({
           track: audioTrack,
@@ -1200,10 +1330,13 @@ export function useMeetMedia({
           }
         });
       }
+      setIsMuted(false);
     } catch (err) {
       console.error("[Meets] Failed to restart audio:", err);
       setIsMuted(previousMuted);
       setMeetError(createMeetError(err, "MEDIA_ERROR"));
+    } finally {
+      toggleMuteInFlightRef.current = false;
     }
   }, [
     ghostEnabled,
@@ -1213,6 +1346,7 @@ export function useMeetMedia({
     stopLocalTrack,
     buildAudioConstraints,
     socketRef,
+    emitToggleMute,
     audioProducerRef,
     localStreamRef,
     setLocalStream,
@@ -1453,6 +1587,9 @@ export function useMeetMedia({
 
   const stopScreenShare = useCallback(
     (options?: { notify?: boolean }) => {
+      screenShareStartTokenRef.current += 1;
+      screenShareStartInFlightRef.current = false;
+
       const producer = screenProducerRef.current;
       const producerId = producer?.id ?? null;
       const shouldNotify = options?.notify !== false;
@@ -1514,15 +1651,45 @@ export function useMeetMedia({
     ]
   );
 
-  const toggleScreenShare = useCallback(async () => {
-    if (ghostEnabled) return;
+  const startScreenShare = useCallback(async (options?: {
+    preStream?: MediaStream;
+    shouldAbort?: () => boolean;
+  }) => {
+    const preStream = options?.preStream ?? null;
+    const shouldAbort = options?.shouldAbort;
+    console.log("[Meets][ScreenShare] startScreenShare requested", {
+      platform: Platform.OS,
+      ghostEnabled,
+      isScreenSharing,
+      inFlight: screenShareStartInFlightRef.current,
+      connectionState,
+      activeScreenShareId,
+      hasTransport: Boolean(producerTransportRef.current),
+      hasPreStream: Boolean(preStream),
+    });
+    if (shouldAbort?.()) {
+      preStream?.getTracks().forEach((track) => stopLocalTrack(track));
+      console.warn("[Meets][ScreenShare] Aborted before start");
+      return "blocked" as const;
+    }
+    if (ghostEnabled) {
+      console.warn("[Meets][ScreenShare] Blocked: ghost mode enabled");
+      return "blocked" as const;
+    }
     if (isScreenSharing) {
-      stopScreenShare({ notify: true });
-      return;
+      console.log("[Meets][ScreenShare] Already marked as started");
+      return "started" as const;
+    }
+    if (screenShareStartInFlightRef.current) {
+      console.warn("[Meets][ScreenShare] Start already in-flight; retry later");
+      return "retry" as const;
     }
 
     if (connectionState !== "joined") {
-      return;
+      console.warn("[Meets][ScreenShare] Blocked: not joined", {
+        connectionState,
+      });
+      return "blocked" as const;
     }
 
     if (activeScreenShareId) {
@@ -1531,13 +1698,25 @@ export function useMeetMedia({
         message: "Someone else is already sharing their screen",
         recoverable: true,
       });
-      return;
+      console.warn("[Meets][ScreenShare] Blocked: active remote screen share", {
+        activeScreenShareId,
+      });
+      return "blocked" as const;
     }
 
     const transport = producerTransportRef.current;
-    if (!transport) return;
+    if (!transport) {
+      console.warn("[Meets][ScreenShare] Blocked: producer transport unavailable");
+      return "blocked" as const;
+    }
 
+    screenShareStartInFlightRef.current = true;
+    const startToken = ++screenShareStartTokenRef.current;
+    const wasStartCancelled = () =>
+      screenShareStartTokenRef.current !== startToken || shouldAbort?.() === true;
     let producer: Producer | null = null;
+    let didSetSharing = false;
+
     try {
       if (Platform.OS === "android" && Platform.Version >= 33) {
         const status = await PermissionsAndroid.request(
@@ -1549,11 +1728,16 @@ export function useMeetMedia({
               "Allow notifications to start screen sharing on Android."
             )
           );
-          return;
+          return "blocked" as const;
         }
       }
 
-      const stream = await getDisplayMedia();
+      console.log("[Meets][ScreenShare] Calling getDisplayMedia", { startToken, hasPreStream: Boolean(preStream) });
+      const stream = preStream ?? await getDisplayMediaWithTimeout(9000);
+      if (wasStartCancelled()) {
+        stream?.getTracks().forEach((streamTrack) => stopLocalTrack(streamTrack));
+        return "blocked" as const;
+      }
       if (!stream) {
         throw new Error("Screen sharing is not available on mobile yet.");
       }
@@ -1564,7 +1748,7 @@ export function useMeetMedia({
       }
       track.enabled = true;
       screenShareStreamRef.current = stream;
-      if (track && "contentHint" in track) {
+      if ("contentHint" in track) {
         track.contentHint = "detail";
       }
 
@@ -1573,22 +1757,74 @@ export function useMeetMedia({
         encodings: [buildScreenShareEncoding()],
         appData: { type: "screen" as ProducerType },
       });
+      console.log("[Meets][ScreenShare] Screen producer created", {
+        producerId: producer.id,
+      });
+
+      if (wasStartCancelled()) {
+        try {
+          producer.close();
+        } catch {}
+        if (screenProducerRef.current?.id === producer.id) {
+          screenProducerRef.current = null;
+        }
+        stream.getTracks().forEach((streamTrack) => stopLocalTrack(streamTrack));
+        screenShareStreamRef.current = null;
+        return "blocked" as const;
+      }
 
       track.onended = () => {
         stopScreenShare({ notify: true });
       };
 
       screenProducerRef.current = producer;
-      await waitForOutgoingScreenFrames(producer);
+      setScreenShareStream(stream);
+      setIsScreenSharing(true);
+      didSetSharing = true;
+
+      try {
+        await waitForOutgoingScreenFrames(producer);
+      } catch (err) {
+        const message =
+          typeof err === "string"
+            ? err
+            : (err as { message?: string })?.message;
+        if (
+          !(
+            Platform.OS === "ios" &&
+            message?.includes("No screen frames were captured")
+          )
+        ) {
+          throw err;
+        }
+      }
+
+      if (wasStartCancelled()) {
+        stopScreenShare({ notify: false });
+        return "blocked" as const;
+      }
 
       if (connectionState !== "joined") {
         stopScreenShare({ notify: false });
-        return;
+        return "blocked" as const;
       }
 
-      setScreenShareStream(stream);
-      setIsScreenSharing(true);
+      return "started" as const;
     } catch (err) {
+      const errorName =
+        err && typeof err === "object" && "name" in err
+          ? String((err as { name?: string }).name)
+          : null;
+      const errorMessage =
+        typeof err === "string"
+          ? err
+          : (err as { message?: string })?.message;
+      console.error("[Meets][ScreenShare] startScreenShare failed", {
+        startToken,
+        errorName,
+        errorMessage,
+        error: err,
+      });
       if (producer) {
         try {
           producer.close();
@@ -1602,8 +1838,12 @@ export function useMeetMedia({
           .getTracks()
           .forEach((track) => stopLocalTrack(track));
         screenShareStreamRef.current = null;
-        setScreenShareStream(null);
       }
+      if (didSetSharing) {
+        setScreenShareStream(null);
+        setIsScreenSharing(false);
+      }
+
       if (
         err &&
         typeof err === "object" &&
@@ -1613,7 +1853,7 @@ export function useMeetMedia({
         const errorName = String((err as { name?: string }).name);
         if (errorName === "NotAllowedError" || errorName === "AbortError") {
           console.log("[Meets] Screen share cancelled or not ready");
-          return;
+          return "retry" as const;
         }
       }
 
@@ -1623,28 +1863,62 @@ export function useMeetMedia({
           : (err as { message?: string })?.message;
       if (message?.includes("AbortError")) {
         console.log("[Meets] Screen share cancelled or not ready");
-        return;
+        return "retry" as const;
+      }
+
+      if (message?.includes("ended before capture started")) {
+        console.log("[Meets] Screen share ended before capture started");
+        return "retry" as const;
+      }
+
+      const normalizedMessage = message?.toLowerCase() ?? "";
+      if (
+        normalizedMessage.includes("already") &&
+        normalizedMessage.includes("screen") &&
+        normalizedMessage.includes("share")
+      ) {
+        setMeetError({
+          code: "MEDIA_ERROR",
+          message:
+            "Screen sharing is already active in iOS. Stop it in Control Center and try again.",
+          recoverable: true,
+        });
+        return "blocked" as const;
       }
 
       console.error("[Meets] Error starting screen share:", err);
       setMeetError(createMeetError(err, "MEDIA_ERROR"));
+      return "blocked" as const;
+    } finally {
+      screenShareStartInFlightRef.current = false;
     }
   }, [
     ghostEnabled,
     isScreenSharing,
-    activeScreenShareId,
-    setIsScreenSharing,
     connectionState,
+    activeScreenShareId,
     producerTransportRef,
-    screenProducerRef,
-    socketRef,
-    setScreenShareStream,
+    getDisplayMedia,
+    getDisplayMediaWithTimeout,
     screenShareStreamRef,
-    setMeetError,
+    screenProducerRef,
     stopLocalTrack,
     stopScreenShare,
+    setMeetError,
+    setScreenShareStream,
+    setIsScreenSharing,
     waitForOutgoingScreenFrames,
   ]);
+
+  const toggleScreenShare = useCallback(async () => {
+    if (ghostEnabled) return;
+    if (isScreenSharing) {
+      stopScreenShare({ notify: true });
+      return;
+    }
+
+    await startScreenShare();
+  }, [ghostEnabled, isScreenSharing, startScreenShare, stopScreenShare]);
 
   useEffect(() => {
     if (!isScreenSharing) return;
@@ -1658,6 +1932,9 @@ export function useMeetMedia({
 
     const handleEnded = () => {
       if (cancelled) return;
+      console.warn("[Meets][ScreenShare] Monitored screen track ended", {
+        track: describeTrack(track),
+      });
       stopScreenShare({ notify: true });
     };
 
@@ -1676,6 +1953,9 @@ export function useMeetMedia({
       if (track.onended === handleEnded) {
         track.onended = previousOnEnded ?? null;
       }
+      console.log("[Meets][ScreenShare] Cleared screen track monitor", {
+        track: describeTrack(track),
+      });
     };
   }, [isScreenSharing, screenShareStreamRef, screenProducerRef, stopScreenShare]);
 
@@ -1721,6 +2001,7 @@ export function useMeetMedia({
     updateVideoQualityRef,
     toggleMute,
     toggleCamera,
+    startScreenShare,
     toggleScreenShare,
     stopScreenShare,
     stopLocalTrack,
@@ -1729,5 +2010,6 @@ export function useMeetMedia({
     playNotificationSound,
     startAudioKeepAlive,
     stopAudioKeepAlive,
+    getDisplayMedia,
   };
 }

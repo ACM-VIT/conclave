@@ -5,6 +5,7 @@ import { LinearGradient } from "expo-linear-gradient";
 import { Pressable, Text, View } from "@/tw";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import {
+  AtSign,
   Hand,
   Lock,
   LockOpen,
@@ -54,6 +55,7 @@ interface ControlsBarProps {
   isNoGuests: boolean;
   isChatLocked: boolean;
   isTtsDisabled: boolean;
+  isDmEnabled: boolean;
   isAdmin: boolean;
   isObserverMode?: boolean;
   pendingUsersCount: number;
@@ -73,6 +75,7 @@ interface ControlsBarProps {
   onToggleNoGuests?: (noGuests: boolean) => void;
   onToggleChatLock?: (locked: boolean) => void;
   onToggleTtsDisabled?: (disabled: boolean) => void;
+  onToggleDmEnabled?: (enabled: boolean) => void;
   onToggleWhiteboard?: () => void;
   onToggleAppsLock?: (locked: boolean) => void;
   onSendReaction: (emoji: string) => void;
@@ -212,6 +215,7 @@ export function ControlsBar({
   isNoGuests,
   isChatLocked,
   isTtsDisabled,
+  isDmEnabled,
   isAdmin,
   isObserverMode = false,
   pendingUsersCount,
@@ -231,6 +235,7 @@ export function ControlsBar({
   onToggleNoGuests,
   onToggleChatLock,
   onToggleTtsDisabled,
+  onToggleDmEnabled,
   onToggleWhiteboard,
   onToggleAppsLock,
   onSendReaction,
@@ -379,6 +384,16 @@ export function ControlsBar({
                     size={buttonSize}
                     iconSize={iconSize}
                     onPress={() => onToggleTtsDisabled(!isTtsDisabled)}
+                  />
+                ) : null}
+                {isAdmin && onToggleDmEnabled ? (
+                  <ControlButton
+                    icon={AtSign}
+                    isActive={!isDmEnabled}
+                    activeColor={COLORS.amber}
+                    size={buttonSize}
+                    iconSize={iconSize}
+                    onPress={() => onToggleDmEnabled(!isDmEnabled)}
                   />
                 ) : null}
                 {isAdmin && onToggleAppsLock && isWhiteboardActive ? (

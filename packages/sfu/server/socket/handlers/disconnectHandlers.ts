@@ -83,7 +83,7 @@ export const registerDisconnectHandlers = (
           io.to(roomChannelId).emit("userLeft", { userId });
         }
         emitWebinarAttendeeCountChanged(io, state, activeRoom);
-        emitWebinarFeedChanged(io, activeRoom);
+        emitWebinarFeedChanged(io, state, activeRoom);
 
         if (wasAdmin) {
           if (!activeRoom.hasActiveAdmin()) {
