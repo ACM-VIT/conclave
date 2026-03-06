@@ -1,11 +1,13 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as AppleAuthentication from "expo-apple-authentication";
 import * as Google from "expo-auth-session/providers/google";
+import * as Crypto from "expo-crypto";
 import * as Haptics from "expo-haptics";
 import * as WebBrowser from "expo-web-browser";
 import { RTCView } from "react-native-webrtc";
 import {
   ActivityIndicator,
+  Alert,
   KeyboardAvoidingView,
   PanResponder,
   Platform,
@@ -101,6 +103,54 @@ const googleClientConfig = {
 };
 
 WebBrowser.maybeCompleteAuthSession();
+
+type SocialUser = {
+  id?: string;
+  email?: string | null;
+  name?: string | null;
+};
+
+type SocialSignInResponse = {
+  user?: SocialUser;
+  error?: string;
+  message?: string;
+};
+
+const summarizeAuthMessage = (value: string) =>
+  value.replace(/\s+/g, " ").trim().slice(0, 180);
+
+const readAuthErrorMessage = (error: unknown, fallback: string) => {
+  if (error instanceof Error) {
+    const message = error.message.trim();
+    if (message) return message;
+  }
+  return fallback;
+};
+
+const isCanceledAppleSignInError = (error: unknown) =>
+  typeof error === "object" &&
+  error !== null &&
+  "code" in error &&
+  (error as { code?: unknown }).code === "ERR_REQUEST_CANCELED";
+
+const formatAppleName = (fullName: AppleAuthentication.AppleAuthenticationFullName | null) => {
+  if (!fullName) return undefined;
+  try {
+    const formatted = AppleAuthentication.formatFullName(fullName);
+    return formatted.trim() || undefined;
+  } catch {
+    const parts = [fullName.givenName, fullName.middleName, fullName.familyName]
+      .filter((value): value is string => Boolean(value))
+      .map((value) => value.trim())
+      .filter(Boolean);
+    return parts.join(" ") || undefined;
+  }
+};
+
+const createNonce = async () => {
+  const bytes = await Crypto.getRandomBytesAsync(16);
+  return Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("");
+};
 
 interface JoinScreenProps {
   roomId: string;
@@ -280,7 +330,15 @@ export function JoinScreen({
   }, []);
 
   const completeSocialSignIn = useCallback(
-    async (provider: "google" | "apple", idToken?: string, nonce?: string, accessToken?: string) => {
+    async (
+      provider: "google" | "apple",
+      idToken?: string,
+      options?: {
+        nonce?: string;
+        accessToken?: string;
+        fallbackName?: string;
+      }
+    ) => {
       const trimmedBase = authBaseUrl.replace(/\/$/, "");
       if (!trimmedBase) {
         throw new Error("Missing EXPO_PUBLIC_APP_URL or EXPO_PUBLIC_API_URL");
@@ -299,34 +357,58 @@ export function JoinScreen({
           callbackURL: trimmedBase,
           idToken: {
             token: idToken,
-            nonce,
-            accessToken,
+            nonce: options?.nonce,
+            accessToken: options?.accessToken,
           },
         }),
       });
+      const contentType = response.headers.get("content-type") || "";
+      let responseText = "";
+      let data: SocialSignInResponse | null = null;
+      if (contentType.includes("application/json")) {
+        data = (await response.json().catch(() => null)) as SocialSignInResponse | null;
+      } else {
+        responseText = await response.text().catch(() => "");
+      }
       if (!response.ok) {
-        const text = await response.text().catch(() => "");
-        const details = text
-          ? `Sign in request failed: ${text}`
+        const details =
+          data?.error ||
+          data?.message ||
+          (responseText ? summarizeAuthMessage(responseText) : "");
+        const errorMessage = details
+          ? `Sign in request failed: ${details}`
           : `Sign in request failed (${response.status})`;
-        throw new Error(details);
+        throw new Error(errorMessage);
       }
-      const data = (await response.json().catch(() => null)) as
-        | {
-            user?: { id?: string; email?: string | null; name?: string | null };
-          }
-        | null;
-      if (data?.user) {
-        onUserChange?.(data.user);
-        if (!displayNameInput.trim()) {
-          const resolvedName = data.user.name || data.user.email || "User";
-          onDisplayNameInputChange(resolvedName);
-        }
-        setPhase("join");
+      if (!data?.user) {
+        const details =
+          data?.error ||
+          data?.message ||
+          (responseText ? summarizeAuthMessage(responseText) : "");
+        const errorMessage =
+          details || "Sign in completed, but the auth server did not return a user session.";
+        throw new Error(errorMessage);
       }
+      onUserChange?.(data.user);
+      if (!displayNameInput.trim()) {
+        const resolvedName =
+          data.user.name || options?.fallbackName || data.user.email || "User";
+        onDisplayNameInputChange(resolvedName);
+      }
+      setPhase("join");
+      return data.user;
     },
     [displayNameInput, onDisplayNameInputChange, onUserChange]
   );
+
+  const handleAuthFailure = useCallback((providerLabel: "Apple" | "Google", error: unknown) => {
+    if (providerLabel === "Apple" && isCanceledAppleSignInError(error)) {
+      return;
+    }
+    const message = readAuthErrorMessage(error, `${providerLabel} sign-in failed.`);
+    console.log(`[JoinScreen] ${providerLabel} sign-in error`, error);
+    Alert.alert(`${providerLabel} sign-in failed`, message);
+  }, []);
 
   const handleGoogleSignIn = useCallback(async () => {
     if (isAuthLoading) return;
@@ -335,32 +417,34 @@ export function JoinScreen({
     try {
       await googlePromptAsync();
     } catch (error) {
-      console.log("[JoinScreen] Google sign-in error", error);
+      handleAuthFailure("Google", error);
       setAuthProvider(null);
     }
-  }, [googlePromptAsync, haptic, isAuthLoading]);
+  }, [googlePromptAsync, handleAuthFailure, haptic, isAuthLoading]);
 
   const handleAppleSignIn = useCallback(async () => {
     if (isAuthLoading) return;
     haptic();
     setAuthProvider("apple");
     try {
+      const nonce = await createNonce();
       const credential = await AppleAuthentication.signInAsync({
         requestedScopes: [
           AppleAuthentication.AppleAuthenticationScope.FULL_NAME,
           AppleAuthentication.AppleAuthenticationScope.EMAIL,
         ],
+        nonce,
       });
-      await completeSocialSignIn(
-        "apple",
-        credential.identityToken ?? undefined
-      );
+      await completeSocialSignIn("apple", credential.identityToken, {
+        nonce,
+        fallbackName: formatAppleName(credential.fullName),
+      });
     } catch (error) {
-      console.log("[JoinScreen] Apple sign-in error", error);
+      handleAuthFailure("Apple", error);
     } finally {
       setAuthProvider(null);
     }
-  }, [completeSocialSignIn, haptic, isAuthLoading]);
+  }, [completeSocialSignIn, handleAuthFailure, haptic, isAuthLoading]);
 
   const handleCreateRoom = useCallback(() => {
     haptic();
@@ -401,14 +485,14 @@ export function JoinScreen({
       googleResponse.authentication?.accessToken ||
       (googleResponse.params as { access_token?: string } | undefined)
         ?.access_token;
-    completeSocialSignIn("google", idToken, undefined, accessToken)
+    completeSocialSignIn("google", idToken, { accessToken })
       .catch((error) => {
-        console.log("[JoinScreen] Google sign-in error", error);
+        handleAuthFailure("Google", error);
       })
       .finally(() => {
         setAuthProvider(null);
       });
-  }, [authProvider, completeSocialSignIn, googleResponse]);
+  }, [authProvider, completeSocialSignIn, googleResponse, handleAuthFailure]);
 
   useEffect(() => {
     if (forceJoinOnly) return;

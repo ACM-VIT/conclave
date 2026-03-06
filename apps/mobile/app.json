@@ -15,11 +15,13 @@
     },
     "plugins": [
       "expo-router",
-      "expo-font"
+      "expo-font",
+      "expo-apple-authentication"
     ],
     "version": "1.0.8",
     "ios": {
       "supportsTablet": true,
+      "usesAppleSignIn": true,
       "associatedDomains": [
         "applinks:conclave.acmvit.in"
       ],

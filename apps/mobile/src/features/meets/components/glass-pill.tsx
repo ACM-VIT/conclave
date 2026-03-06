@@ -77,7 +77,10 @@ export function GlassPill({ style, children }: GlassPillProps) {
   );
 
   return (
-    <RNView onLayout={handleLayout} style={[styles.container, style]}>
+    <RNView
+      onLayout={handleLayout}
+      style={[styles.container, style, isIos && styles.transparentBackground]}
+    >
       {size.width > 0 && size.height > 0 ? (
         <GlassPillBackground width={size.width} height={size.height} />
       ) : null}
@@ -89,5 +92,8 @@ export function GlassPill({ style, children }: GlassPillProps) {
 const styles = StyleSheet.create({
   container: {
     overflow: "hidden",
+  },
+  transparentBackground: {
+    backgroundColor: "transparent",
   },
 });
