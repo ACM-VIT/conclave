@@ -1019,22 +1019,38 @@ export function MeetScreen({
   const exitCurrentMeetingRef = useRef<(options?: { playLeaveSound?: boolean; reason?: string; allowDuringScreenSharePending?: boolean }) => void>(() => {});
   const handleLeaveRef = useRef<() => void>(() => {});
 
+  const resetIosScreenShareIntent = useCallback(() => {
+    iosScreenShareIntentUntilRef.current = 0;
+    iosScreenSharePickerShownAtRef.current = 0;
+    iosScreenShareSawInactiveRef.current = false;
+    iosScreenShareSawActiveAfterInactiveRef.current = false;
+  }, []);
+
+  const finishPendingScreenShareStart = useCallback(
+    (requestToken: number) => {
+      if (screenShareRequestTokenRef.current !== requestToken) {
+        return false;
+      }
+      resetIosScreenShareIntent();
+      setIsScreenSharePending(false);
+      return true;
+    },
+    [resetIosScreenShareIntent]
+  );
+
   const cancelPendingScreenShareStart = useCallback(() => {
     console.log("[Meets][ScreenShare][iOS] Cancelling pending screen share start", {
       requestToken: screenShareRequestTokenRef.current,
       hasRetryTimer: Boolean(screenShareRetryTimerRef.current),
     });
-    iosScreenShareIntentUntilRef.current = 0;
-    iosScreenSharePickerShownAtRef.current = 0;
-    iosScreenShareSawInactiveRef.current = false;
-    iosScreenShareSawActiveAfterInactiveRef.current = false;
+    resetIosScreenShareIntent();
     screenShareRequestTokenRef.current += 1;
     if (screenShareRetryTimerRef.current) {
       clearTimeout(screenShareRetryTimerRef.current);
       screenShareRetryTimerRef.current = null;
     }
     setIsScreenSharePending(false);
-  }, []);
+  }, [resetIosScreenShareIntent]);
 
   const exitCurrentMeeting = useCallback((options?: {
     playLeaveSound?: boolean;
@@ -1583,6 +1599,7 @@ export function MeetScreen({
     }
 
     setIsScreenSharePending(true);
+    const requestToken = ++screenShareRequestTokenRef.current;
     iosScreenShareIntentUntilRef.current = Date.now() + 30000;
 
     console.log("[Meets][ScreenShare][iOS] Creating socket listener via getDisplayMedia");
@@ -1595,28 +1612,33 @@ export function MeetScreen({
       });
     } catch (err) {
       console.warn("[Meets][ScreenShare][iOS] getDisplayMedia failed", { error: err });
-      setIsScreenSharePending(false);
-      iosScreenShareIntentUntilRef.current = 0;
+      finishPendingScreenShareStart(requestToken);
+      return;
+    }
+
+    if (screenShareRequestTokenRef.current !== requestToken) {
+      preStream?.getTracks().forEach((track) => stopLocalTrack(track));
       return;
     }
 
     if (!preStream) {
       console.warn("[Meets][ScreenShare][iOS] getDisplayMedia returned null");
-      setIsScreenSharePending(false);
-      iosScreenShareIntentUntilRef.current = 0;
+      finishPendingScreenShareStart(requestToken);
       return;
     }
 
     console.log("[Meets][ScreenShare][iOS] Socket ready, showing picker");
     showScreenSharePicker();
 
-    const result = await startScreenShare({ preStream });
+    const result = await startScreenShare({
+      preStream,
+      shouldAbort: () => screenShareRequestTokenRef.current !== requestToken,
+    });
     console.log("[Meets][ScreenShare][iOS] startScreenShare result", {
       result,
       isScreenSharing: isScreenSharingRef.current,
     });
-    setIsScreenSharePending(false);
-    iosScreenShareIntentUntilRef.current = 0;
+    finishPendingScreenShareStart(requestToken);
   }, [
     isScreenSharing,
     connectionState,
@@ -1628,7 +1650,9 @@ export function MeetScreen({
     isScreenSharePending,
     startScreenShare,
     getDisplayMedia,
+    finishPendingScreenShareStart,
     setMeetError,
+    stopLocalTrack,
   ]);
 
   const localParticipant = useMemo<Participant>(

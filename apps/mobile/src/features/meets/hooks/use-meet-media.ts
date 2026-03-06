@@ -1653,8 +1653,10 @@ export function useMeetMedia({
 
   const startScreenShare = useCallback(async (options?: {
     preStream?: MediaStream;
+    shouldAbort?: () => boolean;
   }) => {
     const preStream = options?.preStream ?? null;
+    const shouldAbort = options?.shouldAbort;
     console.log("[Meets][ScreenShare] startScreenShare requested", {
       platform: Platform.OS,
       ghostEnabled,
@@ -1665,6 +1667,11 @@ export function useMeetMedia({
       hasTransport: Boolean(producerTransportRef.current),
       hasPreStream: Boolean(preStream),
     });
+    if (shouldAbort?.()) {
+      preStream?.getTracks().forEach((track) => stopLocalTrack(track));
+      console.warn("[Meets][ScreenShare] Aborted before start");
+      return "blocked" as const;
+    }
     if (ghostEnabled) {
       console.warn("[Meets][ScreenShare] Blocked: ghost mode enabled");
       return "blocked" as const;
@@ -1705,6 +1712,8 @@ export function useMeetMedia({
 
     screenShareStartInFlightRef.current = true;
     const startToken = ++screenShareStartTokenRef.current;
+    const wasStartCancelled = () =>
+      screenShareStartTokenRef.current !== startToken || shouldAbort?.() === true;
     let producer: Producer | null = null;
     let didSetSharing = false;
 
@@ -1725,7 +1734,7 @@ export function useMeetMedia({
 
       console.log("[Meets][ScreenShare] Calling getDisplayMedia", { startToken, hasPreStream: Boolean(preStream) });
       const stream = preStream ?? await getDisplayMediaWithTimeout(9000);
-      if (screenShareStartTokenRef.current !== startToken) {
+      if (wasStartCancelled()) {
         stream?.getTracks().forEach((streamTrack) => stopLocalTrack(streamTrack));
         return "blocked" as const;
       }
@@ -1752,7 +1761,7 @@ export function useMeetMedia({
         producerId: producer.id,
       });
 
-      if (screenShareStartTokenRef.current !== startToken) {
+      if (wasStartCancelled()) {
         try {
           producer.close();
         } catch {}
@@ -1790,7 +1799,7 @@ export function useMeetMedia({
         }
       }
 
-      if (screenShareStartTokenRef.current !== startToken) {
+      if (wasStartCancelled()) {
         stopScreenShare({ notify: false });
         return "blocked" as const;
       }
