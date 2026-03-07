@@ -107,7 +107,6 @@ interface MobileMeetsMainContentProps {
   onDismissMeetError?: () => void;
   onRetryMedia?: () => void;
   onTestSpeaker?: () => void;
-  onTestHandRaiseSound?: () => void;
   hostUserId: string | null;
 }
 
@@ -185,7 +184,6 @@ function MobileMeetsMainContent({
   onDismissMeetError,
   onRetryMedia,
   onTestSpeaker,
-  onTestHandRaiseSound,
   hostUserId,
 }: MobileMeetsMainContentProps) {
   const { state: appsState, openApp, closeApp, setLocked, refreshState } = useApps();
@@ -275,7 +273,6 @@ function MobileMeetsMainContent({
         onDismissMeetError={onDismissMeetError}
         onRetryMedia={onRetryMedia}
         onTestSpeaker={onTestSpeaker}
-        onTestHandRaiseSound={onTestHandRaiseSound}
       />
     );
   }

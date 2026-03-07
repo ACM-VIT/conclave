@@ -351,11 +351,6 @@ export default function MeetsClient({
     playNotificationSound("join");
   }, [playNotificationSound, primeAudioOutput]);
 
-  const handleTestHandRaiseSound = useCallback(() => {
-    primeAudioOutput();
-    playNotificationSound("handRaise");
-  }, [playNotificationSound, primeAudioOutput]);
-
   const { toggleHandRaised, setHandRaisedState } = useMeetHandRaise({
     isHandRaised,
     setIsHandRaised,
@@ -777,7 +772,6 @@ export default function MeetsClient({
           onDismissMeetError={() => setMeetError(null)}
           onRetryMedia={handleRetryMedia}
           onTestSpeaker={handleTestSpeaker}
-          onTestHandRaiseSound={handleTestHandRaiseSound}
           hostUserId={hostUserId}
         />
       </div>
@@ -910,7 +904,6 @@ export default function MeetsClient({
         onDismissMeetError={() => setMeetError(null)}
         onRetryMedia={handleRetryMedia}
         onTestSpeaker={handleTestSpeaker}
-        onTestHandRaiseSound={handleTestHandRaiseSound}
         isPopoutActive={isPopoutActive}
         isPopoutSupported={isPopoutSupported}
         onOpenPopout={openPopout}

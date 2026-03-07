@@ -115,7 +115,6 @@ interface MeetsMainContentProps {
   onBrowserAudioAutoplayBlocked: () => void;
   onRetryMedia?: () => void;
   onTestSpeaker?: () => void;
-  onTestHandRaiseSound?: () => void;
   isPopoutActive?: boolean;
   isPopoutSupported?: boolean;
   onOpenPopout?: () => void;
@@ -202,7 +201,6 @@ export default function MeetsMainContent({
   onDismissMeetError,
   onRetryMedia,
   onTestSpeaker,
-  onTestHandRaiseSound,
   isPopoutActive,
   isPopoutSupported,
   onOpenPopout,
@@ -334,7 +332,6 @@ export default function MeetsMainContent({
           onDismissMeetError={onDismissMeetError}
           onRetryMedia={onRetryMedia}
           onTestSpeaker={onTestSpeaker}
-          onTestHandRaiseSound={onTestHandRaiseSound}
         />
       ) : isWhiteboardActive ? (
         <WhiteboardLayout
