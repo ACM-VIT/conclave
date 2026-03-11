@@ -358,6 +358,7 @@ export default function MeetsClient({
     };
   }, [setIsNetworkOffline]);
 
+  const [joinAvatarUrl, setJoinAvatarUrl] = useState<string | undefined>(undefined);
   const {
     setDisplayNames,
     displayNameInput,
@@ -372,9 +373,19 @@ export default function MeetsClient({
     userId,
     isAdmin: isAdminFlag,
     ghostEnabled,
+    avatarUrl: joinAvatarUrl,
     socketRef: refs.socketRef,
     joinOptionsRef: refs.joinOptionsRef,
   });
+  const [avatarUrls, setAvatarUrls] = useState<Map<string, string>>(new Map());
+  const resolveAvatarUrl = useCallback(
+    (targetUserId: string) => {
+      const avatarUrl = avatarUrls.get(targetUserId);
+      const normalizedAvatarUrl = avatarUrl?.trim();
+      return normalizedAvatarUrl || undefined;
+    },
+    [avatarUrls],
+  );
   const appsUser = useMemo(
     () => ({
       id: userId,
@@ -686,6 +697,7 @@ export default function MeetsClient({
     setLocalStream,
     dispatchParticipants,
     setDisplayNames,
+    setAvatarUrls,
     setPendingUsers,
     setConnectionState,
     setMeetError,
@@ -1138,6 +1150,7 @@ export default function MeetsClient({
           socket={refs.socketRef.current}
           setPendingUsers={setPendingUsers}
           resolveDisplayName={resolveDisplayName}
+          resolveAvatarUrl={resolveAvatarUrl}
           reactions={reactionEvents}
           onUserChange={(user) => setCurrentUser(user ?? undefined)}
           onIsAdminChange={setCurrentIsAdmin}
@@ -1255,6 +1268,8 @@ export default function MeetsClient({
         refreshRooms={refreshRooms}
         displayNameInput={displayNameInput}
         setDisplayNameInput={setDisplayNameInput}
+        joinAvatarUrl={joinAvatarUrl}
+        setJoinAvatarUrl={setJoinAvatarUrl}
         ghostEnabled={ghostEnabled}
         setIsGhostMode={setIsGhostMode}
         presentationStream={presentationStream}
@@ -1292,6 +1307,7 @@ export default function MeetsClient({
         socket={refs.socketRef.current}
         setPendingUsers={setPendingUsers}
         resolveDisplayName={resolveDisplayName}
+        resolveAvatarUrl={resolveAvatarUrl}
         reactions={reactionEvents}
         onUserChange={(user) => setCurrentUser(user ?? undefined)}
         onIsAdminChange={setCurrentIsAdmin}

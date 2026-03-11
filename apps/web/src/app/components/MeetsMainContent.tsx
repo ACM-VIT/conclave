@@ -65,6 +65,8 @@ interface MeetsMainContentProps {
   refreshRooms: () => void;
   displayNameInput: string;
   setDisplayNameInput: Dispatch<SetStateAction<string>>;
+  joinAvatarUrl?: string;
+  setJoinAvatarUrl: Dispatch<SetStateAction<string | undefined>>;
   ghostEnabled: boolean;
   setIsGhostMode: Dispatch<SetStateAction<boolean>>;
   presentationStream: MediaStream | null;
@@ -102,6 +104,7 @@ interface MeetsMainContentProps {
   socket: Socket | null;
   setPendingUsers: Dispatch<SetStateAction<Map<string, string>>>;
   resolveDisplayName: (userId: string) => string;
+  resolveAvatarUrl: (userId: string) => string | undefined;
   reactions: ReactionEvent[];
   onUserChange: (
     user: { id: string; email: string; name: string } | null,
@@ -219,6 +222,8 @@ export default function MeetsMainContent({
   refreshRooms,
   displayNameInput,
   setDisplayNameInput,
+  joinAvatarUrl,
+  setJoinAvatarUrl,
   ghostEnabled,
   setIsGhostMode,
   presentationStream,
@@ -256,6 +261,7 @@ export default function MeetsMainContent({
   socket,
   setPendingUsers,
   resolveDisplayName,
+  resolveAvatarUrl,
   reactions,
   onUserChange,
   onIsAdminChange,
@@ -697,6 +703,8 @@ export default function MeetsMainContent({
             onJoinRoom={joinRoomById}
             displayNameInput={displayNameInput}
             onDisplayNameInputChange={setDisplayNameInput}
+            avatarUrl={joinAvatarUrl}
+            onAvatarUrlChange={setJoinAvatarUrl}
             isGhostMode={ghostEnabled}
             onGhostModeChange={setIsGhostMode}
             onUserChange={onUserChange}
@@ -717,6 +725,7 @@ export default function MeetsMainContent({
                 )}:${webinarStage.isScreenShare ? "screen" : "camera"}`}
                 participant={webinarStage.main.participant}
                 displayName={webinarStage.main.displayName}
+                avatarUrl={resolveAvatarUrl(webinarStage.main.participant.userId)}
                 isActiveSpeaker={
                   activeSpeakerId === webinarStage.main.participant.userId
                 }
@@ -747,6 +756,7 @@ export default function MeetsMainContent({
                     )}:pip`}
                     participant={webinarStage.pip.participant}
                     displayName={webinarStage.pip.displayName}
+                    avatarUrl={resolveAvatarUrl(webinarStage.pip.participant.userId)}
                   />
                 </div>
               ) : null}
@@ -773,6 +783,7 @@ export default function MeetsMainContent({
           currentUserId={currentUserId}
           audioOutputDeviceId={audioOutputDeviceId}
           getDisplayName={resolveDisplayName}
+          getAvatarUrl={resolveAvatarUrl}
         />
       ) : isDevPlaygroundEnabled && isDevPlaygroundActive ? (
         <DevPlaygroundLayout
@@ -788,6 +799,7 @@ export default function MeetsMainContent({
           currentUserId={currentUserId}
           audioOutputDeviceId={audioOutputDeviceId}
           getDisplayName={resolveDisplayName}
+          getAvatarUrl={resolveAvatarUrl}
         />
       ) : browserState?.active && browserState.noVncUrl ? (
         <BrowserLayout
@@ -808,6 +820,7 @@ export default function MeetsMainContent({
           currentUserId={currentUserId}
           audioOutputDeviceId={audioOutputDeviceId}
           getDisplayName={resolveDisplayName}
+          getAvatarUrl={resolveAvatarUrl}
           isAdmin={isAdmin}
           isBrowserLaunching={isBrowserLaunching}
           onNavigateBrowser={onNavigateBrowser}
@@ -829,6 +842,7 @@ export default function MeetsMainContent({
           currentUserId={currentUserId}
           audioOutputDeviceId={audioOutputDeviceId}
           getDisplayName={resolveDisplayName}
+          getAvatarUrl={resolveAvatarUrl}
         />
       ) : (
         <GridLayout
@@ -845,6 +859,7 @@ export default function MeetsMainContent({
           audioOutputDeviceId={audioOutputDeviceId}
           onOpenParticipantsPanel={handleOpenParticipants}
           getDisplayName={resolveDisplayName}
+          getAvatarUrl={resolveAvatarUrl}
         />
       )}
 

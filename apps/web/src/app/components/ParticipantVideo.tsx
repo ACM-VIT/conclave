@@ -8,6 +8,7 @@ import { truncateDisplayName } from "../lib/utils";
 interface ParticipantVideoProps {
   participant: Participant;
   displayName: string;
+  avatarUrl?: string;
   compact?: boolean;
   isActiveSpeaker?: boolean;
   audioOutputDeviceId?: string;
@@ -20,6 +21,7 @@ interface ParticipantVideoProps {
 function ParticipantVideo({
   participant,
   displayName,
+  avatarUrl,
   compact = false,
   isActiveSpeaker = false,
   audioOutputDeviceId,
@@ -31,13 +33,19 @@ function ParticipantVideo({
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
   const [isNew, setIsNew] = useState(true);
+  const [avatarLoadFailed, setAvatarLoadFailed] = useState(false);
   const labelWidthClass = compact ? "max-w-[65%]" : "max-w-[75%]";
   const displayLabel = truncateDisplayName(displayName, compact ? 12 : 18);
+  const normalizedAvatarUrl = avatarUrl?.trim() || "";
 
   useEffect(() => {
     const timer = setTimeout(() => setIsNew(false), 800);
     return () => clearTimeout(timer);
   }, []);
+
+  useEffect(() => {
+    setAvatarLoadFailed(false);
+  }, [normalizedAvatarUrl]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -196,6 +204,8 @@ function ParticipantVideo({
   ]);
 
   const showPlaceholder = !participant.videoStream || participant.isCameraOff;
+  const showAvatarImage =
+    showPlaceholder && Boolean(normalizedAvatarUrl) && !avatarLoadFailed;
 
   const handleClick = () => {
     if (isAdmin && onAdminClick) {
@@ -236,13 +246,24 @@ function ParticipantVideo({
       />
       {showPlaceholder && (
         <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-[#1a1a1a] to-[#0d0e0d]">
-          <div
-            className={`rounded-full bg-gradient-to-br from-[#F95F4A]/20 to-[#FF007A]/20 border border-[#FEFCD9]/20 flex items-center justify-center text-[#FEFCD9] font-bold ${
-              compact ? "w-12 h-12 text-lg" : "w-20 h-20 text-3xl"
-            }`}
-          >
-            {displayName[0]?.toUpperCase() || "?"}
-          </div>
+          {showAvatarImage ? (
+            <img
+              src={normalizedAvatarUrl}
+              alt={`${displayName} avatar`}
+              className={`rounded-full object-cover border border-[#FEFCD9]/20 ${
+                compact ? "w-12 h-12" : "w-20 h-20"
+              }`}
+              onError={() => setAvatarLoadFailed(true)}
+            />
+          ) : (
+            <div
+              className={`rounded-full bg-gradient-to-br from-[#F95F4A]/20 to-[#FF007A]/20 border border-[#FEFCD9]/20 flex items-center justify-center text-[#FEFCD9] font-bold ${
+                compact ? "w-12 h-12 text-lg" : "w-20 h-20 text-3xl"
+              }`}
+            >
+              {displayName[0]?.toUpperCase() || "?"}
+            </div>
+          )}
         </div>
       )}
       {participant.isGhost && (

@@ -2,6 +2,7 @@ import { Admin } from "../../../config/classes/Admin.js";
 import { Client } from "../../../config/classes/Client.js";
 import { config } from "../../../config/config.js";
 import type {
+  AvatarSnapshot,
   AppsAwarenessData,
   HandRaisedSnapshot,
   JoinRoomData,
@@ -84,6 +85,10 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         const clientPolicy =
           config.clientPolicies[clientId] ?? config.clientPolicies.default;
         const displayNameCandidate = normalizeDisplayName(data?.displayName);
+        const hasAvatarOverride = typeof data?.avatarUrl === "string";
+        const avatarUrlCandidate =
+          typeof data?.avatarUrl === "string" ? data.avatarUrl.trim() : "";
+        const requestedAvatarUrl = avatarUrlCandidate || undefined;
         if (
           displayNameCandidate &&
           displayNameCandidate.length > MAX_DISPLAY_NAME_LENGTH
@@ -451,6 +456,9 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         context.currentRoom.setUserIdentity(userId, userKey, displayName, {
           forceDisplayName: hasDisplayNameOverride,
         });
+        context.currentRoom.setUserAvatar(userId, userKey, requestedAvatarUrl, {
+          forceAvatar: hasAvatarOverride,
+        });
         context.currentRoom.addClient(context.currentClient);
 
         socket.join(roomChannelId);
@@ -479,20 +487,25 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
 
         const resolvedDisplayName =
           context.currentRoom.getDisplayNameForUser(userId) || displayName;
+        const resolvedAvatarUrl = context.currentRoom.getAvatarForUser(userId);
         if (!wasReconnecting) {
           if (context.currentClient.isGhost) {
             emitUserJoined(context.currentRoom, userId, resolvedDisplayName, {
               ghostOnly: true,
               excludeUserId: userId,
               isGhost: true,
+              avatarUrl: resolvedAvatarUrl,
             });
             for (const [clientId, client] of context.currentRoom.clients) {
               if (clientId === userId || !client.isGhost) continue;
               const ghostDisplayName =
                 context.currentRoom.getDisplayNameForUser(clientId) || clientId;
+              const ghostAvatarUrl =
+                context.currentRoom.getAvatarForUser(clientId);
               socket.emit("userJoined", {
                 userId: clientId,
                 displayName: ghostDisplayName,
+                avatarUrl: ghostAvatarUrl,
                 isGhost: true,
               });
             }
@@ -504,6 +517,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
               client.socket.emit("userJoined", {
                 userId,
                 displayName: resolvedDisplayName,
+                avatarUrl: resolvedAvatarUrl,
               });
             }
           }
@@ -519,6 +533,14 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           users: displayNameSnapshot,
           roomId: context.currentRoom.id,
         });
+
+        socket.emit("avatarSnapshot", {
+          users: context.currentRoom.getAvatarSnapshot({
+            includeGhosts: context.currentClient.isGhost,
+            includeWebinarAttendees: false,
+          }),
+          roomId: context.currentRoom.id,
+        } satisfies AvatarSnapshot & { roomId: string });
 
         socket.emit("handRaisedSnapshot", {
           users: context.currentRoom.getHandRaisedSnapshot(),

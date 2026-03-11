@@ -18,9 +18,11 @@ interface UseMeetDisplayNameOptions {
   userId: string;
   isAdmin: boolean;
   ghostEnabled: boolean;
+  avatarUrl?: string;
   socketRef: React.MutableRefObject<Socket | null>;
   joinOptionsRef: React.MutableRefObject<{
     displayName?: string;
+    avatarUrl?: string;
     isGhost: boolean;
     joinMode: JoinMode;
     webinarInviteCode?: string;
@@ -33,6 +35,7 @@ export function useMeetDisplayName({
   userId,
   isAdmin,
   ghostEnabled,
+  avatarUrl,
   socketRef,
   joinOptionsRef,
 }: UseMeetDisplayNameOptions) {
@@ -101,9 +104,10 @@ export function useMeetDisplayName({
     joinOptionsRef.current = {
       ...joinOptionsRef.current,
       displayName: isAdmin ? normalized || undefined : undefined,
+      avatarUrl: avatarUrl?.trim() || undefined,
       isGhost: ghostEnabled,
     };
-  }, [displayNameInput, ghostEnabled, isAdmin, joinOptionsRef]);
+  }, [avatarUrl, displayNameInput, ghostEnabled, isAdmin, joinOptionsRef]);
 
   useEffect(() => {
     if (!displayNameStatus) return;

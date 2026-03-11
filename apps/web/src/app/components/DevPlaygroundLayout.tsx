@@ -21,6 +21,7 @@ interface DevPlaygroundLayoutProps {
   currentUserId: string;
   audioOutputDeviceId?: string;
   getDisplayName: (userId: string) => string;
+  getAvatarUrl: (userId: string) => string | undefined;
 }
 
 function DevPlaygroundLayout({
@@ -36,6 +37,7 @@ function DevPlaygroundLayout({
   currentUserId,
   audioOutputDeviceId,
   getDisplayName,
+  getAvatarUrl,
 }: DevPlaygroundLayoutProps) {
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const isLocalActiveSpeaker = activeSpeakerId === currentUserId;
@@ -122,6 +124,7 @@ function DevPlaygroundLayout({
             key={participant.userId}
             participant={participant}
             displayName={getDisplayName(participant.userId)}
+            avatarUrl={getAvatarUrl(participant.userId)}
             isActiveSpeaker={activeSpeakerId === participant.userId}
             compact
             audioOutputDeviceId={audioOutputDeviceId}

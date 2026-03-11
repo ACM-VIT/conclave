@@ -21,6 +21,7 @@ interface WhiteboardLayoutProps {
   currentUserId: string;
   audioOutputDeviceId?: string;
   getDisplayName: (userId: string) => string;
+  getAvatarUrl: (userId: string) => string | undefined;
 }
 
 function WhiteboardLayout({
@@ -36,6 +37,7 @@ function WhiteboardLayout({
   currentUserId,
   audioOutputDeviceId,
   getDisplayName,
+  getAvatarUrl,
 }: WhiteboardLayoutProps) {
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const isLocalActiveSpeaker = activeSpeakerId === currentUserId;
@@ -122,6 +124,7 @@ function WhiteboardLayout({
             key={participant.userId}
             participant={participant}
             displayName={getDisplayName(participant.userId)}
+            avatarUrl={getAvatarUrl(participant.userId)}
             isActiveSpeaker={activeSpeakerId === participant.userId}
             compact
             audioOutputDeviceId={audioOutputDeviceId}

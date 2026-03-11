@@ -23,6 +23,7 @@ interface GridLayoutProps {
   onParticipantClick?: (userId: string) => void;
   onOpenParticipantsPanel?: () => void;
   getDisplayName: (userId: string) => string;
+  getAvatarUrl: (userId: string) => string | undefined;
 }
 
 const MAX_GRID_TILES = 16;
@@ -44,6 +45,7 @@ function GridLayout({
   onParticipantClick,
   onOpenParticipantsPanel,
   getDisplayName,
+  getAvatarUrl,
 }: GridLayoutProps) {
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const stableOrderRef = useRef<string[]>([]);
@@ -378,6 +380,7 @@ function GridLayout({
             key={participant.userId}
             participant={participant}
             displayName={getDisplayName(participant.userId)}
+            avatarUrl={getAvatarUrl(participant.userId)}
             isActiveSpeaker={activeSpeakerId === participant.userId}
             audioOutputDeviceId={audioOutputDeviceId}
             isAdmin={isAdmin}

@@ -22,6 +22,7 @@ interface PresentationLayoutProps {
   currentUserId: string;
   audioOutputDeviceId?: string;
   getDisplayName: (userId: string) => string;
+  getAvatarUrl: (userId: string) => string | undefined;
 }
 
 function PresentationLayout({
@@ -39,6 +40,7 @@ function PresentationLayout({
   currentUserId,
   audioOutputDeviceId,
   getDisplayName,
+  getAvatarUrl,
 }: PresentationLayoutProps) {
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const presentationVideoRef = useRef<HTMLVideoElement>(null);
@@ -227,6 +229,7 @@ function PresentationLayout({
               key={participant.userId}
               participant={participant}
               displayName={getDisplayName(participant.userId)}
+              avatarUrl={getAvatarUrl(participant.userId)}
               isActiveSpeaker={activeSpeakerId === participant.userId}
               compact
               audioOutputDeviceId={audioOutputDeviceId}

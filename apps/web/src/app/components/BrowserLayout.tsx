@@ -28,6 +28,7 @@ interface BrowserLayoutProps {
     currentUserId: string;
     audioOutputDeviceId?: string;
     getDisplayName: (userId: string) => string;
+    getAvatarUrl: (userId: string) => string | undefined;
     isAdmin?: boolean;
     isBrowserLaunching?: boolean;
     onNavigateBrowser?: (url: string) => Promise<boolean>;
@@ -50,6 +51,7 @@ function BrowserLayout({
     currentUserId,
     audioOutputDeviceId,
     getDisplayName,
+    getAvatarUrl,
     isAdmin,
     isBrowserLaunching = false,
     onNavigateBrowser,
@@ -292,6 +294,7 @@ function BrowserLayout({
                             key={participant.userId}
                             participant={participant}
                             displayName={getDisplayName(participant.userId)}
+                            avatarUrl={getAvatarUrl(participant.userId)}
                             isActiveSpeaker={activeSpeakerId === participant.userId}
                             compact
                             audioOutputDeviceId={audioOutputDeviceId}

@@ -51,6 +51,7 @@ export function useMeetRefs() {
   const shouldAutoJoinRef = useRef(false);
   const joinOptionsRef = useRef<{
     displayName?: string;
+    avatarUrl?: string;
     isGhost: boolean;
     joinMode: JoinMode;
     webinarInviteCode?: string;
