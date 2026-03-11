@@ -2,7 +2,9 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import * as AppleAuthentication from "expo-apple-authentication";
 import * as Google from "expo-auth-session/providers/google";
 import * as Haptics from "expo-haptics";
+import * as ImagePicker from "expo-image-picker";
 import * as WebBrowser from "expo-web-browser";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { RTCView } from "react-native-webrtc";
 import {
   ActivityIndicator,
@@ -21,8 +23,10 @@ import {
   Mic,
   MicOff,
   Plus,
+  Upload,
   Video,
   VideoOff,
+  X,
 } from "lucide-react-native";
 import type { MeetError } from "../types";
 import {
@@ -66,6 +70,8 @@ const textLineHeight = (fontSize: number, multiplier = 1.2) =>
 type Phase = "welcome" | "auth" | "join";
 
 const isIos = Platform.OS === "ios";
+const AVATAR_URL_STORAGE_KEY = "conclave:avatar-url";
+const MAX_AVATAR_FILE_BYTES = 5 * 1024 * 1024;
 
 const GoogleIcon = ({ size = 18 }: { size?: number }) => (
   <Svg width={size} height={size} viewBox="0 0 24 24">
@@ -118,6 +124,9 @@ interface JoinScreenProps {
   isLoading: boolean;
   displayNameInput: string;
   onDisplayNameInputChange: (value: string) => void;
+  avatarUrl?: string;
+  onAvatarUrlChange: (value: string | undefined) => void;
+  uploadApiBaseUrl?: string;
   isMuted: boolean;
   isCameraOff: boolean;
   localStream: MediaStream | null;
@@ -144,6 +153,9 @@ export function JoinScreen({
   isLoading,
   displayNameInput,
   onDisplayNameInputChange,
+  avatarUrl,
+  onAvatarUrlChange,
+  uploadApiBaseUrl,
   isMuted,
   isCameraOff,
   localStream,
@@ -174,6 +186,10 @@ export function JoinScreen({
     null
   );
   const [isAppleAvailable, setIsAppleAvailable] = useState(false);
+  const [avatarPreviewUri, setAvatarPreviewUri] = useState<string | null>(null);
+  const [avatarUploadError, setAvatarUploadError] = useState<string | null>(null);
+  const [isAvatarUploading, setIsAvatarUploading] = useState(false);
+  const [avatarLoadFailed, setAvatarLoadFailed] = useState(false);
   const [isEditingName, setIsEditingName] = useState(false);
   const nameInputRef = useRef<React.ElementRef<typeof TextInput>>(null);
   const isAuthLoading = authProvider !== null;
@@ -361,6 +377,135 @@ export function JoinScreen({
   }, [canJoin, isLoading, haptic, onIsAdminChange, onJoinRoom, roomId]);
 
   const userInitial = displayNameInput?.[0]?.toUpperCase() || "?";
+  const effectiveAvatarUri = avatarPreviewUri || avatarUrl || "";
+
+  useEffect(() => {
+    if (avatarUrl?.trim()) {
+      AsyncStorage.setItem(AVATAR_URL_STORAGE_KEY, avatarUrl.trim()).catch(() => {});
+      return;
+    }
+    AsyncStorage.removeItem(AVATAR_URL_STORAGE_KEY).catch(() => {});
+  }, [avatarUrl]);
+
+  useEffect(() => {
+    if (avatarUrl?.trim()) return;
+    AsyncStorage.getItem(AVATAR_URL_STORAGE_KEY)
+      .then((stored) => {
+        const normalized = stored?.trim();
+        if (normalized) {
+          onAvatarUrlChange(normalized);
+        }
+      })
+      .catch(() => {});
+  }, [avatarUrl, onAvatarUrlChange]);
+
+  useEffect(() => {
+    setAvatarLoadFailed(false);
+  }, [effectiveAvatarUri]);
+
+  const clearAvatar = useCallback(() => {
+    setAvatarPreviewUri(null);
+    setAvatarUploadError(null);
+    onAvatarUrlChange(undefined);
+    AsyncStorage.removeItem(AVATAR_URL_STORAGE_KEY).catch(() => {});
+  }, [onAvatarUrlChange]);
+
+  const uploadAvatarToSignedUrl = useCallback(
+    async (asset: ImagePicker.ImagePickerAsset) => {
+      const normalizedBase = uploadApiBaseUrl?.trim().replace(/\/$/, "") || authBaseUrl.replace(/\/$/, "");
+      if (!normalizedBase) {
+        throw new Error("Missing EXPO_PUBLIC_APP_URL or EXPO_PUBLIC_API_URL");
+      }
+
+      const signResponse = await fetch(`${normalizedBase}/api/uploads/avatar/sign`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          filename: asset.fileName || `avatar-${Date.now()}.jpg`,
+          contentType: asset.mimeType || "image/jpeg",
+        }),
+      });
+
+      const signResult = (await signResponse.json().catch(() => null)) as {
+        uploadUrl?: string;
+        params?: Record<string, string>;
+        error?: string;
+      } | null;
+
+      if (!signResponse.ok || !signResult?.uploadUrl || !signResult.params) {
+        throw new Error(signResult?.error || "Failed to prepare avatar upload.");
+      }
+
+      const formData = new FormData();
+      for (const [key, value] of Object.entries(signResult.params)) {
+        formData.append(key, value);
+      }
+
+      formData.append("file", {
+        uri: asset.uri,
+        type: asset.mimeType || "image/jpeg",
+        name: asset.fileName || `avatar-${Date.now()}.jpg`,
+      } as unknown as Blob);
+
+      const uploadResponse = await fetch(signResult.uploadUrl, {
+        method: "POST",
+        body: formData,
+      });
+
+      const uploadResult = (await uploadResponse.json().catch(() => null)) as {
+        secure_url?: string;
+        error?: { message?: string };
+      } | null;
+
+      const uploadedUrl = uploadResult?.secure_url?.trim();
+      if (!uploadResponse.ok || !uploadedUrl) {
+        throw new Error(uploadResult?.error?.message || "Avatar upload failed.");
+      }
+
+      return uploadedUrl;
+    },
+    [uploadApiBaseUrl]
+  );
+
+  const handlePickAvatar = useCallback(async () => {
+    haptic();
+    setAvatarUploadError(null);
+    setIsAvatarUploading(true);
+    try {
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ["images"],
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.8,
+        exif: false,
+      });
+
+      if (result.canceled || !result.assets?.length) {
+        return;
+      }
+
+      const asset = result.assets[0];
+      const fileSize = asset.fileSize ?? 0;
+      if (fileSize > MAX_AVATAR_FILE_BYTES) {
+        throw new Error("Image must be 5MB or smaller.");
+      }
+
+      setAvatarPreviewUri(asset.uri);
+      const uploadedUrl = await uploadAvatarToSignedUrl(asset);
+      onAvatarUrlChange(uploadedUrl);
+      setAvatarPreviewUri(null);
+      setAvatarUploadError(null);
+      await AsyncStorage.setItem(AVATAR_URL_STORAGE_KEY, uploadedUrl);
+    } catch (error) {
+      setAvatarUploadError(
+        error instanceof Error ? error.message : "Failed to upload avatar.",
+      );
+    } finally {
+      setIsAvatarUploading(false);
+    }
+  }, [haptic, onAvatarUrlChange, uploadAvatarToSignedUrl]);
 
   useEffect(() => {
     if (Platform.OS !== "ios") return;
@@ -646,12 +791,24 @@ export function JoinScreen({
                         colors={["rgba(249, 95, 74, 0.2)", "rgba(255, 0, 122, 0.1)"]}
                         style={styles.previewGradient}
                       />
-                      <View style={styles.userAvatar}>
-                        <View style={styles.userAvatarBorder} />
-                        <Text style={[styles.userInitial, { color: COLORS.cream }]}>
-                          {userInitial}
-                        </Text>
-                      </View>
+                      {effectiveAvatarUri && !avatarLoadFailed ? (
+                        <View style={styles.userAvatar}>
+                          <Image
+                            source={{ uri: effectiveAvatarUri }}
+                            style={styles.userAvatarImage}
+                            contentFit="cover"
+                            onError={() => setAvatarLoadFailed(true)}
+                          />
+                          <View style={styles.userAvatarBorder} />
+                        </View>
+                      ) : (
+                        <View style={styles.userAvatar}>
+                          <View style={styles.userAvatarBorder} />
+                          <Text style={[styles.userInitial, { color: COLORS.cream }]}> 
+                            {userInitial}
+                          </Text>
+                        </View>
+                      )}
                       {shouldShowPermissionPrompt ? (
                         <View style={styles.permissionFallback}>
                           <Text style={styles.permissionTitle}>
@@ -739,11 +896,43 @@ export function JoinScreen({
                     </View>
                   </View>
 
+                  <View style={styles.avatarActionsOverlay}>
+                    <Pressable
+                      onPress={handlePickAvatar}
+                      disabled={isAvatarUploading}
+                      style={[styles.avatarActionButton, isAvatarUploading && styles.avatarActionButtonDisabled]}
+                    >
+                      {isAvatarUploading ? (
+                        <ActivityIndicator size="small" color={COLORS.cream} />
+                      ) : (
+                        <Upload size={14} color={COLORS.cream} />
+                      )}
+                      <Text style={styles.avatarActionText}>
+                        {isAvatarUploading ? "Uploading" : "Upload photo"}
+                      </Text>
+                    </Pressable>
+                    {effectiveAvatarUri ? (
+                      <Pressable
+                        onPress={clearAvatar}
+                        disabled={isAvatarUploading}
+                        style={[styles.avatarActionButton, styles.avatarActionDanger]}
+                      >
+                        <X size={14} color={COLORS.cream} />
+                        <Text style={styles.avatarActionText}>Remove</Text>
+                      </Pressable>
+                    ) : null}
+                  </View>
+
                 </View>
               </View>
 
               <View style={styles.joinDock} pointerEvents="box-none">
                 <View style={styles.joinDockInner}>
+                  {avatarUploadError ? (
+                    <View style={styles.avatarErrorPill}>
+                      <Text style={styles.avatarErrorText}>{avatarUploadError}</Text>
+                    </View>
+                  ) : null}
                   {!forceJoinOnly ? (
                     <GlassPill style={styles.joinDockTabs}>
                       <Pressable
@@ -905,12 +1094,24 @@ export function JoinScreen({
                             colors={["rgba(249, 95, 74, 0.2)", "rgba(255, 0, 122, 0.1)"]}
                             style={styles.previewGradient}
                           />
-                          <View style={styles.userAvatar}>
-                            <View style={styles.userAvatarBorder} />
-                            <Text style={[styles.userInitial, { color: COLORS.cream }]}>
-                              {userInitial}
-                            </Text>
-                          </View>
+                          {effectiveAvatarUri && !avatarLoadFailed ? (
+                            <View style={styles.userAvatar}>
+                              <Image
+                                source={{ uri: effectiveAvatarUri }}
+                                style={styles.userAvatarImage}
+                                contentFit="cover"
+                                onError={() => setAvatarLoadFailed(true)}
+                              />
+                              <View style={styles.userAvatarBorder} />
+                            </View>
+                          ) : (
+                            <View style={styles.userAvatar}>
+                              <View style={styles.userAvatarBorder} />
+                              <Text style={[styles.userInitial, { color: COLORS.cream }]}> 
+                                {userInitial}
+                              </Text>
+                            </View>
+                          )}
                           {shouldShowPermissionPrompt ? (
                             <View style={styles.permissionFallback}>
                               <Text style={styles.permissionTitle}>
@@ -998,6 +1199,33 @@ export function JoinScreen({
                             )}
                           </Pressable>
                         </View>
+                      </View>
+
+                      <View style={styles.avatarActionsOverlay}>
+                        <Pressable
+                          onPress={handlePickAvatar}
+                          disabled={isAvatarUploading}
+                          style={[styles.avatarActionButton, isAvatarUploading && styles.avatarActionButtonDisabled]}
+                        >
+                          {isAvatarUploading ? (
+                            <ActivityIndicator size="small" color={COLORS.cream} />
+                          ) : (
+                            <Upload size={14} color={COLORS.cream} />
+                          )}
+                          <Text style={styles.avatarActionText}>
+                            {isAvatarUploading ? "Uploading" : "Upload photo"}
+                          </Text>
+                        </Pressable>
+                        {effectiveAvatarUri ? (
+                          <Pressable
+                            onPress={clearAvatar}
+                            disabled={isAvatarUploading}
+                            style={[styles.avatarActionButton, styles.avatarActionDanger]}
+                          >
+                            <X size={14} color={COLORS.cream} />
+                            <Text style={styles.avatarActionText}>Remove</Text>
+                          </Pressable>
+                        ) : null}
                       </View>
                     </View>
                   </Animated.View>
@@ -1622,6 +1850,11 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     backgroundColor: "rgba(249, 95, 74, 0.15)",
     position: "relative",
+    overflow: "hidden",
+  },
+  userAvatarImage: {
+    width: "100%",
+    height: "100%",
   },
   userAvatarBorder: {
     ...StyleSheet.absoluteFillObject,
@@ -1665,6 +1898,54 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     alignItems: "center",
+  },
+  avatarActionsOverlay: {
+    position: "absolute",
+    right: 12,
+    top: 12,
+    gap: 8,
+    alignItems: "flex-end",
+  },
+  avatarActionButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: "rgba(254, 252, 217, 0.2)",
+    backgroundColor: "rgba(0,0,0,0.55)",
+  },
+  avatarActionButtonDisabled: {
+    opacity: 0.7,
+  },
+  avatarActionDanger: {
+    borderColor: "rgba(249, 95, 74, 0.4)",
+    backgroundColor: "rgba(249, 95, 74, 0.18)",
+  },
+  avatarActionText: {
+    fontSize: 10,
+    lineHeight: textLineHeight(10, 1.2),
+    color: COLORS.cream,
+    fontFamily: "PolySans-Mono",
+    letterSpacing: 1,
+    textTransform: "uppercase",
+  },
+  avatarErrorPill: {
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: "rgba(249,95,74,0.35)",
+    backgroundColor: "rgba(249,95,74,0.12)",
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  avatarErrorText: {
+    color: COLORS.primaryOrange,
+    fontSize: 11,
+    lineHeight: textLineHeight(11, 1.25),
+    fontFamily: "PolySans-Mono",
+    textAlign: "center",
   },
   mediaControlsPill: {
     flexDirection: "row",

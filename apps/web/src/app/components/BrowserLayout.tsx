@@ -63,6 +63,12 @@ function BrowserLayout({
     const [isReady, setIsReady] = useState(false);
     const [navInput, setNavInput] = useState(browserUrl);
     const [navError, setNavError] = useState<string | null>(null);
+    const localAvatarUrl = getAvatarUrl(currentUserId)?.trim() || "";
+    const [localAvatarLoadFailed, setLocalAvatarLoadFailed] = useState(false);
+
+    useEffect(() => {
+        setLocalAvatarLoadFailed(false);
+    }, [localAvatarUrl]);
 
     // Wait for browser container to be ready before showing iframe
     useEffect(() => {
@@ -253,9 +259,18 @@ function BrowserLayout({
                     />
                     {isCameraOff && (
                         <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-[#1a1a1a] to-[#0d0e0d]">
-                            <div className="w-12 h-12 rounded-full bg-gradient-to-br from-[#F95F4A]/20 to-[#FF007A]/20 border border-[#FEFCD9]/20 flex items-center justify-center text-lg text-[#FEFCD9] font-bold">
-                                {userEmail[0]?.toUpperCase() || "?"}
-                            </div>
+                            {localAvatarUrl && !localAvatarLoadFailed ? (
+                                <img
+                                    src={localAvatarUrl}
+                                    alt="Your avatar"
+                                    className="w-12 h-12 rounded-full object-cover border border-[#FEFCD9]/20"
+                                    onError={() => setLocalAvatarLoadFailed(true)}
+                                />
+                            ) : (
+                                <div className="w-12 h-12 rounded-full bg-gradient-to-br from-[#F95F4A]/20 to-[#FF007A]/20 border border-[#FEFCD9]/20 flex items-center justify-center text-lg text-[#FEFCD9] font-bold">
+                                    {userEmail[0]?.toUpperCase() || "?"}
+                                </div>
+                            )}
                         </div>
                     )}
                     {isGhost && (

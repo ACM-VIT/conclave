@@ -12,8 +12,10 @@ import {
   Plus,
   ArrowRight,
   RefreshCw,
+  Upload,
+  X,
 } from "lucide-react";
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 import { signIn, signOut, useSession } from "@/lib/auth-client";
 import type { RoomInfo } from "@/lib/sfu-types";
 import type { ConnectionState, MeetError } from "../lib/types";
@@ -35,6 +37,10 @@ import MeetsErrorBanner from "./MeetsErrorBanner";
 const normalizeGuestName = (value: string): string =>
   value.trim().replace(/\s+/g, " ");
 const GUEST_USER_STORAGE_KEY = "conclave:guest-user";
+const AVATAR_URL_STORAGE_KEY = "conclave:avatar-url";
+const MAX_AVATAR_FILE_BYTES = 5 * 1024 * 1024;
+const MAX_LOCAL_AVATAR_DIMENSION = 256;
+const LOCAL_AVATAR_QUALITY = 0.82;
 
 const createGuestId = (): string => {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
@@ -62,6 +68,45 @@ const buildGuestUser = (
   };
 };
 
+const buildLocalAvatarDataUrl = async (file: File): Promise<string> => {
+  const imageUrl = URL.createObjectURL(file);
+  try {
+    const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const element = new Image();
+      element.onload = () => resolve(element);
+      element.onerror = () => reject(new Error("Unable to read avatar image."));
+      element.src = imageUrl;
+    });
+
+    const width = image.naturalWidth || image.width;
+    const height = image.naturalHeight || image.height;
+    const scale = Math.min(
+      1,
+      MAX_LOCAL_AVATAR_DIMENSION / Math.max(width || 1, height || 1),
+    );
+    const targetWidth = Math.max(1, Math.round(width * scale));
+    const targetHeight = Math.max(1, Math.round(height * scale));
+
+    const canvas = document.createElement("canvas");
+    canvas.width = targetWidth;
+    canvas.height = targetHeight;
+
+    const context = canvas.getContext("2d");
+    if (!context) {
+      throw new Error("Unable to process avatar image.");
+    }
+
+    context.drawImage(image, 0, 0, targetWidth, targetHeight);
+    const dataUrl = canvas.toDataURL("image/jpeg", LOCAL_AVATAR_QUALITY);
+    if (!dataUrl) {
+      throw new Error("Unable to prepare avatar image.");
+    }
+    return dataUrl;
+  } finally {
+    URL.revokeObjectURL(imageUrl);
+  }
+};
+
 interface JoinScreenProps {
   roomId: string;
   onRoomIdChange: (id: string) => void;
@@ -84,6 +129,8 @@ interface JoinScreenProps {
   onRefreshRooms: () => void;
   displayNameInput: string;
   onDisplayNameInputChange: (value: string) => void;
+  avatarUrl?: string;
+  onAvatarUrlChange: (value: string | undefined) => void;
   isGhostMode: boolean;
   onGhostModeChange: (value: boolean) => void;
   onUserChange: (user: { id: string; email: string; name: string } | null) => void;
@@ -112,6 +159,8 @@ function JoinScreen({
   onRefreshRooms,
   displayNameInput,
   onDisplayNameInputChange,
+  avatarUrl,
+  onAvatarUrlChange,
   isGhostMode,
   onGhostModeChange,
   onUserChange,
@@ -148,6 +197,11 @@ function JoinScreen({
   );
   const isSigningIn = signInProvider !== null;
   const [isSigningOut, setIsSigningOut] = useState(false);
+  const [avatarPreviewUrl, setAvatarPreviewUrl] = useState<string | null>(null);
+  const [avatarUploadError, setAvatarUploadError] = useState<string | null>(null);
+  const [isAvatarUploading, setIsAvatarUploading] = useState(false);
+  const avatarFileInputRef = useRef<HTMLInputElement>(null);
+  const avatarObjectUrlRef = useRef<string | null>(null);
   const normalizedSegments = useMemo(
     () => normalizedRoomId.split("-"),
     [normalizedRoomId]
@@ -244,6 +298,155 @@ function JoinScreen({
   useEffect(() => {
     if (videoRef.current && localStream) videoRef.current.srcObject = localStream;
   }, [localStream]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (avatarUrl?.trim()) {
+      window.localStorage.setItem(AVATAR_URL_STORAGE_KEY, avatarUrl.trim());
+      return;
+    }
+    window.localStorage.removeItem(AVATAR_URL_STORAGE_KEY);
+  }, [avatarUrl]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (avatarUrl?.trim()) return;
+    const stored = window.localStorage.getItem(AVATAR_URL_STORAGE_KEY)?.trim();
+    if (stored) {
+      onAvatarUrlChange(stored);
+    }
+  }, [avatarUrl, onAvatarUrlChange]);
+
+  useEffect(() => {
+    return () => {
+      if (avatarObjectUrlRef.current) {
+        URL.revokeObjectURL(avatarObjectUrlRef.current);
+        avatarObjectUrlRef.current = null;
+      }
+    };
+  }, []);
+
+  const clearAvatar = () => {
+    if (avatarObjectUrlRef.current) {
+      URL.revokeObjectURL(avatarObjectUrlRef.current);
+      avatarObjectUrlRef.current = null;
+    }
+    setAvatarPreviewUrl(null);
+    setAvatarUploadError(null);
+    onAvatarUrlChange(undefined);
+    if (typeof window !== "undefined") {
+      window.localStorage.removeItem(AVATAR_URL_STORAGE_KEY);
+    }
+    if (avatarFileInputRef.current) {
+      avatarFileInputRef.current.value = "";
+    }
+  };
+
+  const handleAvatarFileSelect = async (
+    event: ChangeEvent<HTMLInputElement>,
+  ) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const normalizedType = file.type?.toLowerCase() || "";
+    const isAllowedType =
+      normalizedType === "image/jpeg" ||
+      normalizedType === "image/jpg" ||
+      normalizedType === "image/png" ||
+      normalizedType === "image/webp";
+
+    if (!isAllowedType) {
+      setAvatarUploadError("Upload a JPG, PNG, or WebP image.");
+      return;
+    }
+    if (file.size > MAX_AVATAR_FILE_BYTES) {
+      setAvatarUploadError("Image must be 5MB or smaller.");
+      return;
+    }
+
+    if (avatarObjectUrlRef.current) {
+      URL.revokeObjectURL(avatarObjectUrlRef.current);
+      avatarObjectUrlRef.current = null;
+    }
+    const objectUrl = URL.createObjectURL(file);
+    avatarObjectUrlRef.current = objectUrl;
+    setAvatarPreviewUrl(objectUrl);
+    setAvatarUploadError(null);
+    setIsAvatarUploading(true);
+
+    try {
+      const signResponse = await fetch("/api/uploads/avatar/sign", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          filename: file.name,
+          contentType: file.type,
+        }),
+      });
+
+      const signResult = (await signResponse.json().catch(() => null)) as {
+        uploadUrl?: string;
+        params?: Record<string, string>;
+        error?: string;
+      } | null;
+
+      if (!signResponse.ok || !signResult?.uploadUrl || !signResult.params) {
+        const localAvatarUrl = await buildLocalAvatarDataUrl(file);
+        onAvatarUrlChange(localAvatarUrl);
+        if (typeof window !== "undefined") {
+          window.localStorage.setItem(AVATAR_URL_STORAGE_KEY, localAvatarUrl);
+        }
+        setAvatarPreviewUrl(null);
+        if (avatarObjectUrlRef.current) {
+          URL.revokeObjectURL(avatarObjectUrlRef.current);
+          avatarObjectUrlRef.current = null;
+        }
+        setAvatarUploadError(null);
+        return;
+      }
+
+      const uploadBody = new FormData();
+      for (const [key, value] of Object.entries(signResult.params)) {
+        uploadBody.append(key, value);
+      }
+      uploadBody.append("file", file);
+
+      const uploadResponse = await fetch(signResult.uploadUrl, {
+        method: "POST",
+        body: uploadBody,
+      });
+
+      const uploadResult = (await uploadResponse.json().catch(() => null)) as {
+        secure_url?: string;
+        error?: { message?: string };
+      } | null;
+
+      const uploadedUrl = uploadResult?.secure_url?.trim();
+      if (!uploadResponse.ok || !uploadedUrl) {
+        throw new Error(uploadResult?.error?.message || "Avatar upload failed.");
+      }
+
+      onAvatarUrlChange(uploadedUrl);
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem(AVATAR_URL_STORAGE_KEY, uploadedUrl);
+      }
+      setAvatarPreviewUrl(null);
+      if (avatarObjectUrlRef.current) {
+        URL.revokeObjectURL(avatarObjectUrlRef.current);
+        avatarObjectUrlRef.current = null;
+      }
+      setAvatarUploadError(null);
+    } catch (error) {
+      console.error("[JoinScreen] Avatar upload error:", error);
+      setAvatarUploadError(
+        error instanceof Error ? error.message : "Failed to upload avatar.",
+      );
+    } finally {
+      setIsAvatarUploading(false);
+    }
+  };
+
+  const effectiveAvatarUrl = avatarPreviewUrl || avatarUrl || "";
 
   const toggleCamera = async () => {
     if (isCameraOn && localStream) {
@@ -624,9 +827,17 @@ function JoinScreen({
                     <video ref={videoRef} autoPlay muted playsInline className="w-full h-full object-cover scale-x-[-1]" />
                   ) : (
                     <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-[#1a1a1a] to-[#0d0e0d]">
-                      <div className="w-20 h-20 rounded-full bg-gradient-to-br from-[#F95F4A]/20 to-[#FF007A]/20 border border-[#FEFCD9]/20 flex items-center justify-center">
-                        <span className="text-3xl text-[#FEFCD9] font-bold">{userEmail[0]?.toUpperCase() || "?"}</span>
-                      </div>
+                      {effectiveAvatarUrl ? (
+                        <img
+                          src={effectiveAvatarUrl}
+                          alt="Your profile photo"
+                          className="w-20 h-20 rounded-full object-cover border border-[#FEFCD9]/20"
+                        />
+                      ) : (
+                        <div className="w-20 h-20 rounded-full bg-gradient-to-br from-[#F95F4A]/20 to-[#FF007A]/20 border border-[#FEFCD9]/20 flex items-center justify-center">
+                          <span className="text-3xl text-[#FEFCD9] font-bold">{userEmail[0]?.toUpperCase() || "?"}</span>
+                        </div>
+                      )}
                     </div>
                   )}
 
@@ -690,6 +901,50 @@ function JoinScreen({
                     </button>
                   )}
                 </div>
+
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  <input
+                    ref={avatarFileInputRef}
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp"
+                    className="hidden"
+                    onChange={handleAvatarFileSelect}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => avatarFileInputRef.current?.click()}
+                    disabled={isAvatarUploading}
+                    className="inline-flex items-center gap-2 rounded-full border border-[#FEFCD9]/15 bg-black/40 px-3 py-1.5 text-[10px] uppercase tracking-wider text-[#FEFCD9]/70 hover:text-[#FEFCD9] hover:border-[#FEFCD9]/35 transition-colors disabled:opacity-60"
+                    style={{ fontFamily: "'PolySans Mono', monospace" }}
+                  >
+                    {isAvatarUploading ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <Upload className="w-3.5 h-3.5" />
+                    )}
+                    {isAvatarUploading ? "Uploading" : "Upload photo"}
+                  </button>
+                  {(avatarUrl || avatarPreviewUrl) && (
+                    <button
+                      type="button"
+                      onClick={clearAvatar}
+                      disabled={isAvatarUploading}
+                      className="inline-flex items-center gap-1.5 rounded-full border border-[#F95F4A]/30 bg-[#F95F4A]/10 px-3 py-1.5 text-[10px] uppercase tracking-wider text-[#FEFCD9]/70 hover:text-[#FEFCD9] hover:border-[#F95F4A]/50 transition-colors disabled:opacity-60"
+                      style={{ fontFamily: "'PolySans Mono', monospace" }}
+                    >
+                      <X className="w-3.5 h-3.5" />
+                      Remove photo
+                    </button>
+                  )}
+                </div>
+                {avatarUploadError ? (
+                  <p
+                    className="mt-2 text-[11px] text-[#F95F4A]"
+                    style={{ fontFamily: "'PolySans Mono', monospace" }}
+                  >
+                    {avatarUploadError}
+                  </p>
+                ) : null}
 
               </div>
 

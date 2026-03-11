@@ -220,6 +220,12 @@ function GridLayout({
   const localSpeakerHighlight = isLocalActiveSpeaker 
     ? "speaking" 
     : "";
+  const localAvatarUrl = getAvatarUrl(currentUserId)?.trim() || "";
+  const [localAvatarLoadFailed, setLocalAvatarLoadFailed] = useState(false);
+
+  useEffect(() => {
+    setLocalAvatarLoadFailed(false);
+  }, [localAvatarUrl]);
 
   const copyToClipboard = async (value: string) => {
     if (navigator.clipboard?.writeText) {
@@ -297,9 +303,18 @@ function GridLayout({
           />
           {isCameraOff && (
             <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-[#1a1a1a] to-[#0d0e0d]">
-              <div className="w-20 h-20 rounded-full bg-gradient-to-br from-[#F95F4A]/20 to-[#FF007A]/20 border border-[#FEFCD9]/20 flex items-center justify-center text-3xl text-[#FEFCD9] font-bold">
-                {userEmail[0]?.toUpperCase() || "?"}
-              </div>
+              {localAvatarUrl && !localAvatarLoadFailed ? (
+                <img
+                  src={localAvatarUrl}
+                  alt={`${localDisplayName} avatar`}
+                  className="w-20 h-20 rounded-full object-cover border border-[#FEFCD9]/20"
+                  onError={() => setLocalAvatarLoadFailed(true)}
+                />
+              ) : (
+                <div className="w-20 h-20 rounded-full bg-gradient-to-br from-[#F95F4A]/20 to-[#FF007A]/20 border border-[#FEFCD9]/20 flex items-center justify-center text-3xl text-[#FEFCD9] font-bold">
+                  {userEmail[0]?.toUpperCase() || "?"}
+                </div>
+              )}
             </div>
           )}
           {isGhost && (

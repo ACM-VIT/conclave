@@ -22,7 +22,7 @@ import { isSystemUserId } from "../utils";
 import { useDeviceLayout, type DeviceLayout } from "../hooks/use-device-layout";
 import { ControlsBar } from "./controls-bar";
 import { ParticipantTile } from "./participant-tile";
-import { FlatList, Text, Pressable } from "@/tw";
+import { FlatList, Text, Pressable, Image } from "@/tw";
 import { Lock, Settings, Users, MicOff, VenetianMask } from "lucide-react-native";
 import { GlassPill } from "./glass-pill";
 import { useApps } from "@conclave/apps-sdk";
@@ -75,6 +75,7 @@ interface CallScreenProps {
   isMirrorCamera: boolean;
   activeSpeakerId: string | null;
   resolveDisplayName: (userId: string) => string;
+  resolveAvatarUrl: (userId: string) => string | undefined;
   onToggleMute: () => void;
   onToggleCamera: () => void;
   onToggleScreenShare: () => void;
@@ -180,6 +181,7 @@ export function CallScreen({
   isMirrorCamera,
   activeSpeakerId,
   resolveDisplayName,
+  resolveAvatarUrl,
   onToggleMute,
   onToggleCamera,
   onToggleScreenShare,
@@ -1003,6 +1005,7 @@ export function CallScreen({
                     : resolveDisplayName(item.userId);
                 const initials =
                   label?.trim()?.[0]?.toUpperCase() || "?";
+                const avatarUrl = resolveAvatarUrl(item.userId);
                 return (
                   <RNView style={[styles.stripTile, { width: stripTileSize, height: stripTileSize }]}>
                     {item.videoStream && !item.isCameraOff ? (
@@ -1018,7 +1021,17 @@ export function CallScreen({
                       />
                     ) : (
                       <RNView style={styles.stripAvatar}>
-                        <Text style={styles.stripInitial}>{initials}</Text>
+                        {avatarUrl ? (
+                          <RNView style={styles.stripAvatarImageWrap}>
+                            <Image
+                              source={{ uri: avatarUrl }}
+                              style={styles.stripAvatarImage}
+                              contentFit="cover"
+                            />
+                          </RNView>
+                        ) : (
+                          <Text style={styles.stripInitial}>{initials}</Text>
+                        )}
                       </RNView>
                     )}
 
@@ -1092,6 +1105,7 @@ export function CallScreen({
                     <ParticipantTile
                       participant={item}
                       displayName={resolveDisplayName(item.userId)}
+                      avatarUrl={resolveAvatarUrl(item.userId)}
                       isLocal={item.userId === localParticipant.userId}
                       mirror={item.userId === localParticipant.userId ? isMirrorCamera : false}
                       isActiveSpeaker={activeSpeakerId === item.userId}
@@ -1386,6 +1400,14 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: "rgba(249, 95, 74, 0.15)",
+  },
+  stripAvatarImageWrap: {
+    width: "100%",
+    height: "100%",
+  },
+  stripAvatarImage: {
+    width: "100%",
+    height: "100%",
   },
   stripInitial: {
     fontSize: 20,

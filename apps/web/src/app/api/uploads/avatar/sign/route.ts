@@ -1,11 +1,21 @@
-import { createHash } from "node:crypto";
-import { NextResponse } from "next/server";
-
 export const runtime = "nodejs";
+
+declare const process:
+  | {
+      env?: Record<string, string | undefined>;
+    }
+  | undefined;
 
 type SignRequestBody = {
   filename?: string;
   contentType?: string;
+};
+
+type CloudinaryConfig = {
+  cloudName?: string;
+  apiKey?: string;
+  apiSecret?: string;
+  folder: string;
 };
 
 const ALLOWED_CONTENT_TYPES = new Set([
@@ -27,30 +37,89 @@ const sanitizeFileBaseName = (filename: string): string => {
   return trimmed || "avatar";
 };
 
-const buildCloudinarySignature = (
+const buildCloudinaryCanonicalString = (
   params: Record<string, string>,
-  apiSecret: string,
 ): string => {
-  const canonical = Object.entries(params)
+  return Object.entries(params)
     .filter(([, value]) => value)
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([key, value]) => `${key}=${value}`)
     .join("&");
+};
 
-  return createHash("sha1")
-    .update(`${canonical}${apiSecret}`)
-    .digest("hex");
+const buildCloudinarySignature = async (
+  params: Record<string, string>,
+  apiSecret: string,
+): Promise<string> => {
+  const canonical = buildCloudinaryCanonicalString(params);
+  const payload = `${canonical}${apiSecret}`;
+  const bytes = new TextEncoder().encode(payload);
+  const digest = await crypto.subtle.digest("SHA-1", bytes);
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+};
+
+const normalizeEnvValue = (value?: string): string | undefined => {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+};
+
+const parseCloudinaryUrl = (
+  cloudinaryUrl?: string,
+): { cloudName?: string; apiKey?: string; apiSecret?: string } => {
+  const normalized = normalizeEnvValue(cloudinaryUrl);
+  if (!normalized) {
+    return {};
+  }
+
+  try {
+    const parsed = new URL(normalized);
+    const cloudName = normalizeEnvValue(parsed.hostname);
+    const apiKey = normalizeEnvValue(parsed.username);
+    const apiSecret = normalizeEnvValue(parsed.password);
+    return { cloudName, apiKey, apiSecret };
+  } catch {
+    return {};
+  }
+};
+
+const resolveCloudinaryConfig = (): CloudinaryConfig => {
+  const env = process?.env ?? {};
+  const fromUrl = parseCloudinaryUrl(env.CLOUDINARY_URL);
+
+  const cloudName =
+    normalizeEnvValue(env.CLOUDINARY_CLOUD_NAME) ||
+    normalizeEnvValue(env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME) ||
+    normalizeEnvValue(env.CLOUDINARY_NAME) ||
+    fromUrl.cloudName;
+
+  const apiKey =
+    normalizeEnvValue(env.CLOUDINARY_API_KEY) ||
+    normalizeEnvValue(env.NEXT_PUBLIC_CLOUDINARY_API_KEY) ||
+    fromUrl.apiKey;
+
+  const apiSecret =
+    normalizeEnvValue(env.CLOUDINARY_API_SECRET) || fromUrl.apiSecret;
+
+  const folder =
+    normalizeEnvValue(env.CLOUDINARY_AVATAR_FOLDER) ||
+    normalizeEnvValue(env.NEXT_PUBLIC_CLOUDINARY_AVATAR_FOLDER) ||
+    "conclave/avatars";
+
+  return {
+    cloudName,
+    apiKey,
+    apiSecret,
+    folder,
+  };
 };
 
 export async function POST(request: Request) {
-  const cloudName = process.env.CLOUDINARY_CLOUD_NAME?.trim();
-  const apiKey = process.env.CLOUDINARY_API_KEY?.trim();
-  const apiSecret = process.env.CLOUDINARY_API_SECRET?.trim();
-  const folder =
-    process.env.CLOUDINARY_AVATAR_FOLDER?.trim() || "conclave/avatars";
+  const { cloudName, apiKey, apiSecret, folder } = resolveCloudinaryConfig();
 
   if (!cloudName || !apiKey || !apiSecret) {
-    return NextResponse.json(
+    return Response.json(
       { error: "Avatar upload is not configured." },
       { status: 500 },
     );
@@ -60,12 +129,12 @@ export async function POST(request: Request) {
   try {
     body = (await request.json()) as SignRequestBody;
   } catch {
-    return NextResponse.json({ error: "Invalid request body" }, { status: 400 });
+    return Response.json({ error: "Invalid request body" }, { status: 400 });
   }
 
   const contentType = body.contentType?.trim().toLowerCase() || "";
   if (!ALLOWED_CONTENT_TYPES.has(contentType)) {
-    return NextResponse.json({ error: "Unsupported image format" }, { status: 400 });
+    return Response.json({ error: "Unsupported image format" }, { status: 400 });
   }
 
   const filename = body.filename?.trim() || "avatar";
@@ -79,9 +148,9 @@ export async function POST(request: Request) {
     timestamp,
   };
 
-  const signature = buildCloudinarySignature(signableParams, apiSecret);
+  const signature = await buildCloudinarySignature(signableParams, apiSecret);
 
-  return NextResponse.json({
+  return Response.json({
     uploadUrl: `https://api.cloudinary.com/v1_1/${cloudName}/image/upload`,
     params: {
       api_key: apiKey,

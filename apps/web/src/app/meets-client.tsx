@@ -382,9 +382,16 @@ export default function MeetsClient({
     (targetUserId: string) => {
       const avatarUrl = avatarUrls.get(targetUserId);
       const normalizedAvatarUrl = avatarUrl?.trim();
+      if (normalizedAvatarUrl) {
+        return normalizedAvatarUrl;
+      }
+      if (targetUserId === userId) {
+        const localAvatar = joinAvatarUrl?.trim();
+        return localAvatar || undefined;
+      }
       return normalizedAvatarUrl || undefined;
     },
-    [avatarUrls],
+    [avatarUrls, joinAvatarUrl, userId],
   );
   const appsUser = useMemo(
     () => ({

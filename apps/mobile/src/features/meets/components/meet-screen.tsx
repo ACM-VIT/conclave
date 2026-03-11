@@ -270,6 +270,7 @@ export function MeetScreen({
 
   const userKey = user?.email || user?.id || `guest-${guestSessionId}`;
   const userId = `${userKey}#${refs.sessionIdRef.current}`;
+  const [joinAvatarUrl, setJoinAvatarUrl] = useState<string | undefined>(undefined);
 
   const {
     setDisplayNames,
@@ -285,9 +286,20 @@ export function MeetScreen({
     userId,
     isAdmin,
     ghostEnabled: isGhostMode,
+    avatarUrl: joinAvatarUrl,
     socketRef: refs.socketRef,
     joinOptionsRef: refs.joinOptionsRef,
   });
+  const [avatarUrls, setAvatarUrls] = useState<Map<string, string>>(new Map());
+  const resolveAvatarUrl = useCallback(
+    (targetUserId: string) => {
+      if (targetUserId === userId) {
+        return joinAvatarUrl?.trim() || avatarUrls.get(targetUserId)?.trim() || undefined;
+      }
+      return avatarUrls.get(targetUserId)?.trim() || undefined;
+    },
+    [avatarUrls, joinAvatarUrl, userId]
+  );
   const appsUser = useMemo(
     () => ({
       id: userId,
@@ -716,6 +728,7 @@ export function MeetScreen({
     setLocalStream,
     dispatchParticipants,
     setDisplayNames,
+    setAvatarUrls,
     setPendingUsers,
     setConnectionState,
     setMeetError,
@@ -1410,6 +1423,9 @@ export function MeetScreen({
             isLoading={isLoading}
             displayNameInput={displayNameInput}
             onDisplayNameInputChange={setDisplayNameInput}
+            avatarUrl={joinAvatarUrl}
+            onAvatarUrlChange={setJoinAvatarUrl}
+            uploadApiBaseUrl={apiBaseUrl || undefined}
             isMuted={isMuted}
             isCameraOff={isCameraOff}
             localStream={localStream}
@@ -1444,6 +1460,7 @@ export function MeetScreen({
           isMirrorCamera={isMirrorCamera}
           activeSpeakerId={effectiveActiveSpeakerId}
           resolveDisplayName={resolveDisplayName}
+          resolveAvatarUrl={resolveAvatarUrl}
           onToggleMute={toggleMute}
           onToggleCamera={toggleCamera}
           onToggleScreenShare={handleToggleScreenShare}

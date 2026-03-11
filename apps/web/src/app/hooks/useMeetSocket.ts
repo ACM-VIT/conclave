@@ -1253,6 +1253,15 @@ export function useMeetSocket({
       setWaitingMessage(null);
       setConnectionState("joining");
 
+      const localAvatarUrl = joinOptions.avatarUrl?.trim();
+      if (localAvatarUrl) {
+        setAvatarUrls((prev) => {
+          const next = new Map(prev);
+          next.set(userId, localAvatarUrl);
+          return next;
+        });
+      }
+
       return new Promise<"joined" | "waiting">((resolve, reject) => {
         socket.emit(
           "joinRoom",
@@ -1815,6 +1824,11 @@ export function useMeetSocket({
                     snapshot.set(snapshotUserId, normalizedAvatarUrl);
                   }
                 });
+
+                const localAvatarFallback = joinOptionsRef.current.avatarUrl?.trim();
+                if (localAvatarFallback && !snapshot.has(userId)) {
+                  snapshot.set(userId, localAvatarFallback);
+                }
                 setAvatarUrls(snapshot);
               },
             );
