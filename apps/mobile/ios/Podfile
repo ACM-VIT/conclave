@@ -20,7 +20,7 @@ platform :ios, podfile_properties['ios.deploymentTarget'] || '15.1'
 
 prepare_react_native_project!
 
-target 'mobile' do
+target 'Conclave' do
   use_expo_modules!
 
   if ENV['EXPO_USE_COMMUNITY_AUTOLINKING'] == '1'
@@ -59,12 +59,5 @@ target 'mobile' do
       :mac_catalyst_enabled => false,
       :ccache_enabled => ccache_enabled?(podfile_properties),
     )
-
-    installer.pods_project.targets.each do |target|
-      target.build_configurations.each do |build_config|
-        next unless build_config.name == 'Release'
-        build_config.build_settings['DEBUG_INFORMATION_FORMAT'] = 'dwarf-with-dsym'
-      end
-    end
   end
 end

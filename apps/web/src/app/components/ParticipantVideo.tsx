@@ -4,6 +4,7 @@ import { Ghost, Hand, Info, MicOff } from "lucide-react";
 import { memo, useEffect, useRef, useState } from "react";
 import type { Participant } from "../lib/types";
 import { truncateDisplayName } from "../lib/utils";
+import ParticipantAudio from "./ParticipantAudio";
 
 interface ParticipantVideoProps {
   participant: Participant;
@@ -16,6 +17,10 @@ interface ParticipantVideoProps {
   isSelected?: boolean;
   onAdminClick?: (userId: string) => void;
   videoObjectFit?: "cover" | "contain";
+  onAudioAutoplayBlocked?: () => void;
+  onAudioPlaybackStarted?: () => void;
+  audioPlaybackAttemptToken?: number;
+  disableAudio?: boolean;
 }
 
 function ParticipantVideo({
@@ -29,9 +34,12 @@ function ParticipantVideo({
   isSelected = false,
   onAdminClick,
   videoObjectFit = "cover",
+  onAudioAutoplayBlocked,
+  onAudioPlaybackStarted,
+  audioPlaybackAttemptToken,
+  disableAudio = false,
 }: ParticipantVideoProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const audioRef = useRef<HTMLAudioElement>(null);
   const [isNew, setIsNew] = useState(true);
   const [avatarLoadFailed, setAvatarLoadFailed] = useState(false);
   const labelWidthClass = compact ? "max-w-[65%]" : "max-w-[75%]";
@@ -153,56 +161,6 @@ function ParticipantVideo({
     };
   }, [participant.videoStream, participant.videoProducerId, participant.isCameraOff]);
 
-  useEffect(() => {
-    const audio = audioRef.current;
-    if (!audio) return;
-
-    if (!participant.audioStream) {
-      if (audio.srcObject) {
-        audio.srcObject = null;
-      }
-      return;
-    }
-
-    if (audio.srcObject !== participant.audioStream) {
-      audio.srcObject = participant.audioStream;
-    }
-
-    const playAudio = () => {
-      audio.play().catch((err) => {
-        if (err.name !== "AbortError") {
-          console.error("[Meets] Audio play error:", err);
-        }
-      });
-    };
-
-    playAudio();
-
-    if (audioOutputDeviceId) {
-      const audioElement = audio as HTMLAudioElement & {
-        setSinkId?: (sinkId: string) => Promise<void>;
-      };
-      if (audioElement.setSinkId) {
-        audioElement.setSinkId(audioOutputDeviceId).catch((err) => {
-          console.error("[Meets] Failed to update audio output:", err);
-        });
-      }
-    }
-
-    const audioTrack = participant.audioStream.getAudioTracks()[0];
-    if (!audioTrack) return;
-    audioTrack.addEventListener("unmute", playAudio);
-
-    return () => {
-      audioTrack.removeEventListener("unmute", playAudio);
-    };
-  }, [
-    participant.audioStream,
-    participant.audioProducerId,
-    participant.isMuted,
-    audioOutputDeviceId,
-  ]);
-
   const showPlaceholder = !participant.videoStream || participant.isCameraOff;
   const showAvatarImage =
     showPlaceholder && Boolean(normalizedAvatarUrl) && !avatarLoadFailed;
@@ -215,6 +173,9 @@ function ParticipantVideo({
 
   const speakerHighlight = isActiveSpeaker 
     ? "speaking" 
+    : "";
+  const handRaisedHighlight = participant.isHandRaised
+    ? "border-amber-400/45 shadow-[0_0_22px_rgba(251,191,36,0.24)]"
     : "";
 
   return (
@@ -229,6 +190,8 @@ function ParticipantVideo({
           ? "animate-participant-leave"
           : ""
       } ${speakerHighlight} ${
+        handRaisedHighlight
+      } ${
         isAdmin && onAdminClick ? "cursor-pointer hover:border-[#F95F4A]/40" : ""
       }`}
       style={{ fontFamily: "'PolySans Trial', sans-serif" }}
@@ -288,7 +251,15 @@ function ParticipantVideo({
           </div>
         </div>
       )}
-      <audio ref={audioRef} autoPlay />
+      {!disableAudio && (
+        <ParticipantAudio
+          participant={participant}
+          audioOutputDeviceId={audioOutputDeviceId}
+          onAudioAutoplayBlocked={onAudioAutoplayBlocked}
+          onAudioPlaybackStarted={onAudioPlaybackStarted}
+          audioPlaybackAttemptToken={audioPlaybackAttemptToken}
+        />
+      )}
       {participant.isHandRaised && (
         <div
           className={`absolute top-3 left-3 rounded-full bg-amber-500/20 border border-amber-400/40 text-amber-300 shadow-[0_0_15px_rgba(251,191,36,0.3)] ${

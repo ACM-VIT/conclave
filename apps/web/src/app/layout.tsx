@@ -9,7 +9,7 @@ export const metadata: Metadata = {
     default: "ACM-VIT | c0nclav3",
     template: "%s · c0nclav3",
   },
-  description: "ACM-VIT's in-house video conferencing platform.",
+  description: "A video conferencing platform for meetings, webinars, and collaboration.",
   applicationName: "c0nclav3",
   metadataBase: new URL(siteUrl),
   alternates: {
@@ -22,7 +22,7 @@ export const metadata: Metadata = {
   },
   openGraph: {
     title: "ACM-VIT | c0nclav3",
-    description: "ACM-VIT's in-house video conferencing platform.",
+    description: "A video conferencing platform for meetings, webinars, and collaboration.",
     url: "/",
     siteName: "c0nclav3",
     images: [
@@ -38,7 +38,7 @@ export const metadata: Metadata = {
   twitter: {
     card: "summary_large_image",
     title: "ACM-VIT | c0nclav3",
-    description: "ACM-VIT's in-house video conferencing platform.",
+    description: "A video conferencing platform for meetings, webinars, and collaboration.",
     images: ["/og.png"],
   },
   robots: {

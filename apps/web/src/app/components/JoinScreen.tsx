@@ -14,6 +14,7 @@ import {
   RefreshCw,
   Upload,
   X,
+  Trash2,
 } from "lucide-react";
 import { memo, useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 import { signIn, signOut, useSession } from "@/lib/auth-client";
@@ -223,6 +224,7 @@ function JoinScreen({
 
   const { data: session } = useSession();
   const canSignOut = Boolean(session?.user || user?.id || user?.email);
+  const isSignedInUser = Boolean((session?.user || user) && !user?.id?.startsWith("guest-"));
   const lastAppliedSessionUserIdRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -571,6 +573,11 @@ function JoinScreen({
     setIsSigningOut(false);
   };
 
+  const handleOpenDeleteAccount = () => {
+    if (typeof window === "undefined") return;
+    window.open("/delete-account", "_blank", "noopener,noreferrer");
+  };
+
   const handleGuest = () => {
     const normalizedGuestName = normalizeGuestName(guestName);
     if (!normalizedGuestName) return;
@@ -658,7 +665,7 @@ function JoinScreen({
               className="text-[#FEFCD9]/30 text-sm mb-12 max-w-xs text-center"
               style={{ fontFamily: "'PolySans Trial', sans-serif" }}
             >
-              ACM-VIT's in-house video conferencing platform
+              Video conferencing for meetings, webinars, and collaboration
             </p>
 
             <button
@@ -850,23 +857,35 @@ function JoinScreen({
                     </button>
                   </div>
 
-                  <div className="absolute top-3 left-3 flex items-center gap-2 max-w-[80%]">
+                  <div className="absolute top-3 left-3 right-3 flex items-start justify-between gap-3">
                     <div
-                      className="min-w-0 px-2.5 py-1 bg-black/50 backdrop-blur-sm rounded-full text-[11px] text-[#FEFCD9]/70 truncate"
+                      className="min-w-0 max-w-[70%] px-2.5 py-1 bg-black/50 backdrop-blur-sm rounded-full text-[11px] text-[#FEFCD9]/70 truncate"
                       style={{ fontFamily: "'PolySans Mono', monospace" }}
                     >
                       {userEmail}
                     </div>
-                    {canSignOut && (
-                      <button
-                        onClick={handleSignOut}
-                        disabled={isSigningOut}
-                        className="shrink-0 px-2.5 py-1 bg-black/50 backdrop-blur-sm rounded-full text-[9px] uppercase tracking-widest text-[#FEFCD9]/70 hover:bg-black/70 disabled:opacity-50"
-                        style={{ fontFamily: "'PolySans Mono', monospace" }}
-                      >
-                        {isSigningOut ? "Signing out..." : "Sign out"}
-                      </button>
-                    )}
+                    <div className="flex items-center gap-2">
+                      {isSignedInUser && (
+                        <button
+                          type="button"
+                          onClick={handleOpenDeleteAccount}
+                          className="shrink-0 h-8 w-8 flex items-center justify-center bg-black/50 backdrop-blur-sm rounded-full text-[#F95F4A] hover:bg-black/70"
+                          aria-label="Delete account"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      )}
+                      {canSignOut && (
+                        <button
+                          onClick={handleSignOut}
+                          disabled={isSigningOut}
+                          className="shrink-0 px-2.5 py-1 bg-black/50 backdrop-blur-sm rounded-full text-[9px] uppercase tracking-widest text-[#FEFCD9]/70 hover:bg-black/70 disabled:opacity-50"
+                          style={{ fontFamily: "'PolySans Mono', monospace" }}
+                        >
+                          {isSigningOut ? "Signing out..." : "Sign out"}
+                        </button>
+                      )}
+                    </div>
                   </div>
                 </div>
 
@@ -892,13 +911,17 @@ function JoinScreen({
                     Camera {isCameraOn ? "On" : "Off"}
                   </div>
                   {onTestSpeaker && (
-                    <button
-                      type="button"
-                      onClick={onTestSpeaker}
-                      className="ml-auto flex items-center gap-2 bg-[#1a1a1a] border border-[#FEFCD9]/10 rounded-full px-3 py-1 text-[#FEFCD9]/70 hover:text-[#FEFCD9] hover:border-[#FEFCD9]/30 transition-colors"
-                    >
-                      Test speaker
-                    </button>
+                    <div className="ml-auto flex items-center gap-2">
+                      {onTestSpeaker && (
+                        <button
+                          type="button"
+                          onClick={onTestSpeaker}
+                          className="flex items-center gap-2 bg-[#1a1a1a] border border-[#FEFCD9]/10 rounded-full px-3 py-1 text-[#FEFCD9]/70 hover:text-[#FEFCD9] hover:border-[#FEFCD9]/30 transition-colors"
+                        >
+                          Test speaker
+                        </button>
+                      )}
+                    </div>
                   )}
                 </div>
 

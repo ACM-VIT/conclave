@@ -13,6 +13,30 @@ import { respond } from "./ack.js";
 
 export const registerMediaHandlers = (context: ConnectionContext): void => {
   const { socket, state, io } = context;
+  const requestVideoKeyFrameForProducer = async (
+    roomChannelId: string,
+    producerId: string,
+    ownerUserId: string,
+  ): Promise<void> => {
+    const activeRoom = state.rooms.get(roomChannelId);
+    if (!activeRoom) return;
+
+    for (const [targetClientId, targetClient] of activeRoom.clients.entries()) {
+      if (targetClientId === ownerUserId) continue;
+      const consumer = targetClient.getConsumer(producerId);
+      if (!consumer || consumer.closed || consumer.kind !== "video") {
+        continue;
+      }
+      try {
+        await consumer.requestKeyFrame();
+      } catch (error) {
+        Logger.warn(
+          `Failed to request keyframe for producer ${producerId} on consumer ${consumer.id}:`,
+          error,
+        );
+      }
+    }
+  };
 
   socket.on(
     "produce",
@@ -32,6 +56,15 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
           respond(callback, {
             error: "Watch-only attendees cannot produce media",
           });
+          return;
+        }
+
+        if (
+          data.transportId &&
+          data.transportId.trim() &&
+          currentClient.producerTransport.id !== data.transportId
+        ) {
+          respond(callback, { error: "Stale producer transport" });
           return;
         }
 
@@ -83,7 +116,7 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
 
           if (producerAdvertised) {
             for (const [targetClientId, targetClient] of activeRoom.clients) {
-              if (targetClientId === clientId || targetClient.isWebinarAttendee) {
+              if (targetClient.isWebinarAttendee) {
                 continue;
               }
               targetClient.socket.emit("producerClosed", {
@@ -93,11 +126,49 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
             }
           }
 
-          emitWebinarFeedChanged(io, activeRoom);
+          emitWebinarFeedChanged(io, state, activeRoom);
         };
 
         producer.on("transportclose", notifyProducerClosed);
         producer.observer.on("close", notifyProducerClosed);
+
+        const syncProducerPausedState = async () => {
+          const activeRoom = state.rooms.get(roomChannelId);
+          if (!activeRoom) return;
+          const ownerClient = activeRoom.getClient(clientId);
+          if (!ownerClient) return;
+
+          if (type === "webcam" && kind === "audio") {
+            ownerClient.isMuted = producer.paused;
+            socket.to(activeRoom.channelId).emit("participantMuted", {
+              userId: clientId,
+              muted: producer.paused,
+              roomId: activeRoom.id,
+            });
+          } else if (type === "webcam" && kind === "video") {
+            ownerClient.isCameraOff = producer.paused;
+            socket.to(activeRoom.channelId).emit("participantCameraOff", {
+              userId: clientId,
+              cameraOff: producer.paused,
+              roomId: activeRoom.id,
+            });
+            if (!producer.paused) {
+              await requestVideoKeyFrameForProducer(
+                roomChannelId,
+                producer.id,
+                clientId,
+              );
+            }
+          }
+          emitWebinarFeedChanged(io, state, activeRoom);
+        };
+
+        producer.observer.on("pause", () => {
+          void syncProducerPausedState();
+        });
+        producer.observer.on("resume", () => {
+          void syncProducerPausedState();
+        });
 
         if (isScreenShareVideo) {
           room.setScreenShareProducer(producer.id);
@@ -135,7 +206,7 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
             paused: producer.paused,
           });
         }
-        emitWebinarFeedChanged(io, activeRoom);
+        emitWebinarFeedChanged(io, state, activeRoom);
 
         Logger.info(
           `User ${clientId} started producing ${kind} (${type}): ${producer.id}`,
@@ -168,10 +239,19 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
           return;
         }
 
+        if (
+          data.transportId &&
+          data.transportId.trim() &&
+          context.currentClient.consumerTransport.id !== data.transportId
+        ) {
+          respond(callback, { error: "Stale consumer transport" });
+          return;
+        }
+
         const consumer = await context.currentClient.consumerTransport.consume({
           producerId,
           rtpCapabilities,
-          paused: false,
+          paused: true,
         });
 
         context.currentClient.addConsumer(consumer);
@@ -224,7 +304,7 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
   socket.on(
     "resumeConsumer",
     async (
-      data: { consumerId: string },
+      data: { consumerId: string; requestKeyFrame?: boolean },
       callback: (response: { success: boolean } | { error: string }) => void,
     ) => {
       try {
@@ -235,7 +315,25 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
 
         for (const consumer of context.currentClient.consumers.values()) {
           if (consumer.id === data.consumerId) {
-            await consumer.resume();
+            const wasPaused = consumer.paused;
+            if (wasPaused) {
+              await consumer.resume();
+            }
+
+            if (
+              consumer.kind === "video" &&
+              (data.requestKeyFrame === true || wasPaused)
+            ) {
+              try {
+                await consumer.requestKeyFrame();
+              } catch (error) {
+                Logger.warn(
+                  `Failed to request keyframe for consumer ${consumer.id}:`,
+                  error,
+                );
+              }
+            }
+
             respond(callback, { success: true });
             return;
           }
@@ -286,7 +384,7 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
           muted,
           roomId: context.currentRoom.id,
         });
-        emitWebinarFeedChanged(io, context.currentRoom);
+        emitWebinarFeedChanged(io, state, context.currentRoom);
 
         respond(callback, { success: true });
       } catch (error) {
@@ -333,7 +431,7 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
           cameraOff,
           roomId: context.currentRoom.id,
         });
-        emitWebinarFeedChanged(io, context.currentRoom);
+        emitWebinarFeedChanged(io, state, context.currentRoom);
 
         respond(callback, { success: true });
       } catch (error) {
@@ -390,7 +488,7 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
               producerUserId: context.currentClient.id,
             });
           }
-          emitWebinarFeedChanged(io, context.currentRoom);
+          emitWebinarFeedChanged(io, state, context.currentRoom);
 
           respond(callback, { success: true });
           return;
@@ -398,7 +496,7 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
 
         if (context.currentRoom.screenShareProducerId === data.producerId) {
           context.currentRoom.clearScreenShareProducer(data.producerId);
-          emitWebinarFeedChanged(io, context.currentRoom);
+          emitWebinarFeedChanged(io, state, context.currentRoom);
         }
 
         respond(callback, { success: true });

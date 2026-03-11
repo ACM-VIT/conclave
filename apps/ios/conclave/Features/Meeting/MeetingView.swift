@@ -7,10 +7,69 @@
 
 import SwiftUI
 
+// MARK: - Tile Layout Algorithm
+
+struct TileLayout {
+    let columns: Int
+    let rows: Int
+    let tileWidth: CGFloat
+    let tileHeight: CGFloat
+}
+
+func computeOptimalTileLayout(
+    participantCount: Int,
+    containerWidth: CGFloat,
+    containerHeight: CGFloat,
+    spacing: CGFloat = 12,
+    padding: CGFloat = 16
+) -> TileLayout {
+    let n = max(participantCount, 1)
+    let aspectRatio: CGFloat = 16.0 / 9.0
+    let availW = containerWidth - 2.0 * padding
+    let availH = containerHeight - 2.0 * padding
+
+    guard availW > 0 && availH > 0 else {
+        return TileLayout(columns: 1, rows: 1, tileWidth: 100, tileHeight: 56)
+    }
+
+    var bestCols = 1
+    var bestArea: CGFloat = 0
+
+    for cols in 1...n {
+        let rows = Int(ceil(Double(n) / Double(cols)))
+        let maxTileW = (availW - CGFloat(cols - 1) * spacing) / CGFloat(cols)
+        let maxTileH = (availH - CGFloat(rows - 1) * spacing) / CGFloat(rows)
+
+        guard maxTileW > 0 && maxTileH > 0 else { continue }
+
+        let candidateW = min(maxTileW, maxTileH * aspectRatio)
+        let candidateH = candidateW / aspectRatio
+        let area = candidateW * candidateH
+
+        if area > bestArea {
+            bestArea = area
+            bestCols = cols
+        }
+    }
+
+    let finalRows = Int(ceil(Double(n) / Double(bestCols)))
+    let maxTileW = (availW - CGFloat(bestCols - 1) * spacing) / CGFloat(bestCols)
+    let maxTileH = (availH - CGFloat(finalRows - 1) * spacing) / CGFloat(finalRows)
+    let tileW = min(maxTileW, maxTileH * aspectRatio)
+    let tileH = tileW / aspectRatio
+
+    return TileLayout(columns: bestCols, rows: finalRows, tileWidth: max(tileW, 1), tileHeight: max(tileH, 1))
+}
+
 struct MeetingView: View {
     @ObservedObject var viewModel: MeetingViewModel
     @State private var showParticipantsSheet = false
     @State private var showSettingsSheet = false
+    @Environment(\.horizontalSizeClass) var horizontalSizeClass
+
+    private var isRegularSizeClass: Bool {
+        horizontalSizeClass == .regular
+    }
     
     var body: some View {
         GeometryReader { geometry in
@@ -27,12 +86,14 @@ struct MeetingView: View {
                     )
 
                     if viewModel.hasActiveScreenShare {
-                        PresentationLayoutView(viewModel: viewModel)
+                        PresentationLayoutView(
+                            viewModel: viewModel,
+                            isCompact: !isRegularSizeClass,
+                            containerSize: geometry.size
+                        )
                     } else {
-                        GridLayoutView(viewModel: viewModel, containerSize: geometry.size)
+                        GridLayoutView(viewModel: viewModel, isCompact: !isRegularSizeClass)
                     }
-
-                    Spacer(minLength: 0)
                 }
 
                 VStack {
@@ -143,290 +204,113 @@ struct MeetingHeaderView: View {
 
 struct GridLayoutView: View {
     @ObservedObject var viewModel: MeetingViewModel
-    let containerSize: CGSize
-    
-    private var columns: [GridItem] {
-        let count = viewModel.participantCount
-        let columnCount: Int
-        
-        switch count {
-        case 1: columnCount = 1
-        case 2: columnCount = 2
-        case 3: columnCount = 3
-        case 4: columnCount = 2
-        case 5...6: columnCount = 3
-        case 7...9: columnCount = 3
-        case 10...12: columnCount = 4
-        default: columnCount = 4
-        }
-        
-        return Array(repeating: GridItem(.flexible(), spacing: 12), count: columnCount)
-    }
-    
+    let isCompact: Bool
+
+    private let spacing: CGFloat = 12
+    private let padding: CGFloat = 16
+    private let controlsOverlap: CGFloat = 80
+
     var body: some View {
+        GeometryReader { geo in
+            let count = viewModel.participantCount
+            let visibleHeight = geo.size.height - controlsOverlap
+            let layout = computeOptimalTileLayout(
+                participantCount: count,
+                containerWidth: geo.size.width,
+                containerHeight: visibleHeight,
+                spacing: spacing,
+                padding: padding
+            )
+
+            let scrollThreshold = isCompact ? 7 : 10
+
+            if count <= scrollThreshold {
+                nonScrollingGrid(layout: layout, count: count)
+                    .frame(width: geo.size.width, height: geo.size.height)
+            } else {
+                scrollingGrid(containerWidth: geo.size.width)
+            }
+        }
+    }
+
+    @ViewBuilder
+    func nonScrollingGrid(layout: TileLayout, count: Int) -> some View {
+        VStack(spacing: spacing) {
+            ForEach(0..<layout.rows, id: \.self) { row in
+                HStack(spacing: spacing) {
+                    let startIndex = row * layout.columns
+                    let endIndex = min(startIndex + layout.columns, count)
+                    let tilesInRow = endIndex - startIndex
+
+                    ForEach(0..<tilesInRow, id: \.self) { col in
+                        let index = startIndex + col
+                        tileAt(index: index)
+                            .frame(width: layout.tileWidth, height: layout.tileHeight)
+                    }
+                }
+            }
+        }
+        .padding(padding)
+    }
+
+    @ViewBuilder
+    func scrollingGrid(containerWidth: CGFloat) -> some View {
+        let colCount = isCompact ? 2 : 3
+        let tileW = (containerWidth - 2 * padding - CGFloat(colCount - 1) * spacing) / CGFloat(colCount)
+        let tileH = tileW * 9.0 / 16.0
+        let columns = Array(repeating: GridItem(.flexible(), spacing: spacing), count: colCount)
+
         ScrollView {
-            LazyVGrid(columns: columns, spacing: 12) {
-                VideoGridItem(
-                    displayName: viewModel.displayName,
-                    isMuted: viewModel.isMuted,
-                    isCameraOff: viewModel.isCameraOff,
-                    isHandRaised: viewModel.isHandRaised,
-                    isGhost: viewModel.isGhostMode,
-                    isSpeaking: viewModel.activeSpeakerId == viewModel.userId,
-                    isLocal: true,
-                    captureSession: viewModel.webRTCClient.getCaptureSession(),
-                    localVideoTrack: viewModel.webRTCClient.getLocalVideoTrack()
-                )
-                
+            LazyVGrid(columns: columns, spacing: spacing) {
+                localTile()
+                    .frame(height: tileH)
+
                 ForEach(viewModel.sortedParticipants) { participant in
-                    VideoGridItem(
-                        displayName: viewModel.displayName(for: participant.id),
-                        isMuted: participant.isMuted,
-                        isCameraOff: participant.isCameraOff,
-                        isHandRaised: participant.isHandRaised,
-                        isGhost: participant.isGhost,
-                        isSpeaking: viewModel.activeSpeakerId == participant.id,
-                        isLocal: false,
-                        trackWrapper: viewModel.webRTCClient.remoteVideoTracks[participant.id]
-                    )
-                    .opacity(participant.isLeaving ? 0.5 : 1)
-                    .animation(.easeOut(duration: 0.2), value: participant.isLeaving)
+                    remoteTile(participant: participant)
+                        .frame(height: tileH)
                 }
             }
-            .padding(16)
+            .padding(padding)
         }
     }
-}
 
-// MARK: - Legacy Local Video Tile
-
-struct LocalVideoTileView: View {
-    let displayName: String
-    let isMuted: Bool
-    let isCameraOff: Bool
-    let isHandRaised: Bool
-    let isGhost: Bool
-    let isSpeaking: Bool
-    
-    var body: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 16)
-                .fill(ACMGradients.cardBackground)
-            
-            if isCameraOff {
-                VStack {
-                    Circle()
-                        .fill(ACMGradients.avatarBackground)
-                        .frame(width: 64, height: 64)
-                        .overlay(
-                            Circle().strokeBorder(ACMColors.creamSubtle, lineWidth: 1)
-                        )
-                        .overlay {
-                            Text(String(displayName.prefix(1)).uppercased())
-                                .font(.system(size: 24, weight: .bold))
-                                .foregroundStyle(ACMColors.cream)
-                        }
-                }
-            } else {
-                // TODO: Actual local video preview
-                Color.black
-            }
-            
-            if isGhost {
-                ZStack {
-                    Color.black.opacity(0.4)
-                    
-                    VStack(spacing: 8) {
-                        Image(systemName: "theatermasks.fill")
-                            .font(.system(size: 48))
-                            .foregroundStyle(ACMColors.primaryPink)
-                            .shadow(color: ACMColors.primaryPink.opacity(0.5), radius: 16)
-                        
-                        Text("GHOST")
-                            .font(ACMFont.mono(10))
-                            .tracking(2)
-                            .foregroundStyle(ACMColors.primaryPink)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 4)
-                            .background(.black.opacity(0.6))
-                            .overlay(
-                                Capsule().strokeBorder(ACMColors.primaryPink.opacity(0.3), lineWidth: 1)
-                            )
-                            .clipShape(Capsule())
-                    }
-                }
-            }
-            
-            if isHandRaised {
-                VStack {
-                    HStack {
-                        Image(systemName: "hand.raised.fill")
-                            .font(.system(size: 14))
-                            .foregroundStyle(Color.orange.opacity(0.9))
-                            .padding(8)
-                            .background(Color.orange.opacity(0.2))
-                            .overlay(
-                                Circle().strokeBorder(Color.orange.opacity(0.4), lineWidth: 1)
-                            )
-                            .clipShape(Circle())
-                            .shadow(color: Color.orange.opacity(0.3), radius: 8)
-                        
-                        Spacer()
-                    }
-                    Spacer()
-                }
-                .padding(12)
-            }
-            
-            VStack {
-                Spacer()
-                
-                HStack {
-                    HStack(spacing: 6) {
-                        Text(displayName.uppercased())
-                            .font(ACMFont.mono(11))
-                            .foregroundStyle(ACMColors.cream)
-                            .tracking(1)
-                        
-                        Text("YOU")
-                            .font(ACMFont.mono(9))
-                            .foregroundStyle(ACMColors.primaryOrange.opacity(0.6))
-                            .tracking(2)
-                        
-                        if isMuted {
-                            Image(systemName: "mic.slash.fill")
-                                .font(.system(size: 10))
-                                .foregroundStyle(ACMColors.primaryOrange)
-                        }
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(.black.opacity(0.7))
-                    .background(.ultraThinMaterial.opacity(0.3))
-                    .overlay(
-                        Capsule().strokeBorder(ACMColors.creamFaint, lineWidth: 1)
-                    )
-                    .clipShape(Capsule())
-                    
-                    Spacer()
-                }
-                .padding(12)
+    @ViewBuilder
+    func tileAt(index: Int) -> some View {
+        if index == 0 {
+            localTile()
+        } else {
+            let participants = viewModel.sortedParticipants
+            if index - 1 < participants.count {
+                remoteTile(participant: participants[index - 1])
             }
         }
-        .aspectRatio(16/9, contentMode: .fit)
-        .acmVideoTile(isSpeaking: isSpeaking)
     }
-}
 
-// MARK: - Remote Video Tile
+    func localTile() -> some View {
+        VideoGridItem(
+            displayName: viewModel.displayName,
+            isMuted: viewModel.isMuted,
+            isCameraOff: viewModel.isCameraOff,
+            isHandRaised: viewModel.isHandRaised,
+            isGhost: viewModel.isGhostMode,
+            isSpeaking: viewModel.activeSpeakerId == viewModel.userId,
+            isLocal: true,
+            captureSession: viewModel.webRTCClient.getCaptureSession(),
+            localVideoTrack: viewModel.webRTCClient.getLocalVideoTrack()
+        )
+    }
 
-struct RemoteVideoTileView: View {
-    let participant: Participant
-    let displayName: String
-    let isSpeaking: Bool
-    
-    var body: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 16)
-                .fill(ACMGradients.cardBackground)
-            
-            if participant.isCameraOff {
-                VStack {
-                    Circle()
-                        .fill(ACMGradients.avatarBackground)
-                        .frame(width: 64, height: 64)
-                        .overlay(
-                            Circle().strokeBorder(ACMColors.creamSubtle, lineWidth: 1)
-                        )
-                        .overlay {
-                            Text(String(displayName.prefix(1)).uppercased())
-                                .font(.system(size: 24, weight: .bold))
-                                .foregroundStyle(ACMColors.cream)
-                        }
-                }
-            } else {
-                // TODO: Actual remote video
-                Color.black
-            }
-            
-            if participant.isGhost {
-                ZStack {
-                    Color.black.opacity(0.4)
-                    
-                    VStack(spacing: 8) {
-                        Image(systemName: "theatermasks.fill")
-                            .font(.system(size: 48))
-                            .foregroundStyle(ACMColors.primaryPink)
-                            .shadow(color: ACMColors.primaryPink.opacity(0.5), radius: 16)
-                        
-                        Text("GHOST")
-                            .font(ACMFont.mono(10))
-                            .tracking(2)
-                            .foregroundStyle(ACMColors.primaryPink)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 4)
-                            .background(.black.opacity(0.6))
-                            .overlay(
-                                Capsule().strokeBorder(ACMColors.primaryPink.opacity(0.3), lineWidth: 1)
-                            )
-                            .clipShape(Capsule())
-                    }
-                }
-            }
-            
-            if participant.isHandRaised {
-                VStack {
-                    HStack {
-                        Image(systemName: "hand.raised.fill")
-                            .font(.system(size: 14))
-                            .foregroundStyle(Color.orange.opacity(0.9))
-                            .padding(8)
-                            .background(Color.orange.opacity(0.2))
-                            .overlay(
-                                Circle().strokeBorder(Color.orange.opacity(0.4), lineWidth: 1)
-                            )
-                            .clipShape(Circle())
-                            .shadow(color: Color.orange.opacity(0.3), radius: 8)
-                        
-                        Spacer()
-                    }
-                    Spacer()
-                }
-                .padding(12)
-            }
-            
-            VStack {
-                Spacer()
-                
-                HStack {
-                    HStack(spacing: 6) {
-                        Text(displayName.uppercased())
-                            .font(ACMFont.mono(11))
-                            .foregroundStyle(ACMColors.cream)
-                            .tracking(1)
-                        
-                        if participant.isMuted {
-                            Image(systemName: "mic.slash.fill")
-                                .font(.system(size: 10))
-                                .foregroundStyle(ACMColors.primaryOrange)
-                        }
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(.black.opacity(0.7))
-                    .background(.ultraThinMaterial.opacity(0.3))
-                    .overlay(
-                        Capsule().strokeBorder(ACMColors.creamFaint, lineWidth: 1)
-                    )
-                    .clipShape(Capsule())
-                    
-                    Spacer()
-                }
-                .padding(12)
-            }
-        }
-        .aspectRatio(16/9, contentMode: .fit)
-        .acmVideoTile(isSpeaking: isSpeaking)
+    func remoteTile(participant: Participant) -> some View {
+        VideoGridItem(
+            displayName: viewModel.displayName(for: participant.id),
+            isMuted: participant.isMuted,
+            isCameraOff: participant.isCameraOff,
+            isHandRaised: participant.isHandRaised,
+            isGhost: participant.isGhost,
+            isSpeaking: viewModel.activeSpeakerId == participant.id,
+            isLocal: false,
+            trackWrapper: viewModel.webRTCClient.remoteVideoTracks[participant.id]
+        )
         .opacity(participant.isLeaving ? 0.5 : 1)
         .animation(.easeOut(duration: 0.2), value: participant.isLeaving)
     }
@@ -436,68 +320,127 @@ struct RemoteVideoTileView: View {
 
 struct PresentationLayoutView: View {
     @ObservedObject var viewModel: MeetingViewModel
-    
+    let isCompact: Bool
+    let containerSize: CGSize
+
     var body: some View {
-        HStack(spacing: 8) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 16)
-                    .fill(Color.black)
-                
-                if let screenShareUserId = viewModel.activeScreenShareUserId {
-                    if let trackWrapper = viewModel.webRTCClient.remoteVideoTracks["\(screenShareUserId)-screen"] {
-                        RemoteVideoView(trackWrapper: trackWrapper)
-                    } else {
-                        VStack(spacing: 8) {
-                            Image(systemName: "rectangle.on.rectangle")
-                                .font(.system(size: 48))
-                                .foregroundStyle(ACMColors.cream.opacity(0.3))
-                            
-                            Text("\(viewModel.displayName(for: screenShareUserId)) is presenting")
-                                .font(ACMFont.trial(14))
-                                .foregroundStyle(ACMColors.cream.opacity(0.5))
+        if isCompact {
+            compactLayout
+        } else {
+            regularLayout
+        }
+    }
+
+    // MARK: Phone portrait: screenshare top, horizontal filmstrip below
+
+    var compactLayout: some View {
+        GeometryReader { geo in
+            VStack(spacing: 8) {
+                screenshareView
+                    .frame(maxWidth: .infinity)
+                    .frame(height: geo.size.height * 0.62)
+                    .clipShape(RoundedRectangle(cornerRadius: 16))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 16)
+                            .strokeBorder(ACMColors.creamFaint, lineWidth: 1)
+                    )
+
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        localThumbnail
+                        ForEach(viewModel.sortedParticipants) { participant in
+                            remoteThumbnail(participant: participant)
                         }
                     }
+                    .padding(.horizontal, 8)
                 }
+                .frame(height: 72)
             }
-            .overlay(
-                RoundedRectangle(cornerRadius: 16)
-                    .strokeBorder(ACMColors.creamFaint, lineWidth: 1)
-            )
-            
+            .padding(8)
+        }
+    }
+
+    // MARK: Tablet / landscape: side-by-side
+
+    var regularLayout: some View {
+        HStack(spacing: 8) {
+            screenshareView
+                .clipShape(RoundedRectangle(cornerRadius: 16))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16)
+                        .strokeBorder(ACMColors.creamFaint, lineWidth: 1)
+                )
+
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(spacing: 8) {
-                    VideoGridItem(
-                        displayName: viewModel.displayName,
-                        isMuted: viewModel.isMuted,
-                        isCameraOff: viewModel.isCameraOff,
-                        isHandRaised: viewModel.isHandRaised,
-                        isGhost: viewModel.isGhostMode,
-                        isSpeaking: false,
-                        isLocal: true,
-                        captureSession: viewModel.webRTCClient.getCaptureSession()
-                    )
-                    .frame(width: 160, height: 90)
-                    
+                    localThumbnail
                     ForEach(viewModel.sortedParticipants) { participant in
-                        VideoGridItem(
-                            displayName: viewModel.displayName(for: participant.id),
-                            isMuted: participant.isMuted,
-                            isCameraOff: participant.isCameraOff,
-                            isHandRaised: participant.isHandRaised,
-                            isGhost: participant.isGhost,
-                            isSpeaking: viewModel.activeSpeakerId == participant.id,
-                            isLocal: false,
-                            trackWrapper: viewModel.webRTCClient.remoteVideoTracks[participant.id]
-                        )
-                        .frame(width: 160, height: 90)
+                        remoteThumbnail(participant: participant)
                     }
                 }
                 .padding(8)
             }
-            .frame(width: 176)
+            .frame(width: 140)
             .background(Color.black.opacity(0.5))
         }
         .padding(8)
+    }
+
+    // MARK: Shared components
+
+    @ViewBuilder
+    var screenshareView: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 16)
+                .fill(Color.black)
+
+            if let screenShareUserId = viewModel.activeScreenShareUserId {
+                if let trackWrapper = viewModel.webRTCClient.remoteVideoTracks["\(screenShareUserId)-screen"] {
+                    RemoteVideoView(trackWrapper: trackWrapper)
+                } else {
+                    VStack(spacing: 8) {
+                        Image(systemName: "rectangle.on.rectangle")
+                            .font(.system(size: 48))
+                            .foregroundStyle(ACMColors.cream.opacity(0.3))
+
+                        Text("\(viewModel.displayName(for: screenShareUserId)) is presenting")
+                            .font(ACMFont.trial(14))
+                            .foregroundStyle(ACMColors.cream.opacity(0.5))
+                    }
+                }
+            }
+        }
+    }
+
+    private var thumbnailWidth: CGFloat { isCompact ? 120 : 124 }
+    private var thumbnailHeight: CGFloat { isCompact ? 68 : 70 }
+
+    var localThumbnail: some View {
+        VideoGridItem(
+            displayName: viewModel.displayName,
+            isMuted: viewModel.isMuted,
+            isCameraOff: viewModel.isCameraOff,
+            isHandRaised: viewModel.isHandRaised,
+            isGhost: viewModel.isGhostMode,
+            isSpeaking: false,
+            isLocal: true,
+            captureSession: viewModel.webRTCClient.getCaptureSession()
+        )
+        .frame(width: thumbnailWidth, height: thumbnailHeight)
+    }
+
+    func remoteThumbnail(participant: Participant) -> some View {
+        VideoGridItem(
+            displayName: viewModel.displayName(for: participant.id),
+            isMuted: participant.isMuted,
+            isCameraOff: participant.isCameraOff,
+            isHandRaised: participant.isHandRaised,
+            isGhost: participant.isGhost,
+            isSpeaking: viewModel.activeSpeakerId == participant.id,
+            isLocal: false,
+            trackWrapper: viewModel.webRTCClient.remoteVideoTracks[participant.id]
+        )
+        .frame(width: thumbnailWidth, height: thumbnailHeight)
     }
 }
 

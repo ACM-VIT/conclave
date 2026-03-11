@@ -6,6 +6,7 @@ interface ParticipantLike {
   audioStream: MediaStream | null;
   isCameraOff: boolean;
   isMuted: boolean;
+  isHandRaised?: boolean;
 }
 
 interface UseSmartParticipantOrderOptions {
@@ -41,6 +42,7 @@ export function useSmartParticipantOrder<T extends ParticipantLike>(
     [participants]
   );
   const [featuredSpeakerId, setFeaturedSpeakerId] = useState<string | null>(null);
+  const [raisedOrder, setRaisedOrder] = useState<string[]>([]);
   const participantsRef = useRef(participants);
   const featuredSpeakerIdRef = useRef<string | null>(null);
   const candidateIdRef = useRef<string | null>(null);
@@ -48,6 +50,7 @@ export function useSmartParticipantOrder<T extends ParticipantLike>(
   const lastSwitchAtRef = useRef(0);
   const promoteTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const previousOrderRef = useRef<Map<string, number>>(new Map());
+  const previousRaisedMapRef = useRef<Map<string, boolean>>(new Map());
 
   const clearPromoteTimeout = () => {
     if (promoteTimeoutRef.current) {
@@ -81,6 +84,38 @@ export function useSmartParticipantOrder<T extends ParticipantLike>(
       setFeaturedSpeakerId(null);
     }
   }, [participantIdsKey]);
+
+  useEffect(() => {
+    setRaisedOrder((previousOrder) => {
+      const currentIds = new Set(participants.map((participant) => participant.userId));
+      let nextOrder = previousOrder.filter((userId) => currentIds.has(userId));
+      const nextRaisedMap = new Map<string, boolean>();
+
+      for (const participant of participants) {
+        const userId = participant.userId;
+        const isRaised = Boolean(participant.isHandRaised);
+        const wasRaised = previousRaisedMapRef.current.get(userId) ?? false;
+        nextRaisedMap.set(userId, isRaised);
+
+        if (isRaised) {
+          if (!wasRaised && !nextOrder.includes(userId)) {
+            nextOrder = [...nextOrder, userId];
+          }
+          continue;
+        }
+
+        if (nextOrder.includes(userId)) {
+          nextOrder = nextOrder.filter((raisedUserId) => raisedUserId !== userId);
+        }
+      }
+
+      previousRaisedMapRef.current = nextRaisedMap;
+      const isUnchanged =
+        previousOrder.length === nextOrder.length &&
+        previousOrder.every((userId, index) => userId === nextOrder[index]);
+      return isUnchanged ? previousOrder : nextOrder;
+    });
+  }, [participants]);
 
   useEffect(() => {
     clearPromoteTimeout();
@@ -139,8 +174,27 @@ export function useSmartParticipantOrder<T extends ParticipantLike>(
       participants.map((participant, index) => [participant.userId, index] as const)
     );
     const previousOrder = previousOrderRef.current;
+    const raisedOrderIndex = new Map(
+      raisedOrder.map((userId, index) => [userId, index] as const)
+    );
 
     return [...participants].sort((left, right) => {
+      const leftRaised = Boolean(left.isHandRaised);
+      const rightRaised = Boolean(right.isHandRaised);
+      if (leftRaised !== rightRaised) {
+        return leftRaised ? -1 : 1;
+      }
+
+      if (leftRaised && rightRaised) {
+        const leftRaisedIndex =
+          raisedOrderIndex.get(left.userId) ?? Number.MAX_SAFE_INTEGER;
+        const rightRaisedIndex =
+          raisedOrderIndex.get(right.userId) ?? Number.MAX_SAFE_INTEGER;
+        if (leftRaisedIndex !== rightRaisedIndex) {
+          return leftRaisedIndex - rightRaisedIndex;
+        }
+      }
+
       const leftIsFeatured = left.userId === featuredSpeakerId ? 1 : 0;
       const rightIsFeatured = right.userId === featuredSpeakerId ? 1 : 0;
       if (leftIsFeatured !== rightIsFeatured) {
@@ -171,7 +225,7 @@ export function useSmartParticipantOrder<T extends ParticipantLike>(
 
       return left.userId.localeCompare(right.userId);
     });
-  }, [participants, featuredSpeakerId]);
+  }, [participants, featuredSpeakerId, raisedOrder]);
 
   useEffect(() => {
     previousOrderRef.current = new Map(

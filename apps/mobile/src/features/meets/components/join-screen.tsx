@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as AppleAuthentication from "expo-apple-authentication";
 import * as Google from "expo-auth-session/providers/google";
+import * as Crypto from "expo-crypto";
 import * as Haptics from "expo-haptics";
 import * as ImagePicker from "expo-image-picker";
 import * as WebBrowser from "expo-web-browser";
@@ -8,6 +9,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { RTCView } from "react-native-webrtc";
 import {
   ActivityIndicator,
+  Alert,
   KeyboardAvoidingView,
   PanResponder,
   Platform,
@@ -24,16 +26,13 @@ import {
   MicOff,
   Plus,
   Upload,
+  Trash2,
   Video,
   VideoOff,
   X,
 } from "lucide-react-native";
 import type { MeetError } from "../types";
-import {
-  generateRoomCode,
-  sanitizeRoomCodeInput,
-  ROOM_CODE_MAX_LENGTH,
-} from "../utils";
+import { generateRoomCode } from "../utils";
 import { useDeviceLayout } from "../hooks/use-device-layout";
 import { ErrorSheet } from "./error-sheet";
 import { GlassPill } from "./glass-pill";
@@ -102,6 +101,9 @@ const authBaseUrl =
   process.env.EXPO_PUBLIC_SFU_BASE_URL ||
   "";
 
+const resolveAppBaseUrl = (value: string) =>
+  value.trim().replace(/\/$/, "").replace(/\/api(?:\/.*)?$/, "");
+
 const googleClientConfig = {
   iosClientId: process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID,
   androidClientId: process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID,
@@ -112,8 +114,57 @@ const googleClientConfig = {
 
 WebBrowser.maybeCompleteAuthSession();
 
+type SocialUser = {
+  id?: string;
+  email?: string | null;
+  name?: string | null;
+};
+
+type SocialSignInResponse = {
+  user?: SocialUser;
+  error?: string;
+  message?: string;
+};
+
+const summarizeAuthMessage = (value: string) =>
+  value.replace(/\s+/g, " ").trim().slice(0, 180);
+
+const readAuthErrorMessage = (error: unknown, fallback: string) => {
+  if (error instanceof Error) {
+    const message = error.message.trim();
+    if (message) return message;
+  }
+  return fallback;
+};
+
+const isCanceledAppleSignInError = (error: unknown) =>
+  typeof error === "object" &&
+  error !== null &&
+  "code" in error &&
+  (error as { code?: unknown }).code === "ERR_REQUEST_CANCELED";
+
+const formatAppleName = (fullName: AppleAuthentication.AppleAuthenticationFullName | null) => {
+  if (!fullName) return undefined;
+  try {
+    const formatted = AppleAuthentication.formatFullName(fullName);
+    return formatted.trim() || undefined;
+  } catch {
+    const parts = [fullName.givenName, fullName.middleName, fullName.familyName]
+      .filter((value): value is string => Boolean(value))
+      .map((value) => value.trim())
+      .filter(Boolean);
+    return parts.join(" ") || undefined;
+  }
+};
+
+const createNonce = async () => {
+  const bytes = await Crypto.getRandomBytesAsync(16);
+  return Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("");
+};
+
 interface JoinScreenProps {
   roomId: string;
+  prefillRoomId?: string;
   onRoomIdChange: (value: string) => void;
   onJoinRoom: (roomId: string, options?: { isHost?: boolean }) => void;
   onIsAdminChange?: (isAdmin: boolean) => void;
@@ -145,6 +196,7 @@ interface JoinScreenProps {
 
 export function JoinScreen({
   roomId,
+  prefillRoomId,
   onRoomIdChange,
   onJoinRoom,
   onIsAdminChange,
@@ -176,12 +228,17 @@ export function JoinScreen({
   const isSignedInUser = Boolean(user && !user.id?.startsWith("guest-"));
   const [phase, setPhase] = useState<Phase>(() => {
     if (forceJoinOnly) return "join";
-    return isSignedInUser ? "join" : "welcome";
+    if (isSignedInUser) return "join";
+    if (prefillRoomId?.trim()) return "auth";
+    return "welcome";
   });
   const [guestName, setGuestName] = useState("");
-  const [activeTab, setActiveTab] = useState<"new" | "join">(
-    forceJoinOnly ? "join" : "new"
-  );
+  const [activeTab, setActiveTab] = useState<"new" | "join">(() => {
+    if (forceJoinOnly) return "join";
+    if (prefillRoomId?.trim()) return "join";
+    return "new";
+  });
+  const lastPrefillRef = useRef("");
   const [authProvider, setAuthProvider] = useState<"google" | "apple" | null>(
     null
   );
@@ -241,6 +298,10 @@ export function JoinScreen({
   const haptic = useCallback(() => {
     Haptics.selectionAsync().catch(() => { });
   }, []);
+  const deleteAccountUrl = useMemo(() => {
+    const baseUrl = resolveAppBaseUrl(authBaseUrl);
+    return baseUrl ? `${baseUrl}/delete-account` : "";
+  }, []);
 
   const shouldShowPermissionPrompt =
     phase === "join" &&
@@ -253,12 +314,26 @@ export function JoinScreen({
 
   const handleRoomChange = useCallback(
     (value: string) => {
-      onRoomIdChange(
-        sanitizeRoomCodeInput(value).slice(0, ROOM_CODE_MAX_LENGTH)
-      );
+      onRoomIdChange(value);
     },
     [onRoomIdChange]
   );
+
+  useEffect(() => {
+    const prefillValue = prefillRoomId?.trim() ?? "";
+    if (!prefillValue || prefillValue === lastPrefillRef.current) return;
+    lastPrefillRef.current = prefillValue;
+    setActiveTab("join");
+    if (forceJoinOnly) {
+      setPhase("join");
+      return;
+    }
+    if (isSignedInUser) {
+      setPhase("join");
+    } else if (phase === "welcome") {
+      setPhase("auth");
+    }
+  }, [forceJoinOnly, isSignedInUser, phase, prefillRoomId]);
 
   const handleContinueAsGuest = useCallback(() => {
     if (!guestName.trim()) return;
@@ -279,7 +354,15 @@ export function JoinScreen({
   }, []);
 
   const completeSocialSignIn = useCallback(
-    async (provider: "google" | "apple", idToken?: string, nonce?: string, accessToken?: string) => {
+    async (
+      provider: "google" | "apple",
+      idToken?: string,
+      options?: {
+        nonce?: string;
+        accessToken?: string;
+        fallbackName?: string;
+      }
+    ) => {
       const trimmedBase = authBaseUrl.replace(/\/$/, "");
       if (!trimmedBase) {
         throw new Error("Missing EXPO_PUBLIC_APP_URL or EXPO_PUBLIC_API_URL");
@@ -298,34 +381,58 @@ export function JoinScreen({
           callbackURL: trimmedBase,
           idToken: {
             token: idToken,
-            nonce,
-            accessToken,
+            nonce: options?.nonce,
+            accessToken: options?.accessToken,
           },
         }),
       });
+      const contentType = response.headers.get("content-type") || "";
+      let responseText = "";
+      let data: SocialSignInResponse | null = null;
+      if (contentType.includes("application/json")) {
+        data = (await response.json().catch(() => null)) as SocialSignInResponse | null;
+      } else {
+        responseText = await response.text().catch(() => "");
+      }
       if (!response.ok) {
-        const text = await response.text().catch(() => "");
-        const details = text
-          ? `Sign in request failed: ${text}`
+        const details =
+          data?.error ||
+          data?.message ||
+          (responseText ? summarizeAuthMessage(responseText) : "");
+        const errorMessage = details
+          ? `Sign in request failed: ${details}`
           : `Sign in request failed (${response.status})`;
-        throw new Error(details);
+        throw new Error(errorMessage);
       }
-      const data = (await response.json().catch(() => null)) as
-        | {
-            user?: { id?: string; email?: string | null; name?: string | null };
-          }
-        | null;
-      if (data?.user) {
-        onUserChange?.(data.user);
-        if (!displayNameInput.trim()) {
-          const resolvedName = data.user.name || data.user.email || "User";
-          onDisplayNameInputChange(resolvedName);
-        }
-        setPhase("join");
+      if (!data?.user) {
+        const details =
+          data?.error ||
+          data?.message ||
+          (responseText ? summarizeAuthMessage(responseText) : "");
+        const errorMessage =
+          details || "Sign in completed, but the auth server did not return a user session.";
+        throw new Error(errorMessage);
       }
+      onUserChange?.(data.user);
+      if (!displayNameInput.trim()) {
+        const resolvedName =
+          data.user.name || options?.fallbackName || data.user.email || "User";
+        onDisplayNameInputChange(resolvedName);
+      }
+      setPhase("join");
+      return data.user;
     },
     [displayNameInput, onDisplayNameInputChange, onUserChange]
   );
+
+  const handleAuthFailure = useCallback((providerLabel: "Apple" | "Google", error: unknown) => {
+    if (providerLabel === "Apple" && isCanceledAppleSignInError(error)) {
+      return;
+    }
+    const message = readAuthErrorMessage(error, `${providerLabel} sign-in failed.`);
+    console.log(`[JoinScreen] ${providerLabel} sign-in error`, error);
+    Alert.alert(`${providerLabel} sign-in failed`, message);
+  }, []);
 
   const handleGoogleSignIn = useCallback(async () => {
     if (isAuthLoading) return;
@@ -334,32 +441,34 @@ export function JoinScreen({
     try {
       await googlePromptAsync();
     } catch (error) {
-      console.log("[JoinScreen] Google sign-in error", error);
+      handleAuthFailure("Google", error);
       setAuthProvider(null);
     }
-  }, [googlePromptAsync, haptic, isAuthLoading]);
+  }, [googlePromptAsync, handleAuthFailure, haptic, isAuthLoading]);
 
   const handleAppleSignIn = useCallback(async () => {
     if (isAuthLoading) return;
     haptic();
     setAuthProvider("apple");
     try {
+      const nonce = await createNonce();
       const credential = await AppleAuthentication.signInAsync({
         requestedScopes: [
           AppleAuthentication.AppleAuthenticationScope.FULL_NAME,
           AppleAuthentication.AppleAuthenticationScope.EMAIL,
         ],
+        nonce,
       });
-      await completeSocialSignIn(
-        "apple",
-        credential.identityToken ?? undefined
-      );
+      await completeSocialSignIn("apple", credential.identityToken, {
+        nonce,
+        fallbackName: formatAppleName(credential.fullName),
+      });
     } catch (error) {
-      console.log("[JoinScreen] Apple sign-in error", error);
+      handleAuthFailure("Apple", error);
     } finally {
       setAuthProvider(null);
     }
-  }, [completeSocialSignIn, haptic, isAuthLoading]);
+  }, [completeSocialSignIn, handleAuthFailure, haptic, isAuthLoading]);
 
   const handleCreateRoom = useCallback(() => {
     haptic();
@@ -375,6 +484,24 @@ export function JoinScreen({
     onIsAdminChange?.(false);
     onJoinRoom(roomId, { isHost: false });
   }, [canJoin, isLoading, haptic, onIsAdminChange, onJoinRoom, roomId]);
+
+  const handleOpenDeleteAccount = useCallback(async () => {
+    haptic();
+    if (!deleteAccountUrl) {
+      Alert.alert(
+        "Delete account unavailable",
+        "Set EXPO_PUBLIC_APP_URL so the app can open the direct deletion page."
+      );
+      return;
+    }
+    try {
+      await WebBrowser.openBrowserAsync(deleteAccountUrl);
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Unable to open the deletion page.";
+      Alert.alert("Unable to open deletion page", message);
+    }
+  }, [deleteAccountUrl, haptic]);
 
   const userInitial = displayNameInput?.[0]?.toUpperCase() || "?";
   const effectiveAvatarUri = avatarPreviewUri || avatarUrl || "";
@@ -529,14 +656,14 @@ export function JoinScreen({
       googleResponse.authentication?.accessToken ||
       (googleResponse.params as { access_token?: string } | undefined)
         ?.access_token;
-    completeSocialSignIn("google", idToken, undefined, accessToken)
+    completeSocialSignIn("google", idToken, { accessToken })
       .catch((error) => {
-        console.log("[JoinScreen] Google sign-in error", error);
+        handleAuthFailure("Google", error);
       })
       .finally(() => {
         setAuthProvider(null);
       });
-  }, [authProvider, completeSocialSignIn, googleResponse]);
+  }, [authProvider, completeSocialSignIn, googleResponse, handleAuthFailure]);
 
   useEffect(() => {
     if (forceJoinOnly) return;
@@ -580,7 +707,7 @@ export function JoinScreen({
                 </View>
 
                 <Text style={[styles.tagline, { color: COLORS.creamLighter }]}>
-                  ACM-VIT's in-house video conferencing platform
+                  Video conferencing for meetings, webinars, and collaboration
                 </Text>
 
                 <Pressable
@@ -858,6 +985,22 @@ export function JoinScreen({
                       </Text>
                     </Pressable>
                   )}
+                  {isSignedInUser ? (
+                    <Pressable
+                      onPress={handleOpenDeleteAccount}
+                      disabled={!deleteAccountUrl}
+                      hitSlop={8}
+                      style={[
+                        styles.deleteAccountIconButton,
+                        !deleteAccountUrl && styles.deleteAccountIconButtonDisabled,
+                      ]}
+                    >
+                      <Trash2
+                        size={14}
+                        color={deleteAccountUrl ? COLORS.primaryOrange : COLORS.creamLight}
+                      />
+                    </Pressable>
+                  ) : null}
 
                   <View style={styles.mediaControlsContainer}>
                     <View style={styles.mediaControlsPill}>
@@ -1163,6 +1306,22 @@ export function JoinScreen({
                       </Text>
                     </Pressable>
                   )}
+                  {isSignedInUser ? (
+                    <Pressable
+                      onPress={handleOpenDeleteAccount}
+                      disabled={!deleteAccountUrl}
+                      hitSlop={8}
+                      style={[
+                        styles.deleteAccountIconButton,
+                        !deleteAccountUrl && styles.deleteAccountIconButtonDisabled,
+                      ]}
+                    >
+                      <Trash2
+                        size={14}
+                        color={deleteAccountUrl ? COLORS.primaryOrange : COLORS.creamLight}
+                      />
+                    </Pressable>
+                  ) : null}
 
                       <View style={styles.mediaControlsContainer}>
                         <View style={styles.mediaControlsPill}>
@@ -1550,7 +1709,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   welcomeLabel: {
-    fontSize: 18,
+    fontSize: 14,
     lineHeight: textLineHeight(18, 1.2),
     marginBottom: 8,
     fontWeight: "500",
@@ -1878,6 +2037,23 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(0, 0, 0, 0.7)",
     borderWidth: 1,
     borderColor: "rgba(254, 252, 217, 0.2)",
+  },
+  deleteAccountIconButton: {
+    position: "absolute",
+    top: 12,
+    right: 12,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(0, 0, 0, 0.7)",
+    borderWidth: 1,
+    borderColor: "rgba(254, 252, 217, 0.2)",
+  },
+  deleteAccountIconButtonDisabled: {
+    backgroundColor: "rgba(0, 0, 0, 0.55)",
+    borderColor: "rgba(254, 252, 217, 0.12)",
   },
   overlayText: {
     fontSize: 12,

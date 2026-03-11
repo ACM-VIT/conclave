@@ -43,6 +43,8 @@ const MEETING_LINK_BASE = "https://conclave.acmvit.in";
 const COPY_RESET_DELAY_MS = 1500;
 const GRID_HORIZONTAL_PADDING = 32;
 const MAX_GRID_TILES = 16;
+const PRESENTATION_STRIP_TILE_SIZE_PHONE = 72;
+const PRESENTATION_STRIP_TILE_SIZE_TABLET = 96;
 
 const getMaxGridColumns = (layout: DeviceLayout, participantCount: number) => {
   if (layout === "large") {
@@ -86,6 +88,7 @@ interface CallScreenProps {
   onToggleNoGuests?: (noGuests: boolean) => void;
   onToggleChatLock?: (locked: boolean) => void;
   onToggleTtsDisabled?: (disabled: boolean) => void;
+  onToggleDmEnabled?: (enabled: boolean) => void;
   onSendReaction: (emoji: string) => void;
   onOpenSettings: () => void;
   onLeave: () => void;
@@ -94,6 +97,7 @@ interface CallScreenProps {
   isNoGuests?: boolean;
   isChatLocked?: boolean;
   isTtsDisabled?: boolean;
+  isDmEnabled?: boolean;
   isAdmin?: boolean;
   pendingUsersCount?: number;
   isObserverMode?: boolean;
@@ -192,6 +196,7 @@ export function CallScreen({
   onToggleNoGuests,
   onToggleChatLock,
   onToggleTtsDisabled,
+  onToggleDmEnabled,
   onSendReaction,
   onOpenSettings,
   onLeave,
@@ -200,6 +205,7 @@ export function CallScreen({
   isNoGuests = false,
   isChatLocked = false,
   isTtsDisabled = false,
+  isDmEnabled = true,
   isAdmin = false,
   pendingUsersCount = 0,
   isObserverMode = false,
@@ -426,10 +432,10 @@ export function CallScreen({
 
     const byPresentedScreen = presentationStream
       ? webinarParticipants.find(
-          (participant) =>
-            participant.screenShareStream?.id === presentationStream.id &&
-            getLiveVideoStream(participant.screenShareStream)
-        )
+        (participant) =>
+          participant.screenShareStream?.id === presentationStream.id &&
+          getLiveVideoStream(participant.screenShareStream)
+      )
       : null;
     const byAnyScreenShare = webinarParticipants.find(
       (participant) => getLiveVideoStream(participant.screenShareStream)
@@ -470,7 +476,7 @@ export function CallScreen({
       .find((participant) => participant !== undefined);
     const preferredVideoParticipant =
       preferredParticipant &&
-      getLiveVideoStream(preferredParticipant.videoStream)
+        getLiveVideoStream(preferredParticipant.videoStream)
         ? preferredParticipant
         : null;
     const preferredAudioParticipant =
@@ -635,11 +641,15 @@ export function CallScreen({
   const gridGap = isTablet ? 16 : 12;
   const participantCountForLayout = Math.max(gridItems.length, 1);
   const controlsReservedHeight = 140 + insets.bottom;
+  const presentationControlsReserved = Math.max(insets.bottom, 12) + 72;
+  const presentationStripTileSize = isTablet
+    ? PRESENTATION_STRIP_TILE_SIZE_TABLET
+    : PRESENTATION_STRIP_TILE_SIZE_PHONE;
   const gridTopPadding =
     layout === "compact" && participantCountForLayout === 2 ? 16 : 8;
   const estimatedGridHeight = Math.max(
     0,
-    height - insets.top - controlsReservedHeight - (isTablet ? 108 : 96)
+    height - insets.top - (isTablet ? 108 : 96)
   );
   const measuredGridHeight =
     gridViewportHeight > 0 ? gridViewportHeight : estimatedGridHeight;
@@ -721,14 +731,20 @@ export function CallScreen({
     layout === "compact" && participantCountForLayout === 2 && columns === 1;
 
   const tileStyle = useMemo(
-    () => ({
-      width: optimalGrid.tileWidth,
-      height: Math.max(isTablet ? 92 : 76, optimalGrid.tileHeight),
-    }),
-    [optimalGrid.tileWidth, optimalGrid.tileHeight, isTablet]
+    () => {
+      let tileHeight = optimalGrid.tileHeight;
+      if (participantCountForLayout === 1) {
+        const maxHeight = Math.floor(optimalGrid.tileWidth * (4 / 3));
+        tileHeight = Math.min(tileHeight, maxHeight);
+      }
+      return {
+        width: optimalGrid.tileWidth,
+        height: tileHeight,
+      };
+    },
+    [optimalGrid.tileWidth, optimalGrid.tileHeight, participantCountForLayout]
   );
 
-  const stripTileSize = isTablet ? 120 : 88;
   const hasTerminalConnectionState =
     connectionState === "disconnected" || connectionState === "error";
   const showServerRestartNotice =
@@ -738,12 +754,12 @@ export function CallScreen({
     showServerRestartNotice
       ? "Server restarting, reconnecting"
       : connectionState === "reconnecting"
-      ? "Reconnecting"
-      : connectionState === "connecting"
-        ? "Connecting"
-        : connectionState === "waiting"
-          ? "Waiting"
-          : null;
+        ? "Reconnecting"
+        : connectionState === "connecting"
+          ? "Connecting"
+          : connectionState === "waiting"
+            ? "Waiting"
+            : null;
 
   const isPresenting = Boolean(presentationStream);
   const isScreenShareAvailable =
@@ -840,50 +856,50 @@ export function CallScreen({
             </Pressable>
           )}
 
-        {connectionLabel ? (
-          <RNView style={styles.statusPill}>
-            <Text style={[styles.statusText, webinarTextStyle]}>
-              {connectionLabel}
-            </Text>
-          </RNView>
-        ) : (
-          isObserverMode ? null : !isTablet ? (
-            isWebinarSession ? (
-              <GlassPill style={styles.pillGlass}>
-                <Pressable onPress={onOpenSettings} style={styles.headerPillIconButtonOnly}>
-                  <Settings size={14} color={COLORS.cream} />
-                </Pressable>
-              </GlassPill>
-            ) : (
-              <GlassPill style={[styles.pillGlass, styles.headerPill]}>
-                <Pressable onPress={onOpenSettings} style={styles.headerPillIconButton}>
-                  <Settings size={14} color={COLORS.cream} />
-                </Pressable>
-                <RNView style={styles.headerPillDivider} />
-                <Pressable onPress={onToggleParticipants} style={styles.headerPillButton}>
+          {connectionLabel ? (
+            <RNView style={styles.statusPill}>
+              <Text style={[styles.statusText, webinarTextStyle]}>
+                {connectionLabel}
+              </Text>
+            </RNView>
+          ) : (
+            isObserverMode ? null : !isTablet ? (
+              isWebinarSession ? (
+                <GlassPill style={styles.pillGlass}>
+                  <Pressable onPress={onOpenSettings} style={styles.headerPillIconButtonOnly}>
+                    <Settings size={14} color={COLORS.cream} />
+                  </Pressable>
+                </GlassPill>
+              ) : (
+                <GlassPill style={[styles.pillGlass, styles.headerPill]}>
+                  <Pressable onPress={onOpenSettings} style={styles.headerPillIconButton}>
+                    <Settings size={14} color={COLORS.cream} />
+                  </Pressable>
+                  <RNView style={styles.headerPillDivider} />
+                  <Pressable onPress={onToggleParticipants} style={styles.headerPillButton}>
+                    <RNView style={styles.participantsPill}>
+                      <Users size={12} color={COLORS.cream} />
+                      <Text style={[styles.participantsCount, webinarTextStyle]}>
+                        {displayParticipantCount}
+                      </Text>
+                    </RNView>
+                  </Pressable>
+                </GlassPill>
+              )
+            ) : isWebinarSession ? null : (
+              <Pressable onPress={onToggleParticipants}>
+                <GlassPill style={styles.pillGlass}>
                   <RNView style={styles.participantsPill}>
                     <Users size={12} color={COLORS.cream} />
                     <Text style={[styles.participantsCount, webinarTextStyle]}>
                       {displayParticipantCount}
                     </Text>
                   </RNView>
-                </Pressable>
-              </GlassPill>
+                </GlassPill>
+              </Pressable>
             )
-          ) : isWebinarSession ? null : (
-            <Pressable onPress={onToggleParticipants}>
-              <GlassPill style={styles.pillGlass}>
-                <RNView style={styles.participantsPill}>
-                  <Users size={12} color={COLORS.cream} />
-                  <Text style={[styles.participantsCount, webinarTextStyle]}>
-                    {displayParticipantCount}
-                  </Text>
-                </RNView>
-              </GlassPill>
-            </Pressable>
-          )
-        )}
-      </RNView>
+          )}
+        </RNView>
 
         {isObserverMode ? (
           <RNView
@@ -922,9 +938,8 @@ export function CallScreen({
                 <RNView style={styles.observerFallback}>
                   <Text style={[styles.presenterText, webinarTextStyle]}>
                     {webinarStage?.mainAudioStream
-                      ? `Listening to ${
-                          webinarStage.displayName?.trim() || "the speaker"
-                        }. Video is currently off.`
+                      ? `Listening to ${webinarStage.displayName?.trim() || "the speaker"
+                      }. Video is currently off.`
                       : "Waiting for the host to start speaking..."}
                   </Text>
                 </RNView>
@@ -972,23 +987,23 @@ export function CallScreen({
           <RNView
             style={[
               styles.presentationContainer,
-              { paddingBottom: 140 + insets.bottom },
+              { paddingBottom: presentationControlsReserved },
             ]}
           >
-            <RNView style={styles.presentationStage}>
+            <RNView style={styles.screenShareStageFull}>
               <RTCView
                 streamURL={presentationStream.toURL()}
                 style={styles.presentationVideo}
                 mirror={false}
                 objectFit="contain"
               />
-              <RNView style={styles.presenterBadge}>
+              <GlassPill style={styles.presenterBadge}>
                 <Text style={[styles.presenterText, webinarTextStyle]}>
                   {presenterName === "You"
                     ? "You're presenting"
                     : `${presenterName || "Presenter"} is presenting`}
                 </Text>
-              </RNView>
+              </GlassPill>
             </RNView>
 
             <FlatList
@@ -1040,22 +1055,62 @@ export function CallScreen({
                         <VenetianMask size={16} color={COLORS.primaryOrange} />
                       </RNView>
                     )}
-
-                    <RNView style={styles.stripLabel}>
-                      <Text
-                        style={[styles.stripLabelText, webinarTextStyle]}
-                        numberOfLines={1}
-                      >
-                        {label}
-                      </Text>
-                      {item.isMuted && (
-                        <MicOff size={12} color={COLORS.primaryOrange} />
+            <RNView style={styles.screenShareStripDock}>
+              <FlatList
+                data={stripParticipants}
+                extraData={participantOrderKey}
+                keyExtractor={(item) => item.userId}
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.stripContent}
+                renderItem={({ item }) => {
+                  const label =
+                    item.userId === localParticipant.userId
+                      ? "You"
+                      : resolveDisplayName(item.userId);
+                  const initials =
+                    label?.trim()?.[0]?.toUpperCase() || "?";
+                  return (
+                    <RNView style={[styles.stripTile, { width: presentationStripTileSize, height: presentationStripTileSize }]}>
+                      {item.videoStream && !item.isCameraOff ? (
+                        <RTCView
+                          streamURL={item.videoStream.toURL()}
+                          style={styles.stripVideo}
+                          mirror={
+                            item.userId === localParticipant.userId
+                              ? isMirrorCamera
+                              : false
+                          }
+                          objectFit="cover"
+                        />
+                      ) : (
+                        <RNView style={styles.stripAvatar}>
+                          <Text style={styles.stripInitial}>{initials}</Text>
+                        </RNView>
                       )}
+
+                      {item.isGhost && (
+                        <RNView style={styles.stripGhost}>
+                          <VenetianMask size={16} color={COLORS.primaryOrange} />
+                        </RNView>
+                      )}
+
+                      <RNView style={styles.stripLabel}>
+                        <Text
+                          style={[styles.stripLabelText, webinarTextStyle]}
+                          numberOfLines={1}
+                        >
+                          {label}
+                        </Text>
+                        {item.isMuted && (
+                          <MicOff size={12} color={COLORS.primaryOrange} />
+                        )}
+                      </RNView>
                     </RNView>
-                  </RNView>
-                );
-              }}
-            />
+                  );
+                }}
+              />
+            </RNView>
           </RNView>
         ) : (
           /* Video Grid */
@@ -1080,7 +1135,7 @@ export function CallScreen({
               contentContainerStyle={[
                 styles.gridContent,
                 { paddingBottom: controlsReservedHeight },
-                isTwoUp && styles.gridContentTwoUp,
+                isTwoUp ? styles.gridContentTwoUp : styles.gridContentCentered,
               ]}
               columnWrapperStyle={columns > 1 ? (isTablet ? columnWrapperStyleTablet : columnWrapperStyle) : undefined}
               renderItem={({ item }) => {
@@ -1129,6 +1184,7 @@ export function CallScreen({
         isNoGuests={isNoGuests}
         isChatLocked={isChatLocked}
         isTtsDisabled={isTtsDisabled}
+        isDmEnabled={isDmEnabled}
         isAdmin={isAdmin}
         isObserverMode={isObserverMode}
         pendingUsersCount={pendingUsersCount}
@@ -1145,6 +1201,7 @@ export function CallScreen({
         onToggleNoGuests={onToggleNoGuests}
         onToggleChatLock={onToggleChatLock}
         onToggleTtsDisabled={onToggleTtsDisabled}
+        onToggleDmEnabled={onToggleDmEnabled}
         isWhiteboardActive={isWhiteboardActive}
         showWhiteboardControl={isTablet && isAdmin}
         isAppsLocked={appsState.locked}
@@ -1272,6 +1329,10 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     paddingTop: 16,
   },
+  gridContentCentered: {
+    flexGrow: 1,
+    justifyContent: "center",
+  },
   overflowTile: {
     flex: 1,
     borderRadius: 16,
@@ -1298,9 +1359,21 @@ const styles = StyleSheet.create({
   },
   presentationContainer: {
     flex: 1,
-    gap: 12,
-    paddingHorizontal: 12,
+    paddingHorizontal: 8,
     paddingTop: 8,
+    width: "100%",
+  },
+  screenShareStageFull: {
+    flex: 1,
+    borderRadius: 16,
+    overflow: "hidden",
+    backgroundColor: "#0b0b0b",
+    borderWidth: 1,
+    borderColor: "rgba(254, 252, 217, 0.08)",
+    marginBottom: 8,
+  },
+  screenShareStripDock: {
+    paddingBottom: 4,
   },
   whiteboardContainer: {
     flex: 1,
@@ -1337,7 +1410,7 @@ const styles = StyleSheet.create({
     borderColor: "rgba(254, 252, 217, 0.12)",
   },
   presenterText: {
-    fontSize: 11,
+    fontSize: 10,
     color: COLORS.cream,
     letterSpacing: 2,
     fontWeight: "500",
@@ -1380,6 +1453,7 @@ const styles = StyleSheet.create({
   observerAudio: observerAudioStyle,
   stripContent: {
     paddingHorizontal: 4,
+    paddingVertical: 8,
     gap: 10,
   },
   stripTile: {

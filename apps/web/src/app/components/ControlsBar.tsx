@@ -69,6 +69,8 @@ interface ControlsBarProps {
   onToggleChatLock?: () => void;
   isTtsDisabled?: boolean;
   onToggleTtsDisabled?: () => void;
+  isDmEnabled?: boolean;
+  onToggleDmEnabled?: () => void;
   isBrowserActive?: boolean;
   isBrowserLaunching?: boolean;
   showBrowserControls?: boolean;
@@ -86,6 +88,10 @@ interface ControlsBarProps {
   onCloseDevPlayground?: () => void;
   isAppsLocked?: boolean;
   onToggleAppsLock?: () => void;
+  isVoiceAgentRunning?: boolean;
+  isVoiceAgentStarting?: boolean;
+  onStartVoiceAgent?: () => void;
+  onStopVoiceAgent?: () => void;
   isPopoutActive?: boolean;
   isPopoutSupported?: boolean;
   onOpenPopout?: () => void;
@@ -202,6 +208,8 @@ function ControlsBar({
   onToggleChatLock,
   isTtsDisabled = false,
   onToggleTtsDisabled,
+  isDmEnabled = true,
+  onToggleDmEnabled,
   isBrowserActive = false,
   isBrowserLaunching = false,
   showBrowserControls = true,
@@ -219,6 +227,10 @@ function ControlsBar({
   onCloseDevPlayground,
   isAppsLocked = false,
   onToggleAppsLock,
+  isVoiceAgentRunning = false,
+  isVoiceAgentStarting = false,
+  onStartVoiceAgent,
+  onStopVoiceAgent,
   isPopoutActive = false,
   isPopoutSupported = false,
   onOpenPopout,
@@ -262,7 +274,12 @@ function ControlsBar({
       (onOpenDevPlayground || onCloseDevPlayground)
   );
   const canShowAppsMenu =
-    canManageWhiteboard || canManageDevPlayground || Boolean(onToggleAppsLock);
+    canManageWhiteboard ||
+    canManageDevPlayground ||
+    Boolean(onToggleAppsLock);
+  const canManageVoiceAgent = Boolean(
+    isAdmin && (onStartVoiceAgent || onStopVoiceAgent),
+  );
 
   useEffect(() => {
     if (!isReactionMenuOpen) return;
@@ -376,6 +393,8 @@ function ControlsBar({
               onToggleChatLock={onToggleChatLock}
               isTtsDisabled={isTtsDisabled}
               onToggleTtsDisabled={onToggleTtsDisabled}
+              isDmEnabled={isDmEnabled}
+              onToggleDmEnabled={onToggleDmEnabled}
               meetingRequiresInviteCode={meetingRequiresInviteCode}
               onGetMeetingConfig={onGetMeetingConfig}
               onUpdateMeetingConfig={onUpdateMeetingConfig}
@@ -618,6 +637,41 @@ function ControlsBar({
             <VolumeX className="w-4 h-4" />
           ) : (
             <Volume2 className="w-4 h-4" />
+          )}
+        </button>
+      )}
+      {canManageVoiceAgent && (
+        <button
+          onClick={() => {
+            if (isVoiceAgentRunning) {
+              onStopVoiceAgent?.();
+              return;
+            }
+            onStartVoiceAgent?.();
+          }}
+          disabled={isVoiceAgentStarting}
+          className={
+            isVoiceAgentRunning
+              ? activeButtonClass
+              : isVoiceAgentStarting
+                ? ghostDisabledClass
+                : defaultButtonClass
+          }
+          title={
+            isVoiceAgentRunning
+              ? "Stop AI participant"
+              : "Start AI participant"
+          }
+          aria-label={
+            isVoiceAgentRunning
+              ? "Stop AI participant"
+              : "Start AI participant"
+          }
+        >
+          {isVoiceAgentStarting ? (
+            <Loader2 className="w-4 h-4 animate-spin" />
+          ) : (
+            <Sparkles className="w-4 h-4" />
           )}
         </button>
       )}

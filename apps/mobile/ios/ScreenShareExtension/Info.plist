@@ -31,5 +31,7 @@
 	</dict>
 	<key>RCTNewArchEnabled</key>
 	<true/>
+	<key>RTCAppGroupIdentifier</key>
+	<string>group.com.acmvit.conclave.screenshare</string>
 </dict>
 </plist>

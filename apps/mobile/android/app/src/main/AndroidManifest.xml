@@ -46,11 +46,13 @@
         <action android:name="android.intent.action.VIEW"/>
         <category android:name="android.intent.category.DEFAULT"/>
         <category android:name="android.intent.category.BROWSABLE"/>
-        <data android:scheme="https" android:host="conclave.acmvit.in"/>
+        <data android:scheme="https" android:host="conclave.acmvit.in" android:pathPrefix="/w/"/>
+        <data android:scheme="https" android:host="conclave.acmvit.in" android:pathPattern="/.*-.*-.*"/>
       </intent-filter>
       <intent-filter android:autoVerify="true" data-generated="true">
         <action android:name="android.intent.action.VIEW"/>
-        <data android:scheme="https" android:host="conclave.acmvit.in"/>
+        <data android:scheme="https" android:host="conclave.acmvit.in" android:pathPrefix="/w/"/>
+        <data android:scheme="https" android:host="conclave.acmvit.in" android:pathPattern="/.*-.*-.*"/>
         <category android:name="android.intent.category.BROWSABLE"/>
         <category android:name="android.intent.category.DEFAULT"/>
       </intent-filter>

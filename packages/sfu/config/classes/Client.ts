@@ -97,10 +97,20 @@ export class Client {
   }
 
   addConsumer(consumer: Consumer): void {
+    const previousConsumer = this.consumers.get(consumer.producerId);
+    if (previousConsumer && previousConsumer.id !== consumer.id) {
+      try {
+        previousConsumer.close();
+      } catch {}
+    }
+
     this.consumers.set(consumer.producerId, consumer);
 
     const cleanup = () => {
-      this.consumers.delete(consumer.producerId);
+      const activeConsumer = this.consumers.get(consumer.producerId);
+      if (activeConsumer?.id === consumer.id) {
+        this.consumers.delete(consumer.producerId);
+      }
     };
 
     consumer.on("transportclose", cleanup);

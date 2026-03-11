@@ -37,8 +37,13 @@ import type {
   WebinarLinkResponse,
   WebinarUpdateRequest,
 } from "../lib/types";
-import { isBrowserVideoUserId, isSystemUserId } from "../lib/utils";
+import {
+  formatDisplayName,
+  isBrowserVideoUserId,
+  isSystemUserId,
+} from "../lib/utils";
 import { useApps } from "@conclave/apps-sdk";
+import { useStableSpeakerId } from "../hooks/useStableSpeakerId";
 
 interface MeetsMainContentProps {
   isJoined: boolean;
@@ -131,6 +136,12 @@ interface MeetsMainContentProps {
   onDismissMeetError?: () => void;
   browserAudioNeedsGesture: boolean;
   onBrowserAudioAutoplayBlocked: () => void;
+  isVoiceAgentRunning?: boolean;
+  isVoiceAgentStarting?: boolean;
+  voiceAgentError?: string | null;
+  onStartVoiceAgent?: () => void;
+  onStopVoiceAgent?: () => void;
+  onClearVoiceAgentError?: () => void;
   onRetryMedia?: () => void;
   onTestSpeaker?: () => void;
   isPopoutActive?: boolean;
@@ -142,6 +153,7 @@ interface MeetsMainContentProps {
   isNetworkOffline: boolean;
   serverRestartNotice?: string | null;
   isTtsDisabled: boolean;
+  isDmEnabled: boolean;
   meetingRequiresInviteCode: boolean;
   webinarConfig?: WebinarConfigSnapshot | null;
   webinarRole?: "attendee" | "participant" | "host" | null;
@@ -174,6 +186,23 @@ const getVideoTrackId = (stream: MediaStream | null): string => {
   return track?.id ?? "none";
 };
 
+const normalizeMentionToken = (value: string): string =>
+  value.trim().toLowerCase().replace(/[^a-z0-9._-]/g, "");
+
+const getMentionTokenForParticipant = (
+  userId: string,
+  displayName: string,
+): string => {
+  const displayNameToken = normalizeMentionToken(displayName);
+  if (displayNameToken) {
+    return displayNameToken;
+  }
+
+  const base = userId.split("#")[0] || userId;
+  const handle = base.split("@")[0] || base;
+  return normalizeMentionToken(handle) || normalizeMentionToken(base);
+};
+
 type PipCorner = "top-left" | "top-right" | "bottom-left" | "bottom-right";
 type PipDragMeta = {
   pointerId: number;
@@ -186,6 +215,9 @@ type PipDragMeta = {
 
 const clamp = (value: number, min: number, max: number) =>
   Math.min(Math.max(value, min), max);
+
+const WEBINAR_SPEAKER_PROMOTE_DELAY_MS = 450;
+const WEBINAR_SPEAKER_MIN_SWITCH_INTERVAL_MS = 1800;
 
 const getPipCornerClass = (corner: PipCorner): string => {
   switch (corner) {
@@ -284,6 +316,12 @@ export default function MeetsMainContent({
   onToggleBrowserAudio,
   browserAudioNeedsGesture,
   onBrowserAudioAutoplayBlocked,
+  isVoiceAgentRunning = false,
+  isVoiceAgentStarting = false,
+  voiceAgentError = null,
+  onStartVoiceAgent,
+  onStopVoiceAgent,
+  onClearVoiceAgentError,
   meetError,
   onDismissMeetError,
   onRetryMedia,
@@ -297,6 +335,7 @@ export default function MeetsMainContent({
   isNetworkOffline,
   serverRestartNotice = null,
   isTtsDisabled,
+  isDmEnabled,
   meetingRequiresInviteCode,
   webinarConfig,
   webinarRole,
@@ -351,6 +390,17 @@ export default function MeetsMainContent({
       ),
     [participantsArray],
   );
+  const webinarParticipantIds = useMemo(
+    () => nonSystemParticipants.map((participant) => participant.userId),
+    [nonSystemParticipants],
+  );
+  const stableWebinarSpeakerId = useStableSpeakerId({
+    primarySpeakerId: webinarSpeakerUserId,
+    secondarySpeakerId: activeSpeakerId,
+    participantIds: webinarParticipantIds,
+    promoteDelayMs: WEBINAR_SPEAKER_PROMOTE_DELAY_MS,
+    minSwitchIntervalMs: WEBINAR_SPEAKER_MIN_SWITCH_INTERVAL_MS,
+  });
   const webinarStageRef = useRef<HTMLDivElement>(null);
   const pipDragRef = useRef<PipDragMeta | null>(null);
   const [pipCorner, setPipCorner] = useState<PipCorner>("bottom-right");
@@ -358,6 +408,8 @@ export default function MeetsMainContent({
     x: number;
     y: number;
   } | null>(null);
+  const [webinarAudioBlocked, setWebinarAudioBlocked] = useState(false);
+  const [webinarAudioPlaybackAttempt, setWebinarAudioPlaybackAttempt] = useState(0);
 
   const webinarStage = useMemo(() => {
     if (!nonSystemParticipants.length) {
@@ -418,6 +470,7 @@ export default function MeetsMainContent({
     }
 
     const preferredIds = [
+      stableWebinarSpeakerId ?? null,
       webinarSpeakerUserId ?? null,
       activeSpeakerId ?? null,
     ].filter((value, index, list): value is string => {
@@ -473,6 +526,7 @@ export default function MeetsMainContent({
     activeSpeakerId,
     nonSystemParticipants,
     resolveDisplayName,
+    stableWebinarSpeakerId,
     webinarSpeakerUserId,
   ]);
   const pipCornerClass = useMemo(() => getPipCornerClass(pipCorner), [pipCorner]);
@@ -570,7 +624,42 @@ export default function MeetsMainContent({
     pipDragRef.current = null;
     setPipDragPosition(null);
   }, []);
+  const handleWebinarAudioAutoplayBlocked = useCallback(() => {
+    setWebinarAudioBlocked(true);
+  }, []);
+  const handleWebinarAudioPlaybackStarted = useCallback(() => {
+    setWebinarAudioBlocked(false);
+  }, []);
+  const handlePlayWebinarAudio = useCallback(() => {
+    setWebinarAudioBlocked(false);
+    setWebinarAudioPlaybackAttempt((attempt) => attempt + 1);
+  }, []);
+  useEffect(() => {
+    if (isJoined && isWebinarAttendee) return;
+    setWebinarAudioBlocked(false);
+    setWebinarAudioPlaybackAttempt(0);
+  }, [isJoined, isWebinarAttendee]);
   const visibleParticipantCount = nonSystemParticipants.length;
+  const mentionableParticipants = useMemo(
+    () =>
+      nonSystemParticipants
+        .filter((participant) => participant.userId !== currentUserId)
+        .map((participant) => {
+          const displayName = formatDisplayName(
+            resolveDisplayName(participant.userId),
+          );
+          return {
+            userId: participant.userId,
+            displayName,
+            mentionToken: getMentionTokenForParticipant(
+              participant.userId,
+              displayName,
+            ),
+          };
+        })
+        .sort((left, right) => left.displayName.localeCompare(right.displayName)),
+    [nonSystemParticipants, currentUserId, resolveDisplayName],
+  );
   const handleToggleParticipants = useCallback(
     () =>
       setIsParticipantsOpen((prev) => {
@@ -594,6 +683,18 @@ export default function MeetsMainContent({
     () => setIsParticipantsOpen(false),
     [setIsParticipantsOpen],
   );
+  useEffect(() => {
+    if (!isChatOpen || chatOverlayMessages.length === 0) return;
+    setChatOverlayMessages([]);
+  }, [isChatOpen, chatOverlayMessages.length, setChatOverlayMessages]);
+
+  const sendChatRef = useRef(sendChat);
+  useEffect(() => {
+    sendChatRef.current = sendChat;
+  }, [sendChat]);
+  const handleSendChat = useCallback((content: string) => {
+    sendChatRef.current(content);
+  }, []);
 
   const handleToggleTtsDisabled = useCallback(() => {
     if (!socket) return;
@@ -607,6 +708,19 @@ export default function MeetsMainContent({
       },
     );
   }, [socket, isTtsDisabled]);
+
+  const handleToggleDmEnabled = useCallback(() => {
+    if (!socket) return;
+    socket.emit(
+      "setDmEnabled",
+      { enabled: !isDmEnabled },
+      (res: { error?: string }) => {
+        if (res?.error) {
+          console.error("Failed to toggle direct messages:", res.error);
+        }
+      },
+    );
+  }, [socket, isDmEnabled]);
   const handleToggleChat = useCallback(() => {
     if (!isChatOpen && isParticipantsOpen) {
       setIsParticipantsOpen(false);
@@ -662,6 +776,15 @@ export default function MeetsMainContent({
       <ScreenShareAudioPlayers
         participants={participants}
         audioOutputDeviceId={audioOutputDeviceId}
+        onAutoplayBlocked={
+          isWebinarAttendee ? handleWebinarAudioAutoplayBlocked : undefined
+        }
+        onPlaybackStarted={
+          isWebinarAttendee ? handleWebinarAudioPlaybackStarted : undefined
+        }
+        playbackAttemptToken={
+          isWebinarAttendee ? webinarAudioPlaybackAttempt : undefined
+        }
       />
       {isJoined && reactions.length > 0 && (
         <ReactionOverlay
@@ -716,7 +839,7 @@ export default function MeetsMainContent({
           />
         )
       ) : isWebinarAttendee ? (
-        <div className="flex flex-1 items-center justify-center p-4">
+        <div className="relative flex flex-1 items-center justify-center p-4">
           {webinarStage ? (
             <div ref={webinarStageRef} className="relative h-[72vh] w-full max-w-6xl">
               <ParticipantVideo
@@ -731,6 +854,9 @@ export default function MeetsMainContent({
                 }
                 audioOutputDeviceId={audioOutputDeviceId}
                 videoObjectFit={webinarStage.isScreenShare ? "contain" : "cover"}
+                onAudioAutoplayBlocked={handleWebinarAudioAutoplayBlocked}
+                onAudioPlaybackStarted={handleWebinarAudioPlaybackStarted}
+                audioPlaybackAttemptToken={webinarAudioPlaybackAttempt}
               />
               {webinarStage.pip ? (
                 <div
@@ -757,6 +883,9 @@ export default function MeetsMainContent({
                     participant={webinarStage.pip.participant}
                     displayName={webinarStage.pip.displayName}
                     avatarUrl={resolveAvatarUrl(webinarStage.pip.participant.userId)}
+                    onAudioAutoplayBlocked={handleWebinarAudioAutoplayBlocked}
+                    onAudioPlaybackStarted={handleWebinarAudioPlaybackStarted}
+                    audioPlaybackAttemptToken={webinarAudioPlaybackAttempt}
                   />
                 </div>
               ) : null}
@@ -766,6 +895,29 @@ export default function MeetsMainContent({
               <p className="text-sm text-[#FEFCD9]">
                 Waiting for the host to start speaking...
               </p>
+            </div>
+          )}
+          {webinarAudioBlocked && (
+            <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/65 p-4 backdrop-blur-sm">
+              <div className="w-full max-w-sm rounded-2xl border border-[#FEFCD9]/20 bg-[#0d0e0d]/95 p-6 text-center shadow-2xl">
+                <p
+                  className="text-sm uppercase tracking-[0.2em] text-[#FEFCD9]"
+                  style={{ fontFamily: "'PolySans Mono', monospace" }}
+                >
+                  Webinar audio is blocked
+                </p>
+                <p className="mt-3 text-xs text-[#FEFCD9]/70">
+                  Your browser needs a click before playback can start.
+                </p>
+                <button
+                  type="button"
+                  onClick={handlePlayWebinarAudio}
+                  className="mt-5 inline-flex items-center justify-center rounded-full border border-[#F95F4A]/60 bg-[#F95F4A]/15 px-5 py-2 text-xs uppercase tracking-[0.2em] text-[#FEFCD9] transition hover:bg-[#F95F4A]/25"
+                  style={{ fontFamily: "'PolySans Mono', monospace" }}
+                >
+                  Play webinar
+                </button>
+              </div>
             </div>
           )}
         </div>
@@ -882,6 +1034,25 @@ export default function MeetsMainContent({
           </p>
         </div>
       )}
+      {isJoined && voiceAgentError && (
+        <div className="absolute top-4 left-4 max-w-[340px] rounded-lg border border-[#F95F4A]/30 bg-[#0d0e0d]/95 px-4 py-3 text-xs text-[#FEFCD9]/90 shadow-2xl">
+          <div className="flex items-start gap-3">
+            <span className="font-medium text-[#F95F4A]">
+              Voice agent error
+            </span>
+            {onClearVoiceAgentError && (
+              <button
+                onClick={onClearVoiceAgentError}
+                className="ml-auto text-[#FEFCD9]/50 hover:text-[#FEFCD9]"
+                aria-label="Dismiss voice agent error"
+              >
+                X
+              </button>
+            )}
+          </div>
+          <p className="mt-1 text-[11px] text-[#FEFCD9]/70">{voiceAgentError}</p>
+        </div>
+      )}
 
       {isJoined &&
         (isWebinarAttendee ? (
@@ -932,6 +1103,8 @@ export default function MeetsMainContent({
                 onToggleChatLock={onToggleChatLock}
                 isTtsDisabled={isTtsDisabled}
                 onToggleTtsDisabled={handleToggleTtsDisabled}
+                isDmEnabled={isDmEnabled}
+                onToggleDmEnabled={handleToggleDmEnabled}
                 isBrowserActive={browserState?.active ?? false}
                 isBrowserLaunching={isBrowserLaunching}
                 showBrowserControls={showBrowserControls}
@@ -953,6 +1126,10 @@ export default function MeetsMainContent({
                 }
                 isAppsLocked={appsState.locked}
                 onToggleAppsLock={isAdmin ? handleToggleAppsLock : undefined}
+                isVoiceAgentRunning={isVoiceAgentRunning}
+                isVoiceAgentStarting={isVoiceAgentStarting}
+                onStartVoiceAgent={isAdmin ? onStartVoiceAgent : undefined}
+                onStopVoiceAgent={isAdmin ? onStopVoiceAgent : undefined}
                 isPopoutActive={isPopoutActive}
                 isPopoutSupported={isPopoutSupported}
                 onOpenPopout={onOpenPopout}
@@ -1038,12 +1215,14 @@ export default function MeetsMainContent({
           messages={chatMessages}
           chatInput={chatInput}
           onInputChange={setChatInput}
-          onSend={sendChat}
+          onSend={handleSendChat}
           onClose={handleToggleChat}
           currentUserId={currentUserId}
           isGhostMode={ghostEnabled}
           isChatLocked={isChatLocked}
+          isDmEnabled={isDmEnabled}
           isAdmin={isAdmin}
+          mentionableParticipants={mentionableParticipants}
         />
       )}
 
@@ -1068,7 +1247,10 @@ export default function MeetsMainContent({
         />
       )}
 
-      {isJoined && !isWebinarAttendee && chatOverlayMessages.length > 0 && (
+      {isJoined &&
+        !isWebinarAttendee &&
+        !isChatOpen &&
+        chatOverlayMessages.length > 0 && (
         <ChatOverlay
           messages={chatOverlayMessages}
           onDismiss={(id) =>

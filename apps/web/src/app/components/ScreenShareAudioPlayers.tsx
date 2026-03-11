@@ -1,16 +1,22 @@
 "use client";
 
-import { memo, useEffect, useRef } from "react";
+import { memo, useCallback, useEffect, useRef } from "react";
 import type { Participant } from "../lib/types";
 
 interface ScreenShareAudioPlayersProps {
   participants: Map<string, Participant>;
   audioOutputDeviceId?: string;
+  onAutoplayBlocked?: () => void;
+  onPlaybackStarted?: () => void;
+  playbackAttemptToken?: number;
 }
 
 function ScreenShareAudioPlayers({
   participants,
   audioOutputDeviceId,
+  onAutoplayBlocked,
+  onPlaybackStarted,
+  playbackAttemptToken,
 }: ScreenShareAudioPlayersProps) {
   const screenShareAudioParticipants = Array.from(participants.values()).filter(
     (participant) => participant.screenShareAudioStream
@@ -26,6 +32,9 @@ function ScreenShareAudioPlayers({
           }
           stream={participant.screenShareAudioStream}
           audioOutputDeviceId={audioOutputDeviceId}
+          onAutoplayBlocked={onAutoplayBlocked}
+          onPlaybackStarted={onPlaybackStarted}
+          playbackAttemptToken={playbackAttemptToken}
         />
       ))}
     </>
@@ -35,24 +44,49 @@ function ScreenShareAudioPlayers({
 interface ScreenShareAudioPlayerProps {
   stream: MediaStream | null;
   audioOutputDeviceId?: string;
+  onAutoplayBlocked?: () => void;
+  onPlaybackStarted?: () => void;
+  playbackAttemptToken?: number;
 }
 
 function ScreenShareAudioPlayer({
   stream,
   audioOutputDeviceId,
+  onAutoplayBlocked,
+  onPlaybackStarted,
+  playbackAttemptToken,
 }: ScreenShareAudioPlayerProps) {
   const audioRef = useRef<HTMLAudioElement>(null);
+
+  const attemptPlay = useCallback(() => {
+    const audio = audioRef.current;
+    if (!audio || !stream) return;
+    audio.play()
+      .then(() => {
+        onPlaybackStarted?.();
+      })
+      .catch((err) => {
+        if (err.name === "NotAllowedError") {
+          onAutoplayBlocked?.();
+          return;
+        }
+        if (err.name !== "AbortError") {
+          console.error("[Meets] Screen share audio play error:", err);
+        }
+      });
+  }, [onAutoplayBlocked, onPlaybackStarted, stream]);
 
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio || !stream) return;
     audio.srcObject = stream;
-    audio.play().catch((err) => {
-      if (err.name !== "AbortError") {
-        console.error("[Meets] Screen share audio play error:", err);
-      }
-    });
-  }, [stream]);
+    attemptPlay();
+  }, [stream, attemptPlay]);
+
+  useEffect(() => {
+    if (playbackAttemptToken == null || playbackAttemptToken < 1) return;
+    attemptPlay();
+  }, [playbackAttemptToken, attemptPlay]);
 
   useEffect(() => {
     const audio = audioRef.current as HTMLAudioElement & {

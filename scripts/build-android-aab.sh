@@ -28,6 +28,7 @@ fi
 
 VERSION_NAME="${ANDROID_VERSION_NAME}"
 VERSION_CODE="${ANDROID_VERSION_CODE}"
+BUILD_NUMBER="${IOS_BUILD_NUMBER:-${ANDROID_VERSION_CODE}}"
 KEYSTORE_PATH="${ANDROID_KEYSTORE_PATH/#\~/$HOME}"
 KEY_ALIAS="${ANDROID_KEYSTORE_ALIAS}"
 KEYSTORE_PASSWORD="${ANDROID_KEYSTORE_PASSWORD}"
@@ -36,13 +37,14 @@ KEY_PASSWORD="${ANDROID_KEY_PASSWORD}"
 APP_JSON="${ROOT}/apps/mobile/app.json"
 GRADLE_FILE="${ROOT}/apps/mobile/android/app/build.gradle"
 ANDROID_DIR="${ROOT}/apps/mobile/android"
+MOBILE_DIR="${ROOT}/apps/mobile"
 
 if [[ ! -f "${KEYSTORE_PATH}" ]]; then
   echo "Keystore not found at ${KEYSTORE_PATH}" >&2
   exit 1
 fi
 
-export APP_JSON VERSION_NAME VERSION_CODE GRADLE_FILE
+export APP_JSON VERSION_NAME VERSION_CODE BUILD_NUMBER GRADLE_FILE
 python3 - <<'PY'
 import json
 import os
@@ -50,17 +52,21 @@ import os
 app_json = os.environ["APP_JSON"]
 version = os.environ["VERSION_NAME"]
 version_code = int(os.environ["VERSION_CODE"])
+build_number = os.environ["BUILD_NUMBER"]
 
 with open(app_json, "r", encoding="utf-8") as f:
     data = json.load(f)
 
 data["expo"]["version"] = version
 data["expo"]["android"]["versionCode"] = version_code
+data["expo"]["ios"]["buildNumber"] = str(build_number)
 
 with open(app_json, "w", encoding="utf-8") as f:
     json.dump(data, f, indent=2)
     f.write("\n")
 PY
+
+(cd "${MOBILE_DIR}" && npx expo prebuild --platform android)
 
 python3 - <<'PY'
 import os

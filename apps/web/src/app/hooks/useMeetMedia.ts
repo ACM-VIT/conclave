@@ -100,6 +100,7 @@ export function useMeetMedia({
   >(async () => {});
   const audioRecoveryInFlightRef = useRef(false);
   const cameraRecoveryInFlightRef = useRef(false);
+  const toggleMuteInFlightRef = useRef(false);
   const buildAudioConstraints = useCallback(
     (deviceId?: string): MediaTrackConstraints => ({
       ...DEFAULT_AUDIO_CONSTRAINTS,
@@ -124,40 +125,54 @@ export function useMeetMedia({
   }, [audioContextRef]);
 
   const playNotificationSound = useCallback(
-    (type: "join" | "leave" | "waiting") => {
+    (type: "join" | "leave" | "waiting" | "handRaise") => {
       const audioContext = getAudioContext();
       if (!audioContext) return;
 
+      const playPattern = () => {
+        const now = audioContext.currentTime;
+        const frequencies =
+          type === "join"
+            ? [523.25, 659.25]
+            : type === "waiting"
+            ? [440.0, 523.25, 659.25]
+            : type === "handRaise"
+            ? [587.33]
+            : [392.0, 261.63];
+        const duration =
+          type === "waiting" ? 0.1 : type === "handRaise" ? 0.12 : 0.12;
+        const gap = 0.03;
+        const peakGain = type === "handRaise" ? 0.13 : 0.16;
+
+        frequencies.forEach((frequency, index) => {
+          const start = now + index * (duration + gap);
+          const oscillator = audioContext.createOscillator();
+          const gain = audioContext.createGain();
+          oscillator.type = "sine";
+          oscillator.frequency.value = frequency;
+
+          gain.gain.setValueAtTime(0, start);
+          gain.gain.linearRampToValueAtTime(peakGain, start + 0.02);
+          gain.gain.exponentialRampToValueAtTime(0.0001, start + duration);
+
+          oscillator.connect(gain);
+          gain.connect(audioContext.destination);
+          oscillator.start(start);
+          oscillator.stop(start + duration + 0.02);
+        });
+      };
+
       if (audioContext.state === "suspended") {
-        audioContext.resume().catch(() => {});
+        audioContext
+          .resume()
+          .then(() => {
+            playPattern();
+          })
+          .catch(() => {});
+        return;
       }
 
-      const now = audioContext.currentTime;
-      const frequencies =
-        type === "join"
-          ? [523.25, 659.25]
-          : type === "waiting"
-          ? [440.0, 523.25, 659.25]
-          : [392.0, 261.63];
-      const duration = type === "waiting" ? 0.1 : 0.12;
-      const gap = 0.03;
-
-      frequencies.forEach((frequency, index) => {
-        const start = now + index * (duration + gap);
-        const oscillator = audioContext.createOscillator();
-        const gain = audioContext.createGain();
-        oscillator.type = "sine";
-        oscillator.frequency.value = frequency;
-
-        gain.gain.setValueAtTime(0, start);
-        gain.gain.linearRampToValueAtTime(0.16, start + 0.02);
-        gain.gain.exponentialRampToValueAtTime(0.0001, start + duration);
-
-        oscillator.connect(gain);
-        gain.connect(audioContext.destination);
-        oscillator.start(start);
-        oscillator.stop(start + duration + 0.02);
-      });
+      playPattern();
     },
     [getAudioContext]
   );
@@ -614,41 +629,61 @@ export function useMeetMedia({
 
   const toggleMute = useCallback(async () => {
     if (ghostEnabled || isObserverMode) return;
+    if (toggleMuteInFlightRef.current) return;
+    toggleMuteInFlightRef.current = true;
     const previousMuted = isMuted;
     const nextMuted = !previousMuted;
     let producer = audioProducerRef.current;
-
-    if (
-      producer &&
-      (producer.closed || producer.track?.readyState !== "live")
-    ) {
-      socketRef.current?.emit(
-        "closeProducer",
-        { producerId: producer.id },
-        () => {}
-      );
-      resetAudioProducer(producer);
-      producer = null;
-    }
-
-    if (nextMuted) {
-      const currentTrack = localStreamRef.current?.getAudioTracks()[0];
-      if (currentTrack && currentTrack.readyState === "live") {
-        currentTrack.enabled = false;
-      }
-
-      if (producer) {
-        try {
-          producer.pause();
-        } catch {}
-        void emitToggleMute(producer.id, true);
-      }
-      setIsMuted(true);
-      return;
-    }
-
     let createdTrack: MediaStreamTrack | null = null;
     try {
+      if (
+        producer &&
+        (producer.closed || producer.track?.readyState !== "live")
+      ) {
+        socketRef.current?.emit(
+          "closeProducer",
+          { producerId: producer.id },
+          () => {}
+        );
+        resetAudioProducer(producer);
+        producer = null;
+      }
+
+      if (nextMuted) {
+        const currentTrack = localStreamRef.current?.getAudioTracks()[0];
+        if (currentTrack && currentTrack.readyState === "live") {
+          currentTrack.enabled = false;
+        }
+
+        if (producer) {
+          try {
+            producer.pause();
+          } catch {}
+          const toggleResult = await emitToggleMute(producer.id, true);
+          if (!toggleResult.ok) {
+            console.warn(
+              "[Meets] toggleMute failed, rolling back mute:",
+              toggleResult.error
+            );
+            if (currentTrack && currentTrack.readyState === "live") {
+              currentTrack.enabled = true;
+            }
+            try {
+              producer.resume();
+            } catch {}
+            setIsMuted(false);
+            setMeetError({
+              code: "TRANSPORT_ERROR",
+              message: toggleResult.error || "Failed to mute microphone",
+              recoverable: true,
+            });
+            return;
+          }
+        }
+        setIsMuted(true);
+        return;
+      }
+
       const transport = producerTransportRef.current;
       if (!transport) {
         setIsMuted(previousMuted);
@@ -748,6 +783,8 @@ export function useMeetMedia({
       }
       setIsMuted(previousMuted);
       setMeetError(createMeetError(err, "MEDIA_ERROR"));
+    } finally {
+      toggleMuteInFlightRef.current = false;
     }
   }, [
     ghostEnabled,
@@ -767,6 +804,7 @@ export function useMeetMedia({
     setMeetError,
     OPUS_MAX_AVERAGE_BITRATE,
     resetAudioProducer,
+    toggleMuteInFlightRef,
   ]);
 
   useEffect(() => {

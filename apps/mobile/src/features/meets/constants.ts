@@ -6,7 +6,7 @@ export const TRANSPORT_DISCONNECT_GRACE_MS = 5000;
 export const PRODUCER_SYNC_INTERVAL_MS = 15000;
 export const SPEAKER_CHECK_INTERVAL_MS = 400;
 export const SPEAKER_THRESHOLD = 0.03;
-export const ACTIVE_SPEAKER_HOLD_MS = 900;
+export const ACTIVE_SPEAKER_HOLD_MS = 50;
 export const REACTION_LIFETIME_MS = 3800;
 export const MAX_REACTIONS = 30;
 export const EMOJI_REACTIONS = [
@@ -47,18 +47,44 @@ export const SCREEN_SHARE_MAX_BITRATE = 1700000;
 export const SCREEN_SHARE_MAX_FRAMERATE = 24;
 export const OPUS_MAX_AVERAGE_BITRATE = 64000;
 
-const turnUrlsRaw =
-  process.env.EXPO_PUBLIC_TURN_URLS ||
-  process.env.EXPO_PUBLIC_TURN_URL ||
-  process.env.NEXT_PUBLIC_TURN_URLS ||
-  process.env.NEXT_PUBLIC_TURN_URL ||
-  "";
+const DEFAULT_PUBLIC_STUN_URLS = [
+  "stun:stun.l.google.com:19302",
+  "stun:stun1.l.google.com:19302",
+  "stun:stun2.l.google.com:19302",
+];
 
-export const MEETS_ICE_SERVERS: RTCIceServer[] = (() => {
-  const urls = turnUrlsRaw
+const splitIceUrls = (value: string): string[] =>
+  value
     .split(",")
-    .map((value) => value.trim())
+    .map((entry) => entry.trim())
     .filter(Boolean);
+
+export const MEETS_STUN_ICE_SERVERS: RTCIceServer[] = (() => {
+  const configuredStunUrls = splitIceUrls(
+    process.env.EXPO_PUBLIC_STUN_URLS ||
+      process.env.EXPO_PUBLIC_STUN_URL ||
+      process.env.NEXT_PUBLIC_STUN_URLS ||
+      process.env.NEXT_PUBLIC_STUN_URL ||
+      "",
+  );
+  const urls =
+    configuredStunUrls.length > 0 ? configuredStunUrls : DEFAULT_PUBLIC_STUN_URLS;
+
+  return [
+    {
+      urls: urls.length === 1 ? urls[0] : urls,
+    },
+  ];
+})();
+
+export const MEETS_TURN_ICE_SERVERS: RTCIceServer[] = (() => {
+  const urls = splitIceUrls(
+    process.env.EXPO_PUBLIC_TURN_URLS ||
+      process.env.EXPO_PUBLIC_TURN_URL ||
+      process.env.NEXT_PUBLIC_TURN_URLS ||
+      process.env.NEXT_PUBLIC_TURN_URL ||
+      "",
+  );
 
   if (!urls.length) return [];
 
@@ -85,5 +111,7 @@ export const MEETS_ICE_SERVERS: RTCIceServer[] = (() => {
 
   return [iceServer];
 })();
+
+export const MEETS_ICE_SERVERS = MEETS_STUN_ICE_SERVERS;
 
 export type ReactionEmoji = (typeof EMOJI_REACTIONS)[number];

@@ -6,6 +6,7 @@ import type { Device } from "mediasoup-client";
 import {
   MAX_RECONNECT_ATTEMPTS,
   MEETS_ICE_SERVERS,
+  MEETS_TURN_ICE_SERVERS,
   OPUS_MAX_AVERAGE_BITRATE,
   RECONNECT_DELAY_MS,
   SOCKET_TIMEOUT_MS,
@@ -56,6 +57,84 @@ type JoinInfo = {
 
 const DEFAULT_SERVER_RESTART_NOTICE =
   "Meeting server is restarting. You will be reconnected automatically.";
+const VIDEO_STALL_KEYFRAME_REQUEST_DELAY_MS = 2500;
+const TURN_URL_PATTERN = /^turns?:/i;
+
+const buildIceServerWithUrls = (
+  iceServer: RTCIceServer,
+  urls: string[],
+): RTCIceServer => ({
+  ...iceServer,
+  urls: urls.length === 1 ? urls[0] : urls,
+});
+
+const splitIceServersByType = (
+  iceServers: RTCIceServer[] | null | undefined,
+): { stunIceServers: RTCIceServer[]; turnIceServers: RTCIceServer[] } => {
+  const stunIceServers: RTCIceServer[] = [];
+  const turnIceServers: RTCIceServer[] = [];
+
+  for (const iceServer of iceServers ?? []) {
+    const urls = normalizeIceServerUrls(iceServer.urls);
+    if (urls.length === 0) continue;
+
+    const turnUrls = urls.filter((url) => TURN_URL_PATTERN.test(url));
+    const stunUrls = urls.filter((url) => !TURN_URL_PATTERN.test(url));
+
+    if (stunUrls.length > 0) {
+      stunIceServers.push(buildIceServerWithUrls(iceServer, stunUrls));
+    }
+    if (turnUrls.length > 0) {
+      turnIceServers.push(buildIceServerWithUrls(iceServer, turnUrls));
+    }
+  }
+
+  return { stunIceServers, turnIceServers };
+};
+
+const normalizeIceServerUrls = (
+  urls: RTCIceServer["urls"] | undefined,
+): string[] => {
+  if (!urls) return [];
+  const normalizedUrls = (Array.isArray(urls) ? urls : [urls])
+    .map((value) => value.trim())
+    .filter(Boolean);
+
+  return Array.from(new Set(normalizedUrls));
+};
+
+const mergeIceServers = (
+  ...lists: Array<RTCIceServer[] | null | undefined>
+): RTCIceServer[] | undefined => {
+  const merged: RTCIceServer[] = [];
+  const seen = new Set<string>();
+
+  for (const list of lists) {
+    if (!Array.isArray(list)) continue;
+
+    for (const server of list) {
+      const urls = normalizeIceServerUrls(server.urls);
+      if (!urls.length) continue;
+
+      const key = JSON.stringify({
+        urls: [...urls].sort(),
+        username: server.username?.trim() ?? "",
+        credential:
+          typeof server.credential === "string" ? server.credential : "",
+      });
+
+      if (seen.has(key)) continue;
+      seen.add(key);
+
+      merged.push({
+        ...server,
+        urls: urls.length === 1 ? urls[0] : urls,
+      });
+    }
+  }
+
+  return merged.length > 0 ? merged : undefined;
+};
 
 interface UseMeetSocketOptions {
   refs: MeetRefs;
@@ -108,6 +187,7 @@ interface UseMeetSocketOptions {
   setMeetingRequiresInviteCode: (value: boolean) => void;
   isTtsDisabled: boolean;
   setIsTtsDisabled: (value: boolean) => void;
+  setIsDmEnabled: (value: boolean) => void;
   setActiveScreenShareId: (value: string | null) => void;
   setVideoQuality: (value: VideoQuality) => void;
   videoQualityRef: React.MutableRefObject<VideoQuality>;
@@ -120,7 +200,9 @@ interface UseMeetSocketOptions {
     kind: "audio" | "video",
     track: MediaStreamTrack,
   ) => void;
-  playNotificationSound: (type: "join" | "leave" | "waiting") => void;
+  playNotificationSound: (
+    type: "join" | "leave" | "waiting" | "handRaise"
+  ) => void;
   primeAudioOutput: () => void;
   addReaction: (reaction: ReactionPayload) => void;
   clearReactions: () => void;
@@ -186,6 +268,7 @@ export function useMeetSocket({
   setMeetingRequiresInviteCode,
   isTtsDisabled,
   setIsTtsDisabled,
+  setIsDmEnabled,
   setActiveScreenShareId,
   setVideoQuality,
   videoQualityRef,
@@ -205,8 +288,11 @@ export function useMeetSocket({
 }: UseMeetSocketOptions) {
   const participantIdsRef = useRef<Set<string>>(new Set([userId]));
   const serverRoomIdRef = useRef<string | null>(null);
-  const runtimeIceServersRef = useRef<RTCIceServer[] | null>(null);
+  const runtimeStunIceServersRef = useRef<RTCIceServer[] | null>(null);
+  const runtimeTurnIceServersRef = useRef<RTCIceServer[] | null>(null);
+  const useTurnFallbackRef = useRef(false);
   const consumeRetryAttemptsRef = useRef<Map<string, number>>(new Map());
+  const videoStallRecoveryTimeoutsRef = useRef<Map<string, number>>(new Map());
   const consumeProducerRef = useRef<
     (producerInfo: ProducerInfo) => Promise<void>
   >(async () => {});
@@ -264,12 +350,33 @@ export function useMeetSocket({
     isTtsDisabledRef.current = isTtsDisabled;
   }, [isTtsDisabled]);
 
+  const enableTurnFallback = useCallback((reason: string): boolean => {
+    if (useTurnFallbackRef.current) return false;
+
+    const turnIceServers =
+      runtimeTurnIceServersRef.current && runtimeTurnIceServersRef.current.length > 0
+        ? runtimeTurnIceServersRef.current
+        : MEETS_TURN_ICE_SERVERS;
+    if (turnIceServers.length === 0) return false;
+
+    useTurnFallbackRef.current = true;
+    console.warn(`[Meets] ${reason}. Retrying with TURN fallback.`);
+    return true;
+  }, []);
+
   const resolveIceServers = useCallback((): RTCIceServer[] | undefined => {
-    const runtimeIceServers = runtimeIceServersRef.current;
-    if (runtimeIceServers && runtimeIceServers.length > 0) {
-      return runtimeIceServers;
-    }
-    return MEETS_ICE_SERVERS.length > 0 ? MEETS_ICE_SERVERS : undefined;
+    const stunIceServers =
+      runtimeStunIceServersRef.current && runtimeStunIceServersRef.current.length > 0
+        ? runtimeStunIceServersRef.current
+        : MEETS_ICE_SERVERS;
+
+    const turnIceServers = useTurnFallbackRef.current
+      ? runtimeTurnIceServersRef.current && runtimeTurnIceServersRef.current.length > 0
+        ? runtimeTurnIceServersRef.current
+        : MEETS_TURN_ICE_SERVERS
+      : undefined;
+
+    return mergeIceServers(stunIceServers, turnIceServers);
   }, []);
 
   const cleanupRoomResources = useCallback(
@@ -291,6 +398,10 @@ export function useMeetSocket({
         } catch {}
       });
       consumersRef.current.clear();
+      for (const timeoutId of videoStallRecoveryTimeoutsRef.current.values()) {
+        window.clearTimeout(timeoutId);
+      }
+      videoStallRecoveryTimeoutsRef.current.clear();
       producerMapRef.current.clear();
       pendingProducersRef.current.clear();
       consumeRetryAttemptsRef.current.clear();
@@ -344,10 +455,14 @@ export function useMeetSocket({
       setActiveScreenShareId(null);
       setIsHandRaised(false);
       setIsTtsDisabled(false);
+      setIsDmEnabled(true);
       setMeetingRequiresInviteCode(false);
       setWebinarConfig(null);
       if (resetRoomId) {
         currentRoomIdRef.current = null;
+        runtimeStunIceServersRef.current = null;
+        runtimeTurnIceServersRef.current = null;
+        useTurnFallbackRef.current = false;
       }
     },
     [
@@ -372,16 +487,21 @@ export function useMeetSocket({
       setWebinarRole,
       setWebinarSpeakerUserId,
       setIsTtsDisabled,
+      setIsDmEnabled,
       setMeetingRequiresInviteCode,
       setWebinarConfig,
       clearReactions,
       videoProducerRef,
       userId,
+      runtimeStunIceServersRef,
+      runtimeTurnIceServersRef,
+      useTurnFallbackRef,
       producerTransportDisconnectTimeoutRef,
       consumerTransportDisconnectTimeoutRef,
       pendingProducerRetryTimeoutRef,
       producerSyncIntervalRef,
       consumeRetryAttemptsRef,
+      videoStallRecoveryTimeoutsRef,
     ],
   );
 
@@ -459,6 +579,12 @@ export function useMeetSocket({
     (producerId: string) => {
       pendingProducersRef.current.delete(producerId);
       consumeRetryAttemptsRef.current.delete(producerId);
+      const scheduledRecoveryTimeout =
+        videoStallRecoveryTimeoutsRef.current.get(producerId);
+      if (scheduledRecoveryTimeout != null) {
+        window.clearTimeout(scheduledRecoveryTimeout);
+        videoStallRecoveryTimeoutsRef.current.delete(producerId);
+      }
       const consumer = consumersRef.current.get(producerId);
       if (consumer) {
         try {
@@ -507,6 +633,7 @@ export function useMeetSocket({
       dispatchParticipants,
       pendingProducersRef,
       consumeRetryAttemptsRef,
+      videoStallRecoveryTimeoutsRef,
       producerMapRef,
       setActiveScreenShareId,
     ],
@@ -564,7 +691,7 @@ export function useMeetSocket({
           (resolve, reject) => {
             socket.emit(
               "restartIce",
-              { transport: transportKind },
+              { transport: transportKind, transportId: transport.id },
               (res: RestartIceResponse | { error: string }) => {
                 if ("error" in res) {
                   reject(new Error(res.error));
@@ -685,6 +812,13 @@ export function useMeetSocket({
                       ) {
                         attemptIceRestart("producer").then((restarted) => {
                           if (!restarted) {
+                            const enabledTurnFallback = enableTurnFallback(
+                              "Producer transport could not recover with STUN-only ICE",
+                            );
+                            if (enabledTurnFallback) {
+                              handleReconnectRef.current?.();
+                              return;
+                            }
                             setMeetError({
                               code: "TRANSPORT_ERROR",
                               message: "Producer transport interrupted",
@@ -710,6 +844,13 @@ export function useMeetSocket({
                 if (!intentionalDisconnectRef.current) {
                   attemptIceRestart("producer").then((restarted) => {
                     if (!restarted) {
+                      const enabledTurnFallback = enableTurnFallback(
+                        "Producer transport failed with STUN-only ICE",
+                      );
+                      if (enabledTurnFallback) {
+                        handleReconnectRef.current?.();
+                        return;
+                      }
                       setMeetError({
                         code: "TRANSPORT_ERROR",
                         message: "Producer transport failed",
@@ -743,6 +884,7 @@ export function useMeetSocket({
       intentionalDisconnectRef,
       producerTransportDisconnectTimeoutRef,
       attemptIceRestart,
+      enableTurnFallback,
       resolveIceServers,
     ],
   );
@@ -807,6 +949,13 @@ export function useMeetSocket({
                       ) {
                         attemptIceRestart("consumer").then((restarted) => {
                           if (!restarted) {
+                            const enabledTurnFallback = enableTurnFallback(
+                              "Consumer transport could not recover with STUN-only ICE",
+                            );
+                            if (enabledTurnFallback) {
+                              handleReconnectRef.current?.();
+                              return;
+                            }
                             handleReconnectRef.current?.();
                           }
                         });
@@ -827,6 +976,13 @@ export function useMeetSocket({
                 if (!intentionalDisconnectRef.current) {
                   attemptIceRestart("consumer").then((restarted) => {
                     if (!restarted) {
+                      const enabledTurnFallback = enableTurnFallback(
+                        "Consumer transport failed with STUN-only ICE",
+                      );
+                      if (enabledTurnFallback) {
+                        handleReconnectRef.current?.();
+                        return;
+                      }
                       handleReconnectRef.current?.();
                     }
                   });
@@ -846,6 +1002,7 @@ export function useMeetSocket({
       intentionalDisconnectRef,
       consumerTransportDisconnectTimeoutRef,
       attemptIceRestart,
+      enableTurnFallback,
       resolveIceServers,
     ],
   );
@@ -854,6 +1011,7 @@ export function useMeetSocket({
     async (stream: MediaStream): Promise<void> => {
       const transport = producerTransportRef.current;
       if (!transport) return;
+      const publicationWarnings: string[] = [];
 
       const audioTrack = stream.getAudioTracks()[0];
       if (audioTrack) {
@@ -883,7 +1041,14 @@ export function useMeetSocket({
           });
         } catch (err) {
           console.error("[Meets] Failed to produce audio:", err);
+          if (!isMuted) {
+            publicationWarnings.push("microphone publish failed");
+            setIsMuted(true);
+          }
         }
+      } else if (!isMuted) {
+        publicationWarnings.push("microphone track missing");
+        setIsMuted(true);
       }
 
       const videoTrack = stream.getVideoTracks()[0];
@@ -923,7 +1088,20 @@ export function useMeetSocket({
           });
         } catch (err) {
           console.error("[Meets] Failed to produce video:", err);
+          if (!isCameraOff) {
+            publicationWarnings.push("camera publish failed");
+            setIsCameraOff(true);
+          }
         }
+      } else if (!isCameraOff) {
+        publicationWarnings.push("camera track missing");
+        setIsCameraOff(true);
+      }
+
+      if (publicationWarnings.length > 0) {
+        console.warn(
+          `[Meets] Continuing join without some local media: ${publicationWarnings.join(", ")}`
+        );
       }
     },
     [
@@ -932,6 +1110,8 @@ export function useMeetSocket({
       videoProducerRef,
       isMuted,
       isCameraOff,
+      setIsMuted,
+      setIsCameraOff,
       videoQualityRef,
     ],
   );
@@ -959,6 +1139,7 @@ export function useMeetSocket({
         socket.emit(
           "consume",
           {
+            transportId: transport.id,
             producerId: producerInfo.producerId,
             rtpCapabilities: device.rtpCapabilities,
           },
@@ -1034,6 +1215,42 @@ export function useMeetSocket({
                 } else if (isWebcamVideo) {
                   updateCameraState(true);
                 }
+                if (response.kind === "video") {
+                  const existingTimeout = videoStallRecoveryTimeoutsRef.current.get(
+                    producerInfo.producerId,
+                  );
+                  if (existingTimeout != null) {
+                    window.clearTimeout(existingTimeout);
+                  }
+                  const timeoutId = window.setTimeout(() => {
+                    const activeConsumer = consumersRef.current.get(
+                      producerInfo.producerId,
+                    );
+                    if (
+                      !activeConsumer ||
+                      activeConsumer.closed ||
+                      activeConsumer.id !== consumer.id
+                    ) {
+                      return;
+                    }
+                    const track = activeConsumer.track;
+                    if (!track || track.readyState !== "live" || !track.muted) {
+                      return;
+                    }
+                    socket.emit(
+                      "resumeConsumer",
+                      {
+                        consumerId: activeConsumer.id,
+                        requestKeyFrame: true,
+                      },
+                      () => {},
+                    );
+                  }, VIDEO_STALL_KEYFRAME_REQUEST_DELAY_MS);
+                  videoStallRecoveryTimeoutsRef.current.set(
+                    producerInfo.producerId,
+                    timeoutId,
+                  );
+                }
               };
 
               const handleTrackUnmuted = () => {
@@ -1042,9 +1259,27 @@ export function useMeetSocket({
                 } else if (isWebcamVideo) {
                   updateCameraState(false);
                 }
+                const existingTimeout = videoStallRecoveryTimeoutsRef.current.get(
+                  producerInfo.producerId,
+                );
+                if (existingTimeout != null) {
+                  window.clearTimeout(existingTimeout);
+                  videoStallRecoveryTimeoutsRef.current.delete(
+                    producerInfo.producerId,
+                  );
+                }
               };
 
               consumer.on("trackended", () => {
+                const existingTimeout = videoStallRecoveryTimeoutsRef.current.get(
+                  producerInfo.producerId,
+                );
+                if (existingTimeout != null) {
+                  window.clearTimeout(existingTimeout);
+                  videoStallRecoveryTimeoutsRef.current.delete(
+                    producerInfo.producerId,
+                  );
+                }
                 handleProducerClosed(producerInfo.producerId);
               });
               consumer.track.onmute = handleTrackMuted;
@@ -1073,7 +1308,10 @@ export function useMeetSocket({
 
               socket.emit(
                 "resumeConsumer",
-                { consumerId: consumer.id },
+                {
+                  consumerId: consumer.id,
+                  requestKeyFrame: response.kind === "video",
+                },
                 () => {},
               );
               resolve();
@@ -1099,6 +1337,7 @@ export function useMeetSocket({
       joinMode,
       queueProducerConsumeRetry,
       setActiveScreenShareId,
+      videoStallRecoveryTimeoutsRef,
       userId,
     ],
   );
@@ -1166,9 +1405,16 @@ export function useMeetSocket({
         const consumer = consumersRef.current.get(producerInfo.producerId);
         if (consumer) {
           if (!producerInfo.paused) {
+            const shouldRequestKeyFrame =
+              consumer.kind === "video" &&
+              consumer.track?.readyState === "live" &&
+              consumer.track.muted;
             socket.emit(
               "resumeConsumer",
-              { consumerId: consumer.id },
+              {
+                consumerId: consumer.id,
+                requestKeyFrame: shouldRequestKeyFrame,
+              },
               () => {},
             );
           }
@@ -1316,6 +1562,7 @@ export function useMeetSocket({
               currentRoomIdRef.current = targetRoomId;
               serverRoomIdRef.current = response.roomId ?? targetRoomId;
               setIsTtsDisabled(response.isTtsDisabled ?? false);
+              setIsDmEnabled(response.isDmEnabled ?? true);
               resolve("waiting");
               return;
             }
@@ -1333,6 +1580,7 @@ export function useMeetSocket({
                 response.meetingRequiresInviteCode ?? false,
               );
               setIsTtsDisabled(response.isTtsDisabled ?? false);
+              setIsDmEnabled(response.isDmEnabled ?? true);
               setWebinarRole(response.webinarRole ?? null);
               setWebinarSpeakerUserId(
                 response.existingProducers?.[0]?.producerUserId ?? null,
@@ -1433,6 +1681,7 @@ export function useMeetSocket({
       syncProducers,
       setIsRoomLocked,
       setIsTtsDisabled,
+      setIsDmEnabled,
     ],
   );
 
@@ -1444,6 +1693,11 @@ export function useMeetSocket({
             if (socketRef.current?.connected) {
               resolve(socketRef.current);
               return;
+            }
+            if (socketRef.current) {
+              socketRef.current.disconnect();
+              socketRef.current = null;
+              onSocketReady?.(null);
             }
 
             setConnectionState("connecting");
@@ -1475,12 +1729,17 @@ export function useMeetSocket({
             ]);
 
             if (Array.isArray(iceServers)) {
-              runtimeIceServersRef.current =
-                iceServers.length > 0 ? iceServers : null;
+              const { stunIceServers, turnIceServers } =
+                splitIceServersByType(iceServers);
+              runtimeStunIceServersRef.current =
+                stunIceServers.length > 0 ? stunIceServers : null;
+              runtimeTurnIceServersRef.current =
+                turnIceServers.length > 0 ? turnIceServers : null;
             }
 
             const socket = io(sfuUrl, {
               transports: ["websocket", "polling"],
+              tryAllTransports: true,
               timeout: SOCKET_TIMEOUT_MS,
               reconnection: false,
               auth: { token },
@@ -1638,6 +1897,10 @@ export function useMeetSocket({
                     if (audioProducerRef.current?.id === producerId) {
                       audioProducerRef.current = null;
                     }
+                    localStreamRef.current?.getAudioTracks().forEach((track) => {
+                      track.enabled = false;
+                    });
+                    setIsMuted(true);
                     return;
                   }
 
@@ -1648,6 +1911,7 @@ export function useMeetSocket({
                     if (videoProducerRef.current?.id === producerId) {
                       videoProducerRef.current = null;
                     }
+                    setIsCameraOff(true);
                     return;
                   }
 
@@ -1931,6 +2195,121 @@ export function useMeetSocket({
                   type: "UPDATE_CAMERA_OFF",
                   userId: camUserId,
                   cameraOff,
+                });
+              },
+            );
+
+            socket.on(
+              "admin:mediaEnforced",
+              (payload: {
+                roomId?: string;
+                userId?: string;
+                reason?: string;
+                kind?: "audio" | "video";
+                type?: ProducerType;
+                producerId?: string;
+                producers?: Array<{
+                  producerId: string;
+                  kind: "audio" | "video";
+                  type: ProducerType;
+                }>;
+              }) => {
+                if (!isRoomEvent(payload?.roomId)) return;
+                if (payload?.userId !== userId) return;
+
+                const enforced =
+                  payload?.producers && payload.producers.length > 0
+                    ? payload.producers
+                    : payload?.producerId && payload.kind && payload.type
+                      ? [
+                          {
+                            producerId: payload.producerId,
+                            kind: payload.kind,
+                            type: payload.type,
+                          },
+                        ]
+                      : [];
+
+                for (const entry of enforced) {
+                  if (entry.kind === "audio" && entry.type === "webcam") {
+                    const producer = audioProducerRef.current;
+                    if (producer?.id === entry.producerId) {
+                      try {
+                        producer.close();
+                      } catch {}
+                      if (audioProducerRef.current?.id === entry.producerId) {
+                        audioProducerRef.current = null;
+                      }
+                    }
+                    localStreamRef.current?.getAudioTracks().forEach((track) => {
+                      track.enabled = false;
+                    });
+                    setIsMuted(true);
+                  } else if (entry.kind === "video" && entry.type === "webcam") {
+                    const producer = videoProducerRef.current;
+                    if (producer?.id === entry.producerId) {
+                      try {
+                        producer.close();
+                      } catch {}
+                      if (videoProducerRef.current?.id === entry.producerId) {
+                        videoProducerRef.current = null;
+                      }
+                    }
+                    localStreamRef.current?.getVideoTracks().forEach((track) => {
+                      stopLocalTrack(track);
+                    });
+                    setLocalStream((prev) => {
+                      if (!prev) return prev;
+                      const remaining = prev
+                        .getTracks()
+                        .filter((track) => track.kind !== "video");
+                      return new MediaStream(remaining);
+                    });
+                    setIsCameraOff(true);
+                  } else if (entry.type === "screen" && entry.kind === "video") {
+                    const producer = screenProducerRef.current;
+                    const track = producer?.track ?? null;
+                    if (producer?.id === entry.producerId) {
+                      stopLocalTrack(track);
+                      try {
+                        producer.close();
+                      } catch {}
+                      if (screenProducerRef.current?.id === entry.producerId) {
+                        screenProducerRef.current = null;
+                      }
+                    }
+                    setIsScreenSharing(false);
+                    setActiveScreenShareId(null);
+                  }
+                }
+
+                if (enforced.length > 0) {
+                  setMeetError({
+                    code: "TRANSPORT_ERROR",
+                    message:
+                      payload.reason?.trim() ||
+                      "Your media was changed by host moderation.",
+                    recoverable: true,
+                  });
+                }
+              },
+            );
+
+            socket.on(
+              "admin:bulkMediaEnforced",
+              (payload: {
+                roomId?: string;
+                reason?: string;
+                users?: string[];
+              }) => {
+                if (!isRoomEvent(payload?.roomId)) return;
+                if (!payload?.users?.includes(userId)) return;
+                setMeetError({
+                  code: "TRANSPORT_ERROR",
+                  message:
+                    payload.reason?.trim() ||
+                    "Your media was changed by host moderation.",
+                  recoverable: true,
                 });
               },
             );
@@ -2220,6 +2599,21 @@ export function useMeetSocket({
             );
 
             socket.on(
+              "dmStateChanged",
+              ({
+                enabled,
+                roomId: eventRoomId,
+              }: {
+                enabled: boolean;
+                roomId?: string;
+              }) => {
+                if (!isRoomEvent(eventRoomId)) return;
+                console.log("[Meets] Room DM state changed:", enabled);
+                setIsDmEnabled(enabled);
+              },
+            );
+
+            socket.on(
               "noGuestsChanged",
               ({
                 noGuests,
@@ -2361,6 +2755,7 @@ export function useMeetSocket({
       setIsRoomLocked,
       setMeetingRequiresInviteCode,
       setIsTtsDisabled,
+      setIsDmEnabled,
       setHostUserId,
       setWebinarRole,
       setWebinarSpeakerUserId,
@@ -2509,6 +2904,9 @@ export function useMeetSocket({
       primeAudioOutput();
       refs.intentionalDisconnectRef.current = false;
       serverRoomIdRef.current = null;
+      runtimeStunIceServersRef.current = null;
+      runtimeTurnIceServersRef.current = null;
+      useTurnFallbackRef.current = false;
       setRoomId(targetRoomId);
       if (joinMode === "webinar_attendee") {
         setIsAdmin(false);
@@ -2547,53 +2945,54 @@ export function useMeetSocket({
         localStreamRef.current = stream;
         setLocalStream(stream);
 
-        try {
-          await joinRoomInternal(targetRoomId, stream, joinOptions);
-        } catch (joinError) {
-          const joinMessage =
-            joinError instanceof Error
-              ? joinError.message
-              : String(joinError ?? "");
-          const isMeetingInviteCodeValidationError =
-            /meeting invite code required/i.test(joinMessage) ||
-            /invalid meeting invite code/i.test(joinMessage);
-          const shouldPromptMeetingInviteCode =
-            joinOptions.joinMode !== "webinar_attendee" &&
-            !joinOptions.meetingInviteCode &&
-            isMeetingInviteCodeValidationError &&
-            typeof requestMeetingInviteCode === "function";
+        let nextJoinOptions = joinOptions;
+        while (true) {
+          try {
+            await joinRoomInternal(targetRoomId, stream, nextJoinOptions);
+            break;
+          } catch (joinError) {
+            const joinMessage =
+              joinError instanceof Error
+                ? joinError.message
+                : String(joinError ?? "");
+            const isMeetingInviteCodeValidationError =
+              /meeting invite code required/i.test(joinMessage) ||
+              /invalid meeting invite code/i.test(joinMessage);
+            const shouldPromptMeetingInviteCode =
+              nextJoinOptions.joinMode !== "webinar_attendee" &&
+              isMeetingInviteCodeValidationError &&
+              typeof requestMeetingInviteCode === "function";
 
-          const isWebinarInviteCodeValidationError =
-            /webinar invite code required/i.test(joinMessage) ||
-            /invalid webinar invite code/i.test(joinMessage);
-          const shouldPromptWebinarInviteCode =
-            joinOptions.joinMode === "webinar_attendee" &&
-            !joinOptions.webinarInviteCode &&
-            isWebinarInviteCodeValidationError &&
-            typeof requestWebinarInviteCode === "function";
+            const isWebinarInviteCodeValidationError =
+              /webinar invite code required/i.test(joinMessage) ||
+              /invalid webinar invite code/i.test(joinMessage);
+            const shouldPromptWebinarInviteCode =
+              nextJoinOptions.joinMode === "webinar_attendee" &&
+              isWebinarInviteCodeValidationError &&
+              typeof requestWebinarInviteCode === "function";
 
-          if (!shouldPromptMeetingInviteCode && !shouldPromptWebinarInviteCode) {
-            throw joinError;
+            if (!shouldPromptMeetingInviteCode && !shouldPromptWebinarInviteCode) {
+              throw joinError;
+            }
+
+            const inviteCode = shouldPromptMeetingInviteCode
+              ? await requestMeetingInviteCode!()
+              : await requestWebinarInviteCode!();
+            if (!inviteCode || !inviteCode.trim()) {
+              throw joinError;
+            }
+
+            nextJoinOptions = shouldPromptMeetingInviteCode
+              ? {
+                  ...nextJoinOptions,
+                  meetingInviteCode: inviteCode.trim(),
+                }
+              : {
+                  ...nextJoinOptions,
+                  webinarInviteCode: inviteCode.trim(),
+                };
+            joinOptionsRef.current = nextJoinOptions;
           }
-
-          const inviteCode = shouldPromptMeetingInviteCode
-            ? await requestMeetingInviteCode!()
-            : await requestWebinarInviteCode!();
-          if (!inviteCode || !inviteCode.trim()) {
-            throw joinError;
-          }
-
-          const retryJoinOptions = shouldPromptMeetingInviteCode
-            ? {
-                ...joinOptions,
-                meetingInviteCode: inviteCode.trim(),
-              }
-            : {
-                ...joinOptions,
-                webinarInviteCode: inviteCode.trim(),
-              };
-          joinOptionsRef.current = retryJoinOptions;
-          await joinRoomInternal(targetRoomId, stream, retryJoinOptions);
         }
       } catch (err) {
         console.error("[Meets] Error joining room:", err);
