@@ -539,7 +539,9 @@ export function SettingsSheet({
       {...SHEET_THEME}
     >
       <ScrollView
+        style={styles.scrollView}
         contentContainerStyle={styles.sheetContent}
+        nestedScrollEnabled
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
       >
@@ -1194,6 +1196,10 @@ export function SettingsSheet({
 }
 
 const styles = StyleSheet.create({
+  scrollView: {
+    flex: 1,
+    minHeight: 0,
+  },
   sheetContent: {
     paddingHorizontal: 16,
     paddingBottom: 16,
