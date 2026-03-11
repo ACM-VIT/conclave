@@ -160,6 +160,7 @@ interface UseMeetSocketOptions {
   setLocalStream: React.Dispatch<React.SetStateAction<MediaStream | null>>;
   dispatchParticipants: (action: ParticipantAction) => void;
   setDisplayNames: React.Dispatch<React.SetStateAction<Map<string, string>>>;
+  setAvatarUrls: React.Dispatch<React.SetStateAction<Map<string, string>>>;
   setPendingUsers: React.Dispatch<React.SetStateAction<Map<string, string>>>;
   setConnectionState: (state: ConnectionState) => void;
   setMeetError: (error: MeetError | null) => void;
@@ -237,6 +238,7 @@ export function useMeetSocket({
   setLocalStream,
   dispatchParticipants,
   setDisplayNames,
+  setAvatarUrls,
   setPendingUsers,
   setConnectionState,
   setMeetError,
@@ -417,6 +419,7 @@ export function useMeetSocket({
       clearReactions();
       setPendingUsers(new Map());
       setDisplayNames(new Map());
+      setAvatarUrls(new Map());
       setHostUserId(null);
       setHostUserIds([]);
       setWebinarRole(null);
@@ -492,6 +495,7 @@ export function useMeetSocket({
       screenShareStreamRef,
       setActiveScreenShareId,
       setDisplayNames,
+      setAvatarUrls,
       setIsHandRaised,
       setIsNoGuests,
       setIsScreenSharing,
@@ -1500,6 +1504,7 @@ export function useMeetSocket({
       stream: MediaStream | null,
       joinOptions: {
         displayName?: string;
+        avatarUrl?: string;
         isGhost: boolean;
         joinMode: JoinMode;
         webinarInviteCode?: string;
@@ -1519,6 +1524,7 @@ export function useMeetSocket({
             roomId: targetRoomId,
             sessionId: sessionIdRef.current,
             displayName: joinOptions.displayName,
+            avatarUrl: joinOptions.avatarUrl,
             ghost: joinOptions.isGhost,
             webinarInviteCode: joinOptions.webinarInviteCode,
             meetingInviteCode: joinOptions.meetingInviteCode,
@@ -1972,10 +1978,12 @@ export function useMeetSocket({
               ({
                 userId: joinedUserId,
                 displayName,
+                avatarUrl,
                 isGhost,
               }: {
                 userId: string;
                 displayName?: string;
+                avatarUrl?: string;
                 isGhost?: boolean;
               }) => {
                 console.log("[Meets] User joined:", joinedUserId);
@@ -1992,6 +2000,15 @@ export function useMeetSocket({
                     return next;
                   });
                 }
+                setAvatarUrls((prev) => {
+                  const next = new Map(prev);
+                  if (avatarUrl?.trim()) {
+                    next.set(joinedUserId, avatarUrl.trim());
+                  } else {
+                    next.delete(joinedUserId);
+                  }
+                  return next;
+                });
                 const leaveTimeout = leaveTimeoutsRef.current.get(joinedUserId);
                 if (leaveTimeout) {
                   clearTimeout(leaveTimeout);
@@ -2016,6 +2033,12 @@ export function useMeetSocket({
                   playNotificationSound("leave");
                 }
                 setDisplayNames((prev) => {
+                  if (!prev.has(leftUserId)) return prev;
+                  const next = new Map(prev);
+                  next.delete(leftUserId);
+                  return next;
+                });
+                setAvatarUrls((prev) => {
                   if (!prev.has(leftUserId)) return prev;
                   const next = new Map(prev);
                   next.delete(leftUserId);
@@ -2086,6 +2109,27 @@ export function useMeetSocket({
             );
 
             socket.on(
+              "avatarSnapshot",
+              ({
+                users,
+                roomId: eventRoomId,
+              }: {
+                users: { userId: string; avatarUrl?: string }[];
+                roomId?: string;
+              }) => {
+                if (!isRoomEvent(eventRoomId)) return;
+                const snapshot = new Map<string, string>();
+                (users || []).forEach(({ userId: snapshotUserId, avatarUrl }) => {
+                  const normalizedAvatarUrl = avatarUrl?.trim();
+                  if (normalizedAvatarUrl) {
+                    snapshot.set(snapshotUserId, normalizedAvatarUrl);
+                  }
+                });
+                setAvatarUrls(snapshot);
+              }
+            );
+
+            socket.on(
               "handRaisedSnapshot",
               ({ users, roomId: eventRoomId }: HandRaisedSnapshot) => {
                 if (!isRoomEvent(eventRoomId)) return;
@@ -2099,6 +2143,30 @@ export function useMeetSocket({
                     userId: raisedUserId,
                     raised,
                   });
+                });
+              }
+            );
+
+            socket.on(
+              "avatarUpdated",
+              ({
+                userId: updatedUserId,
+                avatarUrl,
+                roomId: eventRoomId,
+              }: {
+                userId: string;
+                avatarUrl?: string;
+                roomId?: string;
+              }) => {
+                if (!isRoomEvent(eventRoomId)) return;
+                setAvatarUrls((prev) => {
+                  const next = new Map(prev);
+                  if (avatarUrl?.trim()) {
+                    next.set(updatedUserId, avatarUrl.trim());
+                  } else {
+                    next.delete(updatedUserId);
+                  }
+                  return next;
                 });
               }
             );

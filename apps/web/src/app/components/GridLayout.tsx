@@ -25,6 +25,7 @@ interface GridLayoutProps {
   onParticipantClick?: (userId: string) => void;
   onOpenParticipantsPanel?: () => void;
   getDisplayName: (userId: string) => string;
+  getAvatarUrl: (userId: string) => string | undefined;
 }
 
 const MAX_GRID_TILES = 16;
@@ -46,6 +47,7 @@ function GridLayout({
   onParticipantClick,
   onOpenParticipantsPanel,
   getDisplayName,
+  getAvatarUrl,
 }: GridLayoutProps) {
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const [isOverflowOpen, setIsOverflowOpen] = useState(false);
@@ -157,6 +159,12 @@ function GridLayout({
   const localSpeakerHighlight = isLocalActiveSpeaker 
     ? "speaking" 
     : "";
+  const localAvatarUrl = getAvatarUrl(currentUserId)?.trim() || "";
+  const [localAvatarLoadFailed, setLocalAvatarLoadFailed] = useState(false);
+
+  useEffect(() => {
+    setLocalAvatarLoadFailed(false);
+  }, [localAvatarUrl]);
   const localHandRaisedHighlight = isHandRaised
     ? "border-amber-400/45 shadow-[0_0_22px_rgba(251,191,36,0.24)]"
     : "";
@@ -250,9 +258,18 @@ function GridLayout({
           />
           {isCameraOff && (
             <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-[#1a1a1a] to-[#0d0e0d]">
-              <div className="w-20 h-20 rounded-full bg-gradient-to-br from-[#F95F4A]/20 to-[#FF007A]/20 border border-[#FEFCD9]/20 flex items-center justify-center text-3xl text-[#FEFCD9] font-bold">
-                {userEmail[0]?.toUpperCase() || "?"}
-              </div>
+              {localAvatarUrl && !localAvatarLoadFailed ? (
+                <img
+                  src={localAvatarUrl}
+                  alt={`${localDisplayName} avatar`}
+                  className="w-20 h-20 rounded-full object-cover border border-[#FEFCD9]/20"
+                  onError={() => setLocalAvatarLoadFailed(true)}
+                />
+              ) : (
+                <div className="w-20 h-20 rounded-full bg-gradient-to-br from-[#F95F4A]/20 to-[#FF007A]/20 border border-[#FEFCD9]/20 flex items-center justify-center text-3xl text-[#FEFCD9] font-bold">
+                  {userEmail[0]?.toUpperCase() || "?"}
+                </div>
+              )}
             </div>
           )}
           {isGhost && (
@@ -327,6 +344,7 @@ function GridLayout({
             key={participant.userId}
             participant={participant}
             displayName={getDisplayName(participant.userId)}
+            avatarUrl={getAvatarUrl(participant.userId)}
             isActiveSpeaker={activeSpeakerId === participant.userId}
             audioOutputDeviceId={audioOutputDeviceId}
             disableAudio

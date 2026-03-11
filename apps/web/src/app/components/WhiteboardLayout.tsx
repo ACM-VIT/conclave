@@ -1,7 +1,7 @@
 "use client";
 
 import { Ghost, Hand } from "lucide-react";
-import { memo, useEffect, useRef } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { WhiteboardWebApp } from "@conclave/apps-sdk/whiteboard/web";
 import { useSmartParticipantOrder } from "../hooks/useSmartParticipantOrder";
 import type { Participant } from "../lib/types";
@@ -21,6 +21,7 @@ interface WhiteboardLayoutProps {
   currentUserId: string;
   audioOutputDeviceId?: string;
   getDisplayName: (userId: string) => string;
+  getAvatarUrl: (userId: string) => string | undefined;
 }
 
 function WhiteboardLayout({
@@ -36,9 +37,16 @@ function WhiteboardLayout({
   currentUserId,
   audioOutputDeviceId,
   getDisplayName,
+  getAvatarUrl,
 }: WhiteboardLayoutProps) {
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const isLocalActiveSpeaker = activeSpeakerId === currentUserId;
+  const localAvatarUrl = getAvatarUrl(currentUserId)?.trim() || "";
+  const [localAvatarLoadFailed, setLocalAvatarLoadFailed] = useState(false);
+
+  useEffect(() => {
+    setLocalAvatarLoadFailed(false);
+  }, [localAvatarUrl]);
 
   useEffect(() => {
     const video = localVideoRef.current;
@@ -83,9 +91,18 @@ function WhiteboardLayout({
           />
           {isCameraOff && (
             <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-[#1a1a1a] to-[#0d0e0d]">
-              <div className="w-12 h-12 rounded-full bg-gradient-to-br from-[#F95F4A]/20 to-[#FF007A]/20 border border-[#FEFCD9]/20 flex items-center justify-center text-lg text-[#FEFCD9] font-bold">
-                {userEmail[0]?.toUpperCase() || "?"}
-              </div>
+              {localAvatarUrl && !localAvatarLoadFailed ? (
+                <img
+                  src={localAvatarUrl}
+                  alt="Your avatar"
+                  className="w-12 h-12 rounded-full object-cover border border-[#FEFCD9]/20"
+                  onError={() => setLocalAvatarLoadFailed(true)}
+                />
+              ) : (
+                <div className="w-12 h-12 rounded-full bg-gradient-to-br from-[#F95F4A]/20 to-[#FF007A]/20 border border-[#FEFCD9]/20 flex items-center justify-center text-lg text-[#FEFCD9] font-bold">
+                  {userEmail[0]?.toUpperCase() || "?"}
+                </div>
+              )}
             </div>
           )}
           {isGhost && (
@@ -122,6 +139,7 @@ function WhiteboardLayout({
             key={participant.userId}
             participant={participant}
             displayName={getDisplayName(participant.userId)}
+            avatarUrl={getAvatarUrl(participant.userId)}
             isActiveSpeaker={activeSpeakerId === participant.userId}
             compact
             audioOutputDeviceId={audioOutputDeviceId}
