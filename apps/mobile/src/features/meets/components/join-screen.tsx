@@ -94,6 +94,9 @@ const authBaseUrl =
   process.env.EXPO_PUBLIC_SFU_BASE_URL ||
   "";
 
+const resolveAppBaseUrl = (value: string) =>
+  value.trim().replace(/\/$/, "").replace(/\/api(?:\/.*)?$/, "");
+
 const googleClientConfig = {
   iosClientId: process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID,
   androidClientId: process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID,
@@ -278,6 +281,10 @@ export function JoinScreen({
   const haptic = useCallback(() => {
     Haptics.selectionAsync().catch(() => { });
   }, []);
+  const deleteAccountUrl = useMemo(() => {
+    const baseUrl = resolveAppBaseUrl(authBaseUrl);
+    return baseUrl ? `${baseUrl}/delete-account` : "";
+  }, []);
 
   const shouldShowPermissionPrompt =
     phase === "join" &&
@@ -461,6 +468,24 @@ export function JoinScreen({
     onJoinRoom(roomId, { isHost: false });
   }, [canJoin, isLoading, haptic, onIsAdminChange, onJoinRoom, roomId]);
 
+  const handleOpenDeleteAccount = useCallback(async () => {
+    haptic();
+    if (!deleteAccountUrl) {
+      Alert.alert(
+        "Delete account unavailable",
+        "Set EXPO_PUBLIC_APP_URL so the app can open the direct deletion page."
+      );
+      return;
+    }
+    try {
+      await WebBrowser.openBrowserAsync(deleteAccountUrl);
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Unable to open the deletion page.";
+      Alert.alert("Unable to open deletion page", message);
+    }
+  }, [deleteAccountUrl, haptic]);
+
   const userInitial = displayNameInput?.[0]?.toUpperCase() || "?";
 
   useEffect(() => {
@@ -536,7 +561,7 @@ export function JoinScreen({
                 </View>
 
                 <Text style={[styles.tagline, { color: COLORS.creamLighter }]}>
-                  ACM-VIT's in-house video conferencing platform
+                  Video conferencing for meetings, webinars, and collaboration
                 </Text>
 
                 <Pressable
@@ -688,6 +713,30 @@ export function JoinScreen({
                         </Text>
                       </Pressable>
                     </GlassPill>
+                  </View>
+
+                  <View style={styles.accountLinkRow}>
+                    <Text style={[styles.accountLinkHint, { color: COLORS.creamLighter }]}>
+                      Need to remove an existing account?
+                    </Text>
+                    <Pressable
+                      onPress={handleOpenDeleteAccount}
+                      disabled={!deleteAccountUrl}
+                      style={styles.accountLinkButton}
+                    >
+                      <Text
+                        style={[
+                          styles.accountLinkText,
+                          {
+                            color: deleteAccountUrl
+                              ? COLORS.primaryOrange
+                              : COLORS.creamLight,
+                          },
+                        ]}
+                      >
+                        Delete account
+                      </Text>
+                    </Pressable>
                   </View>
 
                   <Pressable
@@ -842,6 +891,28 @@ export function JoinScreen({
 
                 </View>
               </View>
+
+              {isSignedInUser ? (
+                <View style={styles.joinAccountRow}>
+                  <Text style={styles.joinAccountText}>
+                    {user?.email || displayNameInput || "Signed in"}
+                  </Text>
+                  <Pressable
+                    onPress={handleOpenDeleteAccount}
+                    disabled={!deleteAccountUrl}
+                    style={styles.joinAccountLinkButton}
+                  >
+                    <Text
+                      style={[
+                        styles.joinAccountLinkText,
+                        !deleteAccountUrl && styles.joinAccountLinkTextDisabled,
+                      ]}
+                    >
+                      Delete account
+                    </Text>
+                  </Pressable>
+                </View>
+              ) : null}
 
               <View style={styles.joinDock} pointerEvents="box-none">
                 <View style={styles.joinDockInner}>
@@ -1233,6 +1304,28 @@ export function JoinScreen({
                       </View>
                     )}
 
+                    {isSignedInUser ? (
+                      <View style={styles.joinAccountCardRow}>
+                        <Text style={styles.joinAccountCardText}>
+                          {user?.email || displayNameInput || "Signed in"}
+                        </Text>
+                        <Pressable
+                          onPress={handleOpenDeleteAccount}
+                          disabled={!deleteAccountUrl}
+                          style={styles.joinAccountLinkButton}
+                        >
+                          <Text
+                            style={[
+                              styles.joinAccountLinkText,
+                              !deleteAccountUrl && styles.joinAccountLinkTextDisabled,
+                            ]}
+                          >
+                            Delete account
+                          </Text>
+                        </Pressable>
+                      </View>
+                    ) : null}
+
                     {!forceJoinOnly && (
                       <Pressable
                         onPress={() => {
@@ -1606,6 +1699,28 @@ const styles = StyleSheet.create({
   inputGroup: {
     gap: 12,
   },
+  accountLinkRow: {
+    marginTop: 18,
+    alignItems: "center",
+    gap: 6,
+  },
+  accountLinkHint: {
+    fontSize: 11,
+    lineHeight: textLineHeight(11, 1.3),
+    fontFamily: "PolySans-Regular",
+    textAlign: "center",
+  },
+  accountLinkButton: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  accountLinkText: {
+    fontSize: 12,
+    lineHeight: textLineHeight(12, 1.25),
+    letterSpacing: 1.2,
+    textTransform: "uppercase",
+    fontFamily: "PolySans-Mono",
+  },
   authInputPill: {
     alignSelf: "center",
     width: "100%",
@@ -1687,6 +1802,43 @@ const styles = StyleSheet.create({
   },
   joinContentInner: {
     gap: 20,
+  },
+  joinAccountRow: {
+    marginTop: 12,
+    alignItems: "center",
+    gap: 4,
+  },
+  joinAccountCardRow: {
+    marginTop: 4,
+    alignItems: "flex-start",
+    gap: 6,
+  },
+  joinAccountText: {
+    fontSize: 12,
+    lineHeight: textLineHeight(12, 1.3),
+    color: COLORS.creamLight,
+    fontFamily: "PolySans-Regular",
+    textAlign: "center",
+  },
+  joinAccountCardText: {
+    fontSize: 12,
+    lineHeight: textLineHeight(12, 1.3),
+    color: COLORS.creamLight,
+    fontFamily: "PolySans-Regular",
+  },
+  joinAccountLinkButton: {
+    paddingVertical: 4,
+  },
+  joinAccountLinkText: {
+    fontSize: 12,
+    lineHeight: textLineHeight(12, 1.25),
+    color: COLORS.primaryOrange,
+    fontFamily: "PolySans-Mono",
+    textTransform: "uppercase",
+    letterSpacing: 1,
+  },
+  joinAccountLinkTextDisabled: {
+    color: COLORS.creamLight,
   },
   sectionLabel: {
     fontSize: 12,

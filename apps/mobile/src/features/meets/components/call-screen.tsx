@@ -43,6 +43,8 @@ const MEETING_LINK_BASE = "https://conclave.acmvit.in";
 const COPY_RESET_DELAY_MS = 1500;
 const GRID_HORIZONTAL_PADDING = 32;
 const MAX_GRID_TILES = 16;
+const PRESENTATION_STRIP_TILE_SIZE_PHONE = 72;
+const PRESENTATION_STRIP_TILE_SIZE_TABLET = 96;
 
 const getMaxGridColumns = (layout: DeviceLayout, participantCount: number) => {
   if (layout === "large") {
@@ -637,11 +639,15 @@ export function CallScreen({
   const gridGap = isTablet ? 16 : 12;
   const participantCountForLayout = Math.max(gridItems.length, 1);
   const controlsReservedHeight = 140 + insets.bottom;
+  const presentationControlsReserved = Math.max(insets.bottom, 12) + 72;
+  const presentationStripTileSize = isTablet
+    ? PRESENTATION_STRIP_TILE_SIZE_TABLET
+    : PRESENTATION_STRIP_TILE_SIZE_PHONE;
   const gridTopPadding =
     layout === "compact" && participantCountForLayout === 2 ? 16 : 8;
   const estimatedGridHeight = Math.max(
     0,
-    height - insets.top - controlsReservedHeight - (isTablet ? 108 : 96)
+    height - insets.top - (isTablet ? 108 : 96)
   );
   const measuredGridHeight =
     gridViewportHeight > 0 ? gridViewportHeight : estimatedGridHeight;
@@ -723,14 +729,20 @@ export function CallScreen({
     layout === "compact" && participantCountForLayout === 2 && columns === 1;
 
   const tileStyle = useMemo(
-    () => ({
-      width: optimalGrid.tileWidth,
-      height: Math.max(isTablet ? 92 : 76, optimalGrid.tileHeight),
-    }),
-    [optimalGrid.tileWidth, optimalGrid.tileHeight, isTablet]
+    () => {
+      let tileHeight = optimalGrid.tileHeight;
+      if (participantCountForLayout === 1) {
+        const maxHeight = Math.floor(optimalGrid.tileWidth * (4 / 3));
+        tileHeight = Math.min(tileHeight, maxHeight);
+      }
+      return {
+        width: optimalGrid.tileWidth,
+        height: tileHeight,
+      };
+    },
+    [optimalGrid.tileWidth, optimalGrid.tileHeight, participantCountForLayout]
   );
 
-  const stripTileSize = isTablet ? 120 : 88;
   const hasTerminalConnectionState =
     connectionState === "disconnected" || connectionState === "error";
   const showServerRestartNotice =
@@ -973,25 +985,23 @@ export function CallScreen({
           <RNView
             style={[
               styles.presentationContainer,
-              { paddingBottom: 140 + insets.bottom },
+              { paddingBottom: presentationControlsReserved },
             ]}
           >
-            <RNView style={styles.presentationCenter}>
-              <RNView style={styles.screenShareStage}>
-                <RTCView
-                  streamURL={presentationStream.toURL()}
-                  style={styles.presentationVideo}
-                  mirror={false}
-                  objectFit="contain"
-                />
-                <GlassPill style={styles.presenterBadge}>
-                  <Text style={[styles.presenterText, webinarTextStyle]}>
-                    {presenterName === "You"
-                      ? "You're presenting"
-                      : `${presenterName || "Presenter"} is presenting`}
-                  </Text>
-                </GlassPill>
-              </RNView>
+            <RNView style={styles.screenShareStageFull}>
+              <RTCView
+                streamURL={presentationStream.toURL()}
+                style={styles.presentationVideo}
+                mirror={false}
+                objectFit="contain"
+              />
+              <GlassPill style={styles.presenterBadge}>
+                <Text style={[styles.presenterText, webinarTextStyle]}>
+                  {presenterName === "You"
+                    ? "You're presenting"
+                    : `${presenterName || "Presenter"} is presenting`}
+                </Text>
+              </GlassPill>
             </RNView>
 
             <RNView style={styles.screenShareStripDock}>
@@ -1010,7 +1020,7 @@ export function CallScreen({
                   const initials =
                     label?.trim()?.[0]?.toUpperCase() || "?";
                   return (
-                    <RNView style={[styles.stripTile, { width: stripTileSize, height: stripTileSize }]}>
+                    <RNView style={[styles.stripTile, { width: presentationStripTileSize, height: presentationStripTileSize }]}>
                       {item.videoStream && !item.isCameraOff ? (
                         <RTCView
                           streamURL={item.videoStream.toURL()}
@@ -1074,7 +1084,7 @@ export function CallScreen({
               contentContainerStyle={[
                 styles.gridContent,
                 { paddingBottom: controlsReservedHeight },
-                isTwoUp && styles.gridContentTwoUp,
+                isTwoUp ? styles.gridContentTwoUp : styles.gridContentCentered,
               ]}
               columnWrapperStyle={columns > 1 ? (isTablet ? columnWrapperStyleTablet : columnWrapperStyle) : undefined}
               renderItem={({ item }) => {
@@ -1267,6 +1277,10 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     paddingTop: 16,
   },
+  gridContentCentered: {
+    flexGrow: 1,
+    justifyContent: "center",
+  },
   overflowTile: {
     flex: 1,
     borderRadius: 16,
@@ -1293,17 +1307,21 @@ const styles = StyleSheet.create({
   },
   presentationContainer: {
     flex: 1,
-    paddingHorizontal: 12,
+    paddingHorizontal: 8,
     paddingTop: 8,
     width: "100%",
   },
-  presentationCenter: {
+  screenShareStageFull: {
     flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
+    borderRadius: 16,
+    overflow: "hidden",
+    backgroundColor: "#0b0b0b",
+    borderWidth: 1,
+    borderColor: "rgba(254, 252, 217, 0.08)",
+    marginBottom: 8,
   },
   screenShareStripDock: {
-    width: "100%",
+    paddingBottom: 4,
   },
   whiteboardContainer: {
     flex: 1,
@@ -1312,17 +1330,6 @@ const styles = StyleSheet.create({
   },
   presentationStage: {
     flex: 1,
-    borderRadius: 16,
-    overflow: "hidden",
-    backgroundColor: "#0b0b0b",
-    borderWidth: 1,
-    borderColor: "rgba(254, 252, 217, 0.08)",
-  },
-  screenShareStage: {
-    width: "92%",
-    maxWidth: 980,
-    aspectRatio: 16 / 9,
-    alignSelf: "center",
     borderRadius: 16,
     overflow: "hidden",
     backgroundColor: "#0b0b0b",

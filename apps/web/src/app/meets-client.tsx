@@ -529,7 +529,7 @@ export default function MeetsClient({
   );
 
   const playNotificationSoundForEvents = useCallback(
-    (type: "join" | "leave" | "waiting") => {
+    (type: "join" | "leave" | "waiting" | "handRaise") => {
       if ((type === "join" || type === "leave") && !shouldPlayJoinLeaveSound(type)) {
         return;
       }

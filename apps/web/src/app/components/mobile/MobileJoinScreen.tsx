@@ -420,7 +420,7 @@ function MobileJoinScreen({
           className="relative z-10 text-sm text-[#FEFCD9]/30 mb-10 text-center max-w-[320px]"
           style={{ fontFamily: "'PolySans Trial', sans-serif" }}
         >
-          ACM-VIT's in-house video conferencing platform
+          Video conferencing for meetings, webinars, and collaboration
         </p>
 
         <button

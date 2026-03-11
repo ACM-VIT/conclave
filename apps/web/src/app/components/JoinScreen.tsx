@@ -455,7 +455,7 @@ function JoinScreen({
               className="text-[#FEFCD9]/30 text-sm mb-12 max-w-xs text-center"
               style={{ fontFamily: "'PolySans Trial', sans-serif" }}
             >
-              ACM-VIT's in-house video conferencing platform
+              Video conferencing for meetings, webinars, and collaboration
             </p>
 
             <button

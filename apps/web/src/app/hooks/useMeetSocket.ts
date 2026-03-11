@@ -195,8 +195,13 @@ interface UseMeetSocketOptions {
   >;
   requestMediaPermissions: () => Promise<MediaStream | null>;
   stopLocalTrack: (track?: MediaStreamTrack | null) => void;
-  handleLocalTrackEnded: (kind: "audio" | "video", track: MediaStreamTrack) => void;
-  playNotificationSound: (type: "join" | "leave" | "waiting" | "handRaise") => void;
+  handleLocalTrackEnded: (
+    kind: "audio" | "video",
+    track: MediaStreamTrack,
+  ) => void;
+  playNotificationSound: (
+    type: "join" | "leave" | "waiting" | "handRaise"
+  ) => void;
   primeAudioOutput: () => void;
   addReaction: (reaction: ReactionPayload) => void;
   clearReactions: () => void;
