@@ -7,6 +7,7 @@ import {
   Mic,
   MicOff,
   Plus,
+  Trash2,
   Video,
   VideoOff,
 } from "lucide-react";
@@ -158,6 +159,7 @@ function MobileJoinScreen({
 
   const { data: session } = useSession();
   const canSignOut = Boolean(session?.user || user?.id || user?.email);
+  const isSignedInUser = Boolean((session?.user || user) && !user?.id?.startsWith("guest-"));
   const lastAppliedSessionUserIdRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -328,6 +330,11 @@ function MobileJoinScreen({
         console.error("Sign out error:", error);
       });
     setIsSigningOut(false);
+  };
+
+  const handleOpenDeleteAccount = () => {
+    if (typeof window === "undefined") return;
+    window.open("/delete-account", "_blank", "noopener,noreferrer");
   };
 
   const handleGuest = () => {
@@ -653,23 +660,35 @@ function MobileJoinScreen({
           </div>
 
           {/* User email */}
-          <div className="absolute top-4 left-4 flex items-center gap-2 max-w-[70%]">
+          <div className="absolute top-4 left-4 right-4 flex items-start justify-between gap-3">
             <div
-              className="min-w-0 h-8 px-3 flex items-center mobile-glass mobile-pill text-xs text-[#FEFCD9]/80 truncate"
+              className="min-w-0 max-w-[65%] h-8 px-3 flex items-center mobile-glass mobile-pill text-xs text-[#FEFCD9]/80 truncate"
               style={{ fontFamily: "'PolySans Trial', sans-serif" }}
             >
               {userEmail}
             </div>
-            {canSignOut && (
-              <button
-                onClick={handleSignOut}
-                disabled={isSigningOut}
-                className="shrink-0 h-8 px-3 flex items-center mobile-glass mobile-pill text-xs text-[#FEFCD9]/80 disabled:opacity-50"
-                style={{ fontFamily: "'PolySans Trial', sans-serif" }}
-              >
-                {isSigningOut ? "Signing out..." : "Sign out"}
-              </button>
-            )}
+            <div className="flex items-center gap-2">
+              {isSignedInUser && (
+                <button
+                  type="button"
+                  onClick={handleOpenDeleteAccount}
+                  className="shrink-0 h-8 w-8 flex items-center justify-center mobile-glass mobile-pill text-[#F95F4A]"
+                  aria-label="Delete account"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              )}
+              {canSignOut && (
+                <button
+                  onClick={handleSignOut}
+                  disabled={isSigningOut}
+                  className="shrink-0 h-8 px-3 flex items-center mobile-glass mobile-pill text-xs text-[#FEFCD9]/80 disabled:opacity-50"
+                  style={{ fontFamily: "'PolySans Trial', sans-serif" }}
+                >
+                  {isSigningOut ? "Signing out..." : "Sign out"}
+                </button>
+              )}
+            </div>
           </div>
 
           {showPermissionHint && (
