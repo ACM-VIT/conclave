@@ -23,6 +23,7 @@ import {
   Mic,
   MicOff,
   Plus,
+  Trash2,
   Video,
   VideoOff,
 } from "lucide-react-native";
@@ -715,30 +716,6 @@ export function JoinScreen({
                     </GlassPill>
                   </View>
 
-                  <View style={styles.accountLinkRow}>
-                    <Text style={[styles.accountLinkHint, { color: COLORS.creamLighter }]}>
-                      Need to remove an existing account?
-                    </Text>
-                    <Pressable
-                      onPress={handleOpenDeleteAccount}
-                      disabled={!deleteAccountUrl}
-                      style={styles.accountLinkButton}
-                    >
-                      <Text
-                        style={[
-                          styles.accountLinkText,
-                          {
-                            color: deleteAccountUrl
-                              ? COLORS.primaryOrange
-                              : COLORS.creamLight,
-                          },
-                        ]}
-                      >
-                        Delete account
-                      </Text>
-                    </Pressable>
-                  </View>
-
                   <Pressable
                     onPress={() => {
                       haptic();
@@ -851,6 +828,22 @@ export function JoinScreen({
                       </Text>
                     </Pressable>
                   )}
+                  {isSignedInUser ? (
+                    <Pressable
+                      onPress={handleOpenDeleteAccount}
+                      disabled={!deleteAccountUrl}
+                      hitSlop={8}
+                      style={[
+                        styles.deleteAccountIconButton,
+                        !deleteAccountUrl && styles.deleteAccountIconButtonDisabled,
+                      ]}
+                    >
+                      <Trash2
+                        size={14}
+                        color={deleteAccountUrl ? COLORS.primaryOrange : COLORS.creamLight}
+                      />
+                    </Pressable>
+                  ) : null}
 
                   <View style={styles.mediaControlsContainer}>
                     <View style={styles.mediaControlsPill}>
@@ -891,28 +884,6 @@ export function JoinScreen({
 
                 </View>
               </View>
-
-              {isSignedInUser ? (
-                <View style={styles.joinAccountRow}>
-                  <Text style={styles.joinAccountText}>
-                    {user?.email || displayNameInput || "Signed in"}
-                  </Text>
-                  <Pressable
-                    onPress={handleOpenDeleteAccount}
-                    disabled={!deleteAccountUrl}
-                    style={styles.joinAccountLinkButton}
-                  >
-                    <Text
-                      style={[
-                        styles.joinAccountLinkText,
-                        !deleteAccountUrl && styles.joinAccountLinkTextDisabled,
-                      ]}
-                    >
-                      Delete account
-                    </Text>
-                  </Pressable>
-                </View>
-              ) : null}
 
               <View style={styles.joinDock} pointerEvents="box-none">
                 <View style={styles.joinDockInner}>
@@ -1134,6 +1105,22 @@ export function JoinScreen({
                       </Text>
                     </Pressable>
                   )}
+                  {isSignedInUser ? (
+                    <Pressable
+                      onPress={handleOpenDeleteAccount}
+                      disabled={!deleteAccountUrl}
+                      hitSlop={8}
+                      style={[
+                        styles.deleteAccountIconButton,
+                        !deleteAccountUrl && styles.deleteAccountIconButtonDisabled,
+                      ]}
+                    >
+                      <Trash2
+                        size={14}
+                        color={deleteAccountUrl ? COLORS.primaryOrange : COLORS.creamLight}
+                      />
+                    </Pressable>
+                  ) : null}
 
                       <View style={styles.mediaControlsContainer}>
                         <View style={styles.mediaControlsPill}>
@@ -1303,28 +1290,6 @@ export function JoinScreen({
                         </Pressable>
                       </View>
                     )}
-
-                    {isSignedInUser ? (
-                      <View style={styles.joinAccountCardRow}>
-                        <Text style={styles.joinAccountCardText}>
-                          {user?.email || displayNameInput || "Signed in"}
-                        </Text>
-                        <Pressable
-                          onPress={handleOpenDeleteAccount}
-                          disabled={!deleteAccountUrl}
-                          style={styles.joinAccountLinkButton}
-                        >
-                          <Text
-                            style={[
-                              styles.joinAccountLinkText,
-                              !deleteAccountUrl && styles.joinAccountLinkTextDisabled,
-                            ]}
-                          >
-                            Delete account
-                          </Text>
-                        </Pressable>
-                      </View>
-                    ) : null}
 
                     {!forceJoinOnly && (
                       <Pressable
@@ -1699,28 +1664,6 @@ const styles = StyleSheet.create({
   inputGroup: {
     gap: 12,
   },
-  accountLinkRow: {
-    marginTop: 18,
-    alignItems: "center",
-    gap: 6,
-  },
-  accountLinkHint: {
-    fontSize: 11,
-    lineHeight: textLineHeight(11, 1.3),
-    fontFamily: "PolySans-Regular",
-    textAlign: "center",
-  },
-  accountLinkButton: {
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-  },
-  accountLinkText: {
-    fontSize: 12,
-    lineHeight: textLineHeight(12, 1.25),
-    letterSpacing: 1.2,
-    textTransform: "uppercase",
-    fontFamily: "PolySans-Mono",
-  },
   authInputPill: {
     alignSelf: "center",
     width: "100%",
@@ -1803,43 +1746,6 @@ const styles = StyleSheet.create({
   joinContentInner: {
     gap: 20,
   },
-  joinAccountRow: {
-    marginTop: 12,
-    alignItems: "center",
-    gap: 4,
-  },
-  joinAccountCardRow: {
-    marginTop: 4,
-    alignItems: "flex-start",
-    gap: 6,
-  },
-  joinAccountText: {
-    fontSize: 12,
-    lineHeight: textLineHeight(12, 1.3),
-    color: COLORS.creamLight,
-    fontFamily: "PolySans-Regular",
-    textAlign: "center",
-  },
-  joinAccountCardText: {
-    fontSize: 12,
-    lineHeight: textLineHeight(12, 1.3),
-    color: COLORS.creamLight,
-    fontFamily: "PolySans-Regular",
-  },
-  joinAccountLinkButton: {
-    paddingVertical: 4,
-  },
-  joinAccountLinkText: {
-    fontSize: 12,
-    lineHeight: textLineHeight(12, 1.25),
-    color: COLORS.primaryOrange,
-    fontFamily: "PolySans-Mono",
-    textTransform: "uppercase",
-    letterSpacing: 1,
-  },
-  joinAccountLinkTextDisabled: {
-    color: COLORS.creamLight,
-  },
   sectionLabel: {
     fontSize: 12,
     lineHeight: textLineHeight(12, 1.25),
@@ -1898,6 +1804,23 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(0, 0, 0, 0.7)",
     borderWidth: 1,
     borderColor: "rgba(254, 252, 217, 0.2)",
+  },
+  deleteAccountIconButton: {
+    position: "absolute",
+    top: 12,
+    right: 12,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(0, 0, 0, 0.7)",
+    borderWidth: 1,
+    borderColor: "rgba(254, 252, 217, 0.2)",
+  },
+  deleteAccountIconButtonDisabled: {
+    backgroundColor: "rgba(0, 0, 0, 0.55)",
+    borderColor: "rgba(254, 252, 217, 0.12)",
   },
   overlayText: {
     fontSize: 12,

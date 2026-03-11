@@ -1,7 +1,7 @@
 "use client";
 
-import { AlertTriangle, Apple, CheckCircle2, Loader2 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { Loader2 } from "lucide-react";
+import { useState } from "react";
 import { signIn, useSession } from "@/lib/auth-client";
 
 type Provider = "google" | "apple";
@@ -27,10 +27,31 @@ const readResponsePayload = async (
 const formatDeleteError = (payload: DeleteUserResponse | null, fallbackText: string) => {
   const message = payload?.error || payload?.message || fallbackText;
   if (/session expired/i.test(message)) {
-    return "Your session expired. Sign in again, then retry deletion.";
+    return "Session expired. Sign in again and retry.";
   }
-  return message || "Unable to delete your account right now.";
+  return message || "Unable to delete account.";
 };
+
+const GoogleIcon = () => (
+  <svg className="h-5 w-5 shrink-0" viewBox="0 0 24 24" aria-hidden="true">
+    <path
+      fill="#4285F4"
+      d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
+    />
+    <path
+      fill="#34A853"
+      d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
+    />
+    <path
+      fill="#FBBC05"
+      d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"
+    />
+    <path
+      fill="#EA4335"
+      d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"
+    />
+  </svg>
+);
 
 export default function DeleteAccountClient() {
   const { data: session } = useSession();
@@ -40,22 +61,6 @@ export default function DeleteAccountClient() {
   const [notice, setNotice] = useState<string | null>(null);
   const isSignedIn = Boolean(session?.user?.id);
   const signedInEmail = session?.user?.email || "";
-
-  const providerButtons = useMemo(
-    () => [
-      {
-        id: "google" as const,
-        label: "Continue with Google",
-        icon: <span className="text-base font-semibold text-[#4285F4]">G</span>,
-      },
-      {
-        id: "apple" as const,
-        label: "Continue with Apple",
-        icon: <Apple className="h-4 w-4" />,
-      },
-    ],
-    []
-  );
 
   const handleSignIn = async (provider: Provider) => {
     setActiveProvider(provider);
@@ -88,18 +93,13 @@ export default function DeleteAccountClient() {
         body: JSON.stringify({}),
       });
       const { data, text } = await readResponsePayload(response);
-      if (!response.ok) {
+      if (!response.ok || !data?.success) {
         throw new Error(formatDeleteError(data, text));
       }
-      if (!data?.success) {
-        throw new Error(formatDeleteError(data, text));
-      }
-      setNotice("Your account has been deleted.");
+      setNotice("Account deleted.");
     } catch (deleteError) {
       const message =
-        deleteError instanceof Error
-          ? deleteError.message
-          : "Unable to delete your account right now.";
+        deleteError instanceof Error ? deleteError.message : "Unable to delete account.";
       setError(message);
     } finally {
       setIsDeleting(false);
@@ -107,47 +107,26 @@ export default function DeleteAccountClient() {
   };
 
   return (
-    <main className="mx-auto flex min-h-screen max-w-2xl flex-col justify-center px-5 py-10 text-[#fefcd9]">
-      <div className="rounded-[28px] border border-[#fefcd9]/10 bg-[#111111]/90 p-6 shadow-2xl shadow-black/40">
-        <p className="mb-3 text-xs uppercase tracking-[0.3em] text-[#fefcd9]/50">
-          Account deletion
-        </p>
-        <h1 className="text-3xl font-semibold tracking-tight">Delete your c0nclav3 account</h1>
-        <p className="mt-4 text-sm leading-6 text-[#fefcd9]/75">
-          This page lets you permanently delete the account used with c0nclav3. You do not need to
-          email support.
-        </p>
-
-        <div className="mt-6 rounded-2xl border border-[#f95f4a]/25 bg-[#f95f4a]/8 p-4">
-          <div className="flex items-start gap-3">
-            <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-[#f95f4a]" />
-            <div className="space-y-2 text-sm leading-6 text-[#fefcd9]/80">
-              <p>Deleting your account is permanent.</p>
-              <p>Profile data tied to your account is removed. Live meeting media is not retained after sessions end.</p>
-            </div>
-          </div>
-        </div>
+    <main className="flex min-h-screen items-center justify-center bg-[#060606] px-4 py-10 text-[#fefcd9]">
+      <div className="w-full max-w-sm rounded-3xl border border-white/10 bg-[#111111] p-6 shadow-2xl shadow-black/40">
+        <h1 className="text-2xl font-semibold">Delete account</h1>
 
         {notice ? (
-          <div className="mt-6 rounded-2xl border border-emerald-400/25 bg-emerald-400/10 p-4 text-sm text-emerald-100">
-            <div className="flex items-center gap-3">
-              <CheckCircle2 className="h-5 w-5 shrink-0" />
-              <p>{notice}</p>
-            </div>
+          <div className="mt-4 rounded-2xl border border-emerald-400/25 bg-emerald-400/10 px-4 py-3 text-sm text-emerald-100">
+            {notice}
           </div>
         ) : null}
 
         {error ? (
-          <div className="mt-6 rounded-2xl border border-[#f95f4a]/30 bg-[#f95f4a]/10 p-4 text-sm text-[#ffd2cc]">
+          <div className="mt-4 rounded-2xl border border-[#f95f4a]/30 bg-[#f95f4a]/10 px-4 py-3 text-sm text-[#ffd2cc]">
             {error}
           </div>
         ) : null}
 
         {isSignedIn ? (
-          <div className="mt-8 space-y-4">
-            <div className="rounded-2xl border border-[#fefcd9]/10 bg-black/20 p-4">
-              <p className="text-xs uppercase tracking-[0.2em] text-[#fefcd9]/45">Signed in as</p>
-              <p className="mt-2 text-sm text-[#fefcd9]">{signedInEmail || "Current account"}</p>
+          <div className="mt-5 space-y-4">
+            <div className="rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-[#fefcd9]/80">
+              {signedInEmail || "Current account"}
             </div>
 
             <button
@@ -157,38 +136,45 @@ export default function DeleteAccountClient() {
               className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-[#f95f4a] px-5 py-3 text-sm font-medium text-white transition hover:bg-[#ff755e] disabled:cursor-not-allowed disabled:opacity-60"
             >
               {isDeleting ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-              {isDeleting ? "Deleting account..." : "Delete account"}
+              {isDeleting ? "Deleting..." : "Delete account"}
             </button>
           </div>
         ) : (
-          <div className="mt-8 space-y-4">
-            <p className="text-sm leading-6 text-[#fefcd9]/75">
-              Sign in with the account you want to remove, then confirm deletion.
-            </p>
-            <div className="space-y-3">
-              {providerButtons.map((provider) => {
-                const isLoading = activeProvider === provider.id;
-                return (
-                  <button
-                    key={provider.id}
-                    type="button"
-                    onClick={() => handleSignIn(provider.id)}
-                    disabled={activeProvider !== null}
-                    className="inline-flex w-full items-center justify-center gap-3 rounded-full border border-[#fefcd9]/12 bg-white/5 px-5 py-3 text-sm font-medium text-[#fefcd9] transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : provider.icon}
-                    {isLoading ? "Redirecting..." : provider.label}
-                  </button>
-                );
-              })}
-            </div>
+          <div className="mt-5 space-y-3">
+            <button
+              type="button"
+              onClick={() => handleSignIn("google")}
+              disabled={activeProvider !== null}
+              className="inline-flex w-full items-center justify-center gap-3 rounded-full border border-white/10 bg-white/5 px-5 py-3 text-sm font-medium text-[#fefcd9] transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {activeProvider === "google" ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <GoogleIcon />
+              )}
+              {activeProvider === "google" ? "Redirecting..." : "Continue with Google"}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => handleSignIn("apple")}
+              disabled={activeProvider !== null}
+              className="inline-flex w-full items-center justify-center gap-3 rounded-full border border-white/10 bg-white/5 px-5 py-3 text-sm font-medium text-[#fefcd9] transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {activeProvider === "apple" ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <img
+                  src="/assets/apple-50.png"
+                  alt=""
+                  aria-hidden="true"
+                  className="h-5 w-5 shrink-0 object-contain"
+                />
+              )}
+              {activeProvider === "apple" ? "Redirecting..." : "Continue with Apple"}
+            </button>
           </div>
         )}
-
-        <p className="mt-8 text-xs leading-5 text-[#fefcd9]/45">
-          If your browser says your session expired, sign in again and retry. This page is the
-          direct deletion endpoint linked from the iOS app.
-        </p>
       </div>
     </main>
   );
