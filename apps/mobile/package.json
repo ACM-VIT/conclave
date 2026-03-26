@@ -30,6 +30,7 @@
     "expo-font": "~14.0.11",
     "expo-glass-effect": "~0.1.8",
     "expo-haptics": "~15.0.8",
+    "expo-image-picker": "~16.0.7",
     "expo-image": "^3.0.10",
     "expo-keep-awake": "~15.0.7",
     "expo-linear-gradient": "~15.0.8",

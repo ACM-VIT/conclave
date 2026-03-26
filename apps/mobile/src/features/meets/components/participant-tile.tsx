@@ -1,10 +1,10 @@
-import React, { useMemo } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { StyleSheet, View as RNView } from "react-native";
 import { RTCView } from "react-native-webrtc";
 import { LinearGradient } from "expo-linear-gradient";
 import type { Participant } from "../types";
 import { useDeviceLayout } from "../hooks/use-device-layout";
-import { Text } from "@/tw";
+import { Image, Text } from "@/tw";
 import { Hand, MicOff, VenetianMask } from "lucide-react-native";
 
 const COLORS = {
@@ -22,6 +22,7 @@ const COLORS = {
 interface ParticipantTileProps {
   participant: Participant;
   displayName: string;
+  avatarUrl?: string;
   isLocal?: boolean;
   isActiveSpeaker?: boolean;
   mirror?: boolean;
@@ -36,6 +37,7 @@ const hiddenAudioStyle = {
 function ParticipantTileComponent({
   participant,
   displayName,
+  avatarUrl,
   isLocal = false,
   isActiveSpeaker = false,
   mirror = false,
@@ -45,6 +47,13 @@ function ParticipantTileComponent({
   const audioStream = participant.audioStream;
   const hasVideo = !!videoStream && !participant.isCameraOff;
   const shouldRenderAudioView = !!audioStream && !hasVideo;
+  const [avatarLoadFailed, setAvatarLoadFailed] = useState(false);
+  const normalizedAvatarUrl = avatarUrl?.trim() || "";
+  const showAvatarImage = !hasVideo && Boolean(normalizedAvatarUrl) && !avatarLoadFailed;
+
+  useEffect(() => {
+    setAvatarLoadFailed(false);
+  }, [normalizedAvatarUrl]);
 
   const initials = useMemo(() => {
     const parts = displayName.trim().split(/\s+/).filter(Boolean);
@@ -78,17 +87,34 @@ function ParticipantTileComponent({
               colors={["rgba(249, 95, 74, 0.2)", "rgba(255, 0, 122, 0.1)"]}
               style={styles.avatarGradient}
             />
-            <RNView
-              style={[
-                styles.avatar,
-                { width: avatarSize, height: avatarSize, borderRadius: avatarSize / 2 },
-              ]}
-            >
-              <RNView style={[styles.avatarBorder, { borderRadius: avatarSize / 2 }]} />
-              <Text style={[styles.avatarText, { fontSize: avatarFontSize }]}>
-                {initials}
-              </Text>
-            </RNView>
+            {showAvatarImage ? (
+              <RNView
+                style={[
+                  styles.avatar,
+                  { width: avatarSize, height: avatarSize, borderRadius: avatarSize / 2 },
+                ]}
+              >
+                <Image
+                  source={{ uri: normalizedAvatarUrl }}
+                  style={{ width: avatarSize, height: avatarSize, borderRadius: avatarSize / 2 }}
+                  contentFit="cover"
+                  onError={() => setAvatarLoadFailed(true)}
+                />
+                <RNView style={[styles.avatarBorder, { borderRadius: avatarSize / 2 }]} />
+              </RNView>
+            ) : (
+              <RNView
+                style={[
+                  styles.avatar,
+                  { width: avatarSize, height: avatarSize, borderRadius: avatarSize / 2 },
+                ]}
+              >
+                <RNView style={[styles.avatarBorder, { borderRadius: avatarSize / 2 }]} />
+                <Text style={[styles.avatarText, { fontSize: avatarFontSize }]}>
+                  {initials}
+                </Text>
+              </RNView>
+            )}
           </RNView>
         )}
 
@@ -161,6 +187,7 @@ export const ParticipantTile = React.memo(
   ParticipantTileComponent,
   (prevProps, nextProps) =>
     prevProps.displayName === nextProps.displayName &&
+    prevProps.avatarUrl === nextProps.avatarUrl &&
     prevProps.isLocal === nextProps.isLocal &&
     prevProps.isActiveSpeaker === nextProps.isActiveSpeaker &&
     prevProps.mirror === nextProps.mirror &&

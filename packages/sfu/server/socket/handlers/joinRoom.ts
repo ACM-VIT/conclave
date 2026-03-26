@@ -2,6 +2,7 @@ import { Admin } from "../../../config/classes/Admin.js";
 import { Client } from "../../../config/classes/Client.js";
 import { config } from "../../../config/config.js";
 import type {
+  AvatarSnapshot,
   AppsAwarenessData,
   HandRaisedSnapshot,
   JoinRoomData,
@@ -90,6 +91,10 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         const clientPolicy =
           config.clientPolicies[clientId] ?? config.clientPolicies.default;
         const displayNameCandidate = normalizeDisplayName(data?.displayName);
+        const hasAvatarOverride = typeof data?.avatarUrl === "string";
+        const avatarUrlCandidate =
+          typeof data?.avatarUrl === "string" ? data.avatarUrl.trim() : "";
+        const requestedAvatarUrl = avatarUrlCandidate || undefined;
         if (
           displayNameCandidate &&
           displayNameCandidate.length > MAX_DISPLAY_NAME_LENGTH
@@ -483,6 +488,47 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         context.currentRoom.setUserIdentity(userId, userKey, displayName, {
           forceDisplayName: hasDisplayNameOverride,
         });
+
+        const roomWithAvatarApis = context.currentRoom as typeof context.currentRoom & {
+          setUserAvatar?: (
+            userId: string,
+            userKey: string,
+            avatarUrl?: string,
+            options?: { forceAvatar?: boolean },
+          ) => void;
+          getAvatarForUser?: (userId: string) => string | undefined;
+          getAvatarSnapshot?: (options?: {
+            includeGhosts?: boolean;
+            includeWebinarAttendees?: boolean;
+          }) => { userId: string; avatarUrl?: string }[];
+          userKeysById?: Map<string, string>;
+          avatarByKey?: Map<string, string>;
+        };
+
+        const getAvatarForUserSafe = (targetUserId: string): string | undefined => {
+          if (typeof roomWithAvatarApis.getAvatarForUser === "function") {
+            return roomWithAvatarApis.getAvatarForUser(targetUserId);
+          }
+          const targetKey = roomWithAvatarApis.userKeysById?.get(targetUserId);
+          if (!targetKey) return undefined;
+          return roomWithAvatarApis.avatarByKey?.get(targetKey);
+        };
+
+        if (typeof roomWithAvatarApis.setUserAvatar === "function") {
+          roomWithAvatarApis.setUserAvatar(userId, userKey, requestedAvatarUrl, {
+            forceAvatar: hasAvatarOverride,
+          });
+        } else {
+          roomWithAvatarApis.userKeysById?.set(userId, userKey);
+          if (hasAvatarOverride) {
+            const normalizedAvatarUrl = requestedAvatarUrl?.trim();
+            if (normalizedAvatarUrl) {
+              roomWithAvatarApis.avatarByKey?.set(userKey, normalizedAvatarUrl);
+            } else {
+              roomWithAvatarApis.avatarByKey?.delete(userKey);
+            }
+          }
+        }
         context.currentRoom.addClient(context.currentClient);
 
         socket.join(roomChannelId);
@@ -511,20 +557,24 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
 
         const resolvedDisplayName =
           context.currentRoom.getDisplayNameForUser(userId) || displayName;
+        const resolvedAvatarUrl = getAvatarForUserSafe(userId);
         if (!wasReconnecting) {
           if (context.currentClient.isGhost) {
             emitUserJoined(context.currentRoom, userId, resolvedDisplayName, {
               ghostOnly: true,
               excludeUserId: userId,
               isGhost: true,
+              avatarUrl: resolvedAvatarUrl,
             });
             for (const [clientId, client] of context.currentRoom.clients) {
               if (clientId === userId || !client.isGhost) continue;
               const ghostDisplayName =
                 context.currentRoom.getDisplayNameForUser(clientId) || clientId;
+              const ghostAvatarUrl = getAvatarForUserSafe(clientId);
               socket.emit("userJoined", {
                 userId: clientId,
                 displayName: ghostDisplayName,
+                avatarUrl: ghostAvatarUrl,
                 isGhost: true,
               });
             }
@@ -536,6 +586,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
               client.socket.emit("userJoined", {
                 userId,
                 displayName: resolvedDisplayName,
+                avatarUrl: resolvedAvatarUrl,
               });
             }
           }
@@ -551,6 +602,17 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           users: displayNameSnapshot,
           roomId: context.currentRoom.id,
         });
+
+        socket.emit("avatarSnapshot", {
+          users:
+            typeof roomWithAvatarApis.getAvatarSnapshot === "function"
+              ? roomWithAvatarApis.getAvatarSnapshot({
+                  includeGhosts: context.currentClient.isGhost,
+                  includeWebinarAttendees: false,
+                })
+              : [],
+          roomId: context.currentRoom.id,
+        } satisfies AvatarSnapshot & { roomId: string });
 
         socket.emit("handRaisedSnapshot", {
           users: context.currentRoom.getHandRaisedSnapshot(),
