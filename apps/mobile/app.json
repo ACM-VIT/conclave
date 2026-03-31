@@ -18,7 +18,7 @@
       "expo-font",
       "expo-apple-authentication"
     ],
-    "version": "1.0.9",
+    "version": "1.0.10",
     "ios": {
       "supportsTablet": true,
       "usesAppleSignIn": true,
@@ -35,7 +35,7 @@
         "NSBluetoothAlwaysUsageDescription": "Conclave uses Bluetooth for audio routing."
       },
       "bundleIdentifier": "com.acmvit.conclave",
-      "buildNumber": "22"
+      "buildNumber": "23"
     },
     "android": {
       "permissions": [
@@ -77,7 +77,7 @@
         }
       ],
       "package": "com.acmvit.conclave",
-      "versionCode": 22
+      "versionCode": 23
     },
     "name": "Conclave",
     "slug": "conclave"
