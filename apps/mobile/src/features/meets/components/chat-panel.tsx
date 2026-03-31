@@ -434,7 +434,7 @@ export function ChatPanel({
     const wasVisible = wasVisibleRef.current;
     wasVisibleRef.current = visible;
     requestAnimationFrame(() => {
-      listRef.current?.scrollToEnd({ animated: wasVisible });
+      listRef.current?.scrollToOffset({ offset: 0, animated: wasVisible });
     });
   }, [messages.length, visible]);
 
@@ -452,7 +452,7 @@ export function ChatPanel({
     }
     hasAppliedFooterInsetRef.current = true;
     requestAnimationFrame(() => {
-      listRef.current?.scrollToEnd({ animated: false });
+      listRef.current?.scrollToOffset({ offset: 0, animated: false });
     });
   }, [footerHeight, messages.length, visible]);
 
@@ -536,13 +536,14 @@ export function ChatPanel({
         <View style={styles.listWrapper}>
           <FlatList
             ref={listRef}
-            data={messages}
+            data={[...messages].reverse()}
+            inverted
             keyExtractor={(item: ChatMessage) => item.id}
             contentContainerStyle={[
               styles.listContent,
-              { paddingBottom: Math.max(footerHeight, 0) + 12 },
+              { paddingTop: Math.max(footerHeight, 0) + 12 },
             ]}
-            scrollIndicatorInsets={{ bottom: footerHeight }}
+            scrollIndicatorInsets={{ top: footerHeight }}
             renderItem={({ item }: ListRenderItemInfo<ChatMessage>) => {
               const isOwn = item.userId === currentUserId;
               const actionText = getActionText(item.content);
