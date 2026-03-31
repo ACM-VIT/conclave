@@ -19,17 +19,22 @@ function ParticipantAudio({
   audioPlaybackAttemptToken,
 }: ParticipantAudioProps) {
   const audioRef = useRef<HTMLAudioElement>(null);
+  const autoplayBlockedRef = useRef(false);
 
   const attemptAudioPlayback = useCallback(() => {
     const audio = audioRef.current;
     if (!audio || !participant.audioStream) return;
     audio.play()
       .then(() => {
+        autoplayBlockedRef.current = false;
         onAudioPlaybackStarted?.();
       })
       .catch((err) => {
         if (err.name === "NotAllowedError") {
-          onAudioAutoplayBlocked?.();
+          if (!autoplayBlockedRef.current) {
+            autoplayBlockedRef.current = true;
+            onAudioAutoplayBlocked?.();
+          }
           return;
         }
         if (err.name !== "AbortError") {
@@ -48,13 +53,23 @@ function ParticipantAudio({
     if (!audio) return;
 
     if (!participant.audioStream) {
+      autoplayBlockedRef.current = false;
       if (audio.srcObject) {
         audio.srcObject = null;
       }
       return;
     }
 
+    autoplayBlockedRef.current = false;
+    audio.autoplay = true;
+    audio.defaultMuted = false;
+    audio.muted = false;
+    audio.volume = 1;
+
     if (audio.srcObject !== participant.audioStream) {
+      // Force a clean re-attach when the remote track changes. Firefox is
+      // noticeably less tolerant of keeping a stale MediaStream on the element.
+      audio.srcObject = null;
       audio.srcObject = participant.audioStream;
     }
 
@@ -90,6 +105,10 @@ function ParticipantAudio({
         scheduleReplay();
       }
     };
+    const handleUserGesture = () => {
+      if (!autoplayBlockedRef.current) return;
+      scheduleReplay();
+    };
     const handlePlaybackEvent = () => {
       scheduleReplay();
     };
@@ -100,10 +119,9 @@ function ParticipantAudio({
     audio.addEventListener("loadedmetadata", handlePlaybackEvent);
     audio.addEventListener("loadeddata", handlePlaybackEvent);
     audio.addEventListener("canplay", handlePlaybackEvent);
-    audio.addEventListener("stalled", handlePlaybackEvent);
-    audio.addEventListener("suspend", handlePlaybackEvent);
-    audio.addEventListener("pause", handlePlaybackEvent);
     document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("pointerdown", handleUserGesture, true);
+    window.addEventListener("keydown", handleUserGesture, true);
 
     return () => {
       cancelled = true;
@@ -113,10 +131,9 @@ function ParticipantAudio({
       audio.removeEventListener("loadedmetadata", handlePlaybackEvent);
       audio.removeEventListener("loadeddata", handlePlaybackEvent);
       audio.removeEventListener("canplay", handlePlaybackEvent);
-      audio.removeEventListener("stalled", handlePlaybackEvent);
-      audio.removeEventListener("suspend", handlePlaybackEvent);
-      audio.removeEventListener("pause", handlePlaybackEvent);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("pointerdown", handleUserGesture, true);
+      window.removeEventListener("keydown", handleUserGesture, true);
       for (const timeoutId of replayTimeouts) {
         window.clearTimeout(timeoutId);
       }
@@ -134,7 +151,24 @@ function ParticipantAudio({
     attemptAudioPlayback();
   }, [audioPlaybackAttemptToken, attemptAudioPlayback]);
 
-  return <audio ref={audioRef} autoPlay />;
+  const audioTrackId = participant.audioStream?.getAudioTracks()[0]?.id ?? "none";
+
+  return (
+    <audio
+      key={`${participant.audioProducerId ?? participant.userId}:${audioTrackId}`}
+      ref={audioRef}
+      autoPlay
+      playsInline
+      preload="none"
+      style={{
+        width: 0,
+        height: 0,
+        opacity: 0,
+        position: "absolute",
+        pointerEvents: "none",
+      }}
+    />
+  );
 }
 
 export default memo(ParticipantAudio);

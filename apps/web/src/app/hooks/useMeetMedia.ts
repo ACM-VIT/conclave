@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Socket } from "socket.io-client";
+import type { Device } from "mediasoup-client";
 import {
   DEFAULT_AUDIO_CONSTRAINTS,
   LOW_QUALITY_CONSTRAINTS,
@@ -17,11 +18,11 @@ import type {
   VideoQuality,
 } from "../lib/types";
 import { createMeetError } from "../lib/utils";
+import { buildScreenShareEncoding } from "../lib/video-encodings";
 import {
-  buildWebcamSimulcastEncodings,
-  buildScreenShareEncoding,
-  buildWebcamSingleLayerEncoding,
-} from "../lib/video-encodings";
+  getPreferredWebcamCodec,
+  produceWebcamTrack,
+} from "../lib/webcam-codec";
 
 interface UseMeetMediaOptions {
   ghostEnabled: boolean;
@@ -45,6 +46,7 @@ interface UseMeetMediaOptions {
   videoQuality: VideoQuality;
   videoQualityRef: React.MutableRefObject<VideoQuality>;
   socketRef: React.MutableRefObject<Socket | null>;
+  deviceRef: React.MutableRefObject<Device | null>;
   producerTransportRef: React.MutableRefObject<Transport | null>;
   audioProducerRef: React.MutableRefObject<Producer | null>;
   videoProducerRef: React.MutableRefObject<Producer | null>;
@@ -80,6 +82,7 @@ export function useMeetMedia({
   videoQuality,
   videoQualityRef,
   socketRef,
+  deviceRef,
   producerTransportRef,
   audioProducerRef,
   videoProducerRef,
@@ -567,24 +570,14 @@ export function useMeetMedia({
           return;
         }
 
-        let nextProducer: Producer;
-        try {
-          nextProducer = await transport.produce({
-            track: nextVideoTrack,
-            encodings: buildWebcamSimulcastEncodings(quality),
-            appData: { type: "webcam" as ProducerType, paused: false },
-          });
-        } catch (simulcastError) {
-          console.warn(
-            "[Meets] Simulcast video quality update failed, retrying single-layer:",
-            simulcastError
-          );
-          nextProducer = await transport.produce({
-            track: nextVideoTrack,
-            encodings: [buildWebcamSingleLayerEncoding(quality)],
-            appData: { type: "webcam" as ProducerType, paused: false },
-          });
-        }
+        const preferredWebcamCodec = getPreferredWebcamCodec(deviceRef.current);
+        const nextProducer = await produceWebcamTrack({
+          transport,
+          track: nextVideoTrack,
+          quality,
+          paused: false,
+          preferredCodec: preferredWebcamCodec,
+        });
 
         videoProducerRef.current = nextProducer;
         const nextProducerId = nextProducer.id;
@@ -618,6 +611,7 @@ export function useMeetMedia({
       stopLocalTrack,
       setLocalStream,
       socketRef,
+      deviceRef,
       producerTransportRef,
       videoProducerRef,
     ]
@@ -1039,24 +1033,14 @@ export function useMeetMedia({
         });
 
         const quality = videoQualityRef.current;
-        let videoProducer;
-        try {
-          videoProducer = await transport.produce({
-            track: videoTrack,
-            encodings: buildWebcamSimulcastEncodings(quality),
-            appData: { type: "webcam" as ProducerType, paused: false },
-          });
-        } catch (simulcastError) {
-          console.warn(
-            "[Meets] Simulcast video restart failed, retrying single-layer:",
-            simulcastError
-          );
-          videoProducer = await transport.produce({
-            track: videoTrack,
-            encodings: [buildWebcamSingleLayerEncoding(quality)],
-            appData: { type: "webcam" as ProducerType, paused: false },
-          });
-        }
+        const preferredWebcamCodec = getPreferredWebcamCodec(deviceRef.current);
+        const videoProducer = await produceWebcamTrack({
+          transport,
+          track: videoTrack,
+          quality,
+          paused: false,
+          preferredCodec: preferredWebcamCodec,
+        });
 
         videoProducerRef.current = videoProducer;
         const videoProducerId = videoProducer.id;
@@ -1089,6 +1073,7 @@ export function useMeetMedia({
     handleLocalTrackEnded,
     stopLocalTrack,
     socketRef,
+    deviceRef,
     videoProducerRef,
     producerTransportRef,
     setLocalStream,
@@ -1153,24 +1138,14 @@ export function useMeetMedia({
         }
 
         const quality = videoQualityRef.current;
-        let recoveredProducer: Producer;
-        try {
-          recoveredProducer = await transport.produce({
-            track: videoTrack,
-            encodings: buildWebcamSimulcastEncodings(quality),
-            appData: { type: "webcam" as ProducerType, paused: false },
-          });
-        } catch (simulcastError) {
-          console.warn(
-            "[Meets] Simulcast camera recovery failed, retrying single-layer:",
-            simulcastError
-          );
-          recoveredProducer = await transport.produce({
-            track: videoTrack,
-            encodings: [buildWebcamSingleLayerEncoding(quality)],
-            appData: { type: "webcam" as ProducerType, paused: false },
-          });
-        }
+        const preferredWebcamCodec = getPreferredWebcamCodec(deviceRef.current);
+        const recoveredProducer = await produceWebcamTrack({
+          transport,
+          track: videoTrack,
+          quality,
+          paused: false,
+          preferredCodec: preferredWebcamCodec,
+        });
 
         if (cancelled) {
           try {
@@ -1223,6 +1198,7 @@ export function useMeetMedia({
     setIsCameraOff,
     setMeetError,
     producerTransportRef,
+    deviceRef,
     videoProducerRef,
     localStreamRef,
     videoQualityRef,

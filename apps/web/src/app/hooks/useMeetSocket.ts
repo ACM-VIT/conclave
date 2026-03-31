@@ -44,9 +44,9 @@ import type { ParticipantAction } from "../lib/participant-reducer";
 import { createMeetError, isSystemUserId, normalizeDisplayName } from "../lib/utils";
 import { normalizeChatMessage } from "../lib/chat-commands";
 import {
-  buildWebcamSimulcastEncodings,
-  buildWebcamSingleLayerEncoding,
-} from "../lib/video-encodings";
+  getPreferredWebcamCodec,
+  produceWebcamTrack,
+} from "../lib/webcam-codec";
 import type { MeetRefs } from "./useMeetRefs";
 
 type JoinInfo = {
@@ -1052,24 +1052,14 @@ export function useMeetSocket({
       if (videoTrack) {
         try {
           const quality = videoQualityRef.current;
-          let videoProducer;
-          try {
-            videoProducer = await transport.produce({
-              track: videoTrack,
-              encodings: buildWebcamSimulcastEncodings(quality),
-              appData: { type: "webcam" as ProducerType, paused: isCameraOff },
-            });
-          } catch (simulcastError) {
-            console.warn(
-              "[Meets] Simulcast video produce failed, retrying single-layer:",
-              simulcastError,
-            );
-            videoProducer = await transport.produce({
-              track: videoTrack,
-              encodings: [buildWebcamSingleLayerEncoding(quality)],
-              appData: { type: "webcam" as ProducerType, paused: isCameraOff },
-            });
-          }
+          const preferredWebcamCodec = getPreferredWebcamCodec(deviceRef.current);
+          const videoProducer = await produceWebcamTrack({
+            transport,
+            track: videoTrack,
+            quality,
+            paused: isCameraOff,
+            preferredCodec: preferredWebcamCodec,
+          });
 
           if (isCameraOff) {
             videoProducer.pause();
@@ -1110,6 +1100,7 @@ export function useMeetSocket({
       setIsMuted,
       setIsCameraOff,
       videoQualityRef,
+      deviceRef,
     ],
   );
 
