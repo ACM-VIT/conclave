@@ -406,6 +406,7 @@ export function MeetScreen({
     videoQuality,
     videoQualityRef: refs.videoQualityRef,
     socketRef: refs.socketRef,
+    deviceRef: refs.deviceRef,
     producerTransportRef: refs.producerTransportRef,
     audioProducerRef: refs.audioProducerRef,
     videoProducerRef: refs.videoProducerRef,

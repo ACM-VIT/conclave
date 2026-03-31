@@ -22,6 +22,8 @@ interface GlassPillProps {
 }
 
 const isIos = Platform.OS === "ios";
+const FIXED_GLASS_COLOR_SCHEME = "light" as const;
+const FALLBACK_LIGHT_GLASS_TINT = "rgba(255, 255, 255, 0.18)";
 
 export function GlassPillBackground({
   width,
@@ -34,7 +36,10 @@ export function GlassPillBackground({
   if (canUseSwiftGlass) {
     return (
       <RNView pointerEvents="none" style={StyleSheet.absoluteFill}>
-        <Host style={StyleSheet.absoluteFill}>
+        <Host
+          style={StyleSheet.absoluteFill}
+          colorScheme={FIXED_GLASS_COLOR_SCHEME}
+        >
           <GlassEffectContainer>
             <Capsule
               modifiers={[
@@ -57,6 +62,7 @@ export function GlassPillBackground({
     <RNView pointerEvents="none" style={StyleSheet.absoluteFill}>
       <GlassView
         glassEffectStyle="clear"
+        tintColor={FALLBACK_LIGHT_GLASS_TINT}
         style={[StyleSheet.absoluteFill, { borderRadius: height / 2 }]}
       />
     </RNView>
@@ -73,7 +79,7 @@ export function GlassPill({ style, children }: GlassPillProps) {
         setSize({ width, height });
       }
     },
-    [size.height, size.width]
+    [size.height, size.width],
   );
 
   return (

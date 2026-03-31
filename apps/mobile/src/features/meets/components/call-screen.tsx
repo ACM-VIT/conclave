@@ -26,6 +26,7 @@ import type {
 } from "../types";
 import { isSystemUserId } from "../utils";
 import { useDeviceLayout, type DeviceLayout } from "../hooks/use-device-layout";
+import { useSmartParticipantOrder } from "../hooks/use-smart-participant-order";
 import { ControlsBar } from "./controls-bar";
 import { ParticipantTile } from "./participant-tile";
 import { FlatList, Text, Pressable } from "@/tw";
@@ -332,7 +333,6 @@ export function CallScreen({
     return hasLocal ? list : [localParticipant, ...list];
   }, [participants, localParticipant]);
 
-  const stableOrderRef = useRef<string[]>([]);
   const resolvedLocalParticipant = useMemo(
     () =>
       baseParticipantList.find(
@@ -347,46 +347,14 @@ export function CallScreen({
       ),
     [baseParticipantList, resolvedLocalParticipant.userId],
   );
-  const stableRemoteParticipants = useMemo(() => {
-    const participantMap = new Map(
-      remoteParticipants.map((participant) => [
-        participant.userId,
-        participant,
-      ]),
-    );
-    const nextOrder: string[] = [];
-    const seen = new Set<string>();
-
-    for (const userId of stableOrderRef.current) {
-      if (participantMap.has(userId)) {
-        nextOrder.push(userId);
-        seen.add(userId);
-      }
-    }
-
-    for (const participant of remoteParticipants) {
-      if (!seen.has(participant.userId)) {
-        nextOrder.push(participant.userId);
-        seen.add(participant.userId);
-      }
-    }
-
-    return nextOrder
-      .map((userId) => participantMap.get(userId))
-      .filter((participant): participant is Participant =>
-        Boolean(participant),
-      );
-  }, [remoteParticipants]);
-
-  useEffect(() => {
-    stableOrderRef.current = stableRemoteParticipants.map(
-      (participant) => participant.userId,
-    );
-  }, [stableRemoteParticipants]);
+  const orderedRemoteParticipants = useSmartParticipantOrder(
+    remoteParticipants,
+    activeSpeakerId,
+  );
 
   const participantList = useMemo(
-    () => [resolvedLocalParticipant, ...stableRemoteParticipants],
-    [resolvedLocalParticipant, stableRemoteParticipants],
+    () => [resolvedLocalParticipant, ...orderedRemoteParticipants],
+    [resolvedLocalParticipant, orderedRemoteParticipants],
   );
   const participantOrderKey = useMemo(
     () => participantList.map((participant) => participant.userId).join("|"),
@@ -395,7 +363,7 @@ export function CallScreen({
 
   const maxRemoteWithoutOverflow = Math.max(0, MAX_GRID_TILES - 1);
   const hasOverflow =
-    stableRemoteParticipants.length > maxRemoteWithoutOverflow;
+    orderedRemoteParticipants.length > maxRemoteWithoutOverflow;
   const maxVisibleRemoteParticipants = hasOverflow
     ? Math.max(0, MAX_GRID_TILES - 2)
     : maxRemoteWithoutOverflow;
@@ -404,11 +372,11 @@ export function CallScreen({
       return [];
     }
 
-    if (stableRemoteParticipants.length <= maxVisibleRemoteParticipants) {
-      return stableRemoteParticipants;
+    if (orderedRemoteParticipants.length <= maxVisibleRemoteParticipants) {
+      return orderedRemoteParticipants;
     }
 
-    const baseVisible = stableRemoteParticipants.slice(
+    const baseVisible = orderedRemoteParticipants.slice(
       0,
       maxVisibleRemoteParticipants,
     );
@@ -426,7 +394,7 @@ export function CallScreen({
       return baseVisible;
     }
 
-    const activeParticipant = stableRemoteParticipants.find(
+    const activeParticipant = orderedRemoteParticipants.find(
       (participant) => participant.userId === activeSpeakerId,
     );
     if (!activeParticipant) {
@@ -437,14 +405,14 @@ export function CallScreen({
     nextVisible.push(activeParticipant);
     return nextVisible;
   }, [
-    stableRemoteParticipants,
+    orderedRemoteParticipants,
     activeSpeakerId,
     resolvedLocalParticipant.userId,
     maxVisibleRemoteParticipants,
   ]);
   const hiddenRemoteCount = Math.max(
     0,
-    stableRemoteParticipants.length - visibleRemoteParticipants.length,
+    orderedRemoteParticipants.length - visibleRemoteParticipants.length,
   );
   const showOverflowTile = hiddenRemoteCount > 0;
   const gridItems = useMemo<GridItem[]>(() => {

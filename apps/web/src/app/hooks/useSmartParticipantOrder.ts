@@ -23,7 +23,7 @@ const hasLiveTrack = (
   if (!stream) return false;
   const track =
     kind === "video" ? stream.getVideoTracks()[0] : stream.getAudioTracks()[0];
-  return Boolean(track && track.enabled && track.readyState === "live");
+  return Boolean(track && track.readyState === "live");
 };
 
 const getMediaPriority = (participant: ParticipantWithMediaHints): number => {
@@ -185,6 +185,18 @@ export function useSmartParticipantOrder<T extends ParticipantWithMediaHints>(
     );
 
     return [...participants].sort((left, right) => {
+      const leftIsFeatured = left.userId === featuredSpeakerId ? 1 : 0;
+      const rightIsFeatured = right.userId === featuredSpeakerId ? 1 : 0;
+      if (leftIsFeatured !== rightIsFeatured) {
+        return rightIsFeatured - leftIsFeatured;
+      }
+
+      const leftPriority = getMediaPriority(left);
+      const rightPriority = getMediaPriority(right);
+      if (leftPriority !== rightPriority) {
+        return rightPriority - leftPriority;
+      }
+
       const leftRaised = Boolean(left.isHandRaised);
       const rightRaised = Boolean(right.isHandRaised);
       if (leftRaised !== rightRaised) {
@@ -199,18 +211,6 @@ export function useSmartParticipantOrder<T extends ParticipantWithMediaHints>(
         if (leftRaisedIndex !== rightRaisedIndex) {
           return leftRaisedIndex - rightRaisedIndex;
         }
-      }
-
-      const leftIsFeatured = left.userId === featuredSpeakerId ? 1 : 0;
-      const rightIsFeatured = right.userId === featuredSpeakerId ? 1 : 0;
-      if (leftIsFeatured !== rightIsFeatured) {
-        return rightIsFeatured - leftIsFeatured;
-      }
-
-      const leftPriority = getMediaPriority(left);
-      const rightPriority = getMediaPriority(right);
-      if (leftPriority !== rightPriority) {
-        return rightPriority - leftPriority;
       }
 
       const previousLeft = previousOrder.get(left.userId);
