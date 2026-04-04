@@ -65,6 +65,8 @@ export default function CameraFiltersDrawer({
       const liveLocalVideoTrack = localStream?.getVideoTracks()[0];
       const canUseLiveLocalTrack =
         !isCameraOff && liveLocalVideoTrack?.readyState === "live";
+      const canCloneLocalTrackForPreview =
+        canUseLiveLocalTrack && backgroundEffect === "none";
 
       if (canUseLiveLocalTrack && previewEffect === backgroundEffect) {
         releaseManagedPreview();
@@ -73,13 +75,11 @@ export default function CameraFiltersDrawer({
         return;
       }
 
-
-
       setIsLoading(true);
       releaseManagedPreview();
 
       try {
-        const managedTrack = canUseLiveLocalTrack
+        const managedTrack = canCloneLocalTrackForPreview
           ? await createManagedCameraTrackFromTrack({
               effect: previewEffect,
               sourceTrack: liveLocalVideoTrack,
