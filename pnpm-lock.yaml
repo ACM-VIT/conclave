@@ -21,6 +21,9 @@ importers:
       '@conclave/meeting-core':
         specifier: workspace:*
         version: link:../../packages/meeting-core
+      '@mediapipe/tasks-vision':
+        specifier: ^0.10.34
+        version: 0.10.34
       '@tanstack/react-hotkeys':
         specifier: ^0.1.1
         version: 0.1.1(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
@@ -763,6 +766,9 @@ packages:
   '@lukeed/uuid@2.0.1':
     resolution: {integrity: sha512-qC72D4+CDdjGqJvkFMMEAtancHUQ7/d/tAiHf64z8MopFDmcrtbcJuerDtFceuAfQJ2pDSfCKCtbqoGBNnwg0w==}
     engines: {node: '>=8'}
+
+  '@mediapipe/tasks-vision@0.10.34':
+    resolution: {integrity: sha512-KFGyhDsjJ+9WUMcMfjTOpcEp3LJNS3KwC7BfvKrCYELn/7G/5kmwnU7z6Spps+iWQoTGL8xW8i68r65OTa3DwA==}
 
   '@next/env@16.1.6':
     resolution: {integrity: sha512-N1ySLuZjnAtN3kFnwhAwPvZah8RJxKasD7x1f8shFqhncnWZn4JMfg37diLNuoHsLAlrDfM3g4mawVdtAG8XLQ==}
@@ -3355,6 +3361,8 @@ snapshots:
   '@lukeed/uuid@2.0.1':
     dependencies:
       '@lukeed/csprng': 1.1.0
+
+  '@mediapipe/tasks-vision@0.10.34': {}
 
   '@next/env@16.1.6': {}
 

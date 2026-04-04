@@ -322,6 +322,8 @@ export default function MeetsClient({
     setVideoQuality,
     isMirrorCamera,
     setIsMirrorCamera,
+    backgroundEffect,
+    setBackgroundEffect,
     isVideoSettingsOpen,
     setIsVideoSettingsOpen,
     selectedAudioInputDeviceId,
@@ -490,7 +492,7 @@ export default function MeetsClient({
     setSelectedAudioInputDeviceId,
     selectedAudioOutputDeviceId,
     setSelectedAudioOutputDeviceId,
-    videoQuality,
+    backgroundEffect,
     videoQualityRef: refs.videoQualityRef,
     socketRef: refs.socketRef,
     deviceRef: refs.deviceRef,
@@ -1275,12 +1277,14 @@ export default function MeetsClient({
           isHandRaised={isHandRaised}
           participants={participants}
           isMirrorCamera={isMirrorCamera}
+          backgroundEffect={backgroundEffect}
           activeSpeakerId={effectiveActiveSpeakerId}
           currentUserId={userId}
           selectedAudioInputDeviceId={selectedAudioInputDeviceId}
           audioOutputDeviceId={selectedAudioOutputDeviceId}
           onAudioInputDeviceChange={handleAudioInputDeviceChange}
           onAudioOutputDeviceChange={handleAudioOutputDeviceChange}
+          onBackgroundEffectChange={setBackgroundEffect}
           activeScreenShareId={activeScreenShareId}
           isScreenSharing={isScreenSharing}
           isChatOpen={isChatOpen}
@@ -1374,6 +1378,8 @@ export default function MeetsClient({
         isVideoSettingsOpen={isVideoSettingsOpen}
         onToggleVideoSettings={() => setIsVideoSettingsOpen((prev) => !prev)}
         onToggleMirror={() => setIsMirrorCamera((prev) => !prev)}
+        backgroundEffect={backgroundEffect}
+        onBackgroundEffectChange={setBackgroundEffect}
         isCameraOff={isCameraOff}
         displayNameInput={displayNameInput}
         displayNameStatus={displayNameStatus}
@@ -1440,9 +1446,11 @@ export default function MeetsClient({
         isHandRaised={isHandRaised}
         participants={participants}
         isMirrorCamera={isMirrorCamera}
+        backgroundEffect={backgroundEffect}
         activeSpeakerId={effectiveActiveSpeakerId}
         currentUserId={userId}
         audioOutputDeviceId={selectedAudioOutputDeviceId}
+        onBackgroundEffectChange={setBackgroundEffect}
         activeScreenShareId={activeScreenShareId}
         isScreenSharing={isScreenSharing}
         isChatOpen={isChatOpen}

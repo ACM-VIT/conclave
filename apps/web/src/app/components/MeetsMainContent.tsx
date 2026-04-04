@@ -23,6 +23,7 @@ import SystemAudioPlayers from "./SystemAudioPlayers";
 import WhiteboardLayout from "./WhiteboardLayout";
 import ParticipantVideo from "./ParticipantVideo";
 import type { BrowserState } from "../hooks/useSharedBrowser";
+import type { BackgroundEffect } from "../lib/background-blur";
 
 import type {
   ChatMessage,
@@ -80,9 +81,11 @@ interface MeetsMainContentProps {
   isHandRaised: boolean;
   participants: Map<string, Participant>;
   isMirrorCamera: boolean;
+  backgroundEffect: BackgroundEffect;
   activeSpeakerId: string | null;
   currentUserId: string;
   audioOutputDeviceId?: string;
+  onBackgroundEffectChange: (effect: BackgroundEffect) => void;
   activeScreenShareId: string | null;
   isScreenSharing: boolean;
   isChatOpen: boolean;
@@ -261,9 +264,11 @@ export default function MeetsMainContent({
   isHandRaised,
   participants,
   isMirrorCamera,
+  backgroundEffect,
   activeSpeakerId,
   currentUserId,
   audioOutputDeviceId,
+  onBackgroundEffectChange,
   activeScreenShareId,
   isScreenSharing,
   isChatOpen,
@@ -828,6 +833,8 @@ export default function MeetsMainContent({
             onDismissMeetError={onDismissMeetError}
             onRetryMedia={onRetryMedia}
             onTestSpeaker={onTestSpeaker}
+            backgroundEffect={backgroundEffect}
+            onBackgroundEffectChange={onBackgroundEffectChange}
           />
         )
       ) : isWebinarAttendee ? (
@@ -1062,6 +1069,9 @@ export default function MeetsMainContent({
               <ControlsBar
                 isMuted={isMuted}
                 isCameraOff={isCameraOff}
+                backgroundEffect={backgroundEffect}
+                localStream={localStream}
+                isMirrorCamera={isMirrorCamera}
                 isScreenSharing={isScreenSharing}
                 activeScreenShareId={activeScreenShareId}
                 isChatOpen={isChatOpen}
@@ -1070,6 +1080,7 @@ export default function MeetsMainContent({
                 reactionOptions={reactionOptions}
                 onToggleMute={toggleMute}
                 onToggleCamera={toggleCamera}
+                onBackgroundEffectChange={onBackgroundEffectChange}
                 onToggleScreenShare={toggleScreenShare}
                 onToggleChat={handleToggleChat}
                 onToggleHandRaised={toggleHandRaised}

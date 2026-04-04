@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  Check,
   Globe,
   Hand,
   LayoutGrid,
@@ -21,12 +22,17 @@ import {
   Trello,
   Youtube,
   Smile,
+  ScanFace,
   Users,
   Video,
   VideoOff,
   X,
 } from "lucide-react";
 import { memo, useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import {
+  BACKGROUND_EFFECT_OPTIONS,
+  type BackgroundEffect,
+} from "../lib/background-blur";
 import type {
   MeetingConfigSnapshot,
   MeetingUpdateRequest,
@@ -37,12 +43,16 @@ import type {
 } from "../lib/types";
 import { normalizeBrowserUrl } from "../lib/utils";
 import { HOTKEYS } from "../lib/hotkeys";
+import CameraFiltersDrawer from "./CameraFiltersDrawer";
 import HotkeyTooltip from "./HotkeyTooltip";
 import MeetSettingsPanel from "./MeetSettingsPanel";
 
 interface ControlsBarProps {
   isMuted: boolean;
   isCameraOff: boolean;
+  backgroundEffect: BackgroundEffect;
+  localStream?: MediaStream | null;
+  isMirrorCamera?: boolean;
   isScreenSharing: boolean;
   activeScreenShareId: string | null;
   isChatOpen: boolean;
@@ -51,6 +61,7 @@ interface ControlsBarProps {
   reactionOptions: ReactionOption[];
   onToggleMute: () => void;
   onToggleCamera: () => void;
+  onBackgroundEffectChange: (effect: BackgroundEffect) => void;
   onToggleScreenShare: () => void;
   onToggleChat: () => void;
   onToggleHandRaised: () => void;
@@ -182,6 +193,9 @@ const BROWSER_APPS = [
 function ControlsBar({
   isMuted,
   isCameraOff,
+  backgroundEffect,
+  localStream,
+  isMirrorCamera = true,
   isScreenSharing,
   activeScreenShareId,
   isChatOpen,
@@ -190,6 +204,7 @@ function ControlsBar({
   reactionOptions,
   onToggleMute,
   onToggleCamera,
+  onBackgroundEffectChange,
   onToggleScreenShare,
   onToggleChat,
   onToggleHandRaised,
@@ -252,12 +267,14 @@ function ControlsBar({
   const [isBrowserMenuOpen, setIsBrowserMenuOpen] = useState(false);
   const [isAppsMenuOpen, setIsAppsMenuOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isFilterMenuOpen, setIsFilterMenuOpen] = useState(false);
   const [browserUrlInput, setBrowserUrlInput] = useState("");
   const [browserUrlError, setBrowserUrlError] = useState<string | null>(null);
   const reactionMenuRef = useRef<HTMLDivElement>(null);
   const browserMenuRef = useRef<HTMLDivElement>(null);
   const appsMenuRef = useRef<HTMLDivElement>(null);
   const settingsMenuRef = useRef<HTMLDivElement>(null);
+  const filterMenuRef = useRef<HTMLDivElement>(null);
   const lastReactionTimeRef = useRef<number>(0);
   const REACTION_COOLDOWN_MS = 150;
 
@@ -341,6 +358,22 @@ function ControlsBar({
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [isSettingsOpen]);
+
+  useEffect(() => {
+    if (!isFilterMenuOpen) return;
+
+    const handleClickOutside = (event: MouseEvent) => {
+      if (
+        filterMenuRef.current &&
+        !filterMenuRef.current.contains(event.target as Node)
+      ) {
+        setIsFilterMenuOpen(false);
+      }
+    };
+
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [isFilterMenuOpen]);
 
   const handleReactionClick = useCallback(
     (reaction: ReactionOption) => {
@@ -458,6 +491,44 @@ function ControlsBar({
           )}
         </button>
       </HotkeyTooltip>
+
+      <div className="relative" ref={filterMenuRef}>
+        <button
+          onClick={() => setIsFilterMenuOpen((prev) => !prev)}
+          disabled={isGhostMode}
+          className={
+            isGhostMode
+              ? ghostDisabledClass
+              : isFilterMenuOpen || backgroundEffect !== "none"
+                ? activeButtonClass
+                : defaultButtonClass
+          }
+          title={
+            isGhostMode
+              ? "Ghost mode: filters locked"
+              : "Camera filters"
+          }
+          aria-label={
+            isGhostMode
+              ? "Ghost mode: filters locked"
+              : "Camera filters"
+          }
+        >
+          <ScanFace className="w-4 h-4" />
+        </button>
+
+        <div className="pointer-events-none absolute bottom-full left-0 z-50 mb-3">
+          <CameraFiltersDrawer
+            isOpen={isFilterMenuOpen && !isGhostMode}
+            backgroundEffect={backgroundEffect}
+            onSelect={onBackgroundEffectChange}
+            onClose={() => setIsFilterMenuOpen(false)}
+            localStream={localStream}
+            isCameraOff={isCameraOff}
+            isMirrorCamera={isMirrorCamera}
+          />
+        </div>
+      </div>
 
       <HotkeyTooltip label={HOTKEYS.toggleScreenShare.label} hotkey={HOTKEYS.toggleScreenShare.keys}>
         <button

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import type { BackgroundEffect } from "../lib/background-blur";
 import type { VideoQuality } from "../lib/types";
 
 interface UseMeetMediaSettingsOptions {
@@ -12,6 +13,8 @@ export function useMeetMediaSettings({
 }: UseMeetMediaSettingsOptions) {
   const [videoQuality, setVideoQuality] = useState<VideoQuality>("standard");
   const [isMirrorCamera, setIsMirrorCamera] = useState(true);
+  const [backgroundEffect, setBackgroundEffect] =
+    useState<BackgroundEffect>("none");
   const [isVideoSettingsOpen, setIsVideoSettingsOpen] = useState(false);
   const [selectedAudioInputDeviceId, setSelectedAudioInputDeviceId] =
     useState<string>();
@@ -27,6 +30,8 @@ export function useMeetMediaSettings({
     setVideoQuality,
     isMirrorCamera,
     setIsMirrorCamera,
+    backgroundEffect,
+    setBackgroundEffect,
     isVideoSettingsOpen,
     setIsVideoSettingsOpen,
     selectedAudioInputDeviceId,

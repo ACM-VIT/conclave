@@ -12,16 +12,20 @@ import {
   Plus,
   ArrowRight,
   RefreshCw,
+  ScanFace,
   Trash2,
 } from "lucide-react";
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { signIn, signOut, useSession } from "@/lib/auth-client";
 import type { RoomInfo } from "@/lib/sfu-types";
-import type { ConnectionState, MeetError } from "../lib/types";
 import {
-  DEFAULT_AUDIO_CONSTRAINTS,
-  STANDARD_QUALITY_CONSTRAINTS,
-} from "../lib/constants";
+  createManagedCameraTrack,
+  type BackgroundEffect,
+  getBackgroundEffectOption,
+  type ManagedCameraTrack,
+} from "../lib/background-blur";
+import type { ConnectionState, MeetError } from "../lib/types";
+import { DEFAULT_AUDIO_CONSTRAINTS } from "../lib/constants";
 import {
   generateRoomCode,
   ROOM_CODE_MAX_LENGTH,
@@ -32,6 +36,7 @@ import {
   sanitizeRoomCode,
 } from "../lib/utils";
 import MeetsErrorBanner from "./MeetsErrorBanner";
+import JoinCameraFiltersDrawer from "./JoinCameraFiltersDrawer";
 
 const normalizeGuestName = (value: string): string =>
   value.trim().replace(/\s+/g, " ");
@@ -93,6 +98,8 @@ interface JoinScreenProps {
   onDismissMeetError?: () => void;
   onRetryMedia?: () => void;
   onTestSpeaker?: () => void;
+  backgroundEffect: BackgroundEffect;
+  onBackgroundEffectChange: (effect: BackgroundEffect) => void;
 }
 
 function JoinScreen({
@@ -121,7 +128,11 @@ function JoinScreen({
   onDismissMeetError,
   onRetryMedia,
   onTestSpeaker,
+  backgroundEffect,
+  onBackgroundEffectChange,
 }: JoinScreenProps) {
+  const backgroundEffectLabel =
+    getBackgroundEffectOption(backgroundEffect)?.label ?? "Original";
   const normalizedRoomId =
     roomId === "undefined" || roomId === "null" ? "" : roomId;
   const canJoin = normalizedRoomId.trim().length > 0;
@@ -129,6 +140,7 @@ function JoinScreen({
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [isCameraOn, setIsCameraOn] = useState(false); // Start with camera off
   const [isMicOn, setIsMicOn] = useState(false); // Start with mic off
+  const [isFilterMenuOpen, setIsFilterMenuOpen] = useState(false);
   const isRoutedRoom = forceJoinOnly;
   const enforceShortCode = enableRoomRouting || forceJoinOnly;
   const hasUserIdentity = Boolean(user?.id || user?.email);
@@ -172,6 +184,7 @@ function JoinScreen({
   const canSignOut = Boolean(session?.user || user?.id || user?.email);
   const isSignedInUser = Boolean((session?.user || user) && !user?.id?.startsWith("guest-"));
   const lastAppliedSessionUserIdRef = useRef<string | null>(null);
+  const managedCameraTrackRef = useRef<ManagedCameraTrack | null>(null);
 
   useEffect(() => {
     if (!session?.user) {
@@ -228,6 +241,8 @@ function JoinScreen({
     // Only capture media when in join phase
     if (phase !== "join") {
       // Stop any existing stream when leaving join phase
+      managedCameraTrackRef.current?.stop();
+      managedCameraTrackRef.current = null;
       if (localStream) {
         localStream.getTracks().forEach((t) => t.stop());
         setLocalStream(null);
@@ -237,6 +252,8 @@ function JoinScreen({
 
     // Don't auto-capture - let user explicitly turn on camera/mic
     return () => {
+      managedCameraTrackRef.current?.stop();
+      managedCameraTrackRef.current = null;
       if (localStream) {
         localStream.getTracks().forEach((t) => t.stop());
       }
@@ -247,42 +264,50 @@ function JoinScreen({
     if (videoRef.current && localStream) videoRef.current.srcObject = localStream;
   }, [localStream]);
 
+  const enableCameraPreview = useCallback(async () => {
+    managedCameraTrackRef.current?.stop();
+    const managedTrack = await createManagedCameraTrack({
+      effect: backgroundEffect,
+      quality: "standard",
+    });
+    managedCameraTrackRef.current = managedTrack;
+    const videoTrack = managedTrack.track;
+    if ("contentHint" in videoTrack) {
+      videoTrack.contentHint = "motion";
+    }
+
+    setLocalStream((prev) => {
+      const audioTracks = prev?.getAudioTracks() ?? [];
+      return new MediaStream([...audioTracks, videoTrack]);
+    });
+    setIsCameraOn(true);
+  }, [backgroundEffect]);
+
   const toggleCamera = async () => {
     if (isCameraOn && localStream) {
-      // Turn off camera - stop the video track
-      const track = localStream.getVideoTracks()[0];
-      if (track) {
-        track.stop();
-        // Remove video track from stream
-        localStream.removeTrack(track);
-      }
+      managedCameraTrackRef.current?.stop();
+      managedCameraTrackRef.current = null;
+      localStream.getVideoTracks().forEach((track) => track.stop());
+      setLocalStream((prev) => {
+        const audioTracks = prev?.getAudioTracks() ?? [];
+        return audioTracks.length > 0 ? new MediaStream(audioTracks) : null;
+      });
       setIsCameraOn(false);
     } else {
-      // Turn on camera - acquire new video track
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: STANDARD_QUALITY_CONSTRAINTS,
-        });
-        const videoTrack = stream.getVideoTracks()[0];
-        if (videoTrack) {
-          if ("contentHint" in videoTrack) {
-            videoTrack.contentHint = "motion";
-          }
-          if (localStream) {
-            localStream.addTrack(videoTrack);
-          } else {
-            setLocalStream(stream);
-          }
-          if (videoRef.current) {
-            videoRef.current.srcObject = localStream || stream;
-          }
-          setIsCameraOn(true);
-        }
-      } catch (err) {
+        await enableCameraPreview();
+      } catch {
         console.log("[JoinScreen] Camera access denied");
       }
     }
   };
+
+  useEffect(() => {
+    if (!isCameraOn) return;
+    void enableCameraPreview().catch(() => {
+      console.log("[JoinScreen] Camera refresh for blur effect failed");
+    });
+  }, [backgroundEffect, enableCameraPreview, isCameraOn]);
 
   const toggleMic = async () => {
     if (isMicOn && localStream) {
@@ -625,7 +650,20 @@ function JoinScreen({
 
           {phase === "join" && (
             <div className="w-full max-w-6xl grid gap-6 lg:gap-10 lg:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)] items-start animate-fade-in">
-              <div className="flex flex-col lg:pr-2">
+              <div className="flex flex-col lg:pr-2 relative">
+                
+                <JoinCameraFiltersDrawer
+                    isOpen={isFilterMenuOpen}
+                    backgroundEffect={backgroundEffect}
+                    onSelect={(effect: BackgroundEffect) => {
+                      onBackgroundEffectChange(effect);
+                      setIsFilterMenuOpen(false);
+                    }}
+                    onClose={() => setIsFilterMenuOpen(false)}
+                    localStream={localStream}
+                    isCameraOff={!isCameraOn}
+                    isMirrorCamera
+                  />
                 <div className="relative aspect-video lg:aspect-[16/10] bg-[#0d0e0d] rounded-2xl overflow-hidden border border-[#FEFCD9]/10 shadow-2xl">
                   {isCameraOn && localStream ? (
                     <video ref={videoRef} autoPlay muted playsInline className="w-full h-full object-cover scale-x-[-1]" />
@@ -644,7 +682,23 @@ function JoinScreen({
                     <button onClick={toggleCamera} className={`w-9 h-9 rounded-full flex items-center justify-center transition-all ${isCameraOn ? "text-[#FEFCD9] hover:bg-white/10" : "bg-red-500 text-white"}`}>
                       {isCameraOn ? <Video className="w-4 h-4" /> : <VideoOff className="w-4 h-4" />}
                     </button>
+                    <button
+                      onClick={() => setIsFilterMenuOpen((prev) => !prev)}
+                      className={`h-9 px-3 rounded-full hidden md:flex items-center justify-center gap-1.5 transition-all ${
+                        isFilterMenuOpen || backgroundEffect !== "none"
+                          ? "bg-[#F95F4A] text-white"
+                          : "text-[#FEFCD9]/80 hover:bg-white/10"
+                      }`}
+                      style={{ fontFamily: "'PolySans Mono', monospace" }}
+                    >
+                      <ScanFace className="w-3.5 h-3.5" />
+                      <span className="text-[10px] uppercase tracking-[0.18em]">
+                        Filters
+                      </span>
+                    </button>
                   </div>
+
+
 
                   <div className="absolute top-3 left-3 right-3 flex items-start justify-between gap-3">
                     <div
@@ -653,7 +707,7 @@ function JoinScreen({
                     >
                       {userEmail}
                     </div>
-                    <div className="flex items-center gap-2">
+                    <div className="hidden md:flex items-center gap-2">
                       {isSignedInUser && (
                         <button
                           type="button"
@@ -683,7 +737,7 @@ function JoinScreen({
                   style={{ fontFamily: "'PolySans Mono', monospace" }}
                 >
                   <span className="text-[#FEFCD9]/40">Preflight</span>
-                  <div className="flex items-center gap-2 bg-black/40 border border-[#FEFCD9]/10 rounded-full px-3 py-1 text-[#FEFCD9]/70">
+                  <div className="hidden md:flex items-center gap-2 bg-black/40 border border-[#FEFCD9]/10 rounded-full px-3 py-1 text-[#FEFCD9]/70">
                     <span
                       className={`w-1.5 h-1.5 rounded-full ${
                         isMicOn ? "bg-emerald-400" : "bg-[#F95F4A]"
@@ -691,13 +745,23 @@ function JoinScreen({
                     />
                     Mic {isMicOn ? "On" : "Off"}
                   </div>
-                  <div className="flex items-center gap-2 bg-black/40 border border-[#FEFCD9]/10 rounded-full px-3 py-1 text-[#FEFCD9]/70">
+                  <div className="hidden md:flex items-center gap-2 bg-black/40 border border-[#FEFCD9]/10 rounded-full px-3 py-1 text-[#FEFCD9]/70">
                     <span
                       className={`w-1.5 h-1.5 rounded-full ${
                         isCameraOn ? "bg-emerald-400" : "bg-[#F95F4A]"
                       }`}
                     />
                     Camera {isCameraOn ? "On" : "Off"}
+                  </div>
+                  <div className="hidden md:flex items-center gap-2 bg-black/40 border border-[#FEFCD9]/10 rounded-full px-3 py-1 text-[#FEFCD9]/70">
+                    <span
+                      className={`w-1.5 h-1.5 rounded-full ${
+                        backgroundEffect !== "none"
+                          ? "bg-emerald-400"
+                          : "bg-[#FEFCD9]/35"
+                      }`}
+                    />
+                    Filter {backgroundEffectLabel}
                   </div>
                   {onTestSpeaker && (
                     <div className="ml-auto flex items-center gap-2">

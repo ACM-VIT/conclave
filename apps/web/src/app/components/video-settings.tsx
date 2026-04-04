@@ -5,11 +5,16 @@ import {
   Settings,
   FlipHorizontal,
   Mic,
+  ScanFace,
   Volume2,
   ChevronDown,
   Check,
   UserCheck,
 } from "lucide-react";
+import {
+  BACKGROUND_EFFECT_OPTIONS,
+  type BackgroundEffect,
+} from "../lib/background-blur";
 
 interface MediaDeviceOption {
   deviceId: string;
@@ -21,6 +26,8 @@ interface VideoSettingsProps {
   isOpen: boolean;
   onToggleOpen: () => void;
   onToggleMirror: () => void;
+  backgroundEffect: BackgroundEffect;
+  onBackgroundEffectChange: (effect: BackgroundEffect) => void;
   isCameraOff: boolean;
   isAdmin?: boolean;
   displayNameInput?: string;
@@ -120,6 +127,8 @@ export default function VideoSettings({
   isOpen,
   onToggleOpen,
   onToggleMirror,
+  backgroundEffect,
+  onBackgroundEffectChange,
   isCameraOff,
   isAdmin,
   displayNameInput,
@@ -232,6 +241,39 @@ export default function VideoSettings({
               </div>
             </div>
           </button>
+
+          <div className="px-3 py-2">
+            <div className="mb-2 flex items-center gap-1.5 text-[10px] text-[#FEFCD9]/40 uppercase tracking-wider">
+              <ScanFace className="w-3 h-3" />
+              <span>Camera filters</span>
+            </div>
+            <div className="space-y-1.5">
+              {BACKGROUND_EFFECT_OPTIONS.map((option) => {
+                const isSelected = backgroundEffect === option.id;
+                return (
+                  <button
+                    key={option.id}
+                    onClick={() => onBackgroundEffectChange(option.id)}
+                    className={`w-full flex items-center gap-2 rounded-lg border px-2.5 py-2 text-left transition-colors ${
+                      isSelected
+                        ? "border-[#F95F4A]/50 bg-[#F95F4A]/10 text-[#FEFCD9]"
+                        : "border-[#FEFCD9]/10 text-[#FEFCD9]/75 hover:border-[#FEFCD9]/20 hover:bg-[#FEFCD9]/5"
+                    }`}
+                  >
+                    <div className="flex-1">
+                      <div className="text-xs">{option.label}</div>
+                      <div className="text-[10px] text-[#FEFCD9]/45">
+                        {option.description}
+                      </div>
+                    </div>
+                    {isSelected ? (
+                      <Check className="h-3.5 w-3.5 shrink-0 text-[#F95F4A]" />
+                    ) : null}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
 
           {showDisplayNameSettings && (
             <div className="px-3 py-2">

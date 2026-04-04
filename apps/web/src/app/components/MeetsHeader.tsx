@@ -3,6 +3,7 @@
 import { Copy } from "lucide-react";
 import Image from "next/image";
 import { memo, useEffect, useState } from "react";
+import type { BackgroundEffect } from "../lib/background-blur";
 import VideoSettings from "./video-settings";
 
 interface MeetsHeaderProps {
@@ -13,6 +14,8 @@ interface MeetsHeaderProps {
   isVideoSettingsOpen: boolean;
   onToggleVideoSettings: () => void;
   onToggleMirror: () => void;
+  backgroundEffect: BackgroundEffect;
+  onBackgroundEffectChange: (effect: BackgroundEffect) => void;
   isCameraOff: boolean;
   displayNameInput: string;
   displayNameStatus: { type: "success" | "error"; message: string } | null;
@@ -38,6 +41,8 @@ function MeetsHeader({
   isVideoSettingsOpen,
   onToggleVideoSettings,
   onToggleMirror,
+  backgroundEffect,
+  onBackgroundEffectChange,
   isCameraOff,
   displayNameInput,
   displayNameStatus,
@@ -100,6 +105,8 @@ function MeetsHeader({
               isOpen={isVideoSettingsOpen}
               onToggleOpen={onToggleVideoSettings}
               onToggleMirror={onToggleMirror}
+              backgroundEffect={backgroundEffect}
+              onBackgroundEffectChange={onBackgroundEffectChange}
               isCameraOff={isCameraOff}
               isAdmin={isAdmin}
               displayNameInput={displayNameInput}
@@ -163,6 +170,8 @@ function MeetsHeader({
               isOpen={isVideoSettingsOpen}
               onToggleOpen={onToggleVideoSettings}
               onToggleMirror={onToggleMirror}
+              backgroundEffect={backgroundEffect}
+              onBackgroundEffectChange={onBackgroundEffectChange}
               isCameraOff={isCameraOff}
               isAdmin={isAdmin}
               displayNameInput={displayNameInput}
