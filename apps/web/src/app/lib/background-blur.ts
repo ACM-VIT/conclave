@@ -8,6 +8,29 @@ import type { VideoQuality } from "./types";
 
 export type BackgroundEffect = "none" | "blur";
 
+export interface BackgroundEffectOption {
+  id: BackgroundEffect;
+  label: string;
+  description: string;
+  experimental?: boolean;
+}
+
+export const BACKGROUND_EFFECT_OPTIONS: BackgroundEffectOption[] = [
+  {
+    id: "none",
+    label: "Original",
+    description: "Raw camera feed",
+  },
+  {
+    id: "blur",
+    label: "Blur",
+    description: "Soft background blur",
+  },
+];
+
+export const getBackgroundEffectOption = (effect: BackgroundEffect) =>
+  BACKGROUND_EFFECT_OPTIONS.find((option) => option.id === effect);
+
 export interface ManagedCameraTrack {
   stream: MediaStream;
   track: MediaStreamTrack;
@@ -17,6 +40,11 @@ export interface ManagedCameraTrack {
 interface CreateManagedCameraTrackOptions {
   effect: BackgroundEffect;
   quality: VideoQuality;
+}
+
+interface CreateManagedCameraTrackFromTrackOptions {
+  effect: BackgroundEffect;
+  sourceTrack: MediaStreamTrack;
 }
 
 const MEDIAPIPE_WASM_ROOT =
@@ -352,13 +380,52 @@ export const createManagedCameraTrack = async ({
     return await createBlurredTrack(sourceStream, sourceTrack);
   } catch (error) {
     console.warn(
-      "[Meets] Background blur setup failed, falling back to raw camera:",
+      `[Meets] ${effect} camera effect setup failed, falling back to raw camera:`,
       error,
     );
 
     return {
       stream: new MediaStream([sourceTrack]),
       track: sourceTrack,
+      stop: () => {
+        stopMediaStream(sourceStream);
+      },
+    };
+  }
+};
+
+export const createManagedCameraTrackFromTrack = async ({
+  effect,
+  sourceTrack,
+}: CreateManagedCameraTrackFromTrackOptions): Promise<ManagedCameraTrack> => {
+  const clonedTrack = sourceTrack.clone();
+  const sourceStream = new MediaStream([clonedTrack]);
+
+  if ("contentHint" in clonedTrack) {
+    clonedTrack.contentHint = "motion";
+  }
+
+  if (effect === "none") {
+    return {
+      stream: new MediaStream([clonedTrack]),
+      track: clonedTrack,
+      stop: () => {
+        stopMediaStream(sourceStream);
+      },
+    };
+  }
+
+  try {
+    return await createBlurredTrack(sourceStream, clonedTrack);
+  } catch (error) {
+    console.warn(
+      `[Meets] ${effect} camera effect preview setup failed, falling back to cloned camera:`,
+      error,
+    );
+
+    return {
+      stream: new MediaStream([clonedTrack]),
+      track: clonedTrack,
       stop: () => {
         stopMediaStream(sourceStream);
       },

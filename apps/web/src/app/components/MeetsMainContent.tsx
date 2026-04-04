@@ -1070,6 +1070,8 @@ export default function MeetsMainContent({
                 isMuted={isMuted}
                 isCameraOff={isCameraOff}
                 backgroundEffect={backgroundEffect}
+                localStream={localStream}
+                isMirrorCamera={isMirrorCamera}
                 isScreenSharing={isScreenSharing}
                 activeScreenShareId={activeScreenShareId}
                 isChatOpen={isChatOpen}

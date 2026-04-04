@@ -21,6 +21,7 @@ import type { RoomInfo } from "@/lib/sfu-types";
 import {
   createManagedCameraTrack,
   type BackgroundEffect,
+  getBackgroundEffectOption,
   type ManagedCameraTrack,
 } from "../lib/background-blur";
 import type { ConnectionState, MeetError } from "../lib/types";
@@ -35,6 +36,7 @@ import {
   sanitizeRoomCode,
 } from "../lib/utils";
 import MeetsErrorBanner from "./MeetsErrorBanner";
+import JoinCameraFiltersDrawer from "./JoinCameraFiltersDrawer";
 
 const normalizeGuestName = (value: string): string =>
   value.trim().replace(/\s+/g, " ");
@@ -129,6 +131,8 @@ function JoinScreen({
   backgroundEffect,
   onBackgroundEffectChange,
 }: JoinScreenProps) {
+  const backgroundEffectLabel =
+    getBackgroundEffectOption(backgroundEffect)?.label ?? "Original";
   const normalizedRoomId =
     roomId === "undefined" || roomId === "null" ? "" : roomId;
   const canJoin = normalizedRoomId.trim().length > 0;
@@ -136,6 +140,7 @@ function JoinScreen({
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [isCameraOn, setIsCameraOn] = useState(false); // Start with camera off
   const [isMicOn, setIsMicOn] = useState(false); // Start with mic off
+  const [isFilterMenuOpen, setIsFilterMenuOpen] = useState(false);
   const isRoutedRoom = forceJoinOnly;
   const enforceShortCode = enableRoomRouting || forceJoinOnly;
   const hasUserIdentity = Boolean(user?.id || user?.email);
@@ -645,7 +650,20 @@ function JoinScreen({
 
           {phase === "join" && (
             <div className="w-full max-w-6xl grid gap-6 lg:gap-10 lg:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)] items-start animate-fade-in">
-              <div className="flex flex-col lg:pr-2">
+              <div className="flex flex-col lg:pr-2 relative">
+                
+                <JoinCameraFiltersDrawer
+                    isOpen={isFilterMenuOpen}
+                    backgroundEffect={backgroundEffect}
+                    onSelect={(effect: BackgroundEffect) => {
+                      onBackgroundEffectChange(effect);
+                      setIsFilterMenuOpen(false);
+                    }}
+                    onClose={() => setIsFilterMenuOpen(false)}
+                    localStream={localStream}
+                    isCameraOff={!isCameraOn}
+                    isMirrorCamera
+                  />
                 <div className="relative aspect-video lg:aspect-[16/10] bg-[#0d0e0d] rounded-2xl overflow-hidden border border-[#FEFCD9]/10 shadow-2xl">
                   {isCameraOn && localStream ? (
                     <video ref={videoRef} autoPlay muted playsInline className="w-full h-full object-cover scale-x-[-1]" />
@@ -665,13 +683,9 @@ function JoinScreen({
                       {isCameraOn ? <Video className="w-4 h-4" /> : <VideoOff className="w-4 h-4" />}
                     </button>
                     <button
-                      onClick={() =>
-                        onBackgroundEffectChange(
-                          backgroundEffect === "blur" ? "none" : "blur",
-                        )
-                      }
+                      onClick={() => setIsFilterMenuOpen((prev) => !prev)}
                       className={`h-9 px-3 rounded-full flex items-center justify-center gap-1.5 transition-all ${
-                        backgroundEffect === "blur"
+                        isFilterMenuOpen || backgroundEffect !== "none"
                           ? "bg-[#F95F4A] text-white"
                           : "text-[#FEFCD9]/80 hover:bg-white/10"
                       }`}
@@ -679,10 +693,12 @@ function JoinScreen({
                     >
                       <ScanFace className="w-3.5 h-3.5" />
                       <span className="text-[10px] uppercase tracking-[0.18em]">
-                        Blur
+                        Filters
                       </span>
                     </button>
                   </div>
+
+
 
                   <div className="absolute top-3 left-3 right-3 flex items-start justify-between gap-3">
                     <div
@@ -740,12 +756,12 @@ function JoinScreen({
                   <div className="flex items-center gap-2 bg-black/40 border border-[#FEFCD9]/10 rounded-full px-3 py-1 text-[#FEFCD9]/70">
                     <span
                       className={`w-1.5 h-1.5 rounded-full ${
-                        backgroundEffect === "blur"
+                        backgroundEffect !== "none"
                           ? "bg-emerald-400"
                           : "bg-[#FEFCD9]/35"
                       }`}
                     />
-                    Blur {backgroundEffect === "blur" ? "On" : "Off"}
+                    Filter {backgroundEffectLabel}
                   </div>
                   {onTestSpeaker && (
                     <div className="ml-auto flex items-center gap-2">
