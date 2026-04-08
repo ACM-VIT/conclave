@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { StyleSheet } from "react-native";
 import type { Participant } from "../types";
 import { TrueSheet } from "@lodev09/react-native-true-sheet";
-import { FlatList, Pressable, Text, View } from "@/tw";
+import { Pressable, ScrollView, Text, View } from "@/tw";
 import { Check, X } from "lucide-react-native";
 import { SHEET_COLORS, SHEET_THEME } from "./true-sheet-theme";
 
@@ -144,7 +144,11 @@ export function ParticipantsPanel({
       onDidDismiss={handleDidDismiss}
       {...SHEET_THEME}
     >
-      <View style={styles.sheetContent}>
+      <ScrollView
+        contentContainerStyle={styles.sheetContent}
+        nestedScrollEnabled
+        keyboardShouldPersistTaps="handled"
+      >
         <View style={styles.headerRow}>
           <Text style={styles.headerText}>
             Participants ({data.length})
@@ -199,11 +203,8 @@ export function ParticipantsPanel({
           </View>
         ) : null}
 
-        <FlatList
-          data={data}
-          keyExtractor={(item) => item.userId}
-          contentContainerStyle={styles.listContent}
-          renderItem={({ item }) => {
+        <View style={styles.listContent}>
+          {data.map((item) => {
             const isYou = item.userId === currentUserId;
             const isHost = effectiveHostUserIds.has(item.userId);
             const statusParts: string[] = [];
@@ -219,7 +220,7 @@ export function ParticipantsPanel({
             const isPendingPromotion = pendingPromoteUserId === item.userId;
             const isPromoting = promotingUserId === item.userId;
             return (
-              <View style={styles.row}>
+              <View key={item.userId} style={styles.row}>
                 <View style={styles.rowLeft}>
                   <Text style={styles.nameText} numberOfLines={1}>
                     {resolveDisplayName(item.userId)}
@@ -290,9 +291,9 @@ export function ParticipantsPanel({
                 </View>
               </View>
             );
-          }}
-        />
-      </View>
+          })}
+        </View>
+      </ScrollView>
     </TrueSheet>
   );
 }
