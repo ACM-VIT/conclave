@@ -47,6 +47,7 @@ start_chromium() {
     local extension_dir="${UBLOCK_ORIGIN_EXTENSION_DIR:-/usr/share/chromium/extensions/ublock-origin}"
 
     /usr/bin/chromium \
+        --no-sandbox \
         --user-data-dir=/tmp/chromium-profile \
         --ozone-platform=x11 \
         --disable-extensions-except="${extension_dir}" \

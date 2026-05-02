@@ -1,8 +1,20 @@
 #!/bin/bash
-set -e
+set -euo pipefail
+
+cleanup() {
+    jobs -pr | xargs -r kill 2>/dev/null || true
+}
+
+trap cleanup EXIT INT TERM
 
 Xvfb :99 -screen 0 ${RESOLUTION:-1280x720x24} &
-sleep 1
+
+for _ in {1..50}; do
+    if xdpyinfo -display :99 >/dev/null 2>&1; then
+        break
+    fi
+    sleep 0.2
+done
 
 RESOLUTION="${RESOLUTION:-1280x720x24}"
 WIDTH="${RESOLUTION%%x*}"
@@ -11,6 +23,7 @@ HEIGHT="${REST%%x*}"
 EXTENSION_DIR="${UBLOCK_ORIGIN_EXTENSION_DIR:-/usr/share/chromium/extensions/ublock-origin}"
 
 /usr/bin/chromium \
+    --no-sandbox \
     --user-data-dir=/tmp/chromium-profile \
     --ozone-platform=x11 \
     --disable-extensions-except="${EXTENSION_DIR}" \
@@ -25,7 +38,7 @@ EXTENSION_DIR="${UBLOCK_ORIGIN_EXTENSION_DIR:-/usr/share/chromium/extensions/ubl
     "${START_URL:-about:blank}" &
 sleep 2
 
-x11vnc -display :99 -forever -shared -rfbport 5900 -nopw &
-websockify --web=/usr/share/novnc 6080 localhost:5900
+x11vnc -display :99 -forever -shared -rfbport 5900 -nopw -noxdamage -xkb -repeat &
+websockify --web=/usr/share/novnc 6080 localhost:5900 &
 
-wait
+wait -n

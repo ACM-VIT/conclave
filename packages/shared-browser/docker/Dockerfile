@@ -38,6 +38,9 @@ ENV RESOLUTION=1280x720x24
 
 RUN mkdir -p /opt/scripts
 
+COPY start.sh /opt/scripts/start.sh
+RUN chmod +x /opt/scripts/start.sh
+
 COPY run_chromium.sh /opt/scripts/run_chromium.sh
 RUN chmod +x /opt/scripts/run_chromium.sh
 
