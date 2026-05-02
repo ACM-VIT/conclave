@@ -474,6 +474,8 @@ export function ChatPanel({
     return newIds;
   }, [messages]);
 
+  const reversedMessages = useMemo(() => [...messages].reverse(), [messages]);
+
   useEffect(() => {
     if (visible) {
       hasPresented.current = true;
@@ -536,7 +538,7 @@ export function ChatPanel({
         <View style={styles.listWrapper}>
           <FlatList
             ref={listRef}
-            data={[...messages].reverse()}
+            data={reversedMessages}
             inverted
             keyExtractor={(item: ChatMessage) => item.id}
             contentContainerStyle={[

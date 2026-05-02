@@ -1,8 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { StyleSheet } from "react-native";
+import { StyleSheet, type ListRenderItemInfo } from "react-native";
 import type { Participant } from "../types";
 import { TrueSheet } from "@lodev09/react-native-true-sheet";
-import { Pressable, ScrollView, Text, View } from "@/tw";
+import { FlatList, Pressable, Text, View } from "@/tw";
 import { Check, X } from "lucide-react-native";
 import { SHEET_COLORS, SHEET_THEME } from "./true-sheet-theme";
 
@@ -44,14 +44,16 @@ export function ParticipantsPanel({
   );
   const [promotingUserId, setPromotingUserId] = useState<string | null>(null);
 
-  const effectiveHostUserId = hostUserId ?? (isAdmin ? currentUserId : null);
-  const effectiveHostUserIds = new Set<string>(
-    hostUserIds && hostUserIds.length > 0
-      ? hostUserIds
-      : effectiveHostUserId
-        ? [effectiveHostUserId]
-        : []
-  );
+  const effectiveHostUserIds = useMemo(() => {
+    const effectiveHostUserId = hostUserId ?? (isAdmin ? currentUserId : null);
+    return new Set<string>(
+      hostUserIds && hostUserIds.length > 0
+        ? hostUserIds
+        : effectiveHostUserId
+          ? [effectiveHostUserId]
+          : []
+    );
+  }, [currentUserId, hostUserId, hostUserIds, isAdmin]);
 
   const handleDismiss = useCallback(() => {
     void sheetRef.current?.dismiss();
@@ -119,6 +121,112 @@ export function ParticipantsPanel({
     [onPromoteHost]
   );
 
+  const keyExtractor = useCallback((item: Participant) => item.userId, []);
+
+  const renderParticipant = useCallback(
+    ({ item }: ListRenderItemInfo<Participant>) => {
+      const isYou = item.userId === currentUserId;
+      const isHost = effectiveHostUserIds.has(item.userId);
+      const statusParts: string[] = [];
+      if (item.isMuted) statusParts.push("Muted");
+      if (item.isCameraOff) statusParts.push("Cam Off");
+      if (item.isHandRaised) statusParts.push("✋");
+      const canPromote =
+        Boolean(onPromoteHost) &&
+        isAdmin &&
+        !isYou &&
+        !isHost &&
+        !item.isGhost;
+      const isPendingPromotion = pendingPromoteUserId === item.userId;
+      const isPromoting = promotingUserId === item.userId;
+
+      return (
+        <View style={styles.row}>
+          <View style={styles.rowLeft}>
+            <Text style={styles.nameText} numberOfLines={1}>
+              {resolveDisplayName(item.userId)}
+              {isYou ? (
+                <Text style={styles.youLabel}> (You)</Text>
+              ) : null}
+            </Text>
+            {isHost ? <Text style={styles.hostBadge}>Host</Text> : null}
+          </View>
+          <View style={styles.rowRight}>
+            {statusParts.length ? (
+              <Text style={styles.statusText}>
+                {statusParts.join(" · ")}
+              </Text>
+            ) : null}
+            {canPromote ? (
+              <View style={styles.promoteRow}>
+                {isPendingPromotion ? (
+                  <>
+                    <Pressable
+                      onPress={() => confirmHostPromotion(item.userId)}
+                      disabled={isPromoting}
+                      style={({ pressed }) => [
+                        styles.promoteButton,
+                        styles.promoteConfirm,
+                        pressed && styles.pendingButtonPressed,
+                        isPromoting && styles.promoteDisabled,
+                      ]}
+                      accessibilityRole="button"
+                      accessibilityLabel="Confirm host promotion"
+                    >
+                      <Text style={[styles.promoteText, styles.promoteConfirmText]}>
+                        {isPromoting ? "Promoting" : "Confirm"}
+                      </Text>
+                    </Pressable>
+                    <Pressable
+                      onPress={cancelHostPromotion}
+                      disabled={isPromoting}
+                      style={({ pressed }) => [
+                        styles.promoteButton,
+                        styles.promoteCancel,
+                        pressed && styles.pendingButtonPressed,
+                        isPromoting && styles.promoteDisabled,
+                      ]}
+                      accessibilityRole="button"
+                      accessibilityLabel="Cancel host promotion"
+                    >
+                      <Text style={styles.promoteText}>Cancel</Text>
+                    </Pressable>
+                  </>
+                ) : (
+                  <Pressable
+                    onPress={() => beginHostPromotion(item.userId)}
+                    disabled={isPromoting}
+                    style={({ pressed }) => [
+                      styles.promoteButton,
+                      pressed && styles.pendingButtonPressed,
+                      isPromoting && styles.promoteDisabled,
+                    ]}
+                    accessibilityRole="button"
+                    accessibilityLabel="Promote to host"
+                  >
+                    <Text style={styles.promoteText}>Host</Text>
+                  </Pressable>
+                )}
+              </View>
+            ) : null}
+          </View>
+        </View>
+      );
+    },
+    [
+      beginHostPromotion,
+      cancelHostPromotion,
+      confirmHostPromotion,
+      currentUserId,
+      effectiveHostUserIds,
+      isAdmin,
+      onPromoteHost,
+      pendingPromoteUserId,
+      promotingUserId,
+      resolveDisplayName,
+    ]
+  );
+
   useEffect(() => {
     if (visible) {
       hasPresented.current = true;
@@ -144,156 +252,71 @@ export function ParticipantsPanel({
       onDidDismiss={handleDidDismiss}
       {...SHEET_THEME}
     >
-      <ScrollView
+      <FlatList
+        data={data}
+        keyExtractor={keyExtractor}
+        renderItem={renderParticipant}
         contentContainerStyle={styles.sheetContent}
         nestedScrollEnabled
         keyboardShouldPersistTaps="handled"
-      >
-        <View style={styles.headerRow}>
-          <Text style={styles.headerText}>
-            Participants ({data.length})
-          </Text>
-          <Pressable onPress={handleDismiss} style={styles.closeButton}>
-            <Text style={styles.closeText}>Done</Text>
-          </Pressable>
-        </View>
-
-        {isAdmin && pendingList.length > 0 ? (
-          <View style={styles.pendingSection}>
-            <View style={styles.pendingHeader}>
-              <Text style={styles.pendingTitle}>
-                Waiting ({pendingList.length})
+        ListHeaderComponent={
+          <>
+            <View style={styles.headerRow}>
+              <Text style={styles.headerText}>
+                Participants ({data.length})
               </Text>
+              <Pressable onPress={handleDismiss} style={styles.closeButton}>
+                <Text style={styles.closeText}>Done</Text>
+              </Pressable>
             </View>
-            <View style={styles.pendingList}>
-              {pendingList.map(([userId, displayName]) => (
-                <View key={userId} style={styles.pendingRow}>
-                  <Text style={styles.pendingName} numberOfLines={1}>
-                    {displayName || userId}
-                  </Text>
-                  <View style={styles.pendingActions}>
-                    <Pressable
-                      onPress={() => onRejectPendingUser?.(userId)}
-                      style={({ pressed }) => [
-                        styles.pendingIconButton,
-                        styles.pendingReject,
-                        pressed && styles.pendingButtonPressed,
-                      ]}
-                      accessibilityRole="button"
-                      accessibilityLabel="Reject"
-                    >
-                      <X size={15} color="rgba(248, 113, 113, 0.95)" strokeWidth={2.5} />
-                    </Pressable>
-                    <Pressable
-                      onPress={() => onAdmitPendingUser?.(userId)}
-                      style={({ pressed }) => [
-                        styles.pendingIconButton,
-                        styles.pendingAdmit,
-                        pressed && styles.pendingButtonPressed,
-                      ]}
-                      accessibilityRole="button"
-                      accessibilityLabel="Admit"
-                    >
-                      <Check size={15} color="#16a34a" strokeWidth={2.5} />
-                    </Pressable>
-                  </View>
-                </View>
-              ))}
-            </View>
-          </View>
-        ) : null}
 
-        <View style={styles.listContent}>
-          {data.map((item) => {
-            const isYou = item.userId === currentUserId;
-            const isHost = effectiveHostUserIds.has(item.userId);
-            const statusParts: string[] = [];
-            if (item.isMuted) statusParts.push("Muted");
-            if (item.isCameraOff) statusParts.push("Cam Off");
-            if (item.isHandRaised) statusParts.push("✋");
-            const canPromote =
-              Boolean(onPromoteHost) &&
-              isAdmin &&
-              !isYou &&
-              !isHost &&
-              !item.isGhost;
-            const isPendingPromotion = pendingPromoteUserId === item.userId;
-            const isPromoting = promotingUserId === item.userId;
-            return (
-              <View key={item.userId} style={styles.row}>
-                <View style={styles.rowLeft}>
-                  <Text style={styles.nameText} numberOfLines={1}>
-                    {resolveDisplayName(item.userId)}
-                    {isYou ? (
-                      <Text style={styles.youLabel}> (You)</Text>
-                    ) : null}
+            {isAdmin && pendingList.length > 0 ? (
+              <View style={styles.pendingSection}>
+                <View style={styles.pendingHeader}>
+                  <Text style={styles.pendingTitle}>
+                    Waiting ({pendingList.length})
                   </Text>
-                  {isHost ? <Text style={styles.hostBadge}>Host</Text> : null}
                 </View>
-                <View style={styles.rowRight}>
-                  {statusParts.length ? (
-                    <Text style={styles.statusText}>
-                      {statusParts.join(" · ")}
-                    </Text>
-                  ) : null}
-                  {canPromote ? (
-                    <View style={styles.promoteRow}>
-                      {isPendingPromotion ? (
-                        <>
-                          <Pressable
-                            onPress={() => confirmHostPromotion(item.userId)}
-                            disabled={isPromoting}
-                            style={({ pressed }) => [
-                              styles.promoteButton,
-                              styles.promoteConfirm,
-                              pressed && styles.pendingButtonPressed,
-                              isPromoting && styles.promoteDisabled,
-                            ]}
-                            accessibilityRole="button"
-                            accessibilityLabel="Confirm host promotion"
-                          >
-                            <Text style={[styles.promoteText, styles.promoteConfirmText]}>
-                              {isPromoting ? "Promoting" : "Confirm"}
-                            </Text>
-                          </Pressable>
-                          <Pressable
-                            onPress={cancelHostPromotion}
-                            disabled={isPromoting}
-                            style={({ pressed }) => [
-                              styles.promoteButton,
-                              styles.promoteCancel,
-                              pressed && styles.pendingButtonPressed,
-                              isPromoting && styles.promoteDisabled,
-                            ]}
-                            accessibilityRole="button"
-                            accessibilityLabel="Cancel host promotion"
-                          >
-                            <Text style={styles.promoteText}>Cancel</Text>
-                          </Pressable>
-                        </>
-                      ) : (
+                <View style={styles.pendingList}>
+                  {pendingList.map(([userId, displayName]) => (
+                    <View key={userId} style={styles.pendingRow}>
+                      <Text style={styles.pendingName} numberOfLines={1}>
+                        {displayName || userId}
+                      </Text>
+                      <View style={styles.pendingActions}>
                         <Pressable
-                          onPress={() => beginHostPromotion(item.userId)}
-                          disabled={isPromoting}
+                          onPress={() => onRejectPendingUser?.(userId)}
                           style={({ pressed }) => [
-                            styles.promoteButton,
+                            styles.pendingIconButton,
+                            styles.pendingReject,
                             pressed && styles.pendingButtonPressed,
-                            isPromoting && styles.promoteDisabled,
                           ]}
                           accessibilityRole="button"
-                          accessibilityLabel="Promote to host"
+                          accessibilityLabel="Reject"
                         >
-                          <Text style={styles.promoteText}>Host</Text>
+                          <X size={15} color="rgba(248, 113, 113, 0.95)" strokeWidth={2.5} />
                         </Pressable>
-                      )}
+                        <Pressable
+                          onPress={() => onAdmitPendingUser?.(userId)}
+                          style={({ pressed }) => [
+                            styles.pendingIconButton,
+                            styles.pendingAdmit,
+                            pressed && styles.pendingButtonPressed,
+                          ]}
+                          accessibilityRole="button"
+                          accessibilityLabel="Admit"
+                        >
+                          <Check size={15} color="#16a34a" strokeWidth={2.5} />
+                        </Pressable>
+                      </View>
                     </View>
-                  ) : null}
+                  ))}
                 </View>
               </View>
-            );
-          })}
-        </View>
-      </ScrollView>
+            ) : null}
+          </>
+        }
+      />
     </TrueSheet>
   );
 }
@@ -326,10 +349,6 @@ const styles = StyleSheet.create({
   closeText: {
     fontSize: 12,
     color: SHEET_COLORS.text,
-  },
-  listContent: {
-    gap: 12,
-    paddingBottom: 12,
   },
   pendingSection: {
     marginBottom: 12,
