@@ -47,9 +47,10 @@ start_chromium() {
     local extension_dir="${UBLOCK_ORIGIN_EXTENSION_DIR:-/usr/share/chromium/extensions/ublock-origin}"
 
     /usr/bin/chromium \
-        --no-sandbox \
         --user-data-dir=/tmp/chromium-profile \
         --ozone-platform=x11 \
+        --disable-gpu \
+        --disable-dev-shm-usage \
         --disable-extensions-except="${extension_dir}" \
         --load-extension="${extension_dir}" \
         --no-first-run \
@@ -58,7 +59,6 @@ start_chromium() {
         --force-device-scale-factor=1 \
         --window-position=0,0 \
         --window-size="${window_size}" \
-        --start-fullscreen \
         "${START_URL:-about:blank}"
 }
 
