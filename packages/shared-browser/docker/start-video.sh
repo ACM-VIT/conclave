@@ -22,8 +22,8 @@ HEIGHT="${REST%%x*}"
 
 PAYLOAD="${VIDEO_PAYLOAD_TYPE:-96}"
 SSRC="${VIDEO_SSRC:-22222222}"
-FRAMERATE="${VIDEO_FRAMERATE:-30}"
-BITRATE="${VIDEO_BITRATE:-1M}"
+FRAMERATE="${VIDEO_FRAMERATE:-60}"
+BITRATE="${VIDEO_BITRATE:-2M}"
 RTCP_PORT="${VIDEO_RTCP_PORT:-$((VIDEO_TARGET_PORT + 1))}"
 
 echo "[Video] Starting capture: ${WIDTH}x${HEIGHT}@${FRAMERATE}fps → ${VIDEO_TARGET_IP}:${VIDEO_TARGET_PORT} (RTCP: ${RTCP_PORT})"
@@ -33,6 +33,6 @@ exec ffmpeg -nostdin -hide_banner -loglevel warning \
   -vf format=yuv420p \
   -c:v libvpx -deadline realtime -cpu-used 8 \
   -g "$((FRAMERATE * 2))" -keyint_min "$((FRAMERATE * 2))" \
-  -b:v "${BITRATE}" -maxrate "${BITRATE}" -bufsize 4M \
+  -b:v "${BITRATE}" -maxrate "${BITRATE}" -bufsize 8M \
   -payload_type "${PAYLOAD}" -ssrc "${SSRC}" \
   -f rtp "rtp://${VIDEO_TARGET_IP}:${VIDEO_TARGET_PORT}?rtcpport=${RTCP_PORT}&pkt_size=1200"
