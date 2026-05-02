@@ -7,10 +7,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     x11vnc \
     x11-xserver-utils \
     chromium \
+    chromium-sandbox \
+    webext-ublock-origin-chromium \
     novnc \
     websockify \
     dbus-x11 \
+    fontconfig \
+    fonts-dejavu-core \
     fonts-liberation \
+    fonts-noto-core \
+    fonts-noto-color-emoji \
     libnss3 \
     libxss1 \
     libasound2 \
@@ -19,6 +25,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     supervisor \
     procps \
+    && fc-cache -f \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
