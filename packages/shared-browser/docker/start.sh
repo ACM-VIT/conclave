@@ -23,9 +23,10 @@ HEIGHT="${REST%%x*}"
 EXTENSION_DIR="${UBLOCK_ORIGIN_EXTENSION_DIR:-/usr/share/chromium/extensions/ublock-origin}"
 
 /usr/bin/chromium \
-    --no-sandbox \
     --user-data-dir=/tmp/chromium-profile \
     --ozone-platform=x11 \
+    --disable-gpu \
+    --disable-dev-shm-usage \
     --disable-extensions-except="${EXTENSION_DIR}" \
     --load-extension="${EXTENSION_DIR}" \
     --no-first-run \
@@ -34,7 +35,6 @@ EXTENSION_DIR="${UBLOCK_ORIGIN_EXTENSION_DIR:-/usr/share/chromium/extensions/ubl
     --force-device-scale-factor=1 \
     --window-position=0,0 \
     --window-size="${WIDTH},${HEIGHT}" \
-    --start-fullscreen \
     "${START_URL:-about:blank}" &
 sleep 2
 
