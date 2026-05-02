@@ -62,7 +62,7 @@ function DevPlaygroundLayout({
   );
 
   return (
-    <div className="flex flex-1 min-h-0 min-w-0 gap-4 overflow-hidden">
+    <div className="mt-5 flex flex-1 min-h-0 min-w-0 gap-4 overflow-hidden">
       <div className="flex-1 min-h-0 min-w-0 overflow-hidden">
         <DevPlaygroundWebApp />
       </div>

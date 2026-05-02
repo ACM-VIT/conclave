@@ -163,10 +163,6 @@ function MobileControlsBar({
   onCloseDevPlayground,
   isAppsLocked = false,
   onToggleAppsLock,
-  isVoiceAgentRunning = false,
-  isVoiceAgentStarting = false,
-  onStartVoiceAgent,
-  onStopVoiceAgent,
   audioInputDeviceId,
   audioOutputDeviceId,
   onAudioInputDeviceChange,
@@ -638,42 +634,7 @@ function MobileControlsBar({
                 </span>
               </button>
             )}
-            {isAdmin && (onStartVoiceAgent || onStopVoiceAgent) && (
-              <button
-                onClick={() => {
-                  if (isVoiceAgentRunning) {
-                    onStopVoiceAgent?.();
-                  } else {
-                    onStartVoiceAgent?.();
-                  }
-                  setIsMoreMenuOpen(false);
-                }}
-                className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-[#FEFCD9] hover:bg-[#FEFCD9]/5 active:bg-[#FEFCD9]/10 transition-transform duration-150 touch-feedback"
-                disabled={isVoiceAgentStarting}
-              >
-                <div className="h-9 w-9 rounded-xl bg-[#2b2b2b] border border-white/5 flex items-center justify-center">
-                  {isVoiceAgentStarting ? (
-                    <Settings className="w-4.5 h-4.5 animate-spin" />
-                  ) : (
-                    <Mic className="w-4.5 h-4.5" />
-                  )}
-                </div>
-                <span className="text-sm font-medium">
-                  {isVoiceAgentRunning ? "Stop voice agent" : "Start voice agent"}
-                </span>
-                <span
-                  className={`ml-auto text-[10px] uppercase tracking-[0.2em] ${
-                    isVoiceAgentRunning ? "text-emerald-300" : "text-[#FEFCD9]/40"
-                  }`}
-                >
-                  {isVoiceAgentStarting
-                    ? "Starting"
-                    : isVoiceAgentRunning
-                      ? "Live"
-                      : "Off"}
-                </span>
-              </button>
-            )}
+            {/* Voice agent action hidden from the mobile web menu. */}
             {isAdmin &&
               isDevPlaygroundEnabled &&
               (onOpenDevPlayground || onCloseDevPlayground) && (
