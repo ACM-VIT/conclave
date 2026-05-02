@@ -65,5 +65,21 @@
     "tailwindcss": "^3.4.19",
     "typescript": "~5.9.2"
   },
+  "overrides": {
+    "@xmldom/xmldom": "0.8.13",
+    "brace-expansion@<1.1.13": "1.1.14",
+    "brace-expansion@>=2.0.0 <2.0.3": "2.0.3",
+    "brace-expansion@>=4.0.0 <5.0.5": "5.0.5",
+    "node-forge": "1.4.0",
+    "picomatch@<2.3.2": "2.3.2",
+    "picomatch@>=3.0.0 <3.0.2": "3.0.2",
+    "picomatch@>=4.0.0 <4.0.4": "4.0.4",
+    "postcss": "8.5.13",
+    "socket.io-parser": "4.2.6",
+    "tar": "7.5.13",
+    "undici": "6.25.0",
+    "uuid": "14.0.0",
+    "yaml": "2.8.3"
+  },
   "private": true
 }
