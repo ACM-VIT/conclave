@@ -264,15 +264,6 @@ export function SettingsSheet({
   webinarConfig,
   webinarLink,
   onSetWebinarLink,
-  isVoiceAgentRunning = false,
-  isVoiceAgentStarting = false,
-  voiceAgentError = null,
-  voiceAgentApiKeyInput = "",
-  hasVoiceAgentApiKey = false,
-  voiceAgentApiKeyError = null,
-  onVoiceAgentApiKeyChange,
-  onStartVoiceAgent,
-  onStopVoiceAgent,
   onGetWebinarConfig,
   onUpdateWebinarConfig,
   onGenerateWebinarLink,
@@ -512,24 +503,6 @@ export function SettingsSheet({
     }
     await Clipboard.setStringAsync(link);
   }, []);
-  const canStartVoiceAgent =
-    Boolean(onStartVoiceAgent) &&
-    !isVoiceAgentStarting &&
-    (hasVoiceAgentApiKey || voiceAgentApiKeyInput.trim().length > 0);
-  const voiceAgentStateLabel = isVoiceAgentRunning
-    ? "Live"
-    : isVoiceAgentStarting
-      ? "Starting"
-      : hasVoiceAgentApiKey
-        ? "Ready"
-        : "Off";
-  const voiceAgentActionLabel = isVoiceAgentRunning
-    ? "Stop"
-    : isVoiceAgentStarting
-      ? "Starting..."
-      : "Start";
-  const voiceAgentErrorText = voiceAgentApiKeyError || voiceAgentError;
-
   return (
     <TrueSheet
       ref={sheetRef}
@@ -614,63 +587,7 @@ export function SettingsSheet({
 
         {isAdmin ? (
           <>
-            <View style={styles.voiceAgentCard}>
-              <View style={styles.voiceAgentHeaderRow}>
-                <Text style={styles.voiceAgentTitle}>Voice agent</Text>
-                <View
-                  style={[
-                    styles.voiceAgentStatePill,
-                    isVoiceAgentRunning
-                      ? styles.voiceAgentStatePillLive
-                      : hasVoiceAgentApiKey
-                        ? styles.voiceAgentStatePillReady
-                        : null,
-                  ]}
-                >
-                  <Text style={styles.voiceAgentStateText}>{voiceAgentStateLabel}</Text>
-                </View>
-              </View>
-              <View style={styles.voiceAgentControlsRow}>
-                <TextInput
-                  value={voiceAgentApiKeyInput}
-                  onChangeText={onVoiceAgentApiKeyChange}
-                  placeholder={hasVoiceAgentApiKey ? "Key loaded" : "OpenAI key"}
-                  placeholderTextColor={SHEET_COLORS.textFaint}
-                  secureTextEntry
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  style={[styles.input, styles.voiceAgentInput]}
-                />
-                <Pressable
-                  onPress={() =>
-                    trigger(() => {
-                      if (isVoiceAgentRunning) {
-                        onStopVoiceAgent?.();
-                        return;
-                      }
-                      onStartVoiceAgent?.();
-                    })
-                  }
-                  disabled={
-                    isVoiceAgentRunning ? !onStopVoiceAgent : !canStartVoiceAgent
-                  }
-                  style={({ pressed }) => [
-                    styles.voiceAgentAction,
-                    isVoiceAgentRunning
-                      ? styles.voiceAgentActionStop
-                      : styles.voiceAgentActionStart,
-                    (isVoiceAgentRunning ? !onStopVoiceAgent : !canStartVoiceAgent) &&
-                      styles.voiceAgentActionDisabled,
-                    pressed && styles.quickActionPressed,
-                  ]}
-                >
-                  <Text style={styles.voiceAgentActionText}>{voiceAgentActionLabel}</Text>
-                </Pressable>
-              </View>
-              {voiceAgentErrorText ? (
-                <Text style={styles.errorText}>{voiceAgentErrorText}</Text>
-              ) : null}
-            </View>
+            {/* Voice agent controls hidden from the mobile app settings sheet. */}
 
             <SectionLabel
               label="Host controls"

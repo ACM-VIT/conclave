@@ -227,10 +227,6 @@ function ControlsBar({
   onCloseDevPlayground,
   isAppsLocked = false,
   onToggleAppsLock,
-  isVoiceAgentRunning = false,
-  isVoiceAgentStarting = false,
-  onStartVoiceAgent,
-  onStopVoiceAgent,
   isPopoutActive = false,
   isPopoutSupported = false,
   onOpenPopout,
@@ -277,10 +273,6 @@ function ControlsBar({
     canManageWhiteboard ||
     canManageDevPlayground ||
     Boolean(onToggleAppsLock);
-  const canManageVoiceAgent = Boolean(
-    isAdmin && (onStartVoiceAgent || onStopVoiceAgent),
-  );
-
   useEffect(() => {
     if (!isReactionMenuOpen) return;
 
@@ -640,41 +632,7 @@ function ControlsBar({
           )}
         </button>
       )}
-      {canManageVoiceAgent && (
-        <button
-          onClick={() => {
-            if (isVoiceAgentRunning) {
-              onStopVoiceAgent?.();
-              return;
-            }
-            onStartVoiceAgent?.();
-          }}
-          disabled={isVoiceAgentStarting}
-          className={
-            isVoiceAgentRunning
-              ? activeButtonClass
-              : isVoiceAgentStarting
-                ? ghostDisabledClass
-                : defaultButtonClass
-          }
-          title={
-            isVoiceAgentRunning
-              ? "Stop AI participant"
-              : "Start AI participant"
-          }
-          aria-label={
-            isVoiceAgentRunning
-              ? "Stop AI participant"
-              : "Start AI participant"
-          }
-        >
-          {isVoiceAgentStarting ? (
-            <Loader2 className="w-4 h-4 animate-spin" />
-          ) : (
-            <Sparkles className="w-4 h-4" />
-          )}
-        </button>
-      )}
+      {/* Voice agent button hidden from the navbar. */}
 
       <HotkeyTooltip
         label={isGhostMode ? "Ghost mode: hand raise locked" : isHandRaised ? "Lower hand" : "Raise hand"}
