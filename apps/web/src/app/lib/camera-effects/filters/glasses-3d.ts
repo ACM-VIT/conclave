@@ -1,6 +1,7 @@
 "use client";
 
 import type * as ThreeNamespace from "three";
+import type { MeshoptDecoder } from "three/examples/jsm/libs/meshopt_decoder.module.js";
 import type { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import {
   getLandmarkPoint3D,
@@ -13,6 +14,7 @@ import type { CameraEffect, Landmark, ManagedCameraTrack } from "../types";
 type ThreeModule = {
   THREE: typeof ThreeNamespace;
   GLTFLoader: typeof GLTFLoader;
+  MeshoptDecoder: typeof MeshoptDecoder;
 };
 type ThreeFaceEffect = Extract<CameraEffect, "3d-glasses">;
 
@@ -26,7 +28,7 @@ interface ThreeFaceFilterConfig {
 const THREE_FACE_FILTERS: Record<ThreeFaceEffect, ThreeFaceFilterConfig> = {
   "3d-glasses": {
     id: "3d-glasses",
-    assetPath: "/face-filters/3d/glasses/scene.gltf",
+    assetPath: "/face-filters/3d/glasses/glasses.glb",
     placement: "eyewear",
     scale: 1.18,
   },
@@ -40,7 +42,12 @@ const loadThreeModule = async (): Promise<ThreeModule> => {
     threeModulePromise = Promise.all([
       import("three"),
       import("three/examples/jsm/loaders/GLTFLoader.js"),
-    ]).then(([THREE, { GLTFLoader }]) => ({ THREE, GLTFLoader }));
+      import("three/examples/jsm/libs/meshopt_decoder.module.js"),
+    ]).then(([THREE, { GLTFLoader }, { MeshoptDecoder }]) => ({
+      THREE,
+      GLTFLoader,
+      MeshoptDecoder,
+    }));
   }
 
   return threeModulePromise;
@@ -51,9 +58,10 @@ const loadThreeModel = async (assetPath: string) => {
     threeModelPromises.set(
       assetPath,
       loadThreeModule().then(
-        ({ GLTFLoader }) =>
+        ({ GLTFLoader, MeshoptDecoder }) =>
           new Promise<ThreeNamespace.Object3D>((resolve, reject) => {
             const loader = new GLTFLoader();
+            loader.setMeshoptDecoder(MeshoptDecoder);
             loader.load(
               assetPath,
               (gltf) => resolve(gltf.scene),
