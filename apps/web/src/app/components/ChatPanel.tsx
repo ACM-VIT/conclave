@@ -312,7 +312,7 @@ function ChatPanel({
         );
         return;
       }
-      if (e.key === "Tab" || e.key === "Enter") {
+      if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey)) {
         e.preventDefault();
         applyMentionSuggestion(activeMentionIndex);
         return;
@@ -334,12 +334,17 @@ function ChatPanel({
         );
         return;
       }
-      if (isPickingCommand && (e.key === "Tab" || e.key === "Enter")) {
+      if (
+        isPickingCommand &&
+        (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey))
+      ) {
         const command = commandSuggestions[activeCommandIndex];
         const isExactMatch =
           command &&
           chatInput.trim().toLowerCase() === `/${command.label}`;
         if (e.key === "Enter" && isExactMatch) {
+          e.preventDefault();
+          handleSubmit(e);
           return;
         }
         e.preventDefault();
@@ -514,7 +519,7 @@ function ChatPanel({
                         {directMessageLabel}
                       </p>
                     ) : null}
-                    <p className="text-xs break-words leading-relaxed">
+                    <p className="text-xs break-words whitespace-pre-wrap leading-relaxed">
                       {renderMessageContent(msg.content)}
                     </p>
                   </div>
@@ -605,8 +610,8 @@ function ChatPanel({
             </div>
           )}
           <div className="flex gap-1.5">
-            <input
-              type="text"
+            <textarea
+              rows={1}
               value={chatInput}
               onChange={(e) => onInputChange(e.target.value)}
               onKeyDown={handleKeyDown}
@@ -619,7 +624,7 @@ function ChatPanel({
               }
               maxLength={1000}
               disabled={isChatDisabled}
-              className="flex-1 px-2.5 py-1.5 bg-black/30 border border-[#FEFCD9]/10 rounded-md text-xs text-[#FEFCD9] placeholder:text-[#FEFCD9]/30 focus:outline-none focus:border-[#FEFCD9]/20 disabled:opacity-50"
+              className="max-h-24 min-h-8 flex-1 resize-none px-2.5 py-1.5 bg-black/30 border border-[#FEFCD9]/10 rounded-md text-xs text-[#FEFCD9] placeholder:text-[#FEFCD9]/30 focus:outline-none focus:border-[#FEFCD9]/20 disabled:opacity-50"
             />
             <button
               type="submit"

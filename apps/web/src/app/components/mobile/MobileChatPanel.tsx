@@ -46,7 +46,7 @@ function MobileChatPanel({
   mentionableParticipants = [],
 }: MobileChatPanelProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const [activeCommandIndex, setActiveCommandIndex] = useState(0);
   const [activeMentionIndex, setActiveMentionIndex] = useState(0);
   const [localValue, setLocalValue] = useState(chatInput);
@@ -156,7 +156,7 @@ function MobileChatPanel({
     onInputChange(nextValue);
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (showMentionSuggestions) {
       if (e.key === "ArrowDown") {
         e.preventDefault();
@@ -170,7 +170,7 @@ function MobileChatPanel({
         );
         return;
       }
-      if (e.key === "Tab" || e.key === "Enter") {
+      if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey)) {
         e.preventDefault();
         applyMentionSuggestion(activeMentionIndex);
         return;
@@ -192,12 +192,17 @@ function MobileChatPanel({
         );
         return;
       }
-      if (isPickingCommand && (e.key === "Tab" || e.key === "Enter")) {
+      if (
+        isPickingCommand &&
+        (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey))
+      ) {
         const command = commandSuggestions[activeCommandIndex];
         const isExactMatch =
           command &&
           localValue.trim().toLowerCase() === `/${command.label}`;
         if (e.key === "Enter" && isExactMatch) {
+          e.preventDefault();
+          handleSubmit(e);
           return;
         }
         e.preventDefault();
@@ -207,6 +212,11 @@ function MobileChatPanel({
         }
         return;
       }
+    }
+
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      handleSubmit(e);
     }
   };
 
@@ -348,7 +358,7 @@ function MobileChatPanel({
                           : "bg-[#2a2a2a]/90 text-[#FEFCD9] rounded-bl-md selection:bg-[#F95F4A]/40 selection:text-white"
                       } ${message.isDirect ? "ring-1 ring-amber-300/30" : ""}`}
                     >
-                      <p className="text-sm break-words">
+                      <p className="text-sm break-words whitespace-pre-wrap">
                         {directMessageLabel ? (
                           <span className="mb-1 block text-[9px] uppercase tracking-[0.14em] text-amber-300/80">
                             {directMessageLabel}
@@ -426,9 +436,9 @@ function MobileChatPanel({
                 })}
               </div>
             )}
-            <input
+            <textarea
               ref={inputRef}
-              type="text"
+              rows={1}
               value={localValue}
               onChange={(e) => {
                 setLocalValue(e.target.value);
@@ -443,7 +453,7 @@ function MobileChatPanel({
                     : "Type a message or /..."
               }
               disabled={isChatDisabled}
-              className="flex-1 mobile-glass mobile-pill px-4 py-2.5 text-sm text-[#FEFCD9] placeholder:text-[#FEFCD9]/30 focus:outline-none focus:border-[#F95F4A]/50 disabled:opacity-50"
+              className="max-h-28 min-h-10 flex-1 resize-none mobile-glass mobile-pill px-4 py-2.5 text-sm text-[#FEFCD9] placeholder:text-[#FEFCD9]/30 focus:outline-none focus:border-[#F95F4A]/50 disabled:opacity-50"
             />
             <button
               type="submit"
