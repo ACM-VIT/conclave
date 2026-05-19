@@ -168,30 +168,6 @@ const applyEyewearPlacement = (
   model.rotation.set(xRot, yRot, zRot);
 };
 
-const drawVideoMirroredForThree = (
-  context: CanvasRenderingContext2D,
-  video: HTMLVideoElement,
-  width: number,
-  height: number,
-) => {
-  context.save();
-  context.scale(-1, 1);
-  context.drawImage(video, -width, 0, width, height);
-  context.restore();
-};
-
-const drawThreeCanvasUnmirrored = (
-  context: CanvasRenderingContext2D,
-  canvas: HTMLCanvasElement,
-  width: number,
-  height: number,
-) => {
-  context.save();
-  context.scale(-1, 1);
-  context.drawImage(canvas, -width, 0, width, height);
-  context.restore();
-};
-
 const cloneThreeModel = (
   model: ThreeNamespace.Object3D,
   THREE: typeof ThreeNamespace,
@@ -369,7 +345,7 @@ export const createThreeFaceOverlayTrack = async (
     }
 
     outputContext.clearRect(0, 0, width, height);
-    drawVideoMirroredForThree(outputContext, video, width, height);
+    outputContext.drawImage(video, 0, 0, width, height);
 
     try {
       const result = faceLandmarker.detectForVideo(video, performance.now());
@@ -391,7 +367,7 @@ export const createThreeFaceOverlayTrack = async (
 
       renderer.clear();
       renderer.render(scene, camera);
-      drawThreeCanvasUnmirrored(outputContext, threeCanvas, width, height);
+      outputContext.drawImage(threeCanvas, 0, 0, width, height);
     } catch (error) {
       model.visible = false;
       console.warn("[Meets] 3D face filter frame failed:", error);
@@ -408,4 +384,3 @@ export const createThreeFaceOverlayTrack = async (
     stop,
   };
 };
-
