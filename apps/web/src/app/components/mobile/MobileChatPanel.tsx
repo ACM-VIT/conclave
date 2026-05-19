@@ -128,6 +128,16 @@ function MobileChatPanel({
   }, [chatInput, localValue]);
 
   useEffect(() => {
+    const input = inputRef.current;
+    if (!input) return;
+
+    input.style.height = "auto";
+    input.style.height = `${input.scrollHeight}px`;
+    input.style.overflowY =
+      input.scrollHeight > input.clientHeight ? "auto" : "hidden";
+  }, [localValue]);
+
+  useEffect(() => {
     setActiveCommandIndex(0);
     setActiveMentionIndex(0);
   }, [localValue]);
@@ -379,7 +389,7 @@ function MobileChatPanel({
 
           <form
             onSubmit={handleSubmit}
-            className="relative flex items-center gap-2 px-4 py-3 border-t border-[#FEFCD9]/10 bg-[#0b0b0b]/95"
+            className="relative flex items-end gap-2 px-4 py-3 border-t border-[#FEFCD9]/10 bg-[#0b0b0b]/95"
           >
             {showMentionSuggestions && (
               <div className="absolute bottom-full mb-2 left-0 right-0 max-h-40 overflow-y-auto mobile-sheet-card shadow-xl overflow-hidden">

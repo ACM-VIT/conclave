@@ -135,6 +135,7 @@ function ChatPanel({
 }: ChatPanelProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const shouldAutoScrollRef = useRef(true);
   const sendAnimationTimeoutRef = useRef<number | null>(null);
   const prevMessageIdsRef = useRef<Set<string>>(new Set());
@@ -209,6 +210,16 @@ function ChatPanel({
   useEffect(() => {
     setActiveCommandIndex(0);
     setActiveMentionIndex(0);
+  }, [chatInput]);
+
+  useEffect(() => {
+    const input = inputRef.current;
+    if (!input) return;
+
+    input.style.height = "auto";
+    input.style.height = `${input.scrollHeight}px`;
+    input.style.overflowY =
+      input.scrollHeight > input.clientHeight ? "auto" : "hidden";
   }, [chatInput]);
 
   useEffect(() => {
@@ -609,8 +620,9 @@ function ChatPanel({
               })}
             </div>
           )}
-          <div className="flex gap-1.5">
+          <div className="flex items-end gap-1.5">
             <textarea
+              ref={inputRef}
               rows={1}
               value={chatInput}
               onChange={(e) => onInputChange(e.target.value)}
