@@ -47,6 +47,10 @@ import {
   getPreferredWebcamCodec,
   produceWebcamTrack,
 } from "../lib/webcam-codec";
+import {
+  cleanupPublishedAudioSession,
+  createPublishedAudioSession,
+} from "../lib/rnnoise";
 import type { MeetRefs } from "./useMeetRefs";
 
 type JoinInfo = {
@@ -314,6 +318,7 @@ export function useMeetSocket({
     audioProducerRef,
     videoProducerRef,
     screenProducerRef,
+    publishedAudioSessionRef,
     consumersRef,
     producerMapRef,
     pendingProducersRef,
@@ -438,6 +443,8 @@ export function useMeetSocket({
       try {
         audioProducerRef.current?.close();
       } catch {}
+      cleanupPublishedAudioSession(publishedAudioSessionRef.current);
+      publishedAudioSessionRef.current = null;
       try {
         videoProducerRef.current?.close();
       } catch {}
@@ -506,6 +513,7 @@ export function useMeetSocket({
       setMeetingRequiresInviteCode,
       setWebinarConfig,
       clearReactions,
+      publishedAudioSessionRef,
       videoProducerRef,
       userId,
       runtimeStunIceServersRef,
@@ -1082,9 +1090,13 @@ export function useMeetSocket({
 
       const audioTrack = stream.getAudioTracks()[0];
       if (audioTrack) {
+        let audioSession:
+          | Awaited<ReturnType<typeof createPublishedAudioSession>>
+          | null = null;
         try {
+          audioSession = await createPublishedAudioSession(audioTrack);
           const audioProducer = await transport.produce({
-            track: audioTrack,
+            track: audioSession.outputTrack,
             codecOptions: {
               opusStereo: true,
               opusFec: true,
@@ -1098,15 +1110,26 @@ export function useMeetSocket({
             audioProducer.pause();
           }
 
+          cleanupPublishedAudioSession(publishedAudioSessionRef.current);
+          publishedAudioSessionRef.current = audioSession;
           audioProducerRef.current = audioProducer;
           const audioProducerId = audioProducer.id;
+          const publishedTrackId = audioSession.outputTrack.id;
 
           audioProducer.on("transportclose", () => {
             if (audioProducerRef.current?.id === audioProducerId) {
               audioProducerRef.current = null;
             }
+            if (
+              publishedAudioSessionRef.current?.outputTrack.id ===
+              publishedTrackId
+            ) {
+              cleanupPublishedAudioSession(publishedAudioSessionRef.current);
+              publishedAudioSessionRef.current = null;
+            }
           });
         } catch (err) {
+          cleanupPublishedAudioSession(audioSession);
           console.error("[Meets] Failed to produce audio:", err);
           if (!isMuted) {
             publicationWarnings.push("microphone publish failed");
@@ -1164,6 +1187,7 @@ export function useMeetSocket({
     [
       producerTransportRef,
       audioProducerRef,
+      publishedAudioSessionRef,
       videoProducerRef,
       isMuted,
       isCameraOff,
@@ -2126,6 +2150,8 @@ export function useMeetSocket({
                     if (audioProducerRef.current?.id === producerId) {
                       audioProducerRef.current = null;
                     }
+                    cleanupPublishedAudioSession(publishedAudioSessionRef.current);
+                    publishedAudioSessionRef.current = null;
                     localStreamRef.current?.getAudioTracks().forEach((track) => {
                       track.enabled = false;
                     });
@@ -2405,6 +2431,8 @@ export function useMeetSocket({
                         audioProducerRef.current = null;
                       }
                     }
+                    cleanupPublishedAudioSession(publishedAudioSessionRef.current);
+                    publishedAudioSessionRef.current = null;
                     localStreamRef.current?.getAudioTracks().forEach((track) => {
                       track.enabled = false;
                     });

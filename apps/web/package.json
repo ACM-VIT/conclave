@@ -12,6 +12,7 @@
   "dependencies": {
     "@conclave/apps-sdk": "workspace:*",
     "@conclave/meeting-core": "workspace:*",
+    "@sapphi-red/web-noise-suppressor": "0.3.5",
     "@tanstack/react-hotkeys": "^0.1.1",
     "better-auth": "^1.4.10",
     "jose": "^6.1.3",

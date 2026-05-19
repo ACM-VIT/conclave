@@ -13,6 +13,7 @@ import type {
   Transport,
   VideoQuality,
 } from "../lib/types";
+import type { PublishedAudioSession } from "../lib/rnnoise";
 import { getOrCreateSessionId } from "../lib/utils";
 
 export function useMeetRefs() {
@@ -21,6 +22,7 @@ export function useMeetRefs() {
   const producerTransportRef = useRef<Transport | null>(null);
   const consumerTransportRef = useRef<Transport | null>(null);
   const audioProducerRef = useRef<Producer | null>(null);
+  const publishedAudioSessionRef = useRef<PublishedAudioSession | null>(null);
   const videoProducerRef = useRef<Producer | null>(null);
   const screenProducerRef = useRef<Producer | null>(null);
   const screenAudioProducerRef = useRef<Producer | null>(null);
@@ -79,6 +81,7 @@ export function useMeetRefs() {
     producerTransportRef,
     consumerTransportRef,
     audioProducerRef,
+    publishedAudioSessionRef,
     videoProducerRef,
     screenProducerRef,
     screenAudioProducerRef,

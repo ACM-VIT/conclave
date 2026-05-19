@@ -34,6 +34,9 @@ importers:
       '@conclave/meeting-core':
         specifier: workspace:*
         version: link:../../packages/meeting-core
+      '@sapphi-red/web-noise-suppressor':
+        specifier: 0.3.5
+        version: 0.3.5
       '@tanstack/react-hotkeys':
         specifier: ^0.1.1
         version: 0.1.1(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
@@ -891,6 +894,9 @@ packages:
     peerDependenciesMeta:
       '@types/react':
         optional: true
+
+  '@sapphi-red/web-noise-suppressor@0.3.5':
+    resolution: {integrity: sha512-jh3+V9yM+zxLriQexoGm0GatoPaJWjs6ypFIbFYwQp+AoUb55eUXrjKtKQyuC5zShzzeAQUl0M5JzqB7SSrsRA==}
 
   '@shopify/react-native-skia@2.4.18':
     resolution: {integrity: sha512-/AB/mvb2dGSQVIJTxyG9ZMFn2PjwWlVcFxHU4TV+K25LCU49ntJXl4xda2ghXxdENMggKgO9R5pA+P/AQ0UUrA==}
@@ -3432,6 +3438,8 @@ snapshots:
       react-native: 0.83.1(@babel/core@7.29.0)(@types/react@19.2.8)(react@19.2.3)
     optionalDependencies:
       '@types/react': 19.2.8
+
+  '@sapphi-red/web-noise-suppressor@0.3.5': {}
 
   '@shopify/react-native-skia@2.4.18(react-native@0.83.1(@babel/core@7.29.0)(@types/react@19.2.8)(react@19.2.3))(react@19.2.3)':
     dependencies:
