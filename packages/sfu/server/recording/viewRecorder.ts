@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import {
   createWriteStream,
   existsSync,
@@ -14,6 +14,56 @@ import type { Room } from "../../config/classes/Room.js";
 import { resolveRecordingProfile } from "./qualityProfile.js";
 
 const DEFAULT_CHUNK_BUFFER_MAX_BYTES = 8 * 1024 * 1024;
+
+// Counter for allocating unique Xvfb display numbers across concurrent
+// recordings. Start at :99 (a common convention) and walk up.
+let nextXvfbDisplayNumber = 99;
+const allocateXvfbDisplay = (): number => {
+  const display = nextXvfbDisplayNumber;
+  nextXvfbDisplayNumber += 1;
+  if (nextXvfbDisplayNumber > 199) nextXvfbDisplayNumber = 99;
+  return display;
+};
+
+const spawnXvfb = (
+  displayNumber: number,
+  width: number,
+  height: number,
+): { proc: ChildProcess; displayString: string } => {
+  const displayString = `:${displayNumber}`;
+  const proc = spawn(
+    "Xvfb",
+    [
+      displayString,
+      "-screen",
+      "0",
+      `${width}x${height}x24`,
+      "-nolisten",
+      "tcp",
+      "-noreset",
+    ],
+    { stdio: ["ignore", "pipe", "pipe"] },
+  );
+  proc.stderr?.on("data", (chunk: Buffer) => {
+    const text = chunk.toString("utf8").trim();
+    if (text && process.env.RECORDING_VERBOSE === "1") {
+      Logger.debug(`[xvfb ${displayString}] ${text}`);
+    }
+  });
+  proc.on("error", (error) => {
+    Logger.warn(
+      `[xvfb ${displayString}] spawn error: ${error.message}`,
+    );
+  });
+  return { proc, displayString };
+};
+
+const isXvfbAvailable = (): boolean => {
+  if (process.env.RECORDER_USE_XVFB === "0") return false;
+  // We only force-disable on macOS dev where Xvfb isn't installed.
+  if (process.platform === "darwin") return false;
+  return true;
+};
 
 const FFMPEG_BIN = process.env.FFMPEG_PATH?.trim() || "ffmpeg";
 
@@ -126,6 +176,8 @@ export const createViewRecorder = (
   const transcodedPath = join(options.storageDir, transcodedFilename);
 
   let browser: LaunchedBrowser | null = null;
+  let xvfbProc: ChildProcess | null = null;
+  let xvfbDisplayString: string | null = null;
   let writeStream: WriteStream | null = null;
   let nextExpectedSequence = 0;
   const pendingChunks = new Map<number, Buffer>();
@@ -276,14 +328,31 @@ export const createViewRecorder = (
       `--user-data-dir=${userDataDir}`,
     ];
 
-    // Use the "new" (full-fat) headless mode rather than "shell" — the shell
-    // variant strips the window/tab enumeration code path that
-    // getDisplayMedia + --auto-select-desktop-capture-source relies on, so
-    // capture immediately errored with "Could not start video source".
+    // Headless Chrome (both "shell" and "new") cannot enumerate window/tab
+    // sources for getDisplayMedia inside a container — every attempt failed
+    // with "Could not start video source". The fix is to run Chromium
+    // non-headless against an Xvfb virtual framebuffer, which is what every
+    // production browser-recording stack does.
+    const useXvfb = isXvfbAvailable();
+    const launchEnv: NodeJS.ProcessEnv = { ...process.env };
+    if (useXvfb) {
+      const displayNumber = allocateXvfbDisplay();
+      const xvfb = spawnXvfb(displayNumber, width, height);
+      xvfbProc = xvfb.proc;
+      xvfbDisplayString = xvfb.displayString;
+      launchEnv.DISPLAY = xvfb.displayString;
+      // Give Xvfb a moment to set up the display.
+      await new Promise<void>((resolve) => setTimeout(resolve, 300));
+      Logger.info(
+        `[viewRecorder] Xvfb up on ${xvfb.displayString} for ${sessionId}`,
+      );
+    }
+
     const launched = await puppeteerLaunch({
-      headless: true,
+      headless: useXvfb ? false : true,
       executablePath,
       args: flags,
+      env: launchEnv,
       defaultViewport: {
         width,
         height,
@@ -292,7 +361,49 @@ export const createViewRecorder = (
       ignoreDefaultArgs: ["--enable-automation"],
     });
     browser = {
-      close: () => launched.close(),
+      close: async () => {
+        try {
+          await launched.close();
+        } catch (error) {
+          Logger.warn(
+            `[viewRecorder] browser close error: ${(error as Error).message}`,
+          );
+        }
+        if (xvfbProc && !xvfbProc.killed) {
+          try {
+            xvfbProc.kill("SIGTERM");
+          } catch (error) {
+            Logger.warn(
+              `[viewRecorder] xvfb kill error: ${(error as Error).message}`,
+            );
+          }
+          await new Promise<void>((resolve) => {
+            if (!xvfbProc) {
+              resolve();
+              return;
+            }
+            const timer = setTimeout(() => {
+              try {
+                xvfbProc?.kill("SIGKILL");
+              } catch {
+                // ignore
+              }
+              resolve();
+            }, 2_000);
+            xvfbProc.once("exit", () => {
+              clearTimeout(timer);
+              resolve();
+            });
+          });
+          xvfbProc = null;
+          if (xvfbDisplayString) {
+            Logger.info(
+              `[viewRecorder] Xvfb stopped on ${xvfbDisplayString} for ${sessionId}`,
+            );
+            xvfbDisplayString = null;
+          }
+        }
+      },
     };
 
     const page = (await launched.pages())[0] ?? (await launched.newPage());

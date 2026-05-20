@@ -8,6 +8,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       python3 python3-pip make g++ ca-certificates \
       ffmpeg \
       chromium chromium-sandbox \
+      xvfb x11-utils xauth \
       fonts-liberation fonts-noto-color-emoji fonts-noto-cjk \
       libasound2 libnss3 libxss1 libdrm2 libgbm1 libxshmfence1 \
       libxcomposite1 libxdamage1 libxrandr2 libxkbcommon0 \
