@@ -328,6 +328,30 @@ export default function RecorderBotClient({
         );
         setPhase("recording");
 
+        // Heartbeat every 5s: track health + chunk count. If MediaRecorder
+        // ever silently freezes again we'll see exactly which track muted or
+        // which counter stopped advancing.
+        const heartbeat = setInterval(() => {
+          const vt = combined.getVideoTracks()[0];
+          const at = combined.getAudioTracks()[0];
+          log(
+            `heartbeat: rec.state=${recorder.state} seq=${sequenceRef.current} ` +
+              `v[id=${vt?.id?.slice(0, 6) ?? "?"} state=${vt?.readyState ?? "?"} muted=${vt?.muted ?? "?"} enabled=${vt?.enabled ?? "?"}] ` +
+              `a[id=${at?.id?.slice(0, 6) ?? "?"} state=${at?.readyState ?? "?"} muted=${at?.muted ?? "?"} enabled=${at?.enabled ?? "?"}]`,
+          );
+          // Periodically requestData to force a chunk emit even if encoder
+          // is waiting on a keyframe.
+          if (recorder.state === "recording") {
+            try {
+              recorder.requestData();
+            } catch {
+              // ignore
+            }
+          }
+        }, 5_000);
+        // Make sure heartbeat dies with the page unload
+        window.addEventListener("beforeunload", () => clearInterval(heartbeat));
+
         pollingRef.current = setInterval(async () => {
           try {
             const response = await fetch(
