@@ -248,12 +248,26 @@ export default function RecorderBotClient({
         // with audio:true fails with "Could not start audio source". Request
         // video-only here; audio is captured below via WebAudio by tapping
         // every <audio>/<video> in the (same-origin) meeting iframe.
+        //
+        // `displaySurface: 'browser'` biases the source picker toward tab
+        // capture (vs window/screen). Combined with the launch-time flag
+        // `--auto-select-tab-capture-source-by-title=<tag>`, Chrome picks
+        // this tab automatically since we set `document.title` to <tag>.
         let displayStream: MediaStream;
         try {
           displayStream = await navigator.mediaDevices.getDisplayMedia({
-            video: { frameRate: fps, width, height } as any,
+            video: {
+              displaySurface: "browser",
+              frameRate: fps,
+              width,
+              height,
+            } as any,
             audio: false,
-          });
+            preferCurrentTab: true,
+            selfBrowserSurface: "include",
+            systemAudio: "exclude",
+            surfaceSwitching: "exclude",
+          } as DisplayMediaStreamOptions);
         } catch (err) {
           throw new Error(
             "getDisplayMedia(video-only) failed: " + (err as Error).message,

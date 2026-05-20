@@ -316,13 +316,25 @@ export const createViewRecorder = (
       "--no-sandbox",
       "--disable-setuid-sandbox",
       "--disable-dev-shm-usage",
+      // GPU is fine on Xvfb if we let it fall through to swiftshader.
+      // Keep it disabled though — software-only is plenty for screen capture.
       "--disable-gpu",
       "--no-first-run",
       "--no-default-browser-check",
+      "--start-fullscreen",
+      "--kiosk",
       "--autoplay-policy=no-user-gesture-required",
       "--use-fake-ui-for-media-stream",
       "--allow-running-insecure-content",
       "--disable-blink-features=AutomationControlled",
+      "--enable-features=GetDisplayMediaSet",
+      // Match by *tab* title — the tab title is set by the bot page to
+      // `captureSourceTag` via document.title. Without this flag, the source
+      // picker on Xvfb (no window manager → no window title) returns no
+      // candidates and getDisplayMedia errors with "Could not start video
+      // source". `--auto-select-desktop-capture-source` is kept as a
+      // belt-and-suspenders fallback in case the window title is set.
+      `--auto-select-tab-capture-source-by-title=${captureSourceTag}`,
       `--auto-select-desktop-capture-source=${captureSourceTag}`,
       `--window-size=${width},${height}`,
       `--user-data-dir=${userDataDir}`,
