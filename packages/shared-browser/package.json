@@ -11,17 +11,17 @@
         "typecheck": "tsc --noEmit"
     },
     "dependencies": {
-        "cors": "^2.8.5",
+        "cors": "^2.8.6",
         "dockerode": "^5.0.0",
         "express": "^5.2.1",
         "socket.io": "^4.8.3"
     },
     "devDependencies": {
         "@types/cors": "^2.8.19",
-        "@types/dockerode": "^3.3.31",
-        "@types/express": "^5.0.0",
+        "@types/dockerode": "^4.0.1",
+        "@types/express": "^5.0.6",
         "@types/node": "^20",
-        "tsx": "^4.20.6",
+        "tsx": "^4.22.3",
         "typescript": "^5"
     }
 }
