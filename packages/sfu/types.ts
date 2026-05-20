@@ -68,6 +68,11 @@ export interface JoinRoomResponse {
   webinarRequiresInviteCode?: boolean;
   webinarAttendeeCount?: number;
   webinarMaxAttendees?: number;
+  recording?: {
+    active: boolean;
+    paused: boolean;
+    startedAt: number | null;
+  };
 }
 
 export interface CreateTransportResponse {
@@ -151,6 +156,170 @@ export interface MeetingConfigSnapshot {
 
 export interface MeetingUpdateRequest {
   inviteCode?: string | null;
+}
+
+export type RecordingTrackKind = "audio" | "video" | "screen";
+export type RecordingTrackStatus = "active" | "ended" | "failed";
+
+export interface RecordingTrackArtifact {
+  id: string;
+  trackKind: RecordingTrackKind;
+  producerId: string;
+  producerUserId: string;
+  displayName: string | null;
+  codec: string;
+  container: "webm" | "mp4" | "m4a";
+  filename: string;
+  relativePath: string;
+  startedAt: number;
+  endedAt: number | null;
+  durationMs: number;
+  byteSize: number;
+  status: RecordingTrackStatus;
+  errorMessage: string | null;
+}
+
+export type RecordingSessionStatus =
+  | "idle"
+  | "starting"
+  | "active"
+  | "paused"
+  | "finalizing"
+  | "completed"
+  | "failed";
+
+export interface RecordingCompositeArtifact {
+  status: "pending" | "running" | "completed" | "failed";
+  filename: string | null;
+  relativePath: string | null;
+  startedAt: number | null;
+  completedAt: number | null;
+  byteSize: number;
+  errorMessage: string | null;
+}
+
+export interface RecordingSessionMetadata {
+  id: string;
+  roomId: string;
+  clientId: string;
+  scheduledWebinarId: string | null;
+  status: RecordingSessionStatus;
+  startedAt: number;
+  endedAt: number | null;
+  pausedDurationMs: number;
+  startedBy: string;
+  endedBy: string | null;
+  totalBytes: number;
+  resolution: { width: number; height: number } | null;
+  audioBitrateKbps: number;
+  videoBitrateKbps: number;
+  tracks: RecordingTrackArtifact[];
+  composite: RecordingCompositeArtifact | null;
+  manifestPath: string;
+  manifestRelativePath: string;
+  storagePath: string;
+  storageRelativePath: string;
+  errorMessage: string | null;
+  speakerTimeline: { at: number; userId: string | null }[];
+}
+
+export interface RecordingPublicState {
+  active: boolean;
+  paused: boolean;
+  sessionId: string | null;
+  startedAt: number | null;
+  startedBy: string | null;
+  trackCount: number;
+}
+
+export interface StartRecordingRequest {
+  startedBy?: string;
+  audioBitrateKbps?: number;
+  videoBitrateKbps?: number;
+  preferredVideoCodec?: "h264" | "vp8";
+  composite?: boolean;
+}
+
+export type ScheduledWebinarStatus =
+  | "scheduled"
+  | "live"
+  | "ended"
+  | "cancelled";
+
+export interface ScheduledWebinarCoHost {
+  email: string;
+  name?: string;
+}
+
+export interface ScheduledWebinar {
+  id: string;
+  clientId: string;
+  roomId: string;
+  linkSlug: string;
+  title: string;
+  description: string;
+  hostEmail: string;
+  hostName: string;
+  hostUserId: string | null;
+  coHosts: ScheduledWebinarCoHost[];
+  scheduledStartAt: number;
+  scheduledEndAt: number;
+  status: ScheduledWebinarStatus;
+  publicAccess: boolean;
+  maxAttendees: number;
+  requiresInviteCode: boolean;
+  waitingRoomEnabled: boolean;
+  earlyEntryMinutes: number;
+  qaEnabled: boolean;
+  recordingRequested: boolean;
+  notes: string;
+  createdAt: number;
+  createdBy: string;
+  updatedAt: number;
+  liveStartedAt: number | null;
+  endedAt: number | null;
+  totalJoinCount: number;
+  peakAttendeeCount: number;
+  webinarLink: string;
+}
+
+export interface CreateScheduledWebinarRequest {
+  title: string;
+  description?: string;
+  scheduledStartAt: number;
+  scheduledEndAt?: number;
+  hostEmail?: string;
+  hostName?: string;
+  coHosts?: ScheduledWebinarCoHost[];
+  linkSlug?: string;
+  publicAccess?: boolean;
+  maxAttendees?: number;
+  inviteCode?: string | null;
+  waitingRoomEnabled?: boolean;
+  earlyEntryMinutes?: number;
+  qaEnabled?: boolean;
+  recordingRequested?: boolean;
+  notes?: string;
+}
+
+export interface UpdateScheduledWebinarRequest {
+  title?: string;
+  description?: string;
+  scheduledStartAt?: number;
+  scheduledEndAt?: number;
+  hostEmail?: string;
+  hostName?: string;
+  coHosts?: ScheduledWebinarCoHost[];
+  linkSlug?: string;
+  publicAccess?: boolean;
+  maxAttendees?: number;
+  inviteCode?: string | null;
+  waitingRoomEnabled?: boolean;
+  earlyEntryMinutes?: number;
+  qaEnabled?: boolean;
+  recordingRequested?: boolean;
+  notes?: string;
+  status?: ScheduledWebinarStatus;
 }
 
 export interface WebinarLinkResponse {

@@ -1,8 +1,23 @@
 import jwt from "jsonwebtoken";
+import { createHash } from "node:crypto";
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 
 export const runtime = "nodejs";
+
+let loggedSecretFingerprint = false;
+const logSecretFingerprint = (secret: string): void => {
+  if (loggedSecretFingerprint) return;
+  loggedSecretFingerprint = true;
+  if (process.env.SFU_DEBUG_SECRET === "0") return;
+  const fp = createHash("sha256").update(secret).digest("hex").slice(0, 12);
+  const source = process.env.SFU_SECRET
+    ? "process.env (loaded by Next.js)"
+    : "fallback literal";
+  console.log(
+    `[SFU join] signing JWTs with secret source: ${source}; fingerprint: ${fp}`,
+  );
+};
 
 type JoinRequestBody = {
   roomId?: string;
@@ -204,6 +219,8 @@ export async function POST(request: Request) {
     ? false
     : Boolean(body?.allowRoomCreation);
 
+  const secret = process.env.SFU_SECRET || "development-secret";
+  logSecretFingerprint(secret);
   const token = jwt.sign(
     {
       userId: baseUserId,
@@ -217,7 +234,7 @@ export async function POST(request: Request) {
       sessionId,
       joinMode,
     },
-    process.env.SFU_SECRET || "development-secret",
+    secret,
     { expiresIn: "1h" }
   );
 

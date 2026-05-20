@@ -26,7 +26,14 @@ export type WebinarRoomConfig = {
   linkVersion: number;
   linkSlug: string | null;
   feedMode: WebinarFeedMode;
+  forcedHostEmails: Set<string>;
+  scheduledWebinarId: string | null;
+  waitingRoomEnabled: boolean;
+  qaEnabled: boolean;
 };
+
+export const normalizeHostEmail = (value: string): string =>
+  value.trim().toLowerCase();
 
 export type WebinarLinkTarget = {
   roomChannelId: string;
@@ -43,6 +50,10 @@ export const createDefaultWebinarRoomConfig = (): WebinarRoomConfig => ({
   linkVersion: 1,
   linkSlug: null,
   feedMode: "active-speaker",
+  forcedHostEmails: new Set<string>(),
+  scheduledWebinarId: null,
+  waitingRoomEnabled: false,
+  qaEnabled: false,
 });
 
 export const getOrCreateWebinarRoomConfig = (
@@ -82,6 +93,9 @@ export const normalizeWebinarMaxAttendees = (value: number): number => {
 const hashInviteCode = (inviteCode: string): string => {
   return createHmac("sha256", config.sfuSecret).update(inviteCode).digest("hex");
 };
+
+export const hashWebinarInviteCode = (inviteCode: string): string =>
+  hashInviteCode(inviteCode);
 
 export const verifyInviteCode = (
   inviteCode: string,

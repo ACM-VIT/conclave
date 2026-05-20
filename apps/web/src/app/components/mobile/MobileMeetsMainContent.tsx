@@ -21,6 +21,7 @@ import type { BrowserState } from "../../hooks/useSharedBrowser";
 import ChatOverlay from "../ChatOverlay";
 import ConnectionBanner from "../ConnectionBanner";
 import ReactionOverlay from "../ReactionOverlay";
+import RecordingIndicator from "../RecordingIndicator";
 import MobileChatPanel from "./MobileChatPanel";
 import MobileControlsBar from "./MobileControlsBar";
 import MobileBrowserLayout from "./MobileBrowserLayout";
@@ -156,6 +157,15 @@ interface MobileMeetsMainContentProps {
   ) => Promise<WebinarConfigSnapshot | null>;
   onGenerateWebinarLink?: () => Promise<WebinarLinkResponse | null>;
   onRotateWebinarLink?: () => Promise<WebinarLinkResponse | null>;
+  recordingActive?: boolean;
+  recordingPaused?: boolean;
+  recordingBusy?: boolean;
+  recordingStartedAt?: number | null;
+  recordingTrackCount?: number;
+  onStartRecording?: () => void;
+  onStopRecording?: () => void;
+  onPauseRecording?: () => void;
+  onResumeRecording?: () => void;
 }
 
 const getLiveVideoStream = (stream: MediaStream | null): MediaStream | null => {
@@ -326,6 +336,9 @@ function MobileMeetsMainContent({
   onUpdateWebinarConfig,
   onGenerateWebinarLink,
   onRotateWebinarLink,
+  recordingActive = false,
+  recordingPaused = false,
+  recordingStartedAt = null,
 }: MobileMeetsMainContentProps) {
   const {
     state: appsState,
@@ -841,6 +854,11 @@ function MobileMeetsMainContent({
           getDisplayName={resolveDisplayName}
         />
       )}
+      <RecordingIndicator
+        active={recordingActive}
+        paused={recordingPaused}
+        startedAt={recordingStartedAt}
+      />
       {isDevPlaygroundEnabled && !isWebinarAttendee && (
         <DevMeetToolsPanel roomId={roomId} />
       )}

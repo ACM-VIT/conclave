@@ -22,6 +22,7 @@ import ScreenShareAudioPlayers from "./ScreenShareAudioPlayers";
 import SystemAudioPlayers from "./SystemAudioPlayers";
 import WhiteboardLayout from "./WhiteboardLayout";
 import ParticipantVideo from "./ParticipantVideo";
+import RecordingIndicator from "./RecordingIndicator";
 import type { BrowserState } from "../hooks/useSharedBrowser";
 
 import type {
@@ -167,6 +168,15 @@ interface MeetsMainContentProps {
   ) => Promise<WebinarConfigSnapshot | null>;
   onGenerateWebinarLink?: () => Promise<WebinarLinkResponse | null>;
   onRotateWebinarLink?: () => Promise<WebinarLinkResponse | null>;
+  recordingActive?: boolean;
+  recordingPaused?: boolean;
+  recordingBusy?: boolean;
+  recordingStartedAt?: number | null;
+  recordingTrackCount?: number;
+  onStartRecording?: () => void;
+  onStopRecording?: () => void;
+  onPauseRecording?: () => void;
+  onResumeRecording?: () => void;
 }
 
 const getLiveVideoStream = (stream: MediaStream | null): MediaStream | null => {
@@ -342,6 +352,15 @@ export default function MeetsMainContent({
   onUpdateWebinarConfig,
   onGenerateWebinarLink,
   onRotateWebinarLink,
+  recordingActive = false,
+  recordingPaused = false,
+  recordingBusy = false,
+  recordingStartedAt = null,
+  recordingTrackCount = 0,
+  onStartRecording,
+  onStopRecording,
+  onPauseRecording,
+  onResumeRecording,
 }: MeetsMainContentProps) {
   const {
     state: appsState,
@@ -786,6 +805,11 @@ export default function MeetsMainContent({
           getDisplayName={resolveDisplayName}
         />
       )}
+      <RecordingIndicator
+        active={recordingActive}
+        paused={recordingPaused}
+        startedAt={recordingStartedAt}
+      />
       {isDevToolsEnabled && isJoined && !isWebinarAttendee && (
         <DevMeetToolsPanel roomId={roomId} />
       )}
@@ -1130,6 +1154,16 @@ export default function MeetsMainContent({
                 onUpdateWebinarConfig={onUpdateWebinarConfig}
                 onGenerateWebinarLink={onGenerateWebinarLink}
                 onRotateWebinarLink={onRotateWebinarLink}
+                hostEmail={userEmail || user?.email || null}
+                hostName={user?.name || null}
+                recordingActive={recordingActive}
+                recordingPaused={recordingPaused}
+                recordingBusy={recordingBusy}
+                recordingTrackCount={recordingTrackCount}
+                onStartRecording={onStartRecording}
+                onStopRecording={onStopRecording}
+                onPauseRecording={onPauseRecording}
+                onResumeRecording={onResumeRecording}
               />
             </div>
             <div className="flex items-center gap-4">
