@@ -316,9 +316,13 @@ export const createViewRecorder = (
       "--no-sandbox",
       "--disable-setuid-sandbox",
       "--disable-dev-shm-usage",
-      // GPU is fine on Xvfb if we let it fall through to swiftshader.
-      // Keep it disabled though — software-only is plenty for screen capture.
-      "--disable-gpu",
+      // IMPORTANT: --disable-gpu was preventing MediaRecorder from getting
+      // frames out of tab capture under Xvfb — the recorder reached
+      // recorder.state=recording but no `dataavailable` events ever fired.
+      // Switching to swiftshader software-emulated GL makes the render
+      // pipeline produce frames that tab-capture can read.
+      "--use-gl=swiftshader",
+      "--enable-features=Vulkan,UseSkiaRenderer",
       "--no-first-run",
       "--no-default-browser-check",
       "--start-fullscreen",
@@ -327,7 +331,6 @@ export const createViewRecorder = (
       "--use-fake-ui-for-media-stream",
       "--allow-running-insecure-content",
       "--disable-blink-features=AutomationControlled",
-      "--enable-features=GetDisplayMediaSet",
       // Match by *tab* title — the tab title is set by the bot page to
       // `captureSourceTag` via document.title. Without this flag, the source
       // picker on Xvfb (no window manager → no window title) returns no
