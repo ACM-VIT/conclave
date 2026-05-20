@@ -276,8 +276,12 @@ export const createViewRecorder = (
       `--user-data-dir=${userDataDir}`,
     ];
 
+    // Use the "new" (full-fat) headless mode rather than "shell" — the shell
+    // variant strips the window/tab enumeration code path that
+    // getDisplayMedia + --auto-select-desktop-capture-source relies on, so
+    // capture immediately errored with "Could not start video source".
     const launched = await puppeteerLaunch({
-      headless: "shell",
+      headless: true,
       executablePath,
       args: flags,
       defaultViewport: {
@@ -295,15 +299,23 @@ export const createViewRecorder = (
     page.on("pageerror", (error) => {
       Logger.warn(`[viewRecorder] page error: ${error.message}`);
     });
+    // Forward browser-side console.log/error/warn unconditionally so we can
+    // see what the recorder bot is doing without needing RECORDING_VERBOSE.
+    // Filter the noisy info-level logs.
     page.on("console", (msg) => {
-      if (process.env.RECORDING_VERBOSE === "1") {
-        Logger.debug(`[viewRecorder console] ${msg.type()} ${msg.text()}`);
+      const type = msg.type();
+      if (type === "error" || type === "warn") {
+        Logger.warn(`[recorder-bot/${type}] ${msg.text()}`);
+      } else if (process.env.RECORDING_VERBOSE === "1") {
+        Logger.debug(`[recorder-bot/${type}] ${msg.text()}`);
       }
     });
     page.on("requestfailed", (req) => {
-      if (process.env.RECORDING_VERBOSE === "1") {
-        Logger.debug(
-          `[viewRecorder request failed] ${req.url()} ${req.failure()?.errorText}`,
+      const url = req.url();
+      // Page-asset failures are noise; only log API request failures.
+      if (url.includes("/api/")) {
+        Logger.warn(
+          `[recorder-bot request failed] ${url} ${req.failure()?.errorText}`,
         );
       }
     });
