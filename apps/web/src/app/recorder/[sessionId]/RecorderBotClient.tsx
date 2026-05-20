@@ -29,6 +29,95 @@ const log = (...args: unknown[]): void => {
   console.log("[recorder-bot]", ...args);
 };
 
+/**
+ * Capture audio from every <audio>/<video> element inside the same-origin
+ * meeting iframe by routing each `srcObject` MediaStream into a single
+ * WebAudio destination. Returns the mixed destination stream.
+ *
+ * Returns an empty MediaStream if the iframe never produces audio (e.g. a
+ * silent meeting). The caller composites the result with the video track.
+ */
+const captureIframeAudio = async (
+  iframe: HTMLIFrameElement | null,
+  audioBitrateKbps: number,
+): Promise<MediaStream> => {
+  const audioContext = new AudioContext({ sampleRate: 48_000 });
+  const destination = audioContext.createMediaStreamDestination();
+  const tappedElements = new WeakSet<HTMLMediaElement>();
+
+  const tap = (element: HTMLMediaElement): void => {
+    if (tappedElements.has(element)) return;
+    const stream = element.srcObject as MediaStream | null;
+    if (!stream || stream.getAudioTracks().length === 0) return;
+    try {
+      const source = audioContext.createMediaStreamSource(stream);
+      source.connect(destination);
+      tappedElements.add(element);
+      log("tapped audio source", element.tagName.toLowerCase(), stream.id);
+    } catch (err) {
+      log("tap failed", err);
+    }
+  };
+
+  const scan = (root: Document | null): void => {
+    if (!root) return;
+    const els = root.querySelectorAll<HTMLMediaElement>("audio, video");
+    els.forEach(tap);
+  };
+
+  const setupObserver = (doc: Document | null): void => {
+    if (!doc) return;
+    scan(doc);
+    const observer = new MutationObserver(() => scan(doc));
+    observer.observe(doc.documentElement, {
+      childList: true,
+      subtree: true,
+    });
+  };
+
+  // Wait for the iframe's contentDocument to become accessible. The iframe is
+  // same-origin (both pages served from the same Next.js host), so this is
+  // permitted by the browser.
+  if (iframe) {
+    const waitForDoc = (): Promise<Document | null> =>
+      new Promise((resolve) => {
+        let attempts = 0;
+        const probe = () => {
+          attempts += 1;
+          const doc = iframe.contentDocument;
+          if (doc && doc.readyState !== "loading") {
+            resolve(doc);
+            return;
+          }
+          if (attempts > 100) {
+            resolve(iframe.contentDocument);
+            return;
+          }
+          setTimeout(probe, 200);
+        };
+        probe();
+      });
+    const iframeDoc = await waitForDoc();
+    setupObserver(iframeDoc);
+  }
+
+  // Also scan the top-level document — defensive for the case where the bot is
+  // ever invoked without an iframe wrapper.
+  setupObserver(document);
+
+  // Resume the audio context (it starts suspended in some Chrome configs).
+  if (audioContext.state === "suspended") {
+    try {
+      await audioContext.resume();
+    } catch (err) {
+      log("audio context resume failed", err);
+    }
+  }
+
+  void audioBitrateKbps; // documentation: bitrate is enforced on MediaRecorder
+  return destination.stream;
+};
+
 export default function RecorderBotClient({
   sessionId,
   roomId,
@@ -155,18 +244,32 @@ export default function RecorderBotClient({
     const startRecording = async (): Promise<void> => {
       setPhase("navigating");
       try {
-        const displayStream = await navigator.mediaDevices.getDisplayMedia({
-          video: { frameRate: fps, width, height } as any,
-          audio: {
-            echoCancellation: false,
-            noiseSuppression: false,
-            autoGainControl: false,
-            sampleRate: 48_000,
-          } as any,
-        });
-        mediaStreamRef.current = displayStream;
+        // Headless Chrome has no system audio device, so getDisplayMedia
+        // with audio:true fails with "Could not start audio source". Request
+        // video-only here; audio is captured below via WebAudio by tapping
+        // every <audio>/<video> in the (same-origin) meeting iframe.
+        let displayStream: MediaStream;
+        try {
+          displayStream = await navigator.mediaDevices.getDisplayMedia({
+            video: { frameRate: fps, width, height } as any,
+            audio: false,
+          });
+        } catch (err) {
+          throw new Error(
+            "getDisplayMedia(video-only) failed: " + (err as Error).message,
+          );
+        }
 
-        const tracksHaveAudio = displayStream.getAudioTracks().length > 0;
+        const audioStream = await captureIframeAudio(
+          iframeRef.current,
+          audioBitrateKbps,
+        );
+
+        const combined = new MediaStream();
+        for (const t of displayStream.getVideoTracks()) combined.addTrack(t);
+        for (const t of audioStream.getAudioTracks()) combined.addTrack(t);
+        mediaStreamRef.current = combined;
+
         const mimeCandidates = [
           "video/webm;codecs=vp9,opus",
           "video/webm;codecs=vp8,opus",
@@ -179,7 +282,7 @@ export default function RecorderBotClient({
           throw new Error("MediaRecorder has no compatible WebM codec");
         }
 
-        const recorder = new MediaRecorder(displayStream, {
+        const recorder = new MediaRecorder(combined, {
           mimeType,
           videoBitsPerSecond: videoBitrateKbps * 1_000,
           audioBitsPerSecond: audioBitrateKbps * 1_000,
@@ -199,7 +302,7 @@ export default function RecorderBotClient({
 
         recorder.start(TIMESLICE_MS);
         log(
-          `recording started (${displayStream.getVideoTracks().length} v, ${tracksHaveAudio ? displayStream.getAudioTracks().length : 0} a, mime=${mimeType})`,
+          `recording started (${combined.getVideoTracks().length} v, ${combined.getAudioTracks().length} a, mime=${mimeType})`,
         );
         setPhase("recording");
 
