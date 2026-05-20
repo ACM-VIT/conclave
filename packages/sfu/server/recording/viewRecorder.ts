@@ -58,6 +58,7 @@ const buildRecorderUrl = (params: {
   roomId: string;
   sessionId: string;
   token: string;
+  captureSourceTag: string;
   width: number;
   height: number;
   fps: number;
@@ -68,6 +69,7 @@ const buildRecorderUrl = (params: {
   const search = new URLSearchParams({
     roomId: params.roomId,
     token: params.token,
+    title: params.captureSourceTag,
     w: String(params.width),
     h: String(params.height),
     fps: String(params.fps),
@@ -231,12 +233,19 @@ export const createViewRecorder = (
       );
     });
 
+    // Unique identifier we plant in both:
+    //   1. Chrome's `--auto-select-desktop-capture-source=...` flag, and
+    //   2. The recorder bot page's `document.title`
+    // so the headless tab gets auto-selected when getDisplayMedia is called.
+    const captureSourceTag = `conclave-rec-${sessionId.slice(0, 8)}`;
+
     const token = mintRecorderToken();
     const url = buildRecorderUrl({
       recorderUrlBase: options.recorderUrlBase,
       roomId: options.room.id,
       sessionId,
       token,
+      captureSourceTag,
       width,
       height,
       fps,
@@ -245,6 +254,12 @@ export const createViewRecorder = (
     });
 
     const userDataDir = join(options.storageDir, ".chromium-profile");
+    // Chrome 148 flag set for the headless recorder bot. Verified against
+    // production Chromium — `--auto-accept-camera-and-microphone-capture` was
+    // REMOVED because it's a phantom flag that crashes Chrome at startup when
+    // combined with `--use-fake-ui-for-media-stream` (which already auto-grants
+    // every media permission dialog). `--mute-audio=false` is also dropped: the
+    // default is already unmuted and the `=false` form is fragile.
     const flags = [
       "--no-sandbox",
       "--disable-setuid-sandbox",
@@ -252,13 +267,11 @@ export const createViewRecorder = (
       "--disable-gpu",
       "--no-first-run",
       "--no-default-browser-check",
-      "--mute-audio=false",
       "--autoplay-policy=no-user-gesture-required",
       "--use-fake-ui-for-media-stream",
-      "--auto-accept-camera-and-microphone-capture",
       "--allow-running-insecure-content",
       "--disable-blink-features=AutomationControlled",
-      `--auto-select-desktop-capture-source=${options.room.id}`,
+      `--auto-select-desktop-capture-source=${captureSourceTag}`,
       `--window-size=${width},${height}`,
       `--user-data-dir=${userDataDir}`,
     ];

@@ -6,6 +6,7 @@ type Props = {
   sessionId: string;
   roomId: string;
   token: string;
+  captureSourceTag?: string;
   width?: number;
   height?: number;
   fps?: number;
@@ -32,6 +33,7 @@ export default function RecorderBotClient({
   sessionId,
   roomId,
   token,
+  captureSourceTag,
   width = 1920,
   height = 1080,
   fps = 30,
@@ -46,6 +48,16 @@ export default function RecorderBotClient({
   const sequenceRef = useRef(0);
   const startedAtRef = useRef<number>(0);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    // Set the page title to the capture-source tag so that Chrome's
+    // --auto-select-desktop-capture-source flag picks THIS tab when
+    // getDisplayMedia is invoked. Without a matching title the headless
+    // capture picker silently fails.
+    if (captureSourceTag && typeof document !== "undefined") {
+      document.title = captureSourceTag;
+    }
+  }, [captureSourceTag]);
 
   useEffect(() => {
     if (!roomId || !token || !sessionId) {
