@@ -22,12 +22,17 @@ import {
   toWorkerSnapshots,
 } from "../admin/controlPlane.js";
 import { forceCloseRoom, markRoomEnded } from "../rooms.js";
+import { registerScheduledWebinarRoutes } from "./scheduledWebinarRoutes.js";
+import { registerRecordingRoutes } from "./recordingRoutes.js";
+import { registerRecorderBotRoutes } from "./recorderBotRoutes.js";
+import type { RecordingManager } from "../recording/recordingManager.js";
 import type { SfuState } from "../state.js";
 
 export type CreateSfuAppOptions = {
   state: SfuState;
   config?: typeof defaultConfig;
   getIo?: () => SocketIOServer | null;
+  recordings: RecordingManager;
 };
 
 const hasValidSecret = (req: Request, secret: string): boolean => {
@@ -164,6 +169,7 @@ export const createSfuApp = ({
   state,
   config = defaultConfig,
   getIo,
+  recordings,
 }: CreateSfuAppOptions): Express => {
   const app = express();
   app.use(cors());
@@ -1222,6 +1228,22 @@ export const createSfuApp = ({
     }
 
     await handleDrain(req, res);
+  });
+
+  registerScheduledWebinarRoutes(app, {
+    state,
+    sfuSecret: config.sfuSecret,
+    getIo,
+  });
+
+  registerRecordingRoutes(app, {
+    state,
+    sfuSecret: config.sfuSecret,
+    recordings,
+  });
+
+  registerRecorderBotRoutes(app, {
+    recordings,
   });
 
   return app;

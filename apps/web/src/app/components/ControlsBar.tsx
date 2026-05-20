@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  Circle,
   Globe,
   Hand,
   LayoutGrid,
@@ -9,11 +10,13 @@ import {
   Mic,
   MicOff,
   Monitor,
+  PauseCircle,
   PictureInPicture2,
   Phone,
   PlaySquare,
   Presentation,
   Shield,
+  Square,
   Volume2,
   VolumeX,
   Sparkles,
@@ -111,6 +114,16 @@ interface ControlsBarProps {
   ) => Promise<WebinarConfigSnapshot | null>;
   onGenerateWebinarLink?: () => Promise<WebinarLinkResponse | null>;
   onRotateWebinarLink?: () => Promise<WebinarLinkResponse | null>;
+  hostEmail?: string | null;
+  hostName?: string | null;
+  recordingActive?: boolean;
+  recordingPaused?: boolean;
+  recordingBusy?: boolean;
+  recordingTrackCount?: number;
+  onStartRecording?: () => void;
+  onStopRecording?: () => void;
+  onPauseRecording?: () => void;
+  onResumeRecording?: () => void;
 }
 
 const BROWSER_APPS = [
@@ -242,6 +255,16 @@ function ControlsBar({
   onUpdateWebinarConfig,
   onGenerateWebinarLink,
   onRotateWebinarLink,
+  hostEmail,
+  hostName,
+  recordingActive = false,
+  recordingPaused = false,
+  recordingBusy = false,
+  recordingTrackCount = 0,
+  onStartRecording,
+  onStopRecording,
+  onPauseRecording,
+  onResumeRecording,
 }: ControlsBarProps) {
   const canStartScreenShare = !activeScreenShareId || isScreenSharing;
   const [isReactionMenuOpen, setIsReactionMenuOpen] = useState(false);
@@ -398,6 +421,8 @@ function ControlsBar({
               onUpdateWebinarConfig={onUpdateWebinarConfig}
               onGenerateWebinarLink={onGenerateWebinarLink}
               onRotateWebinarLink={onRotateWebinarLink}
+              hostEmail={hostEmail}
+              hostName={hostName}
               onClose={() => setIsSettingsOpen(false)}
             />
           )}
@@ -475,6 +500,62 @@ function ControlsBar({
           <Monitor className="w-4 h-4" />
         </button>
       </HotkeyTooltip>
+      {isAdmin && (onStartRecording || onStopRecording) && (
+        <div className="flex items-center gap-1">
+          {recordingActive ? (
+            <>
+              <button
+                onClick={recordingPaused ? onResumeRecording : onPauseRecording}
+                disabled={recordingBusy}
+                className={
+                  recordingPaused
+                    ? `${baseButtonClass} !text-amber-300 !bg-amber-300/15`
+                    : `${baseButtonClass} !text-[#FEFCD9]/80`
+                }
+                title={recordingPaused ? "Resume recording" : "Pause recording"}
+                aria-label={
+                  recordingPaused ? "Resume recording" : "Pause recording"
+                }
+              >
+                {recordingBusy ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : recordingPaused ? (
+                  <Circle className="w-4 h-4 fill-amber-300" />
+                ) : (
+                  <PauseCircle className="w-4 h-4" />
+                )}
+              </button>
+              <button
+                onClick={onStopRecording}
+                disabled={recordingBusy}
+                className={`${baseButtonClass} !text-[#F95F4A] !bg-[#F95F4A]/20`}
+                title={`Stop recording (${recordingTrackCount} track${recordingTrackCount === 1 ? "" : "s"})`}
+                aria-label="Stop recording"
+              >
+                {recordingBusy ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Square className="w-4 h-4 fill-[#F95F4A]" />
+                )}
+              </button>
+            </>
+          ) : (
+            <button
+              onClick={onStartRecording}
+              disabled={recordingBusy}
+              className={`${baseButtonClass} hover:!text-[#F95F4A]`}
+              title="Start recording"
+              aria-label="Start recording"
+            >
+              {recordingBusy ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Circle className="w-4 h-4" />
+              )}
+            </button>
+          )}
+        </div>
+      )}
       {showBrowserControls && isAdmin && onLaunchBrowser && (
         <div className="relative" ref={browserMenuRef}>
           <button

@@ -127,6 +127,7 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
           }
 
           emitWebinarFeedChanged(io, state, activeRoom);
+          void context.recordings.onProducerClosed(roomChannelId, producer.id);
         };
 
         producer.on("transportclose", notifyProducerClosed);
@@ -207,6 +208,16 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
           });
         }
         emitWebinarFeedChanged(io, state, activeRoom);
+
+        const recordingSession = context.recordings.forRoom(roomChannelId);
+        if (recordingSession?.isActive()) {
+          void context.recordings.onProducerCreated(roomChannelId, {
+            producer,
+            userId: clientId,
+            displayName: activeRoom.getDisplayNameForUser(clientId) || null,
+            type,
+          });
+        }
 
         Logger.info(
           `User ${clientId} started producing ${kind} (${type}): ${producer.id}`,

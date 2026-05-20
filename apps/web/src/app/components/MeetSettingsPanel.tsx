@@ -1,10 +1,12 @@
 "use client";
 
 import {
+  CalendarClock,
   ChevronLeft,
   ChevronRight,
   Globe,
   Link2,
+  Loader2,
   Lock,
   MessageSquare,
   MessageSquareLock,
@@ -22,6 +24,9 @@ import type {
   WebinarLinkResponse,
   WebinarUpdateRequest,
 } from "../lib/types";
+import type { ScheduledWebinar } from "@/lib/scheduled-webinars";
+import ScheduleWebinarForm from "./ScheduleWebinarForm";
+import ScheduledWebinarList from "./ScheduledWebinarList";
 
 const DEFAULT_WEBINAR_CAP = 500;
 const MIN_WEBINAR_CAP = 1;
@@ -64,6 +69,8 @@ interface MeetSettingsPanelProps {
   ) => Promise<WebinarConfigSnapshot | null>;
   onGenerateWebinarLink?: () => Promise<WebinarLinkResponse | null>;
   onRotateWebinarLink?: () => Promise<WebinarLinkResponse | null>;
+  hostEmail?: string | null;
+  hostName?: string | null;
   onClose: () => void;
 }
 
@@ -169,9 +176,16 @@ export default function MeetSettingsPanel({
   onUpdateWebinarConfig,
   onGenerateWebinarLink,
   onRotateWebinarLink,
+  hostEmail,
+  hostName,
   onClose,
 }: MeetSettingsPanelProps) {
-  const [activeView, setActiveView] = useState<"main" | "webinar">("main");
+  const [activeView, setActiveView] = useState<
+    "main" | "webinar" | "schedule"
+  >("main");
+  const [schedules, setSchedules] = useState<ScheduledWebinar[]>([]);
+  const [scheduleLoading, setScheduleLoading] = useState(false);
+  const [scheduleError, setScheduleError] = useState<string | null>(null);
   const [meetingInviteCodeInput, setMeetingInviteCodeInput] = useState("");
   const [isMeetingWorking, setIsMeetingWorking] = useState(false);
   const [inviteCodeInput, setInviteCodeInput] = useState("");
@@ -208,6 +222,40 @@ export default function MeetSettingsPanel({
   useEffect(() => {
     void refreshMeetingConfig();
   }, [refreshMeetingConfig]);
+
+  const refreshSchedules = useCallback(async () => {
+    setScheduleLoading(true);
+    setScheduleError(null);
+    try {
+      const response = await fetch("/api/webinars/scheduled", {
+        cache: "no-store",
+      });
+      if (!response.ok) {
+        const data = await response.json().catch(() => null);
+        throw new Error(
+          data && typeof data === "object" && "error" in data
+            ? String(
+                (data as { error?: string }).error || "Failed to load",
+              )
+            : "Failed to load scheduled webinars",
+        );
+      }
+      const data = (await response.json()) as {
+        scheduledWebinars?: ScheduledWebinar[];
+      };
+      setSchedules(data?.scheduledWebinars ?? []);
+    } catch (error) {
+      setScheduleError((error as Error).message || "Failed to load");
+      setSchedules([]);
+    } finally {
+      setScheduleLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeView !== "schedule") return;
+    void refreshSchedules();
+  }, [activeView, refreshSchedules]);
 
   const withMeetingTask = useCallback(
     async (
@@ -307,7 +355,11 @@ export default function MeetSettingsPanel({
           className="text-[10px] uppercase tracking-[0.16em] text-[#FEFCD9]/45"
           style={monoFontStyle}
         >
-          {activeView === "webinar" ? "Webinar settings" : "Meeting settings"}
+          {activeView === "webinar"
+            ? "Webinar settings"
+            : activeView === "schedule"
+              ? "Schedule webinar"
+              : "Meeting settings"}
         </p>
         <button
           onClick={onClose}
@@ -318,7 +370,63 @@ export default function MeetSettingsPanel({
         </button>
       </div>
 
-      {activeView === "main" ? (
+      {activeView === "schedule" ? (
+        <div className="space-y-2.5">
+          <button
+            type="button"
+            onClick={() => setActiveView("main")}
+            className="inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-[11px] text-[#FEFCD9]/55 transition hover:bg-[#FEFCD9]/10 hover:text-[#FEFCD9]"
+          >
+            <ChevronLeft className="h-3.5 w-3.5" />
+            Back
+          </button>
+
+          <div className="rounded-lg border border-[#FEFCD9]/10 bg-black/30 p-2.5">
+            <p
+              className="mb-2 text-[10px] uppercase tracking-[0.15em] text-[#FEFCD9]/45"
+              style={monoFontStyle}
+            >
+              New webinar
+            </p>
+            <ScheduleWebinarForm
+              compact
+              defaultHostEmail={hostEmail ?? undefined}
+              defaultHostName={hostName ?? undefined}
+              onScheduled={(webinar) => {
+                setSchedules((prev) => [webinar, ...prev]);
+              }}
+            />
+          </div>
+
+          <div className="rounded-lg border border-[#FEFCD9]/10 bg-black/25 p-2.5">
+            <div className="mb-2 flex items-center justify-between text-[11px] text-[#FEFCD9]/55">
+              <span style={monoFontStyle}>Upcoming</span>
+              <a
+                href="/webinars"
+                className="text-[10px] text-[#FEFCD9]/45 hover:text-[#FEFCD9] underline-offset-2 hover:underline"
+              >
+                Open dashboard ↗
+              </a>
+            </div>
+            {scheduleError ? (
+              <p className="text-[11px] text-[#F95F4A]">{scheduleError}</p>
+            ) : null}
+            {scheduleLoading ? (
+              <div className="flex items-center gap-2 py-2 text-[10px] text-[#FEFCD9]/45">
+                <Loader2 className="h-3 w-3 animate-spin" />
+                Loading…
+              </div>
+            ) : (
+              <ScheduledWebinarList
+                variant="panel"
+                webinars={schedules}
+                onChange={setSchedules}
+                emptyHint="Nothing scheduled yet — use the form above."
+              />
+            )}
+          </div>
+        </div>
+      ) : activeView === "main" ? (
         <div className="space-y-2">
           <div className="rounded-lg border border-[#FEFCD9]/10 bg-black/25">
             <div className="divide-y divide-[#FEFCD9]/10">
@@ -395,6 +503,17 @@ export default function MeetSettingsPanel({
                   <StatusBadge isOn={isWebinarEnabled} tone="success" />
                   <ChevronRight className="h-4 w-4 text-[#FEFCD9]/45" />
                 </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveView("schedule")}
+                className={rowButtonClass}
+              >
+                <span className="inline-flex items-center gap-2 text-[#FEFCD9]">
+                  <CalendarClock className="h-4 w-4 text-[#FEFCD9]/65" />
+                  <span>Schedule webinar</span>
+                </span>
+                <ChevronRight className="h-4 w-4 text-[#FEFCD9]/45" />
               </button>
             </div>
           </div>

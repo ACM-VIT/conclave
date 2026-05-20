@@ -1,9 +1,53 @@
 import dotenv from "dotenv";
 import path from "path";
+import { existsSync } from "fs";
+import { createHash } from "crypto";
 import { fileURLToPath } from "url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-dotenv.config({ path: path.join(__dirname, "../.env") });
+const sfuPackageRoot = path.resolve(__dirname, "..");
+const repoRoot = path.resolve(sfuPackageRoot, "..", "..");
+const webAppRoot = path.resolve(repoRoot, "apps", "web");
+
+// First match wins (dotenv default does not override existing process.env vars).
+// Order: most-specific (sfu package) → shared web app (matches Next.js) → repo root.
+// This keeps local dev in sync without forcing the user to maintain duplicate secrets.
+const envCandidates = [
+  path.join(sfuPackageRoot, ".env.local"),
+  path.join(sfuPackageRoot, ".env"),
+  path.join(webAppRoot, ".env.local"),
+  path.join(webAppRoot, ".env"),
+  path.join(repoRoot, ".env.local"),
+  path.join(repoRoot, ".env"),
+];
+
+const initialSecretFromProcess = process.env.SFU_SECRET;
+const loadedEnvFiles: string[] = [];
+let secretSource: string = initialSecretFromProcess
+  ? "process.env (set before SFU bootstrap)"
+  : "fallback literal";
+
+for (const envPath of envCandidates) {
+  if (existsSync(envPath)) {
+    const beforeSecret = process.env.SFU_SECRET;
+    dotenv.config({ path: envPath });
+    loadedEnvFiles.push(envPath);
+    if (!beforeSecret && process.env.SFU_SECRET) {
+      secretSource = envPath;
+    }
+  }
+}
+
+const sfuSecretFingerprint = (() => {
+  const value = process.env.SFU_SECRET || "development-secret";
+  return createHash("sha256").update(value).digest("hex").slice(0, 12);
+})();
+
+if (process.env.SFU_DEBUG_SECRET !== "0") {
+  console.log(
+    `[SFU env] loaded ${loadedEnvFiles.length} file(s); SFU_SECRET source: ${secretSource}; fingerprint: ${sfuSecretFingerprint}`,
+  );
+}
 
 const toNumber = (value: string | undefined, fallback: number): number => {
   if (!value) return fallback;

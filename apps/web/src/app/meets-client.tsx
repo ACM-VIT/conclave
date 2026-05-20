@@ -36,6 +36,7 @@ import { useMeetReactions } from "./hooks/useMeetReactions";
 import { useMeetRefs } from "./hooks/useMeetRefs";
 import { useMeetRooms } from "./hooks/useMeetRooms";
 import { useMeetSocket } from "./hooks/useMeetSocket";
+import { useRecording } from "./hooks/useRecording";
 import { useMeetState } from "./hooks/useMeetState";
 import { useMeetTts } from "./hooks/useMeetTts";
 import { useIsMobile } from "./hooks/useIsMobile";
@@ -797,6 +798,20 @@ export default function MeetsClient({
     browserState?.active || isBrowserServiceAvailable,
   );
 
+  const recording = useRecording(refs.socketRef, isAdminFlag);
+  const handleStartRecording = useCallback(() => {
+    void recording.startRecording({ composite: true });
+  }, [recording]);
+  const handleStopRecording = useCallback(() => {
+    void recording.stopRecording();
+  }, [recording]);
+  const handlePauseRecording = useCallback(() => {
+    void recording.pauseRecording();
+  }, [recording]);
+  const handleResumeRecording = useCallback(() => {
+    void recording.resumeRecording();
+  }, [recording]);
+
   const voiceAgent = useVoiceAgentParticipant({
     roomId,
     isJoined: connectionState === "joined",
@@ -1348,6 +1363,15 @@ export default function MeetsClient({
           onUpdateWebinarConfig={socket.updateWebinarConfig}
           onGenerateWebinarLink={socket.generateWebinarLink}
           onRotateWebinarLink={socket.rotateWebinarLink}
+          recordingActive={recording.state.active}
+          recordingPaused={recording.state.paused}
+          recordingBusy={recording.isWorking}
+          recordingStartedAt={recording.state.startedAt}
+          recordingTrackCount={recording.state.trackCount}
+          onStartRecording={handleStartRecording}
+          onStopRecording={handleStopRecording}
+          onPauseRecording={handlePauseRecording}
+          onResumeRecording={handleResumeRecording}
           isVoiceAgentRunning={voiceAgent.isRunning}
           isVoiceAgentStarting={voiceAgent.isStarting}
           voiceAgentError={voiceAgent.error}
@@ -1521,6 +1545,15 @@ export default function MeetsClient({
         onUpdateWebinarConfig={socket.updateWebinarConfig}
         onGenerateWebinarLink={socket.generateWebinarLink}
         onRotateWebinarLink={socket.rotateWebinarLink}
+        recordingActive={recording.state.active}
+        recordingPaused={recording.state.paused}
+        recordingBusy={recording.isWorking}
+        recordingStartedAt={recording.state.startedAt}
+        recordingTrackCount={recording.state.trackCount}
+        onStartRecording={handleStartRecording}
+        onStopRecording={handleStopRecording}
+        onPauseRecording={handlePauseRecording}
+        onResumeRecording={handleResumeRecording}
         isVoiceAgentRunning={voiceAgent.isRunning}
         isVoiceAgentStarting={voiceAgent.isStarting}
         voiceAgentError={voiceAgent.error}

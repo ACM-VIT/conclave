@@ -28,10 +28,12 @@ import {
 } from "../../webinarNotifications.js";
 import {
   getOrCreateWebinarRoomConfig,
+  normalizeHostEmail,
   resolveWebinarLinkTarget,
   toWebinarConfigSnapshot,
   verifyInviteCode,
 } from "../../webinar.js";
+import { recordWebinarJoin } from "../../scheduledWebinars.js";
 import type { ConnectionContext } from "../context.js";
 import { registerAdminHandlers } from "./adminHandlers.js";
 import { respond } from "./ack.js";
@@ -64,14 +66,6 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             ? "webinar_attendee"
             : "meeting";
         const isWebinarAttendeeJoin = joinMode === "webinar_attendee";
-        const forcedHostJoin =
-          !isWebinarAttendeeJoin && Boolean(user?.isForcedHost);
-
-        const hostRequested =
-          !isWebinarAttendeeJoin &&
-          Boolean(user?.isHost ?? user?.isAdmin ?? user?.isForcedHost);
-        const allowRoomCreation =
-          !isWebinarAttendeeJoin && Boolean(user?.allowRoomCreation);
         const clientId =
           typeof user?.clientId === "string" ? user.clientId : "default";
         let roomId = requestedRoomId;
@@ -87,6 +81,30 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           }
           roomId = webinarTarget.roomId;
         }
+
+        const resolvedChannelId = getRoomChannelId(clientId, roomId);
+        const preexistingWebinarConfig =
+          state.webinarConfigs.get(resolvedChannelId);
+        const normalizedJoinEmail = normalizeHostEmail(
+          typeof user?.email === "string" ? user.email : "",
+        );
+        const scheduledForcedHost =
+          !isWebinarAttendeeJoin &&
+          Boolean(normalizedJoinEmail) &&
+          Boolean(
+            preexistingWebinarConfig?.forcedHostEmails?.has?.(normalizedJoinEmail),
+          );
+        const forcedHostJoin =
+          !isWebinarAttendeeJoin &&
+          (Boolean(user?.isForcedHost) || scheduledForcedHost);
+
+        const hostRequested =
+          !isWebinarAttendeeJoin &&
+          (Boolean(user?.isHost ?? user?.isAdmin ?? user?.isForcedHost) ||
+            scheduledForcedHost);
+        const allowRoomCreation =
+          !isWebinarAttendeeJoin &&
+          (Boolean(user?.allowRoomCreation) || scheduledForcedHost);
         const clientPolicy =
           config.clientPolicies[clientId] ?? config.clientPolicies.default;
         const displayNameCandidate = normalizeDisplayName(data?.displayName);
@@ -597,6 +615,24 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         emitWebinarAttendeeCountChanged(io, state, context.currentRoom);
         emitWebinarFeedChanged(io, state, context.currentRoom);
 
+        if (webinarConfig.scheduledWebinarId && !wasReconnecting && !existingClient) {
+          const attendeeCount = context.currentRoom.getWebinarAttendeeCount();
+          recordWebinarJoin(
+            state.scheduledWebinars,
+            webinarConfig.scheduledWebinarId,
+            attendeeCount,
+          );
+          if (state.scheduledWebinarPersistence) {
+            try {
+              state.scheduledWebinarPersistence.save(
+                Array.from(state.scheduledWebinars.byId.values()),
+              );
+            } catch (error) {
+              Logger.warn("Failed to persist join metric", error);
+            }
+          }
+        }
+
         const webinarSnapshot = toWebinarConfigSnapshot(
           webinarConfig,
           context.currentRoom.getWebinarAttendeeCount(),
@@ -615,6 +651,10 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         if (context.currentClient instanceof Admin) {
           registerAdminHandlers(context, { roomId });
         }
+
+        const recordingState = context.recordings.publicState(
+          context.currentRoom.channelId,
+        );
 
         respond(callback, {
           roomId,
@@ -637,6 +677,11 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           webinarRequiresInviteCode: webinarSnapshot.requiresInviteCode,
           webinarAttendeeCount: webinarSnapshot.attendeeCount,
           webinarMaxAttendees: webinarSnapshot.maxAttendees,
+          recording: {
+            active: recordingState.active,
+            paused: recordingState.paused,
+            startedAt: recordingState.startedAt,
+          },
         });
       } catch (error) {
         Logger.error("Error joining room:", error);

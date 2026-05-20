@@ -1,7 +1,9 @@
 import type { Server as SocketIOServer } from "socket.io";
 import { Logger } from "../../utilities/loggers.js";
+import type { RecordingManager } from "../recording/recordingManager.js";
 import type { SfuState } from "../state.js";
 import { createConnectionContext } from "./context.js";
+import { registerRecordingHandlers } from "./handlers/recordingHandlers.js";
 import { registerChatHandlers } from "./handlers/chatHandlers.js";
 import { registerDisconnectHandlers } from "./handlers/disconnectHandlers.js";
 import { registerDisplayNameHandlers } from "./handlers/displayNameHandlers.js";
@@ -19,11 +21,12 @@ import { registerWebinarHandlers } from "./handlers/webinarHandlers.js";
 export const registerConnectionHandlers = (
   io: SocketIOServer,
   state: SfuState,
+  recordings: RecordingManager,
 ): void => {
   io.on("connection", (socket) => {
     Logger.info(`Client connected: ${socket.id}`);
 
-    const context = createConnectionContext(io, socket, state);
+    const context = createConnectionContext(io, socket, state, recordings);
     socket.data.context = context;
 
     registerJoinRoomHandler(context);
@@ -37,6 +40,7 @@ export const registerConnectionHandlers = (
     registerAppsHandlers(context);
     registerMeetingHandlers(context);
     registerWebinarHandlers(context);
+    registerRecordingHandlers(context);
     registerSharedBrowserHandlers(context);
     registerDisconnectHandlers(context);
   });
