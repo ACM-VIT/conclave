@@ -422,15 +422,16 @@ export const createViewRecorder = (
     page.on("pageerror", (error) => {
       Logger.warn(`[viewRecorder] page error: ${error.message}`);
     });
-    // Forward browser-side console.log/error/warn unconditionally so we can
-    // see what the recorder bot is doing without needing RECORDING_VERBOSE.
-    // Filter the noisy info-level logs.
+    // Forward ALL browser-side console output. Recording sessions are rare
+    // and bot logs are essential for diagnosing capture failures. Errors are
+    // emitted at warn level; everything else (log/info/debug) at info level.
     page.on("console", (msg) => {
       const type = msg.type();
+      const text = msg.text();
       if (type === "error" || type === "warn") {
-        Logger.warn(`[recorder-bot/${type}] ${msg.text()}`);
-      } else if (process.env.RECORDING_VERBOSE === "1") {
-        Logger.debug(`[recorder-bot/${type}] ${msg.text()}`);
+        Logger.warn(`[recorder-bot/${type}] ${text}`);
+      } else {
+        Logger.info(`[recorder-bot/${type}] ${text}`);
       }
     });
     page.on("requestfailed", (req) => {

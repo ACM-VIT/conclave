@@ -149,7 +149,9 @@ export default function RecorderBotClient({
   }, [captureSourceTag]);
 
   useEffect(() => {
+    log(`mount: sessionId=${sessionId} roomId=${roomId} token=${token ? `${token.slice(0, 8)}…` : "(none)"} captureSourceTag=${captureSourceTag || "(none)"} w=${width} h=${height} fps=${fps} vb=${videoBitrateKbps}k ab=${audioBitrateKbps}k`);
     if (!roomId || !token || !sessionId) {
+      log("ERROR: missing credentials, aborting");
       setError("Missing recorder credentials");
       setPhase("error");
       return;
@@ -242,6 +244,7 @@ export default function RecorderBotClient({
     };
 
     const startRecording = async (): Promise<void> => {
+      log("startRecording: calling getDisplayMedia");
       setPhase("navigating");
       try {
         // Headless Chrome has no system audio device, so getDisplayMedia
@@ -268,12 +271,14 @@ export default function RecorderBotClient({
             systemAudio: "exclude",
             surfaceSwitching: "exclude",
           } as DisplayMediaStreamOptions);
+          log(`getDisplayMedia ok: v=${displayStream.getVideoTracks().length} a=${displayStream.getAudioTracks().length}`);
         } catch (err) {
           throw new Error(
             "getDisplayMedia(video-only) failed: " + (err as Error).message,
           );
         }
 
+        log("setting up WebAudio iframe tap");
         const audioStream = await captureIframeAudio(
           iframeRef.current,
           audioBitrateKbps,
@@ -306,7 +311,10 @@ export default function RecorderBotClient({
 
         recorder.addEventListener("dataavailable", (event) => {
           if (event.data && event.data.size > 0) {
+            log(`dataavailable: ${event.data.size} bytes`);
             void uploadChunk(event.data);
+          } else {
+            log(`dataavailable: empty (size=${event.data?.size ?? "n/a"})`);
           }
         });
         recorder.addEventListener("error", (event) => {
@@ -316,7 +324,7 @@ export default function RecorderBotClient({
 
         recorder.start(TIMESLICE_MS);
         log(
-          `recording started (${combined.getVideoTracks().length} v, ${combined.getAudioTracks().length} a, mime=${mimeType})`,
+          `recording STARTED (${combined.getVideoTracks().length} v, ${combined.getAudioTracks().length} a, mime=${mimeType}, recorder.state=${recorder.state})`,
         );
         setPhase("recording");
 
