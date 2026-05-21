@@ -50,7 +50,6 @@ const DURATION_OPTIONS = [
 export type ScheduleWebinarFormProps = {
   defaultHostEmail?: string;
   defaultHostName?: string;
-  compact?: boolean;
   onScheduled?: (webinar: ScheduledWebinar) => void;
 };
 
@@ -95,7 +94,6 @@ const TOGGLES: Toggle[] = [
 export default function ScheduleWebinarForm({
   defaultHostEmail,
   defaultHostName,
-  compact = false,
   onScheduled,
 }: ScheduleWebinarFormProps) {
   const [title, setTitle] = useState("");
@@ -223,22 +221,20 @@ export default function ScheduleWebinarForm({
         />
       </Field>
 
-      {!compact && (
-        <Field span={2}>
-          <label htmlFor="webinar-desc" className={labelClass}>
-            Description
-          </label>
-          <textarea
-            id="webinar-desc"
-            className={`${inputClass} resize-none`}
-            rows={3}
-            value={description}
-            maxLength={2000}
-            placeholder="A short summary that attendees see on the waiting page."
-            onChange={(e) => setDescription(e.target.value)}
-          />
-        </Field>
-      )}
+      <Field span={2}>
+        <label htmlFor="webinar-desc" className={labelClass}>
+          Description
+        </label>
+        <textarea
+          id="webinar-desc"
+          className={`${inputClass} resize-none`}
+          rows={3}
+          value={description}
+          maxLength={2000}
+          placeholder="A short summary that attendees see on the waiting page."
+          onChange={(e) => setDescription(e.target.value)}
+        />
+      </Field>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
         <Field>
@@ -272,25 +268,22 @@ export default function ScheduleWebinarForm({
         </Field>
       </div>
 
-      {!compact && (
-        <Field span={2}>
-          <label htmlFor="webinar-cohosts" className={labelClass}>
-            Co-hosts
-          </label>
-          <input
-            id="webinar-cohosts"
-            type="text"
-            className={inputClass}
-            value={coHosts}
-            placeholder="alex@example.com, jordan@example.com"
-            onChange={(e) => setCoHosts(e.target.value)}
-          />
-          <p className={helperClass}>
-            Comma-separated emails. Co-hosts are auto-promoted when they
-            join.
-          </p>
-        </Field>
-      )}
+      <Field span={2}>
+        <label htmlFor="webinar-cohosts" className={labelClass}>
+          Co-hosts
+        </label>
+        <input
+          id="webinar-cohosts"
+          type="text"
+          className={inputClass}
+          value={coHosts}
+          placeholder="alex@example.com, jordan@example.com"
+          onChange={(e) => setCoHosts(e.target.value)}
+        />
+        <p className={helperClass}>
+          Comma-separated emails. Co-hosts are auto-promoted when they join.
+        </p>
+      </Field>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
         <Field>
@@ -331,39 +324,37 @@ export default function ScheduleWebinarForm({
         </Field>
       </div>
 
-      {!compact && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-          <Field>
-            <label htmlFor="webinar-invite" className={labelClass}>
-              Invite code
-            </label>
-            <input
-              id="webinar-invite"
-              type="text"
-              className={inputClass}
-              value={inviteCode}
-              placeholder="Leave blank for public access"
-              onChange={(e) => setInviteCode(e.target.value)}
-            />
-          </Field>
-          <Field>
-            <label htmlFor="webinar-lobby" className={labelClass}>
-              Open lobby (minutes before)
-            </label>
-            <input
-              id="webinar-lobby"
-              type="number"
-              min={0}
-              max={240}
-              className={inputClass}
-              value={earlyEntryMinutes}
-              onChange={(e) =>
-                setEarlyEntryMinutes(Math.max(0, Number(e.target.value) || 0))
-              }
-            />
-          </Field>
-        </div>
-      )}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+        <Field>
+          <label htmlFor="webinar-invite" className={labelClass}>
+            Invite code
+          </label>
+          <input
+            id="webinar-invite"
+            type="text"
+            className={inputClass}
+            value={inviteCode}
+            placeholder="Leave blank for public access"
+            onChange={(e) => setInviteCode(e.target.value)}
+          />
+        </Field>
+        <Field>
+          <label htmlFor="webinar-lobby" className={labelClass}>
+            Open lobby (minutes before)
+          </label>
+          <input
+            id="webinar-lobby"
+            type="number"
+            min={0}
+            max={240}
+            className={inputClass}
+            value={earlyEntryMinutes}
+            onChange={(e) =>
+              setEarlyEntryMinutes(Math.max(0, Number(e.target.value) || 0))
+            }
+          />
+        </Field>
+      </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         {TOGGLES.map((toggle) => {

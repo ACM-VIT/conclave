@@ -347,9 +347,12 @@ export default function MeetSettingsPanel({
     normalizedCustomLinkCode,
   );
 
+  const isScheduleView = activeView === "schedule";
   return (
     <div
-      className="absolute bottom-14 left-1/2 z-50 max-h-[70vh] w-[380px] max-w-[calc(100vw-1.5rem)] -translate-x-1/2 overflow-y-auto rounded-2xl border border-[#FEFCD9]/10 bg-[#0d0e0d]/95 p-4 shadow-2xl backdrop-blur-md"
+      className={`absolute bottom-14 left-1/2 z-50 max-h-[80vh] max-w-[calc(100vw-1.5rem)] -translate-x-1/2 overflow-y-auto rounded-2xl border border-[#FEFCD9]/10 bg-[#0d0e0d]/95 p-4 shadow-2xl backdrop-blur-md ${
+        isScheduleView ? "w-[640px]" : "w-[380px]"
+      }`}
       style={{ fontFamily: "'PolySans Trial', sans-serif" }}
     >
       <div className="mb-3 flex items-center justify-between border-b border-[#FEFCD9]/10 pb-3">
@@ -386,7 +389,6 @@ export default function MeetSettingsPanel({
           <div className="rounded-xl border border-[#FEFCD9]/10 bg-black/25 p-4">
             <p className={`mb-3 ${sectionHeadingClass}`}>New webinar</p>
             <ScheduleWebinarForm
-              compact
               defaultHostEmail={hostEmail ?? undefined}
               defaultHostName={hostName ?? undefined}
               onScheduled={(webinar) => {
