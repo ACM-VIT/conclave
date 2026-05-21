@@ -7,6 +7,7 @@ import {
   DEFAULT_AUDIO_CONSTRAINTS,
   LOW_QUALITY_CONSTRAINTS,
   OPUS_MAX_AVERAGE_BITRATE,
+  SCREEN_AUDIO_OPUS_MAX_AVERAGE_BITRATE,
   STANDARD_QUALITY_CONSTRAINTS,
 } from "../lib/constants";
 import type {
@@ -20,6 +21,7 @@ import type {
 import { createMeetError } from "../lib/utils";
 import { buildScreenShareEncoding } from "../lib/video-encodings";
 import {
+  getPreferredScreenShareCodec,
   getPreferredWebcamCodec,
   produceWebcamTrack,
 } from "../lib/webcam-codec";
@@ -748,7 +750,7 @@ export function useMeetMedia({
           codecOptions: {
             opusStereo: true,
             opusFec: true,
-            opusDtx: true,
+            opusDtx: false,
             opusMaxAverageBitrate: OPUS_MAX_AVERAGE_BITRATE,
           },
           appData: { type: "webcam" as ProducerType, paused: false },
@@ -865,7 +867,7 @@ export function useMeetMedia({
           codecOptions: {
             opusStereo: true,
             opusFec: true,
-            opusDtx: true,
+            opusDtx: false,
             opusMaxAverageBitrate: OPUS_MAX_AVERAGE_BITRATE,
           },
           appData: { type: "webcam" as ProducerType, paused: false },
@@ -1257,9 +1259,9 @@ export function useMeetMedia({
       const videoConstraints: MediaTrackConstraints & {
         cursor?: "always" | "motion" | "never";
       } = {
-        frameRate: { ideal: 24, max: 24 },
-        width: { ideal: 1600, max: 1920 },
-        height: { ideal: 900, max: 1080 },
+        frameRate: { ideal: 30, max: 30 },
+        width: { ideal: 1920, max: 3840 },
+        height: { ideal: 1080, max: 2160 },
         cursor: "always",
       };
 
@@ -1272,9 +1274,13 @@ export function useMeetMedia({
         track.contentHint = "detail";
       }
 
+      const preferredScreenShareCodec = getPreferredScreenShareCodec(
+        deviceRef.current,
+      );
       const producer = await transport.produce({
         track,
         encodings: [buildScreenShareEncoding()],
+        ...(preferredScreenShareCodec ? { codec: preferredScreenShareCodec } : {}),
         appData: { type: "screen" as ProducerType },
       });
 
@@ -1289,8 +1295,8 @@ export function useMeetMedia({
             codecOptions: {
               opusStereo: true,
               opusFec: true,
-              opusDtx: true,
-              opusMaxAverageBitrate: OPUS_MAX_AVERAGE_BITRATE,
+              opusDtx: false,
+              opusMaxAverageBitrate: SCREEN_AUDIO_OPUS_MAX_AVERAGE_BITRATE,
             },
             appData: { type: "screen" as ProducerType },
           });

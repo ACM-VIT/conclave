@@ -12,15 +12,15 @@ export const MAX_REACTIONS = 30;
 export const EMOJI_REACTIONS = ["👍", "👏", "😂", "❤️", "🎉", "😮"] as const;
 
 export const STANDARD_QUALITY_CONSTRAINTS = {
-  width: { ideal: 1280, max: 1280 },
-  height: { ideal: 720, max: 720 },
+  width: { ideal: 1920, max: 1920 },
+  height: { ideal: 1080, max: 1080 },
   frameRate: { ideal: 30, max: 30 },
 };
 
 export const LOW_QUALITY_CONSTRAINTS = {
-  width: { ideal: 640, max: 640 },
-  height: { ideal: 360, max: 360 },
-  frameRate: { ideal: 20, max: 24 },
+  width: { ideal: 1280, max: 1280 },
+  height: { ideal: 720, max: 720 },
+  frameRate: { ideal: 30, max: 30 },
 };
 
 export const DEFAULT_AUDIO_CONSTRAINTS: MediaTrackConstraints = {
@@ -32,11 +32,12 @@ export const DEFAULT_AUDIO_CONSTRAINTS: MediaTrackConstraints = {
   sampleSize: { ideal: 16 },
 };
 
-export const STANDARD_VIDEO_MAX_BITRATE = 1200000;
-export const LOW_VIDEO_MAX_BITRATE = 350000;
-export const SCREEN_SHARE_MAX_BITRATE = 1500000;
-export const SCREEN_SHARE_MAX_FRAMERATE = 20;
-export const OPUS_MAX_AVERAGE_BITRATE = 64000;
+export const STANDARD_VIDEO_MAX_BITRATE = 5000000;
+export const LOW_VIDEO_MAX_BITRATE = 1200000;
+export const SCREEN_SHARE_MAX_BITRATE = 12000000;
+export const SCREEN_SHARE_MAX_FRAMERATE = 30;
+export const OPUS_MAX_AVERAGE_BITRATE = 192000;
+export const SCREEN_AUDIO_OPUS_MAX_AVERAGE_BITRATE = 256000;
 
 const DEFAULT_PUBLIC_STUN_URLS = [
   "stun:stun.l.google.com:19302",

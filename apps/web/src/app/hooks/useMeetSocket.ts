@@ -1088,7 +1088,7 @@ export function useMeetSocket({
             codecOptions: {
               opusStereo: true,
               opusFec: true,
-              opusDtx: true,
+              opusDtx: false,
               opusMaxAverageBitrate: OPUS_MAX_AVERAGE_BITRATE,
             },
             appData: { type: "webcam" as ProducerType, paused: isMuted },
@@ -1229,11 +1229,12 @@ export function useMeetSocket({
                     }) => Promise<void>;
                   };
                   await layerConsumer.setPreferredLayers?.({
-                    spatialLayer: 0,
-                    temporalLayer: 1,
+                    spatialLayer: 2,
+                    temporalLayer: 2,
                   });
                 } catch {
-                  // Simulcast layers may be unavailable in some browser/device paths.
+                  // Some producer paths publish fewer simulcast layers; the SFU
+                  // will keep the best available layer in that case.
                 }
               }
 

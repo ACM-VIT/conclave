@@ -33,6 +33,7 @@ export default async function RecorderBotPage({ params, searchParams }: Props) {
   const roomId = first(resolved.roomId) ?? "";
   const clientId = first(resolved.clientId) ?? "";
   const token = first(resolved.token) ?? "";
+  const webinarLinkSlug = first(resolved.webinarSlug) ?? "";
   const captureSourceTag = first(resolved.title) ?? `conclave-rec-${sessionId.slice(0, 8)}`;
   const captureMode =
     first(resolved.capture) === "x11grab" ? "x11grab" : "mediarecorder";
@@ -43,6 +44,7 @@ export default async function RecorderBotPage({ params, searchParams }: Props) {
       roomId={roomId}
       clientId={clientId}
       token={token}
+      webinarLinkSlug={webinarLinkSlug}
       captureSourceTag={captureSourceTag}
       captureMode={captureMode}
       width={num(resolved.w, 1920)}

@@ -9,6 +9,7 @@ import {
 // H264 multi-decoder path that can surface as black remote webcam tiles on some
 // viewer devices in larger calls.
 const PREFERRED_WEBCAM_CODEC_MIME_TYPES = ["video/VP8"] as const;
+const PREFERRED_SCREEN_SHARE_CODEC_MIME_TYPES = ["video/VP8"] as const;
 
 const isPreferredVideoCodec = (
   codec: RtpCodecCapability,
@@ -26,6 +27,23 @@ export const getPreferredWebcamCodec = (
   const codecs = device?.rtpCapabilities?.codecs ?? [];
 
   for (const mimeType of PREFERRED_WEBCAM_CODEC_MIME_TYPES) {
+    const codec = codecs.find((candidate) =>
+      isPreferredVideoCodec(candidate, mimeType),
+    );
+    if (codec) {
+      return codec;
+    }
+  }
+
+  return undefined;
+};
+
+export const getPreferredScreenShareCodec = (
+  device: Pick<Device, "rtpCapabilities"> | null | undefined,
+): RtpCodecCapability | undefined => {
+  const codecs = device?.rtpCapabilities?.codecs ?? [];
+
+  for (const mimeType of PREFERRED_SCREEN_SHARE_CODEC_MIME_TYPES) {
     const codec = codecs.find((candidate) =>
       isPreferredVideoCodec(candidate, mimeType),
     );

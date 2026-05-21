@@ -192,6 +192,7 @@ export type ViewRecorderOptions = {
   storageDir: string;
   recorderUrlBase: string;
   scheduledWebinarId?: string | null;
+  webinarLinkSlug?: string | null;
   width?: number;
   height?: number;
   fps?: number;
@@ -235,6 +236,7 @@ const buildRecorderUrl = (params: {
   videoBitrateKbps: number;
   audioBitrateKbps: number;
   captureMode?: "mediarecorder" | "x11grab";
+  webinarLinkSlug?: string | null;
 }): string => {
   const base = params.recorderUrlBase.replace(/\/$/, "");
   const search = new URLSearchParams({
@@ -249,6 +251,9 @@ const buildRecorderUrl = (params: {
     ab: String(params.audioBitrateKbps),
     capture: params.captureMode ?? "mediarecorder",
   });
+  if (params.webinarLinkSlug?.trim()) {
+    search.set("webinarSlug", params.webinarLinkSlug.trim());
+  }
   return `${base}/recorder/${encodeURIComponent(params.sessionId)}?${search.toString()}`;
 };
 
@@ -386,6 +391,7 @@ export const createViewRecorder = (
       roomId: options.room.id,
       clientId: options.room.clientId,
       scheduledWebinarId: options.scheduledWebinarId ?? null,
+      webinarLinkSlug: options.webinarLinkSlug ?? null,
       width,
       height,
       fps,
@@ -450,6 +456,7 @@ export const createViewRecorder = (
       videoBitrateKbps: options.videoBitrateKbps ?? profile.videoBitrateKbps,
       audioBitrateKbps: options.audioBitrateKbps ?? profile.audioBitrateKbps,
       captureMode: useX11Grab ? "x11grab" : "mediarecorder",
+      webinarLinkSlug: options.webinarLinkSlug ?? null,
     });
 
     const userDataDir = join(options.storageDir, ".chromium-profile");
@@ -914,6 +921,7 @@ export const verifyRecorderToken = (token: string): {
     roomId: string;
     clientId: string;
     scheduledWebinarId: string | null;
+    webinarLinkSlug: string | null;
     width: number;
     height: number;
     fps: number;
@@ -940,6 +948,10 @@ export const verifyRecorderToken = (token: string): {
           decoded.scheduledWebinarId == null
             ? null
             : String(decoded.scheduledWebinarId),
+        webinarLinkSlug:
+          decoded.webinarLinkSlug == null
+            ? null
+            : String(decoded.webinarLinkSlug),
         width: Number(decoded.width) || profileForVerify.width,
         height: Number(decoded.height) || profileForVerify.height,
         fps: Number(decoded.fps) || profileForVerify.fps,

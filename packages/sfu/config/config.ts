@@ -157,9 +157,9 @@ export const config = {
     logTags: ["info", "ice", "dtls", "rtp", "srtp", "rtcp"] as WorkerLogTag[],
   },
   videoQuality: {
-    lowThreshold: Number(process.env.VIDEO_QUALITY_LOW_THRESHOLD) || 10,
+    lowThreshold: Number(process.env.VIDEO_QUALITY_LOW_THRESHOLD) || 1000,
     standardThreshold:
-      Number(process.env.VIDEO_QUALITY_STANDARD_THRESHOLD) || 8,
+      Number(process.env.VIDEO_QUALITY_STANDARD_THRESHOLD) || 900,
   },
   adminCleanupTimeout: Number(process.env.ADMIN_CLEANUP_TIMEOUT) || 120000,
   socket: {
@@ -208,8 +208,14 @@ export const config = {
         announcedIp,
       },
     ],
-    maxIncomingBitrate: 1500000,
-    initialAvailableOutgoingBitrate: 1000000,
+    maxIncomingBitrate: toNumber(
+      process.env.SFU_WEBRTC_MAX_INCOMING_BITRATE,
+      25000000,
+    ),
+    initialAvailableOutgoingBitrate: toNumber(
+      process.env.SFU_WEBRTC_INITIAL_OUTGOING_BITRATE,
+      25000000,
+    ),
   },
   plainTransport: {
     listenIp: process.env.PLAIN_TRANSPORT_LISTEN_IP || "0.0.0.0",

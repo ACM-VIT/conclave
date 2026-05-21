@@ -7,6 +7,7 @@ type Props = {
   roomId: string;
   clientId?: string;
   token: string;
+  webinarLinkSlug?: string;
   captureSourceTag?: string;
   captureMode?: "mediarecorder" | "x11grab";
   width?: number;
@@ -126,6 +127,7 @@ export default function RecorderBotClient({
   roomId,
   clientId,
   token,
+  webinarLinkSlug,
   captureSourceTag,
   captureMode = "mediarecorder",
   width = 1920,
@@ -156,7 +158,7 @@ export default function RecorderBotClient({
   }, [captureSourceTag]);
 
   useEffect(() => {
-    log(`mount: sessionId=${sessionId} roomId=${roomId} clientId=${clientId || "(default)"} token=${token ? `${token.slice(0, 8)}…` : "(none)"} captureSourceTag=${captureSourceTag || "(none)"} captureMode=${captureMode} w=${width} h=${height} fps=${fps} vb=${videoBitrateKbps}k ab=${audioBitrateKbps}k`);
+    log(`mount: sessionId=${sessionId} roomId=${roomId} webinarSlug=${webinarLinkSlug || "(none)"} clientId=${clientId || "(default)"} token=${token ? `${token.slice(0, 8)}…` : "(none)"} captureSourceTag=${captureSourceTag || "(none)"} captureMode=${captureMode} w=${width} h=${height} fps=${fps} vb=${videoBitrateKbps}k ab=${audioBitrateKbps}k`);
     if (!roomId || !token || !sessionId) {
       log("ERROR: missing credentials, aborting");
       setError("Missing recorder credentials");
@@ -524,7 +526,7 @@ export default function RecorderBotClient({
       void stopRecording("page-exit");
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId, roomId, clientId, token, captureMode]);
+  }, [sessionId, roomId, webinarLinkSlug, clientId, token, captureMode]);
 
   const attendeeParams = new URLSearchParams({
     autojoin: "1",
@@ -537,10 +539,15 @@ export default function RecorderBotClient({
     broadcast: "1",
     name: "Recorder Bot",
   });
+  const normalizedWebinarSlug = webinarLinkSlug?.trim() || "";
+  if (normalizedWebinarSlug) {
+    attendeeParams.set("mode", "webinar_attendee");
+  }
   if (clientId?.trim()) {
     attendeeParams.set("clientId", clientId.trim());
   }
-  const attendeeUrl = `/${encodeURIComponent(roomId)}?${attendeeParams.toString()}`;
+  const attendeeRoom = normalizedWebinarSlug || roomId;
+  const attendeeUrl = `/${encodeURIComponent(attendeeRoom)}?${attendeeParams.toString()}`;
 
   return (
     <div

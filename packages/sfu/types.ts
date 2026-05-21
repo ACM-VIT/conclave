@@ -522,14 +522,14 @@ export interface AppsAwarenessData {
 // ============================================
 
 export const VIDEO_CONSTRAINTS = {
-  maxWidth: 640,
-  maxHeight: 360,
+  maxWidth: 1920,
+  maxHeight: 1080,
   maxFrameRate: 30,
-  maxBitrate: 500000, // 500 kbps for 360p
+  maxBitrate: 5000000,
 } as const;
 
 export const AUDIO_CONSTRAINTS = {
-  maxBitrate: 64000, // 64 kbps for audio
+  maxBitrate: 192000,
 } as const;
 
 // ============================================

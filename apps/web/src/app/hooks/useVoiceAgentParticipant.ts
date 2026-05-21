@@ -588,7 +588,7 @@ export function useVoiceAgentParticipant({
       codecOptions: {
         opusStereo: true,
         opusFec: true,
-        opusDtx: true,
+        opusDtx: false,
         opusMaxAverageBitrate: OPUS_MAX_AVERAGE_BITRATE,
       },
       appData: { type: "webcam", paused: false },

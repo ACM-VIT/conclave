@@ -25,6 +25,7 @@ export type CreateRecordingSessionOptions = {
   room: Room;
   startedBy: string;
   scheduledWebinarId?: string | null;
+  webinarLinkSlug?: string | null;
   storageKey?: string;
   audioBitrateKbps?: number;
   videoBitrateKbps?: number;
@@ -95,6 +96,7 @@ export const createRecordingSession = (
     sessionId,
     storageDir,
     scheduledWebinarId: options.scheduledWebinarId ?? null,
+    webinarLinkSlug: options.webinarLinkSlug ?? null,
     recorderUrlBase: options.recorderUrlBase,
     audioBitrateKbps,
     videoBitrateKbps,

@@ -1,6 +1,6 @@
 import { use } from "react";
 import MeetsClientShell from "../meets-client-shell";
-import { sanitizeRoomCode } from "../lib/utils";
+import { sanitizeRoomCode, sanitizeWebinarLinkCode } from "../lib/utils";
 
 type MeetRoomPageProps = {
   params: Promise<{ code: string }>;
@@ -43,7 +43,6 @@ export default function MeetRoomPage({ params, searchParams }: MeetRoomPageProps
   const roomCode = decodeURIComponent(rawCode);
   const resolvedRoomCode =
     roomCode === "undefined" || roomCode === "null" ? "" : roomCode;
-  const sanitizedRoomCode = sanitizeRoomCode(resolvedRoomCode);
   const bypassMediaPermissions = isTruthyParam(
     resolvedSearchParams.recorder
   );
@@ -65,6 +64,10 @@ export default function MeetRoomPage({ params, searchParams }: MeetRoomPageProps
     : undefined;
   const joinMode =
     joinModeParam === "webinar_attendee" ? "webinar_attendee" : undefined;
+  const sanitizedRoomCode =
+    joinMode === "webinar_attendee"
+      ? sanitizeWebinarLinkCode(resolvedRoomCode)
+      : sanitizeRoomCode(resolvedRoomCode);
   const displayName = safeBotOverridesEnabled
     ? getParamValue(resolvedSearchParams.name)
     : undefined;

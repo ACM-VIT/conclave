@@ -18,6 +18,8 @@ import {
 import { getRecordingsRoot } from "./recordingPaths.js";
 import { isFfmpegAvailable } from "./ffmpegBridge.js";
 import { resolveRecordingProfile } from "./qualityProfile.js";
+import { getScheduledWebinarById } from "../scheduledWebinars.js";
+import { ensureWebinarLinkSlug } from "../webinar.js";
 
 export type RecordingManager = {
   start: (
@@ -145,10 +147,41 @@ export const createRecordingManager = (options: {
       );
     }
 
+    const webinarConfig = state.webinarConfigs.get(room.channelId) ?? null;
+    const scheduledWebinarId =
+      sessionOptions.scheduledWebinarId ??
+      webinarConfig?.scheduledWebinarId ??
+      null;
+    const scheduledWebinar = scheduledWebinarId
+      ? getScheduledWebinarById(state.scheduledWebinars, scheduledWebinarId)
+      : null;
+    let webinarLinkSlug =
+      sessionOptions.webinarLinkSlug ??
+      scheduledWebinar?.linkSlug ??
+      (webinarConfig?.enabled ? webinarConfig.linkSlug : null) ??
+      null;
+
+    if (webinarConfig?.enabled && !webinarLinkSlug) {
+      try {
+        webinarLinkSlug = ensureWebinarLinkSlug({
+          webinarConfig,
+          webinarLinks: state.webinarLinks,
+          room,
+        });
+      } catch (error) {
+        Logger.warn(
+          `[recording] failed to prepare webinar attendee link for ${room.channelId}: ${(error as Error).message}`,
+        );
+      }
+    }
+
     const session = createRecordingSession({
       ...sessionOptions,
       room,
       io: getIo(),
+      scheduledWebinarId,
+      webinarLinkSlug,
+      storageKey: sessionOptions.storageKey || scheduledWebinarId || undefined,
       audioBitrateKbps:
         sessionOptions.audioBitrateKbps ?? profile.audioBitrateKbps,
       videoBitrateKbps:

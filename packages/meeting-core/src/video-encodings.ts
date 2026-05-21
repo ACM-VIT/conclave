@@ -51,7 +51,7 @@ export function createVideoEncodingHelpers(
   const buildScreenShareEncoding = () => ({
     maxBitrate: bitrates.screenShare.maxBitrate,
     maxFramerate: bitrates.screenShare.maxFramerate,
-    scalabilityMode: "L1T2" as const,
+    scalabilityMode: "L1T3" as const,
   });
 
   return {

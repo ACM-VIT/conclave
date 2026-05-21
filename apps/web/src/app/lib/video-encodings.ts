@@ -27,9 +27,9 @@ const {
         {
           rid: "q",
           scaleResolutionDownBy: 2,
-          bitrateRatio: 0.35,
-          minBitrate: 90000,
-          maxFramerate: 15,
+          bitrateRatio: 0.45,
+          minBitrate: 250000,
+          maxFramerate: 30,
         },
         {
           rid: "f",
@@ -43,16 +43,16 @@ const {
         {
           rid: "q",
           scaleResolutionDownBy: 4,
-          bitrateRatio: 0.15,
-          minBitrate: 90000,
-          maxFramerate: 15,
+          bitrateRatio: 0.18,
+          minBitrate: 250000,
+          maxFramerate: 30,
         },
         {
           rid: "h",
           scaleResolutionDownBy: 2,
           bitrateRatio: 0.45,
-          minBitrate: 220000,
-          maxFramerate: 24,
+          minBitrate: 750000,
+          maxFramerate: 30,
         },
         {
           rid: "f",
