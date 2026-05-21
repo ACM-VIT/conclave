@@ -40,16 +40,19 @@ export default function MeetRoomPage({ params, searchParams }: MeetRoomPageProps
     resolvedSearchParams.recorder
   );
   const devOverridesEnabled = process.env.NODE_ENV === "development";
+  const recorderOverridesEnabled = bypassMediaPermissions;
+  const safeBotOverridesEnabled =
+    devOverridesEnabled || recorderOverridesEnabled;
   const autoJoinOnMount =
-    devOverridesEnabled && isTruthyParam(resolvedSearchParams.autojoin);
+    safeBotOverridesEnabled && isTruthyParam(resolvedSearchParams.autojoin);
   const hideJoinUI =
-    devOverridesEnabled && isTruthyParam(resolvedSearchParams.hide);
-  const joinModeParam = devOverridesEnabled
+    safeBotOverridesEnabled && isTruthyParam(resolvedSearchParams.hide);
+  const joinModeParam = safeBotOverridesEnabled
     ? getParamValue(resolvedSearchParams.mode)
     : undefined;
   const joinMode =
     joinModeParam === "webinar_attendee" ? "webinar_attendee" : undefined;
-  const displayName = devOverridesEnabled
+  const displayName = safeBotOverridesEnabled
     ? getParamValue(resolvedSearchParams.name)
     : undefined;
   const user = displayName ? { name: displayName } : undefined;
