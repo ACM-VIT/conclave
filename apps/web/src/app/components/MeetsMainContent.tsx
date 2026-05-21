@@ -1261,7 +1261,7 @@ export default function MeetsMainContent({
                 onUpdateWebinarConfig={onUpdateWebinarConfig}
                 onGenerateWebinarLink={onGenerateWebinarLink}
                 onRotateWebinarLink={onRotateWebinarLink}
-                hostEmail={userEmail || user?.email || null}
+                hostEmail={user?.email || null}
                 hostName={user?.name || null}
                 recordingActive={recordingActive}
                 recordingPaused={recordingPaused}

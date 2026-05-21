@@ -392,9 +392,15 @@ export const createScheduledWebinar = (
       ? Number(request.scheduledEndAt)
       : scheduledStartAt + DEFAULT_DURATION_MS;
 
-  const hostEmail = normalizeHostEmail(
-    request.hostEmail || options.defaultHostEmail || "",
+  const requestedHostEmail = normalizeHostEmail(request.hostEmail || "");
+  const requestHostEmailIsValid =
+    requestedHostEmail.length > 0 && requestedHostEmail.includes("@");
+  const fallbackHostEmail = normalizeHostEmail(
+    options.defaultHostEmail || "",
   );
+  const hostEmail = requestHostEmailIsValid
+    ? requestedHostEmail
+    : fallbackHostEmail;
   if (!hostEmail || !hostEmail.includes("@")) {
     throw new Error("Host email is required.");
   }
