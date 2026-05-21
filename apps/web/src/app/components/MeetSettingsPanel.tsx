@@ -37,11 +37,13 @@ const normalizeWebinarLinkCodeInput = (value: string): string =>
 
 const monoFontStyle = { fontFamily: "'PolySans Mono', monospace" };
 const rowButtonClass =
-  "flex w-full items-center justify-between gap-3 rounded-md bg-transparent px-3 py-2 text-left text-sm text-[#FEFCD9]/90 transition hover:bg-[#FEFCD9]/5 disabled:cursor-not-allowed disabled:opacity-45";
+  "flex w-full items-center justify-between gap-3 rounded-lg bg-transparent px-3 py-2.5 text-left text-sm text-[#FEFCD9]/90 transition hover:bg-[#FEFCD9]/5 disabled:cursor-not-allowed disabled:opacity-45";
 const inputClass =
-  "w-full rounded-md border border-[#FEFCD9]/10 bg-black/40 px-3 py-1.5 text-xs text-[#FEFCD9] outline-none placeholder:text-[#FEFCD9]/30 focus:border-[#FEFCD9]/25";
+  "w-full rounded-lg border border-[#FEFCD9]/15 bg-black/30 px-3 py-2 text-sm text-[#FEFCD9] outline-none placeholder:text-[#FEFCD9]/30 transition-colors focus:border-[#FEFCD9]/35";
 const actionButtonClass =
-  "inline-flex items-center justify-center rounded-md border border-[#FEFCD9]/10 px-3 py-1.5 text-[11px] text-[#FEFCD9]/85 transition hover:border-[#FEFCD9]/25 hover:bg-[#FEFCD9]/10 disabled:cursor-not-allowed disabled:opacity-40";
+  "inline-flex items-center justify-center gap-1.5 rounded-lg border border-[#FEFCD9]/15 px-3 py-2 text-xs text-[#FEFCD9]/85 transition hover:border-[#FEFCD9]/30 hover:bg-[#FEFCD9]/5 disabled:cursor-not-allowed disabled:opacity-40";
+const sectionLabelClass = "text-xs text-[#FEFCD9]/50";
+const sectionHeadingClass = "text-sm text-[#FEFCD9]/70";
 
 interface MeetSettingsPanelProps {
   isRoomLocked: boolean;
@@ -113,7 +115,7 @@ function StatusBadge({
 
   return (
     <span
-      className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${
+      className={`rounded-full border px-2 py-0.5 text-xs ${
         isOn ? activeClass : "border-[#FEFCD9]/10 text-[#FEFCD9]/40"
       }`}
     >
@@ -347,23 +349,23 @@ export default function MeetSettingsPanel({
 
   return (
     <div
-      className="absolute bottom-14 left-1/2 z-50 max-h-[70vh] w-[320px] max-w-[calc(100vw-1.5rem)] -translate-x-1/2 overflow-y-auto rounded-xl border border-[#FEFCD9]/10 bg-[#0d0e0d]/95 p-2.5 shadow-2xl backdrop-blur-md"
+      className="absolute bottom-14 left-1/2 z-50 max-h-[70vh] w-[380px] max-w-[calc(100vw-1.5rem)] -translate-x-1/2 overflow-y-auto rounded-2xl border border-[#FEFCD9]/10 bg-[#0d0e0d]/95 p-4 shadow-2xl backdrop-blur-md"
       style={{ fontFamily: "'PolySans Trial', sans-serif" }}
     >
-      <div className="mb-2 flex items-center justify-between border-b border-[#FEFCD9]/10 px-1 pb-2">
-        <p
-          className="text-[10px] uppercase tracking-[0.16em] text-[#FEFCD9]/45"
-          style={monoFontStyle}
+      <div className="mb-3 flex items-center justify-between border-b border-[#FEFCD9]/10 pb-3">
+        <h2
+          className="text-base text-[#FEFCD9] tracking-tight"
+          style={{ fontFamily: "'PolySans Bulky Wide', sans-serif" }}
         >
           {activeView === "webinar"
             ? "Webinar settings"
             : activeView === "schedule"
-              ? "Schedule webinar"
+              ? "Schedule a webinar"
               : "Meeting settings"}
-        </p>
+        </h2>
         <button
           onClick={onClose}
-          className="flex h-6 w-6 items-center justify-center rounded-md text-[#FEFCD9]/45 transition hover:bg-[#FEFCD9]/10 hover:text-[#FEFCD9]"
+          className="flex h-7 w-7 items-center justify-center rounded-lg text-[#FEFCD9]/45 transition hover:bg-[#FEFCD9]/10 hover:text-[#FEFCD9]"
           aria-label="Close meeting settings"
         >
           <X className="h-4 w-4" />
@@ -381,13 +383,8 @@ export default function MeetSettingsPanel({
             Back
           </button>
 
-          <div className="rounded-lg border border-[#FEFCD9]/10 bg-black/30 p-2.5">
-            <p
-              className="mb-2 text-[10px] uppercase tracking-[0.15em] text-[#FEFCD9]/45"
-              style={monoFontStyle}
-            >
-              New webinar
-            </p>
+          <div className="rounded-xl border border-[#FEFCD9]/10 bg-black/25 p-4">
+            <p className={`mb-3 ${sectionHeadingClass}`}>New webinar</p>
             <ScheduleWebinarForm
               compact
               defaultHostEmail={hostEmail ?? undefined}
@@ -398,21 +395,23 @@ export default function MeetSettingsPanel({
             />
           </div>
 
-          <div className="rounded-lg border border-[#FEFCD9]/10 bg-black/25 p-2.5">
-            <div className="mb-2 flex items-center justify-between text-[11px] text-[#FEFCD9]/55">
-              <span style={monoFontStyle}>Upcoming</span>
+          <div className="rounded-xl border border-[#FEFCD9]/10 bg-black/20 p-4">
+            <div className="mb-3 flex items-center justify-between">
+              <p className={sectionHeadingClass}>Upcoming</p>
               <a
                 href="/webinars"
-                className="text-[10px] text-[#FEFCD9]/45 hover:text-[#FEFCD9] underline-offset-2 hover:underline"
+                target="_blank"
+                rel="noreferrer"
+                className="text-xs text-[#FEFCD9]/45 hover:text-[#FEFCD9] underline-offset-2 hover:underline"
               >
                 Open dashboard ↗
               </a>
             </div>
             {scheduleError ? (
-              <p className="text-[11px] text-[#F95F4A]">{scheduleError}</p>
+              <p className="text-xs text-[#F95F4A]">{scheduleError}</p>
             ) : null}
             {scheduleLoading ? (
-              <div className="flex items-center gap-2 py-2 text-[10px] text-[#FEFCD9]/45">
+              <div className="flex items-center gap-2 py-3 text-xs text-[#FEFCD9]/45">
                 <Loader2 className="h-3 w-3 animate-spin" />
                 Loading…
               </div>
@@ -518,11 +517,11 @@ export default function MeetSettingsPanel({
             </div>
           </div>
 
-          <div className="rounded-lg border border-[#FEFCD9]/10 bg-black/25 p-2.5">
-            <div className="mb-2 flex items-center justify-between text-[11px] text-[#FEFCD9]/60">
-              <span>Meeting invite code</span>
+          <div className="rounded-xl border border-[#FEFCD9]/10 bg-black/25 p-4">
+            <div className="mb-3 flex items-center justify-between">
+              <span className={sectionHeadingClass}>Meeting invite code</span>
               <span
-                className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${
+                className={`rounded-full border px-2 py-0.5 text-xs ${
                   meetingRequiresInviteCode
                     ? "border-amber-300/40 bg-amber-300/10 text-amber-200"
                     : "border-[#FEFCD9]/10 text-[#FEFCD9]/40"
@@ -655,11 +654,12 @@ export default function MeetSettingsPanel({
             </div>
           </div>
 
-          <div className="rounded-lg border border-[#FEFCD9]/10 bg-black/25 p-2.5">
-            <div className="mb-2 flex items-center justify-between text-[11px] text-[#FEFCD9]/60">
-              <span>Attendees</span>
-              <span>
-                <span className="text-[#FEFCD9]">{attendeeCount}</span> /{" "}
+          <div className="rounded-xl border border-[#FEFCD9]/10 bg-black/25 p-4">
+            <div className="mb-3 flex items-center justify-between">
+              <span className={sectionHeadingClass}>Attendees</span>
+              <span className="text-sm">
+                <span className="text-[#FEFCD9]">{attendeeCount}</span>
+                <span className="text-[#FEFCD9]/40"> / </span>
                 <span className="text-[#FEFCD9]">{attendeeCap}</span>
               </span>
             </div>
@@ -697,11 +697,11 @@ export default function MeetSettingsPanel({
             </div>
           </div>
 
-          <div className="rounded-lg border border-[#FEFCD9]/10 bg-black/25 p-2.5">
-            <div className="mb-2 flex items-center justify-between text-[11px] text-[#FEFCD9]/60">
-              <span>Invite code</span>
+          <div className="rounded-xl border border-[#FEFCD9]/10 bg-black/25 p-4">
+            <div className="mb-3 flex items-center justify-between">
+              <span className={sectionHeadingClass}>Invite code</span>
               {webinarRole ? (
-                <span className="rounded-full border border-[#FEFCD9]/10 px-2 py-0.5 text-[10px] uppercase tracking-wide text-[#FEFCD9]/50">
+                <span className="rounded-full border border-[#FEFCD9]/10 px-2 py-0.5 text-xs text-[#FEFCD9]/50">
                   {webinarRole}
                 </span>
               ) : null}
@@ -750,8 +750,9 @@ export default function MeetSettingsPanel({
             </div>
           </div>
 
-          <div className="rounded-lg border border-[#FEFCD9]/10 bg-black/25 p-2.5">
-            <div className="mb-2 flex items-center gap-2">
+          <div className="rounded-xl border border-[#FEFCD9]/10 bg-black/25 p-4">
+            <p className={`mb-3 ${sectionHeadingClass}`}>Webinar link</p>
+            <div className="mb-3 flex items-center gap-2">
               <input
                 type="text"
                 value={customLinkCodeInput}

@@ -8,15 +8,10 @@ import type {
   ScheduledWebinarCoHost,
 } from "@/lib/scheduled-webinars";
 
-const monoFontStyle = { fontFamily: "'PolySans Mono', monospace" };
 const inputClass =
-  "w-full rounded-md border border-[#FEFCD9]/10 bg-black/40 px-3 py-1.5 text-xs text-[#FEFCD9] outline-none placeholder:text-[#FEFCD9]/30 focus:border-[#FEFCD9]/25";
-const labelClass =
-  "block text-[10px] uppercase tracking-[0.14em] text-[#FEFCD9]/45";
-const actionButtonClass =
-  "inline-flex items-center justify-center gap-1 rounded-md border border-[#FEFCD9]/10 px-3 py-1.5 text-[11px] text-[#FEFCD9]/85 transition hover:border-[#FEFCD9]/25 hover:bg-[#FEFCD9]/10 disabled:cursor-not-allowed disabled:opacity-40";
-const primaryButtonClass =
-  "inline-flex items-center justify-center gap-1 rounded-md border border-[#F95F4A]/40 bg-[#F95F4A]/15 px-3 py-1.5 text-[11px] text-[#F95F4A] transition hover:border-[#F95F4A]/60 hover:bg-[#F95F4A]/25 disabled:cursor-not-allowed disabled:opacity-40";
+  "w-full rounded-lg border border-[#FEFCD9]/15 bg-black/30 px-4 py-2.5 text-sm text-[#FEFCD9] outline-none placeholder:text-[#FEFCD9]/30 transition-colors focus:border-[#FEFCD9]/35";
+const labelClass = "block text-sm text-[#FEFCD9]/65 mb-1.5";
+const helperClass = "mt-1 text-xs text-[#FEFCD9]/35";
 
 const pad = (n: number): string => String(n).padStart(2, "0");
 
@@ -45,11 +40,11 @@ const parseCoHostList = (raw: string): ScheduledWebinarCoHost[] => {
 };
 
 const DURATION_OPTIONS = [
-  { label: "30 min", minutes: 30 },
-  { label: "45 min", minutes: 45 },
-  { label: "60 min", minutes: 60 },
-  { label: "90 min", minutes: 90 },
-  { label: "2 hr", minutes: 120 },
+  { label: "30 minutes", minutes: 30 },
+  { label: "45 minutes", minutes: 45 },
+  { label: "1 hour", minutes: 60 },
+  { label: "1.5 hours", minutes: 90 },
+  { label: "2 hours", minutes: 120 },
 ];
 
 export type ScheduleWebinarFormProps = {
@@ -58,6 +53,35 @@ export type ScheduleWebinarFormProps = {
   compact?: boolean;
   onScheduled?: (webinar: ScheduledWebinar) => void;
 };
+
+type Toggle = {
+  key: "publicAccess" | "waitingRoomEnabled" | "qaEnabled" | "recordingRequested";
+  label: string;
+  description: string;
+};
+
+const TOGGLES: Toggle[] = [
+  {
+    key: "publicAccess",
+    label: "Public link",
+    description: "Anyone with the link can join.",
+  },
+  {
+    key: "waitingRoomEnabled",
+    label: "Waiting room",
+    description: "Attendees wait until you start.",
+  },
+  {
+    key: "qaEnabled",
+    label: "Q&A",
+    description: "Audience can submit questions.",
+  },
+  {
+    key: "recordingRequested",
+    label: "Record automatically",
+    description: "Start recording when the room opens.",
+  },
+];
 
 export default function ScheduleWebinarForm({
   defaultHostEmail,
@@ -68,17 +92,17 @@ export default function ScheduleWebinarForm({
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const initialStart = useMemo(() => nextRoundedHour(), []);
-  const [startAt, setStartAt] = useState<string>(
-    toLocalInputValue(initialStart),
-  );
+  const [startAt, setStartAt] = useState<string>(toLocalInputValue(initialStart));
   const [durationMinutes, setDurationMinutes] = useState<number>(60);
   const [coHosts, setCoHosts] = useState("");
   const [linkSlug, setLinkSlug] = useState("");
   const [inviteCode, setInviteCode] = useState("");
-  const [publicAccess, setPublicAccess] = useState(true);
-  const [waitingRoomEnabled, setWaitingRoomEnabled] = useState(true);
-  const [qaEnabled, setQaEnabled] = useState(true);
-  const [recordingRequested, setRecordingRequested] = useState(false);
+  const [toggles, setToggles] = useState({
+    publicAccess: true,
+    waitingRoomEnabled: true,
+    qaEnabled: true,
+    recordingRequested: false,
+  });
   const [earlyEntryMinutes, setEarlyEntryMinutes] = useState(10);
   const [maxAttendees, setMaxAttendees] = useState(500);
   const [isWorking, setIsWorking] = useState(false);
@@ -90,7 +114,7 @@ export default function ScheduleWebinarForm({
       setError(null);
       const startMs = parseLocalDateTime(startAt);
       if (!title.trim()) {
-        setError("Add a title.");
+        setError("Add a title for the webinar.");
         return;
       }
       if (!Number.isFinite(startMs)) {
@@ -98,7 +122,7 @@ export default function ScheduleWebinarForm({
         return;
       }
       if (startMs < Date.now() - 60_000) {
-        setError("Start time must be in the future.");
+        setError("The start time has to be in the future.");
         return;
       }
       const payload: CreateScheduledWebinarPayload = {
@@ -110,13 +134,13 @@ export default function ScheduleWebinarForm({
         hostName: defaultHostName,
         coHosts: parseCoHostList(coHosts),
         linkSlug: linkSlug.trim() || undefined,
-        publicAccess,
+        publicAccess: toggles.publicAccess,
         maxAttendees,
         inviteCode: inviteCode.trim() || null,
-        waitingRoomEnabled,
+        waitingRoomEnabled: toggles.waitingRoomEnabled,
         earlyEntryMinutes,
-        qaEnabled,
-        recordingRequested,
+        qaEnabled: toggles.qaEnabled,
+        recordingRequested: toggles.recordingRequested,
       };
       setIsWorking(true);
       try {
@@ -129,7 +153,9 @@ export default function ScheduleWebinarForm({
           const data = await response.json().catch(() => null);
           throw new Error(
             data && typeof data === "object" && "error" in data
-              ? String((data as { error?: string }).error || "Failed to schedule")
+              ? String(
+                  (data as { error?: string }).error || "Failed to schedule",
+                )
               : "Failed to schedule",
           );
         }
@@ -160,27 +186,35 @@ export default function ScheduleWebinarForm({
       coHosts,
       linkSlug,
       inviteCode,
-      publicAccess,
+      toggles,
       maxAttendees,
-      waitingRoomEnabled,
       earlyEntryMinutes,
-      qaEnabled,
-      recordingRequested,
       onScheduled,
     ],
+  );
+
+  const Field = ({
+    children,
+    span = 1,
+  }: {
+    children: React.ReactNode;
+    span?: 1 | 2;
+  }) => (
+    <div className={span === 2 ? "md:col-span-2" : ""}>{children}</div>
   );
 
   return (
     <form
       onSubmit={submit}
-      className="flex flex-col gap-2.5"
+      className="flex flex-col gap-5"
       style={{ fontFamily: "'PolySans Trial', sans-serif" }}
     >
-      <div>
-        <label className={labelClass} style={monoFontStyle}>
+      <Field span={2}>
+        <label htmlFor="webinar-title" className={labelClass}>
           Title
         </label>
         <input
+          id="webinar-title"
           type="text"
           className={inputClass}
           value={title}
@@ -188,41 +222,44 @@ export default function ScheduleWebinarForm({
           placeholder="e.g. Q2 product launch"
           onChange={(e) => setTitle(e.target.value)}
         />
-      </div>
+      </Field>
 
       {!compact && (
-        <div>
-          <label className={labelClass} style={monoFontStyle}>
+        <Field span={2}>
+          <label htmlFor="webinar-desc" className={labelClass}>
             Description
           </label>
           <textarea
+            id="webinar-desc"
             className={`${inputClass} resize-none`}
-            rows={2}
+            rows={3}
             value={description}
             maxLength={2000}
-            placeholder="Short summary shown on the landing page"
+            placeholder="A short summary that attendees see on the waiting page."
             onChange={(e) => setDescription(e.target.value)}
           />
-        </div>
+        </Field>
       )}
 
-      <div className="grid grid-cols-2 gap-2">
-        <div>
-          <label className={labelClass} style={monoFontStyle}>
-            Start
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+        <Field>
+          <label htmlFor="webinar-start" className={labelClass}>
+            Starts at
           </label>
           <input
+            id="webinar-start"
             type="datetime-local"
             className={inputClass}
             value={startAt}
             onChange={(e) => setStartAt(e.target.value)}
           />
-        </div>
-        <div>
-          <label className={labelClass} style={monoFontStyle}>
+        </Field>
+        <Field>
+          <label htmlFor="webinar-duration" className={labelClass}>
             Duration
           </label>
           <select
+            id="webinar-duration"
             className={inputClass}
             value={durationMinutes}
             onChange={(e) => setDurationMinutes(Number(e.target.value))}
@@ -233,46 +270,58 @@ export default function ScheduleWebinarForm({
               </option>
             ))}
           </select>
-        </div>
+        </Field>
       </div>
 
       {!compact && (
-        <div>
-          <label className={labelClass} style={monoFontStyle}>
-            Co-hosts (comma-separated emails)
+        <Field span={2}>
+          <label htmlFor="webinar-cohosts" className={labelClass}>
+            Co-hosts
           </label>
           <input
+            id="webinar-cohosts"
             type="text"
             className={inputClass}
             value={coHosts}
             placeholder="alex@example.com, jordan@example.com"
             onChange={(e) => setCoHosts(e.target.value)}
           />
-        </div>
+          <p className={helperClass}>
+            Comma-separated emails. Co-hosts are auto-promoted when they
+            join.
+          </p>
+        </Field>
       )}
 
-      <div className="grid grid-cols-2 gap-2">
-        <div>
-          <label className={labelClass} style={monoFontStyle}>
-            Link code
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+        <Field>
+          <label htmlFor="webinar-slug" className={labelClass}>
+            Custom link
           </label>
-          <input
-            type="text"
-            className={inputClass}
-            value={linkSlug}
-            placeholder="optional"
-            onChange={(e) =>
-              setLinkSlug(
-                e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""),
-              )
-            }
-          />
-        </div>
-        <div>
-          <label className={labelClass} style={monoFontStyle}>
+          <div className="flex items-stretch rounded-lg border border-[#FEFCD9]/15 bg-black/30 transition-colors focus-within:border-[#FEFCD9]/35">
+            <span className="flex items-center px-3 text-sm text-[#FEFCD9]/35 select-none">
+              /w/
+            </span>
+            <input
+              id="webinar-slug"
+              type="text"
+              className="flex-1 bg-transparent px-1 py-2.5 text-sm text-[#FEFCD9] outline-none placeholder:text-[#FEFCD9]/30"
+              value={linkSlug}
+              placeholder="optional"
+              onChange={(e) =>
+                setLinkSlug(
+                  e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""),
+                )
+              }
+            />
+          </div>
+        </Field>
+        <Field>
+          <label htmlFor="webinar-cap" className={labelClass}>
             Max attendees
           </label>
           <input
+            id="webinar-cap"
             type="number"
             min={1}
             max={5000}
@@ -280,28 +329,30 @@ export default function ScheduleWebinarForm({
             value={maxAttendees}
             onChange={(e) => setMaxAttendees(Number(e.target.value) || 500)}
           />
-        </div>
+        </Field>
       </div>
 
       {!compact && (
-        <div className="grid grid-cols-2 gap-2">
-          <div>
-            <label className={labelClass} style={monoFontStyle}>
-              Invite code (optional)
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+          <Field>
+            <label htmlFor="webinar-invite" className={labelClass}>
+              Invite code
             </label>
             <input
+              id="webinar-invite"
               type="text"
               className={inputClass}
               value={inviteCode}
-              placeholder="leave empty for none"
+              placeholder="Leave blank for public access"
               onChange={(e) => setInviteCode(e.target.value)}
             />
-          </div>
-          <div>
-            <label className={labelClass} style={monoFontStyle}>
-              Open lobby (min before)
+          </Field>
+          <Field>
+            <label htmlFor="webinar-lobby" className={labelClass}>
+              Open lobby (minutes before)
             </label>
             <input
+              id="webinar-lobby"
               type="number"
               min={0}
               max={240}
@@ -311,69 +362,81 @@ export default function ScheduleWebinarForm({
                 setEarlyEntryMinutes(Math.max(0, Number(e.target.value) || 0))
               }
             />
-          </div>
+          </Field>
         </div>
       )}
 
-      <div className="flex flex-wrap gap-x-3 gap-y-1.5 text-[11px] text-[#FEFCD9]/80">
-        <label className="inline-flex items-center gap-1">
-          <input
-            type="checkbox"
-            className="accent-[#F95F4A]"
-            checked={publicAccess}
-            onChange={(e) => setPublicAccess(e.target.checked)}
-          />
-          Public link
-        </label>
-        <label className="inline-flex items-center gap-1">
-          <input
-            type="checkbox"
-            className="accent-[#F95F4A]"
-            checked={waitingRoomEnabled}
-            onChange={(e) => setWaitingRoomEnabled(e.target.checked)}
-          />
-          Waiting room
-        </label>
-        <label className="inline-flex items-center gap-1">
-          <input
-            type="checkbox"
-            className="accent-[#F95F4A]"
-            checked={qaEnabled}
-            onChange={(e) => setQaEnabled(e.target.checked)}
-          />
-          Q&amp;A enabled
-        </label>
-        <label className="inline-flex items-center gap-1">
-          <input
-            type="checkbox"
-            className="accent-[#F95F4A]"
-            checked={recordingRequested}
-            onChange={(e) => setRecordingRequested(e.target.checked)}
-          />
-          Request recording
-        </label>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        {TOGGLES.map((toggle) => {
+          const checked = toggles[toggle.key];
+          return (
+            <button
+              key={toggle.key}
+              type="button"
+              onClick={() =>
+                setToggles((prev) => ({ ...prev, [toggle.key]: !prev[toggle.key] }))
+              }
+              className={`relative flex items-start gap-3 rounded-lg border bg-black/20 p-4 text-left transition-colors ${
+                checked
+                  ? "border-[#F95F4A]/40 bg-[#F95F4A]/5"
+                  : "border-[#FEFCD9]/10 hover:border-[#FEFCD9]/25"
+              }`}
+            >
+              <span
+                className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded border ${
+                  checked
+                    ? "border-[#F95F4A] bg-[#F95F4A]"
+                    : "border-[#FEFCD9]/25"
+                }`}
+                aria-hidden
+              >
+                {checked && (
+                  <svg
+                    className="h-3 w-3 text-white"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                    strokeWidth={3}
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="M5 13l4 4L19 7"
+                    />
+                  </svg>
+                )}
+              </span>
+              <div>
+                <p className="text-sm text-[#FEFCD9]">{toggle.label}</p>
+                <p className="mt-0.5 text-xs text-[#FEFCD9]/50">
+                  {toggle.description}
+                </p>
+              </div>
+            </button>
+          );
+        })}
       </div>
 
-      {error ? (
-        <p className="text-[11px] text-[#F95F4A]">{error}</p>
-      ) : null}
+      {error && (
+        <div className="rounded-lg border border-[#F95F4A]/30 bg-[#F95F4A]/5 px-4 py-3 text-sm text-[#F95F4A]">
+          {error}
+        </div>
+      )}
 
-      <div className="flex items-center justify-end gap-2 pt-1">
+      <div className="flex items-center justify-end">
         <button
           type="submit"
           disabled={isWorking}
-          className={primaryButtonClass}
+          className="group inline-flex items-center gap-2 rounded-lg bg-[#F95F4A] px-5 py-2.5 text-sm text-white transition-all hover:bg-[#e8553f] hover:gap-3 disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:gap-2"
         >
           {isWorking ? (
-            <Loader2 className="h-3 w-3 animate-spin" />
+            <Loader2 className="h-4 w-4 animate-spin" />
           ) : (
-            <CalendarPlus className="h-3 w-3" />
+            <CalendarPlus className="h-4 w-4" />
           )}
-          {isWorking ? "Scheduling…" : "Schedule webinar"}
+          <span>{isWorking ? "Scheduling…" : "Schedule webinar"}</span>
         </button>
       </div>
     </form>
   );
 }
-
-export { actionButtonClass as scheduledWebinarSecondaryButtonClass };
