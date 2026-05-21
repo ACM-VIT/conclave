@@ -98,7 +98,8 @@ const PageShell = ({ children }: { children: React.ReactNode }) => (
     className="relative min-h-dvh bg-[#060606] text-[#FEFCD9] overflow-hidden"
     style={{ fontFamily: "'PolySans Trial', sans-serif" }}
   >
-    <div className="absolute inset-0 acm-bg-dot-grid pointer-events-none opacity-60" />
+    <div className="absolute inset-0 acm-bg-dot-grid pointer-events-none" />
+    <div className="absolute inset-0 acm-bg-radial pointer-events-none" />
     <header className="absolute top-0 left-0 right-0 z-10 flex items-center justify-between px-6 py-5 pointer-events-none">
       <a
         href="/"

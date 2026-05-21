@@ -823,16 +823,115 @@ export default function MeetsMainContent({
       )}
       {!isJoined ? (
         hideJoinUI ? (
-          <div className="flex flex-1 items-center justify-center">
-            <div className="rounded-xl border border-white/10 bg-black/40 px-6 py-4 text-center">
-              <p className="text-sm text-[#FEFCD9]">
-                {isLoading ? "Joining..." : "Preparing..."}
-              </p>
-              {meetError ? (
-                <p className="mt-2 text-xs text-[#F95F4A]">{meetError.message}</p>
-              ) : null}
-            </div>
-          </div>
+          (() => {
+            const errorMessage = meetError?.message ?? "";
+            const isWaitingForHost =
+              /not live|not started|no room|not ready/i.test(errorMessage);
+            const isFatal = errorMessage && !isWaitingForHost;
+            const headline = isFatal
+              ? "we hit a snag"
+              : isWaitingForHost
+                ? "waiting for the host to start"
+                : isLoading
+                  ? "getting you in"
+                  : "almost there";
+            return (
+              <div
+                className="relative -m-4 flex flex-1 overflow-hidden bg-[#060606]"
+                style={{ fontFamily: "'PolySans Trial', sans-serif" }}
+              >
+                <div className="absolute inset-0 acm-bg-dot-grid pointer-events-none" />
+                <div className="absolute inset-0 acm-bg-radial pointer-events-none" />
+                <header className="absolute top-0 left-0 right-0 z-10 flex items-center justify-between px-6 py-5 pointer-events-none">
+                  <a
+                    href="/"
+                    className="pointer-events-auto flex items-center"
+                    aria-label="ACM-VIT"
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src="/assets/acm_topleft.svg"
+                      alt="ACM-VIT"
+                      width={120}
+                      height={32}
+                    />
+                  </a>
+                </header>
+                <main className="relative z-[5] flex flex-1 items-center justify-center px-6 py-24">
+                  <div className="flex w-full max-w-xl flex-col items-center text-center animate-fade-in">
+                    <div className="relative flex items-center gap-3">
+                      <span
+                        className={`block h-2 w-2 rounded-full ${
+                          isFatal
+                            ? "bg-[#F95F4A]"
+                            : "bg-[#F95F4A] animate-pulse"
+                        }`}
+                      />
+                      <span className="text-sm text-[#FEFCD9]/50">
+                        {isFatal
+                          ? "couldn't join the room"
+                          : isWaitingForHost
+                            ? "the room isn't open yet"
+                            : isLoading
+                              ? "connecting…"
+                              : "preparing…"}
+                      </span>
+                    </div>
+                    <h1
+                      className="mt-6 text-3xl md:text-5xl text-[#FEFCD9] tracking-tight"
+                      style={{
+                        fontFamily: "'PolySans Bulky Wide', sans-serif",
+                      }}
+                    >
+                      {headline}
+                    </h1>
+                    {isWaitingForHost ? (
+                      <p className="mt-5 max-w-md text-sm md:text-base text-[#FEFCD9]/60">
+                        Hang tight — this page will refresh on its own the
+                        moment the host opens the room.
+                      </p>
+                    ) : isFatal ? (
+                      <p className="mt-5 max-w-md text-sm md:text-base text-[#FEFCD9]/60">
+                        {errorMessage}
+                      </p>
+                    ) : (
+                      <p className="mt-5 max-w-md text-sm md:text-base text-[#FEFCD9]/60">
+                        Sit tight — getting your camera, mic and the room
+                        ready in a moment.
+                      </p>
+                    )}
+                    <div className="mt-16 flex flex-col items-center text-[#FEFCD9]/30">
+                      <div className="relative inline-block">
+                        <span
+                          className="absolute -left-5 top-1/2 -translate-y-1/2 text-[#F95F4A]/40 text-2xl md:text-3xl"
+                          style={{ fontFamily: "'PolySans Mono', monospace" }}
+                        >
+                          [
+                        </span>
+                        <span
+                          className="text-2xl md:text-3xl text-[#FEFCD9] tracking-tight"
+                          style={{
+                            fontFamily: "'PolySans Bulky Wide', sans-serif",
+                          }}
+                        >
+                          c0nclav3
+                        </span>
+                        <span
+                          className="absolute -right-5 top-1/2 -translate-y-1/2 text-[#F95F4A]/40 text-2xl md:text-3xl"
+                          style={{ fontFamily: "'PolySans Mono', monospace" }}
+                        >
+                          ]
+                        </span>
+                      </div>
+                      <p className="mt-3 text-xs text-[#FEFCD9]/30">
+                        video conferencing by ACM-VIT
+                      </p>
+                    </div>
+                  </div>
+                </main>
+              </div>
+            );
+          })()
         ) : (
           <JoinScreen
             roomId={roomId}
