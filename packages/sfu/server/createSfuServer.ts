@@ -69,6 +69,8 @@ export const createSfuServer = (
 
   const stop = async (): Promise<void> => {
     stopScheduledWebinarTimer(state);
+    state.scheduledWebinarPersistence?.close?.();
+    state.scheduledWebinarPersistence = null;
     io.close();
 
     await new Promise<void>((resolve, reject) => {

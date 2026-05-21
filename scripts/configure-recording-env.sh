@@ -64,6 +64,7 @@ upsert "RECORDER_DEFAULT_AUDIO_BITRATE_KBPS" "$ab"
 upsert "RECORDER_MAX_CONCURRENT_SESSIONS" "$max_concurrent"
 upsert "RECORDER_CHROMIUM_PATH" "/usr/bin/chromium"
 upsert "RECORDING_STORAGE_PATH" "/var/lib/conclave/recordings"
+upsert "CONCLAVE_SQLITE_PATH" "/var/lib/conclave/recordings/conclave.sqlite"
 
 if [[ -z "${RECORDER_PUBLIC_URL:-}" ]] && ! grep -qE "^RECORDER_PUBLIC_URL=" "$ENV_FILE"; then
   if grep -qE "^NEXT_PUBLIC_APP_URL=" "$ENV_FILE"; then

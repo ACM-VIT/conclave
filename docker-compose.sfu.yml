@@ -26,6 +26,7 @@ services:
       RECORDER_DEFAULT_VIDEO_BITRATE_KBPS: ${RECORDER_DEFAULT_VIDEO_BITRATE_KBPS:-}
       RECORDER_DEFAULT_AUDIO_BITRATE_KBPS: ${RECORDER_DEFAULT_AUDIO_BITRATE_KBPS:-}
       RECORDING_STORAGE_PATH: ${RECORDING_STORAGE_PATH:-/var/lib/conclave/recordings}
+      CONCLAVE_SQLITE_PATH: ${CONCLAVE_SQLITE_PATH:-/var/lib/conclave/recordings/conclave.sqlite}
     volumes:
       - ${RECORDING_STORAGE_PATH:-/var/lib/conclave/recordings}:/var/lib/conclave/recordings
     restart: unless-stopped
@@ -57,6 +58,7 @@ services:
       RECORDER_DEFAULT_VIDEO_BITRATE_KBPS: ${RECORDER_DEFAULT_VIDEO_BITRATE_KBPS:-}
       RECORDER_DEFAULT_AUDIO_BITRATE_KBPS: ${RECORDER_DEFAULT_AUDIO_BITRATE_KBPS:-}
       RECORDING_STORAGE_PATH: ${RECORDING_STORAGE_PATH:-/var/lib/conclave/recordings}
+      CONCLAVE_SQLITE_PATH: ${CONCLAVE_SQLITE_PATH:-/var/lib/conclave/recordings/conclave.sqlite}
     volumes:
       - ${RECORDING_STORAGE_PATH:-/var/lib/conclave/recordings}:/var/lib/conclave/recordings
     restart: unless-stopped

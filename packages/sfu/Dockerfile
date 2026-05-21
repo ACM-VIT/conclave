@@ -30,6 +30,7 @@ COPY . .
 RUN mkdir -p /var/lib/conclave/recordings && chown -R node:node /var/lib/conclave
 
 ENV RECORDING_STORAGE_PATH=/var/lib/conclave/recordings
+ENV CONCLAVE_SQLITE_PATH=/var/lib/conclave/recordings/conclave.sqlite
 
 ENTRYPOINT ["/usr/bin/dumb-init", "--"]
 CMD ["npm", "run", "start"]

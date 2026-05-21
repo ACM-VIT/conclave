@@ -1,5 +1,6 @@
 import { createHash, randomUUID, randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from "node:fs";
+import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 import type {
   CreateScheduledWebinarRequest,
@@ -238,12 +239,27 @@ export const listScheduledWebinars = (
 export type ScheduledWebinarPersistence = {
   save: (snapshot: ScheduledWebinar[]) => void;
   load: () => ScheduledWebinar[];
+  close?: () => void;
 };
 
 const scheduledWebinarsPath = (): string => {
   const configured = process.env.SCHEDULED_WEBINARS_PATH?.trim();
   if (configured) return resolve(configured);
   return resolve(process.cwd(), "data", "scheduled-webinars.json");
+};
+
+const scheduledWebinarsSqlitePath = (): string => {
+  const configured =
+    process.env.SCHEDULED_WEBINARS_SQLITE_PATH?.trim() ||
+    process.env.CONCLAVE_SQLITE_PATH?.trim();
+  if (configured) return resolve(configured);
+
+  const recordingStoragePath = process.env.RECORDING_STORAGE_PATH?.trim();
+  if (recordingStoragePath) {
+    return resolve(recordingStoragePath, "conclave.sqlite");
+  }
+
+  return resolve(process.cwd(), "data", "conclave.sqlite");
 };
 
 const writeJsonAtomic = (path: string, data: string): void => {
@@ -281,6 +297,190 @@ export const createFileScheduledWebinarPersistence = (
     }
   },
 });
+
+type SqliteStatement = {
+  run: (...params: unknown[]) => unknown;
+  all: (...params: unknown[]) => unknown[];
+};
+
+type SqliteDatabase = {
+  close: () => void;
+  exec: (sql: string) => void;
+  prepare: (sql: string) => SqliteStatement;
+};
+
+const loadNodeSqlite = (): { DatabaseSync: new (path: string) => SqliteDatabase } => {
+  const require = createRequire(import.meta.url);
+  return require("node:sqlite") as {
+    DatabaseSync: new (path: string) => SqliteDatabase;
+  };
+};
+
+export const createSqliteScheduledWebinarPersistence = (
+  path: string = scheduledWebinarsSqlitePath(),
+): ScheduledWebinarPersistence => {
+  const dir = dirname(path);
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true });
+  }
+
+  const { DatabaseSync } = loadNodeSqlite();
+  const db = new DatabaseSync(path);
+  db.exec("PRAGMA busy_timeout = 5000");
+  db.exec("PRAGMA journal_mode = WAL");
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS scheduled_webinars (
+      id TEXT PRIMARY KEY,
+      client_id TEXT NOT NULL,
+      room_id TEXT NOT NULL,
+      link_slug TEXT NOT NULL,
+      status TEXT NOT NULL,
+      scheduled_start_at INTEGER NOT NULL,
+      scheduled_end_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      payload_json TEXT NOT NULL
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS scheduled_webinars_link_slug_idx
+      ON scheduled_webinars(link_slug);
+    CREATE INDEX IF NOT EXISTS scheduled_webinars_room_idx
+      ON scheduled_webinars(client_id, room_id);
+    CREATE INDEX IF NOT EXISTS scheduled_webinars_status_start_idx
+      ON scheduled_webinars(status, scheduled_start_at);
+  `);
+
+  const insert = db.prepare(`
+    INSERT INTO scheduled_webinars (
+      id,
+      client_id,
+      room_id,
+      link_slug,
+      status,
+      scheduled_start_at,
+      scheduled_end_at,
+      updated_at,
+      payload_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      client_id = excluded.client_id,
+      room_id = excluded.room_id,
+      link_slug = excluded.link_slug,
+      status = excluded.status,
+      scheduled_start_at = excluded.scheduled_start_at,
+      scheduled_end_at = excluded.scheduled_end_at,
+      updated_at = excluded.updated_at,
+      payload_json = excluded.payload_json
+    WHERE excluded.updated_at >= scheduled_webinars.updated_at
+  `);
+  const loadRows = db.prepare(`
+    SELECT payload_json
+    FROM scheduled_webinars
+    ORDER BY scheduled_start_at ASC, id ASC
+  `);
+  const deleteById = db.prepare("DELETE FROM scheduled_webinars WHERE id = ?");
+  let knownIds = new Set<string>();
+
+  return {
+    save: (snapshot) => {
+      try {
+        const snapshotIds = new Set(snapshot.map((webinar) => webinar.id));
+        db.exec("BEGIN IMMEDIATE");
+        for (const webinar of snapshot) {
+          insert.run(
+            webinar.id,
+            webinar.clientId,
+            webinar.roomId,
+            webinar.linkSlug,
+            webinar.status,
+            webinar.scheduledStartAt,
+            webinar.scheduledEndAt,
+            webinar.updatedAt,
+            JSON.stringify(webinar),
+          );
+        }
+        for (const id of knownIds) {
+          if (!snapshotIds.has(id)) {
+            deleteById.run(id);
+          }
+        }
+        db.exec("COMMIT");
+        knownIds = snapshotIds;
+      } catch (error) {
+        try {
+          db.exec("ROLLBACK");
+        } catch {
+          // ignore rollback failures
+        }
+        Logger.error("Failed to persist scheduled webinars to SQLite", error);
+      }
+    },
+    load: () => {
+      try {
+        const webinars = loadRows
+          .all()
+          .map((row) => {
+            const payload =
+              row && typeof row === "object" && "payload_json" in row
+                ? String((row as { payload_json: unknown }).payload_json)
+                : "";
+            if (!payload) return null;
+            return normalizeStoredWebinar(JSON.parse(payload));
+          })
+          .filter((entry): entry is ScheduledWebinar => Boolean(entry));
+        knownIds = new Set(webinars.map((webinar) => webinar.id));
+        return webinars;
+      } catch (error) {
+        Logger.error("Failed to load scheduled webinars from SQLite", error);
+        return [];
+      }
+    },
+    close: () => db.close(),
+  };
+};
+
+const migrateJsonScheduledWebinarsToSqlite = (
+  sqlite: ScheduledWebinarPersistence,
+  json: ScheduledWebinarPersistence,
+): number => {
+  const existing = sqlite.load();
+  if (existing.length > 0) return 0;
+
+  const legacy = json.load();
+  if (legacy.length === 0) return 0;
+
+  sqlite.save(legacy);
+  return sqlite.load().length;
+};
+
+export const createScheduledWebinarPersistence = (): ScheduledWebinarPersistence => {
+  const mode = process.env.SCHEDULED_WEBINARS_PERSISTENCE?.trim().toLowerCase();
+  if (mode === "json" || mode === "file") {
+    return createFileScheduledWebinarPersistence();
+  }
+
+  const jsonPersistence = createFileScheduledWebinarPersistence();
+
+  try {
+    const sqlitePersistence = createSqliteScheduledWebinarPersistence();
+    const migrated = migrateJsonScheduledWebinarsToSqlite(
+      sqlitePersistence,
+      jsonPersistence,
+    );
+    if (migrated > 0) {
+      Logger.info(
+        `Migrated ${migrated} scheduled webinar(s) from JSON into SQLite`,
+      );
+    }
+    return sqlitePersistence;
+  } catch (error) {
+    if (mode === "sqlite") {
+      throw error;
+    }
+    Logger.warn(
+      `SQLite scheduled-webinar persistence unavailable; falling back to JSON: ${(error as Error).message}`,
+    );
+    return jsonPersistence;
+  }
+};
 
 const normalizeStoredWebinar = (raw: any): ScheduledWebinar | null => {
   if (!raw || typeof raw !== "object") return null;
