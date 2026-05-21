@@ -2,7 +2,9 @@ import { spawn, type ChildProcess } from "node:child_process";
 import {
   createWriteStream,
   existsSync,
+  renameSync,
   statSync,
+  unlinkSync,
   type WriteStream,
 } from "node:fs";
 import { join } from "node:path";
@@ -299,6 +301,7 @@ export const createViewRecorder = (
   let xvfbDisplayString: string | null = null;
   let x11GrabRecorder: { proc: ChildProcess; stop: () => Promise<void> } | null =
     null;
+  let x11GrabMode = false;
   let x11GrabStopping = false;
   let writeStream: WriteStream | null = null;
   let nextExpectedSequence = 0;
@@ -417,14 +420,13 @@ export const createViewRecorder = (
     // repeatedly produced zero-byte blobs under Xvfb/swiftshader.
     const useXvfb = isXvfbAvailable();
     const useX11Grab = useXvfb && X11GRAB_ENABLED;
-    if (!useX11Grab) {
-      writeStream = createWriteStream(outputPath, { flags: "w" });
-      writeStream.on("error", (error) => {
-        Logger.error(
-          `[viewRecorder] write stream error for ${sessionId}: ${error.message}`,
-        );
-      });
-    }
+    x11GrabMode = useX11Grab;
+    writeStream = createWriteStream(outputPath, { flags: "w" });
+    writeStream.on("error", (error) => {
+      Logger.error(
+        `[viewRecorder] write stream error for ${sessionId}: ${error.message}`,
+      );
+    });
 
     // Unique identifier we plant in both:
     //   1. Chrome's `--auto-select-desktop-capture-source=...` flag, and
@@ -712,6 +714,85 @@ export const createViewRecorder = (
     });
   };
 
+  const muxX11GrabAudio = async (): Promise<void> => {
+    if (!existsSync(transcodedPath)) return;
+    try {
+      const videoSize = statSync(transcodedPath).size;
+      const audioSize = existsSync(outputPath) ? statSync(outputPath).size : 0;
+      if (videoSize < 1024 || audioSize < 1024) {
+        Logger.info(
+          `[viewRecorder] x11grab audio mux skipped for ${sessionId}: video=${videoSize} audio=${audioSize}`,
+        );
+        return;
+      }
+    } catch {
+      return;
+    }
+
+    const muxedPath = join(options.storageDir, "view.muxed.mp4");
+    await new Promise<void>((resolve) => {
+      const child = spawn(
+        FFMPEG_BIN,
+        [
+          "-y",
+          "-loglevel",
+          "error",
+          "-i",
+          transcodedPath,
+          "-i",
+          outputPath,
+          "-map",
+          "0:v:0",
+          "-map",
+          "1:a:0",
+          "-c:v",
+          "copy",
+          "-c:a",
+          "aac",
+          "-b:a",
+          `${options.audioBitrateKbps ?? 128}k`,
+          "-shortest",
+          "-movflags",
+          "+faststart",
+          muxedPath,
+        ],
+        { stdio: ["ignore", "ignore", "pipe"] },
+      );
+      let stderr = "";
+      child.stderr?.on("data", (chunk) => {
+        stderr += chunk.toString("utf8");
+      });
+      child.on("exit", (code) => {
+        if (code === 0 && existsSync(muxedPath)) {
+          try {
+            renameSync(muxedPath, transcodedPath);
+            Logger.info(`[viewRecorder] muxed x11grab audio for ${sessionId}`);
+          } catch (error) {
+            Logger.warn(
+              `[viewRecorder] failed to install muxed mp4 for ${sessionId}: ${(error as Error).message}`,
+            );
+          }
+        } else {
+          Logger.warn(
+            `[viewRecorder] x11grab audio mux failed (code ${code}): ${stderr.slice(-300)}`,
+          );
+          try {
+            if (existsSync(muxedPath)) unlinkSync(muxedPath);
+          } catch {
+            // ignore
+          }
+        }
+        resolve();
+      });
+      child.on("error", (error) => {
+        Logger.warn(
+          `[viewRecorder] x11grab audio mux spawn error: ${error.message}`,
+        );
+        resolve();
+      });
+    });
+  };
+
   const stop: ViewRecorderHandle["stop"] = async () => {
     if (stopPromise) return await stopPromise;
     if (stopped) {
@@ -784,7 +865,11 @@ export const createViewRecorder = (
       pendingChunks.clear();
       pendingBufferedBytes = 0;
 
-      await transcodeToMp4();
+      if (x11GrabMode) {
+        await muxX11GrabAudio();
+      } else {
+        await transcodeToMp4();
+      }
 
       endedAt = Date.now();
       const byteSize = existsSync(transcodedPath)

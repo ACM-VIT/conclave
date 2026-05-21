@@ -74,6 +74,7 @@ const captureIframeAudio = async (
       childList: true,
       subtree: true,
     });
+    window.setInterval(() => scan(doc), 1_000);
   };
 
   // Wait for the iframe's contentDocument to become accessible. The iframe is
@@ -295,8 +296,49 @@ export default function RecorderBotClient({
       setPhase("navigating");
       try {
         if (captureMode === "x11grab") {
+          log("setting up WebAudio iframe tap for x11grab audio");
+          const audioStream = await captureIframeAudio(
+            iframeRef.current,
+            audioBitrateKbps,
+          );
+          mediaStreamRef.current = audioStream;
           startedAtRef.current = Date.now();
-          log("x11grab capture mode: skipping browser MediaRecorder");
+          const audioMimeCandidates = [
+            "audio/webm;codecs=opus",
+            "audio/webm",
+          ];
+          const audioMimeType = audioMimeCandidates.find((candidate) =>
+            MediaRecorder.isTypeSupported(candidate),
+          );
+          log(
+            `x11grab audio mime candidates: ${audioMimeCandidates.join(", ")} → picked ${audioMimeType || "(none)"}`,
+          );
+          if (audioMimeType && audioStream.getAudioTracks().length > 0) {
+            const audioRecorder = new MediaRecorder(audioStream, {
+              mimeType: audioMimeType,
+              audioBitsPerSecond: audioBitrateKbps * 1_000,
+            });
+            mediaRecorderRef.current = audioRecorder;
+            audioRecorder.addEventListener("dataavailable", (event) => {
+              if (event.data && event.data.size > 0) {
+                log(`audio dataavailable: ${event.data.size} bytes`);
+                queueUpload(event.data);
+              } else {
+                log(`audio dataavailable: empty (size=${event.data?.size ?? "n/a"})`);
+              }
+            });
+            audioRecorder.addEventListener("error", (event) => {
+              log("audio recorder error", event);
+            });
+            audioRecorder.start(TIMESLICE_MS);
+            log(
+              `x11grab capture mode: audio recorder STARTED (${audioStream.getAudioTracks().length} a, mime=${audioMimeType}, recorder.state=${audioRecorder.state})`,
+            );
+          } else {
+            log(
+              `x11grab capture mode: no audio recorder (tracks=${audioStream.getAudioTracks().length}, mime=${audioMimeType || "none"})`,
+            );
+          }
           setPhase("recording");
           startStatusPolling();
           return;

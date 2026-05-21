@@ -61,6 +61,18 @@ const ensureWebinarAccess = (
   return true;
 };
 
+const ensureRoomRecordingAccess = (
+  options: RegisterOptions,
+  req: Request,
+  res: Response,
+): boolean => {
+  if (!hasValidSecret(req, options.sfuSecret)) {
+    res.status(401).json({ error: "Unauthorized" });
+    return false;
+  }
+  return true;
+};
+
 const guessContentType = (filename: string): string => {
   const ext = extname(filename).toLowerCase();
   switch (ext) {
@@ -83,6 +95,56 @@ export const registerRecordingRoutes = (
   app: Express,
   options: RegisterOptions,
 ): void => {
+  app.get("/rooms/:id/recordings", (req, res) => {
+    const roomId = String(req.params.id || "");
+    if (!ensureRoomRecordingAccess(options, req, res)) return;
+    const recordings = options.recordings.listRecordingsForKey(roomId);
+    res.json({ recordings });
+  });
+
+  app.get(
+    "/rooms/:id/recordings/:sessionId",
+    (req, res) => {
+      const roomId = String(req.params.id || "");
+      const sessionId = String(req.params.sessionId || "");
+      if (!ensureRoomRecordingAccess(options, req, res)) return;
+      const recording = options.recordings.getRecording(roomId, sessionId);
+      if (!recording) {
+        res.status(404).json({ error: "Recording not found" });
+        return;
+      }
+      res.json({ recording });
+    },
+  );
+
+  app.get(
+    "/rooms/:id/recordings/:sessionId/files/:filename",
+    (req, res) => {
+      const roomId = String(req.params.id || "");
+      const sessionId = String(req.params.sessionId || "");
+      const filename = String(req.params.filename || "");
+      if (!ensureRoomRecordingAccess(options, req, res)) return;
+      const path = options.recordings.resolveArtifactPath(
+        roomId,
+        sessionId,
+        filename,
+      );
+      if (!path) {
+        res.status(404).json({ error: "Recording artifact not found" });
+        return;
+      }
+      res.setHeader("Content-Type", guessContentType(filename));
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="${filename}"`,
+      );
+      res.setHeader("Cache-Control", "no-store");
+      const stream = createReadStream(path);
+      stream.on("error", () => res.end());
+      stream.pipe(res);
+    },
+  );
+
   app.get("/scheduled-webinars/:id/recordings", (req, res) => {
     const webinarId = String(req.params.id || "");
     if (!ensureWebinarAccess(options, req, res, webinarId)) return;

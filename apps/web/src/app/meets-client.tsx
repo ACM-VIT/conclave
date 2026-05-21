@@ -43,6 +43,10 @@ import { useIsMobile } from "./hooks/useIsMobile";
 import { usePrewarmSocket } from "./hooks/usePrewarmSocket";
 import { useSharedBrowser } from "./hooks/useSharedBrowser";
 import { useVoiceAgentParticipant } from "./hooks/useVoiceAgentParticipant";
+import {
+  formatBytes,
+  type RecordingSessionMetadata,
+} from "@/lib/recordings";
 import type { JoinMode } from "./lib/types";
 import {
   isSystemUserId,
@@ -799,11 +803,19 @@ export default function MeetsClient({
   );
 
   const recording = useRecording(refs.socketRef, isAdminFlag);
+  const [lastRecording, setLastRecording] =
+    useState<RecordingSessionMetadata | null>(null);
   const handleStartRecording = useCallback(() => {
+    setLastRecording(null);
     void recording.startRecording({ composite: true });
   }, [recording]);
   const handleStopRecording = useCallback(() => {
-    void recording.stopRecording();
+    void (async () => {
+      const metadata = await recording.stopRecording();
+      if (metadata) {
+        setLastRecording(metadata);
+      }
+    })();
   }, [recording]);
   const handlePauseRecording = useCallback(() => {
     void recording.pauseRecording();
@@ -1096,6 +1108,44 @@ export default function MeetsClient({
       {content}
     </AppsProvider>
   );
+  const lastRecordingTrack = lastRecording?.tracks.find(
+    (track) =>
+      track.producerUserId === "view-recorder" &&
+      track.status !== "failed" &&
+      Boolean(track.filename),
+  );
+  const lastRecordingHref =
+    lastRecording && lastRecordingTrack
+      ? lastRecording.scheduledWebinarId
+        ? `/api/webinars/scheduled/${encodeURIComponent(lastRecording.scheduledWebinarId)}/recordings/${encodeURIComponent(lastRecording.id)}/files/${encodeURIComponent(lastRecordingTrack.filename)}`
+        : `/api/rooms/${encodeURIComponent(roomId)}/recordings/${encodeURIComponent(lastRecording.id)}/files/${encodeURIComponent(lastRecordingTrack.filename)}`
+      : null;
+  const recordingDownloadPrompt =
+    lastRecordingHref && lastRecordingTrack ? (
+      <div className="fixed bottom-4 right-4 z-[120] max-w-sm rounded-lg border border-[#F95F4A]/35 bg-[#111111]/95 p-3 shadow-2xl backdrop-blur">
+        <p className="text-xs font-medium text-[#FEFCD9]">
+          Recording ready
+        </p>
+        <p className="mt-1 text-[11px] text-[#FEFCD9]/55">
+          {formatBytes(lastRecordingTrack.byteSize)} saved for this meeting.
+        </p>
+        <div className="mt-3 flex items-center gap-2">
+          <a
+            href={lastRecordingHref}
+            className="inline-flex items-center rounded-md border border-[#F95F4A]/45 bg-[#F95F4A]/10 px-3 py-1.5 text-xs text-[#F95F4A] hover:bg-[#F95F4A]/20"
+          >
+            Download MP4
+          </a>
+          <button
+            type="button"
+            onClick={() => setLastRecording(null)}
+            className="rounded-md border border-[#FEFCD9]/10 px-3 py-1.5 text-xs text-[#FEFCD9]/55 hover:text-[#FEFCD9]"
+          >
+            Dismiss
+          </button>
+        </div>
+      </div>
+    ) : null;
   const inviteCodePromptTitle =
     inviteCodePromptMode === "meeting"
       ? "Meeting Invite Code"
@@ -1381,6 +1431,7 @@ export default function MeetsClient({
         />
         {inviteCodePrompt}
         {voiceAgentKeyPrompt}
+        {recordingDownloadPrompt}
       </div>,
     );
   }
@@ -1563,6 +1614,7 @@ export default function MeetsClient({
       />
       {inviteCodePrompt}
       {voiceAgentKeyPrompt}
+      {recordingDownloadPrompt}
     </div>,
   );
 }
