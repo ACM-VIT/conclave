@@ -8,6 +8,9 @@ import {
 import { ensureWebinarRoomConfig } from "../scheduledWebinarScheduler.js";
 import { getRoomChannelId } from "../rooms.js";
 import {
+  acceptScheduledWebinarCoHostInvite,
+  buildCoHostInviteLink,
+  createScheduledWebinarCoHostInvite,
   createScheduledWebinar,
   deleteScheduledWebinar,
   getScheduledWebinarById,
@@ -20,6 +23,7 @@ import { clearWebinarLinkSlug } from "../webinar.js";
 import type { SfuState } from "../state.js";
 import type {
   CreateScheduledWebinarRequest,
+  ScheduledWebinar,
   ScheduledWebinarStatus,
   UpdateScheduledWebinarRequest,
 } from "../../types.js";
@@ -76,6 +80,22 @@ const parseStatusFilter = (
   return filtered.length ? filtered : undefined;
 };
 
+type SafeScheduledWebinar = Omit<
+  ScheduledWebinar,
+  "coHostInviteTokenHash" | "coHostInviteTokenCreatedAt"
+>;
+
+const serializeScheduledWebinar = (
+  webinar: ScheduledWebinar,
+): SafeScheduledWebinar => {
+  const {
+    coHostInviteTokenHash: _coHostInviteTokenHash,
+    coHostInviteTokenCreatedAt: _coHostInviteTokenCreatedAt,
+    ...safe
+  } = webinar;
+  return safe;
+};
+
 export const registerScheduledWebinarRoutes = (
   app: Express,
   options: RegisterOptions,
@@ -115,7 +135,7 @@ export const registerScheduledWebinarRoutes = (
       status: statusFilter,
     });
 
-    res.json({ scheduledWebinars: list });
+    res.json({ scheduledWebinars: list.map(serializeScheduledWebinar) });
   });
 
   app.post("/scheduled-webinars", (req, res) => {
@@ -146,7 +166,7 @@ export const registerScheduledWebinarRoutes = (
       Logger.info(
         `Scheduled webinar created ${webinar.id} (${webinar.linkSlug}) by ${user.email}`,
       );
-      res.status(201).json({ scheduledWebinar: webinar });
+      res.status(201).json({ scheduledWebinar: serializeScheduledWebinar(webinar) });
     } catch (error) {
       res.status(400).json({ error: (error as Error).message });
     }
@@ -160,7 +180,7 @@ export const registerScheduledWebinarRoutes = (
       res.status(404).json({ error: "Scheduled webinar not found" });
       return;
     }
-    res.json({ scheduledWebinar: webinar });
+    res.json({ scheduledWebinar: serializeScheduledWebinar(webinar) });
   });
 
   const requireWebinarAccess = (
@@ -191,7 +211,7 @@ export const registerScheduledWebinarRoutes = (
     if (!requireSecret(req, res)) return;
     const webinar = requireWebinarAccess(req, res);
     if (!webinar) return;
-    res.json({ scheduledWebinar: webinar });
+    res.json({ scheduledWebinar: serializeScheduledWebinar(webinar) });
   });
 
   app.patch("/scheduled-webinars/:id", (req, res) => {
@@ -218,7 +238,7 @@ export const registerScheduledWebinarRoutes = (
       }
       persist();
 
-      res.json({ scheduledWebinar: webinar });
+      res.json({ scheduledWebinar: serializeScheduledWebinar(webinar) });
     } catch (error) {
       res.status(400).json({ error: (error as Error).message });
     }
@@ -268,7 +288,7 @@ export const registerScheduledWebinarRoutes = (
       );
       ensureWebinarRoomConfig(state, webinar, null);
       persist();
-      res.json({ scheduledWebinar: webinar });
+      res.json({ scheduledWebinar: serializeScheduledWebinar(webinar) });
     } catch (error) {
       res.status(400).json({ error: (error as Error).message });
     }
@@ -289,7 +309,7 @@ export const registerScheduledWebinarRoutes = (
       const cfg = state.webinarConfigs.get(channelId);
       if (cfg) cfg.locked = true;
       persist();
-      res.json({ scheduledWebinar: webinar });
+      res.json({ scheduledWebinar: serializeScheduledWebinar(webinar) });
     } catch (error) {
       res.status(400).json({ error: (error as Error).message });
     }
@@ -313,7 +333,60 @@ export const registerScheduledWebinarRoutes = (
         cfg.locked = true;
       }
       persist();
-      res.json({ scheduledWebinar: webinar });
+      res.json({ scheduledWebinar: serializeScheduledWebinar(webinar) });
+    } catch (error) {
+      res.status(400).json({ error: (error as Error).message });
+    }
+  });
+
+  app.post("/scheduled-webinars/:id/cohost-invite", (req, res) => {
+    if (!requireSecret(req, res)) return;
+    const target = requireWebinarAccess(req, res);
+    if (!target) return;
+
+    try {
+      const { webinar, token } = createScheduledWebinarCoHostInvite(
+        state.scheduledWebinars,
+        target.id,
+      );
+      persist();
+      res.json({
+        coHostInviteLink: buildCoHostInviteLink(token),
+        scheduledWebinar: serializeScheduledWebinar(webinar),
+      });
+    } catch (error) {
+      res.status(400).json({ error: (error as Error).message });
+    }
+  });
+
+  app.post("/scheduled-webinars/cohost-invites/:token/accept", (req, res) => {
+    if (!requireSecret(req, res)) return;
+    const user = resolveUserContext(req);
+    if (!user.email) {
+      res.status(400).json({ error: "Signed-in email required" });
+      return;
+    }
+
+    try {
+      const token = String(req.params.token || "");
+      const webinar = acceptScheduledWebinarCoHostInvite(
+        state.scheduledWebinars,
+        token,
+        {
+          email: user.email,
+          name: user.name,
+        },
+      );
+      ensureWebinarRoomConfig(state, webinar, null);
+      persist();
+      const io = getIo?.() ?? null;
+      const channelId = getRoomChannelId(webinar.clientId, webinar.roomId);
+      const room = state.rooms.get(channelId);
+      if (io && room) {
+        emitWebinarConfigChanged(io, state, room);
+        emitWebinarAttendeeCountChanged(io, state, room);
+      }
+      res.json({ scheduledWebinar: serializeScheduledWebinar(webinar) });
     } catch (error) {
       res.status(400).json({ error: (error as Error).message });
     }

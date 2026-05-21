@@ -282,6 +282,8 @@ export interface ScheduledWebinar {
   totalJoinCount: number;
   peakAttendeeCount: number;
   webinarLink: string;
+  coHostInviteTokenHash: string | null;
+  coHostInviteTokenCreatedAt: number | null;
 }
 
 export interface CreateScheduledWebinarRequest {

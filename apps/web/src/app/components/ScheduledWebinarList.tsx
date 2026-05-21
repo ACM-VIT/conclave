@@ -8,6 +8,7 @@ import {
   Loader2,
   PlayCircle,
   RefreshCw,
+  ShieldCheck,
   Trash2,
   Users,
   Video,
@@ -96,6 +97,12 @@ export default function ScheduledWebinarList({
 }: ScheduledWebinarListProps) {
   const [now, setNow] = useState(() => Date.now());
   const [pendingId, setPendingId] = useState<string | null>(null);
+  const [pendingCoHostInviteId, setPendingCoHostInviteId] = useState<
+    string | null
+  >(null);
+  const [copiedCoHostInviteId, setCopiedCoHostInviteId] = useState<
+    string | null
+  >(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -181,6 +188,49 @@ export default function ScheduledWebinarList({
     [removeWebinar, updateWebinar],
   );
 
+  const copyCoHostInvite = useCallback(async (webinarId: string) => {
+    setPendingCoHostInviteId(webinarId);
+    setCopiedCoHostInviteId(null);
+    setError(null);
+    try {
+      const response = await fetch(
+        `/api/webinars/scheduled/${encodeURIComponent(webinarId)}/cohost-invite`,
+        { method: "POST" },
+      );
+      const data = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(
+          data && typeof data === "object" && "error" in data
+            ? String((data as { error?: string }).error || "Invite failed")
+            : "Invite failed",
+        );
+      }
+      const link =
+        data && typeof data === "object" && "coHostInviteLink" in data
+          ? String(
+              (data as { coHostInviteLink?: string }).coHostInviteLink || "",
+            )
+          : "";
+      if (!link) {
+        throw new Error("Co-host invite link was not returned.");
+      }
+      const copied = await copyToClipboard(link);
+      if (!copied) {
+        throw new Error("Copy failed. Browser clipboard access is blocked.");
+      }
+      setCopiedCoHostInviteId(webinarId);
+      window.setTimeout(() => {
+        setCopiedCoHostInviteId((current) =>
+          current === webinarId ? null : current,
+        );
+      }, 1800);
+    } catch (err) {
+      setError((err as Error).message || "Failed to create co-host invite");
+    } finally {
+      setPendingCoHostInviteId(null);
+    }
+  }, []);
+
   if (isLoading) {
     return (
       <div
@@ -231,6 +281,8 @@ export default function ScheduledWebinarList({
         const isEnded =
           webinar.status === "ended" || webinar.status === "cancelled";
         const isPending = pendingId === webinar.id;
+        const isCoHostInvitePending = pendingCoHostInviteId === webinar.id;
+        const isCoHostInviteCopied = copiedCoHostInviteId === webinar.id;
         const hostJoinHref =
           `/${encodeURIComponent(webinar.roomId)}?host=1&clientId=${encodeURIComponent(webinar.clientId)}`;
         const attendeeHref = webinar.webinarLink || `/w/${webinar.linkSlug}`;
@@ -332,6 +384,22 @@ export default function ScheduledWebinarList({
                   >
                     <Download className="h-3 w-3" /> .ics
                   </a>
+                  {!isEnded ? (
+                    <button
+                      type="button"
+                      disabled={isCoHostInvitePending}
+                      onClick={() => void copyCoHostInvite(webinar.id)}
+                      className="inline-flex items-center gap-1 rounded-md border border-emerald-300/20 px-2 py-1 text-[10px] text-emerald-200/80 hover:border-emerald-300/40 hover:text-emerald-100 disabled:opacity-40"
+                      title="Create and copy a link that grants co-host permissions to the signed-in recipient. Creating a new link replaces the previous co-host invite link."
+                    >
+                      {isCoHostInvitePending ? (
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                      ) : (
+                        <ShieldCheck className="h-3 w-3" />
+                      )}
+                      {isCoHostInviteCopied ? "Co-host link copied" : "Co-host link"}
+                    </button>
+                  ) : null}
                 </div>
               </div>
 
@@ -339,10 +407,12 @@ export default function ScheduledWebinarList({
                 {!isEnded ? (
                   <a
                     href={hostJoinHref}
+                    target="_blank"
+                    rel="noreferrer"
                     className="inline-flex items-center gap-1 rounded-md border border-[#F95F4A]/40 bg-[#F95F4A]/15 px-2.5 py-1 text-[11px] text-[#F95F4A] transition hover:border-[#F95F4A]/60 hover:bg-[#F95F4A]/25"
                   >
                     <Video className="h-3 w-3" />
-                    {isLive ? "Rejoin as host" : "Start as host"}
+                    {isLive ? "Rejoin as host" : "Join as host"}
                   </a>
                 ) : null}
                 {!isEnded && !isLive ? (

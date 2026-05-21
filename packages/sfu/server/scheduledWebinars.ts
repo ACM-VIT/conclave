@@ -1,4 +1,4 @@
-import { randomUUID, randomBytes } from "node:crypto";
+import { createHash, randomUUID, randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import type {
@@ -30,6 +30,7 @@ const MAX_CO_HOSTS = 25;
 
 const SLUG_ALPHABET = "abcdefghijkmnpqrstuvwxyz23456789";
 const RANDOM_SLUG_LENGTH = 8;
+const CO_HOST_INVITE_TOKEN_BYTES = 32;
 
 const sanitizeString = (
   value: string | undefined,
@@ -93,6 +94,12 @@ const generateRandomSlug = (): string => {
   }
   return out;
 };
+
+const generateCoHostInviteToken = (): string =>
+  randomBytes(CO_HOST_INVITE_TOKEN_BYTES).toString("base64url");
+
+const hashCoHostInviteToken = (token: string): string =>
+  createHash("sha256").update(token).digest("hex");
 
 const generateRoomId = (): string => {
   const bytes = randomBytes(4).toString("hex");
@@ -321,6 +328,13 @@ const normalizeStoredWebinar = (raw: any): ScheduledWebinar | null => {
     totalJoinCount: Number(raw.totalJoinCount) || 0,
     peakAttendeeCount: Number(raw.peakAttendeeCount) || 0,
     webinarLink: buildWebinarLink(linkSlug),
+    coHostInviteTokenHash:
+      typeof raw.coHostInviteTokenHash === "string"
+        ? raw.coHostInviteTokenHash
+        : null,
+    coHostInviteTokenCreatedAt: raw.coHostInviteTokenCreatedAt
+      ? Number(raw.coHostInviteTokenCreatedAt)
+      : null,
   };
 };
 
@@ -444,6 +458,8 @@ export const createScheduledWebinar = (
     totalJoinCount: 0,
     peakAttendeeCount: 0,
     webinarLink: buildWebinarLink(linkSlug),
+    coHostInviteTokenHash: null,
+    coHostInviteTokenCreatedAt: null,
   };
 
   indexScheduledWebinar(store, webinar);
@@ -612,6 +628,84 @@ export const recordWebinarJoin = (
     webinar.peakAttendeeCount = currentAttendeeCount;
   }
   webinar.updatedAt = Date.now();
+};
+
+export const createScheduledWebinarCoHostInvite = (
+  store: ScheduledWebinarStore,
+  id: string,
+): { webinar: ScheduledWebinar; token: string } => {
+  const webinar = store.byId.get(id);
+  if (!webinar) {
+    throw new Error("Scheduled webinar not found.");
+  }
+  if (webinar.status === "ended" || webinar.status === "cancelled") {
+    throw new Error("Cannot create a co-host link for a concluded webinar.");
+  }
+
+  const token = generateCoHostInviteToken();
+  const now = Date.now();
+  webinar.coHostInviteTokenHash = hashCoHostInviteToken(token);
+  webinar.coHostInviteTokenCreatedAt = now;
+  webinar.updatedAt = now;
+  return { webinar, token };
+};
+
+export const acceptScheduledWebinarCoHostInvite = (
+  store: ScheduledWebinarStore,
+  token: string,
+  user: { email: string; name?: string | null },
+): ScheduledWebinar => {
+  const normalizedToken = token.trim();
+  if (!normalizedToken) {
+    throw new Error("Co-host invite token is required.");
+  }
+  const tokenHash = hashCoHostInviteToken(normalizedToken);
+  const email = normalizeHostEmail(user.email);
+  if (!email || !email.includes("@")) {
+    throw new Error("A signed-in account with an email is required.");
+  }
+
+  for (const webinar of store.byId.values()) {
+    if (webinar.coHostInviteTokenHash !== tokenHash) continue;
+    if (webinar.status === "ended" || webinar.status === "cancelled") {
+      throw new Error("This co-host invite is no longer active.");
+    }
+    if (webinar.hostEmail === email) {
+      webinar.updatedAt = Date.now();
+      return webinar;
+    }
+
+    const existing = webinar.coHosts.find((entry) => entry.email === email);
+    if (existing) {
+      if (!existing.name && user.name) {
+        existing.name = sanitizeString(user.name, {
+          max: 120,
+          allowEmpty: true,
+        }) || undefined;
+      }
+      webinar.updatedAt = Date.now();
+      return webinar;
+    }
+
+    if (webinar.coHosts.length >= MAX_CO_HOSTS) {
+      throw new Error(`A webinar can have at most ${MAX_CO_HOSTS} co-hosts.`);
+    }
+
+    const name = sanitizeString(user.name || undefined, {
+      max: 120,
+      allowEmpty: true,
+    });
+    webinar.coHosts.push({ email, name: name || undefined });
+    webinar.updatedAt = Date.now();
+    return webinar;
+  }
+
+  throw new Error("Invalid or expired co-host invite.");
+};
+
+export const buildCoHostInviteLink = (token: string): string => {
+  const base = getWebinarBaseUrl().replace(/\/$/, "");
+  return `${base}/webinars/cohost/${encodeURIComponent(token)}`;
 };
 
 export const isWithinEarlyEntryWindow = (
