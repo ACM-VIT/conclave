@@ -130,6 +130,7 @@ function MobileJoinScreen({
   const hasUserIdentity = Boolean(user?.id || user?.email);
   const phase = hasUserIdentity ? "join" : (manualPhase ?? "welcome");
   const [guestName, setGuestName] = useState("");
+  const [customRoomCode, setCustomRoomCode] = useState("");
   const normalizedSegments = useMemo(
     () => normalizedRoomId.split("-"),
     [normalizedRoomId]
@@ -297,7 +298,9 @@ function MobileJoinScreen({
 
   const handleCreateRoom = () => {
     onIsAdminChange(true);
-    const id = generateRoomCode();
+    const sanitizedCustomCode = sanitizeRoomCode(customRoomCode);
+    const id =
+      sanitizedCustomCode.length >= 3 ? sanitizedCustomCode : generateRoomCode();
     if (enableRoomRouting && typeof window !== "undefined") {
       window.history.pushState(null, "", `/${id}`);
     }
@@ -820,23 +823,43 @@ function MobileJoinScreen({
                 </button>
               </div>
             ) : (
-              <button
-                onClick={handleCreateRoom}
-                disabled={isLoading}
-                className="w-full h-full flex items-center justify-center gap-2 px-4 bg-[#F95F4A] text-white rounded-full hover:bg-[#e8553f] transition-colors disabled:opacity-50"
-              >
-                {isLoading ? (
-                  <Loader2 className="w-5 h-5 animate-spin" />
-                ) : (
-                  <Plus className="w-5 h-5" />
-                )}
-                <span
-                  className="text-sm font-medium"
+              <div className="flex items-center gap-2 h-full px-2">
+                <input
+                  type="text"
+                  value={customRoomCode}
+                  onChange={(e) =>
+                    setCustomRoomCode(sanitizeRoomCodeInput(e.target.value))
+                  }
+                  placeholder="custom code or leave blank"
+                  maxLength={ROOM_CODE_MAX_LENGTH}
+                  disabled={isLoading}
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  className="relative flex-1 h-full bg-transparent px-2 text-sm text-[#FEFCD9] placeholder:text-[#FEFCD9]/30 focus:outline-none"
                   style={{ fontFamily: "'PolySans Trial', sans-serif" }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !isLoading) handleCreateRoom();
+                  }}
+                />
+                <button
+                  onClick={handleCreateRoom}
+                  disabled={isLoading}
+                  className="h-9 px-4 rounded-full bg-[#F95F4A] text-white flex items-center justify-center gap-1.5 disabled:opacity-50 transition-colors"
                 >
-                  Start Meeting
-                </span>
-              </button>
+                  {isLoading ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Plus className="w-4 h-4" />
+                  )}
+                  <span
+                    className="text-sm font-medium"
+                    style={{ fontFamily: "'PolySans Trial', sans-serif" }}
+                  >
+                    Start
+                  </span>
+                </button>
+              </div>
             )}
           </div>
 

@@ -142,6 +142,7 @@ function JoinScreen({
     return "welcome";
   });
   const [guestName, setGuestName] = useState("");
+  const [customRoomCode, setCustomRoomCode] = useState("");
   const [signInProvider, setSignInProvider] = useState<
     "google" | "apple" | "roblox" | "vercel" | null
   >(
@@ -334,7 +335,9 @@ function JoinScreen({
 
   const handleCreateRoom = () => {
     onIsAdminChange(true);
-    const id = generateRoomCode();
+    const sanitizedCustomCode = sanitizeRoomCode(customRoomCode);
+    const id =
+      sanitizedCustomCode.length >= 3 ? sanitizedCustomCode : generateRoomCode();
     if (enableRoomRouting && typeof window !== "undefined") {
       window.history.pushState(null, "", `/${id}`);
     }
@@ -763,6 +766,28 @@ function JoinScreen({
 
                 {activeTab === "new" && !isRoutedRoom ? (
                   <div className="space-y-4">
+                    <div>
+                      <label className="text-[10px] uppercase tracking-wider text-[#FEFCD9]/40 mb-1.5 block" style={{ fontFamily: "'PolySans Mono', monospace" }}>
+                        Custom Code (optional)
+                      </label>
+                      <input
+                        type="text"
+                        value={customRoomCode}
+                        onChange={(e) =>
+                          setCustomRoomCode(sanitizeRoomCodeInput(e.target.value))
+                        }
+                        placeholder="acmvit-cybersec — leave blank for random"
+                        maxLength={ROOM_CODE_MAX_LENGTH}
+                        disabled={isLoading}
+                        autoCapitalize="none"
+                        autoCorrect="off"
+                        spellCheck={false}
+                        className="w-full px-3 py-2.5 bg-[#1a1a1a] border border-[#FEFCD9]/10 rounded-lg text-sm text-[#FEFCD9] placeholder:text-[#FEFCD9]/30 focus:border-[#F95F4A]/50 focus:outline-none"
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" && !isLoading) handleCreateRoom();
+                        }}
+                      />
+                    </div>
                     {isAdmin && allowGhostMode && (
                       <>
                         <div>

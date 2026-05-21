@@ -68,8 +68,8 @@ const ROOM_WORD_MAX_LENGTH = ROOM_WORDS.reduce(
   0
 );
 const ROOM_WORD_SEPARATOR = "-";
-export const ROOM_CODE_MAX_LENGTH =
-  ROOM_WORDS_PER_CODE * ROOM_WORD_MAX_LENGTH + (ROOM_WORDS_PER_CODE - 1);
+export const ROOM_CODE_MAX_LENGTH = 64;
+export const ROOM_CODE_MIN_LENGTH = 3;
 export const WEBINAR_LINK_CODE_MAX_LENGTH = 32;
 
 export function generateRoomCode(): string {
@@ -84,24 +84,20 @@ export function generateRoomCode(): string {
 export function sanitizeRoomCode(value: string): string {
   const normalized = value
     .toLowerCase()
-    .replace(/[^a-z]+/g, ROOM_WORD_SEPARATOR)
+    .replace(/[^a-z0-9-]+/g, ROOM_WORD_SEPARATOR)
     .replace(/-+/g, ROOM_WORD_SEPARATOR)
     .replace(/^-|-$/g, "");
   if (!normalized) return "";
-  const words = normalized
-    .split(ROOM_WORD_SEPARATOR)
-    .filter(Boolean)
-    .slice(0, ROOM_WORDS_PER_CODE)
-    .map((word) => word.slice(0, ROOM_WORD_MAX_LENGTH));
-  return words.join(ROOM_WORD_SEPARATOR);
+  return normalized.slice(0, ROOM_CODE_MAX_LENGTH);
 }
 
 export function sanitizeRoomCodeInput(value: string): string {
   return value
     .toLowerCase()
-    .replace(/[^a-z]+/g, ROOM_WORD_SEPARATOR)
+    .replace(/[^a-z0-9-]+/g, ROOM_WORD_SEPARATOR)
     .replace(/-+/g, ROOM_WORD_SEPARATOR)
-    .replace(/^-+/g, "");
+    .replace(/^-+/g, "")
+    .slice(0, ROOM_CODE_MAX_LENGTH);
 }
 
 export function sanitizeWebinarLinkCode(value: string): string {
