@@ -75,6 +75,7 @@ const state = {
   attempted: 0,
   connected: 0,
   joined: 0,
+  waiting: 0,
   joinFailed: 0,
   tokenFailed: 0,
   socketErrors: 0,
@@ -108,9 +109,9 @@ async function spawnParticipant(i, isHost) {
   });
 
   let joinedOnce = false;
+  let waitingCounted = false;
 
-  socket.on("connect", () => {
-    state.connected++;
+  const emitJoin = () => {
     socket.emit(
       "joinRoom",
       {
@@ -122,12 +123,34 @@ async function spawnParticipant(i, isHost) {
         if (resp && resp.error) {
           state.joinFailed++;
           console.error(`[#${i}] join: ${resp.error}`);
-        } else if (!joinedOnce) {
+          return;
+        }
+        if (resp && resp.status === "waiting") {
+          if (!waitingCounted) {
+            waitingCounted = true;
+            state.waiting++;
+          }
+          return;
+        }
+        if (resp && resp.status === "joined" && !joinedOnce) {
           joinedOnce = true;
+          if (waitingCounted) {
+            waitingCounted = false;
+            state.waiting = Math.max(0, state.waiting - 1);
+          }
           state.joined++;
         }
       },
     );
+  };
+
+  socket.on("connect", () => {
+    state.connected++;
+    emitJoin();
+  });
+
+  socket.on("joinApproved", () => {
+    emitJoin();
   });
 
   socket.on("disconnect", () => {
@@ -156,7 +179,7 @@ async function main() {
 
   const statsTimer = setInterval(() => {
     console.log(
-      `[stats] attempted=${state.attempted} connected=${state.connected} joined=${state.joined} joinFail=${state.joinFailed} tokenFail=${state.tokenFailed} sockErr=${state.socketErrors}`,
+      `[stats] attempted=${state.attempted} connected=${state.connected} joined=${state.joined} waiting=${state.waiting} joinFail=${state.joinFailed} tokenFail=${state.tokenFailed} sockErr=${state.socketErrors}`,
     );
   }, STATS_MS);
 
