@@ -70,7 +70,7 @@ export default function CoHostInviteClient({ token }: Props) {
 
   const hostJoinHref = useMemo(() => {
     if (state.status !== "accepted") return "";
-    return `/${encodeURIComponent(state.webinar.roomId)}?host=1&clientId=${encodeURIComponent(state.webinar.clientId)}`;
+    return `/webinars/host/${encodeURIComponent(state.webinar.id)}`;
   }, [state]);
 
   return (

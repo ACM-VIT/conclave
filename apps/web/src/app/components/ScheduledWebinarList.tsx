@@ -290,7 +290,7 @@ export default function ScheduledWebinarList({
         const isCoHostInvitePending = pendingCoHostInviteId === webinar.id;
         const isCoHostInviteCopied = copiedCoHostInviteId === webinar.id;
         const isLinkCopied = copiedLinkId === webinar.id;
-        const hostJoinHref = `/${encodeURIComponent(webinar.roomId)}?host=1&clientId=${encodeURIComponent(webinar.clientId)}`;
+        const hostJoinHref = `/webinars/host/${encodeURIComponent(webinar.id)}`;
         const attendeeHref = webinar.webinarLink || `/w/${webinar.linkSlug}`;
         const isMenuOpen = openMenuId === webinar.id;
 

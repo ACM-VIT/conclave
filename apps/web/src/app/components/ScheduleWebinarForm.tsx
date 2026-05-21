@@ -60,6 +60,15 @@ type Toggle = {
   description: string;
 };
 
+type FieldProps = {
+  children: React.ReactNode;
+  span?: 1 | 2;
+};
+
+function Field({ children, span = 1 }: FieldProps) {
+  return <div className={span === 2 ? "md:col-span-2" : ""}>{children}</div>;
+}
+
 const TOGGLES: Toggle[] = [
   {
     key: "publicAccess",
@@ -191,16 +200,6 @@ export default function ScheduleWebinarForm({
       earlyEntryMinutes,
       onScheduled,
     ],
-  );
-
-  const Field = ({
-    children,
-    span = 1,
-  }: {
-    children: React.ReactNode;
-    span?: 1 | 2;
-  }) => (
-    <div className={span === 2 ? "md:col-span-2" : ""}>{children}</div>
   );
 
   return (

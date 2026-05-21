@@ -34,6 +34,7 @@ import {
   verifyInviteCode,
 } from "../../webinar.js";
 import {
+  getScheduledWebinarForRoom,
   getScheduledWebinarBySlug,
   isWithinEarlyEntryWindow,
   recordWebinarJoin,
@@ -109,6 +110,24 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           roomId = webinarTarget.roomId;
         }
 
+        let scheduledWebinarForRoom: ReturnType<
+          typeof getScheduledWebinarForRoom
+        > = null;
+        if (!isWebinarAttendeeJoin) {
+          scheduledWebinarForRoom = getScheduledWebinarForRoom(
+            state.scheduledWebinars,
+            clientId,
+            roomId,
+          );
+          if (
+            scheduledWebinarForRoom &&
+            scheduledWebinarForRoom.status !== "ended" &&
+            scheduledWebinarForRoom.status !== "cancelled"
+          ) {
+            ensureWebinarRoomConfig(state, scheduledWebinarForRoom, null);
+          }
+        }
+
         const resolvedChannelId = getRoomChannelId(clientId, roomId);
         const preexistingWebinarConfig =
           state.webinarConfigs.get(resolvedChannelId);
@@ -132,6 +151,21 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         const allowRoomCreation =
           !isWebinarAttendeeJoin &&
           (Boolean(user?.allowRoomCreation) || scheduledForcedHost);
+        const isActiveScheduledWebinarRoom =
+          Boolean(scheduledWebinarForRoom) &&
+          scheduledWebinarForRoom?.status !== "ended" &&
+          scheduledWebinarForRoom?.status !== "cancelled";
+        if (
+          isActiveScheduledWebinarRoom &&
+          !isRecorderJoin &&
+          !forcedHostJoin &&
+          !hostRequested
+        ) {
+          respond(callback, {
+            error: "Use the public webinar link to join as an attendee.",
+          });
+          return;
+        }
         const clientPolicy =
           config.clientPolicies[clientId] ?? config.clientPolicies.default;
         const displayNameCandidate = normalizeDisplayName(data?.displayName);

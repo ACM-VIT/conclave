@@ -78,6 +78,9 @@ const parseEmailList = (value: string | undefined): Set<string> =>
       .filter((entry): entry is string => Boolean(entry)),
   );
 
+const isScheduledRoomId = (value: string): boolean =>
+  /^sched-[a-f0-9]{8}$/i.test(value);
+
 const alwaysHostEmails = parseEmailList(
   firstNonEmpty(
     process.env.SFU_ALWAYS_HOST_EMAILS,
@@ -207,17 +210,19 @@ export async function POST(request: Request) {
     sessionUser?.id?.trim() || body?.user?.id?.trim() || undefined;
   const baseUserId = email || providedId || `guest-${sessionId}`;
   const isWebinarAttendeeJoin = joinMode === "webinar_attendee";
+  const isScheduledHostRoom = isScheduledRoomId(roomId);
   const isForcedHost =
     !isWebinarAttendeeJoin &&
     Boolean(
       normalizedSessionEmail && alwaysHostEmails.has(normalizedSessionEmail),
     );
+  const requestedHost = Boolean(body?.isHost ?? body?.isAdmin);
   const isHost = isWebinarAttendeeJoin
     ? false
-    : isForcedHost || Boolean(body?.isHost ?? body?.isAdmin);
+    : isForcedHost || (!isScheduledHostRoom && requestedHost);
   const allowRoomCreation = isWebinarAttendeeJoin
     ? false
-    : Boolean(body?.allowRoomCreation);
+    : !isScheduledHostRoom && Boolean(body?.allowRoomCreation);
 
   const secret = process.env.SFU_SECRET || "development-secret";
   logSecretFingerprint(secret);
