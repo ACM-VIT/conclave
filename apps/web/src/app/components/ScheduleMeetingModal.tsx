@@ -316,7 +316,7 @@ export default function ScheduleMeetingModal({
                   onChange={(e) =>
                     setRoomCode(sanitizeRoomCodeInput(e.target.value))
                   }
-                  placeholder="acmvit-cybersec — leave blank for random"
+                  placeholder="acmvit-cybersec, or leave blank for random"
                   maxLength={ROOM_CODE_MAX_LENGTH}
                   autoCapitalize="none"
                   autoCorrect="off"

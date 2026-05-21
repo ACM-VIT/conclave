@@ -830,7 +830,7 @@ function JoinScreen({
                         onChange={(e) =>
                           setCustomRoomCode(sanitizeRoomCodeInput(e.target.value))
                         }
-                        placeholder="acmvit-cybersec — leave blank for random"
+                        placeholder="acmvit-cybersec, or leave blank for random"
                         maxLength={ROOM_CODE_MAX_LENGTH}
                         disabled={isLoading}
                         autoCapitalize="none"
