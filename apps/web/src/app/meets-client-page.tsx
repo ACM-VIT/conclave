@@ -21,13 +21,19 @@ const readError = async (response: Response) => {
   return response.statusText || "Request failed";
 };
 
-const clientId = process.env.NEXT_PUBLIC_SFU_CLIENT_ID || "public";
-const isPublicClient = clientId === "public";
+const defaultClientId = process.env.NEXT_PUBLIC_SFU_CLIENT_ID || "public";
+const normalizeClientId = (value: string | undefined): string | null => {
+  const normalized = value?.trim();
+  if (!normalized) return null;
+  return /^[a-zA-Z0-9._:-]{1,64}$/.test(normalized) ? normalized : null;
+};
 
 type MeetsClientPageProps = {
   initialRoomId?: string;
   forceJoinOnly?: boolean;
   bypassMediaPermissions?: boolean;
+  broadcastMode?: boolean;
+  sfuClientId?: string;
   joinMode?: JoinMode;
   autoJoinOnMount?: boolean;
   hideJoinUI?: boolean;
@@ -44,6 +50,8 @@ export default function MeetsClientPage({
   initialRoomId,
   forceJoinOnly = false,
   bypassMediaPermissions = false,
+  broadcastMode = false,
+  sfuClientId,
   joinMode = "meeting",
   autoJoinOnMount = false,
   hideJoinUI = false,
@@ -53,6 +61,8 @@ export default function MeetsClientPage({
 }: MeetsClientPageProps) {
   const defaultUser = user;
   const resolvedIsAdmin = isAdmin;
+  const resolvedClientId = normalizeClientId(sfuClientId) || defaultClientId;
+  const isPublicClient = resolvedClientId === "public";
 
   const getJoinInfo = useCallback(
     async (
@@ -71,7 +81,7 @@ export default function MeetsClientPage({
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "x-sfu-client": clientId,
+          "x-sfu-client": resolvedClientId,
         },
         body: JSON.stringify({
           roomId,
@@ -79,7 +89,7 @@ export default function MeetsClientPage({
           user: resolvedUser,
           isHost,
           allowRoomCreation: forceJoinOnly,
-          clientId,
+          clientId: resolvedClientId,
           joinMode: resolvedJoinMode,
         }),
       });
@@ -90,20 +100,20 @@ export default function MeetsClientPage({
 
       return response.json();
     },
-    [forceJoinOnly, joinMode, defaultUser]
+    [forceJoinOnly, joinMode, defaultUser, resolvedClientId]
   );
 
   const getRooms = useCallback(async () => {
     const response = await fetch("/api/sfu/rooms", {
       cache: "no-store",
-      headers: { "x-sfu-client": clientId },
+      headers: { "x-sfu-client": resolvedClientId },
     });
     if (!response.ok) {
       throw new Error(await readError(response));
     }
     const data = (await response.json()) as { rooms?: unknown };
     return Array.isArray(data?.rooms) ? data.rooms : [];
-  }, []);
+  }, [resolvedClientId]);
 
 
   const resolvedInitialRoomId =
@@ -117,6 +127,7 @@ export default function MeetsClientPage({
         forceJoinOnly={forceJoinOnly}
         allowGhostMode={!isPublicClient}
         bypassMediaPermissions={bypassMediaPermissions}
+        broadcastMode={broadcastMode}
         joinMode={joinMode}
         autoJoinOnMount={autoJoinOnMount}
         hideJoinUI={hideJoinUI}

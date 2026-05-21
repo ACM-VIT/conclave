@@ -164,6 +164,7 @@ export class Room {
       if (client.isWebinarAttendee && !options?.includeWebinarAttendees) {
         continue;
       }
+      if (client.isRecorder) continue;
       const displayName = this.getDisplayNameForUser(userId) || userId;
       snapshot.push({ userId, displayName });
     }
@@ -251,7 +252,7 @@ export class Room {
   getMeetingParticipantCount(): number {
     let count = 0;
     for (const client of this.clients.values()) {
-      if (client.isWebinarAttendee) {
+      if (client.isObserver) {
         continue;
       }
       count += 1;
@@ -492,7 +493,7 @@ export class Room {
       if (excludeClientId && clientId === excludeClientId) {
         continue;
       }
-      if (client.isGhost || client.isWebinarAttendee) {
+      if (client.isObserver) {
         continue;
       }
       for (const info of client.getProducerInfos()) {
@@ -739,7 +740,7 @@ export class Room {
     }
 
     for (const [userId, client] of this.clients.entries()) {
-      if (client.isGhost || client.isWebinarAttendee) {
+      if (client.isObserver) {
         continue;
       }
 
@@ -759,7 +760,7 @@ export class Room {
 
   private selectWebinarActiveSpeakerUserId(): string | null {
     const candidates = Array.from(this.clients.entries()).filter(
-      ([, client]) => !client.isGhost && !client.isWebinarAttendee,
+      ([, client]) => !client.isObserver,
     );
 
     if (!candidates.length) {
@@ -770,8 +771,7 @@ export class Room {
       const dominant = this.clients.get(this.webinarDominantSpeakerUserId);
       if (
         dominant &&
-        !dominant.isGhost &&
-        !dominant.isWebinarAttendee &&
+        !dominant.isObserver &&
         this.clientHasUnpausedWebcamAudio(dominant)
       ) {
         return this.webinarDominantSpeakerUserId;
@@ -783,8 +783,7 @@ export class Room {
       const current = this.clients.get(this.webinarActiveSpeakerUserId);
       if (
         current &&
-        !current.isGhost &&
-        !current.isWebinarAttendee &&
+        !current.isObserver &&
         this.clientHasUnpausedWebcamAudio(current)
       ) {
         return this.webinarActiveSpeakerUserId;
@@ -801,8 +800,7 @@ export class Room {
       const current = this.clients.get(this.webinarActiveSpeakerUserId);
       if (
         current &&
-        !current.isGhost &&
-        !current.isWebinarAttendee &&
+        !current.isObserver &&
         this.clientHasUnpausedWebcamVideo(current)
       ) {
         return this.webinarActiveSpeakerUserId;
@@ -819,8 +817,7 @@ export class Room {
       const current = this.clients.get(this.webinarActiveSpeakerUserId);
       if (
         current &&
-        !current.isGhost &&
-        !current.isWebinarAttendee &&
+        !current.isObserver &&
         current.getProducerInfos().length > 0
       ) {
         return this.webinarActiveSpeakerUserId;

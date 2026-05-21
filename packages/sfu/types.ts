@@ -47,6 +47,7 @@ export interface JoinRoomData {
   sessionId?: string;
   displayName?: string;
   ghost?: boolean;
+  recorder?: boolean;
   webinarInviteCode?: string;
   meetingInviteCode?: string;
 }

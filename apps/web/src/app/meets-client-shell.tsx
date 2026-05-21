@@ -12,6 +12,8 @@ type MeetsClientShellProps = {
   initialRoomId?: string;
   forceJoinOnly?: boolean;
   bypassMediaPermissions?: boolean;
+  broadcastMode?: boolean;
+  sfuClientId?: string;
   joinMode?: JoinMode;
   autoJoinOnMount?: boolean;
   hideJoinUI?: boolean;
@@ -27,6 +29,8 @@ export default function MeetsClientShell({
   initialRoomId,
   forceJoinOnly,
   bypassMediaPermissions,
+  broadcastMode,
+  sfuClientId,
   joinMode,
   autoJoinOnMount,
   hideJoinUI,
@@ -38,6 +42,8 @@ export default function MeetsClientShell({
       initialRoomId={initialRoomId}
       forceJoinOnly={forceJoinOnly}
       bypassMediaPermissions={bypassMediaPermissions}
+      broadcastMode={broadcastMode}
+      sfuClientId={sfuClientId}
       joinMode={joinMode}
       autoJoinOnMount={autoJoinOnMount}
       hideJoinUI={hideJoinUI}

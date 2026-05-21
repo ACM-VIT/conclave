@@ -15,7 +15,7 @@ import { cleanupRoomBrowser } from "./sharedBrowserHandlers.js";
 
 const promoteNextAdmin = (room: Room): Admin | null => {
   for (const client of room.clients.values()) {
-    if (client instanceof Admin || client.isGhost || client.isWebinarAttendee) {
+    if (client instanceof Admin || client.isObserver) {
       continue;
     }
     const promoted = room.promoteClientToAdmin(client.id);
@@ -64,6 +64,7 @@ export const registerDisconnectHandlers = (
         const wasAdmin = activeClient instanceof Admin;
         const isGhost = activeClient.isGhost;
         const isWebinarAttendee = activeClient.isWebinarAttendee;
+        const isRecorder = activeClient.isRecorder;
         const awarenessRemovals = activeRoom.clearUserAwareness(userId);
 
         for (const removal of awarenessRemovals) {
@@ -79,7 +80,7 @@ export const registerDisconnectHandlers = (
             ghostOnly: true,
             excludeUserId: userId,
           });
-        } else if (!isWebinarAttendee) {
+        } else if (!isWebinarAttendee && !isRecorder) {
           io.to(roomChannelId).emit("userLeft", { userId });
         }
         emitWebinarAttendeeCountChanged(io, state, activeRoom);

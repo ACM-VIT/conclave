@@ -103,6 +103,7 @@ export type MeetsClientProps = {
   forceJoinOnly?: boolean;
   allowGhostMode?: boolean;
   bypassMediaPermissions?: boolean;
+  broadcastMode?: boolean;
   fontClassName?: string;
   user?: {
     id?: string;
@@ -136,6 +137,7 @@ export default function MeetsClient({
   forceJoinOnly = false,
   allowGhostMode = true,
   bypassMediaPermissions = false,
+  broadcastMode = false,
   fontClassName,
   user,
   isAdmin = false,
@@ -1132,6 +1134,9 @@ export default function MeetsClient({
         <div className="mt-3 flex items-center gap-2">
           <a
             href={lastRecordingHref}
+            target="_blank"
+            rel="noopener noreferrer"
+            download={lastRecordingTrack.filename}
             className="inline-flex items-center rounded-md border border-[#F95F4A]/45 bg-[#F95F4A]/10 px-3 py-1.5 text-xs text-[#F95F4A] hover:bg-[#F95F4A]/20"
           >
             Download MP4
@@ -1605,6 +1610,7 @@ export default function MeetsClient({
         onStopRecording={handleStopRecording}
         onPauseRecording={handlePauseRecording}
         onResumeRecording={handleResumeRecording}
+        broadcastMode={broadcastMode}
         isVoiceAgentRunning={voiceAgent.isRunning}
         isVoiceAgentStarting={voiceAgent.isStarting}
         voiceAgentError={voiceAgent.error}

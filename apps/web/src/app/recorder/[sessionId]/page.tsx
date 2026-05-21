@@ -31,6 +31,7 @@ export default async function RecorderBotPage({ params, searchParams }: Props) {
     string | string[] | undefined
   >;
   const roomId = first(resolved.roomId) ?? "";
+  const clientId = first(resolved.clientId) ?? "";
   const token = first(resolved.token) ?? "";
   const captureSourceTag = first(resolved.title) ?? `conclave-rec-${sessionId.slice(0, 8)}`;
   const captureMode =
@@ -40,6 +41,7 @@ export default async function RecorderBotPage({ params, searchParams }: Props) {
     <RecorderBotClient
       sessionId={sessionId}
       roomId={roomId}
+      clientId={clientId}
       token={token}
       captureSourceTag={captureSourceTag}
       captureMode={captureMode}

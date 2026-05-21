@@ -183,9 +183,9 @@ export const toPendingUserSnapshots = (room: Room): PendingUserSnapshot[] => {
 };
 
 export const toRoomSnapshot = (room: Room): RoomSnapshot => {
-  const participants = Array.from(room.clients.values()).map((client) =>
-    toParticipantSnapshot(room, client),
-  );
+  const participants = Array.from(room.clients.values())
+    .filter((client) => !client.isRecorder)
+    .map((client) => toParticipantSnapshot(room, client));
   const pendingUsers = toPendingUserSnapshots(room);
   const adminCount = participants.filter(
     (participant) => participant.role === "host" || participant.role === "admin",

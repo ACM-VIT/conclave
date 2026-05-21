@@ -177,6 +177,10 @@ interface MeetsMainContentProps {
   onStopRecording?: () => void;
   onPauseRecording?: () => void;
   onResumeRecording?: () => void;
+  /** Recorder-bot view: strip every UI chrome so the rendered tab is
+   * publishable as-is (no controls, header, chat, reactions, recording
+   * indicator). The participant video grid is the only thing left. */
+  broadcastMode?: boolean;
 }
 
 const getLiveVideoStream = (stream: MediaStream | null): MediaStream | null => {
@@ -361,6 +365,7 @@ export default function MeetsMainContent({
   onStopRecording,
   onPauseRecording,
   onResumeRecording,
+  broadcastMode = false,
 }: MeetsMainContentProps) {
   const {
     state: appsState,
@@ -771,7 +776,8 @@ export default function MeetsMainContent({
   }, [participantsArray]);
   return (
     <div
-      className={`flex-1 flex flex-col overflow-hidden relative ${isJoined ? "p-4" : "p-0"}`}
+      className={`flex-1 flex flex-col overflow-hidden relative ${broadcastMode ? "p-0 bg-[#060606]" : isJoined ? "p-4" : "p-0"}`}
+      data-broadcast={broadcastMode ? "1" : undefined}
     >
       {isJoined && (!isWebinarAttendee || serverRestartNotice) && (
         <ConnectionBanner
@@ -799,17 +805,19 @@ export default function MeetsMainContent({
           isWebinarAttendee ? webinarAudioPlaybackAttempt : undefined
         }
       />
-      {isJoined && reactions.length > 0 && (
+      {!broadcastMode && isJoined && reactions.length > 0 && (
         <ReactionOverlay
           reactions={reactions}
           getDisplayName={resolveDisplayName}
         />
       )}
-      <RecordingIndicator
-        active={recordingActive}
-        paused={recordingPaused}
-        startedAt={recordingStartedAt}
-      />
+      {!broadcastMode && (
+        <RecordingIndicator
+          active={recordingActive}
+          paused={recordingPaused}
+          startedAt={recordingStartedAt}
+        />
+      )}
       {isDevToolsEnabled && isJoined && !isWebinarAttendee && (
         <DevMeetToolsPanel roomId={roomId} />
       )}
@@ -1063,7 +1071,7 @@ export default function MeetsMainContent({
         </div>
       )}
 
-      {isJoined &&
+      {isJoined && !broadcastMode &&
         (isWebinarAttendee ? (
           <div className="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-black/30 px-4 py-3">
             <div>
@@ -1229,7 +1237,7 @@ export default function MeetsMainContent({
           </div>
         ))}
 
-      {isJoined && !isWebinarAttendee && isChatOpen && (
+      {isJoined && !isWebinarAttendee && !broadcastMode && isChatOpen && (
         <ChatPanel
           messages={chatMessages}
           chatInput={chatInput}
@@ -1245,7 +1253,7 @@ export default function MeetsMainContent({
         />
       )}
 
-      {isJoined && !isWebinarAttendee && isParticipantsOpen && (
+      {isJoined && !isWebinarAttendee && !broadcastMode && isParticipantsOpen && (
         <ParticipantsPanel
           participants={participants}
           currentUserId={currentUserId}
@@ -1268,6 +1276,7 @@ export default function MeetsMainContent({
 
       {isJoined &&
         !isWebinarAttendee &&
+        !broadcastMode &&
         !isChatOpen &&
         chatOverlayMessages.length > 0 && (
         <ChatOverlay

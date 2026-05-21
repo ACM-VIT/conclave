@@ -225,6 +225,7 @@ type LaunchedBrowser = {
 const buildRecorderUrl = (params: {
   recorderUrlBase: string;
   roomId: string;
+  clientId: string;
   sessionId: string;
   token: string;
   captureSourceTag: string;
@@ -238,6 +239,7 @@ const buildRecorderUrl = (params: {
   const base = params.recorderUrlBase.replace(/\/$/, "");
   const search = new URLSearchParams({
     roomId: params.roomId,
+    clientId: params.clientId,
     token: params.token,
     title: params.captureSourceTag,
     w: String(params.width),
@@ -438,6 +440,7 @@ export const createViewRecorder = (
     const url = buildRecorderUrl({
       recorderUrlBase: options.recorderUrlBase,
       roomId: options.room.id,
+      clientId: options.room.clientId,
       sessionId,
       token,
       captureSourceTag,

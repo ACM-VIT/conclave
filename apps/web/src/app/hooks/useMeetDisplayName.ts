@@ -22,6 +22,7 @@ interface UseMeetDisplayNameOptions {
   joinOptionsRef: React.MutableRefObject<{
     displayName?: string;
     isGhost: boolean;
+    isRecorder: boolean;
     joinMode: JoinMode;
     webinarInviteCode?: string;
     meetingInviteCode?: string;

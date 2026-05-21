@@ -139,6 +139,7 @@ export default function WebinarLandingClient({
         initialRoomId={webinarLinkCode}
         forceJoinOnly={true}
         bypassMediaPermissions={true}
+        sfuClientId={webinar?.clientId}
         joinMode="webinar_attendee"
         autoJoinOnMount={true}
         hideJoinUI={true}

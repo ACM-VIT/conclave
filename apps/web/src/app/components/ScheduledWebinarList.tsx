@@ -231,7 +231,8 @@ export default function ScheduledWebinarList({
         const isEnded =
           webinar.status === "ended" || webinar.status === "cancelled";
         const isPending = pendingId === webinar.id;
-        const hostJoinHref = `/${encodeURIComponent(webinar.roomId)}?host=1`;
+        const hostJoinHref =
+          `/${encodeURIComponent(webinar.roomId)}?host=1&clientId=${encodeURIComponent(webinar.clientId)}`;
         const attendeeHref = webinar.webinarLink || `/w/${webinar.linkSlug}`;
         return (
           <div

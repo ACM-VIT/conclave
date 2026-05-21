@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 type Props = {
   sessionId: string;
   roomId: string;
+  clientId?: string;
   token: string;
   captureSourceTag?: string;
   captureMode?: "mediarecorder" | "x11grab";
@@ -123,6 +124,7 @@ const captureIframeAudio = async (
 export default function RecorderBotClient({
   sessionId,
   roomId,
+  clientId,
   token,
   captureSourceTag,
   captureMode = "mediarecorder",
@@ -154,7 +156,7 @@ export default function RecorderBotClient({
   }, [captureSourceTag]);
 
   useEffect(() => {
-    log(`mount: sessionId=${sessionId} roomId=${roomId} token=${token ? `${token.slice(0, 8)}…` : "(none)"} captureSourceTag=${captureSourceTag || "(none)"} captureMode=${captureMode} w=${width} h=${height} fps=${fps} vb=${videoBitrateKbps}k ab=${audioBitrateKbps}k`);
+    log(`mount: sessionId=${sessionId} roomId=${roomId} clientId=${clientId || "(default)"} token=${token ? `${token.slice(0, 8)}…` : "(none)"} captureSourceTag=${captureSourceTag || "(none)"} captureMode=${captureMode} w=${width} h=${height} fps=${fps} vb=${videoBitrateKbps}k ab=${audioBitrateKbps}k`);
     if (!roomId || !token || !sessionId) {
       log("ERROR: missing credentials, aborting");
       setError("Missing recorder credentials");
@@ -522,9 +524,23 @@ export default function RecorderBotClient({
       void stopRecording("page-exit");
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId, roomId, token, captureMode]);
+  }, [sessionId, roomId, clientId, token, captureMode]);
 
-  const attendeeUrl = `/${encodeURIComponent(roomId)}?autojoin=1&hide=1&recorder=1&name=Recorder%20Bot`;
+  const attendeeParams = new URLSearchParams({
+    autojoin: "1",
+    hide: "1",
+    recorder: "1",
+    // broadcast=1 strips every UI chrome element (controls bar, header,
+    // chat, participants panel, reactions, recording indicator) so the
+    // rendered tab Chromium paints into Xvfb is a clean video-grid view
+    // ready to publish to YouTube/etc.
+    broadcast: "1",
+    name: "Recorder Bot",
+  });
+  if (clientId?.trim()) {
+    attendeeParams.set("clientId", clientId.trim());
+  }
+  const attendeeUrl = `/${encodeURIComponent(roomId)}?${attendeeParams.toString()}`;
 
   return (
     <div

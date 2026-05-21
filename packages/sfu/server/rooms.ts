@@ -70,12 +70,14 @@ const cleanupRoomState = (state: SfuState, channelId: string): Room | null => {
 
   const webinarConfig = state.webinarConfigs.get(channelId);
   if (webinarConfig) {
-    clearWebinarLinkSlug({
-      webinarConfig,
-      webinarLinks: state.webinarLinks,
-      roomChannelId: channelId,
-    });
-    state.webinarConfigs.delete(channelId);
+    if (!webinarConfig.scheduledWebinarId) {
+      clearWebinarLinkSlug({
+        webinarConfig,
+        webinarLinks: state.webinarLinks,
+        roomChannelId: channelId,
+      });
+      state.webinarConfigs.delete(channelId);
+    }
   }
 
   room.close();

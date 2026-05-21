@@ -181,6 +181,9 @@ export default function WebinarRecordingsPanel({
                 {viewTrack && viewTrack.filename && viewTrack.status !== "failed" ? (
                   <a
                     href={downloadHref(webinarId, session.id, viewTrack.filename)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    download={viewTrack.filename}
                     className="mt-2 inline-flex items-center gap-2 rounded-md border border-[#F95F4A]/40 bg-[#F95F4A]/10 px-3 py-2 text-xs text-[#F95F4A] transition hover:border-[#F95F4A]/60 hover:bg-[#F95F4A]/20"
                   >
                     <Film className="h-3.5 w-3.5" />
@@ -192,6 +195,9 @@ export default function WebinarRecordingsPanel({
                 {composite?.status === "completed" && composite.filename ? (
                   <a
                     href={downloadHref(webinarId, session.id, composite.filename)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    download={composite.filename}
                     className="mt-2 inline-flex items-center gap-1 rounded-md border border-emerald-300/40 bg-emerald-300/10 px-2.5 py-1 text-[11px] text-emerald-200 transition hover:border-emerald-300/60"
                   >
                     <Download className="h-3 w-3" />
@@ -235,6 +241,9 @@ export default function WebinarRecordingsPanel({
                             session.id,
                             track.filename,
                           )}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          download={track.filename}
                           className="inline-flex items-center gap-1 rounded-md border border-[#FEFCD9]/10 px-2 py-0.5 text-[10px] text-[#FEFCD9]/65 hover:border-[#FEFCD9]/25 hover:text-[#FEFCD9]"
                         >
                           <Download className="h-3 w-3" />

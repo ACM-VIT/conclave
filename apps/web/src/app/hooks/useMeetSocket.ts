@@ -1726,6 +1726,7 @@ export function useMeetSocket({
       joinOptions: {
         displayName?: string;
         isGhost: boolean;
+        isRecorder: boolean;
         joinMode: JoinMode;
         webinarInviteCode?: string;
         meetingInviteCode?: string;
@@ -1745,6 +1746,7 @@ export function useMeetSocket({
             sessionId: sessionIdRef.current,
             displayName: joinOptions.displayName,
             ghost: joinOptions.isGhost,
+            recorder: joinOptions.isRecorder,
             webinarInviteCode: joinOptions.webinarInviteCode,
             meetingInviteCode: joinOptions.meetingInviteCode,
           },
@@ -1850,6 +1852,7 @@ export function useMeetSocket({
               const shouldProduce =
                 !!stream &&
                 !joinOptions.isGhost &&
+                !joinOptions.isRecorder &&
                 joinOptions.joinMode !== "webinar_attendee";
 
               await Promise.all([
@@ -2671,6 +2674,7 @@ export function useMeetSocket({
               let stream = localStreamRef.current;
               const shouldRequestMedia =
                 !joinOptions.isGhost &&
+                !joinOptions.isRecorder &&
                 joinOptions.joinMode !== "webinar_attendee" &&
                 !bypassMediaPermissions;
 
@@ -2685,6 +2689,7 @@ export function useMeetSocket({
                 currentRoomIdRef.current &&
                 (stream ||
                   joinOptions.isGhost ||
+                  joinOptions.isRecorder ||
                   joinOptions.joinMode === "webinar_attendee" ||
                   bypassMediaPermissions)
               ) {
@@ -2978,6 +2983,7 @@ export function useMeetSocket({
             reconnectRoomId &&
             (stream ||
               joinOptions.isGhost ||
+              joinOptions.isRecorder ||
               joinOptions.joinMode === "webinar_attendee" ||
               bypassMediaPermissions)
           ) {
@@ -3110,17 +3116,20 @@ export function useMeetSocket({
       const joinOptions: {
         displayName?: string;
         isGhost: boolean;
+        isRecorder: boolean;
         joinMode: JoinMode;
         webinarInviteCode?: string;
         meetingInviteCode?: string;
       } = {
         displayName: isAdmin ? normalizedDisplayName || undefined : undefined,
         isGhost: ghostEnabled,
+        isRecorder: bypassMediaPermissions,
         joinMode,
       };
       joinOptionsRef.current = joinOptions;
       const shouldRequestMedia =
         !joinOptions.isGhost &&
+        !joinOptions.isRecorder &&
         joinOptions.joinMode !== "webinar_attendee" &&
         !bypassMediaPermissions;
 

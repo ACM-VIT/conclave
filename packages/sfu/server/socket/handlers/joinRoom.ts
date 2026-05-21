@@ -33,7 +33,12 @@ import {
   toWebinarConfigSnapshot,
   verifyInviteCode,
 } from "../../webinar.js";
-import { recordWebinarJoin } from "../../scheduledWebinars.js";
+import {
+  getScheduledWebinarBySlug,
+  isWithinEarlyEntryWindow,
+  recordWebinarJoin,
+} from "../../scheduledWebinars.js";
+import { ensureWebinarRoomConfig } from "../../scheduledWebinarScheduler.js";
 import type { ConnectionContext } from "../context.js";
 import { registerAdminHandlers } from "./adminHandlers.js";
 import { respond } from "./ack.js";
@@ -66,15 +71,37 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             ? "webinar_attendee"
             : "meeting";
         const isWebinarAttendeeJoin = joinMode === "webinar_attendee";
+        const isRecorderJoin =
+          !isWebinarAttendeeJoin && Boolean(data?.recorder);
         const clientId =
           typeof user?.clientId === "string" ? user.clientId : "default";
         let roomId = requestedRoomId;
         if (isWebinarAttendeeJoin) {
-          const webinarTarget = resolveWebinarLinkTarget(
+          let webinarTarget = resolveWebinarLinkTarget(
             state.webinarLinks,
             requestedRoomId,
             clientId,
           );
+          if (!webinarTarget) {
+            const scheduledWebinar = getScheduledWebinarBySlug(
+              state.scheduledWebinars,
+              requestedRoomId,
+            );
+            const canRebindScheduledLink =
+              scheduledWebinar &&
+              scheduledWebinar.clientId === clientId &&
+              scheduledWebinar.status !== "ended" &&
+              scheduledWebinar.status !== "cancelled" &&
+              isWithinEarlyEntryWindow(scheduledWebinar);
+            if (canRebindScheduledLink) {
+              ensureWebinarRoomConfig(state, scheduledWebinar, null);
+              webinarTarget = resolveWebinarLinkTarget(
+                state.webinarLinks,
+                requestedRoomId,
+                clientId,
+              );
+            }
+          }
           if (!webinarTarget) {
             respond(callback, { error: "Webinar is not live." });
             return;
@@ -490,6 +517,12 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             socket,
             mode: "webinar_attendee",
           });
+        } else if (isRecorderJoin) {
+          context.currentClient = new Client({
+            id: userId,
+            socket,
+            mode: "recorder",
+          });
         } else {
           context.currentClient = new Client({
             id: userId,
@@ -530,7 +563,11 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         const resolvedDisplayName =
           context.currentRoom.getDisplayNameForUser(userId) || displayName;
         if (!wasReconnecting) {
-          if (context.currentClient.isGhost) {
+          if (context.currentClient.isRecorder) {
+            // Recorder bots are hidden implementation clients. They need the
+            // full producer snapshot to render the meeting, but should not
+            // appear in participant rosters or join/leave notifications.
+          } else if (context.currentClient.isGhost) {
             emitUserJoined(context.currentRoom, userId, resolvedDisplayName, {
               ghostOnly: true,
               excludeUserId: userId,
