@@ -30,7 +30,8 @@ const loadWebinarForHost = async (
 
   if (!authResult.ok) {
     if (authResult.status === 401) {
-      redirect("/");
+      const returnPath = `/webinars/host/${encodeURIComponent(id)}`;
+      redirect(`/?next=${encodeURIComponent(returnPath)}`);
     }
     return null;
   }

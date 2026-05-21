@@ -44,10 +44,10 @@ const googleJwks = createRemoteJWKSet(
 
 export const auth = betterAuth({
   session: {
-    expiresIn: 60 * 60 * 24 * 7, 
+    expiresIn: 60 * 60 * 24 * 7,
     cookieCache: {
       enabled: true,
-      maxAge: 60 * 5,
+      maxAge: 60,
     },
   },
   user: {

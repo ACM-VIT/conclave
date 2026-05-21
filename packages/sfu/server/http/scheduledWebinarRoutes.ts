@@ -15,6 +15,7 @@ import {
   deleteScheduledWebinar,
   getScheduledWebinarById,
   getScheduledWebinarBySlug,
+  getScheduledWebinarForRoom,
   listScheduledWebinars,
   persistScheduledWebinars,
   updateScheduledWebinar,
@@ -176,6 +177,26 @@ export const registerScheduledWebinarRoutes = (
     if (!requireSecret(req, res)) return;
     const slug = String(req.params.slug || "");
     const webinar = getScheduledWebinarBySlug(state.scheduledWebinars, slug);
+    if (!webinar) {
+      res.status(404).json({ error: "Scheduled webinar not found" });
+      return;
+    }
+    res.json({ scheduledWebinar: serializeScheduledWebinar(webinar) });
+  });
+
+  app.get("/scheduled-webinars/by-room/:clientId/:roomId", (req, res) => {
+    if (!requireSecret(req, res)) return;
+    const clientId = String(req.params.clientId || "").trim();
+    const roomId = String(req.params.roomId || "").trim();
+    if (!clientId || !roomId) {
+      res.status(400).json({ error: "Missing clientId or roomId" });
+      return;
+    }
+    const webinar = getScheduledWebinarForRoom(
+      state.scheduledWebinars,
+      clientId,
+      roomId,
+    );
     if (!webinar) {
       res.status(404).json({ error: "Scheduled webinar not found" });
       return;

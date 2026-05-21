@@ -105,3 +105,55 @@ export const resolveScheduledWebinarsBase = (): string => {
   const base = resolveSfuUrl().replace(/\/$/, "");
   return `${base}/scheduled-webinars`;
 };
+
+export type ScheduledWebinarHostInfo = {
+  id: string;
+  roomId: string;
+  hostEmail: string;
+  coHostEmails: string[];
+  status: string;
+};
+
+export const lookupScheduledWebinarByRoomId = async (
+  clientId: string,
+  roomId: string,
+): Promise<ScheduledWebinarHostInfo | null> => {
+  try {
+    const base = resolveScheduledWebinarsBase();
+    const response = await fetch(
+      `${base}/by-room/${encodeURIComponent(clientId)}/${encodeURIComponent(roomId)}`,
+      {
+        method: "GET",
+        headers: {
+          "x-sfu-secret": resolveSfuSecret(),
+          accept: "application/json",
+        },
+        cache: "no-store",
+      },
+    );
+    if (!response.ok) return null;
+    const data = (await response.json()) as {
+      scheduledWebinar?: {
+        id?: string;
+        roomId?: string;
+        hostEmail?: string;
+        coHosts?: Array<{ email?: string }>;
+        status?: string;
+      };
+    };
+    const w = data?.scheduledWebinar;
+    if (!w?.id || !w?.roomId) return null;
+    const coHostEmails = (w.coHosts ?? [])
+      .map((entry) => (entry?.email || "").trim().toLowerCase())
+      .filter(Boolean);
+    return {
+      id: w.id,
+      roomId: w.roomId,
+      hostEmail: (w.hostEmail || "").trim().toLowerCase(),
+      coHostEmails,
+      status: w.status || "",
+    };
+  } catch {
+    return null;
+  }
+};

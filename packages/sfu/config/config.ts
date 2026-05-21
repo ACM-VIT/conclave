@@ -152,7 +152,7 @@ export const config = {
   clientPolicies,
   workerSettings: {
     rtcMinPort: toNumber(process.env.RTC_MIN_PORT, 40000),
-    rtcMaxPort: toNumber(process.env.RTC_MAX_PORT, 41000),
+    rtcMaxPort: toNumber(process.env.RTC_MAX_PORT, 49999),
     logLevel: "warn" as WorkerLogLevel,
     logTags: ["info", "ice", "dtls", "rtp", "srtp", "rtcp"] as WorkerLogTag[],
   },

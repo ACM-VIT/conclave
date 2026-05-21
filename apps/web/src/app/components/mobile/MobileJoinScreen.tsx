@@ -162,6 +162,24 @@ function MobileJoinScreen({
   const isSignedInUser = Boolean((session?.user || user) && !user?.id?.startsWith("guest-"));
   const lastAppliedSessionUserIdRef = useRef<string | null>(null);
 
+  const [nextParam, setNextParam] = useState<string | null>(null);
+  const hasPushedNextRef = useRef(false);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const candidate = params.get("next");
+    if (!candidate) return;
+    if (!candidate.startsWith("/") || candidate.startsWith("//")) return;
+    setNextParam(candidate);
+  }, []);
+  useEffect(() => {
+    if (!nextParam) return;
+    if (!session?.user) return;
+    if (hasPushedNextRef.current) return;
+    hasPushedNextRef.current = true;
+    window.location.href = nextParam;
+  }, [nextParam, session]);
+
   useEffect(() => {
     if (!session?.user) {
       lastAppliedSessionUserIdRef.current = null;

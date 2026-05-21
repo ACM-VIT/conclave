@@ -2,6 +2,7 @@ import jwt from "jsonwebtoken";
 import { createHash } from "node:crypto";
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
+import { lookupScheduledWebinarByRoomId } from "@/lib/sfu-user-auth";
 
 export const runtime = "nodejs";
 
@@ -217,9 +218,28 @@ export async function POST(request: Request) {
       normalizedSessionEmail && alwaysHostEmails.has(normalizedSessionEmail),
     );
   const requestedHost = Boolean(body?.isHost ?? body?.isAdmin);
+
+  // For scheduled webinar rooms, only the actual host or a registered co-host
+  // may claim host status. We resolve this by looking the scheduled webinar
+  // up by roomId on the SFU and matching the session email.
+  let scheduledRoomHostMatch = false;
+  if (isScheduledHostRoom && !isWebinarAttendeeJoin && normalizedSessionEmail) {
+    const scheduled = await lookupScheduledWebinarByRoomId(clientId, roomId);
+    if (scheduled) {
+      if (
+        scheduled.hostEmail === normalizedSessionEmail ||
+        scheduled.coHostEmails.includes(normalizedSessionEmail)
+      ) {
+        scheduledRoomHostMatch = true;
+      }
+    }
+  }
+
   const isHost = isWebinarAttendeeJoin
     ? false
-    : isForcedHost || (!isScheduledHostRoom && requestedHost);
+    : isForcedHost ||
+      scheduledRoomHostMatch ||
+      (!isScheduledHostRoom && requestedHost);
   const allowRoomCreation = isWebinarAttendeeJoin
     ? false
     : !isScheduledHostRoom && Boolean(body?.allowRoomCreation);
@@ -240,7 +260,7 @@ export async function POST(request: Request) {
       joinMode,
     },
     secret,
-    { expiresIn: "1h" }
+    { expiresIn: "12h" },
   );
 
   const iceServers = resolveIceServers();

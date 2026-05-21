@@ -73,6 +73,12 @@ export default function CoHostInviteClient({ token }: Props) {
     return `/webinars/host/${encodeURIComponent(state.webinar.id)}`;
   }, [state]);
 
+  const signInHref = useMemo(
+    () =>
+      `/?next=${encodeURIComponent(`/webinars/cohost/${encodeURIComponent(token)}`)}`,
+    [token],
+  );
+
   return (
     <div
       className="flex min-h-screen items-center justify-center bg-[#060606] px-4 text-[#FEFCD9]"
@@ -138,7 +144,7 @@ export default function CoHostInviteClient({ token }: Props) {
             </h1>
             <p className="mt-2 text-sm text-[#FEFCD9]/55">{state.message}</p>
             <a
-              href={state.authRequired ? "/" : "/webinars"}
+              href={state.authRequired ? signInHref : "/webinars"}
               className="mt-5 inline-flex items-center rounded-md border border-[#FEFCD9]/10 px-3 py-2 text-sm text-[#FEFCD9]/70 hover:border-[#FEFCD9]/25 hover:text-[#FEFCD9]"
             >
               {state.authRequired ? "Sign in" : "Open webinar console"}
