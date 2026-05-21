@@ -290,7 +290,12 @@ export default function RecorderBotClient({
             systemAudio: "exclude",
             surfaceSwitching: "exclude",
           } as DisplayMediaStreamOptions);
-          log(`getDisplayMedia ok: v=${displayStream.getVideoTracks().length} a=${displayStream.getAudioTracks().length}`);
+          const vt0 = displayStream.getVideoTracks()[0];
+          const settings = vt0?.getSettings?.() ?? {};
+          log(
+            `getDisplayMedia ok: v=${displayStream.getVideoTracks().length} a=${displayStream.getAudioTracks().length} ` +
+              `settings={w:${settings.width ?? "?"} h:${settings.height ?? "?"} fps:${settings.frameRate ?? "?"} surface:${(settings as any).displaySurface ?? "?"}}`,
+          );
         } catch (err) {
           throw new Error(
             "getDisplayMedia(video-only) failed: " + (err as Error).message,
@@ -308,14 +313,24 @@ export default function RecorderBotClient({
         for (const t of audioStream.getAudioTracks()) combined.addTrack(t);
         mediaStreamRef.current = combined;
 
+        // VP8 first: the VP9 software encoder in Chrome on Xvfb/swiftshader
+        // produces empty `dataavailable` blobs (seen via heartbeat:
+        // `dataavailable: empty (size=0)` for the entire recording). VP8 has
+        // a much more battle-tested software encoder path. H.264 isn't
+        // bundled with Chromium-on-debian. Override via ?mime=… query if
+        // we ever need to force a specific codec.
+        const overrideMime =
+          new URLSearchParams(window.location.search).get("mime") || "";
         const mimeCandidates = [
-          "video/webm;codecs=vp9,opus",
+          ...(overrideMime ? [overrideMime] : []),
           "video/webm;codecs=vp8,opus",
+          "video/webm;codecs=vp9,opus",
           "video/webm",
         ];
         const mimeType = mimeCandidates.find((candidate) =>
           MediaRecorder.isTypeSupported(candidate),
         );
+        log(`mime candidates: ${mimeCandidates.join(", ")} → picked ${mimeType || "(none)"}`);
         if (!mimeType) {
           throw new Error("MediaRecorder has no compatible WebM codec");
         }
