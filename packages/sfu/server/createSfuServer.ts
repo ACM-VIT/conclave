@@ -4,7 +4,12 @@ import type { Express } from "express";
 import type { Server as SocketIOServer } from "socket.io";
 import { config as defaultConfig } from "../config/config.js";
 import { Logger } from "../utilities/loggers.js";
-import { initMediaSoup, initScheduledWebinars } from "./init.js";
+import {
+  initMediaSoup,
+  initScheduledMeetings,
+  initScheduledWebinars,
+} from "./init.js";
+import { advanceScheduledMeetings } from "./scheduledMeetings.js";
 import { createSfuApp } from "./http/createApp.js";
 import {
   startScheduledWebinarTimer,
@@ -53,10 +58,25 @@ export const createSfuServer = (
   const httpServer = createHttpServer(app);
   io = createSfuSocketServer(httpServer, { state, config, recordings });
 
+  let scheduledMeetingTickTimer: NodeJS.Timeout | null = null;
+
   const start = async (): Promise<void> => {
     await initMediaSoup(state);
     initScheduledWebinars(state);
+    initScheduledMeetings(state);
     startScheduledWebinarTimer(state, () => io, undefined, recordings);
+    scheduledMeetingTickTimer = setInterval(() => {
+      const changed = advanceScheduledMeetings(state.scheduledMeetings);
+      if (changed > 0 && state.scheduledMeetingPersistence) {
+        try {
+          state.scheduledMeetingPersistence.save(
+            Array.from(state.scheduledMeetings.byId.values()),
+          );
+        } catch (error) {
+          Logger.warn("Failed to persist scheduled-meeting tick", error);
+        }
+      }
+    }, 5000);
     void isFfmpegAvailable();
 
     await new Promise<void>((resolve) => {
@@ -69,8 +89,14 @@ export const createSfuServer = (
 
   const stop = async (): Promise<void> => {
     stopScheduledWebinarTimer(state);
+    if (scheduledMeetingTickTimer) {
+      clearInterval(scheduledMeetingTickTimer);
+      scheduledMeetingTickTimer = null;
+    }
     state.scheduledWebinarPersistence?.close?.();
     state.scheduledWebinarPersistence = null;
+    state.scheduledMeetingPersistence?.close?.();
+    state.scheduledMeetingPersistence = null;
     io.close();
 
     await new Promise<void>((resolve, reject) => {

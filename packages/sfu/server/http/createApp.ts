@@ -23,6 +23,7 @@ import {
 } from "../admin/controlPlane.js";
 import { forceCloseRoom, markRoomEnded } from "../rooms.js";
 import { registerScheduledWebinarRoutes } from "./scheduledWebinarRoutes.js";
+import { registerScheduledMeetingRoutes } from "./scheduledMeetingRoutes.js";
 import { registerRecordingRoutes } from "./recordingRoutes.js";
 import { registerRecorderBotRoutes } from "./recorderBotRoutes.js";
 import type { RecordingManager } from "../recording/recordingManager.js";
@@ -1234,6 +1235,11 @@ export const createSfuApp = ({
     state,
     sfuSecret: config.sfuSecret,
     getIo,
+  });
+
+  registerScheduledMeetingRoutes(app, {
+    state,
+    sfuSecret: config.sfuSecret,
   });
 
   registerRecordingRoutes(app, {

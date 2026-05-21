@@ -1,6 +1,13 @@
-import { use } from "react";
+import { headers as nextHeaders } from "next/headers";
 import MeetsClientShell from "../meets-client-shell";
 import { sanitizeRoomCode, sanitizeWebinarLinkCode } from "../lib/utils";
+import ScheduledMeetingLanding from "../components/ScheduledMeetingLanding";
+import {
+  isMeetingJoinable,
+  lookupPublicScheduledMeetingByRoomCode,
+  lookupScheduledMeetingHostEmail,
+} from "@/lib/scheduled-meetings";
+import { auth } from "@/lib/auth";
 
 type MeetRoomPageProps = {
   params: Promise<{ code: string }>;
@@ -33,12 +40,27 @@ const sanitizeClientId = (
   return /^[a-zA-Z0-9._:-]{1,64}$/.test(candidate) ? candidate : undefined;
 };
 
-export default function MeetRoomPage({ params, searchParams }: MeetRoomPageProps) {
-  const { code } = use(params);
-  const resolvedSearchParams = use(searchParams ?? Promise.resolve({})) as Record<
-    string,
-    string | string[] | undefined
-  >;
+const resolveSessionEmail = async (): Promise<string | null> => {
+  try {
+    const headers = await nextHeaders();
+    const session = await auth.api
+      .getSession({ headers })
+      .catch(() => null);
+    const email = session?.user?.email?.trim().toLowerCase();
+    return email || null;
+  } catch {
+    return null;
+  }
+};
+
+export default async function MeetRoomPage({
+  params,
+  searchParams,
+}: MeetRoomPageProps) {
+  const { code } = await params;
+  const resolvedSearchParams = (await (searchParams ?? Promise.resolve(
+    {} as Record<string, string | string[] | undefined>,
+  ))) as Record<string, string | string[] | undefined>;
   const rawCode = typeof code === "string" ? code : "";
   const roomCode = decodeURIComponent(rawCode);
   const resolvedRoomCode =
@@ -46,9 +68,6 @@ export default function MeetRoomPage({ params, searchParams }: MeetRoomPageProps
   const bypassMediaPermissions = isTruthyParam(
     resolvedSearchParams.recorder
   );
-  // `broadcast=1` (only honored alongside recorder=1, i.e. the headless
-  // bot path) hides every UI chrome element so the rendered tab is
-  // publishable as-is.
   const broadcastMode =
     bypassMediaPermissions && isTruthyParam(resolvedSearchParams.broadcast);
   const devOverridesEnabled = process.env.NODE_ENV === "development";
@@ -75,6 +94,37 @@ export default function MeetRoomPage({ params, searchParams }: MeetRoomPageProps
   const user = displayName ? { name: displayName } : undefined;
   const isAdmin =
     devOverridesEnabled && isTruthyParam(resolvedSearchParams.admin);
+
+  // Scheduled-meeting gate: render the countdown landing if a meeting is
+  // booked for this room code and the start time is still in the future.
+  // The recorder bot path bypasses the gate so the headless bot can join
+  // ahead of attendees when the host fires it manually.
+  if (sanitizedRoomCode && !bypassMediaPermissions) {
+    const clientIdForLookup = sfuClientId || "default";
+    const scheduled = await lookupPublicScheduledMeetingByRoomCode(
+      clientIdForLookup,
+      sanitizedRoomCode,
+    );
+    if (scheduled && !isMeetingJoinable(scheduled)) {
+      const [sessionEmail, hostEmail] = await Promise.all([
+        resolveSessionEmail(),
+        lookupScheduledMeetingHostEmail(
+          clientIdForLookup,
+          sanitizedRoomCode,
+        ),
+      ]);
+      const viewerIsHost = Boolean(
+        sessionEmail && hostEmail && sessionEmail === hostEmail,
+      );
+      return (
+        <ScheduledMeetingLanding
+          meeting={scheduled}
+          viewerIsHost={viewerIsHost}
+        />
+      );
+    }
+  }
+
   return (
     <MeetsClientShell
       initialRoomId={sanitizedRoomCode}

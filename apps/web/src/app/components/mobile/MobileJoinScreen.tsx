@@ -3,6 +3,8 @@
 import {
   AlertCircle,
   ArrowRight,
+  CalendarClock,
+  Copy,
   Loader2,
   Mic,
   MicOff,
@@ -11,9 +13,11 @@ import {
   Video,
   VideoOff,
 } from "lucide-react";
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { signIn, signOut, useSession } from "@/lib/auth-client";
 import type { ConnectionState, MeetError } from "../../lib/types";
+import type { ScheduledMeeting } from "@/lib/scheduled-meetings";
+import ScheduleMeetingModal from "../ScheduleMeetingModal";
 import {
   DEFAULT_AUDIO_CONSTRAINTS,
   STANDARD_QUALITY_CONSTRAINTS,
@@ -131,6 +135,11 @@ function MobileJoinScreen({
   const phase = hasUserIdentity ? "join" : (manualPhase ?? "welcome");
   const [guestName, setGuestName] = useState("");
   const [customRoomCode, setCustomRoomCode] = useState("");
+  const [isScheduleOpen, setIsScheduleOpen] = useState(false);
+  const [upcomingMeetings, setUpcomingMeetings] = useState<ScheduledMeeting[]>(
+    [],
+  );
+  const [copiedMeetingId, setCopiedMeetingId] = useState<string | null>(null);
   const normalizedSegments = useMemo(
     () => normalizedRoomId.split("-"),
     [normalizedRoomId]
@@ -307,6 +316,53 @@ function MobileJoinScreen({
     onRoomIdChange(id);
     onJoinRoom(id);
   };
+
+  const refreshUpcomingMeetings = useCallback(async () => {
+    if (!isSignedInUser) {
+      setUpcomingMeetings([]);
+      return;
+    }
+    try {
+      const response = await fetch(
+        "/api/meetings/scheduled?status=scheduled,live",
+        { cache: "no-store" },
+      );
+      if (!response.ok) {
+        setUpcomingMeetings([]);
+        return;
+      }
+      const data = (await response.json()) as {
+        scheduledMeetings?: ScheduledMeeting[];
+      };
+      setUpcomingMeetings(data?.scheduledMeetings ?? []);
+    } catch {
+      setUpcomingMeetings([]);
+    }
+  }, [isSignedInUser]);
+
+  useEffect(() => {
+    if (phase !== "join") return;
+    if (activeTab !== "new") return;
+    void refreshUpcomingMeetings();
+  }, [phase, activeTab, refreshUpcomingMeetings]);
+
+  const handleCopyMeetingLink = useCallback(async (meeting: ScheduledMeeting) => {
+    if (typeof window === "undefined") return;
+    const link = `${window.location.origin}/${meeting.roomCode}`;
+    try {
+      await navigator.clipboard.writeText(link);
+      setCopiedMeetingId(meeting.id);
+      setTimeout(
+        () =>
+          setCopiedMeetingId((current) =>
+            current === meeting.id ? null : current,
+          ),
+        1800,
+      );
+    } catch {
+      setCopiedMeetingId(null);
+    }
+  }, []);
 
   const handleSocialSignIn = async (
     provider: "google" | "apple" | "roblox" | "vercel"
@@ -863,6 +919,76 @@ function MobileJoinScreen({
             )}
           </div>
 
+          {isSignedInUser && activeTab === "new" && !isRoutedRoom && (
+            <button
+              type="button"
+              onClick={() => setIsScheduleOpen(true)}
+              disabled={isLoading}
+              className="mt-3 w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-full border border-[#FEFCD9]/15 text-[#FEFCD9]/85 hover:border-[#FEFCD9]/35 hover:text-[#FEFCD9] transition-colors disabled:opacity-50"
+            >
+              <CalendarClock className="w-4 h-4" />
+              <span
+                className="text-sm font-medium"
+                style={{ fontFamily: "'PolySans Trial', sans-serif" }}
+              >
+                Schedule a meeting
+              </span>
+            </button>
+          )}
+
+          {isSignedInUser &&
+            activeTab === "new" &&
+            !isRoutedRoom &&
+            upcomingMeetings.length > 0 && (
+              <div className="mt-3 space-y-1.5">
+                <p
+                  className="text-[10px] uppercase tracking-wider text-[#FEFCD9]/40"
+                  style={{ fontFamily: "'PolySans Mono', monospace" }}
+                >
+                  Upcoming
+                </p>
+                {upcomingMeetings.slice(0, 3).map((meeting) => {
+                  const start = new Date(meeting.scheduledStartAt);
+                  const isToday =
+                    start.toDateString() === new Date().toDateString();
+                  const timeLabel = isToday
+                    ? start.toLocaleTimeString(undefined, {
+                        hour: "numeric",
+                        minute: "2-digit",
+                      })
+                    : start.toLocaleString(undefined, {
+                        month: "short",
+                        day: "numeric",
+                        hour: "numeric",
+                        minute: "2-digit",
+                      });
+                  return (
+                    <div
+                      key={meeting.id}
+                      className="flex items-center gap-2 rounded-lg border border-[#FEFCD9]/10 bg-black/25 px-3 py-2"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <p className="text-xs text-[#FEFCD9]/85 truncate">
+                          {meeting.title}
+                        </p>
+                        <p className="text-[10px] text-[#FEFCD9]/45">
+                          {timeLabel} · /{meeting.roomCode}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => void handleCopyMeetingLink(meeting)}
+                        className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[10px] text-[#FEFCD9]/55 hover:bg-[#FEFCD9]/10 hover:text-[#FEFCD9] transition-colors"
+                      >
+                        <Copy className="h-3 w-3" />
+                        {copiedMeetingId === meeting.id ? "copied" : "copy"}
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
         {meetError && onDismissMeetError && (
           <div className="mt-4">
             <MeetsErrorBanner
@@ -897,6 +1023,14 @@ function MobileJoinScreen({
           </div>
         </div>
       )}
+
+      <ScheduleMeetingModal
+        open={isScheduleOpen}
+        onClose={() => setIsScheduleOpen(false)}
+        onScheduled={(meeting) => {
+          setUpcomingMeetings((prev) => [meeting, ...prev]);
+        }}
+      />
     </div>
   );
 }

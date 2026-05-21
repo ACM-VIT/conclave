@@ -325,6 +325,47 @@ export interface UpdateScheduledWebinarRequest {
   status?: ScheduledWebinarStatus;
 }
 
+export type ScheduledMeetingStatus =
+  | "scheduled"
+  | "live"
+  | "ended"
+  | "cancelled";
+
+export interface ScheduledMeeting {
+  id: string;
+  clientId: string;
+  roomCode: string;
+  title: string;
+  hostEmail: string;
+  hostName: string;
+  hostUserId: string | null;
+  scheduledStartAt: number;
+  scheduledEndAt: number;
+  status: ScheduledMeetingStatus;
+  startedAt: number | null;
+  endedAt: number | null;
+  createdAt: number;
+  createdBy: string;
+  updatedAt: number;
+}
+
+export interface CreateScheduledMeetingRequest {
+  title: string;
+  scheduledStartAt: number;
+  scheduledEndAt?: number;
+  roomCode?: string;
+  hostEmail?: string;
+  hostName?: string;
+}
+
+export interface UpdateScheduledMeetingRequest {
+  title?: string;
+  scheduledStartAt?: number;
+  scheduledEndAt?: number;
+  roomCode?: string;
+  status?: ScheduledMeetingStatus;
+}
+
 export interface WebinarLinkResponse {
   slug: string;
   link: string;
