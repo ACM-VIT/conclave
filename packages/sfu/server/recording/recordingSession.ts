@@ -318,7 +318,12 @@ export const createRecordingSession = (
     chunk,
     sequence,
   ) => {
-    if (status !== "active" && status !== "paused" && status !== "starting") {
+    if (
+      status !== "active" &&
+      status !== "paused" &&
+      status !== "starting" &&
+      status !== "finalizing"
+    ) {
       return { accepted: false, reason: `status:${status}` };
     }
     return await viewRecorder.appendChunk(chunk, sequence);

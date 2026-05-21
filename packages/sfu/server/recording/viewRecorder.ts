@@ -14,6 +14,18 @@ import type { Room } from "../../config/classes/Room.js";
 import { resolveRecordingProfile } from "./qualityProfile.js";
 
 const DEFAULT_CHUNK_BUFFER_MAX_BYTES = 8 * 1024 * 1024;
+const DEFAULT_STOP_FINALIZE_GRACE_MS = 12_000;
+const parsePositiveInteger = (
+  value: string | undefined,
+  fallback: number,
+): number => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+};
+const STOP_FINALIZE_GRACE_MS = parsePositiveInteger(
+  process.env.RECORDER_STOP_FINALIZE_GRACE_MS,
+  DEFAULT_STOP_FINALIZE_GRACE_MS,
+);
 
 // Counter for allocating unique Xvfb display numbers across concurrent
 // recordings. Start at :99 (a common convention) and walk up.
@@ -184,9 +196,21 @@ export const createViewRecorder = (
   let pendingBufferedBytes = 0;
   let active = false;
   let stopped = false;
+  let stopPromise:
+    | Promise<{
+        outputPath: string;
+        outputFilename: string;
+        byteSize: number;
+        durationMs: number;
+      }>
+    | null = null;
   let startedAt = 0;
   let endedAt: number | null = null;
   let browserDurationMs = 0;
+  let resolveBrowserFinalize: (() => void) | null = null;
+  const browserFinalizePromise = new Promise<void>((resolve) => {
+    resolveBrowserFinalize = resolve;
+  });
 
   const drainPendingChunks = async (): Promise<void> => {
     if (!writeStream) return;
@@ -478,6 +502,8 @@ export const createViewRecorder = (
     Logger.info(
       `[viewRecorder] browser-side finalize signal for ${sessionId} (${duration} ms)`,
     );
+    resolveBrowserFinalize?.();
+    resolveBrowserFinalize = null;
   };
 
   const transcodeToMp4 = async (): Promise<void> => {
@@ -539,6 +565,7 @@ export const createViewRecorder = (
   };
 
   const stop: ViewRecorderHandle["stop"] = async () => {
+    if (stopPromise) return await stopPromise;
     if (stopped) {
       const size = existsSync(outputPath) ? statSync(outputPath).size : 0;
       return {
@@ -548,50 +575,74 @@ export const createViewRecorder = (
         durationMs: endedAt ? endedAt - startedAt : 0,
       };
     }
-    stopped = true;
-    active = false;
-
-    if (browser) {
-      try {
-        await browser.close();
-      } catch (error) {
-        Logger.warn(
-          `[viewRecorder] browser close error: ${(error as Error).message}`,
-        );
+    stopPromise = (async () => {
+      // The host-side stop request is observed by the bot through its status
+      // poll. Keep the browser and write stream alive briefly so MediaRecorder
+      // can flush its final dataavailable chunk and POST /finalize before we
+      // close Chromium.
+      if (browser && active) {
+        let finalized = false;
+        await Promise.race([
+          browserFinalizePromise.then(() => {
+            finalized = true;
+          }),
+          new Promise<void>((resolve) =>
+            setTimeout(resolve, Math.max(0, STOP_FINALIZE_GRACE_MS)),
+          ),
+        ]);
+        if (!finalized) {
+          Logger.warn(
+            `[viewRecorder] browser did not finalize within ${STOP_FINALIZE_GRACE_MS} ms for ${sessionId}; closing anyway`,
+          );
+        }
       }
-      browser = null;
-    }
 
-    if (writeStream) {
-      await new Promise<void>((resolve) => {
-        writeStream!.end(() => resolve());
-      });
-      writeStream = null;
-    }
+      stopped = true;
+      active = false;
 
-    pendingChunks.clear();
-    pendingBufferedBytes = 0;
+      if (browser) {
+        try {
+          await browser.close();
+        } catch (error) {
+          Logger.warn(
+            `[viewRecorder] browser close error: ${(error as Error).message}`,
+          );
+        }
+        browser = null;
+      }
 
-    await transcodeToMp4();
+      if (writeStream) {
+        await new Promise<void>((resolve) => {
+          writeStream!.end(() => resolve());
+        });
+        writeStream = null;
+      }
 
-    endedAt = Date.now();
-    const byteSize = existsSync(transcodedPath)
-      ? statSync(transcodedPath).size
-      : existsSync(outputPath)
-        ? statSync(outputPath).size
-        : 0;
+      pendingChunks.clear();
+      pendingBufferedBytes = 0;
 
-    const finalFilename = existsSync(transcodedPath)
-      ? transcodedFilename
-      : outputFilename;
-    const finalPath = existsSync(transcodedPath) ? transcodedPath : outputPath;
+      await transcodeToMp4();
 
-    return {
-      outputPath: finalPath,
-      outputFilename: finalFilename,
-      byteSize,
-      durationMs: browserDurationMs || endedAt - startedAt,
-    };
+      endedAt = Date.now();
+      const byteSize = existsSync(transcodedPath)
+        ? statSync(transcodedPath).size
+        : existsSync(outputPath)
+          ? statSync(outputPath).size
+          : 0;
+
+      const finalFilename = existsSync(transcodedPath)
+        ? transcodedFilename
+        : outputFilename;
+      const finalPath = existsSync(transcodedPath) ? transcodedPath : outputPath;
+
+      return {
+        outputPath: finalPath,
+        outputFilename: finalFilename,
+        byteSize,
+        durationMs: browserDurationMs || endedAt - startedAt,
+      };
+    })();
+    return await stopPromise;
   };
 
   return {
