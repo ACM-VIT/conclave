@@ -7,6 +7,7 @@ type Props = {
   roomId: string;
   token: string;
   captureSourceTag?: string;
+  captureMode?: "mediarecorder" | "x11grab";
   width?: number;
   height?: number;
   fps?: number;
@@ -123,6 +124,7 @@ export default function RecorderBotClient({
   roomId,
   token,
   captureSourceTag,
+  captureMode = "mediarecorder",
   width = 1920,
   height = 1080,
   fps = 30,
@@ -151,7 +153,7 @@ export default function RecorderBotClient({
   }, [captureSourceTag]);
 
   useEffect(() => {
-    log(`mount: sessionId=${sessionId} roomId=${roomId} token=${token ? `${token.slice(0, 8)}…` : "(none)"} captureSourceTag=${captureSourceTag || "(none)"} w=${width} h=${height} fps=${fps} vb=${videoBitrateKbps}k ab=${audioBitrateKbps}k`);
+    log(`mount: sessionId=${sessionId} roomId=${roomId} token=${token ? `${token.slice(0, 8)}…` : "(none)"} captureSourceTag=${captureSourceTag || "(none)"} captureMode=${captureMode} w=${width} h=${height} fps=${fps} vb=${videoBitrateKbps}k ab=${audioBitrateKbps}k`);
     if (!roomId || !token || !sessionId) {
       log("ERROR: missing credentials, aborting");
       setError("Missing recorder credentials");
@@ -262,10 +264,44 @@ export default function RecorderBotClient({
       setPhase("completed");
     };
 
+    const startStatusPolling = (): void => {
+      if (pollingRef.current) return;
+      pollingRef.current = setInterval(async () => {
+        try {
+          const response = await fetch(
+            `/api/sfu/recorder/${encodeURIComponent(sessionId)}/status`,
+            {
+              headers: { "x-recorder-token": token },
+              cache: "no-store",
+            },
+          );
+          if (!response.ok) return;
+          const data = (await response.json()) as { stopRequested?: boolean };
+          if (data?.stopRequested) {
+            await stopRecording("host-stop");
+          }
+        } catch (err) {
+          log("status poll error", err);
+        }
+      }, STATUS_POLL_MS);
+    };
+
     const startRecording = async (): Promise<void> => {
-      log("startRecording: calling getDisplayMedia");
+      log(
+        captureMode === "x11grab"
+          ? "startRecording: using x11grab backend"
+          : "startRecording: calling getDisplayMedia",
+      );
       setPhase("navigating");
       try {
+        if (captureMode === "x11grab") {
+          startedAtRef.current = Date.now();
+          log("x11grab capture mode: skipping browser MediaRecorder");
+          setPhase("recording");
+          startStatusPolling();
+          return;
+        }
+
         // Headless Chrome has no system audio device, so getDisplayMedia
         // with audio:true fails with "Could not start audio source". Request
         // video-only here; audio is captured below via WebAudio by tapping
@@ -386,24 +422,7 @@ export default function RecorderBotClient({
         // Make sure heartbeat dies with the page unload
         window.addEventListener("beforeunload", () => clearInterval(heartbeat));
 
-        pollingRef.current = setInterval(async () => {
-          try {
-            const response = await fetch(
-              `/api/sfu/recorder/${encodeURIComponent(sessionId)}/status`,
-              {
-                headers: { "x-recorder-token": token },
-                cache: "no-store",
-              },
-            );
-            if (!response.ok) return;
-            const data = (await response.json()) as { stopRequested?: boolean };
-            if (data?.stopRequested) {
-              await stopRecording("host-stop");
-            }
-          } catch (err) {
-            log("status poll error", err);
-          }
-        }, STATUS_POLL_MS);
+        startStatusPolling();
       } catch (err) {
         const message = (err as Error).message || "Recorder failed to start";
         log("startRecording failed", message);
@@ -461,7 +480,7 @@ export default function RecorderBotClient({
       void stopRecording("page-exit");
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId, roomId, token]);
+  }, [sessionId, roomId, token, captureMode]);
 
   const attendeeUrl = `/${encodeURIComponent(roomId)}?autojoin=1&hide=1&recorder=1&name=Recorder%20Bot`;
 

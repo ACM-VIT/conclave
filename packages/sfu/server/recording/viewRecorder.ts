@@ -26,6 +26,7 @@ const STOP_FINALIZE_GRACE_MS = parsePositiveInteger(
   process.env.RECORDER_STOP_FINALIZE_GRACE_MS,
   DEFAULT_STOP_FINALIZE_GRACE_MS,
 );
+const X11GRAB_ENABLED = process.env.RECORDER_CAPTURE_BACKEND !== "mediarecorder";
 
 // Counter for allocating unique Xvfb display numbers across concurrent
 // recordings. Start at :99 (a common convention) and walk up.
@@ -68,6 +69,110 @@ const spawnXvfb = (
     );
   });
   return { proc, displayString };
+};
+
+const spawnX11GrabRecorder = (
+  displayString: string,
+  width: number,
+  height: number,
+  fps: number,
+  videoBitrateKbps: number,
+  outputPath: string,
+  onExit: (result: {
+    code: number | null;
+    signal: NodeJS.Signals | null;
+    stderr: string;
+  }) => void,
+): { proc: ChildProcess; stop: () => Promise<void> } => {
+  let stderr = "";
+  let exited = false;
+  const proc = spawn(
+    FFMPEG_BIN,
+    [
+      "-y",
+      "-loglevel",
+      "warning",
+      "-f",
+      "x11grab",
+      "-draw_mouse",
+      "0",
+      "-video_size",
+      `${width}x${height}`,
+      "-framerate",
+      String(fps),
+      "-i",
+      `${displayString}.0`,
+      "-an",
+      "-c:v",
+      "libx264",
+      "-preset",
+      process.env.RECORDER_X11GRAB_PRESET || "veryfast",
+      "-b:v",
+      `${videoBitrateKbps}k`,
+      "-maxrate",
+      `${videoBitrateKbps}k`,
+      "-bufsize",
+      `${Math.max(videoBitrateKbps * 2, 1_000)}k`,
+      "-pix_fmt",
+      "yuv420p",
+      "-movflags",
+      "+faststart",
+      outputPath,
+    ],
+    { stdio: ["pipe", "ignore", "pipe"] },
+  );
+
+  proc.stderr?.on("data", (chunk: Buffer) => {
+    const text = chunk.toString("utf8");
+    stderr += text;
+    if (process.env.RECORDING_VERBOSE === "1") {
+      Logger.debug(`[ffmpeg:x11grab ${displayString}] ${text.trim()}`);
+    }
+  });
+  proc.on("exit", (code, signal) => {
+    exited = true;
+    onExit({ code, signal, stderr });
+  });
+  proc.on("error", (error) => {
+    Logger.error(`[ffmpeg:x11grab ${displayString}] spawn error`, error);
+    if (!exited) {
+      exited = true;
+      onExit({ code: -1, signal: null, stderr });
+    }
+  });
+
+  const stop = async (): Promise<void> => {
+    if (exited) return;
+    try {
+      proc.stdin?.end("q");
+    } catch {
+      // ignore
+    }
+    try {
+      proc.kill("SIGINT");
+    } catch {
+      // ignore
+    }
+    await new Promise<void>((resolve) => {
+      if (exited) {
+        resolve();
+        return;
+      }
+      const timer = setTimeout(() => {
+        try {
+          proc.kill("SIGKILL");
+        } catch {
+          // ignore
+        }
+      }, 5_000);
+      proc.once("exit", () => {
+        clearTimeout(timer);
+        resolve();
+      });
+    });
+  };
+
+  return { proc, stop };
 };
 
 const isXvfbAvailable = (): boolean => {
@@ -126,6 +231,7 @@ const buildRecorderUrl = (params: {
   fps: number;
   videoBitrateKbps: number;
   audioBitrateKbps: number;
+  captureMode?: "mediarecorder" | "x11grab";
 }): string => {
   const base = params.recorderUrlBase.replace(/\/$/, "");
   const search = new URLSearchParams({
@@ -137,6 +243,7 @@ const buildRecorderUrl = (params: {
     fps: String(params.fps),
     vb: String(params.videoBitrateKbps),
     ab: String(params.audioBitrateKbps),
+    capture: params.captureMode ?? "mediarecorder",
   });
   return `${base}/recorder/${encodeURIComponent(params.sessionId)}?${search.toString()}`;
 };
@@ -190,6 +297,9 @@ export const createViewRecorder = (
   let browser: LaunchedBrowser | null = null;
   let xvfbProc: ChildProcess | null = null;
   let xvfbDisplayString: string | null = null;
+  let x11GrabRecorder: { proc: ChildProcess; stop: () => Promise<void> } | null =
+    null;
+  let x11GrabStopping = false;
   let writeStream: WriteStream | null = null;
   let nextExpectedSequence = 0;
   const pendingChunks = new Map<number, Buffer>();
@@ -302,12 +412,19 @@ export const createViewRecorder = (
       );
     }
 
-    writeStream = createWriteStream(outputPath, { flags: "w" });
-    writeStream.on("error", (error) => {
-      Logger.error(
-        `[viewRecorder] write stream error for ${sessionId}: ${error.message}`,
-      );
-    });
+    // Linux production uses Xvfb. Capture that virtual display with ffmpeg
+    // instead of relying on Chrome's in-page MediaRecorder encoder, which has
+    // repeatedly produced zero-byte blobs under Xvfb/swiftshader.
+    const useXvfb = isXvfbAvailable();
+    const useX11Grab = useXvfb && X11GRAB_ENABLED;
+    if (!useX11Grab) {
+      writeStream = createWriteStream(outputPath, { flags: "w" });
+      writeStream.on("error", (error) => {
+        Logger.error(
+          `[viewRecorder] write stream error for ${sessionId}: ${error.message}`,
+        );
+      });
+    }
 
     // Unique identifier we plant in both:
     //   1. Chrome's `--auto-select-desktop-capture-source=...` flag, and
@@ -327,6 +444,7 @@ export const createViewRecorder = (
       fps,
       videoBitrateKbps: options.videoBitrateKbps ?? profile.videoBitrateKbps,
       audioBitrateKbps: options.audioBitrateKbps ?? profile.audioBitrateKbps,
+      captureMode: useX11Grab ? "x11grab" : "mediarecorder",
     });
 
     const userDataDir = join(options.storageDir, ".chromium-profile");
@@ -372,7 +490,6 @@ export const createViewRecorder = (
     // with "Could not start video source". The fix is to run Chromium
     // non-headless against an Xvfb virtual framebuffer, which is what every
     // production browser-recording stack does.
-    const useXvfb = isXvfbAvailable();
     const launchEnv: NodeJS.ProcessEnv = { ...process.env };
     if (useXvfb) {
       const displayNumber = allocateXvfbDisplay();
@@ -471,6 +588,32 @@ export const createViewRecorder = (
       }
     });
 
+    if (useX11Grab && xvfbDisplayString) {
+      x11GrabRecorder = spawnX11GrabRecorder(
+        xvfbDisplayString,
+        width,
+        height,
+        fps,
+        options.videoBitrateKbps ?? profile.videoBitrateKbps,
+        transcodedPath,
+        ({ code, signal, stderr }) => {
+          if (x11GrabStopping) return;
+          const tail = stderr.trim().slice(-300);
+          Logger.warn(
+            `[viewRecorder] x11grab recorder exited early for ${sessionId} (code=${code} signal=${signal ?? "n/a"})${tail ? `: ${tail}` : ""}`,
+          );
+          options.onFatal?.(
+            new Error(
+              `x11grab recorder exited early (code=${code}, signal=${signal ?? "n/a"})`,
+            ),
+          );
+        },
+      );
+      Logger.info(
+        `[viewRecorder] x11grab recording ${xvfbDisplayString}.0 → ${transcodedFilename} for ${sessionId}`,
+      );
+    }
+
     active = true;
     startedAt = Date.now();
 
@@ -486,6 +629,11 @@ export const createViewRecorder = (
           `[viewRecorder] failed to load recorder page: ${(error as Error).message}`,
         );
         options.onFatal?.(error as Error);
+        if (x11GrabRecorder) {
+          x11GrabStopping = true;
+          await x11GrabRecorder.stop().catch(() => undefined);
+          x11GrabRecorder = null;
+        }
         if (browser) {
           await browser.close().catch(() => undefined);
           browser = null;
@@ -599,6 +747,21 @@ export const createViewRecorder = (
 
       stopped = true;
       active = false;
+
+      if (x11GrabRecorder) {
+        x11GrabStopping = true;
+        try {
+          await x11GrabRecorder.stop();
+          Logger.info(
+            `[viewRecorder] x11grab stopped for ${sessionId}`,
+          );
+        } catch (error) {
+          Logger.warn(
+            `[viewRecorder] x11grab stop error for ${sessionId}: ${(error as Error).message}`,
+          );
+        }
+        x11GrabRecorder = null;
+      }
 
       if (browser) {
         try {
