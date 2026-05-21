@@ -23,7 +23,7 @@ type Phase =
   | "error";
 
 const TIMESLICE_MS = 4_000;
-const STATUS_POLL_MS = 5_000;
+const STATUS_POLL_MS = 1_000;
 
 const log = (...args: unknown[]): void => {
   console.log("[recorder-bot]", ...args);
@@ -137,6 +137,8 @@ export default function RecorderBotClient({
   const sequenceRef = useRef(0);
   const startedAtRef = useRef<number>(0);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pendingUploadsRef = useRef<Set<Promise<void>>>(new Set());
+  const stopInProgressRef = useRef(false);
 
   useEffect(() => {
     // Set the page title to the capture-source tag so that Chrome's
@@ -158,6 +160,7 @@ export default function RecorderBotClient({
     }
 
     let cancelled = false;
+    const pendingUploads = pendingUploadsRef.current;
 
     const uploadChunk = async (blob: Blob): Promise<void> => {
       if (cancelled) return;
@@ -185,10 +188,25 @@ export default function RecorderBotClient({
       }
     };
 
+    const queueUpload = (blob: Blob): void => {
+      const upload = uploadChunk(blob);
+      pendingUploads.add(upload);
+      void upload.finally(() => {
+        pendingUploads.delete(upload);
+      });
+    };
+
+    const waitForPendingUploads = async (): Promise<void> => {
+      while (pendingUploads.size > 0) {
+        await Promise.allSettled([...pendingUploads]);
+      }
+    };
+
     const stopRecording = async (
       reason: "host-stop" | "page-exit" | "error",
     ): Promise<void> => {
-      if (phase === "completed" || phase === "stopping") return;
+      if (stopInProgressRef.current) return;
+      stopInProgressRef.current = true;
       setPhase("stopping");
       try {
         if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
@@ -206,6 +224,7 @@ export default function RecorderBotClient({
       } catch (err) {
         log("recorder stop error", err);
       }
+      await waitForPendingUploads();
       try {
         if (mediaStreamRef.current) {
           for (const track of mediaStreamRef.current.getTracks()) {
@@ -312,7 +331,7 @@ export default function RecorderBotClient({
         recorder.addEventListener("dataavailable", (event) => {
           if (event.data && event.data.size > 0) {
             log(`dataavailable: ${event.data.size} bytes`);
-            void uploadChunk(event.data);
+            queueUpload(event.data);
           } else {
             log(`dataavailable: empty (size=${event.data?.size ?? "n/a"})`);
           }
