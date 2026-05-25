@@ -106,6 +106,8 @@ export function useMeetMedia({
   >(async () => {});
   const audioRecoveryInFlightRef = useRef(false);
   const cameraRecoveryInFlightRef = useRef(false);
+  const videoQualityUpdateInFlightRef = useRef(false);
+  const pendingVideoQualityUpdateRef = useRef<VideoQuality | null>(null);
   const toggleMuteInFlightRef = useRef(false);
   const managedCameraTrackRef = useRef<ManagedCameraTrack | null>(null);
   const lastAppliedBackgroundEffectRef = useRef<BackgroundEffect>(backgroundEffect);
@@ -564,6 +566,12 @@ export function useMeetMedia({
   const updateVideoQuality = useCallback(
     async (quality: VideoQuality) => {
       if (isCameraOff) return;
+      if (videoQualityUpdateInFlightRef.current) {
+        pendingVideoQualityUpdateRef.current = quality;
+        return;
+      }
+
+      videoQualityUpdateInFlightRef.current = true;
 
       const previousManagedTrack = managedCameraTrackRef.current;
       const previousProducer = videoProducerRef.current;
@@ -638,6 +646,13 @@ export function useMeetMedia({
               prev?.getTracks().filter((track) => track.kind !== "video") ?? [];
             return new MediaStream([...remainingTracks, previousVideoTrack]);
           });
+        }
+      } finally {
+        videoQualityUpdateInFlightRef.current = false;
+        const pendingQuality = pendingVideoQualityUpdateRef.current;
+        pendingVideoQualityUpdateRef.current = null;
+        if (pendingQuality) {
+          void updateVideoQualityRef.current(pendingQuality);
         }
       }
     },
