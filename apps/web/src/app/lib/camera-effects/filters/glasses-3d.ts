@@ -43,11 +43,16 @@ const loadThreeModule = async (): Promise<ThreeModule> => {
       import("three"),
       import("three/examples/jsm/loaders/GLTFLoader.js"),
       import("three/examples/jsm/libs/meshopt_decoder.module.js"),
-    ]).then(([THREE, { GLTFLoader }, { MeshoptDecoder }]) => ({
-      THREE,
-      GLTFLoader,
-      MeshoptDecoder,
-    }));
+    ])
+      .then(([THREE, { GLTFLoader }, { MeshoptDecoder }]) => ({
+        THREE,
+        GLTFLoader,
+        MeshoptDecoder,
+      }))
+      .catch((error) => {
+        threeModulePromise = null;
+        throw error;
+      });
   }
 
   return threeModulePromise;
