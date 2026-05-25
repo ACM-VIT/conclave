@@ -163,6 +163,8 @@ function MobileJoinScreen({
   const [isSigningOut, setIsSigningOut] = useState(false);
   const [showAndroidUpsell, setShowAndroidUpsell] = useState(false);
   const managedCameraTrackRef = useRef<ManagedCameraTrack | null>(null);
+  const cameraPreviewRequestIdRef = useRef(0);
+  const localStreamRef = useRef<MediaStream | null>(null);
 
   const { data: session } = useSession();
   const canSignOut = Boolean(session?.user || user?.id || user?.email);
@@ -196,21 +198,32 @@ function MobileJoinScreen({
   }, [session, user, onUserChange]);
 
   useEffect(() => {
-    if (phase !== "join" && localStream) {
+    localStreamRef.current = localStream;
+  }, [localStream]);
+
+  useEffect(() => {
+    if (phase !== "join") {
+      cameraPreviewRequestIdRef.current += 1;
       managedCameraTrackRef.current?.stop();
       managedCameraTrackRef.current = null;
-      localStream.getTracks().forEach((t) => t.stop());
-      setLocalStream(null);
+      const activeLocalStream = localStreamRef.current;
+      if (activeLocalStream) {
+        activeLocalStream.getTracks().forEach((t) => t.stop());
+        setLocalStream(null);
+      }
+      return;
     }
 
     return () => {
+      cameraPreviewRequestIdRef.current += 1;
       managedCameraTrackRef.current?.stop();
       managedCameraTrackRef.current = null;
-      if (localStream) {
-        localStream.getTracks().forEach((t) => t.stop());
+      const activeLocalStream = localStreamRef.current;
+      if (activeLocalStream) {
+        activeLocalStream.getTracks().forEach((t) => t.stop());
       }
     };
-  }, [localStream, phase]);
+  }, [phase]);
 
   useEffect(() => {
     if (!user?.id?.startsWith("guest-")) return;
@@ -224,12 +237,19 @@ function MobileJoinScreen({
     if (videoRef.current && localStream) videoRef.current.srcObject = localStream;
   }, [localStream]);
 
-  const enableCameraPreview = useCallback(async () => {
+  const enableCameraPreview = useCallback(async (requestId?: number) => {
+    const activeRequestId = requestId ?? ++cameraPreviewRequestIdRef.current;
     managedCameraTrackRef.current?.stop();
+    managedCameraTrackRef.current = null;
     const managedTrack = await createManagedCameraTrack({
       effect: backgroundEffect,
       quality: "standard",
     });
+    if (cameraPreviewRequestIdRef.current !== activeRequestId) {
+      managedTrack.stop();
+      return;
+    }
+
     managedCameraTrackRef.current = managedTrack;
     const videoTrack = managedTrack.track;
     if ("contentHint" in videoTrack) {
@@ -245,6 +265,7 @@ function MobileJoinScreen({
 
   const toggleCamera = async () => {
     if (isCameraOn && localStream) {
+      cameraPreviewRequestIdRef.current += 1;
       managedCameraTrackRef.current?.stop();
       managedCameraTrackRef.current = null;
       localStream.getVideoTracks().forEach((track) => track.stop());
@@ -262,9 +283,15 @@ function MobileJoinScreen({
 
   useEffect(() => {
     if (!isCameraOn) return;
-    void enableCameraPreview().catch(() => {
+    const requestId = ++cameraPreviewRequestIdRef.current;
+    void enableCameraPreview(requestId).catch(() => {
       console.log("[MobileJoinScreen] Camera refresh for blur effect failed");
     });
+    return () => {
+      if (cameraPreviewRequestIdRef.current === requestId) {
+        cameraPreviewRequestIdRef.current += 1;
+      }
+    };
   }, [backgroundEffect, enableCameraPreview, isCameraOn]);
 
   const toggleMic = async () => {

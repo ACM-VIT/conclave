@@ -185,6 +185,8 @@ function JoinScreen({
   const isSignedInUser = Boolean((session?.user || user) && !user?.id?.startsWith("guest-"));
   const lastAppliedSessionUserIdRef = useRef<string | null>(null);
   const managedCameraTrackRef = useRef<ManagedCameraTrack | null>(null);
+  const cameraPreviewRequestIdRef = useRef(0);
+  const localStreamRef = useRef<MediaStream | null>(null);
 
   useEffect(() => {
     if (!session?.user) {
@@ -238,13 +240,19 @@ function JoinScreen({
   }, [guestName, user]);
 
   useEffect(() => {
+    localStreamRef.current = localStream;
+  }, [localStream]);
+
+  useEffect(() => {
     // Only capture media when in join phase
     if (phase !== "join") {
       // Stop any existing stream when leaving join phase
+      cameraPreviewRequestIdRef.current += 1;
       managedCameraTrackRef.current?.stop();
       managedCameraTrackRef.current = null;
-      if (localStream) {
-        localStream.getTracks().forEach((t) => t.stop());
+      const activeLocalStream = localStreamRef.current;
+      if (activeLocalStream) {
+        activeLocalStream.getTracks().forEach((t) => t.stop());
         setLocalStream(null);
       }
       return;
@@ -252,10 +260,12 @@ function JoinScreen({
 
     // Don't auto-capture - let user explicitly turn on camera/mic
     return () => {
+      cameraPreviewRequestIdRef.current += 1;
       managedCameraTrackRef.current?.stop();
       managedCameraTrackRef.current = null;
-      if (localStream) {
-        localStream.getTracks().forEach((t) => t.stop());
+      const activeLocalStream = localStreamRef.current;
+      if (activeLocalStream) {
+        activeLocalStream.getTracks().forEach((t) => t.stop());
       }
     };
   }, [phase]);
@@ -264,12 +274,19 @@ function JoinScreen({
     if (videoRef.current && localStream) videoRef.current.srcObject = localStream;
   }, [localStream]);
 
-  const enableCameraPreview = useCallback(async () => {
+  const enableCameraPreview = useCallback(async (requestId?: number) => {
+    const activeRequestId = requestId ?? ++cameraPreviewRequestIdRef.current;
     managedCameraTrackRef.current?.stop();
+    managedCameraTrackRef.current = null;
     const managedTrack = await createManagedCameraTrack({
       effect: backgroundEffect,
       quality: "standard",
     });
+    if (cameraPreviewRequestIdRef.current !== activeRequestId) {
+      managedTrack.stop();
+      return;
+    }
+
     managedCameraTrackRef.current = managedTrack;
     const videoTrack = managedTrack.track;
     if ("contentHint" in videoTrack) {
@@ -285,6 +302,7 @@ function JoinScreen({
 
   const toggleCamera = async () => {
     if (isCameraOn && localStream) {
+      cameraPreviewRequestIdRef.current += 1;
       managedCameraTrackRef.current?.stop();
       managedCameraTrackRef.current = null;
       localStream.getVideoTracks().forEach((track) => track.stop());
@@ -304,9 +322,15 @@ function JoinScreen({
 
   useEffect(() => {
     if (!isCameraOn) return;
-    void enableCameraPreview().catch(() => {
+    const requestId = ++cameraPreviewRequestIdRef.current;
+    void enableCameraPreview(requestId).catch(() => {
       console.log("[JoinScreen] Camera refresh for blur effect failed");
     });
+    return () => {
+      if (cameraPreviewRequestIdRef.current === requestId) {
+        cameraPreviewRequestIdRef.current += 1;
+      }
+    };
   }, [backgroundEffect, enableCameraPreview, isCameraOn]);
 
   const toggleMic = async () => {
