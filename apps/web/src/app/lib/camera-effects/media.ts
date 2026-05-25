@@ -6,6 +6,8 @@ import {
 } from "../constants";
 import type { VideoQuality } from "../types";
 
+const VIDEO_READY_TIMEOUT_MS = 2500;
+
 export const getVideoConstraints = (
   quality: VideoQuality,
 ): MediaTrackConstraints => {
@@ -31,6 +33,10 @@ export const waitForVideoReady = async (
   }
 
   await new Promise<void>((resolve, reject) => {
+    const timeout = window.setTimeout(() => {
+      cleanup();
+      reject(new Error("Camera preview timed out"));
+    }, VIDEO_READY_TIMEOUT_MS);
     const handleLoadedData = () => {
       cleanup();
       resolve();
@@ -40,6 +46,7 @@ export const waitForVideoReady = async (
       reject(new Error("Camera preview failed to start"));
     };
     const cleanup = () => {
+      window.clearTimeout(timeout);
       video.removeEventListener("loadeddata", handleLoadedData);
       video.removeEventListener("error", handleError);
     };
@@ -48,4 +55,3 @@ export const waitForVideoReady = async (
     video.addEventListener("error", handleError, { once: true });
   });
 };
-
