@@ -95,29 +95,28 @@ enum ACMColors {
         acmColor(red: 196.0, green: 78.0, blue: 207.0)    // #C44ECF magenta
     ]
 
-    /// Deterministic avatar fill. Hashes the WHOLE key (not just the first
-    /// letter — that collided, e.g. "Guest"/"Web Guest" both mapped to one
-    /// colour) over a fixed charset so names+ids distribute well. Skip-safe:
-    /// plain char scan + mod-prime accumulation (no `unicodeScalars`/`charCodeAt`,
-    /// no overflow — the running hash stays < 1_000_003).
+    /// Deterministic avatar fill. Ports the EXACT `@conclave/ui-tokens`
+    /// `avatarColor` algorithm so web + native map a given string to the same
+    /// palette index: trim the key, hash each UTF-16 code unit with the classic
+    /// `hash = (hash << 5) - hash + code` (forced to 32-bit signed after every
+    /// step, mirroring JS `hash |= 0`), then `abs(hash) % palette.count`.
+    /// Overflow-safe in Swift via `Int32` wrapping operators (`&<<`/`&-`/`&+`),
+    /// which truncate to 32 bits identically to JS `|0`.
     static func avatarColor(for key: String) -> Color {
-        let lower = key.lowercased()
-        let charset = "abcdefghijklmnopqrstuvwxyz0123456789-_ .@"
-        var hash = 0
-        for ch in lower {
-            var code = 1
-            var i = 0
-            for c in charset {
-                if c == ch {
-                    code = i + 2
-                    break
-                }
-                i += 1
-            }
-            hash = (hash * 31 + code) % 1000003
-        }
+        let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
         if avatarPalette.isEmpty { return primaryOrange }
-        return avatarPalette[hash % avatarPalette.count]
+        if trimmed.isEmpty { return avatarPalette[0] }
+        var hash: Int32 = 0
+        for unit in trimmed.utf16 {
+            // (hash << 5) - hash == hash * 31, kept 32-bit signed via wrapping
+            // (`&*`/`&+` truncate to 32 bits identically to JS `hash |= 0`).
+            hash = hash &* 31 &+ Int32(unit)
+        }
+        // Math.abs(hash) % len, widened to 64-bit so Int32.min maps to
+        // 2147483648 (as JS does) instead of trapping on a 32-bit negate.
+        let magnitude: Int64 = abs(Int64(hash))
+        let index = Int(magnitude % Int64(avatarPalette.count))
+        return avatarPalette[index]
     }
 
     // MARK: - Hand Raised Colors (amber accent, matches web)

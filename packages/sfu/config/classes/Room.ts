@@ -15,7 +15,7 @@ import {
   removeAwarenessStates,
 } from "y-protocols/awareness";
 import * as Y from "yjs";
-import type { ProducerInfo, VideoQuality } from "../../types.js";
+import type { ChatMessage, ProducerInfo, VideoQuality } from "../../types.js";
 import { Logger } from "../../utilities/loggers.js";
 import { config } from "../config.js";
 import { Admin } from "./Admin.js";
@@ -35,6 +35,7 @@ type AppAwarenessRemoval = {
 
 const WEBINAR_AUDIO_LEVEL_THRESHOLD = -70;
 const WEBINAR_AUDIO_LEVEL_INTERVAL_MS = 350;
+const CHAT_HISTORY_LIMIT = 100;
 
 const getAwarenessStateUserId = (state: unknown): string | null => {
   if (!state || typeof state !== "object" || Array.isArray(state)) {
@@ -91,6 +92,7 @@ export class Room {
   public adminUserKeys: Set<string> = new Set();
   public displayNamesByKey: Map<string, string> = new Map();
   public handRaisedByUserId: Set<string> = new Set();
+  private recentChatMessages: ChatMessage[] = [];
   public lockedAllowedUsers: Set<string> = new Set();
   public blockedUsers: Set<string> = new Set();
   public cleanupTimer: NodeJS.Timeout | null = null;
@@ -219,6 +221,27 @@ export class Room {
       snapshot.push({ userId, raised: true });
     }
     return snapshot;
+  }
+
+  // Retain the most recent broadcast (non-DM) chat messages so a late-joining
+  // or refreshing client can be seeded with prior conversation. Direct messages
+  // are intentionally excluded: they are only ever delivered to the sender and
+  // target, so they must not be replayed to other participants on join.
+  recordChatMessage(message: ChatMessage): void {
+    if (message.isDirect) {
+      return;
+    }
+    this.recentChatMessages.push(message);
+    if (this.recentChatMessages.length > CHAT_HISTORY_LIMIT) {
+      this.recentChatMessages.splice(
+        0,
+        this.recentChatMessages.length - CHAT_HISTORY_LIMIT,
+      );
+    }
+  }
+
+  getChatHistorySnapshot(): ChatMessage[] {
+    return this.recentChatMessages.slice();
   }
 
   getClient(clientId: string): Client | undefined {

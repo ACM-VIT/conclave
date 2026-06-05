@@ -288,6 +288,7 @@ export const registerChatHandlers = (context: ConnectionContext): void => {
           );
         } else {
           socket.to(room.channelId).emit("chatMessage", message);
+          room.recordChatMessage(message);
           Logger.info(
             `Chat in room ${room.id}: ${displayName}: ${messageContent.substring(
               0,

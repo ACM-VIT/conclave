@@ -648,6 +648,13 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           roomId: context.currentRoom.id,
         } satisfies HandRaisedSnapshot & { roomId: string });
 
+        if (!context.currentClient.isRecorder) {
+          socket.emit("chatHistorySnapshot", {
+            messages: context.currentRoom.getChatHistorySnapshot(),
+            roomId: context.currentRoom.id,
+          } satisfies ChatHistorySnapshot);
+        }
+
         socket.emit("roomLockChanged", {
           locked: context.currentRoom.isLocked,
           roomId: context.currentRoom.id,

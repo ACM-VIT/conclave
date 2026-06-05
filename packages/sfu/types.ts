@@ -445,6 +445,11 @@ export interface SendChatData {
 
 export interface ChatMessageNotification extends ChatMessage {}
 
+export interface ChatHistorySnapshot {
+  messages: ChatMessage[];
+  roomId: string;
+}
+
 // ============================================
 // Reactions
 // ============================================
