@@ -435,6 +435,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             hostUserIds: room.getAdminUserIds(),
             isLocked: room.isLocked,
             isTtsDisabled: room.isTtsDisabled,
+            isChatLocked: room.isChatLocked,
             isDmEnabled: room.isDmEnabled,
             meetingRequiresInviteCode: room.requiresMeetingInviteCode,
           });
@@ -479,6 +480,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             hostUserIds: room.getAdminUserIds(),
             isLocked: room.isLocked,
             isTtsDisabled: room.isTtsDisabled,
+            isChatLocked: room.isChatLocked,
             isDmEnabled: room.isDmEnabled,
             meetingRequiresInviteCode: room.requiresMeetingInviteCode,
           });
@@ -736,6 +738,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           hostUserIds: context.currentRoom.getAdminUserIds(),
           isLocked: context.currentRoom.isLocked,
           isTtsDisabled: context.currentRoom.isTtsDisabled,
+          isChatLocked: context.currentRoom.isChatLocked,
           isDmEnabled: context.currentRoom.isDmEnabled,
           meetingRequiresInviteCode: context.currentRoom.requiresMeetingInviteCode,
           webinarRole: context.currentClient.isWebinarAttendee

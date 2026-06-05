@@ -1,11 +1,12 @@
 "use client";
 
-import { Ghost, Hand, Mic, MicOff } from "lucide-react";
+import { Ghost, Hand, Mic, MicOff, MonitorUp } from "lucide-react";
 import { memo, useEffect, useRef } from "react";
 import { createPlaybackRecoveryScheduler } from "../lib/playback-recovery";
 import { useSmartParticipantOrder } from "../hooks/useSmartParticipantOrder";
 import type { Participant } from "../lib/types";
-import { getSpeakerHighlightClasses, isSystemUserId } from "../lib/utils";
+import { isSystemUserId } from "../lib/utils";
+import { avatarColor } from "@conclave/ui-tokens";
 import ParticipantVideo from "./ParticipantVideo";
 
 interface PresentationLayoutProps {
@@ -24,6 +25,8 @@ interface PresentationLayoutProps {
   audioOutputDeviceId?: string;
   getDisplayName: (userId: string) => string;
 }
+
+const FONT_SANS = "'PolySans Trial', system-ui, sans-serif";
 
 function PresentationLayout({
   presentationStream,
@@ -134,86 +137,102 @@ function PresentationLayout({
     activeSpeakerId
   );
 
+  const localDisplayName = getDisplayName(currentUserId);
+  const localSpeakerHighlight = isLocalActiveSpeaker ? "speaking" : "";
+  const localHandRaisedHighlight = isHandRaised ? "!border-amber-400/60" : "";
+
   return (
-    <div className="flex flex-1 gap-4 overflow-hidden mt-5">
-      <div className="flex-1 bg-[#252525] border border-white/5 rounded-lg overflow-hidden relative flex items-center justify-center">
+    <div
+      className="flex min-h-0 flex-1 gap-4 overflow-hidden p-4"
+      style={{ fontFamily: FONT_SANS }}
+    >
+      {/* Screen-share stage — a clean rounded tile on the Carbon canvas. */}
+      <div className="relative flex min-w-0 flex-1 items-center justify-center overflow-hidden rounded-2xl border border-[#fafafa]/10 bg-[#131316]">
         <video
           ref={presentationVideoRef}
           autoPlay
           muted
           playsInline
-          className="max-w-full max-h-full"
+          className="max-h-full max-w-full object-contain"
         />
-        <div
-          className="absolute top-2 left-2 bg-black/40 px-2 py-1 rounded text-white text-sm tracking-[0.5px]"
-          style={{ fontWeight: 500 }}
-        >
-          {presenterName} is presenting
+        <div className="absolute left-3 top-3 flex max-w-[calc(100%-1.5rem)] items-center gap-2 rounded-full border border-[#fafafa]/10 bg-[#0a0a0b]/70 px-3 py-1.5">
+          <MonitorUp size={18} strokeWidth={1.75} className="shrink-0 text-[#F95F4A]" />
+          <span className="truncate text-[13px] font-medium text-[#fafafa]">
+            {presenterName} is presenting
+          </span>
         </div>
       </div>
 
-      <div className="w-64 flex flex-col gap-3 overflow-y-auto overflow-x-visible px-1">
+      {/* Participant filmstrip — flat tiles consistent with the main grid. */}
+      <div className="flex w-64 shrink-0 flex-col gap-3 overflow-y-auto overflow-x-visible px-1">
         <div
-          className={`relative bg-[#252525] border border-white/5 rounded-lg overflow-hidden h-36 shrink-0 transition-all duration-200 ${getSpeakerHighlightClasses(
-            isLocalActiveSpeaker
-          )}`}
+          className={`acm-video-tile h-36 shrink-0 ${localSpeakerHighlight} ${localHandRaisedHighlight}`}
         >
           <video
             ref={localVideoRef}
             autoPlay
             muted
             playsInline
-            className={`w-full h-full object-cover ${isCameraOff ? "hidden" : ""
-              } ${isMirrorCamera ? "scale-x-[-1]" : ""}`}
+            className={`h-full w-full object-cover ${
+              isCameraOff ? "hidden" : ""
+            } ${isMirrorCamera ? "scale-x-[-1]" : ""}`}
           />
           {isCameraOff && (
-            <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-[#1a1a1a] to-[#0d0e0d]">
-              <div className="w-12 h-12 rounded-full bg-gradient-to-br from-[#F95F4A]/20 to-[#FF007A]/20 border border-[#FEFCD9]/20 flex items-center justify-center text-lg text-[#FEFCD9] font-bold">
-                {userEmail[0]?.toUpperCase() || "?"}
+            <div className="absolute inset-0 flex items-center justify-center bg-[#18181b]">
+              <div
+                className="flex h-12 w-12 items-center justify-center rounded-full text-lg font-bold text-white"
+                style={{ backgroundColor: avatarColor(userEmail) }}
+              >
+                {(localDisplayName[0] || userEmail[0] || "?").toUpperCase()}
               </div>
             </div>
           )}
           {isGhost && (
-            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-              <div className="flex flex-col items-center gap-1.5">
-                <Ghost className="w-12 h-12 text-blue-300 drop-shadow-[0_0_18px_rgba(59,130,246,0.45)]" />
-                <span className="text-[10px] text-blue-200/90 bg-black/60 border border-blue-400/30 px-2 py-0.5 rounded-full">
-                  Ghost
+            <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/40">
+              <div className="flex flex-col items-center gap-2">
+                <Ghost size={36} strokeWidth={1.75} className="text-[#FF007A]" />
+                <span className="rounded-full border border-[#FF007A]/30 bg-black/60 px-2.5 py-1 text-[12px] font-medium text-[#FF007A]">
+                  Ghost mode
                 </span>
               </div>
             </div>
           )}
           {isHandRaised && (
             <div
-              className="absolute top-3 left-3 p-1.5 rounded-full bg-amber-500/20 border border-amber-400/40 text-amber-300 shadow-[0_0_15px_rgba(251,191,36,0.3)]"
+              className="absolute left-3 top-3 flex h-8 w-8 items-center justify-center rounded-full border border-amber-400/40 bg-amber-500/20 text-amber-300"
               title="Hand raised"
+              aria-label="Hand raised"
             >
-              <Hand className="w-3 h-3" />
+              <Hand size={18} strokeWidth={1.75} />
             </div>
           )}
-          <div
-            className="absolute bottom-3 left-3 bg-black/70 backdrop-blur-sm border border-[#FEFCD9]/10 rounded-full px-3 py-1.5 flex items-center gap-2 text-[10px]"
-            style={{ fontFamily: "'PolySans Mono', monospace" }}
-          >
-            <span className="font-medium text-[#FEFCD9] uppercase tracking-wide">You</span>
+          <div className="absolute bottom-3 left-3 flex max-w-[80%] items-center gap-1.5 rounded-full border border-[#fafafa]/10 bg-[#0a0a0b]/70 px-3 py-1.5">
+            <span className="truncate text-[13px] font-medium text-[#fafafa]">
+              {localDisplayName}
+            </span>
+            <span className="text-[11px] font-medium text-[#F95F4A]">You</span>
             {isMuted ? (
-              <MicOff className="w-3 h-3 text-[#F95F4A]" />
+              <MicOff size={14} strokeWidth={1.75} className="shrink-0 text-[#F95F4A]" />
             ) : (
-              <Mic className="w-3 h-3 text-emerald-300" />
+              <Mic size={14} strokeWidth={1.75} className="shrink-0 text-[#22c55e]" />
             )}
           </div>
         </div>
 
         {remoteParticipants.map((participant) => (
-            <ParticipantVideo
-              key={participant.userId}
-              participant={participant}
-              displayName={getDisplayName(participant.userId)}
-              isActiveSpeaker={activeSpeakerId === participant.userId}
-              compact
-              audioOutputDeviceId={audioOutputDeviceId}
-            />
-          ))}
+          <ParticipantVideo
+            key={participant.userId}
+            participant={participant}
+            displayName={getDisplayName(participant.userId)}
+            isActiveSpeaker={activeSpeakerId === participant.userId}
+            compact
+            // The grid stays mounted alongside this layout (opacity crossfade)
+            // and owns remote audio via its hidden ParticipantAudio list, so the
+            // filmstrip must NOT also play it — otherwise every remote doubles.
+            disableAudio
+            audioOutputDeviceId={audioOutputDeviceId}
+          />
+        ))}
       </div>
     </div>
   );

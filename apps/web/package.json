@@ -12,6 +12,7 @@
   "dependencies": {
     "@conclave/apps-sdk": "workspace:*",
     "@conclave/meeting-core": "workspace:*",
+    "@conclave/ui-tokens": "workspace:*",
     "@tanstack/react-hotkeys": "^0.1.1",
     "better-auth": "^1.6.2",
     "jose": "^6.1.3",

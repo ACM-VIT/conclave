@@ -1,6 +1,7 @@
 package conclave.module
 
 import android.content.Context
+import android.media.projection.MediaProjection
 import org.mediasoup.droid.Consumer
 import org.mediasoup.droid.Device
 import org.mediasoup.droid.MediasoupClient
@@ -18,6 +19,7 @@ import org.webrtc.EglBase
 import org.webrtc.MediaConstraints
 import org.webrtc.MediaStreamTrack
 import org.webrtc.PeerConnectionFactory
+import org.webrtc.ScreenCapturerAndroid
 import org.webrtc.SurfaceTextureHelper
 import org.webrtc.VideoCapturer
 import org.webrtc.VideoSource
@@ -75,7 +77,10 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         val consumer: Consumer,
         val producerId: String,
         val userId: String,
-        val kind: String
+        val kind: String,
+        // "{userId}" for webcam, "{userId}-screen" for a screen-share, so a
+        // user's webcam + screen tracks coexist (mirrors the iOS client).
+        val trackKey: String = "",
     )
 
     private val consumers: MutableMap<String, ConsumerInfo> = mutableMapOf()
@@ -91,6 +96,12 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     private var localVideoTrack: VideoTrack? = null
     private var localAudioTrack: AudioTrack? = null
 
+    // Screen-share capture chain (MediaProjection -> ScreenCapturerAndroid).
+    private var screenCapturer: VideoCapturer? = null
+    private var screenVideoSource: VideoSource? = null
+    private var screenSurfaceTextureHelper: SurfaceTextureHelper? = null
+    private var screenVideoTrack: VideoTrack? = null
+
     internal fun configure(socketManager: SocketIOManager, rtpCapabilities: RtpCapabilities) {
         this.socketManager = socketManager
         this.serverRtpCapabilities = rtpCapabilities
@@ -100,10 +111,19 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         ensurePeerConnectionFactory(context)
 
         val device = Device()
-        val capabilities = encodeJSONString(rtpCapabilities)
+        // mediasoup Device.load() takes the router rtpCapabilities as a JSON
+        // string. We use the verbatim JSON the server sent in the joinRoom ack
+        // (captured by SocketIOManager) rather than re-encoding the decoded
+        // Codable struct — Skip's JSONEncoder crashes on the [String: String]
+        // codec `parameters` map ("Tuple2 cannot be cast to Encodable"). The
+        // raw JSON matches what the iOS path feeds load (numeric `apt`/
+        // `packetization-mode`, string `profile-level-id`) — keep it verbatim.
+        val capabilities = socketManager.routerRtpCapabilitiesJson
+            ?: throw ErrorException("Router RTP capabilities JSON unavailable")
         try {
             device.load(capabilities, null)
         } catch (error: Throwable) {
+            android.util.Log.e("ConclaveScreenCap", "configure() device.load FAILED", error)
             debugLog("[WebRTC] Failed to load device capabilities: ${error}")
         }
         this.device = device
@@ -149,7 +169,10 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         audioTrack.setEnabled(true)
 
         val appData = encodeJSONString(ProducerAppData(type = ProducerType.webcam.rawValue, paused = false))
-        val producer = sendTransport.produce(this, audioTrack as MediaStreamTrack, null, null, appData)
+        // produce(listener, track, encodings, codecOptions, codec, appData) — the
+        // 5-arg overload's last String is `codec`, NOT appData, so appData must
+        // go in the 6-arg slot with codec=null (else it's parsed as a codec).
+        val producer = sendTransport.produce(this, audioTrack as MediaStreamTrack, null, null, null, appData)
         producer.resume()
 
         audioProducer = producer
@@ -180,7 +203,8 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         videoTrack.setEnabled(true)
 
         val appData = encodeJSONString(ProducerAppData(type = ProducerType.webcam.rawValue, paused = false))
-        val producer = sendTransport.produce(this, videoTrack as MediaStreamTrack, null, null, appData)
+        // codec=null in the 6-arg slot — see startProducingAudio.
+        val producer = sendTransport.produce(this, videoTrack as MediaStreamTrack, null, null, null, appData)
         producer.resume()
 
         videoProducer = producer
@@ -191,26 +215,122 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         localVideoTrackWrapper = wrapper
     }
 
-    internal suspend fun consumeProducer(producerId: String, producerUserId: String) {
+    /// Mirrors startProducingVideo but captures the device screen via
+    /// MediaProjection. The permission result Intent was stored by
+    /// ScreenCaptureManager from the consent dialog; ScreenCapturerAndroid mints
+    /// its own MediaProjection from it (the foreground service must already be
+    /// live with type mediaProjection — the VM awaits requestCapture() first).
+    internal suspend fun startScreenSharing() {
+        val sendTransport = sendTransport ?: throw ErrorException("Send transport not ready")
+        val context = ProcessInfo.processInfo.androidContext
+        ensurePeerConnectionFactory(context)
+
+        // The consent Intent is single-use on API 34+ (one Intent -> one
+        // MediaProjection -> one createVirtualDisplay). ScreenCapturerAndroid
+        // calls getMediaProjection(RESULT_OK, data) + createVirtualDisplay()
+        // synchronously inside startCapture(); both are gated by the OS on the
+        // mediaProjection-type FGS already being foregrounded — which the VM
+        // guarantees by awaiting ScreenCaptureManager.requestCapture() first.
+        val data = ScreenCaptureManager.getCaptureResultIntent()
+            ?: throw ErrorException("No screen capture permission")
+
+        // A non-null MediaProjection.Callback is mandatory on API 34+:
+        // ScreenCapturerAndroid registers it before createVirtualDisplay(), and
+        // omitting it throws IllegalStateException. onStop() fires when the user
+        // revokes via the system UI / notification; propagate so the meeting
+        // tears down the producer and resets UI.
+        val capturer = ScreenCapturerAndroid(data, object : MediaProjection.Callback() {
+            override fun onStop() {
+                ScreenCaptureManager.onProjectionRevoked?.invoke()
+            }
+        })
+        screenCapturer = capturer
+
+        screenSurfaceTextureHelper = SurfaceTextureHelper.create("ScreenCaptureThread", eglBase.eglBaseContext)
+        screenVideoSource = peerConnectionFactory?.createVideoSource(true)
+        val source = screenVideoSource ?: throw ErrorException("Screen source unavailable")
+        capturer.initialize(screenSurfaceTextureHelper, context, source.capturerObserver)
+
+        val metrics = context.resources.displayMetrics
+        try {
+            // getMediaProjection() + createVirtualDisplay() happen here. If the
+            // typed FGS isn't live, or the consent token was already consumed,
+            // this throws SecurityException. Tear down the half-built capture
+            // chain so a retry starts clean (no leaked SurfaceTextureHelper /
+            // capturer) and rethrow for the VM's catch to surface the error.
+            capturer.startCapture(metrics.widthPixels, metrics.heightPixels, 30)
+        } catch (t: Throwable) {
+            android.util.Log.e("ConclaveScreenCap", "startCapture FAILED", t)
+            try {
+                capturer.dispose()
+            } catch (_: Throwable) {
+            }
+            screenCapturer = null
+            screenSurfaceTextureHelper?.dispose()
+            screenSurfaceTextureHelper = null
+            screenVideoSource = null
+            // Drop the now-consumed/invalid consent token so the next share
+            // requests fresh consent instead of reusing a single-use Intent.
+            ScreenCaptureManager.stopCapture()
+            throw ErrorException("Screen capture failed to start: ${t}")
+        }
+
+        val track = peerConnectionFactory?.createVideoTrack("screen0", source)
+            ?: throw ErrorException("Screen track unavailable")
+        track.setEnabled(true)
+        screenVideoTrack = track
+
+        val appData = encodeJSONString(ProducerAppData(type = ProducerType.screen.rawValue, paused = false))
+        // codec=null in the 6-arg slot — see startProducingAudio.
+        val producer = sendTransport.produce(this, track as MediaStreamTrack, null, null, null, appData)
+        producer.resume()
+        screenProducer = producer
+        android.util.Log.i("ConclaveScreenCap", "startScreenSharing: screen producer created id=${producer.id}")
+    }
+
+    internal suspend fun stopScreenSharing() {
+        screenProducer?.close()
+        screenProducer = null
+        try {
+            screenCapturer?.stopCapture()
+        } catch (_: Throwable) {
+        }
+        screenCapturer?.dispose()
+        screenCapturer = null
+        screenSurfaceTextureHelper?.dispose()
+        screenSurfaceTextureHelper = null
+        screenVideoSource = null
+        screenVideoTrack?.setEnabled(false)
+        screenVideoTrack = null
+    }
+
+    internal suspend fun consumeProducer(producerId: String, producerUserId: String, producerType: String = "webcam") {
         val socket = socketManager ?: throw ErrorException("Socket not configured")
-        val rtpCaps = serverRtpCapabilities ?: throw ErrorException("RTP caps missing")
+        val rtpCapsJson = socket.routerRtpCapabilitiesJson ?: throw ErrorException("RTP caps missing")
         val receiveTransport = receiveTransport ?: throw ErrorException("Receive transport missing")
 
-        val response = socket.consume(producerId, rtpCaps)
+        // Raw-JSON path: send the router caps verbatim and feed the server's
+        // rtpParameters straight into mediasoup, never touching the Codable
+        // structs that Skip's JSONEncoder can't round-trip.
+        val response = socket.consumeRaw(producerId, rtpCapsJson)
         val consumer = receiveTransport.consume(
             this,
             response.id,
             response.producerId,
             response.kind,
-            encodeJSONString(response.rtpParameters)
+            response.rtpParametersJson
         )
         consumer.resume()
+
+        val isScreen = producerType == "screen"
+        val trackKey = if (isScreen) "${producerUserId}-screen" else producerUserId
 
         consumers[response.id] = ConsumerInfo(
             consumer = consumer,
             producerId = response.producerId,
             userId = producerUserId,
-            kind = response.kind
+            kind = response.kind,
+            trackKey = trackKey
         )
 
         socket.resumeConsumer(response.id)
@@ -219,11 +339,11 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             val track = consumer.track as? VideoTrack
             val wrapper = VideoTrackWrapper(
                 id = response.id,
-                userId = producerUserId,
+                userId = trackKey,
                 isLocal = false,
                 track = track
             )
-            remoteVideoTracks[producerUserId] = wrapper
+            remoteVideoTracks[trackKey] = wrapper
         }
     }
 
@@ -239,14 +359,16 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             if (entry != null) {
                 entry.value.consumer.close()
                 consumers.remove(entry.key)
-                if (entry.value.userId.isNotEmpty()) {
-                    remoteVideoTracks.removeValue(forKey = entry.value.userId)
+                val key = if (entry.value.trackKey.isEmpty()) entry.value.userId else entry.value.trackKey
+                if (key.isNotEmpty()) {
+                    remoteVideoTracks.removeValue(forKey = key)
                 }
             }
         }
 
         if (userId.isNotEmpty()) {
             remoteVideoTracks.removeValue(forKey = userId)
+            remoteVideoTracks.removeValue(forKey = "${userId}-screen")
         }
     }
 
@@ -306,6 +428,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     }
 
     internal suspend fun cleanup() {
+        android.util.Log.i("ConclaveScreenCap", "cleanup() called — WHO?", Throwable("cleanup stack"))
         try {
             videoCapturer?.stopCapture()
         } catch (_: Throwable) {
@@ -314,6 +437,17 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         videoCapturer = null
         surfaceTextureHelper?.dispose()
         surfaceTextureHelper = null
+
+        try {
+            screenCapturer?.stopCapture()
+        } catch (_: Throwable) {
+        }
+        screenCapturer?.dispose()
+        screenCapturer = null
+        screenSurfaceTextureHelper?.dispose()
+        screenSurfaceTextureHelper = null
+        screenVideoSource = null
+        screenVideoTrack = null
 
         audioProducer?.close()
         videoProducer?.close()
@@ -366,17 +500,20 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         val socket = socketManager ?: return ""
         return runBlocking {
             try {
-                val params = decodeJSONString<RtpParameters>(rtpParameters) ?: return@runBlocking ""
+                // rtpParameters arrives as raw JSON from mediasoup; forward it
+                // verbatim instead of decoding into RtpParameters and re-encoding
+                // (Skip's JSONEncoder can't encode the AnyCodable codec params).
                 val appDataPayload = decodeJSONString<ProducerAppData>(appData, allowFailure = true)
                 val type = ProducerType(rawValue = appDataPayload?.type ?: "webcam") ?: ProducerType.webcam
-                socket.produce(
+                socket.produceRaw(
                     transportId = transport.id,
                     kind = kind,
-                    rtpParameters = params,
+                    rtpParametersJson = rtpParameters,
                     type = type,
                     paused = appDataPayload?.paused ?: false
                 )
-            } catch (_: Throwable) {
+            } catch (t: Throwable) {
+                android.util.Log.e("ConclaveScreenCap", "onProduce FAILED", t)
                 ""
             }
         }

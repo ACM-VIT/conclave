@@ -158,12 +158,12 @@ function MobileParticipantsPanel({
             <div
               className="mt-3 flex items-center justify-between"
             >
-              <h2 className="text-base font-semibold text-[#FEFCD9]">
+              <h2 className="text-base font-semibold text-[#fafafa]">
                 Participants ({participantArray.length + 1})
               </h2>
               <button
                 onClick={onClose}
-                className="mobile-pill mobile-glass-soft px-3 py-1 text-xs text-[#FEFCD9]"
+                className="mobile-pill mobile-glass-soft px-3 py-1 text-xs text-[#fafafa]"
               >
                 Done
               </button>
@@ -188,9 +188,9 @@ function MobileParticipantsPanel({
                 {pendingArray.map(([userId, displayName]) => (
                   <div
                     key={userId}
-                    className="flex items-center justify-between gap-3 rounded-xl border border-[#FEFCD9]/10 bg-white/5 px-3 py-2"
+                    className="flex items-center justify-between gap-3 rounded-xl border border-[#fafafa]/10 bg-white/5 px-3 py-2"
                   >
-                    <span className="text-sm text-[#FEFCD9] truncate">
+                    <span className="text-sm text-[#fafafa] truncate">
                       {formatName(displayName)}
                     </span>
                     <div className="flex items-center gap-2">
@@ -216,12 +216,12 @@ function MobileParticipantsPanel({
           )}
 
           <div className="space-y-2">
-            <span className="text-xs text-[#FEFCD9]/55">In meeting</span>
+            <span className="text-xs text-[#fafafa]/55">In meeting</span>
             <div className="space-y-2">
-              <div className="flex items-center justify-between gap-3 rounded-xl border border-[#FEFCD9]/10 bg-white/5 px-3 py-3">
+              <div className="flex items-center justify-between gap-3 rounded-xl border border-[#fafafa]/10 bg-white/5 px-3 py-3">
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
-                    <span className="text-sm text-[#FEFCD9] truncate">
+                    <span className="text-sm text-[#fafafa] truncate">
                       {formatName(getDisplayName(currentUserId), 16)}
                     </span>
                     <span className="text-[9px] uppercase tracking-[0.2em] text-[#F95F4A]/70">
@@ -246,7 +246,7 @@ function MobileParticipantsPanel({
                 return (
                   <div key={participant.userId} className="space-y-2">
                     <div
-                      className={`flex items-center justify-between gap-3 rounded-xl border border-[#FEFCD9]/10 bg-white/5 px-3 py-3 transition ${
+                      className={`flex items-center justify-between gap-3 rounded-xl border border-[#fafafa]/10 bg-white/5 px-3 py-3 transition ${
                         isExpanded ? "bg-white/10" : ""
                       }`}
                       role="button"
@@ -263,7 +263,7 @@ function MobileParticipantsPanel({
                     >
                       <div className="min-w-0">
                         <div className="flex items-center gap-2 min-w-0">
-                          <span className="text-sm text-[#FEFCD9] truncate">
+                          <span className="text-sm text-[#fafafa] truncate">
                             {formatName(getDisplayName(participant.userId), 16)}
                           </span>
                           {effectiveHostUserIds.has(participant.userId) && (
@@ -279,7 +279,7 @@ function MobileParticipantsPanel({
                           event.stopPropagation();
                           toggleExpanded(participant.userId);
                         }}
-                        className="rounded-full border border-[#FEFCD9]/15 p-1 text-[#FEFCD9]/60 transition-colors hover:border-[#FEFCD9]/35 hover:text-[#FEFCD9]"
+                        className="rounded-full border border-[#fafafa]/15 p-1 text-[#fafafa]/75 transition-colors hover:border-[#fafafa]/35 hover:text-[#fafafa]"
                         aria-expanded={isExpanded}
                         aria-controls={detailId}
                         aria-label={`Toggle details for ${getDisplayName(
@@ -297,11 +297,11 @@ function MobileParticipantsPanel({
                     {isExpanded && (
                       <div
                         id={detailId}
-                        className="rounded-xl border border-[#FEFCD9]/10 bg-black/30 px-3 py-2 text-[11px] text-[#FEFCD9]/70"
+                        className="rounded-xl border border-[#fafafa]/10 bg-black/30 px-3 py-2 text-[11px] text-[#fafafa]/82"
                       >
                         <div className="flex flex-wrap items-center gap-2">
-                          <span className="text-[#FEFCD9]/55">ID:</span>
-                          <span className="text-[#FEFCD9]">
+                          <span className="text-[#fafafa]/55">ID:</span>
+                          <span className="text-[#fafafa]">
                             {participant.userId.split("#")[0] || participant.userId}
                           </span>
                         </div>
@@ -323,7 +323,7 @@ function MobileParticipantsPanel({
                                   <button
                                     onClick={cancelHostPromotion}
                                     disabled={promotingHostUserId === participant.userId}
-                                    className="rounded-md border border-[#FEFCD9]/15 bg-[#FEFCD9]/5 px-2 py-1 text-[#FEFCD9]/60 transition-colors hover:border-[#FEFCD9]/35 hover:text-[#FEFCD9] disabled:opacity-40 disabled:cursor-not-allowed"
+                                    className="rounded-md border border-[#fafafa]/15 bg-[#fafafa]/5 px-2 py-1 text-[#fafafa]/75 transition-colors hover:border-[#fafafa]/35 hover:text-[#fafafa] disabled:opacity-40 disabled:cursor-not-allowed"
                                   >
                                     Cancel
                                   </button>
@@ -332,7 +332,7 @@ function MobileParticipantsPanel({
                                 <button
                                   onClick={() => beginHostPromotion(participant.userId)}
                                   disabled={promotingHostUserId === participant.userId}
-                                  className="rounded-md border border-[#FEFCD9]/15 bg-[#FEFCD9]/5 px-2 py-1 text-[#FEFCD9]/70 transition-colors hover:border-[#FEFCD9]/35 hover:text-[#FEFCD9] disabled:opacity-40 disabled:cursor-not-allowed"
+                                  className="rounded-md border border-[#fafafa]/15 bg-[#fafafa]/5 px-2 py-1 text-[#fafafa]/82 transition-colors hover:border-[#fafafa]/35 hover:text-[#fafafa] disabled:opacity-40 disabled:cursor-not-allowed"
                                 >
                                   Make host
                                 </button>
@@ -351,7 +351,7 @@ function MobileParticipantsPanel({
                                   <button
                                     onClick={cancelKickUser}
                                     disabled={removingUserId === participant.userId}
-                                    className="rounded-md border border-[#FEFCD9]/15 bg-[#FEFCD9]/5 px-2 py-1 text-[#FEFCD9]/60 transition-colors hover:border-[#FEFCD9]/35 hover:text-[#FEFCD9] disabled:opacity-40 disabled:cursor-not-allowed"
+                                    className="rounded-md border border-[#fafafa]/15 bg-[#fafafa]/5 px-2 py-1 text-[#fafafa]/75 transition-colors hover:border-[#fafafa]/35 hover:text-[#fafafa] disabled:opacity-40 disabled:cursor-not-allowed"
                                   >
                                     Cancel
                                   </button>

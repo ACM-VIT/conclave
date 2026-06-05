@@ -1,0 +1,41 @@
+/**
+ * Web Tailwind v4 bridge for @conclave/ui-tokens.
+ * Imported by apps/web/src/app/globals.css so utilities like `bg-surface`,
+ * `text-accent`, `rounded-tile`, `font-sans` resolve to the same literals the
+ * native side reads from tokens.ts. Keep these values in sync with tokens.ts.
+ *
+ * Colors are solid hex so Tailwind opacity modifiers (e.g. `bg-accent/15`,
+ * `border-text/10`) work. NO shadow/glow/elevation tokens — by design.
+ */
+@theme {
+  /* Backgrounds & surfaces */
+  --color-bg: #0a0a0b;
+  --color-bg-alt: #131316;
+  --color-surface: #18181b;
+  --color-surface-raised: #232327;
+  --color-surface-hover: #2e2e33;
+
+  /* Text */
+  --color-text: #fafafa;
+
+  /* Accents */
+  --color-accent: #f95f4a;
+  --color-accent-secondary: #ff007a;
+  --color-speaking: #f95f4a;
+
+  /* Status */
+  --color-danger: #ea4335;
+  --color-warning: #fbbf24;
+  --color-success: #22c55e;
+
+  /* Radii */
+  --radius-tile: 16px;
+  --radius-pill: 999px;
+
+  /* Type */
+  --font-sans: "PolySans Trial", system-ui, -apple-system, sans-serif;
+  --font-display: "PolySans Bulky Wide", sans-serif;
+
+  /* Motion — single fast tier, nothing slower */
+  --duration-fast: 120ms;
+}

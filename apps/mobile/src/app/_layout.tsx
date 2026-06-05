@@ -21,7 +21,6 @@ export default function Layout() {
   const [fontsLoaded, fontError] = useFonts({
     "PolySans-BulkyWide": require("../../assets/fonts/PolySansTrial-BulkyWide.otf"),
     "PolySans-Bulky": require("../../assets/fonts/PolySansTrial-Bulky.otf"),
-    "PolySans-Mono": require("../../assets/fonts/PolySansTrial-NeutralMono.otf"),
     "PolySans-Regular": require("../../assets/fonts/PolySansTrial-Neutral.otf"),
     "PolySans-Median": require("../../assets/fonts/PolySansTrial-Median.otf"),
     "PolySans-Slim": require("../../assets/fonts/PolySansTrial-Slim.otf"),
@@ -49,7 +48,7 @@ export default function Layout() {
     <Stack
       screenOptions={{
         headerShown: false,
-        contentStyle: { backgroundColor: "#060606" },
+        contentStyle: { backgroundColor: "#0a0a0b" },
       }}
     />
   );

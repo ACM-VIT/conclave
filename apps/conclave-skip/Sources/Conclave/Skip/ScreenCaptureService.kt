@@ -5,13 +5,18 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
-import android.content.Context
 import android.content.Intent
-import android.media.projection.MediaProjection
-import android.media.projection.MediaProjectionManager
+import android.content.pm.ServiceInfo
+import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 
+/// Foreground service of type `mediaProjection`. Its ONLY job is to be
+/// foregrounded with that type before the projection is minted — it does NOT
+/// create a MediaProjection itself. The permission result Intent can mint a
+/// projection exactly once, and WebRTCClient's ScreenCapturerAndroid mints it,
+/// so the service must not consume the token. On Android 14+ a mediaProjection
+/// FGS must be running before the projection is obtained.
 class ScreenCaptureService : Service() {
     companion object {
         const val CHANNEL_ID = "conclave_screen_capture_channel"
@@ -20,41 +25,54 @@ class ScreenCaptureService : Service() {
         const val ACTION_STOP = "conclave.app.action.STOP_SCREEN_CAPTURE"
         const val EXTRA_RESULT_CODE = "result_code"
         const val EXTRA_DATA = "data"
-        
-        var mediaProjection: MediaProjection? = null
-            private set
-        
-        fun getMediaProjection(context: Context): MediaProjection? {
-            return mediaProjection
-        }
     }
-    
+
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
     }
-    
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> {
-                stopScreenCapture()
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
                 return START_NOT_STICKY
             }
             ACTION_START -> {
-                val resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, -1)
-                val data = intent.getParcelableExtra<Intent>(EXTRA_DATA)
-                
-                if (resultCode != -1 && data != null) {
-                    val projectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-                    mediaProjection = projectionManager.getMediaProjection(resultCode, data)
-                    
-                    val notification = createNotification()
-                    startForeground(NOTIFICATION_ID, notification)
-                    
-                    ScreenCaptureManager.onMediaProjectionReady(mediaProjection)
+                val notification = createNotification()
+                // startForeground(...mediaProjection) can throw on API 34+
+                // (SecurityException / ForegroundServiceStartNotAllowedException
+                // / MissingForegroundServiceTypeException). If it does, the FGS
+                // is NOT live with the mediaProjection type, so minting the
+                // projection in ScreenCapturerAndroid.startCapture() would throw
+                // the "Media projections require a foreground service of type
+                // ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION"
+                // SecurityException. Gate the resume on success: only signal the
+                // VM to proceed once the typed FGS is actually foregrounded.
+                try {
+                    if (Build.VERSION.SDK_INT >= 29) {
+                        startForeground(
+                            NOTIFICATION_ID,
+                            notification,
+                            ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+                        )
+                    } else {
+                        startForeground(NOTIFICATION_ID, notification)
+                    }
+                } catch (t: Throwable) {
+                    android.util.Log.e("ConclaveScreenCap", "startForeground(mediaProjection) FAILED", t)
+                    // Typed FGS failed to come up — do NOT proceed into the
+                    // projection mint. Resume the waiter with false so the VM
+                    // skips startScreenSharing() instead of crashing into a
+                    // SecurityException it then has to revert.
+                    ScreenCaptureManager.onServiceForegroundFailed()
+                    stopSelf()
+                    return START_NOT_STICKY
                 }
+                // The FGS is live with the mediaProjection type — now the
+                // capturer is allowed to mint the projection. Resume the VM.
+                ScreenCaptureManager.onServiceForegrounded()
                 return START_STICKY
             }
             else -> {
@@ -62,20 +80,16 @@ class ScreenCaptureService : Service() {
             }
         }
     }
-    
+
     override fun onBind(intent: Intent?): IBinder? = null
-    
+
     override fun onDestroy() {
         super.onDestroy()
-        stopScreenCapture()
-    }
-    
-    private fun stopScreenCapture() {
-        mediaProjection?.stop()
-        mediaProjection = null
+        // Propagate revoke (covers the notification Stop action / service kill)
+        // so the meeting tears the WebRTC producer down + resets UI state.
         ScreenCaptureManager.onMediaProjectionStopped()
     }
-    
+
     private fun createNotificationChannel() {
         val channel = NotificationChannel(
             CHANNEL_ID,
@@ -88,16 +102,16 @@ class ScreenCaptureService : Service() {
         val manager = getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(channel)
     }
-    
+
     private fun createNotification(): Notification {
         val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
         val pendingIntent = PendingIntent.getActivity(
-            this, 
-            0, 
+            this,
+            0,
             launchIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-        
+
         val stopIntent = Intent(this, ScreenCaptureService::class.java).apply {
             action = ACTION_STOP
         }
@@ -107,7 +121,7 @@ class ScreenCaptureService : Service() {
             stopIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-        
+
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Conclave")
             .setContentText("Sharing your screen")

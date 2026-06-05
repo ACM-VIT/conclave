@@ -1,0 +1,45 @@
+{
+  "id": "78506a1c-c772-4b6c-8fb1-303357cf0078",
+  "roomId": "yami-shoto-aster",
+  "clientId": "public",
+  "scheduledWebinarId": null,
+  "status": "active",
+  "startedAt": 1780076504778,
+  "endedAt": null,
+  "pausedDurationMs": 0,
+  "startedBy": "guest-53bc4164-fd9c-402b-9d4e-0af76b33b5d2@guest.conclave#1780076492745-l82we5rgl",
+  "endedBy": null,
+  "totalBytes": 0,
+  "resolution": {
+    "width": 1920,
+    "height": 1080
+  },
+  "audioBitrateKbps": 128,
+  "videoBitrateKbps": 5000,
+  "tracks": [
+    {
+      "id": "78506a1c-c772-4b6c-8fb1-303357cf0078",
+      "trackKind": "video",
+      "producerId": "view",
+      "producerUserId": "view-recorder",
+      "displayName": "Meeting view",
+      "codec": "vp9+opus",
+      "container": "webm",
+      "filename": "view.webm",
+      "relativePath": "view.webm",
+      "startedAt": 1780076504778,
+      "endedAt": null,
+      "durationMs": 7428,
+      "byteSize": 0,
+      "status": "active",
+      "errorMessage": null
+    }
+  ],
+  "composite": null,
+  "manifestPath": "/Users/ishaan/Projects/conclave/packages/sfu/data/recordings/yami-shoto-aster/78506a1c-c772-4b6c-8fb1-303357cf0078/manifest.json",
+  "manifestRelativePath": "yami-shoto-aster/78506a1c-c772-4b6c-8fb1-303357cf0078/manifest.json",
+  "storagePath": "/Users/ishaan/Projects/conclave/packages/sfu/data/recordings/yami-shoto-aster/78506a1c-c772-4b6c-8fb1-303357cf0078",
+  "storageRelativePath": "yami-shoto-aster/78506a1c-c772-4b6c-8fb1-303357cf0078",
+  "errorMessage": null,
+  "speakerTimeline": []
+}

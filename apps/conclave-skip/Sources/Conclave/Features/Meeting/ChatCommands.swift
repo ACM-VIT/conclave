@@ -16,7 +16,10 @@ enum ChatCommand: String, CaseIterable {
     case unmute = "unmute"
     case cameraOn = "cameraon"
     case cameraOff = "cameraoff"
-    
+    case help = "help"
+    case clear = "clear"
+    case leave = "leave"
+
     var displayName: String {
         switch self {
         case .raise: return "Raise Hand"
@@ -25,9 +28,12 @@ enum ChatCommand: String, CaseIterable {
         case .unmute: return "Unmute"
         case .cameraOn: return "Camera On"
         case .cameraOff: return "Camera Off"
+        case .help: return "Help"
+        case .clear: return "Clear chat"
+        case .leave: return "Leave"
         }
     }
-    
+
     var description: String {
         switch self {
         case .raise: return "Raise your hand"
@@ -36,9 +42,12 @@ enum ChatCommand: String, CaseIterable {
         case .unmute: return "Unmute your microphone"
         case .cameraOn: return "Turn on your camera"
         case .cameraOff: return "Turn off your camera"
+        case .help: return "Show available commands"
+        case .clear: return "Clear your local chat"
+        case .leave: return "Leave the meeting"
         }
     }
-    
+
     var icon: String {
         switch self {
         case .raise: return "hand.raised.fill"
@@ -47,6 +56,9 @@ enum ChatCommand: String, CaseIterable {
         case .unmute: return "mic.fill"
         case .cameraOn: return "video.fill"
         case .cameraOff: return "video.slash.fill"
+        case .help: return "questionmark.circle.fill"
+        case .clear: return "trash.fill"
+        case .leave: return "rectangle.portrait.and.arrow.right.fill"
         }
     }
 }
@@ -116,6 +128,30 @@ struct ChatCommandParser {
 enum SystemMessageType {
     case commandExecuted(command: ChatCommand, userName: String)
     case commandFailed(command: ChatCommand, reason: String)
+    case info(String)
+}
+
+/// A unified chat-log entry so user messages and system notes (slash-command
+/// feedback) render in one timestamp-ordered timeline. Previously the chat view
+/// iterated only `chatMessages`, so `systemMessages` (appended by every executed
+/// command) were never shown and commands ran with no visible confirmation.
+enum ChatTimelineEntry: Identifiable {
+    case message(ChatMessage)
+    case system(SystemMessage)
+
+    var id: String {
+        switch self {
+        case .message(let m): return "m_\(m.id)"
+        case .system(let s): return "s_\(s.id)"
+        }
+    }
+
+    var timestamp: Date {
+        switch self {
+        case .message(let m): return m.timestamp
+        case .system(let s): return s.timestamp
+        }
+    }
 }
 
 struct SystemMessage: Identifiable, Equatable {
@@ -135,6 +171,8 @@ struct SystemMessage: Identifiable, Equatable {
             return "\(userName) used /\(command.rawValue)"
         case .commandFailed(let command, let reason):
             return "Command /\(command.rawValue) failed: \(reason)"
+        case .info(let text):
+            return text
         }
     }
     

@@ -85,5 +85,8 @@ final class SocketIOManager {
     func admitUser(userId: String) async throws { fatalError() }
     func rejectUser(userId: String) async throws { fatalError() }
     func kickUser(userId: String) async throws { fatalError() }
+    func muteUser(userId: String) async throws { fatalError() }
+    func muteAll() async throws { fatalError() }
+    func promoteHost(userId: String) async throws { fatalError() }
 }
 #endif

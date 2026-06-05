@@ -35,6 +35,9 @@ enum SocketEvent {
     static let admitUser = "admitUser"
     static let rejectUser = "rejectUser"
     static let kickUser = "kickUser"
+    static let muteAll = "muteAll"
+    static let promoteHost = "promoteHost"
+    static let adminMuteUser = "admin:muteUser"
 
     // Incoming
     static let userJoined = "userJoined"
@@ -379,6 +382,18 @@ final class SocketIOManager {
 
     func kickUser(userId: String) async throws {
         _ = try await emit(event: SocketEvent.kickUser, payload: ["userId": userId])
+    }
+
+    func muteUser(userId: String) async throws {
+        _ = try await emit(event: SocketEvent.adminMuteUser, payload: ["userId": userId])
+    }
+
+    func muteAll() async throws {
+        _ = try await emit(event: SocketEvent.muteAll, payload: [String: String]())
+    }
+
+    func promoteHost(userId: String) async throws {
+        _ = try await emit(event: SocketEvent.promoteHost, payload: ["userId": userId])
     }
 
     // MARK: - Private: Emit with Ack

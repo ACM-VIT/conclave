@@ -133,12 +133,12 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   message: {
-    color: "#FEFCD9",
+    color: "#fafafa",
     fontSize: 13,
     fontWeight: "600",
   },
   code: {
-    color: "rgba(254, 252, 217, 0.6)",
+    color: "rgba(250, 250, 250, 0.6)",
     fontSize: 11,
     letterSpacing: 0.6,
     textTransform: "uppercase",
@@ -169,7 +169,7 @@ const styles = StyleSheet.create({
     borderColor: "rgba(255, 255, 255, 0.1)",
   },
   secondaryActionText: {
-    color: "rgba(254, 252, 217, 0.8)",
+    color: "rgba(250, 250, 250, 0.8)",
     fontSize: 11,
     fontWeight: "600",
     letterSpacing: 0.4,

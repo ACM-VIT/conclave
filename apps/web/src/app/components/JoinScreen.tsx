@@ -1,26 +1,20 @@
 "use client";
 
 import {
-  AlertCircle,
   Loader2,
-  Users,
-  Ghost,
   Video,
   VideoOff,
   Mic,
   MicOff,
   Plus,
   ArrowRight,
-  CalendarClock,
-  Copy,
-  RefreshCw,
-  Trash2,
+  Volume2,
+  Ghost,
 } from "lucide-react";
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
+import { Avatar } from "@conclave/ui-tokens/web";
 import { signIn, signOut, useSession } from "@/lib/auth-client";
 import type { RoomInfo } from "@/lib/sfu-types";
-import type { ScheduledMeeting } from "@/lib/scheduled-meetings";
-import ScheduleMeetingModal from "./ScheduleMeetingModal";
 import type { ConnectionState, MeetError } from "../lib/types";
 import {
   DEFAULT_AUDIO_CONSTRAINTS,
@@ -30,7 +24,6 @@ import {
   generateRoomCode,
   ROOM_CODE_MAX_LENGTH,
   extractRoomCode,
-  getRoomWordSuggestions,
   sanitizeInstitutionDisplayName,
   sanitizeRoomCodeInput,
   sanitizeRoomCode,
@@ -60,11 +53,7 @@ const buildGuestUser = (
     typeof existingUser?.email === "string" ? existingUser.email.trim() : "";
   const id = existingGuestId || createGuestId();
   const email = existingEmail || `${id}@guest.conclave`;
-  return {
-    id,
-    email,
-    name,
-  };
+  return { id, email, name };
 };
 
 interface JoinScreenProps {
@@ -99,24 +88,32 @@ interface JoinScreenProps {
   onTestSpeaker?: () => void;
 }
 
+// Flat, Google-Meet-style lobby (dark Carbon, no gradients/marketing): a single
+// screen with the mic/cam self-preview on the left and the join actions on the
+// right. The whole 3-phase welcome/auth/join flow was ripped out for this.
+const FIELD =
+  "w-full rounded-xl border border-white/12 bg-[#131316] px-4 h-12 text-[15px] text-[#fafafa] placeholder:text-[#fafafa]/35 transition-[border-color] duration-150 focus:border-[#F95F4A] focus:outline-none disabled:opacity-50";
+const CTA_PRIMARY =
+  "inline-flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-[#F95F4A] text-[15px] font-medium text-white transition-[filter] duration-150 hover:brightness-105 disabled:bg-[#232327] disabled:text-[#fafafa]/40 disabled:cursor-not-allowed";
+const CTA_GHOST =
+  "inline-flex h-12 w-full items-center justify-center gap-2 rounded-xl border border-white/12 bg-[#18181b] text-[15px] font-medium text-[#fafafa] transition-colors duration-150 hover:bg-[#232327] disabled:opacity-50";
+const PROVIDER_BTN =
+  "inline-flex h-11 w-full items-center justify-center gap-2.5 rounded-xl border border-white/10 bg-[#18181b] text-[14px] font-medium text-[#fafafa] transition-colors duration-150 hover:bg-[#232327] disabled:opacity-50";
+
+const isGoogleSignInEnabled =
+  process.env.NEXT_PUBLIC_GOOGLE_SIGN_IN_ENABLED === "true";
+
 function JoinScreen({
   roomId,
   onRoomIdChange,
   onJoinRoom,
   isLoading,
+  isAdmin,
   user,
   userEmail,
-  connectionState,
-  isAdmin,
-  enableRoomRouting,
   forceJoinOnly,
+  enableRoomRouting,
   allowGhostMode,
-  showPermissionHint,
-  rooms,
-  roomsStatus,
-  onRefreshRooms,
-  displayNameInput,
-  onDisplayNameInputChange,
   isGhostMode,
   onGhostModeChange,
   onUserChange,
@@ -128,286 +125,195 @@ function JoinScreen({
 }: JoinScreenProps) {
   const normalizedRoomId =
     roomId === "undefined" || roomId === "null" ? "" : roomId;
-  const canJoin = normalizedRoomId.trim().length > 0;
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const [localStream, setLocalStream] = useState<MediaStream | null>(null);
-  const [isCameraOn, setIsCameraOn] = useState(false); // Start with camera off
-  const [isMicOn, setIsMicOn] = useState(false); // Start with mic off
   const isRoutedRoom = forceJoinOnly;
   const enforceShortCode = enableRoomRouting || forceJoinOnly;
-  const hasUserIdentity = Boolean(user?.id || user?.email);
-  const [activeTab, setActiveTab] = useState<"new" | "join">(() =>
-    isRoutedRoom ? "join" : "new"
-  );
-  const [phase, setPhase] = useState<"welcome" | "auth" | "join">(() => {
-    if (hasUserIdentity) {
-      return "join";
-    }
-    return "welcome";
-  });
+
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const [localStream, setLocalStream] = useState<MediaStream | null>(null);
+  const [isCameraOn, setIsCameraOn] = useState(false);
+  const [isMicOn, setIsMicOn] = useState(false);
   const [guestName, setGuestName] = useState("");
-  const [customRoomCode, setCustomRoomCode] = useState("");
-  const [isScheduleOpen, setIsScheduleOpen] = useState(false);
-  const [upcomingMeetings, setUpcomingMeetings] = useState<ScheduledMeeting[]>([]);
-  const [copiedMeetingId, setCopiedMeetingId] = useState<string | null>(null);
   const [signInProvider, setSignInProvider] = useState<
-    "google" | "apple" | "roblox" | "vercel" | null
-  >(
-    null
-  );
+    "google" | "apple" | null
+  >(null);
   const isSigningIn = signInProvider !== null;
   const [isSigningOut, setIsSigningOut] = useState(false);
-  const normalizedSegments = useMemo(
-    () => normalizedRoomId.split("-"),
-    [normalizedRoomId]
-  );
-  const currentSegment =
-    normalizedSegments[normalizedSegments.length - 1] ?? "";
-  const usedSegments = normalizedSegments.slice(0, -1).filter(Boolean);
-  const roomSuggestions = useMemo(() => {
-    if (!enforceShortCode) return [];
-    return getRoomWordSuggestions(currentSegment, usedSegments, 5);
-  }, [currentSegment, enforceShortCode, usedSegments]);
-  const inlineSuggestion = roomSuggestions[0] ?? "";
-  const suggestionSuffix =
-    inlineSuggestion &&
-      currentSegment &&
-      inlineSuggestion.startsWith(currentSegment)
-      ? inlineSuggestion.slice(currentSegment.length)
-      : "";
+  // Deferred join: both the guest user (onUserChange) and the host flag
+  // (onIsAdminChange) propagate through the parent asynchronously, and the
+  // parent rebuilds onJoinRoom with the new isHost only on the next render.
+  // So we stash the intent and fire onJoinRoom once both have landed —
+  // otherwise "New meeting" joins with a stale isAdmin=false and the SFU
+  // replies "No room found" (it only creates a room when isHost is true).
+  const [pending, setPending] = useState<{ mode: "new" | "join"; roomId: string } | null>(null);
 
   const { data: session } = useSession();
-  const canSignOut = Boolean(session?.user || user?.id || user?.email);
-  const isSignedInUser = Boolean((session?.user || user) && !user?.id?.startsWith("guest-"));
+  const isSignedInUser = Boolean(
+    (session?.user || user) && !user?.id?.startsWith("guest-")
+  );
+  const hasIdentity = Boolean(user?.id);
   const lastAppliedSessionUserIdRef = useRef<string | null>(null);
 
+  const previewName =
+    normalizeGuestName(user?.name || "") ||
+    normalizeGuestName(guestName || "") ||
+    (userEmail ? userEmail.split("@")[0] : "") ||
+    "You";
+
+  /* --- ?next= redirect after sign-in --- */
   const [nextParam, setNextParam] = useState<string | null>(null);
   const hasPushedNextRef = useRef(false);
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const params = new URLSearchParams(window.location.search);
-    const candidate = params.get("next");
-    if (!candidate) return;
-    if (!candidate.startsWith("/") || candidate.startsWith("//")) return;
+    const candidate = new URLSearchParams(window.location.search).get("next");
+    if (!candidate || !candidate.startsWith("/") || candidate.startsWith("//")) return;
     setNextParam(candidate);
   }, []);
   useEffect(() => {
-    if (!nextParam) return;
-    if (!session?.user) return;
-    if (hasPushedNextRef.current) return;
+    if (!nextParam || !session?.user || hasPushedNextRef.current) return;
     hasPushedNextRef.current = true;
     window.location.href = nextParam;
   }, [nextParam, session]);
 
+  /* --- auto-promote a signed-in session to the active user --- */
   useEffect(() => {
     if (!session?.user) {
       lastAppliedSessionUserIdRef.current = null;
       return;
     }
-
     const isGuestIdentity = Boolean(user?.id?.startsWith("guest-"));
     if (
       (!user || isGuestIdentity) &&
       lastAppliedSessionUserIdRef.current !== session.user.id
     ) {
-      const sessionUser = {
+      onUserChange({
         id: session.user.id,
         email: session.user.email || "",
         name: sanitizeInstitutionDisplayName(
           session.user.name || session.user.email || "User",
           session.user.email || ""
         ),
-      };
-      onUserChange(sessionUser);
-      setPhase("join");
+      });
       lastAppliedSessionUserIdRef.current = session.user.id;
-      return;
-    }
-
-    if (user && !isGuestIdentity && !lastAppliedSessionUserIdRef.current) {
+    } else if (user && !isGuestIdentity && !lastAppliedSessionUserIdRef.current) {
       lastAppliedSessionUserIdRef.current = session.user.id;
     }
   }, [session, user, onUserChange]);
 
-  const prevUserRef = useRef(user);
+  /* --- seed the guest name field from a restored guest user --- */
   useEffect(() => {
-    const prevUser = prevUserRef.current;
-    prevUserRef.current = user;
-
-    if (!prevUser && user) {
-      setPhase("join");
-    }
-    if (prevUser && !user) {
-      setPhase("welcome");
-    }
-  }, [user]);
-
-  useEffect(() => {
-    if (!user?.id?.startsWith("guest-")) return;
-    if (guestName.trim().length > 0) return;
+    if (!user?.id?.startsWith("guest-") || guestName.trim().length > 0) return;
     const nextName = normalizeGuestName(user.name || "");
-    if (!nextName) return;
-    setGuestName(nextName);
+    if (nextName) setGuestName(nextName);
   }, [guestName, user]);
 
-  useEffect(() => {
-    // Only capture media when in join phase
-    if (phase !== "join") {
-      // Stop any existing stream when leaving join phase
-      if (localStream) {
-        localStream.getTracks().forEach((t) => t.stop());
-        setLocalStream(null);
-      }
-      return;
-    }
-
-    // Don't auto-capture - let user explicitly turn on camera/mic
-    return () => {
-      if (localStream) {
-        localStream.getTracks().forEach((t) => t.stop());
-      }
-    };
-  }, [phase]);
-
+  /* --- preview stream is throwaway: stop tracks on unmount (camera light off) --- */
   useEffect(() => {
     if (videoRef.current && localStream) videoRef.current.srcObject = localStream;
+  }, [localStream]);
+  useEffect(() => {
+    return () => {
+      localStream?.getTracks().forEach((t) => t.stop());
+    };
   }, [localStream]);
 
   const toggleCamera = async () => {
     if (isCameraOn && localStream) {
-      // Turn off camera - stop the video track
       const track = localStream.getVideoTracks()[0];
       if (track) {
         track.stop();
-        // Remove video track from stream
         localStream.removeTrack(track);
       }
       setIsCameraOn(false);
-    } else {
-      // Turn on camera - acquire new video track
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: STANDARD_QUALITY_CONSTRAINTS,
-        });
-        const videoTrack = stream.getVideoTracks()[0];
-        if (videoTrack) {
-          if ("contentHint" in videoTrack) {
-            videoTrack.contentHint = "motion";
-          }
-          if (localStream) {
-            localStream.addTrack(videoTrack);
-          } else {
-            setLocalStream(stream);
-          }
-          if (videoRef.current) {
-            videoRef.current.srcObject = localStream || stream;
-          }
-          setIsCameraOn(true);
-        }
-      } catch (err) {
-        console.log("[JoinScreen] Camera access denied");
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: STANDARD_QUALITY_CONSTRAINTS,
+      });
+      const videoTrack = stream.getVideoTracks()[0];
+      if (!videoTrack) return;
+      if ("contentHint" in videoTrack) videoTrack.contentHint = "motion";
+      if (localStream) {
+        localStream.addTrack(videoTrack);
+        if (videoRef.current) videoRef.current.srcObject = localStream;
+      } else {
+        setLocalStream(stream);
       }
+      setIsCameraOn(true);
+    } catch {
+      /* permission denied — stay off */
     }
   };
 
   const toggleMic = async () => {
     if (isMicOn && localStream) {
-      // Turn off mic - stop the audio track
       const track = localStream.getAudioTracks()[0];
       if (track) {
         track.stop();
         localStream.removeTrack(track);
       }
       setIsMicOn(false);
-    } else {
-      // Turn on mic - acquire new audio track
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          audio: DEFAULT_AUDIO_CONSTRAINTS,
-        });
-        const audioTrack = stream.getAudioTracks()[0];
-        if (audioTrack) {
-          if (localStream) {
-            localStream.addTrack(audioTrack);
-          } else {
-            setLocalStream(stream);
-          }
-          setIsMicOn(true);
-        }
-      } catch (err) {
-        console.log("[JoinScreen] Microphone access denied");
-      }
-    }
-  };
-
-  const handleCreateRoom = () => {
-    onIsAdminChange(true);
-    const sanitizedCustomCode = sanitizeRoomCode(customRoomCode);
-    const id =
-      sanitizedCustomCode.length >= 3 ? sanitizedCustomCode : generateRoomCode();
-    if (enableRoomRouting && typeof window !== "undefined") {
-      window.history.pushState(null, "", `/${id}`);
-    }
-    onRoomIdChange(id);
-    onJoinRoom(id);
-  };
-
-  const refreshUpcomingMeetings = useCallback(async () => {
-    if (!isSignedInUser) {
-      setUpcomingMeetings([]);
       return;
     }
     try {
-      const response = await fetch(
-        "/api/meetings/scheduled?status=scheduled,live",
-        { cache: "no-store" },
-      );
-      if (!response.ok) {
-        setUpcomingMeetings([]);
-        return;
-      }
-      const data = (await response.json()) as {
-        scheduledMeetings?: ScheduledMeeting[];
-      };
-      setUpcomingMeetings(data?.scheduledMeetings ?? []);
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: DEFAULT_AUDIO_CONSTRAINTS,
+      });
+      const audioTrack = stream.getAudioTracks()[0];
+      if (!audioTrack) return;
+      if (localStream) localStream.addTrack(audioTrack);
+      else setLocalStream(stream);
+      setIsMicOn(true);
     } catch {
-      setUpcomingMeetings([]);
+      /* permission denied — stay off */
     }
-  }, [isSignedInUser]);
+  };
 
+  // Fire the actual join once the deferred guest user AND the host flag have
+  // both propagated. onJoinRoom is rebuilt by the parent with the right
+  // isHost, and arrives on the same render as the updated isAdmin prop.
   useEffect(() => {
-    if (phase !== "join") return;
-    if (activeTab !== "new") return;
-    void refreshUpcomingMeetings();
-  }, [phase, activeTab, refreshUpcomingMeetings]);
-
-  const handleCopyMeetingLink = useCallback(async (meeting: ScheduledMeeting) => {
-    if (typeof window === "undefined") return;
-    const link = `${window.location.origin}/${meeting.roomCode}`;
-    try {
-      await navigator.clipboard.writeText(link);
-      setCopiedMeetingId(meeting.id);
-      setTimeout(
-        () =>
-          setCopiedMeetingId((current) =>
-            current === meeting.id ? null : current,
-          ),
-        1800,
-      );
-    } catch {
-      setCopiedMeetingId(null);
+    if (!pending || !hasIdentity) return;
+    const wantAdmin = pending.mode === "new";
+    if (Boolean(isAdmin) !== wantAdmin) return; // wait for isHost to land
+    const { mode, roomId: targetId } = pending;
+    setPending(null);
+    if (mode === "new" && enableRoomRouting && typeof window !== "undefined") {
+      window.history.pushState(null, "", `/${targetId}`);
     }
-  }, []);
+    onRoomIdChange(targetId);
+    onJoinRoom(targetId);
+  }, [pending, hasIdentity, isAdmin, enableRoomRouting, onJoinRoom, onRoomIdChange]);
 
-  const handleSocialSignIn = async (
-    provider: "google" | "apple" | "roblox" | "vercel"
-  ) => {
+  // Ensure a guest user exists (from the name field) before acting; returns
+  // false when nothing actionable (no identity and no usable name).
+  const ensureGuest = (): boolean => {
+    if (hasIdentity) return true;
+    const name = normalizeGuestName(guestName);
+    if (!name) return false;
+    onUserChange(buildGuestUser(name, user));
+    return true;
+  };
+
+  const startMeeting = () => {
+    if (!ensureGuest()) return;
+    onIsAdminChange(true);
+    setPending({ mode: "new", roomId: generateRoomCode() });
+  };
+  const joinMeeting = () => {
+    const candidate = enforceShortCode
+      ? sanitizeRoomCode(normalizedRoomId)
+      : normalizedRoomId.trim();
+    if (!candidate) return;
+    if (!ensureGuest()) return;
+    onIsAdminChange(false);
+    setPending({ mode: "join", roomId: candidate });
+  };
+
+  const handleSocialSignIn = async (provider: "google" | "apple") => {
     setSignInProvider(provider);
     try {
-      await signIn.social({
-        provider,
-        callbackURL: window.location.href,
-      });
+      await signIn.social({ provider, callbackURL: window.location.href });
     } catch (error) {
       console.error("Sign in error:", error);
     } finally {
@@ -418,698 +324,223 @@ function JoinScreen({
   const handleSignOut = async () => {
     if (isSigningOut) return;
     setIsSigningOut(true);
-    const clearGuestStorage = () => {
-      if (typeof window === "undefined") return;
-      window.localStorage.removeItem(GUEST_USER_STORAGE_KEY);
+    const clearGuest = () => {
+      if (typeof window !== "undefined")
+        window.localStorage.removeItem(GUEST_USER_STORAGE_KEY);
     };
-
     if (!session?.user) {
-      clearGuestStorage();
+      clearGuest();
       onUserChange(null);
       onIsAdminChange(false);
-      setPhase("welcome");
+      setGuestName("");
       setIsSigningOut(false);
       return;
     }
-
     await signOut()
       .then(() => {
-        clearGuestStorage();
+        clearGuest();
         onUserChange(null);
         onIsAdminChange(false);
-        setPhase("welcome");
+        setGuestName("");
       })
-      .catch((error) => {
-        console.error("Sign out error:", error);
-      });
+      .catch((error) => console.error("Sign out error:", error));
     setIsSigningOut(false);
   };
 
-  const handleOpenDeleteAccount = () => {
-    if (typeof window === "undefined") return;
-    window.open("/delete-account", "_blank", "noopener,noreferrer");
+  const onCodeChange = (raw: string) => {
+    const next = enforceShortCode
+      ? sanitizeRoomCodeInput(raw).slice(0, ROOM_CODE_MAX_LENGTH)
+      : extractRoomCode(raw);
+    onRoomIdChange(next);
   };
 
-  const handleGuest = () => {
-    const normalizedGuestName = normalizeGuestName(guestName);
-    if (!normalizedGuestName) return;
-    const guestUser = buildGuestUser(normalizedGuestName, user);
-    onUserChange(guestUser);
-    onIsAdminChange(false);
-    setGuestName(normalizedGuestName);
-    setPhase("join");
-  };
-
-  const handleJoin = () => {
-    const candidate = enforceShortCode
-      ? sanitizeRoomCode(normalizedRoomId)
-      : normalizedRoomId.trim();
-    if (!candidate) return;
-    if (candidate !== normalizedRoomId) {
-      onRoomIdChange(candidate);
-    }
-    onJoinRoom(candidate);
-  };
-
-  const applySuggestion = (word: string) => {
-    const nextSegments = [...normalizedSegments];
-    nextSegments[nextSegments.length - 1] = word;
-    onRoomIdChange(nextSegments.join("-"));
-  };
-
-  useEffect(() => {
-    if (phase !== "join") return;
-    onIsAdminChange(activeTab === "new");
-  }, [activeTab, onIsAdminChange, phase]);
-
-  useEffect(() => {
-    if (!isRoutedRoom) return;
-    if (activeTab !== "join") {
-      setActiveTab("join");
-    }
-    onIsAdminChange(false);
-  }, [activeTab, isRoutedRoom, onIsAdminChange]);
-
-  useEffect(() => {
-    if (normalizedRoomId === roomId) return;
-    onRoomIdChange(normalizedRoomId);
-  }, [normalizedRoomId, onRoomIdChange, roomId]);
+  const canJoin = normalizedRoomId.trim().length > 0;
+  const nameReady = hasIdentity || normalizeGuestName(guestName).length > 0;
 
   return (
-    <div className="flex-1 flex flex-col relative overflow-hidden bg-gradient-to-b from-[#101010] via-[#0d0e0d] to-[#0b0c0c]">
-      <div className="absolute inset-0 acm-bg-radial pointer-events-none" />
-      <div className="absolute inset-0 acm-bg-dot-grid pointer-events-none" />
-
-      <div className="flex-1 flex items-center justify-center p-6 relative z-10">
-        {phase === "welcome" && (
-          <div className="flex flex-col items-center justify-center animate-fade-in">
-            <div className="text-center mb-8">
-              <div
-                className="hidden md:block text-2xl text-[#FEFCD9]/40 mb-2 tracking-wide"
-                style={{ fontFamily: "'PolySans Bulky Wide', sans-serif" }}
-              >
-                welcome to
+    <div className="relative min-h-screen w-full bg-[#0a0a0b] text-[#fafafa] flex flex-col">
+      <main className="flex-1 flex items-center justify-center px-4 py-10">
+        <div className="grid w-full max-w-5xl items-stretch gap-6 md:grid-cols-[1.5fr_1fr]">
+          {/* LEFT — self preview */}
+          <div className="relative aspect-video overflow-hidden rounded-2xl border border-white/10 bg-[#121214]">
+            <video
+              ref={videoRef}
+              autoPlay
+              muted
+              playsInline
+              className={`h-full w-full -scale-x-100 object-cover ${isCameraOn ? "" : "hidden"}`}
+            />
+            {!isCameraOn && (
+              <div className="absolute inset-0 flex flex-col items-center justify-center gap-3">
+                <Avatar id={user?.id || previewName} name={previewName} size={88} />
+                <span className="text-[14px] text-[#fafafa]/50">Camera is off</span>
               </div>
-
-              <div className="relative inline-block">
-                <span
-                  className="absolute -left-8 top-1/2 -translate-y-1/2 text-[#F95F4A]/40 text-4xl"
-                  style={{ fontFamily: "'PolySans Mono', monospace" }}
-                >
-                  [
-                </span>
-                <h1
-                  className="text-5xl md:text-6xl text-[#FEFCD9] tracking-tight"
-                  style={{ fontFamily: "'PolySans Bulky Wide', sans-serif" }}
-                >
-                  c0nclav3
-                </h1>
-                <span
-                  className="absolute -right-8 top-1/2 -translate-y-1/2 text-[#F95F4A]/40 text-4xl"
-                  style={{ fontFamily: "'PolySans Mono', monospace" }}
-                >
-                  ]
-                </span>
-              </div>
+            )}
+            <div className="pointer-events-none absolute left-3 top-3 rounded-md bg-black/55 px-2.5 py-1 text-[13px] font-medium">
+              {previewName}
             </div>
-
-            <p
-              className="text-[#FEFCD9]/30 text-sm mb-12 max-w-xs text-center"
-              style={{ fontFamily: "'PolySans Trial', sans-serif" }}
-            >
-              Video conferencing for meetings, webinars, and collaboration
-            </p>
-
-            <button
-              onClick={() => setPhase("auth")}
-                className="group flex items-center gap-3 px-8 py-3 bg-[#F95F4A] text-white text-xs uppercase tracking-widest rounded-lg hover:bg-[#e8553f] transition-all hover:gap-4"
-                style={{ fontFamily: "'PolySans Mono', monospace" }}
+            <div className="absolute bottom-4 left-1/2 flex -translate-x-1/2 items-center gap-3">
+              <button
+                onClick={toggleMic}
+                aria-label={isMicOn ? "Turn off microphone" : "Turn on microphone"}
+                className={`inline-flex h-11 w-11 items-center justify-center rounded-full text-white transition-colors duration-150 ${
+                  isMicOn ? "bg-[#232327] hover:bg-[#2e2e33]" : "bg-[#ea4335] hover:brightness-105"
+                }`}
               >
-                <span>LET'S GO</span>
-                <ArrowRight className="w-4 h-4" />
+                {isMicOn ? <Mic size={18} /> : <MicOff size={18} />}
               </button>
-
-              <div
-                className="mt-16 flex items-center gap-2"
-                style={{ fontFamily: "'PolySans Mono', monospace" }}
+              <button
+                onClick={toggleCamera}
+                aria-label={isCameraOn ? "Turn off camera" : "Turn on camera"}
+                className={`inline-flex h-11 w-11 items-center justify-center rounded-full text-white transition-colors duration-150 ${
+                  isCameraOn ? "bg-[#232327] hover:bg-[#2e2e33]" : "bg-[#ea4335] hover:brightness-105"
+                }`}
               >
-                {/* <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
-              <span className="text-[10px] text-[#FEFCD9]/30 uppercase tracking-wider">System online</span> */}
-              </div>
+                {isCameraOn ? <Video size={18} /> : <VideoOff size={18} />}
+              </button>
             </div>
-          )}
+            {onTestSpeaker && (
+              <button
+                onClick={onTestSpeaker}
+                className="absolute bottom-4 right-4 inline-flex items-center gap-1.5 rounded-full bg-black/55 px-3 py-1.5 text-[12px] text-[#fafafa]/70 hover:text-[#fafafa] transition-colors"
+              >
+                <Volume2 size={14} /> Test speaker
+              </button>
+            )}
+          </div>
 
-          {phase === "auth" && (
-            <div className="w-full max-w-sm animate-slide-up">
-              <div className="text-center mb-8">
-                <h2
-                  className="text-2xl text-[#FEFCD9] mb-2"
-                  style={{ fontFamily: "'PolySans Bulky Wide', sans-serif" }}
-                >
-                  Join
-                </h2>
-                <p
-                  className="text-xs text-[#FEFCD9]/40 uppercase tracking-widest"
-                  style={{ fontFamily: "'PolySans Mono', monospace" }}
-                >
-                  choose how to continue
-                </p>
-              </div>
+          {/* RIGHT — join actions */}
+          <div className="flex flex-col justify-center gap-4">
+            {meetError && (
+              <MeetsErrorBanner
+                meetError={meetError}
+                onDismiss={onDismissMeetError ?? (() => {})}
+              />
+            )}
 
-              <div className="grid gap-3 sm:grid-cols-2 mb-3">
-                <button
-                  onClick={() => handleSocialSignIn("google")}
-                  disabled={isSigningIn}
-                  className="w-full flex items-center justify-center gap-3 px-4 py-3 bg-[#1a1a1a] border border-[#FEFCD9]/10 text-[#FEFCD9] rounded-lg hover:border-[#FEFCD9]/25 hover:bg-[#1a1a1a]/80 transition-all disabled:opacity-50"
-                >
-                  {signInProvider === "google" ? (
-                    <Loader2 className="w-5 h-5 animate-spin text-[#FEFCD9]" />
-                  ) : (
-                    <svg className="w-5 h-5 shrink-0" viewBox="0 0 24 24" aria-hidden="true">
-                      <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
-                      <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
-                      <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" />
-                      <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
-                    </svg>
+            {isSignedInUser ? (
+              <div className="flex items-center justify-between rounded-xl border border-white/10 bg-[#18181b] px-4 py-3">
+                <div className="min-w-0">
+                  <p className="truncate text-[14px] font-medium">{previewName}</p>
+                  {userEmail && (
+                    <p className="truncate text-[12px] text-[#fafafa]/45">{userEmail}</p>
                   )}
-                  <span className="text-[13px] sm:text-sm leading-none whitespace-nowrap tracking-tight" style={{ fontFamily: "'PolySans Trial', sans-serif" }}>
-                    Continue with Google
-                  </span>
-                </button>
+                </div>
                 <button
-                  onClick={() => handleSocialSignIn("apple")}
-                  disabled={isSigningIn}
-                  className="w-full flex items-center justify-center gap-3 px-4 py-3 bg-[#1a1a1a] border border-[#FEFCD9]/10 text-[#FEFCD9] rounded-lg hover:border-[#FEFCD9]/25 hover:bg-[#1a1a1a]/80 transition-all disabled:opacity-50"
+                  onClick={handleSignOut}
+                  disabled={isSigningOut}
+                  className="shrink-0 text-[13px] text-[#fafafa]/55 transition-colors hover:text-[#fafafa] disabled:opacity-50"
                 >
-                  {signInProvider === "apple" ? (
-                    <Loader2 className="w-5 h-5 animate-spin text-[#FEFCD9]" />
-                  ) : (
-                    <img
-                      src="/assets/apple-50.png"
-                      alt=""
-                      aria-hidden="true"
-                      className="w-5 h-5 shrink-0 object-contain"
-                    />
-                  )}
-                  <span className="text-[13px] sm:text-sm leading-none whitespace-nowrap tracking-tight" style={{ fontFamily: "'PolySans Trial', sans-serif" }}>
-                    Continue with Apple
-                  </span>
-                </button>
-                <button
-                  onClick={() => handleSocialSignIn("roblox")}
-                  disabled={isSigningIn}
-                  className="w-full flex items-center justify-center gap-3 px-4 py-3 bg-[#1a1a1a] border border-[#FEFCD9]/10 text-[#FEFCD9] rounded-lg hover:border-[#FEFCD9]/25 hover:bg-[#1a1a1a]/80 transition-all disabled:opacity-50"
-                >
-                  {signInProvider === "roblox" ? (
-                    <Loader2 className="w-5 h-5 animate-spin text-[#FEFCD9]" />
-                  ) : (
-                    <img
-                      src="/roblox-logo.png"
-                      alt=""
-                      aria-hidden="true"
-                      className="w-5 h-5 shrink-0 object-contain invert"
-                    />
-                  )}
-                  <span className="text-[13px] sm:text-sm leading-none whitespace-nowrap tracking-tight" style={{ fontFamily: "'PolySans Trial', sans-serif" }}>
-                    Continue with Roblox
-                  </span>
-                </button>
-                <button
-                  onClick={() => handleSocialSignIn("vercel")}
-                  disabled={isSigningIn}
-                  className="w-full flex items-center justify-center gap-3 px-4 py-3 bg-[#1a1a1a] border border-[#FEFCD9]/10 text-[#FEFCD9] rounded-lg hover:border-[#FEFCD9]/25 hover:bg-[#1a1a1a]/80 transition-all disabled:opacity-50"
-                >
-                  {signInProvider === "vercel" ? (
-                    <Loader2 className="w-5 h-5 animate-spin text-[#FEFCD9]" />
-                  ) : (
-                    <svg
-                      className="w-5 h-5 shrink-0"
-                      viewBox="0 0 24 24"
-                      aria-hidden="true"
-                    >
-                      <path fill="#fff" d="M12 4l8 14H4z" />
-                    </svg>
-                  )}
-                  <span className="text-[13px] sm:text-sm leading-none whitespace-nowrap tracking-tight" style={{ fontFamily: "'PolySans Trial', sans-serif" }}>
-                    Continue with Vercel
-                  </span>
+                  {isSigningOut ? "…" : "Sign out"}
                 </button>
               </div>
-
-              <div className="flex items-center gap-4 my-6">
-                <div className="flex-1 h-px bg-[#FEFCD9]/10" />
-                <span className="text-[10px] text-[#FEFCD9]/30 uppercase tracking-widest" style={{ fontFamily: "'PolySans Mono', monospace" }}>or</span>
-                <div className="flex-1 h-px bg-[#FEFCD9]/10" />
-              </div>
-
-              <div>
-                <label
-                  className="text-[10px] text-[#FEFCD9]/40 uppercase tracking-widest mb-2 block"
-                  style={{ fontFamily: "'PolySans Mono', monospace" }}
-                >
-                  Guest name
-                </label>
+            ) : (
+              <div className="space-y-2">
+                <label className="text-[13px] font-medium text-[#fafafa]/55">Your name</label>
                 <input
                   type="text"
                   value={guestName}
                   onChange={(e) => setGuestName(e.target.value)}
                   placeholder="Enter your name"
-                  className="w-full px-3 py-2.5 bg-[#1a1a1a] border border-[#FEFCD9]/10 rounded-lg text-sm text-[#FEFCD9] placeholder:text-[#FEFCD9]/25 focus:border-[#F95F4A]/50 focus:outline-none mb-3"
-                  style={{ fontFamily: "'PolySans Trial', sans-serif" }}
-                  onKeyDown={(e) => { if (e.key === "Enter" && guestName.trim()) handleGuest(); }}
+                  className={FIELD}
                 />
-                <button
-                  onClick={handleGuest}
-                  disabled={!guestName.trim()}
-                  className="w-full px-4 py-2.5 bg-[#F95F4A] text-white text-sm rounded-lg hover:bg-[#e8553f] transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-                  style={{ fontFamily: "'PolySans Trial', sans-serif" }}
-                >
-                  Continue as Guest
-                </button>
               </div>
+            )}
 
+            {!isRoutedRoom && (
               <button
-                onClick={() => setPhase("welcome")}
-                className="w-full mt-6 text-[11px] text-[#FEFCD9]/30 hover:text-[#FEFCD9]/50 transition-colors uppercase tracking-widest"
-                style={{ fontFamily: "'PolySans Mono', monospace" }}
+                onClick={startMeeting}
+                disabled={isLoading || !nameReady}
+                className={CTA_PRIMARY}
               >
-                ← back
+                {isLoading ? <Loader2 size={18} className="animate-spin" /> : <Plus size={18} />}
+                New meeting
               </button>
-            </div>
-          )}
+            )}
 
-          {phase === "join" && (
-            <div className="w-full max-w-6xl grid gap-6 lg:gap-10 lg:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)] items-start animate-fade-in">
-              <div className="flex flex-col lg:pr-2">
-                <div className="relative aspect-video lg:aspect-[16/10] bg-[#0d0e0d] rounded-2xl overflow-hidden border border-[#FEFCD9]/10 shadow-2xl">
-                  {isCameraOn && localStream ? (
-                    <video ref={videoRef} autoPlay muted playsInline className="w-full h-full object-cover scale-x-[-1]" />
-                  ) : (
-                    <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-[#1a1a1a] to-[#0d0e0d]">
-                      <div className="w-20 h-20 rounded-full bg-gradient-to-br from-[#F95F4A]/20 to-[#FF007A]/20 border border-[#FEFCD9]/20 flex items-center justify-center">
-                        <span className="text-3xl text-[#FEFCD9] font-bold">{userEmail[0]?.toUpperCase() || "?"}</span>
-                      </div>
-                    </div>
-                  )}
-
-                  <div className="absolute bottom-3 left-1/2 -translate-x-1/2 flex items-center gap-2 bg-black/50 backdrop-blur-sm rounded-full px-2 py-1.5">
-                    <button onClick={toggleMic} className={`w-9 h-9 rounded-full flex items-center justify-center transition-all ${isMicOn ? "text-[#FEFCD9] hover:bg-white/10" : "bg-red-500 text-white"}`}>
-                      {isMicOn ? <Mic className="w-4 h-4" /> : <MicOff className="w-4 h-4" />}
-                    </button>
-                    <button onClick={toggleCamera} className={`w-9 h-9 rounded-full flex items-center justify-center transition-all ${isCameraOn ? "text-[#FEFCD9] hover:bg-white/10" : "bg-red-500 text-white"}`}>
-                      {isCameraOn ? <Video className="w-4 h-4" /> : <VideoOff className="w-4 h-4" />}
-                    </button>
-                  </div>
-
-                  <div className="absolute top-3 left-3 right-3 flex items-start justify-between gap-3">
-                    <div
-                      className="min-w-0 max-w-[70%] px-2.5 py-1 bg-black/50 backdrop-blur-sm rounded-full text-[11px] text-[#FEFCD9]/70 truncate"
-                      style={{ fontFamily: "'PolySans Mono', monospace" }}
-                    >
-                      {userEmail}
-                    </div>
-                    <div className="flex items-center gap-2">
-                      {isSignedInUser && (
-                        <button
-                          type="button"
-                          onClick={handleOpenDeleteAccount}
-                          className="shrink-0 h-8 w-8 flex items-center justify-center bg-black/50 backdrop-blur-sm rounded-full text-[#F95F4A] hover:bg-black/70"
-                          aria-label="Delete account"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      )}
-                      {canSignOut && (
-                        <button
-                          onClick={handleSignOut}
-                          disabled={isSigningOut}
-                          className="shrink-0 px-2.5 py-1 bg-black/50 backdrop-blur-sm rounded-full text-[9px] uppercase tracking-widest text-[#FEFCD9]/70 hover:bg-black/70 disabled:opacity-50"
-                          style={{ fontFamily: "'PolySans Mono', monospace" }}
-                        >
-                          {isSigningOut ? "Signing out..." : "Sign out"}
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                </div>
-
-                <div
-                  className="mt-4 flex flex-wrap items-center gap-2 text-[10px] uppercase tracking-wider"
-                  style={{ fontFamily: "'PolySans Mono', monospace" }}
+            {allowGhostMode && (
+              <button
+                type="button"
+                onClick={() => onGhostModeChange(!isGhostMode)}
+                aria-pressed={isGhostMode}
+                className="flex w-full items-center gap-3 rounded-xl border border-white/10 bg-[#18181b] px-4 py-3 text-left transition-colors duration-150 hover:bg-[#232327]"
+              >
+                <Ghost
+                  size={18}
+                  style={{ color: isGhostMode ? "#F95F4A" : "rgba(250,250,250,0.6)" }}
+                />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-[14px] text-[#fafafa]">
+                    Join as ghost
+                  </span>
+                  <span className="block truncate text-[12.5px] text-white/45">
+                    Others won&apos;t see you join
+                  </span>
+                </span>
+                <span
+                  aria-hidden
+                  className="relative inline-flex h-[22px] w-[38px] shrink-0 items-center rounded-full transition-colors duration-[120ms]"
+                  style={{
+                    backgroundColor: isGhostMode ? "#F95F4A" : "rgba(250,250,250,0.14)",
+                  }}
                 >
-                  <span className="text-[#FEFCD9]/40">Preflight</span>
-                  <div className="flex items-center gap-2 bg-black/40 border border-[#FEFCD9]/10 rounded-full px-3 py-1 text-[#FEFCD9]/70">
-                    <span
-                      className={`w-1.5 h-1.5 rounded-full ${
-                        isMicOn ? "bg-emerald-400" : "bg-[#F95F4A]"
-                      }`}
-                    />
-                    Mic {isMicOn ? "On" : "Off"}
-                  </div>
-                  <div className="flex items-center gap-2 bg-black/40 border border-[#FEFCD9]/10 rounded-full px-3 py-1 text-[#FEFCD9]/70">
-                    <span
-                      className={`w-1.5 h-1.5 rounded-full ${
-                        isCameraOn ? "bg-emerald-400" : "bg-[#F95F4A]"
-                      }`}
-                    />
-                    Camera {isCameraOn ? "On" : "Off"}
-                  </div>
-                  {onTestSpeaker && (
-                    <div className="ml-auto flex items-center gap-2">
-                      {onTestSpeaker && (
-                        <button
-                          type="button"
-                          onClick={onTestSpeaker}
-                          className="flex items-center gap-2 bg-[#1a1a1a] border border-[#FEFCD9]/10 rounded-full px-3 py-1 text-[#FEFCD9]/70 hover:text-[#FEFCD9] hover:border-[#FEFCD9]/30 transition-colors"
-                        >
-                          Test speaker
-                        </button>
-                      )}
-                    </div>
-                  )}
-                </div>
+                  <span
+                    className="absolute h-[16px] w-[16px] rounded-full bg-white transition-transform duration-[120ms]"
+                    style={{ transform: isGhostMode ? "translateX(19px)" : "translateX(3px)" }}
+                  />
+                </span>
+              </button>
+            )}
 
-              </div>
-
-              <div className="w-full lg:w-auto">
-                <div className="flex flex-col rounded-2xl border border-[#FEFCD9]/12 bg-[#181818]/85 backdrop-blur-sm p-5 shadow-[0_20px_45px_rgba(0,0,0,0.35)]">
-                {!isRoutedRoom && (
-                  <div className="flex mb-6 bg-[#1a1a1a] rounded-lg p-1">
-                    <button
-                      onClick={() => {
-                        setActiveTab("new");
-                        onIsAdminChange(true);
-                      }}
-                      className={`flex-1 py-2.5 text-xs uppercase tracking-wider rounded-md transition-all ${activeTab === "new" ? "bg-[#F95F4A] text-white" : "text-[#FEFCD9]/50 hover:text-[#FEFCD9]"}`}
-                      style={{ fontFamily: "'PolySans Mono', monospace" }}
-                    >
-                      New Meeting
-                    </button>
-                    <button
-                      onClick={() => {
-                        setActiveTab("join");
-                        onIsAdminChange(false);
-                      }}
-                      className={`flex-1 py-2.5 text-xs uppercase tracking-wider rounded-md transition-all ${activeTab === "join" ? "bg-[#F95F4A] text-white" : "text-[#FEFCD9]/50 hover:text-[#FEFCD9]"}`}
-                      style={{ fontFamily: "'PolySans Mono', monospace" }}
-                    >
-                      Join
-                    </button>
-                  </div>
-                )}
-
-                {activeTab === "new" && !isRoutedRoom ? (
-                  <div className="space-y-4">
-                    <div>
-                      <label className="text-[10px] uppercase tracking-wider text-[#FEFCD9]/40 mb-1.5 block" style={{ fontFamily: "'PolySans Mono', monospace" }}>
-                        Custom Code (optional)
-                      </label>
-                      <input
-                        type="text"
-                        value={customRoomCode}
-                        onChange={(e) =>
-                          setCustomRoomCode(sanitizeRoomCodeInput(e.target.value))
-                        }
-                        placeholder="acmvit-cybersec, or leave blank for random"
-                        maxLength={ROOM_CODE_MAX_LENGTH}
-                        disabled={isLoading}
-                        autoCapitalize="none"
-                        autoCorrect="off"
-                        spellCheck={false}
-                        className="w-full px-3 py-2.5 bg-[#1a1a1a] border border-[#FEFCD9]/10 rounded-lg text-sm text-[#FEFCD9] placeholder:text-[#FEFCD9]/30 focus:border-[#F95F4A]/50 focus:outline-none"
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter" && !isLoading) handleCreateRoom();
-                        }}
-                      />
-                    </div>
-                    {isAdmin && allowGhostMode && (
-                      <>
-                        <div>
-                          <label className="text-[10px] uppercase tracking-wider text-[#FEFCD9]/40 mb-1.5 block" style={{ fontFamily: "'PolySans Mono', monospace" }}>
-                            Display Name
-                          </label>
-                          <input
-                            type="text"
-                            value={displayNameInput}
-                            onChange={(e) => onDisplayNameInputChange(e.target.value)}
-                            placeholder="Your name"
-                            maxLength={40}
-                            disabled={isLoading}
-                            className="w-full px-3 py-2.5 bg-[#1a1a1a] border border-[#FEFCD9]/10 rounded-lg text-sm text-[#FEFCD9] placeholder:text-[#FEFCD9]/30 focus:border-[#F95F4A]/50 focus:outline-none"
-                          />
-                        </div>
-                        {/* <button
-                      onClick={() => onGhostModeChange(!isGhostMode)}
-                      disabled={isLoading}
-                      className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg transition-all text-sm ${isGhostMode ? "bg-[#FF007A]/15 border border-[#FF007A]/30" : "bg-[#1a1a1a] border border-[#FEFCD9]/10"}`}
-                    >
-                      <Ghost className={`w-4 h-4 ${isGhostMode ? "text-[#FF007A]" : "text-[#FEFCD9]/40"}`} />
-                      <span className="flex-1 text-left text-[#FEFCD9]/70">Ghost Mode</span>
-                      <div className={`w-8 h-4.5 rounded-full relative ${isGhostMode ? "bg-[#FF007A]" : "bg-[#FEFCD9]/15"}`}>
-                        <div className={`absolute top-0.5 w-3.5 h-3.5 rounded-full bg-white transition-all ${isGhostMode ? "left-4" : "left-0.5"}`} />
-                      </div>
-                    </button> */}
-                      </>
-                    )}
-                    <button
-                      onClick={handleCreateRoom}
-                      disabled={isLoading}
-                      className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-[#F95F4A] text-white rounded-lg hover:bg-[#e8553f] transition-colors disabled:opacity-50"
-                    >
-                      {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
-                      <span className="text-sm" style={{ fontFamily: "'PolySans Trial', sans-serif" }}>Start Meeting</span>
-                    </button>
-                    {isSignedInUser && (
-                      <button
-                        type="button"
-                        onClick={() => setIsScheduleOpen(true)}
-                        disabled={isLoading}
-                        className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg border border-[#FEFCD9]/15 text-[#FEFCD9]/85 hover:border-[#FEFCD9]/35 hover:text-[#FEFCD9] transition-colors disabled:opacity-50"
-                      >
-                        <CalendarClock className="w-4 h-4" />
-                        <span className="text-sm" style={{ fontFamily: "'PolySans Trial', sans-serif" }}>
-                          Schedule a meeting
-                        </span>
-                      </button>
-                    )}
-                    {isSignedInUser && upcomingMeetings.length > 0 && (
-                      <div className="space-y-1.5 pt-1">
-                        <p
-                          className="text-[10px] uppercase tracking-wider text-[#FEFCD9]/40"
-                          style={{ fontFamily: "'PolySans Mono', monospace" }}
-                        >
-                          Upcoming
-                        </p>
-                        {upcomingMeetings.slice(0, 3).map((meeting) => {
-                          const start = new Date(meeting.scheduledStartAt);
-                          const isToday =
-                            start.toDateString() === new Date().toDateString();
-                          const timeLabel = isToday
-                            ? start.toLocaleTimeString(undefined, {
-                                hour: "numeric",
-                                minute: "2-digit",
-                              })
-                            : start.toLocaleString(undefined, {
-                                month: "short",
-                                day: "numeric",
-                                hour: "numeric",
-                                minute: "2-digit",
-                              });
-                          return (
-                            <div
-                              key={meeting.id}
-                              className="flex items-center gap-2 rounded-lg border border-[#FEFCD9]/10 bg-black/25 px-3 py-2"
-                            >
-                              <div className="min-w-0 flex-1">
-                                <p className="text-xs text-[#FEFCD9]/85 truncate">
-                                  {meeting.title}
-                                </p>
-                                <p className="text-[10px] text-[#FEFCD9]/45">
-                                  {timeLabel} · /{meeting.roomCode}
-                                </p>
-                              </div>
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  void handleCopyMeetingLink(meeting)
-                                }
-                                className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[10px] text-[#FEFCD9]/55 hover:bg-[#FEFCD9]/10 hover:text-[#FEFCD9] transition-colors"
-                              >
-                                <Copy className="h-3 w-3" />
-                                {copiedMeetingId === meeting.id
-                                  ? "copied"
-                                  : "copy"}
-                              </button>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-                ) : (
-                  <div className="space-y-4">
-                    <div>
-                      <label className="text-[10px] uppercase tracking-wider text-[#FEFCD9]/40 mb-1.5 block" style={{ fontFamily: "'PolySans Mono', monospace" }}>
-                        Room Name
-                      </label>
-                      <div className="relative">
-                        <input
-                          type="text"
-                          value={normalizedRoomId}
-                          onChange={(e) =>
-                            onRoomIdChange(
-                              enforceShortCode
-                                ? sanitizeRoomCodeInput(e.target.value)
-                                : e.target.value
-                            )
-                          }
-                          placeholder="Paste room link or code"
-                          maxLength={enforceShortCode ? ROOM_CODE_MAX_LENGTH : undefined}
-                          disabled={isLoading}
-                          readOnly={isRoutedRoom}
-                          autoCapitalize="none"
-                          autoCorrect="off"
-                          spellCheck={false}
-                          className="relative w-full px-3 py-2.5 bg-[#1a1a1a] border border-[#FEFCD9]/10 rounded-lg text-sm text-white placeholder:text-[#FEFCD9]/30 focus:border-[#F95F4A]/50 focus:outline-none z-10"
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter" && canJoin) handleJoin();
-                            if (e.key === "Tab" && suggestionSuffix) {
-                              e.preventDefault();
-                              applySuggestion(inlineSuggestion);
-                            }
-                          }}
-                          onPaste={(event) => {
-                            const text = event.clipboardData.getData("text");
-                            if (!text) return;
-                            const extracted = extractRoomCode(text);
-                            if (extracted) {
-                              event.preventDefault();
-                              onRoomIdChange(extracted);
-                            }
-                          }}
-                        />
-                        {suggestionSuffix && (
-                          <div
-                            className="pointer-events-none absolute inset-0 px-3 py-2.5 text-sm text-[#FEFCD9]/30 truncate z-20"
-                            style={{ fontFamily: "'PolySans Trial', sans-serif" }}
-                          >
-                            <span className="text-transparent">{normalizedRoomId}</span>
-                            <span>{suggestionSuffix}</span>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                    {isAdmin && allowGhostMode && (
-                      <div>
-                        <label className="text-[10px] uppercase tracking-wider text-[#FEFCD9]/40 mb-1.5 block" style={{ fontFamily: "'PolySans Mono', monospace" }}>
-                          Display Name
-                        </label>
-                        <input
-                          type="text"
-                          value={displayNameInput}
-                          onChange={(e) => onDisplayNameInputChange(e.target.value)}
-                          placeholder="Your name"
-                          maxLength={40}
-                          disabled={isLoading}
-                          className="w-full px-3 py-2.5 bg-[#1a1a1a] border border-[#FEFCD9]/10 rounded-lg text-sm text-[#FEFCD9] placeholder:text-[#FEFCD9]/30 focus:border-[#F95F4A]/50 focus:outline-none"
-                        />
-                      </div>
-                    )}
-                    <button
-                      onClick={handleJoin}
-                      disabled={!canJoin || isLoading}
-                      className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-[#F95F4A] text-white rounded-lg hover:bg-[#e8553f] transition-colors disabled:opacity-30"
-                    >
-                      {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <ArrowRight className="w-4 h-4" />}
-                      <span className="text-sm" style={{ fontFamily: "'PolySans Trial', sans-serif" }}>Join Meeting</span>
-                    </button>
-                  </div>
-                )}
-
-                {showPermissionHint && (
-                  <div className="mt-4 flex items-center gap-2 px-3 py-2 rounded-lg bg-[#F95F4A]/10 border border-[#F95F4A]/20 text-xs text-[#FEFCD9]/70 animate-slide-up">
-                    <AlertCircle className="w-3.5 h-3.5 text-[#F95F4A]" />
-                    <span>Please allow camera and microphone access to join</span>
-                  </div>
-                )}
-                {meetError && onDismissMeetError && (
-                  <div className="mt-4">
-                    <MeetsErrorBanner
-                      meetError={meetError}
-                      onDismiss={onDismissMeetError}
-                      primaryActionLabel={
-                        meetError.code === "PERMISSION_DENIED"
-                          ? "Retry Permissions"
-                          : meetError.code === "MEDIA_ERROR"
-                            ? "Retry Devices"
-                            : undefined
-                      }
-                      onPrimaryAction={
-                        meetError.code === "PERMISSION_DENIED" ||
-                        meetError.code === "MEDIA_ERROR"
-                          ? onRetryMedia
-                          : undefined
-                      }
-                    />
-                  </div>
-                )}
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-
-      {/* {!isSessionLoading && phase === "join" && isAdmin && rooms.length > 0 && (
-        <div className="border-t border-[#FEFCD9]/5 bg-[#0d0e0d]/50 px-6 py-4 relative z-10">
-          <div className="max-w-4xl mx-auto">
-            <div className="flex items-center justify-between mb-3">
-              <span className="text-[10px] uppercase tracking-wider text-[#FEFCD9]/40" style={{ fontFamily: "'PolySans Mono', monospace" }}>
-                Active Meetings ({rooms.length})
-              </span>
-              <button onClick={onRefreshRooms} disabled={roomsStatus === "loading"} className="p-1 text-[#FEFCD9]/30 hover:text-[#FEFCD9]/60 disabled:opacity-50">
-                <RefreshCw className={`w-3.5 h-3.5 ${roomsStatus === "loading" ? "animate-spin" : ""}`} />
+            <div className="space-y-2">
+              <label className="text-[13px] font-medium text-[#fafafa]/55">
+                {isRoutedRoom ? "Room" : "Join with a code"}
+              </label>
+              <input
+                type="text"
+                value={normalizedRoomId}
+                onChange={(e) => onCodeChange(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && canJoin) joinMeeting();
+                }}
+                placeholder="Enter a code or link"
+                readOnly={isRoutedRoom}
+                autoFocus={isRoutedRoom}
+                className={FIELD}
+              />
+              <button
+                onClick={joinMeeting}
+                disabled={isLoading || !canJoin || !nameReady}
+                className={CTA_GHOST}
+              >
+                {isLoading ? <Loader2 size={18} className="animate-spin" /> : null}
+                Join
+                <ArrowRight size={18} />
               </button>
             </div>
-            <div className="flex gap-2 overflow-x-auto pb-1 animate-slide-up animate-delay-200">
-              {rooms.map((room) => (
+
+            {!isSignedInUser && isGoogleSignInEnabled && (
+              <>
+                <div className="flex items-center gap-3 py-1">
+                  <div className="h-px flex-1 bg-white/10" />
+                  <span className="text-[12px] text-[#fafafa]/40">or</span>
+                  <div className="h-px flex-1 bg-white/10" />
+                </div>
                 <button
-                  key={room.id}
-                  onClick={() => onJoinRoom(room.id)}
-                  disabled={isLoading}
-                  className="flex-shrink-0 flex items-center gap-3 px-4 py-2.5 bg-[#1a1a1a] hover:bg-[#1a1a1a]/80 border border-[#FEFCD9]/5 hover:border-[#F95F4A]/30 rounded-lg transition-all group disabled:opacity-50"
+                  onClick={() => handleSocialSignIn("google")}
+                  disabled={isSigningIn}
+                  className={PROVIDER_BTN}
                 >
-                  <div className="text-left">
-                    <div className="text-sm text-[#FEFCD9] truncate max-w-[150px]">{room.id}</div>
-                    <div className="text-[10px] text-[#FEFCD9]/40 flex items-center gap-1" style={{ fontFamily: "'PolySans Mono', monospace" }}>
-                      <Users className="w-3 h-3" /> {room.userCount}
-                    </div>
-                  </div>
-                  <ArrowRight className="w-4 h-4 text-[#FEFCD9]/20 group-hover:text-[#F95F4A] transition-colors" />
+                  {signInProvider === "google" ? (
+                    <Loader2 size={16} className="animate-spin" />
+                  ) : null}
+                  Continue with Google
                 </button>
-              ))}
-            </div>
+              </>
+            )}
           </div>
         </div>
-      )} */}
-
-      {isLoading && (
-        <div className="absolute inset-0 bg-[#0d0e0d]/80 flex items-center justify-center z-50">
-          <div className="flex flex-col items-center gap-3">
-            <Loader2 className="w-8 h-8 text-[#F95F4A] animate-spin" />
-            <span className="text-sm text-[#FEFCD9]/60" style={{ fontFamily: "'PolySans Mono', monospace" }}>
-              {connectionState === "reconnecting" ? "Reconnecting..." : "Joining..."}
-            </span>
-          </div>
-        </div>
-      )}
-
-      <ScheduleMeetingModal
-        open={isScheduleOpen}
-        onClose={() => setIsScheduleOpen(false)}
-        onScheduled={(meeting) => {
-          setUpcomingMeetings((prev) => [meeting, ...prev]);
-        }}
-      />
+      </main>
     </div>
   );
 }

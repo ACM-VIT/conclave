@@ -28,6 +28,9 @@ struct SfuJoinRequest: Encodable {
     let isHost: Bool
     let isAdmin: Bool
     let clientId: String
+    // The SFU only mints a room-creation token when this is true. Creating a
+    // NEW meeting (host) must request it or the socket joinRoom finds no room.
+    let allowRoomCreation: Bool
 }
 
 struct SfuJoinError: Decodable {
@@ -44,7 +47,8 @@ enum SfuJoinService {
         sessionId: String,
         user: SfuJoinUser?,
         isHost: Bool,
-        clientId: String
+        clientId: String,
+        allowRoomCreation: Bool = false
     ) async throws -> SfuJoinInfo {
         var request = URLRequest(url: resolveJoinURL())
         request.httpMethod = "POST"
@@ -59,7 +63,8 @@ enum SfuJoinService {
             user: user,
             isHost: isHost,
             isAdmin: isHost,
-            clientId: clientId
+            clientId: clientId,
+            allowRoomCreation: allowRoomCreation
         )
 
         request.httpBody = try JSONEncoder().encode(payload)
@@ -89,6 +94,12 @@ enum SfuJoinService {
     }
 
     static func resolveJoinURL() -> URL {
+        #if SKIP
+        return URL(string: "http://10.0.2.2:3000/api/sfu/join")!  // TEMP rig: Android emulator → host localhost dev backend (DO NOT COMMIT)
+        #endif
+        #if targetEnvironment(simulator)
+        return URL(string: "http://localhost:3000/api/sfu/join")!  // TEMP rig: iOS simulator → host localhost dev backend (DO NOT COMMIT)
+        #endif
         if let envUrl = ProcessInfo.processInfo.environment["SFU_JOIN_URL"],
            let url = URL(string: envUrl) {
             return url

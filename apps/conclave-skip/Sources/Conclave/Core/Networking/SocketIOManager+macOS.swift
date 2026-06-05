@@ -92,5 +92,8 @@ final class SocketIOManager {
     func admitUser(userId: String) async throws { }
     func rejectUser(userId: String) async throws { }
     func kickUser(userId: String) async throws { }
+    func muteUser(userId: String) async throws { }
+    func muteAll() async throws { }
+    func promoteHost(userId: String) async throws { }
 }
 #endif

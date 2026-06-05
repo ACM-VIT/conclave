@@ -15,6 +15,7 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <application
@@ -39,6 +40,11 @@
         <service
             android:name="conclave.module.CallService"
             android:foregroundServiceType="microphone|camera"
+            android:exported="false" />
+
+        <service
+            android:name="conclave.module.ScreenCaptureService"
+            android:foregroundServiceType="mediaProjection"
             android:exported="false" />
     </application>
 </manifest>

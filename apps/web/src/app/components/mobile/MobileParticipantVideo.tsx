@@ -140,10 +140,10 @@ function MobileParticipantVideo({
         className={`w-full h-full object-cover ${showPlaceholder ? "hidden" : ""}`}
       />
       {showPlaceholder && (
-        <div className="absolute inset-0 flex items-center justify-center bg-[#0d0e0d]">
+        <div className="absolute inset-0 flex items-center justify-center bg-[#131316]">
           <div className="absolute inset-0 bg-gradient-to-br from-[#F95F4A]/15 to-[#FF007A]/10" />
           <div
-            className={`relative rounded-full mobile-avatar flex items-center justify-center text-[#FEFCD9] font-bold ${avatarSizes[size]}`}
+            className={`relative rounded-full mobile-avatar flex items-center justify-center text-[#fafafa] font-bold ${avatarSizes[size]}`}
             style={{ fontFamily: "'PolySans Bulky Wide', sans-serif" }}
           >
             {displayName[0]?.toUpperCase() || "?"}
@@ -156,7 +156,7 @@ function MobileParticipantVideo({
             <VenetianMask className="w-10 h-10 text-[#FF007A]" />
             <span
               className="mobile-ghost-badge rounded-full px-3 py-1 text-[10px] tracking-[0.25em] text-[#FF007A]"
-              style={{ fontFamily: "'PolySans Mono', monospace" }}
+              style={{ fontFamily: "'PolySans Trial', sans-serif" }}
             >
               GHOST
             </span>
@@ -173,10 +173,10 @@ function MobileParticipantVideo({
         <div className="absolute bottom-1.5 left-1.5 right-1.5 flex items-center justify-between">
           <div
             className="mobile-name-pill px-2.5 py-1 flex items-center gap-2 max-w-[85%] backdrop-blur-md"
-            style={{ fontFamily: "'PolySans Mono', monospace" }}
+            style={{ fontFamily: "'PolySans Trial', sans-serif" }}
           >
             <span
-              className="text-[10px] text-[#FEFCD9] font-medium truncate uppercase tracking-[0.18em]"
+              className="text-[10px] text-[#fafafa] font-medium truncate uppercase tracking-[0.18em]"
               title={displayName}
             >
               {displayLabel}

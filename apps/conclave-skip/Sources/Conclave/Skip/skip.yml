@@ -6,8 +6,9 @@ build:
     - block: 'dependencies'
       contents:
         - 'implementation("io.socket:socket.io-client:2.1.1")'
-        - 'implementation("com.mediasfu:mediasoup-client:1.0.0")'
+        - 'implementation("com.mediasfu:mediasoup-client:1.0.1")'
         - 'implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")'
+        - 'implementation("androidx.compose.material:material-icons-extended")'
 
 # this is a transpiled Skip Lite module
 skip:

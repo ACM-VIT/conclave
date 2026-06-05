@@ -8,6 +8,20 @@ import Observation
 //  Root navigation view with state-based routing
 //
 
+#if SKIP
+// Carbon → a Compose Material3 Color. So Android's NATIVE Material components
+// (DropdownMenu, Switch, ModalBottomSheet, ripples, TextField) read Carbon
+// instead of the default Material baseline. r/g/b in 0–255, a in 0–1.
+private func acmM3(_ r: Double, _ g: Double, _ b: Double, _ a: Double = 1.0) -> androidx.compose.ui.graphics.Color {
+    androidx.compose.ui.graphics.Color(
+        red: Float(r / 255.0),
+        green: Float(g / 255.0),
+        blue: Float(b / 255.0),
+        alpha: Float(a)
+    )
+}
+#endif
+
 struct ContentView: View {
     @Bindable var appState: AppState
     @State var meetingViewModel = MeetingViewModel()
@@ -37,6 +51,40 @@ struct ContentView: View {
         }
         .animation(.easeInOut(duration: 0.3), value: meetingViewModel.state.connectionState)
         .preferredColorScheme(.dark)
+        // App-wide brand accent so native controls (switches, pickers, links,
+        // text-field carets) use Carbon orange instead of the iOS system blue.
+        .tint(ACMColors.primaryOrange)
+        // Android: theme every NATIVE Material 3 component (Menu/DropdownMenu,
+        // Switch, ModalBottomSheet, ripples, TextField) with the Carbon palette
+        // so they're on-brand instead of the default purple Material baseline.
+        #if SKIP
+        .material3ColorScheme { scheme, _ in
+            scheme.copy(
+                primary: acmM3(249, 95, 74),
+                onPrimary: acmM3(255, 255, 255),
+                primaryContainer: acmM3(249, 95, 74),
+                onPrimaryContainer: acmM3(255, 255, 255),
+                secondary: acmM3(255, 0, 122),
+                onSecondary: acmM3(255, 255, 255),
+                background: acmM3(10, 10, 11),
+                onBackground: acmM3(250, 250, 250),
+                surface: acmM3(24, 24, 27),
+                onSurface: acmM3(250, 250, 250),
+                surfaceVariant: acmM3(35, 35, 39),
+                onSurfaceVariant: acmM3(250, 250, 250, 0.74),
+                error: acmM3(234, 67, 53),
+                onError: acmM3(255, 255, 255),
+                outline: acmM3(250, 250, 250, 0.24),
+                outlineVariant: acmM3(250, 250, 250, 0.14),
+                surfaceContainerLowest: acmM3(10, 10, 11),
+                surfaceContainerLow: acmM3(19, 19, 22),
+                surfaceContainer: acmM3(24, 24, 27),
+                surfaceContainerHigh: acmM3(35, 35, 39),
+                surfaceContainerHighest: acmM3(46, 46, 51),
+                scrim: acmM3(0, 0, 0)
+            )
+        }
+        #endif
     }
 }
 
@@ -77,10 +125,10 @@ struct WaitingRoomView: View {
             }
             .ignoresSafeArea()
 
-            VStack(spacing: 32) {
+            VStack(spacing: ACMSpacing.xl) {
                 ZStack {
                     Circle()
-                        .stroke(ACMColors.primaryOrangeGhost, lineWidth: 4)
+                        .stroke(ACMColors.primaryOrangeGhost, lineWidth: 3.0)
                         .frame(width: 80.0, height: 80.0)
 
 #if SKIP
@@ -90,60 +138,54 @@ struct WaitingRoomView: View {
 #else
                     Circle()
                         .trim(from: 0.0, to: 0.7)
-                        .stroke(ACMColors.primaryOrange, style: StrokeStyle(lineWidth: 4, lineCap: .round))
+                        .stroke(ACMColors.primaryOrange, style: StrokeStyle(lineWidth: 3.0, lineCap: .round))
                         .frame(width: 80.0, height: 80.0)
                         .rotationEffect(Angle.degrees(-90))
                         .modifier(RotatingModifier())
 #endif
                 }
 
-                VStack(spacing: 12) {
+                VStack(spacing: ACMSpacing.xs) {
                     Text("Waiting for host")
-                        .font(ACMFont.wide(24))
-                        .foregroundStyle(ACMColors.cream)
+                        .font(ACMFont.trial(24, weight: .bold))
+                        .foregroundStyle(ACMColors.text)
+                        .tracking(-0.4)
 
                     Text(viewModel.state.waitingMessage ?? "You'll join as soon as the host lets you in")
                         .font(ACMFont.trial(14))
-                        .foregroundStyle(acmColor(red: 254.0, green: 252.0, blue: 217.0, opacity: 0.5))
+                        .foregroundStyle(ACMColors.textMuted)
                         .multilineTextAlignment(.center)
                 }
 
-                HStack(spacing: 8) {
-                    ACMSystemIcon.image("number", androidName: "Icons.Outlined.Info")
-                        .font(.system(size: 12))
-                        .foregroundStyle(ACMColors.creamDim)
-
-                    Text(viewModel.state.roomId.uppercased())
-                        .font(ACMFont.mono(14))
-                        .foregroundStyle(acmColor(red: 254.0, green: 252.0, blue: 217.0, opacity: 0.7))
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 10)
-                .acmColorBackground(ACMColors.surface)
-                .overlay {
-                    RoundedRectangle(cornerRadius: 8)
-                        .strokeBorder(lineWidth: 1)
-                        .foregroundStyle(ACMColors.creamFaint)
-                }
-                .clipShape(RoundedRectangle(cornerRadius: 8))
+                Text(viewModel.state.roomId)
+                    .font(ACMFont.trial(14, weight: .medium))
+                    .foregroundStyle(ACMColors.text)
+                    .padding(.horizontal, ACMSpacing.md)
+                    .padding(.vertical, 10)
+                    .acmColorBackground(ACMColors.surface)
+                    .overlay {
+                        RoundedRectangle(cornerRadius: ACMRadius.sm)
+                            .strokeBorder(ACMColors.border, lineWidth: 1.0)
+                    }
+                    .clipShape(RoundedRectangle(cornerRadius: ACMRadius.sm))
 
                 Button {
                     viewModel.leaveRoom()
                 } label: {
                     Text("Cancel")
-                        .font(ACMFont.trial(14))
-                        .foregroundStyle(acmColor(red: 254.0, green: 252.0, blue: 217.0, opacity: 0.6))
-                        .padding(.horizontal, 24)
-                        .padding(.vertical, 12)
+                        .font(ACMFont.trial(16, weight: .medium))
+                        .foregroundStyle(ACMColors.textMuted)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 54.0)
                         .overlay {
-                            RoundedRectangle(cornerRadius: 8)
-                                .strokeBorder(lineWidth: 1)
-                                .foregroundStyle(ACMColors.creamSubtle)
+                            RoundedRectangle(cornerRadius: ACMRadius.lg)
+                                .strokeBorder(ACMColors.border, lineWidth: 1.0)
                         }
                 }
-                .padding(.top, 16)
+                .frame(maxWidth: 280)
+                .padding(.top, ACMSpacing.xs)
             }
-            .padding(32)
+            .padding(ACMSpacing.xl)
         }
     }
 }
@@ -172,45 +214,41 @@ struct ErrorView: View {
             ACMColors.dark
                 .ignoresSafeArea()
 
-            VStack(spacing: 24) {
+            VStack(spacing: ACMSpacing.xl) {
                 ZStack {
                     Circle()
-                        .fill(acmColor01(red: 1.0, green: 0.0, blue: 0.0, opacity: 0.1))
-                        .frame(width: 80, height: 80)
+                        .fill(ACMColors.error.opacity(0.12))
+                        .frame(width: 80.0, height: 80.0)
 
-                    ACMSystemIcon.image("exclamationmark.triangle.fill", androidName: "Icons.Filled.Warning")
-                        .font(.system(size: 36))
-                        .foregroundStyle(Color.red)
+                    ACMSystemIcon.icon("exclamationmark.triangle.fill", android: "warning", size: 32, tint: "danger")
+                        .foregroundStyle(ACMColors.error)
                 }
 
-                VStack(spacing: 8) {
+                VStack(spacing: ACMSpacing.xs) {
                     Text("Something went wrong")
-                        .font(ACMFont.wide(20))
-                        .foregroundStyle(ACMColors.cream)
+                        .font(ACMFont.trial(22, weight: .bold))
+                        .foregroundStyle(ACMColors.text)
+                        .tracking(-0.4)
 
                     Text(message)
                         .font(ACMFont.trial(14))
-                        .foregroundStyle(acmColor(red: 254.0, green: 252.0, blue: 217.0, opacity: 0.5))
+                        .foregroundStyle(ACMColors.textMuted)
                         .multilineTextAlignment(.center)
                         .frame(maxWidth: 280)
                 }
 
                 Button(action: onRetry) {
-                    HStack(spacing: 8) {
-                        ACMSystemIcon.image("arrow.clockwise.circle", androidName: "Icons.Filled.Refresh")
-                            .font(.system(size: 14, weight: .medium))
-
-                        Text("Try Again")
-                            .font(ACMFont.trial(14, weight: .medium))
-                    }
-                    .foregroundStyle(Color.white)
-                    .padding(.horizontal, 24)
-                    .padding(.vertical, 12)
-                    .acmColorBackground(ACMColors.primaryOrange)
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    Text("Try again")
+                        .font(ACMFont.trial(16, weight: .medium))
+                        .foregroundStyle(Color.white)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 54.0)
+                        .acmColorBackground(ACMColors.primaryOrange)
+                        .clipShape(RoundedRectangle(cornerRadius: ACMRadius.lg))
                 }
+                .frame(maxWidth: 280)
             }
-            .padding(32)
+            .padding(ACMSpacing.xl)
         }
     }
 }

@@ -136,12 +136,16 @@ final class MeetingViewModel {
                     for producer in response.existingProducers {
                         try await self.webRTCClient.consumeProducer(
                             producerId: producer.producerId,
-                            producerUserId: producer.producerUserId
+                            producerUserId: producer.producerUserId,
+                            producerType: producer.type
                         )
                         self.handleProducerState(producer)
                     }
                 } catch {
                     debugLog("[Meeting] WebRTC setup error: \(error)")
+                    #if SKIP
+                    android.util.Log.e("ConclaveScreenCap", "VM WebRTC setup error: \(error)")
+                    #endif
                     self.state.errorMessage = error.localizedDescription
                     #if !SKIP
                     HapticManager.shared.trigger(.error)
@@ -275,7 +279,8 @@ final class MeetingViewModel {
                 do {
                     try await self.webRTCClient.consumeProducer(
                         producerId: producer.producerId,
-                        producerUserId: producer.producerUserId
+                        producerUserId: producer.producerUserId,
+                        producerType: producer.type
                     )
                 } catch {
                     debugLog("[Meeting] Failed to consume producer: \(error)")
@@ -510,9 +515,14 @@ final class MeetingViewModel {
                     sessionId: state.sessionId,
                     user: userPayload,
                     isHost: isHost,
-                    clientId: clientId
+                    clientId: clientId,
+                    // A host starting a NEW meeting must be allowed to create the room.
+                    allowRoomCreation: isHost
                 )
-                let sfuUrl = joinInfo.sfuUrl
+                var sfuUrl = joinInfo.sfuUrl
+                #if SKIP
+                sfuUrl = sfuUrl.replacingOccurrences(of: "localhost", with: "10.0.2.2").replacingOccurrences(of: "127.0.0.1", with: "10.0.2.2")  // TEMP rig: emulator → host localhost dev backend (DO NOT COMMIT)
+                #endif
                 let token = joinInfo.token
 
                 try await socketManager.connect(sfuURL: sfuUrl, token: token)
@@ -601,6 +611,9 @@ final class MeetingViewModel {
         #if canImport(ReplayKit) && !SKIP
         await ScreenCaptureManager.shared.stopCapture()
         #endif
+        #if SKIP
+        ScreenCaptureManager.stopCapture()
+        #endif
         await webRTCClient.cleanup()
         
         state.participants.removeAll()
@@ -622,6 +635,14 @@ final class MeetingViewModel {
         state.connectionState = ConnectionState.disconnected
         state.errorMessage = nil
         state.waitingMessage = nil
+    }
+
+    /// Clears a transient, recoverable error shown in the in-call banner WITHOUT
+    /// tearing down the connection (unlike `resetError`, which returns to join).
+    /// Used by the in-meeting banner overlay so a failed mute/camera/chat action
+    /// surfaces visibly instead of being silently dropped while still joined.
+    func dismissError() {
+        state.errorMessage = nil
     }
     
     // MARK: - Media Controls
@@ -695,7 +716,13 @@ final class MeetingViewModel {
                     debugLog("[Meeting] Screen sharing stopped")
                 } else {
                     try await webRTCClient.startScreenSharing()
-                    // Start screen sharing
+                    // Reset the broadcast producer if the user ends the share
+                    // from Control Center / the status bar instead of the
+                    // in-app toggle.
+                    ScreenCaptureManager.shared.onBroadcastStopped = { [weak self] in
+                        self?.handleScreenShareEndedExternally()
+                    }
+                    // Start screen sharing (presents the system broadcast picker)
                     try await ScreenCaptureManager.shared.startCapture(webRTCClient: webRTCClient)
                     state.isScreenSharing = true
                     state.activeScreenShareUserId = state.userId
@@ -710,11 +737,81 @@ final class MeetingViewModel {
                 debugLog("[Meeting] Screen sharing error: \(error)")
             }
         }
+        #elseif SKIP
+        // Android: MediaProjection via the system consent dialog -> a
+        // foreground service -> ScreenCapturerAndroid (ScreenCaptureManager is
+        // the Kotlin bridge object in this same module).
+        Task {
+            if state.isScreenSharing {
+                ScreenCaptureManager.stopCapture()
+                await webRTCClient.stopScreenSharing()
+                state.isScreenSharing = false
+                if state.activeScreenShareUserId == state.userId {
+                    state.activeScreenShareUserId = nil
+                }
+                debugLog("[Meeting] Screen sharing stopped")
+            } else {
+                // Reset state if the user stops from the system UI / notification.
+                ScreenCaptureManager.onProjectionRevoked = { [weak self] in
+                    self?.handleScreenShareEndedExternally()
+                }
+                let granted = await ScreenCaptureManager.requestCapture()
+                if granted {
+                    do {
+                        try await webRTCClient.startScreenSharing()
+                        state.isScreenSharing = true
+                        state.activeScreenShareUserId = state.userId
+                        debugLog("[Meeting] Screen sharing started")
+                    } catch {
+                        android.util.Log.e("ConclaveScreenCap", "VM startScreenSharing threw: \(error)")
+                        ScreenCaptureManager.stopCapture()
+                        await webRTCClient.stopScreenSharing()
+                        state.isScreenSharing = false
+                        state.activeScreenShareUserId = nil
+                        state.errorMessage = "Failed to toggle screen sharing: \(error.localizedDescription)"
+                        debugLog("[Meeting] Screen sharing error: \(error)")
+                    }
+                }
+                // granted == false (user cancelled the consent dialog): no-op,
+                // isScreenSharing stays false, no orphan producer.
+            }
+        }
         #else
         debugLog("[Meeting] Screen sharing not supported on this platform")
         #endif
     }
-    
+
+    // The screen share was ended from OUTSIDE the in-app toggle (iOS: Control
+    // Center; Android: the system "Stop sharing" / notification action). Close
+    // the WebRTC producer and reset state. Duplicated under the two proven Skip
+    // gates (iOS + Android) because Skip mis-evaluates os()-based directives.
+    #if canImport(UIKit) && !SKIP
+    private func handleScreenShareEndedExternally() {
+        guard state.isScreenSharing else { return }
+        Task {
+            await webRTCClient.stopScreenSharing()
+            state.isScreenSharing = false
+            if state.activeScreenShareUserId == state.userId {
+                state.activeScreenShareUserId = nil
+            }
+            debugLog("[Meeting] Screen sharing ended externally")
+        }
+    }
+    #endif
+    #if SKIP
+    private func handleScreenShareEndedExternally() {
+        guard state.isScreenSharing else { return }
+        Task {
+            await webRTCClient.stopScreenSharing()
+            state.isScreenSharing = false
+            if state.activeScreenShareUserId == state.userId {
+                state.activeScreenShareUserId = nil
+            }
+            debugLog("[Meeting] Screen sharing ended externally")
+        }
+    }
+    #endif
+
     func toggleHandRaise() {
         let newState = !state.isHandRaised
         #if !SKIP
@@ -782,6 +879,18 @@ final class MeetingViewModel {
                         await setCameraOff(true)
                         addSystemMessage(.commandExecuted(command: .cameraOff, userName: state.displayName))
                     }
+
+                case .help:
+                    let names = ChatCommand.allCases.map { "/\($0.rawValue)" }.joined(separator: ", ")
+                    addSystemMessage(.info("Available commands: \(names)"))
+
+                case .clear:
+                    state.chatMessages.removeAll()
+                    state.systemMessages.removeAll()
+                    addSystemMessage(.info("Chat cleared"))
+
+                case .leave:
+                    leaveRoom()
                 }
             } catch {
                 addSystemMessage(.commandFailed(command: parsedCommand.command, reason: error.localizedDescription))
@@ -964,6 +1073,53 @@ final class MeetingViewModel {
                 state.errorMessage = error.localizedDescription
             }
         }
+    }
+
+    func muteParticipant(userId: String) {
+        guard state.isAdmin else { return }
+        Task {
+            do {
+                try await socketManager.muteUser(userId: userId)
+            } catch {
+                state.errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    func muteAllParticipants() {
+        guard state.isAdmin else { return }
+        Task {
+            do {
+                try await socketManager.muteAll()
+            } catch {
+                state.errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    func makeHost(userId: String) {
+        guard state.isAdmin else { return }
+        Task {
+            do {
+                try await socketManager.promoteHost(userId: userId)
+            } catch {
+                state.errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    // MARK: - Spotlight / Pin (local-only)
+
+    func togglePin(_ userId: String) {
+        if state.pinnedUserId == userId {
+            state.pinnedUserId = nil
+        } else {
+            state.pinnedUserId = userId
+        }
+    }
+
+    func clearPin() {
+        state.pinnedUserId = nil
     }
 }
 

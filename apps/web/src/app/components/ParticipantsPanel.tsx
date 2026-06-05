@@ -1,24 +1,22 @@
 "use client";
 
 import {
-  AlertCircle,
   ChevronDown,
   Hand,
-  Loader2,
   Mic,
   MicOff,
-  Monitor,
+  MonitorUp,
+  Shield,
   Users,
   Video,
   VideoOff,
   X,
-  Check,
 } from "lucide-react";
 import { memo, useEffect, useState } from "react";
 import type { Socket } from "socket.io-client";
+import { Avatar } from "@conclave/ui-tokens/web";
 import type { Participant } from "../lib/types";
 import { formatDisplayName, isSystemUserId } from "../lib/utils";
-
 
 interface ParticipantsPanelProps {
   participants: Map<string, Participant>;
@@ -36,6 +34,9 @@ interface ParticipantsPanelProps {
   hostUserId?: string | null;
   hostUserIds?: string[];
 }
+
+const ICON = 18;
+const STROKE = 1.75;
 
 function ParticipantsPanel({
   participants,
@@ -100,11 +101,6 @@ function ParticipantsPanel({
   );
   const canManageHost = Boolean(isAdmin);
 
-  const hostBulkButtonClass =
-    "flex-1 rounded-lg border border-[#FEFCD9]/15 bg-[#FEFCD9]/5 px-3 py-2 text-[13px] font-normal text-[#FEFCD9]/75 transition-all hover:border-[#F95F4A]/45 hover:bg-[#F95F4A]/10 hover:text-[#FEFCD9]";
-  const hostUserActionButtonClass =
-    "inline-flex h-6 w-6 items-center justify-center rounded-md border border-[#FEFCD9]/15 bg-[#FEFCD9]/5 text-[#FEFCD9]/60 transition-colors";
-
   const getEmailFromUserId = (userId: string): string => {
     return userId.split("#")[0] || userId;
   };
@@ -115,7 +111,6 @@ function ParticipantsPanel({
       if (res.error) console.error("Failed to close producer:", res.error);
     });
   };
-
 
   const handlePromoteHost = (targetUserId: string) => {
     const targetParticipant = participants.get(targetUserId);
@@ -202,100 +197,131 @@ function ParticipantsPanel({
     setExpandedUserId((prev) => (prev === userId ? null : userId));
   };
 
+  // Tidy, consistent button recipes (presentation-only).
+  const bulkButtonClass =
+    "flex flex-1 items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-[13px] font-medium text-[#a1a1aa] transition-colors hover:bg-white/[0.07] hover:text-[#fafafa]";
+  const actionButtonBase =
+    "inline-flex items-center justify-center rounded-md px-2.5 py-1.5 text-[12.5px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40";
+  const neutralActionClass =
+    actionButtonBase +
+    " border border-white/10 bg-white/[0.04] text-[#a1a1aa] hover:bg-white/[0.07] hover:text-[#fafafa]";
+  const hostActionClass =
+    actionButtonBase +
+    " border border-[#F95F4A]/35 bg-[#F95F4A]/10 text-[#F95F4A] hover:bg-[#F95F4A]/15";
+  const dangerActionClass =
+    actionButtonBase +
+    " border border-[#ea4335]/35 bg-[#ea4335]/10 text-[#ea4335] hover:bg-[#ea4335]/15";
+
   return (
     <div
-      className="fixed right-4 top-16 bottom-20 z-40 flex w-72 flex-col overflow-hidden rounded-xl border border-[#FEFCD9]/10 bg-[#0d0e0d]/95 shadow-2xl backdrop-blur-md"
+      className="fixed right-0 top-0 bottom-0 z-40 flex w-[360px] flex-col overflow-hidden border-l border-white/10 bg-[#18181b] animate-[meet-panel-in_200ms_ease-out]"
       style={{ fontFamily: "'PolySans Trial', sans-serif" }}
     >
-      <div className="flex items-center justify-between border-b border-[#FEFCD9]/10 px-3 py-2.5">
-        <div className="flex items-center gap-2 text-sm font-semibold text-[#FEFCD9]">
-          <Users className="h-4 w-4 text-[#FEFCD9]/70" />
-          <span>Participants</span>
-          <span className="text-[#F95F4A]">({displayParticipants.length})</span>
+      {/* Header */}
+      <header className="flex items-center justify-between border-b border-white/10 px-4 py-3">
+        <div className="flex items-center gap-2">
+          <Users size={ICON} strokeWidth={STROKE} className="text-[#a1a1aa]" />
+          <h2 className="text-[15px] font-semibold text-[#fafafa]">
+            Participants
+          </h2>
+          <span className="text-[15px] font-semibold text-[#a1a1aa]">
+            ({displayParticipants.length})
+          </span>
         </div>
         <button
+          type="button"
           onClick={onClose}
-          className="flex h-6 w-6 items-center justify-center rounded text-[#FEFCD9]/50 transition-all hover:bg-[#FEFCD9]/10 hover:text-[#FEFCD9]"
+          className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-[#a1a1aa] transition-colors hover:bg-white/[0.06] hover:text-[#fafafa]"
           aria-label="Close participants panel"
         >
-          <X className="h-3.5 w-3.5" />
+          <X size={ICON} strokeWidth={STROKE} />
         </button>
-      </div>
+      </header>
 
+      {/* Host controls */}
       {isAdmin && (
-        <div className="border-b border-[#FEFCD9]/5 px-3 py-2">
-          <div className="mb-2 flex items-center gap-2 text-xs font-medium text-[#FEFCD9]/70">
-            <AlertCircle className="h-3.5 w-3.5 text-[#FEFCD9]/45" />
-            Host controls
+        <section className="border-b border-white/10 px-4 py-3">
+          <div className="mb-2.5 flex items-center gap-2">
+            <Shield size={ICON} strokeWidth={STROKE} className="text-[#a1a1aa]" />
+            <h3 className="text-[12.5px] font-semibold text-[#fafafa]">
+              Host controls
+            </h3>
           </div>
           {hostActionError && (
-            <div className="mb-2 rounded border border-red-500/20 bg-red-500/10 px-2 py-1 text-[10px] text-red-300">
+            <div className="mb-2.5 rounded-md border border-[#ea4335]/25 bg-[#ea4335]/10 px-2.5 py-1.5 text-[12px] text-[#ea4335]">
               {hostActionError}
             </div>
           )}
-          <div className="flex gap-1.5">
+          <div className="flex gap-2">
             <button
+              type="button"
               onClick={() =>
                 socket?.emit("muteAll", (res: unknown) =>
                   console.log("Muted all:", res),
                 )
               }
-              className={`${hostBulkButtonClass} flex items-center justify-center gap-2`}
-              title="Mute all"
+              className={bulkButtonClass}
+              title="Mute everyone"
             >
-              <MicOff className="h-4 w-4" />
+              <MicOff size={ICON} strokeWidth={STROKE} />
               <span>Mute all</span>
             </button>
             <button
+              type="button"
               onClick={() =>
                 socket?.emit("closeAllVideo", (res: unknown) =>
                   console.log("Stopped all video:", res),
                 )
               }
-              className={`${hostBulkButtonClass} flex items-center justify-center gap-2`}
-              title="Stop all video"
+              className={bulkButtonClass}
+              title="Turn off everyone's camera"
             >
-              <VideoOff className="h-4 w-4" />
+              <VideoOff size={ICON} strokeWidth={STROKE} />
               <span>Stop video</span>
             </button>
           </div>
-        </div>
+        </section>
       )}
 
+      {/* Pending / waiting room */}
       {isAdmin && pendingList.length > 0 && (
-        <div className="border-b border-[#FEFCD9]/5">
+        <section className="border-b border-white/10">
           <button
             type="button"
             onClick={() => setIsPendingExpanded((prev) => !prev)}
-            className="flex w-full items-center justify-between px-3 py-2 transition-colors hover:bg-[#F95F4A]/5"
+            className="flex w-full items-center justify-between px-4 py-2.5 transition-colors hover:bg-white/[0.04]"
             aria-expanded={isPendingExpanded}
           >
-            <span className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-[#F95F4A]">
-              Pending
-              <span className="rounded bg-[#F95F4A]/20 px-1.5 py-0.5 text-[9px] tabular-nums">
+            <span className="flex items-center gap-2 text-[12.5px] font-semibold text-[#fafafa]">
+              Waiting to join
+              <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-[#F95F4A]/15 px-1.5 text-[11px] font-semibold tabular-nums text-[#F95F4A]">
                 {pendingList.length}
               </span>
             </span>
             <ChevronDown
-              className={`h-3 w-3 text-[#F95F4A] transition-transform ${
+              size={ICON}
+              strokeWidth={STROKE}
+              className={`text-[#a1a1aa] transition-transform ${
                 isPendingExpanded ? "rotate-180" : ""
               }`}
             />
           </button>
           {isPendingExpanded && (
-            <div className="max-h-32 space-y-1 overflow-y-auto px-3 pb-2">
+            <div className="max-h-40 space-y-1 overflow-y-auto px-2 pb-2">
               {pendingList.map(([userId, displayName]) => {
                 const pendingName = formatDisplayName(displayName || userId);
                 return (
                   <div
                     key={userId}
-                    className="flex items-center justify-between rounded-md bg-black/30 px-2 py-1.5"
+                    className="flex items-center gap-3 rounded-lg px-2 py-2"
                   >
-                    <span className="flex-1 truncate text-xs text-[#FEFCD9]/70">
+                    <Avatar name={pendingName} id={userId} size={32} />
+                    <span className="min-w-0 flex-1 truncate text-[14px] font-medium text-[#fafafa]">
                       {pendingName}
                     </span>
-                    <div className="flex shrink-0 items-center gap-1">
+                    <div className="flex shrink-0 items-center gap-1.5">
                       <button
+                        type="button"
                         onClick={() =>
                           socket?.emit(
                             "admitUser",
@@ -305,13 +331,14 @@ function ParticipantsPanel({
                             },
                           )
                         }
-                        className="rounded px-2 py-1 text-[9px] text-green-400 transition-all hover:bg-green-500/20"
-                        title="Admit"
-                        aria-label="Admit user"
+                        className="inline-flex items-center justify-center rounded-md border border-[#22c55e]/35 bg-[#22c55e]/10 px-2.5 py-1.5 text-[12.5px] font-medium text-[#22c55e] transition-colors hover:bg-[#22c55e]/15"
+                        title="Admit to meeting"
+                        aria-label={`Admit ${pendingName}`}
                       >
-                        ✓
+                        Admit
                       </button>
                       <button
+                        type="button"
                         onClick={() =>
                           socket?.emit(
                             "rejectUser",
@@ -321,11 +348,11 @@ function ParticipantsPanel({
                             },
                           )
                         }
-                        className="rounded px-2 py-1 text-[9px] text-red-400 transition-all hover:bg-red-500/20"
-                        title="Reject"
-                        aria-label="Reject user"
+                        className="inline-flex items-center justify-center rounded-md border border-white/10 bg-white/[0.04] px-2.5 py-1.5 text-[12.5px] font-medium text-[#a1a1aa] transition-colors hover:bg-white/[0.07] hover:text-[#fafafa]"
+                        title="Deny entry"
+                        aria-label={`Reject ${pendingName}`}
                       >
-                        ✕
+                        Reject
                       </button>
                     </div>
                   </div>
@@ -333,10 +360,11 @@ function ParticipantsPanel({
               })}
             </div>
           )}
-        </div>
+        </section>
       )}
 
-      <div className="flex-1 min-h-0 space-y-0.5 overflow-y-auto px-2 py-2">
+      {/* Participant list */}
+      <div className="min-h-0 flex-1 space-y-0.5 overflow-y-auto px-2 py-2">
         {displayParticipants.map((participant) => {
           const isMe = participant.userId === currentUserId;
           const isHost = effectiveHostUserIds.has(participant.userId);
@@ -362,11 +390,11 @@ function ParticipantsPanel({
             "",
           )}`;
           return (
-            <div key={participant.userId} className="space-y-1">
+            <div key={participant.userId}>
               <div
-                className={`flex items-center justify-between rounded-md px-2 py-1.5 transition-all cursor-pointer ${
-                  isMe ? "bg-[#F95F4A]/5" : "hover:bg-[#FEFCD9]/5"
-                } ${isExpanded ? "bg-[#FEFCD9]/5" : ""}`}
+                className={`flex cursor-pointer items-center gap-3 rounded-lg px-2 py-2.5 transition-colors ${
+                  isExpanded ? "bg-white/[0.06]" : "hover:bg-white/[0.04]"
+                }`}
                 role="button"
                 tabIndex={0}
                 aria-expanded={isExpanded}
@@ -379,65 +407,93 @@ function ParticipantsPanel({
                   }
                 }}
               >
-                <div className="flex min-w-0 flex-1 items-center gap-1.5">
-                  <span className="truncate text-sm text-[#FEFCD9]/85" title={userEmail}>
-                    {displayName} {isMe && <span className="text-[#F95F4A]/60">(you)</span>}
-                  </span>
-                  {isHost && (
-                    <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-amber-300/30 bg-amber-400/10 px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-amber-200">
-                      Host
+                <Avatar name={displayName} id={participant.userId} size={36} />
+
+                <div className="flex min-w-0 flex-1 flex-col">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span
+                      className="truncate text-[14px] font-medium text-[#fafafa]"
+                      title={userEmail}
+                    >
+                      {displayName}
                     </span>
-                  )}
+                    {isMe && (
+                      <span className="shrink-0 rounded-md bg-white/[0.06] px-1.5 py-0.5 text-[11px] font-medium text-[#a1a1aa]">
+                        You
+                      </span>
+                    )}
+                    {isHost && (
+                      <span className="inline-flex shrink-0 items-center gap-1 rounded-md bg-[#F95F4A]/12 px-1.5 py-0.5 text-[11px] font-medium text-[#F95F4A]">
+                        <Shield size={12} strokeWidth={STROKE} />
+                        Host
+                      </span>
+                    )}
+                  </div>
                 </div>
 
-                <div className="flex shrink-0 items-center gap-1.5">
+                <div className="flex shrink-0 items-center gap-2.5">
                   {participant.isHandRaised && (
-                    <Hand className="h-3.5 w-3.5 text-amber-400" />
+                    <Hand
+                      size={ICON}
+                      strokeWidth={STROKE}
+                      className="text-[#fbbf24]"
+                    />
                   )}
                   {hasScreenShare && (
-                    <Monitor className="h-3.5 w-3.5 text-green-500" />
+                    <MonitorUp
+                      size={ICON}
+                      strokeWidth={STROKE}
+                      className="text-[#22c55e]"
+                    />
                   )}
                   {participant.isCameraOff ? (
-                    <VideoOff className="h-3.5 w-3.5 text-red-400/70" />
+                    <VideoOff
+                      size={ICON}
+                      strokeWidth={STROKE}
+                      className="text-[#ea4335]"
+                    />
                   ) : (
-                    <Video className="h-3.5 w-3.5 text-green-500/70" />
+                    <Video
+                      size={ICON}
+                      strokeWidth={STROKE}
+                      className="text-[#a1a1aa]"
+                    />
                   )}
                   {participant.isMuted ? (
-                    <MicOff className="h-3.5 w-3.5 text-red-400/70" />
-                  ) : (
-                    <Mic className="h-3.5 w-3.5 text-green-500/70" />
-                  )}
-                  <button
-                    type="button"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      toggleExpanded(participant.userId);
-                    }}
-                    className="rounded-full border border-[#FEFCD9]/15 p-1 text-[#FEFCD9]/60 transition-colors hover:border-[#FEFCD9]/35 hover:text-[#FEFCD9]"
-                    aria-expanded={isExpanded}
-                    aria-controls={detailId}
-                    aria-label={`Toggle details for ${displayName}`}
-                  >
-                    <ChevronDown
-                      className={`h-3.5 w-3.5 transition-transform ${
-                        isExpanded ? "rotate-180" : ""
-                      }`}
+                    <MicOff
+                      size={ICON}
+                      strokeWidth={STROKE}
+                      className="text-[#ea4335]"
                     />
-                  </button>
+                  ) : (
+                    <Mic
+                      size={ICON}
+                      strokeWidth={STROKE}
+                      className="text-[#a1a1aa]"
+                    />
+                  )}
+                  <ChevronDown
+                    size={ICON}
+                    strokeWidth={STROKE}
+                    className={`text-[#71717a] transition-transform ${
+                      isExpanded ? "rotate-180" : ""
+                    }`}
+                    aria-hidden="true"
+                  />
                 </div>
               </div>
 
               {isExpanded && (
                 <div
                   id={detailId}
-                  className="rounded-md border border-[#FEFCD9]/10 bg-black/30 px-2 py-2 text-[11px] text-[#FEFCD9]/70"
+                  className="mx-2 mb-1 mt-0.5 rounded-lg border border-white/10 bg-black/20 px-3 py-2.5"
                 >
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-[#FEFCD9]/55">ID:</span>
-                    <span className="text-[#FEFCD9]">{userEmail}</span>
+                  <div className="flex flex-wrap items-baseline gap-1.5 text-[12.5px]">
+                    <span className="text-[#a1a1aa]">ID</span>
+                    <span className="break-all text-[#fafafa]">{userEmail}</span>
                   </div>
                   {isAdmin && !isMe && (
-                    <div className="mt-2 flex flex-wrap gap-2 text-[10px]">
+                    <div className="mt-2.5 flex flex-wrap gap-1.5">
                       {canPromoteParticipant && (
                         <>
                           {isPendingPromotion ? (
@@ -450,10 +506,10 @@ function ParticipantsPanel({
                                 disabled={
                                   promotingHostUserId === participant.userId
                                 }
-                                className="rounded-md border border-amber-300/35 bg-amber-400/10 px-2 py-1 text-amber-200/90 transition-colors hover:border-amber-300/60 hover:text-amber-200 disabled:cursor-not-allowed disabled:opacity-40"
+                                className={hostActionClass}
                               >
                                 {promotingHostUserId === participant.userId
-                                  ? "Promoting"
+                                  ? "Promoting…"
                                   : "Confirm host"}
                               </button>
                               <button
@@ -462,7 +518,7 @@ function ParticipantsPanel({
                                 disabled={
                                   promotingHostUserId === participant.userId
                                 }
-                                className="rounded-md border border-[#FEFCD9]/15 bg-[#FEFCD9]/5 px-2 py-1 text-[#FEFCD9]/60 transition-colors hover:border-[#FEFCD9]/35 hover:text-[#FEFCD9] disabled:cursor-not-allowed disabled:opacity-40"
+                                className={neutralActionClass}
                               >
                                 Cancel
                               </button>
@@ -476,7 +532,7 @@ function ParticipantsPanel({
                               disabled={
                                 promotingHostUserId === participant.userId
                               }
-                              className="rounded-md border border-[#FEFCD9]/15 bg-[#FEFCD9]/5 px-2 py-1 text-[#FEFCD9]/70 transition-colors hover:border-[#FEFCD9]/35 hover:text-[#FEFCD9] disabled:cursor-not-allowed disabled:opacity-40"
+                              className={neutralActionClass}
                             >
                               Make host
                             </button>
@@ -491,17 +547,17 @@ function ParticipantsPanel({
                                 type="button"
                                 onClick={() => handleKickUser(participant.userId)}
                                 disabled={removingUserId === participant.userId}
-                                className="rounded-md border border-red-400/40 bg-red-500/15 px-2 py-1 text-red-200 transition-colors hover:border-red-400/70 hover:text-red-100 disabled:cursor-not-allowed disabled:opacity-40"
+                                className={dangerActionClass}
                               >
                                 {removingUserId === participant.userId
-                                  ? "Removing"
+                                  ? "Removing…"
                                   : "Confirm remove"}
                               </button>
                               <button
                                 type="button"
                                 onClick={cancelKickUser}
                                 disabled={removingUserId === participant.userId}
-                                className="rounded-md border border-[#FEFCD9]/15 bg-[#FEFCD9]/5 px-2 py-1 text-[#FEFCD9]/60 transition-colors hover:border-[#FEFCD9]/35 hover:text-[#FEFCD9] disabled:cursor-not-allowed disabled:opacity-40"
+                                className={neutralActionClass}
                               >
                                 Cancel
                               </button>
@@ -511,7 +567,7 @@ function ParticipantsPanel({
                               type="button"
                               onClick={() => beginKickUser(participant.userId)}
                               disabled={removingUserId === participant.userId}
-                              className="rounded-md border border-red-400/30 bg-red-500/10 px-2 py-1 text-red-200/80 transition-colors hover:border-red-400/60 hover:text-red-100 disabled:cursor-not-allowed disabled:opacity-40"
+                              className={dangerActionClass}
                             >
                               Remove
                             </button>
@@ -524,9 +580,9 @@ function ParticipantsPanel({
                           <button
                             type="button"
                             onClick={() => handleCloseProducer(producerId)}
-                            className="rounded-md border border-[#FEFCD9]/15 bg-[#FEFCD9]/5 px-2 py-1 text-[#FEFCD9]/75 transition hover:border-[#F95F4A]/40 hover:text-[#FEFCD9]"
+                            className={neutralActionClass}
                           >
-                            Stop mic
+                            Mute
                           </button>
                         );
                       })() : null}
@@ -536,9 +592,9 @@ function ParticipantsPanel({
                           <button
                             type="button"
                             onClick={() => handleCloseProducer(producerId)}
-                            className="rounded-md border border-[#FEFCD9]/15 bg-[#FEFCD9]/5 px-2 py-1 text-[#FEFCD9]/75 transition hover:border-[#F95F4A]/40 hover:text-[#FEFCD9]"
+                            className={neutralActionClass}
                           >
-                            Stop video
+                            Turn off camera
                           </button>
                         );
                       })() : null}
@@ -548,7 +604,7 @@ function ParticipantsPanel({
                           <button
                             type="button"
                             onClick={() => handleCloseProducer(producerId)}
-                            className="rounded-md border border-[#FEFCD9]/15 bg-[#FEFCD9]/5 px-2 py-1 text-[#FEFCD9]/75 transition hover:border-[#F95F4A]/40 hover:text-[#FEFCD9]"
+                            className={neutralActionClass}
                           >
                             Stop share
                           </button>
@@ -560,7 +616,7 @@ function ParticipantsPanel({
                           <button
                             type="button"
                             onClick={() => handleCloseProducer(producerId)}
-                            className="rounded-md border border-[#FEFCD9]/15 bg-[#FEFCD9]/5 px-2 py-1 text-[#FEFCD9]/75 transition hover:border-[#F95F4A]/40 hover:text-[#FEFCD9]"
+                            className={neutralActionClass}
                           >
                             Stop share audio
                           </button>
@@ -574,7 +630,6 @@ function ParticipantsPanel({
           );
         })}
       </div>
-
     </div>
   );
 }

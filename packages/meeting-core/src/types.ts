@@ -119,6 +119,7 @@ export interface JoinRoomResponse {
   hostUserIds?: string[];
   isLocked?: boolean;
   isTtsDisabled?: boolean;
+  isChatLocked?: boolean;
   isDmEnabled?: boolean;
   meetingRequiresInviteCode?: boolean;
   webinarRole?: "attendee" | "participant" | "host";

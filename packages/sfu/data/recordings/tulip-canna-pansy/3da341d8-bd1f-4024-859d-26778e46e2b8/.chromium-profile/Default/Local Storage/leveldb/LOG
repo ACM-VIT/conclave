@@ -1,0 +1,53 @@
+2026/06/02-19:51:16.353 2e86a Creating DB /Users/ishaan/Projects/conclave/packages/sfu/data/recordings/tulip-canna-pansy/3da341d8-bd1f-4024-859d-26778e46e2b8/.chromium-profile/Default/Local Storage/leveldb since it was missing.
+2026/06/02-19:51:16.359 2e86a Reusing MANIFEST /Users/ishaan/Projects/conclave/packages/sfu/data/recordings/tulip-canna-pansy/3da341d8-bd1f-4024-859d-26778e46e2b8/.chromium-profile/Default/Local Storage/leveldb/MANIFEST-000001
+2026/06/03-20:53:30.554 2e86a Level-0 table #5: started
+2026/06/03-20:53:30.564 2e86a Level-0 table #5: 20945 bytes OK
+2026/06/03-20:53:30.571 2e86a Delete type=0 #3
+2026/06/03-21:16:02.429 2e86a Level-0 table #7: started
+2026/06/03-21:16:02.434 2e86a Level-0 table #7: 22991 bytes OK
+2026/06/03-21:16:02.437 2e86a Delete type=0 #4
+2026/06/03-21:35:59.822 2e871 Level-0 table #9: started
+2026/06/03-21:35:59.827 2e871 Level-0 table #9: 22944 bytes OK
+2026/06/03-21:35:59.839 2e871 Delete type=0 #6
+2026/06/03-21:57:13.935 2e86a Level-0 table #11: started
+2026/06/03-21:57:13.939 2e86a Level-0 table #11: 22955 bytes OK
+2026/06/03-21:57:13.961 2e86a Delete type=0 #8
+2026/06/03-22:16:25.953 2e871 Level-0 table #13: started
+2026/06/03-22:16:25.959 2e871 Level-0 table #13: 22939 bytes OK
+2026/06/03-22:16:25.968 2e871 Delete type=0 #10
+2026/06/03-22:35:51.669 2e86a Level-0 table #15: started
+2026/06/03-22:35:51.675 2e86a Level-0 table #15: 22832 bytes OK
+2026/06/03-22:35:51.678 2e86a Delete type=0 #12
+2026/06/03-22:35:51.683 2e871 Compacting 4@0 + 1@1 files
+2026/06/03-22:35:51.692 2e871 Generated table #16@0: 4 keys, 2127 bytes
+2026/06/03-22:35:51.692 2e871 Compacted 4@0 + 1@1 files => 2127 bytes
+2026/06/03-22:35:51.693 2e871 compacted to: files[ 0 1 1 0 0 0 0 ]
+2026/06/03-22:35:51.694 2e871 Delete type=2 #15
+2026/06/03-22:35:51.694 2e871 Delete type=2 #7
+2026/06/03-22:35:51.694 2e871 Delete type=2 #13
+2026/06/03-22:35:51.694 2e871 Delete type=2 #11
+2026/06/03-22:35:51.694 2e871 Delete type=2 #9
+2026/06/03-22:57:55.068 2e871 Level-0 table #18: started
+2026/06/03-22:57:55.076 2e871 Level-0 table #18: 22955 bytes OK
+2026/06/03-22:57:55.079 2e871 Delete type=0 #14
+2026/06/03-23:20:07.911 2e871 Level-0 table #20: started
+2026/06/03-23:20:07.920 2e871 Level-0 table #20: 23005 bytes OK
+2026/06/03-23:20:07.924 2e871 Delete type=0 #17
+2026/06/03-23:44:16.979 2e86a Level-0 table #22: started
+2026/06/03-23:44:16.981 2e86a Level-0 table #22: 22915 bytes OK
+2026/06/03-23:44:16.984 2e86a Delete type=0 #19
+2026/06/04-00:04:12.596 2e86a Level-0 table #24: started
+2026/06/04-00:04:12.604 2e86a Level-0 table #24: 22979 bytes OK
+2026/06/04-00:04:12.608 2e86a Delete type=0 #21
+2026/06/04-00:04:12.615 2e871 Compacting 4@0 + 1@1 files
+2026/06/04-00:04:12.621 2e871 Generated table #25@0: 4 keys, 2123 bytes
+2026/06/04-00:04:12.622 2e871 Compacted 4@0 + 1@1 files => 2123 bytes
+2026/06/04-00:04:12.623 2e871 compacted to: files[ 0 1 1 0 0 0 0 ]
+2026/06/04-00:04:12.624 2e871 Delete type=2 #16
+2026/06/04-00:04:12.624 2e871 Delete type=2 #20
+2026/06/04-00:04:12.624 2e871 Delete type=2 #22
+2026/06/04-00:04:12.624 2e871 Delete type=2 #18
+2026/06/04-00:04:12.624 2e871 Delete type=2 #24
+2026/06/04-00:23:47.330 2e871 Level-0 table #27: started
+2026/06/04-00:23:47.344 2e871 Level-0 table #27: 22854 bytes OK
+2026/06/04-00:23:47.347 2e871 Delete type=0 #23

@@ -120,11 +120,12 @@ class CameraPreviewUIView: UIView {
 
 struct RemoteVideoView: View {
     @ObservedObject var trackWrapper: VideoTrackWrapper
-    
+    var contentMode: VideoContentMode = .fill
+
     var body: some View {
         GeometryReader { geometry in
             if let track = trackWrapper.rtcVideoTrack {
-                RTCVideoViewRepresentable(track: track, isMirrored: false)
+                RTCVideoViewRepresentable(track: track, isMirrored: false, contentMode: contentMode)
                     .frame(width: geometry.size.width, height: geometry.size.height)
             } else {
                 ZStack {
@@ -150,23 +151,29 @@ struct RemoteVideoView: View {
 struct RTCVideoViewRepresentable: UIViewRepresentable {
     let track: RTCVideoTrack
     var isMirrored: Bool = false
-    
+    var contentMode: VideoContentMode = .fill
+
+    private var uiContentMode: UIView.ContentMode {
+        contentMode == .fit ? .scaleAspectFit : .scaleAspectFill
+    }
+
     func makeCoordinator() -> Coordinator {
         Coordinator()
     }
 
     func makeUIView(context: Context) -> RTCMTLVideoView {
         let view = RTCMTLVideoView()
-        view.videoContentMode = .scaleAspectFill
+        view.videoContentMode = uiContentMode
         view.clipsToBounds = true
         view.backgroundColor = .black
         context.coordinator.attach(track: track, to: view)
         return view
     }
-    
+
     func updateUIView(_ uiView: RTCMTLVideoView, context: Context) {
         context.coordinator.attach(track: track, to: uiView)
-        
+        uiView.videoContentMode = uiContentMode
+
         if isMirrored {
             uiView.transform = CGAffineTransform(scaleX: -1, y: 1)
         } else {
@@ -207,30 +214,32 @@ struct VideoGridItem: View {
     let isGhost: Bool
     let isSpeaking: Bool
     let isLocal: Bool
-    
+    // When set AND camera off, the tile fills its frame (immersive solo avatar)
+    // rather than locking to 16:9. Video tiles always keep 16:9.
+    var fillStage: Bool = false
+
     var captureSession: AVCaptureSession? = nil
-    
+
     var localVideoTrack: RTCVideoTrack? = nil
-    
+
     var trackWrapper: VideoTrackWrapper? = nil
-    
+
     var body: some View {
-        ZStack {
-            videoContent
-            
-            overlays
-        }
-        .aspectRatio(16.0 / 9.0, contentMode: .fit)
-        .clipShape(RoundedRectangle(cornerRadius: ACMRadius.lg))
-        .overlay {
-            RoundedRectangle(cornerRadius: ACMRadius.lg)
-                .strokeBorder(lineWidth: isSpeaking ? 2.0 : 1.0)
-                .foregroundStyle(isSpeaking ? ACMColors.primaryOrange : ACMColors.creamFaint)
-        }
-        .shadow(
-            color: isSpeaking ? ACMColors.primaryOrangeSoft : Color.clear,
-            radius: isSpeaking ? 15.0 : 0.0
-        )
+        aspectAdjustedContent
+            .clipShape(RoundedRectangle(cornerRadius: ACMRadius.lg))
+            .overlay {
+                RoundedRectangle(cornerRadius: ACMRadius.lg)
+                    .strokeBorder(lineWidth: isSpeaking ? 2.0 : 1.0)
+                    .foregroundStyle(isSpeaking ? ACMColors.primaryOrange : ACMColors.creamFaint)
+            }
+    }
+
+    @ViewBuilder
+    var aspectAdjustedContent: some View {
+        // Fill the frame the parent assigns (grid cell / stage / thumbnail).
+        // Video crops via scaleAspectFill; the avatar centres. The grid packer
+        // hands us correctly proportioned frames, so there are no letterbox gaps.
+        ZStack { videoContent; overlays }
     }
     
     @ViewBuilder
@@ -253,22 +262,23 @@ struct VideoGridItem: View {
     }
     
     var avatarView: some View {
-        ZStack {
-            ACMGradients.cardBackground
-            
-            Circle()
-                .fill(ACMGradients.avatarBackground)
-                .frame(width: 64, height: 64)
-                .overlay {
-                    Circle()
-                        .strokeBorder(lineWidth: 1)
-                        .foregroundStyle(ACMColors.creamSubtle)
-                }
-                .overlay {
-                    Text(String(displayName.prefix(1)).uppercased())
-                        .font(.system(size: 24, weight: .bold))
-                        .foregroundStyle(ACMColors.cream)
-                }
+        GeometryReader { geo in
+            // Scale the avatar to the tile so it reads well in a big solo tile
+            // and isn't oversized in a small grid tile (Meet-style).
+            let avatarSize = min(max((geo.size.width + geo.size.height) * 0.10, 44.0), 240.0)
+            ZStack {
+                ACMColors.bgAlt
+
+                Circle()
+                    .fill(ACMColors.avatarColor(for: displayName))
+                    .frame(width: avatarSize, height: avatarSize)
+                    .overlay {
+                        Text(String(displayName.prefix(1)).uppercased())
+                            .font(.system(size: avatarSize * 0.40, weight: .bold))
+                            .foregroundStyle(Color.white)
+                    }
+            }
+            .frame(width: geo.size.width, height: geo.size.height)
         }
     }
     
@@ -296,9 +306,8 @@ struct VideoGridItem: View {
                     .foregroundStyle(ACMColors.primaryPink)
                     .shadow(color: ACMColors.primaryPinkSoft, radius: 16.0)
 
-                Text("GHOST")
-                    .font(ACMFont.mono(10))
-                    .tracking(2)
+                Text("Ghost")
+                    .font(ACMFont.trial(11, weight: .medium))
                     .foregroundStyle(ACMColors.primaryPink)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 4)
@@ -339,42 +348,28 @@ struct VideoGridItem: View {
     var nameLabel: some View {
         VStack {
             Spacer()
-            
+
             HStack {
-                HStack(spacing: 6) {
-                    Text(displayName.uppercased())
-                        .font(ACMFont.mono(11))
-                        .foregroundStyle(ACMColors.cream)
-                        .tracking(1)
-                        .lineLimit(1)
-                    
-                    if isLocal {
-                        Text("YOU")
-                            .font(ACMFont.mono(9))
-                            .foregroundStyle(ACMColors.primaryOrangeDim)
-                            .tracking(2)
-                    }
-                    
+                HStack(spacing: 5) {
                     if isMuted {
                         Image(systemName: "mic.slash.fill")
-                            .font(.system(size: 10))
-                            .foregroundStyle(ACMColors.primaryOrange)
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(ACMColors.error)
                     }
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .acmColorBackground(ACMColors.blackOverlay(0.7))
-            .acmMaterialBackground(opacity: 0.3)
-            .overlay {
-                Capsule()
-                    .strokeBorder(lineWidth: 1)
-                    .foregroundStyle(ACMColors.creamFaint)
-            }
-            .clipShape(Capsule())
-                
+
+                    Text(isLocal ? "You" : displayName)
+                        .font(ACMFont.trial(12, weight: .medium))
+                        .foregroundStyle(ACMColors.text)
+                        .lineLimit(1)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .acmColorBackground(ACMColors.scrim)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+
                 Spacer()
             }
-            .padding(12)
+            .padding(10)
         }
     }
 }

@@ -63,8 +63,8 @@ const POPOUT_CSS = `
 
   body {
     font-family: 'PolySans Trial', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-    background: #0d0e0d;
-    color: #FEFCD9;
+    background: #131316;
+    color: #fafafa;
     overflow: hidden;
     user-select: none;
     -webkit-user-select: none;
@@ -106,15 +106,15 @@ const POPOUT_CSS = `
     position: relative;
     border-radius: 16px;
     overflow: hidden;
-    background: #0d0e0d;
-    border: 1px solid rgba(254, 252, 217, 0.08);
+    background: #131316;
+    border: 1px solid rgba(250, 250, 250, 0.08);
     transition: all 0.3s ease;
     min-width: 0;
     min-height: 0;
   }
 
   .video-tile:hover {
-    border-color: rgba(254, 252, 217, 0.15);
+    border-color: rgba(250, 250, 250, 0.15);
   }
 
   .video-tile.speaking {
@@ -134,7 +134,7 @@ const POPOUT_CSS = `
     display: flex;
     align-items: center;
     justify-content: center;
-    background: linear-gradient(135deg, #1a1a1a, #0d0e0d);
+    background: linear-gradient(135deg, #18181b, #131316);
   }
 
   .video-tile .avatar-circle {
@@ -147,8 +147,8 @@ const POPOUT_CSS = `
     justify-content: center;
     font-size: 18px;
     font-weight: 700;
-    color: #FEFCD9;
-    border: 1px solid rgba(254, 252, 217, 0.2);
+    color: #fafafa;
+    border: 1px solid rgba(250, 250, 250, 0.2);
   }
 
   .video-tile .label {
@@ -159,18 +159,18 @@ const POPOUT_CSS = `
     background: rgba(0, 0, 0, 0.7);
     backdrop-filter: blur(8px);
     -webkit-backdrop-filter: blur(8px);
-    border: 1px solid rgba(254, 252, 217, 0.1);
+    border: 1px solid rgba(250, 250, 250, 0.1);
     border-radius: 9999px;
     display: flex;
     align-items: center;
     gap: 6px;
-    font-family: 'PolySans Mono', monospace;
+    font-family: 'PolySans Trial', sans-serif;
   }
 
   .video-tile .label-name {
     font-size: 10px;
     font-weight: 500;
-    color: #FEFCD9;
+    color: #fafafa;
     text-transform: uppercase;
     letter-spacing: 0.05em;
     white-space: nowrap;
@@ -206,7 +206,7 @@ const POPOUT_CSS = `
     -webkit-backdrop-filter: blur(12px);
     border-radius: 9999px;
     z-index: 10;
-    font-family: 'PolySans Mono', monospace;
+    font-family: 'PolySans Trial', sans-serif;
   }
 
   .ctrl-btn {
@@ -218,15 +218,15 @@ const POPOUT_CSS = `
     border-radius: 9999px;
     border: none;
     background: transparent;
-    color: rgba(254, 252, 217, 0.8);
+    color: rgba(250, 250, 250, 0.8);
     cursor: pointer;
     transition: all 0.15s ease;
     outline: none;
   }
 
   .ctrl-btn:hover {
-    color: #FEFCD9;
-    background: rgba(254, 252, 217, 0.1);
+    color: #fafafa;
+    background: rgba(250, 250, 250, 0.1);
   }
 
   .ctrl-btn.muted {
@@ -246,17 +246,17 @@ const POPOUT_CSS = `
   .ctrl-divider {
     width: 1px;
     height: 20px;
-    background: rgba(254, 252, 217, 0.1);
+    background: rgba(250, 250, 250, 0.1);
     margin: 0 2px;
   }
 
   .ctrl-btn.leave {
-    color: #ef4444;
+    color: #ea4335;
     background: transparent;
   }
 
   .ctrl-btn.leave:hover {
-    background: rgba(239, 68, 68, 0.2);
+    background: rgba(234, 67, 53, 0.2);
   }
 
   .ctrl-btn.leave svg {
@@ -275,11 +275,11 @@ const POPOUT_CSS = `
     background: rgba(0, 0, 0, 0.6);
     backdrop-filter: blur(8px);
     -webkit-backdrop-filter: blur(8px);
-    border: 1px solid rgba(254, 252, 217, 0.1);
+    border: 1px solid rgba(250, 250, 250, 0.1);
     border-radius: 9999px;
-    font-family: 'PolySans Mono', monospace;
+    font-family: 'PolySans Trial', sans-serif;
     font-size: 10px;
-    color: rgba(254, 252, 217, 0.6);
+    color: rgba(250, 250, 250, 0.6);
     text-transform: uppercase;
     letter-spacing: 0.08em;
     z-index: 10;

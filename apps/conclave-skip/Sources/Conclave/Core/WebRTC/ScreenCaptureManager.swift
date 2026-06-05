@@ -2,8 +2,12 @@
 //  ScreenCaptureManager.swift
 //  Conclave
 //
-//  Manages ReplayKit screen capture and WebRTC integration.
-//  Uses in-app capture via RPScreenRecorder (no broadcast extension required).
+//  Coordinates whole-device screen sharing via a ReplayKit Broadcast Upload
+//  Extension (NOT in-app RPScreenRecorder, which can only capture this app's own
+//  window). Standing up an App-Group socket server, then presenting the system
+//  broadcast picker, lets the user share ANY app / their whole screen — the
+//  extension streams JPEG frames back over the socket, which we decode and feed
+//  into the WebRTC screen producer. Mirrors the working react-native-webrtc flow.
 //
 
 #if canImport(UIKit) && !SKIP
@@ -12,94 +16,166 @@ import ReplayKit
 import WebRTC
 import Combine
 
-/// Manages screen capture coordination between ReplayKit and WebRTC.
+/// Manages screen capture coordination between the broadcast extension and WebRTC.
 @MainActor
 final class ScreenCaptureManager: NSObject {
     static let shared = ScreenCaptureManager()
+
+    // MARK: - Configuration
+    private let appGroupIdentifier = "group.com.acmvit.conclave"
+    private let broadcastExtensionBundleId = "com.acmvit.conclave.ScreenShareExtension"
 
     // MARK: - Publishers
     let isCapturing = CurrentValueSubject<Bool, Never>(false)
     let captureError = PassthroughSubject<Error, Never>()
 
+    /// Invoked when the broadcast ends from OUTSIDE the app (Control Center /
+    /// status bar / the extension's own timeout) so the meeting can tear down
+    /// its producer and reset UI state. Set by MeetingViewModel.
+    var onBroadcastStopped: (() -> Void)?
+
+    /// How long to wait for the broadcast extension to actually connect after
+    /// presenting the picker. Covers the user cancelling / dismissing the
+    /// system sheet (matches the extension's own initialConnectionTimeout).
+    private let startTimeout: TimeInterval = 12
+
     // MARK: - Properties
-    private let recorder = RPScreenRecorder.shared()
     private weak var webRTCClient: WebRTCClient?
+    private var server: ScreenShareSocketServer?
+    private var connected = false
+    private var startGeneration = 0
 
     // MARK: - Public Methods
 
-    /// Start screen capture with WebRTC integration
+    /// Stand up the socket server and present the system broadcast picker. The
+    /// share becomes live once the user confirms the picker and the extension
+    /// connects (frames then flow in via the server). Returns after presenting
+    /// — it does not wait for the user to confirm.
     func startCapture(webRTCClient: WebRTCClient) async throws {
-        guard recorder.isAvailable else {
-            throw ScreenCaptureError.recordingNotAvailable
-        }
-
-        if recorder.isRecording {
-            self.webRTCClient = webRTCClient
-            isCapturing.send(true)
-            return
-        }
-
         self.webRTCClient = webRTCClient
+        self.connected = false
+        startGeneration &+= 1
+        let generation = startGeneration
 
-        try await withCheckedThrowingContinuation { continuation in
-            recorder.startCapture { [weak self] sampleBuffer, bufferType, error in
-                if let error = error {
-                    self?.captureError.send(error)
-                    return
+        guard let server = ScreenShareSocketServer(appGroupIdentifier: appGroupIdentifier) else {
+            throw ScreenCaptureError.appGroupUnavailable
+        }
+
+        let started = server.start(
+            onFrame: { [weak self] box in
+                // Hop to the main actor (WebRTCClient is @MainActor-isolated)
+                // via DispatchQueue.main.async — it preserves FIFO order across
+                // the hop, unlike unstructured Tasks which can reorder frames.
+                DispatchQueue.main.async { [weak self] in
+                    self?.webRTCClient?.feedScreenFrame(box.frame)
                 }
-
-                guard bufferType == .video,
-                      let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
-                    return
+            },
+            onConnect: { [weak self] in
+                DispatchQueue.main.async { [weak self] in
+                    self?.connected = true
                 }
-
-                let timestamp = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sampleBuffer))
-                let timeStampNs = Int64(timestamp * 1_000_000_000)
-                let rtcPixelBuffer = RTCCVPixelBuffer(pixelBuffer: pixelBuffer)
-                let frame = RTCVideoFrame(buffer: rtcPixelBuffer, rotation: ._0, timeStampNs: timeStampNs)
-
-                DispatchQueue.main.async {
-                    self?.webRTCClient?.feedScreenFrame(frame)
-                }
-            } completionHandler: { [weak self] error in
-                if let error = error {
-                    self?.captureError.send(error)
-                    continuation.resume(throwing: error)
-                } else {
-                    continuation.resume()
+            },
+            onDisconnect: { [weak self] in
+                DispatchQueue.main.async { [weak self] in
+                    self?.handleExternalStop()
                 }
             }
+        )
+        guard started else {
+            throw ScreenCaptureError.socketUnavailable
         }
+        self.server = server
 
+        presentBroadcastPicker()
         isCapturing.send(true)
+
+        // If the extension never connects (the user cancelled or dismissed the
+        // system sheet), tear everything back down so the share button doesn't
+        // stay stuck "on" forever with a dead producer.
+        DispatchQueue.main.asyncAfter(deadline: .now() + startTimeout) { [weak self] in
+            guard let self else { return }
+            guard self.startGeneration == generation,
+                  self.server != nil,
+                  !self.connected else { return }
+            self.handleExternalStop()
+        }
     }
 
-    /// Stop screen capture
+    /// Tear down from the app side (the in-app Share toggle). Closing the socket
+    /// makes the extension's next write fail, which finishes the broadcast
+    /// gracefully.
     func stopCapture() async {
-        guard recorder.isRecording else { return }
+        startGeneration &+= 1
+        connected = false
+        server?.stop()
+        server = nil
+        webRTCClient = nil
+        isCapturing.send(false)
+    }
 
-        await withCheckedContinuation { continuation in
-            recorder.stopCapture { [weak self] error in
-                if let error = error {
-                    self?.captureError.send(error)
-                }
-                continuation.resume()
+    // MARK: - Private
+
+    private func handleExternalStop() {
+        guard server != nil else { return }
+        startGeneration &+= 1
+        connected = false
+        server?.stop()
+        server = nil
+        webRTCClient = nil
+        isCapturing.send(false)
+        onBroadcastStopped?()
+    }
+
+    private func presentBroadcastPicker() {
+        let picker = RPSystemBroadcastPickerView(
+            frame: CGRect(x: 0, y: 0, width: 1, height: 1)
+        )
+        picker.preferredExtension = broadcastExtensionBundleId
+        picker.showsMicrophoneButton = false
+
+        // The picker must be in the view hierarchy to present its system sheet.
+        if let window = Self.keyWindow {
+            window.addSubview(picker)
+        }
+
+        // Programmatically tap the internal button to surface the system sheet.
+        for subview in picker.subviews {
+            if let button = subview as? UIButton {
+                button.sendActions(for: .touchUpInside)
+                break
             }
         }
 
-        webRTCClient = nil
-        isCapturing.send(false)
+        // Remove the throwaway picker shortly after; the system sheet is its own
+        // presentation and outlives this view.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            picker.removeFromSuperview()
+        }
+    }
+
+    private static var keyWindow: UIWindow? {
+        UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap { $0.windows }
+            .first { $0.isKeyWindow }
+            ?? UIApplication.shared.connectedScenes
+                .compactMap { $0 as? UIWindowScene }
+                .flatMap { $0.windows }
+                .first
     }
 }
 
 // MARK: - Errors
 enum ScreenCaptureError: Error, LocalizedError {
-    case recordingNotAvailable
+    case appGroupUnavailable
+    case socketUnavailable
 
     var errorDescription: String? {
         switch self {
-        case .recordingNotAvailable:
-            return "Screen recording is not available on this device"
+        case .appGroupUnavailable:
+            return "Screen sharing is not configured (App Group unavailable)."
+        case .socketUnavailable:
+            return "Could not start screen sharing. Please try again."
         }
     }
 }

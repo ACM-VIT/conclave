@@ -555,8 +555,8 @@ export default function RecorderBotClient({
         width: "100vw",
         height: "100vh",
         margin: 0,
-        background: "#060606",
-        color: "#FEFCD9",
+        background: "#0a0a0b",
+        color: "#fafafa",
         fontFamily: "monospace",
         position: "relative",
       }}
@@ -569,7 +569,7 @@ export default function RecorderBotClient({
           width: "100%",
           height: "100%",
           border: "none",
-          background: "#060606",
+          background: "#0a0a0b",
         }}
       />
       <div
@@ -580,7 +580,7 @@ export default function RecorderBotClient({
           padding: "2px 6px",
           fontSize: 10,
           background: "rgba(0,0,0,0.6)",
-          color: phase === "recording" ? "#3ddc84" : phase === "error" ? "#f95f4a" : "#FEFCD9",
+          color: phase === "recording" ? "#3ddc84" : phase === "error" ? "#f95f4a" : "#fafafa",
           borderRadius: 4,
           pointerEvents: "none",
           zIndex: 9999,

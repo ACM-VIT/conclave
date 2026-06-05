@@ -23,19 +23,22 @@ function ReactionOverlay({
             style={{ left: `${reaction.lane}%` }}
           >
             <div className="-translate-x-1/2">
-              <div className="animate-reaction-float flex flex-col items-center gap-1">
-                <div className="w-12 h-12 sm:w-16 sm:h-16 rounded-full bg-black/60 border border-white/10 flex items-center justify-center text-2xl sm:text-3xl shadow-xl">
+              <div
+                className="animate-reaction-float flex flex-col items-center gap-1.5"
+                style={{ animationDuration: "2s" }}
+              >
+                <div className="flex h-11 w-11 items-center justify-center rounded-full border border-[#fafafa]/10 bg-[#18181b]/90 text-2xl sm:h-14 sm:w-14 sm:text-3xl">
                   {reaction.kind === "emoji" ? (
                     reaction.value
                   ) : (
                     <img
                       src={reaction.value}
                       alt={reaction.label || "Reaction"}
-                      className="w-7 h-7 sm:w-10 sm:h-10 object-contain"
+                      className="h-6 w-6 object-contain sm:h-8 sm:w-8"
                     />
                   )}
                 </div>
-                <span className="text-[9px] sm:text-[10px] text-white/70 bg-black/40 border border-white/5 px-1.5 sm:px-2 py-0.5 rounded-full max-w-[140px] truncate">
+                <span className="max-w-[140px] truncate rounded-full border border-[#fafafa]/10 bg-[#18181b]/90 px-2 py-0.5 text-[11px] text-[#fafafa]/70 sm:text-[12px]">
                   {displayName}
                 </span>
               </div>

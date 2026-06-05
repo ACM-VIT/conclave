@@ -1793,6 +1793,7 @@ export function useMeetSocket({
               currentRoomIdRef.current = targetRoomId;
               serverRoomIdRef.current = response.roomId ?? targetRoomId;
               setIsTtsDisabled(response.isTtsDisabled ?? false);
+              setIsChatLocked(response.isChatLocked ?? false);
               setIsDmEnabled(response.isDmEnabled ?? true);
               resolve("waiting");
               return;
@@ -1811,6 +1812,7 @@ export function useMeetSocket({
                 response.meetingRequiresInviteCode ?? false,
               );
               setIsTtsDisabled(response.isTtsDisabled ?? false);
+              setIsChatLocked(response.isChatLocked ?? false);
               setIsDmEnabled(response.isDmEnabled ?? true);
               setWebinarRole(response.webinarRole ?? null);
               setWebinarSpeakerUserId(
@@ -1913,6 +1915,7 @@ export function useMeetSocket({
       syncProducers,
       setIsRoomLocked,
       setIsTtsDisabled,
+      setIsChatLocked,
       setIsDmEnabled,
     ],
   );

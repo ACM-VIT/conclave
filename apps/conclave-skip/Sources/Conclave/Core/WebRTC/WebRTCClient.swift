@@ -74,6 +74,10 @@ final class WebRTCClient: NSObject, ObservableObject {
         let producerId: String
         let userId: String
         let kind: String
+        // Key under which the video track is stored in remoteVideoTracks:
+        // "{userId}" for webcam, "{userId}-screen" for a screen-share — so a
+        // user's webcam and screen tracks coexist instead of overwriting.
+        var trackKey: String = ""
     }
 
     var consumers: [String: ConsumerInfo] = [:]
@@ -309,7 +313,7 @@ final class WebRTCClient: NSObject, ObservableObject {
 
     // MARK: - Consume Remote Media
 
-    func consumeProducer(producerId: String, producerUserId: String) async throws {
+    func consumeProducer(producerId: String, producerUserId: String, producerType: String = "webcam") async throws {
         guard let socket = socketManager,
               let rtpCaps = serverRtpCapabilities,
               let receiveTransport = receiveTransport else {
@@ -331,11 +335,17 @@ final class WebRTCClient: NSObject, ObservableObject {
         consumer.delegate = self
         consumer.resume()
 
+        // A user can produce a webcam AND a screen-share at once — store them
+        // under distinct keys so one never overwrites the other.
+        let isScreen = (producerType == "screen")
+        let trackKey = isScreen ? "\(producerUserId)-screen" : producerUserId
+
         consumers[response.id] = ConsumerInfo(
             consumer: consumer,
             producerId: response.producerId,
             userId: producerUserId,
-            kind: response.kind
+            kind: response.kind,
+            trackKey: trackKey
         )
 
         try await socket.resumeConsumer(consumerId: response.id)
@@ -343,14 +353,14 @@ final class WebRTCClient: NSObject, ObservableObject {
         if response.kind == "video", let videoTrack = consumer.track as? RTCVideoTrack {
             let trackWrapper = VideoTrackWrapper(
                 id: response.id,
-                userId: producerUserId,
+                userId: trackKey,
                 isLocal: false,
                 track: videoTrack
             )
-            remoteVideoTracks[producerUserId] = trackWrapper
+            remoteVideoTracks[trackKey] = trackWrapper
         }
 
-        debugLog("[WebRTC] Consuming producer \(producerId) for user \(producerUserId)")
+        debugLog("[WebRTC] Consuming \(producerType) producer \(producerId) for user \(producerUserId)")
     }
 
     func closeConsumer(producerId: String, userId: String) {
@@ -363,13 +373,18 @@ final class WebRTCClient: NSObject, ObservableObject {
         } else if let entry = consumers.first(where: { $0.value.producerId == producerId }) {
             entry.value.consumer.close()
             consumers.removeValue(forKey: entry.key)
-            if !entry.value.userId.isEmpty {
-                remoteVideoTracks.removeValue(forKey: entry.value.userId)
+            // Remove exactly the track this consumer fed (webcam OR screen),
+            // never the sibling — so stopping a share leaves the webcam intact.
+            let key = entry.value.trackKey.isEmpty ? entry.value.userId : entry.value.trackKey
+            if !key.isEmpty {
+                remoteVideoTracks.removeValue(forKey: key)
             }
         }
 
+        // User left entirely (empty producerId path) — clear both their slots.
         if !userId.isEmpty {
             remoteVideoTracks.removeValue(forKey: userId)
+            remoteVideoTracks.removeValue(forKey: "\(userId)-screen")
         }
     }
 

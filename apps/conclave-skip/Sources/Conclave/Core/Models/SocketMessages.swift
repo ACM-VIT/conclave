@@ -2,7 +2,15 @@
 //  SocketMessages.swift
 //  Conclave
 //
-//  Socket.IO message types matching the SFU server protocol
+//  Socket.IO message payloads — the native mirror of the SFU wire protocol.
+//
+//  SINGLE SOURCE OF TRUTH for the protocol:
+//    • Event names → packages/meeting-core/src/sfu-events.ts
+//      (generated into SfuEvents.swift — use `SfuClientEvent`/`SfuServerEvent`,
+//       never raw strings).
+//    • Payload shapes → packages/meeting-core/src/types.ts + sfu-types.ts
+//      (web's exact types). Keep these structs field-compatible with those;
+//      decode-only structs may add OPTIONAL fields freely (absent = nil).
 //
 
 import Foundation
@@ -72,6 +80,29 @@ struct JoinRoomResponse: Codable {
     let rtpCapabilities: RtpCapabilities
     let existingProducers: [ProducerInfo]
     let status: String
+    // Mirrors the rest of meeting-core JoinRoomResponse (all optional so older
+    // servers / partial payloads still decode).
+    let roomId: String?
+    let hostUserId: String?
+    let hostUserIds: [String]?
+    let isLocked: Bool?
+    let isTtsDisabled: Bool?
+    let isDmEnabled: Bool?
+    let meetingRequiresInviteCode: Bool?
+    let webinarRole: String?
+    let isWebinarEnabled: Bool?
+    let webinarLocked: Bool?
+    let webinarRequiresInviteCode: Bool?
+    let webinarAttendeeCount: Int?
+    let webinarMaxAttendees: Int?
+    let recording: JoinRoomRecordingState?
+}
+
+struct JoinRoomRecordingState: Codable {
+    let active: Bool
+    let paused: Bool
+    let startedAt: Double?
+    let available: Bool
 }
 
 struct TransportResponse: Codable {
@@ -146,6 +177,10 @@ struct ChatMessageNotification: Codable {
     let displayName: String
     let content: String
     let timestamp: Double
+    // DM fields (meeting-core ChatMessage) — present only on direct messages.
+    let isDirect: Bool?
+    let dmTargetUserId: String?
+    let dmTargetDisplayName: String?
 }
 
 struct ReactionNotification: Codable {
@@ -219,6 +254,7 @@ struct WaitingRoomStatusNotification: Codable {
 }
 
 struct RedirectNotification: Codable {
+    let userId: String?
     let newRoomId: String
 }
 

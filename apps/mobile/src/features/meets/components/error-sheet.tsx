@@ -173,7 +173,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 999,
-    backgroundColor: "rgba(254, 252, 217, 0.08)",
+    backgroundColor: "rgba(250, 250, 250, 0.08)",
     borderWidth: 1,
     borderColor: SHEET_COLORS.border,
   },
@@ -207,7 +207,7 @@ const styles = StyleSheet.create({
     borderColor: "rgba(255, 255, 255, 0.1)",
   },
   secondaryActionText: {
-    color: "rgba(254, 252, 217, 0.8)",
+    color: "rgba(250, 250, 250, 0.8)",
     fontSize: 12,
     fontWeight: "600",
     letterSpacing: 0.4,

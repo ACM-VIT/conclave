@@ -5,6 +5,7 @@ import {
   Settings,
   FlipHorizontal,
   Mic,
+  Video,
   Volume2,
   ChevronDown,
   Check,
@@ -31,8 +32,10 @@ interface VideoSettingsProps {
   onDisplayNameSubmit?: () => void;
   selectedAudioInputDeviceId?: string;
   selectedAudioOutputDeviceId?: string;
+  selectedVideoInputDeviceId?: string;
   onAudioInputDeviceChange?: (deviceId: string) => void;
   onAudioOutputDeviceChange?: (deviceId: string) => void;
+  onVideoInputDeviceChange?: (deviceId: string) => void;
 }
 
 // Custom dropdown component
@@ -75,20 +78,20 @@ function DeviceDropdown({
     <div ref={dropdownRef} className="relative">
       <button
         onClick={() => setIsDropdownOpen(!isDropdownOpen)}
-        className="w-full flex items-center justify-between gap-1.5 bg-black/30 border border-[#FEFCD9]/10 rounded-md px-2 py-1.5 text-xs text-left transition-all hover:border-[#FEFCD9]/20"
+        className="w-full flex items-center justify-between gap-1.5 bg-black/30 border border-[#fafafa]/10 rounded-md px-2 py-1.5 text-xs text-left transition-all hover:border-[#fafafa]/20"
       >
-        <span className="truncate text-[#FEFCD9]/70">{displayLabel}</span>
+        <span className="truncate text-[#fafafa]/82">{displayLabel}</span>
         <ChevronDown
-          className={`w-3 h-3 text-[#FEFCD9]/40 shrink-0 transition-transform ${
+          className={`w-3 h-3 text-[#fafafa]/56 shrink-0 transition-transform ${
             isDropdownOpen ? "rotate-180" : ""
           }`}
         />
       </button>
 
       {isDropdownOpen && (
-        <div className="absolute top-full left-0 right-0 mt-1 bg-[#0d0e0d] border border-[#FEFCD9]/10 rounded-md max-h-32 overflow-y-auto z-50 shadow-xl">
+        <div className="absolute top-full left-0 right-0 mt-1 bg-[#131316] border border-[#fafafa]/10 rounded-md max-h-32 overflow-y-auto z-50 shadow-xl">
           {devices.length === 0 ? (
-            <div className="px-2 py-1.5 text-[10px] text-[#FEFCD9]/40">{placeholder}</div>
+            <div className="px-2 py-1.5 text-[10px] text-[#fafafa]/56">{placeholder}</div>
           ) : (
             devices.map((device) => (
               <button
@@ -97,9 +100,9 @@ function DeviceDropdown({
                   onSelect(device.deviceId);
                   setIsDropdownOpen(false);
                 }}
-                className="w-full flex items-center gap-1.5 px-2 py-1.5 text-xs text-left hover:bg-[#FEFCD9]/5 transition-colors"
+                className="w-full flex items-center gap-1.5 px-2 py-1.5 text-xs text-left hover:bg-[#fafafa]/5 transition-colors"
               >
-                <span className="truncate flex-1 text-[#FEFCD9]/70">
+                <span className="truncate flex-1 text-[#fafafa]/82">
                   {device.label}
                 </span>
                 {(device.deviceId === selectedDeviceId ||
@@ -130,14 +133,19 @@ export default function VideoSettings({
   onDisplayNameSubmit,
   selectedAudioInputDeviceId,
   selectedAudioOutputDeviceId,
+  selectedVideoInputDeviceId,
   onAudioInputDeviceChange,
   onAudioOutputDeviceChange,
+  onVideoInputDeviceChange,
 }: VideoSettingsProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [audioInputDevices, setAudioInputDevices] = useState<
     MediaDeviceOption[]
   >([]);
   const [audioOutputDevices, setAudioOutputDevices] = useState<
+    MediaDeviceOption[]
+  >([]);
+  const [videoInputDevices, setVideoInputDevices] = useState<
     MediaDeviceOption[]
   >([]);
   const showDisplayNameSettings =
@@ -162,8 +170,16 @@ export default function VideoSettings({
           label: d.label || `Speaker ${i + 1}`,
         }));
 
+      const videoInputs = devices
+        .filter((d) => d.kind === "videoinput")
+        .map((d, i) => ({
+          deviceId: d.deviceId,
+          label: d.label || `Camera ${i + 1}`,
+        }));
+
       setAudioInputDevices(audioInputs);
       setAudioOutputDevices(audioOutputs);
+      setVideoInputDevices(videoInputs);
     } catch (err) {
       console.error("[VideoSettings] Failed to enumerate devices:", err);
     }
@@ -203,29 +219,29 @@ export default function VideoSettings({
     <div ref={containerRef} className="relative" style={{ fontFamily: "'PolySans Trial', sans-serif" }}>
       <button
         onClick={onToggleOpen}
-        className="w-8 h-8 rounded-full flex items-center justify-center text-[#FEFCD9]/70 hover:text-[#FEFCD9] hover:bg-[#FEFCD9]/10 transition-all"
+        className="w-8 h-8 rounded-full flex items-center justify-center text-[#fafafa]/82 hover:text-[#fafafa] hover:bg-[#fafafa]/10 transition-all"
         title="Settings"
       >
         <Settings className="w-4 h-4" />
       </button>
 
       {isOpen && (
-        <div className="absolute top-full right-0 mt-2 bg-[#0d0e0d]/95 backdrop-blur-md border border-[#FEFCD9]/10 rounded-lg p-2 w-72 z-50 shadow-2xl">
+        <div className="absolute top-full right-0 mt-2 bg-[#131316]/95 backdrop-blur-md border border-[#fafafa]/10 rounded-lg p-2 w-72 z-50 shadow-2xl">
           {/* Mirror Camera Toggle */}
           <button
             onClick={onToggleMirror}
-            className="w-full flex items-center gap-2 px-3 py-2 hover:bg-[#FEFCD9]/5 rounded-lg text-xs transition-colors text-[#FEFCD9]"
+            className="w-full flex items-center gap-2 px-3 py-2 hover:bg-[#fafafa]/5 rounded-lg text-xs transition-colors text-[#fafafa]"
           >
             <FlipHorizontal className="w-3.5 h-3.5" />
             <span>Mirror camera</span>
             <div className="ml-auto">
               <div
                 className={`w-8 h-5 rounded-full transition-all relative ${
-                  isMirrorCamera ? "bg-[#F95F4A]" : "bg-[#FEFCD9]/20"
+                  isMirrorCamera ? "bg-[#F95F4A]" : "bg-[#fafafa]/20"
                 }`}
               >
                 <div
-                  className={`absolute top-0.5 w-4 h-4 rounded-full bg-[#FEFCD9] transition-all ${
+                  className={`absolute top-0.5 w-4 h-4 rounded-full bg-[#fafafa] transition-all ${
                     isMirrorCamera ? "left-3.5" : "left-0.5"
                   }`}
                 />
@@ -235,7 +251,7 @@ export default function VideoSettings({
 
           {showDisplayNameSettings && (
             <div className="px-3 py-2">
-              <div className="flex items-center gap-1.5 text-[10px] text-[#FEFCD9]/40 mb-1.5 uppercase tracking-wider">
+              <div className="flex items-center gap-1.5 text-[10px] text-[#fafafa]/56 mb-1.5 uppercase tracking-wider">
                 <UserCheck className="w-3 h-3" />
                 <span>Display name</span>
               </div>
@@ -253,7 +269,7 @@ export default function VideoSettings({
                     onDisplayNameInputChange?.(event.target.value)
                   }
                   maxLength={40}
-                  className="flex-1 px-2 py-1.5 bg-black/40 border border-[#FEFCD9]/15 rounded-md text-xs text-[#FEFCD9] focus:outline-none focus:border-[#F95F4A] transition-colors placeholder:text-[#FEFCD9]/30"
+                  className="flex-1 px-2 py-1.5 bg-black/40 border border-[#fafafa]/15 rounded-md text-xs text-[#fafafa] focus:outline-none focus:border-[#F95F4A] transition-colors placeholder:text-[#fafafa]/30"
                   placeholder="Enter name"
                   disabled={isDisplayNameUpdating}
                 />
@@ -279,13 +295,30 @@ export default function VideoSettings({
             </div>
           )}
 
-          <div className="border-t border-[#FEFCD9]/5 my-1" />
+          <div className="border-t border-[#fafafa]/5 my-1" />
+
+          {/* Camera Selection */}
+          <div className="px-3 py-2">
+            <div
+              className="text-[10px] text-[#fafafa]/56 flex items-center gap-1.5 mb-1.5 uppercase tracking-wider"
+              style={{ fontFamily: "'PolySans Trial', sans-serif" }}
+            >
+              <Video className="w-3 h-3" />
+              <span>Camera</span>
+            </div>
+            <DeviceDropdown
+              devices={videoInputDevices}
+              selectedDeviceId={selectedVideoInputDeviceId}
+              onSelect={(deviceId) => onVideoInputDeviceChange?.(deviceId)}
+              placeholder="No cameras found"
+            />
+          </div>
 
           {/* Microphone Selection */}
           <div className="px-3 py-2">
             <div 
-              className="text-[10px] text-[#FEFCD9]/40 flex items-center gap-1.5 mb-1.5 uppercase tracking-wider"
-              style={{ fontFamily: "'PolySans Mono', monospace" }}
+              className="text-[10px] text-[#fafafa]/56 flex items-center gap-1.5 mb-1.5 uppercase tracking-wider"
+              style={{ fontFamily: "'PolySans Trial', sans-serif" }}
             >
               <Mic className="w-3 h-3" />
               <span>Microphone</span>
@@ -301,8 +334,8 @@ export default function VideoSettings({
           {/* Speaker Selection */}
           <div className="px-3 py-2">
             <div 
-              className="text-[10px] text-[#FEFCD9]/40 flex items-center gap-1.5 mb-1.5 uppercase tracking-wider"
-              style={{ fontFamily: "'PolySans Mono', monospace" }}
+              className="text-[10px] text-[#fafafa]/56 flex items-center gap-1.5 mb-1.5 uppercase tracking-wider"
+              style={{ fontFamily: "'PolySans Trial', sans-serif" }}
             >
               <Volume2 className="w-3 h-3" />
               <span>Speaker</span>

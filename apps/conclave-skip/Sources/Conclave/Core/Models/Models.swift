@@ -102,6 +102,16 @@ enum ProducerType: String, Codable {
     case screen
 }
 
+// MARK: - Video Content Mode
+//  Two distinct aspect policies (Meet standard): cameras crop-to-fill, screen
+//  shares letterbox on black. Cross-platform (maps to RTCVideoView contentMode
+//  on iOS / RendererCommon.ScalingType on Android).
+
+enum VideoContentMode {
+    case fill   // scaleAspectFill — cameras (crop to fill, no distortion)
+    case fit    // scaleAspectFit — screen-share (letterbox on black)
+}
+
 // MARK: - Meet Error
 
 struct MeetError: Error, Equatable {

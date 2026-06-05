@@ -42,6 +42,9 @@ final class MeetingState {
     // Active States
     var activeScreenShareUserId: String?
     var activeSpeakerId: String?
+    // Locally-pinned participant → spotlight stage (not synced; mirrors web's
+    // per-tile pin). nil = grid.
+    var pinnedUserId: String?
 
     // Chat
     var chatMessages: [ChatMessage] = []
@@ -81,6 +84,9 @@ final class MeetingState {
     var isScreenShareSupported: Bool {
         #if os(iOS) && canImport(ReplayKit) && !SKIP
         return RPScreenRecorder.shared().isAvailable
+        #elseif SKIP
+        // Android: screen capture via MediaProjection (API 21+).
+        return true
         #else
         return false
         #endif

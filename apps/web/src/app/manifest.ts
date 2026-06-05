@@ -7,8 +7,8 @@ export default function manifest(): MetadataRoute.Manifest {
     description: "A video conferencing platform for meetings, webinars, and collaboration.",
     start_url: "/",
     display: "standalone",
-    background_color: "#0d0e0d",
-    theme_color: "#0d0e0d",
+    background_color: "#131316",
+    theme_color: "#131316",
     icons: [
       {
         src: "/favicon.svg",

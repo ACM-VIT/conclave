@@ -167,7 +167,7 @@ export function useMeetPictureInPicture({
                 offsetX = (canvas.width - drawWidth) / 2;
             }
 
-            ctx.fillStyle = "#0d0e0d";
+            ctx.fillStyle = "#131316";
             ctx.fillRect(0, 0, canvas.width, canvas.height);
             ctx.drawImage(video, offsetX, offsetY, drawWidth, drawHeight);
 
@@ -190,12 +190,12 @@ export function useMeetPictureInPicture({
                 ctx.fill();
 
                 // Text
-                ctx.fillStyle = "#FEFCD9";
+                ctx.fillStyle = "#fafafa";
                 ctx.fillText(name, pillX + padding, pillY + fontSize + padding / 2);
             }
         } else {
             // No video - show placeholder
-            ctx.fillStyle = "#0d0e0d";
+            ctx.fillStyle = "#131316";
             ctx.fillRect(0, 0, canvas.width, canvas.height);
 
             // Draw circle with initial
@@ -207,13 +207,13 @@ export function useMeetPictureInPicture({
             ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
             ctx.fillStyle = "rgba(249, 95, 74, 0.2)";
             ctx.fill();
-            ctx.strokeStyle = "rgba(254, 252, 217, 0.2)";
+            ctx.strokeStyle = "rgba(250, 250, 250, 0.2)";
             ctx.lineWidth = 2;
             ctx.stroke();
 
             // Initial letter
             const initial = (name || userEmail || "?")[0]?.toUpperCase() || "?";
-            ctx.fillStyle = "#FEFCD9";
+            ctx.fillStyle = "#fafafa";
             ctx.font = "bold 32px sans-serif";
             ctx.textAlign = "center";
             ctx.textBaseline = "middle";

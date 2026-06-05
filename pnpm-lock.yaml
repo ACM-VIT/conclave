@@ -38,6 +38,9 @@ importers:
       '@conclave/meeting-core':
         specifier: workspace:*
         version: link:../../packages/meeting-core
+      '@conclave/ui-tokens':
+        specifier: workspace:*
+        version: link:../../packages/ui-tokens
       '@tanstack/react-hotkeys':
         specifier: ^0.1.1
         version: 0.1.3(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
@@ -215,6 +218,21 @@ importers:
       typescript:
         specifier: ^5
         version: 5.9.3
+
+  packages/ui-tokens:
+    dependencies:
+      lucide-react:
+        specifier: '*'
+        version: 0.548.0(react@19.2.6)
+      lucide-react-native:
+        specifier: '*'
+        version: 1.16.0(react-native-svg@15.15.5(react-native@0.85.3(@babel/core@7.29.0)(@types/react@19.2.15)(react@19.2.6))(react@19.2.6))(react-native@0.85.3(@babel/core@7.29.0)(@types/react@19.2.15)(react@19.2.6))(react@19.2.6)
+      react:
+        specifier: '*'
+        version: 19.2.6
+      react-native:
+        specifier: '*'
+        version: 0.85.3(@babel/core@7.29.0)(@types/react@19.2.15)(react@19.2.6)
 
 packages:
 

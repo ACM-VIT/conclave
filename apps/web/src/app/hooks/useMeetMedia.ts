@@ -114,6 +114,16 @@ export function useMeetMedia({
     []
   );
 
+  const buildVideoConstraints = useCallback(
+    (deviceId?: string): MediaTrackConstraints => ({
+      ...(videoQualityRef.current === "low"
+        ? LOW_QUALITY_CONSTRAINTS
+        : STANDARD_QUALITY_CONSTRAINTS),
+      ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
+    }),
+    [videoQualityRef]
+  );
+
   const getAudioContext = useCallback(() => {
     const AudioContextConstructor =
       window.AudioContext ||
@@ -469,6 +479,62 @@ export function useMeetMedia({
       audioProducerRef,
       setLocalStream,
       buildAudioConstraints,
+    ]
+  );
+
+  const handleVideoInputDeviceChange = useCallback(
+    async (deviceId: string) => {
+      if (connectionState !== "joined") return;
+      if (isCameraOff) return;
+
+      try {
+        const newStream = await navigator.mediaDevices.getUserMedia({
+          video: buildVideoConstraints(deviceId),
+        });
+
+        const newVideoTrack = newStream.getVideoTracks()[0];
+        if (newVideoTrack) {
+          if ("contentHint" in newVideoTrack) {
+            newVideoTrack.contentHint = "motion";
+          }
+          newVideoTrack.onended = () => {
+            handleLocalTrackEnded("video", newVideoTrack);
+          };
+          const oldVideoTrack = localStream?.getVideoTracks()[0];
+
+          if (videoProducerRef.current) {
+            await videoProducerRef.current.replaceTrack({
+              track: newVideoTrack,
+            });
+          }
+
+          setLocalStream((prev) => {
+            if (prev) {
+              if (oldVideoTrack) {
+                prev.removeTrack(oldVideoTrack);
+              }
+              prev.addTrack(newVideoTrack);
+              if (oldVideoTrack) {
+                stopLocalTrack(oldVideoTrack);
+              }
+              return new MediaStream(prev.getTracks());
+            }
+            return newStream;
+          });
+        }
+      } catch (err) {
+        console.error("[Meets] Failed to switch video input device:", err);
+      }
+    },
+    [
+      connectionState,
+      isCameraOff,
+      localStream,
+      handleLocalTrackEnded,
+      stopLocalTrack,
+      videoProducerRef,
+      setLocalStream,
+      buildVideoConstraints,
     ]
   );
 
@@ -1385,6 +1451,7 @@ export function useMeetMedia({
     showPermissionHint,
     requestMediaPermissions,
     handleAudioInputDeviceChange,
+    handleVideoInputDeviceChange,
     handleAudioOutputDeviceChange,
     updateVideoQuality,
     updateVideoQualityRef,

@@ -1,0 +1,45 @@
+{
+  "id": "ac54ee9e-6546-488e-abd3-ab2a07d6d0d2",
+  "roomId": "rose-soma-flora",
+  "clientId": "public",
+  "scheduledWebinarId": null,
+  "status": "active",
+  "startedAt": 1780080034713,
+  "endedAt": null,
+  "pausedDurationMs": 0,
+  "startedBy": "guest-53bc4164-fd9c-402b-9d4e-0af76b33b5d2@guest.conclave#1780077289406-tl644qf69",
+  "endedBy": null,
+  "totalBytes": 0,
+  "resolution": {
+    "width": 1920,
+    "height": 1080
+  },
+  "audioBitrateKbps": 128,
+  "videoBitrateKbps": 5000,
+  "tracks": [
+    {
+      "id": "ac54ee9e-6546-488e-abd3-ab2a07d6d0d2",
+      "trackKind": "video",
+      "producerId": "view",
+      "producerUserId": "view-recorder",
+      "displayName": "Meeting view",
+      "codec": "vp9+opus",
+      "container": "webm",
+      "filename": "view.webm",
+      "relativePath": "view.webm",
+      "startedAt": 1780080034713,
+      "endedAt": null,
+      "durationMs": 2627,
+      "byteSize": 0,
+      "status": "active",
+      "errorMessage": null
+    }
+  ],
+  "composite": null,
+  "manifestPath": "/Users/ishaan/Projects/conclave/packages/sfu/data/recordings/rose-soma-flora/ac54ee9e-6546-488e-abd3-ab2a07d6d0d2/manifest.json",
+  "manifestRelativePath": "rose-soma-flora/ac54ee9e-6546-488e-abd3-ab2a07d6d0d2/manifest.json",
+  "storagePath": "/Users/ishaan/Projects/conclave/packages/sfu/data/recordings/rose-soma-flora/ac54ee9e-6546-488e-abd3-ab2a07d6d0d2",
+  "storageRelativePath": "rose-soma-flora/ac54ee9e-6546-488e-abd3-ab2a07d6d0d2",
+  "errorMessage": null,
+  "speakerTimeline": []
+}

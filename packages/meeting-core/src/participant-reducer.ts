@@ -36,44 +36,62 @@ const createEmptyParticipant = (
   isGhost,
 });
 
+// Clone the Map and set the participant in one step. Only ever called once a
+// real change is known, so the new Map identity always signals a real update —
+// this is what lets memoized consumers (GridLayout) skip no-op re-renders.
+const withParticipant = (
+  state: Map<string, Participant>,
+  userId: string,
+  participant: Participant
+): Map<string, Participant> => {
+  const next = new Map(state);
+  next.set(userId, participant);
+  return next;
+};
+
 export function participantReducer(
   state: Map<string, Participant>,
   action: ParticipantAction
 ): Map<string, Participant> {
-  const newState = new Map(state);
-
   switch (action.type) {
     case "ADD_PARTICIPANT": {
-      const existing = newState.get(action.userId);
+      const existing = state.get(action.userId);
       if (existing) {
-        newState.set(action.userId, {
+        const nextGhost = action.isGhost ?? existing.isGhost;
+        // Re-add of an already-present, non-leaving participant with the same
+        // ghost flag is a no-op (server re-sync) — keep the same reference.
+        if (!existing.isLeaving && existing.isGhost === nextGhost) {
+          return state;
+        }
+        return withParticipant(state, action.userId, {
           ...existing,
           isLeaving: false,
-          isGhost: action.isGhost ?? existing.isGhost,
+          isGhost: nextGhost,
         });
-        return newState;
       }
-      newState.set(
+      return withParticipant(
+        state,
         action.userId,
         createEmptyParticipant(action.userId, action.isGhost ?? false)
       );
-      return newState;
     }
     case "REMOVE_PARTICIPANT": {
-      newState.delete(action.userId);
-      return newState;
+      if (!state.has(action.userId)) return state;
+      const next = new Map(state);
+      next.delete(action.userId);
+      return next;
     }
     case "MARK_LEAVING": {
-      const participant = newState.get(action.userId);
-      if (participant) {
-        newState.set(action.userId, { ...participant, isLeaving: true });
-      }
-      return newState;
+      const participant = state.get(action.userId);
+      if (!participant || participant.isLeaving) return state;
+      return withParticipant(state, action.userId, {
+        ...participant,
+        isLeaving: true,
+      });
     }
     case "UPDATE_STREAM": {
       const participant =
-        newState.get(action.userId) || createEmptyParticipant(action.userId);
-
+        state.get(action.userId) || createEmptyParticipant(action.userId);
       const updated = { ...participant };
 
       if (action.streamType === "screen") {
@@ -98,35 +116,55 @@ export function participantReducer(
         if (action.stream) updated.isMuted = false;
       }
 
-      newState.set(action.userId, updated);
-      return newState;
+      // Bail if every field matches (re-emitted producer state).
+      if (
+        state.has(action.userId) &&
+        updated.videoStream === participant.videoStream &&
+        updated.videoProducerId === participant.videoProducerId &&
+        updated.audioStream === participant.audioStream &&
+        updated.audioProducerId === participant.audioProducerId &&
+        updated.screenShareStream === participant.screenShareStream &&
+        updated.screenShareProducerId === participant.screenShareProducerId &&
+        updated.screenShareAudioStream === participant.screenShareAudioStream &&
+        updated.screenShareAudioProducerId ===
+          participant.screenShareAudioProducerId &&
+        updated.isCameraOff === participant.isCameraOff &&
+        updated.isMuted === participant.isMuted
+      ) {
+        return state;
+      }
+      return withParticipant(state, action.userId, updated);
     }
     case "UPDATE_MUTED": {
-      const participant =
-        newState.get(action.userId) || createEmptyParticipant(action.userId);
-      newState.set(action.userId, { ...participant, isMuted: action.muted });
-      return newState;
+      const participant = state.get(action.userId);
+      if (participant && participant.isMuted === action.muted) return state;
+      return withParticipant(state, action.userId, {
+        ...(participant || createEmptyParticipant(action.userId)),
+        isMuted: action.muted,
+      });
     }
     case "UPDATE_CAMERA_OFF": {
-      const participant =
-        newState.get(action.userId) || createEmptyParticipant(action.userId);
-      newState.set(action.userId, {
-        ...participant,
+      const participant = state.get(action.userId);
+      if (participant && participant.isCameraOff === action.cameraOff) {
+        return state;
+      }
+      return withParticipant(state, action.userId, {
+        ...(participant || createEmptyParticipant(action.userId)),
         isCameraOff: action.cameraOff,
       });
-      return newState;
     }
     case "UPDATE_HAND_RAISED": {
-      const participant =
-        newState.get(action.userId) || createEmptyParticipant(action.userId);
-      newState.set(action.userId, {
-        ...participant,
+      const participant = state.get(action.userId);
+      if (participant && participant.isHandRaised === action.raised) {
+        return state;
+      }
+      return withParticipant(state, action.userId, {
+        ...(participant || createEmptyParticipant(action.userId)),
         isHandRaised: action.raised,
       });
-      return newState;
     }
     case "CLEAR_ALL": {
-      return new Map();
+      return state.size === 0 ? state : new Map();
     }
     default:
       return state;

@@ -1,0 +1,45 @@
+{
+  "id": "3da341d8-bd1f-4024-859d-26778e46e2b8",
+  "roomId": "tulip-canna-pansy",
+  "clientId": "public",
+  "scheduledWebinarId": null,
+  "status": "active",
+  "startedAt": 1780410071466,
+  "endedAt": null,
+  "pausedDurationMs": 0,
+  "startedBy": "guest-da9368e4-ac47-4a71-a9db-abb247359a2d@guest.conclave#1780409990652-rr7z7ptv7",
+  "endedBy": null,
+  "totalBytes": 0,
+  "resolution": {
+    "width": 1920,
+    "height": 1080
+  },
+  "audioBitrateKbps": 128,
+  "videoBitrateKbps": 5000,
+  "tracks": [
+    {
+      "id": "3da341d8-bd1f-4024-859d-26778e46e2b8",
+      "trackKind": "video",
+      "producerId": "view",
+      "producerUserId": "view-recorder",
+      "displayName": "Meeting view",
+      "codec": "vp9+opus",
+      "container": "webm",
+      "filename": "view.webm",
+      "relativePath": "view.webm",
+      "startedAt": 1780410071466,
+      "endedAt": null,
+      "durationMs": 5606,
+      "byteSize": 0,
+      "status": "active",
+      "errorMessage": null
+    }
+  ],
+  "composite": null,
+  "manifestPath": "/Users/ishaan/Projects/conclave/packages/sfu/data/recordings/tulip-canna-pansy/3da341d8-bd1f-4024-859d-26778e46e2b8/manifest.json",
+  "manifestRelativePath": "tulip-canna-pansy/3da341d8-bd1f-4024-859d-26778e46e2b8/manifest.json",
+  "storagePath": "/Users/ishaan/Projects/conclave/packages/sfu/data/recordings/tulip-canna-pansy/3da341d8-bd1f-4024-859d-26778e46e2b8",
+  "storageRelativePath": "tulip-canna-pansy/3da341d8-bd1f-4024-859d-26778e46e2b8",
+  "errorMessage": null,
+  "speakerTimeline": []
+}

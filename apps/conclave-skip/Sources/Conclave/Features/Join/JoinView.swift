@@ -28,7 +28,7 @@ struct JoinView: View {
     @Bindable var viewModel: MeetingViewModel
     @Bindable var appState: AppState
 
-#if !os(macOS)
+#if !os(macOS) && !SKIP
     @Environment(\.horizontalSizeClass) var horizontalSizeClass
 #endif
 
@@ -48,7 +48,9 @@ struct JoinView: View {
 #endif
 
     private var isRegularSizeClass: Bool {
-#if os(macOS)
+#if SKIP
+        return false
+#elseif os(macOS)
         return true
 #else
         return horizontalSizeClass == UserInterfaceSizeClass.regular
@@ -128,54 +130,52 @@ struct JoinView: View {
     private var welcomePhase: some View {
         VStack(spacing: 0) {
             Spacer()
-            
-            Text("welcome to")
-                .font(ACMFont.wide(18))
-                .foregroundStyle(ACMColors.creamDim)
-                .tracking(1.5)
-                .padding(EdgeInsets(top: 0, leading: 0, bottom: 8, trailing: 0))
-            
-            HStack(spacing: 0) {
-                Text("[")
-                    .font(ACMFont.mono(32, weight: .regular))
-                    .foregroundStyle(ACMColors.primaryOrangeGhost)
-                
-                Text("c0nclav3")
-                    .font(ACMFont.wide(40))
-                    .foregroundStyle(ACMColors.cream)
-                    .tracking(-1)
-                
-                Text("]")
-                    .font(ACMFont.mono(32, weight: .regular))
-                    .foregroundStyle(ACMColors.primaryOrangeGhost)
+
+            VStack(spacing: 16) {
+                // Brand glyph — a small refined bracket mark, not the heavy logo.
+                Text("[ ]")
+                    .font(ACMFont.trial(26, weight: .bold))
+                    .foregroundStyle(ACMColors.primaryOrange)
+                    .tracking(-2)
+                    .padding(.bottom, 4)
+
+                VStack(spacing: 10) {
+                    Text("Welcome to")
+                        .font(ACMFont.trial(17))
+                        .foregroundStyle(ACMColors.textMuted)
+
+                    Text("c0nclav3")
+                        .font(ACMFont.trial(46, weight: .bold))
+                        .foregroundStyle(ACMColors.text)
+                        .tracking(-1.5)
+                }
+
+                Text("ACM-VIT's video conferencing,\nreimagined.")
+                    .font(ACMFont.trial(15))
+                    .foregroundStyle(ACMColors.textFaint)
+                    .multilineTextAlignment(.center)
+                    .lineSpacing(5)
+                    .padding(.top, 2)
             }
-            
-            Text("ACM-VIT's in-house video conferencing platform")
-                .font(ACMFont.trial(14))
-                .foregroundStyle(ACMColors.creamMuted)
-                .multilineTextAlignment(.center)
-                .lineSpacing(4)
-                .padding(EdgeInsets(top: 16, leading: 0, bottom: 0, trailing: 0))
-                .padding(EdgeInsets(top: 0, leading: 0, bottom: 48, trailing: 0))
-            
+
+            Spacer()
+
             Button {
                 phase = .auth
             } label: {
-                HStack(spacing: 10) {
-                    Text("LET'S GO")
-                        .font(ACMFont.mono(11))
-                        .tracking(2)
-                    
-                    ACMSystemIcon.image("arrow.forward", androidName: "Icons.Filled.ArrowForward")
-                        .font(.system(size: 14, weight: .medium))
+                HStack(spacing: 8) {
+                    Text("Get started")
+                        .font(ACMFont.trial(16, weight: .medium))
+                    ACMSystemIcon.icon("arrow.forward", android: "arrow.forward", size: 15, tint: "white")
                 }
                 .foregroundStyle(Color.white)
-                .padding(EdgeInsets(top: 14, leading: 32, bottom: 14, trailing: 32))
+                .frame(maxWidth: .infinity)
+                .frame(height: 54)
                 .acmColorBackground(ACMColors.primaryOrange)
-                .clipShape(RoundedRectangle(cornerRadius: ACMRadius.sm))
+                .clipShape(RoundedRectangle(cornerRadius: ACMRadius.lg))
             }
-            
-            Spacer()
+            .padding(.horizontal, 24)
+            .padding(.bottom, 24)
         }
     }
         
@@ -185,17 +185,17 @@ struct JoinView: View {
 
         return VStack(spacing: 0) {
             Spacer()
-            
+
             VStack(spacing: 24) {
                 VStack(spacing: 8) {
-                    Text("Join")
-                        .font(ACMFont.wide(28))
-                        .foregroundStyle(ACMColors.cream)
-                    
-                    Text("choose how to continue")
-                        .font(ACMFont.mono(11))
-                        .tracking(2)
-                        .foregroundStyle(ACMColors.creamDim)
+                    Text("Join Conclave")
+                        .font(ACMFont.trial(30, weight: .bold))
+                        .foregroundStyle(ACMColors.text)
+                        .tracking(-0.5)
+
+                    Text("Sign in, or continue as a guest.")
+                        .font(ACMFont.trial(15))
+                        .foregroundStyle(ACMColors.textFaint)
                 }
                 .padding(EdgeInsets(top: 0, leading: 0, bottom: 16, trailing: 0))
                 
@@ -213,25 +213,22 @@ struct JoinView: View {
 #endif
                                         .scaleEffect(0.8)
                                 } else {
-                                    ACMSystemIcon.image("globe", androidName: "Icons.Outlined.AccountCircle")
-                                        .font(.system(size: 16))
+                                    ACMSystemIcon.icon("globe", android: "account", size: 16, tint: "text")
                                 }
 
                                 Text("Continue with Google")
-                                    .font(ACMFont.trial(14))
+                                    .font(ACMFont.trial(16, weight: .medium))
                             }
-                            .foregroundStyle(ACMColors.cream)
+                            .foregroundStyle(ACMColors.text)
                             .frame(maxWidth: .infinity)
-                            .frame(minHeight: 48)
-                            .padding(.vertical, 12)
-                            .padding(.horizontal, 16)
-                            .acmColorBackground(ACMColors.surface.opacity(0.9))
+                            .frame(height: 54)
+                            .acmColorBackground(ACMColors.surface)
                             .overlay {
-                                RoundedRectangle(cornerRadius: ACMRadius.sm)
+                                RoundedRectangle(cornerRadius: ACMRadius.lg)
                                     .strokeBorder(lineWidth: 1)
-                                    .foregroundStyle(ACMColors.creamDim)
+                                    .foregroundStyle(ACMColors.border)
                             }
-                            .clipShape(RoundedRectangle(cornerRadius: ACMRadius.sm))
+                            .clipShape(RoundedRectangle(cornerRadius: ACMRadius.lg))
                         }
                         .disabled(isSigningIn)
 
@@ -265,9 +262,8 @@ struct JoinView: View {
                             .frame(height: 1)
 
                         Text("or")
-                            .font(ACMFont.mono(11))
-                            .tracking(2)
-                            .foregroundStyle(ACMColors.creamMuted)
+                            .font(ACMFont.trial(13))
+                            .foregroundStyle(ACMColors.textFaint)
 
                         Rectangle()
                             .fill(ACMColors.creamFaint)
@@ -276,55 +272,52 @@ struct JoinView: View {
                     .padding(EdgeInsets(top: 8, leading: 0, bottom: 8, trailing: 0))
                 }
                 
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("YOUR NAME")
-                        .font(ACMFont.mono(11))
-                        .tracking(2)
-                        .foregroundStyle(ACMColors.creamDim)
-                    
-                    TextField("", text: $guestName, prompt: Text("Enter your name").foregroundStyle(ACMColors.creamFaint))
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Your name")
+                        .font(ACMFont.trial(13, weight: .medium))
+                        .foregroundStyle(ACMColors.textMuted)
+
+                    TextField("", text: $guestName, prompt: Text("Enter your name").foregroundStyle(ACMColors.textFaint))
                         .textFieldStyle(.plain)
-                        .font(ACMFont.trial(15))
-                        .foregroundStyle(ACMColors.cream)
-                        .padding(.vertical, 14)
+                        .font(ACMFont.trial(16))
+                        .foregroundStyle(ACMColors.text)
+                        .frame(height: 52)
                         .padding(.horizontal, 16)
-                        .acmColorBackground(ACMColors.surface)
+                        .acmColorBackground(ACMColors.bgAlt)
                         .overlay {
-                            RoundedRectangle(cornerRadius: ACMRadius.md)
+                            RoundedRectangle(cornerRadius: ACMRadius.lg)
                                 .strokeBorder(lineWidth: 1)
-                                .foregroundStyle(ACMColors.creamDim)
+                                .foregroundStyle(ACMColors.border)
                         }
-                        .clipShape(RoundedRectangle(cornerRadius: ACMRadius.md))
+                        .clipShape(RoundedRectangle(cornerRadius: ACMRadius.lg))
                         .onSubmit {
                             if !trimWhitespace(guestName).isEmpty {
                                 handleGuest()
                             }
                         }
-                    
+
                     Button {
                         handleGuest()
                     } label: {
-                        Text("Continue as Guest")
-                            .font(ACMFont.trial(15))
-                        .foregroundStyle(Color.white)
+                        Text("Continue as guest")
+                            .font(ACMFont.trial(16, weight: .medium))
+                            .foregroundStyle(Color.white)
                             .frame(maxWidth: .infinity)
-                            .frame(minHeight: 48)
-                            .padding(.vertical, 16)
-                            .padding(.horizontal, 12)
-                .acmColorBackground(ACMColors.primaryOrange)
-                .clipShape(RoundedRectangle(cornerRadius: ACMRadius.md))
+                            .frame(height: 54)
+                            .acmColorBackground(ACMColors.primaryOrange)
+                            .clipShape(RoundedRectangle(cornerRadius: ACMRadius.lg))
                     }
+                    .padding(.top, 2)
                 }
-                
+
                 Button {
                     phase = .welcome
                 } label: {
-                    Text("← BACK")
-                        .font(ACMFont.mono(11))
-                        .tracking(2)
-                        .foregroundStyle(ACMColors.creamMuted)
+                    Text("Back")
+                        .font(ACMFont.trial(14, weight: .medium))
+                        .foregroundStyle(ACMColors.textFaint)
                 }
-                .padding(EdgeInsets(top: 16, leading: 0, bottom: 0, trailing: 0))
+                .padding(EdgeInsets(top: 12, leading: 0, bottom: 0, trailing: 0))
             }
             .frame(maxWidth: contentWidth)
             .padding(.horizontal, horizontalPadding)
@@ -365,163 +358,101 @@ struct JoinView: View {
     // MARK: - Camera Preview Section
     
     private var cameraPreviewSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Preview")
-                .font(ACMFont.mono(11))
-                .tracking(2)
-                .textCase(.uppercase)
-                .foregroundStyle(ACMColors.creamDim)
+        ZStack {
+            RoundedRectangle(cornerRadius: ACMRadius.xl)
+                .fill(ACMColors.bgAlt)
 
-            // Video preview container
-            ZStack(alignment: .topLeading) {
-                // Background
-                RoundedRectangle(cornerRadius: ACMRadius.lg)
-                    .fill(ACMColors.surface)
-                
-                // Camera feed or avatar
-                if isCameraOn {
+            // Camera feed or avatar
+            if isCameraOn {
 #if SKIP
-                    Color.black
-                        .clipShape(RoundedRectangle(cornerRadius: ACMRadius.lg))
+                Color.black
+                    .clipShape(RoundedRectangle(cornerRadius: ACMRadius.xl))
 #else
-                    if let session = captureSession {
-                        CameraPreviewRepresentable(session: session)
-                            .clipShape(RoundedRectangle(cornerRadius: ACMRadius.lg))
-                            .scaleEffect(x: -1, y: 1) // Mirror
-                    } else {
-                        Color.black
-                            .clipShape(RoundedRectangle(cornerRadius: ACMRadius.lg))
-                    }
-#endif
+                if let session = captureSession {
+                    CameraPreviewRepresentable(session: session)
+                        .clipShape(RoundedRectangle(cornerRadius: ACMRadius.xl))
+                        .scaleEffect(x: -1, y: 1) // Mirror
                 } else {
-                    // Avatar when camera off
-                    VStack {
-                        Circle()
-                            .fill(ACMColors.primaryOrangeFaint)
-                            .frame(width: 80, height: 80)
-                            .overlay {
-                                Circle()
-                                    .strokeBorder(lineWidth: 1)
-                                    .foregroundStyle(ACMColors.creamDim)
-                            }
-                            .overlay {
-                                Text(userInitial)
-                                    .font(ACMFont.wide(24))
-                                    .foregroundStyle(ACMColors.cream)
-                            }
-                    }
+                    Color.black
+                        .clipShape(RoundedRectangle(cornerRadius: ACMRadius.xl))
                 }
-                
-                // Name overlay (top left)
-                VStack {
-                    HStack {
-                        Text(displayNameInput.isEmpty ? (appState.currentUser?.name ?? "Guest") : displayNameInput)
-                            .font(ACMFont.mono(11))
-                            .foregroundStyle(ACMColors.creamLight)
-                            .lineLimit(1)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 4)
-                            .acmColorBackground(ACMColors.blackOverlay(0.5))
-                            .clipShape(Capsule())
-                        
-                        Spacer()
-                    }
-                    .padding(12)
-                    
+#endif
+            } else {
+                VStack(spacing: 14) {
+                    Circle()
+                        .fill(ACMColors.surfaceRaised)
+                        .frame(width: 96, height: 96)
+                        .overlay {
+                            Circle().strokeBorder(lineWidth: 1).foregroundStyle(ACMColors.border)
+                        }
+                        .overlay {
+                            Text(userInitial)
+                                .font(.system(size: 38, weight: .bold))
+                                .foregroundStyle(ACMColors.text)
+                        }
+
+                    Text("Camera is off")
+                        .font(ACMFont.trial(13))
+                        .foregroundStyle(ACMColors.textFaint)
+                }
+            }
+
+            // Overlays: name (top-left) + mic/cam controls (bottom-center)
+            VStack {
+                HStack {
+                    Text(displayNameInput.isEmpty ? (appState.currentUser?.name ?? "Guest") : displayNameInput)
+                        .font(ACMFont.trial(13, weight: .medium))
+                        .foregroundStyle(ACMColors.text)
+                        .lineLimit(1)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .acmColorBackground(ACMColors.scrim)
+                        .clipShape(Capsule())
                     Spacer()
-                    
-                    // Media controls (bottom center)
-                    HStack(spacing: 8) {
-                        // Mic toggle
-                        Button {
-                            toggleMic()
-                        } label: {
-                            ACMSystemIcon.image(
-                                isMicOn ? "mic.fill" : "mic.slash.fill",
-                                androidName: isMicOn ? "Icons.Filled.Call" : "Icons.Filled.Close"
-                            )
-                                .font(.system(size: 16))
-                                .foregroundStyle(Color.white)
-                                .frame(width: 36, height: 36)
-                                .acmColorBackground(isMicOn ? Color.clear : ACMColors.error)
-                                .clipShape(Circle())
-                        }
-                        
-                        // Camera toggle
-                        Button {
-                            toggleCamera()
-                        } label: {
-                            ACMSystemIcon.image(
-                                isCameraOn ? "video.fill" : "video.slash.fill",
-                                androidName: isCameraOn ? "Icons.Filled.PlayArrow" : "Icons.Filled.Close"
-                            )
-                                .font(.system(size: 16))
-                                .foregroundStyle(Color.white)
-                                .frame(width: 36, height: 36)
-                                .acmColorBackground(isCameraOn ? Color.clear : ACMColors.error)
-                                .clipShape(Circle())
-                        }
-                    }
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 6)
-                    .acmColorBackground(ACMColors.blackOverlay(0.5))
-                    .clipShape(Capsule())
-                    .padding(.bottom, 12)
                 }
-            }
-            .aspectRatio(16.0 / 10.0, contentMode: .fit)
-            .overlay {
-                RoundedRectangle(cornerRadius: ACMRadius.lg)
-                    .strokeBorder(lineWidth: 1)
-                    .foregroundStyle(ACMColors.creamDim)
-            }
-            
-            // Preflight status indicators
-            HStack(spacing: 8) {
-                Text("Preflight")
-                    .font(ACMFont.mono(11))
-                    .tracking(1.5)
-                    .textCase(.uppercase)
-                    .foregroundStyle(ACMColors.creamDim)
-                
-                // Mic status
-                HStack(spacing: 6) {
-                    Circle()
-                        .fill(isMicOn ? Color.green : ACMColors.primaryOrange)
-                        .frame(width: 6, height: 6)
-                    
-                    Text("Mic \(isMicOn ? "On" : "Off")")
-                        .font(ACMFont.mono(11))
-                        .foregroundStyle(ACMColors.creamLight)
+
+                Spacer()
+
+                // Contained control cluster — toggles read as a deliberate bar,
+                // not two floating red alerts.
+                HStack(spacing: 10) {
+                    previewToggle(
+                        on: isMicOn,
+                        onIcon: "mic.fill", offIcon: "mic.slash.fill",
+                        androidOn: "mic", androidOff: "mic.off"
+                    ) { toggleMic() }
+
+                    previewToggle(
+                        on: isCameraOn,
+                        onIcon: "video.fill", offIcon: "video.slash.fill",
+                        androidOn: "video", androidOff: "video.off"
+                    ) { toggleCamera() }
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 4)
-                .acmColorBackground(ACMColors.blackOverlay(0.4))
-                .overlay {
-                    Capsule().strokeBorder(lineWidth: 1)
-                        .foregroundStyle(ACMColors.creamDim)
-                }
-                .clipShape(Capsule())
-                
-                // Camera status
-                HStack(spacing: 6) {
-                    Circle()
-                        .fill(isCameraOn ? Color.green : ACMColors.primaryOrange)
-                        .frame(width: 6, height: 6)
-                    
-                    Text("Camera \(isCameraOn ? "On" : "Off")")
-                        .font(ACMFont.mono(11))
-                        .foregroundStyle(ACMColors.creamLight)
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 4)
-                .acmColorBackground(ACMColors.blackOverlay(0.4))
-                .overlay {
-                    Capsule().strokeBorder(lineWidth: 1)
-                        .foregroundStyle(ACMColors.creamDim)
-                }
+                .padding(6)
+                .acmColorBackground(ACMColors.scrim)
                 .clipShape(Capsule())
             }
+            .padding(16)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: ACMRadius.xl))
+        .overlay {
+            RoundedRectangle(cornerRadius: ACMRadius.xl)
+                .strokeBorder(lineWidth: 1)
+                .foregroundStyle(ACMColors.border)
+        }
+    }
+
+    @ViewBuilder
+    private func previewToggle(
+        on: Bool, onIcon: String, offIcon: String,
+        androidOn: String, androidOff: String, action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            ACMSystemIcon.icon(on ? onIcon : offIcon, android: on ? androidOn : androidOff, size: 18, tint: "white")
+                .foregroundStyle(Color.white)
+                .frame(width: 44, height: 44)
+                .acmColorBackground(on ? ACMColors.surfaceRaised : ACMColors.error)
+                .clipShape(Circle())
         }
     }
     
@@ -533,15 +464,15 @@ struct JoinView: View {
             
             formContent
         }
-                .padding(20)
+        .padding(18)
         .background(
-            RoundedRectangle(cornerRadius: ACMRadius.lg)
-                .fill(ACMColors.darkAlt.opacity(0.8))
+            RoundedRectangle(cornerRadius: ACMRadius.xl)
+                .fill(ACMColors.bgAlt)
         )
         .overlay {
-            RoundedRectangle(cornerRadius: ACMRadius.lg)
+            RoundedRectangle(cornerRadius: ACMRadius.xl)
                 .strokeBorder(lineWidth: 1)
-                .foregroundStyle(ACMColors.creamDim)
+                .foregroundStyle(ACMColors.border)
         }
     }
     
@@ -562,29 +493,27 @@ struct JoinView: View {
         Button {
             activeTab = .new
         } label: {
-            Text("NEW MEETING")
-                .font(ACMFont.mono(12))
-                .tracking(1)
-                .foregroundStyle(activeTab == .new ? Color.white : ACMColors.cream.opacity(0.5))
+            Text("New meeting")
+                .font(ACMFont.trial(14, weight: .medium))
+                .foregroundStyle(activeTab == .new ? Color.white : ACMColors.textFaint)
                 .frame(maxWidth: .infinity)
-                .padding(.vertical, 10)
+                .padding(.vertical, 11)
                 .acmColorBackground(activeTab == .new ? ACMColors.primaryOrange : Color.clear)
-                .clipShape(RoundedRectangle(cornerRadius: ACMRadius.sm))
+                .clipShape(RoundedRectangle(cornerRadius: ACMRadius.md))
         }
     }
-    
+
     private var joinTabButton: some View {
         Button {
             activeTab = .join
         } label: {
-            Text("JOIN")
-                .font(ACMFont.mono(12))
-                .tracking(1)
-                .foregroundStyle(activeTab == .join ? Color.white : ACMColors.cream.opacity(0.5))
+            Text("Join")
+                .font(ACMFont.trial(14, weight: .medium))
+                .foregroundStyle(activeTab == .join ? Color.white : ACMColors.textFaint)
                 .frame(maxWidth: .infinity)
-                .padding(.vertical, 10)
+                .padding(.vertical, 11)
                 .acmColorBackground(activeTab == .join ? ACMColors.primaryOrange : Color.clear)
-                .clipShape(RoundedRectangle(cornerRadius: ACMRadius.sm))
+                .clipShape(RoundedRectangle(cornerRadius: ACMRadius.md))
         }
     }
     
@@ -598,25 +527,24 @@ struct JoinView: View {
     }
     
     private var displayNameInputSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Display Name")
-                .font(ACMFont.mono(11))
-                .tracking(2)
-                .foregroundStyle(ACMColors.creamDim)
-            
-            TextField("", text: $displayNameInput, prompt: Text("Your name").foregroundStyle(ACMColors.creamMuted))
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Display name")
+                .font(ACMFont.trial(13, weight: .medium))
+                .foregroundStyle(ACMColors.textMuted)
+
+            TextField("", text: $displayNameInput, prompt: Text("Your name").foregroundStyle(ACMColors.textFaint))
                 .textFieldStyle(.plain)
-                .font(ACMFont.trial(15))
-                .foregroundStyle(ACMColors.cream)
+                .font(ACMFont.trial(16))
+                .foregroundStyle(ACMColors.text)
+                .frame(height: 52)
                 .padding(.horizontal, 16)
-                .padding(.vertical, 14)
                 .acmColorBackground(ACMColors.surface)
                 .overlay {
-                    RoundedRectangle(cornerRadius: ACMRadius.md)
+                    RoundedRectangle(cornerRadius: ACMRadius.lg)
                         .strokeBorder(lineWidth: 1)
-                        .foregroundStyle(ACMColors.creamDim)
+                        .foregroundStyle(ACMColors.border)
                 }
-                .clipShape(RoundedRectangle(cornerRadius: ACMRadius.md))
+                .clipShape(RoundedRectangle(cornerRadius: ACMRadius.lg))
         }
     }
 
@@ -636,19 +564,17 @@ struct JoinView: View {
 #endif
                         .scaleEffect(0.8)
                 } else {
-                    ACMSystemIcon.image("plus", androidName: "Icons.Filled.Add")
-                        .font(.system(size: 14, weight: .medium))
+                    ACMSystemIcon.icon("plus", android: "add", size: 14, tint: "white")
                 }
-                
-                Text("Start Meeting")
-                    .font(ACMFont.trial(15))
+
+                Text("Start meeting")
+                    .font(ACMFont.trial(16, weight: .medium))
             }
             .foregroundStyle(Color.white)
             .frame(maxWidth: .infinity)
-            .frame(minHeight: 48)
-            .padding(.vertical, 16)
+            .frame(height: 54)
             .acmColorBackground(ACMColors.primaryOrange)
-            .clipShape(RoundedRectangle(cornerRadius: ACMRadius.md))
+            .clipShape(RoundedRectangle(cornerRadius: ACMRadius.lg))
         }
         .disabled(viewModel.state.connectionState == ConnectionState.connecting)
     }
@@ -672,29 +598,28 @@ struct JoinView: View {
     }
     
     private var roomNameInputSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Room Name")
-                .font(ACMFont.mono(11))
-                .tracking(2)
-                .foregroundStyle(ACMColors.creamDim)
-            
-            TextField("", text: sanitizedRoomCodeBinding, prompt: Text("Paste room link or code").foregroundStyle(ACMColors.creamMuted))
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Room code")
+                .font(ACMFont.trial(13, weight: .medium))
+                .foregroundStyle(ACMColors.textMuted)
+
+            TextField("", text: sanitizedRoomCodeBinding, prompt: Text("Paste link or enter code").foregroundStyle(ACMColors.textFaint))
                 .textFieldStyle(.plain)
-                .font(ACMFont.trial(15))
-                .foregroundStyle(Color.white)
+                .font(ACMFont.trial(16))
+                .foregroundStyle(ACMColors.text)
 #if os(iOS)
                 .autocapitalization(.none)
                 .autocorrectionDisabled(true)
 #endif
+                .frame(height: 52)
                 .padding(.horizontal, 16)
-                .padding(.vertical, 14)
                 .acmColorBackground(ACMColors.surface)
                 .overlay {
-                    RoundedRectangle(cornerRadius: ACMRadius.md)
+                    RoundedRectangle(cornerRadius: ACMRadius.lg)
                         .strokeBorder(lineWidth: 1)
-                        .foregroundStyle(ACMColors.creamDim)
+                        .foregroundStyle(ACMColors.border)
                 }
-                .clipShape(RoundedRectangle(cornerRadius: ACMRadius.md))
+                .clipShape(RoundedRectangle(cornerRadius: ACMRadius.lg))
                 .onSubmit {
                     if !roomCode.isEmpty {
                         handleJoinRoom()
@@ -702,7 +627,11 @@ struct JoinView: View {
                 }
         }
     }
-    
+
+    private var isJoinEnabled: Bool {
+        !roomCode.isEmpty && viewModel.state.connectionState != ConnectionState.connecting
+    }
+
     private var joinMeetingButton: some View {
         Button {
             handleJoinRoom()
@@ -715,29 +644,26 @@ struct JoinView: View {
 #endif
                         .scaleEffect(0.8)
                 } else {
-                    ACMSystemIcon.image("arrow.forward", androidName: "Icons.Filled.ArrowForward")
-                        .font(.system(size: 14, weight: .medium))
+                    Text("Join meeting")
+                        .font(ACMFont.trial(16, weight: .medium))
+                    ACMSystemIcon.icon("arrow.forward", android: "arrow.forward", size: 15, tint: isJoinEnabled ? "white" : "faint")
                 }
-                
-                Text("Join Meeting")
-                    .font(ACMFont.trial(15))
             }
-            .foregroundStyle(Color.white)
+            // Disabled state is a flat neutral surface — never a dimmed/muddy accent.
+            .foregroundStyle(isJoinEnabled ? Color.white : ACMColors.textFaint)
             .frame(maxWidth: .infinity)
-            .frame(minHeight: 48)
-            .padding(.vertical, 16)
-            .acmColorBackground(ACMColors.primaryOrange)
-            .clipShape(RoundedRectangle(cornerRadius: ACMRadius.md))
+            .frame(height: 54)
+            .acmColorBackground(isJoinEnabled ? ACMColors.primaryOrange : ACMColors.surface)
+            .clipShape(RoundedRectangle(cornerRadius: ACMRadius.lg))
         }
-        .disabled(roomCode.isEmpty || viewModel.state.connectionState == ConnectionState.connecting)
-        .opacity(roomCode.isEmpty ? 0.3 : 1.0)
+        .disabled(!isJoinEnabled)
     }
     
     // MARK: - Loading Overlay
     
     private var loadingOverlay: some View {
         ZStack {
-            acmColor01(red: 0.0, green: 0.0, blue: 0.0, opacity: 0.8)
+            ACMColors.blackOverlay(0.8)
                 .ignoresSafeArea()
             
             VStack(spacing: 12) {
@@ -747,10 +673,9 @@ struct JoinView: View {
 #endif
                     .scaleEffect(1.5)
                 
-                Text(viewModel.state.connectionState == ConnectionState.reconnecting ? "RECONNECTING..." : "JOINING...")
-                    .font(ACMFont.mono(12))
-                    .tracking(2)
-                    .foregroundStyle(ACMColors.cream.opacity(0.6))
+                Text(viewModel.state.connectionState == ConnectionState.reconnecting ? "Reconnecting…" : "Joining…")
+                    .font(ACMFont.trial(15, weight: .medium))
+                    .foregroundStyle(ACMColors.textMuted)
             }
         }
     }

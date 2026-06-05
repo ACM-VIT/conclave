@@ -57,6 +57,9 @@ open class MainActivity: AppCompatActivity {
         super.onCreate(savedInstanceState)
         logger.info("starting activity")
         UIApplication.launch(this)
+        // Register the MediaProjection consent launcher (must happen at onCreate
+        // before the Activity reaches STARTED) so screen-share can request it.
+        ScreenCaptureManager.register(this)
         enableEdgeToEdge()
 
         setContent {

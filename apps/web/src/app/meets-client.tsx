@@ -36,17 +36,12 @@ import { useMeetReactions } from "./hooks/useMeetReactions";
 import { useMeetRefs } from "./hooks/useMeetRefs";
 import { useMeetRooms } from "./hooks/useMeetRooms";
 import { useMeetSocket } from "./hooks/useMeetSocket";
-import { useRecording } from "./hooks/useRecording";
 import { useMeetState } from "./hooks/useMeetState";
 import { useMeetTts } from "./hooks/useMeetTts";
 import { useIsMobile } from "./hooks/useIsMobile";
 import { usePrewarmSocket } from "./hooks/usePrewarmSocket";
 import { useSharedBrowser } from "./hooks/useSharedBrowser";
 import { useVoiceAgentParticipant } from "./hooks/useVoiceAgentParticipant";
-import {
-  formatBytes,
-  type RecordingSessionMetadata,
-} from "@/lib/recordings";
 import type { JoinMode } from "./lib/types";
 import {
   isSystemUserId,
@@ -335,6 +330,8 @@ export default function MeetsClient({
     setSelectedAudioInputDeviceId,
     selectedAudioOutputDeviceId,
     setSelectedAudioOutputDeviceId,
+    selectedVideoInputDeviceId,
+    setSelectedVideoInputDeviceId,
   } = useMeetMediaSettings({ videoQualityRef: refs.videoQualityRef });
 
   const isAdminFlag = Boolean(currentIsAdmin);
@@ -469,6 +466,7 @@ export default function MeetsClient({
     showPermissionHint,
     requestMediaPermissions,
     handleAudioInputDeviceChange,
+    handleVideoInputDeviceChange,
     handleAudioOutputDeviceChange,
     updateVideoQualityRef,
     toggleMute,
@@ -511,6 +509,16 @@ export default function MeetsClient({
     permissionHintTimeoutRef: refs.permissionHintTimeoutRef,
     audioContextRef: refs.audioContextRef,
   });
+
+  // Record the picked camera so the dropdown reflects the selection, then run
+  // the media swap. Mirrors how the audio-input handler tracks its selected id.
+  const handleVideoInputDeviceSelect = useCallback(
+    (deviceId: string) => {
+      setSelectedVideoInputDeviceId(deviceId);
+      void handleVideoInputDeviceChange(deviceId);
+    },
+    [setSelectedVideoInputDeviceId, handleVideoInputDeviceChange]
+  );
 
   const participantCount = useMemo(() => {
     let count = 1; // include local user
@@ -804,28 +812,6 @@ export default function MeetsClient({
     browserState?.active || isBrowserServiceAvailable,
   );
 
-  const recording = useRecording(refs.socketRef, isAdminFlag);
-  const [lastRecording, setLastRecording] =
-    useState<RecordingSessionMetadata | null>(null);
-  const handleStartRecording = useCallback(() => {
-    setLastRecording(null);
-    void recording.startRecording({ composite: true });
-  }, [recording]);
-  const handleStopRecording = useCallback(() => {
-    void (async () => {
-      const metadata = await recording.stopRecording();
-      if (metadata) {
-        setLastRecording(metadata);
-      }
-    })();
-  }, [recording]);
-  const handlePauseRecording = useCallback(() => {
-    void recording.pauseRecording();
-  }, [recording]);
-  const handleResumeRecording = useCallback(() => {
-    void recording.resumeRecording();
-  }, [recording]);
-
   const voiceAgent = useVoiceAgentParticipant({
     roomId,
     isJoined: connectionState === "joined",
@@ -1016,13 +1002,27 @@ export default function MeetsClient({
       nextStream = localScreenShareStream;
       nextPresenterName = "You";
     } else if (activeScreenShareId) {
+      // Prefer the participant whose screen producer matches the ACTIVE id so
+      // the staged stream + "X is presenting" always correspond to the right
+      // sharer; fall back to any present share so the stage is never blank.
+      let matchedStream: MediaStream | null = null;
+      let matchedName = "";
+      let anyStream: MediaStream | null = null;
+      let anyName = "";
       for (const participant of participants.values()) {
-        if (participant.screenShareStream) {
-          nextStream = participant.screenShareStream;
-          nextPresenterName = resolveDisplayName(participant.userId);
+        if (!participant.screenShareStream) continue;
+        if (!anyStream) {
+          anyStream = participant.screenShareStream;
+          anyName = resolveDisplayName(participant.userId);
+        }
+        if (participant.screenShareProducerId === activeScreenShareId) {
+          matchedStream = participant.screenShareStream;
+          matchedName = resolveDisplayName(participant.userId);
           break;
         }
       }
+      nextStream = matchedStream ?? anyStream;
+      nextPresenterName = matchedStream ? matchedName : anyName;
     }
 
     return { presentationStream: nextStream, presenterName: nextPresenterName };
@@ -1110,47 +1110,6 @@ export default function MeetsClient({
       {content}
     </AppsProvider>
   );
-  const lastRecordingTrack = lastRecording?.tracks.find(
-    (track) =>
-      track.producerUserId === "view-recorder" &&
-      track.status !== "failed" &&
-      Boolean(track.filename),
-  );
-  const lastRecordingHref =
-    lastRecording && lastRecordingTrack
-      ? lastRecording.scheduledWebinarId
-        ? `/api/webinars/scheduled/${encodeURIComponent(lastRecording.scheduledWebinarId)}/recordings/${encodeURIComponent(lastRecording.id)}/files/${encodeURIComponent(lastRecordingTrack.filename)}`
-        : `/api/rooms/${encodeURIComponent(roomId)}/recordings/${encodeURIComponent(lastRecording.id)}/files/${encodeURIComponent(lastRecordingTrack.filename)}`
-      : null;
-  const recordingDownloadPrompt =
-    lastRecordingHref && lastRecordingTrack ? (
-      <div className="fixed bottom-4 right-4 z-[120] max-w-sm rounded-lg border border-[#F95F4A]/35 bg-[#111111]/95 p-3 shadow-2xl backdrop-blur">
-        <p className="text-xs font-medium text-[#FEFCD9]">
-          Recording ready
-        </p>
-        <p className="mt-1 text-[11px] text-[#FEFCD9]/55">
-          {formatBytes(lastRecordingTrack.byteSize)} saved for this meeting.
-        </p>
-        <div className="mt-3 flex items-center gap-2">
-          <a
-            href={lastRecordingHref}
-            target="_blank"
-            rel="noopener noreferrer"
-            download={lastRecordingTrack.filename}
-            className="inline-flex items-center rounded-md border border-[#F95F4A]/45 bg-[#F95F4A]/10 px-3 py-1.5 text-xs text-[#F95F4A] hover:bg-[#F95F4A]/20"
-          >
-            Download MP4
-          </a>
-          <button
-            type="button"
-            onClick={() => setLastRecording(null)}
-            className="rounded-md border border-[#FEFCD9]/10 px-3 py-1.5 text-xs text-[#FEFCD9]/55 hover:text-[#FEFCD9]"
-          >
-            Dismiss
-          </button>
-        </div>
-      </div>
-    ) : null;
   const inviteCodePromptTitle =
     inviteCodePromptMode === "meeting"
       ? "Meeting Invite Code"
@@ -1162,10 +1121,10 @@ export default function MeetsClient({
   const inviteCodePrompt = isInviteCodePromptOpen ? (
     <div className="fixed inset-0 z-[140] flex items-center justify-center bg-black/75 px-4">
       <div className="w-full max-w-sm rounded-2xl border border-white/10 bg-[#111111] p-5 shadow-2xl">
-        <h2 className="text-sm font-semibold text-[#FEFCD9]">
+        <h2 className="text-sm font-semibold text-[#fafafa]">
           {inviteCodePromptTitle}
         </h2>
-        <p className="mt-1 text-xs text-[#FEFCD9]/60">
+        <p className="mt-1 text-xs text-[#fafafa]/75">
           {inviteCodePromptMessage}
         </p>
         <input
@@ -1181,7 +1140,7 @@ export default function MeetsClient({
           autoCorrect="off"
           spellCheck={false}
           placeholder="Invite code"
-          className="mt-4 w-full rounded-xl border border-white/10 bg-black/40 px-3 py-2.5 text-sm text-[#FEFCD9] outline-none focus:border-[#FEFCD9]/35"
+          className="mt-4 w-full rounded-xl border border-white/10 bg-black/40 px-3 py-2.5 text-sm text-[#fafafa] outline-none focus:border-[#fafafa]/35"
           onKeyDown={(event) => {
             if (event.key === "Enter") {
               event.preventDefault();
@@ -1200,7 +1159,7 @@ export default function MeetsClient({
           <button
             type="button"
             onClick={handleCancelInviteCodePrompt}
-            className="rounded-xl border border-white/15 px-3 py-2 text-[11px] uppercase tracking-[0.14em] text-[#FEFCD9]/70 transition-colors hover:border-white/25 hover:text-[#FEFCD9]"
+            className="rounded-xl border border-white/15 px-3 py-2 text-[11px] uppercase tracking-[0.14em] text-[#fafafa]/82 transition-colors hover:border-white/25 hover:text-[#fafafa]"
           >
             Cancel
           </button>
@@ -1218,10 +1177,10 @@ export default function MeetsClient({
   const voiceAgentKeyPrompt = isVoiceAgentKeyPromptOpen ? (
     <div className="fixed inset-0 z-[145] flex items-center justify-center bg-black/75 px-4">
       <div className="w-full max-w-sm rounded-2xl border border-white/10 bg-[#111111] p-5 shadow-2xl">
-        <h2 className="text-sm font-semibold text-[#FEFCD9]">
+        <h2 className="text-sm font-semibold text-[#fafafa]">
           Voice Agent API Key
         </h2>
-        <p className="mt-1 text-xs text-[#FEFCD9]/60">
+        <p className="mt-1 text-xs text-[#fafafa]/75">
           Enter your own OpenAI API key. It stays in-memory in this tab and is
           sent directly to OpenAI, never to this server.
         </p>
@@ -1240,7 +1199,7 @@ export default function MeetsClient({
           spellCheck={false}
           autoComplete="off"
           placeholder="sk-..."
-          className="mt-4 w-full rounded-xl border border-white/10 bg-black/40 px-3 py-2.5 text-sm text-[#FEFCD9] outline-none focus:border-[#FEFCD9]/35"
+          className="mt-4 w-full rounded-xl border border-white/10 bg-black/40 px-3 py-2.5 text-sm text-[#fafafa] outline-none focus:border-[#fafafa]/35"
           onKeyDown={(event) => {
             if (event.key === "Enter") {
               event.preventDefault();
@@ -1259,7 +1218,7 @@ export default function MeetsClient({
           <button
             type="button"
             onClick={closeVoiceAgentKeyPrompt}
-            className="rounded-xl border border-white/15 px-3 py-2 text-[11px] uppercase tracking-[0.14em] text-[#FEFCD9]/70 transition-colors hover:border-white/25 hover:text-[#FEFCD9]"
+            className="rounded-xl border border-white/15 px-3 py-2 text-[11px] uppercase tracking-[0.14em] text-[#fafafa]/82 transition-colors hover:border-white/25 hover:text-[#fafafa]"
           >
             Cancel
           </button>
@@ -1296,7 +1255,7 @@ export default function MeetsClient({
   if (isMobile) {
     return renderWithApps(
       <div
-        className={`flex flex-col h-dvh w-full bg-[#0d0e0d] text-white ${fontClassName ?? ""}`}
+        className={`flex flex-col h-dvh w-full bg-[#131316] text-white ${fontClassName ?? ""}`}
       >
         {isJoined && meetError && (
           <MeetsErrorBanner
@@ -1418,16 +1377,6 @@ export default function MeetsClient({
           onUpdateWebinarConfig={socket.updateWebinarConfig}
           onGenerateWebinarLink={socket.generateWebinarLink}
           onRotateWebinarLink={socket.rotateWebinarLink}
-          recordingActive={recording.state.active}
-          recordingPaused={recording.state.paused}
-          recordingBusy={recording.isWorking}
-          recordingStartedAt={recording.state.startedAt}
-          recordingTrackCount={recording.state.trackCount}
-          recordingAvailable={recording.state.available}
-          onStartRecording={handleStartRecording}
-          onStopRecording={handleStopRecording}
-          onPauseRecording={handlePauseRecording}
-          onResumeRecording={handleResumeRecording}
           isVoiceAgentRunning={voiceAgent.isRunning}
           isVoiceAgentStarting={voiceAgent.isStarting}
           voiceAgentError={voiceAgent.error}
@@ -1437,7 +1386,6 @@ export default function MeetsClient({
         />
         {inviteCodePrompt}
         {voiceAgentKeyPrompt}
-        {recordingDownloadPrompt}
       </div>,
     );
   }
@@ -1445,7 +1393,7 @@ export default function MeetsClient({
   // Desktop layout
   return renderWithApps(
     <div
-      className={`flex flex-col h-full w-full bg-[#1a1a1a] text-white ${fontClassName ?? ""}`}
+      className={`flex flex-col h-full w-full bg-[#18181b] text-white ${fontClassName ?? ""}`}
     >
       <MeetsHeader
         isJoined={isJoined}
@@ -1464,8 +1412,10 @@ export default function MeetsClient({
         onDisplayNameSubmit={handleDisplayNameSubmit}
         selectedAudioInputDeviceId={selectedAudioInputDeviceId}
         selectedAudioOutputDeviceId={selectedAudioOutputDeviceId}
+        selectedVideoInputDeviceId={selectedVideoInputDeviceId}
         onAudioInputDeviceChange={handleAudioInputDeviceChange}
         onAudioOutputDeviceChange={handleAudioOutputDeviceChange}
+        onVideoInputDeviceChange={handleVideoInputDeviceSelect}
         showShareLink={enableRoomRouting || forceJoinOnly}
         canSignOut={canSignOut}
         isSigningOut={isSigningOut}
@@ -1602,16 +1552,6 @@ export default function MeetsClient({
         onUpdateWebinarConfig={socket.updateWebinarConfig}
         onGenerateWebinarLink={socket.generateWebinarLink}
         onRotateWebinarLink={socket.rotateWebinarLink}
-        recordingActive={recording.state.active}
-        recordingPaused={recording.state.paused}
-        recordingBusy={recording.isWorking}
-        recordingStartedAt={recording.state.startedAt}
-        recordingTrackCount={recording.state.trackCount}
-        recordingAvailable={recording.state.available}
-        onStartRecording={handleStartRecording}
-        onStopRecording={handleStopRecording}
-        onPauseRecording={handlePauseRecording}
-        onResumeRecording={handleResumeRecording}
         broadcastMode={broadcastMode}
         isVoiceAgentRunning={voiceAgent.isRunning}
         isVoiceAgentStarting={voiceAgent.isStarting}
@@ -1622,7 +1562,6 @@ export default function MeetsClient({
       />
       {inviteCodePrompt}
       {voiceAgentKeyPrompt}
-      {recordingDownloadPrompt}
     </div>,
   );
 }

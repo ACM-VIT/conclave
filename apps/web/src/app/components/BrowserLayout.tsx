@@ -1,16 +1,17 @@
 "use client";
 
-import { Ghost, Globe, Hand, Loader2, Mic, MicOff } from "lucide-react";
+import { ArrowRight, Ghost, Globe, Hand, Loader2, Mic, MicOff } from "lucide-react";
 import { memo, useEffect, useRef, useState, type FormEvent } from "react";
 import { useSmartParticipantOrder } from "../hooks/useSmartParticipantOrder";
 import type { Participant } from "../lib/types";
 import {
-    getSpeakerHighlightClasses,
     isSystemUserId,
     normalizeBrowserUrl,
     resolveNoVncUrl,
 } from "../lib/utils";
 import ParticipantVideo from "./ParticipantVideo";
+import { Avatar, NamePlate } from "@conclave/ui-tokens/web";
+import { color } from "@conclave/ui-tokens";
 
 interface BrowserLayoutProps {
     browserUrl: string;
@@ -118,11 +119,22 @@ function BrowserLayout({
         activeSpeakerId
     );
 
+    const localName = getDisplayName(currentUserId) || userEmail;
+
     return (
         <div className="mt-5 flex flex-1 min-h-0 min-w-0 gap-4 overflow-hidden">
-            <div className="flex-1 min-h-0 min-w-0 bg-[#252525] border border-white/5 rounded-lg overflow-hidden relative flex flex-col">
+            <div
+                className="flex-1 min-h-0 min-w-0 rounded-2xl overflow-hidden relative flex flex-col"
+                style={{
+                    backgroundColor: color.surface,
+                    border: `1px solid ${color.border}`,
+                }}
+            >
                 {isAdmin && onNavigateBrowser && (
-                    <div className="px-3 py-2 bg-black/50 border-b border-white/5">
+                    <div
+                        className="px-3 py-2.5"
+                        style={{ borderBottom: `1px solid ${color.border}` }}
+                    >
                         <form
                             onSubmit={async (event: FormEvent) => {
                                 event.preventDefault();
@@ -136,33 +148,53 @@ function BrowserLayout({
                             }}
                             className="flex items-center gap-2"
                         >
-                            <Globe className="w-3.5 h-3.5 text-[#FEFCD9]/50 shrink-0" />
-                            <input
-                                type="text"
-                                value={navInput}
-                                onChange={(event) => {
-                                    setNavInput(event.target.value);
-                                    if (navError) {
-                                        setNavError(null);
-                                    }
+                            <div
+                                className="flex flex-1 items-center gap-2 rounded-full px-3 py-2 transition-[border-color] duration-[120ms] focus-within:border-text/25"
+                                style={{
+                                    backgroundColor: color.bgAlt,
+                                    border: `1px solid ${color.border}`,
                                 }}
-                                placeholder="Navigate to a URL"
-                                className="flex-1 bg-black/40 border border-[#FEFCD9]/10 rounded-lg px-2.5 py-1.5 text-xs text-[#FEFCD9] placeholder:text-[#FEFCD9]/30 focus:outline-none focus:border-[#FEFCD9]/25"
-                            />
+                            >
+                                <Globe
+                                    size={18}
+                                    strokeWidth={1.75}
+                                    className="shrink-0"
+                                    style={{ color: color.textMuted }}
+                                />
+                                <input
+                                    type="text"
+                                    value={navInput}
+                                    onChange={(event) => {
+                                        setNavInput(event.target.value);
+                                        if (navError) {
+                                            setNavError(null);
+                                        }
+                                    }}
+                                    placeholder="Navigate to a URL"
+                                    className="flex-1 bg-transparent text-[14px] focus:outline-none"
+                                    style={{ color: color.text }}
+                                />
+                            </div>
                             <button
                                 type="submit"
                                 disabled={!navInput.trim() || isBrowserLaunching}
-                                className="px-3 py-1.5 rounded-lg bg-[#F95F4A] text-white text-xs font-medium hover:bg-[#F95F4A]/90 disabled:opacity-40 disabled:hover:bg-[#F95F4A]"
+                                className="inline-flex items-center justify-center gap-1.5 rounded-full px-4 py-2 text-[14px] font-medium text-white transition-[filter] duration-[120ms] hover:brightness-110 active:brightness-95 disabled:opacity-35 disabled:cursor-not-allowed"
+                                style={{ backgroundColor: color.accent }}
                             >
                                 {isBrowserLaunching ? (
-                                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                    <Loader2 size={18} strokeWidth={1.75} className="animate-spin" />
                                 ) : (
-                                    "Go"
+                                    <>
+                                        Go
+                                        <ArrowRight size={18} strokeWidth={1.75} />
+                                    </>
                                 )}
                             </button>
                         </form>
                         {navError && (
-                            <p className="mt-1 text-[11px] text-[#F95F4A]">{navError}</p>
+                            <p className="mt-2 text-[12.5px]" style={{ color: color.accent }}>
+                                {navError}
+                            </p>
                         )}
                     </div>
                 )}
@@ -202,45 +234,60 @@ function BrowserLayout({
                         />
                     ) : (
                         <div className="flex flex-col items-center justify-center gap-3">
-                            <div className="w-16 h-16 rounded-full bg-[#F95F4A]/10 flex items-center justify-center">
-                                <Globe className="w-8 h-8 text-[#F95F4A] animate-pulse" />
+                            <div
+                                className="flex h-16 w-16 items-center justify-center rounded-full"
+                                style={{ backgroundColor: color.accentSoft }}
+                            >
+                                <Globe size={28} strokeWidth={1.75} style={{ color: color.accent }} />
                             </div>
                             <div className="flex items-center gap-2">
-                                <Loader2 className="w-4 h-4 animate-spin text-[#FEFCD9]/50" />
-                                <span className="text-sm text-[#FEFCD9]/40">Starting browser...</span>
+                                <Loader2
+                                    size={18}
+                                    strokeWidth={1.75}
+                                    className="animate-spin"
+                                    style={{ color: color.textMuted }}
+                                />
+                                <span className="text-[14px]" style={{ color: color.textMuted }}>
+                                    Starting browser
+                                </span>
                             </div>
                         </div>
                     )}
                 </div>
 
-                <div className="flex items-center justify-between px-3 py-2 bg-black/40 border-t border-white/5">
-                    <div className="flex items-center gap-2">
-                        <div className="w-5 h-5 rounded-full bg-[#F95F4A]/20 flex items-center justify-center">
-                            <Globe className="w-2.5 h-2.5 text-[#F95F4A]" />
-                        </div>
+                <div
+                    className="flex items-center justify-between px-3 py-2.5"
+                    style={{ borderTop: `1px solid ${color.border}` }}
+                >
+                    <div className="flex items-center gap-2 min-w-0">
+                        <Globe
+                            size={18}
+                            strokeWidth={1.75}
+                            className="shrink-0"
+                            style={{ color: color.textMuted }}
+                        />
                         <span
-                            className="text-[11px] text-[#FEFCD9]/70 font-medium"
-                            style={{ fontFamily: "'PolySans Trial', sans-serif" }}
+                            className="truncate text-[12.5px] font-medium"
+                            style={{ color: color.text }}
                         >
                             {displayUrl}
                         </span>
                     </div>
                     <div
-                        className="flex items-center gap-2 text-[10px] text-[#FEFCD9]/40"
-                        style={{ fontFamily: "'PolySans Mono', monospace" }}
+                        className="flex shrink-0 items-center gap-2 text-[12.5px]"
+                        style={{ color: color.textMuted }}
                     >
-                        <span className="w-1.5 h-1.5 rounded-full bg-[#4ADE80]"></span>
+                        <span
+                            className="h-1.5 w-1.5 rounded-full"
+                            style={{ backgroundColor: color.success }}
+                        />
                         {controllerName} is sharing
                     </div>
                 </div>
             </div>
 
             <div className="w-64 shrink-0 flex flex-col gap-3 overflow-y-auto overflow-x-visible px-1">
-                <div
-                    className={`relative bg-[#252525] border border-white/5 rounded-lg overflow-hidden h-36 shrink-0 transition-all duration-200 ${getSpeakerHighlightClasses(
-                        isLocalActiveSpeaker
-                    )}`}
-                >
+                <div className={`acm-video-tile h-36 shrink-0 ${isLocalActiveSpeaker ? "speaking" : ""}`}>
                     <video
                         ref={localVideoRef}
                         autoPlay
@@ -250,17 +297,25 @@ function BrowserLayout({
                             } ${isMirrorCamera ? "scale-x-[-1]" : ""}`}
                     />
                     {isCameraOff && (
-                        <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-[#1a1a1a] to-[#0d0e0d]">
-                            <div className="w-12 h-12 rounded-full bg-gradient-to-br from-[#F95F4A]/20 to-[#FF007A]/20 border border-[#FEFCD9]/20 flex items-center justify-center text-lg text-[#FEFCD9] font-bold">
-                                {userEmail[0]?.toUpperCase() || "?"}
-                            </div>
+                        <div
+                            className="absolute inset-0 flex items-center justify-center"
+                            style={{ backgroundColor: color.surface }}
+                        >
+                            <Avatar name={localName} id={currentUserId} size={48} />
                         </div>
                     )}
                     {isGhost && (
-                        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                        <div className="absolute inset-0 flex items-center justify-center pointer-events-none bg-black/40">
                             <div className="flex flex-col items-center gap-1.5">
-                                <Ghost className="w-12 h-12 text-blue-300 drop-shadow-[0_0_18px_rgba(59,130,246,0.45)]" />
-                                <span className="text-[10px] text-blue-200/90 bg-black/60 border border-blue-400/30 px-2 py-0.5 rounded-full">
+                                <Ghost size={40} strokeWidth={1.75} style={{ color: color.accentSecondary }} />
+                                <span
+                                    className="rounded-full px-2.5 py-0.5 text-[11px] font-medium"
+                                    style={{
+                                        color: color.accentSecondary,
+                                        backgroundColor: color.scrim,
+                                        border: `1px solid ${color.border}`,
+                                    }}
+                                >
                                     Ghost
                                 </span>
                             </div>
@@ -268,21 +323,28 @@ function BrowserLayout({
                     )}
                     {isHandRaised && (
                         <div
-                            className="absolute top-3 left-3 p-1.5 rounded-full bg-amber-500/20 border border-amber-400/40 text-amber-300 shadow-[0_0_15px_rgba(251,191,36,0.3)]"
+                            className="absolute top-3 left-3 rounded-full p-1.5 text-amber-300"
+                            style={{
+                                backgroundColor: "rgba(251, 191, 36, 0.2)",
+                                border: "1px solid rgba(251, 191, 36, 0.4)",
+                            }}
                             title="Hand raised"
                         >
-                            <Hand className="w-3 h-3" />
+                            <Hand size={18} strokeWidth={1.75} className="h-3.5 w-3.5" />
                         </div>
                     )}
+                    <div className="absolute bottom-3 left-3 max-w-[80%]">
+                        <NamePlate name="You" isLocal />
+                    </div>
                     <div
-                        className="absolute bottom-3 left-3 bg-black/70 backdrop-blur-sm border border-[#FEFCD9]/10 rounded-full px-3 py-1.5 flex items-center gap-2 text-[10px]"
-                        style={{ fontFamily: "'PolySans Mono', monospace" }}
+                        className="absolute bottom-3 right-3 inline-flex items-center justify-center rounded-full p-1.5"
+                        style={{ backgroundColor: color.scrim, border: `1px solid ${color.border}` }}
+                        title={isMuted ? "Microphone off" : "Microphone on"}
                     >
-                        <span className="font-medium text-[#FEFCD9] uppercase tracking-wide">You</span>
                         {isMuted ? (
-                            <MicOff className="w-3 h-3 text-[#F95F4A]" />
+                            <MicOff size={18} strokeWidth={1.75} className="h-3.5 w-3.5" style={{ color: color.accent }} />
                         ) : (
-                            <Mic className="w-3 h-3 text-emerald-300" />
+                            <Mic size={18} strokeWidth={1.75} className="h-3.5 w-3.5" style={{ color: color.success }} />
                         )}
                     </div>
                 </div>

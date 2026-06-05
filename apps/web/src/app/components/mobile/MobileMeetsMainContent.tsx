@@ -21,7 +21,6 @@ import type { BrowserState } from "../../hooks/useSharedBrowser";
 import ChatOverlay from "../ChatOverlay";
 import ConnectionBanner from "../ConnectionBanner";
 import ReactionOverlay from "../ReactionOverlay";
-import RecordingIndicator from "../RecordingIndicator";
 import MobileChatPanel from "./MobileChatPanel";
 import MobileControlsBar from "./MobileControlsBar";
 import MobileBrowserLayout from "./MobileBrowserLayout";
@@ -157,16 +156,6 @@ interface MobileMeetsMainContentProps {
   ) => Promise<WebinarConfigSnapshot | null>;
   onGenerateWebinarLink?: () => Promise<WebinarLinkResponse | null>;
   onRotateWebinarLink?: () => Promise<WebinarLinkResponse | null>;
-  recordingActive?: boolean;
-  recordingPaused?: boolean;
-  recordingBusy?: boolean;
-  recordingStartedAt?: number | null;
-  recordingTrackCount?: number;
-  recordingAvailable?: boolean;
-  onStartRecording?: () => void;
-  onStopRecording?: () => void;
-  onPauseRecording?: () => void;
-  onResumeRecording?: () => void;
 }
 
 const getLiveVideoStream = (stream: MediaStream | null): MediaStream | null => {
@@ -337,9 +326,6 @@ function MobileMeetsMainContent({
   onUpdateWebinarConfig,
   onGenerateWebinarLink,
   onRotateWebinarLink,
-  recordingActive = false,
-  recordingPaused = false,
-  recordingStartedAt = null,
 }: MobileMeetsMainContentProps) {
   const {
     state: appsState,
@@ -728,7 +714,7 @@ function MobileMeetsMainContent({
       return (
         <div className="flex flex-1 items-center justify-center px-5">
           <div className="mobile-sheet-card px-6 py-4 text-center">
-            <p className="text-sm text-[#FEFCD9]">
+            <p className="text-sm text-[#fafafa]">
               {isLoading ? "Joining webinar..." : "Preparing webinar..."}
             </p>
             {meetError ? (
@@ -767,7 +753,7 @@ function MobileMeetsMainContent({
   }
 
   return (
-    <div className="flex-1 flex flex-col bg-[#060606] overflow-hidden relative h-full">
+    <div className="flex-1 flex flex-col bg-[#0a0a0b] overflow-hidden relative h-full">
       {isJoined && (
         <ConnectionBanner
           state={connectionState}
@@ -787,15 +773,15 @@ function MobileMeetsMainContent({
         audioOutputDeviceId={audioOutputDeviceId}
       />
       {/* Status bar area */}
-      <div className="safe-area-pt bg-[#060606]" />
+      <div className="safe-area-pt bg-[#0a0a0b]" />
 
       {/* Header with room info */}
       <div className="flex items-center justify-between px-4 py-3">
         <div className="flex items-center gap-2">
           <div className="mobile-glass mobile-pill px-3 py-2 flex items-center gap-2">
             <span
-              className="text-[11px] font-medium text-[#FEFCD9] uppercase tracking-[0.2em]"
-              style={{ fontFamily: "'PolySans Mono', monospace" }}
+              className="text-[11px] font-medium text-[#fafafa] uppercase tracking-[0.2em]"
+              style={{ fontFamily: "'PolySans Trial', sans-serif" }}
             >
               {roomId.toUpperCase()}
             </span>
@@ -806,13 +792,13 @@ function MobileMeetsMainContent({
             <button
               type="button"
               onClick={handleOpenParticipants}
-              className="mobile-glass mobile-pill px-3 py-2 flex items-center gap-2 text-[#FEFCD9]"
+              className="mobile-glass mobile-pill px-3 py-2 flex items-center gap-2 text-[#fafafa]"
               aria-label="Open participants panel"
             >
-              <Users className="w-3.5 h-3.5 text-[#FEFCD9]/70" />
+              <Users className="w-3.5 h-3.5 text-[#fafafa]/82" />
               <span
-                className="text-[11px] font-medium text-[#FEFCD9] uppercase tracking-[0.2em]"
-                style={{ fontFamily: "'PolySans Mono', monospace" }}
+                className="text-[11px] font-medium text-[#fafafa] uppercase tracking-[0.2em]"
+                style={{ fontFamily: "'PolySans Trial', sans-serif" }}
               >
                 {isWebinarAttendee
                   ? `${webinarConfig?.attendeeCount ?? 0}`
@@ -855,11 +841,6 @@ function MobileMeetsMainContent({
           getDisplayName={resolveDisplayName}
         />
       )}
-      <RecordingIndicator
-        active={recordingActive}
-        paused={recordingPaused}
-        startedAt={recordingStartedAt}
-      />
       {isDevPlaygroundEnabled && !isWebinarAttendee && (
         <DevMeetToolsPanel roomId={roomId} />
       )}
@@ -887,7 +868,7 @@ function MobileMeetsMainContent({
                 />
                 {webinarStage.pip ? (
                   <div
-                    className={`absolute h-24 w-36 overflow-hidden rounded-xl border border-[#FEFCD9]/20 bg-black/75 shadow-[0_12px_24px_rgba(0,0,0,0.45)] ${pipDragPosition ? "" : pipCornerClass} cursor-grab active:cursor-grabbing touch-none select-none`}
+                    className={`absolute h-24 w-36 overflow-hidden rounded-xl border border-[#fafafa]/20 bg-black/75 shadow-[0_12px_24px_rgba(0,0,0,0.45)] ${pipDragPosition ? "" : pipCornerClass} cursor-grab active:cursor-grabbing touch-none select-none`}
                     style={
                       pipDragPosition
                         ? {
@@ -915,7 +896,7 @@ function MobileMeetsMainContent({
               </div>
             ) : (
               <div className="mobile-sheet-card px-5 py-4 text-center">
-                <p className="text-sm text-[#FEFCD9]">
+                <p className="text-sm text-[#fafafa]">
                   Waiting for the host to start speaking...
                 </p>
               </div>
@@ -1008,39 +989,39 @@ function MobileMeetsMainContent({
       )}
 
       {isJoined && !isWebinarAttendee && browserLaunchError && (
-        <div className="absolute top-16 left-4 right-4 z-40 mobile-sheet-card border border-[#F95F4A]/30 px-3 py-2 text-xs text-[#FEFCD9]/90 shadow-2xl">
+        <div className="absolute top-16 left-4 right-4 z-40 mobile-sheet-card border border-[#F95F4A]/30 px-3 py-2 text-xs text-[#fafafa]/90 shadow-2xl">
           <div className="flex items-start gap-2">
             <span className="font-medium text-[#F95F4A]">Browser error</span>
             {onClearBrowserError && (
               <button
                 onClick={onClearBrowserError}
-                className="ml-auto text-[#FEFCD9]/50 hover:text-[#FEFCD9]"
+                className="ml-auto text-[#fafafa]/66 hover:text-[#fafafa]"
                 aria-label="Dismiss browser error"
               >
                 X
               </button>
             )}
           </div>
-          <p className="mt-1 text-[11px] text-[#FEFCD9]/70">
+          <p className="mt-1 text-[11px] text-[#fafafa]/82">
             {browserLaunchError}
           </p>
         </div>
       )}
       {isJoined && !isWebinarAttendee && voiceAgentError && (
-        <div className="absolute top-16 left-4 right-4 z-40 mobile-sheet-card border border-[#F95F4A]/30 px-3 py-2 text-xs text-[#FEFCD9]/90 shadow-2xl">
+        <div className="absolute top-16 left-4 right-4 z-40 mobile-sheet-card border border-[#F95F4A]/30 px-3 py-2 text-xs text-[#fafafa]/90 shadow-2xl">
           <div className="flex items-start gap-2">
             <span className="font-medium text-[#F95F4A]">Voice agent error</span>
             {onClearVoiceAgentError && (
               <button
                 onClick={onClearVoiceAgentError}
-                className="ml-auto text-[#FEFCD9]/50 hover:text-[#FEFCD9]"
+                className="ml-auto text-[#fafafa]/66 hover:text-[#fafafa]"
                 aria-label="Dismiss voice agent error"
               >
                 X
               </button>
             )}
           </div>
-          <p className="mt-1 text-[11px] text-[#FEFCD9]/70">{voiceAgentError}</p>
+          <p className="mt-1 text-[11px] text-[#fafafa]/82">{voiceAgentError}</p>
         </div>
       )}
 

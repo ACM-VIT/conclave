@@ -36,10 +36,10 @@ function AndroidUpsellSheet({ isOpen, onClose }: AndroidUpsellSheetProps) {
                 />
               </div>
               <div className="flex flex-col">
-                <span className="text-base font-semibold text-[#FEFCD9]">
+                <span className="text-base font-semibold text-[#fafafa]">
                   Conclave for Android
                 </span>
-                <span className="text-xs text-[#FEFCD9]/55">
+                <span className="text-xs text-[#fafafa]/55">
                   A better experience on mobile
                 </span>
               </div>
@@ -58,7 +58,7 @@ function AndroidUpsellSheet({ isOpen, onClose }: AndroidUpsellSheetProps) {
               <button
                 type="button"
                 onClick={onClose}
-                className="flex h-12 w-full items-center justify-center rounded-xl border border-white/10 bg-white/5 px-4 text-sm text-[#FEFCD9]/80 hover:bg-white/10"
+                className="flex h-12 w-full items-center justify-center rounded-xl border border-white/10 bg-white/5 px-4 text-sm text-[#fafafa]/80 hover:bg-white/10"
                 style={{ fontFamily: "'PolySans Trial', sans-serif" }}
               >
                 Continue in browser

@@ -8,6 +8,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.foundation.layout.fillMaxSize
 import org.webrtc.EglBase
+import org.webrtc.RendererCommon
 import org.webrtc.SurfaceViewRenderer
 import org.webrtc.VideoTrack
 
@@ -16,7 +17,7 @@ internal object VideoRendererShared {
 }
 
 @Composable
-internal fun VideoTrackView(track: VideoTrack?, mirror: Boolean) {
+internal fun VideoTrackView(track: VideoTrack?, mirror: Boolean, fit: Boolean = false) {
     val context = LocalContext.current
     val eglBase = VideoRendererShared.eglBase
     val renderer = remember {
@@ -39,6 +40,12 @@ internal fun VideoTrackView(track: VideoTrack?, mirror: Boolean) {
         factory = { renderer },
         update = {
             it.setMirror(mirror)
+            // Cameras crop-to-fill (Meet standard); a screen-share letterboxes
+            // on black so it is never distorted.
+            it.setScalingType(
+                if (fit) RendererCommon.ScalingType.SCALE_ASPECT_FIT
+                else RendererCommon.ScalingType.SCALE_ASPECT_FILL
+            )
         }
     )
 }

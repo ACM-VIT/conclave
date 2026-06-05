@@ -79,7 +79,7 @@ export function DisplayNameSheet({
             value={value}
             onChangeText={onChange}
             placeholder="Your display name"
-            placeholderTextColor="rgba(254, 252, 217, 0.4)"
+            placeholderTextColor="rgba(250, 250, 250, 0.4)"
             style={styles.input}
             autoCapitalize="words"
             autoCorrect={false}
@@ -138,7 +138,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 999,
-    backgroundColor: "rgba(254, 252, 217, 0.08)",
+    backgroundColor: "rgba(250, 250, 250, 0.08)",
     borderWidth: 1,
     borderColor: SHEET_COLORS.border,
   },
@@ -156,7 +156,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 10,
     color: SHEET_COLORS.text,
-    backgroundColor: "rgba(254, 252, 217, 0.04)",
+    backgroundColor: "rgba(250, 250, 250, 0.04)",
   },
   saveButton: {
     alignSelf: "flex-start",

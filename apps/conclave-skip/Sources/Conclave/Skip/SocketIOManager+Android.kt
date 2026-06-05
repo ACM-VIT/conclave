@@ -35,6 +35,9 @@ internal object SocketEvent {
     const val admitUser = "admitUser"
     const val rejectUser = "rejectUser"
     const val kickUser = "kickUser"
+    const val muteAll = "muteAll"
+    const val promoteHost = "promoteHost"
+    const val adminMuteUser = "admin:muteUser"
 
     const val userJoined = "userJoined"
     const val userLeft = "userLeft"
@@ -64,10 +67,29 @@ internal object SocketEvent {
     const val kicked = "kicked"
 }
 
+/// Raw consume-response fields, carrying rtpParameters as the verbatim JSON
+/// string mediasoup gave us rather than a re-encoded Swift struct. Skip's
+/// JSONEncoder cannot encode the `[String: String]` codec `parameters` map
+/// (it throws "Tuple2 cannot be cast to Encodable"), so any round-trip of
+/// RtpParameters/RtpCapabilities through the Codable structs crashes on
+/// Android. We therefore keep these blobs as raw JSON end-to-end.
+internal class ConsumeRawResult(
+    internal val id: String,
+    internal val producerId: String,
+    internal val kind: String,
+    internal val rtpParametersJson: String
+)
+
 internal class SocketIOManager {
     internal var isConnected = false
         private set
     internal var connectionError: Error? = null
+        private set
+
+    /// The router's RTP capabilities exactly as the server sent them in the
+    /// joinRoom ack. Passed verbatim to mediasoup `Device.load()` — see
+    /// ConsumeRawResult for why we avoid re-encoding the Codable struct.
+    internal var routerRtpCapabilitiesJson: String? = null
         private set
 
     internal var onConnected: (() -> Unit)? = null
@@ -224,6 +246,10 @@ internal class SocketIOManager {
         )
 
         val data = emit(SocketEvent.joinRoom, request)
+        // Stash the router rtpCapabilities verbatim BEFORE decoding — mediasoup
+        // Device.load() wants this JSON, and re-encoding the decoded struct
+        // crashes Skip's JSONEncoder (AnyCodable codec params -> Tuple2).
+        extractRawObjectField(data, "rtpCapabilities")?.let { routerRtpCapabilitiesJson = it }
         val response = JSONDecoder().decode(JoinRoomResponse::class, from = data)
         if (response.status == "waiting") {
             onWaitingForAdmission?.invoke()
@@ -234,12 +260,17 @@ internal class SocketIOManager {
     }
 
     internal suspend fun createProducerTransport(): TransportResponse {
-        val data = emit(SocketEvent.createProducerTransport, mapOf<String, Any?>())
+        // These two SFU handlers take ONLY an ack callback (no data arg):
+        //   socket.on("createProducerTransport", (callback) => …)
+        // Emitting an empty `{}` payload first would shift the args so the
+        // server binds `callback` to the object and respond() silently no-ops,
+        // hanging the client. Emit with the ack alone, matching the web client.
+        val data = emitAckOnly(SocketEvent.createProducerTransport)
         return JSONDecoder().decode(TransportResponse::class, from = data)
     }
 
     internal suspend fun createConsumerTransport(): TransportResponse {
-        val data = emit(SocketEvent.createConsumerTransport, mapOf<String, Any?>())
+        val data = emitAckOnly(SocketEvent.createConsumerTransport)
         return JSONDecoder().decode(TransportResponse::class, from = data)
     }
 
@@ -253,28 +284,46 @@ internal class SocketIOManager {
         emit(SocketEvent.connectConsumerTransport, request)
     }
 
-    internal suspend fun produce(
+    /// Send the producer's rtpParameters (the verbatim JSON mediasoup handed us
+    /// in the Transport's onProduce listener) without round-tripping it through
+    /// the RtpParameters Codable struct, which Skip's JSONEncoder cannot encode.
+    /// The request is assembled as a JSONObject so `toSocketPayload` passes it
+    /// through untouched.
+    internal suspend fun produceRaw(
         transportId: String,
         kind: String,
-        rtpParameters: RtpParameters,
+        rtpParametersJson: String,
         type: ProducerType,
         paused: Boolean
     ): String {
-        val request = ProduceRequest(
-            transportId = transportId,
-            kind = kind,
-            rtpParameters = rtpParameters,
-            appData = ProducerAppData(type = type.rawValue, paused = paused)
-        )
+        val request = JSONObject()
+        request.put("transportId", transportId)
+        request.put("kind", kind)
+        request.put("rtpParameters", JSONObject(rtpParametersJson))
+        val appData = JSONObject()
+        appData.put("type", type.rawValue)
+        appData.put("paused", paused)
+        request.put("appData", appData)
         val data = emit(SocketEvent.produce, request)
         val response = JSONDecoder().decode(ProduceResponse::class, from = data)
         return response.producerId
     }
 
-    internal suspend fun consume(producerId: String, rtpCapabilities: RtpCapabilities): ConsumeResponse {
-        val request = ConsumeRequest(producerId = producerId, rtpCapabilities = rtpCapabilities)
+    /// Consume using the router rtpCapabilities verbatim JSON, and return the
+    /// server's rtpParameters as raw JSON for mediasoup `RecvTransport.consume()`.
+    /// Same rationale as produceRaw: avoid the AnyCodable encode crash.
+    internal suspend fun consumeRaw(producerId: String, rtpCapabilitiesJson: String): ConsumeRawResult {
+        val request = JSONObject()
+        request.put("producerId", producerId)
+        request.put("rtpCapabilities", JSONObject(rtpCapabilitiesJson))
         val data = emit(SocketEvent.consume, request)
-        return JSONDecoder().decode(ConsumeResponse::class, from = data)
+        val obj = JSONObject(dataToString(data))
+        return ConsumeRawResult(
+            id = obj.getString("id"),
+            producerId = obj.getString("producerId"),
+            kind = obj.getString("kind"),
+            rtpParametersJson = obj.getJSONObject("rtpParameters").toString()
+        )
     }
 
     internal suspend fun resumeConsumer(consumerId: String) {
@@ -335,6 +384,39 @@ internal class SocketIOManager {
         emit(SocketEvent.kickUser, mapOf("userId" to userId))
     }
 
+    internal suspend fun muteUser(userId: String) {
+        emit(SocketEvent.adminMuteUser, mapOf("userId" to userId))
+    }
+
+    internal suspend fun muteAll() {
+        emit(SocketEvent.muteAll, mapOf<String, String>())
+    }
+
+    internal suspend fun promoteHost(userId: String) {
+        emit(SocketEvent.promoteHost, mapOf("userId" to userId))
+    }
+
+    /// Emit an event whose SFU handler takes ONLY the ack callback (no data
+    /// argument). The socket.io Java client treats a trailing Ack as the ack and
+    /// sends zero data args, so the server's `(callback) => …` binds correctly.
+    private suspend fun emitAckOnly(event: String): Data {
+        val socket = socket ?: throw ErrorException("Socket not connected")
+        return suspendCancellableCoroutine { cont ->
+            socket.emit(event, object : io.socket.client.Ack {
+                override fun call(vararg args: Any?) {
+                    val first = args.firstOrNull()
+                    val errorMessage = extractError(first)
+                    if (errorMessage != null) {
+                        cont.resumeWithException(ErrorException(errorMessage))
+                        return
+                    }
+                    val data = jsonData(first) ?: Data()
+                    cont.resume(data)
+                }
+            })
+        }
+    }
+
     private suspend fun emit(event: String, payload: Any): Data {
         val socket = socket ?: throw ErrorException("Socket not connected")
         val socketPayload = toSocketPayload(payload)
@@ -390,6 +472,18 @@ internal class SocketIOManager {
 
     private fun dataToString(data: Data): String {
         return data.platformValue.toString(Charsets.UTF_8)
+    }
+
+    /// Pull a nested JSON object field out of an ack payload as its verbatim
+    /// JSON string (used to keep mediasoup capability/parameter blobs raw rather
+    /// than re-encoding the decoded Codable struct, which crashes Skip's encoder).
+    private fun extractRawObjectField(data: Data, field: String): String? {
+        return try {
+            val obj = JSONObject(dataToString(data))
+            if (obj.has(field)) obj.getJSONObject(field).toString() else null
+        } catch (_: Throwable) {
+            null
+        }
     }
 
     private fun jsonToAny(json: String): Any {

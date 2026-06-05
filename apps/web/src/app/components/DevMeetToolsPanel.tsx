@@ -341,13 +341,13 @@ export default function DevMeetToolsPanel({ roomId }: DevMeetToolsPanelProps) {
   );
 
   const panelClass =
-    "w-[320px] rounded-xl border border-[#FEFCD9]/15 bg-[#0d0e0d]/95 p-3 text-[11px] text-[#FEFCD9]/80 shadow-2xl backdrop-blur";
+    "w-[320px] rounded-xl border border-[#fafafa]/15 bg-[#131316]/95 p-3 text-[11px] text-[#fafafa]/80 shadow-2xl backdrop-blur";
   const inputClass =
-    "w-full rounded-md border border-[#FEFCD9]/10 bg-black/40 px-2.5 py-1.5 text-[11px] text-[#FEFCD9] outline-none focus:border-[#FEFCD9]/30";
+    "w-full rounded-md border border-[#fafafa]/10 bg-black/40 px-2.5 py-1.5 text-[11px] text-[#fafafa] outline-none focus:border-[#fafafa]/30";
   const labelClass =
-    "text-[10px] uppercase tracking-[0.22em] text-[#FEFCD9]/40";
+    "text-[10px] uppercase tracking-[0.22em] text-[#fafafa]/56";
   const buttonClass =
-    "rounded-md border border-[#FEFCD9]/15 px-2.5 py-1.5 text-[11px] uppercase tracking-[0.16em] text-[#FEFCD9]/80 transition hover:border-[#FEFCD9]/30 hover:text-[#FEFCD9]";
+    "rounded-md border border-[#fafafa]/15 px-2.5 py-1.5 text-[11px] uppercase tracking-[0.16em] text-[#fafafa]/80 transition hover:border-[#fafafa]/30 hover:text-[#fafafa]";
 
   const spawnSummary = useMemo(() => {
     if (!canSpawn) return "Set a room ID first.";
@@ -359,7 +359,7 @@ export default function DevMeetToolsPanel({ roomId }: DevMeetToolsPanelProps) {
       <button
         type="button"
         onClick={() => setIsOpen((prev) => !prev)}
-        className="rounded-full border border-[#FEFCD9]/20 bg-black/60 px-3 py-1.5 text-[10px] uppercase tracking-[0.22em] text-[#FEFCD9]/80 hover:border-[#FEFCD9]/40"
+        className="rounded-full border border-[#fafafa]/20 bg-black/60 px-3 py-1.5 text-[10px] uppercase tracking-[0.22em] text-[#fafafa]/80 hover:border-[#fafafa]/40"
       >
         Dev Tools
       </button>
@@ -368,11 +368,11 @@ export default function DevMeetToolsPanel({ roomId }: DevMeetToolsPanelProps) {
           <div className="flex items-center justify-between">
             <div>
               <div className={labelClass}>Dev panel</div>
-              <p className="mt-1 text-[11px] text-[#FEFCD9]/70">
+              <p className="mt-1 text-[11px] text-[#fafafa]/82">
                 {spawnSummary}
               </p>
             </div>
-            <div className="text-[10px] text-[#FEFCD9]/45">
+            <div className="text-[10px] text-[#fafafa]/75">
               Inline: {inlineBots.length} · Headless: {headlessCount} ·
               Windows: {openWindowsCount}
             </div>
@@ -482,7 +482,7 @@ export default function DevMeetToolsPanel({ roomId }: DevMeetToolsPanelProps) {
             </div>
             <div>
               <div className={labelClass}>Flags</div>
-              <div className="mt-1 flex flex-col gap-1.5 text-[11px] text-[#FEFCD9]/80">
+              <div className="mt-1 flex flex-col gap-1.5 text-[11px] text-[#fafafa]/80">
                 <label className="flex items-center gap-2">
                   <input
                     type="checkbox"

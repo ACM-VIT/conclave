@@ -43,10 +43,10 @@ import { WhiteboardNativeApp } from "@conclave/apps-sdk/whiteboard/native";
 
 const COLORS = {
   primaryOrange: "#F95F4A",
-  cream: "#FEFCD9",
-  dark: "#060606",
-  creamMuted: "rgba(254, 252, 217, 0.5)",
-  creamFaint: "rgba(254, 252, 217, 0.1)",
+  cream: "#fafafa",
+  dark: "#0a0a0b",
+  creamMuted: "rgba(250, 250, 250, 0.5)",
+  creamFaint: "rgba(250, 250, 250, 0.1)",
   amber: "#fbbf24",
   amberDim: "rgba(251, 191, 36, 0.2)",
   amberBorder: "rgba(251, 191, 36, 0.3)",
@@ -113,6 +113,7 @@ interface CallScreenProps {
   onToggleDmEnabled?: (enabled: boolean) => void;
   onSendReaction: (emoji: string) => void;
   onOpenSettings: () => void;
+  onOpenMore: () => void;
   onLeave: () => void;
   participantCount?: number;
   isRoomLocked?: boolean;
@@ -228,6 +229,7 @@ export function CallScreen({
   onToggleDmEnabled,
   onSendReaction,
   onOpenSettings,
+  onOpenMore,
   onLeave,
   participantCount,
   isRoomLocked = false,
@@ -1274,6 +1276,7 @@ export function CallScreen({
         onToggleWhiteboard={isAdmin ? handleToggleWhiteboard : undefined}
         onToggleAppsLock={handleToggleAppsLock}
         onSendReaction={onSendReaction}
+        onOpenMore={onOpenMore}
         onLeave={onLeave}
       />
     </RNView>
@@ -1320,7 +1323,7 @@ const styles = StyleSheet.create({
     fontWeight: "500",
     color: COLORS.cream,
     letterSpacing: 1,
-    fontFamily: "PolySans-Mono",
+    fontFamily: "PolySans-Regular",
   },
   roomIdCopied: {
     textDecorationLine: "underline",
@@ -1339,7 +1342,7 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: "500",
     color: COLORS.amber,
-    fontFamily: "PolySans-Mono",
+    fontFamily: "PolySans-Regular",
   },
   participantsPill: {
     flexDirection: "row",
@@ -1375,7 +1378,7 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: "500",
     color: COLORS.cream,
-    fontFamily: "PolySans-Mono",
+    fontFamily: "PolySans-Regular",
   },
   grid: {
     flex: 1,
@@ -1408,7 +1411,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderStyle: "dashed",
     borderColor: COLORS.creamFaint,
-    backgroundColor: "#0d0e0d",
+    backgroundColor: "#131316",
     alignItems: "center",
     justifyContent: "center",
   },
@@ -1424,7 +1427,7 @@ const styles = StyleSheet.create({
     letterSpacing: 2.6,
     textTransform: "uppercase",
     color: COLORS.creamMuted,
-    fontFamily: "PolySans-Mono",
+    fontFamily: "PolySans-Regular",
   },
   presentationContainer: {
     flex: 1,
@@ -1438,7 +1441,7 @@ const styles = StyleSheet.create({
     overflow: "hidden",
     backgroundColor: "#0b0b0b",
     borderWidth: 1,
-    borderColor: "rgba(254, 252, 217, 0.08)",
+    borderColor: "rgba(250, 250, 250, 0.08)",
     marginBottom: 8,
   },
   screenShareStripDock: {
@@ -1455,7 +1458,7 @@ const styles = StyleSheet.create({
     overflow: "hidden",
     backgroundColor: "#0b0b0b",
     borderWidth: 1,
-    borderColor: "rgba(254, 252, 217, 0.08)",
+    borderColor: "rgba(250, 250, 250, 0.08)",
   },
   presentationVideo: {
     width: "100%",
@@ -1476,7 +1479,7 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     backgroundColor: "rgba(0, 0, 0, 0.6)",
     borderWidth: 1,
-    borderColor: "rgba(254, 252, 217, 0.12)",
+    borderColor: "rgba(250, 250, 250, 0.12)",
   },
   presenterText: {
     fontSize: 10,
@@ -1484,7 +1487,7 @@ const styles = StyleSheet.create({
     letterSpacing: 2,
     fontWeight: "500",
     textTransform: "uppercase",
-    fontFamily: "PolySans-Mono",
+    fontFamily: "PolySans-Regular",
   },
   observerPip: {
     position: "absolute",
@@ -1493,7 +1496,7 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     overflow: "hidden",
     borderWidth: 1,
-    borderColor: "rgba(254, 252, 217, 0.2)",
+    borderColor: "rgba(250, 250, 250, 0.2)",
     backgroundColor: "rgba(0, 0, 0, 0.75)",
   },
   observerPipVideo: {
@@ -1510,14 +1513,14 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     backgroundColor: "rgba(0, 0, 0, 0.62)",
     borderWidth: 1,
-    borderColor: "rgba(254, 252, 217, 0.16)",
+    borderColor: "rgba(250, 250, 250, 0.16)",
   },
   observerPipText: {
     fontSize: 9,
     color: COLORS.cream,
     letterSpacing: 1.2,
     textTransform: "uppercase",
-    fontFamily: "PolySans-Mono",
+    fontFamily: "PolySans-Regular",
   },
   observerAudio: observerAudioStyle,
   stripContent: {
@@ -1532,7 +1535,7 @@ const styles = StyleSheet.create({
     overflow: "hidden",
     backgroundColor: "#121212",
     borderWidth: 1,
-    borderColor: "rgba(254, 252, 217, 0.1)",
+    borderColor: "rgba(250, 250, 250, 0.1)",
   },
   stripVideo: {
     width: "100%",
@@ -1571,7 +1574,7 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     backgroundColor: "rgba(0, 0, 0, 0.6)",
     borderWidth: 1,
-    borderColor: "rgba(254, 252, 217, 0.08)",
+    borderColor: "rgba(250, 250, 250, 0.08)",
     flexDirection: "row",
     alignItems: "center",
     gap: 4,
@@ -1582,7 +1585,7 @@ const styles = StyleSheet.create({
     color: COLORS.cream,
     textTransform: "uppercase",
     letterSpacing: 1,
-    fontFamily: "PolySans-Mono",
+    fontFamily: "PolySans-Regular",
   },
   webinarRegularText: {
     fontFamily: "PolySans-Regular",

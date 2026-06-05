@@ -1,0 +1,11 @@
+2026/06/02-19:51:16.367 2e86a Creating DB /Users/ishaan/Projects/conclave/packages/sfu/data/recordings/tulip-canna-pansy/3da341d8-bd1f-4024-859d-26778e46e2b8/.chromium-profile/Default/Session Storage since it was missing.
+2026/06/02-19:51:16.369 2e86a Reusing MANIFEST /Users/ishaan/Projects/conclave/packages/sfu/data/recordings/tulip-canna-pansy/3da341d8-bd1f-4024-859d-26778e46e2b8/.chromium-profile/Default/Session Storage/MANIFEST-000001
+2026/06/03-21:32:37.953 2e871 Level-0 table #5: started
+2026/06/03-21:32:37.958 2e871 Level-0 table #5: 7018 bytes OK
+2026/06/03-21:32:37.960 2e871 Delete type=0 #3
+2026/06/03-22:30:59.516 2e871 Level-0 table #7: started
+2026/06/03-22:30:59.522 2e871 Level-0 table #7: 6838 bytes OK
+2026/06/03-22:30:59.523 2e871 Delete type=0 #4
+2026/06/03-23:32:15.067 2e871 Level-0 table #9: started
+2026/06/03-23:32:15.071 2e871 Level-0 table #9: 6827 bytes OK
+2026/06/03-23:32:15.074 2e871 Delete type=0 #6

@@ -1,7 +1,5 @@
 "use client";
 
-import { RefreshCw, UserX } from "lucide-react";
-import Image from "next/image";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Dispatch, PointerEvent, SetStateAction } from "react";
 import type { Socket } from "socket.io-client";
@@ -22,7 +20,8 @@ import ScreenShareAudioPlayers from "./ScreenShareAudioPlayers";
 import SystemAudioPlayers from "./SystemAudioPlayers";
 import WhiteboardLayout from "./WhiteboardLayout";
 import ParticipantVideo from "./ParticipantVideo";
-import RecordingIndicator from "./RecordingIndicator";
+import MeetingIdentity from "./MeetingIdentity";
+import ToastQueue from "./ToastQueue";
 import type { BrowserState } from "../hooks/useSharedBrowser";
 
 import type {
@@ -168,16 +167,6 @@ interface MeetsMainContentProps {
   ) => Promise<WebinarConfigSnapshot | null>;
   onGenerateWebinarLink?: () => Promise<WebinarLinkResponse | null>;
   onRotateWebinarLink?: () => Promise<WebinarLinkResponse | null>;
-  recordingActive?: boolean;
-  recordingPaused?: boolean;
-  recordingBusy?: boolean;
-  recordingStartedAt?: number | null;
-  recordingTrackCount?: number;
-  recordingAvailable?: boolean;
-  onStartRecording?: () => void;
-  onStopRecording?: () => void;
-  onPauseRecording?: () => void;
-  onResumeRecording?: () => void;
   /** Recorder-bot view: strip every UI chrome so the rendered tab is
    * publishable as-is (no controls, header, chat, reactions, recording
    * indicator). The participant video grid is the only thing left. */
@@ -191,11 +180,6 @@ const getLiveVideoStream = (stream: MediaStream | null): MediaStream | null => {
     return null;
   }
   return stream;
-};
-
-const getVideoTrackId = (stream: MediaStream | null): string => {
-  const [track] = stream?.getVideoTracks() ?? [];
-  return track?.id ?? "none";
 };
 
 const normalizeMentionToken = (value: string): string =>
@@ -230,6 +214,7 @@ const clamp = (value: number, min: number, max: number) =>
 
 const WEBINAR_SPEAKER_PROMOTE_DELAY_MS = 450;
 const WEBINAR_SPEAKER_MIN_SWITCH_INTERVAL_MS = 1800;
+const DOCKED_PANEL_WIDTH = 360;
 
 const getPipCornerClass = (corner: PipCorner): string => {
   switch (corner) {
@@ -357,16 +342,6 @@ export default function MeetsMainContent({
   onUpdateWebinarConfig,
   onGenerateWebinarLink,
   onRotateWebinarLink,
-  recordingActive = false,
-  recordingPaused = false,
-  recordingBusy = false,
-  recordingStartedAt = null,
-  recordingTrackCount = 0,
-  recordingAvailable = true,
-  onStartRecording,
-  onStopRecording,
-  onPauseRecording,
-  onResumeRecording,
   broadcastMode = false,
 }: MeetsMainContentProps) {
   const {
@@ -680,24 +655,28 @@ export default function MeetsMainContent({
         .sort((left, right) => left.displayName.localeCompare(right.displayName)),
     [nonSystemParticipants, currentUserId, resolveDisplayName],
   );
-  const handleToggleParticipants = useCallback(
-    () =>
-      setIsParticipantsOpen((prev) => {
-        const next = !prev;
-        if (next && isChatOpen) {
-          toggleChat();
-        }
-        return next;
-      }),
-    [isChatOpen, setIsParticipantsOpen, toggleChat],
-  );
+  const handleToggleParticipants = useCallback(() => {
+    const opening = !isParticipantsOpen;
+    // Mutually exclusive with chat (one right-dock panel at a time). Fire the
+    // side effect OUTSIDE the setState updater so StrictMode's double-invoke
+    // doesn't toggle chat twice and leave both panels open.
+    if (opening && isChatOpen) {
+      toggleChat();
+    }
+    setIsParticipantsOpen(opening);
+  }, [isParticipantsOpen, isChatOpen, setIsParticipantsOpen, toggleChat]);
+
+  const isChatOpenRef = useRef(isChatOpen);
+  useEffect(() => {
+    isChatOpenRef.current = isChatOpen;
+  }, [isChatOpen]);
 
   const handleOpenParticipants = useCallback(() => {
-    if (isChatOpen) {
+    if (isChatOpenRef.current) {
       toggleChat();
     }
     setIsParticipantsOpen(true);
-  }, [isChatOpen, toggleChat, setIsParticipantsOpen]);
+  }, [toggleChat, setIsParticipantsOpen]);
 
   const handleCloseParticipants = useCallback(
     () => setIsParticipantsOpen(false),
@@ -776,9 +755,24 @@ export default function MeetsMainContent({
     );
     return videoParticipant?.screenShareStream ?? null;
   }, [participantsArray]);
+  const dockedPanelReserve =
+    isJoined &&
+    !isWebinarAttendee &&
+    !broadcastMode &&
+    (isChatOpen || isParticipantsOpen)
+      ? DOCKED_PANEL_WIDTH
+      : 0;
+  const mainContentStyle =
+    isJoined && !broadcastMode
+      ? { paddingRight: `calc(1rem + ${dockedPanelReserve}px)` }
+      : undefined;
+
   return (
     <div
-      className={`flex-1 flex flex-col overflow-hidden relative ${broadcastMode ? "p-0 bg-[#060606]" : isJoined ? "p-4" : "p-0"}`}
+      className={`flex-1 flex flex-col overflow-hidden relative transition-[padding-right] duration-[200ms] ease-out ${
+        broadcastMode ? "p-0 bg-[#0a0a0b]" : isJoined ? "p-4" : "p-0"
+      }`}
+      style={mainContentStyle}
       data-broadcast={broadcastMode ? "1" : undefined}
     >
       {isJoined && (!isWebinarAttendee || serverRestartNotice) && (
@@ -813,11 +807,12 @@ export default function MeetsMainContent({
           getDisplayName={resolveDisplayName}
         />
       )}
-      {!broadcastMode && (
-        <RecordingIndicator
-          active={recordingActive}
-          paused={recordingPaused}
-          startedAt={recordingStartedAt}
+      {isJoined && !broadcastMode && !isWebinarAttendee && (
+        <MeetingIdentity
+          connectionState={connectionState}
+          serverRestartNotice={serverRestartNotice}
+          isScreenSharing={isScreenSharing}
+          isGhost={ghostEnabled}
         />
       )}
       {isDevToolsEnabled && isJoined && !isWebinarAttendee && (
@@ -839,7 +834,7 @@ export default function MeetsMainContent({
                   : "almost there";
             return (
               <div
-                className="relative -m-4 flex flex-1 overflow-hidden bg-[#060606]"
+                className="relative -m-4 flex flex-1 overflow-hidden bg-[#0a0a0b]"
                 style={{ fontFamily: "'PolySans Trial', sans-serif" }}
               >
                 <div className="absolute inset-0 acm-bg-dot-grid pointer-events-none" />
@@ -869,7 +864,7 @@ export default function MeetsMainContent({
                             : "bg-[#F95F4A] animate-pulse"
                         }`}
                       />
-                      <span className="text-sm text-[#FEFCD9]/50">
+                      <span className="text-sm text-[#fafafa]/66">
                         {isFatal
                           ? "couldn't join the room"
                           : isWaitingForHost
@@ -880,7 +875,7 @@ export default function MeetsMainContent({
                       </span>
                     </div>
                     <h1
-                      className="mt-6 text-3xl md:text-5xl text-[#FEFCD9] tracking-tight"
+                      className="mt-6 text-3xl md:text-5xl text-[#fafafa] tracking-tight"
                       style={{
                         fontFamily: "'PolySans Bulky Wide', sans-serif",
                       }}
@@ -888,30 +883,30 @@ export default function MeetsMainContent({
                       {headline}
                     </h1>
                     {isWaitingForHost ? (
-                      <p className="mt-5 max-w-md text-sm md:text-base text-[#FEFCD9]/60">
+                      <p className="mt-5 max-w-md text-sm md:text-base text-[#fafafa]/75">
                         Hang tight — this page will refresh on its own the
                         moment the host opens the room.
                       </p>
                     ) : isFatal ? (
-                      <p className="mt-5 max-w-md text-sm md:text-base text-[#FEFCD9]/60">
+                      <p className="mt-5 max-w-md text-sm md:text-base text-[#fafafa]/75">
                         {errorMessage}
                       </p>
                     ) : (
-                      <p className="mt-5 max-w-md text-sm md:text-base text-[#FEFCD9]/60">
+                      <p className="mt-5 max-w-md text-sm md:text-base text-[#fafafa]/75">
                         Sit tight — getting your camera, mic and the room
                         ready in a moment.
                       </p>
                     )}
-                    <div className="mt-16 flex flex-col items-center text-[#FEFCD9]/30">
+                    <div className="mt-16 flex flex-col items-center text-[#fafafa]/30">
                       <div className="relative inline-block">
                         <span
                           className="absolute -left-5 top-1/2 -translate-y-1/2 text-[#F95F4A]/40 text-2xl md:text-3xl"
-                          style={{ fontFamily: "'PolySans Mono', monospace" }}
+                          style={{ fontFamily: "'PolySans Trial', sans-serif" }}
                         >
                           [
                         </span>
                         <span
-                          className="text-2xl md:text-3xl text-[#FEFCD9] tracking-tight"
+                          className="text-2xl md:text-3xl text-[#fafafa] tracking-tight"
                           style={{
                             fontFamily: "'PolySans Bulky Wide', sans-serif",
                           }}
@@ -920,12 +915,12 @@ export default function MeetsMainContent({
                         </span>
                         <span
                           className="absolute -right-5 top-1/2 -translate-y-1/2 text-[#F95F4A]/40 text-2xl md:text-3xl"
-                          style={{ fontFamily: "'PolySans Mono', monospace" }}
+                          style={{ fontFamily: "'PolySans Trial', sans-serif" }}
                         >
                           ]
                         </span>
                       </div>
-                      <p className="mt-3 text-xs text-[#FEFCD9]/30">
+                      <p className="mt-3 text-xs text-[#fafafa]/30">
                         video conferencing by ACM-VIT
                       </p>
                     </div>
@@ -968,9 +963,7 @@ export default function MeetsMainContent({
           {webinarStage ? (
             <div ref={webinarStageRef} className="relative h-[72vh] w-full max-w-6xl">
               <ParticipantVideo
-                key={`${webinarStage.main.participant.userId}:${getVideoTrackId(
-                  webinarStage.main.participant.videoStream,
-                )}:${webinarStage.isScreenShare ? "screen" : "camera"}`}
+                key={webinarStage.main.participant.userId}
                 participant={webinarStage.main.participant}
                 displayName={webinarStage.main.displayName}
                 isActiveSpeaker={
@@ -984,7 +977,7 @@ export default function MeetsMainContent({
               />
               {webinarStage.pip ? (
                 <div
-                  className={`absolute h-28 w-44 overflow-hidden rounded-xl border border-[#FEFCD9]/20 bg-black/75 shadow-[0_16px_36px_rgba(0,0,0,0.5)] sm:h-32 sm:w-56 ${pipDragPosition ? "" : pipCornerClass} cursor-grab active:cursor-grabbing touch-none select-none`}
+                  className={`absolute h-28 w-44 overflow-hidden rounded-xl border border-[#fafafa]/20 bg-black/75 shadow-[0_16px_36px_rgba(0,0,0,0.5)] sm:h-32 sm:w-56 ${pipDragPosition ? "" : pipCornerClass} cursor-grab active:cursor-grabbing touch-none select-none`}
                   style={
                     pipDragPosition
                       ? {
@@ -1001,9 +994,7 @@ export default function MeetsMainContent({
                   onPointerCancel={handlePipPointerCancel}
                 >
                   <ParticipantVideo
-                    key={`${webinarStage.pip.participant.userId}:${getVideoTrackId(
-                      webinarStage.pip.participant.videoStream,
-                    )}:pip`}
+                    key={webinarStage.pip.participant.userId}
                     participant={webinarStage.pip.participant}
                     displayName={webinarStage.pip.displayName}
                     onAudioAutoplayBlocked={handleWebinarAudioAutoplayBlocked}
@@ -1015,28 +1006,28 @@ export default function MeetsMainContent({
             </div>
           ) : (
             <div className="rounded-xl border border-white/10 bg-black/40 px-6 py-4 text-center">
-              <p className="text-sm text-[#FEFCD9]">
+              <p className="text-sm text-[#fafafa]">
                 Waiting for the host to start speaking...
               </p>
             </div>
           )}
           {webinarAudioBlocked && (
             <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/65 p-4 backdrop-blur-sm">
-              <div className="w-full max-w-sm rounded-2xl border border-[#FEFCD9]/20 bg-[#0d0e0d]/95 p-6 text-center shadow-2xl">
+              <div className="w-full max-w-sm rounded-2xl border border-[#fafafa]/20 bg-[#131316]/95 p-6 text-center shadow-2xl">
                 <p
-                  className="text-sm uppercase tracking-[0.2em] text-[#FEFCD9]"
-                  style={{ fontFamily: "'PolySans Mono', monospace" }}
+                  className="text-sm uppercase tracking-[0.2em] text-[#fafafa]"
+                  style={{ fontFamily: "'PolySans Trial', sans-serif" }}
                 >
                   Webinar audio is blocked
                 </p>
-                <p className="mt-3 text-xs text-[#FEFCD9]/70">
+                <p className="mt-3 text-xs text-[#fafafa]/82">
                   Your browser needs a click before playback can start.
                 </p>
                 <button
                   type="button"
                   onClick={handlePlayWebinarAudio}
-                  className="mt-5 inline-flex items-center justify-center rounded-full border border-[#F95F4A]/60 bg-[#F95F4A]/15 px-5 py-2 text-xs uppercase tracking-[0.2em] text-[#FEFCD9] transition hover:bg-[#F95F4A]/25"
-                  style={{ fontFamily: "'PolySans Mono', monospace" }}
+                  className="mt-5 inline-flex items-center justify-center rounded-full border border-[#F95F4A]/60 bg-[#F95F4A]/15 px-5 py-2 text-xs uppercase tracking-[0.2em] text-[#fafafa] transition hover:bg-[#F95F4A]/25"
+                  style={{ fontFamily: "'PolySans Trial', sans-serif" }}
                 >
                   Play webinar
                 </button>
@@ -1098,101 +1089,94 @@ export default function MeetsMainContent({
           onNavigateBrowser={onNavigateBrowser}
           browserVideoStream={browserVideoStream}
         />
-      ) : presentationStream ? (
-        <PresentationLayout
-          presentationStream={presentationStream}
-          presenterName={presenterName}
-          localStream={localStream}
-          isCameraOff={isCameraOff}
-          isMuted={isMuted}
-          isHandRaised={isHandRaised}
-          isGhost={ghostEnabled}
-          participants={participants}
-          userEmail={userEmail}
-          isMirrorCamera={isMirrorCamera}
-          activeSpeakerId={activeSpeakerId}
-          currentUserId={currentUserId}
-          audioOutputDeviceId={audioOutputDeviceId}
-          getDisplayName={resolveDisplayName}
-        />
       ) : (
-        <GridLayout
-          localStream={localStream}
-          isCameraOff={isCameraOff}
-          isMuted={isMuted}
-          isHandRaised={isHandRaised}
-          isGhost={ghostEnabled}
-          participants={participants}
-          userEmail={userEmail}
-          isMirrorCamera={isMirrorCamera}
-          activeSpeakerId={activeSpeakerId}
-          currentUserId={currentUserId}
-          audioOutputDeviceId={audioOutputDeviceId}
-          onOpenParticipantsPanel={handleOpenParticipants}
-          getDisplayName={resolveDisplayName}
-        />
+        // Grid + presentation both stay mounted and crossfade via OPACITY. The
+        // grid (what everyone watches) never unmounts on a screen-share
+        // start/stop, so its participant <video> nodes keep identity and their
+        // streams never re-attach — no black flash. display:none is avoided
+        // because engines pause painting a zero-box <video> (flash on reveal).
+        <div className="relative flex min-h-0 flex-1 flex-col">
+          <div
+            className={`absolute inset-0 flex flex-col transition-opacity duration-[120ms] ease-out ${
+              presentationStream ? "pointer-events-none opacity-0" : "opacity-100"
+            }`}
+            aria-hidden={presentationStream ? true : undefined}
+          >
+            <GridLayout
+              localStream={localStream}
+              isCameraOff={isCameraOff}
+              isMuted={isMuted}
+              isHandRaised={isHandRaised}
+              isGhost={ghostEnabled}
+              participants={participants}
+              userEmail={userEmail}
+              isMirrorCamera={isMirrorCamera}
+              activeSpeakerId={activeSpeakerId}
+              currentUserId={currentUserId}
+              audioOutputDeviceId={audioOutputDeviceId}
+              onOpenParticipantsPanel={handleOpenParticipants}
+              getDisplayName={resolveDisplayName}
+            />
+          </div>
+          {presentationStream && (
+            <div className="absolute inset-0 flex flex-col">
+              <PresentationLayout
+                presentationStream={presentationStream}
+                presenterName={presenterName}
+                localStream={localStream}
+                isCameraOff={isCameraOff}
+                isMuted={isMuted}
+                isHandRaised={isHandRaised}
+                isGhost={ghostEnabled}
+                participants={participants}
+                userEmail={userEmail}
+                isMirrorCamera={isMirrorCamera}
+                activeSpeakerId={activeSpeakerId}
+                currentUserId={currentUserId}
+                audioOutputDeviceId={audioOutputDeviceId}
+                getDisplayName={resolveDisplayName}
+              />
+            </div>
+          )}
+        </div>
       )}
 
-      {isJoined && browserLaunchError && (
-        <div className="absolute top-4 right-4 max-w-[320px] rounded-lg border border-[#F95F4A]/30 bg-[#0d0e0d]/95 px-4 py-3 text-xs text-[#FEFCD9]/90 shadow-2xl">
-          <div className="flex items-start gap-3">
-            <span className="font-medium text-[#F95F4A]">Browser error</span>
-            {onClearBrowserError && (
-              <button
-                onClick={onClearBrowserError}
-                className="ml-auto text-[#FEFCD9]/50 hover:text-[#FEFCD9]"
-                aria-label="Dismiss browser error"
-              >
-                X
-              </button>
-            )}
-          </div>
-          <p className="mt-1 text-[11px] text-[#FEFCD9]/70">
-            {browserLaunchError}
-          </p>
-        </div>
-      )}
-      {isJoined && voiceAgentError && (
-        <div className="absolute top-4 left-4 max-w-[340px] rounded-lg border border-[#F95F4A]/30 bg-[#0d0e0d]/95 px-4 py-3 text-xs text-[#FEFCD9]/90 shadow-2xl">
-          <div className="flex items-start gap-3">
-            <span className="font-medium text-[#F95F4A]">
-              Voice agent error
-            </span>
-            {onClearVoiceAgentError && (
-              <button
-                onClick={onClearVoiceAgentError}
-                className="ml-auto text-[#FEFCD9]/50 hover:text-[#FEFCD9]"
-                aria-label="Dismiss voice agent error"
-              >
-                X
-              </button>
-            )}
-          </div>
-          <p className="mt-1 text-[11px] text-[#FEFCD9]/70">{voiceAgentError}</p>
-        </div>
+      {isJoined && (
+        <ToastQueue
+          toasts={[
+            browserLaunchError
+              ? {
+                  id: "browser",
+                  label: "Browser error",
+                  message: browserLaunchError,
+                  onDismiss: onClearBrowserError,
+                }
+              : null,
+            voiceAgentError
+              ? {
+                  id: "voice",
+                  label: "Voice agent error",
+                  message: voiceAgentError,
+                  onDismiss: onClearVoiceAgentError,
+                }
+              : null,
+          ]}
+        />
       )}
 
       {isJoined && !broadcastMode &&
         (isWebinarAttendee ? (
           <div className="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-black/30 px-4 py-3">
             <div>
-              <p className="text-xs text-[#FEFCD9]/70">
+              <p className="text-xs text-[#fafafa]/82">
                 {webinarConfig?.attendeeCount ?? 0} attendees watching
               </p>
             </div>
           </div>
         ) : (
-          <div className="flex items-center justify-between gap-3">
-            <a href="/" className="flex items-center">
-              <Image
-                src="/assets/acm_topleft.svg"
-                alt="ACM Logo"
-                width={129}
-                height={129}
-              />
-            </a>
-            <div className="flex-1 flex justify-center">
-              <ControlsBar
+          <div className="flex w-full flex-col items-center gap-2">
+            <ControlsBar
+                roomId={roomId}
                 isMuted={isMuted}
                 isCameraOff={isCameraOff}
                 isScreenSharing={isScreenSharing}
@@ -1263,74 +1247,7 @@ export default function MeetsMainContent({
                 onUpdateWebinarConfig={onUpdateWebinarConfig}
                 onGenerateWebinarLink={onGenerateWebinarLink}
                 onRotateWebinarLink={onRotateWebinarLink}
-                hostEmail={user?.email || null}
-                hostName={user?.name || null}
-                recordingActive={recordingActive}
-                recordingPaused={recordingPaused}
-                recordingBusy={recordingBusy}
-                recordingTrackCount={recordingTrackCount}
-                recordingAvailable={recordingAvailable}
-                onStartRecording={onStartRecording}
-                onStopRecording={onStopRecording}
-                onPauseRecording={onPauseRecording}
-                onResumeRecording={onResumeRecording}
               />
-            </div>
-            <div className="flex items-center gap-4">
-              {isScreenSharing && (
-                <div
-                  className="flex items-center gap-1.5 text-[#F95F4A] text-[10px] uppercase tracking-wider"
-                  style={{ fontFamily: "'PolySans Mono', monospace" }}
-                >
-                  <span className="w-1.5 h-1.5 rounded-full bg-[#F95F4A]"></span>
-                  Sharing
-                </div>
-              )}
-              {ghostEnabled && (
-                <div
-                  className="flex items-center gap-1.5 text-[#FF007A] text-[10px] uppercase tracking-wider"
-                  style={{ fontFamily: "'PolySans Mono', monospace" }}
-                >
-                  <UserX className="w-3 h-3" />
-                  Ghost
-                </div>
-              )}
-              {(connectionState === "reconnecting" ||
-                (serverRestartNotice &&
-                  !["error", "disconnected"].includes(connectionState))) && (
-                <div
-                  className="flex items-center gap-1.5 text-amber-400 text-[10px] uppercase tracking-wider"
-                  style={{ fontFamily: "'PolySans Mono', monospace" }}
-                >
-                  <RefreshCw className="w-3 h-3 animate-spin" />
-                  {serverRestartNotice &&
-                  !["error", "disconnected"].includes(connectionState)
-                    ? "Restarting"
-                    : "Reconnecting"}
-                </div>
-              )}
-              <div
-                className="flex items-center gap-1 text-[#FEFCD9]/60 text-[10px] uppercase tracking-wider"
-                style={{ fontFamily: "'PolySans Mono', monospace" }}
-              >
-                <span className="inline-flex h-1.5 w-1.5 rounded-full bg-emerald-400" />
-                {visibleParticipantCount + 1} in call
-              </div>
-              <div className="flex flex-col items-end">
-                <span
-                  className="text-sm text-[#FEFCD9]"
-                  style={{ fontFamily: "'PolySans Bulky Wide', sans-serif" }}
-                >
-                  c0nclav3
-                </span>
-                <span
-                  className="text-[9px] uppercase tracking-[0.15em] text-[#FEFCD9]/40"
-                  style={{ fontFamily: "'PolySans Mono', monospace" }}
-                >
-                  by acm-vit
-                </span>
-              </div>
-            </div>
             {browserAudioNeedsGesture && (
               <div className="w-full mt-2 text-center text-[11px] text-[#F95F4A]/70 uppercase tracking-[0.3em]">
                 Click “Shared browser audio” to unlock the system sound.

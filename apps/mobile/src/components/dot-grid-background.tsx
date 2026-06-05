@@ -42,7 +42,7 @@ export function DotGridBackground({ children }: DotGridBackgroundProps) {
 const styles = StyleSheet.create({
     container: {
         flex: 1,
-        backgroundColor: "#0d0e0d",
+        backgroundColor: "#131316",
         width: "100%",
     },
     radialContainer: {

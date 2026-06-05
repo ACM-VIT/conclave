@@ -3,8 +3,6 @@
 import {
   AlertCircle,
   ArrowRight,
-  CalendarClock,
-  Copy,
   Loader2,
   Mic,
   MicOff,
@@ -13,11 +11,9 @@ import {
   Video,
   VideoOff,
 } from "lucide-react";
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { signIn, signOut, useSession } from "@/lib/auth-client";
 import type { ConnectionState, MeetError } from "../../lib/types";
-import type { ScheduledMeeting } from "@/lib/scheduled-meetings";
-import ScheduleMeetingModal from "../ScheduleMeetingModal";
 import {
   DEFAULT_AUDIO_CONSTRAINTS,
   STANDARD_QUALITY_CONSTRAINTS,
@@ -135,11 +131,6 @@ function MobileJoinScreen({
   const phase = hasUserIdentity ? "join" : (manualPhase ?? "welcome");
   const [guestName, setGuestName] = useState("");
   const [customRoomCode, setCustomRoomCode] = useState("");
-  const [isScheduleOpen, setIsScheduleOpen] = useState(false);
-  const [upcomingMeetings, setUpcomingMeetings] = useState<ScheduledMeeting[]>(
-    [],
-  );
-  const [copiedMeetingId, setCopiedMeetingId] = useState<string | null>(null);
   const normalizedSegments = useMemo(
     () => normalizedRoomId.split("-"),
     [normalizedRoomId]
@@ -317,53 +308,6 @@ function MobileJoinScreen({
     onJoinRoom(id);
   };
 
-  const refreshUpcomingMeetings = useCallback(async () => {
-    if (!isSignedInUser) {
-      setUpcomingMeetings([]);
-      return;
-    }
-    try {
-      const response = await fetch(
-        "/api/meetings/scheduled?status=scheduled,live",
-        { cache: "no-store" },
-      );
-      if (!response.ok) {
-        setUpcomingMeetings([]);
-        return;
-      }
-      const data = (await response.json()) as {
-        scheduledMeetings?: ScheduledMeeting[];
-      };
-      setUpcomingMeetings(data?.scheduledMeetings ?? []);
-    } catch {
-      setUpcomingMeetings([]);
-    }
-  }, [isSignedInUser]);
-
-  useEffect(() => {
-    if (phase !== "join") return;
-    if (activeTab !== "new") return;
-    void refreshUpcomingMeetings();
-  }, [phase, activeTab, refreshUpcomingMeetings]);
-
-  const handleCopyMeetingLink = useCallback(async (meeting: ScheduledMeeting) => {
-    if (typeof window === "undefined") return;
-    const link = `${window.location.origin}/${meeting.roomCode}`;
-    try {
-      await navigator.clipboard.writeText(link);
-      setCopiedMeetingId(meeting.id);
-      setTimeout(
-        () =>
-          setCopiedMeetingId((current) =>
-            current === meeting.id ? null : current,
-          ),
-        1800,
-      );
-    } catch {
-      setCopiedMeetingId(null);
-    }
-  }, []);
-
   const handleSocialSignIn = async (
     provider: "google" | "apple" | "roblox" | "vercel"
   ) => {
@@ -469,12 +413,12 @@ function MobileJoinScreen({
 
   if (phase === "welcome") {
     return (
-      <div className="flex-1 flex flex-col items-center justify-center px-6 bg-[#060606] safe-area-pt relative overflow-hidden">
+      <div className="flex-1 flex flex-col items-center justify-center px-6 bg-[#0a0a0b] safe-area-pt relative overflow-hidden">
         <div className="absolute inset-0 acm-bg-radial pointer-events-none" />
         <div className="absolute inset-0 acm-bg-dot-grid pointer-events-none" />
         <div className="relative z-10 text-center mb-8">
           <div
-            className="text-xl text-[#FEFCD9]/40 mb-2 tracking-wide"
+            className="text-xl text-[#fafafa]/56 mb-2 tracking-wide"
             style={{ fontFamily: "'PolySans Bulky Wide', sans-serif" }}
           >
             welcome to
@@ -482,26 +426,26 @@ function MobileJoinScreen({
           <div className="relative inline-block">
             <span
               className="absolute -left-8 top-1/2 -translate-y-1/2 text-[#F95F4A]/40 text-3xl"
-              style={{ fontFamily: "'PolySans Mono', monospace" }}
+              style={{ fontFamily: "'PolySans Trial', sans-serif" }}
             >
               [
             </span>
             <h1
-              className="text-5xl text-[#FEFCD9] tracking-tight"
+              className="text-5xl text-[#fafafa] tracking-tight"
               style={{ fontFamily: "'PolySans Bulky Wide', sans-serif" }}
             >
               c0nclav3
             </h1>
             <span
               className="absolute -right-8 top-1/2 -translate-y-1/2 text-[#F95F4A]/40 text-3xl"
-              style={{ fontFamily: "'PolySans Mono', monospace" }}
+              style={{ fontFamily: "'PolySans Trial', sans-serif" }}
             >
               ]
             </span>
           </div>
         </div>
         <p
-          className="relative z-10 text-sm text-[#FEFCD9]/30 mb-10 text-center max-w-[320px]"
+          className="relative z-10 text-sm text-[#fafafa]/30 mb-10 text-center max-w-[320px]"
           style={{ fontFamily: "'PolySans Trial', sans-serif" }}
         >
           Video conferencing for meetings, webinars, and collaboration
@@ -510,7 +454,7 @@ function MobileJoinScreen({
         <button
           onClick={() => setManualPhase("auth")}
           className="relative z-10 group flex items-center gap-3 px-8 py-3 bg-[#F95F4A] text-white text-xs uppercase tracking-widest rounded-lg active:scale-95 transition-all hover:bg-[#e8553f] hover:gap-4"
-          style={{ fontFamily: "'PolySans Mono', monospace" }}
+          style={{ fontFamily: "'PolySans Trial', sans-serif" }}
         >
           <span>LET'S GO</span>
           <ArrowRight className="w-4 h-4" />
@@ -522,27 +466,27 @@ function MobileJoinScreen({
   // Auth phase
   if (phase === "auth") {
     return (
-      <div className="flex-1 flex flex-col px-6 py-8 bg-[#060606] safe-area-pt relative overflow-hidden">
+      <div className="flex-1 flex flex-col px-6 py-8 bg-[#0a0a0b] safe-area-pt relative overflow-hidden">
         <div className="absolute inset-0 acm-bg-radial pointer-events-none" />
         <div className="absolute inset-0 acm-bg-dot-grid pointer-events-none" />
         <button
           onClick={() => setManualPhase("welcome")}
-          className="relative z-10 text-[10px] text-[#FEFCD9]/60 uppercase tracking-[0.3em] mb-8 mobile-glass-soft mobile-pill px-3 py-1 self-start"
-          style={{ fontFamily: "'PolySans Mono', monospace" }}
+          className="relative z-10 text-[10px] text-[#fafafa]/75 uppercase tracking-[0.3em] mb-8 mobile-glass-soft mobile-pill px-3 py-1 self-start"
+          style={{ fontFamily: "'PolySans Trial', sans-serif" }}
         >
           ← back
         </button>
 
         <div className="relative z-10 flex-1 flex flex-col justify-center">
           <h2
-            className="text-2xl text-[#FEFCD9] mb-2 text-center"
+            className="text-2xl text-[#fafafa] mb-2 text-center"
             style={{ fontFamily: "'PolySans Bulky Wide', sans-serif" }}
           >
             Join
           </h2>
           <p
-            className="text-xs text-[#FEFCD9]/40 uppercase tracking-widest text-center mb-8"
-            style={{ fontFamily: "'PolySans Mono', monospace" }}
+            className="text-xs text-[#fafafa]/56 uppercase tracking-widest text-center mb-8"
+            style={{ fontFamily: "'PolySans Trial', sans-serif" }}
           >
             choose how to continue
           </p>
@@ -551,10 +495,10 @@ function MobileJoinScreen({
             <button
               onClick={() => handleSocialSignIn("google")}
               disabled={isSigningIn}
-              className="w-full flex items-center justify-center gap-3 px-4 py-3 mobile-glass mobile-pill text-[#FEFCD9] hover:border-[#FEFCD9]/25 hover:bg-black/40 transition-all disabled:opacity-50"
+              className="w-full flex items-center justify-center gap-3 px-4 py-3 mobile-glass mobile-pill text-[#fafafa] hover:border-[#fafafa]/25 hover:bg-black/40 transition-all disabled:opacity-50"
             >
               {signInProvider === "google" ? (
-                <Loader2 className="w-5 h-5 animate-spin text-[#FEFCD9]" />
+                <Loader2 className="w-5 h-5 animate-spin text-[#fafafa]" />
               ) : (
                 <svg className="w-5 h-5 shrink-0" viewBox="0 0 24 24" aria-hidden="true">
                   <path
@@ -582,10 +526,10 @@ function MobileJoinScreen({
             <button
               onClick={() => handleSocialSignIn("apple")}
               disabled={isSigningIn}
-              className="w-full flex items-center justify-center gap-3 px-4 py-3 mobile-glass mobile-pill text-[#FEFCD9] hover:border-[#FEFCD9]/25 hover:bg-black/40 transition-all disabled:opacity-50"
+              className="w-full flex items-center justify-center gap-3 px-4 py-3 mobile-glass mobile-pill text-[#fafafa] hover:border-[#fafafa]/25 hover:bg-black/40 transition-all disabled:opacity-50"
             >
               {signInProvider === "apple" ? (
-                <Loader2 className="w-5 h-5 animate-spin text-[#FEFCD9]" />
+                <Loader2 className="w-5 h-5 animate-spin text-[#fafafa]" />
               ) : (
                 <img
                   src="/assets/apple-50.png"
@@ -601,10 +545,10 @@ function MobileJoinScreen({
             <button
               onClick={() => handleSocialSignIn("roblox")}
               disabled={isSigningIn}
-              className="w-full flex items-center justify-center gap-3 px-4 py-3 mobile-glass mobile-pill text-[#FEFCD9] hover:border-[#FEFCD9]/25 hover:bg-black/40 transition-all disabled:opacity-50"
+              className="w-full flex items-center justify-center gap-3 px-4 py-3 mobile-glass mobile-pill text-[#fafafa] hover:border-[#fafafa]/25 hover:bg-black/40 transition-all disabled:opacity-50"
             >
               {signInProvider === "roblox" ? (
-                <Loader2 className="w-5 h-5 animate-spin text-[#FEFCD9]" />
+                <Loader2 className="w-5 h-5 animate-spin text-[#fafafa]" />
               ) : (
                 <img
                   src="/roblox-logo.png"
@@ -620,10 +564,10 @@ function MobileJoinScreen({
             <button
               onClick={() => handleSocialSignIn("vercel")}
               disabled={isSigningIn}
-              className="w-full flex items-center justify-center gap-3 px-4 py-3 mobile-glass mobile-pill text-[#FEFCD9] hover:border-[#FEFCD9]/25 hover:bg-black/40 transition-all disabled:opacity-50"
+              className="w-full flex items-center justify-center gap-3 px-4 py-3 mobile-glass mobile-pill text-[#fafafa] hover:border-[#fafafa]/25 hover:bg-black/40 transition-all disabled:opacity-50"
             >
               {signInProvider === "vercel" ? (
-                <Loader2 className="w-5 h-5 animate-spin text-[#FEFCD9]" />
+                <Loader2 className="w-5 h-5 animate-spin text-[#fafafa]" />
               ) : (
                 <svg
                   className="w-5 h-5 shrink-0"
@@ -640,14 +584,14 @@ function MobileJoinScreen({
           </div>
 
           <div className="flex items-center gap-4 my-6">
-            <div className="flex-1 h-px bg-[#FEFCD9]/10" />
+            <div className="flex-1 h-px bg-[#fafafa]/10" />
             <span
-              className="text-[10px] text-[#FEFCD9]/30 uppercase tracking-widest"
-              style={{ fontFamily: "'PolySans Mono', monospace" }}
+              className="text-[10px] text-[#fafafa]/30 uppercase tracking-widest"
+              style={{ fontFamily: "'PolySans Trial', sans-serif" }}
             >
               or
             </span>
-            <div className="flex-1 h-px bg-[#FEFCD9]/10" />
+            <div className="flex-1 h-px bg-[#fafafa]/10" />
           </div>
 
           <input
@@ -655,7 +599,7 @@ function MobileJoinScreen({
             value={guestName}
             onChange={(e) => setGuestName(e.target.value)}
             placeholder="Enter your name"
-            className="w-full px-4 py-2.5 mobile-glass mobile-pill text-sm text-[#FEFCD9] placeholder:text-[#FEFCD9]/25 focus:border-[#F95F4A]/50 focus:outline-none mb-3"
+            className="w-full px-4 py-2.5 mobile-glass mobile-pill text-sm text-[#fafafa] placeholder:text-[#fafafa]/25 focus:border-[#F95F4A]/50 focus:outline-none mb-3"
             style={{ fontFamily: "'PolySans Trial', sans-serif" }}
             onKeyDown={(e) => {
               if (e.key === "Enter" && guestName.trim()) handleGuest();
@@ -676,12 +620,12 @@ function MobileJoinScreen({
 
   // Join phase
   return (
-    <div className="flex-1 flex flex-col bg-[#060606] safe-area-pt overflow-hidden relative">
+    <div className="flex-1 flex flex-col bg-[#0a0a0b] safe-area-pt overflow-hidden relative">
       <div className="absolute inset-0 acm-bg-radial pointer-events-none" />
       <div className="absolute inset-0 acm-bg-dot-grid pointer-events-none" />
       {/* Video preview */}
       <div className="relative flex-1 px-4 pt-3 pb-36 flex flex-col min-h-0">
-        <div className="relative flex-1 rounded-[28px] border border-[#FEFCD9]/10 bg-[#0d0e0d] overflow-hidden">
+        <div className="relative flex-1 rounded-[28px] border border-[#fafafa]/10 bg-[#131316] overflow-hidden">
           {isCameraOn && localStream ? (
             <video
               ref={videoRef}
@@ -691,11 +635,11 @@ function MobileJoinScreen({
               className="w-full h-full object-cover scale-x-[-1]"
             />
           ) : (
-            <div className="absolute inset-0 flex items-center justify-center bg-[#0d0e0d]">
+            <div className="absolute inset-0 flex items-center justify-center bg-[#131316]">
               <div className="absolute inset-0 bg-gradient-to-br from-[#F95F4A]/15 to-[#FF007A]/10" />
               <div className="relative w-20 h-20 rounded-full mobile-avatar flex items-center justify-center">
                 <span
-                  className="text-4xl text-[#FEFCD9] font-bold"
+                  className="text-4xl text-[#fafafa] font-bold"
                   style={{ fontFamily: "'PolySans Bulky Wide', sans-serif" }}
                 >
                   {userEmail[0]?.toUpperCase() || "?"}
@@ -711,7 +655,7 @@ function MobileJoinScreen({
               className={`w-9 h-9 rounded-full flex items-center justify-center transition-colors ${
                 isMicOn
                   ? "text-white"
-                  : "bg-[#ef4444] text-white shadow-[0_0_12px_rgba(239,68,68,0.35)]"
+                  : "bg-[#ea4335] text-white shadow-[0_0_12px_rgba(234, 67, 53,0.35)]"
               }`}
             >
               {isMicOn ? (
@@ -725,7 +669,7 @@ function MobileJoinScreen({
               className={`w-9 h-9 rounded-full flex items-center justify-center transition-colors ${
                 isCameraOn
                   ? "text-white"
-                  : "bg-[#ef4444] text-white shadow-[0_0_12px_rgba(239,68,68,0.35)]"
+                  : "bg-[#ea4335] text-white shadow-[0_0_12px_rgba(234, 67, 53,0.35)]"
               }`}
             >
               {isCameraOn ? (
@@ -739,7 +683,7 @@ function MobileJoinScreen({
           {/* User email */}
           <div className="absolute top-4 left-4 right-4 flex items-start justify-between gap-3">
             <div
-              className="min-w-0 max-w-[65%] h-8 px-3 flex items-center mobile-glass mobile-pill text-xs text-[#FEFCD9]/80 truncate"
+              className="min-w-0 max-w-[65%] h-8 px-3 flex items-center mobile-glass mobile-pill text-xs text-[#fafafa]/80 truncate"
               style={{ fontFamily: "'PolySans Trial', sans-serif" }}
             >
               {userEmail}
@@ -759,7 +703,7 @@ function MobileJoinScreen({
                 <button
                   onClick={handleSignOut}
                   disabled={isSigningOut}
-                  className="shrink-0 h-8 px-3 flex items-center mobile-glass mobile-pill text-xs text-[#FEFCD9]/80 disabled:opacity-50"
+                  className="shrink-0 h-8 px-3 flex items-center mobile-glass mobile-pill text-xs text-[#fafafa]/80 disabled:opacity-50"
                   style={{ fontFamily: "'PolySans Trial', sans-serif" }}
                 >
                   {isSigningOut ? "Signing out..." : "Sign out"}
@@ -769,7 +713,7 @@ function MobileJoinScreen({
           </div>
 
           {showPermissionHint && (
-            <div className="absolute top-4 right-4 flex items-center gap-2 px-3 py-2 mobile-glass-soft rounded-full text-xs text-[#FEFCD9]/70">
+            <div className="absolute top-4 right-4 flex items-center gap-2 px-3 py-2 mobile-glass-soft rounded-full text-xs text-[#fafafa]/82">
               <AlertCircle className="w-3.5 h-3.5 text-[#F95F4A]" />
               Allow access
             </div>
@@ -792,7 +736,7 @@ function MobileJoinScreen({
               className={`flex-1 py-2.5 text-xs uppercase tracking-[0.25em] rounded-full transition-all ${
                 activeTab === "new"
                   ? "bg-[#F95F4A] text-white"
-                  : "text-[#FEFCD9]/50"
+                  : "text-[#fafafa]/66"
               }`}
               style={{ fontFamily: "'PolySans Trial', sans-serif" }}
               disabled={isRoutedRoom}
@@ -808,7 +752,7 @@ function MobileJoinScreen({
               className={`flex-1 py-2.5 text-xs uppercase tracking-[0.25em] rounded-full transition-all ${
                 activeTab === "join"
                   ? "bg-[#F95F4A] text-white"
-                  : "text-[#FEFCD9]/50"
+                  : "text-[#fafafa]/66"
               } ${isRoutedRoom ? "opacity-60" : ""}`}
               style={{ fontFamily: "'PolySans Trial', sans-serif" }}
             >
@@ -822,7 +766,7 @@ function MobileJoinScreen({
                 <div className="relative flex-1 h-full">
                   {suggestionSuffix && (
                     <div
-                      className="pointer-events-none absolute inset-0 px-2 flex items-center text-sm text-[#FEFCD9]/30 truncate"
+                      className="pointer-events-none absolute inset-0 px-2 flex items-center text-sm text-[#fafafa]/30 truncate"
                       style={{ fontFamily: "'PolySans Trial', sans-serif" }}
                     >
                       <span className="text-transparent">{normalizedRoomId}</span>
@@ -846,7 +790,7 @@ function MobileJoinScreen({
                     autoCapitalize="none"
                     autoCorrect="off"
                     spellCheck={false}
-                    className="relative w-full h-full bg-transparent px-2 text-sm text-[#FEFCD9] placeholder:text-[#FEFCD9]/30 focus:outline-none"
+                    className="relative w-full h-full bg-transparent px-2 text-sm text-[#fafafa] placeholder:text-[#fafafa]/30 focus:outline-none"
                     style={{ fontFamily: "'PolySans Trial', sans-serif" }}
                     onKeyDown={(e) => {
                       if (e.key === "Enter" && canJoin) handleJoin();
@@ -892,7 +836,7 @@ function MobileJoinScreen({
                   autoCapitalize="none"
                   autoCorrect="off"
                   spellCheck={false}
-                  className="relative flex-1 h-full bg-transparent px-2 text-sm text-[#FEFCD9] placeholder:text-[#FEFCD9]/30 focus:outline-none"
+                  className="relative flex-1 h-full bg-transparent px-2 text-sm text-[#fafafa] placeholder:text-[#fafafa]/30 focus:outline-none"
                   style={{ fontFamily: "'PolySans Trial', sans-serif" }}
                   onKeyDown={(e) => {
                     if (e.key === "Enter" && !isLoading) handleCreateRoom();
@@ -919,76 +863,6 @@ function MobileJoinScreen({
             )}
           </div>
 
-          {isSignedInUser && activeTab === "new" && !isRoutedRoom && (
-            <button
-              type="button"
-              onClick={() => setIsScheduleOpen(true)}
-              disabled={isLoading}
-              className="mt-3 w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-full border border-[#FEFCD9]/15 text-[#FEFCD9]/85 hover:border-[#FEFCD9]/35 hover:text-[#FEFCD9] transition-colors disabled:opacity-50"
-            >
-              <CalendarClock className="w-4 h-4" />
-              <span
-                className="text-sm font-medium"
-                style={{ fontFamily: "'PolySans Trial', sans-serif" }}
-              >
-                Schedule a meeting
-              </span>
-            </button>
-          )}
-
-          {isSignedInUser &&
-            activeTab === "new" &&
-            !isRoutedRoom &&
-            upcomingMeetings.length > 0 && (
-              <div className="mt-3 space-y-1.5">
-                <p
-                  className="text-[10px] uppercase tracking-wider text-[#FEFCD9]/40"
-                  style={{ fontFamily: "'PolySans Mono', monospace" }}
-                >
-                  Upcoming
-                </p>
-                {upcomingMeetings.slice(0, 3).map((meeting) => {
-                  const start = new Date(meeting.scheduledStartAt);
-                  const isToday =
-                    start.toDateString() === new Date().toDateString();
-                  const timeLabel = isToday
-                    ? start.toLocaleTimeString(undefined, {
-                        hour: "numeric",
-                        minute: "2-digit",
-                      })
-                    : start.toLocaleString(undefined, {
-                        month: "short",
-                        day: "numeric",
-                        hour: "numeric",
-                        minute: "2-digit",
-                      });
-                  return (
-                    <div
-                      key={meeting.id}
-                      className="flex items-center gap-2 rounded-lg border border-[#FEFCD9]/10 bg-black/25 px-3 py-2"
-                    >
-                      <div className="min-w-0 flex-1">
-                        <p className="text-xs text-[#FEFCD9]/85 truncate">
-                          {meeting.title}
-                        </p>
-                        <p className="text-[10px] text-[#FEFCD9]/45">
-                          {timeLabel} · /{meeting.roomCode}
-                        </p>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => void handleCopyMeetingLink(meeting)}
-                        className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[10px] text-[#FEFCD9]/55 hover:bg-[#FEFCD9]/10 hover:text-[#FEFCD9] transition-colors"
-                      >
-                        <Copy className="h-3 w-3" />
-                        {copiedMeetingId === meeting.id ? "copied" : "copy"}
-                      </button>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-
         {meetError && onDismissMeetError && (
           <div className="mt-4">
             <MeetsErrorBanner
@@ -1014,23 +888,15 @@ function MobileJoinScreen({
       </div>
 
       {isLoading && (
-        <div className="absolute inset-0 bg-[#0d0e0d]/80 flex items-center justify-center z-50">
+        <div className="absolute inset-0 bg-[#131316]/80 flex items-center justify-center z-50">
           <div className="flex flex-col items-center gap-3">
             <Loader2 className="w-8 h-8 text-[#F95F4A] animate-spin" />
-            <span className="text-sm text-[#FEFCD9]/60">
+            <span className="text-sm text-[#fafafa]/75">
               {connectionState === "reconnecting" ? "Reconnecting..." : "Joining..."}
             </span>
           </div>
         </div>
       )}
-
-      <ScheduleMeetingModal
-        open={isScheduleOpen}
-        onClose={() => setIsScheduleOpen(false)}
-        onScheduled={(meeting) => {
-          setUpcomingMeetings((prev) => [meeting, ...prev]);
-        }}
-      />
     </div>
   );
 }

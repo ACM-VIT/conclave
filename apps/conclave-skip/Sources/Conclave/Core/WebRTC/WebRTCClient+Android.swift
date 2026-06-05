@@ -34,7 +34,7 @@ final class WebRTCClient {
 
     func configure(socketManager: SocketIOManager, rtpCapabilities: RtpCapabilities) { fatalError() }
     func createTransports() async throws { fatalError() }
-    func consumeProducer(producerId: String, producerUserId: String) async throws { fatalError() }
+    func consumeProducer(producerId: String, producerUserId: String, producerType: String = "webcam") async throws { fatalError() }
     func closeConsumer(producerId: String, userId: String) { fatalError() }
     func updateVideoQuality(_ quality: VideoQuality) { fatalError() }
     func startProducingAudio() async throws { fatalError() }

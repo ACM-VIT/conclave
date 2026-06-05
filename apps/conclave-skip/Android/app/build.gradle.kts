@@ -89,3 +89,12 @@ android {
         }
     }
 }
+
+dependencies {
+    // The Activity theme (res/values/themes.xml) is `Theme.Material3.Dark.*`,
+    // whose color attributes (colorOnPrimary, colorSurface, …) ship in the
+    // Material Components XML library. Compose Material3 does NOT provide the
+    // XML theme attrs, so this AAR must be a direct dependency or the merged
+    // resources fail with "style attribute 'attr/colorOnPrimary' not found".
+    implementation("com.google.android.material:material:1.12.0")
+}

@@ -38,7 +38,7 @@ export default function MeetsErrorBanner({
         <div className="flex flex-col">
           <span className="text-sm">{meetError.message}</span>
           {helperText && (
-            <span className="text-[11px] text-[#FEFCD9]/60">{helperText}</span>
+            <span className="text-[11px] text-[#fafafa]/75">{helperText}</span>
           )}
         </div>
       </div>

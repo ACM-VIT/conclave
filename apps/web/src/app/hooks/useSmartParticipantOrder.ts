@@ -56,6 +56,7 @@ export function useSmartParticipantOrder<T extends ParticipantWithMediaHints>(
   const promoteTimeoutRef = useRef<number | null>(null);
   const previousOrderRef = useRef<Map<string, number>>(new Map());
   const previousRaisedMapRef = useRef<Map<string, boolean>>(new Map());
+  const previousResultRef = useRef<T[]>([]);
 
   const clearPromoteTimeout = () => {
     if (promoteTimeoutRef.current) {
@@ -233,11 +234,25 @@ export function useSmartParticipantOrder<T extends ParticipantWithMediaHints>(
     });
   }, [participants, featuredSpeakerId, raisedOrder]);
 
-  useEffect(() => {
-    previousOrderRef.current = new Map(
-      orderedParticipants.map((participant, index) => [participant.userId, index] as const)
-    );
+  // Return the SAME array reference when the resulting order is element-
+  // identical (e.g. a participant's mute toggled but the sort didn't move
+  // anyone). Protects every downstream useMemo/FLIP from re-running on a no-op
+  // reorder — same trick `raisedOrder` already uses above.
+  const stableOrdered = useMemo(() => {
+    const prev = previousResultRef.current;
+    const same =
+      prev.length === orderedParticipants.length &&
+      orderedParticipants.every((participant, index) => participant === prev[index]);
+    const next = same ? prev : orderedParticipants;
+    previousResultRef.current = next;
+    return next;
   }, [orderedParticipants]);
 
-  return orderedParticipants;
+  useEffect(() => {
+    previousOrderRef.current = new Map(
+      stableOrdered.map((participant, index) => [participant.userId, index] as const)
+    );
+  }, [stableOrdered]);
+
+  return stableOrdered;
 }

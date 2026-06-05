@@ -2,15 +2,20 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>ITSAppUsesNonExemptEncryption</key>
-    <false/>
-    <key>NSCameraUsageDescription</key>
-    <string>Conclave needs access to your camera to share video in meetings.</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+	<key>NSCameraUsageDescription</key>
+	<string>Conclave needs access to your camera to share video in meetings.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Conclave needs access to your microphone to share audio in meetings.</string>
 	<key>SFU_CLIENT_ID</key>
-    <string>public</string>
-    <key>SFU_JOIN_URL</key>
+	<string>public</string>
+	<key>SFU_JOIN_URL</key>
 	<string>https://conclave.acmvit.in/api/sfu/join</string>
 	<key>UIBackgroundModes</key>
 	<array>

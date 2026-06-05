@@ -411,8 +411,8 @@ function MobileControlsBar({
         <div className="relative flex items-center justify-center px-4 pb-[calc(12px+env(safe-area-inset-bottom))] pt-4">
           <div className="mobile-glass mobile-pill flex items-center gap-3 px-4 py-3">
             <span
-              className="text-[11px] text-[#FEFCD9]/70 uppercase tracking-[0.18em]"
-              style={{ fontFamily: "'PolySans Mono', monospace" }}
+              className="text-[11px] text-[#fafafa]/82 uppercase tracking-[0.18em]"
+              style={{ fontFamily: "'PolySans Trial', sans-serif" }}
             >
               {webinarConfig?.attendeeCount ?? 0} watching
             </span>
@@ -452,7 +452,7 @@ function MobileControlsBar({
               <div className="mx-auto mobile-sheet-grabber" />
               <button
                 onClick={() => setIsReactionMenuOpen(false)}
-                className="absolute right-0 top-0 h-7 w-7 mobile-pill mobile-glass-soft flex items-center justify-center text-[#FEFCD9]/70 hover:text-[#FEFCD9]"
+                className="absolute right-0 top-0 h-7 w-7 mobile-pill mobile-glass-soft flex items-center justify-center text-[#fafafa]/82 hover:text-[#fafafa]"
                 aria-label="Close reactions"
               >
                 <X className="h-3.5 w-3.5" />
@@ -463,7 +463,7 @@ function MobileControlsBar({
                 <button
                   key={reaction.id}
                   onClick={() => handleReactionClick(reaction)}
-                  className="h-11 w-11 sm:h-12 sm:w-12 rounded-full bg-[#141414]/70 border border-[#FEFCD9]/10 text-xl sm:text-2xl flex items-center justify-center transition-transform duration-150 active:scale-95 hover:bg-[#FEFCD9]/10"
+                  className="h-11 w-11 sm:h-12 sm:w-12 rounded-full bg-[#141414]/70 border border-[#fafafa]/10 text-xl sm:text-2xl flex items-center justify-center transition-transform duration-150 active:scale-95 hover:bg-[#fafafa]/10"
                   aria-label={`React ${reaction.label}`}
                 >
                   {reaction.kind === "emoji" ? (
@@ -504,7 +504,7 @@ function MobileControlsBar({
             <div className="mx-auto mobile-sheet-grabber" />
             <button
               onClick={() => setIsMoreMenuOpen(false)}
-              className="absolute right-0 top-0 h-7 w-7 mobile-pill mobile-glass-soft flex items-center justify-center text-[#FEFCD9]/70 hover:text-[#FEFCD9]"
+              className="absolute right-0 top-0 h-7 w-7 mobile-pill mobile-glass-soft flex items-center justify-center text-[#fafafa]/82 hover:text-[#fafafa]"
               aria-label="Close menu"
             >
               <X className="h-3.5 w-3.5" />
@@ -515,7 +515,7 @@ function MobileControlsBar({
               onToggleParticipants?.();
               setIsMoreMenuOpen(false);
             }}
-            className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-[#FEFCD9] hover:bg-[#FEFCD9]/5 active:bg-[#FEFCD9]/10 transition-transform duration-150 touch-feedback"
+            className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-[#fafafa] hover:bg-[#fafafa]/5 active:bg-[#fafafa]/10 transition-transform duration-150 touch-feedback"
           >
             <div className="h-9 w-9 rounded-xl bg-[#2b2b2b] border border-white/5 flex items-center justify-center">
               <Users className="w-4.5 h-4.5" />
@@ -533,7 +533,7 @@ function MobileControlsBar({
               setIsSettingsSheetOpen(true);
               void fetchAudioDevices();
             }}
-            className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-[#FEFCD9] hover:bg-[#FEFCD9]/5 active:bg-[#FEFCD9]/10 transition-transform duration-150 touch-feedback"
+            className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-[#fafafa] hover:bg-[#fafafa]/5 active:bg-[#fafafa]/10 transition-transform duration-150 touch-feedback"
           >
             <div className="h-9 w-9 rounded-xl bg-[#2b2b2b] border border-white/5 flex items-center justify-center">
               <Settings className="w-4.5 h-4.5" />
@@ -550,8 +550,8 @@ function MobileControlsBar({
                   ? "opacity-30"
                   : isHandRaised
                     ? "text-amber-400"
-                    : "text-[#FEFCD9]"
-                } hover:bg-[#FEFCD9]/5 active:bg-[#FEFCD9]/10`}
+                    : "text-[#fafafa]"
+                } hover:bg-[#fafafa]/5 active:bg-[#fafafa]/10`}
             >
               <div
                 className={`h-9 w-9 rounded-xl border border-white/5 flex items-center justify-center ${
@@ -572,8 +572,8 @@ function MobileControlsBar({
                   ? "opacity-30"
                   : isScreenSharing
                     ? "text-[#F95F4A]"
-                    : "text-[#FEFCD9]"
-                } hover:bg-[#FEFCD9]/5 active:bg-[#FEFCD9]/10`}
+                    : "text-[#fafafa]"
+                } hover:bg-[#fafafa]/5 active:bg-[#fafafa]/10`}
             >
               <div
                 className={`h-9 w-9 rounded-xl border border-white/5 flex items-center justify-center ${
@@ -592,7 +592,7 @@ function MobileControlsBar({
                   setIsMoreMenuOpen(false);
                   setIsBrowserSheetOpen(true);
                 }}
-                className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-[#FEFCD9] hover:bg-[#FEFCD9]/5 active:bg-[#FEFCD9]/10 transition-transform duration-150 touch-feedback"
+                className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-[#fafafa] hover:bg-[#fafafa]/5 active:bg-[#fafafa]/10 transition-transform duration-150 touch-feedback"
               >
                 <div className="h-9 w-9 rounded-xl bg-[#2b2b2b] border border-white/5 flex items-center justify-center">
                   <Globe className="w-4.5 h-4.5" />
@@ -600,7 +600,7 @@ function MobileControlsBar({
                 <span className="text-sm font-medium">Shared browser</span>
                 <span
                   className={`ml-auto text-[10px] uppercase tracking-[0.2em] ${
-                    isBrowserActive ? "text-emerald-300" : "text-[#FEFCD9]/40"
+                    isBrowserActive ? "text-emerald-300" : "text-[#fafafa]/56"
                   }`}
                 >
                   {isBrowserActive ? "Live" : "Off"}
@@ -617,7 +617,7 @@ function MobileControlsBar({
                   }
                   setIsMoreMenuOpen(false);
                 }}
-                className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-[#FEFCD9] hover:bg-[#FEFCD9]/5 active:bg-[#FEFCD9]/10 transition-transform duration-150 touch-feedback"
+                className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-[#fafafa] hover:bg-[#fafafa]/5 active:bg-[#fafafa]/10 transition-transform duration-150 touch-feedback"
               >
                 <div className="h-9 w-9 rounded-xl bg-[#2b2b2b] border border-white/5 flex items-center justify-center">
                   <Globe className="w-4.5 h-4.5" />
@@ -627,7 +627,7 @@ function MobileControlsBar({
                 </span>
                 <span
                   className={`ml-auto text-[10px] uppercase tracking-[0.2em] ${
-                    isWhiteboardActive ? "text-emerald-300" : "text-[#FEFCD9]/40"
+                    isWhiteboardActive ? "text-emerald-300" : "text-[#fafafa]/56"
                   }`}
                 >
                   {isWhiteboardActive ? "Live" : "Off"}
@@ -647,7 +647,7 @@ function MobileControlsBar({
                   }
                   setIsMoreMenuOpen(false);
                 }}
-                className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-[#FEFCD9] hover:bg-[#FEFCD9]/5 active:bg-[#FEFCD9]/10 transition-transform duration-150 touch-feedback"
+                className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-[#fafafa] hover:bg-[#fafafa]/5 active:bg-[#fafafa]/10 transition-transform duration-150 touch-feedback"
               >
                 <div className="h-9 w-9 rounded-xl bg-[#2b2b2b] border border-white/5 flex items-center justify-center">
                   <Code2 className="w-4.5 h-4.5" />
@@ -661,7 +661,7 @@ function MobileControlsBar({
                   className={`ml-auto text-[10px] uppercase tracking-[0.2em] ${
                     isDevPlaygroundActive
                       ? "text-emerald-300"
-                      : "text-[#FEFCD9]/40"
+                      : "text-[#fafafa]/56"
                   }`}
                 >
                   {isDevPlaygroundActive ? "Live" : "Off"}
@@ -677,8 +677,8 @@ function MobileControlsBar({
                   setIsMoreMenuOpen(false);
                 }}
                 className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-transform duration-150 touch-feedback ${
-                  isBrowserAudioMuted ? "text-[#F95F4A]" : "text-[#FEFCD9]"
-                } hover:bg-[#FEFCD9]/5 active:bg-[#FEFCD9]/10`}
+                  isBrowserAudioMuted ? "text-[#F95F4A]" : "text-[#fafafa]"
+                } hover:bg-[#fafafa]/5 active:bg-[#fafafa]/10`}
               >
                 <div
                   className={`h-9 w-9 rounded-xl border border-white/5 flex items-center justify-center ${
@@ -692,7 +692,7 @@ function MobileControlsBar({
                   )}
                 </div>
                 <span className="text-sm font-medium">Shared browser audio</span>
-                <span className="ml-auto text-[10px] uppercase tracking-[0.2em] text-[#FEFCD9]/40">
+                <span className="ml-auto text-[10px] uppercase tracking-[0.2em] text-[#fafafa]/56">
                   {isBrowserAudioMuted ? "Muted" : "On"}
                 </span>
               </button>
@@ -704,8 +704,8 @@ function MobileControlsBar({
                   setIsMoreMenuOpen(false);
                 }}
                 className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-transform duration-150 touch-feedback ${
-                  isAppsLocked ? "text-amber-400" : "text-[#FEFCD9]"
-                } hover:bg-[#FEFCD9]/5 active:bg-[#FEFCD9]/10`}
+                  isAppsLocked ? "text-amber-400" : "text-[#fafafa]"
+                } hover:bg-[#fafafa]/5 active:bg-[#fafafa]/10`}
               >
                 <div
                   className={`h-9 w-9 rounded-xl border border-white/5 flex items-center justify-center ${
@@ -727,8 +727,8 @@ function MobileControlsBar({
                 }}
                 className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-transform duration-150 touch-feedback ${isRoomLocked
                     ? "text-amber-400"
-                    : "text-[#FEFCD9]"
-                  } hover:bg-[#FEFCD9]/5 active:bg-[#FEFCD9]/10`}
+                    : "text-[#fafafa]"
+                  } hover:bg-[#fafafa]/5 active:bg-[#fafafa]/10`}
               >
                 <div
                   className={`h-9 w-9 rounded-xl border border-white/5 flex items-center justify-center ${
@@ -751,8 +751,8 @@ function MobileControlsBar({
                   setIsMoreMenuOpen(false);
                 }}
                 className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-transform duration-150 touch-feedback ${
-                  isNoGuests ? "text-amber-400" : "text-[#FEFCD9]"
-                } hover:bg-[#FEFCD9]/5 active:bg-[#FEFCD9]/10`}
+                  isNoGuests ? "text-amber-400" : "text-[#fafafa]"
+                } hover:bg-[#fafafa]/5 active:bg-[#fafafa]/10`}
               >
                 <div
                   className={`h-9 w-9 rounded-xl border border-white/5 flex items-center justify-center ${
@@ -774,8 +774,8 @@ function MobileControlsBar({
                 }}
                 className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-transform duration-150 touch-feedback ${isChatLocked
                     ? "text-amber-400"
-                    : "text-[#FEFCD9]"
-                  } hover:bg-[#FEFCD9]/5 active:bg-[#FEFCD9]/10`}
+                    : "text-[#fafafa]"
+                  } hover:bg-[#fafafa]/5 active:bg-[#fafafa]/10`}
               >
                 <div
                   className={`h-9 w-9 rounded-xl border border-white/5 flex items-center justify-center ${
@@ -794,8 +794,8 @@ function MobileControlsBar({
                   setIsMoreMenuOpen(false);
                 }}
                 className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-transform duration-150 touch-feedback ${
-                  isTtsDisabled ? "text-amber-400" : "text-[#FEFCD9]"
-                } hover:bg-[#FEFCD9]/5 active:bg-[#FEFCD9]/10`}
+                  isTtsDisabled ? "text-amber-400" : "text-[#fafafa]"
+                } hover:bg-[#fafafa]/5 active:bg-[#fafafa]/10`}
               >
                 <div
                   className={`h-9 w-9 rounded-xl border border-white/5 flex items-center justify-center ${
@@ -816,8 +816,8 @@ function MobileControlsBar({
                   setIsMoreMenuOpen(false);
                 }}
                 className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-transform duration-150 touch-feedback ${
-                  isDmEnabled ? "text-amber-300" : "text-[#FEFCD9]"
-                } hover:bg-[#FEFCD9]/5 active:bg-[#FEFCD9]/10`}
+                  isDmEnabled ? "text-amber-300" : "text-[#fafafa]"
+                } hover:bg-[#fafafa]/5 active:bg-[#fafafa]/10`}
               >
                 <div
                   className={`h-9 w-9 rounded-xl border border-white/5 flex items-center justify-center ${
@@ -857,7 +857,7 @@ function MobileControlsBar({
             <div className="mx-auto mobile-sheet-grabber" />
             <button
               onClick={() => setIsSettingsSheetOpen(false)}
-              className="absolute right-0 top-0 h-7 w-7 mobile-pill mobile-glass-soft flex items-center justify-center text-[#FEFCD9]/70 hover:text-[#FEFCD9]"
+              className="absolute right-0 top-0 h-7 w-7 mobile-pill mobile-glass-soft flex items-center justify-center text-[#fafafa]/82 hover:text-[#fafafa]"
               aria-label="Close settings"
             >
               <X className="h-3.5 w-3.5" />
@@ -865,19 +865,19 @@ function MobileControlsBar({
           </div>
 
             <div className="px-1">
-              <h2 className="text-lg font-medium text-[#FEFCD9]">
+              <h2 className="text-lg font-medium text-[#fafafa]">
                 Meeting settings
               </h2>
-              <p className="mt-1 text-xs text-[#FEFCD9]/55">
+              <p className="mt-1 text-xs text-[#fafafa]/55">
                 Audio, access, and webinar controls.
               </p>
             </div>
 
             <div className="mt-5 space-y-5">
               <section className="space-y-3">
-                <h3 className="text-sm font-semibold text-[#FEFCD9]">Audio</h3>
+                <h3 className="text-sm font-semibold text-[#fafafa]">Audio</h3>
                 <div className="space-y-2">
-                  <label className="text-xs text-[#FEFCD9]/70">
+                  <label className="text-xs text-[#fafafa]/82">
                     Microphone
                   </label>
                   <select
@@ -888,7 +888,7 @@ function MobileControlsBar({
                     disabled={
                       !onAudioInputDeviceChange || audioInputDevices.length === 0
                     }
-                    className="w-full bg-black/40 border border-[#FEFCD9]/10 rounded-xl px-3 py-2 text-sm text-[#FEFCD9] focus:outline-none focus:border-[#FEFCD9]/25 disabled:opacity-40 disabled:cursor-not-allowed"
+                    className="w-full bg-black/40 border border-[#fafafa]/10 rounded-xl px-3 py-2 text-sm text-[#fafafa] focus:outline-none focus:border-[#fafafa]/25 disabled:opacity-40 disabled:cursor-not-allowed"
                   >
                     {audioInputDevices.length === 0 ? (
                       <option value="">No microphones found</option>
@@ -906,7 +906,7 @@ function MobileControlsBar({
                 </div>
 
                 <div className="space-y-2">
-                  <label className="text-xs text-[#FEFCD9]/70">Speaker</label>
+                  <label className="text-xs text-[#fafafa]/82">Speaker</label>
                   <select
                     value={selectedAudioOutputValue ?? ""}
                     onChange={(event) =>
@@ -916,7 +916,7 @@ function MobileControlsBar({
                       !onAudioOutputDeviceChange ||
                       audioOutputDevices.length === 0
                     }
-                    className="w-full bg-black/40 border border-[#FEFCD9]/10 rounded-xl px-3 py-2 text-sm text-[#FEFCD9] focus:outline-none focus:border-[#FEFCD9]/25 disabled:opacity-40 disabled:cursor-not-allowed"
+                    className="w-full bg-black/40 border border-[#fafafa]/10 rounded-xl px-3 py-2 text-sm text-[#fafafa] focus:outline-none focus:border-[#fafafa]/25 disabled:opacity-40 disabled:cursor-not-allowed"
                   >
                     {audioOutputDevices.length === 0 ? (
                       <option value="">No speakers found</option>
@@ -934,7 +934,7 @@ function MobileControlsBar({
                 </div>
 
                 {isLoadingAudioDevices && (
-                  <p className="text-xs text-[#FEFCD9]/55">
+                  <p className="text-xs text-[#fafafa]/55">
                     Loading devices...
                   </p>
                 )}
@@ -944,7 +944,7 @@ function MobileControlsBar({
                 )}
 
                 {audioOutputDevices.length === 0 && !audioDevicesError && (
-                  <p className="text-xs text-[#FEFCD9]/45">
+                  <p className="text-xs text-[#fafafa]/75">
                     Speaker selection may be limited in this mobile browser.
                   </p>
                 )}
@@ -953,10 +953,10 @@ function MobileControlsBar({
               {isAdmin ? (
                 <>
                   <section className="space-y-3">
-                    <h3 className="text-sm font-semibold text-[#FEFCD9]">
+                    <h3 className="text-sm font-semibold text-[#fafafa]">
                       Meeting access
                     </h3>
-                    <p className="text-xs text-[#FEFCD9]/60">
+                    <p className="text-xs text-[#fafafa]/75">
                       {meetingRequiresInviteCode
                         ? "Invite code required to join."
                         : "Open meeting. Add a code to protect it."}
@@ -969,7 +969,7 @@ function MobileControlsBar({
                           setMeetingInviteCodeInput(event.target.value)
                         }
                         placeholder="Invite code"
-                        className="w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-[#FEFCD9] outline-none placeholder:text-[#FEFCD9]/30 focus:border-[#FEFCD9]/25"
+                        className="w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-[#fafafa] outline-none placeholder:text-[#fafafa]/30 focus:border-[#fafafa]/25"
                       />
                       <div className="flex items-center gap-2">
                         <button
@@ -1029,7 +1029,7 @@ function MobileControlsBar({
                             !onUpdateMeetingConfig ||
                             !meetingRequiresInviteCode
                           }
-                          className="flex-1 rounded-lg bg-white/10 px-3 py-2 text-sm text-[#FEFCD9]/80 transition hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-40"
+                          className="flex-1 rounded-lg bg-white/10 px-3 py-2 text-sm text-[#fafafa]/80 transition hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-40"
                         >
                           Clear
                         </button>
@@ -1047,11 +1047,11 @@ function MobileControlsBar({
 
                   <section className="space-y-3">
                     <div className="flex items-center justify-between">
-                      <h3 className="text-sm font-semibold text-[#FEFCD9]">
+                      <h3 className="text-sm font-semibold text-[#fafafa]">
                         Webinar
                       </h3>
                       {webinarRole ? (
-                        <span className="text-xs text-[#FEFCD9]/60">
+                        <span className="text-xs text-[#fafafa]/75">
                           Role: {webinarRole}
                         </span>
                       ) : null}
@@ -1081,7 +1081,7 @@ function MobileControlsBar({
                           )
                         }
                         disabled={isWebinarWorking || !onUpdateWebinarConfig}
-                        className="w-full rounded-lg border border-white/10 px-3 py-2 text-left text-sm text-[#FEFCD9] transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
+                        className="w-full rounded-lg border border-white/10 px-3 py-2 text-left text-sm text-[#fafafa] transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
                       >
                         Webinar: {webinarConfig?.enabled ? "On" : "Off"}
                       </button>
@@ -1113,7 +1113,7 @@ function MobileControlsBar({
                           !onUpdateWebinarConfig ||
                           !webinarConfig?.enabled
                         }
-                        className="w-full rounded-lg border border-white/10 px-3 py-2 text-left text-sm text-[#FEFCD9] transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
+                        className="w-full rounded-lg border border-white/10 px-3 py-2 text-left text-sm text-[#fafafa] transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
                       >
                         Public access: {webinarConfig?.publicAccess ? "On" : "Off"}
                       </button>
@@ -1145,19 +1145,19 @@ function MobileControlsBar({
                           !onUpdateWebinarConfig ||
                           !webinarConfig?.enabled
                         }
-                        className="w-full rounded-lg border border-white/10 px-3 py-2 text-left text-sm text-[#FEFCD9] transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
+                        className="w-full rounded-lg border border-white/10 px-3 py-2 text-left text-sm text-[#fafafa] transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
                       >
                         Webinar lock: {webinarConfig?.locked ? "On" : "Off"}
                       </button>
                     </div>
 
-                    <p className="text-xs text-[#FEFCD9]/60">
+                    <p className="text-xs text-[#fafafa]/75">
                       Attendees:{" "}
-                      <span className="text-[#FEFCD9]">
+                      <span className="text-[#fafafa]">
                         {webinarConfig?.attendeeCount ?? 0}
                       </span>{" "}
                       /{" "}
-                      <span className="text-[#FEFCD9]">
+                      <span className="text-[#fafafa]">
                         {webinarConfig?.maxAttendees ?? 500}
                       </span>
                     </p>
@@ -1170,7 +1170,7 @@ function MobileControlsBar({
                         value={webinarCapInput}
                         onChange={(event) => setWebinarCapInput(event.target.value)}
                         placeholder="Attendee cap"
-                        className="w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-[#FEFCD9] outline-none placeholder:text-[#FEFCD9]/30 focus:border-[#FEFCD9]/25"
+                        className="w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-[#fafafa] outline-none placeholder:text-[#fafafa]/30 focus:border-[#fafafa]/25"
                       />
                       <button
                         type="button"
@@ -1199,7 +1199,7 @@ function MobileControlsBar({
                           !webinarConfig?.enabled ||
                           webinarCapValue == null
                         }
-                        className="rounded-lg bg-white/10 px-3 py-2 text-sm text-[#FEFCD9] transition hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-40"
+                        className="rounded-lg bg-white/10 px-3 py-2 text-sm text-[#fafafa] transition hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-40"
                       >
                         Save
                       </button>
@@ -1213,7 +1213,7 @@ function MobileControlsBar({
                           setWebinarInviteCodeInput(event.target.value)
                         }
                         placeholder="Invite code"
-                        className="w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-[#FEFCD9] outline-none placeholder:text-[#FEFCD9]/30 focus:border-[#FEFCD9]/25"
+                        className="w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-[#fafafa] outline-none placeholder:text-[#fafafa]/30 focus:border-[#fafafa]/25"
                       />
                       <div className="flex items-center gap-2">
                         <button
@@ -1274,7 +1274,7 @@ function MobileControlsBar({
                             !onUpdateWebinarConfig ||
                             !webinarConfig?.requiresInviteCode
                           }
-                          className="flex-1 rounded-lg bg-white/10 px-3 py-2 text-sm text-[#FEFCD9]/80 transition hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-40"
+                          className="flex-1 rounded-lg bg-white/10 px-3 py-2 text-sm text-[#fafafa]/80 transition hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-40"
                         >
                           Clear
                         </button>
@@ -1286,7 +1286,7 @@ function MobileControlsBar({
                         readOnly
                         value={webinarLink ?? ""}
                         placeholder="Generate webinar link"
-                        className="w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-[#FEFCD9] outline-none placeholder:text-[#FEFCD9]/30"
+                        className="w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-[#fafafa] outline-none placeholder:text-[#fafafa]/30"
                       />
                       <div className="flex items-center gap-2">
                         <button
@@ -1309,7 +1309,7 @@ function MobileControlsBar({
                             !onGenerateWebinarLink ||
                             !webinarConfig?.enabled
                           }
-                          className="flex-1 rounded-lg bg-white/10 px-3 py-2 text-sm text-[#FEFCD9] transition hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-40"
+                          className="flex-1 rounded-lg bg-white/10 px-3 py-2 text-sm text-[#fafafa] transition hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-40"
                         >
                           Generate
                         </button>
@@ -1333,7 +1333,7 @@ function MobileControlsBar({
                             !onRotateWebinarLink ||
                             !webinarConfig?.enabled
                           }
-                          className="flex-1 rounded-lg bg-white/10 px-3 py-2 text-sm text-[#FEFCD9] transition hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-40"
+                          className="flex-1 rounded-lg bg-white/10 px-3 py-2 text-sm text-[#fafafa] transition hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-40"
                         >
                           Rotate
                         </button>
@@ -1345,7 +1345,7 @@ function MobileControlsBar({
                             }, { successMessage: "Webinar link copied." })
                           }
                           disabled={isWebinarWorking || !webinarLink}
-                          className="flex-1 rounded-lg bg-white/10 px-3 py-2 text-sm text-[#FEFCD9] transition hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-40"
+                          className="flex-1 rounded-lg bg-white/10 px-3 py-2 text-sm text-[#fafafa] transition hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-40"
                         >
                           Copy
                         </button>
@@ -1394,19 +1394,19 @@ function MobileControlsBar({
                 <div className="mx-auto mobile-sheet-grabber" />
                 <button
                   onClick={() => setIsBrowserSheetOpen(false)}
-                  className="absolute right-0 top-0 h-7 w-7 mobile-pill mobile-glass-soft flex items-center justify-center text-[#FEFCD9]/70 hover:text-[#FEFCD9]"
+                  className="absolute right-0 top-0 h-7 w-7 mobile-pill mobile-glass-soft flex items-center justify-center text-[#fafafa]/82 hover:text-[#fafafa]"
                   aria-label="Close shared browser"
                 >
                   <X className="h-3.5 w-3.5" />
                 </button>
               </div>
-              <div className="flex items-center gap-3 text-[#FEFCD9] px-1">
+              <div className="flex items-center gap-3 text-[#fafafa] px-1">
                 <div className="h-10 w-10 rounded-2xl bg-[#2b2b2b] border border-white/5 flex items-center justify-center">
                   <Globe className="w-5 h-5" />
                 </div>
                 <div className="flex flex-col">
                   <span className="text-base font-medium">Shared browser</span>
-                  <span className="text-[11px] text-[#FEFCD9]/45 uppercase tracking-[0.2em]">
+                  <span className="text-[11px] text-[#fafafa]/75 uppercase tracking-[0.2em]">
                     {isBrowserActive ? "Live" : "Offline"}
                   </span>
                 </div>
@@ -1440,7 +1440,7 @@ function MobileControlsBar({
                   if (browserUrlError) setBrowserUrlError(null);
                 }}
                 placeholder={isBrowserActive ? "Navigate to URL" : "Launch URL"}
-                className="w-full bg-black/40 border border-[#FEFCD9]/10 rounded-xl px-3 py-2 text-sm text-[#FEFCD9] placeholder:text-[#FEFCD9]/30 focus:outline-none focus:border-[#FEFCD9]/25"
+                className="w-full bg-black/40 border border-[#fafafa]/10 rounded-xl px-3 py-2 text-sm text-[#fafafa] placeholder:text-[#fafafa]/30 focus:outline-none focus:border-[#fafafa]/25"
               />
               <div className="flex items-center gap-2">
                 <button
@@ -1457,7 +1457,7 @@ function MobileControlsBar({
                       await onCloseBrowser();
                       setIsBrowserSheetOpen(false);
                     }}
-                    className="px-3 py-2 rounded-xl bg-white/10 text-[#FEFCD9] text-sm font-medium hover:bg-white/20 transition-transform duration-150 touch-feedback"
+                    className="px-3 py-2 rounded-xl bg-white/10 text-[#fafafa] text-sm font-medium hover:bg-white/20 transition-transform duration-150 touch-feedback"
                   >
                     Close
                   </button>
@@ -1560,7 +1560,7 @@ function MobileControlsBar({
               <MoreVertical className="w-5 h-5" />
             </button>
 
-            <div className="w-px h-6 bg-[#FEFCD9]/10" />
+            <div className="w-px h-6 bg-[#fafafa]/10" />
 
             {/* Leave button */}
             <button

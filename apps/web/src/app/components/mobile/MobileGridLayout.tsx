@@ -130,13 +130,13 @@ function MobileGridLayout({
             autoPlay
             muted
             playsInline
-            className={`w-full h-full object-contain ${isCameraOff ? "hidden" : ""} ${isMirrorCamera ? "scale-x-[-1]" : ""}`}
+            className={`w-full h-full object-cover ${isCameraOff ? "hidden" : ""} ${isMirrorCamera ? "scale-x-[-1]" : ""}`}
           />
           {isCameraOff && (
             <div className="absolute inset-0 flex items-center justify-center bg-black">
               <div className="absolute inset-0 bg-gradient-to-br from-[#F95F4A]/15 to-[#FF007A]/10" />
               <div
-                className={`relative rounded-full mobile-avatar flex items-center justify-center text-[#FEFCD9] font-bold ${totalCount <= 2 ? "w-20 h-20 text-3xl" : totalCount <= 4 ? "w-14 h-14 text-xl" : "w-10 h-10 text-lg"}`}
+                className={`relative rounded-full mobile-avatar flex items-center justify-center text-[#fafafa] font-bold ${totalCount <= 2 ? "w-20 h-20 text-3xl" : totalCount <= 4 ? "w-14 h-14 text-xl" : "w-10 h-10 text-lg"}`}
                 style={{ fontFamily: "'PolySans Bulky Wide', sans-serif" }}
               >
                 {userEmail[0]?.toUpperCase() || "?"}
@@ -151,7 +151,7 @@ function MobileGridLayout({
                 />
                 <span
                   className="mobile-ghost-badge rounded-full px-3 py-1 text-[10px] tracking-[0.25em] text-[#FF007A]"
-                  style={{ fontFamily: "'PolySans Mono', monospace" }}
+                  style={{ fontFamily: "'PolySans Trial', sans-serif" }}
                 >
                   GHOST
                 </span>
@@ -167,9 +167,9 @@ function MobileGridLayout({
           <div className="absolute bottom-1.5 left-1.5 right-1.5 flex items-center">
             <div
               className="mobile-name-pill px-2.5 py-1 flex items-center gap-2 backdrop-blur-md"
-              style={{ fontFamily: "'PolySans Mono', monospace" }}
+              style={{ fontFamily: "'PolySans Trial', sans-serif" }}
             >
-              <span className={`text-[#FEFCD9] font-medium uppercase tracking-[0.18em] truncate ${totalCount <= 4 ? "text-xs" : "text-[10px]"}`}>
+              <span className={`text-[#fafafa] font-medium uppercase tracking-[0.18em] truncate ${totalCount <= 4 ? "text-xs" : "text-[10px]"}`}>
                 {localDisplayName}
               </span>
               <span className="text-[9px] uppercase tracking-[0.25em] text-[#F95F4A]/70">
@@ -200,17 +200,17 @@ function MobileGridLayout({
             onClick={onOpenParticipantsPanel}
             disabled={!onOpenParticipantsPanel}
             aria-label={`View ${hiddenParticipantsCount} more participants`}
-            className={`mobile-tile flex flex-col items-center justify-center border-dashed border-[#FEFCD9]/20 bg-[#0d0e0d]/85 text-[#FEFCD9] ${
+            className={`mobile-tile flex flex-col items-center justify-center border-dashed border-[#fafafa]/20 bg-[#131316]/85 text-[#fafafa] ${
               onOpenParticipantsPanel ? "cursor-pointer" : "opacity-70"
             }`}
             style={{ fontFamily: "'PolySans Trial', sans-serif" }}
           >
-            <div className="text-2xl font-semibold text-[#FEFCD9]">
+            <div className="text-2xl font-semibold text-[#fafafa]">
               +{hiddenParticipantsCount}
             </div>
             <div
-              className="mt-1 text-[10px] uppercase tracking-[0.35em] text-[#FEFCD9]/60"
-              style={{ fontFamily: "'PolySans Mono', monospace" }}
+              className="mt-1 text-[10px] uppercase tracking-[0.35em] text-[#fafafa]/75"
+              style={{ fontFamily: "'PolySans Trial', sans-serif" }}
             >
               More
             </div>
@@ -279,13 +279,13 @@ const ParticipantTile = memo(function ParticipantTile({
         ref={videoRef}
         autoPlay
         playsInline
-        className={`w-full h-full object-contain ${showPlaceholder ? "hidden" : ""}`}
+        className={`w-full h-full object-cover ${showPlaceholder ? "hidden" : ""}`}
       />
       {showPlaceholder && (
         <div className="absolute inset-0 flex items-center justify-center bg-black">
           <div className="absolute inset-0 bg-gradient-to-br from-[#F95F4A]/15 to-[#FF007A]/10" />
           <div
-            className={`relative rounded-full mobile-avatar flex items-center justify-center text-[#FEFCD9] font-bold ${totalCount <= 2 ? "w-20 h-20 text-3xl" : totalCount <= 4 ? "w-14 h-14 text-xl" : "w-10 h-10 text-lg"}`}
+            className={`relative rounded-full mobile-avatar flex items-center justify-center text-[#fafafa] font-bold ${totalCount <= 2 ? "w-20 h-20 text-3xl" : totalCount <= 4 ? "w-14 h-14 text-xl" : "w-10 h-10 text-lg"}`}
             style={{ fontFamily: "'PolySans Bulky Wide', sans-serif" }}
           >
             {displayName[0]?.toUpperCase() || "?"}
@@ -300,7 +300,7 @@ const ParticipantTile = memo(function ParticipantTile({
             />
             <span
               className="mobile-ghost-badge rounded-full px-3 py-1 text-[10px] tracking-[0.25em] text-[#FF007A]"
-              style={{ fontFamily: "'PolySans Mono', monospace" }}
+              style={{ fontFamily: "'PolySans Trial', sans-serif" }}
             >
               GHOST
             </span>
@@ -316,9 +316,9 @@ const ParticipantTile = memo(function ParticipantTile({
       <div className="absolute bottom-1.5 left-1.5 right-1.5 flex items-center">
         <div 
           className="mobile-name-pill px-2.5 py-1 flex items-center gap-2 max-w-full backdrop-blur-md"
-          style={{ fontFamily: "'PolySans Mono', monospace" }}
+          style={{ fontFamily: "'PolySans Trial', sans-serif" }}
         >
-          <span className={`text-[#FEFCD9] font-medium uppercase tracking-[0.18em] truncate ${totalCount <= 4 ? "text-xs" : "text-[10px]"}`}>
+          <span className={`text-[#fafafa] font-medium uppercase tracking-[0.18em] truncate ${totalCount <= 4 ? "text-xs" : "text-[10px]"}`}>
             {displayName}
           </span>
           {participant.isMuted && <MicOff className="w-3 h-3 text-[#F95F4A] shrink-0" />}

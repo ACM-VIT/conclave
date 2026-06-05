@@ -33,7 +33,7 @@ final class WebRTCClient {
 
     func configure(socketManager: SocketIOManager, rtpCapabilities: RtpCapabilities) { }
     func createTransports() async throws { }
-    func consumeProducer(producerId: String, producerUserId: String) async throws { }
+    func consumeProducer(producerId: String, producerUserId: String, producerType: String = "webcam") async throws { }
     func closeConsumer(producerId: String, userId: String) { }
     func updateVideoQuality(_ quality: VideoQuality) { }
     func startProducingAudio() async throws { }
