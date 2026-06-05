@@ -74,6 +74,21 @@ struct MeetingSheetView: View {
                     .transition(navigationDirection.transition)
             }
         }
+        // Android system / gesture BACK: on a sub-page (.participants/.settings)
+        // pop back to .more instead of dismissing the whole sheet; on .more the
+        // handler is disabled so BACK falls through to the default dismiss. Skip
+        // has no SwiftUI BackHandler, so a Compose `BackHandler` is hosted in a
+        // zero-size ComposeView (emits no UI). iOS is unaffected (#if !SKIP).
+        #if SKIP
+        .overlay(alignment: .top) {
+            ComposeView { _ in
+                MeetingSheetBackHandler(enabled: page != .more) {
+                    navigate(to: .more)
+                }
+            }
+            .frame(width: 0, height: 0)
+        }
+        #endif
         .animation(Self.pageAnimation, value: page)
         .clipped()
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
