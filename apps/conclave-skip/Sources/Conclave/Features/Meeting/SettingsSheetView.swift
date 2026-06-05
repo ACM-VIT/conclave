@@ -181,6 +181,51 @@ struct SettingsSheetView: View {
                                     ),
                                     isActive: viewModel.state.isChatLocked
                                 )
+                                MeetingSheetRowDivider(inset: ACMSpacing.sm + 32 + ACMSpacing.sm)
+                                settingsToggleRow(
+                                    "Block guests",
+                                    icon: "nosign",
+                                    androidIcon: "block",
+                                    isOn: Binding(
+                                        get: { viewModel.state.isNoGuests },
+                                        set: { next in
+                                            if next != viewModel.state.isNoGuests {
+                                                viewModel.toggleNoGuests()
+                                            }
+                                        }
+                                    ),
+                                    isActive: viewModel.state.isNoGuests
+                                )
+                                MeetingSheetRowDivider(inset: ACMSpacing.sm + 32 + ACMSpacing.sm)
+                                settingsToggleRow(
+                                    "Direct messages",
+                                    icon: "bubble.left.and.bubble.right.fill",
+                                    androidIcon: "forum",
+                                    isOn: Binding(
+                                        get: { viewModel.state.isDmEnabled },
+                                        set: { next in
+                                            if next != viewModel.state.isDmEnabled {
+                                                viewModel.toggleDmEnabled()
+                                            }
+                                        }
+                                    ),
+                                    isActive: viewModel.state.isDmEnabled
+                                )
+                                MeetingSheetRowDivider(inset: ACMSpacing.sm + 32 + ACMSpacing.sm)
+                                settingsToggleRow(
+                                    "Read messages aloud",
+                                    icon: viewModel.state.isTtsDisabled ? "speaker.slash.fill" : "speaker.wave.2.fill",
+                                    androidIcon: viewModel.state.isTtsDisabled ? "volume.off" : "volume",
+                                    isOn: Binding(
+                                        get: { !viewModel.state.isTtsDisabled },
+                                        set: { next in
+                                            if next == viewModel.state.isTtsDisabled {
+                                                viewModel.toggleTtsDisabled()
+                                            }
+                                        }
+                                    ),
+                                    isActive: !viewModel.state.isTtsDisabled
+                                )
                             }
                         }
                     }

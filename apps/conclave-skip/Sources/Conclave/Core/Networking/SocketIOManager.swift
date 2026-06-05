@@ -32,6 +32,9 @@ enum SocketEvent {
     static let updateDisplayName = "updateDisplayName"
     static let lockRoom = "lockRoom"
     static let lockChat = "lockChat"
+    static let setNoGuests = "setNoGuests"
+    static let setDmEnabled = "setDmEnabled"
+    static let setTtsDisabled = "setTtsDisabled"
     static let admitUser = "admitUser"
     static let rejectUser = "rejectUser"
     static let admitAllPending = "admin:admitAllPending"
@@ -54,6 +57,9 @@ enum SocketEvent {
     static let handRaisedSnapshot = "handRaisedSnapshot"
     static let roomLockChanged = "roomLockChanged"
     static let chatLockChanged = "chatLockChanged"
+    static let noGuestsChanged = "noGuestsChanged"
+    static let dmStateChanged = "dmStateChanged"
+    static let ttsDisabledChanged = "ttsDisabledChanged"
     static let userRequestedJoin = "userRequestedJoin"
     static let pendingUsersSnapshot = "pendingUsersSnapshot"
     static let userAdmitted = "userAdmitted"
@@ -131,6 +137,9 @@ final class SocketIOManager {
     // Room state
     var onRoomLockChanged: ((Bool) -> Void)?
     var onChatLockChanged: ((Bool) -> Void)?
+    var onNoGuestsChanged: ((Bool) -> Void)?
+    var onDmStateChanged: ((Bool) -> Void)?
+    var onTtsDisabledChanged: ((Bool) -> Void)?
     var onPendingUsersSnapshot: ((PendingUsersSnapshotNotification) -> Void)?
     var onUserRequestedJoin: ((UserRequestedJoinNotification) -> Void)?
     var onPendingUserChanged: ((PendingUserChangedNotification) -> Void)?
@@ -374,6 +383,18 @@ final class SocketIOManager {
         _ = try await emit(event: SocketEvent.lockChat, payload: ["locked": locked])
     }
 
+    func setNoGuests(_ noGuests: Bool) async throws {
+        _ = try await emit(event: SocketEvent.setNoGuests, payload: ["noGuests": noGuests])
+    }
+
+    func setDmEnabled(_ enabled: Bool) async throws {
+        _ = try await emit(event: SocketEvent.setDmEnabled, payload: ["enabled": enabled])
+    }
+
+    func setTtsDisabled(_ disabled: Bool) async throws {
+        _ = try await emit(event: SocketEvent.setTtsDisabled, payload: ["disabled": disabled])
+    }
+
     func admitUser(userId: String) async throws {
         _ = try await emit(event: SocketEvent.admitUser, payload: ["userId": userId])
     }
@@ -578,6 +599,24 @@ final class SocketIOManager {
             guard let self, let first = data.first,
                   let notification = self.decode(ChatLockChangedNotification.self, from: first) else { return }
             self.onChatLockChanged?(notification.locked)
+        }
+
+        socket.on(SocketEvent.noGuestsChanged) { [weak self] data, _ in
+            guard let self, let first = data.first,
+                  let notification = self.decode(NoGuestsChangedNotification.self, from: first) else { return }
+            self.onNoGuestsChanged?(notification.noGuests)
+        }
+
+        socket.on(SocketEvent.dmStateChanged) { [weak self] data, _ in
+            guard let self, let first = data.first,
+                  let notification = self.decode(DmStateChangedNotification.self, from: first) else { return }
+            self.onDmStateChanged?(notification.enabled)
+        }
+
+        socket.on(SocketEvent.ttsDisabledChanged) { [weak self] data, _ in
+            guard let self, let first = data.first,
+                  let notification = self.decode(TtsDisabledChangedNotification.self, from: first) else { return }
+            self.onTtsDisabledChanged?(notification.disabled)
         }
 
         socket.on(SocketEvent.userRequestedJoin) { [weak self] data, _ in

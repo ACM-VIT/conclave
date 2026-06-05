@@ -19,6 +19,9 @@ final class MeetingState {
     var roomId: String = ""
     var isRoomLocked: Bool = false
     var isChatLocked: Bool = false
+    var isNoGuests: Bool = false
+    var isDmEnabled: Bool = true
+    var isTtsDisabled: Bool = false
 
     // User State
     var userId: String

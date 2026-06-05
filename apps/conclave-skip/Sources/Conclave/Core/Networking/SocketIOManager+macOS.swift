@@ -39,6 +39,9 @@ final class SocketIOManager {
 
     var onRoomLockChanged: ((Bool) -> Void)?
     var onChatLockChanged: ((Bool) -> Void)?
+    var onNoGuestsChanged: ((Bool) -> Void)?
+    var onDmStateChanged: ((Bool) -> Void)?
+    var onTtsDisabledChanged: ((Bool) -> Void)?
     var onPendingUsersSnapshot: ((PendingUsersSnapshotNotification) -> Void)?
     var onUserRequestedJoin: ((UserRequestedJoinNotification) -> Void)?
     var onPendingUserChanged: ((PendingUserChangedNotification) -> Void)?
@@ -89,6 +92,9 @@ final class SocketIOManager {
 
     func lockRoom(_ locked: Bool) async throws { }
     func lockChat(_ locked: Bool) async throws { }
+    func setNoGuests(_ noGuests: Bool) async throws { }
+    func setDmEnabled(_ enabled: Bool) async throws { }
+    func setTtsDisabled(_ disabled: Bool) async throws { }
     func admitUser(userId: String) async throws { }
     func rejectUser(userId: String) async throws { }
     func admitAllPending() async throws { }

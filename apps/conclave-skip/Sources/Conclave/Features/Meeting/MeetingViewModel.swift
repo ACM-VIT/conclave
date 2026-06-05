@@ -116,7 +116,21 @@ final class MeetingViewModel {
                 
                 self.state.connectionState = ConnectionState.joined
                 self.state.waitingMessage = nil
-                
+
+                // Hydrate room policy from the join response (optional fields).
+                if let locked = response.isLocked {
+                    self.state.isRoomLocked = locked
+                }
+                if let noGuests = response.noGuests {
+                    self.state.isNoGuests = noGuests
+                }
+                if let dmEnabled = response.isDmEnabled {
+                    self.state.isDmEnabled = dmEnabled
+                }
+                if let ttsDisabled = response.isTtsDisabled {
+                    self.state.isTtsDisabled = ttsDisabled
+                }
+
                 // Configure WebRTC with server capabilities
                 self.webRTCClient.configure(
                     socketManager: self.socketManager,
@@ -382,7 +396,28 @@ final class MeetingViewModel {
                 self.state.isChatLocked = locked
             }
         }
-        
+
+        socketManager.onNoGuestsChanged = { [weak self] noGuests in
+            Task { @MainActor in
+                guard let self = self else { return }
+                self.state.isNoGuests = noGuests
+            }
+        }
+
+        socketManager.onDmStateChanged = { [weak self] enabled in
+            Task { @MainActor in
+                guard let self = self else { return }
+                self.state.isDmEnabled = enabled
+            }
+        }
+
+        socketManager.onTtsDisabledChanged = { [weak self] disabled in
+            Task { @MainActor in
+                guard let self = self else { return }
+                self.state.isTtsDisabled = disabled
+            }
+        }
+
         socketManager.onUserRequestedJoin = { [weak self] notification in
             Task { @MainActor in
                 guard let self = self else { return }
@@ -1044,7 +1079,49 @@ final class MeetingViewModel {
             }
         }
     }
-    
+
+    func toggleNoGuests() {
+        guard state.isAdmin else { return }
+
+        Task {
+            do {
+                let next = !state.isNoGuests
+                try await socketManager.setNoGuests(next)
+                state.isNoGuests = next
+            } catch {
+                state.errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    func toggleDmEnabled() {
+        guard state.isAdmin else { return }
+
+        Task {
+            do {
+                let next = !state.isDmEnabled
+                try await socketManager.setDmEnabled(next)
+                state.isDmEnabled = next
+            } catch {
+                state.errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    func toggleTtsDisabled() {
+        guard state.isAdmin else { return }
+
+        Task {
+            do {
+                let next = !state.isTtsDisabled
+                try await socketManager.setTtsDisabled(next)
+                state.isTtsDisabled = next
+            } catch {
+                state.errorMessage = error.localizedDescription
+            }
+        }
+    }
+
     func admitUser(userId: String) {
         guard state.isAdmin else { return }
         

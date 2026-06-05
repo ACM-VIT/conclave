@@ -32,6 +32,9 @@ internal object SocketEvent {
     const val updateDisplayName = "updateDisplayName"
     const val lockRoom = "lockRoom"
     const val lockChat = "lockChat"
+    const val setNoGuests = "setNoGuests"
+    const val setDmEnabled = "setDmEnabled"
+    const val setTtsDisabled = "setTtsDisabled"
     const val admitUser = "admitUser"
     const val rejectUser = "rejectUser"
     const val admitAllPending = "admin:admitAllPending"
@@ -53,6 +56,9 @@ internal object SocketEvent {
     const val handRaisedSnapshot = "handRaisedSnapshot"
     const val roomLockChanged = "roomLockChanged"
     const val chatLockChanged = "chatLockChanged"
+    const val noGuestsChanged = "noGuestsChanged"
+    const val dmStateChanged = "dmStateChanged"
+    const val ttsDisabledChanged = "ttsDisabledChanged"
     const val userRequestedJoin = "userRequestedJoin"
     const val pendingUsersSnapshot = "pendingUsersSnapshot"
     const val userAdmitted = "userAdmitted"
@@ -127,6 +133,9 @@ internal class SocketIOManager {
 
     internal var onRoomLockChanged: ((Boolean) -> Unit)? = null
     internal var onChatLockChanged: ((Boolean) -> Unit)? = null
+    internal var onNoGuestsChanged: ((Boolean) -> Unit)? = null
+    internal var onDmStateChanged: ((Boolean) -> Unit)? = null
+    internal var onTtsDisabledChanged: ((Boolean) -> Unit)? = null
     internal var onPendingUsersSnapshot: ((PendingUsersSnapshotNotification) -> Unit)? = null
     internal var onUserRequestedJoin: ((UserRequestedJoinNotification) -> Unit)? = null
     internal var onPendingUserChanged: ((PendingUserChangedNotification) -> Unit)? = null
@@ -374,6 +383,18 @@ internal class SocketIOManager {
         emit(SocketEvent.lockChat, mapOf("locked" to locked))
     }
 
+    internal suspend fun setNoGuests(noGuests: Boolean) {
+        emit(SocketEvent.setNoGuests, mapOf("noGuests" to noGuests))
+    }
+
+    internal suspend fun setDmEnabled(enabled: Boolean) {
+        emit(SocketEvent.setDmEnabled, mapOf("enabled" to enabled))
+    }
+
+    internal suspend fun setTtsDisabled(disabled: Boolean) {
+        emit(SocketEvent.setTtsDisabled, mapOf("disabled" to disabled))
+    }
+
     internal suspend fun admitUser(userId: String) {
         emit(SocketEvent.admitUser, mapOf("userId" to userId))
     }
@@ -601,6 +622,21 @@ internal class SocketIOManager {
         socket.on(SocketEvent.chatLockChanged, Emitter.Listener { args ->
             val notification = decode<ChatLockChangedNotification>( args.firstOrNull()) ?: return@Listener
             onChatLockChanged?.invoke(notification.locked)
+        })
+
+        socket.on(SocketEvent.noGuestsChanged, Emitter.Listener { args ->
+            val notification = decode<NoGuestsChangedNotification>( args.firstOrNull()) ?: return@Listener
+            onNoGuestsChanged?.invoke(notification.noGuests)
+        })
+
+        socket.on(SocketEvent.dmStateChanged, Emitter.Listener { args ->
+            val notification = decode<DmStateChangedNotification>( args.firstOrNull()) ?: return@Listener
+            onDmStateChanged?.invoke(notification.enabled)
+        })
+
+        socket.on(SocketEvent.ttsDisabledChanged, Emitter.Listener { args ->
+            val notification = decode<TtsDisabledChangedNotification>( args.firstOrNull()) ?: return@Listener
+            onTtsDisabledChanged?.invoke(notification.disabled)
         })
 
         socket.on(SocketEvent.userRequestedJoin, Emitter.Listener { args ->

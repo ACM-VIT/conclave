@@ -86,6 +86,7 @@ struct JoinRoomResponse: Codable {
     let hostUserId: String?
     let hostUserIds: [String]?
     let isLocked: Bool?
+    let noGuests: Bool?
     let isTtsDisabled: Bool?
     let isDmEnabled: Bool?
     let meetingRequiresInviteCode: Bool?
@@ -224,6 +225,21 @@ struct RoomLockChangedNotification: Codable {
 
 struct ChatLockChangedNotification: Codable {
     let locked: Bool
+    let roomId: String?
+}
+
+struct NoGuestsChangedNotification: Codable {
+    let noGuests: Bool
+    let roomId: String?
+}
+
+struct DmStateChangedNotification: Codable {
+    let enabled: Bool
+    let roomId: String?
+}
+
+struct TtsDisabledChangedNotification: Codable {
+    let disabled: Bool
     let roomId: String?
 }
 

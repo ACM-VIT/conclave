@@ -6,11 +6,15 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.automirrored.filled.VolumeOff
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.CallEnd
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.EmojiEmotions
+import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.HelpOutline
 import androidx.compose.material.icons.filled.Lock
@@ -71,6 +75,10 @@ internal fun meetingIconVector(name: String): ImageVector = when (name) {
     "arrow.forward"   -> Icons.AutoMirrored.Filled.ArrowForward
     "back"            -> Icons.AutoMirrored.Filled.ArrowBack
     "account"         -> Icons.Outlined.AccountCircle
+    "block"           -> Icons.Filled.Block
+    "forum"           -> Icons.Filled.Forum
+    "volume"          -> Icons.AutoMirrored.Filled.VolumeUp
+    "volume.off"      -> Icons.AutoMirrored.Filled.VolumeOff
     "add"             -> Icons.Filled.Add
     "warning"         -> Icons.Filled.Warning
     else              -> Icons.Filled.HelpOutline
