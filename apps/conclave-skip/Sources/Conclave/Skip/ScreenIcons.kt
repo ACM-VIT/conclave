@@ -2,40 +2,43 @@ package conclave.module
 
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.ArrowForward
-import androidx.compose.material.icons.automirrored.filled.Chat
-import androidx.compose.material.icons.automirrored.filled.Send
-import androidx.compose.material.icons.automirrored.filled.VolumeOff
-import androidx.compose.material.icons.automirrored.filled.VolumeUp
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Block
-import androidx.compose.material.icons.filled.CallEnd
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.ContentCopy
-import androidx.compose.material.icons.filled.EmojiEmotions
-import androidx.compose.material.icons.filled.Forum
-import androidx.compose.material.icons.filled.Groups
-import androidx.compose.material.icons.filled.HelpOutline
-import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.LockOpen
-import androidx.compose.material.icons.filled.Mic
-import androidx.compose.material.icons.filled.MicOff
-import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.PanTool
-import androidx.compose.material.icons.filled.PersonRemove
-import androidx.compose.material.icons.filled.ScreenShare
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.StopScreenShare
-import androidx.compose.material.icons.filled.Videocam
-import androidx.compose.material.icons.filled.VideocamOff
-import androidx.compose.material.icons.filled.VisibilityOff
-import androidx.compose.material.icons.filled.Warning
-import androidx.compose.material.icons.filled.WorkspacePremium
+// Rounded Material variants read closest to iOS SF Symbols (soft, rounded
+// terminals) so the Android glyphs match the iOS ones. Outlined variants are
+// kept only where the icon is intentionally an outline state.
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.automirrored.rounded.ArrowForward
+import androidx.compose.material.icons.automirrored.rounded.Chat
+import androidx.compose.material.icons.automirrored.rounded.Send
+import androidx.compose.material.icons.automirrored.rounded.VolumeOff
+import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material.icons.outlined.AccountCircle
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.PanTool
 import androidx.compose.material.icons.outlined.PushPin
+import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.Block
+import androidx.compose.material.icons.rounded.CallEnd
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.ContentCopy
+import androidx.compose.material.icons.rounded.EmojiEmotions
+import androidx.compose.material.icons.rounded.Forum
+import androidx.compose.material.icons.rounded.Groups
+import androidx.compose.material.icons.rounded.HelpOutline
+import androidx.compose.material.icons.rounded.Lock
+import androidx.compose.material.icons.rounded.LockOpen
+import androidx.compose.material.icons.rounded.Mic
+import androidx.compose.material.icons.rounded.MicOff
+import androidx.compose.material.icons.rounded.MoreHoriz
+import androidx.compose.material.icons.rounded.PanTool
+import androidx.compose.material.icons.rounded.PersonRemove
+import androidx.compose.material.icons.rounded.ScreenShare
+import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.material.icons.rounded.StopScreenShare
+import androidx.compose.material.icons.rounded.Videocam
+import androidx.compose.material.icons.rounded.VideocamOff
+import androidx.compose.material.icons.rounded.VisibilityOff
+import androidx.compose.material.icons.rounded.Warning
+import androidx.compose.material.icons.rounded.WorkspacePremium
 import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
@@ -48,40 +51,40 @@ import androidx.compose.ui.unit.dp
 /// proper meeting glyphs (Mic, Videocam, ScreenShare, Chat, CallEnd, …) must be
 /// referenced directly in Kotlin and rendered via a Compose `Icon`.
 internal fun meetingIconVector(name: String): ImageVector = when (name) {
-    "mic"             -> Icons.Filled.Mic
-    "mic.off"         -> Icons.Filled.MicOff
-    "video"           -> Icons.Filled.Videocam
-    "video.off"       -> Icons.Filled.VideocamOff
-    "screen.share"    -> Icons.Filled.ScreenShare
-    "screen.share.off" -> Icons.Filled.StopScreenShare
-    "hangup"          -> Icons.Filled.CallEnd
-    "more"            -> Icons.Filled.MoreVert
-    "chat"            -> Icons.AutoMirrored.Filled.Chat
+    "mic"             -> Icons.Rounded.Mic
+    "mic.off"         -> Icons.Rounded.MicOff
+    "video"           -> Icons.Rounded.Videocam
+    "video.off"       -> Icons.Rounded.VideocamOff
+    "screen.share"    -> Icons.Rounded.ScreenShare
+    "screen.share.off" -> Icons.Rounded.StopScreenShare
+    "hangup"          -> Icons.Rounded.CallEnd
+    "more"            -> Icons.Rounded.MoreHoriz   // iOS ellipsis is horizontal
+    "chat"            -> Icons.AutoMirrored.Rounded.Chat
     "chat.outline"    -> Icons.Outlined.ChatBubbleOutline
-    "participants"    -> Icons.Filled.Groups
-    "settings"        -> Icons.Filled.Settings
-    "raise.hand"      -> Icons.Filled.PanTool
+    "participants"    -> Icons.Rounded.Groups
+    "settings"        -> Icons.Rounded.Settings
+    "raise.hand"      -> Icons.Rounded.PanTool
     "raise.hand.off"  -> Icons.Outlined.PanTool
-    "reactions"       -> Icons.Filled.EmojiEmotions
-    "lock"            -> Icons.Filled.Lock
-    "lock.open"       -> Icons.Filled.LockOpen
-    "send"            -> Icons.AutoMirrored.Filled.Send
-    "close"           -> Icons.Filled.Close
-    "copy"            -> Icons.Filled.ContentCopy
+    "reactions"       -> Icons.Rounded.EmojiEmotions
+    "lock"            -> Icons.Rounded.Lock
+    "lock.open"       -> Icons.Rounded.LockOpen
+    "send"            -> Icons.AutoMirrored.Rounded.Send
+    "close"           -> Icons.Rounded.Close
+    "copy"            -> Icons.Rounded.ContentCopy
     "pin.off"         -> Icons.Outlined.PushPin
-    "ghost"           -> Icons.Filled.VisibilityOff
-    "host"            -> Icons.Filled.WorkspacePremium
-    "remove.person"   -> Icons.Filled.PersonRemove
-    "arrow.forward"   -> Icons.AutoMirrored.Filled.ArrowForward
-    "back"            -> Icons.AutoMirrored.Filled.ArrowBack
+    "ghost"           -> Icons.Rounded.VisibilityOff
+    "host"            -> Icons.Rounded.WorkspacePremium
+    "remove.person"   -> Icons.Rounded.PersonRemove
+    "arrow.forward"   -> Icons.AutoMirrored.Rounded.ArrowForward
+    "back"            -> Icons.AutoMirrored.Rounded.ArrowBack
     "account"         -> Icons.Outlined.AccountCircle
-    "block"           -> Icons.Filled.Block
-    "forum"           -> Icons.Filled.Forum
-    "volume"          -> Icons.AutoMirrored.Filled.VolumeUp
-    "volume.off"      -> Icons.AutoMirrored.Filled.VolumeOff
-    "add"             -> Icons.Filled.Add
-    "warning"         -> Icons.Filled.Warning
-    else              -> Icons.Filled.HelpOutline
+    "block"           -> Icons.Rounded.Block
+    "forum"           -> Icons.Rounded.Forum
+    "volume"          -> Icons.AutoMirrored.Rounded.VolumeUp
+    "volume.off"      -> Icons.AutoMirrored.Rounded.VolumeOff
+    "add"             -> Icons.Rounded.Add
+    "warning"         -> Icons.Rounded.Warning
+    else              -> Icons.Rounded.HelpOutline
 }
 
 /// Resolves a semantic tint key to an explicit Carbon color. Relying on

@@ -342,14 +342,21 @@ struct JoinView: View {
                 .padding(EdgeInsets(top: 24, leading: 0, bottom: 24, trailing: 0))
             } else {
                 ScrollView {
-                    VStack(spacing: 24) {
+                    // Fill the viewport and center the camera + form as one block
+                    // so it isn't cramped at the top with dead space below.
+                    VStack(spacing: 22) {
+                        Spacer(minLength: 8)
+
                         cameraPreviewSection
-                            .frame(height: geometry.size.height * 0.4)
+                            .frame(height: geometry.size.height * 0.44)
 
                         joinFormSection
+
+                        Spacer(minLength: 8)
                     }
-                .padding(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20))
-                .padding(EdgeInsets(top: 24, leading: 0, bottom: 24, trailing: 0))
+                    .frame(minHeight: geometry.size.height - 40)
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 20)
                 }
             }
         }
@@ -379,16 +386,15 @@ struct JoinView: View {
 #endif
             } else {
                 VStack(spacing: 14) {
+                    // Brand-tinted avatar (same hash as the in-meeting tiles) so
+                    // the camera-off state has warmth instead of a flat grey disc.
                     Circle()
-                        .fill(ACMColors.surfaceRaised)
+                        .fill(ACMColors.avatarColor(for: displayNameInput.isEmpty ? (appState.currentUser?.name ?? "Guest") : displayNameInput))
                         .frame(width: 96, height: 96)
-                        .overlay {
-                            Circle().strokeBorder(lineWidth: 1).foregroundStyle(ACMColors.border)
-                        }
                         .overlay {
                             Text(userInitial)
                                 .font(.system(size: 38, weight: .bold))
-                                .foregroundStyle(ACMColors.text)
+                                .foregroundStyle(Color.white)
                         }
 
                     Text("Camera is off")
@@ -448,10 +454,12 @@ struct JoinView: View {
         androidOn: String, androidOff: String, action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
-            ACMSystemIcon.icon(on ? onIcon : offIcon, android: on ? androidOn : androidOff, size: 18, tint: "white")
-                .foregroundStyle(Color.white)
+            // Off reads as a quiet red glyph on the same neutral circle, not a
+            // bright red fill — two filled red circles looked like error alerts.
+            ACMSystemIcon.icon(on ? onIcon : offIcon, android: on ? androidOn : androidOff, size: 18, tint: on ? "white" : "danger")
+                .foregroundStyle(on ? Color.white : ACMColors.error)
                 .frame(width: 44, height: 44)
-                .acmColorBackground(on ? ACMColors.surfaceRaised : ACMColors.error)
+                .acmColorBackground(ACMColors.surfaceRaised)
                 .clipShape(Circle())
         }
     }
@@ -459,20 +467,13 @@ struct JoinView: View {
     // MARK: - Join Form Section
     
     private var joinFormSection: some View {
+        // No outer card — the tab switcher, field, and CTA carry their own
+        // surfaces, so a second bordered box just floated awkwardly next to the
+        // camera card. The controls read cleaner standing on the background.
         VStack(spacing: 0) {
             tabSwitcher
-            
+
             formContent
-        }
-        .padding(18)
-        .background(
-            RoundedRectangle(cornerRadius: ACMRadius.xl)
-                .fill(ACMColors.bgAlt)
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: ACMRadius.xl)
-                .strokeBorder(lineWidth: 1)
-                .foregroundStyle(ACMColors.border)
         }
     }
     
