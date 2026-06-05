@@ -457,6 +457,43 @@ final class WebRTCClient: NSObject, ObservableObject {
         return rtcLocalVideoTrack
     }
 
+    // MARK: - Active Speaker (remote audio levels)
+
+    /// Reads the per-consumer `audioLevel` (0.0–1.0, an RMS-derived linear value)
+    /// from each remote audio consumer's WebRTC stats and returns a userId->level
+    /// map. mediasoup's `Consumer.stats` is the standard RTCStatsReport serialized
+    /// as JSON; the `inbound-rtp` entry of an audio consumer carries `audioLevel`.
+    /// The shared VM picks the loudest above a threshold and debounces, mirroring
+    /// the web client's WebAudio-analyser approach.
+    func sampleAudioLevels() -> [String: Double] {
+        var levels: [String: Double] = [:]
+        for (_, info) in consumers where info.kind == "audio" {
+            let statsJson = info.consumer.stats
+            if let level = Self.parseInboundAudioLevel(statsJson) {
+                levels[info.userId] = level
+            }
+        }
+        return levels
+    }
+
+    private static func parseInboundAudioLevel(_ statsJson: String) -> Double? {
+        guard let data = statsJson.data(using: .utf8),
+              let array = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+            return nil
+        }
+        var best: Double?
+        for obj in array {
+            guard (obj["type"] as? String) == "inbound-rtp",
+                  let value = obj["audioLevel"] as? Double else {
+                continue
+            }
+            if best == nil || value > best! {
+                best = value
+            }
+        }
+        return best
+    }
+
     // MARK: - Cleanup
 
     func cleanup() async {

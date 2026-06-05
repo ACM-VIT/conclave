@@ -33,6 +33,17 @@ final class MeetingViewModel {
     var isIntentionalLeave = false
     var isRejoinInFlight = false
 
+    // MARK: - Active Speaker
+
+    // Client-side active-speaker detection: poll each remote audio consumer's
+    // WebRTC `audioLevel` stat, pick the loudest above a threshold, debounce so
+    // the speaking ring doesn't flicker. Mirrors the web client (no SFU event).
+    private var activeSpeakerTask: Task<Void, Never>?
+    private var lastActiveSpeakerId: String?
+    private var lastActiveSpeakerAt: Date?
+    private let activeSpeakerThreshold: Double = 0.01
+    private let activeSpeakerHoldSeconds: Double = 0.6
+
     func displayNameForUser(_ id: String) -> String {
         state.displayName(for: id)
     }
@@ -155,6 +166,9 @@ final class MeetingViewModel {
                         )
                         self.handleProducerState(producer)
                     }
+
+                    // Light up the speaking ring from remote audio levels.
+                    self.startActiveSpeakerPoll()
                 } catch {
                     debugLog("[Meeting] WebRTC setup error: \(error)")
                     #if SKIP
@@ -609,6 +623,75 @@ final class MeetingViewModel {
         await rejoinIfPossible()
     }
     
+    // MARK: - Active Speaker Poll
+
+    /// Starts the ~400ms poll that reads remote audio levels and updates
+    /// `state.activeSpeakerId`. Idempotent — a running poll is cancelled first.
+    func startActiveSpeakerPoll() {
+        activeSpeakerTask?.cancel()
+        activeSpeakerTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 400_000_000)
+                if Task.isCancelled { return }
+                guard let self = self else { return }
+                self.updateActiveSpeaker()
+            }
+        }
+    }
+
+    func stopActiveSpeakerPoll() {
+        activeSpeakerTask?.cancel()
+        activeSpeakerTask = nil
+        lastActiveSpeakerId = nil
+        lastActiveSpeakerAt = nil
+    }
+
+    /// Picks the loudest remote participant above `activeSpeakerThreshold`. When
+    /// nobody is above the threshold the previous speaker lingers for
+    /// `activeSpeakerHoldSeconds` to debounce the ring, then clears to nil.
+    private func updateActiveSpeaker() {
+        let levels = webRTCClient.sampleAudioLevels()
+
+        var loudestId: String?
+        var maxLevel = activeSpeakerThreshold
+        for (userId, level) in levels {
+            // Only ring a participant the UI knows about and isn't server-muted.
+            guard let participant = state.participants[userId], !participant.isMuted else {
+                continue
+            }
+            if level > maxLevel {
+                maxLevel = level
+                loudestId = participant.id
+            }
+        }
+
+        let now = Date()
+
+        if let loudestId = loudestId {
+            lastActiveSpeakerId = loudestId
+            lastActiveSpeakerAt = now
+            if state.activeSpeakerId != loudestId {
+                state.activeSpeakerId = loudestId
+            }
+            return
+        }
+
+        if let lingeringId = lastActiveSpeakerId,
+           let since = lastActiveSpeakerAt,
+           now.timeIntervalSince(since) < activeSpeakerHoldSeconds {
+            if state.activeSpeakerId != lingeringId {
+                state.activeSpeakerId = lingeringId
+            }
+            return
+        }
+
+        lastActiveSpeakerId = nil
+        lastActiveSpeakerAt = nil
+        if state.activeSpeakerId != nil {
+            state.activeSpeakerId = nil
+        }
+    }
+
     func startProducing() async {
         // Start audio first (usually faster)
         if !state.isMuted {
@@ -643,6 +726,7 @@ final class MeetingViewModel {
     }
     
     func cleanup() async {
+        stopActiveSpeakerPoll()
         #if canImport(ReplayKit) && !SKIP
         await ScreenCaptureManager.shared.stopCapture()
         #endif

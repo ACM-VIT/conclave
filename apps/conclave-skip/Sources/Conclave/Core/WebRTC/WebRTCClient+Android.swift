@@ -45,5 +45,7 @@ final class WebRTCClient {
 
     func getCaptureSession() -> Any? { nil }
     func getLocalVideoTrack() -> Any? { nil }
+
+    func sampleAudioLevels() -> [String: Double] { fatalError() }
 }
 #endif

@@ -478,6 +478,52 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     internal fun getCaptureSession(): Any? = null
     internal fun getLocalVideoTrack(): Any? = localVideoTrackWrapper
 
+    // Reads the per-consumer `audioLevel` (0.0–1.0, an RMS-derived linear value)
+    // from each remote audio consumer's WebRTC stats and returns a userId->level
+    // map. mediasoup's Consumer.getStats() returns the standard RTCStatsReport
+    // serialized as a JSON array; the `inbound-rtp` entry of an audio consumer
+    // carries `audioLevel`. The shared VM picks the loudest above a threshold and
+    // debounces, mirroring the web client's WebAudio-analyser approach.
+    internal fun sampleAudioLevels(): Dictionary<String, Double> {
+        var levels: Dictionary<String, Double> = dictionaryOf()
+        for ((_, info) in consumers) {
+            if (info.kind != "audio") {
+                continue
+            }
+            val statsJson = try {
+                info.consumer.getStats()
+            } catch (_: Throwable) {
+                continue
+            }
+            val level = parseInboundAudioLevel(statsJson) ?: continue
+            levels[info.userId] = level
+        }
+        return levels.sref()
+    }
+
+    private fun parseInboundAudioLevel(statsJson: String): Double? {
+        return try {
+            val array = org.json.JSONArray(statsJson)
+            var best: Double? = null
+            for (i in 0 until array.length()) {
+                val obj = array.optJSONObject(i) ?: continue
+                if (obj.optString("type") != "inbound-rtp") {
+                    continue
+                }
+                if (!obj.has("audioLevel")) {
+                    continue
+                }
+                val value = obj.optDouble("audioLevel", 0.0)
+                if (best == null || value > best!!) {
+                    best = value
+                }
+            }
+            best
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
     override fun onConnect(transport: Transport, dtlsParameters: String) {
         val socket = socketManager ?: return
         runBlocking {
