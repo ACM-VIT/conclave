@@ -372,8 +372,10 @@ struct JoinView: View {
             // Camera feed or avatar
             if isCameraOn {
 #if SKIP
-                Color.black
-                    .clipShape(RoundedRectangle(cornerRadius: ACMRadius.xl))
+                ComposeView { _ in
+                    CameraPreviewView()
+                }
+                .clipShape(RoundedRectangle(cornerRadius: ACMRadius.xl))
 #else
                 if let session = captureSession {
                     CameraPreviewRepresentable(session: session)
