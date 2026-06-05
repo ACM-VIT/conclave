@@ -1,7 +1,11 @@
 package conclave.module
 
 import android.content.Context
+import android.media.AudioDeviceInfo
+import android.media.AudioManager
+import android.media.ToneGenerator
 import android.media.projection.MediaProjection
+import android.os.Build
 import org.mediasoup.droid.Consumer
 import org.mediasoup.droid.Device
 import org.mediasoup.droid.MediasoupClient
@@ -477,6 +481,140 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
 
     internal fun getCaptureSession(): Any? = null
     internal fun getLocalVideoTrack(): Any? = localVideoTrackWrapper
+
+    // MARK: - Audio Device Routing
+
+    private fun audioManager(): AudioManager? {
+        val context = ProcessInfo.processInfo.androidContext
+        return context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+    }
+
+    // Friendly label for an AudioDeviceInfo type, mirroring the route names the
+    // web/iOS clients surface (Speaker / Earpiece / Bluetooth / Wired headset).
+    private fun deviceLabel(info: AudioDeviceInfo): String {
+        return when (info.type) {
+            AudioDeviceInfo.TYPE_BUILTIN_SPEAKER -> "Speaker"
+            AudioDeviceInfo.TYPE_BUILTIN_EARPIECE -> "Earpiece"
+            AudioDeviceInfo.TYPE_BUILTIN_MIC -> "Phone microphone"
+            AudioDeviceInfo.TYPE_BLUETOOTH_SCO, AudioDeviceInfo.TYPE_BLUETOOTH_A2DP -> {
+                val name = info.productName?.toString()
+                if (name.isNullOrBlank()) "Bluetooth" else name
+            }
+            AudioDeviceInfo.TYPE_WIRED_HEADSET, AudioDeviceInfo.TYPE_WIRED_HEADPHONES -> "Wired headset"
+            AudioDeviceInfo.TYPE_USB_HEADSET, AudioDeviceInfo.TYPE_USB_DEVICE -> "USB audio"
+            else -> {
+                val name = info.productName?.toString()
+                if (name.isNullOrBlank()) "Audio device" else name
+            }
+        }
+    }
+
+    internal fun availableAudioInputs(): skip.lib.Array<AudioDevice> {
+        val manager = audioManager() ?: return skip.lib.Array()
+        val out = mutableListOf<AudioDevice>()
+        val seen = mutableSetOf<String>()
+        for (info in manager.getDevices(AudioManager.GET_DEVICES_INPUTS)) {
+            val label = deviceLabel(info)
+            if (seen.add(label)) {
+                out.add(AudioDevice(id = info.id.toString(), label = label))
+            }
+        }
+        return skip.lib.Array(out)
+    }
+
+    internal fun availableAudioOutputs(): skip.lib.Array<AudioDevice> {
+        val manager = audioManager() ?: return skip.lib.Array()
+        val out = mutableListOf<AudioDevice>()
+        val seen = mutableSetOf<String>()
+        for (info in manager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)) {
+            // Telephony / aux / unknown sinks aren't useful pick targets.
+            if (info.type == AudioDeviceInfo.TYPE_TELEPHONY) {
+                continue
+            }
+            val label = deviceLabel(info)
+            if (seen.add(label)) {
+                out.add(AudioDevice(id = info.id.toString(), label = label))
+            }
+        }
+        return skip.lib.Array(out)
+    }
+
+    internal fun currentAudioInputId(): String? {
+        val manager = audioManager() ?: return null
+        if (Build.VERSION.SDK_INT >= 31) {
+            val device = manager.communicationDevice ?: return null
+            return device.id.toString()
+        }
+        return null
+    }
+
+    internal fun currentAudioOutputId(): String? {
+        val manager = audioManager() ?: return null
+        if (Build.VERSION.SDK_INT >= 31) {
+            val device = manager.communicationDevice ?: return null
+            return device.id.toString()
+        }
+        // Pre-31: speaker vs earpiece is the only thing we can read back.
+        val speakerOn = manager.isSpeakerphoneOn
+        val devices = manager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
+        val wanted = if (speakerOn) AudioDeviceInfo.TYPE_BUILTIN_SPEAKER else AudioDeviceInfo.TYPE_BUILTIN_EARPIECE
+        return devices.firstOrNull { it.type == wanted }?.id?.toString()
+    }
+
+    internal fun selectAudioInput(deviceId: String) {
+        // Routing the communication device (API 31+) sets both the active input
+        // and output for the accessory; the dedicated output picker covers the
+        // rest. On older OS versions input routing isn't independently selectable.
+        if (Build.VERSION.SDK_INT >= 31) {
+            routeCommunicationDevice(deviceId)
+        }
+    }
+
+    internal fun selectAudioOutput(deviceId: String) {
+        val manager = audioManager() ?: return
+        // Audio routing only takes effect while the session is in communication
+        // mode (the call mode). Set it defensively; the WebRTC ADM also uses it.
+        manager.mode = AudioManager.MODE_IN_COMMUNICATION
+
+        if (Build.VERSION.SDK_INT >= 31) {
+            routeCommunicationDevice(deviceId)
+            return
+        }
+
+        // Pre-31 fallback: only speaker vs earpiece is reliably controllable.
+        val devices = manager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
+        val target = devices.firstOrNull { it.id.toString() == deviceId }
+        manager.isSpeakerphoneOn = target?.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER
+    }
+
+    private fun routeCommunicationDevice(deviceId: String) {
+        val manager = audioManager() ?: return
+        if (Build.VERSION.SDK_INT < 31) return
+        val devices = manager.availableCommunicationDevices
+        val target = devices.firstOrNull { it.id.toString() == deviceId }
+        if (target != null) {
+            try {
+                manager.setCommunicationDevice(target)
+            } catch (_: Throwable) {
+            }
+        } else {
+            manager.clearCommunicationDevice()
+        }
+    }
+
+    // Plays a short DTMF/beep through the active output so the user can confirm
+    // the selected speaker is audible (mirrors web's "Test speaker").
+    internal fun testSpeaker() {
+        try {
+            val tone = ToneGenerator(AudioManager.STREAM_VOICE_CALL, 80)
+            tone.startTone(ToneGenerator.TONE_PROP_BEEP, 250)
+            // Release after the tone finishes so the generator isn't leaked.
+            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                tone.release()
+            }, 400L)
+        } catch (_: Throwable) {
+        }
+    }
 
     // Reads the per-consumer `audioLevel` (0.0–1.0, an RMS-derived linear value)
     // from each remote audio consumer's WebRTC stats and returns a userId->level

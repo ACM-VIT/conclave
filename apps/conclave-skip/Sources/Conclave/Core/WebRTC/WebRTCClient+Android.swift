@@ -47,5 +47,13 @@ final class WebRTCClient {
     func getLocalVideoTrack() -> Any? { nil }
 
     func sampleAudioLevels() -> [String: Double] { fatalError() }
+
+    func availableAudioInputs() -> [AudioDevice] { fatalError() }
+    func availableAudioOutputs() -> [AudioDevice] { fatalError() }
+    func currentAudioInputId() -> String? { fatalError() }
+    func currentAudioOutputId() -> String? { fatalError() }
+    func selectAudioInput(_ deviceId: String) { fatalError() }
+    func selectAudioOutput(_ deviceId: String) { fatalError() }
+    func testSpeaker() { fatalError() }
 }
 #endif

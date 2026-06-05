@@ -9,6 +9,7 @@
 import Foundation
 import Combine
 @preconcurrency import AVFoundation
+import AudioToolbox
 import Mediasoup
 import WebRTC
 
@@ -713,6 +714,87 @@ extension WebRTCClient: SendTransportDelegate, ReceiveTransportDelegate, Produce
                 }
             }
         }
+    }
+}
+
+// MARK: - Audio Device Routing (iOS)
+
+extension WebRTCClient {
+    /// Microphone inputs reported by AVAudioSession (built-in mic, wired headset,
+    /// any connected Bluetooth HFP device). The port UID is the stable selection id.
+    func availableAudioInputs() -> [AudioDevice] {
+        let inputs = audioSession.availableInputs ?? []
+        return inputs.map { AudioDevice(id: $0.uid, label: $0.portName) }
+    }
+
+    /// Output routes. Built-in Speaker / Receiver (earpiece) are always offered;
+    /// any connected Bluetooth/wired output is added from the active route. The
+    /// id is a synthetic key we interpret in `selectAudioOutput`.
+    func availableAudioOutputs() -> [AudioDevice] {
+        var devices: [AudioDevice] = [
+            AudioDevice(id: "speaker", label: "Speaker"),
+            AudioDevice(id: "receiver", label: "Earpiece")
+        ]
+        for output in audioSession.currentRoute.outputs {
+            switch output.portType {
+            case .bluetoothA2DP, .bluetoothHFP, .bluetoothLE:
+                devices.append(AudioDevice(id: output.uid, label: output.portName))
+            case .headphones, .usbAudio, .carAudio:
+                devices.append(AudioDevice(id: output.uid, label: output.portName))
+            default:
+                break
+            }
+        }
+        return devices
+    }
+
+    func currentAudioInputId() -> String? {
+        audioSession.preferredInput?.uid ?? audioSession.currentRoute.inputs.first?.uid
+    }
+
+    func currentAudioOutputId() -> String? {
+        guard let output = audioSession.currentRoute.outputs.first else { return "receiver" }
+        switch output.portType {
+        case .builtInSpeaker: return "speaker"
+        case .builtInReceiver: return "receiver"
+        default: return output.uid
+        }
+    }
+
+    func selectAudioInput(_ deviceId: String) {
+        guard let input = (audioSession.availableInputs ?? []).first(where: { $0.uid == deviceId }) else { return }
+        do {
+            try audioSession.setPreferredInput(input)
+        } catch {
+            debugLog("[WebRTC] setPreferredInput failed: \(error)")
+        }
+    }
+
+    func selectAudioOutput(_ deviceId: String) {
+        do {
+            switch deviceId {
+            case "speaker":
+                try audioSession.overrideOutputAudioPort(.speaker)
+            case "receiver":
+                try audioSession.overrideOutputAudioPort(.none)
+            default:
+                // Bluetooth / wired: clear any speaker override and prefer the
+                // matching input so the route follows that accessory.
+                try audioSession.overrideOutputAudioPort(.none)
+                if let input = (audioSession.availableInputs ?? []).first(where: { $0.uid == deviceId }) {
+                    try audioSession.setPreferredInput(input)
+                }
+            }
+        } catch {
+            debugLog("[WebRTC] selectAudioOutput failed: \(error)")
+        }
+    }
+
+    /// Plays a short system sound through the current output route so the user can
+    /// confirm the selected speaker is audible (mirrors web's "Test speaker").
+    func testSpeaker() {
+        // 1057 is the short "Tink" UI sound; routes through the active session.
+        AudioServicesPlaySystemSound(SystemSoundID(1057))
     }
 }
 

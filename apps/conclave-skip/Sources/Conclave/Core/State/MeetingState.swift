@@ -41,6 +41,10 @@ final class MeetingState {
     var isScreenSharing: Bool = false
     var isHandRaised: Bool = false
     var videoQuality: VideoQuality = .standard
+    // Selected audio routes (mic input / speaker output). nil = follow the
+    // platform default. Mirrors the web client's device pickers.
+    var selectedAudioInputId: String?
+    var selectedAudioOutputId: String?
 
     // Active States
     var activeScreenShareUserId: String?

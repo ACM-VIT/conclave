@@ -102,6 +102,16 @@ enum VideoQuality: String, Codable {
     case standard
 }
 
+// MARK: - Audio Device
+
+/// A selectable audio input (microphone) or output (speaker/earpiece/bluetooth)
+/// route, surfaced from the platform's audio APIs. `id` is the stable platform
+/// identifier used to select the route; `label` is the human-readable name.
+struct AudioDevice: Identifiable, Equatable {
+    let id: String
+    let label: String
+}
+
 // MARK: - Producer Type
 
 enum ProducerType: String, Codable {

@@ -950,6 +950,40 @@ final class MeetingViewModel {
         state.videoQuality = quality
         webRTCClient.updateVideoQuality(quality)
     }
+
+    // MARK: - Audio Device Routing
+
+    func availableAudioInputs() -> [AudioDevice] {
+        webRTCClient.availableAudioInputs()
+    }
+
+    func availableAudioOutputs() -> [AudioDevice] {
+        webRTCClient.availableAudioOutputs()
+    }
+
+    /// The currently-selected mic input id, falling back to the platform's
+    /// active route so the picker reflects reality on first open.
+    func currentAudioInputId() -> String? {
+        state.selectedAudioInputId ?? webRTCClient.currentAudioInputId()
+    }
+
+    func currentAudioOutputId() -> String? {
+        state.selectedAudioOutputId ?? webRTCClient.currentAudioOutputId()
+    }
+
+    func setAudioInput(_ deviceId: String) {
+        state.selectedAudioInputId = deviceId
+        webRTCClient.selectAudioInput(deviceId)
+    }
+
+    func setAudioOutput(_ deviceId: String) {
+        state.selectedAudioOutputId = deviceId
+        webRTCClient.selectAudioOutput(deviceId)
+    }
+
+    func testSpeaker() {
+        webRTCClient.testSpeaker()
+    }
     
     // MARK: - Chat Commands
     

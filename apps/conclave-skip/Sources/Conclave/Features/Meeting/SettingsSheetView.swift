@@ -113,6 +113,104 @@ struct SettingsSheetView: View {
     }
 
     @ViewBuilder
+    private func microphoneInputRow() -> some View {
+        let inputs = viewModel.availableAudioInputs()
+        HStack(spacing: ACMSpacing.sm) {
+            MeetingSheetIconBox(
+                icon: "mic.fill",
+                androidIcon: "mic",
+                tint: ACMColors.textMuted,
+                androidTint: "muted"
+            )
+
+            rowLabel("Microphone")
+
+            Spacer()
+
+            Picker("", selection: Binding(
+                get: { viewModel.currentAudioInputId() ?? "" },
+                set: { next in
+                    if !next.isEmpty {
+                        viewModel.setAudioInput(next)
+                    }
+                }
+            )) {
+                ForEach(inputs) { device in
+                    Text(device.label).tag(device.id)
+                }
+            }
+            .tint(ACMColors.primaryOrange)
+            .disabled(inputs.isEmpty)
+        }
+        .padding(.horizontal, ACMSpacing.sm)
+        .frame(height: 52)
+    }
+
+    @ViewBuilder
+    private func audioOutputRow() -> some View {
+        let outputs = viewModel.availableAudioOutputs()
+        HStack(spacing: ACMSpacing.sm) {
+            MeetingSheetIconBox(
+                icon: "speaker.wave.2.fill",
+                androidIcon: "volume",
+                tint: ACMColors.textMuted,
+                androidTint: "muted"
+            )
+
+            rowLabel("Speaker")
+
+            Spacer()
+
+            Picker("", selection: Binding(
+                get: { viewModel.currentAudioOutputId() ?? "" },
+                set: { next in
+                    if !next.isEmpty {
+                        viewModel.setAudioOutput(next)
+                    }
+                }
+            )) {
+                ForEach(outputs) { device in
+                    Text(device.label).tag(device.id)
+                }
+            }
+            .tint(ACMColors.primaryOrange)
+            .disabled(outputs.isEmpty)
+        }
+        .padding(.horizontal, ACMSpacing.sm)
+        .frame(height: 52)
+    }
+
+    @ViewBuilder
+    private func testSpeakerRow() -> some View {
+        Button {
+            viewModel.testSpeaker()
+        } label: {
+            HStack(spacing: ACMSpacing.sm) {
+                MeetingSheetIconBox(
+                    icon: "speaker.wave.2.fill",
+                    androidIcon: "volume",
+                    tint: ACMColors.primaryOrange,
+                    androidTint: "accent"
+                )
+
+                Text("Test speaker")
+                    .font(ACMFont.trial(15, weight: .medium))
+                    .foregroundStyle(ACMColors.text)
+                    .lineLimit(1)
+
+                Spacer()
+            }
+            .padding(.horizontal, ACMSpacing.sm)
+            .frame(height: 52)
+            .frame(maxWidth: .infinity, alignment: .leading)
+#if !SKIP
+            .contentShape(Rectangle())
+#endif
+        }
+        .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
     private func qualityRow() -> some View {
         HStack(spacing: ACMSpacing.sm) {
             MeetingSheetIconBox(
@@ -277,6 +375,12 @@ struct SettingsSheetView: View {
                                 isActive: !viewModel.state.isCameraOff,
                                 isDisabled: viewModel.state.isGhostMode
                             )
+                            MeetingSheetRowDivider(inset: ACMSpacing.sm + 32 + ACMSpacing.sm)
+                            microphoneInputRow()
+                            MeetingSheetRowDivider(inset: ACMSpacing.sm + 32 + ACMSpacing.sm)
+                            audioOutputRow()
+                            MeetingSheetRowDivider(inset: ACMSpacing.sm + 32 + ACMSpacing.sm)
+                            testSpeakerRow()
                         }
                     }
 
