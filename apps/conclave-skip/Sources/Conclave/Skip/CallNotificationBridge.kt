@@ -1,6 +1,7 @@
 package conclave.module
 
 import android.content.Intent
+import androidx.core.content.ContextCompat
 import skip.foundation.ProcessInfo
 
 /// Bridges the shared SwiftUI MeetingViewModel (transpiled into this same
@@ -13,8 +14,6 @@ import skip.foundation.ProcessInfo
 /// persistent Leave + Mute/unmute notification that deep-links back into the
 /// meeting.
 object CallNotificationBridge {
-
-    /// Start (or refresh) the ongoing-call foreground service + notification.
     fun startCall(muted: Boolean) {
         val ctx = ProcessInfo.processInfo.androidContext
         val intent = Intent(ctx, CallForegroundService::class.java).apply {
@@ -22,13 +21,12 @@ object CallNotificationBridge {
             putExtra(CallForegroundService.EXTRA_MUTED, muted)
         }
         try {
-            ctx.startForegroundService(intent)
+            ContextCompat.startForegroundService(ctx, intent)
         } catch (t: Throwable) {
             debugLog("[Call] Failed to start foreground service: ${t}")
         }
     }
 
-    /// Update the notification's Mute/unmute action + text to match the call.
     fun updateMuted(muted: Boolean) {
         val ctx = ProcessInfo.processInfo.androidContext
         val intent = Intent(ctx, CallForegroundService::class.java).apply {
@@ -41,7 +39,6 @@ object CallNotificationBridge {
         }
     }
 
-    /// Stop the ongoing-call service + remove the notification (call ended).
     fun stopCall() {
         val ctx = ProcessInfo.processInfo.androidContext
         val intent = Intent(ctx, CallForegroundService::class.java).apply {

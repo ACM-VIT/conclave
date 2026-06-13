@@ -7,6 +7,7 @@ import android.media.projection.MediaProjectionManager
 import androidx.activity.ComponentActivity
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.suspendCancellableCoroutine
 import skip.foundation.ProcessInfo
@@ -66,7 +67,7 @@ object ScreenCaptureManager {
                     action = ScreenCaptureService.ACTION_START
                 }
                 try {
-                    ctx.startForegroundService(intent)
+                    ContextCompat.startForegroundService(ctx, intent)
                 } catch (t: Throwable) {
                     debugLog("[ScreenShare] Failed to start screen capture service: ${t}")
                     synchronized(stateLock) {

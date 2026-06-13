@@ -14,42 +14,63 @@ import java.util.concurrent.atomic.AtomicInteger
 /// so every callback is hopped onto the main thread (the VM is @MainActor).
 object CallActionDispatcher {
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val actionLock = Any()
 
     @Volatile private var onToggleMute: (() -> Unit)? = null
     @Volatile private var onLeave: (() -> Unit)? = null
     private val generation = AtomicInteger(0)
 
-    /// Registered by the VM when a call becomes active.
     fun register(mute: () -> Unit, leave: () -> Unit) {
-        generation.incrementAndGet()
-        onToggleMute = mute
-        onLeave = leave
+        synchronized(actionLock) {
+            onToggleMute = mute
+            onLeave = leave
+            generation.incrementAndGet()
+        }
     }
 
-    /// Cleared by the VM when the call ends.
     fun clear() {
-        generation.incrementAndGet()
-        onToggleMute = null
-        onLeave = null
+        synchronized(actionLock) {
+            onToggleMute = null
+            onLeave = null
+            generation.incrementAndGet()
+        }
     }
 
     fun toggleMute() {
-        val action = onToggleMute ?: return
-        val actionGeneration = generation.get()
+        val snapshot = toggleMuteSnapshot() ?: return
         mainHandler.post {
-            if (generation.get() == actionGeneration && onToggleMute === action) {
-                action()
-            }
+            actionIfCurrent(snapshot, ::onToggleMute)?.invoke()
         }
     }
 
     fun leave() {
-        val action = onLeave ?: return
-        val actionGeneration = generation.get()
+        val snapshot = leaveSnapshot() ?: return
         mainHandler.post {
-            if (generation.get() == actionGeneration && onLeave === action) {
-                action()
-            }
+            actionIfCurrent(snapshot, ::onLeave)?.invoke()
+        }
+    }
+
+    private data class ActionSnapshot(
+        val generation: Int,
+        val action: () -> Unit
+    )
+
+    private fun toggleMuteSnapshot(): ActionSnapshot? = synchronized(actionLock) {
+        onToggleMute?.let { ActionSnapshot(generation.get(), it) }
+    }
+
+    private fun leaveSnapshot(): ActionSnapshot? = synchronized(actionLock) {
+        onLeave?.let { ActionSnapshot(generation.get(), it) }
+    }
+
+    private fun actionIfCurrent(
+        snapshot: ActionSnapshot,
+        currentAction: () -> (() -> Unit)?
+    ): (() -> Unit)? = synchronized(actionLock) {
+        if (generation.get() == snapshot.generation && currentAction() === snapshot.action) {
+            snapshot.action
+        } else {
+            null
         }
     }
 }

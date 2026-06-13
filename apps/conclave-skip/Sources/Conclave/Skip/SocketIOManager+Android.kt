@@ -260,6 +260,7 @@ internal class SocketIOManager {
                             activeRoomId = null
                             activeRoomAliases = emptySet()
                             pendingRoomAliases = emptySet()
+                            routerRtpCapabilitiesJson = null
                         }
                     }
 
@@ -368,6 +369,7 @@ internal class SocketIOManager {
         activeRoomId = null
         activeRoomAliases = emptySet()
         pendingRoomAliases = emptySet()
+        routerRtpCapabilitiesJson = null
         isConnected = false
     }
 
@@ -390,6 +392,7 @@ internal class SocketIOManager {
         activeRoomId = null
         activeRoomAliases = emptySet()
         pendingRoomAliases = roomAliasSet(requestedRoomId = roomId, resolvedRoomId = null)
+        routerRtpCapabilitiesJson = null
 
         try {
             val data = emit(SocketEvent.joinRoom, request)
@@ -411,6 +414,7 @@ internal class SocketIOManager {
             return response
         } catch (error: Throwable) {
             pendingRoomAliases = emptySet()
+            routerRtpCapabilitiesJson = null
             throw error
         }
     }

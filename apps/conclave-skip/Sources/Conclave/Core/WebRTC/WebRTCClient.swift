@@ -176,14 +176,15 @@ final class WebRTCClient: NSObject, ObservableObject {
         let trimmedIceServers = iceServersJSON?.trimmingCharacters(in: .whitespacesAndNewlines)
         self.runtimeIceServersJSON = (trimmedIceServers?.isEmpty == false) ? trimmedIceServers : nil
 
+        self.device = nil
         let device = Device(pcFactory: Self.factory)
         do {
             let capabilities = try encodeJSONString(rtpCapabilities)
             try device.load(with: capabilities)
+            self.device = device
         } catch {
             debugLog("[WebRTC] Failed to load device capabilities: \(error)")
         }
-        self.device = device
     }
 
     // MARK: - Transport Creation
@@ -864,6 +865,8 @@ final class WebRTCClient: NSObject, ObservableObject {
         rtcLocalAudioTrack?.isEnabled = false
         rtcLocalVideoTrack = nil
         rtcLocalAudioTrack = nil
+        videoSource = nil
+        audioSource = nil
 
         // Reset the produce-state flags. The VM (and this client) is now a
         // process-wide singleton reused across calls, so leaving them stale-true
@@ -1193,39 +1196,43 @@ extension WebRTCClient {
             throw WebRTCError.noTransport
         }
         
-        // Create screen video source and capturer
         let screenSource = Self.factory.videoSource()
         self.screenVideoSource = screenSource
         self.screenVideoCapturer = RTCVideoCapturer(delegate: screenSource)
         
-        // Create video track from source
         let screenTrack = Self.factory.videoTrack(with: screenSource, trackId: "screen0")
         screenTrack.isEnabled = true
         self.rtcScreenTrack = screenTrack
-        
-        // Create producer for screen
-        let appData = try encodeJSONString(ProducerAppData(type: ProducerType.screen.rawValue, paused: false))
-        let producer = try sendTransport.createProducer(
-            for: screenTrack,
-            encodings: [
-                RTCRtpEncodingParameters() // HD quality for screen
-            ],
-            codecOptions: nil,
-            codec: nil,
-            appData: appData
-        )
-        producer.delegate = self
-        producer.resume()
-        
-        screenProducer = producer
-        
-        debugLog("[WebRTC] Screen sharing producer created: \(producer.id)")
+
+        do {
+            let appData = try encodeJSONString(ProducerAppData(type: ProducerType.screen.rawValue, paused: false))
+            let producer = try sendTransport.createProducer(
+                for: screenTrack,
+                encodings: [
+                    RTCRtpEncodingParameters()
+                ],
+                codecOptions: nil,
+                codec: nil,
+                appData: appData
+            )
+            producer.delegate = self
+            producer.resume()
+
+            screenProducer = producer
+
+            debugLog("[WebRTC] Screen sharing producer created: \(producer.id)")
+        } catch {
+            screenTrack.isEnabled = false
+            rtcScreenTrack = nil
+            screenVideoSource = nil
+            screenVideoCapturer = nil
+            screenProducer = nil
+            throw error
+        }
     }
     
     func stopScreenSharing() async {
-        guard let producer = screenProducer else { return }
-        
-        producer.close()
+        screenProducer?.close()
         screenProducer = nil
         
         rtcScreenTrack?.isEnabled = false

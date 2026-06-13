@@ -160,6 +160,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         MediasoupClient.initialize(context)
         ensurePeerConnectionFactory(context)
 
+        this.device = null
         val device = Device()
         // mediasoup Device.load() takes the router rtpCapabilities as a JSON
         // string. We use the verbatim JSON the server sent in the joinRoom ack
@@ -172,10 +173,10 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             ?: throw ErrorException("Router RTP capabilities JSON unavailable")
         try {
             device.load(capabilities, null)
+            this.device = device
         } catch (error: Throwable) {
             debugLog("[WebRTC] Failed to load device capabilities: ${error}")
         }
-        this.device = device
     }
 
     internal suspend fun createTransports() {
@@ -244,6 +245,10 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         val sendTransport = sendTransport ?: throw ErrorException("Send transport not ready")
         ensurePeerConnectionFactory(ProcessInfo.processInfo.androidContext)
 
+        if (androidx.core.content.ContextCompat.checkSelfPermission(ProcessInfo.processInfo.androidContext, android.Manifest.permission.RECORD_AUDIO) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            throw ErrorException("Microphone permission not granted")
+        }
+
         if (audioSource == null) {
             audioSource = peerConnectionFactory?.createAudioSource(MediaConstraints())
         }
@@ -252,16 +257,27 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         val audioTrack = localAudioTrack ?: throw ErrorException("Audio track unavailable")
         audioTrack.setEnabled(true)
 
-        val appData = encodeJSONString(ProducerAppData(type = ProducerType.webcam.rawValue, paused = false))
-        // produce(listener, track, encodings, codecOptions, codec, appData) — the
-        // 5-arg overload's last String is `codec`, NOT appData, so appData must
-        // go in the 6-arg slot with codec=null (else it's parsed as a codec).
-        val producer = sendTransport.produce(this, audioTrack as MediaStreamTrack, null, null, null, appData)
-        producer.resume()
+        var pendingProducer: Producer? = null
+        try {
+            val appData = encodeJSONString(ProducerAppData(type = ProducerType.webcam.rawValue, paused = false))
+            // produce(listener, track, encodings, codecOptions, codec, appData) — the
+            // 5-arg overload's last String is `codec`, NOT appData, so appData must
+            // go in the 6-arg slot with codec=null (else it's parsed as a codec).
+            val producer = sendTransport.produce(this, audioTrack as MediaStreamTrack, null, null, null, appData)
+            pendingProducer = producer
+            producer.resume()
 
-        audioProducer = producer
-        localAudioEnabled = true
-        onLocalAudioEnabledChanged?.invoke(true)
+            audioProducer = producer
+            localAudioEnabled = true
+            onLocalAudioEnabledChanged?.invoke(true)
+        } catch (t: Throwable) {
+            pendingProducer?.close()
+            localAudioTrack?.setEnabled(false)
+            localAudioTrack = null
+            audioSource = null
+            localAudioEnabled = false
+            throw t
+        }
     }
 
     internal suspend fun startProducingVideo() {
@@ -284,26 +300,47 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         if (androidx.core.content.ContextCompat.checkSelfPermission(ProcessInfo.processInfo.androidContext, android.Manifest.permission.CAMERA) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
             throw ErrorException("Camera permission not granted")
         }
-        videoSource = peerConnectionFactory?.createVideoSource(false)
-        val source = videoSource ?: throw ErrorException("Video source unavailable")
-        capturer.initialize(surfaceTextureHelper, ProcessInfo.processInfo.androidContext, source.capturerObserver)
-        capturer.startCapture(1280, 720, 30)
+        var pendingProducer: Producer? = null
+        try {
+            videoSource = peerConnectionFactory?.createVideoSource(false)
+            val source = videoSource ?: throw ErrorException("Video source unavailable")
+            capturer.initialize(surfaceTextureHelper, ProcessInfo.processInfo.androidContext, source.capturerObserver)
+            capturer.startCapture(1280, 720, 30)
 
-        localVideoTrack = peerConnectionFactory?.createVideoTrack("video0", source)
-        val videoTrack = localVideoTrack ?: throw ErrorException("Video track unavailable")
-        videoTrack.setEnabled(true)
+            localVideoTrack = peerConnectionFactory?.createVideoTrack("video0", source)
+            val videoTrack = localVideoTrack ?: throw ErrorException("Video track unavailable")
+            videoTrack.setEnabled(true)
 
-        val appData = encodeJSONString(ProducerAppData(type = ProducerType.webcam.rawValue, paused = false))
-        // codec=null in the 6-arg slot — see startProducingAudio.
-        val producer = sendTransport.produce(this, videoTrack as MediaStreamTrack, null, null, null, appData)
-        producer.resume()
+            val appData = encodeJSONString(ProducerAppData(type = ProducerType.webcam.rawValue, paused = false))
+            // codec=null in the 6-arg slot — see startProducingAudio.
+            val producer = sendTransport.produce(this, videoTrack as MediaStreamTrack, null, null, null, appData)
+            pendingProducer = producer
+            producer.resume()
 
-        videoProducer = producer
-        localVideoEnabled = true
-        onLocalVideoEnabledChanged?.invoke(true)
+            videoProducer = producer
+            localVideoEnabled = true
+            onLocalVideoEnabledChanged?.invoke(true)
 
-        val wrapper = VideoTrackWrapper(id = producer.id, userId = "local", isLocal = true, track = videoTrack)
-        localVideoTrackWrapper = wrapper
+            val wrapper = VideoTrackWrapper(id = producer.id, userId = "local", isLocal = true, track = videoTrack)
+            localVideoTrackWrapper = wrapper
+        } catch (t: Throwable) {
+            pendingProducer?.close()
+            localVideoTrack?.setEnabled(false)
+            localVideoTrack = null
+            localVideoTrackWrapper?.setTrack(null)
+            localVideoTrackWrapper = null
+            try {
+                videoCapturer?.stopCapture()
+            } catch (_: Throwable) {
+            }
+            videoCapturer?.dispose()
+            videoCapturer = null
+            surfaceTextureHelper?.dispose()
+            surfaceTextureHelper = null
+            videoSource = null
+            localVideoEnabled = false
+            throw t
+        }
     }
 
     /// Mirrors startProducingVideo but captures the device screen via
@@ -343,6 +380,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         capturer.initialize(screenSurfaceTextureHelper, context, source.capturerObserver)
 
         val metrics = context.resources.displayMetrics
+        var pendingProducer: Producer? = null
         try {
             // getMediaProjection() + createVirtualDisplay() happen here. If the
             // typed FGS isn't live, or the consent token was already consumed,
@@ -350,7 +388,25 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             // chain so a retry starts clean (no leaked SurfaceTextureHelper /
             // capturer) and rethrow for the VM's catch to surface the error.
             capturer.startCapture(metrics.widthPixels, metrics.heightPixels, 30)
+
+            val track = peerConnectionFactory?.createVideoTrack("screen0", source)
+                ?: throw ErrorException("Screen track unavailable")
+            track.setEnabled(true)
+            screenVideoTrack = track
+
+            val appData = encodeJSONString(ProducerAppData(type = ProducerType.screen.rawValue, paused = false))
+            // codec=null in the 6-arg slot — see startProducingAudio.
+            val producer = sendTransport.produce(this, track as MediaStreamTrack, null, null, null, appData)
+            pendingProducer = producer
+            producer.resume()
+            screenProducer = producer
+            debugLog("[WebRTC] Screen sharing producer created: ${producer.id}")
         } catch (t: Throwable) {
+            pendingProducer?.close()
+            try {
+                capturer.stopCapture()
+            } catch (_: Throwable) {
+            }
             try {
                 capturer.dispose()
             } catch (_: Throwable) {
@@ -359,23 +415,13 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             screenSurfaceTextureHelper?.dispose()
             screenSurfaceTextureHelper = null
             screenVideoSource = null
+            screenVideoTrack?.setEnabled(false)
+            screenVideoTrack = null
             // Drop the now-consumed/invalid consent token so the next share
             // requests fresh consent instead of reusing a single-use Intent.
             ScreenCaptureManager.stopCapture()
-            throw ErrorException("Screen capture failed to start: ${t}")
+            throw ErrorException("Screen sharing failed to start: ${t}")
         }
-
-        val track = peerConnectionFactory?.createVideoTrack("screen0", source)
-            ?: throw ErrorException("Screen track unavailable")
-        track.setEnabled(true)
-        screenVideoTrack = track
-
-        val appData = encodeJSONString(ProducerAppData(type = ProducerType.screen.rawValue, paused = false))
-        // codec=null in the 6-arg slot — see startProducingAudio.
-        val producer = sendTransport.produce(this, track as MediaStreamTrack, null, null, null, appData)
-        producer.resume()
-        screenProducer = producer
-        debugLog("[WebRTC] Screen sharing producer created: ${producer.id}")
     }
 
     internal suspend fun stopScreenSharing() {
@@ -651,6 +697,8 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         localAudioTrack?.setEnabled(false)
         localVideoTrack = null
         localAudioTrack = null
+        videoSource = null
+        audioSource = null
 
         // Reset the produce-state flags (mirrors the Swift WebRTCClient.cleanup
         // fix). The client is reused across calls via the singleton VM, so a
