@@ -274,7 +274,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             pendingProducer?.close()
             localAudioTrack?.setEnabled(false)
             localAudioTrack = null
-            audioSource = null
+            clearAudioSource()
             localAudioEnabled = false
             throw t
         }
@@ -337,7 +337,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             videoCapturer = null
             surfaceTextureHelper?.dispose()
             surfaceTextureHelper = null
-            videoSource = null
+            clearVideoSource()
             localVideoEnabled = false
             throw t
         }
@@ -414,7 +414,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             screenCapturer = null
             screenSurfaceTextureHelper?.dispose()
             screenSurfaceTextureHelper = null
-            screenVideoSource = null
+            clearScreenVideoSource()
             screenVideoTrack?.setEnabled(false)
             screenVideoTrack = null
             // Drop the now-consumed/invalid consent token so the next share
@@ -435,7 +435,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         screenCapturer = null
         screenSurfaceTextureHelper?.dispose()
         screenSurfaceTextureHelper = null
-        screenVideoSource = null
+        clearScreenVideoSource()
         screenVideoTrack?.setEnabled(false)
         screenVideoTrack = null
     }
@@ -612,7 +612,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             audioProducer = null
             localAudioTrack?.setEnabled(false)
             localAudioTrack = null
-            audioSource = null
+            clearAudioSource()
             localAudioEnabled = false
             onLocalAudioEnabledChanged?.invoke(false)
             return true
@@ -633,7 +633,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             videoCapturer = null
             surfaceTextureHelper?.dispose()
             surfaceTextureHelper = null
-            videoSource = null
+            clearVideoSource()
             localVideoEnabled = false
             onLocalVideoEnabledChanged?.invoke(false)
             return true
@@ -645,6 +645,21 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         }
 
         return false
+    }
+
+    private fun clearAudioSource() {
+        audioSource?.dispose()
+        audioSource = null
+    }
+
+    private fun clearVideoSource() {
+        videoSource?.dispose()
+        videoSource = null
+    }
+
+    private fun clearScreenVideoSource() {
+        screenVideoSource?.dispose()
+        screenVideoSource = null
     }
 
     private fun matchesProducer(producer: Producer?, producerId: String?): Boolean {
@@ -678,7 +693,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         screenCapturer = null
         screenSurfaceTextureHelper?.dispose()
         screenSurfaceTextureHelper = null
-        screenVideoSource = null
+        clearScreenVideoSource()
         screenVideoTrack = null
 
         audioProducer?.close()
@@ -697,8 +712,8 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         localAudioTrack?.setEnabled(false)
         localVideoTrack = null
         localAudioTrack = null
-        videoSource = null
-        audioSource = null
+        clearVideoSource()
+        clearAudioSource()
 
         // Reset the produce-state flags (mirrors the Swift WebRTCClient.cleanup
         // fix). The client is reused across calls via the singleton VM, so a
