@@ -1429,11 +1429,15 @@ export function useMeetSocket({
 
       if (!mediaIntent.isCameraOn) {
         dropVideoTracksForCameraOff(stream, "camera-off publish intent");
+        if (publicationWarnings.length > 0) {
+          console.warn(
+            `[Meets] Continuing join without some local media: ${publicationWarnings.join(", ")}`
+          );
+        }
+        return;
       }
 
-      const requestedVideoTrack = mediaIntent.isCameraOn
-        ? getVideoPublishTrack?.(stream) ?? null
-        : null;
+      const requestedVideoTrack = getVideoPublishTrack?.(stream) ?? null;
       let videoTrack =
         requestedVideoTrack?.readyState === "live" ? requestedVideoTrack : null;
       if (requestedVideoTrack && requestedVideoTrack.readyState !== "live") {

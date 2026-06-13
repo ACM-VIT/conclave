@@ -1,5 +1,4 @@
 import {
-  Blend,
   Globe,
   Hand,
   LayoutGrid,
@@ -10,6 +9,7 @@ import {
   MicOff,
   Monitor,
   PictureInPicture2,
+  Sparkles,
   StickyNote,
   TerminalSquare,
   Users,
@@ -254,7 +254,7 @@ export function buildControlsConfig(p: ControlsBarProps): ControlsConfig {
   if (p.onToggleVideoEffects) {
     overflow.push({
       id: "effects",
-      icon: Blend,
+      icon: Sparkles,
       label: "Backgrounds and effects",
       active: p.isVideoEffectsOpen || (p.activeVideoEffectsCount ?? 0) > 0,
       disabled: ghost || p.isVideoEffectsPermissionBlocked,

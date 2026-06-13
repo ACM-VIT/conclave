@@ -137,7 +137,7 @@ const VIDEO_FRAME_CALLBACK_TRANSITION_WATCHDOG_MS = 48;
 const VIDEO_FRAME_CALLBACK_EFFECT_CHANGE_PUMP_MS = 320;
 const VIDEO_FRAME_CALLBACK_EFFECT_CHANGE_DRAIN_FRAMES = 4;
 const OUTPUT_WRITER_STEADY_MAX_PENDING_FRAMES = 1;
-const OUTPUT_WRITER_TRANSITION_MAX_PENDING_FRAMES = 1;
+const OUTPUT_WRITER_TRANSITION_MAX_PENDING_FRAMES = 2;
 const OUTPUT_WRITER_TRANSITION_BURST_MS = 900;
 const OUTPUT_WRITER_BACKPRESSURE_DRAIN_TIMEOUT_MS = 36;
 const OUTPUT_WRITER_PENDING_PRESSURE_MS = 75;
@@ -6276,6 +6276,10 @@ export function useVideoEffects({
       externalEffectChangePumpUntilRef.current =
         performance.now() + VIDEO_FRAME_CALLBACK_EFFECT_CHANGE_PUMP_MS;
       effectChangeFramePumpRef.current?.("effects-ref-change");
+      // The output MediaStreamTrack can remain stable while its rendered
+      // effect changes. Tick the version so publishers that fell back to raw
+      // video get another chance to switch back to the processed track.
+      setProcessedTrackVersion((version) => version + 1);
     } else {
       hasObservedEffectsRef.current = true;
     }
