@@ -338,7 +338,7 @@ function VideoEffectsPreview({
   hasLiveVideo: boolean;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const shouldShowVideo = !isCameraOff && hasLiveVideo;
+  const shouldShowVideo = hasLiveVideo;
 
   useEffect(() => {
     const video = videoRef.current;
@@ -448,7 +448,7 @@ export default function VideoEffectsPanel({
     debugStats?.outputTrackPublished === true &&
     Boolean(outputTrackId) &&
     previewVideoTrack?.id === outputTrackId;
-  const cameraUnavailable = isCameraOff || !hasLiveVideo;
+  const cameraUnavailable = !hasLiveVideo;
   const displayedActiveCount = activeCount;
 
   const applyEffectsChange = (updater: SetStateAction<VideoEffectsState>) => {
@@ -866,6 +866,11 @@ export default function VideoEffectsPanel({
       }
       data-video-effects-preview-matches-output={
         previewMatchesPublishedOutput ? "true" : "false"
+      }
+      data-video-effects-camera-off={isCameraOff ? "true" : "false"}
+      data-video-effects-has-live-video={hasLiveVideo ? "true" : "false"}
+      data-video-effects-camera-unavailable={
+        cameraUnavailable ? "true" : "false"
       }
       data-video-effects-filters-visible={showFilters ? "true" : "false"}
       data-video-effects-permission-locked={
