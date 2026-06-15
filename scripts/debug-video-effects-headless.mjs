@@ -1935,6 +1935,8 @@ const runPrejoinPermissionDeniedEffectsProbe = async (cdp, prejoinUrl) => {
         panel?.getAttribute("data-video-effects-permission-locked") === "true" &&
         panel?.getAttribute("data-video-effects-filters-visible") === "false" &&
         bodyText.includes("Camera is blocked") &&
+        panelText.includes("Backgrounds") &&
+        panelText.includes("Appearance") &&
         panelText.includes("Slight blur") &&
         panelText.includes("Blur") &&
         !panelText.includes("Upload image") &&
@@ -1948,6 +1950,52 @@ const runPrejoinPermissionDeniedEffectsProbe = async (cdp, prejoinUrl) => {
         meetDebug?.processedTrack == null;
     })()`,
     10000,
+  );
+  const clickedPermissionBlockedAppearance = await evalValue(
+    cdp,
+    `(() => {
+      const appearanceButton = Array.from(document.querySelectorAll("button")).find(
+        (button) => (button.textContent || "").replace(/\\s+/g, " ").trim() === "Appearance"
+      );
+      if (!(appearanceButton instanceof HTMLButtonElement)) return false;
+      appearanceButton.click();
+      return true;
+    })()`,
+  );
+  if (!clickedPermissionBlockedAppearance) {
+    throw new Error("Permission-blocked appearance tab was not present");
+  }
+  await waitFor(
+    cdp,
+    "prejoin permission-blocked appearance matches Meet",
+    `(() => {
+      const panel = document.querySelector('[data-testid="video-effects-panel"]');
+      const panelText = panel?.innerText || "";
+      return panel?.getAttribute("data-video-effects-permission-locked") === "true" &&
+        panel?.getAttribute("data-video-effects-filters-visible") === "false" &&
+        panelText.includes("Adjust video lighting") &&
+        panelText.includes("Makes it easier to see you against a bright background") &&
+        panelText.includes("Framing") &&
+        panelText.includes("Puts you in the center of the screen") &&
+        !panelText.includes("Touch-up appearance") &&
+        !panelText.includes("Styles") &&
+        !panelText.includes("Cloudy day") &&
+        !panelText.includes("Ocean") &&
+        !panelText.includes("Black and white") &&
+        !panelText.includes("Glowing edges");
+    })()`,
+    10000,
+  );
+  await evalValue(
+    cdp,
+    `(() => {
+      const backgroundsButton = Array.from(document.querySelectorAll("button")).find(
+        (button) => (button.textContent || "").replace(/\\s+/g, " ").trim() === "Backgrounds"
+      );
+      if (!(backgroundsButton instanceof HTMLButtonElement)) return false;
+      backgroundsButton.click();
+      return true;
+    })()`,
   );
   await clickButton(cdp, "Blur your background");
   await waitFor(

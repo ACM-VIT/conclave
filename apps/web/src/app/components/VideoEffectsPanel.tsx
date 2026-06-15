@@ -414,6 +414,8 @@ export default function VideoEffectsPanel({
     CustomVideoBackgroundSummary[]
   >([]);
   const customBackgroundInputRef = useRef<HTMLInputElement | null>(null);
+  const appearanceStyleControlsVisible = !cameraPermissionBlocked;
+  const studioLookControlVisible = !cameraPermissionBlocked;
   const backgroundGroups = useMemo(
     () =>
       groupOptions(
@@ -616,6 +618,7 @@ export default function VideoEffectsPanel({
   const setToggle =
     (key: "studioLighting" | "studioLook" | "framing") =>
     (checked: boolean) => {
+      if (cameraPermissionBlocked && key === "studioLook") return;
       if (key === "framing" && checked) {
         void prewarmVideoEffectsAssets({
           face: true,
@@ -686,7 +689,11 @@ export default function VideoEffectsPanel({
       });
     }
     const appearanceOption = appearanceOptionById.get(effects.style);
-    if (appearanceOption && effects.style !== "none") {
+    if (
+      appearanceStyleControlsVisible &&
+      appearanceOption &&
+      effects.style !== "none"
+    ) {
       stack.push({
         key: "style",
         label: appearanceOption.label,
@@ -700,7 +707,7 @@ export default function VideoEffectsPanel({
           })),
       });
     }
-    if (effects.studioLook) {
+    if (studioLookControlVisible && effects.studioLook) {
       stack.push({
         key: "studioLook",
         label: "Touch-up appearance",
@@ -728,11 +735,13 @@ export default function VideoEffectsPanel({
     return stack;
   }, [
     appearanceOptionById,
+    appearanceStyleControlsVisible,
     backgroundOptionById,
     effects,
     filterOptionById,
     onEffectsChange,
     showFilters,
+    studioLookControlVisible,
   ]);
 
   useEffect(() => {
@@ -796,10 +805,10 @@ export default function VideoEffectsPanel({
   useEffect(() => {
     if (activeTab === "filters") {
       prewarmFace("effects-panel-filters-tab");
-    } else if (activeTab === "appearance") {
+    } else if (activeTab === "appearance" && !cameraPermissionBlocked) {
       prewarmFace("effects-panel-appearance-tab");
     }
-  }, [activeTab, prewarmFace]);
+  }, [activeTab, cameraPermissionBlocked, prewarmFace]);
 
   const statusLabel =
     cameraPermissionBlocked
@@ -1238,17 +1247,19 @@ export default function VideoEffectsPanel({
 
         {activeTab === "appearance" ? (
           <>
-            <Section label="Touch-up appearance">
-              <div className="grid gap-1">
-                <ToggleRow
-                  label="Touch-up appearance"
-                  description="Smooths skin tone and balances contrast"
-                  checked={effects.studioLook}
-                  testId="video-effects-appearance-studio-look"
-                  onChange={setToggle("studioLook")}
-                />
-              </div>
-            </Section>
+            {studioLookControlVisible ? (
+              <Section label="Touch-up appearance">
+                <div className="grid gap-1">
+                  <ToggleRow
+                    label="Touch-up appearance"
+                    description="Smooths skin tone and balances contrast"
+                    checked={effects.studioLook}
+                    testId="video-effects-appearance-studio-look"
+                    onChange={setToggle("studioLook")}
+                  />
+                </div>
+              </Section>
+            ) : null}
 
             <Section label="Lighting and framing">
               <div className="grid gap-1">
@@ -1283,21 +1294,23 @@ export default function VideoEffectsPanel({
               </div>
             </Section>
 
-            {appearanceGroups.map(([label, options]) => (
-              <Section key={label} label={label}>
-                <div className="grid grid-cols-2 gap-2">
-                  {options.map((option) => (
-                    <EffectOptionButton
-                      key={option.id}
-                      option={option}
-                      selected={effects.style === option.id}
-                      testId={`video-effects-appearance-style-${option.id}`}
-                      onSelect={() => setStyle(option.id)}
-                    />
-                  ))}
-                </div>
-              </Section>
-            ))}
+            {appearanceStyleControlsVisible
+              ? appearanceGroups.map(([label, options]) => (
+                  <Section key={label} label={label}>
+                    <div className="grid grid-cols-2 gap-2">
+                      {options.map((option) => (
+                        <EffectOptionButton
+                          key={option.id}
+                          option={option}
+                          selected={effects.style === option.id}
+                          testId={`video-effects-appearance-style-${option.id}`}
+                          onSelect={() => setStyle(option.id)}
+                        />
+                      ))}
+                    </div>
+                  </Section>
+                ))
+              : null}
           </>
         ) : null}
       </div>
