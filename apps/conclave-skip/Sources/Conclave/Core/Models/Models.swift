@@ -124,8 +124,6 @@ struct Participant: Identifiable, Equatable {
     var isGhost: Bool = false
     var isLeaving: Bool = false
     var isScreenSharing: Bool = false
-    
-    // Tracks are managed separately in WebRTC layer
 }
 
 // MARK: - Chat

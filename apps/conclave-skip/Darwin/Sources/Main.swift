@@ -4,7 +4,6 @@ import Conclave
 private typealias AppRootView = ConclaveRootView
 private typealias AppDelegate = ConclaveAppDelegate
 
-/// The entry point to the app simply loads the App implementation from SPM module.
 @main struct AppMain: App {
     @AppDelegateAdaptor(AppMainDelegate.self) var appDelegate
     @Environment(\.scenePhase) private var scenePhase
@@ -22,7 +21,9 @@ private typealias AppDelegate = ConclaveAppDelegate
             case .background:
                 AppDelegate.shared.onStop()
             @unknown default:
+                #if DEBUG
                 print("unknown app phase: \(newPhase)")
+                #endif
             }
         }
     }

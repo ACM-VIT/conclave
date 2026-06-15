@@ -51,7 +51,7 @@ open class AndroidAppMain: Application {
     }
 }
 
-/// AndroidAppMain is the initial `androidx.appcompat.app.AppCompatActivity`, and must match `activity android:name` in AndroidManifest.xml.
+/// MainActivity is the initial `androidx.appcompat.app.AppCompatActivity`, and must match `activity android:name` in AndroidManifest.xml.
 open class MainActivity: AppCompatActivity {
     constructor() {
     }

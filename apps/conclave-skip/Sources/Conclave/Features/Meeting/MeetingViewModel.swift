@@ -882,7 +882,10 @@ final class MeetingViewModel {
         // kick, and end paths call cleanup(), but socket reconnect does not.
         if webRTCClient.isConfigured {
             await webRTCClient.cleanup(notifyLocalState: false)
-            guard isCurrentJoinAttempt(joinAttemptId) else { return }
+            guard isCurrentJoinAttempt(joinAttemptId) else {
+                await cleanupAbandonedJoinAttempt(cleanupMedia: true)
+                return
+            }
         }
 
         applyJoinSnapshot(response)
@@ -900,22 +903,34 @@ final class MeetingViewModel {
 
         do {
             try await webRTCClient.createTransports()
-            guard isCurrentJoinAttempt(joinAttemptId) else { return }
+            guard isCurrentJoinAttempt(joinAttemptId) else {
+                await cleanupAbandonedJoinAttempt(cleanupMedia: true)
+                return
+            }
 
             if state.mediaPublishingDisabled {
                 disableLocalMediaPublishingState()
             } else {
                 let didStayCurrent = await startProducing(joinAttemptId: joinAttemptId)
-                guard didStayCurrent else { return }
+                guard didStayCurrent else {
+                    await cleanupAbandonedJoinAttempt(cleanupMedia: true)
+                    return
+                }
             }
 
             let mediaContext = currentSocketEventContext()
             for producer in response.existingProducers {
-                guard isCurrentSocketEvent(mediaContext, roomId: producer.roomId) else { return }
+                guard isCurrentSocketEvent(mediaContext, roomId: producer.roomId) else {
+                    await cleanupAbandonedJoinAttempt(cleanupMedia: true)
+                    return
+                }
                 await consumeRemoteProducer(producer, context: mediaContext)
             }
 
-            guard isCurrentJoinAttempt(joinAttemptId) else { return }
+            guard isCurrentJoinAttempt(joinAttemptId) else {
+                await cleanupAbandonedJoinAttempt(cleanupMedia: true)
+                return
+            }
             state.connectionState = ConnectionState.joined
             isRejoinInFlight = false
             resetReconnectRetryState()
@@ -924,7 +939,10 @@ final class MeetingViewModel {
             refreshBrowserState()
             refreshAppsState()
         } catch {
-            guard isCurrentJoinAttempt(joinAttemptId) else { return }
+            guard isCurrentJoinAttempt(joinAttemptId) else {
+                await cleanupAbandonedJoinAttempt(cleanupMedia: true)
+                return
+            }
             debugLog("[Meeting] WebRTC setup error: \(error)")
             if isRecoveryJoin {
                 await scheduleRejoinRetry(after: error, joinAttemptId: joinAttemptId)
@@ -937,6 +955,15 @@ final class MeetingViewModel {
     private func isCurrentJoinAttempt(_ joinAttemptId: UUID?) -> Bool {
         guard let joinAttemptId else { return true }
         return activeJoinAttemptId == joinAttemptId
+    }
+
+    private func cleanupAbandonedJoinAttempt(cleanupMedia: Bool = false) async {
+        guard activeJoinAttemptId == nil else { return }
+        currentJoinInfo = nil
+        socketManager.disconnect()
+        if cleanupMedia {
+            await webRTCClient.cleanup(notifyLocalState: false)
+        }
     }
 
     private func normalizedRoomId(_ roomId: String?) -> String? {
@@ -1938,13 +1965,19 @@ final class MeetingViewModel {
                     allowRoomCreation: isHost,
                     joinMode: joinMode
                 )
-                guard self.activeJoinAttemptId == joinAttemptId else { return }
+                guard self.activeJoinAttemptId == joinAttemptId else {
+                    await self.cleanupAbandonedJoinAttempt()
+                    return
+                }
                 let sfuUrl = SfuJoinService.platformReachableURLString(joinInfo.sfuUrl)
                 let token = joinInfo.token
                 self.currentJoinInfo = joinInfo
 
                 try await socketManager.connect(sfuURL: sfuUrl, token: token)
-                guard self.activeJoinAttemptId == joinAttemptId else { return }
+                guard self.activeJoinAttemptId == joinAttemptId else {
+                    await self.cleanupAbandonedJoinAttempt()
+                    return
+                }
 
                 state.connectionState = .joining
                 let response = try await socketManager.joinRoom(
@@ -1955,7 +1988,10 @@ final class MeetingViewModel {
                     meetingInviteCode: meetingInviteCode,
                     webinarInviteCode: webinarInviteCode
                 )
-                guard self.activeJoinAttemptId == joinAttemptId else { return }
+                guard self.activeJoinAttemptId == joinAttemptId else {
+                    await self.cleanupAbandonedJoinAttempt()
+                    return
+                }
 
                 if response.status == "waiting" {
                     applyJoinSnapshot(response)
@@ -1972,7 +2008,10 @@ final class MeetingViewModel {
                 }
 
             } catch {
-                guard self.activeJoinAttemptId == joinAttemptId else { return }
+                guard self.activeJoinAttemptId == joinAttemptId else {
+                    await self.cleanupAbandonedJoinAttempt()
+                    return
+                }
                 currentJoinInfo = nil
                 if let joinFormMessage = inviteCodeJoinErrorMessage(for: error, joinMode: joinMode) {
                     socketManager.disconnect()
