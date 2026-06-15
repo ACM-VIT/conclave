@@ -22,6 +22,23 @@ export interface GridLayoutOptions {
   targetAspect?: number;
 }
 
+export interface GridTilePosition {
+  /** Zero-based tile order on the current page. */
+  index: number;
+  /** Zero-based visual row. */
+  row: number;
+  /** Zero-based visual column within the logical grid. Partial rows may be fractional. */
+  col: number;
+  /** Left offset inside the measured layout area, in px. */
+  x: number;
+  /** Top offset inside the measured layout area, in px. */
+  y: number;
+  /** Tile width in px. */
+  width: number;
+  /** Tile height in px. */
+  height: number;
+}
+
 export interface GridLayoutResult {
   /** Columns and rows for a full page. */
   cols: number;
@@ -35,6 +52,16 @@ export interface GridLayoutResult {
   pages: number;
   /** Tiles laid out on a full page (<= maxTilesPerPage). */
   perPage: number;
+  /** Width of the centered tile group, in px. */
+  contentWidth: number;
+  /** Height of the centered tile group, in px. */
+  contentHeight: number;
+  /** Left offset of the centered tile group inside the measured layout area. */
+  offsetX: number;
+  /** Top offset of the centered tile group inside the measured layout area. */
+  offsetY: number;
+  /** Exact tile positions for the current page, including centered partial rows. */
+  positions: GridTilePosition[];
 }
 
 const DEFAULTS: Required<GridLayoutOptions> = {
@@ -42,6 +69,59 @@ const DEFAULTS: Required<GridLayoutOptions> = {
   maxCols: 7,
   maxTilesPerPage: 49,
   targetAspect: 16 / 9,
+};
+
+const buildGridTilePositions = ({
+  cols,
+  rows,
+  perPage,
+  tileWidth,
+  tileHeight,
+  gap,
+  width,
+  height,
+}: {
+  cols: number;
+  rows: number;
+  perPage: number;
+  tileWidth: number;
+  tileHeight: number;
+  gap: number;
+  width: number;
+  height: number;
+}) => {
+  const contentWidth = Math.max(0, cols * tileWidth + Math.max(0, cols - 1) * gap);
+  const contentHeight = Math.max(0, rows * tileHeight + Math.max(0, rows - 1) * gap);
+  const offsetX = Math.max(0, (width - contentWidth) / 2);
+  const offsetY = Math.max(0, (height - contentHeight) / 2);
+  const positions: GridTilePosition[] = [];
+
+  for (let index = 0; index < perPage; index += 1) {
+    const row = Math.floor(index / cols);
+    const rowStartIndex = row * cols;
+    const rowCount = Math.min(cols, perPage - rowStartIndex);
+    const rowWidth = rowCount * tileWidth + Math.max(0, rowCount - 1) * gap;
+    const rowOffsetX = offsetX + Math.max(0, (contentWidth - rowWidth) / 2);
+    const col = index - rowStartIndex;
+
+    positions.push({
+      index,
+      row,
+      col: col + Math.max(0, cols - rowCount) / 2,
+      x: rowOffsetX + col * (tileWidth + gap),
+      y: offsetY + row * (tileHeight + gap),
+      width: tileWidth,
+      height: tileHeight,
+    });
+  }
+
+  return {
+    contentWidth,
+    contentHeight,
+    offsetX,
+    offsetY,
+    positions,
+  };
 };
 
 /**
@@ -68,7 +148,29 @@ export function computeGridLayout(
 
   // Degenerate container — return a single column so the caller still renders.
   if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
-    return { cols: 1, rows: perPage, tileWidth: 0, tileHeight: 0, lastRowCount: 1, pages, perPage };
+    return {
+      cols: 1,
+      rows: perPage,
+      tileWidth: 0,
+      tileHeight: 0,
+      lastRowCount: 1,
+      pages,
+      perPage,
+      contentWidth: 0,
+      contentHeight: 0,
+      offsetX: 0,
+      offsetY: 0,
+      positions: buildGridTilePositions({
+        cols: 1,
+        rows: perPage,
+        perPage,
+        tileWidth: 0,
+        tileHeight: 0,
+        gap,
+        width: 0,
+        height: 0,
+      }).positions,
+    };
   }
 
   const colCap = Math.min(perPage, Math.max(1, Math.floor(maxCols)));
@@ -114,6 +216,16 @@ export function computeGridLayout(
   const tileWidth = Math.max(0, Math.floor(chosen.tileWidth));
   const tileHeight = Math.max(0, Math.floor(tileWidth / targetAspect));
   const lastRowCount = perPage - (chosen.rows - 1) * chosen.cols;
+  const placement = buildGridTilePositions({
+    cols: chosen.cols,
+    rows: chosen.rows,
+    perPage,
+    tileWidth,
+    tileHeight,
+    gap,
+    width,
+    height,
+  });
 
   return {
     cols: chosen.cols,
@@ -123,6 +235,7 @@ export function computeGridLayout(
     lastRowCount: Math.max(1, lastRowCount),
     pages,
     perPage,
+    ...placement,
   };
 }
 

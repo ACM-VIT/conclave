@@ -42,6 +42,36 @@ describe("computeGridLayout — packing", () => {
     expect(r.lastRowCount).toBe(2);
   });
 
+  it("returns centered x/y positions for partial rows", () => {
+    const r = computeGridLayout(5, 1800, 700, { maxCols: 3 });
+    const firstRow = r.positions.slice(0, 3);
+    const lastRow = r.positions.slice(3);
+
+    expect(r.positions).toHaveLength(5);
+    expect(firstRow.map((position) => position.row)).toEqual([0, 0, 0]);
+    expect(lastRow.map((position) => position.row)).toEqual([1, 1]);
+    expect(lastRow[0].x).toBeCloseTo(
+      firstRow[0].x + (r.tileWidth + 12) / 2,
+    );
+    expect(lastRow[1].x).toBeCloseTo(
+      firstRow[1].x + (r.tileWidth + 12) / 2,
+    );
+    expect(lastRow[0].y).toBeCloseTo(firstRow[0].y + r.tileHeight + 12);
+    expect(r.contentWidth).toBeCloseTo(r.cols * r.tileWidth + 2 * 12);
+    expect(r.contentHeight).toBeCloseTo(r.rows * r.tileHeight + 12);
+  });
+
+  it("centers the whole tile group inside the measured area", () => {
+    const r = computeGridLayout(2, 1920, 1080);
+
+    expect(r.offsetX).toBeCloseTo(
+      (1920 - (2 * r.tileWidth + 12)) / 2,
+    );
+    expect(r.offsetY).toBeCloseTo((1080 - r.tileHeight) / 2);
+    expect(r.positions[0].x).toBeCloseTo(r.offsetX);
+    expect(r.positions[0].y).toBeCloseTo(r.offsetY);
+  });
+
   it("never reports a lastRowCount below 1", () => {
     const r = computeGridLayout(3, 1200, 800, { maxCols: 3 });
     expect(r.lastRowCount).toBeGreaterThanOrEqual(1);
@@ -80,6 +110,8 @@ describe("computeGridLayout — degenerate inputs", () => {
     expect(r.tileWidth).toBe(0);
     expect(r.tileHeight).toBe(0);
     expect(r.rows).toBe(4);
+    expect(r.positions).toHaveLength(4);
+    expect(r.positions.every((position) => position.width === 0)).toBe(true);
   });
 
   it("returns a single column for a non-finite container", () => {

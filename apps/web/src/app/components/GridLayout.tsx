@@ -35,7 +35,11 @@ import { isSystemUserId, truncateDisplayName } from "../lib/utils";
 import ParticipantAudio from "./ParticipantAudio";
 import ParticipantVideo from "./ParticipantVideo";
 import { avatarColor } from "@conclave/ui-tokens";
-import { chooseStageMode, computeGridLayout } from "@conclave/meeting-core";
+import {
+  chooseStageMode,
+  computeGridLayout,
+  type GridTilePosition,
+} from "@conclave/meeting-core";
 import {
   clampMeetViewTiles,
   DEFAULT_MEET_VIEW_SETTINGS,
@@ -250,6 +254,11 @@ type MeetRoomTilingMetadataBase = {
     rows: number;
     tileWidth: number;
     tileHeight: number;
+    contentWidth: number;
+    contentHeight: number;
+    offsetX: number;
+    offsetY: number;
+    positions: Array<GridTilePosition & { id: string }>;
     gridVideoFit: "cover" | "contain";
     fullVideoTileIds: string[];
   };
@@ -1641,8 +1650,8 @@ function GridLayout({
   const localDisplayName = getDisplayName(currentUserId);
 
   // Optimal-packing grid (shared @conclave/meeting-core engine — same logic web,
-  // RN, and the Swift port use). Tiles are sized exactly; flex-wrap + content-
-  // center gives Meet's centered last row for free.
+  // RN, and the Swift port use). Tiles are sized and placed exactly by the core
+  // packer so every renderer gets the same centered rows and group offsets.
   const layout = useMemo(
     () =>
       computeGridLayout(
@@ -1658,18 +1667,64 @@ function GridLayout({
       ),
     [totalParticipants, gridSize.width, gridSize.height, maxGridTiles]
   );
+  const tiledGridTileIds = useMemo(() => {
+    if (usesStageLayout) return [];
+    const ids: string[] = [];
+    if (hasGridPresentationTile) ids.push(PRESENTATION_TILE_ID);
+    if (shouldShowSelfAsTile) ids.push("local");
+    visibleParticipants.forEach((participant) => ids.push(participant.userId));
+    if (showOverflowTileInGrid) ids.push("overflow");
+    return ids;
+  }, [
+    hasGridPresentationTile,
+    shouldShowSelfAsTile,
+    showOverflowTileInGrid,
+    usesStageLayout,
+    visibleParticipants,
+  ]);
   const tileStyle =
     layout.tileWidth > 0
       ? { width: layout.tileWidth, height: layout.tileHeight }
       : undefined;
+  const tiledGridTileStyleById = useMemo(() => {
+    const styles = new Map<string, CSSProperties>();
+    tiledGridTileIds.forEach((id, index) => {
+      const position = layout.positions[index];
+      if (!position) return;
+      styles.set(id, {
+        left: GRID_PADDING + position.x,
+        top: GRID_PADDING + position.y,
+        width: position.width,
+        height: position.height,
+      });
+    });
+    return styles;
+  }, [layout.positions, tiledGridTileIds]);
+  const gridTilePlacements = useMemo(
+    () =>
+      tiledGridTileIds
+        .map((id, index) => {
+          const position = layout.positions[index];
+          return position ? { ...position, id } : null;
+        })
+        .filter(
+          (position): position is GridTilePosition & { id: string } =>
+            position !== null,
+        ),
+    [layout.positions, tiledGridTileIds],
+  );
+  const getTiledGridTileStyle = useCallback(
+    (id: string) => tiledGridTileStyleById.get(id) ?? tileStyle,
+    [tileStyle, tiledGridTileStyleById],
+  );
   const tileClass = layout.tileWidth > 0
-    ? "relative shrink-0 will-change-transform"
+    ? "absolute will-change-transform"
     : "relative h-full w-full will-change-transform";
   // Include the measured stage size so a panel toggle that shifts tile POSITION
   // (the centered group re-centers) WITHOUT changing tile SIZE still re-runs the
   // FLIP effect on the settle commit — otherwise the pending reflow would be
   // dropped and the tiles would snap instead of glide.
-  const layoutSignature = `${renderedViewMode}-${layout.cols}x${layout.rows}-${layout.tileWidth}x${layout.tileHeight}-${gridSize.width}x${gridSize.height}`;
+  const layoutSignature = `${renderedViewMode}-${layout.cols}x${layout.rows}-${layout.tileWidth}x${layout.tileHeight}-${layout.offsetX}x${layout.offsetY}-${gridSize.width}x${gridSize.height}`;
   const hasMeasuredGrid = gridSize.width > 0 && gridSize.height > 0;
 
   const localSpeakerHighlight = isLocalActiveSpeaker ? "speaking" : "";
@@ -1779,6 +1834,11 @@ function GridLayout({
         rows: layout.rows,
         tileWidth: layout.tileWidth,
         tileHeight: layout.tileHeight,
+        contentWidth: layout.contentWidth,
+        contentHeight: layout.contentHeight,
+        offsetX: layout.offsetX,
+        offsetY: layout.offsetY,
+        positions: gridTilePlacements,
         gridVideoFit: gridVideoObjectFit,
         fullVideoTileIds: fullVideoTileIdList,
       },
@@ -1798,7 +1858,12 @@ function GridLayout({
       gridVideoObjectFit,
       hasPresentation,
       hiddenParticipantsCount,
+      gridTilePlacements,
       layout.cols,
+      layout.contentHeight,
+      layout.contentWidth,
+      layout.offsetX,
+      layout.offsetY,
       layout.rows,
       layout.tileHeight,
       layout.tileWidth,
@@ -1985,20 +2050,7 @@ function GridLayout({
   // Stable FLIP keys, in render order. Identity/order changes animate; pure
   // layout size changes only refresh the FLIP snapshot, so panel/window resizes
   // never run every tile through a transform animation.
-  const flipKeys = useMemo(() => {
-    const keys = [
-      ...(hasGridPresentationTile ? [PRESENTATION_TILE_ID] : []),
-      ...(shouldShowSelfAsTile ? ["local"] : []),
-      ...visibleParticipants.map((p) => p.userId),
-    ];
-    if (showOverflowTileInGrid) keys.push("overflow");
-    return keys;
-  }, [
-    hasGridPresentationTile,
-    shouldShowSelfAsTile,
-    visibleParticipants,
-    showOverflowTileInGrid,
-  ]);
+  const flipKeys = tiledGridTileIds;
   const registerTile = useFlip(
     flipKeys,
     layoutSignature,
@@ -2196,7 +2248,9 @@ function GridLayout({
         data-meet-room-tiling-warm-hold={RECENTLY_VISIBLE_WARM_HOLD_MS}
         data-meet-room-tiling-warm-reasons={roomTilingWarmReasonsJson}
         data-meet-room-tiling-scores={roomTilingScoresJson}
-        className={`flex flex-1 min-h-0 flex-wrap content-center justify-center overflow-hidden p-4 ${
+        className={`relative flex flex-1 min-h-0 overflow-hidden p-4 ${
+          usesStageLayout ? "flex-wrap content-center justify-center" : ""
+        } ${
           hasMeasuredGrid ? "opacity-100" : "opacity-0"
         }`}
         style={{ gap: GRID_GAP }}
@@ -2495,7 +2549,7 @@ function GridLayout({
           <div
             ref={getTileRef(PRESENTATION_TILE_ID)}
             className={tileClass}
-            style={tileStyle}
+            style={getTiledGridTileStyle(PRESENTATION_TILE_ID)}
           >
             <PresentationVideoTile
               stream={presentationStream}
@@ -2511,7 +2565,7 @@ function GridLayout({
           <div
             ref={getTileRef("local")}
             className={tileClass}
-            style={tileStyle}
+            style={getTiledGridTileStyle("local")}
           >
             <div
               className={`acm-video-tile group h-full w-full ${localSpeakerHighlight} ${localHandRaisedHighlight}`}
@@ -2701,7 +2755,7 @@ function GridLayout({
             ref={getTileRef(participant.userId)}
             data-userid={participant.userId}
             className={tileClass}
-            style={tileStyle}
+            style={getTiledGridTileStyle(participant.userId)}
           >
             <ParticipantVideo
               participant={participant}
@@ -2727,7 +2781,7 @@ function GridLayout({
             key="overflow"
             ref={getTileRef("overflow")}
             className={tileClass}
-            style={tileStyle}
+            style={getTiledGridTileStyle("overflow")}
           >
             <button
               type="button"

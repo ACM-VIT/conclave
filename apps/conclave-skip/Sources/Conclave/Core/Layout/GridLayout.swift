@@ -29,6 +29,23 @@ struct GridLayoutOptions {
     var targetAspect: CGFloat = 16.0 / 9.0
 }
 
+struct GridTilePosition {
+    /// Zero-based tile order on the current page.
+    let index: Int
+    /// Zero-based visual row.
+    let row: Int
+    /// Zero-based visual column within the logical grid. Partial rows may be fractional.
+    let col: CGFloat
+    /// Left offset inside the measured layout area, in pt.
+    let x: CGFloat
+    /// Top offset inside the measured layout area, in pt.
+    let y: CGFloat
+    /// Tile width in pt.
+    let width: CGFloat
+    /// Tile height in pt.
+    let height: CGFloat
+}
+
 struct GridLayoutResult {
     /// Columns and rows for a full page.
     let cols: Int
@@ -42,6 +59,16 @@ struct GridLayoutResult {
     let pages: Int
     /// Tiles laid out on a full page (<= maxTilesPerPage).
     let perPage: Int
+    /// Width of the centered tile group, in pt.
+    let contentWidth: CGFloat
+    /// Height of the centered tile group, in pt.
+    let contentHeight: CGFloat
+    /// Left offset of the centered tile group inside the measured layout area.
+    let offsetX: CGFloat
+    /// Top offset of the centered tile group inside the measured layout area.
+    let offsetY: CGFloat
+    /// Exact tile positions for the current page, including centered partial rows.
+    let positions: [GridTilePosition]
 }
 
 private struct GridCandidate {
@@ -50,6 +77,52 @@ private struct GridCandidate {
     let tileWidth: CGFloat
     let empty: Int
     let aspectDist: CGFloat
+}
+
+private func buildGridTilePositions(
+    cols: Int,
+    rows: Int,
+    perPage: Int,
+    tileWidth: CGFloat,
+    tileHeight: CGFloat,
+    gap: CGFloat,
+    width: CGFloat,
+    height: CGFloat
+) -> (
+    contentWidth: CGFloat,
+    contentHeight: CGFloat,
+    offsetX: CGFloat,
+    offsetY: CGFloat,
+    positions: [GridTilePosition]
+) {
+    let contentWidth = max(0.0, CGFloat(cols) * tileWidth + CGFloat(max(0, cols - 1)) * gap)
+    let contentHeight = max(0.0, CGFloat(rows) * tileHeight + CGFloat(max(0, rows - 1)) * gap)
+    let offsetX = max(0.0, (width - contentWidth) / 2.0)
+    let offsetY = max(0.0, (height - contentHeight) / 2.0)
+    var positions: [GridTilePosition] = []
+
+    var index = 0
+    while index < perPage {
+        let row = index / cols
+        let rowStartIndex = row * cols
+        let rowCount = min(cols, perPage - rowStartIndex)
+        let rowWidth = CGFloat(rowCount) * tileWidth + CGFloat(max(0, rowCount - 1)) * gap
+        let rowOffsetX = offsetX + max(0.0, (contentWidth - rowWidth) / 2.0)
+        let col = index - rowStartIndex
+
+        positions.append(GridTilePosition(
+            index: index,
+            row: row,
+            col: CGFloat(col) + CGFloat(max(0, cols - rowCount)) / 2.0,
+            x: rowOffsetX + CGFloat(col) * (tileWidth + gap),
+            y: offsetY + CGFloat(row) * (tileHeight + gap),
+            width: tileWidth,
+            height: tileHeight
+        ))
+        index += 1
+    }
+
+    return (contentWidth, contentHeight, offsetX, offsetY, positions)
 }
 
 /// Find the arrangement of `count` aspect-locked tiles that fits the largest
@@ -72,9 +145,18 @@ func computeGridLayout(
 
     // Degenerate container — return a single column so the caller still renders.
     if !width.isFinite || !height.isFinite || width <= 0 || height <= 0 {
+        let placement = buildGridTilePositions(
+            cols: 1, rows: perPage, perPage: perPage,
+            tileWidth: 0.0, tileHeight: 0.0, gap: gap, width: 0.0, height: 0.0
+        )
         return GridLayoutResult(
             cols: 1, rows: perPage, tileWidth: 0.0, tileHeight: 0.0,
-            lastRowCount: 1, pages: pages, perPage: perPage
+            lastRowCount: 1, pages: pages, perPage: perPage,
+            contentWidth: placement.contentWidth,
+            contentHeight: placement.contentHeight,
+            offsetX: placement.offsetX,
+            offsetY: placement.offsetY,
+            positions: placement.positions
         )
     }
 
@@ -120,6 +202,10 @@ func computeGridLayout(
     let tileWidth = max(0.0, floor(chosen.tileWidth))
     let tileHeight = max(0.0, floor(tileWidth / targetAspect))
     let lastRowCount = perPage - (chosen.rows - 1) * chosen.cols
+    let placement = buildGridTilePositions(
+        cols: chosen.cols, rows: chosen.rows, perPage: perPage,
+        tileWidth: tileWidth, tileHeight: tileHeight, gap: gap, width: width, height: height
+    )
 
     return GridLayoutResult(
         cols: chosen.cols,
@@ -128,7 +214,12 @@ func computeGridLayout(
         tileHeight: tileHeight,
         lastRowCount: max(1, lastRowCount),
         pages: pages,
-        perPage: perPage
+        perPage: perPage,
+        contentWidth: placement.contentWidth,
+        contentHeight: placement.contentHeight,
+        offsetX: placement.offsetX,
+        offsetY: placement.offsetY,
+        positions: placement.positions
     )
 }
 
