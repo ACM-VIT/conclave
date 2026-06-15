@@ -33,12 +33,24 @@ import MobileWhiteboardLayout from "./MobileWhiteboardLayout";
 import AndroidUpsellSheet from "./AndroidUpsellSheet";
 import ScreenShareAudioPlayers from "../ScreenShareAudioPlayers";
 import SystemAudioPlayers from "../SystemAudioPlayers";
+import VideoEffectsPanel from "../VideoEffectsPanel";
 import { formatDisplayName, isSystemUserId } from "../../lib/utils";
 import { useApps } from "@conclave/apps-sdk";
 import DevPlaygroundLayout from "../DevPlaygroundLayout";
 import DevMeetToolsPanel from "../DevMeetToolsPanel";
 import ParticipantVideo from "../ParticipantVideo";
+import { useCameraPermissionState } from "../../hooks/useCameraPermissionState";
 import { useStableSpeakerId } from "../../hooks/useStableSpeakerId";
+import {
+  prewarmVideoEffectsAssets,
+  type VideoEffectsDebugStats,
+  type VideoEffectsRuntimeStatus,
+} from "../../hooks/useVideoEffects";
+import {
+  BACKGROUND_EFFECTS,
+  type BackgroundEffectId,
+  type VideoEffectsState,
+} from "../../lib/video-effects";
 
 interface MobileMeetsMainContentProps {
   isJoined: boolean;
@@ -67,6 +79,13 @@ interface MobileMeetsMainContentProps {
   presentationStream: MediaStream | null;
   presenterName: string;
   localStream: MediaStream | null;
+  videoEffects: VideoEffectsState;
+  onVideoEffectsChange: Dispatch<SetStateAction<VideoEffectsState>>;
+  onVideoEffectsRecenter?: () => void;
+  videoEffectsStatus: VideoEffectsRuntimeStatus;
+  videoEffectsError: string | null;
+  videoEffectsDebugStats?: VideoEffectsDebugStats | null;
+  activeVideoEffectsCount: number;
   onPrejoinMediaCommit?: (handoff: PrejoinMediaHandoff) => void;
   isCameraOff: boolean;
   isMuted: boolean;
@@ -244,6 +263,13 @@ function MobileMeetsMainContent({
   presentationStream,
   presenterName,
   localStream,
+  videoEffects,
+  onVideoEffectsChange,
+  onVideoEffectsRecenter,
+  videoEffectsStatus,
+  videoEffectsError,
+  videoEffectsDebugStats = null,
+  activeVideoEffectsCount,
   onPrejoinMediaCommit,
   isCameraOff,
   isMuted,
@@ -497,6 +523,61 @@ function MobileMeetsMainContent({
     y: number;
   } | null>(null);
   const [showAndroidUpsell, setShowAndroidUpsell] = useState(false);
+  const [isVideoEffectsOpen, setIsVideoEffectsOpen] = useState(false);
+  const cameraPermissionState = useCameraPermissionState();
+  const hasLiveLocalCamera = Boolean(getLiveVideoStream(localStream));
+  const isCameraPermissionBlocked =
+    meetError?.code === "PERMISSION_DENIED" ||
+    (!hasLiveLocalCamera &&
+      (cameraPermissionState === "prompt" ||
+        cameraPermissionState === "denied"));
+  const effectsPanelBackgroundPrewarmIds = useMemo(
+    () =>
+      BACKGROUND_EFFECTS.filter(
+        (option) =>
+          option.id !== "custom" &&
+          option.id !== "none" &&
+          option.id !== "gradient" &&
+          Boolean(option.assetPath),
+      ).map((option) => option.id as BackgroundEffectId),
+    [],
+  );
+  const prewarmEffectsPanelOpen = useCallback(() => {
+    void prewarmVideoEffectsAssets({
+      segmentation: true,
+      face: true,
+      backgrounds: effectsPanelBackgroundPrewarmIds,
+      reason: "mobile-effects-panel-open",
+    });
+  }, [effectsPanelBackgroundPrewarmIds]);
+  const handleToggleVideoEffects = useCallback(() => {
+    if (isCameraPermissionBlocked) return;
+    const opening = !isVideoEffectsOpen;
+    if (opening) {
+      prewarmEffectsPanelOpen();
+      if (isChatOpen) {
+        toggleChat();
+      }
+      setIsParticipantsOpen(false);
+    }
+    setIsVideoEffectsOpen(opening);
+  }, [
+    isCameraPermissionBlocked,
+    isChatOpen,
+    isVideoEffectsOpen,
+    prewarmEffectsPanelOpen,
+    setIsParticipantsOpen,
+    toggleChat,
+  ]);
+  const handleCloseVideoEffects = useCallback(
+    () => setIsVideoEffectsOpen(false),
+    [],
+  );
+  useEffect(() => {
+    if (!isJoined || isWebinarAttendee) {
+      setIsVideoEffectsOpen(false);
+    }
+  }, [isJoined, isWebinarAttendee]);
   const webinarStage = useMemo(() => {
     if (!webinarParticipants.length) {
       return null;
@@ -1050,6 +1131,10 @@ function MobileMeetsMainContent({
         isParticipantsOpen={isParticipantsOpen}
         onToggleParticipants={handleToggleParticipants}
         pendingUsersCount={isAdmin ? pendingUsers.size : 0}
+        isVideoEffectsOpen={isVideoEffectsOpen}
+        activeVideoEffectsCount={activeVideoEffectsCount}
+        isVideoEffectsPermissionBlocked={isCameraPermissionBlocked}
+        onToggleVideoEffects={handleToggleVideoEffects}
         isAdmin={isAdmin}
         isRoomLocked={isRoomLocked}
         onToggleLock={onToggleLock}
@@ -1100,6 +1185,30 @@ function MobileMeetsMainContent({
         onGenerateWebinarLink={onGenerateWebinarLink}
         onRotateWebinarLink={onRotateWebinarLink}
       />
+
+      {isJoined && !isWebinarAttendee && isVideoEffectsOpen && (
+        <div
+          className="fixed inset-0 z-50 bg-black/50"
+          onClick={handleCloseVideoEffects}
+        >
+          <div onClick={(event) => event.stopPropagation()}>
+            <VideoEffectsPanel
+              variant="dialog"
+              effects={videoEffects}
+              onEffectsChange={onVideoEffectsChange}
+              onRecenterFraming={onVideoEffectsRecenter}
+              localStream={localStream}
+              isCameraOff={isCameraOff}
+              status={videoEffectsStatus}
+              error={videoEffectsError}
+              debugStats={videoEffectsDebugStats}
+              activeCount={activeVideoEffectsCount}
+              cameraPermissionBlocked={isCameraPermissionBlocked}
+              onClose={handleCloseVideoEffects}
+            />
+          </div>
+        </div>
+      )}
 
       {/* Full-screen chat panel */}
       {!isWebinarAttendee && (

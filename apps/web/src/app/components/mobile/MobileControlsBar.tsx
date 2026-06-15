@@ -14,6 +14,7 @@ import {
   Phone,
   Settings,
   Smile,
+  Sparkles,
   Users,
   Video,
   VideoOff,
@@ -60,6 +61,10 @@ interface MobileControlsBarProps {
   isParticipantsOpen?: boolean;
   onToggleParticipants?: () => void;
   pendingUsersCount?: number;
+  isVideoEffectsOpen?: boolean;
+  activeVideoEffectsCount?: number;
+  isVideoEffectsPermissionBlocked?: boolean;
+  onToggleVideoEffects?: () => void;
   isRoomLocked?: boolean;
   onToggleLock?: () => void;
   isNoGuests?: boolean;
@@ -135,6 +140,10 @@ function MobileControlsBar({
   isParticipantsOpen,
   onToggleParticipants,
   pendingUsersCount = 0,
+  isVideoEffectsOpen = false,
+  activeVideoEffectsCount = 0,
+  isVideoEffectsPermissionBlocked = false,
+  onToggleVideoEffects,
   isRoomLocked = false,
   onToggleLock,
   isNoGuests = false,
@@ -211,6 +220,11 @@ function MobileControlsBar({
   const [isWebinarWorking, setIsWebinarWorking] = useState(false);
 
   const canStartScreenShare = !activeScreenShareId || isScreenSharing;
+  const hasActiveVideoEffects = activeVideoEffectsCount > 0;
+  const canOpenVideoEffects =
+    Boolean(onToggleVideoEffects) &&
+    !isGhostMode &&
+    !isVideoEffectsPermissionBlocked;
 
   const baseButtonClass =
     "mobile-control-btn w-12 h-12 rounded-full flex items-center justify-center active:scale-95";
@@ -541,6 +555,49 @@ function MobileControlsBar({
               <Settings className="w-4.5 h-4.5" />
             </div>
             <span className="text-sm font-medium">Settings</span>
+          </button>
+          <button
+            type="button"
+            aria-pressed={isVideoEffectsOpen || hasActiveVideoEffects}
+            onClick={() => {
+              if (!canOpenVideoEffects) return;
+              onToggleVideoEffects?.();
+              setIsMoreMenuOpen(false);
+            }}
+            disabled={!canOpenVideoEffects}
+            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-transform duration-150 touch-feedback ${
+              !canOpenVideoEffects
+                ? "opacity-30"
+                : isVideoEffectsOpen || hasActiveVideoEffects
+                  ? "text-[#8ab4f8]"
+                  : "text-[#fafafa]"
+            } hover:bg-[#fafafa]/5 active:bg-[#fafafa]/10`}
+          >
+            <div
+              className={`h-9 w-9 rounded-xl border border-white/5 flex items-center justify-center ${
+                isVideoEffectsOpen || hasActiveVideoEffects
+                  ? "bg-[#1a73e8]/25"
+                  : "bg-[#2b2b2b]"
+              }`}
+            >
+              <Sparkles className="w-4.5 h-4.5" />
+            </div>
+            <span className="text-sm font-medium">
+              Backgrounds and effects
+            </span>
+            {isVideoEffectsPermissionBlocked ? (
+              <span className="ml-auto text-[10px] uppercase tracking-[0.2em] text-[#fafafa]/56">
+                Permission needed
+              </span>
+            ) : hasActiveVideoEffects ? (
+              <span className="ml-auto flex h-5 min-w-5 items-center justify-center rounded-full bg-[#1a73e8] px-1.5 text-[11px] font-semibold text-white">
+                {activeVideoEffectsCount}
+              </span>
+            ) : (
+              <span className="ml-auto text-[10px] uppercase tracking-[0.2em] text-[#fafafa]/56">
+                {isVideoEffectsOpen ? "Open" : "Off"}
+              </span>
+            )}
           </button>
           <button
               onClick={() => {

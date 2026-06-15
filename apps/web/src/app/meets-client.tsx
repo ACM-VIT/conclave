@@ -2134,6 +2134,15 @@ export default function MeetsClient({
           presentationStream={presentationStream}
           presenterName={presenterName || ""}
           localStream={displayLocalStream}
+          videoEffects={videoEffects}
+          onVideoEffectsChange={setVideoEffects}
+          onVideoEffectsRecenter={() =>
+            setFramingRecenterToken((token) => token + 1)
+          }
+          videoEffectsStatus={videoEffectsStatus}
+          videoEffectsError={videoEffectsError}
+          videoEffectsDebugStats={videoEffectsDebugStats}
+          activeVideoEffectsCount={activeVideoEffectsCount}
           onPrejoinMediaCommit={handlePrejoinMediaCommit}
           isCameraOff={isCameraOff}
           isMuted={isMuted}
