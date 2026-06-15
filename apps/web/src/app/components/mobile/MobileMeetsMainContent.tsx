@@ -833,6 +833,8 @@ function MobileMeetsMainContent({
         onRetryMedia={onRetryMedia}
         onTestSpeaker={onTestSpeaker}
         onPrejoinMediaCommit={onPrejoinMediaCommit}
+        videoEffects={videoEffects}
+        onVideoEffectsChange={onVideoEffectsChange}
       />
     );
   }

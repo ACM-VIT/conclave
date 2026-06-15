@@ -7,11 +7,13 @@ import {
   Mic,
   MicOff,
   Plus,
+  Sparkles,
   Trash2,
   Video,
   VideoOff,
 } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { Dispatch, SetStateAction } from "react";
 import { signIn, signOut, useSession } from "@/lib/auth-client";
 import type {
   ConnectionState,
@@ -31,7 +33,17 @@ import {
   sanitizeRoomCode,
 } from "../../lib/utils";
 import MeetsErrorBanner from "../MeetsErrorBanner";
+import VideoEffectsPanel from "../VideoEffectsPanel";
 import AndroidUpsellSheet from "./AndroidUpsellSheet";
+import {
+  prewarmVideoEffectsAssets,
+  useVideoEffects,
+} from "../../hooks/useVideoEffects";
+import { useCameraPermissionState } from "../../hooks/useCameraPermissionState";
+import {
+  countActiveVideoEffects,
+  type VideoEffectsState,
+} from "../../lib/video-effects";
 
 const normalizeGuestName = (value: string): string =>
   value.trim().replace(/\s+/g, " ");
@@ -91,6 +103,8 @@ interface MobileJoinScreenProps {
   onRetryMedia?: () => void;
   onTestSpeaker?: () => void;
   onPrejoinMediaCommit?: (handoff: PrejoinMediaHandoff) => void;
+  videoEffects: VideoEffectsState;
+  onVideoEffectsChange: Dispatch<SetStateAction<VideoEffectsState>>;
 }
 
 function MobileJoinScreen({
@@ -117,16 +131,20 @@ function MobileJoinScreen({
   onRetryMedia,
   onTestSpeaker,
   onPrejoinMediaCommit,
+  videoEffects,
+  onVideoEffectsChange,
 }: MobileJoinScreenProps) {
   const normalizedRoomId =
     roomId === "undefined" || roomId === "null" ? "" : roomId;
   const canJoin = normalizedRoomId.trim().length > 0;
   const videoRef = useRef<HTMLVideoElement>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
+  const processedPreviewTrackRef = useRef<MediaStreamTrack | null>(null);
   const handedOffTrackIdsRef = useRef<Set<string>>(new Set());
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [isCameraOn, setIsCameraOn] = useState(false);
   const [isMicOn, setIsMicOn] = useState(false);
+  const [isEffectsOpen, setIsEffectsOpen] = useState(false);
   const isRoutedRoom = forceJoinOnly;
   const enforceShortCode = enableRoomRouting || forceJoinOnly;
   const [activeTab, setActiveTab] = useState<"new" | "join">(() =>
@@ -165,6 +183,46 @@ function MobileJoinScreen({
   const isSigningIn = signInProvider !== null;
   const [isSigningOut, setIsSigningOut] = useState(false);
   const [showAndroidUpsell, setShowAndroidUpsell] = useState(false);
+  const {
+    effectiveStream: processedPreviewStream,
+    status: videoEffectsStatus,
+    error: videoEffectsError,
+    debugStats: videoEffectsDebugStats,
+  } = useVideoEffects({
+    sourceStream: localStream,
+    effects: videoEffects,
+    processedVideoTrackRef: processedPreviewTrackRef,
+  });
+  const previewStream = processedPreviewStream ?? localStream;
+  const activeVideoEffectsCount = countActiveVideoEffects(videoEffects);
+  const cameraPermissionState = useCameraPermissionState();
+  const hasLivePreviewCamera = Boolean(
+    localStream
+      ?.getVideoTracks()
+      .some((track) => track.readyState === "live" && track.enabled),
+  );
+  const isCameraPermissionBlocked =
+    meetError?.code === "PERMISSION_DENIED" ||
+    (!hasLivePreviewCamera &&
+      (cameraPermissionState === "prompt" ||
+        cameraPermissionState === "denied"));
+
+  const prewarmLiveCameraEffects = useCallback((reason: string) => {
+    void prewarmVideoEffectsAssets({
+      segmentation: true,
+      face: true,
+      reason,
+    });
+  }, []);
+
+  const openEffectsPanel = useCallback(() => {
+    void prewarmVideoEffectsAssets({
+      segmentation: true,
+      face: true,
+      reason: "mobile-prejoin-effects-panel-open",
+    });
+    setIsEffectsOpen(true);
+  }, []);
 
   const { data: session } = useSession();
   const canSignOut = Boolean(session?.user || user?.id || user?.email);
@@ -250,23 +308,24 @@ function MobileJoinScreen({
     const video = videoRef.current;
     if (!video) return;
 
-    if (!localStream) {
+    if (!previewStream) {
       if (video.srcObject) {
         video.srcObject = null;
       }
       return;
     }
 
-    if (video.srcObject !== localStream) {
-      video.srcObject = localStream;
+    if (video.srcObject !== previewStream) {
+      video.srcObject = previewStream;
     }
+    video.play().catch(() => {});
 
     return () => {
-      if (video.srcObject === localStream) {
+      if (video.srcObject === previewStream) {
         video.srcObject = null;
       }
     };
-  }, [localStream]);
+  }, [previewStream]);
 
   const toggleCamera = async () => {
     if (isCameraOn && localStream) {
@@ -295,6 +354,7 @@ function MobileJoinScreen({
           } else {
             setLocalStream(stream);
           }
+          prewarmLiveCameraEffects("mobile-prejoin-camera-toggle-live");
           setIsCameraOn(true);
         })
         .catch(() => {
@@ -690,7 +750,7 @@ function MobileJoinScreen({
       <div className="absolute inset-0 acm-bg-dot-grid pointer-events-none" />
       <div className="relative flex-1 px-4 pt-3 pb-36 flex flex-col min-h-0">
         <div className="relative flex-1 rounded-[28px] border border-[#fafafa]/10 bg-[#131316] overflow-hidden">
-          {isCameraOn && localStream ? (
+          {isCameraOn && previewStream ? (
             <video
               ref={videoRef}
               autoPlay
@@ -715,6 +775,7 @@ function MobileJoinScreen({
           <div className="absolute bottom-4 left-1/2 -translate-x-1/2 mobile-glass mobile-pill px-2.5 py-2 flex items-center gap-2">
             <button
               onClick={toggleMic}
+              aria-label={isMicOn ? "Turn off microphone" : "Turn on microphone"}
               className={`w-9 h-9 rounded-full flex items-center justify-center transition-colors ${
                 isMicOn
                   ? "text-white"
@@ -729,6 +790,7 @@ function MobileJoinScreen({
             </button>
             <button
               onClick={toggleCamera}
+              aria-label={isCameraOn ? "Turn off camera" : "Turn on camera"}
               className={`w-9 h-9 rounded-full flex items-center justify-center transition-colors ${
                 isCameraOn
                   ? "text-white"
@@ -740,6 +802,23 @@ function MobileJoinScreen({
               ) : (
                 <VideoOff className="w-[18px] h-[18px]" />
               )}
+            </button>
+            <button
+              onClick={openEffectsPanel}
+              aria-label="Backgrounds and effects"
+              aria-pressed={activeVideoEffectsCount > 0 || isEffectsOpen}
+              className={`relative w-9 h-9 rounded-full flex items-center justify-center transition-colors ${
+                activeVideoEffectsCount > 0 || isEffectsOpen
+                  ? "bg-[#1a73e8] text-white"
+                  : "text-white"
+              }`}
+            >
+              <Sparkles className="w-[18px] h-[18px]" />
+              {activeVideoEffectsCount > 0 ? (
+                <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-white px-1 text-[10px] font-semibold text-[#1a73e8]">
+                  {activeVideoEffectsCount}
+                </span>
+              ) : null}
             </button>
           </div>
 
@@ -956,6 +1035,30 @@ function MobileJoinScreen({
             <span className="text-sm text-[#fafafa]/75">
               {connectionState === "reconnecting" ? "Reconnecting..." : "Joining..."}
             </span>
+          </div>
+        </div>
+      )}
+
+      {isEffectsOpen && (
+        <div
+          className="fixed inset-0 z-50 bg-black/55"
+          onClick={() => setIsEffectsOpen(false)}
+        >
+          <div onClick={(event) => event.stopPropagation()}>
+            <VideoEffectsPanel
+              variant="dialog"
+              effects={videoEffects}
+              onEffectsChange={onVideoEffectsChange}
+              localStream={previewStream}
+              isCameraOff={!isCameraOn}
+              status={videoEffectsStatus}
+              error={videoEffectsError}
+              debugStats={videoEffectsDebugStats}
+              activeCount={activeVideoEffectsCount}
+              cameraPermissionBlocked={isCameraPermissionBlocked}
+              showFilters={!isCameraPermissionBlocked}
+              onClose={() => setIsEffectsOpen(false)}
+            />
           </div>
         </div>
       )}
