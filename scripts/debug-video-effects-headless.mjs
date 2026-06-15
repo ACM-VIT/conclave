@@ -3898,6 +3898,65 @@ const run = async () => {
       10000,
     );
     await collectLayoutState(cdp, "layout_after_dev_spawn");
+
+    const roomTilingHeartbeatStart = await evalValue(
+      cdp,
+      `(() => {
+        const debug = typeof window.__conclaveGetMeetRoomTilingDebug === "function"
+          ? window.__conclaveGetMeetRoomTilingDebug()
+          : null;
+        return {
+          sequence: Number(debug?.sequence || 0),
+          signature: debug?.current?.signature || null,
+        };
+      })()`,
+    );
+    const roomTilingHeartbeatProbe = await waitFor(
+      cdp,
+      "room tiling metadata heartbeat",
+      `(() => {
+        const debug = typeof window.__conclaveGetMeetRoomTilingDebug === "function"
+          ? window.__conclaveGetMeetRoomTilingDebug()
+          : null;
+        const current = debug?.current;
+        const history = Array.isArray(debug?.history) ? debug.history : [];
+        const recent = history.slice(-6);
+        const hasStableSignatureHeartbeat = recent.some((item, index) => {
+          if (index === 0) return false;
+          const previous = recent[index - 1];
+          return Boolean(
+            item?.signature &&
+            item.signature === previous?.signature &&
+            Number(item.sequence || 0) === Number(previous?.sequence || 0) + 1
+          );
+        });
+        const ageMs = current
+          ? Math.max(0, performance.now() - Number(current.performanceTime || 0))
+          : null;
+        const sequence = Number(debug?.sequence || 0);
+        const startSequence = ${JSON.stringify(roomTilingHeartbeatStart.sequence)};
+        const ok =
+          sequence >= startSequence + 2 &&
+          hasStableSignatureHeartbeat &&
+          ageMs !== null &&
+          ageMs < 600 &&
+          current?.intervalMs === 200;
+        return ok ? {
+          ok,
+          startSequence,
+          sequence,
+          ageMs,
+          historyLength: history.length,
+          stableSignatureHeartbeat: hasStableSignatureHeartbeat,
+          intervalMs: current?.intervalMs ?? null,
+          currentSignature: current?.signature ?? null,
+          startSignature: ${JSON.stringify(roomTilingHeartbeatStart.signature)},
+        } : false;
+      })()`,
+      4000,
+    );
+    emit("room_tiling_heartbeat_probe", roomTilingHeartbeatProbe);
+
     const roomTilingAdaptation = await waitFor(
       cdp,
       "effects room tiling pressure adaptation",

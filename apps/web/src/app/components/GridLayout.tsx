@@ -1914,12 +1914,19 @@ function GridLayout({
       sequence: roomTilingSequenceRef.current,
       intervalMs: ROOM_TILING_METADATA_INTERVAL_MS,
     });
-    const publish = (force = false) => {
+    const publish = ({
+      force = false,
+      heartbeat = false,
+    }: {
+      force?: boolean;
+      heartbeat?: boolean;
+    } = {}) => {
       const base = latestRoomTilingMetadataBaseRef.current;
       const signature = latestRoomTilingMetadataSignatureRef.current;
       if (!base || !signature) return;
       if (
         lastPublishedRoomTilingSignatureRef.current === signature &&
+        !heartbeat &&
         (!force || roomTilingMetadataRef.current)
       ) {
         return;
@@ -1946,9 +1953,9 @@ function GridLayout({
     };
 
     window.__conclaveGetMeetRoomTilingDebug = getSnapshot;
-    publish(true);
+    publish({ force: true });
     const interval = window.setInterval(
-      () => publish(false),
+      () => publish({ heartbeat: true }),
       ROOM_TILING_METADATA_INTERVAL_MS,
     );
 
