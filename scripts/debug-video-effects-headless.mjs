@@ -1454,7 +1454,7 @@ const runPrejoinHandoffProbe = async (cdp, prejoinUrl) => {
     10000,
   );
   await collectState(cdp, "state_prejoin_more_effects_camera_off");
-  await clickButton(cdp, "Blur");
+  await clickButton(cdp, "Blur your background");
   await waitFor(
     cdp,
     "prejoin camera-off background selection pending",
@@ -1689,7 +1689,7 @@ const runPrejoinCameraOffJoinProbe = async (cdp, prejoinUrl) => {
     })()`,
     10000,
   );
-  await clickButton(cdp, "Blur");
+  await clickButton(cdp, "Blur your background");
   await waitFor(
     cdp,
     "prejoin camera-off selected effect queued before join",
@@ -1943,7 +1943,7 @@ const runPrejoinPermissionDeniedEffectsProbe = async (cdp, prejoinUrl) => {
     })()`,
     10000,
   );
-  await clickButton(cdp, "Blur");
+  await clickButton(cdp, "Blur your background");
   await waitFor(
     cdp,
     "prejoin permission-blocked blur queues",
@@ -2274,7 +2274,7 @@ const run = async () => {
     await openMeetingEffectsPanel(cdp, "effects panel");
     await collectState(cdp, "state_panel_open");
 
-    await clickButton(cdp, "Blur");
+    await clickButton(cdp, "Blur your background");
     await sleep(75);
     await clickButton(cdp, "Filters");
     await sleep(75);
@@ -2282,9 +2282,9 @@ const run = async () => {
     await sleep(75);
     await clickButton(cdp, "Backgrounds");
     await sleep(75);
-    await clickButton(cdp, "Slight blur");
+    await clickButton(cdp, "Slightly blur your background");
     await sleep(75);
-    await clickButton(cdp, "Blur");
+    await clickButton(cdp, "Blur your background");
     await waitFor(
       cdp,
       "camera-off rapid effect start output healthy",
@@ -3043,7 +3043,7 @@ const run = async () => {
       backgroundRender: state.panelStats?.backgroundRender ?? null,
     });
 
-    await clickButton(cdp, "Blur");
+    await clickButton(cdp, "Blur your background");
     await waitFor(
       cdp,
       "blur restored after custom background",
@@ -3197,7 +3197,7 @@ const run = async () => {
     });
 
     await clickButton(cdp, "Backgrounds");
-    await clickButton(cdp, "Blur");
+    await clickButton(cdp, "Blur your background");
     const reenabledPassthrough = await waitFor(
       cdp,
       "visible passthrough while background warms after effects disabled",
@@ -3653,7 +3653,7 @@ const run = async () => {
     });
 
     await clickButton(cdp, "Backgrounds");
-    await clickButton(cdp, "Blur");
+    await clickButton(cdp, "Blur your background");
     await waitFor(
       cdp,
       "active effects restored after stack removal test",

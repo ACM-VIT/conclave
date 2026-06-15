@@ -92,6 +92,7 @@ export interface VideoEffectsState {
 export interface VideoEffectOption<T extends string> {
   id: T;
   label: string;
+  ariaLabel?: string;
   description?: string;
   icon: LucideIcon;
   tone: string;
@@ -295,6 +296,7 @@ export const BACKGROUND_EFFECTS: VideoEffectOption<BackgroundEffectId>[] = [
   {
     id: "blur-light",
     label: "Slight blur",
+    ariaLabel: "Slightly blur your background",
     icon: Blend,
     tone: "#155e75",
     category: "Blur and personal",
@@ -302,6 +304,7 @@ export const BACKGROUND_EFFECTS: VideoEffectOption<BackgroundEffectId>[] = [
   {
     id: "blur-strong",
     label: "Blur",
+    ariaLabel: "Blur your background",
     icon: Blend,
     tone: "#1d4ed8",
     category: "Blur and personal",

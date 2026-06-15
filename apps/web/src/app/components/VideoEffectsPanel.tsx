@@ -208,6 +208,7 @@ function EffectOptionButton<T extends string>({
       onPointerEnter={disabled ? undefined : onPrewarm}
       onTouchStart={disabled ? undefined : onPrewarm}
       aria-pressed={selected}
+      aria-label={option.ariaLabel ?? option.label}
       disabled={disabled}
       className={`group relative min-h-[84px] rounded-[14px] border p-2 text-left transition-colors ${
         selected
