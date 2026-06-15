@@ -123,6 +123,8 @@ const importantNetworkPatterns = [
   /background/i,
   /blur/i,
   /effect/i,
+  /video_effects\/effects/i,
+  /videopipe_bundle/i,
   /face/i,
   /landmark/i,
   /vision/i,
@@ -134,6 +136,9 @@ const importantNetworkPatterns = [
 const classifyNetworkUrl = (url, mimeType = "", resourceType = "") => {
   const value = `${url} ${mimeType} ${resourceType}`;
   if (/\$rpc\/google\.rtc\.meetings/i.test(value)) return "meet_rpc";
+  if (/video_effects\/effects\/[^/]+\/[^/]+\/videopipe_bundle\.js/i.test(value)) {
+    return "effects_runtime";
+  }
   if (/boq-rtc\.MeetingsUi|meetingsui/i.test(value)) return "meet_bundle";
   if (/wasm/i.test(value)) return "wasm";
   if (/tflite|model|graph/i.test(value)) return "model";
@@ -148,6 +153,25 @@ const classifyNetworkUrl = (url, mimeType = "", resourceType = "") => {
 const isImportantNetworkUrl = (url, mimeType = "", resourceType = "") => {
   const value = `${url} ${mimeType} ${resourceType}`;
   return importantNetworkPatterns.some((pattern) => pattern.test(value));
+};
+
+const getEffectsRuntimeBundle = (url) => {
+  try {
+    const parsed = new URL(url);
+    const match = parsed.pathname.match(
+      /^\/video_effects\/effects\/([^/]+)\/([^/]+)\/([^/]+)$/i,
+    );
+    if (!match || match[3] !== "videopipe_bundle.js") return null;
+    return {
+      origin: parsed.origin,
+      build: match[1],
+      encoding: match[2],
+      file: match[3],
+      url: compactUrl(url),
+    };
+  } catch {
+    return null;
+  }
 };
 
 const compactUrl = (url) => {
@@ -259,9 +283,14 @@ const createNetworkRecorder = () => {
         acc[category] = (acc[category] ?? 0) + 1;
         return acc;
       }, {});
+      const effectsRuntimeBundles = items
+        .map((record) => getEffectsRuntimeBundle(record.url))
+        .filter(Boolean);
       return {
         totalRelevant: items.length,
         categories,
+        effectsRuntimeObserved: effectsRuntimeBundles.length > 0,
+        effectsRuntimeBundles,
         items: items.slice(0, 90).map((record) => ({
           category: record.category,
           method: record.method,
@@ -667,6 +696,7 @@ try {
     (network.items.some(
       (item) => item.category === "meet_rpc" && item.status === 403,
     ) ||
+      network.effectsRuntimeObserved ||
       Number(network.categories.effects_asset ?? 0) > 0);
 
   if (accessLimitedByMeet) {
