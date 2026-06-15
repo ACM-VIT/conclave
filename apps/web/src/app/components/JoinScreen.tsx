@@ -194,6 +194,7 @@ function JoinScreen({
   forceJoinOnly,
   enableRoomRouting,
   allowGhostMode,
+  showPermissionHint,
   isGhostMode,
   onGhostModeChange,
   onUserChange,
@@ -220,6 +221,10 @@ function JoinScreen({
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [isCameraOn, setIsCameraOn] = useState(false);
   const [isMicOn, setIsMicOn] = useState(false);
+  const [isRequestingPermissions, setIsRequestingPermissions] = useState(false);
+  const [permissionRequestError, setPermissionRequestError] = useState<
+    string | null
+  >(null);
   const [isEffectsOpen, setIsEffectsOpen] = useState(false);
   const [isMoreOptionsOpen, setIsMoreOptionsOpen] = useState(false);
   const [guestName, setGuestName] = useState("");
@@ -271,6 +276,12 @@ function JoinScreen({
     (!hasLivePreviewCamera &&
       (cameraPermissionState === "prompt" ||
         cameraPermissionState === "denied"));
+  const shouldShowPermissionCta =
+    !hasLivePreviewCamera &&
+    !isCameraOn &&
+    (cameraPermissionState === "prompt" ||
+      cameraPermissionState === "denied" ||
+      meetError?.code === "PERMISSION_DENIED");
   const isBackgroundBlurActive =
     videoEffects.background === "blur-light" ||
     videoEffects.background === "blur-strong";
@@ -293,6 +304,55 @@ function JoinScreen({
     if (isCameraPermissionBlocked) return;
     setIsMoreOptionsOpen(false);
     setIsEffectsOpen(true);
+  };
+
+  const requestMicrophoneAndCamera = async () => {
+    if (isRequestingPermissions) return;
+
+    setIsRequestingPermissions(true);
+    setPermissionRequestError(null);
+    try {
+      logJoinMedia("get_user_media_full_request", {
+        audio: DEFAULT_AUDIO_CONSTRAINTS,
+        video: STANDARD_QUALITY_CONSTRAINTS,
+      });
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: DEFAULT_AUDIO_CONSTRAINTS,
+        video: STANDARD_QUALITY_CONSTRAINTS,
+      });
+      const liveTracks = stream
+        .getTracks()
+        .filter((track) => track.readyState === "live");
+      const hasAudio = liveTracks.some((track) => track.kind === "audio");
+      const hasVideo = liveTracks.some((track) => track.kind === "video");
+
+      stream.getVideoTracks().forEach((track) => {
+        if ("contentHint" in track) track.contentHint = "motion";
+      });
+      localStreamRef.current?.getTracks().forEach((track) => {
+        if (!liveTracks.includes(track)) track.stop();
+      });
+      const nextStream =
+        liveTracks.length > 0 ? new MediaStream(liveTracks) : null;
+      setLocalStream(nextStream);
+      setIsMicOn(hasAudio);
+      setIsCameraOn(hasVideo);
+      logJoinMedia("get_user_media_full_done", {
+        stream: getJoinStreamDebugSnapshot(nextStream),
+        hasAudio,
+        hasVideo,
+      });
+    } catch (err) {
+      warnJoinMedia("get_user_media_full_failed", {
+        error:
+          err instanceof Error
+            ? { name: err.name, message: err.message, stack: err.stack }
+            : err,
+      });
+      setPermissionRequestError("Permission needed");
+    } finally {
+      setIsRequestingPermissions(false);
+    }
   };
 
   useEffect(() => {
@@ -684,9 +744,33 @@ function JoinScreen({
                 <span className="text-[14px] text-[#fafafa]/50">Camera is off</span>
               </div>
             )}
-            <div className="pointer-events-none absolute left-3 top-3 rounded-md bg-black/55 px-2.5 py-1 text-[13px] font-medium">
+            {shouldShowPermissionCta ? (
+              <button
+                type="button"
+                onClick={requestMicrophoneAndCamera}
+                disabled={isRequestingPermissions}
+                className="absolute left-3 top-3 z-10 inline-flex min-h-9 max-w-[calc(100%-1.5rem)] items-center gap-2 rounded-full bg-[#1a73e8] px-3.5 text-[13px] font-medium text-white shadow-lg shadow-black/20 transition-[background-color,opacity] duration-150 hover:bg-[#1967d2] disabled:cursor-wait disabled:opacity-75"
+              >
+                {isRequestingPermissions ? (
+                  <Loader2 size={16} className="shrink-0 animate-spin" />
+                ) : (
+                  <Video size={16} className="shrink-0" />
+                )}
+                <span className="truncate">Allow microphone and camera</span>
+              </button>
+            ) : null}
+            <div
+              className={`pointer-events-none absolute top-3 rounded-md bg-black/55 px-2.5 py-1 text-[13px] font-medium ${
+                shouldShowPermissionCta ? "right-3" : "left-3"
+              }`}
+            >
               {previewName}
             </div>
+            {(showPermissionHint || permissionRequestError) && (
+              <div className="pointer-events-none absolute bottom-[72px] left-1/2 max-w-[calc(100%-2rem)] -translate-x-1/2 rounded-full bg-black/65 px-3 py-1.5 text-center text-[12.5px] font-medium text-white/80">
+                {permissionRequestError ?? "Permission needed"}
+              </div>
+            )}
             <div className="absolute bottom-4 left-1/2 flex -translate-x-1/2 items-center gap-3">
               <button
                 onClick={toggleMic}
