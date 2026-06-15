@@ -11592,24 +11592,25 @@ export function useVideoEffects({
       let outputDelivered = false;
 
       if (waitingForSegmentationMask) {
-        outputDelivered = await deliverOutputFrame(now);
-        if (outputDelivered) {
-          recordOutputProbeResult(
+        visibleOutputFrameCount = 0;
+        if (outputTrackPublished) {
+          const restoredProbe = restoreLastVisibleOutputFrame(
+            "waiting-for-segmentation-mask",
             outputProbe,
-            sourceProbe,
-            frameSource,
-            currentEffects,
           );
-          if (visibleOutputFrameCount >= OUTPUT_READY_FRAMES) {
-            publishOutputTrack();
+          if (restoredProbe?.visible) {
+            outputProbe = restoredProbe;
+            latestOutputProbe = restoredProbe;
           }
-          setRuntimeStatus(outputProbe.visible ? "running" : "loading", null);
-        } else {
-          visibleOutputFrameCount = 0;
-          if (!outputProbe.visible) {
-            blackOutputFrameCount += 1;
-          }
-          warnVideoEffects(debugId, "waiting_for_segmentation_mask", {
+        }
+        outputDelivered = await deliverOutputFrame(now);
+        latestOutputFrameVisible = outputDelivered && outputProbe.visible;
+        if (
+          currentFrameSequence <= OUTPUT_READY_FRAMES ||
+          currentFrameSequence % OUTPUT_VISIBILITY_PROBE_INTERVAL_FRAMES === 0 ||
+          !outputDelivered
+        ) {
+          logVideoEffects(debugId, "hold_output_until_segmentation_mask", {
             sourceProbe,
             outputProbe,
             frameSource: frameSource.source,
@@ -11629,8 +11630,8 @@ export function useVideoEffects({
             sourceTrack: getTrackDebugSnapshot(sourceVideoTrack),
             hasSegmentationMask: Boolean(latestSegmentationMask),
           });
-          setRuntimeStatus("loading", null);
         }
+        setRuntimeStatus("loading", null);
       } else {
         outputDelivered = await deliverOutputFrame(now);
         if (!outputDelivered) {
@@ -11679,12 +11680,13 @@ export function useVideoEffects({
           Math.max(0, performance.now() - latestEffectSwitchAt),
         );
         if (
+          !waitingForSegmentationMask &&
           outputDelivered &&
           latestEffectSwitchFirstDeliveredLatencyMs === null
         ) {
           latestEffectSwitchFirstDeliveredLatencyMs = switchLatencyMs;
         }
-        if (outputDelivered && outputProbe.visible) {
+        if (!waitingForSegmentationMask && outputDelivered && outputProbe.visible) {
           latestEffectSwitchFirstVisibleLatencyMs = switchLatencyMs;
           latestEffectSwitchPending = false;
           logVideoEffects(debugId, "effect_switch_visible_output", {
