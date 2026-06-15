@@ -171,6 +171,10 @@ const PROCESSOR_PREWARM_FRAME_WIDTH = 256;
 const PROCESSOR_PREWARM_FRAME_HEIGHT = 144;
 const PROCESSOR_PREWARM_CONFIG_ID = -1;
 const ACTIVE_PIPELINE_PREWARM_SUPPRESSION_HOLD_MS = 1600;
+const BACKGROUND_PREWARM_ACTIVE_PIPELINE_DELAY_MS = 160;
+const BACKGROUND_PREWARM_IDLE_DELAY_MS = 24;
+const BACKGROUND_PREWARM_ACTIVE_PIPELINE_CONCURRENCY = 1;
+const BACKGROUND_PREWARM_IDLE_CONCURRENCY = 2;
 const MIN_VISIBLE_AVERAGE_LUMA = 3;
 const MIN_VISIBLE_PEAK_LUMA = 18;
 const PROCESSED_TRACK_STOP_GRACE_MS = 1800;
@@ -1064,6 +1068,7 @@ const backgroundImageCache = new Map<
     promise: Promise<HTMLImageElement | null> | null;
   }
 >();
+const backgroundPrewarmQueuePromises = new Map<string, Promise<void>>();
 
 const clamp = (value: number, min: number, max: number) =>
   Math.min(Math.max(value, min), max);
@@ -2627,6 +2632,89 @@ const loadBackgroundImage = (
   return promise;
 };
 
+const waitForBackgroundPrewarmCadence = () =>
+  new Promise<void>((resolve) => {
+    if (typeof window === "undefined") {
+      resolve();
+      return;
+    }
+    const delayMs = isVideoEffectsPipelineBusyForPrewarm()
+      ? BACKGROUND_PREWARM_ACTIVE_PIPELINE_DELAY_MS
+      : BACKGROUND_PREWARM_IDLE_DELAY_MS;
+    window.setTimeout(resolve, delayMs);
+  });
+
+const prewarmBackgroundImages = async (
+  backgrounds: BackgroundEffectId[],
+  instanceId: number,
+  reason: string,
+) => {
+  const queuedBackgrounds = Array.from(
+    new Set(
+      backgrounds.filter((background) =>
+        Boolean(getBackgroundImageSource(background)),
+      ),
+    ),
+  );
+  if (queuedBackgrounds.length === 0) return;
+
+  const queueKey = queuedBackgrounds.join("|");
+  const existingQueue = backgroundPrewarmQueuePromises.get(queueKey);
+  if (existingQueue) {
+    logVideoEffects(instanceId, "background_prewarm_queue_reuse", {
+      reason,
+      count: queuedBackgrounds.length,
+      key: queueKey,
+    });
+    await existingQueue;
+    return;
+  }
+
+  const bulkPrewarm = queuedBackgrounds.length > 1;
+  const initialConcurrency = bulkPrewarm
+    ? isVideoEffectsPipelineBusyForPrewarm()
+      ? BACKGROUND_PREWARM_ACTIVE_PIPELINE_CONCURRENCY
+      : BACKGROUND_PREWARM_IDLE_CONCURRENCY
+    : 1;
+  logVideoEffects(instanceId, "background_prewarm_queue_start", {
+    reason,
+    count: queuedBackgrounds.length,
+    concurrency: initialConcurrency,
+    bulk: bulkPrewarm,
+    activePipelineCount: activeVideoEffectsPipelineCount,
+  });
+
+  let nextIndex = 0;
+  const worker = async () => {
+    while (nextIndex < queuedBackgrounds.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      if (bulkPrewarm && index > 0) {
+        await waitForBackgroundPrewarmCadence();
+      }
+      await loadBackgroundImage(queuedBackgrounds[index], instanceId).then(
+        () => undefined,
+      );
+    }
+  };
+
+  const workerCount = Math.min(initialConcurrency, queuedBackgrounds.length);
+  const queuePromise = Promise.all(
+    Array.from({ length: workerCount }, () => worker()),
+  ).then(() => undefined);
+  backgroundPrewarmQueuePromises.set(queueKey, queuePromise);
+  await queuePromise.finally(() => {
+    if (backgroundPrewarmQueuePromises.get(queueKey) === queuePromise) {
+      backgroundPrewarmQueuePromises.delete(queueKey);
+    }
+  });
+  logVideoEffects(instanceId, "background_prewarm_queue_done", {
+    reason,
+    count: queuedBackgrounds.length,
+    concurrency: initialConcurrency,
+  });
+};
+
 const getLoadedBackgroundImage = (
   background: BackgroundEffectId,
   customBackgroundDataUrl?: string | null,
@@ -3663,13 +3751,8 @@ export const prewarmVideoEffectsAssets = async ({
       ),
     );
   }
-  for (const background of backgrounds) {
-    modelPromises.push(
-      loadBackgroundImage(background, instanceId).then(() => undefined),
-    );
-  }
-
   await Promise.all(modelPromises);
+  await prewarmBackgroundImages(backgrounds, instanceId, reason);
   logVideoEffects(instanceId, "prewarm_done", {
     segmentation,
     face,
