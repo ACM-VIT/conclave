@@ -1283,6 +1283,69 @@ const waitForMeetVideoPublish = async (cdp, label, mode = "processed") => {
   return state;
 };
 
+const forceCloseLocalVideoProducerForDebug = async (cdp, label) => {
+  const closeResult = await evalValue(
+    cdp,
+    `(() => {
+      const closeProducer = window.__conclaveCloseLocalVideoProducerForDebug;
+      if (typeof closeProducer !== "function") {
+        return { ok: false, error: "debug close function missing" };
+      }
+      return closeProducer(${JSON.stringify(label)});
+    })()`,
+    10000,
+  );
+  emit("local_video_producer_close_probe_start", {
+    label,
+    closeResult,
+  });
+  if (!closeResult?.ok || !closeResult?.producerId) {
+    throw new Error(
+      `Failed to force-close local video producer: ${JSON.stringify(
+        closeResult,
+      )}`,
+    );
+  }
+
+  const closedProducerId = closeResult.producerId;
+  await waitFor(
+    cdp,
+    `${label} recovered processed producer`,
+    `(() => {
+      const debug =
+        typeof window.__conclaveGetMeetVideoDebug === "function"
+          ? window.__conclaveGetMeetVideoDebug()
+          : window.__conclaveMeetVideoDebug ?? null;
+      const producer = debug?.videoProducer;
+      const producerTrack = producer?.track;
+      return debug?.connectionState === "joined" &&
+        debug?.isCameraOff === false &&
+        producer &&
+        producer.id !== ${JSON.stringify(closedProducerId)} &&
+        producer.closed === false &&
+        producerTrack?.readyState === "live" &&
+        debug?.publish?.shouldPublishProcessed === true &&
+        debug?.publish?.usingProcessedTrack === true &&
+        debug?.publish?.producerTrackLive === true;
+    })()`,
+    30000,
+  );
+  const recoveredState = await collectState(
+    cdp,
+    `state_${label.toLowerCase().replace(/[^a-z0-9]+/g, "_")}_recovered`,
+  );
+  emit("local_video_producer_close_recovery_probe", {
+    label,
+    closedProducerId,
+    recoveredProducerId: recoveredState.meetVideoDebug?.videoProducer?.id ?? null,
+    usingProcessedTrack:
+      recoveredState.meetVideoDebug?.publish?.usingProcessedTrack === true,
+    cameraOff: recoveredState.meetVideoDebug?.isCameraOff ?? null,
+    status: recoveredState.meetVideoDebug?.videoEffectsStatus ?? null,
+  });
+  return recoveredState;
+};
+
 const uploadCustomBackground = async (cdp) => {
   const ok = await evalValue(
     cdp,
@@ -3329,6 +3392,16 @@ const run = async () => {
     await waitForMeetVideoPublish(
       cdp,
       "effects reenabled producer uses processed output",
+      "processed",
+    );
+    state = await forceCloseLocalVideoProducerForDebug(
+      cdp,
+      "effects reenabled producer close",
+    );
+    assertOutputWriterQuality(state, "effects reenabled producer close recovery");
+    await waitForMeetVideoPublish(
+      cdp,
+      "effects reenabled producer close keeps processed output",
       "processed",
     );
 

@@ -73,6 +73,9 @@ type MeetUser = {
 type MeetVideoDebugWindow = Window & {
   __conclaveGetMeetVideoDebug?: () => Record<string, unknown>;
   __conclaveMeetVideoDebug?: Record<string, unknown>;
+  __conclaveCloseLocalVideoProducerForDebug?: (
+    reason?: string,
+  ) => Promise<Record<string, unknown>>;
 };
 
 const GUEST_USER_STORAGE_KEY = "conclave:guest-user";
@@ -1157,26 +1160,98 @@ export default function MeetsClient({
     ],
   );
 
+  const closeLocalVideoProducerForDebug = useCallback(
+    async (reason = "debug") => {
+      if (!isMeetVideoDebugEnabled()) {
+        return { ok: false, error: "debug video effects disabled" };
+      }
+
+      const producer = refs.videoProducerRef.current;
+      if (!producer || producer.closed) {
+        return {
+          ok: false,
+          error: "local video producer missing or already closed",
+          snapshot: buildMeetVideoDebugSnapshot("debug_close_missing"),
+        };
+      }
+
+      const producerId = producer.id;
+      const socket = refs.socketRef.current;
+      const closeAck =
+        socket?.connected === true
+          ? await new Promise<Record<string, unknown>>((resolve) => {
+              let settled = false;
+              const timeout = window.setTimeout(() => {
+                if (settled) return;
+                settled = true;
+                resolve({ timeout: true });
+              }, 5000);
+              socket.emit(
+                "closeProducer",
+                { producerId },
+                (response: Record<string, unknown> = {}) => {
+                  if (settled) return;
+                  settled = true;
+                  window.clearTimeout(timeout);
+                  resolve(response);
+                },
+              );
+            })
+          : { skipped: true, reason: "socket disconnected" };
+
+      try {
+        producer.close();
+      } catch {}
+      if (refs.videoProducerRef.current?.id === producerId) {
+        refs.videoProducerRef.current = null;
+      }
+
+      const result = {
+        ok: true,
+        reason,
+        producerId,
+        closeAck,
+        snapshot: buildMeetVideoDebugSnapshot("debug_close_done"),
+      };
+      logMeetVideo("debug_close_local_video_producer", result);
+      return result;
+    },
+    [
+      buildMeetVideoDebugSnapshot,
+      refs.socketRef,
+      refs.videoProducerRef,
+    ],
+  );
+
   useEffect(() => {
     if (typeof window === "undefined") return;
     const debugWindow = window as MeetVideoDebugWindow;
     if (!isMeetVideoDebugEnabled()) {
       delete debugWindow.__conclaveGetMeetVideoDebug;
       delete debugWindow.__conclaveMeetVideoDebug;
+      delete debugWindow.__conclaveCloseLocalVideoProducerForDebug;
       return;
     }
     debugWindow.__conclaveGetMeetVideoDebug = () =>
       buildMeetVideoDebugSnapshot("getter");
     debugWindow.__conclaveMeetVideoDebug =
       buildMeetVideoDebugSnapshot("render");
+    debugWindow.__conclaveCloseLocalVideoProducerForDebug =
+      closeLocalVideoProducerForDebug;
     return () => {
       if (debugWindow.__conclaveGetMeetVideoDebug) {
         debugWindow.__conclaveMeetVideoDebug =
           buildMeetVideoDebugSnapshot("cleanup");
         delete debugWindow.__conclaveGetMeetVideoDebug;
       }
+      if (
+        debugWindow.__conclaveCloseLocalVideoProducerForDebug ===
+        closeLocalVideoProducerForDebug
+      ) {
+        delete debugWindow.__conclaveCloseLocalVideoProducerForDebug;
+      }
     };
-  }, [buildMeetVideoDebugSnapshot]);
+  }, [buildMeetVideoDebugSnapshot, closeLocalVideoProducerForDebug]);
 
   useEffect(() => {
     if (connectionState !== "joined" || isCameraOff) {

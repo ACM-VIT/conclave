@@ -116,6 +116,8 @@ export function useMeetMedia({
   >(async () => {});
   const audioRecoveryInFlightRef = useRef(false);
   const cameraRecoveryInFlightRef = useRef(false);
+  const [cameraProducerRecoveryPulse, setCameraProducerRecoveryPulse] =
+    useState(0);
   const toggleMuteInFlightRef = useRef(false);
   const toggleCameraInFlightRef = useRef(false);
   const buildAudioConstraints = useCallback(
@@ -1331,7 +1333,78 @@ export function useMeetMedia({
     if (ghostEnabled || isObserverMode) return;
     if (connectionState !== "joined") return;
     if (isCameraOff) return;
-    if (videoProducerRef.current) return;
+
+    let disposed = false;
+    const requestRecovery = (reason: "initial" | "watchdog") => {
+      if (disposed || cameraRecoveryInFlightRef.current) return;
+
+      const producer = videoProducerRef.current;
+      const producerTrack = producer?.track ?? null;
+      const needsRecovery =
+        !producer || producer.closed || producerTrack?.readyState !== "live";
+      if (!needsRecovery) return;
+
+      if (producer && videoProducerRef.current?.id === producer.id) {
+        try {
+          producer.close();
+        } catch {}
+        videoProducerRef.current = null;
+      }
+
+      console.warn("[Meets] Camera producer recovery triggered:", {
+        reason,
+        hasProducer: Boolean(producer),
+        producerClosed: producer?.closed ?? null,
+        producerId: producer?.id ?? null,
+        trackId: producerTrack?.id ?? null,
+        trackState: producerTrack?.readyState ?? null,
+      });
+      setCameraProducerRecoveryPulse((value) => value + 1);
+    };
+
+    const initialTimeout = window.setTimeout(
+      () => requestRecovery("initial"),
+      250,
+    );
+    const watchdogInterval = window.setInterval(
+      () => requestRecovery("watchdog"),
+      1500,
+    );
+
+    return () => {
+      disposed = true;
+      window.clearTimeout(initialTimeout);
+      window.clearInterval(watchdogInterval);
+    };
+  }, [
+    connectionState,
+    ghostEnabled,
+    isCameraOff,
+    isObserverMode,
+    videoProducerRef,
+  ]);
+
+  useEffect(() => {
+    if (ghostEnabled || isObserverMode) return;
+    if (connectionState !== "joined") return;
+    if (isCameraOff) return;
+    const existingProducer = videoProducerRef.current;
+    const existingTrack = existingProducer?.track ?? null;
+    if (
+      existingProducer &&
+      !existingProducer.closed &&
+      existingTrack?.readyState === "live"
+    ) {
+      return;
+    }
+    if (existingProducer) {
+      try {
+        existingProducer.close();
+      } catch {}
+      if (videoProducerRef.current?.id === existingProducer.id) {
+        videoProducerRef.current = null;
+      }
+    }
     if (cameraRecoveryInFlightRef.current) return;
 
     let cancelled = false;
@@ -1415,8 +1488,10 @@ export function useMeetMedia({
         recoveredProducer.on("transportclose", () => {
           if (videoProducerRef.current?.id === recoveredProducer.id) {
             videoProducerRef.current = null;
+            setCameraProducerRecoveryPulse((value) => value + 1);
           }
         });
+        setIsCameraOff(false);
       } catch (err) {
         console.error("[Meets] Camera producer recovery failed:", err);
         if (!cancelled) {
@@ -1448,6 +1523,7 @@ export function useMeetMedia({
     ghostEnabled,
     isObserverMode,
     connectionState,
+    cameraProducerRecoveryPulse,
     isCameraOff,
     handleLocalTrackEnded,
     stopLocalTrack,
