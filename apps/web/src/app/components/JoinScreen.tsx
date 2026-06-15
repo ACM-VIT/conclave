@@ -292,6 +292,13 @@ function JoinScreen({
       reason: "prejoin-quick-blur",
     });
   };
+  const prewarmLiveCameraEffects = (reason: string) => {
+    void prewarmVideoEffectsAssets({
+      segmentation: true,
+      face: true,
+      reason,
+    });
+  };
   const toggleBackgroundBlur = () => {
     if (isCameraPermissionBlocked) return;
     const nextBackground = isBackgroundBlurActive ? "none" : "blur-strong";
@@ -343,6 +350,9 @@ function JoinScreen({
       setLocalStream(nextStream);
       setIsMicOn(hasAudio);
       setIsCameraOn(hasVideo);
+      if (hasVideo) {
+        prewarmLiveCameraEffects("prejoin-full-media-camera-live");
+      }
       logJoinMedia("get_user_media_full_done", {
         stream: getJoinStreamDebugSnapshot(nextStream),
         hasAudio,
@@ -562,6 +572,7 @@ function JoinScreen({
           setLocalStream(stream);
         }
         setIsCameraOn(true);
+        prewarmLiveCameraEffects("prejoin-camera-toggle-live");
         logJoinMedia("toggle_camera_on_done", {
           track: getJoinTrackDebugSnapshot(videoTrack),
         });

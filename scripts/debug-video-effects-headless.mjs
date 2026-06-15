@@ -1494,6 +1494,7 @@ const runPrejoinHandoffProbe = async (cdp, prejoinUrl) => {
     cdp,
     "state_prejoin_more_background_selected_camera_off",
   );
+  const prejoinCameraLivePrewarmLogStartIndex = cdp.logs.length;
   await clickButton(cdp, "Turn on camera");
   await waitFor(
     cdp,
@@ -1523,6 +1524,21 @@ const runPrejoinHandoffProbe = async (cdp, prejoinUrl) => {
     })()`,
     30000,
   );
+  const prejoinCameraLivePrewarmRequested = cdp.logs
+    .slice(prejoinCameraLivePrewarmLogStartIndex)
+    .some(
+      (log) =>
+        /prewarm_requested/.test(log.text) &&
+        /prejoin-camera-toggle-live/.test(log.text) &&
+        /"segmentation":true/.test(log.text) &&
+        /"face":true/.test(log.text),
+    );
+  emit("prejoin_camera_live_prewarm_probe", {
+    ok: prejoinCameraLivePrewarmRequested,
+  });
+  if (!prejoinCameraLivePrewarmRequested) {
+    throw new Error("Prejoin camera toggle did not request live-camera effects prewarm");
+  }
   const prejoinState = await collectState(
     cdp,
     "state_prejoin_more_background_selected_live",
