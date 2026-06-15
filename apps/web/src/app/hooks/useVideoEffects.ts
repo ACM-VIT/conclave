@@ -149,6 +149,8 @@ const SEGMENTATION_PROCESSOR_TIMEOUT_MESSAGE =
   "Timed out waiting for segmentation worker result.";
 const FACE_PROCESSOR_TIMEOUT_MESSAGE =
   "Timed out waiting for face worker result.";
+const VIDEO_EFFECTS_PROCESSOR_CLEANUP_MESSAGE =
+  "Video effects processor cleaned up.";
 const TRACK_PROCESSOR_PRIMARY_MAX_AGE_MS = 900;
 const TRACK_PROCESSOR_SCHEDULER_MAX_AGE_MS = 1200;
 const TRACK_PROCESSOR_RETIRE_AFTER_VIDEO_VISIBLE_MS = 1800;
@@ -2469,6 +2471,9 @@ const getErrorDebugSnapshot = (err: unknown) => {
   }
   return err;
 };
+
+const isVideoEffectsProcessorCleanupError = (err: unknown) =>
+  err instanceof Error && err.message === VIDEO_EFFECTS_PROCESSOR_CLEANUP_MESSAGE;
 
 const serializeDebugPayload = (payload: unknown) => {
   if (typeof payload === "string") return payload;
@@ -9949,6 +9954,12 @@ export function useVideoEffects({
           });
           return true;
         }
+        if (isVideoEffectsProcessorCleanupError(err)) {
+          logVideoEffects(debugId, "segmentation_processor_worker_frame_cancelled", {
+            error: getErrorDebugSnapshot(err),
+          });
+          return false;
+        }
         segmentationProcessorWorkerFailures += 1;
         segmentationProcessorFallbackReason = "worker frame failed";
         segmentationProcessorLastError = getErrorDebugSnapshot(err);
@@ -10214,6 +10225,12 @@ export function useVideoEffects({
             hasPreviousLandmarks: Boolean(latestFaceLandmarks?.length),
           });
           return true;
+        }
+        if (isVideoEffectsProcessorCleanupError(err)) {
+          logVideoEffects(debugId, "face_processor_worker_frame_cancelled", {
+            error: getErrorDebugSnapshot(err),
+          });
+          return false;
         }
         faceProcessorWorkerFailures += 1;
         faceProcessorFallbackReason = "worker frame failed";
@@ -12592,13 +12609,13 @@ export function useVideoEffects({
         faceProcessorWorker = null;
       }
       rejectPendingOutputWriterFrames(
-        new Error("Video effects processor cleaned up."),
+        new Error(VIDEO_EFFECTS_PROCESSOR_CLEANUP_MESSAGE),
       );
       rejectPendingSegmentationProcessorFrames(
-        new Error("Video effects processor cleaned up."),
+        new Error(VIDEO_EFFECTS_PROCESSOR_CLEANUP_MESSAGE),
       );
       rejectPendingFaceProcessorFrames(
-        new Error("Video effects processor cleaned up."),
+        new Error(VIDEO_EFFECTS_PROCESSOR_CLEANUP_MESSAGE),
       );
       if (outputGeneratorWriter) {
         void outputGeneratorWriter.close().catch(() => {});
