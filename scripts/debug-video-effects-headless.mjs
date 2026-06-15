@@ -1894,9 +1894,17 @@ const runPrejoinPermissionDeniedEffectsProbe = async (cdp, prejoinUrl) => {
         (button) => button.getAttribute("aria-label") === "Turn on background blur"
       );
       const effectsButton = document.querySelector('[data-testid="prejoin-more-backgrounds-effects"]');
+      const effectsButtonLabel = (effectsButton?.getAttribute("aria-label") || "")
+        .replace(/\\s+/g, " ")
+        .trim();
+      const effectsButtonText = (effectsButton?.textContent || "")
+        .replace(/\\s+/g, " ")
+        .trim();
       return Boolean(quickBlurButton && quickBlurButton.disabled) &&
         Boolean(effectsButton instanceof HTMLButtonElement && effectsButton.disabled) &&
-        (effectsButton?.getAttribute("aria-label") || "").includes("Permission needed") &&
+        effectsButtonLabel === "Backgrounds and effects: Permission needed" &&
+        effectsButtonText.includes("Backgrounds and effects") &&
+        effectsButtonText.includes("Permission needed") &&
         !document.querySelector('[data-testid="video-effects-panel"]');
     })()`,
     10000,

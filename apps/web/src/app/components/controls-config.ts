@@ -252,12 +252,15 @@ export function buildControlsConfig(p: ControlsBarProps): ControlsConfig {
     });
   }
   if (p.onToggleVideoEffects) {
+    const effectsPermissionBlocked = Boolean(p.isVideoEffectsPermissionBlocked);
     overflow.push({
       id: "effects",
       icon: Sparkles,
-      label: "Backgrounds and effects",
+      label: effectsPermissionBlocked
+        ? "Permission needed"
+        : "Backgrounds and effects",
       active: p.isVideoEffectsOpen || (p.activeVideoEffectsCount ?? 0) > 0,
-      disabled: ghost || p.isVideoEffectsPermissionBlocked,
+      disabled: ghost || effectsPermissionBlocked,
       onPress: p.onToggleVideoEffects,
     });
   }
