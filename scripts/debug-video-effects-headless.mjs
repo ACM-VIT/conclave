@@ -1687,10 +1687,39 @@ const runPrejoinCameraOffJoinProbe = async (cdp, prejoinUrl) => {
           ? stream.getVideoTracks()
           : [];
       }).filter((track) => track.readyState === "live");
+      const localTile = document.querySelector(".acm-video-tile");
+      const localTileVideo = localTile?.querySelector("video[data-meet-tile-video='true']");
+      const localTileVideoRect = localTileVideo?.getBoundingClientRect?.();
+      const localTileVideoStyle = localTileVideo ? getComputedStyle(localTileVideo) : null;
+      const localTileVideoVisible = Boolean(
+        localTileVideoRect &&
+        localTileVideoRect.width > 2 &&
+        localTileVideoRect.height > 2 &&
+        localTileVideoStyle?.display !== "none" &&
+        localTileVideoStyle?.visibility !== "hidden" &&
+        localTileVideoStyle?.opacity !== "0"
+      );
+      const localCameraPlaceholder = localTile?.querySelector(
+        "[data-meet-local-camera-placeholder='true']",
+      );
+      const placeholderRect = localCameraPlaceholder?.getBoundingClientRect?.();
+      const placeholderStyle = localCameraPlaceholder
+        ? getComputedStyle(localCameraPlaceholder)
+        : null;
+      const localCameraPlaceholderVisible = Boolean(
+        placeholderRect &&
+        placeholderRect.width > 2 &&
+        placeholderRect.height > 2 &&
+        placeholderStyle?.display !== "none" &&
+        placeholderStyle?.visibility !== "hidden" &&
+        placeholderStyle?.opacity !== "0"
+      );
       const meetDebug = window.__conclaveGetMeetVideoDebug?.();
       return Boolean(grid) &&
         Boolean(cameraButton && !cameraButton.disabled) &&
         liveVideoTracks.length === 0 &&
+        localTileVideoVisible === false &&
+        localCameraPlaceholderVisible === true &&
         meetDebug?.connectionState === "joined" &&
         meetDebug?.isCameraOff === true &&
         meetDebug?.activeVideoEffectsCount === 1 &&

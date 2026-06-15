@@ -2592,7 +2592,10 @@ function GridLayout({
                 } ${isMirrorCamera ? "scale-x-[-1]" : ""}`}
               />
               {isCameraOff && (
-                <div className="absolute inset-0 flex items-center justify-center bg-[#18181b]">
+                <div
+                  data-meet-local-camera-placeholder="true"
+                  className="absolute inset-0 flex items-center justify-center bg-[#18181b]"
+                >
                   <div
                     className="flex h-20 w-20 items-center justify-center rounded-full text-3xl font-bold text-white"
                     style={{ backgroundColor: avatarColor(userEmail) }}
@@ -3211,7 +3214,10 @@ const LocalVideoTile = memo(function LocalVideoTile({
         } ${isMirrorCamera ? "scale-x-[-1]" : ""}`}
       />
       {isCameraOff ? (
-        <div className="absolute inset-0 flex items-center justify-center bg-[#18181b]">
+        <div
+          data-meet-local-camera-placeholder="true"
+          className="absolute inset-0 flex items-center justify-center bg-[#18181b]"
+        >
           <div
             className={`flex items-center justify-center rounded-full font-bold text-white ${
               compact ? "h-12 w-12 text-xl" : "h-20 w-20 text-3xl"
