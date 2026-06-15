@@ -2188,6 +2188,9 @@ const run = async () => {
       localStream: state.meetVideoDebug?.localStream ?? null,
     });
 
+    let cameraToggleLivePrewarmRequested = false;
+    let cameraToggleLivePrewarmDone = false;
+    const cameraToggleLivePrewarmLogStartIndex = cdp.logs.length;
     if (state.meetVideoDebug?.isCameraOff === true) {
       const turnedOn = await evalValue(
         cdp,
@@ -2205,6 +2208,25 @@ const run = async () => {
       await sleep(3000);
       state = await collectState(cdp, "state_after_camera_toggle");
     }
+    cameraToggleLivePrewarmRequested = cdp.logs
+      .slice(cameraToggleLivePrewarmLogStartIndex)
+      .some(
+        (log) =>
+          /prewarm_requested/.test(log.text) &&
+          /"reason":"camera-toggle-live"/.test(log.text),
+      );
+    cameraToggleLivePrewarmDone = cdp.logs
+      .slice(cameraToggleLivePrewarmLogStartIndex)
+      .some(
+        (log) =>
+          /prewarm_done/.test(log.text) &&
+          /"reason":"camera-toggle-live"/.test(log.text),
+      );
+    emit("camera_toggle_live_prewarm_probe", {
+      ok: cameraToggleLivePrewarmRequested && cameraToggleLivePrewarmDone,
+      requested: cameraToggleLivePrewarmRequested,
+      done: cameraToggleLivePrewarmDone,
+    });
 
     await ensureMeetingToolbarControls(cdp);
     await openMeetingEffectsPanel(cdp, "effects panel");
@@ -4560,6 +4582,8 @@ const run = async () => {
       backgroundProbeFailures.length > 0 ||
       darkVideoProbeFallbackFailed ||
       processorPrewarmFailed ||
+      !cameraToggleLivePrewarmRequested ||
+      !cameraToggleLivePrewarmDone ||
       !cameraLivePrewarmRequested ||
       !cameraLivePrewarmDone ||
       !effectSwitchLatencyQuality.ok ||
@@ -4573,6 +4597,8 @@ const run = async () => {
           processorPrewarmFailed,
           missingPrewarmKinds,
           prewarmFailureLogs,
+          cameraToggleLivePrewarmRequested,
+          cameraToggleLivePrewarmDone,
           cameraLivePrewarmRequested,
           cameraLivePrewarmDone,
           effectSwitchLatencyQuality,

@@ -501,16 +501,12 @@ export default function MeetsClient({
     if (cameraLiveEffectsPrewarmDoneRef.current) return;
     if (isCameraOff || !hasLiveVideoTrack(localStream)) return;
 
-    const timeoutId = window.setTimeout(() => {
-      cameraLiveEffectsPrewarmDoneRef.current = true;
-      void prewarmVideoEffectsAssets({
-        segmentation: true,
-        face: true,
-        reason: "camera-live",
-      });
-    }, 350);
-
-    return () => window.clearTimeout(timeoutId);
+    cameraLiveEffectsPrewarmDoneRef.current = true;
+    void prewarmVideoEffectsAssets({
+      segmentation: true,
+      face: true,
+      reason: "camera-live",
+    });
   }, [isCameraOff, localStream]);
 
   const [browserAudioNeedsGesture, setBrowserAudioNeedsGesture] =

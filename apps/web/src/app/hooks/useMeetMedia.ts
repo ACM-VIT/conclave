@@ -25,6 +25,7 @@ import {
   getPreferredWebcamCodec,
   produceWebcamTrack,
 } from "../lib/webcam-codec";
+import { prewarmVideoEffectsAssets } from "./useVideoEffects";
 
 interface UseMeetMediaOptions {
   ghostEnabled: boolean;
@@ -1216,6 +1217,12 @@ export function useMeetMedia({
       if (isCameraOff) {
         let createdTrack: MediaStreamTrack | null = null;
         try {
+          void prewarmVideoEffectsAssets({
+            segmentation: true,
+            face: true,
+            reason: "camera-toggle-live",
+          });
+
           let transport = producerTransportRef.current;
           if (!transport || transport.closed) {
             const transportReady =
