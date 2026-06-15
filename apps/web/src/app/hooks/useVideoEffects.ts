@@ -3688,7 +3688,6 @@ export const prewarmVideoEffectsAssets = async ({
     segmentation,
     face,
     backgrounds: canonicalBackgrounds,
-    reason,
   });
   const existingPrewarm = videoEffectsAssetPrewarmPromises.get(prewarmKey);
   if (existingPrewarm) {
