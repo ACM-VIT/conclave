@@ -314,7 +314,6 @@ function JoinScreen({
     }));
   };
   const openEffectsPanel = () => {
-    if (isCameraPermissionBlocked) return;
     setIsMoreOptionsOpen(false);
     setIsEffectsOpen(true);
   };
@@ -370,11 +369,6 @@ function JoinScreen({
       setIsRequestingPermissions(false);
     }
   };
-
-  useEffect(() => {
-    if (!isCameraPermissionBlocked || !isEffectsOpen) return;
-    setIsEffectsOpen(false);
-  }, [isCameraPermissionBlocked, isEffectsOpen]);
 
   const [nextParam, setNextParam] = useState<string | null>(null);
   const hasPushedNextRef = useRef(false);
@@ -844,31 +838,17 @@ function JoinScreen({
                       type="button"
                       data-testid="prejoin-more-backgrounds-effects"
                       onClick={openEffectsPanel}
-                      disabled={isCameraPermissionBlocked}
-                      aria-label={
-                        isCameraPermissionBlocked
-                          ? "Backgrounds and effects: Permission needed"
-                          : "Backgrounds and effects"
-                      }
+                      aria-label="Backgrounds and effects"
                       className="flex w-full items-center gap-3 px-4 py-3 text-left text-[14px] text-[#f1f3f4] transition-colors duration-150 hover:bg-white/10 disabled:cursor-not-allowed disabled:text-[#f1f3f4]/45 disabled:hover:bg-transparent"
                     >
                       <Sparkles
                         size={18}
-                        className={`shrink-0 ${
-                          isCameraPermissionBlocked
-                            ? "text-[#bdc1c6]/45"
-                            : "text-[#bdc1c6]"
-                        }`}
+                        className="shrink-0 text-[#bdc1c6]"
                       />
                       <span className="min-w-0">
                         <span className="block truncate">
                           Backgrounds and effects
                         </span>
-                        {isCameraPermissionBlocked ? (
-                          <span className="block truncate text-[12px] text-[#f1f3f4]/40">
-                            Permission needed
-                          </span>
-                        ) : null}
                       </span>
                     </button>
                     <button
@@ -1040,7 +1020,7 @@ function JoinScreen({
           </div>
         </div>
       </main>
-      {isEffectsOpen && !isCameraPermissionBlocked && (
+      {isEffectsOpen && (
         <VideoEffectsPanel
           variant="dialog"
           effects={videoEffects}
@@ -1052,6 +1032,7 @@ function JoinScreen({
           debugStats={videoEffectsDebugStats}
           activeCount={activeVideoEffectsCount}
           cameraPermissionBlocked={isCameraPermissionBlocked}
+          showFilters={!isCameraPermissionBlocked}
           onClose={() => setIsEffectsOpen(false)}
         />
       )}

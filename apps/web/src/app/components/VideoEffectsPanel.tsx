@@ -782,19 +782,19 @@ export default function VideoEffectsPanel({
   }, [activeTab, prewarmFace]);
 
   const statusLabel =
-    cameraUnavailable && activeCount > 0
-      ? "Will apply when camera turns on"
-      : cameraPermissionBlocked
-        ? "Permission needed"
+    cameraPermissionBlocked
+      ? "Camera is blocked"
+      : cameraUnavailable && activeCount > 0
+        ? "Will apply when camera turns on"
         : status === "loading"
-        ? "Preparing effects"
-        : status === "running"
-          ? "Effects are live"
-          : status === "degraded"
-            ? "Effects degraded"
-            : activeCount > 0
-              ? "Waiting for camera"
-              : "No effects applied";
+          ? "Preparing effects"
+          : status === "running"
+            ? "Effects are live"
+            : status === "degraded"
+              ? "Effects degraded"
+              : activeCount > 0
+                ? "Waiting for camera"
+                : "No effects applied";
 
   const compactDebugStats = useMemo(() => {
     if (!debugStats) return undefined;
@@ -917,7 +917,7 @@ export default function VideoEffectsPanel({
         {cameraUnavailable ? (
           <div className="mt-3 rounded-[12px] bg-[#fef7e0] px-3 py-2 text-[12px] leading-snug text-[#5f6368]">
             {cameraPermissionBlocked
-              ? "Camera permission is needed to use visual effects."
+              ? "Camera is blocked"
               : "Your camera is turned off. Effects will apply when you turn it on."}
           </div>
         ) : null}

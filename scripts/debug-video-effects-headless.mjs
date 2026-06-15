@@ -1888,7 +1888,7 @@ const runPrejoinPermissionDeniedEffectsProbe = async (cdp, prejoinUrl) => {
   );
   await waitFor(
     cdp,
-    "prejoin permission-blocked effects controls disabled",
+    "prejoin permission-blocked effects menu entry enabled",
     `(() => {
       const quickBlurButton = Array.from(document.querySelectorAll("button")).find(
         (button) => button.getAttribute("aria-label") === "Turn on background blur"
@@ -1901,15 +1901,15 @@ const runPrejoinPermissionDeniedEffectsProbe = async (cdp, prejoinUrl) => {
         .replace(/\\s+/g, " ")
         .trim();
       return Boolean(quickBlurButton && quickBlurButton.disabled) &&
-        Boolean(effectsButton instanceof HTMLButtonElement && effectsButton.disabled) &&
-        effectsButtonLabel === "Backgrounds and effects: Permission needed" &&
+        Boolean(effectsButton instanceof HTMLButtonElement && !effectsButton.disabled) &&
+        effectsButtonLabel === "Backgrounds and effects" &&
         effectsButtonText.includes("Backgrounds and effects") &&
-        effectsButtonText.includes("Permission needed") &&
+        !effectsButtonText.includes("Permission needed") &&
         !document.querySelector('[data-testid="video-effects-panel"]');
     })()`,
     10000,
   );
-  const clickedDisabledEntry = await evalValue(
+  const clickedEffectsEntry = await evalValue(
     cdp,
     `(() => {
       const effectsButton = document.querySelector('[data-testid="prejoin-more-backgrounds-effects"]');
@@ -1918,16 +1918,49 @@ const runPrejoinPermissionDeniedEffectsProbe = async (cdp, prejoinUrl) => {
       return true;
     })()`,
   );
-  if (!clickedDisabledEntry) {
+  if (!clickedEffectsEntry) {
     throw new Error("Permission-blocked effects row was not present");
   }
   await waitFor(
     cdp,
-    "prejoin permission-blocked effects panel stays closed",
+    "prejoin permission-blocked effects panel opens",
     `(() => {
+      const panel = document.querySelector('[data-testid="video-effects-panel"]');
       const meetDebug = window.__conclaveGetMeetVideoDebug?.();
-      return !document.querySelector('[data-testid="video-effects-panel"]') &&
+      const bodyText = document.body?.innerText || "";
+      return panel?.getAttribute("data-video-effects-status") === "off" &&
+        panel?.getAttribute("data-video-effects-active-count") === "0" &&
+        panel?.getAttribute("data-video-effects-output-published") === "false" &&
+        panel?.getAttribute("data-video-effects-permission-locked") === "true" &&
+        panel?.getAttribute("data-video-effects-filters-visible") === "false" &&
+        bodyText.includes("Camera is blocked") &&
         (meetDebug?.activeVideoEffectsCount ?? 0) === 0 &&
+        meetDebug?.isCameraOff === true &&
+        meetDebug?.videoProducer == null &&
+        meetDebug?.localStream == null &&
+        meetDebug?.rawTrack == null &&
+        meetDebug?.processedTrack == null;
+    })()`,
+    10000,
+  );
+  await clickButton(cdp, "Blur");
+  await waitFor(
+    cdp,
+    "prejoin permission-blocked blur queues",
+    `(() => {
+      const panel = document.querySelector('[data-testid="video-effects-panel"]');
+      const raw = panel?.getAttribute("data-video-effects-stats");
+      let stats = null;
+      try { stats = raw ? JSON.parse(raw) : null; } catch {}
+      const meetDebug = window.__conclaveGetMeetVideoDebug?.();
+      return panel?.getAttribute("data-video-effects-status") === "off" &&
+        panel?.getAttribute("data-video-effects-active-count") === "1" &&
+        panel?.getAttribute("data-video-effects-output-published") === "false" &&
+        panel?.getAttribute("data-video-effects-permission-locked") === "true" &&
+        panel?.getAttribute("data-video-effects-filters-visible") === "false" &&
+        stats?.effects?.background === "blur-strong" &&
+        stats?.frameSource === "none" &&
+        stats?.outputTrackPublished === false &&
         meetDebug?.isCameraOff === true &&
         meetDebug?.videoProducer == null &&
         meetDebug?.localStream == null &&
@@ -1938,13 +1971,14 @@ const runPrejoinPermissionDeniedEffectsProbe = async (cdp, prejoinUrl) => {
   );
   const state = await collectState(
     cdp,
-    "state_prejoin_permission_blocked_effects_disabled",
+    "state_prejoin_permission_blocked_effect_queued",
   );
   emit("prejoin_permission_blocked_effects_probe", {
     status: state.meetVideoDebug?.videoEffectsStatus ?? "off",
     activeCount: state.meetVideoDebug?.activeVideoEffectsCount ?? 0,
     permissionLocked: true,
-    controlsDisabled: true,
+    quickBlurDisabled: true,
+    menuEntryEnabled: true,
     panelOpen: state.hasEffectsPanel,
     filtersVisible:
       state.panelAttrs?.["data-video-effects-filters-visible"] === "true",
