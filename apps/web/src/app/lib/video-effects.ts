@@ -64,6 +64,12 @@ export type BackgroundEffectId =
   | "accessible-patio"
   | "gaming-room"
   | "rainy-conservatory"
+  | "rainy-cafe"
+  | "sunny-cafe"
+  | "rustic-cabin"
+  | "snowy-chalet"
+  | "underwater-sea-lab"
+  | "space-station"
   | "gradient"
   | "custom";
 
@@ -176,6 +182,12 @@ const BACKGROUND_EFFECT_IDS = new Set<BackgroundEffectId>([
   "accessible-patio",
   "gaming-room",
   "rainy-conservatory",
+  "rainy-cafe",
+  "sunny-cafe",
+  "rustic-cabin",
+  "snowy-chalet",
+  "underwater-sea-lab",
+  "space-station",
   "gradient",
   "custom",
 ]);
@@ -352,6 +364,12 @@ export const BACKGROUND_ASSET_PATHS = {
   "accessible-patio": "/effects/backgrounds/accessible-patio.webp",
   "gaming-room": "/effects/backgrounds/gaming-room.webp",
   "rainy-conservatory": "/effects/backgrounds/rainy-conservatory.webp",
+  "rainy-cafe": "/effects/backgrounds/rainy-cafe.webp",
+  "sunny-cafe": "/effects/backgrounds/sunny-cafe.webp",
+  "rustic-cabin": "/effects/backgrounds/rustic-cabin.webp",
+  "snowy-chalet": "/effects/backgrounds/snowy-chalet.webp",
+  "underwater-sea-lab": "/effects/backgrounds/underwater-sea-lab.webp",
+  "space-station": "/effects/backgrounds/space-station.webp",
 } satisfies Partial<Record<BackgroundEffectId, string>>;
 
 export const getVideoEffectPreviewPath = <T extends string>(
@@ -438,6 +456,54 @@ export const BACKGROUND_EFFECTS: VideoEffectOption<BackgroundEffectId>[] = [
     icon: Leaf,
     tone: "#0f766e",
     assetPath: BACKGROUND_ASSET_PATHS["rainy-conservatory"],
+    category: "Immersive",
+  },
+  {
+    id: "rainy-cafe",
+    label: "Rainy cafe",
+    icon: Coffee,
+    tone: "#78350f",
+    assetPath: BACKGROUND_ASSET_PATHS["rainy-cafe"],
+    category: "Immersive",
+  },
+  {
+    id: "sunny-cafe",
+    label: "Sunny cafe",
+    icon: SunMedium,
+    tone: "#ca8a04",
+    assetPath: BACKGROUND_ASSET_PATHS["sunny-cafe"],
+    category: "Immersive",
+  },
+  {
+    id: "rustic-cabin",
+    label: "Rustic cabin",
+    icon: Armchair,
+    tone: "#854d0e",
+    assetPath: BACKGROUND_ASSET_PATHS["rustic-cabin"],
+    category: "Immersive",
+  },
+  {
+    id: "snowy-chalet",
+    label: "Snowy chalet",
+    icon: Snowflake,
+    tone: "#0369a1",
+    assetPath: BACKGROUND_ASSET_PATHS["snowy-chalet"],
+    category: "Immersive",
+  },
+  {
+    id: "underwater-sea-lab",
+    label: "Underwater sea lab",
+    icon: Waves,
+    tone: "#0e7490",
+    assetPath: BACKGROUND_ASSET_PATHS["underwater-sea-lab"],
+    category: "Immersive",
+  },
+  {
+    id: "space-station",
+    label: "Space station",
+    icon: Rocket,
+    tone: "#334155",
+    assetPath: BACKGROUND_ASSET_PATHS["space-station"],
     category: "Immersive",
   },
   {
