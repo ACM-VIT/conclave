@@ -15,6 +15,7 @@ import type {
   FaceLandmarker as TasksFaceLandmarker,
   ImageSegmenter as TasksImageSegmenter,
   ImageSegmenterResult,
+  Matrix as TasksMatrix,
 } from "@mediapipe/tasks-vision";
 import {
   BACKGROUND_ASSET_PATHS,
@@ -697,6 +698,18 @@ type CanvasBounds = {
   width: number;
   height: number;
 };
+type FacePoseCandidate = {
+  basis: "row-major" | "column-major";
+  roll: number;
+  yaw: number;
+  pitch: number;
+  scale: number;
+};
+type FacePoseTransform = {
+  rows: number;
+  columns: number;
+  candidates: FacePoseCandidate[];
+};
 type ClosableMediaPipeResource = {
   close?: () => void;
 };
@@ -724,6 +737,10 @@ type FaceFilterRenderStats = {
     eyeAnchorBasis?: "iris" | "contour";
     eyeCenterDistance?: number;
     outerEyeDistance?: number;
+    poseBasis?: FacePoseCandidate["basis"];
+    poseRoll?: number;
+    poseYaw?: number;
+    poseBlend?: number;
   } | null;
   bounds: CanvasBounds | null;
 };
@@ -955,6 +972,7 @@ type FaceProcessorWorkerResultMessage = {
   faceCount: number;
   blendshapeCount: number;
   matrixCount: number;
+  pose: FacePoseTransform | null;
   width: number;
   height: number;
   timestamp: number;
@@ -1130,6 +1148,113 @@ const getEvenDimension = (value: number) => Math.max(2, Math.floor(value / 2) * 
 
 const lerp = (from: number, to: number, alpha: number) =>
   from + (to - from) * alpha;
+
+const normalizeAngleDelta = (angle: number) =>
+  Math.atan2(Math.sin(angle), Math.cos(angle));
+
+const lerpAngle = (from: number, to: number, alpha: number) =>
+  from + normalizeAngleDelta(to - from) * alpha;
+
+const roundPoseNumber = (value: number) => Number(value.toFixed(4));
+
+const getMatrixValue = (data: number[], columns: number, row: number, col: number) =>
+  data[row * columns + col] ?? 0;
+
+const createFacePoseCandidate = (
+  basis: FacePoseCandidate["basis"],
+  xAxis: { x: number; y: number; z: number },
+  yAxis: { x: number; y: number; z: number },
+): FacePoseCandidate | null => {
+  const xScale = Math.hypot(xAxis.x, xAxis.y, xAxis.z);
+  const yScale = Math.hypot(yAxis.x, yAxis.y, yAxis.z);
+  const scale = (xScale + yScale) / 2;
+  if (!Number.isFinite(scale) || scale <= 0.0001) return null;
+
+  return {
+    basis,
+    roll: roundPoseNumber(Math.atan2(xAxis.y, xAxis.x)),
+    yaw: roundPoseNumber(Math.asin(clamp(-xAxis.z / xScale, -1, 1))),
+    pitch: roundPoseNumber(Math.asin(clamp(yAxis.z / yScale, -1, 1))),
+    scale: roundPoseNumber(scale),
+  };
+};
+
+const extractFacePoseTransform = (
+  matrix: TasksMatrix | null | undefined,
+): FacePoseTransform | null => {
+  if (!matrix || matrix.rows < 3 || matrix.columns < 3) return null;
+  const data = Array.isArray(matrix.data) ? matrix.data : [];
+  if (data.length < matrix.rows * matrix.columns) return null;
+
+  const rowMajor = createFacePoseCandidate(
+    "row-major",
+    {
+      x: getMatrixValue(data, matrix.columns, 0, 0),
+      y: getMatrixValue(data, matrix.columns, 0, 1),
+      z: getMatrixValue(data, matrix.columns, 0, 2),
+    },
+    {
+      x: getMatrixValue(data, matrix.columns, 1, 0),
+      y: getMatrixValue(data, matrix.columns, 1, 1),
+      z: getMatrixValue(data, matrix.columns, 1, 2),
+    },
+  );
+  const columnMajor = createFacePoseCandidate(
+    "column-major",
+    {
+      x: getMatrixValue(data, matrix.columns, 0, 0),
+      y: getMatrixValue(data, matrix.columns, 1, 0),
+      z: getMatrixValue(data, matrix.columns, 2, 0),
+    },
+    {
+      x: getMatrixValue(data, matrix.columns, 0, 1),
+      y: getMatrixValue(data, matrix.columns, 1, 1),
+      z: getMatrixValue(data, matrix.columns, 2, 1),
+    },
+  );
+  const candidates = [rowMajor, columnMajor].filter(
+    (candidate): candidate is FacePoseCandidate => Boolean(candidate),
+  );
+  if (candidates.length <= 0) return null;
+
+  return {
+    rows: matrix.rows,
+    columns: matrix.columns,
+    candidates,
+  };
+};
+
+const smoothFacePoseTransform = (
+  previous: FacePoseTransform | null,
+  next: FacePoseTransform | null,
+  alpha: number,
+): FacePoseTransform | null => {
+  if (!next?.candidates.length) return null;
+  if (!previous?.candidates.length) return next;
+
+  return {
+    ...next,
+    candidates: next.candidates.map((candidate) => {
+      const previousCandidate = previous.candidates.find(
+        (item) => item.basis === candidate.basis,
+      );
+      if (!previousCandidate) return candidate;
+      return {
+        ...candidate,
+        roll: roundPoseNumber(
+          lerpAngle(previousCandidate.roll, candidate.roll, alpha),
+        ),
+        yaw: roundPoseNumber(lerp(previousCandidate.yaw, candidate.yaw, alpha)),
+        pitch: roundPoseNumber(
+          lerp(previousCandidate.pitch, candidate.pitch, alpha),
+        ),
+        scale: roundPoseNumber(
+          lerp(previousCandidate.scale, candidate.scale, alpha),
+        ),
+      };
+    }),
+  };
+};
 
 const VIDEO_EFFECTS_ADAPTATION_TIER_CONFIG: Record<
   VideoEffectsAdaptationTier,
@@ -5267,6 +5392,27 @@ const createFaceFilterRenderStats = (
   bounds: null,
 });
 
+const selectFacePoseCandidate = (
+  pose: FacePoseTransform | null,
+  referenceRoll: number,
+): FacePoseCandidate | null => {
+  if (!pose?.candidates.length) return null;
+  let bestCandidate: FacePoseCandidate | null = null;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  for (const candidate of pose.candidates) {
+    const distance = Math.abs(normalizeAngleDelta(candidate.roll - referenceRoll));
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      bestCandidate = candidate;
+    }
+  }
+  if (!bestCandidate || bestDistance > 0.48) return null;
+  if (Math.abs(bestCandidate.yaw) > 0.95 || Math.abs(bestCandidate.pitch) > 0.95) {
+    return null;
+  }
+  return bestCandidate;
+};
+
 const createBackgroundRenderStats = (
   background: BackgroundEffectId,
   reason: string,
@@ -6109,6 +6255,7 @@ const drawFaceFilter = (
   ctx: CanvasRenderingContext2D,
   filter: FaceFilterId,
   landmarks: NormalizedLandmarkList | null,
+  pose: FacePoseTransform | null,
   crop: CropRect,
   sourceWidth: number,
   sourceHeight: number,
@@ -6189,7 +6336,17 @@ const drawFaceFilter = (
   );
   const eyeY = (leftEye.y + rightEye.y) / 2;
   const centerX = (leftEye.x + rightEye.x) / 2;
-  const faceAngle = Math.atan2(rightEye.y - leftEye.y, rightEye.x - leftEye.x);
+  const eyeLineAngle = Math.atan2(
+    rightEye.y - leftEye.y,
+    rightEye.x - leftEye.x,
+  );
+  const poseCandidate = selectFacePoseCandidate(pose, eyeLineAngle);
+  const poseBlend = poseCandidate
+    ? clamp(0.2 + Math.min(Math.abs(poseCandidate.yaw), 0.42) * 0.35, 0.2, 0.34)
+    : 0;
+  const faceAngle = poseCandidate
+    ? lerpAngle(eyeLineAngle, poseCandidate.roll, poseBlend)
+    : eyeLineAngle;
   const cos = Math.cos(faceAngle);
   const sin = Math.sin(faceAngle);
   const toFaceSpace = (point: { x: number; y: number }) => {
@@ -6217,6 +6374,13 @@ const drawFaceFilter = (
     : null;
   const foreheadLocal = toFaceSpace(forehead);
   const chinLocal = chin ? toFaceSpace(chin) : null;
+  const midlineLocal =
+    getAveragePoint(
+      [10, 168, 6, 1, 13, 14, 152].map((index) => {
+        const point = mapLandmark(landmarks[index]);
+        return point ? toFaceSpace(point) : null;
+      }),
+    ) ?? foreheadLocal;
   const localFaceBounds = getPointBounds(
     landmarks.map((landmark) => {
       const point = mapLandmark(landmark);
@@ -6241,7 +6405,11 @@ const drawFaceFilter = (
   const faceBottomY = Math.max(rawChinY, faceWidth * 0.48);
   const faceHeight = Math.max(faceWidth * 0.9, faceBottomY - headTopY);
   const headCenterX = clamp(
-    lerp((faceLocalLeft + faceLocalRight) / 2, foreheadLocal.x, 0.55),
+    lerp(
+      (faceLocalLeft + faceLocalRight) / 2,
+      midlineLocal.x + (poseCandidate?.yaw ?? 0) * faceWidth * 0.06,
+      poseCandidate ? 0.68 : 0.56,
+    ),
     -faceWidth * 0.18,
     faceWidth * 0.18,
   );
@@ -6288,6 +6456,12 @@ const drawFaceFilter = (
     eyeAnchorBasis,
     eyeCenterDistance: Math.round(eyeDistance),
     outerEyeDistance: Math.round(outerEyeDistance || eyeDistance),
+    poseBasis: poseCandidate?.basis,
+    poseRoll: poseCandidate
+      ? Number(poseCandidate.roll.toFixed(4))
+      : undefined,
+    poseYaw: poseCandidate ? Number(poseCandidate.yaw.toFixed(4)) : undefined,
+    poseBlend: poseCandidate ? Number(poseBlend.toFixed(3)) : undefined,
   };
   let bounds: CanvasBounds | null = null;
 
@@ -6724,6 +6898,7 @@ const renderFrame = (
   height: number,
   effects: VideoEffectsState,
   landmarks: NormalizedLandmarkList | null,
+  facePose: FacePoseTransform | null,
   segmentationMask: CanvasImageSource | null,
   backgroundImage: HTMLImageElement | null,
   backgroundBlurScratch: BackgroundBlurScratch,
@@ -6869,6 +7044,7 @@ const renderFrame = (
     ctx,
     effects.filter,
     landmarks,
+    facePose,
     crop,
     sourceWidth,
     sourceHeight,
@@ -7083,6 +7259,8 @@ export function useVideoEffects({
     let latestFaceLandmarksAt = 0;
     let latestFaceFilterLandmarks: NormalizedLandmarkList | null = null;
     let latestFaceFilterLandmarksAt = 0;
+    let latestFacePose: FacePoseTransform | null = null;
+    let latestFaceFilterPose: FacePoseTransform | null = null;
     let latestFaceResultAt = 0;
     let latestFaceLandmarkSmoothingStats =
       createFaceLandmarkSmoothingStats("missing-result", null, null, 1);
@@ -9645,7 +9823,7 @@ export function useVideoEffects({
             minFacePresenceConfidence: 0.55,
             minTrackingConfidence: 0.55,
             outputFaceBlendshapes: false,
-            outputFacialTransformationMatrixes: false,
+            outputFacialTransformationMatrixes: true,
           });
           logVideoEffects(debugId, "tasks_face_create_done", {
             delegate,
@@ -10033,6 +10211,8 @@ export function useVideoEffects({
               FACE_FILTER_LANDMARK_ADAPTIVE_MOTION_START,
               FACE_FILTER_LANDMARK_ADAPTIVE_MOTION_END,
             );
+            latestFacePose = null;
+            latestFaceFilterPose = null;
             latestFaceLandmarks = smoothedLandmarks.landmarks;
             latestFaceLandmarkSmoothingStats = smoothedLandmarks.stats;
             latestFaceLandmarksAt = latestFaceLandmarks ? performance.now() : 0;
@@ -10934,6 +11114,16 @@ export function useVideoEffects({
           FACE_FILTER_LANDMARK_ADAPTIVE_MOTION_START,
           FACE_FILTER_LANDMARK_ADAPTIVE_MOTION_END,
         );
+        latestFacePose = smoothFacePoseTransform(
+          latestFacePose,
+          result.pose,
+          FACE_LANDMARK_SMOOTHING_ALPHA,
+        );
+        latestFaceFilterPose = smoothFacePoseTransform(
+          latestFaceFilterPose,
+          result.pose,
+          FACE_FILTER_LANDMARK_SMOOTHING_ALPHA,
+        );
         latestFaceLandmarks = smoothedLandmarks.landmarks;
         latestFaceLandmarkSmoothingStats = smoothedLandmarks.stats;
         latestFaceLandmarksAt = latestFaceLandmarks ? performance.now() : 0;
@@ -10950,6 +11140,8 @@ export function useVideoEffects({
           landmarkCount: latestFaceLandmarks?.length ?? 0,
           blendshapeCount: result.blendshapeCount,
           matrixCount: result.matrixCount,
+          poseCandidateCount: result.pose?.candidates.length ?? 0,
+          pose: latestFacePose,
           delegate: result.delegate,
           inputSource: result.inputSource,
           processingMs: Number(result.processingMs.toFixed(2)),
@@ -11025,6 +11217,9 @@ export function useVideoEffects({
             (results.faceLandmarks?.[0] as
               | NormalizedLandmarkList
               | undefined) ?? null;
+          const detectedPose = extractFacePoseTransform(
+            results.facialTransformationMatrixes?.[0],
+          );
           latestFaceResultAt = performance.now();
           recordFaceDetectionResult(
             Boolean(detectedLandmarks?.length),
@@ -11041,6 +11236,16 @@ export function useVideoEffects({
             FACE_FILTER_LANDMARK_FAST_SMOOTHING_ALPHA,
             FACE_FILTER_LANDMARK_ADAPTIVE_MOTION_START,
             FACE_FILTER_LANDMARK_ADAPTIVE_MOTION_END,
+          );
+          latestFacePose = smoothFacePoseTransform(
+            latestFacePose,
+            detectedPose,
+            FACE_LANDMARK_SMOOTHING_ALPHA,
+          );
+          latestFaceFilterPose = smoothFacePoseTransform(
+            latestFaceFilterPose,
+            detectedPose,
+            FACE_FILTER_LANDMARK_SMOOTHING_ALPHA,
           );
           latestFaceLandmarks = smoothedLandmarks.landmarks;
           latestFaceLandmarkSmoothingStats = smoothedLandmarks.stats;
@@ -11062,6 +11267,8 @@ export function useVideoEffects({
             landmarkCount: latestFaceLandmarks?.length ?? 0,
             blendshapeCount: results.faceBlendshapes?.length ?? 0,
             matrixCount: results.facialTransformationMatrixes?.length ?? 0,
+            poseCandidateCount: detectedPose?.candidates.length ?? 0,
+            pose: latestFacePose,
             smoothing: latestFaceLandmarkSmoothingStats,
             filterSmoothing: latestFaceFilterLandmarkSmoothingStats,
           });
@@ -11688,7 +11895,16 @@ export function useVideoEffects({
         }
         latestOutputFrameVisible = outputProbe.visible;
         if (blackOutputFrameCount <= 3 || blackOutputFrameCount % 30 === 0) {
-          warnVideoEffects(debugId, "no_visible_frame_source", {
+          const sourceVideoMetadataPending =
+            video.readyState < 2 || video.videoWidth <= 0 || video.videoHeight <= 0;
+          const shouldWarnNoVisibleFrameSource =
+            outputTrackPublished ||
+            outputFramesWritten > 0 ||
+            !sourceVideoMetadataPending;
+          const logNoVisibleFrameSource = shouldWarnNoVisibleFrameSource
+            ? warnVideoEffects
+            : logVideoEffects;
+          logNoVisibleFrameSource(debugId, "no_visible_frame_source", {
             sourceProbe,
             outputProbe,
             blackOutputFrameCount,
@@ -12065,6 +12281,8 @@ export function useVideoEffects({
         latestFaceLandmarksAt = 0;
         latestFaceFilterLandmarks = null;
         latestFaceFilterLandmarksAt = 0;
+        latestFacePose = null;
+        latestFaceFilterPose = null;
         latestFaceLandmarkSmoothingStats =
           createFaceLandmarkSmoothingStats("missing-result", null, null, 1);
         latestFaceFilterLandmarkSmoothingStats =
@@ -12302,6 +12520,9 @@ export function useVideoEffects({
         currentEffects.filter !== "none"
           ? latestFaceFilterLandmarks ?? latestFaceLandmarks
           : latestFaceLandmarks,
+        currentEffects.filter !== "none"
+          ? latestFaceFilterPose ?? latestFacePose
+          : latestFacePose,
         latestSegmentationMask,
         backgroundImage,
         { canvas: backgroundBlurCanvas, ctx: backgroundBlurCtx },
@@ -12862,6 +13083,9 @@ export function useVideoEffects({
             noResultBackoffActive: latestFaceNoResultBackoffActive,
             noResultBackoffReason: latestFaceNoResultBackoffReason,
             noResultBackoffIntervalMs: latestFaceNoResultBackoffIntervalMs,
+            poseCandidateCount: latestFacePose?.candidates.length ?? 0,
+            filterPoseCandidateCount:
+              latestFaceFilterPose?.candidates.length ?? 0,
             landmarkSmoothing: latestFaceLandmarkSmoothingStats,
             filterLandmarkSmoothing: latestFaceFilterLandmarkSmoothingStats,
           },
@@ -13108,6 +13332,9 @@ export function useVideoEffects({
             noResultBackoffActive: latestFaceNoResultBackoffActive,
             noResultBackoffReason: latestFaceNoResultBackoffReason,
             noResultBackoffIntervalMs: latestFaceNoResultBackoffIntervalMs,
+            poseCandidateCount: latestFacePose?.candidates.length ?? 0,
+            filterPoseCandidateCount:
+              latestFaceFilterPose?.candidates.length ?? 0,
             landmarkSmoothing: latestFaceLandmarkSmoothingStats,
             filterLandmarkSmoothing: latestFaceFilterLandmarkSmoothingStats,
           },

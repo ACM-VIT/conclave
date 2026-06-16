@@ -1,4 +1,8 @@
-import { FaceLandmarker, FilesetResolver } from "@mediapipe/tasks-vision";
+import {
+  FaceLandmarker,
+  FilesetResolver,
+  type Matrix,
+} from "@mediapipe/tasks-vision";
 
 type MediaPipeDelegate = "GPU" | "CPU";
 type ModelWorkerInputSource = "video-frame" | "image-bitmap";
@@ -11,6 +15,18 @@ type WorkerFaceLandmark = {
   y: number;
   z?: number;
   visibility?: number;
+};
+type FacePoseCandidate = {
+  basis: "row-major" | "column-major";
+  roll: number;
+  yaw: number;
+  pitch: number;
+  scale: number;
+};
+type FacePoseTransform = {
+  rows: number;
+  columns: number;
+  candidates: FacePoseCandidate[];
 };
 type FaceProcessorRequest =
   | { type: "INIT" }
@@ -60,6 +76,76 @@ const getErrorDebugSnapshot = (err: unknown) => {
   return err;
 };
 
+const roundPoseNumber = (value: number) => Number(value.toFixed(4));
+
+const getMatrixValue = (data: number[], columns: number, row: number, col: number) =>
+  data[row * columns + col] ?? 0;
+
+const createFacePoseCandidate = (
+  basis: FacePoseCandidate["basis"],
+  xAxis: { x: number; y: number; z: number },
+  yAxis: { x: number; y: number; z: number },
+) => {
+  const xScale = Math.hypot(xAxis.x, xAxis.y, xAxis.z);
+  const yScale = Math.hypot(yAxis.x, yAxis.y, yAxis.z);
+  const scale = (xScale + yScale) / 2;
+  if (!Number.isFinite(scale) || scale <= 0.0001) return null;
+
+  return {
+    basis,
+    roll: roundPoseNumber(Math.atan2(xAxis.y, xAxis.x)),
+    yaw: roundPoseNumber(Math.asin(clamp(-xAxis.z / xScale, -1, 1))),
+    pitch: roundPoseNumber(Math.asin(clamp(yAxis.z / yScale, -1, 1))),
+    scale: roundPoseNumber(scale),
+  };
+};
+
+const clamp = (value: number, min: number, max: number) =>
+  Math.min(Math.max(value, min), max);
+
+const extractFacePoseTransform = (matrix: Matrix | undefined) => {
+  if (!matrix || matrix.rows < 3 || matrix.columns < 3) return null;
+  const data = Array.isArray(matrix.data) ? matrix.data : [];
+  if (data.length < matrix.rows * matrix.columns) return null;
+
+  const rowMajor = createFacePoseCandidate(
+    "row-major",
+    {
+      x: getMatrixValue(data, matrix.columns, 0, 0),
+      y: getMatrixValue(data, matrix.columns, 0, 1),
+      z: getMatrixValue(data, matrix.columns, 0, 2),
+    },
+    {
+      x: getMatrixValue(data, matrix.columns, 1, 0),
+      y: getMatrixValue(data, matrix.columns, 1, 1),
+      z: getMatrixValue(data, matrix.columns, 1, 2),
+    },
+  );
+  const columnMajor = createFacePoseCandidate(
+    "column-major",
+    {
+      x: getMatrixValue(data, matrix.columns, 0, 0),
+      y: getMatrixValue(data, matrix.columns, 1, 0),
+      z: getMatrixValue(data, matrix.columns, 2, 0),
+    },
+    {
+      x: getMatrixValue(data, matrix.columns, 0, 1),
+      y: getMatrixValue(data, matrix.columns, 1, 1),
+      z: getMatrixValue(data, matrix.columns, 2, 1),
+    },
+  );
+  const candidates = [rowMajor, columnMajor].filter(
+    (candidate): candidate is FacePoseCandidate => Boolean(candidate),
+  );
+  if (candidates.length <= 0) return null;
+
+  return {
+    rows: matrix.rows,
+    columns: matrix.columns,
+    candidates,
+  } satisfies FacePoseTransform;
+};
+
 const createFaceLandmarker = async (delegate: MediaPipeDelegate) => {
   const fileset = await FilesetResolver.forVisionTasks(
     TASKS_VISION_WASM_LOCAL_PATH,
@@ -83,7 +169,7 @@ const createFaceLandmarker = async (delegate: MediaPipeDelegate) => {
         minFacePresenceConfidence: 0.55,
         minTrackingConfidence: 0.55,
         outputFaceBlendshapes: false,
-        outputFacialTransformationMatrixes: false,
+        outputFacialTransformationMatrixes: true,
       });
     } catch (err) {
       lastError = err;
@@ -174,6 +260,9 @@ workerScope.onmessage = (event) => {
               faceCount: result.faceLandmarks?.length ?? 0,
               blendshapeCount: result.faceBlendshapes?.length ?? 0,
               matrixCount: result.facialTransformationMatrixes?.length ?? 0,
+              pose: extractFacePoseTransform(
+                result.facialTransformationMatrixes?.[0],
+              ),
               width: message.width,
               height: message.height,
               timestamp: message.timestamp,
