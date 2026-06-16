@@ -226,6 +226,11 @@ const faceFilterIdByLabel = new Map([
 ]);
 const primaryFaceFilterLabel = faceFilterLabels[0] ?? "Zombie";
 const primaryFaceFilterId = faceFilterIdByLabel.get(primaryFaceFilterLabel) ?? null;
+const secondaryFaceFilterLabel =
+  faceFilterLabels.find((label) => label !== primaryFaceFilterLabel) ?? null;
+const secondaryFaceFilterId = secondaryFaceFilterLabel
+  ? faceFilterIdByLabel.get(secondaryFaceFilterLabel) ?? null
+  : null;
 const defaultBackgroundLabels = expectFaceLandmarks
   ? [
       "Slight blur",
@@ -1942,6 +1947,130 @@ const runMeetVideoPipeProbe = async (
     `Meet VideoPipe ${primaryFaceFilterLabel} producer uses processed output`,
     "processed",
   );
+
+  if (secondaryFaceFilterLabel && !secondaryFaceFilterId) {
+    throw new Error(
+      `Unknown secondary CONCLAVE_FACE_FILTERS label for Meet VideoPipe probe: ${secondaryFaceFilterLabel}`,
+    );
+  }
+
+  if (secondaryFaceFilterId) {
+    const switchLogStartIndex = cdp.logs.length;
+    await clickButton(cdp, secondaryFaceFilterLabel, 10000);
+    const switchProbe = await waitFor(
+      cdp,
+      `Meet VideoPipe ${secondaryFaceFilterLabel} switch output`,
+      `(() => {
+      const panel = document.querySelector('[data-testid="video-effects-panel"]');
+      const raw = panel?.getAttribute("data-video-effects-stats");
+      let stats = null;
+      try { stats = raw ? JSON.parse(raw) : null; } catch {}
+      const meetVideoPipe = stats?.meetVideoPipe;
+      const debug =
+        typeof window.__conclaveGetMeetVideoDebug === "function"
+          ? window.__conclaveGetMeetVideoDebug()
+          : window.__conclaveMeetVideoDebug ?? null;
+      const producer = debug?.videoProducer;
+      const producerTrack = producer?.track;
+      const publish = debug?.publish;
+      const selectedFilter =
+        stats?.effects?.filter ?? debug?.videoEffects?.filter ?? null;
+      const blackOutputFrameCount = Number(
+        panel?.getAttribute("data-video-effects-black-output-count") ?? 1
+      );
+      const ok =
+        panel?.getAttribute("data-video-effects-status") === "running" &&
+        panel?.getAttribute("data-video-effects-output-published") === "true" &&
+        panel?.getAttribute("data-video-effects-preview-matches-output") === "true" &&
+        Number(panel?.getAttribute("data-video-effects-active-count") || 0) >= 1 &&
+        blackOutputFrameCount === 0 &&
+        selectedFilter === ${JSON.stringify(secondaryFaceFilterId)} &&
+        stats?.frameSource === "meet-videopipe" &&
+        stats?.outputMode === "meet-videopipe" &&
+        stats?.latestOutputFrameVisible === true &&
+        meetVideoPipe?.active === true &&
+        meetVideoPipe?.mode === "direct" &&
+        Number(meetVideoPipe?.effectIdNumber || 0) > 0 &&
+        meetVideoPipe?.outputTrack?.readyState === "live" &&
+        debug?.connectionState === "joined" &&
+        debug?.isCameraOff === false &&
+        producer &&
+        producer.closed === false &&
+        producerTrack?.readyState === "live" &&
+        producerTrack?.enabled !== false &&
+        publish?.producerTrackLive === true &&
+        publish?.shouldPublishProcessed === true &&
+        publish?.usingProcessedTrack === true;
+      return ok
+        ? {
+            selectedFilter,
+            activeCount: panel?.getAttribute("data-video-effects-active-count"),
+            blackOutputFrameCount,
+            outputMode: stats?.outputMode,
+            frameSource: stats?.frameSource,
+            latestOutputFrameVisible: stats?.latestOutputFrameVisible,
+            meetVideoPipe,
+            publish,
+          }
+        : false;
+      })()`,
+      30000,
+    );
+    const switchState = await collectState(
+      cdp,
+      "state_after_meet_videopipe_filter_switch",
+    );
+    await waitForMeetVideoPublish(
+      cdp,
+      `Meet VideoPipe ${secondaryFaceFilterLabel} producer uses processed output`,
+      "processed",
+    );
+    const switchLogs = cdp.logs.slice(switchLogStartIndex);
+    const processorReused = switchLogs.some((log) =>
+      /meet_videopipe_processor_reused/i.test(log.text),
+    );
+    const switchBadLogs = switchLogs.filter((log) =>
+      badLogPatterns.some((pattern) => pattern.test(log.text)),
+    );
+    const switchQuality = {
+      ok:
+        processorReused &&
+        switchBadLogs.length === 0 &&
+        switchState.panelStats?.effects?.filter === secondaryFaceFilterId &&
+        switchState.panelStats?.outputMode === "meet-videopipe" &&
+        switchState.panelStats?.frameSource === "meet-videopipe" &&
+        switchState.panelStats?.meetVideoPipe?.active === true &&
+        switchState.meetVideoDebug?.publish?.usingProcessedTrack === true &&
+        switchState.meetVideoDebug?.publish?.shouldPublishProcessed === true &&
+        switchState.meetVideoDebug?.publish?.producerTrackLive === true,
+      from: primaryFaceFilterLabel,
+      to: secondaryFaceFilterLabel,
+      expectedFilterId: secondaryFaceFilterId,
+      processorReused,
+      switchProbe,
+      status:
+        switchState.panelAttrs?.["data-video-effects-status"] ?? null,
+      outputMode: switchState.panelStats?.outputMode ?? null,
+      frameSource: switchState.panelStats?.frameSource ?? null,
+      effects: switchState.panelStats?.effects ?? null,
+      meetVideoPipe: switchState.panelStats?.meetVideoPipe ?? null,
+      publish: switchState.meetVideoDebug?.publish ?? null,
+      badLogs: switchBadLogs,
+      relevantLogs: switchLogs
+        .filter((log) =>
+          /meet_videopipe|VideoPipe|video.?pipe|black_output|release_processed|skip_replace|track ended|VideoFrame was garbage collected/i.test(
+            log.text,
+          ),
+        )
+        .slice(-40),
+    };
+    emit("meet_videopipe_switch_probe", switchQuality);
+    if (!switchQuality.ok) {
+      throw new Error(
+        `Meet VideoPipe switch regression failed: ${JSON.stringify(switchQuality)}`,
+      );
+    }
+  }
 
   const badLogs = cdp.logs
     .slice(probeLogStartIndex)

@@ -225,6 +225,7 @@ function EffectOptionButton<T extends string>({
   option,
   selected,
   disabled = false,
+  busy = false,
   testId,
   onPrewarm,
   onSelect,
@@ -232,6 +233,7 @@ function EffectOptionButton<T extends string>({
   option: VideoEffectOption<T>;
   selected: boolean;
   disabled?: boolean;
+  busy?: boolean;
   testId?: string;
   onPrewarm?: () => void;
   onSelect: () => void;
@@ -249,6 +251,7 @@ function EffectOptionButton<T extends string>({
       onTouchStart={disabled ? undefined : onPrewarm}
       aria-pressed={selected}
       aria-label={option.ariaLabel ?? option.label}
+      aria-busy={busy ? "true" : undefined}
       disabled={disabled}
       className={getEffectTileClassName(selected)}
     >
@@ -282,12 +285,31 @@ function EffectOptionButton<T extends string>({
             style={{ boxShadow: `inset 0 0 0 1px ${EFFECTS_ACCENT}` }}
           />
         ) : null}
+        {busy ? (
+          <span className="absolute inset-0 flex items-center justify-center bg-black/45">
+            <LoaderCircle
+              size={17}
+              strokeWidth={ICON_STROKE}
+              className="animate-spin text-white"
+            />
+          </span>
+        ) : null}
       </span>
       <span className="mt-2 flex min-w-0 items-start justify-between gap-2">
         <span className="min-w-0">
           <span className="block text-[12px] font-medium leading-tight text-[#fafafa]">
             {option.label}
           </span>
+          {busy ? (
+            <span className="mt-1 flex items-center gap-1.5 text-[11px] leading-tight text-[#f4a096]">
+              <LoaderCircle
+                size={10}
+                strokeWidth={ICON_STROKE}
+                className="animate-spin"
+              />
+              Applying
+            </span>
+          ) : null}
           {option.description ? (
             <span className="mt-1 block text-[11px] leading-tight text-[#a1a1aa]">
               {option.description}
@@ -380,10 +402,14 @@ function VideoEffectsPreview({
   stream,
   isCameraOff,
   hasLiveVideo,
+  isPreparing,
+  preparingLabel,
 }: {
   stream: MediaStream | null;
   isCameraOff: boolean;
   hasLiveVideo: boolean;
+  isPreparing: boolean;
+  preparingLabel: string;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const shouldShowVideo = hasLiveVideo;
@@ -423,6 +449,18 @@ function VideoEffectsPreview({
       {!shouldShowVideo ? (
         <div className="absolute inset-0 flex items-center justify-center text-[15px] font-medium text-[#fafafa]">
           {isCameraOff ? "Camera is off" : "Camera unavailable"}
+        </div>
+      ) : null}
+      {shouldShowVideo && isPreparing ? (
+        <div className="absolute inset-0 flex items-end justify-center bg-black/[0.18] p-3">
+          <div className="flex min-h-9 max-w-full items-center gap-2 rounded-full border border-white/[0.18] bg-[#111113]/90 px-3 text-[12px] font-medium text-[#fafafa] shadow-lg shadow-black/20">
+            <LoaderCircle
+              size={14}
+              strokeWidth={ICON_STROKE}
+              className="shrink-0 animate-spin text-[#F95F4A]"
+            />
+            <span className="truncate">{preparingLabel}</span>
+          </div>
         </div>
       ) : null}
     </div>
@@ -517,6 +555,29 @@ export default function VideoEffectsPanel({
     previewVideoTrack?.id === outputTrackId;
   const cameraUnavailable = !hasLiveVideo;
   const displayedActiveCount = activeCount;
+  const selectedBackgroundLabel =
+    effects.background === "custom"
+      ? effects.customBackgroundName || "uploaded image"
+      : backgroundOptionById.get(effects.background)?.label ?? "background";
+  const selectedFilterLabel =
+    filterOptionById.get(effects.filter)?.label ?? "filter";
+  const selectedStyleLabel =
+    appearanceOptionById.get(effects.style)?.label ?? "appearance";
+  const preparingLabel =
+    effects.filter !== "none"
+      ? `Applying ${selectedFilterLabel}`
+      : effects.background !== "none"
+        ? `Applying ${selectedBackgroundLabel}`
+        : effects.style !== "none"
+          ? `Applying ${selectedStyleLabel}`
+          : effects.studioLook
+            ? "Applying touch-up"
+            : effects.studioLighting
+              ? "Applying lighting"
+              : effects.framing
+                ? "Applying framing"
+                : "Preparing effects";
+  const isPreparingEffects = status === "loading" && activeCount > 0;
 
   const applyEffectsChange = (updater: SetStateAction<VideoEffectsState>) => {
     onEffectsChange(updater);
@@ -850,7 +911,7 @@ export default function VideoEffectsPanel({
       : cameraUnavailable && activeCount > 0
         ? "Will apply when camera turns on"
         : status === "loading"
-          ? "Preparing effects"
+          ? preparingLabel
           : status === "running"
             ? "Effects are live"
             : status === "degraded"
@@ -983,7 +1044,7 @@ export default function VideoEffectsPanel({
                   }`}
                 />
               )}
-              <span>{statusLabel}</span>
+              <span className="truncate">{statusLabel}</span>
             </div>
           </div>
         </div>
@@ -1002,6 +1063,8 @@ export default function VideoEffectsPanel({
           stream={localStream}
           isCameraOff={isCameraOff}
           hasLiveVideo={hasLiveVideo}
+          isPreparing={isPreparingEffects}
+          preparingLabel={preparingLabel}
         />
         {cameraUnavailable ? (
           <div className="mt-3 rounded-xl border border-white/[0.14] bg-[#131316] px-3 py-2 text-[12px] leading-snug text-[#fafafa]/74">
@@ -1277,6 +1340,9 @@ export default function VideoEffectsPanel({
                       key={option.id}
                       option={option}
                       selected={effects.background === option.id}
+                      busy={
+                        isPreparingEffects && effects.background === option.id
+                      }
                       testId={`video-effects-background-${option.id}`}
                       onPrewarm={() => prewarmForBackground(option.id)}
                       onSelect={() => setBackground(option.id)}
@@ -1302,6 +1368,7 @@ export default function VideoEffectsPanel({
                       key={option.id}
                       option={option}
                       selected={effects.filter === option.id}
+                      busy={isPreparingEffects && effects.filter === option.id}
                       testId={`video-effects-filter-${option.id}`}
                       onPrewarm={() =>
                         option.id === "none"
@@ -1382,6 +1449,9 @@ export default function VideoEffectsPanel({
                           key={option.id}
                           option={option}
                           selected={effects.style === option.id}
+                          busy={
+                            isPreparingEffects && effects.style === option.id
+                          }
                           testId={`video-effects-appearance-style-${option.id}`}
                           onSelect={() => setStyle(option.id)}
                         />

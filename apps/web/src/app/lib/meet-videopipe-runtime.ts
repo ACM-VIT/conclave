@@ -117,6 +117,8 @@ type MeetVideoPipeController = {
   requestQueue: Promise<void>;
   disposeTimerId: number | null;
   disposed: boolean;
+  sessionSequence: number;
+  activeSessionId: number | null;
   currentEffectIdNumber: number | null;
   currentGraphId: string | null;
   disposeNow: (reason: string) => Promise<void>;
@@ -300,7 +302,8 @@ const createMeetVideoPipeFlags = (effectIdNumber: number) => ({
   release: MEET_VIDEOPIPE_RUNTIME_RELEASE,
   fetchAssetsFromBundlePath: true,
   googleInternalFeaturesAllowed: true,
-  effectExperimentConfigs: getMeetVideoPipeEffectExperimentConfigs(effectIdNumber),
+  effectExperimentConfigs:
+    getMeetVideoPipeEffectExperimentConfigs(effectIdNumber),
   allowBreakoutBoxWorker: false,
   forceBreakoutBox: false,
   allowWebGpuBackgroundBlurReplace: false,
@@ -375,7 +378,9 @@ const requestControllerEffect = async (
 ) => {
   const effectIdNumber = effectGraph.meetEffectIdNumber;
   if (typeof effectIdNumber !== "number") {
-    throw new Error(`Meet VideoPipe effect ${effectGraph.meetGraphId} has no numeric effect ID.`);
+    throw new Error(
+      `Meet VideoPipe effect ${effectGraph.meetGraphId} has no numeric effect ID.`,
+    );
   }
 
   controller.requestQueue = controller.requestQueue
@@ -416,7 +421,9 @@ export async function startMeetVideoPipeEffect({
 }: StartMeetVideoPipeEffectOptions): Promise<MeetVideoPipeEffectSession> {
   const effectIdNumber = effectGraph.meetEffectIdNumber;
   if (typeof effectIdNumber !== "number") {
-    throw new Error(`Meet VideoPipe effect ${effectGraph.meetGraphId} has no numeric effect ID.`);
+    throw new Error(
+      `Meet VideoPipe effect ${effectGraph.meetGraphId} has no numeric effect ID.`,
+    );
   }
 
   const sourceTrack = getLiveVideoTrack(sourceStream);
@@ -618,6 +625,8 @@ export async function startMeetVideoPipeEffect({
       requestQueue: Promise.resolve(),
       disposeTimerId: null,
       disposed: false,
+      sessionSequence: 0,
+      activeSessionId: null,
       currentEffectIdNumber: null,
       currentGraphId: null,
       disposeNow: async (reason) => {
@@ -627,6 +636,7 @@ export async function startMeetVideoPipeEffect({
         if (warmMeetVideoPipeController === nextController) {
           warmMeetVideoPipeController = null;
         }
+        nextController.activeSessionId = null;
         nextController.callbacks.onLog?.({
           event: "dispose",
           level: "debug",
@@ -671,20 +681,54 @@ export async function startMeetVideoPipeEffect({
     processor.setTransitionsEnabled?.(true);
   }
 
+  const sessionId = controller.sessionSequence + 1;
+  controller.sessionSequence = sessionId;
+  controller.activeSessionId = sessionId;
+
   try {
     await requestControllerEffect(controller, effectGraph);
   } catch (error) {
-    await controller.disposeNow("request-effect-failed").catch(() => {});
+    if (controller.activeSessionId === sessionId) {
+      await controller.disposeNow("request-effect-failed").catch(() => {});
+    } else {
+      onLog?.({
+        event: "stale_request_effect_failed",
+        level: "debug",
+        error,
+        data: {
+          graphId: effectGraph.meetGraphId,
+          effectIdNumber,
+          sessionId,
+          activeSessionId: controller.activeSessionId,
+        },
+      });
+    }
     throw error;
   }
 
   const outputStream = await controller.outputPromise.catch(async (error) => {
-    await controller.disposeNow("output-timeout").catch(() => {});
+    if (controller.activeSessionId === sessionId) {
+      await controller.disposeNow("output-timeout").catch(() => {});
+    } else {
+      onLog?.({
+        event: "stale_output_timeout",
+        level: "debug",
+        error,
+        data: {
+          graphId: effectGraph.meetGraphId,
+          effectIdNumber,
+          sessionId,
+          activeSessionId: controller.activeSessionId,
+        },
+      });
+    }
     throw error;
   });
   const outputTrack = getLiveVideoTrack(outputStream) ?? controller.outputTrack;
   if (!outputTrack) {
-    await controller.disposeNow("output-track-missing").catch(() => {});
+    if (controller.activeSessionId === sessionId) {
+      await controller.disposeNow("output-track-missing").catch(() => {});
+    }
     throw new Error("Meet VideoPipe output stream has no live video track.");
   }
   controller.outputStream = outputStream;
@@ -698,6 +742,7 @@ export async function startMeetVideoPipeEffect({
       effectIdNumber,
       streamId: outputStream.id,
       trackId: outputTrack.id,
+      sessionId,
     },
   });
 
@@ -707,6 +752,20 @@ export async function startMeetVideoPipeEffect({
     outputStream,
     outputTrack,
     dispose: async () => {
+      if (controller.activeSessionId !== sessionId) {
+        onLog?.({
+          event: "session_dispose_stale",
+          level: "debug",
+          data: {
+            graphId: effectGraph.meetGraphId,
+            effectIdNumber,
+            sessionId,
+            activeSessionId: controller.activeSessionId,
+          },
+        });
+        return;
+      }
+      controller.activeSessionId = null;
       onOutputStream?.(null);
       scheduleControllerDispose(controller, "session-dispose");
     },
