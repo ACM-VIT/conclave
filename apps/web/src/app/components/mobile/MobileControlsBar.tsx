@@ -12,9 +12,9 @@ import {
   MicOff,
   MoreVertical,
   Phone,
+  ScanFace,
   Settings,
   Smile,
-  Sparkles,
   Users,
   Video,
   VideoOff,
@@ -580,13 +580,13 @@ function MobileControlsBar({
                   : "bg-[#2b2b2b]"
               }`}
             >
-              <Sparkles className="w-4.5 h-4.5" />
+              <ScanFace className="w-4.5 h-4.5" />
             </div>
             <span className="text-sm font-medium">
               Backgrounds and effects
             </span>
             {isVideoEffectsPermissionBlocked ? (
-              <span className="ml-auto text-[10px] uppercase tracking-[0.2em] text-[#fafafa]/56">
+              <span className="ml-auto text-[11px] text-[#fafafa]/56">
                 Permission needed
               </span>
             ) : hasActiveVideoEffects ? (
@@ -594,7 +594,7 @@ function MobileControlsBar({
                 {activeVideoEffectsCount}
               </span>
             ) : (
-              <span className="ml-auto text-[10px] uppercase tracking-[0.2em] text-[#fafafa]/56">
+              <span className="ml-auto text-[11px] text-[#fafafa]/56">
                 {isVideoEffectsOpen ? "Open" : "Off"}
               </span>
             )}

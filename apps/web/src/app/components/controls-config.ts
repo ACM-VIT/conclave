@@ -9,7 +9,7 @@ import {
   MicOff,
   Monitor,
   PictureInPicture2,
-  Sparkles,
+  ScanFace,
   StickyNote,
   TerminalSquare,
   Users,
@@ -255,7 +255,7 @@ export function buildControlsConfig(p: ControlsBarProps): ControlsConfig {
     const effectsPermissionBlocked = Boolean(p.isVideoEffectsPermissionBlocked);
     overflow.push({
       id: "effects",
-      icon: Sparkles,
+      icon: ScanFace,
       label: effectsPermissionBlocked
         ? "Permission needed"
         : "Backgrounds and effects",

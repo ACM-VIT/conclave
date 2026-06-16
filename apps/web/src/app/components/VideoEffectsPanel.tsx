@@ -112,19 +112,22 @@ const PANEL_FONT = font.sans;
 const ICON_STROKE = 1.75;
 const SECTION_LABEL = color.textFaint;
 const EFFECT_TILE_BASE_CLASS =
-  "group relative min-h-[82px] rounded-lg border p-2 text-left transition-[background-color,border-color,filter] duration-[120ms]";
+  "group relative min-h-[82px] rounded-xl border p-2 text-left transition-[background-color,border-color,filter,transform] duration-[120ms] active:brightness-95";
 const EFFECT_TILE_IDLE_CLASS =
-  "border-white/[0.10] bg-[#131316] hover:border-white/[0.18] hover:bg-white/[0.05]";
+  "border-white/[0.14] bg-[#131316] hover:border-white/[0.24] hover:bg-[#232327]";
 const EFFECT_TILE_SELECTED_CLASS =
-  "border-[#F95F4A] bg-[#232327] hover:border-[#F95F4A] hover:bg-[#2e2e33]";
+  "border-[#F95F4A] bg-[#232327] hover:border-[#F95F4A] hover:bg-[#232327]";
 const EFFECT_TILE_DISABLED_CLASS =
-  "disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:border-white/[0.08] disabled:hover:bg-[#131316]";
+  "disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:border-white/[0.14] disabled:hover:bg-[#131316]";
 
 const PANEL_STYLES = `
 .effectspanel-scroll { scrollbar-width: thin; scrollbar-color: rgba(250,250,250,0.18) transparent; }
 .effectspanel-scroll::-webkit-scrollbar { width: 4px; height: 0; }
 .effectspanel-scroll::-webkit-scrollbar-track { background: transparent; }
 .effectspanel-scroll::-webkit-scrollbar-thumb { background: rgba(250,250,250,0.18); border-radius: 2px; }
+.effectspanel-tab[aria-selected="true"] { color: ${color.text}; border-color: ${color.accent}; }
+.effectspanel-tab[aria-selected="false"] { color: ${color.textMuted}; border-color: transparent; }
+.effectspanel-tab[aria-selected="false"]:hover { color: ${color.text}; background: ${color.surfaceRaised}; }
 `;
 
 const getEffectTileClassName = (selected: boolean, extraClassName = "") =>
@@ -250,7 +253,7 @@ function EffectOptionButton<T extends string>({
       className={getEffectTileClassName(selected)}
     >
       <span
-        className={`relative flex items-center justify-center overflow-hidden rounded-md border border-white/[0.10] bg-[#0a0a0b] ${
+        className={`relative flex items-center justify-center overflow-hidden rounded-lg border border-white/[0.14] bg-[#0a0a0b] ${
           previewPath
             ? "h-14 w-full bg-cover bg-center"
             : "h-10 w-10"
@@ -324,7 +327,7 @@ function ToggleRow({
       aria-checked={checked}
       disabled={disabled}
       onClick={disabled ? undefined : () => onChange(!checked)}
-      className="flex min-h-[44px] w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-left transition-colors duration-[120ms] hover:bg-white/[0.05] active:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:bg-transparent"
+      className="flex min-h-[44px] w-full items-center justify-between gap-3 rounded-xl px-3 py-2 text-left transition-colors duration-[120ms] hover:bg-[#232327] active:bg-[#2e2e33] disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:bg-transparent"
     >
       <span className="min-w-0">
         <span className="block text-[13px] font-medium text-[#fafafa]">
@@ -340,7 +343,7 @@ function ToggleRow({
         className={`relative h-6 w-10 rounded-full border transition-colors ${
           checked
             ? "border-[#F95F4A] bg-[#F95F4A]"
-            : "border-white/[0.16] bg-white/[0.14]"
+            : "border-white/[0.14] bg-[#131316]"
         }`}
       >
         <span
@@ -361,10 +364,10 @@ function Section({
   children: ReactNode;
 }) {
   return (
-    <section className="border-t border-white/[0.10] px-4 py-3 first:border-t-0">
+    <section className="border-t border-white/[0.14] px-4 py-3 first:border-t-0">
       <h3
-        className="mb-2 text-[11px] font-medium uppercase"
-        style={{ letterSpacing: "0.06em", color: SECTION_LABEL }}
+        className="mb-2 text-[12px] font-medium"
+        style={{ color: SECTION_LABEL }}
       >
         {label}
       </h3>
@@ -407,7 +410,7 @@ function VideoEffectsPreview({
   }, [shouldShowVideo, stream]);
 
   return (
-    <div className="relative aspect-video overflow-hidden rounded-lg border border-white/[0.14] bg-[#0a0a0b]">
+    <div className="relative aspect-video overflow-hidden rounded-xl border border-white/[0.14] bg-[#0a0a0b]">
       <video
         ref={videoRef}
         autoPlay
@@ -483,8 +486,8 @@ export default function VideoEffectsPanel({
   );
   const tabGridClassName =
     availableTabs.length === 2
-      ? "grid grid-cols-2 border-b border-white/[0.08] px-4"
-      : "grid grid-cols-3 border-b border-white/[0.08] px-4";
+      ? "grid grid-cols-2 border-b border-white/[0.14] px-4"
+      : "grid grid-cols-3 border-b border-white/[0.14] px-4";
   const backgroundOptionById = useMemo(
     () => new Map(BACKGROUND_EFFECTS.map((option) => [option.id, option])),
     [],
@@ -898,8 +901,8 @@ export default function VideoEffectsPanel({
 
   const panelClassName =
     variant === "dialog"
-      ? "fixed inset-x-3 bottom-3 z-50 flex max-h-[calc(100dvh-24px)] flex-col overflow-hidden rounded-xl border border-white/[0.14] bg-[#18181b] text-[#fafafa] sm:left-1/2 sm:right-auto sm:top-1/2 sm:bottom-auto sm:h-[min(780px,calc(100dvh-48px))] sm:max-h-none sm:w-[min(500px,calc(100vw-32px))] sm:-translate-x-1/2 sm:-translate-y-1/2"
-      : "fixed right-0 top-0 bottom-0 z-40 flex w-[360px] flex-col overflow-hidden border-l border-white/[0.10] bg-[#18181b] text-[#fafafa] animate-[meet-panel-in_280ms_cubic-bezier(0.22,1,0.36,1)]";
+      ? "fixed inset-x-3 bottom-3 z-50 flex max-h-[calc(100dvh-24px)] flex-col overflow-hidden rounded-2xl border border-white/[0.14] bg-[#18181b] text-[#fafafa] sm:left-1/2 sm:right-auto sm:top-1/2 sm:bottom-auto sm:h-[min(780px,calc(100dvh-48px))] sm:max-h-none sm:w-[min(500px,calc(100vw-32px))] sm:-translate-x-1/2 sm:-translate-y-1/2"
+      : "fixed right-0 top-0 bottom-0 z-40 flex w-[380px] flex-col overflow-hidden border-l border-white/[0.14] bg-[#18181b] text-[#fafafa] animate-[meet-panel-in_120ms_cubic-bezier(0.22,1,0.36,1)]";
 
   const panel = (
     <aside
@@ -945,10 +948,10 @@ export default function VideoEffectsPanel({
       }}
     >
       <style>{PANEL_STYLES}</style>
-      <header className="flex items-center justify-between border-b border-white/[0.10] px-4 py-3">
+      <header className="flex items-center justify-between border-b border-white/[0.14] px-4 py-3">
         <div className="flex min-w-0 items-center gap-2">
           <div className="min-w-0">
-            <h2 className="truncate text-[15px] font-semibold text-[#fafafa]">
+            <h2 className="truncate text-[15px] font-bold text-[#fafafa]">
               Backgrounds and effects
             </h2>
             <div className="mt-1 flex items-center gap-2 text-[12px] text-[#a1a1aa]">
@@ -973,32 +976,32 @@ export default function VideoEffectsPanel({
           type="button"
           onClick={onClose}
           aria-label="Close backgrounds and effects"
-          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[#a1a1aa] transition-colors duration-[120ms] hover:bg-white/[0.06] hover:text-[#fafafa]"
+          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[#a1a1aa] transition-colors duration-[120ms] hover:bg-[#232327] hover:text-[#fafafa]"
         >
           <X size={18} strokeWidth={ICON_STROKE} />
         </button>
       </header>
 
-      <div className="border-b border-white/[0.08] px-4 py-4">
+      <div className="border-b border-white/[0.14] px-4 py-4">
         <VideoEffectsPreview
           stream={localStream}
           isCameraOff={isCameraOff}
           hasLiveVideo={hasLiveVideo}
         />
         {cameraUnavailable ? (
-          <div className="mt-3 rounded-lg border border-amber-400/20 bg-amber-400/[0.10] px-3 py-2 text-[12px] leading-snug text-amber-100">
+          <div className="mt-3 rounded-xl border border-white/[0.14] bg-[#131316] px-3 py-2 text-[12px] leading-snug text-[#fafafa]/74">
             {cameraPermissionBlocked
               ? "Camera is blocked"
               : "Your camera is turned off. Effects will apply when you turn it on."}
           </div>
         ) : null}
         {error ? (
-          <div className="mt-2 rounded-lg border border-[#F95F4A]/25 bg-[#F95F4A]/[0.10] px-3 py-2 text-[12px] leading-snug text-red-100">
+          <div className="mt-2 rounded-xl border border-[#F95F4A]/30 bg-[#F95F4A]/[0.14] px-3 py-2 text-[12px] leading-snug text-[#fafafa]">
             {error}
           </div>
         ) : null}
         {customBackgroundError ? (
-          <div className="mt-2 rounded-lg border border-[#F95F4A]/25 bg-[#F95F4A]/[0.10] px-3 py-2 text-[12px] leading-snug text-red-100">
+          <div className="mt-2 rounded-xl border border-[#F95F4A]/30 bg-[#F95F4A]/[0.14] px-3 py-2 text-[12px] leading-snug text-[#fafafa]">
             {customBackgroundError}
           </div>
         ) : null}
@@ -1011,7 +1014,7 @@ export default function VideoEffectsPanel({
             if (activeEffectStack.length === 0) return;
             setShowActiveEffectStack((current) => !current);
           }}
-          className="mt-3 flex min-h-10 w-full items-center justify-between rounded-lg border border-white/[0.14] bg-[#131316] px-3 py-2 text-[13px] font-medium text-[#fafafa] transition-colors duration-[120ms] hover:bg-white/[0.05] disabled:cursor-not-allowed disabled:text-[#71717a] disabled:hover:bg-[#131316]"
+          className="mt-3 flex min-h-10 w-full items-center justify-between rounded-xl border border-white/[0.14] bg-[#131316] px-3 py-2 text-[13px] font-medium text-[#fafafa] transition-colors duration-[120ms] hover:border-white/[0.24] hover:bg-[#232327] disabled:cursor-not-allowed disabled:text-[#71717a] disabled:hover:border-white/[0.14] disabled:hover:bg-[#131316]"
         >
           <span className="flex items-center gap-2">
             <Layers size={16} strokeWidth={ICON_STROKE} />
@@ -1058,7 +1061,7 @@ export default function VideoEffectsPanel({
               return (
                 <div
                   key={item.key}
-                  className="flex min-h-9 items-center gap-2 rounded-lg bg-white/[0.035] px-2.5 py-1.5 text-[13px] text-[#fafafa]"
+                  className="flex min-h-9 items-center gap-2 rounded-xl border border-white/[0.14] bg-[#131316] px-2.5 py-1.5 text-[13px] text-[#fafafa]"
                   data-video-effects-active-item={item.key}
                 >
                   <button
@@ -1079,7 +1082,7 @@ export default function VideoEffectsPanel({
                     onClick={item.remove}
                     aria-label={`Remove ${item.label}`}
                     title={`Remove ${item.label}`}
-                    className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[#a1a1aa] transition-colors duration-[120ms] hover:bg-white/[0.06] hover:text-[#fafafa]"
+                    className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[#a1a1aa] transition-colors duration-[120ms] hover:bg-[#232327] hover:text-[#fafafa]"
                   >
                     <X size={15} strokeWidth={1.85} />
                   </button>
@@ -1100,11 +1103,7 @@ export default function VideoEffectsPanel({
             aria-controls={`video-effects-tabpanel-${tab.id}`}
             id={`video-effects-tab-${tab.id}`}
             onClick={() => setActiveTab(tab.id)}
-            className={`border-b-2 px-2 py-3 text-[13px] font-medium transition-colors ${
-              activeTab === tab.id
-                ? "border-[#F95F4A] text-[#fafafa]"
-                : "border-transparent text-[#a1a1aa] hover:bg-white/[0.05] hover:text-[#fafafa]"
-            }`}
+            className="effectspanel-tab border-b-2 px-2 py-3 text-[13px] font-medium transition-colors duration-[120ms]"
           >
             {tab.label}
           </button>
@@ -1136,11 +1135,11 @@ export default function VideoEffectsPanel({
                     onClick={selectCustomBackgroundUpload}
                     className={getEffectTileClassName(
                       false,
-                      "border-dashed border-white/[0.14] hover:border-[#F95F4A]",
+                      "border-dashed border-white/[0.24] hover:border-[#F95F4A]",
                     )}
                   >
                     <span
-                      className="flex h-10 w-10 items-center justify-center rounded-lg"
+                      className="flex h-10 w-10 items-center justify-center rounded-xl"
                       style={{ backgroundColor: EFFECTS_ACCENT }}
                     >
                       <ImagePlus
@@ -1170,7 +1169,7 @@ export default function VideoEffectsPanel({
                         className={getEffectTileClassName(selected)}
                       >
                         <span
-                          className="flex h-14 w-full items-center justify-center overflow-hidden rounded-md border border-white/[0.08] bg-cover bg-center"
+                          className="flex h-14 w-full items-center justify-center overflow-hidden rounded-lg border border-white/[0.14] bg-cover bg-center"
                           style={{
                             backgroundColor: EFFECTS_ACCENT,
                             backgroundImage: `url("${background.thumbnailDataUrl}")`,
@@ -1211,7 +1210,7 @@ export default function VideoEffectsPanel({
                       )}
                     >
                       <span
-                        className="flex h-14 w-full items-center justify-center overflow-hidden rounded-md border border-white/[0.08] bg-cover bg-center"
+                        className="flex h-14 w-full items-center justify-center overflow-hidden rounded-lg border border-white/[0.14] bg-cover bg-center"
                         style={{
                           backgroundColor: EFFECTS_ACCENT,
                           backgroundImage: `url("${effects.customBackgroundDataUrl}")`,
@@ -1238,7 +1237,7 @@ export default function VideoEffectsPanel({
                         onClick={() => {
                           customBackgroundInputRef.current?.click();
                         }}
-                        className="min-h-[38px] rounded-lg border border-white/[0.12] bg-[#131316] px-3 text-left text-[12px] font-medium text-[#fafafa] transition-colors duration-[120ms] hover:bg-[#232327] disabled:cursor-not-allowed disabled:text-[#71717a] disabled:hover:bg-transparent"
+                        className="min-h-[38px] rounded-xl border border-white/[0.14] bg-[#131316] px-3 text-left text-[12px] font-medium text-[#fafafa] transition-colors duration-[120ms] hover:border-white/[0.24] hover:bg-[#232327] disabled:cursor-not-allowed disabled:text-[#71717a] disabled:hover:bg-transparent"
                       >
                         Change image
                       </button>
@@ -1246,7 +1245,7 @@ export default function VideoEffectsPanel({
                         type="button"
                         data-testid="custom-background-remove"
                         onClick={removeCustomBackground}
-                        className="min-h-[38px] rounded-lg border border-[#F95F4A]/30 bg-[#F95F4A]/[0.14] px-3 text-left text-[12px] font-medium text-[#F95F4A] transition-colors hover:bg-[#F95F4A]/[0.18] disabled:cursor-not-allowed disabled:border-white/[0.10] disabled:bg-white/[0.06] disabled:text-[#71717a]"
+                        className="min-h-[38px] rounded-xl border border-[#F95F4A]/30 bg-[#F95F4A]/[0.14] px-3 text-left text-[12px] font-medium text-[#F95F4A] transition-colors duration-[120ms] hover:bg-[#F95F4A]/[0.20] disabled:cursor-not-allowed disabled:border-white/[0.14] disabled:bg-[#131316] disabled:text-[#71717a]"
                       >
                         Remove image
                       </button>
@@ -1332,7 +1331,7 @@ export default function VideoEffectsPanel({
                   testId="video-effects-appearance-studio-lighting"
                   onChange={setToggle("studioLighting")}
                 />
-                <div className="h-px bg-white/[0.08]" />
+                <div className="h-px bg-white/[0.14]" />
                 <ToggleRow
                   label="Framing"
                   description="Puts you in the center of the screen"
@@ -1349,7 +1348,7 @@ export default function VideoEffectsPanel({
                     !onRecenterFraming
                   }
                   onClick={onRecenterFraming}
-                  className="ml-12 min-h-9 rounded-lg border border-[#F95F4A]/30 bg-[#F95F4A]/[0.12] px-4 text-left text-[13px] font-medium text-[#fafafa] transition-colors duration-[120ms] hover:bg-[#F95F4A]/[0.20] disabled:cursor-not-allowed disabled:border-white/[0.10] disabled:bg-white/[0.06] disabled:text-[#71717a]"
+                  className="ml-12 min-h-9 rounded-full border border-[#F95F4A]/30 bg-[#F95F4A]/[0.14] px-4 text-left text-[13px] font-medium text-[#fafafa] transition-colors duration-[120ms] hover:bg-[#F95F4A]/[0.20] disabled:cursor-not-allowed disabled:border-white/[0.14] disabled:bg-[#131316] disabled:text-[#71717a]"
                 >
                   Recenter
                 </button>
