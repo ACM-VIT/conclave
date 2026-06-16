@@ -3361,8 +3361,12 @@ const run = async () => {
           const faceWidth = Number(anchor?.faceWidth || 0);
           const faceHeight = Number(anchor?.faceHeight || 0);
           const headTopY = Number(anchor?.headTopY || 0);
+          const headCenterX = Number(anchor?.headCenterX || 0);
           const chinY = Number(anchor?.chinY || 0);
           const noseY = Number(anchor?.noseY || 0);
+          const mouthCenterX = Number(anchor?.mouthCenterX || 0);
+          const mouthCenterY = Number(anchor?.mouthCenterY || 0);
+          const mouthWidth = Number(anchor?.mouthWidth || 0);
           const anchorHealthy = Boolean(anchor) &&
             ["iris", "contour"].includes(anchor?.eyeAnchorBasis) &&
             eyeCenterDistance > 0 &&
@@ -3374,7 +3378,13 @@ const run = async () => {
             headTopY <= -faceWidth * 0.2 &&
             chinY >= faceWidth * 0.35 &&
             noseY >= 0 &&
-            noseY <= chinY + faceWidth * 0.2;
+            noseY <= chinY + faceWidth * 0.2 &&
+            Math.abs(headCenterX) <= faceWidth * 0.25 &&
+            Math.abs(mouthCenterX) <= faceWidth * 0.35 &&
+            mouthCenterY >= noseY &&
+            mouthCenterY <= chinY + faceWidth * 0.18 &&
+            mouthWidth >= faceWidth * 0.15 &&
+            mouthWidth <= faceWidth * 0.45;
           const boundsCenterX = Number(bounds?.x || 0) + Number(bounds?.width || 0) / 2;
           const boundsHealthy = !bounds || (
             Number(bounds.width || 0) > 0 &&
@@ -3428,8 +3438,12 @@ const run = async () => {
               faceWidth: render.anchor.faceWidth ?? null,
               faceHeight: render.anchor.faceHeight ?? null,
               headTopY: render.anchor.headTopY ?? null,
+              headCenterX: render.anchor.headCenterX ?? null,
               chinY: render.anchor.chinY ?? null,
               noseY: render.anchor.noseY ?? null,
+              mouthCenterX: render.anchor.mouthCenterX ?? null,
+              mouthCenterY: render.anchor.mouthCenterY ?? null,
+              mouthWidth: render.anchor.mouthWidth ?? null,
               bounds: render.bounds ?? null,
             }
           : null,

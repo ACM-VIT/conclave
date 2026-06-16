@@ -710,8 +710,12 @@ type FaceFilterRenderStats = {
     faceWidth: number;
     faceHeight?: number;
     headTopY?: number;
+    headCenterX?: number;
     chinY?: number;
     noseY?: number;
+    mouthCenterX?: number;
+    mouthCenterY?: number;
+    mouthWidth?: number;
     eyeAnchorBasis?: "iris" | "contour";
     eyeCenterDistance?: number;
     outerEyeDistance?: number;
@@ -5978,6 +5982,8 @@ const drawFaceFilter = (
   const nose = mapLandmark(landmarks[1]);
   const upperLip = mapLandmark(landmarks[13]);
   const lowerLip = mapLandmark(landmarks[14]);
+  const leftMouthCorner = mapLandmark(landmarks[61]);
+  const rightMouthCorner = mapLandmark(landmarks[291]);
   const forehead = mapLandmark(landmarks[10]);
   const chin = mapLandmark(landmarks[152]);
   if (!leftEye || !rightEye || !nose || !forehead) {
@@ -6021,6 +6027,16 @@ const drawFaceFilter = (
   const noseLocal = toFaceSpace(nose);
   const upperLipLocal = upperLip ? toFaceSpace(upperLip) : null;
   const lowerLipLocal = lowerLip ? toFaceSpace(lowerLip) : null;
+  const mouthCornerPair =
+    leftMouthCorner && rightMouthCorner
+      ? sortPointPairByX([leftMouthCorner, rightMouthCorner])
+      : null;
+  const leftMouthCornerLocal = mouthCornerPair
+    ? toFaceSpace(mouthCornerPair[0])
+    : null;
+  const rightMouthCornerLocal = mouthCornerPair
+    ? toFaceSpace(mouthCornerPair[1])
+    : null;
   const foreheadLocal = toFaceSpace(forehead);
   const chinLocal = chin ? toFaceSpace(chin) : null;
   const localFaceBounds = getPointBounds(
@@ -6046,6 +6062,38 @@ const drawFaceFilter = (
   );
   const faceBottomY = Math.max(rawChinY, faceWidth * 0.48);
   const faceHeight = Math.max(faceWidth * 0.9, faceBottomY - headTopY);
+  const headCenterX = clamp(
+    lerp((faceLocalLeft + faceLocalRight) / 2, foreheadLocal.x, 0.55),
+    -faceWidth * 0.18,
+    faceWidth * 0.18,
+  );
+  const mouthCenterLocal =
+    getAveragePoint([
+      leftMouthCornerLocal,
+      rightMouthCornerLocal,
+      upperLipLocal,
+      lowerLipLocal,
+    ]) ??
+    upperLipLocal ??
+    { x: noseLocal.x, y: noseLocal.y + faceWidth * 0.12 };
+  const mouthWidth = clamp(
+    leftMouthCornerLocal && rightMouthCornerLocal
+      ? getPointDistance(leftMouthCornerLocal, rightMouthCornerLocal)
+      : faceWidth * 0.28,
+    faceWidth * 0.18,
+    faceWidth * 0.42,
+  );
+  const eyewearLensW = clamp(
+    (outerEyeDistance || eyeDistance) * 0.4,
+    faceWidth * 0.18,
+    faceWidth * 0.29,
+  );
+  const eyewearLensH = clamp(
+    eyewearLensW * 0.56,
+    faceWidth * 0.1,
+    faceWidth * 0.18,
+  );
+  const eyewearLineY = (leftEyeLocal.y + rightEyeLocal.y) / 2;
   const anchor: NonNullable<FaceFilterRenderStats["anchor"]> = {
     centerX: Math.round(centerX),
     centerY: Math.round(eyeY),
@@ -6053,8 +6101,12 @@ const drawFaceFilter = (
     faceWidth: Math.round(faceWidth),
     faceHeight: Math.round(faceHeight),
     headTopY: Math.round(headTopY),
+    headCenterX: Math.round(headCenterX),
     chinY: Math.round(faceBottomY),
     noseY: Math.round(noseLocal.y),
+    mouthCenterX: Math.round(mouthCenterLocal.x),
+    mouthCenterY: Math.round(mouthCenterLocal.y),
+    mouthWidth: Math.round(mouthWidth),
     eyeAnchorBasis,
     eyeCenterDistance: Math.round(eyeDistance),
     outerEyeDistance: Math.round(outerEyeDistance || eyeDistance),
@@ -6077,11 +6129,11 @@ const drawFaceFilter = (
   ctx.lineJoin = "round";
 
   if (filter === "glasses") {
-    const lensW = faceWidth * 0.22;
-    const lensH = faceWidth * 0.13;
+    const lensW = eyewearLensW;
+    const lensH = eyewearLensH;
     const leftLensX = leftEyeLocal.x - lensW / 2;
     const rightLensX = rightEyeLocal.x - lensW / 2;
-    const lensY = (leftEyeLocal.y + rightEyeLocal.y) / 2 - lensH / 2;
+    const lensY = eyewearLineY - lensH / 2;
     beginProbe({
       left: leftLensX - faceWidth * 0.04,
       right: rightLensX + lensW + faceWidth * 0.04,
@@ -6097,15 +6149,18 @@ const drawFaceFilter = (
     ctx.lineTo(rightEyeLocal.x - lensW / 2, lensY + lensH / 2);
     ctx.stroke();
   } else if (filter === "aviator") {
-    const lensW = faceWidth * 0.26;
-    const lensH = faceWidth * 0.16;
-    const lensY = (leftEyeLocal.y + rightEyeLocal.y) / 2 - lensH / 2;
+    const lensW = clamp(eyewearLensW * 1.12, faceWidth * 0.2, faceWidth * 0.32);
+    const lensH = clamp(eyewearLensH * 1.12, faceWidth * 0.12, faceWidth * 0.2);
+    const lensY = eyewearLineY - lensH / 2;
+    const mustacheX = mouthCenterLocal.x;
     const mustacheY = upperLipLocal
-      ? upperLipLocal.y - faceWidth * 0.035
-      : noseLocal.y + faceWidth * 0.1;
+      ? lerp(noseLocal.y, upperLipLocal.y, 0.7)
+      : mouthCenterLocal.y - faceWidth * 0.02;
+    const mustacheLobeW = clamp(mouthWidth * 0.58, faceWidth * 0.1, faceWidth * 0.18);
+    const mustacheLobeH = clamp(mouthWidth * 0.22, faceWidth * 0.035, faceWidth * 0.07);
     beginProbe({
-      left: -faceWidth * 0.5,
-      right: faceWidth * 0.5,
+      left: Math.min(leftEyeLocal.x - lensW * 0.62, mustacheX - mouthWidth * 0.82) - faceWidth * 0.06,
+      right: Math.max(rightEyeLocal.x + lensW * 0.62, mustacheX + mouthWidth * 0.82) + faceWidth * 0.06,
       top: lensY - faceWidth * 0.08,
       bottom: mustacheY + faceWidth * 0.16,
     });
@@ -6133,39 +6188,40 @@ const drawFaceFilter = (
     ctx.fillStyle = "rgba(28,25,23,0.94)";
     ctx.beginPath();
     ctx.ellipse(
-      -faceWidth * 0.09,
+      mustacheX - mouthWidth * 0.22,
       mustacheY,
-      faceWidth * 0.15,
-      faceWidth * 0.055,
+      mustacheLobeW,
+      mustacheLobeH,
       0.18,
       0,
       Math.PI * 2,
     );
     ctx.ellipse(
-      faceWidth * 0.09,
+      mustacheX + mouthWidth * 0.22,
       mustacheY,
-      faceWidth * 0.15,
-      faceWidth * 0.055,
+      mustacheLobeW,
+      mustacheLobeH,
       -0.18,
       0,
       Math.PI * 2,
     );
     ctx.fill();
   } else if (filter === "cat-eye-beret") {
-    const lensW = faceWidth * 0.24;
-    const lensH = faceWidth * 0.12;
-    const lensY = (leftEyeLocal.y + rightEyeLocal.y) / 2 - lensH / 2;
+    const lensW = clamp(eyewearLensW * 1.04, faceWidth * 0.2, faceWidth * 0.3);
+    const lensH = clamp(eyewearLensH * 0.94, faceWidth * 0.1, faceWidth * 0.16);
+    const lensY = eyewearLineY - lensH / 2;
     const beretY = headTopY - faceWidth * 0.06;
+    const beretX = headCenterX - faceWidth * 0.06;
     beginProbe({
-      left: -faceWidth * 0.5,
-      right: faceWidth * 0.5,
+      left: Math.min(leftEyeLocal.x - lensW * 0.75, beretX - faceWidth * 0.36),
+      right: Math.max(rightEyeLocal.x + lensW * 0.75, beretX + faceWidth * 0.36),
       top: beretY - faceWidth * 0.22,
       bottom: lensY + lensH + faceWidth * 0.08,
     });
     ctx.fillStyle = "#be123c";
     ctx.beginPath();
     ctx.ellipse(
-      -faceWidth * 0.08,
+      beretX,
       beretY,
       faceWidth * 0.34,
       faceWidth * 0.13,
@@ -6176,7 +6232,7 @@ const drawFaceFilter = (
     ctx.fill();
     ctx.fillStyle = "rgba(244,63,94,0.95)";
     ctx.beginPath();
-    ctx.arc(faceWidth * 0.08, beretY - faceWidth * 0.12, faceWidth * 0.025, 0, Math.PI * 2);
+    ctx.arc(beretX + faceWidth * 0.16, beretY - faceWidth * 0.12, faceWidth * 0.025, 0, Math.PI * 2);
     ctx.fill();
     ctx.strokeStyle = "rgba(24,24,27,0.92)";
     ctx.lineWidth = Math.max(4, faceWidth * 0.03);
@@ -6198,8 +6254,8 @@ const drawFaceFilter = (
     const crownW = faceWidth * 0.78;
     const crownH = faceWidth * 0.26;
     beginProbe({
-      left: -crownW / 2 - faceWidth * 0.04,
-      right: crownW / 2 + faceWidth * 0.04,
+      left: headCenterX - crownW / 2 - faceWidth * 0.04,
+      right: headCenterX + crownW / 2 + faceWidth * 0.04,
       top: baseY - crownH - faceWidth * 0.04,
       bottom: baseY + faceWidth * 0.04,
     });
@@ -6207,19 +6263,19 @@ const drawFaceFilter = (
     ctx.strokeStyle = "rgba(255,255,255,0.55)";
     ctx.lineWidth = 3;
     ctx.beginPath();
-    ctx.moveTo(-crownW / 2, baseY);
-    ctx.lineTo(-crownW * 0.28, baseY - crownH);
-    ctx.lineTo(0, baseY - crownH * 0.35);
-    ctx.lineTo(crownW * 0.28, baseY - crownH);
-    ctx.lineTo(crownW / 2, baseY);
+    ctx.moveTo(headCenterX - crownW / 2, baseY);
+    ctx.lineTo(headCenterX - crownW * 0.28, baseY - crownH);
+    ctx.lineTo(headCenterX, baseY - crownH * 0.35);
+    ctx.lineTo(headCenterX + crownW * 0.28, baseY - crownH);
+    ctx.lineTo(headCenterX + crownW / 2, baseY);
     ctx.closePath();
     ctx.fill();
     ctx.stroke();
   } else if (filter === "halo") {
     const haloY = headTopY - faceWidth * 0.13;
     beginProbe({
-      left: -faceWidth * 0.42,
-      right: faceWidth * 0.42,
+      left: headCenterX - faceWidth * 0.42,
+      right: headCenterX + faceWidth * 0.42,
       top: haloY - faceWidth * 0.16,
       bottom: haloY + faceWidth * 0.16,
     });
@@ -6227,7 +6283,7 @@ const drawFaceFilter = (
     ctx.lineWidth = Math.max(6, faceWidth * 0.04);
     ctx.beginPath();
     ctx.ellipse(
-      0,
+      headCenterX,
       haloY,
       faceWidth * 0.34,
       faceWidth * 0.09,
@@ -6241,14 +6297,14 @@ const drawFaceFilter = (
     const earH = faceWidth * 0.58;
     const earW = faceWidth * 0.16;
     beginProbe({
-      left: -faceWidth * 0.42,
-      right: faceWidth * 0.42,
+      left: headCenterX - faceWidth * 0.42,
+      right: headCenterX + faceWidth * 0.42,
       top: earBaseY - earH - faceWidth * 0.08,
       bottom: earBaseY + faceWidth * 0.12,
     });
     [
-      { x: -faceWidth * 0.2, rotate: -0.18 },
-      { x: faceWidth * 0.2, rotate: 0.18 },
+      { x: headCenterX - faceWidth * 0.2, rotate: -0.18 },
+      { x: headCenterX + faceWidth * 0.2, rotate: 0.18 },
     ].forEach((ear) => {
       ctx.save();
       ctx.translate(ear.x, earBaseY - earH * 0.48);
@@ -6264,16 +6320,16 @@ const drawFaceFilter = (
       ctx.restore();
     });
     ctx.fillStyle = "rgba(255,255,255,0.94)";
-    fillRoundRect(ctx, -faceWidth * 0.28, earBaseY - faceWidth * 0.08, faceWidth * 0.56, faceWidth * 0.1, 18);
+    fillRoundRect(ctx, headCenterX - faceWidth * 0.28, earBaseY - faceWidth * 0.08, faceWidth * 0.56, faceWidth * 0.1, 18);
   } else if (filter === "beach-day") {
-    const lensW = faceWidth * 0.24;
-    const lensH = faceWidth * 0.12;
-    const lensY = (leftEyeLocal.y + rightEyeLocal.y) / 2 - lensH / 2;
-    const sunX = faceWidth * 0.35;
+    const lensW = clamp(eyewearLensW * 1.02, faceWidth * 0.19, faceWidth * 0.3);
+    const lensH = clamp(eyewearLensH * 0.96, faceWidth * 0.1, faceWidth * 0.16);
+    const lensY = eyewearLineY - lensH / 2;
+    const sunX = headCenterX + faceWidth * 0.35;
     const sunY = headTopY - faceWidth * 0.1;
     beginProbe({
-      left: -faceWidth * 0.45,
-      right: faceWidth * 0.52,
+      left: Math.min(leftEyeLocal.x - lensW * 0.62, headCenterX - faceWidth * 0.45),
+      right: Math.max(rightEyeLocal.x + lensW * 0.62, sunX + faceWidth * 0.2),
       top: sunY - faceWidth * 0.2,
       bottom: lensY + lensH + faceWidth * 0.16,
     });
@@ -6284,9 +6340,9 @@ const drawFaceFilter = (
     ctx.strokeStyle = "rgba(14,165,233,0.92)";
     ctx.lineWidth = Math.max(4, faceWidth * 0.032);
     ctx.beginPath();
-    ctx.moveTo(-faceWidth * 0.38, lensY + lensH + faceWidth * 0.1);
+    ctx.moveTo(headCenterX - faceWidth * 0.38, lensY + lensH + faceWidth * 0.1);
     for (let step = 0; step <= 6; step += 1) {
-      const x = -faceWidth * 0.38 + step * faceWidth * 0.13;
+      const x = headCenterX - faceWidth * 0.38 + step * faceWidth * 0.13;
       const y =
         lensY +
         lensH +
@@ -6305,31 +6361,34 @@ const drawFaceFilter = (
     ctx.lineTo(rightEyeLocal.x - lensW * 0.48, lensY + lensH * 0.5);
     ctx.stroke();
   } else if (filter === "mustache") {
+    const x = mouthCenterLocal.x;
     const y = upperLipLocal
-      ? upperLipLocal.y - faceWidth * 0.035
-      : noseLocal.y + faceWidth * 0.1;
+      ? lerp(noseLocal.y, upperLipLocal.y, 0.7)
+      : mouthCenterLocal.y - faceWidth * 0.02;
+    const lobeW = clamp(mouthWidth * 0.58, faceWidth * 0.1, faceWidth * 0.18);
+    const lobeH = clamp(mouthWidth * 0.22, faceWidth * 0.035, faceWidth * 0.07);
     beginProbe({
-      left: -faceWidth * 0.28,
-      right: faceWidth * 0.28,
+      left: x - mouthWidth * 0.82,
+      right: x + mouthWidth * 0.82,
       top: y - faceWidth * 0.12,
       bottom: y + faceWidth * 0.12,
     });
     ctx.fillStyle = "rgba(28,25,23,0.94)";
     ctx.beginPath();
     ctx.ellipse(
-      -faceWidth * 0.09,
+      x - mouthWidth * 0.22,
       y,
-      faceWidth * 0.15,
-      faceWidth * 0.055,
+      lobeW,
+      lobeH,
       0.18,
       0,
       Math.PI * 2,
     );
     ctx.ellipse(
-      faceWidth * 0.09,
+      x + mouthWidth * 0.22,
       y,
-      faceWidth * 0.15,
-      faceWidth * 0.055,
+      lobeW,
+      lobeH,
       -0.18,
       0,
       Math.PI * 2,
@@ -6343,8 +6402,8 @@ const drawFaceFilter = (
         : false;
     const bulbY = headTopY - faceWidth * 0.16;
     beginProbe({
-      left: -faceWidth * 0.18,
-      right: faceWidth * 0.18,
+      left: headCenterX - faceWidth * 0.18,
+      right: headCenterX + faceWidth * 0.18,
       top: bulbY - faceWidth * 0.18,
       bottom: bulbY + faceWidth * 0.18,
     });
@@ -6352,13 +6411,13 @@ const drawFaceFilter = (
     ctx.strokeStyle = mouthOpen ? "rgba(253,224,71,0.45)" : "rgba(250,250,250,0.28)";
     ctx.lineWidth = mouthOpen ? 12 : 5;
     ctx.beginPath();
-    ctx.arc(0, bulbY, faceWidth * 0.12, 0, Math.PI * 2);
+    ctx.arc(headCenterX, bulbY, faceWidth * 0.12, 0, Math.PI * 2);
     ctx.fill();
     ctx.stroke();
     ctx.fillStyle = "rgba(10,10,11,0.85)";
     fillRoundRect(
       ctx,
-      -faceWidth * 0.06,
+      headCenterX - faceWidth * 0.06,
       bulbY + faceWidth * 0.08,
       faceWidth * 0.12,
       faceWidth * 0.06,
@@ -6367,34 +6426,39 @@ const drawFaceFilter = (
   } else if (filter === "alien") {
     const shipY = headTopY - faceWidth * 0.16;
     beginProbe({
-      left: -faceWidth * 0.46,
-      right: faceWidth * 0.46,
+      left: headCenterX - faceWidth * 0.46,
+      right: headCenterX + faceWidth * 0.46,
       top: shipY - faceWidth * 0.2,
       bottom: noseLocal.y + faceWidth * 0.1,
     });
-    const beam = ctx.createLinearGradient(0, shipY, 0, noseLocal.y + faceWidth * 0.1);
+    const beam = ctx.createLinearGradient(
+      headCenterX,
+      shipY,
+      noseLocal.x,
+      noseLocal.y + faceWidth * 0.1,
+    );
     beam.addColorStop(0, "rgba(34,197,94,0.36)");
     beam.addColorStop(1, "rgba(34,197,94,0)");
     ctx.fillStyle = beam;
     ctx.beginPath();
-    ctx.moveTo(-faceWidth * 0.22, shipY + faceWidth * 0.05);
-    ctx.lineTo(faceWidth * 0.22, shipY + faceWidth * 0.05);
-    ctx.lineTo(faceWidth * 0.1, noseLocal.y + faceWidth * 0.1);
-    ctx.lineTo(-faceWidth * 0.1, noseLocal.y + faceWidth * 0.1);
+    ctx.moveTo(headCenterX - faceWidth * 0.22, shipY + faceWidth * 0.05);
+    ctx.lineTo(headCenterX + faceWidth * 0.22, shipY + faceWidth * 0.05);
+    ctx.lineTo(noseLocal.x + faceWidth * 0.1, noseLocal.y + faceWidth * 0.1);
+    ctx.lineTo(noseLocal.x - faceWidth * 0.1, noseLocal.y + faceWidth * 0.1);
     ctx.closePath();
     ctx.fill();
     ctx.fillStyle = "rgba(20,184,166,0.95)";
     ctx.beginPath();
-    ctx.ellipse(0, shipY, faceWidth * 0.34, faceWidth * 0.09, 0, 0, Math.PI * 2);
+    ctx.ellipse(headCenterX, shipY, faceWidth * 0.34, faceWidth * 0.09, 0, 0, Math.PI * 2);
     ctx.fill();
     ctx.fillStyle = "rgba(187,247,208,0.9)";
     ctx.beginPath();
-    ctx.ellipse(0, shipY - faceWidth * 0.06, faceWidth * 0.14, faceWidth * 0.08, 0, Math.PI, 0);
+    ctx.ellipse(headCenterX, shipY - faceWidth * 0.06, faceWidth * 0.14, faceWidth * 0.08, 0, Math.PI, 0);
     ctx.fill();
     ctx.fillStyle = "rgba(34,197,94,0.9)";
     for (let light = -1; light <= 1; light += 1) {
       ctx.beginPath();
-      ctx.arc(light * faceWidth * 0.16, shipY + faceWidth * 0.02, faceWidth * 0.018, 0, Math.PI * 2);
+      ctx.arc(headCenterX + light * faceWidth * 0.16, shipY + faceWidth * 0.02, faceWidth * 0.018, 0, Math.PI * 2);
       ctx.fill();
     }
   } else if (filter === "sparkles") {
