@@ -128,6 +128,7 @@ const defaultFaceFilterLabels = expectFaceLandmarks
       "Fuzzy cat",
       "Halloween cat",
       "Velvety dog",
+      "Medium hair and beard",
       "Long wavy hair",
       "Gold crown",
       "Light halo",
