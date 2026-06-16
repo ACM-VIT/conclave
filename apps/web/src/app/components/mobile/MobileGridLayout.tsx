@@ -587,6 +587,20 @@ function MobileGridLayout({
     warmReasonById,
     warmRemoteIds,
   ]);
+  const roomTilingWarmReasonsJson = useMemo(() => {
+    try {
+      return JSON.stringify(roomTilingWarmReasons);
+    } catch {
+      return "{}";
+    }
+  }, [roomTilingWarmReasons]);
+  const roomTilingScoresJson = useMemo(() => {
+    try {
+      return JSON.stringify(roomTilingScores);
+    } catch {
+      return "[]";
+    }
+  }, [roomTilingScores]);
 
   const mobileMaxCols =
     gridSize.width > gridSize.height
@@ -943,15 +957,34 @@ function MobileGridLayout({
       data-mobile-meet-layout={layoutMode}
       data-mobile-room-tiling-source="client"
       data-mobile-room-tiling-interval={MOBILE_ROOM_TILING_METADATA_INTERVAL_MS}
+      data-mobile-room-tiling-metadata-interval={
+        MOBILE_ROOM_TILING_METADATA_INTERVAL_MS
+      }
+      data-mobile-room-tiling-promote-delay={MOBILE_ROOM_TILING_PROMOTE_DELAY_MS}
+      data-mobile-room-tiling-min-switch-interval={
+        MOBILE_ROOM_TILING_MIN_SWITCH_INTERVAL_MS
+      }
+      data-mobile-room-tiling-active-speaker={activeSpeakerId ?? ""}
+      data-mobile-room-tiling-featured-speaker={featuredSpeakerId ?? ""}
       data-mobile-primary={primaryTile.key}
       data-mobile-primary-kind={primaryTile.kind}
+      data-mobile-primary-ids={primaryIds.join(",")}
+      data-mobile-room-tiling-primary-ids={primaryIds.join(",")}
       data-mobile-rail-count={0}
       data-mobile-visible-count={mobileRoomTilingBase.visibleTileCount}
       data-mobile-hidden-count={hiddenParticipantsCount}
       data-mobile-max-tiles={MAX_MOBILE_VISIBLE_TILES}
       data-mobile-visible-ids={visibleRemoteIds.join(",")}
+      data-mobile-room-tiling-visible-ids={visibleRemoteIds.join(",")}
       data-mobile-hidden-ids={hiddenRemoteIds.join(",")}
+      data-mobile-room-tiling-hidden-ids={hiddenRemoteIds.join(",")}
       data-mobile-warm-ids={warmRemoteIds.join(",")}
+      data-mobile-room-tiling-warm-ids={warmRemoteIds.join(",")}
+      data-mobile-warm-hold={MOBILE_RECENTLY_VISIBLE_WARM_HOLD_MS}
+      data-mobile-room-tiling-warm-hold={MOBILE_RECENTLY_VISIBLE_WARM_HOLD_MS}
+      data-mobile-warm-reasons={roomTilingWarmReasonsJson}
+      data-mobile-room-tiling-warm-reasons={roomTilingWarmReasonsJson}
+      data-mobile-room-tiling-scores={roomTilingScoresJson}
       data-mobile-warm-count={warmRemoteIds.length}
       data-mobile-total-people={totalPeople}
       data-mobile-grid-cols={mobileGridLayout.cols}

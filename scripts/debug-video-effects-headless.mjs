@@ -65,6 +65,37 @@ const fakeVideoFps = parsePositiveInteger(
 const forceDarkVideoProbe = /^(1|true|yes)$/i.test(
   process.env.CONCLAVE_FORCE_DARK_VIDEO_PROBE ?? "",
 );
+const headlessMobileViewport = /^(1|true|yes)$/i.test(
+  process.env.CONCLAVE_HEADLESS_MOBILE ?? "",
+);
+const headlessViewportWidth = parsePositiveInteger(
+  process.env.CONCLAVE_HEADLESS_VIEWPORT_WIDTH,
+  headlessMobileViewport ? 390 : 1440,
+);
+const headlessViewportHeight = parsePositiveInteger(
+  process.env.CONCLAVE_HEADLESS_VIEWPORT_HEIGHT,
+  headlessMobileViewport ? 844 : 900,
+);
+const headlessDeviceScaleFactorRaw = Number(
+  process.env.CONCLAVE_HEADLESS_DEVICE_SCALE_FACTOR ??
+    (headlessMobileViewport ? 2 : 1),
+);
+const headlessDeviceScaleFactor =
+  Number.isFinite(headlessDeviceScaleFactorRaw) &&
+  headlessDeviceScaleFactorRaw > 0
+    ? headlessDeviceScaleFactorRaw
+    : headlessMobileViewport
+      ? 2
+      : 1;
+const headlessEmulateMobile = /^(1|true|yes)$/i.test(
+  process.env.CONCLAVE_HEADLESS_EMULATE_MOBILE ??
+    (headlessMobileViewport ? "1" : "0"),
+);
+const headlessTouchEnabled = /^(1|true|yes)$/i.test(
+  process.env.CONCLAVE_HEADLESS_TOUCH ??
+    (headlessMobileViewport ? "1" : "0"),
+);
+const headlessWindowSize = `${headlessViewportWidth},${headlessViewportHeight}`;
 const defaultFaceFilterLabels = expectFaceLandmarks
   ? [
       "Sparkles",
@@ -694,7 +725,8 @@ const openMeetingEffectsPanel = async (cdp, label = "meeting effects panel") => 
       const button = Array.from(document.querySelectorAll("button")).find(
         (candidate) =>
           (normalize(candidate.getAttribute("aria-label")) === "Backgrounds and effects" ||
-            normalize(candidate.textContent) === "Backgrounds and effects") &&
+            normalize(candidate.textContent) === "Backgrounds and effects" ||
+            normalize(candidate.textContent).startsWith("Backgrounds and effects")) &&
           !candidate.disabled
       );
       if (!button) return false;
@@ -713,7 +745,8 @@ const openMeetingEffectsPanel = async (cdp, label = "meeting effects panel") => 
         const button = Array.from(document.querySelectorAll("button")).find(
           (candidate) =>
             normalize(candidate.getAttribute("aria-label")) === "Backgrounds and effects" ||
-            normalize(candidate.textContent) === "Backgrounds and effects"
+            normalize(candidate.textContent) === "Backgrounds and effects" ||
+            normalize(candidate.textContent).startsWith("Backgrounds and effects")
         );
         return Boolean(button && !button.disabled);
       })()`,
@@ -892,15 +925,21 @@ const dragButtonToCorner = async (cdp, label, corner) => {
 
 const collectLayoutStateExpression = `(() => {
   const grid = document.querySelector("[data-meet-view-layout]");
-  const attrs = grid
-    ? Object.fromEntries(Array.from(grid.attributes)
+  const mobileGrid = document.querySelector("[data-mobile-room-tiling-source='client']");
+  const layoutRoot = grid ?? mobileGrid;
+  const attrs = layoutRoot
+    ? Object.fromEntries(Array.from(layoutRoot.attributes)
         .filter((attr) =>
           attr.name.startsWith("data-meet-view") ||
-          attr.name.startsWith("data-meet-room-tiling")
+          attr.name.startsWith("data-meet-room-tiling") ||
+          attr.name.startsWith("data-mobile")
         )
         .map((attr) => [attr.name, attr.value]))
     : null;
-  const tiles = Array.from(document.querySelectorAll(".acm-video-tile")).map((tile, index) => {
+  const tileSelector = grid
+    ? ".acm-video-tile"
+    : "[data-mobile-grid-tile] > .mobile-tile, .mobile-grid-tile > .mobile-tile";
+  const tiles = Array.from(document.querySelectorAll(tileSelector)).map((tile, index) => {
     const rect = tile.getBoundingClientRect();
     const tileStyle = getComputedStyle(tile);
     const videos = Array.from(tile.querySelectorAll("video")).map((video) => {
@@ -940,6 +979,7 @@ const collectLayoutStateExpression = `(() => {
   });
   return {
     url: location.href,
+    layoutKind: grid ? "desktop" : mobileGrid ? "mobile" : "unknown",
     attrs,
     roomTilingDebug: typeof window.__conclaveGetMeetRoomTilingDebug === "function"
       ? window.__conclaveGetMeetRoomTilingDebug()
@@ -966,6 +1006,112 @@ const collectLayoutState = async (cdp, event) => {
     );
   }
   return state;
+};
+
+const collectMobileRoomTilingProbe = async (cdp, event) => {
+  const probe = await waitFor(
+    cdp,
+    event,
+    `(() => {
+      const root = document.querySelector("[data-mobile-room-tiling-source='client']");
+      if (!root) return false;
+      const attrs = Object.fromEntries(
+        Array.from(root.attributes)
+          .filter((attr) => attr.name.startsWith("data-mobile"))
+          .map((attr) => [attr.name, attr.value])
+      );
+      const parseJson = (value, fallback) => {
+        try {
+          return JSON.parse(value || "");
+        } catch {
+          return fallback;
+        }
+      };
+      const debug = typeof window.__conclaveGetMeetRoomTilingDebug === "function"
+        ? window.__conclaveGetMeetRoomTilingDebug()
+        : null;
+      const current = debug?.current;
+      const tileRects = Array.from(
+        document.querySelectorAll("[data-mobile-grid-tile]")
+      ).map((tile) => {
+        const rect = tile.getBoundingClientRect();
+        return {
+          id: tile.getAttribute("data-mobile-grid-tile") || "",
+          width: Math.round(rect.width),
+          height: Math.round(rect.height),
+          visible:
+            rect.width > 2 &&
+            rect.height > 2 &&
+            getComputedStyle(tile).display !== "none" &&
+            getComputedStyle(tile).visibility !== "hidden",
+        };
+      });
+      const visibleTiles = tileRects.filter((tile) => tile.visible);
+      const scores = parseJson(attrs["data-mobile-room-tiling-scores"], []);
+      const warmReasons = parseJson(attrs["data-mobile-warm-reasons"], {});
+      const primaryIds = (attrs["data-mobile-primary-ids"] || "")
+        .split(",")
+        .filter(Boolean);
+      const gridTileIds = (attrs["data-mobile-grid-visible-tile-ids"] || "")
+        .split(",")
+        .filter(Boolean);
+      const ok =
+        attrs["data-mobile-room-tiling-source"] === "client" &&
+        attrs["data-mobile-room-tiling-metadata-interval"] === "200" &&
+        attrs["data-mobile-room-tiling-promote-delay"] === "220" &&
+        attrs["data-mobile-room-tiling-min-switch-interval"] === "2200" &&
+        attrs["data-mobile-max-tiles"] === "9" &&
+        attrs["data-mobile-warm-hold"] === "3500" &&
+        Number(attrs["data-mobile-visible-count"] || 0) >= 1 &&
+        Number(attrs["data-mobile-total-people"] || 0) >= 1 &&
+        Number(attrs["data-mobile-grid-cols"] || 0) >= 1 &&
+        Number(attrs["data-mobile-grid-rows"] || 0) >= 1 &&
+        primaryIds.length >= 1 &&
+        gridTileIds.length >= 1 &&
+        visibleTiles.length >= 1 &&
+        scores.every((item, index) =>
+          typeof item.id === "string" &&
+          item.rank === index &&
+          typeof item.score === "number" &&
+          typeof item.visible === "boolean" &&
+          typeof item.hidden === "boolean" &&
+          typeof item.warm === "boolean" &&
+          Array.isArray(item.warmReasons)
+        ) &&
+        warmReasons &&
+        typeof warmReasons === "object" &&
+        debug?.intervalMs === 200 &&
+        Number(debug?.sequence || 0) >= 1 &&
+        Array.isArray(debug?.history) &&
+        debug.history.length >= 1 &&
+        current?.source === "client" &&
+        current?.intervalMs === 200 &&
+        current?.promoteDelayMs === 220 &&
+        current?.minSwitchIntervalMs === 2200 &&
+        current?.requestedMode === "auto" &&
+        ["solo", "tiled"].includes(current?.renderedMode) &&
+        current?.dynamicCrop === false &&
+        Array.isArray(current?.primaryIds) &&
+        current.primaryIds.length >= 1 &&
+        Number(current?.counts?.maxTiles || 0) === 9 &&
+        Number(current?.counts?.totalGrid || 0) >= 1 &&
+        Number(current?.layout?.tileWidth || 0) > 0 &&
+        Number(current?.layout?.tileHeight || 0) > 0 &&
+        Array.isArray(current?.layout?.positions) &&
+        current.layout.positions.length >= 1 &&
+        current?.signature?.length > 20;
+      return ok ? {
+        ok,
+        attrs,
+        tileRects,
+        current,
+        historyLength: debug.history.length,
+      } : false;
+    })()`,
+    10000,
+  );
+  emit(event, probe);
+  return probe;
 };
 
 const collectStateExpression = `(() => {
@@ -1330,6 +1476,12 @@ const percentile = (values, ratio) => {
 
 const getEffectSwitchLatencyQuality = (logs, state, label, options = {}) => {
   const samples = parseEffectSwitchLatencyLogs(logs, options);
+  const requiredSampleCount = Math.max(
+    1,
+    Number.isFinite(Number(options.minSamples))
+      ? Number(options.minSamples)
+      : minEffectSwitchLatencySamples,
+  );
   const visibleLatencies = samples
     .map((sample) => sample.firstVisibleLatencyMs)
     .filter((value) => Number.isFinite(value));
@@ -1349,7 +1501,7 @@ const getEffectSwitchLatencyQuality = (logs, state, label, options = {}) => {
   const deliveredWithinBudget =
     maxDeliveredLatencyMs === null ||
     maxDeliveredLatencyMs <= maxEffectSwitchDeliveredLatencyMs;
-  const enoughSamples = samples.length >= minEffectSwitchLatencySamples;
+  const enoughSamples = samples.length >= requiredSampleCount;
   const slowSamples = samples.filter((sample) => {
     const visibleSlow =
       Number.isFinite(sample.firstVisibleLatencyMs) &&
@@ -1367,7 +1519,8 @@ const getEffectSwitchLatencyQuality = (logs, state, label, options = {}) => {
       deliveredWithinBudget &&
       !panelPending,
     sampleCount: samples.length,
-    minEffectSwitchLatencySamples,
+    minEffectSwitchLatencySamples: requiredSampleCount,
+    defaultMinEffectSwitchLatencySamples: minEffectSwitchLatencySamples,
     maxEffectSwitchVisibleLatencyMs,
     maxEffectSwitchDeliveredLatencyMs,
     maxVisibleLatencyMs,
@@ -2188,7 +2341,7 @@ const run = async () => {
     "--disable-extensions",
     "--disable-sync",
     "--disable-features=MediaRouter",
-    "--window-size=1440,900",
+    `--window-size=${headlessWindowSize}`,
     "--autoplay-policy=no-user-gesture-required",
     "--use-fake-device-for-media-stream",
     "--use-fake-ui-for-media-stream",
@@ -2209,6 +2362,13 @@ const run = async () => {
     },
     url,
     forceDarkVideoProbe,
+    viewport: {
+      width: headlessViewportWidth,
+      height: headlessViewportHeight,
+      deviceScaleFactor: headlessDeviceScaleFactor,
+      mobile: headlessEmulateMobile,
+      touch: headlessTouchEnabled,
+    },
     command: `${shellEscape(chromePath)} ${args.map(shellEscape).join(" ")}`,
   });
 
@@ -2253,13 +2413,13 @@ const run = async () => {
     await cdp.send("Log.enable");
     await cdp.send("Page.enable");
     await cdp.send("Emulation.setDeviceMetricsOverride", {
-      width: 1440,
-      height: 900,
-      deviceScaleFactor: 1,
-      mobile: false,
+      width: headlessViewportWidth,
+      height: headlessViewportHeight,
+      deviceScaleFactor: headlessDeviceScaleFactor,
+      mobile: headlessEmulateMobile,
     });
     await cdp.send("Emulation.setTouchEmulationEnabled", {
-      enabled: false,
+      enabled: headlessTouchEnabled,
     });
     await cdp.send("Page.setLifecycleEventsEnabled", { enabled: true }).catch(
       () => {},
@@ -2382,13 +2542,28 @@ const run = async () => {
       "meeting surface",
       `(() => {
         const hasGrid = Boolean(document.querySelector("[data-meet-view-layout]"));
-        const hasEffectsButton = Array.from(document.querySelectorAll("button")).some(
-          (button) => (button.getAttribute("aria-label") || "").replace(/\\s+/g, " ").trim() === "Backgrounds and effects"
+        const hasMobileGrid = Boolean(
+          document.querySelector("[data-mobile-room-tiling-source='client']")
         );
-        return hasGrid || hasEffectsButton;
+        const hasEffectsButton = Array.from(document.querySelectorAll("button")).some(
+          (button) => {
+            const label = (button.getAttribute("aria-label") || "")
+              .replace(/\\s+/g, " ")
+              .trim();
+            const text = (button.textContent || "").replace(/\\s+/g, " ").trim();
+            return label === "Backgrounds and effects" ||
+              text === "Backgrounds and effects" ||
+              label === "More options";
+          }
+        );
+        return hasGrid || hasMobileGrid || hasEffectsButton;
       })()`,
     );
     let state = await collectState(cdp, "state_after_join");
+    if (headlessMobileViewport) {
+      await collectMobileRoomTilingProbe(cdp, "mobile_room_tiling_after_join");
+      await collectLayoutState(cdp, "mobile_layout_after_join");
+    }
     if (
       state.meetVideoDebug?.isCameraOff !== true ||
       state.meetVideoDebug?.videoProducer !== null
@@ -2427,6 +2602,13 @@ const run = async () => {
       await sleep(3000);
       state = await collectState(cdp, "state_after_camera_toggle");
     }
+    if (headlessMobileViewport) {
+      await collectMobileRoomTilingProbe(
+        cdp,
+        "mobile_room_tiling_after_camera_toggle",
+      );
+      await collectLayoutState(cdp, "mobile_layout_after_camera_toggle");
+    }
     cameraToggleLivePrewarmRequested = cdp.logs
       .slice(cameraToggleLivePrewarmLogStartIndex)
       .some(
@@ -2447,7 +2629,9 @@ const run = async () => {
       done: cameraToggleLivePrewarmDone,
     });
 
-    await ensureMeetingToolbarControls(cdp);
+    if (!headlessMobileViewport) {
+      await ensureMeetingToolbarControls(cdp);
+    }
     const effectsPanelOpenLogStartIndex = cdp.logs.length;
     await openMeetingEffectsPanel(cdp, "effects panel");
     await collectState(cdp, "state_panel_open");
@@ -2714,6 +2898,13 @@ const run = async () => {
       "rapid start producer uses processed effects",
       "processed",
     );
+    if (headlessMobileViewport) {
+      await collectMobileRoomTilingProbe(
+        cdp,
+        "mobile_room_tiling_after_effects_output",
+      );
+      await collectLayoutState(cdp, "mobile_layout_after_effects_output");
+    }
     emit("camera_off_rapid_effect_start_probe", {
       status: state.panelAttrs?.["data-video-effects-status"],
       activeCount: state.panelAttrs?.["data-video-effects-active-count"],
@@ -2739,6 +2930,111 @@ const run = async () => {
       temporalMask: state.panelStats?.temporalMask ?? null,
       adaptation: state.panelStats?.adaptation ?? null,
     });
+
+    if (headlessMobileViewport && headlessProbe === "effects") {
+      const badLogs = cdp.logs.filter((log) =>
+        badLogPatterns.some((pattern) => pattern.test(log.text)),
+      );
+      const prewarmDoneKinds = new Set(
+        cdp.logs
+          .filter((log) => /processor_worker_prewarm_done/.test(log.text))
+          .map((log) => {
+            const match = log.text.match(/"kind":"([^"]+)"/);
+            return match?.[1] ?? null;
+          })
+          .filter(Boolean),
+      );
+      const prewarmSuppressedKinds = new Set(
+        cdp.logs
+          .filter((log) =>
+            /processor_worker_prewarm_(?:suppressed|cancelled)_busy/.test(
+              log.text,
+            ),
+          )
+          .map((log) => {
+            const match = log.text.match(/"kind":"([^"]+)"/);
+            return match?.[1] ?? null;
+          })
+          .filter(Boolean),
+      );
+      const prewarmFailureLogs = cdp.logs.filter((log) =>
+        /processor_worker_prewarm_failed|output_writer_worker_prewarm_failed/.test(
+          log.text,
+        ),
+      );
+      const missingPrewarmKinds = ["segmentation", "face"].filter(
+        (kind) =>
+          !prewarmDoneKinds.has(kind) && !prewarmSuppressedKinds.has(kind),
+      );
+      const outputWriterPrewarmDone = cdp.logs.some((log) =>
+        /output_writer_worker_prewarm_done/.test(log.text),
+      );
+      const outputWriterPrewarmSuppressed = cdp.logs.some((log) =>
+        /output_writer_worker_prewarm_suppressed_busy/.test(log.text),
+      );
+      const mobileSwitchLatencyQuality = getEffectSwitchLatencyQuality(
+        cdp.logs,
+        state,
+        "mobile-effects",
+        {
+          fromIndex: rapidEffectSwitchLogIndex,
+          minSamples: Math.min(minEffectSwitchLatencySamples, 3),
+        },
+      );
+      emit("mobile_effects_quality_probe", {
+        ok:
+          badLogs.length === 0 &&
+          prewarmFailureLogs.length === 0 &&
+          missingPrewarmKinds.length === 0 &&
+          (outputWriterPrewarmDone || outputWriterPrewarmSuppressed) &&
+          cameraToggleLivePrewarmRequested &&
+          cameraToggleLivePrewarmDone &&
+          mobileSwitchLatencyQuality.ok,
+        badLogs,
+        doneKinds: Array.from(prewarmDoneKinds),
+        suppressedKinds: Array.from(prewarmSuppressedKinds),
+        missingKinds: missingPrewarmKinds,
+        outputWriterDone: outputWriterPrewarmDone,
+        outputWriterSuppressed: outputWriterPrewarmSuppressed,
+        cameraToggleLivePrewarmRequested,
+        cameraToggleLivePrewarmDone,
+        effectSwitchLatencyQuality: mobileSwitchLatencyQuality,
+      });
+      if (
+        state.panelAttrs?.["data-video-effects-output-published"] !== "true" ||
+        state.panelAttrs?.["data-video-effects-status"] !== "running" ||
+        Number(
+          state.panelAttrs?.["data-video-effects-black-output-count"] ?? 1,
+        ) !== 0 ||
+        badLogs.length > 0 ||
+        prewarmFailureLogs.length > 0 ||
+        missingPrewarmKinds.length > 0 ||
+        (!outputWriterPrewarmDone && !outputWriterPrewarmSuppressed) ||
+        !cameraToggleLivePrewarmRequested ||
+        !cameraToggleLivePrewarmDone ||
+        !mobileSwitchLatencyQuality.ok
+      ) {
+        throw new Error(
+          `Mobile effects headless regression failed: ${JSON.stringify({
+            badLogs,
+            prewarmFailureLogs,
+            missingPrewarmKinds,
+            outputWriterPrewarmDone,
+            outputWriterPrewarmSuppressed,
+            cameraToggleLivePrewarmRequested,
+            cameraToggleLivePrewarmDone,
+            mobileSwitchLatencyQuality,
+            status: state.panelAttrs?.["data-video-effects-status"],
+            outputPublished:
+              state.panelAttrs?.["data-video-effects-output-published"],
+            blackOutputFrameCount:
+              state.panelAttrs?.["data-video-effects-black-output-count"],
+          })}`,
+        );
+      }
+      emit("result", { ok: true, probe: headlessProbe, mobile: true });
+      return;
+    }
 
     await clickButton(cdp, "Appearance");
     await clickButton(cdp, "Adjust video lighting");
