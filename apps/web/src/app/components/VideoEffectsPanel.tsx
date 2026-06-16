@@ -3,9 +3,9 @@
 import {
   Check,
   ImagePlus,
+  Layers,
   LoaderCircle,
   Sparkles,
-  SlidersHorizontal,
   WandSparkles,
   X,
 } from "lucide-react";
@@ -384,7 +384,7 @@ function VideoEffectsPreview({
         </div>
       ) : null}
       <div className="absolute bottom-4 right-4 flex h-12 w-12 items-center justify-center rounded-[14px] bg-[#d7e3f0] text-[#202124]">
-        <SlidersHorizontal size={22} strokeWidth={1.75} />
+        <WandSparkles size={22} strokeWidth={1.75} />
       </div>
     </div>
   );
@@ -445,6 +445,10 @@ export default function VideoEffectsPanel({
     () => (!showFilters ? TABS.filter((tab) => tab.id !== "filters") : TABS),
     [showFilters],
   );
+  const tabGridClassName =
+    availableTabs.length === 2
+      ? "grid grid-cols-2 border-b border-[#dadce0] px-6"
+      : "grid grid-cols-3 border-b border-[#dadce0] px-6";
   const backgroundOptionById = useMemo(
     () => new Map(BACKGROUND_EFFECTS.map((option) => [option.id, option])),
     [],
@@ -977,7 +981,7 @@ export default function VideoEffectsPanel({
           className="mt-3 flex w-full items-center justify-between rounded-[12px] bg-[#f1f3f4] px-3 py-2 text-[13px] font-medium text-[#202124] transition-colors hover:bg-[#e8eaed] disabled:cursor-not-allowed disabled:text-[#9aa0a6]"
         >
           <span className="flex items-center gap-2">
-            <SlidersHorizontal size={16} strokeWidth={1.75} />
+            <Layers size={16} strokeWidth={1.75} />
             Turn off visual effects
           </span>
           {displayedActiveCount > 0 ? (
@@ -1044,11 +1048,15 @@ export default function VideoEffectsPanel({
         ) : null}
       </div>
 
-      <div className="grid grid-cols-3 border-b border-[#dadce0] px-6">
+      <div className={tabGridClassName} role="tablist">
         {availableTabs.map((tab) => (
           <button
             key={tab.id}
             type="button"
+            role="tab"
+            aria-selected={activeTab === tab.id}
+            aria-controls={`video-effects-tabpanel-${tab.id}`}
+            id={`video-effects-tab-${tab.id}`}
             onClick={() => setActiveTab(tab.id)}
             className={`border-b-2 px-2 py-3 text-[13px] font-medium transition-colors ${
               activeTab === tab.id
@@ -1063,7 +1071,11 @@ export default function VideoEffectsPanel({
 
       <div className="min-h-0 flex-1 overflow-y-auto pb-6 [scrollbar-width:thin] [scrollbar-color:rgba(60,64,67,0.28)_transparent]">
         {activeTab === "backgrounds" ? (
-          <>
+          <div
+            id="video-effects-tabpanel-backgrounds"
+            role="tabpanel"
+            aria-labelledby="video-effects-tab-backgrounds"
+          >
             {!cameraPermissionBlocked ? (
               <Section label="Personal">
                 <input
@@ -1220,11 +1232,16 @@ export default function VideoEffectsPanel({
                 </div>
               </Section>
             ))}
-          </>
+          </div>
         ) : null}
 
-        {activeTab === "filters"
-          ? filterGroups.map(([label, options]) => (
+        {activeTab === "filters" ? (
+          <div
+            id="video-effects-tabpanel-filters"
+            role="tabpanel"
+            aria-labelledby="video-effects-tab-filters"
+          >
+            {filterGroups.map(([label, options]) => (
               <Section key={label} label={label}>
                 <div className="grid grid-cols-2 gap-2">
                   {options.map((option) => (
@@ -1243,11 +1260,16 @@ export default function VideoEffectsPanel({
                   ))}
                 </div>
               </Section>
-            ))
-          : null}
+            ))}
+          </div>
+        ) : null}
 
         {activeTab === "appearance" ? (
-          <>
+          <div
+            id="video-effects-tabpanel-appearance"
+            role="tabpanel"
+            aria-labelledby="video-effects-tab-appearance"
+          >
             {studioLookControlVisible ? (
               <Section label="Touch-up appearance">
                 <div className="grid gap-1">
@@ -1312,7 +1334,7 @@ export default function VideoEffectsPanel({
                   </Section>
                 ))
               : null}
-          </>
+          </div>
         ) : null}
       </div>
     </aside>

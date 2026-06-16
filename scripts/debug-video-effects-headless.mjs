@@ -217,6 +217,7 @@ const minEffectsOutputWidth = Number(
       ? Math.round(minEffectsOutputHeight * (fakeVideoWidth / fakeVideoHeight))
       : 0),
 );
+const headlessProbe = process.env.CONCLAVE_HEADLESS_PROBE ?? "all";
 
 const emit = (event, payload = {}) => {
   process.stdout.write(
@@ -1989,6 +1990,13 @@ const runPrejoinPermissionDeniedEffectsProbe = async (cdp, prejoinUrl) => {
     "prejoin permission-blocked effects panel opens",
     `(() => {
       const panel = document.querySelector('[data-testid="video-effects-panel"]');
+      const tablist = panel?.querySelector('[role="tablist"]');
+      const tabs = Array.from(panel?.querySelectorAll('[role="tab"]') ?? []);
+      const selectedTab = tabs.find((tab) => tab.getAttribute("aria-selected") === "true");
+      const activePanel = panel?.querySelector('[role="tabpanel"]');
+      const turnOffButton = Array.from(panel?.querySelectorAll("button") ?? []).find(
+        (button) => (button.textContent || "").replace(/\\s+/g, " ").trim().includes("Turn off visual effects")
+      );
       const meetDebug = window.__conclaveGetMeetVideoDebug?.();
       const bodyText = document.body?.innerText || "";
       const panelText = panel?.innerText || "";
@@ -1997,9 +2005,20 @@ const runPrejoinPermissionDeniedEffectsProbe = async (cdp, prejoinUrl) => {
         panel?.getAttribute("data-video-effects-output-published") === "false" &&
         panel?.getAttribute("data-video-effects-permission-locked") === "true" &&
         panel?.getAttribute("data-video-effects-filters-visible") === "false" &&
+        tablist?.className.includes("grid-cols-2") &&
+        tabs.length === 2 &&
+        tabs.map((tab) => (tab.textContent || "").replace(/\\s+/g, " ").trim()).join("|") === "Backgrounds|Appearance" &&
+        selectedTab?.textContent?.includes("Backgrounds") &&
+        selectedTab?.getAttribute("aria-controls") === "video-effects-tabpanel-backgrounds" &&
+        activePanel?.id === "video-effects-tabpanel-backgrounds" &&
+        activePanel?.getAttribute("aria-labelledby") === "video-effects-tab-backgrounds" &&
+        turnOffButton instanceof HTMLButtonElement &&
+        turnOffButton.disabled &&
+        turnOffButton.getAttribute("title") === "No effects applied" &&
         bodyText.includes("Camera is blocked") &&
         panelText.includes("Backgrounds") &&
         panelText.includes("Appearance") &&
+        !panelText.includes("Filters") &&
         panelText.includes("Slight blur") &&
         panelText.includes("Blur") &&
         !panelText.includes("Upload image") &&
@@ -2033,9 +2052,17 @@ const runPrejoinPermissionDeniedEffectsProbe = async (cdp, prejoinUrl) => {
     "prejoin permission-blocked appearance matches Meet",
     `(() => {
       const panel = document.querySelector('[data-testid="video-effects-panel"]');
+      const selectedTab = Array.from(panel?.querySelectorAll('[role="tab"]') ?? []).find(
+        (tab) => tab.getAttribute("aria-selected") === "true"
+      );
+      const activePanel = panel?.querySelector('[role="tabpanel"]');
       const panelText = panel?.innerText || "";
       return panel?.getAttribute("data-video-effects-permission-locked") === "true" &&
         panel?.getAttribute("data-video-effects-filters-visible") === "false" &&
+        selectedTab?.textContent?.includes("Appearance") &&
+        selectedTab?.getAttribute("aria-controls") === "video-effects-tabpanel-appearance" &&
+        activePanel?.id === "video-effects-tabpanel-appearance" &&
+        activePanel?.getAttribute("aria-labelledby") === "video-effects-tab-appearance" &&
         panelText.includes("Adjust video lighting") &&
         panelText.includes("Makes it easier to see you against a bright background") &&
         panelText.includes("Framing") &&
@@ -2317,6 +2344,24 @@ const run = async () => {
     }
 
     await runPrejoinPermissionDeniedEffectsProbe(cdp, prejoinUrl);
+    if (headlessProbe === "permission-blocked-effects") {
+      const badLogs = cdp.logs.filter((log) =>
+        badLogPatterns.some((pattern) => pattern.test(log.text)),
+      );
+      if (badLogs.length > 0) {
+        throw new Error(
+          `Permission-blocked effects probe logged regressions: ${JSON.stringify({
+            badLogs,
+          })}`,
+        );
+      }
+      emit("result", { ok: true, probe: headlessProbe });
+      return;
+    }
+    if (headlessProbe !== "all") {
+      throw new Error(`Unknown CONCLAVE_HEADLESS_PROBE: ${headlessProbe}`);
+    }
+
     await runPrejoinCameraOffJoinProbe(cdp, prejoinUrl);
     await runPrejoinHandoffProbe(cdp, prejoinUrl);
 
