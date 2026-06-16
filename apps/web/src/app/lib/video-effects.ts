@@ -59,6 +59,11 @@ export type BackgroundEffectId =
   | "shelf-with-plants"
   | "stylish-home-office"
   | "stylish-living-room-couch"
+  | "cyberpunk-penthouse"
+  | "tropical-beach"
+  | "accessible-patio"
+  | "gaming-room"
+  | "rainy-conservatory"
   | "gradient"
   | "custom";
 
@@ -160,6 +165,11 @@ const BACKGROUND_EFFECT_IDS = new Set<BackgroundEffectId>([
   "shelf-with-plants",
   "stylish-home-office",
   "stylish-living-room-couch",
+  "cyberpunk-penthouse",
+  "tropical-beach",
+  "accessible-patio",
+  "gaming-room",
+  "rainy-conservatory",
   "gradient",
   "custom",
 ]);
@@ -325,6 +335,11 @@ export const BACKGROUND_ASSET_PATHS = {
   "stylish-home-office": "/effects/backgrounds/stylish-home-office.webp",
   "stylish-living-room-couch":
     "/effects/backgrounds/stylish-living-room-couch.webp",
+  "cyberpunk-penthouse": "/effects/backgrounds/cyberpunk-penthouse.webp",
+  "tropical-beach": "/effects/backgrounds/tropical-beach.webp",
+  "accessible-patio": "/effects/backgrounds/accessible-patio.webp",
+  "gaming-room": "/effects/backgrounds/gaming-room.webp",
+  "rainy-conservatory": "/effects/backgrounds/rainy-conservatory.webp",
 } satisfies Partial<Record<BackgroundEffectId, string>>;
 
 export const getVideoEffectPreviewPath = <T extends string>(
@@ -387,6 +402,30 @@ export const BACKGROUND_EFFECTS: VideoEffectOption<BackgroundEffectId>[] = [
     icon: Waves,
     tone: "#155e75",
     motion: true,
+    category: "Immersive",
+  },
+  {
+    id: "cyberpunk-penthouse",
+    label: "Cyberpunk penthouse",
+    icon: Building2,
+    tone: "#7c3aed",
+    assetPath: BACKGROUND_ASSET_PATHS["cyberpunk-penthouse"],
+    category: "Immersive",
+  },
+  {
+    id: "gaming-room",
+    label: "Gaming room",
+    icon: ImagePlus,
+    tone: "#4f46e5",
+    assetPath: BACKGROUND_ASSET_PATHS["gaming-room"],
+    category: "Immersive",
+  },
+  {
+    id: "rainy-conservatory",
+    label: "Rainy conservatory",
+    icon: Leaf,
+    tone: "#0f766e",
+    assetPath: BACKGROUND_ASSET_PATHS["rainy-conservatory"],
     category: "Immersive",
   },
   {
@@ -558,11 +597,27 @@ export const BACKGROUND_EFFECTS: VideoEffectOption<BackgroundEffectId>[] = [
     category: "Nature",
   },
   {
+    id: "tropical-beach",
+    label: "Tropical beach",
+    icon: Waves,
+    tone: "#0e7490",
+    assetPath: BACKGROUND_ASSET_PATHS["tropical-beach"],
+    category: "Nature",
+  },
+  {
     id: "forest",
     label: "Forest light",
     icon: ImagePlus,
     tone: "#166534",
     assetPath: BACKGROUND_ASSET_PATHS.forest,
+    category: "Nature",
+  },
+  {
+    id: "accessible-patio",
+    label: "Accessible patio",
+    icon: Leaf,
+    tone: "#15803d",
+    assetPath: BACKGROUND_ASSET_PATHS["accessible-patio"],
     category: "Nature",
   },
   {
