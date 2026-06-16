@@ -1114,6 +1114,62 @@ const collectMobileRoomTilingProbe = async (cdp, event) => {
   return probe;
 };
 
+const collectMobileMoreMenuProbe = async (cdp, event) => {
+  const probe = await waitFor(
+    cdp,
+    event,
+    `(() => {
+      const normalize = (value) => (value || "").replace(/\\s+/g, " ").trim();
+      const moreButton = Array.from(document.querySelectorAll("button")).find(
+        (button) => normalize(button.getAttribute("aria-label")) === "More actions"
+      );
+      moreButton?.click();
+      const root = document.querySelector("[data-mobile-more-menu-state]");
+      if (!root || root.getAttribute("data-mobile-more-menu-state") !== "open") {
+        return false;
+      }
+      const actions = Array.from(
+        root.querySelectorAll("[data-mobile-more-action]")
+      ).map((button, index) => ({
+        index,
+        action: button.getAttribute("data-mobile-more-action") || "",
+        state: button.getAttribute("data-mobile-more-action-state") || "",
+        aria: normalize(button.getAttribute("aria-label")),
+        text: normalize(button.textContent),
+        pressed: button.getAttribute("aria-pressed"),
+        disabled: Boolean(button.disabled),
+      }));
+      const effects = actions.find((action) => action.action === "effects");
+      const ok =
+        root.getAttribute("data-mobile-video-effects-permission-blocked") === "false" &&
+        root.getAttribute("data-mobile-video-effects-active-count") === "0" &&
+        root.getAttribute("data-mobile-video-effects-open") === "false" &&
+        root.getAttribute("data-mobile-video-effects-state") === "Off" &&
+        actions[0]?.action === "effects" &&
+        actions[1]?.action === "participants" &&
+        actions[2]?.action === "settings" &&
+        effects?.state === "Off" &&
+        effects?.aria === "Backgrounds and effects, off" &&
+        /Backgrounds and effects/.test(effects?.text || "") &&
+        /Off/.test(effects?.text || "") &&
+        effects?.pressed === "false" &&
+        effects?.disabled === false;
+      return ok ? {
+        ok,
+        attrs: Object.fromEntries(
+          Array.from(root.attributes)
+            .filter((attr) => attr.name.startsWith("data-mobile"))
+            .map((attr) => [attr.name, attr.value])
+        ),
+        actions,
+      } : false;
+    })()`,
+    5000,
+  );
+  emit(event, probe);
+  return probe;
+};
+
 const collectStateExpression = `(() => {
   const normalize = (value) => (value || "").replace(/\\s+/g, " ").trim();
   const panel = document.querySelector('[data-testid="video-effects-panel"]');
@@ -2631,6 +2687,8 @@ const run = async () => {
 
     if (!headlessMobileViewport) {
       await ensureMeetingToolbarControls(cdp);
+    } else {
+      await collectMobileMoreMenuProbe(cdp, "mobile_more_menu_probe");
     }
     const effectsPanelOpenLogStartIndex = cdp.logs.length;
     await openMeetingEffectsPanel(cdp, "effects panel");

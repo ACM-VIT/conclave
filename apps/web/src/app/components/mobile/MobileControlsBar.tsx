@@ -12,7 +12,6 @@ import {
   MicOff,
   MoreVertical,
   Phone,
-  ScanFace,
   Settings,
   Smile,
   Users,
@@ -21,6 +20,7 @@ import {
   Monitor,
   Volume2,
   VolumeX,
+  WandSparkles,
   X,
   ShieldBan,
 } from "lucide-react";
@@ -251,6 +251,20 @@ function MobileControlsBar({
     Boolean(onToggleVideoEffects) &&
     !isGhostMode &&
     !isVideoEffectsPermissionBlocked;
+  const videoEffectsStatusLabel = isVideoEffectsPermissionBlocked
+    ? "Permission needed"
+    : hasActiveVideoEffects
+      ? `${activeVideoEffectsCount} active`
+      : isVideoEffectsOpen
+        ? "Open"
+        : "Off";
+  const videoEffectsAriaLabel = isVideoEffectsPermissionBlocked
+    ? "Backgrounds and effects, permission needed"
+    : hasActiveVideoEffects
+      ? `Backgrounds and effects, ${activeVideoEffectsCount} active`
+      : isVideoEffectsOpen
+        ? "Backgrounds and effects, open"
+        : "Backgrounds and effects, off";
 
   const baseButtonClass =
     "mobile-control-btn w-12 h-12 rounded-full flex items-center justify-center active:scale-95";
@@ -460,6 +474,12 @@ function MobileControlsBar({
     setIsBrowserSheetOpen(true);
   }, []);
 
+  const handleVideoEffectsClick = useCallback(() => {
+    if (!canOpenVideoEffects) return;
+    onToggleVideoEffects?.();
+    closeControlSheets();
+  }, [canOpenVideoEffects, closeControlSheets, onToggleVideoEffects]);
+
   const handleChatButtonClick = useCallback(() => {
     closeControlSheets();
     onToggleChat();
@@ -574,6 +594,13 @@ function MobileControlsBar({
       <div
         className="mobile-sheet-root z-40"
         data-state={isMoreMenuOpen ? "open" : "closed"}
+        data-mobile-more-menu-state={isMoreMenuOpen ? "open" : "closed"}
+        data-mobile-video-effects-state={videoEffectsStatusLabel}
+        data-mobile-video-effects-active-count={activeVideoEffectsCount}
+        data-mobile-video-effects-open={isVideoEffectsOpen ? "true" : "false"}
+        data-mobile-video-effects-permission-blocked={
+          isVideoEffectsPermissionBlocked ? "true" : "false"
+        }
         aria-hidden={!isMoreMenuOpen}
       >
         <div
@@ -600,6 +627,49 @@ function MobileControlsBar({
             </button>
           </div>
           <button
+            type="button"
+            role="menuitem"
+            aria-label={videoEffectsAriaLabel}
+            aria-pressed={isVideoEffectsOpen || hasActiveVideoEffects}
+            data-mobile-more-action="effects"
+            data-mobile-more-action-state={videoEffectsStatusLabel}
+            onClick={handleVideoEffectsClick}
+            disabled={!canOpenVideoEffects}
+            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-transform duration-150 touch-feedback ${
+              !canOpenVideoEffects
+                ? "opacity-30"
+                : isVideoEffectsOpen || hasActiveVideoEffects
+                  ? "text-[#F95F4A]"
+                  : "text-[#fafafa]"
+            } hover:bg-[#fafafa]/5 active:bg-[#fafafa]/10`}
+          >
+            <div
+              className={`h-9 w-9 rounded-xl border border-white/5 flex items-center justify-center ${
+                isVideoEffectsOpen || hasActiveVideoEffects
+                  ? "bg-[#F95F4A]/20"
+                  : "bg-[#2b2b2b]"
+              }`}
+            >
+              <WandSparkles className="w-4.5 h-4.5" />
+            </div>
+            <span className="text-sm font-medium">
+              Backgrounds and effects
+            </span>
+            <span
+              className={`ml-auto text-[11px] ${
+                hasActiveVideoEffects
+                  ? "font-semibold text-[#F95F4A]"
+                  : "font-medium text-[#fafafa]/56"
+              }`}
+            >
+              {videoEffectsStatusLabel}
+            </span>
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            data-mobile-more-action="participants"
+            data-mobile-more-action-state={String(pendingUsersCount)}
             onClick={() => {
               onToggleParticipants?.();
               setIsMoreMenuOpen(false);
@@ -617,6 +687,10 @@ function MobileControlsBar({
             )}
           </button>
           <button
+            type="button"
+            role="menuitem"
+            data-mobile-more-action="settings"
+            data-mobile-more-action-state="available"
             onClick={openSettingsSheet}
             className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-[#fafafa] hover:bg-[#fafafa]/5 active:bg-[#fafafa]/10 transition-transform duration-150 touch-feedback"
           >
@@ -624,49 +698,6 @@ function MobileControlsBar({
               <Settings className="w-4.5 h-4.5" />
             </div>
             <span className="text-sm font-medium">Settings</span>
-          </button>
-          <button
-            type="button"
-            aria-pressed={isVideoEffectsOpen || hasActiveVideoEffects}
-            onClick={() => {
-              if (!canOpenVideoEffects) return;
-              onToggleVideoEffects?.();
-              closeControlSheets();
-            }}
-            disabled={!canOpenVideoEffects}
-            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-transform duration-150 touch-feedback ${
-              !canOpenVideoEffects
-                ? "opacity-30"
-                : isVideoEffectsOpen || hasActiveVideoEffects
-                  ? "text-[#F95F4A]"
-                  : "text-[#fafafa]"
-            } hover:bg-[#fafafa]/5 active:bg-[#fafafa]/10`}
-          >
-            <div
-              className={`h-9 w-9 rounded-xl border border-white/5 flex items-center justify-center ${
-                isVideoEffectsOpen || hasActiveVideoEffects
-                  ? "bg-[#F95F4A]/20"
-                  : "bg-[#2b2b2b]"
-              }`}
-            >
-              <ScanFace className="w-4.5 h-4.5" />
-            </div>
-            <span className="text-sm font-medium">
-              Backgrounds and effects
-            </span>
-            {isVideoEffectsPermissionBlocked ? (
-              <span className="ml-auto text-[11px] text-[#fafafa]/56">
-                Permission needed
-              </span>
-            ) : hasActiveVideoEffects ? (
-              <span className="ml-auto flex h-5 min-w-5 items-center justify-center rounded-full bg-[#F95F4A] px-1.5 text-[11px] font-semibold text-white">
-                {activeVideoEffectsCount}
-              </span>
-            ) : (
-              <span className="ml-auto text-[11px] text-[#fafafa]/56">
-                {isVideoEffectsOpen ? "Open" : "Off"}
-              </span>
-            )}
           </button>
           <button
               onClick={() => {
