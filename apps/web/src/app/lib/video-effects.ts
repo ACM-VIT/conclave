@@ -81,6 +81,8 @@ export type FaceFilterId =
   | "cute-glasses"
   | "cyber-glasses"
   | "cat-ears-glasses"
+  | "bunny"
+  | "working-bunny"
   | "bunny-ears"
   | "beach-day"
   | "party-hat"
@@ -88,6 +90,10 @@ export type FaceFilterId =
   | "trucker-hat"
   | "winter-hat-scarf"
   | "wizard-hat"
+  | "glowing-hat"
+  | "noogler-hat"
+  | "intern-hat"
+  | "dia-de-los-muertos"
   | "butterflies"
   | "cute-alien"
   | "alien";
@@ -192,6 +198,8 @@ const FACE_FILTER_IDS = new Set<FaceFilterId>([
   "cute-glasses",
   "cyber-glasses",
   "cat-ears-glasses",
+  "bunny",
+  "working-bunny",
   "bunny-ears",
   "beach-day",
   "party-hat",
@@ -199,6 +207,10 @@ const FACE_FILTER_IDS = new Set<FaceFilterId>([
   "trucker-hat",
   "winter-hat-scarf",
   "wizard-hat",
+  "glowing-hat",
+  "noogler-hat",
+  "intern-hat",
+  "dia-de-los-muertos",
   "butterflies",
   "cute-alien",
   "alien",
@@ -730,6 +742,20 @@ export const FACE_FILTERS: VideoEffectOption<FaceFilterId>[] = [
     category: "Costumes",
   },
   {
+    id: "bunny",
+    label: "Bunny",
+    icon: Rabbit,
+    tone: "#f472b6",
+    category: "Costumes",
+  },
+  {
+    id: "working-bunny",
+    label: "Working bunny",
+    icon: Rabbit,
+    tone: "#2563eb",
+    category: "Costumes",
+  },
+  {
     id: "cute-alien",
     label: "Cute alien",
     icon: Rocket,
@@ -765,6 +791,27 @@ export const FACE_FILTERS: VideoEffectOption<FaceFilterId>[] = [
     category: "Costumes",
   },
   {
+    id: "glowing-hat",
+    label: "Glowing hat",
+    icon: Sparkles,
+    tone: "#eab308",
+    category: "Costumes",
+  },
+  {
+    id: "noogler-hat",
+    label: "Noogler hat",
+    icon: HatGlasses,
+    tone: "#f97316",
+    category: "Costumes",
+  },
+  {
+    id: "intern-hat",
+    label: "Intern hat",
+    icon: HatGlasses,
+    tone: "#475569",
+    category: "Costumes",
+  },
+  {
     id: "winter-hat-scarf",
     label: "Winter hat and scarf",
     icon: Snowflake,
@@ -776,6 +823,13 @@ export const FACE_FILTERS: VideoEffectOption<FaceFilterId>[] = [
     label: "Wizard hat",
     icon: WandSparkles,
     tone: "#7c3aed",
+    category: "Costumes",
+  },
+  {
+    id: "dia-de-los-muertos",
+    label: "Dia de los Muertos",
+    icon: Crown,
+    tone: "#c2410c",
     category: "Costumes",
   },
   {

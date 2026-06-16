@@ -6757,6 +6757,111 @@ const drawFaceFilter = (
     });
     ctx.fillStyle = "rgba(255,255,255,0.94)";
     fillRoundRect(ctx, headCenterX - faceWidth * 0.28, earBaseY - faceWidth * 0.08, faceWidth * 0.56, faceWidth * 0.1, 18);
+  } else if (filter === "bunny") {
+    const earBaseY = headTopY + faceWidth * 0.06;
+    const earH = faceWidth * 0.56;
+    const earW = faceWidth * 0.16;
+    const noseX = lerp(noseLocal.x, mouthCenterLocal.x, 0.28);
+    const noseY = lerp(noseLocal.y, mouthCenterLocal.y, 0.34);
+    beginProbe({
+      left: headCenterX - faceWidth * 0.44,
+      right: headCenterX + faceWidth * 0.44,
+      top: earBaseY - earH - faceWidth * 0.08,
+      bottom: mouthCenterLocal.y + faceWidth * 0.22,
+    });
+    [
+      { x: headCenterX - faceWidth * 0.2, rotate: -0.2 },
+      { x: headCenterX + faceWidth * 0.2, rotate: 0.2 },
+    ].forEach((ear) => {
+      ctx.save();
+      ctx.translate(ear.x, earBaseY - earH * 0.48);
+      ctx.rotate(ear.rotate);
+      ctx.fillStyle = "rgba(255,255,255,0.96)";
+      ctx.beginPath();
+      ctx.ellipse(0, 0, earW, earH * 0.5, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "rgba(251,207,232,0.82)";
+      ctx.beginPath();
+      ctx.ellipse(0, earH * 0.04, earW * 0.5, earH * 0.34, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    });
+    ctx.fillStyle = "rgba(255,255,255,0.94)";
+    fillRoundRect(ctx, headCenterX - faceWidth * 0.28, earBaseY - faceWidth * 0.08, faceWidth * 0.56, faceWidth * 0.1, 18);
+    ctx.fillStyle = "rgba(244,114,182,0.95)";
+    ctx.beginPath();
+    ctx.moveTo(noseX, noseY + faceWidth * 0.045);
+    ctx.bezierCurveTo(noseX - faceWidth * 0.08, noseY, noseX - faceWidth * 0.045, noseY - faceWidth * 0.08, noseX, noseY - faceWidth * 0.03);
+    ctx.bezierCurveTo(noseX + faceWidth * 0.045, noseY - faceWidth * 0.08, noseX + faceWidth * 0.08, noseY, noseX, noseY + faceWidth * 0.045);
+    ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle = "rgba(255,255,255,0.86)";
+    ctx.lineWidth = Math.max(2, faceWidth * 0.014);
+    [-1, 1].forEach((side) => {
+      for (let whisker = -1; whisker <= 1; whisker += 1) {
+        const startY = noseY + faceWidth * 0.02 + whisker * faceWidth * 0.035;
+        const endY = startY + whisker * faceWidth * 0.022;
+        ctx.beginPath();
+        ctx.moveTo(noseX + side * faceWidth * 0.05, startY);
+        ctx.lineTo(noseX + side * faceWidth * 0.32, endY);
+        ctx.stroke();
+      }
+    });
+  } else if (filter === "working-bunny") {
+    const earBaseY = headTopY + faceWidth * 0.04;
+    const earH = faceWidth * 0.46;
+    const earW = faceWidth * 0.13;
+    const lensW = clamp(eyewearLensW * 1.02, faceWidth * 0.19, faceWidth * 0.3);
+    const lensH = clamp(eyewearLensH * 0.92, faceWidth * 0.1, faceWidth * 0.16);
+    const lensY = eyewearLineY - lensH / 2;
+    const badgeY = faceBottomY + faceWidth * 0.06;
+    beginProbe({
+      left: Math.min(leftEyeLocal.x - lensW * 0.66, headCenterX - faceWidth * 0.42),
+      right: Math.max(rightEyeLocal.x + lensW * 0.66, headCenterX + faceWidth * 0.42),
+      top: earBaseY - earH - faceWidth * 0.1,
+      bottom: badgeY + faceWidth * 0.22,
+    });
+    [
+      { x: headCenterX - faceWidth * 0.22, rotate: -0.26 },
+      { x: headCenterX + faceWidth * 0.22, rotate: 0.26 },
+    ].forEach((ear) => {
+      ctx.save();
+      ctx.translate(ear.x, earBaseY - earH * 0.48);
+      ctx.rotate(ear.rotate);
+      ctx.fillStyle = "rgba(248,250,252,0.96)";
+      ctx.beginPath();
+      ctx.ellipse(0, 0, earW, earH * 0.5, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "rgba(191,219,254,0.8)";
+      ctx.beginPath();
+      ctx.ellipse(0, earH * 0.04, earW * 0.45, earH * 0.32, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    });
+    ctx.fillStyle = "rgba(37,99,235,0.94)";
+    fillRoundRect(ctx, headCenterX - faceWidth * 0.24, earBaseY - faceWidth * 0.07, faceWidth * 0.48, faceWidth * 0.09, 14);
+    ctx.strokeStyle = "rgba(15,23,42,0.94)";
+    ctx.lineWidth = Math.max(4, faceWidth * 0.028);
+    ctx.fillStyle = "rgba(219,234,254,0.18)";
+    [leftEyeLocal, rightEyeLocal].forEach((eye) => {
+      fillRoundRect(ctx, eye.x - lensW / 2, lensY, lensW, lensH, lensH * 0.35);
+      ctx.strokeRect(eye.x - lensW / 2, lensY, lensW, lensH);
+    });
+    ctx.beginPath();
+    ctx.moveTo(leftEyeLocal.x + lensW * 0.48, lensY + lensH * 0.5);
+    ctx.lineTo(rightEyeLocal.x - lensW * 0.48, lensY + lensH * 0.5);
+    ctx.stroke();
+    ctx.strokeStyle = "rgba(37,99,235,0.9)";
+    ctx.lineWidth = Math.max(3, faceWidth * 0.018);
+    ctx.beginPath();
+    ctx.moveTo(headCenterX - faceWidth * 0.14, faceBottomY + faceWidth * 0.02);
+    ctx.lineTo(headCenterX, badgeY);
+    ctx.lineTo(headCenterX + faceWidth * 0.14, faceBottomY + faceWidth * 0.02);
+    ctx.stroke();
+    ctx.fillStyle = "rgba(248,250,252,0.96)";
+    fillRoundRect(ctx, headCenterX - faceWidth * 0.13, badgeY - faceWidth * 0.02, faceWidth * 0.26, faceWidth * 0.14, faceWidth * 0.025);
+    ctx.fillStyle = "rgba(37,99,235,0.9)";
+    fillRoundRect(ctx, headCenterX - faceWidth * 0.08, badgeY + faceWidth * 0.015, faceWidth * 0.16, faceWidth * 0.026, faceWidth * 0.012);
   } else if (filter === "cute-alien") {
     const headY = headTopY + faceWidth * 0.04;
     const headW = faceWidth * 0.5;
@@ -6988,6 +7093,133 @@ const drawFaceFilter = (
     ctx.beginPath();
     ctx.ellipse(headCenterX, capY + capH * 0.12, capW * 0.36, capH * 0.16, 0, 0, Math.PI);
     ctx.fill();
+  } else if (filter === "glowing-hat") {
+    const hatBaseY = headTopY + faceWidth * 0.04;
+    const hatW = faceWidth * 0.66;
+    const hatH = faceWidth * 0.4;
+    beginProbe({
+      left: headCenterX - hatW * 0.62,
+      right: headCenterX + hatW * 0.62,
+      top: hatBaseY - hatH - faceWidth * 0.16,
+      bottom: hatBaseY + faceWidth * 0.13,
+    });
+    ctx.shadowColor = "rgba(250,204,21,0.92)";
+    ctx.shadowBlur = faceWidth * 0.12;
+    const glowingHat = ctx.createLinearGradient(
+      headCenterX - hatW / 2,
+      hatBaseY,
+      headCenterX + hatW / 2,
+      hatBaseY - hatH,
+    );
+    glowingHat.addColorStop(0, "#f97316");
+    glowingHat.addColorStop(0.5, "#facc15");
+    glowingHat.addColorStop(1, "#fef3c7");
+    ctx.fillStyle = glowingHat;
+    ctx.beginPath();
+    ctx.moveTo(headCenterX - hatW * 0.34, hatBaseY);
+    ctx.quadraticCurveTo(headCenterX - hatW * 0.2, hatBaseY - hatH * 0.58, headCenterX, hatBaseY - hatH);
+    ctx.quadraticCurveTo(headCenterX + hatW * 0.2, hatBaseY - hatH * 0.58, headCenterX + hatW * 0.34, hatBaseY);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = "rgba(146,64,14,0.95)";
+    ctx.beginPath();
+    ctx.ellipse(headCenterX, hatBaseY + faceWidth * 0.02, hatW * 0.55, faceWidth * 0.07, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "rgba(255,255,255,0.9)";
+    [
+      { x: headCenterX - hatW * 0.16, y: hatBaseY - hatH * 0.42, r: faceWidth * 0.03 },
+      { x: headCenterX + hatW * 0.12, y: hatBaseY - hatH * 0.62, r: faceWidth * 0.024 },
+      { x: headCenterX + hatW * 0.02, y: hatBaseY - hatH * 0.24, r: faceWidth * 0.02 },
+    ].forEach((sparkle) => {
+      ctx.beginPath();
+      ctx.moveTo(sparkle.x, sparkle.y - sparkle.r);
+      ctx.lineTo(sparkle.x + sparkle.r * 0.32, sparkle.y - sparkle.r * 0.32);
+      ctx.lineTo(sparkle.x + sparkle.r, sparkle.y);
+      ctx.lineTo(sparkle.x + sparkle.r * 0.32, sparkle.y + sparkle.r * 0.32);
+      ctx.lineTo(sparkle.x, sparkle.y + sparkle.r);
+      ctx.lineTo(sparkle.x - sparkle.r * 0.32, sparkle.y + sparkle.r * 0.32);
+      ctx.lineTo(sparkle.x - sparkle.r, sparkle.y);
+      ctx.lineTo(sparkle.x - sparkle.r * 0.32, sparkle.y - sparkle.r * 0.32);
+      ctx.closePath();
+      ctx.fill();
+    });
+  } else if (filter === "noogler-hat") {
+    const capY = headTopY + faceWidth * 0.03;
+    const capW = faceWidth * 0.7;
+    const capH = faceWidth * 0.3;
+    beginProbe({
+      left: headCenterX - capW * 0.58,
+      right: headCenterX + capW * 0.58,
+      top: capY - capH - faceWidth * 0.26,
+      bottom: capY + capH * 0.72,
+    });
+    ctx.strokeStyle = "rgba(15,23,42,0.86)";
+    ctx.lineWidth = Math.max(3, faceWidth * 0.02);
+    ctx.beginPath();
+    ctx.moveTo(headCenterX, capY - capH * 0.48);
+    ctx.lineTo(headCenterX, capY - capH - faceWidth * 0.12);
+    ctx.stroke();
+    ctx.fillStyle = "rgba(251,191,36,0.95)";
+    ctx.beginPath();
+    ctx.ellipse(headCenterX - faceWidth * 0.1, capY - capH - faceWidth * 0.13, faceWidth * 0.18, faceWidth * 0.035, -0.12, 0, Math.PI * 2);
+    ctx.ellipse(headCenterX + faceWidth * 0.1, capY - capH - faceWidth * 0.13, faceWidth * 0.18, faceWidth * 0.035, 0.12, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.save();
+    ctx.beginPath();
+    ctx.ellipse(headCenterX, capY - capH * 0.24, capW * 0.47, capH * 0.56, 0, Math.PI, 0);
+    ctx.lineTo(headCenterX + capW * 0.43, capY);
+    ctx.lineTo(headCenterX - capW * 0.43, capY);
+    ctx.closePath();
+    ctx.clip();
+    [
+      { color: "#ef4444", x: -0.48 },
+      { color: "#facc15", x: -0.16 },
+      { color: "#22c55e", x: 0.16 },
+      { color: "#3b82f6", x: 0.48 },
+    ].forEach((panel) => {
+      ctx.fillStyle = panel.color;
+      ctx.fillRect(headCenterX + capW * panel.x - capW * 0.16, capY - capH * 0.9, capW * 0.32, capH * 1.1);
+    });
+    ctx.restore();
+    ctx.fillStyle = "rgba(248,250,252,0.92)";
+    ctx.beginPath();
+    ctx.ellipse(headCenterX, capY + capH * 0.1, capW * 0.34, capH * 0.15, 0, 0, Math.PI);
+    ctx.fill();
+  } else if (filter === "intern-hat") {
+    const capY = headTopY + faceWidth * 0.03;
+    const capW = faceWidth * 0.72;
+    const capH = faceWidth * 0.28;
+    beginProbe({
+      left: headCenterX - capW * 0.58,
+      right: headCenterX + capW * 0.58,
+      top: capY - capH - faceWidth * 0.08,
+      bottom: capY + capH * 0.76,
+    });
+    ctx.fillStyle = "rgba(71,85,105,0.98)";
+    ctx.beginPath();
+    ctx.ellipse(headCenterX, capY - capH * 0.22, capW * 0.48, capH * 0.55, 0, Math.PI, 0);
+    ctx.lineTo(headCenterX + capW * 0.44, capY);
+    ctx.lineTo(headCenterX - capW * 0.44, capY);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = "rgba(226,232,240,0.92)";
+    fillRoundRect(
+      ctx,
+      headCenterX - capW * 0.2,
+      capY - capH * 0.42,
+      capW * 0.4,
+      capH * 0.3,
+      capH * 0.08,
+    );
+    ctx.fillStyle = "rgba(30,41,59,0.96)";
+    ctx.font = `700 ${Math.max(10, faceWidth * 0.075)}px sans-serif`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText("INT", headCenterX, capY - capH * 0.27);
+    ctx.fillStyle = "rgba(15,23,42,0.82)";
+    ctx.beginPath();
+    ctx.ellipse(headCenterX, capY + capH * 0.12, capW * 0.37, capH * 0.15, 0, 0, Math.PI);
+    ctx.fill();
   } else if (filter === "winter-hat-scarf") {
     const hatY = headTopY + faceWidth * 0.02;
     const hatW = faceWidth * 0.66;
@@ -7058,6 +7290,107 @@ const drawFaceFilter = (
       ctx.lineTo(star.x - star.r * 0.3, star.y - star.r * 0.3);
       ctx.closePath();
       ctx.fill();
+    });
+  } else if (filter === "dia-de-los-muertos") {
+    const hatBaseY = headTopY + faceWidth * 0.03;
+    const hatW = faceWidth * 0.88;
+    const hatH = faceWidth * 0.34;
+    const x = mouthCenterLocal.x;
+    const y = upperLipLocal
+      ? lerp(noseLocal.y, upperLipLocal.y, 0.72)
+      : mouthCenterLocal.y - faceWidth * 0.02;
+    const lobeW = clamp(mouthWidth * 0.6, faceWidth * 0.1, faceWidth * 0.18);
+    const lobeH = clamp(mouthWidth * 0.2, faceWidth * 0.035, faceWidth * 0.07);
+    beginProbe({
+      left: Math.min(headCenterX - hatW * 0.58, x - mouthWidth * 0.86),
+      right: Math.max(headCenterX + hatW * 0.58, x + mouthWidth * 0.86),
+      top: hatBaseY - hatH - faceWidth * 0.13,
+      bottom: y + faceWidth * 0.17,
+    });
+    ctx.fillStyle = "rgba(124,45,18,0.96)";
+    ctx.beginPath();
+    ctx.ellipse(headCenterX, hatBaseY + faceWidth * 0.02, hatW * 0.48, faceWidth * 0.09, 0, 0, Math.PI * 2);
+    ctx.fill();
+    const hatCrown = ctx.createLinearGradient(
+      headCenterX - hatW * 0.2,
+      hatBaseY,
+      headCenterX + hatW * 0.2,
+      hatBaseY - hatH,
+    );
+    hatCrown.addColorStop(0, "#c2410c");
+    hatCrown.addColorStop(0.55, "#ea580c");
+    hatCrown.addColorStop(1, "#fbbf24");
+    ctx.fillStyle = hatCrown;
+    ctx.beginPath();
+    ctx.moveTo(headCenterX - hatW * 0.22, hatBaseY);
+    ctx.quadraticCurveTo(headCenterX - hatW * 0.14, hatBaseY - hatH * 0.78, headCenterX, hatBaseY - hatH);
+    ctx.quadraticCurveTo(headCenterX + hatW * 0.14, hatBaseY - hatH * 0.78, headCenterX + hatW * 0.22, hatBaseY);
+    ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle = "rgba(254,240,138,0.95)";
+    ctx.lineWidth = Math.max(3, faceWidth * 0.018);
+    ctx.beginPath();
+    ctx.moveTo(headCenterX - hatW * 0.24, hatBaseY - hatH * 0.18);
+    ctx.quadraticCurveTo(headCenterX, hatBaseY - hatH * 0.02, headCenterX + hatW * 0.24, hatBaseY - hatH * 0.18);
+    ctx.stroke();
+    [
+      { x: headCenterX - hatW * 0.32, y: hatBaseY - faceWidth * 0.015, color: "#facc15" },
+      { x: headCenterX + hatW * 0.32, y: hatBaseY - faceWidth * 0.015, color: "#fb7185" },
+      { x: headCenterX, y: hatBaseY - hatH * 0.46, color: "#fde047" },
+    ].forEach((flower) => {
+      ctx.fillStyle = flower.color;
+      for (let petal = 0; petal < 6; petal += 1) {
+        const angle = (Math.PI * 2 * petal) / 6;
+        ctx.beginPath();
+        ctx.ellipse(
+          flower.x + Math.cos(angle) * faceWidth * 0.026,
+          flower.y + Math.sin(angle) * faceWidth * 0.026,
+          faceWidth * 0.026,
+          faceWidth * 0.014,
+          angle,
+          0,
+          Math.PI * 2,
+        );
+        ctx.fill();
+      }
+      ctx.fillStyle = "rgba(124,45,18,0.9)";
+      ctx.beginPath();
+      ctx.arc(flower.x, flower.y, faceWidth * 0.012, 0, Math.PI * 2);
+      ctx.fill();
+    });
+    ctx.fillStyle = "rgba(28,25,23,0.96)";
+    ctx.beginPath();
+    ctx.ellipse(
+      x - mouthWidth * 0.24,
+      y,
+      lobeW,
+      lobeH,
+      0.18,
+      0,
+      Math.PI * 2,
+    );
+    ctx.ellipse(
+      x + mouthWidth * 0.24,
+      y,
+      lobeW,
+      lobeH,
+      -0.18,
+      0,
+      Math.PI * 2,
+    );
+    ctx.fill();
+    ctx.fillStyle = "rgba(249,115,22,0.82)";
+    [-1, 1].forEach((side) => {
+      const cheekX = mouthCenterLocal.x + side * faceWidth * 0.2;
+      const cheekY = lerp(noseLocal.y, mouthCenterLocal.y, 0.64);
+      ctx.beginPath();
+      ctx.arc(cheekX, cheekY, faceWidth * 0.028, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "rgba(250,204,21,0.86)";
+      ctx.beginPath();
+      ctx.arc(cheekX + side * faceWidth * 0.035, cheekY - faceWidth * 0.018, faceWidth * 0.016, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "rgba(249,115,22,0.82)";
     });
   } else if (filter === "mustache") {
     const x = mouthCenterLocal.x;
