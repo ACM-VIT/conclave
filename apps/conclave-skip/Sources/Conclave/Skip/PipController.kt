@@ -40,6 +40,7 @@ object PipController {
     fun setInCall(active: Boolean) {
         isInCall = active
         if (!active) {
+            inPipMode = false
             pipVideoTrack = null
             pipVideoIsCameraOff = true
             pipDisplayName = ""

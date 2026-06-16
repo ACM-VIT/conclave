@@ -19,7 +19,7 @@ struct SpotlightLayoutView: View {
 
     private var othersIds: [String] {
         var ids: [String] = []
-        if viewModel.state.userId != pinnedId && viewModel.state.shouldShowSelfTile {
+        if !viewModel.state.isLocalParticipantUserId(pinnedId) && viewModel.state.shouldShowSelfTile {
             ids.append(viewModel.state.userId)
         }
         for participant in viewModel.state.visibleTileParticipants where participant.id != pinnedId {
@@ -57,7 +57,7 @@ struct SpotlightLayoutView: View {
             .frame(width: geo.size.width, height: geo.size.height - controlsOverlap, alignment: .top)
             .padding(8)
             .overlay {
-                if viewModel.state.shouldShowDetachedSelfView && pinnedId != viewModel.state.userId {
+                if viewModel.state.shouldShowDetachedSelfView && !viewModel.state.isLocalParticipantUserId(pinnedId) {
                     DetachedSelfViewOverlay(viewModel: viewModel)
                         .padding(.trailing, usesSidebarRail ? 164.0 : 16.0)
                         .padding(.leading, 16.0)
@@ -140,14 +140,14 @@ struct SpotlightLayoutView: View {
 
     @ViewBuilder
     func tileFor(userId: String) -> some View {
-        if userId == viewModel.state.userId {
+        if viewModel.state.isLocalParticipantUserId(userId) {
             VideoGridItem(
                 displayName: viewModel.state.displayName,
                 isMuted: viewModel.state.isMuted,
                 isCameraOff: viewModel.state.isCameraOff,
                 isHandRaised: viewModel.state.isHandRaised,
                 isGhost: viewModel.state.isGhostMode,
-                isSpeaking: viewModel.state.effectiveActiveSpeakerId == viewModel.state.userId,
+                isSpeaking: viewModel.state.effectiveActiveSpeakerId.map { viewModel.state.isLocalParticipantUserId($0) } == true,
                 isLocal: true,
                 captureSession: viewModel.webRTCClient.getCaptureSession(),
                 localVideoTrack: viewModel.webRTCClient.getLocalVideoTrack()

@@ -36,6 +36,11 @@ struct ConnectTransportRequest: Codable {
     let dtlsParameters: DtlsParameters
 }
 
+struct RestartIceRequest: Codable {
+    let transport: String
+    let transportId: String?
+}
+
 struct ProduceRequest: Codable {
     let transportId: String
     let kind: String
@@ -141,6 +146,10 @@ struct TransportResponse: Codable {
     let iceParameters: IceParameters
     let iceCandidates: [IceCandidate]
     let dtlsParameters: DtlsParameters
+}
+
+struct RestartIceResponse: Codable {
+    let iceParameters: IceParameters
 }
 
 struct ProduceResponse: Codable {
@@ -444,10 +453,31 @@ struct AdminRoomSnapshot: Codable {
     let id: String?
     let hostUserId: String?
     let adminUserIds: [String]?
+    let screenShareProducerId: String?
     let quality: VideoQuality?
     let policies: AdminRoomPolicySnapshot?
     let appsState: AdminRoomAppsStateSnapshot?
+    let participants: [AdminRoomParticipantSnapshot]?
     let pendingUsers: [PendingUserSnapshot]?
+}
+
+struct AdminRoomParticipantSnapshot: Codable {
+    let userId: String
+    let userKey: String?
+    let displayName: String?
+    let role: String?
+    let mode: String?
+    let muted: Bool?
+    let cameraOff: Bool?
+    let pendingDisconnect: Bool?
+    let producers: [AdminRoomParticipantProducerSnapshot]?
+}
+
+struct AdminRoomParticipantProducerSnapshot: Codable {
+    let producerId: String
+    let kind: String
+    let type: String
+    let paused: Bool?
 }
 
 struct AdminRoomPolicySnapshot: Codable {

@@ -95,6 +95,7 @@ final class MeetingViewModel {
     private var meetingLifecycleGeneration = 0
     private var reconnectAttempts = 0
     private var reconnectRetryTask: Task<Void, Never>?
+    private var pendingIceRestartTasks: [String: Task<Void, Never>] = [:]
     private var participantLeaveTokens: [String: UUID] = [:]
     private var pendingProducers: [String: ProducerInfo] = [:]
     private var pendingProducerContexts: [String: SocketEventContext] = [:]
@@ -117,6 +118,7 @@ final class MeetingViewModel {
     private let maxReconnectAttempts = 5
     private let reconnectBaseDelaySeconds = 1.0
     private let reconnectMaxDelaySeconds = 8.0
+    private let transportDisconnectGraceNanoseconds = UInt64(5_000_000_000)
 
     // MARK: - Active Speaker
 
@@ -142,6 +144,7 @@ final class MeetingViewModel {
         let joinMode: JoinMode
         let meetingInviteCode: String?
         let webinarInviteCode: String?
+        let allowRoomCreation: Bool
         let user: SfuJoinUser?
     }
 
@@ -307,7 +310,9 @@ final class MeetingViewModel {
                     isHost: context.isHost,
                     joinMode: context.joinMode,
                     meetingInviteCode: context.meetingInviteCode,
-                    webinarInviteCode: context.webinarInviteCode
+                    webinarInviteCode: context.webinarInviteCode,
+                    allowRoomCreation: context.allowRoomCreation,
+                    reuseExistingSocket: true
                 )
             }
         }
@@ -491,7 +496,7 @@ final class MeetingViewModel {
             let eventContext = self.currentSocketEventContext()
             Task { @MainActor in
                 guard self.isCurrentSocketEvent(eventContext, roomId: update.roomId) else { return }
-                if update.userId == self.state.userId {
+                if self.state.isLocalParticipantUserId(update.userId) {
                     self.state.displayName = update.displayName
                     return
                 }
@@ -535,7 +540,7 @@ final class MeetingViewModel {
                 if appended && !self.state.isChatOpen {
                     self.state.unreadChatCount += 1
                 }
-                if let appendedMessage, appendedMessage.userId != self.state.userId {
+                if let appendedMessage, !self.state.isLocalParticipantUserId(appendedMessage.userId) {
                     self.showChatOverlayMessage(appendedMessage)
                 }
             }
@@ -573,7 +578,7 @@ final class MeetingViewModel {
                 guard self.isCurrentSocketEvent(eventContext, roomId: notification.roomId) else { return }
                 let userId = notification.userId
                 let raised = notification.raised
-                if userId == self.state.userId {
+                if self.state.isLocalParticipantUserId(userId) {
                     self.state.isHandRaised = raised
                     return
                 }
@@ -589,7 +594,7 @@ final class MeetingViewModel {
                 guard self.isCurrentSocketEvent(eventContext, roomId: snapshot.roomId) else { return }
                 self.clearRaisedHands()
                 for entry in snapshot.users {
-                    if entry.userId == self.state.userId {
+                    if self.state.isLocalParticipantUserId(entry.userId) {
                         self.state.isHandRaised = entry.raised
                     } else {
                         self.ensureParticipantPresent(entry.userId)
@@ -604,7 +609,7 @@ final class MeetingViewModel {
             let eventContext = self.currentSocketEventContext()
             Task { @MainActor in
                 guard self.isCurrentSocketEvent(eventContext, roomId: notification.roomId) else { return }
-                if notification.userId == self.state.userId {
+                if self.state.isLocalParticipantUserId(notification.userId) {
                     self.state.isMuted = notification.muted
                     self.syncCallPresenceMute()
                     return
@@ -619,7 +624,7 @@ final class MeetingViewModel {
             let eventContext = self.currentSocketEventContext()
             Task { @MainActor in
                 guard self.isCurrentSocketEvent(eventContext, roomId: notification.roomId) else { return }
-                if notification.userId == self.state.userId {
+                if self.state.isLocalParticipantUserId(notification.userId) {
                     self.state.isCameraOff = notification.cameraOff
                     return
                 }
@@ -818,6 +823,16 @@ final class MeetingViewModel {
                 self.syncCallPresenceMute()
             }
         }
+
+        webRTCClient.onTransportConnectionStateChanged = { [weak self] transportKind, stateName in
+            Task { @MainActor in
+                guard let self else { return }
+                await self.handleTransportConnectionStateChanged(
+                    transportKind: transportKind,
+                    stateName: stateName
+                )
+            }
+        }
     }
 
     // MARK: - Helper Methods
@@ -826,6 +841,58 @@ final class MeetingViewModel {
         reconnectAttempts = 0
         reconnectRetryTask?.cancel()
         reconnectRetryTask = nil
+    }
+
+    private func cancelPendingIceRestartTasks() {
+        for task in pendingIceRestartTasks.values {
+            task.cancel()
+        }
+        pendingIceRestartTasks.removeAll()
+    }
+
+    private func handleTransportConnectionStateChanged(transportKind: String, stateName: String) async {
+        guard !isIntentionalLeave else { return }
+
+        switch stateName {
+        case "connected", "completed", "new":
+            pendingIceRestartTasks[transportKind]?.cancel()
+            pendingIceRestartTasks[transportKind] = nil
+        case "disconnected":
+            guard state.connectionState == .joined,
+                  socketManager.isConnected,
+                  pendingIceRestartTasks[transportKind] == nil else { return }
+            let eventContext = currentSocketEventContext()
+            let delayNanoseconds = transportDisconnectGraceNanoseconds
+            pendingIceRestartTasks[transportKind] = Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: delayNanoseconds)
+                guard let self,
+                      !Task.isCancelled else { return }
+                self.pendingIceRestartTasks[transportKind] = nil
+                guard self.isCurrentSocketEvent(eventContext),
+                      self.state.connectionState == .joined,
+                      self.socketManager.isConnected,
+                      !self.isIntentionalLeave,
+                      self.webRTCClient.hasBrokenTransport() else { return }
+                let restarted = await self.webRTCClient.restartIce(transportKind: transportKind)
+                if !restarted {
+                    await self.forceRejoinWithFreshToken()
+                }
+            }
+        case "failed":
+            pendingIceRestartTasks[transportKind]?.cancel()
+            pendingIceRestartTasks[transportKind] = nil
+            guard state.connectionState == .joined,
+                  socketManager.isConnected else { return }
+            let restarted = await webRTCClient.restartIce(transportKind: transportKind)
+            if !restarted {
+                await forceRejoinWithFreshToken()
+            }
+        case "closed":
+            pendingIceRestartTasks[transportKind]?.cancel()
+            pendingIceRestartTasks[transportKind] = nil
+        default:
+            break
+        }
     }
 
     private func reconnectDelayNanoseconds() -> UInt64 {
@@ -1113,7 +1180,7 @@ final class MeetingViewModel {
             if let displayName = user.displayName?.trimmingCharacters(in: .whitespacesAndNewlines),
                !displayName.isEmpty {
                 nextNames[userId] = displayName
-                if userId == state.userId {
+                if state.isLocalParticipantUserId(userId) {
                     state.displayName = displayName
                 }
             }
@@ -1215,7 +1282,7 @@ final class MeetingViewModel {
         state.webinarSpeakerUserId = response.existingProducers.first?.producerUserId
         if state.isWebinarAttendee,
            let speakerUserId = state.webinarSpeakerUserId,
-           speakerUserId != state.userId {
+           !state.isLocalParticipantUserId(speakerUserId) {
             ensureParticipantPresent(speakerUserId)
         }
         if let enabled = response.isWebinarEnabled {
@@ -1281,8 +1348,116 @@ final class MeetingViewModel {
             state.isAppsActionInFlight = false
         }
 
+        if let participants = snapshot.participants {
+            applyAdminParticipantSnapshot(participants, roomId: roomId)
+        }
+
         if let pendingUsers = snapshot.pendingUsers {
             applyPendingUsersSnapshot(pendingUsers)
+        }
+    }
+
+    private func applyAdminParticipantSnapshot(_ participants: [AdminRoomParticipantSnapshot], roomId: String?) {
+        var snapshotUserIds = Set<String>()
+        var remoteUserIds = Set<String>()
+        var snapshotProducerIds = Set<String>()
+        var nextActiveScreenShareUserId: String?
+
+        for snapshot in participants {
+            let userId = snapshot.userId.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !userId.isEmpty else { continue }
+
+            snapshotUserIds.insert(userId)
+            let displayName = snapshot.displayName?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let isGhost = snapshot.role == "ghost" || snapshot.mode == "ghost"
+            let isLeaving = snapshot.pendingDisconnect == true
+            let activeScreenProducer = snapshot.producers?.first {
+                $0.kind == "video" && $0.type == ProducerType.screen.rawValue && $0.paused != true
+            }
+
+            if state.isLocalParticipantUserId(userId) {
+                if let displayName, !displayName.isEmpty {
+                    state.displayName = displayName
+                }
+                if let muted = snapshot.muted {
+                    state.isMuted = muted
+                    syncCallPresenceMute()
+                }
+                if let cameraOff = snapshot.cameraOff {
+                    state.isCameraOff = cameraOff
+                }
+                state.isScreenSharing = activeScreenProducer != nil
+                if activeScreenProducer != nil {
+                    nextActiveScreenShareUserId = state.userId
+                }
+            } else if state.isRemoteParticipantUserId(userId) {
+                remoteUserIds.insert(userId)
+                guard ensureParticipantPresent(userId) else { continue }
+                if let displayName, !displayName.isEmpty {
+                    state.displayNames[userId] = displayName
+                    state.participants[userId]?.displayName = displayName
+                }
+                if let muted = snapshot.muted {
+                    state.participants[userId]?.isMuted = muted
+                }
+                if let cameraOff = snapshot.cameraOff {
+                    state.participants[userId]?.isCameraOff = cameraOff
+                }
+                state.participants[userId]?.isGhost = isGhost
+                state.participants[userId]?.isLeaving = isLeaving
+                state.participants[userId]?.isScreenSharing = activeScreenProducer != nil
+                if activeScreenProducer != nil {
+                    nextActiveScreenShareUserId = userId
+                }
+            }
+
+            for producer in snapshot.producers ?? [] {
+                let producerId = producer.producerId.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !producerId.isEmpty else { continue }
+                snapshotProducerIds.insert(producerId)
+                handleProducerState(
+                    ProducerInfo(
+                        producerId: producerId,
+                        producerUserId: userId,
+                        kind: producer.kind,
+                        type: producer.type,
+                        paused: producer.paused,
+                        roomId: roomId
+                    )
+                )
+            }
+        }
+
+        for userId in Array(state.participants.keys)
+            where state.isRemoteParticipantUserId(userId) && !remoteUserIds.contains(userId) {
+            removeRemoteParticipant(userId)
+        }
+
+        let staleProducerIds = producerInfosById.compactMap { producerId, producer in
+            snapshotUserIds.contains(producer.producerUserId) && !snapshotProducerIds.contains(producerId)
+                ? producerId
+                : nil
+        }
+        for producerId in staleProducerIds {
+            let producer = producerInfosById.removeValue(forKey: producerId)
+            pendingProducers.removeValue(forKey: producerId)
+            pendingProducerContexts.removeValue(forKey: producerId)
+            pendingProducerRetryAttempts.removeValue(forKey: producerId)
+            webRTCClient.closeConsumer(producerId: producerId, userId: producer?.producerUserId ?? "")
+        }
+        if pendingProducers.isEmpty {
+            pendingProducerRetryTask?.cancel()
+            pendingProducerRetryTask = nil
+        }
+
+        if let nextActiveScreenShareUserId {
+            state.activeScreenShareUserId = nextActiveScreenShareUserId
+        } else if !participants.isEmpty {
+            state.activeScreenShareUserId = nil
+            state.isScreenSharing = false
+            for userId in Array(state.participants.keys) {
+                state.participants[userId]?.isScreenSharing = false
+            }
         }
     }
 
@@ -1405,7 +1580,7 @@ final class MeetingViewModel {
             state.activeScreenShareUserId = nil
         }
 
-        if let speakerUserId, speakerUserId != state.userId {
+        if let speakerUserId, !state.isLocalParticipantUserId(speakerUserId) {
             ensureParticipantPresent(speakerUserId)
         }
 
@@ -1500,7 +1675,7 @@ final class MeetingViewModel {
         guard !userId.isEmpty else { return }
 
         for producer in response.producers ?? [] {
-            if userId == state.userId {
+            if state.isLocalParticipantUserId(userId) {
                 _ = await closeAdminEnforcedProducer(producer)
             } else {
                 handleRemoteProducerClosed(
@@ -1550,7 +1725,7 @@ final class MeetingViewModel {
             let userId = rawUserId.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !userId.isEmpty else { continue }
 
-            if userId == state.userId {
+            if state.isLocalParticipantUserId(userId) {
                 await applyLocalAdminBulkMediaState(action)
                 continue
             }
@@ -1570,6 +1745,13 @@ final class MeetingViewModel {
         }
     }
 
+    private func clearLocalActiveScreenShareIfNeeded() {
+        if let activeScreenShareUserId = state.activeScreenShareUserId,
+           state.isLocalParticipantUserId(activeScreenShareUserId) {
+            state.activeScreenShareUserId = nil
+        }
+    }
+
     private func applyLocalAdminBulkMediaState(_ action: AdminBulkMediaAction) async {
         switch action {
         case .mute:
@@ -1579,9 +1761,7 @@ final class MeetingViewModel {
             state.isCameraOff = true
         case .screen:
             state.isScreenSharing = false
-            if state.activeScreenShareUserId == state.userId {
-                state.activeScreenShareUserId = nil
-            }
+            clearLocalActiveScreenShareIfNeeded()
             await stopScreenCaptureManager()
         }
     }
@@ -1603,7 +1783,7 @@ final class MeetingViewModel {
 
     private func handleLocalProducerClosed(_ notification: ProducerClosedNotification) async -> Bool {
         let producerUserId = notification.producerUserId
-        guard producerUserId == nil || producerUserId == state.userId else { return false }
+        guard producerUserId == nil || state.isLocalParticipantUserId(producerUserId ?? "") else { return false }
 
         if await webRTCClient.closeLocalMedia(
             kind: "audio",
@@ -1647,9 +1827,7 @@ final class MeetingViewModel {
         ) {
             await stopScreenCaptureManager()
             state.isScreenSharing = false
-            if state.activeScreenShareUserId == state.userId {
-                state.activeScreenShareUserId = nil
-            }
+            clearLocalActiveScreenShareIfNeeded()
             return true
         }
 
@@ -1664,7 +1842,7 @@ final class MeetingViewModel {
         pendingProducerRetryAttempts.removeValue(forKey: notification.producerId)
         webRTCClient.closeConsumer(producerId: notification.producerId, userId: producerUserId ?? "")
 
-        guard let producerUserId, producerUserId != state.userId else { return }
+        guard let producerUserId, !state.isLocalParticipantUserId(producerUserId) else { return }
         if MeetingState.isBrowserAudioUserId(producerUserId) {
             refreshBrowserAudioPresence()
             return
@@ -1702,7 +1880,7 @@ final class MeetingViewModel {
 
     private func handleAdminMediaEnforced(_ notification: AdminMediaEnforcedNotification) async {
         guard isCurrentRoomEvent(notification.roomId) else { return }
-        guard notification.userId == state.userId else { return }
+        guard notification.userId.map({ state.isLocalParticipantUserId($0) }) == true else { return }
 
         var didCloseMedia = false
         for producer in notification.closedProducers {
@@ -1716,7 +1894,7 @@ final class MeetingViewModel {
 
     private func handleAdminBulkMediaEnforced(_ notification: AdminBulkMediaEnforcedNotification) {
         guard isCurrentRoomEvent(notification.roomId) else { return }
-        guard notification.users?.contains(state.userId) == true else { return }
+        guard notification.users?.contains(where: { state.isLocalParticipantUserId($0) }) == true else { return }
         state.errorMessage = adminMediaReason(notification.reason)
     }
 
@@ -1737,9 +1915,7 @@ final class MeetingViewModel {
         } else if producer.kind == "video", producer.type == ProducerType.screen.rawValue {
             await stopScreenCaptureManager()
             state.isScreenSharing = false
-            if state.activeScreenShareUserId == state.userId {
-                state.activeScreenShareUserId = nil
-            }
+            clearLocalActiveScreenShareIfNeeded()
             return true
         }
 
@@ -1775,7 +1951,7 @@ final class MeetingViewModel {
             return
         }
         guard !MeetingState.isSystemUserId(producer.producerUserId) else { return }
-        if producer.producerUserId == state.userId {
+        if state.isLocalParticipantUserId(producer.producerUserId) {
             if producer.kind == "audio" {
                 state.isMuted = producer.paused ?? state.isMuted
                 syncCallPresenceMute()
@@ -1897,7 +2073,9 @@ final class MeetingViewModel {
         isHost: Bool = false,
         joinMode: JoinMode = .meeting,
         meetingInviteCode: String? = nil,
-        webinarInviteCode: String? = nil
+        webinarInviteCode: String? = nil,
+        allowRoomCreation: Bool = false,
+        reuseExistingSocket: Bool = false
     ) {
         let isRecoveryJoin = isRejoinInFlight
         meetingLifecycleGeneration += 1
@@ -1909,6 +2087,10 @@ final class MeetingViewModel {
             || previousConnectionState == .joined
             || previousConnectionState == .joining
         activeJoinAttemptId = joinAttemptId
+        if !isRecoveryJoin && !reuseExistingSocket {
+            socketManager.disconnect()
+            cancelPendingIceRestartTasks()
+        }
         currentJoinInfo = nil
         if !isRecoveryJoin {
             resetReconnectRetryState()
@@ -1936,6 +2118,7 @@ final class MeetingViewModel {
 
         let userPayload = user
         let userKey = localSfuUserKey(sessionId: state.sessionId)
+        self.state.sfuUserId = userKey
         self.state.userId = "\(userKey)#\(state.sessionId)"
         self.state.hostUserId = isHost ? self.state.userId : nil
         self.state.hostUserIds = isHost ? [self.state.userId] : []
@@ -1947,6 +2130,7 @@ final class MeetingViewModel {
             joinMode: joinMode,
             meetingInviteCode: meetingInviteCode,
             webinarInviteCode: webinarInviteCode,
+            allowRoomCreation: allowRoomCreation,
             user: userPayload
         )
 
@@ -1961,8 +2145,7 @@ final class MeetingViewModel {
                     user: userPayload,
                     isHost: isHost,
                     clientId: clientId,
-                    // A host starting a NEW meeting must be allowed to create the room.
-                    allowRoomCreation: isHost,
+                    allowRoomCreation: isHost || allowRoomCreation,
                     joinMode: joinMode
                 )
                 guard self.activeJoinAttemptId == joinAttemptId else {
@@ -2037,6 +2220,7 @@ final class MeetingViewModel {
     func rejoinIfPossible() async {
         guard let context = lastJoinContext, shouldRejoinAfterReconnect, !isIntentionalLeave else { return }
         if isRejoinInFlight { return }
+        cancelPendingIceRestartTasks()
         isRejoinInFlight = true
         shouldRejoinAfterReconnect = false
         await MainActor.run {
@@ -2050,7 +2234,8 @@ final class MeetingViewModel {
             isHost: context.isHost,
             joinMode: context.joinMode,
             meetingInviteCode: context.meetingInviteCode,
-            webinarInviteCode: context.webinarInviteCode
+            webinarInviteCode: context.webinarInviteCode,
+            allowRoomCreation: context.allowRoomCreation
         )
     }
 
@@ -2078,9 +2263,17 @@ final class MeetingViewModel {
 
         guard state.connectionState == ConnectionState.joined else { return }
 
-        if !socketManager.isConnected || webRTCClient.hasBrokenTransport() {
+        if !socketManager.isConnected {
             await forceRejoinWithFreshToken()
             return
+        }
+
+        if webRTCClient.hasBrokenTransport() {
+            let restarted = await webRTCClient.restartIce()
+            if !restarted {
+                await forceRejoinWithFreshToken()
+                return
+            }
         }
 
         await syncProducers(context: currentSocketEventContext())
@@ -2101,6 +2294,7 @@ final class MeetingViewModel {
             joinMode: state.webinarRole == "attendee" ? .webinarAttendee : .meeting,
             meetingInviteCode: nil,
             webinarInviteCode: nil,
+            allowRoomCreation: false,
             user: nil
         )
 
@@ -2119,7 +2313,8 @@ final class MeetingViewModel {
             isHost: context.isHost,
             joinMode: context.joinMode,
             meetingInviteCode: context.meetingInviteCode,
-            webinarInviteCode: context.webinarInviteCode
+            webinarInviteCode: context.webinarInviteCode,
+            allowRoomCreation: context.allowRoomCreation
         )
     }
 
@@ -2208,7 +2403,7 @@ final class MeetingViewModel {
         var staleProducerIds: [String] = []
         for (producerId, producer) in producerInfosById {
             guard !serverProducerIds.contains(producerId),
-                  producer.producerUserId != state.userId else { continue }
+                  !state.isLocalParticipantUserId(producer.producerUserId) else { continue }
             if let context {
                 guard isCurrentSocketEvent(context, roomId: producer.roomId) else { continue }
             } else {
@@ -2233,7 +2428,7 @@ final class MeetingViewModel {
             } else {
                 guard isCurrentRoomEvent(producer.roomId) else { continue }
             }
-            if producer.producerUserId == state.userId {
+            if state.isLocalParticipantUserId(producer.producerUserId) {
                 handleProducerState(producer)
                 continue
             }
@@ -2259,7 +2454,7 @@ final class MeetingViewModel {
             guard isCurrentRoomEvent(producer.roomId) else { return }
         }
         handleProducerState(producer)
-        guard producer.producerUserId != state.userId else { return }
+        guard !state.isLocalParticipantUserId(producer.producerUserId) else { return }
         if webRTCClient.consumerId(forProducer: producer.producerId) != nil {
             pendingProducers.removeValue(forKey: producer.producerId)
             pendingProducerContexts.removeValue(forKey: producer.producerId)
@@ -2273,14 +2468,21 @@ final class MeetingViewModel {
                 producerUserId: producer.producerUserId,
                 producerType: producer.type
             )
+            if let context {
+                guard isCurrentSocketEvent(context, roomId: producer.roomId) else {
+                    discardStaleConsumedProducer(producer)
+                    return
+                }
+            } else {
+                guard isCurrentJoinAttempt(joinAttemptId),
+                      isCurrentRoomEvent(producer.roomId) else {
+                    discardStaleConsumedProducer(producer)
+                    return
+                }
+            }
             if MeetingState.isBrowserAudioUserId(producer.producerUserId) {
                 refreshBrowserAudioPresence()
                 applyBrowserAudioMuteState()
-            }
-            if let context {
-                guard isCurrentSocketEvent(context, roomId: producer.roomId) else { return }
-            } else {
-                guard isCurrentJoinAttempt(joinAttemptId) else { return }
             }
             pendingProducers.removeValue(forKey: producer.producerId)
             pendingProducerContexts.removeValue(forKey: producer.producerId)
@@ -2293,6 +2495,20 @@ final class MeetingViewModel {
             }
             debugLog("[Meeting] Failed to consume producer \(producer.producerId): \(error)")
             queueProducerConsumeRetry(producer, context: context, joinAttemptId: joinAttemptId)
+        }
+    }
+
+    private func discardStaleConsumedProducer(_ producer: ProducerInfo) {
+        webRTCClient.closeConsumer(producerId: producer.producerId, userId: producer.producerUserId)
+        if producerInfosById[producer.producerId]?.producerUserId == producer.producerUserId {
+            producerInfosById.removeValue(forKey: producer.producerId)
+        }
+        pendingProducers.removeValue(forKey: producer.producerId)
+        pendingProducerContexts.removeValue(forKey: producer.producerId)
+        pendingProducerRetryAttempts.removeValue(forKey: producer.producerId)
+        if pendingProducers.isEmpty {
+            pendingProducerRetryTask?.cancel()
+            pendingProducerRetryTask = nil
         }
     }
 
@@ -2365,7 +2581,7 @@ final class MeetingViewModel {
         lastActiveSpeakerAt = nil
     }
 
-    /// Picks the loudest remote participant above `activeSpeakerThreshold`. When
+    /// Picks the loudest participant above `activeSpeakerThreshold`. When
     /// nobody is above the threshold the previous speaker lingers for
     /// `activeSpeakerHoldSeconds` to debounce the ring, then clears to nil.
     private func updateActiveSpeaker() {
@@ -2373,18 +2589,25 @@ final class MeetingViewModel {
         // Keep the Picture-in-Picture window pointed at whoever is talking.
         updatePipVideo()
         #endif
-        let levels = webRTCClient.sampleAudioLevels()
+        let localAudioLevelUserId = state.sfuUserId?.isEmpty == false ? state.sfuUserId : state.userId
+        let levels = webRTCClient.sampleAudioLevels(localUserId: localAudioLevelUserId)
 
         var loudestId: String?
         var maxLevel = activeSpeakerThreshold
         for (userId, level) in levels {
-            // Only ring a participant the UI knows about and isn't server-muted.
-            guard let participant = state.participants[userId], !participant.isMuted else {
-                continue
+            let candidateId: String
+            if state.isLocalParticipantUserId(userId) {
+                guard !state.isMuted else { continue }
+                candidateId = state.userId
+            } else {
+                guard let participant = state.participants[userId], !participant.isMuted else {
+                    continue
+                }
+                candidateId = participant.id
             }
             if level > maxLevel {
                 maxLevel = level
-                loudestId = participant.id
+                loudestId = candidateId
             }
         }
 
@@ -2461,9 +2684,7 @@ final class MeetingViewModel {
         }
         if state.isScreenSharing {
             state.isScreenSharing = false
-            if state.activeScreenShareUserId == state.userId {
-                state.activeScreenShareUserId = nil
-            }
+            clearLocalActiveScreenShareIfNeeded()
         }
     }
 
@@ -2604,7 +2825,7 @@ final class MeetingViewModel {
         // Prefer the active speaker; fall back to the local user so PiP is never
         // blank when nobody else is talking.
         let targetId = state.effectiveActiveSpeakerId ?? state.userId
-        let isLocal = (targetId == state.userId)
+        let isLocal = state.isLocalParticipantUserId(targetId)
         let trackId = isLocal ? "local" : targetId
         let track = webRTCClient.rawVideoTrack(userId: trackId)
         let cameraOff: Bool
@@ -2622,6 +2843,7 @@ final class MeetingViewModel {
         let cleanupGeneration = expectedLifecycleGeneration ?? meetingLifecycleGeneration
         guard meetingLifecycleGeneration == cleanupGeneration else { return }
         resetReconnectRetryState()
+        cancelPendingIceRestartTasks()
         deactivateCallPresence()
         stopActiveSpeakerPoll()
         stopTtsPlayback()
@@ -2678,6 +2900,7 @@ final class MeetingViewModel {
         state.adminNoticeLevel = .info
         state.isNetworkOffline = effectiveNetworkOffline
         state.isAdmin = false
+        state.sfuUserId = nil
         state.hostUserId = nil
         state.hostUserIds.removeAll()
         // The VM is a process-wide singleton now (survives the PiP composition
@@ -2824,7 +3047,7 @@ final class MeetingViewModel {
             guard isCurrentJoinedCall(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId) else { return }
             do {
                 if newState {
-                    try await webRTCClient.setVideoEnabled(false)
+                    await webRTCClient.closeLocalVideoProducer()
                 } else {
                     if webRTCClient.localVideoEnabled {
                         try await webRTCClient.setVideoEnabled(true)
@@ -2846,7 +3069,7 @@ final class MeetingViewModel {
               !isScreenShareToggleInFlight else { return }
         if !state.isScreenSharing,
            let activeScreenShareUserId = state.activeScreenShareUserId,
-           activeScreenShareUserId != state.userId {
+           !state.isLocalParticipantUserId(activeScreenShareUserId) {
             state.errorMessage = "Someone else is already sharing their screen."
             return
         }
@@ -2864,12 +3087,10 @@ final class MeetingViewModel {
             do {
                 if state.isScreenSharing {
                     await ScreenCaptureManager.shared.stopCapture()
-                    await webRTCClient.stopScreenSharing()
+                    await webRTCClient.closeLocalScreenProducer()
                     guard isCurrentJoinedCall(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId) else { return }
                     state.isScreenSharing = false
-                    if state.activeScreenShareUserId == state.userId {
-                        state.activeScreenShareUserId = nil
-                    }
+                    clearLocalActiveScreenShareIfNeeded()
                     debugLog("[Meeting] Screen sharing stopped")
                 } else {
                     // Reset the broadcast producer if the user ends the share
@@ -2893,11 +3114,16 @@ final class MeetingViewModel {
                         throw ScreenCaptureError.cancelled
                     }
                     try await webRTCClient.startScreenSharing()
-                    guard isCurrentJoinedCall(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId),
+                    let isCurrentCallAfterStart = isCurrentJoinedCall(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId)
+                    guard isCurrentCallAfterStart,
                           ScreenCaptureManager.shared.isCaptureActive else {
                         ScreenCaptureManager.shared.onBroadcastStopped = nil
                         await ScreenCaptureManager.shared.stopCapture()
-                        await webRTCClient.stopScreenSharing()
+                        if isCurrentCallAfterStart {
+                            await webRTCClient.closeLocalScreenProducer()
+                        } else {
+                            await webRTCClient.stopScreenSharing()
+                        }
                         return
                     }
                     state.isScreenSharing = true
@@ -2909,7 +3135,7 @@ final class MeetingViewModel {
                 if isCurrentJoinedCall(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId) {
                     ScreenCaptureManager.shared.onBroadcastStopped = nil
                     await ScreenCaptureManager.shared.stopCapture()
-                    await webRTCClient.stopScreenSharing()
+                    await webRTCClient.closeLocalScreenProducer()
                     state.isScreenSharing = false
                     state.activeScreenShareUserId = nil
                     if !isCaptureCancelled {
@@ -2933,12 +3159,10 @@ final class MeetingViewModel {
             if state.isScreenSharing {
                 ScreenCaptureManager.onProjectionRevoked = nil
                 ScreenCaptureManager.stopCapture()
-                await webRTCClient.stopScreenSharing()
+                await webRTCClient.closeLocalScreenProducer()
                 guard isCurrentJoinedCall(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId) else { return }
                 state.isScreenSharing = false
-                if state.activeScreenShareUserId == state.userId {
-                    state.activeScreenShareUserId = nil
-                }
+                clearLocalActiveScreenShareIfNeeded()
                 debugLog("[Meeting] Screen sharing stopped")
             } else {
                 // Reset state if the user stops from the system UI / notification.
@@ -2964,11 +3188,16 @@ final class MeetingViewModel {
                             return
                         }
                         try await webRTCClient.startScreenSharing()
-                        guard isCurrentJoinedCall(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId),
+                        let isCurrentCallAfterStart = isCurrentJoinedCall(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId)
+                        guard isCurrentCallAfterStart,
                               ScreenCaptureManager.isCaptureActive() else {
                             ScreenCaptureManager.onProjectionRevoked = nil
                             ScreenCaptureManager.stopCapture()
-                            await webRTCClient.stopScreenSharing()
+                            if isCurrentCallAfterStart {
+                                await webRTCClient.closeLocalScreenProducer()
+                            } else {
+                                await webRTCClient.stopScreenSharing()
+                            }
                             return
                         }
                         state.isScreenSharing = true
@@ -2978,7 +3207,7 @@ final class MeetingViewModel {
                         if isCurrentJoinedCall(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId) {
                             ScreenCaptureManager.onProjectionRevoked = nil
                             ScreenCaptureManager.stopCapture()
-                            await webRTCClient.stopScreenSharing()
+                            await webRTCClient.closeLocalScreenProducer()
                             state.isScreenSharing = false
                             state.activeScreenShareUserId = nil
                             state.errorMessage = "Failed to toggle screen sharing: \(error.localizedDescription)"
@@ -3006,12 +3235,10 @@ final class MeetingViewModel {
               state.isScreenSharing else { return }
         Task { @MainActor in
             guard isCurrentJoinedCall(roomId: roomId, joinAttemptId: joinAttemptId) else { return }
-            await webRTCClient.stopScreenSharing()
+            await webRTCClient.closeLocalScreenProducer()
             guard isCurrentJoinedCall(roomId: roomId, joinAttemptId: joinAttemptId) else { return }
             state.isScreenSharing = false
-            if state.activeScreenShareUserId == state.userId {
-                state.activeScreenShareUserId = nil
-            }
+            clearLocalActiveScreenShareIfNeeded()
             debugLog("[Meeting] Screen sharing ended externally")
         }
     }
@@ -3022,12 +3249,10 @@ final class MeetingViewModel {
               state.isScreenSharing else { return }
         Task { @MainActor in
             guard isCurrentJoinedCall(roomId: roomId, joinAttemptId: joinAttemptId) else { return }
-            await webRTCClient.stopScreenSharing()
+            await webRTCClient.closeLocalScreenProducer()
             guard isCurrentJoinedCall(roomId: roomId, joinAttemptId: joinAttemptId) else { return }
             state.isScreenSharing = false
-            if state.activeScreenShareUserId == state.userId {
-                state.activeScreenShareUserId = nil
-            }
+            clearLocalActiveScreenShareIfNeeded()
             debugLog("[Meeting] Screen sharing ended externally")
         }
     }
@@ -3273,7 +3498,7 @@ final class MeetingViewModel {
         guard isCurrentJoinedCall(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId) else { return }
         do {
             if cameraOff {
-                try await webRTCClient.setVideoEnabled(false)
+                await webRTCClient.closeLocalVideoProducer()
             } else {
                 if webRTCClient.localVideoEnabled {
                     try await webRTCClient.setVideoEnabled(true)
@@ -3319,8 +3544,8 @@ final class MeetingViewModel {
 
     private func isVisibleChatMessage(_ message: ChatMessage) -> Bool {
         !message.isDirect ||
-            message.userId == state.userId ||
-            message.dmTargetUserId == state.userId
+            state.isLocalParticipantUserId(message.userId) ||
+            message.dmTargetUserId.map { state.isLocalParticipantUserId($0) } == true
     }
 
     private func normalizedChatMessage(_ message: ChatMessage) -> ChatMessage {
@@ -4166,7 +4391,7 @@ final class MeetingViewModel {
 
     func removeUser(userId: String) async {
         guard state.isAdmin else { return }
-        guard userId != state.userId else { return }
+        guard !state.isLocalParticipantUserId(userId) else { return }
         let actionKey = "remove:\(userId)"
         guard let actionToken = beginAdminAction(actionKey) else { return }
         let actionContext = currentCallActionContext()

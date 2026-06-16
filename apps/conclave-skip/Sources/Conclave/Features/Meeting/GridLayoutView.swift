@@ -158,7 +158,9 @@ struct GridLayoutView: View {
 
                     ForEach(rowIds, id: \.self) { userId in
                         Button {
-                            viewModel.togglePin(userId)
+                            if userId != MeetingState.overflowTileId {
+                                viewModel.togglePin(userId)
+                            }
                         } label: {
                             tileFor(userId: userId)
                                 .frame(width: layout.tileWidth, height: layout.tileHeight)
@@ -173,7 +175,9 @@ struct GridLayoutView: View {
 
     @ViewBuilder
     func tileFor(userId: String) -> some View {
-        if userId == viewModel.state.userId {
+        if userId == MeetingState.overflowTileId {
+            overflowTile
+        } else if viewModel.state.isLocalParticipantUserId(userId) {
             localTile()
         } else if let participant = viewModel.state.participants[userId] {
             remoteTile(participant: participant)
@@ -191,7 +195,9 @@ struct GridLayoutView: View {
             LazyVGrid(columns: columns, spacing: spacing) {
                 ForEach(ids, id: \.self) { userId in
                     Button {
-                        viewModel.togglePin(userId)
+                        if userId != MeetingState.overflowTileId {
+                            viewModel.togglePin(userId)
+                        }
                     } label: {
                         tileFor(userId: userId).frame(height: tileH)
                     }
@@ -209,7 +215,7 @@ struct GridLayoutView: View {
             isCameraOff: viewModel.state.isCameraOff,
             isHandRaised: viewModel.state.isHandRaised,
             isGhost: viewModel.state.isGhostMode,
-            isSpeaking: viewModel.state.effectiveActiveSpeakerId == viewModel.state.userId,
+            isSpeaking: viewModel.state.effectiveActiveSpeakerId.map { viewModel.state.isLocalParticipantUserId($0) } == true,
             isLocal: true,
             fillStage: fill,
             captureSession: viewModel.webRTCClient.getCaptureSession(),
@@ -230,6 +236,38 @@ struct GridLayoutView: View {
         )
         .opacity(participant.isLeaving ? 0.5 : 1.0)
         .animation(Animation.easeOut(duration: 0.2), value: participant.isLeaving)
+    }
+
+    var overflowTile: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: ACMRadius.lg)
+                .fill(ACMColors.bgAlt)
+
+            VStack(spacing: 8) {
+                Text("+\(viewModel.state.hiddenGridParticipantsCount)")
+                    .font(ACMFont.trial(30, weight: .bold))
+                    .foregroundStyle(ACMColors.text)
+                    .lineLimit(1)
+
+                HStack(spacing: 6) {
+                    ACMSystemIcon.icon("person.2.fill", android: "group", size: 14, tint: "muted")
+                        .foregroundStyle(ACMColors.textMuted)
+                    Text("More")
+                        .font(ACMFont.trial(12, weight: .medium))
+                        .foregroundStyle(ACMColors.textMuted)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .acmColorBackground(ACMColors.surface)
+                .clipShape(Capsule())
+            }
+            .padding(12)
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: ACMRadius.lg)
+                .strokeBorder(style: StrokeStyle(lineWidth: 1.0, dash: [6.0, 5.0]))
+                .foregroundStyle(ACMColors.border)
+        }
     }
 
     // Solo, camera-off: an invite affordance instead of a lone avatar in an

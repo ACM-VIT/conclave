@@ -71,7 +71,7 @@ open class MainActivity: AppCompatActivity {
             // action bar). Restore the full meeting UI when leaving PiP. Reading
             // PipController.inPipMode (a Compose mutableState) recomposes on the
             // PiP-mode transition.
-            if (PipController.inPipMode) {
+            if (PipController.inPipMode && PipController.isInCall) {
                 PipContent()
             } else {
                 val saveableStateHolder = rememberSaveableStateHolder()
@@ -172,6 +172,7 @@ open class MainActivity: AppCompatActivity {
     override fun onRequestPermissionsResult(requestCode: Int, permissions: kotlin.Array<String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         logger.info("onRequestPermissionsResult: ${requestCode}")
+        PermissionHelper.handleRequestPermissionsResult(requestCode, permissions, grantResults)
     }
 
     companion object {

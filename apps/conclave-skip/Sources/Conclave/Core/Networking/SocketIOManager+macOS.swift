@@ -88,6 +88,9 @@ final class SocketIOManager {
     }
     func connectProducerTransport(transportId: String, dtlsParameters: DtlsParameters) async throws { }
     func connectConsumerTransport(transportId: String, dtlsParameters: DtlsParameters) async throws { }
+    func restartIce(transport: String, transportId: String?) async throws -> RestartIceResponse {
+        throw NSError(domain: "Conclave", code: -1, userInfo: [NSLocalizedDescriptionKey: "SocketIO not available on macOS"])
+    }
 
     func produce(
         transportId: String,

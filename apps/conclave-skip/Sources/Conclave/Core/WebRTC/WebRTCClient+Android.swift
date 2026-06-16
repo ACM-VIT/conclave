@@ -27,6 +27,7 @@ final class VideoTrackWrapper: Identifiable {
 final class WebRTCClient {
     var onLocalAudioEnabledChanged: ((Bool) -> Void)?
     var onLocalVideoEnabledChanged: ((Bool) -> Void)?
+    var onTransportConnectionStateChanged: ((String, String) -> Void)?
 
     private(set) var localAudioEnabled: Bool = false
     private(set) var localVideoEnabled: Bool = false
@@ -36,6 +37,8 @@ final class WebRTCClient {
 
     func configure(socketManager: SocketIOManager, rtpCapabilities: RtpCapabilities, iceServersJSON: String?) { fatalError() }
     func createTransports() async throws { fatalError() }
+    func restartIce() async -> Bool { fatalError() }
+    func restartIce(transportKind: String) async -> Bool { fatalError() }
     func consumeProducer(producerId: String, producerUserId: String, producerType: String = "webcam") async throws { fatalError() }
     func closeConsumer(producerId: String, userId: String) { fatalError() }
     func updateVideoQuality(_ quality: VideoQuality) { fatalError() }
@@ -50,6 +53,8 @@ final class WebRTCClient {
     func setAudioConsumersEnabled(userIdPrefix: String, enabled: Bool) { fatalError() }
     func setAudioEnabled(_ enabled: Bool) async throws { fatalError() }
     func setVideoEnabled(_ enabled: Bool) async throws { fatalError() }
+    func closeLocalVideoProducer() async { fatalError() }
+    func closeLocalScreenProducer() async { fatalError() }
     func closeLocalMedia(kind: String, type: String, producerId: String? = nil) async -> Bool { fatalError() }
     func startScreenSharing() async throws { fatalError() }
     func stopScreenSharing() async { fatalError() }
@@ -57,7 +62,7 @@ final class WebRTCClient {
     func getCaptureSession() -> Any? { nil }
     func getLocalVideoTrack() -> Any? { nil }
 
-    func sampleAudioLevels() -> [String: Double] { fatalError() }
+    func sampleAudioLevels(localUserId: String? = nil) -> [String: Double] { fatalError() }
 
     func availableAudioInputs() -> [AudioDevice] { fatalError() }
     func availableAudioOutputs() -> [AudioDevice] { fatalError() }

@@ -48,6 +48,7 @@ final class WebRTCClient: NSObject, ObservableObject {
     @Published private(set) var localVideoTrack: VideoTrackWrapper?
     var onLocalAudioEnabledChanged: ((Bool) -> Void)?
     var onLocalVideoEnabledChanged: ((Bool) -> Void)?
+    var onTransportConnectionStateChanged: ((String, String) -> Void)?
 
     /// When true, mutating localAudioEnabled/localVideoEnabled does NOT fire the
     /// onLocal*EnabledChanged callbacks. The binding handlers hop through
@@ -75,11 +76,8 @@ final class WebRTCClient: NSObject, ObservableObject {
     var isConfigured: Bool { device != nil }
 
     func hasBrokenTransport() -> Bool {
-        switch connectionState {
-        case .failed, .disconnected, .closed:
-            return true
-        default:
-            return false
+        transportConnectionStates.values.contains { state in
+            state == "failed" || state == "disconnected" || state == "closed"
         }
     }
 
@@ -87,6 +85,7 @@ final class WebRTCClient: NSObject, ObservableObject {
     var receiveTransport: ReceiveTransport?
     var sendTransportId: String?
     var receiveTransportId: String?
+    private var transportConnectionStates: [String: String] = [:]
 
     var audioProducer: Producer?
     var videoProducer: Producer?
@@ -230,6 +229,42 @@ final class WebRTCClient: NSObject, ObservableObject {
         debugLog("[WebRTC] Transports created: send=\(producerTransportParams.id), recv=\(consumerTransportParams.id)")
     }
 
+    func restartIce() async -> Bool {
+        let producerReady = sendTransport != nil && sendTransportId != nil
+        let consumerReady = receiveTransport != nil && receiveTransportId != nil
+        guard producerReady || consumerReady else { return false }
+
+        let producerRestarted = producerReady ? await restartIce(transportKind: "producer") : true
+        let consumerRestarted = consumerReady ? await restartIce(transportKind: "consumer") : true
+        return producerRestarted && consumerRestarted
+    }
+
+    func restartIce(transportKind: String) async -> Bool {
+        guard let socket = socketManager else { return false }
+
+        do {
+            switch transportKind {
+            case "producer":
+                guard let transport = sendTransport, let transportId = sendTransportId else { return false }
+                let response = try await socket.restartIce(transport: transportKind, transportId: transportId)
+                let iceParameters = try encodeJSONString(response.iceParameters)
+                try transport.restartICE(with: iceParameters)
+            case "consumer":
+                guard let transport = receiveTransport, let transportId = receiveTransportId else { return false }
+                let response = try await socket.restartIce(transport: transportKind, transportId: transportId)
+                let iceParameters = try encodeJSONString(response.iceParameters)
+                try transport.restartICE(with: iceParameters)
+            default:
+                return false
+            }
+            debugLog("[WebRTC] \(transportKind) transport ICE restart succeeded")
+            return true
+        } catch {
+            debugLog("[WebRTC] \(transportKind) transport ICE restart failed: \(error)")
+            return false
+        }
+    }
+
     // MARK: - Produce Local Media
 
     func startProducingAudio() async throws {
@@ -237,6 +272,7 @@ final class WebRTCClient: NSObject, ObservableObject {
             throw WebRTCError.noTransport
         }
 
+        try await ensureMicrophonePermission()
         try audioSession.setCategory(.playAndRecord, mode: .voiceChat, options: [.defaultToSpeaker, .allowBluetoothHFP])
         try audioSession.setActive(true)
 
@@ -270,6 +306,24 @@ final class WebRTCClient: NSObject, ObservableObject {
         localAudioEnabled = true
 
         debugLog("[WebRTC] Audio producer created: \(producer.id)")
+    }
+
+    private func ensureMicrophonePermission() async throws {
+        switch audioSession.recordPermission {
+        case .granted:
+            return
+        case .denied:
+            throw WebRTCError.permissionDenied
+        case .undetermined:
+            let granted = await withCheckedContinuation { continuation in
+                audioSession.requestRecordPermission { granted in
+                    continuation.resume(returning: granted)
+                }
+            }
+            guard granted else { throw WebRTCError.permissionDenied }
+        @unknown default:
+            throw WebRTCError.permissionDenied
+        }
     }
 
     func startProducingVideo() async throws {
@@ -543,6 +597,36 @@ final class WebRTCClient: NSObject, ObservableObject {
         }
     }
 
+    func closeLocalVideoProducer() async {
+        guard let producerId = videoProducer?.id else { return }
+
+        _ = await closeLocalMedia(
+            kind: "video",
+            type: ProducerType.webcam.rawValue,
+            producerId: producerId
+        )
+
+        do {
+            try await socketManager?.closeProducer(producerId: producerId)
+        } catch {
+            debugLog("[WebRTC] Failed to notify SFU of closed video producer: \(error)")
+        }
+    }
+
+    func closeLocalScreenProducer() async {
+        let producerId = screenProducer?.id
+
+        await stopScreenSharing()
+
+        guard let producerId else { return }
+
+        do {
+            try await socketManager?.closeProducer(producerId: producerId)
+        } catch {
+            debugLog("[WebRTC] Failed to notify SFU of closed screen producer: \(error)")
+        }
+    }
+
     func closeLocalMedia(kind: String, type: String, producerId: String?) async -> Bool {
         let isWebcam = type == ProducerType.webcam.rawValue
         let isScreen = type == ProducerType.screen.rawValue
@@ -609,15 +693,11 @@ final class WebRTCClient: NSObject, ObservableObject {
         return rtcLocalVideoTrack
     }
 
-    // MARK: - Active Speaker (remote audio levels)
+    // MARK: - Active Speaker (audio levels)
 
-    /// Reads the per-consumer `audioLevel` (0.0–1.0, an RMS-derived linear value)
-    /// from each remote audio consumer's WebRTC stats and returns a userId->level
-    /// map. mediasoup's `Consumer.stats` is the standard RTCStatsReport serialized
-    /// as JSON; the `inbound-rtp` entry of an audio consumer carries `audioLevel`.
-    /// The shared VM picks the loudest above a threshold and debounces, mirroring
-    /// the web client's WebAudio-analyser approach.
-    func sampleAudioLevels() -> [String: Double] {
+    /// Reads `audioLevel` (0.0-1.0, RMS-derived) from local producer and remote
+    /// consumer WebRTC stats. The shared VM picks the loudest above a threshold.
+    func sampleAudioLevels(localUserId: String? = nil) -> [String: Double] {
         var levels: [String: Double] = [:]
         for (_, info) in consumers where info.kind == "audio" {
             let statsJson = info.consumer.stats
@@ -625,18 +705,33 @@ final class WebRTCClient: NSObject, ObservableObject {
                 levels[info.userId] = level
             }
         }
+        let normalizedLocalUserId = localUserId?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let normalizedLocalUserId,
+           !normalizedLocalUserId.isEmpty,
+           localAudioEnabled,
+           rtcLocalAudioTrack?.isEnabled == true,
+           let audioProducer,
+           let level = Self.parseAudioLevel(audioProducer.stats) {
+            levels[normalizedLocalUserId] = max(levels[normalizedLocalUserId] ?? 0, level)
+        }
         return levels
     }
 
     private static func parseInboundAudioLevel(_ statsJson: String) -> Double? {
+        parseAudioLevel(statsJson, requiredType: "inbound-rtp")
+    }
+
+    private static func parseAudioLevel(_ statsJson: String, requiredType: String? = nil) -> Double? {
         guard let data = statsJson.data(using: .utf8),
               let array = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
             return nil
         }
         var best: Double?
         for obj in array {
-            guard (obj["type"] as? String) == "inbound-rtp",
-                  let value = statsNumber(obj, "audioLevel") else {
+            if let requiredType, (obj["type"] as? String) != requiredType {
+                continue
+            }
+            guard let value = statsNumber(obj, "audioLevel") else {
                 continue
             }
             if let currentBest = best, value <= currentBest {
@@ -891,6 +986,7 @@ final class WebRTCClient: NSObject, ObservableObject {
         receiveTransport?.close()
         sendTransport = nil
         receiveTransport = nil
+        transportConnectionStates.removeAll()
         device = nil
         runtimeIceServersJSON = nil
 
@@ -998,20 +1094,38 @@ extension WebRTCClient: SendTransportDelegate, ReceiveTransportDelegate, Produce
 
     nonisolated func onConnectionStateChange(transport: any Transport, connectionState: TransportConnectionState) {
         Task { @MainActor in
+            let stateName: String
             switch connectionState {
             case .connected, .completed:
                 self.connectionState = .connected
+                stateName = "connected"
             case .failed:
                 self.connectionState = .failed
+                stateName = "failed"
             case .disconnected:
                 self.connectionState = .disconnected
+                stateName = "disconnected"
             case .closed:
                 self.connectionState = .closed
+                stateName = "closed"
             case .new, .checking:
                 self.connectionState = .new
+                stateName = "new"
             @unknown default:
                 self.connectionState = .failed
+                stateName = "failed"
             }
+
+            let transportKind: String
+            if transport.id == self.sendTransportId {
+                transportKind = "producer"
+            } else if transport.id == self.receiveTransportId {
+                transportKind = "consumer"
+            } else {
+                return
+            }
+            self.transportConnectionStates[transport.id] = stateName
+            self.onTransportConnectionStateChanged?(transportKind, stateName)
         }
     }
 

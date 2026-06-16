@@ -44,6 +44,7 @@ final class MeetingState {
 
     // User State
     var userId: String
+    var sfuUserId: String?
     var sessionId: String
     var displayName: String = ""
     var isAdmin: Bool = false
@@ -113,6 +114,7 @@ final class MeetingState {
 
     static let browserAudioUserIdPrefix = "shared-browser:"
     static let browserVideoUserIdPrefix = "shared-browser-video:"
+    static let overflowTileId = "__conclave_overflow__"
 
     static func isBrowserAudioUserId(_ userId: String) -> Bool {
         userId.hasPrefix(browserAudioUserIdPrefix)
@@ -144,8 +146,14 @@ final class MeetingState {
         return nil
     }
 
+    func isLocalParticipantUserId(_ id: String) -> Bool {
+        let normalized = id.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else { return false }
+        return normalized == userId || normalized == sfuUserId
+    }
+
     func isRemoteParticipantUserId(_ id: String) -> Bool {
-        !id.isEmpty && id != userId && !Self.isSystemUserId(id)
+        !id.isEmpty && !isLocalParticipantUserId(id) && !Self.isSystemUserId(id)
     }
 
     var sortedParticipants: [Participant] {
@@ -211,7 +219,7 @@ final class MeetingState {
     }
 
     var shouldShowSelfTile: Bool {
-        resolvedSelfViewMode == .tile || pinnedUserId == userId
+        resolvedSelfViewMode == .tile || pinnedUserId.map(isLocalParticipantUserId) == true
     }
 
     var shouldShowDetachedSelfView: Bool {
@@ -223,17 +231,36 @@ final class MeetingState {
         if shouldShowSelfTile {
             ids.append(userId)
         }
-        for participant in visibleTileParticipants {
-            ids.append(participant.id)
+
+        let capacity = MeetingViewConstants.clampTiles(viewMaxTiles)
+        let remoteCapacity = max(0, capacity - ids.count)
+        if visibleTileParticipants.count > remoteCapacity {
+            let visibleRemoteCount = max(0, remoteCapacity - 1)
+            for participant in visibleTileParticipants.prefix(visibleRemoteCount) {
+                ids.append(participant.id)
+            }
+            ids.append(Self.overflowTileId)
+        } else {
+            for participant in visibleTileParticipants {
+                ids.append(participant.id)
+            }
         }
         if ids.isEmpty {
             ids.append(userId)
         }
-        return Array(ids.prefix(MeetingViewConstants.clampTiles(viewMaxTiles)))
+        return Array(ids.prefix(capacity))
     }
 
     var visibleGridTileCount: Int {
         max(1, visibleGridUserIds.count)
+    }
+
+    var hiddenGridParticipantsCount: Int {
+        let capacity = MeetingViewConstants.clampTiles(viewMaxTiles)
+        let selfSlot = shouldShowSelfTile ? 1 : 0
+        let remoteCapacity = max(0, capacity - selfSlot)
+        guard visibleTileParticipants.count > remoteCapacity else { return 0 }
+        return visibleTileParticipants.count - max(0, remoteCapacity - 1)
     }
 
     var resolvedViewMode: MeetingResolvedViewMode {
@@ -322,7 +349,7 @@ final class MeetingState {
 
     private var preferredStageUserId: String {
         if let speakerId = effectiveActiveSpeakerId {
-            if speakerId == userId, !isCameraOff {
+            if isLocalParticipantUserId(speakerId), !isCameraOff {
                 return userId
             }
             if let participant = participants[speakerId],
@@ -349,7 +376,7 @@ final class MeetingState {
     }
 
     func displayName(for id: String) -> String {
-        if id == userId {
+        if isLocalParticipantUserId(id) {
             return displayName.isEmpty ? "You" : displayName
         }
         if let systemName = Self.systemDisplayName(for: id) {
@@ -359,12 +386,15 @@ final class MeetingState {
     }
 
     func isHostUser(_ id: String) -> Bool {
+        let localIds = [userId, sfuUserId].compactMap { $0 }
         if !hostUserIds.isEmpty {
             return hostUserIds.contains(id)
+                || (isLocalParticipantUserId(id) && localIds.contains { hostUserIds.contains($0) })
         }
         if let hostUserId {
             return hostUserId == id
+                || (isLocalParticipantUserId(id) && localIds.contains(hostUserId))
         }
-        return isAdmin && id == userId
+        return isAdmin && isLocalParticipantUserId(id)
     }
 }

@@ -132,7 +132,7 @@ struct PresentationLayoutView: View {
             }
         }
         .overlay {
-            if viewModel.state.shouldShowDetachedSelfView {
+            if viewModel.state.shouldShowDetachedSelfView && !viewModel.state.shouldShowSelfTile {
                 DetachedSelfViewOverlay(viewModel: viewModel)
                     .padding(16)
             }
@@ -149,7 +149,7 @@ struct PresentationLayoutView: View {
             isCameraOff: viewModel.state.isCameraOff,
             isHandRaised: viewModel.state.isHandRaised,
             isGhost: viewModel.state.isGhostMode,
-            isSpeaking: viewModel.state.effectiveActiveSpeakerId == viewModel.state.userId,
+            isSpeaking: viewModel.state.effectiveActiveSpeakerId.map { viewModel.state.isLocalParticipantUserId($0) } == true,
             isLocal: true,
             captureSession: viewModel.webRTCClient.getCaptureSession(),
             localVideoTrack: viewModel.webRTCClient.getLocalVideoTrack()

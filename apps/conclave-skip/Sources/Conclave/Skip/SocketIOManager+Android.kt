@@ -25,6 +25,7 @@ internal object SocketEvent {
     val createConsumerTransport = SfuClientEvent.createConsumerTransport.rawValue
     val connectProducerTransport = SfuClientEvent.connectProducerTransport.rawValue
     val connectConsumerTransport = SfuClientEvent.connectConsumerTransport.rawValue
+    val restartIce = SfuClientEvent.restartIce.rawValue
     val produce = SfuClientEvent.produce.rawValue
     val consume = SfuClientEvent.consume.rawValue
     val resumeConsumer = SfuClientEvent.resumeConsumer.rawValue
@@ -361,9 +362,10 @@ internal class SocketIOManager {
         isIntentionalDisconnect = true
         pendingConnectFailure?.invoke(ErrorException("Socket disconnected before connection completed"))
         pendingConnectFailure = null
-        socket?.off()
+        val socketToDisconnect = socket
+        socketToDisconnect?.disconnect()
+        socketToDisconnect?.off()
         manager?.off()
-        socket?.disconnect()
         socket = null
         manager = null
         activeRoomId = null
@@ -442,6 +444,12 @@ internal class SocketIOManager {
     internal suspend fun connectConsumerTransport(transportId: String, dtlsParameters: DtlsParameters) {
         val request = ConnectTransportRequest(transportId = transportId, dtlsParameters = dtlsParameters)
         emit(SocketEvent.connectConsumerTransport, request)
+    }
+
+    internal suspend fun restartIce(transport: String, transportId: String?): RestartIceResponse {
+        val request = RestartIceRequest(transport = transport, transportId = transportId)
+        val data = emit(SocketEvent.restartIce, request)
+        return JSONDecoder().decode(RestartIceResponse::class, from = data)
     }
 
     /// Send the producer's rtpParameters (the verbatim JSON mediasoup handed us
@@ -704,7 +712,7 @@ internal class SocketIOManager {
     }
 
     internal suspend fun muteAll(): AdminBulkMediaActionResponse {
-        val data = emit(SocketEvent.muteAll, mapOf<String, String>())
+        val data = emitAckOnly(SocketEvent.muteAll)
         return JSONDecoder().decode(AdminBulkMediaActionResponse::class, from = data)
     }
 

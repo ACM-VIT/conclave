@@ -26,6 +26,7 @@ final class VideoTrackWrapper: Identifiable {
 final class WebRTCClient {
     var onLocalAudioEnabledChanged: ((Bool) -> Void)?
     var onLocalVideoEnabledChanged: ((Bool) -> Void)?
+    var onTransportConnectionStateChanged: ((String, String) -> Void)?
 
     private(set) var localAudioEnabled: Bool = false
     private(set) var localVideoEnabled: Bool = false
@@ -35,6 +36,8 @@ final class WebRTCClient {
 
     func configure(socketManager: SocketIOManager, rtpCapabilities: RtpCapabilities, iceServersJSON: String?) { }
     func createTransports() async throws { }
+    func restartIce() async -> Bool { false }
+    func restartIce(transportKind: String) async -> Bool { false }
     func consumeProducer(producerId: String, producerUserId: String, producerType: String = "webcam") async throws { }
     func closeConsumer(producerId: String, userId: String) { }
     func updateVideoQuality(_ quality: VideoQuality) { }
@@ -49,12 +52,14 @@ final class WebRTCClient {
     func setAudioConsumersEnabled(userIdPrefix: String, enabled: Bool) { }
     func setAudioEnabled(_ enabled: Bool) async throws { }
     func setVideoEnabled(_ enabled: Bool) async throws { }
+    func closeLocalVideoProducer() async { }
+    func closeLocalScreenProducer() async { }
     func closeLocalMedia(kind: String, type: String, producerId: String? = nil) async -> Bool { false }
 
     func getCaptureSession() -> Any? { nil }
     func getLocalVideoTrack() -> Any? { nil }
 
-    func sampleAudioLevels() -> [String: Double] { [:] }
+    func sampleAudioLevels(localUserId: String? = nil) -> [String: Double] { [:] }
 
     func availableAudioInputs() -> [AudioDevice] { [] }
     func availableAudioOutputs() -> [AudioDevice] { [] }

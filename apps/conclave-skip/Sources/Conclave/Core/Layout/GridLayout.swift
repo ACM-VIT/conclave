@@ -79,6 +79,14 @@ private struct GridCandidate {
     let aspectDist: CGFloat
 }
 
+private struct GridTilePlacement {
+    let contentWidth: CGFloat
+    let contentHeight: CGFloat
+    let offsetX: CGFloat
+    let offsetY: CGFloat
+    let positions: [GridTilePosition]
+}
+
 private func buildGridTilePositions(
     cols: Int,
     rows: Int,
@@ -88,13 +96,7 @@ private func buildGridTilePositions(
     gap: CGFloat,
     width: CGFloat,
     height: CGFloat
-) -> (
-    contentWidth: CGFloat,
-    contentHeight: CGFloat,
-    offsetX: CGFloat,
-    offsetY: CGFloat,
-    positions: [GridTilePosition]
-) {
+) -> GridTilePlacement {
     let contentWidth = max(0.0, CGFloat(cols) * tileWidth + CGFloat(max(0, cols - 1)) * gap)
     let contentHeight = max(0.0, CGFloat(rows) * tileHeight + CGFloat(max(0, rows - 1)) * gap)
     let offsetX = max(0.0, (width - contentWidth) / 2.0)
@@ -122,7 +124,13 @@ private func buildGridTilePositions(
         index += 1
     }
 
-    return (contentWidth, contentHeight, offsetX, offsetY, positions)
+    return GridTilePlacement(
+        contentWidth: contentWidth,
+        contentHeight: contentHeight,
+        offsetX: offsetX,
+        offsetY: offsetY,
+        positions: positions
+    )
 }
 
 /// Find the arrangement of `count` aspect-locked tiles that fits the largest

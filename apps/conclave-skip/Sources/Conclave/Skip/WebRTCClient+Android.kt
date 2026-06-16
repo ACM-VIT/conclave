@@ -56,6 +56,7 @@ internal class VideoTrackWrapper(
 internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Producer.Listener, Consumer.Listener {
     internal var onLocalAudioEnabledChanged: ((Boolean) -> Unit)? = null
     internal var onLocalVideoEnabledChanged: ((Boolean) -> Unit)? = null
+    internal var onTransportConnectionStateChanged: ((String, String) -> Unit)? = null
 
     internal var localAudioEnabled: Boolean = false
         private set
@@ -241,6 +242,42 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         }
     }
 
+    internal suspend fun restartIce(): Boolean {
+        val producerReady = sendTransport != null && sendTransportId != null
+        val consumerReady = receiveTransport != null && receiveTransportId != null
+        if (!producerReady && !consumerReady) return false
+
+        val producerRestarted = if (producerReady) restartIce(transportKind = "producer") else true
+        val consumerRestarted = if (consumerReady) restartIce(transportKind = "consumer") else true
+        return producerRestarted && consumerRestarted
+    }
+
+    internal suspend fun restartIce(transportKind: String): Boolean {
+        val socket = socketManager ?: return false
+        try {
+            when (transportKind) {
+                "producer" -> {
+                    val transport = sendTransport ?: return false
+                    val transportId = sendTransportId ?: return false
+                    val response = socket.restartIce(transport = transportKind, transportId = transportId)
+                    transport.restartIce(encodeJSONString(response.iceParameters))
+                }
+                "consumer" -> {
+                    val transport = receiveTransport ?: return false
+                    val transportId = receiveTransportId ?: return false
+                    val response = socket.restartIce(transport = transportKind, transportId = transportId)
+                    transport.restartIce(encodeJSONString(response.iceParameters))
+                }
+                else -> return false
+            }
+            debugLog("[WebRTC] ${transportKind} transport ICE restart succeeded")
+            return true
+        } catch (t: Throwable) {
+            debugLog("[WebRTC] ${transportKind} transport ICE restart failed: ${t}")
+            return false
+        }
+    }
+
     internal suspend fun startProducingAudio() {
         val sendTransport = sendTransport ?: throw ErrorException("Send transport not ready")
         ensurePeerConnectionFactory(ProcessInfo.processInfo.androidContext)
@@ -284,6 +321,14 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         val sendTransport = sendTransport ?: throw ErrorException("Send transport not ready")
         ensurePeerConnectionFactory(ProcessInfo.processInfo.androidContext)
 
+        // Without the CAMERA runtime permission, WebRTC's Camera2Capturer throws a
+        // SecurityException on its async capture thread and CRASHES the process
+        // (a try/catch around startCapture can't catch that thread). Bail early
+        // with a catchable error so toggleCamera surfaces it instead of crashing.
+        if (androidx.core.content.ContextCompat.checkSelfPermission(ProcessInfo.processInfo.androidContext, android.Manifest.permission.CAMERA) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            throw ErrorException("Camera permission not granted")
+        }
+
         if (videoCapturer == null) {
             videoCapturer = createCameraCapturer(ProcessInfo.processInfo.androidContext)
         }
@@ -293,13 +338,6 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         }
 
         val capturer = videoCapturer ?: throw ErrorException("No camera capturer")
-        // Without the CAMERA runtime permission, WebRTC's Camera2Capturer throws a
-        // SecurityException on its async capture thread and CRASHES the process
-        // (a try/catch around startCapture can't catch that thread). Bail early
-        // with a catchable error so toggleCamera surfaces it instead of crashing.
-        if (androidx.core.content.ContextCompat.checkSelfPermission(ProcessInfo.processInfo.androidContext, android.Manifest.permission.CAMERA) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
-            throw ErrorException("Camera permission not granted")
-        }
         var pendingProducer: Producer? = null
         try {
             videoSource = peerConnectionFactory?.createVideoSource(false)
@@ -600,6 +638,38 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             onLocalVideoEnabledChanged?.invoke(previous)
             debugLog("[WebRTC] Failed to toggle video: ${error}")
             throw error
+        }
+    }
+
+    internal suspend fun closeLocalVideoProducer() {
+        val socket = socketManager
+        val producerId = videoProducer?.id ?: return
+
+        closeLocalMedia(
+            kind = "video",
+            type = ProducerType.webcam.rawValue,
+            producerId = producerId
+        )
+
+        try {
+            socket?.closeProducer(producerId)
+        } catch (error: Throwable) {
+            debugLog("[WebRTC] Failed to notify SFU of closed video producer: ${error}")
+        }
+    }
+
+    internal suspend fun closeLocalScreenProducer() {
+        val socket = socketManager
+        val producerId = screenProducer?.id
+
+        stopScreenSharing()
+
+        if (producerId == null) return
+
+        try {
+            socket?.closeProducer(producerId)
+        } catch (error: Throwable) {
+            debugLog("[WebRTC] Failed to notify SFU of closed screen producer: ${error}")
         }
     }
 
@@ -1041,13 +1111,9 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         return ConnectionQuality.good
     }
 
-    // Reads the per-consumer `audioLevel` (0.0–1.0, an RMS-derived linear value)
-    // from each remote audio consumer's WebRTC stats and returns a userId->level
-    // map. mediasoup's Consumer.getStats() returns the standard RTCStatsReport
-    // serialized as a JSON array; the `inbound-rtp` entry of an audio consumer
-    // carries `audioLevel`. The shared VM picks the loudest above a threshold and
-    // debounces, mirroring the web client's WebAudio-analyser approach.
-    internal fun sampleAudioLevels(): Dictionary<String, Double> {
+    // Reads audioLevel (0.0-1.0, RMS-derived) from local producer and remote
+    // consumer WebRTC stats. The shared VM picks the loudest above a threshold.
+    internal fun sampleAudioLevels(localUserId: String? = null): Dictionary<String, Double> {
         var levels: Dictionary<String, Double> = dictionaryOf()
         for ((_, info) in consumers) {
             if (info.kind != "audio") {
@@ -1061,16 +1127,40 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             val level = parseInboundAudioLevel(statsJson) ?: continue
             levels[info.userId] = level
         }
+        val normalizedLocalUserId = localUserId?.trim()?.takeIf { it.isNotEmpty() }
+        val localTrack = localAudioTrack
+        val localProducer = audioProducer
+        if (
+            normalizedLocalUserId != null &&
+            localAudioEnabled &&
+            localTrack?.enabled() == true &&
+            localProducer != null
+        ) {
+            val statsJson = try {
+                localProducer.getStats()
+            } catch (_: Throwable) {
+                null
+            }
+            val level = statsJson?.let { parseAudioLevel(it) }
+            if (level != null) {
+                val existing = levels[normalizedLocalUserId] ?: 0.0
+                levels[normalizedLocalUserId] = maxOf(existing, level)
+            }
+        }
         return levels.sref()
     }
 
     private fun parseInboundAudioLevel(statsJson: String): Double? {
+        return parseAudioLevel(statsJson, requiredType = "inbound-rtp")
+    }
+
+    private fun parseAudioLevel(statsJson: String, requiredType: String? = null): Double? {
         return try {
             val array = org.json.JSONArray(statsJson)
             var best: Double? = null
             for (i in 0 until array.length()) {
                 val obj = array.optJSONObject(i) ?: continue
-                if (obj.optString("type") != "inbound-rtp") {
+                if (requiredType != null && obj.optString("type") != requiredType) {
                     continue
                 }
                 if (!obj.has("audioLevel")) {
@@ -1171,7 +1261,14 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     }
 
     override fun onConnectionStateChange(transport: Transport, connectionState: String) {
-        transportConnectionStates[transport.id] = connectionState.lowercase()
+        val stateName = connectionState.lowercase()
+        transportConnectionStates[transport.id] = stateName
+        val transportKind = when (transport.id) {
+            sendTransportId -> "producer"
+            receiveTransportId -> "consumer"
+            else -> return
+        }
+        onTransportConnectionStateChanged?.invoke(transportKind, stateName)
     }
 
     override fun onProduce(transport: Transport, kind: String, rtpParameters: String, appData: String): String {

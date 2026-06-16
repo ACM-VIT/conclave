@@ -133,7 +133,7 @@ struct ChatOverlayView: View {
                             ForEach(timeline) { entry in
                                 switch entry {
                                 case .message(let message):
-                                    let isFromCurrentUser = message.userId == viewModel.state.userId
+                                    let isFromCurrentUser = viewModel.state.isLocalParticipantUserId(message.userId)
                                     if let actionText = ChatMessagePresentation.actionText(from: message.content) {
                                         ChatActionMessageRow(
                                             message: message,

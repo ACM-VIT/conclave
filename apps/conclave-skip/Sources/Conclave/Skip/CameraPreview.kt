@@ -22,15 +22,8 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleOwner
 
-/// A live front-camera preview for the pre-join screen, mirrored to match the
-/// iOS AVCaptureSession path. Sets up CameraX (ProcessCameraProvider + a Preview
-/// use case bound to the front camera) and hosts a PreviewView via AndroidView.
-///
-/// Requests CAMERA at runtime (the permission is declared in the manifest for
-/// calls); until granted the surface stays blank, never a crash. The use case is
-/// unbound when the Composable leaves the tree (camera toggled off / view gone).
 @Composable
-internal fun CameraPreviewView() {
+internal fun CameraPreviewView(onPermissionChanged: (Boolean) -> Unit) {
     val context = LocalContext.current
     val lifecycleOwner = context as? LifecycleOwner
 
@@ -45,11 +38,14 @@ internal fun CameraPreviewView() {
         ActivityResultContracts.RequestPermission()
     ) { granted ->
         hasPermission = granted
+        onPermissionChanged(granted)
     }
 
     LaunchedEffect(hasPermission) {
         if (!hasPermission) {
             permissionLauncher.launch(Manifest.permission.CAMERA)
+        } else {
+            onPermissionChanged(true)
         }
     }
 
@@ -82,6 +78,8 @@ internal fun CameraPreviewView() {
                     cameraProvider.bindToLifecycle(lifecycleOwner, selector, preview)
                 } catch (t: Throwable) {
                     logger.error("CameraPreviewView bind failed: ${t}")
+                    hasPermission = false
+                    onPermissionChanged(false)
                 }
             }
             providerFuture.addListener(listener, ContextCompat.getMainExecutor(context))

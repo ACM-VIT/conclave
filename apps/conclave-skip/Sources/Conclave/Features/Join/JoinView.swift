@@ -75,6 +75,7 @@ struct JoinView: View {
         let joinMode: JoinMode
         let meetingInviteCode: String?
         let webinarInviteCode: String?
+        let allowRoomCreation: Bool
     }
 
     private var isGoogleSignInEnabled: Bool {
@@ -145,6 +146,9 @@ struct JoinView: View {
         .onDisappear {
             authTransitionGeneration += 1
             inputFocusClearGeneration += 1
+#if SKIP
+            PermissionHelper.onRecordAudioPermissionResult = nil
+#endif
             stopPreviewCapture()
         }
     }
@@ -407,7 +411,9 @@ struct JoinView: View {
             if isCameraOn {
 #if SKIP
                 ComposeView { _ in
-                    CameraPreviewView()
+                    CameraPreviewView(onPermissionChanged: { granted in
+                        isCameraOn = granted
+                    })
                 }
                 .clipShape(RoundedRectangle(cornerRadius: ACMRadius.xl))
 #else
@@ -1110,7 +1116,8 @@ struct JoinView: View {
             isHost: false,
             joinMode: joinTarget.joinMode,
             meetingInviteCode: meetingInviteCode,
-            webinarInviteCode: webinarInviteCode
+            webinarInviteCode: webinarInviteCode,
+            allowRoomCreation: joinTarget.allowRoomCreation
         )
         pendingLinkJoinTarget = nil
     }
@@ -1177,7 +1184,13 @@ struct JoinView: View {
         let trimmed = trimWhitespaceAndNewlines(input)
         let lowercasedTrimmed = trimmed.lowercased()
         guard !trimmed.isEmpty, lowercasedTrimmed != "undefined", lowercasedTrimmed != "null" else {
-            return ParsedJoinTarget(roomId: "", joinMode: .meeting, meetingInviteCode: nil, webinarInviteCode: nil)
+            return ParsedJoinTarget(
+                roomId: "",
+                joinMode: .meeting,
+                meetingInviteCode: nil,
+                webinarInviteCode: nil,
+                allowRoomCreation: false
+            )
         }
 
         let normalizedUrlInput = normalizeJoinUrlInput(trimmed)
@@ -1204,7 +1217,8 @@ struct JoinView: View {
             roomId: roomId,
             joinMode: joinMode,
             meetingInviteCode: inviteCodeValue(from: queryItems, joinMode: joinMode, target: .meeting),
-            webinarInviteCode: inviteCodeValue(from: queryItems, joinMode: joinMode, target: .webinarAttendee)
+            webinarInviteCode: inviteCodeValue(from: queryItems, joinMode: joinMode, target: .webinarAttendee),
+            allowRoomCreation: false
         )
     }
 
@@ -1226,7 +1240,8 @@ struct JoinView: View {
             roomId: roomId,
             joinMode: joinMode,
             meetingInviteCode: inviteCodeValue(from: queryItems, joinMode: joinMode, target: .meeting),
-            webinarInviteCode: inviteCodeValue(from: queryItems, joinMode: joinMode, target: .webinarAttendee)
+            webinarInviteCode: inviteCodeValue(from: queryItems, joinMode: joinMode, target: .webinarAttendee),
+            allowRoomCreation: joinMode == .meeting
         )
     }
 
@@ -1341,7 +1356,8 @@ struct JoinView: View {
             roomId: parsed.roomId,
             joinMode: pendingLinkJoinTarget.joinMode,
             meetingInviteCode: pendingLinkJoinTarget.meetingInviteCode,
-            webinarInviteCode: pendingLinkJoinTarget.webinarInviteCode
+            webinarInviteCode: pendingLinkJoinTarget.webinarInviteCode,
+            allowRoomCreation: pendingLinkJoinTarget.allowRoomCreation
         )
     }
 
@@ -1506,11 +1522,56 @@ struct JoinView: View {
     }
     
     private func toggleMic() {
+#if SKIP
+        if isMicOn {
+            PermissionHelper.onRecordAudioPermissionResult = nil
+            isMicOn = false
+        } else {
+            requestAndroidMicrophonePermission()
+        }
+#elseif os(iOS)
+        if isMicOn {
+            isMicOn = false
+        } else {
+            requestIOSMicrophonePermission()
+        }
+#else
         isMicOn = !isMicOn
+#endif
     }
     
     #if SKIP
-    #else
+    private func requestAndroidMicrophonePermission() {
+        if PermissionHelper.hasRecordAudioPermission() {
+            isMicOn = true
+            return
+        }
+
+        PermissionHelper.onRecordAudioPermissionResult = { granted in
+            isMicOn = granted
+        }
+        PermissionHelper.requestRecordAudioPermission()
+    }
+    #elseif os(iOS)
+    private func requestIOSMicrophonePermission() {
+        switch AVAudioApplication.shared.recordPermission {
+        case .granted:
+            isMicOn = true
+        case .denied:
+            isMicOn = false
+        case .undetermined:
+            AVAudioApplication.requestRecordPermission { granted in
+                DispatchQueue.main.async {
+                    isMicOn = granted
+                }
+            }
+        @unknown default:
+            isMicOn = false
+        }
+    }
+    #endif
+
+    #if !SKIP
     private func setupCamera() {
         cameraPreviewGeneration += 1
         let generation = cameraPreviewGeneration

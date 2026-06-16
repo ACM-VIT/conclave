@@ -9,6 +9,7 @@ private enum SocketEvent {
     static let createConsumerTransport = SfuClientEvent.createConsumerTransport.rawValue
     static let connectProducerTransport = SfuClientEvent.connectProducerTransport.rawValue
     static let connectConsumerTransport = SfuClientEvent.connectConsumerTransport.rawValue
+    static let restartIce = SfuClientEvent.restartIce.rawValue
     static let produce = SfuClientEvent.produce.rawValue
     static let consume = SfuClientEvent.consume.rawValue
     static let resumeConsumer = SfuClientEvent.resumeConsumer.rawValue
@@ -385,8 +386,15 @@ final class SocketIOManager {
         pendingConnectFailure?(SocketError.connectionFailed("Socket disconnected before connection completed"))
         pendingConnectFailure = nil
         pendingConnectAttemptId = nil
-        socket?.removeAllHandlers()
-        manager?.disconnect()
+        let socketToDisconnect = socket
+        let managerToDisconnect = manager
+        socketToDisconnect?.disconnect()
+        socketToDisconnect?.removeAllHandlers()
+        if let managerToDisconnect {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                managerToDisconnect.disconnect()
+            }
+        }
         socket = nil
         manager = nil
         activeRoomId = nil
@@ -457,6 +465,12 @@ final class SocketIOManager {
     func connectConsumerTransport(transportId: String, dtlsParameters: DtlsParameters) async throws {
         let request = ConnectTransportRequest(transportId: transportId, dtlsParameters: dtlsParameters)
         _ = try await emit(event: SocketEvent.connectConsumerTransport, payload: request)
+    }
+
+    func restartIce(transport: String, transportId: String?) async throws -> RestartIceResponse {
+        let request = RestartIceRequest(transport: transport, transportId: transportId)
+        let data = try await emit(event: SocketEvent.restartIce, payload: request)
+        return try JSONDecoder().decode(RestartIceResponse.self, from: data)
     }
 
     func produce(
@@ -696,7 +710,7 @@ final class SocketIOManager {
     }
 
     func muteAll() async throws -> AdminBulkMediaActionResponse {
-        let data = try await emit(event: SocketEvent.muteAll, payload: [String: String]())
+        let data = try await emitAckOnly(event: SocketEvent.muteAll)
         return try JSONDecoder().decode(AdminBulkMediaActionResponse.self, from: data)
     }
 

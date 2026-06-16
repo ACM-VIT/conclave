@@ -83,6 +83,7 @@ final class SocketIOManager {
     func createConsumerTransport() async throws -> TransportResponse { fatalError() }
     func connectProducerTransport(transportId: String, dtlsParameters: DtlsParameters) async throws { fatalError() }
     func connectConsumerTransport(transportId: String, dtlsParameters: DtlsParameters) async throws { fatalError() }
+    func restartIce(transport: String, transportId: String?) async throws -> RestartIceResponse { fatalError() }
 
     func produce(
         transportId: String,
