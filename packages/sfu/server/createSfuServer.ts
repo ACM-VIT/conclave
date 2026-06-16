@@ -50,7 +50,7 @@ export const createSfuServer = (
   let scheduledMeetingTickTimer: NodeJS.Timeout | null = null;
 
   const start = async (): Promise<void> => {
-    await initMediaSoup(state);
+    await initMediaSoup(state, () => io);
     initScheduledWebinars(state);
     initScheduledMeetings(state);
     startScheduledWebinarTimer(state, () => io, undefined);
