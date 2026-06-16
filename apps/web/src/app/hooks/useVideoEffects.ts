@@ -1079,6 +1079,8 @@ let faceModelPrewarmPromise: Promise<void> | null = null;
 let outputWriterWorkerPrewarmPromise: Promise<void> | null = null;
 let segmentationProcessorWorkerPrewarmPromise: Promise<void> | null = null;
 let faceProcessorWorkerPrewarmPromise: Promise<void> | null = null;
+let videoEffectsRuntimePrewarmPromise: Promise<void> | null = null;
+let videoEffectsRuntimePrewarmDone = false;
 let prewarmedOutputWriterWorker: PrewarmedOutputWriterWorker | null = null;
 let prewarmedSegmentationProcessorWorker: PrewarmedProcessorWorker | null = null;
 let prewarmedFaceProcessorWorker: PrewarmedProcessorWorker | null = null;
@@ -3795,6 +3797,67 @@ const prewarmOutputWriterWorker = (
 
   setPromise(promise);
   return promise;
+};
+
+export const prewarmVideoEffectsRuntime = async ({
+  reason = "manual",
+  outputWriter = true,
+}: {
+  reason?: string;
+  outputWriter?: boolean;
+} = {}) => {
+  if (typeof window === "undefined") return;
+  const instanceId = 0;
+
+  if (videoEffectsRuntimePrewarmDone) {
+    logVideoEffects(instanceId, "runtime_prewarm_reuse", {
+      reason,
+      outputWriter,
+    });
+    return;
+  }
+  if (videoEffectsRuntimePrewarmPromise) {
+    logVideoEffects(instanceId, "runtime_prewarm_wait", {
+      reason,
+      outputWriter,
+    });
+    return videoEffectsRuntimePrewarmPromise;
+  }
+
+  videoEffectsRuntimePrewarmPromise = (async () => {
+    logVideoEffects(instanceId, "runtime_prewarm_requested", {
+      reason,
+      outputWriter,
+    });
+    const tasksReady = ensureSharedTasksVisionFileset(instanceId)
+      .then(() => undefined)
+      .catch((err) => {
+        warnVideoEffects(instanceId, "runtime_tasks_fileset_prewarm_failed", {
+          reason,
+          error: getErrorDebugSnapshot(err),
+        });
+      });
+    const outputWriterReady = outputWriter
+      ? prewarmOutputWriterWorker(
+          instanceId,
+          outputWriterWorkerPrewarmPromise,
+          (promise) => {
+            outputWriterWorkerPrewarmPromise = promise;
+          },
+        )
+      : Promise.resolve();
+
+    await Promise.all([tasksReady, outputWriterReady]);
+    videoEffectsRuntimePrewarmDone = true;
+    logVideoEffects(instanceId, "runtime_prewarm_done", {
+      reason,
+      outputWriter,
+    });
+  })().finally(() => {
+    videoEffectsRuntimePrewarmPromise = null;
+  });
+
+  return videoEffectsRuntimePrewarmPromise;
 };
 
 export const prewarmVideoEffectsAssets = async ({

@@ -40,6 +40,7 @@ import { useMeetState } from "./hooks/useMeetState";
 import { useMeetTts } from "./hooks/useMeetTts";
 import {
   prewarmVideoEffectsAssets,
+  prewarmVideoEffectsRuntime,
   useVideoEffects,
 } from "./hooks/useVideoEffects";
 import { useConnectionQuality } from "./hooks/useConnectionQuality";
@@ -402,6 +403,43 @@ export default function MeetsClient({
   >(null);
   const restoredVideoEffectsPrewarmDoneRef = useRef(false);
   const cameraLiveEffectsPrewarmDoneRef = useRef(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    let timeoutId: number | null = null;
+    let idleId: number | null = null;
+    const run = () => {
+      if (cancelled) return;
+      void prewarmVideoEffectsRuntime({
+        reason: "meet-shell-runtime",
+        outputWriter: true,
+      });
+    };
+    const idleWindow = window as Window & {
+      requestIdleCallback?: (
+        callback: IdleRequestCallback,
+        options?: IdleRequestOptions,
+      ) => number;
+      cancelIdleCallback?: (handle: number) => void;
+    };
+    if (typeof idleWindow.requestIdleCallback === "function") {
+      idleId = idleWindow.requestIdleCallback(run, { timeout: 1800 });
+    } else {
+      timeoutId = window.setTimeout(run, 300);
+    }
+    return () => {
+      cancelled = true;
+      if (
+        idleId !== null &&
+        typeof idleWindow.cancelIdleCallback === "function"
+      ) {
+        idleWindow.cancelIdleCallback(idleId);
+      }
+      if (timeoutId !== null) {
+        window.clearTimeout(timeoutId);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     writeStoredVideoEffects(videoEffects);

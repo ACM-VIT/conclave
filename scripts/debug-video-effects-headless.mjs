@@ -2002,8 +2002,8 @@ const runPrejoinPermissionDeniedEffectsProbe = async (cdp, prejoinUrl) => {
       const tabs = Array.from(panel?.querySelectorAll('[role="tab"]') ?? []);
       const selectedTab = tabs.find((tab) => tab.getAttribute("aria-selected") === "true");
       const activePanel = panel?.querySelector('[role="tabpanel"]');
-      const turnOffButton = Array.from(panel?.querySelectorAll("button") ?? []).find(
-        (button) => (button.textContent || "").replace(/\\s+/g, " ").trim().includes("Turn off visual effects")
+      const activeEffectsButton = Array.from(panel?.querySelectorAll("button") ?? []).find(
+        (button) => (button.textContent || "").replace(/\\s+/g, " ").trim().includes("Active effects")
       );
       const meetDebug = window.__conclaveGetMeetVideoDebug?.();
       const bodyText = document.body?.innerText || "";
@@ -2020,9 +2020,9 @@ const runPrejoinPermissionDeniedEffectsProbe = async (cdp, prejoinUrl) => {
         selectedTab?.getAttribute("aria-controls") === "video-effects-tabpanel-backgrounds" &&
         activePanel?.id === "video-effects-tabpanel-backgrounds" &&
         activePanel?.getAttribute("aria-labelledby") === "video-effects-tab-backgrounds" &&
-        turnOffButton instanceof HTMLButtonElement &&
-        turnOffButton.disabled &&
-        turnOffButton.getAttribute("title") === "No effects applied" &&
+        activeEffectsButton instanceof HTMLButtonElement &&
+        activeEffectsButton.disabled &&
+        activeEffectsButton.getAttribute("title") === "No effects applied" &&
         bodyText.includes("Camera is blocked") &&
         panelText.includes("Backgrounds") &&
         panelText.includes("Appearance") &&
@@ -2919,7 +2919,7 @@ const run = async () => {
     });
 
     if (expectFaceLandmarks) {
-      await clickButton(cdp, "Turn off visual effects");
+      await clickButton(cdp, "Active effects");
       await waitFor(
         cdp,
         "active effects stack opened before framing-only static crop",
@@ -3348,7 +3348,7 @@ const run = async () => {
 
     emit("face_filter_probe_summary", { faceProbes });
 
-    await clickButton(cdp, "Turn off visual effects");
+    await clickButton(cdp, "Active effects");
     await waitFor(
       cdp,
       "active effects stack opened before removing all",
@@ -3802,7 +3802,7 @@ const run = async () => {
       state = await collectState(cdp, "state_after_face_no_result_backoff");
     }
 
-    await clickButton(cdp, "Turn off visual effects");
+    await clickButton(cdp, "Active effects");
     await waitFor(
       cdp,
       "active effects stack contains blur and sparkles",
@@ -4112,6 +4112,16 @@ const run = async () => {
           /prewarm_done/.test(log.text) &&
           /"reason":"camera-live"/.test(log.text),
       );
+      const shellRuntimePrewarmRequested = cdp.logs.some(
+        (log) =>
+          /runtime_prewarm_requested/.test(log.text) &&
+          /"reason":"meet-shell-runtime"/.test(log.text),
+      );
+      const shellRuntimePrewarmDone = cdp.logs.some(
+        (log) =>
+          /runtime_prewarm_done/.test(log.text) &&
+          /"reason":"meet-shell-runtime"/.test(log.text),
+      );
       const missingPrewarmKinds = ["segmentation", "face"].filter(
         (kind) =>
           !prewarmDoneKinds.has(kind) && !prewarmSuppressedKinds.has(kind),
@@ -4135,6 +4145,12 @@ const run = async () => {
         ok: cameraLivePrewarmRequested && cameraLivePrewarmDone,
         requested: cameraLivePrewarmRequested,
         done: cameraLivePrewarmDone,
+      });
+      emit("meet_shell_runtime_prewarm_probe", {
+        label: probeLabel,
+        ok: shellRuntimePrewarmRequested && shellRuntimePrewarmDone,
+        requested: shellRuntimePrewarmRequested,
+        done: shellRuntimePrewarmDone,
       });
 
       const blackOutputCount = Number(
@@ -4187,6 +4203,8 @@ const run = async () => {
         !cameraToggleLivePrewarmDone ||
         !cameraLivePrewarmRequested ||
         !cameraLivePrewarmDone ||
+        !shellRuntimePrewarmRequested ||
+        !shellRuntimePrewarmDone ||
         !effectSwitchLatencyQuality.ok ||
         badLogs.length > 0
       ) {
@@ -4203,6 +4221,8 @@ const run = async () => {
             cameraToggleLivePrewarmDone,
             cameraLivePrewarmRequested,
             cameraLivePrewarmDone,
+            shellRuntimePrewarmRequested,
+            shellRuntimePrewarmDone,
             effectSwitchLatencyQuality,
             sourceFrame,
             badLogs,
@@ -4997,6 +5017,16 @@ const run = async () => {
         /prewarm_done/.test(log.text) &&
         /"reason":"camera-live"/.test(log.text),
     );
+    const shellRuntimePrewarmRequested = cdp.logs.some(
+      (log) =>
+        /runtime_prewarm_requested/.test(log.text) &&
+        /"reason":"meet-shell-runtime"/.test(log.text),
+    );
+    const shellRuntimePrewarmDone = cdp.logs.some(
+      (log) =>
+        /runtime_prewarm_done/.test(log.text) &&
+        /"reason":"meet-shell-runtime"/.test(log.text),
+    );
     const missingPrewarmKinds = ["segmentation", "face"].filter(
       (kind) =>
         !prewarmDoneKinds.has(kind) && !prewarmSuppressedKinds.has(kind),
@@ -5018,6 +5048,12 @@ const run = async () => {
       ok: cameraLivePrewarmRequested && cameraLivePrewarmDone,
       requested: cameraLivePrewarmRequested,
       done: cameraLivePrewarmDone,
+    });
+    emit("meet_shell_runtime_prewarm_probe", {
+      label: "final",
+      ok: shellRuntimePrewarmRequested && shellRuntimePrewarmDone,
+      requested: shellRuntimePrewarmRequested,
+      done: shellRuntimePrewarmDone,
     });
 
     const blackOutputCount = Number(
@@ -5070,6 +5106,8 @@ const run = async () => {
       !cameraToggleLivePrewarmDone ||
       !cameraLivePrewarmRequested ||
       !cameraLivePrewarmDone ||
+      !shellRuntimePrewarmRequested ||
+      !shellRuntimePrewarmDone ||
       !effectSwitchLatencyQuality.ok ||
       badLogs.length > 0
     ) {
@@ -5085,6 +5123,8 @@ const run = async () => {
           cameraToggleLivePrewarmDone,
           cameraLivePrewarmRequested,
           cameraLivePrewarmDone,
+          shellRuntimePrewarmRequested,
+          shellRuntimePrewarmDone,
           effectSwitchLatencyQuality,
           sourceFrame,
           badLogs,
