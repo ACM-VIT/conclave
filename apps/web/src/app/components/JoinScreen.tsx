@@ -317,6 +317,7 @@ function JoinScreen({
     }));
   };
   const openEffectsPanel = () => {
+    if (isCameraPermissionBlocked) return;
     setIsMoreOptionsOpen(false);
     setIsEffectsOpen(true);
   };
@@ -847,9 +848,18 @@ function JoinScreen({
                 onTouchStart={() =>
                   prewarmLiveCameraEffects("prejoin-effects-button")
                 }
-                aria-label="Backgrounds and effects"
-                title="Backgrounds and effects"
-                className={`inline-flex h-11 w-11 items-center justify-center rounded-full text-white transition-colors duration-150 hover:bg-[#2e2e33] ${
+                disabled={isCameraPermissionBlocked}
+                aria-label={
+                  isCameraPermissionBlocked
+                    ? "Backgrounds and effects: Permission needed"
+                    : "Backgrounds and effects"
+                }
+                title={
+                  isCameraPermissionBlocked
+                    ? "Permission needed"
+                    : "Backgrounds and effects"
+                }
+                className={`inline-flex h-11 w-11 items-center justify-center rounded-full text-white transition-colors duration-150 hover:bg-[#2e2e33] disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-[#232327] ${
                   activeVideoEffectsCount > 0
                     ? "bg-[#F95F4A] shadow-[0_0_0_1px_rgba(249,95,74,0.35)] hover:bg-[#ff6d5a]"
                     : "bg-[#232327]"
@@ -876,7 +886,12 @@ function JoinScreen({
                       type="button"
                       data-testid="prejoin-more-backgrounds-effects"
                       onClick={openEffectsPanel}
-                      aria-label="Backgrounds and effects"
+                      disabled={isCameraPermissionBlocked}
+                      aria-label={
+                        isCameraPermissionBlocked
+                          ? "Backgrounds and effects: Permission needed"
+                          : "Backgrounds and effects"
+                      }
                       className="flex w-full items-center gap-3 px-4 py-3 text-left text-[14px] text-[#f1f3f4] transition-colors duration-150 hover:bg-white/10 disabled:cursor-not-allowed disabled:text-[#f1f3f4]/45 disabled:hover:bg-transparent"
                     >
                       <WandSparkles
@@ -887,6 +902,11 @@ function JoinScreen({
                         <span className="block truncate">
                           Backgrounds and effects
                         </span>
+                        {isCameraPermissionBlocked ? (
+                          <span className="mt-0.5 block text-[12px] text-[#f1f3f4]/45">
+                            Permission needed
+                          </span>
+                        ) : null}
                       </span>
                     </button>
                     <button

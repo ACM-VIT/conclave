@@ -216,13 +216,14 @@ function MobileJoinScreen({
   }, []);
 
   const openEffectsPanel = useCallback(() => {
+    if (isCameraPermissionBlocked) return;
     void prewarmVideoEffectsAssets({
       segmentation: true,
       face: true,
       reason: "mobile-prejoin-effects-panel-open",
     });
     setIsEffectsOpen(true);
-  }, []);
+  }, [isCameraPermissionBlocked]);
 
   const { data: session } = useSession();
   const canSignOut = Boolean(session?.user || user?.id || user?.email);
@@ -813,16 +814,30 @@ function MobileJoinScreen({
             </button>
             <button
               onClick={openEffectsPanel}
-              aria-label="Backgrounds and effects"
-              aria-pressed={activeVideoEffectsCount > 0 || isEffectsOpen}
-              className={`relative w-9 h-9 rounded-full flex items-center justify-center transition-colors ${
-                activeVideoEffectsCount > 0 || isEffectsOpen
+              disabled={isCameraPermissionBlocked}
+              aria-label={
+                isCameraPermissionBlocked
+                  ? "Backgrounds and effects: Permission needed"
+                  : "Backgrounds and effects"
+              }
+              aria-pressed={
+                !isCameraPermissionBlocked &&
+                (activeVideoEffectsCount > 0 || isEffectsOpen)
+              }
+              title={
+                isCameraPermissionBlocked
+                  ? "Permission needed"
+                  : "Backgrounds and effects"
+              }
+              className={`relative w-9 h-9 rounded-full flex items-center justify-center transition-colors disabled:cursor-not-allowed disabled:opacity-45 ${
+                !isCameraPermissionBlocked &&
+                (activeVideoEffectsCount > 0 || isEffectsOpen)
                   ? "bg-[#F95F4A] text-white"
                   : "text-white"
               }`}
             >
               <WandSparkles className="w-[18px] h-[18px]" />
-              {activeVideoEffectsCount > 0 ? (
+              {!isCameraPermissionBlocked && activeVideoEffectsCount > 0 ? (
                 <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-white px-1 text-[10px] font-semibold text-[#F95F4A]">
                   {activeVideoEffectsCount}
                 </span>
