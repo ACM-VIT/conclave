@@ -20,10 +20,12 @@ import type {
 import {
   BACKGROUND_ASSET_PATHS,
   DEFAULT_VIDEO_EFFECTS,
+  getFaceFilterEffectGraph,
   hasActiveVideoEffects,
   isAnimatedBackgroundEffect,
   type AppearanceStyleId,
   type BackgroundEffectId,
+  type FaceFilterEffectGraph,
   type FaceFilterId,
   type VideoEffectsState,
 } from "../lib/video-effects";
@@ -717,6 +719,7 @@ type ClosableMediaPipeResource = {
 };
 type FaceFilterRenderStats = {
   filter: FaceFilterId;
+  effectGraph: FaceFilterEffectGraphStats | null;
   drawn: boolean;
   reason?: string;
   landmarkCount: number;
@@ -745,6 +748,16 @@ type FaceFilterRenderStats = {
     poseBlend?: number;
   } | null;
   bounds: CanvasBounds | null;
+};
+type FaceFilterEffectGraphStats = {
+  meetGraphId: string;
+  renderMode: FaceFilterEffectGraph["renderMode"];
+  assetProfile: FaceFilterEffectGraph["assetProfile"];
+  dependencies: FaceFilterEffectGraph["dependencies"];
+  requiresFaceLandmarks: boolean;
+  requiresSegmentation: boolean;
+  modelIntervalMs: number;
+  liveBundleVersion: FaceFilterEffectGraph["liveBundleVersion"];
 };
 type BackgroundRenderStats = {
   background: BackgroundEffectId;
@@ -3026,6 +3039,23 @@ const getBackgroundImageSource = (
     : null;
 };
 
+const getFaceFilterEffectGraphStats = (
+  filter: FaceFilterId,
+): FaceFilterEffectGraphStats | null => {
+  const graph = getFaceFilterEffectGraph(filter);
+  if (!graph) return null;
+  return {
+    meetGraphId: graph.meetGraphId,
+    renderMode: graph.renderMode,
+    assetProfile: graph.assetProfile,
+    dependencies: graph.dependencies,
+    requiresFaceLandmarks: graph.requiresFaceLandmarks,
+    requiresSegmentation: graph.requiresSegmentation,
+    modelIntervalMs: graph.modelIntervalMs,
+    liveBundleVersion: graph.liveBundleVersion,
+  };
+};
+
 const loadBackgroundImage = (
   background: BackgroundEffectId,
   instanceId: number,
@@ -4235,28 +4265,42 @@ export const prewarmVideoEffectsRuntime = async ({
 export const prewarmVideoEffectsAssets = async ({
   segmentation = false,
   face = false,
+  faceFilter,
   backgrounds = [],
   reason = "manual",
 }: {
   segmentation?: boolean;
   face?: boolean;
+  faceFilter?: FaceFilterId;
   backgrounds?: BackgroundEffectId[];
   reason?: string;
 } = {}) => {
   if (typeof window === "undefined") return;
   const instanceId = 0;
   const requestedBackgrounds = Array.from(new Set(backgrounds));
+  const faceFilterGraph = faceFilter
+    ? getFaceFilterEffectGraph(faceFilter)
+    : null;
+  const faceFilterGraphStats = faceFilter
+    ? getFaceFilterEffectGraphStats(faceFilter)
+    : null;
+  const effectiveFace = face || Boolean(faceFilterGraph?.requiresFaceLandmarks);
+  const effectiveSegmentation =
+    segmentation || Boolean(faceFilterGraph?.requiresSegmentation);
   const canonicalBackgrounds = [...requestedBackgrounds].sort();
   const prewarmKey = JSON.stringify({
-    segmentation,
-    face,
+    segmentation: effectiveSegmentation,
+    face: effectiveFace,
+    faceFilter: faceFilterGraph?.meetGraphId ?? faceFilter ?? null,
     backgrounds: canonicalBackgrounds,
   });
   const existingPrewarm = videoEffectsAssetPrewarmPromises.get(prewarmKey);
   if (existingPrewarm) {
     logVideoEffects(instanceId, "prewarm_coalesce_inflight", {
-      segmentation,
-      face,
+      segmentation: effectiveSegmentation,
+      face: effectiveFace,
+      faceFilter,
+      faceFilterGraph: faceFilterGraphStats,
       backgrounds: requestedBackgrounds,
       reason,
     });
@@ -4266,8 +4310,10 @@ export const prewarmVideoEffectsAssets = async ({
   let prewarmPromise: Promise<void>;
   prewarmPromise = (async () => {
     logVideoEffects(instanceId, "prewarm_requested", {
-      segmentation,
-      face,
+      segmentation: effectiveSegmentation,
+      face: effectiveFace,
+      faceFilter,
+      faceFilterGraph: faceFilterGraphStats,
       backgrounds: requestedBackgrounds,
       reason,
     });
@@ -4282,7 +4328,7 @@ export const prewarmVideoEffectsAssets = async ({
       });
 
     const modelPromises: Promise<void>[] = [tasksReady];
-    if (segmentation || face || requestedBackgrounds.length > 0) {
+    if (effectiveSegmentation || effectiveFace || requestedBackgrounds.length > 0) {
       modelPromises.push(
         prewarmOutputWriterWorker(
           instanceId,
@@ -4293,7 +4339,7 @@ export const prewarmVideoEffectsAssets = async ({
         ),
       );
     }
-    if (segmentation) {
+    if (effectiveSegmentation) {
       modelPromises.push(
         prewarmModelAsset(
           instanceId,
@@ -4314,7 +4360,7 @@ export const prewarmVideoEffectsAssets = async ({
         ),
       );
     }
-    if (face) {
+    if (effectiveFace) {
       modelPromises.push(
         prewarmModelAsset(
           instanceId,
@@ -4338,8 +4384,10 @@ export const prewarmVideoEffectsAssets = async ({
     await Promise.all(modelPromises);
     await prewarmBackgroundImages(requestedBackgrounds, instanceId, reason);
     logVideoEffects(instanceId, "prewarm_done", {
-      segmentation,
-      face,
+      segmentation: effectiveSegmentation,
+      face: effectiveFace,
+      faceFilter,
+      faceFilterGraph: faceFilterGraphStats,
       backgrounds: requestedBackgrounds,
       reason,
     });
@@ -5747,12 +5795,19 @@ const getMakeupFaceFilterConfig = (
 ): MakeupFaceFilterConfig | null =>
   MAKEUP_FACE_FILTER_CONFIG[filter as MakeupFaceFilterId] ?? null;
 
+const FACE_OVAL_LANDMARK_INDICES = [
+  10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288, 397, 365, 379,
+  378, 400, 377, 152, 148, 176, 149, 150, 136, 172, 58, 132, 93, 234, 127,
+  162, 21, 54, 103, 67, 109,
+] as const;
+
 const createFaceFilterRenderStats = (
   filter: FaceFilterId,
   landmarkCount: number,
   reason: string,
 ): FaceFilterRenderStats => ({
   filter,
+  effectGraph: getFaceFilterEffectGraphStats(filter),
   drawn: false,
   reason,
   landmarkCount,
@@ -6488,41 +6543,6 @@ const drawProceduralBackgroundDirect = (
 ) => {
   if (drawProceduralRoomBackground(ctx, background, width, height)) return;
 
-  if (background === "beach") {
-    const sky = ctx.createLinearGradient(0, 0, 0, height);
-    sky.addColorStop(0, "#93c5fd");
-    sky.addColorStop(0.48, "#bae6fd");
-    sky.addColorStop(0.5, "#0284c7");
-    sky.addColorStop(0.72, "#0891b2");
-    sky.addColorStop(0.73, "#fde68a");
-    sky.addColorStop(1, "#f59e0b");
-    ctx.fillStyle = sky;
-    ctx.fillRect(0, 0, width, height);
-    ctx.fillStyle = "rgba(255,255,255,0.65)";
-    ctx.fillRect(0, height * 0.53, width, height * 0.02);
-    return;
-  }
-
-  if (background === "forest") {
-    const bg = ctx.createLinearGradient(0, 0, 0, height);
-    bg.addColorStop(0, "#052e16");
-    bg.addColorStop(0.5, "#166534");
-    bg.addColorStop(1, "#022c22");
-    ctx.fillStyle = bg;
-    ctx.fillRect(0, 0, width, height);
-    for (let i = 0; i < 9; i += 1) {
-      const x = (width / 8) * i;
-      ctx.fillStyle = i % 2 ? "rgba(21,128,61,0.78)" : "rgba(22,101,52,0.9)";
-      ctx.beginPath();
-      ctx.moveTo(x - 80, height);
-      ctx.lineTo(x + 40, height * 0.18);
-      ctx.lineTo(x + 160, height);
-      ctx.closePath();
-      ctx.fill();
-    }
-    return;
-  }
-
   if (background === "office" || background === "studio") {
     const wall = ctx.createLinearGradient(0, 0, width, height);
     wall.addColorStop(0, background === "office" ? "#d6d3d1" : "#cbd5e1");
@@ -6835,6 +6855,46 @@ const drawFaceFilter = (
     poseBlend: poseCandidate ? Number(poseBlend.toFixed(3)) : undefined,
   };
   let bounds: CanvasBounds | null = null;
+  const faceOvalLocalPoints = FACE_OVAL_LANDMARK_INDICES.map((index) => {
+    const point = mapLandmark(landmarks[index]);
+    return point ? toFaceSpace(point) : null;
+  }).filter((point): point is { x: number; y: number } => Boolean(point));
+
+  const beginFaceSurfacePath = () => {
+    ctx.beginPath();
+    if (faceOvalLocalPoints.length >= 24) {
+      const first = faceOvalLocalPoints[0];
+      ctx.moveTo(first.x, first.y);
+      for (let index = 1; index < faceOvalLocalPoints.length; index += 1) {
+        const previous = faceOvalLocalPoints[index - 1];
+        const point = faceOvalLocalPoints[index];
+        ctx.quadraticCurveTo(
+          previous.x,
+          previous.y,
+          (previous.x + point.x) / 2,
+          (previous.y + point.y) / 2,
+        );
+      }
+      const last = faceOvalLocalPoints[faceOvalLocalPoints.length - 1];
+      ctx.quadraticCurveTo(
+        last.x,
+        last.y,
+        (last.x + first.x) / 2,
+        (last.y + first.y) / 2,
+      );
+      ctx.closePath();
+      return;
+    }
+    ctx.ellipse(
+      headCenterX,
+      lerp(headTopY, faceBottomY, 0.55),
+      faceWidth * 0.39,
+      Math.max(faceWidth * 0.47, faceHeight * 0.42),
+      0,
+      0,
+      Math.PI * 2,
+    );
+  };
 
   const beginProbe = (localBounds: {
     left: number;
@@ -6891,19 +6951,17 @@ const drawFaceFilter = (
             ? "rgba(2,6,23,0.18)"
             : "rgba(120,53,15,0.08)";
     ctx.globalCompositeOperation = "source-over";
+    ctx.save();
+    beginFaceSurfacePath();
+    ctx.clip();
     ctx.fillStyle = skinTint;
     ctx.globalAlpha = 1;
-    ctx.beginPath();
-    ctx.ellipse(
-      headCenterX,
-      lerp(headTopY, faceBottomY, 0.55),
-      faceWidth * 0.39,
-      Math.max(faceWidth * 0.47, faceHeight * 0.42),
-      0,
-      0,
-      Math.PI * 2,
+    ctx.fillRect(
+      headCenterX - faceWidth * 0.58,
+      headTopY - faceWidth * 0.08,
+      faceWidth * 1.16,
+      faceHeight + faceWidth * 0.16,
     );
-    ctx.fill();
     ctx.globalCompositeOperation = "multiply";
     ctx.fillStyle = contourTint;
     [-1, 1].forEach((side) => {
@@ -6935,6 +6993,7 @@ const drawFaceFilter = (
       Math.PI * 2,
     );
     ctx.fill();
+    ctx.restore();
     ctx.globalCompositeOperation = "source-over";
     ctx.fillStyle = makeup.eye;
     ctx.globalAlpha = makeup.eyeAlpha;
@@ -8890,18 +8949,16 @@ const drawFaceFilter = (
     );
     ctx.save();
     ctx.globalCompositeOperation = "source-over";
+    ctx.save();
+    beginFaceSurfacePath();
+    ctx.clip();
     ctx.fillStyle = "rgba(244,114,182,0.14)";
-    ctx.beginPath();
-    ctx.ellipse(
-      headCenterX,
-      lerp(headTopY, faceBottomY, 0.55),
-      faceWidth * 0.38,
-      Math.max(faceWidth * 0.47, faceHeight * 0.42),
-      0,
-      0,
-      Math.PI * 2,
+    ctx.fillRect(
+      headCenterX - faceWidth * 0.58,
+      headTopY - faceWidth * 0.08,
+      faceWidth * 1.16,
+      faceHeight + faceWidth * 0.16,
     );
-    ctx.fill();
     ctx.globalCompositeOperation = "screen";
     ctx.fillStyle = "rgba(255,255,255,0.18)";
     ctx.beginPath();
@@ -8915,6 +8972,7 @@ const drawFaceFilter = (
       Math.PI * 2,
     );
     ctx.fill();
+    ctx.restore();
     ctx.globalCompositeOperation = "source-over";
     ctx.globalAlpha = 0.28;
     ctx.fillStyle = "#f9a8d4";
@@ -9011,6 +9069,7 @@ const drawFaceFilter = (
   const changedPixels = samplePixelCount > 0 ? 1 : 0;
   return {
     filter,
+    effectGraph: getFaceFilterEffectGraphStats(filter),
     drawn: changedPixels > 0,
     reason: probeRender ? "geometry sampled" : undefined,
     landmarkCount,

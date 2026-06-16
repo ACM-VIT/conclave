@@ -835,9 +835,11 @@ export default function MeetsMainContent({
     void prewarmVideoEffectsAssets({
       segmentation: true,
       face: true,
+      faceFilter:
+        videoEffects.filter !== "none" ? videoEffects.filter : undefined,
       reason: "effects-panel-open",
     });
-  }, []);
+  }, [videoEffects.filter]);
 
   const handleToggleVideoEffects = useCallback(() => {
     if (isCameraPermissionBlocked) return;

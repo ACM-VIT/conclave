@@ -649,7 +649,7 @@ export default function VideoEffectsPanel({
   const setFilter = (filter: FaceFilterId) => {
     if (filter !== "none") {
       void prewarmVideoEffectsAssets({
-        face: true,
+        faceFilter: filter,
         reason: `filter:${filter}:select`,
       });
     }
@@ -830,9 +830,11 @@ export default function VideoEffectsPanel({
     void prewarmVideoEffectsAssets({
       segmentation: true,
       face: showFilters,
+      faceFilter:
+        showFilters && effects.filter !== "none" ? effects.filter : undefined,
       reason: "effects-panel-open",
     });
-  }, [showFilters]);
+  }, [effects.filter, showFilters]);
 
   useEffect(() => {
     if (activeTab === "filters") {
@@ -1301,7 +1303,10 @@ export default function VideoEffectsPanel({
                       onPrewarm={() =>
                         option.id === "none"
                           ? undefined
-                          : prewarmFace(`filter:${option.id}`)
+                          : void prewarmVideoEffectsAssets({
+                              faceFilter: option.id,
+                              reason: `filter:${option.id}:hover`,
+                            })
                       }
                       onSelect={() => setFilter(option.id)}
                     />

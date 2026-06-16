@@ -179,6 +179,33 @@ export interface VideoEffectOption<T extends string> {
   category?: string;
 }
 
+export type FaceFilterEffectRenderMode =
+  | "face-makeup"
+  | "face-prop"
+  | "face-hair"
+  | "face-costume"
+  | "face-lighting";
+
+export interface FaceFilterEffectGraph {
+  meetGraphId: string;
+  renderMode: FaceFilterEffectRenderMode;
+  assetProfile:
+    | "effect-js-wasm-xass"
+    | "makeup-tflite"
+    | "fun-makeup-tflite"
+    | "lut";
+  dependencies: readonly (
+    | "face_detection"
+    | "face_landmarks"
+    | "face_pose"
+    | "face_surface"
+  )[];
+  requiresFaceLandmarks: boolean;
+  requiresSegmentation: boolean;
+  modelIntervalMs: number;
+  liveBundleVersion: "929503300";
+}
+
 export const DEFAULT_VIDEO_EFFECTS: VideoEffectsState = {
   background: "none",
   filter: "none",
@@ -319,6 +346,147 @@ const APPEARANCE_STYLE_IDS = new Set<AppearanceStyleId>([
   "moonlight",
   "sunlight",
 ]);
+
+const createFaceGraph = (
+  meetGraphId: string,
+  renderMode: FaceFilterEffectRenderMode,
+  assetProfile: FaceFilterEffectGraph["assetProfile"] = "effect-js-wasm-xass",
+  modelIntervalMs = 200,
+): FaceFilterEffectGraph => ({
+  meetGraphId,
+  renderMode,
+  assetProfile,
+  dependencies:
+    renderMode === "face-makeup" || assetProfile.endsWith("tflite")
+      ? ["face_detection", "face_landmarks", "face_surface"]
+      : ["face_detection", "face_landmarks", "face_pose"],
+  requiresFaceLandmarks: true,
+  requiresSegmentation: false,
+  modelIntervalMs,
+  liveBundleVersion: "929503300",
+});
+
+export const FACE_FILTER_EFFECT_GRAPHS: Partial<
+  Record<FaceFilterId, FaceFilterEffectGraph>
+> = {
+  butterflies: createFaceGraph(
+    "butterflies_and_makeup",
+    "face-makeup",
+    "effect-js-wasm-xass",
+  ),
+  "makeup-barely-there": createFaceGraph(
+    "makeup_barely_there_v2",
+    "face-makeup",
+    "makeup-tflite",
+  ),
+  "makeup-simply-radiant": createFaceGraph(
+    "makeup_simply_radiant_v2",
+    "face-makeup",
+    "makeup-tflite",
+  ),
+  "makeup-dewy-fresh": createFaceGraph(
+    "makeup_dewy_fresh_v2",
+    "face-makeup",
+    "makeup-tflite",
+  ),
+  "makeup-warm-glow": createFaceGraph(
+    "makeup_warm_glow_v2",
+    "face-makeup",
+    "makeup-tflite",
+  ),
+  "makeup-coral-hint": createFaceGraph(
+    "makeup_coral_hint_v2",
+    "face-makeup",
+    "makeup-tflite",
+  ),
+  "makeup-berry-blush": createFaceGraph(
+    "makeup_berry_blush_v2",
+    "face-makeup",
+    "makeup-tflite",
+  ),
+  "makeup-cat-eye": createFaceGraph(
+    "makeup_cat_eye",
+    "face-makeup",
+    "makeup-tflite",
+  ),
+  "makeup-dramatic-eye": createFaceGraph(
+    "makeup_dramatic_eye",
+    "face-makeup",
+    "makeup-tflite",
+  ),
+  "makeup-lip-gloss": createFaceGraph(
+    "makeup_lip_gloss",
+    "face-makeup",
+    "makeup-tflite",
+  ),
+  "makeup-pink-dewy": createFaceGraph(
+    "makeup_pink_dewy",
+    "face-makeup",
+    "makeup-tflite",
+  ),
+  "makeup-red-lipstick": createFaceGraph(
+    "makeup_red_lipstick",
+    "face-makeup",
+    "makeup-tflite",
+  ),
+  "makeup-rosy-pink": createFaceGraph(
+    "makeup_rosy_pink",
+    "face-makeup",
+    "makeup-tflite",
+  ),
+  "makeup-signature-statement": createFaceGraph(
+    "makeup_signature_statement_v2",
+    "face-makeup",
+    "makeup-tflite",
+  ),
+  "makeup-goth-chic": createFaceGraph(
+    "fun_makeup_goth_chic",
+    "face-makeup",
+    "fun-makeup-tflite",
+  ),
+  "makeup-mummy": createFaceGraph(
+    "fun_makeup_mummy",
+    "face-makeup",
+    "fun-makeup-tflite",
+  ),
+  "makeup-zombie": createFaceGraph(
+    "fun_makeup_zombie",
+    "face-makeup",
+    "fun-makeup-tflite",
+  ),
+  "beach-day": createFaceGraph("beach_day_v2", "face-prop"),
+  aviator: createFaceGraph(
+    "aviator_glasses_and_mustache_v2",
+    "face-prop",
+  ),
+  "cat-eye-beret": createFaceGraph(
+    "beret_and_cat_eye_glasses_v2",
+    "face-prop",
+  ),
+  "cat-ear-headphones": createFaceGraph(
+    "cat_ear_headphones",
+    "face-prop",
+  ),
+  bunny: createFaceGraph("bunny_v2", "face-costume"),
+  "working-bunny": createFaceGraph("working_bunny_js_v2", "face-costume"),
+  "cute-alien": createFaceGraph("cute_alien", "face-costume"),
+  "cat-ears-glasses": createFaceGraph(
+    "cat_ears_and_glasses",
+    "face-costume",
+  ),
+  "hair-medium-beard": createFaceGraph(
+    "hair_medium_beard",
+    "face-hair",
+  ),
+  "long-wavy-hair": createFaceGraph("long_wavy_hair", "face-hair"),
+  "cute-astronaut": createFaceGraph("cute_astronaut_v2", "face-costume"),
+  pirate: createFaceGraph("pirate_v2", "face-costume"),
+  alien: createFaceGraph("alien_spaceship_js_v2", "face-lighting"),
+};
+
+export const getFaceFilterEffectGraph = (
+  filter: FaceFilterId,
+): FaceFilterEffectGraph | null => FACE_FILTER_EFFECT_GRAPHS[filter] ?? null;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null;

@@ -551,6 +551,8 @@ export default function MeetsClient({
     void prewarmVideoEffectsAssets({
       segmentation: backgroundNeedsSegmentation,
       face: videoEffects.filter !== "none" || videoEffects.framing,
+      faceFilter:
+        videoEffects.filter !== "none" ? videoEffects.filter : undefined,
       backgrounds,
       reason: "restored-effects-state",
     });
