@@ -145,6 +145,11 @@ function MobileJoinScreen({
   const [isCameraOn, setIsCameraOn] = useState(false);
   const [isMicOn, setIsMicOn] = useState(false);
   const [isEffectsOpen, setIsEffectsOpen] = useState(false);
+  const [isRequestingPermissions, setIsRequestingPermissions] =
+    useState(false);
+  const [permissionRequestError, setPermissionRequestError] = useState<
+    string | null
+  >(null);
   const isRoutedRoom = forceJoinOnly;
   const enforceShortCode = enableRoomRouting || forceJoinOnly;
   const [activeTab, setActiveTab] = useState<"new" | "join">(() =>
@@ -206,6 +211,12 @@ function MobileJoinScreen({
     (!hasLivePreviewCamera &&
       (cameraPermissionState === "prompt" ||
         cameraPermissionState === "denied"));
+  const shouldShowPermissionCta =
+    !hasLivePreviewCamera &&
+    !isCameraOn &&
+    (cameraPermissionState === "prompt" ||
+      cameraPermissionState === "denied" ||
+      meetError?.code === "PERMISSION_DENIED");
 
   const prewarmLiveCameraEffects = useCallback((reason: string) => {
     void prewarmVideoEffectsAssets({
@@ -327,6 +338,46 @@ function MobileJoinScreen({
       }
     };
   }, [previewStream]);
+
+  const requestMicrophoneAndCamera = async () => {
+    if (isRequestingPermissions) return;
+
+    setIsRequestingPermissions(true);
+    setPermissionRequestError(null);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: DEFAULT_AUDIO_CONSTRAINTS,
+        video: STANDARD_QUALITY_CONSTRAINTS,
+      });
+      const liveTracks = stream
+        .getTracks()
+        .filter((track) => track.readyState === "live");
+      const hasAudio = liveTracks.some((track) => track.kind === "audio");
+      const hasVideo = liveTracks.some((track) => track.kind === "video");
+
+      stream.getVideoTracks().forEach((track) => {
+        if ("contentHint" in track) track.contentHint = "motion";
+      });
+      localStreamRef.current?.getTracks().forEach((track) => {
+        if (!liveTracks.includes(track)) track.stop();
+      });
+
+      const nextStream =
+        liveTracks.length > 0 ? new MediaStream(liveTracks) : null;
+      setLocalStream(nextStream);
+      setIsMicOn(hasAudio);
+      setIsCameraOn(hasVideo);
+      if (hasVideo) {
+        prewarmLiveCameraEffects("mobile-prejoin-full-media-camera-live");
+      }
+    } catch {
+      setPermissionRequestError("Permission needed");
+      setIsMicOn(false);
+      setIsCameraOn(false);
+    } finally {
+      setIsRequestingPermissions(false);
+    }
+  };
 
   const toggleCamera = async () => {
     if (isCameraOn && localStream) {
@@ -781,6 +832,32 @@ function MobileJoinScreen({
             </div>
           )}
 
+          {shouldShowPermissionCta ? (
+            <button
+              type="button"
+              onClick={requestMicrophoneAndCamera}
+              disabled={isRequestingPermissions}
+              className="absolute left-4 top-14 z-10 flex min-h-9 max-w-[calc(100%-2rem)] items-center gap-2 rounded-full bg-[#F95F4A] px-3.5 text-[13px] font-medium text-white shadow-lg shadow-black/25 transition-[background-color,opacity] duration-150 active:bg-[#e8553f] disabled:cursor-wait disabled:opacity-75"
+              style={{ fontFamily: "'PolySans Trial', sans-serif" }}
+            >
+              {isRequestingPermissions ? (
+                <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
+              ) : (
+                <Video className="h-4 w-4 shrink-0" />
+              )}
+              <span className="truncate">Allow microphone and camera</span>
+            </button>
+          ) : null}
+
+          {(showPermissionHint || permissionRequestError) && (
+            <div className="pointer-events-none absolute bottom-[84px] left-1/2 z-10 flex max-w-[calc(100%-2rem)] -translate-x-1/2 items-center gap-2 rounded-full bg-black/65 px-3 py-1.5 text-center text-[12px] font-medium text-white/82">
+              <AlertCircle className="h-3.5 w-3.5 shrink-0 text-[#F95F4A]" />
+              <span className="truncate">
+                {permissionRequestError ?? "Permission needed"}
+              </span>
+            </div>
+          )}
+
           <div className="absolute bottom-4 left-1/2 -translate-x-1/2 mobile-glass mobile-pill px-2.5 py-2 flex items-center gap-2">
             <button
               onClick={toggleMic}
@@ -876,12 +953,6 @@ function MobileJoinScreen({
             </div>
           </div>
 
-          {showPermissionHint && (
-            <div className="absolute top-4 right-4 flex items-center gap-2 px-3 py-2 mobile-glass-soft rounded-full text-xs text-[#fafafa]/82">
-              <AlertCircle className="w-3.5 h-3.5 text-[#F95F4A]" />
-              Allow access
-            </div>
-          )}
         </div>
       </div>
 
