@@ -928,6 +928,25 @@ select:focus {
   display: none;
 }
 
+.mobile-tiled-layout {
+  contain: layout paint;
+}
+
+.mobile-grid-tile {
+  min-width: 0;
+  min-height: 0;
+  transition:
+    left 220ms cubic-bezier(0.22, 1, 0.36, 1),
+    top 220ms cubic-bezier(0.22, 1, 0.36, 1),
+    width 220ms cubic-bezier(0.22, 1, 0.36, 1),
+    height 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.mobile-grid-tile > .mobile-tile {
+  height: 100%;
+  width: 100%;
+}
+
 @media (max-width: 960px) and (max-height: 520px) and (orientation: landscape) {
   .mobile-stage-layout[data-mobile-stage-layout="stage-rail"] {
     flex-direction: row !important;

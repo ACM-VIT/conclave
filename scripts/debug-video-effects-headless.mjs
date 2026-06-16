@@ -20,7 +20,7 @@ const baseUrl = process.env.CONCLAVE_WEB_URL ?? "http://localhost:3000";
 const roomId =
   process.env.CONCLAVE_ROOM_ID ?? `headless-effects-${Date.now()}`;
 const fakeVideoDurationSeconds = Number(
-  process.env.CONCLAVE_FAKE_VIDEO_DURATION_SECONDS ?? 30,
+  process.env.CONCLAVE_FAKE_VIDEO_DURATION_SECONDS ?? 12,
 );
 const fakeVideoSourceImage =
   process.env.CONCLAVE_FAKE_VIDEO_SOURCE_IMAGE ?? null;
@@ -52,7 +52,7 @@ const expectedStableOutputHeight = Math.max(
 );
 const fakeVideoFps = parsePositiveInteger(
   process.env.CONCLAVE_FAKE_VIDEO_FPS,
-  10,
+  8,
 );
 const expectFaceLandmarks = /^(1|true|yes)$/i.test(
   process.env.CONCLAVE_EXPECT_FACE ?? "",
@@ -178,7 +178,7 @@ const fakeVideoPath =
   );
 const maxReusableFakeVideoBytes = parsePositiveInteger(
   process.env.CONCLAVE_MAX_FAKE_VIDEO_BYTES,
-  32 * 1024 * 1024,
+  12 * 1024 * 1024,
 );
 const shouldCleanupLegacyFakeVideos = !/^(0|false|no)$/i.test(
   process.env.CONCLAVE_CLEANUP_LEGACY_FAKE_VIDEOS ?? "1",
@@ -300,6 +300,7 @@ const ensureFakeVideo = () => {
     width: fakeVideoWidth,
     height: fakeVideoHeight,
     fps: fakeVideoFps,
+    durationSeconds: fakeVideoDurationSeconds,
   });
 
   let args;
@@ -368,6 +369,7 @@ const ensureFakeVideo = () => {
     width: fakeVideoWidth,
     height: fakeVideoHeight,
     fps: fakeVideoFps,
+    durationSeconds: fakeVideoDurationSeconds,
   });
 };
 
@@ -2344,6 +2346,7 @@ const run = async () => {
       width: fakeVideoWidth,
       height: fakeVideoHeight,
       fps: fakeVideoFps,
+      durationSeconds: fakeVideoDurationSeconds,
     },
     url,
     forceDarkVideoProbe,

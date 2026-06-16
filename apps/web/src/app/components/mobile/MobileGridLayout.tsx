@@ -1,7 +1,21 @@
 "use client";
 
 import { Hand, MicOff, VenetianMask } from "lucide-react";
-import { memo, useEffect, useMemo, useRef, type RefObject } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type RefObject,
+} from "react";
+import {
+  computeGridLayout,
+  type GridTilePosition,
+} from "@conclave/meeting-core";
 import { useSmartParticipantOrder } from "../../hooks/useSmartParticipantOrder";
 import type { Participant } from "../../lib/types";
 import { isSystemUserId, truncateDisplayName } from "../../lib/utils";
@@ -23,7 +37,7 @@ interface MobileGridLayoutProps {
   getDisplayName: (userId: string) => string;
 }
 
-type TileVariant = "solo" | "primary" | "rail";
+type TileVariant = "solo" | "primary" | "rail" | "grid";
 
 type MobileTileDescriptor =
   | { kind: "local"; key: "local" }
@@ -35,14 +49,22 @@ type MobileTileDescriptor =
     }
   | { kind: "overflow"; key: "overflow"; count: number };
 
-const MAX_MOBILE_RAIL_TILES = 6;
-const MOBILE_WARM_BUFFER_TILES = 3;
+const MAX_MOBILE_VISIBLE_TILES = 9;
+const MOBILE_WARM_BUFFER_TILES = 4;
+const MOBILE_RECENTLY_VISIBLE_WARM_BUFFER_TILES = 3;
+const MOBILE_RECENTLY_VISIBLE_WARM_HOLD_MS = 3500;
+const MOBILE_PRIORITY_WARM_BUFFER_TILES = 3;
+const MOBILE_GRID_PADDING = 12;
+const MOBILE_GRID_GAP = 8;
+const MOBILE_GRID_PORTRAIT_MAX_COLS = 2;
+const MOBILE_GRID_LANDSCAPE_MAX_COLS = 4;
 const MOBILE_ROOM_TILING_METADATA_INTERVAL_MS = 200;
 const MOBILE_ROOM_TILING_PROMOTE_DELAY_MS = 220;
 const MOBILE_ROOM_TILING_MIN_SWITCH_INTERVAL_MS = 2200;
 
 type MobileRoomTilingWarmReason =
   | "boundary"
+  | "recently-visible"
   | "active-speaker"
   | "hand-raised";
 
@@ -69,9 +91,9 @@ type MobileRoomTilingMetadata = {
   activeSpeakerId: string | null;
   featuredSpeakerId: string | null;
   requestedMode: "auto";
-  renderedMode: "solo" | "stageRail";
-  effectiveMode: "solo" | "stageRail";
-  autoStageMode: "mobile-solo" | "mobile-stage-rail";
+  renderedMode: "solo" | "tiled";
+  effectiveMode: "solo" | "tiled";
+  autoStageMode: "mobile-solo" | "mobile-tiled";
   dynamicCrop: false;
   presenting: false;
   pinnedId: null;
@@ -168,13 +190,54 @@ function MobileGridLayout({
 }: MobileGridLayoutProps) {
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
-  const stageMainRef = useRef<HTMLDivElement>(null);
-  const stageRailRef = useRef<HTMLDivElement>(null);
+  const gridRef = useRef<HTMLDivElement>(null);
   const localTileRef = useRef<HTMLDivElement>(null);
   const roomTilingSequenceRef = useRef(0);
   const roomTilingMetadataRef = useRef<MobileRoomTilingMetadata | null>(null);
   const roomTilingHistoryRef = useRef<MobileRoomTilingMetadata[]>([]);
   const lastRoomTilingSignatureRef = useRef<string | null>(null);
+  const recentlyVisibleWarmIdsRef = useRef<Map<string, number>>(new Map());
+  const previousVisibleWarmIdsRef = useRef<Set<string>>(new Set());
+  const [recentlyVisibleWarmRevision, setRecentlyVisibleWarmRevision] =
+    useState(0);
+  const [gridSize, setGridSize] = useState({ width: 0, height: 0 });
+
+  useLayoutEffect(() => {
+    const element = rootRef.current;
+    if (!element) return;
+
+    let frame = 0;
+    const measure = () => {
+      frame = 0;
+      const rect = element.getBoundingClientRect();
+      const width = Math.round(rect.width);
+      const height = Math.round(rect.height);
+      setGridSize((current) =>
+        current.width === width && current.height === height
+          ? current
+          : { width, height },
+      );
+    };
+    const scheduleMeasure = () => {
+      if (frame) return;
+      frame = window.requestAnimationFrame(measure);
+    };
+
+    measure();
+    const observer = new ResizeObserver(scheduleMeasure);
+    observer.observe(element);
+    window.visualViewport?.addEventListener("resize", scheduleMeasure);
+    window.addEventListener("orientationchange", scheduleMeasure);
+
+    return () => {
+      observer.disconnect();
+      window.visualViewport?.removeEventListener("resize", scheduleMeasure);
+      window.removeEventListener("orientationchange", scheduleMeasure);
+      if (frame) {
+        window.cancelAnimationFrame(frame);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     const video = localVideoRef.current;
@@ -208,6 +271,10 @@ function MobileGridLayout({
         participant.userId !== currentUserId,
     ),
     activeSpeakerId,
+    {
+      promoteDelayMs: MOBILE_ROOM_TILING_PROMOTE_DELAY_MS,
+      minSwitchIntervalMs: MOBILE_ROOM_TILING_MIN_SWITCH_INTERVAL_MS,
+    },
   );
 
   const localDisplayName = truncateDisplayName(
@@ -224,7 +291,12 @@ function MobileGridLayout({
     }));
   }, [getDisplayName, orderedRemoteParticipants]);
 
-  const { primaryTile, railTiles, hiddenParticipantsCount } = useMemo(() => {
+  const {
+    visibleTiles,
+    hiddenTiles,
+    hiddenParticipantsCount,
+    showOverflowTile,
+  } = useMemo(() => {
     const localTile: MobileTileDescriptor = { kind: "local", key: "local" };
     const remoteTileList = remoteTiles.filter(
       (tile): tile is Extract<MobileTileDescriptor, { kind: "remote" }> =>
@@ -238,85 +310,226 @@ function MobileGridLayout({
       remoteTileList.find((tile) => hasLiveAudio(tile.participant)) ??
       (remoteTileList.length > 0 ? remoteTileList[0] : null);
     const primary = primaryRemote ?? localTile;
-    const secondaryTiles: MobileTileDescriptor[] = [
+    const ordered: MobileTileDescriptor[] = [
+      primary,
       ...(primary.kind === "local" ? [] : [localTile]),
       ...remoteTileList.filter((tile) => tile.key !== primary.key),
     ];
 
-    if (secondaryTiles.length <= MAX_MOBILE_RAIL_TILES) {
+    if (ordered.length <= MAX_MOBILE_VISIBLE_TILES) {
       return {
-        primaryTile: primary,
-        railTiles: secondaryTiles,
+        visibleTiles: ordered,
+        hiddenTiles: [] as MobileTileDescriptor[],
         hiddenParticipantsCount: 0,
+        showOverflowTile: false,
       };
     }
 
-    const visibleRailTiles = secondaryTiles.slice(0, MAX_MOBILE_RAIL_TILES - 1);
-    const hiddenCount = secondaryTiles.length - visibleRailTiles.length;
+    const visibleWithoutOverflow = ordered.slice(0, MAX_MOBILE_VISIBLE_TILES - 1);
+    const hidden = ordered.slice(visibleWithoutOverflow.length);
+    const hiddenCount = hidden.length;
     const overflowTile: MobileTileDescriptor = {
       kind: "overflow",
       key: "overflow",
       count: hiddenCount,
     };
     return {
-      primaryTile: primary,
-      railTiles: [...visibleRailTiles, overflowTile],
+      visibleTiles: [...visibleWithoutOverflow, overflowTile],
+      hiddenTiles: hidden,
       hiddenParticipantsCount: hiddenCount,
+      showOverflowTile: true,
     };
   }, [activeSpeakerId, remoteTiles]);
 
   const totalPeople = orderedRemoteParticipants.length + 1;
-  const layoutMode = railTiles.length === 0 ? "solo" : "stage-rail";
+  const layoutMode = visibleTiles.length <= 1 ? "solo" : "tiled";
   const renderedRoomMode: MobileRoomTilingMetadata["renderedMode"] =
-    layoutMode === "solo" ? "solo" : "stageRail";
-  const primaryIds = useMemo(() => [primaryTile.key], [primaryTile.key]);
+    layoutMode === "solo" ? "solo" : "tiled";
+  const primaryTile = visibleTiles[0] ?? { kind: "local", key: "local" };
+  const primaryIds = useMemo(() => {
+    const ids = visibleTiles.map((tile) => tile.key);
+    return ids.length > 0 ? ids : ["local"];
+  }, [visibleTiles]);
   const visibleRemoteIds = useMemo(() => {
     const ids = new Set<string>();
-    if (primaryTile.kind === "remote") {
-      ids.add(primaryTile.key);
-    }
-    railTiles.forEach((tile) => {
+    visibleTiles.forEach((tile) => {
       if (tile.kind === "remote") {
         ids.add(tile.key);
       }
     });
     return Array.from(ids);
-  }, [primaryTile, railTiles]);
+  }, [visibleTiles]);
   const hiddenRemoteIds = useMemo(() => {
-    const visible = new Set(visibleRemoteIds);
-    return remoteTiles
-      .filter((tile) => tile.kind === "remote" && !visible.has(tile.key))
+    return hiddenTiles
+      .filter((tile): tile is Extract<MobileTileDescriptor, { kind: "remote" }> =>
+        tile.kind === "remote",
+      )
       .map((tile) => tile.key);
-  }, [remoteTiles, visibleRemoteIds]);
-  const warmRemoteIds = useMemo(
-    () => hiddenRemoteIds.slice(0, MOBILE_WARM_BUFFER_TILES),
+  }, [hiddenTiles]);
+
+  const visibleRemoteIdSignature = useMemo(
+    () => visibleRemoteIds.join(","),
+    [visibleRemoteIds],
+  );
+  const orderedRemoteIdSignature = useMemo(
+    () =>
+      orderedRemoteParticipants
+        .map((participant) => participant.userId)
+        .join(","),
+    [orderedRemoteParticipants],
+  );
+  const hiddenRemoteIdSignature = useMemo(
+    () => hiddenRemoteIds.join(","),
     [hiddenRemoteIds],
   );
-  const warmRemoteTiles = useMemo(() => {
-    const warm = new Set(warmRemoteIds);
-    return remoteTiles.filter(
+
+  useEffect(() => {
+    const now = performance.now();
+    const visibleIds = new Set(visibleRemoteIdSignature.split(",").filter(Boolean));
+    const previousVisibleIds = previousVisibleWarmIdsRef.current;
+    const orderedIds = new Set(orderedRemoteIdSignature.split(",").filter(Boolean));
+    const map = recentlyVisibleWarmIdsRef.current;
+    let changed = false;
+
+    for (const id of visibleIds) {
+      if (map.get(id) !== Number.POSITIVE_INFINITY) {
+        map.set(id, Number.POSITIVE_INFINITY);
+        changed = true;
+      }
+    }
+
+    for (const id of previousVisibleIds) {
+      if (!visibleIds.has(id) && orderedIds.has(id)) {
+        const expiresAt = now + MOBILE_RECENTLY_VISIBLE_WARM_HOLD_MS;
+        if (map.get(id) !== expiresAt) {
+          map.set(id, expiresAt);
+          changed = true;
+        }
+      }
+    }
+
+    for (const [id, expiresAt] of map) {
+      if (visibleIds.has(id)) continue;
+      if (!orderedIds.has(id) || expiresAt <= now) {
+        map.delete(id);
+        changed = true;
+      }
+    }
+
+    previousVisibleWarmIdsRef.current = visibleIds;
+
+    if (changed) {
+      setRecentlyVisibleWarmRevision((revision) => revision + 1);
+    }
+
+    const nextExpiry = Array.from(map.values())
+      .filter(Number.isFinite)
+      .reduce((min, expiresAt) => Math.min(min, expiresAt), Number.POSITIVE_INFINITY);
+    if (!Number.isFinite(nextExpiry)) return;
+
+    const timeout = window.setTimeout(() => {
+      const pruneAt = performance.now();
+      let pruned = false;
+      for (const [id, expiresAt] of recentlyVisibleWarmIdsRef.current) {
+        if (
+          !orderedIds.has(id) ||
+          (Number.isFinite(expiresAt) && expiresAt <= pruneAt)
+        ) {
+          recentlyVisibleWarmIdsRef.current.delete(id);
+          pruned = true;
+        }
+      }
+      if (pruned) {
+        setRecentlyVisibleWarmRevision((revision) => revision + 1);
+      }
+    }, Math.max(16, nextExpiry - now + 16));
+
+    return () => window.clearTimeout(timeout);
+  }, [
+    hiddenRemoteIdSignature,
+    orderedRemoteIdSignature,
+    visibleRemoteIdSignature,
+  ]);
+
+  const { warmRemoteTiles, warmReasonById } = useMemo(() => {
+    const visibleSet = new Set(visibleRemoteIds);
+    const hiddenRemoteTiles = hiddenTiles.filter(
       (tile): tile is Extract<MobileTileDescriptor, { kind: "remote" }> =>
-        tile.kind === "remote" && warm.has(tile.key),
+        tile.kind === "remote",
     );
-  }, [remoteTiles, warmRemoteIds]);
+    const warmById = new Map<
+      string,
+      Extract<MobileTileDescriptor, { kind: "remote" }>
+    >();
+    const reasonSets = new Map<string, Set<MobileRoomTilingWarmReason>>();
+    const addWarm = (
+      tile:
+        | Extract<MobileTileDescriptor, { kind: "remote" }>
+        | undefined,
+      reason: MobileRoomTilingWarmReason,
+    ) => {
+      if (!tile || visibleSet.has(tile.key)) return;
+      warmById.set(tile.key, tile);
+      const reasons = reasonSets.get(tile.key) ?? new Set();
+      reasons.add(reason);
+      reasonSets.set(tile.key, reasons);
+    };
+
+    hiddenRemoteTiles
+      .slice(0, MOBILE_WARM_BUFFER_TILES)
+      .forEach((tile) => addWarm(tile, "boundary"));
+
+    const now = performance.now();
+    const recentlyVisibleWarmIds = new Set(
+      Array.from(recentlyVisibleWarmIdsRef.current.entries())
+        .filter(([, expiresAt]) => expiresAt > now)
+        .map(([id]) => id),
+    );
+    hiddenRemoteTiles
+      .filter((tile) => recentlyVisibleWarmIds.has(tile.key))
+      .slice(0, MOBILE_RECENTLY_VISIBLE_WARM_BUFFER_TILES)
+      .forEach((tile) => addWarm(tile, "recently-visible"));
+
+    if (activeSpeakerId) {
+      addWarm(
+        hiddenRemoteTiles.find((tile) => tile.key === activeSpeakerId),
+        "active-speaker",
+      );
+    }
+
+    hiddenRemoteTiles
+      .filter((tile) => tile.participant.isHandRaised)
+      .slice(0, MOBILE_PRIORITY_WARM_BUFFER_TILES)
+      .forEach((tile) => addWarm(tile, "hand-raised"));
+
+    return {
+      warmRemoteTiles: Array.from(warmById.values()),
+      warmReasonById: new Map(
+        Array.from(reasonSets.entries()).map(([id, reasons]) => [
+          id,
+          Array.from(reasons),
+        ]),
+      ),
+    };
+  }, [
+    activeSpeakerId,
+    hiddenTiles,
+    recentlyVisibleWarmRevision,
+    visibleRemoteIds,
+  ]);
+  const warmRemoteIds = useMemo(
+    () => warmRemoteTiles.map((tile) => tile.key),
+    [warmRemoteTiles],
+  );
   const warmRemoteVideoTiles = useMemo(
     () => warmRemoteTiles.filter((tile) => hasLiveVideo(tile.participant)),
     [warmRemoteTiles],
   );
   const roomTilingWarmReasons = useMemo(() => {
-    const reasons: Record<string, MobileRoomTilingWarmReason[]> = {};
-    warmRemoteTiles.forEach((tile) => {
-      const nextReasons: MobileRoomTilingWarmReason[] = ["boundary"];
-      if (tile.participant.userId === activeSpeakerId) {
-        nextReasons.push("active-speaker");
-      }
-      if (tile.participant.isHandRaised) {
-        nextReasons.push("hand-raised");
-      }
-      reasons[tile.participant.userId] = nextReasons;
-    });
-    return reasons;
-  }, [activeSpeakerId, warmRemoteTiles]);
+    return Object.fromEntries(
+      warmReasonById.entries(),
+    ) as Record<string, MobileRoomTilingWarmReason[]>;
+  }, [warmReasonById]);
   const roomTilingScores = useMemo<MobileRoomTilingScore[]>(() => {
     const visible = new Set(visibleRemoteIds);
     const hidden = new Set(hiddenRemoteIds);
@@ -347,17 +560,77 @@ function MobileGridLayout({
           visible: visible.has(tile.participant.userId),
           hidden: hidden.has(tile.participant.userId),
           warm: warm.has(tile.participant.userId),
-          warmReasons: roomTilingWarmReasons[tile.participant.userId] ?? [],
+          warmReasons: warmReasonById.get(tile.participant.userId) ?? [],
         };
       });
   }, [
     activeSpeakerId,
     hiddenRemoteIds,
     remoteTiles,
-    roomTilingWarmReasons,
     visibleRemoteIds,
+    warmReasonById,
     warmRemoteIds,
   ]);
+
+  const mobileMaxCols =
+    gridSize.width > gridSize.height
+      ? MOBILE_GRID_LANDSCAPE_MAX_COLS
+      : MOBILE_GRID_PORTRAIT_MAX_COLS;
+  const mobileGridLayout = useMemo(
+    () =>
+      computeGridLayout(
+        Math.max(1, visibleTiles.length),
+        Math.max(0, gridSize.width - MOBILE_GRID_PADDING * 2),
+        Math.max(0, gridSize.height - MOBILE_GRID_PADDING * 2),
+        {
+          gap: MOBILE_GRID_GAP,
+          maxCols: mobileMaxCols,
+          maxTilesPerPage: MAX_MOBILE_VISIBLE_TILES,
+          targetAspect: 16 / 9,
+        },
+      ),
+    [gridSize.height, gridSize.width, mobileMaxCols, visibleTiles.length],
+  );
+  const mobileGridTileIds = useMemo(
+    () => visibleTiles.map((tile) => tile.key),
+    [visibleTiles],
+  );
+  const gridTilePlacements = useMemo(
+    () =>
+      mobileGridTileIds
+        .map((id, index) => {
+          const position = mobileGridLayout.positions[index];
+          return position ? { ...position, id } : null;
+        })
+        .filter(
+          (position): position is GridTilePosition & { id: string } =>
+            position !== null,
+        ),
+    [mobileGridLayout.positions, mobileGridTileIds],
+  );
+  const gridTileStyleById = useMemo(() => {
+    const styles = new Map<string, CSSProperties>();
+    gridTilePlacements.forEach((position) => {
+      styles.set(position.id, {
+        left: MOBILE_GRID_PADDING + position.x,
+        top: MOBILE_GRID_PADDING + position.y,
+        width: position.width,
+        height: position.height,
+      });
+    });
+    return styles;
+  }, [gridTilePlacements]);
+  const fallbackTileStyle: CSSProperties | undefined =
+    mobileGridLayout.tileWidth > 0
+      ? {
+          width: mobileGridLayout.tileWidth,
+          height: mobileGridLayout.tileHeight,
+        }
+      : undefined;
+  const getGridTileStyle = useCallback(
+    (id: string) => gridTileStyleById.get(id) ?? fallbackTileStyle,
+    [fallbackTileStyle, gridTileStyleById],
+  );
   const mobileRoomTilingBase = useMemo(
     () => ({
       activeSpeakerId,
@@ -377,10 +650,10 @@ function MobileGridLayout({
       primaryParticipantId:
         primaryTile.kind === "remote" ? primaryTile.participant.userId : null,
       localIsPrimary: primaryTile.kind === "local",
-      localIsRail: railTiles.some((tile) => tile.kind === "local"),
+      localIsVisibleTile: visibleTiles.some((tile) => tile.kind === "local"),
       visibleTileCount:
-        1 + railTiles.filter((tile) => tile.kind !== "overflow").length,
-      railTileCount: railTiles.length,
+        visibleTiles.filter((tile) => tile.kind !== "overflow").length,
+      overflowTileVisible: showOverflowTile,
       hiddenParticipantsCount,
       totalPeople,
     }),
@@ -391,12 +664,13 @@ function MobileGridLayout({
       orderedRemoteParticipants,
       primaryIds,
       primaryTile,
-      railTiles,
+      showOverflowTile,
       renderedRoomMode,
       roomTilingScores,
       roomTilingWarmReasons,
       totalPeople,
       visibleRemoteIds,
+      visibleTiles,
       warmRemoteIds,
     ],
   );
@@ -420,26 +694,23 @@ function MobileGridLayout({
     });
     const publish = ({ heartbeat = false } = {}) => {
       const rootRect = readRect(rootRef.current);
-      const mainRect = readRect(stageMainRef.current);
-      const railRect = readRect(stageRailRef.current);
       const localRect = readRect(localTileRef.current);
-      const fallbackTileRect = mobileRoomTilingBase.localIsPrimary
-        ? mainRect
-        : railRect;
-      const tileWidth = localRect.width || fallbackTileRect.width;
-      const tileHeight = localRect.height || fallbackTileRect.height;
-      const localPosition =
-        tileWidth > 0 && tileHeight > 0
-          ? [
-              {
-                id: "local",
-                x: Math.max(0, localRect.x - rootRect.x),
-                y: Math.max(0, localRect.y - rootRect.y),
-                width: tileWidth,
-                height: tileHeight,
-              },
-            ]
-          : [];
+      const tileWidth = localRect.width || mobileGridLayout.tileWidth;
+      const tileHeight = localRect.height || mobileGridLayout.tileHeight;
+      const positions =
+        gridTilePlacements.length > 0
+          ? gridTilePlacements
+          : tileWidth > 0 && tileHeight > 0
+            ? [
+                {
+                  id: "local",
+                  x: Math.max(0, localRect.x - rootRect.x),
+                  y: Math.max(0, localRect.y - rootRect.y),
+                  width: tileWidth,
+                  height: tileHeight,
+                },
+              ]
+            : [];
       const metadataWithoutSequence = {
         source: "client" as const,
         intervalMs: MOBILE_ROOM_TILING_METADATA_INTERVAL_MS,
@@ -453,7 +724,7 @@ function MobileGridLayout({
         autoStageMode:
           mobileRoomTilingBase.renderedMode === "solo"
             ? ("mobile-solo" as const)
-            : ("mobile-stage-rail" as const),
+            : ("mobile-tiled" as const),
         dynamicCrop: false as const,
         presenting: false as const,
         pinnedId: null,
@@ -470,11 +741,13 @@ function MobileGridLayout({
           hidden: mobileRoomTilingBase.hiddenParticipantsCount,
           warm: mobileRoomTilingBase.warmRemoteIds.length,
           totalGrid: mobileRoomTilingBase.totalPeople,
-          stageRail: mobileRoomTilingBase.railTileCount,
-          maxTiles: MAX_MOBILE_RAIL_TILES + 1,
-          requestedMaxTiles: MAX_MOBILE_RAIL_TILES + 1,
-          autoTileLimit: MAX_MOBILE_RAIL_TILES + 1,
-          recentlyVisibleWarm: 0,
+          stageRail: 0,
+          maxTiles: MAX_MOBILE_VISIBLE_TILES,
+          requestedMaxTiles: MAX_MOBILE_VISIBLE_TILES,
+          autoTileLimit: MAX_MOBILE_VISIBLE_TILES,
+          recentlyVisibleWarm: Object.values(
+            mobileRoomTilingBase.roomTilingWarmReasons,
+          ).filter((reasons) => reasons.includes("recently-visible")).length,
           priorityWarm: Object.values(
             mobileRoomTilingBase.roomTilingWarmReasons,
           ).filter((reasons) =>
@@ -494,37 +767,29 @@ function MobileGridLayout({
           mainParticipantId: mobileRoomTilingBase.localIsPrimary
             ? currentUserId
             : mobileRoomTilingBase.primaryParticipantId,
-          sideCompanionKind: mobileRoomTilingBase.localIsRail
-            ? ("local" as const)
-            : mobileRoomTilingBase.railTileCount > 0
-              ? ("remote" as const)
-              : ("none" as const),
-          sideCompanionId: mobileRoomTilingBase.localIsRail
-            ? currentUserId
-            : null,
+          sideCompanionKind: "none" as const,
+          sideCompanionId: null,
           sideBySide: false as const,
-          spotlight: mobileRoomTilingBase.renderedMode === "stageRail",
+          spotlight: false,
         },
         selfView: {
           requested: "auto" as const,
           effective: "tile" as const,
-          placement: mobileRoomTilingBase.localIsPrimary
-            ? ("stage" as const)
-            : ("tile" as const),
+          placement: "tile" as const,
           corner: "bottom-right" as const,
         },
         layout: {
           width: rootRect.width,
           height: rootRect.height,
-          cols: mobileRoomTilingBase.renderedMode === "solo" ? 1 : 2,
-          rows: mobileRoomTilingBase.renderedMode === "solo" ? 1 : 2,
+          cols: mobileGridLayout.cols,
+          rows: mobileGridLayout.rows,
           tileWidth,
           tileHeight,
-          contentWidth: rootRect.width,
-          contentHeight: rootRect.height,
-          offsetX: 0,
-          offsetY: 0,
-          positions: localPosition,
+          contentWidth: mobileGridLayout.contentWidth,
+          contentHeight: mobileGridLayout.contentHeight,
+          offsetX: mobileGridLayout.offsetX,
+          offsetY: mobileGridLayout.offsetY,
+          positions,
           gridVideoFit: "cover" as const,
           fullVideoTileIds: [],
         },
@@ -582,7 +847,19 @@ function MobileGridLayout({
         delete debugWindow.__conclaveMeetRoomTilingDebug;
       }
     };
-  }, [currentUserId, mobileRoomTilingBase]);
+  }, [
+    currentUserId,
+    gridTilePlacements,
+    mobileGridLayout.cols,
+    mobileGridLayout.contentHeight,
+    mobileGridLayout.contentWidth,
+    mobileGridLayout.offsetX,
+    mobileGridLayout.offsetY,
+    mobileGridLayout.rows,
+    mobileGridLayout.tileHeight,
+    mobileGridLayout.tileWidth,
+    mobileRoomTilingBase,
+  ]);
 
   const renderTile = (tile: MobileTileDescriptor, variant: TileVariant) => {
     if (tile.kind === "local") {
@@ -646,15 +923,20 @@ function MobileGridLayout({
       data-mobile-room-tiling-interval={MOBILE_ROOM_TILING_METADATA_INTERVAL_MS}
       data-mobile-primary={primaryTile.key}
       data-mobile-primary-kind={primaryTile.kind}
-      data-mobile-rail-count={railTiles.length}
+      data-mobile-rail-count={0}
       data-mobile-visible-count={mobileRoomTilingBase.visibleTileCount}
       data-mobile-hidden-count={hiddenParticipantsCount}
-      data-mobile-max-tiles={MAX_MOBILE_RAIL_TILES + 1}
+      data-mobile-max-tiles={MAX_MOBILE_VISIBLE_TILES}
       data-mobile-visible-ids={visibleRemoteIds.join(",")}
       data-mobile-hidden-ids={hiddenRemoteIds.join(",")}
       data-mobile-warm-ids={warmRemoteIds.join(",")}
       data-mobile-warm-count={warmRemoteIds.length}
       data-mobile-total-people={totalPeople}
+      data-mobile-grid-cols={mobileGridLayout.cols}
+      data-mobile-grid-rows={mobileGridLayout.rows}
+      data-mobile-grid-tile-size={`${mobileGridLayout.tileWidth}x${mobileGridLayout.tileHeight}`}
+      data-mobile-grid-visible-tile-ids={mobileGridTileIds.join(",")}
+      data-mobile-overflow-tile={showOverflowTile ? "true" : "false"}
     >
       <div
         className="pointer-events-none absolute h-0 w-0 overflow-hidden"
@@ -684,21 +966,31 @@ function MobileGridLayout({
       ) : null}
 
       <div
-        className="mobile-stage-layout flex h-full w-full flex-col gap-2 p-3"
+        ref={gridRef}
+        className="mobile-stage-layout mobile-tiled-layout mobile-stage-main relative h-full w-full p-3"
         data-mobile-stage-layout={layoutMode}
       >
-        <div ref={stageMainRef} className="mobile-stage-main min-h-0 flex-1">
-          {renderTile(primaryTile, railTiles.length === 0 ? "solo" : "primary")}
-        </div>
-        {railTiles.length > 0 ? (
+        {visibleTiles.map((tile) => (
           <div
-            ref={stageRailRef}
-            className="mobile-stage-rail grid h-32 shrink-0 grid-flow-col auto-cols-[minmax(112px,34vw)] gap-2 overflow-x-auto pb-1"
-            aria-label="Other participants"
+            key={`mobile-grid-${tile.key}`}
+            className={
+              mobileGridLayout.tileWidth > 0
+                ? "mobile-grid-tile absolute will-change-transform"
+                : "mobile-grid-tile relative h-full w-full"
+            }
+            style={getGridTileStyle(tile.key)}
+            data-mobile-grid-tile={tile.key}
           >
-            {railTiles.map((tile) => renderTile(tile, "rail"))}
+            {renderTile(
+              tile,
+              visibleTiles.length === 1
+                ? "solo"
+                : tile.key === primaryTile.key
+                  ? "primary"
+                  : "grid",
+            )}
           </div>
-        ) : null}
+        ))}
       </div>
     </div>
   );

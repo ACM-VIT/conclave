@@ -1423,6 +1423,17 @@ const readRoomTilingPolicyContextFromDom =
         mobileRoot,
         "data-mobile-rail-count",
       );
+      const [mobileTileWidth = 0, mobileTileHeight = 0] =
+        readElementStringAttribute(
+          mobileRoot,
+          "data-mobile-grid-tile-size",
+          "0x0",
+        )
+          .split("x")
+          .map((value) => Number(value));
+      const localTileRect = document
+        .querySelector("[data-mobile-grid-tile='local']")
+        ?.getBoundingClientRect();
       const mainRect = document
         .querySelector(".mobile-stage-main")
         ?.getBoundingClientRect();
@@ -1455,9 +1466,19 @@ const readRoomTilingPolicyContextFromDom =
           "data-mobile-max-tiles",
           stageRailCount + 1,
         ),
-        tileWidth: Math.round(tileRect?.width ?? rootRect.width),
-        tileHeight: Math.round(tileRect?.height ?? rootRect.height),
-        selfViewPlacement: localIsPrimary ? "stage" : "tile",
+        tileWidth: Math.round(
+          mobileTileWidth ||
+            localTileRect?.width ||
+            tileRect?.width ||
+            rootRect.width,
+        ),
+        tileHeight: Math.round(
+          mobileTileHeight ||
+            localTileRect?.height ||
+            tileRect?.height ||
+            rootRect.height,
+        ),
+        selfViewPlacement: "tile",
         localIsPrimary,
         receivedAt: performance.now(),
       };
