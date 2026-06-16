@@ -4949,11 +4949,81 @@ const getStyleFilter = (
     filters.push("grayscale(1)", "contrast(1.06)");
   } else if (style === "glow") {
     filters.push("brightness(1.08)", "contrast(1.18)", "saturate(1.12)");
+  } else if (style === "bloom") {
+    filters.push("brightness(1.1)", "contrast(1.04)", "saturate(1.18)");
+  } else if (style === "moonlight") {
+    filters.push(
+      "brightness(0.94)",
+      "contrast(1.1)",
+      "saturate(0.82)",
+      "hue-rotate(196deg)",
+    );
+  } else if (style === "sunlight") {
+    filters.push(
+      "brightness(1.09)",
+      "contrast(1.05)",
+      "saturate(1.12)",
+      "sepia(0.08)",
+    );
   }
   if (studioLook) {
     filters.push("contrast(1.08)", "saturate(1.06)");
   }
   return filters.length ? filters.join(" ") : "none";
+};
+
+const applyAppearanceStyleOverlay = (
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  style: AppearanceStyleId,
+) => {
+  if (style === "none" || style === "cloudy" || style === "ocean" || style === "mono") {
+    return;
+  }
+
+  ctx.save();
+  if (style === "glow") {
+    ctx.globalCompositeOperation = "screen";
+    ctx.strokeStyle = "rgba(250,204,21,0.3)";
+    ctx.lineWidth = 8;
+    ctx.strokeRect(4, 4, width - 8, height - 8);
+  } else if (style === "bloom") {
+    const gradient = ctx.createRadialGradient(
+      width * 0.5,
+      height * 0.42,
+      Math.min(width, height) * 0.08,
+      width * 0.5,
+      height * 0.45,
+      Math.max(width, height) * 0.68,
+    );
+    gradient.addColorStop(0, "rgba(255,255,245,0.2)");
+    gradient.addColorStop(0.46, "rgba(255,214,170,0.1)");
+    gradient.addColorStop(1, "rgba(255,255,255,0)");
+    ctx.globalCompositeOperation = "screen";
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, width, height);
+  } else if (style === "moonlight") {
+    const gradient = ctx.createLinearGradient(0, 0, width, height);
+    gradient.addColorStop(0, "rgba(56,94,185,0.22)");
+    gradient.addColorStop(0.58, "rgba(21,42,92,0.08)");
+    gradient.addColorStop(1, "rgba(4,11,28,0.16)");
+    ctx.globalCompositeOperation = "multiply";
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, width, height);
+    ctx.globalCompositeOperation = "screen";
+    ctx.fillStyle = "rgba(112,154,255,0.08)";
+    ctx.fillRect(0, 0, width, height);
+  } else if (style === "sunlight") {
+    const gradient = ctx.createLinearGradient(0, 0, width, height);
+    gradient.addColorStop(0, "rgba(255,235,169,0.22)");
+    gradient.addColorStop(0.42, "rgba(255,181,95,0.08)");
+    gradient.addColorStop(1, "rgba(255,255,255,0)");
+    ctx.globalCompositeOperation = "screen";
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, width, height);
+  }
+  ctx.restore();
 };
 
 const computeLowLightRenderStats = (
@@ -6796,10 +6866,75 @@ const drawFaceFilter = (
     beginProbe({
       left: headCenterX - faceWidth * 0.45,
       right: headCenterX + faceWidth * 0.45,
-      top: Math.min(eyeTopY - faceWidth * 0.08, headTopY + faceWidth * 0.26),
-      bottom: Math.min(lipY + lipH * 1.8, faceBottomY + faceWidth * 0.08),
+      top: Math.min(eyeTopY - faceWidth * 0.08, headTopY - faceWidth * 0.02),
+      bottom: Math.max(lipY + lipH * 1.8, faceBottomY + faceWidth * 0.08),
     });
     ctx.save();
+    const skinTint =
+      makeup.mode === "goth"
+        ? "rgba(31,41,55,0.26)"
+        : makeup.mode === "mummy"
+          ? "rgba(214,211,209,0.42)"
+          : makeup.mode === "zombie"
+            ? "rgba(101,163,13,0.34)"
+            : makeup.mode === "dramatic"
+              ? "rgba(168,85,247,0.12)"
+              : makeup.mode === "gloss"
+                ? "rgba(244,114,182,0.1)"
+                : `${makeup.cheek.slice(0, 7)}1f`;
+    const contourTint =
+      makeup.mode === "zombie"
+        ? "rgba(54,83,20,0.2)"
+        : makeup.mode === "mummy"
+          ? "rgba(87,83,78,0.16)"
+          : makeup.mode === "goth"
+            ? "rgba(2,6,23,0.18)"
+            : "rgba(120,53,15,0.08)";
+    ctx.globalCompositeOperation = "source-over";
+    ctx.fillStyle = skinTint;
+    ctx.globalAlpha = 1;
+    ctx.beginPath();
+    ctx.ellipse(
+      headCenterX,
+      lerp(headTopY, faceBottomY, 0.55),
+      faceWidth * 0.39,
+      Math.max(faceWidth * 0.47, faceHeight * 0.42),
+      0,
+      0,
+      Math.PI * 2,
+    );
+    ctx.fill();
+    ctx.globalCompositeOperation = "multiply";
+    ctx.fillStyle = contourTint;
+    [-1, 1].forEach((side) => {
+      ctx.beginPath();
+      ctx.ellipse(
+        headCenterX + side * faceWidth * 0.27,
+        lerp(headTopY, faceBottomY, 0.58),
+        faceWidth * 0.09,
+        faceWidth * 0.28,
+        side * 0.08,
+        0,
+        Math.PI * 2,
+      );
+      ctx.fill();
+    });
+    ctx.globalCompositeOperation = "screen";
+    ctx.fillStyle =
+      makeup.mode === "goth" || makeup.mode === "zombie"
+        ? "rgba(255,255,255,0.06)"
+        : "rgba(255,255,255,0.16)";
+    ctx.beginPath();
+    ctx.ellipse(
+      headCenterX - faceWidth * 0.06,
+      lerp(headTopY, noseLocal.y, 0.62),
+      faceWidth * 0.1,
+      faceWidth * 0.22,
+      -0.08,
+      0,
+      Math.PI * 2,
+    );
+    ctx.fill();
     ctx.globalCompositeOperation = "source-over";
     ctx.fillStyle = makeup.eye;
     ctx.globalAlpha = makeup.eyeAlpha;
@@ -7318,11 +7453,68 @@ const drawFaceFilter = (
     const headW = faceWidth * 0.5;
     const headH = faceWidth * 0.34;
     beginProbe({
-      left: headCenterX - headW * 0.62,
-      right: headCenterX + headW * 0.62,
+      left: headCenterX - faceWidth * 0.48,
+      right: headCenterX + faceWidth * 0.48,
       top: headY - headH * 0.78 - faceWidth * 0.18,
-      bottom: headY + headH * 0.7,
+      bottom: Math.max(headY + headH * 0.7, faceBottomY + faceWidth * 0.08),
     });
+    ctx.save();
+    ctx.globalCompositeOperation = "source-over";
+    ctx.fillStyle = "rgba(74,222,128,0.2)";
+    ctx.beginPath();
+    ctx.ellipse(
+      headCenterX,
+      lerp(headTopY, faceBottomY, 0.56),
+      faceWidth * 0.36,
+      faceWidth * 0.48,
+      0,
+      0,
+      Math.PI * 2,
+    );
+    ctx.fill();
+    ctx.globalCompositeOperation = "multiply";
+    ctx.fillStyle = "rgba(22,101,52,0.16)";
+    [-1, 1].forEach((side) => {
+      ctx.beginPath();
+      ctx.ellipse(
+        headCenterX + side * faceWidth * 0.27,
+        lerp(headTopY, faceBottomY, 0.56),
+        faceWidth * 0.08,
+        faceWidth * 0.26,
+        side * 0.08,
+        0,
+        Math.PI * 2,
+      );
+      ctx.fill();
+    });
+    ctx.globalCompositeOperation = "source-over";
+    ctx.fillStyle = "rgba(21,128,61,0.84)";
+    [leftEyeLocal, rightEyeLocal].forEach((eye, index) => {
+      const side = index === 0 ? -1 : 1;
+      ctx.beginPath();
+      ctx.ellipse(
+        eye.x + side * faceWidth * 0.015,
+        eye.y - faceWidth * 0.01,
+        faceWidth * 0.075,
+        faceWidth * 0.12,
+        side * 0.16,
+        0,
+        Math.PI * 2,
+      );
+      ctx.fill();
+      ctx.fillStyle = "rgba(187,247,208,0.55)";
+      ctx.beginPath();
+      ctx.arc(
+        eye.x - side * faceWidth * 0.02,
+        eye.y - faceWidth * 0.045,
+        faceWidth * 0.018,
+        0,
+        Math.PI * 2,
+      );
+      ctx.fill();
+      ctx.fillStyle = "rgba(21,128,61,0.84)";
+    });
+    ctx.restore();
     ctx.strokeStyle = "rgba(22,101,52,0.9)";
     ctx.lineWidth = Math.max(3, faceWidth * 0.018);
     [-1, 1].forEach((side) => {
@@ -8579,7 +8771,7 @@ const drawFaceFilter = (
       left: headCenterX - faceWidth * 0.46,
       right: headCenterX + faceWidth * 0.46,
       top: shipY - faceWidth * 0.2,
-      bottom: noseLocal.y + faceWidth * 0.1,
+      bottom: faceBottomY + faceWidth * 0.08,
     });
     const beam = ctx.createLinearGradient(
       headCenterX,
@@ -8597,6 +8789,45 @@ const drawFaceFilter = (
     ctx.lineTo(noseLocal.x - faceWidth * 0.1, noseLocal.y + faceWidth * 0.1);
     ctx.closePath();
     ctx.fill();
+    const faceBeam = ctx.createRadialGradient(
+      noseLocal.x,
+      noseLocal.y,
+      faceWidth * 0.08,
+      headCenterX,
+      lerp(headTopY, faceBottomY, 0.56),
+      faceWidth * 0.5,
+    );
+    faceBeam.addColorStop(0, "rgba(187,247,208,0.22)");
+    faceBeam.addColorStop(0.56, "rgba(34,197,94,0.12)");
+    faceBeam.addColorStop(1, "rgba(34,197,94,0)");
+    ctx.globalCompositeOperation = "screen";
+    ctx.fillStyle = faceBeam;
+    ctx.beginPath();
+    ctx.ellipse(
+      headCenterX,
+      lerp(headTopY, faceBottomY, 0.56),
+      faceWidth * 0.38,
+      faceWidth * 0.48,
+      0,
+      0,
+      Math.PI * 2,
+    );
+    ctx.fill();
+    ctx.globalCompositeOperation = "source-over";
+    ctx.fillStyle = "rgba(22,101,52,0.36)";
+    [leftEyeLocal, rightEyeLocal].forEach((eye) => {
+      ctx.beginPath();
+      ctx.ellipse(
+        eye.x,
+        eye.y - faceWidth * 0.005,
+        faceWidth * 0.07,
+        faceWidth * 0.055,
+        0,
+        0,
+        Math.PI * 2,
+      );
+      ctx.fill();
+    });
     ctx.fillStyle = "rgba(20,184,166,0.95)";
     ctx.beginPath();
     ctx.ellipse(headCenterX, shipY, faceWidth * 0.34, faceWidth * 0.09, 0, 0, Math.PI * 2);
@@ -8808,14 +9039,7 @@ const renderFrame = (
     drawVideo(ctx, source, crop, width, height, sourceFilter);
   }
 
-  if (effects.style === "glow") {
-    ctx.save();
-    ctx.globalCompositeOperation = "screen";
-    ctx.strokeStyle = "rgba(250,204,21,0.3)";
-    ctx.lineWidth = 8;
-    ctx.strokeRect(4, 4, width - 8, height - 8);
-    ctx.restore();
-  }
+  applyAppearanceStyleOverlay(ctx, width, height, effects.style);
 
   applyLighting(ctx, width, height, effects, lowLightRenderStats);
 

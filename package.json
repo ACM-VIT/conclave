@@ -8,6 +8,7 @@
     "packages/*"
   ],
   "scripts": {
+    "check:video-effect-assets": "node scripts/check-video-effect-assets.mjs",
     "debug:video-effects": "node scripts/debug-video-effects-headless.mjs",
     "debug:video-effects:face": "node scripts/debug-video-effects-face.mjs",
     "observe:meet-effects": "node scripts/observe-meet-effects-headless.mjs",

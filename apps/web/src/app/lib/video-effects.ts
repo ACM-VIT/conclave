@@ -25,7 +25,6 @@ import {
   Scissors,
   Snowflake,
   Sparkles,
-  Sofa,
   SunMedium,
   VenetianMask,
   WandSparkles,
@@ -150,7 +149,10 @@ export type AppearanceStyleId =
   | "cloudy"
   | "ocean"
   | "mono"
-  | "glow";
+  | "glow"
+  | "bloom"
+  | "moonlight"
+  | "sunlight";
 
 export interface VideoEffectsState {
   background: BackgroundEffectId;
@@ -313,6 +315,9 @@ const APPEARANCE_STYLE_IDS = new Set<AppearanceStyleId>([
   "ocean",
   "mono",
   "glow",
+  "bloom",
+  "moonlight",
+  "sunlight",
 ]);
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -321,6 +326,44 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 const isBackgroundEffectId = (value: unknown): value is BackgroundEffectId =>
   typeof value === "string" &&
   BACKGROUND_EFFECT_IDS.has(value as BackgroundEffectId);
+
+const HIDDEN_BACKGROUND_EFFECT_IDS = new Set<BackgroundEffectId>([
+  "desk-motion",
+  "loft-motion",
+  "aurora-motion",
+  "home-office-living-room",
+  "home-office-sofa",
+  "lounge",
+  "living-room-close",
+  "living-room-shelf",
+  "office-break-room",
+  "office-meeting-space",
+  "stylish-home-office",
+  "stylish-living-room-couch",
+  "cyberpunk-penthouse",
+  "tropical-beach",
+  "gaming-room",
+  "rainy-conservatory",
+  "rainy-cafe",
+  "sunny-cafe",
+  "rustic-cabin",
+  "snowy-chalet",
+  "underwater-sea-lab",
+  "space-station",
+  "japanese-courtyard",
+  "parisian-skyline",
+  "greenhouse",
+  "italian-terrace-countryside",
+  "physics-lab",
+  "lakeside-tent",
+  "gradient",
+]);
+
+const isSelectableBackgroundEffectId = (
+  value: unknown,
+): value is BackgroundEffectId =>
+  isBackgroundEffectId(value) &&
+  !HIDDEN_BACKGROUND_EFFECT_IDS.has(value);
 
 export const isAnimatedBackgroundEffect = (
   value: BackgroundEffectId,
@@ -366,7 +409,7 @@ export function normalizeVideoEffectsState(value: unknown): VideoEffectsState {
     customBackgroundDataUrl || customBackgroundId,
   );
   const background =
-    isBackgroundEffectId(value.background) &&
+    isSelectableBackgroundEffectId(value.background) &&
     (value.background !== "custom" || hasCustomBackground)
       ? value.background
       : DEFAULT_VIDEO_EFFECTS.background;
@@ -505,150 +548,6 @@ export const BACKGROUND_EFFECTS: VideoEffectOption<BackgroundEffectId>[] = [
     category: "Blur and personal",
   },
   {
-    id: "desk-motion",
-    label: "Desk motion",
-    icon: LampDesk,
-    tone: "#1e3a8a",
-    motion: true,
-    category: "Immersive",
-  },
-  {
-    id: "loft-motion",
-    label: "Loft motion",
-    icon: Building2,
-    tone: "#7c2d12",
-    motion: true,
-    category: "Immersive",
-  },
-  {
-    id: "aurora-motion",
-    label: "Aurora motion",
-    icon: Waves,
-    tone: "#155e75",
-    motion: true,
-    category: "Immersive",
-  },
-  {
-    id: "cyberpunk-penthouse",
-    label: "Cyberpunk penthouse",
-    icon: Building2,
-    tone: "#7c3aed",
-    assetPath: BACKGROUND_ASSET_PATHS["cyberpunk-penthouse"],
-    category: "Immersive",
-  },
-  {
-    id: "gaming-room",
-    label: "Gaming room",
-    icon: ImagePlus,
-    tone: "#4f46e5",
-    assetPath: BACKGROUND_ASSET_PATHS["gaming-room"],
-    category: "Immersive",
-  },
-  {
-    id: "rainy-conservatory",
-    label: "Rainy conservatory",
-    icon: Leaf,
-    tone: "#0f766e",
-    assetPath: BACKGROUND_ASSET_PATHS["rainy-conservatory"],
-    category: "Immersive",
-  },
-  {
-    id: "rainy-cafe",
-    label: "Rainy cafe",
-    icon: Coffee,
-    tone: "#78350f",
-    assetPath: BACKGROUND_ASSET_PATHS["rainy-cafe"],
-    category: "Immersive",
-  },
-  {
-    id: "sunny-cafe",
-    label: "Sunny cafe",
-    icon: SunMedium,
-    tone: "#ca8a04",
-    assetPath: BACKGROUND_ASSET_PATHS["sunny-cafe"],
-    category: "Immersive",
-  },
-  {
-    id: "rustic-cabin",
-    label: "Rustic cabin",
-    icon: Armchair,
-    tone: "#854d0e",
-    assetPath: BACKGROUND_ASSET_PATHS["rustic-cabin"],
-    category: "Immersive",
-  },
-  {
-    id: "snowy-chalet",
-    label: "Snowy chalet",
-    icon: Snowflake,
-    tone: "#0369a1",
-    assetPath: BACKGROUND_ASSET_PATHS["snowy-chalet"],
-    category: "Immersive",
-  },
-  {
-    id: "underwater-sea-lab",
-    label: "Underwater sea lab",
-    icon: Waves,
-    tone: "#0e7490",
-    assetPath: BACKGROUND_ASSET_PATHS["underwater-sea-lab"],
-    category: "Immersive",
-  },
-  {
-    id: "space-station",
-    label: "Space station",
-    icon: Rocket,
-    tone: "#334155",
-    assetPath: BACKGROUND_ASSET_PATHS["space-station"],
-    category: "Immersive",
-  },
-  {
-    id: "japanese-courtyard",
-    label: "Japanese courtyard",
-    icon: Leaf,
-    tone: "#166534",
-    assetPath: BACKGROUND_ASSET_PATHS["japanese-courtyard"],
-    category: "Immersive",
-  },
-  {
-    id: "parisian-skyline",
-    label: "Parisian skyline",
-    icon: Building2,
-    tone: "#475569",
-    assetPath: BACKGROUND_ASSET_PATHS["parisian-skyline"],
-    category: "Immersive",
-  },
-  {
-    id: "greenhouse",
-    label: "Greenhouse",
-    icon: Leaf,
-    tone: "#15803d",
-    assetPath: BACKGROUND_ASSET_PATHS.greenhouse,
-    category: "Immersive",
-  },
-  {
-    id: "italian-terrace-countryside",
-    label: "Italian terrace",
-    icon: SunMedium,
-    tone: "#a16207",
-    assetPath: BACKGROUND_ASSET_PATHS["italian-terrace-countryside"],
-    category: "Immersive",
-  },
-  {
-    id: "physics-lab",
-    label: "Physics lab",
-    icon: Lightbulb,
-    tone: "#334155",
-    assetPath: BACKGROUND_ASSET_PATHS["physics-lab"],
-    category: "Immersive",
-  },
-  {
-    id: "lakeside-tent",
-    label: "Lakeside tent",
-    icon: Waves,
-    tone: "#0f766e",
-    assetPath: BACKGROUND_ASSET_PATHS["lakeside-tent"],
-    category: "Immersive",
-  },
-  {
     id: "camper-vacation",
     label: "Camper vacation",
     icon: Plane,
@@ -721,27 +620,11 @@ export const BACKGROUND_EFFECTS: VideoEffectOption<BackgroundEffectId>[] = [
     category: "Professional",
   },
   {
-    id: "office-break-room",
-    label: "Office break room",
-    icon: Coffee,
-    tone: "#0f766e",
-    assetPath: BACKGROUND_ASSET_PATHS["office-break-room"],
-    category: "Professional",
-  },
-  {
     id: "office-library",
     label: "Office library",
     icon: LibraryBig,
     tone: "#365314",
     assetPath: BACKGROUND_ASSET_PATHS["office-library"],
-    category: "Professional",
-  },
-  {
-    id: "office-meeting-space",
-    label: "Office meeting space",
-    icon: Building2,
-    tone: "#0f766e",
-    assetPath: BACKGROUND_ASSET_PATHS["office-meeting-space"],
     category: "Professional",
   },
   {
@@ -769,60 +652,12 @@ export const BACKGROUND_EFFECTS: VideoEffectOption<BackgroundEffectId>[] = [
     category: "Home office",
   },
   {
-    id: "home-office-living-room",
-    label: "Home office living room",
-    icon: LampDesk,
-    tone: "#57534e",
-    assetPath: BACKGROUND_ASSET_PATHS["home-office-living-room"],
-    category: "Home office",
-  },
-  {
     id: "shelf-with-plants",
     label: "Shelf with plants",
     icon: Leaf,
     tone: "#166534",
     assetPath: BACKGROUND_ASSET_PATHS["shelf-with-plants"],
     category: "Home office",
-  },
-  {
-    id: "stylish-home-office",
-    label: "Stylish home office",
-    icon: LampDesk,
-    tone: "#57534e",
-    assetPath: BACKGROUND_ASSET_PATHS["stylish-home-office"],
-    category: "Home office",
-  },
-  {
-    id: "lounge",
-    label: "Warm lounge",
-    icon: ImagePlus,
-    tone: "#7c2d12",
-    assetPath: BACKGROUND_ASSET_PATHS.lounge,
-    category: "Cozy home",
-  },
-  {
-    id: "home-office-sofa",
-    label: "Home sofa",
-    icon: Sofa,
-    tone: "#9a3412",
-    assetPath: BACKGROUND_ASSET_PATHS["home-office-sofa"],
-    category: "Cozy home",
-  },
-  {
-    id: "living-room-close",
-    label: "Living room close",
-    icon: Sofa,
-    tone: "#9a3412",
-    assetPath: BACKGROUND_ASSET_PATHS["living-room-close"],
-    category: "Cozy home",
-  },
-  {
-    id: "living-room-shelf",
-    label: "Living room shelf",
-    icon: Armchair,
-    tone: "#92400e",
-    assetPath: BACKGROUND_ASSET_PATHS["living-room-shelf"],
-    category: "Cozy home",
   },
   {
     id: "living-room-wide",
@@ -838,14 +673,6 @@ export const BACKGROUND_EFFECTS: VideoEffectOption<BackgroundEffectId>[] = [
     icon: Armchair,
     tone: "#92400e",
     assetPath: BACKGROUND_ASSET_PATHS["modern-indian-living-room"],
-    category: "Cozy home",
-  },
-  {
-    id: "stylish-living-room-couch",
-    label: "Stylish living room",
-    icon: Sofa,
-    tone: "#7f1d1d",
-    assetPath: BACKGROUND_ASSET_PATHS["stylish-living-room-couch"],
     category: "Cozy home",
   },
   {
@@ -865,14 +692,6 @@ export const BACKGROUND_EFFECTS: VideoEffectOption<BackgroundEffectId>[] = [
     category: "Nature",
   },
   {
-    id: "tropical-beach",
-    label: "Tropical beach",
-    icon: Waves,
-    tone: "#0e7490",
-    assetPath: BACKGROUND_ASSET_PATHS["tropical-beach"],
-    category: "Nature",
-  },
-  {
     id: "forest",
     label: "Forest light",
     icon: ImagePlus,
@@ -887,13 +706,6 @@ export const BACKGROUND_EFFECTS: VideoEffectOption<BackgroundEffectId>[] = [
     tone: "#15803d",
     assetPath: BACKGROUND_ASSET_PATHS["accessible-patio"],
     category: "Nature",
-  },
-  {
-    id: "gradient",
-    label: "Color field",
-    icon: Palette,
-    tone: "#6d28d9",
-    category: "Stylized",
   },
   {
     id: "custom",
@@ -1330,6 +1142,24 @@ export const APPEARANCE_STYLES: VideoEffectOption<AppearanceStyleId>[] = [
     label: "Glowing edges",
     icon: Focus,
     tone: "#eab308",
+  },
+  {
+    id: "bloom",
+    label: "Bloom",
+    icon: Sparkles,
+    tone: "#f59e0b",
+  },
+  {
+    id: "moonlight",
+    label: "Moonlight",
+    icon: Palette,
+    tone: "#2563eb",
+  },
+  {
+    id: "sunlight",
+    label: "Sunlight",
+    icon: SunMedium,
+    tone: "#f97316",
   },
 ];
 
