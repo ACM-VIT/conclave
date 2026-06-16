@@ -113,6 +113,9 @@ const STATIC_CROP_ENTER_DRIFT_PX = 2.5;
 const STATIC_CROP_EXIT_DRIFT_PX = 10;
 const STATIC_CROP_FACE_REVALIDATION_INTERVAL_MS = 360;
 const FACE_LANDMARK_SMOOTHING_ALPHA = 0.42;
+const FACE_LANDMARK_FAST_SMOOTHING_ALPHA = 0.84;
+const FACE_LANDMARK_ADAPTIVE_MOTION_START = 0.004;
+const FACE_LANDMARK_ADAPTIVE_MOTION_END = 0.03;
 const MASK_TEMPORAL_ALPHA = 0.72;
 const MASK_CONFIDENCE_FLOOR = 0.18;
 const MASK_CONFIDENCE_CEILING = 0.74;
@@ -781,6 +784,25 @@ type SmoothedMetric = {
   initialValue: number;
   alpha: number;
   initialized: boolean;
+};
+type FaceLandmarkSmoothingStats = {
+  alpha: number;
+  motionScore: number;
+  centerDrift: number;
+  sizeDrift: number;
+  reset: boolean;
+  reason:
+    | "adaptive"
+    | "first-result"
+    | "large-jump"
+    | "landmark-count-change"
+    | "missing-result";
+  previousCount: number;
+  nextCount: number;
+};
+type FaceLandmarkSmoothingResult = {
+  landmarks: NormalizedLandmarkList | null;
+  stats: FaceLandmarkSmoothingStats;
 };
 type VideoEffectsAdaptationState = {
   adaptiveEffect: boolean;
@@ -1909,43 +1931,142 @@ const getNormalizedLandmarkCenter = (landmarks: NormalizedLandmarkList) => {
   };
 };
 
+const getNormalizedLandmarkMetrics = (landmarks: NormalizedLandmarkList) => {
+  let minX = 1;
+  let minY = 1;
+  let maxX = 0;
+  let maxY = 0;
+  for (const landmark of landmarks) {
+    minX = Math.min(minX, landmark.x);
+    minY = Math.min(minY, landmark.y);
+    maxX = Math.max(maxX, landmark.x);
+    maxY = Math.max(maxY, landmark.y);
+  }
+  const center = getNormalizedLandmarkCenter(landmarks);
+  return {
+    centerX: center.x,
+    centerY: center.y,
+    width: Math.max(0, maxX - minX),
+    height: Math.max(0, maxY - minY),
+  };
+};
+
 const cloneFaceLandmarks = (
   landmarks: NormalizedLandmarkList,
 ): NormalizedLandmarkList => landmarks.map((landmark) => ({ ...landmark }));
+
+const createFaceLandmarkSmoothingStats = (
+  reason: FaceLandmarkSmoothingStats["reason"],
+  previous: NormalizedLandmarkList | null,
+  next: NormalizedLandmarkList | null,
+  alpha: number,
+  motionScore = 0,
+  centerDrift = 0,
+  sizeDrift = 0,
+): FaceLandmarkSmoothingStats => ({
+  alpha: Number(alpha.toFixed(3)),
+  motionScore: Number(motionScore.toFixed(4)),
+  centerDrift: Number(centerDrift.toFixed(4)),
+  sizeDrift: Number(sizeDrift.toFixed(4)),
+  reset: reason !== "adaptive",
+  reason,
+  previousCount: previous?.length ?? 0,
+  nextCount: next?.length ?? 0,
+});
 
 const smoothFaceLandmarks = (
   previous: NormalizedLandmarkList | null,
   next: NormalizedLandmarkList | null,
   alpha = FACE_LANDMARK_SMOOTHING_ALPHA,
-): NormalizedLandmarkList | null => {
-  if (!next?.length) return null;
+): FaceLandmarkSmoothingResult => {
+  if (!next?.length) {
+    return {
+      landmarks: null,
+      stats: createFaceLandmarkSmoothingStats(
+        "missing-result",
+        previous,
+        next,
+        1,
+      ),
+    };
+  }
   if (!previous || previous.length !== next.length) {
-    return cloneFaceLandmarks(next);
+    return {
+      landmarks: cloneFaceLandmarks(next),
+      stats: createFaceLandmarkSmoothingStats(
+        previous ? "landmark-count-change" : "first-result",
+        previous,
+        next,
+        1,
+      ),
+    };
   }
 
-  const previousCenter = getNormalizedLandmarkCenter(previous);
-  const nextCenter = getNormalizedLandmarkCenter(next);
+  const previousMetrics = getNormalizedLandmarkMetrics(previous);
+  const nextMetrics = getNormalizedLandmarkMetrics(next);
   const centerJump = Math.hypot(
-    nextCenter.x - previousCenter.x,
-    nextCenter.y - previousCenter.y,
+    nextMetrics.centerX - previousMetrics.centerX,
+    nextMetrics.centerY - previousMetrics.centerY,
+  );
+  const sizeJump = Math.max(
+    Math.abs(nextMetrics.width - previousMetrics.width),
+    Math.abs(nextMetrics.height - previousMetrics.height),
   );
   if (centerJump > 0.16) {
-    return cloneFaceLandmarks(next);
+    return {
+      landmarks: cloneFaceLandmarks(next),
+      stats: createFaceLandmarkSmoothingStats(
+        "large-jump",
+        previous,
+        next,
+        1,
+        centerJump,
+        centerJump,
+        sizeJump,
+      ),
+    };
   }
 
-  return next.map((landmark, index) => {
-    const previousLandmark = previous[index];
-    return {
-      ...landmark,
-      x: lerp(previousLandmark.x, landmark.x, alpha),
-      y: lerp(previousLandmark.y, landmark.y, alpha),
-      z:
-        typeof landmark.z === "number" &&
-        typeof previousLandmark.z === "number"
-          ? lerp(previousLandmark.z, landmark.z, alpha)
-          : landmark.z,
-    };
-  });
+  const motionScore = Math.max(centerJump, sizeJump * 0.65);
+  const motionProgress = smoothStep(
+    clamp(
+      (motionScore - FACE_LANDMARK_ADAPTIVE_MOTION_START) /
+        (FACE_LANDMARK_ADAPTIVE_MOTION_END -
+          FACE_LANDMARK_ADAPTIVE_MOTION_START),
+      0,
+      1,
+    ),
+  );
+  const adaptiveAlpha = clamp(
+    lerp(alpha, FACE_LANDMARK_FAST_SMOOTHING_ALPHA, motionProgress),
+    alpha,
+    FACE_LANDMARK_FAST_SMOOTHING_ALPHA,
+  );
+
+  return {
+    landmarks: next.map((landmark, index) => {
+      const previousLandmark = previous[index];
+      return {
+        ...landmark,
+        x: lerp(previousLandmark.x, landmark.x, adaptiveAlpha),
+        y: lerp(previousLandmark.y, landmark.y, adaptiveAlpha),
+        z:
+          typeof landmark.z === "number" &&
+          typeof previousLandmark.z === "number"
+            ? lerp(previousLandmark.z, landmark.z, adaptiveAlpha)
+            : landmark.z,
+      };
+    }),
+    stats: createFaceLandmarkSmoothingStats(
+      "adaptive",
+      previous,
+      next,
+      adaptiveAlpha,
+      motionScore,
+      centerJump,
+      sizeJump,
+    ),
+  };
 };
 
 const isVideoEffectsDebugEnabled = () => {
@@ -6598,6 +6719,8 @@ export function useVideoEffects({
     let latestFaceLandmarks: NormalizedLandmarkList | null = null;
     let latestFaceLandmarksAt = 0;
     let latestFaceResultAt = 0;
+    let latestFaceLandmarkSmoothingStats =
+      createFaceLandmarkSmoothingStats("missing-result", null, null, 1);
     let consecutiveFaceNoResultCount = 0;
     let latestFaceNoResultBackoffActive = false;
     let latestFaceNoResultBackoffReason: string | null = null;
@@ -9531,14 +9654,17 @@ export function useVideoEffects({
             latestFaceResultAt = performance.now();
             const detectedLandmarks = results.multiFaceLandmarks?.[0] ?? null;
             recordFaceDetectionResult(Boolean(detectedLandmarks?.length), "legacy");
-            latestFaceLandmarks = smoothFaceLandmarks(
+            const smoothedLandmarks = smoothFaceLandmarks(
               latestFaceLandmarks,
               detectedLandmarks,
             );
+            latestFaceLandmarks = smoothedLandmarks.landmarks;
+            latestFaceLandmarkSmoothingStats = smoothedLandmarks.stats;
             latestFaceLandmarksAt = latestFaceLandmarks ? performance.now() : 0;
             logVideoEffects(debugId, "legacy_face_results", {
               faceCount: results.multiFaceLandmarks?.length ?? 0,
               landmarkCount: latestFaceLandmarks?.length ?? 0,
+              smoothing: latestFaceLandmarkSmoothingStats,
             });
           });
           await instance.initialize();
@@ -10414,10 +10540,12 @@ export function useVideoEffects({
         faceProcessorMode = "worker";
         latestFaceResultAt = performance.now();
         recordFaceDetectionResult(Boolean(result.landmarks?.length), "worker");
-        latestFaceLandmarks = smoothFaceLandmarks(
+        const smoothedLandmarks = smoothFaceLandmarks(
           latestFaceLandmarks,
           result.landmarks,
         );
+        latestFaceLandmarks = smoothedLandmarks.landmarks;
+        latestFaceLandmarkSmoothingStats = smoothedLandmarks.stats;
         latestFaceLandmarksAt = latestFaceLandmarks ? performance.now() : 0;
         logVideoEffects(debugId, "face_processor_worker_results", {
           sequence: result.sequence,
@@ -10429,6 +10557,7 @@ export function useVideoEffects({
           delegate: result.delegate,
           inputSource: result.inputSource,
           processingMs: Number(result.processingMs.toFixed(2)),
+          smoothing: latestFaceLandmarkSmoothingStats,
         });
         return true;
       } catch (err) {
@@ -10504,10 +10633,12 @@ export function useVideoEffects({
             Boolean(detectedLandmarks?.length),
             "main-thread",
           );
-          latestFaceLandmarks = smoothFaceLandmarks(
+          const smoothedLandmarks = smoothFaceLandmarks(
             latestFaceLandmarks,
             detectedLandmarks,
           );
+          latestFaceLandmarks = smoothedLandmarks.landmarks;
+          latestFaceLandmarkSmoothingStats = smoothedLandmarks.stats;
           latestFaceLandmarksAt = latestFaceLandmarks
             ? performance.now()
             : 0;
@@ -10520,6 +10651,7 @@ export function useVideoEffects({
             landmarkCount: latestFaceLandmarks?.length ?? 0,
             blendshapeCount: results.faceBlendshapes?.length ?? 0,
             matrixCount: results.facialTransformationMatrixes?.length ?? 0,
+            smoothing: latestFaceLandmarkSmoothingStats,
           });
           return;
         } catch (err) {
@@ -11507,6 +11639,8 @@ export function useVideoEffects({
       } else {
         latestFaceLandmarks = null;
         latestFaceLandmarksAt = 0;
+        latestFaceLandmarkSmoothingStats =
+          createFaceLandmarkSmoothingStats("missing-result", null, null, 1);
         consecutiveFaceNoResultCount = 0;
         latestFaceNoResultBackoffActive = false;
         latestFaceNoResultBackoffReason = null;
@@ -12292,6 +12426,7 @@ export function useVideoEffects({
             noResultBackoffActive: latestFaceNoResultBackoffActive,
             noResultBackoffReason: latestFaceNoResultBackoffReason,
             noResultBackoffIntervalMs: latestFaceNoResultBackoffIntervalMs,
+            landmarkSmoothing: latestFaceLandmarkSmoothingStats,
           },
           faceFilterRender: latestFaceFilterRenderStats,
           backgroundRender: latestBackgroundRenderStats,
@@ -12534,6 +12669,7 @@ export function useVideoEffects({
             noResultBackoffActive: latestFaceNoResultBackoffActive,
             noResultBackoffReason: latestFaceNoResultBackoffReason,
             noResultBackoffIntervalMs: latestFaceNoResultBackoffIntervalMs,
+            landmarkSmoothing: latestFaceLandmarkSmoothingStats,
           },
           faceFilterRender: latestFaceFilterRenderStats,
           backgroundRender: latestBackgroundRenderStats,
