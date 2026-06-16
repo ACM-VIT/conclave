@@ -56,7 +56,39 @@ const nextConfig: NextConfig = {
           },
         ],
       },
+      {
+        source: "/_/rtcvidproc/release/:path*",
+        headers: [
+          {
+            key: "Cache-Control",
+            value: "public, max-age=31536000, immutable",
+          },
+          {
+            key: "Cross-Origin-Resource-Policy",
+            value: "same-origin",
+          },
+          {
+            key: "X-Content-Type-Options",
+            value: "nosniff",
+          },
+        ],
+      },
     ];
+  },
+  async rewrites() {
+    return {
+      fallback: [
+        {
+          source: "/_/rtcvidproc/release/assets/:path*",
+          destination: "https://www.gstatic.com/video_effects/assets/:path*",
+        },
+        {
+          source: "/_/rtcvidproc/release/:release/:path*",
+          destination:
+            "https://www.gstatic.com/video_effects/effects/:release/brotli/:path*",
+        },
+      ],
+    };
   },
   webpack: (config) => {
     config.resolve = config.resolve ?? {};

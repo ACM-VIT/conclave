@@ -886,7 +886,10 @@ export default function VideoEffectsPanel({
       temporalMask: debugStats.temporalMask,
       frameMetadata: debugStats.frameMetadata,
       framePipeline: debugStats.framePipeline,
+      sourceTrack: debugStats.sourceTrack,
+      outputTrack: debugStats.outputTrack,
       effects: debugStats.effects,
+      meetVideoPipe: debugStats.meetVideoPipe,
       latestSegmentationMaskAgeMs: debugStats.latestSegmentationMaskAgeMs,
       latestFaceLandmarksAgeMs: debugStats.latestFaceLandmarksAgeMs,
       latestFaceFilterLandmarksAgeMs:

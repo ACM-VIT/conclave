@@ -1,0 +1,1 @@
+'use strict';const b=new Map;self.onmessage=a=>{if(a.data.timeoutMs!==void 0){var c=setTimeout(()=>{self.postMessage({callbackId:a.data.callbackId});b.delete(a.data.callbackId)},a.data.timeoutMs);b.set(a.data.callbackId,c)}else if(c=b.get(a.data.callbackId))clearTimeout(c),b.delete(a.data.callbackId)};

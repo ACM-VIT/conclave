@@ -31,7 +31,10 @@ import {
   type FaceFilterId,
   type VideoEffectsState,
 } from "../lib/video-effects";
-import { startMeetVideoPipeEffect } from "../lib/meet-videopipe-runtime";
+import {
+  prewarmMeetVideoPipeRuntime,
+  startMeetVideoPipeEffect,
+} from "../lib/meet-videopipe-runtime";
 
 const SELFIE_SEGMENTATION_CDN =
   "https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation@0.1.1675465747";
@@ -214,6 +217,14 @@ export type VideoEffectsRuntimeStatus =
   | "running"
   | "degraded";
 export type VideoEffectsDebugStats = Record<string, unknown>;
+
+type MeetVideoPipeFailureSnapshot = {
+  requestKey: string;
+  graphId: string;
+  effectIdNumber: number | null;
+  timestampMs: number;
+  error: unknown;
+};
 
 type CropRect = {
   sx: number;
@@ -2955,6 +2966,54 @@ const createInactiveDebugStats = ({
   },
 });
 
+const createMeetVideoPipeDirectDebugStats = ({
+  sourceStream,
+  sourceVideoTrack,
+  outputTrack,
+  effects,
+  meetVideoPipe,
+}: {
+  sourceStream: MediaStream | null;
+  sourceVideoTrack: MediaStreamTrack | null;
+  outputTrack: MediaStreamTrack;
+  effects: VideoEffectsState;
+  meetVideoPipe: Record<string, unknown>;
+}): VideoEffectsDebugStats => {
+  const base = createInactiveDebugStats({
+    active: true,
+    sourceStream,
+    sourceVideoTrack,
+    effects,
+  });
+  const baseFramePipeline =
+    typeof base.framePipeline === "object" && base.framePipeline !== null
+      ? (base.framePipeline as Record<string, unknown>)
+      : {};
+
+  return {
+    ...base,
+    needsFace: true,
+    frameSource: "meet-videopipe",
+    outputTrackPublished: true,
+    outputMode: "meet-videopipe",
+    latestOutputFrameVisible: true,
+    framePipeline: {
+      ...baseFramePipeline,
+      outputMode: "meet-videopipe",
+      outputReady: true,
+      outputTrackPublished: true,
+    },
+    sourceStream: getStreamDebugSnapshot(sourceStream),
+    sourceTrack: getTrackDebugSnapshot(sourceVideoTrack),
+    outputTrack: getTrackDebugSnapshot(outputTrack),
+    effects: {
+      ...getEffectsDebugSnapshot(effects),
+      active: true,
+    },
+    meetVideoPipe,
+  };
+};
+
 const getErrorDebugSnapshot = (err: unknown) => {
   if (err instanceof Error) {
     return {
@@ -4391,6 +4450,23 @@ export const prewarmVideoEffectsAssets = async ({
             faceProcessorWorkerPrewarmPromise = promise;
           },
         ),
+      );
+    }
+    if (faceFilterGraph?.requiresMeetVideoPipe === true) {
+      modelPromises.push(
+        prewarmMeetVideoPipeRuntime(({ event, level, error, data }) => {
+          const payload = {
+            faceFilter,
+            reason,
+            data,
+            error: error ? getErrorDebugSnapshot(error) : undefined,
+          };
+          if (level === "warn" || level === "error") {
+            warnVideoEffects(instanceId, `meet_videopipe_${event}`, payload);
+            return;
+          }
+          logVideoEffects(instanceId, `meet_videopipe_${event}`, payload);
+        }),
       );
     }
     await Promise.all(modelPromises);
@@ -9313,6 +9389,8 @@ export function useVideoEffects({
   const [meetVideoPipeTrackReady, setMeetVideoPipeTrackReady] = useState(false);
   const [meetVideoPipeFailedRequestKey, setMeetVideoPipeFailedRequestKey] =
     useState<string | null>(null);
+  const [meetVideoPipeLastFailure, setMeetVideoPipeLastFailure] =
+    useState<MeetVideoPipeFailureSnapshot | null>(null);
   const [status, setStatus] = useState<VideoEffectsRuntimeStatus>("off");
   const [error, setError] = useState<string | null>(null);
   const [debugStats, setDebugStats] = useState<VideoEffectsDebugStats | null>(
@@ -9338,22 +9416,67 @@ export function useVideoEffects({
           meetVideoPipeEffectIdNumber,
         ].join(":")
       : null;
-  const meetVideoPipeActive =
-    Boolean(sourceStream) &&
-    rawSourceVideoTrack?.readyState === "live" &&
-    isMeetVideoPipeRuntimeEnabled() &&
-    meetVideoPipeEffectGraph?.requiresMeetVideoPipe === true &&
-    typeof meetVideoPipeEffectIdNumber === "number" &&
-    meetVideoPipeFailedRequestKey !== meetVideoPipeRequestKey;
+  const meetVideoPipeRuntimeEnabled = isMeetVideoPipeRuntimeEnabled();
+  const meetVideoPipeGate = useMemo(
+    () => {
+      const hasSourceStream = Boolean(sourceStream);
+      const rawTrackLive = rawSourceVideoTrack?.readyState === "live";
+      const graphRequiresMeetVideoPipe =
+        meetVideoPipeEffectGraph?.requiresMeetVideoPipe === true;
+      const hasNumericEffectId = typeof meetVideoPipeEffectIdNumber === "number";
+      const failedRequestMatched =
+        Boolean(meetVideoPipeRequestKey) &&
+        meetVideoPipeFailedRequestKey === meetVideoPipeRequestKey;
+      const lastFailure =
+        meetVideoPipeLastFailure?.requestKey === meetVideoPipeRequestKey
+          ? meetVideoPipeLastFailure
+          : null;
+      return {
+        active:
+          hasSourceStream &&
+          rawTrackLive &&
+          meetVideoPipeRuntimeEnabled &&
+          graphRequiresMeetVideoPipe &&
+          hasNumericEffectId &&
+          !failedRequestMatched,
+        selectedFilter: effects.filter,
+        hasSourceStream,
+        rawTrackLive,
+        rawTrack: getTrackDebugSnapshot(rawSourceVideoTrack),
+        runtimeEnabled: meetVideoPipeRuntimeEnabled,
+        hasEffectGraph: Boolean(meetVideoPipeEffectGraph),
+        graphRequiresMeetVideoPipe,
+        effectIdNumber: meetVideoPipeEffectIdNumber ?? null,
+        requestKey: meetVideoPipeRequestKey,
+        failedRequestKey: meetVideoPipeFailedRequestKey,
+        failedRequestMatched,
+        lastFailure,
+      };
+    },
+    [
+      effects.filter,
+      meetVideoPipeEffectGraph,
+      meetVideoPipeEffectIdNumber,
+      meetVideoPipeFailedRequestKey,
+      meetVideoPipeLastFailure,
+      meetVideoPipeRequestKey,
+      meetVideoPipeRuntimeEnabled,
+      rawSourceVideoTrack,
+      sourceStream,
+    ],
+  );
+  const meetVideoPipeActive = meetVideoPipeGate.active;
+  const meetVideoPipeOnlyFilterSelected =
+    meetVideoPipeEffectGraph?.requiresMeetVideoPipe === true;
   const localProcessingEffects = useMemo<VideoEffectsState>(
     () =>
-      meetVideoPipeActive
+      meetVideoPipeOnlyFilterSelected
         ? {
             ...effects,
             filter: "none",
           }
         : effects,
-    [effects, meetVideoPipeActive],
+    [effects, meetVideoPipeOnlyFilterSelected],
   );
   const localPipelineActive = hasActiveVideoEffects(localProcessingEffects);
   const meetVideoPipeOutputReady =
@@ -9464,8 +9587,15 @@ export function useVideoEffects({
       selected: getEffectsDebugSnapshot(effects),
       localPipeline: getEffectsDebugSnapshot(localProcessingEffects),
       meetVideoPipeActive,
+      meetVideoPipeGate,
     });
-  }, [debugId, effects, localProcessingEffects, meetVideoPipeActive]);
+  }, [
+    debugId,
+    effects,
+    localProcessingEffects,
+    meetVideoPipeActive,
+    meetVideoPipeGate,
+  ]);
 
   useEffect(() => {
     processedVideoTrackRef.current = processedTrack;
@@ -9489,11 +9619,6 @@ export function useVideoEffects({
           logVideoEffects(debugId, "meet_videopipe_release_inactive", {
             outputTrack: getTrackDebugSnapshot(current),
           });
-          stopProcessedTrackAfterGrace(
-            debugId,
-            current,
-            "Meet VideoPipe inactive",
-          );
         }
         return null;
       });
@@ -9511,6 +9636,9 @@ export function useVideoEffects({
       setMeetVideoPipeFailedRequestKey((current) =>
         current === meetVideoPipeRequestKey ? null : current,
       );
+      setMeetVideoPipeLastFailure((current) =>
+        current?.requestKey === meetVideoPipeRequestKey ? null : current,
+      );
 
       if (localPipelineActive) {
         logVideoEffects(debugId, "meet_videopipe_source_track_ready", {
@@ -9525,27 +9653,24 @@ export function useVideoEffects({
       setProcessedTrackReady(true);
       setStatus("running");
       setError(null);
-      setDebugStats({
-        ...createInactiveDebugStats({
-          active: true,
+      setDebugStats(
+        createMeetVideoPipeDirectDebugStats({
           sourceStream,
           sourceVideoTrack: rawSourceVideoTrack,
+          outputTrack: track,
           effects: selectedEffectsRef.current,
+          meetVideoPipe: {
+            active: true,
+            mode: "direct",
+            graphId: meetVideoPipeEffectGraph.meetGraphId,
+            effectIdNumber: meetVideoPipeEffectGraph.meetEffectIdNumber,
+            requestKey: meetVideoPipeRequestKey,
+            gate: meetVideoPipeGate,
+            sourceTrack: getTrackDebugSnapshot(rawSourceVideoTrack),
+            outputTrack: getTrackDebugSnapshot(track),
+          },
         }),
-        frameSource: "meet-videopipe",
-        outputTrackPublished: true,
-        outputMode: "meet-videopipe",
-        latestOutputFrameVisible: true,
-        meetVideoPipe: {
-          active: true,
-          mode: "direct",
-          graphId: meetVideoPipeEffectGraph.meetGraphId,
-          effectIdNumber: meetVideoPipeEffectGraph.meetEffectIdNumber,
-          requestKey: meetVideoPipeRequestKey,
-          sourceTrack: getTrackDebugSnapshot(rawSourceVideoTrack),
-          outputTrack: getTrackDebugSnapshot(track),
-        },
-      });
+      );
       logVideoEffects(debugId, "meet_videopipe_publish_processed_track", {
         graphId: meetVideoPipeEffectGraph.meetGraphId,
         effectIdNumber: meetVideoPipeEffectGraph.meetEffectIdNumber,
@@ -9629,38 +9754,30 @@ export function useVideoEffects({
       })
       .catch((err) => {
         if (cancelled) return;
+        const errorSnapshot = getErrorDebugSnapshot(err);
         warnVideoEffects(debugId, "meet_videopipe_failed", {
-          error: getErrorDebugSnapshot(err),
+          error: errorSnapshot,
           graphId: meetVideoPipeEffectGraph.meetGraphId,
           effectIdNumber: meetVideoPipeEffectGraph.meetEffectIdNumber,
           requestKey: meetVideoPipeRequestKey,
         });
         setMeetVideoPipeFailedRequestKey(meetVideoPipeRequestKey);
+        setMeetVideoPipeLastFailure({
+          requestKey: meetVideoPipeRequestKey,
+          graphId: meetVideoPipeEffectGraph.meetGraphId,
+          effectIdNumber: meetVideoPipeEffectGraph.meetEffectIdNumber ?? null,
+          timestampMs: Date.now(),
+          error: errorSnapshot,
+        });
         setMeetVideoPipeTrackReady(false);
         setMeetVideoPipeTrack((current) => {
-          if (current) {
-            stopProcessedTrackAfterGrace(
-              debugId,
-              current,
-              "Meet VideoPipe failed",
-            );
-          }
           return null;
         });
         if (finalTrackOwnerRef.current === "meet-videopipe") {
           finalTrackOwnerRef.current = "none";
           processedVideoTrackRef.current = null;
           setProcessedTrackReady(false);
-          setProcessedTrack((current) => {
-            if (current) {
-              stopProcessedTrackAfterGrace(
-                debugId,
-                current,
-                "Meet VideoPipe failed",
-              );
-            }
-            return null;
-          });
+          setProcessedTrack(null);
         }
         setStatus("degraded");
         setError("Meet VideoPipe effect failed; using raw video fallback.");
@@ -9683,11 +9800,6 @@ export function useVideoEffects({
       setMeetVideoPipeTrackReady(false);
       setMeetVideoPipeTrack((current) => {
         if (current && current === releasedTrack) {
-          stopProcessedTrackAfterGrace(
-            debugId,
-            current,
-            "Meet VideoPipe cleanup",
-          );
           return null;
         }
         return current;
@@ -9710,6 +9822,7 @@ export function useVideoEffects({
     localPipelineActive,
     meetVideoPipeActive,
     meetVideoPipeEffectGraph,
+    meetVideoPipeGate,
     meetVideoPipeRequestKey,
     processedVideoTrackRef,
     rawSourceVideoTrack,
@@ -9725,17 +9838,50 @@ export function useVideoEffects({
       logVideoEffects(debugId, "inactive_or_no_live_source", {
         active: localPipelineActive,
         meetVideoPipeActive,
+        meetVideoPipeGate,
         sourceStream: getStreamDebugSnapshot(sourceStreamRef.current),
         sourceVideoTrack: getTrackDebugSnapshot(sourceVideoTrack),
       });
-      setDebugStats(
-        createInactiveDebugStats({
-          active: localPipelineActive,
-          sourceStream: sourceStreamRef.current,
-          sourceVideoTrack,
-          effects: effectsRef.current,
-        }),
-      );
+      if (
+        meetVideoPipeActive &&
+        meetVideoPipeOutputReady &&
+        meetVideoPipeTrack?.readyState === "live" &&
+        rawSourceVideoTrack?.readyState === "live"
+      ) {
+        setDebugStats(
+          createMeetVideoPipeDirectDebugStats({
+            sourceStream,
+            sourceVideoTrack: rawSourceVideoTrack,
+            outputTrack: meetVideoPipeTrack,
+            effects: selectedEffectsRef.current,
+            meetVideoPipe: {
+              active: true,
+              mode: "direct",
+              graphId: meetVideoPipeEffectGraph?.meetGraphId ?? null,
+              effectIdNumber:
+                meetVideoPipeEffectGraph?.meetEffectIdNumber ?? null,
+              requestKey: meetVideoPipeRequestKey,
+              gate: meetVideoPipeGate,
+              sourceTrack: getTrackDebugSnapshot(rawSourceVideoTrack),
+              outputTrack: getTrackDebugSnapshot(meetVideoPipeTrack),
+            },
+          }),
+        );
+      } else {
+        setDebugStats({
+          ...createInactiveDebugStats({
+            active: localPipelineActive,
+            sourceStream: sourceStreamRef.current,
+            sourceVideoTrack,
+            effects: effectsRef.current,
+          }),
+          meetVideoPipe: {
+            active: meetVideoPipeActive,
+            mode: "gate",
+            gate: meetVideoPipeGate,
+          },
+        });
+      }
       if (finalTrackOwnerRef.current === "local") {
         processedVideoTrackRef.current = null;
         finalTrackOwnerRef.current = "none";
@@ -15774,6 +15920,11 @@ export function useVideoEffects({
           },
           canvas: { width: canvas.width, height: canvas.height },
           effects: getEffectsDebugSnapshot(currentEffects),
+          meetVideoPipe: {
+            active: meetVideoPipeActive,
+            mode: "gate",
+            gate: meetVideoPipeGate,
+          },
         };
         const compactFramePipeline = {
           processor: framePipeline.processor,
@@ -15995,6 +16146,11 @@ export function useVideoEffects({
           frameMetadata: latestFrameMetadata,
           framePipeline: compactFramePipeline,
           effects: getEffectsDebugSnapshot(currentEffects),
+          meetVideoPipe: {
+            active: meetVideoPipeActive,
+            mode: "gate",
+            gate: meetVideoPipeGate,
+          },
           latestSegmentationMaskAgeMs,
           latestFaceLandmarksAgeMs,
           latestFaceFilterLandmarksAgeMs,
@@ -16304,7 +16460,14 @@ export function useVideoEffects({
     debugId,
     localPipelineActive,
     meetVideoPipeActive,
+    meetVideoPipeEffectGraph,
+    meetVideoPipeGate,
+    meetVideoPipeOutputReady,
+    meetVideoPipeRequestKey,
+    meetVideoPipeTrack,
     processedVideoTrackRef,
+    rawSourceVideoTrack,
+    sourceStream,
     sourceVideoTrack,
   ]);
 
