@@ -3257,6 +3257,13 @@ const run = async () => {
           let stats = null;
           try { stats = raw ? JSON.parse(raw) : null; } catch {}
           const render = stats?.faceFilterRender;
+          const anchor = render?.anchor;
+          const eyeCenterDistance = Number(anchor?.eyeCenterDistance || 0);
+          const outerEyeDistance = Number(anchor?.outerEyeDistance || 0);
+          const anchorHealthy = Boolean(anchor) &&
+            ["iris", "contour"].includes(anchor?.eyeAnchorBasis) &&
+            eyeCenterDistance > 0 &&
+            outerEyeDistance >= eyeCenterDistance;
           const outputHealthy = panel?.getAttribute("data-video-effects-status") === "running" &&
             panel?.getAttribute("data-video-effects-output-published") === "true" &&
             panel?.getAttribute("data-video-effects-preview-matches-output") === "true" &&
@@ -3267,7 +3274,8 @@ const run = async () => {
             Number(stats?.faceLandmarkCount || 0) > 0 &&
             render?.filter === ${JSON.stringify(expectedFilterId)} &&
             render?.drawn === true &&
-            Number(render?.changedPixels || 0) > 0;
+            Number(render?.changedPixels || 0) > 0 &&
+            anchorHealthy;
         })()`,
         30000,
       );

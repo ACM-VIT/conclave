@@ -705,6 +705,9 @@ type FaceFilterRenderStats = {
     centerY: number;
     faceAngle: number;
     faceWidth: number;
+    eyeAnchorBasis?: "iris" | "contour";
+    eyeCenterDistance?: number;
+    outerEyeDistance?: number;
   } | null;
   bounds: CanvasBounds | null;
 };
@@ -4567,6 +4570,31 @@ const getPoint = (
   };
 };
 
+type CanvasPoint = {
+  x: number;
+  y: number;
+};
+
+const getAveragePoint = (points: Array<CanvasPoint | null>) => {
+  let x = 0;
+  let y = 0;
+  let count = 0;
+  for (const point of points) {
+    if (!point) continue;
+    x += point.x;
+    y += point.y;
+    count += 1;
+  }
+  if (count <= 0) return null;
+  return { x: x / count, y: y / count };
+};
+
+const sortPointPairByX = <T extends CanvasPoint>(points: [T, T]): [T, T] =>
+  points[0].x <= points[1].x ? points : [points[1], points[0]];
+
+const getPointDistance = (a: CanvasPoint, b: CanvasPoint) =>
+  Math.hypot(b.x - a.x, b.y - a.y);
+
 const getLandmarkBounds = (
   landmarks: NormalizedLandmarkList | null,
   width: number,
@@ -5701,8 +5729,36 @@ const drawFaceFilter = (
 
   const mapLandmark = (landmark: NormalizedLandmark | undefined) =>
     getPoint(landmark, crop, sourceWidth, sourceHeight, width, height);
-  const leftEye = mapLandmark(landmarks[33]);
-  const rightEye = mapLandmark(landmarks[263]);
+  const mapLandmarks = (indices: number[]) =>
+    getAveragePoint(indices.map((index) => mapLandmark(landmarks[index])));
+  const leftOuterEye = mapLandmark(landmarks[33]);
+  const rightOuterEye = mapLandmark(landmarks[263]);
+  const outerEyePair =
+    leftOuterEye && rightOuterEye
+      ? sortPointPairByX([leftOuterEye, rightOuterEye])
+      : null;
+  const leftContourEye = getAveragePoint([
+    mapLandmark(landmarks[33]),
+    mapLandmark(landmarks[133]),
+  ]);
+  const rightContourEye = getAveragePoint([
+    mapLandmark(landmarks[263]),
+    mapLandmark(landmarks[362]),
+  ]);
+  const contourEyePair =
+    leftContourEye && rightContourEye
+      ? sortPointPairByX([leftContourEye, rightContourEye])
+      : null;
+  const irisEyeA = mapLandmarks([468, 469, 470, 471, 472]);
+  const irisEyeB = mapLandmarks([473, 474, 475, 476, 477]);
+  const irisEyePair =
+    irisEyeA && irisEyeB ? sortPointPairByX([irisEyeA, irisEyeB]) : null;
+  const eyePair = irisEyePair ?? contourEyePair ?? outerEyePair;
+  const eyeAnchorBasis = irisEyePair ? "iris" : "contour";
+  const leftEye = eyePair?.[0] ?? null;
+  const rightEye = eyePair?.[1] ?? null;
+  const outerLeftEye = outerEyePair?.[0] ?? leftEye;
+  const outerRightEye = outerEyePair?.[1] ?? rightEye;
   const nose = mapLandmark(landmarks[1]);
   const upperLip = mapLandmark(landmarks[13]);
   const lowerLip = mapLandmark(landmarks[14]);
@@ -5716,8 +5772,16 @@ const drawFaceFilter = (
     );
   }
 
-  const eyeDistance = Math.hypot(rightEye.x - leftEye.x, rightEye.y - leftEye.y);
-  const faceWidth = Math.max(80, eyeDistance * 1.9);
+  const eyeDistance = getPointDistance(leftEye, rightEye);
+  const outerEyeDistance =
+    outerLeftEye && outerRightEye
+      ? getPointDistance(outerLeftEye, outerRightEye)
+      : 0;
+  const faceWidth = Math.max(
+    80,
+    outerEyeDistance > 0 ? outerEyeDistance * 1.9 : 0,
+    eyeDistance * 2.65,
+  );
   const eyeY = (leftEye.y + rightEye.y) / 2;
   const centerX = (leftEye.x + rightEye.x) / 2;
   const faceAngle = Math.atan2(rightEye.y - leftEye.y, rightEye.x - leftEye.x);
@@ -5726,6 +5790,9 @@ const drawFaceFilter = (
     centerY: Math.round(eyeY),
     faceAngle,
     faceWidth: Math.round(faceWidth),
+    eyeAnchorBasis,
+    eyeCenterDistance: Math.round(eyeDistance),
+    outerEyeDistance: Math.round(outerEyeDistance || eyeDistance),
   };
   const cos = Math.cos(faceAngle);
   const sin = Math.sin(faceAngle);
