@@ -8248,6 +8248,70 @@ export function useVideoEffects({
       }, WORKER_CLOSE_GRACE_MS);
     };
 
+    const detachWorkerCallbacks = (worker: Worker) => {
+      try {
+        worker.onmessage = null;
+        worker.onerror = null;
+      } catch {}
+    };
+
+    const resetSegmentationProcessorWorker = (
+      reason: string,
+      err: unknown,
+    ) => {
+      const worker = segmentationProcessorWorker;
+      const pendingFrameCount = segmentationProcessorPendingFrames.size;
+      segmentationProcessorWorker = null;
+      segmentationProcessorWorkerPromise = null;
+      segmentationProcessorWorkerReady = false;
+      segmentationProcessorWorkerDelegate = null;
+      segmentationProcessorMode = "none";
+      segmentationProcessorFallbackReason = reason;
+      segmentationProcessorLastError = getErrorDebugSnapshot(err);
+      segmentationProcessorWorkerInitResolve?.(false);
+      segmentationProcessorWorkerInitResolve = null;
+      segmentationProcessorWorkerInitReject = null;
+      rejectPendingSegmentationProcessorFrames(err);
+      if (worker) {
+        detachWorkerCallbacks(worker);
+        closeWorkerAfterGrace(worker, `segmentation-processor:${reason}`);
+      }
+      logVideoEffects(debugId, "segmentation_processor_worker_reset", {
+        reason,
+        pendingFrameCount,
+        latestSequence: segmentationProcessorWorkerSequence,
+        latestAckSequence: segmentationProcessorWorkerAckSequence,
+        error: getErrorDebugSnapshot(err),
+      });
+    };
+
+    const resetFaceProcessorWorker = (reason: string, err: unknown) => {
+      const worker = faceProcessorWorker;
+      const pendingFrameCount = faceProcessorPendingFrames.size;
+      faceProcessorWorker = null;
+      faceProcessorWorkerPromise = null;
+      faceProcessorWorkerReady = false;
+      faceProcessorWorkerDelegate = null;
+      faceProcessorMode = "none";
+      faceProcessorFallbackReason = reason;
+      faceProcessorLastError = getErrorDebugSnapshot(err);
+      faceProcessorWorkerInitResolve?.(false);
+      faceProcessorWorkerInitResolve = null;
+      faceProcessorWorkerInitReject = null;
+      rejectPendingFaceProcessorFrames(err);
+      if (worker) {
+        detachWorkerCallbacks(worker);
+        closeWorkerAfterGrace(worker, `face-processor:${reason}`);
+      }
+      logVideoEffects(debugId, "face_processor_worker_reset", {
+        reason,
+        pendingFrameCount,
+        latestSequence: faceProcessorWorkerSequence,
+        latestAckSequence: faceProcessorWorkerAckSequence,
+        error: getErrorDebugSnapshot(err),
+      });
+    };
+
     const handleOutputWriterWorkerMessage = (
       message: OutputWriterWorkerMessage,
     ) => {
@@ -10873,13 +10937,12 @@ export function useVideoEffects({
           err instanceof Error &&
           err.message === SEGMENTATION_PROCESSOR_TIMEOUT_MESSAGE
         ) {
-          segmentationProcessorFallbackReason = "worker frame timed out";
-          segmentationProcessorLastError = getErrorDebugSnapshot(err);
           warnVideoEffects(debugId, "segmentation_processor_worker_frame_timeout", {
             error: getErrorDebugSnapshot(err),
             hasPreviousMask: Boolean(latestSegmentationMask),
           });
-          return true;
+          resetSegmentationProcessorWorker("worker frame timed out", err);
+          return false;
         }
         if (isVideoEffectsProcessorCleanupError(err)) {
           logVideoEffects(debugId, "segmentation_processor_worker_frame_cancelled", {
@@ -11175,13 +11238,12 @@ export function useVideoEffects({
           err instanceof Error &&
           err.message === FACE_PROCESSOR_TIMEOUT_MESSAGE
         ) {
-          faceProcessorFallbackReason = "worker frame timed out";
-          faceProcessorLastError = getErrorDebugSnapshot(err);
           warnVideoEffects(debugId, "face_processor_worker_frame_timeout", {
             error: getErrorDebugSnapshot(err),
             hasPreviousLandmarks: Boolean(latestFaceLandmarks?.length),
           });
-          return true;
+          resetFaceProcessorWorker("worker frame timed out", err);
+          return false;
         }
         if (isVideoEffectsProcessorCleanupError(err)) {
           logVideoEffects(debugId, "face_processor_worker_frame_cancelled", {
