@@ -110,11 +110,11 @@ const CUSTOM_BACKGROUND_OUTPUT_ATTEMPTS = [
 const EFFECTS_ACCENT = color.accent;
 const PANEL_FONT = font.sans;
 const ICON_STROKE = 1.75;
-const SECTION_LABEL = "rgba(250,250,250,0.38)";
+const SECTION_LABEL = color.textFaint;
 const EFFECT_TILE_BASE_CLASS =
-  "group relative min-h-[86px] rounded-lg border-2 p-[7px] text-left transition-[background-color,border-color,filter] duration-[120ms]";
+  "group relative min-h-[82px] rounded-lg border p-2 text-left transition-[background-color,border-color,filter] duration-[120ms]";
 const EFFECT_TILE_IDLE_CLASS =
-  "border-white/[0.08] bg-[#131316] hover:border-white/[0.18] hover:bg-[#232327]";
+  "border-white/[0.10] bg-[#131316] hover:border-white/[0.18] hover:bg-white/[0.05]";
 const EFFECT_TILE_SELECTED_CLASS =
   "border-[#F95F4A] bg-[#232327] hover:border-[#F95F4A] hover:bg-[#2e2e33]";
 const EFFECT_TILE_DISABLED_CLASS =
@@ -250,7 +250,7 @@ function EffectOptionButton<T extends string>({
       className={getEffectTileClassName(selected)}
     >
       <span
-        className={`relative flex items-center justify-center overflow-hidden rounded-[7px] border border-white/[0.08] bg-[#0a0a0b] ${
+        className={`relative flex items-center justify-center overflow-hidden rounded-md border border-white/[0.10] bg-[#0a0a0b] ${
           previewPath
             ? "h-14 w-full bg-cover bg-center"
             : "h-10 w-10"
@@ -275,7 +275,7 @@ function EffectOptionButton<T extends string>({
         {selected ? (
           <span
             aria-hidden
-            className="pointer-events-none absolute inset-0 rounded-[7px]"
+            className="pointer-events-none absolute inset-0 rounded-md"
             style={{ boxShadow: `inset 0 0 0 1px ${EFFECTS_ACCENT}` }}
           />
         ) : null}
@@ -324,7 +324,7 @@ function ToggleRow({
       aria-checked={checked}
       disabled={disabled}
       onClick={disabled ? undefined : () => onChange(!checked)}
-      className="flex min-h-[44px] w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-left transition-colors duration-[120ms] hover:bg-[#232327] active:bg-[#2e2e33] disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:bg-transparent"
+      className="flex min-h-[44px] w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-left transition-colors duration-[120ms] hover:bg-white/[0.05] active:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:bg-transparent"
     >
       <span className="min-w-0">
         <span className="block text-[13px] font-medium text-[#fafafa]">
@@ -407,7 +407,7 @@ function VideoEffectsPreview({
   }, [shouldShowVideo, stream]);
 
   return (
-    <div className="relative aspect-video overflow-hidden rounded-[10px] border border-white/[0.12] bg-[#0a0a0b]">
+    <div className="relative aspect-video overflow-hidden rounded-lg border border-white/[0.14] bg-[#0a0a0b]">
       <video
         ref={videoRef}
         autoPlay
@@ -895,7 +895,7 @@ export default function VideoEffectsPanel({
 
   const panelClassName =
     variant === "dialog"
-      ? "fixed inset-x-3 bottom-3 z-50 flex max-h-[calc(100dvh-24px)] flex-col overflow-hidden rounded-2xl border border-white/[0.10] bg-[#18181b] text-[#fafafa] sm:left-1/2 sm:right-auto sm:top-1/2 sm:bottom-auto sm:h-[min(780px,calc(100dvh-48px))] sm:max-h-none sm:w-[min(500px,calc(100vw-32px))] sm:-translate-x-1/2 sm:-translate-y-1/2"
+      ? "fixed inset-x-3 bottom-3 z-50 flex max-h-[calc(100dvh-24px)] flex-col overflow-hidden rounded-xl border border-white/[0.14] bg-[#18181b] text-[#fafafa] sm:left-1/2 sm:right-auto sm:top-1/2 sm:bottom-auto sm:h-[min(780px,calc(100dvh-48px))] sm:max-h-none sm:w-[min(500px,calc(100vw-32px))] sm:-translate-x-1/2 sm:-translate-y-1/2"
       : "fixed right-0 top-0 bottom-0 z-40 flex w-[360px] flex-col overflow-hidden border-l border-white/[0.10] bg-[#18181b] text-[#fafafa] animate-[meet-panel-in_280ms_cubic-bezier(0.22,1,0.36,1)]";
 
   const panel = (
@@ -983,19 +983,19 @@ export default function VideoEffectsPanel({
           hasLiveVideo={hasLiveVideo}
         />
         {cameraUnavailable ? (
-          <div className="mt-3 rounded-[10px] border border-amber-400/20 bg-amber-400/[0.10] px-3 py-2 text-[12px] leading-snug text-amber-100">
+          <div className="mt-3 rounded-lg border border-amber-400/20 bg-amber-400/[0.10] px-3 py-2 text-[12px] leading-snug text-amber-100">
             {cameraPermissionBlocked
               ? "Camera is blocked"
               : "Your camera is turned off. Effects will apply when you turn it on."}
           </div>
         ) : null}
         {error ? (
-          <div className="mt-2 rounded-[10px] border border-[#F95F4A]/25 bg-[#F95F4A]/[0.10] px-3 py-2 text-[12px] leading-snug text-red-100">
+          <div className="mt-2 rounded-lg border border-[#F95F4A]/25 bg-[#F95F4A]/[0.10] px-3 py-2 text-[12px] leading-snug text-red-100">
             {error}
           </div>
         ) : null}
         {customBackgroundError ? (
-          <div className="mt-2 rounded-[10px] border border-[#F95F4A]/25 bg-[#F95F4A]/[0.10] px-3 py-2 text-[12px] leading-snug text-red-100">
+          <div className="mt-2 rounded-lg border border-[#F95F4A]/25 bg-[#F95F4A]/[0.10] px-3 py-2 text-[12px] leading-snug text-red-100">
             {customBackgroundError}
           </div>
         ) : null}
@@ -1008,7 +1008,7 @@ export default function VideoEffectsPanel({
             if (activeEffectStack.length === 0) return;
             setShowActiveEffectStack((current) => !current);
           }}
-          className="mt-3 flex min-h-10 w-full items-center justify-between rounded-[10px] border border-white/[0.12] bg-[#131316] px-3 py-2 text-[13px] font-medium text-[#fafafa] transition-colors duration-[120ms] hover:bg-[#232327] disabled:cursor-not-allowed disabled:text-[#71717a] disabled:hover:bg-[#131316]"
+          className="mt-3 flex min-h-10 w-full items-center justify-between rounded-lg border border-white/[0.14] bg-[#131316] px-3 py-2 text-[13px] font-medium text-[#fafafa] transition-colors duration-[120ms] hover:bg-white/[0.05] disabled:cursor-not-allowed disabled:text-[#71717a] disabled:hover:bg-[#131316]"
         >
           <span className="flex items-center gap-2">
             <Layers size={16} strokeWidth={ICON_STROKE} />
@@ -1033,7 +1033,7 @@ export default function VideoEffectsPanel({
         activeEffectStack.length > 0 ? (
           <div
             aria-label="Active visual effects"
-            className="mt-2 grid gap-1.5 rounded-[10px] border border-white/[0.10] bg-[#131316] p-2"
+            className="mt-2 grid gap-1.5 border-l border-white/[0.14] pl-2"
             data-video-effects-active-stack="true"
             data-video-effects-active-stack-open="true"
           >
@@ -1055,7 +1055,7 @@ export default function VideoEffectsPanel({
               return (
                 <div
                   key={item.key}
-                  className="flex min-h-9 items-center gap-2 rounded-lg border border-white/[0.08] bg-transparent px-2.5 py-1.5 text-[13px] text-[#fafafa]"
+                  className="flex min-h-9 items-center gap-2 rounded-lg bg-white/[0.035] px-2.5 py-1.5 text-[13px] text-[#fafafa]"
                   data-video-effects-active-item={item.key}
                 >
                   <button

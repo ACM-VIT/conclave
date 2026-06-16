@@ -35,7 +35,19 @@ const dropFrameMessage = (message, reason) => {
   postWorkerDropped(message.sequence, reason);
 };
 
+const cleanupRendererResources = () => {
+  closeFrameMessagePayload(self.__conclaveQueuedFrameMessage);
+  self.__conclaveQueuedFrameMessage = null;
+  for (const frame of self.__conclaveActiveFrames || []) {
+    closeResource(frame);
+  }
+  for (const bitmap of self.__conclaveActiveBitmaps || []) {
+    closeResource(bitmap);
+  }
+};
+
 const resetRendererState = () => {
+  cleanupRendererResources();
   self.__conclaveRendererCanvas = null;
   self.__conclaveRendererCtx = null;
   self.__conclaveRendererMode = "bitmap-video-frame";
@@ -277,12 +289,7 @@ self.onmessage = async (event) => {
         dropFrameMessage(self.__conclaveQueuedFrameMessage, "closing");
         self.__conclaveQueuedFrameMessage = null;
         await (self.__conclaveFrameWriteChain || Promise.resolve()).catch(() => {});
-        for (const frame of self.__conclaveActiveFrames || []) {
-          closeResource(frame);
-        }
-        for (const bitmap of self.__conclaveActiveBitmaps || []) {
-          closeResource(bitmap);
-        }
+        cleanupRendererResources();
         const writer = self.__conclaveWriter;
         self.__conclaveWriter = null;
         resetRendererState();
@@ -299,6 +306,9 @@ self.onmessage = async (event) => {
         throw new Error(`Unknown output worker message: ${message.type}`);
     }
   } catch (err) {
+    if (message.type === "FRAME") {
+      closeFrameMessagePayload(message);
+    }
     postWorkerError(message.sequence, err);
   }
 };
