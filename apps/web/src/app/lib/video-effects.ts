@@ -271,18 +271,20 @@ export const BACKGROUND_ASSET_PATHS = {
   beach: "/effects/backgrounds/beach-pavilion.webp",
   forest: "/effects/backgrounds/forest-light.webp",
   studio: "/effects/backgrounds/conference-wall.webp",
-  bookshelf: "/effects/backgrounds/office-shelf.webp",
-  "coffee-shop": "/effects/backgrounds/warm-lounge.webp",
-  "home-office-bookshelf": "/effects/backgrounds/office-shelf.webp",
-  "home-office-sofa": "/effects/backgrounds/warm-lounge.webp",
-  "living-room-shelf": "/effects/backgrounds/warm-lounge.webp",
-  "modern-conference-room": "/effects/backgrounds/conference-wall.webp",
-  "office-library": "/effects/backgrounds/office-shelf.webp",
-  "office-meeting-space": "/effects/backgrounds/conference-wall.webp",
-  "office-green-space": "/effects/backgrounds/forest-light.webp",
-  "shelf-with-plants": "/effects/backgrounds/office-shelf.webp",
-  "stylish-home-office": "/effects/backgrounds/office-shelf.webp",
-  "stylish-living-room-couch": "/effects/backgrounds/warm-lounge.webp",
+  bookshelf: "/effects/backgrounds/bookshelf.webp",
+  "coffee-shop": "/effects/backgrounds/coffee-shop.webp",
+  "home-office-bookshelf": "/effects/backgrounds/home-office-bookshelf.webp",
+  "home-office-sofa": "/effects/backgrounds/home-office-sofa.webp",
+  "living-room-shelf": "/effects/backgrounds/living-room-shelf.webp",
+  "modern-conference-room":
+    "/effects/backgrounds/modern-conference-room.webp",
+  "office-library": "/effects/backgrounds/office-library.webp",
+  "office-meeting-space": "/effects/backgrounds/office-meeting-space.webp",
+  "office-green-space": "/effects/backgrounds/office-green-space.webp",
+  "shelf-with-plants": "/effects/backgrounds/shelf-with-plants.webp",
+  "stylish-home-office": "/effects/backgrounds/stylish-home-office.webp",
+  "stylish-living-room-couch":
+    "/effects/backgrounds/stylish-living-room-couch.webp",
 } satisfies Partial<Record<BackgroundEffectId, string>>;
 
 export const BACKGROUND_EFFECTS: VideoEffectOption<BackgroundEffectId>[] = [
@@ -480,7 +482,7 @@ export const BACKGROUND_EFFECTS: VideoEffectOption<BackgroundEffectId>[] = [
     id: "custom",
     label: "Uploaded image",
     icon: ImagePlus,
-    tone: "#1a73e8",
+    tone: "#F95F4A",
     category: "Personal",
   },
 ];
