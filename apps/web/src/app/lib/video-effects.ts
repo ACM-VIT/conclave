@@ -115,6 +115,22 @@ export type FaceFilterId =
   | "dia-de-los-muertos"
   | "dia-de-los-muertos-flower"
   | "butterflies"
+  | "makeup-barely-there"
+  | "makeup-simply-radiant"
+  | "makeup-dewy-fresh"
+  | "makeup-warm-glow"
+  | "makeup-coral-hint"
+  | "makeup-berry-blush"
+  | "makeup-cat-eye"
+  | "makeup-dramatic-eye"
+  | "makeup-lip-gloss"
+  | "makeup-pink-dewy"
+  | "makeup-red-lipstick"
+  | "makeup-rosy-pink"
+  | "makeup-signature-statement"
+  | "makeup-goth-chic"
+  | "makeup-mummy"
+  | "makeup-zombie"
   | "cute-alien"
   | "alien";
 
@@ -252,6 +268,22 @@ const FACE_FILTER_IDS = new Set<FaceFilterId>([
   "dia-de-los-muertos",
   "dia-de-los-muertos-flower",
   "butterflies",
+  "makeup-barely-there",
+  "makeup-simply-radiant",
+  "makeup-dewy-fresh",
+  "makeup-warm-glow",
+  "makeup-coral-hint",
+  "makeup-berry-blush",
+  "makeup-cat-eye",
+  "makeup-dramatic-eye",
+  "makeup-lip-gloss",
+  "makeup-pink-dewy",
+  "makeup-red-lipstick",
+  "makeup-rosy-pink",
+  "makeup-signature-statement",
+  "makeup-goth-chic",
+  "makeup-mummy",
+  "makeup-zombie",
   "cute-alien",
   "alien",
 ]);
@@ -818,6 +850,118 @@ export const FACE_FILTERS: VideoEffectOption<FaceFilterId>[] = [
     icon: Flower2,
     tone: "#db2777",
     category: "New",
+  },
+  {
+    id: "makeup-barely-there",
+    label: "Barely there",
+    icon: Palette,
+    tone: "#f9a8d4",
+    category: "Makeup",
+  },
+  {
+    id: "makeup-simply-radiant",
+    label: "Simply radiant",
+    icon: Sparkles,
+    tone: "#f472b6",
+    category: "Makeup",
+  },
+  {
+    id: "makeup-dewy-fresh",
+    label: "Dewy fresh",
+    icon: Sparkles,
+    tone: "#fb7185",
+    category: "Makeup",
+  },
+  {
+    id: "makeup-warm-glow",
+    label: "Warm glow",
+    icon: SunMedium,
+    tone: "#f97316",
+    category: "Makeup",
+  },
+  {
+    id: "makeup-coral-hint",
+    label: "Coral hint",
+    icon: Palette,
+    tone: "#fb923c",
+    category: "Makeup",
+  },
+  {
+    id: "makeup-berry-blush",
+    label: "Berry blush",
+    icon: Palette,
+    tone: "#be185d",
+    category: "Makeup",
+  },
+  {
+    id: "makeup-cat-eye",
+    label: "Cat eye",
+    icon: Focus,
+    tone: "#111827",
+    category: "Makeup",
+  },
+  {
+    id: "makeup-dramatic-eye",
+    label: "Dramatic eye",
+    icon: Focus,
+    tone: "#312e81",
+    category: "Makeup",
+  },
+  {
+    id: "makeup-lip-gloss",
+    label: "Lip gloss",
+    icon: Palette,
+    tone: "#f43f5e",
+    category: "Makeup",
+  },
+  {
+    id: "makeup-pink-dewy",
+    label: "Pink dewy",
+    icon: Palette,
+    tone: "#ec4899",
+    category: "Makeup",
+  },
+  {
+    id: "makeup-red-lipstick",
+    label: "Red lipstick",
+    icon: Palette,
+    tone: "#dc2626",
+    category: "Makeup",
+  },
+  {
+    id: "makeup-rosy-pink",
+    label: "Rosy pink",
+    icon: Palette,
+    tone: "#f43f5e",
+    category: "Makeup",
+  },
+  {
+    id: "makeup-signature-statement",
+    label: "Signature statement",
+    icon: Sparkles,
+    tone: "#a21caf",
+    category: "Makeup",
+  },
+  {
+    id: "makeup-goth-chic",
+    label: "Goth chic",
+    icon: VenetianMask,
+    tone: "#171717",
+    category: "Makeup",
+  },
+  {
+    id: "makeup-mummy",
+    label: "Mummy",
+    icon: VenetianMask,
+    tone: "#a8a29e",
+    category: "Makeup",
+  },
+  {
+    id: "makeup-zombie",
+    label: "Zombie",
+    icon: VenetianMask,
+    tone: "#65a30d",
+    category: "Makeup",
   },
   {
     id: "beach-day",

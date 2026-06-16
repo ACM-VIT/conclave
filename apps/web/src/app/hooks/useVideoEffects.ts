@@ -5432,6 +5432,242 @@ const fillRoundRect = (
   ctx.fill();
 };
 
+type MakeupFaceFilterId = Extract<
+  FaceFilterId,
+  | "makeup-barely-there"
+  | "makeup-simply-radiant"
+  | "makeup-dewy-fresh"
+  | "makeup-warm-glow"
+  | "makeup-coral-hint"
+  | "makeup-berry-blush"
+  | "makeup-cat-eye"
+  | "makeup-dramatic-eye"
+  | "makeup-lip-gloss"
+  | "makeup-pink-dewy"
+  | "makeup-red-lipstick"
+  | "makeup-rosy-pink"
+  | "makeup-signature-statement"
+  | "makeup-goth-chic"
+  | "makeup-mummy"
+  | "makeup-zombie"
+>;
+
+type MakeupFaceFilterConfig = {
+  cheek: string;
+  cheekAlpha: number;
+  lip: string;
+  lipAlpha: number;
+  eye: string;
+  eyeAlpha: number;
+  line: string;
+  lineAlpha: number;
+  lineWidth: number;
+  mode?: "natural" | "cat-eye" | "dramatic" | "gloss" | "goth" | "mummy" | "zombie";
+};
+
+const MAKEUP_FACE_FILTER_CONFIG: Record<
+  MakeupFaceFilterId,
+  MakeupFaceFilterConfig
+> = {
+  "makeup-barely-there": {
+    cheek: "#f9a8d4",
+    cheekAlpha: 0.2,
+    lip: "#fb7185",
+    lipAlpha: 0.22,
+    eye: "#fbcfe8",
+    eyeAlpha: 0.14,
+    line: "#7f1d1d",
+    lineAlpha: 0.22,
+    lineWidth: 0.008,
+    mode: "natural",
+  },
+  "makeup-simply-radiant": {
+    cheek: "#fb7185",
+    cheekAlpha: 0.27,
+    lip: "#e11d48",
+    lipAlpha: 0.32,
+    eye: "#f9a8d4",
+    eyeAlpha: 0.2,
+    line: "#831843",
+    lineAlpha: 0.28,
+    lineWidth: 0.01,
+    mode: "natural",
+  },
+  "makeup-dewy-fresh": {
+    cheek: "#fda4af",
+    cheekAlpha: 0.26,
+    lip: "#fb7185",
+    lipAlpha: 0.28,
+    eye: "#fecdd3",
+    eyeAlpha: 0.2,
+    line: "#9f1239",
+    lineAlpha: 0.24,
+    lineWidth: 0.009,
+    mode: "gloss",
+  },
+  "makeup-warm-glow": {
+    cheek: "#fb923c",
+    cheekAlpha: 0.28,
+    lip: "#ea580c",
+    lipAlpha: 0.28,
+    eye: "#fed7aa",
+    eyeAlpha: 0.24,
+    line: "#7c2d12",
+    lineAlpha: 0.28,
+    lineWidth: 0.01,
+    mode: "natural",
+  },
+  "makeup-coral-hint": {
+    cheek: "#fb923c",
+    cheekAlpha: 0.24,
+    lip: "#f97316",
+    lipAlpha: 0.32,
+    eye: "#fdba74",
+    eyeAlpha: 0.18,
+    line: "#9a3412",
+    lineAlpha: 0.26,
+    lineWidth: 0.009,
+    mode: "natural",
+  },
+  "makeup-berry-blush": {
+    cheek: "#be185d",
+    cheekAlpha: 0.3,
+    lip: "#9d174d",
+    lipAlpha: 0.38,
+    eye: "#f0abfc",
+    eyeAlpha: 0.2,
+    line: "#4a044e",
+    lineAlpha: 0.34,
+    lineWidth: 0.012,
+    mode: "natural",
+  },
+  "makeup-cat-eye": {
+    cheek: "#f9a8d4",
+    cheekAlpha: 0.16,
+    lip: "#be123c",
+    lipAlpha: 0.26,
+    eye: "#e5e7eb",
+    eyeAlpha: 0.14,
+    line: "#0f172a",
+    lineAlpha: 0.82,
+    lineWidth: 0.018,
+    mode: "cat-eye",
+  },
+  "makeup-dramatic-eye": {
+    cheek: "#a855f7",
+    cheekAlpha: 0.18,
+    lip: "#7f1d1d",
+    lipAlpha: 0.28,
+    eye: "#312e81",
+    eyeAlpha: 0.34,
+    line: "#020617",
+    lineAlpha: 0.9,
+    lineWidth: 0.02,
+    mode: "dramatic",
+  },
+  "makeup-lip-gloss": {
+    cheek: "#fb7185",
+    cheekAlpha: 0.18,
+    lip: "#f43f5e",
+    lipAlpha: 0.42,
+    eye: "#fbcfe8",
+    eyeAlpha: 0.12,
+    line: "#9f1239",
+    lineAlpha: 0.22,
+    lineWidth: 0.009,
+    mode: "gloss",
+  },
+  "makeup-pink-dewy": {
+    cheek: "#ec4899",
+    cheekAlpha: 0.26,
+    lip: "#db2777",
+    lipAlpha: 0.32,
+    eye: "#f9a8d4",
+    eyeAlpha: 0.22,
+    line: "#831843",
+    lineAlpha: 0.28,
+    lineWidth: 0.01,
+    mode: "gloss",
+  },
+  "makeup-red-lipstick": {
+    cheek: "#fb7185",
+    cheekAlpha: 0.18,
+    lip: "#dc2626",
+    lipAlpha: 0.54,
+    eye: "#fecaca",
+    eyeAlpha: 0.14,
+    line: "#450a0a",
+    lineAlpha: 0.26,
+    lineWidth: 0.01,
+    mode: "gloss",
+  },
+  "makeup-rosy-pink": {
+    cheek: "#f43f5e",
+    cheekAlpha: 0.28,
+    lip: "#e11d48",
+    lipAlpha: 0.34,
+    eye: "#fecdd3",
+    eyeAlpha: 0.2,
+    line: "#881337",
+    lineAlpha: 0.26,
+    lineWidth: 0.01,
+    mode: "natural",
+  },
+  "makeup-signature-statement": {
+    cheek: "#a21caf",
+    cheekAlpha: 0.25,
+    lip: "#be123c",
+    lipAlpha: 0.48,
+    eye: "#c084fc",
+    eyeAlpha: 0.26,
+    line: "#3b0764",
+    lineAlpha: 0.76,
+    lineWidth: 0.016,
+    mode: "dramatic",
+  },
+  "makeup-goth-chic": {
+    cheek: "#6b7280",
+    cheekAlpha: 0.18,
+    lip: "#111827",
+    lipAlpha: 0.62,
+    eye: "#111827",
+    eyeAlpha: 0.42,
+    line: "#020617",
+    lineAlpha: 0.92,
+    lineWidth: 0.018,
+    mode: "goth",
+  },
+  "makeup-mummy": {
+    cheek: "#d6d3d1",
+    cheekAlpha: 0.18,
+    lip: "#78716c",
+    lipAlpha: 0.22,
+    eye: "#a8a29e",
+    eyeAlpha: 0.22,
+    line: "#57534e",
+    lineAlpha: 0.48,
+    lineWidth: 0.012,
+    mode: "mummy",
+  },
+  "makeup-zombie": {
+    cheek: "#84cc16",
+    cheekAlpha: 0.22,
+    lip: "#7f1d1d",
+    lipAlpha: 0.42,
+    eye: "#166534",
+    eyeAlpha: 0.28,
+    line: "#365314",
+    lineAlpha: 0.56,
+    lineWidth: 0.014,
+    mode: "zombie",
+  },
+};
+
+const getMakeupFaceFilterConfig = (
+  filter: FaceFilterId,
+): MakeupFaceFilterConfig | null =>
+  MAKEUP_FACE_FILTER_CONFIG[filter as MakeupFaceFilterId] ?? null;
+
 const createFaceFilterRenderStats = (
   filter: FaceFilterId,
   landmarkCount: number,
@@ -6536,7 +6772,117 @@ const drawFaceFilter = (
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
 
-  if (filter === "glasses") {
+  const makeup = getMakeupFaceFilterConfig(filter);
+  if (makeup) {
+    const eyeTopY = eyewearLineY - faceWidth * 0.08;
+    const lipTopY = upperLipLocal?.y ?? mouthCenterLocal.y - faceWidth * 0.035;
+    const lipBottomY = lowerLipLocal?.y ?? mouthCenterLocal.y + faceWidth * 0.04;
+    const lipY = (lipTopY + lipBottomY) / 2;
+    const lipW = clamp(mouthWidth * 0.72, faceWidth * 0.16, faceWidth * 0.32);
+    const lipH = clamp(Math.max(lipBottomY - lipTopY, faceWidth * 0.035), faceWidth * 0.035, faceWidth * 0.08);
+    const cheekY = lerp(noseLocal.y, mouthCenterLocal.y, 0.68);
+    const cheekX = clamp(faceWidth * 0.23, mouthWidth * 0.72, faceWidth * 0.32);
+    const cheekW = faceWidth * 0.12;
+    const cheekH = faceWidth * 0.07;
+    beginProbe({
+      left: headCenterX - faceWidth * 0.45,
+      right: headCenterX + faceWidth * 0.45,
+      top: Math.min(eyeTopY - faceWidth * 0.08, headTopY + faceWidth * 0.26),
+      bottom: Math.min(lipY + lipH * 1.8, faceBottomY + faceWidth * 0.08),
+    });
+    ctx.save();
+    ctx.globalCompositeOperation = "source-over";
+    ctx.fillStyle = makeup.eye;
+    ctx.globalAlpha = makeup.eyeAlpha;
+    [leftEyeLocal, rightEyeLocal].forEach((eye) => {
+      ctx.beginPath();
+      ctx.ellipse(
+        eye.x,
+        eye.y - faceWidth * 0.035,
+        faceWidth * 0.13,
+        faceWidth * 0.045,
+        0,
+        0,
+        Math.PI * 2,
+      );
+      ctx.fill();
+    });
+    ctx.fillStyle = makeup.cheek;
+    ctx.globalAlpha = makeup.cheekAlpha;
+    [-1, 1].forEach((side) => {
+      ctx.beginPath();
+      ctx.ellipse(side * cheekX, cheekY, cheekW, cheekH, side * 0.12, 0, Math.PI * 2);
+      ctx.fill();
+    });
+    ctx.fillStyle = makeup.lip;
+    ctx.globalAlpha = makeup.lipAlpha;
+    ctx.beginPath();
+    ctx.ellipse(mouthCenterLocal.x, lipY - lipH * 0.18, lipW * 0.48, lipH * 0.48, 0, 0, Math.PI * 2);
+    ctx.ellipse(mouthCenterLocal.x, lipY + lipH * 0.22, lipW * 0.5, lipH * 0.46, 0, 0, Math.PI * 2);
+    ctx.fill();
+    if (makeup.mode === "gloss") {
+      ctx.strokeStyle = "rgba(255,255,255,0.72)";
+      ctx.globalAlpha = 0.34;
+      ctx.lineWidth = Math.max(1.5, faceWidth * 0.008);
+      ctx.beginPath();
+      ctx.moveTo(mouthCenterLocal.x - lipW * 0.16, lipY - lipH * 0.2);
+      ctx.lineTo(mouthCenterLocal.x + lipW * 0.2, lipY - lipH * 0.28);
+      ctx.stroke();
+    }
+    ctx.strokeStyle = makeup.line;
+    ctx.globalAlpha = makeup.lineAlpha;
+    ctx.lineWidth = Math.max(1.5, faceWidth * makeup.lineWidth);
+    [leftEyeLocal, rightEyeLocal].forEach((eye, index) => {
+      const side = index === 0 ? -1 : 1;
+      const innerX = eye.x - side * faceWidth * 0.04;
+      const outerX = eye.x + side * faceWidth * 0.1;
+      const wingX = outerX + side * faceWidth * (makeup.mode === "cat-eye" || makeup.mode === "dramatic" ? 0.09 : 0.045);
+      const wingY = eye.y - faceWidth * (makeup.mode === "dramatic" ? 0.08 : 0.045);
+      ctx.beginPath();
+      ctx.moveTo(innerX, eye.y - faceWidth * 0.006);
+      ctx.quadraticCurveTo(eye.x, eye.y - faceWidth * 0.025, outerX, eye.y - faceWidth * 0.012);
+      ctx.lineTo(wingX, wingY);
+      ctx.stroke();
+    });
+    if (makeup.mode === "goth" || makeup.mode === "dramatic") {
+      ctx.globalAlpha = makeup.mode === "goth" ? 0.46 : 0.28;
+      ctx.fillStyle = makeup.line;
+      [leftEyeLocal, rightEyeLocal].forEach((eye) => {
+        ctx.beginPath();
+        ctx.ellipse(eye.x, eye.y + faceWidth * 0.03, faceWidth * 0.11, faceWidth * 0.035, 0, 0, Math.PI * 2);
+        ctx.fill();
+      });
+    } else if (makeup.mode === "mummy") {
+      ctx.globalAlpha = 0.42;
+      ctx.strokeStyle = "rgba(231,229,228,0.88)";
+      ctx.lineWidth = Math.max(3, faceWidth * 0.025);
+      for (let stripe = 0; stripe < 4; stripe += 1) {
+        const y = headTopY + faceWidth * (0.34 + stripe * 0.15);
+        ctx.beginPath();
+        ctx.moveTo(headCenterX - faceWidth * 0.34, y + stripe * faceWidth * 0.01);
+        ctx.lineTo(headCenterX + faceWidth * 0.34, y - stripe * faceWidth * 0.015);
+        ctx.stroke();
+      }
+    } else if (makeup.mode === "zombie") {
+      ctx.globalAlpha = 0.56;
+      ctx.strokeStyle = "#3f6212";
+      ctx.lineWidth = Math.max(2, faceWidth * 0.012);
+      [-1, 1].forEach((side) => {
+        const scarX = side * faceWidth * 0.2;
+        ctx.beginPath();
+        ctx.moveTo(scarX - side * faceWidth * 0.04, cheekY - faceWidth * 0.12);
+        ctx.lineTo(scarX + side * faceWidth * 0.04, cheekY + faceWidth * 0.02);
+        ctx.stroke();
+        for (let mark = -1; mark <= 1; mark += 1) {
+          ctx.beginPath();
+          ctx.moveTo(scarX - side * faceWidth * 0.03, cheekY - faceWidth * (0.06 - mark * 0.03));
+          ctx.lineTo(scarX + side * faceWidth * 0.015, cheekY - faceWidth * (0.04 - mark * 0.03));
+          ctx.stroke();
+        }
+      });
+    }
+    ctx.restore();
+  } else if (filter === "glasses") {
     const lensW = eyewearLensW;
     const lensH = eyewearLensH;
     const leftLensX = leftEyeLocal.x - lensW / 2;
