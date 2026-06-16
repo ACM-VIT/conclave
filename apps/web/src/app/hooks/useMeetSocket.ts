@@ -349,6 +349,7 @@ export function useMeetSocket({
   const runtimeStunIceServersRef = useRef<RTCIceServer[] | null>(null);
   const runtimeTurnIceServersRef = useRef<RTCIceServer[] | null>(null);
   const useTurnFallbackRef = useRef(false);
+  const serverRestartNoticeRef = useRef<string | null>(null);
   const consumeRetryAttemptsRef = useRef<Map<string, number>>(new Map());
   const videoStallRecoveryTimeoutsRef = useRef<Map<string, number>>(new Map());
   const staleConsumerRecoveryTimeoutsRef = useRef<Map<string, number>>(
@@ -630,6 +631,7 @@ export function useMeetSocket({
     setIsMuted(true);
     setIsCameraOff(true);
     setWaitingMessage(null);
+    serverRestartNoticeRef.current = null;
     setServerRestartNotice(null);
     reconnectAttemptsRef.current = 0;
   }, [
@@ -2622,6 +2624,7 @@ export function useMeetSocket({
               );
               setConnectionState("connected");
               setMeetError(null);
+              serverRestartNoticeRef.current = null;
               setServerRestartNotice(null);
               reconnectAttemptsRef.current = 0;
               intentionalDisconnectRef.current = false;
@@ -2640,6 +2643,14 @@ export function useMeetSocket({
               // that race the kicked/roomEnded/roomClosed messages. Only
               // transient drops (ping timeout, transport close/error) reconnect.
               if (reason === "io server disconnect") {
+                if (serverRestartNoticeRef.current) {
+                  if (currentRoomIdRef.current) {
+                    handleReconnectRef.current();
+                  } else {
+                    setConnectionState("disconnected");
+                  }
+                  return;
+                }
                 setConnectionState("disconnected");
                 return;
               }
@@ -2713,9 +2724,9 @@ export function useMeetSocket({
               (notification: ServerRestartNotification) => {
                 if (!isRoomEvent(notification?.roomId)) return;
                 const message = notification?.message?.trim();
-                setServerRestartNotice(
-                  message || DEFAULT_SERVER_RESTART_NOTICE,
-                );
+                const notice = message || DEFAULT_SERVER_RESTART_NOTICE;
+                serverRestartNoticeRef.current = notice;
+                setServerRestartNotice(notice);
               },
             );
 

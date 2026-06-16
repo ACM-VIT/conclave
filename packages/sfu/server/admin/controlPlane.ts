@@ -16,6 +16,8 @@ import {
   emitWebinarAttendeeCountChanged,
   emitWebinarFeedChanged,
 } from "../webinarNotifications.js";
+import type { ConnectionContext } from "../socket/context.js";
+import { registerAdminHandlers } from "../socket/handlers/adminHandlers.js";
 
 type ParticipantRole = "host" | "admin" | "participant" | "ghost" | "attendee";
 
@@ -143,6 +145,104 @@ export type RoomPolicyUpdate = {
 };
 
 type ProducerInfo = ReturnType<Client["getProducerInfos"]>[number];
+
+const promoteNextAdmin = (room: Room): Admin | null => {
+  for (const client of room.clients.values()) {
+    if (client instanceof Admin || client.isObserver) {
+      continue;
+    }
+    const promoted = room.promoteClientToAdmin(client.id);
+    if (promoted) {
+      return promoted;
+    }
+  }
+  return null;
+};
+
+const handleAdminRemoved = (
+  io: SocketIOServer,
+  state: SfuState,
+  room: Room,
+): void => {
+  const roomId = room.id;
+  const roomChannelId = room.channelId;
+
+  if (!room.hasActiveAdmin()) {
+    const promoted = promoteNextAdmin(room);
+    if (promoted) {
+      const promotedContext = promoted.socket.data
+        ?.context as ConnectionContext | undefined;
+      if (promotedContext) {
+        promotedContext.currentClient = promoted;
+        promotedContext.currentRoom = room;
+        registerAdminHandlers(promotedContext, { roomId });
+      }
+      if (room.cleanupTimer) {
+        room.stopCleanupTimer();
+      }
+      const pendingUsers = Array.from(room.pendingClients.values()).map(
+        (pending) => ({
+          userId: pending.userKey,
+          displayName: pending.displayName || pending.userKey,
+        }),
+      );
+      promoted.socket.emit("pendingUsersSnapshot", {
+        users: pendingUsers,
+        roomId,
+      });
+      promoted.socket.emit("roomLockChanged", {
+        locked: room.isLocked,
+        roomId,
+      });
+      promoted.socket.emit("hostAssigned", {
+        roomId,
+        hostUserId: promoted.id,
+      });
+      if (room.pendingClients.size > 0) {
+        for (const pending of room.pendingClients.values()) {
+          pending.socket.emit("waitingRoomStatus", {
+            message: "A host is available to let you in.",
+            roomId,
+          });
+        }
+      }
+    } else {
+      if (room.pendingClients.size > 0) {
+        for (const pending of room.pendingClients.values()) {
+          pending.socket.emit("waitingRoomStatus", {
+            message: "No one to let you in.",
+            roomId,
+          });
+        }
+      }
+      room.startCleanupTimer(() => {
+        if (!state.rooms.has(roomChannelId)) return;
+        const roomInState = state.rooms.get(roomChannelId);
+        if (!roomInState || roomInState.hasActiveAdmin()) return;
+        if (roomInState.pendingClients.size > 0) {
+          for (const pending of roomInState.pendingClients.values()) {
+            pending.socket.emit("waitingRoomStatus", {
+              message: "No one to let you in.",
+              roomId,
+            });
+          }
+        }
+        if (roomInState.isEmpty()) {
+          cleanupRoom(state, roomChannelId);
+        }
+      });
+    }
+  }
+
+  io.to(roomChannelId).emit("hostChanged", {
+    roomId,
+    hostUserId: room.getHostUserId(),
+  });
+  io.to(roomChannelId).emit("adminUsersChanged", {
+    roomId,
+    hostUserIds: room.getAdminUserIds(),
+  });
+};
 
 const toParticipantRole = (room: Room, client: Client): ParticipantRole => {
   if (client.isWebinarAttendee) return "attendee";
@@ -702,6 +802,7 @@ export const forceRemoveClientNow = (options: {
   }
 
   const roomChannelId = room.channelId;
+  const wasAdmin = target instanceof Admin;
   const isGhost = target.isGhost;
   const isWebinarAttendee = target.isWebinarAttendee;
 
@@ -728,6 +829,10 @@ export const forceRemoveClientNow = (options: {
 
   emitWebinarAttendeeCountChanged(io, state, room);
   emitWebinarFeedChanged(io, state, room);
+
+  if (wasAdmin) {
+    handleAdminRemoved(io, state, room);
+  }
 
   if (state.rooms.has(roomChannelId)) {
     cleanupRoom(state, roomChannelId);

@@ -6,6 +6,10 @@ import { Logger } from "./loggers.js";
 
 const totalThreads = os.cpus().length;
 
+type CreateWorkersOptions = {
+  onWorkerDied?: (worker: Worker, label: string) => void;
+};
+
 const spawnWorker = (): Promise<Worker> =>
   mediasoup.createWorker({
     rtcMinPort: config.workerSettings.rtcMinPort,
@@ -14,7 +18,9 @@ const spawnWorker = (): Promise<Worker> =>
     logTags: config.workerSettings.logTags,
   });
 
-const createWorkers = async (): Promise<Worker[]> => {
+const createWorkers = async (
+  options: CreateWorkersOptions = {},
+): Promise<Worker[]> => {
   const workers: Worker[] = [];
 
   // A dead mediasoup worker takes its routers — and the rooms running on them —
@@ -28,6 +34,7 @@ const createWorkers = async (): Promise<Worker[]> => {
   const attachDiedHandler = (worker: Worker, label: string): void => {
     worker.on("died", () => {
       Logger.error(`Worker ${label} has died — recreating a replacement`);
+      options.onWorkerDied?.(worker, label);
       const deadIndex = workers.indexOf(worker);
       spawnWorker()
         .then((replacement) => {
