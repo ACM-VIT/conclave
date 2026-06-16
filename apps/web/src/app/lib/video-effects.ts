@@ -43,9 +43,14 @@ export type BackgroundEffectId =
   | "bookshelf"
   | "coffee-shop"
   | "home-office-bookshelf"
+  | "home-office-living-room"
   | "home-office-sofa"
+  | "living-room-close"
   | "living-room-shelf"
+  | "living-room-wide"
   | "modern-conference-room"
+  | "modern-indian-living-room"
+  | "office-break-room"
   | "office-library"
   | "office-meeting-space"
   | "office-green-space"
@@ -65,8 +70,12 @@ export type FaceFilterId =
   | "sparkles"
   | "aviator"
   | "cat-eye-beret"
+  | "cyber-glasses"
+  | "cat-ears-glasses"
   | "bunny-ears"
   | "beach-day"
+  | "party-hat"
+  | "pilot-hat"
   | "butterflies"
   | "alien";
 
@@ -129,9 +138,14 @@ const BACKGROUND_EFFECT_IDS = new Set<BackgroundEffectId>([
   "bookshelf",
   "coffee-shop",
   "home-office-bookshelf",
+  "home-office-living-room",
   "home-office-sofa",
+  "living-room-close",
   "living-room-shelf",
+  "living-room-wide",
   "modern-conference-room",
+  "modern-indian-living-room",
+  "office-break-room",
   "office-library",
   "office-meeting-space",
   "office-green-space",
@@ -156,8 +170,12 @@ const FACE_FILTER_IDS = new Set<FaceFilterId>([
   "sparkles",
   "aviator",
   "cat-eye-beret",
+  "cyber-glasses",
+  "cat-ears-glasses",
   "bunny-ears",
   "beach-day",
+  "party-hat",
+  "pilot-hat",
   "butterflies",
   "alien",
 ]);
@@ -275,10 +293,17 @@ export const BACKGROUND_ASSET_PATHS = {
   bookshelf: "/effects/backgrounds/bookshelf.webp",
   "coffee-shop": "/effects/backgrounds/coffee-shop.webp",
   "home-office-bookshelf": "/effects/backgrounds/home-office-bookshelf.webp",
+  "home-office-living-room":
+    "/effects/backgrounds/home-office-living-room.webp",
   "home-office-sofa": "/effects/backgrounds/home-office-sofa.webp",
+  "living-room-close": "/effects/backgrounds/living-room-close.webp",
   "living-room-shelf": "/effects/backgrounds/living-room-shelf.webp",
+  "living-room-wide": "/effects/backgrounds/living-room-wide.webp",
   "modern-conference-room":
     "/effects/backgrounds/modern-conference-room.webp",
+  "modern-indian-living-room":
+    "/effects/backgrounds/modern-indian-living-room.webp",
+  "office-break-room": "/effects/backgrounds/office-break-room.webp",
   "office-library": "/effects/backgrounds/office-library.webp",
   "office-meeting-space": "/effects/backgrounds/office-meeting-space.webp",
   "office-green-space": "/effects/backgrounds/office-green-space.webp",
@@ -375,6 +400,14 @@ export const BACKGROUND_EFFECTS: VideoEffectOption<BackgroundEffectId>[] = [
     category: "Professional",
   },
   {
+    id: "office-break-room",
+    label: "Office break room",
+    icon: Coffee,
+    tone: "#0f766e",
+    assetPath: BACKGROUND_ASSET_PATHS["office-break-room"],
+    category: "Professional",
+  },
+  {
     id: "office-library",
     label: "Office library",
     icon: LibraryBig,
@@ -415,6 +448,14 @@ export const BACKGROUND_EFFECTS: VideoEffectOption<BackgroundEffectId>[] = [
     category: "Home office",
   },
   {
+    id: "home-office-living-room",
+    label: "Home office living room",
+    icon: LampDesk,
+    tone: "#57534e",
+    assetPath: BACKGROUND_ASSET_PATHS["home-office-living-room"],
+    category: "Home office",
+  },
+  {
     id: "shelf-with-plants",
     label: "Shelf with plants",
     icon: Leaf,
@@ -447,11 +488,35 @@ export const BACKGROUND_EFFECTS: VideoEffectOption<BackgroundEffectId>[] = [
     category: "Cozy home",
   },
   {
+    id: "living-room-close",
+    label: "Living room close",
+    icon: Sofa,
+    tone: "#9a3412",
+    assetPath: BACKGROUND_ASSET_PATHS["living-room-close"],
+    category: "Cozy home",
+  },
+  {
     id: "living-room-shelf",
     label: "Living room shelf",
     icon: Armchair,
     tone: "#92400e",
     assetPath: BACKGROUND_ASSET_PATHS["living-room-shelf"],
+    category: "Cozy home",
+  },
+  {
+    id: "living-room-wide",
+    label: "Living room wide",
+    icon: Armchair,
+    tone: "#475569",
+    assetPath: BACKGROUND_ASSET_PATHS["living-room-wide"],
+    category: "Cozy home",
+  },
+  {
+    id: "modern-indian-living-room",
+    label: "Modern Indian living room",
+    icon: Armchair,
+    tone: "#92400e",
+    assetPath: BACKGROUND_ASSET_PATHS["modern-indian-living-room"],
     category: "Cozy home",
   },
   {
@@ -561,6 +626,13 @@ export const FACE_FILTERS: VideoEffectOption<FaceFilterId>[] = [
     category: "Accessories",
   },
   {
+    id: "cyber-glasses",
+    label: "Cyber glasses",
+    icon: Glasses,
+    tone: "#0891b2",
+    category: "Accessories",
+  },
+  {
     id: "crown",
     label: "Gold crown",
     icon: Crown,
@@ -579,6 +651,27 @@ export const FACE_FILTERS: VideoEffectOption<FaceFilterId>[] = [
     label: "Bunny ears",
     icon: Rabbit,
     tone: "#f9a8d4",
+    category: "Costumes",
+  },
+  {
+    id: "cat-ears-glasses",
+    label: "Cat ears and glasses",
+    icon: VenetianMask,
+    tone: "#ec4899",
+    category: "Costumes",
+  },
+  {
+    id: "party-hat",
+    label: "Party hat",
+    icon: Sparkles,
+    tone: "#7c3aed",
+    category: "Costumes",
+  },
+  {
+    id: "pilot-hat",
+    label: "Pilot hat",
+    icon: Plane,
+    tone: "#1f2937",
     category: "Costumes",
   },
   {

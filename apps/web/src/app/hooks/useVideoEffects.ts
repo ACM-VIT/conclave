@@ -6622,6 +6622,40 @@ const drawFaceFilter = (
       ctx.fill();
       ctx.stroke();
     });
+  } else if (filter === "cyber-glasses") {
+    const lensW = clamp(eyewearLensW * 1.14, faceWidth * 0.2, faceWidth * 0.34);
+    const lensH = clamp(eyewearLensH * 0.82, faceWidth * 0.08, faceWidth * 0.15);
+    const lensY = eyewearLineY - lensH / 2;
+    beginProbe({
+      left: leftEyeLocal.x - lensW * 0.7,
+      right: rightEyeLocal.x + lensW * 0.7,
+      top: lensY - faceWidth * 0.08,
+      bottom: lensY + lensH + faceWidth * 0.1,
+    });
+    ctx.shadowColor = "rgba(34,211,238,0.9)";
+    ctx.shadowBlur = faceWidth * 0.06;
+    ctx.fillStyle = "rgba(8,13,24,0.9)";
+    ctx.strokeStyle = "rgba(103,232,249,0.95)";
+    ctx.lineWidth = Math.max(3, faceWidth * 0.024);
+    [leftEyeLocal, rightEyeLocal].forEach((eye, index) => {
+      const skew = index === 0 ? -1 : 1;
+      ctx.beginPath();
+      ctx.moveTo(eye.x - lensW * 0.56, lensY + lensH * 0.12);
+      ctx.lineTo(eye.x + lensW * 0.44, lensY);
+      ctx.lineTo(eye.x + lensW * 0.58, lensY + lensH * 0.76);
+      ctx.lineTo(eye.x - lensW * 0.38, lensY + lensH);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(eye.x - lensW * 0.36, lensY + lensH * 0.52);
+      ctx.lineTo(eye.x + skew * lensW * 0.28, lensY + lensH * 0.34);
+      ctx.stroke();
+    });
+    ctx.beginPath();
+    ctx.moveTo(leftEyeLocal.x + lensW * 0.48, lensY + lensH * 0.45);
+    ctx.lineTo(rightEyeLocal.x - lensW * 0.48, lensY + lensH * 0.45);
+    ctx.stroke();
   } else if (filter === "crown") {
     const baseY = headTopY + faceWidth * 0.04;
     const crownW = faceWidth * 0.78;
@@ -6694,6 +6728,55 @@ const drawFaceFilter = (
     });
     ctx.fillStyle = "rgba(255,255,255,0.94)";
     fillRoundRect(ctx, headCenterX - faceWidth * 0.28, earBaseY - faceWidth * 0.08, faceWidth * 0.56, faceWidth * 0.1, 18);
+  } else if (filter === "cat-ears-glasses") {
+    const earBaseY = headTopY + faceWidth * 0.05;
+    const earH = faceWidth * 0.3;
+    const earW = faceWidth * 0.18;
+    const lensW = clamp(eyewearLensW * 1.02, faceWidth * 0.2, faceWidth * 0.3);
+    const lensH = clamp(eyewearLensH * 0.95, faceWidth * 0.1, faceWidth * 0.16);
+    const lensY = eyewearLineY - lensH / 2;
+    beginProbe({
+      left: Math.min(leftEyeLocal.x - lensW * 0.7, headCenterX - faceWidth * 0.44),
+      right: Math.max(rightEyeLocal.x + lensW * 0.7, headCenterX + faceWidth * 0.44),
+      top: earBaseY - earH - faceWidth * 0.08,
+      bottom: lensY + lensH + faceWidth * 0.08,
+    });
+    [
+      { x: headCenterX - faceWidth * 0.26, rotate: -0.18 },
+      { x: headCenterX + faceWidth * 0.26, rotate: 0.18 },
+    ].forEach((ear) => {
+      ctx.save();
+      ctx.translate(ear.x, earBaseY - earH * 0.44);
+      ctx.rotate(ear.rotate);
+      ctx.fillStyle = "rgba(24,24,27,0.96)";
+      ctx.beginPath();
+      ctx.moveTo(-earW, earH * 0.46);
+      ctx.lineTo(0, -earH * 0.58);
+      ctx.lineTo(earW, earH * 0.46);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = "rgba(244,114,182,0.74)";
+      ctx.beginPath();
+      ctx.moveTo(-earW * 0.45, earH * 0.28);
+      ctx.lineTo(0, -earH * 0.28);
+      ctx.lineTo(earW * 0.45, earH * 0.28);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    });
+    ctx.strokeStyle = "rgba(24,24,27,0.94)";
+    ctx.lineWidth = Math.max(4, faceWidth * 0.03);
+    ctx.fillStyle = "rgba(244,114,182,0.16)";
+    [leftEyeLocal, rightEyeLocal].forEach((eye) => {
+      ctx.beginPath();
+      ctx.ellipse(eye.x, lensY + lensH * 0.52, lensW * 0.52, lensH * 0.55, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+    });
+    ctx.beginPath();
+    ctx.moveTo(leftEyeLocal.x + lensW * 0.5, lensY + lensH * 0.5);
+    ctx.lineTo(rightEyeLocal.x - lensW * 0.5, lensY + lensH * 0.5);
+    ctx.stroke();
   } else if (filter === "beach-day") {
     const lensW = clamp(eyewearLensW * 1.02, faceWidth * 0.19, faceWidth * 0.3);
     const lensH = clamp(eyewearLensH * 0.96, faceWidth * 0.1, faceWidth * 0.16);
@@ -6733,6 +6816,68 @@ const drawFaceFilter = (
     ctx.moveTo(leftEyeLocal.x + lensW * 0.48, lensY + lensH * 0.5);
     ctx.lineTo(rightEyeLocal.x - lensW * 0.48, lensY + lensH * 0.5);
     ctx.stroke();
+  } else if (filter === "party-hat") {
+    const hatBaseY = headTopY + faceWidth * 0.03;
+    const hatW = faceWidth * 0.48;
+    const hatH = faceWidth * 0.52;
+    const hatX = headCenterX - faceWidth * 0.05;
+    beginProbe({
+      left: hatX - hatW * 0.55,
+      right: hatX + hatW * 0.55,
+      top: hatBaseY - hatH - faceWidth * 0.08,
+      bottom: hatBaseY + faceWidth * 0.08,
+    });
+    const cone = ctx.createLinearGradient(hatX - hatW / 2, hatBaseY, hatX + hatW / 2, hatBaseY - hatH);
+    cone.addColorStop(0, "#f97316");
+    cone.addColorStop(0.5, "#ec4899");
+    cone.addColorStop(1, "#7c3aed");
+    ctx.fillStyle = cone;
+    ctx.beginPath();
+    ctx.moveTo(hatX - hatW / 2, hatBaseY);
+    ctx.lineTo(hatX, hatBaseY - hatH);
+    ctx.lineTo(hatX + hatW / 2, hatBaseY);
+    ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle = "rgba(255,255,255,0.62)";
+    ctx.lineWidth = Math.max(3, faceWidth * 0.02);
+    for (let stripe = 0; stripe < 3; stripe += 1) {
+      const y = hatBaseY - hatH * (0.22 + stripe * 0.2);
+      ctx.beginPath();
+      ctx.moveTo(hatX - hatW * (0.38 - stripe * 0.08), y);
+      ctx.lineTo(hatX + hatW * (0.38 - stripe * 0.08), y - faceWidth * 0.02);
+      ctx.stroke();
+    }
+    ctx.fillStyle = "#facc15";
+    ctx.beginPath();
+    ctx.arc(hatX, hatBaseY - hatH - faceWidth * 0.03, faceWidth * 0.055, 0, Math.PI * 2);
+    ctx.fill();
+  } else if (filter === "pilot-hat") {
+    const capY = headTopY + faceWidth * 0.03;
+    const capW = faceWidth * 0.72;
+    const capH = faceWidth * 0.24;
+    beginProbe({
+      left: headCenterX - capW * 0.56,
+      right: headCenterX + capW * 0.56,
+      top: capY - capH - faceWidth * 0.12,
+      bottom: capY + capH * 0.7,
+    });
+    ctx.fillStyle = "rgba(30,41,59,0.98)";
+    ctx.beginPath();
+    ctx.ellipse(headCenterX, capY - capH * 0.22, capW * 0.48, capH * 0.52, 0, Math.PI, 0);
+    ctx.lineTo(headCenterX + capW * 0.45, capY);
+    ctx.lineTo(headCenterX - capW * 0.45, capY);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = "rgba(15,23,42,0.95)";
+    fillRoundRect(ctx, headCenterX - capW * 0.44, capY - capH * 0.06, capW * 0.88, capH * 0.22, capH * 0.08);
+    ctx.fillStyle = "#f8fafc";
+    ctx.beginPath();
+    ctx.moveTo(headCenterX - capW * 0.08, capY - capH * 0.18);
+    ctx.lineTo(headCenterX, capY - capH * 0.32);
+    ctx.lineTo(headCenterX + capW * 0.08, capY - capH * 0.18);
+    ctx.lineTo(headCenterX, capY - capH * 0.1);
+    ctx.closePath();
+    ctx.fill();
   } else if (filter === "mustache") {
     const x = mouthCenterLocal.x;
     const y = upperLipLocal
