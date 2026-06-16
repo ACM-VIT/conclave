@@ -14,13 +14,13 @@ import {
   Phone,
   Settings,
   Smile,
+  Sparkles,
   Users,
   Video,
   VideoOff,
   Monitor,
   Volume2,
   VolumeX,
-  WandSparkles,
   X,
   ShieldBan,
 } from "lucide-react";
@@ -580,7 +580,7 @@ function MobileControlsBar({
                   : "bg-[#2b2b2b]"
               }`}
             >
-              <WandSparkles className="w-4.5 h-4.5" />
+              <Sparkles className="w-4.5 h-4.5" />
             </div>
             <span className="text-sm font-medium">
               Backgrounds and effects
