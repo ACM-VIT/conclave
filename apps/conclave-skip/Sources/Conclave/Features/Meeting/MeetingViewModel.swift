@@ -101,6 +101,7 @@ final class MeetingViewModel {
     private var pendingProducerContexts: [String: SocketEventContext] = [:]
     private var producerInfosById: [String: ProducerInfo] = [:]
     private var pendingProducerRetryAttempts: [String: Int] = [:]
+    private var webRTCJoinAttemptId: UUID?
     private var pendingProducerRetryTask: Task<Void, Never>?
     private var ttsHighlightTask: Task<Void, Never>?
     private var isMuteToggleInFlight = false
@@ -352,7 +353,8 @@ final class MeetingViewModel {
                 self.applyHostSnapshot(
                     hostUserId: notification.hostUserId,
                     hostUserIds: nil,
-                    updateAdminFromSnapshot: false
+                    updateAdminFromSnapshot: false,
+                    clearMissingHostUserId: true
                 )
             }
         }
@@ -949,8 +951,9 @@ final class MeetingViewModel {
         // kick, and end paths call cleanup(), but socket reconnect does not.
         if webRTCClient.isConfigured {
             await webRTCClient.cleanup(notifyLocalState: false)
+            webRTCJoinAttemptId = nil
             guard isCurrentJoinAttempt(joinAttemptId) else {
-                await cleanupAbandonedJoinAttempt(cleanupMedia: true)
+                await cleanupAbandonedJoinAttempt(cleanupMedia: true, joinAttemptId: joinAttemptId)
                 return
             }
         }
@@ -959,9 +962,11 @@ final class MeetingViewModel {
         applyHostSnapshot(
             hostUserId: response.hostUserId,
             hostUserIds: response.hostUserIds,
-            updateAdminFromSnapshot: true
+            updateAdminFromSnapshot: true,
+            clearMissingHostUserId: true
         )
 
+        webRTCJoinAttemptId = joinAttemptId
         webRTCClient.configure(
             socketManager: socketManager,
             rtpCapabilities: response.rtpCapabilities,
@@ -971,7 +976,7 @@ final class MeetingViewModel {
         do {
             try await webRTCClient.createTransports()
             guard isCurrentJoinAttempt(joinAttemptId) else {
-                await cleanupAbandonedJoinAttempt(cleanupMedia: true)
+                await cleanupAbandonedJoinAttempt(cleanupMedia: true, joinAttemptId: joinAttemptId)
                 return
             }
 
@@ -980,7 +985,7 @@ final class MeetingViewModel {
             } else {
                 let didStayCurrent = await startProducing(joinAttemptId: joinAttemptId)
                 guard didStayCurrent else {
-                    await cleanupAbandonedJoinAttempt(cleanupMedia: true)
+                    await cleanupAbandonedJoinAttempt(cleanupMedia: true, joinAttemptId: joinAttemptId)
                     return
                 }
             }
@@ -988,14 +993,14 @@ final class MeetingViewModel {
             let mediaContext = currentSocketEventContext()
             for producer in response.existingProducers {
                 guard isCurrentSocketEvent(mediaContext, roomId: producer.roomId) else {
-                    await cleanupAbandonedJoinAttempt(cleanupMedia: true)
+                    await cleanupAbandonedJoinAttempt(cleanupMedia: true, joinAttemptId: joinAttemptId)
                     return
                 }
                 await consumeRemoteProducer(producer, context: mediaContext)
             }
 
             guard isCurrentJoinAttempt(joinAttemptId) else {
-                await cleanupAbandonedJoinAttempt(cleanupMedia: true)
+                await cleanupAbandonedJoinAttempt(cleanupMedia: true, joinAttemptId: joinAttemptId)
                 return
             }
             state.connectionState = ConnectionState.joined
@@ -1007,7 +1012,7 @@ final class MeetingViewModel {
             refreshAppsState()
         } catch {
             guard isCurrentJoinAttempt(joinAttemptId) else {
-                await cleanupAbandonedJoinAttempt(cleanupMedia: true)
+                await cleanupAbandonedJoinAttempt(cleanupMedia: true, joinAttemptId: joinAttemptId)
                 return
             }
             debugLog("[Meeting] WebRTC setup error: \(error)")
@@ -1024,12 +1029,25 @@ final class MeetingViewModel {
         return activeJoinAttemptId == joinAttemptId
     }
 
-    private func cleanupAbandonedJoinAttempt(cleanupMedia: Bool = false) async {
-        guard activeJoinAttemptId == nil else { return }
-        currentJoinInfo = nil
-        socketManager.disconnect()
-        if cleanupMedia {
-            await webRTCClient.cleanup(notifyLocalState: false)
+    private func cleanupAbandonedJoinAttempt(cleanupMedia: Bool = false, joinAttemptId: UUID? = nil) async {
+        if activeJoinAttemptId == nil {
+            currentJoinInfo = nil
+            socketManager.disconnect()
+            if cleanupMedia {
+                await webRTCClient.cleanup(notifyLocalState: false)
+                if webRTCJoinAttemptId == joinAttemptId || joinAttemptId == nil {
+                    webRTCJoinAttemptId = nil
+                }
+            }
+            return
+        }
+
+        guard cleanupMedia,
+              let joinAttemptId,
+              webRTCJoinAttemptId == joinAttemptId else { return }
+        await webRTCClient.cleanup(notifyLocalState: false)
+        if webRTCJoinAttemptId == joinAttemptId {
+            webRTCJoinAttemptId = nil
         }
     }
 
@@ -1236,10 +1254,13 @@ final class MeetingViewModel {
     private func applyHostSnapshot(
         hostUserId: String?,
         hostUserIds: [String]?,
-        updateAdminFromSnapshot: Bool
+        updateAdminFromSnapshot: Bool,
+        clearMissingHostUserId: Bool = false
     ) {
         if let hostUserId {
             state.hostUserId = hostUserId
+        } else if clearMissingHostUserId {
+            state.hostUserId = nil
         }
 
         if let hostUserIds {
@@ -1310,7 +1331,8 @@ final class MeetingViewModel {
         applyHostSnapshot(
             hostUserId: snapshot.hostUserId,
             hostUserIds: snapshot.adminUserIds,
-            updateAdminFromSnapshot: true
+            updateAdminFromSnapshot: true,
+            clearMissingHostUserId: true
         )
 
         if let policies = snapshot.policies {
@@ -2135,9 +2157,16 @@ final class MeetingViewModel {
         )
 
         state.connectionState = shouldStayInMeetingShell ? ConnectionState.joining : ConnectionState.connecting
+        let shouldCleanupExistingMediaBeforeJoin = !reuseExistingSocket && webRTCClient.isConfigured
 
         Task {
             do {
+                if shouldCleanupExistingMediaBeforeJoin {
+                    await webRTCClient.cleanup(notifyLocalState: false)
+                    webRTCJoinAttemptId = nil
+                    guard self.activeJoinAttemptId == joinAttemptId else { return }
+                }
+
                 let clientId = SfuJoinService.resolveClientId()
                 let joinInfo = try await SfuJoinService.fetchJoinInfo(
                     roomId: roomId,
@@ -2181,7 +2210,8 @@ final class MeetingViewModel {
                     applyHostSnapshot(
                         hostUserId: response.hostUserId,
                         hostUserIds: response.hostUserIds,
-                        updateAdminFromSnapshot: true
+                        updateAdminFromSnapshot: true,
+                        clearMissingHostUserId: true
                     )
                     state.connectionState = ConnectionState.waiting
                     isRejoinInFlight = false
@@ -2862,6 +2892,7 @@ final class MeetingViewModel {
         ScreenCaptureManager.stopCapture()
         #endif
         await webRTCClient.cleanup()
+        webRTCJoinAttemptId = nil
         guard meetingLifecycleGeneration == cleanupGeneration else { return }
 
         state.participants.removeAll()

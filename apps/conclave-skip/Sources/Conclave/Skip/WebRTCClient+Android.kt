@@ -72,6 +72,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     private var localVideoTrackWrapper: VideoTrackWrapper? = null
 
     private var device: Device? = null
+    private var configurationGeneration: Long = 0
     // True once configure() has set up the mediasoup Device and before cleanup()
     // tears it down — lets the rejoin path detect a still-live prior session.
     internal val isConfigured: Boolean get() = device != null
@@ -153,6 +154,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     private var screenVideoTrack: VideoTrack? = null
 
     internal fun configure(socketManager: SocketIOManager, rtpCapabilities: RtpCapabilities, iceServersJSON: String?) {
+        configurationGeneration += 1
         this.socketManager = socketManager
         this.serverRtpCapabilities = rtpCapabilities
         this.runtimeIceServersJSON = iceServersJSON?.trim()?.takeIf { it.isNotEmpty() }
@@ -183,19 +185,23 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     internal suspend fun createTransports() {
         val socket = socketManager ?: throw ErrorException("Socket not configured")
         val device = device ?: throw ErrorException("Device not configured")
+        val generation = configurationGeneration
 
         val producerTransportParams = socket.createProducerTransport()
+        if (generation != configurationGeneration) {
+            throw ErrorException("WebRTC session was replaced")
+        }
         val consumerTransportParams = socket.createConsumerTransport()
-
-        sendTransportId = producerTransportParams.id
-        receiveTransportId = consumerTransportParams.id
+        if (generation != configurationGeneration) {
+            throw ErrorException("WebRTC session was replaced")
+        }
 
         val peerConnectionOptions = resolvePeerConnectionOptions()
         val producerIceParameters = encodeJSONString(producerTransportParams.iceParameters)
         val producerIceCandidates = encodeJSONString(producerTransportParams.iceCandidates)
         val producerDtlsParameters = encodeJSONString(producerTransportParams.dtlsParameters)
 
-        sendTransport = if (peerConnectionOptions != null) {
+        val nextSendTransport = if (peerConnectionOptions != null) {
             device.createSendTransport(
                 this,
                 producerTransportParams.id,
@@ -220,7 +226,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         val consumerIceCandidates = encodeJSONString(consumerTransportParams.iceCandidates)
         val consumerDtlsParameters = encodeJSONString(consumerTransportParams.dtlsParameters)
 
-        receiveTransport = if (peerConnectionOptions != null) {
+        val nextReceiveTransport = if (peerConnectionOptions != null) {
             device.createRecvTransport(
                 this,
                 consumerTransportParams.id,
@@ -240,6 +246,19 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
                 consumerDtlsParameters
             )
         }
+
+        if (generation != configurationGeneration) {
+            nextSendTransport.close()
+            nextReceiveTransport.close()
+            throw ErrorException("WebRTC session was replaced")
+        }
+
+        sendTransport?.close()
+        receiveTransport?.close()
+        sendTransportId = producerTransportParams.id
+        receiveTransportId = consumerTransportParams.id
+        sendTransport = nextSendTransport
+        receiveTransport = nextReceiveTransport
     }
 
     internal suspend fun restartIce(): Boolean {
@@ -746,6 +765,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     }
 
     internal suspend fun cleanup(notifyLocalState: Boolean = true) {
+        configurationGeneration += 1
         try {
             videoCapturer?.stopCapture()
         } catch (_: Throwable) {

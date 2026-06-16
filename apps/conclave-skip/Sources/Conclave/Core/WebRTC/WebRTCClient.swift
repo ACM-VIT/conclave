@@ -70,6 +70,7 @@ final class WebRTCClient: NSObject, ObservableObject {
 
     var device: Device?
     private var runtimeIceServersJSON: String?
+    private var configurationGeneration = 0
     /// True once configure() has set up the mediasoup Device for a session and
     /// before cleanup() tears it down. Lets the rejoin path detect a still-live
     /// prior session that must be torn down before reconfiguring.
@@ -170,6 +171,7 @@ final class WebRTCClient: NSObject, ObservableObject {
     // MARK: - Setup
 
     func configure(socketManager: SocketIOManager, rtpCapabilities: RtpCapabilities, iceServersJSON: String?) {
+        configurationGeneration += 1
         self.socketManager = socketManager
         self.serverRtpCapabilities = rtpCapabilities
         let trimmedIceServers = iceServersJSON?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -196,13 +198,13 @@ final class WebRTCClient: NSObject, ObservableObject {
 
         let iceServers = runtimeIceServersJSON ?? resolveIceServersJSON()
 
+        let generation = configurationGeneration
         let producerTransportParams = try await socket.createProducerTransport()
+        guard generation == configurationGeneration else { throw WebRTCError.staleConfiguration }
         let consumerTransportParams = try await socket.createConsumerTransport()
+        guard generation == configurationGeneration else { throw WebRTCError.staleConfiguration }
 
-        sendTransportId = producerTransportParams.id
-        receiveTransportId = consumerTransportParams.id
-
-        let sendTransport = try device.createSendTransport(
+        let nextSendTransport = try device.createSendTransport(
             id: producerTransportParams.id,
             iceParameters: try encodeJSONString(producerTransportParams.iceParameters),
             iceCandidates: try encodeJSONString(producerTransportParams.iceCandidates),
@@ -211,10 +213,9 @@ final class WebRTCClient: NSObject, ObservableObject {
             iceServers: iceServers,
             appData: nil
         )
-        sendTransport.delegate = self
-        self.sendTransport = sendTransport
+        nextSendTransport.delegate = self
 
-        let receiveTransport = try device.createReceiveTransport(
+        let nextReceiveTransport = try device.createReceiveTransport(
             id: consumerTransportParams.id,
             iceParameters: try encodeJSONString(consumerTransportParams.iceParameters),
             iceCandidates: try encodeJSONString(consumerTransportParams.iceCandidates),
@@ -223,8 +224,20 @@ final class WebRTCClient: NSObject, ObservableObject {
             iceServers: iceServers,
             appData: nil
         )
-        receiveTransport.delegate = self
-        self.receiveTransport = receiveTransport
+        nextReceiveTransport.delegate = self
+
+        guard generation == configurationGeneration else {
+            nextSendTransport.close()
+            nextReceiveTransport.close()
+            throw WebRTCError.staleConfiguration
+        }
+
+        sendTransport?.close()
+        receiveTransport?.close()
+        sendTransportId = producerTransportParams.id
+        receiveTransportId = consumerTransportParams.id
+        sendTransport = nextSendTransport
+        receiveTransport = nextReceiveTransport
 
         debugLog("[WebRTC] Transports created: send=\(producerTransportParams.id), recv=\(consumerTransportParams.id)")
     }
@@ -939,6 +952,7 @@ final class WebRTCClient: NSObject, ObservableObject {
     // MARK: - Cleanup
 
     func cleanup(notifyLocalState: Bool = true) async {
+        configurationGeneration += 1
         await videoCapturer?.stopCapture()
         videoCapturer = nil
 
@@ -1381,6 +1395,7 @@ private var screenTrackKey: UInt8 = 0
 
 enum WebRTCError: LocalizedError {
     case notConfigured
+    case staleConfiguration
     case noTransport
     case permissionDenied
     case noCameraAvailable
@@ -1390,6 +1405,8 @@ enum WebRTCError: LocalizedError {
         switch self {
         case .notConfigured:
             return "WebRTC client not configured"
+        case .staleConfiguration:
+            return "WebRTC session was replaced"
         case .noTransport:
             return "Transport not created"
         case .permissionDenied:
