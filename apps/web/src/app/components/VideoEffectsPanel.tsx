@@ -375,7 +375,7 @@ function VideoEffectsPreview({
         autoPlay
         muted
         playsInline
-        className={`h-full w-full object-cover ${
+        className={`h-full w-full scale-x-[-1] object-cover ${
           shouldShowVideo ? "" : "hidden"
         }`}
       />
@@ -873,7 +873,7 @@ export default function VideoEffectsPanel({
 
   const panelClassName =
     variant === "dialog"
-      ? "fixed left-1/2 top-1/2 z-50 flex h-[min(780px,calc(100dvh-48px))] w-[min(500px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-[24px] border border-white/[0.10] bg-[#18181b] text-[#fafafa] shadow-[0_24px_80px_rgba(0,0,0,0.58)]"
+      ? "fixed inset-x-3 bottom-3 z-50 flex max-h-[calc(100dvh-24px)] flex-col overflow-hidden rounded-[24px] border border-white/[0.10] bg-[#18181b] text-[#fafafa] shadow-[0_24px_80px_rgba(0,0,0,0.58)] sm:left-1/2 sm:right-auto sm:top-1/2 sm:bottom-auto sm:h-[min(780px,calc(100dvh-48px))] sm:max-h-none sm:w-[min(500px,calc(100vw-32px))] sm:-translate-x-1/2 sm:-translate-y-1/2"
       : "fixed right-0 top-0 bottom-0 z-40 flex w-[360px] flex-col overflow-hidden border-l border-white/[0.10] bg-[#18181b] text-[#fafafa] shadow-[0_18px_60px_rgba(0,0,0,0.42)] animate-[meet-panel-in_280ms_cubic-bezier(0.22,1,0.36,1)]";
 
   const panel = (

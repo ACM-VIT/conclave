@@ -777,7 +777,7 @@ function JoinScreen({
                 type="button"
                 onClick={requestMicrophoneAndCamera}
                 disabled={isRequestingPermissions}
-                className="absolute left-3 top-3 z-10 inline-flex min-h-9 max-w-[calc(100%-1.5rem)] items-center gap-2 rounded-full bg-[#1a73e8] px-3.5 text-[13px] font-medium text-white shadow-lg shadow-black/20 transition-[background-color,opacity] duration-150 hover:bg-[#1967d2] disabled:cursor-wait disabled:opacity-75"
+                className="absolute left-3 top-3 z-10 inline-flex min-h-9 max-w-[calc(100%-1.5rem)] items-center gap-2 rounded-full bg-[#F95F4A] px-3.5 text-[13px] font-medium text-white shadow-lg shadow-black/20 transition-[background-color,opacity] duration-150 hover:bg-[#e8553f] disabled:cursor-wait disabled:opacity-75"
               >
                 {isRequestingPermissions ? (
                   <Loader2 size={16} className="shrink-0 animate-spin" />

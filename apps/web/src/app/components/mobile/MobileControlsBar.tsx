@@ -569,14 +569,14 @@ function MobileControlsBar({
               !canOpenVideoEffects
                 ? "opacity-30"
                 : isVideoEffectsOpen || hasActiveVideoEffects
-                  ? "text-[#8ab4f8]"
+                  ? "text-[#F95F4A]"
                   : "text-[#fafafa]"
             } hover:bg-[#fafafa]/5 active:bg-[#fafafa]/10`}
           >
             <div
               className={`h-9 w-9 rounded-xl border border-white/5 flex items-center justify-center ${
                 isVideoEffectsOpen || hasActiveVideoEffects
-                  ? "bg-[#1a73e8]/25"
+                  ? "bg-[#F95F4A]/20"
                   : "bg-[#2b2b2b]"
               }`}
             >
@@ -590,7 +590,7 @@ function MobileControlsBar({
                 Permission needed
               </span>
             ) : hasActiveVideoEffects ? (
-              <span className="ml-auto flex h-5 min-w-5 items-center justify-center rounded-full bg-[#1a73e8] px-1.5 text-[11px] font-semibold text-white">
+              <span className="ml-auto flex h-5 min-w-5 items-center justify-center rounded-full bg-[#F95F4A] px-1.5 text-[11px] font-semibold text-white">
                 {activeVideoEffectsCount}
               </span>
             ) : (

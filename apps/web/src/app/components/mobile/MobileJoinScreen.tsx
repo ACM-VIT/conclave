@@ -817,13 +817,13 @@ function MobileJoinScreen({
               aria-pressed={activeVideoEffectsCount > 0 || isEffectsOpen}
               className={`relative w-9 h-9 rounded-full flex items-center justify-center transition-colors ${
                 activeVideoEffectsCount > 0 || isEffectsOpen
-                  ? "bg-[#1a73e8] text-white"
+                  ? "bg-[#F95F4A] text-white shadow-[0_0_12px_rgba(249,95,74,0.28)]"
                   : "text-white"
               }`}
             >
               <WandSparkles className="w-[18px] h-[18px]" />
               {activeVideoEffectsCount > 0 ? (
-                <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-white px-1 text-[10px] font-semibold text-[#1a73e8]">
+                <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-white px-1 text-[10px] font-semibold text-[#F95F4A]">
                   {activeVideoEffectsCount}
                 </span>
               ) : null}
@@ -872,10 +872,6 @@ function MobileJoinScreen({
 
       <div className="absolute bottom-0 left-0 right-0 z-10 px-4 pb-[calc(12px+env(safe-area-inset-bottom))]">
         <div className="flex flex-col gap-3">
-          <AndroidUpsellSheet
-            isOpen={showAndroidUpsell}
-            onClose={dismissAndroidUpsell}
-          />
           <div className="flex mobile-glass mobile-pill p-1">
             <button
               onClick={() => {
@@ -1035,6 +1031,11 @@ function MobileJoinScreen({
         )}
         </div>
       </div>
+
+      <AndroidUpsellSheet
+        isOpen={showAndroidUpsell}
+        onClose={dismissAndroidUpsell}
+      />
 
       {isLoading && (
         <div className="absolute inset-0 bg-[#131316]/80 flex items-center justify-center z-50">
