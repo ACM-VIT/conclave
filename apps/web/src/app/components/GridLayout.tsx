@@ -168,6 +168,7 @@ type MeetVideoEffectsFrameMetadata = {
     tilesStable: boolean;
     enabledFramesCount: number;
     stableFramesCount: number;
+    fallbackLevel: number;
   };
   humanTrackingMetadata?: {
     lifetimeTrackCount: number;
@@ -227,6 +228,7 @@ type MeetRoomTilingMetadataBase = {
   hiddenIds: string[];
   warmIds: string[];
   warmReasons: Record<string, MeetRoomTilingWarmReason[]>;
+  fallbackLevel: number;
   orderedRemoteIds: string[];
   scores: MeetRoomTilingScore[];
   counts: {
@@ -482,6 +484,8 @@ const readVideoEffectsFrameMetadata = (
             readFiniteNumber(roomTilingMetadata.enabledFramesCount) ?? 0,
           stableFramesCount:
             readFiniteNumber(roomTilingMetadata.stableFramesCount) ?? 0,
+          fallbackLevel:
+            readFiniteNumber(roomTilingMetadata.fallbackLevel) ?? 0,
         }
       : undefined,
     humanTrackingMetadata: {
@@ -1835,6 +1839,16 @@ function GridLayout({
         : showMinimizedSelfView
           ? "minimized"
           : "none";
+  const roomTilingFallbackLevel = !hasMeasuredGrid
+    ? 2
+    : usesStageLayout &&
+        !usesSpotlightLayout &&
+        stageRailCandidateParticipants.length > 0 &&
+        stageRailLayout.slotCount <= stageRailFixedTileCount
+      ? 1
+      : usesMeasuredAutoTileLimit && autoGridTileLimit < requestedMaxTiles
+        ? 1
+        : 0;
   const roomTilingSequenceRef = useRef(0);
   const roomTilingMetadataRef = useRef<MeetRoomTilingMetadata | null>(null);
   const roomTilingHistoryRef = useRef<MeetRoomTilingMetadata[]>([]);
@@ -1862,6 +1876,7 @@ function GridLayout({
       hiddenIds: roomTilingHiddenIds,
       warmIds: roomTilingWarmIds,
       warmReasons: roomTilingWarmReasons,
+      fallbackLevel: roomTilingFallbackLevel,
       orderedRemoteIds: orderedRemoteParticipants.map(
         (participant) => participant.userId,
       ),
@@ -1972,6 +1987,7 @@ function GridLayout({
       requestedSelfViewCorner,
       requestedSelfViewMode,
       roomTilingHiddenIds,
+      roomTilingFallbackLevel,
       roomTilingPrimaryIds,
       roomTilingRemoteVisibleIds,
       roomTilingWarmReasons,
@@ -2355,6 +2371,7 @@ function GridLayout({
         data-meet-room-tiling-min-switch-interval={
           ROOM_TILING_MIN_SWITCH_INTERVAL_MS
         }
+        data-meet-room-tiling-fallback-level={roomTilingFallbackLevel}
         data-meet-room-tiling-active-speaker={activeSpeakerId ?? ""}
         data-meet-room-tiling-featured-speaker={featuredSpeakerId ?? ""}
         data-meet-room-tiling-primary-ids={roomTilingPrimaryIds.join(",")}

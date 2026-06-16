@@ -3071,6 +3071,7 @@ const run = async () => {
           Number(frameMetadata?.roomTilingMetadata?.enabledFramesCount || 0) > 0 &&
           Number(frameMetadata?.roomTilingMetadata?.tileCount ?? -1) >= 0 &&
           typeof frameMetadata?.roomTilingMetadata?.tilesStable === "boolean" &&
+          Number(frameMetadata?.roomTilingMetadata?.fallbackLevel ?? -1) >= 0 &&
           Number(frameMetadata?.humanTrackingMetadata?.lifetimeTrackCount ?? -1) >= 0 &&
           Number(frameMetadata?.humanTrackingMetadata?.activeTrackCount ?? -1) >= 0 &&
           Array.isArray(frameMetadata?.humanTrackingMetadata?.trackedHumans) &&
@@ -4237,6 +4238,7 @@ const run = async () => {
           Number(frameMetadata?.roomTilingMetadata?.enabledFramesCount || 0) > 0 &&
           Number(frameMetadata?.roomTilingMetadata?.tileCount ?? -1) >= 0 &&
           typeof frameMetadata?.roomTilingMetadata?.tilesStable === "boolean" &&
+          Number(frameMetadata?.roomTilingMetadata?.fallbackLevel ?? -1) >= 0 &&
           Number(frameMetadata?.humanTrackingMetadata?.lifetimeTrackCount ?? -1) >= 0 &&
           Number(frameMetadata?.humanTrackingMetadata?.activeTrackCount ?? -1) >= 0 &&
           Array.isArray(frameMetadata?.humanTrackingMetadata?.trackedHumans) &&
@@ -4879,6 +4881,7 @@ const run = async () => {
           grid?.getAttribute("data-meet-room-tiling-metadata-interval") === "200" &&
           grid?.getAttribute("data-meet-room-tiling-promote-delay") === "220" &&
           grid?.getAttribute("data-meet-room-tiling-min-switch-interval") === "2200" &&
+          Number(grid?.getAttribute("data-meet-room-tiling-fallback-level") ?? -1) >= 0 &&
           roomTilingVisibleIds.length >= 3 &&
           roomTilingPrimaryIds.includes("local") &&
           roomTilingScores.length >= 3 &&
@@ -4897,6 +4900,7 @@ const run = async () => {
           currentTiling?.intervalMs === 200 &&
           currentTiling?.promoteDelayMs === 220 &&
           currentTiling?.minSwitchIntervalMs === 2200 &&
+          Number(currentTiling?.fallbackLevel ?? -1) >= 0 &&
           (currentTiling?.featuredSpeakerId ?? "") === roomTilingFeaturedSpeaker &&
           currentTiling?.requestedMode === "auto" &&
           currentTiling?.renderedMode === "tiled" &&
@@ -5029,6 +5033,7 @@ const run = async () => {
           Number(room.totalGridCount || 0) >= 4 &&
           Number(room.tileWidth || 0) > 0 &&
           Number(room.tileHeight || 0) > 0 &&
+          Number(room.fallbackLevel ?? -1) >= 0 &&
           policyReason.includes("room-tiling") &&
           (qualityTier === 1000 || qualityTier === 1100) &&
           runtimePressureHealthy &&

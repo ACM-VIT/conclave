@@ -301,6 +301,7 @@ type VideoEffectsFrameMetadata = {
     tilesStable: boolean;
     enabledFramesCount: number;
     stableFramesCount: number;
+    fallbackLevel: number;
   };
   humanTrackingMetadata: {
     lifetimeTrackCount: number;
@@ -369,6 +370,7 @@ type VideoEffectsRoomTilingPolicyContext = {
   visibleCount: number;
   hiddenCount: number;
   stageRailCount: number;
+  fallbackLevel: number;
   maxTiles: number;
   tileWidth: number;
   tileHeight: number;
@@ -1363,6 +1365,7 @@ const readRoomTilingPolicyContext = (
     visibleCount,
     hiddenCount: readFiniteNumber(counts.hidden),
     stageRailCount,
+    fallbackLevel: readFiniteNumber(value.fallbackLevel),
     maxTiles,
     tileWidth,
     tileHeight,
@@ -1461,6 +1464,7 @@ const readRoomTilingPolicyContextFromDom =
         visibleCount,
         hiddenCount,
         stageRailCount,
+        fallbackLevel: hiddenCount > 0 ? 1 : 0,
         maxTiles: readElementNumberAttribute(
           mobileRoot,
           "data-mobile-max-tiles",
@@ -1535,6 +1539,10 @@ const readRoomTilingPolicyContextFromDom =
         "data-meet-view-hidden-count",
       ),
       stageRailCount,
+      fallbackLevel: readElementNumberAttribute(
+        desktopRoot,
+        "data-meet-room-tiling-fallback-level",
+      ),
       maxTiles: readElementNumberAttribute(
         desktopRoot,
         "data-meet-view-max-tiles",
@@ -2161,6 +2169,7 @@ const getVideoEffectsAdaptationStats = (
           visibleCount: roomTilingPolicyContext.visibleCount,
           hiddenCount: roomTilingPolicyContext.hiddenCount,
           stageRailCount: roomTilingPolicyContext.stageRailCount,
+          fallbackLevel: roomTilingPolicyContext.fallbackLevel,
           maxTiles: roomTilingPolicyContext.maxTiles,
           tileWidth: roomTilingPolicyContext.tileWidth,
           tileHeight: roomTilingPolicyContext.tileHeight,
@@ -13335,6 +13344,18 @@ export function useVideoEffects({
         humanTrackingLifetimeTrackCount,
         trackedHumans.length,
       );
+      const sourceFallbackLevel =
+        latestSourceFrameFallbackReason === "dark-video"
+          ? 3
+          : latestSourceFrameFallbackReason === "missing-video"
+            ? 2
+            : blackSourceVideoFrameCount > 0
+              ? 1
+              : 0;
+      const fallbackLevel = Math.max(
+        roomTilingPolicyContextRef.current?.fallbackLevel ?? 0,
+        sourceFallbackLevel,
+      );
 
       const exactTimestampMs =
         videoFrameMetadata &&
@@ -13363,6 +13384,7 @@ export function useVideoEffects({
           tilesStable,
           enabledFramesCount: roomTilingEnabledFramesCount,
           stableFramesCount: roomTilingStableFramesCount,
+          fallbackLevel,
         },
         humanTrackingMetadata: {
           lifetimeTrackCount: humanTrackingLifetimeTrackCount,
@@ -14041,6 +14063,7 @@ export function useVideoEffects({
                 visibleCount: roomTilingPolicyContext.visibleCount,
                 hiddenCount: roomTilingPolicyContext.hiddenCount,
                 stageRailCount: roomTilingPolicyContext.stageRailCount,
+                fallbackLevel: roomTilingPolicyContext.fallbackLevel,
                 tileWidth: roomTilingPolicyContext.tileWidth,
                 tileHeight: roomTilingPolicyContext.tileHeight,
                 selfViewPlacement: roomTilingPolicyContext.selfViewPlacement,
