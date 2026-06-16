@@ -239,6 +239,70 @@ export function computeGridLayout(
   };
 }
 
+export interface StageRailLayoutInput {
+  /** Remote tiles competing for the stage rail, excluding the stage main tile. */
+  candidateCount: number;
+  /** Non-remote rail tiles that must remain visible, such as self-view/share. */
+  fixedTileCount?: number;
+  /** User/device tile budget for the whole stage layout. */
+  maxTiles?: number;
+  /** Measured rail viewport height in px. */
+  railHeight: number;
+  /** Compact rail tile height in px. */
+  tileHeight?: number;
+  /** Gap between rail tiles in px. */
+  gap?: number;
+}
+
+export interface StageRailLayoutResult {
+  /** Physical tile slots that fit in the measured rail viewport. */
+  slotCount: number;
+  /** Remote candidate tiles rendered as live video in the rail. */
+  remoteCapacity: number;
+  /** Whether a single overflow tile should reserve one visible rail slot. */
+  overflowTile: boolean;
+  /** Remote candidates hidden behind overflow. */
+  hiddenCount: number;
+  /** Fixed + remote + overflow tiles rendered in the rail. */
+  renderedTileCount: number;
+}
+
+export function computeStageRailLayout(
+  input: StageRailLayoutInput,
+): StageRailLayoutResult {
+  const candidateCount = Math.max(0, Math.floor(input.candidateCount));
+  const fixedTileCount = Math.max(0, Math.floor(input.fixedTileCount ?? 0));
+  const maxTiles = Number.isFinite(input.maxTiles ?? Number.POSITIVE_INFINITY)
+    ? Math.max(0, Math.floor(input.maxTiles ?? 0))
+    : Number.POSITIVE_INFINITY;
+  const tileHeight = Math.max(1, Math.floor(input.tileHeight ?? 112));
+  const gap = Math.max(0, Math.floor(input.gap ?? 12));
+  const railHeight = Math.max(0, Math.floor(input.railHeight));
+
+  const slotCount =
+    railHeight > 0 ? Math.floor((railHeight + gap) / (tileHeight + gap)) : 0;
+  const visibleSlots = Math.max(
+    0,
+    Math.min(slotCount - fixedTileCount, maxTiles - fixedTileCount),
+  );
+  const initialRemoteCapacity = Math.min(candidateCount, visibleSlots);
+  const overflowTile =
+    candidateCount > initialRemoteCapacity && visibleSlots > 0;
+  const remoteCapacity = overflowTile
+    ? Math.max(0, Math.min(candidateCount, visibleSlots - 1))
+    : initialRemoteCapacity;
+  const hiddenCount = Math.max(0, candidateCount - remoteCapacity);
+
+  return {
+    slotCount,
+    remoteCapacity,
+    overflowTile,
+    hiddenCount,
+    renderedTileCount:
+      fixedTileCount + remoteCapacity + (overflowTile ? 1 : 0),
+  };
+}
+
 export type StageMode = "tiled" | "spotlight" | "sideBySide" | "sidebar";
 
 export interface StageModeInput {

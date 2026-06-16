@@ -191,6 +191,7 @@ const faceFilterIdByLabel = new Map([
   ["Fuzzy cat", "fuzzy-cat"],
   ["Halloween cat", "halloween-cat"],
   ["Velvety dog", "velvety-dog"],
+  ["Medium hair and beard", "hair-medium-beard"],
   ["Long wavy hair", "long-wavy-hair"],
   ["Gold crown", "crown"],
   ["Light halo", "halo"],
@@ -5358,11 +5359,20 @@ const run = async () => {
         const grid = document.querySelector("[data-meet-view-layout]");
         const stageMain = document.querySelector("[data-meet-stage-main='__presentation__']");
         const presentationVideo = stageMain?.querySelector("video[data-meet-presentation-video='true']");
+        const railCount = Number(grid?.getAttribute("data-meet-view-stage-rail-count") || 0);
+        const railCapacity = Number(grid?.getAttribute("data-meet-view-stage-rail-capacity") || 0);
+        const railRemoteCapacity = Number(grid?.getAttribute("data-meet-view-stage-rail-remote-capacity") || 0);
+        const railFixedCount = Number(grid?.getAttribute("data-meet-view-stage-rail-fixed-count") || 0);
+        const railOverflow = grid?.getAttribute("data-meet-view-stage-rail-overflow") === "true";
         return grid?.getAttribute("data-meet-view-requested") === "sidebar" &&
           grid?.getAttribute("data-meet-view-layout") === "sidebar" &&
           grid?.getAttribute("data-meet-view-presenting") === "true" &&
           grid?.getAttribute("data-meet-view-stage-main-kind") === "presentation" &&
-          Number(grid?.getAttribute("data-meet-view-stage-rail-count") || 0) >= 1 &&
+          railCount >= 1 &&
+          railCapacity >= railCount &&
+          railRemoteCapacity >= 1 &&
+          railRemoteCapacity <= railCapacity &&
+          railCount === railFixedCount + railRemoteCapacity + (railOverflow ? 1 : 0) &&
           Boolean(stageMain) &&
           Boolean(presentationVideo) &&
           presentationVideo.readyState >= 2;
@@ -5571,10 +5581,19 @@ const run = async () => {
       "sidebar layout",
       `(() => {
         const grid = document.querySelector("[data-meet-view-layout]");
+        const railCount = Number(grid?.getAttribute("data-meet-view-stage-rail-count") || 0);
+        const railCapacity = Number(grid?.getAttribute("data-meet-view-stage-rail-capacity") || 0);
+        const railRemoteCapacity = Number(grid?.getAttribute("data-meet-view-stage-rail-remote-capacity") || 0);
+        const railFixedCount = Number(grid?.getAttribute("data-meet-view-stage-rail-fixed-count") || 0);
+        const railOverflow = grid?.getAttribute("data-meet-view-stage-rail-overflow") === "true";
         return grid?.getAttribute("data-meet-view-requested") === "sidebar" &&
           grid?.getAttribute("data-meet-view-layout") === "sidebar" &&
           grid?.getAttribute("data-meet-view-stage-main-kind") !== "none" &&
-          Number(grid?.getAttribute("data-meet-view-stage-rail-count") || 0) >= 1;
+          railCount >= 1 &&
+          railCapacity >= railCount &&
+          railRemoteCapacity >= 0 &&
+          railRemoteCapacity <= railCapacity &&
+          railCount === railFixedCount + railRemoteCapacity + (railOverflow ? 1 : 0);
       })()`,
       10000,
     );

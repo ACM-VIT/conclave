@@ -106,6 +106,7 @@ export type FaceFilterId =
   | "fuzzy-cat"
   | "halloween-cat"
   | "velvety-dog"
+  | "hair-medium-beard"
   | "long-wavy-hair"
   | "bunny"
   | "working-bunny"
@@ -267,6 +268,7 @@ const FACE_FILTER_IDS = new Set<FaceFilterId>([
   "fuzzy-cat",
   "halloween-cat",
   "velvety-dog",
+  "hair-medium-beard",
   "long-wavy-hair",
   "bunny",
   "working-bunny",
@@ -1168,6 +1170,13 @@ export const FACE_FILTERS: VideoEffectOption<FaceFilterId>[] = [
     label: "Velvety dog",
     icon: VenetianMask,
     tone: "#a16207",
+    category: "Costumes",
+  },
+  {
+    id: "hair-medium-beard",
+    label: "Medium hair and beard",
+    icon: Scissors,
+    tone: "#3f2a1d",
     category: "Costumes",
   },
   {

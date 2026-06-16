@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   chooseStageMode,
   computeGridLayout,
+  computeStageRailLayout,
   type StageModeInput,
 } from "../src/grid-layout";
 
@@ -168,5 +169,74 @@ describe("chooseStageMode", () => {
     expect(chooseStageMode(input({ count: 5, tiledThreshold: 4 }))).toBe(
       "sidebar",
     );
+  });
+});
+
+describe("computeStageRailLayout", () => {
+  it("caps remote rail videos to measured visible slots", () => {
+    const r = computeStageRailLayout({
+      candidateCount: 10,
+      fixedTileCount: 1,
+      maxTiles: 8,
+      railHeight: 608,
+      tileHeight: 112,
+      gap: 12,
+    });
+
+    expect(r.slotCount).toBe(5);
+    expect(r.remoteCapacity).toBe(3);
+    expect(r.overflowTile).toBe(true);
+    expect(r.hiddenCount).toBe(7);
+    expect(r.renderedTileCount).toBe(5);
+  });
+
+  it("does not reserve overflow when every candidate fits", () => {
+    const r = computeStageRailLayout({
+      candidateCount: 2,
+      fixedTileCount: 1,
+      maxTiles: 8,
+      railHeight: 608,
+      tileHeight: 112,
+      gap: 12,
+    });
+
+    expect(r.slotCount).toBe(5);
+    expect(r.remoteCapacity).toBe(2);
+    expect(r.overflowTile).toBe(false);
+    expect(r.hiddenCount).toBe(0);
+    expect(r.renderedTileCount).toBe(3);
+  });
+
+  it("honors the user tile budget even when the rail has more physical space", () => {
+    const r = computeStageRailLayout({
+      candidateCount: 8,
+      fixedTileCount: 1,
+      maxTiles: 4,
+      railHeight: 1200,
+      tileHeight: 112,
+      gap: 12,
+    });
+
+    expect(r.slotCount).toBeGreaterThan(4);
+    expect(r.remoteCapacity).toBe(2);
+    expect(r.overflowTile).toBe(true);
+    expect(r.renderedTileCount).toBe(4);
+  });
+
+  it("keeps fixed tiles and hides remotes when no remote slot is available", () => {
+    const r = computeStageRailLayout({
+      candidateCount: 3,
+      fixedTileCount: 2,
+      maxTiles: 2,
+      railHeight: 256,
+      tileHeight: 112,
+      gap: 12,
+    });
+
+    expect(r.slotCount).toBe(2);
+    expect(r.remoteCapacity).toBe(0);
+    expect(r.overflowTile).toBe(false);
+    expect(r.hiddenCount).toBe(3);
+    expect(r.renderedTileCount).toBe(2);
   });
 });

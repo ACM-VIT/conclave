@@ -39,6 +39,7 @@ import { Avatar } from "@conclave/ui-tokens/web";
 import {
   chooseStageMode,
   computeGridLayout,
+  computeStageRailLayout,
   type GridTilePosition,
 } from "@conclave/meeting-core";
 import {
@@ -96,6 +97,8 @@ const PRIORITY_WARM_BUFFER_TILES = 4;
 const GRID_PADDING = 16;
 const GRID_GAP = 12;
 const GRID_MAX_COLS = 6;
+const STAGE_RAIL_TILE_HEIGHT = 112;
+const SIDE_BY_SIDE_RAIL_HEIGHT_RATIO = 0.35;
 const AUTO_GRID_MIN_TILE_WIDTH = 176;
 const AUTO_GRID_MIN_TILE_HEIGHT = 99;
 const ROOM_TILING_METADATA_INTERVAL_MS = 200;
@@ -240,6 +243,8 @@ type MeetRoomTilingMetadataBase = {
     priorityWarm: number;
     handRaisedWarm: number;
     featuredSpeakerWarm: number;
+    stageRailCapacity: number;
+    stageRailRemoteCapacity: number;
   };
   stage: {
     mainKind: "presentation" | "local" | "remote" | "none";
@@ -1277,29 +1282,76 @@ function GridLayout({
     hasPresentation &&
     Boolean(sideBySideCompanionKind);
   const usesSpotlightLayout = usesStageLayout && renderedViewMode === "spotlight";
-  const stageAuxTileCount =
-    (shouldShowSelfAsTile && stageMainKind !== "local" ? 1 : 0) +
-    (hasPresentation && stageMainKind !== "presentation" ? 1 : 0) +
-    (sideBySideCompanionKind === "remote" ? 1 : 0);
-  const stageSideRemoteCapacity = Math.max(
-    0,
-    usesSpotlightLayout ? 0 : maxGridTiles - 1 - stageAuxTileCount,
-  );
-  const stageSideParticipants = useMemo(
+  const stageRailLocalTileCount =
+    usesStageLayout &&
+    !usesSpotlightLayout &&
+    shouldShowSelfAsTile &&
+    (usesSideBySideLayout
+      ? sideBySideCompanionKind !== "local"
+      : stageMainKind !== "local")
+      ? 1
+      : 0;
+  const stageRailPresentationTileCount =
+    usesStageLayout &&
+    !usesSpotlightLayout &&
+    !usesSideBySideLayout &&
+    hasPresentation &&
+    stageMainKind !== "presentation"
+      ? 1
+      : 0;
+  const stageRailFixedTileCount =
+    stageRailLocalTileCount + stageRailPresentationTileCount;
+  const stageBudgetCompanionTileCount =
+    sideBySideCompanionKind === "remote" ? 1 : 0;
+  const stageRailCandidateParticipants = useMemo(
     () =>
       usesStageLayout
-        ? orderedRemoteParticipants
-            .filter(
-              (participant) =>
-                participant.userId !== stageMainParticipantId &&
-                participant.userId !== sideBySideCompanionParticipantId,
-            )
-            .slice(0, stageSideRemoteCapacity)
+        ? orderedRemoteParticipants.filter(
+            (participant) =>
+              participant.userId !== stageMainParticipantId &&
+              participant.userId !== sideBySideCompanionParticipantId,
+          )
         : [],
     [
       orderedRemoteParticipants,
       sideBySideCompanionParticipantId,
       stageMainParticipantId,
+      usesStageLayout,
+    ],
+  );
+  const stageRailViewportHeight = usesStageLayout && !usesSpotlightLayout
+    ? Math.max(0, gridSize.height - GRID_PADDING * 2) *
+      (usesSideBySideLayout ? SIDE_BY_SIDE_RAIL_HEIGHT_RATIO : 1)
+    : 0;
+  const stageRailLayout = useMemo(
+    () =>
+      computeStageRailLayout({
+        candidateCount: stageRailCandidateParticipants.length,
+        fixedTileCount:
+          stageRailFixedTileCount + stageBudgetCompanionTileCount,
+        maxTiles: Math.max(0, maxGridTiles - 1),
+        railHeight: stageRailViewportHeight,
+        tileHeight: STAGE_RAIL_TILE_HEIGHT,
+        gap: GRID_GAP,
+      }),
+    [
+      maxGridTiles,
+      stageBudgetCompanionTileCount,
+      stageRailCandidateParticipants.length,
+      stageRailFixedTileCount,
+      stageRailViewportHeight,
+    ],
+  );
+  const stageSideRemoteCapacity = usesSpotlightLayout
+    ? 0
+    : stageRailLayout.remoteCapacity;
+  const stageSideParticipants = useMemo(
+    () =>
+      usesStageLayout
+        ? stageRailCandidateParticipants.slice(0, stageSideRemoteCapacity)
+        : [],
+    [
+      stageRailCandidateParticipants,
       stageSideRemoteCapacity,
       usesStageLayout,
     ],
@@ -1336,6 +1388,11 @@ function GridLayout({
     [hiddenParticipants, stageHiddenParticipants, usesStageLayout],
   );
   const hiddenParticipantsCount = overflowParticipants.length;
+  const showStageOverflowTile =
+    usesStageLayout &&
+    !usesSpotlightLayout &&
+    stageRailLayout.overflowTile &&
+    hiddenParticipantsCount > 0;
   const roomTilingRemoteVisibleIds = useMemo(() => {
     const ids: string[] = [];
     if (usesStageLayout) {
@@ -1529,33 +1586,13 @@ function GridLayout({
     recentlyVisibleWarmRevision,
     roomTilingRemoteVisibleIds,
   ]);
-  const showOverflowTile = hiddenParticipantsCount > 0 && !usesSpotlightLayout;
+  const showOverflowTile = usesStageLayout
+    ? showStageOverflowTile
+    : hiddenParticipantsCount > 0 && !usesSpotlightLayout;
   const showOverflowTileInGrid =
     showOverflowTile && !isOverflowOpen && !usesStageLayout;
-  const stageRailLocalTileCount =
-    usesStageLayout &&
-    !usesSpotlightLayout &&
-    shouldShowSelfAsTile &&
-    (usesSideBySideLayout
-      ? sideBySideCompanionKind !== "local"
-      : stageMainKind !== "local")
-      ? 1
-      : 0;
-  const stageRailPresentationTileCount =
-    usesStageLayout &&
-    !usesSpotlightLayout &&
-    !usesSideBySideLayout &&
-    hasPresentation &&
-    stageMainKind !== "presentation"
-      ? 1
-      : 0;
-  const stageRailOverflowTileCount =
-    usesStageLayout && !usesSpotlightLayout && showOverflowTile ? 1 : 0;
   const stageRailTileCount = usesStageLayout
-    ? stageRailLocalTileCount +
-      stageRailPresentationTileCount +
-      stageSideParticipants.length +
-      stageRailOverflowTileCount
+    ? stageRailLayout.renderedTileCount
     : 0;
   const totalParticipants =
     visibleParticipants.length +
@@ -1858,6 +1895,10 @@ function GridLayout({
         featuredSpeakerWarm: Object.values(roomTilingWarmReasons).filter(
           (reasons) => reasons.includes("featured-speaker"),
         ).length,
+        stageRailCapacity: usesStageLayout ? stageRailLayout.slotCount : 0,
+        stageRailRemoteCapacity: usesStageLayout
+          ? stageRailLayout.remoteCapacity
+          : 0,
       },
       stage: {
         mainKind: usesStageLayout ? stageMainKind ?? "none" : "none",
@@ -1938,6 +1979,8 @@ function GridLayout({
       roomTilingWarmIds,
       sideBySideCompanionKind,
       sideBySideCompanionParticipantId,
+      stageRailLayout.remoteCapacity,
+      stageRailLayout.slotCount,
       stageMainKind,
       stageMainParticipantId,
       stageRailTileCount,
@@ -2277,6 +2320,16 @@ function GridLayout({
         data-meet-view-warm-count={warmParticipants.length}
         data-meet-view-grid-count={totalParticipants}
         data-meet-view-stage-rail-count={stageRailTileCount}
+        data-meet-view-stage-rail-capacity={
+          usesStageLayout ? stageRailLayout.slotCount : 0
+        }
+        data-meet-view-stage-rail-remote-capacity={
+          usesStageLayout ? stageRailLayout.remoteCapacity : 0
+        }
+        data-meet-view-stage-rail-fixed-count={stageRailFixedTileCount}
+        data-meet-view-stage-rail-overflow={
+          showStageOverflowTile ? "true" : "false"
+        }
         data-meet-view-max-tiles={maxGridTiles}
         data-meet-view-requested-max-tiles={requestedMaxTiles}
         data-meet-view-auto-tile-limit={autoGridTileLimit}

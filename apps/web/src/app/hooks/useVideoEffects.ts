@@ -7638,6 +7638,111 @@ const drawFaceFilter = (
     ctx.moveTo(noseX, noseY + faceWidth * 0.02);
     ctx.quadraticCurveTo(noseX + faceWidth * 0.05, noseY + faceWidth * 0.08, noseX + faceWidth * 0.1, noseY + faceWidth * 0.04);
     ctx.stroke();
+  } else if (filter === "hair-medium-beard") {
+    const hairTopY = headTopY - faceWidth * 0.05;
+    const hairlineY = headTopY + faceWidth * 0.2;
+    const beardTopY = lerp(noseLocal.y, mouthCenterLocal.y, 0.62);
+    const beardBottomY = faceBottomY + faceWidth * 0.16;
+    const sideburnTopY = headTopY + faceWidth * 0.22;
+    beginProbe({
+      left: headCenterX - faceWidth * 0.52,
+      right: headCenterX + faceWidth * 0.52,
+      top: hairTopY - faceWidth * 0.06,
+      bottom: beardBottomY + faceWidth * 0.04,
+    });
+    const hairGradient = ctx.createLinearGradient(
+      headCenterX - faceWidth * 0.48,
+      hairTopY,
+      headCenterX + faceWidth * 0.48,
+      beardBottomY,
+    );
+    hairGradient.addColorStop(0, "rgba(74,47,30,0.98)");
+    hairGradient.addColorStop(0.55, "rgba(45,31,23,0.96)");
+    hairGradient.addColorStop(1, "rgba(28,25,23,0.94)");
+    ctx.fillStyle = hairGradient;
+    ctx.beginPath();
+    ctx.ellipse(
+      headCenterX,
+      hairTopY + faceWidth * 0.2,
+      faceWidth * 0.46,
+      faceWidth * 0.26,
+      -0.02,
+      Math.PI,
+      Math.PI * 2,
+    );
+    ctx.lineTo(headCenterX + faceWidth * 0.34, hairlineY);
+    ctx.quadraticCurveTo(
+      headCenterX + faceWidth * 0.1,
+      hairlineY + faceWidth * 0.12,
+      headCenterX - faceWidth * 0.36,
+      hairlineY,
+    );
+    ctx.closePath();
+    ctx.fill();
+    [-1, 1].forEach((side) => {
+      ctx.beginPath();
+      ctx.moveTo(headCenterX + side * faceWidth * 0.36, sideburnTopY);
+      ctx.bezierCurveTo(
+        headCenterX + side * faceWidth * 0.5,
+        sideburnTopY + faceWidth * 0.14,
+        headCenterX + side * faceWidth * 0.4,
+        beardTopY + faceWidth * 0.18,
+        headCenterX + side * faceWidth * 0.26,
+        beardBottomY - faceWidth * 0.02,
+      );
+      ctx.lineTo(headCenterX + side * faceWidth * 0.16, beardTopY);
+      ctx.quadraticCurveTo(
+        headCenterX + side * faceWidth * 0.28,
+        sideburnTopY + faceWidth * 0.1,
+        headCenterX + side * faceWidth * 0.36,
+        sideburnTopY,
+      );
+      ctx.closePath();
+      ctx.fill();
+    });
+    ctx.beginPath();
+    ctx.moveTo(headCenterX - faceWidth * 0.28, beardTopY);
+    ctx.quadraticCurveTo(
+      headCenterX - faceWidth * 0.34,
+      faceBottomY,
+      headCenterX,
+      beardBottomY,
+    );
+    ctx.quadraticCurveTo(
+      headCenterX + faceWidth * 0.34,
+      faceBottomY,
+      headCenterX + faceWidth * 0.28,
+      beardTopY,
+    );
+    ctx.quadraticCurveTo(
+      headCenterX + faceWidth * 0.16,
+      beardTopY + faceWidth * 0.14,
+      headCenterX,
+      beardTopY + faceWidth * 0.1,
+    );
+    ctx.quadraticCurveTo(
+      headCenterX - faceWidth * 0.16,
+      beardTopY + faceWidth * 0.14,
+      headCenterX - faceWidth * 0.28,
+      beardTopY,
+    );
+    ctx.closePath();
+    ctx.fill();
+    ctx.globalAlpha = 0.34;
+    ctx.strokeStyle = "rgba(251,191,36,0.52)";
+    ctx.lineWidth = Math.max(1.5, faceWidth * 0.008);
+    [-0.22, 0, 0.22].forEach((offset) => {
+      ctx.beginPath();
+      ctx.moveTo(headCenterX + faceWidth * offset, hairTopY + faceWidth * 0.06);
+      ctx.quadraticCurveTo(
+        headCenterX + faceWidth * (offset * 0.4),
+        hairlineY + faceWidth * 0.08,
+        headCenterX + faceWidth * (offset * 1.2),
+        hairlineY + faceWidth * 0.02,
+      );
+      ctx.stroke();
+    });
+    ctx.globalAlpha = 1;
   } else if (filter === "long-wavy-hair") {
     const hairTopY = headTopY - faceWidth * 0.08;
     const hairBottomY = faceBottomY + faceWidth * 0.3;
