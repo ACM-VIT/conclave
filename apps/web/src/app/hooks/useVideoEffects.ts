@@ -708,6 +708,10 @@ type FaceFilterRenderStats = {
     centerY: number;
     faceAngle: number;
     faceWidth: number;
+    faceHeight?: number;
+    headTopY?: number;
+    chinY?: number;
+    noseY?: number;
     eyeAnchorBasis?: "iris" | "contour";
     eyeCenterDistance?: number;
     outerEyeDistance?: number;
@@ -5939,15 +5943,6 @@ const drawFaceFilter = (
   const eyeY = (leftEye.y + rightEye.y) / 2;
   const centerX = (leftEye.x + rightEye.x) / 2;
   const faceAngle = Math.atan2(rightEye.y - leftEye.y, rightEye.x - leftEye.x);
-  const anchor: NonNullable<FaceFilterRenderStats["anchor"]> = {
-    centerX: Math.round(centerX),
-    centerY: Math.round(eyeY),
-    faceAngle,
-    faceWidth: Math.round(faceWidth),
-    eyeAnchorBasis,
-    eyeCenterDistance: Math.round(eyeDistance),
-    outerEyeDistance: Math.round(outerEyeDistance || eyeDistance),
-  };
   const cos = Math.cos(faceAngle);
   const sin = Math.sin(faceAngle);
   const toFaceSpace = (point: { x: number; y: number }) => {
@@ -5976,6 +5971,31 @@ const drawFaceFilter = (
   const faceLocalTop = localFaceBounds?.minY ?? foreheadLocal.y;
   const faceLocalBottom =
     localFaceBounds?.maxY ?? chinLocal?.y ?? faceWidth * 0.56;
+  const rawHeadTopY = Math.min(foreheadLocal.y, faceLocalTop);
+  const rawChinY = Math.max(chinLocal?.y ?? faceLocalBottom, faceLocalBottom);
+  const canonicalHeadTopY = chinLocal
+    ? -clamp(chinLocal.y * 0.62, faceWidth * 0.32, faceWidth * 0.58)
+    : -faceWidth * 0.42;
+  const headTopY = clamp(
+    lerp(rawHeadTopY, canonicalHeadTopY, 0.55),
+    -faceWidth * 0.62,
+    -faceWidth * 0.26,
+  );
+  const faceBottomY = Math.max(rawChinY, faceWidth * 0.48);
+  const faceHeight = Math.max(faceWidth * 0.9, faceBottomY - headTopY);
+  const anchor: NonNullable<FaceFilterRenderStats["anchor"]> = {
+    centerX: Math.round(centerX),
+    centerY: Math.round(eyeY),
+    faceAngle,
+    faceWidth: Math.round(faceWidth),
+    faceHeight: Math.round(faceHeight),
+    headTopY: Math.round(headTopY),
+    chinY: Math.round(faceBottomY),
+    noseY: Math.round(noseLocal.y),
+    eyeAnchorBasis,
+    eyeCenterDistance: Math.round(eyeDistance),
+    outerEyeDistance: Math.round(outerEyeDistance || eyeDistance),
+  };
   let bounds: CanvasBounds | null = null;
 
   const beginProbe = (localBounds: {
@@ -6072,7 +6092,7 @@ const drawFaceFilter = (
     const lensW = faceWidth * 0.24;
     const lensH = faceWidth * 0.12;
     const lensY = (leftEyeLocal.y + rightEyeLocal.y) / 2 - lensH / 2;
-    const beretY = foreheadLocal.y - faceWidth * 0.12;
+    const beretY = headTopY - faceWidth * 0.06;
     beginProbe({
       left: -faceWidth * 0.5,
       right: faceWidth * 0.5,
@@ -6101,17 +6121,17 @@ const drawFaceFilter = (
     [leftEyeLocal, rightEyeLocal].forEach((eye, index) => {
       const direction = index === 0 ? -1 : 1;
       ctx.beginPath();
-      ctx.moveTo(eye.x - direction * lensW * 0.6, lensY + lensH * 0.5);
-      ctx.lineTo(eye.x - direction * lensW * 0.18, lensY);
-      ctx.lineTo(eye.x + direction * lensW * 0.44, lensY + lensH * 0.14);
-      ctx.lineTo(eye.x + direction * lensW * 0.38, lensY + lensH);
-      ctx.lineTo(eye.x - direction * lensW * 0.12, lensY + lensH * 0.9);
+      ctx.moveTo(eye.x + direction * lensW * 0.6, lensY + lensH * 0.5);
+      ctx.lineTo(eye.x + direction * lensW * 0.18, lensY);
+      ctx.lineTo(eye.x - direction * lensW * 0.44, lensY + lensH * 0.14);
+      ctx.lineTo(eye.x - direction * lensW * 0.38, lensY + lensH);
+      ctx.lineTo(eye.x + direction * lensW * 0.12, lensY + lensH * 0.9);
       ctx.closePath();
       ctx.fill();
       ctx.stroke();
     });
   } else if (filter === "crown") {
-    const baseY = foreheadLocal.y - faceWidth * 0.02;
+    const baseY = headTopY + faceWidth * 0.04;
     const crownW = faceWidth * 0.78;
     const crownH = faceWidth * 0.26;
     beginProbe({
@@ -6133,7 +6153,7 @@ const drawFaceFilter = (
     ctx.fill();
     ctx.stroke();
   } else if (filter === "halo") {
-    const haloY = foreheadLocal.y - faceWidth * 0.12;
+    const haloY = headTopY - faceWidth * 0.13;
     beginProbe({
       left: -faceWidth * 0.42,
       right: faceWidth * 0.42,
@@ -6154,7 +6174,7 @@ const drawFaceFilter = (
     );
     ctx.stroke();
   } else if (filter === "bunny-ears") {
-    const earBaseY = foreheadLocal.y - faceWidth * 0.02;
+    const earBaseY = headTopY + faceWidth * 0.06;
     const earH = faceWidth * 0.58;
     const earW = faceWidth * 0.16;
     beginProbe({
@@ -6187,7 +6207,7 @@ const drawFaceFilter = (
     const lensH = faceWidth * 0.12;
     const lensY = (leftEyeLocal.y + rightEyeLocal.y) / 2 - lensH / 2;
     const sunX = faceWidth * 0.35;
-    const sunY = foreheadLocal.y - faceWidth * 0.12;
+    const sunY = headTopY - faceWidth * 0.1;
     beginProbe({
       left: -faceWidth * 0.45,
       right: faceWidth * 0.52,
@@ -6258,7 +6278,7 @@ const drawFaceFilter = (
         ? Math.abs(lowerLipLocal.y - upperLipLocal.y) >
           Math.max(12, faceWidth * 0.08)
         : false;
-    const bulbY = foreheadLocal.y - faceWidth * 0.18;
+    const bulbY = headTopY - faceWidth * 0.16;
     beginProbe({
       left: -faceWidth * 0.18,
       right: faceWidth * 0.18,
@@ -6282,7 +6302,7 @@ const drawFaceFilter = (
       3,
     );
   } else if (filter === "alien") {
-    const shipY = foreheadLocal.y - faceWidth * 0.18;
+    const shipY = headTopY - faceWidth * 0.16;
     beginProbe({
       left: -faceWidth * 0.46,
       right: faceWidth * 0.46,
@@ -6318,7 +6338,7 @@ const drawFaceFilter = (
     const bounds = {
       left: Math.max(faceLocalLeft - faceWidth * 0.05, -faceWidth * 0.45),
       right: Math.min(faceLocalRight + faceWidth * 0.05, faceWidth * 0.45),
-      top: Math.max(faceLocalTop + faceWidth * 0.03, foreheadLocal.y),
+      top: Math.max(faceLocalTop + faceWidth * 0.03, headTopY + faceWidth * 0.02),
       bottom: Math.min(faceLocalBottom - faceWidth * 0.03, faceWidth * 0.56),
     };
     ctx.fillStyle = "rgba(216,180,254,0.9)";
@@ -6347,7 +6367,7 @@ const drawFaceFilter = (
     const localBounds = {
       left: Math.max(faceLocalLeft - faceWidth * 0.08, -faceWidth * 0.48),
       right: Math.min(faceLocalRight + faceWidth * 0.08, faceWidth * 0.48),
-      top: Math.max(faceLocalTop, foreheadLocal.y - faceWidth * 0.02),
+      top: Math.max(faceLocalTop, headTopY - faceWidth * 0.02),
       bottom: Math.min(faceLocalBottom - faceWidth * 0.06, faceWidth * 0.5),
     };
     beginProbe(localBounds);

@@ -3262,12 +3262,35 @@ const run = async () => {
           try { stats = raw ? JSON.parse(raw) : null; } catch {}
           const render = stats?.faceFilterRender;
           const anchor = render?.anchor;
+          const bounds = render?.bounds;
           const eyeCenterDistance = Number(anchor?.eyeCenterDistance || 0);
           const outerEyeDistance = Number(anchor?.outerEyeDistance || 0);
+          const faceWidth = Number(anchor?.faceWidth || 0);
+          const faceHeight = Number(anchor?.faceHeight || 0);
+          const headTopY = Number(anchor?.headTopY || 0);
+          const chinY = Number(anchor?.chinY || 0);
+          const noseY = Number(anchor?.noseY || 0);
           const anchorHealthy = Boolean(anchor) &&
             ["iris", "contour"].includes(anchor?.eyeAnchorBasis) &&
             eyeCenterDistance > 0 &&
             outerEyeDistance >= eyeCenterDistance;
+          const geometryHealthy =
+            faceWidth > 0 &&
+            faceHeight >= faceWidth * 0.85 &&
+            faceHeight <= faceWidth * 2.1 &&
+            headTopY <= -faceWidth * 0.2 &&
+            chinY >= faceWidth * 0.35 &&
+            noseY >= 0 &&
+            noseY <= chinY + faceWidth * 0.2;
+          const boundsCenterX = Number(bounds?.x || 0) + Number(bounds?.width || 0) / 2;
+          const boundsHealthy = !bounds || (
+            Number(bounds.width || 0) > 0 &&
+            Number(bounds.height || 0) > 0 &&
+            Math.abs(boundsCenterX - Number(anchor?.centerX || 0)) <= Math.max(80, faceWidth * 0.85) &&
+            Number(bounds.y || 0) >= Number(anchor?.centerY || 0) + headTopY - faceWidth * 0.78 &&
+            Number(bounds.y || 0) + Number(bounds.height || 0) <=
+              Number(anchor?.centerY || 0) + chinY + faceWidth * 0.42
+          );
           const outputHealthy = panel?.getAttribute("data-video-effects-status") === "running" &&
             panel?.getAttribute("data-video-effects-output-published") === "true" &&
             panel?.getAttribute("data-video-effects-preview-matches-output") === "true" &&
@@ -3279,7 +3302,9 @@ const run = async () => {
             render?.filter === ${JSON.stringify(expectedFilterId)} &&
             render?.drawn === true &&
             Number(render?.changedPixels || 0) > 0 &&
-            anchorHealthy;
+            anchorHealthy &&
+            geometryHealthy &&
+            boundsHealthy;
         })()`,
         30000,
       );
@@ -3305,6 +3330,16 @@ const run = async () => {
           state.panelAttrs?.["data-video-effects-preview-matches-output"] ===
           "true",
         taskFaceRuns: Number(state.panelStats?.taskFaceRuns ?? 0),
+        alignment: render?.anchor
+          ? {
+              faceWidth: render.anchor.faceWidth ?? null,
+              faceHeight: render.anchor.faceHeight ?? null,
+              headTopY: render.anchor.headTopY ?? null,
+              chinY: render.anchor.chinY ?? null,
+              noseY: render.anchor.noseY ?? null,
+              bounds: render.bounds ?? null,
+            }
+          : null,
         render,
       };
       faceProbes.push(faceProbe);
