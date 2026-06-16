@@ -19,8 +19,16 @@ const chromeHeadlessFlag =
 const baseUrl = process.env.CONCLAVE_WEB_URL ?? "http://localhost:3000";
 const roomId =
   process.env.CONCLAVE_ROOM_ID ?? `headless-effects-${Date.now()}`;
+const expectFaceLandmarks = /^(1|true|yes)$/i.test(
+  process.env.CONCLAVE_EXPECT_FACE ?? "",
+);
+const defaultFakeVideoWidth = expectFaceLandmarks ? 352 : 256;
+const defaultFakeVideoHeight = expectFaceLandmarks ? 198 : 144;
+const defaultFakeVideoFps = expectFaceLandmarks ? 8 : 6;
+const defaultFakeVideoDurationSeconds = expectFaceLandmarks ? 10 : 6;
 const fakeVideoDurationSeconds = Number(
-  process.env.CONCLAVE_FAKE_VIDEO_DURATION_SECONDS ?? 12,
+  process.env.CONCLAVE_FAKE_VIDEO_DURATION_SECONDS ??
+    defaultFakeVideoDurationSeconds,
 );
 const fakeVideoSourceImage =
   process.env.CONCLAVE_FAKE_VIDEO_SOURCE_IMAGE ?? null;
@@ -31,11 +39,11 @@ const parsePositiveInteger = (value, fallback) => {
 };
 const fakeVideoWidth = parsePositiveInteger(
   process.env.CONCLAVE_FAKE_VIDEO_WIDTH,
-  352,
+  defaultFakeVideoWidth,
 );
 const fakeVideoHeight = parsePositiveInteger(
   process.env.CONCLAVE_FAKE_VIDEO_HEIGHT,
-  198,
+  defaultFakeVideoHeight,
 );
 const expectedStableOutputScale = Math.min(
   1,
@@ -52,10 +60,7 @@ const expectedStableOutputHeight = Math.max(
 );
 const fakeVideoFps = parsePositiveInteger(
   process.env.CONCLAVE_FAKE_VIDEO_FPS,
-  8,
-);
-const expectFaceLandmarks = /^(1|true|yes)$/i.test(
-  process.env.CONCLAVE_EXPECT_FACE ?? "",
+  defaultFakeVideoFps,
 );
 const forceDarkVideoProbe = /^(1|true|yes)$/i.test(
   process.env.CONCLAVE_FORCE_DARK_VIDEO_PROBE ?? "",
@@ -178,7 +183,7 @@ const fakeVideoPath =
   );
 const maxReusableFakeVideoBytes = parsePositiveInteger(
   process.env.CONCLAVE_MAX_FAKE_VIDEO_BYTES,
-  12 * 1024 * 1024,
+  (expectFaceLandmarks ? 10 : 4) * 1024 * 1024,
 );
 const shouldCleanupLegacyFakeVideos = !/^(0|false|no)$/i.test(
   process.env.CONCLAVE_CLEANUP_LEGACY_FAKE_VIDEOS ?? "1",
