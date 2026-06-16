@@ -92,11 +92,18 @@ export type FaceFilterId =
   | "cat-eye-beret"
   | "cute-glasses"
   | "cyber-glasses"
+  | "cat-ear-headphones"
   | "cat-ears-glasses"
+  | "cat-on-head"
+  | "fuzzy-cat"
+  | "halloween-cat"
+  | "velvety-dog"
   | "bunny"
   | "working-bunny"
   | "bunny-ears"
   | "beach-day"
+  | "cute-astronaut"
+  | "pirate"
   | "party-hat"
   | "pilot-hat"
   | "trucker-hat"
@@ -106,6 +113,7 @@ export type FaceFilterId =
   | "noogler-hat"
   | "intern-hat"
   | "dia-de-los-muertos"
+  | "dia-de-los-muertos-flower"
   | "butterflies"
   | "cute-alien"
   | "alien";
@@ -221,11 +229,18 @@ const FACE_FILTER_IDS = new Set<FaceFilterId>([
   "cat-eye-beret",
   "cute-glasses",
   "cyber-glasses",
+  "cat-ear-headphones",
   "cat-ears-glasses",
+  "cat-on-head",
+  "fuzzy-cat",
+  "halloween-cat",
+  "velvety-dog",
   "bunny",
   "working-bunny",
   "bunny-ears",
   "beach-day",
+  "cute-astronaut",
+  "pirate",
   "party-hat",
   "pilot-hat",
   "trucker-hat",
@@ -235,6 +250,7 @@ const FACE_FILTER_IDS = new Set<FaceFilterId>([
   "noogler-hat",
   "intern-hat",
   "dia-de-los-muertos",
+  "dia-de-los-muertos-flower",
   "butterflies",
   "cute-alien",
   "alien",
@@ -854,6 +870,13 @@ export const FACE_FILTERS: VideoEffectOption<FaceFilterId>[] = [
     category: "Accessories",
   },
   {
+    id: "cat-ear-headphones",
+    label: "Cat ear headphones",
+    icon: HatGlasses,
+    tone: "#7c3aed",
+    category: "Accessories",
+  },
+  {
     id: "crown",
     label: "Gold crown",
     icon: Crown,
@@ -900,6 +923,48 @@ export const FACE_FILTERS: VideoEffectOption<FaceFilterId>[] = [
     label: "Cat ears and glasses",
     icon: VenetianMask,
     tone: "#ec4899",
+    category: "Costumes",
+  },
+  {
+    id: "cat-on-head",
+    label: "Cat on head",
+    icon: VenetianMask,
+    tone: "#f59e0b",
+    category: "Costumes",
+  },
+  {
+    id: "fuzzy-cat",
+    label: "Fuzzy cat",
+    icon: VenetianMask,
+    tone: "#a855f7",
+    category: "Costumes",
+  },
+  {
+    id: "halloween-cat",
+    label: "Halloween cat",
+    icon: VenetianMask,
+    tone: "#f97316",
+    category: "Costumes",
+  },
+  {
+    id: "velvety-dog",
+    label: "Velvety dog",
+    icon: VenetianMask,
+    tone: "#a16207",
+    category: "Costumes",
+  },
+  {
+    id: "cute-astronaut",
+    label: "Cute astronaut",
+    icon: Rocket,
+    tone: "#2563eb",
+    category: "Costumes",
+  },
+  {
+    id: "pirate",
+    label: "Pirate",
+    icon: HatGlasses,
+    tone: "#111827",
     category: "Costumes",
   },
   {
@@ -963,6 +1028,13 @@ export const FACE_FILTERS: VideoEffectOption<FaceFilterId>[] = [
     label: "Dia de los Muertos",
     icon: Crown,
     tone: "#c2410c",
+    category: "Costumes",
+  },
+  {
+    id: "dia-de-los-muertos-flower",
+    label: "Dia de los Muertos flower",
+    icon: Flower2,
+    tone: "#db2777",
     category: "Costumes",
   },
   {

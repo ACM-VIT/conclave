@@ -6720,6 +6720,67 @@ const drawFaceFilter = (
     ctx.moveTo(leftEyeLocal.x + lensW * 0.48, lensY + lensH * 0.45);
     ctx.lineTo(rightEyeLocal.x - lensW * 0.48, lensY + lensH * 0.45);
     ctx.stroke();
+  } else if (filter === "cat-ear-headphones") {
+    const earBaseY = headTopY + faceWidth * 0.03;
+    const earH = faceWidth * 0.28;
+    const earW = faceWidth * 0.18;
+    const cupY = eyewearLineY + faceWidth * 0.03;
+    const cupW = faceWidth * 0.14;
+    const cupH = faceWidth * 0.25;
+    beginProbe({
+      left: headCenterX - faceWidth * 0.56,
+      right: headCenterX + faceWidth * 0.56,
+      top: earBaseY - earH - faceWidth * 0.1,
+      bottom: cupY + cupH * 0.62,
+    });
+    [
+      { x: headCenterX - faceWidth * 0.26, rotate: -0.16 },
+      { x: headCenterX + faceWidth * 0.26, rotate: 0.16 },
+    ].forEach((ear) => {
+      ctx.save();
+      ctx.translate(ear.x, earBaseY - earH * 0.45);
+      ctx.rotate(ear.rotate);
+      ctx.fillStyle = "rgba(24,24,27,0.96)";
+      ctx.beginPath();
+      ctx.moveTo(-earW, earH * 0.48);
+      ctx.lineTo(0, -earH * 0.6);
+      ctx.lineTo(earW, earH * 0.48);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = "rgba(216,180,254,0.82)";
+      ctx.beginPath();
+      ctx.moveTo(-earW * 0.46, earH * 0.3);
+      ctx.lineTo(0, -earH * 0.28);
+      ctx.lineTo(earW * 0.46, earH * 0.3);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    });
+    ctx.strokeStyle = "rgba(24,24,27,0.96)";
+    ctx.lineWidth = Math.max(7, faceWidth * 0.055);
+    ctx.beginPath();
+    ctx.arc(
+      headCenterX,
+      earBaseY + faceWidth * 0.1,
+      faceWidth * 0.43,
+      Math.PI * 1.08,
+      Math.PI * 1.92,
+    );
+    ctx.stroke();
+    ctx.fillStyle = "rgba(124,58,237,0.95)";
+    [
+      { x: headCenterX - faceWidth * 0.43, side: -1 },
+      { x: headCenterX + faceWidth * 0.43, side: 1 },
+    ].forEach((cup) => {
+      ctx.beginPath();
+      ctx.ellipse(cup.x, cupY, cupW, cupH, cup.side * 0.05, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "rgba(24,24,27,0.88)";
+      ctx.beginPath();
+      ctx.ellipse(cup.x, cupY, cupW * 0.58, cupH * 0.72, cup.side * 0.05, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "rgba(124,58,237,0.95)";
+    });
   } else if (filter === "crown") {
     const baseY = headTopY + faceWidth * 0.04;
     const crownW = faceWidth * 0.78;
@@ -6948,6 +7009,41 @@ const drawFaceFilter = (
     ctx.beginPath();
     ctx.arc(headCenterX, headY + headH * 0.16, faceWidth * 0.07, 0.18, Math.PI - 0.18);
     ctx.stroke();
+  } else if (filter === "cute-astronaut") {
+    const helmetCenterY = lerp(headTopY, faceBottomY, 0.46);
+    const helmetW = faceWidth * 0.86;
+    const helmetH = faceWidth * 0.92;
+    const collarY = faceBottomY + faceWidth * 0.06;
+    beginProbe({
+      left: headCenterX - helmetW * 0.58,
+      right: headCenterX + helmetW * 0.58,
+      top: helmetCenterY - helmetH * 0.62,
+      bottom: collarY + faceWidth * 0.18,
+    });
+    ctx.fillStyle = "rgba(248,250,252,0.96)";
+    ctx.beginPath();
+    ctx.ellipse(headCenterX, helmetCenterY, helmetW * 0.5, helmetH * 0.5, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "rgba(147,197,253,0.24)";
+    ctx.strokeStyle = "rgba(37,99,235,0.92)";
+    ctx.lineWidth = Math.max(5, faceWidth * 0.032);
+    ctx.beginPath();
+    ctx.ellipse(headCenterX, helmetCenterY, helmetW * 0.39, helmetH * 0.38, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.strokeStyle = "rgba(255,255,255,0.72)";
+    ctx.lineWidth = Math.max(3, faceWidth * 0.018);
+    ctx.beginPath();
+    ctx.arc(headCenterX - helmetW * 0.08, helmetCenterY - helmetH * 0.08, helmetW * 0.18, Math.PI * 1.12, Math.PI * 1.58);
+    ctx.stroke();
+    ctx.fillStyle = "rgba(37,99,235,0.95)";
+    fillRoundRect(ctx, headCenterX - helmetW * 0.28, collarY - faceWidth * 0.04, helmetW * 0.56, faceWidth * 0.15, faceWidth * 0.04);
+    ctx.fillStyle = "rgba(248,250,252,0.96)";
+    fillRoundRect(ctx, headCenterX - helmetW * 0.18, collarY, helmetW * 0.36, faceWidth * 0.14, faceWidth * 0.035);
+    ctx.fillStyle = "rgba(239,68,68,0.95)";
+    ctx.beginPath();
+    ctx.arc(headCenterX + helmetW * 0.18, collarY + faceWidth * 0.03, faceWidth * 0.025, 0, Math.PI * 2);
+    ctx.fill();
   } else if (filter === "cat-ears-glasses") {
     const earBaseY = headTopY + faceWidth * 0.05;
     const earH = faceWidth * 0.3;
@@ -6997,6 +7093,205 @@ const drawFaceFilter = (
     ctx.moveTo(leftEyeLocal.x + lensW * 0.5, lensY + lensH * 0.5);
     ctx.lineTo(rightEyeLocal.x - lensW * 0.5, lensY + lensH * 0.5);
     ctx.stroke();
+  } else if (filter === "cat-on-head") {
+    const catY = headTopY - faceWidth * 0.2;
+    const catW = faceWidth * 0.48;
+    const catH = faceWidth * 0.28;
+    beginProbe({
+      left: headCenterX - catW * 0.62,
+      right: headCenterX + catW * 0.62,
+      top: catY - catH * 0.75,
+      bottom: catY + catH * 0.72,
+    });
+    ctx.fillStyle = "rgba(251,191,36,0.96)";
+    ctx.beginPath();
+    ctx.ellipse(headCenterX, catY, catW * 0.5, catH * 0.56, 0, 0, Math.PI * 2);
+    ctx.fill();
+    [
+      { x: headCenterX - catW * 0.28, rotate: -0.08 },
+      { x: headCenterX + catW * 0.28, rotate: 0.08 },
+    ].forEach((ear) => {
+      ctx.save();
+      ctx.translate(ear.x, catY - catH * 0.36);
+      ctx.rotate(ear.rotate);
+      ctx.fillStyle = "rgba(251,191,36,0.96)";
+      ctx.beginPath();
+      ctx.moveTo(-catW * 0.14, catH * 0.12);
+      ctx.lineTo(0, -catH * 0.46);
+      ctx.lineTo(catW * 0.14, catH * 0.12);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = "rgba(251,113,133,0.72)";
+      ctx.beginPath();
+      ctx.moveTo(-catW * 0.06, catH * 0.02);
+      ctx.lineTo(0, -catH * 0.24);
+      ctx.lineTo(catW * 0.06, catH * 0.02);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    });
+    ctx.fillStyle = "rgba(24,24,27,0.9)";
+    [-1, 1].forEach((side) => {
+      ctx.beginPath();
+      ctx.ellipse(headCenterX + side * catW * 0.16, catY - catH * 0.05, catW * 0.035, catH * 0.06, 0, 0, Math.PI * 2);
+      ctx.fill();
+    });
+    ctx.fillStyle = "rgba(244,114,182,0.9)";
+    ctx.beginPath();
+    ctx.moveTo(headCenterX, catY + catH * 0.1);
+    ctx.lineTo(headCenterX - catW * 0.045, catY + catH * 0.02);
+    ctx.lineTo(headCenterX + catW * 0.045, catY + catH * 0.02);
+    ctx.closePath();
+    ctx.fill();
+  } else if (filter === "fuzzy-cat") {
+    const earBaseY = headTopY + faceWidth * 0.04;
+    const earH = faceWidth * 0.32;
+    const earW = faceWidth * 0.2;
+    const noseX = lerp(noseLocal.x, mouthCenterLocal.x, 0.28);
+    const noseY = lerp(noseLocal.y, mouthCenterLocal.y, 0.34);
+    beginProbe({
+      left: headCenterX - faceWidth * 0.48,
+      right: headCenterX + faceWidth * 0.48,
+      top: earBaseY - earH - faceWidth * 0.1,
+      bottom: noseY + faceWidth * 0.22,
+    });
+    [
+      { x: headCenterX - faceWidth * 0.26, rotate: -0.2 },
+      { x: headCenterX + faceWidth * 0.26, rotate: 0.2 },
+    ].forEach((ear) => {
+      ctx.save();
+      ctx.translate(ear.x, earBaseY - earH * 0.42);
+      ctx.rotate(ear.rotate);
+      ctx.fillStyle = "rgba(168,85,247,0.94)";
+      ctx.beginPath();
+      ctx.moveTo(-earW, earH * 0.48);
+      ctx.lineTo(0, -earH * 0.6);
+      ctx.lineTo(earW, earH * 0.48);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = "rgba(253,244,255,0.82)";
+      ctx.beginPath();
+      ctx.moveTo(-earW * 0.45, earH * 0.28);
+      ctx.lineTo(0, -earH * 0.24);
+      ctx.lineTo(earW * 0.45, earH * 0.28);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    });
+    ctx.fillStyle = "rgba(168,85,247,0.38)";
+    fillRoundRect(ctx, headCenterX - faceWidth * 0.28, earBaseY - faceWidth * 0.07, faceWidth * 0.56, faceWidth * 0.11, faceWidth * 0.04);
+    ctx.fillStyle = "rgba(244,114,182,0.95)";
+    ctx.beginPath();
+    ctx.arc(noseX, noseY, faceWidth * 0.035, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = "rgba(253,244,255,0.9)";
+    ctx.lineWidth = Math.max(2, faceWidth * 0.014);
+    [-1, 1].forEach((side) => {
+      for (let whisker = -1; whisker <= 1; whisker += 1) {
+        const startY = noseY + whisker * faceWidth * 0.035;
+        ctx.beginPath();
+        ctx.moveTo(noseX + side * faceWidth * 0.045, startY);
+        ctx.lineTo(noseX + side * faceWidth * 0.34, startY + whisker * faceWidth * 0.02);
+        ctx.stroke();
+      }
+    });
+  } else if (filter === "halloween-cat") {
+    const earBaseY = headTopY + faceWidth * 0.04;
+    const earH = faceWidth * 0.34;
+    const hatBaseY = headTopY - faceWidth * 0.01;
+    const hatW = faceWidth * 0.46;
+    const hatH = faceWidth * 0.38;
+    const noseX = lerp(noseLocal.x, mouthCenterLocal.x, 0.28);
+    const noseY = lerp(noseLocal.y, mouthCenterLocal.y, 0.34);
+    beginProbe({
+      left: headCenterX - faceWidth * 0.48,
+      right: headCenterX + faceWidth * 0.48,
+      top: hatBaseY - hatH - faceWidth * 0.08,
+      bottom: noseY + faceWidth * 0.2,
+    });
+    [
+      { x: headCenterX - faceWidth * 0.28, rotate: -0.2 },
+      { x: headCenterX + faceWidth * 0.28, rotate: 0.2 },
+    ].forEach((ear) => {
+      ctx.save();
+      ctx.translate(ear.x, earBaseY - earH * 0.42);
+      ctx.rotate(ear.rotate);
+      ctx.fillStyle = "rgba(17,24,39,0.96)";
+      ctx.beginPath();
+      ctx.moveTo(-faceWidth * 0.18, earH * 0.48);
+      ctx.lineTo(0, -earH * 0.58);
+      ctx.lineTo(faceWidth * 0.18, earH * 0.48);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = "rgba(249,115,22,0.78)";
+      ctx.beginPath();
+      ctx.moveTo(-faceWidth * 0.08, earH * 0.25);
+      ctx.lineTo(0, -earH * 0.22);
+      ctx.lineTo(faceWidth * 0.08, earH * 0.25);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    });
+    ctx.fillStyle = "rgba(249,115,22,0.96)";
+    ctx.beginPath();
+    ctx.moveTo(headCenterX - hatW * 0.32, hatBaseY);
+    ctx.lineTo(headCenterX, hatBaseY - hatH);
+    ctx.lineTo(headCenterX + hatW * 0.32, hatBaseY);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = "rgba(17,24,39,0.96)";
+    ctx.beginPath();
+    ctx.ellipse(headCenterX, hatBaseY + faceWidth * 0.02, hatW * 0.52, faceWidth * 0.055, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "rgba(249,115,22,0.9)";
+    ctx.beginPath();
+    ctx.arc(noseX, noseY, faceWidth * 0.032, 0, Math.PI * 2);
+    ctx.fill();
+  } else if (filter === "velvety-dog") {
+    const earTopY = headTopY + faceWidth * 0.02;
+    const earH = faceWidth * 0.58;
+    const earW = faceWidth * 0.18;
+    const noseX = lerp(noseLocal.x, mouthCenterLocal.x, 0.24);
+    const noseY = lerp(noseLocal.y, mouthCenterLocal.y, 0.42);
+    beginProbe({
+      left: headCenterX - faceWidth * 0.54,
+      right: headCenterX + faceWidth * 0.54,
+      top: earTopY - faceWidth * 0.08,
+      bottom: noseY + faceWidth * 0.24,
+    });
+    [
+      { x: headCenterX - faceWidth * 0.34, rotate: 0.16 },
+      { x: headCenterX + faceWidth * 0.34, rotate: -0.16 },
+    ].forEach((ear) => {
+      ctx.save();
+      ctx.translate(ear.x, earTopY + earH * 0.34);
+      ctx.rotate(ear.rotate);
+      ctx.fillStyle = "rgba(120,53,15,0.94)";
+      ctx.beginPath();
+      ctx.ellipse(0, 0, earW, earH * 0.5, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "rgba(180,83,9,0.7)";
+      ctx.beginPath();
+      ctx.ellipse(0, earH * 0.08, earW * 0.52, earH * 0.34, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    });
+    ctx.fillStyle = "rgba(254,243,199,0.84)";
+    ctx.beginPath();
+    ctx.ellipse(noseX, noseY + faceWidth * 0.025, faceWidth * 0.16, faceWidth * 0.1, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "rgba(41,37,36,0.96)";
+    ctx.beginPath();
+    ctx.ellipse(noseX, noseY - faceWidth * 0.02, faceWidth * 0.055, faceWidth * 0.04, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = "rgba(41,37,36,0.78)";
+    ctx.lineWidth = Math.max(2, faceWidth * 0.012);
+    ctx.beginPath();
+    ctx.moveTo(noseX, noseY + faceWidth * 0.02);
+    ctx.quadraticCurveTo(noseX - faceWidth * 0.05, noseY + faceWidth * 0.08, noseX - faceWidth * 0.1, noseY + faceWidth * 0.04);
+    ctx.moveTo(noseX, noseY + faceWidth * 0.02);
+    ctx.quadraticCurveTo(noseX + faceWidth * 0.05, noseY + faceWidth * 0.08, noseX + faceWidth * 0.1, noseY + faceWidth * 0.04);
+    ctx.stroke();
   } else if (filter === "beach-day") {
     const lensW = clamp(eyewearLensW * 1.02, faceWidth * 0.19, faceWidth * 0.3);
     const lensH = clamp(eyewearLensH * 0.96, faceWidth * 0.1, faceWidth * 0.16);
@@ -7036,6 +7331,63 @@ const drawFaceFilter = (
     ctx.moveTo(leftEyeLocal.x + lensW * 0.48, lensY + lensH * 0.5);
     ctx.lineTo(rightEyeLocal.x - lensW * 0.48, lensY + lensH * 0.5);
     ctx.stroke();
+  } else if (filter === "pirate") {
+    const hatBaseY = headTopY + faceWidth * 0.02;
+    const hatW = faceWidth * 0.84;
+    const hatH = faceWidth * 0.34;
+    const patchEye = rightEyeLocal;
+    const patchW = clamp(eyewearLensW * 0.92, faceWidth * 0.18, faceWidth * 0.28);
+    const patchH = clamp(eyewearLensH * 0.96, faceWidth * 0.1, faceWidth * 0.18);
+    const patchY = eyewearLineY - patchH / 2;
+    const beardY = lowerLipLocal
+      ? lerp(lowerLipLocal.y, faceBottomY, 0.44)
+      : mouthCenterLocal.y + faceWidth * 0.12;
+    beginProbe({
+      left: Math.min(headCenterX - hatW * 0.56, patchEye.x - patchW * 0.7),
+      right: Math.max(headCenterX + hatW * 0.56, patchEye.x + patchW * 0.7),
+      top: hatBaseY - hatH - faceWidth * 0.08,
+      bottom: beardY + faceWidth * 0.14,
+    });
+    ctx.fillStyle = "rgba(17,24,39,0.98)";
+    ctx.beginPath();
+    ctx.moveTo(headCenterX - hatW * 0.5, hatBaseY);
+    ctx.quadraticCurveTo(headCenterX - hatW * 0.28, hatBaseY - hatH * 0.78, headCenterX, hatBaseY - hatH * 0.58);
+    ctx.quadraticCurveTo(headCenterX + hatW * 0.28, hatBaseY - hatH * 0.78, headCenterX + hatW * 0.5, hatBaseY);
+    ctx.quadraticCurveTo(headCenterX + hatW * 0.22, hatBaseY + faceWidth * 0.09, headCenterX, hatBaseY + faceWidth * 0.02);
+    ctx.quadraticCurveTo(headCenterX - hatW * 0.22, hatBaseY + faceWidth * 0.09, headCenterX - hatW * 0.5, hatBaseY);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = "rgba(248,250,252,0.94)";
+    ctx.beginPath();
+    ctx.arc(headCenterX, hatBaseY - hatH * 0.28, faceWidth * 0.048, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = "rgba(248,250,252,0.88)";
+    ctx.lineWidth = Math.max(3, faceWidth * 0.016);
+    [-1, 1].forEach((side) => {
+      ctx.beginPath();
+      ctx.moveTo(headCenterX, hatBaseY - hatH * 0.2);
+      ctx.lineTo(headCenterX + side * faceWidth * 0.12, hatBaseY - hatH * 0.04);
+      ctx.moveTo(headCenterX + side * faceWidth * 0.02, hatBaseY - hatH * 0.04);
+      ctx.lineTo(headCenterX + side * faceWidth * 0.14, hatBaseY - hatH * 0.2);
+      ctx.stroke();
+    });
+    ctx.fillStyle = "rgba(15,23,42,0.96)";
+    ctx.beginPath();
+    ctx.ellipse(patchEye.x, patchY + patchH * 0.5, patchW * 0.5, patchH * 0.56, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = "rgba(15,23,42,0.92)";
+    ctx.lineWidth = Math.max(4, faceWidth * 0.025);
+    ctx.beginPath();
+    ctx.moveTo(headCenterX - faceWidth * 0.32, eyewearLineY - faceWidth * 0.12);
+    ctx.lineTo(patchEye.x + patchW * 0.18, patchY + patchH * 0.26);
+    ctx.lineTo(headCenterX + faceWidth * 0.36, eyewearLineY - faceWidth * 0.1);
+    ctx.stroke();
+    ctx.fillStyle = "rgba(55,65,81,0.88)";
+    ctx.beginPath();
+    ctx.moveTo(mouthCenterLocal.x - faceWidth * 0.18, beardY - faceWidth * 0.04);
+    ctx.quadraticCurveTo(mouthCenterLocal.x, beardY + faceWidth * 0.16, mouthCenterLocal.x + faceWidth * 0.18, beardY - faceWidth * 0.04);
+    ctx.quadraticCurveTo(mouthCenterLocal.x, beardY + faceWidth * 0.04, mouthCenterLocal.x - faceWidth * 0.18, beardY - faceWidth * 0.04);
+    ctx.fill();
   } else if (filter === "party-hat") {
     const hatBaseY = headTopY + faceWidth * 0.03;
     const hatW = faceWidth * 0.48;
@@ -7426,6 +7778,82 @@ const drawFaceFilter = (
       ctx.arc(cheekX + side * faceWidth * 0.035, cheekY - faceWidth * 0.018, faceWidth * 0.016, 0, Math.PI * 2);
       ctx.fill();
       ctx.fillStyle = "rgba(249,115,22,0.82)";
+    });
+  } else if (filter === "dia-de-los-muertos-flower") {
+    const crownY = headTopY + faceWidth * 0.02;
+    const flowerRadius = faceWidth * 0.065;
+    const eyePetalR = clamp(eyewearLensW * 0.34, faceWidth * 0.07, faceWidth * 0.11);
+    const noseX = lerp(noseLocal.x, mouthCenterLocal.x, 0.18);
+    const noseY = lerp(noseLocal.y, mouthCenterLocal.y, 0.32);
+    beginProbe({
+      left: Math.min(headCenterX - faceWidth * 0.48, leftEyeLocal.x - eyePetalR * 1.55),
+      right: Math.max(headCenterX + faceWidth * 0.48, rightEyeLocal.x + eyePetalR * 1.55),
+      top: crownY - faceWidth * 0.18,
+      bottom: mouthCenterLocal.y + faceWidth * 0.2,
+    });
+    [
+      { x: headCenterX - faceWidth * 0.28, y: crownY, color: "#f97316" },
+      { x: headCenterX - faceWidth * 0.12, y: crownY - faceWidth * 0.06, color: "#db2777" },
+      { x: headCenterX + faceWidth * 0.05, y: crownY - faceWidth * 0.07, color: "#facc15" },
+      { x: headCenterX + faceWidth * 0.23, y: crownY - faceWidth * 0.02, color: "#be123c" },
+    ].forEach((flower) => {
+      ctx.fillStyle = flower.color;
+      for (let petal = 0; petal < 8; petal += 1) {
+        const angle = (Math.PI * 2 * petal) / 8;
+        ctx.beginPath();
+        ctx.ellipse(
+          flower.x + Math.cos(angle) * flowerRadius * 0.62,
+          flower.y + Math.sin(angle) * flowerRadius * 0.62,
+          flowerRadius * 0.46,
+          flowerRadius * 0.26,
+          angle,
+          0,
+          Math.PI * 2,
+        );
+        ctx.fill();
+      }
+      ctx.fillStyle = "rgba(88,28,135,0.9)";
+      ctx.beginPath();
+      ctx.arc(flower.x, flower.y, flowerRadius * 0.24, 0, Math.PI * 2);
+      ctx.fill();
+    });
+    [leftEyeLocal, rightEyeLocal].forEach((eye, eyeIndex) => {
+      ctx.strokeStyle = eyeIndex === 0 ? "rgba(219,39,119,0.88)" : "rgba(234,88,12,0.88)";
+      ctx.lineWidth = Math.max(2, faceWidth * 0.012);
+      for (let petal = 0; petal < 10; petal += 1) {
+        const angle = (Math.PI * 2 * petal) / 10;
+        ctx.beginPath();
+        ctx.ellipse(
+          eye.x + Math.cos(angle) * eyePetalR * 0.62,
+          eye.y + Math.sin(angle) * eyePetalR * 0.5,
+          eyePetalR * 0.2,
+          eyePetalR * 0.32,
+          angle,
+          0,
+          Math.PI * 2,
+        );
+        ctx.stroke();
+      }
+    });
+    ctx.fillStyle = "rgba(88,28,135,0.9)";
+    ctx.beginPath();
+    ctx.moveTo(noseX, noseY + faceWidth * 0.052);
+    ctx.bezierCurveTo(noseX - faceWidth * 0.062, noseY, noseX - faceWidth * 0.034, noseY - faceWidth * 0.064, noseX, noseY - faceWidth * 0.026);
+    ctx.bezierCurveTo(noseX + faceWidth * 0.034, noseY - faceWidth * 0.064, noseX + faceWidth * 0.062, noseY, noseX, noseY + faceWidth * 0.052);
+    ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle = "rgba(219,39,119,0.86)";
+    ctx.lineWidth = Math.max(2, faceWidth * 0.012);
+    [-1, 1].forEach((side) => {
+      const cheekX = mouthCenterLocal.x + side * faceWidth * 0.2;
+      const cheekY = lerp(noseLocal.y, mouthCenterLocal.y, 0.7);
+      ctx.beginPath();
+      ctx.arc(cheekX, cheekY, faceWidth * 0.035, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(mouthCenterLocal.x + side * faceWidth * 0.06, mouthCenterLocal.y + faceWidth * 0.04);
+      ctx.lineTo(mouthCenterLocal.x + side * faceWidth * 0.18, mouthCenterLocal.y + faceWidth * 0.08);
+      ctx.stroke();
     });
   } else if (filter === "mustache") {
     const x = mouthCenterLocal.x;
