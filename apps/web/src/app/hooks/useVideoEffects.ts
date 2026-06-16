@@ -4553,13 +4553,17 @@ const applyLowLightTransition = (
 const getPoint = (
   landmark: NormalizedLandmark | undefined,
   crop: CropRect,
-  width: number,
-  height: number,
+  sourceWidth: number,
+  sourceHeight: number,
+  outputWidth: number,
+  outputHeight: number,
 ) => {
   if (!landmark) return null;
+  const sourceX = landmark.x * sourceWidth;
+  const sourceY = landmark.y * sourceHeight;
   return {
-    x: ((landmark.x * width - crop.sx) / crop.sw) * width,
-    y: ((landmark.y * height - crop.sy) / crop.sh) * height,
+    x: ((sourceX - crop.sx) / crop.sw) * outputWidth,
+    y: ((sourceY - crop.sy) / crop.sh) * outputHeight,
   };
 };
 
@@ -5681,6 +5685,8 @@ const drawFaceFilter = (
   filter: FaceFilterId,
   landmarks: NormalizedLandmarkList | null,
   crop: CropRect,
+  sourceWidth: number,
+  sourceHeight: number,
   width: number,
   height: number,
   probeRender: boolean,
@@ -5693,13 +5699,15 @@ const drawFaceFilter = (
     return createFaceFilterRenderStats(filter, landmarkCount, "no landmarks");
   }
 
-  const leftEye = getPoint(landmarks[33], crop, width, height);
-  const rightEye = getPoint(landmarks[263], crop, width, height);
-  const nose = getPoint(landmarks[1], crop, width, height);
-  const upperLip = getPoint(landmarks[13], crop, width, height);
-  const lowerLip = getPoint(landmarks[14], crop, width, height);
-  const forehead = getPoint(landmarks[10], crop, width, height);
-  const chin = getPoint(landmarks[152], crop, width, height);
+  const mapLandmark = (landmark: NormalizedLandmark | undefined) =>
+    getPoint(landmark, crop, sourceWidth, sourceHeight, width, height);
+  const leftEye = mapLandmark(landmarks[33]);
+  const rightEye = mapLandmark(landmarks[263]);
+  const nose = mapLandmark(landmarks[1]);
+  const upperLip = mapLandmark(landmarks[13]);
+  const lowerLip = mapLandmark(landmarks[14]);
+  const forehead = mapLandmark(landmarks[10]);
+  const chin = mapLandmark(landmarks[152]);
   if (!leftEye || !rightEye || !nose || !forehead) {
     return createFaceFilterRenderStats(
       filter,
@@ -6319,6 +6327,8 @@ const renderFrame = (
     effects.filter,
     landmarks,
     crop,
+    sourceWidth,
+    sourceHeight,
     width,
     height,
     probeFaceRender,
