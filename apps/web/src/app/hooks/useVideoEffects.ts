@@ -59,9 +59,9 @@ const MAX_SEGMENTATION_MODEL_INPUT_HEIGHT = 360;
 const MAX_FACE_MODEL_INPUT_WIDTH = 640;
 const MAX_FACE_MODEL_INPUT_HEIGHT = 360;
 const INITIAL_SEGMENTATION_INTERVAL_MS = 66;
-const INITIAL_FACE_INTERVAL_MS = 84;
 const MIN_SEGMENTATION_INTERVAL_MS = 66;
 const MIN_FACE_INTERVAL_MS = 84;
+const MIN_FACE_FILTER_INTERVAL_MS = 50;
 const MAX_SEGMENTATION_INTERVAL_MS = 180;
 const MAX_FACE_INTERVAL_MS = 260;
 const FACE_NO_RESULT_BACKOFF_AFTER_RESULTS = 6;
@@ -116,6 +116,10 @@ const FACE_LANDMARK_SMOOTHING_ALPHA = 0.42;
 const FACE_LANDMARK_FAST_SMOOTHING_ALPHA = 0.84;
 const FACE_LANDMARK_ADAPTIVE_MOTION_START = 0.004;
 const FACE_LANDMARK_ADAPTIVE_MOTION_END = 0.03;
+const FACE_FILTER_LANDMARK_SMOOTHING_ALPHA = 0.72;
+const FACE_FILTER_LANDMARK_FAST_SMOOTHING_ALPHA = 0.94;
+const FACE_FILTER_LANDMARK_ADAPTIVE_MOTION_START = 0.0015;
+const FACE_FILTER_LANDMARK_ADAPTIVE_MOTION_END = 0.012;
 const MASK_TEMPORAL_ALPHA = 0.72;
 const MASK_CONFIDENCE_FLOOR = 0.18;
 const MASK_CONFIDENCE_CEILING = 0.74;
@@ -1775,13 +1779,15 @@ const getAdaptedModelInterval = (
   state: VideoEffectsAdaptationState,
   kind: ModelDispatchKind,
   baseIntervalMs: number,
+  minIntervalOverrideMs?: number,
 ) => {
   const tier = getCurrentAdaptationTier(state);
   const { modelIntervalScale } = VIDEO_EFFECTS_ADAPTATION_TIER_CONFIG[tier];
   const minIntervalMs =
-    kind === "segmentation"
+    minIntervalOverrideMs ??
+    (kind === "segmentation"
       ? MIN_SEGMENTATION_INTERVAL_MS
-      : MIN_FACE_INTERVAL_MS;
+      : MIN_FACE_INTERVAL_MS);
   const maxIntervalMs =
     kind === "segmentation"
       ? MAX_SEGMENTATION_INTERVAL_MS
@@ -1928,6 +1934,9 @@ const isFramingOnlyEffect = (effects: VideoEffectsState) =>
   !effects.studioLighting &&
   !effects.studioLook;
 
+const getFaceModelMinIntervalMs = (effects: VideoEffectsState) =>
+  effects.filter !== "none" ? MIN_FACE_FILTER_INTERVAL_MS : MIN_FACE_INTERVAL_MS;
+
 const getNormalizedLandmarkCenter = (landmarks: NormalizedLandmarkList) => {
   let x = 0;
   let y = 0;
@@ -1988,6 +1997,9 @@ const smoothFaceLandmarks = (
   previous: NormalizedLandmarkList | null,
   next: NormalizedLandmarkList | null,
   alpha = FACE_LANDMARK_SMOOTHING_ALPHA,
+  fastAlpha = FACE_LANDMARK_FAST_SMOOTHING_ALPHA,
+  motionStart = FACE_LANDMARK_ADAPTIVE_MOTION_START,
+  motionEnd = FACE_LANDMARK_ADAPTIVE_MOTION_END,
 ): FaceLandmarkSmoothingResult => {
   if (!next?.length) {
     return {
@@ -2040,17 +2052,16 @@ const smoothFaceLandmarks = (
   const motionScore = Math.max(centerJump, sizeJump * 0.65);
   const motionProgress = smoothStep(
     clamp(
-      (motionScore - FACE_LANDMARK_ADAPTIVE_MOTION_START) /
-        (FACE_LANDMARK_ADAPTIVE_MOTION_END -
-          FACE_LANDMARK_ADAPTIVE_MOTION_START),
+      (motionScore - motionStart) /
+        Math.max(0.0001, motionEnd - motionStart),
       0,
       1,
     ),
   );
   const adaptiveAlpha = clamp(
-    lerp(alpha, FACE_LANDMARK_FAST_SMOOTHING_ALPHA, motionProgress),
+    lerp(alpha, fastAlpha, motionProgress),
     alpha,
-    FACE_LANDMARK_FAST_SMOOTHING_ALPHA,
+    fastAlpha,
   );
 
   return {
@@ -6856,7 +6867,7 @@ export function useVideoEffects({
     let lastSegmentationAt = 0;
     let lastFaceAt = 0;
     let segmentationIntervalMs = INITIAL_SEGMENTATION_INTERVAL_MS;
-    let faceIntervalMs = INITIAL_FACE_INTERVAL_MS;
+    let faceIntervalMs = getFaceModelMinIntervalMs(effectsRef.current);
     let tasksSegmenterFailed = false;
     let tasksFaceLandmarkerFailed = false;
     let legacySegmentationFailed = false;
@@ -6865,8 +6876,12 @@ export function useVideoEffects({
     let latestSegmentationMaskAt = 0;
     let latestFaceLandmarks: NormalizedLandmarkList | null = null;
     let latestFaceLandmarksAt = 0;
+    let latestFaceFilterLandmarks: NormalizedLandmarkList | null = null;
+    let latestFaceFilterLandmarksAt = 0;
     let latestFaceResultAt = 0;
     let latestFaceLandmarkSmoothingStats =
+      createFaceLandmarkSmoothingStats("missing-result", null, null, 1);
+    let latestFaceFilterLandmarkSmoothingStats =
       createFaceLandmarkSmoothingStats("missing-result", null, null, 1);
     let consecutiveFaceNoResultCount = 0;
     let latestFaceNoResultBackoffActive = false;
@@ -9805,13 +9820,28 @@ export function useVideoEffects({
               latestFaceLandmarks,
               detectedLandmarks,
             );
+            const smoothedFaceFilterLandmarks = smoothFaceLandmarks(
+              latestFaceFilterLandmarks,
+              detectedLandmarks,
+              FACE_FILTER_LANDMARK_SMOOTHING_ALPHA,
+              FACE_FILTER_LANDMARK_FAST_SMOOTHING_ALPHA,
+              FACE_FILTER_LANDMARK_ADAPTIVE_MOTION_START,
+              FACE_FILTER_LANDMARK_ADAPTIVE_MOTION_END,
+            );
             latestFaceLandmarks = smoothedLandmarks.landmarks;
             latestFaceLandmarkSmoothingStats = smoothedLandmarks.stats;
             latestFaceLandmarksAt = latestFaceLandmarks ? performance.now() : 0;
+            latestFaceFilterLandmarks = smoothedFaceFilterLandmarks.landmarks;
+            latestFaceFilterLandmarkSmoothingStats =
+              smoothedFaceFilterLandmarks.stats;
+            latestFaceFilterLandmarksAt = latestFaceFilterLandmarks
+              ? performance.now()
+              : 0;
             logVideoEffects(debugId, "legacy_face_results", {
               faceCount: results.multiFaceLandmarks?.length ?? 0,
               landmarkCount: latestFaceLandmarks?.length ?? 0,
               smoothing: latestFaceLandmarkSmoothingStats,
+              filterSmoothing: latestFaceFilterLandmarkSmoothingStats,
             });
           });
           await instance.initialize();
@@ -10691,9 +10721,23 @@ export function useVideoEffects({
           latestFaceLandmarks,
           result.landmarks,
         );
+        const smoothedFaceFilterLandmarks = smoothFaceLandmarks(
+          latestFaceFilterLandmarks,
+          result.landmarks,
+          FACE_FILTER_LANDMARK_SMOOTHING_ALPHA,
+          FACE_FILTER_LANDMARK_FAST_SMOOTHING_ALPHA,
+          FACE_FILTER_LANDMARK_ADAPTIVE_MOTION_START,
+          FACE_FILTER_LANDMARK_ADAPTIVE_MOTION_END,
+        );
         latestFaceLandmarks = smoothedLandmarks.landmarks;
         latestFaceLandmarkSmoothingStats = smoothedLandmarks.stats;
         latestFaceLandmarksAt = latestFaceLandmarks ? performance.now() : 0;
+        latestFaceFilterLandmarks = smoothedFaceFilterLandmarks.landmarks;
+        latestFaceFilterLandmarkSmoothingStats =
+          smoothedFaceFilterLandmarks.stats;
+        latestFaceFilterLandmarksAt = latestFaceFilterLandmarks
+          ? performance.now()
+          : 0;
         logVideoEffects(debugId, "face_processor_worker_results", {
           sequence: result.sequence,
           processingConfigId: result.processingConfigId,
@@ -10705,6 +10749,7 @@ export function useVideoEffects({
           inputSource: result.inputSource,
           processingMs: Number(result.processingMs.toFixed(2)),
           smoothing: latestFaceLandmarkSmoothingStats,
+          filterSmoothing: latestFaceFilterLandmarkSmoothingStats,
         });
         return true;
       } catch (err) {
@@ -10784,9 +10829,23 @@ export function useVideoEffects({
             latestFaceLandmarks,
             detectedLandmarks,
           );
+          const smoothedFaceFilterLandmarks = smoothFaceLandmarks(
+            latestFaceFilterLandmarks,
+            detectedLandmarks,
+            FACE_FILTER_LANDMARK_SMOOTHING_ALPHA,
+            FACE_FILTER_LANDMARK_FAST_SMOOTHING_ALPHA,
+            FACE_FILTER_LANDMARK_ADAPTIVE_MOTION_START,
+            FACE_FILTER_LANDMARK_ADAPTIVE_MOTION_END,
+          );
           latestFaceLandmarks = smoothedLandmarks.landmarks;
           latestFaceLandmarkSmoothingStats = smoothedLandmarks.stats;
           latestFaceLandmarksAt = latestFaceLandmarks
+            ? performance.now()
+            : 0;
+          latestFaceFilterLandmarks = smoothedFaceFilterLandmarks.landmarks;
+          latestFaceFilterLandmarkSmoothingStats =
+            smoothedFaceFilterLandmarks.stats;
+          latestFaceFilterLandmarksAt = latestFaceFilterLandmarks
             ? performance.now()
             : 0;
           latestFaceProcessingMs = Math.max(
@@ -10799,6 +10858,7 @@ export function useVideoEffects({
             blendshapeCount: results.faceBlendshapes?.length ?? 0,
             matrixCount: results.facialTransformationMatrixes?.length ?? 0,
             smoothing: latestFaceLandmarkSmoothingStats,
+            filterSmoothing: latestFaceFilterLandmarkSmoothingStats,
           });
           return;
         } catch (err) {
@@ -10829,9 +10889,11 @@ export function useVideoEffects({
     };
 
     const sendFaceFrame = (now: number, frameSource: FrameSource) => {
-      const effectiveFaceIntervalMs = staticCropActive
-        ? Math.max(faceIntervalMs, STATIC_CROP_FACE_REVALIDATION_INTERVAL_MS)
-        : faceIntervalMs;
+      const faceFilterActive = effectsRef.current.filter !== "none";
+      const effectiveFaceIntervalMs =
+        staticCropActive && !faceFilterActive
+          ? Math.max(faceIntervalMs, STATIC_CROP_FACE_REVALIDATION_INTERVAL_MS)
+          : faceIntervalMs;
       if (
         faceMeshInFlight ||
         (tasksFaceLandmarkerFailed && legacyFaceMeshFailed) ||
@@ -10900,10 +10962,12 @@ export function useVideoEffects({
               getAdaptationRecordOptions(adaptationSampleNow),
             );
           }
+          const faceMinIntervalMs = getFaceModelMinIntervalMs(effectsRef.current);
           const adaptedFaceIntervalMs = getAdaptedModelInterval(
             adaptationState,
             "face",
-            skipWarmupAdaptation ? INITIAL_FACE_INTERVAL_MS : elapsed * 1.35,
+            skipWarmupAdaptation ? faceMinIntervalMs : elapsed * 1.35,
+            faceMinIntervalMs,
           );
           const shouldBackoffNoFace =
             !skipWarmupAdaptation &&
@@ -11637,10 +11701,12 @@ export function useVideoEffects({
           );
         }
         if (needsFace) {
+          const faceMinIntervalMs = getFaceModelMinIntervalMs(currentEffects);
           faceIntervalMs = getAdaptedModelInterval(
             adaptationState,
             "face",
-            INITIAL_FACE_INTERVAL_MS,
+            faceMinIntervalMs,
+            faceMinIntervalMs,
           );
         }
       }
@@ -11786,7 +11852,11 @@ export function useVideoEffects({
       } else {
         latestFaceLandmarks = null;
         latestFaceLandmarksAt = 0;
+        latestFaceFilterLandmarks = null;
+        latestFaceFilterLandmarksAt = 0;
         latestFaceLandmarkSmoothingStats =
+          createFaceLandmarkSmoothingStats("missing-result", null, null, 1);
+        latestFaceFilterLandmarkSmoothingStats =
           createFaceLandmarkSmoothingStats("missing-result", null, null, 1);
         consecutiveFaceNoResultCount = 0;
         latestFaceNoResultBackoffActive = false;
@@ -12018,7 +12088,9 @@ export function useVideoEffects({
         canvas.width,
         canvas.height,
         currentEffects,
-        latestFaceLandmarks,
+        currentEffects.filter !== "none"
+          ? latestFaceFilterLandmarks ?? latestFaceLandmarks
+          : latestFaceLandmarks,
         latestSegmentationMask,
         backgroundImage,
         { canvas: backgroundBlurCanvas, ctx: backgroundBlurCtx },
@@ -12294,6 +12366,10 @@ export function useVideoEffects({
           latestFaceLandmarksAt > 0
             ? Math.round(statsNow - latestFaceLandmarksAt)
             : null;
+        const latestFaceFilterLandmarksAgeMs =
+          latestFaceFilterLandmarksAt > 0
+            ? Math.round(statsNow - latestFaceFilterLandmarksAt)
+            : null;
         const latestFaceResultAgeMs =
           latestFaceResultAt > 0
             ? Math.round(statsNow - latestFaceResultAt)
@@ -12527,9 +12603,10 @@ export function useVideoEffects({
             },
           },
         };
-        const effectiveFaceIntervalMs = staticCropActive
-          ? Math.max(faceIntervalMs, STATIC_CROP_FACE_REVALIDATION_INTERVAL_MS)
-          : faceIntervalMs;
+        const effectiveFaceIntervalMs =
+          staticCropActive && currentEffects.filter === "none"
+            ? Math.max(faceIntervalMs, STATIC_CROP_FACE_REVALIDATION_INTERVAL_MS)
+            : faceIntervalMs;
         const adaptationStats = getVideoEffectsAdaptationStats(
           adaptationState,
           {
@@ -12568,12 +12645,14 @@ export function useVideoEffects({
           needsFace,
           hasSegmentationMask: Boolean(latestSegmentationMask),
           faceLandmarkCount: latestFaceLandmarks?.length ?? 0,
+          faceFilterLandmarkCount: latestFaceFilterLandmarks?.length ?? 0,
           faceDetection: {
             consecutiveNoResultCount: consecutiveFaceNoResultCount,
             noResultBackoffActive: latestFaceNoResultBackoffActive,
             noResultBackoffReason: latestFaceNoResultBackoffReason,
             noResultBackoffIntervalMs: latestFaceNoResultBackoffIntervalMs,
             landmarkSmoothing: latestFaceLandmarkSmoothingStats,
+            filterLandmarkSmoothing: latestFaceFilterLandmarkSmoothingStats,
           },
           faceFilterRender: latestFaceFilterRenderStats,
           backgroundRender: latestBackgroundRenderStats,
@@ -12587,6 +12666,7 @@ export function useVideoEffects({
           framePipeline,
           latestSegmentationMaskAgeMs,
           latestFaceLandmarksAgeMs,
+          latestFaceFilterLandmarksAgeMs,
           latestFaceResultAgeMs,
           nextModelDispatchKind,
           outputTrackPublished,
@@ -12811,12 +12891,14 @@ export function useVideoEffects({
           taskFaceRuns,
           closedSegmentationMasks,
           faceLandmarkCount: latestFaceLandmarks?.length ?? 0,
+          faceFilterLandmarkCount: latestFaceFilterLandmarks?.length ?? 0,
           faceDetection: {
             consecutiveNoResultCount: consecutiveFaceNoResultCount,
             noResultBackoffActive: latestFaceNoResultBackoffActive,
             noResultBackoffReason: latestFaceNoResultBackoffReason,
             noResultBackoffIntervalMs: latestFaceNoResultBackoffIntervalMs,
             landmarkSmoothing: latestFaceLandmarkSmoothingStats,
+            filterLandmarkSmoothing: latestFaceFilterLandmarkSmoothingStats,
           },
           faceFilterRender: latestFaceFilterRenderStats,
           backgroundRender: latestBackgroundRenderStats,
@@ -12839,6 +12921,7 @@ export function useVideoEffects({
           effects: getEffectsDebugSnapshot(currentEffects),
           latestSegmentationMaskAgeMs,
           latestFaceLandmarksAgeMs,
+          latestFaceFilterLandmarksAgeMs,
           latestOutputFrameVisible,
           blackOutputFrameCount,
           intervals: {

@@ -867,6 +867,7 @@ export default function VideoEffectsPanel({
       taskFaceRuns: debugStats.taskFaceRuns,
       closedSegmentationMasks: debugStats.closedSegmentationMasks,
       faceLandmarkCount: debugStats.faceLandmarkCount,
+      faceFilterLandmarkCount: debugStats.faceFilterLandmarkCount,
       faceDetection: debugStats.faceDetection,
       faceFilterRender: debugStats.faceFilterRender,
       backgroundRender: debugStats.backgroundRender,
@@ -882,6 +883,8 @@ export default function VideoEffectsPanel({
       effects: debugStats.effects,
       latestSegmentationMaskAgeMs: debugStats.latestSegmentationMaskAgeMs,
       latestFaceLandmarksAgeMs: debugStats.latestFaceLandmarksAgeMs,
+      latestFaceFilterLandmarksAgeMs:
+        debugStats.latestFaceFilterLandmarksAgeMs,
       latestOutputFrameVisible: debugStats.latestOutputFrameVisible,
       blackOutputFrameCount: debugStats.blackOutputFrameCount,
       failures: debugStats.failures,

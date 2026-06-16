@@ -3367,10 +3367,18 @@ const run = async () => {
           const mouthCenterX = Number(anchor?.mouthCenterX || 0);
           const mouthCenterY = Number(anchor?.mouthCenterY || 0);
           const mouthWidth = Number(anchor?.mouthWidth || 0);
+          const faceIntervalMs = Number(stats?.intervals?.faceIntervalMs || 999);
+          const landmarkSmoothingAlpha = Number(stats?.faceDetection?.landmarkSmoothing?.alpha || 0);
+          const filterLandmarkSmoothingAlpha = Number(stats?.faceDetection?.filterLandmarkSmoothing?.alpha || 0);
           const anchorHealthy = Boolean(anchor) &&
             ["iris", "contour"].includes(anchor?.eyeAnchorBasis) &&
             eyeCenterDistance > 0 &&
             outerEyeDistance >= eyeCenterDistance;
+          const filterTrackingHealthy =
+            Number(stats?.faceFilterLandmarkCount || 0) > 0 &&
+            filterLandmarkSmoothingAlpha >= 0.7 &&
+            filterLandmarkSmoothingAlpha >= landmarkSmoothingAlpha &&
+            faceIntervalMs <= 70;
           const geometryHealthy =
             faceWidth > 0 &&
             faceHeight >= faceWidth * 0.85 &&
@@ -3406,6 +3414,7 @@ const run = async () => {
             render?.drawn === true &&
             Number(render?.changedPixels || 0) > 0 &&
             anchorHealthy &&
+            filterTrackingHealthy &&
             geometryHealthy &&
             boundsHealthy;
         })()`,
@@ -3444,6 +3453,14 @@ const run = async () => {
               mouthCenterX: render.anchor.mouthCenterX ?? null,
               mouthCenterY: render.anchor.mouthCenterY ?? null,
               mouthWidth: render.anchor.mouthWidth ?? null,
+              faceIntervalMs:
+                typeof state.panelStats?.intervals?.faceIntervalMs === "number"
+                  ? state.panelStats.intervals.faceIntervalMs
+                  : null,
+              landmarkSmoothing:
+                state.panelStats?.faceDetection?.landmarkSmoothing ?? null,
+              filterLandmarkSmoothing:
+                state.panelStats?.faceDetection?.filterLandmarkSmoothing ?? null,
               bounds: render.bounds ?? null,
             }
           : null,
@@ -4267,6 +4284,11 @@ const run = async () => {
         ? faceProbes.filter(
             (probe) =>
               probe.faceLandmarkCount <= 0 ||
+              Number(probe.alignment?.filterLandmarkSmoothing?.alpha ?? 0) <
+                0.7 ||
+              Number(probe.alignment?.filterLandmarkSmoothing?.alpha ?? 0) <
+                Number(probe.alignment?.landmarkSmoothing?.alpha ?? 0) ||
+              Number(probe.alignment?.faceIntervalMs ?? 999) > 70 ||
               probe.previewMatchesOutput !== true ||
               probe.render?.filter !== probe.expectedFilterId ||
               probe.render?.drawn !== true ||
@@ -5175,6 +5197,11 @@ const run = async () => {
       ? faceProbes.filter(
           (probe) =>
             probe.faceLandmarkCount <= 0 ||
+            Number(probe.alignment?.filterLandmarkSmoothing?.alpha ?? 0) <
+              0.7 ||
+            Number(probe.alignment?.filterLandmarkSmoothing?.alpha ?? 0) <
+              Number(probe.alignment?.landmarkSmoothing?.alpha ?? 0) ||
+            Number(probe.alignment?.faceIntervalMs ?? 999) > 70 ||
             probe.previewMatchesOutput !== true ||
             probe.render?.filter !== probe.expectedFilterId ||
             probe.render?.drawn !== true ||
