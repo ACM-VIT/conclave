@@ -23,6 +23,7 @@ import {
   getFaceFilterEffectGraph,
   hasActiveVideoEffects,
   isAnimatedBackgroundEffect,
+  requiresMeetVideoPipeFaceFilter,
   type AppearanceStyleId,
   type BackgroundEffectId,
   type FaceFilterEffectGraph,
@@ -751,11 +752,15 @@ type FaceFilterRenderStats = {
 };
 type FaceFilterEffectGraphStats = {
   meetGraphId: string;
+  meetEffectIdNumber?: number;
   renderMode: FaceFilterEffectGraph["renderMode"];
   assetProfile: FaceFilterEffectGraph["assetProfile"];
   dependencies: FaceFilterEffectGraph["dependencies"];
   requiresFaceLandmarks: boolean;
   requiresSegmentation: boolean;
+  requiresMeetVideoPipe?: boolean;
+  bundleAssets?: FaceFilterEffectGraph["bundleAssets"];
+  thumbnailAsset?: string;
   modelIntervalMs: number;
   liveBundleVersion: FaceFilterEffectGraph["liveBundleVersion"];
 };
@@ -3046,11 +3051,15 @@ const getFaceFilterEffectGraphStats = (
   if (!graph) return null;
   return {
     meetGraphId: graph.meetGraphId,
+    meetEffectIdNumber: graph.meetEffectIdNumber,
     renderMode: graph.renderMode,
     assetProfile: graph.assetProfile,
     dependencies: graph.dependencies,
     requiresFaceLandmarks: graph.requiresFaceLandmarks,
     requiresSegmentation: graph.requiresSegmentation,
+    requiresMeetVideoPipe: graph.requiresMeetVideoPipe,
+    bundleAssets: graph.bundleAssets,
+    thumbnailAsset: graph.thumbnailAsset,
     modelIntervalMs: graph.modelIntervalMs,
     liveBundleVersion: graph.liveBundleVersion,
   };
@@ -6657,6 +6666,13 @@ const drawFaceFilter = (
   const landmarkCount = landmarks?.length ?? 0;
   if (filter === "none") {
     return createFaceFilterRenderStats(filter, landmarkCount, "no filter");
+  }
+  if (requiresMeetVideoPipeFaceFilter(filter)) {
+    return createFaceFilterRenderStats(
+      filter,
+      landmarkCount,
+      "requires Meet VideoPipe runtime",
+    );
   }
   if (!landmarks) {
     return createFaceFilterRenderStats(filter, landmarkCount, "no landmarks");

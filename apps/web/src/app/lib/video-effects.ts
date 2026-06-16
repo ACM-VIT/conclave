@@ -188,6 +188,7 @@ export type FaceFilterEffectRenderMode =
 
 export interface FaceFilterEffectGraph {
   meetGraphId: string;
+  meetEffectIdNumber?: number;
   renderMode: FaceFilterEffectRenderMode;
   assetProfile:
     | "effect-js-wasm-xass"
@@ -202,6 +203,9 @@ export interface FaceFilterEffectGraph {
   )[];
   requiresFaceLandmarks: boolean;
   requiresSegmentation: boolean;
+  requiresMeetVideoPipe?: boolean;
+  bundleAssets?: readonly string[];
+  thumbnailAsset?: string;
   modelIntervalMs: number;
   liveBundleVersion: "929503300";
 }
@@ -352,8 +356,16 @@ const createFaceGraph = (
   renderMode: FaceFilterEffectRenderMode,
   assetProfile: FaceFilterEffectGraph["assetProfile"] = "effect-js-wasm-xass",
   modelIntervalMs = 200,
+  exactMeetPackage?: Pick<
+    FaceFilterEffectGraph,
+    | "bundleAssets"
+    | "meetEffectIdNumber"
+    | "requiresMeetVideoPipe"
+    | "thumbnailAsset"
+  >,
 ): FaceFilterEffectGraph => ({
   meetGraphId,
+  meetEffectIdNumber: exactMeetPackage?.meetEffectIdNumber,
   renderMode,
   assetProfile,
   dependencies:
@@ -362,9 +374,33 @@ const createFaceGraph = (
       : ["face_detection", "face_landmarks", "face_pose"],
   requiresFaceLandmarks: true,
   requiresSegmentation: false,
+  requiresMeetVideoPipe: exactMeetPackage?.requiresMeetVideoPipe,
+  bundleAssets: exactMeetPackage?.bundleAssets,
+  thumbnailAsset: exactMeetPackage?.thumbnailAsset,
   modelIntervalMs,
   liveBundleVersion: "929503300",
 });
+
+const MEET_MAKEUP_SHARED_ASSETS = [
+  "config_2020_07_15_dynamic.xass",
+  "config_2022_09_14_static.xass",
+  "facedetector-front.f16.tflite",
+  "facemesh-ultralite.f16.tflite",
+] as const;
+
+const createMeetMakeupGraph = (
+  meetGraphId: string,
+  meetEffectIdNumber: number,
+  modelAsset: string,
+  thumbnailAsset: string,
+  assetProfile: FaceFilterEffectGraph["assetProfile"] = "makeup-tflite",
+) =>
+  createFaceGraph(meetGraphId, "face-makeup", assetProfile, 200, {
+    meetEffectIdNumber,
+    requiresMeetVideoPipe: true,
+    bundleAssets: [...MEET_MAKEUP_SHARED_ASSETS, modelAsset],
+    thumbnailAsset,
+  });
 
 export const FACE_FILTER_EFFECT_GRAPHS: Partial<
   Record<FaceFilterId, FaceFilterEffectGraph>
@@ -373,36 +409,51 @@ export const FACE_FILTER_EFFECT_GRAPHS: Partial<
     "butterflies_and_makeup",
     "face-makeup",
     "effect-js-wasm-xass",
+    200,
+    {
+      requiresMeetVideoPipe: true,
+      bundleAssets: [
+        "butterflies_and_makeup_c4a1419ce57f13a3e906b0f694f8dcf3.zip",
+        "butterflies_and_makeup_77af64d21673c2fb22d4b25a5d2753f4.wasm.data",
+        "butterflies_and_makeup_b1245861fd65e20658a2597be8d2e577.metadata.jspb",
+      ],
+    },
   ),
-  "makeup-barely-there": createFaceGraph(
+  "makeup-barely-there": createMeetMakeupGraph(
     "makeup_barely_there_v2",
-    "face-makeup",
-    "makeup-tflite",
+    650,
+    "barely_there_251027_run_1_epoch_59.tflite",
+    "makeup_barely_there_v2_ea7e7074027e8ee185b0c102b304df52.png",
   ),
-  "makeup-simply-radiant": createFaceGraph(
+  "makeup-simply-radiant": createMeetMakeupGraph(
     "makeup_simply_radiant_v2",
-    "face-makeup",
-    "makeup-tflite",
+    655,
+    "simply_radiant_20251027_run_3_epoch_59.tflite",
+    "makeup_simply_radiant_v2_df864f51edcd1bfc4a5b651d78209896.png",
   ),
-  "makeup-dewy-fresh": createFaceGraph(
+  "makeup-dewy-fresh": createMeetMakeupGraph(
     "makeup_dewy_fresh_v2",
-    "face-makeup",
-    "makeup-tflite",
+    653,
+    "dewy_fresh_251027_run_2_epoch_59.tflite",
+    "makeup_dewy_fresh_v2_c9d938ffc6389ea30244d1212a161129.png",
   ),
-  "makeup-warm-glow": createFaceGraph(
+  "makeup-warm-glow": createMeetMakeupGraph(
     "makeup_warm_glow_v2",
-    "face-makeup",
-    "makeup-tflite",
+    656,
+    "warm_glow_251027_run_4_epoch_59.tflite",
+    "makeup_warm_glow_v2_ac84b9949982ba83246ab80a8f1d885e.png",
   ),
-  "makeup-coral-hint": createFaceGraph(
+  "makeup-coral-hint": createMeetMakeupGraph(
     "makeup_coral_hint_v2",
-    "face-makeup",
-    "makeup-tflite",
+    652,
+    "coral_hint_251027_run_1_epoch_59.tflite",
+    "makeup_coral_hint_v2_7be78597c16adc923e7925866221084d.png",
   ),
-  "makeup-berry-blush": createFaceGraph(
+  "makeup-berry-blush": createMeetMakeupGraph(
     "makeup_berry_blush_v2",
-    "face-makeup",
-    "makeup-tflite",
+    651,
+    "berry_blush_251027_run_1_epoch_59.tflite",
+    "makeup_berry_blush_v2_a687bf1f45f0e2dd5fbe015135fb7f7f.png",
   ),
   "makeup-cat-eye": createFaceGraph(
     "makeup_cat_eye",
@@ -434,24 +485,31 @@ export const FACE_FILTER_EFFECT_GRAPHS: Partial<
     "face-makeup",
     "makeup-tflite",
   ),
-  "makeup-signature-statement": createFaceGraph(
+  "makeup-signature-statement": createMeetMakeupGraph(
     "makeup_signature_statement_v2",
-    "face-makeup",
-    "makeup-tflite",
+    654,
+    "signature_statement_251027_run_1_epoch_59.tflite",
+    "makeup_signature_statement_v2_0964dbe8faa432c9133c35dee0263394.png",
   ),
-  "makeup-goth-chic": createFaceGraph(
+  "makeup-goth-chic": createMeetMakeupGraph(
     "fun_makeup_goth_chic",
-    "face-makeup",
+    633,
+    "goth_chic_250624_run_9_epoch_299.tflite",
+    "fun_makeup_goth_chic_83d0335290fc9757fa930313b5a35c3f.png",
     "fun-makeup-tflite",
   ),
-  "makeup-mummy": createFaceGraph(
+  "makeup-mummy": createMeetMakeupGraph(
     "fun_makeup_mummy",
-    "face-makeup",
+    636,
+    "mummy_v4s.tflite",
+    "fun_makeup_mummy_e9874106a0845fb839d00c1e1252a26c.png",
     "fun-makeup-tflite",
   ),
-  "makeup-zombie": createFaceGraph(
+  "makeup-zombie": createMeetMakeupGraph(
     "fun_makeup_zombie",
-    "face-makeup",
+    635,
+    "risen_zombie_v2s.tflite",
+    "fun_makeup_zombie_0df67af1eb3d3c3c9cdbe3b86badd0da.png",
     "fun-makeup-tflite",
   ),
   "beach-day": createFaceGraph("beach_day_v2", "face-prop"),
@@ -487,6 +545,32 @@ export const FACE_FILTER_EFFECT_GRAPHS: Partial<
 export const getFaceFilterEffectGraph = (
   filter: FaceFilterId,
 ): FaceFilterEffectGraph | null => FACE_FILTER_EFFECT_GRAPHS[filter] ?? null;
+
+const MEET_VIDEOPIPE_ONLY_FACE_FILTER_IDS = new Set<FaceFilterId>([
+  "butterflies",
+  "makeup-barely-there",
+  "makeup-simply-radiant",
+  "makeup-dewy-fresh",
+  "makeup-warm-glow",
+  "makeup-coral-hint",
+  "makeup-berry-blush",
+  "makeup-cat-eye",
+  "makeup-dramatic-eye",
+  "makeup-lip-gloss",
+  "makeup-pink-dewy",
+  "makeup-red-lipstick",
+  "makeup-rosy-pink",
+  "makeup-signature-statement",
+  "makeup-goth-chic",
+  "makeup-mummy",
+  "makeup-zombie",
+]);
+
+export const requiresMeetVideoPipeFaceFilter = (
+  filter: FaceFilterId,
+): boolean =>
+  MEET_VIDEOPIPE_ONLY_FACE_FILTER_IDS.has(filter) ||
+  getFaceFilterEffectGraph(filter)?.requiresMeetVideoPipe === true;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null;
@@ -566,6 +650,23 @@ const HIDDEN_FACE_FILTER_IDS = new Set<FaceFilterId>([
   "dia-de-los-muertos-flower",
   "mustache",
   "thin-mustache",
+  "butterflies",
+  "makeup-barely-there",
+  "makeup-simply-radiant",
+  "makeup-dewy-fresh",
+  "makeup-warm-glow",
+  "makeup-coral-hint",
+  "makeup-berry-blush",
+  "makeup-cat-eye",
+  "makeup-dramatic-eye",
+  "makeup-lip-gloss",
+  "makeup-pink-dewy",
+  "makeup-red-lipstick",
+  "makeup-rosy-pink",
+  "makeup-signature-statement",
+  "makeup-goth-chic",
+  "makeup-mummy",
+  "makeup-zombie",
 ]);
 
 const isSelectableFaceFilterId = (value: unknown): value is FaceFilterId =>
