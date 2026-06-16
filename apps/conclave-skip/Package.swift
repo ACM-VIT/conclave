@@ -15,6 +15,7 @@ let package = Package(
         .package(url: "https://source.skip.tools/skip-fuse.git", from: "1.0.0"),
         .package(url: "https://source.skip.tools/skip-model.git", from: "1.0.0"),
         .package(url: "https://source.skip.tools/skip-kit.git", from: "0.6.0"),
+        .package(url: "https://github.com/google/GoogleSignIn-iOS", from: "9.0.0"),
         .package(url: "https://github.com/socketio/socket.io-client-swift.git", from: "16.1.1"),
         .package(url: "https://github.com/VLprojects/mediasoup-client-swift", from: "0.9.0")
     ],
@@ -25,6 +26,7 @@ let package = Package(
             .product(name: "SkipFuse", package: "skip-fuse"),
             .product(name: "SkipModel", package: "skip-model"),
             .product(name: "SkipKit", package: "skip-kit"),
+            .product(name: "GoogleSignIn", package: "GoogleSignIn-iOS", condition: .when(platforms: [.iOS])),
             .product(name: "SocketIO", package: "socket.io-client-swift", condition: .when(platforms: [.iOS])),
             .product(name: "Mediasoup", package: "mediasoup-client-swift", condition: .when(platforms: [.iOS]))
         ], resources: [.process("Resources")], plugins: [.plugin(name: "skipstone", package: "skip")]),

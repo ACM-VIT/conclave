@@ -7,6 +7,7 @@ build:
       contents:
         - 'implementation("io.socket:socket.io-client:2.1.1")'
         - 'implementation("com.mediasfu:mediasoup-client:1.0.1")'
+        - 'implementation("com.google.android.gms:play-services-auth:21.2.0")'
         - 'implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")'
         - 'implementation("androidx.compose.material:material-icons-extended")'
         # CameraX powers the live front-camera preview on the pre-join screen

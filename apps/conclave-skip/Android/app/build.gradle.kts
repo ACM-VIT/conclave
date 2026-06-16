@@ -1,5 +1,11 @@
 import java.util.Properties
 
+val googleSignInWebClientId = providers.gradleProperty("GOOGLE_SIGN_IN_WEB_CLIENT_ID")
+    .orElse(providers.environmentVariable("GOOGLE_SIGN_IN_WEB_CLIENT_ID"))
+    .orElse(providers.environmentVariable("GOOGLE_WEB_CLIENT_ID"))
+    .orElse(providers.environmentVariable("GOOGLE_CLIENT_ID"))
+    .getOrElse("")
+
 plugins {
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
@@ -35,6 +41,7 @@ android {
     defaultConfig {
         minSdk = libs.versions.android.sdk.min.get().toInt()
         targetSdk = libs.versions.android.sdk.compile.get().toInt()
+        manifestPlaceholders["GOOGLE_SIGN_IN_WEB_CLIENT_ID"] = googleSignInWebClientId
         // skip.tools.skip-build-plugin will automatically use Skip.env properties for:
         // applicationId = ANDROID_APPLICATION_ID ?? PRODUCT_BUNDLE_IDENTIFIER
         // versionCode = CURRENT_PROJECT_VERSION

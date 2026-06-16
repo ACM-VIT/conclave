@@ -7,6 +7,14 @@ import SkipFuse
 import ReplayKit
 #endif
 
+struct ActiveAppBinaryMessage: Identifiable {
+    let id = UUID()
+    let appId: String
+    let data: Data
+    let clientId: Int?
+    let sequence: Int
+}
+
 @MainActor
 @Observable
 final class MeetingState {
@@ -83,6 +91,10 @@ final class MeetingState {
     var activeAppId: String?
     var isAppsLocked: Bool = false
     var isAppsActionInFlight: Bool = false
+    var latestAppYjsUpdate: ActiveAppBinaryMessage?
+    var latestAppAwarenessUpdate: ActiveAppBinaryMessage?
+    var appYjsUpdateSequence: Int = 0
+    var appAwarenessUpdateSequence: Int = 0
 
     // Active States
     var activeScreenShareUserId: String?

@@ -179,6 +179,11 @@ export interface VideoEffectOption<T extends string> {
   category?: string;
 }
 
+export const MEET_VIDEOPIPE_RUNTIME_RELEASE = "929503300";
+
+export const isMeetVideoPipeRuntimeEnabled = (): boolean =>
+  process.env.NEXT_PUBLIC_CONCLAVE_ENABLE_MEET_VIDEOPIPE !== "0";
+
 export type FaceFilterEffectRenderMode =
   | "face-makeup"
   | "face-prop"
@@ -402,6 +407,20 @@ const createMeetMakeupGraph = (
     thumbnailAsset,
   });
 
+const createMeetFaceGraph = (
+  meetGraphId: string,
+  meetEffectIdNumber: number,
+  renderMode: FaceFilterEffectRenderMode,
+  thumbnailAsset: string,
+  bundleAssets?: readonly string[],
+) =>
+  createFaceGraph(meetGraphId, renderMode, "effect-js-wasm-xass", 200, {
+    meetEffectIdNumber,
+    requiresMeetVideoPipe: true,
+    bundleAssets,
+    thumbnailAsset,
+  });
+
 export const FACE_FILTER_EFFECT_GRAPHS: Partial<
   Record<FaceFilterId, FaceFilterEffectGraph>
 > = {
@@ -411,12 +430,14 @@ export const FACE_FILTER_EFFECT_GRAPHS: Partial<
     "effect-js-wasm-xass",
     200,
     {
+      meetEffectIdNumber: 565,
       requiresMeetVideoPipe: true,
       bundleAssets: [
         "butterflies_and_makeup_c4a1419ce57f13a3e906b0f694f8dcf3.zip",
         "butterflies_and_makeup_77af64d21673c2fb22d4b25a5d2753f4.wasm.data",
         "butterflies_and_makeup_b1245861fd65e20658a2597be8d2e577.metadata.jspb",
       ],
+      thumbnailAsset: "butterflies_and_makeup_5a9c770599973fd5846d70cf4c6052b4.png",
     },
   ),
   "makeup-barely-there": createMeetMakeupGraph(
@@ -459,31 +480,93 @@ export const FACE_FILTER_EFFECT_GRAPHS: Partial<
     "makeup_cat_eye",
     "face-makeup",
     "makeup-tflite",
+    200,
+    {
+      meetEffectIdNumber: 604,
+      requiresMeetVideoPipe: true,
+      bundleAssets: [
+        ...MEET_MAKEUP_SHARED_ASSETS,
+        "cat_eye_250721_run_41_epoch_299.tflite",
+      ],
+      thumbnailAsset: "makeup_cat_eye_6f650ac9e71829e856c4d684baf42f0c.png",
+    },
   ),
   "makeup-dramatic-eye": createFaceGraph(
     "makeup_dramatic_eye",
     "face-makeup",
     "makeup-tflite",
+    200,
+    {
+      meetEffectIdNumber: 629,
+      requiresMeetVideoPipe: true,
+      bundleAssets: [
+        ...MEET_MAKEUP_SHARED_ASSETS,
+        "dramatic_eye_250721_run_14_epoch_299.tflite",
+      ],
+      thumbnailAsset:
+        "makeup_dramatic_eye_784873fb8896602f4dd1d41267ba30ed.png",
+    },
   ),
   "makeup-lip-gloss": createFaceGraph(
     "makeup_lip_gloss",
     "face-makeup",
     "makeup-tflite",
+    200,
+    {
+      meetEffectIdNumber: 628,
+      requiresMeetVideoPipe: true,
+      bundleAssets: [
+        ...MEET_MAKEUP_SHARED_ASSETS,
+        "lip_gloss_250721_run_32_epoch_299.tflite",
+      ],
+      thumbnailAsset: "makeup_lip_gloss_bc56f88d47ce9086598a24931708bc74.png",
+    },
   ),
   "makeup-pink-dewy": createFaceGraph(
     "makeup_pink_dewy",
     "face-makeup",
     "makeup-tflite",
+    200,
+    {
+      meetEffectIdNumber: 606,
+      requiresMeetVideoPipe: true,
+      bundleAssets: [
+        ...MEET_MAKEUP_SHARED_ASSETS,
+        "pink_dewy_250624_run_2_epoch_299.tflite",
+      ],
+      thumbnailAsset: "makeup_pink_dewy_f19a8a00bf6e150a5876614dfca7f2f6.png",
+    },
   ),
   "makeup-red-lipstick": createFaceGraph(
     "makeup_red_lipstick",
     "face-makeup",
     "makeup-tflite",
+    200,
+    {
+      meetEffectIdNumber: 593,
+      requiresMeetVideoPipe: true,
+      bundleAssets: [
+        ...MEET_MAKEUP_SHARED_ASSETS,
+        "red_lipstick_250721_run_43_epoch_299.tflite",
+      ],
+      thumbnailAsset:
+        "makeup_red_lipstick_a8e7ed43161b83c5b1e95906d36ef7fa.png",
+    },
   ),
   "makeup-rosy-pink": createFaceGraph(
     "makeup_rosy_pink",
     "face-makeup",
     "makeup-tflite",
+    200,
+    {
+      meetEffectIdNumber: 627,
+      requiresMeetVideoPipe: true,
+      bundleAssets: [
+        ...MEET_MAKEUP_SHARED_ASSETS,
+        "rosy_pink_250721_run_16_epoch_299.tflite",
+      ],
+      thumbnailAsset: "makeup_rosy_pink_f97e69441dbe0e5711fb2c2294703189.png",
+    },
   ),
   "makeup-signature-statement": createMeetMakeupGraph(
     "makeup_signature_statement_v2",
@@ -512,34 +595,84 @@ export const FACE_FILTER_EFFECT_GRAPHS: Partial<
     "fun_makeup_zombie_0df67af1eb3d3c3c9cdbe3b86badd0da.png",
     "fun-makeup-tflite",
   ),
-  "beach-day": createFaceGraph("beach_day_v2", "face-prop"),
-  aviator: createFaceGraph(
+  "beach-day": createMeetFaceGraph(
+    "beach_day_v2",
+    445,
+    "face-prop",
+    "beach_day_v2_4288ff378ab723a6f289a2616184ae04.png",
+  ),
+  aviator: createMeetFaceGraph(
     "aviator_glasses_and_mustache_v2",
+    520,
     "face-prop",
+    "aviator_glasses_and_mustache_v2_fd3b2895c2ea96665eb2df184cc8524d.png",
   ),
-  "cat-eye-beret": createFaceGraph(
+  "cat-eye-beret": createMeetFaceGraph(
     "beret_and_cat_eye_glasses_v2",
+    564,
     "face-prop",
+    "beret_and_cat_eye_glasses_v2_22a4822de24dc7049e1ee78d7aaeddc8.png",
   ),
-  "cat-ear-headphones": createFaceGraph(
+  "cat-ear-headphones": createMeetFaceGraph(
     "cat_ear_headphones",
+    552,
     "face-prop",
+    "cat_ear_headphones_1ac9a811cf18abc4a04cad39e8de6192.png",
   ),
-  bunny: createFaceGraph("bunny_v2", "face-costume"),
-  "working-bunny": createFaceGraph("working_bunny_js_v2", "face-costume"),
-  "cute-alien": createFaceGraph("cute_alien", "face-costume"),
-  "cat-ears-glasses": createFaceGraph(
-    "cat_ears_and_glasses",
+  bunny: createMeetFaceGraph(
+    "bunny_v2",
+    504,
     "face-costume",
+    "bunny_v2_228a8ce2df8c9f18fcaaa731f4ca9437.png",
   ),
-  "hair-medium-beard": createFaceGraph(
+  "working-bunny": createMeetFaceGraph(
+    "working_bunny_js_v2",
+    322,
+    "face-costume",
+    "working_bunny_js_v2_6a4cb09051b7e8793597fa8530b16533.png",
+  ),
+  "cute-alien": createMeetFaceGraph(
+    "cute_alien",
+    588,
+    "face-costume",
+    "cute_alien_150945fb2cae3359b98d8c35d841c019.png",
+  ),
+  "cat-ears-glasses": createMeetFaceGraph(
+    "cat_ears_and_glasses",
+    560,
+    "face-costume",
+    "cat_ears_and_glasses_33fb90ca39d651cc6a87b927db5c2b6d.png",
+  ),
+  "hair-medium-beard": createMeetFaceGraph(
     "hair_medium_beard",
+    658,
     "face-hair",
+    "hair_medium_beard_c849f407efaa95e342c711c6de72ffb6.png",
   ),
-  "long-wavy-hair": createFaceGraph("long_wavy_hair", "face-hair"),
-  "cute-astronaut": createFaceGraph("cute_astronaut_v2", "face-costume"),
-  pirate: createFaceGraph("pirate_v2", "face-costume"),
-  alien: createFaceGraph("alien_spaceship_js_v2", "face-lighting"),
+  "long-wavy-hair": createMeetFaceGraph(
+    "long_wavy_hair",
+    693,
+    "face-hair",
+    "long_wavy_hair_14e0e61bf57ccd06fe641a48357ad085.png",
+  ),
+  "cute-astronaut": createMeetFaceGraph(
+    "cute_astronaut_v2",
+    559,
+    "face-costume",
+    "cute_astronaut_v2_826f7f71c44e370ad7032c4532b4eb48.png",
+  ),
+  pirate: createMeetFaceGraph(
+    "pirate_v2",
+    264,
+    "face-costume",
+    "pirate_v2_a8d8f01b75fa38b233ed1282223b75a5.png",
+  ),
+  alien: createMeetFaceGraph(
+    "alien_spaceship_js_v2",
+    334,
+    "face-lighting",
+    "alien_spaceship_js_v2_e4b827b62e026fb12d48fc655bf5bc36.png",
+  ),
 };
 
 export const getFaceFilterEffectGraph = (
@@ -670,7 +803,20 @@ const HIDDEN_FACE_FILTER_IDS = new Set<FaceFilterId>([
 ]);
 
 const isSelectableFaceFilterId = (value: unknown): value is FaceFilterId =>
-  isFaceFilterId(value) && !HIDDEN_FACE_FILTER_IDS.has(value);
+  isFaceFilterId(value) &&
+  (!HIDDEN_FACE_FILTER_IDS.has(value) ||
+    isMeetVideoPipeSelectableFaceFilterId(value));
+
+const isMeetVideoPipeSelectableFaceFilterId = (
+  value: FaceFilterId,
+): boolean => {
+  const graph = getFaceFilterEffectGraph(value);
+  return (
+    isMeetVideoPipeRuntimeEnabled() &&
+    graph?.requiresMeetVideoPipe === true &&
+    typeof graph.meetEffectIdNumber === "number"
+  );
+};
 
 const isAppearanceStyleId = (value: unknown): value is AppearanceStyleId =>
   typeof value === "string" &&
@@ -1413,7 +1559,11 @@ const ALL_FACE_FILTERS: VideoEffectOption<FaceFilterId>[] = [
 ];
 
 export const FACE_FILTERS: VideoEffectOption<FaceFilterId>[] =
-  ALL_FACE_FILTERS.filter((option) => !HIDDEN_FACE_FILTER_IDS.has(option.id));
+  ALL_FACE_FILTERS.filter(
+    (option) =>
+      !HIDDEN_FACE_FILTER_IDS.has(option.id) ||
+      isMeetVideoPipeSelectableFaceFilterId(option.id),
+  );
 
 export const APPEARANCE_STYLES: VideoEffectOption<AppearanceStyleId>[] = [
   {

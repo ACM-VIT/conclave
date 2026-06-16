@@ -19,11 +19,14 @@ enum SettingsSheetPage {
     case webinarLink
     case profile
     case audioVideo
-    case videoQuality
+    case microphone
+    case camera
+    case speaker
 }
 
 struct SettingsSheetView: View {
     @Bindable var viewModel: MeetingViewModel
+    @Bindable var appState: AppState = AppState.shared
     var bodyReady: Bool = true
     var page: SettingsSheetPage = .overview
     @Environment(\.dismiss) private var dismiss
@@ -39,7 +42,9 @@ struct SettingsSheetView: View {
     var onOpenWebinarLinkSettings: (() -> Void)? = nil
     var onOpenProfileSettings: (() -> Void)? = nil
     var onOpenAudioVideoSettings: (() -> Void)? = nil
-    var onOpenVideoQualitySettings: (() -> Void)? = nil
+    var onOpenMicrophoneSettings: (() -> Void)? = nil
+    var onOpenCameraSettings: (() -> Void)? = nil
+    var onOpenSpeakerSettings: (() -> Void)? = nil
     @State private var displayNameInput = ""
     @State private var meetingInviteCodeInput = ""
     @State private var webinarInviteCodeInput = ""
@@ -95,6 +100,28 @@ struct SettingsSheetView: View {
         return "No link generated"
     }
 
+    private var microphoneSummary: String {
+        if viewModel.state.mediaPublishingDisabled {
+            return "Publishing disabled"
+        }
+        let state = viewModel.state.isMuted ? "Muted" : "On"
+        guard let label = selectedAudioInputLabel() else { return state }
+        return "\(state), \(label)"
+    }
+
+    private var cameraSummary: String {
+        let cameraState = viewModel.state.isCameraOff ? "Off" : "On"
+        let quality = viewModel.state.videoQuality == .low ? "low bandwidth" : "standard"
+        if viewModel.state.mediaPublishingDisabled {
+            return "Publishing disabled, \(quality)"
+        }
+        return "\(cameraState), \(quality)"
+    }
+
+    private var speakerSummary: String {
+        selectedAudioOutputLabel() ?? "System default"
+    }
+
     private var title: String {
         switch page {
         case .overview:
@@ -121,8 +148,12 @@ struct SettingsSheetView: View {
             return "Profile"
         case .audioVideo:
             return "Audio and video"
-        case .videoQuality:
-            return "Video"
+        case .microphone:
+            return "Microphone"
+        case .camera:
+            return "Camera"
+        case .speaker:
+            return "Speaker"
         }
     }
 
@@ -152,6 +183,16 @@ struct SettingsSheetView: View {
     private func syncWebinarDraftsFromState() {
         syncWebinarCapacityDraftFromState()
         syncWebinarLinkDraftFromState()
+    }
+
+    private func selectedAudioInputLabel() -> String? {
+        guard let selectedId = viewModel.currentAudioInputId(), !selectedId.isEmpty else { return nil }
+        return viewModel.availableAudioInputs().first { $0.id == selectedId }?.label
+    }
+
+    private func selectedAudioOutputLabel() -> String? {
+        guard let selectedId = viewModel.currentAudioOutputId(), !selectedId.isEmpty else { return nil }
+        return viewModel.availableAudioOutputs().first { $0.id == selectedId }?.label
     }
 
     @ViewBuilder
@@ -868,6 +909,80 @@ struct SettingsSheetView: View {
     }
 
     @ViewBuilder
+    private func accountRow(_ user: AppState.User) -> some View {
+        HStack(spacing: ACMSpacing.sm) {
+            MeetingSheetIconBox(
+                icon: "person.crop.circle.badge.checkmark",
+                androidIcon: "account",
+                tint: user.provider == .guest ? ACMColors.textMuted : ACMColors.primaryOrange,
+                androidTint: user.provider == .guest ? "muted" : "accent"
+            )
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(accountTitle(for: user))
+                    .font(ACMFont.trial(15, weight: .medium))
+                    .foregroundStyle(ACMColors.text)
+                    .lineLimit(1)
+                Text(accountSubtitle(for: user))
+                    .font(ACMFont.trial(12))
+                    .foregroundStyle(ACMColors.textFaint)
+                    .lineLimit(1)
+            }
+
+            Spacer()
+        }
+        .padding(.horizontal, ACMSpacing.sm)
+        .frame(height: 58)
+    }
+
+    @ViewBuilder
+    private func signOutRow() -> some View {
+        Button {
+            appState.clearAuthentication()
+        } label: {
+            HStack(spacing: ACMSpacing.sm) {
+                MeetingSheetIconBox(
+                    icon: "person.crop.circle.badge.xmark",
+                    androidIcon: "remove.person",
+                    tint: ACMColors.error,
+                    androidTint: "danger"
+                )
+
+                Text("Sign out")
+                    .font(ACMFont.trial(15, weight: .medium))
+                    .foregroundStyle(ACMColors.error)
+                    .lineLimit(1)
+
+                Spacer()
+            }
+            .padding(.horizontal, ACMSpacing.sm)
+            .frame(height: 52)
+            .frame(maxWidth: .infinity, alignment: .leading)
+#if !SKIP
+            .contentShape(Rectangle())
+#endif
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func accountTitle(for user: AppState.User) -> String {
+        if user.provider == .guest {
+            return "Guest"
+        }
+        let name = user.name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return name.isEmpty ? "Signed in" : name
+    }
+
+    private func accountSubtitle(for user: AppState.User) -> String {
+        if user.provider == .guest {
+            return "Temporary meeting identity"
+        }
+        let provider = user.provider == .apple ? "Apple" : "Google"
+        let email = user.email?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return email.isEmpty ? "Signed in with \(provider)" : email
+    }
+
+    @ViewBuilder
     private func microphoneInputRow() -> some View {
         let inputs = viewModel.availableAudioInputs()
         HStack(spacing: ACMSpacing.sm) {
@@ -1021,8 +1136,12 @@ struct SettingsSheetView: View {
             profileSettingsContent
         case .audioVideo:
             audioVideoSettingsContent
-        case .videoQuality:
-            videoQualitySettingsContent
+        case .microphone:
+            microphoneSettingsContent
+        case .camera:
+            cameraSettingsContent
+        case .speaker:
+            speakerSettingsContent
         }
     }
 
@@ -1077,16 +1196,6 @@ struct SettingsSheetView: View {
                     isActive: !viewModel.state.isMuted || !viewModel.state.isCameraOff
                 ) {
                     onOpenAudioVideoSettings?()
-                }
-                MoreRowDivider()
-                settingsNavigationRow(
-                    "Video quality",
-                    subtitle: viewModel.state.videoQuality == .low ? "Low bandwidth" : "Standard",
-                    icon: "video.fill",
-                    androidIcon: "video",
-                    isActive: viewModel.state.videoQuality == .low
-                ) {
-                    onOpenVideoQualitySettings?()
                 }
             }
         }
@@ -1244,6 +1353,14 @@ struct SettingsSheetView: View {
                 displayNameRow()
                 MeetingSheetRowDivider(inset: ACMSpacing.sm + 32 + ACMSpacing.sm)
                 updateDisplayNameRow()
+                if let user = appState.currentUser {
+                    MeetingSheetRowDivider(inset: ACMSpacing.sm + 32 + ACMSpacing.sm)
+                    accountRow(user)
+                    if user.provider != .guest {
+                        MeetingSheetRowDivider(inset: ACMSpacing.sm + 32 + ACMSpacing.sm)
+                        signOutRow()
+                    }
+                }
             }
         }
     }
@@ -1252,6 +1369,44 @@ struct SettingsSheetView: View {
     private var audioVideoSettingsContent: some View {
         VStack(alignment: .leading, spacing: ACMSpacing.xs) {
             acmListSectionHeader("Audio and video")
+
+            MeetingSheetSectionCard {
+                settingsNavigationRow(
+                    "Microphone",
+                    subtitle: microphoneSummary,
+                    icon: viewModel.state.isMuted ? "mic.slash.fill" : "mic.fill",
+                    androidIcon: viewModel.state.isMuted ? "mic.off" : "mic",
+                    isActive: !viewModel.state.isMuted && !viewModel.state.mediaPublishingDisabled
+                ) {
+                    onOpenMicrophoneSettings?()
+                }
+                MoreRowDivider()
+                settingsNavigationRow(
+                    "Camera",
+                    subtitle: cameraSummary,
+                    icon: viewModel.state.isCameraOff ? "video.slash.fill" : "video.fill",
+                    androidIcon: viewModel.state.isCameraOff ? "video.off" : "video",
+                    isActive: (!viewModel.state.isCameraOff || viewModel.state.videoQuality == .low) && !viewModel.state.mediaPublishingDisabled
+                ) {
+                    onOpenCameraSettings?()
+                }
+                MoreRowDivider()
+                settingsNavigationRow(
+                    "Speaker",
+                    subtitle: speakerSummary,
+                    icon: "speaker.wave.2.fill",
+                    androidIcon: "volume"
+                ) {
+                    onOpenSpeakerSettings?()
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var microphoneSettingsContent: some View {
+        VStack(alignment: .leading, spacing: ACMSpacing.xs) {
+            acmListSectionHeader("Microphone")
 
             MeetingSheetSectionCard {
                 settingsToggleRow(
@@ -1271,6 +1426,17 @@ struct SettingsSheetView: View {
                     isDisabled: viewModel.state.mediaPublishingDisabled
                 )
                 MeetingSheetRowDivider(inset: ACMSpacing.sm + 32 + ACMSpacing.sm)
+                microphoneInputRow()
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var cameraSettingsContent: some View {
+        VStack(alignment: .leading, spacing: ACMSpacing.xs) {
+            acmListSectionHeader("Camera")
+
+            MeetingSheetSectionCard {
                 settingsToggleRow(
                     "Camera",
                     icon: viewModel.state.isCameraOff ? "video.slash.fill" : "video.fill",
@@ -1288,22 +1454,20 @@ struct SettingsSheetView: View {
                     isDisabled: viewModel.state.mediaPublishingDisabled
                 )
                 MeetingSheetRowDivider(inset: ACMSpacing.sm + 32 + ACMSpacing.sm)
-                microphoneInputRow()
-                MeetingSheetRowDivider(inset: ACMSpacing.sm + 32 + ACMSpacing.sm)
-                audioOutputRow()
-                MeetingSheetRowDivider(inset: ACMSpacing.sm + 32 + ACMSpacing.sm)
-                testSpeakerRow()
+                qualityRow()
             }
         }
     }
 
     @ViewBuilder
-    private var videoQualitySettingsContent: some View {
+    private var speakerSettingsContent: some View {
         VStack(alignment: .leading, spacing: ACMSpacing.xs) {
-            acmListSectionHeader("Video")
+            acmListSectionHeader("Speaker")
 
             MeetingSheetSectionCard {
-                qualityRow()
+                audioOutputRow()
+                MeetingSheetRowDivider(inset: ACMSpacing.sm + 32 + ACMSpacing.sm)
+                testSpeakerRow()
             }
         }
     }

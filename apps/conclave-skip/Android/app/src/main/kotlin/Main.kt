@@ -169,6 +169,13 @@ open class MainActivity: AppCompatActivity {
         PermissionHelper.handleRequestPermissionsResult(requestCode, permissions, grantResults)
     }
 
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        if (NativeGoogleSignInBridge.handleActivityResult(requestCode, resultCode, data)) {
+            return
+        }
+        super.onActivityResult(requestCode, resultCode, data)
+    }
+
     companion object {
     }
 }

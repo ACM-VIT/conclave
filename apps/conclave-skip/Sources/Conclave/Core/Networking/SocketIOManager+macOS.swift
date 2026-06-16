@@ -33,6 +33,8 @@ final class SocketIOManager {
     var onBrowserState: ((BrowserStateNotification) -> Void)?
     var onBrowserClosed: ((BrowserClosedNotification) -> Void)?
     var onAppsState: ((AppsStateNotification) -> Void)?
+    var onAppsYjsUpdate: ((AppsYjsUpdateNotification) -> Void)?
+    var onAppsAwareness: ((AppsAwarenessNotification) -> Void)?
 
     var onUserJoined: ((UserJoinedNotification) -> Void)?
     var onUserLeft: ((UserLeftNotification) -> Void)?
@@ -176,6 +178,11 @@ final class SocketIOManager {
     func setAppsLocked(_ locked: Bool) async throws -> AppsLockResponse {
         AppsLockResponse(success: true, locked: locked, error: nil)
     }
+    func syncApp(appId: String, stateVector: Data) async throws -> AppsSyncResponse {
+        AppsSyncResponse(syncMessage: Data(), stateVector: nil, awarenessUpdate: nil)
+    }
+    func sendAppYjsUpdate(appId: String, update: Data) { }
+    func sendAppAwareness(appId: String, awarenessUpdate: Data, clientId: Int? = nil) { }
     func admitUser(userId: String) async throws { }
     func rejectUser(userId: String) async throws { }
     func admitAllPending() async throws { }
@@ -202,6 +209,9 @@ final class SocketIOManager {
     func clearRaisedHands() async throws { }
     func broadcastAdminNotice(message: String, level: AdminNoticeLevel) async throws -> AdminNoticeResponse {
         AdminNoticeResponse(success: true, error: nil)
+    }
+    func endRoom(message: String? = nil, delayMs: Int? = nil) async throws -> AdminEndRoomResponse {
+        AdminEndRoomResponse(success: true, roomId: nil, delayMs: delayMs, error: nil)
     }
     func promoteHost(userId: String) async throws { }
 }

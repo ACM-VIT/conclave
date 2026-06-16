@@ -86,6 +86,7 @@ enum SfuJoinService {
         var request = URLRequest(url: resolveJoinURL())
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpShouldHandleCookies = user?.id != nil || user?.email != nil
         if !clientId.isEmpty {
             request.setValue(clientId, forHTTPHeaderField: "x-sfu-client")
         }

@@ -39,17 +39,23 @@ struct MeetingHeaderView: View {
 
                 if showsParticipantsButton {
                     Button(action: onParticipantsPressed) {
-                        HStack(spacing: 6) {
-                            ACMSystemIcon.icon("person.2.fill", android: "participants", size: 13)
+                        ZStack {
+                            HStack(spacing: 6) {
+                                ACMSystemIcon.icon("person.2.fill", android: "participants", size: 13)
 
-                            Text("\(participantCount)")
-                                .font(ACMFont.trial(13, weight: .medium))
+                                Text("\(participantCount)")
+                                    .font(ACMFont.trial(13, weight: .medium))
+                            }
+                            .foregroundStyle(ACMColors.text)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .acmGlassCapsule(interactive: true)
+#if SKIP
+                            ACMAndroidSemanticText("Participants, \(participantCount)")
+#endif
                         }
-                        .foregroundStyle(ACMColors.text)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .acmGlassCapsule(interactive: true)
                     }
+                    .accessibilityLabel("Participants, \(participantCount)")
                 }
             }
         }

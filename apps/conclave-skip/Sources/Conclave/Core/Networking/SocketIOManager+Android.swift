@@ -34,6 +34,8 @@ final class SocketIOManager {
     var onBrowserState: ((BrowserStateNotification) -> Void)?
     var onBrowserClosed: ((BrowserClosedNotification) -> Void)?
     var onAppsState: ((AppsStateNotification) -> Void)?
+    var onAppsYjsUpdate: ((AppsYjsUpdateNotification) -> Void)?
+    var onAppsAwareness: ((AppsAwarenessNotification) -> Void)?
 
     var onUserJoined: ((UserJoinedNotification) -> Void)?
     var onUserLeft: ((UserLeftNotification) -> Void)?
@@ -133,6 +135,9 @@ final class SocketIOManager {
     func openApp(_ appId: String) async throws -> AppsOpenResponse { fatalError() }
     func closeApp() async throws -> AppsCloseResponse { fatalError() }
     func setAppsLocked(_ locked: Bool) async throws -> AppsLockResponse { fatalError() }
+    func syncApp(appId: String, stateVector: Data) async throws -> AppsSyncResponse { fatalError() }
+    func sendAppYjsUpdate(appId: String, update: Data) { fatalError() }
+    func sendAppAwareness(appId: String, awarenessUpdate: Data, clientId: Int? = nil) { fatalError() }
     func admitUser(userId: String) async throws { fatalError() }
     func rejectUser(userId: String) async throws { fatalError() }
     func admitAllPending() async throws { fatalError() }

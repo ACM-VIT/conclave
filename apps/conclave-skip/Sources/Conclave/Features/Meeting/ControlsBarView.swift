@@ -113,7 +113,8 @@ struct ControlsBarView: View {
                     ControlButton(
                         icon: participantsIcon,
                         isActive: false,
-                        badge: viewModel.state.pendingUsersCount > 0 ? viewModel.state.pendingUsersCount : nil
+                        badge: viewModel.state.pendingUsersCount > 0 ? viewModel.state.pendingUsersCount : nil,
+                        accessibilityLabel: "Participants"
                     ) {
                         onParticipantsPressed()
                     }
@@ -122,7 +123,8 @@ struct ControlsBarView: View {
                         ControlButton(
                             icon: lockIcon,
                             isActive: viewModel.state.isRoomLocked,
-                            activeColor: ACMColors.primaryOrange
+                            activeColor: ACMColors.primaryOrange,
+                            accessibilityLabel: viewModel.state.isRoomLocked ? "Unlock room" : "Lock room"
                         ) {
                             viewModel.toggleRoomLock()
                         }
@@ -132,7 +134,8 @@ struct ControlsBarView: View {
                 ControlButton(
                     icon: micIcon,
                     isMuted: viewModel.state.isMuted,
-                    isGhostDisabled: mediaPublishingDisabled
+                    isGhostDisabled: mediaPublishingDisabled,
+                    accessibilityLabel: viewModel.state.isMuted ? "Unmute microphone" : "Mute microphone"
                 ) {
                     viewModel.toggleMute()
                 }
@@ -141,7 +144,8 @@ struct ControlsBarView: View {
                 ControlButton(
                     icon: cameraIcon,
                     isMuted: viewModel.state.isCameraOff,
-                    isGhostDisabled: mediaPublishingDisabled
+                    isGhostDisabled: mediaPublishingDisabled,
+                    accessibilityLabel: viewModel.state.isCameraOff ? "Turn camera on" : "Turn camera off"
                 ) {
                     viewModel.toggleCamera()
                 }
@@ -151,7 +155,8 @@ struct ControlsBarView: View {
                     ControlButton(
                         icon: screenShareIcon,
                         isActive: viewModel.state.isScreenSharing,
-                        isGhostDisabled: isScreenShareDisabled
+                        isGhostDisabled: isScreenShareDisabled,
+                        accessibilityLabel: viewModel.state.isScreenSharing ? "Stop screen sharing" : "Share screen"
                     ) {
                         viewModel.toggleScreenShare()
                     }
@@ -162,7 +167,8 @@ struct ControlsBarView: View {
                     ControlButton(
                         icon: moreIcon,
                         isActive: false,
-                        badge: viewModel.state.unreadChatCount > 0 ? viewModel.state.unreadChatCount : nil
+                        badge: viewModel.state.unreadChatCount > 0 ? viewModel.state.unreadChatCount : nil,
+                        accessibilityLabel: "More controls"
                     ) {
                         onMorePressed()
                     }
@@ -171,7 +177,8 @@ struct ControlsBarView: View {
                         icon: handRaiseIcon,
                         isActive: viewModel.state.isHandRaised,
                         activeColor: ACMColors.handRaised,
-                        isGhostDisabled: viewModel.state.isGhostMode
+                        isGhostDisabled: viewModel.state.isGhostMode,
+                        accessibilityLabel: viewModel.state.isHandRaised ? "Lower hand" : "Raise hand"
                     ) {
                         viewModel.toggleHandRaise()
                     }
@@ -180,7 +187,8 @@ struct ControlsBarView: View {
                     ControlButton(
                         icon: reactionIcon,
                         isActive: showReactionPicker,
-                        isGhostDisabled: viewModel.state.isGhostMode
+                        isGhostDisabled: viewModel.state.isGhostMode,
+                        accessibilityLabel: "Reactions"
                     ) {
                         showReactionPicker = !showReactionPicker
                     }
@@ -204,14 +212,16 @@ struct ControlsBarView: View {
                     ControlButton(
                         icon: chatIcon,
                         isActive: viewModel.state.isChatOpen,
-                        badge: viewModel.state.unreadChatCount > 0 ? viewModel.state.unreadChatCount : nil
+                        badge: viewModel.state.unreadChatCount > 0 ? viewModel.state.unreadChatCount : nil,
+                        accessibilityLabel: "Chat"
                     ) {
                         viewModel.toggleChat()
                     }
 
                     ControlButton(
                         icon: settingsIcon,
-                        isActive: false
+                        isActive: false,
+                        accessibilityLabel: "Settings"
                     ) {
                         onSettingsPressed()
                     }
@@ -232,10 +242,16 @@ struct ControlsBarView: View {
             Button {
                 viewModel.leaveRoom()
             } label: {
-                ACMSystemIcon.icon("phone.down.fill", android: "hangup", size: 18)
-                    .frame(width: 44, height: 44)
+                ZStack {
+                    ACMSystemIcon.icon("phone.down.fill", android: "hangup", size: 18)
+#if SKIP
+                    ACMAndroidSemanticText("Hang Up")
+#endif
+                }
+                .frame(width: 44, height: 44)
             }
             .acmControlButtonStyle(isDanger: true)
+            .accessibilityLabel("Hang Up")
         }
         .frame(maxWidth: isCompact ? min(360.0, availableWidth - 24.0) : availableWidth - 24.0)
         .padding(.horizontal, 12)
@@ -258,19 +274,26 @@ struct ControlButton: View {
     let action: () -> Void
     
     var body: some View {
+        let label = accessibilityLabel ?? icon
+
         Button(action: action) {
-            ACMSystemIcon.icon(icon, android: icon, size: 18)
-                .overlay(alignment: .topTrailing) {
-                    if let badge = badge {
-                        Text(badge > 9 ? "9+" : "\(badge)")
-                            .font(ACMFont.trial(10, weight: .bold))
-                            .foregroundStyle(Color.white)
-                            .frame(minWidth: 16, minHeight: 16)
-                            .acmColorBackground(ACMColors.primaryOrange)
-                            .clipShape(Circle())
-                            .offset(x: 10, y: -10)
+            ZStack {
+                ACMSystemIcon.icon(icon, android: icon, size: 18)
+                    .overlay(alignment: .topTrailing) {
+                        if let badge = badge {
+                            Text(badge > 9 ? "9+" : "\(badge)")
+                                .font(ACMFont.trial(10, weight: .bold))
+                                .foregroundStyle(Color.white)
+                                .frame(minWidth: 16, minHeight: 16)
+                                .acmColorBackground(ACMColors.primaryOrange)
+                                .clipShape(Circle())
+                                .offset(x: 10, y: -10)
+                        }
                     }
-                }
+#if SKIP
+                ACMAndroidSemanticText(label)
+#endif
+            }
         }
         .acmControlButtonStyle(
             isActive: isActive,
@@ -278,8 +301,8 @@ struct ControlButton: View {
             isGhostDisabled: isGhostDisabled,
             isHandRaised: isActive && activeColor == ACMColors.handRaised
         )
+        .accessibilityLabel(label)
         #if !SKIP
-        .accessibilityLabel(accessibilityLabel ?? "")
         .accessibilityHint(accessibilityHint ?? "")
         #endif
     }

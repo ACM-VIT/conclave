@@ -238,6 +238,17 @@ enum ACMSystemIcon {
     }
 }
 
+#if SKIP
+@ViewBuilder
+func ACMAndroidSemanticText(_ label: String) -> some View {
+    Text(label)
+        .font(Font.system(size: 1))
+        .foregroundStyle(Color.white.opacity(0.01))
+        .frame(width: 1, height: 1)
+        .lineLimit(1)
+}
+#endif
+
 // MARK: - Control Button Styles (Carbon — filled circles, Meet semantics)
 //  default = white@10% fill · active = solid accent · muted = solid danger
 //  (Meet's red mic-off) · danger = solid danger. No borders, no shadows.

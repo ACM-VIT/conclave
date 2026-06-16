@@ -12,8 +12,7 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
-    <!-- Ongoing-call notification (with Leave + Mute actions) needs runtime
-         POST_NOTIFICATIONS consent on Android 13+. -->
+    <!-- Enables notification-drawer call controls when the user grants notification access. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
@@ -23,6 +22,10 @@
         android:allowBackup="true"
         android:usesCleartextTraffic="true"
         android:icon="@mipmap/ic_launcher">
+        <meta-data
+            android:name="GOOGLE_SIGN_IN_WEB_CLIENT_ID"
+            android:value="${GOOGLE_SIGN_IN_WEB_CLIENT_ID}" />
+
         <activity
             android:name=".MainActivity"
             android:exported="true"

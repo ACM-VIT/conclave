@@ -10,6 +10,7 @@ import skip.foundation.*
 import skip.lib.Decodable
 import skip.lib.Error
 import skip.lib.ErrorException
+import java.util.Base64
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -56,6 +57,7 @@ internal object SocketEvent {
     val adminStopAllScreenShare = SfuClientEvent.adminStopAllScreenShare.rawValue
     val adminClearRaisedHands = SfuClientEvent.adminClearRaisedHands.rawValue
     val adminBroadcastNotice = SfuClientEvent.adminBroadcastNotice.rawValue
+    val adminEndRoom = SfuClientEvent.adminEndRoom.rawValue
     val meetingGetConfig = SfuClientEvent.meetingGetConfig.rawValue
     val meetingUpdateConfig = SfuClientEvent.meetingUpdateConfig.rawValue
     val webinarGetConfig = SfuClientEvent.webinarGetConfig.rawValue
@@ -71,6 +73,9 @@ internal object SocketEvent {
     val appsClose = SfuClientEvent.appsClose.rawValue
     val appsLock = SfuClientEvent.appsLock.rawValue
     val appsGetState = SfuClientEvent.appsGetState.rawValue
+    val appsYjsSync = SfuClientEvent.appsYjsSync.rawValue
+    val appsYjsUpdate = SfuClientEvent.appsYjsUpdate.rawValue
+    val appsAwareness = SfuClientEvent.appsAwareness.rawValue
 
     val userJoined = SfuServerEvent.userJoined.rawValue
     val userLeft = SfuServerEvent.userLeft.rawValue
@@ -120,6 +125,8 @@ internal object SocketEvent {
     val browserState = SfuServerEvent.browserState.rawValue
     val browserClosed = SfuServerEvent.browserClosed.rawValue
     val appsState = SfuServerEvent.appsState.rawValue
+    val appsYjsServerUpdate = SfuServerEvent.appsYjsUpdate.rawValue
+    val appsServerAwareness = SfuServerEvent.appsAwareness.rawValue
 }
 
 /// Raw consume-response fields, carrying rtpParameters as the verbatim JSON
@@ -174,6 +181,8 @@ internal class SocketIOManager {
     internal var onBrowserState: ((BrowserStateNotification) -> Unit)? = null
     internal var onBrowserClosed: ((BrowserClosedNotification) -> Unit)? = null
     internal var onAppsState: ((AppsStateNotification) -> Unit)? = null
+    internal var onAppsYjsUpdate: ((AppsYjsUpdateNotification) -> Unit)? = null
+    internal var onAppsAwareness: ((AppsAwarenessNotification) -> Unit)? = null
 
     internal var onUserJoined: ((UserJoinedNotification) -> Unit)? = null
     internal var onUserLeft: ((UserLeftNotification) -> Unit)? = null
@@ -681,6 +690,33 @@ internal class SocketIOManager {
         return JSONDecoder().decode(AppsLockResponse::class, from = data)
     }
 
+    internal suspend fun syncApp(appId: String, stateVector: Data): AppsSyncResponse {
+        val payload = JSONObject()
+            .put("appId", appId)
+            .put("syncMessage", encodeBase64(stateVector))
+        val data = emit(SocketEvent.appsYjsSync, payload)
+        val response = decodeAppsSyncResponse(data)
+            ?: throw ErrorException("Invalid app sync acknowledgement.")
+        return response
+    }
+
+    internal fun sendAppYjsUpdate(appId: String, update: Data) {
+        val payload = JSONObject()
+            .put("appId", appId)
+            .put("update", encodeBase64(update))
+        socket?.emit(SocketEvent.appsYjsUpdate, payload)
+    }
+
+    internal fun sendAppAwareness(appId: String, awarenessUpdate: Data, clientId: Int? = null) {
+        val payload = JSONObject()
+            .put("appId", appId)
+            .put("awarenessUpdate", encodeBase64(awarenessUpdate))
+        if (clientId != null) {
+            payload.put("clientId", clientId)
+        }
+        socket?.emit(SocketEvent.appsAwareness, payload)
+    }
+
     private suspend fun updateWebinarConfig(payload: JSONObject): WebinarConfigSnapshot {
         val data = emit(SocketEvent.webinarUpdateConfig, payload)
         val response = JSONDecoder().decode(WebinarConfigUpdateResponse::class, from = data)
@@ -745,6 +781,12 @@ internal class SocketIOManager {
         val request = AdminNoticeRequest(message = message, level = level.rawValue)
         val data = emit(SocketEvent.adminBroadcastNotice, request)
         return JSONDecoder().decode(AdminNoticeResponse::class, from = data)
+    }
+
+    internal suspend fun endRoom(message: String?, delayMs: Int?): AdminEndRoomResponse {
+        val request = AdminEndRoomRequest(message = message, delayMs = delayMs)
+        val data = emit(SocketEvent.adminEndRoom, request)
+        return JSONDecoder().decode(AdminEndRoomResponse::class, from = data)
     }
 
     internal suspend fun promoteHost(userId: String) {
@@ -851,6 +893,143 @@ internal class SocketIOManager {
 
     private fun dataToString(data: Data): String {
         return data.platformValue.toString(Charsets.UTF_8)
+    }
+
+    private fun encodeBase64(data: Data): String {
+        return Base64.getEncoder().encodeToString(data.platformValue)
+    }
+
+    private fun jsonObject(value: Any?): JSONObject? {
+        return when (value) {
+            is JSONObject -> value
+            is Map<*, *> -> jsonCompatibleValue(value) as? JSONObject
+            is String -> try {
+                JSONObject(value)
+            } catch (_: Throwable) {
+                null
+            }
+            else -> null
+        }
+    }
+
+    private fun jsonCompatibleValue(value: Any?): Any {
+        return when (value) {
+            null -> JSONObject.NULL
+            is JSONObject -> value
+            is JSONArray -> value
+            is String -> value
+            is Number -> value
+            is Boolean -> value
+            is ByteArray -> JSONArray().also { array ->
+                value.forEach { byte ->
+                    array.put(byte.toInt() and 0xff)
+                }
+            }
+            is Map<*, *> -> JSONObject().also { obj ->
+                value.forEach { (key, item) ->
+                    if (key is String) {
+                        obj.put(key, jsonCompatibleValue(item))
+                    }
+                }
+            }
+            is Collection<*> -> JSONArray().also { array ->
+                value.forEach { item ->
+                    array.put(jsonCompatibleValue(item))
+                }
+            }
+            is Array<*> -> JSONArray().also { array ->
+                value.forEach { item ->
+                    array.put(jsonCompatibleValue(item))
+                }
+            }
+            else -> value.toString()
+        }
+    }
+
+    private fun stringField(obj: JSONObject, field: String): String? {
+        if (!obj.has(field) || obj.isNull(field)) return null
+        val trimmed = obj.optString(field, "").trim()
+        return trimmed.ifEmpty { null }
+    }
+
+    private fun intField(obj: JSONObject, field: String): Int? {
+        if (!obj.has(field) || obj.isNull(field)) return null
+        return when (val value = obj.opt(field)) {
+            is Number -> value.toInt()
+            else -> null
+        }
+    }
+
+    private fun byteData(value: Any?): Data? {
+        return when (value) {
+            is ByteArray -> if (value.isEmpty()) null else Data(platformValue = value)
+            is JSONArray -> {
+                val bytes = ByteArray(value.length())
+                for (i in 0 until value.length()) {
+                    val number = value.optInt(i, -1)
+                    if (number !in 0..255) return null
+                    bytes[i] = number.toByte()
+                }
+                if (bytes.isEmpty()) null else Data(platformValue = bytes)
+            }
+            is JSONObject -> {
+                if (stringField(value, "type") == "Buffer") {
+                    byteData(value.opt("data"))
+                } else {
+                    null
+                }
+            }
+            is String -> {
+                val trimmed = value.trim()
+                if (trimmed.isEmpty()) {
+                    null
+                } else {
+                    try {
+                        Data(platformValue = Base64.getDecoder().decode(trimmed))
+                    } catch (_: Throwable) {
+                        null
+                    }
+                }
+            }
+            else -> null
+        }
+    }
+
+    private fun decodeAppsSyncResponse(data: Data): AppsSyncResponse? {
+        val obj = try {
+            JSONObject(dataToString(data))
+        } catch (_: Throwable) {
+            return null
+        }
+        val syncMessage = byteData(obj.opt("syncMessage")) ?: return null
+        return AppsSyncResponse(
+            syncMessage = syncMessage,
+            stateVector = byteData(obj.opt("stateVector")),
+            awarenessUpdate = byteData(obj.opt("awarenessUpdate"))
+        )
+    }
+
+    private fun decodeAppsYjsUpdate(value: Any?): AppsYjsUpdateNotification? {
+        val obj = jsonObject(value) ?: return null
+        val appId = stringField(obj, "appId") ?: return null
+        val update = byteData(obj.opt("update")) ?: return null
+        return AppsYjsUpdateNotification(
+            appId = appId,
+            update = update,
+            roomId = stringField(obj, "roomId")
+        )
+    }
+
+    private fun decodeAppsAwareness(value: Any?): AppsAwarenessNotification? {
+        val obj = jsonObject(value) ?: return null
+        val appId = stringField(obj, "appId") ?: return null
+        val awarenessUpdate = byteData(obj.opt("awarenessUpdate")) ?: return null
+        return AppsAwarenessNotification(
+            appId = appId,
+            awarenessUpdate = awarenessUpdate,
+            clientId = intField(obj, "clientId"),
+            roomId = stringField(obj, "roomId")
+        )
     }
 
     /// Pull a nested JSON object field out of an ack payload as its verbatim
@@ -1307,6 +1486,20 @@ internal class SocketIOManager {
             val notification = decode<AppsStateNotification>(args.firstOrNull()) ?: return@Listener
             if (!eventRoomIdMatchesActiveOrPending(notification.roomId)) return@Listener
             onAppsState?.invoke(notification)
+        })
+
+        socket.on(SocketEvent.appsYjsServerUpdate, Emitter.Listener { args ->
+            if (this.socket !== socket) return@Listener
+            val notification = decodeAppsYjsUpdate(args.firstOrNull()) ?: return@Listener
+            if (!eventRoomIdMatchesActiveOrPending(notification.roomId)) return@Listener
+            onAppsYjsUpdate?.invoke(notification)
+        })
+
+        socket.on(SocketEvent.appsServerAwareness, Emitter.Listener { args ->
+            if (this.socket !== socket) return@Listener
+            val notification = decodeAppsAwareness(args.firstOrNull()) ?: return@Listener
+            if (!eventRoomIdMatchesActiveOrPending(notification.roomId)) return@Listener
+            onAppsAwareness?.invoke(notification)
         })
 
         socket.on(SocketEvent.adminMediaEnforced, Emitter.Listener { args ->

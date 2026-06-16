@@ -36,6 +36,10 @@ struct JoinView: View {
     @State private var isMicOn = false
     @State private var isSigningIn = false
     @State private var signingInProvider: AppState.AuthProvider = .none
+    @State private var enabledAuthProviders: Set<NativeAuthProvider> = []
+    @State private var isLoadingAuthProviders = false
+    @State private var authErrorMessage: String?
+    @State private var appleSignInNonce: String?
     @State private var pendingLinkJoinTarget: ParsedJoinTarget?
     @State private var shouldShowInviteCodeInput = false
     @State private var inviteCodePromptRoomId: String?
@@ -82,18 +86,23 @@ struct JoinView: View {
     }
 
     private var isGoogleSignInEnabled: Bool {
-        let env = ProcessInfo.processInfo.environment
-        if let value = env["GOOGLE_SIGN_IN_ENABLED"]?.lowercased() {
-            return value == "1" || value == "true" || value == "yes"
-        }
-        if let plistBool = Bundle.main.object(forInfoDictionaryKey: "GOOGLE_SIGN_IN_ENABLED") as? Bool {
-            return plistBool
-        }
-        if let plistString = Bundle.main.object(forInfoDictionaryKey: "GOOGLE_SIGN_IN_ENABLED") as? String {
-            let normalized = plistString.lowercased()
-            return normalized == "1" || normalized == "true" || normalized == "yes"
-        }
-        return false
+        enabledAuthProviders.contains(.google) && NativeAuthService.isNativeGoogleSignInAvailable()
+    }
+
+    private var isAppleSignInEnabled: Bool {
+#if !SKIP
+        enabledAuthProviders.contains(.apple)
+#else
+        false
+#endif
+    }
+
+    private var shouldShowSocialSignIn: Bool {
+        isLoadingAuthProviders || isGoogleSignInEnabled || isAppleSignInEnabled
+    }
+
+    private var canShowGhostModeToggle: Bool {
+        SfuJoinService.resolveClientId() != "public"
     }
     
     var body: some View {
@@ -138,6 +147,7 @@ struct JoinView: View {
             restoreExistingIdentity()
             restoreJoinDraft()
             restoreJoinFormAfterRecoverableError()
+            refreshAuthProviders()
             applyPendingJoinLinkIfPossible()
         }
         .onChange(of: appState.pendingJoinRequestID) { _, _ in
@@ -236,61 +246,81 @@ struct JoinView: View {
                 }
                 .padding(EdgeInsets(top: 0, leading: 0, bottom: 16, trailing: 0))
                 
-                if isGoogleSignInEnabled {
-                    VStack(spacing: 12) {
-                        // Google Sign-In Button
-                        Button {
-                            handleGoogleSignIn()
-                        } label: {
-                            HStack(spacing: 12) {
-                                if isSigningIn && signingInProvider == .google {
+                if shouldShowSocialSignIn {
+                    ACMGlassGroup(spacing: 12) {
+                        VStack(spacing: 12) {
+                            if isLoadingAuthProviders && !isGoogleSignInEnabled && !isAppleSignInEnabled {
+                                HStack(spacing: 10) {
                                     ProgressView()
 #if !SKIP
                                         .progressViewStyle(CircularProgressViewStyle(tint: ACMColors.cream))
 #endif
                                         .scaleEffect(0.8)
-                                } else {
-                                    ACMSystemIcon.icon("globe", android: "account", size: 16, tint: "text")
-                                }
 
-                                Text("Continue with Google")
-                                    .font(ACMFont.trial(16, weight: .medium))
+                                    Text("Checking sign-in options")
+                                        .font(ACMFont.trial(14, weight: .medium))
+                                        .foregroundStyle(ACMColors.textMuted)
+                                }
+                                .frame(maxWidth: .infinity)
+                                .frame(height: 50)
+                                .acmGlassRoundedRect(cornerRadius: ACMRadius.lg)
                             }
-                            .foregroundStyle(ACMColors.text)
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 54)
-                            .acmColorBackground(ACMColors.surface)
-                            .overlay {
-                                RoundedRectangle(cornerRadius: ACMRadius.lg)
-                                    .strokeBorder(lineWidth: 1)
-                                    .foregroundStyle(ACMColors.border)
+
+                            if isGoogleSignInEnabled {
+                                Button {
+                                    handleGoogleSignIn()
+                                } label: {
+                                    HStack(spacing: 12) {
+                                        if isSigningIn && signingInProvider == .google {
+                                            ProgressView()
+#if !SKIP
+                                                .progressViewStyle(CircularProgressViewStyle(tint: ACMColors.cream))
+#endif
+                                                .scaleEffect(0.8)
+                                        } else {
+                                            ACMSystemIcon.icon("globe", android: "account", size: 16, tint: "text")
+                                        }
+
+                                        Text("Continue with Google")
+                                            .font(ACMFont.trial(16, weight: .medium))
+                                    }
+                                    .foregroundStyle(ACMColors.text)
+                                    .frame(maxWidth: .infinity)
+                                    .frame(height: 54)
+                                    .acmGlassRoundedRect(cornerRadius: ACMRadius.lg, interactive: true)
+                                }
+                                .buttonStyle(.plain)
+                                .disabled(isSigningIn)
                             }
-                            .clipShape(RoundedRectangle(cornerRadius: ACMRadius.lg))
-                        }
-                        .disabled(isSigningIn)
 
 #if !SKIP
-                        // Apple Sign-In Button (iOS only)
-                        SignInWithAppleButton(.continue) { request in
-                            request.requestedScopes = [.fullName, .email]
-                        } onCompletion: { result in
-                            handleAppleSignIn(result: result)
-                        }
-                        .signInWithAppleButtonStyle(.whiteOutline)
-                        .frame(height: 48)
-                        .disabled(isSigningIn)
-                        .overlay {
-                            if isSigningIn && signingInProvider == .apple {
-                                RoundedRectangle(cornerRadius: ACMRadius.sm)
-                                    .fill(ACMColors.surface.opacity(0.9))
-                                    .overlay {
-                                        ProgressView()
-                                            .progressViewStyle(CircularProgressViewStyle(tint: ACMColors.cream))
-                                            .scaleEffect(0.8)
+                            if isAppleSignInEnabled {
+                                SignInWithAppleButton(.continue) { request in
+                                    let nonce = createAuthNonce()
+                                    appleSignInNonce = nonce
+                                    request.nonce = nonce
+                                    request.requestedScopes = [.fullName, .email]
+                                } onCompletion: { result in
+                                    handleAppleSignIn(result: result)
+                                }
+                                .signInWithAppleButtonStyle(.whiteOutline)
+                                .frame(height: 48)
+                                .clipShape(RoundedRectangle(cornerRadius: ACMRadius.lg))
+                                .disabled(isSigningIn)
+                                .overlay {
+                                    if isSigningIn && signingInProvider == .apple {
+                                        RoundedRectangle(cornerRadius: ACMRadius.lg)
+                                            .fill(ACMColors.surface.opacity(0.9))
+                                            .overlay {
+                                                ProgressView()
+                                                    .progressViewStyle(CircularProgressViewStyle(tint: ACMColors.cream))
+                                                    .scaleEffect(0.8)
+                                            }
                                     }
+                                }
                             }
-                        }
 #endif
+                        }
                     }
 
                     HStack(spacing: 16) {
@@ -308,6 +338,8 @@ struct JoinView: View {
                     }
                     .padding(EdgeInsets(top: 8, leading: 0, bottom: 8, trailing: 0))
                 }
+
+                authErrorBanner
                 
                 VStack(alignment: .leading, spacing: 10) {
                     Text("Your name")
@@ -571,8 +603,67 @@ struct JoinView: View {
     private var newMeetingForm: some View {
         VStack(spacing: 16) {
             displayNameInputSection
+            if canShowGhostModeToggle {
+                ghostModeToggleRow
+            }
             startMeetingButton
         }
+    }
+
+    private var ghostModeToggleRow: some View {
+        Button {
+            isGhostMode = !isGhostMode
+            if isGhostMode {
+                isMicOn = false
+                isCameraOn = false
+                stopPreviewCapture()
+            }
+        } label: {
+            HStack(spacing: 12) {
+                ACMSystemIcon.icon("theatermasks.fill", android: "ghost", size: 18, tint: isGhostMode ? "accent" : "muted")
+                    .foregroundStyle(isGhostMode ? ACMColors.primaryOrange : ACMColors.textMuted)
+                    .frame(width: 28, height: 28)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Join as ghost")
+                        .font(ACMFont.trial(14, weight: .medium))
+                        .foregroundStyle(ACMColors.text)
+                    Text("Others won't see you join")
+                        .font(ACMFont.trial(12))
+                        .foregroundStyle(ACMColors.textFaint)
+                }
+
+                Spacer()
+
+                ghostModeSwitch
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 14)
+            .frame(height: 64)
+            .acmColorBackground(ACMColors.surface)
+            .overlay {
+                RoundedRectangle(cornerRadius: ACMRadius.lg)
+                    .strokeBorder(lineWidth: 1)
+                    .foregroundStyle(isGhostMode ? ACMColors.primaryOrange.opacity(0.55) : ACMColors.border)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: ACMRadius.lg))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var ghostModeSwitch: some View {
+        ZStack(alignment: isGhostMode ? .trailing : .leading) {
+            Capsule()
+                .fill(isGhostMode ? ACMColors.primaryOrange : ACMColors.surfaceRaised)
+                .frame(width: 42, height: 24)
+
+            Circle()
+                .fill(Color.white)
+                .frame(width: 18, height: 18)
+                .padding(.horizontal, 3)
+        }
+        .frame(width: 42, height: 24)
+        .animation(.easeInOut(duration: 0.12), value: isGhostMode)
     }
     
     private var displayNameInputSection: some View {
@@ -656,6 +747,31 @@ struct JoinView: View {
             displayNameInputSection2
             joinFormErrorBanner
             joinMeetingButton
+        }
+    }
+
+    @ViewBuilder
+    private var authErrorBanner: some View {
+        if let message = authErrorMessage, !message.isEmpty {
+            HStack(alignment: .top, spacing: 8) {
+                ACMSystemIcon.icon("exclamationmark.circle.fill", android: "warning", size: 14, tint: "danger")
+                    .foregroundStyle(ACMColors.error)
+                    .frame(width: 18, height: 18)
+
+                Text(message)
+                    .font(ACMFont.trial(13))
+                    .foregroundStyle(ACMColors.error)
+                    .multilineTextAlignment(.leading)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(12)
+            .acmColorBackground(ACMColors.error.opacity(0.12))
+            .overlay {
+                RoundedRectangle(cornerRadius: ACMRadius.md)
+                    .strokeBorder(lineWidth: 1)
+                    .foregroundStyle(ACMColors.error.opacity(0.28))
+            }
+            .clipShape(RoundedRectangle(cornerRadius: ACMRadius.md))
         }
     }
 
@@ -947,12 +1063,80 @@ struct JoinView: View {
     }
     
     // MARK: - Actions
-    
+
+    private func refreshAuthProviders() {
+        guard !isLoadingAuthProviders else { return }
+        isLoadingAuthProviders = true
+        Task { @MainActor in
+            let providers = await NativeAuthService.fetchEnabledProviders()
+            enabledAuthProviders = providers
+            isLoadingAuthProviders = false
+        }
+    }
+
+    private func createAuthNonce() -> String {
+        "\(UUID().uuidString)-\(UUID().uuidString)"
+    }
+
+    private func applyAuthenticatedUser(
+        _ user: NativeAuthenticatedUser,
+        provider: NativeAuthProvider,
+        fallbackName: String? = nil,
+        fallbackEmail: String? = nil
+    ) {
+        let email = normalizedOptional(user.email) ?? normalizedOptional(fallbackEmail)
+        let id = normalizedOptional(user.id) ?? email ?? "\(provider.rawValue)-\(UUID().uuidString)"
+        let resolvedName =
+            normalizedOptional(user.name)
+            ?? normalizedOptional(fallbackName)
+            ?? email?.components(separatedBy: "@").first
+            ?? "User"
+        let authProvider: AppState.AuthProvider = provider == .apple ? .apple : .google
+
+        appState.setAuthenticatedUser(AppState.User(
+            id: id,
+            name: resolvedName,
+            email: email,
+            provider: authProvider
+        ))
+
+        displayNameInput = resolvedName
+        guestName = resolvedName
+        clearAuthError()
+        phase = .join
+        clearInputFocusAfterLayout()
+    }
+
+    private func normalizedOptional(_ value: String?) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
     private func handleGoogleSignIn() {
-        isSigningIn = false
-        signingInProvider = .none
-        viewModel.state.connectionState = ConnectionState.error
-        viewModel.state.errorMessage = "Google Sign-In is not configured for this build."
+        guard !isSigningIn else { return }
+        clearAuthError()
+        isSigningIn = true
+        signingInProvider = .google
+        Task { @MainActor in
+            do {
+                let identityToken = try await NativeAuthService.requestNativeGoogleIdentityToken()
+                let user = try await NativeAuthService.signInWithSocialToken(
+                    provider: .google,
+                    idToken: identityToken.token,
+                    userName: identityToken.name,
+                    userEmail: identityToken.email
+                )
+                applyAuthenticatedUser(
+                    user,
+                    provider: .google,
+                    fallbackName: identityToken.name,
+                    fallbackEmail: identityToken.email
+                )
+            } catch {
+                showAuthError(error.localizedDescription)
+            }
+            finishSignInAttempt()
+        }
     }
 
     private func finishSignInAttempt() {
@@ -961,6 +1145,7 @@ struct JoinView: View {
     }
 
     private func clearAuthError() {
+        authErrorMessage = nil
         if viewModel.state.connectionState == ConnectionState.error {
             viewModel.state.connectionState = ConnectionState.disconnected
         }
@@ -968,8 +1153,7 @@ struct JoinView: View {
     }
 
     private func showAuthError(_ message: String) {
-        viewModel.state.connectionState = ConnectionState.error
-        viewModel.state.errorMessage = message
+        authErrorMessage = message
     }
 
 #if !SKIP
@@ -985,7 +1169,16 @@ struct JoinView: View {
                 return
             }
 
-            let userId = credential.user
+            guard let identityTokenData = credential.identityToken,
+                  let identityToken = String(data: identityTokenData, encoding: .utf8),
+                  !identityToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                finishSignInAttempt()
+                showAuthError("Apple Sign-In did not return an identity token.")
+                return
+            }
+
+            let nonce = appleSignInNonce
+            appleSignInNonce = nil
             let email = credential.email
             let fullName = credential.fullName
 
@@ -996,19 +1189,22 @@ struct JoinView: View {
                 displayName = givenName
             }
 
-            appState.currentUser = AppState.User(
-                id: "apple-\(userId)",
-                name: displayName ?? email?.components(separatedBy: "@").first ?? "Apple User",
-                email: email ?? "\(userId)@apple.private",
-                provider: .apple
-            )
-            appState.authProvider = .apple
-            appState.isAuthenticated = true
-
-            displayNameInput = appState.currentUser?.name ?? ""
-            clearAuthError()
-            finishSignInAttempt()
-            phase = .join
+            Task { @MainActor in
+                do {
+                    let user = try await NativeAuthService.signInWithSocialToken(
+                        provider: .apple,
+                        idToken: identityToken,
+                        nonce: nonce,
+                        userName: displayName,
+                        userEmail: email
+                    )
+                    applyAuthenticatedUser(user, provider: .apple, fallbackName: displayName, fallbackEmail: email)
+                } catch {
+                    logger.error("Apple Sign-In exchange failed: \(error.localizedDescription)")
+                    showAuthError(error.localizedDescription)
+                }
+                finishSignInAttempt()
+            }
 
         case .failure(let error):
             logger.error("Apple Sign-In failed: \(error.localizedDescription)")
@@ -1025,14 +1221,12 @@ struct JoinView: View {
         clearInputFocus()
         let trimmedName = resolvedGuestName
         let guestId = "guest-\(UUID().uuidString)"
-        appState.currentUser = AppState.User(
+        appState.setAuthenticatedUser(AppState.User(
             id: guestId,
             name: trimmedName,
             email: "\(guestId)@guest.conclave",
             provider: .guest
-        )
-        appState.authProvider = .guest
-        appState.isAuthenticated = true
+        ))
         displayNameInput = trimmedName
         clearAuthError()
         authTransitionGeneration += 1

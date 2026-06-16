@@ -22,6 +22,7 @@ import {
   DEFAULT_VIDEO_EFFECTS,
   getFaceFilterEffectGraph,
   hasActiveVideoEffects,
+  isMeetVideoPipeRuntimeEnabled,
   isAnimatedBackgroundEffect,
   requiresMeetVideoPipeFaceFilter,
   type AppearanceStyleId,
@@ -30,6 +31,7 @@ import {
   type FaceFilterId,
   type VideoEffectsState,
 } from "../lib/video-effects";
+import { startMeetVideoPipeEffect } from "../lib/meet-videopipe-runtime";
 
 const SELFIE_SEGMENTATION_CDN =
   "https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation@0.1.1675465747";
@@ -919,6 +921,7 @@ type ProcessedOutput = {
   stream: MediaStream;
   track: MediaStreamTrack;
 };
+type FinalProcessedTrackOwner = "none" | "local" | "meet-videopipe";
 type OutputWriterWorkerReadyMessage = {
   type: "READY";
   hasVideoFrame: boolean;
@@ -9291,6 +9294,7 @@ export function useVideoEffects({
     debugInstanceIdRef.current = videoEffectsInstanceCounter;
   }
   const debugId = debugInstanceIdRef.current;
+  const selectedEffectsRef = useRef(effects);
   const effectsRef = useRef(effects);
   const hasObservedEffectsRef = useRef(false);
   const externalEffectChangePumpUntilRef = useRef(0);
@@ -9304,21 +9308,79 @@ export function useVideoEffects({
   );
   const [processedTrackReady, setProcessedTrackReady] = useState(false);
   const [processedTrackVersion, setProcessedTrackVersion] = useState(0);
+  const [meetVideoPipeTrack, setMeetVideoPipeTrack] =
+    useState<MediaStreamTrack | null>(null);
+  const [meetVideoPipeTrackReady, setMeetVideoPipeTrackReady] = useState(false);
+  const [meetVideoPipeFailedRequestKey, setMeetVideoPipeFailedRequestKey] =
+    useState<string | null>(null);
   const [status, setStatus] = useState<VideoEffectsRuntimeStatus>("off");
   const [error, setError] = useState<string | null>(null);
   const [debugStats, setDebugStats] = useState<VideoEffectsDebugStats | null>(
     null,
   );
 
-  const sourceVideoTrack = sourceStream?.getVideoTracks()[0] ?? null;
+  const rawSourceVideoTrack = sourceStream?.getVideoTracks()[0] ?? null;
   const active = hasActiveVideoEffects(effects);
-  const sourceStreamRef = useRef(sourceStream);
+  const meetVideoPipeEffectGraph =
+    active && effects.filter !== "none"
+      ? getFaceFilterEffectGraph(effects.filter)
+      : null;
+  const meetVideoPipeEffectIdNumber =
+    meetVideoPipeEffectGraph?.meetEffectIdNumber;
+  const meetVideoPipeRequestKey =
+    sourceStream &&
+    rawSourceVideoTrack &&
+    typeof meetVideoPipeEffectIdNumber === "number"
+      ? [
+          sourceStream.id,
+          rawSourceVideoTrack.id,
+          effects.filter,
+          meetVideoPipeEffectIdNumber,
+        ].join(":")
+      : null;
+  const meetVideoPipeActive =
+    Boolean(sourceStream) &&
+    rawSourceVideoTrack?.readyState === "live" &&
+    isMeetVideoPipeRuntimeEnabled() &&
+    meetVideoPipeEffectGraph?.requiresMeetVideoPipe === true &&
+    typeof meetVideoPipeEffectIdNumber === "number" &&
+    meetVideoPipeFailedRequestKey !== meetVideoPipeRequestKey;
+  const localProcessingEffects = useMemo<VideoEffectsState>(
+    () =>
+      meetVideoPipeActive
+        ? {
+            ...effects,
+            filter: "none",
+          }
+        : effects,
+    [effects, meetVideoPipeActive],
+  );
+  const localPipelineActive = hasActiveVideoEffects(localProcessingEffects);
+  const meetVideoPipeOutputReady =
+    meetVideoPipeTrackReady && meetVideoPipeTrack?.readyState === "live";
+  const localSourceVideoTrack = meetVideoPipeActive
+    ? meetVideoPipeOutputReady
+      ? meetVideoPipeTrack
+      : null
+    : rawSourceVideoTrack;
+  const localPipelineSourceStream = useMemo(() => {
+    if (!sourceStream) return null;
+    if (!localSourceVideoTrack) return meetVideoPipeActive ? null : sourceStream;
+    const tracks = sourceStream
+      .getTracks()
+      .filter((track) => track.kind !== "video");
+    tracks.push(localSourceVideoTrack);
+    return new MediaStream(tracks);
+  }, [localSourceVideoTrack, meetVideoPipeActive, sourceStream]);
+  const sourceVideoTrack = localSourceVideoTrack;
+  const sourceStreamRef = useRef(localPipelineSourceStream);
+  const finalTrackOwnerRef = useRef<FinalProcessedTrackOwner>("none");
   const roomTilingPolicyContextRef =
     useRef<VideoEffectsRoomTilingPolicyContext | null>(null);
 
   useEffect(() => {
-    sourceStreamRef.current = sourceStream;
-  }, [sourceStream]);
+    sourceStreamRef.current = localPipelineSourceStream;
+  }, [localPipelineSourceStream]);
 
   useEffect(() => {
     const ingestRoomTilingMetadata = (value: unknown) => {
@@ -9385,7 +9447,8 @@ export function useVideoEffects({
   }, []);
 
   useEffect(() => {
-    effectsRef.current = effects;
+    selectedEffectsRef.current = effects;
+    effectsRef.current = localProcessingEffects;
     if (hasObservedEffectsRef.current) {
       externalEffectChangePumpUntilRef.current =
         performance.now() + VIDEO_FRAME_CALLBACK_EFFECT_CHANGE_PUMP_MS;
@@ -9397,8 +9460,12 @@ export function useVideoEffects({
     } else {
       hasObservedEffectsRef.current = true;
     }
-    logVideoEffects(debugId, "effects_changed", getEffectsDebugSnapshot(effects));
-  }, [debugId, effects]);
+    logVideoEffects(debugId, "effects_changed", {
+      selected: getEffectsDebugSnapshot(effects),
+      localPipeline: getEffectsDebugSnapshot(localProcessingEffects),
+      meetVideoPipeActive,
+    });
+  }, [debugId, effects, localProcessingEffects, meetVideoPipeActive]);
 
   useEffect(() => {
     processedVideoTrackRef.current = processedTrack;
@@ -9409,33 +9476,287 @@ export function useVideoEffects({
   }, [debugId, processedTrack, processedVideoTrackRef]);
 
   useEffect(() => {
-    if (!active || !sourceVideoTrack || sourceVideoTrack.readyState !== "live") {
+    if (
+      !meetVideoPipeActive ||
+      !sourceStream ||
+      !rawSourceVideoTrack ||
+      !meetVideoPipeEffectGraph ||
+      !meetVideoPipeRequestKey
+    ) {
+      setMeetVideoPipeTrackReady(false);
+      setMeetVideoPipeTrack((current) => {
+        if (current) {
+          logVideoEffects(debugId, "meet_videopipe_release_inactive", {
+            outputTrack: getTrackDebugSnapshot(current),
+          });
+          stopProcessedTrackAfterGrace(
+            debugId,
+            current,
+            "Meet VideoPipe inactive",
+          );
+        }
+        return null;
+      });
+      return;
+    }
+
+    let cancelled = false;
+    let outputTrack: MediaStreamTrack | null = null;
+    let disposeSession: (() => Promise<void>) | null = null;
+
+    const publishMeetVideoPipeTrack = (track: MediaStreamTrack) => {
+      if (cancelled || track.readyState !== "live") return;
+      setMeetVideoPipeTrack(track);
+      setMeetVideoPipeTrackReady(true);
+      setMeetVideoPipeFailedRequestKey((current) =>
+        current === meetVideoPipeRequestKey ? null : current,
+      );
+
+      if (localPipelineActive) {
+        logVideoEffects(debugId, "meet_videopipe_source_track_ready", {
+          localPipelineActive,
+          outputTrack: getTrackDebugSnapshot(track),
+        });
+        return;
+      }
+
+      finalTrackOwnerRef.current = "meet-videopipe";
+      processedVideoTrackRef.current = track;
+      setProcessedTrackReady(true);
+      setStatus("running");
+      setError(null);
+      setDebugStats({
+        ...createInactiveDebugStats({
+          active: true,
+          sourceStream,
+          sourceVideoTrack: rawSourceVideoTrack,
+          effects: selectedEffectsRef.current,
+        }),
+        frameSource: "meet-videopipe",
+        outputTrackPublished: true,
+        outputMode: "meet-videopipe",
+        latestOutputFrameVisible: true,
+        meetVideoPipe: {
+          active: true,
+          mode: "direct",
+          graphId: meetVideoPipeEffectGraph.meetGraphId,
+          effectIdNumber: meetVideoPipeEffectGraph.meetEffectIdNumber,
+          requestKey: meetVideoPipeRequestKey,
+          sourceTrack: getTrackDebugSnapshot(rawSourceVideoTrack),
+          outputTrack: getTrackDebugSnapshot(track),
+        },
+      });
+      logVideoEffects(debugId, "meet_videopipe_publish_processed_track", {
+        graphId: meetVideoPipeEffectGraph.meetGraphId,
+        effectIdNumber: meetVideoPipeEffectGraph.meetEffectIdNumber,
+        outputTrack: getTrackDebugSnapshot(track),
+      });
+      setProcessedTrack(track);
+    };
+
+    const handleOutputMute = () => {
+      warnVideoEffects(debugId, "meet_videopipe_output_track_mute", {
+        outputTrack: getTrackDebugSnapshot(outputTrack),
+      });
+    };
+    const handleOutputUnmute = () => {
+      logVideoEffects(debugId, "meet_videopipe_output_track_unmute", {
+        outputTrack: getTrackDebugSnapshot(outputTrack),
+      });
+    };
+    const handleOutputEnded = () => {
+      warnVideoEffects(debugId, "meet_videopipe_output_track_ended", {
+        outputTrack: getTrackDebugSnapshot(outputTrack),
+      });
+      setMeetVideoPipeTrackReady(false);
+      if (finalTrackOwnerRef.current === "meet-videopipe") {
+        finalTrackOwnerRef.current = "none";
+        processedVideoTrackRef.current = null;
+        setProcessedTrackReady(false);
+        setProcessedTrack((current) =>
+          current === outputTrack ? null : current,
+        );
+      }
+    };
+
+    setMeetVideoPipeTrackReady(false);
+    setStatus("loading");
+    setError(null);
+    logVideoEffects(debugId, "meet_videopipe_start", {
+      graphId: meetVideoPipeEffectGraph.meetGraphId,
+      effectIdNumber: meetVideoPipeEffectGraph.meetEffectIdNumber,
+      requestKey: meetVideoPipeRequestKey,
+      localPipelineActive,
+      sourceStream: getStreamDebugSnapshot(sourceStream),
+      sourceTrack: getTrackDebugSnapshot(rawSourceVideoTrack),
+    });
+
+    void startMeetVideoPipeEffect({
+      sourceStream,
+      effectGraph: meetVideoPipeEffectGraph,
+      onOutputStream: (stream) => {
+        logVideoEffects(debugId, "meet_videopipe_output_stream", {
+          stream: getStreamDebugSnapshot(stream),
+        });
+      },
+      onLog: ({ event, level, message, error: logError, data }) => {
+        const payload = {
+          message,
+          error: logError ? getErrorDebugSnapshot(logError) : undefined,
+          data,
+        };
+        if (level === "warn" || level === "error") {
+          warnVideoEffects(debugId, `meet_videopipe_${event}`, payload);
+          return;
+        }
+        logVideoEffects(debugId, `meet_videopipe_${event}`, payload);
+      },
+    })
+      .then((session) => {
+        if (cancelled) {
+          void session.dispose();
+          return;
+        }
+        disposeSession = session.dispose;
+        outputTrack = session.outputTrack;
+        if ("contentHint" in outputTrack) {
+          outputTrack.contentHint = "motion";
+        }
+        outputTrack.addEventListener("mute", handleOutputMute);
+        outputTrack.addEventListener("unmute", handleOutputUnmute);
+        outputTrack.addEventListener("ended", handleOutputEnded);
+        publishMeetVideoPipeTrack(outputTrack);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        warnVideoEffects(debugId, "meet_videopipe_failed", {
+          error: getErrorDebugSnapshot(err),
+          graphId: meetVideoPipeEffectGraph.meetGraphId,
+          effectIdNumber: meetVideoPipeEffectGraph.meetEffectIdNumber,
+          requestKey: meetVideoPipeRequestKey,
+        });
+        setMeetVideoPipeFailedRequestKey(meetVideoPipeRequestKey);
+        setMeetVideoPipeTrackReady(false);
+        setMeetVideoPipeTrack((current) => {
+          if (current) {
+            stopProcessedTrackAfterGrace(
+              debugId,
+              current,
+              "Meet VideoPipe failed",
+            );
+          }
+          return null;
+        });
+        if (finalTrackOwnerRef.current === "meet-videopipe") {
+          finalTrackOwnerRef.current = "none";
+          processedVideoTrackRef.current = null;
+          setProcessedTrackReady(false);
+          setProcessedTrack((current) => {
+            if (current) {
+              stopProcessedTrackAfterGrace(
+                debugId,
+                current,
+                "Meet VideoPipe failed",
+              );
+            }
+            return null;
+          });
+        }
+        setStatus("degraded");
+        setError("Meet VideoPipe effect failed; using raw video fallback.");
+      });
+
+    return () => {
+      cancelled = true;
+      if (outputTrack) {
+        outputTrack.removeEventListener("mute", handleOutputMute);
+        outputTrack.removeEventListener("unmute", handleOutputUnmute);
+        outputTrack.removeEventListener("ended", handleOutputEnded);
+      }
+      const releasedTrack = outputTrack;
+      logVideoEffects(debugId, "meet_videopipe_cleanup", {
+        graphId: meetVideoPipeEffectGraph.meetGraphId,
+        effectIdNumber: meetVideoPipeEffectGraph.meetEffectIdNumber,
+        requestKey: meetVideoPipeRequestKey,
+        outputTrack: getTrackDebugSnapshot(releasedTrack),
+      });
+      setMeetVideoPipeTrackReady(false);
+      setMeetVideoPipeTrack((current) => {
+        if (current && current === releasedTrack) {
+          stopProcessedTrackAfterGrace(
+            debugId,
+            current,
+            "Meet VideoPipe cleanup",
+          );
+          return null;
+        }
+        return current;
+      });
+      if (
+        releasedTrack &&
+        finalTrackOwnerRef.current === "meet-videopipe"
+      ) {
+        finalTrackOwnerRef.current = "none";
+        processedVideoTrackRef.current = null;
+        setProcessedTrackReady(false);
+        setProcessedTrack((current) =>
+          current === releasedTrack ? null : current,
+        );
+      }
+      void disposeSession?.();
+    };
+  }, [
+    debugId,
+    localPipelineActive,
+    meetVideoPipeActive,
+    meetVideoPipeEffectGraph,
+    meetVideoPipeRequestKey,
+    processedVideoTrackRef,
+    rawSourceVideoTrack,
+    sourceStream,
+  ]);
+
+  useEffect(() => {
+    if (
+      !localPipelineActive ||
+      !sourceVideoTrack ||
+      sourceVideoTrack.readyState !== "live"
+    ) {
       logVideoEffects(debugId, "inactive_or_no_live_source", {
-        active,
+        active: localPipelineActive,
+        meetVideoPipeActive,
         sourceStream: getStreamDebugSnapshot(sourceStreamRef.current),
         sourceVideoTrack: getTrackDebugSnapshot(sourceVideoTrack),
       });
-      processedVideoTrackRef.current = null;
-      setProcessedTrackReady(false);
       setDebugStats(
         createInactiveDebugStats({
-          active,
+          active: localPipelineActive,
           sourceStream: sourceStreamRef.current,
           sourceVideoTrack,
           effects: effectsRef.current,
         }),
       );
-      setProcessedTrack((current) => {
-        if (current) {
+      if (finalTrackOwnerRef.current === "local") {
+        processedVideoTrackRef.current = null;
+        finalTrackOwnerRef.current = "none";
+        setProcessedTrackReady(false);
+        setProcessedTrack((current) => {
+          if (!current) return null;
           logVideoEffects(debugId, "release_processed_track_inactive", {
             processedTrack: getTrackDebugSnapshot(current),
           });
           stopProcessedTrackAfterGrace(debugId, current, "inactive or no live source");
-        }
-        return null;
-      });
-      setStatus("off");
-      setError(null);
+          return null;
+        });
+      } else if (!active && finalTrackOwnerRef.current !== "meet-videopipe") {
+        setProcessedTrackReady(false);
+      }
+      if (!active) {
+        setStatus("off");
+        setError(null);
+      } else if (localPipelineActive && meetVideoPipeActive) {
+        setStatus("loading");
+      }
       return;
     }
 
@@ -11491,6 +11812,7 @@ export function useVideoEffects({
         firstPublishedTrackAt = performance.now();
       }
       setProcessedTrackReady(true);
+      finalTrackOwnerRef.current = "local";
       logVideoEffects(debugId, "publish_processed_track", {
         visibleOutputFrameCount,
         blackOutputFrameCount,
@@ -11507,8 +11829,11 @@ export function useVideoEffects({
     ) => {
       if (!outputTrackPublished || cancelled) return;
       outputTrackPublished = false;
-      setProcessedTrackReady(false);
       visibleOutputFrameCount = 0;
+      if (finalTrackOwnerRef.current === "local") {
+        finalTrackOwnerRef.current = "none";
+        setProcessedTrackReady(false);
+      }
       const logRelease =
         severity === "warn" ? warnVideoEffects : logVideoEffects;
       logRelease(
@@ -11524,8 +11849,10 @@ export function useVideoEffects({
         sourceTrack: getTrackDebugSnapshot(sourceVideoTrack),
         },
       );
-      processedVideoTrackRef.current = null;
-      setProcessedTrack((current) => (current === track ? null : current));
+      if (finalTrackOwnerRef.current !== "meet-videopipe") {
+        processedVideoTrackRef.current = null;
+        setProcessedTrack((current) => (current === track ? null : current));
+      }
     };
 
     const recordOutputWriterFrameFailure = (err: unknown, phase: string) => {
@@ -15964,12 +16291,22 @@ export function useVideoEffects({
       tasksFaceLandmarker?.close();
       void legacySegmentation?.close().catch(() => {});
       void legacyFaceMesh?.close().catch(() => {});
-      processedVideoTrackRef.current = null;
-      setProcessedTrackReady(false);
-      setProcessedTrack((current) => (current === track ? null : current));
+      if (finalTrackOwnerRef.current === "local") {
+        finalTrackOwnerRef.current = "none";
+        processedVideoTrackRef.current = null;
+        setProcessedTrackReady(false);
+        setProcessedTrack((current) => (current === track ? null : current));
+      }
       stopProcessedTrackAfterGrace(debugId, track, "processor cleanup");
     };
-  }, [active, debugId, processedVideoTrackRef, sourceVideoTrack]);
+  }, [
+    active,
+    debugId,
+    localPipelineActive,
+    meetVideoPipeActive,
+    processedVideoTrackRef,
+    sourceVideoTrack,
+  ]);
 
   const effectiveStream = useMemo(() => {
     if (!sourceStream) return null;
@@ -15979,12 +16316,18 @@ export function useVideoEffects({
     const videoTrack =
       active && processedTrackReady && processedTrack?.readyState === "live"
         ? processedTrack
-        : sourceVideoTrack;
+        : rawSourceVideoTrack;
     if (videoTrack) {
       tracks.push(videoTrack);
     }
     return new MediaStream(tracks);
-  }, [active, processedTrack, processedTrackReady, sourceStream, sourceVideoTrack]);
+  }, [
+    active,
+    processedTrack,
+    processedTrackReady,
+    rawSourceVideoTrack,
+    sourceStream,
+  ]);
 
   return {
     effectiveStream,

@@ -14,7 +14,7 @@ public struct ConclaveRootView: View {
         ContentView(appState: appState)
             #if !SKIP
             .onOpenURL { url in
-                appState.openJoinURL(url)
+                _ = ConclaveAppDelegate.shared.onOpenURL(url)
             }
             #endif
     }
@@ -41,8 +41,21 @@ public final class ConclaveAppDelegate: Sendable {
         }
     }
 
+    @discardableResult
+    @MainActor
+    public func onOpenURL(_ url: URL) -> Bool {
+        if NativeAuthService.handleOpenURL(url) {
+            return true
+        }
+        AppState.shared.openJoinURL(url)
+        return true
+    }
+
     public func onOpenURL(_ urlString: String) {
         Task { @MainActor in
+            if let url = URL(string: urlString), NativeAuthService.handleOpenURL(url) {
+                return
+            }
             AppState.shared.openJoinURLString(urlString)
         }
     }

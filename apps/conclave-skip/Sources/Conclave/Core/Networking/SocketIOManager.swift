@@ -40,6 +40,7 @@ private enum SocketEvent {
     static let adminStopAllScreenShare = SfuClientEvent.adminStopAllScreenShare.rawValue
     static let adminClearRaisedHands = SfuClientEvent.adminClearRaisedHands.rawValue
     static let adminBroadcastNotice = SfuClientEvent.adminBroadcastNotice.rawValue
+    static let adminEndRoom = SfuClientEvent.adminEndRoom.rawValue
     static let meetingGetConfig = SfuClientEvent.meetingGetConfig.rawValue
     static let meetingUpdateConfig = SfuClientEvent.meetingUpdateConfig.rawValue
     static let webinarGetConfig = SfuClientEvent.webinarGetConfig.rawValue
@@ -55,6 +56,9 @@ private enum SocketEvent {
     static let appsClose = SfuClientEvent.appsClose.rawValue
     static let appsLock = SfuClientEvent.appsLock.rawValue
     static let appsGetState = SfuClientEvent.appsGetState.rawValue
+    static let appsYjsSync = SfuClientEvent.appsYjsSync.rawValue
+    static let appsYjsUpdate = SfuClientEvent.appsYjsUpdate.rawValue
+    static let appsAwareness = SfuClientEvent.appsAwareness.rawValue
 
     static let userJoined = SfuServerEvent.userJoined.rawValue
     static let userLeft = SfuServerEvent.userLeft.rawValue
@@ -104,6 +108,8 @@ private enum SocketEvent {
     static let browserState = SfuServerEvent.browserState.rawValue
     static let browserClosed = SfuServerEvent.browserClosed.rawValue
     static let appsState = SfuServerEvent.appsState.rawValue
+    static let appsYjsServerUpdate = SfuServerEvent.appsYjsUpdate.rawValue
+    static let appsServerAwareness = SfuServerEvent.appsAwareness.rawValue
 }
 
 // MARK: - Socket Manager
@@ -169,6 +175,8 @@ final class SocketIOManager {
     var onBrowserState: ((BrowserStateNotification) -> Void)?
     var onBrowserClosed: ((BrowserClosedNotification) -> Void)?
     var onAppsState: ((AppsStateNotification) -> Void)?
+    var onAppsYjsUpdate: ((AppsYjsUpdateNotification) -> Void)?
+    var onAppsAwareness: ((AppsAwarenessNotification) -> Void)?
 
     // Participant events
     var onUserJoined: ((UserJoinedNotification) -> Void)?
@@ -685,6 +693,36 @@ final class SocketIOManager {
         return try JSONDecoder().decode(AppsLockResponse.self, from: data)
     }
 
+    func syncApp(appId: String, stateVector: Data) async throws -> AppsSyncResponse {
+        let request = AppsSyncRequest(appId: appId, syncMessage: stateVector.base64EncodedString())
+        let data = try await emit(
+            event: SocketEvent.appsYjsSync,
+            payload: request
+        )
+        guard let response = decodeAppsSyncResponse(from: data) else {
+            throw SocketError.serverError("Invalid app sync acknowledgement.")
+        }
+        return response
+    }
+
+    func sendAppYjsUpdate(appId: String, update: Data) {
+        let request = AppsUpdateRequest(appId: appId, update: update.base64EncodedString())
+        if let payload = try? jsonObject(from: request) {
+            socket?.emit(SocketEvent.appsYjsUpdate, payload)
+        }
+    }
+
+    func sendAppAwareness(appId: String, awarenessUpdate: Data, clientId: Int? = nil) {
+        let request = AppsAwarenessRequest(
+            appId: appId,
+            awarenessUpdate: awarenessUpdate.base64EncodedString(),
+            clientId: clientId
+        )
+        if let payload = try? jsonObject(from: request) {
+            socket?.emit(SocketEvent.appsAwareness, payload)
+        }
+    }
+
     func admitUser(userId: String) async throws {
         _ = try await emit(event: SocketEvent.admitUser, payload: ["userId": userId])
     }
@@ -743,6 +781,12 @@ final class SocketIOManager {
         let request = AdminNoticeRequest(message: message, level: level.rawValue)
         let data = try await emit(event: SocketEvent.adminBroadcastNotice, payload: request)
         return try JSONDecoder().decode(AdminNoticeResponse.self, from: data)
+    }
+
+    func endRoom(message: String? = nil, delayMs: Int? = nil) async throws -> AdminEndRoomResponse {
+        let request = AdminEndRoomRequest(message: message, delayMs: delayMs)
+        let data = try await emit(event: SocketEvent.adminEndRoom, payload: request)
+        return try JSONDecoder().decode(AdminEndRoomResponse.self, from: data)
     }
 
     func promoteHost(userId: String) async throws {
@@ -983,6 +1027,109 @@ final class SocketIOManager {
     func decode<T: Decodable>(_ type: T.Type, from data: Any) -> T? {
         guard let payloadData = jsonData(from: data) else { return nil }
         return try? JSONDecoder().decode(T.self, from: payloadData)
+    }
+
+    private func dictionary(from value: Any) -> [String: Any]? {
+        if let dict = value as? [String: Any] {
+            return dict
+        }
+        guard let payloadData = jsonData(from: value),
+              let object = try? JSONSerialization.jsonObject(with: payloadData, options: []),
+              let dict = object as? [String: Any] else {
+            return nil
+        }
+        return dict
+    }
+
+    private func stringField(_ dict: [String: Any], _ key: String) -> String? {
+        let trimmed = (dict[key] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private func intField(_ dict: [String: Any], _ key: String) -> Int? {
+        if let intValue = dict[key] as? Int {
+            return intValue
+        }
+        if let number = dict[key] as? NSNumber {
+            return number.intValue
+        }
+        return nil
+    }
+
+    private func byteData(from value: Any?) -> Data? {
+        if let data = value as? Data {
+            return data.isEmpty ? nil : data
+        }
+        if let bytes = value as? [UInt8] {
+            return bytes.isEmpty ? nil : Data(bytes)
+        }
+        if let array = value as? [Any] {
+            var bytes: [UInt8] = []
+            bytes.reserveCapacity(array.count)
+            for item in array {
+                let number: Int?
+                if let intValue = item as? Int {
+                    number = intValue
+                } else if let numberValue = item as? NSNumber {
+                    number = numberValue.intValue
+                } else {
+                    number = nil
+                }
+                guard let number, (0...255).contains(number) else { return nil }
+                bytes.append(UInt8(number))
+            }
+            return bytes.isEmpty ? nil : Data(bytes)
+        }
+        if let dict = value as? [String: Any],
+           stringField(dict, "type") == "Buffer" {
+            return byteData(from: dict["data"])
+        }
+        if let string = value as? String {
+            let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return nil }
+            return Data(base64Encoded: trimmed)
+        }
+        return nil
+    }
+
+    private func decodeAppsSyncResponse(from data: Data) -> AppsSyncResponse? {
+        guard let object = try? JSONSerialization.jsonObject(with: data, options: []),
+              let dict = object as? [String: Any],
+              let syncMessage = byteData(from: dict["syncMessage"]) else {
+            return nil
+        }
+        return AppsSyncResponse(
+            syncMessage: syncMessage,
+            stateVector: byteData(from: dict["stateVector"]),
+            awarenessUpdate: byteData(from: dict["awarenessUpdate"])
+        )
+    }
+
+    private func decodeAppsYjsUpdate(from value: Any) -> AppsYjsUpdateNotification? {
+        guard let dict = dictionary(from: value),
+              let appId = stringField(dict, "appId"),
+              let update = byteData(from: dict["update"]) else {
+            return nil
+        }
+        return AppsYjsUpdateNotification(
+            appId: appId,
+            update: update,
+            roomId: stringField(dict, "roomId")
+        )
+    }
+
+    private func decodeAppsAwareness(from value: Any) -> AppsAwarenessNotification? {
+        guard let dict = dictionary(from: value),
+              let appId = stringField(dict, "appId"),
+              let awarenessUpdate = byteData(from: dict["awarenessUpdate"]) else {
+            return nil
+        }
+        return AppsAwarenessNotification(
+            appId: appId,
+            awarenessUpdate: awarenessUpdate,
+            clientId: intField(dict, "clientId"),
+            roomId: stringField(dict, "roomId")
+        )
     }
 
     // MARK: - Event Handlers
@@ -1406,6 +1553,22 @@ final class SocketIOManager {
                   let notification = self.decode(AppsStateNotification.self, from: first),
                   self.eventRoomIdMatchesActiveOrPending(notification.roomId) else { return }
             self.onAppsState?(notification)
+        }
+
+        socket.on(SocketEvent.appsYjsServerUpdate) { [weak self] data, _ in
+            guard let self, let first = data.first,
+                  self.socket === socket,
+                  let notification = self.decodeAppsYjsUpdate(from: first),
+                  self.eventRoomIdMatchesActiveOrPending(notification.roomId) else { return }
+            self.onAppsYjsUpdate?(notification)
+        }
+
+        socket.on(SocketEvent.appsServerAwareness) { [weak self] data, _ in
+            guard let self, let first = data.first,
+                  self.socket === socket,
+                  let notification = self.decodeAppsAwareness(from: first),
+                  self.eventRoomIdMatchesActiveOrPending(notification.roomId) else { return }
+            self.onAppsAwareness?(notification)
         }
 
         socket.on(SocketEvent.adminMediaEnforced) { [weak self] data, _ in

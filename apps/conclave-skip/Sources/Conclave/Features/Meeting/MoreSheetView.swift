@@ -213,6 +213,8 @@ struct AdminControlsSheetView: View {
     @State private var noticeInput = ""
     @State private var noticeLevel: AdminNoticeLevel = .info
     @State private var isNoticeSending = false
+    @State private var showEndMeetingConfirmation = false
+    @State private var isEndingMeeting = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -286,6 +288,7 @@ struct AdminControlsSheetView: View {
                         }
 
                         noticeSection
+                        destructiveSection
                     }
                     .padding(.horizontal, ACMSpacing.lg)
                     .padding(.top, ACMSpacing.md)
@@ -301,6 +304,19 @@ struct AdminControlsSheetView: View {
         #else
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         #endif
+        .confirmationDialog(
+            "End meeting for everyone?",
+            isPresented: $showEndMeetingConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("End meeting", role: .destructive) {
+                endMeetingForEveryone()
+            }
+            Button("Cancel", role: .cancel) {
+            }
+        } message: {
+            Text("Everyone in the room, including people waiting to join, will be disconnected.")
+        }
     }
 
     private var noticeSection: some View {
@@ -357,6 +373,25 @@ struct AdminControlsSheetView: View {
         }
     }
 
+    private var destructiveSection: some View {
+        VStack(alignment: .leading, spacing: ACMSpacing.xs) {
+            acmListSectionHeader("Danger zone")
+
+            MeetingSheetSectionCard {
+                MoreRow(
+                    icon: "xmark.octagon.fill",
+                    androidIcon: "close",
+                    title: isEndingMeeting ? "Ending meeting..." : "End meeting for everyone",
+                    tint: ACMColors.error,
+                    androidTint: "danger",
+                    isDisabled: isEndingMeeting
+                ) {
+                    showEndMeetingConfirmation = true
+                }
+            }
+        }
+    }
+
     private var canSendNotice: Bool {
         !isNoticeSending && !noticeInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
@@ -390,6 +425,18 @@ struct AdminControlsSheetView: View {
                 noticeInput = ""
             }
             isNoticeSending = false
+        }
+    }
+
+    private func endMeetingForEveryone() {
+        guard !isEndingMeeting else { return }
+        isEndingMeeting = true
+        Task { @MainActor in
+            let ended = await viewModel.endMeetingForEveryone()
+            isEndingMeeting = false
+            if ended {
+                dismiss()
+            }
         }
     }
 
@@ -454,7 +501,7 @@ struct SharedBrowserSheetView: View {
                                 if viewModel.state.isBrowserActive {
                                     activeBrowserStatusRow
 
-                                    if viewModel.state.hasBrowserAudio || viewModel.state.isBrowserActive {
+                                    if viewModel.state.hasBrowserAudio {
                                         MoreRowDivider()
                                         browserAudioRow
                                     }

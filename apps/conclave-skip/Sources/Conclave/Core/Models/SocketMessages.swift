@@ -116,6 +116,22 @@ struct AppsLockRequest: Codable {
     let locked: Bool
 }
 
+struct AppsSyncRequest: Codable {
+    let appId: String
+    let syncMessage: String
+}
+
+struct AppsUpdateRequest: Codable {
+    let appId: String
+    let update: String
+}
+
+struct AppsAwarenessRequest: Codable {
+    let appId: String
+    let awarenessUpdate: String
+    let clientId: Int?
+}
+
 struct AdminNoticeRequest: Codable {
     let message: String
     let level: String
@@ -449,6 +465,18 @@ struct AdminNoticeNotification: Codable {
     let senderUserId: String?
 }
 
+struct AdminEndRoomRequest: Encodable {
+    let message: String?
+    let delayMs: Int?
+}
+
+struct AdminEndRoomResponse: Codable {
+    let success: Bool?
+    let roomId: String?
+    let delayMs: Int?
+    let error: String?
+}
+
 struct AdminHandsClearedNotification: Codable {
     let roomId: String?
     let count: Int?
@@ -636,6 +664,25 @@ struct AppsLockResponse: Codable {
     let success: Bool?
     let locked: Bool?
     let error: String?
+}
+
+struct AppsSyncResponse {
+    let syncMessage: Data
+    let stateVector: Data?
+    let awarenessUpdate: Data?
+}
+
+struct AppsYjsUpdateNotification {
+    let appId: String
+    let update: Data
+    let roomId: String?
+}
+
+struct AppsAwarenessNotification {
+    let appId: String
+    let awarenessUpdate: Data
+    let clientId: Int?
+    let roomId: String?
 }
 
 // MARK: - WebRTC Types (Simplified)

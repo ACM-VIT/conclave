@@ -53,6 +53,10 @@ typealias AppType = NSApplication
         return true
     }
 
+    func application(_ application: UIApplication, open url: URL, options: [UIApplication.OpenURLOptionsKey : Any] = [:]) -> Bool {
+        AppDelegate.shared.onOpenURL(url)
+    }
+
     func applicationWillTerminate(_ application: UIApplication) {
         AppDelegate.shared.onDestroy()
     }
