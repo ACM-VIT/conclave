@@ -275,12 +275,12 @@ function MobileChatPanel({
               className="mt-3 flex items-center justify-between"
               style={{ fontFamily: "'PolySans Trial', sans-serif" }}
             >
-              <h2 className="text-base font-semibold text-[#fafafa] uppercase tracking-[0.2em]">
+              <h2 className="text-base font-semibold text-[#fafafa]">
                 Chat
               </h2>
               <button
                 onClick={onClose}
-                className="mobile-pill mobile-glass-soft px-3 py-1 text-[10px] uppercase tracking-[0.2em] text-[#fafafa]"
+                className="mobile-pill mobile-glass-soft px-3 py-1 text-[12px] font-medium text-[#fafafa]"
               >
                 Done
               </button>
@@ -319,7 +319,7 @@ function MobileChatPanel({
                     >
                       <div className="text-[11px] text-[#fafafa]/82 italic px-1">
                         {directMessageLabel ? (
-                          <p className="mb-0.5 text-[9px] not-italic uppercase tracking-[0.14em] text-amber-300/80">
+                          <p className="mb-0.5 text-[11px] not-italic font-medium text-amber-300/80">
                             {directMessageLabel}
                           </p>
                         ) : null}
@@ -338,7 +338,7 @@ function MobileChatPanel({
                     className={`${isNew ? "mobile-chat-message-new" : ""} flex flex-col ${isOwn ? "items-end" : "items-start"}`}
                   >
                     {!isOwn && (
-                      <span className="text-[10px] text-[#fafafa]/66 mb-0.5 px-1 uppercase tracking-[0.18em]">
+                      <span className="mb-0.5 px-1 text-[11px] font-medium text-[#fafafa]/66">
                         {resolveDisplayName(message.userId)}
                       </span>
                     )}
@@ -351,7 +351,7 @@ function MobileChatPanel({
                     >
                       <p className="text-sm break-words">
                         {directMessageLabel ? (
-                          <span className="mb-1 block text-[9px] uppercase tracking-[0.14em] text-amber-300/80">
+                          <span className="mb-1 block text-[11px] font-medium text-amber-300/80">
                             {directMessageLabel}
                           </span>
                         ) : null}
@@ -373,7 +373,7 @@ function MobileChatPanel({
             className="relative flex items-center gap-2 px-4 py-3 border-t border-[#fafafa]/10 bg-[#0b0b0b]/95"
           >
             {showMentionSuggestions && (
-              <div className="absolute bottom-full mb-2 left-0 right-0 max-h-40 overflow-y-auto mobile-sheet-card shadow-xl overflow-hidden">
+              <div className="absolute bottom-full mb-2 left-0 right-0 max-h-40 overflow-y-auto mobile-sheet-card overflow-hidden">
                 {mentionSuggestions.map((participant, index) => {
                   const isActive = index === activeMentionIndex;
                   return (
@@ -396,7 +396,7 @@ function MobileChatPanel({
               </div>
             )}
             {showCommandSuggestions && (
-              <div className="absolute bottom-full mb-2 left-0 right-0 max-h-48 overflow-y-auto mobile-sheet-card shadow-xl overflow-hidden">
+              <div className="absolute bottom-full mb-2 left-0 right-0 max-h-48 overflow-y-auto mobile-sheet-card overflow-hidden">
                 {commandSuggestions.map((command, index) => {
                   const isActive = index === activeCommandIndex;
                   return (

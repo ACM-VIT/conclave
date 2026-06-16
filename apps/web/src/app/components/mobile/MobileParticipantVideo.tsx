@@ -169,10 +169,10 @@ function MobileParticipantVideo({
           <div className="flex flex-col items-center gap-2">
             <VenetianMask className="w-10 h-10 text-[#FF007A]" />
             <span
-              className="mobile-ghost-badge rounded-full px-3 py-1 text-[10px] tracking-[0.25em] text-[#FF007A]"
+              className="mobile-ghost-badge rounded-full px-3 py-1 text-[11px] font-medium text-[#FF007A]"
               style={{ fontFamily: "'PolySans Trial', sans-serif" }}
             >
-              GHOST
+              Ghost
             </span>
           </div>
         </div>
@@ -186,11 +186,11 @@ function MobileParticipantVideo({
       {size !== "small" && (
         <div className="absolute bottom-1.5 left-1.5 right-1.5 flex items-center justify-between">
           <div
-            className="mobile-name-pill px-2.5 py-1 flex items-center gap-2 max-w-[85%] backdrop-blur-md"
+            className="mobile-name-pill px-2.5 py-1 flex items-center gap-2 max-w-[85%]"
             style={{ fontFamily: "'PolySans Trial', sans-serif" }}
           >
             <span
-              className="text-[10px] text-[#fafafa] font-medium truncate uppercase tracking-[0.18em]"
+              className="text-[12px] text-[#fafafa] font-medium truncate"
               title={displayName}
             >
               {displayLabel}

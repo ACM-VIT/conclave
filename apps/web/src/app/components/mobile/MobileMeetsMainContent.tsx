@@ -852,10 +852,10 @@ function MobileMeetsMainContent({
         <div className="flex items-center gap-2">
           <div className="mobile-glass mobile-pill px-3 py-2 flex items-center gap-2">
             <span
-              className="text-[11px] font-medium text-[#fafafa] uppercase tracking-[0.2em]"
+              className="text-[12px] font-medium text-[#fafafa]"
               style={{ fontFamily: "'PolySans Trial', sans-serif" }}
             >
-              {roomId.toUpperCase()}
+              {roomId}
             </span>
           </div>
         </div>
@@ -869,7 +869,7 @@ function MobileMeetsMainContent({
             >
               <Users className="w-3.5 h-3.5 text-[#fafafa]/82" />
               <span
-                className="text-[11px] font-medium text-[#fafafa] uppercase tracking-[0.2em]"
+                className="text-[12px] font-medium text-[#fafafa]"
                 style={{ fontFamily: "'PolySans Trial', sans-serif" }}
               >
                 {isWebinarAttendee
@@ -879,20 +879,20 @@ function MobileMeetsMainContent({
             </button>
           )}
           {isScreenSharing && (
-            <div className="mobile-glass-soft mobile-pill px-2.5 py-1 flex items-center gap-1 text-[#F95F4A] text-[9px] uppercase tracking-[0.2em] font-medium">
+            <div className="mobile-glass-soft mobile-pill px-2.5 py-1 flex items-center gap-1 text-[#F95F4A] text-[11px] font-medium">
               <span className="w-1.5 h-1.5 rounded-full bg-[#F95F4A]" />
               Sharing
             </div>
           )}
           {ghostEnabled && (
-            <div className="mobile-glass-soft mobile-pill px-2.5 py-1 flex items-center gap-1 text-[#FF007A] text-[9px] uppercase tracking-[0.2em] font-medium">
+            <div className="mobile-glass-soft mobile-pill px-2.5 py-1 flex items-center gap-1 text-[#FF007A] text-[11px] font-medium">
               <Ghost className="w-3 h-3" />
             </div>
           )}
           {(connectionState === "reconnecting" ||
             (serverRestartNotice &&
               !["error", "disconnected"].includes(connectionState))) && (
-            <div className="mobile-glass-soft mobile-pill px-2.5 py-1 flex items-center gap-1 text-amber-300 text-[9px] uppercase tracking-[0.2em] font-medium">
+            <div className="mobile-glass-soft mobile-pill px-2.5 py-1 flex items-center gap-1 text-amber-300 text-[11px] font-medium">
               <RefreshCw className="w-3 h-3 animate-spin" />
             </div>
           )}
@@ -916,7 +916,7 @@ function MobileMeetsMainContent({
         <DevMeetToolsPanel roomId={roomId} />
       )}
 
-      <div className="flex-1 min-h-0 pb-24">
+      <div className="flex-1 min-h-0 pb-40">
         {isWebinarAttendee ? (
           <div className="flex h-full items-center justify-center px-4">
             {webinarStage ? (
@@ -938,7 +938,7 @@ function MobileMeetsMainContent({
                 />
                 {webinarStage.pip ? (
                   <div
-                    className={`absolute h-24 w-36 overflow-hidden rounded-xl border border-[#fafafa]/20 bg-black/75 shadow-[0_12px_24px_rgba(0,0,0,0.45)] ${pipDragPosition ? "" : pipCornerClass} cursor-grab active:cursor-grabbing touch-none select-none`}
+                    className={`absolute h-24 w-36 overflow-hidden rounded-xl border border-[#fafafa]/20 bg-black/75 ${pipDragPosition ? "" : pipCornerClass} cursor-grab active:cursor-grabbing touch-none select-none`}
                     style={
                       pipDragPosition
                         ? {
@@ -1058,7 +1058,7 @@ function MobileMeetsMainContent({
       )}
 
       {isJoined && !isWebinarAttendee && browserLaunchError && (
-        <div className="absolute top-16 left-4 right-4 z-40 mobile-sheet-card border border-[#F95F4A]/30 px-3 py-2 text-xs text-[#fafafa]/90 shadow-2xl">
+        <div className="absolute top-16 left-4 right-4 z-40 mobile-sheet-card border border-[#F95F4A]/30 px-3 py-2 text-xs text-[#fafafa]/90">
           <div className="flex items-start gap-2">
             <span className="font-medium text-[#F95F4A]">Browser error</span>
             {onClearBrowserError && (
@@ -1077,7 +1077,7 @@ function MobileMeetsMainContent({
         </div>
       )}
       {isJoined && !isWebinarAttendee && voiceAgentError && (
-        <div className="absolute top-16 left-4 right-4 z-40 mobile-sheet-card border border-[#F95F4A]/30 px-3 py-2 text-xs text-[#fafafa]/90 shadow-2xl">
+        <div className="absolute top-16 left-4 right-4 z-40 mobile-sheet-card border border-[#F95F4A]/30 px-3 py-2 text-xs text-[#fafafa]/90">
           <div className="flex items-start gap-2">
             <span className="font-medium text-[#F95F4A]">Voice agent error</span>
             {onClearVoiceAgentError && (
@@ -1095,7 +1095,7 @@ function MobileMeetsMainContent({
       )}
 
       {!isWebinarAttendee && browserAudioNeedsGesture && (
-        <div className="px-4 mt-2 text-[11px] text-[#F95F4A]/70 text-center uppercase tracking-[0.4em]">
+        <div className="px-4 mt-2 text-center text-[12px] font-medium text-[#F95F4A]/80">
           Tap "Shared browser audio" to unlock the system sound.
         </div>
       )}
@@ -1175,27 +1175,20 @@ function MobileMeetsMainContent({
       />
 
       {isJoined && !isWebinarAttendee && isVideoEffectsOpen && (
-        <div
-          className="fixed inset-0 z-50 bg-black/50"
-          onClick={handleCloseVideoEffects}
-        >
-          <div onClick={(event) => event.stopPropagation()}>
-            <VideoEffectsPanel
-              variant="dialog"
-              effects={videoEffects}
-              onEffectsChange={onVideoEffectsChange}
-              onRecenterFraming={onVideoEffectsRecenter}
-              localStream={localStream}
-              isCameraOff={isCameraOff}
-              status={videoEffectsStatus}
-              error={videoEffectsError}
-              debugStats={videoEffectsDebugStats}
-              activeCount={activeVideoEffectsCount}
-              cameraPermissionBlocked={isCameraPermissionBlocked}
-              onClose={handleCloseVideoEffects}
-            />
-          </div>
-        </div>
+        <VideoEffectsPanel
+          variant="dialog"
+          effects={videoEffects}
+          onEffectsChange={onVideoEffectsChange}
+          onRecenterFraming={onVideoEffectsRecenter}
+          localStream={localStream}
+          isCameraOff={isCameraOff}
+          status={videoEffectsStatus}
+          error={videoEffectsError}
+          debugStats={videoEffectsDebugStats}
+          activeCount={activeVideoEffectsCount}
+          cameraPermissionBlocked={isCameraPermissionBlocked}
+          onClose={handleCloseVideoEffects}
+        />
       )}
 
       {/* Full-screen chat panel */}

@@ -427,7 +427,7 @@ function MobileControlsBar({
         <div className="relative flex items-center justify-center px-4 pb-[calc(12px+env(safe-area-inset-bottom))] pt-4">
           <div className="mobile-glass mobile-pill flex items-center gap-3 px-4 py-3">
             <span
-              className="text-[11px] text-[#fafafa]/82 uppercase tracking-[0.18em]"
+              className="text-[12px] font-medium text-[#fafafa]/82"
               style={{ fontFamily: "'PolySans Trial', sans-serif" }}
             >
               {webinarConfig?.attendeeCount ?? 0} watching
@@ -658,7 +658,7 @@ function MobileControlsBar({
                 </div>
                 <span className="text-sm font-medium">Shared browser</span>
                 <span
-                  className={`ml-auto text-[10px] uppercase tracking-[0.2em] ${
+                  className={`ml-auto text-[12px] font-medium ${
                     isBrowserActive ? "text-emerald-300" : "text-[#fafafa]/56"
                   }`}
                 >
@@ -685,7 +685,7 @@ function MobileControlsBar({
                   {isWhiteboardActive ? "Close whiteboard" : "Open whiteboard"}
                 </span>
                 <span
-                  className={`ml-auto text-[10px] uppercase tracking-[0.2em] ${
+                  className={`ml-auto text-[12px] font-medium ${
                     isWhiteboardActive ? "text-emerald-300" : "text-[#fafafa]/56"
                   }`}
                 >
@@ -717,7 +717,7 @@ function MobileControlsBar({
                     : "Open dev playground"}
                 </span>
                 <span
-                  className={`ml-auto text-[10px] uppercase tracking-[0.2em] ${
+                  className={`ml-auto text-[12px] font-medium ${
                     isDevPlaygroundActive
                       ? "text-emerald-300"
                       : "text-[#fafafa]/56"
@@ -751,7 +751,7 @@ function MobileControlsBar({
                   )}
                 </div>
                 <span className="text-sm font-medium">Shared browser audio</span>
-                <span className="ml-auto text-[10px] uppercase tracking-[0.2em] text-[#fafafa]/56">
+                <span className="ml-auto text-[12px] font-medium text-[#fafafa]/56">
                   {isBrowserAudioMuted ? "Muted" : "On"}
                 </span>
               </button>
@@ -1465,7 +1465,7 @@ function MobileControlsBar({
                 </div>
                 <div className="flex flex-col">
                   <span className="text-base font-medium">Shared browser</span>
-                  <span className="text-[11px] text-[#fafafa]/75 uppercase tracking-[0.2em]">
+                  <span className="text-[12px] font-medium text-[#fafafa]/75">
                     {isBrowserActive ? "Live" : "Offline"}
                   </span>
                 </div>

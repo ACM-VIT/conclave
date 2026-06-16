@@ -31,6 +31,20 @@ const keepUserDataDir =
 const streamNetwork = /^(1|true|yes)$/i.test(
   process.env.MEET_OBSERVER_STREAM_NETWORK ?? "",
 );
+const mobileMode = /^(1|true|yes)$/i.test(
+  process.env.MEET_OBSERVER_MOBILE ?? "",
+);
+const mobileWidth = Number(process.env.MEET_OBSERVER_MOBILE_WIDTH ?? 390);
+const mobileHeight = Number(process.env.MEET_OBSERVER_MOBILE_HEIGHT ?? 844);
+const mobileDeviceScaleFactor = Number(
+  process.env.MEET_OBSERVER_MOBILE_DEVICE_SCALE_FACTOR ?? 3,
+);
+const mobileUserAgent =
+  process.env.MEET_OBSERVER_MOBILE_USER_AGENT ??
+  "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1";
+const mobilePlatform = /android/i.test(mobileUserAgent)
+  ? "Linux armv8l"
+  : "iPhone";
 
 const emit = (event, payload = {}) => {
   process.stdout.write(
@@ -515,7 +529,9 @@ const chromeArgs = [
   "--disable-component-update",
   "--disable-extensions",
   "--disable-sync",
-  "--window-size=1440,900",
+  mobileMode
+    ? `--window-size=${mobileWidth},${mobileHeight}`
+    : "--window-size=1440,900",
   "--autoplay-policy=no-user-gesture-required",
   "--enable-logging=stderr",
   "--v=0",
@@ -582,6 +598,33 @@ try {
   await cdp.send("Network.enable");
   await cdp.send("Page.enable");
   await cdp.send("Log.enable");
+  if (mobileMode) {
+    await cdp.send("Network.setUserAgentOverride", {
+      userAgent: mobileUserAgent,
+      platform: mobilePlatform,
+    });
+    await cdp.send("Emulation.setDeviceMetricsOverride", {
+      width: mobileWidth,
+      height: mobileHeight,
+      deviceScaleFactor: mobileDeviceScaleFactor,
+      mobile: true,
+    });
+    await cdp.send("Emulation.setTouchEmulationEnabled", {
+      enabled: true,
+      maxTouchPoints: 5,
+    });
+    await cdp.send("Emulation.setEmitTouchEventsForMouse", {
+      enabled: true,
+      configuration: "mobile",
+    }).catch(() => {});
+    emit("mobile_emulation_enabled", {
+      width: mobileWidth,
+      height: mobileHeight,
+      deviceScaleFactor: mobileDeviceScaleFactor,
+      platform: mobilePlatform,
+      userAgent: mobileUserAgent,
+    });
+  }
   await cdp.send("Page.navigate", { url: meetUrl });
   await waitFor(
     cdp,

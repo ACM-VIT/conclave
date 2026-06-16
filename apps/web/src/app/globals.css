@@ -753,15 +753,13 @@ select:focus {
 }
 
 .mobile-glass {
-  background: rgba(12, 12, 12, 0.45);
-  border: 1px solid rgba(250, 250, 250, 0.12);
-  backdrop-filter: blur(16px);
+  background: var(--mobile-surface);
+  border: 1px solid rgba(250, 250, 250, 0.14);
 }
 
 .mobile-glass-soft {
-  background: rgba(20, 20, 20, 0.6);
-  border: 1px solid rgba(250, 250, 250, 0.08);
-  backdrop-filter: blur(14px);
+  background: var(--mobile-surface-2);
+  border: 1px solid rgba(250, 250, 250, 0.12);
 }
 
 .mobile-pill {
@@ -843,9 +841,9 @@ select:focus {
 
 .mobile-control-btn {
   border: 1px solid rgba(250, 250, 250, 0.12);
-  background: transparent;
+  background: var(--mobile-surface);
   color: rgba(250, 250, 250, 0.85);
-  transition: transform 0.15s ease, background 0.2s ease, border-color 0.2s ease,
+  transition: transform 0.12s ease, background 0.16s ease, border-color 0.16s ease,
     color 0.2s ease;
 }
 
@@ -893,9 +891,11 @@ select:focus {
 
 .mobile-tile {
   position: relative;
-  background: #000;
-  border: 1px solid rgba(250, 250, 250, 0.1);
+  background: #0a0a0b;
+  border: 1px solid rgba(250, 250, 250, 0.14);
   border-radius: 16px;
+  contain: layout paint;
+  isolation: isolate;
   overflow: hidden;
 }
 
@@ -913,15 +913,28 @@ select:focus {
 }
 
 .mobile-name-pill {
-  background: rgba(0, 0, 0, 0.7);
-  border: 1px solid rgba(250, 250, 250, 0.1);
+  background: rgba(10, 10, 11, 0.86);
+  border: 1px solid rgba(250, 250, 250, 0.14);
   border-radius: 999px;
 }
 
+.mobile-stage-rail {
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+.mobile-stage-rail::-webkit-scrollbar {
+  display: none;
+}
+
+.mobile-tile-hand-raised {
+  border-color: rgba(251, 191, 36, 0.42);
+}
+
 .mobile-hand-badge {
-  background: rgba(255, 128, 0, 0.2);
-  border: 1px solid rgba(255, 128, 0, 0.4);
-  box-shadow: 0 0 10px rgba(255, 128, 0, 0.3);
+  background: rgba(251, 191, 36, 0.16);
+  border: 1px solid rgba(251, 191, 36, 0.42);
 }
 
 .mobile-ghost-overlay {

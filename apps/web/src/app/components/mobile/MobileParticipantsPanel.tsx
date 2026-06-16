@@ -181,7 +181,7 @@ function MobileParticipantsPanel({
           {isAdmin && pendingArray.length > 0 && (
             <div className="mobile-sheet-card p-3">
               <div className="flex items-center justify-between mb-2">
-                <span className="text-[10px] uppercase tracking-[0.25em] text-[#F95F4A]/80">
+                <span className="text-[12px] font-medium text-[#F95F4A]/80">
                   Waiting ({pendingArray.length})
                 </span>
               </div>
@@ -225,11 +225,11 @@ function MobileParticipantsPanel({
                     <span className="text-sm text-[#fafafa] truncate">
                       {formatName(getDisplayName(currentUserId), 16)}
                     </span>
-                    <span className="text-[9px] uppercase tracking-[0.2em] text-[#F95F4A]/70">
-                      YOU
+                    <span className="text-[11px] font-medium text-[#F95F4A]/70">
+                      You
                     </span>
                     {effectiveHostUserIds.has(currentUserId) && (
-                      <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-amber-300/30 bg-amber-400/10 px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-amber-200">
+                      <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-amber-300/30 bg-amber-400/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-200">
                         Host
                       </span>
                     )}
@@ -268,7 +268,7 @@ function MobileParticipantsPanel({
                             {formatName(getDisplayName(participant.userId), 16)}
                           </span>
                           {effectiveHostUserIds.has(participant.userId) && (
-                            <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-amber-300/30 bg-amber-400/10 px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-amber-200">
+                            <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-amber-300/30 bg-amber-400/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-200">
                               Host
                             </span>
                           )}

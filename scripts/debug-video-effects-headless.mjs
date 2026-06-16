@@ -4,6 +4,7 @@ import {
   existsSync,
   mkdtempSync,
   mkdirSync,
+  readdirSync,
   rmSync,
   statSync,
 } from "node:fs";
@@ -19,7 +20,7 @@ const baseUrl = process.env.CONCLAVE_WEB_URL ?? "http://localhost:3000";
 const roomId =
   process.env.CONCLAVE_ROOM_ID ?? `headless-effects-${Date.now()}`;
 const fakeVideoDurationSeconds = Number(
-  process.env.CONCLAVE_FAKE_VIDEO_DURATION_SECONDS ?? 60,
+  process.env.CONCLAVE_FAKE_VIDEO_DURATION_SECONDS ?? 30,
 );
 const fakeVideoSourceImage =
   process.env.CONCLAVE_FAKE_VIDEO_SOURCE_IMAGE ?? null;
@@ -30,11 +31,11 @@ const parsePositiveInteger = (value, fallback) => {
 };
 const fakeVideoWidth = parsePositiveInteger(
   process.env.CONCLAVE_FAKE_VIDEO_WIDTH,
-  640,
+  426,
 );
 const fakeVideoHeight = parsePositiveInteger(
   process.env.CONCLAVE_FAKE_VIDEO_HEIGHT,
-  360,
+  240,
 );
 const expectedStableOutputScale = Math.min(
   1,
@@ -51,7 +52,7 @@ const expectedStableOutputHeight = Math.max(
 );
 const fakeVideoFps = parsePositiveInteger(
   process.env.CONCLAVE_FAKE_VIDEO_FPS,
-  30,
+  12,
 );
 const expectFaceLandmarks = /^(1|true|yes)$/i.test(
   process.env.CONCLAVE_EXPECT_FACE ?? "",
@@ -175,6 +176,13 @@ const fakeVideoPath =
       ? `conclave-fake-camera-${basename(fakeVideoSourceImage).replace(/[^a-z0-9._-]/gi, "_")}-${fakeVideoWidth}x${fakeVideoHeight}-${fakeVideoFps}fps-${fakeVideoDurationSeconds}s.y4m`
       : `conclave-fake-camera-${fakeVideoWidth}x${fakeVideoHeight}-${fakeVideoFps}fps-${fakeVideoDurationSeconds}s.y4m`,
   );
+const maxReusableFakeVideoBytes = parsePositiveInteger(
+  process.env.CONCLAVE_MAX_FAKE_VIDEO_BYTES,
+  96 * 1024 * 1024,
+);
+const shouldCleanupLegacyFakeVideos = !/^(0|false|no)$/i.test(
+  process.env.CONCLAVE_CLEANUP_LEGACY_FAKE_VIDEOS ?? "1",
+);
 const timeoutMs = Number(process.env.CONCLAVE_HEADLESS_TIMEOUT_MS ?? 90000);
 const chromePort = Number(
   process.env.CONCLAVE_CHROME_DEBUG_PORT ??
@@ -238,6 +246,30 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const shellEscape = (value) => `'${String(value).replaceAll("'", "'\\''")}'`;
 
+const cleanupLegacyFakeVideos = () => {
+  if (hasExplicitFakeVideoPath || !shouldCleanupLegacyFakeVideos) return;
+
+  for (const entry of readdirSync(tmpdir())) {
+    if (!/^conclave-fake-camera-.*\.y4m$/.test(entry)) continue;
+
+    const path = join(tmpdir(), entry);
+    if (path === fakeVideoPath) continue;
+
+    try {
+      const { size } = statSync(path);
+      if (size <= maxReusableFakeVideoBytes) continue;
+
+      rmSync(path, { force: true });
+      emit("fake_video_cleanup_legacy", { path, size });
+    } catch (err) {
+      emit("fake_video_cleanup_legacy_failed", {
+        path,
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+};
+
 const ensureFakeVideo = () => {
   if (existsSync(fakeVideoPath)) {
     const size = statSync(fakeVideoPath).size;
@@ -245,7 +277,17 @@ const ensureFakeVideo = () => {
       !fakeVideoSourceImage ||
       (existsSync(fakeVideoSourceImage) &&
         statSync(fakeVideoPath).mtimeMs >= statSync(fakeVideoSourceImage).mtimeMs);
-    if (size > 1024 * 1024 && (hasExplicitFakeVideoPath || sourceImageIsFresh)) {
+    if (!hasExplicitFakeVideoPath && size > maxReusableFakeVideoBytes) {
+      rmSync(fakeVideoPath, { force: true });
+      emit("fake_video_discard_oversized", {
+        fakeVideoPath,
+        size,
+        maxReusableFakeVideoBytes,
+      });
+    } else if (
+      size > 1024 * 1024 &&
+      (hasExplicitFakeVideoPath || sourceImageIsFresh)
+    ) {
       emit("fake_video_reuse", { fakeVideoPath, size });
       return;
     }
@@ -2268,6 +2310,7 @@ const badLogPatterns = [
 ];
 
 const run = async () => {
+  cleanupLegacyFakeVideos();
   ensureFakeVideo();
   const userDataDir = mkdtempSync(join(tmpdir(), "conclave-headless-chrome-"));
   const normalizedBaseUrl = baseUrl.replace(/\/$/, "");

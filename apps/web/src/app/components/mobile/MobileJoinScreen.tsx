@@ -553,7 +553,7 @@ function MobileJoinScreen({
         <div className="absolute inset-0 acm-bg-dot-grid pointer-events-none" />
         <div className="relative z-10 text-center mb-8">
           <div
-            className="text-xl text-[#fafafa]/56 mb-2 tracking-wide"
+            className="text-xl text-[#fafafa]/56 mb-2"
             style={{ fontFamily: "'PolySans Bulky Wide', sans-serif" }}
           >
             welcome to
@@ -566,7 +566,7 @@ function MobileJoinScreen({
               [
             </span>
             <h1
-              className="text-5xl text-[#fafafa] tracking-tight"
+              className="text-5xl text-[#fafafa]"
               style={{ fontFamily: "'PolySans Bulky Wide', sans-serif" }}
             >
               c0nclav3
@@ -588,10 +588,10 @@ function MobileJoinScreen({
 
         <button
           onClick={() => setManualPhase("auth")}
-          className="relative z-10 group flex items-center gap-3 px-8 py-3 bg-[#F95F4A] text-white text-xs uppercase tracking-widest rounded-lg active:scale-95 transition-all hover:bg-[#e8553f] hover:gap-4"
+          className="relative z-10 group flex items-center gap-3 rounded-full bg-[#F95F4A] px-8 py-3 text-sm font-medium text-white transition-colors active:scale-95 hover:bg-[#e8553f]"
           style={{ fontFamily: "'PolySans Trial', sans-serif" }}
         >
-          <span>LET'S GO</span>
+          <span>Let's go</span>
           <ArrowRight className="w-4 h-4" />
         </button>
       </div>
@@ -605,10 +605,10 @@ function MobileJoinScreen({
         <div className="absolute inset-0 acm-bg-dot-grid pointer-events-none" />
         <button
           onClick={() => setManualPhase("welcome")}
-          className="relative z-10 text-[10px] text-[#fafafa]/75 uppercase tracking-[0.3em] mb-8 mobile-glass-soft mobile-pill px-3 py-1 self-start"
+          className="relative z-10 mb-8 self-start mobile-glass-soft mobile-pill px-3 py-1 text-[12px] font-medium text-[#fafafa]/75"
           style={{ fontFamily: "'PolySans Trial', sans-serif" }}
         >
-          ← back
+          Back
         </button>
 
         <div className="relative z-10 flex-1 flex flex-col justify-center">
@@ -619,10 +619,10 @@ function MobileJoinScreen({
             Join
           </h2>
           <p
-            className="text-xs text-[#fafafa]/56 uppercase tracking-widest text-center mb-8"
+            className="text-sm text-[#fafafa]/56 text-center mb-8"
             style={{ fontFamily: "'PolySans Trial', sans-serif" }}
           >
-            choose how to continue
+            Choose how to continue
           </p>
 
           <div className="grid gap-3 mb-4">
@@ -653,7 +653,7 @@ function MobileJoinScreen({
                   />
                 </svg>
               )}
-              <span className="text-[13px] leading-none whitespace-nowrap tracking-tight" style={{ fontFamily: "'PolySans Trial', sans-serif" }}>
+              <span className="text-[13px] leading-none whitespace-nowrap" style={{ fontFamily: "'PolySans Trial', sans-serif" }}>
                 Continue with Google
               </span>
             </button>
@@ -672,7 +672,7 @@ function MobileJoinScreen({
                   className="w-5 h-5 shrink-0 object-contain"
                 />
               )}
-              <span className="text-[13px] leading-none whitespace-nowrap tracking-tight" style={{ fontFamily: "'PolySans Trial', sans-serif" }}>
+              <span className="text-[13px] leading-none whitespace-nowrap" style={{ fontFamily: "'PolySans Trial', sans-serif" }}>
                 Continue with Apple
               </span>
             </button>
@@ -691,7 +691,7 @@ function MobileJoinScreen({
                   className="w-5 h-5 shrink-0 object-contain invert"
                 />
               )}
-              <span className="text-[13px] leading-none whitespace-nowrap tracking-tight" style={{ fontFamily: "'PolySans Trial', sans-serif" }}>
+              <span className="text-[13px] leading-none whitespace-nowrap" style={{ fontFamily: "'PolySans Trial', sans-serif" }}>
                 Continue with Roblox
               </span>
             </button>
@@ -711,7 +711,7 @@ function MobileJoinScreen({
                   <path fill="#fff" d="M12 4l8 14H4z" />
                 </svg>
               )}
-              <span className="text-[13px] leading-none whitespace-nowrap tracking-tight" style={{ fontFamily: "'PolySans Trial', sans-serif" }}>
+              <span className="text-[13px] leading-none whitespace-nowrap" style={{ fontFamily: "'PolySans Trial', sans-serif" }}>
                 Continue with Vercel
               </span>
             </button>
@@ -720,7 +720,7 @@ function MobileJoinScreen({
           <div className="flex items-center gap-4 my-6">
             <div className="flex-1 h-px bg-[#fafafa]/10" />
             <span
-              className="text-[10px] text-[#fafafa]/30 uppercase tracking-widest"
+              className="text-[12px] font-medium text-[#fafafa]/40"
               style={{ fontFamily: "'PolySans Trial', sans-serif" }}
             >
               or
@@ -787,7 +787,7 @@ function MobileJoinScreen({
               className={`w-9 h-9 rounded-full flex items-center justify-center transition-colors ${
                 isMicOn
                   ? "text-white"
-                  : "bg-[#ea4335] text-white shadow-[0_0_12px_rgba(234, 67, 53,0.35)]"
+                  : "bg-[#ea4335] text-white"
               }`}
             >
               {isMicOn ? (
@@ -802,7 +802,7 @@ function MobileJoinScreen({
               className={`w-9 h-9 rounded-full flex items-center justify-center transition-colors ${
                 isCameraOn
                   ? "text-white"
-                  : "bg-[#ea4335] text-white shadow-[0_0_12px_rgba(234, 67, 53,0.35)]"
+                  : "bg-[#ea4335] text-white"
               }`}
             >
               {isCameraOn ? (
@@ -817,7 +817,7 @@ function MobileJoinScreen({
               aria-pressed={activeVideoEffectsCount > 0 || isEffectsOpen}
               className={`relative w-9 h-9 rounded-full flex items-center justify-center transition-colors ${
                 activeVideoEffectsCount > 0 || isEffectsOpen
-                  ? "bg-[#F95F4A] text-white shadow-[0_0_12px_rgba(249,95,74,0.28)]"
+                  ? "bg-[#F95F4A] text-white"
                   : "text-white"
               }`}
             >
@@ -878,7 +878,7 @@ function MobileJoinScreen({
                 setActiveTab("new");
                 onIsAdminChange(true);
               }}
-              className={`flex-1 py-2.5 text-xs uppercase tracking-[0.25em] rounded-full transition-all ${
+              className={`flex-1 rounded-full py-2.5 text-sm font-medium transition-colors ${
                 activeTab === "new"
                   ? "bg-[#F95F4A] text-white"
                   : "text-[#fafafa]/66"
@@ -894,7 +894,7 @@ function MobileJoinScreen({
                 setActiveTab("join");
                 onIsAdminChange(false);
               }}
-              className={`flex-1 py-2.5 text-xs uppercase tracking-[0.25em] rounded-full transition-all ${
+              className={`flex-1 rounded-full py-2.5 text-sm font-medium transition-colors ${
                 activeTab === "join"
                   ? "bg-[#F95F4A] text-white"
                   : "text-[#fafafa]/66"
@@ -1049,27 +1049,20 @@ function MobileJoinScreen({
       )}
 
       {isEffectsOpen && (
-        <div
-          className="fixed inset-0 z-50 bg-black/55"
-          onClick={() => setIsEffectsOpen(false)}
-        >
-          <div onClick={(event) => event.stopPropagation()}>
-            <VideoEffectsPanel
-              variant="dialog"
-              effects={videoEffects}
-              onEffectsChange={onVideoEffectsChange}
-              localStream={previewStream}
-              isCameraOff={!isCameraOn}
-              status={videoEffectsStatus}
-              error={videoEffectsError}
-              debugStats={videoEffectsDebugStats}
-              activeCount={activeVideoEffectsCount}
-              cameraPermissionBlocked={isCameraPermissionBlocked}
-              showFilters={!isCameraPermissionBlocked}
-              onClose={() => setIsEffectsOpen(false)}
-            />
-          </div>
-        </div>
+        <VideoEffectsPanel
+          variant="dialog"
+          effects={videoEffects}
+          onEffectsChange={onVideoEffectsChange}
+          localStream={previewStream}
+          isCameraOff={!isCameraOn}
+          status={videoEffectsStatus}
+          error={videoEffectsError}
+          debugStats={videoEffectsDebugStats}
+          activeCount={activeVideoEffectsCount}
+          cameraPermissionBlocked={isCameraPermissionBlocked}
+          showFilters={!isCameraPermissionBlocked}
+          onClose={() => setIsEffectsOpen(false)}
+        />
       )}
     </div>
   );

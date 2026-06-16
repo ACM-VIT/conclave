@@ -176,7 +176,7 @@ function MobilePresentationLayout({
           className="w-full h-full object-contain"
         />
         <div
-          className="absolute top-2 left-2 mobile-name-pill px-3 py-1 text-[10px] text-[#fafafa] font-medium uppercase tracking-[0.18em] backdrop-blur-md truncate max-w-[80%]"
+          className="absolute top-2 left-2 mobile-name-pill px-3 py-1 text-[12px] text-[#fafafa] font-medium truncate max-w-[80%]"
           style={{ fontFamily: "'PolySans Trial', sans-serif" }}
           title={`${presenterName} is presenting`}
         >
@@ -211,10 +211,10 @@ function MobilePresentationLayout({
               <div className="flex flex-col items-center gap-1">
                 <VenetianMask className="w-6 h-6 text-[#FF007A]" />
                 <span
-                  className="mobile-ghost-badge rounded-full px-2 py-0.5 text-[8px] tracking-[0.2em] text-[#FF007A]"
+                  className="mobile-ghost-badge rounded-full px-2 py-0.5 text-[10px] font-medium text-[#FF007A]"
                   style={{ fontFamily: "'PolySans Trial', sans-serif" }}
                 >
-                  GHOST
+                  Ghost
                 </span>
               </div>
             </div>
@@ -223,8 +223,8 @@ function MobilePresentationLayout({
             className="absolute bottom-1 left-1 right-1 flex items-center justify-center"
             style={{ fontFamily: "'PolySans Trial', sans-serif" }}
           >
-            <span className="mobile-name-pill px-1.5 py-0.5 text-[10px] text-[#fafafa] font-medium uppercase tracking-[0.18em] flex items-center gap-1 backdrop-blur-md">
-              YOU
+            <span className="mobile-name-pill px-1.5 py-0.5 text-[10px] text-[#fafafa] font-medium flex items-center gap-1">
+              You
               {isMuted && <MicOff className="w-2.5 h-2.5 text-[#F95F4A]" />}
             </span>
           </div>
@@ -260,10 +260,10 @@ function MobilePresentationLayout({
                 <div className="flex flex-col items-center gap-1">
                   <VenetianMask className="w-6 h-6 text-[#FF007A]" />
                   <span
-                    className="mobile-ghost-badge rounded-full px-2 py-0.5 text-[8px] tracking-[0.2em] text-[#FF007A]"
+                    className="mobile-ghost-badge rounded-full px-2 py-0.5 text-[10px] font-medium text-[#FF007A]"
                     style={{ fontFamily: "'PolySans Trial', sans-serif" }}
                   >
-                    GHOST
+                    Ghost
                   </span>
                 </div>
               </div>
@@ -272,7 +272,7 @@ function MobilePresentationLayout({
               className="absolute bottom-1 left-1 right-1 flex items-center justify-center"
               style={{ fontFamily: "'PolySans Trial', sans-serif" }}
             >
-              <span className="mobile-name-pill px-1.5 py-0.5 text-[10px] text-[#fafafa] font-medium uppercase tracking-[0.18em] truncate max-w-full flex items-center gap-1 backdrop-blur-md">
+              <span className="mobile-name-pill px-1.5 py-0.5 text-[10px] text-[#fafafa] font-medium truncate max-w-full flex items-center gap-1">
                 {truncateDisplayName(getDisplayName(participant.userId), 10)}
                 {participant.isMuted && <MicOff className="w-2.5 h-2.5 text-[#F95F4A]" />}
               </span>
