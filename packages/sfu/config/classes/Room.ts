@@ -27,6 +27,7 @@ export interface RoomOptions {
   id: string;
   router: Router;
   clientId: string;
+  workerPid: number | null;
 }
 
 type AppAwarenessRemoval = {
@@ -76,6 +77,7 @@ export class Room {
   public readonly id: string;
   public readonly router: Router;
   public readonly clientId: string;
+  public readonly workerPid: number | null;
   public readonly channelId: string;
   public clients: Map<string, Client> = new Map();
   public pendingClients: Map<
@@ -128,6 +130,7 @@ export class Room {
     this.id = options.id;
     this.router = options.router;
     this.clientId = options.clientId;
+    this.workerPid = options.workerPid;
     this.channelId = `${options.clientId}:${options.id}`;
   }
 

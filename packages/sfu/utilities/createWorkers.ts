@@ -7,7 +7,7 @@ import { Logger } from "./loggers.js";
 const totalThreads = os.cpus().length;
 
 type CreateWorkersOptions = {
-  onWorkerDied?: (worker: Worker, label: string) => void;
+  onWorkerDied?: (worker: Worker, label: string) => void | Promise<void>;
 };
 
 const spawnWorker = (): Promise<Worker> =>
@@ -34,7 +34,13 @@ const createWorkers = async (
   const attachDiedHandler = (worker: Worker, label: string): void => {
     worker.on("died", () => {
       Logger.error(`Worker ${label} has died — recreating a replacement`);
-      options.onWorkerDied?.(worker, label);
+      void Promise.resolve(options.onWorkerDied?.(worker, label)).catch(
+        (error) => {
+          Logger.error(
+            `Failed to clean up rooms for dead worker ${label}: ${String(error)}`,
+          );
+        },
+      );
       const deadIndex = workers.indexOf(worker);
       spawnWorker()
         .then((replacement) => {

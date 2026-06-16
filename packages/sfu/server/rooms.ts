@@ -54,7 +54,12 @@ export const getOrCreateRoom = async (
     mediaCodecs: config.routerMediaCodecs,
   });
 
-  room = new Room({ id: roomId, router, clientId });
+  room = new Room({
+    id: roomId,
+    router,
+    clientId,
+    workerPid: typeof worker.pid === "number" ? worker.pid : null,
+  });
   state.rooms.set(channelId, room);
   Logger.success(`Created room: ${roomId} (${clientId})`);
 
