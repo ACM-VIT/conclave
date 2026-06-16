@@ -31,11 +31,11 @@ const parsePositiveInteger = (value, fallback) => {
 };
 const fakeVideoWidth = parsePositiveInteger(
   process.env.CONCLAVE_FAKE_VIDEO_WIDTH,
-  426,
+  352,
 );
 const fakeVideoHeight = parsePositiveInteger(
   process.env.CONCLAVE_FAKE_VIDEO_HEIGHT,
-  240,
+  198,
 );
 const expectedStableOutputScale = Math.min(
   1,
@@ -52,7 +52,7 @@ const expectedStableOutputHeight = Math.max(
 );
 const fakeVideoFps = parsePositiveInteger(
   process.env.CONCLAVE_FAKE_VIDEO_FPS,
-  12,
+  10,
 );
 const expectFaceLandmarks = /^(1|true|yes)$/i.test(
   process.env.CONCLAVE_EXPECT_FACE ?? "",
@@ -178,7 +178,7 @@ const fakeVideoPath =
   );
 const maxReusableFakeVideoBytes = parsePositiveInteger(
   process.env.CONCLAVE_MAX_FAKE_VIDEO_BYTES,
-  96 * 1024 * 1024,
+  32 * 1024 * 1024,
 );
 const shouldCleanupLegacyFakeVideos = !/^(0|false|no)$/i.test(
   process.env.CONCLAVE_CLEANUP_LEGACY_FAKE_VIDEOS ?? "1",

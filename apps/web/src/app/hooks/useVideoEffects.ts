@@ -62,6 +62,7 @@ const INITIAL_SEGMENTATION_INTERVAL_MS = 66;
 const MIN_SEGMENTATION_INTERVAL_MS = 66;
 const MIN_FACE_INTERVAL_MS = 84;
 const MIN_FACE_FILTER_INTERVAL_MS = 50;
+const MAX_ACTIVE_FACE_FILTER_INTERVAL_MS = 70;
 const MAX_SEGMENTATION_INTERVAL_MS = 180;
 const MAX_FACE_INTERVAL_MS = 260;
 const FACE_NO_RESULT_BACKOFF_AFTER_RESULTS = 6;
@@ -1936,6 +1937,14 @@ const isFramingOnlyEffect = (effects: VideoEffectsState) =>
 
 const getFaceModelMinIntervalMs = (effects: VideoEffectsState) =>
   effects.filter !== "none" ? MIN_FACE_FILTER_INTERVAL_MS : MIN_FACE_INTERVAL_MS;
+
+const capFaceModelIntervalForActiveFilter = (
+  effects: VideoEffectsState,
+  intervalMs: number,
+) =>
+  effects.filter !== "none"
+    ? Math.min(intervalMs, MAX_ACTIVE_FACE_FILTER_INTERVAL_MS)
+    : intervalMs;
 
 const getNormalizedLandmarkCenter = (landmarks: NormalizedLandmarkList) => {
   let x = 0;
@@ -10963,11 +10972,14 @@ export function useVideoEffects({
             );
           }
           const faceMinIntervalMs = getFaceModelMinIntervalMs(effectsRef.current);
-          const adaptedFaceIntervalMs = getAdaptedModelInterval(
-            adaptationState,
-            "face",
-            skipWarmupAdaptation ? faceMinIntervalMs : elapsed * 1.35,
-            faceMinIntervalMs,
+          const adaptedFaceIntervalMs = capFaceModelIntervalForActiveFilter(
+            effectsRef.current,
+            getAdaptedModelInterval(
+              adaptationState,
+              "face",
+              skipWarmupAdaptation ? faceMinIntervalMs : elapsed * 1.35,
+              faceMinIntervalMs,
+            ),
           );
           const shouldBackoffNoFace =
             !skipWarmupAdaptation &&
@@ -11702,11 +11714,14 @@ export function useVideoEffects({
         }
         if (needsFace) {
           const faceMinIntervalMs = getFaceModelMinIntervalMs(currentEffects);
-          faceIntervalMs = getAdaptedModelInterval(
-            adaptationState,
-            "face",
-            faceMinIntervalMs,
-            faceMinIntervalMs,
+          faceIntervalMs = capFaceModelIntervalForActiveFilter(
+            currentEffects,
+            getAdaptedModelInterval(
+              adaptationState,
+              "face",
+              faceMinIntervalMs,
+              faceMinIntervalMs,
+            ),
           );
         }
       }

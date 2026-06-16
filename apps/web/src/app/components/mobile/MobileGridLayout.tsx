@@ -220,8 +220,11 @@ function MobileGridLayout({
         ))}
       </div>
 
-      <div className="flex h-full w-full flex-col gap-2 p-3">
-        <div className="min-h-0 flex-1">
+      <div
+        className="mobile-stage-layout flex h-full w-full flex-col gap-2 p-3"
+        data-mobile-stage-layout={layoutMode}
+      >
+        <div className="mobile-stage-main min-h-0 flex-1">
           {renderTile(primaryTile, railTiles.length === 0 ? "solo" : "primary")}
         </div>
         {railTiles.length > 0 ? (
