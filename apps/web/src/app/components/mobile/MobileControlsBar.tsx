@@ -219,6 +219,32 @@ function MobileControlsBar({
   const [webinarError, setWebinarError] = useState<string | null>(null);
   const [isWebinarWorking, setIsWebinarWorking] = useState(false);
 
+  const closeControlSheets = useCallback(() => {
+    setIsMoreMenuOpen(false);
+    setIsReactionMenuOpen(false);
+    setIsBrowserSheetOpen(false);
+    setIsSettingsSheetOpen(false);
+  }, []);
+
+  const closeExternalSheets = useCallback(() => {
+    if (isChatOpen) {
+      onToggleChat();
+    }
+    if (isParticipantsOpen) {
+      onToggleParticipants?.();
+    }
+    if (isVideoEffectsOpen) {
+      onToggleVideoEffects?.();
+    }
+  }, [
+    isChatOpen,
+    isParticipantsOpen,
+    isVideoEffectsOpen,
+    onToggleChat,
+    onToggleParticipants,
+    onToggleVideoEffects,
+  ]);
+
   const canStartScreenShare = !activeScreenShareId || isScreenSharing;
   const hasActiveVideoEffects = activeVideoEffectsCount > 0;
   const canOpenVideoEffects =
@@ -403,6 +429,53 @@ function MobileControlsBar({
     throw new Error("Clipboard is unavailable in this browser.");
   }, []);
 
+  const openReactionMenu = useCallback(() => {
+    closeExternalSheets();
+    setIsMoreMenuOpen(false);
+    setIsBrowserSheetOpen(false);
+    setIsSettingsSheetOpen(false);
+    setIsReactionMenuOpen(true);
+  }, [closeExternalSheets]);
+
+  const openMoreMenu = useCallback(() => {
+    closeExternalSheets();
+    setIsReactionMenuOpen(false);
+    setIsBrowserSheetOpen(false);
+    setIsSettingsSheetOpen(false);
+    setIsMoreMenuOpen(true);
+  }, [closeExternalSheets]);
+
+  const openSettingsSheet = useCallback(() => {
+    setIsMoreMenuOpen(false);
+    setIsReactionMenuOpen(false);
+    setIsBrowserSheetOpen(false);
+    setIsSettingsSheetOpen(true);
+  }, []);
+
+  const openBrowserSheet = useCallback(() => {
+    setBrowserUrlError(null);
+    setIsMoreMenuOpen(false);
+    setIsReactionMenuOpen(false);
+    setIsSettingsSheetOpen(false);
+    setIsBrowserSheetOpen(true);
+  }, []);
+
+  const handleChatButtonClick = useCallback(() => {
+    closeControlSheets();
+    onToggleChat();
+  }, [closeControlSheets, onToggleChat]);
+
+  useEffect(() => {
+    if (isChatOpen || isParticipantsOpen || isVideoEffectsOpen) {
+      closeControlSheets();
+    }
+  }, [
+    closeControlSheets,
+    isChatOpen,
+    isParticipantsOpen,
+    isVideoEffectsOpen,
+  ]);
+
   const selectedAudioInputValue = audioInputDevices.some(
     (device) => device.deviceId === audioInputDeviceId,
   )
@@ -544,11 +617,7 @@ function MobileControlsBar({
             )}
           </button>
           <button
-            onClick={() => {
-              setIsMoreMenuOpen(false);
-              setIsSettingsSheetOpen(true);
-              void fetchAudioDevices();
-            }}
+            onClick={openSettingsSheet}
             className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-[#fafafa] hover:bg-[#fafafa]/5 active:bg-[#fafafa]/10 transition-transform duration-150 touch-feedback"
           >
             <div className="h-9 w-9 rounded-xl bg-[#2b2b2b] border border-white/5 flex items-center justify-center">
@@ -562,7 +631,7 @@ function MobileControlsBar({
             onClick={() => {
               if (!canOpenVideoEffects) return;
               onToggleVideoEffects?.();
-              setIsMoreMenuOpen(false);
+              closeControlSheets();
             }}
             disabled={!canOpenVideoEffects}
             className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-transform duration-150 touch-feedback ${
@@ -647,10 +716,7 @@ function MobileControlsBar({
               isAdmin &&
               (onLaunchBrowser || onNavigateBrowser || onCloseBrowser) && (
               <button
-                onClick={() => {
-                  setIsMoreMenuOpen(false);
-                  setIsBrowserSheetOpen(true);
-                }}
+                onClick={openBrowserSheet}
                 className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-[#fafafa] hover:bg-[#fafafa]/5 active:bg-[#fafafa]/10 transition-transform duration-150 touch-feedback"
               >
                 <div className="h-9 w-9 rounded-xl bg-[#2b2b2b] border border-white/5 flex items-center justify-center">
@@ -1584,7 +1650,7 @@ function MobileControlsBar({
             </button>
 
             <button
-              onClick={() => setIsReactionMenuOpen(true)}
+              onClick={openReactionMenu}
               disabled={isGhostMode}
               className={isGhostMode ? ghostDisabledClass : defaultButtonClass}
               aria-label={isGhostMode ? "Reactions locked" : "Reactions"}
@@ -1593,7 +1659,7 @@ function MobileControlsBar({
             </button>
 
             <button
-              onClick={onToggleChat}
+              onClick={handleChatButtonClick}
               className={`relative ${isChatOpen ? activeButtonClass : defaultButtonClass}`}
               aria-label="Chat"
             >
@@ -1606,7 +1672,7 @@ function MobileControlsBar({
             </button>
 
             <button
-              onClick={() => setIsMoreMenuOpen(true)}
+              onClick={openMoreMenu}
               className={defaultButtonClass}
               aria-label="More actions"
             >
