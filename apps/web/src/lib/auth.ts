@@ -75,7 +75,7 @@ const configuredAppOrigins = [
   .map(originFromUrl)
   .filter((origin): origin is string => Boolean(origin));
 
-const resolveTrustedOrigins = (request?: Request): string[] => {
+const resolveTrustedOrigins = (): string[] => {
   const origins = new Set<string>([
     "http://localhost:3000",
     "http://localhost:3001",
@@ -84,21 +84,6 @@ const resolveTrustedOrigins = (request?: Request): string[] => {
     "https://appleid.apple.com",
     ...configuredAppOrigins,
   ]);
-
-  const requestOrigin = request ? originFromUrl(request.url) : null;
-  if (requestOrigin) origins.add(requestOrigin);
-
-  const headerOrigin = request?.headers.get("origin") || undefined;
-  const normalizedHeaderOrigin = originFromUrl(headerOrigin);
-  if (normalizedHeaderOrigin) origins.add(normalizedHeaderOrigin);
-
-  const forwardedHost = request?.headers.get("x-forwarded-host")?.split(",")[0]?.trim();
-  const forwardedProto =
-    request?.headers.get("x-forwarded-proto")?.split(",")[0]?.trim() || "https";
-  const forwardedOrigin = forwardedHost
-    ? originFromUrl(`${forwardedProto}://${forwardedHost}`)
-    : null;
-  if (forwardedOrigin) origins.add(forwardedOrigin);
 
   return Array.from(origins);
 };

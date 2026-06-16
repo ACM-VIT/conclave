@@ -8,17 +8,95 @@
  *
  *   node packages/meeting-core/scripts/gen-swift-events.mjs
  *
- * Node 22+ strips the TS types on import, so we can import the .ts directly and
- * read the runtime object. No build step required.
+ * Keep this script plain Node-compatible for CI. It reads the TypeScript source
+ * and evaluates only the SFU_EVENTS object literal, avoiding a TS loader.
  */
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
+import vm from "node:vm";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "../../..");
+const sourcePath = resolve(here, "../src/sfu-events.ts");
 
-const { SFU_EVENTS } = await import(resolve(here, "../src/sfu-events.ts"));
+function findObjectLiteral(source, exportName) {
+  const marker = `export const ${exportName}`;
+  const markerIndex = source.indexOf(marker);
+  if (markerIndex === -1) {
+    throw new Error(`Could not find ${marker} in ${sourcePath}`);
+  }
+  const start = source.indexOf("{", markerIndex);
+  if (start === -1) {
+    throw new Error(`Could not find ${exportName} object literal`);
+  }
+
+  let depth = 0;
+  let quote = null;
+  let escaped = false;
+  let lineComment = false;
+  let blockComment = false;
+
+  for (let index = start; index < source.length; index += 1) {
+    const char = source[index];
+    const next = source[index + 1];
+
+    if (lineComment) {
+      if (char === "\n") lineComment = false;
+      continue;
+    }
+    if (blockComment) {
+      if (char === "*" && next === "/") {
+        blockComment = false;
+        index += 1;
+      }
+      continue;
+    }
+    if (quote) {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (char === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (char === quote) quote = null;
+      continue;
+    }
+
+    if (char === "/" && next === "/") {
+      lineComment = true;
+      index += 1;
+      continue;
+    }
+    if (char === "/" && next === "*") {
+      blockComment = true;
+      index += 1;
+      continue;
+    }
+    if (char === "\"" || char === "'" || char === "`") {
+      quote = char;
+      continue;
+    }
+    if (char === "{") {
+      depth += 1;
+      continue;
+    }
+    if (char === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        return source.slice(start, index + 1);
+      }
+    }
+  }
+
+  throw new Error(`Could not parse ${exportName} object literal`);
+}
+
+const source = readFileSync(sourcePath, "utf8");
+const objectLiteral = findObjectLiteral(source, "SFU_EVENTS");
+const SFU_EVENTS = vm.runInNewContext(`(${objectLiteral})`, Object.create(null));
 
 const OUT = resolve(
   repoRoot,
