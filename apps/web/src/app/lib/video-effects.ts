@@ -70,6 +70,12 @@ export type BackgroundEffectId =
   | "snowy-chalet"
   | "underwater-sea-lab"
   | "space-station"
+  | "japanese-courtyard"
+  | "parisian-skyline"
+  | "greenhouse"
+  | "italian-terrace-countryside"
+  | "physics-lab"
+  | "lakeside-tent"
   | "gradient"
   | "custom";
 
@@ -188,6 +194,12 @@ const BACKGROUND_EFFECT_IDS = new Set<BackgroundEffectId>([
   "snowy-chalet",
   "underwater-sea-lab",
   "space-station",
+  "japanese-courtyard",
+  "parisian-skyline",
+  "greenhouse",
+  "italian-terrace-countryside",
+  "physics-lab",
+  "lakeside-tent",
   "gradient",
   "custom",
 ]);
@@ -370,6 +382,13 @@ export const BACKGROUND_ASSET_PATHS = {
   "snowy-chalet": "/effects/backgrounds/snowy-chalet.webp",
   "underwater-sea-lab": "/effects/backgrounds/underwater-sea-lab.webp",
   "space-station": "/effects/backgrounds/space-station.webp",
+  "japanese-courtyard": "/effects/backgrounds/japanese-courtyard.webp",
+  "parisian-skyline": "/effects/backgrounds/parisian-skyline.webp",
+  greenhouse: "/effects/backgrounds/greenhouse.webp",
+  "italian-terrace-countryside":
+    "/effects/backgrounds/italian-terrace-countryside.webp",
+  "physics-lab": "/effects/backgrounds/physics-lab.webp",
+  "lakeside-tent": "/effects/backgrounds/lakeside-tent.webp",
 } satisfies Partial<Record<BackgroundEffectId, string>>;
 
 export const getVideoEffectPreviewPath = <T extends string>(
@@ -504,6 +523,54 @@ export const BACKGROUND_EFFECTS: VideoEffectOption<BackgroundEffectId>[] = [
     icon: Rocket,
     tone: "#334155",
     assetPath: BACKGROUND_ASSET_PATHS["space-station"],
+    category: "Immersive",
+  },
+  {
+    id: "japanese-courtyard",
+    label: "Japanese courtyard",
+    icon: Leaf,
+    tone: "#166534",
+    assetPath: BACKGROUND_ASSET_PATHS["japanese-courtyard"],
+    category: "Immersive",
+  },
+  {
+    id: "parisian-skyline",
+    label: "Parisian skyline",
+    icon: Building2,
+    tone: "#475569",
+    assetPath: BACKGROUND_ASSET_PATHS["parisian-skyline"],
+    category: "Immersive",
+  },
+  {
+    id: "greenhouse",
+    label: "Greenhouse",
+    icon: Leaf,
+    tone: "#15803d",
+    assetPath: BACKGROUND_ASSET_PATHS.greenhouse,
+    category: "Immersive",
+  },
+  {
+    id: "italian-terrace-countryside",
+    label: "Italian terrace",
+    icon: SunMedium,
+    tone: "#a16207",
+    assetPath: BACKGROUND_ASSET_PATHS["italian-terrace-countryside"],
+    category: "Immersive",
+  },
+  {
+    id: "physics-lab",
+    label: "Physics lab",
+    icon: Lightbulb,
+    tone: "#334155",
+    assetPath: BACKGROUND_ASSET_PATHS["physics-lab"],
+    category: "Immersive",
+  },
+  {
+    id: "lakeside-tent",
+    label: "Lakeside tent",
+    icon: Waves,
+    tone: "#0f766e",
+    assetPath: BACKGROUND_ASSET_PATHS["lakeside-tent"],
     category: "Immersive",
   },
   {
