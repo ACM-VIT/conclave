@@ -210,6 +210,9 @@ struct AdminControlsSheetView: View {
     var bodyReady: Bool = true
     var onBack: (() -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
+    @State private var noticeInput = ""
+    @State private var noticeLevel: AdminNoticeLevel = .info
+    @State private var isNoticeSending = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -281,6 +284,8 @@ struct AdminControlsSheetView: View {
                                 }
                             }
                         }
+
+                        noticeSection
                     }
                     .padding(.horizontal, ACMSpacing.lg)
                     .padding(.top, ACMSpacing.md)
@@ -296,6 +301,129 @@ struct AdminControlsSheetView: View {
         #else
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         #endif
+    }
+
+    private var noticeSection: some View {
+        VStack(alignment: .leading, spacing: ACMSpacing.xs) {
+            acmListSectionHeader("Room notice")
+
+            MeetingSheetSectionCard {
+                HStack(spacing: ACMSpacing.sm) {
+                    MeetingSheetIconBox(
+                        icon: "megaphone.fill",
+                        androidIcon: "info",
+                        tint: noticeTint(for: noticeLevel),
+                        androidTint: noticeAndroidTint(for: noticeLevel),
+                        background: ACMColors.surfaceRaised
+                    )
+
+                    TextField("", text: $noticeInput, prompt: Text("Message everyone").foregroundStyle(ACMColors.textFaint))
+                        .textFieldStyle(.plain)
+                        .font(ACMFont.trial(15))
+                        .foregroundStyle(ACMColors.text)
+                        .tint(ACMColors.primaryOrange)
+                    #if !SKIP
+                    #if os(iOS)
+                        .textInputAutocapitalization(.sentences)
+                    #endif
+                    #endif
+                }
+                .padding(.horizontal, ACMSpacing.sm)
+                .frame(height: 52)
+
+                MoreRowDivider()
+
+                HStack(spacing: ACMSpacing.xs) {
+                    noticeLevelButton(.info, title: "Info")
+                    noticeLevelButton(.warning, title: "Warning")
+                    noticeLevelButton(.error, title: "Error")
+                }
+                .padding(.horizontal, ACMSpacing.sm)
+                .padding(.vertical, ACMSpacing.sm)
+
+                MoreRowDivider()
+
+                MoreRow(
+                    icon: "paperplane.fill",
+                    androidIcon: "send",
+                    title: isNoticeSending ? "Sending notice..." : "Send notice",
+                    tint: canSendNotice ? ACMColors.text : ACMColors.textFaint,
+                    androidTint: canSendNotice ? "text" : "faint",
+                    isDisabled: !canSendNotice
+                ) {
+                    sendNotice()
+                }
+            }
+        }
+    }
+
+    private var canSendNotice: Bool {
+        !isNoticeSending && !noticeInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func noticeLevelButton(_ level: AdminNoticeLevel, title: String) -> some View {
+        let isSelected = noticeLevel == level
+        return Button {
+            noticeLevel = level
+        } label: {
+            Text(title)
+                .font(ACMFont.trial(12, weight: .medium))
+                .foregroundStyle(isSelected ? noticeTint(for: level) : ACMColors.textMuted)
+                .lineLimit(1)
+                .minimumScaleFactor(0.78)
+                .frame(maxWidth: .infinity)
+                .frame(height: 34)
+                .acmColorBackground(isSelected ? noticeBackground(for: level) : ACMColors.surfaceRaised)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+        }
+        .buttonStyle(.plain)
+        .disabled(isNoticeSending)
+    }
+
+    private func sendNotice() {
+        let message = noticeInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !message.isEmpty, !isNoticeSending else { return }
+        isNoticeSending = true
+        Task { @MainActor in
+            let sent = await viewModel.broadcastAdminNotice(message: message, level: noticeLevel)
+            if sent {
+                noticeInput = ""
+            }
+            isNoticeSending = false
+        }
+    }
+
+    private func noticeTint(for level: AdminNoticeLevel) -> Color {
+        switch level {
+        case .info:
+            return ACMColors.primaryOrange
+        case .warning:
+            return ACMColors.handRaised
+        case .error:
+            return ACMColors.error
+        }
+    }
+
+    private func noticeBackground(for level: AdminNoticeLevel) -> Color {
+        switch level {
+        case .info:
+            return ACMColors.primaryOrangeFaint
+        case .warning:
+            return ACMColors.handRaisedBackground
+        case .error:
+            return ACMColors.error.opacity(0.16)
+        }
+    }
+
+    private func noticeAndroidTint(for level: AdminNoticeLevel) -> String {
+        switch level {
+        case .info:
+            return "accent"
+        case .warning:
+            return "amber"
+        case .error:
+            return "error"
+        }
     }
 }
 

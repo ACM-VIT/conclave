@@ -1777,6 +1777,19 @@ final class MeetingViewModel {
         }
     }
 
+    private func requireAdminNoticeSuccess(
+        _ response: AdminNoticeResponse,
+        fallbackMessage: String
+    ) throws {
+        if let error = response.error?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !error.isEmpty {
+            throw MeetingActionResponseError(message: error)
+        }
+        if response.success == false {
+            throw MeetingActionResponseError(message: fallbackMessage)
+        }
+    }
+
     private func applyAdminBulkMediaActionResponse(
         _ response: AdminBulkMediaActionResponse,
         action: AdminBulkMediaAction
@@ -4624,6 +4637,24 @@ final class MeetingViewModel {
             } catch {
                 applyActionError(error, context: actionContext)
             }
+        }
+    }
+
+    func broadcastAdminNotice(message: String, level: AdminNoticeLevel) async -> Bool {
+        let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        let actionKey = "adminNotice"
+        guard let actionToken = beginAdminAction(actionKey) else { return false }
+        let actionContext = currentCallActionContext()
+        defer { finishAdminAction(actionKey, token: actionToken) }
+        do {
+            let response = try await socketManager.broadcastAdminNotice(message: trimmed, level: level)
+            guard isSameCallContext(actionContext) else { return false }
+            try requireAdminNoticeSuccess(response, fallbackMessage: "Failed to send notice.")
+            return true
+        } catch {
+            applyActionError(error, context: actionContext)
+            return false
         }
     }
 

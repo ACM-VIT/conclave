@@ -145,6 +145,7 @@ final class SocketIOManager {
     func closeAllVideo() async throws -> AdminBulkMediaActionResponse { fatalError() }
     func stopAllScreenShares() async throws -> AdminBulkMediaActionResponse { fatalError() }
     func clearRaisedHands() async throws { fatalError() }
+    func broadcastAdminNotice(message: String, level: AdminNoticeLevel) async throws -> AdminNoticeResponse { fatalError() }
     func promoteHost(userId: String) async throws { fatalError() }
 }
 #endif

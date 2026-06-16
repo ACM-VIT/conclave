@@ -39,6 +39,7 @@ private enum SocketEvent {
     static let adminStopUserScreenShare = SfuClientEvent.adminStopUserScreenShare.rawValue
     static let adminStopAllScreenShare = SfuClientEvent.adminStopAllScreenShare.rawValue
     static let adminClearRaisedHands = SfuClientEvent.adminClearRaisedHands.rawValue
+    static let adminBroadcastNotice = SfuClientEvent.adminBroadcastNotice.rawValue
     static let meetingGetConfig = SfuClientEvent.meetingGetConfig.rawValue
     static let meetingUpdateConfig = SfuClientEvent.meetingUpdateConfig.rawValue
     static let webinarGetConfig = SfuClientEvent.webinarGetConfig.rawValue
@@ -736,6 +737,12 @@ final class SocketIOManager {
 
     func clearRaisedHands() async throws {
         _ = try await emitAckOnly(event: SocketEvent.adminClearRaisedHands)
+    }
+
+    func broadcastAdminNotice(message: String, level: AdminNoticeLevel) async throws -> AdminNoticeResponse {
+        let request = AdminNoticeRequest(message: message, level: level.rawValue)
+        let data = try await emit(event: SocketEvent.adminBroadcastNotice, payload: request)
+        return try JSONDecoder().decode(AdminNoticeResponse.self, from: data)
     }
 
     func promoteHost(userId: String) async throws {

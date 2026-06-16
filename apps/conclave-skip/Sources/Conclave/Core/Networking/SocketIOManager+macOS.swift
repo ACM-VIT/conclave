@@ -200,6 +200,9 @@ final class SocketIOManager {
         AdminBulkMediaActionResponse(success: true, error: nil, count: nil, affectedProducers: nil, users: nil)
     }
     func clearRaisedHands() async throws { }
+    func broadcastAdminNotice(message: String, level: AdminNoticeLevel) async throws -> AdminNoticeResponse {
+        AdminNoticeResponse(success: true, error: nil)
+    }
     func promoteHost(userId: String) async throws { }
 }
 #endif

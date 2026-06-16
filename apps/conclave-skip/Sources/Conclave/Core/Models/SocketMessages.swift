@@ -116,6 +116,11 @@ struct AppsLockRequest: Codable {
     let locked: Bool
 }
 
+struct AdminNoticeRequest: Codable {
+    let message: String
+    let level: String
+}
+
 // MARK: - Incoming Messages / Responses
 
 struct JoinRoomResponse: Codable {
@@ -227,6 +232,11 @@ struct AdminBulkMediaActionResponse: Codable {
     let count: Int?
     let affectedProducers: Int?
     let users: [String]?
+}
+
+struct AdminNoticeResponse: Codable {
+    let success: Bool?
+    let error: String?
 }
 
 struct AdminMediaEnforcedNotification: Codable {

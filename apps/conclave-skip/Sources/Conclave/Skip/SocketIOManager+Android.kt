@@ -55,6 +55,7 @@ internal object SocketEvent {
     val adminStopUserScreenShare = SfuClientEvent.adminStopUserScreenShare.rawValue
     val adminStopAllScreenShare = SfuClientEvent.adminStopAllScreenShare.rawValue
     val adminClearRaisedHands = SfuClientEvent.adminClearRaisedHands.rawValue
+    val adminBroadcastNotice = SfuClientEvent.adminBroadcastNotice.rawValue
     val meetingGetConfig = SfuClientEvent.meetingGetConfig.rawValue
     val meetingUpdateConfig = SfuClientEvent.meetingUpdateConfig.rawValue
     val webinarGetConfig = SfuClientEvent.webinarGetConfig.rawValue
@@ -738,6 +739,12 @@ internal class SocketIOManager {
 
     internal suspend fun clearRaisedHands() {
         emitAckOnly(SocketEvent.adminClearRaisedHands)
+    }
+
+    internal suspend fun broadcastAdminNotice(message: String, level: AdminNoticeLevel): AdminNoticeResponse {
+        val request = AdminNoticeRequest(message = message, level = level.rawValue)
+        val data = emit(SocketEvent.adminBroadcastNotice, request)
+        return JSONDecoder().decode(AdminNoticeResponse::class, from = data)
     }
 
     internal suspend fun promoteHost(userId: String) {
