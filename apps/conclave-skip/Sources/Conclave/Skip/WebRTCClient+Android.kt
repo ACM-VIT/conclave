@@ -37,6 +37,8 @@ import skip.foundation.JSONEncoder
 import skip.foundation.ProcessInfo
 import skip.lib.*
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlin.coroutines.resume
 
 internal class VideoTrackWrapper(
     override val id: String,
@@ -302,7 +304,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         val sendTransport = sendTransport ?: throw ErrorException("Send transport not ready")
         ensurePeerConnectionFactory(ProcessInfo.processInfo.androidContext)
 
-        if (androidx.core.content.ContextCompat.checkSelfPermission(ProcessInfo.processInfo.androidContext, android.Manifest.permission.RECORD_AUDIO) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+        if (!ensureRecordAudioPermission()) {
             throw ErrorException("Microphone permission not granted")
         }
 
@@ -343,9 +345,9 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
 
         // Without the CAMERA runtime permission, WebRTC's Camera2Capturer throws a
         // SecurityException on its async capture thread and CRASHES the process
-        // (a try/catch around startCapture can't catch that thread). Bail early
-        // with a catchable error so toggleCamera surfaces it instead of crashing.
-        if (androidx.core.content.ContextCompat.checkSelfPermission(ProcessInfo.processInfo.androidContext, android.Manifest.permission.CAMERA) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+        // (a try/catch around startCapture can't catch that thread). Request the
+        // permission before capture starts and bail with a catchable error on denial.
+        if (!ensureCameraPermission()) {
             throw ErrorException("Camera permission not granted")
         }
 
@@ -736,6 +738,54 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         }
 
         return false
+    }
+
+    private suspend fun ensureRecordAudioPermission(): Boolean {
+        if (PermissionHelper.hasRecordAudioPermission()) return true
+
+        return suspendCancellableCoroutine { cont ->
+            if (PermissionHelper.onRecordAudioPermissionResult != null) {
+                cont.resume(false)
+                return@suspendCancellableCoroutine
+            }
+
+            val callback: (Boolean) -> Unit = { granted ->
+                if (cont.isActive) {
+                    cont.resume(granted)
+                }
+            }
+            PermissionHelper.onRecordAudioPermissionResult = callback
+            cont.invokeOnCancellation {
+                if (PermissionHelper.onRecordAudioPermissionResult === callback) {
+                    PermissionHelper.onRecordAudioPermissionResult = null
+                }
+            }
+            PermissionHelper.requestRecordAudioPermission()
+        }
+    }
+
+    private suspend fun ensureCameraPermission(): Boolean {
+        if (PermissionHelper.hasCameraPermission()) return true
+
+        return suspendCancellableCoroutine { cont ->
+            if (PermissionHelper.onCameraPermissionResult != null) {
+                cont.resume(false)
+                return@suspendCancellableCoroutine
+            }
+
+            val callback: (Boolean) -> Unit = { granted ->
+                if (cont.isActive) {
+                    cont.resume(granted)
+                }
+            }
+            PermissionHelper.onCameraPermissionResult = callback
+            cont.invokeOnCancellation {
+                if (PermissionHelper.onCameraPermissionResult === callback) {
+                    PermissionHelper.onCameraPermissionResult = null
+                }
+            }
+            PermissionHelper.requestCameraPermission()
+        }
     }
 
     private fun clearAudioSource() {
