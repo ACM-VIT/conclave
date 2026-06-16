@@ -54,8 +54,6 @@ import { useApps } from "@conclave/apps-sdk";
 import { useCameraPermissionState } from "../hooks/useCameraPermissionState";
 import { useStableSpeakerId } from "../hooks/useStableSpeakerId";
 import {
-  BACKGROUND_EFFECTS,
-  type BackgroundEffectId,
   type VideoEffectsState,
 } from "../lib/video-effects";
 import {
@@ -833,26 +831,13 @@ export default function MeetsMainContent({
     [],
   );
 
-  const effectsPanelBackgroundPrewarmIds = useMemo(
-    () =>
-      BACKGROUND_EFFECTS.filter(
-        (option) =>
-          option.id !== "custom" &&
-          option.id !== "none" &&
-          option.id !== "gradient" &&
-          Boolean(option.assetPath),
-      ).map((option) => option.id as BackgroundEffectId),
-    [],
-  );
-
   const prewarmEffectsPanelOpen = useCallback(() => {
     void prewarmVideoEffectsAssets({
       segmentation: true,
       face: true,
-      backgrounds: effectsPanelBackgroundPrewarmIds,
       reason: "effects-panel-open",
     });
-  }, [effectsPanelBackgroundPrewarmIds]);
+  }, []);
 
   const handleToggleVideoEffects = useCallback(() => {
     if (isCameraPermissionBlocked) return;

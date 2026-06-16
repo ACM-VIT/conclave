@@ -814,26 +814,13 @@ export default function VideoEffectsPanel({
     void prewarmVideoEffectsAssets({ face: true, reason });
   }, []);
 
-  const imageBackgroundIds = useMemo(
-    () =>
-      BACKGROUND_EFFECTS.filter(
-        (option) =>
-          option.id !== "custom" &&
-          option.id !== "none" &&
-          option.id !== "gradient" &&
-          Boolean(option.assetPath),
-      ).map((option) => option.id),
-    [],
-  );
-
   useEffect(() => {
     void prewarmVideoEffectsAssets({
       segmentation: true,
       face: showFilters,
-      backgrounds: imageBackgroundIds,
       reason: "effects-panel-open",
     });
-  }, [imageBackgroundIds, showFilters]);
+  }, [showFilters]);
 
   useEffect(() => {
     if (activeTab === "filters") {

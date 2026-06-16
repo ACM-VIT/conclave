@@ -47,8 +47,6 @@ import {
   type VideoEffectsRuntimeStatus,
 } from "../../hooks/useVideoEffects";
 import {
-  BACKGROUND_EFFECTS,
-  type BackgroundEffectId,
   type VideoEffectsState,
 } from "../../lib/video-effects";
 
@@ -531,25 +529,13 @@ function MobileMeetsMainContent({
     (!hasLiveLocalCamera &&
       (cameraPermissionState === "prompt" ||
         cameraPermissionState === "denied"));
-  const effectsPanelBackgroundPrewarmIds = useMemo(
-    () =>
-      BACKGROUND_EFFECTS.filter(
-        (option) =>
-          option.id !== "custom" &&
-          option.id !== "none" &&
-          option.id !== "gradient" &&
-          Boolean(option.assetPath),
-      ).map((option) => option.id as BackgroundEffectId),
-    [],
-  );
   const prewarmEffectsPanelOpen = useCallback(() => {
     void prewarmVideoEffectsAssets({
       segmentation: true,
       face: true,
-      backgrounds: effectsPanelBackgroundPrewarmIds,
       reason: "mobile-effects-panel-open",
     });
-  }, [effectsPanelBackgroundPrewarmIds]);
+  }, []);
   const handleToggleVideoEffects = useCallback(() => {
     if (isCameraPermissionBlocked) return;
     const opening = !isVideoEffectsOpen;

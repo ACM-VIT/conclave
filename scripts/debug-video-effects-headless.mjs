@@ -1171,6 +1171,95 @@ const parseEffectSwitchLatencyLogs = (logs, options = {}) => {
   return samples;
 };
 
+const escapeRegExp = (value) =>
+  String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const parseVideoEffectsEventLogs = (logs, eventName, options = {}) => {
+  const startIndex = Math.max(0, Number(options.fromIndex || 0));
+  const pattern = new RegExp(
+    `\\[VideoEffects#(\\d+)\\]\\s+${escapeRegExp(eventName)}\\s+(\\{.*\\})$`,
+  );
+  const events = [];
+  for (const log of logs.slice(startIndex)) {
+    const match = log.text.match(pattern);
+    if (!match) continue;
+    try {
+      events.push({
+        instanceId: Number(match[1]),
+        timestamp: log.timestamp,
+        payload: JSON.parse(match[2]),
+      });
+    } catch {}
+  }
+  return events;
+};
+
+const isEffectsPanelOpenReason = (reason) =>
+  typeof reason === "string" && reason.endsWith("effects-panel-open");
+
+const getEffectsPanelOpenPrewarmScopeQuality = (
+  logs,
+  label,
+  options = {},
+) => {
+  const prewarmRequests = parseVideoEffectsEventLogs(
+    logs,
+    "prewarm_requested",
+    options,
+  ).filter((event) => isEffectsPanelOpenReason(event.payload?.reason));
+  const backgroundQueueStarts = parseVideoEffectsEventLogs(
+    logs,
+    "background_prewarm_queue_start",
+    options,
+  ).filter((event) => isEffectsPanelOpenReason(event.payload?.reason));
+  const requestedBackgroundCounts = prewarmRequests.map((event) =>
+    Array.isArray(event.payload?.backgrounds)
+      ? event.payload.backgrounds.length
+      : 0,
+  );
+  const queuedBackgroundCounts = backgroundQueueStarts.map((event) =>
+    Number(event.payload?.count || 0),
+  );
+  const maxRequestedBackgrounds =
+    requestedBackgroundCounts.length > 0
+      ? Math.max(...requestedBackgroundCounts)
+      : 0;
+  const maxQueuedBackgrounds =
+    queuedBackgroundCounts.length > 0
+      ? Math.max(...queuedBackgroundCounts)
+      : 0;
+  const bulkQueues = backgroundQueueStarts.filter(
+    (event) => event.payload?.bulk === true || Number(event.payload?.count) > 1,
+  );
+  return {
+    label,
+    ok:
+      maxRequestedBackgrounds <= 1 &&
+      maxQueuedBackgrounds <= 1 &&
+      bulkQueues.length === 0,
+    requestCount: prewarmRequests.length,
+    backgroundQueueStartCount: backgroundQueueStarts.length,
+    maxRequestedBackgrounds,
+    maxQueuedBackgrounds,
+    bulkQueueCount: bulkQueues.length,
+    recentRequests: prewarmRequests.slice(-4),
+    recentBackgroundQueues: backgroundQueueStarts.slice(-4),
+  };
+};
+
+const assertEffectsPanelOpenPrewarmScope = (logs, label, options = {}) => {
+  const quality = getEffectsPanelOpenPrewarmScopeQuality(logs, label, options);
+  emit("effects_panel_open_prewarm_scope_probe", quality);
+  if (!quality.ok) {
+    throw new Error(
+      `Effects panel open prewarm scope regression at ${label}: ${JSON.stringify(
+        quality,
+      )}`,
+    );
+  }
+  return quality;
+};
+
 const percentile = (values, ratio) => {
   if (values.length === 0) return null;
   const sorted = [...values].sort((left, right) => left - right);
@@ -1595,7 +1684,7 @@ const runPrejoinHandoffProbe = async (cdp, prejoinUrl) => {
     .slice(prejoinCameraLivePrewarmLogStartIndex)
     .some(
       (log) =>
-        /prewarm_requested/.test(log.text) &&
+        /prewarm_(?:requested|coalesce_inflight)/.test(log.text) &&
         /prejoin-camera-toggle-live/.test(log.text) &&
         /"segmentation":true/.test(log.text) &&
         /"face":true/.test(log.text),
@@ -2443,8 +2532,12 @@ const run = async () => {
     });
 
     await ensureMeetingToolbarControls(cdp);
+    const effectsPanelOpenLogStartIndex = cdp.logs.length;
     await openMeetingEffectsPanel(cdp, "effects panel");
     await collectState(cdp, "state_panel_open");
+    assertEffectsPanelOpenPrewarmScope(cdp.logs, "effects panel open", {
+      fromIndex: effectsPanelOpenLogStartIndex,
+    });
 
     await clickButton(cdp, "Blur your background");
     await sleep(75);
