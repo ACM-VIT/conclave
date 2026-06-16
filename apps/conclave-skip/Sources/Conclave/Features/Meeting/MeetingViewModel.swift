@@ -1974,7 +1974,7 @@ final class MeetingViewModel {
         }
         guard !MeetingState.isSystemUserId(producer.producerUserId) else { return }
         if state.isLocalParticipantUserId(producer.producerUserId) {
-            if producer.kind == "audio" {
+            if producer.kind == "audio", producer.type == ProducerType.webcam.rawValue {
                 state.isMuted = producer.paused ?? state.isMuted
                 syncCallPresenceMute()
             } else if producer.kind == "video" {
@@ -1990,7 +1990,7 @@ final class MeetingViewModel {
 
         ensureParticipantPresent(producer.producerUserId)
 
-        if producer.kind == "audio" {
+        if producer.kind == "audio", producer.type == ProducerType.webcam.rawValue {
             state.participants[producer.producerUserId]?.isMuted = producer.paused ?? false
         } else if producer.kind == "video" {
             if producer.type == "screen" {

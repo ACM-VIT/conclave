@@ -474,8 +474,8 @@ final class WebRTCClient: NSObject, ObservableObject {
 
         // A user can produce a webcam AND a screen-share at once — store them
         // under distinct keys so one never overwrites the other.
-        let isScreen = (producerType == "screen")
-        let trackKey = isScreen ? "\(producerUserId)-screen" : producerUserId
+        let isScreenVideo = (producerType == "screen" && response.kind == "video")
+        let trackKey = isScreenVideo ? "\(producerUserId)-screen" : producerUserId
 
         consumers[response.id] = ConsumerInfo(
             consumer: consumer,
@@ -515,10 +515,11 @@ final class WebRTCClient: NSObject, ObservableObject {
             entry.value.consumer.close()
             consumers.removeValue(forKey: entry.key)
             videoFreezeStats.removeValue(forKey: entry.key)
-            // Remove exactly the track this consumer fed (webcam OR screen),
-            // never the sibling — so stopping a share leaves the webcam intact.
+            // Only video consumers populate remoteVideoTracks. Screen audio uses
+            // the same producer type as screen video but must not clear the
+            // visible screen-share tile when its audio producer closes.
             let key = entry.value.trackKey.isEmpty ? entry.value.userId : entry.value.trackKey
-            if !key.isEmpty {
+            if entry.value.kind == "video", !key.isEmpty {
                 remoteVideoTracks.removeValue(forKey: key)
             }
         }

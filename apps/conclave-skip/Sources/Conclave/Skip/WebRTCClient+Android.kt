@@ -515,8 +515,8 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         )
         consumer.resume()
 
-        val isScreen = producerType == "screen"
-        val trackKey = if (isScreen) "${producerUserId}-screen" else producerUserId
+        val isScreenVideo = producerType == "screen" && response.kind == "video"
+        val trackKey = if (isScreenVideo) "${producerUserId}-screen" else producerUserId
 
         consumers[response.id] = ConsumerInfo(
             consumer = consumer,
@@ -557,7 +557,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
                 consumers.remove(entry.key)
                 videoFreezeStats.remove(entry.key)
                 val key = if (entry.value.trackKey.isEmpty()) entry.value.userId else entry.value.trackKey
-                if (key.isNotEmpty()) {
+                if (entry.value.kind == "video" && key.isNotEmpty()) {
                     remoteVideoTracks.removeValue(forKey = key)
                 }
             }
