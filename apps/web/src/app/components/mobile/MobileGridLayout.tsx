@@ -647,7 +647,9 @@ function MobileGridLayout({
       data-mobile-primary={primaryTile.key}
       data-mobile-primary-kind={primaryTile.kind}
       data-mobile-rail-count={railTiles.length}
+      data-mobile-visible-count={mobileRoomTilingBase.visibleTileCount}
       data-mobile-hidden-count={hiddenParticipantsCount}
+      data-mobile-max-tiles={MAX_MOBILE_RAIL_TILES + 1}
       data-mobile-visible-ids={visibleRemoteIds.join(",")}
       data-mobile-hidden-ids={hiddenRemoteIds.join(",")}
       data-mobile-warm-ids={warmRemoteIds.join(",")}

@@ -1247,6 +1247,164 @@ const readRoomTilingPolicyContext = (
   };
 };
 
+const readElementNumberAttribute = (
+  element: Element,
+  name: string,
+  fallback = 0,
+) => {
+  const value = Number(element.getAttribute(name));
+  return Number.isFinite(value) ? value : fallback;
+};
+
+const readElementStringAttribute = (
+  element: Element,
+  name: string,
+  fallback = "",
+) => element.getAttribute(name) ?? fallback;
+
+const readElementBooleanAttribute = (element: Element, name: string) =>
+  element.getAttribute(name) === "true";
+
+const readCsvAttribute = (element: Element, name: string) =>
+  readElementStringAttribute(element, name)
+    .split(",")
+    .map((id) => id.trim())
+    .filter(Boolean);
+
+const normalizeRoomTilingMode = (value: string) =>
+  value === "stage-rail" ? "stageRail" : value;
+
+const readRoomTilingPolicyContextFromDom =
+  (): VideoEffectsRoomTilingPolicyContext | null => {
+    const mobileRoot = document.querySelector(
+      "[data-mobile-room-tiling-source='client']",
+    );
+    if (mobileRoot) {
+      const totalGridCount = readElementNumberAttribute(
+        mobileRoot,
+        "data-mobile-total-people",
+        1,
+      );
+      const hiddenCount = readElementNumberAttribute(
+        mobileRoot,
+        "data-mobile-hidden-count",
+      );
+      const visibleCount = readElementNumberAttribute(
+        mobileRoot,
+        "data-mobile-visible-count",
+        Math.max(1, totalGridCount - hiddenCount),
+      );
+      const stageRailCount = readElementNumberAttribute(
+        mobileRoot,
+        "data-mobile-rail-count",
+      );
+      const mainRect = document
+        .querySelector(".mobile-stage-main")
+        ?.getBoundingClientRect();
+      const railRect = document
+        .querySelector(".mobile-stage-rail")
+        ?.getBoundingClientRect();
+      const rootRect = mobileRoot.getBoundingClientRect();
+      const localIsPrimary =
+        readElementStringAttribute(mobileRoot, "data-mobile-primary") ===
+        "local";
+      const tileRect = localIsPrimary ? mainRect : railRect ?? mainRect;
+
+      return {
+        sequence: 0,
+        renderedMode: normalizeRoomTilingMode(
+          readElementStringAttribute(
+            mobileRoot,
+            "data-mobile-meet-layout",
+            "solo",
+          ),
+        ),
+        presenting: false,
+        dynamicCrop: false,
+        totalGridCount,
+        visibleCount,
+        hiddenCount,
+        stageRailCount,
+        maxTiles: readElementNumberAttribute(
+          mobileRoot,
+          "data-mobile-max-tiles",
+          stageRailCount + 1,
+        ),
+        tileWidth: Math.round(tileRect?.width ?? rootRect.width),
+        tileHeight: Math.round(tileRect?.height ?? rootRect.height),
+        selfViewPlacement: localIsPrimary ? "stage" : "tile",
+        localIsPrimary,
+        receivedAt: performance.now(),
+      };
+    }
+
+    const desktopRoot = document.querySelector(
+      "[data-meet-room-tiling-source='client']",
+    );
+    if (!desktopRoot) return null;
+
+    const visibleCount = readElementNumberAttribute(
+      desktopRoot,
+      "data-meet-view-visible-count",
+    );
+    const stageRailCount = readElementNumberAttribute(
+      desktopRoot,
+      "data-meet-view-stage-rail-count",
+    );
+    const totalGridCount = readElementNumberAttribute(
+      desktopRoot,
+      "data-meet-view-grid-count",
+      Math.max(1, visibleCount + stageRailCount),
+    );
+    const rootRect = desktopRoot.getBoundingClientRect();
+    const estimatedCols =
+      visibleCount > 1 ? Math.ceil(Math.sqrt(visibleCount)) : 1;
+    const estimatedRows = Math.max(1, Math.ceil(visibleCount / estimatedCols));
+    const primaryIds = readCsvAttribute(
+      desktopRoot,
+      "data-meet-room-tiling-primary-ids",
+    );
+
+    return {
+      sequence: 0,
+      renderedMode: normalizeRoomTilingMode(
+        readElementStringAttribute(
+          desktopRoot,
+          "data-meet-view-effective",
+          readElementStringAttribute(desktopRoot, "data-meet-view-layout"),
+        ),
+      ),
+      presenting: readElementBooleanAttribute(
+        desktopRoot,
+        "data-meet-view-presenting",
+      ),
+      dynamicCrop: readElementBooleanAttribute(
+        desktopRoot,
+        "data-meet-view-dynamic-crop",
+      ),
+      totalGridCount,
+      visibleCount,
+      hiddenCount: readElementNumberAttribute(
+        desktopRoot,
+        "data-meet-view-hidden-count",
+      ),
+      stageRailCount,
+      maxTiles: readElementNumberAttribute(
+        desktopRoot,
+        "data-meet-view-max-tiles",
+        visibleCount,
+      ),
+      tileWidth: Math.round(rootRect.width / estimatedCols),
+      tileHeight: Math.round(rootRect.height / estimatedRows),
+      selfViewPlacement: readElementStringAttribute(
+        desktopRoot,
+        "data-meet-view-self-view-placement",
+      ),
+      localIsPrimary: primaryIds.includes("local"),
+      receivedAt: performance.now(),
+    };
+  };
+
 const getRoomTilingPolicyTier = (
   effects: VideoEffectsState,
   roomTiling: VideoEffectsRoomTilingPolicyContext | null,
@@ -6771,24 +6929,62 @@ export function useVideoEffects({
       const context = readRoomTilingPolicyContext(value);
       if (context) {
         roomTilingPolicyContextRef.current = context;
+        return true;
       }
+      return false;
+    };
+    const ingestRoomTilingMetadataFromDom = () => {
+      const context = readRoomTilingPolicyContextFromDom();
+      if (context) {
+        roomTilingPolicyContextRef.current = context;
+        return true;
+      }
+      return false;
     };
     const windowWithRoomTiling = window as Window & {
       __conclaveGetMeetRoomTilingDebug?: () => { current?: unknown };
     };
     try {
-      ingestRoomTilingMetadata(
+      const ingestedDebugMetadata = ingestRoomTilingMetadata(
         windowWithRoomTiling.__conclaveGetMeetRoomTilingDebug?.().current,
       );
+      if (!ingestedDebugMetadata) {
+        ingestRoomTilingMetadataFromDom();
+      }
     } catch {
-      // Room tiling debug state is best-effort; live events will fill it in.
+      ingestRoomTilingMetadataFromDom();
     }
     const handleRoomTiling = (event: Event) => {
-      ingestRoomTilingMetadata((event as CustomEvent<unknown>).detail);
+      if (!ingestRoomTilingMetadata((event as CustomEvent<unknown>).detail)) {
+        ingestRoomTilingMetadataFromDom();
+      }
+    };
+    const handleViewportRoomTilingUpdate = () => {
+      ingestRoomTilingMetadataFromDom();
     };
     window.addEventListener("conclave:meet-room-tiling", handleRoomTiling);
+    window.addEventListener("resize", handleViewportRoomTilingUpdate);
+    window.addEventListener("orientationchange", handleViewportRoomTilingUpdate);
+    window.visualViewport?.addEventListener(
+      "resize",
+      handleViewportRoomTilingUpdate,
+    );
+    const fallbackInterval = window.setInterval(
+      ingestRoomTilingMetadataFromDom,
+      1000,
+    );
     return () => {
+      window.clearInterval(fallbackInterval);
       window.removeEventListener("conclave:meet-room-tiling", handleRoomTiling);
+      window.removeEventListener("resize", handleViewportRoomTilingUpdate);
+      window.removeEventListener(
+        "orientationchange",
+        handleViewportRoomTilingUpdate,
+      );
+      window.visualViewport?.removeEventListener(
+        "resize",
+        handleViewportRoomTilingUpdate,
+      );
     };
   }, []);
 
