@@ -10,6 +10,7 @@ import {
   Flower2,
   Focus,
   Glasses,
+  HatGlasses,
   ImagePlus,
   LampDesk,
   Layers,
@@ -20,6 +21,7 @@ import {
   Plane,
   Rabbit,
   Rocket,
+  Snowflake,
   Sparkles,
   Sofa,
   SunMedium,
@@ -67,16 +69,22 @@ export type FaceFilterId =
   | "halo"
   | "idea"
   | "mustache"
+  | "thin-mustache"
   | "sparkles"
   | "aviator"
   | "cat-eye-beret"
+  | "cute-glasses"
   | "cyber-glasses"
   | "cat-ears-glasses"
   | "bunny-ears"
   | "beach-day"
   | "party-hat"
   | "pilot-hat"
+  | "trucker-hat"
+  | "winter-hat-scarf"
+  | "wizard-hat"
   | "butterflies"
+  | "cute-alien"
   | "alien";
 
 export type AppearanceStyleId =
@@ -167,16 +175,22 @@ const FACE_FILTER_IDS = new Set<FaceFilterId>([
   "halo",
   "idea",
   "mustache",
+  "thin-mustache",
   "sparkles",
   "aviator",
   "cat-eye-beret",
+  "cute-glasses",
   "cyber-glasses",
   "cat-ears-glasses",
   "bunny-ears",
   "beach-day",
   "party-hat",
   "pilot-hat",
+  "trucker-hat",
+  "winter-hat-scarf",
+  "wizard-hat",
   "butterflies",
+  "cute-alien",
   "alien",
 ]);
 const APPEARANCE_STYLE_IDS = new Set<AppearanceStyleId>([
@@ -612,6 +626,13 @@ export const FACE_FILTERS: VideoEffectOption<FaceFilterId>[] = [
     category: "Accessories",
   },
   {
+    id: "cute-glasses",
+    label: "Cute glasses",
+    icon: Glasses,
+    tone: "#ec4899",
+    category: "Accessories",
+  },
+  {
     id: "aviator",
     label: "Aviator",
     icon: Plane,
@@ -654,6 +675,13 @@ export const FACE_FILTERS: VideoEffectOption<FaceFilterId>[] = [
     category: "Costumes",
   },
   {
+    id: "cute-alien",
+    label: "Cute alien",
+    icon: Rocket,
+    tone: "#22c55e",
+    category: "Costumes",
+  },
+  {
     id: "cat-ears-glasses",
     label: "Cat ears and glasses",
     icon: VenetianMask,
@@ -675,6 +703,27 @@ export const FACE_FILTERS: VideoEffectOption<FaceFilterId>[] = [
     category: "Costumes",
   },
   {
+    id: "trucker-hat",
+    label: "Trucker hat",
+    icon: HatGlasses,
+    tone: "#2563eb",
+    category: "Costumes",
+  },
+  {
+    id: "winter-hat-scarf",
+    label: "Winter hat and scarf",
+    icon: Snowflake,
+    tone: "#0ea5e9",
+    category: "Costumes",
+  },
+  {
+    id: "wizard-hat",
+    label: "Wizard hat",
+    icon: WandSparkles,
+    tone: "#7c3aed",
+    category: "Costumes",
+  },
+  {
     id: "alien",
     label: "Alien ship",
     icon: Rocket,
@@ -686,6 +735,13 @@ export const FACE_FILTERS: VideoEffectOption<FaceFilterId>[] = [
     label: "Mustache",
     icon: WandSparkles,
     tone: "#44403c",
+    category: "Costumes",
+  },
+  {
+    id: "thin-mustache",
+    label: "Thin mustache",
+    icon: VenetianMask,
+    tone: "#292524",
     category: "Costumes",
   },
 ];
