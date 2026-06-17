@@ -110,7 +110,7 @@ export class Room {
   > = new Map();
   public pendingDisconnects: Map<
     string,
-    { timeout: NodeJS.Timeout; socketId: string }
+    { timeout: NodeJS.Timeout; socketId: string; startedAt: number }
   > = new Map();
   public allowedUsers: Set<string> = new Set();
   public currentScreenShareProducerId: string | null = null;
@@ -1279,7 +1279,11 @@ export class Room {
       this.pendingDisconnects.delete(userId);
       onExpire();
     }, delayMs);
-    this.pendingDisconnects.set(userId, { timeout, socketId });
+    this.pendingDisconnects.set(userId, {
+      timeout,
+      socketId,
+      startedAt: Date.now(),
+    });
   }
 
   clearPendingDisconnect(userId: string, socketId?: string): boolean {
@@ -1296,6 +1300,10 @@ export class Room {
     if (!pending) return false;
     if (socketId && pending.socketId !== socketId) return false;
     return true;
+  }
+
+  getPendingDisconnectStartedAt(userId: string): number | null {
+    return this.pendingDisconnects.get(userId)?.startedAt ?? null;
   }
 
   startCleanupTimer(callback: () => void) {

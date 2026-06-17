@@ -415,6 +415,10 @@ const shouldCleanupLegacyFakeVideos = !/^(0|false|no)$/i.test(
   process.env.CONCLAVE_CLEANUP_LEGACY_FAKE_VIDEOS ?? "1",
 );
 const timeoutMs = Number(process.env.CONCLAVE_HEADLESS_TIMEOUT_MS ?? 90000);
+const postProbeSoakMs = Math.max(
+  0,
+  Number(process.env.CONCLAVE_POST_PROBE_SOAK_MS ?? 0) || 0,
+);
 const chromePort = Number(
   process.env.CONCLAVE_CHROME_DEBUG_PORT ??
     String(9300 + Math.floor(Math.random() * 600)),
@@ -2268,6 +2272,109 @@ const runMeetVideoPipeProbe = async (
     throw new Error(
       `Meet VideoPipe headless regression failed: ${JSON.stringify(quality)}`,
     );
+  }
+
+  if (postProbeSoakMs > 0) {
+    const soakLogStartIndex = cdp.logs.length;
+    await sleep(postProbeSoakMs);
+    const soakState = await collectState(cdp, "state_after_meet_videopipe_soak");
+    const soakLogs = cdp.logs.slice(soakLogStartIndex);
+    const soakBadLogs = soakLogs.filter((log) =>
+      badLogPatterns.some((pattern) => pattern.test(log.text)),
+    );
+    const soakVideoFrameWarnings = soakBadLogs.filter((log) =>
+      /VideoFrame was garbage collected/i.test(log.text),
+    );
+    const soakFatalBadLogs = soakBadLogs.filter(
+      (log) => !/VideoFrame was garbage collected/i.test(log.text),
+    );
+    const soakPanelStats = soakState.panelStats ?? {};
+    const soakSelectedFilterMatches = meetVideoPipeCombinedBackgroundId
+      ? soakState.meetVideoDebug?.videoEffects?.filter === primaryFaceFilterId
+      : soakPanelStats.effects?.filter === primaryFaceFilterId;
+    const soakCombinedBackgroundOk = meetVideoPipeCombinedBackgroundId
+      ? soakPanelStats.effects?.background === meetVideoPipeCombinedBackgroundId &&
+        soakPanelStats.backgroundRender?.background ===
+          meetVideoPipeCombinedBackgroundId &&
+        soakPanelStats.backgroundRender?.active === true
+      : true;
+    const soakOutputModeOk = meetVideoPipeCombinedBackgroundId
+      ? soakPanelStats.outputMode === "track-generator" ||
+        soakPanelStats.outputMode === "canvas-capture"
+      : soakPanelStats.outputMode === "meet-videopipe";
+    const soakFrameSourceOk = meetVideoPipeCombinedBackgroundId
+      ? soakPanelStats.frameSource === "video" ||
+        soakPanelStats.frameSource === "track-processor"
+      : soakPanelStats.frameSource === "meet-videopipe";
+    const soakMeetVideoPipeOk = meetVideoPipeCombinedBackgroundId
+      ? soakPanelStats.meetVideoPipe?.active === true &&
+        soakPanelStats.meetVideoPipe?.mode === "gate" &&
+        soakPanelStats.meetVideoPipe?.gate?.selectedFilter ===
+          primaryFaceFilterId
+      : soakPanelStats.meetVideoPipe?.active === true &&
+        soakPanelStats.meetVideoPipe?.outputTrack?.readyState === "live";
+    const soakQuality = {
+      ok:
+        soakState.panelAttrs?.["data-video-effects-status"] === "running" &&
+        soakState.panelAttrs?.["data-video-effects-output-published"] ===
+          "true" &&
+        soakState.panelAttrs?.["data-video-effects-preview-matches-output"] ===
+          "true" &&
+        Number(
+          soakState.panelAttrs?.["data-video-effects-black-output-count"] ?? 1,
+        ) === 0 &&
+        soakSelectedFilterMatches &&
+        soakCombinedBackgroundOk &&
+        soakOutputModeOk &&
+        soakFrameSourceOk &&
+        soakMeetVideoPipeOk &&
+        soakState.meetVideoDebug?.publish?.usingProcessedTrack === true &&
+        soakState.meetVideoDebug?.publish?.usingRawTrack === false &&
+        soakState.meetVideoDebug?.publish?.shouldPublishProcessed === true &&
+        (meetVideoPipeCombinedBackgroundId
+          ? soakState.meetVideoDebug?.publish
+              ?.processedSourceMatchesChainedInput === true
+          : true) &&
+        soakState.meetVideoDebug?.publish?.producerTrackLive === true &&
+        soakFatalBadLogs.length === 0,
+      durationMs: postProbeSoakMs,
+      label: primaryFaceFilterLabel,
+      expectedFilterId: primaryFaceFilterId,
+      status: soakState.panelAttrs?.["data-video-effects-status"] ?? null,
+      outputPublished:
+        soakState.panelAttrs?.["data-video-effects-output-published"] ?? null,
+      previewMatchesOutput:
+        soakState.panelAttrs?.[
+          "data-video-effects-preview-matches-output"
+        ] ?? null,
+      blackOutputFrameCount: Number(
+        soakState.panelAttrs?.["data-video-effects-black-output-count"] ?? 1,
+      ),
+      combinedBackgroundId: meetVideoPipeCombinedBackgroundId,
+      combinedBackgroundOk: soakCombinedBackgroundOk,
+      selectedFilterMatches: soakSelectedFilterMatches,
+      outputMode: soakPanelStats.outputMode ?? null,
+      frameSource: soakPanelStats.frameSource ?? null,
+      effects: soakPanelStats.effects ?? null,
+      backgroundRender: soakPanelStats.backgroundRender ?? null,
+      meetVideoPipe: soakPanelStats.meetVideoPipe ?? null,
+      publish: soakState.meetVideoDebug?.publish ?? null,
+      badLogs: soakFatalBadLogs,
+      videoFrameWarnings: soakVideoFrameWarnings,
+      relevantLogs: soakLogs
+        .filter((log) =>
+          /meet_videopipe|VideoPipe|video.?pipe|black_output|release_processed|skip_replace|track ended|VideoFrame was garbage collected|worker disappeared|processor_worker_frame_failed|output_writer_worker_write_failed/i.test(
+            log.text,
+          ),
+        )
+        .slice(-40),
+    };
+    emit("meet_videopipe_soak_probe", soakQuality);
+    if (!soakQuality.ok) {
+      throw new Error(
+        `Meet VideoPipe soak regression failed: ${JSON.stringify(soakQuality)}`,
+      );
+    }
   }
 
   emit("result", {

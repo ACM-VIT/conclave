@@ -36,8 +36,8 @@ export default function ConnectionBanner({
     : showServerRestartNotice
       ? serverRestartNotice
       : isReconnecting
-        ? "Reconnecting…"
-        : "Connection lost.";
+        ? "Connection interrupted. Reconnecting to the meeting…"
+        : "Meeting connection lost.";
 
   // accent for in-progress recovery, danger for hard failures.
   const tone = isReconnecting

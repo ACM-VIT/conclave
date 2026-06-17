@@ -33,6 +33,7 @@ import { useStableSpeakerId } from "../hooks/useStableSpeakerId";
 import type { Participant } from "../lib/types";
 import { isSystemUserId, truncateDisplayName } from "../lib/utils";
 import ParticipantAudio from "./ParticipantAudio";
+import ParticipantConnectionOverlay from "./ParticipantConnectionOverlay";
 import ParticipantVideo from "./ParticipantVideo";
 import { Avatar } from "@conclave/ui-tokens/web";
 import {
@@ -3504,6 +3505,8 @@ const OverflowGalleryTile = memo(function OverflowGalleryTile({
   const videoRef = useRef<HTMLVideoElement>(null);
   const videoStream = participant.isCameraOff ? null : participant.videoStream;
   const videoTrack = videoStream?.getVideoTracks()[0] ?? null;
+  const connectionStatus = participant.connectionStatus;
+  const isReconnecting = connectionStatus?.state === "reconnecting";
 
   useEffect(() => {
     const video = videoRef.current;
@@ -3564,13 +3567,20 @@ const OverflowGalleryTile = memo(function OverflowGalleryTile({
           ref={videoRef}
           autoPlay
           playsInline
-          className={`h-full w-full object-cover ${showPlaceholder ? "hidden" : ""}`}
+          className={`h-full w-full object-cover ${
+            showPlaceholder ? "hidden" : ""
+          } ${isReconnecting ? "opacity-75 saturate-90" : ""}`}
         />
         {showPlaceholder && (
-          <div className="absolute inset-0 flex items-center justify-center bg-[#18181b]">
+          <div
+            className={`absolute inset-0 flex items-center justify-center bg-[#18181b] ${
+              isReconnecting ? "opacity-90" : ""
+            }`}
+          >
             <Avatar id={participant.userId} name={tileLabel} size={56} />
           </div>
         )}
+        <ParticipantConnectionOverlay status={connectionStatus} compact />
         {participant.isGhost && (
           <div className="absolute inset-0 flex items-center justify-center bg-black/35">
             <Ghost size={28} strokeWidth={1.75} className="text-[#FF007A]" />

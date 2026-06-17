@@ -24,6 +24,20 @@ export type JoinMode = "meeting" | "webinar_attendee";
 
 export type ReactionKind = "emoji" | "asset";
 
+export type ParticipantConnectionStatus =
+  | {
+      state: "reconnecting";
+      reason?: string;
+      graceMs?: number;
+      updatedAt?: number;
+    }
+  | {
+      state: "reconnected";
+      reason?: string;
+      downtimeMs?: number;
+      updatedAt?: number;
+    };
+
 export interface ChatMessage {
   id: string;
   userId: string;
@@ -98,6 +112,7 @@ export interface Participant {
   isHandRaised: boolean;
   isGhost: boolean;
   isLeaving?: boolean;
+  connectionStatus?: ParticipantConnectionStatus;
 }
 
 export interface AudioAnalyserEntry {

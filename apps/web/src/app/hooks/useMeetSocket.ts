@@ -27,6 +27,7 @@ import type {
   MeetError,
   MeetingConfigSnapshot,
   MeetingUpdateRequest,
+  ParticipantConnectionStatus,
   ProducerInfo,
   ProducerType,
   ReactionNotification,
@@ -384,6 +385,9 @@ export function useMeetSocket({
   const serverRestartNoticeRef = useRef<string | null>(null);
   const consumeRetryAttemptsRef = useRef<Map<string, number>>(new Map());
   const videoStallRecoveryTimeoutsRef = useRef<Map<string, number>>(new Map());
+  const participantConnectionStatusTimeoutsRef = useRef<Map<string, number>>(
+    new Map(),
+  );
   const staleConsumerRecoveryTimeoutsRef = useRef<Map<string, number>>(
     new Map(),
   );
@@ -522,6 +526,10 @@ export function useMeetSocket({
         window.clearTimeout(timeoutId);
       }
       videoStallRecoveryTimeoutsRef.current.clear();
+      for (const timeoutId of participantConnectionStatusTimeoutsRef.current.values()) {
+        window.clearTimeout(timeoutId);
+      }
+      participantConnectionStatusTimeoutsRef.current.clear();
       for (const timeoutId of staleConsumerRecoveryTimeoutsRef.current.values()) {
         window.clearTimeout(timeoutId);
       }
@@ -843,6 +851,41 @@ export function useMeetSocket({
       leaveTimeoutsRef.current.set(leftUserId, timeoutId);
     },
     [dispatchParticipants, leaveTimeoutsRef],
+  );
+
+  const clearParticipantConnectionStatusTimer = useCallback(
+    (targetUserId: string) => {
+      const timeoutId =
+        participantConnectionStatusTimeoutsRef.current.get(targetUserId);
+      if (!timeoutId) return;
+      window.clearTimeout(timeoutId);
+      participantConnectionStatusTimeoutsRef.current.delete(targetUserId);
+    },
+    [],
+  );
+
+  const applyParticipantConnectionStatus = useCallback(
+    (targetUserId: string, status: ParticipantConnectionStatus) => {
+      clearParticipantConnectionStatusTimer(targetUserId);
+      dispatchParticipants({
+        type: "UPDATE_CONNECTION_STATUS",
+        userId: targetUserId,
+        status,
+      });
+
+      if (status.state !== "reconnected") return;
+
+      const timeoutId = window.setTimeout(() => {
+        participantConnectionStatusTimeoutsRef.current.delete(targetUserId);
+        dispatchParticipants({
+          type: "UPDATE_CONNECTION_STATUS",
+          userId: targetUserId,
+          status: null,
+        });
+      }, 4500);
+      participantConnectionStatusTimeoutsRef.current.set(targetUserId, timeoutId);
+    },
+    [clearParticipantConnectionStatusTimer, dispatchParticipants],
   );
 
   const isRoomEvent = useCallback(
@@ -2933,6 +2976,7 @@ export function useMeetSocket({
                   window.clearTimeout(leaveTimeout);
                   leaveTimeoutsRef.current.delete(joinedUserId);
                 }
+                clearParticipantConnectionStatusTimer(joinedUserId);
                 dispatchParticipants({
                   type: "ADD_PARTICIPANT",
                   userId: joinedUserId,
@@ -2957,6 +3001,7 @@ export function useMeetSocket({
                   next.delete(leftUserId);
                   return next;
                 });
+                clearParticipantConnectionStatusTimer(leftUserId);
 
                 const producersToClose = Array.from(
                   producerMapRef.current.entries(),
@@ -2980,6 +3025,56 @@ export function useMeetSocket({
                 });
 
                 scheduleParticipantRemoval(leftUserId);
+              },
+            );
+
+            socket.on(
+              "participantConnectionState",
+              (payload: {
+                userId?: string;
+                roomId?: string;
+                state?: ParticipantConnectionStatus["state"];
+                reason?: string;
+                graceMs?: number;
+                downtimeMs?: number;
+                updatedAt?: number;
+              }) => {
+                if (!isRoomEvent(payload?.roomId)) return;
+                const targetUserId = payload?.userId;
+                if (!targetUserId || targetUserId === userId) return;
+
+                const state = payload?.state;
+                if (state !== "reconnecting" && state !== "reconnected") {
+                  return;
+                }
+
+                applyParticipantConnectionStatus(targetUserId, {
+                  state,
+                  reason:
+                    typeof payload.reason === "string"
+                      ? payload.reason
+                      : undefined,
+                  graceMs:
+                    typeof payload.graceMs === "number"
+                      ? payload.graceMs
+                      : undefined,
+                  downtimeMs:
+                    typeof payload.downtimeMs === "number"
+                      ? payload.downtimeMs
+                      : undefined,
+                  updatedAt:
+                    typeof payload.updatedAt === "number"
+                      ? payload.updatedAt
+                      : Date.now(),
+                });
+
+                telemetry.capture("meet_participant_connection_state", {
+                  roomId: payload.roomId,
+                  userId: targetUserId,
+                  state,
+                  reason: payload.reason,
+                  downtimeMs: payload.downtimeMs,
+                });
               },
             );
 
@@ -3010,6 +3105,7 @@ export function useMeetSocket({
                         window.clearTimeout(leaveTimeout);
                         leaveTimeoutsRef.current.delete(snapshotUserId);
                       }
+                      clearParticipantConnectionStatusTimer(snapshotUserId);
                       dispatchParticipants({
                         type: "ADD_PARTICIPANT",
                         userId: snapshotUserId,
@@ -3679,6 +3775,7 @@ export function useMeetSocket({
       handleProducerClosed,
       handleRedirectRef,
       handleReconnectRef,
+      applyParticipantConnectionStatus,
       ensureLiveLocalMediaForJoin,
       getVideoPublishTrack,
       getJoinInfo,
@@ -3692,6 +3789,7 @@ export function useMeetSocket({
       joinOptionsRef,
       joinRoomInternal,
       leaveTimeoutsRef,
+      clearParticipantConnectionStatusTimer,
       localStream,
       localStreamRef,
       prejoinMediaIntentRef,

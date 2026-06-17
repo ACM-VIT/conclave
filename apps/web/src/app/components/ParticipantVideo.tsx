@@ -6,6 +6,7 @@ import { createPlaybackRecoveryScheduler } from "../lib/playback-recovery";
 import type { Participant } from "../lib/types";
 import { truncateDisplayName } from "../lib/utils";
 import ParticipantAudio from "./ParticipantAudio";
+import ParticipantConnectionOverlay from "./ParticipantConnectionOverlay";
 import { Avatar } from "@conclave/ui-tokens/web";
 
 interface ParticipantVideoProps {
@@ -54,6 +55,8 @@ function ParticipantVideo({
   const displayLabel = truncateDisplayName(displayName, compact ? 12 : 18);
   const videoStream = participant.isCameraOff ? null : participant.videoStream;
   const videoTrack = videoStream?.getVideoTracks()[0] ?? null;
+  const connectionStatus = participant.connectionStatus;
+  const isReconnecting = connectionStatus?.state === "reconnecting";
 
   useEffect(() => {
     const video = videoRef.current;
@@ -187,10 +190,14 @@ function ParticipantVideo({
           videoObjectFit === "contain" ? "object-contain bg-black" : "object-cover"
         } ${
           showPlaceholder ? "hidden" : ""
-        }`}
+        } ${isReconnecting ? "opacity-75 saturate-90" : ""}`}
       />
       {showPlaceholder && (
-        <div className="absolute inset-0 flex items-center justify-center bg-[#18181b]">
+        <div
+          className={`absolute inset-0 flex items-center justify-center bg-[#18181b] ${
+            isReconnecting ? "opacity-90" : ""
+          }`}
+        >
           <Avatar
             className={compact ? "text-lg" : "text-3xl"}
             id={participant.userId}
@@ -199,6 +206,10 @@ function ParticipantVideo({
           />
         </div>
       )}
+      <ParticipantConnectionOverlay
+        status={connectionStatus}
+        compact={compact}
+      />
       {participant.isGhost && (
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none bg-black/40">
           <div
