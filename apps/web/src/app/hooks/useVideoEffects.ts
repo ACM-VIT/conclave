@@ -9387,6 +9387,7 @@ export function useVideoEffects({
   const [meetVideoPipeTrack, setMeetVideoPipeTrack] =
     useState<MediaStreamTrack | null>(null);
   const [meetVideoPipeTrackReady, setMeetVideoPipeTrackReady] = useState(false);
+  const [meetVideoPipeRestartNonce, setMeetVideoPipeRestartNonce] = useState(0);
   const [meetVideoPipeFailedRequestKey, setMeetVideoPipeFailedRequestKey] =
     useState<string | null>(null);
   const [meetVideoPipeLastFailure, setMeetVideoPipeLastFailure] =
@@ -9787,8 +9788,13 @@ export function useVideoEffects({
     const handleOutputEnded = () => {
       warnVideoEffects(debugId, "meet_videopipe_output_track_ended", {
         outputTrack: getTrackDebugSnapshot(outputTrack),
+        localPipelineActive,
+        rawSourceTrack: getTrackDebugSnapshot(rawSourceVideoTrack),
       });
       setMeetVideoPipeTrackReady(false);
+      setMeetVideoPipeTrack((current) =>
+        current === outputTrack ? null : current,
+      );
       if (finalTrackOwnerRef.current === "meet-videopipe") {
         finalTrackOwnerRef.current = "none";
         processedVideoTrackRef.current = null;
@@ -9796,6 +9802,15 @@ export function useVideoEffects({
         setProcessedTrack((current) =>
           current === outputTrack ? null : current,
         );
+      }
+      if (!cancelled && rawSourceVideoTrack?.readyState === "live") {
+        logVideoEffects(debugId, "meet_videopipe_restart_after_output_end", {
+          requestKey: meetVideoPipeRequestKey,
+          localPipelineActive,
+          rawSourceTrack: getTrackDebugSnapshot(rawSourceVideoTrack),
+        });
+        setStatus("loading");
+        setMeetVideoPipeRestartNonce((nonce) => nonce + 1);
       }
     };
 
@@ -9807,6 +9822,7 @@ export function useVideoEffects({
       effectIdNumber: meetVideoPipeEffectGraph.meetEffectIdNumber,
       requestKey: meetVideoPipeRequestKey,
       localPipelineActive,
+      restartNonce: meetVideoPipeRestartNonce,
       sourceStream: getStreamDebugSnapshot(sourceStream),
       sourceTrack: getTrackDebugSnapshot(rawSourceVideoTrack),
     });
@@ -9928,6 +9944,7 @@ export function useVideoEffects({
     meetVideoPipeEffectGraph,
     meetVideoPipeGate,
     meetVideoPipeRequestKey,
+    meetVideoPipeRestartNonce,
     processedVideoTrackRef,
     rawSourceVideoTrack,
     sourceStream,
@@ -10078,6 +10095,7 @@ export function useVideoEffects({
     const adaptationState = createVideoEffectsAdaptationState();
     let currentStatus: VideoEffectsRuntimeStatus = "loading";
     let outputTrackPublished = false;
+    let meetVideoPipeSourceRecoveryRequested = false;
     let visibleOutputFrameCount = 0;
     let blackOutputFrameCount = 0;
     let renderedFrames = 0;
@@ -12251,6 +12269,10 @@ export function useVideoEffects({
           mode: OutputWriterInputMode,
           resource: GeneratedVideoFrame | ImageBitmap,
         ) => {
+          const worker = outputWriterWorker;
+          if (!worker) {
+            throw new Error("Output writer worker disappeared before frame post.");
+          }
           let resolveCompletion = (
             _message: OutputWriterWorkerCompletionMessage,
           ) => {};
@@ -12275,7 +12297,7 @@ export function useVideoEffects({
             sentAt,
           });
           try {
-            outputWriterWorker?.postMessage(
+            worker.postMessage(
               {
                 type: "FRAME",
                 sequence,
@@ -13638,6 +13660,12 @@ export function useVideoEffects({
         const frameProcessingConfigId = modelProcessingConfigId;
         const sentAt = performance.now();
         const sourceForWorker = workerSource;
+        const worker = segmentationProcessorWorker;
+        if (!worker || !segmentationProcessorWorkerReady) {
+          throw new Error(
+            "Segmentation processor worker disappeared before frame post.",
+          );
+        }
         const result =
           await new Promise<SegmentationProcessorWorkerResultMessage>(
             (resolve, reject) => {
@@ -13655,7 +13683,7 @@ export function useVideoEffects({
                 processingConfigId: frameProcessingConfigId,
               });
               try {
-                segmentationProcessorWorker?.postMessage(
+                worker.postMessage(
                   {
                     type: "SEGMENT",
                     sequence,
@@ -13921,6 +13949,12 @@ export function useVideoEffects({
         const frameProcessingConfigId = modelProcessingConfigId;
         const sentAt = performance.now();
         const sourceForWorker = workerSource;
+        const worker = faceProcessorWorker;
+        if (!worker || !faceProcessorWorkerReady) {
+          throw new Error(
+            "Face processor worker disappeared before frame post.",
+          );
+        }
         const result = await new Promise<FaceProcessorWorkerResultMessage>(
           (resolve, reject) => {
             const timeoutId = window.setTimeout(() => {
@@ -13937,7 +13971,7 @@ export function useVideoEffects({
               processingConfigId: frameProcessingConfigId,
             });
             try {
-              faceProcessorWorker?.postMessage(
+              worker.postMessage(
                 {
                   type: "FACE",
                   sequence,
@@ -14543,13 +14577,41 @@ export function useVideoEffects({
           currentEffects.studioLook,
       );
       if (sourceVideoTrack.readyState !== "live") {
+        const canRecoverMeetVideoPipeSource =
+          meetVideoPipeActive && rawSourceVideoTrack?.readyState === "live";
         logVideoEffects(debugId, "source_track_ended_cleanup", {
           outputTrackPublished,
           outputMode,
           outputFramesWritten,
+          canRecoverMeetVideoPipeSource,
           sourceTrack: getTrackDebugSnapshot(sourceVideoTrack),
+          rawSourceTrack: getTrackDebugSnapshot(rawSourceVideoTrack),
           effects: getEffectsDebugSnapshot(currentEffects),
         });
+        if (canRecoverMeetVideoPipeSource) {
+          if (!meetVideoPipeSourceRecoveryRequested) {
+            meetVideoPipeSourceRecoveryRequested = true;
+            closeTrackProcessor("meet-videopipe-source-ended");
+            logVideoEffects(debugId, "meet_videopipe_restart_after_source_end", {
+              requestKey: meetVideoPipeRequestKey,
+              sourceTrack: getTrackDebugSnapshot(sourceVideoTrack),
+              rawSourceTrack: getTrackDebugSnapshot(rawSourceVideoTrack),
+            });
+            setMeetVideoPipeTrackReady(false);
+            setMeetVideoPipeTrack((current) =>
+              current === sourceVideoTrack ? null : current,
+            );
+            setMeetVideoPipeRestartNonce((nonce) => nonce + 1);
+          }
+          if (outputTrackPublished && track.readyState === "live") {
+            retainLocalProcessedTrackForTransition(
+              track,
+              "meet-videopipe source track ended",
+            );
+          }
+          setRuntimeStatus("loading", null);
+          return;
+        }
         releaseOutputTrackToRaw("source track ended", "debug");
         setRuntimeStatus("off", null);
         return;
