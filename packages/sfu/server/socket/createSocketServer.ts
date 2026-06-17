@@ -5,6 +5,7 @@ import { Server as SocketIOServer } from "socket.io";
 import { config as defaultConfig } from "../../config/config.js";
 import { Logger } from "../../utilities/loggers.js";
 import { resolveCorsOrigins } from "../cors.js";
+import { isRedisTransientError } from "../redisErrors.js";
 import type { SfuState } from "../state.js";
 import { attachSocketAuth } from "./auth.js";
 import { registerConnectionHandlers } from "./registerConnectionHandlers.js";
@@ -77,15 +78,20 @@ export const connectSocketAdapter = async (
     url: redisUrl,
     socket: {
       connectTimeout: socketConfig.socket.redisConnectTimeoutMs,
+      reconnectStrategy: (retries) => Math.min(100 + retries * 200, 5000),
     },
+    disableOfflineQueue: true,
+    commandsQueueMaxLength: 1000,
   });
   const subClient = pubClient.duplicate();
 
   pubClient.on("error", (error) => {
-    Logger.error("[Socket.IO] Redis pub client error", error);
+    const log = isRedisTransientError(error) ? Logger.warn : Logger.error;
+    log("[Socket.IO] Redis pub client error", error);
   });
   subClient.on("error", (error) => {
-    Logger.error("[Socket.IO] Redis sub client error", error);
+    const log = isRedisTransientError(error) ? Logger.warn : Logger.error;
+    log("[Socket.IO] Redis sub client error", error);
   });
 
   try {
