@@ -433,9 +433,10 @@ export function ChatPanel({
 
     const wasVisible = wasVisibleRef.current;
     wasVisibleRef.current = visible;
-    requestAnimationFrame(() => {
+    const frameId = requestAnimationFrame(() => {
       listRef.current?.scrollToOffset({ offset: 0, animated: wasVisible });
     });
+    return () => cancelAnimationFrame(frameId);
   }, [messages.length, visible]);
 
   useEffect(() => {
@@ -451,9 +452,10 @@ export function ChatPanel({
       return;
     }
     hasAppliedFooterInsetRef.current = true;
-    requestAnimationFrame(() => {
+    const frameId = requestAnimationFrame(() => {
       listRef.current?.scrollToOffset({ offset: 0, animated: false });
     });
+    return () => cancelAnimationFrame(frameId);
   }, [footerHeight, messages.length, visible]);
 
   useEffect(() => {
@@ -624,7 +626,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 999,
-    backgroundColor: "rgba(254, 252, 217, 0.08)",
+    backgroundColor: "rgba(250, 250, 250, 0.08)",
     borderWidth: 1,
     borderColor: SHEET_COLORS.border,
   },
@@ -796,7 +798,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 10,
     borderRadius: 12,
-    backgroundColor: "rgba(254, 252, 217, 0.06)",
+    backgroundColor: "rgba(250, 250, 250, 0.06)",
     borderWidth: 1,
     borderColor: SHEET_COLORS.border,
     color: SHEET_COLORS.text,

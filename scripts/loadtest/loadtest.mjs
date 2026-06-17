@@ -1,26 +1,26 @@
 #!/usr/bin/env node
-// Synthetic-participant load test. Spawns NUM socket.io clients that fetch
-// a JWT from the Next.js /api/sfu/join endpoint and then issue joinRoom
-// against the SFU, persisting the connection until SIGINT/SIGTERM. The
-// first participant requests host so the room is auto-created if it does
-// not exist yet.
-//
-// Env vars:
-//   NEXT_API      Next.js token endpoint (default https://conclave.acmvit.in/api/sfu/join)
-//   ROOM_ID       Meeting room code to join (default acmvit-cybersec)
-//   NUM           Participant count (default 200)
-//   STAGGER_MS    Spacing between spawns (default 50)
-//   STATS_MS      Stats heartbeat interval (default 15000)
-
 import { io } from "socket.io-client";
+
+const integerEnv = (name, fallback, { min = 0, max = Number.MAX_SAFE_INTEGER } = {}) => {
+  const raw = process.env[name];
+  if (raw == null || raw.trim() === "") return fallback;
+
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < min || value > max) {
+    console.warn(`[config] ignoring invalid ${name}=${JSON.stringify(raw)}; using ${fallback}`);
+    return fallback;
+  }
+
+  return value;
+};
 
 const NEXT_API =
   process.env.NEXT_API || "https://conclave.acmvit.in/api/sfu/join";
 const ROOM_ID = process.env.ROOM_ID || "acmvit-cybersec";
 const CLIENT_ID = process.env.CLIENT_ID || "default";
-const NUM = Number(process.env.NUM || 200);
-const STAGGER_MS = Number(process.env.STAGGER_MS || 50);
-const STATS_MS = Number(process.env.STATS_MS || 15000);
+const NUM = integerEnv("NUM", 200, { min: 1 });
+const STAGGER_MS = integerEnv("STAGGER_MS", 50);
+const STATS_MS = integerEnv("STATS_MS", 15000, { min: 1000 });
 
 const FIRST_NAMES = [
   "Arjun", "Aarav", "Aditya", "Aanya", "Ananya", "Aisha", "Akshay", "Aman",
@@ -73,7 +73,16 @@ async function getToken({ name, sessionId, isHost }) {
     const text = await resp.text().catch(() => "");
     throw new Error(`token ${resp.status}: ${text.slice(0, 120)}`);
   }
-  return resp.json();
+  const payload = await resp.json().catch(() => null);
+  if (
+    !payload ||
+    typeof payload !== "object" ||
+    typeof payload.token !== "string" ||
+    typeof payload.sfuUrl !== "string"
+  ) {
+    throw new Error("token response missing token or sfuUrl");
+  }
+  return payload;
 }
 
 const state = {
@@ -171,6 +180,7 @@ async function spawnParticipant(i, isHost) {
 }
 
 async function main() {
+  let shuttingDown = false;
   console.log(
     `[boot] participants=${NUM} room=${ROOM_ID} clientId=${CLIENT_ID} api=${NEXT_API} stagger=${STAGGER_MS}ms`,
   );
@@ -189,14 +199,14 @@ async function main() {
   }, STATS_MS);
 
   const shutdown = (signal) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
     console.log(`[shutdown] received ${signal}, disconnecting ${handles.length} sockets`);
     clearInterval(statsTimer);
     for (const handle of handles) {
       try {
         handle.socket.disconnect();
-      } catch {
-        // ignore
-      }
+      } catch {}
     }
     setTimeout(() => process.exit(0), 1000).unref();
   };

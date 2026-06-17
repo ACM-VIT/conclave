@@ -2,7 +2,7 @@ import type { MediaKind } from "mediasoup/types";
 import cors from "cors";
 import express from "express";
 import type { Express, Request, Response } from "express";
-import type { Server as SocketIOServer } from "socket.io";
+import type { Server as SocketIOServer, Socket } from "socket.io";
 import { Admin } from "../../config/classes/Admin.js";
 import type { Room } from "../../config/classes/Room.js";
 import type { ProducerType } from "../../config/classes/Client.js";
@@ -14,6 +14,7 @@ import {
   clearAllRaisedHands,
   closeClientProducers,
   closeProducerById,
+  forceRemoveClientNow,
   kickClient,
   rejectAllPendingUsers,
   resolveRoom,
@@ -21,34 +22,81 @@ import {
   toRoomSnapshot,
   toWorkerSnapshots,
 } from "../admin/controlPlane.js";
-import { forceCloseRoom, markRoomEnded } from "../rooms.js";
+import { forceCloseRoom, getRoomChannelId, markRoomEnded } from "../rooms.js";
+import { resolveCorsOrigins } from "../cors.js";
+import { secretsMatch } from "../secret.js";
 import { registerScheduledWebinarRoutes } from "./scheduledWebinarRoutes.js";
 import { registerScheduledMeetingRoutes } from "./scheduledMeetingRoutes.js";
-import { registerRecordingRoutes } from "./recordingRoutes.js";
-import { registerRecorderBotRoutes } from "./recorderBotRoutes.js";
-import type { RecordingManager } from "../recording/recordingManager.js";
 import type { SfuState } from "../state.js";
+import { resolveWebinarLinkTarget } from "../webinar.js";
 
 export type CreateSfuAppOptions = {
   state: SfuState;
   config?: typeof defaultConfig;
   getIo?: () => SocketIOServer | null;
-  recordings: RecordingManager;
 };
 
 const hasValidSecret = (req: Request, secret: string): boolean => {
   const provided = req.header("x-sfu-secret");
-  return Boolean(provided && provided === secret);
+  return Boolean(provided && secretsMatch(provided, secret));
 };
 
 const DEFAULT_SERVER_RESTART_NOTICE =
   "Meeting server is restarting. You will be reconnected automatically.";
 const DEFAULT_SERVER_RESTART_NOTICE_MS = 4000;
 const MAX_SERVER_RESTART_NOTICE_MS = 30000;
+const MAX_OPERATOR_NOTICE_LENGTH = 2000;
+const MAX_OPERATOR_REASON_LENGTH = 256;
+const MAX_ID_LENGTH = 256;
+const MAX_USER_ID_LENGTH = 512;
+const MAX_USER_KEY_LENGTH = 256;
+const MAX_BULK_USER_KEYS = 100;
+const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/;
 
 const DEFAULT_END_ROOM_MESSAGE =
   "This meeting has been ended by the host.";
 const MAX_END_ROOM_DELAY_MS = 30000;
+
+const normalizePlainText = (
+  value: unknown,
+  options: { maxLength: number; fallback?: string },
+): string => {
+  const raw = typeof value === "string" ? value.trim() : "";
+  const text = raw || options.fallback || "";
+  return text.slice(0, options.maxLength);
+};
+
+const normalizeIdentifier = (
+  value: unknown,
+  maxLength = MAX_ID_LENGTH,
+): string | null => {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const text = value.trim();
+  if (
+    !text ||
+    text.length > maxLength ||
+    CONTROL_CHARACTER_PATTERN.test(text)
+  ) {
+    return null;
+  }
+  return text;
+};
+
+const normalizeUserKey = (value: unknown): string | null => {
+  return normalizeIdentifier(value, MAX_USER_KEY_LENGTH);
+};
+
+const normalizeOperatorReason = (
+  value: unknown,
+  fallback: string,
+): string => {
+  return normalizePlainText(value, {
+    maxLength: MAX_OPERATOR_REASON_LENGTH,
+    fallback,
+  });
+};
 
 const parseRestartNoticeMs = (value: unknown): number => {
   if (typeof value !== "number" || !Number.isFinite(value)) {
@@ -61,11 +109,10 @@ const parseRestartNoticeMs = (value: unknown): number => {
 };
 
 const parseRestartNotice = (value: unknown): string => {
-  if (typeof value !== "string") {
-    return DEFAULT_SERVER_RESTART_NOTICE;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : DEFAULT_SERVER_RESTART_NOTICE;
+  return normalizePlainText(value, {
+    maxLength: MAX_OPERATOR_NOTICE_LENGTH,
+    fallback: DEFAULT_SERVER_RESTART_NOTICE,
+  });
 };
 
 const parseEndRoomDelay = (value: unknown): number => {
@@ -79,20 +126,15 @@ const parseEndRoomDelay = (value: unknown): number => {
 };
 
 const parseEndRoomMessage = (value: unknown): string => {
-  if (typeof value !== "string") {
-    return DEFAULT_END_ROOM_MESSAGE;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : DEFAULT_END_ROOM_MESSAGE;
-};
-
-const toStringOrEmpty = (value: unknown): string => {
-  return typeof value === "string" ? value.trim() : "";
+  return normalizePlainText(value, {
+    maxLength: MAX_OPERATOR_NOTICE_LENGTH,
+    fallback: DEFAULT_END_ROOM_MESSAGE,
+  });
 };
 
 const resolveClientId = (req: Request): string | undefined => {
-  const headerValue = toStringOrEmpty(req.header("x-sfu-client"));
-  const queryValue = toStringOrEmpty(req.query.clientId);
+  const headerValue = normalizeIdentifier(req.header("x-sfu-client")) ?? "";
+  const queryValue = normalizeIdentifier(req.query.clientId) ?? "";
   const next = queryValue || headerValue;
   return next || undefined;
 };
@@ -143,22 +185,22 @@ const parseMediaTypes = (value: unknown): ProducerType[] | null | undefined => {
 
 const parseUserKeys = (value: unknown): string[] | null => {
   if (typeof value === "string") {
-    const normalized = value.trim();
-    return normalized ? [normalized] : [];
+    const normalized = normalizeUserKey(value);
+    return normalized ? [normalized] : null;
   }
 
   if (!Array.isArray(value)) {
     return null;
   }
+  if (value.length > MAX_BULK_USER_KEYS) {
+    return null;
+  }
 
   const keys: string[] = [];
   for (const entry of value) {
-    if (typeof entry !== "string") {
-      return null;
-    }
-    const normalized = entry.trim();
+    const normalized = normalizeUserKey(entry);
     if (!normalized) {
-      continue;
+      return null;
     }
     keys.push(normalized);
   }
@@ -170,10 +212,12 @@ export const createSfuApp = ({
   state,
   config = defaultConfig,
   getIo,
-  recordings,
 }: CreateSfuAppOptions): Express => {
   const app = express();
-  app.use(cors());
+  // Env-driven CORS allow-list. Defaults to "*" (unchanged dev behavior); set
+  // SFU_CORS_ORIGINS to a comma-separated list to lock origins down in prod.
+  const corsOrigins = resolveCorsOrigins();
+  app.use(cors({ origin: corsOrigins }));
   app.use(express.json());
 
   const requireSecret = (req: Request, res: Response): boolean => {
@@ -197,7 +241,7 @@ export const createSfuApp = ({
     req: Request,
     res: Response,
   ): ReturnType<typeof resolveRoom> | null => {
-    const roomId = toStringOrEmpty(req.params.roomId);
+    const roomId = normalizeIdentifier(req.params.roomId);
     if (!roomId) {
       res.status(400).json({ error: "Room ID is required" });
       return null;
@@ -266,7 +310,7 @@ export const createSfuApp = ({
       return;
     }
 
-    const userId = toStringOrEmpty(req.params.userId);
+    const userId = normalizeIdentifier(req.params.userId, MAX_USER_ID_LENGTH);
     if (!userId) {
       res.status(400).json({ error: "User ID is required" });
       return;
@@ -284,10 +328,10 @@ export const createSfuApp = ({
       return;
     }
 
-    const reason =
-      toStringOrEmpty(req.body?.reason) ||
-      overrides?.defaultReason ||
-      "Operator moderation action";
+    const reason = normalizeOperatorReason(
+      req.body?.reason,
+      overrides?.defaultReason || "Operator moderation action",
+    );
 
     const result = closeClientProducers({
       io,
@@ -340,10 +384,7 @@ export const createSfuApp = ({
       0,
     );
 
-    const pendingSockets = new Set<{
-      emit: (event: string, payload: unknown) => void;
-      disconnect: (close?: boolean) => void;
-    }>();
+    const pendingSockets = new Set<Socket>();
 
     for (const room of rooms) {
       io.to(room.channelId).emit("serverRestarting", {
@@ -353,15 +394,7 @@ export const createSfuApp = ({
       });
 
       for (const pending of room.pendingClients.values()) {
-        const pendingSocket = pending.socket as
-          | {
-              emit: (event: string, payload: unknown) => void;
-              disconnect: (close?: boolean) => void;
-            }
-          | undefined;
-        if (pendingSocket) {
-          pendingSockets.add(pendingSocket);
-        }
+        pendingSockets.add(pending.socket);
       }
     }
 
@@ -427,7 +460,7 @@ export const createSfuApp = ({
       return res.status(401).json({ error: "Unauthorized" });
     }
 
-    const clientId = req.header("x-sfu-client") || "default";
+    const clientId = normalizeIdentifier(req.header("x-sfu-client")) || "default";
     const roomDetails = Array.from(state.rooms.values())
       .filter((room) => room.clientId === clientId)
       .map((room) => ({
@@ -436,6 +469,55 @@ export const createSfuApp = ({
       }));
 
     return res.json({ rooms: roomDetails });
+  });
+
+  app.get("/routing/rooms/:clientId/:roomId", async (req, res) => {
+    if (!requireSecret(req, res)) {
+      return;
+    }
+
+    const clientId = normalizeIdentifier(req.params.clientId);
+    const requestedRoomId = normalizeIdentifier(req.params.roomId);
+    if (!clientId) {
+      res.status(400).json({ error: "Client ID is required" });
+      return;
+    }
+    if (!requestedRoomId) {
+      res.status(400).json({ error: "Room ID is required" });
+      return;
+    }
+
+    try {
+      let roomId = requestedRoomId;
+      let channelId = getRoomChannelId(clientId, roomId);
+      let owner = await state.roomRegistry.getOwner(channelId);
+
+      if (!owner) {
+        const webinarTarget = resolveWebinarLinkTarget(
+          state.webinarLinks,
+          requestedRoomId,
+          clientId,
+        );
+        if (webinarTarget) {
+          roomId = webinarTarget.roomId;
+          channelId = webinarTarget.roomChannelId;
+          owner = await state.roomRegistry.getOwner(channelId);
+        }
+      }
+
+      res.json({
+        requestedRoomId,
+        roomId,
+        clientId,
+        channelId,
+        registryMode: state.roomRegistry.mode,
+        local: state.roomRegistry.isLocalOwner(owner),
+        owner,
+      });
+    } catch (error) {
+      Logger.warn("Room routing lookup failed", error);
+      res.status(503).json({ error: "Room routing lookup failed" });
+    }
   });
 
   app.get("/status", (req, res) => {
@@ -576,7 +658,9 @@ export const createSfuApp = ({
       return;
     }
 
-    const message = toStringOrEmpty(req.body?.message);
+    const message = normalizePlainText(req.body?.message, {
+      maxLength: MAX_OPERATOR_NOTICE_LENGTH,
+    });
     if (!message) {
       res.status(400).json({ error: "Message is required" });
       return;
@@ -613,7 +697,7 @@ export const createSfuApp = ({
       return;
     }
 
-    const producerId = toStringOrEmpty(req.params.producerId);
+    const producerId = normalizeIdentifier(req.params.producerId);
     if (!producerId) {
       res.status(400).json({ error: "Producer ID is required" });
       return;
@@ -633,20 +717,24 @@ export const createSfuApp = ({
       return;
     }
 
+    const io = requireIo(res);
+    if (!io) {
+      return;
+    }
+
     const lookup = resolveRoomForAdmin(req, res);
     if (!lookup || "error" in lookup) {
       return;
     }
 
-    const userId = toStringOrEmpty(req.params.userId);
+    const userId = normalizeIdentifier(req.params.userId, MAX_USER_ID_LENGTH);
     if (!userId) {
       res.status(400).json({ error: "User ID is required" });
       return;
     }
 
-    const reason =
-      toStringOrEmpty(req.body?.reason) || "Removed by host";
-    const kicked = kickClient(lookup.room, userId, reason);
+    const reason = normalizeOperatorReason(req.body?.reason, "Removed by host");
+    const kicked = kickClient(lookup.room, userId, reason, { io, state });
 
     if (!kicked) {
       res.status(404).json({ error: "User not found" });
@@ -738,7 +826,7 @@ export const createSfuApp = ({
       }
 
       if (pending) {
-        pending.socket.emit("joinApproved");
+        pending.socket.emit("joinApproved", { roomId: lookup.room.id });
         admitted.push(userKey);
         for (const admin of lookup.room.getAdmins()) {
           admin.socket.emit("userAdmitted", {
@@ -822,7 +910,10 @@ export const createSfuApp = ({
     }
 
     const kickPresent = req.body?.kickPresent !== false;
-    const reason = toStringOrEmpty(req.body?.reason) || "Blocked by operator";
+    const reason = normalizeOperatorReason(
+      req.body?.reason,
+      "Blocked by operator",
+    );
     const kickedUserIds = new Set<string>();
     const rejectedPending: string[] = [];
 
@@ -831,17 +922,21 @@ export const createSfuApp = ({
       lookup.room.blockUser(userKey);
 
       if (pending) {
-        pending.socket.emit("joinRejected");
+        pending.socket.emit("joinRejected", { roomId: lookup.room.id });
         rejectedPending.push(userKey);
       }
 
       if (kickPresent) {
-        for (const [userId, key] of lookup.room.userKeysById.entries()) {
+        for (const [userId, key] of [
+          ...lookup.room.userKeysById.entries(),
+        ]) {
           if (key !== userKey) continue;
           const client = lookup.room.getClient(userId);
           if (!client) continue;
           client.socket.emit("kicked", { reason, roomId: lookup.room.id });
           client.socket.disconnect(true);
+          // Deterministically stop media now (cancel any disconnect grace).
+          forceRemoveClientNow({ io, state, room: lookup.room, userId });
           kickedUserIds.add(userId);
         }
       }
@@ -896,17 +991,26 @@ export const createSfuApp = ({
       return;
     }
 
+    const io = requireIo(res);
+    if (!io) {
+      return;
+    }
+
     const lookup = resolveRoomForAdmin(req, res);
     if (!lookup || "error" in lookup) {
       return;
     }
 
-    const includeGhosts = Boolean(req.body?.includeGhosts);
-    const includeAttendees = Boolean(req.body?.includeAttendees);
-    const reason = toStringOrEmpty(req.body?.reason) || "Meeting reset by operator";
+    const includeGhosts = req.body?.includeGhosts === true;
+    const includeAttendees = req.body?.includeAttendees === true;
+    const reason = normalizeOperatorReason(
+      req.body?.reason,
+      "Meeting reset by operator",
+    );
     const kickedUserIds: string[] = [];
 
-    for (const client of lookup.room.clients.values()) {
+    // Snapshot clients before iterating: forceRemoveClientNow mutates room.clients.
+    for (const client of [...lookup.room.clients.values()]) {
       if (client instanceof Admin) {
         continue;
       }
@@ -918,6 +1022,8 @@ export const createSfuApp = ({
       }
       client.socket.emit("kicked", { reason, roomId: lookup.room.id });
       client.socket.disconnect(true);
+      // Deterministically stop media now (cancel any disconnect grace).
+      forceRemoveClientNow({ io, state, room: lookup.room, userId: client.id });
       kickedUserIds.push(client.id);
     }
 
@@ -934,12 +1040,17 @@ export const createSfuApp = ({
       return;
     }
 
+    const io = requireIo(res);
+    if (!io) {
+      return;
+    }
+
     const lookup = resolveRoomForAdmin(req, res);
     if (!lookup || "error" in lookup) {
       return;
     }
 
-    const userId = toStringOrEmpty(req.params.userId);
+    const userId = normalizeIdentifier(req.params.userId, MAX_USER_ID_LENGTH);
     if (!userId) {
       res.status(400).json({ error: "User ID is required" });
       return;
@@ -951,12 +1062,17 @@ export const createSfuApp = ({
       return;
     }
 
-    const reason = toStringOrEmpty(req.body?.reason) || "Blocked by operator";
+    const reason = normalizeOperatorReason(
+      req.body?.reason,
+      "Blocked by operator",
+    );
     lookup.room.blockUser(userKey);
     const target = lookup.room.getClient(userId);
     if (target) {
       target.socket.emit("kicked", { reason, roomId: lookup.room.id });
       target.socket.disconnect(true);
+      // Deterministically stop media now (cancel any disconnect grace).
+      forceRemoveClientNow({ io, state, room: lookup.room, userId });
     }
 
     res.json({
@@ -978,13 +1094,13 @@ export const createSfuApp = ({
       return;
     }
 
-    const userId = toStringOrEmpty(req.params.userId);
+    const userId = normalizeIdentifier(req.params.userId, MAX_USER_ID_LENGTH);
     if (!userId) {
       res.status(400).json({ error: "User ID is required" });
       return;
     }
 
-    const bodyUserKey = toStringOrEmpty(req.body?.userKey);
+    const bodyUserKey = normalizeUserKey(req.body?.userKey) ?? "";
     const userKey = lookup.room.userKeysById.get(userId) || bodyUserKey;
     if (!userKey) {
       res.status(404).json({ error: "User identity not found" });
@@ -1016,7 +1132,7 @@ export const createSfuApp = ({
       return;
     }
 
-    const userKey = toStringOrEmpty(req.params.userKey);
+    const userKey = normalizeUserKey(req.params.userKey);
     if (!userKey) {
       res.status(400).json({ error: "Pending user key is required" });
       return;
@@ -1032,7 +1148,7 @@ export const createSfuApp = ({
       lookup.room.allowLockedUser(userKey);
     }
     lookup.room.allowUser(userKey);
-    pending.socket.emit("joinApproved");
+    pending.socket.emit("joinApproved", { roomId: lookup.room.id });
 
     for (const admin of lookup.room.getAdmins()) {
       admin.socket.emit("userAdmitted", {
@@ -1060,7 +1176,7 @@ export const createSfuApp = ({
       return;
     }
 
-    const userKey = toStringOrEmpty(req.params.userKey);
+    const userKey = normalizeUserKey(req.params.userKey);
     if (!userKey) {
       res.status(400).json({ error: "Pending user key is required" });
       return;
@@ -1073,7 +1189,7 @@ export const createSfuApp = ({
     }
 
     lookup.room.removePendingClient(userKey);
-    pending.socket.emit("joinRejected");
+    pending.socket.emit("joinRejected", { roomId: lookup.room.id });
 
     for (const admin of lookup.room.getAdmins()) {
       admin.socket.emit("userRejected", {
@@ -1175,16 +1291,10 @@ export const createSfuApp = ({
     const delayMs = parseEndRoomDelay(req.body?.delayMs);
     const message = parseEndRoomMessage(req.body?.message);
 
-    const pendingSockets = Array.from(room.pendingClients.values())
-      .map((pending) => pending.socket)
-      .filter(
-        (pendingSocket): pendingSocket is { disconnect: (close?: boolean) => void; emit: (event: string, payload: unknown) => void } =>
-          Boolean(
-            pendingSocket &&
-              typeof pendingSocket.disconnect === "function" &&
-              typeof pendingSocket.emit === "function",
-          ),
-      );
+    const pendingSockets = Array.from(
+      room.pendingClients.values(),
+      (pending) => pending.socket,
+    );
 
     markRoomEnded(state, room, {
       message,
@@ -1240,16 +1350,6 @@ export const createSfuApp = ({
   registerScheduledMeetingRoutes(app, {
     state,
     sfuSecret: config.sfuSecret,
-  });
-
-  registerRecordingRoutes(app, {
-    state,
-    sfuSecret: config.sfuSecret,
-    recordings,
-  });
-
-  registerRecorderBotRoutes(app, {
-    recordings,
   });
 
   return app;

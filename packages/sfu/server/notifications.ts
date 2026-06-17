@@ -17,6 +17,7 @@ export const emitUserJoined = (
       userId,
       displayName,
       isGhost: options?.isGhost,
+      roomId: room.id,
     });
   }
 };
@@ -33,6 +34,6 @@ export const emitUserLeft = (
     if (options?.ghostOnly && !client.isGhost) {
       continue;
     }
-    client.socket.emit("userLeft", { userId });
+    client.socket.emit("userLeft", { userId, roomId: room.id });
   }
 };

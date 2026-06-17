@@ -1,5 +1,24 @@
 import java.util.Properties
 
+val googleSignInWebClientId = providers.gradleProperty("GOOGLE_SIGN_IN_WEB_CLIENT_ID")
+    .orElse(providers.environmentVariable("GOOGLE_SIGN_IN_WEB_CLIENT_ID"))
+    .orElse(providers.environmentVariable("GOOGLE_WEB_CLIENT_ID"))
+    .orElse(providers.environmentVariable("GOOGLE_CLIENT_ID"))
+    .getOrElse("")
+
+val conclaveAuthBaseUrl = providers.gradleProperty("CONCLAVE_AUTH_BASE_URL")
+    .orElse(providers.environmentVariable("CONCLAVE_AUTH_BASE_URL"))
+    .orElse(providers.environmentVariable("AUTH_BASE_URL"))
+    .orElse(providers.environmentVariable("BETTER_AUTH_URL"))
+    .orElse(providers.environmentVariable("APP_BASE_URL"))
+    .orElse(providers.environmentVariable("NEXT_PUBLIC_APP_URL"))
+    .orElse(providers.environmentVariable("NEXT_PUBLIC_SITE_URL"))
+    .getOrElse("")
+
+val sfuJoinUrl = providers.gradleProperty("SFU_JOIN_URL")
+    .orElse(providers.environmentVariable("SFU_JOIN_URL"))
+    .getOrElse("")
+
 plugins {
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
@@ -35,6 +54,9 @@ android {
     defaultConfig {
         minSdk = libs.versions.android.sdk.min.get().toInt()
         targetSdk = libs.versions.android.sdk.compile.get().toInt()
+        manifestPlaceholders["GOOGLE_SIGN_IN_WEB_CLIENT_ID"] = googleSignInWebClientId
+        manifestPlaceholders["CONCLAVE_AUTH_BASE_URL"] = conclaveAuthBaseUrl
+        manifestPlaceholders["SFU_JOIN_URL"] = sfuJoinUrl
         // skip.tools.skip-build-plugin will automatically use Skip.env properties for:
         // applicationId = ANDROID_APPLICATION_ID ?? PRODUCT_BUNDLE_IDENTIFIER
         // versionCode = CURRENT_PROJECT_VERSION
@@ -88,4 +110,13 @@ android {
             proguardFiles(getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro")
         }
     }
+}
+
+dependencies {
+    // The Activity theme (res/values/themes.xml) is `Theme.Material3.Dark.*`,
+    // whose color attributes (colorOnPrimary, colorSurface, …) ship in the
+    // Material Components XML library. Compose Material3 does NOT provide the
+    // XML theme attrs, so this AAR must be a direct dependency or the merged
+    // resources fail with "style attribute 'attr/colorOnPrimary' not found".
+    implementation("com.google.android.material:material:1.12.0")
 }

@@ -2,6 +2,7 @@
 
 import { Hand, MicOff, VenetianMask } from "lucide-react";
 import { memo, useEffect, useRef } from "react";
+import { Avatar } from "@conclave/ui-tokens/web";
 import type { Participant } from "../../lib/types";
 import { truncateDisplayName } from "../../lib/utils";
 
@@ -37,6 +38,7 @@ function MobileParticipantVideo({
     if (video.srcObject !== participant.videoStream) {
       video.srcObject = participant.videoStream;
     }
+    const videoStream = participant.videoStream;
 
     const playVideo = () => {
       video.play().catch((err) => {
@@ -49,11 +51,17 @@ function MobileParticipantVideo({
     playVideo();
 
     const videoTrack = participant.videoStream.getVideoTracks()[0];
-    if (!videoTrack) return;
-    videoTrack.addEventListener("unmute", playVideo);
+    if (videoTrack) {
+      videoTrack.addEventListener("unmute", playVideo);
+    }
 
     return () => {
-      videoTrack.removeEventListener("unmute", playVideo);
+      if (videoTrack) {
+        videoTrack.removeEventListener("unmute", playVideo);
+      }
+      if (video.srcObject === videoStream) {
+        video.srcObject = null;
+      }
     };
   }, [participant.videoStream, participant.videoProducerId, participant.isCameraOff]);
 
@@ -71,6 +79,7 @@ function MobileParticipantVideo({
     if (audio.srcObject !== participant.audioStream) {
       audio.srcObject = participant.audioStream;
     }
+    const audioStream = participant.audioStream;
 
     const playAudio = () => {
       audio.play().catch((err) => {
@@ -94,11 +103,17 @@ function MobileParticipantVideo({
     }
 
     const audioTrack = participant.audioStream.getAudioTracks()[0];
-    if (!audioTrack) return;
-    audioTrack.addEventListener("unmute", playAudio);
+    if (audioTrack) {
+      audioTrack.addEventListener("unmute", playAudio);
+    }
 
     return () => {
-      audioTrack.removeEventListener("unmute", playAudio);
+      if (audioTrack) {
+        audioTrack.removeEventListener("unmute", playAudio);
+      }
+      if (audio.srcObject === audioStream) {
+        audio.srcObject = null;
+      }
     };
   }, [
     participant.audioStream,
@@ -117,10 +132,10 @@ function MobileParticipantVideo({
   };
 
   const avatarSizes = {
-    small: "w-8 h-8 text-sm",
-    medium: "w-12 h-12 text-lg",
-    large: "w-16 h-16 text-2xl",
-    featured: "w-20 h-20 text-3xl",
+    small: 32,
+    medium: 48,
+    large: 64,
+    featured: 80,
   };
 
   const speakerRing = isActiveSpeaker ? "mobile-tile-active" : "";
@@ -140,14 +155,14 @@ function MobileParticipantVideo({
         className={`w-full h-full object-cover ${showPlaceholder ? "hidden" : ""}`}
       />
       {showPlaceholder && (
-        <div className="absolute inset-0 flex items-center justify-center bg-[#0d0e0d]">
-          <div className="absolute inset-0 bg-gradient-to-br from-[#F95F4A]/15 to-[#FF007A]/10" />
-          <div
-            className={`relative rounded-full mobile-avatar flex items-center justify-center text-[#FEFCD9] font-bold ${avatarSizes[size]}`}
-            style={{ fontFamily: "'PolySans Bulky Wide', sans-serif" }}
-          >
-            {displayName[0]?.toUpperCase() || "?"}
-          </div>
+        <div className="absolute inset-0 flex items-center justify-center bg-[#131316]">
+          <div className="absolute inset-0 bg-[rgba(249,95,74,0.15)]" />
+          <Avatar
+            className="relative mobile-avatar"
+            id={participant.userId}
+            name={displayName}
+            size={avatarSizes[size]}
+          />
         </div>
       )}
       {participant.isGhost && (
@@ -155,10 +170,10 @@ function MobileParticipantVideo({
           <div className="flex flex-col items-center gap-2">
             <VenetianMask className="w-10 h-10 text-[#FF007A]" />
             <span
-              className="mobile-ghost-badge rounded-full px-3 py-1 text-[10px] tracking-[0.25em] text-[#FF007A]"
-              style={{ fontFamily: "'PolySans Mono', monospace" }}
+              className="mobile-ghost-badge rounded-full px-3 py-1 text-[11px] font-medium text-[#FF007A]"
+              style={{ fontFamily: "'PolySans Trial', sans-serif" }}
             >
-              GHOST
+              Ghost
             </span>
           </div>
         </div>
@@ -172,11 +187,11 @@ function MobileParticipantVideo({
       {size !== "small" && (
         <div className="absolute bottom-1.5 left-1.5 right-1.5 flex items-center justify-between">
           <div
-            className="mobile-name-pill px-2.5 py-1 flex items-center gap-2 max-w-[85%] backdrop-blur-md"
-            style={{ fontFamily: "'PolySans Mono', monospace" }}
+            className="mobile-name-pill px-2.5 py-1 flex items-center gap-2 max-w-[85%]"
+            style={{ fontFamily: "'PolySans Trial', sans-serif" }}
           >
             <span
-              className="text-[10px] text-[#FEFCD9] font-medium truncate uppercase tracking-[0.18em]"
+              className="text-[12px] text-[#fafafa] font-medium truncate"
               title={displayName}
             >
               {displayLabel}

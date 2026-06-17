@@ -16,6 +16,8 @@ const MIN_WEBINAR_LINK_LENGTH = 3;
 const MAX_WEBINAR_LINK_LENGTH = 32;
 const WEBINAR_LINK_PATTERN = /^[a-z0-9-]+$/;
 const RANDOM_WEBINAR_LINK_ALPHABET = "abcdefghijklmnopqrstuvwxyz";
+const MAX_INVITE_CODE_LENGTH = 256;
+const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/;
 
 export type WebinarRoomConfig = {
   enabled: boolean;
@@ -92,6 +94,19 @@ export const normalizeWebinarMaxAttendees = (value: number): number => {
 
 const hashInviteCode = (inviteCode: string): string => {
   return createHmac("sha256", config.sfuSecret).update(inviteCode).digest("hex");
+};
+
+const normalizeInviteCode = (value: unknown): string => {
+  if (typeof value !== "string") return "";
+  const normalized = value.trim();
+  if (
+    !normalized ||
+    normalized.length > MAX_INVITE_CODE_LENGTH ||
+    CONTROL_CHARACTER_PATTERN.test(normalized)
+  ) {
+    return "";
+  }
+  return normalized;
 };
 
 export const hashWebinarInviteCode = (inviteCode: string): string =>
@@ -314,8 +329,7 @@ export const updateWebinarRoomConfig = (
   }
 
   if (update.inviteCode !== undefined) {
-    const normalizedInviteCode =
-      typeof update.inviteCode === "string" ? update.inviteCode.trim() : "";
+    const normalizedInviteCode = normalizeInviteCode(update.inviteCode);
     const nextHash = normalizedInviteCode
       ? hashInviteCode(normalizedInviteCode)
       : null;

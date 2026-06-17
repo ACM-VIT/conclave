@@ -10,6 +10,12 @@ export interface BrowserState {
     controllerUserId?: string;
 }
 
+type BrowserCommandResponse = {
+    success?: boolean;
+    noVncUrl?: string;
+    error?: string;
+};
+
 interface UseSharedBrowserOptions {
     socketRef: React.MutableRefObject<Socket | null>;
     isAdmin: boolean;
@@ -24,6 +30,47 @@ interface UseSharedBrowserReturn {
     closeBrowser: () => Promise<boolean>;
     clearError: () => void;
 }
+
+const BROWSER_COMMAND_TIMEOUT_MS = 15000;
+
+const emitBrowserCommand = (
+    socket: Socket,
+    event: "browser:launch" | "browser:navigate" | "browser:close",
+    payload?: { url: string },
+): Promise<BrowserCommandResponse> => {
+    return new Promise((resolve) => {
+        if (!socket.connected) {
+            resolve({ error: "Shared browser socket is disconnected." });
+            return;
+        }
+
+        let settled = false;
+        const settle = (response: BrowserCommandResponse) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timeout);
+            socket.off("disconnect", handleDisconnect);
+            resolve(response);
+        };
+        const handleDisconnect = () => {
+            settle({ error: "Shared browser socket disconnected before the command completed." });
+        };
+        const timeout = setTimeout(() => {
+            settle({ error: "Shared browser command timed out." });
+        }, BROWSER_COMMAND_TIMEOUT_MS);
+
+        socket.once("disconnect", handleDisconnect);
+        if (payload) {
+            socket.emit(event, payload, (response: BrowserCommandResponse = {}) => {
+                settle(response);
+            });
+        } else {
+            socket.emit(event, (response: BrowserCommandResponse = {}) => {
+                settle(response);
+            });
+        }
+    });
+};
 
 export function useSharedBrowser({
     socketRef,
@@ -100,26 +147,19 @@ export function useSharedBrowser({
             setIsLaunching(true);
             setLaunchError(null);
 
-            return new Promise((resolve) => {
-                socket.emit(
-                    "browser:launch",
-                    { url },
-                    (response: { success?: boolean; noVncUrl?: string; error?: string }) => {
-                        setIsLaunching(false);
-                        if (response.error) {
-                            setLaunchError(response.error);
-                            resolve(false);
-                        } else {
-                            setBrowserState({
-                                active: true,
-                                url,
-                                noVncUrl: response.noVncUrl,
-                            });
-                            resolve(true);
-                        }
-                    }
-                );
+            const response = await emitBrowserCommand(socket, "browser:launch", { url });
+            setIsLaunching(false);
+            if (response.error) {
+                setLaunchError(response.error);
+                return false;
+            }
+
+            setBrowserState({
+                active: true,
+                url,
+                noVncUrl: response.noVncUrl,
             });
+            return true;
         },
         [socketRef, isAdmin]
     );
@@ -132,26 +172,19 @@ export function useSharedBrowser({
             setIsLaunching(true);
             setLaunchError(null);
 
-            return new Promise((resolve) => {
-                socket.emit(
-                    "browser:navigate",
-                    { url },
-                    (response: { success?: boolean; noVncUrl?: string; error?: string }) => {
-                        setIsLaunching(false);
-                        if (response.error) {
-                            setLaunchError(response.error);
-                            resolve(false);
-                        } else {
-                            setBrowserState((prev) => ({
-                                ...prev,
-                                url,
-                                noVncUrl: response.noVncUrl,
-                            }));
-                            resolve(true);
-                        }
-                    }
-                );
-            });
+            const response = await emitBrowserCommand(socket, "browser:navigate", { url });
+            setIsLaunching(false);
+            if (response.error) {
+                setLaunchError(response.error);
+                return false;
+            }
+
+            setBrowserState((prev) => ({
+                ...prev,
+                url,
+                noVncUrl: response.noVncUrl,
+            }));
+            return true;
         },
         [socketRef, isAdmin]
     );
@@ -160,17 +193,14 @@ export function useSharedBrowser({
         const socket = socketRef.current;
         if (!socket || !isAdmin) return false;
 
-        return new Promise((resolve) => {
-            socket.emit("browser:close", (response: { success?: boolean; error?: string }) => {
-                if (response.error) {
-                    setLaunchError(response.error);
-                    resolve(false);
-                } else {
-                    setBrowserState({ active: false });
-                    resolve(true);
-                }
-            });
-        });
+        const response = await emitBrowserCommand(socket, "browser:close");
+        if (response.error) {
+            setLaunchError(response.error);
+            return false;
+        }
+
+        setBrowserState({ active: false });
+        return true;
     }, [socketRef, isAdmin]);
 
     return {

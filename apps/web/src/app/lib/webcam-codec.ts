@@ -78,6 +78,10 @@ export async function produceWebcamTrack({
   ) => ({
     track,
     encodings,
+    // The effects pipeline may replace the producer track with a processed
+    // canvas track while continuing to read from the raw camera. mediasoup's
+    // default stopTracks=true stops the previous track during replaceTrack().
+    stopTracks: false,
     ...(codec ? { codec } : {}),
     appData: { type: "webcam" as ProducerType, paused },
   });

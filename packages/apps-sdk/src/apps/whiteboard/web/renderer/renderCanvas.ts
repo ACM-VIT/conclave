@@ -6,8 +6,6 @@ const FONT_STACK =
   'Virgil, "Segoe Print", "Comic Sans MS", "Marker Felt", cursive';
 const ROTATION_EPSILON = 0.0001;
 
-/* ── deterministic RNG ── */
-
 const seedFrom = (value: string): number => {
   let hash = 2166136261;
   for (let i = 0; i < value.length; i += 1) {

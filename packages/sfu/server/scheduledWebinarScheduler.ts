@@ -6,10 +6,9 @@ import {
   getScheduledWebinarById,
   hasWebinarEnded,
   isWithinEarlyEntryWindow,
-  persistScheduledWebinars,
+  persistScheduledWebinarChanges,
 } from "./scheduledWebinars.js";
 import type { SfuState } from "./state.js";
-import type { RecordingManager } from "./recording/recordingManager.js";
 import {
   getOrCreateWebinarRoomConfig,
   normalizeHostEmail,
@@ -87,9 +86,9 @@ export const advanceScheduledWebinars = (
   state: SfuState,
   io: SocketIOServer | null,
   now = Date.now(),
-  recordings?: RecordingManager,
 ): number => {
   let changed = 0;
+  const changedWebinars: ScheduledWebinar[] = [];
   for (const webinar of state.scheduledWebinars.byId.values()) {
     if (webinar.status === "cancelled") continue;
 
@@ -101,43 +100,18 @@ export const advanceScheduledWebinars = (
           webinar.liveStartedAt = now;
         }
         webinar.updatedAt = now;
+        changedWebinars.push(webinar);
         changed += 1;
-        if (recordings && webinar.recordingRequested) {
-          const channelId = getRoomChannelId(webinar.clientId, webinar.roomId);
-          const room = state.rooms.get(channelId);
-          if (room) {
-            void recordings
-              .start(room, {
-                startedBy: "scheduler",
-                scheduledWebinarId: webinar.id,
-                storageKey: webinar.id,
-                produceComposite: true,
-              })
-              .catch((error) =>
-                Logger.warn(
-                  `[recording] auto-start failed for ${webinar.id}: ${(error as Error).message}`,
-                ),
-              );
-          }
-        }
       }
     } else if (webinar.status === "live" && hasWebinarEnded(webinar, now)) {
       webinar.status = "ended";
       webinar.endedAt = now;
       webinar.updatedAt = now;
+      changedWebinars.push(webinar);
       const channelId = getRoomChannelId(webinar.clientId, webinar.roomId);
       const cfg = state.webinarConfigs.get(channelId);
       if (cfg) {
         cfg.locked = true;
-      }
-      if (recordings) {
-        void recordings
-          .stop(channelId, { endedBy: "scheduler" })
-          .catch((error) =>
-            Logger.warn(
-              `[recording] auto-stop failed for ${webinar.id}: ${(error as Error).message}`,
-            ),
-          );
       }
       void io;
       changed += 1;
@@ -145,9 +119,10 @@ export const advanceScheduledWebinars = (
   }
 
   if (changed > 0 && state.scheduledWebinarPersistence) {
-    persistScheduledWebinars(
+    persistScheduledWebinarChanges(
       state.scheduledWebinars,
       state.scheduledWebinarPersistence,
+      changedWebinars,
     );
   }
 
@@ -158,12 +133,11 @@ export const startScheduledWebinarTimer = (
   state: SfuState,
   getIo: () => SocketIOServer | null,
   intervalMs = DEFAULT_TICK_MS,
-  recordings?: RecordingManager,
 ): void => {
   if (state.scheduledWebinarTimer) return;
   state.scheduledWebinarTimer = setInterval(() => {
     try {
-      advanceScheduledWebinars(state, getIo(), Date.now(), recordings);
+      advanceScheduledWebinars(state, getIo(), Date.now());
     } catch (error) {
       Logger.error("scheduled webinar tick failed", error);
     }

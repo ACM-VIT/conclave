@@ -16,7 +16,6 @@ import {
 } from "react-native";
 import Svg, { Path } from "react-native-svg";
 import Animated, { FadeIn, FadeInDown, FadeInUp } from "react-native-reanimated";
-import { LinearGradient } from "expo-linear-gradient";
 import {
   ArrowLeft,
   ArrowRight,
@@ -46,15 +45,15 @@ import { DotGridBackground } from "@/components/dot-grid-background";
 const COLORS = {
   primaryOrange: "#F95F4A",
   primaryPink: "#FF007A",
-  cream: "#FEFCD9",
-  dark: "#060606",
-  darkAlt: "#0d0e0d",
-  surface: "#1a1a1a",
-  surfaceLight: "#252525",
-  surfaceHover: "#2a2a2a",
-  creamLight: "rgba(254, 252, 217, 0.4)",
-  creamLighter: "rgba(254, 252, 217, 0.3)",
-  creamDim: "rgba(254, 252, 217, 0.1)",
+  cream: "#fafafa",
+  dark: "#0a0a0b",
+  darkAlt: "#131316",
+  surface: "#18181b",
+  surfaceLight: "#232327",
+  surfaceHover: "#2e2e33",
+  creamLight: "rgba(250, 250, 250, 0.4)",
+  creamLighter: "rgba(250, 250, 250, 0.3)",
+  creamDim: "rgba(250, 250, 250, 0.1)",
   orangeLight: "rgba(249, 95, 74, 0.4)",
   orangeDim: "rgba(249, 95, 74, 0.2)",
 } as const;
@@ -233,6 +232,7 @@ export function JoinScreen({
   const [isAppleAvailable, setIsAppleAvailable] = useState(false);
   const [isEditingName, setIsEditingName] = useState(false);
   const nameInputRef = useRef<React.ElementRef<typeof TextInput>>(null);
+  const nameFocusFrameRef = useRef<number | null>(null);
   const isAuthLoading = authProvider !== null;
   const phases = useMemo<Phase[]>(
     () => (forceJoinOnly ? ["join"] : ["welcome", "auth", "join"]),
@@ -328,9 +328,22 @@ export function JoinScreen({
 
   const handleNamePress = useCallback(() => {
     setIsEditingName(true);
-    requestAnimationFrame(() => {
+    if (nameFocusFrameRef.current !== null) {
+      cancelAnimationFrame(nameFocusFrameRef.current);
+    }
+    nameFocusFrameRef.current = requestAnimationFrame(() => {
+      nameFocusFrameRef.current = null;
       nameInputRef.current?.focus();
     });
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (nameFocusFrameRef.current !== null) {
+        cancelAnimationFrame(nameFocusFrameRef.current);
+        nameFocusFrameRef.current = null;
+      }
+    };
   }, []);
 
   const handleNameBlur = useCallback(() => {
@@ -769,10 +782,6 @@ export function JoinScreen({
                     />
                   ) : (
                     <View style={styles.noVideoContainer}>
-                      <LinearGradient
-                        colors={["rgba(249, 95, 74, 0.2)", "rgba(255, 0, 122, 0.1)"]}
-                        style={styles.previewGradient}
-                      />
                       <View style={styles.userAvatar}>
                         <View style={styles.userAvatarBorder} />
                         <Text style={[styles.userInitial, { color: COLORS.cream }]}>
@@ -813,7 +822,7 @@ export function JoinScreen({
                         style={styles.nameInput}
                         value={displayNameInput}
                         placeholder="Your name"
-                        placeholderTextColor="rgba(254, 252, 217, 0.6)"
+                        placeholderTextColor="rgba(250, 250, 250, 0.6)"
                         onChangeText={onDisplayNameInputChange}
                         onBlur={handleNameBlur}
                         returnKeyType="done"
@@ -1030,8 +1039,8 @@ export function JoinScreen({
                         {
                           backgroundColor: isIos
                             ? "rgba(13, 14, 13, 0.35)"
-                            : "#0d0e0d",
-                          borderColor: "rgba(254, 252, 217, 0.1)",
+                            : "#131316",
+                          borderColor: "rgba(250, 250, 250, 0.1)",
                         },
                         isIpadLayout && styles.videoPreviewTablet,
                       ]}
@@ -1044,10 +1053,6 @@ export function JoinScreen({
                         />
                       ) : (
                         <View style={styles.noVideoContainer}>
-                          <LinearGradient
-                            colors={["rgba(249, 95, 74, 0.2)", "rgba(255, 0, 122, 0.1)"]}
-                            style={styles.previewGradient}
-                          />
                           <View style={styles.userAvatar}>
                             <View style={styles.userAvatarBorder} />
                             <Text style={[styles.userInitial, { color: COLORS.cream }]}>
@@ -1090,7 +1095,7 @@ export function JoinScreen({
                         style={styles.nameInput}
                         value={displayNameInput}
                         placeholder="Your name"
-                        placeholderTextColor="rgba(254, 252, 217, 0.6)"
+                        placeholderTextColor="rgba(250, 250, 250, 0.6)"
                         onChangeText={onDisplayNameInputChange}
                         onBlur={handleNameBlur}
                         returnKeyType="done"
@@ -1333,9 +1338,9 @@ const styles = StyleSheet.create({
     flex: 1,
     borderRadius: 28,
     overflow: "hidden",
-    backgroundColor: "#0d0e0d",
+    backgroundColor: "#131316",
     borderWidth: 1,
-    borderColor: "rgba(254, 252, 217, 0.1)",
+    borderColor: "rgba(250, 250, 250, 0.1)",
   },
   permissionFallback: {
     marginTop: 16,
@@ -1397,7 +1402,7 @@ const styles = StyleSheet.create({
     padding: 6,
     borderRadius: 999,
     borderWidth: 1,
-    borderColor: "rgba(254, 252, 217, 0.12)",
+    borderColor: "rgba(250, 250, 250, 0.12)",
     backgroundColor: isIos ? "rgba(12, 12, 12, 0.4)" : "rgba(12, 12, 12, 0.8)",
   },
   joinDockTab: {
@@ -1414,7 +1419,7 @@ const styles = StyleSheet.create({
     lineHeight: textLineHeight(12, 1.2),
     letterSpacing: 1,
     textTransform: "uppercase",
-    fontFamily: "PolySans-Mono",
+    fontFamily: "PolySans-Regular",
     textAlign: "center",
     flexShrink: 1,
   },
@@ -1446,7 +1451,7 @@ const styles = StyleSheet.create({
   joinDockAction: {
     borderRadius: 999,
     borderWidth: 1,
-    borderColor: "rgba(254, 252, 217, 0.12)",
+    borderColor: "rgba(250, 250, 250, 0.12)",
     backgroundColor: isIos ? "rgba(20, 20, 20, 0.35)" : "rgba(20, 20, 20, 0.85)",
     height: 52,
   },
@@ -1497,7 +1502,7 @@ const styles = StyleSheet.create({
     fontSize: 32,
     lineHeight: textLineHeight(32, 1.15),
     fontWeight: "300",
-    fontFamily: "PolySans-Mono",
+    fontFamily: "PolySans-Regular",
   },
   brandTitle: {
     fontSize: 40,
@@ -1530,7 +1535,7 @@ const styles = StyleSheet.create({
     fontWeight: "500",
     letterSpacing: 2,
     textTransform: "uppercase",
-    fontFamily: "PolySans-Mono",
+    fontFamily: "PolySans-Regular",
   },
   arrowIcon: {
     color: "#FFFFFF",
@@ -1578,7 +1583,7 @@ const styles = StyleSheet.create({
     lineHeight: textLineHeight(12, 1.25),
     letterSpacing: 2,
     textTransform: "uppercase",
-    fontFamily: "PolySans-Mono",
+    fontFamily: "PolySans-Regular",
   },
   socialGroup: {
     gap: 12,
@@ -1591,7 +1596,7 @@ const styles = StyleSheet.create({
     height: 54,
     borderRadius: 999,
     borderWidth: 1,
-    borderColor: "rgba(254, 252, 217, 0.12)",
+    borderColor: "rgba(250, 250, 250, 0.12)",
     backgroundColor: isIos ? "rgba(20, 20, 20, 0.35)" : "rgba(20, 20, 20, 0.85)",
   },
   socialButton: {
@@ -1627,8 +1632,8 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: textLineHeight(12, 1.25),
     fontWeight: "600",
-    color: "#FEFCD9",
-    fontFamily: "PolySans-Mono",
+    color: "#fafafa",
+    fontFamily: "PolySans-Regular",
   },
   socialButtonText: {
     fontSize: 14,
@@ -1659,7 +1664,7 @@ const styles = StyleSheet.create({
     lineHeight: textLineHeight(11, 1.3),
     letterSpacing: 2,
     textTransform: "uppercase",
-    fontFamily: "PolySans-Mono",
+    fontFamily: "PolySans-Regular",
   },
   inputGroup: {
     gap: 12,
@@ -1671,7 +1676,7 @@ const styles = StyleSheet.create({
     height: 54,
     borderRadius: 999,
     borderWidth: 1,
-    borderColor: "rgba(254, 252, 217, 0.12)",
+    borderColor: "rgba(250, 250, 250, 0.12)",
     backgroundColor: isIos ? "rgba(20, 20, 20, 0.35)" : "rgba(20, 20, 20, 0.85)",
     paddingHorizontal: 18,
     justifyContent: "center",
@@ -1687,7 +1692,7 @@ const styles = StyleSheet.create({
   authActionPill: {
     borderRadius: 999,
     borderWidth: 1,
-    borderColor: "rgba(254, 252, 217, 0.12)",
+    borderColor: "rgba(250, 250, 250, 0.12)",
     backgroundColor: isIos ? "rgba(20, 20, 20, 0.35)" : "rgba(20, 20, 20, 0.85)",
   },
   inputLabel: {
@@ -1695,7 +1700,7 @@ const styles = StyleSheet.create({
     lineHeight: textLineHeight(12, 1.25),
     letterSpacing: 2,
     textTransform: "uppercase",
-    fontFamily: "PolySans-Mono",
+    fontFamily: "PolySans-Regular",
   },
   textInput: {
     width: "100%",
@@ -1714,7 +1719,7 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.primaryOrange,
   },
   secondaryButtonDisabled: {
-    backgroundColor: "rgba(254, 252, 217, 0.1)",
+    backgroundColor: "rgba(250, 250, 250, 0.1)",
   },
   secondaryButtonText: {
     fontSize: 15,
@@ -1736,7 +1741,7 @@ const styles = StyleSheet.create({
     lineHeight: textLineHeight(12, 1.25),
     letterSpacing: 2,
     textTransform: "uppercase",
-    fontFamily: "PolySans-Mono",
+    fontFamily: "PolySans-Regular",
   },
   joinContent: {
     paddingHorizontal: 20,
@@ -1752,7 +1757,7 @@ const styles = StyleSheet.create({
     letterSpacing: 2,
     textTransform: "uppercase",
     marginBottom: 8,
-    fontFamily: "PolySans-Mono",
+    fontFamily: "PolySans-Regular",
   },
   videoPreview: {
     aspectRatio: 16 / 9,
@@ -1786,7 +1791,7 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
     borderRadius: 32,
     borderWidth: 1,
-    borderColor: "rgba(254, 252, 217, 0.2)",
+    borderColor: "rgba(250, 250, 250, 0.2)",
   },
   userInitial: {
     fontSize: 24,
@@ -1803,7 +1808,7 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     backgroundColor: "rgba(0, 0, 0, 0.7)",
     borderWidth: 1,
-    borderColor: "rgba(254, 252, 217, 0.2)",
+    borderColor: "rgba(250, 250, 250, 0.2)",
   },
   deleteAccountIconButton: {
     position: "absolute",
@@ -1816,23 +1821,23 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     backgroundColor: "rgba(0, 0, 0, 0.7)",
     borderWidth: 1,
-    borderColor: "rgba(254, 252, 217, 0.2)",
+    borderColor: "rgba(250, 250, 250, 0.2)",
   },
   deleteAccountIconButtonDisabled: {
     backgroundColor: "rgba(0, 0, 0, 0.55)",
-    borderColor: "rgba(254, 252, 217, 0.12)",
+    borderColor: "rgba(250, 250, 250, 0.12)",
   },
   overlayText: {
     fontSize: 12,
     lineHeight: textLineHeight(12, 1.25),
-    color: "rgba(254, 252, 217, 0.9)",
-    fontFamily: "PolySans-Mono",
+    color: "rgba(250, 250, 250, 0.9)",
+    fontFamily: "PolySans-Regular",
   },
   nameInput: {
     minWidth: 96,
-    color: "rgba(254, 252, 217, 0.95)",
+    color: "rgba(250, 250, 250, 0.95)",
     fontSize: 12,
-    fontFamily: "PolySans-Mono",
+    fontFamily: "PolySans-Regular",
     includeFontPadding: false,
   },
   mediaControlsContainer: {
@@ -1858,7 +1863,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   mediaButtonActive: {
-    backgroundColor: "#ef4444",
+    backgroundColor: "#ea4335",
   },
   mediaButtonIcon: {
     fontSize: 16,
@@ -1876,7 +1881,7 @@ const styles = StyleSheet.create({
     lineHeight: textLineHeight(12, 1.25),
     letterSpacing: 1,
     textTransform: "uppercase",
-    fontFamily: "PolySans-Mono",
+    fontFamily: "PolySans-Regular",
   },
   statusPill: {
     flexDirection: "row",
@@ -1887,7 +1892,7 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     backgroundColor: "rgba(0, 0, 0, 0.4)",
     borderWidth: 1,
-    borderColor: "rgba(254, 252, 217, 0.1)",
+    borderColor: "rgba(250, 250, 250, 0.1)",
   },
   statusDot: {
     width: 6,
@@ -1897,8 +1902,8 @@ const styles = StyleSheet.create({
   statusText: {
     fontSize: 12,
     lineHeight: textLineHeight(12, 1.25),
-    color: "rgba(254, 252, 217, 0.7)",
-    fontFamily: "PolySans-Mono",
+    color: "rgba(250, 250, 250, 0.7)",
+    fontFamily: "PolySans-Regular",
   },
   joinCard: {
     borderRadius: 16,
@@ -1926,7 +1931,7 @@ const styles = StyleSheet.create({
     letterSpacing: 1,
     textTransform: "uppercase",
     fontWeight: "500",
-    fontFamily: "PolySans-Mono",
+    fontFamily: "PolySans-Regular",
     textAlign: "center",
     flexShrink: 1,
   },
@@ -1982,7 +1987,7 @@ const styles = StyleSheet.create({
   quickActionText: {
     fontSize: 12,
     lineHeight: textLineHeight(12, 1.25),
-    fontFamily: "PolySans-Mono",
+    fontFamily: "PolySans-Regular",
   },
   backButtonJoin: {
     alignItems: "center",

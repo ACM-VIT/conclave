@@ -1,7 +1,5 @@
 "use client";
 
-import Image from "next/image";
-
 interface MeetsWaitingScreenProps {
   waitingTitle: string;
   waitingIntro: string;
@@ -16,91 +14,32 @@ export default function MeetsWaitingScreen({
   isAdmin,
 }: MeetsWaitingScreenProps) {
   return (
-    <div className="min-h-screen flex flex-col bg-[#060606] text-[#FEFCD9]">
-      <header className="flex items-center justify-between px-6 py-4">
-        <a href="/" className="flex items-center">
-          <Image
-            src="/assets/acm_topleft.svg"
-            alt="ACM Logo"
-            width={100}
-            height={100}
-          />
-        </a>
-        <div className="flex flex-col items-end">
-          <span 
-            className="text-sm text-[#FEFCD9]"
-            style={{ fontFamily: "'PolySans Bulky Wide', sans-serif" }}
-          >
-            c0nclav3
-          </span>
-          <span 
-            className="text-[9px] uppercase tracking-[0.15em] text-[#FEFCD9]/40"
-            style={{ fontFamily: "'PolySans Mono', monospace" }}
-          >
-            by acm-vit
+    <main className="flex min-h-dvh items-center justify-center bg-[#0a0a0b] px-4 py-10 text-[#fafafa]">
+      <section className="animate-fade-in w-full max-w-[420px] rounded-2xl border border-white/10 bg-[#0e0e10] p-6 sm:p-8 text-center">
+        <div className="mx-auto mb-4 flex items-center justify-center gap-2">
+          <span className="h-2 w-2 rounded-full bg-[#F95F4A] animate-pulse" />
+          <span className="text-[11.5px] font-semibold uppercase tracking-[0.07em] text-[#fafafa]/40">
+            {waitingTitle}
           </span>
         </div>
-      </header>
-
-      {/* Main content */}
-      <div className="flex-1 flex items-center justify-center">
-        <div className="flex flex-col items-center text-center px-6">
-          {/* Main branding */}
-          <div className="mb-12">
-            <div className="relative inline-block">
-              <span 
-                className="absolute -left-8 top-1/2 -translate-y-1/2 text-[#F95F4A]/40 text-4xl"
-                style={{ fontFamily: "'PolySans Mono', monospace" }}
-              >
-                [
-              </span>
-              <h1 
-                className="text-5xl md:text-6xl text-[#FEFCD9] tracking-tight"
-                style={{ fontFamily: "'PolySans Bulky Wide', sans-serif" }}
-              >
-                c0nclav3
-              </h1>
-              <span 
-                className="absolute -right-8 top-1/2 -translate-y-1/2 text-[#F95F4A]/40 text-4xl"
-                style={{ fontFamily: "'PolySans Mono', monospace" }}
-              >
-                ]
-              </span>
-            </div>
+        <h1
+          className="text-[22px] leading-tight text-[#fafafa]"
+          style={{ fontFamily: "'PolySans Bulky Wide', sans-serif" }}
+        >
+          Waiting to join
+        </h1>
+        <p className="mt-2 text-[13.5px] leading-snug text-[#fafafa]/55">
+          {waitingIntro}
+        </p>
+        {isAdmin && roomId ? (
+          <div className="mt-6 rounded-xl border border-white/10 bg-white/[0.04] px-4 py-3">
+            <p className="text-[11.5px] font-semibold uppercase tracking-[0.07em] text-[#fafafa]/40">
+              Room code
+            </p>
+            <p className="mt-1 text-[15px] font-medium text-[#F95F4A]">{roomId}</p>
           </div>
-
-          {/* Divider line */}
-          <div className="w-16 h-px bg-gradient-to-r from-transparent via-[#FEFCD9]/20 to-transparent mb-8" />
-
-          {/* Status */}
-          <div 
-            className="flex items-center gap-2 mb-3"
-            style={{ fontFamily: "'PolySans Mono', monospace" }}
-          >
-            <span className="w-1.5 h-1.5 rounded-full bg-[#F95F4A]" />
-            <span className="text-[11px] text-[#FEFCD9]/60 uppercase tracking-[0.2em]">
-              {waitingTitle}
-            </span>
-          </div>
-          
-          <p 
-            className="text-[#FEFCD9]/30 text-sm max-w-xs"
-            style={{ fontFamily: "'PolySans Trial', sans-serif" }}
-          >
-            {waitingIntro}
-          </p>
-
-          {isAdmin && roomId && (
-            <div 
-              className="mt-8 px-4 py-2 border border-[#FEFCD9]/10 rounded"
-              style={{ fontFamily: "'PolySans Mono', monospace" }}
-            >
-              <span className="text-[10px] text-[#FEFCD9]/30 uppercase tracking-wider">Room </span>
-              <span className="text-sm text-[#F95F4A]">{roomId}</span>
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
+        ) : null}
+      </section>
+    </main>
   );
 }

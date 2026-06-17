@@ -1,3 +1,4 @@
+import type { RtpCapabilities } from "mediasoup/types";
 import type { ConnectionContext } from "../context.js";
 import { respond } from "./ack.js";
 
@@ -8,7 +9,7 @@ export const registerRouterHandlers = (context: ConnectionContext): void => {
     "getRouterRtpCapabilities",
     (
       callback: (
-        response: { rtpCapabilities: any } | { error: string },
+        response: { rtpCapabilities: RtpCapabilities } | { error: string },
       ) => void,
     ) => {
       try {

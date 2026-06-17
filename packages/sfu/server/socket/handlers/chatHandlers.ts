@@ -4,6 +4,7 @@ import { Logger } from "../../../utilities/loggers.js";
 import type Room from "../../../config/classes/Room.js";
 import type { ConnectionContext } from "../context.js";
 import { respond } from "./ack.js";
+import { RATE_LIMITS, takeToken } from "../rateLimit.js";
 
 const AT_DIRECT_MESSAGE_PATTERN = /^@(\S+)\s+([\s\S]+)$/;
 const DM_COMMAND_PATTERN = /^\/dm\s+(\S+)\s+([\s\S]+)$/i;
@@ -185,6 +186,12 @@ export const registerChatHandlers = (context: ConnectionContext): void => {
           return;
         }
 
+        // Throttle: drop over-budget messages (ack an error, do not process).
+        if (!takeToken(socket, "sendChat", RATE_LIMITS.chat)) {
+          respond(callback, { error: "You are sending messages too quickly" });
+          return;
+        }
+
         const room = context.currentRoom;
         const sender = context.currentClient;
 
@@ -288,6 +295,7 @@ export const registerChatHandlers = (context: ConnectionContext): void => {
           );
         } else {
           socket.to(room.channelId).emit("chatMessage", message);
+          room.recordChatMessage(message);
           Logger.info(
             `Chat in room ${room.id}: ${displayName}: ${messageContent.substring(
               0,

@@ -53,18 +53,13 @@ const POPOUT_CSS = `
     src: local('PolySans Trial');
     font-display: swap;
   }
-  @font-face {
-    font-family: 'PolySans Mono';
-    src: local('PolySans Mono');
-    font-display: swap;
-  }
 
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
   body {
     font-family: 'PolySans Trial', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-    background: #0d0e0d;
-    color: #FEFCD9;
+    background: #131316;
+    color: #fafafa;
     overflow: hidden;
     user-select: none;
     -webkit-user-select: none;
@@ -77,7 +72,6 @@ const POPOUT_CSS = `
     width: 100vw;
   }
 
-  /* ── Video grid (full area, no header) ── */
   .popout-videos {
     flex: 1;
     display: grid;
@@ -106,20 +100,19 @@ const POPOUT_CSS = `
     position: relative;
     border-radius: 16px;
     overflow: hidden;
-    background: #0d0e0d;
-    border: 1px solid rgba(254, 252, 217, 0.08);
+    background: #131316;
+    border: 1px solid rgba(250, 250, 250, 0.08);
     transition: all 0.3s ease;
     min-width: 0;
     min-height: 0;
   }
 
   .video-tile:hover {
-    border-color: rgba(254, 252, 217, 0.15);
+    border-color: rgba(250, 250, 250, 0.15);
   }
 
   .video-tile.speaking {
-    border-color: #F95F4A;
-    box-shadow: 0 0 0 2px rgba(249, 95, 74, 0.3), 0 0 30px rgba(249, 95, 74, 0.2);
+    border: 2px solid #F95F4A;
   }
 
   .video-tile video {
@@ -134,21 +127,15 @@ const POPOUT_CSS = `
     display: flex;
     align-items: center;
     justify-content: center;
-    background: linear-gradient(135deg, #1a1a1a, #0d0e0d);
+    background: #131316;
   }
 
   .video-tile .avatar-circle {
     width: 44px;
     height: 44px;
     border-radius: 50%;
-    background: linear-gradient(135deg, rgba(249, 95, 74, 0.2), rgba(255, 0, 122, 0.2));
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 18px;
-    font-weight: 700;
-    color: #FEFCD9;
-    border: 1px solid rgba(254, 252, 217, 0.2);
+    object-fit: cover;
+    box-shadow: inset 0 0 0 1px rgba(250, 250, 250, 0.18);
   }
 
   .video-tile .label {
@@ -159,18 +146,18 @@ const POPOUT_CSS = `
     background: rgba(0, 0, 0, 0.7);
     backdrop-filter: blur(8px);
     -webkit-backdrop-filter: blur(8px);
-    border: 1px solid rgba(254, 252, 217, 0.1);
+    border: 1px solid rgba(250, 250, 250, 0.1);
     border-radius: 9999px;
     display: flex;
     align-items: center;
     gap: 6px;
-    font-family: 'PolySans Mono', monospace;
+    font-family: 'PolySans Trial', sans-serif;
   }
 
   .video-tile .label-name {
     font-size: 10px;
     font-weight: 500;
-    color: #FEFCD9;
+    color: #fafafa;
     text-transform: uppercase;
     letter-spacing: 0.05em;
     white-space: nowrap;
@@ -191,7 +178,6 @@ const POPOUT_CSS = `
     height: 10px;
   }
 
-  /* ── Controls bar (floating pill at bottom, matches ControlsBar) ── */
   .popout-controls {
     position: absolute;
     bottom: 10px;
@@ -206,7 +192,7 @@ const POPOUT_CSS = `
     -webkit-backdrop-filter: blur(12px);
     border-radius: 9999px;
     z-index: 10;
-    font-family: 'PolySans Mono', monospace;
+    font-family: 'PolySans Trial', sans-serif;
   }
 
   .ctrl-btn {
@@ -218,15 +204,15 @@ const POPOUT_CSS = `
     border-radius: 9999px;
     border: none;
     background: transparent;
-    color: rgba(254, 252, 217, 0.8);
+    color: rgba(250, 250, 250, 0.8);
     cursor: pointer;
     transition: all 0.15s ease;
     outline: none;
   }
 
   .ctrl-btn:hover {
-    color: #FEFCD9;
-    background: rgba(254, 252, 217, 0.1);
+    color: #fafafa;
+    background: rgba(250, 250, 250, 0.1);
   }
 
   .ctrl-btn.muted {
@@ -246,24 +232,23 @@ const POPOUT_CSS = `
   .ctrl-divider {
     width: 1px;
     height: 20px;
-    background: rgba(254, 252, 217, 0.1);
+    background: rgba(250, 250, 250, 0.1);
     margin: 0 2px;
   }
 
   .ctrl-btn.leave {
-    color: #ef4444;
+    color: #ea4335;
     background: transparent;
   }
 
   .ctrl-btn.leave:hover {
-    background: rgba(239, 68, 68, 0.2);
+    background: rgba(234, 67, 53, 0.2);
   }
 
   .ctrl-btn.leave svg {
     transform: rotate(135deg);
   }
 
-  /* ── Count badge (top-left overlay) ── */
   .popout-badge {
     position: absolute;
     top: 12px;
@@ -275,11 +260,11 @@ const POPOUT_CSS = `
     background: rgba(0, 0, 0, 0.6);
     backdrop-filter: blur(8px);
     -webkit-backdrop-filter: blur(8px);
-    border: 1px solid rgba(254, 252, 217, 0.1);
+    border: 1px solid rgba(250, 250, 250, 0.1);
     border-radius: 9999px;
-    font-family: 'PolySans Mono', monospace;
+    font-family: 'PolySans Trial', sans-serif;
     font-size: 10px;
-    color: rgba(254, 252, 217, 0.6);
+    color: rgba(250, 250, 250, 0.6);
     text-transform: uppercase;
     letter-spacing: 0.08em;
     z-index: 10;
@@ -320,6 +305,7 @@ export function useMeetPopout({
   const popoutWindowRef = useRef<Window | null>(null);
   const updateIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const videoElementsRef = useRef<Map<string, HTMLVideoElement>>(new Map());
+  const popoutListenerCleanupsRef = useRef<Array<() => void>>([]);
 
   const onToggleMuteRef = useRef(onToggleMute);
   const onToggleCameraRef = useRef(onToggleCamera);
@@ -438,7 +424,7 @@ export function useMeetPopout({
         tile.dataset.userId = participant.userId;
         tile.innerHTML = `
           <div class="avatar-placeholder" style="display: none;">
-            <div class="avatar-circle"></div>
+            <img class="avatar-circle" alt="" />
           </div>
           <video autoplay playsinline muted style="display: none;"></video>
           <div class="label">
@@ -453,7 +439,7 @@ export function useMeetPopout({
 
       const video = tile.querySelector("video") as HTMLVideoElement;
       const avatar = tile.querySelector(".avatar-placeholder") as HTMLElement;
-      const avatarCircle = tile.querySelector(".avatar-circle") as HTMLElement;
+      const avatarCircle = tile.querySelector(".avatar-circle") as HTMLImageElement;
       const labelName = tile.querySelector(".label-name") as HTMLElement;
       const labelMuted = tile.querySelector(".label-muted") as HTMLElement;
 
@@ -471,8 +457,7 @@ export function useMeetPopout({
       } else {
         video.style.display = "none";
         avatar.style.display = "flex";
-        const initial = (participant.displayName || "?")[0]?.toUpperCase() || "?";
-        avatarCircle.textContent = initial;
+        avatarCircle.src = avatarUrl(participant.displayName, participant.userId);
         if (video.srcObject) {
           video.srcObject = null;
           videoElementsRef.current.delete(participant.userId);
@@ -497,12 +482,26 @@ export function useMeetPopout({
 
   useEffect(() => { updatePopoutRef.current = updatePopoutContent; }, [updatePopoutContent]);
 
+  const cleanupPopoutResources = useCallback(() => {
+    popoutListenerCleanupsRef.current.forEach((cleanup) => cleanup());
+    popoutListenerCleanupsRef.current = [];
+    if (updateIntervalRef.current) {
+      clearInterval(updateIntervalRef.current);
+      updateIntervalRef.current = null;
+    }
+    for (const vid of videoElementsRef.current.values()) {
+      vid.srcObject = null;
+    }
+    videoElementsRef.current.clear();
+  }, []);
 
   const openPopout = useCallback(async () => {
     if (!isPopoutSupported || !isJoined || isPopoutActive) return;
 
+    let pipWin: Window | null = null;
     try {
-      const pipWin = await window.documentPictureInPicture!.requestWindow({
+      cleanupPopoutResources();
+      pipWin = await window.documentPictureInPicture!.requestWindow({
         width: 380,
         height: 320,
         disallowReturnToOpener: false,
@@ -546,7 +545,7 @@ export function useMeetPopout({
       style.textContent = POPOUT_CSS;
       pipWin.document.head.appendChild(style);
 
-      pipWin.document.title = "Conclave — Mini Meet";
+      pipWin.document.title = "Conclave · Mini Meet";
 
       pipWin.document.body.innerHTML = `
         <div class="popout-root">
@@ -564,39 +563,49 @@ export function useMeetPopout({
         </div>
       `;
 
-      pipWin.document.getElementById("btn-mute")?.addEventListener("click", () => {
+      const registerPopoutListener = (
+        target: EventTarget | null,
+        type: string,
+        listener: EventListener,
+      ) => {
+        if (!target) return;
+        target.addEventListener(type, listener);
+        popoutListenerCleanupsRef.current.push(() => {
+          target.removeEventListener(type, listener);
+        });
+      };
+
+      registerPopoutListener(pipWin.document.getElementById("btn-mute"), "click", () => {
         onToggleMuteRef.current();
       });
 
-      pipWin.document.getElementById("btn-cam")?.addEventListener("click", () => {
+      registerPopoutListener(pipWin.document.getElementById("btn-cam"), "click", () => {
         onToggleCameraRef.current();
       });
 
-      pipWin.document.getElementById("btn-leave")?.addEventListener("click", () => {
+      registerPopoutListener(pipWin.document.getElementById("btn-leave"), "click", () => {
         onLeaveRef.current();
-        pipWin.close();
+        pipWin?.close();
       });
 
-      // Initial render
       updatePopoutContent();
 
       updateIntervalRef.current = setInterval(() => {
         updatePopoutRef.current?.();
       }, 250);
 
-      pipWin.addEventListener("pagehide", () => {
+      registerPopoutListener(pipWin, "pagehide", () => {
         setIsPopoutActive(false);
         popoutWindowRef.current = null;
-        if (updateIntervalRef.current) {
-          clearInterval(updateIntervalRef.current);
-          updateIntervalRef.current = null;
-        }
-        for (const vid of videoElementsRef.current.values()) {
-          vid.srcObject = null;
-        }
-        videoElementsRef.current.clear();
+        cleanupPopoutResources();
       });
     } catch (err) {
+      cleanupPopoutResources();
+      if (pipWin && !pipWin.closed) {
+        pipWin.close();
+      }
+      popoutWindowRef.current = null;
+      setIsPopoutActive(false);
       console.warn("[Popout] Failed to open popout:", err);
     }
   }, [
@@ -604,6 +613,7 @@ export function useMeetPopout({
     isJoined,
     isPopoutActive,
     updatePopoutContent,
+    cleanupPopoutResources,
   ]);
 
   const closePopout = useCallback(() => {
@@ -613,11 +623,8 @@ export function useMeetPopout({
     }
     setIsPopoutActive(false);
     popoutWindowRef.current = null;
-    if (updateIntervalRef.current) {
-      clearInterval(updateIntervalRef.current);
-      updateIntervalRef.current = null;
-    }
-  }, []);
+    cleanupPopoutResources();
+  }, [cleanupPopoutResources]);
 
 
   useEffect(() => {
@@ -635,15 +642,13 @@ export function useMeetPopout({
 
   useEffect(() => {
     return () => {
-      if (updateIntervalRef.current) {
-        clearInterval(updateIntervalRef.current);
-      }
+      cleanupPopoutResources();
       const pipWin = popoutWindowRef.current;
       if (pipWin && !pipWin.closed) {
         pipWin.close();
       }
     };
-  }, []);
+  }, [cleanupPopoutResources]);
 
   return {
     isPopoutActive,
@@ -651,4 +656,15 @@ export function useMeetPopout({
     openPopout,
     closePopout,
   };
+}
+
+function avatarUrl(name: string, id: string) {
+  const seed = id.trim() ? `${name || id}:${id}` : name || "?";
+  const params = new URLSearchParams({
+    format: "svg",
+    name: seed,
+    showInitial: "false",
+    size: "96",
+  });
+  return `/api/avatar?${params.toString()}`;
 }

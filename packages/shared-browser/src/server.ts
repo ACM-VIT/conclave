@@ -123,10 +123,22 @@ app.post("/activity", (req, res) => {
     res.json({ success: true });
 });
 
+let isShuttingDown = false;
+
 const gracefulShutdown = async () => {
+    if (isShuttingDown) {
+        return;
+    }
+    isShuttingDown = true;
+
     console.log("\n[Server] Received shutdown signal, cleaning up...");
-    await containerManager.shutdown();
-    process.exit(0);
+    try {
+        await containerManager.shutdown();
+        process.exit(0);
+    } catch (error) {
+        console.error("[Server] Failed to clean up browser sessions:", error);
+        process.exit(1);
+    }
 };
 
 process.on("SIGTERM", gracefulShutdown);

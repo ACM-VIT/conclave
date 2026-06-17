@@ -3,8 +3,6 @@ import { createPortal } from "react-dom";
 import type { ToolKind, ToolSettings } from "../../core/tools/engine";
 import { TOOL_COLORS } from "../../shared/constants/tools";
 
-/* ── SVG icon wrapper ── */
-
 const Icon = ({ children, size = 16 }: { children: React.ReactNode; size?: number }) => (
   <svg
     width={size}
@@ -19,8 +17,6 @@ const Icon = ({ children, size = 16 }: { children: React.ReactNode; size?: numbe
     {children}
   </svg>
 );
-
-/* ── Tool icons ── */
 
 const SelectIcon = () => (
   <Icon>
@@ -110,8 +106,6 @@ const ExportIcon = () => (
   </Icon>
 );
 
-/* ── Maps ── */
-
 const TOOL_ICONS: Record<ToolKind, React.FC> = {
   select: SelectIcon,
   pan: PanIcon,
@@ -142,8 +136,6 @@ const TOOL_KEYS: Record<ToolKind, string> = {
 
 const STROKE_WIDTHS = [2, 3, 5, 8, 12] as const;
 
-/* ── Helpers ── */
-
 const normalizeHex = (raw: string): string | null => {
   const stripped = raw.replace(/^#/, "").toLowerCase();
   if (/^[0-9a-f]{6}$/.test(stripped)) return `#${stripped}`;
@@ -162,8 +154,6 @@ const perceivedBrightness = (hex: string): number => {
   return (r * 299 + g * 587 + b * 114) / 1000;
 };
 
-/* ── Shared portal popup positioner ── */
-
 const GAP = 8;
 
 function calcPopupStyle(triggerRect: DOMRect): React.CSSProperties {
@@ -175,8 +165,6 @@ function calcPopupStyle(triggerRect: DOMRect): React.CSSProperties {
     zIndex: 9999,
   };
 }
-
-/* ── Toolbar button ── */
 
 function ToolButton({
   toolId,
@@ -235,8 +223,6 @@ function ToolDivider() {
     />
   );
 }
-
-/* ── Compact color picker ── */
 
 function ColorPicker({
   settings,
@@ -331,7 +317,6 @@ function ColorPicker({
           width: 236,
         }}
       >
-        {/* Swatches row */}
         <div className="flex flex-wrap gap-1 mb-2.5">
           {TOOL_COLORS.map((color) => {
             const isSelected = color.toLowerCase() === currentColor.toLowerCase();
@@ -376,10 +361,8 @@ function ColorPicker({
           })}
         </div>
 
-        {/* Divider */}
         <div className="h-px mb-2.5" style={{ backgroundColor: "rgba(255,255,255,0.06)" }} />
 
-        {/* Hex input row */}
         <div className="flex items-center gap-2">
           <div
             className="rounded-md shrink-0 border border-white/10"
@@ -438,7 +421,6 @@ function ColorPicker({
               }
         }
       >
-        {/* Swatch circle with ring showing stroke width */}
         <div
           className="rounded-full"
           style={{
@@ -454,8 +436,6 @@ function ColorPicker({
     </div>
   );
 }
-
-/* ── Stroke width picker ── */
 
 function StrokeWidthPicker({
   settings,
@@ -551,7 +531,6 @@ function StrokeWidthPicker({
                     : "1px solid rgba(255,255,255,0.06)",
                 }}
               >
-                {/* Line preview */}
                 <div
                   className="rounded-full w-6"
                   style={{
@@ -601,7 +580,6 @@ function StrokeWidthPicker({
               }
         }
       >
-        {/* Line preview at current width */}
         <svg width="16" height="16" viewBox="0 0 16 16">
           <line
             x1="2"
@@ -619,8 +597,6 @@ function StrokeWidthPicker({
     </div>
   );
 }
-
-/* ── Main toolbar ── */
 
 export function WhiteboardToolbar({
   tool,
@@ -652,7 +628,6 @@ export function WhiteboardToolbar({
           "0 4px 6px -1px rgba(0,0,0,0.3), 0 10px 24px -4px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.04)",
       }}
     >
-      {/* Pointer tools */}
       {pointerTools.map((id) => (
         <ToolButton
           key={id}
@@ -665,7 +640,6 @@ export function WhiteboardToolbar({
 
       <ToolDivider />
 
-      {/* Draw tools */}
       {drawTools.map((id) => (
         <ToolButton
           key={id}
@@ -678,7 +652,6 @@ export function WhiteboardToolbar({
 
       <ToolDivider />
 
-      {/* Shape tools */}
       {shapeTools.map((id) => (
         <ToolButton
           key={id}
@@ -691,7 +664,6 @@ export function WhiteboardToolbar({
 
       <ToolDivider />
 
-      {/* Insert tools */}
       {insertTools.map((id) => (
         <ToolButton
           key={id}
@@ -704,7 +676,6 @@ export function WhiteboardToolbar({
 
       <ToolDivider />
 
-      {/* Color + stroke width */}
       <ColorPicker
         settings={settings}
         onSettingsChange={onSettingsChange}
@@ -718,7 +689,6 @@ export function WhiteboardToolbar({
 
       <ToolDivider />
 
-      {/* Export */}
       <button
         type="button"
         onClick={onExport}

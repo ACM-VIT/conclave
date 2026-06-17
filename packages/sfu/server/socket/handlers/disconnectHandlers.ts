@@ -11,7 +11,6 @@ import {
 } from "../../webinarNotifications.js";
 import type { ConnectionContext } from "../context.js";
 import { registerAdminHandlers } from "./adminHandlers.js";
-import { cleanupRoomBrowser } from "./sharedBrowserHandlers.js";
 
 const promoteNextAdmin = (room: Room): Admin | null => {
   for (const client of room.clients.values()) {
@@ -64,7 +63,6 @@ export const registerDisconnectHandlers = (
         const wasAdmin = activeClient instanceof Admin;
         const isGhost = activeClient.isGhost;
         const isWebinarAttendee = activeClient.isWebinarAttendee;
-        const isRecorder = activeClient.isRecorder;
         const awarenessRemovals = activeRoom.clearUserAwareness(userId);
 
         for (const removal of awarenessRemovals) {
@@ -80,8 +78,11 @@ export const registerDisconnectHandlers = (
             ghostOnly: true,
             excludeUserId: userId,
           });
-        } else if (!isWebinarAttendee && !isRecorder) {
-          io.to(roomChannelId).emit("userLeft", { userId });
+        } else if (!isWebinarAttendee) {
+          io.to(roomChannelId).emit("userLeft", {
+            userId,
+            roomId: activeRoom.id,
+          });
         }
         emitWebinarAttendeeCountChanged(io, state, activeRoom);
         emitWebinarFeedChanged(io, state, activeRoom);
@@ -93,7 +94,7 @@ export const registerDisconnectHandlers = (
               Logger.info(
                 `Promoted ${promoted.id} to admin in room ${roomId} after host disconnect.`,
               );
-              const promotedContext = (promoted.socket as any).data
+              const promotedContext = promoted.socket.data
                 ?.context as ConnectionContext | undefined;
               if (promotedContext) {
                 promotedContext.currentClient = promoted;
@@ -163,9 +164,7 @@ export const registerDisconnectHandlers = (
                       Logger.info(
                         `Cleanup executed for room ${roomId}. Room is empty.`,
                       );
-                      if (cleanupRoom(state, roomChannelId)) {
-                        void cleanupRoomBrowser(roomChannelId);
-                      }
+                      cleanupRoom(state, roomChannelId);
                     }
                   }
                 }
@@ -186,9 +185,7 @@ export const registerDisconnectHandlers = (
         }
 
         if (state.rooms.has(roomChannelId)) {
-          if (cleanupRoom(state, roomChannelId)) {
-            void cleanupRoomBrowser(roomChannelId);
-          }
+          cleanupRoom(state, roomChannelId);
         }
 
         Logger.info(`User ${userId} left room ${roomId}`);
@@ -200,6 +197,7 @@ export const registerDisconnectHandlers = (
             if (newQuality) {
               io.to(roomChannelId).emit("setVideoQuality", {
                 quality: newQuality,
+                roomId: roomInState.id,
               });
             }
           }
@@ -248,9 +246,7 @@ export const registerDisconnectHandlers = (
             });
           }
           if (pendingRoom.isEmpty()) {
-            if (cleanupRoom(state, context.pendingRoomChannelId)) {
-              void cleanupRoomBrowser(context.pendingRoomChannelId);
-            }
+            cleanupRoom(state, context.pendingRoomChannelId);
           }
         }
       }

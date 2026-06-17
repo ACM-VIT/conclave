@@ -4,7 +4,24 @@ import type {
   MeetingUpdateRequest,
 } from "../../../types.js";
 import type { ConnectionContext } from "../context.js";
+import { RATE_LIMITS, takeToken } from "../rateLimit.js";
 import { respond } from "./ack.js";
+
+const MAX_INVITE_CODE_LENGTH = 256;
+const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/;
+
+const normalizeInviteCode = (value: unknown): string | null => {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim();
+  if (
+    !normalized ||
+    normalized.length > MAX_INVITE_CODE_LENGTH ||
+    CONTROL_CHARACTER_PATTERN.test(normalized)
+  ) {
+    return null;
+  }
+  return normalized;
+};
 
 const toMeetingConfigSnapshot = (
   context: ConnectionContext,
@@ -23,6 +40,10 @@ const ensureAdminRoom = (
 
   if (!(context.currentClient instanceof Admin)) {
     return { error: "Only admins can manage meeting settings" };
+  }
+
+  if (!takeToken(context.socket, "meeting:admin", RATE_LIMITS.adminAction)) {
+    return { error: "Too many admin requests; please retry shortly" };
   }
 
   return { roomId: context.currentRoom.id };
@@ -69,8 +90,15 @@ export const registerMeetingHandlers = (context: ConnectionContext): void => {
       let changed = false;
 
       if (Object.prototype.hasOwnProperty.call(update, "inviteCode")) {
-        const inviteCode =
-          typeof update.inviteCode === "string" ? update.inviteCode : null;
+        let inviteCode: string | null = null;
+        if (typeof update.inviteCode === "string" && update.inviteCode.trim()) {
+          const normalizedInviteCode = normalizeInviteCode(update.inviteCode);
+          if (!normalizedInviteCode) {
+            respond(callback, { error: "Invalid invite code" });
+            return;
+          }
+          inviteCode = normalizedInviteCode;
+        }
         changed = room.setMeetingInviteCode(inviteCode) || changed;
       }
 

@@ -4,8 +4,9 @@
 // Setting to "launch" will build and run the app in the first open Android emulator or device
 // Setting to "build" will just run gradle build, but will not launch the app
 // Setting to "none" will completely disable the build and launch of the Android app
-SKIP_ACTION = launch
-//SKIP_ACTION = build
+// Use "launch" locally when you explicitly want Xcode to start Android too.
+SKIP_ACTION = build
+//SKIP_ACTION = launch
 //SKIP_ACTION = none
 
 ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon
@@ -13,6 +14,10 @@ ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor
 
 INFOPLIST_FILE = Info.plist
 GENERATE_INFOPLIST_FILE = YES
+SFU_JOIN_URL = https:/$()/conclave.acmvit.in/api/sfu/join
+SFU_JOIN_URL[config=Debug][sdk=iphonesimulator*] = http:/$()/127.0.0.1:3000/api/sfu/join
+CONCLAVE_AUTH_BASE_URL = https:/$()/conclave.acmvit.in
+CONCLAVE_AUTH_BASE_URL[config=Debug][sdk=iphonesimulator*] = http:/$()/127.0.0.1:3000
 
 // The user-visible name of the app (localizable)
 //INFOPLIST_KEY_CFBundleDisplayName = App Name

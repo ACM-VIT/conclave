@@ -3,6 +3,7 @@
 import { Ghost, Hand } from "lucide-react";
 import { memo, useEffect, useRef } from "react";
 import { WhiteboardWebApp } from "@conclave/apps-sdk/whiteboard/web";
+import { Avatar } from "@conclave/ui-tokens/web";
 import { useSmartParticipantOrder } from "../hooks/useSmartParticipantOrder";
 import type { Participant } from "../lib/types";
 import { getSpeakerHighlightClasses, isSystemUserId } from "../lib/utils";
@@ -42,14 +43,27 @@ function WhiteboardLayout({
 
   useEffect(() => {
     const video = localVideoRef.current;
-    if (video && localStream) {
-      video.srcObject = localStream;
-      video.play().catch((err) => {
-        if (err.name !== "AbortError") {
-          console.error("[Meets] Whiteboard local video play error:", err);
-        }
-      });
+    if (!video) return;
+
+    if (!localStream) {
+      if (video.srcObject) {
+        video.srcObject = null;
+      }
+      return;
     }
+
+    video.srcObject = localStream;
+    video.play().catch((err) => {
+      if (err.name !== "AbortError") {
+        console.error("[Meets] Whiteboard local video play error:", err);
+      }
+    });
+
+    return () => {
+      if (video.srcObject === localStream) {
+        video.srcObject = null;
+      }
+    };
   }, [localStream]);
 
   const participantsList = useSmartParticipantOrder(
@@ -68,7 +82,7 @@ function WhiteboardLayout({
       </div>
       <aside className="hidden lg:flex w-64 shrink-0 flex-col gap-3 overflow-y-auto overflow-x-visible px-1">
         <div
-          className={`relative bg-[#252525] border border-white/5 rounded-lg overflow-hidden h-36 shrink-0 transition-all duration-200 ${getSpeakerHighlightClasses(
+          className={`relative bg-[#232327] border border-white/5 rounded-lg overflow-hidden h-36 shrink-0 transition-all duration-200 ${getSpeakerHighlightClasses(
             isLocalActiveSpeaker
           )}`}
         >
@@ -82,16 +96,14 @@ function WhiteboardLayout({
             } ${isMirrorCamera ? "scale-x-[-1]" : ""}`}
           />
           {isCameraOff && (
-            <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-[#1a1a1a] to-[#0d0e0d]">
-              <div className="w-12 h-12 rounded-full bg-gradient-to-br from-[#F95F4A]/20 to-[#FF007A]/20 border border-[#FEFCD9]/20 flex items-center justify-center text-lg text-[#FEFCD9] font-bold">
-                {userEmail[0]?.toUpperCase() || "?"}
-              </div>
+            <div className="absolute inset-0 flex items-center justify-center bg-[#18181b]">
+              <Avatar id={userEmail} name={userEmail} size={48} />
             </div>
           )}
           {isGhost && (
             <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
               <div className="flex flex-col items-center gap-1.5">
-                <Ghost className="w-12 h-12 text-blue-300 drop-shadow-[0_0_18px_rgba(59,130,246,0.45)]" />
+                <Ghost className="w-12 h-12 text-blue-300" />
                 <span className="text-[10px] text-blue-200/90 bg-black/60 border border-blue-400/30 px-2 py-0.5 rounded-full">
                   Ghost
                 </span>
@@ -100,17 +112,17 @@ function WhiteboardLayout({
           )}
           {isHandRaised && (
             <div
-              className="absolute top-3 left-3 p-1.5 rounded-full bg-amber-500/20 border border-amber-400/40 text-amber-300 shadow-[0_0_15px_rgba(251,191,36,0.3)]"
+              className="absolute top-3 left-3 p-1.5 rounded-full bg-amber-500/20 border border-amber-400/40 text-amber-300"
               title="Hand raised"
             >
               <Hand className="w-3 h-3" />
             </div>
           )}
           <div
-            className="absolute bottom-3 left-3 bg-black/70 backdrop-blur-sm border border-[#FEFCD9]/10 rounded-full px-3 py-1.5 flex items-center gap-2 text-[10px]"
-            style={{ fontFamily: "'PolySans Mono', monospace" }}
+            className="absolute bottom-3 left-3 bg-black/70 backdrop-blur-sm border border-[#fafafa]/10 rounded-full px-3 py-1.5 flex items-center gap-2 text-[10px]"
+            style={{ fontFamily: "'PolySans Trial', sans-serif" }}
           >
-            <span className="font-medium text-[#FEFCD9] uppercase tracking-wide">
+            <span className="font-medium text-[#fafafa] uppercase tracking-wide">
               You
             </span>
             {isMuted ? <span className="text-[#F95F4A]">Muted</span> : null}

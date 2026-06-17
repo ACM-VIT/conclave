@@ -1,7 +1,8 @@
 "use client";
 
-import { Send, X } from "lucide-react";
+import { ArrowDown, MessageSquare, Send, X } from "lucide-react";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { Avatar } from "@conclave/ui-tokens/web";
 import type { ChatMessage } from "../lib/types";
 import { getActionText, getCommandSuggestions } from "../lib/chat-commands";
 import { formatDisplayName, getChatMessageSegments } from "../lib/utils";
@@ -135,6 +136,7 @@ function ChatPanel({
 }: ChatPanelProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const shouldAutoScrollRef = useRef(true);
   const sendAnimationTimeoutRef = useRef<number | null>(null);
   const prevMessageIdsRef = useRef<Set<string>>(new Set());
@@ -216,10 +218,12 @@ function ChatPanel({
     const addedMessages = messages.length - previousCount;
     if (addedMessages > 0) {
       if (shouldAutoScrollRef.current) {
-        requestAnimationFrame(() => {
+        const frameId = window.requestAnimationFrame(() => {
           messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
         });
         setUnseenCount(0);
+        previousMessageCountRef.current = messages.length;
+        return () => window.cancelAnimationFrame(frameId);
       } else {
         setUnseenCount((prev) => prev + addedMessages);
       }
@@ -237,16 +241,24 @@ function ChatPanel({
   );
 
   useEffect(() => {
-    requestAnimationFrame(() => {
+    const frameId = window.requestAnimationFrame(() => {
       shouldAutoScrollRef.current = true;
       setUnseenCount(0);
       messagesEndRef.current?.scrollIntoView({ behavior: "auto" });
     });
+    return () => window.cancelAnimationFrame(frameId);
   }, []);
 
   useEffect(() => {
     hasInitializedRef.current = true;
   }, []);
+
+  useEffect(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    textarea.style.height = "auto";
+    textarea.style.height = `${Math.min(textarea.scrollHeight, 112)}px`;
+  }, [chatInput]);
 
   const handleScroll = () => {
     const container = scrollContainerRef.current;
@@ -364,7 +376,7 @@ function ChatPanel({
           href={segment.href}
           target="_blank"
           rel="noopener noreferrer"
-          className="break-all underline decoration-[#FEFCD9]/50 underline-offset-2 hover:decoration-[#FEFCD9]"
+          className="break-all underline decoration-[#fafafa]/40 underline-offset-2 transition-[text-decoration-color] hover:decoration-[#fafafa]"
         >
           {segment.text}
         </a>
@@ -391,37 +403,35 @@ function ChatPanel({
 
   return (
     <div
-      className="fixed right-4 top-16 bottom-20 w-72 bg-[#0d0e0d]/95 backdrop-blur-md border border-[#FEFCD9]/10 rounded-xl flex flex-col z-40 shadow-2xl"
+      className="fixed right-0 top-0 bottom-0 z-40 flex w-[360px] flex-col border-l border-white/10 bg-[#18181b] animate-[meet-panel-in_280ms_cubic-bezier(0.22,1,0.36,1)]"
       style={{ fontFamily: "'PolySans Trial', sans-serif" }}
     >
-      <div className="shrink-0 flex items-center justify-between px-3 py-2.5 border-b border-[#FEFCD9]/10">
-        <div className="flex items-center gap-2">
-          <span
-            className="text-[10px] uppercase tracking-[0.12em] text-[#FEFCD9]/60"
-            style={{ fontFamily: "'PolySans Mono', monospace" }}
-          >
-            Chat
-          </span>
-        </div>
+      <div className="flex shrink-0 items-center justify-between border-b border-white/10 px-4 py-3">
+        <h2 className="text-[15px] font-semibold text-[#fafafa]">Chat</h2>
         <button
           onClick={onClose}
+          aria-label="Close chat"
           title="Close chat (Esc)"
-          className="w-6 h-6 rounded flex items-center justify-center text-[#FEFCD9]/50 hover:text-[#FEFCD9] hover:bg-[#FEFCD9]/10 transition-all"
+          className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-[#a1a1aa] transition-colors hover:bg-white/[0.06] hover:text-[#fafafa]"
         >
-          <X className="w-3.5 h-3.5" />
+          <X size={18} strokeWidth={1.75} />
         </button>
       </div>
 
-      {/* Messages */}
-      <div className="relative flex-1 min-h-0">
+      <div className="relative min-h-0 flex-1">
         <div
           ref={scrollContainerRef}
           onScroll={handleScroll}
-          className="web-chat-scroll h-full min-h-0 overflow-y-auto overflow-x-hidden px-3 py-2 space-y-1.5"
+          className="web-chat-scroll h-full min-h-0 overflow-y-auto overflow-x-hidden px-4 py-4"
         >
           {messages.length === 0 ? (
-            <div className="flex items-center justify-center h-full text-[#FEFCD9]/30 text-xs">
-              No messages yet
+            <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
+              <div className="flex h-12 w-12 items-center justify-center rounded-full border border-white/10 bg-white/[0.03] text-[#a1a1aa]">
+                <MessageSquare size={18} strokeWidth={1.75} />
+              </div>
+              <div className="space-y-1">
+                <p className="text-[14px] font-medium text-[#fafafa]">No messages yet</p>
+              </div>
             </div>
           ) : (
             messages.map((msg, index) => {
@@ -460,29 +470,35 @@ function ChatPanel({
                     )}`
                   : "Private message"
                 : null;
+              const timeLabel = new Date(msg.timestamp).toLocaleTimeString([], {
+                hour: "2-digit",
+                minute: "2-digit",
+              });
+
               if (actionText) {
                 return (
                   <div
                     key={msg.id}
-                    className={`${isNew ? "web-chat-action-new" : ""} text-[11px] text-[#FEFCD9]/70 italic px-1 py-0.5`}
+                    className={`${isNew ? "web-chat-action-new" : ""} px-2 py-1.5 text-center text-[12px] leading-relaxed text-[#a1a1aa]`}
                   >
                     {directMessageLabel ? (
-                      <p className="mb-0.5 text-[9px] not-italic uppercase tracking-[0.14em] text-amber-300/80">
+                      <p className="mb-0.5 text-[11px] font-medium text-amber-300/80">
                         {directMessageLabel}
                       </p>
                     ) : null}
-                    <span className="text-[#F95F4A]/80">
+                    <span className="font-medium text-[#fafafa]">
                       {isOwn ? "You" : displayName}
                     </span>{" "}
-                    {actionText}
+                    <span>{actionText}</span>
                   </div>
                 );
               }
+
               return (
                 <div
                   key={msg.id}
-                  className={`flex flex-col ${
-                    isOwn ? "items-end" : "items-start"
+                  className={`flex ${isOwn ? "justify-end pl-10" : "justify-start gap-3 pr-8"} ${
+                    groupedWithPrevious ? "mt-1" : "mt-4 first:mt-0"
                   } ${
                     isNew
                       ? isOwn
@@ -491,43 +507,60 @@ function ChatPanel({
                       : ""
                   }`}
                 >
+                  {!isOwn ? (
+                    <div className="w-9 shrink-0">
+                      {!groupedWithPrevious ? (
+                        <Avatar name={displayName} id={msg.userId} size={32} />
+                      ) : null}
+                    </div>
+                  ) : null}
+
                   <div
-                    className={`max-w-[85%] rounded-2xl px-2.5 py-1.5 ${
-                      isOwn
-                        ? "bg-[#F95F4A] text-white selection:bg-white/90 selection:text-[#0d0e0d]"
-                        : "bg-[#1a1a1a] text-[#FEFCD9]/90 selection:bg-[#F95F4A]/40 selection:text-white"
-                    } ${
-                      isOwn
-                        ? groupedWithPrevious
-                          ? "rounded-tr-md"
-                          : ""
-                        : groupedWithPrevious
-                          ? "rounded-tl-md"
-                          : ""
-                    } ${msg.isDirect ? "ring-1 ring-amber-300/30" : ""}`}
+                    className={`min-w-0 max-w-[82%] ${
+                      isOwn ? "flex flex-col items-end" : "flex-1"
+                    }`}
                   >
-                    {!isOwn && !groupedWithPrevious && (
-                      <p className="text-[9px] text-[#F95F4A]/80 mb-0.5">{displayName}</p>
+                    {!groupedWithPrevious && (
+                      <div
+                        className={`mb-1 flex max-w-full items-baseline gap-2 ${
+                          isOwn ? "justify-end text-right" : ""
+                        }`}
+                      >
+                        <span className="truncate text-[13px] font-medium text-[#fafafa]">
+                          {isOwn ? "You" : displayName}
+                        </span>
+                        <span className="shrink-0 text-[11px] tabular-nums text-[#a1a1aa]/70">
+                          {timeLabel}
+                        </span>
+                      </div>
                     )}
                     {directMessageLabel ? (
-                      <p className="mb-0.5 text-[9px] uppercase tracking-[0.14em] text-amber-300/80">
+                      <p
+                        className={`mb-1 text-[11px] font-medium text-amber-300/80 ${
+                          isOwn ? "text-right" : ""
+                        }`}
+                      >
                         {directMessageLabel}
                       </p>
                     ) : null}
-                    <p className="text-xs break-words leading-relaxed">
-                      {renderMessageContent(msg.content)}
-                    </p>
-                  </div>
-                  {!groupedWithNext && (
-                    <span
-                      className={`${isNew ? "web-chat-meta-new" : ""} text-[9px] text-[#FEFCD9]/20 mt-0.5 tabular-nums`}
+                    <div
+                      className={`inline-block max-w-full px-3.5 py-2 text-[13.5px] leading-relaxed break-words whitespace-pre-wrap ${
+                        isOwn
+                          ? "rounded-[18px] bg-[#F95F4A] text-white shadow-sm shadow-black/10 selection:bg-white/25 selection:text-white"
+                          : "bg-white/[0.05] text-[#fafafa] selection:bg-[#F95F4A]/40 selection:text-white"
+                      } ${
+                        isOwn
+                          ? groupedWithPrevious
+                            ? "rounded-tr-md"
+                            : ""
+                          : "rounded-[18px]"
+                      } ${
+                        !isOwn && groupedWithPrevious ? "rounded-tl-md" : ""
+                      } ${msg.isDirect ? "ring-1 ring-amber-300/30" : ""}`}
                     >
-                      {new Date(msg.timestamp).toLocaleTimeString([], {
-                        hour: "2-digit",
-                        minute: "2-digit",
-                      })}
-                    </span>
-                  )}
+                      {renderMessageContent(msg.content)}
+                    </div>
+                  </div>
                 </div>
               );
             })
@@ -538,22 +571,22 @@ function ChatPanel({
           <button
             type="button"
             onClick={scrollToLatest}
-            className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full border border-[#FEFCD9]/20 bg-[#0d0e0d]/95 px-2.5 py-1 text-[10px] uppercase tracking-[0.16em] text-[#FEFCD9]/80 backdrop-blur-md shadow-lg hover:bg-[#151615] transition-colors"
-            style={{ fontFamily: "'PolySans Mono', monospace" }}
+            className="absolute bottom-3 left-1/2 inline-flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-white/10 bg-[#232327] px-3 py-1.5 text-[12.5px] font-medium text-[#fafafa] transition-colors hover:bg-[#2e2e33]"
+            style={{ fontFamily: "'PolySans Trial', sans-serif" }}
           >
+            <ArrowDown size={14} strokeWidth={1.75} />
             {unseenCount} new {unseenCount === 1 ? "message" : "messages"}
           </button>
         )}
       </div>
 
-      {/* Input */}
       <form
         onSubmit={handleSubmit}
-        className="shrink-0 p-2 border-t border-[#FEFCD9]/5"
+        className="shrink-0 border-t border-white/10 px-3 py-3"
       >
         <div className="relative">
           {showMentionSuggestions && (
-            <div className="absolute bottom-full mb-1.5 left-0 right-0 z-10 max-h-40 overflow-y-auto rounded-md border border-[#FEFCD9]/10 bg-[#0d0e0d]/95">
+            <div className="absolute bottom-full left-0 right-0 z-10 mb-2 max-h-48 overflow-y-auto rounded-xl border border-white/10 bg-[#232327] p-1">
               {mentionSuggestions.map((participant, index) => {
                 const isActive = index === activeMentionIndex;
                 return (
@@ -561,22 +594,25 @@ function ChatPanel({
                     key={participant.userId}
                     type="button"
                     onClick={() => applyMentionSuggestion(index)}
-                    className={`w-full px-2.5 py-1.5 text-left text-xs transition-colors ${
-                      isActive
-                        ? "bg-[#F95F4A]/20 text-[#FEFCD9]"
-                        : "text-[#FEFCD9]/70 hover:bg-[#FEFCD9]/10"
+                    className={`flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors ${
+                      isActive ? "bg-white/[0.08]" : "hover:bg-white/[0.04]"
                     }`}
                   >
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="font-medium">{participant.displayName}</span>
-                    </div>
+                    <Avatar
+                      name={participant.displayName}
+                      id={participant.userId}
+                      size={24}
+                    />
+                    <span className="truncate text-[13px] font-medium text-[#fafafa]">
+                      {participant.displayName}
+                    </span>
                   </button>
                 );
               })}
             </div>
           )}
           {showCommandSuggestions && (
-            <div className="absolute bottom-full mb-1.5 left-0 right-0 z-10 max-h-40 overflow-y-auto rounded-md border border-[#FEFCD9]/10 bg-[#0d0e0d]/95">
+            <div className="absolute bottom-full left-0 right-0 z-10 mb-2 max-h-48 overflow-y-auto rounded-xl border border-white/10 bg-[#232327] p-1">
               {commandSuggestions.map((command, index) => {
                 const isActive = index === activeCommandIndex;
                 return (
@@ -584,19 +620,19 @@ function ChatPanel({
                     key={command.id}
                     type="button"
                     onClick={() => onInputChange(command.insertText)}
-                    className={`w-full px-2.5 py-1.5 text-left text-xs transition-colors ${
-                      isActive
-                        ? "bg-[#F95F4A]/20 text-[#FEFCD9]"
-                        : "text-[#FEFCD9]/70 hover:bg-[#FEFCD9]/10"
+                    className={`w-full rounded-lg px-2.5 py-2 text-left transition-colors ${
+                      isActive ? "bg-white/[0.08]" : "hover:bg-white/[0.04]"
                     }`}
                   >
                     <div className="flex items-center justify-between gap-2">
-                      <span className="font-medium">/{command.label}</span>
-                      <span className="text-[10px] text-[#FEFCD9]/40">
+                      <span className="text-[13px] font-medium text-[#fafafa]">
+                        /{command.label}
+                      </span>
+                      <span className="shrink-0 text-[11px] text-[#a1a1aa]">
                         {command.usage}
                       </span>
                     </div>
-                    <p className="text-[10px] text-[#FEFCD9]/45">
+                    <p className="mt-0.5 text-[12px] leading-snug text-[#a1a1aa]">
                       {command.description}
                     </p>
                   </button>
@@ -604,9 +640,9 @@ function ChatPanel({
               })}
             </div>
           )}
-          <div className="flex gap-1.5">
-            <input
-              type="text"
+          <div className="flex items-end gap-2 rounded-2xl border border-white/10 bg-white/[0.04] py-2 pl-3 pr-2 transition-colors focus-within:border-white/20 focus-within:bg-white/[0.055]">
+            <textarea
+              ref={textareaRef}
               value={chatInput}
               onChange={(e) => onInputChange(e.target.value)}
               onKeyDown={handleKeyDown}
@@ -615,33 +651,26 @@ function ChatPanel({
                   ? "Ghost mode: chat disabled"
                   : isChatLocked && !isAdmin
                     ? "Chat locked by host"
-                    : "Message... (type / for commands)"
+                    : "Send a message"
               }
               maxLength={1000}
               disabled={isChatDisabled}
-              className="flex-1 px-2.5 py-1.5 bg-black/30 border border-[#FEFCD9]/10 rounded-md text-xs text-[#FEFCD9] placeholder:text-[#FEFCD9]/30 focus:outline-none focus:border-[#FEFCD9]/20 disabled:opacity-50"
+              rows={1}
+              className="max-h-28 min-h-8 min-w-0 flex-1 resize-none bg-transparent py-1 text-[13.5px] leading-5 text-[#fafafa] placeholder:text-[#a1a1aa] focus:outline-none disabled:opacity-50"
             />
             <button
               type="submit"
               disabled={isChatDisabled || !chatInput.trim()}
-              className={`w-8 h-8 rounded-md flex items-center justify-center text-[#FEFCD9]/60 hover:text-[#FEFCD9] hover:bg-[#FEFCD9]/10 disabled:opacity-30 transition-all ${
+              aria-label="Send message"
+              title="Send message"
+              className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[#F95F4A] text-white transition-[background-color,filter,opacity] hover:brightness-110 active:brightness-95 disabled:cursor-not-allowed disabled:bg-white/[0.06] disabled:text-[#a1a1aa] disabled:brightness-100 ${
                 isSendAnimating ? "web-chat-send-active" : ""
               }`}
             >
-              <Send className="w-3.5 h-3.5" />
+              <Send size={18} strokeWidth={1.75} />
             </button>
           </div>
         </div>
-        {isGhostMode && (
-          <div className="mt-1.5 text-[9px] text-[#FF007A]/60 text-center">
-            Ghost mode
-          </div>
-        )}
-        {!isGhostMode && isChatLocked && !isAdmin && (
-          <div className="mt-1.5 text-[9px] text-amber-200/70 text-center">
-            Chat locked by host
-          </div>
-        )}
       </form>
     </div>
   );

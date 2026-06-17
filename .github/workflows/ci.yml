@@ -1,0 +1,62 @@
+name: CI
+
+"on":
+  push:
+    branches: ["**"]
+  pull_request:
+
+# Cancel superseded runs on the same ref to save CI minutes.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: typecheck + test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.12.3
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        # mobile is excluded from the workspace; this installs web, sfu, and the
+        # shared packages (incl. meeting-core's vitest devDep).
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck apps/web
+        run: pnpm -C apps/web exec tsc --noEmit
+
+      - name: Lint apps/web (react-hooks guard)
+        # Minimal ESLint config — only `react-hooks/rules-of-hooks` (error).
+        # Catches app-crashing conditional/early-return hook placement that
+        # `tsc` cannot see (Next 16 removed `next lint`, so this is the gate).
+        run: pnpm -C apps/web run lint
+
+      - name: Typecheck packages/sfu
+        run: pnpm -C packages/sfu exec tsc --noEmit
+
+      - name: Unit tests (packages/meeting-core)
+        run: pnpm -C packages/meeting-core test
+
+      - name: Verify generated Swift events are in sync
+        # apps/conclave-skip/.../SfuEvents.swift is generated from
+        # packages/meeting-core/src/sfu-events.ts (the cross-platform source of
+        # truth). Regenerate and fail if it drifts — i.e. someone changed the TS
+        # event list without re-running the generator (this is how stale
+        # recording:* events once slipped through unnoticed).
+        run: |
+          node packages/meeting-core/scripts/gen-swift-events.mjs
+          git diff --exit-code -- apps/conclave-skip/Sources/Conclave/Core/Networking/SfuEvents.swift

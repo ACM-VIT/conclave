@@ -3,8 +3,10 @@ import { Client } from "../../../config/classes/Client.js";
 import { config } from "../../../config/config.js";
 import type {
   AppsAwarenessData,
+  ChatHistorySnapshot,
   HandRaisedSnapshot,
   JoinRoomData,
+  JoinRoomErrorResponse,
   JoinRoomResponse,
 } from "../../../types.js";
 import { Logger } from "../../../utilities/loggers.js";
@@ -17,11 +19,16 @@ import {
 import { emitUserJoined, emitUserLeft } from "../../notifications.js";
 import {
   cleanupRoom,
+  cleanupStaleRoom,
   clearEndedRoom,
   getEndedRoom,
   getOrCreateRoom,
   getRoomChannelId,
 } from "../../rooms.js";
+import {
+  RoomOwnershipError,
+  type RoomOwnerRecord,
+} from "../../roomRegistry.js";
 import {
   emitWebinarAttendeeCountChanged,
   emitWebinarFeedChanged,
@@ -37,6 +44,7 @@ import {
   getScheduledWebinarForRoom,
   getScheduledWebinarBySlug,
   isWithinEarlyEntryWindow,
+  persistScheduledWebinarChanges,
   recordWebinarJoin,
 } from "../../scheduledWebinars.js";
 import { ensureWebinarRoomConfig } from "../../scheduledWebinarScheduler.js";
@@ -44,10 +52,31 @@ import type { ConnectionContext } from "../context.js";
 import { registerAdminHandlers } from "./adminHandlers.js";
 import { respond } from "./ack.js";
 import {
-  cleanupRoomBrowser,
   clearBrowserState,
   getBrowserState,
 } from "./sharedBrowserHandlers.js";
+
+const MAX_CLIENT_ID_LENGTH = 256;
+const MAX_ROOM_ID_LENGTH = 256;
+const MAX_SESSION_ID_LENGTH = 128;
+const MAX_INVITE_CODE_LENGTH = 256;
+const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/;
+
+const normalizeIdentifier = (
+  value: unknown,
+  maxLength: number,
+): string | null => {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim();
+  if (
+    !normalized ||
+    normalized.length > maxLength ||
+    CONTROL_CHARACTER_PATTERN.test(normalized)
+  ) {
+    return null;
+  }
+  return normalized;
+};
 
 export const registerJoinRoomHandler = (context: ConnectionContext): void => {
   const { socket, io, state } = context;
@@ -56,26 +85,44 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
     "joinRoom",
     async (
       data: JoinRoomData,
-      callback: (response: JoinRoomResponse | { error: string }) => void,
+      callback: (response: JoinRoomResponse | JoinRoomErrorResponse) => void,
     ) => {
       try {
-        const requestedRoomId =
-          typeof data?.roomId === "string" ? data.roomId.trim() : "";
-        const { sessionId } = data;
-        const user = (socket as any).user;
+        const requestedRoomId = normalizeIdentifier(
+          data?.roomId,
+          MAX_ROOM_ID_LENGTH,
+        );
+        let sessionId: string | undefined;
+        const user = socket.data.user;
         if (!requestedRoomId) {
           respond(callback, { error: "Missing room ID" });
           return;
+        }
+        if (data?.sessionId !== undefined) {
+          const normalizedSessionId = normalizeIdentifier(
+            data.sessionId,
+            MAX_SESSION_ID_LENGTH,
+          );
+          if (!normalizedSessionId) {
+            respond(callback, { error: "Invalid session ID" });
+            return;
+          }
+          sessionId = normalizedSessionId;
         }
         const joinMode =
           user?.joinMode === "webinar_attendee"
             ? "webinar_attendee"
             : "meeting";
         const isWebinarAttendeeJoin = joinMode === "webinar_attendee";
-        const isRecorderJoin =
-          !isWebinarAttendeeJoin && Boolean(data?.recorder);
-        const clientId =
-          typeof user?.clientId === "string" ? user.clientId : "default";
+        const tokenClientId =
+          typeof user?.clientId === "string"
+            ? normalizeIdentifier(user.clientId, MAX_CLIENT_ID_LENGTH)
+            : "default";
+        if (!tokenClientId) {
+          respond(callback, { error: "Invalid client ID" });
+          return;
+        }
+        const clientId = tokenClientId;
         let roomId = requestedRoomId;
         if (isWebinarAttendeeJoin) {
           let webinarTarget = resolveWebinarLinkTarget(
@@ -157,7 +204,6 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           scheduledWebinarForRoom?.status !== "cancelled";
         if (
           isActiveScheduledWebinarRoom &&
-          !isRecorderJoin &&
           !forcedHostJoin &&
           !hostRequested
         ) {
@@ -184,7 +230,11 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           });
           return;
         }
-        if (user?.sessionId && sessionId && user.sessionId !== sessionId) {
+        const tokenSessionId = normalizeIdentifier(
+          user?.sessionId,
+          MAX_SESSION_ID_LENGTH,
+        );
+        if (tokenSessionId && sessionId && tokenSessionId !== sessionId) {
           respond(callback, { error: "Session mismatch" });
           return;
         }
@@ -193,6 +243,23 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         const roomChannelId = getRoomChannelId(clientId, roomId);
         let room = state.rooms.get(roomChannelId);
         let createdRoom = false;
+        const respondWithRoomOwner = (owner: RoomOwnerRecord): void => {
+          Logger.info(
+            `Join for ${roomId} (${clientId}) routed to SFU instance ${owner.instanceId}`,
+          );
+          respond(callback, {
+            error: "Room is hosted by another SFU instance.",
+            roomId: owner.roomId,
+            redirectInstanceId: owner.instanceId,
+            ...(owner.instanceUrl ? { redirectUrl: owner.instanceUrl } : {}),
+          } satisfies JoinRoomErrorResponse);
+        };
+
+        if (room?.router.closed) {
+          cleanupStaleRoom(state, roomChannelId);
+          room = undefined;
+        }
+
         const endedRoom = getEndedRoom(state, roomChannelId);
         const canReopenEndedRoom =
           Boolean(endedRoom) &&
@@ -206,7 +273,25 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           return;
         }
 
+        if (room) {
+          try {
+            room = await getOrCreateRoom(state, clientId, roomId);
+          } catch (error) {
+            if (error instanceof RoomOwnershipError) {
+              respondWithRoomOwner(error.owner);
+              return;
+            }
+            throw error;
+          }
+        }
+
         if (!room) {
+          const owner = await state.roomRegistry.getOwner(roomChannelId);
+          if (owner && !state.roomRegistry.isLocalOwner(owner)) {
+            respondWithRoomOwner(owner);
+            return;
+          }
+
           if (isWebinarAttendeeJoin) {
             respond(callback, { error: "Webinar is not live." });
             return;
@@ -225,7 +310,15 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             respond(callback, { error: "No room found." });
             return;
           }
-          room = await getOrCreateRoom(state, clientId, roomId);
+          try {
+            room = await getOrCreateRoom(state, clientId, roomId);
+          } catch (error) {
+            if (error instanceof RoomOwnershipError) {
+              respondWithRoomOwner(error.owner);
+              return;
+            }
+            throw error;
+          }
           if (canReopenEndedRoom) {
             clearEndedRoom(state, roomChannelId);
             Logger.info(
@@ -246,7 +339,18 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             return;
           }
 
-          const inviteCode = data?.webinarInviteCode?.trim() || "";
+          let inviteCode = "";
+          if (data?.webinarInviteCode !== undefined) {
+            const normalizedInviteCode = normalizeIdentifier(
+              data.webinarInviteCode,
+              MAX_INVITE_CODE_LENGTH,
+            );
+            if (!normalizedInviteCode) {
+              respond(callback, { error: "Invalid webinar invite code." });
+              return;
+            }
+            inviteCode = normalizedInviteCode;
+          }
           const inviteCodeHash = webinarConfig.inviteCodeHash;
           const hasInviteCodeConfig = Boolean(inviteCodeHash);
 
@@ -329,7 +433,18 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           return;
         }
 
-        const meetingInviteCode = data?.meetingInviteCode?.trim() || "";
+        let meetingInviteCode = "";
+        if (data?.meetingInviteCode !== undefined) {
+          const normalizedInviteCode = normalizeIdentifier(
+            data.meetingInviteCode,
+            MAX_INVITE_CODE_LENGTH,
+          );
+          if (!normalizedInviteCode) {
+            respond(callback, { error: "Invalid meeting invite code." });
+            return;
+          }
+          meetingInviteCode = normalizedInviteCode;
+        }
         const requiresMeetingInviteCode = room.requiresMeetingInviteCode;
         const shouldValidateMeetingInviteCode =
           !isWebinarAttendeeJoin &&
@@ -393,7 +508,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         const displayName = requestedDisplayName || identity.displayName;
         const hasDisplayNameOverride = Boolean(requestedDisplayName);
         const isGhost =
-          !isWebinarAttendeeJoin && Boolean(data?.ghost) && Boolean(isAdminJoin);
+          !isWebinarAttendeeJoin && data?.ghost === true && isAdminJoin;
         context.currentUserKey = userKey;
 
         if (
@@ -435,6 +550,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             hostUserIds: room.getAdminUserIds(),
             isLocked: room.isLocked,
             isTtsDisabled: room.isTtsDisabled,
+            isChatLocked: room.isChatLocked,
             isDmEnabled: room.isDmEnabled,
             meetingRequiresInviteCode: room.requiresMeetingInviteCode,
           });
@@ -479,6 +595,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             hostUserIds: room.getAdminUserIds(),
             isLocked: room.isLocked,
             isTtsDisabled: room.isTtsDisabled,
+            isChatLocked: room.isChatLocked,
             isDmEnabled: room.isDmEnabled,
             meetingRequiresInviteCode: room.requiresMeetingInviteCode,
           });
@@ -516,16 +633,17 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           } else if (!context.currentClient.isWebinarAttendee) {
             socket
               .to(previousChannelId)
-              .emit("userLeft", { userId: previousClientId });
+              .emit("userLeft", {
+                userId: previousClientId,
+                roomId: previousRoom.id,
+              });
           }
 
           emitWebinarAttendeeCountChanged(io, state, previousRoom);
           emitWebinarFeedChanged(io, state, previousRoom);
 
           socket.leave(previousChannelId);
-          if (cleanupRoom(state, previousChannelId)) {
-            void cleanupRoomBrowser(previousChannelId);
-          }
+          cleanupRoom(state, previousChannelId);
 
           context.currentRoom = null;
           context.currentClient = null;
@@ -550,12 +668,6 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             id: userId,
             socket,
             mode: "webinar_attendee",
-          });
-        } else if (isRecorderJoin) {
-          context.currentClient = new Client({
-            id: userId,
-            socket,
-            mode: "recorder",
           });
         } else {
           context.currentClient = new Client({
@@ -597,11 +709,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         const resolvedDisplayName =
           context.currentRoom.getDisplayNameForUser(userId) || displayName;
         if (!wasReconnecting) {
-          if (context.currentClient.isRecorder) {
-            // Recorder bots are hidden implementation clients. They need the
-            // full producer snapshot to render the meeting, but should not
-            // appear in participant rosters or join/leave notifications.
-          } else if (context.currentClient.isGhost) {
+          if (context.currentClient.isGhost) {
             emitUserJoined(context.currentRoom, userId, resolvedDisplayName, {
               ghostOnly: true,
               excludeUserId: userId,
@@ -615,6 +723,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
                 userId: clientId,
                 displayName: ghostDisplayName,
                 isGhost: true,
+                roomId: context.currentRoom.id,
               });
             }
           } else if (!context.currentClient.isWebinarAttendee) {
@@ -625,6 +734,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
               client.socket.emit("userJoined", {
                 userId,
                 displayName: resolvedDisplayName,
+                roomId: context.currentRoom.id,
               });
             }
           }
@@ -645,6 +755,11 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           users: context.currentRoom.getHandRaisedSnapshot(),
           roomId: context.currentRoom.id,
         } satisfies HandRaisedSnapshot & { roomId: string });
+
+        socket.emit("chatHistorySnapshot", {
+          messages: context.currentRoom.getChatHistorySnapshot(),
+          roomId: context.currentRoom.id,
+        } satisfies ChatHistorySnapshot);
 
         socket.emit("roomLockChanged", {
           locked: context.currentRoom.isLocked,
@@ -669,13 +784,20 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         socket.emit("apps:state", {
           activeAppId: context.currentRoom.appsState.activeAppId,
           locked: context.currentRoom.appsState.locked,
+          roomId: context.currentRoom.id,
         });
 
         const newQuality = context.currentRoom.updateVideoQuality();
         if (newQuality) {
-          io.to(roomChannelId).emit("setVideoQuality", { quality: newQuality });
+          io.to(roomChannelId).emit("setVideoQuality", {
+            quality: newQuality,
+            roomId: context.currentRoom.id,
+          });
         } else if (context.currentRoom.currentQuality === "low") {
-          socket.emit("setVideoQuality", { quality: "low" });
+          socket.emit("setVideoQuality", {
+            quality: "low",
+            roomId: context.currentRoom.id,
+          });
         }
 
         const feedSnapshot = context.currentRoom.refreshWebinarFeedSnapshot();
@@ -688,15 +810,17 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
 
         if (webinarConfig.scheduledWebinarId && !wasReconnecting && !existingClient) {
           const attendeeCount = context.currentRoom.getWebinarAttendeeCount();
-          recordWebinarJoin(
+          const webinarWithJoinMetric = recordWebinarJoin(
             state.scheduledWebinars,
             webinarConfig.scheduledWebinarId,
             attendeeCount,
           );
-          if (state.scheduledWebinarPersistence) {
+          if (state.scheduledWebinarPersistence && webinarWithJoinMetric) {
             try {
-              state.scheduledWebinarPersistence.save(
-                Array.from(state.scheduledWebinars.byId.values()),
+              persistScheduledWebinarChanges(
+                state.scheduledWebinars,
+                state.scheduledWebinarPersistence,
+                [webinarWithJoinMetric],
               );
             } catch (error) {
               Logger.warn("Failed to persist join metric", error);
@@ -723,10 +847,6 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           registerAdminHandlers(context, { roomId });
         }
 
-        const recordingState = context.recordings.publicState(
-          context.currentRoom.channelId,
-        );
-
         respond(callback, {
           roomId,
           rtpCapabilities: context.currentRoom.rtpCapabilities,
@@ -736,6 +856,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           hostUserIds: context.currentRoom.getAdminUserIds(),
           isLocked: context.currentRoom.isLocked,
           isTtsDisabled: context.currentRoom.isTtsDisabled,
+          isChatLocked: context.currentRoom.isChatLocked,
           isDmEnabled: context.currentRoom.isDmEnabled,
           meetingRequiresInviteCode: context.currentRoom.requiresMeetingInviteCode,
           webinarRole: context.currentClient.isWebinarAttendee
@@ -748,12 +869,6 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           webinarRequiresInviteCode: webinarSnapshot.requiresInviteCode,
           webinarAttendeeCount: webinarSnapshot.attendeeCount,
           webinarMaxAttendees: webinarSnapshot.maxAttendees,
-          recording: {
-            active: recordingState.active,
-            paused: recordingState.paused,
-            startedAt: recordingState.startedAt,
-            available: recordingState.available,
-          },
         });
       } catch (error) {
         Logger.error("Error joining room:", error);

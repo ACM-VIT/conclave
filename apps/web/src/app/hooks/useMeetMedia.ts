@@ -25,6 +25,7 @@ import {
   getPreferredWebcamCodec,
   produceWebcamTrack,
 } from "../lib/webcam-codec";
+import { prewarmVideoEffectsAssets } from "./useVideoEffects";
 
 interface UseMeetMediaOptions {
   ghostEnabled: boolean;
@@ -47,9 +48,16 @@ interface UseMeetMediaOptions {
   setSelectedAudioOutputDeviceId: (value: string) => void;
   videoQuality: VideoQuality;
   videoQualityRef: React.MutableRefObject<VideoQuality>;
+  activeVideoEffectsCount?: number;
+  getVideoPublishTrackRef?: React.MutableRefObject<
+    ((stream?: MediaStream | null) => MediaStreamTrack | null) | null
+  >;
   socketRef: React.MutableRefObject<Socket | null>;
   deviceRef: React.MutableRefObject<Device | null>;
   producerTransportRef: React.MutableRefObject<Transport | null>;
+  ensureProducerTransportRef?: React.MutableRefObject<
+    (() => Promise<boolean>) | null
+  >;
   audioProducerRef: React.MutableRefObject<Producer | null>;
   videoProducerRef: React.MutableRefObject<Producer | null>;
   screenProducerRef: React.MutableRefObject<Producer | null>;
@@ -83,9 +91,12 @@ export function useMeetMedia({
   setSelectedAudioOutputDeviceId,
   videoQuality,
   videoQualityRef,
+  activeVideoEffectsCount = 0,
+  getVideoPublishTrackRef,
   socketRef,
   deviceRef,
   producerTransportRef,
+  ensureProducerTransportRef,
   audioProducerRef,
   videoProducerRef,
   screenProducerRef,
@@ -105,13 +116,26 @@ export function useMeetMedia({
   >(async () => {});
   const audioRecoveryInFlightRef = useRef(false);
   const cameraRecoveryInFlightRef = useRef(false);
+  const [cameraProducerRecoveryPulse, setCameraProducerRecoveryPulse] =
+    useState(0);
   const toggleMuteInFlightRef = useRef(false);
+  const toggleCameraInFlightRef = useRef(false);
   const buildAudioConstraints = useCallback(
     (deviceId?: string): MediaTrackConstraints => ({
       ...DEFAULT_AUDIO_CONSTRAINTS,
       ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
     }),
     []
+  );
+
+  const buildVideoConstraints = useCallback(
+    (deviceId?: string): MediaTrackConstraints => ({
+      ...(videoQualityRef.current === "low"
+        ? LOW_QUALITY_CONSTRAINTS
+        : STANDARD_QUALITY_CONSTRAINTS),
+      ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
+    }),
+    [videoQualityRef]
   );
 
   const getAudioContext = useCallback(() => {
@@ -202,11 +226,15 @@ export function useMeetMedia({
 
       return new Promise<{ ok: boolean; error?: string }>((resolve) => {
         let settled = false;
+        // 1500ms was too tight: a slow-but-healthy ack would time out and (on
+        // unmute) trigger a destructive producer-recreate. The toggle itself is
+        // delivered reliably (TCP) and the SFU acts on the event, not the ack —
+        // so we can afford to wait for the ack rather than assume failure.
         const timeout = window.setTimeout(() => {
           if (settled) return;
           settled = true;
           resolve({ ok: false, error: "toggleMute timeout" });
-        }, 1500);
+        }, 5000);
 
         socket.emit(
           "toggleMute",
@@ -238,6 +266,32 @@ export function useMeetMedia({
       }
     },
     [audioProducerRef]
+  );
+
+  const waitForPreferredVideoPublishTrack = useCallback(
+    async (stream: MediaStream, rawTrack: MediaStreamTrack) => {
+      if (activeVideoEffectsCount <= 0) return rawTrack;
+
+      const startedAt = performance.now();
+      let latestTrack: MediaStreamTrack | null = null;
+      while (performance.now() - startedAt < 900) {
+        const candidate = getVideoPublishTrackRef?.current?.(stream) ?? null;
+        if (candidate?.readyState === "live") {
+          latestTrack = candidate;
+          if (candidate.id !== rawTrack.id) {
+            return candidate;
+          }
+        }
+        await new Promise((resolve) => window.setTimeout(resolve, 50));
+      }
+
+      if (latestTrack?.readyState === "live") {
+        return latestTrack;
+      }
+
+      return rawTrack;
+    },
+    [activeVideoEffectsCount, getVideoPublishTrackRef]
   );
 
   const stopLocalTrack = useCallback(
@@ -331,13 +385,24 @@ export function useMeetMedia({
           ? { ...LOW_QUALITY_CONSTRAINTS }
           : { ...STANDARD_QUALITY_CONSTRAINTS };
 
-      const audioConstraints = buildAudioConstraints(
-        selectedAudioInputDeviceId
-      );
+      const audioConstraints = isMuted
+        ? false
+        : buildAudioConstraints(selectedAudioInputDeviceId);
+      const videoConstraintsForRequest = isCameraOff
+        ? false
+        : videoConstraints;
+
+      if (!audioConstraints && !videoConstraintsForRequest) {
+        setMediaState({
+          hasAudioPermission: false,
+          hasVideoPermission: false,
+        });
+        return new MediaStream();
+      }
 
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: audioConstraints,
-        video: isCameraOff ? false : videoConstraints,
+        video: videoConstraintsForRequest,
       });
 
       setMediaState({
@@ -373,6 +438,10 @@ export function useMeetMedia({
         meetErr.code === "MEDIA_ERROR"
       ) {
         try {
+          if (isMuted) {
+            return null;
+          }
+
           const audioOnlyConstraints = buildAudioConstraints(
             selectedAudioInputDeviceId
           );
@@ -407,6 +476,7 @@ export function useMeetMedia({
   }, [
     videoQuality,
     selectedAudioInputDeviceId,
+    isMuted,
     isCameraOff,
     handleLocalTrackEnded,
     buildAudioConstraints,
@@ -469,6 +539,77 @@ export function useMeetMedia({
       audioProducerRef,
       setLocalStream,
       buildAudioConstraints,
+    ]
+  );
+
+  const handleVideoInputDeviceChange = useCallback(
+    async (deviceId: string) => {
+      if (connectionState !== "joined") return;
+      if (isCameraOff) return;
+
+      try {
+        const newStream = await navigator.mediaDevices.getUserMedia({
+          video: buildVideoConstraints(deviceId),
+        });
+
+        const newVideoTrack = newStream.getVideoTracks()[0];
+        if (newVideoTrack) {
+          if ("contentHint" in newVideoTrack) {
+            newVideoTrack.contentHint = "motion";
+          }
+          newVideoTrack.onended = () => {
+            handleLocalTrackEnded("video", newVideoTrack);
+          };
+          const previousStream = localStreamRef.current ?? localStream;
+          const oldVideoTrack = previousStream?.getVideoTracks()[0] ?? null;
+          const remainingTracks =
+            previousStream
+              ?.getTracks()
+              .filter((track) => track.kind !== "video") ?? [];
+          const nextStream = new MediaStream([...remainingTracks, newVideoTrack]);
+          localStreamRef.current = nextStream;
+          setLocalStream(nextStream);
+
+          if (videoProducerRef.current) {
+            const publishTrack = await waitForPreferredVideoPublishTrack(
+              nextStream,
+              newVideoTrack,
+            );
+            try {
+              await videoProducerRef.current.replaceTrack({
+                track: publishTrack,
+              });
+            } catch (err) {
+              if (publishTrack.id === newVideoTrack.id) throw err;
+              console.warn(
+                "[Meets] Processed device-switch track failed; retrying raw camera:",
+                err,
+              );
+              await videoProducerRef.current.replaceTrack({
+                track: newVideoTrack,
+              });
+            }
+          }
+
+          if (oldVideoTrack && oldVideoTrack !== newVideoTrack) {
+            stopLocalTrack(oldVideoTrack);
+          }
+        }
+      } catch (err) {
+        console.error("[Meets] Failed to switch video input device:", err);
+      }
+    },
+    [
+      connectionState,
+      isCameraOff,
+      localStream,
+      handleLocalTrackEnded,
+      stopLocalTrack,
+      videoProducerRef,
+      setLocalStream,
+      buildVideoConstraints,
+      localStreamRef,
+      waitForPreferredVideoPublishTrack,
     ]
   );
 
@@ -539,6 +680,8 @@ export function useMeetMedia({
         }
 
         let nextVideoTrack = localStream.getVideoTracks()[0];
+        let publishStream = localStreamRef.current ?? localStream;
+        let oldVideoTrackToStop: MediaStreamTrack | null = null;
 
         if (!nextVideoTrack || nextVideoTrack.readyState !== "live") {
           const newStream = await navigator.mediaDevices.getUserMedia({
@@ -555,27 +698,60 @@ export function useMeetMedia({
             handleLocalTrackEnded("video", newVideoTrack);
           };
 
-          const oldVideoTrack = localStream.getVideoTracks()[0];
-          if (oldVideoTrack) {
-            stopLocalTrack(oldVideoTrack);
-            localStream.removeTrack(oldVideoTrack);
-          }
-          localStream.addTrack(newVideoTrack);
-          setLocalStream(new MediaStream(localStream.getTracks()));
+          const previousStream = localStreamRef.current ?? localStream;
+          oldVideoTrackToStop = previousStream?.getVideoTracks()[0] ?? null;
+          const remainingTracks = previousStream
+            .getTracks()
+            .filter((track) => track.kind !== "video");
+          publishStream = new MediaStream([...remainingTracks, newVideoTrack]);
+          localStreamRef.current = publishStream;
+          setLocalStream(publishStream);
           nextVideoTrack = newVideoTrack;
         }
 
-        const transport = producerTransportRef.current;
         const previousProducer = videoProducerRef.current;
 
-        if (!transport || !nextVideoTrack) {
+        if (!nextVideoTrack) {
+          return;
+        }
+
+        const publishTrack = await waitForPreferredVideoPublishTrack(
+          publishStream,
+          nextVideoTrack,
+        );
+
+        if (previousProducer && !previousProducer.closed) {
+          if (previousProducer.track?.id !== publishTrack.id) {
+            try {
+              await previousProducer.replaceTrack({ track: publishTrack });
+            } catch (err) {
+              if (publishTrack.id === nextVideoTrack.id) throw err;
+              console.warn(
+                "[Meets] Processed quality-switch track failed; retrying raw camera:",
+                err,
+              );
+              await previousProducer.replaceTrack({ track: nextVideoTrack });
+            }
+          }
+          if (
+            oldVideoTrackToStop &&
+            oldVideoTrackToStop !== nextVideoTrack &&
+            oldVideoTrackToStop !== previousProducer.track
+          ) {
+            stopLocalTrack(oldVideoTrackToStop);
+          }
+          return;
+        }
+
+        const transport = producerTransportRef.current;
+        if (!transport) {
           return;
         }
 
         const preferredWebcamCodec = getPreferredWebcamCodec(deviceRef.current);
         const nextProducer = await produceWebcamTrack({
           transport,
-          track: nextVideoTrack,
+          track: publishTrack,
           quality,
           paused: false,
           preferredCodec: preferredWebcamCodec,
@@ -602,6 +778,9 @@ export function useMeetMedia({
             previousProducer.close();
           } catch {}
         }
+        if (oldVideoTrackToStop && oldVideoTrackToStop !== nextVideoTrack) {
+          stopLocalTrack(oldVideoTrackToStop);
+        }
       } catch (err) {
         console.error("[Meets] Failed to update video quality:", err);
       }
@@ -616,6 +795,8 @@ export function useMeetMedia({
       deviceRef,
       producerTransportRef,
       videoProducerRef,
+      localStreamRef,
+      waitForPreferredVideoPublishTrack,
     ]
   );
 
@@ -735,12 +916,47 @@ export function useMeetMedia({
         } catch {}
         const toggleResult = await emitToggleMute(producer.id, false);
         if (!toggleResult.ok) {
-          console.warn(
-            "[Meets] toggleMute failed, restarting audio producer:",
-            toggleResult.error
-          );
-          resetAudioProducer(producer);
-          producer = null;
+          const isTimeout = toggleResult.error === "toggleMute timeout";
+          const producerDead =
+            producer.closed || producer.track?.readyState !== "live";
+          if (isTimeout && !producerDead) {
+            // A slow/lost ACK on a healthy producer does NOT mean the producer
+            // is broken: the SFU resumes its producer from the toggleMute event
+            // itself (reliably delivered), not the ack. Keep the producer and
+            // retry the toggle idempotently rather than recreating it — a
+            // recreate fires producerClosed+newProducer and forces every
+            // listener to re-consume (a multi-RTT audio gap, and a prime cause
+            // of "I unmuted but nobody can hear me").
+            console.warn(
+              "[Meets] unmute ack timed out but producer is healthy — retrying toggle:",
+              toggleResult.error
+            );
+            const retry = await emitToggleMute(producer.id, false);
+            if (!retry.ok) {
+              // The retry ALSO failed (likely a real disconnect/non-delivery,
+              // not just a slow ack). Don't claim "unmuted" over a producer that
+              // may still be paused server-side — recreate so a fresh, resumed
+              // producer is published (or transport.produce() throws and we roll
+              // back to muted below).
+              console.warn(
+                "[Meets] unmute retry also failed — recreating to be safe:",
+                retry.error
+              );
+              resetAudioProducer(producer);
+              producer = null;
+            }
+          } else {
+            // An EXPLICIT server error (e.g. "Microphone producer not found")
+            // or a dead local producer means the SFU has no live producer for
+            // us — keeping it would leave us silently muted server-side. Tear
+            // down + recreate so a fresh producer is published.
+            console.warn(
+              "[Meets] unmute failed (server error / dead producer) — recreating:",
+              toggleResult.error
+            );
+            resetAudioProducer(producer);
+            producer = null;
+          }
         }
       }
 
@@ -934,18 +1150,63 @@ export function useMeetMedia({
 
   const toggleCamera = useCallback(async () => {
     if (ghostEnabled || isObserverMode) return;
-    const producer = videoProducerRef.current;
+    if (toggleCameraInFlightRef.current) return;
+    toggleCameraInFlightRef.current = true;
 
-    if (producer) {
-      const newCameraOff = !isCameraOff;
-      if (newCameraOff) {
-        setIsCameraOff(true);
+    try {
+      const producer = videoProducerRef.current;
+
+      if (producer) {
+        const newCameraOff = !isCameraOff;
+        if (newCameraOff) {
+          setIsCameraOff(true);
+          socketRef.current?.emit(
+            "closeProducer",
+            { producerId: producer.id },
+            (response: { success: boolean } | { error: string }) => {
+              if ("error" in response) {
+                console.error("[Meets] Failed to close video producer:", response);
+              }
+            }
+          );
+          try {
+            producer.close();
+          } catch {}
+          videoProducerRef.current = null;
+
+          setLocalStream((prev) => {
+            if (!prev) return prev;
+            prev.getVideoTracks().forEach((track) => {
+              stopLocalTrack(track);
+            });
+            const remainingTracks = prev
+              .getTracks()
+              .filter((track) => track.kind !== "video");
+            return new MediaStream(remainingTracks);
+          });
+          return;
+        }
+
+        if (producer.track?.readyState === "live") {
+          producer.resume();
+          setIsCameraOff(false);
+          socketRef.current?.emit(
+            "toggleCamera",
+            { producerId: producer.id, paused: false },
+            () => {}
+          );
+          return;
+        }
+
         socketRef.current?.emit(
           "closeProducer",
           { producerId: producer.id },
           (response: { success: boolean } | { error: string }) => {
             if ("error" in response) {
-              console.error("[Meets] Failed to close video producer:", response);
+              console.error(
+                "[Meets] Failed to close stale video producer:",
+                response
+              );
             }
           }
         );
@@ -953,120 +1214,101 @@ export function useMeetMedia({
           producer.close();
         } catch {}
         videoProducerRef.current = null;
+      }
 
-        setLocalStream((prev) => {
-          if (!prev) return prev;
-          prev.getVideoTracks().forEach((track) => {
+      if (isCameraOff) {
+        let createdTrack: MediaStreamTrack | null = null;
+        try {
+          void prewarmVideoEffectsAssets({
+            segmentation: true,
+            face: true,
+            reason: "camera-toggle-live",
+          });
+
+          let transport = producerTransportRef.current;
+          if (!transport || transport.closed) {
+            const transportReady =
+              (await ensureProducerTransportRef?.current?.()) ?? false;
+            transport = producerTransportRef.current;
+            if (!transportReady || !transport || transport.closed) {
+              throw new Error("Video transport unavailable");
+            }
+          }
+          if (!transport) {
+            throw new Error("Video transport unavailable");
+          }
+
+          const stream = await navigator.mediaDevices.getUserMedia({
+            video:
+              videoQualityRef.current === "low"
+                ? LOW_QUALITY_CONSTRAINTS
+                : STANDARD_QUALITY_CONSTRAINTS,
+          });
+          const videoTrack = stream.getVideoTracks()[0];
+          createdTrack = videoTrack ?? null;
+
+          if (!videoTrack) throw new Error("No video track obtained");
+          if ("contentHint" in videoTrack) {
+            videoTrack.contentHint = "motion";
+          }
+          videoTrack.onended = () => {
+            handleLocalTrackEnded("video", videoTrack);
+          };
+
+          const previousStream = localStreamRef.current;
+          previousStream?.getVideoTracks().forEach((track) => {
             stopLocalTrack(track);
           });
-          const remainingTracks = prev
-            .getTracks()
-            .filter((track) => track.kind !== "video");
-          return new MediaStream(remainingTracks);
-        });
-        return;
-      }
+          const remainingTracks =
+            previousStream
+              ?.getTracks()
+              .filter((track) => track.kind !== "video") ?? [];
+          const nextStream = new MediaStream([...remainingTracks, videoTrack]);
+          localStreamRef.current = nextStream;
+          setLocalStream(nextStream);
+          const publishTrack = await waitForPreferredVideoPublishTrack(
+            nextStream,
+            videoTrack,
+          );
 
-      if (producer.track?.readyState === "live") {
-        producer.resume();
-        setIsCameraOff(false);
-        socketRef.current?.emit(
-          "toggleCamera",
-          { producerId: producer.id, paused: false },
-          () => {}
-        );
-        return;
-      }
-
-      socketRef.current?.emit(
-        "closeProducer",
-        { producerId: producer.id },
-        (response: { success: boolean } | { error: string }) => {
-          if ("error" in response) {
-            console.error(
-              "[Meets] Failed to close stale video producer:",
-              response
-            );
-          }
-        }
-      );
-      try {
-        producer.close();
-      } catch {}
-      videoProducerRef.current = null;
-    }
-
-    if (isCameraOff) {
-      let createdTrack: MediaStreamTrack | null = null;
-      try {
-        const transport = producerTransportRef.current;
-        if (!transport) {
-          throw new Error("Video transport unavailable");
-        }
-
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video:
-            videoQualityRef.current === "low"
-              ? LOW_QUALITY_CONSTRAINTS
-              : STANDARD_QUALITY_CONSTRAINTS,
-        });
-        const videoTrack = stream.getVideoTracks()[0];
-        createdTrack = videoTrack ?? null;
-
-        if (!videoTrack) throw new Error("No video track obtained");
-        if ("contentHint" in videoTrack) {
-          videoTrack.contentHint = "motion";
-        }
-        videoTrack.onended = () => {
-          handleLocalTrackEnded("video", videoTrack);
-        };
-
-        setLocalStream((prev) => {
-          if (prev) {
-            prev.getVideoTracks().forEach((track) => {
-              stopLocalTrack(track);
-            });
-            const remainingTracks = prev
-              .getTracks()
-              .filter((track) => track.kind !== "video");
-            return new MediaStream([...remainingTracks, videoTrack]);
-          }
-          return new MediaStream([videoTrack]);
-        });
-
-        const quality = videoQualityRef.current;
-        const preferredWebcamCodec = getPreferredWebcamCodec(deviceRef.current);
-        const videoProducer = await produceWebcamTrack({
-          transport,
-          track: videoTrack,
-          quality,
-          paused: false,
-          preferredCodec: preferredWebcamCodec,
-        });
-
-        videoProducerRef.current = videoProducer;
-        const videoProducerId = videoProducer.id;
-        videoProducer.on("transportclose", () => {
-          if (videoProducerRef.current?.id === videoProducerId) {
-            videoProducerRef.current = null;
-          }
-        });
-        setIsCameraOff(false);
-      } catch (err) {
-        console.error("[Meets] Failed to restart video:", err);
-        if (createdTrack) {
-          stopLocalTrack(createdTrack);
-          setLocalStream((prev) => {
-            if (!prev) return prev;
-            const remaining = prev
-              .getTracks()
-              .filter((track) => track !== createdTrack && track.kind !== "video");
-            return new MediaStream(remaining);
+          const quality = videoQualityRef.current;
+          const preferredWebcamCodec = getPreferredWebcamCodec(deviceRef.current);
+          const videoProducer = await produceWebcamTrack({
+            transport,
+            track: publishTrack,
+            quality,
+            paused: false,
+            preferredCodec: preferredWebcamCodec,
           });
+
+          videoProducerRef.current = videoProducer;
+          const videoProducerId = videoProducer.id;
+          videoProducer.on("transportclose", () => {
+            if (videoProducerRef.current?.id === videoProducerId) {
+              videoProducerRef.current = null;
+            }
+          });
+          setIsCameraOff(false);
+        } catch (err) {
+          console.error("[Meets] Failed to restart video:", err);
+          if (createdTrack) {
+            stopLocalTrack(createdTrack);
+            setLocalStream((prev) => {
+              if (!prev) return prev;
+              const remaining = prev
+                .getTracks()
+                .filter(
+                  (track) => track !== createdTrack && track.kind !== "video",
+                );
+              return new MediaStream(remaining);
+            });
+          }
+          setIsCameraOff(true);
+          setMeetError(createMeetError(err, "MEDIA_ERROR"));
         }
-        setIsCameraOff(true);
-        setMeetError(createMeetError(err, "MEDIA_ERROR"));
       }
+    } finally {
+      toggleCameraInFlightRef.current = false;
     }
   }, [
     ghostEnabled,
@@ -1078,21 +1320,92 @@ export function useMeetMedia({
     deviceRef,
     videoProducerRef,
     producerTransportRef,
+    ensureProducerTransportRef,
     setLocalStream,
+    localStreamRef,
     videoQualityRef,
     setIsCameraOff,
     setMeetError,
+    waitForPreferredVideoPublishTrack,
   ]);
 
   useEffect(() => {
     if (ghostEnabled || isObserverMode) return;
     if (connectionState !== "joined") return;
     if (isCameraOff) return;
-    if (videoProducerRef.current) return;
-    if (cameraRecoveryInFlightRef.current) return;
 
-    const transport = producerTransportRef.current;
-    if (!transport) return;
+    let disposed = false;
+    const requestRecovery = (reason: "initial" | "watchdog") => {
+      if (disposed || cameraRecoveryInFlightRef.current) return;
+
+      const producer = videoProducerRef.current;
+      const producerTrack = producer?.track ?? null;
+      const needsRecovery =
+        !producer || producer.closed || producerTrack?.readyState !== "live";
+      if (!needsRecovery) return;
+
+      if (producer && videoProducerRef.current?.id === producer.id) {
+        try {
+          producer.close();
+        } catch {}
+        videoProducerRef.current = null;
+      }
+
+      console.warn("[Meets] Camera producer recovery triggered:", {
+        reason,
+        hasProducer: Boolean(producer),
+        producerClosed: producer?.closed ?? null,
+        producerId: producer?.id ?? null,
+        trackId: producerTrack?.id ?? null,
+        trackState: producerTrack?.readyState ?? null,
+      });
+      setCameraProducerRecoveryPulse((value) => value + 1);
+    };
+
+    const initialTimeout = window.setTimeout(
+      () => requestRecovery("initial"),
+      250,
+    );
+    const watchdogInterval = window.setInterval(
+      () => requestRecovery("watchdog"),
+      1500,
+    );
+
+    return () => {
+      disposed = true;
+      window.clearTimeout(initialTimeout);
+      window.clearInterval(watchdogInterval);
+    };
+  }, [
+    connectionState,
+    ghostEnabled,
+    isCameraOff,
+    isObserverMode,
+    videoProducerRef,
+  ]);
+
+  useEffect(() => {
+    if (ghostEnabled || isObserverMode) return;
+    if (connectionState !== "joined") return;
+    if (isCameraOff) return;
+    const existingProducer = videoProducerRef.current;
+    const existingTrack = existingProducer?.track ?? null;
+    if (
+      existingProducer &&
+      !existingProducer.closed &&
+      existingTrack?.readyState === "live"
+    ) {
+      return;
+    }
+    if (existingProducer) {
+      try {
+        existingProducer.close();
+      } catch {}
+      if (videoProducerRef.current?.id === existingProducer.id) {
+        videoProducerRef.current = null;
+      }
+    }
+    if (cameraRecoveryInFlightRef.current) return;
 
     let cancelled = false;
     cameraRecoveryInFlightRef.current = true;
@@ -1100,6 +1413,16 @@ export function useMeetMedia({
     const recoverCameraProducer = async () => {
       let createdTrack: MediaStreamTrack | null = null;
       try {
+        let transport = producerTransportRef.current;
+        if (!transport || transport.closed) {
+          const transportReady =
+            (await ensureProducerTransportRef?.current?.()) ?? false;
+          transport = producerTransportRef.current;
+          if (!transportReady || !transport || transport.closed) {
+            throw new Error("Video transport unavailable");
+          }
+        }
+
         let videoTrack = localStreamRef.current?.getVideoTracks()[0] ?? null;
 
         if (!videoTrack || videoTrack.readyState !== "live") {
@@ -1125,25 +1448,30 @@ export function useMeetMedia({
         };
 
         if (createdTrack) {
-          setLocalStream((prev) => {
-            if (prev) {
-              prev.getVideoTracks().forEach((track) => {
-                stopLocalTrack(track);
-              });
-              const remaining = prev
-                .getTracks()
-                .filter((track) => track.kind !== "video");
-              return new MediaStream([...remaining, videoTrack]);
-            }
-            return new MediaStream([videoTrack]);
+          const previousStream = localStreamRef.current;
+          previousStream?.getVideoTracks().forEach((track) => {
+            stopLocalTrack(track);
           });
+          const remainingTracks =
+            previousStream
+              ?.getTracks()
+              .filter((track) => track.kind !== "video") ?? [];
+          const nextStream = new MediaStream([...remainingTracks, videoTrack]);
+          localStreamRef.current = nextStream;
+          setLocalStream(nextStream);
         }
 
+        const publishStream =
+          localStreamRef.current ?? new MediaStream([videoTrack]);
+        const publishTrack = await waitForPreferredVideoPublishTrack(
+          publishStream,
+          videoTrack,
+        );
         const quality = videoQualityRef.current;
         const preferredWebcamCodec = getPreferredWebcamCodec(deviceRef.current);
         const recoveredProducer = await produceWebcamTrack({
           transport,
-          track: videoTrack,
+          track: publishTrack,
           quality,
           paused: false,
           preferredCodec: preferredWebcamCodec,
@@ -1160,8 +1488,10 @@ export function useMeetMedia({
         recoveredProducer.on("transportclose", () => {
           if (videoProducerRef.current?.id === recoveredProducer.id) {
             videoProducerRef.current = null;
+            setCameraProducerRecoveryPulse((value) => value + 1);
           }
         });
+        setIsCameraOff(false);
       } catch (err) {
         console.error("[Meets] Camera producer recovery failed:", err);
         if (!cancelled) {
@@ -1193,6 +1523,7 @@ export function useMeetMedia({
     ghostEnabled,
     isObserverMode,
     connectionState,
+    cameraProducerRecoveryPulse,
     isCameraOff,
     handleLocalTrackEnded,
     stopLocalTrack,
@@ -1200,10 +1531,12 @@ export function useMeetMedia({
     setIsCameraOff,
     setMeetError,
     producerTransportRef,
+    ensureProducerTransportRef,
     deviceRef,
     videoProducerRef,
     localStreamRef,
     videoQualityRef,
+    waitForPreferredVideoPublishTrack,
   ]);
 
   const toggleScreenShare = useCallback(async () => {
@@ -1385,6 +1718,7 @@ export function useMeetMedia({
     showPermissionHint,
     requestMediaPermissions,
     handleAudioInputDeviceChange,
+    handleVideoInputDeviceChange,
     handleAudioOutputDeviceChange,
     updateVideoQuality,
     updateVideoQualityRef,

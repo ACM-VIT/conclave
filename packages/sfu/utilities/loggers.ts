@@ -64,7 +64,7 @@ const shouldLog = (level: LogLevel) => {
 };
 
 export const Logger = {
-  info: (message: string, ...args: any[]) => {
+  info: (message: string, ...args: unknown[]) => {
     if (!shouldLog("info")) return;
     console.log(
       `${colors.dim}${getTimestamp()}${colors.reset} ${PREFIX} ${
@@ -74,7 +74,7 @@ export const Logger = {
     );
   },
 
-  success: (message: string, ...args: any[]) => {
+  success: (message: string, ...args: unknown[]) => {
     if (!shouldLog("info")) return;
     console.log(
       `${colors.dim}${getTimestamp()}${colors.reset} ${PREFIX} ${
@@ -84,7 +84,7 @@ export const Logger = {
     );
   },
 
-  warn: (message: string, ...args: any[]) => {
+  warn: (message: string, ...args: unknown[]) => {
     if (!shouldLog("warn")) return;
     console.warn(
       `${colors.dim}${getTimestamp()}${colors.reset} ${PREFIX} ${
@@ -94,7 +94,7 @@ export const Logger = {
     );
   },
 
-  error: (message: string, ...args: any[]) => {
+  error: (message: string, ...args: unknown[]) => {
     if (!shouldLog("error")) return;
     console.error(
       `${colors.dim}${getTimestamp()}${colors.reset} ${PREFIX} ${
@@ -104,7 +104,7 @@ export const Logger = {
     );
   },
 
-  debug: (message: string, ...args: any[]) => {
+  debug: (message: string, ...args: unknown[]) => {
     if (!shouldLog("debug")) return;
     console.log(
       `${colors.dim}${getTimestamp()}${colors.reset} ${PREFIX} ${

@@ -1,6 +1,5 @@
 import {
   buildScheduledWebinarHeaders,
-  resolveScheduledWebinarsBase,
   type SfuAuthenticatedUser,
 } from "@/lib/sfu-user-auth";
 import { resolveSfuSecret, resolveSfuUrl } from "@/lib/sfu-admin-auth";
@@ -59,6 +58,16 @@ export const buildScheduledMeetingHeaders = (
   user: SfuAuthenticatedUser,
   request: Request,
 ): Headers => buildScheduledWebinarHeaders(user, request);
+
+export const readScheduledMeetingError = async (
+  response: Response,
+): Promise<string> => {
+  const data = await response.json().catch(() => null);
+  if (data && typeof data === "object" && "error" in data) {
+    return String((data as { error?: string }).error || "Request failed");
+  }
+  return response.statusText || "Request failed";
+};
 
 export const lookupPublicScheduledMeetingByRoomCode = async (
   clientId: string,

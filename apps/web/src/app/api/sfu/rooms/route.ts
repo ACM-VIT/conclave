@@ -16,7 +16,7 @@ const resolveClientId = (request: Request) => {
     return envClientId.trim();
   }
 
-  return request.headers.get("x-sfu-client")?.trim() || "";
+  return request.headers.get("x-sfu-client")?.trim() || "public";
 };
 
 export async function GET(request: Request) {

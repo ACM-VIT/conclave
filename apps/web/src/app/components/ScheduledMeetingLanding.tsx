@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import Image from "next/image";
 import { CalendarClock, Copy, Loader2, PlayCircle } from "lucide-react";
 import type { PublicScheduledMeeting } from "@/lib/scheduled-meetings";
 
@@ -34,6 +33,11 @@ const formatScheduledTime = (timestamp: number): string =>
     minute: "2-digit",
   });
 
+const CTA_PRIMARY =
+  "inline-flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-[#F95F4A] text-[15px] font-medium text-white transition-[filter] duration-150 hover:brightness-[1.05] disabled:cursor-not-allowed disabled:opacity-50";
+const CTA_GHOST =
+  "inline-flex h-12 w-full items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] text-[15px] font-medium text-[#fafafa] transition-colors duration-150 hover:bg-white/[0.08]";
+
 export default function ScheduledMeetingLanding({
   meeting,
   viewerIsHost,
@@ -62,10 +66,7 @@ export default function ScheduledMeetingLanding({
 
   useEffect(() => {
     if (!isLive) return;
-    const timeout = setTimeout(() => {
-      window.location.reload();
-    }, 500);
-    return () => clearTimeout(timeout);
+    window.location.reload();
   }, [isLive]);
 
   const handleCopy = useCallback(async () => {
@@ -105,133 +106,86 @@ export default function ScheduledMeetingLanding({
 
   if (meeting.status === "cancelled") {
     return (
-      <div
-        className="relative min-h-dvh bg-[#060606] text-[#FEFCD9] overflow-hidden"
-        style={{ fontFamily: "'PolySans Trial', sans-serif" }}
-      >
-        <div className="absolute inset-0 acm-bg-dot-grid pointer-events-none" />
-        <div className="absolute inset-0 acm-bg-radial pointer-events-none" />
-        <main className="relative z-10 mx-auto flex min-h-dvh w-full max-w-2xl flex-col items-center justify-center px-6 text-center">
-          <p className="text-sm text-[#FEFCD9]/45">scheduled meeting</p>
+      <main className="flex min-h-dvh items-center justify-center bg-[#0a0a0b] px-4 py-10 text-[#fafafa]">
+        <section className="animate-fade-in w-full max-w-lg rounded-2xl border border-white/10 bg-[#0e0e10] p-6 sm:p-8 text-center">
+          <p className="text-[11.5px] font-semibold uppercase tracking-[0.07em] text-[#fafafa]/40">
+            Scheduled meeting
+          </p>
           <h1
-            className="mt-2 text-4xl md:text-5xl text-[#FEFCD9] tracking-tight"
+            className="mt-3 text-[22px] leading-tight text-[#fafafa]"
             style={{ fontFamily: "'PolySans Bulky Wide', sans-serif" }}
           >
-            this meeting was cancelled
+            This meeting was cancelled
           </h1>
-          <p className="mt-3 max-w-md text-sm text-[#FEFCD9]/55">
+          <p className="mt-2 text-[13.5px] leading-snug text-[#fafafa]/55">
             The host called this one off. Reach out to them if you think this
             is a mistake.
           </p>
-        </main>
-      </div>
+        </section>
+      </main>
     );
   }
 
   return (
-    <div
-      className="relative min-h-dvh bg-[#060606] text-[#FEFCD9] overflow-hidden"
-      style={{ fontFamily: "'PolySans Trial', sans-serif" }}
-    >
-      <div className="absolute inset-0 acm-bg-dot-grid pointer-events-none" />
-      <div className="absolute inset-0 acm-bg-radial pointer-events-none" />
-
-      <header className="relative z-10 flex items-center justify-between px-6 py-5">
-        <a href="/" className="flex items-center" aria-label="ACM-VIT">
-          <Image
-            src="/assets/acm_topleft.svg"
-            alt="ACM-VIT"
-            width={120}
-            height={32}
-            priority
-          />
-        </a>
-        <span className="hidden md:inline-flex items-center gap-2 text-xs text-[#FEFCD9]/45">
+    <main className="flex min-h-dvh items-center justify-center bg-[#0a0a0b] px-4 py-10 text-[#fafafa]">
+      <section className="animate-fade-in w-full max-w-lg rounded-2xl border border-white/10 bg-[#0e0e10] p-6 sm:p-8 text-center">
+        <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-[12px] text-[#fafafa]/55">
           <CalendarClock className="h-3.5 w-3.5" />
-          scheduled meeting
-        </span>
-      </header>
+          Scheduled meeting
+        </div>
 
-      <main className="relative z-[5] mx-auto flex min-h-[calc(100dvh-72px)] w-full max-w-3xl flex-col items-center justify-center px-6 pb-24 text-center">
-        <p className="text-sm text-[#FEFCD9]/45">starts in</p>
-        <h1
-          className="mt-3 text-6xl md:text-7xl text-[#FEFCD9] tracking-tight tabular-nums"
+        <p className="text-[11.5px] font-semibold uppercase tracking-[0.07em] text-[#fafafa]/40">
+          Starts in
+        </p>
+        <p
+          className="mt-2 text-[44px] leading-none tabular-nums text-[#fafafa] sm:text-[52px]"
           style={{ fontFamily: "'PolySans Bulky Wide', sans-serif" }}
         >
           {formatCountdown(remaining)}
-        </h1>
-        <p className="mt-6 text-lg md:text-xl text-[#FEFCD9]/85 max-w-2xl">
-          {meeting.title}
-        </p>
-        <p className="mt-2 text-sm text-[#FEFCD9]/55">
-          {formatScheduledTime(meeting.scheduledStartAt)}
-          {meeting.hostName ? ` · hosted by ${meeting.hostName}` : ""}
         </p>
 
-        <div className="mt-10 flex flex-col items-center gap-3">
+        <h1 className="mt-6 text-[20px] font-medium leading-snug text-[#fafafa]">
+          {meeting.title}
+        </h1>
+        <p className="mt-2 text-[13.5px] text-[#fafafa]/55">
+          {formatScheduledTime(meeting.scheduledStartAt)}
+          {meeting.hostName ? ` · Hosted by ${meeting.hostName}` : ""}
+        </p>
+
+        <div className="mt-8 flex flex-col gap-2.5">
           {viewerIsHost && !isLive && (
             <button
               type="button"
               onClick={() => void handleStartNow()}
               disabled={isStarting}
-              className="inline-flex items-center gap-2 rounded-lg bg-[#F95F4A] px-5 py-2.5 text-sm text-white transition-all hover:bg-[#e8553f] hover:gap-3 disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:gap-2"
+              className={CTA_PRIMARY}
             >
               {isStarting ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
               ) : (
                 <PlayCircle className="h-4 w-4" />
               )}
-              <span>{isStarting ? "Starting…" : "Start the meeting now"}</span>
+              {isStarting ? "Starting..." : "Start the meeting now"}
             </button>
           )}
           {isLive && (
             <a
               href={`/${encodeURIComponent(meeting.roomCode)}`}
-              className="inline-flex items-center gap-2 rounded-lg bg-[#F95F4A] px-5 py-2.5 text-sm text-white transition-all hover:bg-[#e8553f] hover:gap-3"
+              className={CTA_PRIMARY}
             >
-              Open the meeting →
+              Open the meeting
             </a>
           )}
-          <button
-            type="button"
-            onClick={() => void handleCopy()}
-            className="inline-flex items-center gap-2 rounded-lg border border-[#FEFCD9]/15 px-4 py-2 text-xs text-[#FEFCD9]/75 transition hover:border-[#FEFCD9]/35 hover:text-[#FEFCD9]"
-          >
-            <Copy className="h-3.5 w-3.5" />
-            {copied ? "copied" : "copy share link"}
+          <button type="button" onClick={() => void handleCopy()} className={CTA_GHOST}>
+            <Copy className="h-4 w-4" />
+            {copied ? "Copied" : "Copy share link"}
           </button>
         </div>
 
-        {startError && (
-          <p className="mt-4 text-xs text-[#F95F4A]">{startError}</p>
-        )}
-
-        <footer className="mt-16 flex flex-col items-center text-[#FEFCD9]/30">
-          <div className="relative inline-block">
-            <span
-              className="absolute -left-5 top-1/2 -translate-y-1/2 text-[#F95F4A]/40 text-2xl"
-              style={{ fontFamily: "'PolySans Mono', monospace" }}
-            >
-              [
-            </span>
-            <span
-              className="text-2xl text-[#FEFCD9]/65 tracking-tight"
-              style={{ fontFamily: "'PolySans Bulky Wide', sans-serif" }}
-            >
-              c0nclav3
-            </span>
-            <span
-              className="absolute -right-5 top-1/2 -translate-y-1/2 text-[#F95F4A]/40 text-2xl"
-              style={{ fontFamily: "'PolySans Mono', monospace" }}
-            >
-              ]
-            </span>
-          </div>
-          <p className="mt-3 text-xs text-[#FEFCD9]/30">
-            video conferencing by ACM-VIT
-          </p>
-        </footer>
-      </main>
-    </div>
+        {startError ? (
+          <p className="mt-4 text-[13px] text-[#F95F4A]">{startError}</p>
+        ) : null}
+      </section>
+    </main>
   );
 }

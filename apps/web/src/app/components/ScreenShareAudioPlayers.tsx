@@ -5,6 +5,7 @@ import type { Participant } from "../lib/types";
 
 interface ScreenShareAudioPlayersProps {
   participants: Map<string, Participant>;
+  currentUserId: string;
   audioOutputDeviceId?: string;
   onAutoplayBlocked?: () => void;
   onPlaybackStarted?: () => void;
@@ -13,13 +14,15 @@ interface ScreenShareAudioPlayersProps {
 
 function ScreenShareAudioPlayers({
   participants,
+  currentUserId,
   audioOutputDeviceId,
   onAutoplayBlocked,
   onPlaybackStarted,
   playbackAttemptToken,
 }: ScreenShareAudioPlayersProps) {
   const screenShareAudioParticipants = Array.from(participants.values()).filter(
-    (participant) => participant.screenShareAudioStream
+    (participant) =>
+      participant.userId !== currentUserId && participant.screenShareAudioStream
   );
 
   return (
@@ -78,9 +81,22 @@ function ScreenShareAudioPlayer({
 
   useEffect(() => {
     const audio = audioRef.current;
-    if (!audio || !stream) return;
+    if (!audio) return;
+
+    if (!stream) {
+      if (audio.srcObject) {
+        audio.srcObject = null;
+      }
+      return;
+    }
+
     audio.srcObject = stream;
     attemptPlay();
+    return () => {
+      if (audio.srcObject === stream) {
+        audio.srcObject = null;
+      }
+    };
   }, [stream, attemptPlay]);
 
   useEffect(() => {

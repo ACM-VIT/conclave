@@ -1,5 +1,11 @@
-import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync } from "node:fs";
+import { randomBytes, randomUUID } from "node:crypto";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  writeFileSync,
+} from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 import type {
@@ -301,6 +307,8 @@ export const listScheduledMeetings = (
 
 export type ScheduledMeetingPersistence = {
   save: (snapshot: ScheduledMeeting[]) => void;
+  saveChanged?: (meetings: ScheduledMeeting[]) => void;
+  deleteIds?: (ids: string[]) => void;
   load: () => ScheduledMeeting[];
   close?: () => void;
 };
@@ -315,6 +323,22 @@ const scheduledMeetingsSqlitePath = (): string => {
     return resolve(recordingStoragePath, "conclave.sqlite");
   }
   return resolve(process.cwd(), "data", "conclave.sqlite");
+};
+
+const scheduledMeetingsPath = (): string => {
+  const configured = process.env.SCHEDULED_MEETINGS_PATH?.trim();
+  if (configured) return resolve(configured);
+  return resolve(process.cwd(), "data", "scheduled-meetings.json");
+};
+
+const writeJsonAtomic = (path: string, data: string): void => {
+  const dir = dirname(path);
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true });
+  }
+  const tmp = `${path}.${randomBytes(4).toString("hex")}.tmp`;
+  writeFileSync(tmp, data, "utf8");
+  renameSync(tmp, path);
 };
 
 type SqliteStatement = {
@@ -337,45 +361,47 @@ const loadNodeSqlite = (): {
   };
 };
 
-const normalizeStoredMeeting = (raw: any): ScheduledMeeting | null => {
-  if (!raw || typeof raw !== "object") return null;
-  if (typeof raw.id !== "string" || !raw.id) return null;
-  if (typeof raw.clientId !== "string" || !raw.clientId) return null;
-  if (typeof raw.roomCode !== "string" || !raw.roomCode) return null;
-  if (typeof raw.hostEmail !== "string" || !raw.hostEmail) return null;
-  const scheduledStartAt = Number(raw.scheduledStartAt);
+const normalizeStoredMeeting = (raw: unknown): ScheduledMeeting | null => {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const record = raw as Record<string, unknown>;
+  if (typeof record.id !== "string" || !record.id) return null;
+  if (typeof record.clientId !== "string" || !record.clientId) return null;
+  if (typeof record.roomCode !== "string" || !record.roomCode) return null;
+  if (typeof record.hostEmail !== "string" || !record.hostEmail) return null;
+  const scheduledStartAt = Number(record.scheduledStartAt);
   if (!Number.isFinite(scheduledStartAt)) return null;
-  const scheduledEndAt = Number.isFinite(Number(raw.scheduledEndAt))
-    ? Number(raw.scheduledEndAt)
+  const scheduledEndAt = Number.isFinite(Number(record.scheduledEndAt))
+    ? Number(record.scheduledEndAt)
     : scheduledStartAt + DEFAULT_DURATION_MS;
+  const rawStatus = record.status;
   const status: ScheduledMeetingStatus =
-    raw.status === "live" ||
-    raw.status === "ended" ||
-    raw.status === "cancelled"
-      ? raw.status
+    rawStatus === "live" ||
+    rawStatus === "ended" ||
+    rawStatus === "cancelled"
+      ? rawStatus
       : "scheduled";
   const now = Date.now();
   return {
-    id: raw.id,
-    clientId: raw.clientId,
-    roomCode: raw.roomCode,
-    title: typeof raw.title === "string" ? raw.title : "Scheduled meeting",
-    hostEmail: raw.hostEmail,
-    hostName: typeof raw.hostName === "string" ? raw.hostName : "",
-    hostUserId: typeof raw.hostUserId === "string" ? raw.hostUserId : null,
+    id: record.id,
+    clientId: record.clientId,
+    roomCode: record.roomCode,
+    title: typeof record.title === "string" ? record.title : "Scheduled meeting",
+    hostEmail: record.hostEmail,
+    hostName: typeof record.hostName === "string" ? record.hostName : "",
+    hostUserId: typeof record.hostUserId === "string" ? record.hostUserId : null,
     scheduledStartAt,
     scheduledEndAt,
     status,
-    startedAt: Number.isFinite(Number(raw.startedAt))
-      ? Number(raw.startedAt)
+    startedAt: Number.isFinite(Number(record.startedAt))
+      ? Number(record.startedAt)
       : null,
-    endedAt: Number.isFinite(Number(raw.endedAt)) ? Number(raw.endedAt) : null,
-    createdAt: Number.isFinite(Number(raw.createdAt))
-      ? Number(raw.createdAt)
+    endedAt: Number.isFinite(Number(record.endedAt)) ? Number(record.endedAt) : null,
+    createdAt: Number.isFinite(Number(record.createdAt))
+      ? Number(record.createdAt)
       : now,
-    createdBy: typeof raw.createdBy === "string" ? raw.createdBy : raw.hostEmail,
-    updatedAt: Number.isFinite(Number(raw.updatedAt))
-      ? Number(raw.updatedAt)
+    createdBy: typeof record.createdBy === "string" ? record.createdBy : record.hostEmail,
+    updatedAt: Number.isFinite(Number(record.updatedAt))
+      ? Number(record.updatedAt)
       : now,
   };
 };
@@ -431,22 +457,26 @@ export const createSqliteScheduledMeetingPersistence = (
   const deleteById = db.prepare("DELETE FROM scheduled_meetings WHERE id = ?");
   let knownIds = new Set<string>();
 
+  const upsertMeeting = (meeting: ScheduledMeeting): void => {
+    insert.run(
+      meeting.id,
+      meeting.clientId,
+      meeting.roomCode,
+      meeting.status,
+      meeting.scheduledStartAt,
+      meeting.scheduledEndAt,
+      meeting.updatedAt,
+      JSON.stringify(meeting),
+    );
+  };
+
   return {
     save: (snapshot) => {
       try {
         const snapshotIds = new Set(snapshot.map((meeting) => meeting.id));
         db.exec("BEGIN IMMEDIATE");
         for (const meeting of snapshot) {
-          insert.run(
-            meeting.id,
-            meeting.clientId,
-            meeting.roomCode,
-            meeting.status,
-            meeting.scheduledStartAt,
-            meeting.scheduledEndAt,
-            meeting.updatedAt,
-            JSON.stringify(meeting),
-          );
+          upsertMeeting(meeting);
         }
         for (const id of knownIds) {
           if (!snapshotIds.has(id)) {
@@ -458,10 +488,40 @@ export const createSqliteScheduledMeetingPersistence = (
       } catch (error) {
         try {
           db.exec("ROLLBACK");
-        } catch {
-          // ignore rollback failures
-        }
+        } catch {}
         Logger.error("Failed to persist scheduled meetings", error);
+      }
+    },
+    saveChanged: (meetings) => {
+      if (meetings.length === 0) return;
+      try {
+        db.exec("BEGIN IMMEDIATE");
+        for (const meeting of meetings) {
+          upsertMeeting(meeting);
+          knownIds.add(meeting.id);
+        }
+        db.exec("COMMIT");
+      } catch (error) {
+        try {
+          db.exec("ROLLBACK");
+        } catch {}
+        Logger.error("Failed to persist changed scheduled meetings", error);
+      }
+    },
+    deleteIds: (ids) => {
+      if (ids.length === 0) return;
+      try {
+        db.exec("BEGIN IMMEDIATE");
+        for (const id of ids) {
+          deleteById.run(id);
+          knownIds.delete(id);
+        }
+        db.exec("COMMIT");
+      } catch (error) {
+        try {
+          db.exec("ROLLBACK");
+        } catch {}
+        Logger.error("Failed to delete scheduled meetings", error);
       }
     },
     load: () => {
@@ -488,6 +548,77 @@ export const createSqliteScheduledMeetingPersistence = (
   };
 };
 
+export const createFileScheduledMeetingPersistence = (
+  path: string = scheduledMeetingsPath(),
+): ScheduledMeetingPersistence => ({
+  save: (snapshot) => {
+    try {
+      writeJsonAtomic(path, JSON.stringify(snapshot, null, 2));
+    } catch (error) {
+      Logger.error("Failed to persist scheduled meetings to JSON", error);
+    }
+  },
+  load: () => {
+    try {
+      if (!existsSync(path)) return [];
+      const raw = readFileSync(path, "utf8");
+      const data = JSON.parse(raw);
+      if (!Array.isArray(data)) return [];
+      return data
+        .map((entry) => normalizeStoredMeeting(entry))
+        .filter((entry): entry is ScheduledMeeting => Boolean(entry));
+    } catch (error) {
+      Logger.error("Failed to load scheduled meetings from JSON", error);
+      return [];
+    }
+  },
+});
+
+const migrateJsonScheduledMeetingsToSqlite = (
+  sqlite: ScheduledMeetingPersistence,
+  json: ScheduledMeetingPersistence,
+): number => {
+  const existing = sqlite.load();
+  if (existing.length > 0) return 0;
+
+  const legacy = json.load();
+  if (legacy.length === 0) return 0;
+
+  sqlite.save(legacy);
+  return sqlite.load().length;
+};
+
+export const createScheduledMeetingPersistence = (): ScheduledMeetingPersistence => {
+  const mode = process.env.SCHEDULED_MEETINGS_PERSISTENCE?.trim().toLowerCase();
+  if (mode === "json" || mode === "file") {
+    return createFileScheduledMeetingPersistence();
+  }
+
+  const jsonPersistence = createFileScheduledMeetingPersistence();
+
+  try {
+    const sqlitePersistence = createSqliteScheduledMeetingPersistence();
+    const migrated = migrateJsonScheduledMeetingsToSqlite(
+      sqlitePersistence,
+      jsonPersistence,
+    );
+    if (migrated > 0) {
+      Logger.info(
+        `Migrated ${migrated} scheduled meeting(s) from JSON into SQLite`,
+      );
+    }
+    return sqlitePersistence;
+  } catch (error) {
+    if (mode === "sqlite") {
+      throw error;
+    }
+    Logger.warn(
+      `SQLite scheduled-meeting persistence unavailable; falling back to JSON: ${(error as Error).message}`,
+    );
+    return jsonPersistence;
+  }
+};
+
 export const loadPersistedMeetings = (
   store: ScheduledMeetingStore,
   persistence: ScheduledMeetingPersistence,
@@ -506,22 +637,48 @@ export const persistScheduledMeetings = (
   persistence.save(Array.from(store.byId.values()));
 };
 
+export const persistScheduledMeetingChanges = (
+  store: ScheduledMeetingStore,
+  persistence: ScheduledMeetingPersistence,
+  meetings: ScheduledMeeting[],
+): void => {
+  if (meetings.length === 0) return;
+  if (persistence.saveChanged) {
+    persistence.saveChanged(meetings);
+    return;
+  }
+  persistScheduledMeetings(store, persistence);
+};
+
+export const persistScheduledMeetingDeletes = (
+  store: ScheduledMeetingStore,
+  persistence: ScheduledMeetingPersistence,
+  ids: string[],
+): void => {
+  if (ids.length === 0) return;
+  if (persistence.deleteIds) {
+    persistence.deleteIds(ids);
+    return;
+  }
+  persistScheduledMeetings(store, persistence);
+};
+
 export const advanceScheduledMeetings = (
   store: ScheduledMeetingStore,
   now = Date.now(),
-): number => {
-  let changed = 0;
+): ScheduledMeeting[] => {
+  const changed: ScheduledMeeting[] = [];
   for (const meeting of store.byId.values()) {
     if (meeting.status === "scheduled" && now >= meeting.scheduledStartAt) {
       meeting.status = "live";
       if (!meeting.startedAt) meeting.startedAt = now;
       meeting.updatedAt = now;
-      changed += 1;
+      changed.push(meeting);
     } else if (meeting.status === "live" && now >= meeting.scheduledEndAt) {
       meeting.status = "ended";
       if (!meeting.endedAt) meeting.endedAt = now;
       meeting.updatedAt = now;
-      changed += 1;
+      changed.push(meeting);
     }
   }
   return changed;

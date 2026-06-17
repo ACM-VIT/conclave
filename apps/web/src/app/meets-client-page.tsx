@@ -32,7 +32,6 @@ type MeetsClientPageProps = {
   initialRoomId?: string;
   forceJoinOnly?: boolean;
   bypassMediaPermissions?: boolean;
-  broadcastMode?: boolean;
   sfuClientId?: string;
   joinMode?: JoinMode;
   autoJoinOnMount?: boolean;
@@ -50,7 +49,6 @@ export default function MeetsClientPage({
   initialRoomId,
   forceJoinOnly = false,
   bypassMediaPermissions = false,
-  broadcastMode = false,
   sfuClientId,
   joinMode = "meeting",
   autoJoinOnMount = false,
@@ -120,14 +118,13 @@ export default function MeetsClientPage({
     initialRoomId ?? (isPublicClient ? "" : "default-room");
 
   return (
-    <div className="w-full h-full min-h-screen bg-[#060606] overflow-auto relative">
+    <div className="w-full h-full min-h-screen bg-[#0a0a0b] overflow-auto relative">
       <MeetsClient
         initialRoomId={resolvedInitialRoomId}
         enableRoomRouting={isPublicClient}
         forceJoinOnly={forceJoinOnly}
         allowGhostMode={!isPublicClient}
         bypassMediaPermissions={bypassMediaPermissions}
-        broadcastMode={broadcastMode}
         joinMode={joinMode}
         autoJoinOnMount={autoJoinOnMount}
         hideJoinUI={hideJoinUI}

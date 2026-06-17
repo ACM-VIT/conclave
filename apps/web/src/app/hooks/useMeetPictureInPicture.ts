@@ -41,8 +41,13 @@ export function useMeetPictureInPicture({
 
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
     const videoRef = useRef<HTMLVideoElement | null>(null);
+    const pipVideoRef = useRef<HTMLVideoElement | null>(null);
+    const canvasStreamRef = useRef<MediaStream | null>(null);
     const animationFrameRef = useRef<number | null>(null);
     const pipWindowRef = useRef<PictureInPictureWindow | null>(null);
+    const pipWindowResizeHandlerRef = useRef<(() => void) | null>(null);
+    const pipLeaveHandlerRef = useRef<(() => void) | null>(null);
+    const avatarImagesRef = useRef<Map<string, HTMLImageElement>>(new Map());
     const manualExitRef = useRef(false);
     const lastRemoteSpeakerRef = useRef<string | null>(null);
 
@@ -52,8 +57,6 @@ export function useMeetPictureInPicture({
         }
     }, [activeSpeakerId, currentUserId]);
 
-    // Check PiP support on mount
-    // Disable legacy canvas PiP if Document PiP is available (the new popout is better)
     useEffect(() => {
         const hasDocumentPiP =
             typeof window !== "undefined" && "documentPictureInPicture" in window;
@@ -65,14 +68,11 @@ export function useMeetPictureInPicture({
         setIsPiPSupported(supported);
     }, []);
 
-    // Get the current video source to display
     const getVideoSource = useCallback((): { stream: MediaStream | null; name: string } => {
-        // Priority 1: Presentation/screen share
         if (presentationStream) {
             return { stream: presentationStream, name: presenterName };
         }
 
-        // Priority 2: Active speaker (prefer remote)
         if (activeSpeakerId && activeSpeakerId !== currentUserId) {
             const speakerParticipant = participants.get(activeSpeakerId);
             return {
@@ -81,7 +81,6 @@ export function useMeetPictureInPicture({
             };
         }
 
-        // Priority 3: Last remote speaker (fallback when local is active)
         if (lastRemoteSpeakerRef.current) {
             const lastSpeakerId = lastRemoteSpeakerRef.current;
             if (lastSpeakerId !== currentUserId) {
@@ -93,7 +92,6 @@ export function useMeetPictureInPicture({
             }
         }
 
-        // Priority 4: First remote participant with video
         for (const [userId, participant] of participants) {
             if (userId === currentUserId) continue;
             if (participant.videoStream && !participant.isCameraOff) {
@@ -101,13 +99,11 @@ export function useMeetPictureInPicture({
             }
         }
 
-        // Priority 5: Any remote participant (even without video)
         for (const [userId] of participants) {
             if (userId === currentUserId) continue;
             return { stream: null, name: getDisplayName(userId) };
         }
 
-        // Priority 6: Local stream (self)
         if (localStream && !isCameraOff) {
             return { stream: localStream, name: "You" };
         }
@@ -124,9 +120,67 @@ export function useMeetPictureInPicture({
         getDisplayName,
     ]);
 
+    const getAvatarImage = useCallback((name: string) => {
+        if (typeof Image === "undefined") return null;
+
+        const src = avatarUrl(name || userEmail);
+        let image = avatarImagesRef.current.get(src);
+
+        if (!image) {
+            image = new Image();
+            image.decoding = "async";
+            image.src = src;
+            avatarImagesRef.current.set(src, image);
+        }
+
+        return image.complete && image.naturalWidth > 0 ? image : null;
+    }, [userEmail]);
+
     const canEnterPiP = isPiPSupported && isJoined;
 
-    // Render video to canvas with name overlay
+    const stopRenderLoop = useCallback(() => {
+        if (animationFrameRef.current !== null) {
+            cancelAnimationFrame(animationFrameRef.current);
+            animationFrameRef.current = null;
+        }
+    }, []);
+
+    const cleanupPiPResources = useCallback(() => {
+        stopRenderLoop();
+
+        if (videoRef.current?.srcObject) {
+            videoRef.current.srcObject = null;
+        }
+
+        if (pipWindowRef.current && pipWindowResizeHandlerRef.current) {
+            pipWindowRef.current.removeEventListener(
+                "resize",
+                pipWindowResizeHandlerRef.current,
+            );
+            pipWindowResizeHandlerRef.current = null;
+        }
+
+        if (pipVideoRef.current) {
+            if (pipLeaveHandlerRef.current) {
+                pipVideoRef.current.removeEventListener(
+                    "leavepictureinpicture",
+                    pipLeaveHandlerRef.current,
+                );
+                pipLeaveHandlerRef.current = null;
+            }
+            pipVideoRef.current.srcObject = null;
+            pipVideoRef.current.remove();
+            pipVideoRef.current = null;
+        }
+
+        if (canvasStreamRef.current) {
+            canvasStreamRef.current.getTracks().forEach((track) => track.stop());
+            canvasStreamRef.current = null;
+        }
+
+        pipWindowRef.current = null;
+    }, [stopRenderLoop]);
+
     const renderFrame = useCallback(() => {
         const canvas = canvasRef.current;
         const video = videoRef.current;
@@ -148,9 +202,7 @@ export function useMeetPictureInPicture({
             video.srcObject = null;
         }
 
-        // Draw video frame
         if (video.readyState >= 2) {
-            // Maintain aspect ratio
             const videoAspect = video.videoWidth / video.videoHeight;
             const canvasAspect = canvas.width / canvas.height;
 
@@ -167,18 +219,16 @@ export function useMeetPictureInPicture({
                 offsetX = (canvas.width - drawWidth) / 2;
             }
 
-            ctx.fillStyle = "#0d0e0d";
+            ctx.fillStyle = "#131316";
             ctx.fillRect(0, 0, canvas.width, canvas.height);
             ctx.drawImage(video, offsetX, offsetY, drawWidth, drawHeight);
 
-            // Draw name overlay
             if (name) {
                 const padding = 8;
                 const fontSize = 14;
                 ctx.font = `500 ${fontSize}px sans-serif`;
                 const textWidth = ctx.measureText(name).width;
 
-                // Background pill
                 ctx.fillStyle = "rgba(13, 14, 13, 0.8)";
                 const pillHeight = fontSize + padding * 2;
                 const pillWidth = textWidth + padding * 2;
@@ -189,49 +239,63 @@ export function useMeetPictureInPicture({
                 ctx.roundRect(pillX, pillY, pillWidth, pillHeight, pillHeight / 2);
                 ctx.fill();
 
-                // Text
-                ctx.fillStyle = "#FEFCD9";
+                ctx.fillStyle = "#fafafa";
                 ctx.fillText(name, pillX + padding, pillY + fontSize + padding / 2);
             }
         } else {
-            // No video - show placeholder
-            ctx.fillStyle = "#0d0e0d";
+            ctx.fillStyle = "#131316";
             ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-            // Draw circle with initial
             const centerX = canvas.width / 2;
             const centerY = canvas.height / 2;
             const radius = 40;
+            const avatarImage = getAvatarImage(name || userEmail);
 
             ctx.beginPath();
             ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
-            ctx.fillStyle = "rgba(249, 95, 74, 0.2)";
-            ctx.fill();
-            ctx.strokeStyle = "rgba(254, 252, 217, 0.2)";
+            ctx.save();
+            ctx.clip();
+
+            if (avatarImage) {
+                ctx.drawImage(
+                    avatarImage,
+                    centerX - radius,
+                    centerY - radius,
+                    radius * 2,
+                    radius * 2,
+                );
+            } else {
+                ctx.fillStyle = "#F95F4A";
+                ctx.fillRect(centerX - radius, centerY - radius, radius * 2, radius * 2);
+                ctx.fillStyle = "rgba(255, 255, 255, 0.9)";
+                ctx.beginPath();
+                ctx.arc(centerX - 14, centerY - 8, 6, 0, Math.PI * 2);
+                ctx.arc(centerX + 14, centerY - 8, 6, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.lineWidth = 4;
+                ctx.strokeStyle = "rgba(255, 255, 255, 0.9)";
+                ctx.beginPath();
+                ctx.arc(centerX, centerY + 4, 14, 0.15 * Math.PI, 0.85 * Math.PI);
+                ctx.stroke();
+            }
+
+            ctx.restore();
+            ctx.beginPath();
+            ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
+            ctx.strokeStyle = "rgba(250, 250, 250, 0.2)";
             ctx.lineWidth = 2;
             ctx.stroke();
-
-            // Initial letter
-            const initial = (name || userEmail || "?")[0]?.toUpperCase() || "?";
-            ctx.fillStyle = "#FEFCD9";
-            ctx.font = "bold 32px sans-serif";
-            ctx.textAlign = "center";
-            ctx.textBaseline = "middle";
-            ctx.fillText(initial, centerX, centerY);
-            ctx.textAlign = "start";
         }
 
         animationFrameRef.current = requestAnimationFrame(renderFrame);
-    }, [getVideoSource, userEmail]);
+    }, [getAvatarImage, getVideoSource, userEmail]);
 
-    // Enter PiP mode
     const enterPiP = useCallback(async () => {
         if (!isPiPSupported || !isJoined || isPiPActive) return;
 
         manualExitRef.current = false;
 
         try {
-            // Create canvas if not exists
             if (!canvasRef.current) {
                 const canvas = document.createElement("canvas");
                 canvas.width = 320;
@@ -239,7 +303,6 @@ export function useMeetPictureInPicture({
                 canvasRef.current = canvas;
             }
 
-            // Create hidden video element for source
             if (!videoRef.current) {
                 const video = document.createElement("video");
                 video.muted = true;
@@ -247,19 +310,18 @@ export function useMeetPictureInPicture({
                 videoRef.current = video;
             }
 
-            // Start rendering
             if (animationFrameRef.current === null) {
                 animationFrameRef.current = requestAnimationFrame(renderFrame);
             }
 
-            // Create a video element from canvas stream
             const canvasStream = canvasRef.current.captureStream(30);
+            canvasStreamRef.current = canvasStream;
             const pipVideo = document.createElement("video");
+            pipVideoRef.current = pipVideo;
             pipVideo.srcObject = canvasStream;
             pipVideo.muted = true;
             pipVideo.playsInline = true;
 
-            // Need to add to DOM briefly for PiP to work in some browsers
             pipVideo.style.position = "fixed";
             pipVideo.style.opacity = "0";
             pipVideo.style.pointerEvents = "none";
@@ -273,33 +335,38 @@ export function useMeetPictureInPicture({
             pipWindowRef.current = pipWindow;
             setIsPiPActive(true);
 
-            pipWindow.addEventListener("resize", () => {
+            const handleResize = () => {
                 if (canvasRef.current) {
                     canvasRef.current.width = pipWindow.width;
                     canvasRef.current.height = pipWindow.height;
                 }
-            });
+            };
+            pipWindowResizeHandlerRef.current = handleResize;
+            pipWindow.addEventListener("resize", handleResize);
 
-            pipVideo.addEventListener("leavepictureinpicture", () => {
+            const handleLeavePictureInPicture = () => {
                 setIsPiPActive(false);
-                pipWindowRef.current = null;
                 manualExitRef.current = true;
-
-                // Clean up
-                if (animationFrameRef.current !== null) {
-                    cancelAnimationFrame(animationFrameRef.current);
-                    animationFrameRef.current = null;
-                }
-
-                pipVideo.remove();
-            });
+                cleanupPiPResources();
+            };
+            pipLeaveHandlerRef.current = handleLeavePictureInPicture;
+            pipVideo.addEventListener(
+                "leavepictureinpicture",
+                handleLeavePictureInPicture,
+            );
 
         } catch (err) {
+            cleanupPiPResources();
             console.warn("[PiP] Failed to enter Picture-in-Picture:", err);
         }
-    }, [isPiPSupported, isJoined, isPiPActive, renderFrame]);
+    }, [
+        isPiPSupported,
+        isJoined,
+        isPiPActive,
+        renderFrame,
+        cleanupPiPResources,
+    ]);
 
-    // Exit PiP mode
     const exitPiP = useCallback(async () => {
         if (!isPiPActive) return;
 
@@ -312,10 +379,9 @@ export function useMeetPictureInPicture({
         }
 
         setIsPiPActive(false);
-        pipWindowRef.current = null;
-    }, [isPiPActive]);
+        cleanupPiPResources();
+    }, [isPiPActive, cleanupPiPResources]);
 
-    // Auto-enter PiP when tab becomes hidden
     useEffect(() => {
         if (!isPiPSupported || !isJoined) return;
 
@@ -333,19 +399,15 @@ export function useMeetPictureInPicture({
         };
     }, [isPiPSupported, isJoined, isPiPActive, enterPiP, exitPiP]);
 
-    // Cleanup on unmount or when leaving room
     useEffect(() => {
         return () => {
-            if (animationFrameRef.current !== null) {
-                cancelAnimationFrame(animationFrameRef.current);
-            }
+            cleanupPiPResources();
             if (document.pictureInPictureElement) {
                 document.exitPictureInPicture().catch(() => { });
             }
         };
-    }, []);
+    }, [cleanupPiPResources]);
 
-    // Exit PiP when leaving room
     useEffect(() => {
         if (!isJoined && isPiPActive) {
             exitPiP();
@@ -359,4 +421,14 @@ export function useMeetPictureInPicture({
         enterPiP,
         exitPiP,
     };
+}
+
+function avatarUrl(name: string) {
+    const params = new URLSearchParams({
+        format: "svg",
+        name: name || "?",
+        showInitial: "false",
+        size: "96",
+    });
+    return `/api/avatar?${params.toString()}`;
 }

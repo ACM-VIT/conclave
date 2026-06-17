@@ -3,13 +3,22 @@ import type { Server as SocketIOServer } from "socket.io";
 import { Admin } from "../../config/classes/Admin.js";
 import type {
   Client,
+  ConsumerTelemetrySnapshot,
   ProducerKey,
   ProducerType,
 } from "../../config/classes/Client.js";
 import type { Room } from "../../config/classes/Room.js";
-import { getRoomChannelId } from "../rooms.js";
+import type { AppsAwarenessData } from "../../types.js";
+import { isGuestUserKey } from "../identity.js";
+import { cleanupRoom, getRoomChannelId } from "../rooms.js";
+import { emitUserLeft } from "../notifications.js";
 import type { SfuState } from "../state.js";
-import { emitWebinarFeedChanged } from "../webinarNotifications.js";
+import {
+  emitWebinarAttendeeCountChanged,
+  emitWebinarFeedChanged,
+} from "../webinarNotifications.js";
+import type { ConnectionContext } from "../socket/context.js";
+import { registerAdminHandlers } from "../socket/handlers/adminHandlers.js";
 
 type ParticipantRole = "host" | "admin" | "participant" | "ghost" | "attendee";
 
@@ -32,6 +41,7 @@ export type ParticipantSnapshot = {
     paused: boolean;
   }>;
   consumerCount: number;
+  consumers: ConsumerTelemetrySnapshot[];
 };
 
 export type PendingUserSnapshot = {
@@ -138,6 +148,104 @@ export type RoomPolicyUpdate = {
 
 type ProducerInfo = ReturnType<Client["getProducerInfos"]>[number];
 
+const promoteNextAdmin = (room: Room): Admin | null => {
+  for (const client of room.clients.values()) {
+    if (client instanceof Admin || client.isObserver) {
+      continue;
+    }
+    const promoted = room.promoteClientToAdmin(client.id);
+    if (promoted) {
+      return promoted;
+    }
+  }
+  return null;
+};
+
+const handleAdminRemoved = (
+  io: SocketIOServer,
+  state: SfuState,
+  room: Room,
+): void => {
+  const roomId = room.id;
+  const roomChannelId = room.channelId;
+
+  if (!room.hasActiveAdmin()) {
+    const promoted = promoteNextAdmin(room);
+    if (promoted) {
+      const promotedContext = promoted.socket.data
+        ?.context as ConnectionContext | undefined;
+      if (promotedContext) {
+        promotedContext.currentClient = promoted;
+        promotedContext.currentRoom = room;
+        registerAdminHandlers(promotedContext, { roomId });
+      }
+      if (room.cleanupTimer) {
+        room.stopCleanupTimer();
+      }
+      const pendingUsers = Array.from(room.pendingClients.values()).map(
+        (pending) => ({
+          userId: pending.userKey,
+          displayName: pending.displayName || pending.userKey,
+        }),
+      );
+      promoted.socket.emit("pendingUsersSnapshot", {
+        users: pendingUsers,
+        roomId,
+      });
+      promoted.socket.emit("roomLockChanged", {
+        locked: room.isLocked,
+        roomId,
+      });
+      promoted.socket.emit("hostAssigned", {
+        roomId,
+        hostUserId: promoted.id,
+      });
+      if (room.pendingClients.size > 0) {
+        for (const pending of room.pendingClients.values()) {
+          pending.socket.emit("waitingRoomStatus", {
+            message: "A host is available to let you in.",
+            roomId,
+          });
+        }
+      }
+    } else {
+      if (room.pendingClients.size > 0) {
+        for (const pending of room.pendingClients.values()) {
+          pending.socket.emit("waitingRoomStatus", {
+            message: "No one to let you in.",
+            roomId,
+          });
+        }
+      }
+      room.startCleanupTimer(() => {
+        if (!state.rooms.has(roomChannelId)) return;
+        const roomInState = state.rooms.get(roomChannelId);
+        if (!roomInState || roomInState.hasActiveAdmin()) return;
+        if (roomInState.pendingClients.size > 0) {
+          for (const pending of roomInState.pendingClients.values()) {
+            pending.socket.emit("waitingRoomStatus", {
+              message: "No one to let you in.",
+              roomId,
+            });
+          }
+        }
+        if (roomInState.isEmpty()) {
+          cleanupRoom(state, roomChannelId);
+        }
+      });
+    }
+  }
+
+  io.to(roomChannelId).emit("hostChanged", {
+    roomId,
+    hostUserId: room.getHostUserId(),
+  });
+  io.to(roomChannelId).emit("adminUsersChanged", {
+    roomId,
+    hostUserIds: room.getAdminUserIds(),
+  });
+};
+
 const toParticipantRole = (room: Room, client: Client): ParticipantRole => {
   if (client.isWebinarAttendee) return "attendee";
   if (client.isGhost) return "ghost";
@@ -155,6 +263,7 @@ export const toParticipantSnapshot = (
   client: Client,
 ): ParticipantSnapshot => {
   const producers = client.getProducerInfos();
+  const consumers = client.getConsumerTelemetrySnapshot();
   return {
     userId: client.id,
     userKey: room.userKeysById.get(client.id) ?? null,
@@ -168,7 +277,8 @@ export const toParticipantSnapshot = (
     consumerTransportConnected: Boolean(client.consumerTransport),
     pendingDisconnect: room.hasPendingDisconnect(client.id),
     producers,
-    consumerCount: client.consumers.size,
+    consumerCount: consumers.length,
+    consumers,
   };
 };
 
@@ -184,7 +294,6 @@ export const toPendingUserSnapshots = (room: Room): PendingUserSnapshot[] => {
 
 export const toRoomSnapshot = (room: Room): RoomSnapshot => {
   const participants = Array.from(room.clients.values())
-    .filter((client) => !client.isRecorder)
     .map((client) => toParticipantSnapshot(room, client));
   const pendingUsers = toPendingUserSnapshots(room);
   const adminCount = participants.filter(
@@ -203,11 +312,9 @@ export const toRoomSnapshot = (room: Room): RoomSnapshot => {
   const attendees = participants.filter(
     (participant) => participant.role === "attendee",
   ).length;
-  const guests = participants.filter((participant) => {
-    const key = participant.userKey;
-    if (!key) return false;
-    return key.startsWith("guest:");
-  }).length;
+  const guests = participants.filter((participant) =>
+    isGuestUserKey(participant.userKey),
+  ).length;
 
   return {
     id: room.id,
@@ -403,6 +510,7 @@ const notifyProducerClosed = (
     targetClient.socket.emit("producerClosed", {
       producerId,
       producerUserId: ownerId,
+      roomId: room.id,
     });
   }
   io.to(room.channelId).emit("admin:producerClosed", {
@@ -423,36 +531,44 @@ export const closeProducerById = (
   kind?: MediaKind;
   type?: ProducerType;
 } => {
-  for (const client of room.clients.values()) {
-    const removed = client.removeProducerById(producerId);
-    if (!removed) {
-      continue;
-    }
-
-    if (removed.kind === "video" && removed.type === "screen") {
-      room.clearScreenShareProducer(producerId);
-    }
-    notifyProducerClosed(io, room, client.id, producerId);
-    emitWebinarFeedChanged(io, state, room);
-
-    client.socket.emit("admin:mediaEnforced", {
-      roomId: room.id,
-      userId: client.id,
-      producerId,
-      kind: removed.kind,
-      type: removed.type,
-      action: "closed",
-    });
-
-    return {
-      closed: true,
-      userId: client.id,
-      kind: removed.kind,
-      type: removed.type,
-    };
+  const producerInfo = room.getProducerInfoById(producerId);
+  if (!producerInfo) {
+    return { closed: false };
   }
 
-  return { closed: false };
+  const client = room.getClient(producerInfo.producerUserId);
+  if (!client) {
+    return { closed: false };
+  }
+
+  const removed = client.removeProducerById(producerId);
+  if (!removed) {
+    room.removeProducerIndexById(producerId);
+    return { closed: false };
+  }
+
+  room.removeProducerIndexById(producerId);
+  if (removed.kind === "video" && removed.type === "screen") {
+    room.clearScreenShareProducer(producerId);
+  }
+  notifyProducerClosed(io, room, client.id, producerId);
+  emitWebinarFeedChanged(io, state, room);
+
+  client.socket.emit("admin:mediaEnforced", {
+    roomId: room.id,
+    userId: client.id,
+    producerId,
+    kind: removed.kind,
+    type: removed.type,
+    action: "closed",
+  });
+
+  return {
+    closed: true,
+    userId: client.id,
+    kind: removed.kind,
+    type: removed.type,
+  };
 };
 
 const shouldCloseProducer = (
@@ -505,6 +621,7 @@ export const closeClientProducers = (options: {
   for (const info of infos) {
     const removed = target.removeProducerById(info.producerId);
     if (!removed) continue;
+    room.removeProducerIndexById(info.producerId);
 
     if (removed.kind === "video" && removed.type === "screen") {
       room.clearScreenShareProducer(info.producerId);
@@ -609,7 +726,7 @@ export const admitAllPendingUsers = (
       room.allowLockedUser(pending.userKey);
     }
     room.allowUser(pending.userKey);
-    pending.socket.emit("joinApproved");
+    pending.socket.emit("joinApproved", { roomId: room.id });
     admitted.push({ userId: pending.userId, userKey: pending.userKey });
   }
 
@@ -633,7 +750,7 @@ export const rejectAllPendingUsers = (
 
   for (const pending of pendingUsers) {
     room.removePendingClient(pending.userKey);
-    pending.socket.emit("joinRejected");
+    pending.socket.emit("joinRejected", { roomId: room.id });
     rejected.push({ userId: pending.userId, userKey: pending.userKey });
   }
 
@@ -666,10 +783,82 @@ export const clearAllRaisedHands = (io: SocketIOServer, room: Room): number => {
   return count;
 };
 
+/**
+ * Deterministically remove a client from a room RIGHT NOW as part of a
+ * moderation action (kick / block).
+ *
+ * Why this exists: a normal network drop schedules a ~15s disconnect grace
+ * (Room.scheduleDisconnect / disconnectHandlers) during which the client's
+ * producers keep flowing. If a host kicks/blocks that user concurrently, calling
+ * `socket.disconnect(true)` on the already-dead socket is a no-op and does NOT
+ * cancel the pending grace, so media would keep flowing for the full grace
+ * window. Here we explicitly clear any pending grace and close the client's
+ * producers/transports immediately so media stops at once, then emit the same
+ * userLeft / awareness / webinar updates the normal disconnect finalize would.
+ *
+ * The non-moderated disconnect-grace reconnect path is untouched: it still runs
+ * through disconnectHandlers and is only short-circuited here when an admin
+ * takes an explicit action.
+ */
+export const forceRemoveClientNow = (options: {
+  io: SocketIOServer;
+  state: SfuState;
+  room: Room;
+  userId: string;
+}): boolean => {
+  const { io, state, room, userId } = options;
+  const target = room.getClient(userId);
+  if (!target) {
+    // Already gone (grace may have already expired); nothing to stop.
+    room.clearPendingDisconnect(userId);
+    return false;
+  }
+
+  const roomChannelId = room.channelId;
+  const wasAdmin = target instanceof Admin;
+  const isGhost = target.isGhost;
+  const isWebinarAttendee = target.isWebinarAttendee;
+
+  // Cancel any in-flight disconnect grace so the timer cannot double-process.
+  room.clearPendingDisconnect(userId);
+
+  // Clear awareness before removing the client so peers stop seeing its cursor.
+  const awarenessRemovals = room.clearUserAwareness(userId);
+  for (const removal of awarenessRemovals) {
+    io.to(roomChannelId).emit("apps:awareness", {
+      appId: removal.appId,
+      awarenessUpdate: removal.awarenessUpdate,
+    } satisfies AppsAwarenessData);
+  }
+
+  // removeClient() closes the client's producers + transports => media stops now.
+  room.removeClient(userId);
+
+  if (isGhost) {
+    emitUserLeft(room, userId, { ghostOnly: true, excludeUserId: userId });
+  } else if (!isWebinarAttendee) {
+    io.to(roomChannelId).emit("userLeft", { userId, roomId: room.id });
+  }
+
+  emitWebinarAttendeeCountChanged(io, state, room);
+  emitWebinarFeedChanged(io, state, room);
+
+  if (wasAdmin) {
+    handleAdminRemoved(io, state, room);
+  }
+
+  if (state.rooms.has(roomChannelId)) {
+    cleanupRoom(state, roomChannelId);
+  }
+
+  return true;
+};
+
 export const kickClient = (
   room: Room,
   userId: string,
   reason = "Removed by host",
+  options?: { io?: SocketIOServer; state?: SfuState },
 ): boolean => {
   const target = room.getClient(userId);
   if (!target) {
@@ -677,6 +866,18 @@ export const kickClient = (
   }
   target.socket.emit("kicked", { reason, roomId: room.id });
   target.socket.disconnect(true);
+
+  // When io/state are available, also deterministically stop media now so a
+  // concurrent network drop's disconnect grace cannot keep producers flowing.
+  if (options?.io && options.state) {
+    forceRemoveClientNow({
+      io: options.io,
+      state: options.state,
+      room,
+      userId,
+    });
+  }
+
   return true;
 };
 
@@ -706,6 +907,7 @@ export const closeProducerForMediaKey = (options: {
   if (!removed) {
     return { closed: false };
   }
+  room.removeProducerIndexById(producerId);
   if (kind === "video" && type === "screen") {
     room.clearScreenShareProducer(producerId);
   }

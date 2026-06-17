@@ -5,8 +5,8 @@ import skip.model.*
 import skip.foundation.*
 import skip.ui.*
 
-import android.Manifest
 import android.app.Application
+import android.content.Intent
 import android.graphics.Color as AndroidColor
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -25,14 +25,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.material3.MaterialTheme
-import androidx.core.app.ActivityCompat
 
 internal val logger: SkipLogger = SkipLogger(subsystem = "conclave.module", category = "Conclave")
 
 private typealias AppRootView = ConclaveRootView
 private typealias AppDelegate = ConclaveAppDelegate
 
-/// AndroidAppMain is the `android.app.Application` entry point, and must match `application android:name` in the AndroidMainfest.xml file.
+/// AndroidAppMain is the `android.app.Application` entry point, and must match `application android:name` in AndroidManifest.xml.
 open class AndroidAppMain: Application {
     constructor() {
     }
@@ -42,13 +41,17 @@ open class AndroidAppMain: Application {
         logger.info("starting app")
         ProcessInfo.launch(applicationContext)
         AppDelegate.shared.onInit()
+        // Prebuild the meeting icon vectors on a background thread now, so the
+        // first sheet/controls render reuses the cached vectors instead of
+        // building ~12 of them on the main thread mid-open (the sheet-content lag).
+        warmMeetingIcons()
     }
 
     companion object {
     }
 }
 
-/// AndroidAppMain is initial `androidx.appcompat.app.AppCompatActivity`, and must match `activity android:name` in the AndroidMainfest.xml file.
+/// MainActivity is the initial `androidx.appcompat.app.AppCompatActivity`, and must match `activity android:name` in AndroidManifest.xml.
 open class MainActivity: AppCompatActivity {
     constructor() {
     }
@@ -57,28 +60,30 @@ open class MainActivity: AppCompatActivity {
         super.onCreate(savedInstanceState)
         logger.info("starting activity")
         UIApplication.launch(this)
+        // Register the MediaProjection consent launcher (must happen at onCreate
+        // before the Activity reaches STARTED) so screen-share can request it.
+        ScreenCaptureManager.register(this)
         enableEdgeToEdge()
 
         setContent {
-            val saveableStateHolder = rememberSaveableStateHolder()
-            saveableStateHolder.SaveableStateProvider(true) {
-                PresentationRootView(ComposeContext())
-                SideEffect { saveableStateHolder.removeState(true) }
+            // While in Picture-in-Picture, render ONLY the minimal active-speaker
+            // layout (no controls/chrome — Mute/Leave live in the system PiP
+            // action bar). Restore the full meeting UI when leaving PiP. Reading
+            // PipController.inPipMode (a Compose mutableState) recomposes on the
+            // PiP-mode transition.
+            if (PipController.inPipMode && PipController.isInCall) {
+                PipContent()
+            } else {
+                val saveableStateHolder = rememberSaveableStateHolder()
+                saveableStateHolder.SaveableStateProvider(true) {
+                    PresentationRootView(ComposeContext())
+                    SideEffect { saveableStateHolder.removeState(true) }
+                }
             }
         }
 
         AppDelegate.shared.onLaunch()
-
-        // Example of requesting permissions on startup.
-        // These must match the permissions in the AndroidManifest.xml file.
-        //let permissions = listOf(
-        //    Manifest.permission.ACCESS_COARSE_LOCATION,
-        //    Manifest.permission.ACCESS_FINE_LOCATION
-        //    Manifest.permission.CAMERA,
-        //    Manifest.permission.WRITE_EXTERNAL_STORAGE,
-        //)
-        //let requestTag = 1
-        //ActivityCompat.requestPermissions(self, permissions.toTypedArray(), requestTag)
+        handleIncomingDeepLink(intent)
     }
 
     override fun onStart() {
@@ -101,6 +106,41 @@ open class MainActivity: AppCompatActivity {
         AppDelegate.shared.onStop()
     }
 
+    /// Fired when the user is leaving the activity (Home / Recents). If a call is
+    /// active, enter Picture-in-Picture showing the active speaker's video so the
+    /// call stays visible. The foreground service already keeps audio alive.
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        if (
+            PipController.isInCall &&
+            !ScreenCaptureManager.isRequestingCapture() &&
+            android.os.Build.VERSION.SDK_INT >= 26
+        ) {
+            PipManager.enterPip(this, PipController.muted)
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleIncomingDeepLink(intent)
+    }
+
+    private fun handleIncomingDeepLink(intent: Intent?) {
+        val urlString = intent?.dataString?.trim() ?: return
+        if (urlString.isEmpty()) return
+        AppDelegate.shared.onOpenURL(urlString)
+    }
+
+    override fun onPictureInPictureModeChanged(
+        isInPictureInPictureMode: Boolean,
+        newConfig: android.content.res.Configuration
+    ) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+        // Swap the Compose content to / from the minimal PiP layout.
+        PipController.inPipMode = isInPictureInPictureMode
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         AppDelegate.shared.onDestroy()
@@ -119,7 +159,6 @@ open class MainActivity: AppCompatActivity {
     override fun onSaveInstanceState(outState: android.os.Bundle): Unit = super.onSaveInstanceState(outState)
 
     override fun onRestoreInstanceState(bundle: android.os.Bundle) {
-        // Usually you restore your state in onCreate(). It is possible to restore it in onRestoreInstanceState() as well, but not very common. (onRestoreInstanceState() is called after onStart(), whereas onCreate() is called before onStart().
         logger.info("onRestoreInstanceState")
         super.onRestoreInstanceState(bundle)
     }
@@ -127,6 +166,14 @@ open class MainActivity: AppCompatActivity {
     override fun onRequestPermissionsResult(requestCode: Int, permissions: kotlin.Array<String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         logger.info("onRequestPermissionsResult: ${requestCode}")
+        PermissionHelper.handleRequestPermissionsResult(requestCode, permissions, grantResults)
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        if (NativeGoogleSignInBridge.handleActivityResult(requestCode, resultCode, data)) {
+            return
+        }
+        super.onActivityResult(requestCode, resultCode, data)
     }
 
     companion object {

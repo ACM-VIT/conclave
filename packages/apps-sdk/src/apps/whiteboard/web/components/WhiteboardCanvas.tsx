@@ -385,11 +385,27 @@ export function WhiteboardCanvas({
   const resizeSessionRef = useRef<ResizeSession | null>(null);
   const rotateSessionRef = useRef<RotateSession | null>(null);
   const textEditorRef = useRef<HTMLTextAreaElement>(null);
+  const deferredTaskTimersRef = useRef<Set<ReturnType<typeof setTimeout>>>(
+    new Set()
+  );
   const [imageVersion, setImageVersion] = useState(0);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [editingElementId, setEditingElementId] = useState<string | null>(null);
   const [editingText, setEditingText] = useState("");
   const [stickyScrollOffsets, setStickyScrollOffsets] = useState<Record<string, number>>({});
+
+  const scheduleDeferredTask = useCallback((callback: () => void, delayMs: number) => {
+    const timer = setTimeout(() => {
+      deferredTaskTimersRef.current.delete(timer);
+      callback();
+    }, delayMs);
+    deferredTaskTimersRef.current.add(timer);
+  }, []);
+
+  const clearDeferredTasks = useCallback(() => {
+    deferredTaskTimersRef.current.forEach((timer) => clearTimeout(timer));
+    deferredTaskTimersRef.current.clear();
+  }, []);
 
   const toCanvasPoint = useCallback(
     (screenX: number, screenY: number, rect: DOMRect) => {
@@ -536,9 +552,10 @@ export function WhiteboardCanvas({
         renderFrameRef.current = null;
       }
       renderQueuedRef.current = false;
+      clearDeferredTasks();
       clearCursor();
     };
-  }, [clearCursor]);
+  }, [clearCursor, clearDeferredTasks]);
 
   const startEditingById = useCallback(
     (elementId: string | null) => {
@@ -890,9 +907,9 @@ export function WhiteboardCanvas({
         const nextSelectedId = engineRef.current?.getSelectedId() ?? null;
         setSelectedId(nextSelectedId);
         if (tool === "text" || tool === "sticky") {
-          setTimeout(() => startEditingById(nextSelectedId), 0);
+          scheduleDeferredTask(() => startEditingById(nextSelectedId), 0);
           if (onToolChange) {
-            setTimeout(() => onToolChange("select"), 10);
+            scheduleDeferredTask(() => onToolChange("select"), 10);
           }
         }
       }
@@ -907,6 +924,7 @@ export function WhiteboardCanvas({
       onPanStart,
       onToolChange,
       scheduleCursorSync,
+      scheduleDeferredTask,
       selectedId,
       startEditingById,
       toCanvasPoint,
@@ -1071,11 +1089,19 @@ export function WhiteboardCanvas({
         })() : null;
         if (id) {
           setSelectedId(id);
-          setTimeout(() => startEditingById(id), 0);
+          scheduleDeferredTask(() => startEditingById(id), 0);
         }
       }
     },
-    [elements, locked, onToolChange, startEditingById, toCanvasPoint, tool]
+    [
+      elements,
+      locked,
+      onToolChange,
+      scheduleDeferredTask,
+      startEditingById,
+      toCanvasPoint,
+      tool,
+    ]
   );
 
   const selectedElement = useMemo(
@@ -1273,7 +1299,6 @@ export function WhiteboardCanvas({
         ) : null}
         {editingElement && editorStyle ? (
           <>
-            {/* Subtle dashed outline around editing element */}
             {(() => {
               const b = getBoundsForElement(editingElement);
               return (

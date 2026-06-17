@@ -54,7 +54,15 @@ function SystemAudioPlayer({
 
   useEffect(() => {
     const audio = audioRef.current;
-    if (!audio || !stream) return;
+    if (!audio) return;
+
+    if (!stream) {
+      if (audio.srcObject) {
+        audio.srcObject = null;
+      }
+      return;
+    }
+
     audio.srcObject = stream;
     audio.play().catch((err) => {
       if (err.name === "NotAllowedError") {
@@ -66,7 +74,12 @@ function SystemAudioPlayer({
         console.error("[Meets] System audio play error:", err);
       }
     });
-  }, [stream]);
+    return () => {
+      if (audio.srcObject === stream) {
+        audio.srcObject = null;
+      }
+    };
+  }, [stream, onAutoplayBlocked]);
 
   useEffect(() => {
     const audio = audioRef.current;

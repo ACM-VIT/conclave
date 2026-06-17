@@ -83,7 +83,7 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     backgroundColor: "rgba(10, 10, 10, 0.92)",
     borderWidth: 1,
-    borderColor: "rgba(254, 252, 217, 0.15)",
+    borderColor: "rgba(250, 250, 250, 0.15)",
   },
   label: {
     fontSize: 10,
@@ -93,12 +93,12 @@ const styles = StyleSheet.create({
   },
   name: {
     fontSize: 12,
-    color: "rgba(254, 252, 217, 0.92)",
+    color: "rgba(250, 250, 250, 0.92)",
     maxWidth: 120,
   },
   more: {
     fontSize: 10,
-    color: "rgba(254, 252, 217, 0.5)",
+    color: "rgba(250, 250, 250, 0.5)",
   },
   iconButton: {
     width: 40,
@@ -109,8 +109,8 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   rejectButton: {
-    borderColor: "rgba(239, 68, 68, 0.5)",
-    backgroundColor: "rgba(239, 68, 68, 0.15)",
+    borderColor: "rgba(234, 67, 53, 0.5)",
+    backgroundColor: "rgba(234, 67, 53, 0.15)",
   },
   admitButton: {
     borderColor: "rgba(249, 95, 74, 0.6)",

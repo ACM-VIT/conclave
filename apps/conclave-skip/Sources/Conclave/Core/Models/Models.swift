@@ -1,10 +1,3 @@
-//
-//  Models.swift
-//  Conclave
-//
-//  Core data models matching the web client types
-//
-
 import Foundation
 
 // MARK: - Connection State
@@ -20,6 +13,105 @@ enum ConnectionState: String, Equatable {
     case error
 }
 
+enum AdminNoticeLevel: String, Equatable {
+    case info
+    case warning
+    case error
+
+    static func from(_ value: String?) -> AdminNoticeLevel {
+        switch value?.lowercased() {
+        case "warning":
+            return .warning
+        case "error":
+            return .error
+        default:
+            return .info
+        }
+    }
+}
+
+enum MeetingViewMode: String, Codable, Equatable {
+    case auto
+    case tiled
+    case spotlight
+    case sidebar
+
+    var title: String {
+        switch self {
+        case .auto:
+            return "Auto"
+        case .tiled:
+            return "Tiled"
+        case .spotlight:
+            return "Spotlight"
+        case .sidebar:
+            return "Sidebar"
+        }
+    }
+}
+
+enum MeetingResolvedViewMode: String, Codable, Equatable {
+    case tiled
+    case spotlight
+    case sidebar
+}
+
+enum MeetingSelfViewMode: String, Codable, Equatable {
+    case auto
+    case tile
+    case floating
+    case minimized
+
+    var title: String {
+        switch self {
+        case .auto:
+            return "Auto"
+        case .tile:
+            return "In a tile"
+        case .floating:
+            return "Floating"
+        case .minimized:
+            return "Minimized"
+        }
+    }
+}
+
+enum MeetingSelfViewCorner: String, Codable, Equatable {
+    case topLeft = "top-left"
+    case topRight = "top-right"
+    case bottomLeft = "bottom-left"
+    case bottomRight = "bottom-right"
+
+    var title: String {
+        switch self {
+        case .topLeft:
+            return "Top left"
+        case .topRight:
+            return "Top right"
+        case .bottomLeft:
+            return "Bottom left"
+        case .bottomRight:
+            return "Bottom right"
+        }
+    }
+}
+
+enum MeetingViewConstants {
+    static let minTiles = 2
+    static let maxTiles = 49
+    static let defaultMaxTiles = 16
+    static let autoTiledThreshold = 12
+    static let stageRailMaxTiles = 8
+
+    static func clampTiles(_ value: Int) -> Int {
+        min(max(value, minTiles), maxTiles)
+    }
+
+    static func clampStageRailTiles(_ value: Int) -> Int {
+        min(clampTiles(value), stageRailMaxTiles)
+    }
+}
+
 // MARK: - Participant
 
 struct Participant: Identifiable, Equatable {
@@ -32,8 +124,6 @@ struct Participant: Identifiable, Equatable {
     var isGhost: Bool = false
     var isLeaving: Bool = false
     var isScreenSharing: Bool = false
-    
-    // Tracks are managed separately in WebRTC layer
 }
 
 // MARK: - Chat
@@ -44,13 +134,22 @@ struct ChatMessage: Identifiable, Equatable {
     let displayName: String
     let content: String
     let timestamp: Date
-    
-    init(id: String = UUID().uuidString, userId: String, displayName: String, content: String, timestamp: Date = Date()) {
+    // Direct-message metadata (web chat parity). Set only on private messages.
+    let isDirect: Bool
+    let dmTargetUserId: String?
+    let dmTargetDisplayName: String?
+    let roomId: String?
+
+    init(id: String = UUID().uuidString, userId: String, displayName: String, content: String, timestamp: Date = Date(), isDirect: Bool = false, dmTargetUserId: String? = nil, dmTargetDisplayName: String? = nil, roomId: String? = nil) {
         self.id = id
         self.userId = userId
         self.displayName = displayName
         self.content = content
         self.timestamp = timestamp
+        self.isDirect = isDirect
+        self.dmTargetUserId = dmTargetUserId
+        self.dmTargetDisplayName = dmTargetDisplayName
+        self.roomId = roomId
     }
 }
 
@@ -68,15 +167,126 @@ struct Reaction: Identifiable {
     let value: String
     let label: String?
     let timestamp: Date
+    let roomId: String?
     var lane: Int = 0
     
-    init(id: String = UUID().uuidString, userId: String, kind: ReactionKind, value: String, label: String? = nil, timestamp: Date = Date()) {
+    init(id: String = UUID().uuidString, userId: String, kind: ReactionKind, value: String, label: String? = nil, timestamp: Date = Date(), roomId: String? = nil) {
         self.id = id
         self.userId = userId
         self.kind = kind
         self.value = value
         self.label = label
         self.timestamp = timestamp
+        self.roomId = roomId
+    }
+}
+
+struct MeetingReactionOption: Identifiable, Equatable, Hashable {
+    let id: String
+    let kind: ReactionKind
+    let value: String
+    let label: String
+
+    init(kind: ReactionKind, value: String, label: String) {
+        self.id = "\(kind.rawValue)-\(value)"
+        self.kind = kind
+        self.value = value
+        self.label = label
+    }
+
+    static func emoji(_ value: String) -> MeetingReactionOption {
+        MeetingReactionOption(kind: .emoji, value: value, label: value)
+    }
+}
+
+enum MeetingReactionConstants {
+    static let emojiOptions = ["👍", "👏", "😂", "❤️", "🎉", "😮", "😢", "🤔"]
+    static var emojiReactionOptions: [MeetingReactionOption] {
+        emojiOptions.map { MeetingReactionOption.emoji($0) }
+    }
+    static var assetOptions: [MeetingReactionOption] {
+        assetPaths.map { path in
+            MeetingReactionOption(
+                kind: .asset,
+                value: path,
+                label: assetLabel(value: path, label: nil)
+            )
+        }
+    }
+    static var allOptions: [MeetingReactionOption] {
+        emojiReactionOptions + assetOptions
+    }
+    static let maxActiveReactions = 30
+    private static let assetPrefix = "/reactions/"
+    private static let assetPaths = [
+        "/reactions/aura.gif",
+        "/reactions/crycry.gif",
+        "/reactions/goblin.gif",
+        "/reactions/phone.gif",
+        "/reactions/sixseven.gif",
+        "/reactions/yawn.gif"
+    ]
+    private static let assetExtensions = [".gif", ".png", ".jpg", ".jpeg", ".webp", ".svg"]
+
+    static func isAllowedEmoji(_ value: String) -> Bool {
+        emojiOptions.contains(value)
+    }
+
+    static func isAllowedAsset(_ value: String) -> Bool {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix(assetPrefix), !trimmed.contains("..") else { return false }
+
+        let decoded = trimmed.removingPercentEncoding ?? trimmed
+        let lowercased = decoded.lowercased()
+        return assetExtensions.contains { lowercased.hasSuffix($0) }
+    }
+
+    static func isAllowedOption(_ option: MeetingReactionOption) -> Bool {
+        switch option.kind {
+        case .emoji:
+            return isAllowedEmoji(option.value)
+        case .asset:
+            return isAllowedAsset(option.value)
+        }
+    }
+
+    static func assetLabel(value: String, label: String?) -> String {
+        let trimmedLabel = label?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !trimmedLabel.isEmpty {
+            return trimmedLabel
+        }
+
+        let decoded = value.removingPercentEncoding ?? value
+        let fileName = decoded.components(separatedBy: "/").last ?? decoded
+        let baseName = fileName.components(separatedBy: ".").first ?? fileName
+        let words = assetLabelWords(from: baseName).map { word in
+            let lowercased = word.lowercased()
+            guard let first = lowercased.first else { return lowercased }
+            return String(first).uppercased() + String(lowercased.dropFirst())
+        }
+
+        return words.isEmpty ? "Reaction" : words.prefix(2).joined(separator: " ")
+    }
+
+    private static func assetLabelWords(from value: String) -> [String] {
+        let allowed = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+        var words: [String] = []
+        var current = ""
+
+        for character in value {
+            if allowed.contains(character) {
+                current += String(character)
+            } else if !current.isEmpty {
+                words.append(current)
+                current = ""
+            }
+        }
+
+        if !current.isEmpty {
+            words.append(current)
+        }
+
+        return words
     }
 }
 
@@ -95,11 +305,40 @@ enum VideoQuality: String, Codable {
     case standard
 }
 
+// MARK: - Connection Quality
+
+enum ConnectionQuality: String, Codable {
+    case good
+    case fair
+    case poor
+    case unknown
+}
+
+// MARK: - Audio Device
+
+/// A selectable audio input (microphone) or output (speaker/earpiece/bluetooth)
+/// route, surfaced from the platform's audio APIs. `id` is the stable platform
+/// identifier used to select the route; `label` is the human-readable name.
+struct AudioDevice: Identifiable, Equatable {
+    let id: String
+    let label: String
+}
+
 // MARK: - Producer Type
 
 enum ProducerType: String, Codable {
     case webcam
     case screen
+}
+
+// MARK: - Video Content Mode
+//  Two distinct aspect policies (Meet standard): cameras crop-to-fill, screen
+//  shares letterbox on black. Cross-platform (maps to RTCVideoView contentMode
+//  on iOS / RendererCommon.ScalingType on Android).
+
+enum VideoContentMode {
+    case fill   // scaleAspectFill — cameras (crop to fill, no distortion)
+    case fit    // scaleAspectFit — screen-share (letterbox on black)
 }
 
 // MARK: - Meet Error

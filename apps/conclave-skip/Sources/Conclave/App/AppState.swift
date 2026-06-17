@@ -1,3 +1,4 @@
+import Foundation
 import Observation
 #if !SKIP
 import SkipFuse
@@ -6,18 +7,30 @@ import SkipFuse
 @MainActor
 @Observable
 final class AppState {
-    var isAuthenticated = false
-    var currentUser: User?
-    var authProvider: AuthProvider = .none
+    private static let storedUserKey = "conclave.auth.user"
 
-    enum AuthProvider {
+    static let shared = AppState()
+
+    var isAuthenticated = false {
+        didSet { persistAuthState() }
+    }
+    var currentUser: User? {
+        didSet { persistAuthState() }
+    }
+    var authProvider: AuthProvider = .none {
+        didSet { persistAuthState() }
+    }
+    var pendingJoinURLString: String?
+    var pendingJoinRequestID = 0
+
+    enum AuthProvider: String, Codable {
         case none
         case google
         case apple
         case guest
     }
 
-    struct User: Identifiable {
+    struct User: Identifiable, Codable {
         let id: String
         let name: String?
         let email: String?
@@ -29,6 +42,87 @@ final class AppState {
             self.email = email
             self.provider = provider
         }
+    }
+
+    private struct StoredAuthUser: Codable {
+        let id: String
+        let name: String?
+        let email: String?
+        let provider: AuthProvider
+    }
+
+    init() {
+        restoreStoredAuthState()
+    }
+
+    func setAuthenticatedUser(_ user: User) {
+        currentUser = user
+        authProvider = user.provider
+        isAuthenticated = true
+        persistAuthState()
+    }
+
+    func clearAuthentication(signOutRemote: Bool = true) {
+        currentUser = nil
+        authProvider = .none
+        isAuthenticated = false
+        UserDefaults.standard.removeObject(forKey: Self.storedUserKey)
+        guard signOutRemote else { return }
+        Task {
+            await NativeAuthService.signOut()
+        }
+    }
+
+    func openJoinURL(_ url: URL) {
+        openJoinURLString(url.absoluteString)
+    }
+
+    func openJoinURLString(_ value: String) {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        pendingJoinURLString = trimmed
+        pendingJoinRequestID += 1
+    }
+
+    func consumePendingJoinURLString() -> String? {
+        guard let value = pendingJoinURLString, !value.isEmpty else { return nil }
+        pendingJoinURLString = nil
+        return value
+    }
+
+    private func restoreStoredAuthState() {
+        guard let raw = UserDefaults.standard.string(forKey: Self.storedUserKey),
+              let data = raw.data(using: .utf8),
+              let stored = try? JSONDecoder().decode(StoredAuthUser.self, from: data),
+              stored.provider != AppState.AuthProvider.guest else {
+            return
+        }
+
+        currentUser = User(
+            id: stored.id,
+            name: stored.name,
+            email: stored.email,
+            provider: stored.provider
+        )
+        authProvider = stored.provider
+        isAuthenticated = true
+    }
+
+    private func persistAuthState() {
+        guard let currentUser, currentUser.provider != .guest else {
+            UserDefaults.standard.removeObject(forKey: Self.storedUserKey)
+            return
+        }
+
+        let stored = StoredAuthUser(
+            id: currentUser.id,
+            name: currentUser.name,
+            email: currentUser.email,
+            provider: currentUser.provider
+        )
+        guard let data = try? JSONEncoder().encode(stored),
+              let raw = String(data: data, encoding: .utf8) else { return }
+        UserDefaults.standard.set(raw, forKey: Self.storedUserKey)
     }
 }
 

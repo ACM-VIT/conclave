@@ -12,7 +12,7 @@ import {
   type ScheduledMeetingPersistence,
   type ScheduledMeetingStore,
 } from "./scheduledMeetings.js";
-import type { RecordingSession } from "./recording/recordingSession.js";
+import { createRoomRegistry, type RoomRegistry } from "./roomRegistry.js";
 
 export type EndedRoom = {
   roomId: string;
@@ -25,6 +25,7 @@ export type EndedRoom = {
 export type SfuState = {
   workers: Worker[];
   rooms: Map<string, Room>;
+  roomCreations: Map<string, Promise<Room>>;
   endedRooms: Map<string, EndedRoom>;
   webinarConfigs: Map<string, WebinarRoomConfig>;
   webinarLinks: Map<string, WebinarLinkTarget>;
@@ -33,14 +34,18 @@ export type SfuState = {
   scheduledWebinarTimer: NodeJS.Timeout | null;
   scheduledMeetings: ScheduledMeetingStore;
   scheduledMeetingPersistence: ScheduledMeetingPersistence | null;
-  recordingSessions: Map<string, RecordingSession>;
+  roomRegistry: RoomRegistry;
   isDraining: boolean;
 };
 
-export const createSfuState = (options?: { isDraining?: boolean }): SfuState => {
+export const createSfuState = (options?: {
+  isDraining?: boolean;
+  roomRegistry?: RoomRegistry;
+}): SfuState => {
   return {
     workers: [],
     rooms: new Map(),
+    roomCreations: new Map(),
     endedRooms: new Map(),
     webinarConfigs: new Map(),
     webinarLinks: new Map(),
@@ -49,7 +54,7 @@ export const createSfuState = (options?: { isDraining?: boolean }): SfuState => 
     scheduledWebinarTimer: null,
     scheduledMeetings: createScheduledMeetingStore(),
     scheduledMeetingPersistence: null,
-    recordingSessions: new Map(),
+    roomRegistry: options?.roomRegistry ?? createRoomRegistry(config),
     isDraining: options?.isDraining ?? config.draining,
   };
 };

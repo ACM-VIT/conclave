@@ -1,27 +1,26 @@
 import { NextResponse } from "next/server";
-import { requireSfuSessionUser } from "@/lib/sfu-user-auth";
 import {
   buildScheduledMeetingHeaders,
+  readScheduledMeetingError,
   resolveScheduledMeetingsBase,
 } from "@/lib/scheduled-meetings";
+import { requireSfuSessionUser } from "@/lib/sfu-user-auth";
 
 export const runtime = "nodejs";
 
-const readError = async (response: Response): Promise<string> => {
-  const payload = await response.json().catch(() => null);
-  if (payload && typeof payload === "object" && "error" in payload) {
-    return String((payload as { error?: string }).error || "Request failed");
-  }
-  return response.statusText || "Request failed";
+type RouteContext = {
+  params: Promise<{ id: string }>;
 };
 
-const proxy = async (
+const resolveTargetUrl = async (context: RouteContext): Promise<string> => {
+  const { id } = await context.params;
+  return `${resolveScheduledMeetingsBase()}/${encodeURIComponent(id)}`;
+};
+
+const proxyScheduledMeetingRequest = async (
   request: Request,
-  id: string,
-  method: "GET" | "PATCH" | "DELETE" | "POST",
-  body?: string,
-  suffix: string = "",
-) => {
+  context: RouteContext,
+): Promise<NextResponse> => {
   const authResult = await requireSfuSessionUser(request);
   if (!authResult.ok) {
     return NextResponse.json(
@@ -29,46 +28,48 @@ const proxy = async (
       { status: authResult.status },
     );
   }
+
+  const method = request.method.toUpperCase();
+  const init: RequestInit = {
+    method,
+    headers: buildScheduledMeetingHeaders(authResult.user, request),
+    cache: "no-store",
+  };
+
+  if (method !== "GET" && method !== "HEAD") {
+    const body = await request.text().catch(() => "");
+    if (body) init.body = body;
+  }
+
   try {
-    const url = `${resolveScheduledMeetingsBase()}/${encodeURIComponent(id)}${suffix}`;
-    const response = await fetch(url, {
-      method,
-      headers: buildScheduledMeetingHeaders(authResult.user, request),
-      body,
-      cache: "no-store",
-    });
+    const response = await fetch(await resolveTargetUrl(context), init);
     if (!response.ok) {
       return NextResponse.json(
-        { error: await readError(response) },
+        { error: await readScheduledMeetingError(response) },
         { status: response.status },
       );
     }
     const data = await response.json().catch(() => ({}));
     return NextResponse.json(data, {
+      status: response.status,
       headers: { "Cache-Control": "no-store" },
     });
-  } catch (_error) {
+  } catch {
     return NextResponse.json(
-      { error: "Failed to reach scheduled-meeting service" },
+      { error: "Failed to reach scheduled meetings service" },
       { status: 502 },
     );
   }
 };
 
-type Ctx = { params: Promise<{ id: string }> };
-
-export async function GET(request: Request, ctx: Ctx) {
-  const { id } = await ctx.params;
-  return proxy(request, id, "GET");
+export async function GET(request: Request, context: RouteContext) {
+  return proxyScheduledMeetingRequest(request, context);
 }
 
-export async function PATCH(request: Request, ctx: Ctx) {
-  const { id } = await ctx.params;
-  const body = await request.text();
-  return proxy(request, id, "PATCH", body);
+export async function PATCH(request: Request, context: RouteContext) {
+  return proxyScheduledMeetingRequest(request, context);
 }
 
-export async function DELETE(request: Request, ctx: Ctx) {
-  const { id } = await ctx.params;
-  return proxy(request, id, "DELETE");
+export async function DELETE(request: Request, context: RouteContext) {
+  return proxyScheduledMeetingRequest(request, context);
 }

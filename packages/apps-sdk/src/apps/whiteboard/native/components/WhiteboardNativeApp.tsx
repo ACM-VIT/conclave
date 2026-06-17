@@ -20,6 +20,12 @@ import { WhiteboardNativeToolbar } from "./WhiteboardNativeToolbar";
 import { useWhiteboardPages } from "../../shared/hooks/useWhiteboardPages";
 import { updateElement, getPageElements } from "../../core/doc/index";
 
+type EditingTextState = {
+  pageId: string;
+  elementId: string;
+  text: string;
+};
+
 export function WhiteboardNativeApp() {
   const { user, isAdmin } = useApps();
   const { doc, awareness, locked } = useAppDoc("whiteboard");
@@ -35,27 +41,24 @@ export function WhiteboardNativeApp() {
     return pages.find((page) => page.id === activePageId) ?? pages[0];
   }, [pages, activePageId]);
 
-  const [editingText, setEditingText] = useState<{
-    elementId: string;
-    text: string;
-  } | null>(null);
+  const [editingText, setEditingText] = useState<EditingTextState | null>(null);
 
   const handleRequestTextEdit = useCallback(
-    (elementId: string, currentText: string) => {
-      setEditingText({ elementId, text: currentText });
+    (pageId: string, elementId: string, currentText: string) => {
+      setEditingText({ pageId, elementId, text: currentText });
     },
     [],
   );
 
   const saveEditingText = useCallback(() => {
-    if (!editingText || !activePage) return;
-    const elements = getPageElements(doc, activePage.id);
+    if (!editingText) return;
+    const elements = getPageElements(doc, editingText.pageId);
     const el = elements.find((e) => e.id === editingText.elementId);
     if (el && (el.type === "text" || el.type === "sticky")) {
       const updated = { ...el, text: editingText.text };
-      updateElement(doc, activePage.id, updated);
+      updateElement(doc, editingText.pageId, updated);
     }
-  }, [editingText, doc, activePage]);
+  }, [editingText, doc]);
 
   const handleTextSubmit = useCallback(() => {
     saveEditingText();
@@ -73,10 +76,6 @@ export function WhiteboardNativeApp() {
   const handleTextChange = useCallback((text: string) => {
     setEditingText((prev) => (prev ? { ...prev, text } : null));
   }, []);
-
-  const handleExport = () => {
-    // TODO: implement native export to PNG/PDF
-  };
 
   if (!activePage) {
     return (
@@ -109,10 +108,6 @@ export function WhiteboardNativeApp() {
 
       <View style={styles.topFloat} pointerEvents="box-none">
         <View style={styles.topBar}>
-          {/* <View style={styles.statusPill}>
-            <View style={styles.headerDot} />
-            <Text style={styles.headerMeta}>{states.length}</Text>
-          </View> */}
           {locked ? (
             <View style={styles.lockedPill}>
               <Lock size={11} color="rgba(253,230,138,0.95)" strokeWidth={2} />
@@ -175,7 +170,6 @@ export function WhiteboardNativeApp() {
         settings={settings}
         onSettingsChange={setSettings}
         locked={isReadOnly}
-        onExport={handleExport}
       />
     </View>
   );
@@ -187,7 +181,11 @@ const styles = StyleSheet.create({
     backgroundColor: "#060606",
   },
   canvasContainer: {
-    ...StyleSheet.absoluteFillObject,
+    position: "absolute",
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
   },
   topFloat: {
     position: "absolute",
@@ -209,25 +207,6 @@ const styles = StyleSheet.create({
     borderColor: "rgba(254,252,217,0.08)",
     alignSelf: "center",
     maxWidth: "100%",
-  },
-  statusPill: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-    paddingHorizontal: 6,
-    paddingVertical: 4,
-  },
-  headerDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: "rgba(74,222,128,0.85)",
-  },
-  headerMeta: {
-    color: "rgba(254,252,217,0.6)",
-    fontSize: 12,
-    fontWeight: "600",
-    fontVariant: ["tabular-nums"],
   },
   lockedPill: {
     paddingHorizontal: 6,

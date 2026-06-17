@@ -1,16 +1,18 @@
 import { NextResponse } from "next/server";
-import { requireSfuSessionUser } from "@/lib/sfu-user-auth";
 import {
   buildScheduledMeetingHeaders,
+  readScheduledMeetingError,
   resolveScheduledMeetingsBase,
 } from "@/lib/scheduled-meetings";
+import { requireSfuSessionUser } from "@/lib/sfu-user-auth";
 
 export const runtime = "nodejs";
 
-type Ctx = { params: Promise<{ id: string }> };
+type RouteContext = {
+  params: Promise<{ id: string }>;
+};
 
-export async function POST(request: Request, ctx: Ctx) {
-  const { id } = await ctx.params;
+export async function POST(request: Request, context: RouteContext) {
   const authResult = await requireSfuSessionUser(request);
   if (!authResult.ok) {
     return NextResponse.json(
@@ -18,31 +20,32 @@ export async function POST(request: Request, ctx: Ctx) {
       { status: authResult.status },
     );
   }
+
+  const { id } = await context.params;
+
   try {
-    const url = `${resolveScheduledMeetingsBase()}/${encodeURIComponent(id)}/start`;
-    const response = await fetch(url, {
-      method: "POST",
-      headers: buildScheduledMeetingHeaders(authResult.user, request),
-      cache: "no-store",
-    });
-    const data = await response.json().catch(() => ({}));
+    const response = await fetch(
+      `${resolveScheduledMeetingsBase()}/${encodeURIComponent(id)}/start`,
+      {
+        method: "POST",
+        headers: buildScheduledMeetingHeaders(authResult.user, request),
+        cache: "no-store",
+      },
+    );
     if (!response.ok) {
-      const errorMessage =
-        typeof data === "object" && data && "error" in data
-          ? String((data as { error?: string }).error || "Request failed")
-          : "Request failed";
       return NextResponse.json(
-        { error: errorMessage },
+        { error: await readScheduledMeetingError(response) },
         { status: response.status },
       );
     }
+    const data = await response.json().catch(() => ({}));
     return NextResponse.json(data, {
       status: response.status,
       headers: { "Cache-Control": "no-store" },
     });
-  } catch (_error) {
+  } catch {
     return NextResponse.json(
-      { error: "Failed to reach scheduled-meeting service" },
+      { error: "Failed to reach scheduled meetings service" },
       { status: 502 },
     );
   }

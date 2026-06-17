@@ -1,6 +1,6 @@
 "use client";
 
-import { Ghost, RefreshCw, Users } from "lucide-react";
+import { Ghost, RefreshCw, Users, X } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Dispatch, PointerEvent, SetStateAction } from "react";
 import type { Socket } from "socket.io-client";
@@ -11,6 +11,7 @@ import type {
   MeetingConfigSnapshot,
   MeetingUpdateRequest,
   Participant,
+  PrejoinMediaHandoff,
   ReactionEvent,
   ReactionOption,
   WebinarConfigSnapshot,
@@ -21,7 +22,6 @@ import type { BrowserState } from "../../hooks/useSharedBrowser";
 import ChatOverlay from "../ChatOverlay";
 import ConnectionBanner from "../ConnectionBanner";
 import ReactionOverlay from "../ReactionOverlay";
-import RecordingIndicator from "../RecordingIndicator";
 import MobileChatPanel from "./MobileChatPanel";
 import MobileControlsBar from "./MobileControlsBar";
 import MobileBrowserLayout from "./MobileBrowserLayout";
@@ -33,12 +33,22 @@ import MobileWhiteboardLayout from "./MobileWhiteboardLayout";
 import AndroidUpsellSheet from "./AndroidUpsellSheet";
 import ScreenShareAudioPlayers from "../ScreenShareAudioPlayers";
 import SystemAudioPlayers from "../SystemAudioPlayers";
+import VideoEffectsPanel from "../VideoEffectsPanel";
 import { formatDisplayName, isSystemUserId } from "../../lib/utils";
 import { useApps } from "@conclave/apps-sdk";
 import DevPlaygroundLayout from "../DevPlaygroundLayout";
 import DevMeetToolsPanel from "../DevMeetToolsPanel";
 import ParticipantVideo from "../ParticipantVideo";
+import { useCameraPermissionState } from "../../hooks/useCameraPermissionState";
 import { useStableSpeakerId } from "../../hooks/useStableSpeakerId";
+import {
+  prewarmVideoEffectsAssets,
+  type VideoEffectsDebugStats,
+  type VideoEffectsRuntimeStatus,
+} from "../../hooks/useVideoEffects";
+import {
+  type VideoEffectsState,
+} from "../../lib/video-effects";
 
 interface MobileMeetsMainContentProps {
   isJoined: boolean;
@@ -67,6 +77,14 @@ interface MobileMeetsMainContentProps {
   presentationStream: MediaStream | null;
   presenterName: string;
   localStream: MediaStream | null;
+  videoEffects: VideoEffectsState;
+  onVideoEffectsChange: Dispatch<SetStateAction<VideoEffectsState>>;
+  onVideoEffectsRecenter?: () => void;
+  videoEffectsStatus: VideoEffectsRuntimeStatus;
+  videoEffectsError: string | null;
+  videoEffectsDebugStats?: VideoEffectsDebugStats | null;
+  activeVideoEffectsCount: number;
+  onPrejoinMediaCommit?: (handoff: PrejoinMediaHandoff) => void;
   isCameraOff: boolean;
   isMuted: boolean;
   isHandRaised: boolean;
@@ -157,16 +175,6 @@ interface MobileMeetsMainContentProps {
   ) => Promise<WebinarConfigSnapshot | null>;
   onGenerateWebinarLink?: () => Promise<WebinarLinkResponse | null>;
   onRotateWebinarLink?: () => Promise<WebinarLinkResponse | null>;
-  recordingActive?: boolean;
-  recordingPaused?: boolean;
-  recordingBusy?: boolean;
-  recordingStartedAt?: number | null;
-  recordingTrackCount?: number;
-  recordingAvailable?: boolean;
-  onStartRecording?: () => void;
-  onStopRecording?: () => void;
-  onPauseRecording?: () => void;
-  onResumeRecording?: () => void;
 }
 
 const getLiveVideoStream = (stream: MediaStream | null): MediaStream | null => {
@@ -253,6 +261,14 @@ function MobileMeetsMainContent({
   presentationStream,
   presenterName,
   localStream,
+  videoEffects,
+  onVideoEffectsChange,
+  onVideoEffectsRecenter,
+  videoEffectsStatus,
+  videoEffectsError,
+  videoEffectsDebugStats = null,
+  activeVideoEffectsCount,
+  onPrejoinMediaCommit,
   isCameraOff,
   isMuted,
   isHandRaised,
@@ -337,9 +353,6 @@ function MobileMeetsMainContent({
   onUpdateWebinarConfig,
   onGenerateWebinarLink,
   onRotateWebinarLink,
-  recordingActive = false,
-  recordingPaused = false,
-  recordingStartedAt = null,
 }: MobileMeetsMainContentProps) {
   const {
     state: appsState,
@@ -508,6 +521,49 @@ function MobileMeetsMainContent({
     y: number;
   } | null>(null);
   const [showAndroidUpsell, setShowAndroidUpsell] = useState(false);
+  const [isVideoEffectsOpen, setIsVideoEffectsOpen] = useState(false);
+  const cameraPermissionState = useCameraPermissionState();
+  const hasLiveLocalCamera = Boolean(getLiveVideoStream(localStream));
+  const isCameraPermissionBlocked =
+    meetError?.code === "PERMISSION_DENIED" ||
+    (!hasLiveLocalCamera &&
+      (cameraPermissionState === "prompt" ||
+        cameraPermissionState === "denied"));
+  const prewarmEffectsPanelOpen = useCallback(() => {
+    void prewarmVideoEffectsAssets({
+      segmentation: true,
+      face: true,
+      reason: "mobile-effects-panel-open",
+    });
+  }, []);
+  const handleToggleVideoEffects = useCallback(() => {
+    if (isCameraPermissionBlocked) return;
+    const opening = !isVideoEffectsOpen;
+    if (opening) {
+      prewarmEffectsPanelOpen();
+      if (isChatOpen) {
+        toggleChat();
+      }
+      setIsParticipantsOpen(false);
+    }
+    setIsVideoEffectsOpen(opening);
+  }, [
+    isCameraPermissionBlocked,
+    isChatOpen,
+    isVideoEffectsOpen,
+    prewarmEffectsPanelOpen,
+    setIsParticipantsOpen,
+    toggleChat,
+  ]);
+  const handleCloseVideoEffects = useCallback(
+    () => setIsVideoEffectsOpen(false),
+    [],
+  );
+  useEffect(() => {
+    if (!isJoined || isWebinarAttendee) {
+      setIsVideoEffectsOpen(false);
+    }
+  }, [isJoined, isWebinarAttendee]);
   const webinarStage = useMemo(() => {
     if (!webinarParticipants.length) {
       return null;
@@ -728,7 +784,7 @@ function MobileMeetsMainContent({
       return (
         <div className="flex flex-1 items-center justify-center px-5">
           <div className="mobile-sheet-card px-6 py-4 text-center">
-            <p className="text-sm text-[#FEFCD9]">
+            <p className="text-sm text-[#fafafa]">
               {isLoading ? "Joining webinar..." : "Preparing webinar..."}
             </p>
             {meetError ? (
@@ -762,12 +818,15 @@ function MobileMeetsMainContent({
         onDismissMeetError={onDismissMeetError}
         onRetryMedia={onRetryMedia}
         onTestSpeaker={onTestSpeaker}
+        onPrejoinMediaCommit={onPrejoinMediaCommit}
+        videoEffects={videoEffects}
+        onVideoEffectsChange={onVideoEffectsChange}
       />
     );
   }
 
   return (
-    <div className="flex-1 flex flex-col bg-[#060606] overflow-hidden relative h-full">
+    <div className="flex-1 flex flex-col bg-[#0a0a0b] overflow-hidden relative h-full">
       {isJoined && (
         <ConnectionBanner
           state={connectionState}
@@ -784,20 +843,19 @@ function MobileMeetsMainContent({
       />
       <ScreenShareAudioPlayers
         participants={participants}
+        currentUserId={currentUserId}
         audioOutputDeviceId={audioOutputDeviceId}
       />
-      {/* Status bar area */}
-      <div className="safe-area-pt bg-[#060606]" />
+      <div className="safe-area-pt bg-[#0a0a0b]" />
 
-      {/* Header with room info */}
       <div className="flex items-center justify-between px-4 py-3">
         <div className="flex items-center gap-2">
           <div className="mobile-glass mobile-pill px-3 py-2 flex items-center gap-2">
             <span
-              className="text-[11px] font-medium text-[#FEFCD9] uppercase tracking-[0.2em]"
-              style={{ fontFamily: "'PolySans Mono', monospace" }}
+              className="text-[12px] font-medium text-[#fafafa]"
+              style={{ fontFamily: "'PolySans Trial', sans-serif" }}
             >
-              {roomId.toUpperCase()}
+              {roomId}
             </span>
           </div>
         </div>
@@ -806,13 +864,13 @@ function MobileMeetsMainContent({
             <button
               type="button"
               onClick={handleOpenParticipants}
-              className="mobile-glass mobile-pill px-3 py-2 flex items-center gap-2 text-[#FEFCD9]"
+              className="mobile-glass mobile-pill px-3 py-2 flex items-center gap-2 text-[#fafafa]"
               aria-label="Open participants panel"
             >
-              <Users className="w-3.5 h-3.5 text-[#FEFCD9]/70" />
+              <Users className="w-3.5 h-3.5 text-[#fafafa]/82" />
               <span
-                className="text-[11px] font-medium text-[#FEFCD9] uppercase tracking-[0.2em]"
-                style={{ fontFamily: "'PolySans Mono', monospace" }}
+                className="text-[12px] font-medium text-[#fafafa]"
+                style={{ fontFamily: "'PolySans Trial', sans-serif" }}
               >
                 {isWebinarAttendee
                   ? `${webinarConfig?.attendeeCount ?? 0}`
@@ -821,20 +879,20 @@ function MobileMeetsMainContent({
             </button>
           )}
           {isScreenSharing && (
-            <div className="mobile-glass-soft mobile-pill px-2.5 py-1 flex items-center gap-1 text-[#F95F4A] text-[9px] uppercase tracking-[0.2em] font-medium">
+            <div className="mobile-glass-soft mobile-pill px-2.5 py-1 flex items-center gap-1 text-[#F95F4A] text-[11px] font-medium">
               <span className="w-1.5 h-1.5 rounded-full bg-[#F95F4A]" />
               Sharing
             </div>
           )}
           {ghostEnabled && (
-            <div className="mobile-glass-soft mobile-pill px-2.5 py-1 flex items-center gap-1 text-[#FF007A] text-[9px] uppercase tracking-[0.2em] font-medium">
+            <div className="mobile-glass-soft mobile-pill px-2.5 py-1 flex items-center gap-1 text-[#FF007A] text-[11px] font-medium">
               <Ghost className="w-3 h-3" />
             </div>
           )}
           {(connectionState === "reconnecting" ||
             (serverRestartNotice &&
               !["error", "disconnected"].includes(connectionState))) && (
-            <div className="mobile-glass-soft mobile-pill px-2.5 py-1 flex items-center gap-1 text-amber-300 text-[9px] uppercase tracking-[0.2em] font-medium">
+            <div className="mobile-glass-soft mobile-pill px-2.5 py-1 flex items-center gap-1 text-amber-300 text-[11px] font-medium">
               <RefreshCw className="w-3 h-3 animate-spin" />
             </div>
           )}
@@ -848,24 +906,17 @@ function MobileMeetsMainContent({
         />
       )}
 
-      {/* Reactions overlay */}
       {!isWebinarAttendee && reactions.length > 0 && (
         <ReactionOverlay
           reactions={reactions}
           getDisplayName={resolveDisplayName}
         />
       )}
-      <RecordingIndicator
-        active={recordingActive}
-        paused={recordingPaused}
-        startedAt={recordingStartedAt}
-      />
       {isDevPlaygroundEnabled && !isWebinarAttendee && (
         <DevMeetToolsPanel roomId={roomId} />
       )}
 
-      {/* Main content area - with padding for controls */}
-      <div className="flex-1 min-h-0 pb-24">
+      <div className="flex-1 min-h-0 pb-40">
         {isWebinarAttendee ? (
           <div className="flex h-full items-center justify-center px-4">
             {webinarStage ? (
@@ -887,7 +938,7 @@ function MobileMeetsMainContent({
                 />
                 {webinarStage.pip ? (
                   <div
-                    className={`absolute h-24 w-36 overflow-hidden rounded-xl border border-[#FEFCD9]/20 bg-black/75 shadow-[0_12px_24px_rgba(0,0,0,0.45)] ${pipDragPosition ? "" : pipCornerClass} cursor-grab active:cursor-grabbing touch-none select-none`}
+                    className={`absolute h-24 w-36 overflow-hidden rounded-xl border border-[#fafafa]/20 bg-black/75 ${pipDragPosition ? "" : pipCornerClass} cursor-grab active:cursor-grabbing touch-none select-none`}
                     style={
                       pipDragPosition
                         ? {
@@ -915,7 +966,7 @@ function MobileMeetsMainContent({
               </div>
             ) : (
               <div className="mobile-sheet-card px-5 py-4 text-center">
-                <p className="text-sm text-[#FEFCD9]">
+                <p className="text-sm text-[#fafafa]">
                   Waiting for the host to start speaking...
                 </p>
               </div>
@@ -995,7 +1046,6 @@ function MobileMeetsMainContent({
         )}
       </div>
 
-      {/* Chat overlay messages */}
       {!isWebinarAttendee && !isChatOpen && chatOverlayMessages.length > 0 && (
         <div className="absolute top-16 left-4 right-4 z-30 pointer-events-none">
           <ChatOverlay
@@ -1008,46 +1058,53 @@ function MobileMeetsMainContent({
       )}
 
       {isJoined && !isWebinarAttendee && browserLaunchError && (
-        <div className="absolute top-16 left-4 right-4 z-40 mobile-sheet-card border border-[#F95F4A]/30 px-3 py-2 text-xs text-[#FEFCD9]/90 shadow-2xl">
+        <div className="absolute top-16 left-4 right-4 z-40 mobile-sheet-card border border-[#F95F4A]/30 px-3 py-2 text-xs text-[#fafafa]/90">
           <div className="flex items-start gap-2">
             <span className="font-medium text-[#F95F4A]">Browser error</span>
             {onClearBrowserError && (
               <button
+                type="button"
                 onClick={onClearBrowserError}
-                className="ml-auto text-[#FEFCD9]/50 hover:text-[#FEFCD9]"
+                className="ml-auto inline-flex h-6 w-6 items-center justify-center rounded-full text-[#fafafa]/66 hover:text-[#fafafa]"
                 aria-label="Dismiss browser error"
               >
-                X
+                <X className="h-3.5 w-3.5" />
               </button>
             )}
           </div>
-          <p className="mt-1 text-[11px] text-[#FEFCD9]/70">
+          <p className="mt-1 text-[11px] text-[#fafafa]/82">
             {browserLaunchError}
           </p>
         </div>
       )}
       {isJoined && !isWebinarAttendee && voiceAgentError && (
-        <div className="absolute top-16 left-4 right-4 z-40 mobile-sheet-card border border-[#F95F4A]/30 px-3 py-2 text-xs text-[#FEFCD9]/90 shadow-2xl">
+        <div className="absolute top-16 left-4 right-4 z-40 mobile-sheet-card border border-[#F95F4A]/30 px-3 py-2 text-xs text-[#fafafa]/90">
           <div className="flex items-start gap-2">
             <span className="font-medium text-[#F95F4A]">Voice agent error</span>
             {onClearVoiceAgentError && (
               <button
+                type="button"
                 onClick={onClearVoiceAgentError}
-                className="ml-auto text-[#FEFCD9]/50 hover:text-[#FEFCD9]"
+                className="ml-auto inline-flex h-6 w-6 items-center justify-center rounded-full text-[#fafafa]/66 hover:text-[#fafafa]"
                 aria-label="Dismiss voice agent error"
               >
-                X
+                <X className="h-3.5 w-3.5" />
               </button>
             )}
           </div>
-          <p className="mt-1 text-[11px] text-[#FEFCD9]/70">{voiceAgentError}</p>
+          <p className="mt-1 text-[11px] text-[#fafafa]/82">{voiceAgentError}</p>
         </div>
       )}
 
-      {/* Controls bar */}
       {!isWebinarAttendee && browserAudioNeedsGesture && (
-        <div className="px-4 mt-2 text-[11px] text-[#F95F4A]/70 text-center uppercase tracking-[0.4em]">
-          Tap "Shared browser audio" to unlock the system sound.
+        <div className="px-4 mt-2 flex justify-center">
+          <button
+            type="button"
+            onClick={onToggleBrowserAudio}
+            className="rounded-full bg-[#F95F4A] px-4 py-2 text-[13px] font-medium text-white transition-colors active:scale-95 hover:bg-[#e8553f]"
+          >
+            Tap to enable shared browser audio
+          </button>
         </div>
       )}
       <MobileControlsBar
@@ -1070,6 +1127,10 @@ function MobileMeetsMainContent({
         isParticipantsOpen={isParticipantsOpen}
         onToggleParticipants={handleToggleParticipants}
         pendingUsersCount={isAdmin ? pendingUsers.size : 0}
+        isVideoEffectsOpen={isVideoEffectsOpen}
+        activeVideoEffectsCount={activeVideoEffectsCount}
+        isVideoEffectsPermissionBlocked={isCameraPermissionBlocked}
+        onToggleVideoEffects={handleToggleVideoEffects}
         isAdmin={isAdmin}
         isRoomLocked={isRoomLocked}
         onToggleLock={onToggleLock}
@@ -1120,6 +1181,24 @@ function MobileMeetsMainContent({
         onGenerateWebinarLink={onGenerateWebinarLink}
         onRotateWebinarLink={onRotateWebinarLink}
       />
+
+      {isJoined && !isWebinarAttendee && isVideoEffectsOpen && (
+        <VideoEffectsPanel
+          variant="dialog"
+          effects={videoEffects}
+          onEffectsChange={onVideoEffectsChange}
+          onRecenterFraming={onVideoEffectsRecenter}
+          localStream={localStream}
+          isCameraOff={isCameraOff}
+          status={videoEffectsStatus}
+          error={videoEffectsError}
+          debugStats={videoEffectsDebugStats}
+          activeCount={activeVideoEffectsCount}
+          cameraPermissionBlocked={isCameraPermissionBlocked}
+          onToggleCamera={toggleCamera}
+          onClose={handleCloseVideoEffects}
+        />
+      )}
 
       {/* Full-screen chat panel */}
       {!isWebinarAttendee && (

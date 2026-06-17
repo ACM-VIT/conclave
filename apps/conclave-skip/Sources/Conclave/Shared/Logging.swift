@@ -2,7 +2,7 @@ import Foundation
 
 #if DEBUG
 func debugLog(_ message: String) {
-    print(message)
+    Swift.print(message)
 }
 
 func debugLog(_ message: () -> String) {

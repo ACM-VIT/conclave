@@ -8,6 +8,7 @@ const isCI = process.env.CI === "1" || process.env.CI === "true";
 const workspaceRoot = path.resolve(__dirname, "../..");
 const appsSdkPath = path.resolve(workspaceRoot, "packages/apps-sdk");
 const meetingCorePath = path.resolve(workspaceRoot, "packages/meeting-core");
+const uiTokensPath = path.resolve(workspaceRoot, "packages/ui-tokens");
 const workspaceNodeModulesPath = path.resolve(workspaceRoot, "node_modules");
 const isomorphicWebcryptoShimPackagePath = path.resolve(
   __dirname,
@@ -72,6 +73,10 @@ config.resolver = {
       meetingCorePath,
       "src/video-encodings.ts"
     ),
+    "@conclave/ui-tokens": path.join(uiTokensPath, "src/index.ts"),
+    "@conclave/ui-tokens/native": path.join(uiTokensPath, "src/native/index.ts"),
+    "@conclave/ui-tokens/core": path.join(uiTokensPath, "src/core/index.ts"),
+    "@conclave/ui-tokens/tokens.css": path.join(uiTokensPath, "src/tokens.css"),
     "event-target-shim": eventTargetShimPath,
     "event-target-shim/index": eventTargetShimIndexPath,
     "isomorphic-webcrypto": isomorphicWebcryptoShimPackagePath,
@@ -91,7 +96,12 @@ config.resolver = {
   disableHierarchicalLookup: true,
 };
 
-config.watchFolders = [appsSdkPath, meetingCorePath, workspaceNodeModulesPath];
+config.watchFolders = [
+  appsSdkPath,
+  meetingCorePath,
+  uiTokensPath,
+  workspaceNodeModulesPath,
+];
 
 module.exports = withNativeWind(config, {
   input: "./src/global.css",

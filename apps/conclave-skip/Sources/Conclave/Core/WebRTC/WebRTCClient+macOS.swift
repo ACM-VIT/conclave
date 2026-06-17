@@ -26,23 +26,47 @@ final class VideoTrackWrapper: Identifiable {
 final class WebRTCClient {
     var onLocalAudioEnabledChanged: ((Bool) -> Void)?
     var onLocalVideoEnabledChanged: ((Bool) -> Void)?
+    var onTransportConnectionStateChanged: ((String, String) -> Void)?
 
     private(set) var localAudioEnabled: Bool = false
     private(set) var localVideoEnabled: Bool = false
     var remoteVideoTracks: [String: VideoTrackWrapper] = [:]
+    var isConfigured: Bool { false }
+    func hasBrokenTransport() -> Bool { false }
 
-    func configure(socketManager: SocketIOManager, rtpCapabilities: RtpCapabilities) { }
+    func configure(socketManager: SocketIOManager, rtpCapabilities: RtpCapabilities, iceServersJSON: String?) { }
     func createTransports() async throws { }
-    func consumeProducer(producerId: String, producerUserId: String) async throws { }
+    func restartIce() async -> Bool { false }
+    func restartIce(transportKind: String) async -> Bool { false }
+    func consumeProducer(producerId: String, producerUserId: String, producerType: String = "webcam") async throws { }
     func closeConsumer(producerId: String, userId: String) { }
     func updateVideoQuality(_ quality: VideoQuality) { }
     func startProducingAudio() async throws { }
     func startProducingVideo() async throws { }
-    func cleanup() async { }
-    func setAudioEnabled(_ enabled: Bool) async { }
-    func setVideoEnabled(_ enabled: Bool) async { }
+    func cleanup(notifyLocalState: Bool = true) async { }
+    func checkVideoFreezes() async { }
+    func sampleConnectionQuality() -> ConnectionQuality { .unknown }
+    func consumerId(forProducer producerId: String) -> String? { nil }
+    func closeConsumers(exceptProducerIds producerIds: [String]) { }
+    func hasAudioConsumer(userIdPrefix: String) -> Bool { false }
+    func setAudioConsumersEnabled(userIdPrefix: String, enabled: Bool) { }
+    func setAudioEnabled(_ enabled: Bool) async throws { }
+    func setVideoEnabled(_ enabled: Bool) async throws { }
+    func closeLocalVideoProducer() async { }
+    func closeLocalScreenProducer() async { }
+    func closeLocalMedia(kind: String, type: String, producerId: String? = nil) async -> Bool { false }
 
     func getCaptureSession() -> Any? { nil }
     func getLocalVideoTrack() -> Any? { nil }
+
+    func sampleAudioLevels(localUserId: String? = nil) -> [String: Double] { [:] }
+
+    func availableAudioInputs() -> [AudioDevice] { [] }
+    func availableAudioOutputs() -> [AudioDevice] { [] }
+    func currentAudioInputId() -> String? { nil }
+    func currentAudioOutputId() -> String? { nil }
+    func selectAudioInput(_ deviceId: String) { }
+    func selectAudioOutput(_ deviceId: String) { }
+    func testSpeaker() { }
 }
 #endif

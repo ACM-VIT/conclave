@@ -1,34 +1,38 @@
 import type { Worker } from "mediasoup/types";
 
-const getWorker = (workers: Worker[]): Promise<Worker> => {
-  return new Promise(async (resolve, reject) => {
-    if (workers.length === 0) {
-      reject(new Error("No workers available"));
-      return;
+export type WorkerLoadOptions = {
+  loadScoresByPid?: Map<number, number>;
+};
+
+const getWorker = async (
+  workers: Worker[],
+  options: WorkerLoadOptions = {},
+): Promise<Worker> => {
+  // Only consider live workers. A worker that just died and is mid-replacement
+  // must not receive a new router.
+  const liveWorkers = workers.filter((worker) => !worker.closed);
+  if (liveWorkers.length === 0) {
+    throw new Error("No workers available");
+  }
+
+  let leastLoadedWorker = liveWorkers[0];
+  let leastWorkerLoad =
+    typeof leastLoadedWorker.pid === "number"
+      ? options.loadScoresByPid?.get(leastLoadedWorker.pid) ?? 0
+      : 0;
+
+  for (const worker of liveWorkers.slice(1)) {
+    const workerLoad =
+      typeof worker.pid === "number"
+        ? options.loadScoresByPid?.get(worker.pid) ?? 0
+        : 0;
+    if (workerLoad < leastWorkerLoad) {
+      leastLoadedWorker = worker;
+      leastWorkerLoad = workerLoad;
     }
+  }
 
-    const workersLoad = workers.map((worker) => {
-      return new Promise<number>(async (resolve) => {
-        const stats = await worker.getResourceUsage();
-        const cpuUsage = stats.ru_utime + stats.ru_stime;
-        resolve(cpuUsage);
-      });
-    });
-
-    const workersLoadCalc = await Promise.all(workersLoad);
-
-    let leastLoadedWorkerIndex = 0;
-    let leastWorkerLoad = workersLoadCalc[0];
-
-    for (let i = 1; i < workersLoadCalc.length; i++) {
-      if (workersLoadCalc[i] < leastWorkerLoad) {
-        leastLoadedWorkerIndex = i;
-        leastWorkerLoad = workersLoadCalc[i];
-      }
-    }
-
-    resolve(workers[leastLoadedWorkerIndex]);
-  });
+  return leastLoadedWorker;
 };
 
 export default getWorker;

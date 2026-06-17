@@ -18,7 +18,24 @@ import {
   updateWebinarRoomConfig,
 } from "../../webinar.js";
 import type { ConnectionContext } from "../context.js";
+import { RATE_LIMITS, takeToken } from "../rateLimit.js";
 import { respond } from "./ack.js";
+
+const MAX_INVITE_CODE_LENGTH = 256;
+const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/;
+
+const normalizeInviteCode = (value: unknown): string | null => {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim();
+  if (
+    !normalized ||
+    normalized.length > MAX_INVITE_CODE_LENGTH ||
+    CONTROL_CHARACTER_PATTERN.test(normalized)
+  ) {
+    return null;
+  }
+  return normalized;
+};
 
 const ensureAdminRoom = (
   context: ConnectionContext,
@@ -29,6 +46,10 @@ const ensureAdminRoom = (
 
   if (!(context.currentClient instanceof Admin)) {
     return { error: "Only admins can manage webinar settings" };
+  }
+
+  if (!takeToken(context.socket, "webinar:admin", RATE_LIMITS.adminAction)) {
+    return { error: "Too many admin requests; please retry shortly" };
   }
 
   return { roomId: context.currentRoom.id };
@@ -77,14 +98,36 @@ export const registerWebinarHandlers = (context: ConnectionContext): void => {
       );
 
       try {
-        const update = data ?? {};
-        const { changed: baseChanged } = updateWebinarRoomConfig(
+        const update = { ...(data ?? {}) };
+        if (Object.prototype.hasOwnProperty.call(update, "inviteCode")) {
+          if (
+            typeof update.inviteCode === "string" &&
+            update.inviteCode.trim()
+          ) {
+            const normalizedInviteCode = normalizeInviteCode(update.inviteCode);
+            if (!normalizedInviteCode) {
+              respond(callback, { error: "Invalid invite code" });
+              return;
+            }
+            update.inviteCode = normalizedInviteCode;
+          } else {
+            update.inviteCode = null;
+          }
+        }
+        const {
+          changed: baseChanged,
+          linkVersionBumped,
+        } = updateWebinarRoomConfig(
           webinarConfig,
           update,
         );
         let changed = baseChanged;
+        const disablingWebinar = update.enabled === false;
 
-        if (Object.prototype.hasOwnProperty.call(update, "linkSlug")) {
+        if (
+          !disablingWebinar &&
+          Object.prototype.hasOwnProperty.call(update, "linkSlug")
+        ) {
           const rawLinkSlug =
             typeof update.linkSlug === "string" ? update.linkSlug.trim() : "";
 
@@ -109,6 +152,18 @@ export const registerWebinarHandlers = (context: ConnectionContext): void => {
             if (slugChanged) {
               webinarConfig.linkVersion += 1;
             }
+          }
+        }
+
+        if (disablingWebinar) {
+          const cleared = clearWebinarLinkSlug({
+            webinarConfig,
+            webinarLinks: state.webinarLinks,
+            roomChannelId: room.channelId,
+          });
+          changed = changed || cleared;
+          if (cleared && !linkVersionBumped) {
+            webinarConfig.linkVersion += 1;
           }
         }
 

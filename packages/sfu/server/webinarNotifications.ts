@@ -42,15 +42,19 @@ export const emitWebinarAttendeeCountChanged = (
   state: SfuState,
   room: Room,
 ): void => {
-  const webinarConfig = getOrCreateWebinarRoomConfig(
-    state.webinarConfigs,
-    room.channelId,
-  );
+  const attendeeCount = room.getWebinarAttendeeCount();
+  const webinarConfig = state.webinarConfigs.get(room.channelId);
+  if (!webinarConfig && attendeeCount === 0) {
+    return;
+  }
 
   io.to(room.channelId).emit("webinar:attendeeCountChanged", {
     roomId: room.id,
-    attendeeCount: room.getWebinarAttendeeCount(),
-    maxAttendees: webinarConfig.maxAttendees,
+    attendeeCount,
+    maxAttendees:
+      webinarConfig?.maxAttendees ??
+      getOrCreateWebinarRoomConfig(state.webinarConfigs, room.channelId)
+        .maxAttendees,
   } satisfies WebinarAttendeeCountChangedNotification);
 };
 

@@ -9,6 +9,7 @@ import {
   Linking,
   NativeModules,
   Platform,
+  Share,
   StyleSheet,
   findNodeHandle,
   type ViewProps,
@@ -63,6 +64,7 @@ import { PendingJoinToast } from "./pending-join-toast";
 import { ParticipantsPanel } from "./participants-panel";
 import { ReactionOverlay } from "./reaction-overlay";
 import { ReactionSheet } from "./reaction-sheet";
+import { MoreSheet } from "./more-sheet";
 import { SettingsSheet } from "./settings-sheet";
 import {
   AppsProvider,
@@ -72,6 +74,7 @@ import {
 import { whiteboardApp } from "@conclave/apps-sdk/whiteboard/native";
 
 const clientId = process.env.EXPO_PUBLIC_SFU_CLIENT_ID || "public";
+const MEETING_LINK_BASE = "https://conclave.acmvit.in";
 const apiBaseUrl =
   process.env.EXPO_PUBLIC_SFU_BASE_URL ||
   process.env.EXPO_PUBLIC_API_URL ||
@@ -312,8 +315,12 @@ export function MeetScreen({
   const pendingToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingToastSeenRef = useRef<Set<string>>(new Set());
 
-  const userKey = user?.email || user?.id || `guest-${guestSessionId}`;
-  const userId = `${userKey}#${refs.sessionIdRef.current}`;
+  const sessionId = refs.sessionIdRef.current;
+  const isGuestIdentity = !user || Boolean(user.id?.startsWith("guest-"));
+  const userKey = isGuestIdentity
+    ? `guest-${sessionId}`
+    : user.email || user.id || `guest-${sessionId}`;
+  const userId = `${userKey}#${sessionId}`;
 
   const {
     setDisplayNames,
@@ -418,14 +425,17 @@ export function MeetScreen({
   });
 
   const participantCount = useMemo(() => {
-    let count = 1; // include local user
+    let count = 1;
     participants.forEach((participant) => {
-      if (!isSystemUserId(participant.userId)) {
+      if (
+        participant.userId !== userId &&
+        !isSystemUserId(participant.userId)
+      ) {
         count += 1;
       }
     });
     return count;
-  }, [participants]);
+  }, [participants, userId]);
 
   const participantCountRef = useRef(participantCount);
   useEffect(() => {
@@ -1411,14 +1421,22 @@ export function MeetScreen({
 
   const [isReactionSheetOpen, setIsReactionSheetOpen] = useState(false);
   const [isSettingsSheetOpen, setIsSettingsSheetOpen] = useState(false);
+  const [isMoreSheetOpen, setIsMoreSheetOpen] = useState(false);
   const hasAutoJoinedRef = useRef(false);
 
   const handleToggleChat = useCallback(() => {
     setIsParticipantsOpen(false);
     setIsReactionSheetOpen(false);
     setIsSettingsSheetOpen(false);
+    setIsMoreSheetOpen(false);
     toggleChat();
-  }, [toggleChat, setIsParticipantsOpen, setIsReactionSheetOpen, setIsSettingsSheetOpen]);
+  }, [
+    toggleChat,
+    setIsParticipantsOpen,
+    setIsReactionSheetOpen,
+    setIsSettingsSheetOpen,
+    setIsMoreSheetOpen,
+  ]);
 
   useEffect(() => {
     if (Platform.OS !== "android") return;
@@ -1435,6 +1453,11 @@ export function MeetScreen({
 
       if (isTakeoverPromptOpen) {
         resolveTakeoverPrompt(false);
+        return true;
+      }
+
+      if (isMoreSheetOpen) {
+        setIsMoreSheetOpen(false);
         return true;
       }
 
@@ -1478,6 +1501,7 @@ export function MeetScreen({
     blockBackNavigation,
     isDisplayNameSheetOpen,
     isTakeoverPromptOpen,
+    isMoreSheetOpen,
     isSettingsSheetOpen,
     isReactionSheetOpen,
     isParticipantsOpen,
@@ -1517,7 +1541,7 @@ export function MeetScreen({
     void handleJoin(targetRoomId, { isHost: false });
   }, [autoJoinOnMount, handleJoin, initialRoomId, roomId]);
 
-  type ScreenSharePickerHandle = React.Component<any, any>;
+  type ScreenSharePickerHandle = React.Component<unknown, unknown>;
   const IOS_SCREENSHARE_EXTENSION_BUNDLE_ID =
     "com.acmvit.conclave.ScreenShareExtension";
   const ScreenSharePicker =
@@ -1740,7 +1764,7 @@ export function MeetScreen({
       isAdmin={isAdmin}
       uploadAsset={uploadAsset}
     >
-      <View className="flex-1 bg-[#0d0e0d]">
+      <View className="flex-1 bg-[#131316]">
         <StatusBar style="light" />
       {isJoined && meetError ? (
         <ErrorSheet
@@ -1778,7 +1802,7 @@ export function MeetScreen({
         hideJoinUI ? (
           <View className="flex-1 items-center justify-center px-6">
             <View className="rounded-2xl border border-white/10 bg-black/50 px-6 py-5">
-              <Text className="text-sm font-medium text-[#FEFCD9]">
+              <Text className="text-sm font-medium text-[#fafafa]">
                 {isLoading ? "Joining webinar..." : "Preparing webinar..."}
               </Text>
               {meetError ? (
@@ -1868,7 +1892,15 @@ export function MeetScreen({
             if (isChatOpen) toggleChat();
             setIsParticipantsOpen(false);
             setIsReactionSheetOpen(false);
+            setIsMoreSheetOpen(false);
             setIsSettingsSheetOpen(true);
+          }}
+          onOpenMore={() => {
+            if (isChatOpen) toggleChat();
+            setIsParticipantsOpen(false);
+            setIsReactionSheetOpen(false);
+            setIsSettingsSheetOpen(false);
+            setIsMoreSheetOpen(true);
           }}
           onLeave={handleLeave}
           isAdmin={isAdmin}
@@ -1963,6 +1995,84 @@ export function MeetScreen({
             setIsReactionSheetOpen(false);
           }}
           onClose={() => setIsReactionSheetOpen(false)}
+        />
+      ) : null}
+
+      {isJoined && !isWebinarAttendee ? (
+        <MoreSheet
+          isOpen={isMoreSheetOpen}
+          isHandRaised={isHandRaised}
+          isScreenSharing={isScreenSharing}
+          isScreenShareAvailable={
+            isScreenSharing ||
+            !presentationStream ||
+            presenterName === "You"
+          }
+          isChatOpen={isChatOpen}
+          isRoomLocked={isRoomLocked}
+          isNoGuests={isNoGuests}
+          isChatLocked={isChatLocked}
+          isTtsDisabled={isTtsDisabled}
+          isDmEnabled={isDmEnabled}
+          isAdmin={isAdmin}
+          showWhiteboardControl={false}
+          pendingUsersCount={pendingUsers.size}
+          unreadCount={unreadCount}
+          showParticipantsControl={!isWebinarSession}
+          onToggleScreenShare={() => {
+            setIsMoreSheetOpen(false);
+            void handleToggleScreenShare();
+          }}
+          onToggleHand={() => {
+            setIsMoreSheetOpen(false);
+            toggleHandRaised();
+          }}
+          onToggleChat={() => {
+            setIsMoreSheetOpen(false);
+            handleToggleChat();
+          }}
+          onToggleParticipants={() => {
+            setIsMoreSheetOpen(false);
+            if (isWebinarSession) return;
+            if (isChatOpen) toggleChat();
+            setIsReactionSheetOpen(false);
+            setIsSettingsSheetOpen(false);
+            setIsParticipantsOpen((prev) => !prev);
+          }}
+          onOpenReactions={() => {
+            setIsMoreSheetOpen(false);
+            if (isChatOpen) toggleChat();
+            setIsParticipantsOpen(false);
+            setIsSettingsSheetOpen(false);
+            setIsReactionSheetOpen(true);
+          }}
+          onShareLink={() => {
+            setIsMoreSheetOpen(false);
+            void Share.share({
+              message: `Join my Conclave meeting: ${MEETING_LINK_BASE}/${roomId}`,
+            }).catch(() => {});
+          }}
+          onToggleRoomLock={(locked) => {
+            setIsMoreSheetOpen(false);
+            socket.toggleRoomLock?.(locked);
+          }}
+          onToggleNoGuests={(noGuests) => {
+            setIsMoreSheetOpen(false);
+            socket.toggleNoGuests?.(noGuests);
+          }}
+          onToggleChatLock={(locked) => {
+            setIsMoreSheetOpen(false);
+            socket.toggleChatLock?.(locked);
+          }}
+          onToggleTtsDisabled={(disabled) => {
+            setIsMoreSheetOpen(false);
+            socket.toggleTtsDisabled?.(disabled);
+          }}
+          onToggleDmEnabled={(enabled) => {
+            setIsMoreSheetOpen(false);
+            socket.toggleDmEnabled?.(enabled);
+          }}
+          onClose={() => setIsMoreSheetOpen(false)}
         />
       ) : null}
 
@@ -2075,10 +2185,10 @@ export function MeetScreen({
           <View className="bg-neutral-900 border border-white/10 rounded-3xl px-6 py-5">
             <View className="gap-2">
               <View className="gap-2">
-                <Text className="text-base font-semibold text-[#FEFCD9]" selectable>
+                <Text className="text-base font-semibold text-[#fafafa]" selectable>
                   {waitingMessage}
                 </Text>
-                <Text className="text-xs text-[#FEFCD9]/60">
+                <Text className="text-xs text-[#fafafa]/60">
                   We’ll let you in as soon as the host admits you.
                 </Text>
               </View>
@@ -2090,12 +2200,12 @@ export function MeetScreen({
       {isInviteCodePromptOpen ? (
         <View className="absolute inset-0 bg-black/75 items-center justify-center px-6">
           <View className="w-full max-w-sm rounded-3xl border border-white/10 bg-[#111111] p-5">
-            <Text className="text-base font-semibold text-[#FEFCD9]">
+            <Text className="text-base font-semibold text-[#fafafa]">
               {inviteCodePromptMode === "meeting"
                 ? "Meeting invite code"
                 : "Webinar invite code"}
             </Text>
-            <Text className="mt-1 text-xs text-[#FEFCD9]/60">
+            <Text className="mt-1 text-xs text-[#fafafa]/60">
               {inviteCodePromptMode === "meeting"
                 ? "This meeting requires an invite code."
                 : "This webinar requires an invite code."}
@@ -2112,8 +2222,8 @@ export function MeetScreen({
               autoCapitalize="none"
               autoCorrect={false}
               placeholder="Invite code"
-              placeholderTextColor="rgba(254,252,217,0.35)"
-              className="mt-4 rounded-xl border border-white/10 bg-black/40 px-3 py-3 text-[#FEFCD9]"
+              placeholderTextColor="rgba(250, 250, 250,0.35)"
+              className="mt-4 rounded-xl border border-white/10 bg-black/40 px-3 py-3 text-[#fafafa]"
               onSubmitEditing={handleSubmitInviteCodePrompt}
               returnKeyType="done"
             />
@@ -2127,7 +2237,7 @@ export function MeetScreen({
                 onPress={handleCancelInviteCodePrompt}
                 className="rounded-xl border border-white/15 px-3 py-2"
               >
-                <Text className="text-xs uppercase tracking-[0.14em] text-[#FEFCD9]/70">
+                <Text className="text-xs uppercase tracking-[0.14em] text-[#fafafa]/70">
                   Cancel
                 </Text>
               </Pressable>
@@ -2147,10 +2257,10 @@ export function MeetScreen({
       {isTakeoverPromptOpen ? (
         <View className="absolute inset-0 bg-black/75 items-center justify-center px-6">
           <View className="w-full max-w-sm rounded-3xl border border-white/10 bg-[#111111] p-5">
-            <Text className="text-base font-semibold text-[#FEFCD9]">
+            <Text className="text-base font-semibold text-[#fafafa]">
               Join new meeting?
             </Text>
-            <Text className="mt-1 text-xs text-[#FEFCD9]/60">
+            <Text className="mt-1 text-xs text-[#fafafa]/60">
               You are currently in {takeoverPromptRoomLabel}. Leave it and join this one?
             </Text>
             <View className="mt-4 flex-row items-center justify-end gap-2">
@@ -2158,7 +2268,7 @@ export function MeetScreen({
                 onPress={handleTakeoverPromptStay}
                 className="rounded-xl border border-white/15 px-3 py-2"
               >
-                <Text className="text-xs uppercase tracking-[0.14em] text-[#FEFCD9]/70">
+                <Text className="text-xs uppercase tracking-[0.14em] text-[#fafafa]/70">
                   Stay
                 </Text>
               </Pressable>

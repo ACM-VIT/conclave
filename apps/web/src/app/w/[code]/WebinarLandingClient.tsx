@@ -1,16 +1,17 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import Image from "next/image";
-import {
-  CalendarPlus,
-  Check,
-  Copy,
-  Loader2,
-} from "lucide-react";
-import MeetsClientShell from "../../meets-client-shell";
+import { Roboto } from "next/font/google";
+import { CalendarPlus, Check, Copy } from "lucide-react";
+import MeetsClientPage from "../../meets-client-page";
 
-type PublicScheduledWebinar = {
+const roboto = Roboto({
+  subsets: ["latin"],
+  weight: ["400", "500", "700"],
+  display: "swap",
+});
+
+export type PublicScheduledWebinar = {
   id: string;
   linkSlug: string;
   title: string;
@@ -39,7 +40,7 @@ type Props = {
 const pad = (n: number): string => String(n).padStart(2, "0");
 
 const formatCountdown = (ms: number): { primary: string; suffix: string } => {
-  if (ms <= 0) return { primary: "starting", suffix: "now" };
+  if (ms <= 0) return { primary: "Starting", suffix: "now" };
   const totalSeconds = Math.floor(ms / 1000);
   const days = Math.floor(totalSeconds / 86_400);
   const hours = Math.floor((totalSeconds % 86_400) / 3600);
@@ -54,12 +55,12 @@ const formatCountdown = (ms: number): { primary: string; suffix: string } => {
   if (hours > 0) {
     return {
       primary: `${hours}:${pad(minutes)}:${pad(seconds)}`,
-      suffix: "until we begin",
+      suffix: "until we start",
     };
   }
   return {
     primary: `${minutes}:${pad(seconds)}`,
-    suffix: "until we begin",
+    suffix: "until we start",
   };
 };
 
@@ -94,64 +95,16 @@ const buildGoogleCalendarUrl = (webinar: PublicScheduledWebinar): string => {
 };
 
 const PageShell = ({ children }: { children: React.ReactNode }) => (
-  <div
-    className="relative min-h-dvh bg-[#060606] text-[#FEFCD9] overflow-hidden"
-    style={{ fontFamily: "'PolySans Trial', sans-serif" }}
-  >
-    <div className="absolute inset-0 acm-bg-dot-grid pointer-events-none" />
-    <div className="absolute inset-0 acm-bg-radial pointer-events-none" />
-    <header className="absolute top-0 left-0 right-0 z-10 flex items-center justify-between px-6 py-5 pointer-events-none">
-      <a
-        href="/"
-        className="pointer-events-auto flex items-center"
-        aria-label="ACM-VIT"
-      >
-        <Image
-          src="/assets/acm_topleft.svg"
-          alt="ACM-VIT"
-          width={120}
-          height={32}
-          priority
-        />
-      </a>
-    </header>
-    <main className="relative z-[5] flex min-h-dvh items-center justify-center px-6 py-24">
-      {children}
-    </main>
-  </div>
+  <main className="flex min-h-dvh items-center justify-center bg-[#0a0a0b] px-4 py-10 text-[#fafafa]">
+    <div className="animate-fade-in w-full max-w-lg">{children}</div>
+  </main>
 );
 
-const ConclaveLockup = ({ size = "lg" }: { size?: "md" | "lg" }) => {
-  const titleClass =
-    size === "lg"
-      ? "text-4xl md:text-5xl"
-      : "text-2xl md:text-3xl";
-  const bracketClass =
-    size === "lg" ? "text-4xl md:text-5xl" : "text-2xl md:text-3xl";
-  const offsetClass = size === "lg" ? "-left-8 -right-8" : "-left-5 -right-5";
-  return (
-    <div className="relative inline-block">
-      <span
-        className={`absolute ${offsetClass.split(" ")[0]} top-1/2 -translate-y-1/2 text-[#F95F4A]/40 ${bracketClass}`}
-        style={{ fontFamily: "'PolySans Mono', monospace" }}
-      >
-        [
-      </span>
-      <h1
-        className={`${titleClass} text-[#FEFCD9] tracking-tight`}
-        style={{ fontFamily: "'PolySans Bulky Wide', sans-serif" }}
-      >
-        c0nclav3
-      </h1>
-      <span
-        className={`absolute ${offsetClass.split(" ")[1]} top-1/2 -translate-y-1/2 text-[#F95F4A]/40 ${bracketClass}`}
-        style={{ fontFamily: "'PolySans Mono', monospace" }}
-      >
-        ]
-      </span>
-    </div>
-  );
-};
+const StatusCard = ({ children }: { children: React.ReactNode }) => (
+  <section className="rounded-2xl border border-white/10 bg-[#0e0e10] p-6 sm:p-8 text-center">
+    {children}
+  </section>
+);
 
 export default function WebinarLandingClient({
   webinarLinkCode,
@@ -164,14 +117,14 @@ export default function WebinarLandingClient({
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(timer);
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
   }, []);
 
   useEffect(() => {
     if (!webinar) return;
     if (webinar.status === "ended" || webinar.status === "cancelled") return;
-    const interval = setInterval(async () => {
+    const interval = window.setInterval(async () => {
       try {
         const response = await fetch(
           `/api/webinars/by-slug/${encodeURIComponent(webinar.linkSlug)}`,
@@ -183,15 +136,17 @@ export default function WebinarLandingClient({
         };
         if (data?.scheduledWebinar) setWebinar(data.scheduledWebinar);
       } catch {
-        // silent — countdown keeps running
+        // The countdown can continue from the server-rendered snapshot.
       }
     }, 20_000);
-    return () => clearInterval(interval);
+    return () => window.clearInterval(interval);
   }, [webinar]);
 
   const isOpen = useMemo(() => {
     if (!webinar) return true;
-    if (webinar.status === "ended" || webinar.status === "cancelled") return false;
+    if (webinar.status === "ended" || webinar.status === "cancelled") {
+      return false;
+    }
     if (webinar.status === "live") return true;
     const earlyMs = (webinar.earlyEntryMinutes ?? 0) * 60 * 1000;
     return now >= webinar.scheduledStartAt - earlyMs;
@@ -199,7 +154,7 @@ export default function WebinarLandingClient({
 
   if (isOpen) {
     return (
-      <MeetsClientShell
+      <MeetsClientPage
         initialRoomId={webinarLinkCode}
         forceJoinOnly={true}
         bypassMediaPermissions={true}
@@ -207,46 +162,35 @@ export default function WebinarLandingClient({
         joinMode="webinar_attendee"
         autoJoinOnMount={true}
         hideJoinUI={true}
+        fontClassName={roboto.className}
       />
     );
   }
 
-  if (!webinar) {
-    return (
-      <PageShell>
-        <div className="flex flex-col items-center text-center animate-fade-in">
-          <Loader2 className="h-7 w-7 animate-spin text-[#FEFCD9]/45" />
-          <p className="mt-4 text-sm text-[#FEFCD9]/45">
-            Looking up your webinar…
-          </p>
-        </div>
-      </PageShell>
-    );
-  }
+  // `isOpen` is always true when there's no webinar snapshot, so reaching here
+  // guarantees `webinar` is present — this guard just restores that narrowing.
+  if (!webinar) return null;
 
   if (webinar.status === "ended" || webinar.status === "cancelled") {
     const ended = webinar.status === "ended";
     return (
       <PageShell>
-        <div className="flex max-w-xl flex-col items-center text-center animate-fade-in">
-          <p className="text-sm text-[#FEFCD9]/40">
-            {ended ? "this webinar has ended" : "this webinar was cancelled"}
+        <StatusCard>
+          <p className="text-[11.5px] font-semibold uppercase tracking-[0.07em] text-[#fafafa]/40">
+            {ended ? "Webinar ended" : "Webinar cancelled"}
           </p>
           <h1
-            className="mt-4 text-3xl md:text-4xl text-[#FEFCD9] tracking-tight"
+            className="mt-3 text-[22px] leading-tight text-[#fafafa]"
             style={{ fontFamily: "'PolySans Bulky Wide', sans-serif" }}
           >
             {webinar.title}
           </h1>
-          <p className="mt-4 text-sm text-[#FEFCD9]/55">
+          <p className="mt-2 text-[13.5px] leading-snug text-[#fafafa]/55">
             {ended
               ? "Reach out to the organizer for a replay or about future sessions."
               : "The organizer cancelled this session. Reach out to them for an update."}
           </p>
-          <div className="mt-10 text-[#FEFCD9]/30">
-            <ConclaveLockup size="md" />
-          </div>
-        </div>
+        </StatusCard>
       </PageShell>
     );
   }
@@ -266,79 +210,70 @@ export default function WebinarLandingClient({
 
   return (
     <PageShell>
-      <div className="flex w-full max-w-2xl flex-col items-center text-center animate-fade-in">
-        <p className="text-sm text-[#FEFCD9]/40">you&apos;re a little early</p>
-
+      <StatusCard>
+        <p className="text-[11.5px] font-semibold uppercase tracking-[0.07em] text-[#fafafa]/40">
+          You&apos;re a little early
+        </p>
         <h1
-          className="mt-3 text-3xl md:text-5xl text-[#FEFCD9] tracking-tight"
+          className="mt-3 text-[22px] leading-tight text-[#fafafa]"
           style={{ fontFamily: "'PolySans Bulky Wide', sans-serif" }}
         >
           {webinar.title}
         </h1>
-
-        <p className="mt-4 text-sm md:text-base text-[#FEFCD9]/60">
-          hosted by{" "}
-          <span className="text-[#FEFCD9]/90">
+        <p className="mt-2 text-[13.5px] text-[#fafafa]/55">
+          Hosted by{" "}
+          <span className="text-[#fafafa]">
             {webinar.hostName || "the organizer"}
-          </span>{" "}
-          · {formatStartString(webinar.scheduledStartAt)}
+          </span>
+          {" · "}
+          {formatStartString(webinar.scheduledStartAt)}
         </p>
 
-        <div className="mt-12 flex flex-col items-center">
-          <div
-            className="text-6xl md:text-7xl text-[#FEFCD9] tracking-tight tabular-nums"
+        <div className="mt-8">
+          <p
+            className="text-[44px] leading-none tabular-nums text-[#fafafa] sm:text-[52px]"
             style={{ fontFamily: "'PolySans Bulky Wide', sans-serif" }}
           >
             {countdown.primary}
-          </div>
-          <div className="mt-3 text-sm text-[#FEFCD9]/45">
-            {countdown.suffix}
-          </div>
+          </p>
+          <p className="mt-2 text-[13.5px] text-[#fafafa]/55">{countdown.suffix}</p>
           {webinar.earlyEntryMinutes > 0 && msToLobby > 0 ? (
-            <div className="mt-2 text-xs text-[#FEFCD9]/35">
-              the lobby opens {webinar.earlyEntryMinutes} minutes before we
-              start
-            </div>
+            <p className="mt-2 text-[12.5px] text-[#fafafa]/45">
+              The lobby opens {webinar.earlyEntryMinutes} minutes before we start.
+            </p>
           ) : null}
         </div>
 
         {webinar.description ? (
-          <p className="mt-12 max-w-xl text-sm md:text-base text-[#FEFCD9]/70 whitespace-pre-line">
+          <p className="mt-8 text-left text-[13.5px] leading-relaxed text-[#fafafa]/55 whitespace-pre-line">
             {webinar.description}
           </p>
         ) : null}
 
-        <div className="mt-12 flex flex-wrap items-center justify-center gap-3">
+        <div className="mt-8 flex flex-col gap-2.5">
           <a
             href={buildGoogleCalendarUrl(webinar)}
             target="_blank"
             rel="noreferrer"
-            className="group inline-flex items-center gap-2 rounded-lg bg-[#F95F4A] px-5 py-2.5 text-sm text-white transition-all hover:bg-[#e8553f] hover:gap-3"
+            className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-[#F95F4A] text-[15px] font-medium text-white transition-[filter] duration-150 hover:brightness-[1.05]"
           >
             <CalendarPlus className="h-4 w-4" />
-            <span>Add to calendar</span>
+            Add to calendar
           </a>
           <button
             type="button"
             onClick={handleCopy}
-            className="inline-flex items-center gap-2 rounded-lg border border-[#FEFCD9]/15 px-5 py-2.5 text-sm text-[#FEFCD9]/85 transition-all hover:border-[#FEFCD9]/35 hover:text-[#FEFCD9]"
+            className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] text-[15px] font-medium text-[#fafafa] transition-colors duration-150 hover:bg-white/[0.08]"
           >
             {copied ? (
               <Check className="h-4 w-4 text-[#F95F4A]" />
             ) : (
               <Copy className="h-4 w-4" />
             )}
-            <span>{copied ? "Link copied" : "Copy the link"}</span>
+            {copied ? "Link copied" : "Copy the link"}
           </button>
         </div>
-
-        <div className="mt-20 flex flex-col items-center text-[#FEFCD9]/35">
-          <ConclaveLockup size="md" />
-          <p className="mt-3 text-xs text-[#FEFCD9]/30">
-            video conferencing by ACM-VIT
-          </p>
-        </div>
-      </div>
+      </StatusCard>
     </PageShell>
   );
 }

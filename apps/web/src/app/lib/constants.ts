@@ -6,7 +6,11 @@ export const TRANSPORT_DISCONNECT_GRACE_MS = 5000;
 export const PRODUCER_SYNC_INTERVAL_MS = 15000;
 export const SPEAKER_CHECK_INTERVAL_MS = 250;
 export const SPEAKER_THRESHOLD = 0.03;
-export const ACTIVE_SPEAKER_HOLD_MS = 50;
+// How long the last active speaker stays highlighted after they go quiet, so a
+// natural pause doesn't drop + re-light the 2px orange border every check tick.
+// Must be comfortably larger than SPEAKER_CHECK_INTERVAL_MS (250ms) or the
+// highlight flickers between speakers (the old value of 50ms never lingered).
+export const ACTIVE_SPEAKER_HOLD_MS = 1500;
 export const REACTION_LIFETIME_MS = 3800;
 export const MAX_REACTIONS = 30;
 export const EMOJI_REACTIONS = ["👍", "👏", "😂", "❤️", "🎉", "😮"] as const;

@@ -8,6 +8,7 @@ import type {
 import type {
   ChatMessage,
   DtlsParameters,
+  JoinRoomErrorResponse,
   JoinRoomResponse,
   Participant,
   RtpParameters,
@@ -74,6 +75,36 @@ const DEFAULT_INSTRUCTIONS =
   "You are a concise, helpful voice assistant in a live meeting. Keep responses short and practical.";
 const AGENT_DISPLAY_NAME = "Voice Agent";
 const SOCKET_CONNECT_TIMEOUT_MS = 8000;
+const SOCKET_ACK_TIMEOUT_MS = 10000;
+const MAX_JOIN_ROOM_REDIRECTS = 1;
+
+class JoinRoomRedirectError extends Error {
+  readonly redirectUrl: string;
+
+  constructor(response: JoinRoomErrorResponse, redirectUrl: string) {
+    super(response.error || "Room is hosted by another SFU instance.");
+    this.name = "JoinRoomRedirectError";
+    this.redirectUrl = redirectUrl;
+  }
+}
+
+const normalizeJoinRedirectUrl = (value: unknown): string | null => {
+  if (typeof value !== "string" || !value.trim()) return null;
+  try {
+    const url = new URL(value.trim());
+    if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+    return url.toString().replace(/\/+$/, "");
+  } catch {
+    return null;
+  }
+};
+
+const getJoinRoomRedirectError = (
+  response: JoinRoomErrorResponse
+): JoinRoomRedirectError | null => {
+  const redirectUrl = normalizeJoinRedirectUrl(response.redirectUrl);
+  return redirectUrl ? new JoinRoomRedirectError(response, redirectUrl) : null;
+};
 const SFU_CLIENT_ID = process.env.EXPO_PUBLIC_SFU_CLIENT_ID || "public";
 const SFU_BASE_URL =
   process.env.EXPO_PUBLIC_SFU_BASE_URL || process.env.EXPO_PUBLIC_API_URL || "";
@@ -355,20 +386,26 @@ const createSocketConnection = async (
   });
 
   return new Promise<Socket>((resolve, reject) => {
+    const cleanup = () => {
+      clearTimeout(timeoutId);
+      socket.off("connect", onConnect);
+      socket.off("connect_error", onConnectError);
+    };
+
     const timeoutId = setTimeout(() => {
+      cleanup();
       socket.disconnect();
       reject(new Error("Voice agent socket connect timeout."));
     }, SOCKET_CONNECT_TIMEOUT_MS);
 
     const onConnect = () => {
-      clearTimeout(timeoutId);
-      socket.off("connect_error", onConnectError);
+      cleanup();
       resolve(socket);
     };
 
     const onConnectError = (error: Error) => {
-      clearTimeout(timeoutId);
-      socket.off("connect", onConnect);
+      cleanup();
+      socket.disconnect();
       reject(error);
     };
 
@@ -383,6 +420,12 @@ const joinRoomAsAgent = async (
   sessionId: string
 ): Promise<JoinRoomResponse> => {
   return new Promise<JoinRoomResponse>((resolve, reject) => {
+    let settled = false;
+    const timeoutId = setTimeout(() => {
+      settled = true;
+      reject(new Error("Voice agent joinRoom acknowledgement timeout."));
+    }, SOCKET_ACK_TIMEOUT_MS);
+
     socket.emit(
       "joinRoom",
       {
@@ -391,9 +434,12 @@ const joinRoomAsAgent = async (
         displayName: AGENT_DISPLAY_NAME,
         ghost: false,
       },
-      (response: JoinRoomResponse | { error: string }) => {
+      (response: JoinRoomResponse | JoinRoomErrorResponse) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeoutId);
         if ("error" in response) {
-          reject(new Error(response.error));
+          reject(getJoinRoomRedirectError(response) ?? new Error(response.error));
           return;
         }
         if (response.status === "waiting") {
@@ -413,9 +459,22 @@ const createProducerTransport = async (
 ): Promise<Transport> => {
   const transportResponse = await new Promise<TransportResponse>(
     (resolve, reject) => {
+      let settled = false;
+      const timeoutId = setTimeout(() => {
+        settled = true;
+        reject(
+          new Error(
+            "Voice agent createProducerTransport acknowledgement timeout."
+          )
+        );
+      }, SOCKET_ACK_TIMEOUT_MS);
+
       socket.emit(
         "createProducerTransport",
         (response: TransportResponse | { error: string }) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timeoutId);
           if ("error" in response) {
             reject(new Error(response.error));
             return;
@@ -438,10 +497,21 @@ const createProducerTransport = async (
       callback: () => void,
       errback: (error: Error) => void
     ) => {
+      let settled = false;
+      const timeoutId = setTimeout(() => {
+        settled = true;
+        errback(
+          new Error("Voice agent connectProducerTransport acknowledgement timeout.")
+        );
+      }, SOCKET_ACK_TIMEOUT_MS);
+
       socket.emit(
         "connectProducerTransport",
         { transportId: transport.id, dtlsParameters },
         (response: { success: boolean } | { error: string }) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timeoutId);
           if ("error" in response) {
             errback(new Error(response.error));
             return;
@@ -467,10 +537,19 @@ const createProducerTransport = async (
       callback: ({ id }: { id: string }) => void,
       errback: (error: Error) => void
     ) => {
+      let settled = false;
+      const timeoutId = setTimeout(() => {
+        settled = true;
+        errback(new Error("Voice agent produce acknowledgement timeout."));
+      }, SOCKET_ACK_TIMEOUT_MS);
+
       socket.emit(
         "produce",
         { kind, rtpParameters, appData },
         (response: { producerId: string } | { error: string }) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timeoutId);
           if ("error" in response) {
             errback(new Error(response.error));
             return;
@@ -1062,19 +1141,42 @@ export function useVoiceAgentParticipant({
           );
         }
 
-        runtime.sfuSocket = await createSocketConnection(sfuUrl, token);
-        runtime.sfuSocket.on("disconnect", () => {
-          if (!mountedRef.current) return;
-          if (runtimeRef.current.sfuSocket !== runtime.sfuSocket) return;
-          setSafeError("Voice agent disconnected from SFU.");
-          setSafeStatus("error");
-        });
+        const connectAgentSocket = async (url: string) => {
+          const socket = await createSocketConnection(url, token);
+          runtime.sfuSocket = socket;
+          socket.on("disconnect", () => {
+            if (!mountedRef.current) return;
+            if (runtimeRef.current.sfuSocket !== socket) return;
+            setSafeError("Voice agent disconnected from SFU.");
+            setSafeStatus("error");
+          });
+          return socket;
+        };
 
-        const joinRoomResponse = await joinRoomAsAgent(
-          runtime.sfuSocket,
-          roomId,
-          agentSessionId
-        );
+        let agentSocket = await connectAgentSocket(sfuUrl);
+        let joinRoomResponse: JoinRoomResponse;
+        let redirectCount = 0;
+        while (true) {
+          try {
+            joinRoomResponse = await joinRoomAsAgent(
+              agentSocket,
+              roomId,
+              agentSessionId
+            );
+            break;
+          } catch (error) {
+            if (
+              error instanceof JoinRoomRedirectError &&
+              redirectCount < MAX_JOIN_ROOM_REDIRECTS
+            ) {
+              redirectCount += 1;
+              agentSocket.disconnect();
+              agentSocket = await connectAgentSocket(error.redirectUrl);
+              continue;
+            }
+            throw error;
+          }
+        }
 
         const { Device } = await import("mediasoup-client");
         const device = new Device();

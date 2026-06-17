@@ -16,6 +16,7 @@
   "license": "ISC",
   "type": "module",
   "dependencies": {
+    "@socket.io/redis-adapter": "^8.3.0",
     "cors": "^2.8.6",
     "dotenv": "^17.3.1",
     "express": "^5.2.1",
@@ -23,6 +24,7 @@
     "lib0": "^0.2.117",
     "mediasoup": "^3.19.17",
     "puppeteer-core": "^23.5.3",
+    "redis": "^6.0.0",
     "socket.io": "^4.8.3",
     "y-protocols": "^1.0.7",
     "yjs": "^13.6.29"

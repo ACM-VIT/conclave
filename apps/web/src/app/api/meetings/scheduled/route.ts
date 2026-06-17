@@ -1,20 +1,21 @@
 import { NextResponse } from "next/server";
 import {
-  requireSfuSessionUser,
-} from "@/lib/sfu-user-auth";
-import {
   buildScheduledMeetingHeaders,
+  readScheduledMeetingError,
   resolveScheduledMeetingsBase,
 } from "@/lib/scheduled-meetings";
+import { requireSfuSessionUser } from "@/lib/sfu-user-auth";
 
 export const runtime = "nodejs";
 
-const readError = async (response: Response): Promise<string> => {
-  const payload = await response.json().catch(() => null);
-  if (payload && typeof payload === "object" && "error" in payload) {
-    return String((payload as { error?: string }).error || "Request failed");
-  }
-  return response.statusText || "Request failed";
+const buildTargetUrl = (request: Request): string => {
+  const incomingUrl = new URL(request.url);
+  const targetUrl = new URL(resolveScheduledMeetingsBase());
+  const status = incomingUrl.searchParams.get("status")?.trim();
+  const scope = incomingUrl.searchParams.get("scope")?.trim();
+  if (status) targetUrl.searchParams.set("status", status);
+  if (scope) targetUrl.searchParams.set("scope", scope);
+  return targetUrl.toString();
 };
 
 export async function GET(request: Request) {
@@ -26,22 +27,15 @@ export async function GET(request: Request) {
     );
   }
 
-  const incomingUrl = new URL(request.url);
-  const targetUrl = new URL(resolveScheduledMeetingsBase());
-  const scope = incomingUrl.searchParams.get("scope");
-  const status = incomingUrl.searchParams.get("status");
-  if (scope) targetUrl.searchParams.set("scope", scope);
-  if (status) targetUrl.searchParams.set("status", status);
-
   try {
-    const response = await fetch(targetUrl.toString(), {
+    const response = await fetch(buildTargetUrl(request), {
       method: "GET",
       headers: buildScheduledMeetingHeaders(authResult.user, request),
       cache: "no-store",
     });
     if (!response.ok) {
       return NextResponse.json(
-        { error: await readError(response) },
+        { error: await readScheduledMeetingError(response) },
         { status: response.status },
       );
     }
@@ -49,9 +43,9 @@ export async function GET(request: Request) {
     return NextResponse.json(data, {
       headers: { "Cache-Control": "no-store" },
     });
-  } catch (_error) {
+  } catch {
     return NextResponse.json(
-      { error: "Failed to reach scheduled-meeting service" },
+      { error: "Failed to reach scheduled meetings service" },
       { status: 502 },
     );
   }
@@ -66,7 +60,13 @@ export async function POST(request: Request) {
     );
   }
 
-  const body = await request.text();
+  let body = "";
+  try {
+    body = await request.text();
+  } catch {
+    return NextResponse.json({ error: "Invalid request body" }, { status: 400 });
+  }
+
   try {
     const response = await fetch(resolveScheduledMeetingsBase(), {
       method: "POST",
@@ -74,24 +74,20 @@ export async function POST(request: Request) {
       body,
       cache: "no-store",
     });
-    const data = await response.json().catch(() => ({}));
     if (!response.ok) {
-      const errorMessage =
-        typeof data === "object" && data && "error" in data
-          ? String((data as { error?: string }).error || "Request failed")
-          : "Request failed";
       return NextResponse.json(
-        { error: errorMessage },
+        { error: await readScheduledMeetingError(response) },
         { status: response.status },
       );
     }
+    const data = await response.json().catch(() => ({}));
     return NextResponse.json(data, {
       status: response.status,
       headers: { "Cache-Control": "no-store" },
     });
-  } catch (_error) {
+  } catch {
     return NextResponse.json(
-      { error: "Failed to reach scheduled-meeting service" },
+      { error: "Failed to reach scheduled meetings service" },
       { status: 502 },
     );
   }

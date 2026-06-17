@@ -2,6 +2,15 @@ import { Platform } from "react-native";
 import notifee, { EventType } from "@notifee/react-native";
 import { dispatchForegroundAction } from "./foreground-actions";
 
+type ForegroundActionEvent = {
+  type: EventType;
+  detail?: {
+    pressAction?: {
+      id?: string;
+    };
+  };
+};
+
 if (Platform.OS !== "web") {
   if (Platform.OS === "android") {
     notifee.registerForegroundService(() => {
@@ -9,7 +18,7 @@ if (Platform.OS !== "web") {
     });
   }
 
-  const handleEvent = (event: { type: EventType; detail?: any }) => {
+  const handleEvent = (event: ForegroundActionEvent) => {
     const actionId = event?.detail?.pressAction?.id;
     if (!actionId) return;
     if (event.type === EventType.ACTION_PRESS || event.type === EventType.PRESS) {

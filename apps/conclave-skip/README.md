@@ -1,19 +1,6 @@
 # Conclave
 
 This is a [Skip](https://skip.tools) dual-platform app project.
-ok 
-
-<!-- TODO: add iOS screenshots to fastlane metadata
-## iPhone Screenshots
-
-<img alt="iPhone Screenshot" src="Darwin/fastlane/screenshots/en-US/1_en-US.png" style="width: 18%" /> <img alt="iPhone Screenshot" src="Darwin/fastlane/screenshots/en-US/2_en-US.png" style="width: 18%" /> <img alt="iPhone Screenshot" src="Darwin/fastlane/screenshots/en-US/3_en-US.png" style="width: 18%" /> <img alt="iPhone Screenshot" src="Darwin/fastlane/screenshots/en-US/4_en-US.png" style="width: 18%" /> <img alt="iPhone Screenshot" src="Darwin/fastlane/screenshots/en-US/5_en-US.png" style="width: 18%" />
--->
-
-<!-- TODO: add Android screenshots to fastlane metadata
-## Android Screenshots
-
-<img alt="Android Screenshot" src="Android/fastlane/metadata/android/en-US/images/phoneScreenshots/1_en-US.png" style="width: 18%" /> <img alt="Android Screenshot" src="Android/fastlane/metadata/android/en-US/images/phoneScreenshots/2_en-US.png" style="width: 18%" /> <img alt="Android Screenshot" src="Android/fastlane/metadata/android/en-US/images/phoneScreenshots/3_en-US.png" style="width: 18%" /> <img alt="Android Screenshot" src="Android/fastlane/metadata/android/en-US/images/phoneScreenshots/4_en-US.png" style="width: 18%" /> <img alt="Android Screenshot" src="Android/fastlane/metadata/android/en-US/images/phoneScreenshots/5_en-US.png" style="width: 18%" />
--->
 
 ## Building
 
@@ -39,7 +26,7 @@ Android Studio's Device Manager.
 
 The project can be opened and run in Xcode from
 `Project.xcworkspace`, which also enabled parallel
-development of any Skip libary dependencies.
+development of any Skip library dependencies.
 
 To run both the Swift and Kotlin apps simultaneously,
 launch the "Conclave App" target from Xcode.

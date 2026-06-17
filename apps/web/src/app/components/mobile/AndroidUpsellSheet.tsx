@@ -26,9 +26,9 @@ function AndroidUpsellSheet({ isOpen, onClose }: AndroidUpsellSheetProps) {
           <div className="relative px-1 pb-3">
             <div className="mx-auto mobile-sheet-grabber" />
           </div>
-          <div className="mobile-sheet-card p-4 border border-white/10 bg-[#161012] shadow-[0_12px_28px_rgba(0,0,0,0.4)]">
+          <div className="mobile-sheet-card border border-white/10 bg-[#161012] p-4">
             <div className="flex items-center gap-3">
-              <div className="h-12 w-12 rounded-2xl bg-[#1a0f12] border border-[#F95F4A]/25 flex items-center justify-center shadow-[0_8px_18px_rgba(249,95,74,0.18)]">
+              <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-[#F95F4A]/25 bg-[#1a0f12]">
                 <img
                   src="/logo.png"
                   alt="Conclave app logo"
@@ -36,11 +36,11 @@ function AndroidUpsellSheet({ isOpen, onClose }: AndroidUpsellSheetProps) {
                 />
               </div>
               <div className="flex flex-col">
-                <span className="text-base font-semibold text-[#FEFCD9]">
+                <span className="text-base font-semibold text-[#fafafa]">
                   Conclave for Android
                 </span>
-                <span className="text-xs text-[#FEFCD9]/55">
-                  A better experience on mobile
+                <span className="text-xs text-[#fafafa]/55">
+                  Available on the Play Store
                 </span>
               </div>
             </div>
@@ -50,7 +50,7 @@ function AndroidUpsellSheet({ isOpen, onClose }: AndroidUpsellSheetProps) {
                 href="https://play.google.com/store/apps/details?id=com.acmvit.conclave"
                 target="_blank"
                 rel="noreferrer"
-                className="flex h-12 w-full items-center justify-center rounded-xl bg-[#F95F4A] px-4 text-center text-sm font-medium text-white transition-colors hover:bg-[#e8553f] shadow-[0_10px_24px_rgba(249,95,74,0.22)]"
+                className="flex h-12 w-full items-center justify-center rounded-xl bg-[#F95F4A] px-4 text-center text-sm font-medium text-white transition-colors hover:bg-[#e8553f]"
                 style={{ fontFamily: "'PolySans Trial', sans-serif" }}
               >
                 Install Conclave
@@ -58,7 +58,7 @@ function AndroidUpsellSheet({ isOpen, onClose }: AndroidUpsellSheetProps) {
               <button
                 type="button"
                 onClick={onClose}
-                className="flex h-12 w-full items-center justify-center rounded-xl border border-white/10 bg-white/5 px-4 text-sm text-[#FEFCD9]/80 hover:bg-white/10"
+                className="flex h-12 w-full items-center justify-center rounded-xl border border-white/10 bg-white/5 px-4 text-sm text-[#fafafa]/80 hover:bg-white/10"
                 style={{ fontFamily: "'PolySans Trial', sans-serif" }}
               >
                 Continue in browser

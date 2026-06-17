@@ -1,12 +1,14 @@
 import type { Express, Request, Response } from "express";
 import { Logger } from "../../utilities/loggers.js";
+import { secretsMatch } from "../secret.js";
 import {
   createScheduledMeeting,
   deleteScheduledMeeting,
   getScheduledMeetingById,
   getScheduledMeetingByRoomCode,
   listScheduledMeetings,
-  persistScheduledMeetings,
+  persistScheduledMeetingChanges,
+  persistScheduledMeetingDeletes,
   updateScheduledMeeting,
 } from "../scheduledMeetings.js";
 import type { SfuState } from "../state.js";
@@ -22,13 +24,42 @@ type RegisterOptions = {
   sfuSecret: string;
 };
 
-const hasValidSecret = (req: Request, secret: string): boolean =>
-  Boolean(req.header("x-sfu-secret") && req.header("x-sfu-secret") === secret);
+const MAX_ID_LENGTH = 256;
+const MAX_ROOM_CODE_LENGTH = 64;
+const MAX_EMAIL_LENGTH = 320;
+const MAX_NAME_LENGTH = 120;
+const MAX_STATUS_FILTER_LENGTH = 128;
+const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/;
+
+const hasValidSecret = (req: Request, secret: string): boolean => {
+  const provided = req.header("x-sfu-secret");
+  return Boolean(provided && secretsMatch(provided, secret));
+};
+
+const normalizeIdentifier = (
+  value: unknown,
+  maxLength = MAX_ID_LENGTH,
+): string | null => {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim();
+  if (
+    !normalized ||
+    normalized.length > maxLength ||
+    CONTROL_CHARACTER_PATTERN.test(normalized)
+  ) {
+    return null;
+  }
+  return normalized;
+};
+
+const normalizeEmail = (value: unknown): string | null => {
+  const normalized = normalizeIdentifier(value, MAX_EMAIL_LENGTH)?.toLowerCase();
+  return normalized || null;
+};
 
 const resolveClientId = (req: Request, fallback = "default"): string => {
-  const fromQuery =
-    typeof req.query.clientId === "string" ? req.query.clientId.trim() : "";
-  const fromHeader = req.header("x-sfu-client")?.trim() || "";
+  const fromQuery = normalizeIdentifier(req.query.clientId) || "";
+  const fromHeader = normalizeIdentifier(req.header("x-sfu-client")) || "";
   return fromQuery || fromHeader || fallback;
 };
 
@@ -40,9 +71,9 @@ const resolveUserContext = (
   userId: string | null;
   isAdmin: boolean;
 } => {
-  const email = req.header("x-user-email")?.trim().toLowerCase() || null;
-  const name = req.header("x-user-name")?.trim() || null;
-  const userId = req.header("x-user-id")?.trim() || null;
+  const email = normalizeEmail(req.header("x-user-email"));
+  const name = normalizeIdentifier(req.header("x-user-name"), MAX_NAME_LENGTH);
+  const userId = normalizeIdentifier(req.header("x-user-id"));
   const isAdmin = req.header("x-user-is-admin") === "1";
   return { email: email || null, name, userId, isAdmin };
 };
@@ -50,7 +81,13 @@ const resolveUserContext = (
 const parseStatusFilter = (
   value: unknown,
 ): ScheduledMeetingStatus[] | undefined => {
-  if (typeof value !== "string" || !value.trim()) return undefined;
+  if (
+    typeof value !== "string" ||
+    !value.trim() ||
+    value.length > MAX_STATUS_FILTER_LENGTH
+  ) {
+    return undefined;
+  }
   const tokens = value
     .split(",")
     .map((t) => t.trim())
@@ -91,15 +128,30 @@ export const registerScheduledMeetingRoutes = (
     return false;
   };
 
-  const persist = (): void => {
+  const persistChanged = (meeting: ScheduledMeeting): void => {
     if (state.scheduledMeetingPersistence) {
       try {
-        persistScheduledMeetings(
+        persistScheduledMeetingChanges(
           state.scheduledMeetings,
           state.scheduledMeetingPersistence,
+          [meeting],
         );
       } catch (error) {
         Logger.warn("Failed to persist scheduled meetings", error);
+      }
+    }
+  };
+
+  const persistDeleted = (id: string): void => {
+    if (state.scheduledMeetingPersistence) {
+      try {
+        persistScheduledMeetingDeletes(
+          state.scheduledMeetings,
+          state.scheduledMeetingPersistence,
+          [id],
+        );
+      } catch (error) {
+        Logger.warn("Failed to delete scheduled meeting", error);
       }
     }
   };
@@ -140,7 +192,7 @@ export const registerScheduledMeetingRoutes = (
         defaultHostUserId: user.userId,
       });
 
-      persist();
+      persistChanged(meeting);
       Logger.info(
         `Scheduled meeting created ${meeting.id} (${meeting.roomCode}) by ${user.email}`,
       );
@@ -153,7 +205,10 @@ export const registerScheduledMeetingRoutes = (
   app.get("/scheduled-meetings/by-room/:roomCode", (req, res) => {
     if (!requireSecret(req, res)) return;
     const clientId = resolveClientId(req);
-    const roomCode = String(req.params.roomCode || "").trim().toLowerCase();
+    const roomCode = normalizeIdentifier(
+      req.params.roomCode,
+      MAX_ROOM_CODE_LENGTH,
+    )?.toLowerCase();
     if (!roomCode) {
       res.status(400).json({ error: "Room code is required" });
       return;
@@ -173,7 +228,10 @@ export const registerScheduledMeetingRoutes = (
   app.get("/scheduled-meetings/public/by-room/:roomCode", (req, res) => {
     if (!requireSecret(req, res)) return;
     const clientId = resolveClientId(req);
-    const roomCode = String(req.params.roomCode || "").trim().toLowerCase();
+    const roomCode = normalizeIdentifier(
+      req.params.roomCode,
+      MAX_ROOM_CODE_LENGTH,
+    )?.toLowerCase();
     if (!roomCode) {
       res.status(400).json({ error: "Room code is required" });
       return;
@@ -194,7 +252,11 @@ export const registerScheduledMeetingRoutes = (
     req: Request,
     res: Response,
   ): ScheduledMeeting | null => {
-    const id = String(req.params.id || "");
+    const id = normalizeIdentifier(req.params.id);
+    if (!id) {
+      res.status(400).json({ error: "Scheduled meeting ID is required" });
+      return null;
+    }
     const meeting = getScheduledMeetingById(state.scheduledMeetings, id);
     if (!meeting) {
       res.status(404).json({ error: "Scheduled meeting not found" });
@@ -228,7 +290,7 @@ export const registerScheduledMeetingRoutes = (
         target.id,
         body,
       );
-      persist();
+      persistChanged(meeting);
       res.json({ scheduledMeeting: serializeMeeting(meeting) });
     } catch (error) {
       res.status(400).json({ error: (error as Error).message });
@@ -244,7 +306,7 @@ export const registerScheduledMeetingRoutes = (
       res.status(404).json({ error: "Scheduled meeting not found" });
       return;
     }
-    persist();
+    persistDeleted(meeting.id);
     res.json({ success: true, id: meeting.id });
   });
 
@@ -258,7 +320,7 @@ export const registerScheduledMeetingRoutes = (
         target.id,
         { status: "live" },
       );
-      persist();
+      persistChanged(meeting);
       res.json({ scheduledMeeting: serializeMeeting(meeting) });
     } catch (error) {
       res.status(400).json({ error: (error as Error).message });
@@ -275,7 +337,7 @@ export const registerScheduledMeetingRoutes = (
         target.id,
         { status: "cancelled" },
       );
-      persist();
+      persistChanged(meeting);
       res.json({ scheduledMeeting: serializeMeeting(meeting) });
     } catch (error) {
       res.status(400).json({ error: (error as Error).message });

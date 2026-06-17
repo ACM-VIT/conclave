@@ -116,9 +116,10 @@ function MobileChatPanel({
 
   useEffect(() => {
     if (!isOpen || !messages.length) return;
-    requestAnimationFrame(() => {
+    const frameId = requestAnimationFrame(() => {
       messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
     });
+    return () => cancelAnimationFrame(frameId);
   }, [isOpen, messages.length]);
 
   useEffect(() => {
@@ -230,7 +231,7 @@ function MobileChatPanel({
           href={segment.href}
           target="_blank"
           rel="noopener noreferrer"
-          className="underline decoration-[#FEFCD9]/50 underline-offset-2 hover:decoration-[#FEFCD9]"
+          className="underline decoration-[#fafafa]/50 underline-offset-2 hover:decoration-[#fafafa]"
         >
           {segment.text}
         </a>
@@ -272,14 +273,14 @@ function MobileChatPanel({
             <div className="mx-auto mobile-sheet-grabber" />
             <div
               className="mt-3 flex items-center justify-between"
-              style={{ fontFamily: "'PolySans Mono', monospace" }}
+              style={{ fontFamily: "'PolySans Trial', sans-serif" }}
             >
-              <h2 className="text-base font-semibold text-[#FEFCD9] uppercase tracking-[0.2em]">
+              <h2 className="text-base font-semibold text-[#fafafa]">
                 Chat
               </h2>
               <button
                 onClick={onClose}
-                className="mobile-pill mobile-glass-soft px-3 py-1 text-[10px] uppercase tracking-[0.2em] text-[#FEFCD9]"
+                className="mobile-pill mobile-glass-soft px-3 py-1 text-[12px] font-medium text-[#fafafa]"
               >
                 Done
               </button>
@@ -289,10 +290,8 @@ function MobileChatPanel({
           <div className="flex-1 mobile-sheet-scroll overflow-y-auto px-4 pb-3 space-y-3">
             {messages.length === 0 ? (
               <div className="flex-1 flex items-center justify-center h-full py-6">
-                <p className="text-[#FEFCD9]/45 text-sm text-center">
-                  No messages yet.
-                  <br />
-                  Start the conversation!
+                <p className="text-[#fafafa]/60 text-sm text-center">
+                  No messages yet
                 </p>
               </div>
             ) : (
@@ -316,9 +315,9 @@ function MobileChatPanel({
                       key={message.id}
                       className={isNew ? "mobile-chat-message-new" : ""}
                     >
-                      <div className="text-[11px] text-[#FEFCD9]/70 italic px-1">
+                      <div className="text-[11px] text-[#fafafa]/82 italic px-1">
                         {directMessageLabel ? (
-                          <p className="mb-0.5 text-[9px] not-italic uppercase tracking-[0.14em] text-amber-300/80">
+                          <p className="mb-0.5 text-[11px] not-italic font-medium text-amber-300/80">
                             {directMessageLabel}
                           </p>
                         ) : null}
@@ -337,27 +336,27 @@ function MobileChatPanel({
                     className={`${isNew ? "mobile-chat-message-new" : ""} flex flex-col ${isOwn ? "items-end" : "items-start"}`}
                   >
                     {!isOwn && (
-                      <span className="text-[10px] text-[#FEFCD9]/50 mb-0.5 px-1 uppercase tracking-[0.18em]">
+                      <span className="mb-0.5 px-1 text-[11px] font-medium text-[#fafafa]/66">
                         {resolveDisplayName(message.userId)}
                       </span>
                     )}
                     <div
                       className={`max-w-[80%] rounded-[18px] px-3 py-2 ${
                         isOwn
-                          ? "bg-[#F95F4A] text-white rounded-br-md selection:bg-white/90 selection:text-[#0d0e0d]"
-                          : "bg-[#2a2a2a]/90 text-[#FEFCD9] rounded-bl-md selection:bg-[#F95F4A]/40 selection:text-white"
+                          ? "bg-[#F95F4A] text-white rounded-br-md selection:bg-white/90 selection:text-[#131316]"
+                          : "bg-[#2e2e33]/90 text-[#fafafa] rounded-bl-md selection:bg-[#F95F4A]/40 selection:text-white"
                       } ${message.isDirect ? "ring-1 ring-amber-300/30" : ""}`}
                     >
                       <p className="text-sm break-words">
                         {directMessageLabel ? (
-                          <span className="mb-1 block text-[9px] uppercase tracking-[0.14em] text-amber-300/80">
+                          <span className="mb-1 block text-[11px] font-medium text-amber-300/80">
                             {directMessageLabel}
                           </span>
                         ) : null}
                         {renderMessageContent(message.content)}
                       </p>
                     </div>
-                    <span className="text-[9px] text-[#FEFCD9]/35 mt-0.5 px-1">
+                    <span className="text-[9px] text-[#fafafa]/35 mt-0.5 px-1">
                       {formatTime(message.timestamp)}
                     </span>
                   </div>
@@ -369,10 +368,10 @@ function MobileChatPanel({
 
           <form
             onSubmit={handleSubmit}
-            className="relative flex items-center gap-2 px-4 py-3 border-t border-[#FEFCD9]/10 bg-[#0b0b0b]/95"
+            className="relative flex items-center gap-2 px-4 py-3 border-t border-[#fafafa]/10 bg-[#0b0b0b]/95"
           >
             {showMentionSuggestions && (
-              <div className="absolute bottom-full mb-2 left-0 right-0 max-h-40 overflow-y-auto mobile-sheet-card shadow-xl overflow-hidden">
+              <div className="absolute bottom-full mb-2 left-0 right-0 max-h-40 overflow-y-auto mobile-sheet-card overflow-hidden">
                 {mentionSuggestions.map((participant, index) => {
                   const isActive = index === activeMentionIndex;
                   return (
@@ -382,8 +381,8 @@ function MobileChatPanel({
                       onClick={() => applyMentionSuggestion(index)}
                       className={`w-full px-3 py-2 text-left text-sm transition-colors ${
                         isActive
-                          ? "bg-[#F95F4A]/20 text-[#FEFCD9]"
-                          : "text-[#FEFCD9]/70 hover:bg-[#FEFCD9]/10"
+                          ? "bg-[#F95F4A]/20 text-[#fafafa]"
+                          : "text-[#fafafa]/82 hover:bg-[#fafafa]/10"
                       }`}
                     >
                       <div className="flex items-center justify-between gap-2">
@@ -395,7 +394,7 @@ function MobileChatPanel({
               </div>
             )}
             {showCommandSuggestions && (
-              <div className="absolute bottom-full mb-2 left-0 right-0 max-h-48 overflow-y-auto mobile-sheet-card shadow-xl overflow-hidden">
+              <div className="absolute bottom-full mb-2 left-0 right-0 max-h-48 overflow-y-auto mobile-sheet-card overflow-hidden">
                 {commandSuggestions.map((command, index) => {
                   const isActive = index === activeCommandIndex;
                   return (
@@ -408,17 +407,17 @@ function MobileChatPanel({
                       }}
                       className={`w-full px-3 py-2 text-left text-sm transition-colors ${
                         isActive
-                          ? "bg-[#F95F4A]/20 text-[#FEFCD9]"
-                          : "text-[#FEFCD9]/70 hover:bg-[#FEFCD9]/10"
+                          ? "bg-[#F95F4A]/20 text-[#fafafa]"
+                          : "text-[#fafafa]/82 hover:bg-[#fafafa]/10"
                       }`}
                     >
                       <div className="flex items-center justify-between gap-2">
                         <span className="font-medium">/{command.label}</span>
-                        <span className="text-[10px] text-[#FEFCD9]/40">
+                        <span className="text-[10px] text-[#fafafa]/56">
                           {command.usage}
                         </span>
                       </div>
-                      <p className="text-[10px] text-[#FEFCD9]/45">
+                      <p className="text-[10px] text-[#fafafa]/75">
                         {command.description}
                       </p>
                     </button>
@@ -443,7 +442,7 @@ function MobileChatPanel({
                     : "Type a message or /..."
               }
               disabled={isChatDisabled}
-              className="flex-1 mobile-glass mobile-pill px-4 py-2.5 text-sm text-[#FEFCD9] placeholder:text-[#FEFCD9]/30 focus:outline-none focus:border-[#F95F4A]/50 disabled:opacity-50"
+              className="flex-1 mobile-glass mobile-pill px-4 py-2.5 text-sm text-[#fafafa] placeholder:text-[#fafafa]/30 focus:outline-none focus:border-[#F95F4A]/50 disabled:opacity-50"
             />
             <button
               type="submit"

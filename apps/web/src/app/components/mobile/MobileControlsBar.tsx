@@ -20,10 +20,14 @@ import {
   Monitor,
   Volume2,
   VolumeX,
+  WandSparkles,
   X,
   ShieldBan,
+  type LucideIcon,
 } from "lucide-react";
 import { memo, useCallback, useEffect, useRef, useState } from "react";
+import type { ReactNode } from "react";
+import { SwitchRow } from "@conclave/ui-tokens/web";
 import type {
   MeetingConfigSnapshot,
   MeetingUpdateRequest,
@@ -37,6 +41,83 @@ import { normalizeBrowserUrl } from "../../lib/utils";
 interface MediaDeviceOption {
   deviceId: string;
   label: string;
+}
+
+type MoreRowTone = "accent" | "warning";
+
+/** Clean sheet row: a plain icon + label + optional trailing accessory. No
+ * boxed-icon chrome — the old per-row icon tiles made the sheet read as noise. */
+function MoreRow({
+  icon: Icon,
+  label,
+  onClick,
+  disabled = false,
+  active = false,
+  tone = "accent",
+  trailing,
+  ariaLabel,
+  ariaPressed,
+  dataAction,
+  dataActionState,
+}: {
+  icon: LucideIcon;
+  label: string;
+  onClick?: () => void;
+  disabled?: boolean;
+  active?: boolean;
+  tone?: MoreRowTone;
+  trailing?: ReactNode;
+  ariaLabel?: string;
+  ariaPressed?: boolean;
+  dataAction?: string;
+  dataActionState?: string;
+}) {
+  const activeColor = tone === "warning" ? "text-amber-400" : "text-[#F95F4A]";
+  return (
+    <button
+      type="button"
+      role="menuitem"
+      aria-label={ariaLabel}
+      aria-pressed={ariaPressed}
+      data-mobile-more-action={dataAction}
+      data-mobile-more-action-state={dataActionState}
+      onClick={onClick}
+      disabled={disabled}
+      className="flex w-full items-center gap-3.5 rounded-xl px-3 py-3 text-left text-[#fafafa] transition-colors duration-150 hover:bg-[#fafafa]/5 active:bg-[#fafafa]/10 disabled:opacity-30"
+    >
+      <Icon
+        className={`h-[19px] w-[19px] shrink-0 ${active ? activeColor : "text-[#fafafa]/70"}`}
+        strokeWidth={1.75}
+      />
+      <span className="flex-1 text-[15px] font-medium">{label}</span>
+      {trailing}
+    </button>
+  );
+}
+
+/** Non-interactive switch pill for use inside a row that is itself the toggle. */
+function MiniSwitch({ on, tone = "accent" }: { on: boolean; tone?: MoreRowTone }) {
+  const fill = tone === "warning" ? "#fbbf24" : "#F95F4A";
+  return (
+    <span
+      aria-hidden
+      className="relative inline-flex h-[22px] w-[38px] shrink-0 items-center rounded-full transition-colors duration-[120ms]"
+      style={{ backgroundColor: on ? fill : "rgba(250,250,250,0.16)" }}
+    >
+      <span
+        className="absolute h-[16px] w-[16px] rounded-full bg-white transition-transform duration-[120ms]"
+        style={{ transform: on ? "translateX(19px)" : "translateX(3px)" }}
+      />
+    </span>
+  );
+}
+
+function MoreSectionLabel({ children }: { children: ReactNode }) {
+  return (
+    <p className="px-3 pb-1 pt-3 text-[11px] font-medium uppercase tracking-[0.08em] text-[#fafafa]/45">
+      {children}
+    </p>
+  );
 }
 
 interface MobileControlsBarProps {
@@ -60,6 +141,10 @@ interface MobileControlsBarProps {
   isParticipantsOpen?: boolean;
   onToggleParticipants?: () => void;
   pendingUsersCount?: number;
+  isVideoEffectsOpen?: boolean;
+  activeVideoEffectsCount?: number;
+  isVideoEffectsPermissionBlocked?: boolean;
+  onToggleVideoEffects?: () => void;
   isRoomLocked?: boolean;
   onToggleLock?: () => void;
   isNoGuests?: boolean;
@@ -135,6 +220,10 @@ function MobileControlsBar({
   isParticipantsOpen,
   onToggleParticipants,
   pendingUsersCount = 0,
+  isVideoEffectsOpen = false,
+  activeVideoEffectsCount = 0,
+  isVideoEffectsPermissionBlocked = false,
+  onToggleVideoEffects,
   isRoomLocked = false,
   onToggleLock,
   isNoGuests = false,
@@ -210,7 +299,52 @@ function MobileControlsBar({
   const [webinarError, setWebinarError] = useState<string | null>(null);
   const [isWebinarWorking, setIsWebinarWorking] = useState(false);
 
+  const closeControlSheets = useCallback(() => {
+    setIsMoreMenuOpen(false);
+    setIsReactionMenuOpen(false);
+    setIsBrowserSheetOpen(false);
+    setIsSettingsSheetOpen(false);
+  }, []);
+
+  const closeExternalSheets = useCallback(() => {
+    if (isChatOpen) {
+      onToggleChat();
+    }
+    if (isParticipantsOpen) {
+      onToggleParticipants?.();
+    }
+    if (isVideoEffectsOpen) {
+      onToggleVideoEffects?.();
+    }
+  }, [
+    isChatOpen,
+    isParticipantsOpen,
+    isVideoEffectsOpen,
+    onToggleChat,
+    onToggleParticipants,
+    onToggleVideoEffects,
+  ]);
+
   const canStartScreenShare = !activeScreenShareId || isScreenSharing;
+  const hasActiveVideoEffects = activeVideoEffectsCount > 0;
+  const canOpenVideoEffects =
+    Boolean(onToggleVideoEffects) &&
+    !isGhostMode &&
+    !isVideoEffectsPermissionBlocked;
+  const videoEffectsStatusLabel = isVideoEffectsPermissionBlocked
+    ? "Permission needed"
+    : hasActiveVideoEffects
+      ? `${activeVideoEffectsCount} active`
+      : isVideoEffectsOpen
+        ? "Open"
+        : "Off";
+  const videoEffectsAriaLabel = isVideoEffectsPermissionBlocked
+    ? "Backgrounds and effects, permission needed"
+    : hasActiveVideoEffects
+      ? `Backgrounds and effects, ${activeVideoEffectsCount} active`
+      : isVideoEffectsOpen
+        ? "Backgrounds and effects, open"
+        : "Backgrounds and effects, off";
 
   const baseButtonClass =
     "mobile-control-btn w-12 h-12 rounded-full flex items-center justify-center active:scale-95";
@@ -284,7 +418,8 @@ function MobileControlsBar({
   useEffect(() => {
     if (
       typeof navigator === "undefined" ||
-      !navigator.mediaDevices?.addEventListener
+      !navigator.mediaDevices?.addEventListener ||
+      !navigator.mediaDevices.removeEventListener
     ) {
       return;
     }
@@ -295,11 +430,12 @@ function MobileControlsBar({
     };
 
     navigator.mediaDevices.addEventListener("devicechange", handleDeviceChange);
-    return () =>
+    return () => {
       navigator.mediaDevices.removeEventListener(
         "devicechange",
         handleDeviceChange,
       );
+    };
   }, [fetchAudioDevices, isSettingsSheetOpen]);
 
   useEffect(() => {
@@ -387,6 +523,59 @@ function MobileControlsBar({
     throw new Error("Clipboard is unavailable in this browser.");
   }, []);
 
+  const openReactionMenu = useCallback(() => {
+    closeExternalSheets();
+    setIsMoreMenuOpen(false);
+    setIsBrowserSheetOpen(false);
+    setIsSettingsSheetOpen(false);
+    setIsReactionMenuOpen(true);
+  }, [closeExternalSheets]);
+
+  const openMoreMenu = useCallback(() => {
+    closeExternalSheets();
+    setIsReactionMenuOpen(false);
+    setIsBrowserSheetOpen(false);
+    setIsSettingsSheetOpen(false);
+    setIsMoreMenuOpen(true);
+  }, [closeExternalSheets]);
+
+  const openSettingsSheet = useCallback(() => {
+    setIsMoreMenuOpen(false);
+    setIsReactionMenuOpen(false);
+    setIsBrowserSheetOpen(false);
+    setIsSettingsSheetOpen(true);
+  }, []);
+
+  const openBrowserSheet = useCallback(() => {
+    setBrowserUrlError(null);
+    setIsMoreMenuOpen(false);
+    setIsReactionMenuOpen(false);
+    setIsSettingsSheetOpen(false);
+    setIsBrowserSheetOpen(true);
+  }, []);
+
+  const handleVideoEffectsClick = useCallback(() => {
+    if (!canOpenVideoEffects) return;
+    onToggleVideoEffects?.();
+    closeControlSheets();
+  }, [canOpenVideoEffects, closeControlSheets, onToggleVideoEffects]);
+
+  const handleChatButtonClick = useCallback(() => {
+    closeControlSheets();
+    onToggleChat();
+  }, [closeControlSheets, onToggleChat]);
+
+  useEffect(() => {
+    if (isChatOpen || isParticipantsOpen || isVideoEffectsOpen) {
+      closeControlSheets();
+    }
+  }, [
+    closeControlSheets,
+    isChatOpen,
+    isParticipantsOpen,
+    isVideoEffectsOpen,
+  ]);
+
   const selectedAudioInputValue = audioInputDevices.some(
     (device) => device.deviceId === audioInputDeviceId,
   )
@@ -407,12 +596,12 @@ function MobileControlsBar({
   if (isObserverMode) {
     return (
       <div className="fixed inset-x-0 bottom-0 z-40">
-        <div className="absolute inset-x-0 bottom-0 h-28 bg-gradient-to-t from-black/95 via-black/70 to-transparent pointer-events-none" />
+        <div className="absolute inset-x-0 bottom-0 h-28 bg-black/55 pointer-events-none" />
         <div className="relative flex items-center justify-center px-4 pb-[calc(12px+env(safe-area-inset-bottom))] pt-4">
           <div className="mobile-glass mobile-pill flex items-center gap-3 px-4 py-3">
             <span
-              className="text-[11px] text-[#FEFCD9]/70 uppercase tracking-[0.18em]"
-              style={{ fontFamily: "'PolySans Mono', monospace" }}
+              className="text-[12px] font-medium text-[#fafafa]/82"
+              style={{ fontFamily: "'PolySans Trial', sans-serif" }}
             >
               {webinarConfig?.attendeeCount ?? 0} watching
             </span>
@@ -452,7 +641,7 @@ function MobileControlsBar({
               <div className="mx-auto mobile-sheet-grabber" />
               <button
                 onClick={() => setIsReactionMenuOpen(false)}
-                className="absolute right-0 top-0 h-7 w-7 mobile-pill mobile-glass-soft flex items-center justify-center text-[#FEFCD9]/70 hover:text-[#FEFCD9]"
+                className="absolute right-0 top-0 h-7 w-7 mobile-pill mobile-glass-soft flex items-center justify-center text-[#fafafa]/82 hover:text-[#fafafa]"
                 aria-label="Close reactions"
               >
                 <X className="h-3.5 w-3.5" />
@@ -463,7 +652,7 @@ function MobileControlsBar({
                 <button
                   key={reaction.id}
                   onClick={() => handleReactionClick(reaction)}
-                  className="h-11 w-11 sm:h-12 sm:w-12 rounded-full bg-[#141414]/70 border border-[#FEFCD9]/10 text-xl sm:text-2xl flex items-center justify-center transition-transform duration-150 active:scale-95 hover:bg-[#FEFCD9]/10"
+                  className="h-11 w-11 sm:h-12 sm:w-12 rounded-full bg-[#141414]/70 border border-[#fafafa]/10 text-xl sm:text-2xl flex items-center justify-center transition-transform duration-150 active:scale-95 hover:bg-[#fafafa]/10"
                   aria-label={`React ${reaction.label}`}
                 >
                   {reaction.kind === "emoji" ? (
@@ -483,8 +672,15 @@ function MobileControlsBar({
       </div>
 
       <div
-        className="mobile-sheet-root z-40"
+        className="mobile-sheet-root z-50"
         data-state={isMoreMenuOpen ? "open" : "closed"}
+        data-mobile-more-menu-state={isMoreMenuOpen ? "open" : "closed"}
+        data-mobile-video-effects-state={videoEffectsStatusLabel}
+        data-mobile-video-effects-active-count={activeVideoEffectsCount}
+        data-mobile-video-effects-open={isVideoEffectsOpen ? "true" : "false"}
+        data-mobile-video-effects-permission-blocked={
+          isVideoEffectsPermissionBlocked ? "true" : "false"
+        }
         aria-hidden={!isMoreMenuOpen}
       >
         <div
@@ -493,7 +689,7 @@ function MobileControlsBar({
         />
         <div className="mobile-sheet-panel">
           <div
-            className="mobile-sheet mobile-sheet-scroll w-full p-4 pb-6 max-h-[75vh] touch-pan-y"
+            className="mobile-sheet mobile-sheet-scroll w-full p-4 pb-[calc(24px+env(safe-area-inset-bottom))] max-h-[80vh] touch-pan-y"
             style={{ fontFamily: "'PolySans Trial', sans-serif" }}
             role="dialog"
             aria-modal="true"
@@ -504,111 +700,106 @@ function MobileControlsBar({
             <div className="mx-auto mobile-sheet-grabber" />
             <button
               onClick={() => setIsMoreMenuOpen(false)}
-              className="absolute right-0 top-0 h-7 w-7 mobile-pill mobile-glass-soft flex items-center justify-center text-[#FEFCD9]/70 hover:text-[#FEFCD9]"
+              className="absolute right-0 top-0 h-7 w-7 mobile-pill mobile-glass-soft flex items-center justify-center text-[#fafafa]/82 hover:text-[#fafafa]"
               aria-label="Close menu"
             >
               <X className="h-3.5 w-3.5" />
             </button>
           </div>
-          <button
+          <MoreRow
+            icon={WandSparkles}
+            label="Backgrounds and effects"
+            ariaLabel={videoEffectsAriaLabel}
+            ariaPressed={isVideoEffectsOpen || hasActiveVideoEffects}
+            dataAction="effects"
+            dataActionState={videoEffectsStatusLabel}
+            onClick={handleVideoEffectsClick}
+            disabled={!canOpenVideoEffects}
+            active={isVideoEffectsOpen || hasActiveVideoEffects}
+            trailing={
+              <span
+                className={`text-[12px] ${
+                  hasActiveVideoEffects
+                    ? "font-semibold text-[#F95F4A]"
+                    : "font-medium text-[#fafafa]/56"
+                }`}
+              >
+                {videoEffectsStatusLabel}
+              </span>
+            }
+          />
+          <MoreRow
+            icon={Users}
+            label="Participants"
+            dataAction="participants"
+            dataActionState={String(pendingUsersCount)}
             onClick={() => {
               onToggleParticipants?.();
               setIsMoreMenuOpen(false);
             }}
-            className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-[#FEFCD9] hover:bg-[#FEFCD9]/5 active:bg-[#FEFCD9]/10 transition-transform duration-150 touch-feedback"
-          >
-            <div className="h-9 w-9 rounded-xl bg-[#2b2b2b] border border-white/5 flex items-center justify-center">
-              <Users className="w-4.5 h-4.5" />
-            </div>
-            <span className="text-sm font-medium">Participants</span>
-            {pendingUsersCount > 0 && (
-              <span className="ml-auto text-xs bg-[#F95F4A] text-white px-2 py-0.5 rounded-full font-bold">
-                {pendingUsersCount}
-              </span>
-            )}
-          </button>
-          <button
+            trailing={
+              pendingUsersCount > 0 ? (
+                <span className="rounded-full bg-[#F95F4A] px-2 py-0.5 text-xs font-bold text-white">
+                  {pendingUsersCount}
+                </span>
+              ) : undefined
+            }
+          />
+          <MoreRow
+            icon={Settings}
+            label="Settings"
+            dataAction="settings"
+            dataActionState="available"
+            onClick={openSettingsSheet}
+          />
+          <MoreRow
+            icon={Hand}
+            label="Raise hand"
+            tone="warning"
+            active={isHandRaised}
+            disabled={isGhostMode}
             onClick={() => {
+              onToggleHandRaised();
               setIsMoreMenuOpen(false);
-              setIsSettingsSheetOpen(true);
-              void fetchAudioDevices();
             }}
-            className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-[#FEFCD9] hover:bg-[#FEFCD9]/5 active:bg-[#FEFCD9]/10 transition-transform duration-150 touch-feedback"
-          >
-            <div className="h-9 w-9 rounded-xl bg-[#2b2b2b] border border-white/5 flex items-center justify-center">
-              <Settings className="w-4.5 h-4.5" />
-            </div>
-            <span className="text-sm font-medium">Settings</span>
-          </button>
-          <button
-              onClick={() => {
-                onToggleHandRaised();
-                setIsMoreMenuOpen(false);
-              }}
-              disabled={isGhostMode}
-              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-transform duration-150 touch-feedback ${isGhostMode
-                  ? "opacity-30"
-                  : isHandRaised
-                    ? "text-amber-400"
-                    : "text-[#FEFCD9]"
-                } hover:bg-[#FEFCD9]/5 active:bg-[#FEFCD9]/10`}
-            >
-              <div
-                className={`h-9 w-9 rounded-xl border border-white/5 flex items-center justify-center ${
-                  isHandRaised ? "bg-amber-500/15" : "bg-[#2b2b2b]"
-                }`}
-              >
-                <Hand className="w-4.5 h-4.5" />
-              </div>
-              <span className="text-sm font-medium">{isHandRaised ? "Lower hand" : "Raise hand"}</span>
-            </button>
-            <button
-              onClick={() => {
-                onToggleScreenShare();
-                setIsMoreMenuOpen(false);
-              }}
-              disabled={isGhostMode || !canStartScreenShare}
-              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-transform duration-150 touch-feedback ${isGhostMode || !canStartScreenShare
-                  ? "opacity-30"
-                  : isScreenSharing
-                    ? "text-[#F95F4A]"
-                    : "text-[#FEFCD9]"
-                } hover:bg-[#FEFCD9]/5 active:bg-[#FEFCD9]/10`}
-            >
-              <div
-                className={`h-9 w-9 rounded-xl border border-white/5 flex items-center justify-center ${
-                  isScreenSharing ? "bg-[#F95F4A]/20" : "bg-[#2b2b2b]"
-                }`}
-              >
-                <Monitor className="w-4.5 h-4.5" />
-              </div>
-              <span className="text-sm font-medium">{isScreenSharing ? "Stop sharing" : "Share screen"}</span>
-            </button>
+            trailing={<MiniSwitch on={isHandRaised} tone="warning" />}
+          />
+          <MoreRow
+            icon={Monitor}
+            label="Share screen"
+            active={isScreenSharing}
+            disabled={isGhostMode || !canStartScreenShare}
+            onClick={() => {
+              onToggleScreenShare();
+              setIsMoreMenuOpen(false);
+            }}
+            trailing={<MiniSwitch on={isScreenSharing} />}
+          />
+            {isAdmin && <MoreSectionLabel>Host controls</MoreSectionLabel>}
             {showBrowserControls &&
               isAdmin &&
               (onLaunchBrowser || onNavigateBrowser || onCloseBrowser) && (
-              <button
-                onClick={() => {
-                  setIsMoreMenuOpen(false);
-                  setIsBrowserSheetOpen(true);
-                }}
-                className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-[#FEFCD9] hover:bg-[#FEFCD9]/5 active:bg-[#FEFCD9]/10 transition-transform duration-150 touch-feedback"
-              >
-                <div className="h-9 w-9 rounded-xl bg-[#2b2b2b] border border-white/5 flex items-center justify-center">
-                  <Globe className="w-4.5 h-4.5" />
-                </div>
-                <span className="text-sm font-medium">Shared browser</span>
-                <span
-                  className={`ml-auto text-[10px] uppercase tracking-[0.2em] ${
-                    isBrowserActive ? "text-emerald-300" : "text-[#FEFCD9]/40"
-                  }`}
-                >
-                  {isBrowserActive ? "Live" : "Off"}
-                </span>
-              </button>
+              <MoreRow
+                icon={Globe}
+                label="Shared browser"
+                active={isBrowserActive}
+                onClick={openBrowserSheet}
+                trailing={
+                  <span
+                    className={`text-[12px] font-medium ${
+                      isBrowserActive ? "text-emerald-300" : "text-[#fafafa]/56"
+                    }`}
+                  >
+                    {isBrowserActive ? "Live" : "Off"}
+                  </span>
+                }
+              />
             )}
             {isAdmin && (onOpenWhiteboard || onCloseWhiteboard) && (
-              <button
+              <MoreRow
+                icon={Globe}
+                label="Whiteboard"
+                active={isWhiteboardActive}
                 onClick={() => {
                   if (isWhiteboardActive) {
                     onCloseWhiteboard?.();
@@ -617,28 +808,25 @@ function MobileControlsBar({
                   }
                   setIsMoreMenuOpen(false);
                 }}
-                className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-[#FEFCD9] hover:bg-[#FEFCD9]/5 active:bg-[#FEFCD9]/10 transition-transform duration-150 touch-feedback"
-              >
-                <div className="h-9 w-9 rounded-xl bg-[#2b2b2b] border border-white/5 flex items-center justify-center">
-                  <Globe className="w-4.5 h-4.5" />
-                </div>
-                <span className="text-sm font-medium">
-                  {isWhiteboardActive ? "Close whiteboard" : "Open whiteboard"}
-                </span>
-                <span
-                  className={`ml-auto text-[10px] uppercase tracking-[0.2em] ${
-                    isWhiteboardActive ? "text-emerald-300" : "text-[#FEFCD9]/40"
-                  }`}
-                >
-                  {isWhiteboardActive ? "Live" : "Off"}
-                </span>
-              </button>
+                trailing={
+                  <span
+                    className={`text-[12px] font-medium ${
+                      isWhiteboardActive ? "text-emerald-300" : "text-[#fafafa]/56"
+                    }`}
+                  >
+                    {isWhiteboardActive ? "Live" : "Off"}
+                  </span>
+                }
+              />
             )}
             {/* Voice agent action hidden from the mobile web menu. */}
             {isAdmin &&
               isDevPlaygroundEnabled &&
               (onOpenDevPlayground || onCloseDevPlayground) && (
-              <button
+              <MoreRow
+                icon={Code2}
+                label="Dev playground"
+                active={isDevPlaygroundActive}
                 onClick={() => {
                   if (isDevPlaygroundActive) {
                     onCloseDevPlayground?.();
@@ -647,189 +835,105 @@ function MobileControlsBar({
                   }
                   setIsMoreMenuOpen(false);
                 }}
-                className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-[#FEFCD9] hover:bg-[#FEFCD9]/5 active:bg-[#FEFCD9]/10 transition-transform duration-150 touch-feedback"
-              >
-                <div className="h-9 w-9 rounded-xl bg-[#2b2b2b] border border-white/5 flex items-center justify-center">
-                  <Code2 className="w-4.5 h-4.5" />
-                </div>
-                <span className="text-sm font-medium">
-                  {isDevPlaygroundActive
-                    ? "Close dev playground"
-                    : "Open dev playground"}
-                </span>
-                <span
-                  className={`ml-auto text-[10px] uppercase tracking-[0.2em] ${
-                    isDevPlaygroundActive
-                      ? "text-emerald-300"
-                      : "text-[#FEFCD9]/40"
-                  }`}
-                >
-                  {isDevPlaygroundActive ? "Live" : "Off"}
-                </span>
-              </button>
-            )}
-            {showBrowserControls &&
-              (hasBrowserAudio || isBrowserActive) &&
-              onToggleBrowserAudio && (
-              <button
-                onClick={() => {
-                  onToggleBrowserAudio();
-                  setIsMoreMenuOpen(false);
-                }}
-                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-transform duration-150 touch-feedback ${
-                  isBrowserAudioMuted ? "text-[#F95F4A]" : "text-[#FEFCD9]"
-                } hover:bg-[#FEFCD9]/5 active:bg-[#FEFCD9]/10`}
-              >
-                <div
-                  className={`h-9 w-9 rounded-xl border border-white/5 flex items-center justify-center ${
-                    isBrowserAudioMuted ? "bg-[#F95F4A]/20" : "bg-[#2b2b2b]"
-                  }`}
-                >
-                  {isBrowserAudioMuted ? (
-                    <VolumeX className="w-4.5 h-4.5" />
-                  ) : (
-                    <Volume2 className="w-4.5 h-4.5" />
-                  )}
-                </div>
-                <span className="text-sm font-medium">Shared browser audio</span>
-                <span className="ml-auto text-[10px] uppercase tracking-[0.2em] text-[#FEFCD9]/40">
-                  {isBrowserAudioMuted ? "Muted" : "On"}
-                </span>
-              </button>
+                trailing={
+                  <span
+                    className={`text-[12px] font-medium ${
+                      isDevPlaygroundActive ? "text-emerald-300" : "text-[#fafafa]/56"
+                    }`}
+                  >
+                    {isDevPlaygroundActive ? "Live" : "Off"}
+                  </span>
+                }
+              />
             )}
             {isAdmin && onToggleAppsLock && (
-              <button
+              <MoreRow
+                icon={isAppsLocked ? Lock : LockOpen}
+                label="Lock whiteboard"
+                tone="warning"
+                active={isAppsLocked}
                 onClick={() => {
                   onToggleAppsLock();
                   setIsMoreMenuOpen(false);
                 }}
-                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-transform duration-150 touch-feedback ${
-                  isAppsLocked ? "text-amber-400" : "text-[#FEFCD9]"
-                } hover:bg-[#FEFCD9]/5 active:bg-[#FEFCD9]/10`}
-              >
-                <div
-                  className={`h-9 w-9 rounded-xl border border-white/5 flex items-center justify-center ${
-                    isAppsLocked ? "bg-amber-500/20" : "bg-[#2b2b2b]"
-                  }`}
-                >
-                  {isAppsLocked ? <Lock className="w-4.5 h-4.5" /> : <LockOpen className="w-4.5 h-4.5" />}
-                </div>
-                <span className="text-sm font-medium">
-                  {isAppsLocked ? "Unlock whiteboard" : "Lock whiteboard"}
-                </span>
-              </button>
+                trailing={<MiniSwitch on={isAppsLocked} tone="warning" />}
+              />
             )}
             {isAdmin && (
-              <button
+              <MoreRow
+                icon={isRoomLocked ? Lock : LockOpen}
+                label="Lock meeting"
+                tone="warning"
+                active={isRoomLocked}
                 onClick={() => {
                   onToggleLock?.();
                   setIsMoreMenuOpen(false);
                 }}
-                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-transform duration-150 touch-feedback ${isRoomLocked
-                    ? "text-amber-400"
-                    : "text-[#FEFCD9]"
-                  } hover:bg-[#FEFCD9]/5 active:bg-[#FEFCD9]/10`}
-              >
-                <div
-                  className={`h-9 w-9 rounded-xl border border-white/5 flex items-center justify-center ${
-                    isRoomLocked ? "bg-amber-500/20" : "bg-[#2b2b2b]"
-                  }`}
-                >
-                  {isRoomLocked ? (
-                    <Lock className="w-4.5 h-4.5" />
-                  ) : (
-                    <LockOpen className="w-4.5 h-4.5" />
-                  )}
-                </div>
-                <span className="text-sm font-medium">{isRoomLocked ? "Unlock meeting" : "Lock meeting"}</span>
-              </button>
+                trailing={<MiniSwitch on={isRoomLocked} tone="warning" />}
+              />
             )}
             {isAdmin && onToggleNoGuests && (
-              <button
+              <MoreRow
+                icon={ShieldBan}
+                label="Block guests"
+                tone="warning"
+                active={isNoGuests}
                 onClick={() => {
                   onToggleNoGuests();
                   setIsMoreMenuOpen(false);
                 }}
-                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-transform duration-150 touch-feedback ${
-                  isNoGuests ? "text-amber-400" : "text-[#FEFCD9]"
-                } hover:bg-[#FEFCD9]/5 active:bg-[#FEFCD9]/10`}
-              >
-                <div
-                  className={`h-9 w-9 rounded-xl border border-white/5 flex items-center justify-center ${
-                    isNoGuests ? "bg-amber-500/20" : "bg-[#2b2b2b]"
-                  }`}
-                >
-                  <ShieldBan className="w-4.5 h-4.5" />
-                </div>
-                <span className="text-sm font-medium">
-                  {isNoGuests ? "Allow guests" : "Block guests"}
-                </span>
-              </button>
+                trailing={<MiniSwitch on={isNoGuests} tone="warning" />}
+              />
             )}
             {isAdmin && onToggleChatLock && (
-              <button
+              <MoreRow
+                icon={MessageSquareLock}
+                label="Allow chat"
+                active={!isChatLocked}
                 onClick={() => {
                   onToggleChatLock();
                   setIsMoreMenuOpen(false);
                 }}
-                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-transform duration-150 touch-feedback ${isChatLocked
-                    ? "text-amber-400"
-                    : "text-[#FEFCD9]"
-                  } hover:bg-[#FEFCD9]/5 active:bg-[#FEFCD9]/10`}
-              >
-                <div
-                  className={`h-9 w-9 rounded-xl border border-white/5 flex items-center justify-center ${
-                    isChatLocked ? "bg-amber-500/20" : "bg-[#2b2b2b]"
-                  }`}
-                >
-                  <MessageSquareLock className="w-4.5 h-4.5" />
-                </div>
-                <span className="text-sm font-medium">{isChatLocked ? "Enable chat" : "Disable chat"}</span>
-              </button>
-            )}
-            {isAdmin && onToggleTtsDisabled && (
-              <button
-                onClick={() => {
-                  onToggleTtsDisabled();
-                  setIsMoreMenuOpen(false);
-                }}
-                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-transform duration-150 touch-feedback ${
-                  isTtsDisabled ? "text-amber-400" : "text-[#FEFCD9]"
-                } hover:bg-[#FEFCD9]/5 active:bg-[#FEFCD9]/10`}
-              >
-                <div
-                  className={`h-9 w-9 rounded-xl border border-white/5 flex items-center justify-center ${
-                    isTtsDisabled ? "bg-amber-500/20" : "bg-[#2b2b2b]"
-                  }`}
-                >
-                  <VolumeX className="w-4.5 h-4.5" />
-                </div>
-                <span className="text-sm font-medium">
-                  {isTtsDisabled ? "Enable TTS" : "Disable TTS"}
-                </span>
-              </button>
+                trailing={<MiniSwitch on={!isChatLocked} />}
+              />
             )}
             {isAdmin && onToggleDmEnabled && (
-              <button
+              <MoreRow
+                icon={MessageSquare}
+                label="Direct messages"
+                active={isDmEnabled}
                 onClick={() => {
                   onToggleDmEnabled();
                   setIsMoreMenuOpen(false);
                 }}
-                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-transform duration-150 touch-feedback ${
-                  isDmEnabled ? "text-amber-300" : "text-[#FEFCD9]"
-                } hover:bg-[#FEFCD9]/5 active:bg-[#FEFCD9]/10`}
-              >
-                <div
-                  className={`h-9 w-9 rounded-xl border border-white/5 flex items-center justify-center ${
-                    isDmEnabled ? "bg-amber-500/20" : "bg-[#2b2b2b]"
-                  }`}
-                >
-                  <MessageSquare className="w-4.5 h-4.5" />
-                </div>
-                <span className="text-sm font-medium">
-                  {isDmEnabled ? "Disable DMs" : "Enable DMs"}
-                </span>
-              </button>
+                trailing={<MiniSwitch on={isDmEnabled} />}
+              />
+            )}
+            {isAdmin && onToggleTtsDisabled && (
+              <MoreRow
+                icon={Volume2}
+                label="Read messages aloud"
+                active={!isTtsDisabled}
+                onClick={() => {
+                  onToggleTtsDisabled();
+                  setIsMoreMenuOpen(false);
+                }}
+                trailing={<MiniSwitch on={!isTtsDisabled} />}
+              />
+            )}
+            {showBrowserControls &&
+              (hasBrowserAudio || isBrowserActive) &&
+              onToggleBrowserAudio && (
+              <MoreRow
+                icon={isBrowserAudioMuted ? VolumeX : Volume2}
+                label="Shared browser audio"
+                active={!isBrowserAudioMuted}
+                onClick={() => {
+                  onToggleBrowserAudio();
+                  setIsMoreMenuOpen(false);
+                }}
+                trailing={<MiniSwitch on={!isBrowserAudioMuted} />}
+              />
             )}
           </div>
         </div>
@@ -857,7 +961,7 @@ function MobileControlsBar({
             <div className="mx-auto mobile-sheet-grabber" />
             <button
               onClick={() => setIsSettingsSheetOpen(false)}
-              className="absolute right-0 top-0 h-7 w-7 mobile-pill mobile-glass-soft flex items-center justify-center text-[#FEFCD9]/70 hover:text-[#FEFCD9]"
+              className="absolute right-0 top-0 h-7 w-7 mobile-pill mobile-glass-soft flex items-center justify-center text-[#fafafa]/82 hover:text-[#fafafa]"
               aria-label="Close settings"
             >
               <X className="h-3.5 w-3.5" />
@@ -865,19 +969,16 @@ function MobileControlsBar({
           </div>
 
             <div className="px-1">
-              <h2 className="text-lg font-medium text-[#FEFCD9]">
+              <h2 className="text-lg font-medium text-[#fafafa]">
                 Meeting settings
               </h2>
-              <p className="mt-1 text-xs text-[#FEFCD9]/55">
-                Audio, access, and webinar controls.
-              </p>
             </div>
 
             <div className="mt-5 space-y-5">
               <section className="space-y-3">
-                <h3 className="text-sm font-semibold text-[#FEFCD9]">Audio</h3>
+                <h3 className="text-sm font-semibold text-[#fafafa]">Audio</h3>
                 <div className="space-y-2">
-                  <label className="text-xs text-[#FEFCD9]/70">
+                  <label className="text-xs text-[#fafafa]/82">
                     Microphone
                   </label>
                   <select
@@ -888,7 +989,7 @@ function MobileControlsBar({
                     disabled={
                       !onAudioInputDeviceChange || audioInputDevices.length === 0
                     }
-                    className="w-full bg-black/40 border border-[#FEFCD9]/10 rounded-xl px-3 py-2 text-sm text-[#FEFCD9] focus:outline-none focus:border-[#FEFCD9]/25 disabled:opacity-40 disabled:cursor-not-allowed"
+                    className="w-full bg-black/40 border border-[#fafafa]/10 rounded-xl px-3 py-2 text-sm text-[#fafafa] focus:outline-none focus:border-[#fafafa]/25 disabled:opacity-40 disabled:cursor-not-allowed"
                   >
                     {audioInputDevices.length === 0 ? (
                       <option value="">No microphones found</option>
@@ -906,7 +1007,7 @@ function MobileControlsBar({
                 </div>
 
                 <div className="space-y-2">
-                  <label className="text-xs text-[#FEFCD9]/70">Speaker</label>
+                  <label className="text-xs text-[#fafafa]/82">Speaker</label>
                   <select
                     value={selectedAudioOutputValue ?? ""}
                     onChange={(event) =>
@@ -916,7 +1017,7 @@ function MobileControlsBar({
                       !onAudioOutputDeviceChange ||
                       audioOutputDevices.length === 0
                     }
-                    className="w-full bg-black/40 border border-[#FEFCD9]/10 rounded-xl px-3 py-2 text-sm text-[#FEFCD9] focus:outline-none focus:border-[#FEFCD9]/25 disabled:opacity-40 disabled:cursor-not-allowed"
+                    className="w-full bg-black/40 border border-[#fafafa]/10 rounded-xl px-3 py-2 text-sm text-[#fafafa] focus:outline-none focus:border-[#fafafa]/25 disabled:opacity-40 disabled:cursor-not-allowed"
                   >
                     {audioOutputDevices.length === 0 ? (
                       <option value="">No speakers found</option>
@@ -934,7 +1035,7 @@ function MobileControlsBar({
                 </div>
 
                 {isLoadingAudioDevices && (
-                  <p className="text-xs text-[#FEFCD9]/55">
+                  <p className="text-xs text-[#fafafa]/55">
                     Loading devices...
                   </p>
                 )}
@@ -944,7 +1045,7 @@ function MobileControlsBar({
                 )}
 
                 {audioOutputDevices.length === 0 && !audioDevicesError && (
-                  <p className="text-xs text-[#FEFCD9]/45">
+                  <p className="text-xs text-[#fafafa]/75">
                     Speaker selection may be limited in this mobile browser.
                   </p>
                 )}
@@ -953,10 +1054,10 @@ function MobileControlsBar({
               {isAdmin ? (
                 <>
                   <section className="space-y-3">
-                    <h3 className="text-sm font-semibold text-[#FEFCD9]">
+                    <h3 className="text-sm font-semibold text-[#fafafa]">
                       Meeting access
                     </h3>
-                    <p className="text-xs text-[#FEFCD9]/60">
+                    <p className="text-xs text-[#fafafa]/75">
                       {meetingRequiresInviteCode
                         ? "Invite code required to join."
                         : "Open meeting. Add a code to protect it."}
@@ -969,7 +1070,7 @@ function MobileControlsBar({
                           setMeetingInviteCodeInput(event.target.value)
                         }
                         placeholder="Invite code"
-                        className="w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-[#FEFCD9] outline-none placeholder:text-[#FEFCD9]/30 focus:border-[#FEFCD9]/25"
+                        className="w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-[#fafafa] outline-none placeholder:text-[#fafafa]/30 focus:border-[#fafafa]/25"
                       />
                       <div className="flex items-center gap-2">
                         <button
@@ -1029,7 +1130,7 @@ function MobileControlsBar({
                             !onUpdateMeetingConfig ||
                             !meetingRequiresInviteCode
                           }
-                          className="flex-1 rounded-lg bg-white/10 px-3 py-2 text-sm text-[#FEFCD9]/80 transition hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-40"
+                          className="flex-1 rounded-lg bg-white/10 px-3 py-2 text-sm text-[#fafafa]/80 transition hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-40"
                         >
                           Clear
                         </button>
@@ -1047,20 +1148,24 @@ function MobileControlsBar({
 
                   <section className="space-y-3">
                     <div className="flex items-center justify-between">
-                      <h3 className="text-sm font-semibold text-[#FEFCD9]">
+                      <h3 className="text-sm font-semibold text-[#fafafa]">
                         Webinar
                       </h3>
                       {webinarRole ? (
-                        <span className="text-xs text-[#FEFCD9]/60">
-                          Role: {webinarRole}
+                        <span className="text-xs capitalize text-[#fafafa]/75">
+                          {webinarRole}
                         </span>
                       ) : null}
                     </div>
 
-                    <div className="flex flex-col gap-2">
-                      <button
-                        type="button"
-                        onClick={() =>
+                    <div className="-mx-2 flex flex-col">
+                      <SwitchRow
+                        label="Webinar mode"
+                        tone="success"
+                        checked={Boolean(webinarConfig?.enabled)}
+                        disabled={isWebinarWorking || !onUpdateWebinarConfig}
+                        className="rounded-lg"
+                        onChange={() =>
                           void runWebinarTask(
                             async () => {
                               if (!onUpdateWebinarConfig) {
@@ -1080,15 +1185,18 @@ function MobileControlsBar({
                             },
                           )
                         }
-                        disabled={isWebinarWorking || !onUpdateWebinarConfig}
-                        className="w-full rounded-lg border border-white/10 px-3 py-2 text-left text-sm text-[#FEFCD9] transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
-                      >
-                        Webinar: {webinarConfig?.enabled ? "On" : "Off"}
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() =>
+                      />
+                      <SwitchRow
+                        label="Public access"
+                        tone="success"
+                        checked={Boolean(webinarConfig?.publicAccess)}
+                        disabled={
+                          isWebinarWorking ||
+                          !onUpdateWebinarConfig ||
+                          !webinarConfig?.enabled
+                        }
+                        className="rounded-lg"
+                        onChange={() =>
                           void runWebinarTask(
                             async () => {
                               if (!onUpdateWebinarConfig) {
@@ -1108,19 +1216,18 @@ function MobileControlsBar({
                             },
                           )
                         }
+                      />
+                      <SwitchRow
+                        label="Lock webinar"
+                        tone="warning"
+                        checked={Boolean(webinarConfig?.locked)}
                         disabled={
                           isWebinarWorking ||
                           !onUpdateWebinarConfig ||
                           !webinarConfig?.enabled
                         }
-                        className="w-full rounded-lg border border-white/10 px-3 py-2 text-left text-sm text-[#FEFCD9] transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
-                      >
-                        Public access: {webinarConfig?.publicAccess ? "On" : "Off"}
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() =>
+                        className="rounded-lg"
+                        onChange={() =>
                           void runWebinarTask(
                             async () => {
                               if (!onUpdateWebinarConfig) {
@@ -1140,24 +1247,16 @@ function MobileControlsBar({
                             },
                           )
                         }
-                        disabled={
-                          isWebinarWorking ||
-                          !onUpdateWebinarConfig ||
-                          !webinarConfig?.enabled
-                        }
-                        className="w-full rounded-lg border border-white/10 px-3 py-2 text-left text-sm text-[#FEFCD9] transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
-                      >
-                        Webinar lock: {webinarConfig?.locked ? "On" : "Off"}
-                      </button>
+                      />
                     </div>
 
-                    <p className="text-xs text-[#FEFCD9]/60">
+                    <p className="text-xs text-[#fafafa]/75">
                       Attendees:{" "}
-                      <span className="text-[#FEFCD9]">
+                      <span className="text-[#fafafa]">
                         {webinarConfig?.attendeeCount ?? 0}
                       </span>{" "}
                       /{" "}
-                      <span className="text-[#FEFCD9]">
+                      <span className="text-[#fafafa]">
                         {webinarConfig?.maxAttendees ?? 500}
                       </span>
                     </p>
@@ -1170,7 +1269,7 @@ function MobileControlsBar({
                         value={webinarCapInput}
                         onChange={(event) => setWebinarCapInput(event.target.value)}
                         placeholder="Attendee cap"
-                        className="w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-[#FEFCD9] outline-none placeholder:text-[#FEFCD9]/30 focus:border-[#FEFCD9]/25"
+                        className="w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-[#fafafa] outline-none placeholder:text-[#fafafa]/30 focus:border-[#fafafa]/25"
                       />
                       <button
                         type="button"
@@ -1199,7 +1298,7 @@ function MobileControlsBar({
                           !webinarConfig?.enabled ||
                           webinarCapValue == null
                         }
-                        className="rounded-lg bg-white/10 px-3 py-2 text-sm text-[#FEFCD9] transition hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-40"
+                        className="rounded-lg bg-white/10 px-3 py-2 text-sm text-[#fafafa] transition hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-40"
                       >
                         Save
                       </button>
@@ -1213,7 +1312,7 @@ function MobileControlsBar({
                           setWebinarInviteCodeInput(event.target.value)
                         }
                         placeholder="Invite code"
-                        className="w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-[#FEFCD9] outline-none placeholder:text-[#FEFCD9]/30 focus:border-[#FEFCD9]/25"
+                        className="w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-[#fafafa] outline-none placeholder:text-[#fafafa]/30 focus:border-[#fafafa]/25"
                       />
                       <div className="flex items-center gap-2">
                         <button
@@ -1274,7 +1373,7 @@ function MobileControlsBar({
                             !onUpdateWebinarConfig ||
                             !webinarConfig?.requiresInviteCode
                           }
-                          className="flex-1 rounded-lg bg-white/10 px-3 py-2 text-sm text-[#FEFCD9]/80 transition hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-40"
+                          className="flex-1 rounded-lg bg-white/10 px-3 py-2 text-sm text-[#fafafa]/80 transition hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-40"
                         >
                           Clear
                         </button>
@@ -1286,7 +1385,7 @@ function MobileControlsBar({
                         readOnly
                         value={webinarLink ?? ""}
                         placeholder="Generate webinar link"
-                        className="w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-[#FEFCD9] outline-none placeholder:text-[#FEFCD9]/30"
+                        className="w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-[#fafafa] outline-none placeholder:text-[#fafafa]/30"
                       />
                       <div className="flex items-center gap-2">
                         <button
@@ -1309,7 +1408,7 @@ function MobileControlsBar({
                             !onGenerateWebinarLink ||
                             !webinarConfig?.enabled
                           }
-                          className="flex-1 rounded-lg bg-white/10 px-3 py-2 text-sm text-[#FEFCD9] transition hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-40"
+                          className="flex-1 rounded-lg bg-white/10 px-3 py-2 text-sm text-[#fafafa] transition hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-40"
                         >
                           Generate
                         </button>
@@ -1333,7 +1432,7 @@ function MobileControlsBar({
                             !onRotateWebinarLink ||
                             !webinarConfig?.enabled
                           }
-                          className="flex-1 rounded-lg bg-white/10 px-3 py-2 text-sm text-[#FEFCD9] transition hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-40"
+                          className="flex-1 rounded-lg bg-white/10 px-3 py-2 text-sm text-[#fafafa] transition hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-40"
                         >
                           Rotate
                         </button>
@@ -1345,7 +1444,7 @@ function MobileControlsBar({
                             }, { successMessage: "Webinar link copied." })
                           }
                           disabled={isWebinarWorking || !webinarLink}
-                          className="flex-1 rounded-lg bg-white/10 px-3 py-2 text-sm text-[#FEFCD9] transition hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-40"
+                          className="flex-1 rounded-lg bg-white/10 px-3 py-2 text-sm text-[#fafafa] transition hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-40"
                         >
                           Copy
                         </button>
@@ -1394,19 +1493,19 @@ function MobileControlsBar({
                 <div className="mx-auto mobile-sheet-grabber" />
                 <button
                   onClick={() => setIsBrowserSheetOpen(false)}
-                  className="absolute right-0 top-0 h-7 w-7 mobile-pill mobile-glass-soft flex items-center justify-center text-[#FEFCD9]/70 hover:text-[#FEFCD9]"
+                  className="absolute right-0 top-0 h-7 w-7 mobile-pill mobile-glass-soft flex items-center justify-center text-[#fafafa]/82 hover:text-[#fafafa]"
                   aria-label="Close shared browser"
                 >
                   <X className="h-3.5 w-3.5" />
                 </button>
               </div>
-              <div className="flex items-center gap-3 text-[#FEFCD9] px-1">
+              <div className="flex items-center gap-3 text-[#fafafa] px-1">
                 <div className="h-10 w-10 rounded-2xl bg-[#2b2b2b] border border-white/5 flex items-center justify-center">
                   <Globe className="w-5 h-5" />
                 </div>
                 <div className="flex flex-col">
                   <span className="text-base font-medium">Shared browser</span>
-                  <span className="text-[11px] text-[#FEFCD9]/45 uppercase tracking-[0.2em]">
+                  <span className="text-[12px] font-medium text-[#fafafa]/75">
                     {isBrowserActive ? "Live" : "Offline"}
                   </span>
                 </div>
@@ -1440,7 +1539,7 @@ function MobileControlsBar({
                   if (browserUrlError) setBrowserUrlError(null);
                 }}
                 placeholder={isBrowserActive ? "Navigate to URL" : "Launch URL"}
-                className="w-full bg-black/40 border border-[#FEFCD9]/10 rounded-xl px-3 py-2 text-sm text-[#FEFCD9] placeholder:text-[#FEFCD9]/30 focus:outline-none focus:border-[#FEFCD9]/25"
+                className="w-full bg-black/40 border border-[#fafafa]/10 rounded-xl px-3 py-2 text-sm text-[#fafafa] placeholder:text-[#fafafa]/30 focus:outline-none focus:border-[#fafafa]/25"
               />
               <div className="flex items-center gap-2">
                 <button
@@ -1457,7 +1556,7 @@ function MobileControlsBar({
                       await onCloseBrowser();
                       setIsBrowserSheetOpen(false);
                     }}
-                    className="px-3 py-2 rounded-xl bg-white/10 text-[#FEFCD9] text-sm font-medium hover:bg-white/20 transition-transform duration-150 touch-feedback"
+                    className="px-3 py-2 rounded-xl bg-white/10 text-[#fafafa] text-sm font-medium hover:bg-white/20 transition-transform duration-150 touch-feedback"
                   >
                     Close
                   </button>
@@ -1474,12 +1573,10 @@ function MobileControlsBar({
       </div>
       )}
 
-      {/* Main controls bar */}
       <div className="fixed inset-x-0 bottom-0 z-40">
-        <div className="absolute inset-x-0 bottom-0 h-32 bg-gradient-to-t from-black/95 via-black/70 to-transparent pointer-events-none" />
+        <div className="absolute inset-x-0 bottom-0 h-32 bg-black/55 pointer-events-none" />
         <div className="relative flex items-center justify-center px-4 pb-[calc(12px+env(safe-area-inset-bottom))] pt-4">
           <div className="mobile-glass mobile-pill flex items-center gap-3 px-4 py-3">
-            {/* Mute button */}
             <button
               onClick={onToggleMute}
               disabled={isGhostMode}
@@ -1501,7 +1598,6 @@ function MobileControlsBar({
               )}
             </button>
 
-            {/* Camera button */}
             <button
               onClick={onToggleCamera}
               disabled={isGhostMode}
@@ -1527,9 +1623,8 @@ function MobileControlsBar({
               )}
             </button>
 
-            {/* Reactions button */}
             <button
-              onClick={() => setIsReactionMenuOpen(true)}
+              onClick={openReactionMenu}
               disabled={isGhostMode}
               className={isGhostMode ? ghostDisabledClass : defaultButtonClass}
               aria-label={isGhostMode ? "Reactions locked" : "Reactions"}
@@ -1537,9 +1632,8 @@ function MobileControlsBar({
               <Smile className="w-5 h-5" />
             </button>
 
-            {/* Chat button */}
             <button
-              onClick={onToggleChat}
+              onClick={handleChatButtonClick}
               className={`relative ${isChatOpen ? activeButtonClass : defaultButtonClass}`}
               aria-label="Chat"
             >
@@ -1551,18 +1645,16 @@ function MobileControlsBar({
               )}
             </button>
 
-            {/* More button */}
             <button
-              onClick={() => setIsMoreMenuOpen(true)}
+              onClick={openMoreMenu}
               className={defaultButtonClass}
               aria-label="More actions"
             >
               <MoreVertical className="w-5 h-5" />
             </button>
 
-            <div className="w-px h-6 bg-[#FEFCD9]/10" />
+            <div className="w-px h-6 bg-[#fafafa]/10" />
 
-            {/* Leave button */}
             <button
               onClick={onLeave}
               className={leaveButtonClass}

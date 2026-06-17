@@ -9,27 +9,33 @@ import {
   initScheduledMeetings,
   initScheduledWebinars,
 } from "./init.js";
-import { advanceScheduledMeetings } from "./scheduledMeetings.js";
+import {
+  advanceScheduledMeetings,
+  persistScheduledMeetingChanges,
+} from "./scheduledMeetings.js";
 import { createSfuApp } from "./http/createApp.js";
 import {
   startScheduledWebinarTimer,
   stopScheduledWebinarTimer,
 } from "./scheduledWebinarScheduler.js";
-import { createSfuSocketServer } from "./socket/createSocketServer.js";
+import {
+  connectSocketAdapter,
+  createSfuSocketServer,
+  type SocketAdapterLifecycle,
+} from "./socket/createSocketServer.js";
+import { createRoomRegistry } from "./roomRegistry.js";
+import {
+  releaseAllRoomOwnerships,
+  renewRoomOwnerships,
+} from "./rooms.js";
 import { createSfuState } from "./state.js";
 import type { SfuState } from "./state.js";
-import {
-  createRecordingManager,
-  type RecordingManager,
-} from "./recording/recordingManager.js";
-import { isFfmpegAvailable } from "./recording/ffmpegBridge.js";
 
 export type SfuServer = {
   app: Express;
   httpServer: HttpServer;
   io: SocketIOServer;
   state: SfuState;
-  recordings: RecordingManager;
   start: () => Promise<void>;
   stop: () => Promise<void>;
 };
@@ -42,42 +48,54 @@ export const createSfuServer = (
   options: CreateSfuServerOptions = {},
 ): SfuServer => {
   const config = options.config ?? defaultConfig;
-  const state = createSfuState({ isDraining: config.draining });
-  let io: SocketIOServer | null = null;
-  const recordings = createRecordingManager({
-    state,
-    getIo: () => io,
+  const roomRegistry = createRoomRegistry(config);
+  const state = createSfuState({
+    isDraining: config.draining,
+    roomRegistry,
   });
+  let io: SocketIOServer | null = null;
 
   const app = createSfuApp({
     state,
     config,
     getIo: () => io,
-    recordings,
   });
   const httpServer = createHttpServer(app);
-  io = createSfuSocketServer(httpServer, { state, config, recordings });
+  io = createSfuSocketServer(httpServer, { state, config });
 
   let scheduledMeetingTickTimer: NodeJS.Timeout | null = null;
+  let roomOwnershipRenewTimer: NodeJS.Timeout | null = null;
+  let socketAdapterLifecycle: SocketAdapterLifecycle | null = null;
 
   const start = async (): Promise<void> => {
-    await initMediaSoup(state);
+    await state.roomRegistry.start();
+    socketAdapterLifecycle = await connectSocketAdapter(io, { config });
+    await initMediaSoup(state, () => io);
     initScheduledWebinars(state);
     initScheduledMeetings(state);
-    startScheduledWebinarTimer(state, () => io, undefined, recordings);
+    startScheduledWebinarTimer(state, () => io, undefined);
+    roomOwnershipRenewTimer = setInterval(() => {
+      renewRoomOwnerships(state).catch((error) => {
+        Logger.error("Failed to renew room ownerships", error);
+      });
+    }, config.roomRegistry.renewIntervalMs);
+    if (roomOwnershipRenewTimer.unref) {
+      roomOwnershipRenewTimer.unref();
+    }
     scheduledMeetingTickTimer = setInterval(() => {
-      const changed = advanceScheduledMeetings(state.scheduledMeetings);
-      if (changed > 0 && state.scheduledMeetingPersistence) {
+      const changedMeetings = advanceScheduledMeetings(state.scheduledMeetings);
+      if (changedMeetings.length > 0 && state.scheduledMeetingPersistence) {
         try {
-          state.scheduledMeetingPersistence.save(
-            Array.from(state.scheduledMeetings.byId.values()),
+          persistScheduledMeetingChanges(
+            state.scheduledMeetings,
+            state.scheduledMeetingPersistence,
+            changedMeetings,
           );
         } catch (error) {
           Logger.warn("Failed to persist scheduled-meeting tick", error);
         }
       }
     }, 5000);
-    void isFfmpegAvailable();
 
     await new Promise<void>((resolve) => {
       httpServer.listen(config.port, () => {
@@ -93,10 +111,18 @@ export const createSfuServer = (
       clearInterval(scheduledMeetingTickTimer);
       scheduledMeetingTickTimer = null;
     }
+    if (roomOwnershipRenewTimer) {
+      clearInterval(roomOwnershipRenewTimer);
+      roomOwnershipRenewTimer = null;
+    }
     state.scheduledWebinarPersistence?.close?.();
     state.scheduledWebinarPersistence = null;
     state.scheduledMeetingPersistence?.close?.();
     state.scheduledMeetingPersistence = null;
+    await releaseAllRoomOwnerships(state);
+    await socketAdapterLifecycle?.close();
+    socketAdapterLifecycle = null;
+    await state.roomRegistry.close();
     io.close();
 
     await new Promise<void>((resolve, reject) => {
@@ -113,6 +139,7 @@ export const createSfuServer = (
       room.close();
     }
     state.rooms.clear();
+    state.roomCreations.clear();
 
     for (const worker of state.workers) {
       try {
@@ -129,7 +156,6 @@ export const createSfuServer = (
     httpServer,
     io,
     state,
-    recordings,
     start,
     stop,
   };

@@ -1,10 +1,3 @@
-//
-//  JoinView.swift
-//  Conclave
-//
-//  Join screen
-//
-
 import SwiftUI
 import Foundation
 import Observation
@@ -28,12 +21,13 @@ struct JoinView: View {
     @Bindable var viewModel: MeetingViewModel
     @Bindable var appState: AppState
 
-#if !os(macOS)
-    @Environment(\.horizontalSizeClass) var horizontalSizeClass
+#if !os(macOS) && !SKIP
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 #endif
 
     @State private var phase: JoinPhase = .welcome
     @State private var roomCode = ""
+    @State private var inviteCode = ""
     @State private var guestName = ""
     @State private var displayNameInput = ""
     @State private var isGhostMode = false
@@ -42,13 +36,29 @@ struct JoinView: View {
     @State private var isMicOn = false
     @State private var isSigningIn = false
     @State private var signingInProvider: AppState.AuthProvider = .none
+    @State private var enabledAuthProviders: Set<NativeAuthProvider> = []
+    @State private var isLoadingAuthProviders = false
+    @State private var authErrorMessage: String?
+    @State private var appleSignInNonce: String?
+    @State private var pendingLinkJoinTarget: ParsedJoinTarget?
+    @State private var shouldShowInviteCodeInput = false
+    @State private var inviteCodePromptRoomId: String?
+    @State private var inviteCodePromptJoinMode: JoinMode?
+    @State private var authTransitionGeneration = 0
+    @State private var inputFocusClearGeneration = 0
+    @State private var cameraPreviewGeneration = 0
+#if !SKIP
+    @FocusState private var focusedInput: FocusedInput?
+#endif
 #if SKIP
 #else
     @State private var captureSession: AVCaptureSession?
 #endif
 
     private var isRegularSizeClass: Bool {
-#if os(macOS)
+#if SKIP
+        return false
+#elseif os(macOS)
         return true
 #else
         return horizontalSizeClass == UserInterfaceSizeClass.regular
@@ -63,19 +73,36 @@ struct JoinView: View {
         case new, join
     }
 
+    private enum FocusedInput {
+        case guestName, displayName
+    }
+
+    private struct ParsedJoinTarget {
+        let roomId: String
+        let joinMode: JoinMode
+        let meetingInviteCode: String?
+        let webinarInviteCode: String?
+        let allowRoomCreation: Bool
+    }
+
     private var isGoogleSignInEnabled: Bool {
-        let env = ProcessInfo.processInfo.environment
-        if let value = env["GOOGLE_SIGN_IN_ENABLED"]?.lowercased() {
-            return value == "1" || value == "true" || value == "yes"
-        }
-        if let plistBool = Bundle.main.object(forInfoDictionaryKey: "GOOGLE_SIGN_IN_ENABLED") as? Bool {
-            return plistBool
-        }
-        if let plistString = Bundle.main.object(forInfoDictionaryKey: "GOOGLE_SIGN_IN_ENABLED") as? String {
-            let normalized = plistString.lowercased()
-            return normalized == "1" || normalized == "true" || normalized == "yes"
-        }
-        return false
+        enabledAuthProviders.contains(.google) && NativeAuthService.isNativeGoogleSignInAvailable()
+    }
+
+    private var isAppleSignInEnabled: Bool {
+#if !SKIP
+        enabledAuthProviders.contains(.apple)
+#else
+        false
+#endif
+    }
+
+    private var shouldShowSocialSignIn: Bool {
+        isLoadingAuthProviders || isGoogleSignInEnabled || isAppleSignInEnabled
+    }
+
+    private var canShowGhostModeToggle: Bool {
+        SfuJoinService.resolveClientId() != "public"
     }
     
     var body: some View {
@@ -110,16 +137,39 @@ struct JoinView: View {
                 .composeModifier { $0.imePadding() }
                 #endif
                 
-                if viewModel.state.connectionState == ConnectionState.connecting || viewModel.state.connectionState == ConnectionState.joining {
+                if isJoinInProgress {
                     loadingOverlay
                 }
             }
         }
         .animation(.easeOut(duration: 0.4), value: phase)
         .onAppear {
-            if let user = appState.currentUser, !user.id.hasPrefix("guest-") {
-                phase = .join
+            restoreExistingIdentity()
+            restoreJoinDraft()
+            restoreJoinFormAfterRecoverableError()
+            refreshRestoredAuthentication()
+            refreshAuthProviders()
+            applyPendingJoinLinkIfPossible()
+        }
+        .onChange(of: appState.pendingJoinRequestID) { _, _ in
+            applyPendingJoinLinkIfPossible()
+        }
+        .onChange(of: appState.isAuthenticated) { _, _ in
+            applyPendingJoinLinkIfPossible()
+        }
+        .onChange(of: viewModel.state.joinFormErrorMessage) { _, message in
+            if shouldRevealInviteCodeInput(for: message) {
+                revealInviteCodeInputForCurrentTarget()
             }
+        }
+        .onDisappear {
+            authTransitionGeneration += 1
+            inputFocusClearGeneration += 1
+#if SKIP
+            PermissionHelper.onRecordAudioPermissionResult = nil
+            PermissionHelper.onCameraPermissionResult = nil
+#endif
+            stopPreviewCapture()
         }
     }
     
@@ -128,54 +178,52 @@ struct JoinView: View {
     private var welcomePhase: some View {
         VStack(spacing: 0) {
             Spacer()
-            
-            Text("welcome to")
-                .font(ACMFont.wide(18))
-                .foregroundStyle(ACMColors.creamDim)
-                .tracking(1.5)
-                .padding(EdgeInsets(top: 0, leading: 0, bottom: 8, trailing: 0))
-            
-            HStack(spacing: 0) {
-                Text("[")
-                    .font(ACMFont.mono(32, weight: .regular))
-                    .foregroundStyle(ACMColors.primaryOrangeGhost)
-                
-                Text("c0nclav3")
-                    .font(ACMFont.wide(40))
-                    .foregroundStyle(ACMColors.cream)
-                    .tracking(-1)
-                
-                Text("]")
-                    .font(ACMFont.mono(32, weight: .regular))
-                    .foregroundStyle(ACMColors.primaryOrangeGhost)
+
+            VStack(spacing: 16) {
+                // Brand glyph — a small refined bracket mark, not the heavy logo.
+                Text("[ ]")
+                    .font(ACMFont.trial(26, weight: .bold))
+                    .foregroundStyle(ACMColors.primaryOrange)
+                    .tracking(-2)
+                    .padding(.bottom, 4)
+
+                VStack(spacing: 10) {
+                    Text("Welcome to")
+                        .font(ACMFont.trial(17))
+                        .foregroundStyle(ACMColors.textMuted)
+
+                    Text("c0nclav3")
+                        .font(ACMFont.trial(46, weight: .bold))
+                        .foregroundStyle(ACMColors.text)
+                        .tracking(-1.5)
+                }
+
+                Text("ACM-VIT's video conferencing,\nreimagined.")
+                    .font(ACMFont.trial(15))
+                    .foregroundStyle(ACMColors.textFaint)
+                    .multilineTextAlignment(.center)
+                    .lineSpacing(5)
+                    .padding(.top, 2)
             }
-            
-            Text("ACM-VIT's in-house video conferencing platform")
-                .font(ACMFont.trial(14))
-                .foregroundStyle(ACMColors.creamMuted)
-                .multilineTextAlignment(.center)
-                .lineSpacing(4)
-                .padding(EdgeInsets(top: 16, leading: 0, bottom: 0, trailing: 0))
-                .padding(EdgeInsets(top: 0, leading: 0, bottom: 48, trailing: 0))
-            
+
+            Spacer()
+
             Button {
                 phase = .auth
             } label: {
-                HStack(spacing: 10) {
-                    Text("LET'S GO")
-                        .font(ACMFont.mono(11))
-                        .tracking(2)
-                    
-                    ACMSystemIcon.image("arrow.forward", androidName: "Icons.Filled.ArrowForward")
-                        .font(.system(size: 14, weight: .medium))
+                HStack(spacing: 8) {
+                    Text("Get started")
+                        .font(ACMFont.trial(16, weight: .medium))
+                    ACMSystemIcon.icon("arrow.forward", android: "arrow.forward", size: 15, tint: "white")
                 }
                 .foregroundStyle(Color.white)
-                .padding(EdgeInsets(top: 14, leading: 32, bottom: 14, trailing: 32))
+                .frame(maxWidth: .infinity)
+                .frame(height: 54)
                 .acmColorBackground(ACMColors.primaryOrange)
-                .clipShape(RoundedRectangle(cornerRadius: ACMRadius.sm))
+                .clipShape(RoundedRectangle(cornerRadius: ACMRadius.lg))
             }
-            
-            Spacer()
+            .padding(.horizontal, 24)
+            .padding(.bottom, 24)
         }
     }
         
@@ -185,78 +233,95 @@ struct JoinView: View {
 
         return VStack(spacing: 0) {
             Spacer()
-            
+
             VStack(spacing: 24) {
                 VStack(spacing: 8) {
-                    Text("Join")
-                        .font(ACMFont.wide(28))
-                        .foregroundStyle(ACMColors.cream)
-                    
-                    Text("choose how to continue")
-                        .font(ACMFont.mono(11))
-                        .tracking(2)
-                        .foregroundStyle(ACMColors.creamDim)
+                    Text("Join Conclave")
+                        .font(ACMFont.trial(30, weight: .bold))
+                        .foregroundStyle(ACMColors.text)
+                        .tracking(-0.5)
+
+                    Text("Sign in, or continue as a guest.")
+                        .font(ACMFont.trial(15))
+                        .foregroundStyle(ACMColors.textFaint)
                 }
                 .padding(EdgeInsets(top: 0, leading: 0, bottom: 16, trailing: 0))
                 
-                if isGoogleSignInEnabled {
-                    VStack(spacing: 12) {
-                        // Google Sign-In Button
-                        Button {
-                            handleGoogleSignIn()
-                        } label: {
-                            HStack(spacing: 12) {
-                                if isSigningIn && signingInProvider == .google {
+                if shouldShowSocialSignIn {
+                    ACMGlassGroup(spacing: 12) {
+                        VStack(spacing: 12) {
+                            if isLoadingAuthProviders && !isGoogleSignInEnabled && !isAppleSignInEnabled {
+                                HStack(spacing: 10) {
                                     ProgressView()
 #if !SKIP
                                         .progressViewStyle(CircularProgressViewStyle(tint: ACMColors.cream))
 #endif
                                         .scaleEffect(0.8)
-                                } else {
-                                    ACMSystemIcon.image("globe", androidName: "Icons.Outlined.AccountCircle")
-                                        .font(.system(size: 16))
-                                }
 
-                                Text("Continue with Google")
-                                    .font(ACMFont.trial(14))
+                                    Text("Checking sign-in options")
+                                        .font(ACMFont.trial(14, weight: .medium))
+                                        .foregroundStyle(ACMColors.textMuted)
+                                }
+                                .frame(maxWidth: .infinity)
+                                .frame(height: 50)
+                                .acmGlassRoundedRect(cornerRadius: ACMRadius.lg)
                             }
-                            .foregroundStyle(ACMColors.cream)
-                            .frame(maxWidth: .infinity)
-                            .frame(minHeight: 48)
-                            .padding(.vertical, 12)
-                            .padding(.horizontal, 16)
-                            .acmColorBackground(ACMColors.surface.opacity(0.9))
-                            .overlay {
-                                RoundedRectangle(cornerRadius: ACMRadius.sm)
-                                    .strokeBorder(lineWidth: 1)
-                                    .foregroundStyle(ACMColors.creamDim)
+
+                            if isGoogleSignInEnabled {
+                                Button {
+                                    handleGoogleSignIn()
+                                } label: {
+                                    HStack(spacing: 12) {
+                                        if isSigningIn && signingInProvider == .google {
+                                            ProgressView()
+#if !SKIP
+                                                .progressViewStyle(CircularProgressViewStyle(tint: ACMColors.cream))
+#endif
+                                                .scaleEffect(0.8)
+                                        } else {
+                                            ACMSystemIcon.icon("globe", android: "account", size: 16, tint: "text")
+                                        }
+
+                                        Text("Continue with Google")
+                                            .font(ACMFont.trial(16, weight: .medium))
+                                    }
+                                    .foregroundStyle(ACMColors.text)
+                                    .frame(maxWidth: .infinity)
+                                    .frame(height: 54)
+                                    .acmGlassRoundedRect(cornerRadius: ACMRadius.lg, interactive: true)
+                                }
+                                .buttonStyle(.plain)
+                                .disabled(isSigningIn)
                             }
-                            .clipShape(RoundedRectangle(cornerRadius: ACMRadius.sm))
-                        }
-                        .disabled(isSigningIn)
 
 #if !SKIP
-                        // Apple Sign-In Button (iOS only)
-                        SignInWithAppleButton(.continue) { request in
-                            request.requestedScopes = [.fullName, .email]
-                        } onCompletion: { result in
-                            handleAppleSignIn(result: result)
-                        }
-                        .signInWithAppleButtonStyle(.whiteOutline)
-                        .frame(height: 48)
-                        .disabled(isSigningIn)
-                        .overlay {
-                            if isSigningIn && signingInProvider == .apple {
-                                RoundedRectangle(cornerRadius: ACMRadius.sm)
-                                    .fill(ACMColors.surface.opacity(0.9))
-                                    .overlay {
-                                        ProgressView()
-                                            .progressViewStyle(CircularProgressViewStyle(tint: ACMColors.cream))
-                                            .scaleEffect(0.8)
+                            if isAppleSignInEnabled {
+                                SignInWithAppleButton(.continue) { request in
+                                    let nonce = createAuthNonce()
+                                    appleSignInNonce = nonce
+                                    request.nonce = nonce
+                                    request.requestedScopes = [.fullName, .email]
+                                } onCompletion: { result in
+                                    handleAppleSignIn(result: result)
+                                }
+                                .signInWithAppleButtonStyle(.whiteOutline)
+                                .frame(height: 48)
+                                .clipShape(RoundedRectangle(cornerRadius: ACMRadius.lg))
+                                .disabled(isSigningIn)
+                                .overlay {
+                                    if isSigningIn && signingInProvider == .apple {
+                                        RoundedRectangle(cornerRadius: ACMRadius.lg)
+                                            .fill(ACMColors.surface.opacity(0.9))
+                                            .overlay {
+                                                ProgressView()
+                                                    .progressViewStyle(CircularProgressViewStyle(tint: ACMColors.cream))
+                                                    .scaleEffect(0.8)
+                                            }
                                     }
+                                }
                             }
-                        }
 #endif
+                        }
                     }
 
                     HStack(spacing: 16) {
@@ -265,9 +330,8 @@ struct JoinView: View {
                             .frame(height: 1)
 
                         Text("or")
-                            .font(ACMFont.mono(11))
-                            .tracking(2)
-                            .foregroundStyle(ACMColors.creamMuted)
+                            .font(ACMFont.trial(13))
+                            .foregroundStyle(ACMColors.textFaint)
 
                         Rectangle()
                             .fill(ACMColors.creamFaint)
@@ -275,56 +339,62 @@ struct JoinView: View {
                     }
                     .padding(EdgeInsets(top: 8, leading: 0, bottom: 8, trailing: 0))
                 }
+
+                authErrorBanner
                 
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("YOUR NAME")
-                        .font(ACMFont.mono(11))
-                        .tracking(2)
-                        .foregroundStyle(ACMColors.creamDim)
-                    
-                    TextField("", text: $guestName, prompt: Text("Enter your name").foregroundStyle(ACMColors.creamFaint))
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Your name")
+                        .font(ACMFont.trial(13, weight: .medium))
+                        .foregroundStyle(ACMColors.textMuted)
+
+                    TextField("", text: $guestName, prompt: Text("Enter your name").foregroundStyle(ACMColors.textFaint))
                         .textFieldStyle(.plain)
-                        .font(ACMFont.trial(15))
-                        .foregroundStyle(ACMColors.cream)
-                        .padding(.vertical, 14)
+                        .font(ACMFont.trial(16))
+                        .foregroundStyle(ACMColors.text)
+#if !SKIP
+                        .focused($focusedInput, equals: .guestName)
+#endif
+                        .submitLabel(SubmitLabel.done)
+                        .frame(height: 52)
                         .padding(.horizontal, 16)
-                        .acmColorBackground(ACMColors.surface)
+                        .acmColorBackground(ACMColors.bgAlt)
                         .overlay {
-                            RoundedRectangle(cornerRadius: ACMRadius.md)
+                            RoundedRectangle(cornerRadius: ACMRadius.lg)
                                 .strokeBorder(lineWidth: 1)
-                                .foregroundStyle(ACMColors.creamDim)
+                                .foregroundStyle(ACMColors.border)
                         }
-                        .clipShape(RoundedRectangle(cornerRadius: ACMRadius.md))
+                        .clipShape(RoundedRectangle(cornerRadius: ACMRadius.lg))
                         .onSubmit {
                             if !trimWhitespace(guestName).isEmpty {
+                                clearInputFocus()
                                 handleGuest()
                             }
                         }
-                    
+
                     Button {
+                        clearInputFocus()
                         handleGuest()
                     } label: {
-                        Text("Continue as Guest")
-                            .font(ACMFont.trial(15))
-                        .foregroundStyle(Color.white)
+                        Text("Continue as guest")
+                            .font(ACMFont.trial(16, weight: .medium))
+                            .foregroundStyle(Color.white)
                             .frame(maxWidth: .infinity)
-                            .frame(minHeight: 48)
-                            .padding(.vertical, 16)
-                            .padding(.horizontal, 12)
-                .acmColorBackground(ACMColors.primaryOrange)
-                .clipShape(RoundedRectangle(cornerRadius: ACMRadius.md))
+                            .frame(height: 54)
+                            .acmColorBackground(ACMColors.primaryOrange)
+                            .clipShape(RoundedRectangle(cornerRadius: ACMRadius.lg))
                     }
+                    .padding(.top, 2)
                 }
-                
+
                 Button {
+                    authTransitionGeneration += 1
                     phase = .welcome
                 } label: {
-                    Text("← BACK")
-                        .font(ACMFont.mono(11))
-                        .tracking(2)
-                        .foregroundStyle(ACMColors.creamMuted)
+                    Text("Back")
+                        .font(ACMFont.trial(14, weight: .medium))
+                        .foregroundStyle(ACMColors.textFaint)
                 }
-                .padding(EdgeInsets(top: 16, leading: 0, bottom: 0, trailing: 0))
+                .padding(EdgeInsets(top: 12, leading: 0, bottom: 0, trailing: 0))
             }
             .frame(maxWidth: contentWidth)
             .padding(.horizontal, horizontalPadding)
@@ -349,179 +419,130 @@ struct JoinView: View {
                 .padding(EdgeInsets(top: 24, leading: 0, bottom: 24, trailing: 0))
             } else {
                 ScrollView {
-                    VStack(spacing: 24) {
+                    // Fill the viewport and center the camera + form as one block
+                    // so it isn't cramped at the top with dead space below.
+                    VStack(spacing: 22) {
+                        Spacer(minLength: 8)
+
                         cameraPreviewSection
-                            .frame(height: geometry.size.height * 0.4)
+                            .frame(height: geometry.size.height * 0.44)
 
                         joinFormSection
+
+                        Spacer(minLength: 8)
                     }
-                .padding(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20))
-                .padding(EdgeInsets(top: 24, leading: 0, bottom: 24, trailing: 0))
+                    .frame(minHeight: geometry.size.height - 40)
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 20)
                 }
             }
+        }
+        .onAppear {
+            clearInputFocusAfterLayout()
         }
     }
     
     // MARK: - Camera Preview Section
     
     private var cameraPreviewSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Preview")
-                .font(ACMFont.mono(11))
-                .tracking(2)
-                .textCase(.uppercase)
-                .foregroundStyle(ACMColors.creamDim)
+        ZStack {
+            RoundedRectangle(cornerRadius: ACMRadius.xl)
+                .fill(ACMColors.bgAlt)
 
-            // Video preview container
-            ZStack(alignment: .topLeading) {
-                // Background
-                RoundedRectangle(cornerRadius: ACMRadius.lg)
-                    .fill(ACMColors.surface)
-                
-                // Camera feed or avatar
-                if isCameraOn {
+            // Camera feed or avatar
+            if isCameraOn {
 #if SKIP
-                    Color.black
-                        .clipShape(RoundedRectangle(cornerRadius: ACMRadius.lg))
+                ComposeView { _ in
+                    CameraPreviewView(onPermissionChanged: { granted in
+                        isCameraOn = granted
+                    })
+                }
+                .clipShape(RoundedRectangle(cornerRadius: ACMRadius.xl))
 #else
-                    if let session = captureSession {
-                        CameraPreviewRepresentable(session: session)
-                            .clipShape(RoundedRectangle(cornerRadius: ACMRadius.lg))
-                            .scaleEffect(x: -1, y: 1) // Mirror
-                    } else {
-                        Color.black
-                            .clipShape(RoundedRectangle(cornerRadius: ACMRadius.lg))
-                    }
-#endif
+                if let session = captureSession {
+                    CameraPreviewRepresentable(session: session)
+                        .clipShape(RoundedRectangle(cornerRadius: ACMRadius.xl))
+                        .scaleEffect(x: -1, y: 1) // Mirror
                 } else {
-                    // Avatar when camera off
-                    VStack {
-                        Circle()
-                            .fill(ACMColors.primaryOrangeFaint)
-                            .frame(width: 80, height: 80)
-                            .overlay {
-                                Circle()
-                                    .strokeBorder(lineWidth: 1)
-                                    .foregroundStyle(ACMColors.creamDim)
-                            }
-                            .overlay {
-                                Text(userInitial)
-                                    .font(ACMFont.wide(24))
-                                    .foregroundStyle(ACMColors.cream)
-                            }
-                    }
+                    Color.black
+                        .clipShape(RoundedRectangle(cornerRadius: ACMRadius.xl))
                 }
-                
-                // Name overlay (top left)
-                VStack {
-                    HStack {
-                        Text(displayNameInput.isEmpty ? (appState.currentUser?.name ?? "Guest") : displayNameInput)
-                            .font(ACMFont.mono(11))
-                            .foregroundStyle(ACMColors.creamLight)
-                            .lineLimit(1)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 4)
-                            .acmColorBackground(ACMColors.blackOverlay(0.5))
-                            .clipShape(Capsule())
-                        
-                        Spacer()
-                    }
-                    .padding(12)
-                    
+#endif
+            } else {
+                VStack(spacing: 14) {
+                    // Brand-tinted avatar (same hash as the in-meeting tiles) so
+                    // the camera-off state has warmth instead of a flat grey disc.
+                    Circle()
+                        .fill(ACMColors.avatarColor(for: previewDisplayName))
+                        .frame(width: 96, height: 96)
+                        .overlay {
+                            Text(userInitial)
+                                .font(.system(size: 38, weight: .bold))
+                                .foregroundStyle(Color.white)
+                        }
+
+                    Text("Camera is off")
+                        .font(ACMFont.trial(13))
+                        .foregroundStyle(ACMColors.textFaint)
+                }
+            }
+
+            // Overlays: name (top-left) + mic/cam controls (bottom-center)
+            VStack {
+                HStack {
+                    Text(previewDisplayName)
+                        .font(ACMFont.trial(13, weight: .medium))
+                        .foregroundStyle(ACMColors.text)
+                        .lineLimit(1)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .acmColorBackground(ACMColors.scrim)
+                        .clipShape(Capsule())
                     Spacer()
-                    
-                    // Media controls (bottom center)
-                    HStack(spacing: 8) {
-                        // Mic toggle
-                        Button {
-                            toggleMic()
-                        } label: {
-                            ACMSystemIcon.image(
-                                isMicOn ? "mic.fill" : "mic.slash.fill",
-                                androidName: isMicOn ? "Icons.Filled.Call" : "Icons.Filled.Close"
-                            )
-                                .font(.system(size: 16))
-                                .foregroundStyle(Color.white)
-                                .frame(width: 36, height: 36)
-                                .acmColorBackground(isMicOn ? Color.clear : ACMColors.error)
-                                .clipShape(Circle())
-                        }
-                        
-                        // Camera toggle
-                        Button {
-                            toggleCamera()
-                        } label: {
-                            ACMSystemIcon.image(
-                                isCameraOn ? "video.fill" : "video.slash.fill",
-                                androidName: isCameraOn ? "Icons.Filled.PlayArrow" : "Icons.Filled.Close"
-                            )
-                                .font(.system(size: 16))
-                                .foregroundStyle(Color.white)
-                                .frame(width: 36, height: 36)
-                                .acmColorBackground(isCameraOn ? Color.clear : ACMColors.error)
-                                .clipShape(Circle())
-                        }
-                    }
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 6)
-                    .acmColorBackground(ACMColors.blackOverlay(0.5))
-                    .clipShape(Capsule())
-                    .padding(.bottom, 12)
                 }
-            }
-            .aspectRatio(16.0 / 10.0, contentMode: .fit)
-            .overlay {
-                RoundedRectangle(cornerRadius: ACMRadius.lg)
-                    .strokeBorder(lineWidth: 1)
-                    .foregroundStyle(ACMColors.creamDim)
-            }
-            
-            // Preflight status indicators
-            HStack(spacing: 8) {
-                Text("Preflight")
-                    .font(ACMFont.mono(11))
-                    .tracking(1.5)
-                    .textCase(.uppercase)
-                    .foregroundStyle(ACMColors.creamDim)
-                
-                // Mic status
-                HStack(spacing: 6) {
-                    Circle()
-                        .fill(isMicOn ? Color.green : ACMColors.primaryOrange)
-                        .frame(width: 6, height: 6)
-                    
-                    Text("Mic \(isMicOn ? "On" : "Off")")
-                        .font(ACMFont.mono(11))
-                        .foregroundStyle(ACMColors.creamLight)
+
+                Spacer()
+
+                // Contained control cluster — toggles read as a deliberate bar,
+                // not two floating red alerts.
+                HStack(spacing: 10) {
+                    previewToggle(
+                        on: isMicOn,
+                        onIcon: "mic.fill", offIcon: "mic.slash.fill",
+                        androidOn: "mic", androidOff: "mic.off"
+                    ) { toggleMic() }
+
+                    previewToggle(
+                        on: isCameraOn,
+                        onIcon: "video.fill", offIcon: "video.slash.fill",
+                        androidOn: "video", androidOff: "video.off"
+                    ) { toggleCamera() }
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 4)
-                .acmColorBackground(ACMColors.blackOverlay(0.4))
-                .overlay {
-                    Capsule().strokeBorder(lineWidth: 1)
-                        .foregroundStyle(ACMColors.creamDim)
-                }
-                .clipShape(Capsule())
-                
-                // Camera status
-                HStack(spacing: 6) {
-                    Circle()
-                        .fill(isCameraOn ? Color.green : ACMColors.primaryOrange)
-                        .frame(width: 6, height: 6)
-                    
-                    Text("Camera \(isCameraOn ? "On" : "Off")")
-                        .font(ACMFont.mono(11))
-                        .foregroundStyle(ACMColors.creamLight)
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 4)
-                .acmColorBackground(ACMColors.blackOverlay(0.4))
-                .overlay {
-                    Capsule().strokeBorder(lineWidth: 1)
-                        .foregroundStyle(ACMColors.creamDim)
-                }
+                .padding(6)
+                .acmColorBackground(ACMColors.scrim)
                 .clipShape(Capsule())
             }
+            .padding(16)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: ACMRadius.xl))
+        .overlay {
+            RoundedRectangle(cornerRadius: ACMRadius.xl)
+                .strokeBorder(lineWidth: 1)
+                .foregroundStyle(ACMColors.border)
+        }
+    }
+
+    @ViewBuilder
+    private func previewToggle(
+        on: Bool, onIcon: String, offIcon: String,
+        androidOn: String, androidOff: String, action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            ACMSystemIcon.icon(on ? onIcon : offIcon, android: on ? androidOn : androidOff, size: 18, tint: on ? "white" : "danger")
+                .foregroundStyle(on ? Color.white : ACMColors.error)
+                .frame(width: 44, height: 44)
+                .acmColorBackground(ACMColors.surfaceRaised)
+                .clipShape(Circle())
         }
     }
     
@@ -530,18 +551,8 @@ struct JoinView: View {
     private var joinFormSection: some View {
         VStack(spacing: 0) {
             tabSwitcher
-            
+
             formContent
-        }
-                .padding(20)
-        .background(
-            RoundedRectangle(cornerRadius: ACMRadius.lg)
-                .fill(ACMColors.darkAlt.opacity(0.8))
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: ACMRadius.lg)
-                .strokeBorder(lineWidth: 1)
-                .foregroundStyle(ACMColors.creamDim)
         }
     }
     
@@ -561,30 +572,30 @@ struct JoinView: View {
     private var newMeetingTabButton: some View {
         Button {
             activeTab = .new
+            viewModel.state.joinFormErrorMessage = nil
+            resetInviteCodePrompt()
         } label: {
-            Text("NEW MEETING")
-                .font(ACMFont.mono(12))
-                .tracking(1)
-                .foregroundStyle(activeTab == .new ? Color.white : ACMColors.cream.opacity(0.5))
+            Text("New meeting")
+                .font(ACMFont.trial(14, weight: .medium))
+                .foregroundStyle(activeTab == .new ? Color.white : ACMColors.textFaint)
                 .frame(maxWidth: .infinity)
-                .padding(.vertical, 10)
+                .padding(.vertical, 11)
                 .acmColorBackground(activeTab == .new ? ACMColors.primaryOrange : Color.clear)
-                .clipShape(RoundedRectangle(cornerRadius: ACMRadius.sm))
+                .clipShape(RoundedRectangle(cornerRadius: ACMRadius.md))
         }
     }
-    
+
     private var joinTabButton: some View {
         Button {
             activeTab = .join
         } label: {
-            Text("JOIN")
-                .font(ACMFont.mono(12))
-                .tracking(1)
-                .foregroundStyle(activeTab == .join ? Color.white : ACMColors.cream.opacity(0.5))
+            Text("Join")
+                .font(ACMFont.trial(14, weight: .medium))
+                .foregroundStyle(activeTab == .join ? Color.white : ACMColors.textFaint)
                 .frame(maxWidth: .infinity)
-                .padding(.vertical, 10)
+                .padding(.vertical, 11)
                 .acmColorBackground(activeTab == .join ? ACMColors.primaryOrange : Color.clear)
-                .clipShape(RoundedRectangle(cornerRadius: ACMRadius.sm))
+                .clipShape(RoundedRectangle(cornerRadius: ACMRadius.md))
         }
     }
     
@@ -593,30 +604,95 @@ struct JoinView: View {
     private var newMeetingForm: some View {
         VStack(spacing: 16) {
             displayNameInputSection
+            if canShowGhostModeToggle {
+                ghostModeToggleRow
+            }
             startMeetingButton
         }
     }
+
+    private var ghostModeToggleRow: some View {
+        Button {
+            isGhostMode = !isGhostMode
+            if isGhostMode {
+                isMicOn = false
+                isCameraOn = false
+                stopPreviewCapture()
+            }
+        } label: {
+            HStack(spacing: 12) {
+                ACMSystemIcon.icon("theatermasks.fill", android: "ghost", size: 18, tint: isGhostMode ? "accent" : "muted")
+                    .foregroundStyle(isGhostMode ? ACMColors.primaryOrange : ACMColors.textMuted)
+                    .frame(width: 28, height: 28)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Join as ghost")
+                        .font(ACMFont.trial(14, weight: .medium))
+                        .foregroundStyle(ACMColors.text)
+                    Text("Others won't see you join")
+                        .font(ACMFont.trial(12))
+                        .foregroundStyle(ACMColors.textFaint)
+                }
+
+                Spacer()
+
+                ghostModeSwitch
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 14)
+            .frame(height: 64)
+            .acmColorBackground(ACMColors.surface)
+            .overlay {
+                RoundedRectangle(cornerRadius: ACMRadius.lg)
+                    .strokeBorder(lineWidth: 1)
+                    .foregroundStyle(isGhostMode ? ACMColors.primaryOrange.opacity(0.55) : ACMColors.border)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: ACMRadius.lg))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var ghostModeSwitch: some View {
+        ZStack(alignment: isGhostMode ? .trailing : .leading) {
+            Capsule()
+                .fill(isGhostMode ? ACMColors.primaryOrange : ACMColors.surfaceRaised)
+                .frame(width: 42, height: 24)
+
+            Circle()
+                .fill(Color.white)
+                .frame(width: 18, height: 18)
+                .padding(.horizontal, 3)
+        }
+        .frame(width: 42, height: 24)
+        .animation(.easeInOut(duration: 0.12), value: isGhostMode)
+    }
     
     private var displayNameInputSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Display Name")
-                .font(ACMFont.mono(11))
-                .tracking(2)
-                .foregroundStyle(ACMColors.creamDim)
-            
-            TextField("", text: $displayNameInput, prompt: Text("Your name").foregroundStyle(ACMColors.creamMuted))
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Display name")
+                .font(ACMFont.trial(13, weight: .medium))
+                .foregroundStyle(ACMColors.textMuted)
+
+            TextField("", text: $displayNameInput, prompt: Text("Your name").foregroundStyle(ACMColors.textFaint))
                 .textFieldStyle(.plain)
-                .font(ACMFont.trial(15))
-                .foregroundStyle(ACMColors.cream)
+                .font(ACMFont.trial(16))
+                .foregroundStyle(ACMColors.text)
+#if !SKIP
+                .focused($focusedInput, equals: .displayName)
+#endif
+                .submitLabel(SubmitLabel.done)
+                .frame(height: 52)
                 .padding(.horizontal, 16)
-                .padding(.vertical, 14)
                 .acmColorBackground(ACMColors.surface)
                 .overlay {
-                    RoundedRectangle(cornerRadius: ACMRadius.md)
+                    RoundedRectangle(cornerRadius: ACMRadius.lg)
                         .strokeBorder(lineWidth: 1)
-                        .foregroundStyle(ACMColors.creamDim)
+                        .foregroundStyle(ACMColors.border)
                 }
-                .clipShape(RoundedRectangle(cornerRadius: ACMRadius.md))
+                .clipShape(RoundedRectangle(cornerRadius: ACMRadius.lg))
+                .onSubmit {
+                    clearInputFocus()
+                }
         }
     }
 
@@ -625,32 +701,31 @@ struct JoinView: View {
     }
     
     private var startMeetingButton: some View {
-        Button {
-            handleCreateRoom()
-        } label: {
+        joinActionSurface(
+            accessibilityLabel: "Start meeting",
+            isEnabled: !isJoinInProgress,
+            action: triggerCreateRoom
+        ) {
             HStack(spacing: 8) {
-                if viewModel.state.connectionState == ConnectionState.connecting {
+                if isJoinInProgress {
                     ProgressView()
 #if !SKIP
                         .progressViewStyle(CircularProgressViewStyle(tint: Color.white))
 #endif
                         .scaleEffect(0.8)
                 } else {
-                    ACMSystemIcon.image("plus", androidName: "Icons.Filled.Add")
-                        .font(.system(size: 14, weight: .medium))
+                    ACMSystemIcon.icon("plus", android: "add", size: 14, tint: "white")
                 }
-                
-                Text("Start Meeting")
-                    .font(ACMFont.trial(15))
+
+                Text("Start meeting")
+                    .font(ACMFont.trial(16, weight: .medium))
             }
             .foregroundStyle(Color.white)
             .frame(maxWidth: .infinity)
-            .frame(minHeight: 48)
-            .padding(.vertical, 16)
+            .frame(height: 54)
             .acmColorBackground(ACMColors.primaryOrange)
-            .clipShape(RoundedRectangle(cornerRadius: ACMRadius.md))
+            .clipShape(RoundedRectangle(cornerRadius: ACMRadius.lg))
         }
-        .disabled(viewModel.state.connectionState == ConnectionState.connecting)
     }
     
     private var formContent: some View {
@@ -661,83 +736,226 @@ struct JoinView: View {
                 joinMeetingForm
             }
         }
+        .frame(minHeight: 320, alignment: .top)
     }
     
     private var joinMeetingForm: some View {
         VStack(spacing: 16) {
             roomNameInputSection
+            if shouldRenderInviteCodeInput {
+                inviteCodeInputSection
+            }
             displayNameInputSection2
+            joinFormErrorBanner
             joinMeetingButton
+        }
+    }
+
+    @ViewBuilder
+    private var authErrorBanner: some View {
+        if let message = authErrorMessage, !message.isEmpty {
+            HStack(alignment: .top, spacing: 8) {
+                ACMSystemIcon.icon("exclamationmark.circle.fill", android: "warning", size: 14, tint: "danger")
+                    .foregroundStyle(ACMColors.error)
+                    .frame(width: 18, height: 18)
+
+                Text(message)
+                    .font(ACMFont.trial(13))
+                    .foregroundStyle(ACMColors.error)
+                    .multilineTextAlignment(.leading)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(12)
+            .acmColorBackground(ACMColors.error.opacity(0.12))
+            .overlay {
+                RoundedRectangle(cornerRadius: ACMRadius.md)
+                    .strokeBorder(lineWidth: 1)
+                    .foregroundStyle(ACMColors.error.opacity(0.28))
+            }
+            .clipShape(RoundedRectangle(cornerRadius: ACMRadius.md))
+        }
+    }
+
+    @ViewBuilder
+    private var joinFormErrorBanner: some View {
+        if let message = viewModel.state.joinFormErrorMessage, !message.isEmpty {
+            HStack(alignment: .top, spacing: 8) {
+                ACMSystemIcon.icon("exclamationmark.circle.fill", android: "warning", size: 14, tint: "danger")
+                    .foregroundStyle(ACMColors.error)
+                    .frame(width: 18, height: 18)
+
+                Text(message)
+                    .font(ACMFont.trial(13))
+                    .foregroundStyle(ACMColors.error)
+                    .multilineTextAlignment(.leading)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(12)
+            .acmColorBackground(ACMColors.error.opacity(0.12))
+            .overlay {
+                RoundedRectangle(cornerRadius: ACMRadius.md)
+                    .strokeBorder(lineWidth: 1)
+                    .foregroundStyle(ACMColors.error.opacity(0.28))
+            }
+            .clipShape(RoundedRectangle(cornerRadius: ACMRadius.md))
         }
     }
     
     private var roomNameInputSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Room Name")
-                .font(ACMFont.mono(11))
-                .tracking(2)
-                .foregroundStyle(ACMColors.creamDim)
-            
-            TextField("", text: sanitizedRoomCodeBinding, prompt: Text("Paste room link or code").foregroundStyle(ACMColors.creamMuted))
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Room code")
+                .font(ACMFont.trial(13, weight: .medium))
+                .foregroundStyle(ACMColors.textMuted)
+
+            TextField("", text: sanitizedRoomCodeBinding, prompt: Text("Paste link or enter code").foregroundStyle(ACMColors.textFaint))
                 .textFieldStyle(.plain)
-                .font(ACMFont.trial(15))
-                .foregroundStyle(Color.white)
+                .font(ACMFont.trial(16))
+                .foregroundStyle(ACMColors.text)
 #if os(iOS)
-                .autocapitalization(.none)
+                .keyboardType(.URL)
+                .textInputAutocapitalization(.never)
                 .autocorrectionDisabled(true)
 #endif
+                .frame(height: 52)
                 .padding(.horizontal, 16)
-                .padding(.vertical, 14)
                 .acmColorBackground(ACMColors.surface)
                 .overlay {
-                    RoundedRectangle(cornerRadius: ACMRadius.md)
+                    RoundedRectangle(cornerRadius: ACMRadius.lg)
                         .strokeBorder(lineWidth: 1)
-                        .foregroundStyle(ACMColors.creamDim)
+                        .foregroundStyle(ACMColors.border)
                 }
-                .clipShape(RoundedRectangle(cornerRadius: ACMRadius.md))
+                .clipShape(RoundedRectangle(cornerRadius: ACMRadius.lg))
                 .onSubmit {
-                    if !roomCode.isEmpty {
+                    if isJoinEnabled {
                         handleJoinRoom()
                     }
                 }
         }
     }
-    
+
+    private var isJoinEnabled: Bool {
+        !parseJoinTarget(from: roomCode).roomId.isEmpty && !isJoinInProgress
+    }
+
+    private var shouldRenderInviteCodeInput: Bool {
+        let target = resolvedJoinTarget(from: roomCode)
+        return shouldShowInviteCodeInput
+            && !target.roomId.isEmpty
+            && inviteCodePromptRoomId == target.roomId
+            && inviteCodePromptJoinMode == target.joinMode
+    }
+
+    private var isJoinInProgress: Bool {
+        switch viewModel.state.connectionState {
+        case .connecting, .connected, .joining, .waiting, .reconnecting:
+            return true
+        case .disconnected, .joined, .error:
+            return false
+        }
+    }
+
+    private var inviteCodeInputSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Invite code")
+                .font(ACMFont.trial(13, weight: .medium))
+                .foregroundStyle(ACMColors.textMuted)
+
+            TextField("", text: inviteCodeBinding, prompt: Text("Required").foregroundStyle(ACMColors.textFaint))
+                .textFieldStyle(.plain)
+                .font(ACMFont.trial(16))
+                .foregroundStyle(ACMColors.text)
+#if os(iOS)
+                .keyboardType(.asciiCapable)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled(true)
+#endif
+                .frame(height: 52)
+                .padding(.horizontal, 16)
+                .acmColorBackground(ACMColors.surface)
+                .overlay {
+                    RoundedRectangle(cornerRadius: ACMRadius.lg)
+                        .strokeBorder(lineWidth: 1)
+                        .foregroundStyle(ACMColors.border)
+                }
+                .clipShape(RoundedRectangle(cornerRadius: ACMRadius.lg))
+                .onSubmit {
+                    if isJoinEnabled {
+                        handleJoinRoom()
+                    }
+                }
+        }
+    }
+
     private var joinMeetingButton: some View {
-        Button {
-            handleJoinRoom()
-        } label: {
+        joinActionSurface(
+            accessibilityLabel: "Join meeting",
+            isEnabled: isJoinEnabled,
+            action: triggerJoinRoom
+        ) {
             HStack(spacing: 8) {
-                if viewModel.state.connectionState == ConnectionState.connecting {
+                if isJoinInProgress {
                     ProgressView()
 #if !SKIP
                         .progressViewStyle(CircularProgressViewStyle(tint: Color.white))
 #endif
                         .scaleEffect(0.8)
                 } else {
-                    ACMSystemIcon.image("arrow.forward", androidName: "Icons.Filled.ArrowForward")
-                        .font(.system(size: 14, weight: .medium))
+                    Text("Join meeting")
+                        .font(ACMFont.trial(16, weight: .medium))
+                    ACMSystemIcon.icon("arrow.forward", android: "arrow.forward", size: 15, tint: isJoinEnabled ? "white" : "faint")
                 }
-                
-                Text("Join Meeting")
-                    .font(ACMFont.trial(15))
             }
-            .foregroundStyle(Color.white)
+            .foregroundStyle(isJoinEnabled ? Color.white : ACMColors.textFaint)
             .frame(maxWidth: .infinity)
-            .frame(minHeight: 48)
-            .padding(.vertical, 16)
-            .acmColorBackground(ACMColors.primaryOrange)
-            .clipShape(RoundedRectangle(cornerRadius: ACMRadius.md))
+            .frame(height: 54)
+            .acmColorBackground(isJoinEnabled ? ACMColors.primaryOrange : ACMColors.surface)
+            .clipShape(RoundedRectangle(cornerRadius: ACMRadius.lg))
         }
-        .disabled(roomCode.isEmpty || viewModel.state.connectionState == ConnectionState.connecting)
-        .opacity(roomCode.isEmpty ? 0.3 : 1.0)
+    }
+
+    @ViewBuilder
+    private func joinActionSurface<Content: View>(
+        accessibilityLabel: String,
+        isEnabled: Bool,
+        action: @escaping () -> Void,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+#if !SKIP
+#if canImport(UIKit)
+        ZStack {
+            content()
+                .allowsHitTesting(false)
+
+            NativeTapButtonSurface(
+                accessibilityLabel: accessibilityLabel,
+                isEnabled: isEnabled,
+                action: action
+            )
+            .frame(maxWidth: .infinity)
+            .frame(height: 54)
+            .clipShape(RoundedRectangle(cornerRadius: ACMRadius.lg))
+        }
+#else
+        Button(action: action) {
+            content()
+        }
+        .buttonStyle(.plain)
+        .disabled(!isEnabled)
+#endif
+#else
+        Button(action: action) {
+            content()
+        }
+        .buttonStyle(.plain)
+        .disabled(!isEnabled)
+#endif
     }
     
     // MARK: - Loading Overlay
     
     private var loadingOverlay: some View {
         ZStack {
-            acmColor01(red: 0.0, green: 0.0, blue: 0.0, opacity: 0.8)
+            ACMColors.blackOverlay(0.8)
                 .ignoresSafeArea()
             
             VStack(spacing: 12) {
@@ -747,10 +965,9 @@ struct JoinView: View {
 #endif
                     .scaleEffect(1.5)
                 
-                Text(viewModel.state.connectionState == ConnectionState.reconnecting ? "RECONNECTING..." : "JOINING...")
-                    .font(ACMFont.mono(12))
-                    .tracking(2)
-                    .foregroundStyle(ACMColors.cream.opacity(0.6))
+                Text(viewModel.state.connectionState == ConnectionState.reconnecting ? "Reconnecting…" : "Joining…")
+                    .font(ACMFont.trial(15, weight: .medium))
+                    .foregroundStyle(ACMColors.textMuted)
             }
         }
     }
@@ -817,40 +1034,148 @@ struct JoinView: View {
     }
     
     private var userInitial: String {
-        String((appState.currentUser?.name ?? resolvedGuestName).prefix(1)).uppercased()
+        String(previewDisplayName.prefix(1)).uppercased()
+    }
+
+    private var previewDisplayName: String {
+        resolvedDisplayName(fallback: "Guest")
+    }
+
+    private func resolvedDisplayName(fallback: String) -> String {
+        let typedName = trimWhitespaceAndNewlines(displayNameInput)
+        if !typedName.isEmpty {
+            return typedName
+        }
+        if let accountName = appState.currentUser?.name {
+            let trimmedAccountName = trimWhitespaceAndNewlines(accountName)
+            if !trimmedAccountName.isEmpty {
+                return trimmedAccountName
+            }
+        }
+        return fallback
+    }
+
+    private func sfuJoinUserPayload(displayName: String) -> SfuJoinUser {
+        guard let user = appState.currentUser, user.provider != .guest else {
+            return SfuJoinUser(id: nil, email: nil, name: displayName)
+        }
+
+        return SfuJoinUser(id: user.id, email: user.email, name: displayName)
     }
     
     // MARK: - Actions
-    
+
+    private func refreshAuthProviders() {
+        guard !isLoadingAuthProviders else { return }
+        isLoadingAuthProviders = true
+        Task { @MainActor in
+            let providers = await NativeAuthService.fetchEnabledProviders()
+            enabledAuthProviders = providers
+            isLoadingAuthProviders = false
+        }
+    }
+
+    private func createAuthNonce() -> String {
+        "\(UUID().uuidString)-\(UUID().uuidString)"
+    }
+
+    private func applyAuthenticatedUser(
+        _ user: NativeAuthenticatedUser,
+        provider: NativeAuthProvider,
+        fallbackName: String? = nil,
+        fallbackEmail: String? = nil
+    ) {
+        storeAuthenticatedUser(
+            user,
+            provider: authProvider(for: provider),
+            fallbackName: fallbackName,
+            fallbackEmail: fallbackEmail,
+            moveToJoin: true
+        )
+    }
+
+    private func authProvider(for provider: NativeAuthProvider) -> AppState.AuthProvider {
+        provider == .apple ? .apple : .google
+    }
+
+    private func storeAuthenticatedUser(
+        _ user: NativeAuthenticatedUser,
+        provider: AppState.AuthProvider,
+        fallbackName: String? = nil,
+        fallbackEmail: String? = nil,
+        moveToJoin: Bool
+    ) {
+        let email = normalizedOptional(user.email) ?? normalizedOptional(fallbackEmail)
+        let id = normalizedOptional(user.id) ?? email ?? "\(provider.rawValue)-\(UUID().uuidString)"
+        let resolvedName =
+            normalizedOptional(user.name)
+            ?? normalizedOptional(fallbackName)
+            ?? email?.components(separatedBy: "@").first
+            ?? "User"
+
+        appState.setAuthenticatedUser(AppState.User(
+            id: id,
+            name: resolvedName,
+            email: email,
+            provider: provider
+        ))
+
+        displayNameInput = resolvedName
+        guestName = resolvedName
+        clearAuthError()
+        if moveToJoin {
+            phase = .join
+            clearInputFocusAfterLayout()
+        }
+    }
+
+    private func normalizedOptional(_ value: String?) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
     private func handleGoogleSignIn() {
+        guard !isSigningIn else { return }
+        clearAuthError()
         isSigningIn = true
         signingInProvider = .google
-        // In production, implement proper OAuth flow
-        // For now, simulate sign-in
-#if SKIP
         Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 1_000_000_000)
-            isSigningIn = false
-            signingInProvider = .none
+            do {
+                let identityToken = try await NativeAuthService.requestNativeGoogleIdentityToken()
+                let user = try await NativeAuthService.signInWithSocialToken(
+                    provider: .google,
+                    idToken: identityToken.token,
+                    userName: identityToken.name,
+                    userEmail: identityToken.email
+                )
+                applyAuthenticatedUser(
+                    user,
+                    provider: .google,
+                    fallbackName: identityToken.name,
+                    fallbackEmail: identityToken.email
+                )
+            } catch {
+                showAuthError(error.localizedDescription)
+            }
+            finishSignInAttempt()
         }
-#else
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
-            isSigningIn = false
-            signingInProvider = .none
-            // TODO: Implement actual Google Sign-In
-            // When implemented, follow this pattern:
-            // appState.currentUser = AppState.User(
-            //     id: "google-\(googleUserId)",
-            //     name: googleUserName,
-            //     email: googleUserEmail,
-            //     provider: .google
-            // )
-            // appState.authProvider = .google
-            // appState.isAuthenticated = true
-            // displayNameInput = googleUserName
-            // phase = .join
+    }
+
+    private func finishSignInAttempt() {
+        isSigningIn = false
+        signingInProvider = .none
+    }
+
+    private func clearAuthError() {
+        authErrorMessage = nil
+        if viewModel.state.connectionState == ConnectionState.error {
+            viewModel.state.connectionState = ConnectionState.disconnected
         }
-#endif
+        viewModel.state.errorMessage = nil
+    }
+
+    private func showAuthError(_ message: String) {
+        authErrorMessage = message
     }
 
 #if !SKIP
@@ -861,17 +1186,24 @@ struct JoinView: View {
         switch result {
         case .success(let authorization):
             guard let credential = authorization.credential as? ASAuthorizationAppleIDCredential else {
-                isSigningIn = false
-                signingInProvider = .none
+                finishSignInAttempt()
+                showAuthError("Apple Sign-In did not return a valid credential.")
                 return
             }
 
-            // Extract user information
-            let userId = credential.user
+            guard let identityTokenData = credential.identityToken,
+                  let identityToken = String(data: identityTokenData, encoding: .utf8),
+                  !identityToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                finishSignInAttempt()
+                showAuthError("Apple Sign-In did not return an identity token.")
+                return
+            }
+
+            let nonce = appleSignInNonce
+            appleSignInNonce = nil
             let email = credential.email
             let fullName = credential.fullName
 
-            // Build display name from full name components
             var displayName: String?
             if let givenName = fullName?.givenName, let familyName = fullName?.familyName {
                 displayName = "\(givenName) \(familyName)"
@@ -879,60 +1211,110 @@ struct JoinView: View {
                 displayName = givenName
             }
 
-            // In production, send the identity token to your backend for verification
-            // let identityToken = credential.identityToken
-            // let authorizationCode = credential.authorizationCode
-
-            // Create user and update state
-            appState.currentUser = AppState.User(
-                id: "apple-\(userId)",
-                name: displayName ?? email?.components(separatedBy: "@").first ?? "Apple User",
-                email: email ?? "\(userId)@apple.private",
-                provider: .apple
-            )
-            appState.authProvider = .apple
-            appState.isAuthenticated = true
-
-            displayNameInput = appState.currentUser?.name ?? ""
-            isSigningIn = false
-            signingInProvider = .none
-            phase = .join
+            Task { @MainActor in
+                do {
+                    let user = try await NativeAuthService.signInWithSocialToken(
+                        provider: .apple,
+                        idToken: identityToken,
+                        nonce: nonce,
+                        userName: displayName,
+                        userEmail: email
+                    )
+                    applyAuthenticatedUser(user, provider: .apple, fallbackName: displayName, fallbackEmail: email)
+                } catch {
+                    logger.error("Apple Sign-In exchange failed: \(error.localizedDescription)")
+                    showAuthError(error.localizedDescription)
+                }
+                finishSignInAttempt()
+            }
 
         case .failure(let error):
             logger.error("Apple Sign-In failed: \(error.localizedDescription)")
-            isSigningIn = false
-            signingInProvider = .none
+            finishSignInAttempt()
+            if let authError = error as? ASAuthorizationError, authError.code == .canceled {
+                return
+            }
+            showAuthError("Apple Sign-In failed. Try again or continue as guest.")
         }
     }
 #endif
 
     private func handleGuest() {
+        clearInputFocus()
         let trimmedName = resolvedGuestName
-        appState.currentUser = AppState.User(
-            id: "guest-\(Int(Date().timeIntervalSince1970 * 1000))",
+        let guestId = "guest-\(UUID().uuidString)"
+        appState.setAuthenticatedUser(AppState.User(
+            id: guestId,
             name: trimmedName,
-            email: "\(trimmedName)@guest.local",
+            email: "\(guestId)@guest.conclave",
             provider: .guest
-        )
-        appState.authProvider = .guest
+        ))
         displayNameInput = trimmedName
-        phase = .join
+        clearAuthError()
+        authTransitionGeneration += 1
+        let generation = authTransitionGeneration
+        Task { @MainActor in
+            await Task.yield()
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            guard authTransitionGeneration == generation else { return }
+            phase = .join
+            clearInputFocusAfterLayout()
+        }
+    }
+
+    private func clearInputFocus() {
+#if !SKIP
+        focusedInput = nil
+#if canImport(UIKit)
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap(\.windows)
+            .forEach { $0.endEditing(true) }
+#endif
+#endif
+    }
+
+    private func clearInputFocusAfterLayout() {
+#if !SKIP
+        inputFocusClearGeneration += 1
+        let generation = inputFocusClearGeneration
+        clearInputFocus()
+        Task { @MainActor in
+            await Task.yield()
+            guard inputFocusClearGeneration == generation else { return }
+            clearInputFocus()
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            guard inputFocusClearGeneration == generation else { return }
+            clearInputFocus()
+        }
+#endif
+    }
+
+    private func triggerCreateRoom() {
+        guard !isJoinInProgress else { return }
+        clearInputFocus()
+        handleCreateRoom()
+    }
+
+    private func triggerJoinRoom() {
+        guard isJoinEnabled else { return }
+        clearInputFocus()
+        handleJoinRoom()
     }
     
     private func handleCreateRoom() {
         #if !SKIP
         HapticManager.shared.trigger(.success)
         #endif
+        let shouldJoinWithCameraOn = isCameraOn
+        stopPreviewCapture()
         viewModel.state.isAdmin = true
         let roomId = generateRoomCode()
-        viewModel.state.displayName = displayNameInput.isEmpty ? (appState.currentUser?.name ?? "Host") : displayNameInput
+        viewModel.state.displayName = resolvedDisplayName(fallback: "Host")
         viewModel.state.isMuted = !isMicOn
-        viewModel.state.isCameraOff = !isCameraOn
-        let userPayload = SfuJoinUser(
-            id: appState.currentUser?.id,
-            email: appState.currentUser?.email,
-            name: appState.currentUser?.name
-        )
+        viewModel.state.isCameraOff = !shouldJoinWithCameraOn
+        let userPayload = sfuJoinUserPayload(displayName: viewModel.state.displayName)
         viewModel.joinRoom(
             roomId: roomId,
             displayName: viewModel.state.displayName,
@@ -946,27 +1328,38 @@ struct JoinView: View {
         #if !SKIP
         HapticManager.shared.trigger(.success)
         #endif
-        let extractedCode = extractRoomCode(from: roomCode)
-        guard !extractedCode.isEmpty else { return }
-        if extractedCode != roomCode {
-            roomCode = extractedCode
+        let joinTarget = resolvedJoinTarget(from: roomCode)
+        guard !joinTarget.roomId.isEmpty else { return }
+        if joinTarget.roomId != roomCode {
+            roomCode = joinTarget.roomId
         }
+        let shouldJoinWithCameraOn = isCameraOn
+        stopPreviewCapture()
+        let enteredInviteCode = trimWhitespaceAndNewlines(inviteCode)
+        let meetingInviteCode = resolvedMeetingInviteCode(for: joinTarget, enteredInviteCode: enteredInviteCode)
+        let webinarInviteCode = resolvedWebinarInviteCode(for: joinTarget, enteredInviteCode: enteredInviteCode)
         viewModel.state.isAdmin = false
-        viewModel.state.displayName = displayNameInput.isEmpty ? (appState.currentUser?.name ?? "Guest") : displayNameInput
-        viewModel.state.isMuted = !isMicOn
-        viewModel.state.isCameraOff = !isCameraOn
-        let userPayload = SfuJoinUser(
-            id: appState.currentUser?.id,
-            email: appState.currentUser?.email,
-            name: appState.currentUser?.name
-        )
+        viewModel.state.displayName = resolvedDisplayName(fallback: "Guest")
+        if joinTarget.joinMode == .webinarAttendee {
+            viewModel.state.isMuted = true
+            viewModel.state.isCameraOff = true
+        } else {
+            viewModel.state.isMuted = !isMicOn
+            viewModel.state.isCameraOff = !shouldJoinWithCameraOn
+        }
+        let userPayload = sfuJoinUserPayload(displayName: viewModel.state.displayName)
         viewModel.joinRoom(
-            roomId: extractedCode,
+            roomId: joinTarget.roomId,
             displayName: viewModel.state.displayName,
             isGhost: isGhostMode,
             user: userPayload,
-            isHost: false
+            isHost: false,
+            joinMode: joinTarget.joinMode,
+            meetingInviteCode: meetingInviteCode,
+            webinarInviteCode: webinarInviteCode,
+            allowRoomCreation: joinTarget.allowRoomCreation
         )
+        pendingLinkJoinTarget = nil
     }
     
     private func generateRoomCode() -> String {
@@ -980,30 +1373,38 @@ struct JoinView: View {
     }
 
     private func sanitizeRoomCode(_ value: String) -> String {
-        let normalized = normalizeRoomCharacters(in: value)
-        guard !normalized.isEmpty else { return "" }
-
-        let separator: Character = "-"
-        let words = normalized
-            .split(separator: separator, omittingEmptySubsequences: true)
-            .prefix(roomWordsPerCode)
-            .map { String($0.prefix(roomWordMaxLength)) }
-
-        return words.joined(separator: roomWordSeparator)
+        let normalized = normalizeRoomCharacters(in: value, trimTrailingSeparator: true)
+        return String(normalized.prefix(roomCodeMaxLength))
     }
 
     private func sanitizeRoomCodeInput(_ value: String) -> String {
-        normalizeRoomCharacters(in: value)
+        String(normalizeRoomCharacters(in: value, trimTrailingSeparator: false).prefix(roomCodeMaxLength))
     }
 
-    private func normalizeRoomCharacters(in input: String) -> String {
+    private func sanitizeWebinarLinkCode(_ value: String) -> String {
+        let allowed = "abcdefghijklmnopqrstuvwxyz0123456789-"
+        var sanitized = ""
+
+        for character in trimWhitespaceAndNewlines(value).lowercased() {
+            if allowed.contains(character) {
+                sanitized += String(character)
+                if sanitized.count >= webinarLinkCodeMaxLength {
+                    break
+                }
+            }
+        }
+
+        return sanitized
+    }
+
+    private func normalizeRoomCharacters(in input: String, trimTrailingSeparator: Bool = true) -> String {
         let separator: Character = "-"
         var normalized = ""
         var previousWasSeparator = false
 
-        let letters = "abcdefghijklmnopqrstuvwxyz"
+        let allowed = "abcdefghijklmnopqrstuvwxyz0123456789"
         for character in input.lowercased() {
-            if letters.contains(character) {
+            if allowed.contains(character) {
                 normalized += String(character)
                 previousWasSeparator = false
             } else if !normalized.isEmpty && !previousWasSeparator {
@@ -1012,28 +1413,192 @@ struct JoinView: View {
             }
         }
 
-        if previousWasSeparator && !normalized.isEmpty {
+        if trimTrailingSeparator && previousWasSeparator && !normalized.isEmpty {
             normalized = String(normalized.dropLast())
         }
 
         return normalized
     }
 
-    private func extractRoomCode(from input: String) -> String {
+    private func parseJoinTarget(from input: String) -> ParsedJoinTarget {
         let trimmed = trimWhitespaceAndNewlines(input)
-        guard !trimmed.isEmpty else { return "" }
-
-        if let url = URL(string: trimmed), let last = url.pathComponents.last {
-            return sanitizeRoomCode(last)
+        let lowercasedTrimmed = trimmed.lowercased()
+        guard !trimmed.isEmpty, lowercasedTrimmed != "undefined", lowercasedTrimmed != "null" else {
+            return ParsedJoinTarget(
+                roomId: "",
+                joinMode: .meeting,
+                meetingInviteCode: nil,
+                webinarInviteCode: nil,
+                allowRoomCreation: false
+            )
         }
 
-        if trimmed.contains("/") {
-            if let last = trimmed.split(separator: "/").last {
-                return sanitizeRoomCode(String(last))
+        let normalizedUrlInput = normalizeJoinUrlInput(trimmed)
+        if let components = URLComponents(string: normalizedUrlInput) {
+            let segments = joinPathSegments(from: components)
+            if !segments.isEmpty {
+                return buildJoinTarget(from: segments, queryItems: components.queryItems ?? [])
             }
         }
 
-        return sanitizeRoomCode(trimmed)
+        let parts = trimmed.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false)
+        let path = parts.isEmpty ? trimmed : String(parts[0])
+        let queryItems = queryItems(fromRawQuery: parts.count > 1 ? String(parts[1]) : "")
+        if path.contains("/") {
+            let segments = pathSegments(from: path)
+            if !segments.isEmpty {
+                return buildJoinTarget(from: segments, queryItems: queryItems)
+            }
+        }
+
+        let joinMode = joinMode(from: queryItems) ?? .meeting
+        let roomId = joinMode == .webinarAttendee ? sanitizeWebinarLinkCode(path) : sanitizeRoomCode(path)
+        return ParsedJoinTarget(
+            roomId: roomId,
+            joinMode: joinMode,
+            meetingInviteCode: inviteCodeValue(from: queryItems, joinMode: joinMode, target: .meeting),
+            webinarInviteCode: inviteCodeValue(from: queryItems, joinMode: joinMode, target: .webinarAttendee),
+            allowRoomCreation: false
+        )
+    }
+
+    private func buildJoinTarget(from segments: [String], queryItems: [URLQueryItem]) -> ParsedJoinTarget {
+        let pathJoinMode: JoinMode?
+        let rawRoomId: String
+
+        if segments.count >= 2 && segments[0].lowercased() == "w" {
+            pathJoinMode = .webinarAttendee
+            rawRoomId = segments[1]
+        } else {
+            pathJoinMode = nil
+            rawRoomId = segments.last ?? ""
+        }
+
+        let joinMode = pathJoinMode ?? joinMode(from: queryItems) ?? .meeting
+        let roomId = joinMode == .webinarAttendee ? sanitizeWebinarLinkCode(rawRoomId) : sanitizeRoomCode(rawRoomId)
+        return ParsedJoinTarget(
+            roomId: roomId,
+            joinMode: joinMode,
+            meetingInviteCode: inviteCodeValue(from: queryItems, joinMode: joinMode, target: .meeting),
+            webinarInviteCode: inviteCodeValue(from: queryItems, joinMode: joinMode, target: .webinarAttendee),
+            allowRoomCreation: joinMode == .meeting
+        )
+    }
+
+    private func normalizeJoinUrlInput(_ input: String) -> String {
+        let lowercased = input.lowercased()
+        if hasUrlScheme(input) {
+            return input
+        }
+        if lowercased.hasPrefix("conclave.acmvit.in") || lowercased.hasPrefix("www.conclave.acmvit.in") {
+            return "https://\(input)"
+        }
+        return input
+    }
+
+    private func hasUrlScheme(_ input: String) -> Bool {
+        guard let colonIndex = input.firstIndex(of: ":") else { return false }
+        let scheme = String(input[..<colonIndex])
+        guard let first = scheme.first else { return false }
+        let afterColon = input[input.index(after: colonIndex)...]
+        guard afterColon.hasPrefix("//") else { return false }
+        let letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        let allowed = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+.-"
+        guard letters.contains(first) else { return false }
+        for character in scheme {
+            if !allowed.contains(character) {
+                return false
+            }
+        }
+        return true
+    }
+
+    private func joinPathSegments(from components: URLComponents) -> [String] {
+        var segments = pathSegments(from: components.path)
+        if components.scheme?.lowercased() == "conclave",
+           let host = components.host,
+           !host.isEmpty {
+            segments.insert(host, at: 0)
+        }
+        return segments
+    }
+
+    private func pathSegments(from path: String) -> [String] {
+        var segments: [String] = []
+        for segment in path.split(separator: "/", omittingEmptySubsequences: true) {
+            segments.append(String(segment))
+        }
+        return segments
+    }
+
+    private func queryItems(fromRawQuery rawQuery: String) -> [URLQueryItem] {
+        guard !rawQuery.isEmpty else { return [] }
+        return URLComponents(string: "https://conclave.local/?\(rawQuery)")?.queryItems ?? []
+    }
+
+    private func joinMode(from queryItems: [URLQueryItem]) -> JoinMode? {
+        guard let value = queryValue(named: ["mode", "joinMode"], from: queryItems)?.lowercased() else { return nil }
+        if value == JoinMode.webinarAttendee.rawValue {
+            return .webinarAttendee
+        }
+        if value == JoinMode.meeting.rawValue {
+            return .meeting
+        }
+        return nil
+    }
+
+    private func inviteCodeValue(from queryItems: [URLQueryItem], joinMode: JoinMode, target: JoinMode) -> String? {
+        switch target {
+        case .meeting:
+            return queryValue(named: ["meetingInviteCode", "meetingInvite"], from: queryItems)
+                ?? (joinMode == .meeting ? queryValue(named: ["inviteCode", "invite", "code"], from: queryItems) : nil)
+        case .webinarAttendee:
+            return queryValue(named: ["webinarInviteCode", "webinarInvite"], from: queryItems)
+                ?? (joinMode == .webinarAttendee ? queryValue(named: ["inviteCode", "invite", "code"], from: queryItems) : nil)
+        }
+    }
+
+    private func queryValue(named names: [String], from queryItems: [URLQueryItem]) -> String? {
+        let targetNames = names.map { $0.lowercased() }
+        for item in queryItems {
+            if targetNames.contains(item.name.lowercased()) {
+                let value = trimWhitespaceAndNewlines(item.value ?? "")
+                if !value.isEmpty {
+                    return value
+                }
+            }
+        }
+        return nil
+    }
+
+    private func resolvedMeetingInviteCode(for joinTarget: ParsedJoinTarget, enteredInviteCode: String) -> String? {
+        if !enteredInviteCode.isEmpty && joinTarget.joinMode == .meeting {
+            return enteredInviteCode
+        }
+        return joinTarget.meetingInviteCode
+    }
+
+    private func resolvedWebinarInviteCode(for joinTarget: ParsedJoinTarget, enteredInviteCode: String) -> String? {
+        if !enteredInviteCode.isEmpty && joinTarget.joinMode == .webinarAttendee {
+            return enteredInviteCode
+        }
+        return joinTarget.webinarInviteCode
+    }
+
+    private func resolvedJoinTarget(from input: String) -> ParsedJoinTarget {
+        let parsed = parseJoinTarget(from: input)
+        guard let pendingLinkJoinTarget,
+              pendingLinkJoinTarget.roomId == parsed.roomId,
+              !input.contains("/") && !input.contains(":") else {
+            return parsed
+        }
+        return ParsedJoinTarget(
+            roomId: parsed.roomId,
+            joinMode: pendingLinkJoinTarget.joinMode,
+            meetingInviteCode: pendingLinkJoinTarget.meetingInviteCode,
+            webinarInviteCode: pendingLinkJoinTarget.webinarInviteCode,
+            allowRoomCreation: pendingLinkJoinTarget.allowRoomCreation
+        )
     }
 
     private func trimCharacters(in value: String, condition: (Character) -> Bool) -> String {
@@ -1070,67 +1635,303 @@ struct JoinView: View {
 
     private let roomWordsPerCode = 3
     private let roomWordSeparator = "-"
-    private var roomWordMaxLength: Int {
-        roomWords.map(\.count).max() ?? 0
-    }
+    private let roomCodeMaxLength = 64
+    private let webinarLinkCodeMaxLength = 32
 
     private var sanitizedRoomCodeBinding: Binding<String> {
         Binding(
             get: { roomCode },
             set: { newValue in
+                let previousRoomCode = roomCode
+                viewModel.state.joinFormErrorMessage = nil
+                pendingLinkJoinTarget = nil
                 if newValue.contains("/") || newValue.contains(":") {
                     roomCode = newValue
                 } else {
                     roomCode = sanitizeRoomCodeInput(newValue)
                 }
+                if roomCode != previousRoomCode {
+                    resetInviteCodePrompt()
+                }
             }
         )
+    }
+
+    private var inviteCodeBinding: Binding<String> {
+        Binding(
+            get: { inviteCode },
+            set: { newValue in
+                inviteCode = newValue
+                viewModel.state.joinFormErrorMessage = nil
+            }
+        )
+    }
+
+    private func revealInviteCodeInputForCurrentTarget() {
+        let target = resolvedJoinTarget(from: roomCode)
+        guard !target.roomId.isEmpty else { return }
+        inviteCodePromptRoomId = target.roomId
+        inviteCodePromptJoinMode = target.joinMode
+        shouldShowInviteCodeInput = true
+    }
+
+    private func resetInviteCodePrompt(clearCode: Bool = true) {
+        shouldShowInviteCodeInput = false
+        inviteCodePromptRoomId = nil
+        inviteCodePromptJoinMode = nil
+        if clearCode {
+            inviteCode = ""
+        }
+    }
+
+    private func restoreJoinFormAfterRecoverableError() {
+        guard viewModel.state.joinFormErrorMessage != nil else { return }
+        phase = .join
+        activeTab = .join
+        if !viewModel.state.roomId.isEmpty {
+            roomCode = viewModel.state.roomId
+        }
+        if !viewModel.state.displayName.isEmpty {
+            displayNameInput = viewModel.state.displayName
+        }
+        if shouldRevealInviteCodeInput(for: viewModel.state.joinFormErrorMessage) {
+            revealInviteCodeInputForCurrentTarget()
+        } else {
+            resetInviteCodePrompt()
+        }
+    }
+
+    private func restoreExistingIdentity() {
+        guard let user = appState.currentUser else { return }
+        phase = .join
+
+        if displayNameInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            displayNameInput = user.name ?? ""
+        }
+        if user.id.hasPrefix("guest-"),
+           guestName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            guestName = user.name ?? ""
+        }
+    }
+
+    private func refreshRestoredAuthentication() {
+        guard let storedUser = appState.currentUser,
+              storedUser.provider != .guest,
+              storedUser.provider != .none else {
+            return
+        }
+
+        let storedUserId = storedUser.id
+        let storedProvider = storedUser.provider
+
+        Task { @MainActor in
+            do {
+                guard let sessionUser = try await NativeAuthService.fetchCurrentSessionUser() else {
+                    guard appState.currentUser?.id == storedUserId else { return }
+                    appState.clearAuthentication(signOutRemote: false)
+                    phase = .auth
+                    showAuthError("Your sign-in session expired. Sign in again or continue as guest.")
+                    return
+                }
+
+                guard appState.currentUser?.id == storedUserId else { return }
+                storeAuthenticatedUser(
+                    sessionUser,
+                    provider: storedProvider,
+                    fallbackName: storedUser.name,
+                    fallbackEmail: storedUser.email,
+                    moveToJoin: false
+                )
+            } catch {
+                // Keep the stored identity when the auth server cannot be reached.
+            }
+        }
+    }
+
+    private func restoreJoinDraft() {
+        if !viewModel.state.roomId.isEmpty,
+           roomCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            roomCode = viewModel.state.roomId
+            activeTab = .join
+        }
+        if !viewModel.state.displayName.isEmpty,
+           displayNameInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            displayNameInput = viewModel.state.displayName
+        }
+    }
+
+    private func applyPendingJoinLinkIfPossible() {
+        guard appState.pendingJoinURLString != nil else { return }
+        guard appState.isAuthenticated || appState.currentUser != nil else {
+            phase = .auth
+            activeTab = .join
+            return
+        }
+        guard let joinLink = appState.consumePendingJoinURLString() else { return }
+        applyJoinLink(joinLink)
+    }
+
+    private func applyJoinLink(_ link: String) {
+        let joinTarget = parseJoinTarget(from: link)
+        phase = .join
+        activeTab = .join
+        viewModel.state.joinFormErrorMessage = nil
+        resetInviteCodePrompt()
+
+        guard !joinTarget.roomId.isEmpty else {
+            pendingLinkJoinTarget = nil
+            roomCode = ""
+            viewModel.state.joinFormErrorMessage = "That meeting link is invalid."
+            return
+        }
+
+        pendingLinkJoinTarget = joinTarget
+        roomCode = joinTarget.roomId
+        if joinTarget.joinMode == .meeting {
+            inviteCode = joinTarget.meetingInviteCode ?? ""
+            resetInviteCodePrompt(clearCode: false)
+        } else {
+            inviteCode = joinTarget.webinarInviteCode ?? ""
+            resetInviteCodePrompt(clearCode: false)
+            isCameraOn = false
+            isMicOn = false
+            stopPreviewCapture()
+        }
+    }
+
+    private func shouldRevealInviteCodeInput(for message: String?) -> Bool {
+        let normalized = message?.lowercased() ?? ""
+        return normalized.contains("invite code")
     }
     
     private func toggleCamera() {
 #if SKIP
-        isCameraOn = !isCameraOn
+        if isCameraOn {
+            PermissionHelper.onCameraPermissionResult = nil
+            isCameraOn = false
+        } else {
+            requestAndroidCameraPermission()
+        }
 #else
         if isCameraOn {
-            captureSession?.stopRunning()
-            captureSession = nil
-            isCameraOn = false
+            stopPreviewCapture()
         } else {
             setupCamera()
         }
 #endif
     }
+
+    private func stopPreviewCapture() {
+        cameraPreviewGeneration += 1
+#if SKIP
+        isCameraOn = false
+#else
+        if let captureSession {
+            stopPreviewSession(captureSession)
+        }
+        captureSession = nil
+        isCameraOn = false
+#endif
+    }
     
     private func toggleMic() {
+#if SKIP
+        if isMicOn {
+            PermissionHelper.onRecordAudioPermissionResult = nil
+            isMicOn = false
+        } else {
+            requestAndroidMicrophonePermission()
+        }
+#elseif os(iOS)
+        if isMicOn {
+            isMicOn = false
+        } else {
+            requestIOSMicrophonePermission()
+        }
+#else
         isMicOn = !isMicOn
-        // Audio session will be configured when joining
+#endif
     }
     
     #if SKIP
-    #else
+    private func requestAndroidCameraPermission() {
+        if PermissionHelper.hasCameraPermission() {
+            isCameraOn = true
+            return
+        }
+
+        PermissionHelper.onCameraPermissionResult = { granted in
+            isCameraOn = granted
+        }
+        PermissionHelper.requestCameraPermission()
+    }
+
+    private func requestAndroidMicrophonePermission() {
+        if PermissionHelper.hasRecordAudioPermission() {
+            isMicOn = true
+            return
+        }
+
+        PermissionHelper.onRecordAudioPermissionResult = { granted in
+            isMicOn = granted
+        }
+        PermissionHelper.requestRecordAudioPermission()
+    }
+    #elseif os(iOS)
+    private func requestIOSMicrophonePermission() {
+        switch AVAudioApplication.shared.recordPermission {
+        case .granted:
+            isMicOn = true
+        case .denied:
+            isMicOn = false
+        case .undetermined:
+            AVAudioApplication.requestRecordPermission { granted in
+                DispatchQueue.main.async {
+                    isMicOn = granted
+                }
+            }
+        @unknown default:
+            isMicOn = false
+        }
+    }
+    #endif
+
+    #if !SKIP
     private func setupCamera() {
+        cameraPreviewGeneration += 1
+        let generation = cameraPreviewGeneration
         AVCaptureDevice.requestAccess(for: .video) { granted in
             guard granted else { return }
-            
-            DispatchQueue.main.async {
+
+            DispatchQueue.global(qos: .userInitiated).async {
                 let session = AVCaptureSession()
                 session.sessionPreset = .medium
-                
+
                 guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .front),
                       let input = try? AVCaptureDeviceInput(device: device),
                       session.canAddInput(input) else {
                     return
                 }
-                
+
                 session.addInput(input)
-                
-                DispatchQueue.global(qos: .userInitiated).async {
-                    session.startRunning()
+                session.startRunning()
+
+                DispatchQueue.main.async {
+                    guard cameraPreviewGeneration == generation else {
+                        stopPreviewSession(session)
+                        return
+                    }
+
+                    self.captureSession = session
+                    self.isCameraOn = true
                 }
-                
-                self.captureSession = session
-                self.isCameraOn = true
             }
+        }
+    }
+
+    private func stopPreviewSession(_ session: AVCaptureSession) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            session.stopRunning()
         }
     }
     #endif
@@ -1186,6 +1987,46 @@ struct CameraPreviewRepresentable: NSViewRepresentable {
     
     func updateNSView(_ nsView: NSView, context: Context) {
         // No-op for macOS
+    }
+}
+#endif
+
+#if os(iOS)
+private struct NativeTapButtonSurface: UIViewRepresentable {
+    let accessibilityLabel: String
+    let isEnabled: Bool
+    let action: () -> Void
+
+    func makeUIView(context: Context) -> UIButton {
+        let button = UIButton(type: .custom)
+        button.backgroundColor = .clear
+        button.addTarget(context.coordinator, action: #selector(Coordinator.activate), for: .touchUpInside)
+        return button
+    }
+
+    func updateUIView(_ uiView: UIButton, context: Context) {
+        context.coordinator.action = action
+        uiView.isEnabled = isEnabled
+        uiView.isUserInteractionEnabled = isEnabled
+        uiView.isAccessibilityElement = true
+        uiView.accessibilityLabel = accessibilityLabel
+        uiView.accessibilityTraits = isEnabled ? [.button] : [.button, .notEnabled]
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(action: action)
+    }
+
+    final class Coordinator {
+        var action: () -> Void
+
+        init(action: @escaping () -> Void) {
+            self.action = action
+        }
+
+        @objc func activate() {
+            action()
+        }
     }
 }
 #endif

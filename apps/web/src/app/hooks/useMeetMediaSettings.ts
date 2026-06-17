@@ -17,6 +17,8 @@ export function useMeetMediaSettings({
     useState<string>();
   const [selectedAudioOutputDeviceId, setSelectedAudioOutputDeviceId] =
     useState<string>();
+  const [selectedVideoInputDeviceId, setSelectedVideoInputDeviceId] =
+    useState<string>();
 
   useEffect(() => {
     videoQualityRef.current = videoQuality;
@@ -33,5 +35,7 @@ export function useMeetMediaSettings({
     setSelectedAudioInputDeviceId,
     selectedAudioOutputDeviceId,
     setSelectedAudioOutputDeviceId,
+    selectedVideoInputDeviceId,
+    setSelectedVideoInputDeviceId,
   };
 }

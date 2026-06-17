@@ -18,6 +18,18 @@
       "@conclave/meeting-core/*": [
         "../../packages/meeting-core/src/*"
       ],
+      "@conclave/ui-tokens": [
+        "../../packages/ui-tokens/src/index.ts"
+      ],
+      "@conclave/ui-tokens/*": [
+        "../../packages/ui-tokens/src/*"
+      ],
+      "@conclave/ui-tokens/native": [
+        "../../packages/ui-tokens/src/native/index.ts"
+      ],
+      "@conclave/ui-tokens/core": [
+        "../../packages/ui-tokens/src/core/index.ts"
+      ],
       "@conclave/apps-sdk/whiteboard/native": [
         "../../packages/apps-sdk/src/apps/whiteboard/native/index.ts"
       ],

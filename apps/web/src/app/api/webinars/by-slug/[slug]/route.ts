@@ -4,7 +4,6 @@ import {
   resolveSfuSecret,
   resolveSfuUrl,
 } from "@/lib/sfu-admin-auth";
-import type { ScheduledWebinar } from "@/lib/scheduled-webinars";
 
 export const runtime = "nodejs";
 
@@ -12,7 +11,28 @@ type RouteContext = {
   params: Promise<{ slug: string }>;
 };
 
-const buildPublicProjection = (webinar: ScheduledWebinar) => ({
+type ScheduledWebinarSnapshot = {
+  id: string;
+  linkSlug: string;
+  title: string;
+  description: string;
+  hostName: string;
+  scheduledStartAt: number;
+  scheduledEndAt: number;
+  status: "scheduled" | "live" | "ended" | "cancelled";
+  publicAccess: boolean;
+  requiresInviteCode: boolean;
+  waitingRoomEnabled: boolean;
+  earlyEntryMinutes: number;
+  qaEnabled: boolean;
+  webinarLink: string;
+  roomId: string;
+  clientId: string;
+  totalJoinCount: number;
+  peakAttendeeCount: number;
+};
+
+const buildPublicProjection = (webinar: ScheduledWebinarSnapshot) => ({
   id: webinar.id,
   linkSlug: webinar.linkSlug,
   title: webinar.title,
@@ -50,9 +70,10 @@ export async function GET(request: Request, context: RouteContext) {
       cache: "no-store",
     });
     if (response.status === 404) {
-      return NextResponse.json({ scheduledWebinar: null }, {
-        headers: { "Cache-Control": "no-store" },
-      });
+      return NextResponse.json(
+        { scheduledWebinar: null },
+        { headers: { "Cache-Control": "no-store" } },
+      );
     }
     if (!response.ok) {
       return NextResponse.json(
@@ -61,18 +82,14 @@ export async function GET(request: Request, context: RouteContext) {
       );
     }
     const data = (await response.json()) as {
-      scheduledWebinar?: ScheduledWebinar;
+      scheduledWebinar?: ScheduledWebinarSnapshot;
     };
     const webinar = data?.scheduledWebinar;
-    if (!webinar) {
-      return NextResponse.json({ scheduledWebinar: null }, {
-        headers: { "Cache-Control": "no-store" },
-      });
-    }
-    if (webinar.clientId !== clientId) {
-      return NextResponse.json({ scheduledWebinar: null }, {
-        headers: { "Cache-Control": "no-store" },
-      });
+    if (!webinar || webinar.clientId !== clientId) {
+      return NextResponse.json(
+        { scheduledWebinar: null },
+        { headers: { "Cache-Control": "no-store" } },
+      );
     }
     return NextResponse.json(
       { scheduledWebinar: buildPublicProjection(webinar) },

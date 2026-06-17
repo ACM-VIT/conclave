@@ -69,7 +69,7 @@ export const requireSfuSessionUser = async (
     return {
       ok: false,
       status: 403,
-      error: "Email is required on your account to manage webinars",
+      error: "Email is required on your account to manage Conclave sessions",
     };
   }
   const normalized: SfuAuthenticatedUser = {

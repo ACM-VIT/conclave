@@ -2,27 +2,24 @@ import Foundation
 import OSLog
 import SwiftUI
 
-/// A logger for the Conclave module.
 let logger: Logger = Logger(subsystem: "com.acmvit.conclave", category: "Conclave")
 
-/// The shared top-level view for the app, loaded from the platform-specific App delegates below.
 public struct ConclaveRootView: View {
-    @State var appState = AppState()
+    @State private var appState = AppState.shared
 
     public init() {
     }
 
     public var body: some View {
         ContentView(appState: appState)
-            .task {
-                logger.info("Skip app logs are viewable in the Xcode console for iOS; Android logs can be viewed in Studio or using adb logcat")
+            #if !SKIP
+            .onOpenURL { url in
+                _ = ConclaveAppDelegate.shared.onOpenURL(url)
             }
+            #endif
     }
 }
 
-/// Global application delegate functions.
-///
-/// These functions can update a shared observable object to communicate app state changes to interested views.
 public final class ConclaveAppDelegate: Sendable {
     public static let shared = ConclaveAppDelegate()
 
@@ -30,33 +27,51 @@ public final class ConclaveAppDelegate: Sendable {
     }
 
     public func onInit() {
-        logger.debug("onInit")
+        #if SKIP
+        NativeAuthSessionBridge.install()
+        #endif
     }
 
     public func onLaunch() {
-        logger.debug("onLaunch")
         #if !SKIP
         FontRegistration.registerFonts()
         #endif
     }
 
     public func onResume() {
-        logger.debug("onResume")
+        Task { @MainActor in
+            await MeetingViewModel.shared.recoverActiveMeetingFromForeground()
+        }
+    }
+
+    @discardableResult
+    @MainActor
+    public func onOpenURL(_ url: URL) -> Bool {
+        if NativeAuthService.handleOpenURL(url) {
+            return true
+        }
+        AppState.shared.openJoinURL(url)
+        return true
+    }
+
+    public func onOpenURL(_ urlString: String) {
+        Task { @MainActor in
+            if let url = URL(string: urlString), NativeAuthService.handleOpenURL(url) {
+                return
+            }
+            AppState.shared.openJoinURLString(urlString)
+        }
     }
 
     public func onPause() {
-        logger.debug("onPause")
     }
 
     public func onStop() {
-        logger.debug("onStop")
     }
 
     public func onDestroy() {
-        logger.debug("onDestroy")
     }
 
     public func onLowMemory() {
-        logger.debug("onLowMemory")
     }
 }

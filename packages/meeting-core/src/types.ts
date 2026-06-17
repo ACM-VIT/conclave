@@ -42,16 +42,23 @@ export interface ReactionNotification {
   value?: string;
   label?: string;
   timestamp: number;
+  roomId?: string;
 }
 
 export interface HandRaisedNotification {
   userId: string;
   raised: boolean;
   timestamp: number;
+  roomId?: string;
 }
 
 export interface HandRaisedSnapshot {
   users: { userId: string; raised: boolean }[];
+  roomId?: string;
+}
+
+export interface ChatHistorySnapshot {
+  messages: ChatMessage[];
   roomId?: string;
 }
 
@@ -106,6 +113,7 @@ export interface ProducerInfo {
   kind: "audio" | "video";
   type: ProducerType;
   paused?: boolean;
+  roomId?: string;
 }
 
 export type VideoQuality = "low" | "standard";
@@ -119,6 +127,7 @@ export interface JoinRoomResponse {
   hostUserIds?: string[];
   isLocked?: boolean;
   isTtsDisabled?: boolean;
+  isChatLocked?: boolean;
   isDmEnabled?: boolean;
   meetingRequiresInviteCode?: boolean;
   webinarRole?: "attendee" | "participant" | "host";
@@ -127,6 +136,13 @@ export interface JoinRoomResponse {
   webinarRequiresInviteCode?: boolean;
   webinarAttendeeCount?: number;
   webinarMaxAttendees?: number;
+}
+
+export interface JoinRoomErrorResponse {
+  error: string;
+  roomId?: string;
+  redirectInstanceId?: string;
+  redirectUrl?: string;
 }
 
 export interface WebinarConfigSnapshot {

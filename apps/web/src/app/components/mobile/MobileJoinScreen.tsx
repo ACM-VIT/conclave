@@ -3,8 +3,7 @@
 import {
   AlertCircle,
   ArrowRight,
-  CalendarClock,
-  Copy,
+  Blend,
   Loader2,
   Mic,
   MicOff,
@@ -12,12 +11,17 @@ import {
   Trash2,
   Video,
   VideoOff,
+  WandSparkles,
 } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { signIn, signOut, useSession } from "@/lib/auth-client";
-import type { ConnectionState, MeetError } from "../../lib/types";
-import type { ScheduledMeeting } from "@/lib/scheduled-meetings";
-import ScheduleMeetingModal from "../ScheduleMeetingModal";
+import type { Dispatch, SetStateAction } from "react";
+import { Avatar } from "@conclave/ui-tokens/web";
+import { signOut, useSession } from "@/lib/auth-client";
+import type {
+  ConnectionState,
+  MeetError,
+  PrejoinMediaHandoff,
+} from "../../lib/types";
 import {
   DEFAULT_AUDIO_CONSTRAINTS,
   STANDARD_QUALITY_CONSTRAINTS,
@@ -31,11 +35,28 @@ import {
   sanitizeRoomCode,
 } from "../../lib/utils";
 import MeetsErrorBanner from "../MeetsErrorBanner";
+import ScheduledMeetingsPanel from "../ScheduledMeetingsPanel";
+import VideoEffectsPanel from "../VideoEffectsPanel";
 import AndroidUpsellSheet from "./AndroidUpsellSheet";
+import {
+  prewarmVideoEffectsAssets,
+  useVideoEffects,
+} from "../../hooks/useVideoEffects";
+import { useCameraPermissionState } from "../../hooks/useCameraPermissionState";
+import {
+  countActiveVideoEffects,
+  type VideoEffectsState,
+} from "../../lib/video-effects";
 
 const normalizeGuestName = (value: string): string =>
   value.trim().replace(/\s+/g, " ");
 const GUEST_USER_STORAGE_KEY = "conclave:guest-user";
+
+const getSignInHref = (): string => {
+  if (typeof window === "undefined") return "/sign-in";
+  const next = `${window.location.pathname}${window.location.search}`;
+  return `/sign-in?next=${encodeURIComponent(next || "/")}`;
+};
 
 const createGuestId = (): string => {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
@@ -90,6 +111,9 @@ interface MobileJoinScreenProps {
   onDismissMeetError?: () => void;
   onRetryMedia?: () => void;
   onTestSpeaker?: () => void;
+  onPrejoinMediaCommit?: (handoff: PrejoinMediaHandoff) => void;
+  videoEffects: VideoEffectsState;
+  onVideoEffectsChange: Dispatch<SetStateAction<VideoEffectsState>>;
 }
 
 function MobileJoinScreen({
@@ -115,14 +139,26 @@ function MobileJoinScreen({
   onDismissMeetError,
   onRetryMedia,
   onTestSpeaker,
+  onPrejoinMediaCommit,
+  videoEffects,
+  onVideoEffectsChange,
 }: MobileJoinScreenProps) {
   const normalizedRoomId =
     roomId === "undefined" || roomId === "null" ? "" : roomId;
   const canJoin = normalizedRoomId.trim().length > 0;
   const videoRef = useRef<HTMLVideoElement>(null);
+  const localStreamRef = useRef<MediaStream | null>(null);
+  const processedPreviewTrackRef = useRef<MediaStreamTrack | null>(null);
+  const handedOffTrackIdsRef = useRef<Set<string>>(new Set());
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [isCameraOn, setIsCameraOn] = useState(false);
   const [isMicOn, setIsMicOn] = useState(false);
+  const [isEffectsOpen, setIsEffectsOpen] = useState(false);
+  const [isRequestingPermissions, setIsRequestingPermissions] =
+    useState(false);
+  const [permissionRequestError, setPermissionRequestError] = useState<
+    string | null
+  >(null);
   const isRoutedRoom = forceJoinOnly;
   const enforceShortCode = enableRoomRouting || forceJoinOnly;
   const [activeTab, setActiveTab] = useState<"new" | "join">(() =>
@@ -134,12 +170,14 @@ function MobileJoinScreen({
   const hasUserIdentity = Boolean(user?.id || user?.email);
   const phase = hasUserIdentity ? "join" : (manualPhase ?? "welcome");
   const [guestName, setGuestName] = useState("");
+  const nameInputValue = guestName || displayNameInput;
+  const liveDisplayName = normalizeGuestName(nameInputValue);
+  const previewName =
+    liveDisplayName ||
+    normalizeGuestName(user?.name || "") ||
+    (userEmail ? userEmail.split("@")[0] : "") ||
+    "You";
   const [customRoomCode, setCustomRoomCode] = useState("");
-  const [isScheduleOpen, setIsScheduleOpen] = useState(false);
-  const [upcomingMeetings, setUpcomingMeetings] = useState<ScheduledMeeting[]>(
-    [],
-  );
-  const [copiedMeetingId, setCopiedMeetingId] = useState<string | null>(null);
   const normalizedSegments = useMemo(
     () => normalizedRoomId.split("-"),
     [normalizedRoomId]
@@ -158,14 +196,86 @@ function MobileJoinScreen({
       inlineSuggestion.startsWith(currentSegment)
       ? inlineSuggestion.slice(currentSegment.length)
       : "";
-  const [signInProvider, setSignInProvider] = useState<
-    "google" | "apple" | "roblox" | "vercel" | null
-  >(
-    null
-  );
-  const isSigningIn = signInProvider !== null;
   const [isSigningOut, setIsSigningOut] = useState(false);
   const [showAndroidUpsell, setShowAndroidUpsell] = useState(false);
+  const {
+    effectiveStream: processedPreviewStream,
+    status: videoEffectsStatus,
+    error: videoEffectsError,
+    debugStats: videoEffectsDebugStats,
+  } = useVideoEffects({
+    sourceStream: localStream,
+    effects: videoEffects,
+    processedVideoTrackRef: processedPreviewTrackRef,
+  });
+  const previewStream = processedPreviewStream ?? localStream;
+  const activeVideoEffectsCount = countActiveVideoEffects(videoEffects);
+  const cameraPermissionState = useCameraPermissionState();
+  const hasLivePreviewCamera = Boolean(
+    localStream
+      ?.getVideoTracks()
+      .some((track) => track.readyState === "live" && track.enabled),
+  );
+  const isCameraPermissionBlocked =
+    meetError?.code === "PERMISSION_DENIED" ||
+    (!hasLivePreviewCamera &&
+      (cameraPermissionState === "prompt" ||
+        cameraPermissionState === "denied"));
+  const isBackgroundBlurActive =
+    !isCameraPermissionBlocked &&
+    (videoEffects.background === "blur-light" ||
+      videoEffects.background === "blur-strong");
+  const shouldShowPermissionCta =
+    !hasLivePreviewCamera &&
+    !isCameraOn &&
+    (cameraPermissionState === "prompt" ||
+      cameraPermissionState === "denied" ||
+      meetError?.code === "PERMISSION_DENIED");
+
+  const prewarmLiveCameraEffects = useCallback((reason: string) => {
+    void prewarmVideoEffectsAssets({
+      segmentation: true,
+      face: true,
+      reason,
+    });
+  }, []);
+
+  const prewarmBackgroundBlur = useCallback(() => {
+    if (isCameraPermissionBlocked) return;
+    void prewarmVideoEffectsAssets({
+      segmentation: true,
+      reason: "mobile-prejoin-quick-blur",
+    });
+  }, [isCameraPermissionBlocked]);
+
+  const toggleBackgroundBlur = useCallback(() => {
+    if (isCameraPermissionBlocked) return;
+    const nextBackground = isBackgroundBlurActive ? "none" : "blur-strong";
+    if (nextBackground !== "none") {
+      void prewarmVideoEffectsAssets({
+        segmentation: true,
+        reason: "mobile-prejoin-quick-blur:select",
+      });
+    }
+    onVideoEffectsChange((current) => ({
+      ...current,
+      background: nextBackground,
+    }));
+  }, [
+    isBackgroundBlurActive,
+    isCameraPermissionBlocked,
+    onVideoEffectsChange,
+  ]);
+
+  const openEffectsPanel = useCallback(() => {
+    if (isCameraPermissionBlocked) return;
+    void prewarmVideoEffectsAssets({
+      segmentation: true,
+      face: true,
+      reason: "mobile-prejoin-effects-panel-open",
+    });
+    setIsEffectsOpen(true);
+  }, [isCameraPermissionBlocked]);
 
   const { data: session } = useSession();
   const canSignOut = Boolean(session?.user || user?.id || user?.email);
@@ -217,17 +327,27 @@ function MobileJoinScreen({
   }, [session, user, onUserChange]);
 
   useEffect(() => {
+    localStreamRef.current = localStream;
+  }, [localStream]);
+
+  const stopUnhandedOffTracks = useCallback((stream: MediaStream | null) => {
+    const handedOffTrackIds = handedOffTrackIdsRef.current;
+    stream?.getTracks().forEach((track) => {
+      if (handedOffTrackIds.has(track.id)) return;
+      track.stop();
+    });
+  }, []);
+
+  useEffect(() => {
     if (phase !== "join" && localStream) {
-      localStream.getTracks().forEach((t) => t.stop());
+      stopUnhandedOffTracks(localStream);
       setLocalStream(null);
     }
 
     return () => {
-      if (localStream) {
-        localStream.getTracks().forEach((t) => t.stop());
-      }
+      stopUnhandedOffTracks(localStream);
     };
-  }, [localStream, phase]);
+  }, [localStream, phase, stopUnhandedOffTracks]);
 
   useEffect(() => {
     if (!user?.id?.startsWith("guest-")) return;
@@ -235,19 +355,82 @@ function MobileJoinScreen({
     const nextName = normalizeGuestName(user.name || "");
     if (!nextName) return;
     setGuestName(nextName);
-  }, [guestName, user]);
+    onDisplayNameInputChange(nextName);
+  }, [guestName, onDisplayNameInputChange, user]);
 
   useEffect(() => {
-    if (videoRef.current && localStream) videoRef.current.srcObject = localStream;
-  }, [localStream]);
+    const video = videoRef.current;
+    if (!video) return;
+
+    if (!previewStream) {
+      if (video.srcObject) {
+        video.srcObject = null;
+      }
+      return;
+    }
+
+    if (video.srcObject !== previewStream) {
+      video.srcObject = previewStream;
+    }
+    video.play().catch(() => {});
+
+    return () => {
+      if (video.srcObject === previewStream) {
+        video.srcObject = null;
+      }
+    };
+  }, [previewStream]);
+
+  const requestMicrophoneAndCamera = async () => {
+    if (isRequestingPermissions) return;
+
+    setIsRequestingPermissions(true);
+    setPermissionRequestError(null);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: DEFAULT_AUDIO_CONSTRAINTS,
+        video: STANDARD_QUALITY_CONSTRAINTS,
+      });
+      const liveTracks = stream
+        .getTracks()
+        .filter((track) => track.readyState === "live");
+      const hasAudio = liveTracks.some((track) => track.kind === "audio");
+      const hasVideo = liveTracks.some((track) => track.kind === "video");
+
+      stream.getVideoTracks().forEach((track) => {
+        if ("contentHint" in track) track.contentHint = "motion";
+      });
+      localStreamRef.current?.getTracks().forEach((track) => {
+        if (!liveTracks.includes(track)) track.stop();
+      });
+
+      const nextStream =
+        liveTracks.length > 0 ? new MediaStream(liveTracks) : null;
+      setLocalStream(nextStream);
+      setIsMicOn(hasAudio);
+      setIsCameraOn(hasVideo);
+      if (hasVideo) {
+        prewarmLiveCameraEffects("mobile-prejoin-full-media-camera-live");
+      }
+    } catch {
+      setPermissionRequestError("Permission needed");
+      setIsMicOn(false);
+      setIsCameraOn(false);
+    } finally {
+      setIsRequestingPermissions(false);
+    }
+  };
 
   const toggleCamera = async () => {
     if (isCameraOn && localStream) {
       const track = localStream.getVideoTracks()[0];
       if (track) {
         track.stop();
-        localStream.removeTrack(track);
       }
+      const nextTracks = localStream
+        .getTracks()
+        .filter((candidate) => candidate !== track);
+      setLocalStream(nextTracks.length > 0 ? new MediaStream(nextTracks) : null);
       setIsCameraOn(false);
     } else {
       await navigator.mediaDevices
@@ -256,18 +439,20 @@ function MobileJoinScreen({
         })
         .then((stream) => {
           const videoTrack = stream.getVideoTracks()[0];
-          if (!videoTrack) return;
+          if (!videoTrack) {
+            stream.getTracks().forEach((track) => track.stop());
+            return;
+          }
           if ("contentHint" in videoTrack) {
             videoTrack.contentHint = "motion";
           }
-          if (localStream) {
-            localStream.addTrack(videoTrack);
-          } else {
-            setLocalStream(stream);
-          }
-          if (videoRef.current) {
-            videoRef.current.srcObject = localStream || stream;
-          }
+          const currentTracks = localStream?.getTracks() ?? [];
+          const nextStream =
+            currentTracks.length > 0
+              ? new MediaStream([...currentTracks, videoTrack])
+              : stream;
+          setLocalStream(nextStream);
+          prewarmLiveCameraEffects("mobile-prejoin-camera-toggle-live");
           setIsCameraOn(true);
         })
         .catch(() => {
@@ -281,8 +466,11 @@ function MobileJoinScreen({
       const track = localStream.getAudioTracks()[0];
       if (track) {
         track.stop();
-        localStream.removeTrack(track);
       }
+      const nextTracks = localStream
+        .getTracks()
+        .filter((candidate) => candidate !== track);
+      setLocalStream(nextTracks.length > 0 ? new MediaStream(nextTracks) : null);
       setIsMicOn(false);
     } else {
       await navigator.mediaDevices
@@ -291,18 +479,48 @@ function MobileJoinScreen({
         })
         .then((stream) => {
           const audioTrack = stream.getAudioTracks()[0];
-          if (!audioTrack) return;
-          if (localStream) {
-            localStream.addTrack(audioTrack);
-          } else {
-            setLocalStream(stream);
+          if (!audioTrack) {
+            stream.getTracks().forEach((track) => track.stop());
+            return;
           }
+          const currentTracks = localStream?.getTracks() ?? [];
+          const nextStream =
+            currentTracks.length > 0
+              ? new MediaStream([...currentTracks, audioTrack])
+              : stream;
+          setLocalStream(nextStream);
           setIsMicOn(true);
         })
         .catch(() => {
           console.log("[MobileJoinScreen] Microphone access denied");
         });
     }
+  };
+
+  const commitPrejoinMedia = () => {
+    if (!onPrejoinMediaCommit) return;
+    const stream = localStreamRef.current;
+    const liveTracks =
+      stream
+        ?.getTracks()
+        .filter((track) => {
+          if (track.readyState !== "live") return false;
+          if (track.kind === "video") return isCameraOn;
+          if (track.kind === "audio") return isMicOn;
+          return true;
+        }) ?? [];
+    handedOffTrackIdsRef.current = new Set(
+      liveTracks.map((track) => track.id),
+    );
+    const handoffStream =
+      liveTracks.length > 0 ? new MediaStream(liveTracks) : null;
+    const hasLiveVideo = liveTracks.some((track) => track.kind === "video");
+    const hasLiveAudio = liveTracks.some((track) => track.kind === "audio");
+    onPrejoinMediaCommit({
+      stream: handoffStream,
+      isCameraOn: isCameraOn && hasLiveVideo,
+      isMicOn: isMicOn && hasLiveAudio,
+    });
   };
 
   const handleCreateRoom = () => {
@@ -313,70 +531,9 @@ function MobileJoinScreen({
     if (enableRoomRouting && typeof window !== "undefined") {
       window.history.pushState(null, "", `/${id}`);
     }
+    commitPrejoinMedia();
     onRoomIdChange(id);
     onJoinRoom(id);
-  };
-
-  const refreshUpcomingMeetings = useCallback(async () => {
-    if (!isSignedInUser) {
-      setUpcomingMeetings([]);
-      return;
-    }
-    try {
-      const response = await fetch(
-        "/api/meetings/scheduled?status=scheduled,live",
-        { cache: "no-store" },
-      );
-      if (!response.ok) {
-        setUpcomingMeetings([]);
-        return;
-      }
-      const data = (await response.json()) as {
-        scheduledMeetings?: ScheduledMeeting[];
-      };
-      setUpcomingMeetings(data?.scheduledMeetings ?? []);
-    } catch {
-      setUpcomingMeetings([]);
-    }
-  }, [isSignedInUser]);
-
-  useEffect(() => {
-    if (phase !== "join") return;
-    if (activeTab !== "new") return;
-    void refreshUpcomingMeetings();
-  }, [phase, activeTab, refreshUpcomingMeetings]);
-
-  const handleCopyMeetingLink = useCallback(async (meeting: ScheduledMeeting) => {
-    if (typeof window === "undefined") return;
-    const link = `${window.location.origin}/${meeting.roomCode}`;
-    try {
-      await navigator.clipboard.writeText(link);
-      setCopiedMeetingId(meeting.id);
-      setTimeout(
-        () =>
-          setCopiedMeetingId((current) =>
-            current === meeting.id ? null : current,
-          ),
-        1800,
-      );
-    } catch {
-      setCopiedMeetingId(null);
-    }
-  }, []);
-
-  const handleSocialSignIn = async (
-    provider: "google" | "apple" | "roblox" | "vercel"
-  ) => {
-    setSignInProvider(provider);
-    await signIn
-      .social({
-        provider,
-        callbackURL: window.location.href,
-      })
-      .catch((error) => {
-        console.error("Sign in error:", error);
-      });
-    setSignInProvider(null);
   };
 
   const handleSignOut = async () => {
@@ -415,13 +572,18 @@ function MobileJoinScreen({
   };
 
   const handleGuest = () => {
-    const normalizedGuestName = normalizeGuestName(guestName);
+    const normalizedGuestName = liveDisplayName;
     if (!normalizedGuestName) return;
     const guestUser = buildGuestUser(normalizedGuestName, user);
     onUserChange(guestUser);
     onIsAdminChange(false);
     setGuestName(normalizedGuestName);
+    onDisplayNameInputChange(normalizedGuestName);
     setManualPhase("join");
+  };
+  const handleNameInputChange = (nextName: string) => {
+    setGuestName(nextName);
+    onDisplayNameInputChange(nextName);
   };
 
   const handleJoin = () => {
@@ -432,6 +594,7 @@ function MobileJoinScreen({
     if (candidate !== normalizedRoomId) {
       onRoomIdChange(candidate);
     }
+    commitPrejoinMedia();
     onJoinRoom(candidate);
   };
 
@@ -469,220 +632,96 @@ function MobileJoinScreen({
 
   if (phase === "welcome") {
     return (
-      <div className="flex-1 flex flex-col items-center justify-center px-6 bg-[#060606] safe-area-pt relative overflow-hidden">
-        <div className="absolute inset-0 acm-bg-radial pointer-events-none" />
-        <div className="absolute inset-0 acm-bg-dot-grid pointer-events-none" />
-        <div className="relative z-10 text-center mb-8">
-          <div
-            className="text-xl text-[#FEFCD9]/40 mb-2 tracking-wide"
+      <div className="flex-1 flex flex-col items-center justify-center px-6 bg-[#0a0a0b] safe-area-pt">
+        <div className="relative z-10 text-center mb-10">
+          <h1
+            className="text-5xl text-[#fafafa]"
             style={{ fontFamily: "'PolySans Bulky Wide', sans-serif" }}
           >
-            welcome to
-          </div>
-          <div className="relative inline-block">
-            <span
-              className="absolute -left-8 top-1/2 -translate-y-1/2 text-[#F95F4A]/40 text-3xl"
-              style={{ fontFamily: "'PolySans Mono', monospace" }}
-            >
-              [
-            </span>
-            <h1
-              className="text-5xl text-[#FEFCD9] tracking-tight"
-              style={{ fontFamily: "'PolySans Bulky Wide', sans-serif" }}
-            >
-              c0nclav3
-            </h1>
-            <span
-              className="absolute -right-8 top-1/2 -translate-y-1/2 text-[#F95F4A]/40 text-3xl"
-              style={{ fontFamily: "'PolySans Mono', monospace" }}
-            >
-              ]
-            </span>
-          </div>
+            Conclave
+          </h1>
         </div>
-        <p
-          className="relative z-10 text-sm text-[#FEFCD9]/30 mb-10 text-center max-w-[320px]"
-          style={{ fontFamily: "'PolySans Trial', sans-serif" }}
-        >
-          Video conferencing for meetings, webinars, and collaboration
-        </p>
 
         <button
           onClick={() => setManualPhase("auth")}
-          className="relative z-10 group flex items-center gap-3 px-8 py-3 bg-[#F95F4A] text-white text-xs uppercase tracking-widest rounded-lg active:scale-95 transition-all hover:bg-[#e8553f] hover:gap-4"
-          style={{ fontFamily: "'PolySans Mono', monospace" }}
+          className="relative z-10 group flex items-center gap-3 rounded-full bg-[#F95F4A] px-8 py-3 text-sm font-medium text-white transition-colors active:scale-95 hover:bg-[#e8553f]"
+          style={{ fontFamily: "'PolySans Trial', sans-serif" }}
         >
-          <span>LET'S GO</span>
+          <span>Get started</span>
           <ArrowRight className="w-4 h-4" />
         </button>
       </div>
     );
   }
 
-  // Auth phase
   if (phase === "auth") {
     return (
-      <div className="flex-1 flex flex-col px-6 py-8 bg-[#060606] safe-area-pt relative overflow-hidden">
-        <div className="absolute inset-0 acm-bg-radial pointer-events-none" />
-        <div className="absolute inset-0 acm-bg-dot-grid pointer-events-none" />
+      <div className="flex-1 flex flex-col px-6 py-8 bg-[#0a0a0b] safe-area-pt">
         <button
           onClick={() => setManualPhase("welcome")}
-          className="relative z-10 text-[10px] text-[#FEFCD9]/60 uppercase tracking-[0.3em] mb-8 mobile-glass-soft mobile-pill px-3 py-1 self-start"
-          style={{ fontFamily: "'PolySans Mono', monospace" }}
+          className="relative z-10 mb-8 self-start mobile-glass-soft mobile-pill px-3 py-1 text-[12px] font-medium text-[#fafafa]/75"
+          style={{ fontFamily: "'PolySans Trial', sans-serif" }}
         >
-          ← back
+          Back
         </button>
 
         <div className="relative z-10 flex-1 flex flex-col justify-center">
           <h2
-            className="text-2xl text-[#FEFCD9] mb-2 text-center"
+            className="text-2xl text-[#fafafa] mb-8 text-center"
             style={{ fontFamily: "'PolySans Bulky Wide', sans-serif" }}
           >
             Join
           </h2>
-          <p
-            className="text-xs text-[#FEFCD9]/40 uppercase tracking-widest text-center mb-8"
-            style={{ fontFamily: "'PolySans Mono', monospace" }}
-          >
-            choose how to continue
-          </p>
 
-          <div className="grid gap-3 mb-4">
-            <button
-              onClick={() => handleSocialSignIn("google")}
-              disabled={isSigningIn}
-              className="w-full flex items-center justify-center gap-3 px-4 py-3 mobile-glass mobile-pill text-[#FEFCD9] hover:border-[#FEFCD9]/25 hover:bg-black/40 transition-all disabled:opacity-50"
-            >
-              {signInProvider === "google" ? (
-                <Loader2 className="w-5 h-5 animate-spin text-[#FEFCD9]" />
-              ) : (
-                <svg className="w-5 h-5 shrink-0" viewBox="0 0 24 24" aria-hidden="true">
-                  <path
-                    fill="#4285F4"
-                    d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
-                  />
-                  <path
-                    fill="#34A853"
-                    d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
-                  />
-                  <path
-                    fill="#FBBC05"
-                    d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"
-                  />
-                  <path
-                    fill="#EA4335"
-                    d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"
-                  />
-                </svg>
-              )}
-              <span className="text-[13px] leading-none whitespace-nowrap tracking-tight" style={{ fontFamily: "'PolySans Trial', sans-serif" }}>
-                Continue with Google
-              </span>
-            </button>
-            <button
-              onClick={() => handleSocialSignIn("apple")}
-              disabled={isSigningIn}
-              className="w-full flex items-center justify-center gap-3 px-4 py-3 mobile-glass mobile-pill text-[#FEFCD9] hover:border-[#FEFCD9]/25 hover:bg-black/40 transition-all disabled:opacity-50"
-            >
-              {signInProvider === "apple" ? (
-                <Loader2 className="w-5 h-5 animate-spin text-[#FEFCD9]" />
-              ) : (
-                <img
-                  src="/assets/apple-50.png"
-                  alt=""
-                  aria-hidden="true"
-                  className="w-5 h-5 shrink-0 object-contain"
-                />
-              )}
-              <span className="text-[13px] leading-none whitespace-nowrap tracking-tight" style={{ fontFamily: "'PolySans Trial', sans-serif" }}>
-                Continue with Apple
-              </span>
-            </button>
-            <button
-              onClick={() => handleSocialSignIn("roblox")}
-              disabled={isSigningIn}
-              className="w-full flex items-center justify-center gap-3 px-4 py-3 mobile-glass mobile-pill text-[#FEFCD9] hover:border-[#FEFCD9]/25 hover:bg-black/40 transition-all disabled:opacity-50"
-            >
-              {signInProvider === "roblox" ? (
-                <Loader2 className="w-5 h-5 animate-spin text-[#FEFCD9]" />
-              ) : (
-                <img
-                  src="/roblox-logo.png"
-                  alt=""
-                  aria-hidden="true"
-                  className="w-5 h-5 shrink-0 object-contain invert"
-                />
-              )}
-              <span className="text-[13px] leading-none whitespace-nowrap tracking-tight" style={{ fontFamily: "'PolySans Trial', sans-serif" }}>
-                Continue with Roblox
-              </span>
-            </button>
-            <button
-              onClick={() => handleSocialSignIn("vercel")}
-              disabled={isSigningIn}
-              className="w-full flex items-center justify-center gap-3 px-4 py-3 mobile-glass mobile-pill text-[#FEFCD9] hover:border-[#FEFCD9]/25 hover:bg-black/40 transition-all disabled:opacity-50"
-            >
-              {signInProvider === "vercel" ? (
-                <Loader2 className="w-5 h-5 animate-spin text-[#FEFCD9]" />
-              ) : (
-                <svg
-                  className="w-5 h-5 shrink-0"
-                  viewBox="0 0 24 24"
-                  aria-hidden="true"
-                >
-                  <path fill="#fff" d="M12 4l8 14H4z" />
-                </svg>
-              )}
-              <span className="text-[13px] leading-none whitespace-nowrap tracking-tight" style={{ fontFamily: "'PolySans Trial', sans-serif" }}>
-                Continue with Vercel
-              </span>
-            </button>
-          </div>
+          <a
+            href={getSignInHref()}
+            className="mb-4 w-full flex items-center justify-center gap-3 px-4 py-3 bg-[#F95F4A] text-white text-sm rounded-full hover:bg-[#e8553f] transition-colors"
+            style={{ fontFamily: "'PolySans Trial', sans-serif" }}
+          >
+            Sign in
+            <ArrowRight className="w-4 h-4" />
+          </a>
 
           <div className="flex items-center gap-4 my-6">
-            <div className="flex-1 h-px bg-[#FEFCD9]/10" />
+            <div className="flex-1 h-px bg-[#fafafa]/10" />
             <span
-              className="text-[10px] text-[#FEFCD9]/30 uppercase tracking-widest"
-              style={{ fontFamily: "'PolySans Mono', monospace" }}
+              className="text-[12px] font-medium text-[#fafafa]/40"
+              style={{ fontFamily: "'PolySans Trial', sans-serif" }}
             >
               or
             </span>
-            <div className="flex-1 h-px bg-[#FEFCD9]/10" />
+            <div className="flex-1 h-px bg-[#fafafa]/10" />
           </div>
 
           <input
             type="text"
-            value={guestName}
-            onChange={(e) => setGuestName(e.target.value)}
+            value={nameInputValue}
+            onChange={(e) => handleNameInputChange(e.target.value)}
             placeholder="Enter your name"
-            className="w-full px-4 py-2.5 mobile-glass mobile-pill text-sm text-[#FEFCD9] placeholder:text-[#FEFCD9]/25 focus:border-[#F95F4A]/50 focus:outline-none mb-3"
+            className="w-full px-4 py-2.5 mobile-glass mobile-pill text-sm text-[#fafafa] placeholder:text-[#fafafa]/25 focus:border-[#F95F4A]/50 focus:outline-none mb-3"
             style={{ fontFamily: "'PolySans Trial', sans-serif" }}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && guestName.trim()) handleGuest();
+              if (e.key === "Enter" && liveDisplayName) handleGuest();
             }}
           />
           <button
             onClick={handleGuest}
-            disabled={!guestName.trim()}
+            disabled={!liveDisplayName}
             className="w-full px-4 py-3 bg-[#F95F4A] text-white text-sm rounded-full hover:bg-[#e8553f] transition-colors disabled:opacity-30"
             style={{ fontFamily: "'PolySans Trial', sans-serif" }}
           >
-            Continue as Guest
+            Join as Guest
           </button>
         </div>
       </div>
     );
   }
 
-  // Join phase
   return (
-    <div className="flex-1 flex flex-col bg-[#060606] safe-area-pt overflow-hidden relative">
-      <div className="absolute inset-0 acm-bg-radial pointer-events-none" />
-      <div className="absolute inset-0 acm-bg-dot-grid pointer-events-none" />
-      {/* Video preview */}
+    <div className="flex-1 flex flex-col bg-[#0a0a0b] safe-area-pt overflow-hidden relative">
       <div className="relative flex-1 px-4 pt-3 pb-36 flex flex-col min-h-0">
-        <div className="relative flex-1 rounded-[28px] border border-[#FEFCD9]/10 bg-[#0d0e0d] overflow-hidden">
-          {isCameraOn && localStream ? (
+        <div className="relative flex-1 rounded-[28px] border border-[#fafafa]/10 bg-[#131316] overflow-hidden">
+          {isCameraOn && previewStream ? (
             <video
               ref={videoRef}
               autoPlay
@@ -691,27 +730,51 @@ function MobileJoinScreen({
               className="w-full h-full object-cover scale-x-[-1]"
             />
           ) : (
-            <div className="absolute inset-0 flex items-center justify-center bg-[#0d0e0d]">
-              <div className="absolute inset-0 bg-gradient-to-br from-[#F95F4A]/15 to-[#FF007A]/10" />
-              <div className="relative w-20 h-20 rounded-full mobile-avatar flex items-center justify-center">
-                <span
-                  className="text-4xl text-[#FEFCD9] font-bold"
-                  style={{ fontFamily: "'PolySans Bulky Wide', sans-serif" }}
-                >
-                  {userEmail[0]?.toUpperCase() || "?"}
-                </span>
-              </div>
+            <div className="absolute inset-0 flex items-center justify-center bg-[#131316]">
+              <div className="absolute inset-0 bg-[rgba(249,95,74,0.15)]" />
+              <Avatar
+                className="relative mobile-avatar"
+                id={user?.id || userEmail || previewName}
+                name={previewName}
+                size={80}
+              />
             </div>
           )}
 
-          {/* Camera/mic controls */}
+          {shouldShowPermissionCta ? (
+            <button
+              type="button"
+              onClick={requestMicrophoneAndCamera}
+              disabled={isRequestingPermissions}
+              className="absolute left-4 top-14 z-10 flex min-h-9 max-w-[calc(100%-2rem)] items-center gap-2 rounded-full bg-[#F95F4A] px-3.5 text-[13px] font-medium text-white shadow-lg shadow-black/25 transition-[background-color,opacity] duration-150 active:bg-[#e8553f] disabled:cursor-wait disabled:opacity-75"
+              style={{ fontFamily: "'PolySans Trial', sans-serif" }}
+            >
+              {isRequestingPermissions ? (
+                <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
+              ) : (
+                <Video className="h-4 w-4 shrink-0" />
+              )}
+              <span className="truncate">Allow microphone and camera</span>
+            </button>
+          ) : null}
+
+          {(showPermissionHint || permissionRequestError) && (
+            <div className="pointer-events-none absolute bottom-[84px] left-1/2 z-10 flex max-w-[calc(100%-2rem)] -translate-x-1/2 items-center gap-2 rounded-full bg-black/65 px-3 py-1.5 text-center text-[12px] font-medium text-white/82">
+              <AlertCircle className="h-3.5 w-3.5 shrink-0 text-[#F95F4A]" />
+              <span className="truncate">
+                {permissionRequestError ?? "Permission needed"}
+              </span>
+            </div>
+          )}
+
           <div className="absolute bottom-4 left-1/2 -translate-x-1/2 mobile-glass mobile-pill px-2.5 py-2 flex items-center gap-2">
             <button
               onClick={toggleMic}
+              aria-label={isMicOn ? "Turn off microphone" : "Turn on microphone"}
               className={`w-9 h-9 rounded-full flex items-center justify-center transition-colors ${
                 isMicOn
                   ? "text-white"
-                  : "bg-[#ef4444] text-white shadow-[0_0_12px_rgba(239,68,68,0.35)]"
+                  : "bg-[#ea4335] text-white"
               }`}
             >
               {isMicOn ? (
@@ -722,10 +785,11 @@ function MobileJoinScreen({
             </button>
             <button
               onClick={toggleCamera}
+              aria-label={isCameraOn ? "Turn off camera" : "Turn on camera"}
               className={`w-9 h-9 rounded-full flex items-center justify-center transition-colors ${
                 isCameraOn
                   ? "text-white"
-                  : "bg-[#ef4444] text-white shadow-[0_0_12px_rgba(239,68,68,0.35)]"
+                  : "bg-[#ea4335] text-white"
               }`}
             >
               {isCameraOn ? (
@@ -734,15 +798,73 @@ function MobileJoinScreen({
                 <VideoOff className="w-[18px] h-[18px]" />
               )}
             </button>
+            <button
+              type="button"
+              onClick={toggleBackgroundBlur}
+              onFocus={prewarmBackgroundBlur}
+              onPointerEnter={prewarmBackgroundBlur}
+              onTouchStart={prewarmBackgroundBlur}
+              disabled={isCameraPermissionBlocked}
+              aria-label={
+                isBackgroundBlurActive
+                  ? "Turn off background blur"
+                  : "Turn on background blur"
+              }
+              aria-pressed={isBackgroundBlurActive}
+              title={
+                isCameraPermissionBlocked
+                  ? "Permission needed"
+                  : isBackgroundBlurActive
+                    ? "Turn off background blur"
+                    : "Turn on background blur"
+              }
+              className={`w-9 h-9 rounded-full flex items-center justify-center transition-colors disabled:cursor-not-allowed disabled:opacity-45 ${
+                isBackgroundBlurActive
+                  ? "bg-[#F95F4A] text-white"
+                  : "text-white"
+              }`}
+            >
+              <Blend className="w-[18px] h-[18px]" />
+            </button>
+            <button
+              onClick={openEffectsPanel}
+              disabled={isCameraPermissionBlocked}
+              aria-label={
+                isCameraPermissionBlocked
+                  ? "Backgrounds and effects: Permission needed"
+                  : "Backgrounds and effects"
+              }
+              aria-pressed={
+                !isCameraPermissionBlocked &&
+                (activeVideoEffectsCount > 0 || isEffectsOpen)
+              }
+              title={
+                isCameraPermissionBlocked
+                  ? "Permission needed"
+                  : "Backgrounds and effects"
+              }
+              className={`relative w-9 h-9 rounded-full flex items-center justify-center transition-colors disabled:cursor-not-allowed disabled:opacity-45 ${
+                !isCameraPermissionBlocked &&
+                (activeVideoEffectsCount > 0 || isEffectsOpen)
+                  ? "bg-[#F95F4A] text-white"
+                  : "text-white"
+              }`}
+            >
+              <WandSparkles className="w-[18px] h-[18px]" />
+              {!isCameraPermissionBlocked && activeVideoEffectsCount > 0 ? (
+                <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-white px-1 text-[10px] font-semibold text-[#F95F4A]">
+                  {activeVideoEffectsCount}
+                </span>
+              ) : null}
+            </button>
           </div>
 
-          {/* User email */}
           <div className="absolute top-4 left-4 right-4 flex items-start justify-between gap-3">
             <div
-              className="min-w-0 max-w-[65%] h-8 px-3 flex items-center mobile-glass mobile-pill text-xs text-[#FEFCD9]/80 truncate"
+              className="min-w-0 max-w-[65%] h-8 px-3 flex items-center mobile-glass mobile-pill text-xs text-[#fafafa]/80 truncate"
               style={{ fontFamily: "'PolySans Trial', sans-serif" }}
             >
-              {userEmail}
+              {previewName}
             </div>
             <div className="flex items-center gap-2">
               {isSignedInUser && (
@@ -759,7 +881,7 @@ function MobileJoinScreen({
                 <button
                   onClick={handleSignOut}
                   disabled={isSigningOut}
-                  className="shrink-0 h-8 px-3 flex items-center mobile-glass mobile-pill text-xs text-[#FEFCD9]/80 disabled:opacity-50"
+                  className="shrink-0 h-8 px-3 flex items-center mobile-glass mobile-pill text-xs text-[#fafafa]/80 disabled:opacity-50"
                   style={{ fontFamily: "'PolySans Trial', sans-serif" }}
                 >
                   {isSigningOut ? "Signing out..." : "Sign out"}
@@ -768,31 +890,21 @@ function MobileJoinScreen({
             </div>
           </div>
 
-          {showPermissionHint && (
-            <div className="absolute top-4 right-4 flex items-center gap-2 px-3 py-2 mobile-glass-soft rounded-full text-xs text-[#FEFCD9]/70">
-              <AlertCircle className="w-3.5 h-3.5 text-[#F95F4A]" />
-              Allow access
-            </div>
-          )}
         </div>
       </div>
 
       <div className="absolute bottom-0 left-0 right-0 z-10 px-4 pb-[calc(12px+env(safe-area-inset-bottom))]">
         <div className="flex flex-col gap-3">
-          <AndroidUpsellSheet
-            isOpen={showAndroidUpsell}
-            onClose={dismissAndroidUpsell}
-          />
           <div className="flex mobile-glass mobile-pill p-1">
             <button
               onClick={() => {
                 setActiveTab("new");
                 onIsAdminChange(true);
               }}
-              className={`flex-1 py-2.5 text-xs uppercase tracking-[0.25em] rounded-full transition-all ${
+              className={`flex-1 rounded-full py-2.5 text-sm font-medium transition-colors ${
                 activeTab === "new"
                   ? "bg-[#F95F4A] text-white"
-                  : "text-[#FEFCD9]/50"
+                  : "text-[#fafafa]/66"
               }`}
               style={{ fontFamily: "'PolySans Trial', sans-serif" }}
               disabled={isRoutedRoom}
@@ -805,10 +917,10 @@ function MobileJoinScreen({
                 setActiveTab("join");
                 onIsAdminChange(false);
               }}
-              className={`flex-1 py-2.5 text-xs uppercase tracking-[0.25em] rounded-full transition-all ${
+              className={`flex-1 rounded-full py-2.5 text-sm font-medium transition-colors ${
                 activeTab === "join"
                   ? "bg-[#F95F4A] text-white"
-                  : "text-[#FEFCD9]/50"
+                  : "text-[#fafafa]/66"
               } ${isRoutedRoom ? "opacity-60" : ""}`}
               style={{ fontFamily: "'PolySans Trial', sans-serif" }}
             >
@@ -822,7 +934,7 @@ function MobileJoinScreen({
                 <div className="relative flex-1 h-full">
                   {suggestionSuffix && (
                     <div
-                      className="pointer-events-none absolute inset-0 px-2 flex items-center text-sm text-[#FEFCD9]/30 truncate"
+                      className="pointer-events-none absolute inset-0 px-2 flex items-center text-sm text-[#fafafa]/30 truncate"
                       style={{ fontFamily: "'PolySans Trial', sans-serif" }}
                     >
                       <span className="text-transparent">{normalizedRoomId}</span>
@@ -846,7 +958,7 @@ function MobileJoinScreen({
                     autoCapitalize="none"
                     autoCorrect="off"
                     spellCheck={false}
-                    className="relative w-full h-full bg-transparent px-2 text-sm text-[#FEFCD9] placeholder:text-[#FEFCD9]/30 focus:outline-none"
+                    className="relative w-full h-full bg-transparent px-2 text-sm text-[#fafafa] placeholder:text-[#fafafa]/30 focus:outline-none"
                     style={{ fontFamily: "'PolySans Trial', sans-serif" }}
                     onKeyDown={(e) => {
                       if (e.key === "Enter" && canJoin) handleJoin();
@@ -886,13 +998,13 @@ function MobileJoinScreen({
                   onChange={(e) =>
                     setCustomRoomCode(sanitizeRoomCodeInput(e.target.value))
                   }
-                  placeholder="custom code or leave blank"
+                  placeholder="Custom code (optional)"
                   maxLength={ROOM_CODE_MAX_LENGTH}
                   disabled={isLoading}
                   autoCapitalize="none"
                   autoCorrect="off"
                   spellCheck={false}
-                  className="relative flex-1 h-full bg-transparent px-2 text-sm text-[#FEFCD9] placeholder:text-[#FEFCD9]/30 focus:outline-none"
+                  className="relative flex-1 h-full bg-transparent px-2 text-sm text-[#fafafa] placeholder:text-[#fafafa]/30 focus:outline-none"
                   style={{ fontFamily: "'PolySans Trial', sans-serif" }}
                   onKeyDown={(e) => {
                     if (e.key === "Enter" && !isLoading) handleCreateRoom();
@@ -919,81 +1031,14 @@ function MobileJoinScreen({
             )}
           </div>
 
-          {isSignedInUser && activeTab === "new" && !isRoutedRoom && (
-            <button
-              type="button"
-              onClick={() => setIsScheduleOpen(true)}
-              disabled={isLoading}
-              className="mt-3 w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-full border border-[#FEFCD9]/15 text-[#FEFCD9]/85 hover:border-[#FEFCD9]/35 hover:text-[#FEFCD9] transition-colors disabled:opacity-50"
-            >
-              <CalendarClock className="w-4 h-4" />
-              <span
-                className="text-sm font-medium"
-                style={{ fontFamily: "'PolySans Trial', sans-serif" }}
-              >
-                Schedule a meeting
-              </span>
-            </button>
-          )}
-
-          {isSignedInUser &&
-            activeTab === "new" &&
-            !isRoutedRoom &&
-            upcomingMeetings.length > 0 && (
-              <div className="mt-3 space-y-1.5">
-                <p
-                  className="text-[10px] uppercase tracking-wider text-[#FEFCD9]/40"
-                  style={{ fontFamily: "'PolySans Mono', monospace" }}
-                >
-                  Upcoming
-                </p>
-                {upcomingMeetings.slice(0, 3).map((meeting) => {
-                  const start = new Date(meeting.scheduledStartAt);
-                  const isToday =
-                    start.toDateString() === new Date().toDateString();
-                  const timeLabel = isToday
-                    ? start.toLocaleTimeString(undefined, {
-                        hour: "numeric",
-                        minute: "2-digit",
-                      })
-                    : start.toLocaleString(undefined, {
-                        month: "short",
-                        day: "numeric",
-                        hour: "numeric",
-                        minute: "2-digit",
-                      });
-                  return (
-                    <div
-                      key={meeting.id}
-                      className="flex items-center gap-2 rounded-lg border border-[#FEFCD9]/10 bg-black/25 px-3 py-2"
-                    >
-                      <div className="min-w-0 flex-1">
-                        <p className="text-xs text-[#FEFCD9]/85 truncate">
-                          {meeting.title}
-                        </p>
-                        <p className="text-[10px] text-[#FEFCD9]/45">
-                          {timeLabel} · /{meeting.roomCode}
-                        </p>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => void handleCopyMeetingLink(meeting)}
-                        className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[10px] text-[#FEFCD9]/55 hover:bg-[#FEFCD9]/10 hover:text-[#FEFCD9] transition-colors"
-                      >
-                        <Copy className="h-3 w-3" />
-                        {copiedMeetingId === meeting.id ? "copied" : "copy"}
-                      </button>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
+          <ScheduledMeetingsPanel isSignedIn={isSignedInUser} />
 
         {meetError && onDismissMeetError && (
           <div className="mt-4">
             <MeetsErrorBanner
               meetError={meetError}
               onDismiss={onDismissMeetError}
+              variant="inline"
               primaryActionLabel={
                 meetError.code === "PERMISSION_DENIED"
                   ? "Retry Permissions"
@@ -1013,24 +1058,39 @@ function MobileJoinScreen({
         </div>
       </div>
 
+      <AndroidUpsellSheet
+        isOpen={showAndroidUpsell}
+        onClose={dismissAndroidUpsell}
+      />
+
       {isLoading && (
-        <div className="absolute inset-0 bg-[#0d0e0d]/80 flex items-center justify-center z-50">
+        <div className="absolute inset-0 bg-[#131316]/80 flex items-center justify-center z-50">
           <div className="flex flex-col items-center gap-3">
             <Loader2 className="w-8 h-8 text-[#F95F4A] animate-spin" />
-            <span className="text-sm text-[#FEFCD9]/60">
+            <span className="text-sm text-[#fafafa]/75">
               {connectionState === "reconnecting" ? "Reconnecting..." : "Joining..."}
             </span>
           </div>
         </div>
       )}
 
-      <ScheduleMeetingModal
-        open={isScheduleOpen}
-        onClose={() => setIsScheduleOpen(false)}
-        onScheduled={(meeting) => {
-          setUpcomingMeetings((prev) => [meeting, ...prev]);
-        }}
-      />
+      {isEffectsOpen && (
+        <VideoEffectsPanel
+          variant="dialog"
+          effects={videoEffects}
+          onEffectsChange={onVideoEffectsChange}
+          localStream={previewStream}
+          isCameraOff={!isCameraOn}
+          status={videoEffectsStatus}
+          error={videoEffectsError}
+          debugStats={videoEffectsDebugStats}
+          activeCount={activeVideoEffectsCount}
+          cameraPermissionBlocked={isCameraPermissionBlocked}
+          showFilters={!isCameraPermissionBlocked}
+          onToggleCamera={toggleCamera}
+          onClose={() => setIsEffectsOpen(false)}
+        />
+      )}
     </div>
   );
 }

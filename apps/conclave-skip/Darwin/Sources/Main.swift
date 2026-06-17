@@ -4,7 +4,6 @@ import Conclave
 private typealias AppRootView = ConclaveRootView
 private typealias AppDelegate = ConclaveAppDelegate
 
-/// The entry point to the app simply loads the App implementation from SPM module.
 @main struct AppMain: App {
     @AppDelegateAdaptor(AppMainDelegate.self) var appDelegate
     @Environment(\.scenePhase) private var scenePhase
@@ -22,7 +21,9 @@ private typealias AppDelegate = ConclaveAppDelegate
             case .background:
                 AppDelegate.shared.onStop()
             @unknown default:
+                #if DEBUG
                 print("unknown app phase: \(newPhase)")
+                #endif
             }
         }
     }
@@ -50,6 +51,10 @@ typealias AppType = NSApplication
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey : Any]? = nil) -> Bool {
         AppDelegate.shared.onLaunch()
         return true
+    }
+
+    func application(_ application: UIApplication, open url: URL, options: [UIApplication.OpenURLOptionsKey : Any] = [:]) -> Bool {
+        AppDelegate.shared.onOpenURL(url)
     }
 
     func applicationWillTerminate(_ application: UIApplication) {

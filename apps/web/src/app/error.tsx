@@ -2,7 +2,7 @@
 
 import { useEffect } from "react";
 
-export default function GlobalError({
+export default function Error({
   error,
   reset,
 }: {
@@ -10,49 +10,41 @@ export default function GlobalError({
   reset: () => void;
 }) {
   useEffect(() => {
-    console.error("[GlobalError]", error);
+    console.error("[Error]", error);
   }, [error]);
 
   return (
-    <div className="min-h-dvh bg-[#0d0e0d] text-white flex items-center justify-center px-6 relative overflow-hidden">
-      <div className="absolute inset-0 acm-bg-dot-grid pointer-events-none" />
-      <div className="relative z-10 max-w-md w-full bg-[#1a1a1a]/90 border border-[#FEFCD9]/10 rounded-2xl p-6 shadow-2xl text-center">
-        <div
-          className="text-[11px] uppercase tracking-[0.3em] text-[#FEFCD9]/40"
-          style={{ fontFamily: "'PolySans Mono', monospace" }}
-        >
-          Something broke
-        </div>
+    <main className="flex min-h-dvh items-center justify-center bg-[#0a0a0b] px-4 py-10 text-[#fafafa]">
+      <section className="animate-fade-in w-full max-w-[420px] rounded-2xl border border-white/10 bg-[#0e0e10] p-6 sm:p-8 text-center">
+        <p className="text-[11.5px] font-semibold uppercase tracking-[0.07em] text-[#fafafa]/40">
+          Something went wrong
+        </p>
         <h1
-          className="mt-4 text-2xl text-[#FEFCD9] tracking-tight"
+          className="mt-3 text-[22px] leading-tight text-[#fafafa]"
           style={{ fontFamily: "'PolySans Bulky Wide', sans-serif" }}
         >
           We hit a snag
         </h1>
-        <p
-          className="mt-3 text-sm text-[#FEFCD9]/60"
-          style={{ fontFamily: "'PolySans Trial', sans-serif" }}
-        >
+        <p className="mt-2 text-[13.5px] leading-snug text-[#fafafa]/55">
           Please try again. If this keeps happening, refresh the page or rejoin
           the room.
         </p>
-        <div className="mt-6 flex items-center justify-center gap-3">
+        <div className="mt-6 flex flex-col gap-2.5 sm:flex-row sm:justify-center">
           <button
+            type="button"
             onClick={reset}
-            className="px-4 py-2 rounded-lg bg-[#F95F4A] text-white text-sm font-medium hover:bg-[#e8553f] transition-colors"
-            style={{ fontFamily: "'PolySans Trial', sans-serif" }}
+            className="inline-flex h-12 flex-1 items-center justify-center rounded-xl bg-[#F95F4A] px-5 text-[15px] font-medium text-white transition-[filter] duration-150 hover:brightness-[1.05] sm:flex-none sm:min-w-[120px]"
           >
-            Try Again
+            Try again
           </button>
           <a
             href="/"
-            className="px-4 py-2 rounded-lg bg-white/10 text-[#FEFCD9] text-sm font-medium hover:bg-white/20 transition-colors"
-            style={{ fontFamily: "'PolySans Trial', sans-serif" }}
+            className="inline-flex h-12 flex-1 items-center justify-center rounded-xl border border-white/10 bg-white/[0.04] px-5 text-[15px] font-medium text-[#fafafa] transition-colors duration-150 hover:bg-white/[0.08] sm:flex-none sm:min-w-[120px]"
           >
-            Go Home
+            Go home
           </a>
         </div>
-      </div>
-    </div>
+      </section>
+    </main>
   );
 }

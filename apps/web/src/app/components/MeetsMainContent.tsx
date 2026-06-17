@@ -1,7 +1,5 @@
 "use client";
 
-import { RefreshCw, UserX } from "lucide-react";
-import Image from "next/image";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Dispatch, PointerEvent, SetStateAction } from "react";
 import type { Socket } from "socket.io-client";
@@ -13,7 +11,8 @@ import GridLayout from "./GridLayout";
 import ConnectionBanner from "./ConnectionBanner";
 import JoinScreen from "./JoinScreen";
 import ParticipantsPanel from "./ParticipantsPanel";
-import PresentationLayout from "./PresentationLayout";
+import MeetSettingsPanel from "./MeetSettingsPanel";
+import MeetViewPanel from "./MeetViewPanel";
 import ReactionOverlay from "./ReactionOverlay";
 import BrowserLayout from "./BrowserLayout";
 import DevPlaygroundLayout from "./DevPlaygroundLayout";
@@ -22,9 +21,16 @@ import ScreenShareAudioPlayers from "./ScreenShareAudioPlayers";
 import SystemAudioPlayers from "./SystemAudioPlayers";
 import WhiteboardLayout from "./WhiteboardLayout";
 import ParticipantVideo from "./ParticipantVideo";
-import RecordingIndicator from "./RecordingIndicator";
+import MeetingIdentity from "./MeetingIdentity";
+import ToastQueue from "./ToastQueue";
 import type { BrowserState } from "../hooks/useSharedBrowser";
-
+import type { ConnectionQuality } from "../hooks/useConnectionQuality";
+import VideoEffectsPanel from "./VideoEffectsPanel";
+import {
+  prewarmVideoEffectsAssets,
+  type VideoEffectsDebugStats,
+  type VideoEffectsRuntimeStatus,
+} from "../hooks/useVideoEffects";
 import type {
   ChatMessage,
   ConnectionState,
@@ -37,6 +43,7 @@ import type {
   WebinarConfigSnapshot,
   WebinarLinkResponse,
   WebinarUpdateRequest,
+  PrejoinMediaHandoff,
 } from "../lib/types";
 import {
   formatDisplayName,
@@ -44,7 +51,16 @@ import {
   isSystemUserId,
 } from "../lib/utils";
 import { useApps } from "@conclave/apps-sdk";
+import { useCameraPermissionState } from "../hooks/useCameraPermissionState";
 import { useStableSpeakerId } from "../hooks/useStableSpeakerId";
+import {
+  type VideoEffectsState,
+} from "../lib/video-effects";
+import {
+  DEFAULT_MEET_VIEW_SETTINGS,
+  normalizeMeetViewSettings,
+  type MeetViewSettings,
+} from "../lib/meet-view";
 
 interface MeetsMainContentProps {
   isJoined: boolean;
@@ -76,11 +92,27 @@ interface MeetsMainContentProps {
   presentationStream: MediaStream | null;
   presenterName: string;
   localStream: MediaStream | null;
+  videoEffects: VideoEffectsState;
+  onVideoEffectsChange: Dispatch<SetStateAction<VideoEffectsState>>;
+  onVideoEffectsRecenter?: () => void;
+  videoEffectsStatus: VideoEffectsRuntimeStatus;
+  videoEffectsError: string | null;
+  videoEffectsDebugStats?: VideoEffectsDebugStats | null;
+  activeVideoEffectsCount: number;
+  onDevCameraStreamChange?: (stream: MediaStream | null) => void;
+  onPrejoinMediaCommit?: (handoff: PrejoinMediaHandoff) => void;
   isCameraOff: boolean;
   isMuted: boolean;
   isHandRaised: boolean;
   participants: Map<string, Participant>;
   isMirrorCamera: boolean;
+  onToggleMirror?: () => void;
+  selectedAudioInputDeviceId?: string;
+  selectedAudioOutputDeviceId?: string;
+  selectedVideoInputDeviceId?: string;
+  onAudioInputDeviceChange?: (deviceId: string) => void;
+  onAudioOutputDeviceChange?: (deviceId: string) => void;
+  onVideoInputDeviceChange?: (deviceId: string) => void;
   activeSpeakerId: string | null;
   currentUserId: string;
   audioOutputDeviceId?: string;
@@ -168,21 +200,31 @@ interface MeetsMainContentProps {
   ) => Promise<WebinarConfigSnapshot | null>;
   onGenerateWebinarLink?: () => Promise<WebinarLinkResponse | null>;
   onRotateWebinarLink?: () => Promise<WebinarLinkResponse | null>;
-  recordingActive?: boolean;
-  recordingPaused?: boolean;
-  recordingBusy?: boolean;
-  recordingStartedAt?: number | null;
-  recordingTrackCount?: number;
-  recordingAvailable?: boolean;
-  onStartRecording?: () => void;
-  onStopRecording?: () => void;
-  onPauseRecording?: () => void;
-  onResumeRecording?: () => void;
-  /** Recorder-bot view: strip every UI chrome so the rendered tab is
-   * publishable as-is (no controls, header, chat, reactions, recording
-   * indicator). The participant video grid is the only thing left. */
-  broadcastMode?: boolean;
+  selfConnectionQuality?: ConnectionQuality;
 }
+
+const MEET_VIEW_STORAGE_KEY = "conclave:meet-view";
+
+const readStoredMeetViewSettings = (): MeetViewSettings => {
+  if (typeof window === "undefined") return DEFAULT_MEET_VIEW_SETTINGS;
+  try {
+    const storedValue = window.localStorage.getItem(MEET_VIEW_STORAGE_KEY);
+    if (!storedValue) return DEFAULT_MEET_VIEW_SETTINGS;
+    return normalizeMeetViewSettings(JSON.parse(storedValue));
+  } catch {
+    return DEFAULT_MEET_VIEW_SETTINGS;
+  }
+};
+
+const writeStoredMeetViewSettings = (settings: MeetViewSettings) => {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(
+      MEET_VIEW_STORAGE_KEY,
+      JSON.stringify(normalizeMeetViewSettings(settings)),
+    );
+  } catch {}
+};
 
 const getLiveVideoStream = (stream: MediaStream | null): MediaStream | null => {
   if (!stream) return null;
@@ -191,11 +233,6 @@ const getLiveVideoStream = (stream: MediaStream | null): MediaStream | null => {
     return null;
   }
   return stream;
-};
-
-const getVideoTrackId = (stream: MediaStream | null): string => {
-  const [track] = stream?.getVideoTracks() ?? [];
-  return track?.id ?? "none";
 };
 
 const normalizeMentionToken = (value: string): string =>
@@ -230,6 +267,7 @@ const clamp = (value: number, min: number, max: number) =>
 
 const WEBINAR_SPEAKER_PROMOTE_DELAY_MS = 450;
 const WEBINAR_SPEAKER_MIN_SWITCH_INTERVAL_MS = 1800;
+const DOCKED_PANEL_WIDTH = 360;
 
 const getPipCornerClass = (corner: PipCorner): string => {
   switch (corner) {
@@ -271,11 +309,27 @@ export default function MeetsMainContent({
   presentationStream,
   presenterName,
   localStream,
+  videoEffects,
+  onVideoEffectsChange,
+  onVideoEffectsRecenter,
+  videoEffectsStatus,
+  videoEffectsError,
+  videoEffectsDebugStats = null,
+  activeVideoEffectsCount,
+  onDevCameraStreamChange,
+  onPrejoinMediaCommit,
   isCameraOff,
   isMuted,
   isHandRaised,
   participants,
   isMirrorCamera,
+  onToggleMirror,
+  selectedAudioInputDeviceId,
+  selectedAudioOutputDeviceId,
+  selectedVideoInputDeviceId,
+  onAudioInputDeviceChange,
+  onAudioOutputDeviceChange,
+  onVideoInputDeviceChange,
   activeSpeakerId,
   currentUserId,
   audioOutputDeviceId,
@@ -357,17 +411,7 @@ export default function MeetsMainContent({
   onUpdateWebinarConfig,
   onGenerateWebinarLink,
   onRotateWebinarLink,
-  recordingActive = false,
-  recordingPaused = false,
-  recordingBusy = false,
-  recordingStartedAt = null,
-  recordingTrackCount = 0,
-  recordingAvailable = true,
-  onStartRecording,
-  onStopRecording,
-  onPauseRecording,
-  onResumeRecording,
-  broadcastMode = false,
+  selfConnectionQuality = "unknown",
 }: MeetsMainContentProps) {
   const {
     state: appsState,
@@ -406,9 +450,11 @@ export default function MeetsMainContent({
   const nonSystemParticipants = useMemo(
     () =>
       participantsArray.filter(
-        (participant) => !isSystemUserId(participant.userId),
+        (participant) =>
+          participant.userId !== currentUserId &&
+          !isSystemUserId(participant.userId),
       ),
-    [participantsArray],
+    [currentUserId, participantsArray],
   );
   const webinarParticipantIds = useMemo(
     () => nonSystemParticipants.map((participant) => participant.userId),
@@ -430,6 +476,55 @@ export default function MeetsMainContent({
   } | null>(null);
   const [webinarAudioBlocked, setWebinarAudioBlocked] = useState(false);
   const [webinarAudioPlaybackAttempt, setWebinarAudioPlaybackAttempt] = useState(0);
+  // Right-docked panels are owned here so the stage reserve stays in sync.
+  const [isHostControlsOpen, setIsHostControlsOpen] = useState(false);
+  const [isVideoEffectsOpen, setIsVideoEffectsOpen] = useState(false);
+  const [isViewPanelOpen, setIsViewPanelOpen] = useState(false);
+  const [viewSettings, setViewSettings] = useState<MeetViewSettings>(
+    readStoredMeetViewSettings,
+  );
+  useEffect(() => {
+    writeStoredMeetViewSettings(viewSettings);
+  }, [viewSettings]);
+  const [devPresentationStream, setDevPresentationStream] =
+    useState<MediaStream | null>(null);
+  const [devCameraStream, setDevCameraStream] =
+    useState<MediaStream | null>(null);
+  const cameraPermissionState = useCameraPermissionState();
+  const hasLiveLocalCamera = Boolean(getLiveVideoStream(localStream));
+  const hasLiveDevCamera = Boolean(getLiveVideoStream(devCameraStream));
+  const isCameraPermissionBlocked =
+    meetError?.code === "PERMISSION_DENIED" ||
+    (!hasLiveLocalCamera &&
+      !hasLiveDevCamera &&
+      (cameraPermissionState === "prompt" ||
+        cameraPermissionState === "denied"));
+  const effectivePresentationStream =
+    presentationStream ?? devPresentationStream;
+  const effectivePresenterName = presentationStream
+    ? presenterName
+    : devPresentationStream
+      ? "Dev presentation"
+      : presenterName;
+  const shouldUseDevCameraStream =
+    Boolean(devCameraStream) && !getLiveVideoStream(localStream);
+  const effectiveLocalStream = shouldUseDevCameraStream
+    ? devCameraStream
+    : localStream;
+  const hasRenderedLocalVideo = Boolean(getLiveVideoStream(effectiveLocalStream));
+  const effectiveIsCameraOff =
+    shouldUseDevCameraStream && hasLiveDevCamera ? false : isCameraOff;
+  const effectiveActiveSpeakerId =
+    shouldUseDevCameraStream && hasLiveDevCamera
+      ? currentUserId
+      : activeSpeakerId;
+  const handleDevCameraStreamChange = useCallback(
+    (stream: MediaStream | null) => {
+      setDevCameraStream(stream);
+      onDevCameraStreamChange?.(stream);
+    },
+    [onDevCameraStreamChange],
+  );
 
   const webinarStage = useMemo(() => {
     if (!nonSystemParticipants.length) {
@@ -680,29 +775,143 @@ export default function MeetsMainContent({
         .sort((left, right) => left.displayName.localeCompare(right.displayName)),
     [nonSystemParticipants, currentUserId, resolveDisplayName],
   );
-  const handleToggleParticipants = useCallback(
-    () =>
-      setIsParticipantsOpen((prev) => {
-        const next = !prev;
-        if (next && isChatOpen) {
-          toggleChat();
-        }
-        return next;
-      }),
-    [isChatOpen, setIsParticipantsOpen, toggleChat],
-  );
-
-  const handleOpenParticipants = useCallback(() => {
-    if (isChatOpen) {
+  const handleToggleParticipants = useCallback(() => {
+    const opening = !isParticipantsOpen;
+    // Fire the chat side effect outside the state updater so StrictMode's
+    // double-invoke doesn't toggle chat twice and leave panels open.
+    if (opening && isChatOpen) {
       toggleChat();
     }
+    if (opening) {
+      setIsHostControlsOpen(false);
+      setIsVideoEffectsOpen(false);
+      setIsViewPanelOpen(false);
+    }
+    setIsParticipantsOpen(opening);
+  }, [isParticipantsOpen, isChatOpen, setIsParticipantsOpen, toggleChat]);
+
+  const isChatOpenRef = useRef(isChatOpen);
+  useEffect(() => {
+    isChatOpenRef.current = isChatOpen;
+  }, [isChatOpen]);
+
+  const handleOpenParticipants = useCallback(() => {
+    if (isChatOpenRef.current) {
+      toggleChat();
+    }
+    setIsHostControlsOpen(false);
+    setIsVideoEffectsOpen(false);
+    setIsViewPanelOpen(false);
     setIsParticipantsOpen(true);
-  }, [isChatOpen, toggleChat, setIsParticipantsOpen]);
+  }, [toggleChat, setIsParticipantsOpen]);
 
   const handleCloseParticipants = useCallback(
     () => setIsParticipantsOpen(false),
     [setIsParticipantsOpen],
   );
+
+  const handleToggleHostControls = useCallback(() => {
+    const opening = !isHostControlsOpen;
+    // One right-dock panel at a time. Fire the side effects OUTSIDE the setState
+    // updater so StrictMode's double-invoke doesn't toggle chat twice and leave
+    // both panels docked (mirrors handleToggleParticipants).
+    if (opening && isChatOpenRef.current) {
+      toggleChat();
+    }
+    if (opening) {
+      setIsParticipantsOpen(false);
+      setIsVideoEffectsOpen(false);
+      setIsViewPanelOpen(false);
+    }
+    setIsHostControlsOpen(opening);
+  }, [isHostControlsOpen, toggleChat, setIsParticipantsOpen]);
+
+  const handleCloseHostControls = useCallback(
+    () => setIsHostControlsOpen(false),
+    [],
+  );
+
+  const prewarmEffectsPanelOpen = useCallback(() => {
+    void prewarmVideoEffectsAssets({
+      segmentation: true,
+      face: true,
+      faceFilter:
+        videoEffects.filter !== "none" ? videoEffects.filter : undefined,
+      reason: "effects-panel-open",
+    });
+  }, [videoEffects.filter]);
+
+  const handleToggleVideoEffects = useCallback(() => {
+    if (isCameraPermissionBlocked) return;
+    const opening = !isVideoEffectsOpen;
+    if (opening) {
+      prewarmEffectsPanelOpen();
+    }
+    if (opening && isChatOpenRef.current) {
+      toggleChat();
+    }
+    if (opening) {
+      setIsParticipantsOpen(false);
+      setIsHostControlsOpen(false);
+      setIsViewPanelOpen(false);
+    }
+    setIsVideoEffectsOpen(opening);
+  }, [
+    isCameraPermissionBlocked,
+    isVideoEffectsOpen,
+    prewarmEffectsPanelOpen,
+    setIsParticipantsOpen,
+    toggleChat,
+  ]);
+
+  const handleCloseVideoEffects = useCallback(
+    () => setIsVideoEffectsOpen(false),
+    [],
+  );
+  const handleOpenVideoEffects = useCallback(() => {
+    if (isCameraPermissionBlocked) return;
+    prewarmEffectsPanelOpen();
+    if (isChatOpenRef.current) {
+      toggleChat();
+    }
+    setIsParticipantsOpen(false);
+    setIsHostControlsOpen(false);
+    setIsViewPanelOpen(false);
+    setIsVideoEffectsOpen(true);
+  }, [
+    isCameraPermissionBlocked,
+    prewarmEffectsPanelOpen,
+    setIsParticipantsOpen,
+    toggleChat,
+  ]);
+
+  const handleToggleViewPanel = useCallback(() => {
+    const opening = !isViewPanelOpen;
+    if (opening && isChatOpenRef.current) {
+      toggleChat();
+    }
+    if (opening) {
+      setIsParticipantsOpen(false);
+      setIsHostControlsOpen(false);
+      setIsVideoEffectsOpen(false);
+    }
+    setIsViewPanelOpen(opening);
+  }, [isViewPanelOpen, setIsParticipantsOpen, toggleChat]);
+
+  const handleCloseViewPanel = useCallback(() => {
+    setIsViewPanelOpen(false);
+  }, []);
+
+  const handleToggleVideoFraming = useCallback(() => {
+    void prewarmVideoEffectsAssets({
+      face: true,
+      reason: "meeting-framing-toggle:select",
+    });
+    onVideoEffectsChange((current) => ({
+      ...current,
+      framing: !current.framing,
+    }));
+  }, [onVideoEffectsChange]);
   useEffect(() => {
     if (!isChatOpen || chatOverlayMessages.length === 0) return;
     setChatOverlayMessages([]);
@@ -742,8 +951,13 @@ export default function MeetsMainContent({
     );
   }, [socket, isDmEnabled]);
   const handleToggleChat = useCallback(() => {
-    if (!isChatOpen && isParticipantsOpen) {
-      setIsParticipantsOpen(false);
+    if (!isChatOpen) {
+      if (isParticipantsOpen) {
+        setIsParticipantsOpen(false);
+      }
+      setIsHostControlsOpen(false);
+      setIsVideoEffectsOpen(false);
+      setIsViewPanelOpen(false);
     }
     toggleChat();
   }, [isChatOpen, isParticipantsOpen, setIsParticipantsOpen, toggleChat]);
@@ -776,10 +990,26 @@ export default function MeetsMainContent({
     );
     return videoParticipant?.screenShareStream ?? null;
   }, [participantsArray]);
+  const dockedPanelReserve =
+    isJoined &&
+    !isWebinarAttendee &&
+    (isChatOpen ||
+      isParticipantsOpen ||
+      isHostControlsOpen ||
+      isVideoEffectsOpen ||
+      isViewPanelOpen)
+      ? DOCKED_PANEL_WIDTH
+      : 0;
+  const mainContentStyle = isJoined
+    ? { paddingRight: `calc(1rem + ${dockedPanelReserve}px)` }
+    : undefined;
+
   return (
     <div
-      className={`flex-1 flex flex-col overflow-hidden relative ${broadcastMode ? "p-0 bg-[#060606]" : isJoined ? "p-4" : "p-0"}`}
-      data-broadcast={broadcastMode ? "1" : undefined}
+      className={`flex-1 flex flex-col overflow-hidden relative ${
+        isJoined ? "p-4" : "p-0"
+      }`}
+      style={mainContentStyle}
     >
       {isJoined && (!isWebinarAttendee || serverRestartNotice) && (
         <ConnectionBanner
@@ -796,6 +1026,7 @@ export default function MeetsMainContent({
       />
       <ScreenShareAudioPlayers
         participants={participants}
+        currentUserId={currentUserId}
         audioOutputDeviceId={audioOutputDeviceId}
         onAutoplayBlocked={
           isWebinarAttendee ? handleWebinarAudioAutoplayBlocked : undefined
@@ -807,21 +1038,27 @@ export default function MeetsMainContent({
           isWebinarAttendee ? webinarAudioPlaybackAttempt : undefined
         }
       />
-      {!broadcastMode && isJoined && reactions.length > 0 && (
+      {isJoined && reactions.length > 0 && (
         <ReactionOverlay
           reactions={reactions}
           getDisplayName={resolveDisplayName}
         />
       )}
-      {!broadcastMode && (
-        <RecordingIndicator
-          active={recordingActive}
-          paused={recordingPaused}
-          startedAt={recordingStartedAt}
+      {isJoined && !isWebinarAttendee && (
+        <MeetingIdentity
+          connectionState={connectionState}
+          serverRestartNotice={serverRestartNotice}
+          isScreenSharing={isScreenSharing}
+          isGhost={ghostEnabled}
+          connectionQuality={selfConnectionQuality}
         />
       )}
       {isDevToolsEnabled && isJoined && !isWebinarAttendee && (
-        <DevMeetToolsPanel roomId={roomId} />
+        <DevMeetToolsPanel
+          roomId={roomId}
+          onPresentationStreamChange={setDevPresentationStream}
+          onCameraStreamChange={handleDevCameraStreamChange}
+        />
       )}
       {!isJoined ? (
         hideJoinUI ? (
@@ -838,100 +1075,47 @@ export default function MeetsMainContent({
                   ? "getting you in"
                   : "almost there";
             return (
-              <div
-                className="relative -m-4 flex flex-1 overflow-hidden bg-[#060606]"
-                style={{ fontFamily: "'PolySans Trial', sans-serif" }}
-              >
-                <div className="absolute inset-0 acm-bg-dot-grid pointer-events-none" />
-                <div className="absolute inset-0 acm-bg-radial pointer-events-none" />
-                <header className="absolute top-0 left-0 right-0 z-10 flex items-center justify-between px-6 py-5 pointer-events-none">
-                  <a
-                    href="/"
-                    className="pointer-events-auto flex items-center"
-                    aria-label="ACM-VIT"
-                  >
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      src="/assets/acm_topleft.svg"
-                      alt="ACM-VIT"
-                      width={120}
-                      height={32}
+              <main className="flex min-h-dvh items-center justify-center bg-[#0a0a0b] px-4 py-10 text-[#fafafa]">
+                <section className="animate-fade-in w-full max-w-[420px] rounded-2xl border border-white/10 bg-[#0e0e10] p-6 sm:p-8 text-center">
+                  <div className="mx-auto mb-4 flex items-center justify-center gap-2">
+                    <span
+                      className={`h-2 w-2 rounded-full ${
+                        isFatal ? "bg-[#F95F4A]" : "bg-[#F95F4A] animate-pulse"
+                      }`}
                     />
-                  </a>
-                </header>
-                <main className="relative z-[5] flex flex-1 items-center justify-center px-6 py-24">
-                  <div className="flex w-full max-w-xl flex-col items-center text-center animate-fade-in">
-                    <div className="relative flex items-center gap-3">
-                      <span
-                        className={`block h-2 w-2 rounded-full ${
-                          isFatal
-                            ? "bg-[#F95F4A]"
-                            : "bg-[#F95F4A] animate-pulse"
-                        }`}
-                      />
-                      <span className="text-sm text-[#FEFCD9]/50">
-                        {isFatal
-                          ? "couldn't join the room"
-                          : isWaitingForHost
-                            ? "the room isn't open yet"
-                            : isLoading
-                              ? "connecting…"
-                              : "preparing…"}
-                      </span>
-                    </div>
-                    <h1
-                      className="mt-6 text-3xl md:text-5xl text-[#FEFCD9] tracking-tight"
-                      style={{
-                        fontFamily: "'PolySans Bulky Wide', sans-serif",
-                      }}
-                    >
-                      {headline}
-                    </h1>
-                    {isWaitingForHost ? (
-                      <p className="mt-5 max-w-md text-sm md:text-base text-[#FEFCD9]/60">
-                        Hang tight — this page will refresh on its own the
-                        moment the host opens the room.
-                      </p>
-                    ) : isFatal ? (
-                      <p className="mt-5 max-w-md text-sm md:text-base text-[#FEFCD9]/60">
-                        {errorMessage}
-                      </p>
-                    ) : (
-                      <p className="mt-5 max-w-md text-sm md:text-base text-[#FEFCD9]/60">
-                        Sit tight — getting your camera, mic and the room
-                        ready in a moment.
-                      </p>
-                    )}
-                    <div className="mt-16 flex flex-col items-center text-[#FEFCD9]/30">
-                      <div className="relative inline-block">
-                        <span
-                          className="absolute -left-5 top-1/2 -translate-y-1/2 text-[#F95F4A]/40 text-2xl md:text-3xl"
-                          style={{ fontFamily: "'PolySans Mono', monospace" }}
-                        >
-                          [
-                        </span>
-                        <span
-                          className="text-2xl md:text-3xl text-[#FEFCD9] tracking-tight"
-                          style={{
-                            fontFamily: "'PolySans Bulky Wide', sans-serif",
-                          }}
-                        >
-                          c0nclav3
-                        </span>
-                        <span
-                          className="absolute -right-5 top-1/2 -translate-y-1/2 text-[#F95F4A]/40 text-2xl md:text-3xl"
-                          style={{ fontFamily: "'PolySans Mono', monospace" }}
-                        >
-                          ]
-                        </span>
-                      </div>
-                      <p className="mt-3 text-xs text-[#FEFCD9]/30">
-                        video conferencing by ACM-VIT
-                      </p>
-                    </div>
+                    <span className="text-[11.5px] font-semibold uppercase tracking-[0.07em] text-[#fafafa]/40">
+                      {isFatal
+                        ? "Couldn't join the room"
+                        : isWaitingForHost
+                          ? "The room isn't open yet"
+                          : isLoading
+                            ? "Connecting"
+                            : "Preparing"}
+                    </span>
                   </div>
-                </main>
-              </div>
+                  <h1
+                    className="text-[22px] leading-tight text-[#fafafa]"
+                    style={{ fontFamily: "'PolySans Bulky Wide', sans-serif" }}
+                  >
+                    {headline}
+                  </h1>
+                  {isWaitingForHost ? (
+                    <p className="mt-2 text-[13.5px] leading-snug text-[#fafafa]/55">
+                      Hang tight. This page will refresh on its own the moment
+                      the host opens the room.
+                    </p>
+                  ) : isFatal ? (
+                    <p className="mt-2 text-[13.5px] leading-snug text-[#fafafa]/55">
+                      {errorMessage}
+                    </p>
+                  ) : (
+                    <p className="mt-2 text-[13.5px] leading-snug text-[#fafafa]/55">
+                      Sit tight. Getting your camera, mic, and the room ready in
+                      a moment.
+                    </p>
+                  )}
+                </section>
+              </main>
             );
           })()
         ) : (
@@ -961,6 +1145,9 @@ export default function MeetsMainContent({
             onDismissMeetError={onDismissMeetError}
             onRetryMedia={onRetryMedia}
             onTestSpeaker={onTestSpeaker}
+            videoEffects={videoEffects}
+            onVideoEffectsChange={onVideoEffectsChange}
+            onPrejoinMediaCommit={onPrejoinMediaCommit}
           />
         )
       ) : isWebinarAttendee ? (
@@ -968,9 +1155,7 @@ export default function MeetsMainContent({
           {webinarStage ? (
             <div ref={webinarStageRef} className="relative h-[72vh] w-full max-w-6xl">
               <ParticipantVideo
-                key={`${webinarStage.main.participant.userId}:${getVideoTrackId(
-                  webinarStage.main.participant.videoStream,
-                )}:${webinarStage.isScreenShare ? "screen" : "camera"}`}
+                key={webinarStage.main.participant.userId}
                 participant={webinarStage.main.participant}
                 displayName={webinarStage.main.displayName}
                 isActiveSpeaker={
@@ -984,7 +1169,7 @@ export default function MeetsMainContent({
               />
               {webinarStage.pip ? (
                 <div
-                  className={`absolute h-28 w-44 overflow-hidden rounded-xl border border-[#FEFCD9]/20 bg-black/75 shadow-[0_16px_36px_rgba(0,0,0,0.5)] sm:h-32 sm:w-56 ${pipDragPosition ? "" : pipCornerClass} cursor-grab active:cursor-grabbing touch-none select-none`}
+                  className={`absolute h-28 w-44 overflow-hidden rounded-xl border border-[#fafafa]/20 bg-black/75 shadow-[0_16px_36px_rgba(0,0,0,0.5)] sm:h-32 sm:w-56 ${pipDragPosition ? "" : pipCornerClass} cursor-grab active:cursor-grabbing touch-none select-none`}
                   style={
                     pipDragPosition
                       ? {
@@ -1001,9 +1186,7 @@ export default function MeetsMainContent({
                   onPointerCancel={handlePipPointerCancel}
                 >
                   <ParticipantVideo
-                    key={`${webinarStage.pip.participant.userId}:${getVideoTrackId(
-                      webinarStage.pip.participant.videoStream,
-                    )}:pip`}
+                    key={webinarStage.pip.participant.userId}
                     participant={webinarStage.pip.participant}
                     displayName={webinarStage.pip.displayName}
                     onAudioAutoplayBlocked={handleWebinarAudioAutoplayBlocked}
@@ -1015,28 +1198,28 @@ export default function MeetsMainContent({
             </div>
           ) : (
             <div className="rounded-xl border border-white/10 bg-black/40 px-6 py-4 text-center">
-              <p className="text-sm text-[#FEFCD9]">
+              <p className="text-sm text-[#fafafa]">
                 Waiting for the host to start speaking...
               </p>
             </div>
           )}
           {webinarAudioBlocked && (
             <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/65 p-4 backdrop-blur-sm">
-              <div className="w-full max-w-sm rounded-2xl border border-[#FEFCD9]/20 bg-[#0d0e0d]/95 p-6 text-center shadow-2xl">
+              <div className="w-full max-w-sm rounded-2xl border border-[#fafafa]/20 bg-[#131316]/95 p-6 text-center shadow-2xl">
                 <p
-                  className="text-sm uppercase tracking-[0.2em] text-[#FEFCD9]"
-                  style={{ fontFamily: "'PolySans Mono', monospace" }}
+                  className="text-sm uppercase tracking-[0.2em] text-[#fafafa]"
+                  style={{ fontFamily: "'PolySans Trial', sans-serif" }}
                 >
                   Webinar audio is blocked
                 </p>
-                <p className="mt-3 text-xs text-[#FEFCD9]/70">
+                <p className="mt-3 text-xs text-[#fafafa]/82">
                   Your browser needs a click before playback can start.
                 </p>
                 <button
                   type="button"
                   onClick={handlePlayWebinarAudio}
-                  className="mt-5 inline-flex items-center justify-center rounded-full border border-[#F95F4A]/60 bg-[#F95F4A]/15 px-5 py-2 text-xs uppercase tracking-[0.2em] text-[#FEFCD9] transition hover:bg-[#F95F4A]/25"
-                  style={{ fontFamily: "'PolySans Mono', monospace" }}
+                  className="mt-5 inline-flex items-center justify-center rounded-full border border-[#F95F4A]/60 bg-[#F95F4A]/15 px-5 py-2 text-xs uppercase tracking-[0.2em] text-[#fafafa] transition hover:bg-[#F95F4A]/25"
+                  style={{ fontFamily: "'PolySans Trial', sans-serif" }}
                 >
                   Play webinar
                 </button>
@@ -1098,101 +1281,70 @@ export default function MeetsMainContent({
           onNavigateBrowser={onNavigateBrowser}
           browserVideoStream={browserVideoStream}
         />
-      ) : presentationStream ? (
-        <PresentationLayout
-          presentationStream={presentationStream}
-          presenterName={presenterName}
-          localStream={localStream}
-          isCameraOff={isCameraOff}
-          isMuted={isMuted}
-          isHandRaised={isHandRaised}
-          isGhost={ghostEnabled}
-          participants={participants}
-          userEmail={userEmail}
-          isMirrorCamera={isMirrorCamera}
-          activeSpeakerId={activeSpeakerId}
-          currentUserId={currentUserId}
-          audioOutputDeviceId={audioOutputDeviceId}
-          getDisplayName={resolveDisplayName}
-        />
       ) : (
         <GridLayout
-          localStream={localStream}
-          isCameraOff={isCameraOff}
+          localStream={effectiveLocalStream}
+          isCameraOff={effectiveIsCameraOff}
           isMuted={isMuted}
           isHandRaised={isHandRaised}
           isGhost={ghostEnabled}
           participants={participants}
           userEmail={userEmail}
           isMirrorCamera={isMirrorCamera}
-          activeSpeakerId={activeSpeakerId}
+          activeSpeakerId={effectiveActiveSpeakerId}
           currentUserId={currentUserId}
           audioOutputDeviceId={audioOutputDeviceId}
           onOpenParticipantsPanel={handleOpenParticipants}
+          activeVideoEffectsCount={activeVideoEffectsCount}
+          isVideoFramingEnabled={videoEffects.framing}
+          onToggleVideoFraming={handleToggleVideoFraming}
+          viewSettings={viewSettings}
+          onViewSettingsChange={setViewSettings}
+          presentationStream={effectivePresentationStream}
+          presenterName={effectivePresenterName}
           getDisplayName={resolveDisplayName}
+          sidePanelReserve={dockedPanelReserve}
         />
       )}
 
-      {isJoined && browserLaunchError && (
-        <div className="absolute top-4 right-4 max-w-[320px] rounded-lg border border-[#F95F4A]/30 bg-[#0d0e0d]/95 px-4 py-3 text-xs text-[#FEFCD9]/90 shadow-2xl">
-          <div className="flex items-start gap-3">
-            <span className="font-medium text-[#F95F4A]">Browser error</span>
-            {onClearBrowserError && (
-              <button
-                onClick={onClearBrowserError}
-                className="ml-auto text-[#FEFCD9]/50 hover:text-[#FEFCD9]"
-                aria-label="Dismiss browser error"
-              >
-                X
-              </button>
-            )}
-          </div>
-          <p className="mt-1 text-[11px] text-[#FEFCD9]/70">
-            {browserLaunchError}
-          </p>
-        </div>
-      )}
-      {isJoined && voiceAgentError && (
-        <div className="absolute top-4 left-4 max-w-[340px] rounded-lg border border-[#F95F4A]/30 bg-[#0d0e0d]/95 px-4 py-3 text-xs text-[#FEFCD9]/90 shadow-2xl">
-          <div className="flex items-start gap-3">
-            <span className="font-medium text-[#F95F4A]">
-              Voice agent error
-            </span>
-            {onClearVoiceAgentError && (
-              <button
-                onClick={onClearVoiceAgentError}
-                className="ml-auto text-[#FEFCD9]/50 hover:text-[#FEFCD9]"
-                aria-label="Dismiss voice agent error"
-              >
-                X
-              </button>
-            )}
-          </div>
-          <p className="mt-1 text-[11px] text-[#FEFCD9]/70">{voiceAgentError}</p>
-        </div>
+      {isJoined && (
+        <ToastQueue
+          toasts={[
+            browserLaunchError
+              ? {
+                  id: "browser",
+                  label: "Browser error",
+                  message: browserLaunchError,
+                  tone: "danger" as const,
+                  onDismiss: onClearBrowserError,
+                }
+              : null,
+            voiceAgentError
+              ? {
+                  id: "voice",
+                  label: "Voice agent error",
+                  message: voiceAgentError,
+                  tone: "danger" as const,
+                  onDismiss: onClearVoiceAgentError,
+                }
+              : null,
+          ]}
+        />
       )}
 
-      {isJoined && !broadcastMode &&
+      {isJoined &&
         (isWebinarAttendee ? (
           <div className="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-black/30 px-4 py-3">
             <div>
-              <p className="text-xs text-[#FEFCD9]/70">
+              <p className="text-xs text-[#fafafa]/82">
                 {webinarConfig?.attendeeCount ?? 0} attendees watching
               </p>
             </div>
           </div>
         ) : (
-          <div className="flex items-center justify-between gap-3">
-            <a href="/" className="flex items-center">
-              <Image
-                src="/assets/acm_topleft.svg"
-                alt="ACM Logo"
-                width={129}
-                height={129}
-              />
-            </a>
-            <div className="flex-1 flex justify-center">
-              <ControlsBar
+          <div className="flex w-full flex-col items-center gap-2">
+            <ControlsBar
+                roomId={roomId}
                 isMuted={isMuted}
                 isCameraOff={isCameraOff}
                 isScreenSharing={isScreenSharing}
@@ -1208,10 +1360,28 @@ export default function MeetsMainContent({
                 onToggleHandRaised={toggleHandRaised}
                 onSendReaction={sendReaction}
                 onLeave={leaveRoom}
+                selectedAudioInputDeviceId={selectedAudioInputDeviceId}
+                selectedAudioOutputDeviceId={selectedAudioOutputDeviceId}
+                selectedVideoInputDeviceId={selectedVideoInputDeviceId}
+                onAudioInputDeviceChange={onAudioInputDeviceChange}
+                onAudioOutputDeviceChange={onAudioOutputDeviceChange}
+                onVideoInputDeviceChange={onVideoInputDeviceChange}
+                isMirrorCamera={isMirrorCamera}
+                onToggleMirror={onToggleMirror}
+                isVideoEffectsOpen={isVideoEffectsOpen}
+                activeVideoEffectsCount={activeVideoEffectsCount}
+                isVideoEffectsPermissionBlocked={isCameraPermissionBlocked}
+                onToggleVideoEffects={handleToggleVideoEffects}
+                isViewPanelOpen={isViewPanelOpen}
+                onToggleViewPanel={handleToggleViewPanel}
                 isAdmin={isAdmin}
                 isGhostMode={ghostEnabled}
                 isParticipantsOpen={isParticipantsOpen}
                 onToggleParticipants={handleToggleParticipants}
+                isHostControlsOpen={isHostControlsOpen}
+                onToggleHostControls={
+                  isAdmin ? handleToggleHostControls : undefined
+                }
                 pendingUsersCount={isAdmin ? pendingUsers.size : 0}
                 isRoomLocked={isRoomLocked}
                 onToggleLock={onToggleLock}
@@ -1263,74 +1433,7 @@ export default function MeetsMainContent({
                 onUpdateWebinarConfig={onUpdateWebinarConfig}
                 onGenerateWebinarLink={onGenerateWebinarLink}
                 onRotateWebinarLink={onRotateWebinarLink}
-                hostEmail={user?.email || null}
-                hostName={user?.name || null}
-                recordingActive={recordingActive}
-                recordingPaused={recordingPaused}
-                recordingBusy={recordingBusy}
-                recordingTrackCount={recordingTrackCount}
-                recordingAvailable={recordingAvailable}
-                onStartRecording={onStartRecording}
-                onStopRecording={onStopRecording}
-                onPauseRecording={onPauseRecording}
-                onResumeRecording={onResumeRecording}
               />
-            </div>
-            <div className="flex items-center gap-4">
-              {isScreenSharing && (
-                <div
-                  className="flex items-center gap-1.5 text-[#F95F4A] text-[10px] uppercase tracking-wider"
-                  style={{ fontFamily: "'PolySans Mono', monospace" }}
-                >
-                  <span className="w-1.5 h-1.5 rounded-full bg-[#F95F4A]"></span>
-                  Sharing
-                </div>
-              )}
-              {ghostEnabled && (
-                <div
-                  className="flex items-center gap-1.5 text-[#FF007A] text-[10px] uppercase tracking-wider"
-                  style={{ fontFamily: "'PolySans Mono', monospace" }}
-                >
-                  <UserX className="w-3 h-3" />
-                  Ghost
-                </div>
-              )}
-              {(connectionState === "reconnecting" ||
-                (serverRestartNotice &&
-                  !["error", "disconnected"].includes(connectionState))) && (
-                <div
-                  className="flex items-center gap-1.5 text-amber-400 text-[10px] uppercase tracking-wider"
-                  style={{ fontFamily: "'PolySans Mono', monospace" }}
-                >
-                  <RefreshCw className="w-3 h-3 animate-spin" />
-                  {serverRestartNotice &&
-                  !["error", "disconnected"].includes(connectionState)
-                    ? "Restarting"
-                    : "Reconnecting"}
-                </div>
-              )}
-              <div
-                className="flex items-center gap-1 text-[#FEFCD9]/60 text-[10px] uppercase tracking-wider"
-                style={{ fontFamily: "'PolySans Mono', monospace" }}
-              >
-                <span className="inline-flex h-1.5 w-1.5 rounded-full bg-emerald-400" />
-                {visibleParticipantCount + 1} in call
-              </div>
-              <div className="flex flex-col items-end">
-                <span
-                  className="text-sm text-[#FEFCD9]"
-                  style={{ fontFamily: "'PolySans Bulky Wide', sans-serif" }}
-                >
-                  c0nclav3
-                </span>
-                <span
-                  className="text-[9px] uppercase tracking-[0.15em] text-[#FEFCD9]/40"
-                  style={{ fontFamily: "'PolySans Mono', monospace" }}
-                >
-                  by acm-vit
-                </span>
-              </div>
-            </div>
             {browserAudioNeedsGesture && (
               <div className="w-full mt-2 text-center text-[11px] text-[#F95F4A]/70 uppercase tracking-[0.3em]">
                 Click “Shared browser audio” to unlock the system sound.
@@ -1339,7 +1442,7 @@ export default function MeetsMainContent({
           </div>
         ))}
 
-      {isJoined && !isWebinarAttendee && !broadcastMode && isChatOpen && (
+      {isJoined && !isWebinarAttendee && isChatOpen && (
         <ChatPanel
           messages={chatMessages}
           chatInput={chatInput}
@@ -1355,7 +1458,7 @@ export default function MeetsMainContent({
         />
       )}
 
-      {isJoined && !isWebinarAttendee && !broadcastMode && isParticipantsOpen && (
+      {isJoined && !isWebinarAttendee && isParticipantsOpen && (
         <ParticipantsPanel
           participants={participants}
           currentUserId={currentUserId}
@@ -1378,7 +1481,62 @@ export default function MeetsMainContent({
 
       {isJoined &&
         !isWebinarAttendee &&
-        !broadcastMode &&
+        isAdmin &&
+        isHostControlsOpen && (
+          <MeetSettingsPanel
+            isRoomLocked={isRoomLocked}
+            onToggleLock={onToggleLock}
+            isNoGuests={isNoGuests}
+            onToggleNoGuests={onToggleNoGuests}
+            isChatLocked={isChatLocked}
+            onToggleChatLock={onToggleChatLock}
+            isTtsDisabled={isTtsDisabled}
+            onToggleTtsDisabled={handleToggleTtsDisabled}
+            isDmEnabled={isDmEnabled}
+            onToggleDmEnabled={handleToggleDmEnabled}
+            meetingRequiresInviteCode={meetingRequiresInviteCode}
+            onGetMeetingConfig={onGetMeetingConfig}
+            onUpdateMeetingConfig={onUpdateMeetingConfig}
+            webinarConfig={webinarConfig}
+            webinarRole={webinarRole}
+            webinarLink={webinarLink}
+            onSetWebinarLink={onSetWebinarLink}
+            onGetWebinarConfig={onGetWebinarConfig}
+            onUpdateWebinarConfig={onUpdateWebinarConfig}
+            onGenerateWebinarLink={onGenerateWebinarLink}
+            onRotateWebinarLink={onRotateWebinarLink}
+            onClose={handleCloseHostControls}
+          />
+        )}
+
+      {isJoined && !isWebinarAttendee && isVideoEffectsOpen && (
+        <VideoEffectsPanel
+          effects={videoEffects}
+          onEffectsChange={onVideoEffectsChange}
+          onRecenterFraming={onVideoEffectsRecenter}
+          localStream={effectiveLocalStream}
+          isCameraOff={effectiveIsCameraOff}
+          status={videoEffectsStatus}
+          error={videoEffectsError}
+          debugStats={videoEffectsDebugStats}
+          activeCount={activeVideoEffectsCount}
+          cameraPermissionBlocked={isCameraPermissionBlocked}
+          onToggleCamera={toggleCamera}
+          onClose={handleCloseVideoEffects}
+        />
+      )}
+
+      {isJoined && !isWebinarAttendee && isViewPanelOpen && (
+        <MeetViewPanel
+          settings={viewSettings}
+          onSettingsChange={setViewSettings}
+          participantCount={visibleParticipantCount + 1}
+          onClose={handleCloseViewPanel}
+        />
+      )}
+
+      {isJoined &&
+        !isWebinarAttendee &&
         !isChatOpen &&
         chatOverlayMessages.length > 0 && (
         <ChatOverlay

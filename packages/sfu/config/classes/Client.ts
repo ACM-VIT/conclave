@@ -3,6 +3,8 @@ import type {
   WebRtcTransport,
   Producer,
   Consumer,
+  ConsumerLayers,
+  ConsumerScore,
   MediaKind,
 } from "mediasoup/types";
 
@@ -17,10 +19,27 @@ export type ProducerType = "webcam" | "screen";
 export type ClientMode =
   | "participant"
   | "ghost"
-  | "webinar_attendee"
-  | "recorder";
+  | "webinar_attendee";
 
 export type ProducerKey = `${MediaKind}-${ProducerType}`;
+
+export type ConsumerTelemetrySnapshot = {
+  consumerId: string;
+  producerId: string;
+  producerUserId?: string;
+  kind: MediaKind;
+  type?: ProducerType;
+  paused: boolean;
+  producerPaused: boolean;
+  priority: number;
+  score: ConsumerScore;
+  preferredLayers?: ConsumerLayers;
+  currentLayers?: ConsumerLayers;
+  createdAt: number;
+  updatedAt: number;
+};
+
+type ConsumerState = ConsumerTelemetrySnapshot;
 
 export function createProducerKey(
   kind: MediaKind,
@@ -38,8 +57,11 @@ export class Client {
   public consumerTransport: WebRtcTransport | null = null;
 
   public producers: Map<ProducerKey, Producer> = new Map();
+  private producerKeysById: Map<string, ProducerKey> = new Map();
 
   public consumers: Map<string, Consumer> = new Map();
+  private consumerProducerIdsById: Map<string, string> = new Map();
+  private consumerStates: Map<string, ConsumerState> = new Map();
 
   public isMuted: boolean = false;
   public isCameraOff: boolean = false;
@@ -64,12 +86,8 @@ export class Client {
     return this.mode === "webinar_attendee";
   }
 
-  get isRecorder(): boolean {
-    return this.mode === "recorder";
-  }
-
   get isObserver(): boolean {
-    return this.isGhost || this.isWebinarAttendee || this.isRecorder;
+    return this.isGhost || this.isWebinarAttendee;
   }
 
   addProducer(producer: Producer): void {
@@ -78,8 +96,10 @@ export class Client {
     const previousProducer = this.producers.get(key);
 
     this.producers.set(key, producer);
+    this.producerKeysById.set(producer.id, key);
 
     const cleanup = () => {
+      this.producerKeysById.delete(producer.id);
       const activeProducer = this.producers.get(key);
       if (activeProducer?.id === producer.id) {
         this.producers.delete(key);
@@ -91,6 +111,7 @@ export class Client {
 
     if (previousProducer && previousProducer.id !== producer.id) {
       try {
+        this.producerKeysById.delete(previousProducer.id);
         previousProducer.close();
       } catch {}
     }
@@ -104,20 +125,43 @@ export class Client {
     }
   }
 
-  addConsumer(consumer: Consumer): void {
+  addConsumer(
+    consumer: Consumer,
+    metadata?: { producerUserId?: string; type?: ProducerType },
+  ): void {
     const previousConsumer = this.consumers.get(consumer.producerId);
     if (previousConsumer && previousConsumer.id !== consumer.id) {
       try {
+        this.consumerProducerIdsById.delete(previousConsumer.id);
         previousConsumer.close();
       } catch {}
     }
 
     this.consumers.set(consumer.producerId, consumer);
+    this.consumerProducerIdsById.set(consumer.id, consumer.producerId);
+    const now = Date.now();
+    this.consumerStates.set(consumer.producerId, {
+      consumerId: consumer.id,
+      producerId: consumer.producerId,
+      producerUserId: metadata?.producerUserId,
+      kind: consumer.kind,
+      type: metadata?.type,
+      paused: consumer.paused,
+      producerPaused: consumer.producerPaused,
+      priority: consumer.priority,
+      score: consumer.score,
+      preferredLayers: consumer.preferredLayers,
+      currentLayers: consumer.currentLayers,
+      createdAt: now,
+      updatedAt: now,
+    });
 
     const cleanup = () => {
+      this.consumerProducerIdsById.delete(consumer.id);
       const activeConsumer = this.consumers.get(consumer.producerId);
       if (activeConsumer?.id === consumer.id) {
         this.consumers.delete(consumer.producerId);
+        this.consumerStates.delete(consumer.producerId);
       }
     };
 
@@ -135,6 +179,46 @@ export class Client {
 
   getConsumer(producerId: string): Consumer | undefined {
     return this.consumers.get(producerId);
+  }
+
+  getConsumerById(consumerId: string): Consumer | undefined {
+    const producerId = this.consumerProducerIdsById.get(consumerId);
+    if (!producerId) return undefined;
+    const consumer = this.consumers.get(producerId);
+    return consumer?.id === consumerId ? consumer : undefined;
+  }
+
+  updateConsumerTelemetry(
+    consumer: Consumer,
+    patch: Partial<
+      Pick<
+        ConsumerState,
+        | "paused"
+        | "producerPaused"
+        | "priority"
+        | "score"
+        | "preferredLayers"
+        | "currentLayers"
+      >
+    > = {},
+  ): ConsumerTelemetrySnapshot | null {
+    const existing = this.consumerStates.get(consumer.producerId);
+    if (!existing || existing.consumerId !== consumer.id) {
+      return null;
+    }
+
+    const next: ConsumerState = {
+      ...existing,
+      paused: patch.paused ?? consumer.paused,
+      producerPaused: patch.producerPaused ?? consumer.producerPaused,
+      priority: patch.priority ?? consumer.priority,
+      score: patch.score ?? consumer.score,
+      preferredLayers: patch.preferredLayers ?? consumer.preferredLayers,
+      currentLayers: patch.currentLayers ?? consumer.currentLayers,
+      updatedAt: Date.now(),
+    };
+    this.consumerStates.set(consumer.producerId, next);
+    return { ...next };
   }
 
   async toggleMute(paused: boolean): Promise<void> {
@@ -161,16 +245,25 @@ export class Client {
     }
   }
 
-  close(): void {
+  closeConsumers(): void {
     for (const consumer of this.consumers.values()) {
-      consumer.close();
+      try {
+        consumer.close();
+      } catch {}
     }
     this.consumers.clear();
+    this.consumerProducerIdsById.clear();
+    this.consumerStates.clear();
+  }
+
+  close(): void {
+    this.closeConsumers();
 
     for (const producer of this.producers.values()) {
       producer.close();
     }
     this.producers.clear();
+    this.producerKeysById.clear();
 
     if (this.producerTransport) {
       this.producerTransport.close();
@@ -207,18 +300,27 @@ export class Client {
     return infos;
   }
 
+  getConsumerTelemetrySnapshot(): ConsumerTelemetrySnapshot[] {
+    return Array.from(this.consumerStates.values()).map((state) => ({ ...state }));
+  }
+
   removeProducerById(
     producerId: string,
   ): { kind: MediaKind; type: ProducerType } | null {
-    for (const [key, producer] of this.producers) {
-      if (producer.id === producerId) {
-        producer.close();
-        this.producers.delete(key);
-        const [kind, type] = key.split("-") as [MediaKind, ProducerType];
-        return { kind, type };
-      }
+    const key = this.producerKeysById.get(producerId);
+    if (!key) {
+      return null;
     }
-    return null;
+    const producer = this.producers.get(key);
+    if (!producer || producer.id !== producerId) {
+      this.producerKeysById.delete(producerId);
+      return null;
+    }
+    producer.close();
+    this.producers.delete(key);
+    this.producerKeysById.delete(producerId);
+    const [kind, type] = key.split("-") as [MediaKind, ProducerType];
+    return { kind, type };
   }
 }
 

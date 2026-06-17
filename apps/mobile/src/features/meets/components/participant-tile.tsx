@@ -1,8 +1,8 @@
 import React, { useMemo } from "react";
 import { StyleSheet, View as RNView } from "react-native";
 import { RTCView } from "react-native-webrtc";
-import { LinearGradient } from "expo-linear-gradient";
 import type { Participant } from "../types";
+import { avatarColor } from "@conclave/ui-tokens";
 import { useDeviceLayout } from "../hooks/use-device-layout";
 import { Text } from "@/tw";
 import { Hand, MicOff, VenetianMask } from "lucide-react-native";
@@ -10,12 +10,12 @@ import { Hand, MicOff, VenetianMask } from "lucide-react-native";
 const COLORS = {
   primaryOrange: "#F95F4A",
   primaryPink: "#FF007A",
-  cream: "#FEFCD9",
-  creamMuted: "rgba(254, 252, 217, 0.5)",
-  creamFaint: "rgba(254, 252, 217, 0.15)",
-  creamSubtle: "rgba(254, 252, 217, 0.2)",
+  cream: "#fafafa",
+  creamMuted: "rgba(250, 250, 250, 0.5)",
+  creamFaint: "rgba(250, 250, 250, 0.15)",
+  creamSubtle: "rgba(250, 250, 250, 0.2)",
   orangeDim: "rgba(249, 95, 74, 0.5)",
-  surface: "#1a1a1a",
+  surface: "#18181b",
   speakerGlow: "rgba(249, 95, 74, 0.3)",
 } as const;
 
@@ -75,17 +75,17 @@ function ParticipantTileComponent({
           />
         ) : (
           <RNView style={styles.avatarContainer}>
-            <LinearGradient
-              colors={["rgba(249, 95, 74, 0.2)", "rgba(255, 0, 122, 0.1)"]}
-              style={styles.avatarGradient}
-            />
             <RNView
               style={[
                 styles.avatar,
-                { width: avatarSize, height: avatarSize, borderRadius: avatarSize / 2 },
+                {
+                  width: avatarSize,
+                  height: avatarSize,
+                  borderRadius: avatarSize / 2,
+                  backgroundColor: avatarColor(participant.userId),
+                },
               ]}
             >
-              <RNView style={[styles.avatarBorder, { borderRadius: avatarSize / 2 }]} />
               <Text style={[styles.avatarText, { fontSize: avatarFontSize }]}>
                 {initials}
               </Text>
@@ -173,13 +173,7 @@ const styles = StyleSheet.create({
     flex: 1,
     borderRadius: 18,
   },
-  outerActive: {
-    shadowColor: COLORS.primaryOrange,
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.35,
-    shadowRadius: 18,
-    elevation: 8,
-  },
+  outerActive: {},
   activeSpeakerRing: {
     ...StyleSheet.absoluteFillObject,
     top: -2,
@@ -196,7 +190,7 @@ const styles = StyleSheet.create({
     overflow: "hidden",
     backgroundColor: "#000",
     borderWidth: 1,
-    borderColor: "rgba(254, 252, 217, 0.1)",
+    borderColor: "rgba(250, 250, 250, 0.1)",
   },
   activeSpeaker: {
     borderColor: COLORS.primaryOrange,
@@ -209,7 +203,7 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#0d0e0d",
+    backgroundColor: "#131316",
   },
   avatarGradient: {
     ...StyleSheet.absoluteFillObject,
@@ -227,7 +221,7 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
     borderRadius: 32,
     borderWidth: 1,
-    borderColor: "rgba(254, 252, 217, 0.2)",
+    borderColor: "rgba(250, 250, 250, 0.2)",
   },
   avatarText: {
     fontSize: 24,
@@ -255,7 +249,7 @@ const styles = StyleSheet.create({
     fontWeight: "500",
     color: COLORS.primaryPink,
     letterSpacing: 2,
-    fontFamily: "PolySans-Mono",
+    fontFamily: "PolySans-Regular",
   },
   handRaisedContainer: {
     position: "absolute",
@@ -271,10 +265,6 @@ const styles = StyleSheet.create({
     borderColor: "rgba(255, 128, 0, 0.4)",
     alignItems: "center",
     justifyContent: "center",
-    shadowColor: "rgba(255, 128, 0, 0.3)",
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 1,
-    shadowRadius: 8,
   },
   nameOverlay: {
     position: "absolute",
@@ -292,21 +282,21 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(0, 0, 0, 0.7)",
     borderRadius: 20,
     borderWidth: 1,
-    borderColor: "rgba(254, 252, 217, 0.1)",
+    borderColor: "rgba(250, 250, 250, 0.1)",
   },
   nameText: {
     fontSize: 11,
     fontWeight: "500",
     color: COLORS.cream,
     letterSpacing: 1,
-    fontFamily: "PolySans-Mono",
+    fontFamily: "PolySans-Regular",
   },
   youLabel: {
     fontSize: 9,
     fontWeight: "500",
     color: COLORS.orangeDim,
     letterSpacing: 2,
-    fontFamily: "PolySans-Mono",
+    fontFamily: "PolySans-Regular",
   },
   mutedIcon: {
     fontSize: 10,

@@ -2,16 +2,50 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>ITSAppUsesNonExemptEncryption</key>
-    <false/>
-    <key>NSCameraUsageDescription</key>
-    <string>Conclave needs access to your camera to share video in meetings.</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.acmvit.conclave</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>conclave</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>google</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>$(GOOGLE_IOS_REVERSED_CLIENT_ID)</string>
+			</array>
+		</dict>
+	</array>
+	<key>GIDClientID</key>
+	<string>$(GOOGLE_IOS_CLIENT_ID)</string>
+	<key>GOOGLE_IOS_CLIENT_ID</key>
+	<string>$(GOOGLE_IOS_CLIENT_ID)</string>
+	<key>GOOGLE_IOS_REVERSED_CLIENT_ID</key>
+	<string>$(GOOGLE_IOS_REVERSED_CLIENT_ID)</string>
+	<key>CONCLAVE_AUTH_BASE_URL</key>
+	<string>$(CONCLAVE_AUTH_BASE_URL)</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+	<key>NSCameraUsageDescription</key>
+	<string>Conclave uses the camera so you can turn on your video in a meeting.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Conclave needs access to your microphone to share audio in meetings.</string>
+	<string>Conclave uses the microphone so you can be heard in a meeting.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Conclave uses the local network to connect your call's audio and video to other people, for faster and more reliable meetings.</string>
 	<key>SFU_CLIENT_ID</key>
-    <string>public</string>
-    <key>SFU_JOIN_URL</key>
-	<string>https://conclave.acmvit.in/api/sfu/join</string>
+	<string>public</string>
+	<key>SFU_JOIN_URL</key>
+	<string>$(SFU_JOIN_URL)</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>

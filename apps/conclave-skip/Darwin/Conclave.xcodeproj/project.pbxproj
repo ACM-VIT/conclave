@@ -12,7 +12,22 @@
 		496BDBEE2B8A7E9C00C09264 /* Localizable.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = 496BDBED2B8A7E9C00C09264 /* Localizable.xcstrings */; };
 		499CD43B2AC5B799001AE8D8 /* Main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49F90C2B2A52156200F06D93 /* Main.swift */; };
 		499CD4402AC5B799001AE8D8 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 49F90C2F2A52156300F06D93 /* Assets.xcassets */; };
+		502A04D681B019AAC7B8DC4A /* ScreenShareExtension.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = B4453F91272390D27F4F652A /* ScreenShareExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, CodeSignOnCopy, ); }; };
+		A8264D6A672273FA806A3FB6 /* SampleHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = D9C74C4304A8EA72CC8134FE /* SampleHandler.swift */; };
+		DFE47E95E36C8EE1B5CCE9EC /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 66D43BF7D33BFBAD3F7B4B90 /* Foundation.framework */; };
+		E6C0BBDB133797BCEB6F5341 /* ReplayKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = F8C4FBE6A31E1433318CB3E2 /* ReplayKit.framework */; };
+		FA0957C178416245BF758A86 /* ScreenShareSocketConnection.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2C7DBA37CDA1456AE24E503 /* ScreenShareSocketConnection.swift */; };
 /* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		71D46C2FE4CC3CD76AC25FF9 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 49F90C202A52156200F06D93 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = C177BC9AEA385A664A4C4A9D;
+			remoteInfo = ScreenShareExtension;
+		};
+/* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
 		499CD44A2AC5B9C6001AE8D8 /* Embed Frameworks */ = {
@@ -26,9 +41,21 @@
 			name = "Embed Frameworks";
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		DED5F813849FF18CBE9AFB5A /* Embed App Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				502A04D681B019AAC7B8DC4A /* ScreenShareExtension.appex in Embed App Extensions */,
+			);
+			name = "Embed App Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		36B0F80D3E4E571FE785B302 /* Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		4900101C2BACEA710000DE33 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		493609562A6B7EAE00C401E2 /* Conclave */ = {isa = PBXFileReference; lastKnownFileType = wrapper; name = Conclave; path = ..; sourceTree = "<group>"; };
 		496BDBEB2B89A47800C09264 /* Conclave.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Conclave.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -40,9 +67,24 @@
 		49F90C2B2A52156200F06D93 /* Main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = Main.swift; path = Sources/Main.swift; sourceTree = SOURCE_ROOT; };
 		49F90C2F2A52156300F06D93 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		49F90C312A52156300F06D93 /* Entitlements.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Entitlements.plist; sourceTree = "<group>"; };
+		66D43BF7D33BFBAD3F7B4B90 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
+		B1ABD79B5D294DEA239C6EE1 /* ScreenShareExtension.entitlements */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.entitlements; path = ScreenShareExtension.entitlements; sourceTree = "<group>"; };
+		B2C7DBA37CDA1456AE24E503 /* ScreenShareSocketConnection.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ScreenShareSocketConnection.swift; sourceTree = "<group>"; };
+		B4453F91272390D27F4F652A /* ScreenShareExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = ScreenShareExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		D9C74C4304A8EA72CC8134FE /* SampleHandler.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SampleHandler.swift; sourceTree = "<group>"; };
+		F8C4FBE6A31E1433318CB3E2 /* ReplayKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = ReplayKit.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.0.sdk/System/Library/Frameworks/ReplayKit.framework; sourceTree = DEVELOPER_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		27D5FD1C796B4A84CF7197E7 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				DFE47E95E36C8EE1B5CCE9EC /* Foundation.framework in Frameworks */,
+				E6C0BBDB133797BCEB6F5341 /* ReplayKit.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		499CD43C2AC5B799001AE8D8 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -54,10 +96,31 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		08049D8876C1F24A3401D4DE /* ScreenShareExtension */ = {
+			isa = PBXGroup;
+			children = (
+				D9C74C4304A8EA72CC8134FE /* SampleHandler.swift */,
+				B2C7DBA37CDA1456AE24E503 /* ScreenShareSocketConnection.swift */,
+				36B0F80D3E4E571FE785B302 /* Info.plist */,
+				B1ABD79B5D294DEA239C6EE1 /* ScreenShareExtension.entitlements */,
+			);
+			name = ScreenShareExtension;
+			path = ScreenShareExtension;
+			sourceTree = SOURCE_ROOT;
+		};
+		23AF4C199783C9F523551BA3 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				B339E2FDDC355E58C6CC0D80 /* iOS */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
 		496BDBEC2B89A47800C09264 /* Products */ = {
 			isa = PBXGroup;
 			children = (
 				496BDBEB2B89A47800C09264 /* Conclave.app */,
+				B4453F91272390D27F4F652A /* ScreenShareExtension.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -81,6 +144,8 @@
 				49F90C2A2A52156200F06D93 /* App */,
 				49AB54462B066A7E007B79B2 /* SkipStone */,
 				496BDBEC2B89A47800C09264 /* Products */,
+				23AF4C199783C9F523551BA3 /* Frameworks */,
+				08049D8876C1F24A3401D4DE /* ScreenShareExtension */,
 			);
 			sourceTree = "<group>";
 		};
@@ -95,6 +160,15 @@
 			name = App;
 			sourceTree = "<group>";
 		};
+		B339E2FDDC355E58C6CC0D80 /* iOS */ = {
+			isa = PBXGroup;
+			children = (
+				66D43BF7D33BFBAD3F7B4B90 /* Foundation.framework */,
+				F8C4FBE6A31E1433318CB3E2 /* ReplayKit.framework */,
+			);
+			name = iOS;
+			sourceTree = "<group>";
+		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -107,10 +181,12 @@
 				499CD43E2AC5B799001AE8D8 /* Resources */,
 				499CD4452AC5B869001AE8D8 /* Run skip gradle */,
 				499CD44A2AC5B9C6001AE8D8 /* Embed Frameworks */,
+				DED5F813849FF18CBE9AFB5A /* Embed App Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				A2053695217560C161E5AD7D /* PBXTargetDependency */,
 			);
 			name = "Conclave App";
 			packageProductDependencies = (
@@ -119,6 +195,23 @@
 			productName = App;
 			productReference = 496BDBEB2B89A47800C09264 /* Conclave.app */;
 			productType = "com.apple.product-type.application";
+		};
+		C177BC9AEA385A664A4C4A9D /* ScreenShareExtension */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 715401479CCB56D605A80E7B /* Build configuration list for PBXNativeTarget "ScreenShareExtension" */;
+			buildPhases = (
+				DA440F8BDEC4A242AF507D3E /* Sources */,
+				27D5FD1C796B4A84CF7197E7 /* Frameworks */,
+				D8437152ED65B65BAD66390E /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = ScreenShareExtension;
+			productName = ScreenShareExtension;
+			productReference = B4453F91272390D27F4F652A /* ScreenShareExtension.appex */;
+			productType = "com.apple.product-type.app-extension";
 		};
 /* End PBXNativeTarget section */
 
@@ -142,13 +235,12 @@
 				"zh-Hans",
 			);
 			mainGroup = 49F90C1F2A52156200F06D93;
-			packageReferences = (
-			);
 			productRefGroup = 496BDBEC2B89A47800C09264 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
 				499CD4382AC5B799001AE8D8 /* Conclave App */,
+				C177BC9AEA385A664A4C4A9D /* ScreenShareExtension */,
 			);
 		};
 /* End PBXProject section */
@@ -160,6 +252,13 @@
 			files = (
 				499CD4402AC5B799001AE8D8 /* Assets.xcassets in Resources */,
 				496BDBEE2B8A7E9C00C09264 /* Localizable.xcstrings in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		D8437152ED65B65BAD66390E /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -196,9 +295,57 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		DA440F8BDEC4A242AF507D3E /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A8264D6A672273FA806A3FB6 /* SampleHandler.swift in Sources */,
+				FA0957C178416245BF758A86 /* ScreenShareSocketConnection.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
+/* Begin PBXTargetDependency section */
+		A2053695217560C161E5AD7D /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = ScreenShareExtension;
+			target = C177BC9AEA385A664A4C4A9D /* ScreenShareExtension */;
+			targetProxy = 71D46C2FE4CC3CD76AC25FF9 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
 /* Begin XCBuildConfiguration section */
+		05E041EEC730BBD70F153CF4 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGNING_REQUIRED = NO;
+				CODE_SIGN_ENTITLEMENTS = ScreenShareExtension/ScreenShareExtension.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = ScreenShareExtension/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 0.0.1;
+				PRODUCT_BUNDLE_IDENTIFIER = com.acmvit.conclave.ScreenShareExtension;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = NO;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
 		499CD4422AC5B799001AE8D8 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = 496EB72F2A6AE4DE00C1253B /* Conclave.xcconfig */;
@@ -244,7 +391,7 @@
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
 				COPY_PHASE_STRIP = NO;
-				DEBUG_INFORMATION_FORMAT = dwarf-with-dsym;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
@@ -254,6 +401,35 @@
 				SWIFT_COMPILATION_MODE = wholemodule;
 			};
 			name = Release;
+		};
+		66A29025C23116E1F8ABC24E /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGNING_REQUIRED = NO;
+				CODE_SIGN_ENTITLEMENTS = ScreenShareExtension/ScreenShareExtension.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = ScreenShareExtension/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 0.0.1;
+				PRODUCT_BUNDLE_IDENTIFIER = com.acmvit.conclave.ScreenShareExtension;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = NO;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
 		};
 /* End XCBuildConfiguration section */
 
@@ -272,6 +448,15 @@
 			buildConfigurations = (
 				49F90C4B2A52156300F06D93 /* Debug */,
 				49F90C4C2A52156300F06D93 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		715401479CCB56D605A80E7B /* Build configuration list for PBXNativeTarget "ScreenShareExtension" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				05E041EEC730BBD70F153CF4 /* Release */,
+				66A29025C23116E1F8ABC24E /* Debug */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

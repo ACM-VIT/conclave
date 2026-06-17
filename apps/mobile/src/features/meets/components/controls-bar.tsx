@@ -1,48 +1,34 @@
-import React, { useCallback, useState } from "react";
+import React, { useCallback } from "react";
 import * as Haptics from "expo-haptics";
 import { StyleSheet, View as RNView } from "react-native";
-import { LinearGradient } from "expo-linear-gradient";
-import { Pressable, Text, View } from "@/tw";
+import { Pressable, Text } from "@/tw";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import {
-  AtSign,
-  Hand,
-  Lock,
-  LockOpen,
-  MessageCircle,
-  MessageSquareLock,
   Mic,
   MicOff,
+  MoreHorizontal,
   PhoneOff,
   ScreenShare,
-  Smile,
-  Users,
   Video,
   VideoOff,
-  StickyNote,
-  UserMinus,
-  VolumeX,
 } from "lucide-react-native";
-import { EMOJI_REACTIONS } from "../constants";
 import { useDeviceLayout, TOUCH_TARGETS } from "../hooks/use-device-layout";
 import { GlassPill } from "./glass-pill";
 
 const COLORS = {
   primaryOrange: "#F95F4A",
   primaryPink: "#FF007A",
-  cream: "#FEFCD9",
-  dark: "#060606",
-  surface: "#1a1a1a",
-  creamDim: "rgba(254, 252, 217, 0.1)",
-  creamMuted: "rgba(254, 252, 217, 0.8)",
-  creamFaint: "rgba(254, 252, 217, 0.15)",
+  cream: "#fafafa",
+  dark: "#0a0a0b",
+  surface: "#18181b",
+  creamDim: "rgba(250, 250, 250, 0.1)",
+  creamMuted: "rgba(250, 250, 250, 0.8)",
+  creamFaint: "rgba(250, 250, 250, 0.15)",
   orangeDim: "rgba(249, 95, 74, 0.15)",
   amber: "#fbbf24",
   amberDim: "rgba(251, 191, 36, 0.15)",
-  redDim: "rgba(239, 68, 68, 0.15)",
+  redDim: "rgba(234, 67, 53, 0.15)",
 } as const;
-
-const QUICK_REACTIONS = EMOJI_REACTIONS;
 
 interface ControlsBarProps {
   isMuted: boolean;
@@ -79,6 +65,7 @@ interface ControlsBarProps {
   onToggleWhiteboard?: () => void;
   onToggleAppsLock?: (locked: boolean) => void;
   onSendReaction: (emoji: string) => void;
+  onOpenMore: () => void;
   onLeave: () => void;
 }
 
@@ -92,6 +79,7 @@ interface ControlButtonProps {
   isDanger?: boolean;
   activeColor?: string;
   badge?: number;
+  disabled?: boolean;
   onPress: () => void;
 }
 
@@ -105,6 +93,7 @@ function ControlButton({
   isDanger = false,
   activeColor,
   badge,
+  disabled = false,
   onPress,
 }: ControlButtonProps) {
   const haptic = useCallback(() => {
@@ -142,6 +131,7 @@ function ControlButton({
   return (
     <Pressable
       onPress={handlePress}
+      disabled={disabled}
       style={({ pressed }) => [
         styles.controlButton,
         {
@@ -150,6 +140,7 @@ function ControlButton({
           borderRadius: buttonSize / 2,
         },
         buttonBg,
+        disabled && styles.buttonDisabled,
         pressed && styles.buttonPressed,
       ]}
     >
@@ -165,85 +156,21 @@ function ControlButton({
   );
 }
 
-function ReactionPicker({
-  visible,
-  onSelect,
-  onClose,
-}: {
-  visible: boolean;
-  onSelect: (emoji: string) => void;
-  onClose: () => void;
-}) {
-  const haptic = useCallback(() => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => { });
-  }, []);
-
-  if (!visible) return null;
-
-  return (
-    <RNView style={styles.reactionPickerContainer}>
-      <Pressable style={styles.reactionPickerBackdrop} onPress={onClose} />
-      <RNView style={styles.reactionPicker}>
-        {QUICK_REACTIONS.map((emoji) => (
-          <Pressable
-            key={emoji}
-            onPress={() => {
-              haptic();
-              onSelect(emoji);
-            }}
-            style={({ pressed }) => [
-              styles.reactionOption,
-              pressed && styles.reactionOptionPressed,
-            ]}
-          >
-            <Text style={styles.reactionEmoji}>{emoji}</Text>
-          </Pressable>
-        ))}
-      </RNView>
-    </RNView>
-  );
-}
-
 export function ControlsBar({
   isMuted,
   isCameraOff,
-  isHandRaised,
   isScreenSharing,
   isScreenShareAvailable = true,
-  isChatOpen,
-  isRoomLocked,
-  isNoGuests,
-  isChatLocked,
-  isTtsDisabled,
-  isDmEnabled,
-  isAdmin,
   isObserverMode = false,
-  pendingUsersCount,
-  unreadCount,
   availableWidth,
-  showParticipantsControl = true,
-  isWhiteboardActive = false,
-  showWhiteboardControl = true,
-  isAppsLocked = false,
   onToggleMute,
   onToggleCamera,
   onToggleScreenShare,
-  onToggleHand,
-  onToggleChat,
-  onToggleParticipants,
-  onToggleRoomLock,
-  onToggleNoGuests,
-  onToggleChatLock,
-  onToggleTtsDisabled,
-  onToggleDmEnabled,
-  onToggleWhiteboard,
-  onToggleAppsLock,
-  onSendReaction,
+  onOpenMore,
   onLeave,
 }: ControlsBarProps) {
   const insets = useSafeAreaInsets();
   const { isTablet, touchTargetSize } = useDeviceLayout();
-  const [showReactionPicker, setShowReactionPicker] = useState(false);
 
   const isCompact = !isTablet && availableWidth < 420;
   const pillMaxWidth = isCompact
@@ -256,28 +183,12 @@ export function ControlsBar({
     Math.max(touchTargetSize, TOUCH_TARGETS.MIN) * (isTablet ? 1.24 : 1.18)
   );
   const iconSize = isTablet ? 22 : 19;
-  const showInlineToggles = isTablet;
   const canUseScreenShareControl = isScreenSharing || isScreenShareAvailable;
   const pillGap = isCompact ? 14 : Math.max(12, Math.round(buttonSize * 0.25));
-
-  const handleReactionSelect = (emoji: string) => {
-    onSendReaction(emoji);
-    setShowReactionPicker(false);
-  };
-
-  const toggleReactionPicker = () => {
-    Haptics.selectionAsync().catch(() => { });
-    setShowReactionPicker(!showReactionPicker);
-  };
 
   if (isObserverMode) {
     return (
       <RNView style={styles.container}>
-        <LinearGradient
-          colors={["rgba(0, 0, 0, 0)", "rgba(0, 0, 0, 0.95)"]}
-          style={styles.gradient}
-          pointerEvents="none"
-        />
         <RNView
           style={[styles.pillContainer, { paddingBottom: Math.max(insets.bottom, 12) }]}
         >
@@ -309,22 +220,8 @@ export function ControlsBar({
 
   return (
     <RNView style={styles.container}>
-      {/* Gradient fade at top */}
-      <LinearGradient
-        colors={["rgba(0, 0, 0, 0)", "rgba(0, 0, 0, 0.95)"]}
-        style={styles.gradient}
-        pointerEvents="none"
-      />
-
       {/* Controls pill */}
       <RNView style={[styles.pillContainer, { paddingBottom: Math.max(insets.bottom, 12) }]}>
-        {/* Reaction picker popover - positioned above controls */}
-        <ReactionPicker
-          visible={showReactionPicker}
-          onSelect={handleReactionSelect}
-          onClose={() => setShowReactionPicker(false)}
-        />
-
         <GlassPill style={[styles.controlsGlass, { maxWidth: pillMaxWidth }]}>
           <RNView
             style={[
@@ -334,81 +231,6 @@ export function ControlsBar({
               },
             ]}
           >
-            {!isCompact ? (
-              <>
-                {showParticipantsControl ? (
-                  <ControlButton
-                    icon={Users}
-                    badge={pendingUsersCount}
-                    size={buttonSize}
-                    iconSize={iconSize}
-                    onPress={onToggleParticipants}
-                  />
-                ) : null}
-
-                {isAdmin ? (
-                  <ControlButton
-                    icon={isRoomLocked ? Lock : LockOpen}
-                    isActive={isRoomLocked}
-                    activeColor={COLORS.amber}
-                    size={buttonSize}
-                    iconSize={iconSize}
-                    onPress={() => onToggleRoomLock?.(!isRoomLocked)}
-                  />
-                ) : null}
-                {isAdmin && onToggleNoGuests ? (
-                  <ControlButton
-                    icon={UserMinus}
-                    isActive={isNoGuests}
-                    activeColor={COLORS.amber}
-                    size={buttonSize}
-                    iconSize={iconSize}
-                    onPress={() => onToggleNoGuests(!isNoGuests)}
-                  />
-                ) : null}
-                {isAdmin && onToggleChatLock ? (
-                  <ControlButton
-                    icon={MessageSquareLock}
-                    isActive={isChatLocked}
-                    activeColor={COLORS.amber}
-                    size={buttonSize}
-                    iconSize={iconSize}
-                    onPress={() => onToggleChatLock(!isChatLocked)}
-                  />
-                ) : null}
-                {isAdmin && onToggleTtsDisabled ? (
-                  <ControlButton
-                    icon={VolumeX}
-                    isActive={isTtsDisabled}
-                    activeColor={COLORS.primaryOrange}
-                    size={buttonSize}
-                    iconSize={iconSize}
-                    onPress={() => onToggleTtsDisabled(!isTtsDisabled)}
-                  />
-                ) : null}
-                {isAdmin && onToggleDmEnabled ? (
-                  <ControlButton
-                    icon={AtSign}
-                    isActive={!isDmEnabled}
-                    activeColor={COLORS.amber}
-                    size={buttonSize}
-                    iconSize={iconSize}
-                    onPress={() => onToggleDmEnabled(!isDmEnabled)}
-                  />
-                ) : null}
-                {isAdmin && onToggleAppsLock && isWhiteboardActive ? (
-                  <ControlButton
-                    icon={isAppsLocked ? Lock : LockOpen}
-                    isActive={isAppsLocked}
-                    activeColor={COLORS.amber}
-                    size={buttonSize}
-                    iconSize={iconSize}
-                    onPress={() => onToggleAppsLock(!isAppsLocked)}
-                  />
-                ) : null}
-              </>
-            ) : null}
-
             <ControlButton
               icon={isMuted ? MicOff : Mic}
               isMuted={isMuted}
@@ -425,71 +247,20 @@ export function ControlsBar({
               onPress={onToggleCamera}
             />
 
-            {showInlineToggles ? (
-              <>
-                <ControlButton
-                  icon={ScreenShare}
-                  isActive={isScreenSharing}
-                  size={buttonSize}
-                  iconSize={iconSize}
-                  onPress={onToggleScreenShare}
-                />
-
-                <ControlButton
-                  icon={Hand}
-                  isHandRaised={isHandRaised}
-                  size={buttonSize}
-                  iconSize={iconSize}
-                  onPress={onToggleHand}
-                />
-              </>
-            ) : null}
-
-            {!showInlineToggles ? (
-              canUseScreenShareControl ? (
-                <ControlButton
-                  icon={ScreenShare}
-                  isActive={isScreenSharing}
-                  size={buttonSize}
-                  iconSize={iconSize}
-                  onPress={onToggleScreenShare}
-                />
-              ) : (
-                <ControlButton
-                  icon={Hand}
-                  isHandRaised={isHandRaised}
-                  size={buttonSize}
-                  iconSize={iconSize}
-                  onPress={onToggleHand}
-                />
-              )
-            ) : null}
-
             <ControlButton
-              icon={MessageCircle}
-              isActive={isChatOpen}
-              badge={unreadCount}
+              icon={ScreenShare}
+              isActive={isScreenSharing}
               size={buttonSize}
               iconSize={iconSize}
-              onPress={onToggleChat}
+              onPress={onToggleScreenShare}
+              disabled={!canUseScreenShareControl}
             />
 
-            {showWhiteboardControl && onToggleWhiteboard ? (
-              <ControlButton
-                icon={StickyNote}
-                isActive={isWhiteboardActive}
-                size={buttonSize}
-                iconSize={iconSize}
-                onPress={onToggleWhiteboard}
-              />
-            ) : null}
-
             <ControlButton
-              icon={Smile}
-              isActive={showReactionPicker}
+              icon={MoreHorizontal}
               size={buttonSize}
               iconSize={iconSize}
-              onPress={toggleReactionPicker}
+              onPress={onOpenMore}
             />
 
             <RNView style={[styles.divider, { marginHorizontal: isCompact ? 2 : 4 }]} />
@@ -593,49 +364,8 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     color: "#FFFFFF",
   },
-  reactionPickerContainer: {
-    position: "absolute",
-    bottom: 90,
-    left: 0,
-    right: 0,
-    alignItems: "center",
-    zIndex: 100,
-  },
-  reactionPickerBackdrop: {
-    position: "absolute",
-    top: -500,
-    left: -100,
-    right: -100,
-    bottom: -100,
-  },
-  reactionPicker: {
-    flexDirection: "row",
-    gap: 4,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    backgroundColor: "rgba(0, 0, 0, 0.9)",
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: "rgba(254, 252, 217, 0.1)",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 8,
-  },
-  reactionOption: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  reactionOptionPressed: {
-    backgroundColor: "rgba(254, 252, 217, 0.1)",
-    transform: [{ scale: 1.1 }],
-  },
-  reactionEmoji: {
-    fontSize: 22,
+  buttonDisabled: {
+    opacity: 0.35,
   },
   observerLabel: {
     fontSize: 12,

@@ -17,7 +17,6 @@ import {
   ArrowRight,
   Baseline,
   StickyNote,
-  Download,
   Palette,
   X,
 } from "lucide-react-native";
@@ -46,14 +45,12 @@ export function WhiteboardNativeToolbar({
   settings,
   onSettingsChange,
   locked,
-  onExport,
 }: {
   tool: ToolKind;
   onToolChange: (tool: ToolKind) => void;
   settings: ToolSettings;
   onSettingsChange: (next: ToolSettings) => void;
   locked: boolean;
-  onExport: () => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const { width: screenWidth } = useWindowDimensions();
@@ -65,7 +62,6 @@ export function WhiteboardNativeToolbar({
 
   return (
     <View style={styles.wrapper} pointerEvents="box-none">
-      {/* Expandable options panel — colors + stroke widths */}
       {expanded && (
         <View style={[styles.optionsPanel, { maxWidth: screenWidth - 32 }]}>
           <View style={styles.optionsRow}>
@@ -167,13 +163,6 @@ export function WhiteboardNativeToolbar({
           ) : (
             <Palette size={iconSize} color="rgba(254,252,217,0.7)" strokeWidth={1.6} />
           )}
-        </Pressable>
-
-        <Pressable
-          onPress={onExport}
-          style={[styles.toolBtn, { width: btnSize, height: btnSize }]}
-        >
-          <Download size={iconSize} color="rgba(254,252,217,0.7)" strokeWidth={1.6} />
         </Pressable>
       </View>
     </View>

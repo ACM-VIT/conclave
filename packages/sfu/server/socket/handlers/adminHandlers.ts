@@ -10,6 +10,7 @@ import {
   closeClientProducers,
   closeProducerById,
   closeProducerForMediaKey,
+  forceRemoveClientNow,
   kickClient,
   rejectAllPendingUsers,
   toPendingUserSnapshots,
@@ -17,19 +18,95 @@ import {
 } from "../../admin/controlPlane.js";
 import { forceCloseRoom, markRoomEnded } from "../../rooms.js";
 import type { ConnectionContext } from "../context.js";
+import { RATE_LIMITS, takeToken } from "../rateLimit.js";
 import { respond } from "./ack.js";
 
 const DEFAULT_END_ROOM_MESSAGE =
   "This meeting has been ended by the host.";
 const MAX_END_ROOM_DELAY_MS = 30000;
+const MAX_USER_KEY_LENGTH = 256;
+const MAX_USER_ID_LENGTH = 512;
+const MAX_BULK_USER_KEYS = 100;
+const MAX_ADMIN_REASON_LENGTH = 256;
+const MAX_ADMIN_NOTICE_LENGTH = 2000;
+const MAX_ROOM_ID_LENGTH = 256;
+const MAX_PRODUCER_ID_LENGTH = 256;
+const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/;
+
+const normalizePlainText = (
+  value: unknown,
+  options: { maxLength: number; fallback?: string },
+): string => {
+  const raw = typeof value === "string" ? value.trim() : "";
+  const text = raw || options.fallback || "";
+  return text.slice(0, options.maxLength);
+};
+
+const normalizeRoomId = (value: unknown): string | null => {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const roomId = value.trim();
+  if (
+    !roomId ||
+    roomId.length > MAX_ROOM_ID_LENGTH ||
+    CONTROL_CHARACTER_PATTERN.test(roomId)
+  ) {
+    return null;
+  }
+  return roomId;
+};
+
+const normalizeUserKey = (value: string): string | null => {
+  const userKey = value.trim();
+  if (
+    !userKey ||
+    userKey.length > MAX_USER_KEY_LENGTH ||
+    CONTROL_CHARACTER_PATTERN.test(userKey)
+  ) {
+    return null;
+  }
+  return userKey;
+};
+
+const normalizeUserId = (value: unknown): string | null => {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const userId = value.trim();
+  if (
+    !userId ||
+    userId.length > MAX_USER_ID_LENGTH ||
+    CONTROL_CHARACTER_PATTERN.test(userId)
+  ) {
+    return null;
+  }
+  return userId;
+};
+
+const normalizeProducerId = (value: unknown): string | null => {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const producerId = value.trim();
+  if (
+    !producerId ||
+    producerId.length > MAX_PRODUCER_ID_LENGTH ||
+    CONTROL_CHARACTER_PATTERN.test(producerId)
+  ) {
+    return null;
+  }
+  return producerId;
+};
 
 const resolveClientId = (context: ConnectionContext): string => {
-  const raw = (context.socket as any).user?.clientId;
+  const raw = context.socket.data.user?.clientId;
   return typeof raw === "string" && raw.trim() ? raw.trim() : "default";
 };
 
 const ensureAdminRoom = (
   context: ConnectionContext,
+  options: { bulk?: boolean } = {},
 ):
   | {
       room: NonNullable<ConnectionContext["currentRoom"]>;
@@ -45,6 +122,14 @@ const ensureAdminRoom = (
 
   if (!(currentClient instanceof Admin)) {
     return { error: "Admin privileges required" };
+  }
+
+  const limit = options.bulk
+    ? RATE_LIMITS.adminBulkAction
+    : RATE_LIMITS.adminAction;
+  const limitKey = options.bulk ? "admin:bulk" : "admin:action";
+  if (!takeToken(context.socket, limitKey, limit)) {
+    return { error: "Too many admin requests; please retry shortly" };
   }
 
   return { room, adminId: currentClient.id };
@@ -72,9 +157,9 @@ const toBulkMediaOptions = (
   };
 
   return {
-    includeAdmins: Boolean(data.includeAdmins),
-    includeGhosts: Boolean(data.includeGhosts),
-    includeAttendees: Boolean(data.includeAttendees),
+    includeAdmins: data.includeAdmins === true,
+    includeGhosts: data.includeGhosts === true,
+    includeAttendees: data.includeAttendees === true,
   };
 };
 
@@ -126,10 +211,13 @@ const parseTypes = (value: unknown): ProducerType[] | null | undefined => {
 
 const parseUserKeys = (value: unknown): string[] | null => {
   if (typeof value === "string") {
-    const normalized = value.trim();
+    const normalized = normalizeUserKey(value);
     return normalized ? [normalized] : [];
   }
   if (!Array.isArray(value)) {
+    return null;
+  }
+  if (value.length > MAX_BULK_USER_KEYS) {
     return null;
   }
 
@@ -138,9 +226,9 @@ const parseUserKeys = (value: unknown): string[] | null => {
     if (typeof entry !== "string") {
       return null;
     }
-    const normalized = entry.trim();
+    const normalized = normalizeUserKey(entry);
     if (!normalized) {
-      continue;
+      return null;
     }
     userKeys.push(normalized);
   }
@@ -159,11 +247,10 @@ const parseEndRoomDelay = (value: unknown): number => {
 };
 
 const parseEndRoomMessage = (value: unknown): string => {
-  if (typeof value !== "string") {
-    return DEFAULT_END_ROOM_MESSAGE;
-  }
-  const trimmed = value.trim();
-  return trimmed || DEFAULT_END_ROOM_MESSAGE;
+  return normalizePlainText(value, {
+    maxLength: MAX_ADMIN_NOTICE_LENGTH,
+    fallback: DEFAULT_END_ROOM_MESSAGE,
+  });
 };
 
 const performBulkMediaClosure = (options: {
@@ -235,7 +322,7 @@ const activatePromotedAdmin = (
   promoted: Admin,
   roomId: string,
 ): void => {
-  const promotedContext = (promoted.socket as any).data?.context as
+  const promotedContext = promoted.socket.data?.context as
     | ConnectionContext
     | undefined;
 
@@ -264,28 +351,43 @@ export const registerAdminHandlers = (
 ): void => {
   const { socket, io, state } = context;
 
+  // Idempotent per socket. joinRoom (incl. the in-place room-switch path) and
+  // both host-promotion paths can each invoke this on the SAME live socket;
+  // binding twice would stack duplicate socket.on listeners so every admin
+  // action (kick / end-room / promote) fires N times and listeners leak. The
+  // single bound set always acts on the CURRENT room; the handlers resolve it
+  // live from the (per-socket, mutated-in-place) context via ensureAdminRoom.
+  if (context.adminHandlersRegistered) {
+    return;
+  }
+  context.adminHandlersRegistered = true;
+
   socket.on("kickUser", ({ userId: targetId }: { userId: string }, cb) => {
     const guard = ensureAdminRoom(context);
     if ("error" in guard) {
       respond(cb, guard);
       return;
     }
-    if (!targetId || typeof targetId !== "string") {
+    const normalizedTargetId = normalizeUserId(targetId);
+    if (!normalizedTargetId) {
       respond(cb, { error: "Invalid user ID" });
       return;
     }
-    if (targetId === guard.adminId) {
+    if (normalizedTargetId === guard.adminId) {
       respond(cb, { error: "Cannot kick yourself" });
       return;
     }
 
-    const kicked = kickClient(guard.room, targetId);
+    const kicked = kickClient(guard.room, normalizedTargetId, "Removed by host", {
+      io,
+      state,
+    });
     if (!kicked) {
       respond(cb, { error: "User not found" });
       return;
     }
 
-    Logger.info(`Admin ${guard.adminId} kicked ${targetId} in room ${guard.room.id}`);
+    Logger.info(`Admin ${guard.adminId} kicked ${normalizedTargetId} in room ${guard.room.id}`);
     respond(cb, { success: true });
   });
 
@@ -296,12 +398,13 @@ export const registerAdminHandlers = (
       return;
     }
 
-    if (!producerId || typeof producerId !== "string") {
+    const normalizedProducerId = normalizeProducerId(producerId);
+    if (!normalizedProducerId) {
       respond(cb, { error: "Invalid producer ID" });
       return;
     }
 
-    const result = closeProducerById(io, state, guard.room, producerId);
+    const result = closeProducerById(io, state, guard.room, normalizedProducerId);
     if (!result.closed) {
       respond(cb, { error: "Producer not found" });
       return;
@@ -332,7 +435,7 @@ export const registerAdminHandlers = (
         return;
       }
 
-      const targetId = typeof data?.userId === "string" ? data.userId : "";
+      const targetId = normalizeUserId(data?.userId);
       if (!targetId) {
         respond(cb, { error: "Invalid user ID" });
         return;
@@ -352,7 +455,10 @@ export const registerAdminHandlers = (
 
       const reason =
         typeof data?.reason === "string" && data.reason.trim()
-          ? data.reason.trim()
+          ? normalizePlainText(data.reason, {
+              maxLength: MAX_ADMIN_REASON_LENGTH,
+              fallback: "Host moderation action",
+            })
           : "Host moderation action";
 
       const result = closeClientProducers({
@@ -383,18 +489,24 @@ export const registerAdminHandlers = (
       return;
     }
 
+    const normalizedTargetId = normalizeUserId(targetId);
+    if (!normalizedTargetId) {
+      respond(cb, { error: "Invalid user ID" });
+      return;
+    }
+
     const result = closeClientProducers({
       io,
       state,
       room: guard.room,
-      userId: targetId,
+      userId: normalizedTargetId,
       selector: { kinds: ["audio"] },
       reason: "Muted by host",
     });
 
     respond(cb, {
       success: true,
-      userId: targetId,
+      userId: normalizedTargetId,
       affectedProducers: result.closedCount,
       producers: result.closedProducers,
     });
@@ -407,18 +519,24 @@ export const registerAdminHandlers = (
       return;
     }
 
+    const normalizedTargetId = normalizeUserId(targetId);
+    if (!normalizedTargetId) {
+      respond(cb, { error: "Invalid user ID" });
+      return;
+    }
+
     const result = closeClientProducers({
       io,
       state,
       room: guard.room,
-      userId: targetId,
+      userId: normalizedTargetId,
       selector: { kinds: ["video"], types: ["webcam"] },
       reason: "Camera turned off by host",
     });
 
     respond(cb, {
       success: true,
-      userId: targetId,
+      userId: normalizedTargetId,
       affectedProducers: result.closedCount,
       producers: result.closedProducers,
     });
@@ -431,18 +549,24 @@ export const registerAdminHandlers = (
       return;
     }
 
+    const normalizedTargetId = normalizeUserId(targetId);
+    if (!normalizedTargetId) {
+      respond(cb, { error: "Invalid user ID" });
+      return;
+    }
+
     const result = closeClientProducers({
       io,
       state,
       room: guard.room,
-      userId: targetId,
+      userId: normalizedTargetId,
       selector: { types: ["screen"] },
       reason: "Screen share stopped by host",
     });
 
     respond(cb, {
       success: true,
-      userId: targetId,
+      userId: normalizedTargetId,
       affectedProducers: result.closedCount,
       producers: result.closedProducers,
     });
@@ -453,7 +577,7 @@ export const registerAdminHandlers = (
     const data = typeof input === "function" ? {} : input;
     if (!callback) return;
 
-    const guard = ensureAdminRoom(context);
+    const guard = ensureAdminRoom(context, { bulk: true });
     if ("error" in guard) {
       respond(callback, guard);
       return;
@@ -482,7 +606,7 @@ export const registerAdminHandlers = (
     const data = typeof input === "function" ? {} : input;
     if (!callback) return;
 
-    const guard = ensureAdminRoom(context);
+    const guard = ensureAdminRoom(context, { bulk: true });
     if ("error" in guard) {
       respond(callback, guard);
       return;
@@ -511,7 +635,7 @@ export const registerAdminHandlers = (
     const data = typeof input === "function" ? {} : input;
     if (!callback) return;
 
-    const guard = ensureAdminRoom(context);
+    const guard = ensureAdminRoom(context, { bulk: true });
     if ("error" in guard) {
       respond(callback, guard);
       return;
@@ -536,6 +660,10 @@ export const registerAdminHandlers = (
   });
 
   socket.on("promoteHost", ({ userId: targetId }: { userId: string }, cb) => {
+    if (!takeToken(socket, "admin:action", RATE_LIMITS.adminAction)) {
+      respond(cb, { error: "Too many admin requests; please retry shortly" });
+      return;
+    }
     if (!context.currentRoom || !context.currentClient) {
       respond(cb, { error: "Room not found" });
       return;
@@ -551,7 +679,13 @@ export const registerAdminHandlers = (
       return;
     }
 
-    const targetClient = currentRoom.getClient(targetId);
+    const normalizedTargetId = normalizeUserId(targetId);
+    if (!normalizedTargetId) {
+      respond(cb, { error: "Invalid user ID" });
+      return;
+    }
+
+    const targetClient = currentRoom.getClient(normalizedTargetId);
     if (!targetClient) {
       respond(cb, { error: "User not found" });
       return;
@@ -561,14 +695,14 @@ export const registerAdminHandlers = (
       return;
     }
 
-    const targetUserKey = currentRoom.userKeysById.get(targetId);
+    const targetUserKey = currentRoom.userKeysById.get(normalizedTargetId);
     if (!targetUserKey) {
       respond(cb, { error: "User identity not found" });
       return;
     }
 
     const alreadyAdmin = targetClient instanceof Admin;
-    const promoted = currentRoom.promoteClientToAdmin(targetId);
+    const promoted = currentRoom.promoteClientToAdmin(normalizedTargetId);
     if (!promoted) {
       respond(cb, { error: "Failed to promote user" });
       return;
@@ -608,7 +742,12 @@ export const registerAdminHandlers = (
     }
 
     const currentRoom = guard.room;
-    const targetClient = currentRoom.getClient(targetId);
+    const normalizedTargetId = normalizeUserId(targetId);
+    if (!normalizedTargetId) {
+      respond(cb, { error: "Invalid user ID" });
+      return;
+    }
+    const targetClient = currentRoom.getClient(normalizedTargetId);
     if (!targetClient) {
       respond(cb, { error: "User not found" });
       return;
@@ -618,14 +757,14 @@ export const registerAdminHandlers = (
       return;
     }
 
-    const targetUserKey = currentRoom.userKeysById.get(targetId);
+    const targetUserKey = currentRoom.userKeysById.get(normalizedTargetId);
     if (!targetUserKey) {
       respond(cb, { error: "User identity not found" });
       return;
     }
 
     const alreadyAdmin = targetClient instanceof Admin;
-    const promoted = currentRoom.promoteClientToAdmin(targetId);
+    const promoted = currentRoom.promoteClientToAdmin(normalizedTargetId);
     if (!promoted) {
       respond(cb, { error: "Failed to promote user" });
       return;
@@ -742,7 +881,7 @@ export const registerAdminHandlers = (
       },
       cb,
     ) => {
-      const guard = ensureAdminRoom(context);
+      const guard = ensureAdminRoom(context, { bulk: true });
       if ("error" in guard) {
         respond(cb, guard);
         return;
@@ -768,7 +907,7 @@ export const registerAdminHandlers = (
           guard.room.allowLockedUser(userKey);
         }
         if (pending) {
-          pending.socket.emit("joinApproved");
+          pending.socket.emit("joinApproved", { roomId: guard.room.id });
           admitted.push(userKey);
           for (const admin of guard.room.getAdmins()) {
             admin.socket.emit("userAdmitted", {
@@ -803,7 +942,7 @@ export const registerAdminHandlers = (
       },
       cb,
     ) => {
-      const guard = ensureAdminRoom(context);
+      const guard = ensureAdminRoom(context, { bulk: true });
       if ("error" in guard) {
         respond(cb, guard);
         return;
@@ -822,7 +961,10 @@ export const registerAdminHandlers = (
       const kickPresent = data?.kickPresent !== false;
       const reason =
         typeof data?.reason === "string" && data.reason.trim()
-          ? data.reason.trim()
+          ? normalizePlainText(data.reason, {
+              maxLength: MAX_ADMIN_REASON_LENGTH,
+              fallback: "Blocked by host",
+            })
           : "Blocked by host";
       const kickedUserIds = new Set<string>();
       const rejectedPending: string[] = [];
@@ -832,7 +974,7 @@ export const registerAdminHandlers = (
         guard.room.blockUser(userKey);
 
         if (pending) {
-          pending.socket.emit("joinRejected");
+          pending.socket.emit("joinRejected", { roomId: guard.room.id });
           rejectedPending.push(userKey);
           for (const admin of guard.room.getAdmins()) {
             admin.socket.emit("userRejected", {
@@ -843,12 +985,16 @@ export const registerAdminHandlers = (
         }
 
         if (kickPresent) {
-          for (const [userId, key] of guard.room.userKeysById.entries()) {
+          for (const [userId, key] of [
+            ...guard.room.userKeysById.entries(),
+          ]) {
             if (key !== userKey) continue;
             const target = guard.room.getClient(userId);
             if (!target) continue;
             target.socket.emit("kicked", { reason, roomId: guard.room.id });
             target.socket.disconnect(true);
+            // Deterministically stop media now (cancel any disconnect grace).
+            forceRemoveClientNow({ io, state, room: guard.room, userId });
             kickedUserIds.add(userId);
           }
         }
@@ -877,7 +1023,7 @@ export const registerAdminHandlers = (
       },
       cb,
     ) => {
-      const guard = ensureAdminRoom(context);
+      const guard = ensureAdminRoom(context, { bulk: true });
       if ("error" in guard) {
         respond(cb, guard);
         return;
@@ -914,7 +1060,7 @@ export const registerAdminHandlers = (
       },
       cb,
     ) => {
-      const guard = ensureAdminRoom(context);
+      const guard = ensureAdminRoom(context, { bulk: true });
       if ("error" in guard) {
         respond(cb, guard);
         return;
@@ -955,10 +1101,24 @@ export const registerAdminHandlers = (
         return;
       }
 
-      const targetClient = guard.room.getClient(targetId);
+      const normalizedTargetId = normalizeUserId(targetId);
+      const normalizedRoomId = normalizeRoomId(newRoomId);
+      if (!normalizedTargetId) {
+        respond(cb, { error: "Invalid user ID" });
+        return;
+      }
+      if (!normalizedRoomId) {
+        respond(cb, { error: "Invalid target room ID" });
+        return;
+      }
+      const targetClient = guard.room.getClient(normalizedTargetId);
       if (targetClient) {
-        Logger.info(`Admin redirecting user ${targetId} to ${newRoomId}`);
-        targetClient.socket.emit("redirect", { newRoomId });
+        Logger.info(`Admin redirecting user ${targetClient.id} to ${normalizedRoomId}`);
+        targetClient.socket.emit("redirect", {
+          roomId: guard.room.id,
+          userId: targetClient.id,
+          newRoomId: normalizedRoomId,
+        });
         respond(cb, { success: true });
       } else {
         respond(cb, { error: "User not found" });
@@ -973,14 +1133,20 @@ export const registerAdminHandlers = (
       return;
     }
 
-    const pending = guard.room.pendingClients.get(targetId);
+    const normalizedTargetId = normalizeUserKey(targetId);
+    if (!normalizedTargetId) {
+      respond(cb, { error: "Invalid user ID" });
+      return;
+    }
+
+    const pending = guard.room.pendingClients.get(normalizedTargetId);
     if (pending) {
       Logger.info(`Admin admitted user ${pending.userKey} to room ${options.roomId}`);
       if (guard.room.isLocked) {
         guard.room.allowLockedUser(pending.userKey);
       }
       guard.room.allowUser(pending.userKey);
-      pending.socket.emit("joinApproved");
+      pending.socket.emit("joinApproved", { roomId: guard.room.id });
 
       for (const admin of guard.room.getAdmins()) {
         admin.socket.emit("userAdmitted", {
@@ -1002,13 +1168,19 @@ export const registerAdminHandlers = (
       return;
     }
 
-    const pending = guard.room.pendingClients.get(targetId);
+    const normalizedTargetId = normalizeUserKey(targetId);
+    if (!normalizedTargetId) {
+      respond(cb, { error: "Invalid user ID" });
+      return;
+    }
+
+    const pending = guard.room.pendingClients.get(normalizedTargetId);
     if (pending) {
       Logger.info(
         `Admin rejected user ${pending.userKey} from room ${options.roomId}`,
       );
       guard.room.removePendingClient(pending.userKey);
-      pending.socket.emit("joinRejected");
+      pending.socket.emit("joinRejected", { roomId: guard.room.id });
 
       for (const admin of guard.room.getAdmins()) {
         admin.socket.emit("userRejected", {
@@ -1024,7 +1196,7 @@ export const registerAdminHandlers = (
   });
 
   socket.on("admin:admitAllPending", (cb) => {
-    const guard = ensureAdminRoom(context);
+    const guard = ensureAdminRoom(context, { bulk: true });
     if ("error" in guard) {
       respond(cb, guard);
       return;
@@ -1044,7 +1216,7 @@ export const registerAdminHandlers = (
   });
 
   socket.on("admin:rejectAllPending", (cb) => {
-    const guard = ensureAdminRoom(context);
+    const guard = ensureAdminRoom(context, { bulk: true });
     if ("error" in guard) {
       respond(cb, guard);
       return;
@@ -1257,7 +1429,9 @@ export const registerAdminHandlers = (
       return;
     }
 
-    const message = typeof data?.message === "string" ? data.message.trim() : "";
+    const message = normalizePlainText(data?.message, {
+      maxLength: MAX_ADMIN_NOTICE_LENGTH,
+    });
     if (!message) {
       respond(cb, { error: "Message is required" });
       return;
@@ -1298,7 +1472,7 @@ export const registerAdminHandlers = (
     },
     cb: (payload: { success: boolean; roomId?: string; delayMs?: number; error?: string }) => void,
   ): void => {
-    const guard = ensureAdminRoom(context);
+    const guard = ensureAdminRoom(context, { bulk: true });
     if ("error" in guard) {
       respond(cb, guard);
       return;
@@ -1320,18 +1494,10 @@ export const registerAdminHandlers = (
       endedBy: guard.adminId,
     });
 
-    const pendingSockets = Array.from(guard.room.pendingClients.values())
-      .map((pending) => pending.socket)
-      .filter(
-        (
-          pendingSocket,
-        ): pendingSocket is { disconnect: (close?: boolean) => void; emit: (event: string, payload: unknown) => void } =>
-          Boolean(
-            pendingSocket &&
-              typeof pendingSocket.emit === "function" &&
-              typeof pendingSocket.disconnect === "function",
-          ),
-      );
+    const pendingSockets = Array.from(
+      guard.room.pendingClients.values(),
+      (pending) => pending.socket,
+    );
 
     for (const pendingSocket of pendingSockets) {
       pendingSocket.emit("roomEnded", {
@@ -1390,12 +1556,17 @@ export const registerAdminHandlers = (
       respond(cb, guard);
       return;
     }
+    const normalizedTargetId = normalizeUserId(targetId);
+    if (!normalizedTargetId) {
+      respond(cb, { error: "Invalid user ID" });
+      return;
+    }
 
     const result = closeProducerForMediaKey({
       io,
       state,
       room: guard.room,
-      userId: targetId,
+      userId: normalizedTargetId,
       mediaKey: "audio-webcam",
       reason: "Muted by host",
     });

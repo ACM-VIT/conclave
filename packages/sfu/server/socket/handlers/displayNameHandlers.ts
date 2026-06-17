@@ -3,6 +3,7 @@ import { config } from "../../../config/config.js";
 import { MAX_DISPLAY_NAME_LENGTH } from "../../constants.js";
 import { normalizeDisplayName } from "../../identity.js";
 import type { ConnectionContext } from "../context.js";
+import { RATE_LIMITS, takeToken } from "../rateLimit.js";
 import { respond } from "./ack.js";
 
 export const registerDisplayNameHandlers = (
@@ -32,7 +33,14 @@ export const registerDisplayNameHandlers = (
           return;
         }
 
-        const user = (socket as any).user;
+        if (!takeToken(socket, "updateDisplayName", RATE_LIMITS.displayName)) {
+          respond(callback, {
+            error: "You are changing your display name too quickly",
+          });
+          return;
+        }
+
+        const user = socket.data.user;
         const clientId =
           typeof user?.clientId === "string" ? user.clientId : "default";
         const clientPolicy =

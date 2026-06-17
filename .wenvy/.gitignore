@@ -1,0 +1,4 @@
+cache/
+snapshots/
+*.local.json
+*.token

@@ -323,9 +323,12 @@ export function isValidAssetPath(value: string): boolean {
 }
 
 export function getSpeakerHighlightClasses(isActive: boolean): string {
-  return isActive
-    ? "border-emerald-300/90 ring-4 ring-emerald-400/45 shadow-[0_0_26px_rgba(16,185,129,0.28)]"
-    : "";
+  // Design law: active speaker = flat 2px solid brand-orange ring — no glow /
+  // drop-shadow halo, and orange (not emerald). Uses an INSET ring (box-shadow),
+  // NOT a border-width change: toggling 1px→2px border resized the tile's
+  // content box and read as jitter/flicker on every speaker change. The ring
+  // keeps the box size constant. Matches the grid's `.acm-video-tile.speaking`.
+  return isActive ? "ring-2 ring-inset ring-[#F95F4A]" : "";
 }
 
 export function prioritizeActiveSpeaker<T extends { userId: string }>(

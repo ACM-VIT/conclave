@@ -13,6 +13,16 @@ export type AssetUploadHandlerOptions = {
   mapError?: (response: Response) => Promise<string>;
 };
 
+type ReactNativeFormFile = {
+  uri: string;
+  name: string;
+  type: string;
+};
+
+type ReactNativeFormData = FormData & {
+  append(name: string, value: Blob | string | ReactNativeFormFile, fileName?: string): void;
+};
+
 const isNativeRuntime =
   typeof navigator !== "undefined" && navigator.product === "ReactNative";
 const DEFAULT_ENDPOINT = "/api/apps";
@@ -26,6 +36,14 @@ const defaultErrorMapper = async (response: Response): Promise<string> => {
     }
   }
   return response.statusText || "Asset upload failed";
+};
+
+const isAssetUploadResult = (value: unknown): value is AssetUploadResult => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const result = value as { url?: unknown };
+  return typeof result.url === "string" && result.url.trim().length > 0;
 };
 
 const appendAsset = async (
@@ -43,17 +61,17 @@ const appendAsset = async (
     if (typeof File !== "undefined") {
       form.append(fieldName, new File([input], "asset", { type: input.type }));
     } else {
-      form.append(fieldName, input as any);
+      form.append(fieldName, input);
     }
     return;
   }
 
   if (isNativeRuntime) {
-    form.append(fieldName, {
+    (form as ReactNativeFormData).append(fieldName, {
       uri: input.uri,
       name: input.name,
       type: input.type ?? "application/octet-stream",
-    } as any);
+    });
     return;
   }
 
@@ -65,7 +83,7 @@ const appendAsset = async (
   if (typeof File !== "undefined") {
     form.append(fieldName, new File([blob], input.name, { type: input.type ?? blob.type }));
   } else {
-    form.append(fieldName, blob as any);
+    form.append(fieldName, blob);
   }
 };
 
@@ -95,6 +113,11 @@ export const createAssetUploadHandler = (
       throw new Error(await mapError(response));
     }
 
-    return response.json() as Promise<AssetUploadResult>;
+    const payload = await response.json().catch(() => null);
+    if (!isAssetUploadResult(payload)) {
+      throw new Error("Asset upload returned an invalid response");
+    }
+
+    return payload;
   };
 };

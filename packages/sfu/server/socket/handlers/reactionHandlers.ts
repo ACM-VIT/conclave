@@ -3,6 +3,20 @@ import { allowedEmojiReactions } from "../../constants.js";
 import { isValidReactionAssetPath } from "../../reactions.js";
 import type { ConnectionContext } from "../context.js";
 import { respond } from "./ack.js";
+import { RATE_LIMITS, takeToken } from "../rateLimit.js";
+
+const MAX_REACTION_LABEL_LENGTH = 64;
+
+const normalizeReactionLabel = (value: unknown): string | undefined => {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const label = value.trim();
+  if (!label) {
+    return undefined;
+  }
+  return label.slice(0, MAX_REACTION_LABEL_LENGTH);
+};
 
 export const registerReactionHandlers = (
   context: ConnectionContext,
@@ -27,6 +41,12 @@ export const registerReactionHandlers = (
           return;
         }
 
+        // Throttle: drop over-budget reactions (ack an error, do not broadcast).
+        if (!takeToken(socket, "sendReaction", RATE_LIMITS.reaction)) {
+          respond(callback, { error: "You are reacting too quickly" });
+          return;
+        }
+
         if (data.kind === "asset" && typeof data.value === "string") {
           if (!isValidReactionAssetPath(data.value)) {
             respond(callback, { error: "Invalid reaction asset" });
@@ -37,8 +57,9 @@ export const registerReactionHandlers = (
             userId: context.currentClient.id,
             kind: "asset",
             value: data.value,
-            label: data.label,
+            label: normalizeReactionLabel(data.label),
             timestamp: Date.now(),
+            roomId: context.currentRoom.id,
           };
 
           socket.to(context.currentRoom.channelId).emit("reaction", reaction);
@@ -60,8 +81,9 @@ export const registerReactionHandlers = (
           userId: context.currentClient.id,
           kind: "emoji",
           value: emoji,
-          label: data.label,
+          label: normalizeReactionLabel(data.label),
           timestamp: Date.now(),
+          roomId: context.currentRoom.id,
         };
 
         socket.to(context.currentRoom.channelId).emit("reaction", reaction);

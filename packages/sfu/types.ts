@@ -2,6 +2,8 @@ import type {
   Router,
   Producer,
   Consumer,
+  ConsumerLayers,
+  ConsumerScore,
   WebRtcTransport,
   RtpCapabilities,
   RtpParameters,
@@ -9,10 +11,6 @@ import type {
   DtlsParameters,
 } from "mediasoup/types";
 import type { Socket } from "socket.io";
-
-// ============================================
-// Client & Room Types
-// ============================================
 
 export interface RoomInfo {
   id: string;
@@ -28,6 +26,16 @@ export interface RedirectData {
   newRoomId: string;
 }
 
+export interface RedirectNotification {
+  roomId?: string;
+  userId?: string;
+  newRoomId: string;
+}
+
+export interface JoinDecisionNotification {
+  roomId?: string;
+}
+
 export interface ClientOptions {
   id: string;
   socket: Socket;
@@ -38,16 +46,11 @@ export interface RoomOptions {
   router: Router;
 }
 
-// ============================================
-// Socket Event Payloads
-// ============================================
-
 export interface JoinRoomData {
   roomId: string;
   sessionId?: string;
   displayName?: string;
   ghost?: boolean;
-  recorder?: boolean;
   webinarInviteCode?: string;
   meetingInviteCode?: string;
 }
@@ -61,6 +64,7 @@ export interface JoinRoomResponse {
   hostUserIds?: string[];
   isLocked?: boolean;
   isTtsDisabled?: boolean;
+  isChatLocked?: boolean;
   isDmEnabled?: boolean;
   meetingRequiresInviteCode?: boolean;
   webinarRole?: "attendee" | "participant" | "host";
@@ -69,12 +73,13 @@ export interface JoinRoomResponse {
   webinarRequiresInviteCode?: boolean;
   webinarAttendeeCount?: number;
   webinarMaxAttendees?: number;
-  recording?: {
-    active: boolean;
-    paused: boolean;
-    startedAt: number | null;
-    available: boolean;
-  };
+}
+
+export interface JoinRoomErrorResponse {
+  error: string;
+  roomId?: string;
+  redirectInstanceId?: string;
+  redirectUrl?: string;
 }
 
 export interface CreateTransportResponse {
@@ -101,7 +106,7 @@ export interface RestartIceResponse {
 export interface ProduceData {
   transportId: string;
   kind: MediaKind;
-  rtpParameters: RtpParameters; // Using RtpParameters from mediasoup/types
+  rtpParameters: RtpParameters;
   appData: { type: "webcam" | "screen"; paused?: boolean };
 }
 
@@ -113,6 +118,8 @@ export interface ConsumeData {
   transportId?: string;
   producerId: string;
   rtpCapabilities: RtpCapabilities;
+  preferredLayers?: ConsumerLayerPreference;
+  priority?: number;
 }
 
 export interface ConsumeResponse {
@@ -120,6 +127,32 @@ export interface ConsumeResponse {
   producerId: string;
   kind: MediaKind;
   rtpParameters: RtpParameters;
+  producerPaused?: boolean;
+  score?: ConsumerScore;
+  preferredLayers?: ConsumerLayerPreference;
+  currentLayers?: ConsumerLayerPreference;
+  priority?: number;
+}
+
+export type ConsumerLayerPreference = ConsumerLayers;
+
+export interface SetConsumerPreferencesData {
+  consumerId: string;
+  preferredLayers?: ConsumerLayerPreference;
+  priority?: number | null;
+  paused?: boolean;
+  requestKeyFrame?: boolean;
+}
+
+export interface SetConsumerPreferencesResponse {
+  success: boolean;
+  consumerId: string;
+  producerId: string;
+  paused: boolean;
+  producerPaused: boolean;
+  priority: number;
+  preferredLayers?: ConsumerLayerPreference;
+  currentLayers?: ConsumerLayerPreference;
 }
 
 export interface ProducerInfo {
@@ -128,6 +161,7 @@ export interface ProducerInfo {
   kind: MediaKind;
   type: "webcam" | "screen";
   paused?: boolean;
+  roomId?: string;
 }
 
 export type WebinarFeedMode = "active-speaker";
@@ -158,94 +192,6 @@ export interface MeetingConfigSnapshot {
 
 export interface MeetingUpdateRequest {
   inviteCode?: string | null;
-}
-
-export type RecordingTrackKind = "audio" | "video" | "screen";
-export type RecordingTrackStatus = "active" | "ended" | "failed";
-
-export interface RecordingTrackArtifact {
-  id: string;
-  trackKind: RecordingTrackKind;
-  producerId: string;
-  producerUserId: string;
-  displayName: string | null;
-  codec: string;
-  container: "webm" | "mp4" | "m4a";
-  filename: string;
-  relativePath: string;
-  startedAt: number;
-  endedAt: number | null;
-  durationMs: number;
-  byteSize: number;
-  status: RecordingTrackStatus;
-  errorMessage: string | null;
-}
-
-export type RecordingSessionStatus =
-  | "idle"
-  | "starting"
-  | "active"
-  | "paused"
-  | "finalizing"
-  | "completed"
-  | "failed";
-
-export interface RecordingCompositeArtifact {
-  status: "pending" | "running" | "completed" | "failed";
-  filename: string | null;
-  relativePath: string | null;
-  startedAt: number | null;
-  completedAt: number | null;
-  byteSize: number;
-  errorMessage: string | null;
-}
-
-export interface RecordingSessionMetadata {
-  id: string;
-  roomId: string;
-  clientId: string;
-  scheduledWebinarId: string | null;
-  status: RecordingSessionStatus;
-  startedAt: number;
-  endedAt: number | null;
-  pausedDurationMs: number;
-  startedBy: string;
-  endedBy: string | null;
-  totalBytes: number;
-  resolution: { width: number; height: number } | null;
-  audioBitrateKbps: number;
-  videoBitrateKbps: number;
-  tracks: RecordingTrackArtifact[];
-  composite: RecordingCompositeArtifact | null;
-  manifestPath: string;
-  manifestRelativePath: string;
-  storagePath: string;
-  storageRelativePath: string;
-  errorMessage: string | null;
-  speakerTimeline: { at: number; userId: string | null }[];
-}
-
-export interface RecordingPublicState {
-  active: boolean;
-  paused: boolean;
-  sessionId: string | null;
-  startedAt: number | null;
-  startedBy: string | null;
-  trackCount: number;
-  /**
-   * Whether the SFU has the recording stack online (ffmpeg present and not
-   * disabled via SFU_RECORDING_DISABLED). When false, the web client hides
-   * the record button so hosts don't trigger something that can't run.
-   */
-  available: boolean;
-}
-
-export interface StartRecordingRequest {
-  startedBy?: string;
-  audioBitrateKbps?: number;
-  videoBitrateKbps?: number;
-  preferredVideoCodec?: "h264" | "vp8";
-  composite?: boolean;
 }
 
 export type ScheduledWebinarStatus =
@@ -279,7 +225,6 @@ export interface ScheduledWebinar {
   waitingRoomEnabled: boolean;
   earlyEntryMinutes: number;
   qaEnabled: boolean;
-  recordingRequested: boolean;
   notes: string;
   createdAt: number;
   createdBy: string;
@@ -308,7 +253,6 @@ export interface CreateScheduledWebinarRequest {
   waitingRoomEnabled?: boolean;
   earlyEntryMinutes?: number;
   qaEnabled?: boolean;
-  recordingRequested?: boolean;
   notes?: string;
 }
 
@@ -327,7 +271,6 @@ export interface UpdateScheduledWebinarRequest {
   waitingRoomEnabled?: boolean;
   earlyEntryMinutes?: number;
   qaEnabled?: boolean;
-  recordingRequested?: boolean;
   notes?: string;
   status?: ScheduledWebinarStatus;
 }
@@ -401,6 +344,32 @@ export type VideoQuality = "low" | "standard";
 
 export interface SetVideoQualityNotification {
   quality: VideoQuality;
+  roomId?: string;
+}
+
+export interface ConsumerTelemetryNotification {
+  event:
+    | "created"
+    | "score"
+    | "layerschange"
+    | "preferences"
+    | "pause"
+    | "resume"
+    | "producerpause"
+    | "producerresume"
+    | "closed";
+  roomId: string;
+  userId: string;
+  consumerId: string;
+  producerId: string;
+  kind: MediaKind;
+  score: ConsumerScore;
+  paused: boolean;
+  producerPaused: boolean;
+  priority: number;
+  preferredLayers?: ConsumerLayerPreference;
+  currentLayers?: ConsumerLayerPreference;
+  timestamp: number;
 }
 
 export interface NewProducerNotification {
@@ -408,24 +377,27 @@ export interface NewProducerNotification {
   producerUserId: string;
   kind: MediaKind;
   type: "webcam" | "screen";
+  paused?: boolean;
+  roomId?: string;
 }
 
 export interface ProducerClosedNotification {
   producerId: string;
-  producerUserId: string;
+  producerUserId?: string;
+  roomId?: string;
 }
 
 export interface UserJoinedNotification {
   userId: string;
+  displayName?: string;
+  isGhost?: boolean;
+  roomId?: string;
 }
 
 export interface UserLeftNotification {
   userId: string;
+  roomId?: string;
 }
-
-// ============================================
-// Chat Types
-// ============================================
 
 export interface ChatMessage {
   id: string;
@@ -444,9 +416,10 @@ export interface SendChatData {
 
 export interface ChatMessageNotification extends ChatMessage {}
 
-// ============================================
-// Reactions
-// ============================================
+export interface ChatHistorySnapshot {
+  messages: ChatMessage[];
+  roomId: string;
+}
 
 export interface SendReactionData {
   emoji?: string;
@@ -461,11 +434,8 @@ export interface ReactionNotification {
   value: string;
   label?: string;
   timestamp: number;
+  roomId?: string;
 }
-
-// ============================================
-// Raise Hand
-// ============================================
 
 export interface SetHandRaisedData {
   raised: boolean;
@@ -475,13 +445,13 @@ export interface HandRaisedNotification {
   userId: string;
   raised: boolean;
   timestamp: number;
+  roomId?: string;
 }
 
 export interface HandRaisedSnapshot {
   users: { userId: string; raised: boolean }[];
+  roomId?: string;
 }
-
-// shared browser types
 
 export interface LaunchBrowserData {
   url: string;
@@ -502,19 +472,18 @@ export interface BrowserStateNotification {
   url?: string;
   noVncUrl?: string;
   controllerUserId?: string;
+  roomId?: string;
 }
 
 export interface BrowserClosedNotification {
   closedBy?: string;
+  roomId?: string;
 }
-
-// ============================================
-// Apps (SDK) Types
-// ============================================
 
 export interface AppsState {
   activeAppId: string | null;
   locked: boolean;
+  roomId?: string;
 }
 
 export interface AppsOpenData {
@@ -565,29 +534,12 @@ export interface AppsAwarenessData {
   clientId?: number;
 }
 
-// ============================================
-// Media Constraints
-// ============================================
-
-export const VIDEO_CONSTRAINTS = {
-  maxWidth: 1920,
-  maxHeight: 1080,
-  maxFrameRate: 30,
-  maxBitrate: 5000000,
-} as const;
-
-export const AUDIO_CONSTRAINTS = {
-  maxBitrate: 192000,
-} as const;
-
-// ============================================
-// Re-exports for convenience
-// ============================================
-
 export type {
   Router,
   Producer,
   Consumer,
+  ConsumerLayers,
+  ConsumerScore,
   WebRtcTransport,
   RtpCapabilities,
   RtpParameters,

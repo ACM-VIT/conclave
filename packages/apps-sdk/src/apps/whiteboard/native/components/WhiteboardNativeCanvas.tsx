@@ -40,6 +40,7 @@ const DEFAULT_SCENE_BOUNDS = {
 const EXTRA_SCENE_PADDING = 120;
 const WHITEBOARD_FONT_FAMILY = "Virgil";
 const HANDLE_HIT_RADIUS = 12;
+const MIN_PINCH_DISTANCE = 1;
 
 type ResizeHandle = "nw" | "ne" | "sw" | "se";
 type ResizableElement = Extract<WhiteboardElement, { type: "shape" | "sticky" | "image" }>;
@@ -168,8 +169,12 @@ export type WhiteboardNativeCanvasProps = {
   locked: boolean;
   user?: AppUser;
   states?: PresenceState[];
-  onRequestTextEdit?: (elementId: string, currentText: string) => void;
-  editingText?: { elementId: string; text: string } | null;
+  onRequestTextEdit?: (
+    pageId: string,
+    elementId: string,
+    currentText: string,
+  ) => void;
+  editingText?: { pageId: string; elementId: string; text: string } | null;
   onEditingTextChange?: (text: string) => void;
   onEditingTextSubmit?: () => void;
   onEditingTextBlur?: () => void;
@@ -512,7 +517,6 @@ export function WhiteboardNativeCanvas({
   const MIN_SCALE = 0.25;
   const MAX_SCALE = 5;
 
-  /** Convert a screen-space point to canvas-space */
   const toCanvas = useCallback(
     (sx: number, sy: number) => ({
       x: (sx - viewport.x) / viewport.scale,
@@ -551,10 +555,11 @@ export function WhiteboardNativeCanvas({
 
   const editingElement = useMemo(() => {
     if (!editingText?.elementId) return null;
+    if (editingText.pageId !== pageId) return null;
     const element = elements.find((item) => item.id === editingText.elementId);
     if (!element || !isEditableElement(element)) return null;
     return element;
-  }, [editingText?.elementId, elements]);
+  }, [editingText?.elementId, editingText?.pageId, elements, pageId]);
 
   const sceneBounds = useMemo(() => getSceneBounds(elements), [elements]);
 
@@ -679,9 +684,9 @@ export function WhiteboardNativeCanvas({
     if (!touches || touches.length === 0) {
       return [{ x: event.nativeEvent.locationX, y: event.nativeEvent.locationY }];
     }
-    return Array.from(touches).map((t: any) => ({
-      x: t.locationX ?? t.pageX,
-      y: t.locationY ?? t.pageY,
+    return Array.from(touches).map((touch) => ({
+      x: touch.locationX ?? touch.pageX,
+      y: touch.locationY ?? touch.pageY,
     }));
   };
 
@@ -700,7 +705,10 @@ export function WhiteboardNativeCanvas({
           if (touches.length >= 2) {
             resizeSessionRef.current = null;
             flushPendingMove();
-            const dist = getDistance(touches[0], touches[1]);
+            const dist = Math.max(
+              MIN_PINCH_DISTANCE,
+              getDistance(touches[0], touches[1]),
+            );
             const midX = (touches[0].x + touches[1].x) / 2;
             const midY = (touches[0].y + touches[1].y) / 2;
             pinchRef.current = {
@@ -740,7 +748,6 @@ export function WhiteboardNativeCanvas({
               }
             }
 
-            // In text tools, tapping an existing text/sticky should edit it instead of creating a new element.
             if (!locked && onRequestTextEdit && (tool === "text" || tool === "sticky")) {
               const editableHit = [...elements]
                 .reverse()
@@ -750,7 +757,7 @@ export function WhiteboardNativeCanvas({
                 );
               if (editableHit) {
                 setSelectedId(editableHit.id);
-                onRequestTextEdit(editableHit.id, editableHit.text);
+                onRequestTextEdit(pageId, editableHit.id, editableHit.text);
                 scheduleCursorSync(pt.x, pt.y);
                 pinchRef.current = null;
                 return;
@@ -762,7 +769,6 @@ export function WhiteboardNativeCanvas({
               const newSelectedId = engineRef.current?.getSelectedId() ?? null;
               setSelectedId(newSelectedId);
 
-              // Text/sticky tools should immediately edit the newly placed element.
               if (
                 newSelectedId &&
                 onRequestTextEdit &&
@@ -770,6 +776,7 @@ export function WhiteboardNativeCanvas({
               ) {
                 const created = elements.find((item) => item.id === newSelectedId);
                 onRequestTextEdit(
+                  pageId,
                   newSelectedId,
                   created && isEditableElement(created)
                     ? created.text
@@ -789,7 +796,10 @@ export function WhiteboardNativeCanvas({
 
           if (touches.length >= 2) {
             resizeSessionRef.current = null;
-            const dist = getDistance(touches[0], touches[1]);
+            const dist = Math.max(
+              MIN_PINCH_DISTANCE,
+              getDistance(touches[0], touches[1]),
+            );
             const midX = (touches[0].x + touches[1].x) / 2;
             const midY = (touches[0].y + touches[1].y) / 2;
 
@@ -813,9 +823,11 @@ export function WhiteboardNativeCanvas({
 
             const pinch = pinchRef.current;
             const rawScale = (dist / pinch.initialDistance) * pinch.initialScale;
+            if (!Number.isFinite(rawScale)) return;
             const newScale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, rawScale));
 
-            const scaleRatio = newScale / pinch.initialScale;
+            const scaleRatio =
+              pinch.initialScale === 0 ? 1 : newScale / pinch.initialScale;
             const newX =
               midX - (pinch.initialMidX - pinch.initialOffsetX) * scaleRatio +
               (midX - pinch.initialMidX);
@@ -826,7 +838,6 @@ export function WhiteboardNativeCanvas({
             setViewport({ x: newX, y: newY, scale: newScale });
             setHasUserViewportTransform(true);
           } else if (!pinchRef.current) {
-            // Single finger draw
             const pt = toCanvas(touches[0].x, touches[0].y);
             const resizeSession = resizeSessionRef.current;
             if (!locked && resizeSession) {
@@ -1096,7 +1107,8 @@ export function WhiteboardNativeCanvas({
       ) : null}
 
       {textElements.map((element) => {
-        const isEditing = editingText?.elementId === element.id;
+        const isEditing =
+          editingText?.pageId === pageId && editingText.elementId === element.id;
 
         if (element.type === "text") {
           const left = element.x * viewport.scale + viewport.x;
@@ -1335,7 +1347,11 @@ const styles = StyleSheet.create({
     overflow: "hidden",
   },
   editBackdrop: {
-    ...StyleSheet.absoluteFillObject,
+    position: "absolute",
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
   },
   textEditorInput: {
     padding: 0,
@@ -1413,7 +1429,11 @@ const styles = StyleSheet.create({
     width: 8,
     height: 8,
     borderRadius: 4,
-    boxShadow: "0 0 12px rgba(0,0,0,0.4)",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.4,
+    shadowRadius: 12,
+    elevation: 4,
   },
   cursorLabel: {
     marginTop: 4,

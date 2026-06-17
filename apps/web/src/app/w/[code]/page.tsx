@@ -1,31 +1,16 @@
 import { headers as nextHeaders } from "next/headers";
 import { sanitizeWebinarLinkCode } from "../../lib/utils";
-import { resolveSfuClientId, resolveSfuSecret, resolveSfuUrl } from "@/lib/sfu-admin-auth";
-import WebinarLandingClient from "./WebinarLandingClient";
+import {
+  resolveSfuClientId,
+  resolveSfuSecret,
+  resolveSfuUrl,
+} from "@/lib/sfu-admin-auth";
+import WebinarLandingClient, {
+  type PublicScheduledWebinar,
+} from "./WebinarLandingClient";
 
 type WebinarRoomPageProps = {
   params: Promise<{ code: string }>;
-};
-
-type PublicScheduledWebinar = {
-  id: string;
-  linkSlug: string;
-  title: string;
-  description: string;
-  hostName: string;
-  scheduledStartAt: number;
-  scheduledEndAt: number;
-  status: "scheduled" | "live" | "ended" | "cancelled";
-  publicAccess: boolean;
-  requiresInviteCode: boolean;
-  waitingRoomEnabled: boolean;
-  earlyEntryMinutes: number;
-  qaEnabled: boolean;
-  webinarLink: string;
-  roomId: string;
-  clientId: string;
-  totalJoinCount: number;
-  peakAttendeeCount: number;
 };
 
 const lookupScheduledWebinar = async (
@@ -55,8 +40,7 @@ const lookupScheduledWebinar = async (
       scheduledWebinar?: PublicScheduledWebinar;
     };
     const webinar = data?.scheduledWebinar;
-    if (!webinar) return null;
-    if (webinar.clientId !== clientId) return null;
+    if (!webinar || webinar.clientId !== clientId) return null;
     return {
       id: webinar.id,
       linkSlug: webinar.linkSlug,

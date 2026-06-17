@@ -16,6 +16,11 @@ interface UseSmartParticipantOrderOptions {
   minSwitchIntervalMs?: number;
 }
 
+interface SmartParticipantOrderResult<T extends ParticipantWithMediaHints> {
+  orderedParticipants: T[];
+  featuredSpeakerId: string | null;
+}
+
 const hasLiveTrack = (
   stream: MediaStream | null | undefined,
   kind: "audio" | "video"
@@ -36,11 +41,13 @@ const getMediaPriority = (participant: ParticipantWithMediaHints): number => {
   return 0;
 };
 
-export function useSmartParticipantOrder<T extends ParticipantWithMediaHints>(
+export function useSmartParticipantOrderWithMetadata<
+  T extends ParticipantWithMediaHints,
+>(
   participants: readonly T[],
   activeSpeakerId: string | null,
   options: UseSmartParticipantOrderOptions = {}
-): T[] {
+): SmartParticipantOrderResult<T> {
   const { promoteDelayMs = 700, minSwitchIntervalMs = 2200 } = options;
   const participantIdsKey = useMemo(
     () => participants.map((participant) => participant.userId).join("|"),
@@ -56,6 +63,7 @@ export function useSmartParticipantOrder<T extends ParticipantWithMediaHints>(
   const promoteTimeoutRef = useRef<number | null>(null);
   const previousOrderRef = useRef<Map<string, number>>(new Map());
   const previousRaisedMapRef = useRef<Map<string, boolean>>(new Map());
+  const previousResultRef = useRef<T[]>([]);
 
   const clearPromoteTimeout = () => {
     if (promoteTimeoutRef.current) {
@@ -191,12 +199,6 @@ export function useSmartParticipantOrder<T extends ParticipantWithMediaHints>(
         return rightIsFeatured - leftIsFeatured;
       }
 
-      const leftPriority = getMediaPriority(left);
-      const rightPriority = getMediaPriority(right);
-      if (leftPriority !== rightPriority) {
-        return rightPriority - leftPriority;
-      }
-
       const leftRaised = Boolean(left.isHandRaised);
       const rightRaised = Boolean(right.isHandRaised);
       if (leftRaised !== rightRaised) {
@@ -211,6 +213,12 @@ export function useSmartParticipantOrder<T extends ParticipantWithMediaHints>(
         if (leftRaisedIndex !== rightRaisedIndex) {
           return leftRaisedIndex - rightRaisedIndex;
         }
+      }
+
+      const leftPriority = getMediaPriority(left);
+      const rightPriority = getMediaPriority(right);
+      if (leftPriority !== rightPriority) {
+        return rightPriority - leftPriority;
       }
 
       const previousLeft = previousOrder.get(left.userId);
@@ -233,11 +241,43 @@ export function useSmartParticipantOrder<T extends ParticipantWithMediaHints>(
     });
   }, [participants, featuredSpeakerId, raisedOrder]);
 
-  useEffect(() => {
-    previousOrderRef.current = new Map(
-      orderedParticipants.map((participant, index) => [participant.userId, index] as const)
-    );
+  // Return the SAME array reference when the resulting order is element-
+  // identical (e.g. a participant's mute toggled but the sort didn't move
+  // anyone). Protects every downstream useMemo/FLIP from re-running on a no-op
+  // reorder — same trick `raisedOrder` already uses above.
+  const stableOrdered = useMemo(() => {
+    const prev = previousResultRef.current;
+    const same =
+      prev.length === orderedParticipants.length &&
+      orderedParticipants.every((participant, index) => participant === prev[index]);
+    const next = same ? prev : orderedParticipants;
+    previousResultRef.current = next;
+    return next;
   }, [orderedParticipants]);
 
-  return orderedParticipants;
+  useEffect(() => {
+    previousOrderRef.current = new Map(
+      stableOrdered.map((participant, index) => [participant.userId, index] as const)
+    );
+  }, [stableOrdered]);
+
+  return useMemo(
+    () => ({
+      orderedParticipants: stableOrdered,
+      featuredSpeakerId,
+    }),
+    [featuredSpeakerId, stableOrdered],
+  );
+}
+
+export function useSmartParticipantOrder<T extends ParticipantWithMediaHints>(
+  participants: readonly T[],
+  activeSpeakerId: string | null,
+  options: UseSmartParticipantOrderOptions = {}
+): T[] {
+  return useSmartParticipantOrderWithMetadata(
+    participants,
+    activeSpeakerId,
+    options,
+  ).orderedParticipants;
 }

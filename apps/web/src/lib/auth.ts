@@ -42,6 +42,52 @@ const googleJwks = createRemoteJWKSet(
   new URL("https://www.googleapis.com/oauth2/v3/certs")
 );
 
+const firstNonEmpty = (...values: Array<string | undefined>): string | undefined => {
+  for (const value of values) {
+    const normalized = value?.trim();
+    if (normalized) return normalized;
+  }
+  return undefined;
+};
+
+const parseCsv = (value: string | undefined): string[] =>
+  (value || "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+
+const originFromUrl = (value: string | undefined): string | null => {
+  if (!value?.trim()) return null;
+  try {
+    const withProtocol = value.includes("://") ? value : `https://${value}`;
+    return new URL(withProtocol).origin;
+  } catch {
+    return null;
+  }
+};
+
+const configuredAppOrigins = [
+  firstNonEmpty(process.env.NEXT_PUBLIC_APP_URL, process.env.BETTER_AUTH_URL),
+  process.env.NEXT_PUBLIC_SITE_URL,
+  process.env.VERCEL_URL,
+  ...parseCsv(process.env.BETTER_AUTH_TRUSTED_ORIGINS),
+]
+  .map(originFromUrl)
+  .filter((origin): origin is string => Boolean(origin));
+
+const resolveTrustedOrigins = (): string[] => {
+  const origins = new Set<string>([
+    "http://localhost:3000",
+    "http://localhost:3001",
+    "http://127.0.0.1:3000",
+    "http://127.0.0.1:3001",
+    "https://appleid.apple.com",
+    ...configuredAppOrigins,
+  ]);
+
+  return Array.from(origins);
+};
+
 export const auth = betterAuth({
   session: {
     expiresIn: 60 * 60 * 24 * 7,
@@ -88,11 +134,7 @@ export const auth = betterAuth({
     ...robloxProvider,
     ...vercelProvider,
   },
-  
-  trustedOrigins: [
-    process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000",
-    "https://appleid.apple.com",
-  ],
+  trustedOrigins: resolveTrustedOrigins,
   
   advanced: {
     useSecureCookies: process.env.NODE_ENV === "production",

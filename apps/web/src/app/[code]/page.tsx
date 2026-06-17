@@ -43,9 +43,7 @@ const sanitizeClientId = (
 const resolveSessionEmail = async (): Promise<string | null> => {
   try {
     const headers = await nextHeaders();
-    const session = await auth.api
-      .getSession({ headers })
-      .catch(() => null);
+    const session = await auth.api.getSession({ headers }).catch(() => null);
     const email = session?.user?.email?.trim().toLowerCase();
     return email || null;
   } catch {
@@ -65,15 +63,10 @@ export default async function MeetRoomPage({
   const roomCode = decodeURIComponent(rawCode);
   const resolvedRoomCode =
     roomCode === "undefined" || roomCode === "null" ? "" : roomCode;
-  const bypassMediaPermissions = isTruthyParam(
-    resolvedSearchParams.recorder
-  );
-  const broadcastMode =
-    bypassMediaPermissions && isTruthyParam(resolvedSearchParams.broadcast);
+  const bypassMediaPermissions = isTruthyParam(resolvedSearchParams.recorder);
   const devOverridesEnabled = process.env.NODE_ENV === "development";
-  const recorderOverridesEnabled = bypassMediaPermissions;
   const safeBotOverridesEnabled =
-    devOverridesEnabled || recorderOverridesEnabled;
+    devOverridesEnabled || bypassMediaPermissions;
   const autoJoinOnMount =
     safeBotOverridesEnabled && isTruthyParam(resolvedSearchParams.autojoin);
   const hideJoinUI =
@@ -95,10 +88,6 @@ export default async function MeetRoomPage({
   const isAdmin =
     devOverridesEnabled && isTruthyParam(resolvedSearchParams.admin);
 
-  // Scheduled-meeting gate: render the countdown landing if a meeting is
-  // booked for this room code and the start time is still in the future.
-  // The recorder bot path bypasses the gate so the headless bot can join
-  // ahead of attendees when the host fires it manually.
   if (sanitizedRoomCode && !bypassMediaPermissions) {
     const clientIdForLookup = sfuClientId || "default";
     const scheduled = await lookupPublicScheduledMeetingByRoomCode(
@@ -108,10 +97,7 @@ export default async function MeetRoomPage({
     if (scheduled && !isMeetingJoinable(scheduled)) {
       const [sessionEmail, hostEmail] = await Promise.all([
         resolveSessionEmail(),
-        lookupScheduledMeetingHostEmail(
-          clientIdForLookup,
-          sanitizedRoomCode,
-        ),
+        lookupScheduledMeetingHostEmail(clientIdForLookup, sanitizedRoomCode),
       ]);
       const viewerIsHost = Boolean(
         sessionEmail && hostEmail && sessionEmail === hostEmail,
@@ -130,7 +116,6 @@ export default async function MeetRoomPage({
       initialRoomId={sanitizedRoomCode}
       forceJoinOnly={true}
       bypassMediaPermissions={bypassMediaPermissions}
-      broadcastMode={broadcastMode}
       sfuClientId={sfuClientId}
       autoJoinOnMount={autoJoinOnMount}
       hideJoinUI={hideJoinUI}

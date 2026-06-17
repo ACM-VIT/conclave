@@ -1,15 +1,235 @@
+import type { Consumer, ConsumerLayers } from "mediasoup/types";
 import type {
   ConsumeData,
   ConsumeResponse,
+  ConsumerTelemetryNotification,
   ProduceData,
   ProduceResponse,
   ProducerInfo,
+  SetConsumerPreferencesData,
+  SetConsumerPreferencesResponse,
   ToggleMediaData,
 } from "../../../types.js";
+import type { Client } from "../../../config/classes/Client.js";
+import type { Room } from "../../../config/classes/Room.js";
 import { Logger } from "../../../utilities/loggers.js";
 import { emitWebinarFeedChanged } from "../../webinarNotifications.js";
 import type { ConnectionContext } from "../context.js";
+import { RATE_LIMITS, takeToken } from "../rateLimit.js";
 import { respond } from "./ack.js";
+
+type ParseResult<T> = { ok: true; value: T | undefined } | { ok: false; error: string };
+
+const MAX_CONSUMER_LAYER = 10;
+const MIN_CONSUMER_PRIORITY = 0;
+const MAX_CONSUMER_PRIORITY = 255;
+const MAX_MEDIA_ID_LENGTH = 256;
+const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/;
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  Boolean(value && typeof value === "object" && !Array.isArray(value));
+
+const normalizeMediaId = (value: unknown): string | null => {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim();
+  if (
+    !normalized ||
+    normalized.length > MAX_MEDIA_ID_LENGTH ||
+    CONTROL_CHARACTER_PATTERN.test(normalized)
+  ) {
+    return null;
+  }
+  return normalized;
+};
+
+const parseConsumerLayers = (
+  value: unknown,
+): ParseResult<ConsumerLayers> => {
+  if (value === undefined) {
+    return { ok: true, value: undefined };
+  }
+  if (!isRecord(value)) {
+    return { ok: false, error: "Invalid consumer layer preference" };
+  }
+
+  const spatialLayer = Number(value.spatialLayer);
+  const temporalLayer =
+    value.temporalLayer === undefined ? undefined : Number(value.temporalLayer);
+
+  if (
+    !Number.isInteger(spatialLayer) ||
+    spatialLayer < 0 ||
+    spatialLayer > MAX_CONSUMER_LAYER
+  ) {
+    return { ok: false, error: "Invalid spatial layer" };
+  }
+
+  if (
+    temporalLayer !== undefined &&
+    (!Number.isInteger(temporalLayer) ||
+      temporalLayer < 0 ||
+      temporalLayer > MAX_CONSUMER_LAYER)
+  ) {
+    return { ok: false, error: "Invalid temporal layer" };
+  }
+
+  return {
+    ok: true,
+    value: {
+      spatialLayer,
+      ...(temporalLayer === undefined ? {} : { temporalLayer }),
+    },
+  };
+};
+
+const parseConsumerPriority = (
+  value: unknown,
+  options: { allowNull?: boolean } = {},
+): ParseResult<number | null> => {
+  if (value === undefined) {
+    return { ok: true, value: undefined };
+  }
+  if (value === null && options.allowNull) {
+    return { ok: true, value: null };
+  }
+
+  const priority = Number(value);
+  if (
+    !Number.isInteger(priority) ||
+    priority < MIN_CONSUMER_PRIORITY ||
+    priority > MAX_CONSUMER_PRIORITY
+  ) {
+    return { ok: false, error: "Invalid consumer priority" };
+  }
+
+  return { ok: true, value: priority };
+};
+
+const isLayerCapableConsumer = (consumer: Consumer): boolean =>
+  consumer.kind === "video" &&
+  (consumer.type === "simulcast" || consumer.type === "svc");
+
+const getDefaultConsumerLayers = (
+  room: Room,
+  client: Client,
+  consumer: Consumer,
+  producerInfo: ProducerInfo,
+): ConsumerLayers | undefined => {
+  if (!isLayerCapableConsumer(consumer) || producerInfo.type !== "webcam") {
+    return undefined;
+  }
+
+  if (client.isWebinarAttendee) {
+    return { spatialLayer: 0, temporalLayer: 1 };
+  }
+
+  if (room.currentQuality === "low") {
+    return { spatialLayer: 0, temporalLayer: 1 };
+  }
+
+  return undefined;
+};
+
+const getDefaultConsumerPriority = (
+  consumer: Consumer,
+  producerInfo: ProducerInfo,
+): number | undefined => {
+  if (consumer.kind !== "video") {
+    return undefined;
+  }
+
+  if (producerInfo.type === "screen") {
+    return 200;
+  }
+
+  return 100;
+};
+
+type ConsumerTelemetryTarget = {
+  room: Room;
+  client: Client;
+  consumer: Consumer;
+};
+
+const emitConsumerTelemetry = (
+  target: ConsumerTelemetryTarget,
+  event: ConsumerTelemetryNotification["event"],
+): void => {
+  const { room, client, consumer } = target;
+
+  const snapshot = client.updateConsumerTelemetry(consumer);
+  if (!snapshot) {
+    return;
+  }
+
+  client.socket.emit("consumerTelemetry", {
+    event,
+    roomId: room.id,
+    userId: client.id,
+    consumerId: snapshot.consumerId,
+    producerId: snapshot.producerId,
+    kind: snapshot.kind,
+    score: snapshot.score,
+    paused: snapshot.paused,
+    producerPaused: snapshot.producerPaused,
+    priority: snapshot.priority,
+    preferredLayers: snapshot.preferredLayers,
+    currentLayers: snapshot.currentLayers,
+    timestamp: snapshot.updatedAt,
+  } satisfies ConsumerTelemetryNotification);
+};
+
+const applyConsumerPreferences = async (
+  target: ConsumerTelemetryTarget,
+  options: {
+    preferredLayers?: ConsumerLayers;
+    priority?: number | null;
+    paused?: boolean;
+    requestKeyFrame?: boolean;
+    explicitLayers?: boolean;
+  },
+): Promise<void> => {
+  const { consumer } = target;
+
+  if (options.preferredLayers) {
+    if (isLayerCapableConsumer(consumer)) {
+      try {
+        await consumer.setPreferredLayers(options.preferredLayers);
+      } catch (error) {
+        if (options.explicitLayers) {
+          throw error;
+        }
+        Logger.debug(
+          `Could not set default layers for consumer ${consumer.id}: ${(error as Error).message}`,
+        );
+      }
+    } else if (options.explicitLayers) {
+      throw new Error("Consumer does not support layer preferences");
+    }
+  }
+
+  if (options.priority !== undefined) {
+    if (options.priority === null) {
+      await consumer.unsetPriority();
+    } else {
+      await consumer.setPriority(options.priority);
+    }
+  }
+
+  if (options.paused !== undefined) {
+    if (options.paused) {
+      await consumer.pause();
+    } else {
+      await consumer.resume();
+    }
+  }
+
+  if (options.requestKeyFrame && consumer.kind === "video") {
+    await consumer.requestKeyFrame();
+  }
+
+  emitConsumerTelemetry(target, "preferences");
+};
 
 export const registerMediaHandlers = (context: ConnectionContext): void => {
   const { socket, state, io } = context;
@@ -21,21 +241,23 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
     const activeRoom = state.rooms.get(roomChannelId);
     if (!activeRoom) return;
 
+    const keyFrameRequests: Promise<void>[] = [];
     for (const [targetClientId, targetClient] of activeRoom.clients.entries()) {
       if (targetClientId === ownerUserId) continue;
       const consumer = targetClient.getConsumer(producerId);
       if (!consumer || consumer.closed || consumer.kind !== "video") {
         continue;
       }
-      try {
-        await consumer.requestKeyFrame();
-      } catch (error) {
-        Logger.warn(
-          `Failed to request keyframe for producer ${producerId} on consumer ${consumer.id}:`,
-          error,
-        );
-      }
+      keyFrameRequests.push(
+        consumer.requestKeyFrame().catch((error) => {
+          Logger.warn(
+            `Failed to request keyframe for producer ${producerId} on consumer ${consumer.id}:`,
+            error,
+          );
+        }),
+      );
     }
+    await Promise.all(keyFrameRequests);
   };
 
   socket.on(
@@ -59,18 +281,45 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
           return;
         }
 
+        if (!takeToken(socket, "mediaProduce", RATE_LIMITS.mediaProduce)) {
+          respond(callback, {
+            error: "Too many media publish requests; please retry shortly",
+          });
+          return;
+        }
+
         if (
-          data.transportId &&
-          data.transportId.trim() &&
-          currentClient.producerTransport.id !== data.transportId
+          data?.transportId &&
+          normalizeMediaId(data.transportId) !== currentClient.producerTransport.id
         ) {
           respond(callback, { error: "Stale producer transport" });
           return;
         }
 
-        const { kind, rtpParameters, appData } = data;
-        const type = (appData.type as "webcam" | "screen") || "webcam";
-        const paused = !!appData.paused;
+        const kind = data?.kind;
+        if (kind !== "audio" && kind !== "video") {
+          respond(callback, { error: "Invalid media kind" });
+          return;
+        }
+        if (!isRecord(data?.rtpParameters)) {
+          respond(callback, { error: "Invalid RTP parameters" });
+          return;
+        }
+        const appData: Record<string, unknown> = isRecord(data?.appData)
+          ? data.appData
+          : {};
+        const type =
+          appData.type === "screen"
+            ? "screen"
+            : appData.type === "webcam" || appData.type === undefined
+              ? "webcam"
+              : null;
+        if (!type) {
+          respond(callback, { error: "Invalid producer type" });
+          return;
+        }
+        const paused = appData.paused === true;
+        const rtpParameters = data.rtpParameters;
 
         const isScreenShareVideo = type === "screen" && kind === "video";
         const isScreenShareAudio = type === "screen" && kind === "audio";
@@ -122,12 +371,12 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
               targetClient.socket.emit("producerClosed", {
                 producerId: producer.id,
                 producerUserId: clientId,
+                roomId: activeRoom.id,
               });
             }
           }
 
           emitWebinarFeedChanged(io, state, activeRoom);
-          void context.recordings.onProducerClosed(roomChannelId, producer.id);
         };
 
         producer.on("transportclose", notifyProducerClosed);
@@ -176,6 +425,7 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
         }
 
         currentClient.addProducer(producer);
+        room.indexClientProducer(currentClient.id, producer, type);
         await room.registerWebinarAudioProducer(
           currentClient.id,
           producer,
@@ -185,7 +435,7 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
         const activeRoom = state.rooms.get(roomChannelId);
         const activeClient = activeRoom?.getClient(clientId);
         const producerStillActive = Boolean(
-          activeClient?.getProducerInfos().some((info) => info.producerId === producer.id),
+          activeClient && activeRoom?.getProducerInfoById(producer.id),
         );
 
         if (producer.closed || producerClosed || !activeRoom || !producerStillActive) {
@@ -205,19 +455,10 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
             kind,
             type,
             paused: producer.paused,
+            roomId: activeRoom.id,
           });
         }
         emitWebinarFeedChanged(io, state, activeRoom);
-
-        const recordingSession = context.recordings.forRoom(roomChannelId);
-        if (recordingSession?.isActive()) {
-          void context.recordings.onProducerCreated(roomChannelId, {
-            producer,
-            userId: clientId,
-            displayName: activeRoom.getDisplayNameForUser(clientId) || null,
-            type,
-          });
-        }
 
         Logger.info(
           `User ${clientId} started producing ${kind} (${type}): ${producer.id}`,
@@ -238,34 +479,93 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
       callback: (response: ConsumeResponse | { error: string }) => void,
     ) => {
       try {
-        if (!context.currentRoom || !context.currentClient?.consumerTransport) {
+        const room = context.currentRoom;
+        const currentClient = context.currentClient;
+        if (!room || !currentClient?.consumerTransport) {
           respond(callback, { error: "Not ready to consume" });
           return;
         }
 
-        const { producerId, rtpCapabilities } = data;
+        const producerId = normalizeMediaId(data?.producerId);
+        if (!producerId) {
+          respond(callback, { error: "Producer ID is required" });
+          return;
+        }
+        const rtpCapabilities = data?.rtpCapabilities;
+        if (!isRecord(rtpCapabilities)) {
+          respond(callback, { error: "Invalid RTP capabilities" });
+          return;
+        }
+        const producerInfo = room.getProducerInfoById(producerId);
+        if (!producerInfo) {
+          respond(callback, { error: "Producer not found" });
+          return;
+        }
 
-        if (!context.currentRoom.canConsume(producerId, rtpCapabilities)) {
+        if (!room.canConsume(producerId, rtpCapabilities)) {
           respond(callback, { error: "Cannot consume this producer" });
           return;
         }
 
         if (
-          data.transportId &&
-          data.transportId.trim() &&
-          context.currentClient.consumerTransport.id !== data.transportId
+          data?.transportId &&
+          normalizeMediaId(data.transportId) !== currentClient.consumerTransport.id
         ) {
           respond(callback, { error: "Stale consumer transport" });
           return;
         }
 
-        const consumer = await context.currentClient.consumerTransport.consume({
+        const requestedLayers = parseConsumerLayers(data.preferredLayers);
+        if (!requestedLayers.ok) {
+          respond(callback, { error: requestedLayers.error });
+          return;
+        }
+        const requestedPriority = parseConsumerPriority(data.priority);
+        if (!requestedPriority.ok) {
+          respond(callback, { error: requestedPriority.error });
+          return;
+        }
+
+        const consumer = await currentClient.consumerTransport.consume({
           producerId,
           rtpCapabilities,
           paused: true,
         });
 
-        context.currentClient.addConsumer(consumer);
+        currentClient.addConsumer(consumer, {
+          producerUserId: producerInfo.producerUserId,
+          type: producerInfo.type,
+        });
+        const telemetryTarget = { room, client: currentClient, consumer };
+
+        consumer.on("score", () => {
+          emitConsumerTelemetry(telemetryTarget, "score");
+        });
+        consumer.on("layerschange", () => {
+          emitConsumerTelemetry(telemetryTarget, "layerschange");
+        });
+        consumer.on("producerpause", () => {
+          emitConsumerTelemetry(telemetryTarget, "producerpause");
+        });
+        consumer.on("producerresume", () => {
+          emitConsumerTelemetry(telemetryTarget, "producerresume");
+        });
+        consumer.observer.on("pause", () => {
+          emitConsumerTelemetry(telemetryTarget, "pause");
+        });
+        consumer.observer.on("resume", () => {
+          emitConsumerTelemetry(telemetryTarget, "resume");
+        });
+
+        await applyConsumerPreferences(telemetryTarget, {
+          preferredLayers:
+            requestedLayers.value ??
+            getDefaultConsumerLayers(room, currentClient, consumer, producerInfo),
+          priority:
+            requestedPriority.value ??
+            getDefaultConsumerPriority(consumer, producerInfo),
+          explicitLayers: requestedLayers.value !== undefined,
+        });
 
         consumer.on("transportclose", () => {
           Logger.info(`Consumer transport closed: ${consumer.id}`);
@@ -273,14 +573,25 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
 
         consumer.on("producerclose", () => {
           Logger.info(`Producer closed for consumer: ${consumer.id}`);
-          socket.emit("producerClosed", { producerId });
+          emitConsumerTelemetry(telemetryTarget, "closed");
+          socket.emit("producerClosed", {
+            producerId,
+            roomId: room.id,
+          });
         });
+
+        emitConsumerTelemetry(telemetryTarget, "created");
 
         respond(callback, {
           id: consumer.id,
           producerId: consumer.producerId,
           kind: consumer.kind,
           rtpParameters: consumer.rtpParameters,
+          producerPaused: consumer.producerPaused,
+          score: consumer.score,
+          preferredLayers: consumer.preferredLayers,
+          currentLayers: consumer.currentLayers,
+          priority: consumer.priority,
         });
       } catch (error) {
         Logger.error("Error consuming:", error);
@@ -319,38 +630,130 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
       callback: (response: { success: boolean } | { error: string }) => void,
     ) => {
       try {
-        if (!context.currentClient) {
+        const room = context.currentRoom;
+        const currentClient = context.currentClient;
+        if (!room || !currentClient) {
           respond(callback, { error: "Not in a room" });
           return;
         }
 
-        for (const consumer of context.currentClient.consumers.values()) {
-          if (consumer.id === data.consumerId) {
-            const wasPaused = consumer.paused;
-            if (wasPaused) {
-              await consumer.resume();
-            }
+        if (!takeToken(socket, "resumeConsumer", RATE_LIMITS.consumerControl)) {
+          respond(callback, {
+            error: "Too many consumer control requests; please retry shortly",
+          });
+          return;
+        }
 
-            if (
-              consumer.kind === "video" &&
-              (data.requestKeyFrame === true || wasPaused)
-            ) {
-              try {
-                await consumer.requestKeyFrame();
-              } catch (error) {
-                Logger.warn(
-                  `Failed to request keyframe for consumer ${consumer.id}:`,
-                  error,
-                );
-              }
-            }
+        const consumerId = normalizeMediaId(data?.consumerId);
+        if (!consumerId) {
+          respond(callback, { error: "Consumer ID is required" });
+          return;
+        }
 
-            respond(callback, { success: true });
-            return;
+        const consumer = currentClient.getConsumerById(consumerId);
+        if (!consumer) {
+          respond(callback, { error: "Consumer not found" });
+          return;
+        }
+
+        const wasPaused = consumer.paused;
+        if (wasPaused) {
+          await consumer.resume();
+        }
+
+        if (
+          consumer.kind === "video" &&
+          (data.requestKeyFrame === true || wasPaused)
+        ) {
+          try {
+            await consumer.requestKeyFrame();
+          } catch (error) {
+            Logger.warn(
+              `Failed to request keyframe for consumer ${consumer.id}:`,
+              error,
+            );
           }
         }
 
-        respond(callback, { error: "Consumer not found" });
+        emitConsumerTelemetry(
+          { room, client: currentClient, consumer },
+          wasPaused ? "resume" : "preferences",
+        );
+        respond(callback, { success: true });
+      } catch (error) {
+        respond(callback, { error: (error as Error).message });
+      }
+    },
+  );
+
+  socket.on(
+    "setConsumerPreferences",
+    async (
+      data: SetConsumerPreferencesData,
+      callback: (
+        response: SetConsumerPreferencesResponse | { error: string },
+      ) => void,
+    ) => {
+      try {
+        const room = context.currentRoom;
+        const currentClient = context.currentClient;
+        if (!room || !currentClient) {
+          respond(callback, { error: "Not in a room" });
+          return;
+        }
+
+        if (!takeToken(socket, "setConsumerPreferences", RATE_LIMITS.consumerControl)) {
+          respond(callback, {
+            error: "Too many consumer control requests; please retry shortly",
+          });
+          return;
+        }
+
+        const consumerId = normalizeMediaId(data?.consumerId);
+        if (!consumerId) {
+          respond(callback, { error: "Consumer ID is required" });
+          return;
+        }
+
+        const consumer = currentClient.getConsumerById(consumerId);
+        if (!consumer) {
+          respond(callback, { error: "Consumer not found" });
+          return;
+        }
+
+        const requestedLayers = parseConsumerLayers(data.preferredLayers);
+        if (!requestedLayers.ok) {
+          respond(callback, { error: requestedLayers.error });
+          return;
+        }
+
+        const requestedPriority = parseConsumerPriority(data.priority, {
+          allowNull: true,
+        });
+        if (!requestedPriority.ok) {
+          respond(callback, { error: requestedPriority.error });
+          return;
+        }
+
+        await applyConsumerPreferences({ room, client: currentClient, consumer }, {
+          preferredLayers: requestedLayers.value,
+          priority: requestedPriority.value,
+          paused:
+            typeof data?.paused === "boolean" ? data.paused : undefined,
+          requestKeyFrame: data?.requestKeyFrame === true,
+          explicitLayers: requestedLayers.value !== undefined,
+        });
+
+        respond(callback, {
+          success: true,
+          consumerId: consumer.id,
+          producerId: consumer.producerId,
+          paused: consumer.paused,
+          producerPaused: consumer.producerPaused,
+          priority: consumer.priority,
+          preferredLayers: consumer.preferredLayers,
+          currentLayers: consumer.currentLayers,
+        });
       } catch (error) {
         respond(callback, { error: (error as Error).message });
       }
@@ -372,6 +775,10 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
           respond(callback, {
             error: "Watch-only attendees cannot control microphones",
           });
+          return;
+        }
+        if (typeof data?.paused !== "boolean") {
+          respond(callback, { error: "Invalid mute state" });
           return;
         }
 
@@ -421,6 +828,10 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
           });
           return;
         }
+        if (typeof data?.paused !== "boolean") {
+          respond(callback, { error: "Invalid camera state" });
+          return;
+        }
 
         const videoProducer = context.currentClient.getProducer("video", "webcam");
         if (!videoProducer) {
@@ -468,12 +879,17 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
           });
           return;
         }
-        const removed = context.currentClient.removeProducerById(
-          data.producerId,
-        );
+        const producerId = normalizeMediaId(data?.producerId);
+        if (!producerId) {
+          respond(callback, { error: "Producer ID is required" });
+          return;
+        }
+
+        const removed = context.currentClient.removeProducerById(producerId);
         if (removed) {
+          context.currentRoom.removeProducerIndexById(producerId);
           if (removed.type === "screen") {
-            context.currentRoom.clearScreenShareProducer(data.producerId);
+            context.currentRoom.clearScreenShareProducer(producerId);
           } else if (removed.kind === "audio") {
             context.currentClient.isMuted = true;
             socket.to(context.currentRoom.channelId).emit("participantMuted", {
@@ -495,8 +911,9 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
               continue;
             }
             client.socket.emit("producerClosed", {
-              producerId: data.producerId,
+              producerId,
               producerUserId: context.currentClient.id,
+              roomId: context.currentRoom.id,
             });
           }
           emitWebinarFeedChanged(io, state, context.currentRoom);
@@ -505,8 +922,8 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
           return;
         }
 
-        if (context.currentRoom.screenShareProducerId === data.producerId) {
-          context.currentRoom.clearScreenShareProducer(data.producerId);
+        if (context.currentRoom.screenShareProducerId === producerId) {
+          context.currentRoom.clearScreenShareProducer(producerId);
           emitWebinarFeedChanged(io, state, context.currentRoom);
         }
 

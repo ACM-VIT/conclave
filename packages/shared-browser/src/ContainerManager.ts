@@ -69,18 +69,18 @@ export class ContainerManager {
     private getPortFromUrl(url: string): number | null {
         try {
             const parsed = new URL(url);
-            if (parsed.port) {
-                return parseInt(parsed.port, 10);
+            const pathMatch = parsed.pathname.match(/\/novnc\/(\d+)(?:\/|$)/);
+            if (pathMatch) {
+                return parseInt(pathMatch[1], 10);
             }
-            const pathMatch = parsed.pathname.match(/\/novnc\/(\d+)\//);
-            return pathMatch ? parseInt(pathMatch[1], 10) : null;
+            return parsed.port ? parseInt(parsed.port, 10) : null;
         } catch {
-            const match = url.match(/:(\d+)/);
-            if (match) {
-                return parseInt(match[1], 10);
+            const pathMatch = url.match(/\/novnc\/(\d+)(?:\/|$)/);
+            if (pathMatch) {
+                return parseInt(pathMatch[1], 10);
             }
-            const pathMatch = url.match(/\/novnc\/(\d+)\//);
-            return pathMatch ? parseInt(pathMatch[1], 10) : null;
+            const match = url.match(/:(\d+)/);
+            return match ? parseInt(match[1], 10) : null;
         }
     }
 
@@ -142,6 +142,8 @@ export class ContainerManager {
             };
         }
 
+        let container: Docker.Container | null = null;
+
         try {
             const containerName = `conclave-browser-${this.sanitizeContainerName(roomId)}`;
 
@@ -174,7 +176,7 @@ export class ContainerManager {
                 containerEnv.push(`VIDEO_SSRC=${videoTarget.ssrc}`);
             }
 
-            const container = await this.docker.createContainer({
+            container = await this.docker.createContainer({
                 Image: this.config.dockerImageName,
                 name: containerName,
                 Env: containerEnv,
@@ -218,6 +220,10 @@ export class ContainerManager {
             };
         } catch (error) {
             this.releasePort(port);
+            if (container) {
+                await container.remove({ force: true }).catch(() => {
+                });
+            }
             console.error(`[ContainerManager] Failed to launch browser for room ${roomId}:`, error);
             return {
                 success: false,

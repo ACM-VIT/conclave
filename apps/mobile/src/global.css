@@ -6,11 +6,11 @@
   @theme {
     --color-primary-orange: #F95F4A;
     --color-primary-pink: #FF007A;
-    --color-acm-cream: #FEFCD9;
-    --color-acm-dark: #060606;
-    --color-acm-dark-alt: #0d0e0d;
-    --color-acm-surface: #1a1a1a;
-    --color-acm-surface-light: #252525;
+    --color-acm-cream: #fafafa;
+    --color-acm-dark: #0a0a0b;
+    --color-acm-dark-alt: #131316;
+    --color-acm-surface: #18181b;
+    --color-acm-surface-light: #232327;
 
     /* Fonts */
     --font-rounded: "SF Pro Rounded", "Hiragino Maru Gothic ProN", Meiryo,

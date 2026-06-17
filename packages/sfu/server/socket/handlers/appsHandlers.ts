@@ -14,7 +14,44 @@ import type {
 import { Admin } from "../../../config/classes/Admin.js";
 import { Logger } from "../../../utilities/loggers.js";
 import type { ConnectionContext } from "../context.js";
+import { RATE_LIMITS, takeToken } from "../rateLimit.js";
 import { respond } from "./ack.js";
+
+const MAX_APPS_SYNC_BYTES = 64 * 1024;
+const MAX_APPS_SYNC_RESPONSE_BYTES = 1024 * 1024;
+const MAX_APPS_UPDATE_BYTES = 256 * 1024;
+const MAX_APPS_AWARENESS_BYTES = 64 * 1024;
+const MAX_APP_ID_LENGTH = 128;
+const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/;
+
+const normalizeAppId = (value: unknown): string | null => {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const appId = value.trim();
+  if (
+    !appId ||
+    appId.length > MAX_APP_ID_LENGTH ||
+    CONTROL_CHARACTER_PATTERN.test(appId)
+  ) {
+    return null;
+  }
+  return appId;
+};
+
+const emitAppAwarenessRemoval = (
+  context: ConnectionContext,
+  appId: string,
+  awarenessUpdate: Uint8Array | null,
+): void => {
+  if (!awarenessUpdate) {
+    return;
+  }
+  context.io.to(context.currentRoom!.channelId).emit("apps:awareness", {
+    appId,
+    awarenessUpdate,
+  } satisfies AppsAwarenessData);
+};
 
 const decodeBase64 = (value: string): Uint8Array | null => {
   const trimmed = value.trim();
@@ -61,6 +98,7 @@ const getRoomAppsState = (context: ConnectionContext): AppsState => {
   return {
     activeAppId: context.currentRoom.appsState.activeAppId,
     locked: context.currentRoom.appsState.locked,
+    roomId: context.currentRoom.id,
   };
 };
 
@@ -84,10 +122,19 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
         return;
       }
 
-      const appId = data?.appId?.trim();
+      const appId = normalizeAppId(data?.appId);
       if (!appId) {
-        respond(callback, { success: false, error: "Missing app id" });
+        respond(callback, { success: false, error: "Invalid app id" });
         return;
+      }
+
+      const previousAppId = context.currentRoom.appsState.activeAppId;
+      if (previousAppId && previousAppId !== appId) {
+        emitAppAwarenessRemoval(
+          context,
+          previousAppId,
+          context.currentRoom.clearAppState(previousAppId),
+        );
       }
 
       context.currentRoom.appsState.activeAppId = appId;
@@ -113,13 +160,11 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
 
     const activeAppId = context.currentRoom.appsState.activeAppId;
     if (activeAppId) {
-      const awarenessUpdate = context.currentRoom.clearAppAwareness(activeAppId);
-      if (awarenessUpdate) {
-        io.to(context.currentRoom.channelId).emit("apps:awareness", {
-          appId: activeAppId,
-          awarenessUpdate,
-        } satisfies AppsAwarenessData);
-      }
+      emitAppAwarenessRemoval(
+        context,
+        activeAppId,
+        context.currentRoom.clearAppState(activeAppId),
+      );
     }
 
     context.currentRoom.appsState.activeAppId = null;
@@ -142,7 +187,12 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
         return;
       }
 
-      context.currentRoom.appsState.locked = Boolean(data?.locked);
+      if (typeof data?.locked !== "boolean") {
+        respond(callback, { success: false, error: "Invalid app lock state" });
+        return;
+      }
+
+      context.currentRoom.appsState.locked = data.locked;
       const state = getRoomAppsState(context);
       io.to(context.currentRoom.channelId).emit("apps:state", state);
       respond(callback, { success: true, locked: state.locked });
@@ -160,10 +210,14 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
         respond(callback, { error: "Watch-only attendees cannot use shared apps" });
         return;
       }
+      if (!takeToken(socket, "apps:yjs:sync", RATE_LIMITS.appsYjsSync)) {
+        respond(callback, { error: "Too many app sync requests" });
+        return;
+      }
 
-      const appId = data?.appId?.trim();
+      const appId = normalizeAppId(data?.appId);
       if (!appId) {
-        respond(callback, { error: "Missing app id" });
+        respond(callback, { error: "Invalid app id" });
         return;
       }
 
@@ -178,10 +232,22 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
         respond(callback, { error: "Invalid sync payload" });
         return;
       }
+      if (stateVector.length > MAX_APPS_SYNC_BYTES) {
+        respond(callback, { error: "Sync payload too large" });
+        return;
+      }
 
       const update = Y.encodeStateAsUpdate(doc, stateVector);
-      const awarenessUpdate =
+      if (update.length > MAX_APPS_SYNC_RESPONSE_BYTES) {
+        respond(callback, { error: "App document too large to sync" });
+        return;
+      }
+      const awarenessSnapshot =
         context.currentRoom.encodeAppAwarenessSnapshot(appId) ?? undefined;
+      const awarenessUpdate =
+        awarenessSnapshot && awarenessSnapshot.length <= MAX_APPS_AWARENESS_BYTES
+          ? awarenessSnapshot
+          : undefined;
       respond(callback, {
         syncMessage: update,
         stateVector: Y.encodeStateVector(doc),
@@ -193,8 +259,9 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
   socket.on("apps:yjs:update", (data: AppsUpdateData) => {
     if (!context.currentRoom || !context.currentClient) return;
     if (context.currentClient.isObserver) return;
+    if (!takeToken(socket, "apps:yjs:update", RATE_LIMITS.appsYjsUpdate)) return;
 
-    const appId = data?.appId?.trim();
+    const appId = normalizeAppId(data?.appId);
     if (!appId) return;
     if (context.currentRoom.appsState.activeAppId !== appId) return;
 
@@ -205,6 +272,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
     const doc = context.currentRoom.getOrCreateAppDoc(appId);
     const update = toUint8Array(data.update);
     if (!update || update.length === 0) return;
+    if (update.length > MAX_APPS_UPDATE_BYTES) return;
 
     try {
       Y.applyUpdate(doc, update, socket.id);
@@ -222,12 +290,15 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
   socket.on("apps:awareness", (data: AppsAwarenessData) => {
     if (!context.currentRoom || !context.currentClient) return;
     if (context.currentClient.isObserver) return;
+    // High-frequency event: drop (ignore) when over budget rather than process.
+    if (!takeToken(socket, "apps:awareness", RATE_LIMITS.appsAwareness)) return;
 
-    const appId = data?.appId?.trim();
+    const appId = normalizeAppId(data?.appId);
     if (!appId) return;
     if (context.currentRoom.appsState.activeAppId !== appId) return;
     const awarenessUpdate = toUint8Array(data.awarenessUpdate);
     if (!awarenessUpdate || awarenessUpdate.length === 0) return;
+    if (awarenessUpdate.length > MAX_APPS_AWARENESS_BYTES) return;
     const clientId =
       typeof data.clientId === "number" && Number.isFinite(data.clientId)
         ? data.clientId

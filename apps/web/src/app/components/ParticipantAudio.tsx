@@ -132,6 +132,9 @@ function ParticipantAudio({
       window.removeEventListener("pointerdown", handleUserGesture, true);
       window.removeEventListener("keydown", handleUserGesture, true);
       playbackRecovery.clear();
+      if (audio.srcObject === participant.audioStream) {
+        audio.srcObject = null;
+      }
     };
   }, [
     participant.audioStream,

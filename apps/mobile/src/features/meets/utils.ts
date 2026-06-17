@@ -267,8 +267,8 @@ export function formatDisplayName(raw: string): string {
 }
 
 const VIT_STUDENT_DOMAIN = "vitstudent.ac.in";
-//need the whitespace lol
-const VIT_REGISTRATION_NUMBER_PATTERN = /\s+\d{2}[A-Za-z]{3}\d{3,4}[A-Za-z]?\s*$/;
+const TRAILING_VIT_REGISTRATION_NUMBER_PATTERN =
+  /\s+\d{2}[A-Za-z]{3}\d{3,4}[A-Za-z]?\s*$/;
 
 export function sanitizeInstitutionDisplayName(
   name: string,
@@ -278,7 +278,9 @@ export function sanitizeInstitutionDisplayName(
   if (!normalizedEmail || !normalizedEmail.endsWith(`@${VIT_STUDENT_DOMAIN}`)) {
     return name;
   }
-  const sanitized = name.replace(VIT_REGISTRATION_NUMBER_PATTERN, "").trim();
+  const sanitized = name
+    .replace(TRAILING_VIT_REGISTRATION_NUMBER_PATTERN, "")
+    .trim();
   return sanitized || name.trim();
 }
 

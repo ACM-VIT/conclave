@@ -140,9 +140,7 @@ export function AppsProvider({
       }
       try {
         doc.destroy();
-      } catch {
-        // ignore
-      }
+      } catch {}
     }
 
     for (const [appId, awareness] of awarenessRef.current.entries()) {
@@ -152,9 +150,7 @@ export function AppsProvider({
       }
       try {
         awareness.destroy();
-      } catch {
-        // ignore
-      }
+      } catch {}
     }
 
     docsRef.current.clear();

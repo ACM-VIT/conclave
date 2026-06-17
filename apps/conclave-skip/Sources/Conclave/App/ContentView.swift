@@ -1,16 +1,30 @@
 import SwiftUI
 import Observation
+#if canImport(UIKit) && !SKIP
+import UIKit
+#endif
 
-//
-//  ContentView.swift
-//  Conclave
-//
-//  Root navigation view with state-based routing
-//
+#if SKIP
+// Carbon → a Compose Material3 Color. So Android's NATIVE Material components
+// (DropdownMenu, Switch, ModalBottomSheet, ripples, TextField) read Carbon
+// instead of the default Material baseline. r/g/b in 0–255, a in 0–1.
+private func acmM3(_ r: Double, _ g: Double, _ b: Double, _ a: Double = 1.0) -> androidx.compose.ui.graphics.Color {
+    androidx.compose.ui.graphics.Color(
+        red: Float(r / 255.0),
+        green: Float(g / 255.0),
+        blue: Float(b / 255.0),
+        alpha: Float(a)
+    )
+}
+#endif
 
 struct ContentView: View {
     @Bindable var appState: AppState
-    @State var meetingViewModel = MeetingViewModel()
+    // Retained singleton (NOT a fresh per-view instance) so the call survives
+    // backgrounding / Activity recreation / the PiP composition swap — returning
+    // to the app lands back in the meeting, not the join screen.
+    @State private var meetingViewModel = MeetingViewModel.shared
+    @State private var pendingJoinPromptRequestID: Int?
 
     var body: some View {
         Group {
@@ -35,8 +49,310 @@ struct ContentView: View {
                 .transition(.opacity)
             }
         }
+        .overlay {
+            pendingJoinPromptOverlay
+        }
+        .onAppear {
+            handlePendingJoinURLIfNeeded()
+        }
+        .onChange(of: appState.pendingJoinRequestID) { _, _ in
+            handlePendingJoinURLIfNeeded()
+        }
+        .onChange(of: meetingViewModel.state.connectionState) { _, _ in
+            handlePendingJoinURLIfNeeded()
+        }
         .animation(.easeInOut(duration: 0.3), value: meetingViewModel.state.connectionState)
         .preferredColorScheme(.dark)
+        // App-wide brand accent so native controls (switches, pickers, links,
+        // text-field carets) use Carbon orange instead of the iOS system blue.
+        .tint(ACMColors.primaryOrange)
+        // Android: theme every NATIVE Material 3 component (Menu/DropdownMenu,
+        // Switch, ModalBottomSheet, ripples, TextField) with the Carbon palette
+        // so they're on-brand instead of the default purple Material baseline.
+        #if SKIP
+        .material3ColorScheme { scheme, _ in
+            scheme.copy(
+                primary: acmM3(249, 95, 74),
+                onPrimary: acmM3(255, 255, 255),
+                primaryContainer: acmM3(249, 95, 74),
+                onPrimaryContainer: acmM3(255, 255, 255),
+                secondary: acmM3(255, 0, 122),
+                onSecondary: acmM3(255, 255, 255),
+                background: acmM3(10, 10, 11),
+                onBackground: acmM3(250, 250, 250),
+                surface: acmM3(24, 24, 27),
+                onSurface: acmM3(250, 250, 250),
+                surfaceVariant: acmM3(35, 35, 39),
+                onSurfaceVariant: acmM3(250, 250, 250, 0.74),
+                error: acmM3(234, 67, 53),
+                onError: acmM3(255, 255, 255),
+                outline: acmM3(250, 250, 250, 0.24),
+                outlineVariant: acmM3(250, 250, 250, 0.14),
+                surfaceContainerLowest: acmM3(10, 10, 11),
+                surfaceContainerLow: acmM3(19, 19, 22),
+                surfaceContainer: acmM3(24, 24, 27),
+                surfaceContainerHigh: acmM3(35, 35, 39),
+                surfaceContainerHighest: acmM3(46, 46, 51),
+                scrim: acmM3(0, 0, 0)
+            )
+        }
+        #endif
+    }
+
+    @ViewBuilder
+    private var pendingJoinPromptOverlay: some View {
+        if pendingJoinPromptRequestID != nil,
+           appState.pendingJoinURLString != nil,
+           isInMeetingSession {
+            ZStack {
+                Color.black.opacity(0.74)
+                    .ignoresSafeArea()
+
+                VStack(alignment: .leading, spacing: 16) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Join new meeting?")
+                            .font(ACMFont.trial(18, weight: .bold))
+                            .foregroundStyle(ACMColors.text)
+
+                        Text("You are currently in \(currentRoomLabel). Leave it and join \(pendingJoinRoomLabel)?")
+                            .font(ACMFont.trial(13))
+                            .foregroundStyle(ACMColors.textMuted)
+                    }
+
+                    HStack(spacing: 10) {
+                        Spacer()
+
+                        Button {
+                            dismissPendingJoinPrompt()
+                        } label: {
+                            Text("Stay")
+                                .font(ACMFont.trial(12, weight: .semibold))
+                                .textCase(.uppercase)
+                                .tracking(1.4)
+                                .foregroundStyle(ACMColors.textMuted)
+                                .padding(.horizontal, 14)
+                                .frame(height: 38)
+                                .overlay {
+                                    RoundedRectangle(cornerRadius: ACMRadius.sm)
+                                        .strokeBorder(ACMColors.border, lineWidth: 1.0)
+                                }
+                        }
+                        .buttonStyle(.plain)
+
+                        Button {
+                            acceptPendingJoinPrompt()
+                        } label: {
+                            Text("Leave & Join")
+                                .font(ACMFont.trial(12, weight: .semibold))
+                                .textCase(.uppercase)
+                                .tracking(1.4)
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 14)
+                                .frame(height: 38)
+                                .acmColorBackground(ACMColors.primaryOrange)
+                                .clipShape(RoundedRectangle(cornerRadius: ACMRadius.sm))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(20)
+                .frame(maxWidth: 360)
+                .acmColorBackground(ACMColors.surface)
+                .overlay {
+                    RoundedRectangle(cornerRadius: ACMRadius.lg)
+                        .strokeBorder(ACMColors.border, lineWidth: 1.0)
+                }
+                .clipShape(RoundedRectangle(cornerRadius: ACMRadius.lg))
+                .padding(.horizontal, 24)
+            }
+            .transition(.opacity)
+        }
+    }
+
+    private var isInMeetingSession: Bool {
+        switch meetingViewModel.state.connectionState {
+        case .joining, .joined, .reconnecting, .waiting:
+            return true
+        case .disconnected, .connecting, .connected, .error:
+            return false
+        }
+    }
+
+    private var currentRoomLabel: String {
+        let roomId = meetingViewModel.state.roomId.trimmingCharacters(in: .whitespacesAndNewlines)
+        return roomId.isEmpty ? "your current meeting" : roomId
+    }
+
+    private var pendingJoinRoomLabel: String {
+        guard let link = appState.pendingJoinURLString,
+              let roomId = roomIdFromJoinURLString(link),
+              !roomId.isEmpty else {
+            return "another meeting"
+        }
+        return roomId
+    }
+
+    private func handlePendingJoinURLIfNeeded() {
+        guard let pendingURL = appState.pendingJoinURLString else {
+            pendingJoinPromptRequestID = nil
+            return
+        }
+
+        guard let pendingRoomId = roomIdFromJoinURLString(pendingURL),
+              !pendingRoomId.isEmpty else {
+            _ = appState.consumePendingJoinURLString()
+            pendingJoinPromptRequestID = nil
+            return
+        }
+
+        guard isInMeetingSession else {
+            pendingJoinPromptRequestID = nil
+            return
+        }
+
+        let currentRoomId = meetingViewModel.state.roomId.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !currentRoomId.isEmpty && pendingRoomId.lowercased() == currentRoomId.lowercased() {
+            _ = appState.consumePendingJoinURLString()
+            pendingJoinPromptRequestID = nil
+            return
+        }
+
+        pendingJoinPromptRequestID = appState.pendingJoinRequestID
+    }
+
+    private func dismissPendingJoinPrompt() {
+        _ = appState.consumePendingJoinURLString()
+        pendingJoinPromptRequestID = nil
+    }
+
+    private func acceptPendingJoinPrompt() {
+        guard appState.pendingJoinURLString != nil else {
+            pendingJoinPromptRequestID = nil
+            return
+        }
+        pendingJoinPromptRequestID = nil
+        meetingViewModel.leaveRoom()
+    }
+
+    private func roomIdFromJoinURLString(_ input: String) -> String? {
+        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        let normalized = normalizeJoinURLString(trimmed)
+        if let components = URLComponents(string: normalized) {
+            let segments = joinPathSegments(from: components)
+            if let roomId = roomId(fromPathSegments: segments) {
+                return roomId
+            }
+        }
+
+        let parts = trimmed.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false)
+        let path = parts.isEmpty ? trimmed : String(parts[0])
+        if path.contains("/") {
+            let segments = pathSegments(from: path)
+            if let roomId = roomId(fromPathSegments: segments) {
+                return roomId
+            }
+        }
+
+        let sanitized = sanitizeRoomCode(path)
+        return sanitized.isEmpty ? nil : sanitized
+    }
+
+    private func normalizeJoinURLString(_ input: String) -> String {
+        let lowercased = input.lowercased()
+        if hasURLScheme(input) {
+            return input
+        }
+        if lowercased.hasPrefix("conclave.acmvit.in") || lowercased.hasPrefix("www.conclave.acmvit.in") {
+            return "https://\(input)"
+        }
+        return input
+    }
+
+    private func hasURLScheme(_ input: String) -> Bool {
+        guard let colonIndex = input.firstIndex(of: ":") else { return false }
+        let scheme = String(input[..<colonIndex])
+        guard let first = scheme.first else { return false }
+        let afterColon = input[input.index(after: colonIndex)...]
+        guard afterColon.hasPrefix("//") else { return false }
+        let letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        let allowed = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+.-"
+        guard letters.contains(first) else { return false }
+        for character in scheme where !allowed.contains(character) {
+            return false
+        }
+        return true
+    }
+
+    private func joinPathSegments(from components: URLComponents) -> [String] {
+        var segments = pathSegments(from: components.path)
+        if components.scheme?.lowercased() == "conclave",
+           let host = components.host,
+           !host.isEmpty {
+            segments.insert(host, at: 0)
+        }
+        return segments
+    }
+
+    private func pathSegments(from path: String) -> [String] {
+        var segments: [String] = []
+        for segment in path.split(separator: "/", omittingEmptySubsequences: true) {
+            segments.append(String(segment))
+        }
+        return segments
+    }
+
+    private func roomId(fromPathSegments segments: [String]) -> String? {
+        guard !segments.isEmpty else { return nil }
+        if segments.count >= 2 && segments[0].lowercased() == "w" {
+            let roomId = sanitizeWebinarLinkCode(segments[1])
+            return roomId.isEmpty ? nil : roomId
+        }
+        guard let rawRoomId = segments.last else { return nil }
+        let roomId = sanitizeRoomCode(rawRoomId)
+        return roomId.isEmpty ? nil : roomId
+    }
+
+    private func sanitizeRoomCode(_ value: String) -> String {
+        let normalized = normalizeRoomCharacters(in: value)
+        return String(normalized.prefix(64))
+    }
+
+    private func sanitizeWebinarLinkCode(_ value: String) -> String {
+        let allowed = "abcdefghijklmnopqrstuvwxyz0123456789-"
+        var sanitized = ""
+        for character in value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+            if allowed.contains(character) {
+                sanitized += String(character)
+                if sanitized.count >= 32 {
+                    break
+                }
+            }
+        }
+        return sanitized
+    }
+
+    private func normalizeRoomCharacters(in input: String) -> String {
+        let separator: Character = "-"
+        var normalized = ""
+        var previousWasSeparator = false
+        let allowed = "abcdefghijklmnopqrstuvwxyz0123456789"
+
+        for character in input.lowercased() {
+            if allowed.contains(character) {
+                normalized += String(character)
+                previousWasSeparator = false
+            } else if !normalized.isEmpty && !previousWasSeparator {
+                normalized += String(separator)
+                previousWasSeparator = true
+            }
+        }
+
+        if previousWasSeparator && !normalized.isEmpty {
+            normalized = String(normalized.dropLast())
+        }
+        return normalized
     }
 }
 
@@ -77,10 +393,10 @@ struct WaitingRoomView: View {
             }
             .ignoresSafeArea()
 
-            VStack(spacing: 32) {
+            VStack(spacing: ACMSpacing.xl) {
                 ZStack {
                     Circle()
-                        .stroke(ACMColors.primaryOrangeGhost, lineWidth: 4)
+                        .stroke(ACMColors.primaryOrangeGhost, lineWidth: 3.0)
                         .frame(width: 80.0, height: 80.0)
 
 #if SKIP
@@ -90,66 +406,65 @@ struct WaitingRoomView: View {
 #else
                     Circle()
                         .trim(from: 0.0, to: 0.7)
-                        .stroke(ACMColors.primaryOrange, style: StrokeStyle(lineWidth: 4, lineCap: .round))
+                        .stroke(ACMColors.primaryOrange, style: StrokeStyle(lineWidth: 3.0, lineCap: .round))
                         .frame(width: 80.0, height: 80.0)
                         .rotationEffect(Angle.degrees(-90))
                         .modifier(RotatingModifier())
 #endif
                 }
 
-                VStack(spacing: 12) {
+                VStack(spacing: ACMSpacing.xs) {
                     Text("Waiting for host")
-                        .font(ACMFont.wide(24))
-                        .foregroundStyle(ACMColors.cream)
+                        .font(ACMFont.trial(24, weight: .bold))
+                        .foregroundStyle(ACMColors.text)
+                        .tracking(-0.4)
 
                     Text(viewModel.state.waitingMessage ?? "You'll join as soon as the host lets you in")
                         .font(ACMFont.trial(14))
-                        .foregroundStyle(acmColor(red: 254.0, green: 252.0, blue: 217.0, opacity: 0.5))
+                        .foregroundStyle(ACMColors.textMuted)
                         .multilineTextAlignment(.center)
                 }
 
-                HStack(spacing: 8) {
-                    ACMSystemIcon.image("number", androidName: "Icons.Outlined.Info")
-                        .font(.system(size: 12))
-                        .foregroundStyle(ACMColors.creamDim)
-
-                    Text(viewModel.state.roomId.uppercased())
-                        .font(ACMFont.mono(14))
-                        .foregroundStyle(acmColor(red: 254.0, green: 252.0, blue: 217.0, opacity: 0.7))
+                Button {
+                    MeetingShare.copyMeetingLink(viewModel.state.meetingLink)
+                } label: {
+                    Text(viewModel.state.roomId)
+                        .font(ACMFont.trial(14, weight: .medium))
+                        .foregroundStyle(ACMColors.text)
+                        .padding(.horizontal, ACMSpacing.md)
+                        .padding(.vertical, 10)
+                        .acmColorBackground(ACMColors.surface)
+                        .overlay {
+                            RoundedRectangle(cornerRadius: ACMRadius.sm)
+                                .strokeBorder(ACMColors.border, lineWidth: 1.0)
+                        }
+                        .clipShape(RoundedRectangle(cornerRadius: ACMRadius.sm))
                 }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 10)
-                .acmColorBackground(ACMColors.surface)
-                .overlay {
-                    RoundedRectangle(cornerRadius: 8)
-                        .strokeBorder(lineWidth: 1)
-                        .foregroundStyle(ACMColors.creamFaint)
-                }
-                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .buttonStyle(.plain)
 
                 Button {
                     viewModel.leaveRoom()
                 } label: {
                     Text("Cancel")
-                        .font(ACMFont.trial(14))
-                        .foregroundStyle(acmColor(red: 254.0, green: 252.0, blue: 217.0, opacity: 0.6))
-                        .padding(.horizontal, 24)
-                        .padding(.vertical, 12)
+                        .font(ACMFont.trial(16, weight: .medium))
+                        .foregroundStyle(ACMColors.textMuted)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 54.0)
                         .overlay {
-                            RoundedRectangle(cornerRadius: 8)
-                                .strokeBorder(lineWidth: 1)
-                                .foregroundStyle(ACMColors.creamSubtle)
+                            RoundedRectangle(cornerRadius: ACMRadius.lg)
+                                .strokeBorder(ACMColors.border, lineWidth: 1.0)
                         }
                 }
-                .padding(.top, 16)
+                .frame(maxWidth: 280)
+                .padding(.top, ACMSpacing.xs)
             }
-            .padding(32)
+            .padding(ACMSpacing.xl)
         }
     }
 }
 
 struct RotatingModifier: ViewModifier {
-    @State var isRotating = false
+    @State private var isRotating = false
 
     func body(content: Content) -> some View {
         content
@@ -172,45 +487,41 @@ struct ErrorView: View {
             ACMColors.dark
                 .ignoresSafeArea()
 
-            VStack(spacing: 24) {
+            VStack(spacing: ACMSpacing.xl) {
                 ZStack {
                     Circle()
-                        .fill(acmColor01(red: 1.0, green: 0.0, blue: 0.0, opacity: 0.1))
-                        .frame(width: 80, height: 80)
+                        .fill(ACMColors.error.opacity(0.12))
+                        .frame(width: 80.0, height: 80.0)
 
-                    ACMSystemIcon.image("exclamationmark.triangle.fill", androidName: "Icons.Filled.Warning")
-                        .font(.system(size: 36))
-                        .foregroundStyle(Color.red)
+                    ACMSystemIcon.icon("exclamationmark.triangle.fill", android: "warning", size: 32, tint: "danger")
+                        .foregroundStyle(ACMColors.error)
                 }
 
-                VStack(spacing: 8) {
+                VStack(spacing: ACMSpacing.xs) {
                     Text("Something went wrong")
-                        .font(ACMFont.wide(20))
-                        .foregroundStyle(ACMColors.cream)
+                        .font(ACMFont.trial(22, weight: .bold))
+                        .foregroundStyle(ACMColors.text)
+                        .tracking(-0.4)
 
                     Text(message)
                         .font(ACMFont.trial(14))
-                        .foregroundStyle(acmColor(red: 254.0, green: 252.0, blue: 217.0, opacity: 0.5))
+                        .foregroundStyle(ACMColors.textMuted)
                         .multilineTextAlignment(.center)
                         .frame(maxWidth: 280)
                 }
 
                 Button(action: onRetry) {
-                    HStack(spacing: 8) {
-                        ACMSystemIcon.image("arrow.clockwise.circle", androidName: "Icons.Filled.Refresh")
-                            .font(.system(size: 14, weight: .medium))
-
-                        Text("Try Again")
-                            .font(ACMFont.trial(14, weight: .medium))
-                    }
-                    .foregroundStyle(Color.white)
-                    .padding(.horizontal, 24)
-                    .padding(.vertical, 12)
-                    .acmColorBackground(ACMColors.primaryOrange)
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    Text("Try again")
+                        .font(ACMFont.trial(16, weight: .medium))
+                        .foregroundStyle(Color.white)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 54.0)
+                        .acmColorBackground(ACMColors.primaryOrange)
+                        .clipShape(RoundedRectangle(cornerRadius: ACMRadius.lg))
                 }
+                .frame(maxWidth: 280)
             }
-            .padding(32)
+            .padding(ACMSpacing.xl)
         }
     }
 }
