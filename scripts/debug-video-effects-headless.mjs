@@ -337,6 +337,20 @@ const backgroundIdByLabel = new Map([
   ["Stylish living room", "stylish-living-room-couch"],
   ["Color field", "gradient"],
 ]);
+const meetVideoPipeCombinedBackgroundLabelRaw =
+  process.env.CONCLAVE_MEET_VIDEOPIPE_COMBINED_BACKGROUND?.trim() ?? "";
+const meetVideoPipeCombinedBackgroundLabel =
+  meetVideoPipeCombinedBackgroundLabelRaw &&
+  !/^(0|false|none|off|no)$/i.test(meetVideoPipeCombinedBackgroundLabelRaw)
+    ? meetVideoPipeCombinedBackgroundLabelRaw
+    : null;
+const meetVideoPipeCombinedBackgroundId = meetVideoPipeCombinedBackgroundLabel
+  ? backgroundIdByLabel.get(meetVideoPipeCombinedBackgroundLabel) ?? null
+  : null;
+const meetVideoPipeCombinedOrder =
+  process.env.CONCLAVE_MEET_VIDEOPIPE_COMBINED_ORDER === "filter-first"
+    ? "filter-first"
+    : "background-first";
 const imageBackedBackgroundIds = new Set([
   "office",
   "studio",
@@ -1843,11 +1857,81 @@ const runMeetVideoPipeProbe = async (
       `Unknown CONCLAVE_FACE_FILTERS label for Meet VideoPipe probe: ${primaryFaceFilterLabel}`,
     );
   }
+  if (meetVideoPipeCombinedBackgroundLabel && !meetVideoPipeCombinedBackgroundId) {
+    throw new Error(
+      `Unknown CONCLAVE_MEET_VIDEOPIPE_COMBINED_BACKGROUND label: ${meetVideoPipeCombinedBackgroundLabel}`,
+    );
+  }
 
   const probeLogStartIndex = cdp.logs.length;
-  await clickButton(cdp, "Filters");
-  await sleep(75);
-  await clickButton(cdp, primaryFaceFilterLabel, 10000);
+  const selectCombinedBackground = async () => {
+    if (!meetVideoPipeCombinedBackgroundId) return;
+    await clickButton(cdp, "Backgrounds");
+    await sleep(75);
+    await clickButton(cdp, meetVideoPipeCombinedBackgroundLabel, 10000);
+    await waitFor(
+      cdp,
+      `${meetVideoPipeCombinedBackgroundLabel} background before Meet VideoPipe filter`,
+      `(() => {
+      const panel = document.querySelector('[data-testid="video-effects-panel"]');
+      const raw = panel?.getAttribute("data-video-effects-stats");
+      let stats = null;
+      try { stats = raw ? JSON.parse(raw) : null; } catch {}
+      const render = stats?.backgroundRender;
+      return panel?.getAttribute("data-video-effects-status") === "running" &&
+        panel?.getAttribute("data-video-effects-output-published") === "true" &&
+        Number(panel?.getAttribute("data-video-effects-black-output-count") || 1) === 0 &&
+        stats?.effects?.background === ${JSON.stringify(meetVideoPipeCombinedBackgroundId)} &&
+        render?.background === ${JSON.stringify(meetVideoPipeCombinedBackgroundId)} &&
+        render?.active === true;
+      })()`,
+      30000,
+    );
+  };
+  const selectPrimaryMeetVideoPipeFilter = async () => {
+    await clickButton(cdp, "Filters");
+    await sleep(75);
+    await clickButton(cdp, primaryFaceFilterLabel, 10000);
+  };
+  const waitForDirectMeetVideoPipeFilter = async () => {
+    await waitFor(
+      cdp,
+      `${primaryFaceFilterLabel} Meet VideoPipe filter before combined background`,
+      `(() => {
+      const panel = document.querySelector('[data-testid="video-effects-panel"]');
+      const raw = panel?.getAttribute("data-video-effects-stats");
+      let stats = null;
+      try { stats = raw ? JSON.parse(raw) : null; } catch {}
+      const debug = window.__conclaveGetMeetVideoDebug?.();
+      const producer = debug?.videoProducer;
+      return panel?.getAttribute("data-video-effects-status") === "running" &&
+        panel?.getAttribute("data-video-effects-output-published") === "true" &&
+        stats?.effects?.filter === ${JSON.stringify(primaryFaceFilterId)} &&
+        stats?.outputMode === "meet-videopipe" &&
+        stats?.meetVideoPipe?.active === true &&
+        stats?.meetVideoPipe?.mode === "direct" &&
+        stats?.meetVideoPipe?.outputTrack?.readyState === "live" &&
+        debug?.publish?.usingProcessedTrack === true &&
+        debug?.publish?.usingRawTrack === false &&
+        producer?.track?.readyState === "live";
+      })()`,
+      30000,
+    );
+  };
+  if (
+    meetVideoPipeCombinedBackgroundId &&
+    meetVideoPipeCombinedOrder === "background-first"
+  ) {
+    await selectCombinedBackground();
+  }
+  await selectPrimaryMeetVideoPipeFilter();
+  if (
+    meetVideoPipeCombinedBackgroundId &&
+    meetVideoPipeCombinedOrder === "filter-first"
+  ) {
+    await waitForDirectMeetVideoPipeFilter();
+    await selectCombinedBackground();
+  }
 
   const collectRelevantLogs = () =>
     cdp.logs
@@ -1877,11 +1961,31 @@ const runMeetVideoPipeProbe = async (
       const producer = debug?.videoProducer;
       const producerTrack = producer?.track;
       const publish = debug?.publish;
-      const selectedFilter =
-        stats?.effects?.filter ?? debug?.videoEffects?.filter ?? null;
+      const combinedBackgroundId = ${JSON.stringify(meetVideoPipeCombinedBackgroundId)};
+      const selectedFilter = combinedBackgroundId
+        ? debug?.videoEffects?.filter ?? stats?.effects?.filter ?? null
+        : stats?.effects?.filter ?? debug?.videoEffects?.filter ?? null;
       const blackOutputFrameCount = Number(
         panel?.getAttribute("data-video-effects-black-output-count") ?? 1
       );
+      const combinedBackgroundOk = combinedBackgroundId
+        ? stats?.effects?.background === combinedBackgroundId &&
+          stats?.backgroundRender?.background === combinedBackgroundId &&
+          stats?.backgroundRender?.active === true
+        : true;
+      const outputModeOk = combinedBackgroundId
+        ? (stats?.outputMode === "track-generator" || stats?.outputMode === "canvas-capture")
+        : stats?.outputMode === "meet-videopipe";
+      const frameSourceOk = combinedBackgroundId
+        ? (stats?.frameSource === "video" || stats?.frameSource === "track-processor")
+        : stats?.frameSource === "meet-videopipe";
+      const meetVideoPipeOk = combinedBackgroundId
+        ? meetVideoPipe?.active === true &&
+          meetVideoPipe?.mode === "gate" &&
+          meetVideoPipe?.gate?.selectedFilter === ${JSON.stringify(primaryFaceFilterId)}
+        : meetVideoPipe?.active === true &&
+          meetVideoPipe?.mode === "direct" &&
+          meetVideoPipe?.outputTrack?.readyState === "live";
       const ok =
         panel?.getAttribute("data-video-effects-status") === "running" &&
         panel?.getAttribute("data-video-effects-output-published") === "true" &&
@@ -1889,14 +1993,11 @@ const runMeetVideoPipeProbe = async (
         Number(panel?.getAttribute("data-video-effects-active-count") || 0) >= 1 &&
         blackOutputFrameCount === 0 &&
         selectedFilter === ${JSON.stringify(primaryFaceFilterId)} &&
-        stats?.needsFace === true &&
-        stats?.frameSource === "meet-videopipe" &&
-        stats?.outputMode === "meet-videopipe" &&
+        combinedBackgroundOk &&
+        frameSourceOk &&
+        outputModeOk &&
         stats?.latestOutputFrameVisible === true &&
-        meetVideoPipe?.active === true &&
-        meetVideoPipe?.mode === "direct" &&
-        Number(meetVideoPipe?.effectIdNumber || 0) > 0 &&
-        meetVideoPipe?.outputTrack?.readyState === "live" &&
+        meetVideoPipeOk &&
         debug?.connectionState === "joined" &&
         debug?.isCameraOff === false &&
         producer &&
@@ -1913,6 +2014,8 @@ const runMeetVideoPipeProbe = async (
             blackOutputFrameCount,
             outputMode: stats?.outputMode,
             frameSource: stats?.frameSource,
+            background: stats?.effects?.background ?? null,
+            backgroundRender: stats?.backgroundRender ?? null,
             latestOutputFrameVisible: stats?.latestOutputFrameVisible,
             meetVideoPipe,
             publish,
@@ -2078,6 +2181,33 @@ const runMeetVideoPipeProbe = async (
   const relevantLogs = collectRelevantLogs().slice(-40);
 
   const panelStats = state.panelStats ?? {};
+  const combinedOutputModeOk = meetVideoPipeCombinedBackgroundId
+    ? panelStats.outputMode === "track-generator" ||
+      panelStats.outputMode === "canvas-capture"
+    : panelStats.outputMode === "meet-videopipe";
+  const combinedFrameSourceOk = meetVideoPipeCombinedBackgroundId
+    ? panelStats.frameSource === "video" ||
+      panelStats.frameSource === "track-processor"
+    : panelStats.frameSource === "meet-videopipe";
+  const combinedBackgroundOk = meetVideoPipeCombinedBackgroundId
+    ? panelStats.effects?.background === meetVideoPipeCombinedBackgroundId &&
+      panelStats.backgroundRender?.background ===
+        meetVideoPipeCombinedBackgroundId &&
+      panelStats.backgroundRender?.active === true
+    : true;
+  const combinedMeetVideoPipeOk = meetVideoPipeCombinedBackgroundId
+    ? panelStats.meetVideoPipe?.active === true &&
+      panelStats.meetVideoPipe?.mode === "gate" &&
+      panelStats.meetVideoPipe?.gate?.selectedFilter === primaryFaceFilterId
+    : panelStats.meetVideoPipe?.active === true &&
+      panelStats.meetVideoPipe?.outputTrack?.readyState === "live";
+  const selectedFilterMatches = meetVideoPipeCombinedBackgroundId
+    ? state.meetVideoDebug?.videoEffects?.filter === primaryFaceFilterId
+    : panelStats.effects?.filter === primaryFaceFilterId;
+  const cameraToggleLivePrewarmOk = meetVideoPipeCombinedBackgroundId
+    ? cameraToggleLivePrewarmRequested === true
+    : cameraToggleLivePrewarmRequested === true &&
+      cameraToggleLivePrewarmDone === true;
   const quality = {
     ok:
       state.panelAttrs?.["data-video-effects-status"] === "running" &&
@@ -2087,16 +2217,19 @@ const runMeetVideoPipeProbe = async (
       Number(
         state.panelAttrs?.["data-video-effects-black-output-count"] ?? 1,
       ) === 0 &&
-      panelStats.effects?.filter === primaryFaceFilterId &&
-      panelStats.outputMode === "meet-videopipe" &&
-      panelStats.frameSource === "meet-videopipe" &&
-      panelStats.meetVideoPipe?.active === true &&
-      panelStats.meetVideoPipe?.outputTrack?.readyState === "live" &&
+      selectedFilterMatches &&
+      combinedBackgroundOk &&
+      combinedOutputModeOk &&
+      combinedFrameSourceOk &&
+      combinedMeetVideoPipeOk &&
       state.meetVideoDebug?.publish?.usingProcessedTrack === true &&
       state.meetVideoDebug?.publish?.shouldPublishProcessed === true &&
+      (meetVideoPipeCombinedBackgroundId
+        ? state.meetVideoDebug?.publish?.processedSourceMatchesChainedInput ===
+          true
+        : true) &&
       state.meetVideoDebug?.publish?.producerTrackLive === true &&
-      cameraToggleLivePrewarmRequested === true &&
-      cameraToggleLivePrewarmDone === true &&
+      cameraToggleLivePrewarmOk &&
       badLogs.length === 0,
     label: primaryFaceFilterLabel,
     expectedFilterId: primaryFaceFilterId,
@@ -2109,11 +2242,22 @@ const runMeetVideoPipeProbe = async (
     blackOutputFrameCount: Number(
       state.panelAttrs?.["data-video-effects-black-output-count"] ?? 1,
     ),
+    combinedBackgroundLabel: meetVideoPipeCombinedBackgroundLabel,
+    combinedBackgroundId: meetVideoPipeCombinedBackgroundId,
+    combinedOrder: meetVideoPipeCombinedBackgroundId
+      ? meetVideoPipeCombinedOrder
+      : null,
+    combinedBackgroundOk,
+    combinedOutputModeOk,
+    combinedFrameSourceOk,
+    selectedFilterMatches,
     outputMode: panelStats.outputMode ?? null,
     frameSource: panelStats.frameSource ?? null,
     effects: panelStats.effects ?? null,
+    backgroundRender: panelStats.backgroundRender ?? null,
     meetVideoPipe: panelStats.meetVideoPipe ?? null,
     publish: state.meetVideoDebug?.publish ?? null,
+    cameraToggleLivePrewarmOk,
     cameraToggleLivePrewarmRequested,
     cameraToggleLivePrewarmDone,
     badLogs,

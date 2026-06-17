@@ -9498,12 +9498,103 @@ export function useVideoEffects({
   const sourceVideoTrack = localSourceVideoTrack;
   const sourceStreamRef = useRef(localPipelineSourceStream);
   const finalTrackOwnerRef = useRef<FinalProcessedTrackOwner>("none");
+  const retainedLocalOutputTrackRef = useRef<MediaStreamTrack | null>(null);
+  const retainedLocalOutputCleanupRef = useRef<(() => void) | null>(null);
+  const mountedRef = useRef(true);
+  const processingContinuityRef = useRef({
+    active,
+    localPipelineActive,
+    meetVideoPipeActive,
+  });
+  processingContinuityRef.current = {
+    active,
+    localPipelineActive,
+    meetVideoPipeActive,
+  };
   const roomTilingPolicyContextRef =
     useRef<VideoEffectsRoomTilingPolicyContext | null>(null);
+
+  const shouldRetainProcessedTrackForTransition = (
+    track: MediaStreamTrack | null,
+  ) => {
+    const continuity = processingContinuityRef.current;
+    return Boolean(
+      track &&
+        track.readyState === "live" &&
+        mountedRef.current &&
+        continuity.active &&
+        (continuity.localPipelineActive || continuity.meetVideoPipeActive),
+    );
+  };
+
+  const retainLocalProcessedTrackForTransition = (
+    track: MediaStreamTrack,
+    reason: string,
+    cleanupResources?: () => void,
+  ) => {
+    if (!shouldRetainProcessedTrackForTransition(track)) return false;
+    const retainedTrack = retainedLocalOutputTrackRef.current;
+    if (retainedTrack && retainedTrack !== track) {
+      retainedLocalOutputCleanupRef.current?.();
+      retainedLocalOutputCleanupRef.current = null;
+      stopProcessedTrackAfterGrace(
+        debugId,
+        retainedTrack,
+        "superseded retained processed output",
+      );
+    }
+    retainedLocalOutputTrackRef.current = track;
+    if (cleanupResources) {
+      retainedLocalOutputCleanupRef.current = cleanupResources;
+    }
+    processedVideoTrackRef.current = track;
+    setProcessedTrackReady(true);
+    setStatus("loading");
+    setProcessedTrack((current) => {
+      if (!current || current === track) return track;
+      return current;
+    });
+    logVideoEffects(debugId, "retain_processed_track_during_transition", {
+      reason,
+      retainedTrack: getTrackDebugSnapshot(track),
+      continuity: processingContinuityRef.current,
+    });
+    return true;
+  };
+
+  const releaseRetainedLocalProcessedTrack = (
+    reason: string,
+    replacementTrack?: MediaStreamTrack | null,
+  ) => {
+    const retainedTrack = retainedLocalOutputTrackRef.current;
+    if (!retainedTrack) return;
+    const cleanupResources = retainedLocalOutputCleanupRef.current;
+    retainedLocalOutputTrackRef.current = null;
+    retainedLocalOutputCleanupRef.current = null;
+    if (retainedTrack === replacementTrack) return;
+    cleanupResources?.();
+    stopProcessedTrackAfterGrace(debugId, retainedTrack, reason);
+  };
 
   useEffect(() => {
     sourceStreamRef.current = localPipelineSourceStream;
   }, [localPipelineSourceStream]);
+
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false;
+      const retainedTrack = retainedLocalOutputTrackRef.current;
+      const cleanupResources = retainedLocalOutputCleanupRef.current;
+      retainedLocalOutputTrackRef.current = null;
+      retainedLocalOutputCleanupRef.current = null;
+      cleanupResources?.();
+      if (!retainedTrack || retainedTrack.readyState !== "live") return;
+      logVideoEffects(debugId, "stop_retained_processed_track_unmount", {
+        retainedTrack: getTrackDebugSnapshot(retainedTrack),
+      });
+      retainedTrack.stop();
+    };
+  }, [debugId]);
 
   useEffect(() => {
     const ingestRoomTilingMetadata = (value: unknown) => {
@@ -9653,6 +9744,10 @@ export function useVideoEffects({
       setProcessedTrackReady(true);
       setStatus("running");
       setError(null);
+      releaseRetainedLocalProcessedTrack(
+        "replaced by meet-videopipe output",
+        track,
+      );
       setDebugStats(
         createMeetVideoPipeDirectDebugStats({
           sourceStream,
@@ -9808,6 +9903,15 @@ export function useVideoEffects({
         releasedTrack &&
         finalTrackOwnerRef.current === "meet-videopipe"
       ) {
+        if (
+          retainLocalProcessedTrackForTransition(
+            releasedTrack,
+            "meet-videopipe cleanup",
+          )
+        ) {
+          void disposeSession?.();
+          return;
+        }
         finalTrackOwnerRef.current = "none";
         processedVideoTrackRef.current = null;
         setProcessedTrackReady(false);
@@ -9883,6 +9987,16 @@ export function useVideoEffects({
         });
       }
       if (finalTrackOwnerRef.current === "local") {
+        const currentProcessedTrack = processedVideoTrackRef.current;
+        if (
+          currentProcessedTrack &&
+          retainLocalProcessedTrackForTransition(
+            currentProcessedTrack,
+            "inactive or no live source",
+          )
+        ) {
+          return;
+        }
         processedVideoTrackRef.current = null;
         finalTrackOwnerRef.current = "none";
         setProcessedTrackReady(false);
@@ -9895,6 +10009,7 @@ export function useVideoEffects({
           return null;
         });
       } else if (!active && finalTrackOwnerRef.current !== "meet-videopipe") {
+        releaseRetainedLocalProcessedTrack("effects inactive");
         setProcessedTrackReady(false);
       }
       if (!active) {
@@ -11959,6 +12074,11 @@ export function useVideoEffects({
       }
       setProcessedTrackReady(true);
       finalTrackOwnerRef.current = "local";
+      processedVideoTrackRef.current = track;
+      releaseRetainedLocalProcessedTrack(
+        "replaced by local processed output",
+        track,
+      );
       logVideoEffects(debugId, "publish_processed_track", {
         visibleOutputFrameCount,
         blackOutputFrameCount,
@@ -16404,6 +16524,29 @@ export function useVideoEffects({
       track.removeEventListener("mute", handleOutputMute);
       track.removeEventListener("unmute", handleOutputUnmute);
       track.removeEventListener("ended", handleOutputEnded);
+      const retainOutputTrack =
+        finalTrackOwnerRef.current === "local" &&
+        shouldRetainProcessedTrackForTransition(track);
+      const retainedOutputWriterWorker = retainOutputTrack
+        ? outputWriterWorker
+        : null;
+      const retainedOutputGeneratorWriter = retainOutputTrack
+        ? outputGeneratorWriter
+        : null;
+      const cleanupRetainedOutputWriterResources = () => {
+        if (retainedOutputWriterWorker) {
+          closeWorkerAfterGrace(
+            retainedOutputWriterWorker,
+            "retained-output-writer",
+          );
+        }
+        if (retainedOutputGeneratorWriter) {
+          void retainedOutputGeneratorWriter.close().catch(() => {});
+          try {
+            retainedOutputGeneratorWriter.releaseLock();
+          } catch {}
+        }
+      };
       video.removeEventListener("loadedmetadata", handleHiddenVideoMediaEvent);
       video.removeEventListener("loadeddata", handleHiddenVideoMediaEvent);
       video.removeEventListener("canplay", handleHiddenVideoMediaEvent);
@@ -16413,7 +16556,11 @@ export function useVideoEffects({
       video.remove();
       closeTrackProcessor("cleanup");
       if (outputWriterWorker) {
-        closeWorkerAfterGrace(outputWriterWorker, "output-writer");
+        if (retainOutputTrack) {
+          detachWorkerCallbacks(outputWriterWorker);
+        } else {
+          closeWorkerAfterGrace(outputWriterWorker, "output-writer");
+        }
         outputWriterWorker = null;
       }
       if (segmentationProcessorWorker) {
@@ -16437,10 +16584,12 @@ export function useVideoEffects({
         new Error(VIDEO_EFFECTS_PROCESSOR_CLEANUP_MESSAGE),
       );
       if (outputGeneratorWriter) {
-        void outputGeneratorWriter.close().catch(() => {});
-        try {
-          outputGeneratorWriter.releaseLock();
-        } catch {}
+        if (!retainOutputTrack) {
+          void outputGeneratorWriter.close().catch(() => {});
+          try {
+            outputGeneratorWriter.releaseLock();
+          } catch {}
+        }
         outputGeneratorWriter = null;
       }
       tasksSegmenter?.close();
@@ -16448,6 +16597,15 @@ export function useVideoEffects({
       void legacySegmentation?.close().catch(() => {});
       void legacyFaceMesh?.close().catch(() => {});
       if (finalTrackOwnerRef.current === "local") {
+        if (
+          retainLocalProcessedTrackForTransition(
+            track,
+            "processor cleanup",
+            cleanupRetainedOutputWriterResources,
+          )
+        ) {
+          return;
+        }
         finalTrackOwnerRef.current = "none";
         processedVideoTrackRef.current = null;
         setProcessedTrackReady(false);

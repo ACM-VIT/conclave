@@ -146,14 +146,53 @@ const getMeetTrackDebugSnapshot = (track: MediaStreamTrack | null) => {
   };
 };
 
-const getVideoEffectsDebugTrackId = (
-  debugStats: Record<string, unknown> | null | undefined,
-  key: "outputTrack" | "sourceTrack",
-) => {
-  const track = debugStats?.[key];
+const getDebugTrackId = (track: unknown) => {
   if (typeof track !== "object" || track === null) return null;
   const id = (track as { id?: unknown }).id;
   return typeof id === "string" ? id : null;
+};
+
+const getVideoEffectsDebugTrackId = (
+  debugStats: Record<string, unknown> | null | undefined,
+  key: "outputTrack" | "sourceTrack",
+) => getDebugTrackId(debugStats?.[key]);
+
+const getVideoEffectsChainedSourceTrackId = (
+  debugStats: Record<string, unknown> | null | undefined,
+  rawTrackId: string | null,
+) => {
+  if (!rawTrackId) return null;
+  const sourceTrackId = getVideoEffectsDebugTrackId(debugStats, "sourceTrack");
+  if (!sourceTrackId) return null;
+  const meetVideoPipe = debugStats?.meetVideoPipe;
+  if (typeof meetVideoPipe !== "object" || meetVideoPipe === null) {
+    return null;
+  }
+  const gate = (meetVideoPipe as { gate?: unknown }).gate;
+  if (typeof gate !== "object" || gate === null) return null;
+  const gateRecord = gate as {
+    active?: unknown;
+    rawTrack?: unknown;
+  };
+  const gateRawTrackId = getDebugTrackId(gateRecord.rawTrack);
+  if (gateRecord.active === true && gateRawTrackId === rawTrackId) {
+    return sourceTrackId;
+  }
+  return null;
+};
+
+const getVideoEffectsDebugOutputPublished = (
+  debugStats: Record<string, unknown> | null | undefined,
+) => {
+  if (debugStats?.outputTrackPublished === true) return true;
+  const framePipeline = debugStats?.framePipeline;
+  if (typeof framePipeline !== "object" || framePipeline === null) {
+    return false;
+  }
+  return (
+    (framePipeline as { outputTrackPublished?: unknown })
+      .outputTrackPublished === true
+  );
 };
 
 const getMeetStreamDebugSnapshot = (stream: MediaStream | null) => {
@@ -999,13 +1038,31 @@ export default function MeetsClient({
         videoEffectsDebugStats,
         "outputTrack",
       );
+      const processedDebugOutputPublished =
+        getVideoEffectsDebugOutputPublished(videoEffectsDebugStats);
+      const processedChainedSourceTrackId = getVideoEffectsChainedSourceTrackId(
+        videoEffectsDebugStats,
+        rawTrack?.id ?? null,
+      );
+      const processedSourceMatchesRawTrack = Boolean(
+        processedSourceTrackId &&
+          rawTrack &&
+          processedSourceTrackId === rawTrack.id,
+      );
+      const processedSourceMatchesChainedInput = Boolean(
+        processedSourceTrackId &&
+          processedChainedSourceTrackId &&
+          processedSourceTrackId === processedChainedSourceTrackId,
+      );
       const processedTrackHasExplicitSourceMismatch = Boolean(
         processedSourceTrackId &&
           rawTrack &&
-          processedSourceTrackId !== rawTrack.id,
+          !processedSourceMatchesRawTrack &&
+          !processedSourceMatchesChainedInput,
       );
       const processedTrackHasExplicitOutputMismatch = Boolean(
-        processedOutputTrackId &&
+        processedDebugOutputPublished &&
+          processedOutputTrackId &&
           processedTrack &&
           processedOutputTrackId !== processedTrack.id,
       );
@@ -1032,6 +1089,9 @@ export default function MeetsClient({
             rawTrack: getMeetTrackDebugSnapshot(rawTrack),
             processedSourceTrackId,
             processedOutputTrackId,
+            processedDebugOutputPublished,
+            processedChainedSourceTrackId,
+            processedSourceMatchesChainedInput,
           },
         );
         return processedTrack;
@@ -1051,6 +1111,9 @@ export default function MeetsClient({
           rawTrack: getMeetTrackDebugSnapshot(rawTrack),
           processedSourceTrackId,
           processedOutputTrackId,
+          processedDebugOutputPublished,
+          processedChainedSourceTrackId,
+          processedSourceMatchesChainedInput,
           processedTrackHasExplicitSourceMismatch,
           processedTrackHasExplicitOutputMismatch,
         });
@@ -1067,6 +1130,9 @@ export default function MeetsClient({
         rawTrack: getMeetTrackDebugSnapshot(rawTrack),
         rawStream: getMeetStreamDebugSnapshot(stream ?? null),
         localStreamRef: getMeetStreamDebugSnapshot(refs.localStreamRef.current),
+        processedDebugOutputPublished,
+        processedChainedSourceTrackId,
+        processedSourceMatchesChainedInput,
       });
       return rawTrack;
     },
@@ -1112,13 +1178,31 @@ export default function MeetsClient({
         videoEffectsDebugStats,
         "outputTrack",
       );
+      const processedDebugOutputPublished =
+        getVideoEffectsDebugOutputPublished(videoEffectsDebugStats);
+      const processedChainedSourceTrackId = getVideoEffectsChainedSourceTrackId(
+        videoEffectsDebugStats,
+        rawTrack?.id ?? null,
+      );
+      const processedSourceMatchesRawTrack = Boolean(
+        processedSourceTrackId &&
+          rawTrack &&
+          processedSourceTrackId === rawTrack.id,
+      );
+      const processedSourceMatchesChainedInput = Boolean(
+        processedSourceTrackId &&
+          processedChainedSourceTrackId &&
+          processedSourceTrackId === processedChainedSourceTrackId,
+      );
       const processedTrackHasExplicitSourceMismatch = Boolean(
         processedSourceTrackId &&
           rawTrack &&
-          processedSourceTrackId !== rawTrack.id,
+          !processedSourceMatchesRawTrack &&
+          !processedSourceMatchesChainedInput,
       );
       const processedTrackHasExplicitOutputMismatch = Boolean(
-        processedOutputTrackId &&
+        processedDebugOutputPublished &&
+          processedOutputTrackId &&
           processedTrack &&
           processedOutputTrackId !== processedTrack.id,
       );
@@ -1169,10 +1253,13 @@ export default function MeetsClient({
           processedTrackMatchesCurrentSource,
           processedTrackHasExplicitSourceMismatch,
           processedTrackHasExplicitOutputMismatch,
+          processedChainedSourceTrackId,
+          processedSourceMatchesChainedInput,
           processedTrackMetadataPending:
             !processedSourceTrackId || !processedOutputTrackId,
           processedSourceTrackId,
           processedOutputTrackId,
+          processedDebugOutputPublished,
           producerTrackLive:
             Boolean(producer) &&
             !producer?.closed &&
