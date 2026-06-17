@@ -33,6 +33,7 @@ import { HOTKEYS } from "../lib/hotkeys";
 export interface ControlsBarProps {
   roomId?: string;
   isMuted: boolean;
+  isMuteTogglePending?: boolean;
   isCameraOff: boolean;
   isScreenSharing: boolean;
   activeScreenShareId: string | null;
@@ -128,6 +129,7 @@ export interface ControlDescriptor {
   variant: ControlButtonVariant;
   badge?: number;
   disabled?: boolean;
+  loading?: boolean;
   onPress?: () => void;
 }
 
@@ -201,10 +203,19 @@ export function buildControlsConfig(p: ControlsBarProps): ControlsConfig {
     {
       id: "mic",
       icon: p.isMuted ? MicOff : Mic,
-      label: ghost ? "Ghost mode: mic locked" : p.isMuted ? "Unmute" : "Mute",
+      label: ghost
+        ? "Ghost mode: mic locked"
+        : p.isMuteTogglePending
+          ? p.isMuted
+            ? "Unmuting"
+            : "Muting"
+          : p.isMuted
+            ? "Unmute"
+            : "Mute",
       hotkey: HOTKEYS.toggleMute.keys,
       variant: ghost ? "default" : p.isMuted ? "muted" : "default",
       disabled: ghost,
+      loading: Boolean(p.isMuteTogglePending && !ghost),
       onPress: p.onToggleMute,
     },
     {

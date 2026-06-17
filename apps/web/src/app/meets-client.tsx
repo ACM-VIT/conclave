@@ -841,6 +841,7 @@ export default function MeetsClient({
     handleAudioOutputDeviceChange,
     updateVideoQualityRef,
     toggleMute,
+    isMuteTogglePending,
     toggleCamera,
     toggleScreenShare,
     stopLocalTrack,
@@ -2284,6 +2285,7 @@ export default function MeetsClient({
           onPrejoinMediaCommit={handlePrejoinMediaCommit}
           isCameraOff={isCameraOff}
           isMuted={isMuted}
+          isMuteTogglePending={isMuteTogglePending}
           isHandRaised={isHandRaised}
           participants={participants}
           isMirrorCamera={isMirrorCamera}
@@ -2437,6 +2439,7 @@ export default function MeetsClient({
         onPrejoinMediaCommit={handlePrejoinMediaCommit}
         isCameraOff={isCameraOff}
         isMuted={isMuted}
+        isMuteTogglePending={isMuteTogglePending}
         isHandRaised={isHandRaised}
         participants={participants}
         isMirrorCamera={isMirrorCamera}

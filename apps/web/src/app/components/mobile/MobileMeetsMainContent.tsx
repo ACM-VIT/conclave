@@ -89,6 +89,7 @@ interface MobileMeetsMainContentProps {
   onPrejoinMediaCommit?: (handoff: PrejoinMediaHandoff) => void;
   isCameraOff: boolean;
   isMuted: boolean;
+  isMuteTogglePending?: boolean;
   isHandRaised: boolean;
   participants: Map<string, Participant>;
   isMirrorCamera: boolean;
@@ -273,6 +274,7 @@ function MobileMeetsMainContent({
   onPrejoinMediaCommit,
   isCameraOff,
   isMuted,
+  isMuteTogglePending = false,
   isHandRaised,
   participants,
   isMirrorCamera,
@@ -1111,6 +1113,7 @@ function MobileMeetsMainContent({
       )}
       <MobileControlsBar
         isMuted={isMuted}
+        isMuteTogglePending={isMuteTogglePending}
         isCameraOff={isCameraOff}
         isScreenSharing={isScreenSharing}
         activeScreenShareId={activeScreenShareId}

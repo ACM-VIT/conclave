@@ -119,6 +119,7 @@ export function useMeetMedia({
   const [cameraProducerRecoveryPulse, setCameraProducerRecoveryPulse] =
     useState(0);
   const toggleMuteInFlightRef = useRef(false);
+  const [isMuteTogglePending, setIsMuteTogglePending] = useState(false);
   const toggleCameraInFlightRef = useRef(false);
   const buildAudioConstraints = useCallback(
     (deviceId?: string): MediaTrackConstraints => ({
@@ -808,6 +809,7 @@ export function useMeetMedia({
     if (ghostEnabled || isObserverMode) return;
     if (toggleMuteInFlightRef.current) return;
     toggleMuteInFlightRef.current = true;
+    setIsMuteTogglePending(true);
     const previousMuted = isMuted;
     const nextMuted = !previousMuted;
     let producer = audioProducerRef.current;
@@ -1001,6 +1003,7 @@ export function useMeetMedia({
       setMeetError(createMeetError(err, "MEDIA_ERROR"));
     } finally {
       toggleMuteInFlightRef.current = false;
+      setIsMuteTogglePending(false);
     }
   }, [
     ghostEnabled,
@@ -1721,6 +1724,7 @@ export function useMeetMedia({
   return {
     mediaState,
     showPermissionHint,
+    isMuteTogglePending,
     requestMediaPermissions,
     handleAudioInputDeviceChange,
     handleVideoInputDeviceChange,

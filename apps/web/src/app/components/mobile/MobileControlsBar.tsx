@@ -6,6 +6,7 @@ import {
   Globe,
   Lock,
   LockOpen,
+  Loader2,
   MessageSquare,
   MessageSquareLock,
   Mic,
@@ -122,6 +123,7 @@ function MoreSectionLabel({ children }: { children: ReactNode }) {
 
 interface MobileControlsBarProps {
   isMuted: boolean;
+  isMuteTogglePending?: boolean;
   isCameraOff: boolean;
   isScreenSharing: boolean;
   activeScreenShareId: string | null;
@@ -201,6 +203,7 @@ interface MobileControlsBarProps {
 
 function MobileControlsBar({
   isMuted,
+  isMuteTogglePending = false,
   isCameraOff,
   isScreenSharing,
   activeScreenShareId,
@@ -353,6 +356,7 @@ function MobileControlsBar({
   const mutedButtonClass = `${baseButtonClass} is-muted`;
   const ghostDisabledClass = `${baseButtonClass} is-disabled`;
   const leaveButtonClass = `${baseButtonClass} is-danger`;
+  const isMicBusy = isMuteTogglePending && !isGhostMode;
 
   const handleReactionClick = useCallback(
     (reaction: ReactionOption) => {
@@ -1588,10 +1592,21 @@ function MobileControlsBar({
                     : defaultButtonClass
               }
               aria-label={
-                isGhostMode ? "Microphone locked" : isMuted ? "Unmute" : "Mute"
+                isGhostMode
+                  ? "Microphone locked"
+                  : isMicBusy
+                    ? isMuted
+                      ? "Unmuting"
+                      : "Muting"
+                    : isMuted
+                      ? "Unmute"
+                      : "Mute"
               }
+              aria-busy={isMicBusy || undefined}
             >
-              {isMuted ? (
+              {isMicBusy ? (
+                <Loader2 className="h-5 w-5 animate-spin" />
+              ) : isMuted ? (
                 <MicOff className="w-5 h-5" />
               ) : (
                 <Mic className="w-5 h-5" />

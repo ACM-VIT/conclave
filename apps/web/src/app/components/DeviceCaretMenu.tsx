@@ -4,6 +4,7 @@ import {
   Check,
   ChevronUp,
   FlipHorizontal2,
+  Loader2,
   type LucideIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -136,6 +137,7 @@ export interface MediaControlClusterProps {
   badge?: number;
   hotkey?: string;
   disabled?: boolean;
+  loading?: boolean;
   selectedAudioInputDeviceId?: string;
   selectedAudioOutputDeviceId?: string;
   selectedVideoInputDeviceId?: string;
@@ -157,6 +159,7 @@ export function MediaControlCluster(props: MediaControlClusterProps) {
     badge,
     hotkey,
     disabled = false,
+    loading = false,
     selectedAudioInputDeviceId,
     selectedAudioOutputDeviceId,
     selectedVideoInputDeviceId,
@@ -218,6 +221,7 @@ export function MediaControlCluster(props: MediaControlClusterProps) {
       type="button"
       disabled={disabled}
       aria-label={label}
+      aria-busy={loading || undefined}
       onClick={onPress}
       className={
         "relative inline-flex h-12 w-full shrink-0 items-center justify-center rounded-full border " +
@@ -227,7 +231,15 @@ export function MediaControlCluster(props: MediaControlClusterProps) {
       }
       style={{ ...mainStyle, color: colors.fg }}
     >
-      <Icon size={ICON_SIZE} strokeWidth={1.75} />
+      {loading ? (
+        <Loader2
+          size={ICON_SIZE}
+          strokeWidth={1.75}
+          className="animate-spin"
+        />
+      ) : (
+        <Icon size={ICON_SIZE} strokeWidth={1.75} />
+      )}
       {typeof badge === "number" && badge > 0 ? (
         <span
           className="absolute -right-0.5 -top-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-bold text-white"

@@ -116,6 +116,7 @@ function MediaClusterButton({
       badge={d.badge}
       hotkey={d.hotkey}
       disabled={disabled || d.disabled}
+      loading={d.loading}
       {...audio}
       {...video}
     />

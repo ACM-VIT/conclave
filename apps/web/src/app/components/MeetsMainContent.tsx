@@ -105,6 +105,7 @@ interface MeetsMainContentProps {
   onPrejoinMediaCommit?: (handoff: PrejoinMediaHandoff) => void;
   isCameraOff: boolean;
   isMuted: boolean;
+  isMuteTogglePending?: boolean;
   isHandRaised: boolean;
   participants: Map<string, Participant>;
   isMirrorCamera: boolean;
@@ -322,6 +323,7 @@ export default function MeetsMainContent({
   onPrejoinMediaCommit,
   isCameraOff,
   isMuted,
+  isMuteTogglePending = false,
   isHandRaised,
   participants,
   isMirrorCamera,
@@ -1348,6 +1350,7 @@ export default function MeetsMainContent({
             <ControlsBar
                 roomId={roomId}
                 isMuted={isMuted}
+                isMuteTogglePending={isMuteTogglePending}
                 isCameraOff={isCameraOff}
                 isScreenSharing={isScreenSharing}
                 activeScreenShareId={activeScreenShareId}
