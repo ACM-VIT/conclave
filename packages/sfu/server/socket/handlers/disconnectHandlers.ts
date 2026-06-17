@@ -221,6 +221,22 @@ export const registerDisconnectHandlers = (
           graceMs,
           finalizeDisconnect,
         );
+        if (
+          !context.currentClient.isGhost &&
+          !context.currentClient.isWebinarAttendee
+        ) {
+          io.to(roomChannelId).except(disconnectedSocketId).emit(
+            "participantConnectionState",
+            {
+              userId,
+              roomId,
+              state: "reconnecting",
+              reason,
+              graceMs,
+              updatedAt: Date.now(),
+            },
+          );
+        }
         Logger.info(
           `Delaying disconnect cleanup for ${userId} in room ${roomId} by ${graceMs}ms.`,
         );

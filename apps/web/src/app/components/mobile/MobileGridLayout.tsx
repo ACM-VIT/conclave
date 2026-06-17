@@ -21,6 +21,7 @@ import { useSmartParticipantOrderWithMetadata } from "../../hooks/useSmartPartic
 import type { Participant } from "../../lib/types";
 import { isSystemUserId, truncateDisplayName } from "../../lib/utils";
 import ParticipantAudio from "../ParticipantAudio";
+import ParticipantConnectionOverlay from "../ParticipantConnectionOverlay";
 
 interface MobileGridLayoutProps {
   localStream: MediaStream | null;
@@ -1138,6 +1139,8 @@ const ParticipantTile = memo(function ParticipantTile({
   isActiveSpeaker: boolean;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const connectionStatus = participant.connectionStatus;
+  const isReconnecting = connectionStatus?.state === "reconnecting";
 
   useEffect(() => {
     const video = videoRef.current;
@@ -1197,10 +1200,14 @@ const ParticipantTile = memo(function ParticipantTile({
         playsInline
         className={`h-full w-full object-cover ${
           showPlaceholder ? "hidden" : ""
-        }`}
+        } ${isReconnecting ? "opacity-75 saturate-90" : ""}`}
       />
       {showPlaceholder && (
-        <div className="absolute inset-0 flex items-center justify-center bg-[#0a0a0b]">
+        <div
+          className={`absolute inset-0 flex items-center justify-center bg-[#0a0a0b] ${
+            isReconnecting ? "opacity-90" : ""
+          }`}
+        >
           <Avatar
             className="relative mobile-avatar"
             id={participant.userId}
@@ -1209,6 +1216,7 @@ const ParticipantTile = memo(function ParticipantTile({
           />
         </div>
       )}
+      <ParticipantConnectionOverlay status={connectionStatus} compact />
       {participant.isGhost && <GhostOverlay variant={variant} />}
       {participant.isHandRaised && <HandRaisedBadge variant={variant} />}
       <TileLabel

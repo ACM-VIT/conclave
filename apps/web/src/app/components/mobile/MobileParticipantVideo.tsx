@@ -5,6 +5,7 @@ import { memo, useEffect, useRef } from "react";
 import { Avatar } from "@conclave/ui-tokens/web";
 import type { Participant } from "../../lib/types";
 import { truncateDisplayName } from "../../lib/utils";
+import ParticipantConnectionOverlay from "../ParticipantConnectionOverlay";
 
 interface MobileParticipantVideoProps {
   participant: Participant;
@@ -23,6 +24,8 @@ function MobileParticipantVideo({
 }: MobileParticipantVideoProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
+  const connectionStatus = participant.connectionStatus;
+  const isReconnecting = connectionStatus?.state === "reconnecting";
 
   useEffect(() => {
     const video = videoRef.current;
@@ -152,10 +155,16 @@ function MobileParticipantVideo({
         ref={videoRef}
         autoPlay
         playsInline
-        className={`w-full h-full object-cover ${showPlaceholder ? "hidden" : ""}`}
+        className={`w-full h-full object-cover ${
+          showPlaceholder ? "hidden" : ""
+        } ${isReconnecting ? "opacity-75 saturate-90" : ""}`}
       />
       {showPlaceholder && (
-        <div className="absolute inset-0 flex items-center justify-center bg-[#131316]">
+        <div
+          className={`absolute inset-0 flex items-center justify-center bg-[#131316] ${
+            isReconnecting ? "opacity-90" : ""
+          }`}
+        >
           <div className="absolute inset-0 bg-[rgba(249,95,74,0.15)]" />
           <Avatar
             className="relative mobile-avatar"
@@ -165,6 +174,7 @@ function MobileParticipantVideo({
           />
         </div>
       )}
+      <ParticipantConnectionOverlay status={connectionStatus} compact={size !== "featured"} />
       {participant.isGhost && (
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none mobile-ghost-overlay">
           <div className="flex flex-col items-center gap-2">

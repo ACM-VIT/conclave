@@ -1,6 +1,7 @@
 import { createClient, type RedisClientType } from "redis";
 import { config as defaultConfig } from "../config/config.js";
 import { Logger } from "../utilities/loggers.js";
+import { isRedisTransientError } from "./redisErrors.js";
 
 export type RoomOwnerRecord = {
   channelId: string;
@@ -224,6 +225,7 @@ class RedisRoomRegistry implements RoomRegistry {
   instanceId: string;
   instanceUrl?: string;
   private client: RedisClientType;
+  private localFallback: LocalRoomRegistry;
   private keyPrefix: string;
   private ttlMs: number;
   private startPromise: Promise<void> | null = null;
@@ -241,11 +243,19 @@ class RedisRoomRegistry implements RoomRegistry {
     this.instanceUrl = options.instanceUrl || undefined;
     this.keyPrefix = options.keyPrefix.replace(/:+$/, "");
     this.ttlMs = options.ttlMs;
+    this.localFallback = new LocalRoomRegistry({
+      instanceId: options.instanceId,
+      instanceUrl: options.instanceUrl,
+      ttlMs: options.ttlMs,
+    });
     this.client = createClient({
       url: options.redisUrl,
       socket: {
         connectTimeout: options.connectTimeoutMs,
+        reconnectStrategy: (retries) => Math.min(100 + retries * 200, 5000),
       },
+      disableOfflineQueue: true,
+      commandsQueueMaxLength: 1000,
     });
     this.client.on("error", (error) => {
       Logger.error("[RoomRegistry] Redis client error", error);
@@ -278,23 +288,29 @@ class RedisRoomRegistry implements RoomRegistry {
   async close(): Promise<void> {
     this.startPromise = null;
     if (!this.started) {
+      await this.localFallback.close();
       return;
     }
     this.started = false;
-    await this.client.quit();
+    await Promise.allSettled([this.client.quit(), this.localFallback.close()]);
   }
 
   async getOwner(channelId: string): Promise<RoomOwnerRecord | null> {
-    await this.start();
-    const value = await this.client.get(this.keyFor(channelId));
-    const owner = parseOwnerRecord(value);
-    if (!owner) {
-      return null;
+    try {
+      await this.start();
+      const value = await this.client.get(this.keyFor(channelId));
+      const owner = parseOwnerRecord(value);
+      if (!owner) {
+        return this.localFallback.getOwner(channelId);
+      }
+      if (owner.expiresAt <= Date.now()) {
+        return this.localFallback.getOwner(channelId);
+      }
+      return owner;
+    } catch (error) {
+      this.logTransientRedisFailure("get owner", channelId, error);
+      return this.localFallback.getOwner(channelId);
     }
-    if (owner.expiresAt <= Date.now()) {
-      return null;
-    }
-    return owner;
   }
 
   async claimRoom(input: {
@@ -314,11 +330,16 @@ class RedisRoomRegistry implements RoomRegistry {
   }
 
   async releaseRoom(channelId: string): Promise<void> {
-    await this.start();
-    await this.client.eval(RELEASE_SCRIPT, {
-      keys: [this.keyFor(channelId)],
-      arguments: [this.instanceId],
-    });
+    await this.localFallback.releaseRoom(channelId);
+    try {
+      await this.start();
+      await this.client.eval(RELEASE_SCRIPT, {
+        keys: [this.keyFor(channelId)],
+        arguments: [this.instanceId],
+      });
+    } catch (error) {
+      this.logTransientRedisFailure("release room", channelId, error);
+    }
   }
 
   isLocalOwner(owner: RoomOwnerRecord | null | undefined): boolean {
@@ -330,19 +351,44 @@ class RedisRoomRegistry implements RoomRegistry {
     clientId: string;
     roomId: string;
   }): Promise<RoomOwnershipClaim> {
-    await this.start();
-    const now = Date.now();
-    const owner = this.createOwner(input, now);
-    const result = await this.client.eval(CLAIM_OR_RENEW_SCRIPT, {
-      keys: [this.keyFor(input.channelId)],
-      arguments: [
-        serializeOwnerRecord(owner),
-        this.instanceId,
-        String(now),
-        String(this.ttlMs),
-      ],
-    });
-    return parseClaimResult(result);
+    try {
+      await this.start();
+      const now = Date.now();
+      const owner = this.createOwner(input, now);
+      const result = await this.client.eval(CLAIM_OR_RENEW_SCRIPT, {
+        keys: [this.keyFor(input.channelId)],
+        arguments: [
+          serializeOwnerRecord(owner),
+          this.instanceId,
+          String(now),
+          String(this.ttlMs),
+        ],
+      });
+      const ownership = parseClaimResult(result);
+      if (ownership.ok) {
+        await this.localFallback.renewRoom(input);
+      }
+      return ownership;
+    } catch (error) {
+      this.logTransientRedisFailure("claim/renew room", input.channelId, error);
+      return this.localFallback.claimRoom(input);
+    }
+  }
+
+  private logTransientRedisFailure(
+    operation: string,
+    channelId: string,
+    error: unknown,
+  ): void {
+    if (isRedisTransientError(error)) {
+      Logger.warn(
+        `[RoomRegistry] Redis ${operation} failed for ${channelId}; using local fallback.`,
+        error,
+      );
+      return;
+    }
+
+    Logger.error(`[RoomRegistry] Redis ${operation} failed for ${channelId}`, error);
   }
 
   private createOwner(

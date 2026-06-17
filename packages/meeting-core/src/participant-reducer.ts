@@ -1,4 +1,8 @@
-import type { Participant, ProducerType } from "./types";
+import type {
+  Participant,
+  ParticipantConnectionStatus,
+  ProducerType,
+} from "./types";
 
 export type ParticipantAction =
   | { type: "ADD_PARTICIPANT"; userId: string; isGhost?: boolean }
@@ -15,6 +19,11 @@ export type ParticipantAction =
   | { type: "UPDATE_MUTED"; userId: string; muted: boolean }
   | { type: "UPDATE_CAMERA_OFF"; userId: string; cameraOff: boolean }
   | { type: "UPDATE_HAND_RAISED"; userId: string; raised: boolean }
+  | {
+      type: "UPDATE_CONNECTION_STATUS";
+      userId: string;
+      status: ParticipantConnectionStatus | null;
+    }
   | { type: "CLEAR_ALL" };
 
 const createEmptyParticipant = (
@@ -67,6 +76,7 @@ export function participantReducer(
           ...existing,
           isLeaving: false,
           isGhost: nextGhost,
+          connectionStatus: undefined,
         });
       }
       return withParticipant(
@@ -161,6 +171,34 @@ export function participantReducer(
       return withParticipant(state, action.userId, {
         ...(participant || createEmptyParticipant(action.userId)),
         isHandRaised: action.raised,
+      });
+    }
+    case "UPDATE_CONNECTION_STATUS": {
+      const participant = state.get(action.userId);
+      const previous = participant?.connectionStatus;
+      const previousGraceMs =
+        previous?.state === "reconnecting" ? previous.graceMs : undefined;
+      const nextGraceMs =
+        action.status?.state === "reconnecting" ? action.status.graceMs : undefined;
+      const previousDowntimeMs =
+        previous?.state === "reconnected" ? previous.downtimeMs : undefined;
+      const nextDowntimeMs =
+        action.status?.state === "reconnected"
+          ? action.status.downtimeMs
+          : undefined;
+      if (
+        previous?.state === action.status?.state &&
+        previous?.reason === action.status?.reason &&
+        previousGraceMs === nextGraceMs &&
+        previousDowntimeMs === nextDowntimeMs
+      ) {
+        return state;
+      }
+      return withParticipant(state, action.userId, {
+        ...(participant || createEmptyParticipant(action.userId)),
+        connectionStatus: action.status ?? undefined,
+        isLeaving:
+          action.status?.state === "reconnecting" ? false : participant?.isLeaving,
       });
     }
     case "CLEAR_ALL": {

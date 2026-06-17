@@ -374,6 +374,8 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           }
         }
 
+        const pendingDisconnectStartedAt =
+          room.getPendingDisconnectStartedAt(userId);
         const wasReconnecting = room.clearPendingDisconnect(userId);
         const existingClient = room.getClient(userId);
         const reclaimingWebinarSeat = existingClient
@@ -740,6 +742,21 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           }
         } else {
           Logger.info(`User ${userId} reconnected to room ${roomId}.`);
+          if (
+            context.currentClient &&
+            !context.currentClient.isGhost &&
+            !context.currentClient.isWebinarAttendee
+          ) {
+            io.to(roomChannelId).emit("participantConnectionState", {
+              userId,
+              roomId: context.currentRoom.id,
+              state: "reconnected",
+              downtimeMs: pendingDisconnectStartedAt
+                ? Date.now() - pendingDisconnectStartedAt
+                : undefined,
+              updatedAt: Date.now(),
+            });
+          }
         }
 
         const displayNameSnapshot = context.currentRoom.getDisplayNameSnapshot({
