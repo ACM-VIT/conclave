@@ -1,13 +1,11 @@
 import { NextResponse } from "next/server";
+import { resolveSfuUrl } from "@/lib/sfu-url";
 
 export const runtime = "nodejs";
 
 type RoomsResponse = {
   rooms?: Array<{ id: string; clients?: number; userCount?: number }>;
 };
-
-const resolveSfuUrl = () =>
-  process.env.SFU_URL || process.env.NEXT_PUBLIC_SFU_URL || "http://localhost:3031";
 
 const resolveClientId = (request: Request) => {
   const envClientId =
