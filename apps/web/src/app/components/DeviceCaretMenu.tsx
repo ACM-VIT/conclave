@@ -171,15 +171,26 @@ export function MediaControlCluster(props: MediaControlClusterProps) {
   const { audioInput, audioOutput, videoInput } = useEnumeratedDevices(open);
   const colors = controlButtonColors(variant);
   const sideColors = controlButtonColors("default");
+  const isDefaultVariant = variant === "default";
   const mainStyle = {
-    backgroundColor: colors.bg,
-    borderColor: colors.border,
+    backgroundColor: isDefaultVariant ? "transparent" : colors.bg,
+    borderColor: isDefaultVariant ? "transparent" : colors.border,
   };
   const sideStyle = {
+    backgroundColor: isDefaultVariant ? "transparent" : sideColors.bg,
+    borderColor: isDefaultVariant ? "transparent" : sideColors.border,
+  };
+  const defaultShellStyle = {
     backgroundColor: sideColors.bg,
     borderColor: sideColors.border,
   };
   const caretColor = open ? color.accent : "rgba(250, 250, 250, 0.72)";
+  const sideHoverClass = isDefaultVariant
+    ? "hover:bg-white/[0.06] active:bg-white/[0.04]"
+    : "hover:brightness-110 active:brightness-95";
+  const mainHoverClass = isDefaultVariant
+    ? "hover:bg-white/[0.06] active:bg-white/[0.04]"
+    : "hover:brightness-110 active:brightness-95";
 
   useEffect(() => {
     if (!open) return;
@@ -208,7 +219,12 @@ export function MediaControlCluster(props: MediaControlClusterProps) {
       disabled={disabled}
       aria-label={label}
       onClick={onPress}
-      className="relative inline-flex h-12 w-full shrink-0 items-center justify-center rounded-full border transition-[filter,transform] duration-[120ms] hover:brightness-110 active:scale-[0.96] active:brightness-95 disabled:cursor-not-allowed disabled:hover:brightness-100"
+      className={
+        "relative inline-flex h-12 w-full shrink-0 items-center justify-center rounded-full border " +
+        "transition-[background-color,filter,transform] duration-[120ms] active:scale-[0.96] " +
+        "disabled:cursor-not-allowed disabled:hover:brightness-100 " +
+        mainHoverClass
+      }
       style={{ ...mainStyle, color: colors.fg }}
     >
       <Icon size={ICON_SIZE} strokeWidth={1.75} />
@@ -229,13 +245,26 @@ export function MediaControlCluster(props: MediaControlClusterProps) {
         className={"relative h-12 shrink-0 " + (disabled ? "opacity-35" : "")}
         style={{ width: CLUSTER_W }}
       >
+        {isDefaultVariant ? (
+          <div
+            aria-hidden
+            className="absolute inset-0 rounded-full border"
+            style={defaultShellStyle}
+          />
+        ) : null}
+
         <button
           type="button"
           disabled={disabled}
           aria-label={kind === "mic" ? "Audio settings" : "Camera settings"}
           aria-expanded={open}
           onClick={() => setOpen((v) => !v)}
-          className="absolute left-0 top-0 z-0 inline-flex h-12 items-center justify-start rounded-full border transition-[filter] duration-[120ms] hover:brightness-110 active:brightness-95 disabled:cursor-not-allowed disabled:hover:brightness-100"
+          className={
+            "absolute left-0 top-0 z-0 inline-flex h-12 items-center justify-start rounded-full border " +
+            "transition-[background-color,filter] duration-[120ms] disabled:cursor-not-allowed " +
+            "disabled:hover:brightness-100 " +
+            sideHoverClass
+          }
           style={{ ...sideStyle, width: SIDE_ZONE_W, color: caretColor }}
         >
           <span
