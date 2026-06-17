@@ -8,6 +8,7 @@ import type {
 import type {
   ChatMessage,
   DtlsParameters,
+  JoinRoomErrorResponse,
   JoinRoomResponse,
   Participant,
   RtpParameters,
@@ -75,6 +76,35 @@ const DEFAULT_INSTRUCTIONS =
 const AGENT_DISPLAY_NAME = "Voice Agent";
 const SOCKET_CONNECT_TIMEOUT_MS = 8000;
 const SOCKET_ACK_TIMEOUT_MS = 10000;
+const MAX_JOIN_ROOM_REDIRECTS = 1;
+
+class JoinRoomRedirectError extends Error {
+  readonly redirectUrl: string;
+
+  constructor(response: JoinRoomErrorResponse, redirectUrl: string) {
+    super(response.error || "Room is hosted by another SFU instance.");
+    this.name = "JoinRoomRedirectError";
+    this.redirectUrl = redirectUrl;
+  }
+}
+
+const normalizeJoinRedirectUrl = (value: unknown): string | null => {
+  if (typeof value !== "string" || !value.trim()) return null;
+  try {
+    const url = new URL(value.trim());
+    if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+    return url.toString().replace(/\/+$/, "");
+  } catch {
+    return null;
+  }
+};
+
+const getJoinRoomRedirectError = (
+  response: JoinRoomErrorResponse
+): JoinRoomRedirectError | null => {
+  const redirectUrl = normalizeJoinRedirectUrl(response.redirectUrl);
+  return redirectUrl ? new JoinRoomRedirectError(response, redirectUrl) : null;
+};
 const SFU_CLIENT_ID = process.env.EXPO_PUBLIC_SFU_CLIENT_ID || "public";
 const SFU_BASE_URL =
   process.env.EXPO_PUBLIC_SFU_BASE_URL || process.env.EXPO_PUBLIC_API_URL || "";
@@ -404,12 +434,12 @@ const joinRoomAsAgent = async (
         displayName: AGENT_DISPLAY_NAME,
         ghost: false,
       },
-      (response: JoinRoomResponse | { error: string }) => {
+      (response: JoinRoomResponse | JoinRoomErrorResponse) => {
         if (settled) return;
         settled = true;
         clearTimeout(timeoutId);
         if ("error" in response) {
-          reject(new Error(response.error));
+          reject(getJoinRoomRedirectError(response) ?? new Error(response.error));
           return;
         }
         if (response.status === "waiting") {
@@ -1111,19 +1141,42 @@ export function useVoiceAgentParticipant({
           );
         }
 
-        runtime.sfuSocket = await createSocketConnection(sfuUrl, token);
-        runtime.sfuSocket.on("disconnect", () => {
-          if (!mountedRef.current) return;
-          if (runtimeRef.current.sfuSocket !== runtime.sfuSocket) return;
-          setSafeError("Voice agent disconnected from SFU.");
-          setSafeStatus("error");
-        });
+        const connectAgentSocket = async (url: string) => {
+          const socket = await createSocketConnection(url, token);
+          runtime.sfuSocket = socket;
+          socket.on("disconnect", () => {
+            if (!mountedRef.current) return;
+            if (runtimeRef.current.sfuSocket !== socket) return;
+            setSafeError("Voice agent disconnected from SFU.");
+            setSafeStatus("error");
+          });
+          return socket;
+        };
 
-        const joinRoomResponse = await joinRoomAsAgent(
-          runtime.sfuSocket,
-          roomId,
-          agentSessionId
-        );
+        let agentSocket = await connectAgentSocket(sfuUrl);
+        let joinRoomResponse: JoinRoomResponse;
+        let redirectCount = 0;
+        while (true) {
+          try {
+            joinRoomResponse = await joinRoomAsAgent(
+              agentSocket,
+              roomId,
+              agentSessionId
+            );
+            break;
+          } catch (error) {
+            if (
+              error instanceof JoinRoomRedirectError &&
+              redirectCount < MAX_JOIN_ROOM_REDIRECTS
+            ) {
+              redirectCount += 1;
+              agentSocket.disconnect();
+              agentSocket = await connectAgentSocket(error.redirectUrl);
+              continue;
+            }
+            throw error;
+          }
+        }
 
         const { Device } = await import("mediasoup-client");
         const device = new Device();

@@ -22,6 +22,7 @@ import type {
   HandRaisedNotification,
   HandRaisedSnapshot,
   JoinMode,
+  JoinRoomErrorResponse,
   JoinRoomResponse,
   MeetError,
   MeetingConfigSnapshot,
@@ -57,11 +58,42 @@ type JoinInfo = {
   iceServers?: RTCIceServer[];
 };
 
+const MAX_JOIN_ROOM_REDIRECTS = 1;
 const DEFAULT_SERVER_RESTART_NOTICE =
   "Meeting server is restarting. You will be reconnected automatically.";
 const VIDEO_STALL_KEYFRAME_REQUEST_DELAY_MS = 2500;
 const STALE_CONSUMER_RECOVERY_DELAY_MS = 9000;
 const TURN_URL_PATTERN = /^turns?:/i;
+
+class JoinRoomRedirectError extends Error {
+  readonly redirectUrl: string;
+  readonly response: JoinRoomErrorResponse;
+
+  constructor(response: JoinRoomErrorResponse, redirectUrl: string) {
+    super(response.error || "Room is hosted by another SFU instance.");
+    this.name = "JoinRoomRedirectError";
+    this.redirectUrl = redirectUrl;
+    this.response = response;
+  }
+}
+
+const normalizeJoinRedirectUrl = (value: unknown): string | null => {
+  if (typeof value !== "string" || !value.trim()) return null;
+  try {
+    const url = new URL(value.trim());
+    if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+    return url.toString().replace(/\/+$/, "");
+  } catch {
+    return null;
+  }
+};
+
+const getJoinRoomRedirectError = (
+  response: JoinRoomErrorResponse,
+): JoinRoomRedirectError | null => {
+  const redirectUrl = normalizeJoinRedirectUrl(response.redirectUrl);
+  return redirectUrl ? new JoinRoomRedirectError(response, redirectUrl) : null;
+};
 
 const buildIceServerWithUrls = (
   iceServer: RTCIceServer,
@@ -2382,9 +2414,9 @@ export function useMeetSocket({
             webinarInviteCode: joinOptions.webinarInviteCode,
             meetingInviteCode: joinOptions.meetingInviteCode,
           },
-          async (response: JoinRoomResponse | { error: string }) => {
+          async (response: JoinRoomResponse | JoinRoomErrorResponse) => {
             if ("error" in response) {
-              reject(new Error(response.error));
+              reject(getJoinRoomRedirectError(response) ?? new Error(response.error));
               return;
             }
 
@@ -2553,11 +2585,17 @@ export function useMeetSocket({
   );
 
   const connectSocket = useCallback(
-    (targetRoomId: string): Promise<Socket> => {
+    (
+      targetRoomId: string,
+      options?: { sfuUrlOverride?: string },
+    ): Promise<Socket> => {
       return new Promise((resolve, reject) => {
         (async () => {
           try {
-            if (socketRef.current?.connected) {
+            const sfuUrlOverride = normalizeJoinRedirectUrl(
+              options?.sfuUrlOverride,
+            );
+            if (socketRef.current?.connected && !sfuUrlOverride) {
               resolve(socketRef.current);
               return;
             }
@@ -2594,6 +2632,7 @@ export function useMeetSocket({
               tokenPromise,
               socketIoPromise,
             ]);
+            const socketUrl = sfuUrlOverride ?? sfuUrl;
 
             if (Array.isArray(iceServers)) {
               const { stunIceServers, turnIceServers } =
@@ -2604,7 +2643,7 @@ export function useMeetSocket({
                 turnIceServers.length > 0 ? turnIceServers : null;
             }
 
-            const socket = io(sfuUrl, {
+            const socket = io(socketUrl, {
               transports: ["websocket", "polling"],
               tryAllTransports: true,
               timeout: SOCKET_TIMEOUT_MS,
@@ -3956,6 +3995,7 @@ export function useMeetSocket({
         setLocalStream(streamForJoin);
 
         let nextJoinOptions = joinOptions;
+        let joinRedirectCount = 0;
         while (true) {
           try {
             const joinResult = await joinRoomInternal(
@@ -3973,6 +4013,28 @@ export function useMeetSocket({
             }
             break;
           } catch (joinError) {
+            if (
+              joinError instanceof JoinRoomRedirectError &&
+              joinRedirectCount < MAX_JOIN_ROOM_REDIRECTS
+            ) {
+              joinRedirectCount += 1;
+              console.log(
+                `[Meets] Reconnecting to routed SFU ${joinError.redirectUrl}`,
+                {
+                  roomId: targetRoomId,
+                  redirectInstanceId: joinError.response.redirectInstanceId,
+                },
+              );
+              cleanupRoomResources({ resetRoomId: false });
+              socketRef.current?.disconnect();
+              socketRef.current = null;
+              onSocketReady?.(null);
+              await connectSocket(targetRoomId, {
+                sfuUrlOverride: joinError.redirectUrl,
+              });
+              continue;
+            }
+
             const joinMessage =
               joinError instanceof Error
                 ? joinError.message
@@ -4034,6 +4096,7 @@ export function useMeetSocket({
     },
     [
       connectSocket,
+      cleanupRoomResources,
       displayNameInput,
       dropVideoTracksForCameraOff,
       ghostEnabled,
@@ -4059,7 +4122,9 @@ export function useMeetSocket({
       setLocalStream,
       setMeetError,
       setRoomId,
+      socketRef,
       stopLocalTrack,
+      onSocketReady,
     ],
   );
 
