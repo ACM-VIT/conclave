@@ -15,6 +15,7 @@ import {
   PRODUCER_SYNC_INTERVAL_MS,
 } from "../lib/constants";
 import type {
+  AdminNoticeNotification,
   ChatHistorySnapshot,
   ChatMessage,
   ConnectionState,
@@ -62,6 +63,7 @@ type JoinInfo = {
 const MAX_JOIN_ROOM_REDIRECTS = 1;
 const DEFAULT_SERVER_RESTART_NOTICE =
   "Meeting server is restarting. You will be reconnected automatically.";
+const ADMIN_NOTICE_DURATION_MS = 60000;
 const VIDEO_STALL_KEYFRAME_REQUEST_DELAY_MS = 2500;
 const STALE_CONSUMER_RECOVERY_DELAY_MS = 9000;
 const TURN_URL_PATTERN = /^turns?:/i;
@@ -259,6 +261,7 @@ interface UseMeetSocketOptions {
   setHostUserId: (userId: string | null) => void;
   setHostUserIds: React.Dispatch<React.SetStateAction<string[]>>;
   setServerRestartNotice: (notice: string | null) => void;
+  setAdminNotice: (notice: AdminNoticeNotification | null) => void;
   setWebinarConfig: React.Dispatch<
     React.SetStateAction<WebinarConfigSnapshot | null>
   >;
@@ -342,6 +345,7 @@ export function useMeetSocket({
   setHostUserId,
   setHostUserIds,
   setServerRestartNotice,
+  setAdminNotice,
   setWebinarConfig,
   setWebinarRole,
   setWebinarSpeakerUserId,
@@ -383,6 +387,7 @@ export function useMeetSocket({
   const runtimeTurnIceServersRef = useRef<RTCIceServer[] | null>(null);
   const useTurnFallbackRef = useRef(false);
   const serverRestartNoticeRef = useRef<string | null>(null);
+  const adminNoticeTimeoutRef = useRef<number | null>(null);
   const consumeRetryAttemptsRef = useRef<Map<string, number>>(new Map());
   const videoStallRecoveryTimeoutsRef = useRef<Map<string, number>>(new Map());
   const participantConnectionStatusTimeoutsRef = useRef<Map<string, number>>(
@@ -673,6 +678,11 @@ export function useMeetSocket({
     setWaitingMessage(null);
     serverRestartNoticeRef.current = null;
     setServerRestartNotice(null);
+    if (adminNoticeTimeoutRef.current) {
+      window.clearTimeout(adminNoticeTimeoutRef.current);
+      adminNoticeTimeoutRef.current = null;
+    }
+    setAdminNotice(null);
     reconnectAttemptsRef.current = 0;
   }, [
     cleanupRoomResources,
@@ -683,6 +693,7 @@ export function useMeetSocket({
     setIsCameraOff,
     setIsMuted,
     setLocalStream,
+    setAdminNotice,
     setServerRestartNotice,
     setWaitingMessage,
     socketRef,
@@ -2812,6 +2823,36 @@ export function useMeetSocket({
               },
             );
 
+            socket.on("adminNotice", (notification: AdminNoticeNotification) => {
+              if (!isRoomEvent(notification?.roomId)) return;
+              const message = notification?.message?.trim();
+              if (!message) return;
+
+              const level =
+                notification.level === "warning" || notification.level === "error"
+                  ? notification.level
+                  : "info";
+
+              if (adminNoticeTimeoutRef.current) {
+                window.clearTimeout(adminNoticeTimeoutRef.current);
+              }
+              setAdminNotice({
+                ...notification,
+                message,
+                level,
+                timestamp: notification.timestamp ?? Date.now(),
+              });
+              adminNoticeTimeoutRef.current = window.setTimeout(() => {
+                adminNoticeTimeoutRef.current = null;
+                setAdminNotice(null);
+              }, ADMIN_NOTICE_DURATION_MS);
+
+              telemetry.capture("meet_admin_notice_received", {
+                roomId: notification.roomId,
+                level,
+              });
+            });
+
             socket.on(
               "hostChanged",
               ({
@@ -3817,6 +3858,7 @@ export function useMeetSocket({
       setWebinarSpeakerUserId,
       setWebinarConfig,
       setServerRestartNotice,
+      setAdminNotice,
       setLocalStream,
       setMeetError,
       setPendingUsers,

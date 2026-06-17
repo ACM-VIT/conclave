@@ -444,6 +444,8 @@ export default function MeetsClient({
     setWebinarSpeakerUserId,
     serverRestartNotice,
     setServerRestartNotice,
+    adminNotice,
+    setAdminNotice,
   } = useMeetState({ initialRoomId });
   const [videoEffects, setVideoEffects] =
     useState<VideoEffectsState>(readStoredVideoEffects);
@@ -1683,6 +1685,7 @@ export default function MeetsClient({
     setHostUserId,
     setHostUserIds,
     setServerRestartNotice,
+    setAdminNotice,
     setWebinarConfig,
     setWebinarRole,
     setWebinarSpeakerUserId,
@@ -2344,6 +2347,7 @@ export default function MeetsClient({
           hostUserIds={hostUserIds}
           isNetworkOffline={isNetworkOffline}
           serverRestartNotice={serverRestartNotice}
+          adminNotice={adminNotice}
           meetingRequiresInviteCode={meetingRequiresInviteCode}
           webinarConfig={webinarConfig}
           webinarRole={webinarRole}
@@ -2511,6 +2515,7 @@ export default function MeetsClient({
         hostUserIds={hostUserIds}
         isNetworkOffline={isNetworkOffline}
         serverRestartNotice={serverRestartNotice}
+        adminNotice={adminNotice}
         meetingRequiresInviteCode={meetingRequiresInviteCode}
         webinarConfig={webinarConfig}
         webinarRole={webinarRole}

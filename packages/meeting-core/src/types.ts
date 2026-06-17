@@ -71,6 +71,14 @@ export interface HandRaisedSnapshot {
   roomId?: string;
 }
 
+export interface AdminNoticeNotification {
+  roomId?: string;
+  message: string;
+  level?: "info" | "warning" | "error";
+  timestamp?: number;
+  senderUserId?: string;
+}
+
 export interface ChatHistorySnapshot {
   messages: ChatMessage[];
   roomId?: string;

@@ -3,6 +3,7 @@
 import { useReducer, useState } from "react";
 import { participantReducer } from "../lib/participant-reducer";
 import type {
+  AdminNoticeNotification,
   ConnectionState,
   MeetError,
   Participant,
@@ -60,6 +61,8 @@ export function useMeetState({ initialRoomId }: UseMeetStateOptions) {
   const [serverRestartNotice, setServerRestartNotice] = useState<string | null>(
     null,
   );
+  const [adminNotice, setAdminNotice] =
+    useState<AdminNoticeNotification | null>(null);
 
   return {
     connectionState,
@@ -122,5 +125,7 @@ export function useMeetState({ initialRoomId }: UseMeetStateOptions) {
     setWebinarSpeakerUserId,
     serverRestartNotice,
     setServerRestartNotice,
+    adminNotice,
+    setAdminNotice,
   };
 }
