@@ -668,9 +668,10 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
           try {
             await consumer.requestKeyFrame();
           } catch (error) {
-            Logger.warn(
-              `Failed to request keyframe for consumer ${consumer.id}:`,
-              error,
+            const errorMessage =
+              error instanceof Error ? error.message : String(error);
+            Logger.debug(
+              `Skipped keyframe request for stale consumer ${consumer.id}: ${errorMessage}`,
             );
           }
         }
