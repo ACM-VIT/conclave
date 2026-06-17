@@ -968,11 +968,6 @@ export default function MeetsClient({
     ],
   );
 
-  const handleTestSpeaker = useCallback(() => {
-    primeAudioOutput();
-    playNotificationSound("join");
-  }, [playNotificationSound, primeAudioOutput]);
-
   const {
     effectiveStream: processedLocalStream,
     processedTrackVersion,
@@ -2258,7 +2253,6 @@ export default function MeetsClient({
           meetError={meetError}
           onDismissMeetError={() => setMeetError(null)}
           onRetryMedia={handleRetryMedia}
-          onTestSpeaker={handleTestSpeaker}
           hostUserId={hostUserId}
           hostUserIds={hostUserIds}
           isNetworkOffline={isNetworkOffline}
@@ -2422,7 +2416,6 @@ export default function MeetsClient({
         meetError={meetError}
         onDismissMeetError={() => setMeetError(null)}
         onRetryMedia={handleRetryMedia}
-        onTestSpeaker={handleTestSpeaker}
         isPopoutActive={isPopoutActive}
         isPopoutSupported={isPopoutSupported}
         onOpenPopout={openPopout}

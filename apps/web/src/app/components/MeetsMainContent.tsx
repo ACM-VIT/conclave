@@ -173,7 +173,6 @@ interface MeetsMainContentProps {
   onStopVoiceAgent?: () => void;
   onClearVoiceAgentError?: () => void;
   onRetryMedia?: () => void;
-  onTestSpeaker?: () => void;
   isPopoutActive?: boolean;
   isPopoutSupported?: boolean;
   onOpenPopout?: () => void;
@@ -388,7 +387,6 @@ export default function MeetsMainContent({
   meetError,
   onDismissMeetError,
   onRetryMedia,
-  onTestSpeaker,
   isPopoutActive,
   isPopoutSupported,
   onOpenPopout,
@@ -1144,7 +1142,6 @@ export default function MeetsMainContent({
             meetError={meetError}
             onDismissMeetError={onDismissMeetError}
             onRetryMedia={onRetryMedia}
-            onTestSpeaker={onTestSpeaker}
             videoEffects={videoEffects}
             onVideoEffectsChange={onVideoEffectsChange}
             onPrejoinMediaCommit={onPrejoinMediaCommit}

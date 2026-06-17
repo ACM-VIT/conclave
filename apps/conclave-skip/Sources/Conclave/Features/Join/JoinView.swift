@@ -157,6 +157,9 @@ struct JoinView: View {
         .onChange(of: appState.isAuthenticated) { _, _ in
             applyPendingJoinLinkIfPossible()
         }
+        .onChange(of: appState.currentUser?.id ?? "") { _, _ in
+            applyPendingJoinLinkIfPossible()
+        }
         .onChange(of: viewModel.state.joinFormErrorMessage) { _, message in
             if shouldRevealInviteCodeInput(for: message) {
                 revealInviteCodeInputForCurrentTarget()
@@ -208,9 +211,11 @@ struct JoinView: View {
 
             Spacer()
 
-            Button {
-                phase = .auth
-            } label: {
+            joinActionSurface(
+                accessibilityLabel: "Get started",
+                isEnabled: true,
+                action: { phase = .auth }
+            ) {
                 HStack(spacing: 8) {
                     Text("Get started")
                         .font(ACMFont.trial(16, weight: .medium))
@@ -1243,7 +1248,7 @@ struct JoinView: View {
         clearInputFocus()
         let trimmedName = resolvedGuestName
         let guestId = "guest-\(UUID().uuidString)"
-        appState.setAuthenticatedUser(AppState.User(
+        appState.setGuestUser(AppState.User(
             id: guestId,
             name: trimmedName,
             email: "\(guestId)@guest.conclave",

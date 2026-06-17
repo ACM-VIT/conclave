@@ -152,7 +152,6 @@ interface MobileMeetsMainContentProps {
   meetError?: MeetError | null;
   onDismissMeetError?: () => void;
   onRetryMedia?: () => void;
-  onTestSpeaker?: () => void;
   hostUserId: string | null;
   hostUserIds: string[];
   isNetworkOffline: boolean;
@@ -334,7 +333,6 @@ function MobileMeetsMainContent({
   meetError,
   onDismissMeetError,
   onRetryMedia,
-  onTestSpeaker,
   hostUserId,
   hostUserIds,
   isNetworkOffline,
@@ -817,7 +815,6 @@ function MobileMeetsMainContent({
         meetError={meetError}
         onDismissMeetError={onDismissMeetError}
         onRetryMedia={onRetryMedia}
-        onTestSpeaker={onTestSpeaker}
         onPrejoinMediaCommit={onPrejoinMediaCommit}
         videoEffects={videoEffects}
         onVideoEffectsChange={onVideoEffectsChange}

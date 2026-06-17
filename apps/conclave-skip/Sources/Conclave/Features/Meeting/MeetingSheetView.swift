@@ -24,6 +24,10 @@ enum MeetingSheetPage: Equatable {
     case selfViewSettings
     case selfViewPositionSettings
     case adminControls
+    case adminAccessControls
+    case adminMediaControls
+    case adminNoticeControls
+    case adminDangerControls
     case sharedBrowser
     case apps
     case roomSettings
@@ -50,6 +54,7 @@ private extension MeetingSheetPage {
         case .participants, .settings, .viewSettings, .adminControls, .sharedBrowser, .apps:
             return 1
         case .viewModeSettings, .gridSettings, .selfViewSettings, .selfViewPositionSettings,
+             .adminAccessControls, .adminMediaControls, .adminNoticeControls, .adminDangerControls,
              .roomSettings, .webinarSettings, .profileSettings, .audioVideoSettings:
             return 2
         case .roomAccessSettings, .roomCommunicationSettings, .meetingInviteCodeSettings,
@@ -67,6 +72,8 @@ private extension MeetingSheetPage {
             return .more
         case .viewModeSettings, .gridSettings, .selfViewSettings, .selfViewPositionSettings:
             return .viewSettings
+        case .adminAccessControls, .adminMediaControls, .adminNoticeControls, .adminDangerControls:
+            return .adminControls
         case .roomSettings, .webinarSettings, .profileSettings, .audioVideoSettings:
             return .settings
         case .roomAccessSettings, .roomCommunicationSettings, .meetingInviteCodeSettings:
@@ -193,7 +200,24 @@ struct MeetingSheetView: View {
                 case .selfViewPositionSettings:
                     pageView(ViewSettingsSheetView(viewModel: viewModel, bodyReady: bodyReady, page: ViewSettingsSheetPage.selfViewPosition, onBack: { navigate(to: .viewSettings) }))
                 case .adminControls:
-                    pageView(AdminControlsSheetView(viewModel: viewModel, bodyReady: bodyReady, onBack: { navigate(to: .more) }))
+                    pageView(AdminControlsSheetView(
+                        viewModel: viewModel,
+                        bodyReady: bodyReady,
+                        page: AdminControlsSheetPage.overview,
+                        onBack: { navigate(to: .more) },
+                        onOpenAdminAccessControls: { navigate(to: .adminAccessControls) },
+                        onOpenAdminMediaControls: { navigate(to: .adminMediaControls) },
+                        onOpenAdminNoticeControls: { navigate(to: .adminNoticeControls) },
+                        onOpenAdminDangerControls: { navigate(to: .adminDangerControls) }
+                    ))
+                case .adminAccessControls:
+                    pageView(AdminControlsSheetView(viewModel: viewModel, bodyReady: bodyReady, page: AdminControlsSheetPage.access, onBack: { navigate(to: .adminControls) }))
+                case .adminMediaControls:
+                    pageView(AdminControlsSheetView(viewModel: viewModel, bodyReady: bodyReady, page: AdminControlsSheetPage.participantMedia, onBack: { navigate(to: .adminControls) }))
+                case .adminNoticeControls:
+                    pageView(AdminControlsSheetView(viewModel: viewModel, bodyReady: bodyReady, page: AdminControlsSheetPage.notice, onBack: { navigate(to: .adminControls) }))
+                case .adminDangerControls:
+                    pageView(AdminControlsSheetView(viewModel: viewModel, bodyReady: bodyReady, page: AdminControlsSheetPage.danger, onBack: { navigate(to: .adminControls) }))
                 case .sharedBrowser:
                     pageView(SharedBrowserSheetView(viewModel: viewModel, bodyReady: bodyReady, onBack: { navigate(to: .more) }))
                 case .apps:

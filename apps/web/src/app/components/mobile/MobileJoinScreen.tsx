@@ -35,7 +35,7 @@ import {
   sanitizeRoomCode,
 } from "../../lib/utils";
 import MeetsErrorBanner from "../MeetsErrorBanner";
-import ScheduledMeetingsPanel from "../ScheduledMeetingsPanel";
+// import ScheduledMeetingsPanel from "../ScheduledMeetingsPanel";
 import VideoEffectsPanel from "../VideoEffectsPanel";
 import AndroidUpsellSheet from "./AndroidUpsellSheet";
 import {
@@ -110,7 +110,6 @@ interface MobileJoinScreenProps {
   meetError?: MeetError | null;
   onDismissMeetError?: () => void;
   onRetryMedia?: () => void;
-  onTestSpeaker?: () => void;
   onPrejoinMediaCommit?: (handoff: PrejoinMediaHandoff) => void;
   videoEffects: VideoEffectsState;
   onVideoEffectsChange: Dispatch<SetStateAction<VideoEffectsState>>;
@@ -138,7 +137,6 @@ function MobileJoinScreen({
   meetError,
   onDismissMeetError,
   onRetryMedia,
-  onTestSpeaker,
   onPrejoinMediaCommit,
   videoEffects,
   onVideoEffectsChange,
@@ -1031,7 +1029,9 @@ function MobileJoinScreen({
             )}
           </div>
 
+          {/* ScheduledMeetingsPanel disabled for now
           <ScheduledMeetingsPanel isSignedIn={isSignedInUser} />
+          */}
 
         {meetError && onDismissMeetError && (
           <div className="mt-4">

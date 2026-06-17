@@ -1139,7 +1139,7 @@ export function useVoiceAgentParticipant({
 
       try {
         runtime.producerTransport = await createProducerTransport(
-          runtime.sfuSocket,
+          agentSocket,
           device,
           stunOnlyIceServers,
         );
@@ -1152,7 +1152,7 @@ export function useVoiceAgentParticipant({
           stunTransportError,
         );
         runtime.producerTransport = await createProducerTransport(
-          runtime.sfuSocket,
+          agentSocket,
           device,
           turnFallbackIceServers,
         );

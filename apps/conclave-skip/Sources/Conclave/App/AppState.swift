@@ -58,7 +58,19 @@ final class AppState {
     func setAuthenticatedUser(_ user: User) {
         currentUser = user
         authProvider = user.provider
-        isAuthenticated = true
+        isAuthenticated = user.provider != .guest && user.provider != .none
+        persistAuthState()
+    }
+
+    func setGuestUser(_ user: User) {
+        currentUser = User(
+            id: user.id,
+            name: user.name,
+            email: user.email,
+            provider: .guest
+        )
+        authProvider = .guest
+        isAuthenticated = false
         persistAuthState()
     }
 

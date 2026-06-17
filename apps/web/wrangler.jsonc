@@ -1,0 +1,36 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "conclave-web",
+  "main": ".open-next/worker.js",
+  "account_id": "4ee36e42cabfd44e8ce61b2a6bd637c5",
+  "compatibility_date": "2026-06-17",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "assets": {
+    "directory": ".open-next/assets",
+    "binding": "ASSETS"
+  },
+  "vars": {
+    "BETTER_AUTH_URL": "https://conclave.acmvit.in",
+    "BETTER_AUTH_TRUSTED_ORIGINS": "https://conclave.acmvit.in",
+    "NEXT_PUBLIC_APP_URL": "https://conclave.acmvit.in",
+    "NEXT_PUBLIC_SITE_URL": "https://conclave.acmvit.in"
+  },
+  "services": [
+    {
+      "binding": "WORKER_SELF_REFERENCE",
+      "service": "conclave-web"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "NEXT_INC_CACHE_R2_BUCKET",
+      "bucket_name": "conclave-web-opennext-cache"
+    }
+  ],
+  "images": {
+    "binding": "IMAGES"
+  },
+  "observability": {
+    "enabled": true
+  }
+}

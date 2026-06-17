@@ -90,6 +90,7 @@ enum SfuJoinService {
         if !clientId.isEmpty {
             request.setValue(clientId, forHTTPHeaderField: "x-sfu-client")
         }
+        attachNativeAuthCookies(to: &request)
 
         let payload = SfuJoinRequest(
             roomId: roomId,
@@ -105,6 +106,7 @@ enum SfuJoinService {
         request.httpBody = try JSONEncoder().encode(payload)
 
         let (data, response) = try await URLSession.shared.data(for: request)
+        storeNativeAuthCookies(from: response, url: request.url)
         let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
 
         if !(200...299).contains(statusCode) {
@@ -113,6 +115,38 @@ enum SfuJoinService {
         }
 
         return try JSONDecoder().decode(SfuJoinInfo.self, from: data)
+    }
+
+    private static func attachNativeAuthCookies(to request: inout URLRequest) {
+        #if SKIP
+        guard request.httpShouldHandleCookies,
+              let url = request.url?.absoluteString,
+              let cookieHeader = NativeAuthSessionBridge.cookieHeader(forURL: url),
+              !cookieHeader.isEmpty else {
+            return
+        }
+        request.setValue(cookieHeader, forHTTPHeaderField: "Cookie")
+        #else
+        _ = request
+        #endif
+    }
+
+    private static func storeNativeAuthCookies(from response: URLResponse, url: URL?) {
+        #if SKIP
+        guard let url,
+              let httpResponse = response as? HTTPURLResponse,
+              let setCookieHeader = httpResponse.value(forHTTPHeaderField: "Set-Cookie"),
+              !setCookieHeader.isEmpty else {
+            return
+        }
+        NativeAuthSessionBridge.storeSetCookieHeader(
+            setCookieHeader: setCookieHeader,
+            forURL: url.absoluteString
+        )
+        #else
+        _ = response
+        _ = url
+        #endif
     }
 
     static func resolveClientId() -> String {

@@ -205,10 +205,23 @@ struct MoreSheetView: View {
     }
 }
 
+enum AdminControlsSheetPage {
+    case overview
+    case access
+    case participantMedia
+    case notice
+    case danger
+}
+
 struct AdminControlsSheetView: View {
     @Bindable var viewModel: MeetingViewModel
     var bodyReady: Bool = true
+    var page: AdminControlsSheetPage = .overview
     var onBack: (() -> Void)? = nil
+    var onOpenAdminAccessControls: (() -> Void)? = nil
+    var onOpenAdminMediaControls: (() -> Void)? = nil
+    var onOpenAdminNoticeControls: (() -> Void)? = nil
+    var onOpenAdminDangerControls: (() -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
     @State private var noticeInput = ""
     @State private var noticeLevel: AdminNoticeLevel = .info
@@ -216,80 +229,52 @@ struct AdminControlsSheetView: View {
     @State private var showEndMeetingConfirmation = false
     @State private var isEndingMeeting = false
 
+    private var title: String {
+        switch page {
+        case .overview:
+            return "Host controls"
+        case .access:
+            return "Access"
+        case .participantMedia:
+            return "Participant media"
+        case .notice:
+            return "Room notice"
+        case .danger:
+            return "End meeting"
+        }
+    }
+
+    private var accessSummary: String {
+        let roomState = viewModel.state.isRoomLocked ? "Room locked" : "Room open"
+        let chatState = viewModel.state.isChatLocked ? "chat locked" : "chat open"
+        return "\(roomState), \(chatState)"
+    }
+
+    private var participantMediaSummary: String {
+        let count = viewModel.state.participantCount
+        let noun = count == 1 ? "participant" : "participants"
+        return "\(count) \(noun), mute and camera controls"
+    }
+
+    private var hasRaisedHands: Bool {
+        if viewModel.state.isHandRaised {
+            return true
+        }
+        for participant in viewModel.state.sortedParticipants {
+            if participant.isHandRaised {
+                return true
+            }
+        }
+        return false
+    }
+
     var body: some View {
         VStack(spacing: 0) {
-            MeetingSheetHeader(title: "Host controls", onBack: onBack, onDone: { dismiss() })
+            MeetingSheetHeader(title: title, onBack: onBack, onDone: { dismiss() })
 
             if bodyReady {
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: ACMSpacing.md) {
-                        VStack(alignment: .leading, spacing: ACMSpacing.xs) {
-                            acmListSectionHeader("Access and moderation")
-
-                            MeetingSheetSectionCard {
-                                MoreRow(
-                                    icon: viewModel.state.isRoomLocked ? "lock.open.fill" : "lock.fill",
-                                    androidIcon: viewModel.state.isRoomLocked ? "lock.open" : "lock",
-                                    title: viewModel.state.isRoomLocked ? "Unlock meeting" : "Lock meeting",
-                                    tint: viewModel.state.isRoomLocked ? ACMColors.primaryOrange : ACMColors.text,
-                                    androidTint: viewModel.state.isRoomLocked ? "accent" : "text"
-                                ) {
-                                    viewModel.toggleRoomLock()
-                                }
-
-                                MoreRowDivider()
-
-                                MoreRow(
-                                    icon: "nosign",
-                                    androidIcon: "block",
-                                    title: viewModel.state.isNoGuests ? "Allow guests" : "Block guests",
-                                    tint: viewModel.state.isNoGuests ? ACMColors.primaryOrange : ACMColors.text,
-                                    androidTint: viewModel.state.isNoGuests ? "accent" : "text"
-                                ) {
-                                    viewModel.toggleNoGuests()
-                                }
-
-                                MoreRowDivider()
-
-                                MoreRow(
-                                    icon: viewModel.state.isChatLocked ? "message.fill" : "message.badge.fill",
-                                    androidIcon: "chat",
-                                    title: viewModel.state.isChatLocked ? "Enable chat" : "Disable chat",
-                                    tint: viewModel.state.isChatLocked ? ACMColors.primaryOrange : ACMColors.text,
-                                    androidTint: viewModel.state.isChatLocked ? "accent" : "text"
-                                ) {
-                                    viewModel.toggleChatLock()
-                                }
-
-                                MoreRowDivider()
-
-                                MoreRow(
-                                    icon: viewModel.state.isTtsDisabled ? "speaker.wave.2.fill" : "speaker.slash.fill",
-                                    androidIcon: viewModel.state.isTtsDisabled ? "volume" : "volume.off",
-                                    title: viewModel.state.isTtsDisabled ? "Enable TTS" : "Disable TTS",
-                                    tint: viewModel.state.isTtsDisabled ? ACMColors.primaryOrange : ACMColors.text,
-                                    androidTint: viewModel.state.isTtsDisabled ? "accent" : "text"
-                                ) {
-                                    viewModel.toggleTtsDisabled()
-                                }
-
-                                MoreRowDivider()
-
-                                MoreRow(
-                                    icon: viewModel.state.isDmEnabled ? "message.fill" : "message.slash.fill",
-                                    androidIcon: "chat",
-                                    title: viewModel.state.isDmEnabled ? "Disable DMs" : "Enable DMs",
-                                    tint: viewModel.state.isDmEnabled ? ACMColors.text : ACMColors.primaryOrange,
-                                    androidTint: viewModel.state.isDmEnabled ? "text" : "accent"
-                                ) {
-                                    viewModel.toggleDmEnabled()
-                                }
-                            }
-                        }
-
-                        noticeSection
-                        destructiveSection
-                    }
+                    content
                     .padding(.horizontal, ACMSpacing.lg)
                     .padding(.top, ACMSpacing.md)
                     .padding(.bottom, ACMSpacing.lg)
@@ -317,6 +302,237 @@ struct AdminControlsSheetView: View {
         } message: {
             Text("Everyone in the room, including people waiting to join, will be disconnected.")
         }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        switch page {
+        case .overview:
+            overviewContent
+        case .access:
+            accessContent
+        case .participantMedia:
+            participantMediaContent
+        case .notice:
+            LazyVStack(alignment: .leading, spacing: ACMSpacing.md) {
+                noticeSection
+            }
+        case .danger:
+            LazyVStack(alignment: .leading, spacing: ACMSpacing.md) {
+                destructiveSection
+            }
+        }
+    }
+
+    private var overviewContent: some View {
+        LazyVStack(alignment: .leading, spacing: ACMSpacing.md) {
+            VStack(alignment: .leading, spacing: ACMSpacing.xs) {
+                acmListSectionHeader("Host controls")
+
+                MeetingSheetSectionCard {
+                    adminNavigationRow(
+                        "Access and chat",
+                        subtitle: accessSummary,
+                        icon: viewModel.state.isRoomLocked ? "lock.fill" : "lock.open.fill",
+                        androidIcon: viewModel.state.isRoomLocked ? "lock" : "lock.open",
+                        iconTint: viewModel.state.isRoomLocked || viewModel.state.isChatLocked ? ACMColors.primaryOrange : ACMColors.textMuted,
+                        androidIconTint: viewModel.state.isRoomLocked || viewModel.state.isChatLocked ? "accent" : "muted"
+                    ) {
+                        onOpenAdminAccessControls?()
+                    }
+
+                    MoreRowDivider()
+
+                    adminNavigationRow(
+                        "Participant media",
+                        subtitle: participantMediaSummary,
+                        icon: "mic.slash.fill",
+                        androidIcon: "mic.off",
+                        iconTint: hasRaisedHands || viewModel.state.activeScreenShareUserId != nil ? ACMColors.primaryOrange : ACMColors.textMuted,
+                        androidIconTint: hasRaisedHands || viewModel.state.activeScreenShareUserId != nil ? "accent" : "muted"
+                    ) {
+                        onOpenAdminMediaControls?()
+                    }
+
+                    MoreRowDivider()
+
+                    adminNavigationRow(
+                        "Room notice",
+                        subtitle: "Send a banner to everyone",
+                        icon: "megaphone.fill",
+                        androidIcon: "info"
+                    ) {
+                        onOpenAdminNoticeControls?()
+                    }
+
+                    MoreRowDivider()
+
+                    adminNavigationRow(
+                        "End meeting",
+                        subtitle: "Disconnect everyone in this room",
+                        icon: "xmark.octagon.fill",
+                        androidIcon: "close",
+                        iconTint: ACMColors.error,
+                        androidIconTint: "danger",
+                        titleTint: ACMColors.error
+                    ) {
+                        onOpenAdminDangerControls?()
+                    }
+                }
+            }
+        }
+    }
+
+    private var accessContent: some View {
+        LazyVStack(alignment: .leading, spacing: ACMSpacing.md) {
+            VStack(alignment: .leading, spacing: ACMSpacing.xs) {
+                acmListSectionHeader("Access and moderation")
+
+                MeetingSheetSectionCard {
+                    MoreRow(
+                        icon: viewModel.state.isRoomLocked ? "lock.open.fill" : "lock.fill",
+                        androidIcon: viewModel.state.isRoomLocked ? "lock.open" : "lock",
+                        title: viewModel.state.isRoomLocked ? "Unlock meeting" : "Lock meeting",
+                        tint: viewModel.state.isRoomLocked ? ACMColors.primaryOrange : ACMColors.text,
+                        androidTint: viewModel.state.isRoomLocked ? "accent" : "text"
+                    ) {
+                        viewModel.toggleRoomLock()
+                    }
+
+                    MoreRowDivider()
+
+                    MoreRow(
+                        icon: "nosign",
+                        androidIcon: "block",
+                        title: viewModel.state.isNoGuests ? "Allow guests" : "Block guests",
+                        tint: viewModel.state.isNoGuests ? ACMColors.primaryOrange : ACMColors.text,
+                        androidTint: viewModel.state.isNoGuests ? "accent" : "text"
+                    ) {
+                        viewModel.toggleNoGuests()
+                    }
+
+                    MoreRowDivider()
+
+                    MoreRow(
+                        icon: viewModel.state.isChatLocked ? "message.fill" : "message.badge.fill",
+                        androidIcon: "chat",
+                        title: viewModel.state.isChatLocked ? "Enable chat" : "Disable chat",
+                        tint: viewModel.state.isChatLocked ? ACMColors.primaryOrange : ACMColors.text,
+                        androidTint: viewModel.state.isChatLocked ? "accent" : "text"
+                    ) {
+                        viewModel.toggleChatLock()
+                    }
+
+                    MoreRowDivider()
+
+                    MoreRow(
+                        icon: viewModel.state.isTtsDisabled ? "speaker.wave.2.fill" : "speaker.slash.fill",
+                        androidIcon: viewModel.state.isTtsDisabled ? "volume" : "volume.off",
+                        title: viewModel.state.isTtsDisabled ? "Enable TTS" : "Disable TTS",
+                        tint: viewModel.state.isTtsDisabled ? ACMColors.primaryOrange : ACMColors.text,
+                        androidTint: viewModel.state.isTtsDisabled ? "accent" : "text"
+                    ) {
+                        viewModel.toggleTtsDisabled()
+                    }
+
+                    MoreRowDivider()
+
+                    MoreRow(
+                        icon: viewModel.state.isDmEnabled ? "message.fill" : "message.slash.fill",
+                        androidIcon: "chat",
+                        title: viewModel.state.isDmEnabled ? "Disable DMs" : "Enable DMs",
+                        tint: viewModel.state.isDmEnabled ? ACMColors.text : ACMColors.primaryOrange,
+                        androidTint: viewModel.state.isDmEnabled ? "text" : "accent"
+                    ) {
+                        viewModel.toggleDmEnabled()
+                    }
+                }
+            }
+        }
+    }
+
+    private var participantMediaContent: some View {
+        LazyVStack(alignment: .leading, spacing: ACMSpacing.md) {
+            VStack(alignment: .leading, spacing: ACMSpacing.xs) {
+                acmListSectionHeader("Participant media")
+
+                MeetingSheetSectionCard {
+                    MoreRow(icon: "mic.slash.fill", androidIcon: "mic.off", title: "Mute everyone") {
+                        viewModel.muteAllParticipants()
+                    }
+
+                    MoreRowDivider()
+
+                    MoreRow(icon: "video.slash.fill", androidIcon: "video.off", title: "Turn off cameras") {
+                        viewModel.turnOffAllParticipantCameras()
+                    }
+
+                    if viewModel.state.activeScreenShareUserId != nil {
+                        MoreRowDivider()
+
+                        MoreRow(icon: "rectangle.on.rectangle.slash", androidIcon: "screen.share.off", title: "Stop screen shares") {
+                            viewModel.stopAllScreenShares()
+                        }
+                    }
+
+                    if hasRaisedHands {
+                        MoreRowDivider()
+
+                        MoreRow(icon: "hand.raised.slash.fill", androidIcon: "raise.hand.off", title: "Clear raised hands") {
+                            viewModel.clearAllRaisedHands()
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func adminNavigationRow(
+        _ title: String,
+        subtitle: String,
+        icon: String,
+        androidIcon: String,
+        iconTint: Color = ACMColors.textMuted,
+        androidIconTint: String = "muted",
+        titleTint: Color = ACMColors.text,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: ACMSpacing.sm) {
+                MeetingSheetIconBox(
+                    icon: icon,
+                    androidIcon: androidIcon,
+                    tint: iconTint,
+                    androidTint: androidIconTint,
+                    background: ACMColors.surfaceRaised
+                )
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(ACMFont.trial(15, weight: .medium))
+                        .foregroundStyle(titleTint)
+                        .lineLimit(1)
+
+                    Text(subtitle)
+                        .font(ACMFont.trial(12))
+                        .foregroundStyle(ACMColors.textFaint)
+                        .lineLimit(1)
+                }
+
+                Spacer()
+
+                ACMSystemIcon.icon("chevron.right", android: "arrow.forward", size: 16, tint: "faint")
+                    .foregroundStyle(ACMColors.textFaint)
+                    .frame(width: 24, height: 24)
+            }
+            .padding(.horizontal, ACMSpacing.sm)
+            .frame(height: 56)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            #if !SKIP
+            .contentShape(Rectangle())
+            #endif
+        }
+        .buttonStyle(.plain)
     }
 
     private var noticeSection: some View {

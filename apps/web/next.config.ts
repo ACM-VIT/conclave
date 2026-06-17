@@ -10,6 +10,9 @@ const yProtocolsAlias = "./node_modules/y-protocols";
 const nextConfig: NextConfig = {
   reactStrictMode: true,
   reactCompiler: true,
+  images: {
+    unoptimized: true,
+  },
   transpilePackages: ["@conclave/apps-sdk", "@conclave/meeting-core", "@conclave/ui-tokens"],
   turbopack: {
     root: workspaceRoot,

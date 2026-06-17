@@ -3089,6 +3089,9 @@ final class MeetingViewModel {
     private func setLocalCameraOffState(_ cameraOff: Bool) {
         state.isCameraOff = cameraOff
         syncCallPresenceMute()
+        #if SKIP
+        updatePipVideo()
+        #endif
     }
 
     private func syncCallPresenceMute() {

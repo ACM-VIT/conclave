@@ -8,7 +8,6 @@ import {
   Mic,
   MicOff,
   Plus,
-  Volume2,
   Ghost,
 } from "lucide-react";
 import { memo, useEffect, useRef, useState } from "react";
@@ -38,7 +37,7 @@ import {
   sanitizeRoomCode,
 } from "../lib/utils";
 import MeetsErrorBanner from "./MeetsErrorBanner";
-import ScheduledMeetingsPanel from "./ScheduledMeetingsPanel";
+// import ScheduledMeetingsPanel from "./ScheduledMeetingsPanel";
 import VideoEffectsPanel from "./VideoEffectsPanel";
 import {
   prewarmVideoEffectsAssets,
@@ -105,7 +104,6 @@ interface JoinScreenProps {
   meetError?: MeetError | null;
   onDismissMeetError?: () => void;
   onRetryMedia?: () => void;
-  onTestSpeaker?: () => void;
   videoEffects: VideoEffectsState;
   onVideoEffectsChange: Dispatch<SetStateAction<VideoEffectsState>>;
   onPrejoinMediaCommit?: (handoff: PrejoinMediaHandoff) => void;
@@ -205,7 +203,6 @@ function JoinScreen({
   meetError,
   onDismissMeetError,
   onRetryMedia,
-  onTestSpeaker,
   videoEffects,
   onVideoEffectsChange,
   onPrejoinMediaCommit,
@@ -827,14 +824,6 @@ function JoinScreen({
                     <WandSparkles size={18} />
                   </button>
                 </div>
-                {onTestSpeaker && (
-                  <button
-                    onClick={onTestSpeaker}
-                    className="absolute bottom-4 right-4 inline-flex items-center gap-1.5 rounded-full bg-black/55 px-3 py-1.5 text-[12px] text-[#fafafa]/70 backdrop-blur-sm transition-colors hover:text-[#fafafa]"
-                  >
-                    <Volume2 size={14} /> Test speaker
-                  </button>
-                )}
               </div>
 
           <div className="flex flex-col justify-center gap-4 p-6 sm:p-8">
@@ -917,7 +906,9 @@ function JoinScreen({
                 </button>
               )}
 
+              {/* ScheduledMeetingsPanel disabled for now
               <ScheduledMeetingsPanel isSignedIn={isSignedInUser} />
+              */}
 
               {allowGhostMode && (
                 <button

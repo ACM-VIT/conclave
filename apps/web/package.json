@@ -6,6 +6,10 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "cf:build": "opennextjs-cloudflare build && node scripts/prune-open-next-og.mjs",
+    "cf:preview": "opennextjs-cloudflare build && opennextjs-cloudflare preview",
+    "cf:deploy": "pnpm run cf:build && pnpm run cf:deploy:direct",
+    "cf:deploy:direct": "wrangler deploy .open-next/worker.js --assets .open-next/assets --name conclave-web --compatibility-date 2026-06-17 --compatibility-flag nodejs_compat --compatibility-flag global_fetch_strictly_public --domain conclave.acmvit.in --var BETTER_AUTH_URL:https://conclave.acmvit.in --var BETTER_AUTH_TRUSTED_ORIGINS:https://conclave.acmvit.in --var NEXT_PUBLIC_APP_URL:https://conclave.acmvit.in --var NEXT_PUBLIC_SITE_URL:https://conclave.acmvit.in --autoconfig false",
     "start": "next start",
     "lint": "eslint \"src/**/*.{ts,tsx}\""
   },
@@ -30,6 +34,7 @@
     "socket.io-client": "^4.8.3"
   },
   "devDependencies": {
+    "@opennextjs/cloudflare": "^1.19.11",
     "@tailwindcss/postcss": "^4",
     "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^20",
@@ -40,6 +45,7 @@
     "eslint": "^10.4.1",
     "eslint-plugin-react-hooks": "^7.1.1",
     "tailwindcss": "^4",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "wrangler": "^4.101.0"
   }
 }
