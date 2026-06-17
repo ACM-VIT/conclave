@@ -7,12 +7,14 @@ interface HotkeyTooltipProps {
   label: string;
   hotkey: string;
   children: ReactNode;
+  className?: string;
 }
 
 export default function HotkeyTooltip({
   label,
   hotkey,
   children,
+  className = "",
 }: HotkeyTooltipProps) {
   // With no hotkey to surface, the tooltip would just duplicate the control's
   // own aria-label/title — so skip the hover chrome entirely.
@@ -20,7 +22,7 @@ export default function HotkeyTooltip({
     return <>{children}</>;
   }
   return (
-    <div className="relative group/tooltip">
+    <div className={`relative group/tooltip ${className}`}>
       {children}
       <div className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 z-50 mb-1.5 flex flex-col items-center opacity-0 transition-opacity duration-150 group-hover/tooltip:opacity-100">
         <div className="flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-[#fafafa]/10 bg-[#131316]/95 px-2.5 py-1.5 backdrop-blur-sm">

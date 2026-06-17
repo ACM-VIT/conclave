@@ -16,7 +16,7 @@ import {
 } from "react";
 import { ControlButton } from "@conclave/ui-tokens/web";
 import { color } from "@conclave/ui-tokens";
-import { DeviceCaretMenu } from "./DeviceCaretMenu";
+import { MediaControlCluster, type MediaControlClusterProps } from "./DeviceCaretMenu";
 import type { ReactionOption } from "../lib/types";
 import { normalizeBrowserUrl } from "../lib/utils";
 import HotkeyTooltip from "./HotkeyTooltip";
@@ -84,6 +84,43 @@ function BarButton({ d, size = 48 }: { d: ControlDescriptor; size?: number }) {
   ) : (
     button
   );
+}
+
+function MediaClusterButton({
+  d,
+  disabled,
+  audio,
+  video,
+}: {
+  d: ControlDescriptor;
+  disabled?: boolean;
+  audio?: Pick<
+    MediaControlClusterProps,
+    | "selectedAudioInputDeviceId"
+    | "selectedAudioOutputDeviceId"
+    | "onAudioInputDeviceChange"
+    | "onAudioOutputDeviceChange"
+  >;
+  video?: Pick<
+    MediaControlClusterProps,
+    "selectedVideoInputDeviceId" | "onVideoInputDeviceChange" | "isMirrorCamera" | "onToggleMirror"
+  >;
+}) {
+  const cluster = (
+    <MediaControlCluster
+      kind={d.id === "mic" ? "mic" : "video"}
+      icon={d.icon}
+      variant={d.variant}
+      label={d.label}
+      onPress={d.onPress}
+      badge={d.badge}
+      hotkey={d.hotkey}
+      disabled={disabled || d.disabled}
+      {...audio}
+      {...video}
+    />
+  );
+  return cluster;
 }
 
 function PanelButton({ d }: { d: ControlDescriptor }) {
@@ -225,32 +262,32 @@ function ControlsBar(props: ControlsBarProps) {
         {config.center.map((d) => {
           if (d.id === "mic" && hasAudioDevicePicker) {
             return (
-              <div key={d.id} className="flex items-center">
-                <DeviceCaretMenu
-                  kind="audio"
-                  disabled={isGhostMode}
-                  selectedAudioInputDeviceId={selectedAudioInputDeviceId}
-                  selectedAudioOutputDeviceId={selectedAudioOutputDeviceId}
-                  onAudioInputDeviceChange={onAudioInputDeviceChange}
-                  onAudioOutputDeviceChange={onAudioOutputDeviceChange}
-                />
-                <BarButton d={d} />
-              </div>
+              <MediaClusterButton
+                key={d.id}
+                d={d}
+                disabled={isGhostMode}
+                audio={{
+                  selectedAudioInputDeviceId,
+                  selectedAudioOutputDeviceId,
+                  onAudioInputDeviceChange,
+                  onAudioOutputDeviceChange,
+                }}
+              />
             );
           }
           if (d.id === "camera" && hasVideoDevicePicker) {
             return (
-              <div key={d.id} className="flex items-center">
-                <DeviceCaretMenu
-                  kind="video"
-                  disabled={isGhostMode}
-                  selectedVideoInputDeviceId={selectedVideoInputDeviceId}
-                  onVideoInputDeviceChange={onVideoInputDeviceChange}
-                  isMirrorCamera={isMirrorCamera}
-                  onToggleMirror={onToggleMirror}
-                />
-                <BarButton d={d} />
-              </div>
+              <MediaClusterButton
+                key={d.id}
+                d={d}
+                disabled={isGhostMode}
+                video={{
+                  selectedVideoInputDeviceId,
+                  onVideoInputDeviceChange,
+                  isMirrorCamera,
+                  onToggleMirror,
+                }}
+              />
             );
           }
           return <BarButton key={d.id} d={d} />;

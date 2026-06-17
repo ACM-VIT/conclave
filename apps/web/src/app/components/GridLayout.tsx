@@ -2,7 +2,6 @@
 
 import {
   Crop,
-  Focus,
   Ghost,
   Hand,
   Link2,
@@ -783,8 +782,6 @@ function GridLayout({
   onParticipantClick,
   onOpenParticipantsPanel,
   activeVideoEffectsCount = 0,
-  isVideoFramingEnabled = false,
-  onToggleVideoFraming,
   viewSettings = DEFAULT_MEET_VIEW_SETTINGS,
   onViewSettingsChange,
   presentationStream = null,
@@ -2789,26 +2786,6 @@ function GridLayout({
                   )}
                 </button>
               ) : null}
-              {onToggleVideoFraming && (
-                <div className="absolute left-1/2 top-3 flex -translate-x-1/2 items-center gap-2 opacity-0 transition-opacity duration-[120ms] group-hover:opacity-100 focus-within:opacity-100">
-                  <button
-                    type="button"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      onToggleVideoFraming();
-                    }}
-                    disabled={isCameraOff}
-                    title={isCameraOff ? "Reframe unavailable" : "Reframe"}
-                    aria-label={isCameraOff ? "Reframe unavailable" : "Reframe"}
-                    aria-pressed={isVideoFramingEnabled}
-                    className={`inline-flex h-9 w-9 items-center justify-center rounded-full border border-[#fafafa]/12 bg-black/65 text-[#fafafa] shadow-[0_8px_20px_rgba(0,0,0,0.35)] transition-colors hover:bg-black/80 disabled:cursor-not-allowed disabled:opacity-45 ${
-                      isVideoFramingEnabled ? "text-[#F95F4A]" : ""
-                    }`}
-                  >
-                    <Focus size={18} strokeWidth={1.75} />
-                  </button>
-                </div>
-              )}
               {isHandRaised && (
                 <div
                   className="absolute left-3 top-3 flex h-8 w-8 items-center justify-center rounded-full border border-amber-400/40 bg-amber-500/20 text-amber-300"
