@@ -16,6 +16,8 @@ INFOPLIST_FILE = Info.plist
 GENERATE_INFOPLIST_FILE = YES
 SFU_JOIN_URL = https:/$()/conclave.acmvit.in/api/sfu/join
 SFU_JOIN_URL[config=Debug][sdk=iphonesimulator*] = http:/$()/127.0.0.1:3000/api/sfu/join
+CONCLAVE_AUTH_BASE_URL = https:/$()/conclave.acmvit.in
+CONCLAVE_AUTH_BASE_URL[config=Debug][sdk=iphonesimulator*] = http:/$()/127.0.0.1:3000
 
 // The user-visible name of the app (localizable)
 //INFOPLIST_KEY_CFBundleDisplayName = App Name

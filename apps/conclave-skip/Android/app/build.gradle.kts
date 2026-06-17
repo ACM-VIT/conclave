@@ -6,6 +6,19 @@ val googleSignInWebClientId = providers.gradleProperty("GOOGLE_SIGN_IN_WEB_CLIEN
     .orElse(providers.environmentVariable("GOOGLE_CLIENT_ID"))
     .getOrElse("")
 
+val conclaveAuthBaseUrl = providers.gradleProperty("CONCLAVE_AUTH_BASE_URL")
+    .orElse(providers.environmentVariable("CONCLAVE_AUTH_BASE_URL"))
+    .orElse(providers.environmentVariable("AUTH_BASE_URL"))
+    .orElse(providers.environmentVariable("BETTER_AUTH_URL"))
+    .orElse(providers.environmentVariable("APP_BASE_URL"))
+    .orElse(providers.environmentVariable("NEXT_PUBLIC_APP_URL"))
+    .orElse(providers.environmentVariable("NEXT_PUBLIC_SITE_URL"))
+    .getOrElse("")
+
+val sfuJoinUrl = providers.gradleProperty("SFU_JOIN_URL")
+    .orElse(providers.environmentVariable("SFU_JOIN_URL"))
+    .getOrElse("")
+
 plugins {
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
@@ -42,6 +55,8 @@ android {
         minSdk = libs.versions.android.sdk.min.get().toInt()
         targetSdk = libs.versions.android.sdk.compile.get().toInt()
         manifestPlaceholders["GOOGLE_SIGN_IN_WEB_CLIENT_ID"] = googleSignInWebClientId
+        manifestPlaceholders["CONCLAVE_AUTH_BASE_URL"] = conclaveAuthBaseUrl
+        manifestPlaceholders["SFU_JOIN_URL"] = sfuJoinUrl
         // skip.tools.skip-build-plugin will automatically use Skip.env properties for:
         // applicationId = ANDROID_APPLICATION_ID ?? PRODUCT_BUNDLE_IDENTIFIER
         // versionCode = CURRENT_PROJECT_VERSION

@@ -25,6 +25,12 @@
         <meta-data
             android:name="GOOGLE_SIGN_IN_WEB_CLIENT_ID"
             android:value="${GOOGLE_SIGN_IN_WEB_CLIENT_ID}" />
+        <meta-data
+            android:name="CONCLAVE_AUTH_BASE_URL"
+            android:value="${CONCLAVE_AUTH_BASE_URL}" />
+        <meta-data
+            android:name="SFU_JOIN_URL"
+            android:value="${SFU_JOIN_URL}" />
 
         <activity
             android:name=".MainActivity"

@@ -29,6 +29,8 @@
 	<string>$(GOOGLE_IOS_CLIENT_ID)</string>
 	<key>GOOGLE_IOS_REVERSED_CLIENT_ID</key>
 	<string>$(GOOGLE_IOS_REVERSED_CLIENT_ID)</string>
+	<key>CONCLAVE_AUTH_BASE_URL</key>
+	<string>$(CONCLAVE_AUTH_BASE_URL)</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>

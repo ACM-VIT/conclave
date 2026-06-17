@@ -71,6 +71,15 @@ private struct NativeSocialSignInResponse: Decodable {
     let message: String?
 }
 
+private struct NativeCurrentSessionResponse: Decodable {
+    struct Session: Decodable {
+        let user: NativeAuthenticatedUser?
+    }
+
+    let user: NativeAuthenticatedUser?
+    let session: Session?
+}
+
 enum NativeAuthService {
     static func fetchEnabledProviders() async -> Set<NativeAuthProvider> {
         guard let baseURL = resolveAppBaseURL(),
@@ -81,16 +90,59 @@ enum NativeAuthService {
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        request.httpShouldHandleCookies = true
+        prepareAuthRequest(&request, url: url)
 
-        guard let (data, response) = try? await URLSession.shared.data(for: request),
-              let statusCode = (response as? HTTPURLResponse)?.statusCode,
+        guard let result = try? await URLSession.shared.data(for: request) else {
+            return []
+        }
+        let (data, response) = result
+        storeAuthCookies(from: response, url: url)
+
+        guard let statusCode = (response as? HTTPURLResponse)?.statusCode,
               (200...299).contains(statusCode),
               let decoded = try? JSONDecoder().decode(NativeAuthProvidersResponse.self, from: data) else {
             return []
         }
 
         return Set((decoded.providers ?? []).compactMap { NativeAuthProvider(rawValue: $0) })
+    }
+
+    static func fetchCurrentSessionUser() async throws -> NativeAuthenticatedUser? {
+        guard let baseURL = resolveAppBaseURL(),
+              let url = authURL(path: "/api/auth/get-session", baseURL: baseURL) else {
+            throw NativeAuthError(message: "Authentication server is not configured.")
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        prepareAuthRequest(&request, url: url)
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        storeAuthCookies(from: response, url: url)
+        let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
+
+        if statusCode == 401 || statusCode == 403 {
+            return nil
+        }
+
+        guard (200...299).contains(statusCode) else {
+            throw NativeAuthError(message: responseSummary(from: data) ?? "Session refresh failed.")
+        }
+
+        if data.isEmpty {
+            return nil
+        }
+
+        if let raw = String(data: data, encoding: .utf8) {
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty || trimmed == "null" {
+                return nil
+            }
+        }
+
+        let decoded = try JSONDecoder().decode(NativeCurrentSessionResponse.self, from: data)
+        return decoded.user ?? decoded.session?.user
     }
 
     static func signInWithSocialToken(
@@ -128,9 +180,10 @@ enum NativeAuthService {
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue(originString(from: trustedAuthBaseURL(from: baseURL)), forHTTPHeaderField: "Origin")
         request.httpBody = try JSONEncoder().encode(requestBody)
-        request.httpShouldHandleCookies = true
+        prepareAuthRequest(&request, url: url)
 
         let (data, response) = try await URLSession.shared.data(for: request)
+        storeAuthCookies(from: response, url: url)
         let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
         let decoded = try? JSONDecoder().decode(NativeSocialSignInResponse.self, from: data)
 
@@ -159,9 +212,11 @@ enum NativeAuthService {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue(originString(from: trustedAuthBaseURL(from: baseURL)), forHTTPHeaderField: "Origin")
-        request.httpShouldHandleCookies = true
+        prepareAuthRequest(&request, url: url)
 
-        _ = try? await URLSession.shared.data(for: request)
+        if let (_, response) = try? await URLSession.shared.data(for: request) {
+            storeAuthCookies(from: response, url: url)
+        }
         clearStoredSessionCookies(matching: baseURL)
     }
 
@@ -301,6 +356,34 @@ enum NativeAuthService {
         return components.url ?? baseURL
         #else
         return baseURL
+        #endif
+    }
+
+    private static func prepareAuthRequest(_ request: inout URLRequest, url: URL) {
+        request.httpShouldHandleCookies = true
+        #if SKIP
+        if let cookieHeader = NativeAuthSessionBridge.cookieHeader(forURL: url.absoluteString),
+           !cookieHeader.isEmpty {
+            request.setValue(cookieHeader, forHTTPHeaderField: "Cookie")
+        }
+        #else
+        _ = url
+        #endif
+    }
+
+    private static func storeAuthCookies(from response: URLResponse, url: URL) {
+        #if SKIP
+        guard let httpResponse = response as? HTTPURLResponse,
+              let setCookieHeader = httpResponse.value(forHTTPHeaderField: "Set-Cookie") else {
+            return
+        }
+        NativeAuthSessionBridge.storeSetCookieHeader(
+            setCookieHeader: setCookieHeader,
+            forURL: url.absoluteString
+        )
+        #else
+        _ = response
+        _ = url
         #endif
     }
 

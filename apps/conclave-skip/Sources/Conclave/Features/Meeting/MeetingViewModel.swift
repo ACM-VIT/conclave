@@ -277,6 +277,15 @@ final class MeetingViewModel {
                     return
                 }
                 if reason == "io server disconnect" {
+                    // SFU drain emits serverRestarting before this server-side disconnect.
+                    // That path is reconnectable; kicks and ended rooms remain terminal.
+                    if self.state.serverRestartNotice != nil,
+                       self.lastJoinContext != nil {
+                        self.state.connectionState = ConnectionState.reconnecting
+                        self.shouldRejoinAfterReconnect = true
+                        await self.forceRejoinWithFreshToken()
+                        return
+                    }
                     self.state.connectionState = ConnectionState.disconnected
                     self.shouldRejoinAfterReconnect = false
                     return

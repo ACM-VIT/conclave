@@ -27,6 +27,9 @@ public final class ConclaveAppDelegate: Sendable {
     }
 
     public func onInit() {
+        #if SKIP
+        NativeAuthSessionBridge.install()
+        #endif
     }
 
     public func onLaunch() {

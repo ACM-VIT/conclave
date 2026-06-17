@@ -62,11 +62,12 @@ final class AppState {
         persistAuthState()
     }
 
-    func clearAuthentication() {
+    func clearAuthentication(signOutRemote: Bool = true) {
         currentUser = nil
         authProvider = .none
         isAuthenticated = false
         UserDefaults.standard.removeObject(forKey: Self.storedUserKey)
+        guard signOutRemote else { return }
         Task {
             await NativeAuthService.signOut()
         }

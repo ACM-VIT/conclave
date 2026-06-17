@@ -147,6 +147,7 @@ struct JoinView: View {
             restoreExistingIdentity()
             restoreJoinDraft()
             restoreJoinFormAfterRecoverableError()
+            refreshRestoredAuthentication()
             refreshAuthProviders()
             applyPendingJoinLinkIfPossible()
         }
@@ -1084,6 +1085,26 @@ struct JoinView: View {
         fallbackName: String? = nil,
         fallbackEmail: String? = nil
     ) {
+        storeAuthenticatedUser(
+            user,
+            provider: authProvider(for: provider),
+            fallbackName: fallbackName,
+            fallbackEmail: fallbackEmail,
+            moveToJoin: true
+        )
+    }
+
+    private func authProvider(for provider: NativeAuthProvider) -> AppState.AuthProvider {
+        provider == .apple ? .apple : .google
+    }
+
+    private func storeAuthenticatedUser(
+        _ user: NativeAuthenticatedUser,
+        provider: AppState.AuthProvider,
+        fallbackName: String? = nil,
+        fallbackEmail: String? = nil,
+        moveToJoin: Bool
+    ) {
         let email = normalizedOptional(user.email) ?? normalizedOptional(fallbackEmail)
         let id = normalizedOptional(user.id) ?? email ?? "\(provider.rawValue)-\(UUID().uuidString)"
         let resolvedName =
@@ -1091,20 +1112,21 @@ struct JoinView: View {
             ?? normalizedOptional(fallbackName)
             ?? email?.components(separatedBy: "@").first
             ?? "User"
-        let authProvider: AppState.AuthProvider = provider == .apple ? .apple : .google
 
         appState.setAuthenticatedUser(AppState.User(
             id: id,
             name: resolvedName,
             email: email,
-            provider: authProvider
+            provider: provider
         ))
 
         displayNameInput = resolvedName
         guestName = resolvedName
         clearAuthError()
-        phase = .join
-        clearInputFocusAfterLayout()
+        if moveToJoin {
+            phase = .join
+            clearInputFocusAfterLayout()
+        }
     }
 
     private func normalizedOptional(_ value: String?) -> String? {
@@ -1689,6 +1711,40 @@ struct JoinView: View {
         if user.id.hasPrefix("guest-"),
            guestName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             guestName = user.name ?? ""
+        }
+    }
+
+    private func refreshRestoredAuthentication() {
+        guard let storedUser = appState.currentUser,
+              storedUser.provider != .guest,
+              storedUser.provider != .none else {
+            return
+        }
+
+        let storedUserId = storedUser.id
+        let storedProvider = storedUser.provider
+
+        Task { @MainActor in
+            do {
+                guard let sessionUser = try await NativeAuthService.fetchCurrentSessionUser() else {
+                    guard appState.currentUser?.id == storedUserId else { return }
+                    appState.clearAuthentication(signOutRemote: false)
+                    phase = .auth
+                    showAuthError("Your sign-in session expired. Sign in again or continue as guest.")
+                    return
+                }
+
+                guard appState.currentUser?.id == storedUserId else { return }
+                storeAuthenticatedUser(
+                    sessionUser,
+                    provider: storedProvider,
+                    fallbackName: storedUser.name,
+                    fallbackEmail: storedUser.email,
+                    moveToJoin: false
+                )
+            } catch {
+                // Keep the stored identity when the auth server cannot be reached.
+            }
         }
     }
 
