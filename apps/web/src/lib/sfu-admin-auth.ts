@@ -1,4 +1,5 @@
 import { auth } from "@/lib/auth";
+export { resolveSfuUrl } from "@/lib/sfu-url";
 
 const firstNonEmpty = (...values: Array<string | undefined>): string | undefined => {
   for (const value of values) {
@@ -108,9 +109,6 @@ const getAllowlistConfigurationError = (): string | null => {
 
   return "SFU admin access is disabled until an allowlist is configured. Set SFU_ADMIN_ALLOWLIST_* env vars.";
 };
-
-export const resolveSfuUrl = (): string =>
-  process.env.SFU_URL || process.env.NEXT_PUBLIC_SFU_URL || "http://localhost:3031";
 
 export const resolveSfuSecret = (): string =>
   process.env.SFU_SECRET || "development-secret";

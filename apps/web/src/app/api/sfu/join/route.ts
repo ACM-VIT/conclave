@@ -4,6 +4,11 @@ import { NextResponse } from "next/server";
 import { resolveHostGrant } from "@conclave/meeting-core";
 import { auth } from "@/lib/auth";
 import { lookupScheduledWebinarByRoomId } from "@/lib/sfu-user-auth";
+import {
+  normalizeRoutedSfuUrl,
+  normalizeSfuUrl,
+  resolveSfuUrl,
+} from "@/lib/sfu-url";
 
 export const runtime = "nodejs";
 
@@ -47,9 +52,6 @@ const DEFAULT_PUBLIC_STUN_URLS = [
   "stun:stun1.l.google.com:19302",
   "stun:stun2.l.google.com:19302",
 ];
-
-const resolveSfuUrl = () =>
-  process.env.SFU_URL || process.env.NEXT_PUBLIC_SFU_URL || "http://localhost:3031";
 
 type RoomRoutingResponse = {
   owner?: {
@@ -102,24 +104,6 @@ const parseEmailList = (value: string | undefined): Set<string> =>
 
 const isScheduledRoomId = (value: string): boolean =>
   /^sched-[a-f0-9]{8}$/i.test(value);
-
-const normalizeSfuUrl = (value: string): string => value.replace(/\/+$/, "");
-
-const normalizeRoutedSfuUrl = (value: unknown): string | null => {
-  if (typeof value !== "string" || !value.trim()) {
-    return null;
-  }
-
-  try {
-    const url = new URL(value.trim());
-    if (url.protocol !== "http:" && url.protocol !== "https:") {
-      return null;
-    }
-    return normalizeSfuUrl(url.toString());
-  } catch {
-    return null;
-  }
-};
 
 let roomRoutingWarningLogged = false;
 const resolveRoutedSfuUrl = async (options: {

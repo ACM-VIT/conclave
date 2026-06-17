@@ -87,7 +87,7 @@ pnpm -C apps/web run dev
 
 Notes:
 
-- Web defaults to `http://localhost:3031` SFU if `SFU_URL`/`NEXT_PUBLIC_SFU_URL` is unset.
+- Web defaults to `https://sfu.acmvit.in` if `SFU_URL`/`NEXT_PUBLIC_SFU_URL` is unset.
 - SFU has development defaults; production must set secrets and announced IPs.
 
 ---
