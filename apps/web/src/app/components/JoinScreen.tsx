@@ -878,7 +878,7 @@ function JoinScreen({
                 </div>
               ) : (
                 <div className="space-y-1.5">
-                  <label className="block text-[11.5px] font-semibold uppercase tracking-[0.07em] text-[#fafafa]/40">
+                  <label className="block text-[11.5px] font-semibold text-[#fafafa]/40">
                     Your name
                   </label>
                   <input
@@ -945,7 +945,7 @@ function JoinScreen({
               )}
 
               <div className="space-y-1.5">
-                <label className="block text-[11.5px] font-semibold uppercase tracking-[0.07em] text-[#fafafa]/40">
+                <label className="block text-[11.5px] font-semibold text-[#fafafa]/40">
                   {isRoutedRoom ? "Room" : "Join with a code"}
                 </label>
                 <input

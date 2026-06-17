@@ -1,9 +1,25 @@
 "use client";
 
-import { Check, ChevronUp, FlipHorizontal2 } from "lucide-react";
+import {
+  Check,
+  ChevronUp,
+  FlipHorizontal2,
+  type LucideIcon,
+} from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { color } from "@conclave/ui-tokens";
+import {
+  color,
+  controlButtonColors,
+  type ControlButtonVariant,
+} from "@conclave/ui-tokens";
 import { SwitchRow } from "@conclave/ui-tokens/web";
+import HotkeyTooltip from "./HotkeyTooltip";
+
+const ICON_SIZE = 20;
+const CLUSTER_W = 104;
+const SIDE_ZONE_W = 64;
+const MAIN_ZONE_W = 72;
+const CARET_CLICK_W = 40;
 
 type DeviceOption = { deviceId: string; label: string };
 
@@ -68,7 +84,6 @@ function DeviceList({
   onSelect?: (deviceId: string) => void;
 }) {
   if (!devices.length || !onSelect) return null;
-  // If nothing is explicitly selected, the first device is the active default.
   const activeId = selectedId || devices[0]?.deviceId;
   return (
     <div className="px-1.5 pb-1 pt-1">
@@ -99,21 +114,27 @@ function DeviceList({
   );
 }
 
-function EmptyDevices({ kind }: { kind: "audio" | "video" }) {
+function EmptyDevices({ kind }: { kind: "mic" | "video" }) {
   return (
     <p
       className="px-3 py-3 text-[13px]"
       style={{ color: color.textFaint }}
     >
-      {kind === "audio"
+      {kind === "mic"
         ? "No microphones or speakers found. Allow microphone access, then reopen this menu."
         : "No cameras found. Allow camera access, then reopen this menu."}
     </p>
   );
 }
 
-export interface DeviceCaretMenuProps {
-  kind: "audio" | "video";
+export interface MediaControlClusterProps {
+  kind: "mic" | "video";
+  icon: LucideIcon;
+  variant: ControlButtonVariant;
+  label: string;
+  onPress?: () => void;
+  badge?: number;
+  hotkey?: string;
   disabled?: boolean;
   selectedAudioInputDeviceId?: string;
   selectedAudioOutputDeviceId?: string;
@@ -125,11 +146,40 @@ export interface DeviceCaretMenuProps {
   onToggleMirror?: () => void;
 }
 
-export function DeviceCaretMenu(props: DeviceCaretMenuProps) {
-  const { kind, disabled } = props;
+/** Mic/camera toggle + device caret as one unified pill control. */
+export function MediaControlCluster(props: MediaControlClusterProps) {
+  const {
+    kind,
+    icon: Icon,
+    variant,
+    label,
+    onPress,
+    badge,
+    hotkey,
+    disabled = false,
+    selectedAudioInputDeviceId,
+    selectedAudioOutputDeviceId,
+    selectedVideoInputDeviceId,
+    onAudioInputDeviceChange,
+    onAudioOutputDeviceChange,
+    onVideoInputDeviceChange,
+    isMirrorCamera,
+    onToggleMirror,
+  } = props;
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const { audioInput, audioOutput, videoInput } = useEnumeratedDevices(open);
+  const colors = controlButtonColors(variant);
+  const sideColors = controlButtonColors("default");
+  const mainStyle = {
+    backgroundColor: colors.bg,
+    borderColor: colors.border,
+  };
+  const sideStyle = {
+    backgroundColor: sideColors.bg,
+    borderColor: sideColors.border,
+  };
+  const caretColor = open ? color.accent : "rgba(250, 250, 250, 0.72)";
 
   useEffect(() => {
     if (!open) return;
@@ -152,52 +202,93 @@ export function DeviceCaretMenu(props: DeviceCaretMenuProps) {
       cb?.(id);
       setOpen(false);
     };
+  const mainButton = (
+    <button
+      type="button"
+      disabled={disabled}
+      aria-label={label}
+      onClick={onPress}
+      className="relative inline-flex h-12 w-full shrink-0 items-center justify-center rounded-full border transition-[filter,transform] duration-[120ms] hover:brightness-110 active:scale-[0.96] active:brightness-95 disabled:cursor-not-allowed disabled:hover:brightness-100"
+      style={{ ...mainStyle, color: colors.fg }}
+    >
+      <Icon size={ICON_SIZE} strokeWidth={1.75} />
+      {typeof badge === "number" && badge > 0 ? (
+        <span
+          className="absolute -right-0.5 -top-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-bold text-white"
+          style={{ backgroundColor: color.accent }}
+        >
+          {badge > 9 ? "9+" : badge}
+        </span>
+      ) : null}
+    </button>
+  );
 
   return (
-    <div ref={ref} className="relative flex">
-      <button
-        type="button"
-        disabled={disabled}
-        aria-label={kind === "audio" ? "Audio settings" : "Camera settings"}
-        aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
-        className="group/caret flex h-12 w-8 items-center justify-center disabled:opacity-40"
-        style={{ color: open ? color.accent : color.textMuted }}
+    <div ref={ref} className="group/cluster relative inline-block">
+      <div
+        className={"relative h-12 shrink-0 " + (disabled ? "opacity-35" : "")}
+        style={{ width: CLUSTER_W }}
       >
-        <span
-          className="flex h-8 w-8 items-center justify-center rounded-full transition-[background-color] duration-[120ms] group-hover/caret:bg-white/[0.09]"
-          style={open ? { backgroundColor: "rgba(249, 95, 74, 0.16)" } : undefined}
+        <button
+          type="button"
+          disabled={disabled}
+          aria-label={kind === "mic" ? "Audio settings" : "Camera settings"}
+          aria-expanded={open}
+          onClick={() => setOpen((v) => !v)}
+          className="absolute left-0 top-0 z-0 inline-flex h-12 items-center justify-start rounded-full border transition-[filter] duration-[120ms] hover:brightness-110 active:brightness-95 disabled:cursor-not-allowed disabled:hover:brightness-100"
+          style={{ ...sideStyle, width: SIDE_ZONE_W, color: caretColor }}
         >
-          <ChevronUp
-            size={15}
-            strokeWidth={2.25}
-            className={`transition-transform duration-[150ms] ${open ? "rotate-180" : ""}`}
-          />
-        </span>
-      </button>
+          <span
+            className="inline-flex h-12 items-center justify-center"
+            style={{ width: CARET_CLICK_W }}
+          >
+            <ChevronUp
+              size={15}
+              strokeWidth={2.25}
+              className={`transition-transform duration-[150ms] ${open ? "rotate-180" : ""}`}
+            />
+          </span>
+        </button>
+
+        <div
+          className="absolute right-0 top-0 z-[1] h-12"
+          style={{ width: MAIN_ZONE_W }}
+        >
+          {hotkey ? (
+            <HotkeyTooltip label={label} hotkey={hotkey} className="h-full w-full">
+              {mainButton}
+            </HotkeyTooltip>
+          ) : (
+            mainButton
+          )}
+        </div>
+      </div>
 
       {open && (
-        <div className="absolute bottom-full left-1/2 mb-3 w-64 -translate-x-1/2">
+        <div className="absolute bottom-full left-1/2 z-50 mb-3 w-64 -translate-x-1/2">
           <div
             className="origin-bottom rounded-2xl border p-1 will-change-transform animate-[meet-popover-in_150ms_cubic-bezier(0.22,1,0.36,1)]"
-            style={{ backgroundColor: color.surfaceRaised, borderColor: color.border }}
+            style={{
+              backgroundColor: color.surfaceRaised,
+              borderColor: color.border,
+            }}
           >
-            {kind === "audio" ? (
+            {kind === "mic" ? (
               audioInput.length === 0 && audioOutput.length === 0 ? (
-                <EmptyDevices kind="audio" />
+                <EmptyDevices kind="mic" />
               ) : (
                 <>
                   <DeviceList
                     heading="Microphone"
                     devices={audioInput}
-                    selectedId={props.selectedAudioInputDeviceId}
-                    onSelect={handleSelect(props.onAudioInputDeviceChange)}
+                    selectedId={selectedAudioInputDeviceId}
+                    onSelect={handleSelect(onAudioInputDeviceChange)}
                   />
                   <DeviceList
                     heading="Speaker"
                     devices={audioOutput}
-                    selectedId={props.selectedAudioOutputDeviceId}
-                    onSelect={handleSelect(props.onAudioOutputDeviceChange)}
+                    selectedId={selectedAudioOutputDeviceId}
+                    onSelect={handleSelect(onAudioOutputDeviceChange)}
                   />
                 </>
               )
@@ -209,16 +300,16 @@ export function DeviceCaretMenu(props: DeviceCaretMenuProps) {
                   <DeviceList
                     heading="Camera"
                     devices={videoInput}
-                    selectedId={props.selectedVideoInputDeviceId}
-                    onSelect={handleSelect(props.onVideoInputDeviceChange)}
+                    selectedId={selectedVideoInputDeviceId}
+                    onSelect={handleSelect(onVideoInputDeviceChange)}
                   />
                 )}
-                {props.onToggleMirror && (
+                {onToggleMirror && (
                   <SwitchRow
                     icon={FlipHorizontal2}
                     label="Mirror my video"
-                    checked={Boolean(props.isMirrorCamera)}
-                    onChange={() => props.onToggleMirror?.()}
+                    checked={Boolean(isMirrorCamera)}
+                    onChange={() => onToggleMirror?.()}
                     className="rounded-lg"
                   />
                 )}
