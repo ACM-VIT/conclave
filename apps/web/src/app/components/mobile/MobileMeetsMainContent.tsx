@@ -5,6 +5,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Dispatch, PointerEvent, SetStateAction } from "react";
 import type { Socket } from "socket.io-client";
 import type {
+  AdminNoticeNotification,
   ChatMessage,
   ConnectionState,
   MeetError,
@@ -21,6 +22,7 @@ import type {
 import type { BrowserState } from "../../hooks/useSharedBrowser";
 import ChatOverlay from "../ChatOverlay";
 import ConnectionBanner from "../ConnectionBanner";
+import AdminNoticePill from "../AdminNoticePill";
 import ReactionOverlay from "../ReactionOverlay";
 import MobileChatPanel from "./MobileChatPanel";
 import MobileControlsBar from "./MobileControlsBar";
@@ -156,6 +158,7 @@ interface MobileMeetsMainContentProps {
   hostUserIds: string[];
   isNetworkOffline: boolean;
   serverRestartNotice?: string | null;
+  adminNotice?: AdminNoticeNotification | null;
   isTtsDisabled: boolean;
   isDmEnabled: boolean;
   meetingRequiresInviteCode: boolean;
@@ -337,6 +340,7 @@ function MobileMeetsMainContent({
   hostUserIds,
   isNetworkOffline,
   serverRestartNotice = null,
+  adminNotice = null,
   isTtsDisabled,
   isDmEnabled,
   meetingRequiresInviteCode,
@@ -832,6 +836,7 @@ function MobileMeetsMainContent({
           serverRestartNotice={serverRestartNotice}
         />
       )}
+      {isJoined && <AdminNoticePill notice={adminNotice} compact />}
       <SystemAudioPlayers
         participants={participants}
         audioOutputDeviceId={audioOutputDeviceId}

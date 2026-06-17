@@ -9,6 +9,7 @@ import ChatPanel from "./ChatPanel";
 import ControlsBar from "./ControlsBar";
 import GridLayout from "./GridLayout";
 import ConnectionBanner from "./ConnectionBanner";
+import AdminNoticePill from "./AdminNoticePill";
 import JoinScreen from "./JoinScreen";
 import ParticipantsPanel from "./ParticipantsPanel";
 import MeetSettingsPanel from "./MeetSettingsPanel";
@@ -32,6 +33,7 @@ import {
   type VideoEffectsRuntimeStatus,
 } from "../hooks/useVideoEffects";
 import type {
+  AdminNoticeNotification,
   ChatMessage,
   ConnectionState,
   MeetError,
@@ -181,6 +183,7 @@ interface MeetsMainContentProps {
   hostUserIds: string[];
   isNetworkOffline: boolean;
   serverRestartNotice?: string | null;
+  adminNotice?: AdminNoticeNotification | null;
   isTtsDisabled: boolean;
   isDmEnabled: boolean;
   meetingRequiresInviteCode: boolean;
@@ -395,6 +398,7 @@ export default function MeetsMainContent({
   hostUserIds,
   isNetworkOffline,
   serverRestartNotice = null,
+  adminNotice = null,
   isTtsDisabled,
   isDmEnabled,
   meetingRequiresInviteCode,
@@ -1016,6 +1020,7 @@ export default function MeetsMainContent({
           serverRestartNotice={serverRestartNotice}
         />
       )}
+      {isJoined && <AdminNoticePill notice={adminNotice} />}
       <SystemAudioPlayers
         participants={participants}
         audioOutputDeviceId={audioOutputDeviceId}
