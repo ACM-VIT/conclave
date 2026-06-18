@@ -509,8 +509,9 @@ export function useMeetSocket({
   }, []);
 
   const cleanupRoomResources = useCallback(
-    (options?: { resetRoomId?: boolean }) => {
+    (options?: { resetRoomId?: boolean; preserveMeetingState?: boolean }) => {
       const resetRoomId = options?.resetRoomId !== false;
+      const preserveMeetingState = options?.preserveMeetingState === true;
       console.log("[Meets] Cleaning up room resources...");
       if (producerSyncIntervalRef.current) {
         window.clearInterval(producerSyncIntervalRef.current);
@@ -550,15 +551,17 @@ export function useMeetSocket({
         window.clearTimeout(timeoutId);
       });
       leaveTimeoutsRef.current.clear();
-      clearReactions();
-      setPendingUsers(new Map());
-      setDisplayNames(new Map());
-      setHostUserId(null);
-      setHostUserIds([]);
-      setWebinarRole(null);
-      setWebinarSpeakerUserId(null);
-      participantIdsRef.current = new Set([userId]);
-      serverRoomIdRef.current = null;
+      if (!preserveMeetingState) {
+        clearReactions();
+        setPendingUsers(new Map());
+        setDisplayNames(new Map());
+        setHostUserId(null);
+        setHostUserIds([]);
+        setWebinarRole(null);
+        setWebinarSpeakerUserId(null);
+        participantIdsRef.current = new Set([userId]);
+        serverRoomIdRef.current = null;
+      }
 
       try {
         audioProducerRef.current?.close();
@@ -592,14 +595,18 @@ export function useMeetSocket({
         consumerTransportDisconnectTimeoutRef.current = null;
       }
 
-      dispatchParticipants({ type: "CLEAR_ALL" });
+      if (!preserveMeetingState) {
+        dispatchParticipants({ type: "CLEAR_ALL" });
+      }
       setIsScreenSharing(false);
-      setActiveScreenShareId(null);
-      setIsHandRaised(false);
-      setIsTtsDisabled(false);
-      setIsDmEnabled(true);
-      setMeetingRequiresInviteCode(false);
-      setWebinarConfig(null);
+      if (!preserveMeetingState) {
+        setActiveScreenShareId(null);
+        setIsHandRaised(false);
+        setIsTtsDisabled(false);
+        setIsDmEnabled(true);
+        setMeetingRequiresInviteCode(false);
+        setWebinarConfig(null);
+      }
       if (resetRoomId) {
         currentRoomIdRef.current = null;
         runtimeStunIceServersRef.current = null;
@@ -3131,6 +3138,7 @@ export function useMeetSocket({
                 if (!isRoomEvent(eventRoomId)) return;
                 const snapshot = new Map<string, string>();
                 const nextParticipantIds = new Set<string>([userId]);
+                const previousParticipantIds = participantIdsRef.current;
                 (users || []).forEach(
                   ({ userId: snapshotUserId, displayName }) => {
                     if (displayName) {
@@ -3154,6 +3162,37 @@ export function useMeetSocket({
                     }
                   },
                 );
+                for (const previousUserId of previousParticipantIds) {
+                  if (
+                    previousUserId === userId ||
+                    nextParticipantIds.has(previousUserId)
+                  ) {
+                    continue;
+                  }
+                  const leaveTimeout = leaveTimeoutsRef.current.get(previousUserId);
+                  if (leaveTimeout) {
+                    window.clearTimeout(leaveTimeout);
+                    leaveTimeoutsRef.current.delete(previousUserId);
+                  }
+                  clearParticipantConnectionStatusTimer(previousUserId);
+                  const producersToClose = Array.from(
+                    producerMapRef.current.entries(),
+                  )
+                    .filter(([, info]) => info.userId === previousUserId)
+                    .map(([producerId]) => producerId);
+                  for (const [producerId, info] of pendingProducersRef.current) {
+                    if (info.producerUserId === previousUserId) {
+                      pendingProducersRef.current.delete(producerId);
+                    }
+                  }
+                  for (const producerId of producersToClose) {
+                    handleProducerClosed(producerId);
+                  }
+                  dispatchParticipants({
+                    type: "REMOVE_PARTICIPANT",
+                    userId: previousUserId,
+                  });
+                }
                 participantIdsRef.current = nextParticipantIds;
                 setDisplayNames(snapshot);
               },
@@ -3909,14 +3948,22 @@ export function useMeetSocket({
 
         try {
           const reconnectRoomId = currentRoomIdRef.current;
-          cleanupRoomResources({ resetRoomId: false });
-          socketRef.current?.disconnect();
-          socketRef.current = null;
-          onSocketReady?.(null);
           if (!reconnectRoomId) {
             throw new Error("Missing room ID for reconnect");
           }
-          await connectSocket(reconnectRoomId);
+          const canReuseSocket = socketRef.current?.connected === true;
+          cleanupRoomResources({
+            resetRoomId: false,
+            preserveMeetingState: true,
+          });
+          if (!canReuseSocket) {
+            socketRef.current?.disconnect();
+            socketRef.current = null;
+            onSocketReady?.(null);
+            await connectSocket(reconnectRoomId);
+          } else {
+            setMeetError(null);
+          }
           // …or while the socket was (re)connecting — bail before rejoining so
           // we don't re-enter a room we were just removed from.
           if (intentionalDisconnectRef.current) return;
@@ -3935,7 +3982,25 @@ export function useMeetSocket({
               bypassMediaPermissions ||
               joinOptions.joinMode === "webinar_attendee")
           ) {
-            await joinRoomInternal(reconnectRoomId, stream, joinOptions);
+            try {
+              await joinRoomInternal(reconnectRoomId, stream, joinOptions);
+            } catch (joinError) {
+              if (!(joinError instanceof JoinRoomRedirectError)) {
+                throw joinError;
+              }
+              cleanupRoomResources({
+                resetRoomId: false,
+                preserveMeetingState: true,
+              });
+              socketRef.current?.disconnect();
+              socketRef.current = null;
+              onSocketReady?.(null);
+              await connectSocket(reconnectRoomId, {
+                sfuUrlOverride: joinError.redirectUrl,
+              });
+              if (intentionalDisconnectRef.current) return;
+              await joinRoomInternal(reconnectRoomId, stream, joinOptions);
+            }
           } else {
             throw new Error("Missing live local media for reconnect");
           }
@@ -3983,6 +4048,7 @@ export function useMeetSocket({
     setConnectionState,
     setMeetError,
     socketRef,
+    onSocketReady,
     bypassMediaPermissions,
   ]);
 
