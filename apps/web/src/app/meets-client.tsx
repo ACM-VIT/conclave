@@ -6,7 +6,7 @@ import type { RegisterableHotkey } from "@tanstack/hotkeys";
 import { HOTKEYS } from "./lib/hotkeys";
 import type { Socket } from "socket.io-client";
 import type { RoomInfo } from "@/lib/sfu-types";
-import { signOut } from "@/lib/auth-client";
+import { signOut, useSession } from "@/lib/auth-client";
 import type { AssetUploadHandler } from "@conclave/apps-sdk";
 import {
   AppsProvider,
@@ -237,6 +237,9 @@ const isGuestUser = (
 ): candidate is MeetUser & { id: string } =>
   Boolean(candidate?.id?.startsWith("guest-"));
 
+const isGeneratedGuestDisplayName = (value?: string | null): boolean =>
+  Boolean(value?.trim().match(/^Guest\s+\d/i));
+
 const parseGuestUser = (raw: string | null): MeetUser | null => {
   if (!raw) return null;
   try {
@@ -261,10 +264,30 @@ const parseGuestUser = (raw: string | null): MeetUser | null => {
         : record.name === null
           ? null
           : undefined;
+    if (isGeneratedGuestDisplayName(name)) {
+      return null;
+    }
     return { id, email, name };
   } catch {
     return null;
   }
+};
+
+const normalizeSessionUser = (user: {
+  id?: string;
+  email?: string | null;
+  name?: string | null;
+}): MeetUser | undefined => {
+  if (!user.id) return undefined;
+  const email = user.email || null;
+  return {
+    id: user.id,
+    email,
+    name: sanitizeInstitutionDisplayName(
+      user.name || user.email || "User",
+      email,
+    ),
+  };
 };
 
 export type MeetsClientProps = {
@@ -316,6 +339,8 @@ export default function MeetsClient({
   getRooms,
   reactionAssets,
 }: MeetsClientProps) {
+  const { data: authSession, isPending: isAuthSessionPending } = useSession();
+  const authSessionUser = authSession?.user;
   const [currentUser, setCurrentUser] = useState<MeetUser | undefined>(user);
   const [currentIsAdmin, setCurrentIsAdmin] = useState(isAdmin);
   const [guestStorageReady, setGuestStorageReady] = useState(false);
@@ -328,16 +353,18 @@ export default function MeetsClient({
 
   useEffect(() => {
     if (guestStorageReady || typeof window === "undefined") return;
-    if (!user) {
-      const storedGuest = parseGuestUser(
-        window.localStorage.getItem(GUEST_USER_STORAGE_KEY),
-      );
+    if (isAuthSessionPending) return;
+    if (!user && !authSessionUser?.id) {
+      const storedGuestRaw = window.localStorage.getItem(GUEST_USER_STORAGE_KEY);
+      const storedGuest = parseGuestUser(storedGuestRaw);
       if (storedGuest) {
         setCurrentUser(storedGuest);
+      } else if (storedGuestRaw) {
+        window.localStorage.removeItem(GUEST_USER_STORAGE_KEY);
       }
     }
     setGuestStorageReady(true);
-  }, [guestStorageReady, user]);
+  }, [authSessionUser?.id, guestStorageReady, isAuthSessionPending, user]);
 
   useEffect(() => {
     if (!guestStorageReady || typeof window === "undefined") return;
@@ -358,19 +385,46 @@ export default function MeetsClient({
 
   useEffect(() => {
     if (!user?.id) return;
+    const nextUser = normalizeSessionUser(user);
+    if (!nextUser) return;
     clearGuestStorage();
     setCurrentUser((current) => {
       if (
-        current?.id === user.id &&
-        current?.email === user.email &&
-        current?.name === user.name
+        current?.id === nextUser.id &&
+        current?.email === nextUser.email &&
+        current?.name === nextUser.name
       ) {
         return current;
       }
-      return user;
+      return nextUser;
     });
     setCurrentIsAdmin(isAdmin);
   }, [clearGuestStorage, isAdmin, user]);
+
+  useEffect(() => {
+    const nextUser = authSessionUser
+      ? normalizeSessionUser(authSessionUser)
+      : undefined;
+    if (!nextUser) return;
+    clearGuestStorage();
+    setCurrentUser((current) => {
+      if (
+        current?.id === nextUser.id &&
+        current?.email === nextUser.email &&
+        current?.name === nextUser.name
+      ) {
+        return current;
+      }
+      return nextUser;
+    });
+    setCurrentIsAdmin(isAdmin);
+  }, [
+    authSessionUser?.email,
+    authSessionUser?.id,
+    authSessionUser?.name,
+    clearGuestStorage,
+    isAdmin,
+  ]);
 
   useEffect(() => {
     if (process.env.NODE_ENV === "development") {
@@ -723,7 +777,7 @@ export default function MeetsClient({
     normalizedCurrentUserName ||
     currentUser?.email ||
     currentUser?.id ||
-    "guest";
+    "You";
   const isGuestIdentity = !currentUser || isGuestUser(currentUser);
   const userKey = isGuestIdentity
     ? `guest-${sessionId}`
@@ -768,7 +822,7 @@ export default function MeetsClient({
         normalizedCurrentUserName ||
         currentUser?.email ||
         currentUser?.id ||
-        "Guest",
+        "You",
       email: currentUser?.email ?? null,
     }),
     [userId, displayNameInput, normalizedCurrentUserName, currentUser],

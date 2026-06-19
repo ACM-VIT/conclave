@@ -209,6 +209,9 @@ export function getOrCreateSessionId(): string {
 
 export function formatDisplayName(raw: string): string {
   const base = raw.split("#")[0] || raw;
+  if (base.startsWith("guest-")) {
+    return "Guest";
+  }
   const handle = base.split("@")[0] || base;
   const tokens = handle.split(/[^A-Za-z0-9]+/).filter(Boolean);
   const words = tokens
