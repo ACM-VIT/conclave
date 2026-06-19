@@ -88,12 +88,16 @@ const resolveTrustedOrigins = (): string[] => {
   return Array.from(origins);
 };
 
+const AUTH_SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 365;
+
 export const auth = betterAuth({
   session: {
-    expiresIn: 60 * 60 * 24 * 7,
+    expiresIn: AUTH_SESSION_MAX_AGE_SECONDS,
     cookieCache: {
       enabled: true,
-      maxAge: 60,
+      strategy: "jwe",
+      refreshCache: true,
+      maxAge: AUTH_SESSION_MAX_AGE_SECONDS,
     },
   },
   user: {

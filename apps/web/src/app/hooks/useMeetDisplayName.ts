@@ -29,6 +29,17 @@ interface UseMeetDisplayNameOptions {
   }>;
 }
 
+const getDisplayNameFallback = (
+  targetUserId: string,
+  localUserId: string,
+): string => {
+  const stableKey = targetUserId.split("#")[0] || targetUserId;
+  if (stableKey.startsWith("guest-")) {
+    return targetUserId === localUserId ? "You" : "Guest";
+  }
+  return formatDisplayName(targetUserId);
+};
+
 export function useMeetDisplayName({
   user,
   userId,
@@ -53,7 +64,10 @@ export function useMeetDisplayName({
     if (sanitizedName) return sanitizedName;
     return user?.email?.trim() || "";
   }, [user?.name, user?.email]);
-  const localIdFallbackName = useMemo(() => formatDisplayName(userId), [userId]);
+  const localIdFallbackName = useMemo(
+    () => getDisplayNameFallback(userId, userId),
+    [userId],
+  );
 
   const resolveDisplayName = useCallback(
     (targetUserId: string) => {
@@ -67,7 +81,7 @@ export function useMeetDisplayName({
       if (targetUserId === userId && preferredLocalDisplayName) {
         return preferredLocalDisplayName;
       }
-      return formatDisplayName(targetUserId);
+      return getDisplayNameFallback(targetUserId, userId);
     },
     [displayNames, preferredLocalDisplayName, userId]
   );
@@ -94,8 +108,12 @@ export function useMeetDisplayName({
   }, [localIdFallbackName, preferredLocalDisplayName, userId]);
 
   useEffect(() => {
+    if (!preferredLocalDisplayName && currentUserDisplayName === "You") {
+      setDisplayNameInput("");
+      return;
+    }
     setDisplayNameInput(currentUserDisplayName);
-  }, [currentUserDisplayName]);
+  }, [currentUserDisplayName, preferredLocalDisplayName]);
 
   useEffect(() => {
     const normalized = normalizeDisplayName(displayNameInput);
