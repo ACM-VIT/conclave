@@ -106,6 +106,11 @@ assertIncludes(
 );
 assertIncludes(
   "webCodec",
+  "const fairFramerateCaps = [15, 24, 30];",
+  "web fair webcam preserves motion cadence",
+);
+assertIncludes(
+  "webCodec",
   "layerRank === 0 ? 65000 : 90000",
   "web emergency webcam bitrate cap",
 );
@@ -273,6 +278,11 @@ assertIncludes(
   "webAdaptiveConsumerPreferences",
   "isVisible ? bounds.maxTemporalLayer : 0",
   "web visible good-link tiles keep max temporal layer",
+);
+assertIncludes(
+  "webAdaptiveConsumerPreferences",
+  "isVisible || isFocus ? bounds.maxTemporalLayer : 1",
+  "web visible fair-link tiles keep max temporal layer",
 );
 assertIncludes(
   "webAdaptiveConsumerPreferences",

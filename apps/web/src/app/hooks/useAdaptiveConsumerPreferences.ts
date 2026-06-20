@@ -470,7 +470,11 @@ const getDesiredPreferences = (
   if (quality === "fair") {
     return {
       preferredLayers: bounds
-        ? buildLayerPreference(isFocus ? 1 : 0, isFocus ? 2 : 1, bounds)
+        ? buildLayerPreference(
+            isFocus ? 1 : 0,
+            isVisible || isFocus ? bounds.maxTemporalLayer : 1,
+            bounds,
+          )
         : undefined,
       priority: isFocus ? 175 : isVisible ? 90 : 50,
       paused: false,

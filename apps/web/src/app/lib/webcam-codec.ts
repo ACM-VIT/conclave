@@ -189,7 +189,7 @@ const getProfileAdjustedCap = (
       quality === "standard"
         ? [120000, 420000, 900000]
         : [80000, 220000];
-    const fairFramerateCaps = [12, 20, 24];
+    const fairFramerateCaps = [15, 24, 30];
     return {
       maxBitrate: Math.min(
         base.maxBitrate,
