@@ -35,6 +35,7 @@ import {
   getPreferredScreenShareCodec,
   getPreferredWebcamCodec,
   produceWebcamTrack,
+  shouldUseWebcamSimulcast,
   type WebcamProducerNetworkProfile,
 } from "../lib/webcam-codec";
 import type { ConnectionQualityStats } from "./useConnectionQuality";
@@ -1044,11 +1045,13 @@ export function useMeetMedia({
           publishStream,
           nextVideoTrack,
         );
+        const preferredWebcamCodec = getPreferredWebcamCodec(deviceRef.current);
         const previousEncodingCount =
           previousProducer?.rtpSender?.getParameters().encodings?.length ??
           previousProducer?.rtpParameters.encodings?.length ??
           0;
         const needsStandardSimulcastRecreate =
+          shouldUseWebcamSimulcast(preferredWebcamCodec) &&
           quality === "standard" &&
           Boolean(previousProducer && !previousProducer.closed) &&
           previousEncodingCount > 0 &&
@@ -1096,7 +1099,6 @@ export function useMeetMedia({
           }
         }
 
-        const preferredWebcamCodec = getPreferredWebcamCodec(deviceRef.current);
         const nextProducer = await produceCameraTrackWithRawFallback({
           transport,
           publishTrack,

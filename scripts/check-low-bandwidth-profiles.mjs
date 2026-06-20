@@ -124,7 +124,7 @@ assertNotIncludes(
 );
 assertIncludes(
   "webCodec",
-  "const shouldUseWebcamSimulcast =",
+  "export const shouldUseWebcamSimulcast =",
   "web webcam simulcast decision is codec/browser-aware",
 );
 assertRegex(
@@ -573,6 +573,14 @@ for (const [context, label] of [
     if (!section.includes("await ensureProducerTransportRef?.current?.()")) {
       failures.push(
         "web video-quality producer recreation must rebuild failed transports",
+      );
+    }
+    if (
+      !section.includes("shouldUseWebcamSimulcast(preferredWebcamCodec)") ||
+      !section.includes("const needsStandardSimulcastRecreate =")
+    ) {
+      failures.push(
+        "web video-quality producer recreation must skip intentional mobile/H264 single-layer webcam producers",
       );
     }
   }

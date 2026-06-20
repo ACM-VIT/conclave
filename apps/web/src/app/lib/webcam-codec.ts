@@ -55,7 +55,7 @@ const isPreferredVideoCodec = (
   );
 };
 
-const shouldUseWebcamSimulcast = (
+export const shouldUseWebcamSimulcast = (
   preferredCodec?: RtpCodecCapability,
 ): boolean => {
   if (!isLikelyHardwareAcceleratedH264Browser()) return true;
