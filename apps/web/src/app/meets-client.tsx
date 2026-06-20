@@ -2364,11 +2364,11 @@ export default function MeetsClient({
   });
   connectionQualityDebugRef.current = selfConnectionStats;
   const {
-    quality: selfConnectionQuality,
     publishQuality: selfPublishQuality,
     receiveQuality: selfReceiveQuality,
+    publishEmergencyMode: selfPublishEmergencyMode,
+    receiveEmergencyMode: selfReceiveEmergencyMode,
   } = selfConnectionStats;
-  const selfEmergencyNetworkMode = selfConnectionStats.emergencyMode;
   const hasPoorPublishRecoverySignal =
     (selfConnectionStats.rttMs !== null &&
       selfConnectionStats.rttMs >= PUBLISH_RECOVERY_RTT_POOR_MS) ||
@@ -2396,7 +2396,7 @@ export default function MeetsClient({
     refs,
     enabled: connectionState === "joined",
     connectionQuality: selfReceiveQuality,
-    emergencyMode: selfEmergencyNetworkMode,
+    emergencyMode: selfReceiveEmergencyMode,
     activeSpeakerId: effectiveActiveSpeakerId,
     debugStateRef: adaptiveConsumerDebugRef,
     onVideoAdaptivePauseStateChange: handleVideoAdaptivePauseStateChange,
@@ -2405,7 +2405,7 @@ export default function MeetsClient({
     enabled: connectionState === "joined",
     connectionQuality: selfPublishQuality,
     capRecoveryQuality: selfPublishCapRecoveryQuality,
-    emergencyMode: selfEmergencyNetworkMode,
+    emergencyMode: selfPublishEmergencyMode,
     isCameraOff,
     participantCount,
     audioProducerRef: refs.audioProducerRef,
@@ -2769,7 +2769,7 @@ export default function MeetsClient({
       <MeetsMainContent
         isJoined={isJoined}
         connectionState={connectionState}
-        selfConnectionQuality={selfConnectionQuality}
+        selfConnectionQuality={selfConnectionStats.quality}
         isLoading={isLoading}
         roomId={roomId}
         setRoomId={setRoomId}

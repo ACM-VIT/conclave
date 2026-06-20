@@ -450,6 +450,16 @@ assertNotIncludes(
   "? (selfConnectionStats.browserNetwork.quality as ConnectionQuality)",
   "web raw browser quality must not hold live publish caps down",
 );
+assertRegex(
+  "webMeetClient",
+  /publishEmergencyMode: selfPublishEmergencyMode,[\s\S]*receiveEmergencyMode: selfReceiveEmergencyMode,[\s\S]*useAdaptiveConsumerPreferences\(\{[\s\S]*connectionQuality: selfReceiveQuality,[\s\S]*emergencyMode: selfReceiveEmergencyMode,[\s\S]*useAdaptivePublishQuality\(\{[\s\S]*connectionQuality: selfPublishQuality,[\s\S]*emergencyMode: selfPublishEmergencyMode,/,
+  "web publish and receive adaptation use direction-specific emergency signals",
+);
+assertNotIncludes(
+  "webMeetClient",
+  "const selfEmergencyNetworkMode = selfConnectionStats.emergencyMode;",
+  "web publish/receive adaptation must not share combined emergency mode",
+);
 assertNotIncludes(
   "webMeetMedia",
   "shouldReopenVideoTrackForQuality",
