@@ -233,6 +233,8 @@ export function useMeetMedia({
     ) => Promise<void>
   >(async () => {});
   const audioRecoveryInFlightRef = useRef(false);
+  const [audioProducerRecoveryPulse, setAudioProducerRecoveryPulse] =
+    useState(0);
   const cameraRecoveryInFlightRef = useRef(false);
   const [cameraProducerRecoveryPulse, setCameraProducerRecoveryPulse] =
     useState(0);
@@ -500,7 +502,6 @@ export function useMeetMedia({
       if (consumeIntentionalStop(track)) return;
 
       if (kind === "audio") {
-        setIsMuted(true);
         const producer = audioProducerRef.current;
         if (producer) {
           socketRef.current?.emit(
@@ -512,6 +513,14 @@ export function useMeetMedia({
             producer.close();
           } catch {}
           audioProducerRef.current = null;
+        }
+        if (connectionStateRef.current === "joined") {
+          console.warn(
+            "[Meets] Local audio track ended unexpectedly; recovering audio producer.",
+          );
+          setAudioProducerRecoveryPulse((value) => value + 1);
+        } else {
+          setIsMuted(true);
         }
       } else {
         const producer = videoProducerRef.current;
@@ -543,6 +552,7 @@ export function useMeetMedia({
       audioProducerRef,
       videoProducerRef,
       socketRef,
+      setAudioProducerRecoveryPulse,
       setCameraProducerRecoveryPulse,
     ]
   );
@@ -1258,6 +1268,7 @@ export function useMeetMedia({
         audioProducer.on("transportclose", () => {
           if (audioProducerRef.current?.id === audioProducerId) {
             audioProducerRef.current = null;
+            setAudioProducerRecoveryPulse((value) => value + 1);
           }
         });
       }
@@ -1394,6 +1405,7 @@ export function useMeetMedia({
         audioProducer.on("transportclose", () => {
           if (audioProducerRef.current?.id === audioProducer.id) {
             audioProducerRef.current = null;
+            setAudioProducerRecoveryPulse((value) => value + 1);
           }
         });
       } catch (err) {
@@ -1427,6 +1439,7 @@ export function useMeetMedia({
     ghostEnabled,
     isObserverMode,
     connectionState,
+    audioProducerRecoveryPulse,
     isMuted,
     selectedAudioInputDeviceId,
     handleLocalTrackEnded,

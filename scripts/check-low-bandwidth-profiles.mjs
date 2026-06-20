@@ -404,6 +404,20 @@ assertIncludes(
     const section = compact(text.slice(start, end));
     if (
       !section.includes(
+        'connectionStateRef.current === "joined") { console.warn( "[Meets] Local audio track ended unexpectedly; recovering audio producer."',
+      )
+    ) {
+      failures.push(
+        "web unexpected audio track ends must preserve mic intent in joined meetings",
+      );
+    }
+    if (!section.includes("setAudioProducerRecoveryPulse((value) => value + 1)")) {
+      failures.push(
+        "web unexpected audio track ends must trigger producer recovery",
+      );
+    }
+    if (
+      !section.includes(
         'connectionStateRef.current === "joined") { console.warn( "[Meets] Local video track ended unexpectedly; recovering camera producer."',
       )
     ) {
@@ -472,6 +486,14 @@ assertIncludes(
     ) {
       failures.push(
         "web audio producer recovery must not mute users for retryable transport rebuilds",
+      );
+    }
+    if (!text.includes("audioProducerRecoveryPulse,")) {
+      failures.push("web audio producer recovery must be pulse-triggered");
+    }
+    if (!section.includes("setAudioProducerRecoveryPulse((value) => value + 1)")) {
+      failures.push(
+        "web audio producer transport close must trigger producer recovery",
       );
     }
   }
