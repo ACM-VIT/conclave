@@ -73,6 +73,7 @@ interface UseMeetMediaOptions {
   videoProducerRef: React.MutableRefObject<Producer | null>;
   screenProducerRef: React.MutableRefObject<Producer | null>;
   screenAudioProducerRef: React.MutableRefObject<Producer | null>;
+  screenShareStreamRef: React.MutableRefObject<MediaStream | null>;
   intentionalLocalProducerCloseIdsRef: React.MutableRefObject<Set<string>>;
   localStreamRef: React.MutableRefObject<MediaStream | null>;
   connectionQualityRef?: React.MutableRefObject<ConnectionQualityStats | null>;
@@ -192,6 +193,7 @@ export function useMeetMedia({
   videoProducerRef,
   screenProducerRef,
   screenAudioProducerRef,
+  screenShareStreamRef,
   intentionalLocalProducerCloseIdsRef,
   localStreamRef,
   connectionQualityRef,
@@ -1828,6 +1830,7 @@ export function useMeetMedia({
     if (isScreenSharing) {
       const producer = screenProducerRef.current;
       const audioProducer = screenAudioProducerRef.current;
+      const screenStream = screenShareStreamRef.current;
       if (producer) {
         socketRef.current?.emit(
           "closeProducer",
@@ -1856,7 +1859,15 @@ export function useMeetMedia({
         }
       }
       screenAudioProducerRef.current = null;
+      if (screenStream) {
+        for (const track of screenStream.getTracks()) {
+          track.onended = null;
+          stopLocalTrack(track);
+        }
+      }
+      screenShareStreamRef.current = null;
       setIsScreenSharing(false);
+      setActiveScreenShareId(null);
       return;
     }
 
@@ -1904,12 +1915,15 @@ export function useMeetMedia({
         encodings: [
           buildScreenShareEncodingForNetworkProfile(screenNetworkProfile),
         ],
+        stopTracks: false,
         ...(preferredScreenShareCodec ? { codec: preferredScreenShareCodec } : {}),
         appData: { type: "screen" as ProducerType },
       });
 
+      screenShareStreamRef.current = stream;
       screenProducerRef.current = producer;
       setIsScreenSharing(true);
+      setActiveScreenShareId(producer.id);
 
       const audioTrack = stream.getAudioTracks()[0];
       if (audioTrack && audioTrack.readyState === "live") {
@@ -1919,6 +1933,7 @@ export function useMeetMedia({
             codecOptions: buildScreenShareAudioOpusCodecOptions(
               screenNetworkProfile,
             ),
+            stopTracks: false,
             appData: { type: "screen" as ProducerType },
           });
 
@@ -1958,6 +1973,7 @@ export function useMeetMedia({
           producer.close();
         } catch {}
         screenProducerRef.current = null;
+        screenShareStreamRef.current = null;
         const currentAudioProducer = screenAudioProducerRef.current;
         if (currentAudioProducer) {
           socketRef.current?.emit(
@@ -1974,6 +1990,7 @@ export function useMeetMedia({
           screenAudioProducerRef.current = null;
         }
         setIsScreenSharing(false);
+        setActiveScreenShareId(null);
       };
     } catch (err) {
       if ((err as Error).name === "NotAllowedError") {
@@ -1989,13 +2006,16 @@ export function useMeetMedia({
     isScreenSharing,
     activeScreenShareId,
     setIsScreenSharing,
+    setActiveScreenShareId,
     producerTransportRef,
     screenProducerRef,
     screenAudioProducerRef,
+    screenShareStreamRef,
     socketRef,
     setMeetError,
     ensureProducerTransportRef,
     getPublishNetworkProfile,
+    stopLocalTrack,
   ]);
 
   useEffect(() => {

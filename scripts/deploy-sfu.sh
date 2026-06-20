@@ -53,8 +53,8 @@ if [[ -n "${UPSTASH_REDIS_REST_URL:-}" && -n "${UPSTASH_REDIS_REST_TOKEN:-}" ]];
   HAS_UPSTASH="true"
 fi
 
-if [[ "$HAS_UPSTASH" != "true" && -z "${REDIS_PASSWORD:-}" ]]; then
-  echo "REDIS_PASSWORD is required in .env when not using Upstash" >&2
+if [[ "$HAS_UPSTASH" != "true" && -z "${REDIS_PASSWORD:-}" && -z "${REDIS_URL:-}" ]]; then
+  echo "REDIS_PASSWORD or REDIS_URL is required in .env when not using Upstash" >&2
   exit 1
 fi
 
@@ -97,6 +97,10 @@ json_field() {
   node -e "const fs=require('fs');const data=JSON.parse(fs.readFileSync(0,'utf8'));const val=data['$field'];if(typeof val==='boolean'){console.log(val?'true':'false');}else if(val===undefined||val===null){console.log('');}else{console.log(val);}"
 }
 
+redis_url_host() {
+  node -e "try{const value=process.env.REDIS_URL||'';const url=new URL(value);console.log(url.host||'configured Redis');}catch{console.log('configured Redis');}"
+}
+
 status_json() {
   local url="$1"
   curl -fsS --connect-timeout 3 --max-time 5 -H "x-sfu-secret: ${SFU_SECRET}" "${url}/status" 2>/dev/null || true
@@ -117,11 +121,13 @@ git -C "$ROOT_DIR" pull
 
 if [[ "$HAS_UPSTASH" == "true" ]]; then
   echo "Using Upstash Redis; skipping local Redis container."
+elif [[ -n "${REDIS_URL:-}" ]]; then
+  echo "Using Redis at $(redis_url_host); skipping compose Redis container."
 elif [[ "$HAS_REDIS_SERVICE" == "true" ]]; then
   echo "Ensuring Redis is running..."
   "${COMPOSE[@]}" up -d redis
 else
-  echo "Redis service not present in ${COMPOSE_FILE}; skipping local Redis container."
+  echo "Redis service not present in ${COMPOSE_FILE}; using host Redis credentials from .env."
 fi
 
 STATUS_A="$(status_json "$SFU_A_URL")"

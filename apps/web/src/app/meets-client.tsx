@@ -1029,6 +1029,7 @@ export default function MeetsClient({
     videoProducerRef: refs.videoProducerRef,
     screenProducerRef: refs.screenProducerRef,
     screenAudioProducerRef: refs.screenAudioProducerRef,
+    screenShareStreamRef: refs.screenShareStreamRef,
     intentionalLocalProducerCloseIdsRef:
       refs.intentionalLocalProducerCloseIdsRef,
     localStreamRef: refs.localStreamRef,
