@@ -10962,6 +10962,7 @@ export function useVideoEffects({
     });
     let loopTimerId: number | null = null;
     let effectChangeFramePumpTimerId: number | null = null;
+    let processedOutputStaleCheckIntervalId: number | null = null;
     let effectChangeFramePumpGeneration = 0;
     let effectChangeFramePumpDrainFramesRemaining = 0;
     let videoFrameCallbackId: number | null = null;
@@ -11175,6 +11176,10 @@ export function useVideoEffects({
     let latestOutputFrameDispatchAt = 0;
     let latestOutputFrameAt = 0;
     let lastHiddenStaleOutputPreserveLogAt = 0;
+    let hiddenStaleOutputKeepaliveInFlight = false;
+    let hiddenStaleOutputKeepaliveCount = 0;
+    let hiddenStaleOutputKeepaliveFailureCount = 0;
+    let lastHiddenStaleOutputKeepaliveLogAt = 0;
     let latestOutputFrameVisible = false;
     let latestOutputProbe: CanvasVisibilityProbe = {
       averageLuma: 0,
@@ -13094,6 +13099,19 @@ export function useVideoEffects({
       }
     };
 
+    const getLatestOutputFrameAgeMs = (sampleNow = performance.now()) =>
+      latestOutputFrameAt > 0
+        ? Math.max(0, sampleNow - latestOutputFrameAt)
+        : Number.POSITIVE_INFINITY;
+
+    const isHiddenStaleProcessedOutput = (sampleNow = performance.now()) =>
+      outputTrackPublished &&
+      !cancelled &&
+      track.readyState === "live" &&
+      active &&
+      document.visibilityState !== "visible" &&
+      getLatestOutputFrameAgeMs(sampleNow) >= PROCESSED_OUTPUT_STALE_RELEASE_MS;
+
     const releaseStaleProcessedOutputIfNeeded = (
       reason: string,
       sampleNow = performance.now(),
@@ -13101,10 +13119,7 @@ export function useVideoEffects({
       if (!outputTrackPublished || cancelled || track.readyState !== "live") {
         return false;
       }
-      const latestOutputFrameAgeMs =
-        latestOutputFrameAt > 0
-          ? Math.max(0, sampleNow - latestOutputFrameAt)
-          : Number.POSITIVE_INFINITY;
+      const latestOutputFrameAgeMs = getLatestOutputFrameAgeMs(sampleNow);
       if (latestOutputFrameAgeMs < PROCESSED_OUTPUT_STALE_RELEASE_MS) {
         return false;
       }
@@ -13148,9 +13163,6 @@ export function useVideoEffects({
       releaseOutputTrackToRaw(reason);
       return true;
     };
-    const processedOutputStaleCheckIntervalId = window.setInterval(() => {
-      releaseStaleProcessedOutputIfNeeded("processed output stale heartbeat");
-    }, PROCESSED_OUTPUT_STALE_CHECK_MS);
 
     const recordOutputWriterFrameFailure = (err: unknown, phase: string) => {
       outputWriterWriteFailures += 1;
@@ -13498,6 +13510,95 @@ export function useVideoEffects({
         } catch {}
       }
     };
+
+    const keepHiddenStaleProcessedOutputAlive = async (
+      reason: string,
+      sampleNow = performance.now(),
+    ) => {
+      if (
+        hiddenStaleOutputKeepaliveInFlight ||
+        !isHiddenStaleProcessedOutput(sampleNow)
+      ) {
+        return false;
+      }
+
+      hiddenStaleOutputKeepaliveInFlight = true;
+      const latestOutputFrameAgeMs = getLatestOutputFrameAgeMs(sampleNow);
+      try {
+        if (!latestOutputProbe.visible) {
+          const restoredProbe = restoreLastVisibleOutputFrame(
+            "hidden-stale-output-keepalive",
+            latestOutputProbe,
+          );
+          if (restoredProbe?.visible) {
+            latestOutputProbe = restoredProbe;
+            latestOutputFrameVisible = true;
+          }
+        }
+
+        const outputDelivered = await deliverOutputFrame(sampleNow);
+        if (outputDelivered) {
+          hiddenStaleOutputKeepaliveCount += 1;
+          hiddenStaleOutputKeepaliveFailureCount = 0;
+          if (
+            hiddenStaleOutputKeepaliveCount <= 3 ||
+            sampleNow - lastHiddenStaleOutputKeepaliveLogAt >= 5000
+          ) {
+            lastHiddenStaleOutputKeepaliveLogAt = sampleNow;
+            logVideoEffects(debugId, "hidden_stale_output_keepalive", {
+              reason,
+              keepaliveCount: hiddenStaleOutputKeepaliveCount,
+              latestOutputFrameAgeMs: Number.isFinite(latestOutputFrameAgeMs)
+                ? Math.round(latestOutputFrameAgeMs)
+                : null,
+              outputMode,
+              outputWriterMode,
+              outputFramesWritten,
+              outputFrameSequence,
+              outputTrack: getTrackDebugSnapshot(track),
+              sourceTrack: getTrackDebugSnapshot(sourceVideoTrack),
+            });
+          }
+          return true;
+        }
+
+        hiddenStaleOutputKeepaliveFailureCount += 1;
+        if (
+          hiddenStaleOutputKeepaliveFailureCount <= 3 ||
+          hiddenStaleOutputKeepaliveFailureCount % 5 === 0
+        ) {
+          warnVideoEffects(debugId, "hidden_stale_output_keepalive_failed", {
+            reason,
+            failureCount: hiddenStaleOutputKeepaliveFailureCount,
+            latestOutputFrameAgeMs: Number.isFinite(latestOutputFrameAgeMs)
+              ? Math.round(latestOutputFrameAgeMs)
+              : null,
+            outputMode,
+            outputWriterMode,
+            outputFramesWritten,
+            outputFrameSequence,
+            outputTrack: getTrackDebugSnapshot(track),
+            sourceTrack: getTrackDebugSnapshot(sourceVideoTrack),
+          });
+        }
+        return false;
+      } finally {
+        hiddenStaleOutputKeepaliveInFlight = false;
+      }
+    };
+
+    processedOutputStaleCheckIntervalId = window.setInterval(() => {
+      const sampleNow = performance.now();
+      const released = releaseStaleProcessedOutputIfNeeded(
+        "processed output stale heartbeat",
+        sampleNow,
+      );
+      if (released) return;
+      void keepHiddenStaleProcessedOutputAlive(
+        "processed output hidden stale heartbeat",
+        sampleNow,
+      );
+    }, PROCESSED_OUTPUT_STALE_CHECK_MS);
 
     const setRuntimeStatus = (
       nextStatus: VideoEffectsRuntimeStatus,
@@ -17835,7 +17936,10 @@ export function useVideoEffects({
         window.clearTimeout(effectChangeFramePumpTimerId);
         effectChangeFramePumpTimerId = null;
       }
-      window.clearInterval(processedOutputStaleCheckIntervalId);
+      if (processedOutputStaleCheckIntervalId !== null) {
+        window.clearInterval(processedOutputStaleCheckIntervalId);
+        processedOutputStaleCheckIntervalId = null;
+      }
       if (loopTimerId !== null) {
         window.clearTimeout(loopTimerId);
         loopTimerId = null;

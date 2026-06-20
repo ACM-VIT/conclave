@@ -1918,12 +1918,17 @@ assertRegex(
 );
 assertRegex(
   "webVideoEffects",
-  /const releaseStaleProcessedOutputIfNeeded =[\s\S]*latestOutputFrameAt[\s\S]*PROCESSED_OUTPUT_STALE_RELEASE_MS[\s\S]*document\.visibilityState !== "visible"[\s\S]*preserve_processed_track_hidden_stale[\s\S]*return false;[\s\S]*releaseOutputTrackToRaw\(reason\);/,
+  /const getLatestOutputFrameAgeMs =[\s\S]*latestOutputFrameAt[\s\S]*const isHiddenStaleProcessedOutput =[\s\S]*document\.visibilityState !== "visible"[\s\S]*PROCESSED_OUTPUT_STALE_RELEASE_MS[\s\S]*const releaseStaleProcessedOutputIfNeeded =[\s\S]*preserve_processed_track_hidden_stale[\s\S]*return false;[\s\S]*releaseOutputTrackToRaw\(reason\);/,
   "web hidden-tab stale processed effects output preserves effects instead of raw fallback",
 );
 assertRegex(
   "webVideoEffects",
-  /const processedOutputStaleCheckIntervalId = window\.setInterval\(\(\) => \{[\s\S]*releaseStaleProcessedOutputIfNeeded\("processed output stale heartbeat"\);[\s\S]*PROCESSED_OUTPUT_STALE_CHECK_MS[\s\S]*window\.clearInterval\(processedOutputStaleCheckIntervalId\);/,
+  /const keepHiddenStaleProcessedOutputAlive = async[\s\S]*isHiddenStaleProcessedOutput\(sampleNow\)[\s\S]*restoreLastVisibleOutputFrame\(\s*"hidden-stale-output-keepalive"[\s\S]*await deliverOutputFrame\(sampleNow\)[\s\S]*"hidden_stale_output_keepalive"/,
+  "web hidden stale processed effects output sends keepalive frames instead of going inert",
+);
+assertRegex(
+  "webVideoEffects",
+  /processedOutputStaleCheckIntervalId = window\.setInterval\(\(\) => \{[\s\S]*releaseStaleProcessedOutputIfNeeded\(\s*"processed output stale heartbeat",\s*sampleNow,\s*\);[\s\S]*keepHiddenStaleProcessedOutputAlive\([\s\S]*PROCESSED_OUTPUT_STALE_CHECK_MS[\s\S]*window\.clearInterval\(processedOutputStaleCheckIntervalId\);/,
   "web stale processed effects output heartbeat survives stalled effects loops",
 );
 assertRegex(
