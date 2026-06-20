@@ -2811,14 +2811,51 @@ export function useMeetSocket({
       if (!currentRoomIdRef.current) return;
 
       const socket = socketRef.current;
-      const hasTerminalTransportFailure = [
-        producerTransportRef.current?.connectionState,
-        consumerTransportRef.current?.connectionState,
-      ].some((state) => state === "closed" || state === "failed");
+      const producerState = producerTransportRef.current?.connectionState;
+      const consumerState = consumerTransportRef.current?.connectionState;
+      const hasTerminalTransportFailure = [producerState, consumerState].some(
+        (state) => state === "closed" || state === "failed",
+      );
 
       if (!socket?.connected || hasTerminalTransportFailure) {
         console.log(`[Meets] ${reason} recovery triggered reconnect.`);
         handleReconnectRef.current?.();
+        return;
+      }
+
+      const disconnectedTransportKinds: Array<"producer" | "consumer"> = [];
+      if (producerState === "disconnected") {
+        disconnectedTransportKinds.push("producer");
+      }
+      if (consumerState === "disconnected") {
+        disconnectedTransportKinds.push("consumer");
+      }
+
+      if (disconnectedTransportKinds.length > 0) {
+        console.log(`[Meets] ${reason} recovery restarting ICE.`, {
+          transports: disconnectedTransportKinds,
+        });
+        void Promise.all(
+          disconnectedTransportKinds.map((kind) =>
+            iceRestartInFlightRef.current[kind]
+              ? Promise.resolve(true)
+              : attemptIceRestart(kind),
+          ),
+        ).then((results) => {
+          if (intentionalDisconnectRef.current) return;
+          if (results.every(Boolean)) {
+            void syncProducers()
+              .then(() => flushPendingProducers())
+              .catch((error) => {
+                console.warn(
+                  `[Meets] ${reason} producer sync failed after ICE restart:`,
+                  error,
+                );
+              });
+            return;
+          }
+          handleReconnectRef.current?.();
+        });
         return;
       }
 
@@ -2833,6 +2870,8 @@ export function useMeetSocket({
       currentRoomIdRef,
       flushPendingProducers,
       handleReconnectRef,
+      attemptIceRestart,
+      iceRestartInFlightRef,
       intentionalDisconnectRef,
       producerTransportRef,
       socketRef,

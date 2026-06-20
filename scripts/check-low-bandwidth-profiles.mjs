@@ -385,6 +385,11 @@ assertIncludes(
   "web background transport disconnect grace",
 );
 assertRegex(
+  "webMeetSocket",
+  /const disconnectedTransportKinds: Array<"producer" \| "consumer"> = \[\];[\s\S]*producerState === "disconnected"[\s\S]*consumerState === "disconnected"[\s\S]*attemptIceRestart\(kind\)[\s\S]*producer sync failed after ICE restart/,
+  "web foreground recovery restarts ICE for disconnected transports",
+);
+assertRegex(
   "webMeetClient",
   /const browserPublishRecoveryQuality = selfConnectionStats\.browserNetwork[\s\S]*browserPublishRecoveryQuality === "good"[\s\S]*\? "good"[\s\S]*: selfPublishQuality/,
   "web cap recovery browser hint only restores good profile",
