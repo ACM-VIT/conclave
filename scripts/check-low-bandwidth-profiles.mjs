@@ -116,9 +116,12 @@ assertRegex(
     source.webMeetMedia.match(
       /track: audioTrack,[\s\S]*?buildMicrophoneOpusCodecOptions\([\s\S]*?stopTracks: false,[\s\S]*?type: "webcam" as ProducerType/g,
     ) ?? [];
-  if (mediaAudioProduceMatches.length < 2) {
+  if (
+    mediaAudioProduceMatches.length < 1 ||
+    !source.webMeetMedia.includes("requestAudioProducerRecovery();\n      return;")
+  ) {
     failures.push(
-      "web mute and audio recovery microphone producers must preserve capture tracks during producer cleanup",
+      "web audio recovery microphone producers must preserve capture tracks and unmute must use recovery instead of cold publish",
     );
   }
 }
@@ -879,11 +882,14 @@ assertRegex(
       !text.includes("isMutedRef.current") ||
       !section.includes("setMutedIntent(false);") ||
       !section.includes("confirmAudioProducerUnmuted(producer.id);") ||
+      !section.includes("requestAudioProducerRecovery();") ||
       !section.includes("return;") ||
-      section.includes("const retry = await emitToggleMute(producer.id, false)")
+      section.includes("const retry = await emitToggleMute(producer.id, false)") ||
+      section.includes("transport.produce({") ||
+      section.includes('throw new Error("Audio transport unavailable")')
     ) {
       failures.push(
-        "web unmute must return after local producer resume and confirm SFU state in the background",
+        "web unmute must return after local producer resume and never wait for cold producer creation",
       );
     }
   }
@@ -947,7 +953,11 @@ assertRegex(
     }
     if (
       !section.includes("hadLiveAudioTrackBeforeRecovery") ||
+      !section.includes("const shouldStartPaused = isMutedRef.current;") ||
       !section.includes("let audioTrack = getFirstLiveTrack(") ||
+      !section.includes("if (shouldStartPaused)") ||
+      !section.includes("audioTrack.enabled = !shouldStartPaused;") ||
+      !section.includes("paused: shouldStartPaused") ||
       !section.includes("if (createdTrack)") ||
       !section.includes("localStreamRef.current = nextStream;") ||
       !section.includes("setLocalStream(nextStream);") ||
@@ -992,7 +1002,7 @@ assertRegex(
 }
 {
   const text = source.webMeetMedia;
-  const start = text.indexOf('"[Meets] Audio producer recovery triggered:"');
+  const start = text.indexOf("const getReusableAudioTrack =");
   const end = text.indexOf("const recoverAudioProducer = async () => {", start);
   if (start < 0 || end < 0) {
     failures.push("web audio producer recovery watchdog missing");
@@ -1008,9 +1018,13 @@ assertRegex(
         "web audio producer watchdog must only run in joined meetings",
       );
     }
-    if (!section.includes("if (isMuted) return;")) {
+    if (
+      !section.includes("getReusableAudioTrack") ||
+      !section.includes("if (isMuted && !getReusableAudioTrack()) return;") ||
+      !section.includes("if (isMutedRef.current && !liveAudioTrack) return;")
+    ) {
       failures.push(
-        "web audio producer watchdog must preserve muted intent",
+        "web audio producer watchdog must keep muted producers warm without opening cold mic capture",
       );
     }
     if (!section.includes("window.setInterval(")) {
