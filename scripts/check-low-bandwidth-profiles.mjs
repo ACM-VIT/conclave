@@ -824,6 +824,16 @@ assertIncludes(
   "SFU documents why grace-window reconnect badges are suppressed",
 );
 assertIncludes(
+  "webMeetSocket",
+  "const PARTICIPANT_RECONNECTING_STATUS_FALLBACK_MS = 30000;",
+  "web reconnecting participant badges have a grace-window fallback TTL",
+);
+assertRegex(
+  "webMeetSocket",
+  /status\.state === "reconnected"[\s\S]*PARTICIPANT_RECONNECTED_STATUS_MS[\s\S]*PARTICIPANT_RECONNECTING_STATUS_FALLBACK_MS[\s\S]*PARTICIPANT_RECONNECTING_STATUS_BUFFER_MS/,
+  "web reconnecting participant badges expire even if recovery event is missed",
+);
+assertIncludes(
   "sfuConfig",
   "30000",
   "SFU socket disconnect grace tolerates backgrounded tabs",

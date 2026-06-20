@@ -83,6 +83,9 @@ const DEFAULT_SERVER_RESTART_NOTICE =
 const ADMIN_NOTICE_DURATION_MS = 60000;
 const VIDEO_STALL_KEYFRAME_REQUEST_DELAY_MS = 2500;
 const STALE_CONSUMER_RECOVERY_DELAY_MS = 9000;
+const PARTICIPANT_RECONNECTING_STATUS_FALLBACK_MS = 30000;
+const PARTICIPANT_RECONNECTING_STATUS_BUFFER_MS = 5000;
+const PARTICIPANT_RECONNECTED_STATUS_MS = 4500;
 const TURN_URL_PATTERN = /^turns?:/i;
 const TRANSPORT_CC_FEEDBACK_TYPE = "transport-cc";
 
@@ -1290,16 +1293,27 @@ export function useMeetSocket({
         status,
       });
 
-      if (status.state !== "reconnected") return;
-
-      const timeoutId = window.setTimeout(() => {
+      const clearStatus = () => {
         participantConnectionStatusTimeoutsRef.current.delete(targetUserId);
         dispatchParticipants({
           type: "UPDATE_CONNECTION_STATUS",
           userId: targetUserId,
           status: null,
         });
-      }, 4500);
+      };
+      const timeoutMs =
+        status.state === "reconnected"
+          ? PARTICIPANT_RECONNECTED_STATUS_MS
+          : Math.max(
+              1000,
+              (typeof status.graceMs === "number"
+                ? status.graceMs
+                : PARTICIPANT_RECONNECTING_STATUS_FALLBACK_MS) +
+                PARTICIPANT_RECONNECTING_STATUS_BUFFER_MS -
+                Math.max(0, Date.now() - (status.updatedAt ?? Date.now())),
+            );
+
+      const timeoutId = window.setTimeout(clearStatus, timeoutMs);
       participantConnectionStatusTimeoutsRef.current.set(targetUserId, timeoutId);
     },
     [clearParticipantConnectionStatusTimer, dispatchParticipants],
