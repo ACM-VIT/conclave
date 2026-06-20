@@ -243,9 +243,13 @@ const routerMediaCodecs: RouterRtpCodecCapability[] = [
   },
   {
     kind: "video",
-    mimeType: "video/VP8",
+    mimeType: "video/H264",
     clockRate: 90000,
-    parameters: {},
+    parameters: {
+      "packetization-mode": 1,
+      "profile-level-id": "42e01f",
+      "level-asymmetry-allowed": 1,
+    },
     rtcpFeedback: [
       { type: "nack" },
       { type: "nack", parameter: "pli" },
@@ -256,13 +260,9 @@ const routerMediaCodecs: RouterRtpCodecCapability[] = [
   },
   {
     kind: "video",
-    mimeType: "video/H264",
+    mimeType: "video/VP8",
     clockRate: 90000,
-    parameters: {
-      "packetization-mode": 1,
-      "profile-level-id": "42e01f",
-      "level-asymmetry-allowed": 1,
-    },
+    parameters: {},
     rtcpFeedback: [
       { type: "nack" },
       { type: "nack", parameter: "pli" },
@@ -364,7 +364,7 @@ export const config = {
     ),
     initialAvailableOutgoingBitrate: toNumber(
       process.env.SFU_WEBRTC_INITIAL_OUTGOING_BITRATE,
-      1500000,
+      4000000,
       { min: 1 },
     ),
   },
