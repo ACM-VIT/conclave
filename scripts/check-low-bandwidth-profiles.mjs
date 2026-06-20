@@ -1070,7 +1070,7 @@ assertIncludes(
 {
   const text = source.webAdaptivePublishQuality;
   const start = text.indexOf("const applyLiveProducerProfile = useCallback(");
-  const end = text.indexOf("const switchQuality = useCallback(", start);
+  const end = text.indexOf("const restoreStandardCaptureIfNeeded", start);
   if (start < 0 || end < 0) {
     failures.push("web adaptive live-profile section missing");
   } else if (text.slice(start, end).includes("updateVideoQualityRef.current")) {
@@ -1079,12 +1079,22 @@ assertIncludes(
     );
   }
 }
+assertRegex(
+  "webAdaptivePublishQuality",
+  /const restoreStandardCaptureIfNeeded = useCallback[\s\S]*videoQualityRef\.current !== "standard"[\s\S]*webcamTrack\?\.readyState !== "live"[\s\S]*await updateVideoQualityRef\.current\("standard", "good"\)[\s\S]*lastStandardCaptureRestoreSignatureRef\.current = signature/,
+  "web adaptive good-link restore refreshes standard capture without reopening camera",
+);
+assertRegex(
+  "webAdaptivePublishQuality",
+  /shouldRestoreStableStandardCapture[\s\S]*capRecoveryQuality === "good"[\s\S]*capRecoveryElapsedMs >= GOOD_LIVE_RESTORE_AFTER_MS[\s\S]*currentPublishQuality === "standard"[\s\S]*void restoreStandardCaptureIfNeeded\(\);[\s\S]*applyStableLiveProfile\(\);/,
+  "web adaptive good-link restore is serialized against live profile cap updates",
+);
 {
   const text = source.webAdaptivePublishQuality;
   const start = text.indexOf(
     "autoDowngradedRef.current ||\n          networkManagedVideoQualityRef?.current === true",
   );
-  const end = text.indexOf("applyStableLiveProfile();", start);
+  const end = text.indexOf("if (shouldRestoreStableStandardCapture)", start);
   if (start < 0 || end < 0) {
     failures.push("web adaptive auto-upgrade section missing");
   } else {

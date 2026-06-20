@@ -188,6 +188,7 @@ export function useAdaptivePublishQuality({
     screen: string | null;
     screenAudio: string | null;
   }>({ audio: null, webcam: null, screen: null, screenAudio: null });
+  const lastStandardCaptureRestoreSignatureRef = useRef<string | null>(null);
 
   const writeDebugSnapshot = useCallback(
     (now = Date.now()) => {
@@ -344,6 +345,48 @@ export function useAdaptivePublishQuality({
     ],
   );
 
+  const restoreStandardCaptureIfNeeded = useCallback(async () => {
+    if (isCameraOff || updateInFlightRef.current) return;
+    if (videoQualityRef.current !== "standard") return;
+
+    const webcamProducer = videoProducerRef.current;
+    const webcamTrack = webcamProducer?.track ?? null;
+    if (
+      !webcamProducer ||
+      webcamProducer.closed ||
+      webcamTrack?.readyState !== "live"
+    ) {
+      return;
+    }
+
+    const signature = `${webcamProducer.id}:standard:good`;
+    if (lastStandardCaptureRestoreSignatureRef.current === signature) {
+      return;
+    }
+
+    updateInFlightRef.current = true;
+    try {
+      await updateVideoQualityRef.current("standard", "good");
+      lastStandardCaptureRestoreSignatureRef.current = signature;
+      lastAppliedProfilesRef.current.webcam = signature;
+      writeDebugSnapshot();
+    } catch (error) {
+      console.warn(
+        "[Meets] Adaptive standard camera capture restore failed:",
+        error,
+      );
+    } finally {
+      updateInFlightRef.current = false;
+      writeDebugSnapshot();
+    }
+  }, [
+    isCameraOff,
+    updateVideoQualityRef,
+    videoProducerRef,
+    videoQualityRef,
+    writeDebugSnapshot,
+  ]);
+
   const switchQuality = useCallback(
     async (
       quality: VideoQuality,
@@ -423,6 +466,7 @@ export function useAdaptivePublishQuality({
         screen: null,
         screenAudio: null,
       };
+      lastStandardCaptureRestoreSignatureRef.current = null;
       writeDebugSnapshot();
       return;
     }
@@ -457,6 +501,11 @@ export function useAdaptivePublishQuality({
           void applyLiveProducerProfile(liveProfile);
         }
       };
+      const shouldRestoreStableStandardCapture =
+        capRecoveryQuality === "good" &&
+        capRecoveryElapsedMs >= GOOD_LIVE_RESTORE_AFTER_MS &&
+        connectionQuality !== "poor" &&
+        currentPublishQuality === "standard";
       if (isCameraOff) {
         applyStableLiveProfile();
         writeDebugSnapshot(now);
@@ -506,7 +555,11 @@ export function useAdaptivePublishQuality({
         writeDebugSnapshot(now);
         return;
       }
-      applyStableLiveProfile();
+      if (shouldRestoreStableStandardCapture) {
+        void restoreStandardCaptureIfNeeded();
+      } else {
+        applyStableLiveProfile();
+      }
       writeDebugSnapshot(now);
     };
 
@@ -523,6 +576,7 @@ export function useAdaptivePublishQuality({
     isCameraOff,
     networkManagedVideoQualityRef,
     participantCount,
+    restoreStandardCaptureIfNeeded,
     switchQuality,
     videoQualityRef,
     writeDebugSnapshot,
