@@ -93,6 +93,35 @@ assertRegex(
   "Android microphone Opus constrained ladder",
 );
 
+// Codec preference should not globally force VP8: Safari/iOS/Android benefit
+// from H264 hardware acceleration, while desktop browsers can still prefer VP8
+// for simulcast.
+assertIncludes(
+  "webCodec",
+  "isLikelyHardwareAcceleratedH264Browser",
+  "web hardware-sensitive browser codec detection",
+);
+assertIncludes(
+  "webCodec",
+  "SOFTWARE_VP8_SENSITIVE_CODEC_MIME_TYPES",
+  "web H264-first codec list for hardware-sensitive browsers",
+);
+assertIncludes(
+  "webCodec",
+  "SIMULCAST_FRIENDLY_CODEC_MIME_TYPES",
+  "web VP8-first codec list for simulcast-friendly browsers",
+);
+assertIncludes(
+  "webCodec",
+  "getPreferredVideoCodecMimeTypes()",
+  "web codec preference is browser-aware",
+);
+assertNotIncludes(
+  "webCodec",
+  'PREFERRED_WEBCAM_CODEC_MIME_TYPES = ["video/VP8"]',
+  "web must not globally force VP8 webcam codec",
+);
+
 // Webcam publish must keep poor distinct from emergency: poor preserves more
 // motion/detail, while emergency is the survival floor.
 assertIncludes(

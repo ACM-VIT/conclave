@@ -12,11 +12,38 @@ import {
   buildScreenShareEncoding,
 } from "./video-encodings";
 
-// Prefer VP8 when the browser/router intersection supports it. This avoids the
-// H264 multi-decoder path that can surface as black remote webcam tiles on some
-// viewer devices in larger calls.
-const PREFERRED_WEBCAM_CODEC_MIME_TYPES = ["video/VP8"] as const;
-const PREFERRED_SCREEN_SHARE_CODEC_MIME_TYPES = ["video/VP8"] as const;
+// Desktop Chromium/Firefox generally get the strongest simulcast behavior with
+// VP8. Safari/iOS/Android are more sensitive to software video paths, so prefer
+// H264 there when the router/browser intersection supports it.
+const SOFTWARE_VP8_SENSITIVE_CODEC_MIME_TYPES = [
+  "video/H264",
+  "video/VP8",
+] as const;
+const SIMULCAST_FRIENDLY_CODEC_MIME_TYPES = [
+  "video/VP8",
+  "video/H264",
+] as const;
+
+const isLikelyHardwareAcceleratedH264Browser = (): boolean => {
+  if (typeof navigator === "undefined") return false;
+  const userAgent = navigator.userAgent;
+  const vendor = navigator.vendor;
+  const platform = navigator.platform;
+  const isIOS =
+    /\b(iPad|iPhone|iPod)\b/.test(userAgent) ||
+    (platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  const isSafari =
+    /Safari/i.test(userAgent) &&
+    /Apple/i.test(vendor) &&
+    !/CriOS|FxiOS|EdgiOS|Chrome|Chromium|Edg\//i.test(userAgent);
+  const isAndroid = /Android/i.test(userAgent);
+  return isIOS || isSafari || isAndroid;
+};
+
+const getPreferredVideoCodecMimeTypes = () =>
+  isLikelyHardwareAcceleratedH264Browser()
+    ? SOFTWARE_VP8_SENSITIVE_CODEC_MIME_TYPES
+    : SIMULCAST_FRIENDLY_CODEC_MIME_TYPES;
 
 const isPreferredVideoCodec = (
   codec: RtpCodecCapability,
@@ -33,7 +60,7 @@ export const getPreferredWebcamCodec = (
 ): RtpCodecCapability | undefined => {
   const codecs = device?.rtpCapabilities?.codecs ?? [];
 
-  for (const mimeType of PREFERRED_WEBCAM_CODEC_MIME_TYPES) {
+  for (const mimeType of getPreferredVideoCodecMimeTypes()) {
     const codec = codecs.find((candidate) =>
       isPreferredVideoCodec(candidate, mimeType),
     );
@@ -50,7 +77,7 @@ export const getPreferredScreenShareCodec = (
 ): RtpCodecCapability | undefined => {
   const codecs = device?.rtpCapabilities?.codecs ?? [];
 
-  for (const mimeType of PREFERRED_SCREEN_SHARE_CODEC_MIME_TYPES) {
+  for (const mimeType of getPreferredVideoCodecMimeTypes()) {
     const codec = codecs.find((candidate) =>
       isPreferredVideoCodec(candidate, mimeType),
     );
@@ -754,7 +781,7 @@ export async function produceWebcamTrack({
     }
 
     console.warn(
-      "[Meets] Preferred VP8 webcam codec failed, retrying router default codec:",
+      "[Meets] Preferred webcam codec failed, retrying router default codec:",
       codecError,
     );
   }
