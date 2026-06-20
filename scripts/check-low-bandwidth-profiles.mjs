@@ -1089,10 +1089,22 @@ assertRegex(
       );
     }
     if (
-      !section.includes("!isMutedRef.current && liveAudioTrack !== null")
+      !section.includes("const shouldRecoverAudio = !isMutedRef.current;") ||
+      !section.includes("if (liveAudioTrack) {") ||
+      !section.includes("liveAudioTrack.enabled = true;")
     ) {
       failures.push(
-        "web local audio producer-close recovery must preserve unmuted mic intent",
+        "web local audio producer-close recovery must preserve unmuted mic intent even before a live mic track is visible",
+      );
+    }
+    if (
+      !section.includes("const shouldRecoverCamera =") ||
+      !section.includes("!isCameraOffRef.current;") ||
+      !section.includes("if (liveVideoTrack) {") ||
+      !section.includes("liveVideoTrack.enabled = true;")
+    ) {
+      failures.push(
+        "web local camera producer-close recovery must preserve camera intent even before a live camera track is visible",
       );
     }
     if (!section.includes("requestAudioProducerRecovery();")) {

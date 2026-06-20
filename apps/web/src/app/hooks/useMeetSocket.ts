@@ -3713,10 +3713,11 @@ export function useMeetSocket({
                     const liveAudioTrack = getFirstLiveTrack(
                       localStreamRef.current?.getAudioTracks() ?? [],
                     );
-                    const shouldRecoverAudio =
-                      !isMutedRef.current && liveAudioTrack !== null;
-                    if (shouldRecoverAudio && liveAudioTrack) {
-                      liveAudioTrack.enabled = true;
+                    const shouldRecoverAudio = !isMutedRef.current;
+                    if (shouldRecoverAudio) {
+                      if (liveAudioTrack) {
+                        liveAudioTrack.enabled = true;
+                      }
                       isMutedRef.current = false;
                       setIsMuted(false);
                       requestAudioProducerRecovery();
@@ -3747,8 +3748,11 @@ export function useMeetSocket({
                             currentStream?.getVideoTracks() ?? [],
                           );
                     const shouldRecoverCamera =
-                      !isCameraOffRef.current && Boolean(liveVideoTrack);
+                      !isCameraOffRef.current;
                     if (shouldRecoverCamera) {
+                      if (liveVideoTrack) {
+                        liveVideoTrack.enabled = true;
+                      }
                       isCameraOffRef.current = false;
                       setIsCameraOff(false);
                       requestCameraProducerRecovery();
