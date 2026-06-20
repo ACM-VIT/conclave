@@ -1579,12 +1579,17 @@ assertRegex(
 );
 assertRegex(
   "webMeetSocket",
-  /hasLiveReplacementProducer[\s\S]*producerMapRef\.current\.entries\(\)[\s\S]*hasAnnouncedReplacementProducer[\s\S]*announcedRemoteProducersRef\.current\.entries\(\)[\s\S]*const hasReplacementProducer =[\s\S]*hasLiveReplacementProducer \|\| hasAnnouncedReplacementProducer[\s\S]*if \(!hasReplacementProducer\) \{[\s\S]*UPDATE_STREAM[\s\S]*stream: null[\s\S]*if \(info\.kind === "video" && info\.type === "webcam"\) \{[\s\S]*if \(!hasReplacementProducer\)[\s\S]*UPDATE_CAMERA_OFF[\s\S]*announcedRemoteProducersRef\.current\.set\(data\.producerId, data\)/,
+  /getMatchingReplacementState[\s\S]*producerMapRef\.current\.entries\(\)[\s\S]*announcedRemoteProducersRef\.current\.entries\(\)[\s\S]*hasReplacementProducer:[\s\S]*hasConsumedReplacement \|\| hasPendingReplacement[\s\S]*clearClosedProducerState[\s\S]*UPDATE_STREAM[\s\S]*stream: null[\s\S]*if \(!hasPendingReplacement\)[\s\S]*UPDATE_CAMERA_OFF[\s\S]*announcedRemoteProducersRef\.current\.set\(data\.producerId, data\)/,
   "web producer replacement announcements suppress transient stream and camera-off clears",
 );
 assertRegex(
   "webMeetSocket",
-  /STALE_REPLACEMENT_CLEANUP_DELAY_MS[\s\S]*staleReplacementCleanupTimeoutsRef[\s\S]*hasConsumedReplacement[\s\S]*if \(hasConsumedReplacement\) return;[\s\S]*hasPendingReplacement[\s\S]*UPDATE_STREAM[\s\S]*stream: null[\s\S]*if \(!hasPendingReplacement\)/,
+  /PRODUCER_CLOSE_REPLACEMENT_GRACE_MS[\s\S]*if \(!replacementState\.hasReplacementProducer\)[\s\S]*window\.setTimeout[\s\S]*latestReplacementState = getMatchingReplacementState\(\)[\s\S]*latestReplacementState\.hasConsumedReplacement[\s\S]*clearClosedProducerState\([\s\S]*latestReplacementState\.hasPendingReplacement/,
+  "web unannounced producer closes wait briefly for reconnect replacement before clearing streams",
+);
+assertRegex(
+  "webMeetSocket",
+  /STALE_REPLACEMENT_CLEANUP_DELAY_MS[\s\S]*else if \(!replacementState\.hasConsumedReplacement\)[\s\S]*window\.setTimeout[\s\S]*latestReplacementState = getMatchingReplacementState\(\)[\s\S]*latestReplacementState\.hasConsumedReplacement[\s\S]*clearClosedProducerState\([\s\S]*latestReplacementState\.hasPendingReplacement/,
   "web stale producer replacement cleanup clears frozen old streams if the replacement never consumes",
 );
 assertRegex(

@@ -87,6 +87,7 @@ const RESTART_ICE_ACK_TIMEOUT_MS = 5000;
 const PARTICIPANT_RECONNECTING_STATUS_FALLBACK_MS = 30000;
 const PARTICIPANT_RECONNECTING_STATUS_BUFFER_MS = 5000;
 const PARTICIPANT_RECONNECTED_STATUS_MS = 4500;
+const PRODUCER_CLOSE_REPLACEMENT_GRACE_MS = 1500;
 const STALE_REPLACEMENT_CLEANUP_DELAY_MS = 5000;
 const TURN_URL_PATTERN = /^turns?:/i;
 const TRANSPORT_CC_FEEDBACK_TYPE = "transport-cc";
@@ -1493,26 +1494,34 @@ export function useMeetSocket({
 
       const info = producerMapRef.current.get(producerId);
       if (info) {
-        const hasLiveReplacementProducer =
-          Array.from(producerMapRef.current.entries()).some(
+        const getMatchingReplacementState = () => {
+          const hasConsumedReplacement = Array.from(
+            producerMapRef.current.entries(),
+          ).some(
             ([otherProducerId, otherInfo]) =>
               otherProducerId !== producerId &&
               otherInfo.userId === info.userId &&
               otherInfo.kind === info.kind &&
               otherInfo.type === info.type,
           );
-        const hasAnnouncedReplacementProducer =
-          Array.from(announcedRemoteProducersRef.current.entries()).some(
+          const hasPendingReplacement = Array.from(
+            announcedRemoteProducersRef.current.entries(),
+          ).some(
             ([otherProducerId, otherInfo]) =>
               otherProducerId !== producerId &&
               otherInfo.producerUserId === info.userId &&
               otherInfo.kind === info.kind &&
               otherInfo.type === info.type,
           );
-        const hasReplacementProducer =
-          hasLiveReplacementProducer || hasAnnouncedReplacementProducer;
+          return {
+            hasConsumedReplacement,
+            hasPendingReplacement,
+            hasReplacementProducer:
+              hasConsumedReplacement || hasPendingReplacement,
+          };
+        };
 
-        if (!hasReplacementProducer) {
+        const clearClosedProducerState = (hasPendingReplacement: boolean) => {
           dispatchParticipants({
             type: "UPDATE_STREAM",
             userId: info.userId,
@@ -1521,84 +1530,46 @@ export function useMeetSocket({
             stream: null,
             producerId: producerId,
           });
-        }
 
-        if (info.kind === "video" && info.type === "webcam") {
-          if (!hasReplacementProducer) {
-            dispatchParticipants({
-              type: "UPDATE_CAMERA_OFF",
-              userId: info.userId,
-              cameraOff: true,
-            });
+          if (!hasPendingReplacement) {
+            if (info.kind === "video" && info.type === "webcam") {
+              dispatchParticipants({
+                type: "UPDATE_CAMERA_OFF",
+                userId: info.userId,
+                cameraOff: true,
+              });
+            } else if (info.kind === "audio" && info.type === "webcam") {
+              dispatchParticipants({
+                type: "UPDATE_MUTED",
+                userId: info.userId,
+                muted: true,
+              });
+            } else if (info.type === "screen" && info.kind === "video") {
+              setActiveScreenShareId(null);
+            }
           }
-        } else if (info.kind === "audio" && info.type === "webcam") {
-          if (!hasReplacementProducer) {
-            dispatchParticipants({
-              type: "UPDATE_MUTED",
-              userId: info.userId,
-              muted: true,
-            });
-          }
-        }
+        };
 
-        if (
-          info.type === "screen" &&
-          info.kind === "video" &&
-          !hasReplacementProducer
-        ) {
-          setActiveScreenShareId(null);
-        }
-
-        if (hasReplacementProducer && !hasLiveReplacementProducer) {
+        const replacementState = getMatchingReplacementState();
+        if (!replacementState.hasReplacementProducer) {
           const timeoutId = window.setTimeout(() => {
             staleReplacementCleanupTimeoutsRef.current.delete(producerId);
-            const hasConsumedReplacement = Array.from(
-              producerMapRef.current.entries(),
-            ).some(
-              ([otherProducerId, otherInfo]) =>
-                otherProducerId !== producerId &&
-                otherInfo.userId === info.userId &&
-                otherInfo.kind === info.kind &&
-                otherInfo.type === info.type,
+            const latestReplacementState = getMatchingReplacementState();
+            if (latestReplacementState.hasConsumedReplacement) return;
+            clearClosedProducerState(
+              latestReplacementState.hasPendingReplacement,
             );
-            if (hasConsumedReplacement) return;
+          }, PRODUCER_CLOSE_REPLACEMENT_GRACE_MS);
+          staleReplacementCleanupTimeoutsRef.current.set(producerId, timeoutId);
+        } else if (!replacementState.hasConsumedReplacement) {
+          const timeoutId = window.setTimeout(() => {
+            staleReplacementCleanupTimeoutsRef.current.delete(producerId);
+            const latestReplacementState = getMatchingReplacementState();
+            if (latestReplacementState.hasConsumedReplacement) return;
 
-            const hasPendingReplacement = Array.from(
-              announcedRemoteProducersRef.current.entries(),
-            ).some(
-              ([otherProducerId, otherInfo]) =>
-                otherProducerId !== producerId &&
-                otherInfo.producerUserId === info.userId &&
-                otherInfo.kind === info.kind &&
-                otherInfo.type === info.type,
+            clearClosedProducerState(
+              latestReplacementState.hasPendingReplacement,
             );
-
-            dispatchParticipants({
-              type: "UPDATE_STREAM",
-              userId: info.userId,
-              kind: info.kind,
-              streamType: info.type,
-              stream: null,
-              producerId,
-            });
-
-            if (!hasPendingReplacement) {
-              if (info.kind === "video" && info.type === "webcam") {
-                dispatchParticipants({
-                  type: "UPDATE_CAMERA_OFF",
-                  userId: info.userId,
-                  cameraOff: true,
-                });
-              } else if (info.kind === "audio" && info.type === "webcam") {
-                dispatchParticipants({
-                  type: "UPDATE_MUTED",
-                  userId: info.userId,
-                  muted: true,
-                });
-              } else if (info.type === "screen" && info.kind === "video") {
-                setActiveScreenShareId(null);
-              }
-            }
           }, STALE_REPLACEMENT_CLEANUP_DELAY_MS);
           staleReplacementCleanupTimeoutsRef.current.set(producerId, timeoutId);
         }
