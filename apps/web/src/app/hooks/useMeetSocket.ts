@@ -4762,6 +4762,7 @@ export function useMeetSocket({
             attempt: reconnectAttemptsRef.current,
             usingTurnFallback: useTurnFallbackRef.current,
           });
+          reconnectAttemptsRef.current = 0;
           return;
         } catch (_err) {
           // retry

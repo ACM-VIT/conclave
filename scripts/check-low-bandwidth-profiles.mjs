@@ -1244,6 +1244,11 @@ assertRegex(
   /status\.state === "reconnected"[\s\S]*!visibleParticipantReconnectingIdsRef\.current\.has\(targetUserId\)[\s\S]*return;[\s\S]*status\.state === "reconnecting"[\s\S]*visibleParticipantReconnectingIdsRef\.current\.add\(targetUserId\)/,
   "web reconnected badges only show after a visible reconnecting state",
 );
+assertRegex(
+  "webMeetSocket",
+  /meet_reconnect_success[\s\S]*attempt: reconnectAttemptsRef\.current[\s\S]*reconnectAttemptsRef\.current = 0;[\s\S]*return;/,
+  "web successful reconnect resets retry attempts after reused-socket rejoins",
+);
 assertIncludes(
   "sfuConfig",
   "30000",
