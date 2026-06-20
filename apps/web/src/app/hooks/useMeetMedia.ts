@@ -973,11 +973,14 @@ export function useMeetMedia({
       setSelectedAudioInputDeviceId(deviceId);
 
       if (connectionState === "joined") {
+        let acquiredAudioTracks: MediaStreamTrack[] = [];
+        let committedNewAudioTrack: MediaStreamTrack | null = null;
         try {
           const newStream = await navigator.mediaDevices.getUserMedia({
             audio: buildAudioConstraints(deviceId),
           });
 
+          acquiredAudioTracks = newStream.getAudioTracks();
           const newAudioTrack = newStream.getAudioTracks()[0];
           if (newAudioTrack) {
             markAudioTrackForSpeech(newAudioTrack);
@@ -1003,9 +1006,11 @@ export function useMeetMedia({
               newAudioTrack,
             ]);
             commitLocalStream(nextStream);
+            committedNewAudioTrack = newAudioTrack;
             stopTracksExcept(previousAudioTracks, [newAudioTrack]);
           }
         } catch (err) {
+          stopTracksExcept(acquiredAudioTracks, [committedNewAudioTrack]);
           console.error("[Meets] Failed to switch audio input device:", err);
         }
       }
@@ -1029,11 +1034,14 @@ export function useMeetMedia({
       if (connectionState !== "joined") return;
       if (isCameraOff) return;
 
+      let acquiredVideoTracks: MediaStreamTrack[] = [];
+      let committedNewVideoTrack: MediaStreamTrack | null = null;
       try {
         const newStream = await navigator.mediaDevices.getUserMedia({
           video: buildVideoConstraints(deviceId),
         });
 
+        acquiredVideoTracks = newStream.getVideoTracks();
         const newVideoTrack = newStream.getVideoTracks()[0];
         if (newVideoTrack) {
           if ("contentHint" in newVideoTrack) {
@@ -1049,8 +1057,6 @@ export function useMeetMedia({
               ?.getTracks()
               .filter((track) => track.kind !== "video") ?? [];
           const nextStream = new MediaStream([...remainingTracks, newVideoTrack]);
-          localStreamRef.current = nextStream;
-          setLocalStream(nextStream);
 
           if (videoProducerRef.current) {
             const publishTrack = await waitForPreferredVideoPublishTrack(
@@ -1075,14 +1081,20 @@ export function useMeetMedia({
                 track: newVideoTrack,
               });
             }
+          } else {
+            requestCameraProducerRecovery();
           }
 
+          localStreamRef.current = nextStream;
+          setLocalStream(nextStream);
+          committedNewVideoTrack = newVideoTrack;
           stopTracksExcept(previousVideoTracks, [
             newVideoTrack,
             videoProducerRef.current?.track ?? null,
           ]);
         }
       } catch (err) {
+        stopTracksExcept(acquiredVideoTracks, [committedNewVideoTrack]);
         console.error("[Meets] Failed to switch video input device:", err);
       }
     },
@@ -1098,6 +1110,7 @@ export function useMeetMedia({
       waitForPreferredVideoPublishTrack,
       onPreferredVideoPublishTrackRejected,
       stopTracksExcept,
+      requestCameraProducerRecovery,
     ]
   );
 

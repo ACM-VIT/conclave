@@ -797,15 +797,20 @@ assertRegex(
   } else {
     const section = text.slice(start, end);
     if (
+      !section.includes("let acquiredAudioTracks: MediaStreamTrack[] = [];") ||
+      !section.includes("let committedNewAudioTrack: MediaStreamTrack | null = null;") ||
+      !section.includes("acquiredAudioTracks = newStream.getAudioTracks();") ||
       !section.includes("const previousStream = localStreamRef.current;") ||
       !section.includes("const previousAudioTracks =") ||
       !section.includes("commitLocalStream(nextStream);") ||
+      !section.includes("committedNewAudioTrack = newAudioTrack;") ||
       !section.includes("stopTracksExcept(previousAudioTracks, [newAudioTrack]);") ||
+      !section.includes("stopTracksExcept(acquiredAudioTracks, [committedNewAudioTrack]);") ||
       section.includes("prev.removeTrack(oldAudioTrack)") ||
       section.includes("prev.addTrack(newAudioTrack)")
     ) {
       failures.push(
-        "web audio input device changes must sync local stream refs and stop all replaced mic tracks",
+        "web audio input device changes must sync local stream refs and clean up failed mic captures",
       );
     }
   }
@@ -818,13 +823,24 @@ assertRegex(
     failures.push("web video input device-change section missing");
   } else {
     const section = text.slice(start, end);
+    const replaceIndex = section.indexOf("await videoProducerRef.current.replaceTrack");
+    const commitIndex = section.indexOf("localStreamRef.current = nextStream;");
     if (
+      !section.includes("let acquiredVideoTracks: MediaStreamTrack[] = [];") ||
+      !section.includes("let committedNewVideoTrack: MediaStreamTrack | null = null;") ||
+      !section.includes("acquiredVideoTracks = newStream.getVideoTracks();") ||
       !section.includes("const previousVideoTracks =") ||
+      replaceIndex < 0 ||
+      commitIndex < 0 ||
+      commitIndex < replaceIndex ||
+      !section.includes("committedNewVideoTrack = newVideoTrack;") ||
       !section.includes("stopTracksExcept(previousVideoTracks, [") ||
+      !section.includes("stopTracksExcept(acquiredVideoTracks, [committedNewVideoTrack]);") ||
+      !section.includes("requestCameraProducerRecovery();") ||
       !section.includes("videoProducerRef.current?.track ?? null")
     ) {
       failures.push(
-        "web video input device changes must stop all replaced camera tracks",
+        "web video input device changes must commit after publish replacement and clean up failed camera captures",
       );
     }
   }
