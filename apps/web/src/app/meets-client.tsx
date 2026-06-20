@@ -2313,9 +2313,13 @@ export default function MeetsClient({
       selfConnectionStats.jitterMs >= PUBLISH_RECOVERY_JITTER_POOR_MS);
   const hasBrowserEmergencySignal =
     selfConnectionStats.browserNetwork.emergency === true;
+  const browserPublishRecoveryQuality = selfConnectionStats.browserNetwork
+    .quality as ConnectionQuality;
   const selfPublishCapRecoveryQuality: ConnectionQuality =
-    !hasBrowserEmergencySignal && !hasPoorPublishRecoverySignal
-      ? (selfConnectionStats.browserNetwork.quality as ConnectionQuality)
+    !hasBrowserEmergencySignal &&
+    !hasPoorPublishRecoverySignal &&
+    browserPublishRecoveryQuality === "good"
+      ? "good"
       : selfPublishQuality;
   useAdaptiveConsumerPreferences({
     refs,

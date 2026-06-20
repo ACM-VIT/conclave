@@ -8,6 +8,8 @@ const files = {
   webCodec: "apps/web/src/app/lib/webcam-codec.ts",
   webNetworkInformation: "apps/web/src/app/lib/network-information.ts",
   webConnectionQuality: "apps/web/src/app/hooks/useConnectionQuality.ts",
+  webAdaptivePublishQuality:
+    "apps/web/src/app/hooks/useAdaptivePublishQuality.ts",
   webMeetClient: "apps/web/src/app/meets-client.tsx",
   webMeetMedia: "apps/web/src/app/hooks/useMeetMedia.ts",
   webJoinScreen: "apps/web/src/app/components/JoinScreen.tsx",
@@ -23,6 +25,9 @@ const files = {
     "apps/conclave-skip/Sources/Conclave/Core/Networking/NetworkReachabilityMonitor.swift",
   androidReachability:
     "apps/conclave-skip/Sources/Conclave/Skip/NetworkReachabilityMonitor.kt",
+  sfuRoom: "packages/sfu/config/classes/Room.ts",
+  sfuDisconnectHandlers:
+    "packages/sfu/server/socket/handlers/disconnectHandlers.ts",
 };
 
 const source = Object.fromEntries(
@@ -43,6 +48,12 @@ const assertIncludes = (key, snippet, label) => {
 const assertRegex = (key, regex, label) => {
   if (!regex.test(source[key])) {
     failures.push(`${label} missing in ${relative(root, resolve(root, files[key]))}`);
+  }
+};
+
+const assertNotIncludes = (key, snippet, label) => {
+  if (source[key].includes(snippet)) {
+    failures.push(`${label} present in ${relative(root, resolve(root, files[key]))}`);
   }
 };
 
@@ -186,6 +197,58 @@ assertIncludes(
   "webConnectionQuality",
   "inboundJitterWeightedMs += jitter * 1000 * jitterWeight",
   "web weighted inbound jitter",
+);
+assertIncludes(
+  "webConnectionQuality",
+  "if (browserNetwork.emergency || browserNetwork.saveData === true)",
+  "web live browser hints only force adaptation for emergency/save-data",
+);
+assertRegex(
+  "webMeetClient",
+  /const browserPublishRecoveryQuality = selfConnectionStats\.browserNetwork[\s\S]*browserPublishRecoveryQuality === "good"[\s\S]*\? "good"[\s\S]*: selfPublishQuality/,
+  "web cap recovery browser hint only restores good profile",
+);
+assertNotIncludes(
+  "webMeetClient",
+  "? (selfConnectionStats.browserNetwork.quality as ConnectionQuality)",
+  "web raw browser quality must not hold live publish caps down",
+);
+assertNotIncludes(
+  "webMeetMedia",
+  "shouldReopenVideoTrackForQuality",
+  "web must not reopen live cameras because settings undershoot constraints",
+);
+assertNotIncludes(
+  "webMeetMedia",
+  "cameraQualityReopenBackoffRef",
+  "web camera quality changes must not create reopen/backoff churn",
+);
+assertIncludes(
+  "webMeetMedia",
+  "Camera constraints update failed; keeping live track",
+  "web keeps live camera track when capture constraint update fails",
+);
+{
+  const text = source.webAdaptivePublishQuality;
+  const start = text.indexOf("const applyLiveProducerProfile = useCallback(");
+  const end = text.indexOf("const switchQuality = useCallback(", start);
+  if (start < 0 || end < 0) {
+    failures.push("web adaptive live-profile section missing");
+  } else if (text.slice(start, end).includes("updateVideoQualityRef.current")) {
+    failures.push(
+      "web adaptive live-profile tick must not refresh camera capture constraints",
+    );
+  }
+}
+assertIncludes(
+  "sfuRoom",
+  "schedulePendingDisconnectNotification",
+  "SFU delayed reconnect notification helper",
+);
+assertIncludes(
+  "sfuDisconnectHandlers",
+  "room.schedulePendingDisconnectNotification",
+  "SFU reconnect badge delayed inside disconnect grace window",
 );
 assertIncludes(
   "iosWebrtc",
