@@ -1342,6 +1342,11 @@ assertIncludes(
   "Browser background throttling",
   "SFU documents why grace-window reconnect badges are suppressed",
 );
+assertRegex(
+  "sfuConfig",
+  /const BACKGROUND_SOCKET_RECOVERY_WINDOW_MS = 120000;[\s\S]*disconnectGraceMs: toNumber\([\s\S]*SFU_SOCKET_DISCONNECT_GRACE_MS[\s\S]*BACKGROUND_SOCKET_RECOVERY_WINDOW_MS[\s\S]*recoveryMaxDisconnectionMs: toNumber\([\s\S]*SFU_SOCKET_RECOVERY_MAX_MS[\s\S]*BACKGROUND_SOCKET_RECOVERY_WINDOW_MS/,
+  "SFU default socket recovery and disconnect grace stay aligned for background clients",
+);
 assertIncludes(
   "webMeetSocket",
   "const PARTICIPANT_RECONNECTING_STATUS_FALLBACK_MS = 30000;",
@@ -1369,7 +1374,7 @@ assertRegex(
 );
 assertIncludes(
   "sfuConfig",
-  "30000",
+  "BACKGROUND_SOCKET_RECOVERY_WINDOW_MS = 120000",
   "SFU socket disconnect grace tolerates backgrounded tabs",
 );
 assertIncludes(

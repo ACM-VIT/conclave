@@ -44,6 +44,9 @@ const sfuSecretFingerprint = (() => {
   const value = sfuSecret;
   return createHash("sha256").update(value).digest("hex").slice(0, 12);
 })();
+// Hidden/mobile browsers can suspend socket timers while WebRTC media is still
+// viable. Keep producers warm long enough for low-bandwidth recovery by default.
+const BACKGROUND_SOCKET_RECOVERY_WINDOW_MS = 120000;
 
 if (process.env.SFU_DEBUG_SECRET !== "0") {
   console.log(
@@ -319,12 +322,12 @@ export const config = {
     }),
     disconnectGraceMs: toNumber(
       process.env.SFU_SOCKET_DISCONNECT_GRACE_MS,
-      30000,
+      BACKGROUND_SOCKET_RECOVERY_WINDOW_MS,
       { min: 0 },
     ),
     recoveryMaxDisconnectionMs: toNumber(
       process.env.SFU_SOCKET_RECOVERY_MAX_MS,
-      30000,
+      BACKGROUND_SOCKET_RECOVERY_WINDOW_MS,
       { min: 0 },
     ),
     redisUrl: socketRedisUrl,
