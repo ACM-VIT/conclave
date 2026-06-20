@@ -229,6 +229,7 @@ const OUTPUT_WRITER_BACKPRESSURE_DRAIN_TIMEOUT_MS = 36;
 const OUTPUT_WRITER_PENDING_PRESSURE_MS = 75;
 const OUTPUT_WRITER_FRAME_TIMEOUT_MS = 3000;
 const OUTPUT_WRITER_FAILURE_RELEASE_THRESHOLD = 3;
+const DUPLICATE_OUTPUT_HEARTBEAT_MS = 900;
 const PROCESSED_OUTPUT_STALE_RELEASE_MS = 2500;
 const PROCESSED_OUTPUT_STALE_CHECK_MS = 1000;
 const SEGMENTATION_PROCESSOR_FRAME_TIMEOUT_MS = 6000;
@@ -11173,6 +11174,7 @@ export function useVideoEffects({
     let outputFramesWritten = 0;
     let latestOutputFrameDispatchAt = 0;
     let latestOutputFrameAt = 0;
+    let lastHiddenStaleOutputPreserveLogAt = 0;
     let latestOutputFrameVisible = false;
     let latestOutputProbe: CanvasVisibilityProbe = {
       averageLuma: 0,
@@ -13104,6 +13106,29 @@ export function useVideoEffects({
           ? Math.max(0, sampleNow - latestOutputFrameAt)
           : Number.POSITIVE_INFINITY;
       if (latestOutputFrameAgeMs < PROCESSED_OUTPUT_STALE_RELEASE_MS) {
+        return false;
+      }
+
+      if (active && document.visibilityState !== "visible") {
+        if (
+          lastHiddenStaleOutputPreserveLogAt <= 0 ||
+          sampleNow - lastHiddenStaleOutputPreserveLogAt >= 5000
+        ) {
+          lastHiddenStaleOutputPreserveLogAt = sampleNow;
+          logVideoEffects(debugId, "preserve_processed_track_hidden_stale", {
+            reason,
+            latestOutputFrameAgeMs: Number.isFinite(latestOutputFrameAgeMs)
+              ? Math.round(latestOutputFrameAgeMs)
+              : null,
+            thresholdMs: PROCESSED_OUTPUT_STALE_RELEASE_MS,
+            outputMode,
+            outputWriterMode,
+            outputFramesWritten,
+            outputFrameSequence,
+            outputTrack: getTrackDebugSnapshot(track),
+            sourceTrack: getTrackDebugSnapshot(sourceVideoTrack),
+          });
+        }
         return false;
       }
 
@@ -16042,6 +16067,10 @@ export function useVideoEffects({
       const hasNewModelResult =
         latestSegmentationMaskAt > lastRenderedSegmentationMaskAt ||
         latestFaceLandmarksAt > lastRenderedFaceLandmarksAt;
+      const duplicateOutputHeartbeatDue =
+        outputTrackPublished &&
+        latestOutputFrameAt > 0 &&
+        loopStartedAt - latestOutputFrameAt >= DUPLICATE_OUTPUT_HEARTBEAT_MS;
       const shouldSkipDuplicateFrame =
         (frameSource.source === "video" ||
           frameSource.source === "track-processor") &&
@@ -16051,7 +16080,8 @@ export function useVideoEffects({
         !hasNewModelResult &&
         outputTrackPublished &&
         latestOutputFrameAt > 0 &&
-        track.readyState === "live";
+        track.readyState === "live" &&
+        !duplicateOutputHeartbeatDue;
       if (shouldSkipDuplicateFrame) {
         duplicateFrameSkipCount += 1;
         lastDuplicateVideoFrameKey = latestVideoFrameKey;
