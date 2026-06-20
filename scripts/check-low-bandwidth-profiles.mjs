@@ -410,6 +410,21 @@ assertIncludes(
   "export const BACKGROUND_TRANSPORT_DISCONNECT_GRACE_MS = 18000;",
   "web background transport disconnect grace",
 );
+assertIncludes(
+  "webMeetSocket",
+  "const shouldDeferTransportRecoveryUntilVisible = (): boolean =>",
+  "web hidden-tab transport recovery visibility gate",
+);
+assertRegex(
+  "webMeetSocket",
+  /transport\.connectionState === "disconnected"[\s\S]*shouldDeferTransportRecoveryUntilVisible\(\)[\s\S]*Producer transport recovery deferred until foreground[\s\S]*attemptIceRestart\("producer"\)/,
+  "web hidden producer disconnect does not force background reconnect",
+);
+assertRegex(
+  "webMeetSocket",
+  /transport\.connectionState === "disconnected"[\s\S]*shouldDeferTransportRecoveryUntilVisible\(\)[\s\S]*Consumer transport recovery deferred until foreground[\s\S]*attemptIceRestart\("consumer"\)/,
+  "web hidden consumer disconnect does not force background reconnect",
+);
 assertRegex(
   "webMeetSocket",
   /const disconnectedTransportKinds: Array<"producer" \| "consumer"> = \[\];[\s\S]*producerState === "disconnected"[\s\S]*consumerState === "disconnected"[\s\S]*attemptIceRestart\(kind\)[\s\S]*producer sync failed after ICE restart/,
@@ -1218,7 +1233,7 @@ assertIncludes(
 );
 assertRegex(
   "webMeetClient",
-  /const shouldRunVideoEffects =\s*activeVideoEffectsCount > 0 &&\s*isDocumentVisible &&\s*!shouldSuppressVideoEffectsForBandwidth;/,
+  /const shouldRunVisualVideoEffects =\s*activeVideoEffectsCount > 0 &&\s*isDocumentVisible &&\s*!shouldSuppressVideoEffectsForBandwidth;[\s\S]*const shouldRunVideoEffects = shouldRunVisualVideoEffects;[\s\S]*const shouldPublishProcessedVideo = shouldRunVisualVideoEffects;/,
   "web meet-shell effects only run when active, visible, and not constrained",
 );
 assertRegex(
@@ -1228,7 +1243,7 @@ assertRegex(
 );
 assertIncludes(
   "webMeetClient",
-  "const shouldPublishProcessedVideo = shouldRunVideoEffects;",
+  "const shouldPublishProcessedVideo = shouldRunVisualVideoEffects;",
   "web hidden tabs publish raw camera while effects pipeline is suspended",
 );
 assertRegex(

@@ -578,7 +578,7 @@ export default function MeetsClient({
     useBandwidthHeavyPreloadDeferred();
   const shouldSuppressVideoEffectsForBandwidth =
     useBandwidthHeavyVideoEffectsSuppressed();
-  const shouldRunVideoEffects =
+  const shouldRunVisualVideoEffects =
     activeVideoEffectsCount > 0 &&
     isDocumentVisible &&
     !shouldSuppressVideoEffectsForBandwidth;
@@ -893,7 +893,8 @@ export default function MeetsClient({
   const isWebinarAttendee =
     joinMode === "webinar_attendee" || webinarRole === "attendee";
   const ghostEnabled = allowGhostMode && isAdminFlag && isGhostMode;
-  const shouldPublishProcessedVideo = shouldRunVideoEffects;
+  const shouldRunVideoEffects = shouldRunVisualVideoEffects;
+  const shouldPublishProcessedVideo = shouldRunVisualVideoEffects;
   const canSignOut = Boolean(
     currentUser && !currentUser.id?.startsWith("guest-"),
   );

@@ -106,6 +106,9 @@ const getTransportDisconnectGraceMs = (): number => {
   return TRANSPORT_DISCONNECT_GRACE_MS;
 };
 
+const shouldDeferTransportRecoveryUntilVisible = (): boolean =>
+  typeof document !== "undefined" && document.visibilityState !== "visible";
+
 type InitialConsumerPreferences = {
   preferredLayers?: {
     spatialLayer: number;
@@ -1673,6 +1676,12 @@ export function useMeetSocket({
                         !intentionalDisconnectRef.current &&
                         transport.connectionState === "disconnected"
                       ) {
+                        if (shouldDeferTransportRecoveryUntilVisible()) {
+                          console.info(
+                            "[Meets] Producer transport recovery deferred until foreground.",
+                          );
+                          return;
+                        }
                         attemptIceRestart("producer").then((restarted) => {
                           if (!restarted) {
                             const enabledTurnFallback = enableTurnFallback(
@@ -1705,6 +1714,12 @@ export function useMeetSocket({
 
               if (state === "failed") {
                 if (!intentionalDisconnectRef.current) {
+                  if (shouldDeferTransportRecoveryUntilVisible()) {
+                    console.info(
+                      "[Meets] Producer transport failure recovery deferred until foreground.",
+                    );
+                    return;
+                  }
                   attemptIceRestart("producer").then((restarted) => {
                     if (!restarted) {
                       const enabledTurnFallback = enableTurnFallback(
@@ -1856,6 +1871,12 @@ export function useMeetSocket({
                         !intentionalDisconnectRef.current &&
                         transport.connectionState === "disconnected"
                       ) {
+                        if (shouldDeferTransportRecoveryUntilVisible()) {
+                          console.info(
+                            "[Meets] Consumer transport recovery deferred until foreground.",
+                          );
+                          return;
+                        }
                         attemptIceRestart("consumer").then((restarted) => {
                           if (!restarted) {
                             const enabledTurnFallback = enableTurnFallback(
@@ -1883,6 +1904,12 @@ export function useMeetSocket({
 
               if (state === "failed") {
                 if (!intentionalDisconnectRef.current) {
+                  if (shouldDeferTransportRecoveryUntilVisible()) {
+                    console.info(
+                      "[Meets] Consumer transport failure recovery deferred until foreground.",
+                    );
+                    return;
+                  }
                   attemptIceRestart("consumer").then((restarted) => {
                     if (!restarted) {
                       const enabledTurnFallback = enableTurnFallback(
