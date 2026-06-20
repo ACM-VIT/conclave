@@ -1499,33 +1499,44 @@ export function useMeetSocket({
       if (info) {
         clearStaleReplacementCleanupTimeout(producerId);
         const getMatchingReplacementState = () => {
-          const hasConsumedReplacement = Array.from(
+          const consumedReplacement = Array.from(
             producerMapRef.current.entries(),
-          ).some(
+          ).find(
             ([otherProducerId, otherInfo]) =>
               otherProducerId !== producerId &&
               otherInfo.userId === info.userId &&
               otherInfo.kind === info.kind &&
               otherInfo.type === info.type,
           );
-          const hasPendingReplacement = Array.from(
+          const pendingReplacement = Array.from(
             announcedRemoteProducersRef.current.entries(),
-          ).some(
+          ).find(
             ([otherProducerId, otherInfo]) =>
               otherProducerId !== producerId &&
               otherInfo.producerUserId === info.userId &&
               otherInfo.kind === info.kind &&
               otherInfo.type === info.type,
           );
+          const hasConsumedReplacement = Boolean(consumedReplacement);
+          const hasPendingReplacement = Boolean(pendingReplacement);
           return {
             hasConsumedReplacement,
             hasPendingReplacement,
             hasReplacementProducer:
               hasConsumedReplacement || hasPendingReplacement,
+            pendingReplacementProducerId: pendingReplacement?.[0] ?? null,
           };
         };
 
-        const clearClosedProducerState = (hasPendingReplacement: boolean) => {
+        const clearClosedProducerState = ({
+          hasPendingReplacement,
+          pendingReplacementProducerId,
+          preservePendingScreenShare,
+        }: {
+          hasPendingReplacement: boolean;
+          pendingReplacementProducerId: string | null;
+          preservePendingScreenShare: boolean;
+        }) => {
           dispatchParticipants({
             type: "UPDATE_STREAM",
             userId: info.userId,
@@ -1536,7 +1547,11 @@ export function useMeetSocket({
           });
 
           if (info.kind === "video" && info.type === "screen") {
-            setActiveScreenShareId(null);
+            setActiveScreenShareId(
+              preservePendingScreenShare && pendingReplacementProducerId
+                ? pendingReplacementProducerId
+                : null,
+            );
           }
 
           if (!hasPendingReplacement) {
@@ -1556,28 +1571,48 @@ export function useMeetSocket({
           }
         };
 
+        const scheduleStaleReplacementCleanup = () => {
+          const timeoutId = window.setTimeout(() => {
+            staleReplacementCleanupTimeoutsRef.current.delete(producerId);
+            const latestReplacementState = getMatchingReplacementState();
+            if (latestReplacementState.hasConsumedReplacement) return;
+
+            clearClosedProducerState({
+              hasPendingReplacement: latestReplacementState.hasPendingReplacement,
+              pendingReplacementProducerId:
+                latestReplacementState.pendingReplacementProducerId,
+              preservePendingScreenShare: false,
+            });
+          }, STALE_REPLACEMENT_CLEANUP_DELAY_MS);
+          staleReplacementCleanupTimeoutsRef.current.set(producerId, timeoutId);
+        };
+
         const replacementState = getMatchingReplacementState();
         if (!replacementState.hasReplacementProducer) {
           const timeoutId = window.setTimeout(() => {
             staleReplacementCleanupTimeoutsRef.current.delete(producerId);
             const latestReplacementState = getMatchingReplacementState();
             if (latestReplacementState.hasConsumedReplacement) return;
-            clearClosedProducerState(
-              latestReplacementState.hasPendingReplacement,
-            );
+            clearClosedProducerState({
+              hasPendingReplacement: latestReplacementState.hasPendingReplacement,
+              pendingReplacementProducerId:
+                latestReplacementState.pendingReplacementProducerId,
+              preservePendingScreenShare: true,
+            });
+            if (latestReplacementState.hasPendingReplacement) {
+              scheduleStaleReplacementCleanup();
+            }
           }, PRODUCER_CLOSE_REPLACEMENT_GRACE_MS);
           staleReplacementCleanupTimeoutsRef.current.set(producerId, timeoutId);
         } else if (!replacementState.hasConsumedReplacement) {
-          const timeoutId = window.setTimeout(() => {
-            staleReplacementCleanupTimeoutsRef.current.delete(producerId);
-            const latestReplacementState = getMatchingReplacementState();
-            if (latestReplacementState.hasConsumedReplacement) return;
-
-            clearClosedProducerState(
-              latestReplacementState.hasPendingReplacement,
-            );
-          }, STALE_REPLACEMENT_CLEANUP_DELAY_MS);
-          staleReplacementCleanupTimeoutsRef.current.set(producerId, timeoutId);
+          if (
+            info.kind === "video" &&
+            info.type === "screen" &&
+            replacementState.pendingReplacementProducerId
+          ) {
+            setActiveScreenShareId(replacementState.pendingReplacementProducerId);
+          }
+          scheduleStaleReplacementCleanup();
         }
 
         producerMapRef.current.delete(producerId);

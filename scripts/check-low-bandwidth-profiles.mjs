@@ -709,7 +709,7 @@ for (const [context, label] of [
         "web unexpected audio track ends must preserve mic intent in joined meetings",
       );
     }
-    if (!section.includes("setAudioProducerRecoveryPulse((value) => value + 1)")) {
+    if (!section.includes("requestAudioProducerRecovery();")) {
       failures.push(
         "web unexpected audio track ends must trigger producer recovery",
       );
@@ -723,7 +723,7 @@ for (const [context, label] of [
         "web unexpected camera track ends must preserve camera intent in joined meetings",
       );
     }
-    if (!section.includes("setCameraProducerRecoveryPulse((value) => value + 1)")) {
+    if (!section.includes("requestCameraProducerRecovery();")) {
       failures.push(
         "web unexpected camera track ends must trigger producer recovery",
       );
@@ -937,6 +937,35 @@ assertRegex(
       "web media recovery must stop rebuilding producers once reconnect cleanup starts",
     );
   }
+  if (
+    !/pendingAudioProducerRecoveryRef[\s\S]*pendingCameraProducerRecoveryRef[\s\S]*blockedProducerRecoveryFlushPulse[\s\S]*flushQueuedProducerRecoveries[\s\S]*window\.setInterval\(\(\) => \{[\s\S]*if \(isMediaRecoveryBlocked\(\)\) return;[\s\S]*flushQueuedProducerRecoveries\(\);/.test(
+      mediaText,
+    )
+  ) {
+    failures.push(
+      "web blocked reconnect recovery pulses must be queued and replayed after reconnect unblocks",
+    );
+  }
+  if (
+    !/const requestAudioProducerRecovery = useCallback\(\(\) => \{[\s\S]*if \(isMediaRecoveryBlocked\(\)\) \{[\s\S]*queueBlockedProducerRecovery\("audio"\);[\s\S]*setAudioProducerRecoveryPulse/.test(
+      mediaText,
+    ) ||
+    !/const requestCameraProducerRecovery = useCallback\(\(\) => \{[\s\S]*if \(isMediaRecoveryBlocked\(\)\) \{[\s\S]*queueBlockedProducerRecovery\("camera"\);[\s\S]*setCameraProducerRecoveryPulse/.test(
+      mediaText,
+    )
+  ) {
+    failures.push(
+      "web explicit audio/camera recovery requests must queue while reconnect cleanup blocks recovery",
+    );
+  }
+  if (
+    /transportclose"[\s\S]{0,400}setAudioProducerRecoveryPulse/.test(mediaText) ||
+    /transportclose"[\s\S]{0,400}setCameraProducerRecoveryPulse/.test(mediaText)
+  ) {
+    failures.push(
+      "web producer transport-close handlers must use queued recovery requests, not raw pulses",
+    );
+  }
 
   const socketText = source.webMeetSocket;
   const start = socketText.indexOf('"producerClosed"');
@@ -1130,12 +1159,12 @@ assertRegex(
       );
     }
     if (
-      !section.includes(
-        "!isMediaRecoveryBlocked() &&\n          videoProducerRef.current?.id === producer.id",
+      !/!allowProducerRecreate \|\|[\s\S]*isMediaRecoveryBlocked\(\)[\s\S]*Stalled camera sender recovery failed; keeping producer open/.test(
+        section,
       )
     ) {
       failures.push(
-        "web stalled camera sender recovery failure must honor reconnect recovery block",
+        "web stalled camera sender recovery failure must honor hidden-tab and reconnect no-recreate guards",
       );
     }
   }
@@ -1794,17 +1823,17 @@ assertRegex(
 );
 assertRegex(
   "webMeetSocket",
-  /getMatchingReplacementState[\s\S]*producerMapRef\.current\.entries\(\)[\s\S]*announcedRemoteProducersRef\.current\.entries\(\)[\s\S]*hasReplacementProducer:[\s\S]*hasConsumedReplacement \|\| hasPendingReplacement[\s\S]*clearClosedProducerState[\s\S]*UPDATE_STREAM[\s\S]*stream: null[\s\S]*if \(!hasPendingReplacement\)[\s\S]*UPDATE_CAMERA_OFF[\s\S]*announcedRemoteProducersRef\.current\.set\(data\.producerId, data\)/,
+  /getMatchingReplacementState[\s\S]*producerMapRef\.current\.entries\(\)[\s\S]*announcedRemoteProducersRef\.current\.entries\(\)[\s\S]*hasReplacementProducer:[\s\S]*hasConsumedReplacement \|\| hasPendingReplacement[\s\S]*pendingReplacementProducerId[\s\S]*clearClosedProducerState[\s\S]*UPDATE_STREAM[\s\S]*stream: null[\s\S]*if \(!hasPendingReplacement\)[\s\S]*UPDATE_CAMERA_OFF[\s\S]*announcedRemoteProducersRef\.current\.set\(data\.producerId, data\)/,
   "web producer replacement announcements suppress transient stream and camera-off clears",
 );
 assertRegex(
   "webMeetSocket",
-  /PRODUCER_CLOSE_REPLACEMENT_GRACE_MS[\s\S]*if \(!replacementState\.hasReplacementProducer\)[\s\S]*window\.setTimeout[\s\S]*latestReplacementState = getMatchingReplacementState\(\)[\s\S]*latestReplacementState\.hasConsumedReplacement[\s\S]*clearClosedProducerState\([\s\S]*latestReplacementState\.hasPendingReplacement/,
+  /PRODUCER_CLOSE_REPLACEMENT_GRACE_MS[\s\S]*if \(!replacementState\.hasReplacementProducer\)[\s\S]*window\.setTimeout[\s\S]*latestReplacementState = getMatchingReplacementState\(\)[\s\S]*latestReplacementState\.hasConsumedReplacement[\s\S]*clearClosedProducerState\(\{[\s\S]*latestReplacementState\.hasPendingReplacement[\s\S]*preservePendingScreenShare: true/,
   "web unannounced producer closes wait briefly for reconnect replacement before clearing streams",
 );
 assertRegex(
   "webMeetSocket",
-  /STALE_REPLACEMENT_CLEANUP_DELAY_MS[\s\S]*else if \(!replacementState\.hasConsumedReplacement\)[\s\S]*window\.setTimeout[\s\S]*latestReplacementState = getMatchingReplacementState\(\)[\s\S]*latestReplacementState\.hasConsumedReplacement[\s\S]*clearClosedProducerState\([\s\S]*latestReplacementState\.hasPendingReplacement/,
+  /const scheduleStaleReplacementCleanup = \(\) => \{[\s\S]*clearClosedProducerState\(\{[\s\S]*latestReplacementState\.hasPendingReplacement[\s\S]*preservePendingScreenShare: false[\s\S]*STALE_REPLACEMENT_CLEANUP_DELAY_MS[\s\S]*else if \(!replacementState\.hasConsumedReplacement\)[\s\S]*scheduleStaleReplacementCleanup\(\);/,
   "web stale producer replacement cleanup clears frozen old streams if the replacement never consumes",
 );
 {
@@ -1827,12 +1856,12 @@ assertRegex(
       );
     }
     if (
-      !/const clearClosedProducerState = \(hasPendingReplacement: boolean\) => \{[\s\S]*UPDATE_STREAM[\s\S]*if \(info\.kind === "video" && info\.type === "screen"\) \{[\s\S]*setActiveScreenShareId\(null\);[\s\S]*if \(!hasPendingReplacement\)/.test(
+      !/pendingReplacementProducerId[\s\S]*setActiveScreenShareId\([\s\S]*preservePendingScreenShare && pendingReplacementProducerId[\s\S]*scheduleStaleReplacementCleanup[\s\S]*preservePendingScreenShare: false[\s\S]*replacementState\.pendingReplacementProducerId[\s\S]*setActiveScreenShareId\(replacementState\.pendingReplacementProducerId\)/.test(
         section,
       )
     ) {
       failures.push(
-        "web stale screen-share replacements must clear active screen share even while a replacement is pending",
+        "web screen-share replacements must move active state to pending replacements and clear never-consumed replacements",
       );
     }
   }

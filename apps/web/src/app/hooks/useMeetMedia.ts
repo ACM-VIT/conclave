@@ -340,18 +340,71 @@ export function useMeetMedia({
   );
   const [audioProducerRecoveryPulse, setAudioProducerRecoveryPulse] =
     useState(0);
-  const notificationVolume = clampMeetVolume(meetVolume);
-  const requestAudioProducerRecovery = useCallback(() => {
-    if (isMediaRecoveryBlocked()) return;
-    setAudioProducerRecoveryPulse((value) => value + 1);
-  }, [isMediaRecoveryBlocked]);
   const cameraRecoveryInFlightRef = useRef(false);
   const [cameraProducerRecoveryPulse, setCameraProducerRecoveryPulse] =
     useState(0);
+  const pendingAudioProducerRecoveryRef = useRef(false);
+  const pendingCameraProducerRecoveryRef = useRef(false);
+  const [blockedProducerRecoveryFlushPulse, setBlockedProducerRecoveryFlushPulse] =
+    useState(0);
+  const flushQueuedProducerRecoveries = useCallback(() => {
+    if (pendingAudioProducerRecoveryRef.current) {
+      pendingAudioProducerRecoveryRef.current = false;
+      setAudioProducerRecoveryPulse((value) => value + 1);
+    }
+    if (pendingCameraProducerRecoveryRef.current) {
+      pendingCameraProducerRecoveryRef.current = false;
+      setCameraProducerRecoveryPulse((value) => value + 1);
+    }
+  }, []);
+  const queueBlockedProducerRecovery = useCallback(
+    (kind: "audio" | "camera") => {
+      if (kind === "audio") {
+        pendingAudioProducerRecoveryRef.current = true;
+      } else {
+        pendingCameraProducerRecoveryRef.current = true;
+      }
+      setBlockedProducerRecoveryFlushPulse((value) => value + 1);
+    },
+    [],
+  );
+  const notificationVolume = clampMeetVolume(meetVolume);
+  const requestAudioProducerRecovery = useCallback(() => {
+    if (isMediaRecoveryBlocked()) {
+      queueBlockedProducerRecovery("audio");
+      return;
+    }
+    setAudioProducerRecoveryPulse((value) => value + 1);
+  }, [isMediaRecoveryBlocked, queueBlockedProducerRecovery]);
   const requestCameraProducerRecovery = useCallback(() => {
-    if (isMediaRecoveryBlocked()) return;
+    if (isMediaRecoveryBlocked()) {
+      queueBlockedProducerRecovery("camera");
+      return;
+    }
     setCameraProducerRecoveryPulse((value) => value + 1);
-  }, [isMediaRecoveryBlocked]);
+  }, [isMediaRecoveryBlocked, queueBlockedProducerRecovery]);
+  useEffect(() => {
+    if (
+      !pendingAudioProducerRecoveryRef.current &&
+      !pendingCameraProducerRecoveryRef.current
+    ) {
+      return;
+    }
+    if (!isMediaRecoveryBlocked()) {
+      flushQueuedProducerRecoveries();
+      return;
+    }
+    const intervalId = window.setInterval(() => {
+      if (isMediaRecoveryBlocked()) return;
+      window.clearInterval(intervalId);
+      flushQueuedProducerRecoveries();
+    }, 250);
+    return () => window.clearInterval(intervalId);
+  }, [
+    blockedProducerRecoveryFlushPulse,
+    flushQueuedProducerRecoveries,
+    isMediaRecoveryBlocked,
+  ]);
   const cameraProducerTrackRepairInFlightRef = useRef(false);
   const cameraRecoveryCodecOverrideRef = useRef<ReturnType<
     typeof getPreferredWebcamCodec
@@ -736,7 +789,7 @@ export function useMeetMedia({
           console.warn(
             "[Meets] Local audio track ended unexpectedly; recovering audio producer.",
           );
-          setAudioProducerRecoveryPulse((value) => value + 1);
+          requestAudioProducerRecovery();
         } else {
           setIsMuted(true);
         }
@@ -749,7 +802,7 @@ export function useMeetMedia({
           console.warn(
             "[Meets] Local video track ended unexpectedly; recovering camera producer.",
           );
-          setCameraProducerRecoveryPulse((value) => value + 1);
+          requestCameraProducerRecovery();
         } else {
           setIsCameraOff(true);
         }
@@ -775,8 +828,8 @@ export function useMeetMedia({
       audioProducerRef,
       videoProducerRef,
       socketRef,
-      setAudioProducerRecoveryPulse,
-      setCameraProducerRecoveryPulse,
+      requestAudioProducerRecovery,
+      requestCameraProducerRecovery,
     ]
   );
 
@@ -1488,7 +1541,7 @@ export function useMeetMedia({
         audioProducer.on("transportclose", () => {
           if (audioProducerRef.current?.id === audioProducerId) {
             audioProducerRef.current = null;
-            setAudioProducerRecoveryPulse((value) => value + 1);
+            requestAudioProducerRecovery();
           }
         });
       }
@@ -2252,18 +2305,29 @@ export function useMeetMedia({
         resetStallState();
         requestCameraProducerRecovery();
       } catch (err) {
+        if (
+          !allowProducerRecreate ||
+          isMediaRecoveryBlocked() ||
+          videoProducerRef.current?.id !== producer.id
+        ) {
+          cameraOutboundStallStateRef.current = {
+            ...state,
+            lastRecoveryAtMs: performance.now(),
+          };
+          console.warn(
+            "[Meets] Stalled camera sender recovery failed; keeping producer open:",
+            err,
+          );
+          return;
+        }
+
         console.warn(
           "[Meets] Stalled camera sender recovery failed; recreating producer:",
           err,
         );
-        if (
-          !isMediaRecoveryBlocked() &&
-          videoProducerRef.current?.id === producer.id
-        ) {
-          closeLocalVideoProducerForReplacement(producer);
-          resetStallState();
-          requestCameraProducerRecovery();
-        }
+        closeLocalVideoProducerForReplacement(producer);
+        resetStallState();
+        requestCameraProducerRecovery();
       } finally {
         cameraProducerTrackRepairInFlightRef.current = false;
       }
