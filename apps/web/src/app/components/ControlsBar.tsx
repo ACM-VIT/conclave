@@ -20,6 +20,8 @@ import { MediaControlCluster, type MediaControlClusterProps } from "./DeviceCare
 import type { ReactionOption } from "../lib/types";
 import { normalizeBrowserUrl } from "../lib/utils";
 import HotkeyTooltip from "./HotkeyTooltip";
+import Coachmark from "./Coachmark";
+import { useOneTimeHint } from "../hooks/useOneTimeHint";
 import {
   BROWSER_APPS,
   buildControlsConfig,
@@ -223,6 +225,16 @@ function ControlsBar(props: ControlsBarProps) {
   useClickOutside(moreOpen, moreRef, () => setMoreOpen(false));
   useClickOutside(browserOpen, browserRef, () => setBrowserOpen(false));
 
+  // One-time nudge toward the backgrounds/filters tucked inside More — only
+  // surfaced if that option is actually available to this participant.
+  const hasEffects = config.overflow.some(
+    (row) => row.id === "effects" && !row.disabled,
+  );
+  const filtersTip = useOneTimeHint("more-filters", {
+    enabled: hasEffects,
+    delay: 1800,
+  });
+
   const lastReactionRef = useRef(0);
   const handleReaction = useCallback(
     (reaction: ReactionOption) => {
@@ -352,8 +364,18 @@ function ControlsBar(props: ControlsBarProps) {
             size={48}
             iconSize={ICON}
             label="More options"
-            onClick={() => setMoreOpen((v) => !v)}
+            onClick={() => {
+              if (filtersTip.visible) filtersTip.dismiss();
+              setMoreOpen((v) => !v);
+            }}
           />
+          {filtersTip.visible && !moreOpen && !reactionsOpen && !browserOpen ? (
+            <Coachmark
+              title="New filters to check out!"
+              description="We added some more"
+              onDismiss={filtersTip.dismiss}
+            />
+          ) : null}
           {moreOpen && (
             <div
               ref={browserRef}
