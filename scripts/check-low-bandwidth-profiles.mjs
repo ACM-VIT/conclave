@@ -421,6 +421,25 @@ assertIncludes(
     if (!section.includes("await ensureProducerTransportRef?.current?.()")) {
       failures.push("web audio producer recovery must rebuild failed transports");
     }
+    const transportSectionEnd = section.indexOf("let audioTrack");
+    const transportSection =
+      transportSectionEnd >= 0 ? section.slice(0, transportSectionEnd) : section;
+    if (
+      !transportSection.includes(
+        "Audio producer recovery waiting for producer transport.",
+      )
+    ) {
+      failures.push(
+        "web audio producer recovery must treat transport rebuild as retryable",
+      );
+    }
+    if (
+      transportSection.includes('throw new Error("Audio transport unavailable")')
+    ) {
+      failures.push(
+        "web audio producer recovery must not mute users for retryable transport rebuilds",
+      );
+    }
   }
 }
 {

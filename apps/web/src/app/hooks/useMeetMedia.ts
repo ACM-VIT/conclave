@@ -1329,7 +1329,10 @@ export function useMeetMedia({
             (await ensureProducerTransportRef?.current?.()) ?? false;
           transport = getUsableProducerTransport(producerTransportRef.current);
           if (!transportReady || !transport) {
-            throw new Error("Audio transport unavailable");
+            console.warn(
+              "[Meets] Audio producer recovery waiting for producer transport.",
+            );
+            return;
           }
         }
 
