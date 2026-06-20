@@ -391,8 +391,18 @@ assertIncludes(
 );
 assertIncludes(
   "sfuDisconnectHandlers",
-  'reason !== "ping timeout"',
-  "SFU suppresses ambiguous ping-timeout reconnect badges",
+  "SHOULD_SUPPRESS_RECONNECT_NOTICE_REASONS",
+  "SFU centralizes ambiguous reconnect badge suppression",
+);
+assertIncludes(
+  "sfuDisconnectHandlers",
+  '"transport close"',
+  "SFU suppresses ambiguous transport-close reconnect badges",
+);
+assertIncludes(
+  "sfuDisconnectHandlers",
+  '"transport error"',
+  "SFU suppresses ambiguous transport-error reconnect badges",
 );
 assertIncludes(
   "iosWebrtc",

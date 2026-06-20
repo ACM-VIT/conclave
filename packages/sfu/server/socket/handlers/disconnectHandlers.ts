@@ -25,6 +25,12 @@ const promoteNextAdmin = (room: Room): Admin | null => {
   return null;
 };
 
+const SHOULD_SUPPRESS_RECONNECT_NOTICE_REASONS = new Set([
+  "ping timeout",
+  "transport close",
+  "transport error",
+]);
+
 export const registerDisconnectHandlers = (
   context: ConnectionContext,
 ): void => {
@@ -223,7 +229,7 @@ export const registerDisconnectHandlers = (
           finalizeDisconnect,
         );
         if (
-          reason !== "ping timeout" &&
+          !SHOULD_SUPPRESS_RECONNECT_NOTICE_REASONS.has(reason) &&
           !context.currentClient.isGhost &&
           !context.currentClient.isWebinarAttendee
         ) {
