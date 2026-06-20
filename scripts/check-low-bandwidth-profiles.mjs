@@ -345,6 +345,26 @@ assertIncludes(
   "web hidden consumers stay warm unless receive quality is poor",
 );
 assertIncludes(
+  "webAdaptiveConsumerPreferences",
+  "const CONSUMER_PREFERENCE_ACK_TIMEOUT_MS = 3000;",
+  "web consumer preference updates have ACK timeout",
+);
+assertIncludes(
+  "webAdaptiveConsumerPreferences",
+  'markDeferredForRetry("setConsumerPreferences ack timeout")',
+  "web consumer preference ACK timeout retries stale layer updates",
+);
+assertIncludes(
+  "webAdaptiveConsumerPreferences",
+  'markDeferredForRetry(\n                    "setConsumerPreferences priority-only ack timeout",',
+  "web consumer preference fallback ACK timeout retries stale layer updates",
+);
+assertRegex(
+  "webAdaptiveConsumerPreferences",
+  /scheduledPreferenceTimeoutsRef\.current\.add\(ackTimeoutId\);[\s\S]*scheduledPreferenceTimeoutsRef\.current\.delete\(ackTimeoutId\);[\s\S]*window\.clearTimeout\(ackTimeoutId\);/,
+  "web consumer preference ACK timeout is cleared on response",
+);
+assertIncludes(
   "webConstants",
   "export const BACKGROUND_TRANSPORT_DISCONNECT_GRACE_MS = 18000;",
   "web background transport disconnect grace",

@@ -62,6 +62,7 @@ const MAX_WEBCAMS_TO_KEEP_FULL_ON_GOOD_LINKS = 4;
 const MAX_CONSUMER_PREFERENCE_UPDATES_PER_CYCLE = 8;
 const CONSUMER_PREFERENCE_EMIT_SPACING_MS = 75;
 const RATE_LIMIT_RETRY_DELAY_MS = 1000;
+const CONSUMER_PREFERENCE_ACK_TIMEOUT_MS = 3000;
 const AUDIO_CONSUMER_PRIORITY = 255;
 const CONSUMER_SCORE_STALE_AFTER_MS = 15000;
 
@@ -1004,7 +1005,7 @@ export function useAdaptiveConsumerPreferences({
         debugEntryBase,
       } = update;
 
-      const markDeferredAfterRateLimit = (error: string) => {
+      const markDeferredForRetry = (error: string) => {
         preferenceDebugRef.current.set(producerId, {
           ...debugEntryBase,
           status: "deferred",
@@ -1043,6 +1044,16 @@ export function useAdaptiveConsumerPreferences({
           return;
         }
 
+        let settled = false;
+        const ackTimeoutId = window.setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          scheduledPreferenceTimeoutsRef.current.delete(ackTimeoutId);
+          inFlightProducerIdsRef.current.delete(producerId);
+          markDeferredForRetry("setConsumerPreferences ack timeout");
+        }, CONSUMER_PREFERENCE_ACK_TIMEOUT_MS);
+        scheduledPreferenceTimeoutsRef.current.add(ackTimeoutId);
+
         socket.emit(
           "setConsumerPreferences",
           {
@@ -1055,10 +1066,14 @@ export function useAdaptiveConsumerPreferences({
             requestKeyFrame: debugEntryBase.requestKeyFrame,
           },
           (response: SetConsumerPreferencesResponse) => {
+            if (settled) return;
+            settled = true;
+            scheduledPreferenceTimeoutsRef.current.delete(ackTimeoutId);
+            window.clearTimeout(ackTimeoutId);
             if ("error" in response) {
               if (isConsumerControlRateLimitError(response.error)) {
                 inFlightProducerIdsRef.current.delete(producerId);
-                markDeferredAfterRateLimit(response.error);
+                markDeferredForRetry(response.error);
                 return;
               }
 
@@ -1083,6 +1098,19 @@ export function useAdaptiveConsumerPreferences({
                     producerId,
                   );
                 }
+                let fallbackSettled = false;
+                const fallbackAckTimeoutId = window.setTimeout(() => {
+                  if (fallbackSettled) return;
+                  fallbackSettled = true;
+                  scheduledPreferenceTimeoutsRef.current.delete(
+                    fallbackAckTimeoutId,
+                  );
+                  inFlightProducerIdsRef.current.delete(producerId);
+                  markDeferredForRetry(
+                    "setConsumerPreferences priority-only ack timeout",
+                  );
+                }, CONSUMER_PREFERENCE_ACK_TIMEOUT_MS);
+                scheduledPreferenceTimeoutsRef.current.add(fallbackAckTimeoutId);
                 socket.emit(
                   "setConsumerPreferences",
                   {
@@ -1093,6 +1121,12 @@ export function useAdaptiveConsumerPreferences({
                       : {}),
                   },
                   (priorityOnlyResponse: SetConsumerPreferencesResponse) => {
+                    if (fallbackSettled) return;
+                    fallbackSettled = true;
+                    scheduledPreferenceTimeoutsRef.current.delete(
+                      fallbackAckTimeoutId,
+                    );
+                    window.clearTimeout(fallbackAckTimeoutId);
                     if ("error" in priorityOnlyResponse) {
                       inFlightProducerIdsRef.current.delete(producerId);
                       if (
@@ -1100,7 +1134,7 @@ export function useAdaptiveConsumerPreferences({
                           priorityOnlyResponse.error,
                         )
                       ) {
-                        markDeferredAfterRateLimit(priorityOnlyResponse.error);
+                        markDeferredForRetry(priorityOnlyResponse.error);
                         return;
                       }
 
