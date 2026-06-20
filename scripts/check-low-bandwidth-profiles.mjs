@@ -802,6 +802,9 @@ assertRegex(
       !section.includes("acquiredAudioTracks = newStream.getAudioTracks();") ||
       !section.includes("const previousStream = localStreamRef.current;") ||
       !section.includes("const previousAudioTracks =") ||
+      !section.includes("const currentAudioProducer = audioProducerRef.current;") ||
+      !section.includes("currentAudioProducer?.closed") ||
+      !section.includes("resetAudioProducer(currentAudioProducer);") ||
       !section.includes("requestAudioProducerRecovery();") ||
       !section.includes("commitLocalStream(nextStream);") ||
       !section.includes("committedNewAudioTrack = newAudioTrack;") ||
@@ -811,7 +814,7 @@ assertRegex(
       section.includes("prev.addTrack(newAudioTrack)")
     ) {
       failures.push(
-        "web audio input device changes must sync refs, recover missing producers, and clean up failed mic captures",
+        "web audio input device changes must sync refs, clear dead producers, recover missing producers, and clean up failed mic captures",
       );
     }
   }
@@ -824,13 +827,16 @@ assertRegex(
     failures.push("web video input device-change section missing");
   } else {
     const section = text.slice(start, end);
-    const replaceIndex = section.indexOf("await videoProducerRef.current.replaceTrack");
+    const replaceIndex = section.indexOf("await videoProducer.replaceTrack");
     const commitIndex = section.indexOf("localStreamRef.current = nextStream;");
     if (
       !section.includes("let acquiredVideoTracks: MediaStreamTrack[] = [];") ||
       !section.includes("let committedNewVideoTrack: MediaStreamTrack | null = null;") ||
       !section.includes("acquiredVideoTracks = newStream.getVideoTracks();") ||
       !section.includes("const previousVideoTracks =") ||
+      !section.includes("const currentVideoProducer = videoProducerRef.current;") ||
+      !section.includes("currentVideoProducer?.closed") ||
+      !section.includes("closeLocalVideoProducerForReplacement(currentVideoProducer);") ||
       replaceIndex < 0 ||
       commitIndex < 0 ||
       commitIndex < replaceIndex ||
@@ -841,7 +847,7 @@ assertRegex(
       !section.includes("videoProducerRef.current?.track ?? null")
     ) {
       failures.push(
-        "web video input device changes must commit after publish replacement and clean up failed camera captures",
+        "web video input device changes must clear dead producers, commit after publish replacement, and clean up failed camera captures",
       );
     }
   }

@@ -991,8 +991,13 @@ export function useMeetMedia({
             const previousStream = localStreamRef.current;
             const previousAudioTracks = previousStream?.getAudioTracks() ?? [];
 
-            if (audioProducerRef.current) {
-              await audioProducerRef.current.replaceTrack({
+            const currentAudioProducer = audioProducerRef.current;
+            if (currentAudioProducer?.closed) {
+              resetAudioProducer(currentAudioProducer);
+            }
+            const audioProducer = audioProducerRef.current;
+            if (audioProducer) {
+              await audioProducer.replaceTrack({
                 track: newAudioTrack,
               });
             } else if (!isMuted) {
@@ -1027,6 +1032,7 @@ export function useMeetMedia({
       commitLocalStream,
       buildAudioConstraints,
       markAudioTrackForSpeech,
+      resetAudioProducer,
       stopTracksExcept,
       requestAudioProducerRecovery,
     ]
@@ -1061,13 +1067,18 @@ export function useMeetMedia({
               .filter((track) => track.kind !== "video") ?? [];
           const nextStream = new MediaStream([...remainingTracks, newVideoTrack]);
 
-          if (videoProducerRef.current) {
+          const currentVideoProducer = videoProducerRef.current;
+          if (currentVideoProducer?.closed) {
+            closeLocalVideoProducerForReplacement(currentVideoProducer);
+          }
+          const videoProducer = videoProducerRef.current;
+          if (videoProducer) {
             const publishTrack = await waitForPreferredVideoPublishTrack(
               nextStream,
               newVideoTrack,
             );
             try {
-              await videoProducerRef.current.replaceTrack({
+              await videoProducer.replaceTrack({
                 track: publishTrack,
               });
             } catch (err) {
@@ -1080,7 +1091,7 @@ export function useMeetMedia({
                 publishTrack,
                 "device-switch-raw-replace-fallback",
               );
-              await videoProducerRef.current.replaceTrack({
+              await videoProducer.replaceTrack({
                 track: newVideoTrack,
               });
             }
@@ -1113,6 +1124,7 @@ export function useMeetMedia({
       waitForPreferredVideoPublishTrack,
       onPreferredVideoPublishTrackRejected,
       stopTracksExcept,
+      closeLocalVideoProducerForReplacement,
       requestCameraProducerRecovery,
     ]
   );
