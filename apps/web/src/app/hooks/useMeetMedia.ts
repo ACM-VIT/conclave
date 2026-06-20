@@ -1322,21 +1322,22 @@ export function useMeetMedia({
           handleLocalTrackEnded("audio", nextAudioTrack);
         };
 
-        setLocalStream((prev) => {
-          if (prev) {
-            const newStream = new MediaStream(prev.getTracks());
-            newStream.getAudioTracks().forEach((t) => {
-              if (t.id === nextAudioTrack.id) return;
-              stopLocalTrack(t);
-              newStream.removeTrack(t);
-            });
-            if (!newStream.getAudioTracks().some((t) => t.id === nextAudioTrack.id)) {
-              newStream.addTrack(nextAudioTrack);
-            }
-            return newStream;
+        const previousStream = localStreamRef.current;
+        previousStream?.getAudioTracks().forEach((track) => {
+          if (track.id !== nextAudioTrack.id) {
+            stopLocalTrack(track);
           }
-          return new MediaStream([nextAudioTrack]);
         });
+        const remainingTracks =
+          previousStream
+            ?.getTracks()
+            .filter((track) => track.kind !== "audio") ?? [];
+        const nextStream = new MediaStream([
+          ...remainingTracks,
+          nextAudioTrack,
+        ]);
+        localStreamRef.current = nextStream;
+        setLocalStream(nextStream);
 
         audioTrack = nextAudioTrack;
       }
@@ -1572,18 +1573,17 @@ export function useMeetMedia({
         };
 
         if (createdTrack) {
-          setLocalStream((prev) => {
-            if (prev) {
-              const next = new MediaStream(prev.getTracks());
-              next.getAudioTracks().forEach((track) => {
-                stopLocalTrack(track);
-                next.removeTrack(track);
-              });
-              next.addTrack(audioTrack);
-              return next;
-            }
-            return new MediaStream([audioTrack]);
+          const previousStream = localStreamRef.current;
+          previousStream?.getAudioTracks().forEach((track) => {
+            stopLocalTrack(track);
           });
+          const remainingTracks =
+            previousStream
+              ?.getTracks()
+              .filter((track) => track.kind !== "audio") ?? [];
+          const nextStream = new MediaStream([...remainingTracks, audioTrack]);
+          localStreamRef.current = nextStream;
+          setLocalStream(nextStream);
         }
 
         const audioProducer = await transport.produce({

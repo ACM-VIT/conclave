@@ -744,6 +744,8 @@ for (const [context, label] of [
     if (
       !section.includes("hadLiveAudioTrackBeforeRecovery") ||
       !section.includes("if (createdTrack)") ||
+      !section.includes("localStreamRef.current = nextStream;") ||
+      !section.includes("setLocalStream(nextStream);") ||
       !section.includes("if (!hadLiveAudioTrackBeforeRecovery)") ||
       section.includes("existingAudioTracks.forEach((track) =>")
     ) {
