@@ -365,6 +365,46 @@ assertIncludes(
   "web downgrades avoid camera capture restarts",
 );
 assertIncludes(
+  "webMeetMedia",
+  "const getUsableProducerTransport =",
+  "web media publish paths centralize producer transport usability",
+);
+assertIncludes(
+  "webMeetMedia",
+  'transport.connectionState === "failed"',
+  "web media publish paths rebuild failed producer transports",
+);
+assertIncludes(
+  "webMeetSocket",
+  "const getUsableProducerTransport =",
+  "web socket producer transport creation centralizes usability",
+);
+assertIncludes(
+  "webMeetSocket",
+  "existingTransport.close();",
+  "web producer transport recovery closes unusable transports before rebuilding",
+);
+{
+  const text = source.webMeetSocket;
+  const start = text.indexOf('socket.on(\n              "setVideoQuality"');
+  const end = text.indexOf('socket.on("chatMessage"', start);
+  if (start < 0 || end < 0) {
+    failures.push("web SFU video-quality socket handler missing");
+  } else {
+    const section = text.slice(start, end);
+    if (!section.includes("setNetworkManagedVideoQuality(quality);")) {
+      failures.push(
+        "web SFU video-quality downgrades must remain network-managed for auto-recovery",
+      );
+    }
+    if (!section.includes("setNetworkManagedVideoQuality(previousQuality);")) {
+      failures.push(
+        "web SFU video-quality rollback must preserve network-managed state",
+      );
+    }
+  }
+}
+assertIncludes(
   "webMeetSocket",
   "retrying consumer later",
   "web stale consumer recovery retries only the affected consumer",

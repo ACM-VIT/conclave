@@ -40,6 +40,7 @@ import type {
   RtpParameters,
   TransportResponse,
   RestartIceResponse,
+  Transport,
   VideoQuality,
   WebinarConfigSnapshot,
   WebinarFeedChangedNotification,
@@ -218,6 +219,19 @@ const normalizeReceiveRtpParametersForCongestionFeedback = (
     ...rtpParameters,
     codecs,
   };
+};
+
+const getUsableProducerTransport = (
+  transport: Transport | null | undefined,
+): Transport | null => {
+  if (!transport || transport.closed) return null;
+  if (
+    transport.connectionState === "closed" ||
+    transport.connectionState === "failed"
+  ) {
+    return null;
+  }
+  return transport;
 };
 
 class JoinRoomRedirectError extends Error {
@@ -1701,8 +1715,11 @@ export function useMeetSocket({
 
   const ensureProducerTransport = useCallback(async (): Promise<boolean> => {
     const existingTransport = producerTransportRef.current;
-    if (existingTransport && !existingTransport.closed) return true;
-    if (existingTransport?.closed) {
+    if (getUsableProducerTransport(existingTransport)) return true;
+    if (existingTransport) {
+      try {
+        existingTransport.close();
+      } catch {}
       producerTransportRef.current = null;
     }
 

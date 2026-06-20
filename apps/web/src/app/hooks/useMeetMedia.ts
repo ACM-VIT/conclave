@@ -168,6 +168,19 @@ const shouldRefreshVideoTrackForQualitySwitch = (
   );
 };
 
+const getUsableProducerTransport = (
+  transport: Transport | null | undefined,
+): Transport | null => {
+  if (!transport || transport.closed) return null;
+  if (
+    transport.connectionState === "closed" ||
+    transport.connectionState === "failed"
+  ) {
+    return null;
+  }
+  return transport;
+};
+
 export function useMeetMedia({
   ghostEnabled,
   isObserverMode = false,
@@ -1116,12 +1129,12 @@ export function useMeetMedia({
         return;
       }
 
-      let transport = producerTransportRef.current;
-      if (!transport || transport.closed) {
+      let transport = getUsableProducerTransport(producerTransportRef.current);
+      if (!transport) {
         const transportReady =
           (await ensureProducerTransportRef?.current?.()) ?? false;
-        transport = producerTransportRef.current;
-        if (!transportReady || !transport || transport.closed) {
+        transport = getUsableProducerTransport(producerTransportRef.current);
+        if (!transportReady || !transport) {
           throw new Error("Audio transport unavailable");
         }
       }
@@ -1489,12 +1502,14 @@ export function useMeetMedia({
             });
           }
 
-          let transport = producerTransportRef.current;
-          if (!transport || transport.closed) {
+          let transport = getUsableProducerTransport(
+            producerTransportRef.current,
+          );
+          if (!transport) {
             const transportReady =
               (await ensureProducerTransportRef?.current?.()) ?? false;
-            transport = producerTransportRef.current;
-            if (!transportReady || !transport || transport.closed) {
+            transport = getUsableProducerTransport(producerTransportRef.current);
+            if (!transportReady || !transport) {
               throw new Error("Video transport unavailable");
             }
           }
@@ -1674,12 +1689,12 @@ export function useMeetMedia({
           ?.getVideoTracks()
           .some((track) => track.readyState === "live") === true;
       try {
-        let transport = producerTransportRef.current;
-        if (!transport || transport.closed) {
+        let transport = getUsableProducerTransport(producerTransportRef.current);
+        if (!transport) {
           const transportReady =
             (await ensureProducerTransportRef?.current?.()) ?? false;
-          transport = producerTransportRef.current;
-          if (!transportReady || !transport || transport.closed) {
+          transport = getUsableProducerTransport(producerTransportRef.current);
+          if (!transportReady || !transport) {
             throw new Error("Video transport unavailable");
           }
         }
@@ -1866,12 +1881,12 @@ export function useMeetMedia({
     }
 
     try {
-      let transport = producerTransportRef.current;
-      if (!transport || transport.closed) {
+      let transport = getUsableProducerTransport(producerTransportRef.current);
+      if (!transport) {
         const transportReady =
           (await ensureProducerTransportRef?.current?.()) ?? false;
-        transport = producerTransportRef.current;
-        if (!transportReady || !transport || transport.closed) {
+        transport = getUsableProducerTransport(producerTransportRef.current);
+        if (!transportReady || !transport) {
           throw new Error("Screen share transport unavailable");
         }
       }
