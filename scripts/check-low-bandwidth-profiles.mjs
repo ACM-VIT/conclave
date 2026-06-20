@@ -1167,8 +1167,13 @@ assertIncludes(
 }
 assertRegex(
   "webAdaptivePublishQuality",
-  /const restoreStandardCaptureIfNeeded = useCallback[\s\S]*videoQualityRef\.current !== "standard"[\s\S]*webcamTrack\?\.readyState !== "live"[\s\S]*await updateVideoQualityRef\.current\("standard", "good"\)[\s\S]*lastStandardCaptureRestoreSignatureRef\.current = signature/,
-  "web adaptive good-link restore refreshes standard capture without reopening camera",
+  /needsStandardCaptureRestore[\s\S]*STANDARD_CAPTURE_MIN_WIDTH[\s\S]*STANDARD_CAPTURE_MIN_HEIGHT[\s\S]*STANDARD_CAPTURE_MIN_FRAMERATE/,
+  "web adaptive good-link restore only refreshes undersized camera capture",
+);
+assertRegex(
+  "webAdaptivePublishQuality",
+  /const restoreStandardCaptureIfNeeded = useCallback[\s\S]*videoQualityRef\.current !== "standard"[\s\S]*webcamTrack\?\.readyState !== "live"[\s\S]*if \(needsStandardCaptureRestore\(webcamTrack\)\) \{[\s\S]*await updateVideoQualityRef\.current\("standard", "good"\)[\s\S]*\} else \{[\s\S]*await applyWebcamProducerNetworkProfile\(webcamProducer, "standard", "good"\);[\s\S]*lastStandardCaptureRestoreSignatureRef\.current = signature/,
+  "web adaptive good-link restore avoids camera constraint churn when capture is already standard",
 );
 assertRegex(
   "webAdaptivePublishQuality",

@@ -44,6 +44,9 @@ const POOR_LIVE_CAP_AFTER_MS = 2500;
 const GOOD_LIVE_RESTORE_AFTER_MS = 15000;
 const MAX_AUTO_UPGRADE_PARTICIPANTS = 4;
 const STANDARD_CAPTURE_RESTORE_RETRY_MS = 1000;
+const STANDARD_CAPTURE_MIN_WIDTH = 960;
+const STANDARD_CAPTURE_MIN_HEIGHT = 540;
+const STANDARD_CAPTURE_MIN_FRAMERATE = 24;
 
 type QualityWindow = {
   quality: ConnectionQuality;
@@ -77,6 +80,18 @@ type PublishProducerEncodingDebugSnapshot = {
   scaleResolutionDownBy: number | null;
   priority: RTCPriorityType | null;
   networkPriority: RTCPriorityType | null;
+};
+
+const needsStandardCaptureRestore = (track: MediaStreamTrack): boolean => {
+  const settings = track.getSettings();
+  return (
+    (typeof settings.width === "number" &&
+      settings.width < STANDARD_CAPTURE_MIN_WIDTH) ||
+    (typeof settings.height === "number" &&
+      settings.height < STANDARD_CAPTURE_MIN_HEIGHT) ||
+    (typeof settings.frameRate === "number" &&
+      settings.frameRate < STANDARD_CAPTURE_MIN_FRAMERATE)
+  );
 };
 
 export type AdaptivePublishQualityDebugSnapshot = {
@@ -385,7 +400,15 @@ export function useAdaptivePublishQuality({
 
     updateInFlightRef.current = true;
     try {
-      await updateVideoQualityRef.current("standard", "good");
+      if (needsStandardCaptureRestore(webcamTrack)) {
+        await updateVideoQualityRef.current("standard", "good");
+      } else {
+        await applyWebcamProducerNetworkProfile(
+          webcamProducer,
+          "standard",
+          "good",
+        );
+      }
       lastStandardCaptureRestoreSignatureRef.current = signature;
       lastAppliedProfilesRef.current.webcam = signature;
       writeDebugSnapshot();
