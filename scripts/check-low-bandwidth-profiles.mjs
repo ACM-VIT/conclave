@@ -346,7 +346,7 @@ assertIncludes(
 );
 assertIncludes(
   "webMeetClient",
-  "const shouldSuppressVideoEffectsForBandwidth =\n    useBandwidthHeavyPreloadDeferred();",
+  "const shouldSuppressVideoEffectsForBandwidth =\n    useBandwidthHeavyVideoEffectsSuppressed();",
   "web meet-shell video effects bandwidth suppression",
 );
 assertRegex(
@@ -390,12 +390,12 @@ for (const [key, label] of [
   );
   assertRegex(
     key,
-    /if \(shouldSuppressPreviewVideoEffectsForBandwidth\) return;[\s\S]*prewarmVideoEffectsAssetsDeferred/,
+    /if \(shouldDeferPreviewVideoEffectsPreload\) return;[\s\S]*prewarmVideoEffectsAssetsDeferred/,
     `${label} effects prewarm constrained-link guard`,
   );
   assertIncludes(
     key,
-    "deferPreload={shouldSuppressPreviewVideoEffectsForBandwidth}",
+    "deferPreload={shouldDeferPreviewVideoEffectsPreload}",
     `${label} effects panel preload deferral`,
   );
 }

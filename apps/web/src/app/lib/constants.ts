@@ -81,8 +81,8 @@ export const STANDARD_VIDEO_MAX_BITRATE = 1500000;
 export const LOW_VIDEO_MAX_BITRATE = 260000;
 export const SCREEN_SHARE_MAX_BITRATE = 2500000;
 export const SCREEN_SHARE_MAX_FRAMERATE = 24;
-export const OPUS_MAX_AVERAGE_BITRATE = 48000;
-export const SCREEN_AUDIO_OPUS_MAX_AVERAGE_BITRATE = 48000;
+export const OPUS_MAX_AVERAGE_BITRATE = 96000;
+export const SCREEN_AUDIO_OPUS_MAX_AVERAGE_BITRATE = 96000;
 export type AudioProducerNetworkProfile =
   | "good"
   | "fair"

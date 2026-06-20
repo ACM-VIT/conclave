@@ -102,6 +102,7 @@ type MobileRoomTilingMetadata = {
   presenting: false;
   pinnedId: null;
   primaryIds: string[];
+  focusIds: string[];
   visibleRemoteIds: string[];
   hiddenIds: string[];
   warmIds: string[];
@@ -359,6 +360,19 @@ function MobileGridLayout({
     const ids = visibleTiles.map((tile) => tile.key);
     return ids.length > 0 ? ids : ["local"];
   }, [visibleTiles]);
+  const focusIds = useMemo(() => {
+    const ids: string[] = [];
+    if (primaryTile.kind === "remote") {
+      ids.push(primaryTile.participant.userId);
+    }
+    if (activeSpeakerId) {
+      ids.push(activeSpeakerId);
+    }
+    if (featuredSpeakerId) {
+      ids.push(featuredSpeakerId);
+    }
+    return Array.from(new Set(ids.filter(Boolean)));
+  }, [activeSpeakerId, featuredSpeakerId, primaryTile]);
   const visibleRemoteIds = useMemo(() => {
     const ids = new Set<string>();
     visibleTiles.forEach((tile) => {
@@ -671,6 +685,7 @@ function MobileGridLayout({
       featuredSpeakerId,
       renderedMode: renderedRoomMode,
       primaryIds,
+      focusIds,
       visibleRemoteIds,
       hiddenRemoteIds,
       warmRemoteIds,
@@ -699,6 +714,7 @@ function MobileGridLayout({
       hiddenRemoteIds,
       orderedRemoteParticipants,
       primaryIds,
+      focusIds,
       primaryTile,
       showOverflowTile,
       renderedRoomMode,
@@ -765,6 +781,7 @@ function MobileGridLayout({
         presenting: false as const,
         pinnedId: null,
         primaryIds: mobileRoomTilingBase.primaryIds,
+        focusIds: mobileRoomTilingBase.focusIds,
         visibleRemoteIds: mobileRoomTilingBase.visibleRemoteIds,
         hiddenIds: mobileRoomTilingBase.hiddenRemoteIds,
         warmIds: mobileRoomTilingBase.warmRemoteIds,

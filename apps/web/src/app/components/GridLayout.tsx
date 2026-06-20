@@ -225,6 +225,7 @@ type MeetRoomTilingMetadataBase = {
   presenting: boolean;
   pinnedId: string | null;
   primaryIds: string[];
+  focusIds: string[];
   visibleRemoteIds: string[];
   hiddenIds: string[];
   warmIds: string[];
@@ -1638,6 +1639,25 @@ function GridLayout({
     usesStageLayout,
     visibleParticipants,
   ]);
+  const roomTilingFocusIds = useMemo(() => {
+    const ids: string[] = [];
+    if (usesStageLayout && stageMainKind === "remote" && stageMainParticipantId) {
+      ids.push(stageMainParticipantId);
+    }
+    if (activeSpeakerId) {
+      ids.push(activeSpeakerId);
+    }
+    if (featuredSpeakerId) {
+      ids.push(featuredSpeakerId);
+    }
+    return Array.from(new Set(ids.filter(Boolean)));
+  }, [
+    activeSpeakerId,
+    featuredSpeakerId,
+    stageMainKind,
+    stageMainParticipantId,
+    usesStageLayout,
+  ]);
   const roomTilingHiddenIds = useMemo(
     () => overflowParticipants.map((participant) => participant.userId),
     [overflowParticipants],
@@ -1872,6 +1892,7 @@ function GridLayout({
       presenting: hasPresentation,
       pinnedId,
       primaryIds: roomTilingPrimaryIds,
+      focusIds: roomTilingFocusIds,
       visibleRemoteIds: roomTilingRemoteVisibleIds,
       hiddenIds: roomTilingHiddenIds,
       warmIds: roomTilingWarmIds,
@@ -1989,6 +2010,7 @@ function GridLayout({
       roomTilingHiddenIds,
       roomTilingFallbackLevel,
       roomTilingPrimaryIds,
+      roomTilingFocusIds,
       roomTilingRemoteVisibleIds,
       roomTilingWarmReasons,
       roomTilingScores,

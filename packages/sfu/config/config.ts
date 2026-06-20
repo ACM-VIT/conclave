@@ -296,12 +296,12 @@ export const config = {
     logTags: ["info", "ice", "dtls", "rtp", "srtp", "rtcp"] as WorkerLogTag[],
   },
   videoQuality: {
-    lowThreshold: toNumber(process.env.VIDEO_QUALITY_LOW_THRESHOLD, 6, {
+    lowThreshold: toNumber(process.env.VIDEO_QUALITY_LOW_THRESHOLD, 1000, {
       min: 1,
     }),
     standardThreshold: toNumber(
       process.env.VIDEO_QUALITY_STANDARD_THRESHOLD,
-      4,
+      900,
       { min: 1 },
     ),
   },

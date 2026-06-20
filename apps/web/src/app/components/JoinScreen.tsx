@@ -40,7 +40,10 @@ import {
 import MeetsErrorBanner from "./MeetsErrorBanner";
 // import ScheduledMeetingsPanel from "./ScheduledMeetingsPanel";
 import { useCameraPermissionState } from "../hooks/useCameraPermissionState";
-import { useBandwidthHeavyPreloadDeferred } from "../hooks/useBandwidthHeavyPreloadDeferred";
+import {
+  useBandwidthHeavyPreloadDeferred,
+  useBandwidthHeavyVideoEffectsSuppressed,
+} from "../hooks/useBandwidthHeavyPreloadDeferred";
 import {
   countActiveVideoEffects,
   type VideoEffectsState,
@@ -281,8 +284,10 @@ function JoinScreen({
     (userEmail ? userEmail.split("@")[0] : "") ||
     "You";
   const activeVideoEffectsCount = countActiveVideoEffects(videoEffects);
-  const shouldSuppressPreviewVideoEffectsForBandwidth =
+  const shouldDeferPreviewVideoEffectsPreload =
     useBandwidthHeavyPreloadDeferred();
+  const shouldSuppressPreviewVideoEffectsForBandwidth =
+    useBandwidthHeavyVideoEffectsSuppressed();
   const shouldRunPreviewVideoEffects =
     activeVideoEffectsCount > 0 &&
     !shouldSuppressPreviewVideoEffectsForBandwidth;
@@ -320,7 +325,7 @@ function JoinScreen({
       meetError?.code === "PERMISSION_DENIED");
   const prewarmLiveCameraEffects = (reason: string) => {
     if (activeVideoEffectsCount <= 0 && !isEffectsOpen) return;
-    if (shouldSuppressPreviewVideoEffectsForBandwidth) return;
+    if (shouldDeferPreviewVideoEffectsPreload) return;
     void prewarmVideoEffectsAssetsDeferred({
       segmentation: true,
       face: true,
@@ -1045,7 +1050,7 @@ function JoinScreen({
           error={videoEffectsError}
           debugStats={videoEffectsDebugStats}
           activeCount={activeVideoEffectsCount}
-          deferPreload={shouldSuppressPreviewVideoEffectsForBandwidth}
+          deferPreload={shouldDeferPreviewVideoEffectsPreload}
           cameraPermissionBlocked={isCameraPermissionBlocked}
           showFilters={!isCameraPermissionBlocked}
           onToggleCamera={toggleCamera}

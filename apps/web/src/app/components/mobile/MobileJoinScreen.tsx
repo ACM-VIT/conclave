@@ -39,7 +39,10 @@ import MeetsErrorBanner from "../MeetsErrorBanner";
 // import ScheduledMeetingsPanel from "../ScheduledMeetingsPanel";
 import AndroidUpsellSheet from "./AndroidUpsellSheet";
 import { useCameraPermissionState } from "../../hooks/useCameraPermissionState";
-import { useBandwidthHeavyPreloadDeferred } from "../../hooks/useBandwidthHeavyPreloadDeferred";
+import {
+  useBandwidthHeavyPreloadDeferred,
+  useBandwidthHeavyVideoEffectsSuppressed,
+} from "../../hooks/useBandwidthHeavyPreloadDeferred";
 import {
   countActiveVideoEffects,
   type VideoEffectsState,
@@ -225,8 +228,10 @@ function MobileJoinScreen({
   const [isSigningOut, setIsSigningOut] = useState(false);
   const [showAndroidUpsell, setShowAndroidUpsell] = useState(false);
   const activeVideoEffectsCount = countActiveVideoEffects(videoEffects);
-  const shouldSuppressPreviewVideoEffectsForBandwidth =
+  const shouldDeferPreviewVideoEffectsPreload =
     useBandwidthHeavyPreloadDeferred();
+  const shouldSuppressPreviewVideoEffectsForBandwidth =
+    useBandwidthHeavyVideoEffectsSuppressed();
   const shouldRunPreviewVideoEffects =
     activeVideoEffectsCount > 0 &&
     !shouldSuppressPreviewVideoEffectsForBandwidth;
@@ -270,7 +275,7 @@ function MobileJoinScreen({
   const prewarmLiveCameraEffects = useCallback(
     (reason: string) => {
       if (activeVideoEffectsCount <= 0 && !isEffectsOpen) return;
-      if (shouldSuppressPreviewVideoEffectsForBandwidth) return;
+      if (shouldDeferPreviewVideoEffectsPreload) return;
       void prewarmVideoEffectsAssetsDeferred({
         segmentation: true,
         face: true,
@@ -280,20 +285,20 @@ function MobileJoinScreen({
     [
       activeVideoEffectsCount,
       isEffectsOpen,
-      shouldSuppressPreviewVideoEffectsForBandwidth,
+      shouldDeferPreviewVideoEffectsPreload,
     ],
   );
 
   const prewarmBackgroundBlur = useCallback(() => {
     if (isCameraPermissionBlocked) return;
-    if (shouldSuppressPreviewVideoEffectsForBandwidth) return;
+    if (shouldDeferPreviewVideoEffectsPreload) return;
     void prewarmVideoEffectsAssetsDeferred({
       segmentation: true,
       reason: "mobile-prejoin-quick-blur",
     });
   }, [
     isCameraPermissionBlocked,
-    shouldSuppressPreviewVideoEffectsForBandwidth,
+    shouldDeferPreviewVideoEffectsPreload,
   ]);
 
   const toggleBackgroundBlur = useCallback(() => {
@@ -301,7 +306,7 @@ function MobileJoinScreen({
     const nextBackground = isBackgroundBlurActive ? "none" : "blur-strong";
     if (
       nextBackground !== "none" &&
-      !shouldSuppressPreviewVideoEffectsForBandwidth
+      !shouldDeferPreviewVideoEffectsPreload
     ) {
       void prewarmVideoEffectsAssetsDeferred({
         segmentation: true,
@@ -316,12 +321,12 @@ function MobileJoinScreen({
     isBackgroundBlurActive,
     isCameraPermissionBlocked,
     onVideoEffectsChange,
-    shouldSuppressPreviewVideoEffectsForBandwidth,
+    shouldDeferPreviewVideoEffectsPreload,
   ]);
 
   const openEffectsPanel = useCallback(() => {
     if (isCameraPermissionBlocked) return;
-    if (!shouldSuppressPreviewVideoEffectsForBandwidth) {
+    if (!shouldDeferPreviewVideoEffectsPreload) {
       void prewarmVideoEffectsAssetsDeferred({
         segmentation: true,
         face: true,
@@ -331,7 +336,7 @@ function MobileJoinScreen({
     setIsEffectsOpen(true);
   }, [
     isCameraPermissionBlocked,
-    shouldSuppressPreviewVideoEffectsForBandwidth,
+    shouldDeferPreviewVideoEffectsPreload,
   ]);
 
   const { data: session } = useSession();
@@ -1155,7 +1160,7 @@ function MobileJoinScreen({
           error={videoEffectsError}
           debugStats={videoEffectsDebugStats}
           activeCount={activeVideoEffectsCount}
-          deferPreload={shouldSuppressPreviewVideoEffectsForBandwidth}
+          deferPreload={shouldDeferPreviewVideoEffectsPreload}
           cameraPermissionBlocked={isCameraPermissionBlocked}
           showFilters={!isCameraPermissionBlocked}
           onToggleCamera={toggleCamera}

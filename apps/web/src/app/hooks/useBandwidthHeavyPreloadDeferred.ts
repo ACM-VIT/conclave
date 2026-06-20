@@ -4,15 +4,14 @@ import { useEffect, useState } from "react";
 import {
   getBrowserNetworkInformation,
   shouldDeferBandwidthHeavyPreload,
+  shouldSuppressBandwidthHeavyVideoEffects,
 } from "../lib/network-information";
 
-export function useBandwidthHeavyPreloadDeferred(): boolean {
-  const [deferred, setDeferred] = useState(() =>
-    shouldDeferBandwidthHeavyPreload(),
-  );
+const useNetworkBoolean = (readValue: () => boolean): boolean => {
+  const [value, setValue] = useState(readValue);
 
   useEffect(() => {
-    const update = () => setDeferred(shouldDeferBandwidthHeavyPreload());
+    const update = () => setValue(readValue());
     const connection = getBrowserNetworkInformation();
 
     update();
@@ -25,7 +24,15 @@ export function useBandwidthHeavyPreloadDeferred(): boolean {
       window.removeEventListener("online", update);
       window.removeEventListener("offline", update);
     };
-  }, []);
+  }, [readValue]);
 
-  return deferred;
+  return value;
+};
+
+export function useBandwidthHeavyPreloadDeferred(): boolean {
+  return useNetworkBoolean(shouldDeferBandwidthHeavyPreload);
+}
+
+export function useBandwidthHeavyVideoEffectsSuppressed(): boolean {
+  return useNetworkBoolean(shouldSuppressBandwidthHeavyVideoEffects);
 }

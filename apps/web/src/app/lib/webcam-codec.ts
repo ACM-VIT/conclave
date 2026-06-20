@@ -123,19 +123,29 @@ const getTrackCaptureSize = (
   }
 };
 
-const getEncodingRank = (
-  encoding: RTCRtpEncodingParameters,
-  index: number,
-): number => {
-  return getEncodingRankFromRid(encoding.rid, index);
+const getEncodingRid = (encoding: unknown): unknown => {
+  if (!encoding || typeof encoding !== "object" || !("rid" in encoding)) {
+    return undefined;
+  }
+  return (encoding as { rid?: unknown }).rid;
 };
 
-const getEncodingRankFromRid = (rid: unknown, index: number): number => {
-  if (typeof rid !== "string") return index;
-  const ridIndex = WEBRTC_ENCODING_ORDER.indexOf(
-    rid as (typeof WEBRTC_ENCODING_ORDER)[number],
+const getEncodingRanks = (
+  encodings: readonly unknown[],
+): number[] => {
+  const presentKnownRids = WEBRTC_ENCODING_ORDER.filter((rid) =>
+    encodings.some((encoding) => getEncodingRid(encoding) === rid),
   );
-  return ridIndex >= 0 ? ridIndex : index;
+  const rankByRid = new Map(
+    presentKnownRids.map((rid, index) => [rid, index] as const),
+  );
+  return encodings.map((encoding, index) => {
+    const rid = getEncodingRid(encoding);
+    if (typeof rid !== "string") return index;
+    return rankByRid.get(
+      rid as (typeof WEBRTC_ENCODING_ORDER)[number],
+    ) ?? index;
+  });
 };
 
 const getBaseEncodingCaps = (
@@ -286,12 +296,10 @@ const applyNetworkProfileToInitialWebcamEncodings = <
   quality: VideoQuality,
   profile: WebcamProducerNetworkProfile,
   captureSize: CaptureSize,
-): T[] =>
-  encodings.map((encoding, index) => {
-    const layerRank = getEncodingRankFromRid(
-      "rid" in encoding ? encoding.rid : undefined,
-      index,
-    );
+): T[] => {
+  const layerRanks = getEncodingRanks(encodings);
+  return encodings.map((encoding, index) => {
+    const layerRank = layerRanks[index] ?? index;
     const adjusted = getProfileAdjustedCap(
       {
         maxBitrate: encoding.maxBitrate,
@@ -318,6 +326,7 @@ const applyNetworkProfileToInitialWebcamEncodings = <
       maxFramerate: adjusted.maxFramerate,
     };
   });
+};
 
 const mergeEncodingCaps = (
   current: RTCRtpEncodingParameters,
@@ -437,8 +446,9 @@ const applyWebcamEncodingCaps = async (
     if (encodings.length > 0) {
       const captureSize = getTrackCaptureSize(producer.track);
       const baseCaps = getBaseEncodingCaps(quality, encodings.length);
+      const layerRanks = getEncodingRanks(encodings);
       const nextEncodings = encodings.map((encoding, index) => {
-        const layerRank = getEncodingRank(encoding, index);
+        const layerRank = layerRanks[index] ?? index;
         const base = baseCaps[layerRank] ?? baseCaps[index] ?? baseCaps[0];
         const adjusted = getProfileAdjustedCap(
           base,

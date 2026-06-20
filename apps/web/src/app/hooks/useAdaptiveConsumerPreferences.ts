@@ -67,6 +67,7 @@ const CONSUMER_SCORE_STALE_AFTER_MS = 15000;
 
 type LayoutRole = {
   primary: boolean;
+  focus: boolean;
   visible: boolean;
   hidden: boolean;
   warm: boolean;
@@ -75,6 +76,7 @@ type LayoutRole = {
 
 type RoomTilingHints = {
   primaryIds: Set<string>;
+  focusIds: Set<string>;
   visibleRemoteIds: Set<string>;
   hiddenIds: Set<string>;
   warmIds: Set<string>;
@@ -198,6 +200,7 @@ const readRoomTilingHints = (): RoomTilingHints | null => {
 
   return {
     primaryIds: new Set(readStringArray(current, "primaryIds")),
+    focusIds: new Set(readStringArray(current, "focusIds")),
     visibleRemoteIds: new Set(readStringArray(current, "visibleRemoteIds")),
     hiddenIds: new Set(readStringArray(current, "hiddenIds")),
     warmIds: new Set(readStringArray(current, "warmIds")),
@@ -217,6 +220,7 @@ const getLayoutRole = (
   if (!hints) return null;
   return {
     primary: hints.primaryIds.has(userId),
+    focus: hints.focusIds.has(userId),
     visible: hints.visibleRemoteIds.has(userId),
     hidden: hints.hiddenIds.has(userId),
     warm: hints.warmIds.has(userId),
@@ -406,10 +410,11 @@ const getDesiredPreferences = (
   const isActiveSpeaker = info.userId === options.activeSpeakerId;
   const layout = options.layout;
   const isPrimary = layout?.primary === true;
+  const isLayoutFocus = layout?.focus === true;
   const isVisible = layout ? layout.visible || isPrimary : true;
   const isWarm = layout?.warm === true;
   const isHidden = layout?.hidden === true && !isVisible;
-  const isFocus = isActiveSpeaker || isPrimary;
+  const isFocus = isActiveSpeaker || isLayoutFocus;
 
   if (options.emergencyMode) {
     if (!options.emergencyKeepVideo) {

@@ -39,7 +39,10 @@ import { useMeetRooms } from "./hooks/useMeetRooms";
 import { useMeetSocket } from "./hooks/useMeetSocket";
 import { useMeetState } from "./hooks/useMeetState";
 import { useMeetTts } from "./hooks/useMeetTts";
-import { useBandwidthHeavyPreloadDeferred } from "./hooks/useBandwidthHeavyPreloadDeferred";
+import {
+  useBandwidthHeavyPreloadDeferred,
+  useBandwidthHeavyVideoEffectsSuppressed,
+} from "./hooks/useBandwidthHeavyPreloadDeferred";
 import {
   useAdaptiveConsumerPreferences,
   type AdaptiveConsumerPreferencesDebugSnapshot,
@@ -566,8 +569,10 @@ export default function MeetsClient({
     () => countActiveVideoEffects(videoEffects),
     [videoEffects],
   );
-  const shouldSuppressVideoEffectsForBandwidth =
+  const shouldDeferVideoEffectsPreload =
     useBandwidthHeavyPreloadDeferred();
+  const shouldSuppressVideoEffectsForBandwidth =
+    useBandwidthHeavyVideoEffectsSuppressed();
   const shouldRunVideoEffects =
     activeVideoEffectsCount > 0 && !shouldSuppressVideoEffectsForBandwidth;
   const [videoEffectsBridgeState, setVideoEffectsBridgeState] =
@@ -1930,7 +1935,7 @@ export default function MeetsClient({
     setIsTtsDisabled,
     setIsDmEnabled,
     setActiveScreenShareId,
-    setVideoQuality,
+    setVideoQuality: setNetworkManagedVideoQuality,
     videoQualityRef: refs.videoQualityRef,
     updateVideoQualityRef,
     requestMediaPermissions,
@@ -2567,7 +2572,7 @@ export default function MeetsClient({
           videoEffectsError={videoEffectsError}
           videoEffectsDebugStats={videoEffectsDebugStats}
           activeVideoEffectsCount={activeVideoEffectsCount}
-          deferVideoEffectsPreload={shouldSuppressVideoEffectsForBandwidth}
+          deferVideoEffectsPreload={shouldDeferVideoEffectsPreload}
           onPrejoinMediaCommit={handlePrejoinMediaCommit}
           isCameraOff={isCameraOff}
           isMuted={isMuted}
@@ -2721,7 +2726,7 @@ export default function MeetsClient({
           videoEffectsError={videoEffectsError}
         videoEffectsDebugStats={videoEffectsDebugStats}
         activeVideoEffectsCount={activeVideoEffectsCount}
-        deferVideoEffectsPreload={shouldSuppressVideoEffectsForBandwidth}
+        deferVideoEffectsPreload={shouldDeferVideoEffectsPreload}
         onDevCameraStreamChange={setDevCameraStream}
         onPrejoinMediaCommit={handlePrejoinMediaCommit}
         isCameraOff={isCameraOff}

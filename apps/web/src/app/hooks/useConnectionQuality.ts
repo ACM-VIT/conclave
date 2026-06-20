@@ -746,11 +746,11 @@ export function useConnectionQuality({
 
     const poll = async () => {
       const browserNetwork = getBrowserNetworkSnapshot();
-      const browserQualityHint = (
+      const startupBrowserQualityHint =
         browserNetwork.quality === "unknown"
           ? browserNetwork.startupQuality
-          : browserNetwork.quality
-      ) as ConnectionQuality;
+          : browserNetwork.quality;
+      const liveBrowserQualityHint = browserNetwork.quality as ConnectionQuality;
       const producerTransport = producerTransportRef.current;
       const consumerTransport = consumerTransportRef.current;
       const transportEntries = [
@@ -783,9 +783,9 @@ export function useConnectionQuality({
           prevReceiveMediaRef.current = null;
           setStats({
             ...UNKNOWN_STATS,
-            quality: browserQualityHint,
-            publishQuality: browserQualityHint,
-            receiveQuality: browserQualityHint,
+            quality: startupBrowserQualityHint,
+            publishQuality: startupBrowserQualityHint,
+            receiveQuality: startupBrowserQualityHint,
             rtcPublishQuality: "unknown",
             rtcReceiveQuality: "unknown",
             emergencyMode: browserNetwork.emergency,
@@ -955,11 +955,11 @@ export function useConnectionQuality({
       });
       const publishQuality = applyBrowserQualityHint(
         observedPublishQuality,
-        browserQualityHint,
+        liveBrowserQualityHint,
       );
       const receiveQuality = applyBrowserQualityHint(
         observedReceiveQuality,
-        browserQualityHint,
+        liveBrowserQualityHint,
       );
       const publishEmergencyMode =
         browserNetwork.emergency || observedPublishEmergencyMode;
