@@ -1039,12 +1039,16 @@ for (const [context, label] of [
       failures.push("web camera producer recovery must rebuild failed transports");
     }
     if (
-      !section.includes("cameraRecoveryCodecOverrideRef.current ??") ||
+      !section.includes(
+        "const recoveryCodecOverride = cameraRecoveryCodecOverrideRef.current",
+      ) ||
+      !section.includes("recoveryCodecOverride ??") ||
       !section.includes("forceSingleLayer,") ||
+      !section.includes("consumedRecoveryPublishOverride") ||
       !section.includes("cameraRecoveryForceSingleLayerRef.current = false")
     ) {
       failures.push(
-        "web camera producer recovery must consume and clear single-layer codec fallback",
+        "web camera producer recovery must consume and clear single-layer codec fallback after attempted publish",
       );
     }
     const transportSectionEnd = section.indexOf("let videoTrack");
@@ -1168,6 +1172,11 @@ assertRegex(
 );
 assertRegex(
   "webAdaptivePublishQuality",
+  /STANDARD_CAPTURE_RESTORE_RETRY_MS[\s\S]*standardCaptureRestoreRetryTimeoutRef[\s\S]*scheduleRestoreRetry[\s\S]*updateInFlightRef\.current[\s\S]*scheduleRestoreRetry\(\)[\s\S]*Adaptive standard camera capture restore failed[\s\S]*scheduleRestoreRetry\(\)/,
+  "web adaptive good-link standard capture restore retries after in-flight or failed restore",
+);
+assertRegex(
+  "webAdaptivePublishQuality",
   /shouldRestoreStableStandardCapture[\s\S]*capRecoveryQuality === "good"[\s\S]*capRecoveryElapsedMs >= GOOD_LIVE_RESTORE_AFTER_MS[\s\S]*currentPublishQuality === "standard"[\s\S]*void restoreStandardCaptureIfNeeded\(\)\.finally\(\(\) => \{[\s\S]*applyLiveProducerProfile\("good"\)[\s\S]*\} else \{[\s\S]*applyStableLiveProfile\(\);/,
   "web adaptive good-link capture restore also restores good publish profiles",
 );
@@ -1219,6 +1228,11 @@ assertRegex(
   "webMeetSocket",
   /status\.state === "reconnected"[\s\S]*PARTICIPANT_RECONNECTED_STATUS_MS[\s\S]*PARTICIPANT_RECONNECTING_STATUS_FALLBACK_MS[\s\S]*PARTICIPANT_RECONNECTING_STATUS_BUFFER_MS/,
   "web reconnecting participant badges expire even if recovery event is missed",
+);
+assertRegex(
+  "webMeetSocket",
+  /status\.state === "reconnected"[\s\S]*!visibleParticipantReconnectingIdsRef\.current\.has\(targetUserId\)[\s\S]*return;[\s\S]*status\.state === "reconnecting"[\s\S]*visibleParticipantReconnectingIdsRef\.current\.add\(targetUserId\)/,
+  "web reconnected badges only show after a visible reconnecting state",
 );
 assertIncludes(
   "sfuConfig",
@@ -1550,8 +1564,13 @@ assertRegex(
 );
 assertRegex(
   "webMeetSocket",
-  /announcedRemoteProducersRef[\s\S]*hasReplacementProducer[\s\S]*announcedRemoteProducersRef\.current\.entries\(\)[\s\S]*if \(!hasReplacementProducer\) \{[\s\S]*UPDATE_STREAM[\s\S]*stream: null[\s\S]*if \(info\.kind === "video" && info\.type === "webcam"\) \{[\s\S]*if \(!hasReplacementProducer\)[\s\S]*UPDATE_CAMERA_OFF[\s\S]*announcedRemoteProducersRef\.current\.set\(data\.producerId, data\)/,
+  /hasLiveReplacementProducer[\s\S]*producerMapRef\.current\.entries\(\)[\s\S]*hasAnnouncedReplacementProducer[\s\S]*announcedRemoteProducersRef\.current\.entries\(\)[\s\S]*const hasReplacementProducer =[\s\S]*hasLiveReplacementProducer \|\| hasAnnouncedReplacementProducer[\s\S]*if \(!hasReplacementProducer\) \{[\s\S]*UPDATE_STREAM[\s\S]*stream: null[\s\S]*if \(info\.kind === "video" && info\.type === "webcam"\) \{[\s\S]*if \(!hasReplacementProducer\)[\s\S]*UPDATE_CAMERA_OFF[\s\S]*announcedRemoteProducersRef\.current\.set\(data\.producerId, data\)/,
   "web producer replacement announcements suppress transient stream and camera-off clears",
+);
+assertRegex(
+  "webMeetSocket",
+  /STALE_REPLACEMENT_CLEANUP_DELAY_MS[\s\S]*staleReplacementCleanupTimeoutsRef[\s\S]*hasConsumedReplacement[\s\S]*if \(hasConsumedReplacement\) return;[\s\S]*hasPendingReplacement[\s\S]*UPDATE_STREAM[\s\S]*stream: null[\s\S]*if \(!hasPendingReplacement\)/,
+  "web stale producer replacement cleanup clears frozen old streams if the replacement never consumes",
 );
 assertRegex(
   "sfuClient",

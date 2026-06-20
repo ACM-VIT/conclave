@@ -87,6 +87,7 @@ const RESTART_ICE_ACK_TIMEOUT_MS = 5000;
 const PARTICIPANT_RECONNECTING_STATUS_FALLBACK_MS = 30000;
 const PARTICIPANT_RECONNECTING_STATUS_BUFFER_MS = 5000;
 const PARTICIPANT_RECONNECTED_STATUS_MS = 4500;
+const STALE_REPLACEMENT_CLEANUP_DELAY_MS = 5000;
 const TURN_URL_PATTERN = /^turns?:/i;
 const TRANSPORT_CC_FEEDBACK_TYPE = "transport-cc";
 
@@ -579,7 +580,11 @@ export function useMeetSocket({
   const participantConnectionStatusTimeoutsRef = useRef<Map<string, number>>(
     new Map(),
   );
+  const visibleParticipantReconnectingIdsRef = useRef<Set<string>>(new Set());
   const staleConsumerRecoveryTimeoutsRef = useRef<Map<string, number>>(
+    new Map(),
+  );
+  const staleReplacementCleanupTimeoutsRef = useRef<Map<string, number>>(
     new Map(),
   );
   const mutedConsumerSinceRef = useRef<Map<string, number>>(new Map());
@@ -921,10 +926,15 @@ export function useMeetSocket({
         window.clearTimeout(timeoutId);
       }
       participantConnectionStatusTimeoutsRef.current.clear();
+      visibleParticipantReconnectingIdsRef.current.clear();
       for (const timeoutId of staleConsumerRecoveryTimeoutsRef.current.values()) {
         window.clearTimeout(timeoutId);
       }
       staleConsumerRecoveryTimeoutsRef.current.clear();
+      for (const timeoutId of staleReplacementCleanupTimeoutsRef.current.values()) {
+        window.clearTimeout(timeoutId);
+      }
+      staleReplacementCleanupTimeoutsRef.current.clear();
       mutedConsumerSinceRef.current.clear();
       producerPausedStateRef.current.clear();
       videoFreezeStatsRef.current.clear();
@@ -1305,7 +1315,19 @@ export function useMeetSocket({
 
   const applyParticipantConnectionStatus = useCallback(
     (targetUserId: string, status: ParticipantConnectionStatus) => {
+      if (
+        status.state === "reconnected" &&
+        !visibleParticipantReconnectingIdsRef.current.has(targetUserId)
+      ) {
+        return;
+      }
+
       clearParticipantConnectionStatusTimer(targetUserId);
+      if (status.state === "reconnecting") {
+        visibleParticipantReconnectingIdsRef.current.add(targetUserId);
+      } else {
+        visibleParticipantReconnectingIdsRef.current.delete(targetUserId);
+      }
       dispatchParticipants({
         type: "UPDATE_CONNECTION_STATUS",
         userId: targetUserId,
@@ -1314,6 +1336,7 @@ export function useMeetSocket({
 
       const clearStatus = () => {
         participantConnectionStatusTimeoutsRef.current.delete(targetUserId);
+        visibleParticipantReconnectingIdsRef.current.delete(targetUserId);
         dispatchParticipants({
           type: "UPDATE_CONNECTION_STATUS",
           userId: targetUserId,
@@ -1356,6 +1379,17 @@ export function useMeetSocket({
     window.clearTimeout(timeoutId);
     staleConsumerRecoveryTimeoutsRef.current.delete(producerId);
   }, []);
+
+  const clearStaleReplacementCleanupTimeout = useCallback(
+    (producerId: string) => {
+      const timeoutId =
+        staleReplacementCleanupTimeoutsRef.current.get(producerId);
+      if (timeoutId == null) return;
+      window.clearTimeout(timeoutId);
+      staleReplacementCleanupTimeoutsRef.current.delete(producerId);
+    },
+    [],
+  );
 
   const setProducerPausedState = useCallback(
     (producerId: string, paused: boolean) => {
@@ -1428,6 +1462,7 @@ export function useMeetSocket({
 
   const handleProducerClosed = useCallback(
     (producerId: string) => {
+      clearStaleReplacementCleanupTimeout(producerId);
       pendingProducersRef.current.delete(producerId);
       consumeRetryAttemptsRef.current.delete(producerId);
       const scheduledRecoveryTimeout =
@@ -1458,14 +1493,15 @@ export function useMeetSocket({
 
       const info = producerMapRef.current.get(producerId);
       if (info) {
-        const hasReplacementProducer =
+        const hasLiveReplacementProducer =
           Array.from(producerMapRef.current.entries()).some(
             ([otherProducerId, otherInfo]) =>
               otherProducerId !== producerId &&
               otherInfo.userId === info.userId &&
               otherInfo.kind === info.kind &&
               otherInfo.type === info.type,
-          ) ||
+          );
+        const hasAnnouncedReplacementProducer =
           Array.from(announcedRemoteProducersRef.current.entries()).some(
             ([otherProducerId, otherInfo]) =>
               otherProducerId !== producerId &&
@@ -1473,6 +1509,8 @@ export function useMeetSocket({
               otherInfo.kind === info.kind &&
               otherInfo.type === info.type,
           );
+        const hasReplacementProducer =
+          hasLiveReplacementProducer || hasAnnouncedReplacementProducer;
 
         if (!hasReplacementProducer) {
           dispatchParticipants({
@@ -1511,6 +1549,60 @@ export function useMeetSocket({
           setActiveScreenShareId(null);
         }
 
+        if (hasReplacementProducer && !hasLiveReplacementProducer) {
+          const timeoutId = window.setTimeout(() => {
+            staleReplacementCleanupTimeoutsRef.current.delete(producerId);
+            const hasConsumedReplacement = Array.from(
+              producerMapRef.current.entries(),
+            ).some(
+              ([otherProducerId, otherInfo]) =>
+                otherProducerId !== producerId &&
+                otherInfo.userId === info.userId &&
+                otherInfo.kind === info.kind &&
+                otherInfo.type === info.type,
+            );
+            if (hasConsumedReplacement) return;
+
+            const hasPendingReplacement = Array.from(
+              announcedRemoteProducersRef.current.entries(),
+            ).some(
+              ([otherProducerId, otherInfo]) =>
+                otherProducerId !== producerId &&
+                otherInfo.producerUserId === info.userId &&
+                otherInfo.kind === info.kind &&
+                otherInfo.type === info.type,
+            );
+
+            dispatchParticipants({
+              type: "UPDATE_STREAM",
+              userId: info.userId,
+              kind: info.kind,
+              streamType: info.type,
+              stream: null,
+              producerId,
+            });
+
+            if (!hasPendingReplacement) {
+              if (info.kind === "video" && info.type === "webcam") {
+                dispatchParticipants({
+                  type: "UPDATE_CAMERA_OFF",
+                  userId: info.userId,
+                  cameraOff: true,
+                });
+              } else if (info.kind === "audio" && info.type === "webcam") {
+                dispatchParticipants({
+                  type: "UPDATE_MUTED",
+                  userId: info.userId,
+                  muted: true,
+                });
+              } else if (info.type === "screen" && info.kind === "video") {
+                setActiveScreenShareId(null);
+              }
+            }
+          }, STALE_REPLACEMENT_CLEANUP_DELAY_MS);
+          staleReplacementCleanupTimeoutsRef.current.set(producerId, timeoutId);
+        }
+
         producerMapRef.current.delete(producerId);
       }
       announcedRemoteProducersRef.current.delete(producerId);
@@ -1529,6 +1621,7 @@ export function useMeetSocket({
       consumerRecoveryInFlightRef,
       producerMapRef,
       announcedRemoteProducersRef,
+      clearStaleReplacementCleanupTimeout,
       setActiveScreenShareId,
     ],
   );
@@ -3686,6 +3779,7 @@ export function useMeetSocket({
                   return next;
                 });
                 clearParticipantConnectionStatusTimer(leftUserId);
+                visibleParticipantReconnectingIdsRef.current.delete(leftUserId);
 
                 const producersToClose = Array.from(
                   producerMapRef.current.entries(),

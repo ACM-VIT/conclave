@@ -2258,6 +2258,7 @@ export function useMeetMedia({
 
     const recoverCameraProducer = async () => {
       let createdTrack: MediaStreamTrack | null = null;
+      let consumedRecoveryPublishOverride = false;
       const hadLiveCameraTrackBeforeRecovery =
         localStreamRef.current
           ?.getVideoTracks()
@@ -2320,9 +2321,11 @@ export function useMeetMedia({
         const quality = videoQualityRef.current;
         const networkProfile = getPublishNetworkProfile();
         const forceSingleLayer = cameraRecoveryForceSingleLayerRef.current;
+        const recoveryCodecOverride = cameraRecoveryCodecOverrideRef.current;
+        consumedRecoveryPublishOverride =
+          forceSingleLayer || recoveryCodecOverride !== null;
         const preferredWebcamCodec =
-          cameraRecoveryCodecOverrideRef.current ??
-          getPreferredWebcamCodec(deviceRef.current);
+          recoveryCodecOverride ?? getPreferredWebcamCodec(deviceRef.current);
         const recoveredProducer = await produceCameraTrackWithRawFallback({
           transport,
           publishTrack,
@@ -2349,8 +2352,6 @@ export function useMeetMedia({
             requestCameraProducerRecovery();
           }
         });
-        cameraRecoveryCodecOverrideRef.current = null;
-        cameraRecoveryForceSingleLayerRef.current = false;
         setIsCameraOff(false);
       } catch (err) {
         console.error("[Meets] Camera producer recovery failed:", err);
@@ -2373,6 +2374,10 @@ export function useMeetMedia({
           setMeetError(createMeetError(err, "MEDIA_ERROR"));
         }
       } finally {
+        if (consumedRecoveryPublishOverride) {
+          cameraRecoveryCodecOverrideRef.current = null;
+          cameraRecoveryForceSingleLayerRef.current = false;
+        }
         cameraRecoveryInFlightRef.current = false;
       }
     };

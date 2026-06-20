@@ -43,6 +43,7 @@ const FAIR_LIVE_CAP_AFTER_MS = 5000;
 const POOR_LIVE_CAP_AFTER_MS = 2500;
 const GOOD_LIVE_RESTORE_AFTER_MS = 15000;
 const MAX_AUTO_UPGRADE_PARTICIPANTS = 4;
+const STANDARD_CAPTURE_RESTORE_RETRY_MS = 1000;
 
 type QualityWindow = {
   quality: ConnectionQuality;
@@ -189,6 +190,7 @@ export function useAdaptivePublishQuality({
     screenAudio: string | null;
   }>({ audio: null, webcam: null, screen: null, screenAudio: null });
   const lastStandardCaptureRestoreSignatureRef = useRef<string | null>(null);
+  const standardCaptureRestoreRetryTimeoutRef = useRef<number | null>(null);
 
   const writeDebugSnapshot = useCallback(
     (now = Date.now()) => {
@@ -346,7 +348,24 @@ export function useAdaptivePublishQuality({
   );
 
   const restoreStandardCaptureIfNeeded = useCallback(async () => {
-    if (isCameraOff || updateInFlightRef.current) return;
+    const scheduleRestoreRetry = () => {
+      if (
+        typeof window === "undefined" ||
+        standardCaptureRestoreRetryTimeoutRef.current !== null
+      ) {
+        return;
+      }
+      standardCaptureRestoreRetryTimeoutRef.current = window.setTimeout(() => {
+        standardCaptureRestoreRetryTimeoutRef.current = null;
+        void restoreStandardCaptureIfNeeded();
+      }, STANDARD_CAPTURE_RESTORE_RETRY_MS);
+    };
+
+    if (isCameraOff) return;
+    if (updateInFlightRef.current) {
+      scheduleRestoreRetry();
+      return;
+    }
     if (videoQualityRef.current !== "standard") return;
 
     const webcamProducer = videoProducerRef.current;
@@ -375,6 +394,7 @@ export function useAdaptivePublishQuality({
         "[Meets] Adaptive standard camera capture restore failed:",
         error,
       );
+      scheduleRestoreRetry();
     } finally {
       updateInFlightRef.current = false;
       writeDebugSnapshot();
@@ -467,6 +487,10 @@ export function useAdaptivePublishQuality({
         screenAudio: null,
       };
       lastStandardCaptureRestoreSignatureRef.current = null;
+      if (standardCaptureRestoreRetryTimeoutRef.current !== null) {
+        window.clearTimeout(standardCaptureRestoreRetryTimeoutRef.current);
+        standardCaptureRestoreRetryTimeoutRef.current = null;
+      }
       writeDebugSnapshot();
       return;
     }
@@ -566,7 +590,13 @@ export function useAdaptivePublishQuality({
 
     evaluate();
     const interval = window.setInterval(evaluate, CHECK_INTERVAL_MS);
-    return () => window.clearInterval(interval);
+    return () => {
+      window.clearInterval(interval);
+      if (standardCaptureRestoreRetryTimeoutRef.current !== null) {
+        window.clearTimeout(standardCaptureRestoreRetryTimeoutRef.current);
+        standardCaptureRestoreRetryTimeoutRef.current = null;
+      }
+    };
   }, [
     applyLiveProducerProfile,
     capRecoveryQuality,
