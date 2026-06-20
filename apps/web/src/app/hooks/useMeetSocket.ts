@@ -2074,6 +2074,7 @@ export function useMeetSocket({
             codecOptions: buildMicrophoneOpusCodecOptions(
               getBrowserPublishNetworkProfile(),
             ),
+            stopTracks: false,
             appData: {
               type: "webcam" as ProducerType,
               paused: shouldPauseAudio,
@@ -4652,7 +4653,15 @@ export function useMeetSocket({
         // otherwise we'd briefly re-enter the call and then clobber the terminal
         // notice ("The host ended the meeting.") with "Failed to reconnect".
         if (intentionalDisconnectRef.current) return;
-        setConnectionState("reconnecting");
+        const shouldSurfaceReconnectState =
+          !shouldDeferTransportRecoveryUntilVisible();
+        if (shouldSurfaceReconnectState) {
+          setConnectionState("reconnecting");
+        } else {
+          console.info(
+            "[Meets] Background reconnect in progress; preserving joined UI state.",
+          );
+        }
         reconnectAttemptsRef.current++;
         const delay =
           RECONNECT_DELAY_MS * 2 ** (reconnectAttemptsRef.current - 1);

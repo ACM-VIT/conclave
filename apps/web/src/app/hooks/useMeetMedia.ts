@@ -1440,6 +1440,7 @@ export function useMeetMedia({
           codecOptions: buildMicrophoneOpusCodecOptions(
             getPublishNetworkProfile(),
           ),
+          stopTracks: false,
           appData: { type: "webcam" as ProducerType, paused: false },
         });
 
@@ -1628,6 +1629,7 @@ export function useMeetMedia({
           codecOptions: buildMicrophoneOpusCodecOptions(
             getPublishNetworkProfile(),
           ),
+          stopTracks: false,
           appData: { type: "webcam" as ProducerType, paused: false },
         });
 

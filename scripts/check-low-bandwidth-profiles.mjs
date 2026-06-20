@@ -104,6 +104,22 @@ assertRegex(
   /ConnectionQuality\.emergency -> 18_000[\s\S]*ConnectionQuality\.poor -> 24_000[\s\S]*ConnectionQuality\.fair -> 32_000/,
   "Android microphone Opus constrained ladder",
 );
+assertRegex(
+  "webMeetSocket",
+  /track: audioTrack,[\s\S]*buildMicrophoneOpusCodecOptions\([\s\S]*stopTracks: false,[\s\S]*type: "webcam" as ProducerType/,
+  "web initial microphone producer must preserve capture tracks during producer cleanup",
+);
+{
+  const mediaAudioProduceMatches =
+    source.webMeetMedia.match(
+      /track: audioTrack,[\s\S]*?buildMicrophoneOpusCodecOptions\([\s\S]*?stopTracks: false,[\s\S]*?type: "webcam" as ProducerType/g,
+    ) ?? [];
+  if (mediaAudioProduceMatches.length < 2) {
+    failures.push(
+      "web mute and audio recovery microphone producers must preserve capture tracks during producer cleanup",
+    );
+  }
+}
 
 // Codec preference should not globally force VP8: Safari/iOS/Android benefit
 // from H264 hardware acceleration, while desktop browsers can still prefer VP8
@@ -1340,6 +1356,11 @@ assertRegex(
   "webMeetSocket",
   /status\.state === "reconnected"[\s\S]*!visibleParticipantReconnectingIdsRef\.current\.has\(targetUserId\)[\s\S]*return;[\s\S]*status\.state === "reconnecting"[\s\S]*visibleParticipantReconnectingIdsRef\.current\.add\(targetUserId\)/,
   "web reconnected badges only show after a visible reconnecting state",
+);
+assertRegex(
+  "webMeetSocket",
+  /const shouldSurfaceReconnectState =[\s\S]*!shouldDeferTransportRecoveryUntilVisible\(\);[\s\S]*if \(shouldSurfaceReconnectState\) \{[\s\S]*setConnectionState\("reconnecting"\);[\s\S]*Background reconnect in progress; preserving joined UI state/,
+  "web hidden-tab reconnect attempts must not surface reconnecting UI state",
 );
 assertRegex(
   "webMeetSocket",
