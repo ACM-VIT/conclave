@@ -93,6 +93,7 @@ const PARTICIPANT_RECONNECTING_STATUS_BUFFER_MS = 5000;
 const PARTICIPANT_RECONNECTED_STATUS_MS = 4500;
 const PRODUCER_CLOSE_REPLACEMENT_GRACE_MS = 1500;
 const STALE_REPLACEMENT_CLEANUP_DELAY_MS = 5000;
+const SCREEN_SHARE_STALE_REPLACEMENT_CLEANUP_DELAY_MS = 1500;
 const TURN_URL_PATTERN = /^turns?:/i;
 const TRANSPORT_CC_FEEDBACK_TYPE = "transport-cc";
 
@@ -1610,6 +1611,10 @@ export function useMeetSocket({
         };
 
         const scheduleStaleReplacementCleanup = () => {
+          const cleanupDelayMs =
+            info.kind === "video" && info.type === "screen"
+              ? SCREEN_SHARE_STALE_REPLACEMENT_CLEANUP_DELAY_MS
+              : STALE_REPLACEMENT_CLEANUP_DELAY_MS;
           const timeoutId = window.setTimeout(() => {
             staleReplacementCleanupTimeoutsRef.current.delete(producerId);
             const latestReplacementState = getMatchingReplacementState();
@@ -1621,7 +1626,7 @@ export function useMeetSocket({
                 latestReplacementState.pendingReplacementProducerId,
               preservePendingScreenShare: false,
             });
-          }, STALE_REPLACEMENT_CLEANUP_DELAY_MS);
+          }, cleanupDelayMs);
           staleReplacementCleanupTimeoutsRef.current.set(producerId, timeoutId);
         };
 

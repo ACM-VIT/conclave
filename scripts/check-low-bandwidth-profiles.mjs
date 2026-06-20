@@ -1858,8 +1858,8 @@ assertRegex(
 );
 assertRegex(
   "webMeetSocket",
-  /const scheduleStaleReplacementCleanup = \(\) => \{[\s\S]*clearClosedProducerState\(\{[\s\S]*latestReplacementState\.hasPendingReplacement[\s\S]*preservePendingScreenShare: false[\s\S]*STALE_REPLACEMENT_CLEANUP_DELAY_MS[\s\S]*else if \(!replacementState\.hasConsumedReplacement\)[\s\S]*scheduleStaleReplacementCleanup\(\);/,
-  "web stale producer replacement cleanup clears frozen old streams if the replacement never consumes",
+  /SCREEN_SHARE_STALE_REPLACEMENT_CLEANUP_DELAY_MS[\s\S]*const scheduleStaleReplacementCleanup = \(\) => \{[\s\S]*const cleanupDelayMs =[\s\S]*info\.kind === "video" && info\.type === "screen"[\s\S]*SCREEN_SHARE_STALE_REPLACEMENT_CLEANUP_DELAY_MS[\s\S]*STALE_REPLACEMENT_CLEANUP_DELAY_MS[\s\S]*clearClosedProducerState\(\{[\s\S]*latestReplacementState\.hasPendingReplacement[\s\S]*preservePendingScreenShare: false[\s\S]*cleanupDelayMs[\s\S]*else if \(!replacementState\.hasConsumedReplacement\)[\s\S]*setActiveScreenShareId\(replacementState\.pendingReplacementProducerId\)[\s\S]*scheduleStaleReplacementCleanup\(\);/,
+  "web stale producer replacement cleanup quickly clears failed screen shares while preserving pending replacements",
 );
 {
   const text = source.webMeetSocket;
