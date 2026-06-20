@@ -22,6 +22,8 @@ const SIDE_ZONE_W = 64;
 const MAIN_ZONE_W = 72;
 const CARET_CLICK_W = 40;
 
+const IN_USE_TOGGLE = "#4F86F7";
+
 type DeviceOption = { deviceId: string; label: string };
 
 function useEnumeratedDevices(active: boolean) {
@@ -175,25 +177,18 @@ export function MediaControlCluster(props: MediaControlClusterProps) {
   const colors = controlButtonColors(variant);
   const sideColors = controlButtonColors("default");
   const isDefaultVariant = variant === "default";
+  
   const mainStyle = {
-    backgroundColor: isDefaultVariant ? "transparent" : colors.bg,
-    borderColor: isDefaultVariant ? "transparent" : colors.border,
+    backgroundColor: isDefaultVariant ? IN_USE_TOGGLE : colors.bg,
+    borderColor: "transparent",
   };
   const sideStyle = {
-    backgroundColor: isDefaultVariant ? "transparent" : sideColors.bg,
-    borderColor: isDefaultVariant ? "transparent" : sideColors.border,
-  };
-  const defaultShellStyle = {
     backgroundColor: sideColors.bg,
-    borderColor: sideColors.border,
+    borderColor: "transparent",
   };
   const caretColor = open ? color.accent : "rgba(250, 250, 250, 0.72)";
-  const sideHoverClass = isDefaultVariant
-    ? "hover:bg-white/[0.06] active:bg-white/[0.04]"
-    : "hover:brightness-110 active:brightness-95";
-  const mainHoverClass = isDefaultVariant
-    ? "hover:bg-white/[0.06] active:bg-white/[0.04]"
-    : "hover:brightness-110 active:brightness-95";
+  const sideHoverClass = "hover:bg-white/[0.06] active:bg-white/[0.04]";
+  const mainHoverClass = "hover:brightness-110 active:brightness-95";
 
   useEffect(() => {
     if (!open) return;
@@ -257,14 +252,6 @@ export function MediaControlCluster(props: MediaControlClusterProps) {
         className={"relative h-12 shrink-0 " + (disabled ? "opacity-35" : "")}
         style={{ width: CLUSTER_W }}
       >
-        {isDefaultVariant ? (
-          <div
-            aria-hidden
-            className="absolute inset-0 rounded-full border"
-            style={defaultShellStyle}
-          />
-        ) : null}
-
         <button
           type="button"
           disabled={disabled}

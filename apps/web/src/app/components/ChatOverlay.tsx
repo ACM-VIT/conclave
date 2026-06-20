@@ -1,7 +1,9 @@
 "use client";
 
 import { memo } from "react";
-import { Lock, MessageSquare, X } from "lucide-react";
+import { Lock, X } from "lucide-react";
+import { Avatar } from "@conclave/ui-tokens/web";
+import { color } from "@conclave/ui-tokens";
 import type { ChatMessage } from "../lib/types";
 import { getActionText } from "../lib/chat-commands";
 import { formatDisplayName } from "../lib/utils";
@@ -13,61 +15,65 @@ interface ChatOverlayProps {
 
 function ChatOverlay({ messages, onDismiss }: ChatOverlayProps) {
   return (
-    <div
-      className="fixed bottom-24 left-4 z-40 flex w-[22rem] max-w-[calc(100vw-1.5rem)] flex-col gap-2"
-      style={{ fontFamily: "'PolySans Trial', sans-serif" }}
-    >
-      {messages.slice(-3).map((message) => (
-        <div
-          key={message.id}
-          className="animate-in slide-in-from-left-full fade-in rounded-xl border border-[#fafafa]/10 bg-[#18181b]/95 p-3 backdrop-blur-md duration-300"
-        >
-          <div className="flex items-start gap-2.5">
-            <div className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-[#fafafa]/[0.06]">
-              <MessageSquare
-                size={14}
-                strokeWidth={1.75}
-                className="text-[#fafafa]/70"
-              />
-            </div>
+    <div className="fixed bottom-24 left-4 z-40 flex w-[21rem] max-w-[calc(100vw-1.5rem)] flex-col gap-2">
+      {messages.slice(-3).map((message) => {
+        const displayName = formatDisplayName(message.displayName || message.userId);
+        const actionText = getActionText(message.content);
+        return (
+          <div
+            key={message.id}
+            className="animate-in slide-in-from-left-full fade-in flex items-start gap-2.5 rounded-2xl border p-2.5 backdrop-blur-md duration-300"
+            style={{
+              backgroundColor: "rgba(24, 24, 27, 0.94)",
+              borderColor: color.border,
+            }}
+          >
+            <Avatar name={displayName} id={message.userId} size={30} className="mt-0.5" />
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-1.5">
-                <p className="truncate text-[12.5px] text-[#fafafa]/60">
-                  {formatDisplayName(message.displayName || message.userId)}
+                <p
+                  className="truncate text-[12.5px] font-medium"
+                  style={{ color: color.text }}
+                >
+                  {displayName}
                 </p>
                 {message.isDirect ? (
-                  <span className="inline-flex shrink-0 items-center gap-1 text-[12.5px] text-[#fbbf24]">
-                    <Lock size={12} strokeWidth={1.75} />
+                  <span
+                    className="inline-flex shrink-0 items-center gap-0.5 text-[11px] font-medium"
+                    style={{ color: color.warning }}
+                  >
+                    <Lock size={11} strokeWidth={2} />
                     Private
                   </span>
                 ) : null}
               </div>
-              {(() => {
-                const actionText = getActionText(message.content);
-                if (!actionText) {
-                  return (
-                    <p className="mt-0.5 break-words text-[14px] leading-snug text-[#fafafa]">
-                      {message.content}
-                    </p>
-                  );
-                }
-                return (
-                  <p className="mt-0.5 break-words text-[13px] italic leading-snug text-[#fafafa]/80">
-                    {actionText}
-                  </p>
-                );
-              })()}
+              {actionText ? (
+                <p
+                  className="mt-0.5 break-words text-[13px] italic leading-snug"
+                  style={{ color: color.textMuted }}
+                >
+                  {actionText}
+                </p>
+              ) : (
+                <p
+                  className="mt-0.5 break-words text-[13.5px] leading-snug"
+                  style={{ color: color.text }}
+                >
+                  {message.content}
+                </p>
+              )}
             </div>
             <button
               onClick={() => onDismiss(message.id)}
-              className="shrink-0 rounded-md p-0.5 text-[#fafafa]/55 transition-colors hover:bg-[#fafafa]/[0.06] hover:text-[#fafafa]"
-              aria-label={`Dismiss message from ${message.displayName}`}
+              className="shrink-0 rounded-md p-1 transition-[background-color,color] duration-[120ms] hover:bg-white/[0.08]"
+              style={{ color: color.textFaint }}
+              aria-label={`Dismiss message from ${displayName}`}
             >
-              <X size={16} strokeWidth={1.75} />
+              <X size={15} strokeWidth={2} />
             </button>
           </div>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }

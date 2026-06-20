@@ -13,6 +13,7 @@ import {
   TRANSPORT_DISCONNECT_GRACE_MS,
   PRODUCER_SYNC_INTERVAL_MS,
   buildMicrophoneOpusCodecOptions,
+  buildScreenShareAudioOpusCodecOptions,
 } from "../lib/constants";
 import type {
   AdminNoticeNotification,
@@ -26,6 +27,7 @@ import type {
   JoinRoomErrorResponse,
   JoinRoomResponse,
   MeetError,
+  Producer,
   MeetingConfigSnapshot,
   MeetingUpdateRequest,
   ParticipantConnectionStatus,
@@ -49,6 +51,9 @@ import { createMeetError, isSystemUserId, normalizeDisplayName } from "../lib/ut
 import { normalizeChatMessage } from "../lib/chat-commands";
 import { telemetry } from "../lib/telemetry";
 import {
+  applyScreenShareTrackNetworkProfile,
+  buildScreenShareEncodingForNetworkProfile,
+  getPreferredScreenShareCodec,
   getPreferredWebcamCodec,
   produceWebcamTrack,
   type WebcamProducerNetworkProfile,
@@ -549,6 +554,7 @@ export function useMeetSocket({
     Map<string, { frames: number; bytes: number; stalls: number }>
   >(new Map());
   const consumerRecoveryInFlightRef = useRef<Set<string>>(new Set());
+  const pendingScreenProducerCloseIdsRef = useRef<Set<string>>(new Set());
   const consumeProducerRef = useRef<
     (producerInfo: ProducerInfo) => Promise<void>
   >(async () => {});
@@ -567,6 +573,8 @@ export function useMeetSocket({
     audioProducerRef,
     videoProducerRef,
     screenProducerRef,
+    screenAudioProducerRef,
+    screenShareStreamRef,
     intentionalLocalProducerCloseIdsRef,
     consumersRef,
     adaptivelyPausedConsumerProducerIdsRef,
@@ -653,6 +661,186 @@ export function useMeetSocket({
     return mergeIceServers(stunIceServers, turnIceServers);
   }, []);
 
+  const stopScreenShareCapture = useCallback(() => {
+    const screenStream = screenShareStreamRef.current;
+    if (!screenStream) return;
+    for (const track of screenStream.getTracks()) {
+      track.onended = null;
+      stopLocalTrack(track);
+    }
+    screenShareStreamRef.current = null;
+  }, [screenShareStreamRef, stopLocalTrack]);
+
+  const emitCloseProducer = useCallback(
+    (producerId: string) => {
+      socketRef.current?.emit("closeProducer", { producerId }, () => {});
+    },
+    [socketRef],
+  );
+
+  const closeProducerOnServer = useCallback(
+    async (producerId: string) => {
+      const socket = socketRef.current;
+      if (!socket?.connected) return;
+
+      await new Promise<void>((resolve) => {
+        let settled = false;
+        const timeoutId = window.setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          resolve();
+        }, 1500);
+
+        socket.emit("closeProducer", { producerId }, () => {
+          if (settled) return;
+          settled = true;
+          window.clearTimeout(timeoutId);
+          resolve();
+        });
+      });
+    },
+    [socketRef],
+  );
+
+  const flushPendingScreenProducerCloses = useCallback(async () => {
+    const producerIds = Array.from(pendingScreenProducerCloseIdsRef.current);
+    pendingScreenProducerCloseIdsRef.current.clear();
+    if (producerIds.length === 0) return;
+    await Promise.all(
+      producerIds.map((producerId) => closeProducerOnServer(producerId)),
+    );
+  }, [closeProducerOnServer]);
+
+  const republishScreenShare = useCallback(
+    async (reason: string): Promise<boolean> => {
+      const screenStream = screenShareStreamRef.current;
+      const videoTrack = getFirstLiveTrack(screenStream?.getVideoTracks() ?? []);
+      if (!screenStream || !videoTrack) {
+        return false;
+      }
+
+      const transport = producerTransportRef.current;
+      if (!transport || transport.closed) {
+        throw new Error("Screen share transport unavailable");
+      }
+
+      await flushPendingScreenProducerCloses();
+
+      if ("contentHint" in videoTrack) {
+        videoTrack.contentHint = "detail";
+      }
+
+      const screenNetworkProfile = getBrowserPublishNetworkProfile();
+      await applyScreenShareTrackNetworkProfile(videoTrack, screenNetworkProfile);
+      const preferredScreenShareCodec = getPreferredScreenShareCodec(
+        deviceRef.current,
+      );
+      const producer = await transport.produce({
+        track: videoTrack,
+        encodings: [
+          buildScreenShareEncodingForNetworkProfile(screenNetworkProfile),
+        ],
+        stopTracks: false,
+        ...(preferredScreenShareCodec ? { codec: preferredScreenShareCodec } : {}),
+        appData: { type: "screen" as ProducerType },
+      });
+
+      screenProducerRef.current = producer;
+      setIsScreenSharing(true);
+      setActiveScreenShareId(producer.id);
+      console.log(`[Meets] Republished screen share after ${reason}`);
+
+      producer.on("transportclose", () => {
+        if (screenProducerRef.current?.id === producer.id) {
+          screenProducerRef.current = null;
+        }
+      });
+
+      let screenVideoEnded = false;
+      const closeScreenAudioProducer = (audioProducer: Producer) => {
+        emitCloseProducer(audioProducer.id);
+        try {
+          audioProducer.close();
+        } catch {}
+        if (audioProducer.track) {
+          audioProducer.track.onended = null;
+        }
+        if (screenAudioProducerRef.current?.id === audioProducer.id) {
+          screenAudioProducerRef.current = null;
+        }
+      };
+      const finishScreenShare = () => {
+        if (screenVideoEnded) return;
+        screenVideoEnded = true;
+        emitCloseProducer(producer.id);
+        try {
+          producer.close();
+        } catch {}
+        if (screenProducerRef.current?.id === producer.id) {
+          screenProducerRef.current = null;
+        }
+        const audioProducer = screenAudioProducerRef.current;
+        if (audioProducer) {
+          closeScreenAudioProducer(audioProducer);
+        }
+        stopScreenShareCapture();
+        setIsScreenSharing(false);
+        setActiveScreenShareId(null);
+      };
+      videoTrack.onended = finishScreenShare;
+
+      const audioTrack = getFirstLiveTrack(screenStream.getAudioTracks());
+      if (audioTrack) {
+        try {
+          const audioProducer = await transport.produce({
+            track: audioTrack,
+            codecOptions: buildScreenShareAudioOpusCodecOptions(
+              screenNetworkProfile,
+            ),
+            stopTracks: false,
+            appData: { type: "screen" as ProducerType },
+          });
+          if (
+            screenVideoEnded ||
+            videoTrack.readyState !== "live" ||
+            screenShareStreamRef.current !== screenStream
+          ) {
+            if (!screenVideoEnded) {
+              finishScreenShare();
+            }
+            closeScreenAudioProducer(audioProducer);
+            return true;
+          }
+          screenAudioProducerRef.current = audioProducer;
+          audioProducer.on("transportclose", () => {
+            if (screenAudioProducerRef.current?.id === audioProducer.id) {
+              screenAudioProducerRef.current = null;
+            }
+          });
+          audioTrack.onended = () => {
+            closeScreenAudioProducer(audioProducer);
+          };
+        } catch (audioErr) {
+          console.warn("[Meets] Failed to restore screen share audio:", audioErr);
+        }
+      }
+
+      return true;
+    },
+    [
+      deviceRef,
+      emitCloseProducer,
+      flushPendingScreenProducerCloses,
+      producerTransportRef,
+      screenAudioProducerRef,
+      screenProducerRef,
+      screenShareStreamRef,
+      setActiveScreenShareId,
+      setIsScreenSharing,
+      stopScreenShareCapture,
+    ],
+  );
+
   const cleanupRoomResources = useCallback(
     (options?: { resetRoomId?: boolean; preserveMeetingState?: boolean }) => {
       const resetRoomId = options?.resetRoomId !== false;
@@ -710,6 +898,25 @@ export function useMeetSocket({
         serverRoomIdRef.current = null;
       }
 
+      const shouldPreserveScreenShare =
+        preserveMeetingState &&
+        Boolean(
+          getFirstLiveTrack(
+            screenShareStreamRef.current?.getVideoTracks() ?? [],
+          ),
+        );
+
+      if (shouldPreserveScreenShare) {
+        const screenProducerId = screenProducerRef.current?.id;
+        const screenAudioProducerId = screenAudioProducerRef.current?.id;
+        if (screenProducerId) {
+          pendingScreenProducerCloseIdsRef.current.add(screenProducerId);
+        }
+        if (screenAudioProducerId) {
+          pendingScreenProducerCloseIdsRef.current.add(screenAudioProducerId);
+        }
+      }
+
       try {
         audioProducerRef.current?.close();
       } catch {}
@@ -719,9 +926,13 @@ export function useMeetSocket({
       try {
         screenProducerRef.current?.close();
       } catch {}
+      try {
+        screenAudioProducerRef.current?.close();
+      } catch {}
       audioProducerRef.current = null;
       videoProducerRef.current = null;
       screenProducerRef.current = null;
+      screenAudioProducerRef.current = null;
 
       try {
         producerTransportRef.current?.close();
@@ -745,7 +956,12 @@ export function useMeetSocket({
       if (!preserveMeetingState) {
         dispatchParticipants({ type: "CLEAR_ALL" });
       }
-      setIsScreenSharing(false);
+      if (shouldPreserveScreenShare) {
+        setIsScreenSharing(true);
+      } else {
+        stopScreenShareCapture();
+        setIsScreenSharing(false);
+      }
       if (!preserveMeetingState) {
         setActiveScreenShareId(null);
         setIsHandRaised(false);
@@ -773,7 +989,9 @@ export function useMeetSocket({
       producerMapRef,
       producerTransportRef,
       serverRoomIdRef,
+      screenAudioProducerRef,
       screenProducerRef,
+      screenShareStreamRef,
       intentionalLocalProducerCloseIdsRef,
       setActiveScreenShareId,
       setDisplayNames,
@@ -805,6 +1023,7 @@ export function useMeetSocket({
       mutedConsumerSinceRef,
       producerPausedStateRef,
       consumerRecoveryInFlightRef,
+      stopScreenShareCapture,
     ],
   );
 
@@ -2711,6 +2930,23 @@ export function useMeetSocket({
               );
 
               await Promise.all([producePromise, ...consumePromises]);
+              try {
+                await republishScreenShare("reconnect");
+              } catch (screenErr) {
+                console.warn(
+                  "[Meets] Failed to restore screen share after reconnect:",
+                  screenErr,
+                );
+                stopScreenShareCapture();
+                setIsScreenSharing(false);
+                setActiveScreenShareId(null);
+                setMeetError({
+                  code: "TRANSPORT_ERROR",
+                  message:
+                    "Reconnected, but screen sharing could not be restored. Please share again.",
+                  recoverable: true,
+                });
+              }
               await flushPendingProducers();
 
               setConnectionState("joined");
@@ -2748,10 +2984,15 @@ export function useMeetSocket({
       produce,
       consumeProducer,
       flushPendingProducers,
+      republishScreenShare,
+      stopScreenShareCapture,
       playNotificationSound,
       startProducerSync,
       syncProducers,
+      setActiveScreenShareId,
       setIsRoomLocked,
+      setIsScreenSharing,
+      setMeetError,
       setIsTtsDisabled,
       setIsChatLocked,
       setIsDmEnabled,
@@ -3143,15 +3384,24 @@ export function useMeetSocket({
                   }
 
                   if (localScreenProducer?.id === producerId) {
-                    if (localScreenProducer.track) {
-                      localScreenProducer.track.stop();
-                    }
                     try {
                       localScreenProducer.close();
                     } catch {}
+                    const localScreenAudioProducer = screenAudioProducerRef.current;
+                    if (localScreenAudioProducer) {
+                      emitCloseProducer(localScreenAudioProducer.id);
+                      try {
+                        localScreenAudioProducer.close();
+                      } catch {}
+                      if (localScreenAudioProducer.track) {
+                        localScreenAudioProducer.track.onended = null;
+                      }
+                      screenAudioProducerRef.current = null;
+                    }
                     if (screenProducerRef.current?.id === producerId) {
                       screenProducerRef.current = null;
                     }
+                    stopScreenShareCapture();
                     setIsScreenSharing(false);
                     setActiveScreenShareId(null);
                     return;
@@ -3552,9 +3802,7 @@ export function useMeetSocket({
                     setIsCameraOff(true);
                   } else if (entry.type === "screen" && entry.kind === "video") {
                     const producer = screenProducerRef.current;
-                    const track = producer?.track ?? null;
                     if (producer?.id === entry.producerId) {
-                      stopLocalTrack(track);
                       try {
                         producer.close();
                       } catch {}
@@ -3562,6 +3810,20 @@ export function useMeetSocket({
                         screenProducerRef.current = null;
                       }
                     }
+                    const audioProducer = screenAudioProducerRef.current;
+                    if (audioProducer) {
+                      emitCloseProducer(audioProducer.id);
+                      try {
+                        audioProducer.close();
+                      } catch {}
+                      if (audioProducer.track) {
+                        audioProducer.track.onended = null;
+                      }
+                      if (screenAudioProducerRef.current?.id === audioProducer.id) {
+                        screenAudioProducerRef.current = null;
+                      }
+                    }
+                    stopScreenShareCapture();
                     setIsScreenSharing(false);
                     setActiveScreenShareId(null);
                   }
@@ -4026,6 +4288,7 @@ export function useMeetSocket({
       currentRoomIdRef,
       deviceRef,
       dispatchParticipants,
+      emitCloseProducer,
       handleLocalTrackEnded,
       handleProducerClosed,
       handleRedirectRef,
@@ -4054,6 +4317,7 @@ export function useMeetSocket({
       applyWebinarFeedProducers,
       producerMapRef,
       reconnectAttemptsRef,
+      screenAudioProducerRef,
       screenProducerRef,
       setActiveScreenShareId,
       setConnectionState,
@@ -4078,6 +4342,7 @@ export function useMeetSocket({
       setWaitingMessage,
       setNetworkManagedVideoQuality,
       socketRef,
+      stopScreenShareCapture,
       stopLocalTrack,
       syncProducers,
       setProducerPausedState,

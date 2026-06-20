@@ -46,6 +46,7 @@ export function useMeetRefs() {
   const videoProducerRef = useRef<Producer | null>(null);
   const screenProducerRef = useRef<Producer | null>(null);
   const screenAudioProducerRef = useRef<Producer | null>(null);
+  const screenShareStreamRef = useRef<MediaStream | null>(null);
   const intentionalLocalProducerCloseIdsRef = useRef<Set<string>>(new Set());
   const consumersRef = useRef<Map<string, Consumer>>(new Map());
   const adaptivelyPausedConsumerProducerIdsRef = useRef<Set<string>>(
@@ -119,6 +120,7 @@ export function useMeetRefs() {
     videoProducerRef,
     screenProducerRef,
     screenAudioProducerRef,
+    screenShareStreamRef,
     intentionalLocalProducerCloseIdsRef,
     consumersRef,
     adaptivelyPausedConsumerProducerIdsRef,
