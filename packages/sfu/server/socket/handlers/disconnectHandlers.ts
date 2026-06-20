@@ -223,6 +223,7 @@ export const registerDisconnectHandlers = (
           finalizeDisconnect,
         );
         if (
+          reason !== "ping timeout" &&
           !context.currentClient.isGhost &&
           !context.currentClient.isWebinarAttendee
         ) {

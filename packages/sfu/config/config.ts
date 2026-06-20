@@ -319,7 +319,7 @@ export const config = {
     }),
     disconnectGraceMs: toNumber(
       process.env.SFU_SOCKET_DISCONNECT_GRACE_MS,
-      15000,
+      30000,
       { min: 0 },
     ),
     recoveryMaxDisconnectionMs: toNumber(

@@ -34,6 +34,7 @@ const files = {
   androidReachability:
     "apps/conclave-skip/Sources/Conclave/Skip/NetworkReachabilityMonitor.kt",
   sfuRoom: "packages/sfu/config/classes/Room.ts",
+  sfuConfig: "packages/sfu/config/config.ts",
   sfuDisconnectHandlers:
     "packages/sfu/server/socket/handlers/disconnectHandlers.ts",
 };
@@ -243,6 +244,36 @@ assertIncludes(
   "if (browserNetwork.emergency || browserNetwork.saveData === true)",
   "web live browser hints only force adaptation for emergency/save-data",
 );
+assertIncludes(
+  "webConnectionQuality",
+  "const hasBandwidthQualityLimitation = (reason: string | null): boolean =>",
+  "web connection quality ignores non-network encoder limitations",
+);
+assertNotIncludes(
+  "webConnectionQuality",
+  'reason === "cpu"',
+  "web CPU encoder limitation must not drive network downgrades",
+);
+assertIncludes(
+  "webAdaptiveConsumerPreferences",
+  "const MAX_WEBCAMS_TO_KEEP_FULL_ON_GOOD_LINKS = 4;",
+  "web good-link rooms keep small calls at full webcam layers",
+);
+assertIncludes(
+  "webAdaptiveConsumerPreferences",
+  "isVisible ? bounds.maxTemporalLayer : 0",
+  "web visible good-link tiles keep max temporal layer",
+);
+assertIncludes(
+  "webAdaptiveConsumerPreferences",
+  "paused: quality === \"poor\"",
+  "web hidden consumers stay warm unless receive quality is poor",
+);
+assertIncludes(
+  "webConstants",
+  "export const BACKGROUND_TRANSPORT_DISCONNECT_GRACE_MS = 18000;",
+  "web background transport disconnect grace",
+);
 assertRegex(
   "webMeetClient",
   /const browserPublishRecoveryQuality = selfConnectionStats\.browserNetwork[\s\S]*browserPublishRecoveryQuality === "good"[\s\S]*\? "good"[\s\S]*: selfPublishQuality/,
@@ -299,6 +330,16 @@ assertIncludes(
   "sfuDisconnectHandlers",
   "const reconnectNoticeDelayMs = Math.max(0, graceMs - 1000);",
   "SFU reconnect badge appears only at the end of disconnect grace",
+);
+assertIncludes(
+  "sfuConfig",
+  "30000",
+  "SFU socket disconnect grace tolerates backgrounded tabs",
+);
+assertIncludes(
+  "sfuDisconnectHandlers",
+  'reason !== "ping timeout"',
+  "SFU suppresses ambiguous ping-timeout reconnect badges",
 );
 assertIncludes(
   "iosWebrtc",

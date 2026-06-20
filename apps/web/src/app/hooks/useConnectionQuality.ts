@@ -579,8 +579,8 @@ const buildDirectionMediaStats = (
   video: buildMediaTrackStats({ kind: "video", current, previous }),
 });
 
-const hasEncoderQualityLimitation = (reason: string | null): boolean =>
-  reason === "bandwidth" || reason === "cpu" || reason === "other";
+const hasBandwidthQualityLimitation = (reason: string | null): boolean =>
+  reason === "bandwidth";
 
 const getDirectionMediaBitrate = (
   stats: DirectionMediaQualityStats,
@@ -610,7 +610,7 @@ function deriveDirectionalQuality({
   poorBitrate: number;
   qualityLimitationReason?: string | null;
 }): ConnectionQuality {
-  const encoderLimited = hasEncoderQualityLimitation(
+  const bandwidthLimited = hasBandwidthQualityLimitation(
     qualityLimitationReason ?? null,
   );
   if (
@@ -618,7 +618,7 @@ function deriveDirectionalQuality({
     packetLoss == null &&
     jitterMs == null &&
     availableBitrate == null &&
-    !encoderLimited
+    !bandwidthLimited
   ) {
     return "unknown";
   }
@@ -631,7 +631,7 @@ function deriveDirectionalQuality({
       availableBitrate,
       poorBitrate,
       mediaBitrate,
-      encoderLimited,
+      bandwidthLimited,
     );
   if (isPoor) return "poor";
 
@@ -643,9 +643,9 @@ function deriveDirectionalQuality({
       availableBitrate,
       fairBitrate,
       mediaBitrate,
-      encoderLimited,
+      bandwidthLimited,
     ) ||
-    encoderLimited;
+    bandwidthLimited;
   if (isFair) return "fair";
 
   return "good";
@@ -668,7 +668,7 @@ function deriveDirectionalEmergencyMode({
   emergencyBitrate: number;
   qualityLimitationReason?: string | null;
 }): boolean {
-  const encoderLimited = hasEncoderQualityLimitation(
+  const bandwidthLimited = hasBandwidthQualityLimitation(
     qualityLimitationReason ?? null,
   );
 
@@ -680,7 +680,7 @@ function deriveDirectionalEmergencyMode({
       availableBitrate,
       emergencyBitrate,
       mediaBitrate,
-      encoderLimited,
+      bandwidthLimited,
     )
   ) {
     return true;
@@ -689,7 +689,11 @@ function deriveDirectionalEmergencyMode({
   // Some browsers report a sender-side bandwidth limitation but omit
   // availableOutgoingBitrate. If the actual media stream is already below the
   // emergency ceiling, switch to emergency rather than lingering in "poor".
-  return encoderLimited && mediaBitrate != null && mediaBitrate <= emergencyBitrate;
+  return (
+    bandwidthLimited &&
+    mediaBitrate != null &&
+    mediaBitrate <= emergencyBitrate
+  );
 }
 
 const qualityRank: Record<ConnectionQuality, number> = {

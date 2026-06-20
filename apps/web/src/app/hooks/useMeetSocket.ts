@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef } from "react";
 import type { Socket } from "socket.io-client";
 import type { Device } from "mediasoup-client";
 import {
+  BACKGROUND_TRANSPORT_DISCONNECT_GRACE_MS,
   MAX_RECONNECT_ATTEMPTS,
   MEETS_ICE_SERVERS,
   MEETS_TURN_ICE_SERVERS,
@@ -92,6 +93,13 @@ const getBrowserPublishNetworkProfile = (): WebcamProducerNetworkProfile => {
   if (quality === "poor") return "poor";
   if (quality === "fair") return "fair";
   return "good";
+};
+
+const getTransportDisconnectGraceMs = (): number => {
+  if (typeof document !== "undefined" && document.visibilityState !== "visible") {
+    return BACKGROUND_TRANSPORT_DISCONNECT_GRACE_MS;
+  }
+  return TRANSPORT_DISCONNECT_GRACE_MS;
 };
 
 type InitialConsumerPreferences = {
@@ -1630,7 +1638,7 @@ export function useMeetSocket({
                           }
                         });
                       }
-                    }, TRANSPORT_DISCONNECT_GRACE_MS);
+                    }, getTransportDisconnectGraceMs());
                 }
                 return;
               }
@@ -1805,7 +1813,7 @@ export function useMeetSocket({
                           }
                         });
                       }
-                    }, TRANSPORT_DISCONNECT_GRACE_MS);
+                    }, getTransportDisconnectGraceMs());
                 }
                 return;
               }
@@ -2743,17 +2751,12 @@ export function useMeetSocket({
       if (!currentRoomIdRef.current) return;
 
       const socket = socketRef.current;
-      const hasBrokenTransport = [
+      const hasTerminalTransportFailure = [
         producerTransportRef.current?.connectionState,
         consumerTransportRef.current?.connectionState,
-      ].some(
-        (state) =>
-          state === "closed" ||
-          state === "disconnected" ||
-          state === "failed",
-      );
+      ].some((state) => state === "closed" || state === "failed");
 
-      if (!socket?.connected || hasBrokenTransport) {
+      if (!socket?.connected || hasTerminalTransportFailure) {
         console.log(`[Meets] ${reason} recovery triggered reconnect.`);
         handleReconnectRef.current?.();
         return;
