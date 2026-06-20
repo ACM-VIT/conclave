@@ -236,6 +236,10 @@ export function useMeetMedia({
   const cameraRecoveryInFlightRef = useRef(false);
   const [cameraProducerRecoveryPulse, setCameraProducerRecoveryPulse] =
     useState(0);
+  const connectionStateRef = useRef(connectionState);
+  if (connectionStateRef.current !== connectionState) {
+    connectionStateRef.current = connectionState;
+  }
   const toggleMuteInFlightRef = useRef(false);
   const [isMuteTogglePending, setIsMuteTogglePending] = useState(false);
   const toggleCameraInFlightRef = useRef(false);
@@ -510,18 +514,17 @@ export function useMeetMedia({
           audioProducerRef.current = null;
         }
       } else {
-        setIsCameraOff(true);
         const producer = videoProducerRef.current;
         if (producer) {
-          socketRef.current?.emit(
-            "closeProducer",
-            { producerId: producer.id },
-            () => {}
+          closeLocalVideoProducerForReplacement(producer);
+        }
+        if (connectionStateRef.current === "joined") {
+          console.warn(
+            "[Meets] Local video track ended unexpectedly; recovering camera producer.",
           );
-          try {
-            producer.close();
-          } catch {}
-          videoProducerRef.current = null;
+          setCameraProducerRecoveryPulse((value) => value + 1);
+        } else {
+          setIsCameraOff(true);
         }
       }
 
@@ -533,12 +536,14 @@ export function useMeetMedia({
     },
     [
       consumeIntentionalStop,
+      closeLocalVideoProducerForReplacement,
       setIsMuted,
       setIsCameraOff,
       setLocalStream,
       audioProducerRef,
       videoProducerRef,
       socketRef,
+      setCameraProducerRecoveryPulse,
     ]
   );
 

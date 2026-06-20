@@ -386,6 +386,30 @@ assertIncludes(
 );
 {
   const text = source.webMeetMedia;
+  const start = text.indexOf("const handleLocalTrackEnded = useCallback(");
+  const end = text.indexOf("const requestMediaPermissions = useCallback", start);
+  if (start < 0 || end < 0) {
+    failures.push("web local track-ended handler missing");
+  } else {
+    const section = compact(text.slice(start, end));
+    if (
+      !section.includes(
+        'connectionStateRef.current === "joined") { console.warn( "[Meets] Local video track ended unexpectedly; recovering camera producer."',
+      )
+    ) {
+      failures.push(
+        "web unexpected camera track ends must preserve camera intent in joined meetings",
+      );
+    }
+    if (!section.includes("setCameraProducerRecoveryPulse((value) => value + 1)")) {
+      failures.push(
+        "web unexpected camera track ends must trigger producer recovery",
+      );
+    }
+  }
+}
+{
+  const text = source.webMeetMedia;
   const start = text.indexOf("const updateVideoQuality = useCallback(");
   const end = text.indexOf(
     "useEffect(() => {\n    updateVideoQualityRef.current = updateVideoQuality;",
