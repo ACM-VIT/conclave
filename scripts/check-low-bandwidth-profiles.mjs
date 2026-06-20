@@ -757,7 +757,7 @@ for (const [context, label] of [
 }
 assertRegex(
   "webMeetMedia",
-  /const recoverAudioProducer = async \(\) => \{[\s\S]*const removeCreatedTrackFromLocalStream = \(\) => \{[\s\S]*stopLocalTrack\(createdTrack\);[\s\S]*createdTrack = null;[\s\S]*if \(cancelled\) \{[\s\S]*audioProducer\.close\(\);[\s\S]*removeCreatedTrackFromLocalStream\(\);[\s\S]*catch \(err\) \{[\s\S]*removeCreatedTrackFromLocalStream\(\);/,
+  /let createdTrack: MediaStreamTrack \| null = null;[\s\S]*const removeCreatedTrackFromLocalStream = \(\) => \{[\s\S]*stopLocalTrack\(createdTrack\);[\s\S]*createdTrack = null;[\s\S]*audioRecoveryInFlightRef\.current = true;[\s\S]*const recoverAudioProducer = async \(\) => \{[\s\S]*if \(cancelled\) \{[\s\S]*audioProducer\.close\(\);[\s\S]*removeCreatedTrackFromLocalStream\(\);[\s\S]*catch \(err\) \{[\s\S]*removeCreatedTrackFromLocalStream\(\);[\s\S]*return \(\) => \{[\s\S]*cancelled = true;[\s\S]*removeCreatedTrackFromLocalStream\(\);/,
   "web cancelled audio recovery stops recovery-created mic tracks",
 );
 assertRegex(
@@ -937,7 +937,10 @@ assertRegex(
       !section.includes("if (createdTrack)") ||
       !section.includes("localStreamRef.current = nextStream;") ||
       !section.includes("setLocalStream(nextStream);") ||
-      !section.includes("if (!hadLiveAudioTrackBeforeRecovery)") ||
+      !section.includes("!hadLiveAudioTrackBeforeRecovery &&") ||
+      !section.includes(
+        "shouldDisableMediaIntentAfterRecoveryFailure(err, meetErr)",
+      ) ||
       section.includes("existingAudioTracks.forEach((track) =>")
     ) {
       failures.push(
@@ -1073,6 +1076,33 @@ assertRegex(
   ) {
     failures.push(
       "web producer transport-close handlers must use queued recovery requests, not raw pulses",
+    );
+  }
+  if (
+    !/let createdTrack: MediaStreamTrack \| null = null;[\s\S]*const removeCreatedTrackFromLocalStream = \(\) => \{[\s\S]*audioRecoveryInFlightRef\.current = true;[\s\S]*const recoverAudioProducer = async \(\) => \{[\s\S]*const audioProducer = await transport\.produce[\s\S]*if \(cancelled\) \{[\s\S]*removeCreatedTrackFromLocalStream\(\);[\s\S]*audioProducerRef\.current = audioProducer;[\s\S]*createdTrack = null;[\s\S]*return \(\) => \{[\s\S]*cancelled = true;[\s\S]*removeCreatedTrackFromLocalStream\(\);/.test(
+      mediaText,
+    )
+  ) {
+    failures.push(
+      "web audio recovery must stop recovery-created mic tracks immediately on effect cancellation",
+    );
+  }
+  if (
+    !/let createdTrack: MediaStreamTrack \| null = null;[\s\S]*const removeCreatedTrackFromLocalStream = \(\) => \{[\s\S]*cameraRecoveryInFlightRef\.current = true;[\s\S]*const recoverCameraProducer = async \(\) => \{[\s\S]*const recoveredProducer = await produceCameraTrackWithRawFallback[\s\S]*if \(cancelled\) \{[\s\S]*removeCreatedTrackFromLocalStream\(\);[\s\S]*videoProducerRef\.current = recoveredProducer;[\s\S]*createdTrack = null;[\s\S]*return \(\) => \{[\s\S]*cancelled = true;[\s\S]*removeCreatedTrackFromLocalStream\(\);/.test(
+      mediaText,
+    )
+  ) {
+    failures.push(
+      "web camera recovery must stop recovery-created video tracks immediately on effect cancellation",
+    );
+  }
+  if (
+    !/shouldDisableMediaIntentAfterRecoveryFailure[\s\S]*meetError\.code === "PERMISSION_DENIED"[\s\S]*NotFoundError[\s\S]*Audio producer recovery failed[\s\S]*const meetErr = createMeetError\(err, "MEDIA_ERROR"\);[\s\S]*!hadLiveAudioTrackBeforeRecovery &&[\s\S]*shouldDisableMediaIntentAfterRecoveryFailure\(err, meetErr\)[\s\S]*setIsMuted\(true\);[\s\S]*Camera producer recovery failed[\s\S]*const meetErr = createMeetError\(err, "MEDIA_ERROR"\);[\s\S]*!hadLiveCameraTrackBeforeRecovery &&[\s\S]*shouldDisableMediaIntentAfterRecoveryFailure\(err, meetErr\)[\s\S]*setIsCameraOff\(true\);/.test(
+      mediaText,
+    )
+  ) {
+    failures.push(
+      "web media recovery must preserve mic/camera intent on transient producer failures",
     );
   }
 
@@ -1301,8 +1331,8 @@ assertRegex(
   );
   assertRegex(
     "webMeetMedia",
-    /framesPerSecond: number \| null[\s\S]*currentFramesPerSecond = getRtcStatsNumber\(stat, "framesPerSecond"\)[\s\S]*When frame counters exist, flat frames alone are not enough to prove a[\s\S]*sample\.frames > previous\.frames[\s\S]*sample\.framesPerSecond !== null[\s\S]*sample\.bytes - previous\.bytes >= MIN_OUTBOUND_VIDEO_BYTE_DELTA_FOR_PROGRESS[\s\S]*return false;[\s\S]*return true;/,
-    "web camera sender watchdog must not recreate producers from quiet/static frame counters",
+    /framesPerSecond: number \| null[\s\S]*currentFramesPerSecond = getRtcStatsNumber\(stat, "framesPerSecond"\)[\s\S]*When frame counters exist, they are the strongest signal[\s\S]*sample\.frames > previous\.frames[\s\S]*sample\.framesPerSecond !== null[\s\S]*return true;[\s\S]*return false;[\s\S]*previous\.bytes !== null[\s\S]*sample\.bytes - previous\.bytes >= MIN_OUTBOUND_VIDEO_BYTE_DELTA_FOR_PROGRESS[\s\S]*return true;/,
+    "web camera sender watchdog must treat flat frame counters as stalled video",
   );
   assertRegex(
     "webMeetMedia",
@@ -1326,7 +1356,7 @@ assertRegex(
   );
   assertRegex(
     "webMeetMedia",
-    /const recoverCameraProducer = async \(\) => \{[\s\S]*const removeCreatedTrackFromLocalStream = \(\) => \{[\s\S]*stopLocalTrack\(createdTrack\);[\s\S]*createdTrack = null;[\s\S]*if \(cancelled\) \{[\s\S]*recoveredProducer\.close\(\);[\s\S]*removeCreatedTrackFromLocalStream\(\);[\s\S]*catch \(err\) \{[\s\S]*removeCreatedTrackFromLocalStream\(\);/,
+    /let createdTrack: MediaStreamTrack \| null = null;[\s\S]*const removeCreatedTrackFromLocalStream = \(\) => \{[\s\S]*stopLocalTrack\(createdTrack\);[\s\S]*createdTrack = null;[\s\S]*cameraRecoveryInFlightRef\.current = true;[\s\S]*const recoverCameraProducer = async \(\) => \{[\s\S]*if \(cancelled\) \{[\s\S]*recoveredProducer\.close\(\);[\s\S]*removeCreatedTrackFromLocalStream\(\);[\s\S]*catch \(err\) \{[\s\S]*removeCreatedTrackFromLocalStream\(\);[\s\S]*return \(\) => \{[\s\S]*cancelled = true;[\s\S]*removeCreatedTrackFromLocalStream\(\);/,
     "web cancelled camera recovery stops recovery-created camera tracks",
   );
   assertRegex(
@@ -1595,6 +1625,11 @@ assertRegex(
   "webMeetSocket",
   /const shouldSurfaceReconnectState =[\s\S]*!shouldDeferTransportRecoveryUntilVisible\(\);[\s\S]*if \(shouldSurfaceReconnectState\) \{[\s\S]*setConnectionState\("reconnecting"\);[\s\S]*Background reconnect in progress; preserving joined UI state/,
   "web hidden-tab reconnect attempts must not surface reconnecting UI state",
+);
+assertRegex(
+  "webMeetSocket",
+  /const handleReconnect = useCallback\(async \(\) => \{[\s\S]*reconnectInFlightRef\.current = true;[\s\S]*const shouldSurfaceReconnectState =[\s\S]*cleanupRoomResources\(\{[\s\S]*preserveMeetingState: true[\s\S]*await joinRoomInternal[\s\S]*\} finally \{[\s\S]*reconnectInFlightRef\.current = false;/,
+  "web hidden-tab reconnect keeps internal media recovery blocked across cleanup and rejoin",
 );
 assertRegex(
   "webMeetSocket",
