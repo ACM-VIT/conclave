@@ -879,13 +879,15 @@ assertRegex(
       );
     }
     if (
+      !section.includes("const currentStream = localStreamRef.current ?? localStream;") ||
+      !section.includes("if (!currentStream) return;") ||
       !section.includes("const currentTrack = getFirstLiveTrack(") ||
       !section.includes("let nextVideoTrack = getFirstLiveTrack(") ||
       !section.includes("let oldVideoTracksToStop: MediaStreamTrack[] = [];") ||
       !section.includes("stopTracksExcept(oldVideoTracksToStop, [")
     ) {
       failures.push(
-        "web video-quality recovery must prefer live tracks and stop all replaced camera tracks",
+        "web video-quality recovery must prefer ref-backed live tracks and stop all replaced camera tracks",
       );
     }
   }

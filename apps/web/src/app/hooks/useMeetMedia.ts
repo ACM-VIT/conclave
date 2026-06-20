@@ -1142,7 +1142,8 @@ export function useMeetMedia({
       networkProfileOverride?: WebcamProducerNetworkProfile,
     ) => {
       if (isCameraOff) return;
-      if (!localStream) return;
+      const currentStream = localStreamRef.current ?? localStream;
+      if (!currentStream) return;
 
       let rollbackStream: MediaStream | null = null;
       let replacementTrack: MediaStreamTrack | null = null;
@@ -1160,7 +1161,7 @@ export function useMeetMedia({
           JSON.stringify(constraints)
         );
 
-        const currentTrack = getFirstLiveTrack(localStream.getVideoTracks());
+        const currentTrack = getFirstLiveTrack(currentStream.getVideoTracks());
         const shouldUpdateCaptureConstraints =
           shouldUpdateCaptureConstraintsForQualitySwitch(
             quality,
@@ -1184,8 +1185,8 @@ export function useMeetMedia({
           }
         }
 
-        let nextVideoTrack = getFirstLiveTrack(localStream.getVideoTracks());
-        let publishStream = localStreamRef.current ?? localStream;
+        let nextVideoTrack = getFirstLiveTrack(currentStream.getVideoTracks());
+        let publishStream = currentStream;
         let oldVideoTracksToStop: MediaStreamTrack[] = [];
 
         if (
@@ -1228,7 +1229,7 @@ export function useMeetMedia({
             handleLocalTrackEnded("video", newVideoTrack);
           };
 
-          const previousStream = localStreamRef.current ?? localStream;
+          const previousStream = localStreamRef.current ?? currentStream;
           rollbackStream = previousStream;
           oldVideoTracksToStop = previousStream?.getVideoTracks() ?? [];
           const remainingTracks = previousStream
