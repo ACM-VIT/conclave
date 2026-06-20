@@ -10,6 +10,8 @@ const files = {
   webConnectionQuality: "apps/web/src/app/hooks/useConnectionQuality.ts",
   webAdaptivePublishQuality:
     "apps/web/src/app/hooks/useAdaptivePublishQuality.ts",
+  webAdaptiveConsumerPreferences:
+    "apps/web/src/app/hooks/useAdaptiveConsumerPreferences.ts",
   webMeetClient: "apps/web/src/app/meets-client.tsx",
   webMeetMedia: "apps/web/src/app/hooks/useMeetMedia.ts",
   webJoinScreen: "apps/web/src/app/components/JoinScreen.tsx",
@@ -198,6 +200,11 @@ assertIncludes(
   "inboundJitterWeightedMs += jitter * 1000 * jitterWeight",
   "web weighted inbound jitter",
 );
+assertRegex(
+  "webAdaptiveConsumerPreferences",
+  /const effectiveQuality = worstQuality\([\s\S]*options\.quality === "good" \|\| options\.quality === "fair"[\s\S]*\? "unknown"[\s\S]*: getConsumerScoreQualityHint/,
+  "web consumer scores must not lower good/fair receive stats",
+);
 assertIncludes(
   "webConnectionQuality",
   "if (browserNetwork.emergency || browserNetwork.saveData === true)",
@@ -249,6 +256,11 @@ assertIncludes(
   "sfuDisconnectHandlers",
   "room.schedulePendingDisconnectNotification",
   "SFU reconnect badge delayed inside disconnect grace window",
+);
+assertIncludes(
+  "sfuDisconnectHandlers",
+  "const reconnectNoticeDelayMs = Math.max(0, graceMs - 1000);",
+  "SFU reconnect badge appears only at the end of disconnect grace",
 );
 assertIncludes(
   "iosWebrtc",

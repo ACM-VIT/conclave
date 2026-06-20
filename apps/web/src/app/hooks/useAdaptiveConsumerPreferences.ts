@@ -389,7 +389,9 @@ const getDesiredPreferences = (
 
   const effectiveQuality = worstQuality(
     options.quality,
-    getConsumerScoreQualityHint(options.consumerScoreQuality),
+    options.quality === "good" || options.quality === "fair"
+      ? "unknown"
+      : getConsumerScoreQualityHint(options.consumerScoreQuality),
   );
   const quality = effectiveQuality === "unknown" ? "good" : effectiveQuality;
 

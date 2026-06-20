@@ -205,10 +205,7 @@ export const registerDisconnectHandlers = (
       };
 
       const graceMs = config.socket.disconnectGraceMs;
-      const reconnectNoticeDelayMs = Math.min(
-        10000,
-        Math.max(0, graceMs - 5000),
-      );
+      const reconnectNoticeDelayMs = Math.max(0, graceMs - 1000);
       const immediateReasons = new Set([
         "client namespace disconnect",
         "server namespace disconnect",
