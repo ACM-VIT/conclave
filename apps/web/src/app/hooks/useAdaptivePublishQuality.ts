@@ -25,7 +25,10 @@ interface UseAdaptivePublishQualityOptions {
   networkManagedVideoQualityRef?: React.MutableRefObject<boolean>;
   setVideoQuality: (value: VideoQuality) => void;
   updateVideoQualityRef: React.MutableRefObject<
-    (quality: VideoQuality) => Promise<void>
+    (
+      quality: VideoQuality,
+      networkProfileOverride?: WebcamProducerNetworkProfile,
+    ) => Promise<void>
   >;
   debugStateRef?: React.MutableRefObject<
     AdaptivePublishQualityDebugSnapshot | null
@@ -284,7 +287,7 @@ export function useAdaptivePublishQuality({
             if (!isCameraOff && !updateInFlightRef.current) {
               updateInFlightRef.current = true;
               try {
-                await updateVideoQualityRef.current(quality);
+                await updateVideoQualityRef.current(quality, profile);
               } catch (error) {
                 console.warn(
                   "[Meets] Adaptive webcam capture constraints failed:",
@@ -358,14 +361,17 @@ export function useAdaptivePublishQuality({
   );
 
   const switchQuality = useCallback(
-    async (quality: VideoQuality) => {
+    async (
+      quality: VideoQuality,
+      networkProfileOverride?: WebcamProducerNetworkProfile,
+    ) => {
       if (updateInFlightRef.current) return;
       const previousQuality = videoQualityRef.current;
       if (previousQuality === quality) return;
 
       updateInFlightRef.current = true;
       try {
-        await updateVideoQualityRef.current(quality);
+        await updateVideoQualityRef.current(quality, networkProfileOverride);
         videoQualityRef.current = quality;
         setVideoQuality(quality);
         if (networkManagedVideoQualityRef) {
@@ -501,7 +507,13 @@ export function useAdaptivePublishQuality({
         if (networkManagedVideoQualityRef) {
           networkManagedVideoQualityRef.current = false;
         }
-        void switchQuality("standard");
+        void switchQuality(
+          "standard",
+          capRecoveryQuality === "good" &&
+            capRecoveryElapsedMs >= GOOD_UPGRADE_AFTER_MS
+            ? "good"
+            : undefined,
+        );
         writeDebugSnapshot(now);
         return;
       }

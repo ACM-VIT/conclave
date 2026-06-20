@@ -205,7 +205,10 @@ export function useMeetMedia({
   });
   const [showPermissionHint, setShowPermissionHint] = useState(false);
   const updateVideoQualityRef = useRef<
-    (quality: VideoQuality) => Promise<void>
+    (
+      quality: VideoQuality,
+      networkProfileOverride?: WebcamProducerNetworkProfile,
+    ) => Promise<void>
   >(async () => {});
   const audioRecoveryInFlightRef = useRef(false);
   const cameraRecoveryInFlightRef = useRef(false);
@@ -784,7 +787,10 @@ export function useMeetMedia({
   );
 
   const updateVideoQuality = useCallback(
-    async (quality: VideoQuality) => {
+    async (
+      quality: VideoQuality,
+      networkProfileOverride?: WebcamProducerNetworkProfile,
+    ) => {
       if (isCameraOff) return;
       if (!localStream) return;
 
@@ -792,9 +798,11 @@ export function useMeetMedia({
       let replacementTrack: MediaStreamTrack | null = null;
 
       try {
+        const publishNetworkProfile =
+          networkProfileOverride ?? getPublishNetworkProfile();
         const constraints = buildCameraVideoConstraints(
           quality,
-          getPublishNetworkProfile(),
+          publishNetworkProfile,
         );
 
         console.log(
@@ -987,7 +995,7 @@ export function useMeetMedia({
           await applyWebcamProducerNetworkProfile(
             previousProducer,
             quality,
-            getPublishNetworkProfile(),
+            publishNetworkProfile,
           );
           if (
             oldVideoTrackToStop &&
@@ -1009,7 +1017,7 @@ export function useMeetMedia({
           transport,
           track: publishTrack,
           quality,
-          networkProfile: getPublishNetworkProfile(),
+          networkProfile: publishNetworkProfile,
           paused: false,
           preferredCodec: preferredWebcamCodec,
         });

@@ -423,7 +423,10 @@ interface UseMeetSocketOptions {
   setVideoQuality: (value: VideoQuality) => void;
   videoQualityRef: React.MutableRefObject<VideoQuality>;
   updateVideoQualityRef: React.MutableRefObject<
-    (quality: VideoQuality) => Promise<void>
+    (
+      quality: VideoQuality,
+      networkProfileOverride?: WebcamProducerNetworkProfile,
+    ) => Promise<void>
   >;
   requestMediaPermissions: () => Promise<MediaStream | null>;
   stopLocalTrack: (track?: MediaStreamTrack | null) => void;
