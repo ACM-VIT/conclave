@@ -371,6 +371,16 @@ assertIncludes(
 );
 assertIncludes(
   "webMeetMedia",
+  "settings.width <= lowQualityWidth * 1.05",
+  "web standard-quality camera refresh only reopens low-width captures",
+);
+assertIncludes(
+  "webMeetMedia",
+  "settings.height <= lowQualityHeight * 1.05",
+  "web standard-quality camera refresh only reopens low-height captures",
+);
+assertIncludes(
+  "webMeetMedia",
   "shouldUpdateCaptureConstraintsForQualitySwitch",
   "web capture constraint updates are gated to upgrades",
 );

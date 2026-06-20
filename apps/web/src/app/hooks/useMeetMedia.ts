@@ -142,19 +142,25 @@ const shouldRefreshVideoTrackForQualitySwitch = (
   }
 
   const constraints = getQualitySwitchReferenceConstraints(quality, profile);
-  const targetWidth = getNumericConstraintValue(constraints.width, "ideal");
-  const targetHeight = getNumericConstraintValue(constraints.height, "ideal");
   const maxWidth = getNumericConstraintValue(constraints.width, "max");
   const maxHeight = getNumericConstraintValue(constraints.height, "max");
 
   if (quality === "standard" && profile === "good") {
+    const lowQualityWidth = getNumericConstraintValue(
+      LOW_QUALITY_CONSTRAINTS.width,
+      "ideal",
+    );
+    const lowQualityHeight = getNumericConstraintValue(
+      LOW_QUALITY_CONSTRAINTS.height,
+      "ideal",
+    );
     return (
       (typeof settings.width === "number" &&
-        targetWidth !== null &&
-        settings.width < targetWidth * 0.9) ||
+        lowQualityWidth !== null &&
+        settings.width <= lowQualityWidth * 1.05) ||
       (typeof settings.height === "number" &&
-        targetHeight !== null &&
-        settings.height < targetHeight * 0.9)
+        lowQualityHeight !== null &&
+        settings.height <= lowQualityHeight * 1.05)
     );
   }
 
