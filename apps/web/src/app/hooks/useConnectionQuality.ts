@@ -688,11 +688,13 @@ function deriveDirectionalEmergencyMode({
   }
 
   // Some browsers report a sender-side bandwidth limitation but omit
-  // availableOutgoingBitrate. If the actual media stream is already below the
-  // emergency ceiling, switch to emergency rather than lingering in "poor".
+  // availableOutgoingBitrate. Treat that as emergency only while media is near
+  // the emergency threshold; otherwise our own survival cap can keep emergency
+  // mode latched after the link recovers.
   return (
     bandwidthLimited &&
     mediaBitrate != null &&
+    mediaBitrate >= emergencyBitrate * AVAILABLE_BITRATE_SATURATION_RATIO &&
     mediaBitrate <= emergencyBitrate
   );
 }

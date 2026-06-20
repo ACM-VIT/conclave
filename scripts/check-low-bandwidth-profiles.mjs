@@ -299,6 +299,11 @@ assertIncludes(
   "mediaBitrate >= threshold * AVAILABLE_BITRATE_SATURATION_RATIO",
   "web available-bitrate quality must not be sustained by intentional caps",
 );
+assertIncludes(
+  "webConnectionQuality",
+  "mediaBitrate >= emergencyBitrate * AVAILABLE_BITRATE_SATURATION_RATIO",
+  "web emergency mode must not be sustained by intentional caps",
+);
 assertNotIncludes(
   "webConnectionQuality",
   'reason === "cpu"',
