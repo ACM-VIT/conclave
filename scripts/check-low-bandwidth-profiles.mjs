@@ -21,6 +21,8 @@ const files = {
   webMobileParticipantVideo:
     "apps/web/src/app/components/mobile/MobileParticipantVideo.tsx",
   webGridLayout: "apps/web/src/app/components/GridLayout.tsx",
+  webMobileGridLayout:
+    "apps/web/src/app/components/mobile/MobileGridLayout.tsx",
   webPresentationLayout: "apps/web/src/app/components/PresentationLayout.tsx",
   webMobilePresentationLayout:
     "apps/web/src/app/components/mobile/MobilePresentationLayout.tsx",
@@ -339,6 +341,16 @@ assertRegex(
   "webMobileParticipantVideo",
   /<video[\s\S]*autoPlay[\s\S]*muted[\s\S]*playsInline/,
   "web mobile participant video is muted for autoplay reliability",
+);
+assertRegex(
+  "webMobileGridLayout",
+  /const ParticipantTile = memo[\s\S]*createPlaybackRecoveryScheduler[\s\S]*shouldAttemptAnimationFrameReplay[\s\S]*video\.addEventListener\("stalled", scheduleReplay\)[\s\S]*document\.addEventListener\("visibilitychange", handleVisibilityChange\)[\s\S]*window\.addEventListener\("orientationchange", handleOrientationChange\)/,
+  "web mobile grid visible remote video retries stalled playback",
+);
+assertRegex(
+  "webMobileGridLayout",
+  /function WarmRemoteVideo[\s\S]*createPlaybackRecoveryScheduler[\s\S]*shouldAttemptAnimationFrameReplay[\s\S]*video\.addEventListener\("stalled", scheduleReplay\)[\s\S]*document\.addEventListener\("visibilitychange", handleVisibilityChange\)[\s\S]*window\.addEventListener\("orientationchange", handleOrientationChange\)/,
+  "web mobile grid warm remote video keeps decoder playback live",
 );
 assertRegex(
   "webAdaptiveConsumerPreferences",

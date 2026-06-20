@@ -18,6 +18,7 @@ import {
 } from "@conclave/meeting-core";
 import { Avatar } from "@conclave/ui-tokens/web";
 import { useSmartParticipantOrderWithMetadata } from "../../hooks/useSmartParticipantOrder";
+import { createPlaybackRecoveryScheduler } from "../../lib/playback-recovery";
 import { getRenderableParticipantVideoStream } from "../../lib/participant-media";
 import type { Participant } from "../../lib/types";
 import { isSystemUserId, truncateDisplayName } from "../../lib/utils";
@@ -1177,28 +1178,67 @@ const ParticipantTile = memo(function ParticipantTile({
       video.srcObject = videoStream;
     }
 
+    let cancelled = false;
     const playVideo = () => {
-      video.play().catch(() => {});
+      if (cancelled) return;
+      video.play().catch((err) => {
+        if (err.name === "NotAllowedError") {
+          video.muted = true;
+          video.play().catch(() => {});
+          return;
+        }
+        if (err.name !== "AbortError") {
+          console.error("[Meets] Mobile grid video play error:", err);
+        }
+      });
     };
 
-    playVideo();
+    const playbackRecovery = createPlaybackRecoveryScheduler({
+      attemptPlayback: playVideo,
+      shouldAttemptAnimationFrameReplay: () =>
+        !cancelled &&
+        (video.paused ||
+          video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA),
+    });
+    const scheduleReplay = playbackRecovery.schedule;
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        scheduleReplay();
+      }
+    };
+    const handleResize = () => {
+      scheduleReplay();
+    };
+    const handleOrientationChange = () => {
+      scheduleReplay();
+    };
 
-    if (videoTrack) {
-      videoTrack.addEventListener("unmute", playVideo);
-    }
+    scheduleReplay();
+    videoTrack?.addEventListener("unmute", scheduleReplay);
+    video.addEventListener("loadedmetadata", scheduleReplay);
+    video.addEventListener("loadeddata", scheduleReplay);
+    video.addEventListener("canplay", scheduleReplay);
+    video.addEventListener("stalled", scheduleReplay);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("resize", handleResize);
+    window.addEventListener("orientationchange", handleOrientationChange);
 
     return () => {
-      if (videoTrack) {
-        videoTrack.removeEventListener("unmute", playVideo);
-      }
+      cancelled = true;
+      videoTrack?.removeEventListener("unmute", scheduleReplay);
+      video.removeEventListener("loadedmetadata", scheduleReplay);
+      video.removeEventListener("loadeddata", scheduleReplay);
+      video.removeEventListener("canplay", scheduleReplay);
+      video.removeEventListener("stalled", scheduleReplay);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("resize", handleResize);
+      window.removeEventListener("orientationchange", handleOrientationChange);
+      playbackRecovery.clear();
       if (video.srcObject === videoStream) {
         video.srcObject = null;
       }
     };
-  }, [
-    videoStream,
-    videoTrack,
-  ]);
+  }, [videoStream, videoTrack]);
 
   const showPlaceholder = !videoStream;
   const label = truncateDisplayName(displayName, variant === "rail" ? 14 : 20);
@@ -1270,28 +1310,58 @@ function WarmRemoteVideo({ participant }: { participant: Participant }) {
       video.srcObject = videoStream;
     }
 
+    let cancelled = false;
     const playVideo = () => {
+      if (cancelled) return;
       video.play().catch(() => {});
     };
 
-    playVideo();
+    const playbackRecovery = createPlaybackRecoveryScheduler({
+      attemptPlayback: playVideo,
+      shouldAttemptAnimationFrameReplay: () =>
+        !cancelled &&
+        (video.paused ||
+          video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA),
+    });
+    const scheduleReplay = playbackRecovery.schedule;
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        scheduleReplay();
+      }
+    };
+    const handleResize = () => {
+      scheduleReplay();
+    };
+    const handleOrientationChange = () => {
+      scheduleReplay();
+    };
 
-    if (videoTrack) {
-      videoTrack.addEventListener("unmute", playVideo);
-    }
+    scheduleReplay();
+    videoTrack?.addEventListener("unmute", scheduleReplay);
+    video.addEventListener("loadedmetadata", scheduleReplay);
+    video.addEventListener("loadeddata", scheduleReplay);
+    video.addEventListener("canplay", scheduleReplay);
+    video.addEventListener("stalled", scheduleReplay);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("resize", handleResize);
+    window.addEventListener("orientationchange", handleOrientationChange);
 
     return () => {
-      if (videoTrack) {
-        videoTrack.removeEventListener("unmute", playVideo);
-      }
+      cancelled = true;
+      videoTrack?.removeEventListener("unmute", scheduleReplay);
+      video.removeEventListener("loadedmetadata", scheduleReplay);
+      video.removeEventListener("loadeddata", scheduleReplay);
+      video.removeEventListener("canplay", scheduleReplay);
+      video.removeEventListener("stalled", scheduleReplay);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("resize", handleResize);
+      window.removeEventListener("orientationchange", handleOrientationChange);
+      playbackRecovery.clear();
       if (video.srcObject === videoStream) {
         video.srcObject = null;
       }
     };
-  }, [
-    videoStream,
-    videoTrack,
-  ]);
+  }, [videoStream, videoTrack]);
 
   if (!videoStream) {
     return null;
