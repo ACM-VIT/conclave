@@ -94,9 +94,9 @@ export const MICROPHONE_OPUS_MAX_AVERAGE_BITRATE_BY_PROFILE: Record<
   number
 > = {
   good: OPUS_MAX_AVERAGE_BITRATE,
-  fair: 32000,
-  poor: 24000,
-  emergency: 18000,
+  fair: 48000,
+  poor: 32000,
+  emergency: 24000,
 };
 export const SCREEN_AUDIO_OPUS_MAX_AVERAGE_BITRATE_BY_PROFILE: Record<
   AudioProducerNetworkProfile,
@@ -107,7 +107,7 @@ export const SCREEN_AUDIO_OPUS_MAX_AVERAGE_BITRATE_BY_PROFILE: Record<
   // same Opus payload type with different fmtp parameters as a BUNDLE collision.
   fair: MICROPHONE_OPUS_MAX_AVERAGE_BITRATE_BY_PROFILE.fair,
   poor: MICROPHONE_OPUS_MAX_AVERAGE_BITRATE_BY_PROFILE.poor,
-  emergency: 18000,
+  emergency: MICROPHONE_OPUS_MAX_AVERAGE_BITRATE_BY_PROFILE.emergency,
 };
 export const OPUS_PACKET_TIME_MS = 20;
 export const buildMicrophoneOpusCodecOptions = (

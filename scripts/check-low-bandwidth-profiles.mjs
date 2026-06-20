@@ -74,13 +74,13 @@ const includesAny = (value, needles) =>
 // Audio has to stay codec-identical per profile for bundled audio m-lines.
 assertRegex(
   "webConstants",
-  /fair:\s*32000,[\s\S]*poor:\s*24000,[\s\S]*emergency:\s*18000,/,
-  "web microphone Opus constrained ladder",
+  /fair:\s*48000,[\s\S]*poor:\s*32000,[\s\S]*emergency:\s*24000,/,
+  "web microphone Opus crisp constrained ladder",
 );
 assertRegex(
   "webConstants",
-  /fair:\s*MICROPHONE_OPUS_MAX_AVERAGE_BITRATE_BY_PROFILE\.fair,[\s\S]*poor:\s*MICROPHONE_OPUS_MAX_AVERAGE_BITRATE_BY_PROFILE\.poor,[\s\S]*emergency:\s*18000,/,
-  "web screen-audio Opus constrained ladder",
+  /fair:\s*MICROPHONE_OPUS_MAX_AVERAGE_BITRATE_BY_PROFILE\.fair,[\s\S]*poor:\s*MICROPHONE_OPUS_MAX_AVERAGE_BITRATE_BY_PROFILE\.poor,[\s\S]*emergency:\s*MICROPHONE_OPUS_MAX_AVERAGE_BITRATE_BY_PROFILE\.emergency,/,
+  "web screen-audio Opus tracks microphone ladder",
 );
 assertRegex(
   "iosWebrtc",
