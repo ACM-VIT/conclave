@@ -1,7 +1,8 @@
 import { readFileSync } from "node:fs";
-import { relative, resolve } from "node:path";
+import { dirname, relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const root = resolve(import.meta.dirname, "..");
+const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 const files = {
   webConstants: "apps/web/src/app/lib/constants.ts",
@@ -343,6 +344,11 @@ assertIncludes(
   "webAdaptiveConsumerPreferences",
   "const fallbackWebcamRanks = new Map<string, number>();",
   "web missing layout hints use deterministic webcam fallback ranks",
+);
+assertRegex(
+  "webAdaptiveConsumerPreferences",
+  /fallbackWebcamRanks[\s\S]*Array\.from\(refs\.consumersRef\.current\.entries\(\)\)[\s\S]*active: info\.userId === activeSpeakerId[\s\S]*left\.userId\.localeCompare\(right\.userId\)[\s\S]*left\.producerId\.localeCompare\(right\.producerId\)[\s\S]*fallbackWebcamRanks\.set\(candidate\.producerId, index\)/,
+  "web missing layout fallback ranks are stable across clients",
 );
 assertRegex(
   "webAdaptiveConsumerPreferences",

@@ -710,18 +710,41 @@ export function useAdaptiveConsumerPreferences({
     ).length;
     const fallbackWebcamRanks = new Map<string, number>();
     if (!layoutHints) {
-      refs.consumersRef.current.forEach((consumer, producerId) => {
-        const info = refs.producerMapRef.current.get(producerId);
-        if (
-          !info ||
-          consumer.closed ||
-          info.kind !== "video" ||
-          info.type !== "webcam"
-        ) {
-          return;
-        }
-        fallbackWebcamRanks.set(producerId, fallbackWebcamRanks.size);
-      });
+      Array.from(refs.consumersRef.current.entries())
+        .map(([producerId, consumer]) => {
+          const info = refs.producerMapRef.current.get(producerId);
+          if (
+            !info ||
+            consumer.closed ||
+            info.kind !== "video" ||
+            info.type !== "webcam"
+          ) {
+            return null;
+          }
+          return {
+            producerId,
+            userId: info.userId,
+            active: info.userId === activeSpeakerId,
+          };
+        })
+        .filter(
+          (
+            candidate,
+          ): candidate is {
+            producerId: string;
+            userId: string;
+            active: boolean;
+          } => Boolean(candidate),
+        )
+        .sort(
+          (left, right) =>
+            Number(right.active) - Number(left.active) ||
+            left.userId.localeCompare(right.userId) ||
+            left.producerId.localeCompare(right.producerId),
+        )
+        .forEach((candidate, index) => {
+          fallbackWebcamRanks.set(candidate.producerId, index);
+        });
     }
     const emergencyVideoKeepProducerIds = new Set<string>();
     if (emergencyMode) {
