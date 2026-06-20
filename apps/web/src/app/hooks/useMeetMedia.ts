@@ -124,6 +124,11 @@ const getQualitySwitchReferenceConstraints = (
   return STANDARD_QUALITY_CONSTRAINTS;
 };
 
+const shouldUpdateCaptureConstraintsForQualitySwitch = (
+  quality: VideoQuality,
+  profile: WebcamProducerNetworkProfile,
+): boolean => quality === "standard" && profile === "good";
+
 const shouldRefreshVideoTrackForQualitySwitch = (
   track: MediaStreamTrack,
   quality: VideoQuality,
@@ -811,8 +816,17 @@ export function useMeetMedia({
         );
 
         const currentTrack = localStream.getVideoTracks()[0];
+        const shouldUpdateCaptureConstraints =
+          shouldUpdateCaptureConstraintsForQualitySwitch(
+            quality,
+            publishNetworkProfile,
+          );
         let shouldRefreshVideoTrack = false;
-        if (currentTrack && currentTrack.readyState === "live") {
+        if (
+          currentTrack &&
+          currentTrack.readyState === "live" &&
+          shouldUpdateCaptureConstraints
+        ) {
           currentTrack.onended = () => {
             handleLocalTrackEnded("video", currentTrack);
           };

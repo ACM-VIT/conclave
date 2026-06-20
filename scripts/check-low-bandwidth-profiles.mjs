@@ -125,6 +125,16 @@ assertIncludes(
   "web poor/emergency webcam keeps sender downscale without capture churn",
 );
 assertIncludes(
+  "webCodec",
+  "FAIR_BANDWIDTH_ACTIVE_LAYER_TARGET",
+  "web fair webcam sender downscale target",
+);
+assertIncludes(
+  "webCodec",
+  'profile === "fair" && layerRank <= 1',
+  "web fair active webcam layers downscale without capture churn",
+);
+assertIncludes(
   "iosWebrtc",
   "case .poor:\n            let bitrateCaps = [120_000, 160_000, 180_000]\n            let framerateCaps: [Double] = [12, 12, 15]",
   "iOS poor webcam caps",
@@ -303,6 +313,16 @@ assertIncludes(
   "webMeetMedia",
   "shouldRefreshVideoTrackForQualitySwitch",
   "web quality switch refreshes capture when constraints undershoot",
+);
+assertIncludes(
+  "webMeetMedia",
+  "shouldUpdateCaptureConstraintsForQualitySwitch",
+  "web capture constraint updates are gated to upgrades",
+);
+assertIncludes(
+  "webMeetMedia",
+  'quality === "standard" && profile === "good"',
+  "web downgrades avoid camera capture restarts",
 );
 {
   const text = source.webAdaptivePublishQuality;

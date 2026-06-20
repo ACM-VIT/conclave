@@ -108,6 +108,7 @@ const LOW_BANDWIDTH_BASE_LAYER_TARGETS: Record<
   poor: { width: 426, height: 240 },
   emergency: { width: 320, height: 180 },
 };
+const FAIR_BANDWIDTH_ACTIVE_LAYER_TARGET = { width: 640, height: 360 };
 
 const getTrackCaptureSize = (
   track: MediaStreamTrack | null | undefined,
@@ -280,6 +281,15 @@ const getCaptureAdjustedScaleResolutionDownBy = (
     const targetScale = getCaptureScaleForTarget(
       captureSize,
       LOW_BANDWIDTH_BASE_LAYER_TARGETS[profile],
+    );
+    return targetScale === null
+      ? profileAdjusted
+      : Math.max(profileAdjusted, targetScale);
+  }
+  if (profile === "fair" && layerRank <= 1) {
+    const targetScale = getCaptureScaleForTarget(
+      captureSize,
+      FAIR_BANDWIDTH_ACTIVE_LAYER_TARGET,
     );
     return targetScale === null
       ? profileAdjusted
