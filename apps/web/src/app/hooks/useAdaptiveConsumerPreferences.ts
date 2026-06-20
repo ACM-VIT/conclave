@@ -455,6 +455,7 @@ const getDesiredPreferences = (
   const keepFull =
     quality === "good" &&
     (isFocus ||
+      isVisible ||
       options.webcamVideoCount <= MAX_WEBCAMS_TO_KEEP_FULL_ON_GOOD_LINKS);
 
   if (quality === "poor") {

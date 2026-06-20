@@ -316,6 +316,11 @@ assertIncludes(
 );
 assertIncludes(
   "webAdaptiveConsumerPreferences",
+  "isFocus ||\n      isVisible ||",
+  "web visible good-link webcams keep full spatial layer",
+);
+assertIncludes(
+  "webAdaptiveConsumerPreferences",
   "isVisible ? bounds.maxTemporalLayer : 0",
   "web visible good-link tiles keep max temporal layer",
 );
