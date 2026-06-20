@@ -594,6 +594,12 @@ export function useMeetSocket({
   const producerTransportCreatePromiseRef = useRef<Promise<boolean> | null>(
     null,
   );
+  const iceRestartPromiseRef = useRef<
+    Record<"producer" | "consumer", Promise<boolean> | null>
+  >({
+    producer: null,
+    consumer: null,
+  });
 
   const {
     socketRef,
@@ -1519,6 +1525,9 @@ export function useMeetSocket({
 
   const attemptIceRestart = useCallback(
     async (transportKind: "producer" | "consumer"): Promise<boolean> => {
+      const existingRestart = iceRestartPromiseRef.current[transportKind];
+      if (existingRestart) return existingRestart;
+
       const socket = socketRef.current;
       if (!socket || !socket.connected) return false;
 
@@ -1533,37 +1542,44 @@ export function useMeetSocket({
       if (inFlight[transportKind]) return false;
       inFlight[transportKind] = true;
 
-      try {
-        const response = await new Promise<RestartIceResponse>(
-          (resolve, reject) => {
-            socket.emit(
-              "restartIce",
-              { transport: transportKind, transportId: transport.id },
-              (res: RestartIceResponse | { error: string }) => {
-                if ("error" in res) {
-                  reject(new Error(res.error));
-                } else {
-                  resolve(res);
-                }
-              },
-            );
-          },
-        );
+      let restartPromise: Promise<boolean>;
+      restartPromise = (async () => {
+        try {
+          const response = await new Promise<RestartIceResponse>(
+            (resolve, reject) => {
+              socket.emit(
+                "restartIce",
+                { transport: transportKind, transportId: transport.id },
+                (res: RestartIceResponse | { error: string }) => {
+                  if ("error" in res) {
+                    reject(new Error(res.error));
+                  } else {
+                    resolve(res);
+                  }
+                },
+              );
+            },
+          );
 
-        await transport.restartIce({ iceParameters: response.iceParameters });
-        console.log(
-          `[Meets] ${transportKind} transport ICE restart succeeded.`,
-        );
-        return true;
-      } catch (err) {
-        console.error(
-          `[Meets] ${transportKind} transport ICE restart failed:`,
-          err,
-        );
-        return false;
-      } finally {
-        inFlight[transportKind] = false;
-      }
+          await transport.restartIce({ iceParameters: response.iceParameters });
+          console.log(
+            `[Meets] ${transportKind} transport ICE restart succeeded.`,
+          );
+          return true;
+        } catch (err) {
+          console.error(
+            `[Meets] ${transportKind} transport ICE restart failed:`,
+            err,
+          );
+          return false;
+        } finally {
+          inFlight[transportKind] = false;
+          iceRestartPromiseRef.current[transportKind] = null;
+        }
+      })();
+
+      iceRestartPromiseRef.current[transportKind] = restartPromise;
+      return restartPromise;
     },
     [
       socketRef,
@@ -2836,11 +2852,7 @@ export function useMeetSocket({
           transports: disconnectedTransportKinds,
         });
         void Promise.all(
-          disconnectedTransportKinds.map((kind) =>
-            iceRestartInFlightRef.current[kind]
-              ? Promise.resolve(true)
-              : attemptIceRestart(kind),
-          ),
+          disconnectedTransportKinds.map((kind) => attemptIceRestart(kind)),
         ).then((results) => {
           if (intentionalDisconnectRef.current) return;
           if (results.every(Boolean)) {

@@ -416,6 +416,16 @@ assertRegex(
   "web foreground recovery restarts ICE for disconnected transports",
 );
 assertRegex(
+  "webMeetSocket",
+  /const iceRestartPromiseRef = useRef[\s\S]*Promise<boolean> \| null[\s\S]*const existingRestart = iceRestartPromiseRef\.current\[transportKind\];[\s\S]*if \(existingRestart\) return existingRestart;[\s\S]*iceRestartPromiseRef\.current\[transportKind\] = restartPromise;[\s\S]*return restartPromise;/,
+  "web ICE restart recovery waits for in-flight restart result",
+);
+assertNotIncludes(
+  "webMeetSocket",
+  "? Promise.resolve(true)\n              : attemptIceRestart(kind)",
+  "web foreground recovery must not treat in-flight ICE restart as success",
+);
+assertRegex(
   "webMeetClient",
   /const browserPublishRecoveryQuality = selfConnectionStats\.browserNetwork[\s\S]*browserPublishRecoveryQuality === "good"[\s\S]*\? "good"[\s\S]*: selfPublishQuality/,
   "web cap recovery browser hint only restores good profile",
