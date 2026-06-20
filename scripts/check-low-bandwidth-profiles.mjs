@@ -1324,21 +1324,22 @@ assertRegex(
   } else {
     const section = text.slice(start, end);
     if (
-      !section.includes("producer.replaceTrack({ track: rawCameraTrack });") ||
+      !section.includes("producer.replaceTrack({ track: publishTrack });") ||
+      !section.includes("waitForPreferredVideoPublishTrack(") ||
       !section.includes("closeLocalVideoProducerForReplacement(producer);") ||
       !section.includes("requestCameraProducerRecovery();") ||
       !section.includes("cameraRecoveryForceSingleLayerRef.current = true") ||
       !section.includes("getFallbackWebcamCodec(device, currentCodec)")
     ) {
       failures.push(
-        "web stalled camera sender recovery must repair with raw camera and then recreate with single-layer codec fallback",
+        "web stalled camera sender recovery must repair with preferred camera track and then recreate with single-layer codec fallback",
       );
     }
     const rawRepairIndex = section.indexOf(
-      "producer.replaceTrack({ track: rawCameraTrack });",
+      "producer.replaceTrack({ track: publishTrack });",
     );
     const rawRepairConditionIndex = section.indexOf(
-      "const shouldTryRawRepair = !state.rawRepairAttempted;",
+      "const shouldTryPreferredRepair = !state.rawRepairAttempted;",
     );
     const recreateIndex = section.indexOf(
       "closeLocalVideoProducerForReplacement(producer);",
@@ -1355,20 +1356,22 @@ assertRegex(
     }
     if (
       rawRepairConditionIndex < 0 ||
-      !section.includes("if (producerTrack.id !== rawCameraTrack.id)") ||
-      !section.includes("Refreshed stalled camera sender with raw camera track")
+      !section.includes("publishTrack.id === rawCameraTrack.id") ||
+      !section.includes(
+        "Refreshed stalled camera sender with preferred camera track",
+      )
     ) {
       failures.push(
-        "web stalled camera sender recovery must soft-refresh raw camera before any destructive producer recreation",
+        "web stalled camera sender recovery must soft-refresh preferred camera before any destructive producer recreation",
       );
     }
     if (
       rawRepairIndex >= 0 &&
       hiddenGuardIndex >= 0 &&
-      rawRepairIndex < hiddenGuardIndex
+      hiddenGuardIndex < rawRepairIndex
     ) {
       failures.push(
-        "web hidden-tab camera stalls must hit the no-recreate guard before raw-track repair",
+        "web hidden-tab camera stalls must try preferred-track repair before the no-recreate guard",
       );
     }
     if (
@@ -1399,7 +1402,7 @@ assertRegex(
   assertRegex(
     "webMeetMedia",
     /allowProducerRecreate: boolean[\s\S]*if \(!allowProducerRecreate\) \{[\s\S]*Camera sender stalled in background; keeping producer open/,
-    "web hidden camera sender watchdog repairs raw tracks without background producer recreation",
+    "web hidden camera sender watchdog repairs preferred tracks without background producer recreation",
   );
   assertRegex(
     "webMeetMedia",
@@ -1413,7 +1416,7 @@ assertRegex(
   );
   assertRegex(
     "webMeetMedia",
-    /onPreferredVideoPublishTrackRejected[\s\S]*producer\.replaceTrack\(\{ track: rawCameraTrack \}\);[\s\S]*onPreferredVideoPublishTrackRejected\?\.[\s\S]*camera-outbound-stall-raw-repair/,
+    /producer\.replaceTrack\(\{ track: publishTrack \}\);[\s\S]*publishTrack\.id === rawCameraTrack\.id[\s\S]*onPreferredVideoPublishTrackRejected\?\.[\s\S]*camera-outbound-stall-raw-repair/,
     "web raw camera repair suppresses the rejected processed publish track",
   );
   assertRegex(
@@ -1945,6 +1948,11 @@ assertIncludes(
   "const HIDDEN_STALE_OUTPUT_REPUBLISH_RETRY_MS = 5000;",
   "web hidden processed effects republish retry cadence",
 );
+assertIncludes(
+  "webVideoEffects",
+  "const HIDDEN_VIDEO_REARM_INTERVAL_MS = 5000;",
+  "web hidden effects source video rearm cadence",
+);
 assertRegex(
   "webVideoEffects",
   /const duplicateOutputHeartbeatDue =[\s\S]*DUPLICATE_OUTPUT_HEARTBEAT_MS[\s\S]*!duplicateOutputHeartbeatDue/,
@@ -1959,6 +1967,11 @@ assertRegex(
   "webVideoEffects",
   /const keepHiddenStaleProcessedOutputAlive = async[\s\S]*isHiddenStaleProcessedOutput\(sampleNow\)[\s\S]*restoreLastVisibleOutputFrame\(\s*"hidden-stale-output-keepalive"[\s\S]*await deliverOutputFrame\(sampleNow\)[\s\S]*HIDDEN_STALE_OUTPUT_REPUBLISH_RETRY_MS[\s\S]*setProcessedTrackReady\(true\);[\s\S]*bumpProcessedTrackVersionForFreshOutput\([\s\S]*"hidden-stale-output-keepalive"[\s\S]*"hidden_stale_output_keepalive"/,
   "web hidden stale processed effects output sends keepalive frames instead of going inert",
+);
+assertRegex(
+  "webVideoEffects",
+  /const handleDocumentVisibilityChange = \(\) => \{[\s\S]*rearmHiddenVideoPlayback\(reason\)[\s\S]*keepHiddenStaleProcessedOutputAlive\(reason\)[\s\S]*video\.addEventListener\("pause", handleHiddenVideoPlaybackStall\)[\s\S]*video\.addEventListener\("stalled", handleHiddenVideoPlaybackStall\)[\s\S]*document\.addEventListener\("visibilitychange", handleDocumentVisibilityChange\)[\s\S]*hiddenVideoRearmIntervalId = window\.setInterval/,
+  "web hidden effects pipeline actively rearms background video playback",
 );
 assertRegex(
   "webVideoEffects",

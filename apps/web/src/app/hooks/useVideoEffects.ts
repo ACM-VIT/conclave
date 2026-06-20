@@ -222,6 +222,7 @@ const VIDEO_FRAME_CALLBACK_WATCHDOG_MS = 450;
 const VIDEO_FRAME_CALLBACK_TRANSITION_WATCHDOG_MS = 48;
 const VIDEO_FRAME_CALLBACK_EFFECT_CHANGE_PUMP_MS = 320;
 const VIDEO_FRAME_CALLBACK_EFFECT_CHANGE_DRAIN_FRAMES = 4;
+const HIDDEN_VIDEO_REARM_INTERVAL_MS = 5000;
 const OUTPUT_WRITER_STEADY_MAX_PENDING_FRAMES = 1;
 const OUTPUT_WRITER_TRANSITION_MAX_PENDING_FRAMES = 1;
 const OUTPUT_WRITER_TRANSITION_BURST_MS = 900;
@@ -10964,6 +10965,7 @@ export function useVideoEffects({
     let loopTimerId: number | null = null;
     let effectChangeFramePumpTimerId: number | null = null;
     let processedOutputStaleCheckIntervalId: number | null = null;
+    let hiddenVideoRearmIntervalId: number | null = null;
     let effectChangeFramePumpGeneration = 0;
     let effectChangeFramePumpDrainFramesRemaining = 0;
     let videoFrameCallbackId: number | null = null;
@@ -14624,6 +14626,18 @@ export function useVideoEffects({
         });
     };
 
+    const handleDocumentVisibilityChange = () => {
+      if (cancelled) return;
+      const reason =
+        document.visibilityState === "visible"
+          ? "document-visible"
+          : "document-hidden";
+      rearmHiddenVideoPlayback(reason);
+      if (document.visibilityState !== "visible") {
+        void keepHiddenStaleProcessedOutputAlive(reason);
+      }
+    };
+
     const handleHiddenVideoMediaEvent = (event: Event) => {
       if (cancelled) return;
       hiddenVideoMediaEventCount += 1;
@@ -14643,10 +14657,26 @@ export function useVideoEffects({
       schedule();
     };
 
+    const handleHiddenVideoPlaybackStall = (event: Event) => {
+      if (cancelled) return;
+      rearmHiddenVideoPlayback(`hidden-video-${event.type}`);
+    };
+
     video.addEventListener("loadedmetadata", handleHiddenVideoMediaEvent);
     video.addEventListener("loadeddata", handleHiddenVideoMediaEvent);
     video.addEventListener("canplay", handleHiddenVideoMediaEvent);
     video.addEventListener("playing", handleHiddenVideoMediaEvent);
+    video.addEventListener("pause", handleHiddenVideoPlaybackStall);
+    video.addEventListener("stalled", handleHiddenVideoPlaybackStall);
+    video.addEventListener("suspend", handleHiddenVideoPlaybackStall);
+    video.addEventListener("waiting", handleHiddenVideoPlaybackStall);
+    document.addEventListener("visibilitychange", handleDocumentVisibilityChange);
+    window.addEventListener("pageshow", handleDocumentVisibilityChange);
+    hiddenVideoRearmIntervalId = window.setInterval(() => {
+      if (cancelled || document.visibilityState === "visible") return;
+      rearmHiddenVideoPlayback("hidden-video-keepalive");
+      void keepHiddenStaleProcessedOutputAlive("hidden-video-keepalive");
+    }, HIDDEN_VIDEO_REARM_INTERVAL_MS);
 
     const getAdaptationRecordOptions = (sampleNow = performance.now()) => {
       const warmupHeld =
@@ -17975,6 +18005,10 @@ export function useVideoEffects({
         window.clearInterval(processedOutputStaleCheckIntervalId);
         processedOutputStaleCheckIntervalId = null;
       }
+      if (hiddenVideoRearmIntervalId !== null) {
+        window.clearInterval(hiddenVideoRearmIntervalId);
+        hiddenVideoRearmIntervalId = null;
+      }
       if (loopTimerId !== null) {
         window.clearTimeout(loopTimerId);
         loopTimerId = null;
@@ -18023,6 +18057,15 @@ export function useVideoEffects({
       video.removeEventListener("loadeddata", handleHiddenVideoMediaEvent);
       video.removeEventListener("canplay", handleHiddenVideoMediaEvent);
       video.removeEventListener("playing", handleHiddenVideoMediaEvent);
+      video.removeEventListener("pause", handleHiddenVideoPlaybackStall);
+      video.removeEventListener("stalled", handleHiddenVideoPlaybackStall);
+      video.removeEventListener("suspend", handleHiddenVideoPlaybackStall);
+      video.removeEventListener("waiting", handleHiddenVideoPlaybackStall);
+      document.removeEventListener(
+        "visibilitychange",
+        handleDocumentVisibilityChange,
+      );
+      window.removeEventListener("pageshow", handleDocumentVisibilityChange);
       video.pause();
       video.srcObject = null;
       video.remove();

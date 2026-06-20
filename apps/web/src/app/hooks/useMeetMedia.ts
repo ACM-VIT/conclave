@@ -2249,6 +2249,7 @@ export function useMeetMedia({
     localStreamRef,
     videoQualityRef,
     handleLocalTrackEnded,
+    waitForPreferredVideoPublishTrack,
     getPublishNetworkProfile,
     onPreferredVideoPublishTrackRejected,
     closeLocalVideoProducerForReplacement,
@@ -2334,35 +2335,28 @@ export function useMeetMedia({
           return;
         }
 
-        if (!allowProducerRecreate) {
-          cameraOutboundStallStateRef.current = {
-            ...state,
-            lastRecoveryAtMs: now,
-          };
-          console.warn(
-            "[Meets] Camera sender stalled in background; keeping producer open.",
-            {
-              producerId: producer.id,
-              trackId: producerTrack.id,
-              rawTrackId: rawCameraTrack.id,
-              stalledSamples: state.stalledSamples,
-              frames: sample.frames,
-              bytes: sample.bytes,
-            },
+        const shouldTryPreferredRepair = !state.rawRepairAttempted;
+        if (shouldTryPreferredRepair) {
+          const publishStream =
+            localStreamRef.current ?? new MediaStream([rawCameraTrack]);
+          const publishTrack = await waitForPreferredVideoPublishTrack(
+            publishStream,
+            rawCameraTrack,
           );
-          return;
-        }
-
-        const shouldTryRawRepair = !state.rawRepairAttempted;
-        if (shouldTryRawRepair) {
+          if (!publishTrack || publishTrack.readyState !== "live") {
+            return;
+          }
           if ("contentHint" in rawCameraTrack) {
             rawCameraTrack.contentHint = "motion";
           }
           rawCameraTrack.onended = () => {
             handleLocalTrackEnded("video", rawCameraTrack);
           };
-          await producer.replaceTrack({ track: rawCameraTrack });
-          if (producerTrack.id !== rawCameraTrack.id) {
+          await producer.replaceTrack({ track: publishTrack });
+          if (
+            publishTrack.id === rawCameraTrack.id &&
+            producerTrack.id !== rawCameraTrack.id
+          ) {
             onPreferredVideoPublishTrackRejected?.(
               producerTrack,
               "camera-outbound-stall-raw-repair",
@@ -2374,17 +2368,38 @@ export function useMeetMedia({
             getPublishNetworkProfile(),
           );
           cameraOutboundStallStateRef.current = {
-            ...createCameraOutboundStallState(producer.id, rawCameraTrack.id),
+            ...createCameraOutboundStallState(producer.id, publishTrack.id),
             frames: sample.frames,
             bytes: sample.bytes,
             rawRepairAttempted: true,
             lastRecoveryAtMs: now,
           };
           console.warn(
-            "[Meets] Refreshed stalled camera sender with raw camera track:",
+            "[Meets] Refreshed stalled camera sender with preferred camera track:",
             {
               producerId: producer.id,
               previousTrackId: producerTrack.id,
+              publishTrackId: publishTrack.id,
+              rawTrackId: rawCameraTrack.id,
+              usedRawFallback: publishTrack.id === rawCameraTrack.id,
+              stalledSamples: state.stalledSamples,
+              frames: sample.frames,
+              bytes: sample.bytes,
+            },
+          );
+          return;
+        }
+
+        if (!allowProducerRecreate) {
+          cameraOutboundStallStateRef.current = {
+            ...state,
+            lastRecoveryAtMs: now,
+          };
+          console.warn(
+            "[Meets] Camera sender stalled in background; keeping producer open.",
+            {
+              producerId: producer.id,
+              trackId: producerTrack.id,
               rawTrackId: rawCameraTrack.id,
               stalledSamples: state.stalledSamples,
               frames: sample.frames,
