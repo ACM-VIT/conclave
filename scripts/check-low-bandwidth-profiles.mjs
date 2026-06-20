@@ -1172,7 +1172,12 @@ assertRegex(
 );
 assertRegex(
   "webAdaptivePublishQuality",
-  /const restoreStandardCaptureIfNeeded = useCallback[\s\S]*videoQualityRef\.current !== "standard"[\s\S]*webcamTrack\?\.readyState !== "live"[\s\S]*if \(needsStandardCaptureRestore\(webcamTrack\)\) \{[\s\S]*await updateVideoQualityRef\.current\("standard", "good"\)[\s\S]*\} else \{[\s\S]*await applyWebcamProducerNetworkProfile\(webcamProducer, "standard", "good"\);[\s\S]*lastStandardCaptureRestoreSignatureRef\.current = signature/,
+  /getStandardCaptureRestoreSignature[\s\S]*settings\.width[\s\S]*settings\.height[\s\S]*settings\.frameRate[\s\S]*const signature = getStandardCaptureRestoreSignature\([\s\S]*webcamProducer\.id,[\s\S]*webcamTrack/,
+  "web adaptive good-link restore signature tracks live capture settings",
+);
+assertRegex(
+  "webAdaptivePublishQuality",
+  /const restoreStandardCaptureIfNeeded = useCallback[\s\S]*videoQualityRef\.current !== "standard"[\s\S]*webcamTrack\?\.readyState !== "live"[\s\S]*if \(needsStandardCaptureRestore\(webcamTrack\)\) \{[\s\S]*await updateVideoQualityRef\.current\("standard", "good"\)[\s\S]*\} else \{[\s\S]*await applyWebcamProducerNetworkProfile\([\s\S]*webcamProducer,[\s\S]*"standard",[\s\S]*"good",[\s\S]*\);[\s\S]*lastStandardCaptureRestoreSignatureRef\.current = signature/,
   "web adaptive good-link restore avoids camera constraint churn when capture is already standard",
 );
 assertRegex(

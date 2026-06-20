@@ -94,6 +94,21 @@ const needsStandardCaptureRestore = (track: MediaStreamTrack): boolean => {
   );
 };
 
+const getStandardCaptureRestoreSignature = (
+  producerId: string,
+  track: MediaStreamTrack,
+): string => {
+  const settings = track.getSettings();
+  return [
+    producerId,
+    "standard",
+    "good",
+    settings.width ?? "unknown-width",
+    settings.height ?? "unknown-height",
+    settings.frameRate ?? "unknown-fps",
+  ].join(":");
+};
+
 export type AdaptivePublishQualityDebugSnapshot = {
   enabled: boolean;
   timestamp: number;
@@ -393,7 +408,10 @@ export function useAdaptivePublishQuality({
       return;
     }
 
-    const signature = `${webcamProducer.id}:standard:good`;
+    const signature = getStandardCaptureRestoreSignature(
+      webcamProducer.id,
+      webcamTrack,
+    );
     if (lastStandardCaptureRestoreSignatureRef.current === signature) {
       return;
     }
