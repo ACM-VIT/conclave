@@ -714,6 +714,25 @@ export function useMeetMedia({
     [localStreamRef, setLocalStream],
   );
 
+  const stopTracksExcept = useCallback(
+    (
+      tracks: readonly MediaStreamTrack[],
+      keepTracks: readonly (MediaStreamTrack | null | undefined)[],
+    ) => {
+      const keepTrackIds = new Set(
+        keepTracks
+          .filter((track): track is MediaStreamTrack => Boolean(track))
+          .map((track) => track.id),
+      );
+      for (const track of tracks) {
+        if (!keepTrackIds.has(track.id)) {
+          stopLocalTrack(track);
+        }
+      }
+    },
+    [stopLocalTrack],
+  );
+
   const closeLocalVideoProducerForReplacement = useCallback(
     (producer: Producer) => {
       intentionalLocalProducerCloseIdsRef.current.add(producer.id);
@@ -967,7 +986,7 @@ export function useMeetMedia({
             };
             newAudioTrack.enabled = !isMuted;
             const previousStream = localStreamRef.current;
-            const oldAudioTrack = previousStream?.getAudioTracks()[0] ?? null;
+            const previousAudioTracks = previousStream?.getAudioTracks() ?? [];
 
             if (audioProducerRef.current) {
               await audioProducerRef.current.replaceTrack({
@@ -984,9 +1003,7 @@ export function useMeetMedia({
               newAudioTrack,
             ]);
             commitLocalStream(nextStream);
-            if (oldAudioTrack && oldAudioTrack.id !== newAudioTrack.id) {
-              stopLocalTrack(oldAudioTrack);
-            }
+            stopTracksExcept(previousAudioTracks, [newAudioTrack]);
           }
         } catch (err) {
           console.error("[Meets] Failed to switch audio input device:", err);
@@ -997,13 +1014,13 @@ export function useMeetMedia({
       connectionState,
       isMuted,
       handleLocalTrackEnded,
-      stopLocalTrack,
       setSelectedAudioInputDeviceId,
       audioProducerRef,
       localStreamRef,
       commitLocalStream,
       buildAudioConstraints,
       markAudioTrackForSpeech,
+      stopTracksExcept,
     ]
   );
 
@@ -1026,7 +1043,7 @@ export function useMeetMedia({
             handleLocalTrackEnded("video", newVideoTrack);
           };
           const previousStream = localStreamRef.current ?? localStream;
-          const oldVideoTrack = previousStream?.getVideoTracks()[0] ?? null;
+          const previousVideoTracks = previousStream?.getVideoTracks() ?? [];
           const remainingTracks =
             previousStream
               ?.getTracks()
@@ -1060,9 +1077,10 @@ export function useMeetMedia({
             }
           }
 
-          if (oldVideoTrack && oldVideoTrack !== newVideoTrack) {
-            stopLocalTrack(oldVideoTrack);
-          }
+          stopTracksExcept(previousVideoTracks, [
+            newVideoTrack,
+            videoProducerRef.current?.track ?? null,
+          ]);
         }
       } catch (err) {
         console.error("[Meets] Failed to switch video input device:", err);
@@ -1073,13 +1091,13 @@ export function useMeetMedia({
       isCameraOff,
       localStream,
       handleLocalTrackEnded,
-      stopLocalTrack,
       videoProducerRef,
       setLocalStream,
       buildVideoConstraints,
       localStreamRef,
       waitForPreferredVideoPublishTrack,
       onPreferredVideoPublishTrackRejected,
+      stopTracksExcept,
     ]
   );
 
@@ -1142,7 +1160,7 @@ export function useMeetMedia({
           JSON.stringify(constraints)
         );
 
-        const currentTrack = localStream.getVideoTracks()[0];
+        const currentTrack = getFirstLiveTrack(localStream.getVideoTracks());
         const shouldUpdateCaptureConstraints =
           shouldUpdateCaptureConstraintsForQualitySwitch(
             quality,
@@ -1166,9 +1184,9 @@ export function useMeetMedia({
           }
         }
 
-        let nextVideoTrack = localStream.getVideoTracks()[0];
+        let nextVideoTrack = getFirstLiveTrack(localStream.getVideoTracks());
         let publishStream = localStreamRef.current ?? localStream;
-        let oldVideoTrackToStop: MediaStreamTrack | null = null;
+        let oldVideoTracksToStop: MediaStreamTrack[] = [];
 
         if (
           !nextVideoTrack ||
@@ -1212,7 +1230,7 @@ export function useMeetMedia({
 
           const previousStream = localStreamRef.current ?? localStream;
           rollbackStream = previousStream;
-          oldVideoTrackToStop = previousStream?.getVideoTracks()[0] ?? null;
+          oldVideoTracksToStop = previousStream?.getVideoTracks() ?? [];
           const remainingTracks = previousStream
             .getTracks()
             .filter((track) => track.kind !== "video");
@@ -1271,13 +1289,10 @@ export function useMeetMedia({
             quality,
             publishNetworkProfile,
           );
-          if (
-            oldVideoTrackToStop &&
-            oldVideoTrackToStop !== nextVideoTrack &&
-            oldVideoTrackToStop !== previousProducer.track
-          ) {
-            stopLocalTrack(oldVideoTrackToStop);
-          }
+          stopTracksExcept(oldVideoTracksToStop, [
+            nextVideoTrack,
+            previousProducer.track,
+          ]);
           return;
         }
 
@@ -1325,9 +1340,10 @@ export function useMeetMedia({
             previousProducer.close();
           } catch {}
         }
-        if (oldVideoTrackToStop && oldVideoTrackToStop !== nextVideoTrack) {
-          stopLocalTrack(oldVideoTrackToStop);
-        }
+        stopTracksExcept(oldVideoTracksToStop, [
+          nextVideoTrack,
+          nextProducer.track,
+        ]);
       } catch (err) {
         console.error("[Meets] Failed to update video quality:", err);
         if (rollbackStream && replacementTrack) {
@@ -1343,6 +1359,7 @@ export function useMeetMedia({
       localStream,
       handleLocalTrackEnded,
       stopLocalTrack,
+      stopTracksExcept,
       setLocalStream,
       socketRef,
       deviceRef,
@@ -1387,10 +1404,14 @@ export function useMeetMedia({
       }
 
       if (nextMuted) {
-        const currentTrack = localStreamRef.current?.getAudioTracks()[0];
-        if (currentTrack && currentTrack.readyState === "live") {
-          currentTrack.enabled = false;
-        }
+        const currentAudioTracks =
+          localStreamRef.current?.getAudioTracks() ?? [];
+        const liveAudioTracks = currentAudioTracks.filter(
+          (track) => track.readyState === "live",
+        );
+        liveAudioTracks.forEach((track) => {
+          track.enabled = false;
+        });
 
         if (producer) {
           try {
@@ -1402,9 +1423,11 @@ export function useMeetMedia({
               "[Meets] toggleMute failed, rolling back mute:",
               toggleResult.error
             );
-            if (currentTrack && currentTrack.readyState === "live") {
-              currentTrack.enabled = true;
-            }
+            liveAudioTracks.forEach((track) => {
+              if (track.readyState === "live") {
+                track.enabled = true;
+              }
+            });
             try {
               producer.resume();
             } catch {}
@@ -1431,7 +1454,9 @@ export function useMeetMedia({
         }
       }
 
-      let audioTrack = localStreamRef.current?.getAudioTracks()[0] ?? null;
+      let audioTrack = getFirstLiveTrack(
+        localStreamRef.current?.getAudioTracks() ?? [],
+      );
 
       if (audioTrack && audioTrack.readyState !== "live") {
         stopLocalTrack(audioTrack);
@@ -1703,7 +1728,9 @@ export function useMeetMedia({
           }
         }
 
-        let audioTrack = localStreamRef.current?.getAudioTracks()[0] ?? null;
+        let audioTrack = getFirstLiveTrack(
+          localStreamRef.current?.getAudioTracks() ?? [],
+        );
 
         if (!audioTrack || audioTrack.readyState !== "live") {
           const stream = await navigator.mediaDevices.getUserMedia({
@@ -2516,7 +2543,9 @@ export function useMeetMedia({
           }
         }
 
-        let videoTrack = localStreamRef.current?.getVideoTracks()[0] ?? null;
+        let videoTrack = getFirstLiveTrack(
+          localStreamRef.current?.getVideoTracks() ?? [],
+        );
 
         if (!videoTrack || videoTrack.readyState !== "live") {
           const stream = await navigator.mediaDevices.getUserMedia({

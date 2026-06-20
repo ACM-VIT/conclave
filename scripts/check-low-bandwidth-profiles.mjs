@@ -760,6 +760,11 @@ assertRegex(
   /const recoverAudioProducer = async \(\) => \{[\s\S]*const removeCreatedTrackFromLocalStream = \(\) => \{[\s\S]*stopLocalTrack\(createdTrack\);[\s\S]*createdTrack = null;[\s\S]*if \(cancelled\) \{[\s\S]*audioProducer\.close\(\);[\s\S]*removeCreatedTrackFromLocalStream\(\);[\s\S]*catch \(err\) \{[\s\S]*removeCreatedTrackFromLocalStream\(\);/,
   "web cancelled audio recovery stops recovery-created mic tracks",
 );
+assertRegex(
+  "webMeetMedia",
+  /const stopTracksExcept = useCallback\([\s\S]*keepTrackIds[\s\S]*for \(const track of tracks\)[\s\S]*stopLocalTrack\(track\);/,
+  "web replaced local capture tracks are stopped as a complete set",
+);
 {
   const text = source.webMeetMedia;
   const start = text.indexOf("const handleLocalTrackEnded = useCallback(");
@@ -793,12 +798,53 @@ assertRegex(
     const section = text.slice(start, end);
     if (
       !section.includes("const previousStream = localStreamRef.current;") ||
+      !section.includes("const previousAudioTracks =") ||
       !section.includes("commitLocalStream(nextStream);") ||
+      !section.includes("stopTracksExcept(previousAudioTracks, [newAudioTrack]);") ||
       section.includes("prev.removeTrack(oldAudioTrack)") ||
       section.includes("prev.addTrack(newAudioTrack)")
     ) {
       failures.push(
-        "web audio input device changes must sync local stream refs without mutating stale streams",
+        "web audio input device changes must sync local stream refs and stop all replaced mic tracks",
+      );
+    }
+  }
+}
+{
+  const text = source.webMeetMedia;
+  const start = text.indexOf("const handleVideoInputDeviceChange = useCallback(");
+  const end = text.indexOf("const updateVideoQuality = useCallback", start);
+  if (start < 0 || end < 0) {
+    failures.push("web video input device-change section missing");
+  } else {
+    const section = text.slice(start, end);
+    if (
+      !section.includes("const previousVideoTracks =") ||
+      !section.includes("stopTracksExcept(previousVideoTracks, [") ||
+      !section.includes("videoProducerRef.current?.track ?? null")
+    ) {
+      failures.push(
+        "web video input device changes must stop all replaced camera tracks",
+      );
+    }
+  }
+}
+{
+  const text = source.webMeetMedia;
+  const start = text.indexOf("const toggleMute = useCallback(");
+  const end = text.indexOf("useEffect(() => {\n    if (ghostEnabled || isObserverMode) return;", start);
+  if (start < 0 || end < 0) {
+    failures.push("web mute toggle section missing");
+  } else {
+    const section = text.slice(start, end);
+    if (
+      !section.includes("const currentAudioTracks =") ||
+      !section.includes("const liveAudioTracks = currentAudioTracks.filter(") ||
+      !section.includes("liveAudioTracks.forEach((track) => {") ||
+      !section.includes("let audioTrack = getFirstLiveTrack(")
+    ) {
+      failures.push(
+        "web mute toggle must apply intent to all live mic tracks and unmute a live track",
       );
     }
   }
@@ -832,6 +878,16 @@ assertRegex(
         "web video-quality producer recreation must skip intentional mobile/H264 single-layer webcam producers",
       );
     }
+    if (
+      !section.includes("const currentTrack = getFirstLiveTrack(") ||
+      !section.includes("let nextVideoTrack = getFirstLiveTrack(") ||
+      !section.includes("let oldVideoTracksToStop: MediaStreamTrack[] = [];") ||
+      !section.includes("stopTracksExcept(oldVideoTracksToStop, [")
+    ) {
+      failures.push(
+        "web video-quality recovery must prefer live tracks and stop all replaced camera tracks",
+      );
+    }
   }
 }
 {
@@ -850,6 +906,7 @@ assertRegex(
     }
     if (
       !section.includes("hadLiveAudioTrackBeforeRecovery") ||
+      !section.includes("let audioTrack = getFirstLiveTrack(") ||
       !section.includes("if (createdTrack)") ||
       !section.includes("localStreamRef.current = nextStream;") ||
       !section.includes("setLocalStream(nextStream);") ||
@@ -1277,6 +1334,7 @@ assertRegex(
       !section.includes(
         "const recoveryCodecOverride = cameraRecoveryCodecOverrideRef.current",
       ) ||
+      !section.includes("let videoTrack = getFirstLiveTrack(") ||
       !section.includes("recoveryCodecOverride ??") ||
       !section.includes("forceSingleLayer,") ||
       !section.includes("consumedRecoveryPublishOverride") ||
