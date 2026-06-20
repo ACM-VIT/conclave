@@ -112,6 +112,10 @@ const getFirstLiveTrack = <T extends MediaStreamTrack>(
   tracks: readonly T[],
 ): T | null => tracks.find((track) => track.readyState === "live") ?? null;
 
+const TOGGLE_MUTE_STRICT_ACK_TIMEOUT_MS = 5000;
+const TOGGLE_MUTE_FAST_ACK_TIMEOUT_MS = 1500;
+const TOGGLE_MUTE_BACKGROUND_ACK_TIMEOUT_MS = 3000;
+
 const shouldUpdateCaptureConstraintsForQualitySwitch = (
   quality: VideoQuality,
   profile: WebcamProducerNetworkProfile,
@@ -416,6 +420,17 @@ export function useMeetMedia({
   if (connectionStateRef.current !== connectionState) {
     connectionStateRef.current = connectionState;
   }
+  const isMutedRef = useRef(isMuted);
+  useEffect(() => {
+    isMutedRef.current = isMuted;
+  }, [isMuted]);
+  const setMutedIntent = useCallback(
+    (value: boolean) => {
+      isMutedRef.current = value;
+      setIsMuted(value);
+    },
+    [setIsMuted],
+  );
   const toggleMuteInFlightRef = useRef(false);
   const [isMuteTogglePending, setIsMuteTogglePending] = useState(false);
   const toggleCameraInFlightRef = useRef(false);
@@ -539,7 +554,11 @@ export function useMeetMedia({
   }, [getAudioContext]);
 
   const emitToggleMute = useCallback(
-    (producerId: string, paused: boolean) => {
+    (
+      producerId: string,
+      paused: boolean,
+      options?: { timeoutMs?: number },
+    ) => {
       const socket = socketRef.current;
       if (!socket || !socket.connected) {
         return Promise.resolve({
@@ -550,15 +569,13 @@ export function useMeetMedia({
 
       return new Promise<{ ok: boolean; error?: string }>((resolve) => {
         let settled = false;
-        // 1500ms was too tight: a slow-but-healthy ack would time out and (on
-        // unmute) trigger a destructive producer-recreate. The toggle itself is
-        // delivered reliably (TCP) and the SFU acts on the event, not the ack —
-        // so we can afford to wait for the ack rather than assume failure.
+        const timeoutMs =
+          options?.timeoutMs ?? TOGGLE_MUTE_STRICT_ACK_TIMEOUT_MS;
         const timeout = window.setTimeout(() => {
           if (settled) return;
           settled = true;
           resolve({ ok: false, error: "toggleMute timeout" });
-        }, 5000);
+        }, timeoutMs);
 
         socket.emit(
           "toggleMute",
@@ -596,6 +613,63 @@ export function useMeetMedia({
       }
     },
     [audioProducerRef, intentionalLocalProducerCloseIdsRef, socketRef],
+  );
+
+  const confirmAudioProducerUnmuted = useCallback(
+    (producerId: string) => {
+      void (async () => {
+        const firstResult = await emitToggleMute(producerId, false, {
+          timeoutMs: TOGGLE_MUTE_FAST_ACK_TIMEOUT_MS,
+        });
+        if (firstResult.ok) return;
+
+        let currentProducer = audioProducerRef.current;
+        if (
+          isMutedRef.current ||
+          !currentProducer ||
+          currentProducer.id !== producerId ||
+          currentProducer.closed
+        ) {
+          return;
+        }
+
+        let confirmationError = firstResult.error;
+        if (firstResult.error === "toggleMute timeout") {
+          console.warn(
+            "[Meets] unmute ack timed out; confirming microphone state in background:",
+            firstResult.error,
+          );
+          const retryResult = await emitToggleMute(producerId, false, {
+            timeoutMs: TOGGLE_MUTE_BACKGROUND_ACK_TIMEOUT_MS,
+          });
+          if (retryResult.ok) return;
+          confirmationError = retryResult.error;
+        }
+
+        currentProducer = audioProducerRef.current;
+        if (
+          isMutedRef.current ||
+          !currentProducer ||
+          currentProducer.id !== producerId ||
+          currentProducer.closed
+        ) {
+          return;
+        }
+
+        console.warn(
+          "[Meets] unmute confirmation failed; refreshing microphone producer:",
+          confirmationError,
+        );
+        closeLocalAudioProducerForReplacement(currentProducer);
+        requestAudioProducerRecovery();
+      })();
+    },
+    [
+      audioProducerRef,
+      closeLocalAudioProducerForReplacement,
+      emitToggleMute,
+      requestAudioProducerRecovery,
+    ],
   );
 
   const getPublishNetworkProfile =
@@ -1438,7 +1512,9 @@ export function useMeetMedia({
           try {
             producer.pause();
           } catch {}
-          const toggleResult = await emitToggleMute(producer.id, true);
+          const toggleResult = await emitToggleMute(producer.id, true, {
+            timeoutMs: TOGGLE_MUTE_STRICT_ACK_TIMEOUT_MS,
+          });
           if (!toggleResult.ok) {
             console.warn(
               "[Meets] toggleMute failed, rolling back mute:",
@@ -1452,7 +1528,7 @@ export function useMeetMedia({
             try {
               producer.resume();
             } catch {}
-            setIsMuted(false);
+            setMutedIntent(false);
             setMeetError({
               code: "TRANSPORT_ERROR",
               message: toggleResult.error || "Failed to mute microphone",
@@ -1461,7 +1537,7 @@ export function useMeetMedia({
             return;
           }
         }
-        setIsMuted(true);
+        setMutedIntent(true);
         return;
       }
 
@@ -1526,50 +1602,10 @@ export function useMeetMedia({
         try {
           producer.resume();
         } catch {}
-        const toggleResult = await emitToggleMute(producer.id, false);
-        if (!toggleResult.ok) {
-          const isTimeout = toggleResult.error === "toggleMute timeout";
-          const producerDead =
-            producer.closed || producer.track?.readyState !== "live";
-          if (isTimeout && !producerDead) {
-            // A slow/lost ACK on a healthy producer does NOT mean the producer
-            // is broken: the SFU resumes its producer from the toggleMute event
-            // itself (reliably delivered), not the ack. Keep the producer and
-            // retry the toggle idempotently rather than recreating it — a
-            // recreate fires producerClosed+newProducer and forces every
-            // listener to re-consume (a multi-RTT audio gap, and a prime cause
-            // of "I unmuted but nobody can hear me").
-            console.warn(
-              "[Meets] unmute ack timed out but producer is healthy — retrying toggle:",
-              toggleResult.error
-            );
-            const retry = await emitToggleMute(producer.id, false);
-            if (!retry.ok) {
-              // The retry ALSO failed (likely a real disconnect/non-delivery,
-              // not just a slow ack). Don't claim "unmuted" over a producer that
-              // may still be paused server-side — recreate so a fresh, resumed
-              // producer is published (or transport.produce() throws and we roll
-              // back to muted below).
-              console.warn(
-                "[Meets] unmute retry also failed — recreating to be safe:",
-                retry.error
-              );
-              closeLocalAudioProducerForReplacement(producer);
-              producer = null;
-            }
-          } else {
-            // An EXPLICIT server error (e.g. "Microphone producer not found")
-            // or a dead local producer means the SFU has no live producer for
-            // us — keeping it would leave us silently muted server-side. Tear
-            // down + recreate so a fresh producer is published.
-            console.warn(
-              "[Meets] unmute failed (server error / dead producer) — recreating:",
-              toggleResult.error
-            );
-            closeLocalAudioProducerForReplacement(producer);
-            producer = null;
-          }
-        }
+        setMutedIntent(false);
+        setMeetError(null);
+        confirmAudioProducerUnmuted(producer.id);
+        return;
       }
 
       if (!producer) {
@@ -1591,7 +1627,8 @@ export function useMeetMedia({
           }
         });
       }
-      setIsMuted(false);
+      setMutedIntent(false);
+      setMeetError(null);
     } catch (err) {
       console.error("[Meets] Failed to restart audio:", err);
       if (createdTrack) {
@@ -1604,7 +1641,7 @@ export function useMeetMedia({
           commitLocalStream(new MediaStream(remaining));
         }
       }
-      setIsMuted(previousMuted);
+      setMutedIntent(previousMuted);
       setMeetError(createMeetError(err, "MEDIA_ERROR"));
     } finally {
       toggleMuteInFlightRef.current = false;
@@ -1625,11 +1662,12 @@ export function useMeetMedia({
     commitLocalStream,
     producerTransportRef,
     ensureProducerTransportRef,
-    setIsMuted,
     setMeetError,
     closeLocalAudioProducerForReplacement,
+    confirmAudioProducerUnmuted,
     getPublishNetworkProfile,
     markAudioTrackForSpeech,
+    setMutedIntent,
     toggleMuteInFlightRef,
   ]);
 

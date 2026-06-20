@@ -872,6 +872,20 @@ assertRegex(
         "web mute toggle must apply intent to all live mic tracks and unmute a live track",
       );
     }
+    if (
+      !text.includes("const confirmAudioProducerUnmuted = useCallback(") ||
+      !text.includes("TOGGLE_MUTE_FAST_ACK_TIMEOUT_MS") ||
+      !text.includes("TOGGLE_MUTE_BACKGROUND_ACK_TIMEOUT_MS") ||
+      !text.includes("isMutedRef.current") ||
+      !section.includes("setMutedIntent(false);") ||
+      !section.includes("confirmAudioProducerUnmuted(producer.id);") ||
+      !section.includes("return;") ||
+      section.includes("const retry = await emitToggleMute(producer.id, false)")
+    ) {
+      failures.push(
+        "web unmute must return after local producer resume and confirm SFU state in the background",
+      );
+    }
   }
 }
 {
