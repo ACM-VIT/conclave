@@ -227,12 +227,13 @@ const hasOutboundVideoProgress = (
   previous: CameraOutboundStallState,
   sample: OutboundVideoProgressSample,
 ): boolean => {
+  // When frame counters exist, byte trickle alone is not video progress: RTP
+  // padding/RTX can advance bytes while the camera frame stream is frozen.
   if (
     previous.frames !== null &&
-    sample.frames !== null &&
-    sample.frames > previous.frames
+    sample.frames !== null
   ) {
-    return true;
+    return sample.frames > previous.frames;
   }
 
   if (
@@ -1986,11 +1987,13 @@ export function useMeetMedia({
       producerTrack,
       sample,
       state,
+      allowProducerRecreate,
     }: {
       producer: Producer;
       producerTrack: MediaStreamTrack;
       sample: OutboundVideoProgressSample;
       state: CameraOutboundStallState;
+      allowProducerRecreate: boolean;
     }) => {
       if (disposed) return;
       if (cameraProducerTrackRepairInFlightRef.current) return;
@@ -2066,6 +2069,25 @@ export function useMeetMedia({
           return;
         }
 
+        if (!allowProducerRecreate) {
+          cameraOutboundStallStateRef.current = {
+            ...state,
+            lastRecoveryAtMs: now,
+          };
+          console.warn(
+            "[Meets] Camera sender stalled in background; keeping producer open.",
+            {
+              producerId: producer.id,
+              trackId: producerTrack.id,
+              rawTrackId: rawCameraTrack.id,
+              stalledSamples: state.stalledSamples,
+              frames: sample.frames,
+              bytes: sample.bytes,
+            },
+          );
+          return;
+        }
+
         console.warn("[Meets] Recreating stalled camera sender:", {
           producerId: producer.id,
           trackId: producerTrack.id,
@@ -2113,16 +2135,6 @@ export function useMeetMedia({
     const pollOutboundProgress = () => {
       if (disposed) return;
       if (
-        typeof document !== "undefined" &&
-        document.visibilityState !== "visible"
-      ) {
-        resetStallState(
-          videoProducerRef.current?.id ?? null,
-          videoProducerRef.current?.track?.id ?? null,
-        );
-        return;
-      }
-      if (
         cameraProducerTrackRepairInFlightRef.current ||
         cameraRecoveryInFlightRef.current
       ) {
@@ -2165,6 +2177,9 @@ export function useMeetMedia({
           }
 
           const sample = readOutboundVideoProgressSample(report);
+          const allowProducerRecreate =
+            typeof document === "undefined" ||
+            document.visibilityState === "visible";
           const currentState = cameraOutboundStallStateRef.current;
           const previous =
             currentState.producerId === producer.id &&
@@ -2199,6 +2214,7 @@ export function useMeetMedia({
             producerTrack,
             sample,
             state: nextState,
+            allowProducerRecreate,
           });
         })
         .catch(() => {

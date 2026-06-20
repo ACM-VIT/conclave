@@ -1002,6 +1002,21 @@ for (const [context, label] of [
   );
   assertRegex(
     "webMeetMedia",
+    /When frame counters exist, byte trickle alone is not video progress[\s\S]*previous\.frames !== null[\s\S]*sample\.frames !== null[\s\S]*return sample\.frames > previous\.frames;[\s\S]*sample\.bytes - previous\.bytes >= MIN_OUTBOUND_VIDEO_BYTE_DELTA_FOR_PROGRESS/,
+    "web camera sender watchdog must not treat byte trickle as frame progress",
+  );
+  assertRegex(
+    "webMeetMedia",
+    /allowProducerRecreate: boolean[\s\S]*if \(!allowProducerRecreate\) \{[\s\S]*Camera sender stalled in background; keeping producer open/,
+    "web hidden camera sender watchdog repairs raw tracks without background producer recreation",
+  );
+  assertRegex(
+    "webMeetMedia",
+    /const allowProducerRecreate =[\s\S]*document\.visibilityState === "visible"[\s\S]*recoverStalledProducer\(\{[\s\S]*allowProducerRecreate/,
+    "web camera sender watchdog passes foreground state to stalled recovery",
+  );
+  assertRegex(
+    "webMeetMedia",
     /qualityLimitationReason[\s\S]*isEncoderLimitedOutboundSample[\s\S]*qualityLimitationReason === "bandwidth"[\s\S]*qualityLimitationReason === "cpu"[\s\S]*stalledSamples < CAMERA_OUTBOUND_STALL_SAMPLES_BEFORE_RECOVERY \|\|[\s\S]*isEncoderLimitedOutboundSample\(sample\)/,
     "web camera sender watchdog must not recreate producers for encoder-limited stalls",
   );
