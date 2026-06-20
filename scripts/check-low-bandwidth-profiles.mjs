@@ -804,7 +804,9 @@ assertRegex(
       !section.includes("const previousAudioTracks =") ||
       !section.includes("const currentAudioProducer = audioProducerRef.current;") ||
       !section.includes("currentAudioProducer?.closed") ||
-      !section.includes("resetAudioProducer(currentAudioProducer);") ||
+      !section.includes(
+        "closeLocalAudioProducerForReplacement(currentAudioProducer);",
+      ) ||
       !section.includes("requestAudioProducerRecovery();") ||
       !section.includes("commitLocalStream(nextStream);") ||
       !section.includes("committedNewAudioTrack = newAudioTrack;") ||
@@ -1596,6 +1598,11 @@ assertIncludes(
   "webMeetMedia",
   "intentionalLocalProducerCloseIdsRef.current.add(producer.id)",
   "web camera recovery marks replacement closes as intentional",
+);
+assertRegex(
+  "webMeetMedia",
+  /const closeLocalAudioProducerForReplacement = useCallback\([\s\S]*intentionalLocalProducerCloseIdsRef\.current\.add\(producer\.id\)[\s\S]*socketRef\.current\?\.emit\([\s\S]*"closeProducer"[\s\S]*producerId: producer\.id[\s\S]*producer\.close\(\)[\s\S]*audioProducerRef\.current = null;/,
+  "web audio producer replacement closes are intentional and notify the SFU",
 );
 assertIncludes(
   "iosWebrtc",

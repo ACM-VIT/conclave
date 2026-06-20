@@ -580,9 +580,15 @@ export function useMeetMedia({
     [socketRef]
   );
 
-  const resetAudioProducer = useCallback(
+  const closeLocalAudioProducerForReplacement = useCallback(
     (producer: Producer | null) => {
       if (!producer) return;
+      intentionalLocalProducerCloseIdsRef.current.add(producer.id);
+      socketRef.current?.emit(
+        "closeProducer",
+        { producerId: producer.id },
+        () => {},
+      );
       try {
         producer.close();
       } catch {}
@@ -590,7 +596,7 @@ export function useMeetMedia({
         audioProducerRef.current = null;
       }
     },
-    [audioProducerRef]
+    [audioProducerRef, intentionalLocalProducerCloseIdsRef, socketRef],
   );
 
   const getPublishNetworkProfile =
@@ -794,15 +800,7 @@ export function useMeetMedia({
       if (kind === "audio") {
         const producer = audioProducerRef.current;
         if (producer) {
-          socketRef.current?.emit(
-            "closeProducer",
-            { producerId: producer.id },
-            () => {}
-          );
-          try {
-            producer.close();
-          } catch {}
-          audioProducerRef.current = null;
+          closeLocalAudioProducerForReplacement(producer);
         }
         if (connectionStateRef.current === "joined") {
           console.warn(
@@ -839,6 +837,7 @@ export function useMeetMedia({
     },
     [
       consumeIntentionalStop,
+      closeLocalAudioProducerForReplacement,
       closeLocalVideoProducerForReplacement,
       commitLocalStream,
       setIsMuted,
@@ -846,7 +845,6 @@ export function useMeetMedia({
       localStreamRef,
       audioProducerRef,
       videoProducerRef,
-      socketRef,
       requestAudioProducerRecovery,
       requestCameraProducerRecovery,
     ]
@@ -993,7 +991,7 @@ export function useMeetMedia({
 
             const currentAudioProducer = audioProducerRef.current;
             if (currentAudioProducer?.closed) {
-              resetAudioProducer(currentAudioProducer);
+              closeLocalAudioProducerForReplacement(currentAudioProducer);
             }
             const audioProducer = audioProducerRef.current;
             if (audioProducer) {
@@ -1032,7 +1030,7 @@ export function useMeetMedia({
       commitLocalStream,
       buildAudioConstraints,
       markAudioTrackForSpeech,
-      resetAudioProducer,
+      closeLocalAudioProducerForReplacement,
       stopTracksExcept,
       requestAudioProducerRecovery,
     ]
@@ -1423,12 +1421,7 @@ export function useMeetMedia({
         producer &&
         (producer.closed || producer.track?.readyState !== "live")
       ) {
-        socketRef.current?.emit(
-          "closeProducer",
-          { producerId: producer.id },
-          () => {}
-        );
-        resetAudioProducer(producer);
+        closeLocalAudioProducerForReplacement(producer);
         producer = null;
       }
 
@@ -1562,7 +1555,7 @@ export function useMeetMedia({
                 "[Meets] unmute retry also failed — recreating to be safe:",
                 retry.error
               );
-              resetAudioProducer(producer);
+              closeLocalAudioProducerForReplacement(producer);
               producer = null;
             }
           } else {
@@ -1574,7 +1567,7 @@ export function useMeetMedia({
               "[Meets] unmute failed (server error / dead producer) — recreating:",
               toggleResult.error
             );
-            resetAudioProducer(producer);
+            closeLocalAudioProducerForReplacement(producer);
             producer = null;
           }
         }
@@ -1635,7 +1628,7 @@ export function useMeetMedia({
     ensureProducerTransportRef,
     setIsMuted,
     setMeetError,
-    resetAudioProducer,
+    closeLocalAudioProducerForReplacement,
     getPublishNetworkProfile,
     markAudioTrackForSpeech,
     toggleMuteInFlightRef,
@@ -1659,7 +1652,7 @@ export function useMeetMedia({
       if (!needsRecovery) return;
 
       if (producer && audioProducerRef.current?.id === producer.id) {
-        resetAudioProducer(producer);
+        closeLocalAudioProducerForReplacement(producer);
       }
 
       console.warn("[Meets] Audio producer recovery triggered:", {
@@ -1694,7 +1687,7 @@ export function useMeetMedia({
     isObserverMode,
     isMediaRecoveryBlocked,
     audioProducerRef,
-    resetAudioProducer,
+    closeLocalAudioProducerForReplacement,
     requestAudioProducerRecovery,
   ]);
 
@@ -1709,7 +1702,7 @@ export function useMeetMedia({
         existingProducer.closed ||
         existingProducer.track?.readyState !== "live"
       ) {
-        resetAudioProducer(existingProducer);
+        closeLocalAudioProducerForReplacement(existingProducer);
       } else {
         return;
       }
@@ -1861,7 +1854,7 @@ export function useMeetMedia({
     setLocalStream,
     setIsMuted,
     setMeetError,
-    resetAudioProducer,
+    closeLocalAudioProducerForReplacement,
     getPublishNetworkProfile,
     markAudioTrackForSpeech,
     requestAudioProducerRecovery,
