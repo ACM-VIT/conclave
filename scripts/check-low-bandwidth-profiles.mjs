@@ -340,6 +340,11 @@ assertIncludes(
   "retrying consumer later",
   "web stale consumer recovery retries only the affected consumer",
 );
+assertIncludes(
+  "webMeetSocket",
+  "if (consumer.paused || shouldRequestKeyFrame)",
+  "web producer sync avoids no-op consumer resumes",
+);
 {
   const text = source.webMeetSocket;
   const start = text.indexOf("const recoverStaleConsumer = useCallback(");

@@ -2660,14 +2660,16 @@ export function useMeetSocket({
               consumer.kind === "video" &&
               consumer.track?.readyState === "live" &&
               consumer.track.muted;
-            socket.emit(
-              "resumeConsumer",
-              {
-                consumerId: consumer.id,
-                requestKeyFrame: shouldRequestKeyFrame,
-              },
-              () => {},
-            );
+            if (consumer.paused || shouldRequestKeyFrame) {
+              socket.emit(
+                "resumeConsumer",
+                {
+                  consumerId: consumer.id,
+                  requestKeyFrame: shouldRequestKeyFrame,
+                },
+                () => {},
+              );
+            }
           }
           continue;
         }
