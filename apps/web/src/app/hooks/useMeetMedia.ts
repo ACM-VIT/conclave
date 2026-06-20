@@ -6,8 +6,12 @@ import type { Device } from "mediasoup-client";
 import {
   buildCameraVideoConstraints,
   DEFAULT_AUDIO_CONSTRAINTS,
+  EMERGENCY_QUALITY_CONSTRAINTS,
+  LOW_QUALITY_CONSTRAINTS,
   buildMicrophoneOpusCodecOptions,
+  POOR_QUALITY_CONSTRAINTS,
   buildScreenShareAudioOpusCodecOptions,
+  STANDARD_QUALITY_CONSTRAINTS,
 } from "../lib/constants";
 import type {
   MediaState,
@@ -98,6 +102,66 @@ const isPublishEmergencyProfile = (
 ) =>
   browserNetwork.emergency ||
   (stats?.publishEmergencyMode === true && stats.publishQuality !== "good");
+
+const getNumericConstraintValue = (
+  value: MediaTrackConstraintSet["width"],
+  key: "ideal" | "max",
+): number | null => {
+  if (typeof value === "number") return value;
+  if (typeof value !== "object" || value === null) return null;
+  const record = value as { ideal?: unknown; max?: unknown };
+  const next = record[key];
+  return typeof next === "number" && Number.isFinite(next) ? next : null;
+};
+
+const getQualitySwitchReferenceConstraints = (
+  quality: VideoQuality,
+  profile: WebcamProducerNetworkProfile,
+) => {
+  if (profile === "emergency") return EMERGENCY_QUALITY_CONSTRAINTS;
+  if (profile === "poor") return POOR_QUALITY_CONSTRAINTS;
+  if (quality === "low" || profile === "fair") return LOW_QUALITY_CONSTRAINTS;
+  return STANDARD_QUALITY_CONSTRAINTS;
+};
+
+const shouldRefreshVideoTrackForQualitySwitch = (
+  track: MediaStreamTrack,
+  quality: VideoQuality,
+  profile: WebcamProducerNetworkProfile,
+): boolean => {
+  let settings: MediaTrackSettings = {};
+  try {
+    settings = track.getSettings();
+  } catch {
+    return false;
+  }
+
+  const constraints = getQualitySwitchReferenceConstraints(quality, profile);
+  const targetWidth = getNumericConstraintValue(constraints.width, "ideal");
+  const targetHeight = getNumericConstraintValue(constraints.height, "ideal");
+  const maxWidth = getNumericConstraintValue(constraints.width, "max");
+  const maxHeight = getNumericConstraintValue(constraints.height, "max");
+
+  if (quality === "standard" && profile === "good") {
+    return (
+      (typeof settings.width === "number" &&
+        targetWidth !== null &&
+        settings.width < targetWidth * 0.9) ||
+      (typeof settings.height === "number" &&
+        targetHeight !== null &&
+        settings.height < targetHeight * 0.9)
+    );
+  }
+
+  return (
+    (typeof settings.width === "number" &&
+      maxWidth !== null &&
+      settings.width > maxWidth * 1.25) ||
+    (typeof settings.height === "number" &&
+      maxHeight !== null &&
+      settings.height > maxHeight * 1.25)
+  );
+};
 
 export function useMeetMedia({
   ghostEnabled,
@@ -747,6 +811,7 @@ export function useMeetMedia({
         );
 
         const currentTrack = localStream.getVideoTracks()[0];
+        let shouldRefreshVideoTrack = false;
         if (currentTrack && currentTrack.readyState === "live") {
           currentTrack.onended = () => {
             handleLocalTrackEnded("video", currentTrack);
@@ -754,9 +819,28 @@ export function useMeetMedia({
           try {
             await currentTrack.applyConstraints(constraints);
           } catch (err) {
+            shouldRefreshVideoTrack = true;
             console.warn(
-              "[Meets] Camera constraints update failed; keeping live track:",
+              "[Meets] Camera constraints update failed; refreshing capture once:",
               err
+            );
+          }
+          if (
+            !shouldRefreshVideoTrack &&
+            shouldRefreshVideoTrackForQualitySwitch(
+              currentTrack,
+              quality,
+              publishNetworkProfile,
+            )
+          ) {
+            shouldRefreshVideoTrack = true;
+            console.info(
+              "[Meets] Camera track did not reach requested quality; refreshing capture once:",
+              {
+                quality,
+                profile: publishNetworkProfile,
+                settings: currentTrack.getSettings(),
+              },
             );
           }
         }
@@ -767,7 +851,8 @@ export function useMeetMedia({
 
         if (
           !nextVideoTrack ||
-          nextVideoTrack.readyState !== "live"
+          nextVideoTrack.readyState !== "live" ||
+          shouldRefreshVideoTrack
         ) {
           const currentDeviceId =
             currentTrack?.readyState === "live"

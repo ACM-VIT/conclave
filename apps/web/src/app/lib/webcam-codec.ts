@@ -101,6 +101,13 @@ const SCREEN_SHARE_RTP_PRIORITY: RTCPriorityType = "medium";
 const WEBRTC_ENCODING_ORDER = ["q", "h", "f"] as const;
 const MIN_CRISP_BASE_LAYER_WIDTH = 300;
 const MIN_CRISP_BASE_LAYER_HEIGHT = 160;
+const LOW_BANDWIDTH_BASE_LAYER_TARGETS: Record<
+  Extract<WebcamProducerNetworkProfile, "poor" | "emergency">,
+  { width: number; height: number }
+> = {
+  poor: { width: 426, height: 240 },
+  emergency: { width: 320, height: 180 },
+};
 
 const getTrackCaptureSize = (
   track: MediaStreamTrack | null | undefined,
@@ -224,10 +231,27 @@ const getProfileAdjustedScaleResolutionDownBy = (
   if (layerRank !== 0) return current;
   if (profile !== "poor" && profile !== "emergency") return current;
 
-  // Poor/emergency capture is already constrained before encoding. Scaling the
-  // only active layer again makes the stream softer without saving meaningful
-  // bandwidth because the bitrate/FPS caps are already tight.
-  return 1;
+  return current;
+};
+
+const getCaptureScaleForTarget = (
+  captureSize: CaptureSize,
+  target: { width: number; height: number },
+): number | null => {
+  const widthScale =
+    captureSize.width !== null && captureSize.width > 0
+      ? captureSize.width / target.width
+      : null;
+  const heightScale =
+    captureSize.height !== null && captureSize.height > 0
+      ? captureSize.height / target.height
+      : null;
+  const targetScale = Math.min(
+    ...(widthScale !== null ? [widthScale] : []),
+    ...(heightScale !== null ? [heightScale] : []),
+  );
+  if (!Number.isFinite(targetScale) || targetScale <= 1) return null;
+  return Number(targetScale.toFixed(1));
 };
 
 const getCaptureAdjustedScaleResolutionDownBy = (
@@ -242,9 +266,25 @@ const getCaptureAdjustedScaleResolutionDownBy = (
     layerRank,
   );
   if (layerRank !== 0 || typeof profileAdjusted !== "number") {
+    if (layerRank === 0 && (profile === "poor" || profile === "emergency")) {
+      return (
+        getCaptureScaleForTarget(
+          captureSize,
+          LOW_BANDWIDTH_BASE_LAYER_TARGETS[profile],
+        ) ?? profileAdjusted
+      );
+    }
     return profileAdjusted;
   }
-  if (profile === "poor" || profile === "emergency") return profileAdjusted;
+  if (profile === "poor" || profile === "emergency") {
+    const targetScale = getCaptureScaleForTarget(
+      captureSize,
+      LOW_BANDWIDTH_BASE_LAYER_TARGETS[profile],
+    );
+    return targetScale === null
+      ? profileAdjusted
+      : Math.max(profileAdjusted, targetScale);
+  }
 
   const widthScale =
     captureSize.width !== null && captureSize.width >= MIN_CRISP_BASE_LAYER_WIDTH

@@ -115,8 +115,13 @@ assertIncludes(
 );
 assertIncludes(
   "webCodec",
-  "return 1;",
-  "web constrained active webcam layer avoids double scaling",
+  "LOW_BANDWIDTH_BASE_LAYER_TARGETS",
+  "web low-bandwidth webcam sender downscale targets",
+);
+assertIncludes(
+  "webCodec",
+  "Math.max(profileAdjusted, targetScale)",
+  "web poor/emergency webcam keeps sender downscale without capture churn",
 );
 assertIncludes(
   "iosWebrtc",
@@ -260,8 +265,13 @@ assertNotIncludes(
 );
 assertIncludes(
   "webMeetMedia",
-  "Camera constraints update failed; keeping live track",
-  "web keeps live camera track when capture constraint update fails",
+  "Camera constraints update failed; refreshing capture once",
+  "web quality switch refreshes capture when constraints fail",
+);
+assertIncludes(
+  "webMeetMedia",
+  "shouldRefreshVideoTrackForQualitySwitch",
+  "web quality switch refreshes capture when constraints undershoot",
 );
 {
   const text = source.webAdaptivePublishQuality;
