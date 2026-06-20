@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertTriangle, Home, RotateCw } from "lucide-react";
+import Image from "next/image";
 
 type ErrorStateViewProps = {
   eyebrow?: string;
@@ -20,56 +20,51 @@ export default function ErrorStateView({
   onRetry,
 }: ErrorStateViewProps) {
   return (
-    <main className="min-h-dvh bg-[#080809] px-5 py-6 text-[#fafafa] sm:px-8">
-      <div className="mx-auto flex min-h-[calc(100dvh-48px)] w-full max-w-2xl flex-col">
-        <header className="flex items-center justify-between">
-          <a
-            href="/"
-            className="text-[13px] font-semibold text-[#fafafa]/70 transition-colors hover:text-[#fafafa]"
-            aria-label="Conclave lobby"
+    <main className="flex min-h-dvh flex-col bg-[#0a0a0b] text-[#fafafa]">
+      <header className="px-5 py-4">
+        <a href="/" className="flex items-center" aria-label="Conclave home">
+          <Image
+            src="/assets/acm_topleft.svg"
+            alt="ACM-VIT"
+            width={128}
+            height={128}
+            className="h-auto w-[104px]"
+            priority
+          />
+        </a>
+      </header>
+
+      <div className="flex flex-1 items-center justify-center px-4 py-10">
+        <section className="animate-fade-in w-full max-w-[420px] rounded-2xl border border-white/10 bg-[#0e0e10] p-6 text-center sm:max-w-[480px] sm:p-8">
+          <p className="text-[11.5px] font-semibold uppercase tracking-[0.07em] text-[#fafafa]/40">
+            {eyebrow}
+          </p>
+          <h1
+            className="mt-3 text-[22px] leading-tight text-[#fafafa]"
+            style={{ fontFamily: "'PolySans Bulky Wide', sans-serif" }}
           >
-            Conclave
-          </a>
-        </header>
+            {title}
+          </h1>
+          <p className="mt-2 text-[13.5px] leading-snug text-[#fafafa]/55">
+            {message}
+          </p>
 
-        <section className="flex flex-1 items-center py-10">
-          <div className="w-full rounded-xl border border-white/10 bg-[#111113] p-6 shadow-[0_18px_50px_rgba(0,0,0,0.28)] sm:p-8">
-            <div className="flex h-10 w-10 items-center justify-center rounded-lg border border-[#F95F4A]/25 bg-[#F95F4A]/10 text-[#F95F4A]">
-              <AlertTriangle size={20} strokeWidth={1.9} />
-            </div>
-
-            <p className="mt-6 text-[12px] font-semibold uppercase text-[#fafafa]/40">
-              {eyebrow}
-            </p>
-            <h1
-              className="mt-3 max-w-[520px] text-[28px] leading-[1.08] text-[#fafafa] sm:text-[36px]"
-              style={{ fontFamily: "'PolySans Bulky Wide', sans-serif" }}
-            >
-              {title}
-            </h1>
-            <p className="mt-4 max-w-[520px] text-[15px] leading-6 text-[#fafafa]/58">
-              {message}
-            </p>
-
-            <div className="mt-8 flex flex-col gap-3 sm:flex-row">
-              {onRetry ? (
-                <button
-                  type="button"
-                  onClick={onRetry}
-                className="inline-flex h-12 items-center justify-center gap-2 rounded-xl bg-[#F95F4A] px-5 text-[14px] font-semibold text-white transition-colors hover:bg-[#ff705d] focus:outline-none focus:ring-2 focus:ring-[#F95F4A]/45 focus:ring-offset-2 focus:ring-offset-[#111113]"
-                >
-                  <RotateCw size={17} strokeWidth={2.2} />
-                  {retryLabel}
-                </button>
-              ) : null}
-              <a
-                href="/"
-                className="inline-flex h-12 items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-5 text-[14px] font-semibold text-[#fafafa] transition-colors hover:bg-white/[0.07] focus:outline-none focus:ring-2 focus:ring-white/20 focus:ring-offset-2 focus:ring-offset-[#111113]"
+          <div className="mt-6 flex flex-col gap-2.5">
+            {onRetry ? (
+              <button
+                type="button"
+                onClick={onRetry}
+                className="inline-flex h-12 w-full items-center justify-center rounded-xl bg-[#F95F4A] text-[15px] font-medium text-white transition-[filter] duration-150 hover:brightness-[1.05]"
               >
-                <Home size={17} strokeWidth={2.1} />
-                {homeLabel}
-              </a>
-            </div>
+                {retryLabel}
+              </button>
+            ) : null}
+            <a
+              href="/"
+              className="inline-flex h-12 w-full items-center justify-center rounded-xl border border-white/10 bg-white/[0.03] text-[15px] font-medium text-[#fafafa] transition-colors hover:bg-white/[0.06]"
+            >
+              {homeLabel}
+            </a>
           </div>
         </section>
       </div>
