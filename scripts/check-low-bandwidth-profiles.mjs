@@ -398,6 +398,30 @@ assertIncludes(
     );
   }
 }
+{
+  const text = source.webAdaptivePublishQuality;
+  const start = text.indexOf(
+    "autoDowngradedRef.current ||\n          networkManagedVideoQualityRef?.current === true",
+  );
+  const end = text.indexOf("applyStableLiveProfile();", start);
+  if (start < 0 || end < 0) {
+    failures.push("web adaptive auto-upgrade section missing");
+  } else {
+    const section = text.slice(start, end);
+    const switchIndex = section.indexOf("void switchQuality(");
+    const clearIndex = section.indexOf("autoDowngradedRef.current = false");
+    if (switchIndex < 0 || clearIndex < 0 || clearIndex < switchIndex) {
+      failures.push(
+        "web adaptive auto-upgrade must clear network-managed flags only after switchQuality succeeds",
+      );
+    }
+    if (!section.includes(".then((switched) => {")) {
+      failures.push(
+        "web adaptive auto-upgrade must retain retry state when switchQuality is skipped",
+      );
+    }
+  }
+}
 assertIncludes(
   "sfuDisconnectHandlers",
   "room.scheduleDisconnect",
