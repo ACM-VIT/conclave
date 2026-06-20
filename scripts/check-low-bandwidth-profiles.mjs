@@ -159,6 +159,11 @@ assertIncludes(
   "Math.max(profileAdjusted, targetScale)",
   "web poor/emergency webcam keeps sender downscale without capture churn",
 );
+assertRegex(
+  "webCodec",
+  /const fallbackScaleResolutionDownBy = getCaptureAdjustedScaleResolutionDownBy\(\s*undefined,\s*profile,\s*0,\s*captureSize,\s*\);[\s\S]*scaleResolutionDownBy: fallbackScaleResolutionDownBy/,
+  "web fallback webcam profile caps include sender downscale",
+);
 assertIncludes(
   "webCodec",
   "FAIR_BANDWIDTH_ACTIVE_LAYER_TARGET",

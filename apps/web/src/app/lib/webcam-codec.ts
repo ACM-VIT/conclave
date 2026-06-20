@@ -563,9 +563,19 @@ const applyWebcamEncodingCaps = async (
 
   const [base] = getBaseEncodingCaps(quality, 1);
   const adjusted = getProfileAdjustedCap(base, quality, profile, 0);
+  const captureSize = getTrackCaptureSize(producer.track);
+  const fallbackScaleResolutionDownBy = getCaptureAdjustedScaleResolutionDownBy(
+    undefined,
+    profile,
+    0,
+    captureSize,
+  );
   await producer.setRtpEncodingParameters({
     maxBitrate: adjusted.maxBitrate,
     maxFramerate: adjusted.maxFramerate,
+    ...(typeof fallbackScaleResolutionDownBy === "number"
+      ? { scaleResolutionDownBy: fallbackScaleResolutionDownBy }
+      : {}),
   } as RTCRtpEncodingParameters);
 };
 
