@@ -1432,6 +1432,11 @@ assertIncludes(
   "if (consumer.paused || shouldRequestKeyFrame)",
   "web producer sync avoids no-op consumer resumes",
 );
+assertRegex(
+  "webMeetSocket",
+  /STALL_SAMPLES_BEFORE_PLI = 1[\s\S]*KEYFRAME_REQUEST_COOLDOWN_MS = 3500[\s\S]*bytesNow - prev\.bytes >= MIN_STALL_BYTE_DELTA[\s\S]*sampleNow - lastKeyFrameRequestAt >= KEYFRAME_REQUEST_COOLDOWN_MS[\s\S]*requestKeyFrame: true[\s\S]*lastKeyFrameRequestAt = sampleNow/,
+  "web frozen remote video decoders request keyframes after one stalled decode sample with cooldown",
+);
 {
   const text = source.webMeetSocket;
   const start = text.indexOf("const handleTrackMuted = () => {");

@@ -622,7 +622,15 @@ export function useMeetSocket({
   // effect below — this catches a frozen decoder that `track.muted` never fires
   // for (RTP keeps flowing, the decoder is stuck on a stale reference frame).
   const videoFreezeStatsRef = useRef<
-    Map<string, { frames: number; bytes: number; stalls: number }>
+    Map<
+      string,
+      {
+        frames: number;
+        bytes: number;
+        stalls: number;
+        lastKeyFrameRequestAt: number;
+      }
+    >
   >(new Map());
   const consumerRecoveryInFlightRef = useRef<Set<string>>(new Set());
   const announcedRemoteProducersRef = useRef<Map<string, ProducerInfo>>(
@@ -2745,13 +2753,14 @@ export function useMeetSocket({
   // never fires. Poll each remote VIDEO consumer's getStats every ~2s: if
   // framesDecoded stops advancing while bytesReceived keeps climbing and the
   // producer isn't paused, the decoder is stuck — request a fresh keyframe (PLI)
-  // so it un-freezes. Conservative: needs 2 consecutive stalled samples (~4s)
-  // before a PLI, and resets after each PLI to avoid keyframe storms in lossy
-  // rooms. Persistent failures still fall through to the existing stale-consumer
-  // / producer-sync recovery.
+  // so it un-freezes. One confirmed stalled sample is enough (~2s) because the
+  // byte-delta gate proves media is still arriving; a per-consumer cooldown
+  // avoids keyframe storms in lossy rooms. Persistent failures still fall
+  // through to the existing stale-consumer / producer-sync recovery.
   useEffect(() => {
     const FREEZE_CHECK_MS = 2000;
-    const STALL_SAMPLES_BEFORE_PLI = 2;
+    const STALL_SAMPLES_BEFORE_PLI = 1;
+    const KEYFRAME_REQUEST_COOLDOWN_MS = 3500;
     // Only treat a flat frame count as a freeze when REAL media is still
     // arriving (>~32kbps over the 2s window). A truly frozen decoder still
     // receives full-bitrate RTP from the sender, so a real freeze easily clears
@@ -2817,6 +2826,7 @@ export function useMeetSocket({
 
             const prev = stats.get(producerId);
             let stalls = 0;
+            let lastKeyFrameRequestAt = prev?.lastKeyFrameRequestAt ?? 0;
             if (prev) {
               const decoderStuck =
                 decodedNow === prev.frames &&
@@ -2824,7 +2834,11 @@ export function useMeetSocket({
               stalls = decoderStuck ? prev.stalls + 1 : 0;
             }
 
-            if (stalls >= STALL_SAMPLES_BEFORE_PLI) {
+            const sampleNow = Date.now();
+            if (
+              stalls >= STALL_SAMPLES_BEFORE_PLI &&
+              sampleNow - lastKeyFrameRequestAt >= KEYFRAME_REQUEST_COOLDOWN_MS
+            ) {
               // Decoder is frozen but real media is flowing → force a keyframe.
               const socket2 = socketRef.current;
               if (socket2?.connected) {
@@ -2834,6 +2848,7 @@ export function useMeetSocket({
                   () => {},
                 );
               }
+              lastKeyFrameRequestAt = sampleNow;
               stalls = 0; // give the PLI time to land before re-requesting
             }
 
@@ -2841,6 +2856,7 @@ export function useMeetSocket({
               frames: decodedNow,
               bytes: bytesNow,
               stalls,
+              lastKeyFrameRequestAt,
             });
           })
           .catch(() => {});
