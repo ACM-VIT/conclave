@@ -46,12 +46,24 @@ export interface ConnectionQualityStats {
   publishEmergencyMode: boolean;
   /** Receive-side emergency signal from browser hints or WebRTC stats. */
   receiveEmergencyMode: boolean;
-  /** Round-trip time in milliseconds, if observable. */
+  /** Worst observed round-trip time in milliseconds, if observable. */
   rttMs: number | null;
-  /** Fraction of packets lost (0-1) over the most recent window. */
+  /** Worst observed fraction of packets lost (0-1) over the most recent window. */
   packetLoss: number | null;
-  /** Jitter in milliseconds, if observable. */
+  /** Worst observed jitter in milliseconds, if observable. */
   jitterMs: number | null;
+  /** Send-side round-trip time in milliseconds, if observable. */
+  publishRttMs: number | null;
+  /** Send-side packet loss fraction (0-1) over the most recent window. */
+  publishPacketLoss: number | null;
+  /** Send-side jitter in milliseconds, if observable from remote inbound stats. */
+  publishJitterMs: number | null;
+  /** Receive-side round-trip time in milliseconds, if observable. */
+  receiveRttMs: number | null;
+  /** Receive-side packet loss fraction (0-1) over the most recent window. */
+  receivePacketLoss: number | null;
+  /** Receive-side jitter in milliseconds, if observable. */
+  receiveJitterMs: number | null;
   /** Estimated send-side available bitrate in bits/sec, if exposed. */
   availableOutgoingBitrate: number | null;
   /** Estimated receive-side available bitrate in bits/sec, if exposed. */
@@ -134,6 +146,12 @@ const UNKNOWN_STATS: ConnectionQualityStats = {
   rttMs: null,
   packetLoss: null,
   jitterMs: null,
+  publishRttMs: null,
+  publishPacketLoss: null,
+  publishJitterMs: null,
+  receiveRttMs: null,
+  receivePacketLoss: null,
+  receiveJitterMs: null,
   availableOutgoingBitrate: null,
   availableIncomingBitrate: null,
   browserNetwork: UNKNOWN_BROWSER_NETWORK_SNAPSHOT,
@@ -989,6 +1007,12 @@ export function useConnectionQuality({
         rttMs: maxNullable(publish.rttMs, receive.rttMs),
         packetLoss: maxNullable(publishLoss, receiveLoss),
         jitterMs: maxNullable(publish.jitterMs, receive.jitterMs),
+        publishRttMs: publish.rttMs,
+        publishPacketLoss: publishLoss,
+        publishJitterMs: publish.jitterMs,
+        receiveRttMs: receive.rttMs,
+        receivePacketLoss: receiveLoss,
+        receiveJitterMs: receive.jitterMs,
         availableOutgoingBitrate: publish.availableBitrate,
         availableIncomingBitrate: receive.availableBitrate,
         browserNetwork,

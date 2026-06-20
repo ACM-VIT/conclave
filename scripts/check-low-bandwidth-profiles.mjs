@@ -442,8 +442,28 @@ assertNotIncludes(
 );
 assertRegex(
   "webMeetClient",
-  /const browserPublishRecoveryQuality = \([\s\S]*selfConnectionStats\.browserNetwork\.quality === "unknown"[\s\S]*selfConnectionStats\.browserNetwork\.startupQuality[\s\S]*const browserAllowsPublishCapRecovery =[\s\S]*browserPublishRecoveryQuality === "good" \|\|[\s\S]*browserPublishRecoveryQuality === "unknown"[\s\S]*browserAllowsPublishCapRecovery && !hasPoorPublishRecoverySignal[\s\S]*\? "good"[\s\S]*: selfPublishQuality/,
+  /const hasPoorPublishRecoverySignal =[\s\S]*selfConnectionStats\.publishRttMs[\s\S]*selfConnectionStats\.publishPacketLoss[\s\S]*selfConnectionStats\.publishJitterMs[\s\S]*const browserPublishRecoveryQuality = \([\s\S]*selfConnectionStats\.browserNetwork\.quality === "unknown"[\s\S]*selfConnectionStats\.browserNetwork\.startupQuality[\s\S]*const browserAllowsPublishCapRecovery =[\s\S]*browserPublishRecoveryQuality === "good" \|\|[\s\S]*browserPublishRecoveryQuality === "unknown"[\s\S]*browserAllowsPublishCapRecovery && !hasPoorPublishRecoverySignal[\s\S]*\? "good"[\s\S]*: selfPublishQuality/,
   "web cap recovery restores good profile when browser hint is good or unknown",
+);
+assertRegex(
+  "webConnectionQuality",
+  /publishRttMs: number \| null;[\s\S]*publishPacketLoss: number \| null;[\s\S]*publishJitterMs: number \| null;[\s\S]*receiveRttMs: number \| null;[\s\S]*receivePacketLoss: number \| null;[\s\S]*receiveJitterMs: number \| null;/,
+  "web connection quality exposes directional transport impairment signals",
+);
+assertNotIncludes(
+  "webMeetClient",
+  "selfConnectionStats.rttMs >= PUBLISH_RECOVERY_RTT_POOR_MS",
+  "web publish cap recovery must not use combined RTT",
+);
+assertNotIncludes(
+  "webMeetClient",
+  "selfConnectionStats.packetLoss >= PUBLISH_RECOVERY_LOSS_POOR",
+  "web publish cap recovery must not use combined packet loss",
+);
+assertNotIncludes(
+  "webMeetClient",
+  "selfConnectionStats.jitterMs >= PUBLISH_RECOVERY_JITTER_POOR_MS",
+  "web publish cap recovery must not use combined jitter",
 );
 assertNotIncludes(
   "webMeetClient",

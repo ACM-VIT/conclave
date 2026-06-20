@@ -2370,12 +2370,12 @@ export default function MeetsClient({
     receiveEmergencyMode: selfReceiveEmergencyMode,
   } = selfConnectionStats;
   const hasPoorPublishRecoverySignal =
-    (selfConnectionStats.rttMs !== null &&
-      selfConnectionStats.rttMs >= PUBLISH_RECOVERY_RTT_POOR_MS) ||
-    (selfConnectionStats.packetLoss !== null &&
-      selfConnectionStats.packetLoss >= PUBLISH_RECOVERY_LOSS_POOR) ||
-    (selfConnectionStats.jitterMs !== null &&
-      selfConnectionStats.jitterMs >= PUBLISH_RECOVERY_JITTER_POOR_MS);
+    (selfConnectionStats.publishRttMs !== null &&
+      selfConnectionStats.publishRttMs >= PUBLISH_RECOVERY_RTT_POOR_MS) ||
+    (selfConnectionStats.publishPacketLoss !== null &&
+      selfConnectionStats.publishPacketLoss >= PUBLISH_RECOVERY_LOSS_POOR) ||
+    (selfConnectionStats.publishJitterMs !== null &&
+      selfConnectionStats.publishJitterMs >= PUBLISH_RECOVERY_JITTER_POOR_MS);
   const hasBrowserEmergencySignal =
     selfConnectionStats.browserNetwork.emergency === true;
   const browserPublishRecoveryQuality = (
