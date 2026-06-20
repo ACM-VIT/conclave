@@ -1402,8 +1402,8 @@ assertRegex(
 );
 assertRegex(
   "webMeetSocket",
-  /announcedRemoteProducersRef[\s\S]*hasReplacementProducer[\s\S]*announcedRemoteProducersRef\.current\.entries\(\)[\s\S]*if \(info\.kind === "video" && info\.type === "webcam"\) \{[\s\S]*if \(!hasReplacementProducer\)[\s\S]*UPDATE_CAMERA_OFF[\s\S]*announcedRemoteProducersRef\.current\.set\(data\.producerId, data\)/,
-  "web producer replacement announcements suppress transient camera-off state",
+  /announcedRemoteProducersRef[\s\S]*hasReplacementProducer[\s\S]*announcedRemoteProducersRef\.current\.entries\(\)[\s\S]*if \(!hasReplacementProducer\) \{[\s\S]*UPDATE_STREAM[\s\S]*stream: null[\s\S]*if \(info\.kind === "video" && info\.type === "webcam"\) \{[\s\S]*if \(!hasReplacementProducer\)[\s\S]*UPDATE_CAMERA_OFF[\s\S]*announcedRemoteProducersRef\.current\.set\(data\.producerId, data\)/,
+  "web producer replacement announcements suppress transient stream and camera-off clears",
 );
 assertRegex(
   "sfuClient",

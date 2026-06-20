@@ -1469,14 +1469,16 @@ export function useMeetSocket({
               otherInfo.type === info.type,
           );
 
-        dispatchParticipants({
-          type: "UPDATE_STREAM",
-          userId: info.userId,
-          kind: info.kind,
-          streamType: info.type,
-          stream: null,
-          producerId: producerId,
-        });
+        if (!hasReplacementProducer) {
+          dispatchParticipants({
+            type: "UPDATE_STREAM",
+            userId: info.userId,
+            kind: info.kind,
+            streamType: info.type,
+            stream: null,
+            producerId: producerId,
+          });
+        }
 
         if (info.kind === "video" && info.type === "webcam") {
           if (!hasReplacementProducer) {
@@ -1496,7 +1498,11 @@ export function useMeetSocket({
           }
         }
 
-        if (info.type === "screen" && info.kind === "video") {
+        if (
+          info.type === "screen" &&
+          info.kind === "video" &&
+          !hasReplacementProducer
+        ) {
           setActiveScreenShareId(null);
         }
 
