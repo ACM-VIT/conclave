@@ -587,6 +587,9 @@ export function useMeetSocket({
     Map<string, { frames: number; bytes: number; stalls: number }>
   >(new Map());
   const consumerRecoveryInFlightRef = useRef<Set<string>>(new Set());
+  const announcedRemoteProducersRef = useRef<Map<string, ProducerInfo>>(
+    new Map(),
+  );
   const pendingScreenProducerCloseIdsRef = useRef<Set<string>>(new Set());
   const consumeProducerRef = useRef<
     (producerInfo: ProducerInfo) => Promise<void>
@@ -920,6 +923,7 @@ export function useMeetSocket({
       producerPausedStateRef.current.clear();
       videoFreezeStatsRef.current.clear();
       consumerRecoveryInFlightRef.current.clear();
+      announcedRemoteProducersRef.current.clear();
       consumerTelemetryRef.current.clear();
       producerMapRef.current.clear();
       pendingProducersRef.current.clear();
@@ -1448,6 +1452,22 @@ export function useMeetSocket({
 
       const info = producerMapRef.current.get(producerId);
       if (info) {
+        const hasReplacementProducer =
+          Array.from(producerMapRef.current.entries()).some(
+            ([otherProducerId, otherInfo]) =>
+              otherProducerId !== producerId &&
+              otherInfo.userId === info.userId &&
+              otherInfo.kind === info.kind &&
+              otherInfo.type === info.type,
+          ) ||
+          Array.from(announcedRemoteProducersRef.current.entries()).some(
+            ([otherProducerId, otherInfo]) =>
+              otherProducerId !== producerId &&
+              otherInfo.producerUserId === info.userId &&
+              otherInfo.kind === info.kind &&
+              otherInfo.type === info.type,
+          );
+
         dispatchParticipants({
           type: "UPDATE_STREAM",
           userId: info.userId,
@@ -1458,17 +1478,21 @@ export function useMeetSocket({
         });
 
         if (info.kind === "video" && info.type === "webcam") {
-          dispatchParticipants({
-            type: "UPDATE_CAMERA_OFF",
-            userId: info.userId,
-            cameraOff: true,
-          });
+          if (!hasReplacementProducer) {
+            dispatchParticipants({
+              type: "UPDATE_CAMERA_OFF",
+              userId: info.userId,
+              cameraOff: true,
+            });
+          }
         } else if (info.kind === "audio" && info.type === "webcam") {
-          dispatchParticipants({
-            type: "UPDATE_MUTED",
-            userId: info.userId,
-            muted: true,
-          });
+          if (!hasReplacementProducer) {
+            dispatchParticipants({
+              type: "UPDATE_MUTED",
+              userId: info.userId,
+              muted: true,
+            });
+          }
         }
 
         if (info.type === "screen" && info.kind === "video") {
@@ -1477,6 +1501,7 @@ export function useMeetSocket({
 
         producerMapRef.current.delete(producerId);
       }
+      announcedRemoteProducersRef.current.delete(producerId);
     },
     [
       consumersRef,
@@ -1491,6 +1516,7 @@ export function useMeetSocket({
       producerPausedStateRef,
       consumerRecoveryInFlightRef,
       producerMapRef,
+      announcedRemoteProducersRef,
       setActiveScreenShareId,
     ],
   );
@@ -2231,6 +2257,9 @@ export function useMeetSocket({
               });
 
               consumersRef.current.set(producerInfo.producerId, consumer);
+              announcedRemoteProducersRef.current.delete(
+                producerInfo.producerId,
+              );
               consumeRetryAttemptsRef.current.delete(producerInfo.producerId);
               producerMapRef.current.set(producerInfo.producerId, {
                 userId: producerInfo.producerUserId,
@@ -2475,6 +2504,7 @@ export function useMeetSocket({
       mutedConsumerSinceRef,
       producerPausedStateRef,
       setProducerPausedState,
+      announcedRemoteProducersRef,
       userId,
     ],
   );
@@ -2671,6 +2701,11 @@ export function useMeetSocket({
       const serverProducerIds = new Set(
         producers.map((producer) => producer.producerId),
       );
+      for (const producerId of announcedRemoteProducersRef.current.keys()) {
+        if (!serverProducerIds.has(producerId)) {
+          announcedRemoteProducersRef.current.delete(producerId);
+        }
+      }
 
       const staleConsumerIds: string[] = [];
       for (const [producerId, consumer] of consumersRef.current.entries()) {
@@ -2813,6 +2848,7 @@ export function useMeetSocket({
     mutedConsumerSinceRef,
     clearStaleConsumerRecoveryTimeout,
     videoFreezeStatsRef,
+    announcedRemoteProducersRef,
   ]);
 
   const applyWebinarFeedProducers = useCallback(
@@ -3418,6 +3454,7 @@ export function useMeetSocket({
                 void syncProducers();
                 return;
               }
+              announcedRemoteProducersRef.current.set(data.producerId, data);
               await consumeProducer(data);
             });
 

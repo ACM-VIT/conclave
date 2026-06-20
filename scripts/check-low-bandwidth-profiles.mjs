@@ -22,6 +22,7 @@ const files = {
   webMeetClient: "apps/web/src/app/meets-client.tsx",
   webMeetMedia: "apps/web/src/app/hooks/useMeetMedia.ts",
   webMeetSocket: "apps/web/src/app/hooks/useMeetSocket.ts",
+  meetingParticipantReducer: "packages/meeting-core/src/participant-reducer.ts",
   webJoinScreen: "apps/web/src/app/components/JoinScreen.tsx",
   webMobileJoinScreen: "apps/web/src/app/components/mobile/MobileJoinScreen.tsx",
   webLowBandwidthProbe: "scripts/probe-low-bandwidth-meet.mjs",
@@ -36,7 +37,9 @@ const files = {
   androidReachability:
     "apps/conclave-skip/Sources/Conclave/Skip/NetworkReachabilityMonitor.kt",
   sfuRoom: "packages/sfu/config/classes/Room.ts",
+  sfuClient: "packages/sfu/config/classes/Client.ts",
   sfuConfig: "packages/sfu/config/config.ts",
+  sfuMediaHandlers: "packages/sfu/server/socket/handlers/mediaHandlers.ts",
   sfuDisconnectHandlers:
     "packages/sfu/server/socket/handlers/disconnectHandlers.ts",
 };
@@ -911,6 +914,11 @@ for (const [context, label] of [
     /producer[\s\S]*\.getStats\(\)[\s\S]*readOutboundVideoProgressSample\(report\)[\s\S]*hasOutboundVideoProgress/,
     "web camera sender watchdog monitors outbound RTP frame progress",
   );
+  assertRegex(
+    "webMeetMedia",
+    /qualityLimitationReason[\s\S]*isEncoderLimitedOutboundSample[\s\S]*qualityLimitationReason === "bandwidth"[\s\S]*qualityLimitationReason === "cpu"[\s\S]*stalledSamples < CAMERA_OUTBOUND_STALL_SAMPLES_BEFORE_RECOVERY \|\|[\s\S]*isEncoderLimitedOutboundSample\(sample\)/,
+    "web camera sender watchdog must not recreate producers for encoder-limited stalls",
+  );
 }
 {
   const text = source.webMeetMedia;
@@ -1376,6 +1384,32 @@ assertRegex(
   /refreshLocalScreenProducerForBandwidthProfile[\s\S]*transport\.produce\([\s\S]*screenShareEncodings\(connectionQuality\)[\s\S]*socket\.closeProducer\(oldProducer\.id\)/,
   "Android screen producer refresh for new bandwidth profile",
 );
+
+assertRegex(
+  "meetingParticipantReducer",
+  /if \(!action\.stream\) \{[\s\S]*currentProducerId[\s\S]*currentProducerId !== action\.producerId[\s\S]*return state;/,
+  "shared participant reducer ignores stale producer close events",
+);
+assertRegex(
+  "webMeetSocket",
+  /announcedRemoteProducersRef[\s\S]*hasReplacementProducer[\s\S]*announcedRemoteProducersRef\.current\.entries\(\)[\s\S]*if \(info\.kind === "video" && info\.type === "webcam"\) \{[\s\S]*if \(!hasReplacementProducer\)[\s\S]*UPDATE_CAMERA_OFF[\s\S]*announcedRemoteProducersRef\.current\.set\(data\.producerId, data\)/,
+  "web producer replacement announcements suppress transient camera-off state",
+);
+assertRegex(
+  "sfuClient",
+  /addProducer\(producer: Producer\): Producer \| null[\s\S]*const displacedProducer =[\s\S]*return displacedProducer;/,
+  "SFU client returns displaced producer instead of closing it inline",
+);
+{
+  const text = source.sfuMediaHandlers;
+  const newProducerIndex = text.indexOf('client.socket.emit("newProducer"');
+  const closeIndex = text.indexOf("displacedProducer.close()", newProducerIndex);
+  if (newProducerIndex < 0 || closeIndex < 0 || closeIndex < newProducerIndex) {
+    failures.push(
+      "SFU producer replacement must advertise the new producer before closing the displaced producer",
+    );
+  }
+}
 
 // Native receive adaptation must keep audio crisp, preserve screen shares, and
 // pause extra webcam video only in emergency mode.

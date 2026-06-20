@@ -428,7 +428,7 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
           room.setScreenShareProducer(producer.id);
         }
 
-        currentClient.addProducer(producer);
+        const displacedProducer = currentClient.addProducer(producer);
         room.indexClientProducer(currentClient.id, producer, type);
         await room.registerWebinarAudioProducer(
           currentClient.id,
@@ -461,6 +461,15 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
             paused: producer.paused,
             roomId: activeRoom.id,
           });
+        }
+        if (
+          displacedProducer &&
+          displacedProducer.id !== producer.id &&
+          !displacedProducer.closed
+        ) {
+          try {
+            displacedProducer.close();
+          } catch {}
         }
         emitWebinarFeedChanged(io, state, activeRoom);
 

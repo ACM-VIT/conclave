@@ -256,6 +256,61 @@ describe("participantReducer — UPDATE_STREAM", () => {
     const next = participantReducer(state, videoAction("a", s, "vp1"));
     expect(next).toBe(state);
   });
+
+  it("ignores stale webcam video closes after a replacement stream is attached", () => {
+    let state = seed("a");
+    const oldStream = fakeStream("old-video");
+    const nextStream = fakeStream("next-video");
+    state = participantReducer(state, videoAction("a", oldStream, "old-vp"));
+    state = participantReducer(state, videoAction("a", nextStream, "next-vp"));
+
+    const staleClose = participantReducer(
+      state,
+      videoAction("a", null, "old-vp"),
+    );
+
+    expect(staleClose).toBe(state);
+    expect(staleClose.get("a")!.videoStream).toBe(nextStream);
+    expect(staleClose.get("a")!.videoProducerId).toBe("next-vp");
+    expect(staleClose.get("a")!.isCameraOff).toBe(false);
+  });
+
+  it("ignores stale screen-share video closes after a replacement stream is attached", () => {
+    let state = seed("a");
+    const oldStream = fakeStream("old-screen");
+    const nextStream = fakeStream("next-screen");
+    state = participantReducer(state, {
+      type: "UPDATE_STREAM",
+      userId: "a",
+      kind: "video",
+      streamType: "screen",
+      stream: oldStream,
+      producerId: "old-screen-producer",
+    });
+    state = participantReducer(state, {
+      type: "UPDATE_STREAM",
+      userId: "a",
+      kind: "video",
+      streamType: "screen",
+      stream: nextStream,
+      producerId: "next-screen-producer",
+    });
+
+    const staleClose = participantReducer(state, {
+      type: "UPDATE_STREAM",
+      userId: "a",
+      kind: "video",
+      streamType: "screen",
+      stream: null,
+      producerId: "old-screen-producer",
+    });
+
+    expect(staleClose).toBe(state);
+    expect(staleClose.get("a")!.screenShareStream).toBe(nextStream);
+    expect(staleClose.get("a")!.screenShareProducerId).toBe(
+      "next-screen-producer",
+    );
+  });
 });
 
 describe("participantReducer — mute / camera / hand transitions", () => {

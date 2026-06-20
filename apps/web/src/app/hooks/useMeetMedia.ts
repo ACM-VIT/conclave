@@ -125,6 +125,7 @@ const getUsableProducerTransport = (
 type OutboundVideoProgressSample = {
   frames: number | null;
   bytes: number | null;
+  qualityLimitationReason: string | null;
 };
 
 type CameraOutboundStallState = {
@@ -170,6 +171,7 @@ const readOutboundVideoProgressSample = (
   let hasFrames = false;
   let bytes = 0;
   let hasBytes = false;
+  let qualityLimitationReason: string | null = null;
 
   report.forEach((entry) => {
     const stat = entry as unknown as Record<string, unknown>;
@@ -191,13 +193,28 @@ const readOutboundVideoProgressSample = (
       bytes += Math.max(0, byteCount);
       hasBytes = true;
     }
+
+    if (
+      typeof stat.qualityLimitationReason === "string" &&
+      stat.qualityLimitationReason &&
+      stat.qualityLimitationReason !== "none"
+    ) {
+      qualityLimitationReason = stat.qualityLimitationReason;
+    }
   });
 
   return {
     frames: hasFrames ? frames : null,
     bytes: hasBytes ? bytes : null,
+    qualityLimitationReason,
   };
 };
+
+const isEncoderLimitedOutboundSample = (
+  sample: OutboundVideoProgressSample,
+): boolean =>
+  sample.qualityLimitationReason === "bandwidth" ||
+  sample.qualityLimitationReason === "cpu";
 
 const hasOutboundVideoProgress = (
   previous: CameraOutboundStallState,
@@ -2108,8 +2125,8 @@ export function useMeetMedia({
           cameraOutboundStallStateRef.current = nextState;
 
           if (
-            stalledSamples <
-            CAMERA_OUTBOUND_STALL_SAMPLES_BEFORE_RECOVERY
+            stalledSamples < CAMERA_OUTBOUND_STALL_SAMPLES_BEFORE_RECOVERY ||
+            isEncoderLimitedOutboundSample(sample)
           ) {
             return;
           }

@@ -107,8 +107,24 @@ export function participantReducer(
       });
     }
     case "UPDATE_STREAM": {
+      const existingParticipant = state.get(action.userId);
+      if (!action.stream) {
+        if (!existingParticipant) return state;
+        const currentProducerId =
+          action.streamType === "screen"
+            ? action.kind === "video"
+              ? existingParticipant.screenShareProducerId
+              : existingParticipant.screenShareAudioProducerId
+            : action.kind === "video"
+              ? existingParticipant.videoProducerId
+              : existingParticipant.audioProducerId;
+        if (currentProducerId && currentProducerId !== action.producerId) {
+          return state;
+        }
+      }
+
       const participant =
-        state.get(action.userId) || createEmptyParticipant(action.userId);
+        existingParticipant || createEmptyParticipant(action.userId);
       const updated = { ...participant };
 
       if (action.streamType === "screen") {

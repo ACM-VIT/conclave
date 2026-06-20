@@ -90,7 +90,7 @@ export class Client {
     return this.isGhost || this.isWebinarAttendee;
   }
 
-  addProducer(producer: Producer): void {
+  addProducer(producer: Producer): Producer | null {
     const type = (producer.appData.type as ProducerType) || "webcam";
     const key = createProducerKey(producer.kind, type);
     const previousProducer = this.producers.get(key);
@@ -109,12 +109,10 @@ export class Client {
     producer.on("transportclose", cleanup);
     producer.observer.on("close", cleanup);
 
-    if (previousProducer && previousProducer.id !== producer.id) {
-      try {
-        this.producerKeysById.delete(previousProducer.id);
-        previousProducer.close();
-      } catch {}
-    }
+    const displacedProducer =
+      previousProducer && previousProducer.id !== producer.id
+        ? previousProducer
+        : null;
 
     if (type === "webcam") {
       if (producer.kind === "audio") {
@@ -123,6 +121,8 @@ export class Client {
         this.isCameraOff = producer.paused;
       }
     }
+
+    return displacedProducer;
   }
 
   addConsumer(
