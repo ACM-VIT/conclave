@@ -20,6 +20,7 @@ import { forceCloseRoom, markRoomEnded } from "../../rooms.js";
 import type { ConnectionContext } from "../context.js";
 import { RATE_LIMITS, takeToken } from "../rateLimit.js";
 import { respond } from "./ack.js";
+import { emitChatHistorySnapshot } from "./chatHistory.js";
 
 const DEFAULT_END_ROOM_MESSAGE =
   "This meeting has been ended by the host.";
@@ -338,6 +339,7 @@ const activatePromotedAdmin = (
     users: toPendingUserSnapshots(context.currentRoom),
     roomId,
   });
+  emitChatHistorySnapshot(promoted.socket, context.currentRoom);
 
   promoted.socket.emit("admin:roomStateChanged", {
     roomId,

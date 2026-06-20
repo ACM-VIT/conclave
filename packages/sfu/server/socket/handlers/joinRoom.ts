@@ -3,7 +3,6 @@ import { Client } from "../../../config/classes/Client.js";
 import { config } from "../../../config/config.js";
 import type {
   AppsAwarenessData,
-  ChatHistorySnapshot,
   HandRaisedSnapshot,
   JoinRoomData,
   JoinRoomErrorResponse,
@@ -51,6 +50,7 @@ import { ensureWebinarRoomConfig } from "../../scheduledWebinarScheduler.js";
 import type { ConnectionContext } from "../context.js";
 import { registerAdminHandlers } from "./adminHandlers.js";
 import { respond } from "./ack.js";
+import { emitChatHistorySnapshot } from "./chatHistory.js";
 import {
   clearBrowserState,
   getBrowserState,
@@ -775,10 +775,9 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           roomId: context.currentRoom.id,
         } satisfies HandRaisedSnapshot & { roomId: string });
 
-        socket.emit("chatHistorySnapshot", {
-          messages: context.currentRoom.getChatHistorySnapshot(),
-          roomId: context.currentRoom.id,
-        } satisfies ChatHistorySnapshot);
+        if (context.currentClient instanceof Admin) {
+          emitChatHistorySnapshot(socket, context.currentRoom);
+        }
 
         socket.emit("roomLockChanged", {
           locked: context.currentRoom.isLocked,

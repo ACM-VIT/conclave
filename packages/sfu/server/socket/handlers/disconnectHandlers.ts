@@ -10,6 +10,7 @@ import {
   emitWebinarFeedChanged,
 } from "../../webinarNotifications.js";
 import type { ConnectionContext } from "../context.js";
+import { emitChatHistorySnapshot } from "./chatHistory.js";
 import { registerAdminHandlers } from "./adminHandlers.js";
 
 const promoteNextAdmin = (room: Room): Admin | null => {
@@ -114,6 +115,7 @@ export const registerDisconnectHandlers = (
                 users: pendingUsers,
                 roomId,
               });
+              emitChatHistorySnapshot(promoted.socket, activeRoom);
               promoted.socket.emit("roomLockChanged", {
                 locked: activeRoom.isLocked,
                 roomId,
