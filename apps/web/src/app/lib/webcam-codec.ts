@@ -82,6 +82,32 @@ export const getPreferredWebcamCodec = (
   return undefined;
 };
 
+export const getFallbackWebcamCodec = (
+  device: Pick<Device, "rtpCapabilities"> | null | undefined,
+  currentCodec?: RtpCodecCapability,
+): RtpCodecCapability | undefined => {
+  const codecs = device?.rtpCapabilities?.codecs ?? [];
+  const currentMimeType = currentCodec?.mimeType.toLowerCase() ?? null;
+  const fallbackOrder =
+    currentMimeType === "video/h264"
+      ? (["video/VP8", "video/H264"] as const)
+      : currentMimeType === "video/vp8"
+      ? (["video/H264", "video/VP8"] as const)
+      : getPreferredVideoCodecMimeTypes();
+
+  for (const mimeType of fallbackOrder) {
+    if (mimeType.toLowerCase() === currentMimeType) continue;
+    const codec = codecs.find((candidate) =>
+      isPreferredVideoCodec(candidate, mimeType),
+    );
+    if (codec) {
+      return codec;
+    }
+  }
+
+  return undefined;
+};
+
 export const getPreferredScreenShareCodec = (
   device: Pick<Device, "rtpCapabilities"> | null | undefined,
 ): RtpCodecCapability | undefined => {
@@ -106,6 +132,7 @@ type ProduceWebcamTrackOptions = {
   networkProfile?: WebcamProducerNetworkProfile;
   paused: boolean;
   preferredCodec?: RtpCodecCapability;
+  forceSingleLayer?: boolean;
 };
 
 export type WebcamProducerNetworkProfile =
@@ -742,6 +769,7 @@ export async function produceWebcamTrack({
   networkProfile = "good",
   paused,
   preferredCodec,
+  forceSingleLayer = false,
 }: ProduceWebcamTrackOptions): Promise<Producer> {
   const captureSize = getTrackCaptureSize(track);
   const buildOptions = (
@@ -776,7 +804,7 @@ export async function produceWebcamTrack({
     return producer;
   };
 
-  if (shouldUseWebcamSimulcast(preferredCodec)) {
+  if (!forceSingleLayer && shouldUseWebcamSimulcast(preferredCodec)) {
     try {
       return await finishProducer(
         await transport.produce(

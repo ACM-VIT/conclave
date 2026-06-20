@@ -130,6 +130,11 @@ assertIncludes(
   "export const shouldUseWebcamSimulcast =",
   "web webcam simulcast decision is codec/browser-aware",
 );
+assertIncludes(
+  "webCodec",
+  "export const getFallbackWebcamCodec =",
+  "web webcam stalled-sender codec fallback",
+);
 assertRegex(
   "webCodec",
   /if \(!preferredCodec \|\| isPreferredVideoCodec\(preferredCodec, "video\/H264"\)\)[\s\S]*return false;/,
@@ -137,7 +142,7 @@ assertRegex(
 );
 assertRegex(
   "webCodec",
-  /if \(shouldUseWebcamSimulcast\(preferredCodec\)\) \{[\s\S]*buildOptions\(buildWebcamSimulcastEncodings\(quality\)\)[\s\S]*\}[\s\S]*buildOptions\(\[buildWebcamSingleLayerEncoding\(quality\)\]\)/,
+  /forceSingleLayer\?: boolean[\s\S]*if \(!forceSingleLayer && shouldUseWebcamSimulcast\(preferredCodec\)\) \{[\s\S]*buildOptions\(buildWebcamSimulcastEncodings\(quality\)\)[\s\S]*\}[\s\S]*buildOptions\(\[buildWebcamSingleLayerEncoding\(quality\)\]\)/,
   "web simulcast-friendly webcam publish keeps single-layer fallback",
 );
 assertRegex(
@@ -887,10 +892,12 @@ for (const [context, label] of [
     if (
       !section.includes("producer.replaceTrack({ track: rawCameraTrack });") ||
       !section.includes("closeLocalVideoProducerForReplacement(producer);") ||
-      !section.includes("requestCameraProducerRecovery();")
+      !section.includes("requestCameraProducerRecovery();") ||
+      !section.includes("cameraRecoveryForceSingleLayerRef.current = true") ||
+      !section.includes("getFallbackWebcamCodec(device, currentCodec)")
     ) {
       failures.push(
-        "web stalled camera sender recovery must repair with raw camera before recreating the producer",
+        "web stalled camera sender recovery must repair with raw camera and then recreate with single-layer codec fallback",
       );
     }
     const rawRepairIndex = section.indexOf(
@@ -929,6 +936,11 @@ for (const [context, label] of [
     /onPreferredVideoPublishTrackRejected[\s\S]*producer\.replaceTrack\(\{ track: rawCameraTrack \}\);[\s\S]*onPreferredVideoPublishTrackRejected\?\.[\s\S]*camera-outbound-stall-raw-repair/,
     "web raw camera repair suppresses the rejected processed publish track",
   );
+  assertRegex(
+    "webMeetMedia",
+    /Processed \$\{context\} camera publish failed; retrying raw camera:[\s\S]*onPreferredVideoPublishTrackRejected\?\.[\s\S]*\`\$\{context\}-raw-produce-fallback\`/,
+    "web raw camera produce fallback suppresses the rejected processed publish track",
+  );
 }
 {
   const text = source.webMeetMedia;
@@ -943,6 +955,15 @@ for (const [context, label] of [
     }
     if (!section.includes("await ensureProducerTransportRef?.current?.()")) {
       failures.push("web camera producer recovery must rebuild failed transports");
+    }
+    if (
+      !section.includes("cameraRecoveryCodecOverrideRef.current ??") ||
+      !section.includes("forceSingleLayer,") ||
+      !section.includes("cameraRecoveryForceSingleLayerRef.current = false")
+    ) {
+      failures.push(
+        "web camera producer recovery must consume and clear single-layer codec fallback",
+      );
     }
     const transportSectionEnd = section.indexOf("let videoTrack");
     const transportSection =

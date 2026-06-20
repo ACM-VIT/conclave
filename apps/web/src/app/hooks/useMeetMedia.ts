@@ -28,6 +28,7 @@ import {
   applyScreenShareTrackNetworkProfile,
   buildScreenShareEncodingForNetworkProfile,
   buildScreenShareVideoConstraintsForNetworkProfile,
+  getFallbackWebcamCodec,
   getPreferredScreenShareCodec,
   getPreferredWebcamCodec,
   produceWebcamTrack,
@@ -308,6 +309,10 @@ export function useMeetMedia({
     setCameraProducerRecoveryPulse((value) => value + 1);
   }, []);
   const cameraProducerTrackRepairInFlightRef = useRef(false);
+  const cameraRecoveryCodecOverrideRef = useRef<ReturnType<
+    typeof getPreferredWebcamCodec
+  > | null>(null);
+  const cameraRecoveryForceSingleLayerRef = useRef(false);
   const cameraOutboundStallStateRef = useRef<CameraOutboundStallState>(
     createCameraOutboundStallState(),
   );
@@ -538,6 +543,7 @@ export function useMeetMedia({
       networkProfile,
       paused,
       preferredCodec,
+      forceSingleLayer = false,
       context,
     }: {
       transport: Transport;
@@ -547,6 +553,7 @@ export function useMeetMedia({
       networkProfile: WebcamProducerNetworkProfile;
       paused: boolean;
       preferredCodec: ReturnType<typeof getPreferredWebcamCodec>;
+      forceSingleLayer?: boolean;
       context: string;
     }) => {
       try {
@@ -557,6 +564,7 @@ export function useMeetMedia({
           networkProfile,
           paused,
           preferredCodec,
+          forceSingleLayer,
         });
       } catch (err) {
         if (
@@ -570,6 +578,10 @@ export function useMeetMedia({
           `[Meets] Processed ${context} camera publish failed; retrying raw camera:`,
           err,
         );
+        onPreferredVideoPublishTrackRejected?.(
+          publishTrack,
+          `${context}-raw-produce-fallback`,
+        );
         return produceWebcamTrack({
           transport,
           track: rawTrack,
@@ -577,10 +589,11 @@ export function useMeetMedia({
           networkProfile,
           paused,
           preferredCodec,
+          forceSingleLayer,
         });
       }
     },
-    [],
+    [onPreferredVideoPublishTrackRejected],
   );
 
   const stopLocalTrack = useCallback(
@@ -2045,6 +2058,24 @@ export function useMeetMedia({
           frames: sample.frames,
           bytes: sample.bytes,
         });
+        const currentCodecMimeType =
+          producer.rtpParameters.codecs
+            .find((codec) => codec.mimeType.toLowerCase().startsWith("video/"))
+            ?.mimeType.toLowerCase() ?? null;
+        const device = deviceRef.current;
+        const currentCodec =
+          device?.rtpCapabilities.codecs?.find(
+            (codec) =>
+              currentCodecMimeType !== null &&
+              codec.mimeType.toLowerCase() === currentCodecMimeType,
+          ) ?? getPreferredWebcamCodec(device);
+        const fallbackCodec = getFallbackWebcamCodec(device, currentCodec);
+        cameraRecoveryCodecOverrideRef.current = fallbackCodec ?? currentCodec ?? null;
+        cameraRecoveryForceSingleLayerRef.current = true;
+        console.warn("[Meets] Next camera recovery will use single-layer codec:", {
+          currentCodec: currentCodec?.mimeType ?? currentCodecMimeType,
+          fallbackCodec: fallbackCodec?.mimeType ?? null,
+        });
         closeLocalVideoProducerForReplacement(producer);
         resetStallState();
         requestCameraProducerRecovery();
@@ -2178,6 +2209,7 @@ export function useMeetMedia({
     isCameraOff,
     isObserverMode,
     videoProducerRef,
+    deviceRef,
     localStreamRef,
     videoQualityRef,
     handleLocalTrackEnded,
@@ -2271,7 +2303,10 @@ export function useMeetMedia({
         );
         const quality = videoQualityRef.current;
         const networkProfile = getPublishNetworkProfile();
-        const preferredWebcamCodec = getPreferredWebcamCodec(deviceRef.current);
+        const forceSingleLayer = cameraRecoveryForceSingleLayerRef.current;
+        const preferredWebcamCodec =
+          cameraRecoveryCodecOverrideRef.current ??
+          getPreferredWebcamCodec(deviceRef.current);
         const recoveredProducer = await produceCameraTrackWithRawFallback({
           transport,
           publishTrack,
@@ -2280,6 +2315,7 @@ export function useMeetMedia({
           networkProfile,
           paused: false,
           preferredCodec: preferredWebcamCodec,
+          forceSingleLayer,
           context: "camera-recovery",
         });
 
@@ -2297,6 +2333,8 @@ export function useMeetMedia({
             requestCameraProducerRecovery();
           }
         });
+        cameraRecoveryCodecOverrideRef.current = null;
+        cameraRecoveryForceSingleLayerRef.current = false;
         setIsCameraOff(false);
       } catch (err) {
         console.error("[Meets] Camera producer recovery failed:", err);
