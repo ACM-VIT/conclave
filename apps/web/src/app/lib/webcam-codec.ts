@@ -55,6 +55,16 @@ const isPreferredVideoCodec = (
   );
 };
 
+const shouldUseWebcamSimulcast = (
+  preferredCodec?: RtpCodecCapability,
+): boolean => {
+  if (!isLikelyHardwareAcceleratedH264Browser()) return true;
+  if (!preferredCodec || isPreferredVideoCodec(preferredCodec, "video/H264")) {
+    return false;
+  }
+  return true;
+};
+
 export const getPreferredWebcamCodec = (
   device: Pick<Device, "rtpCapabilities"> | null | undefined,
 ): RtpCodecCapability | undefined => {
@@ -756,7 +766,7 @@ export async function produceWebcamTrack({
   });
 
   const finishProducer = async (producer: Producer): Promise<Producer> => {
-    if (networkProfile !== "good") {
+    if (networkProfile !== "good" && hasMultipleSpatialLayers(producer)) {
       try {
         await producer.setMaxSpatialLayer(
           getTargetSpatialLayer(quality, networkProfile),
@@ -766,17 +776,19 @@ export async function produceWebcamTrack({
     return producer;
   };
 
-  try {
-    return await finishProducer(
-      await transport.produce(
-        buildOptions(buildWebcamSimulcastEncodings(quality)),
-      ),
-    );
-  } catch (simulcastError) {
-    console.warn(
-      "[Meets] Webcam simulcast produce failed, retrying single-layer:",
-      simulcastError,
-    );
+  if (shouldUseWebcamSimulcast(preferredCodec)) {
+    try {
+      return await finishProducer(
+        await transport.produce(
+          buildOptions(buildWebcamSimulcastEncodings(quality)),
+        ),
+      );
+    } catch (simulcastError) {
+      console.warn(
+        "[Meets] Webcam simulcast produce failed, retrying single-layer:",
+        simulcastError,
+      );
+    }
   }
 
   try {

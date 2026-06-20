@@ -121,6 +121,26 @@ assertNotIncludes(
   'PREFERRED_WEBCAM_CODEC_MIME_TYPES = ["video/VP8"]',
   "web must not globally force VP8 webcam codec",
 );
+assertIncludes(
+  "webCodec",
+  "const shouldUseWebcamSimulcast =",
+  "web webcam simulcast decision is codec/browser-aware",
+);
+assertRegex(
+  "webCodec",
+  /if \(!preferredCodec \|\| isPreferredVideoCodec\(preferredCodec, "video\/H264"\)\)[\s\S]*return false;/,
+  "web hardware-sensitive H264 webcam publish starts single-layer",
+);
+assertRegex(
+  "webCodec",
+  /if \(shouldUseWebcamSimulcast\(preferredCodec\)\) \{[\s\S]*buildOptions\(buildWebcamSimulcastEncodings\(quality\)\)[\s\S]*\}[\s\S]*buildOptions\(\[buildWebcamSingleLayerEncoding\(quality\)\]\)/,
+  "web simulcast-friendly webcam publish keeps single-layer fallback",
+);
+assertRegex(
+  "webCodec",
+  /networkProfile !== "good" && hasMultipleSpatialLayers\(producer\)/,
+  "web initial webcam spatial-layer cap only runs on multi-layer producers",
+);
 
 // Webcam publish must keep poor distinct from emergency: poor preserves more
 // motion/detail, while emergency is the survival floor.
