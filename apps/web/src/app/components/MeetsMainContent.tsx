@@ -3,6 +3,7 @@
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Dispatch, PointerEvent, SetStateAction } from "react";
+import { Loader2, LogOut } from "lucide-react";
 import type { Socket } from "socket.io-client";
 import type { RoomInfo } from "@/lib/sfu-types";
 import ChatOverlay from "./ChatOverlay";
@@ -1074,6 +1075,12 @@ export default function MeetsMainContent({
   const mainContentStyle = isJoined
     ? { paddingRight: `calc(1rem + ${dockedPanelReserve}px)` }
     : undefined;
+  const isRecoveringMeeting = isJoined && connectionState !== "joined";
+  const recoveryDetail = isNetworkOffline
+    ? "You are offline. We will restore the meeting as soon as your connection returns."
+    : connectionState === "connected" || connectionState === "joining"
+      ? "Connection is back. Restoring media, participants, and room state."
+      : "Keeping your meeting open while the connection is restored.";
 
   return (
     <div
@@ -1088,6 +1095,43 @@ export default function MeetsMainContent({
           isOffline={isNetworkOffline}
           serverRestartNotice={serverRestartNotice}
         />
+      )}
+      {isRecoveringMeeting && (
+        <div
+          className="absolute inset-0 z-[95] flex items-center justify-center bg-[#0a0a0b]/62 px-4 backdrop-blur-[2px]"
+          aria-live="assertive"
+          aria-label="Reconnecting to the meeting"
+        >
+          <section
+            className="w-full max-w-[360px] rounded-xl border border-[#fafafa]/10 bg-[#101012]/94 p-5 text-center shadow-2xl"
+            style={{ fontFamily: "'PolySans Trial', sans-serif" }}
+          >
+            <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-full border border-[#F95F4A]/25 bg-[#F95F4A]/10">
+              <Loader2
+                size={22}
+                strokeWidth={1.8}
+                className="animate-spin text-[#F95F4A]"
+              />
+            </div>
+            <h2
+              className="mt-4 text-[18px] leading-tight text-[#fafafa]"
+              style={{ fontFamily: "'PolySans Bulky Wide', sans-serif" }}
+            >
+              Reconnecting to the meeting
+            </h2>
+            <p className="mt-2 text-[13px] leading-snug text-[#fafafa]/62">
+              {recoveryDetail}
+            </p>
+            <button
+              type="button"
+              onClick={leaveRoom}
+              className="mt-5 inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-[#fafafa]/12 px-3.5 text-[13px] font-medium text-[#fafafa]/82 transition-colors hover:border-[#fafafa]/24 hover:bg-[#fafafa]/[0.06] hover:text-[#fafafa]"
+            >
+              <LogOut size={15} strokeWidth={1.8} />
+              Leave meeting
+            </button>
+          </section>
+        </div>
       )}
       {isJoined && <AdminNoticePill notice={adminNotice} />}
       <SystemAudioPlayers

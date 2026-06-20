@@ -28,6 +28,7 @@ const files = {
     "apps/web/src/app/components/mobile/MobilePresentationLayout.tsx",
   webMobileBrowserLayout:
     "apps/web/src/app/components/mobile/MobileBrowserLayout.tsx",
+  webMeetsMainContent: "apps/web/src/app/components/MeetsMainContent.tsx",
   webMeetClient: "apps/web/src/app/meets-client.tsx",
   webMeetMedia: "apps/web/src/app/hooks/useMeetMedia.ts",
   webMeetSocket: "apps/web/src/app/hooks/useMeetSocket.ts",
@@ -1780,6 +1781,16 @@ assertRegex(
   "webMeetSocket",
   /meet_reconnect_success[\s\S]*attempt: reconnectAttemptsRef\.current[\s\S]*reconnectAttemptsRef\.current = 0;[\s\S]*return;/,
   "web successful reconnect resets retry attempts after reused-socket rejoins",
+);
+assertRegex(
+  "webMeetClient",
+  /hasEnteredMeetingSurface[\s\S]*connectionState === "joined"[\s\S]*setHasEnteredMeetingSurface\(true\)[\s\S]*connectionState === "disconnected"[\s\S]*setHasEnteredMeetingSurface\(false\)[\s\S]*const isRejoiningMeetingSurface =[\s\S]*connectionState === "reconnecting"[\s\S]*connectionState === "connecting"[\s\S]*connectionState === "connected"[\s\S]*connectionState === "joining"[\s\S]*const isJoined = connectionState === "joined" \|\| isRejoiningMeetingSurface;/,
+  "web reconnect flow keeps the meeting surface mounted instead of showing prejoin",
+);
+assertRegex(
+  "webMeetsMainContent",
+  /const isRecoveringMeeting = isJoined && connectionState !== "joined";[\s\S]*Reconnecting to the meeting[\s\S]*Leave meeting[\s\S]*!\s*isJoined \?/,
+  "web reconnect flow shows an in-meeting overlay before the join screen branch",
 );
 assertIncludes(
   "sfuConfig",

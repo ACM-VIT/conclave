@@ -2216,6 +2216,22 @@ export default function MeetsClient({
   });
 
   const isMobile = useIsMobile();
+  const [hasEnteredMeetingSurface, setHasEnteredMeetingSurface] =
+    useState(false);
+
+  useEffect(() => {
+    if (connectionState === "joined") {
+      setHasEnteredMeetingSurface(true);
+      return;
+    }
+    if (
+      connectionState === "disconnected" ||
+      connectionState === "waiting" ||
+      connectionState === "error"
+    ) {
+      setHasEnteredMeetingSurface(false);
+    }
+  }, [connectionState]);
 
   useEffect(() => {
     if (isAdminFlag && connectionState !== "joined") {
@@ -2488,7 +2504,13 @@ export default function MeetsClient({
 
   if (!mounted) return null;
 
-  const isJoined = connectionState === "joined";
+  const isRejoiningMeetingSurface =
+    hasEnteredMeetingSurface &&
+    (connectionState === "reconnecting" ||
+      connectionState === "connecting" ||
+      connectionState === "connected" ||
+      connectionState === "joining");
+  const isJoined = connectionState === "joined" || isRejoiningMeetingSurface;
   const isLoading =
     connectionState === "connecting" ||
     connectionState === "joining" ||
