@@ -128,13 +128,14 @@ export class Client {
   addConsumer(
     consumer: Consumer,
     metadata?: { producerUserId?: string; type?: ProducerType },
-  ): void {
+  ): Consumer | null {
     const previousConsumer = this.consumers.get(consumer.producerId);
-    if (previousConsumer && previousConsumer.id !== consumer.id) {
-      try {
-        this.consumerProducerIdsById.delete(previousConsumer.id);
-        previousConsumer.close();
-      } catch {}
+    const displacedConsumer =
+      previousConsumer && previousConsumer.id !== consumer.id
+        ? previousConsumer
+        : null;
+    if (displacedConsumer) {
+      this.consumerProducerIdsById.delete(displacedConsumer.id);
     }
 
     this.consumers.set(consumer.producerId, consumer);
@@ -168,6 +169,8 @@ export class Client {
     consumer.on("transportclose", cleanup);
     consumer.on("producerclose", cleanup);
     consumer.observer.on("close", cleanup);
+
+    return displacedConsumer;
   }
 
   getProducer(

@@ -21,6 +21,7 @@ import type {
   ChatHistorySnapshot,
   ChatMessage,
   ConnectionState,
+  Consumer,
   ConsumeResponse,
   HandRaisedNotification,
   HandRaisedSnapshot,
@@ -74,6 +75,10 @@ type ConsumerTelemetryPayload = Omit<
   ConsumerTelemetrySnapshot,
   "receivedAt"
 >;
+
+type ConsumeProducerOptions = {
+  replaceExisting?: boolean;
+};
 
 type JoinInfo = {
   token: string;
@@ -638,7 +643,7 @@ export function useMeetSocket({
   );
   const pendingScreenProducerCloseIdsRef = useRef<Set<string>>(new Set());
   const consumeProducerRef = useRef<
-    (producerInfo: ProducerInfo) => Promise<void>
+    (producerInfo: ProducerInfo, options?: ConsumeProducerOptions) => Promise<void>
   >(async () => {});
   const recoverStaleConsumerRef = useRef<
     (producerInfo: ProducerInfo, reason: string) => Promise<void>
@@ -1519,7 +1524,7 @@ export function useMeetSocket({
   );
 
   const closeConsumerForSameProducerReconsume = useCallback(
-    (producerId: string) => {
+    (producerId: string, consumerToClose?: Consumer | null) => {
       pendingProducersRef.current.delete(producerId);
       consumeRetryAttemptsRef.current.delete(producerId);
       const scheduledRecoveryTimeout =
@@ -1535,7 +1540,7 @@ export function useMeetSocket({
       consumerTelemetryRef.current.delete(producerId);
       videoFreezeStatsRef.current.delete(producerId);
 
-      const consumer = consumersRef.current.get(producerId);
+      const consumer = consumerToClose ?? consumersRef.current.get(producerId);
       if (!consumer) return;
       try {
         consumer.track.onmute = null;
@@ -1543,7 +1548,9 @@ export function useMeetSocket({
         consumer.track.stop();
         consumer.close();
       } catch {}
-      consumersRef.current.delete(producerId);
+      if (consumersRef.current.get(producerId)?.id === consumer.id) {
+        consumersRef.current.delete(producerId);
+      }
     },
     [
       adaptivelyPausedConsumerProducerIdsRef,
@@ -2443,11 +2450,15 @@ export function useMeetSocket({
   );
 
   const consumeProducer = useCallback(
-    async (producerInfo: ProducerInfo): Promise<void> => {
+    async (
+      producerInfo: ProducerInfo,
+      options: ConsumeProducerOptions = {},
+    ): Promise<void> => {
       if (producerInfo.producerUserId === userId) {
         return;
       }
-      if (consumersRef.current.has(producerInfo.producerId)) {
+      const existingConsumer = consumersRef.current.get(producerInfo.producerId);
+      if (existingConsumer && !options.replaceExisting) {
         consumeRetryAttemptsRef.current.delete(producerInfo.producerId);
         return;
       }
@@ -2696,6 +2707,13 @@ export function useMeetSocket({
                 setActiveScreenShareId(producerInfo.producerId);
               }
 
+              if (existingConsumer && existingConsumer.id !== consumer.id) {
+                closeConsumerForSameProducerReconsume(
+                  producerInfo.producerId,
+                  existingConsumer,
+                );
+              }
+
               if (producerInfo.paused) {
                 if (isWebcamAudio) {
                   updateMutedState(true);
@@ -2736,6 +2754,7 @@ export function useMeetSocket({
       producerMapRef,
       dispatchParticipants,
       handleProducerClosed,
+      closeConsumerForSameProducerReconsume,
       getReceiveNetworkProfile,
       joinMode,
       queueProducerConsumeRetry,
@@ -2775,8 +2794,7 @@ export function useMeetSocket({
         console.warn(
           `[Meets] Recovering stale ${producerInfo.kind} consumer ${producerInfo.producerId}: ${reason}`,
         );
-        closeConsumerForSameProducerReconsume(producerInfo.producerId);
-        await consumeProducer(producerInfo);
+        await consumeProducer(producerInfo, { replaceExisting: true });
       } catch (error) {
         console.error(
           `[Meets] Failed to recover stale consumer ${producerInfo.producerId}:`,
@@ -2791,7 +2809,6 @@ export function useMeetSocket({
       consumerRecoveryInFlightRef,
       socketRef,
       consumerTransportRef,
-      closeConsumerForSameProducerReconsume,
       consumeProducer,
       queueProducerConsumeRetry,
     ],

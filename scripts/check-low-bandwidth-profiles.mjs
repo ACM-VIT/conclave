@@ -1573,12 +1573,15 @@ assertRegex(
     }
     if (
       section.includes("handleProducerClosed(producerInfo.producerId)") ||
+      section.includes(
+        "closeConsumerForSameProducerReconsume(producerInfo.producerId);",
+      ) ||
       !section.includes(
-        "closeConsumerForSameProducerReconsume(producerInfo.producerId)",
+        "await consumeProducer(producerInfo, { replaceExisting: true });",
       )
     ) {
       failures.push(
-        "web stale consumer recovery must not schedule stream cleanup while re-consuming the same producer",
+        "web stale consumer recovery must keep the old stream rendered until replacement consume succeeds",
       );
     }
   }
@@ -2127,10 +2130,12 @@ assertRegex(
   } else {
     const section = text.slice(start, end);
     if (
+      !section.includes("consumerToClose?: Consumer | null") ||
       !section.includes("clearStaleReplacementCleanupTimeout(producerId);") ||
       !section.includes("consumer.track.onmute = null;") ||
       !section.includes("consumer.track.onunmute = null;") ||
       !section.includes("consumer.track.stop();") ||
+      !section.includes("consumersRef.current.get(producerId)?.id === consumer.id") ||
       !section.includes("consumersRef.current.delete(producerId);") ||
       section.includes('type: "UPDATE_STREAM"') ||
       section.includes("producerMapRef.current.delete(producerId)")
@@ -2141,10 +2146,40 @@ assertRegex(
     }
   }
 }
+{
+  const text = source.webMeetSocket;
+  const start = text.indexOf("const consumeProducer = useCallback(");
+  const end = text.indexOf("consumeProducerRef.current = consumeProducer", start);
+  if (start < 0 || end < 0) {
+    failures.push("web consume producer section missing");
+  } else {
+    const section = text.slice(start, end);
+    const dispatchIndex = section.indexOf('type: "UPDATE_STREAM"');
+    const closeIndex = section.indexOf(
+      "closeConsumerForSameProducerReconsume(\n                  producerInfo.producerId,\n                  existingConsumer,",
+    );
+    if (
+      !section.includes("options: ConsumeProducerOptions = {}") ||
+      !section.includes("existingConsumer && !options.replaceExisting") ||
+      dispatchIndex < 0 ||
+      closeIndex < 0 ||
+      closeIndex < dispatchIndex
+    ) {
+      failures.push(
+        "web replacement consumer handoff must dispatch the new stream before closing the old consumer",
+      );
+    }
+  }
+}
 assertRegex(
   "sfuClient",
   /addProducer\(producer: Producer\): Producer \| null[\s\S]*const displacedProducer =[\s\S]*return displacedProducer;/,
   "SFU client returns displaced producer instead of closing it inline",
+);
+assertRegex(
+  "sfuClient",
+  /addConsumer\([\s\S]*\): Consumer \| null[\s\S]*const displacedConsumer =[\s\S]*this\.consumerProducerIdsById\.delete\(displacedConsumer\.id\)[\s\S]*return displacedConsumer;/,
+  "SFU client returns displaced consumer instead of closing it inline",
 );
 {
   const text = source.sfuMediaHandlers;
@@ -2156,6 +2191,11 @@ assertRegex(
     );
   }
 }
+assertRegex(
+  "sfuMediaHandlers",
+  /const displacedConsumer = currentClient\.addConsumer[\s\S]*respond\(callback, \{[\s\S]*priority: consumer\.priority,[\s\S]*if \(displacedConsumer && !displacedConsumer\.closed\) \{[\s\S]*DISPLACED_CONSUMER_CLOSE_DELAY_MS/,
+  "SFU same-producer consumer replacement must respond before closing the displaced consumer",
+);
 
 // Native receive adaptation must keep audio crisp, preserve screen shares, and
 // pause extra webcam video only in emergency mode.

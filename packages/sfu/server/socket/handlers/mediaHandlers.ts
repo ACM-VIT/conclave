@@ -24,6 +24,7 @@ const MAX_CONSUMER_LAYER = 10;
 const MIN_CONSUMER_PRIORITY = 0;
 const MAX_CONSUMER_PRIORITY = 255;
 const MAX_MEDIA_ID_LENGTH = 256;
+const DISPLACED_CONSUMER_CLOSE_DELAY_MS = 3000;
 const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -545,7 +546,7 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
           paused: true,
         });
 
-        currentClient.addConsumer(consumer, {
+        const displacedConsumer = currentClient.addConsumer(consumer, {
           producerUserId: producerInfo.producerUserId,
           type: producerInfo.type,
         });
@@ -609,6 +610,16 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
           currentLayers: consumer.currentLayers,
           priority: consumer.priority,
         });
+
+        if (displacedConsumer && !displacedConsumer.closed) {
+          setTimeout(() => {
+            try {
+              if (!displacedConsumer.closed) {
+                displacedConsumer.close();
+              }
+            } catch {}
+          }, DISPLACED_CONSUMER_CLOSE_DELAY_MS).unref?.();
+        }
       } catch (error) {
         Logger.error("Error consuming:", error);
         respond(callback, { error: (error as Error).message });
