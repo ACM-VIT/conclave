@@ -20,6 +20,7 @@ const files = {
     "apps/web/src/app/components/mobile/MobilePresentationLayout.tsx",
   webMeetClient: "apps/web/src/app/meets-client.tsx",
   webMeetMedia: "apps/web/src/app/hooks/useMeetMedia.ts",
+  webMeetSocket: "apps/web/src/app/hooks/useMeetSocket.ts",
   webJoinScreen: "apps/web/src/app/components/JoinScreen.tsx",
   webMobileJoinScreen: "apps/web/src/app/components/mobile/MobileJoinScreen.tsx",
   webLowBandwidthProbe: "scripts/probe-low-bandwidth-meet.mjs",
@@ -334,6 +335,23 @@ assertIncludes(
   'quality === "standard" && profile === "good"',
   "web downgrades avoid camera capture restarts",
 );
+assertIncludes(
+  "webMeetSocket",
+  "retrying consumer later",
+  "web stale consumer recovery retries only the affected consumer",
+);
+{
+  const text = source.webMeetSocket;
+  const start = text.indexOf("const recoverStaleConsumer = useCallback(");
+  const end = text.indexOf("recoverStaleConsumerRef.current", start);
+  if (start < 0 || end < 0) {
+    failures.push("web stale consumer recovery section missing");
+  } else if (text.slice(start, end).includes("handleReconnectRef.current")) {
+    failures.push(
+      "web stale consumer recovery must not trigger full meeting reconnect",
+    );
+  }
+}
 {
   const text = source.webAdaptivePublishQuality;
   const start = text.indexOf("const applyLiveProducerProfile = useCallback(");

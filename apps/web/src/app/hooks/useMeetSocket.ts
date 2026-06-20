@@ -2389,9 +2389,9 @@ export function useMeetSocket({
       const transport = consumerTransportRef.current;
       if (!socket?.connected || !transport || transport.closed) {
         console.warn(
-          `[Meets] Could not recover stale consumer ${producerInfo.producerId}; reconnecting instead.`,
+          `[Meets] Could not recover stale consumer ${producerInfo.producerId}; retrying consumer later.`,
         );
-        handleReconnectRef.current?.();
+        queueProducerConsumeRetry(producerInfo, 1200);
         return;
       }
 
@@ -2408,7 +2408,7 @@ export function useMeetSocket({
           `[Meets] Failed to recover stale consumer ${producerInfo.producerId}:`,
           error,
         );
-        handleReconnectRef.current?.();
+        queueProducerConsumeRetry(producerInfo, 1200);
       } finally {
         consumerRecoveryInFlightRef.current.delete(producerInfo.producerId);
       }
@@ -2417,9 +2417,9 @@ export function useMeetSocket({
       consumerRecoveryInFlightRef,
       socketRef,
       consumerTransportRef,
-      handleReconnectRef,
       handleProducerClosed,
       consumeProducer,
+      queueProducerConsumeRetry,
     ],
   );
   recoverStaleConsumerRef.current = recoverStaleConsumer;
