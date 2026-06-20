@@ -614,6 +614,14 @@ export function useMeetMedia({
     [intentionalTrackStopsRef]
   );
 
+  const commitLocalStream = useCallback(
+    (nextStream: MediaStream | null) => {
+      localStreamRef.current = nextStream;
+      setLocalStream(nextStream);
+    },
+    [localStreamRef, setLocalStream],
+  );
+
   const closeLocalVideoProducerForReplacement = useCallback(
     (producer: Producer) => {
       intentionalLocalProducerCloseIdsRef.current.add(producer.id);
@@ -647,6 +655,30 @@ export function useMeetMedia({
   const handleLocalTrackEnded = useCallback(
     (kind: "audio" | "video", track: MediaStreamTrack) => {
       if (consumeIntentionalStop(track)) return;
+
+      const currentStream = localStreamRef.current;
+      const hasCurrentLocalTrack =
+        currentStream
+          ?.getTracks()
+          .some(
+            (currentTrack) =>
+              currentTrack === track || currentTrack.id === track.id,
+          ) === true;
+      const activeProducer =
+        kind === "audio" ? audioProducerRef.current : videoProducerRef.current;
+      const producerTrack = activeProducer?.track ?? null;
+      const hasCurrentProducerTrack =
+        producerTrack === track || producerTrack?.id === track.id;
+
+      if (!hasCurrentLocalTrack && !hasCurrentProducerTrack) {
+        console.info("[Meets] Ignoring ended stale local track:", {
+          kind,
+          trackId: track.id,
+          activeProducerId: activeProducer?.id ?? null,
+          activeProducerTrackId: producerTrack?.id ?? null,
+        });
+        return;
+      }
 
       if (kind === "audio") {
         const producer = audioProducerRef.current;
@@ -684,18 +716,23 @@ export function useMeetMedia({
         }
       }
 
-      setLocalStream((prev) => {
-        if (!prev) return prev;
-        const remaining = prev.getTracks().filter((t) => t.kind !== kind);
-        return new MediaStream(remaining);
-      });
+      if (hasCurrentLocalTrack && currentStream) {
+        const remaining = currentStream
+          .getTracks()
+          .filter(
+            (currentTrack) =>
+              currentTrack !== track && currentTrack.id !== track.id,
+          );
+        commitLocalStream(new MediaStream(remaining));
+      }
     },
     [
       consumeIntentionalStop,
       closeLocalVideoProducerForReplacement,
+      commitLocalStream,
       setIsMuted,
       setIsCameraOff,
-      setLocalStream,
+      localStreamRef,
       audioProducerRef,
       videoProducerRef,
       socketRef,
@@ -837,7 +874,8 @@ export function useMeetMedia({
               handleLocalTrackEnded("audio", newAudioTrack);
             };
             newAudioTrack.enabled = !isMuted;
-            const oldAudioTrack = localStream?.getAudioTracks()[0];
+            const previousStream = localStreamRef.current;
+            const oldAudioTrack = previousStream?.getAudioTracks()[0] ?? null;
 
             if (audioProducerRef.current) {
               await audioProducerRef.current.replaceTrack({
@@ -845,19 +883,18 @@ export function useMeetMedia({
               });
             }
 
-            setLocalStream((prev) => {
-              if (prev) {
-                if (oldAudioTrack) {
-                  prev.removeTrack(oldAudioTrack);
-                }
-                prev.addTrack(newAudioTrack);
-                if (oldAudioTrack) {
-                  stopLocalTrack(oldAudioTrack);
-                }
-                return new MediaStream(prev.getTracks());
-              }
-              return newStream;
-            });
+            const remainingTracks =
+              previousStream
+                ?.getTracks()
+                .filter((track) => track.kind !== "audio") ?? [];
+            const nextStream = new MediaStream([
+              ...remainingTracks,
+              newAudioTrack,
+            ]);
+            commitLocalStream(nextStream);
+            if (oldAudioTrack && oldAudioTrack.id !== newAudioTrack.id) {
+              stopLocalTrack(oldAudioTrack);
+            }
           }
         } catch (err) {
           console.error("[Meets] Failed to switch audio input device:", err);
@@ -867,12 +904,12 @@ export function useMeetMedia({
     [
       connectionState,
       isMuted,
-      localStream,
       handleLocalTrackEnded,
       stopLocalTrack,
       setSelectedAudioInputDeviceId,
       audioProducerRef,
-      setLocalStream,
+      localStreamRef,
+      commitLocalStream,
       buildAudioConstraints,
       markAudioTrackForSpeech,
     ]
@@ -1420,13 +1457,13 @@ export function useMeetMedia({
       console.error("[Meets] Failed to restart audio:", err);
       if (createdTrack) {
         stopLocalTrack(createdTrack);
-        setLocalStream((prev) => {
-          if (!prev) return prev;
-          const remaining = prev
+        const currentStream = localStreamRef.current;
+        if (currentStream?.getTracks().includes(createdTrack)) {
+          const remaining = currentStream
             .getTracks()
             .filter((track) => track !== createdTrack && track.kind !== "audio");
-          return new MediaStream(remaining);
-        });
+          commitLocalStream(new MediaStream(remaining));
+        }
       }
       setIsMuted(previousMuted);
       setMeetError(createMeetError(err, "MEDIA_ERROR"));
@@ -1446,7 +1483,7 @@ export function useMeetMedia({
     emitToggleMute,
     audioProducerRef,
     localStreamRef,
-    setLocalStream,
+    commitLocalStream,
     producerTransportRef,
     ensureProducerTransportRef,
     setIsMuted,
@@ -1686,16 +1723,16 @@ export function useMeetMedia({
           } catch {}
           videoProducerRef.current = null;
 
-          setLocalStream((prev) => {
-            if (!prev) return prev;
-            prev.getVideoTracks().forEach((track) => {
+          const previousStream = localStreamRef.current;
+          if (previousStream) {
+            previousStream.getVideoTracks().forEach((track) => {
               stopLocalTrack(track);
             });
-            const remainingTracks = prev
+            const remainingTracks = previousStream
               .getTracks()
               .filter((track) => track.kind !== "video");
-            return new MediaStream(remainingTracks);
-          });
+            commitLocalStream(new MediaStream(remainingTracks));
+          }
           return;
         }
 
@@ -1814,15 +1851,15 @@ export function useMeetMedia({
           console.error("[Meets] Failed to restart video:", err);
           if (createdTrack) {
             stopLocalTrack(createdTrack);
-            setLocalStream((prev) => {
-              if (!prev) return prev;
-              const remaining = prev
+            const currentStream = localStreamRef.current;
+            if (currentStream?.getTracks().includes(createdTrack)) {
+              const remaining = currentStream
                 .getTracks()
                 .filter(
                   (track) => track !== createdTrack && track.kind !== "video",
                 );
-              return new MediaStream(remaining);
-            });
+              commitLocalStream(new MediaStream(remaining));
+            }
           }
           setIsCameraOff(true);
           setMeetError(createMeetError(err, "MEDIA_ERROR"));
@@ -1843,6 +1880,7 @@ export function useMeetMedia({
     producerTransportRef,
     ensureProducerTransportRef,
     setLocalStream,
+    commitLocalStream,
     localStreamRef,
     videoQualityRef,
     setIsCameraOff,

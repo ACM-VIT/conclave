@@ -698,6 +698,49 @@ for (const [context, label] of [
 }
 {
   const text = source.webMeetMedia;
+  const start = text.indexOf("const handleLocalTrackEnded = useCallback(");
+  const end = text.indexOf("const requestMediaPermissions = useCallback", start);
+  if (start < 0 || end < 0) {
+    failures.push("web local track-ended handler section missing");
+  } else {
+    const section = text.slice(start, end);
+    if (
+      !text.includes("const commitLocalStream = useCallback(") ||
+      !section.includes("const currentStream = localStreamRef.current;") ||
+      !section.includes("hasCurrentLocalTrack") ||
+      !section.includes("hasCurrentProducerTrack") ||
+      !section.includes("Ignoring ended stale local track") ||
+      !section.includes("commitLocalStream(new MediaStream(remaining));") ||
+      section.includes(".filter((t) => t.kind !== kind)")
+    ) {
+      failures.push(
+        "web local track-ended handler must ignore stale ended tracks and sync stream refs",
+      );
+    }
+  }
+}
+{
+  const text = source.webMeetMedia;
+  const start = text.indexOf("const handleAudioInputDeviceChange = useCallback(");
+  const end = text.indexOf("const handleVideoInputDeviceChange = useCallback", start);
+  if (start < 0 || end < 0) {
+    failures.push("web audio input device-change section missing");
+  } else {
+    const section = text.slice(start, end);
+    if (
+      !section.includes("const previousStream = localStreamRef.current;") ||
+      !section.includes("commitLocalStream(nextStream);") ||
+      section.includes("prev.removeTrack(oldAudioTrack)") ||
+      section.includes("prev.addTrack(newAudioTrack)")
+    ) {
+      failures.push(
+        "web audio input device changes must sync local stream refs without mutating stale streams",
+      );
+    }
+  }
+}
+{
+  const text = source.webMeetMedia;
   const start = text.indexOf("const updateVideoQuality = useCallback(");
   const end = text.indexOf(
     "useEffect(() => {\n    updateVideoQualityRef.current = updateVideoQuality;",
@@ -888,6 +931,16 @@ for (const [context, label] of [
     if (!section.includes("requestCameraProducerRecovery();")) {
       failures.push(
         "web camera-toggle video producer transport close must pulse camera recovery",
+      );
+    }
+    if (
+      !section.includes("const previousStream = localStreamRef.current;") ||
+      !section.includes("commitLocalStream(new MediaStream(remainingTracks));") ||
+      !section.includes("if (currentStream?.getTracks().includes(createdTrack))") ||
+      !section.includes("commitLocalStream(new MediaStream(remaining));")
+    ) {
+      failures.push(
+        "web camera toggle cleanup must keep local stream ref synchronized",
       );
     }
   }
