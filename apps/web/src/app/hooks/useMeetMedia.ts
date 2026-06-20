@@ -62,6 +62,10 @@ interface UseMeetMediaOptions {
   getVideoPublishTrackRef?: React.MutableRefObject<
     ((stream?: MediaStream | null) => MediaStreamTrack | null) | null
   >;
+  onPreferredVideoPublishTrackRejected?: (
+    track: MediaStreamTrack,
+    reason: string,
+  ) => void;
   socketRef: React.MutableRefObject<Socket | null>;
   deviceRef: React.MutableRefObject<Device | null>;
   producerTransportRef: React.MutableRefObject<Transport | null>;
@@ -263,6 +267,7 @@ export function useMeetMedia({
   activeVideoEffectsCount = 0,
   shouldUsePreferredVideoPublishTrack = activeVideoEffectsCount > 0,
   getVideoPublishTrackRef,
+  onPreferredVideoPublishTrackRejected,
   socketRef,
   deviceRef,
   producerTransportRef,
@@ -1850,6 +1855,12 @@ export function useMeetMedia({
               handleLocalTrackEnded("video", rawCameraTrack);
             };
             await producer.replaceTrack({ track: rawCameraTrack });
+            if (producerTrack && producerTrack.id !== rawCameraTrack.id) {
+              onPreferredVideoPublishTrackRejected?.(
+                producerTrack,
+                "camera-producer-raw-repair",
+              );
+            }
             await applyWebcamProducerNetworkProfile(
               producer,
               videoQualityRef.current,
@@ -1916,6 +1927,7 @@ export function useMeetMedia({
     videoQualityRef,
     handleLocalTrackEnded,
     getPublishNetworkProfile,
+    onPreferredVideoPublishTrackRejected,
     closeLocalVideoProducerForReplacement,
     requestCameraProducerRecovery,
   ]);
@@ -1995,6 +2007,10 @@ export function useMeetMedia({
             handleLocalTrackEnded("video", rawCameraTrack);
           };
           await producer.replaceTrack({ track: rawCameraTrack });
+          onPreferredVideoPublishTrackRejected?.(
+            producerTrack,
+            "camera-outbound-stall-raw-repair",
+          );
           await applyWebcamProducerNetworkProfile(
             producer,
             videoQualityRef.current,
@@ -2166,6 +2182,7 @@ export function useMeetMedia({
     videoQualityRef,
     handleLocalTrackEnded,
     getPublishNetworkProfile,
+    onPreferredVideoPublishTrackRejected,
     closeLocalVideoProducerForReplacement,
     requestCameraProducerRecovery,
   ]);

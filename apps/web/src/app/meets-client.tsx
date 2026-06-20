@@ -593,6 +593,11 @@ export default function MeetsClient({
   const getVideoPublishTrackRef = useRef<
     ((stream?: MediaStream | null) => MediaStreamTrack | null) | null
   >(null);
+  const suppressedProcessedPublishTrackRef = useRef<{
+    trackId: string;
+    processedTrackVersion: number;
+    reason: string;
+  } | null>(null);
   const publishTrackSwitchRef = useRef<{
     sequence: number;
     promise: Promise<void>;
@@ -1018,6 +1023,28 @@ export default function MeetsClient({
     isTtsDisabled,
   });
 
+  const handlePreferredVideoPublishTrackRejected = useCallback(
+    (track: MediaStreamTrack, reason: string) => {
+      const processedTrack = refs.processedVideoTrackRef.current;
+      if (!processedTrack || processedTrack.id !== track.id) return;
+
+      suppressedProcessedPublishTrackRef.current = {
+        trackId: track.id,
+        processedTrackVersion: videoEffectsBridgeState.processedTrackVersion,
+        reason,
+      };
+      warnMeetVideo("suppress_processed_publish_track_after_raw_repair", {
+        reason,
+        processedTrack: getMeetTrackDebugSnapshot(processedTrack),
+        processedTrackVersion: videoEffectsBridgeState.processedTrackVersion,
+      });
+    },
+    [
+      refs.processedVideoTrackRef,
+      videoEffectsBridgeState.processedTrackVersion,
+    ],
+  );
+
   const {
     showPermissionHint,
     requestMediaPermissions,
@@ -1059,6 +1086,8 @@ export default function MeetsClient({
     activeVideoEffectsCount,
     shouldUsePreferredVideoPublishTrack: shouldPublishProcessedVideo,
     getVideoPublishTrackRef,
+    onPreferredVideoPublishTrackRejected:
+      handlePreferredVideoPublishTrackRejected,
     socketRef: refs.socketRef,
     deviceRef: refs.deviceRef,
     producerTransportRef: refs.producerTransportRef,
@@ -1234,6 +1263,24 @@ export default function MeetsClient({
         null;
       const producerTrack = refs.videoProducerRef.current?.track ?? null;
       const processedTrack = refs.processedVideoTrackRef.current;
+      const suppressedProcessedPublishTrack =
+        suppressedProcessedPublishTrackRef.current;
+      const processedTrackSuppressed = Boolean(
+        suppressedProcessedPublishTrack &&
+          processedTrack &&
+          suppressedProcessedPublishTrack.trackId === processedTrack.id &&
+          suppressedProcessedPublishTrack.processedTrackVersion ===
+            processedTrackVersion,
+      );
+      if (
+        suppressedProcessedPublishTrack &&
+        (!processedTrack ||
+          suppressedProcessedPublishTrack.trackId !== processedTrack.id ||
+          suppressedProcessedPublishTrack.processedTrackVersion !==
+            processedTrackVersion)
+      ) {
+        suppressedProcessedPublishTrackRef.current = null;
+      }
       const processedSourceTrackId = getVideoEffectsDebugTrackId(
         videoEffectsDebugStats,
         "sourceTrack",
@@ -1288,6 +1335,7 @@ export default function MeetsClient({
       );
       if (
         shouldPublishProcessedVideo &&
+        !processedTrackSuppressed &&
         processedTrackReady &&
         processedTrack &&
         processedTrack.readyState === "live" &&
@@ -1308,12 +1356,14 @@ export default function MeetsClient({
             processedChainedSourceTrackId,
             processedSourceMatchesChainedInput,
             processedTrackOutputIsWarming,
+            suppressedProcessedPublishTrack,
           },
         );
         return processedTrack;
       }
       if (
         shouldPublishProcessedVideo &&
+        !processedTrackSuppressed &&
         !processedTrackReady &&
         processedTrack &&
         processedTrack.readyState === "live" &&
@@ -1330,8 +1380,17 @@ export default function MeetsClient({
           processedChainedSourceTrackId,
           processedSourceMatchesChainedInput,
           processedTrackOutputIsWarming,
+          suppressedProcessedPublishTrack,
         });
         return processedTrack;
+      }
+      if (processedTrackSuppressed) {
+        logMeetVideo("skip_processed_track_suppressed_after_raw_repair", {
+          processedTrack: getMeetTrackDebugSnapshot(processedTrack),
+          producerTrack: getMeetTrackDebugSnapshot(producerTrack),
+          suppressedProcessedPublishTrack,
+          processedTrackVersion,
+        });
       }
       if (processedTrack && !processedTrackReady) {
         logMeetVideo("skip_processed_track_not_ready", {
@@ -1373,15 +1432,18 @@ export default function MeetsClient({
         processedChainedSourceTrackId,
         processedSourceMatchesChainedInput,
         processedTrackOutputIsWarming,
+        suppressedProcessedPublishTrack,
       });
       return rawTrack;
     },
     [
+      processedTrackVersion,
       processedTrackReady,
       refs.localStreamRef,
       refs.processedVideoTrackRef,
       refs.videoProducerRef,
       shouldPublishProcessedVideo,
+      suppressedProcessedPublishTrackRef,
       videoEffectsDebugStats,
     ],
   );

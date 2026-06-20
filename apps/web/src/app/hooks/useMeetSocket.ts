@@ -83,6 +83,7 @@ const DEFAULT_SERVER_RESTART_NOTICE =
 const ADMIN_NOTICE_DURATION_MS = 60000;
 const VIDEO_STALL_KEYFRAME_REQUEST_DELAY_MS = 2500;
 const STALE_CONSUMER_RECOVERY_DELAY_MS = 9000;
+const RESTART_ICE_ACK_TIMEOUT_MS = 5000;
 const PARTICIPANT_RECONNECTING_STATUS_FALLBACK_MS = 30000;
 const PARTICIPANT_RECONNECTING_STATUS_BUFFER_MS = 5000;
 const PARTICIPANT_RECONNECTED_STATUS_MS = 4500;
@@ -1576,10 +1577,19 @@ export function useMeetSocket({
         try {
           const response = await new Promise<RestartIceResponse>(
             (resolve, reject) => {
+              let settled = false;
+              const timeoutId = window.setTimeout(() => {
+                if (settled) return;
+                settled = true;
+                reject(new Error("restartIce acknowledgement timeout"));
+              }, RESTART_ICE_ACK_TIMEOUT_MS);
               socket.emit(
                 "restartIce",
                 { transport: transportKind, transportId: transport.id },
                 (res: RestartIceResponse | { error: string }) => {
+                  if (settled) return;
+                  settled = true;
+                  window.clearTimeout(timeoutId);
                   if ("error" in res) {
                     reject(new Error(res.error));
                   } else {
