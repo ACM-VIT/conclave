@@ -802,6 +802,7 @@ assertRegex(
       !section.includes("acquiredAudioTracks = newStream.getAudioTracks();") ||
       !section.includes("const previousStream = localStreamRef.current;") ||
       !section.includes("const previousAudioTracks =") ||
+      !section.includes("requestAudioProducerRecovery();") ||
       !section.includes("commitLocalStream(nextStream);") ||
       !section.includes("committedNewAudioTrack = newAudioTrack;") ||
       !section.includes("stopTracksExcept(previousAudioTracks, [newAudioTrack]);") ||
@@ -810,7 +811,7 @@ assertRegex(
       section.includes("prev.addTrack(newAudioTrack)")
     ) {
       failures.push(
-        "web audio input device changes must sync local stream refs and clean up failed mic captures",
+        "web audio input device changes must sync refs, recover missing producers, and clean up failed mic captures",
       );
     }
   }

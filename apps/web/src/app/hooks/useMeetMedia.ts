@@ -995,6 +995,8 @@ export function useMeetMedia({
               await audioProducerRef.current.replaceTrack({
                 track: newAudioTrack,
               });
+            } else if (!isMuted) {
+              requestAudioProducerRecovery();
             }
 
             const remainingTracks =
@@ -1026,6 +1028,7 @@ export function useMeetMedia({
       buildAudioConstraints,
       markAudioTrackForSpeech,
       stopTracksExcept,
+      requestAudioProducerRecovery,
     ]
   );
 
