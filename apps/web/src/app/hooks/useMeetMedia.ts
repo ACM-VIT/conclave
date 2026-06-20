@@ -2353,8 +2353,7 @@ export function useMeetMedia({
           return;
         }
 
-        const shouldTryRawRepair =
-          !state.rawRepairAttempted && producerTrack.id !== rawCameraTrack.id;
+        const shouldTryRawRepair = !state.rawRepairAttempted;
         if (shouldTryRawRepair) {
           if ("contentHint" in rawCameraTrack) {
             rawCameraTrack.contentHint = "motion";
@@ -2363,10 +2362,12 @@ export function useMeetMedia({
             handleLocalTrackEnded("video", rawCameraTrack);
           };
           await producer.replaceTrack({ track: rawCameraTrack });
-          onPreferredVideoPublishTrackRejected?.(
-            producerTrack,
-            "camera-outbound-stall-raw-repair",
-          );
+          if (producerTrack.id !== rawCameraTrack.id) {
+            onPreferredVideoPublishTrackRejected?.(
+              producerTrack,
+              "camera-outbound-stall-raw-repair",
+            );
+          }
           await applyWebcamProducerNetworkProfile(
             producer,
             videoQualityRef.current,
@@ -2380,7 +2381,7 @@ export function useMeetMedia({
             lastRecoveryAtMs: now,
           };
           console.warn(
-            "[Meets] Repaired stalled camera sender with raw camera track:",
+            "[Meets] Refreshed stalled camera sender with raw camera track:",
             {
               producerId: producer.id,
               previousTrackId: producerTrack.id,

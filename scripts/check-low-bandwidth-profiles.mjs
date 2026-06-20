@@ -1337,6 +1337,9 @@ assertRegex(
     const rawRepairIndex = section.indexOf(
       "producer.replaceTrack({ track: rawCameraTrack });",
     );
+    const rawRepairConditionIndex = section.indexOf(
+      "const shouldTryRawRepair = !state.rawRepairAttempted;",
+    );
     const recreateIndex = section.indexOf(
       "closeLocalVideoProducerForReplacement(producer);",
     );
@@ -1348,6 +1351,15 @@ assertRegex(
     ) {
       failures.push(
         "web stalled camera sender recovery must try raw-track repair before producer recreation",
+      );
+    }
+    if (
+      rawRepairConditionIndex < 0 ||
+      !section.includes("if (producerTrack.id !== rawCameraTrack.id)") ||
+      !section.includes("Refreshed stalled camera sender with raw camera track")
+    ) {
+      failures.push(
+        "web stalled camera sender recovery must soft-refresh raw camera before any destructive producer recreation",
       );
     }
     if (
