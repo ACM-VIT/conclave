@@ -2218,17 +2218,24 @@ export default function MeetsClient({
   const isMobile = useIsMobile();
   const [hasEnteredMeetingSurface, setHasEnteredMeetingSurface] =
     useState(false);
+  const shouldResetMeetingSurfaceOnDisconnectRef = useRef(false);
 
   useEffect(() => {
     if (connectionState === "joined") {
+      shouldResetMeetingSurfaceOnDisconnectRef.current = false;
       setHasEnteredMeetingSurface(true);
       return;
     }
+    if (connectionState === "waiting") {
+      shouldResetMeetingSurfaceOnDisconnectRef.current = false;
+      setHasEnteredMeetingSurface(false);
+      return;
+    }
     if (
-      connectionState === "disconnected" ||
-      connectionState === "waiting" ||
-      connectionState === "error"
+      connectionState === "disconnected" &&
+      shouldResetMeetingSurfaceOnDisconnectRef.current
     ) {
+      shouldResetMeetingSurfaceOnDisconnectRef.current = false;
       setHasEnteredMeetingSurface(false);
     }
   }, [connectionState]);
@@ -2276,6 +2283,7 @@ export default function MeetsClient({
   const leaveRoom = useCallback(() => {
     handleStopVoiceAgent();
     playNotificationSoundForEvents("leave");
+    shouldResetMeetingSurfaceOnDisconnectRef.current = true;
     socket.cleanup();
     setIsCameraOff(true);
     setIsMuted(true);
@@ -2509,7 +2517,9 @@ export default function MeetsClient({
     (connectionState === "reconnecting" ||
       connectionState === "connecting" ||
       connectionState === "connected" ||
-      connectionState === "joining");
+      connectionState === "joining" ||
+      connectionState === "disconnected" ||
+      connectionState === "error");
   const isJoined = connectionState === "joined" || isRejoiningMeetingSurface;
   const isLoading =
     connectionState === "connecting" ||
@@ -2689,7 +2699,7 @@ export default function MeetsClient({
   return renderWithApps(
     <div className="flex flex-col h-full w-full bg-[#18181b] text-white">
       <MeetsHeader isJoined={isJoined} />
-      {isJoined && meetError && (
+      {connectionState === "joined" && meetError && (
         <MeetsErrorBanner
           meetError={meetError}
           onDismiss={() => setMeetError(null)}

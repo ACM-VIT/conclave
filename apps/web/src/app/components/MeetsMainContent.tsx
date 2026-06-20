@@ -3,7 +3,7 @@
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Dispatch, PointerEvent, SetStateAction } from "react";
-import { Loader2, LogOut } from "lucide-react";
+import { Loader2, LogOut, RefreshCw } from "lucide-react";
 import type { Socket } from "socket.io-client";
 import type { RoomInfo } from "@/lib/sfu-types";
 import ChatOverlay from "./ChatOverlay";
@@ -1076,11 +1076,27 @@ export default function MeetsMainContent({
     ? { paddingRight: `calc(1rem + ${dockedPanelReserve}px)` }
     : undefined;
   const isRecoveringMeeting = isJoined && connectionState !== "joined";
+  const isTerminalMeetingError =
+    Boolean(meetError) && meetError?.recoverable === false;
+  const canRetryRecovery =
+    !isTerminalMeetingError &&
+    (connectionState === "disconnected" || connectionState === "error");
+  const recoveryTitle = isNetworkOffline
+    ? "Waiting for internet"
+    : isTerminalMeetingError
+      ? "Meeting unavailable"
+    : canRetryRecovery
+      ? "Connection interrupted"
+      : "Reconnecting";
   const recoveryDetail = isNetworkOffline
-    ? "You are offline. We will restore the meeting as soon as your connection returns."
+    ? "We are keeping the room open and will restore media when your connection returns."
     : connectionState === "connected" || connectionState === "joining"
       ? "Connection is back. Restoring media, participants, and room state."
-      : "Keeping your meeting open while the connection is restored.";
+      : isTerminalMeetingError
+        ? meetError?.message
+      : canRetryRecovery
+        ? (meetError?.message ?? "We could not restore the connection yet.")
+        : "Keeping your meeting open while the connection is restored.";
 
   return (
     <div
@@ -1089,7 +1105,9 @@ export default function MeetsMainContent({
       }`}
       style={mainContentStyle}
     >
-      {isJoined && (!isWebinarAttendee || serverRestartNotice) && (
+      {isJoined &&
+        !isRecoveringMeeting &&
+        (!isWebinarAttendee || serverRestartNotice) && (
         <ConnectionBanner
           state={connectionState}
           isOffline={isNetworkOffline}
@@ -1098,38 +1116,61 @@ export default function MeetsMainContent({
       )}
       {isRecoveringMeeting && (
         <div
-          className="absolute inset-0 z-[95] flex items-center justify-center bg-[#0a0a0b]/62 px-4 backdrop-blur-[2px]"
+          className="absolute inset-0 z-[95] flex items-start justify-center bg-[#050506]/45 px-4 pt-[clamp(5.5rem,16vh,8.5rem)] backdrop-blur-[1.5px]"
           aria-live="assertive"
           aria-label="Reconnecting to the meeting"
         >
           <section
-            className="w-full max-w-[360px] rounded-xl border border-[#fafafa]/10 bg-[#101012]/94 p-5 text-center shadow-2xl"
+            className="w-full max-w-[520px] rounded-lg border border-[#fafafa]/12 bg-[#111113]/95 p-4 text-left shadow-[0_18px_80px_rgba(0,0,0,0.42)]"
             style={{ fontFamily: "'PolySans Trial', sans-serif" }}
           >
-            <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-full border border-[#F95F4A]/25 bg-[#F95F4A]/10">
-              <Loader2
-                size={22}
-                strokeWidth={1.8}
-                className="animate-spin text-[#F95F4A]"
-              />
+            <div className="flex items-start gap-3.5">
+              <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-[#F95F4A]/24 bg-[#F95F4A]/10">
+                <Loader2
+                  size={19}
+                  strokeWidth={1.8}
+                  className="animate-spin text-[#F95F4A]"
+                />
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h2
+                    className="text-[16px] leading-tight text-[#fafafa]"
+                    style={{ fontFamily: "'PolySans Bulky Wide', sans-serif" }}
+                  >
+                    {recoveryTitle}
+                  </h2>
+                  <span className="rounded-full border border-[#F95F4A]/20 bg-[#F95F4A]/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.12em] text-[#F95F4A]">
+                    Meeting still open
+                  </span>
+                </div>
+                <p className="mt-1.5 text-[12.5px] leading-snug text-[#fafafa]/64">
+                  {recoveryDetail}
+                </p>
+              </div>
             </div>
-            <h2
-              className="mt-4 text-[18px] leading-tight text-[#fafafa]"
-              style={{ fontFamily: "'PolySans Bulky Wide', sans-serif" }}
-            >
-              Reconnecting to the meeting
-            </h2>
-            <p className="mt-2 text-[13px] leading-snug text-[#fafafa]/62">
-              {recoveryDetail}
-            </p>
-            <button
-              type="button"
-              onClick={leaveRoom}
-              className="mt-5 inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-[#fafafa]/12 px-3.5 text-[13px] font-medium text-[#fafafa]/82 transition-colors hover:border-[#fafafa]/24 hover:bg-[#fafafa]/[0.06] hover:text-[#fafafa]"
-            >
-              <LogOut size={15} strokeWidth={1.8} />
-              Leave meeting
-            </button>
+            <div className="mt-4 flex flex-wrap items-center justify-end gap-2">
+              {canRetryRecovery ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    void joinRoomById(roomId);
+                  }}
+                  className="inline-flex h-9 items-center justify-center gap-2 rounded-md bg-[#F95F4A] px-3.5 text-[12.5px] font-medium text-white transition-[filter] hover:brightness-110"
+                >
+                  <RefreshCw size={14} strokeWidth={1.8} />
+                  Retry now
+                </button>
+              ) : null}
+              <button
+                type="button"
+                onClick={leaveRoom}
+                className="inline-flex h-9 items-center justify-center gap-2 rounded-md border border-[#fafafa]/12 px-3.5 text-[12.5px] font-medium text-[#fafafa]/76 transition-colors hover:border-[#fafafa]/24 hover:bg-[#fafafa]/[0.06] hover:text-[#fafafa]"
+              >
+                <LogOut size={14} strokeWidth={1.8} />
+                Leave
+              </button>
+            </div>
           </section>
         </div>
       )}

@@ -1784,14 +1784,34 @@ assertRegex(
 );
 assertRegex(
   "webMeetClient",
-  /hasEnteredMeetingSurface[\s\S]*connectionState === "joined"[\s\S]*setHasEnteredMeetingSurface\(true\)[\s\S]*connectionState === "disconnected"[\s\S]*setHasEnteredMeetingSurface\(false\)[\s\S]*const isRejoiningMeetingSurface =[\s\S]*connectionState === "reconnecting"[\s\S]*connectionState === "connecting"[\s\S]*connectionState === "connected"[\s\S]*connectionState === "joining"[\s\S]*const isJoined = connectionState === "joined" \|\| isRejoiningMeetingSurface;/,
-  "web reconnect flow keeps the meeting surface mounted instead of showing prejoin",
+  /hasEnteredMeetingSurface[\s\S]*shouldResetMeetingSurfaceOnDisconnectRef[\s\S]*connectionState === "joined"[\s\S]*setHasEnteredMeetingSurface\(true\)[\s\S]*connectionState === "waiting"[\s\S]*setHasEnteredMeetingSurface\(false\)[\s\S]*connectionState === "disconnected"[\s\S]*shouldResetMeetingSurfaceOnDisconnectRef\.current[\s\S]*setHasEnteredMeetingSurface\(false\)[\s\S]*const isRejoiningMeetingSurface =[\s\S]*connectionState === "reconnecting"[\s\S]*connectionState === "disconnected"[\s\S]*connectionState === "error"/,
+  "web reconnect flow keeps the meeting surface mounted through recoverable error/disconnected states",
 );
-assertRegex(
+assertIncludes(
   "webMeetsMainContent",
-  /const isRecoveringMeeting = isJoined && connectionState !== "joined";[\s\S]*Reconnecting to the meeting[\s\S]*Leave meeting[\s\S]*!\s*isJoined \?/,
-  "web reconnect flow shows an in-meeting overlay before the join screen branch",
+  "const isRecoveringMeeting = isJoined && connectionState !== \"joined\";",
+  "web reconnect flow derives in-meeting recovery overlay state",
 );
+assertIncludes(
+  "webMeetsMainContent",
+  "void joinRoomById(roomId);",
+  "web reconnect recovery overlay can retry without leaving the meeting surface",
+);
+assertIncludes(
+  "webMeetsMainContent",
+  "Retry now",
+  "web reconnect recovery overlay exposes retry action",
+);
+{
+  const text = source.webMeetsMainContent ?? "";
+  const overlayIndex = text.indexOf("{isRecoveringMeeting && (");
+  const joinScreenIndex = text.indexOf("{!isJoined ? (");
+  if (overlayIndex < 0 || joinScreenIndex < 0 || overlayIndex > joinScreenIndex) {
+    failures.push(
+      "web reconnect flow must render the in-meeting overlay before the join screen branch",
+    );
+  }
+}
 assertIncludes(
   "sfuConfig",
   "BACKGROUND_SOCKET_RECOVERY_WINDOW_MS = 120000",
