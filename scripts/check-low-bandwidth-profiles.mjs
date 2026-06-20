@@ -1911,6 +1911,11 @@ assertIncludes(
   "const PROCESSED_OUTPUT_STALE_CHECK_MS = 1000;",
   "web stale processed effects output heartbeat interval",
 );
+assertIncludes(
+  "webVideoEffects",
+  "const HIDDEN_STALE_OUTPUT_REPUBLISH_RETRY_MS = 5000;",
+  "web hidden processed effects republish retry cadence",
+);
 assertRegex(
   "webVideoEffects",
   /const duplicateOutputHeartbeatDue =[\s\S]*DUPLICATE_OUTPUT_HEARTBEAT_MS[\s\S]*!duplicateOutputHeartbeatDue/,
@@ -1923,8 +1928,13 @@ assertRegex(
 );
 assertRegex(
   "webVideoEffects",
-  /const keepHiddenStaleProcessedOutputAlive = async[\s\S]*isHiddenStaleProcessedOutput\(sampleNow\)[\s\S]*restoreLastVisibleOutputFrame\(\s*"hidden-stale-output-keepalive"[\s\S]*await deliverOutputFrame\(sampleNow\)[\s\S]*"hidden_stale_output_keepalive"/,
+  /const keepHiddenStaleProcessedOutputAlive = async[\s\S]*isHiddenStaleProcessedOutput\(sampleNow\)[\s\S]*restoreLastVisibleOutputFrame\(\s*"hidden-stale-output-keepalive"[\s\S]*await deliverOutputFrame\(sampleNow\)[\s\S]*HIDDEN_STALE_OUTPUT_REPUBLISH_RETRY_MS[\s\S]*setProcessedTrackReady\(true\);[\s\S]*bumpProcessedTrackVersionForFreshOutput\([\s\S]*"hidden-stale-output-keepalive"[\s\S]*"hidden_stale_output_keepalive"/,
   "web hidden stale processed effects output sends keepalive frames instead of going inert",
+);
+assertRegex(
+  "webVideoEffects",
+  /const publishOutputTrack = \(\) => \{[\s\S]*setProcessedTrack\(track\);[\s\S]*bumpProcessedTrackVersionForFreshOutput\("publish-processed-track"\);/,
+  "web processed effects publish bumps version so raw fallback suppression can retry",
 );
 assertRegex(
   "webVideoEffects",

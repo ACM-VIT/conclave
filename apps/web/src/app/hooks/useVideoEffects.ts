@@ -232,6 +232,7 @@ const OUTPUT_WRITER_FAILURE_RELEASE_THRESHOLD = 3;
 const DUPLICATE_OUTPUT_HEARTBEAT_MS = 900;
 const PROCESSED_OUTPUT_STALE_RELEASE_MS = 2500;
 const PROCESSED_OUTPUT_STALE_CHECK_MS = 1000;
+const HIDDEN_STALE_OUTPUT_REPUBLISH_RETRY_MS = 5000;
 const SEGMENTATION_PROCESSOR_FRAME_TIMEOUT_MS = 6000;
 const SEGMENTATION_PROCESSOR_INITIAL_FRAME_TIMEOUT_MS = 16000;
 const FACE_PROCESSOR_FRAME_TIMEOUT_MS = 6000;
@@ -11180,6 +11181,7 @@ export function useVideoEffects({
     let hiddenStaleOutputKeepaliveCount = 0;
     let hiddenStaleOutputKeepaliveFailureCount = 0;
     let lastHiddenStaleOutputKeepaliveLogAt = 0;
+    let lastHiddenStaleOutputVersionBumpAt = 0;
     let latestOutputFrameVisible = false;
     let latestOutputProbe: CanvasVisibilityProbe = {
       averageLuma: 0,
@@ -13038,6 +13040,26 @@ export function useVideoEffects({
     });
     prestartNeededProcessorWorkers("startup", effectsRef.current);
 
+    const bumpProcessedTrackVersionForFreshOutput = (
+      reason: string,
+      sampleNow = performance.now(),
+    ) => {
+      if (cancelled || track.readyState !== "live") return;
+      setProcessedTrackVersion((version) => version + 1);
+      logVideoEffects(debugId, "processed_track_fresh_output_version", {
+        reason,
+        outputMode,
+        outputWriterMode,
+        outputFramesWritten,
+        outputFrameSequence,
+        outputTrack: getTrackDebugSnapshot(track),
+        ageMs:
+          latestOutputFrameAt > 0
+            ? Math.round(Math.max(0, sampleNow - latestOutputFrameAt))
+            : null,
+      });
+    };
+
     const publishOutputTrack = () => {
       if (outputTrackPublished || cancelled || track.readyState !== "live") return;
       if (
@@ -13065,6 +13087,7 @@ export function useVideoEffects({
         outputTrack: getTrackDebugSnapshot(track),
       });
       setProcessedTrack(track);
+      bumpProcessedTrackVersionForFreshOutput("publish-processed-track");
     };
 
     const releaseOutputTrackToRaw = (
@@ -13540,6 +13563,18 @@ export function useVideoEffects({
         if (outputDelivered) {
           hiddenStaleOutputKeepaliveCount += 1;
           hiddenStaleOutputKeepaliveFailureCount = 0;
+          if (
+            lastHiddenStaleOutputVersionBumpAt <= 0 ||
+            sampleNow - lastHiddenStaleOutputVersionBumpAt >=
+              HIDDEN_STALE_OUTPUT_REPUBLISH_RETRY_MS
+          ) {
+            lastHiddenStaleOutputVersionBumpAt = sampleNow;
+            setProcessedTrackReady(true);
+            bumpProcessedTrackVersionForFreshOutput(
+              "hidden-stale-output-keepalive",
+              sampleNow,
+            );
+          }
           if (
             hiddenStaleOutputKeepaliveCount <= 3 ||
             sampleNow - lastHiddenStaleOutputKeepaliveLogAt >= 5000
