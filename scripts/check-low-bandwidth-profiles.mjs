@@ -319,6 +319,11 @@ assertIncludes(
   "const MAX_WEBCAMS_TO_KEEP_FULL_ON_GOOD_LINKS = 4;",
   "web good-link rooms keep small calls at full webcam layers",
 );
+assertRegex(
+  "webMeetSocket",
+  /const existingWebcamVideoConsumerCount = Array\.from\([\s\S]*producerMapRef\.current\.values\(\)[\s\S]*info\.kind === "video" && info\.type === "webcam"[\s\S]*preferHighWebcamLayer:[\s\S]*joinMode === "webinar_attendee" \|\|[\s\S]*existingWebcamVideoConsumerCount < 4/,
+  "web initial small-call webcam consumers request high layers immediately",
+);
 assertIncludes(
   "webAdaptiveConsumerPreferences",
   "isFocus ||\n      isVisible ||",

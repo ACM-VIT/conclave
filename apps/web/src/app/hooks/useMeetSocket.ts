@@ -2145,6 +2145,10 @@ export function useMeetSocket({
       }
 
       return new Promise((resolve) => {
+        const existingWebcamVideoConsumerCount = Array.from(
+          producerMapRef.current.values(),
+        ).filter((info) => info.kind === "video" && info.type === "webcam")
+          .length;
         socket.emit(
           "consume",
           {
@@ -2152,7 +2156,9 @@ export function useMeetSocket({
             producerId: producerInfo.producerId,
             rtpCapabilities: device.rtpCapabilities,
             ...getInitialConsumerPreferences(producerInfo, {
-              preferHighWebcamLayer: joinMode === "webinar_attendee",
+              preferHighWebcamLayer:
+                joinMode === "webinar_attendee" ||
+                existingWebcamVideoConsumerCount < 4,
             }),
           },
           async (response: ConsumeResponse | { error: string }) => {
