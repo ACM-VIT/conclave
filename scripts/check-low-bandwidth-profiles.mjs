@@ -997,22 +997,32 @@ assertIncludes(
 );
 assertRegex(
   "webMeetClient",
-  /const shouldRunVideoEffects =\s*activeVideoEffectsCount > 0 &&\s*!shouldSuppressVideoEffectsForBandwidth;/,
-  "web meet-shell effects only run when active and not constrained",
+  /const shouldRunVideoEffects =\s*activeVideoEffectsCount > 0 &&\s*isDocumentVisible &&\s*!shouldSuppressVideoEffectsForBandwidth;/,
+  "web meet-shell effects only run when active, visible, and not constrained",
 );
 assertRegex(
   "webMeetClient",
-  /if \(activeVideoEffectsCount <= 0\) return;[\s\S]*if \(shouldSuppressVideoEffectsForBandwidth\) return;[\s\S]*prewarmVideoEffectsRuntimeDeferred/,
+  /document\.addEventListener\("visibilitychange", syncDocumentVisibility\);[\s\S]*window\.addEventListener\("pageshow", syncDocumentVisibility\);/,
+  "web meet-shell tracks page visibility for processed video publishing",
+);
+assertIncludes(
+  "webMeetClient",
+  "const shouldPublishProcessedVideo = shouldRunVideoEffects;",
+  "web hidden tabs publish raw camera while effects pipeline is suspended",
+);
+assertRegex(
+  "webMeetClient",
+  /if \(activeVideoEffectsCount <= 0\) return;[\s\S]*if \(!isDocumentVisible\) return;[\s\S]*if \(shouldSuppressVideoEffectsForBandwidth\) return;[\s\S]*prewarmVideoEffectsRuntimeDeferred/,
   "web meet-shell runtime prewarm constrained-link guard",
 );
 assertRegex(
   "webMeetClient",
-  /if \(restoredVideoEffectsPrewarmDoneRef\.current\) return;[\s\S]*if \(shouldSuppressVideoEffectsForBandwidth\) return;[\s\S]*reason: "restored-effects-state"/,
+  /if \(restoredVideoEffectsPrewarmDoneRef\.current\) return;[\s\S]*if \(!isDocumentVisible\) return;[\s\S]*if \(shouldSuppressVideoEffectsForBandwidth\) return;[\s\S]*reason: "restored-effects-state"/,
   "web restored-effects asset prewarm constrained-link guard",
 );
 assertRegex(
   "webMeetClient",
-  /if \(activeVideoEffectsCount <= 0\) return;[\s\S]*if \(isCameraOff \|\| !hasLiveVideoTrack\(localStream\)\) return;[\s\S]*if \(shouldSuppressVideoEffectsForBandwidth\) return;[\s\S]*reason: "camera-live"/,
+  /if \(activeVideoEffectsCount <= 0\) return;[\s\S]*if \(isCameraOff \|\| !hasLiveVideoTrack\(localStream\)\) return;[\s\S]*if \(!isDocumentVisible\) return;[\s\S]*if \(shouldSuppressVideoEffectsForBandwidth\) return;[\s\S]*reason: "camera-live"/,
   "web live-camera asset prewarm constrained-link guard",
 );
 assertRegex(

@@ -565,6 +565,11 @@ export default function MeetsClient({
   const [devCameraStream, setDevCameraStream] = useState<MediaStream | null>(
     null,
   );
+  const [isDocumentVisible, setIsDocumentVisible] = useState(
+    () =>
+      typeof document === "undefined" ||
+      document.visibilityState === "visible",
+  );
   const activeVideoEffectsCount = useMemo(
     () => countActiveVideoEffects(videoEffects),
     [videoEffects],
@@ -574,7 +579,9 @@ export default function MeetsClient({
   const shouldSuppressVideoEffectsForBandwidth =
     useBandwidthHeavyVideoEffectsSuppressed();
   const shouldRunVideoEffects =
-    activeVideoEffectsCount > 0 && !shouldSuppressVideoEffectsForBandwidth;
+    activeVideoEffectsCount > 0 &&
+    isDocumentVisible &&
+    !shouldSuppressVideoEffectsForBandwidth;
   const [videoEffectsBridgeState, setVideoEffectsBridgeState] =
     useState<VideoEffectsBridgeState>(VIDEO_EFFECTS_OFF_STATE);
   const handleVideoEffectsBridgeStateChange = useCallback(
@@ -590,6 +597,19 @@ export default function MeetsClient({
   const cameraLiveEffectsPrewarmDoneRef = useRef(false);
 
   useEffect(() => {
+    const syncDocumentVisibility = () => {
+      setIsDocumentVisible(document.visibilityState === "visible");
+    };
+    syncDocumentVisibility();
+    document.addEventListener("visibilitychange", syncDocumentVisibility);
+    window.addEventListener("pageshow", syncDocumentVisibility);
+    return () => {
+      document.removeEventListener("visibilitychange", syncDocumentVisibility);
+      window.removeEventListener("pageshow", syncDocumentVisibility);
+    };
+  }, []);
+
+  useEffect(() => {
     const normalized = normalizeVideoEffectsState(videoEffects);
     if (areVideoEffectsEqual(videoEffects, normalized)) return;
     setVideoEffects(normalized);
@@ -602,6 +622,7 @@ export default function MeetsClient({
     const run = () => {
       if (cancelled) return;
       if (activeVideoEffectsCount <= 0) return;
+      if (!isDocumentVisible) return;
       if (shouldSuppressVideoEffectsForBandwidth) return;
       void prewarmVideoEffectsRuntimeDeferred({
         reason: "meet-shell-runtime",
@@ -632,7 +653,11 @@ export default function MeetsClient({
         window.clearTimeout(timeoutId);
       }
     };
-  }, [activeVideoEffectsCount, shouldSuppressVideoEffectsForBandwidth]);
+  }, [
+    activeVideoEffectsCount,
+    isDocumentVisible,
+    shouldSuppressVideoEffectsForBandwidth,
+  ]);
 
   useEffect(() => {
     writeStoredVideoEffects(videoEffects);
@@ -710,6 +735,7 @@ export default function MeetsClient({
       return;
     }
     if (restoredVideoEffectsPrewarmDoneRef.current) return;
+    if (!isDocumentVisible) return;
     if (shouldSuppressVideoEffectsForBandwidth) return;
     restoredVideoEffectsPrewarmDoneRef.current = true;
     const backgroundNeedsSegmentation =
@@ -732,12 +758,13 @@ export default function MeetsClient({
       backgrounds,
       reason: "restored-effects-state",
     });
-  }, [shouldSuppressVideoEffectsForBandwidth, videoEffects]);
+  }, [isDocumentVisible, shouldSuppressVideoEffectsForBandwidth, videoEffects]);
 
   useEffect(() => {
     if (cameraLiveEffectsPrewarmDoneRef.current) return;
     if (activeVideoEffectsCount <= 0) return;
     if (isCameraOff || !hasLiveVideoTrack(localStream)) return;
+    if (!isDocumentVisible) return;
     if (shouldSuppressVideoEffectsForBandwidth) return;
 
     cameraLiveEffectsPrewarmDoneRef.current = true;
@@ -748,6 +775,7 @@ export default function MeetsClient({
     });
   }, [
     activeVideoEffectsCount,
+    isDocumentVisible,
     isCameraOff,
     localStream,
     shouldSuppressVideoEffectsForBandwidth,
@@ -1454,6 +1482,7 @@ export default function MeetsClient({
         consumerTelemetry: Array.from(
           refs.consumerTelemetryRef.current.values(),
         ),
+        isDocumentVisible,
         activeVideoEffectsCount,
         shouldSuppressVideoEffectsForBandwidth,
         shouldRunVideoEffects,
@@ -1510,6 +1539,7 @@ export default function MeetsClient({
       connectionState,
       displayLocalStream,
       getRawVideoPublishTrack,
+      isDocumentVisible,
       isCameraOff,
       isMirrorCamera,
       localStream,
