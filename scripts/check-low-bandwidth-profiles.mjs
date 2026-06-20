@@ -498,6 +498,16 @@ assertRegex(
   /publishEmergencyMode: selfPublishEmergencyMode,[\s\S]*receiveEmergencyMode: selfReceiveEmergencyMode,[\s\S]*useAdaptiveConsumerPreferences\(\{[\s\S]*connectionQuality: selfReceiveQuality,[\s\S]*emergencyMode: selfReceiveEmergencyMode,[\s\S]*useAdaptivePublishQuality\(\{[\s\S]*connectionQuality: selfPublishQuality,[\s\S]*emergencyMode: selfPublishEmergencyMode,/,
   "web publish and receive adaptation use direction-specific emergency signals",
 );
+assertNotIncludes(
+  "webAdaptivePublishQuality",
+  'if (connectionQuality === "poor") {\n          void applyLiveProducerProfile(emergencyMode ? "emergency" : "poor");\n        }',
+  "web publish caps must wait for poor-link stability window",
+);
+assertRegex(
+  "webAdaptivePublishQuality",
+  /if \(previous\.quality !== connectionQuality\) \{[\s\S]*qualityWindowRef\.current = \{ quality: connectionQuality, since: now \};[\s\S]*writeDebugSnapshot\(now\);[\s\S]*return;/,
+  "web publish quality changes reset stability window before capping",
+);
 assertRegex(
   "webMeetClient",
   /suppressedProcessedPublishTrackRef[\s\S]*handlePreferredVideoPublishTrackRejected[\s\S]*suppress_processed_publish_track_after_raw_repair[\s\S]*onPreferredVideoPublishTrackRejected:[\s\S]*handlePreferredVideoPublishTrackRejected[\s\S]*processedTrackSuppressed[\s\S]*skip_processed_track_suppressed_after_raw_repair/,

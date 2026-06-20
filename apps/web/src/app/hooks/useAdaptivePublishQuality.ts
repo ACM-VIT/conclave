@@ -483,9 +483,6 @@ export function useAdaptivePublishQuality({
       }
       if (previous.quality !== connectionQuality) {
         qualityWindowRef.current = { quality: connectionQuality, since: now };
-        if (connectionQuality === "poor") {
-          void applyLiveProducerProfile(emergencyMode ? "emergency" : "poor");
-        }
         writeDebugSnapshot(now);
         return;
       }
