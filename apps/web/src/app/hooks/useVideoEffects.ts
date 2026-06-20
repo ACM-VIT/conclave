@@ -43,17 +43,35 @@ const FACE_MESH_CDN =
 const TASKS_VISION_VERSION = "0.10.35";
 const TASKS_VISION_WASM_LOCAL_PATH = `/mediapipe/tasks-vision/${TASKS_VISION_VERSION}/wasm`;
 const TASKS_VISION_WASM_CDN = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${TASKS_VISION_VERSION}/wasm`;
-const TASKS_SELFIE_SEGMENTER_MODEL_LOCAL_PATH =
+const TASKS_SELFIE_SEGMENTER_SQUARE_MODEL_LOCAL_PATH =
+  "/mediapipe/models/image_segmenter/selfie_segmenter/float16/latest/selfie_segmenter.tflite";
+const TASKS_SELFIE_SEGMENTER_SQUARE_MODEL_CDN =
+  "https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter/float16/latest/selfie_segmenter.tflite";
+const TASKS_SELFIE_SEGMENTER_LANDSCAPE_MODEL_LOCAL_PATH =
   "/mediapipe/models/image_segmenter/selfie_segmenter_landscape/float16/latest/selfie_segmenter_landscape.tflite";
-const TASKS_SELFIE_SEGMENTER_MODEL_CDN =
+const TASKS_SELFIE_SEGMENTER_LANDSCAPE_MODEL_CDN =
   "https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter_landscape/float16/latest/selfie_segmenter_landscape.tflite";
 const TASKS_FACE_LANDMARKER_MODEL_LOCAL_PATH =
   "/mediapipe/models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task";
 const TASKS_FACE_LANDMARKER_MODEL_CDN =
   "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task";
 const TASKS_SELFIE_SEGMENTER_MODELS = [
-  { source: "same-origin", url: TASKS_SELFIE_SEGMENTER_MODEL_LOCAL_PATH },
-  { source: "google-storage", url: TASKS_SELFIE_SEGMENTER_MODEL_CDN },
+  {
+    source: "same-origin-square",
+    url: TASKS_SELFIE_SEGMENTER_SQUARE_MODEL_LOCAL_PATH,
+  },
+  {
+    source: "google-storage-square",
+    url: TASKS_SELFIE_SEGMENTER_SQUARE_MODEL_CDN,
+  },
+  {
+    source: "same-origin-landscape",
+    url: TASKS_SELFIE_SEGMENTER_LANDSCAPE_MODEL_LOCAL_PATH,
+  },
+  {
+    source: "google-storage-landscape",
+    url: TASKS_SELFIE_SEGMENTER_LANDSCAPE_MODEL_CDN,
+  },
 ] as const;
 const TASKS_FACE_LANDMARKER_MODELS = [
   { source: "same-origin", url: TASKS_FACE_LANDMARKER_MODEL_LOCAL_PATH },
@@ -63,12 +81,16 @@ const TASKS_FACE_LANDMARKER_MODELS = [
 const TARGET_FPS = 30;
 const MAX_EFFECTS_OUTPUT_WIDTH = 1280;
 const MAX_EFFECTS_OUTPUT_HEIGHT = 720;
-const MAX_SEGMENTATION_MODEL_INPUT_WIDTH = 640;
-const MAX_SEGMENTATION_MODEL_INPUT_HEIGHT = 360;
+const MAX_SEGMENTATION_MODEL_INPUT_WIDTH = 960;
+const MAX_SEGMENTATION_MODEL_INPUT_HEIGHT = 540;
 const MAX_FACE_MODEL_INPUT_WIDTH = 640;
 const MAX_FACE_MODEL_INPUT_HEIGHT = 360;
-const INITIAL_SEGMENTATION_INTERVAL_MS = 66;
-const MIN_SEGMENTATION_INTERVAL_MS = 66;
+const INITIAL_SEGMENTATION_INTERVAL_MS = 50;
+const MIN_SEGMENTATION_INTERVAL_MS = 50;
+const IMAGE_REPLACEMENT_INITIAL_SEGMENTATION_INTERVAL_MS = 33;
+const IMAGE_REPLACEMENT_MIN_SEGMENTATION_INTERVAL_MS = 33;
+const IMAGE_REPLACEMENT_MAX_SEGMENTATION_INTERVAL_MS = 72;
+const IMAGE_REPLACEMENT_SEGMENTATION_RESULT_STALE_MS = 125;
 const MIN_FACE_INTERVAL_MS = 84;
 const MIN_FACE_FILTER_INTERVAL_MS = 50;
 const MAX_ACTIVE_FACE_FILTER_INTERVAL_MS = 70;
@@ -131,11 +153,58 @@ const FACE_FILTER_LANDMARK_FAST_SMOOTHING_ALPHA = 0.94;
 const FACE_FILTER_LANDMARK_ADAPTIVE_MOTION_START = 0.0015;
 const FACE_FILTER_LANDMARK_ADAPTIVE_MOTION_END = 0.012;
 const MASK_TEMPORAL_ALPHA = 0.72;
-const MASK_CONFIDENCE_FLOOR = 0.18;
-const MASK_CONFIDENCE_CEILING = 0.74;
-const MASK_CONFIDENCE_GAMMA = 0.82;
-const MASK_EDGE_FEATHER_PX = 1.35;
-const MASK_EDGE_REINFORCE_ALPHA = 0.72;
+const MASK_TEMPORAL_RISE_ALPHA = 0.86;
+const MASK_TEMPORAL_FALL_ALPHA = 0.74;
+const MASK_REPLACEMENT_TEMPORAL_RISE_ALPHA = 0.92;
+const MASK_REPLACEMENT_TEMPORAL_FALL_ALPHA = 0.52;
+const MASK_CONFIDENCE_FLOOR = 0.32;
+const MASK_CONFIDENCE_CEILING = 0.8;
+const MASK_CONFIDENCE_GAMMA = 0.9;
+const MASK_ALPHA_CLIP = 0.05;
+const MASK_EDGE_GROW_ALPHA = 0.14;
+const MASK_EDGE_ERODE_ALPHA = 0.38;
+const MASK_REPLACEMENT_EDGE_GROW_ALPHA = 0.24;
+const MASK_REPLACEMENT_EDGE_ERODE_ALPHA = 0.3;
+const MASK_EDGE_ERODE_PASSES = 1;
+const MASK_EDGE_FEATHER_PX = 0.38;
+const MASK_REPLACEMENT_EDGE_FEATHER_PX = 0.48;
+const MASK_EDGE_REINFORCE_ALPHA = 0.92;
+const MASK_REPLACEMENT_EDGE_REINFORCE_ALPHA = 0.88;
+const FOREGROUND_EDGE_OUTER_UNDERLAY_ALPHA = 0.18;
+const FOREGROUND_EDGE_OUTER_UNDERLAY_BLUR_PX = 5.2;
+const FOREGROUND_EDGE_UNDERLAY_ALPHA = 0.36;
+const FOREGROUND_EDGE_UNDERLAY_BLUR_PX = 2.2;
+const FOREGROUND_REPLACEMENT_EDGE_OUTER_UNDERLAY_ALPHA = 0;
+const FOREGROUND_REPLACEMENT_EDGE_OUTER_UNDERLAY_BLUR_PX = 0;
+const FOREGROUND_REPLACEMENT_EDGE_UNDERLAY_ALPHA = 0;
+const FOREGROUND_REPLACEMENT_EDGE_UNDERLAY_BLUR_PX = 0;
+const FOREGROUND_EDGE_STALE_MASK_START_MS = 90;
+const FOREGROUND_EDGE_STALE_MASK_FULL_MS = 240;
+const FOREGROUND_EDGE_STALE_OUTER_ALPHA_BOOST = 0.12;
+const FOREGROUND_EDGE_STALE_OUTER_BLUR_BOOST_PX = 2.4;
+const FOREGROUND_EDGE_STALE_INNER_ALPHA_BOOST = 0.08;
+const FOREGROUND_EDGE_STALE_INNER_BLUR_BOOST_PX = 1.0;
+const FOREGROUND_REPLACEMENT_EDGE_STALE_OUTER_ALPHA_BOOST = 0;
+const FOREGROUND_REPLACEMENT_EDGE_STALE_OUTER_BLUR_BOOST_PX = 0;
+const FOREGROUND_REPLACEMENT_EDGE_STALE_INNER_ALPHA_BOOST = 0;
+const FOREGROUND_REPLACEMENT_EDGE_STALE_INNER_BLUR_BOOST_PX = 0;
+const FOREGROUND_REPLACEMENT_MASK_GATE_PASSES = 1;
+const FOREGROUND_REPLACEMENT_COLOR_BLEED_ALPHA = 0.04;
+const FOREGROUND_REPLACEMENT_COLOR_BLEED_BLUR_PX = 0.65;
+const FOREGROUND_REPLACEMENT_COLOR_BLEED_STALE_ALPHA_BOOST = 0.02;
+const FOREGROUND_REPLACEMENT_COLOR_BLEED_STALE_BLUR_BOOST_PX = 0.2;
+const FOREGROUND_REPLACEMENT_CORE_RESTORE_ALPHA = 0.48;
+const FOREGROUND_REPLACEMENT_CORE_RESTORE_STALE_ALPHA_BOOST = 0.16;
+const FOREGROUND_REPLACEMENT_CORE_RESTORE_MASK_GATE_PASSES = 3;
+const SOURCE_MOTION_SAMPLE_WIDTH = 48;
+const SOURCE_MOTION_SAMPLE_HEIGHT = 27;
+const SOURCE_MOTION_LUMA_DELTA_THRESHOLD = 10;
+const SOURCE_MOTION_BOOST_START = 0.035;
+const SOURCE_MOTION_BOOST_END = 0.18;
+const SOURCE_MOTION_FOREGROUND_RESTORE_ALPHA = 0.18;
+const SOURCE_MOTION_FOREGROUND_RESTORE_BLUR_PX = 0.85;
+const SOURCE_MOTION_MASK_BLUR_PX = 1.1;
+const SOURCE_MOTION_MASK_HOLD_MS = 260;
 const OUTPUT_PROBE_WIDTH = 16;
 const OUTPUT_PROBE_HEIGHT = 9;
 const LOW_LIGHT_SAMPLE_WIDTH = 48;
@@ -161,7 +230,9 @@ const OUTPUT_WRITER_PENDING_PRESSURE_MS = 75;
 const OUTPUT_WRITER_FRAME_TIMEOUT_MS = 3000;
 const OUTPUT_WRITER_FAILURE_RELEASE_THRESHOLD = 3;
 const SEGMENTATION_PROCESSOR_FRAME_TIMEOUT_MS = 6000;
+const SEGMENTATION_PROCESSOR_INITIAL_FRAME_TIMEOUT_MS = 16000;
 const FACE_PROCESSOR_FRAME_TIMEOUT_MS = 6000;
+const FACE_PROCESSOR_INITIAL_FRAME_TIMEOUT_MS = 16000;
 const SEGMENTATION_PROCESSOR_TIMEOUT_MESSAGE =
   "Timed out waiting for segmentation worker result.";
 const FACE_PROCESSOR_TIMEOUT_MESSAGE =
@@ -408,7 +479,13 @@ type VideoEffectsAdaptationPolicy =
       sourcePixels: number;
     };
 type ModelAssetCandidate = {
-  source: "same-origin" | "google-storage";
+  source:
+    | "same-origin"
+    | "same-origin-square"
+    | "same-origin-landscape"
+    | "google-storage"
+    | "google-storage-square"
+    | "google-storage-landscape";
   url: string;
 };
 type CanvasVisibilityProbe = {
@@ -424,12 +501,20 @@ type TemporalMaskSource =
 type TemporalMaskStats = {
   enabled: boolean;
   alpha: number;
+  riseAlpha: number;
+  fallAlpha: number;
   confidenceFloor: number;
   confidenceCeiling: number;
   confidenceGamma: number;
+  edgeGrowAlpha: number;
+  edgeErodeAlpha: number;
+  edgeErodePasses: number;
+  edgeFeatherPx: number;
+  edgeReinforceAlpha: number;
   frameCount: number;
   shapeFrameCount: number;
   smoothedFrameCount: number;
+  edgeGrowFrameCount: number;
   resetCount: number;
   source: TemporalMaskSource;
   pixelCount: number;
@@ -787,6 +872,38 @@ type BackgroundRenderStats = {
   sampleRegions: CanvasBounds[];
   hasSegmentationMask: boolean;
   hasBackgroundImage: boolean;
+  segmentationMaskAgeMs: number | null;
+  edgeUnderlayActive: boolean;
+  edgeUnderlayAlpha: number;
+  edgeUnderlayBlurPx: number;
+  outerEdgeUnderlayAlpha: number;
+  outerEdgeUnderlayBlurPx: number;
+  edgeUnderlayStaleMaskBoost: number;
+  edgeUnderlaySourceBackedBackground: boolean;
+  edgeUnderlayRawHaloSuppression: number;
+  foregroundMatteGatePasses: number;
+  foregroundColorBleedActive: boolean;
+  foregroundColorBleedAlpha: number;
+  foregroundColorBleedBlurPx: number;
+  foregroundCoreRestoreActive: boolean;
+  foregroundCoreRestoreAlpha: number;
+  foregroundCoreRestoreGatePasses: number;
+  sourceMotionScore: number;
+  sourceMotionChangedPixelRatio: number;
+  sourceMotionAverageLumaDelta: number;
+  sourceMotionEdgeBoost: number;
+  sourceMotionMaskActive: boolean;
+  sourceMotionForegroundRestoreAlpha: number;
+  sourceMotionForegroundRestoreBlurPx: number;
+};
+type SourceMotionStats = {
+  score: number;
+  boost: number;
+  changedPixelRatio: number;
+  averageLumaDelta: number;
+  samplePixelCount: number;
+  reason: string;
+  maskActive: boolean;
 };
 type ProceduralBackgroundLayerCache = {
   canvas: HTMLCanvasElement;
@@ -993,6 +1110,7 @@ type OutputWriterPendingFrame = {
   completion: Promise<OutputWriterWorkerCompletionMessage>;
   timeoutId: number;
   sentAt: number;
+  closeResource: () => void;
 };
 type FaceProcessorWorkerReadyMessage = {
   type: "READY";
@@ -1030,6 +1148,7 @@ type FaceProcessorPendingFrame = {
   timeoutId: number;
   sentAt: number;
   processingConfigId: number;
+  closeSource: () => void;
 };
 type SegmentationProcessorWorkerReadyMessage = {
   type: "READY";
@@ -1067,6 +1186,7 @@ type SegmentationProcessorPendingFrame = {
   timeoutId: number;
   sentAt: number;
   processingConfigId: number;
+  closeSource: () => void;
 };
 type SegmentationMaskPixels = {
   width: number;
@@ -1086,6 +1206,7 @@ type ModelWorkerFrameSource = {
   height: number;
   scale: number;
 };
+type ProcessorPrewarmFrameSource = Omit<ModelWorkerFrameSource, "scale">;
 type FrameSource = {
   image: HTMLVideoElement | HTMLCanvasElement;
   width: number;
@@ -1098,6 +1219,7 @@ interface UseVideoEffectsOptions {
   effects: VideoEffectsState;
   processedVideoTrackRef: React.MutableRefObject<MediaStreamTrack | null>;
   framingRecenterToken?: number;
+  mirrorOutput?: boolean;
 }
 
 interface UseVideoEffectsResult {
@@ -1175,7 +1297,8 @@ const shapeSegmentationConfidence = (confidence: number) => {
     0,
     1,
   );
-  return Math.pow(smoothStep(normalized), MASK_CONFIDENCE_GAMMA);
+  const shaped = Math.pow(smoothStep(normalized), MASK_CONFIDENCE_GAMMA);
+  return shaped <= MASK_ALPHA_CLIP ? 0 : shaped;
 };
 
 const getEvenDimension = (value: number) => Math.max(2, Math.floor(value / 2) * 2);
@@ -1354,6 +1477,14 @@ const getVideoEffectsComplexityScore = (effects: VideoEffectsState) => {
   if (effects.framing) score += 0.5;
   return score;
 };
+
+const isImageReplacementBackgroundEffect = (effects: VideoEffectsState) =>
+  effects.background === "custom" ||
+  Boolean(
+    BACKGROUND_ASSET_PATHS[
+      effects.background as keyof typeof BACKGROUND_ASSET_PATHS
+    ],
+  );
 
 const isPlainRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -2148,6 +2279,56 @@ const getAdaptedModelInterval = (
   );
 };
 
+const getSegmentationInitialIntervalMs = (effects: VideoEffectsState) =>
+  isImageReplacementBackgroundEffect(effects)
+    ? IMAGE_REPLACEMENT_INITIAL_SEGMENTATION_INTERVAL_MS
+    : INITIAL_SEGMENTATION_INTERVAL_MS;
+
+const getSegmentationMinIntervalMs = (effects: VideoEffectsState) =>
+  isImageReplacementBackgroundEffect(effects)
+    ? IMAGE_REPLACEMENT_MIN_SEGMENTATION_INTERVAL_MS
+    : MIN_SEGMENTATION_INTERVAL_MS;
+
+const getSegmentationResultStaleMs = (effects: VideoEffectsState) =>
+  isImageReplacementBackgroundEffect(effects)
+    ? IMAGE_REPLACEMENT_SEGMENTATION_RESULT_STALE_MS
+    : SEGMENTATION_RESULT_STALE_MS;
+
+const getTemporalMaskProfile = (effects: VideoEffectsState) =>
+  isImageReplacementBackgroundEffect(effects)
+    ? {
+        riseAlpha: MASK_REPLACEMENT_TEMPORAL_RISE_ALPHA,
+        fallAlpha: MASK_REPLACEMENT_TEMPORAL_FALL_ALPHA,
+        edgeGrowAlpha: MASK_REPLACEMENT_EDGE_GROW_ALPHA,
+        edgeErodeAlpha: MASK_REPLACEMENT_EDGE_ERODE_ALPHA,
+        edgeFeatherPx: MASK_REPLACEMENT_EDGE_FEATHER_PX,
+        edgeReinforceAlpha: MASK_REPLACEMENT_EDGE_REINFORCE_ALPHA,
+      }
+    : {
+        riseAlpha: MASK_TEMPORAL_RISE_ALPHA,
+        fallAlpha: MASK_TEMPORAL_FALL_ALPHA,
+        edgeGrowAlpha: MASK_EDGE_GROW_ALPHA,
+        edgeErodeAlpha: MASK_EDGE_ERODE_ALPHA,
+        edgeFeatherPx: MASK_EDGE_FEATHER_PX,
+        edgeReinforceAlpha: MASK_EDGE_REINFORCE_ALPHA,
+      };
+
+const getAdaptedSegmentationInterval = (
+  state: VideoEffectsAdaptationState,
+  effects: VideoEffectsState,
+  baseIntervalMs: number,
+) => {
+  const intervalMs = getAdaptedModelInterval(
+    state,
+    "segmentation",
+    baseIntervalMs,
+    getSegmentationMinIntervalMs(effects),
+  );
+  return isImageReplacementBackgroundEffect(effects)
+    ? Math.min(intervalMs, IMAGE_REPLACEMENT_MAX_SEGMENTATION_INTERVAL_MS)
+    : intervalMs;
+};
+
 const getVideoEffectsAdaptationStats = (
   state: VideoEffectsAdaptationState,
   {
@@ -2513,6 +2694,15 @@ const getEffectsDebugSnapshot = (effects: VideoEffectsState) => ({
   active: hasActiveVideoEffects(effects),
 });
 
+const getVideoProcessingDebugSnapshot = (
+  effects: VideoEffectsState,
+  mirrorOutput: boolean,
+) => ({
+  ...getEffectsDebugSnapshot(effects),
+  mirrorOutput,
+  active: hasActiveVideoEffects(effects) || mirrorOutput,
+});
+
 const createVisualEffectTransitionSnapshot = (
   effects: VideoEffectsState,
 ): VisualEffectTransitionSnapshot => getEffectsDebugSnapshot(effects);
@@ -2781,11 +2971,13 @@ const createInactiveDebugStats = ({
   sourceStream,
   sourceVideoTrack,
   effects,
+  mirrorOutput,
 }: {
   active: boolean;
   sourceStream: MediaStream | null;
   sourceVideoTrack: MediaStreamTrack | null;
   effects: VideoEffectsState;
+  mirrorOutput: boolean;
 }): VideoEffectsDebugStats => ({
   needsSegmentation: false,
   needsFace: false,
@@ -2815,12 +3007,20 @@ const createInactiveDebugStats = ({
   temporalMask: {
     enabled: false,
     alpha: MASK_TEMPORAL_ALPHA,
+    riseAlpha: MASK_TEMPORAL_RISE_ALPHA,
+    fallAlpha: MASK_TEMPORAL_FALL_ALPHA,
     confidenceFloor: MASK_CONFIDENCE_FLOOR,
     confidenceCeiling: MASK_CONFIDENCE_CEILING,
     confidenceGamma: MASK_CONFIDENCE_GAMMA,
+    edgeGrowAlpha: MASK_EDGE_GROW_ALPHA,
+    edgeErodeAlpha: MASK_EDGE_ERODE_ALPHA,
+    edgeErodePasses: MASK_EDGE_ERODE_PASSES,
+    edgeFeatherPx: MASK_EDGE_FEATHER_PX,
+    edgeReinforceAlpha: MASK_EDGE_REINFORCE_ALPHA,
     frameCount: 0,
     shapeFrameCount: 0,
     smoothedFrameCount: 0,
+    edgeGrowFrameCount: 0,
     resetCount: 0,
     source: "none",
     pixelCount: 0,
@@ -2961,7 +3161,7 @@ const createInactiveDebugStats = ({
   sourceTrack: getTrackDebugSnapshot(sourceVideoTrack),
   outputTrack: null,
   effects: {
-    ...getEffectsDebugSnapshot(effects),
+    ...getVideoProcessingDebugSnapshot(effects, mirrorOutput),
     active,
   },
 });
@@ -2984,6 +3184,7 @@ const createMeetVideoPipeDirectDebugStats = ({
     sourceStream,
     sourceVideoTrack,
     effects,
+    mirrorOutput: false,
   });
   const baseFramePipeline =
     typeof base.framePipeline === "object" && base.framePipeline !== null
@@ -3023,6 +3224,14 @@ const getErrorDebugSnapshot = (err: unknown) => {
     };
   }
   return err;
+};
+
+const closeTransferredFrameResource = (
+  resource: ClosableMediaPipeResource | null | undefined,
+) => {
+  try {
+    resource?.close?.();
+  } catch {}
 };
 
 const isVideoEffectsProcessorCleanupError = (err: unknown) =>
@@ -3428,7 +3637,9 @@ const prewarmModelAsset = (
         const response = await fetch(candidate.url, {
           cache: "force-cache",
           credentials: "omit",
-          mode: candidate.source === "same-origin" ? "same-origin" : "cors",
+          mode: candidate.source.startsWith("same-origin")
+            ? "same-origin"
+            : "cors",
         });
         if (!response.ok) {
           throw new Error(`Failed to prewarm ${label}: ${response.status}`);
@@ -3711,20 +3922,6 @@ const createProcessorPrewarmFrameSource = async () => {
   ctx.arc(canvas.width * 0.55, canvas.height * 0.42, 3, 0, Math.PI * 2);
   ctx.fill();
 
-  const VideoFrameCtor = (
-    globalThis as unknown as { VideoFrame?: unknown }
-  ).VideoFrame as VideoFrameConstructor | undefined;
-  if (VideoFrameCtor) {
-    const frame = new VideoFrameCtor(canvas, { timestamp: 0 });
-    return {
-      source: frame,
-      kind: "video-frame" as ModelWorkerInputSource,
-      transfer: frame as unknown as Transferable,
-      width: canvas.width,
-      height: canvas.height,
-    };
-  }
-
   if (typeof createImageBitmap !== "function") return null;
   const bitmap = await createImageBitmap(canvas);
   return {
@@ -3741,7 +3938,7 @@ const postProcessorPrewarmFrame = async (
   kind: ProcessorPrewarmKind,
 ) => {
   const frameSource = await createProcessorPrewarmFrameSource();
-  if (!frameSource) return false;
+  if (!frameSource) return null;
   try {
     worker.postMessage(
       {
@@ -3756,7 +3953,7 @@ const postProcessorPrewarmFrame = async (
       },
       [frameSource.transfer],
     );
-    return true;
+    return frameSource as ProcessorPrewarmFrameSource;
   } catch (err) {
     try {
       frameSource.source.close?.();
@@ -3833,8 +4030,15 @@ const prewarmProcessorWorker = (
     let delegate: MediaPipeDelegate | null = null;
     let warmupStartedAt = 0;
     let warmupRan = false;
+    let postedPrewarmFrameSource: ProcessorPrewarmFrameSource | null = null;
     const startedAt = performance.now();
     let timeoutId: number | null = null;
+    const closePostedPrewarmFrameSource = () => {
+      closeTransferredFrameResource(
+        postedPrewarmFrameSource?.source as ClosableMediaPipeResource | null,
+      );
+      postedPrewarmFrameSource = null;
+    };
     const closeWorker = () => {
       if (!worker) return;
       if (!closePosted) {
@@ -3861,6 +4065,7 @@ const prewarmProcessorWorker = (
       } else {
         resolve();
       }
+      closePostedPrewarmFrameSource();
       if (err) {
         closeWorker();
       }
@@ -3894,8 +4099,9 @@ const prewarmProcessorWorker = (
           }
           warmupStartedAt = performance.now();
           postProcessorPrewarmFrame(worker as Worker, kind)
-            .then((posted) => {
-              if (!posted) {
+            .then((postedFrameSource) => {
+              postedPrewarmFrameSource = postedFrameSource;
+              if (!postedFrameSource) {
                 if (worker && delegate) {
                   storePrewarmedProcessorWorker(
                     kind,
@@ -4452,7 +4658,7 @@ export const prewarmVideoEffectsAssets = async ({
         ),
       );
     }
-    if (faceFilterGraph?.requiresMeetVideoPipe === true) {
+    if (faceFilter && requiresMeetVideoPipeFaceFilter(faceFilter)) {
       modelPromises.push(
         prewarmMeetVideoPipeRuntime(({ event, level, error, data }) => {
           const payload = {
@@ -4551,6 +4757,196 @@ const probeCanvasFrameVisibility = (
       averageLuma >= MIN_VISIBLE_AVERAGE_LUMA ||
       peakLuma >= MIN_VISIBLE_PEAK_LUMA,
   };
+};
+
+const createSourceMotionStats = (
+  score = 0,
+  boost = 0,
+  changedPixelRatio = 0,
+  averageLumaDelta = 0,
+  samplePixelCount = 0,
+  reason = "unavailable",
+  maskActive = false,
+): SourceMotionStats => ({
+  score: Number(score.toFixed(4)),
+  boost: Number(boost.toFixed(4)),
+  changedPixelRatio: Number(changedPixelRatio.toFixed(4)),
+  averageLumaDelta: Number(averageLumaDelta.toFixed(3)),
+  samplePixelCount,
+  reason,
+  maskActive,
+});
+
+const createHeldSourceMotionStats = (
+  stats: SourceMotionStats,
+  now: number,
+  expiresAt: number,
+): SourceMotionStats => {
+  const holdProgress = clamp(
+    (expiresAt - now) / Math.max(1, SOURCE_MOTION_MASK_HOLD_MS),
+    0,
+    1,
+  );
+  const decay = smoothStep(holdProgress);
+  return createSourceMotionStats(
+    stats.score * decay,
+    stats.boost * decay,
+    stats.changedPixelRatio,
+    stats.averageLumaDelta,
+    stats.samplePixelCount,
+    "held",
+    decay > 0.001,
+  );
+};
+
+const computeSourceMotionStats = (
+  source: CanvasImageSource,
+  crop: CropRect,
+  sampleCanvas: HTMLCanvasElement,
+  sampleCtx: CanvasRenderingContext2D | null,
+  maskCanvas: HTMLCanvasElement,
+  maskCtx: CanvasRenderingContext2D | null,
+  previousLuma: Uint8Array | null,
+): {
+  stats: SourceMotionStats;
+  luma: Uint8Array | null;
+  mask: HTMLCanvasElement | null;
+} => {
+  if (!sampleCtx || crop.sw <= 0 || crop.sh <= 0) {
+    return {
+      stats: createSourceMotionStats(0, 0, 0, 0, 0, "missing-context"),
+      luma: previousLuma,
+      mask: null,
+    };
+  }
+
+  if (
+    sampleCanvas.width !== SOURCE_MOTION_SAMPLE_WIDTH ||
+    sampleCanvas.height !== SOURCE_MOTION_SAMPLE_HEIGHT
+  ) {
+    sampleCanvas.width = SOURCE_MOTION_SAMPLE_WIDTH;
+    sampleCanvas.height = SOURCE_MOTION_SAMPLE_HEIGHT;
+    previousLuma = null;
+  }
+  if (
+    maskCtx &&
+    (maskCanvas.width !== SOURCE_MOTION_SAMPLE_WIDTH ||
+      maskCanvas.height !== SOURCE_MOTION_SAMPLE_HEIGHT)
+  ) {
+    maskCanvas.width = SOURCE_MOTION_SAMPLE_WIDTH;
+    maskCanvas.height = SOURCE_MOTION_SAMPLE_HEIGHT;
+  }
+
+  try {
+    sampleCtx.drawImage(
+      source,
+      crop.sx,
+      crop.sy,
+      crop.sw,
+      crop.sh,
+      0,
+      0,
+      SOURCE_MOTION_SAMPLE_WIDTH,
+      SOURCE_MOTION_SAMPLE_HEIGHT,
+    );
+    const imageData = sampleCtx.getImageData(
+      0,
+      0,
+      SOURCE_MOTION_SAMPLE_WIDTH,
+      SOURCE_MOTION_SAMPLE_HEIGHT,
+    );
+    const pixelCount = SOURCE_MOTION_SAMPLE_WIDTH * SOURCE_MOTION_SAMPLE_HEIGHT;
+    const luma = new Uint8Array(pixelCount);
+    const maskImageData =
+      maskCtx?.createImageData(
+        SOURCE_MOTION_SAMPLE_WIDTH,
+        SOURCE_MOTION_SAMPLE_HEIGHT,
+      ) ?? null;
+    let changedPixels = 0;
+    let totalDelta = 0;
+    for (
+      let index = 0, offset = 0;
+      index < pixelCount;
+      index += 1, offset += 4
+    ) {
+      const value = Math.round(
+        imageData.data[offset] * 0.2126 +
+          imageData.data[offset + 1] * 0.7152 +
+          imageData.data[offset + 2] * 0.0722,
+      );
+      luma[index] = value;
+      if (!previousLuma || previousLuma.length !== pixelCount) continue;
+      const delta = Math.abs(value - previousLuma[index]);
+      totalDelta += delta;
+      const motionAlpha = clamp(
+        (delta - SOURCE_MOTION_LUMA_DELTA_THRESHOLD) / 48,
+        0,
+        1,
+      );
+      if (motionAlpha > 0) {
+        changedPixels += 1;
+        if (maskImageData) {
+          maskImageData.data[offset] = 255;
+          maskImageData.data[offset + 1] = 255;
+          maskImageData.data[offset + 2] = 255;
+          maskImageData.data[offset + 3] = Math.round(motionAlpha * 255);
+        }
+      }
+    }
+
+    if (!previousLuma || previousLuma.length !== pixelCount) {
+      maskCtx?.clearRect(0, 0, maskCanvas.width, maskCanvas.height);
+      return {
+        stats: createSourceMotionStats(0, 0, 0, 0, pixelCount, "priming"),
+        luma,
+        mask: null,
+      };
+    }
+
+    const changedPixelRatio = changedPixels / pixelCount;
+    const averageLumaDelta = totalDelta / pixelCount;
+    const score = clamp(
+      changedPixelRatio * 0.72 + (averageLumaDelta / 255) * 1.65,
+      0,
+      1,
+    );
+    const boost = smoothStep(
+      clamp(
+        (score - SOURCE_MOTION_BOOST_START) /
+          Math.max(0.001, SOURCE_MOTION_BOOST_END - SOURCE_MOTION_BOOST_START),
+        0,
+        1,
+      ),
+    );
+    const maskActive = Boolean(
+      maskImageData && changedPixels > 0 && boost > 0.001,
+    );
+    if (maskCtx && maskImageData) {
+      maskCtx.clearRect(0, 0, maskCanvas.width, maskCanvas.height);
+      if (maskActive) {
+        maskCtx.putImageData(maskImageData, 0, 0);
+      }
+    }
+    return {
+      stats: createSourceMotionStats(
+        score,
+        boost,
+        changedPixelRatio,
+        averageLumaDelta,
+        pixelCount,
+        "ok",
+        maskActive,
+      ),
+      luma,
+      mask: maskActive ? maskCanvas : null,
+    };
+  } catch {
+    return {
+      stats: createSourceMotionStats(0, 0, 0, 0, 0, "sample-failed"),
+      luma: previousLuma,
+      mask: null,
+    };
+  }
 };
 
 const probeVideoFrameVisibility = (
@@ -5114,7 +5510,12 @@ const applyAppearanceStyleOverlay = (
   height: number,
   style: AppearanceStyleId,
 ) => {
-  if (style === "none" || style === "cloudy" || style === "ocean" || style === "mono") {
+  if (
+    style === "none" ||
+    style === "cloudy" ||
+    style === "ocean" ||
+    style === "mono"
+  ) {
     return;
   }
 
@@ -5130,10 +5531,10 @@ const applyAppearanceStyleOverlay = (
       height * 0.42,
       Math.min(width, height) * 0.08,
       width * 0.5,
-      height * 0.45,
-      Math.max(width, height) * 0.68,
+      height * 0.42,
+      Math.max(width, height) * 0.7,
     );
-    gradient.addColorStop(0, "rgba(255,255,245,0.2)");
+    gradient.addColorStop(0, "rgba(255,245,215,0.18)");
     gradient.addColorStop(0.46, "rgba(255,214,170,0.1)");
     gradient.addColorStop(1, "rgba(255,255,255,0)");
     ctx.globalCompositeOperation = "screen";
@@ -5572,6 +5973,218 @@ type BackgroundBlurScratch = {
   ctx: CanvasRenderingContext2D | null;
 };
 
+type ForegroundCompositeScratch = {
+  canvas: HTMLCanvasElement;
+  ctx: CanvasRenderingContext2D | null;
+};
+
+const ensureScratchCanvasSize = (
+  canvas: HTMLCanvasElement,
+  width: number,
+  height: number,
+) => {
+  if (canvas.width !== width || canvas.height !== height) {
+    canvas.width = width;
+    canvas.height = height;
+  }
+};
+
+const mirrorCanvasHorizontally = (
+  ctx: CanvasRenderingContext2D,
+  sourceCanvas: HTMLCanvasElement,
+  scratch: ForegroundCompositeScratch,
+  width: number,
+  height: number,
+) => {
+  if (width <= 0 || height <= 0 || !scratch.ctx) return;
+
+  ensureScratchCanvasSize(scratch.canvas, width, height);
+  scratch.ctx.clearRect(0, 0, width, height);
+  scratch.ctx.drawImage(sourceCanvas, 0, 0, width, height);
+
+  ctx.save();
+  ctx.clearRect(0, 0, width, height);
+  ctx.translate(width, 0);
+  ctx.scale(-1, 1);
+  ctx.drawImage(scratch.canvas, 0, 0, width, height);
+  ctx.restore();
+};
+
+const drawMaskedForegroundLayer = (
+  ctx: CanvasRenderingContext2D,
+  scratch: ForegroundCompositeScratch,
+  source: CanvasImageSource,
+  segmentationMask: CanvasImageSource,
+  crop: CropRect,
+  sourceWidth: number,
+  sourceHeight: number,
+  width: number,
+  height: number,
+  sourceFilter: string,
+  alpha = 1,
+  maskBlurPx = 0,
+  maskGatePasses = 0,
+) => {
+  if (!scratch.ctx || width <= 0 || height <= 0) return false;
+  if (alpha <= 0.001) return false;
+
+  ensureScratchCanvasSize(scratch.canvas, width, height);
+  scratch.ctx.save();
+  scratch.ctx.clearRect(0, 0, width, height);
+  scratch.ctx.imageSmoothingEnabled = true;
+  scratch.ctx.imageSmoothingQuality = "high";
+  if (maskBlurPx > 0) {
+    scratch.ctx.filter = `blur(${maskBlurPx}px)`;
+  }
+  drawSegmentationMaskToOutput(
+    scratch.ctx,
+    segmentationMask,
+    crop,
+    sourceWidth,
+    sourceHeight,
+    width,
+    height,
+    width,
+    height,
+  );
+  scratch.ctx.filter = "none";
+  for (let pass = 0; pass < maskGatePasses; pass += 1) {
+    scratch.ctx.globalCompositeOperation = "destination-in";
+    drawSegmentationMaskToOutput(
+      scratch.ctx,
+      segmentationMask,
+      crop,
+      sourceWidth,
+      sourceHeight,
+      width,
+      height,
+      width,
+      height,
+    );
+  }
+  scratch.ctx.globalCompositeOperation = "source-in";
+  scratch.ctx.globalAlpha = alpha;
+  drawVideo(scratch.ctx, source, crop, width, height, sourceFilter);
+  scratch.ctx.restore();
+
+  ctx.drawImage(scratch.canvas, 0, 0, width, height);
+  return true;
+};
+
+const drawMaskedForegroundColorBleedLayer = (
+  ctx: CanvasRenderingContext2D,
+  scratch: ForegroundCompositeScratch,
+  source: CanvasImageSource,
+  segmentationMask: CanvasImageSource,
+  crop: CropRect,
+  sourceWidth: number,
+  sourceHeight: number,
+  width: number,
+  height: number,
+  sourceFilter: string,
+  alpha: number,
+  blurPx: number,
+  maskGatePasses = 0,
+) => {
+  if (!scratch.ctx || width <= 0 || height <= 0) return false;
+  if (alpha <= 0.001 || blurPx <= 0.001) return false;
+
+  ensureScratchCanvasSize(scratch.canvas, width, height);
+  scratch.ctx.save();
+  scratch.ctx.clearRect(0, 0, width, height);
+  scratch.ctx.imageSmoothingEnabled = true;
+  scratch.ctx.imageSmoothingQuality = "high";
+  drawSegmentationMaskToOutput(
+    scratch.ctx,
+    segmentationMask,
+    crop,
+    sourceWidth,
+    sourceHeight,
+    width,
+    height,
+    width,
+    height,
+  );
+  for (let pass = 0; pass < maskGatePasses; pass += 1) {
+    scratch.ctx.globalCompositeOperation = "destination-in";
+    drawSegmentationMaskToOutput(
+      scratch.ctx,
+      segmentationMask,
+      crop,
+      sourceWidth,
+      sourceHeight,
+      width,
+      height,
+      width,
+      height,
+    );
+  }
+  scratch.ctx.globalCompositeOperation = "source-in";
+  drawVideo(scratch.ctx, source, crop, width, height, sourceFilter);
+  scratch.ctx.restore();
+
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.filter = `blur(${blurPx}px)`;
+  ctx.drawImage(scratch.canvas, 0, 0, width, height);
+  ctx.restore();
+  return true;
+};
+
+const drawMotionForegroundRestoreLayer = (
+  ctx: CanvasRenderingContext2D,
+  scratch: ForegroundCompositeScratch,
+  source: CanvasImageSource,
+  segmentationMask: CanvasImageSource,
+  motionMask: CanvasImageSource | null,
+  crop: CropRect,
+  sourceWidth: number,
+  sourceHeight: number,
+  width: number,
+  height: number,
+  sourceFilter: string,
+  alpha: number,
+  maskBlurPx: number,
+  motionMaskBlurPx: number,
+) => {
+  if (!scratch.ctx || !motionMask || width <= 0 || height <= 0) return false;
+  if (alpha <= 0.001) return false;
+
+  ensureScratchCanvasSize(scratch.canvas, width, height);
+  scratch.ctx.save();
+  scratch.ctx.clearRect(0, 0, width, height);
+  scratch.ctx.imageSmoothingEnabled = true;
+  scratch.ctx.imageSmoothingQuality = "high";
+  if (maskBlurPx > 0) {
+    scratch.ctx.filter = `blur(${maskBlurPx}px)`;
+  }
+  drawSegmentationMaskToOutput(
+    scratch.ctx,
+    segmentationMask,
+    crop,
+    sourceWidth,
+    sourceHeight,
+    width,
+    height,
+    width,
+    height,
+  );
+  scratch.ctx.filter = "none";
+  scratch.ctx.globalCompositeOperation = "destination-in";
+  if (motionMaskBlurPx > 0) {
+    scratch.ctx.filter = `blur(${motionMaskBlurPx}px)`;
+  }
+  scratch.ctx.drawImage(motionMask, 0, 0, width, height);
+  scratch.ctx.filter = "none";
+  scratch.ctx.globalCompositeOperation = "source-in";
+  scratch.ctx.globalAlpha = alpha;
+  drawVideo(scratch.ctx, source, crop, width, height, sourceFilter);
+  scratch.ctx.restore();
+
+  ctx.drawImage(scratch.canvas, 0, 0, width, height);
+  return true;
+};
+
 const drawBlurredVideoBackground = (
   ctx: CanvasRenderingContext2D,
   scratch: BackgroundBlurScratch,
@@ -5942,6 +6555,29 @@ const createBackgroundRenderStats = (
   sampleRegions: [],
   hasSegmentationMask,
   hasBackgroundImage,
+  segmentationMaskAgeMs: null,
+  edgeUnderlayActive: false,
+  edgeUnderlayAlpha: FOREGROUND_EDGE_UNDERLAY_ALPHA,
+  edgeUnderlayBlurPx: FOREGROUND_EDGE_UNDERLAY_BLUR_PX,
+  outerEdgeUnderlayAlpha: FOREGROUND_EDGE_OUTER_UNDERLAY_ALPHA,
+  outerEdgeUnderlayBlurPx: FOREGROUND_EDGE_OUTER_UNDERLAY_BLUR_PX,
+  edgeUnderlayStaleMaskBoost: 0,
+  edgeUnderlaySourceBackedBackground: false,
+  edgeUnderlayRawHaloSuppression: 0,
+  foregroundMatteGatePasses: 0,
+  foregroundColorBleedActive: false,
+  foregroundColorBleedAlpha: 0,
+  foregroundColorBleedBlurPx: 0,
+  foregroundCoreRestoreActive: false,
+  foregroundCoreRestoreAlpha: 0,
+  foregroundCoreRestoreGatePasses: 0,
+  sourceMotionScore: 0,
+  sourceMotionChangedPixelRatio: 0,
+  sourceMotionAverageLumaDelta: 0,
+  sourceMotionEdgeBoost: 0,
+  sourceMotionMaskActive: false,
+  sourceMotionForegroundRestoreAlpha: 0,
+  sourceMotionForegroundRestoreBlurPx: 0,
 });
 
 const toCanvasBounds = (
@@ -9189,8 +9825,10 @@ const renderFrame = (
   landmarks: NormalizedLandmarkList | null,
   facePose: FacePoseTransform | null,
   segmentationMask: CanvasImageSource | null,
+  segmentationMaskAgeMs: number | null,
   backgroundImage: HTMLImageElement | null,
   backgroundBlurScratch: BackgroundBlurScratch,
+  foregroundCompositeScratch: ForegroundCompositeScratch,
   proceduralBackgroundCache: ProceduralBackgroundLayerCache | null,
   crop: CropRect,
   sourceProbe: CanvasVisibilityProbe,
@@ -9198,6 +9836,8 @@ const renderFrame = (
   probeBackgroundRender: boolean,
   probeFaceRender: boolean,
   lowLightTransition: LowLightTransitionState,
+  sourceMotionStats: SourceMotionStats,
+  sourceMotionMask: CanvasImageSource | null,
   now: number,
 ): FrameRenderStats => {
   const rawLowLightRenderStats = computeLowLightRenderStats(
@@ -9232,6 +9872,142 @@ const renderFrame = (
     customBackgroundReady && effects.background !== "none";
   const hasSegmentationMask = Boolean(segmentationMask);
   const hasBackgroundImage = Boolean(backgroundImage);
+  const sourceBackedReplacement =
+    effects.background === "blur-light" || effects.background === "blur-strong";
+  const edgeUnderlayStaleMaskBoost =
+    needsSegmentation && segmentationMaskAgeMs !== null
+      ? smoothStep(
+          clamp(
+            (segmentationMaskAgeMs - FOREGROUND_EDGE_STALE_MASK_START_MS) /
+              Math.max(
+                1,
+                FOREGROUND_EDGE_STALE_MASK_FULL_MS -
+                  FOREGROUND_EDGE_STALE_MASK_START_MS,
+              ),
+            0,
+            1,
+          ),
+        )
+      : 0;
+  const sourceMotionEdgeBoost =
+    needsSegmentation && !sourceBackedReplacement
+      ? sourceMotionStats.boost
+      : 0;
+  const foregroundProtectionBoost = sourceBackedReplacement
+    ? edgeUnderlayStaleMaskBoost
+    : Math.max(edgeUnderlayStaleMaskBoost, sourceMotionEdgeBoost);
+  const baseOuterEdgeUnderlayAlpha = sourceBackedReplacement
+    ? FOREGROUND_EDGE_OUTER_UNDERLAY_ALPHA
+    : FOREGROUND_REPLACEMENT_EDGE_OUTER_UNDERLAY_ALPHA;
+  const baseOuterEdgeUnderlayBlurPx = sourceBackedReplacement
+    ? FOREGROUND_EDGE_OUTER_UNDERLAY_BLUR_PX
+    : FOREGROUND_REPLACEMENT_EDGE_OUTER_UNDERLAY_BLUR_PX;
+  const baseEdgeUnderlayAlpha = sourceBackedReplacement
+    ? FOREGROUND_EDGE_UNDERLAY_ALPHA
+    : FOREGROUND_REPLACEMENT_EDGE_UNDERLAY_ALPHA;
+  const baseEdgeUnderlayBlurPx = sourceBackedReplacement
+    ? FOREGROUND_EDGE_UNDERLAY_BLUR_PX
+    : FOREGROUND_REPLACEMENT_EDGE_UNDERLAY_BLUR_PX;
+  const outerEdgeUnderlayAlphaBoost = sourceBackedReplacement
+    ? FOREGROUND_EDGE_STALE_OUTER_ALPHA_BOOST
+    : FOREGROUND_REPLACEMENT_EDGE_STALE_OUTER_ALPHA_BOOST;
+  const outerEdgeUnderlayBlurBoostPx = sourceBackedReplacement
+    ? FOREGROUND_EDGE_STALE_OUTER_BLUR_BOOST_PX
+    : FOREGROUND_REPLACEMENT_EDGE_STALE_OUTER_BLUR_BOOST_PX;
+  const edgeUnderlayAlphaBoost = sourceBackedReplacement
+    ? FOREGROUND_EDGE_STALE_INNER_ALPHA_BOOST
+    : FOREGROUND_REPLACEMENT_EDGE_STALE_INNER_ALPHA_BOOST;
+  const edgeUnderlayBlurBoostPx = sourceBackedReplacement
+    ? FOREGROUND_EDGE_STALE_INNER_BLUR_BOOST_PX
+    : FOREGROUND_REPLACEMENT_EDGE_STALE_INNER_BLUR_BOOST_PX;
+  const outerEdgeUnderlayAlpha = clamp(
+    baseOuterEdgeUnderlayAlpha +
+      foregroundProtectionBoost * outerEdgeUnderlayAlphaBoost,
+    0,
+    0.42,
+  );
+  const outerEdgeUnderlayBlurPx =
+    baseOuterEdgeUnderlayBlurPx +
+    foregroundProtectionBoost * outerEdgeUnderlayBlurBoostPx;
+  const edgeUnderlayAlpha = clamp(
+    baseEdgeUnderlayAlpha +
+      foregroundProtectionBoost * edgeUnderlayAlphaBoost,
+    0,
+    0.5,
+  );
+  const edgeUnderlayBlurPx =
+    baseEdgeUnderlayBlurPx + foregroundProtectionBoost * edgeUnderlayBlurBoostPx;
+  const edgeUnderlayRawHaloSuppression = sourceBackedReplacement
+    ? 0
+    : Number(
+        (
+          1 -
+          baseEdgeUnderlayAlpha / Math.max(FOREGROUND_EDGE_UNDERLAY_ALPHA, 0.001)
+        ).toFixed(3),
+      );
+  const edgeUnderlayHasRawBlend =
+    outerEdgeUnderlayAlpha > 0.001 || edgeUnderlayAlpha > 0.001;
+  const foregroundMatteGatePasses =
+    needsSegmentation && !sourceBackedReplacement
+      ? FOREGROUND_REPLACEMENT_MASK_GATE_PASSES
+      : 0;
+  const foregroundColorBleedAlpha =
+    needsSegmentation && !sourceBackedReplacement
+      ? clamp(
+          FOREGROUND_REPLACEMENT_COLOR_BLEED_ALPHA +
+            foregroundProtectionBoost *
+              FOREGROUND_REPLACEMENT_COLOR_BLEED_STALE_ALPHA_BOOST,
+          0,
+          0.48,
+        )
+      : 0;
+  const foregroundColorBleedBlurPx =
+    foregroundColorBleedAlpha > 0
+      ? FOREGROUND_REPLACEMENT_COLOR_BLEED_BLUR_PX +
+        foregroundProtectionBoost *
+          FOREGROUND_REPLACEMENT_COLOR_BLEED_STALE_BLUR_BOOST_PX
+      : 0;
+  const foregroundColorBleedActive =
+    foregroundColorBleedAlpha > 0.001 && foregroundColorBleedBlurPx > 0.001;
+  const foregroundCoreRestoreAlpha =
+    needsSegmentation && !sourceBackedReplacement
+      ? clamp(
+          FOREGROUND_REPLACEMENT_CORE_RESTORE_ALPHA +
+            foregroundProtectionBoost *
+              FOREGROUND_REPLACEMENT_CORE_RESTORE_STALE_ALPHA_BOOST,
+          0,
+          0.62,
+        )
+      : 0;
+  const foregroundCoreRestoreGatePasses =
+    foregroundCoreRestoreAlpha > 0
+      ? FOREGROUND_REPLACEMENT_CORE_RESTORE_MASK_GATE_PASSES
+      : 0;
+  const foregroundCoreRestoreActive =
+    foregroundCoreRestoreAlpha > 0.001 && foregroundCoreRestoreGatePasses > 0;
+  const sourceMotionMaskActive = Boolean(
+    sourceMotionStats.maskActive && sourceMotionMask,
+  );
+  const sourceMotionForegroundRestoreAlpha =
+    needsSegmentation && !sourceBackedReplacement && sourceMotionMaskActive
+      ? clamp(
+          SOURCE_MOTION_FOREGROUND_RESTORE_ALPHA * sourceMotionStats.boost,
+          0,
+          SOURCE_MOTION_FOREGROUND_RESTORE_ALPHA,
+        )
+      : 0;
+  const sourceMotionForegroundRestoreBlurPx =
+    sourceMotionForegroundRestoreAlpha > 0.001
+      ? SOURCE_MOTION_FOREGROUND_RESTORE_BLUR_PX
+      : 0;
+  const sourceMotionForegroundRestoreActive =
+    sourceMotionForegroundRestoreAlpha > 0.001;
+  const imageBackedBackgroundPending =
+    needsSegmentation &&
+    hasImageBackedBackground &&
+    effects.background !== "blur-light" &&
+    effects.background !== "blur-strong" &&
+    !hasBackgroundImage;
   let backgroundRenderStats = createBackgroundRenderStats(
     effects.background,
     hasBackgroundEffect ? "not sampled" : "no background",
@@ -9241,23 +10017,7 @@ const renderFrame = (
 
   ctx.clearRect(0, 0, width, height);
 
-  if (needsSegmentation && segmentationMask) {
-    ctx.save();
-    drawSegmentationMaskToOutput(
-      ctx,
-      segmentationMask,
-      crop,
-      sourceWidth,
-      sourceHeight,
-      width,
-      height,
-      width,
-      height,
-    );
-    ctx.globalCompositeOperation = "source-in";
-    drawVideo(ctx, source, crop, width, height, sourceFilter);
-    ctx.globalCompositeOperation = "destination-over";
-
+  const drawReplacementBackground = () => {
     if (effects.background === "blur-light" || effects.background === "blur-strong") {
       drawBlurredVideoBackground(
         ctx,
@@ -9279,15 +10039,7 @@ const renderFrame = (
         "brightness(0.92) saturate(1.04)",
       );
     } else if (hasImageBackedBackground) {
-      drawBlurredVideoBackground(
-        ctx,
-        backgroundBlurScratch,
-        source,
-        crop,
-        width,
-        height,
-        "blur-strong",
-      );
+      drawVideo(ctx, source, crop, width, height, sourceFilter);
     } else {
       drawProceduralBackground(
         ctx,
@@ -9298,7 +10050,125 @@ const renderFrame = (
         proceduralBackgroundCache,
       );
     }
-    ctx.restore();
+  };
+
+  if (needsSegmentation && segmentationMask) {
+    if (foregroundCompositeScratch.ctx) {
+      drawReplacementBackground();
+      if (foregroundColorBleedActive) {
+        drawMaskedForegroundColorBleedLayer(
+          ctx,
+          foregroundCompositeScratch,
+          source,
+          segmentationMask,
+          crop,
+          sourceWidth,
+          sourceHeight,
+          width,
+          height,
+          sourceFilter,
+          foregroundColorBleedAlpha,
+          foregroundColorBleedBlurPx,
+          foregroundMatteGatePasses,
+        );
+      }
+      drawMaskedForegroundLayer(
+        ctx,
+        foregroundCompositeScratch,
+        source,
+        segmentationMask,
+        crop,
+        sourceWidth,
+        sourceHeight,
+        width,
+        height,
+        sourceFilter,
+        outerEdgeUnderlayAlpha,
+        outerEdgeUnderlayBlurPx,
+      );
+      drawMaskedForegroundLayer(
+        ctx,
+        foregroundCompositeScratch,
+        source,
+        segmentationMask,
+        crop,
+        sourceWidth,
+        sourceHeight,
+        width,
+        height,
+        sourceFilter,
+        edgeUnderlayAlpha,
+        edgeUnderlayBlurPx,
+      );
+      drawMaskedForegroundLayer(
+        ctx,
+        foregroundCompositeScratch,
+        source,
+        segmentationMask,
+        crop,
+        sourceWidth,
+        sourceHeight,
+        width,
+        height,
+        sourceFilter,
+        1,
+        0,
+        foregroundMatteGatePasses,
+      );
+      if (sourceMotionForegroundRestoreActive) {
+        drawMotionForegroundRestoreLayer(
+          ctx,
+          foregroundCompositeScratch,
+          source,
+          segmentationMask,
+          sourceMotionMask,
+          crop,
+          sourceWidth,
+          sourceHeight,
+          width,
+          height,
+          sourceFilter,
+          sourceMotionForegroundRestoreAlpha,
+          sourceMotionForegroundRestoreBlurPx,
+          SOURCE_MOTION_MASK_BLUR_PX,
+        );
+      }
+      if (foregroundCoreRestoreActive) {
+        drawMaskedForegroundLayer(
+          ctx,
+          foregroundCompositeScratch,
+          source,
+          segmentationMask,
+          crop,
+          sourceWidth,
+          sourceHeight,
+          width,
+          height,
+          sourceFilter,
+          foregroundCoreRestoreAlpha,
+          0,
+          foregroundCoreRestoreGatePasses,
+        );
+      }
+    } else {
+      ctx.save();
+      drawSegmentationMaskToOutput(
+        ctx,
+        segmentationMask,
+        crop,
+        sourceWidth,
+        sourceHeight,
+        width,
+        height,
+        width,
+        height,
+      );
+      ctx.globalCompositeOperation = "source-in";
+      drawVideo(ctx, source, crop, width, height, sourceFilter);
+      ctx.globalCompositeOperation = "destination-over";
+      drawReplacementBackground();
+      ctx.restore();
+    }
   } else if (effects.background === "gradient") {
     drawProceduralBackground(
       ctx,
@@ -9321,7 +10191,9 @@ const renderFrame = (
   applyLighting(ctx, width, height, effects, lowLightRenderStats);
 
   if (hasBackgroundEffect) {
-    const active = !needsSegmentation || hasSegmentationMask;
+    const active =
+      (!needsSegmentation || hasSegmentationMask) &&
+      !imageBackedBackgroundPending;
     backgroundRenderStats = {
       background: effects.background,
       active,
@@ -9329,13 +10201,42 @@ const renderFrame = (
         ? probeBackgroundRender
           ? "geometry sampled"
           : "sample throttled"
-        : "waiting for segmentation mask",
+        : imageBackedBackgroundPending
+          ? "waiting for background image"
+          : "waiting for segmentation mask",
       changedPixels: active ? 1 : 0,
       changedPixelRatio: active ? 1 : 0,
       samplePixelCount: active ? 1 : 0,
       sampleRegions: [],
       hasSegmentationMask,
       hasBackgroundImage,
+      segmentationMaskAgeMs,
+      edgeUnderlayActive:
+        active &&
+        needsSegmentation &&
+        Boolean(foregroundCompositeScratch.ctx) &&
+        edgeUnderlayHasRawBlend,
+      edgeUnderlayAlpha,
+      edgeUnderlayBlurPx,
+      outerEdgeUnderlayAlpha,
+      outerEdgeUnderlayBlurPx,
+      edgeUnderlayStaleMaskBoost,
+      edgeUnderlaySourceBackedBackground: sourceBackedReplacement,
+      edgeUnderlayRawHaloSuppression,
+      foregroundMatteGatePasses,
+      foregroundColorBleedActive,
+      foregroundColorBleedAlpha,
+      foregroundColorBleedBlurPx,
+      foregroundCoreRestoreActive,
+      foregroundCoreRestoreAlpha,
+      foregroundCoreRestoreGatePasses,
+      sourceMotionScore: sourceMotionStats.score,
+      sourceMotionChangedPixelRatio: sourceMotionStats.changedPixelRatio,
+      sourceMotionAverageLumaDelta: sourceMotionStats.averageLumaDelta,
+      sourceMotionEdgeBoost,
+      sourceMotionMaskActive,
+      sourceMotionForegroundRestoreAlpha,
+      sourceMotionForegroundRestoreBlurPx,
     };
   }
 
@@ -9363,6 +10264,7 @@ export function useVideoEffects({
   effects,
   processedVideoTrackRef,
   framingRecenterToken = 0,
+  mirrorOutput = false,
 }: UseVideoEffectsOptions): UseVideoEffectsResult {
   const debugInstanceIdRef = useRef(0);
   if (debugInstanceIdRef.current === 0) {
@@ -9399,7 +10301,8 @@ export function useVideoEffects({
   );
 
   const rawSourceVideoTrack = sourceStream?.getVideoTracks()[0] ?? null;
-  const active = hasActiveVideoEffects(effects);
+  const effectsActive = hasActiveVideoEffects(effects);
+  const active = effectsActive || mirrorOutput;
   const meetVideoPipeEffectGraph =
     active && effects.filter !== "none"
       ? getFaceFilterEffectGraph(effects.filter)
@@ -9422,8 +10325,9 @@ export function useVideoEffects({
     () => {
       const hasSourceStream = Boolean(sourceStream);
       const rawTrackLive = rawSourceVideoTrack?.readyState === "live";
-      const graphRequiresMeetVideoPipe =
-        meetVideoPipeEffectGraph?.requiresMeetVideoPipe === true;
+      const graphRequiresMeetVideoPipe = requiresMeetVideoPipeFaceFilter(
+        effects.filter,
+      );
       const hasNumericEffectId = typeof meetVideoPipeEffectIdNumber === "number";
       const failedRequestMatched =
         Boolean(meetVideoPipeRequestKey) &&
@@ -9467,8 +10371,9 @@ export function useVideoEffects({
     ],
   );
   const meetVideoPipeActive = meetVideoPipeGate.active;
-  const meetVideoPipeOnlyFilterSelected =
-    meetVideoPipeEffectGraph?.requiresMeetVideoPipe === true;
+  const meetVideoPipeOnlyFilterSelected = requiresMeetVideoPipeFaceFilter(
+    effects.filter,
+  );
   const localProcessingEffects = useMemo<VideoEffectsState>(
     () =>
       meetVideoPipeOnlyFilterSelected
@@ -9479,13 +10384,16 @@ export function useVideoEffects({
         : effects,
     [effects, meetVideoPipeOnlyFilterSelected],
   );
-  const localPipelineActive = hasActiveVideoEffects(localProcessingEffects);
+  const localPipelineActive =
+    hasActiveVideoEffects(localProcessingEffects) || mirrorOutput;
   const meetVideoPipeOutputReady =
     meetVideoPipeTrackReady && meetVideoPipeTrack?.readyState === "live";
   const localSourceVideoTrack = meetVideoPipeActive
     ? meetVideoPipeOutputReady
       ? meetVideoPipeTrack
-      : null
+      : localPipelineActive
+        ? rawSourceVideoTrack
+        : null
     : rawSourceVideoTrack;
   const localPipelineSourceStream = useMemo(() => {
     if (!sourceStream) return null;
@@ -9676,8 +10584,11 @@ export function useVideoEffects({
       hasObservedEffectsRef.current = true;
     }
     logVideoEffects(debugId, "effects_changed", {
-      selected: getEffectsDebugSnapshot(effects),
-      localPipeline: getEffectsDebugSnapshot(localProcessingEffects),
+      selected: getVideoProcessingDebugSnapshot(effects, mirrorOutput),
+      localPipeline: getVideoProcessingDebugSnapshot(
+        localProcessingEffects,
+        mirrorOutput,
+      ),
       meetVideoPipeActive,
       meetVideoPipeGate,
     });
@@ -9687,6 +10598,7 @@ export function useVideoEffects({
     localProcessingEffects,
     meetVideoPipeActive,
     meetVideoPipeGate,
+    mirrorOutput,
   ]);
 
   useEffect(() => {
@@ -9995,6 +10907,7 @@ export function useVideoEffects({
             sourceStream: sourceStreamRef.current,
             sourceVideoTrack,
             effects: effectsRef.current,
+            mirrorOutput,
           }),
           meetVideoPipe: {
             active: meetVideoPipeActive,
@@ -10203,8 +11116,6 @@ export function useVideoEffects({
     let totalOutputWriterFrameBuildMs = 0;
     let maxOutputWriterFrameBuildMs = 0;
     let outputWriterFrameBuildSampleCount = 0;
-    let modelWorkerVideoFrameSourceUnavailable = false;
-    let modelWorkerVideoFrameSourceFailures = 0;
     const outputWriterPendingFrames = new Map<
       number,
       OutputWriterPendingFrame
@@ -10320,14 +11231,22 @@ export function useVideoEffects({
       | "dark-video"
       | "missing-video"
       | "none" = "none";
+    let previousSourceMotionLuma: Uint8Array | null = null;
+    let latestSourceMotionStats = createSourceMotionStats();
+    let heldSourceMotionStats = createSourceMotionStats();
+    let heldSourceMotionMaskExpiresAt = 0;
     let maskImageData: ImageData | null = null;
     let maskAlphaHistory: Uint8Array | null = null;
+    let maskEdgeGrowAlphaBuffer: Uint8Array | null = null;
+    let maskEdgeErodeScratchBuffer: Uint8Array | null = null;
     let temporalMaskFrameCount = 0;
     let temporalMaskShapeFrameCount = 0;
     let temporalMaskSmoothedFrameCount = 0;
+    let temporalMaskEdgeGrowFrameCount = 0;
     let temporalMaskResetCount = 0;
     let temporalMaskPixelCount = 0;
     let temporalMaskSource: TemporalMaskSource = "none";
+    let latestTemporalMaskProfile = getTemporalMaskProfile(effectsRef.current);
     let latestFaceFilterRenderStats = createFaceFilterRenderStats(
       effectsRef.current.filter,
       0,
@@ -10479,7 +11398,7 @@ export function useVideoEffects({
     logVideoEffects(debugId, "processor_start", {
       sourceStream: getStreamDebugSnapshot(sourceStreamRef.current),
       sourceVideoTrack: getTrackDebugSnapshot(sourceVideoTrack),
-      effects: getEffectsDebugSnapshot(effectsRef.current),
+      effects: getVideoProcessingDebugSnapshot(effectsRef.current, mirrorOutput),
     });
 
     const canvas = document.createElement("canvas");
@@ -10513,6 +11432,18 @@ export function useVideoEffects({
     const sourceProbeCtx = sourceProbeCanvas.getContext("2d", {
       willReadFrequently: true,
     });
+    const sourceMotionCanvas = document.createElement("canvas");
+    const sourceMotionCtx = sourceMotionCanvas.getContext("2d", {
+      willReadFrequently: true,
+    });
+    const sourceMotionMaskCanvas = document.createElement("canvas");
+    const sourceMotionMaskCtx = sourceMotionMaskCanvas.getContext("2d", {
+      alpha: true,
+    });
+    const heldSourceMotionMaskCanvas = document.createElement("canvas");
+    const heldSourceMotionMaskCtx = heldSourceMotionMaskCanvas.getContext("2d", {
+      alpha: true,
+    });
     const visualTransitionCanvas = document.createElement("canvas");
     const visualTransitionCtx = visualTransitionCanvas.getContext("2d", {
       alpha: true,
@@ -10521,6 +11452,16 @@ export function useVideoEffects({
     const backgroundBlurCanvas = document.createElement("canvas");
     const backgroundBlurCtx = backgroundBlurCanvas.getContext("2d", {
       alpha: false,
+      desynchronized: true,
+    });
+    const foregroundCompositeCanvas = document.createElement("canvas");
+    const foregroundCompositeCtx = foregroundCompositeCanvas.getContext("2d", {
+      alpha: true,
+      desynchronized: true,
+    });
+    const outputMirrorCanvas = document.createElement("canvas");
+    const outputMirrorCtx = outputMirrorCanvas.getContext("2d", {
+      alpha: true,
       desynchronized: true,
     });
     const proceduralBackgroundCanvas = document.createElement("canvas");
@@ -10981,6 +11922,7 @@ export function useVideoEffects({
     const rejectPendingOutputWriterFrames = (err: unknown) => {
       for (const [, pending] of outputWriterPendingFrames) {
         window.clearTimeout(pending.timeoutId);
+        pending.closeResource();
         pending.reject(err);
       }
       outputWriterPendingFrames.clear();
@@ -11018,6 +11960,7 @@ export function useVideoEffects({
     const rejectPendingSegmentationProcessorFrames = (err: unknown) => {
       for (const [, pending] of segmentationProcessorPendingFrames) {
         window.clearTimeout(pending.timeoutId);
+        pending.closeSource();
         pending.reject(err);
       }
       segmentationProcessorPendingFrames.clear();
@@ -11026,6 +11969,7 @@ export function useVideoEffects({
     const rejectPendingFaceProcessorFrames = (err: unknown) => {
       for (const [, pending] of faceProcessorPendingFrames) {
         window.clearTimeout(pending.timeoutId);
+        pending.closeSource();
         pending.reject(err);
       }
       faceProcessorPendingFrames.clear();
@@ -11143,6 +12087,7 @@ export function useVideoEffects({
           if (!pending) return;
           outputWriterPendingFrames.delete(message.sequence);
           window.clearTimeout(pending.timeoutId);
+          pending.closeResource();
           outputWriterAckSequence = Math.max(
             outputWriterAckSequence,
             message.sequence,
@@ -11165,6 +12110,7 @@ export function useVideoEffects({
           if (!pending) return;
           outputWriterPendingFrames.delete(message.sequence);
           window.clearTimeout(pending.timeoutId);
+          pending.closeResource();
           outputWriterAckSequence = Math.max(
             outputWriterAckSequence,
             message.sequence,
@@ -11210,6 +12156,7 @@ export function useVideoEffects({
             if (pending) {
               outputWriterPendingFrames.delete(message.sequence);
               window.clearTimeout(pending.timeoutId);
+              pending.closeResource();
               pending.reject(message.error);
               break;
             }
@@ -11319,6 +12266,7 @@ export function useVideoEffects({
           if (!pending) return;
           segmentationProcessorPendingFrames.delete(message.sequence);
           window.clearTimeout(pending.timeoutId);
+          pending.closeSource();
           segmentationProcessorWorkerResults += 1;
           segmentationProcessorWorkerFirstResultSeen = true;
           segmentationProcessorWorkerAckSequence = Math.max(
@@ -11365,6 +12313,7 @@ export function useVideoEffects({
             if (pending) {
               segmentationProcessorPendingFrames.delete(message.sequence);
               window.clearTimeout(pending.timeoutId);
+              pending.closeSource();
               pending.reject(message.error);
               break;
             }
@@ -11574,6 +12523,7 @@ export function useVideoEffects({
           if (!pending) return;
           faceProcessorPendingFrames.delete(message.sequence);
           window.clearTimeout(pending.timeoutId);
+          pending.closeSource();
           faceProcessorWorkerResults += 1;
           faceProcessorWorkerFirstResultSeen = true;
           faceProcessorWorkerAckSequence = Math.max(
@@ -11614,6 +12564,7 @@ export function useVideoEffects({
             if (pending) {
               faceProcessorPendingFrames.delete(message.sequence);
               window.clearTimeout(pending.timeoutId);
+              pending.closeSource();
               pending.reject(message.error);
               break;
             }
@@ -12284,6 +13235,8 @@ export function useVideoEffects({
             },
           );
           const timeoutId = window.setTimeout(() => {
+            const pending = outputWriterPendingFrames.get(sequence);
+            pending?.closeResource();
             outputWriterPendingFrames.delete(sequence);
             const err = new Error("Timed out waiting for output worker write.");
             outputWriterLastError = getErrorDebugSnapshot(err);
@@ -12295,6 +13248,10 @@ export function useVideoEffects({
             completion,
             timeoutId,
             sentAt,
+            closeResource: () =>
+              closeTransferredFrameResource(
+                resource as unknown as ClosableMediaPipeResource,
+              ),
           });
           try {
             worker.postMessage(
@@ -12645,7 +13602,7 @@ export function useVideoEffects({
           outputFramesWritten,
           outputTrack: getTrackDebugSnapshot(track),
           sourceTrack: getTrackDebugSnapshot(sourceVideoTrack),
-          effects: getEffectsDebugSnapshot(currentEffects),
+          effects: getVideoProcessingDebugSnapshot(currentEffects, mirrorOutput),
         });
         setRuntimeStatus(
           "loading",
@@ -12875,6 +13832,8 @@ export function useVideoEffects({
       }
 
       maskUpdates += 1;
+      const temporalMaskProfile = getTemporalMaskProfile(effectsRef.current);
+      latestTemporalMaskProfile = temporalMaskProfile;
       logVideoEffects(debugId, "tasks_segmentation_mask", {
         processor,
         confidenceMasks: confidenceMaskCount,
@@ -12900,6 +13859,8 @@ export function useVideoEffects({
           maskScratchCanvas.height = height;
           maskImageData = null;
           maskAlphaHistory = null;
+          maskEdgeGrowAlphaBuffer = null;
+          maskEdgeErodeScratchBuffer = null;
           temporalMaskShapeFrameCount = 0;
         }
 
@@ -12914,18 +13875,34 @@ export function useVideoEffects({
         if (!maskAlphaHistory || maskAlphaHistory.length !== pixelCount) {
           maskAlphaHistory = new Uint8Array(pixelCount);
         }
+        if (
+          !maskEdgeGrowAlphaBuffer ||
+          maskEdgeGrowAlphaBuffer.length !== pixelCount
+        ) {
+          maskEdgeGrowAlphaBuffer = new Uint8Array(pixelCount);
+        }
+        if (
+          !maskEdgeErodeScratchBuffer ||
+          maskEdgeErodeScratchBuffer.length !== pixelCount
+        ) {
+          maskEdgeErodeScratchBuffer = new Uint8Array(pixelCount);
+        }
         const canSmoothTemporalMask = temporalMaskShapeFrameCount > 0;
         temporalMaskSource = confidence ? "tasks-confidence" : "tasks-category";
         temporalMaskPixelCount = pixelCount;
         const pixels = maskImageData.data;
         const smoothMaskAlpha = (index: number, targetAlpha: number) => {
           const previousAlpha = maskAlphaHistory?.[index] ?? targetAlpha;
+          const temporalAlpha =
+            targetAlpha >= previousAlpha
+              ? temporalMaskProfile.riseAlpha
+              : temporalMaskProfile.fallAlpha;
           const nextAlpha =
             !canSmoothTemporalMask
               ? targetAlpha
               : Math.round(
                   previousAlpha +
-                    (targetAlpha - previousAlpha) * MASK_TEMPORAL_ALPHA,
+                    (targetAlpha - previousAlpha) * temporalAlpha,
                 );
           if (maskAlphaHistory) {
             maskAlphaHistory[index] = nextAlpha;
@@ -12952,6 +13929,108 @@ export function useVideoEffects({
             pixels[offset + 3] = smoothMaskAlpha(index, targetAlpha);
           }
         }
+        if (maskEdgeGrowAlphaBuffer && maskEdgeErodeScratchBuffer) {
+          let sourceAlphaBuffer: Uint8Array | null = null;
+          let targetAlphaBuffer = maskEdgeGrowAlphaBuffer;
+          let scratchAlphaBuffer = maskEdgeErodeScratchBuffer;
+          let grewForegroundEdge = false;
+          const clipAlpha = Math.round(MASK_ALPHA_CLIP * 255);
+          const readAlpha = (buffer: Uint8Array | null, index: number) =>
+            buffer ? buffer[index] : pixels[index * 4 + 3];
+
+          if (temporalMaskProfile.edgeGrowAlpha > 0) {
+            for (let y = 0; y < height; y += 1) {
+              const rowOffset = y * width;
+              const previousRowOffset = Math.max(0, y - 1) * width;
+              const nextRowOffset = Math.min(height - 1, y + 1) * width;
+              for (let x = 0; x < width; x += 1) {
+                const index = rowOffset + x;
+                const leftIndex = rowOffset + Math.max(0, x - 1);
+                const rightIndex = rowOffset + Math.min(width - 1, x + 1);
+                const upIndex = previousRowOffset + x;
+                const downIndex = nextRowOffset + x;
+                const upLeftIndex = previousRowOffset + Math.max(0, x - 1);
+                const upRightIndex = previousRowOffset + Math.min(width - 1, x + 1);
+                const downLeftIndex = nextRowOffset + Math.max(0, x - 1);
+                const downRightIndex = nextRowOffset + Math.min(width - 1, x + 1);
+                const alpha = readAlpha(sourceAlphaBuffer, index);
+                const maxNeighborAlpha = Math.max(
+                  readAlpha(sourceAlphaBuffer, leftIndex),
+                  readAlpha(sourceAlphaBuffer, rightIndex),
+                  readAlpha(sourceAlphaBuffer, upIndex),
+                  readAlpha(sourceAlphaBuffer, downIndex),
+                  readAlpha(sourceAlphaBuffer, upLeftIndex),
+                  readAlpha(sourceAlphaBuffer, upRightIndex),
+                  readAlpha(sourceAlphaBuffer, downLeftIndex),
+                  readAlpha(sourceAlphaBuffer, downRightIndex),
+                );
+                const edgeAlpha =
+                  maxNeighborAlpha > alpha
+                    ? Math.round(
+                        alpha +
+                          (maxNeighborAlpha - alpha) *
+                            temporalMaskProfile.edgeGrowAlpha,
+                      )
+                    : alpha;
+                targetAlphaBuffer[index] = edgeAlpha <= clipAlpha ? 0 : edgeAlpha;
+              }
+            }
+            sourceAlphaBuffer = targetAlphaBuffer;
+            targetAlphaBuffer = scratchAlphaBuffer;
+            scratchAlphaBuffer = sourceAlphaBuffer;
+            grewForegroundEdge = true;
+          }
+
+          for (let pass = 0; pass < MASK_EDGE_ERODE_PASSES; pass += 1) {
+            for (let y = 0; y < height; y += 1) {
+              const rowOffset = y * width;
+              const previousRowOffset = Math.max(0, y - 1) * width;
+              const nextRowOffset = Math.min(height - 1, y + 1) * width;
+              for (let x = 0; x < width; x += 1) {
+                const index = rowOffset + x;
+                const leftIndex = rowOffset + Math.max(0, x - 1);
+                const rightIndex = rowOffset + Math.min(width - 1, x + 1);
+                const upIndex = previousRowOffset + x;
+                const downIndex = nextRowOffset + x;
+                const upLeftIndex = previousRowOffset + Math.max(0, x - 1);
+                const upRightIndex = previousRowOffset + Math.min(width - 1, x + 1);
+                const downLeftIndex = nextRowOffset + Math.max(0, x - 1);
+                const downRightIndex = nextRowOffset + Math.min(width - 1, x + 1);
+                const alpha = readAlpha(sourceAlphaBuffer, index);
+                const minNeighborAlpha = Math.min(
+                  readAlpha(sourceAlphaBuffer, leftIndex),
+                  readAlpha(sourceAlphaBuffer, rightIndex),
+                  readAlpha(sourceAlphaBuffer, upIndex),
+                  readAlpha(sourceAlphaBuffer, downIndex),
+                  readAlpha(sourceAlphaBuffer, upLeftIndex),
+                  readAlpha(sourceAlphaBuffer, upRightIndex),
+                  readAlpha(sourceAlphaBuffer, downLeftIndex),
+                  readAlpha(sourceAlphaBuffer, downRightIndex),
+                );
+                const edgeAlpha =
+                  minNeighborAlpha < alpha
+                    ? Math.round(
+                        alpha +
+                          (minNeighborAlpha - alpha) *
+                            temporalMaskProfile.edgeErodeAlpha,
+                      )
+                    : alpha;
+                targetAlphaBuffer[index] = edgeAlpha <= clipAlpha ? 0 : edgeAlpha;
+              }
+            }
+            sourceAlphaBuffer = targetAlphaBuffer;
+            const nextTarget = scratchAlphaBuffer;
+            scratchAlphaBuffer = targetAlphaBuffer;
+            targetAlphaBuffer = nextTarget;
+          }
+
+          for (let index = 0, offset = 3; index < pixelCount; index += 1, offset += 4) {
+            pixels[offset] = readAlpha(sourceAlphaBuffer, index);
+          }
+          if (grewForegroundEdge) {
+            temporalMaskEdgeGrowFrameCount += 1;
+          }
+        }
         temporalMaskFrameCount += 1;
         temporalMaskShapeFrameCount += 1;
         if (canSmoothTemporalMask) {
@@ -12967,7 +14046,7 @@ export function useVideoEffects({
         maskCtx.imageSmoothingEnabled = true;
         maskCtx.imageSmoothingQuality = "high";
         maskCtx.save();
-        maskCtx.filter = `blur(${MASK_EDGE_FEATHER_PX}px)`;
+        maskCtx.filter = `blur(${temporalMaskProfile.edgeFeatherPx}px)`;
         maskCtx.drawImage(
           maskScratchCanvas,
           0,
@@ -12977,7 +14056,7 @@ export function useVideoEffects({
         );
         maskCtx.restore();
         maskCtx.save();
-        maskCtx.globalAlpha = MASK_EDGE_REINFORCE_ALPHA;
+        maskCtx.globalAlpha = temporalMaskProfile.edgeReinforceAlpha;
         maskCtx.drawImage(
           maskScratchCanvas,
           0,
@@ -13510,20 +14589,6 @@ export function useVideoEffects({
       );
     };
 
-    const getModelWorkerVideoFrameTimestamp = (
-      now: number,
-      frameSource: FrameSource,
-    ) => {
-      if (
-        frameSource.source === "video" &&
-        Number.isFinite(video.currentTime) &&
-        video.currentTime > 0
-      ) {
-        return Math.round(video.currentTime * 1_000_000);
-      }
-      return Math.round(now * 1000);
-    };
-
     const getModelFrameInput = (
       frameSource: FrameSource,
       kind: ModelDispatchKind,
@@ -13588,37 +14653,12 @@ export function useVideoEffects({
       kind: ModelDispatchKind,
     ): Promise<ModelWorkerFrameSource | null> => {
       const modelFrame = getModelFrameInput(frameSource, kind);
-      const VideoFrameCtor = (
-        globalThis as unknown as { VideoFrame?: unknown }
-      ).VideoFrame as VideoFrameConstructor | undefined;
-      if (VideoFrameCtor && !modelWorkerVideoFrameSourceUnavailable) {
-        try {
-          const frame = new VideoFrameCtor(modelFrame.image, {
-            timestamp: getModelWorkerVideoFrameTimestamp(now, frameSource),
-          });
-          return {
-            source: frame,
-            kind: "video-frame",
-            transfer: frame as unknown as Transferable,
-            width: modelFrame.width,
-            height: modelFrame.height,
-            scale: modelFrame.scale,
-          };
-        } catch (err) {
-          modelWorkerVideoFrameSourceFailures += 1;
-          modelWorkerVideoFrameSourceUnavailable = true;
-          warnVideoEffects(debugId, "model_worker_video_frame_source_failed", {
-            error: getErrorDebugSnapshot(err),
-            source: frameSource.source,
-            failures: modelWorkerVideoFrameSourceFailures,
-          });
-        }
-      }
-
       if (typeof createImageBitmap !== "function") {
         return null;
       }
 
+      // MediaPipe worker calls can outlive effect switches; ImageBitmap avoids
+      // worker-owned VideoFrames being GC'd during graph teardown.
       const bitmap = await createImageBitmap(modelFrame.image);
       return {
         source: bitmap,
@@ -13661,6 +14701,9 @@ export function useVideoEffects({
         const sentAt = performance.now();
         const sourceForWorker = workerSource;
         const worker = segmentationProcessorWorker;
+        const frameTimeoutMs = segmentationProcessorWorkerFirstResultSeen
+          ? SEGMENTATION_PROCESSOR_FRAME_TIMEOUT_MS
+          : SEGMENTATION_PROCESSOR_INITIAL_FRAME_TIMEOUT_MS;
         if (!worker || !segmentationProcessorWorkerReady) {
           throw new Error(
             "Segmentation processor worker disappeared before frame post.",
@@ -13670,17 +14713,24 @@ export function useVideoEffects({
           await new Promise<SegmentationProcessorWorkerResultMessage>(
             (resolve, reject) => {
               const timeoutId = window.setTimeout(() => {
+                const pending =
+                  segmentationProcessorPendingFrames.get(sequence);
+                pending?.closeSource();
                 segmentationProcessorPendingFrames.delete(sequence);
                 const err = new Error(SEGMENTATION_PROCESSOR_TIMEOUT_MESSAGE);
                 segmentationProcessorLastError = getErrorDebugSnapshot(err);
                 reject(err);
-              }, SEGMENTATION_PROCESSOR_FRAME_TIMEOUT_MS);
+              }, frameTimeoutMs);
               segmentationProcessorPendingFrames.set(sequence, {
                 resolve,
                 reject,
                 timeoutId,
                 sentAt,
                 processingConfigId: frameProcessingConfigId,
+                closeSource: () =>
+                  closeTransferredFrameResource(
+                    sourceForWorker.source as ClosableMediaPipeResource,
+                  ),
               });
               try {
                 worker.postMessage(
@@ -13908,11 +14958,12 @@ export function useVideoEffects({
               getAdaptationRecordOptions(adaptationSampleNow),
             );
           }
-          segmentationIntervalMs = getAdaptedModelInterval(
+          const currentSegmentationEffects = effectsRef.current;
+          segmentationIntervalMs = getAdaptedSegmentationInterval(
             adaptationState,
-            "segmentation",
+            currentSegmentationEffects,
             skipWarmupAdaptation
-              ? INITIAL_SEGMENTATION_INTERVAL_MS
+              ? getSegmentationInitialIntervalMs(currentSegmentationEffects)
               : elapsed * 1.35,
           );
         });
@@ -13950,6 +15001,9 @@ export function useVideoEffects({
         const sentAt = performance.now();
         const sourceForWorker = workerSource;
         const worker = faceProcessorWorker;
+        const frameTimeoutMs = faceProcessorWorkerFirstResultSeen
+          ? FACE_PROCESSOR_FRAME_TIMEOUT_MS
+          : FACE_PROCESSOR_INITIAL_FRAME_TIMEOUT_MS;
         if (!worker || !faceProcessorWorkerReady) {
           throw new Error(
             "Face processor worker disappeared before frame post.",
@@ -13958,17 +15012,23 @@ export function useVideoEffects({
         const result = await new Promise<FaceProcessorWorkerResultMessage>(
           (resolve, reject) => {
             const timeoutId = window.setTimeout(() => {
+              const pending = faceProcessorPendingFrames.get(sequence);
+              pending?.closeSource();
               faceProcessorPendingFrames.delete(sequence);
               const err = new Error(FACE_PROCESSOR_TIMEOUT_MESSAGE);
               faceProcessorLastError = getErrorDebugSnapshot(err);
               reject(err);
-            }, FACE_PROCESSOR_FRAME_TIMEOUT_MS);
+            }, frameTimeoutMs);
             faceProcessorPendingFrames.set(sequence, {
               resolve,
               reject,
               timeoutId,
               sentAt,
               processingConfigId: frameProcessingConfigId,
+              closeSource: () =>
+                closeTransferredFrameResource(
+                  sourceForWorker.source as ClosableMediaPipeResource,
+                ),
             });
             try {
               worker.postMessage(
@@ -14551,6 +15611,10 @@ export function useVideoEffects({
           effectSwitchNow + VIDEO_EFFECTS_ADAPTATION_WARMUP_HOLD_MS,
         );
         resetAdaptationWarmupMetrics(adaptationState);
+        maskAlphaHistory = null;
+        maskEdgeGrowAlphaBuffer = null;
+        maskEdgeErodeScratchBuffer = null;
+        temporalMaskShapeFrameCount = 0;
         consecutiveFaceNoResultCount = 0;
         latestFaceNoResultBackoffActive = false;
         latestFaceNoResultBackoffReason = null;
@@ -14586,7 +15650,7 @@ export function useVideoEffects({
           canRecoverMeetVideoPipeSource,
           sourceTrack: getTrackDebugSnapshot(sourceVideoTrack),
           rawSourceTrack: getTrackDebugSnapshot(rawSourceVideoTrack),
-          effects: getEffectsDebugSnapshot(currentEffects),
+          effects: getVideoProcessingDebugSnapshot(currentEffects, mirrorOutput),
         });
         if (canRecoverMeetVideoPipeSource) {
           if (!meetVideoPipeSourceRecoveryRequested) {
@@ -14894,7 +15958,7 @@ export function useVideoEffects({
               paused: video.paused,
               ended: video.ended,
             },
-            effects: getEffectsDebugSnapshot(currentEffects),
+            effects: getVideoProcessingDebugSnapshot(currentEffects, mirrorOutput),
             sourceTrack: getTrackDebugSnapshot(sourceVideoTrack),
           };
           logNoVisibleFrameSource(
@@ -15083,10 +16147,10 @@ export function useVideoEffects({
         performance.now() < effectSwitchModelCadenceWarmupUntil
       ) {
         if (needsSegmentation) {
-          segmentationIntervalMs = getAdaptedModelInterval(
+          segmentationIntervalMs = getAdaptedSegmentationInterval(
             adaptationState,
-            "segmentation",
-            INITIAL_SEGMENTATION_INTERVAL_MS,
+            currentEffects,
+            getSegmentationInitialIntervalMs(currentEffects),
           );
         }
         if (needsFace) {
@@ -15197,7 +16261,7 @@ export function useVideoEffects({
             : Number.POSITIVE_INFINITY;
         const segmentationStale =
           !latestSegmentationMask ||
-          segmentationResultAge > SEGMENTATION_RESULT_STALE_MS;
+          segmentationResultAge > getSegmentationResultStaleMs(currentEffects);
         const faceStale =
           !latestFaceLandmarks || faceResultAge > FACE_RESULT_STALE_MS;
         const shouldPrimeBothModels =
@@ -15419,6 +16483,9 @@ export function useVideoEffects({
             currentEffects.customBackgroundId,
           )
         : null;
+      const waitingForBackgroundImage = Boolean(
+        backgroundImageSource && !backgroundImage,
+      );
       if (
         backgroundImageSource &&
         !backgroundImage &&
@@ -15475,6 +16542,84 @@ export function useVideoEffects({
         latestLowLightSourceStats = lowLightSourceStats;
         latestLowLightSourceStatsAt = performance.now();
       }
+      let sourceMotionStats = createSourceMotionStats(
+        0,
+        0,
+        0,
+        0,
+        SOURCE_MOTION_SAMPLE_WIDTH * SOURCE_MOTION_SAMPLE_HEIGHT,
+        "inactive",
+      );
+      let sourceMotionMask: HTMLCanvasElement | null = null;
+      if (needsSegmentation && isImageReplacementBackgroundEffect(currentEffects)) {
+        const sampledMotion = computeSourceMotionStats(
+          frameSource.image,
+          currentCrop,
+          sourceMotionCanvas,
+          sourceMotionCtx,
+          sourceMotionMaskCanvas,
+          sourceMotionMaskCtx,
+          previousSourceMotionLuma,
+        );
+        previousSourceMotionLuma = sampledMotion.luma;
+        sourceMotionStats = sampledMotion.stats;
+        sourceMotionMask = sampledMotion.mask;
+        if (
+          sampledMotion.mask &&
+          sampledMotion.stats.maskActive &&
+          heldSourceMotionMaskCtx
+        ) {
+          ensureScratchCanvasSize(
+            heldSourceMotionMaskCanvas,
+            sampledMotion.mask.width,
+            sampledMotion.mask.height,
+          );
+          heldSourceMotionMaskCtx?.clearRect(
+            0,
+            0,
+            heldSourceMotionMaskCanvas.width,
+            heldSourceMotionMaskCanvas.height,
+          );
+          heldSourceMotionMaskCtx?.drawImage(sampledMotion.mask, 0, 0);
+          heldSourceMotionStats = sampledMotion.stats;
+          heldSourceMotionMaskExpiresAt = now + SOURCE_MOTION_MASK_HOLD_MS;
+          sourceMotionMask = heldSourceMotionMaskCanvas;
+        } else if (
+          heldSourceMotionMaskCtx &&
+          heldSourceMotionMaskExpiresAt > now &&
+          heldSourceMotionStats.maskActive
+        ) {
+          sourceMotionStats = createHeldSourceMotionStats(
+            heldSourceMotionStats,
+            now,
+            heldSourceMotionMaskExpiresAt,
+          );
+          if (sourceMotionStats.maskActive) {
+            sourceMotionMask = heldSourceMotionMaskCanvas;
+          }
+        }
+      } else {
+        previousSourceMotionLuma = null;
+        heldSourceMotionStats = createSourceMotionStats();
+        heldSourceMotionMaskExpiresAt = 0;
+        sourceMotionMaskCtx?.clearRect(
+          0,
+          0,
+          sourceMotionMaskCanvas.width,
+          sourceMotionMaskCanvas.height,
+        );
+        heldSourceMotionMaskCtx?.clearRect(
+          0,
+          0,
+          heldSourceMotionMaskCanvas.width,
+          heldSourceMotionMaskCanvas.height,
+        );
+      }
+      latestSourceMotionStats = sourceMotionStats;
+      const currentSegmentationMaskAgeMs =
+        latestSegmentationMaskAt > 0
+          ? Math.max(0, performance.now() - latestSegmentationMaskAt)
+          : null;
       const frameRenderStats = renderFrame(
         ctx,
         frameSource.image,
@@ -15490,8 +16635,10 @@ export function useVideoEffects({
           ? latestFaceFilterPose ?? latestFacePose
           : latestFacePose,
         latestSegmentationMask,
+        currentSegmentationMaskAgeMs,
         backgroundImage,
         { canvas: backgroundBlurCanvas, ctx: backgroundBlurCtx },
+        { canvas: foregroundCompositeCanvas, ctx: foregroundCompositeCtx },
         proceduralBackgroundCache,
         currentCrop,
         sourceProbe,
@@ -15499,6 +16646,8 @@ export function useVideoEffects({
         probeBackgroundRender,
         probeFaceRender,
         lowLightTransition,
+        sourceMotionStats,
+        sourceMotionMask,
         now,
       );
       latestFaceFilterRenderStats =
@@ -15523,6 +16672,15 @@ export function useVideoEffects({
         canvas.height,
         performance.now(),
       );
+      if (mirrorOutput) {
+        mirrorCanvasHorizontally(
+          ctx,
+          canvas,
+          { canvas: outputMirrorCanvas, ctx: outputMirrorCtx },
+          canvas.width,
+          canvas.height,
+        );
+      }
       latestVisualTransitionStats = getVisualEffectTransitionStats(
         visualTransition,
         performance.now(),
@@ -15558,13 +16716,20 @@ export function useVideoEffects({
       }
       const waitingForSegmentationMask =
         needsSegmentation && !latestSegmentationMask;
+      const waitingForVisualAsset =
+        waitingForSegmentationMask || waitingForBackgroundImage;
+      const outputHoldReason = waitingForSegmentationMask
+        ? "waiting-for-segmentation-mask"
+        : waitingForBackgroundImage
+          ? "waiting-for-background-image"
+          : "none";
       let outputDelivered = false;
 
-      if (waitingForSegmentationMask) {
+      if (waitingForVisualAsset) {
         visibleOutputFrameCount = 0;
         if (outputTrackPublished) {
           const restoredProbe = restoreLastVisibleOutputFrame(
-            "waiting-for-segmentation-mask",
+            outputHoldReason,
             outputProbe,
           );
           if (restoredProbe?.visible) {
@@ -15579,7 +16744,8 @@ export function useVideoEffects({
           currentFrameSequence % OUTPUT_VISIBILITY_PROBE_INTERVAL_FRAMES === 0 ||
           !outputDelivered
         ) {
-          logVideoEffects(debugId, "hold_output_until_segmentation_mask", {
+          logVideoEffects(debugId, "hold_output_until_visual_asset", {
+            reason: outputHoldReason,
             sourceProbe,
             outputProbe,
             frameSource: frameSource.source,
@@ -15595,9 +16761,11 @@ export function useVideoEffects({
               paused: video.paused,
               ended: video.ended,
             },
-            effects: getEffectsDebugSnapshot(currentEffects),
+            effects: getVideoProcessingDebugSnapshot(currentEffects, mirrorOutput),
             sourceTrack: getTrackDebugSnapshot(sourceVideoTrack),
             hasSegmentationMask: Boolean(latestSegmentationMask),
+            hasBackgroundImage: Boolean(backgroundImage),
+            backgroundImageSource,
           });
         }
         setRuntimeStatus("loading", null);
@@ -15636,7 +16804,7 @@ export function useVideoEffects({
                 paused: video.paused,
                 ended: video.ended,
               },
-              effects: getEffectsDebugSnapshot(currentEffects),
+              effects: getVideoProcessingDebugSnapshot(currentEffects, mirrorOutput),
               sourceTrack: getTrackDebugSnapshot(sourceVideoTrack),
               hasSegmentationMask: Boolean(latestSegmentationMask),
               hasFaceLandmarks: Boolean(latestFaceLandmarks?.length),
@@ -15649,13 +16817,13 @@ export function useVideoEffects({
           Math.max(0, performance.now() - latestEffectSwitchAt),
         );
         if (
-          !waitingForSegmentationMask &&
+          !waitingForVisualAsset &&
           outputDelivered &&
           latestEffectSwitchFirstDeliveredLatencyMs === null
         ) {
           latestEffectSwitchFirstDeliveredLatencyMs = switchLatencyMs;
         }
-        if (!waitingForSegmentationMask && outputDelivered && outputProbe.visible) {
+        if (!waitingForVisualAsset && outputDelivered && outputProbe.visible) {
           latestEffectSwitchFirstVisibleLatencyMs = switchLatencyMs;
           latestEffectSwitchPending = false;
           logVideoEffects(debugId, "effect_switch_visible_output", {
@@ -15685,8 +16853,8 @@ export function useVideoEffects({
         outputDelivered,
         renderLatencyMs: Math.round(Math.max(0, performance.now() - loopStartedAt)),
         segmentationMaskAgeMs:
-          latestSegmentationMaskAt > 0
-            ? Math.round(performance.now() - latestSegmentationMaskAt)
+          currentSegmentationMaskAgeMs !== null
+            ? Math.round(currentSegmentationMaskAgeMs)
             : null,
         faceLandmarksAgeMs:
           latestFaceLandmarksAt > 0
@@ -15787,12 +16955,20 @@ export function useVideoEffects({
             temporalMaskSource === "tasks-confidence" ||
             temporalMaskSource === "tasks-category",
           alpha: MASK_TEMPORAL_ALPHA,
+          riseAlpha: latestTemporalMaskProfile.riseAlpha,
+          fallAlpha: latestTemporalMaskProfile.fallAlpha,
           confidenceFloor: MASK_CONFIDENCE_FLOOR,
           confidenceCeiling: MASK_CONFIDENCE_CEILING,
           confidenceGamma: MASK_CONFIDENCE_GAMMA,
+          edgeGrowAlpha: latestTemporalMaskProfile.edgeGrowAlpha,
+          edgeErodeAlpha: latestTemporalMaskProfile.edgeErodeAlpha,
+          edgeErodePasses: MASK_EDGE_ERODE_PASSES,
+          edgeFeatherPx: latestTemporalMaskProfile.edgeFeatherPx,
+          edgeReinforceAlpha: latestTemporalMaskProfile.edgeReinforceAlpha,
           frameCount: temporalMaskFrameCount,
           shapeFrameCount: temporalMaskShapeFrameCount,
           smoothedFrameCount: temporalMaskSmoothedFrameCount,
+          edgeGrowFrameCount: temporalMaskEdgeGrowFrameCount,
           resetCount: temporalMaskResetCount,
           source: temporalMaskSource,
           pixelCount: temporalMaskPixelCount,
@@ -16057,6 +17233,7 @@ export function useVideoEffects({
           },
           faceFilterRender: latestFaceFilterRenderStats,
           backgroundRender: latestBackgroundRenderStats,
+          sourceMotion: latestSourceMotionStats,
           lowLightRender: latestLowLightRenderStats,
           visualTransition: latestVisualTransitionStats,
           effectSwitchLatency,
@@ -16101,7 +17278,7 @@ export function useVideoEffects({
             ended: video.ended,
           },
           canvas: { width: canvas.width, height: canvas.height },
-          effects: getEffectsDebugSnapshot(currentEffects),
+          effects: getVideoProcessingDebugSnapshot(currentEffects, mirrorOutput),
           meetVideoPipe: {
             active: meetVideoPipeActive,
             mode: "gate",
@@ -16311,6 +17488,7 @@ export function useVideoEffects({
           },
           faceFilterRender: latestFaceFilterRenderStats,
           backgroundRender: latestBackgroundRenderStats,
+          sourceMotion: latestSourceMotionStats,
           lowLightRender: latestLowLightRenderStats,
           visualTransition: latestVisualTransitionStats,
           effectSwitchLatency,
@@ -16318,16 +17496,30 @@ export function useVideoEffects({
           adaptation: adaptationStats,
           temporalMask: {
             enabled: temporalMask.enabled,
+            alpha: temporalMask.alpha,
+            riseAlpha: temporalMask.riseAlpha,
+            fallAlpha: temporalMask.fallAlpha,
+            confidenceFloor: temporalMask.confidenceFloor,
+            confidenceCeiling: temporalMask.confidenceCeiling,
+            confidenceGamma: temporalMask.confidenceGamma,
+            edgeGrowAlpha: temporalMask.edgeGrowAlpha,
+            edgeErodeAlpha: temporalMask.edgeErodeAlpha,
+            edgeErodePasses: temporalMask.edgeErodePasses,
+            edgeFeatherPx: temporalMask.edgeFeatherPx,
+            edgeReinforceAlpha: temporalMask.edgeReinforceAlpha,
             frameCount: temporalMask.frameCount,
+            shapeFrameCount: temporalMask.shapeFrameCount,
             smoothedFrameCount: temporalMask.smoothedFrameCount,
+            edgeGrowFrameCount: temporalMask.edgeGrowFrameCount,
             resetCount: temporalMask.resetCount,
+            pixelCount: temporalMask.pixelCount,
             source: temporalMask.source,
             latestAgeMs: temporalMask.latestAgeMs,
             hasHistory: temporalMask.hasHistory,
           },
           frameMetadata: latestFrameMetadata,
           framePipeline: compactFramePipeline,
-          effects: getEffectsDebugSnapshot(currentEffects),
+          effects: getVideoProcessingDebugSnapshot(currentEffects, mirrorOutput),
           meetVideoPipe: {
             active: meetVideoPipeActive,
             mode: "gate",
@@ -16685,6 +17877,7 @@ export function useVideoEffects({
     meetVideoPipeOutputReady,
     meetVideoPipeRequestKey,
     meetVideoPipeTrack,
+    mirrorOutput,
     processedVideoTrackRef,
     rawSourceVideoTrack,
     sourceStream,
@@ -16697,7 +17890,7 @@ export function useVideoEffects({
       return track.kind !== "video";
     });
     const videoTrack =
-      active && processedTrackReady && processedTrack?.readyState === "live"
+      active && processedTrack?.readyState === "live"
         ? processedTrack
         : rawSourceVideoTrack;
     if (videoTrack) {
@@ -16707,7 +17900,6 @@ export function useVideoEffects({
   }, [
     active,
     processedTrack,
-    processedTrackReady,
     rawSourceVideoTrack,
     sourceStream,
   ]);

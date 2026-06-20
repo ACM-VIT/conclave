@@ -1,17 +1,5 @@
-//
-//  GridLayout.swift
-//  Conclave
-//
-//  Google-Meet-style participant grid arrangement — a faithful 1:1 port of the
-//  web/RN engine in `packages/meeting-core/src/grid-layout.ts`. Pure, no UI deps,
-//  so iOS (SwiftUI) and Android (Compose via Skip) lay tiles out IDENTICALLY to
-//  the web app. Given a tile count, a measured container, and a target aspect,
-//  it finds the column/row arrangement that MAXIMISES tile size (the canonical
-//  optimal-grid packing Meet/Jitsi/Daily use), then reports last-row centering
-//  and paging.
-//
-//  Keep this in lockstep with grid-layout.ts — same objective, same tie-breaks.
-//
+// Participant grid layout shared by SwiftUI and Skip/Compose.
+// Keep the objective and tie-breaks in lockstep with the web grid layout.
 
 import Foundation
 #if canImport(CoreGraphics)

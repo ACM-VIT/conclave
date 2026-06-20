@@ -11,11 +11,14 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ChangeEvent, Dispatch, ReactNode, SetStateAction } from "react";
 import { color, font } from "@conclave/ui-tokens";
-import {
-  prewarmVideoEffectsAssets,
-  type VideoEffectsDebugStats,
-  type VideoEffectsRuntimeStatus,
+import type {
+  VideoEffectsDebugStats,
+  VideoEffectsRuntimeStatus,
 } from "../hooks/useVideoEffects";
+import {
+  prewarmVideoEffectsAssetsDeferred,
+  type PrewarmVideoEffectsAssetsOptions,
+} from "../lib/video-effects-lazy";
 import {
   APPEARANCE_STYLES,
   BACKGROUND_EFFECTS,
@@ -52,6 +55,18 @@ type ActiveEffectStackItem = {
   tone?: string;
   remove: () => void;
 };
+type PendingEffectSelection = {
+  key:
+    | "background"
+    | "filter"
+    | "style"
+    | "studioLighting"
+    | "studioLook"
+    | "framing";
+  id: string;
+  label: string;
+  startedAt: number;
+};
 
 interface VideoEffectsPanelProps {
   effects: VideoEffectsState;
@@ -69,6 +84,7 @@ interface VideoEffectsPanelProps {
   variant?: "dock" | "dialog";
   initialTab?: EffectsTab;
   showFilters?: boolean;
+  deferPreload?: boolean;
 }
 
 const TABS: { id: EffectsTab; label: string }[] = [
@@ -494,6 +510,7 @@ export default function VideoEffectsPanel({
   variant = "dock",
   initialTab = "backgrounds",
   showFilters = true,
+  deferPreload = false,
 }: VideoEffectsPanelProps) {
   const isDialogVariant = variant === "dialog";
   const [activeTab, setActiveTab] = useState<EffectsTab>(initialTab);
@@ -503,6 +520,8 @@ export default function VideoEffectsPanel({
   const [customBackgrounds, setCustomBackgrounds] = useState<
     CustomVideoBackgroundSummary[]
   >([]);
+  const [pendingEffect, setPendingEffect] =
+    useState<PendingEffectSelection | null>(null);
   const customBackgroundInputRef = useRef<HTMLInputElement | null>(null);
   const appearanceStyleControlsVisible = !cameraPermissionBlocked;
   const studioLookControlVisible = !cameraPermissionBlocked;
@@ -574,24 +593,53 @@ export default function VideoEffectsPanel({
     filterOptionById.get(effects.filter)?.label ?? "filter";
   const selectedStyleLabel =
     appearanceOptionById.get(effects.style)?.label ?? "appearance";
+  const pendingPreparingLabel = pendingEffect
+    ? `Applying ${pendingEffect.label}`
+    : null;
   const preparingLabel =
-    effects.filter !== "none"
+    pendingPreparingLabel ??
+    (effects.filter !== "none"
       ? `Applying ${selectedFilterLabel}`
       : effects.background !== "none"
         ? `Applying ${selectedBackgroundLabel}`
         : effects.style !== "none"
           ? `Applying ${selectedStyleLabel}`
           : effects.studioLook
-            ? "Applying touch-up"
+            ? "Applying studio look"
             : effects.studioLighting
-              ? "Applying lighting"
+              ? "Applying studio lighting"
               : effects.framing
                 ? "Applying framing"
-                : "Preparing effects";
-  const isPreparingEffects = status === "loading" && activeCount > 0;
+                : "Preparing effects");
+  const isRuntimePreparingEffects = status === "loading" && activeCount > 0;
+  const isPreparingEffects =
+    isRuntimePreparingEffects || Boolean(pendingEffect);
+  const isOptionBusy = (
+    key: PendingEffectSelection["key"],
+    id: string,
+    selected: boolean,
+  ) =>
+    pendingEffect
+      ? pendingEffect.key === key && pendingEffect.id === id
+      : isRuntimePreparingEffects && selected;
+  const prewarmVideoEffectsAssets = useCallback(
+    (options: PrewarmVideoEffectsAssetsOptions) => {
+      if (deferPreload) return;
+      void prewarmVideoEffectsAssetsDeferred(options);
+    },
+    [deferPreload],
+  );
 
   const applyEffectsChange = (updater: SetStateAction<VideoEffectsState>) => {
     onEffectsChange(updater);
+  };
+
+  const markPendingEffect = (
+    key: PendingEffectSelection["key"],
+    id: string,
+    label: string,
+  ) => {
+    setPendingEffect({ key, id, label, startedAt: Date.now() });
   };
 
   const setBackground = (background: BackgroundEffectId) => {
@@ -601,6 +649,13 @@ export default function VideoEffectsPanel({
         backgrounds: [background],
         reason: `background:${background}:select`,
       });
+      markPendingEffect(
+        "background",
+        background,
+        backgroundOptionById.get(background)?.label ?? "background",
+      );
+    } else {
+      setPendingEffect(null);
     }
     applyEffectsChange((current) => ({ ...current, background }));
   };
@@ -724,11 +779,27 @@ export default function VideoEffectsPanel({
         faceFilter: filter,
         reason: `filter:${filter}:select`,
       });
+      markPendingEffect(
+        "filter",
+        filter,
+        filterOptionById.get(filter)?.label ?? "filter",
+      );
+    } else {
+      setPendingEffect(null);
     }
     applyEffectsChange((current) => ({ ...current, filter }));
   };
 
   const setStyle = (style: AppearanceStyleId) => {
+    if (style !== "none") {
+      markPendingEffect(
+        "style",
+        style,
+        appearanceOptionById.get(style)?.label ?? "appearance",
+      );
+    } else {
+      setPendingEffect(null);
+    }
     applyEffectsChange((current) => ({ ...current, style }));
   };
 
@@ -741,6 +812,19 @@ export default function VideoEffectsPanel({
           face: true,
           reason: "appearance:framing:select",
         });
+      }
+      if (checked) {
+        markPendingEffect(
+          key,
+          key,
+          key === "studioLighting"
+            ? "studio lighting"
+            : key === "studioLook"
+              ? "studio look"
+              : "framing",
+        );
+      } else {
+        setPendingEffect(null);
       }
       applyEffectsChange((current) => ({ ...current, [key]: checked }));
     };
@@ -796,7 +880,7 @@ export default function VideoEffectsPanel({
     if (effects.studioLighting) {
       stack.push({
         key: "studioLighting",
-        label: "Adjust video lighting",
+        label: "Studio lighting",
         tab: "appearance",
         remove: () =>
           onEffectsChange((current) => ({
@@ -827,7 +911,7 @@ export default function VideoEffectsPanel({
     if (studioLookControlVisible && effects.studioLook) {
       stack.push({
         key: "studioLook",
-        label: "Touch-up appearance",
+        label: "Studio look",
         tab: "appearance",
         remove: () =>
           onEffectsChange((current) => ({
@@ -871,6 +955,16 @@ export default function VideoEffectsPanel({
     }
   }, [activeTab, availableTabs]);
 
+  useEffect(() => {
+    if (!pendingEffect) return;
+    if (activeCount > 0 && status !== "loading" && status !== "off") {
+      const timeoutId = window.setTimeout(() => setPendingEffect(null), 250);
+      return () => window.clearTimeout(timeoutId);
+    }
+    const timeoutId = window.setTimeout(() => setPendingEffect(null), 9000);
+    return () => window.clearTimeout(timeoutId);
+  }, [activeCount, pendingEffect, status]);
+
   const prewarmForBackground = useCallback(
     (background: BackgroundEffectId) => {
       if (
@@ -885,12 +979,12 @@ export default function VideoEffectsPanel({
         reason: `background:${background}`,
       });
     },
-    [],
+    [prewarmVideoEffectsAssets],
   );
 
   const prewarmFace = useCallback((reason: string) => {
     void prewarmVideoEffectsAssets({ face: true, reason });
-  }, []);
+  }, [prewarmVideoEffectsAssets]);
 
   useEffect(() => {
     void prewarmVideoEffectsAssets({
@@ -900,7 +994,7 @@ export default function VideoEffectsPanel({
         showFilters && effects.filter !== "none" ? effects.filter : undefined,
       reason: "effects-panel-open",
     });
-  }, [effects.filter, showFilters]);
+  }, [effects.filter, prewarmVideoEffectsAssets, showFilters]);
 
   useEffect(() => {
     if (activeTab === "filters") {
@@ -1268,9 +1362,11 @@ export default function VideoEffectsPanel({
                       key={option.id}
                       option={option}
                       selected={effects.background === option.id}
-                      busy={
-                        isPreparingEffects && effects.background === option.id
-                      }
+                      busy={isOptionBusy(
+                        "background",
+                        option.id,
+                        effects.background === option.id,
+                      )}
                       testId={`video-effects-background-${option.id}`}
                       onPrewarm={() => prewarmForBackground(option.id)}
                       onSelect={() => setBackground(option.id)}
@@ -1296,7 +1392,11 @@ export default function VideoEffectsPanel({
                       key={option.id}
                       option={option}
                       selected={effects.filter === option.id}
-                      busy={isPreparingEffects && effects.filter === option.id}
+                      busy={isOptionBusy(
+                        "filter",
+                        option.id,
+                        effects.filter === option.id,
+                      )}
                       testId={`video-effects-filter-${option.id}`}
                       onPrewarm={() =>
                         option.id === "none"
@@ -1321,11 +1421,24 @@ export default function VideoEffectsPanel({
             role="tabpanel"
             aria-labelledby="video-effects-tab-appearance"
           >
+            <Section label="Studio lighting">
+              <div className="grid gap-1">
+                <ToggleRow
+                  label="Studio lighting"
+                  description="Makes it easier to see you against a bright background"
+                  checked={effects.studioLighting}
+                  testId="video-effects-appearance-studio-lighting"
+                  onChange={setToggle("studioLighting")}
+                />
+              </div>
+            </Section>
+
             {studioLookControlVisible ? (
-              <Section label="Appearance">
+              <Section label="Studio look">
                 <div className="grid gap-1">
                   <ToggleRow
-                    label="Touch-up appearance"
+                    label="Studio look"
+                    description="When needed, sharpens your features so people can see you better"
                     checked={effects.studioLook}
                     testId="video-effects-appearance-studio-look"
                     onChange={setToggle("studioLook")}
@@ -1334,16 +1447,8 @@ export default function VideoEffectsPanel({
               </Section>
             ) : null}
 
-            <Section label="Lighting and framing">
+            <Section label="Framing">
               <div className="grid gap-1">
-                <ToggleRow
-                  label="Adjust video lighting"
-                  description="Makes it easier to see you against a bright background"
-                  checked={effects.studioLighting}
-                  testId="video-effects-appearance-studio-lighting"
-                  onChange={setToggle("studioLighting")}
-                />
-                <div className="h-px bg-white/[0.14]" />
                 <ToggleRow
                   label="Framing"
                   description="Puts you in the center of the screen"
@@ -1376,9 +1481,11 @@ export default function VideoEffectsPanel({
                           key={option.id}
                           option={option}
                           selected={effects.style === option.id}
-                          busy={
-                            isPreparingEffects && effects.style === option.id
-                          }
+                          busy={isOptionBusy(
+                            "style",
+                            option.id,
+                            effects.style === option.id,
+                          )}
                           testId={`video-effects-appearance-style-${option.id}`}
                           onSelect={() => setStyle(option.id)}
                         />

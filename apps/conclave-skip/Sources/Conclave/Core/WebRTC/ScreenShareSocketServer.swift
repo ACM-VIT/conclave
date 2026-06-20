@@ -53,6 +53,9 @@ final class ScreenShareSocketServer: @unchecked Sendable {
 
     /// Called on the read queue with each decoded frame.
     private var onFrame: (@Sendable (ScreenFrameBox) -> Void)?
+    /// Called before JPEG decode so constrained links can skip excess frames
+    /// without spending CPU on frames that WebRTC will drop anyway.
+    private var shouldDecodeFrame: (@Sendable () -> Bool)?
     /// Called on the read queue when the extension actually connects (the
     /// broadcast went live) — lets the app distinguish a real share from a
     /// picker the user cancelled.
@@ -80,10 +83,12 @@ final class ScreenShareSocketServer: @unchecked Sendable {
     /// extension closes the connection.
     func start(
         onFrame: @escaping @Sendable (ScreenFrameBox) -> Void,
+        shouldDecodeFrame: @escaping @Sendable () -> Bool = { true },
         onConnect: @escaping @Sendable () -> Void,
         onDisconnect: @escaping @Sendable () -> Void
     ) -> Bool {
         self.onFrame = onFrame
+        self.shouldDecodeFrame = shouldDecodeFrame
         self.onClientConnect = onConnect
         self.onClientDisconnect = onDisconnect
 
@@ -295,7 +300,9 @@ final class ScreenShareSocketServer: @unchecked Sendable {
             let width = intHeader(msg, "Buffer-Width") ?? 0
             let height = intHeader(msg, "Buffer-Height") ?? 0
             let orientation = intHeader(msg, "Buffer-Orientation") ?? 0
-            emitFrame(jpeg: Data(frameData), width: width, height: height, orientation: orientation)
+            if shouldDecodeFrame?() ?? true {
+                emitFrame(jpeg: Data(frameData), width: width, height: height, orientation: orientation)
+            }
 
             // Bytes beyond Content-Length are the start of the next frame(s).
             let leftover = body.count > contentLength

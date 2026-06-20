@@ -3,7 +3,7 @@
 ## Project Structure & Module Organization
 Conclave is a pnpm monorepo split by runtime surface:
 - `apps/web`: Next.js web client (`src/app`, `src/lib`, static assets in `public/`).
-- `apps/mobile`: Expo/React Native client (`src/app`, `src/features`, assets in `assets/`).
+- `apps/mobile`: Expo/React Native client (`src/app`, `src/features`, assets in `assets/`). ---- THIS IS NOW DEPRECATED, DO NOT BOTHER MAKING ANY CHANGES TO THIS, INSTEAD, MAKE CHANGES TO apps/conclave-skip AS WE FOCUS ON THE NATIVE APPLICATIONS
 - `packages/sfu`: mediasoup SFU server and socket handlers.
 - `packages/apps-sdk`: in-meeting apps runtime SDK.
 - `packages/shared-browser`: optional VNC-based shared browser service.

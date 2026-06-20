@@ -2,26 +2,15 @@
 //  GlassStyle.swift
 //  Conclave
 //
-//  Cross-platform "Liquid Glass" surface layer.
-//
-//  • iOS / macOS 26+ : native Liquid Glass (`.glassEffect`, `GlassEffectContainer`).
-//  • earlier Apple OS: `.ultraThinMaterial` + hairline border (closest match).
-//  • Android (Skip)  : a translucent Carbon surface + hairline border. Skip can't
-//    transpile `glassEffect`, so every iOS-26 symbol lives behind `#if !SKIP`;
-//    the `#if SKIP` branch is what skipstone turns into Jetpack Compose.
-//
-//  Build-safety: the iOS-26 glass symbols only EXIST in the iOS 26 SDK (Xcode 26 /
-//  Swift 6.2). `#available` is a runtime check and can't hide a missing symbol at
-//  compile time, so we also gate behind `#if compiler(>=6.2)` — older Xcode then
-//  compiles only the material fallback and the build stays green either way.
-//
-//  Apply these LAST (after layout/padding), per Apple's glass modifier ordering.
+//  Cross-platform Liquid Glass surface layer. iOS/macOS 26+ uses native
+//  `glassEffect`; older Apple OS and Android keep compatible material/scrim
+//  fallbacks. Keep iOS 26 symbols behind `#if compiler(>=6.2)` because
+//  `#available` alone cannot hide missing SDK symbols from older Xcode builds.
 //
 
 import SwiftUI
 
-// Translucent fill used as the Android/Compose "glass" and the pre-26 fallback
-// scrim. Carbon `surface` (#18181b) at 72% reads as frosted over video.
+// Android/Compose fallback fill for glass-like controls over video.
 private let acmGlassFill = acmColor(red: 24.0, green: 24.0, blue: 27.0, opacity: 0.72)
 
 #if !SKIP
@@ -93,7 +82,6 @@ extension View {
     }
 
     #if !SKIP
-    /// `.ultraThinMaterial` fallback used pre-iOS-26 / pre-Xcode-26.
     @ViewBuilder
     fileprivate func acmMaterialGlassCapsule() -> some View {
         self

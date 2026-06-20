@@ -39,14 +39,25 @@ final class WebRTCClient {
     func createTransports() async throws { fatalError() }
     func restartIce() async -> Bool { fatalError() }
     func restartIce(transportKind: String) async -> Bool { fatalError() }
-    func consumeProducer(producerId: String, producerUserId: String, producerType: String = "webcam") async throws { fatalError() }
+    func consumeProducer(producerId: String, producerUserId: String, producerKind: String? = nil, producerType: String = "webcam", preferHighWebcamLayer: Bool = false) async throws { fatalError() }
     func closeConsumer(producerId: String, userId: String) { fatalError() }
+    func applyRemoteConsumerBandwidthPolicy(
+        focusedUserIds: Set<String>,
+        visibleUserIds: Set<String>,
+        connectionQuality: ConnectionQuality,
+        videoQuality: VideoQuality
+    ) async { fatalError() }
     func updateVideoQuality(_ quality: VideoQuality) { fatalError() }
+    func applyLocalBandwidthProfile(connectionQuality: ConnectionQuality) { fatalError() }
+    func refreshLocalAudioProducerForBandwidthProfile(connectionQuality: ConnectionQuality) async { fatalError() }
+    func refreshLocalVideoProducerForBandwidthProfile(connectionQuality: ConnectionQuality) async { fatalError() }
+    func refreshLocalScreenProducerForBandwidthProfile(connectionQuality: ConnectionQuality) async { fatalError() }
     func startProducingAudio() async throws { fatalError() }
     func startProducingVideo() async throws { fatalError() }
     func cleanup(notifyLocalState: Bool = true) async { fatalError() }
     func checkVideoFreezes() async { fatalError() }
     func sampleConnectionQuality() -> ConnectionQuality { fatalError() }
+    func sampleConnectionQualitySample() -> ConnectionQualitySample { fatalError() }
     func consumerId(forProducer producerId: String) -> String? { fatalError() }
     func closeConsumers(exceptProducerIds producerIds: [String]) { fatalError() }
     func hasAudioConsumer(userIdPrefix: String) -> Bool { fatalError() }

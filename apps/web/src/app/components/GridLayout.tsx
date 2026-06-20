@@ -30,6 +30,7 @@ import {
 } from "react";
 import { useSmartParticipantOrder } from "../hooks/useSmartParticipantOrder";
 import { useStableSpeakerId } from "../hooks/useStableSpeakerId";
+import { getRenderableParticipantVideoStream } from "../lib/participant-media";
 import type { Participant } from "../lib/types";
 import { isSystemUserId, truncateDisplayName } from "../lib/utils";
 import ParticipantAudio from "./ParticipantAudio";
@@ -315,7 +316,7 @@ const hasLiveVideo = (stream: MediaStream | null | undefined) =>
   hasLiveTrack(stream, "video");
 
 const participantHasLiveVideo = (participant: Participant) =>
-  !participant.isCameraOff && hasLiveVideo(participant.videoStream);
+  hasLiveVideo(getRenderableParticipantVideoStream(participant));
 
 const participantHasLiveAudio = (participant: Participant) =>
   !participant.isMuted && hasLiveTrack(participant.audioStream, "audio");
@@ -3503,7 +3504,7 @@ const OverflowGalleryTile = memo(function OverflowGalleryTile({
   onParticipantClick?: (userId: string) => void;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const videoStream = participant.isCameraOff ? null : participant.videoStream;
+  const videoStream = getRenderableParticipantVideoStream(participant);
   const videoTrack = videoStream?.getVideoTracks()[0] ?? null;
   const connectionStatus = participant.connectionStatus;
   const isReconnecting = connectionStatus?.state === "reconnecting";
@@ -3561,6 +3562,9 @@ const OverflowGalleryTile = memo(function OverflowGalleryTile({
       className={`acm-video-tile group relative flex h-28 w-44 shrink-0 snap-start flex-col overflow-hidden text-left ${
         isActiveSpeaker ? "speaking" : ""
       } ${isClickable ? "cursor-pointer hover:border-[#F95F4A]/40" : "cursor-default opacity-85"}`}
+      data-meet-video-adaptively-paused={
+        participant.isVideoAdaptivelyPaused ? "true" : "false"
+      }
     >
       <div className="relative h-full w-full">
         <video

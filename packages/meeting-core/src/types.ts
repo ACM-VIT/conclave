@@ -117,6 +117,7 @@ export interface Participant {
   screenShareAudioProducerId: string | null;
   isMuted: boolean;
   isCameraOff: boolean;
+  isVideoAdaptivelyPaused: boolean;
   isHandRaised: boolean;
   isGhost: boolean;
   isLeaving?: boolean;

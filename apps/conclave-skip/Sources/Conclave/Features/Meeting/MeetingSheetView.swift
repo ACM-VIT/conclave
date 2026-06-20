@@ -1,14 +1,5 @@
-//
-//  MeetingSheetView.swift
-//  Conclave
-//
-//  A single bottom sheet that swaps its content in place (More / Participants /
-//  Settings) instead of dismissing one sheet and presenting another. On Skip
-//  every `.sheet` is a native Material `ModalBottomSheet`; presenting a second
-//  sheet only after the first finishes dismissing (the old `onDismiss` chain)
-//  produced a visible ~half-second blank gap between two animations. Swapping
-//  content inside one persistent sheet removes that presentation gap while the
-//  page content handles its own push/pop transition.
+//  A single persistent bottom sheet swaps pages in place; chained native
+//  ModalBottomSheet presentations leave visible gaps on Skip/Android.
 //
 
 import SwiftUI
@@ -112,10 +103,6 @@ struct MeetingSheetView: View {
     var androidDetentHeight: CGFloat? = nil
     @State private var navigationDirection: MeetingSheetNavigationDirection = .push
     @State private var pageTransitionsEnabled = false
-    // Defer the heavy sheet BODY (icon rows / bordered cards) until just after the
-    // open slide settles, so the Material ModalBottomSheet's open animation isn't
-    // blocked by first-frame composition (the cheap header still shows during the
-    // slide). Drag-to-close stays smooth because the body is already composed.
     @State private var bodyReady = false
     @State private var bodyRevealGeneration = 0
 
@@ -278,11 +265,6 @@ struct MeetingSheetView: View {
                 }
             }
         }
-        // Android system / gesture BACK: on a sub-page (.participants/.settings)
-        // pop back to .more instead of dismissing the whole sheet; on .more the
-        // handler is disabled so BACK falls through to the default dismiss. Skip
-        // has no SwiftUI BackHandler, so a Compose `BackHandler` is hosted in a
-        // zero-size ComposeView (emits no UI). iOS is unaffected (#if !SKIP).
         #if SKIP
         .overlay(alignment: .top) {
             ComposeView { _ in
@@ -302,18 +284,9 @@ struct MeetingSheetView: View {
         #else
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         #endif
-        // The sheet base is the app's darkest surface so the lighter rows /
-        // cards inside each page keep their contrast (More's surfaceRaised card,
-        // the participants/settings surface rows).
         .acmColorBackground(ACMColors.bg)
         .preferredColorScheme(.dark)
-        // Brand the native Material controls (switches, picker, caret) with the
-        // Carbon accent instead of iOS blue/green.
         .tint(ACMColors.primaryOrange)
-        // One fixed detent for every page so the Material sheet never re-measures
-        // / re-settles when the content swaps — a single clean spring reads as
-        // instant. ~62% leaves the scrollable lists room while keeping More from
-        // opening near-full.
         #if SKIP
         .presentationDetents([.height(resolvedAndroidDetentHeight)])
         #else
@@ -324,11 +297,7 @@ struct MeetingSheetView: View {
             bodyRevealGeneration += 1
             let generation = bodyRevealGeneration
             #if SKIP
-            // Android only: keep the very first slide frame light (just the cheap
-            // header), then bring the body in almost immediately. The icon vectors
-            // are pre-warmed at app start (warmMeetingIcons), so the body now
-            // composes cheaply — a short ~90ms beat is enough to keep the open
-            // smooth without the content feeling like it arrives late.
+            // Keep the first Android sheet frame light while the open slide settles.
             bodyReady = false
             Task { @MainActor in
                 try? await Task.sleep(nanoseconds: 90_000_000)
@@ -338,7 +307,6 @@ struct MeetingSheetView: View {
                 }
             }
             #else
-            // iOS sheets aren't lag-bound — show the body immediately.
             bodyReady = true
             #endif
         }
@@ -352,19 +320,13 @@ struct MeetingSheetView: View {
     }
 }
 
-/// Shared pinned header for the in-sheet pages. Replaces the per-sheet
-/// `NavigationStack` + `.toolbar`, which Skip lowered into a full
-/// `NavHost + Scaffold + CenterAlignedTopAppBar` on every open (pure overhead,
-/// and an un-native iOS-style app bar inside an Android bottom sheet). A plain
-/// `HStack` row is cheap and reads correctly on both platforms.
+/// Shared pinned header for in-sheet pages.
 struct MeetingSheetHeader: View {
     let title: String
     var onBack: (() -> Void)? = nil
     let onDone: () -> Void
 
     var body: some View {
-        // Plain native chrome: a bare back chevron and bare "Done" text — no
-        // boxed/bordered buttons (those read as un-native on a bottom sheet).
         HStack(spacing: ACMSpacing.xs) {
             if let onBack {
                 Button(action: onBack) {
@@ -376,6 +338,7 @@ struct MeetingSheetHeader: View {
                         #endif
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("Back")
             }
 
             Text(title)
@@ -395,6 +358,7 @@ struct MeetingSheetHeader: View {
                     #endif
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("Done")
         }
         .padding(.horizontal, ACMSpacing.lg)
         .padding(.top, ACMSpacing.md)
@@ -429,15 +393,14 @@ struct MeetingSheetIconBox: View {
     let androidIcon: String
     var tint: Color = ACMColors.textMuted
     var androidTint: String = "muted"
-    // Kept for call-site compatibility; no longer drawn as a box. A bordered box
-    // around every list icon reads as un-native — a plain tinted glyph in a fixed
-    // frame (so the row dividers still align) is the native list anatomy.
     var background: Color = ACMColors.surfaceRaised
 
     var body: some View {
         ACMSystemIcon.icon(icon, android: androidIcon, size: 22, tint: androidTint)
             .foregroundStyle(tint)
             .frame(width: 32, height: 32)
+            .acmColorBackground(background)
+            .clipShape(RoundedRectangle(cornerRadius: ACMRadius.sm))
     }
 }
 

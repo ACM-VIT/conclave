@@ -1,7 +1,3 @@
-//
-//  Theme.swift
-//  Conclave
-//
 //  Design System — "Carbon" palette, shared 1:1 with the web app
 //  (packages/ui-tokens). Flat surfaces, brand hues, NO gradients / glows /
 //  monospace. Active speaker = 2px solid accent border (no halo). This file is

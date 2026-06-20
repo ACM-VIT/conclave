@@ -19,6 +19,12 @@ import kotlinx.coroutines.withTimeout
 
 private const val ACK_TIMEOUT_MS = 30_000L
 private const val CONNECT_TIMEOUT_MS = 15_000L
+private const val MAX_JOIN_ROOM_REDIRECTS = 1
+
+private class JoinRoomRedirectException(
+    message: String,
+    val redirectUrl: String
+) : RuntimeException(message)
 
 internal object SocketEvent {
     val joinRoom = SfuClientEvent.joinRoom.rawValue
@@ -30,6 +36,7 @@ internal object SocketEvent {
     val produce = SfuClientEvent.produce.rawValue
     val consume = SfuClientEvent.consume.rawValue
     val resumeConsumer = SfuClientEvent.resumeConsumer.rawValue
+    val setConsumerPreferences = SfuClientEvent.setConsumerPreferences.rawValue
     val getProducers = SfuClientEvent.getProducers.rawValue
     val toggleMute = SfuClientEvent.toggleMute.rawValue
     val toggleCamera = SfuClientEvent.toggleCamera.rawValue
@@ -48,15 +55,22 @@ internal object SocketEvent {
     val admitAllPending = SfuClientEvent.adminAdmitAllPending.rawValue
     val rejectAllPending = SfuClientEvent.adminRejectAllPending.rawValue
     val kickUser = SfuClientEvent.kickUser.rawValue
+    val closeRemoteProducer = SfuClientEvent.closeRemoteProducer.rawValue
     val muteAll = SfuClientEvent.muteAll.rawValue
     val closeAllVideo = SfuClientEvent.closeAllVideo.rawValue
     val promoteHost = SfuClientEvent.promoteHost.rawValue
     val adminMuteUser = SfuClientEvent.adminMuteUser.rawValue
     val adminCloseUserVideo = SfuClientEvent.adminCloseUserVideo.rawValue
+    val adminCloseUserMedia = SfuClientEvent.adminCloseUserMedia.rawValue
     val adminStopUserScreenShare = SfuClientEvent.adminStopUserScreenShare.rawValue
     val adminStopAllScreenShare = SfuClientEvent.adminStopAllScreenShare.rawValue
     val adminClearRaisedHands = SfuClientEvent.adminClearRaisedHands.rawValue
     val adminBroadcastNotice = SfuClientEvent.adminBroadcastNotice.rawValue
+    val adminGetAccessLists = SfuClientEvent.adminGetAccessLists.rawValue
+    val adminAllowUsers = SfuClientEvent.adminAllowUsers.rawValue
+    val adminBlockUsers = SfuClientEvent.adminBlockUsers.rawValue
+    val adminUnblockUsers = SfuClientEvent.adminUnblockUsers.rawValue
+    val adminRevokeAllowedUsers = SfuClientEvent.adminRevokeAllowedUsers.rawValue
     val adminEndRoom = SfuClientEvent.adminEndRoom.rawValue
     val meetingGetConfig = SfuClientEvent.meetingGetConfig.rawValue
     val meetingUpdateConfig = SfuClientEvent.meetingUpdateConfig.rawValue
@@ -106,6 +120,8 @@ internal object SocketEvent {
     val adminUsersChanged = SfuServerEvent.adminUsersChanged.rawValue
     val participantMuted = SfuServerEvent.participantMuted.rawValue
     val participantCameraOff = SfuServerEvent.participantCameraOff.rawValue
+    // SFU emits this today, but the generated event registry does not include it yet.
+    val participantConnectionState = "participantConnectionState"
     val setVideoQuality = SfuServerEvent.setVideoQuality.rawValue
     val redirect = SfuServerEvent.redirect.rawValue
     val kicked = SfuServerEvent.kicked.rawValue
@@ -190,6 +206,7 @@ internal class SocketIOManager {
     internal var onDisplayNameUpdated: ((DisplayNameUpdatedNotification) -> Unit)? = null
     internal var onParticipantMuted: ((ParticipantMutedNotification) -> Unit)? = null
     internal var onParticipantCameraOff: ((ParticipantCameraOffNotification) -> Unit)? = null
+    internal var onParticipantConnectionState: ((ParticipantConnectionStateNotification) -> Unit)? = null
 
     internal var onNewProducer: ((ProducerInfo) -> Unit)? = null
     internal var onProducerClosed: ((ProducerClosedNotification) -> Unit)? = null
@@ -221,20 +238,38 @@ internal class SocketIOManager {
     private var activeRoomId: String? = null
     private var activeRoomAliases: Set<String> = emptySet()
     private var pendingRoomAliases: Set<String> = emptySet()
+    private var activeAuthToken: String? = null
+    private var activeSfuURL: String? = null
     private var pendingConnectFailure: ((ErrorException) -> Unit)? = null
 
     internal suspend fun connect(sfuURL: String, token: String) {
-        if (isConnected) return
-        if (socket != null || manager != null) {
-            disconnect()
-        }
-        if (token.isBlank()) {
+        val normalizedToken = token.trim()
+        val normalizedSfuURL = sfuURL.trim()
+
+        if (normalizedToken.isBlank()) {
             val error = ErrorException("Missing token for SFU connection")
             connectionError = error
             onError?.invoke(error)
             throw error
         }
+        if (normalizedSfuURL.isBlank()) {
+            val error = ErrorException("Missing SFU URL")
+            connectionError = error
+            onError?.invoke(error)
+            throw error
+        }
+        if (isConnected) {
+            if (activeAuthToken == normalizedToken && activeSfuURL == normalizedSfuURL) {
+                return
+            }
+            disconnect()
+        }
+        if (socket != null || manager != null) {
+            disconnect()
+        }
 
+        activeAuthToken = normalizedToken
+        activeSfuURL = normalizedSfuURL
         isIntentionalDisconnect = false
 
         val opts = IO.Options().apply {
@@ -243,12 +278,12 @@ internal class SocketIOManager {
             reconnectionAttempts = 8
             reconnectionDelay = 1000
             reconnectionDelayMax = 5000
-            query = "token=${java.net.URLEncoder.encode(token, "UTF-8")}"
-            auth = mapOf("token" to token)
+            query = "token=${java.net.URLEncoder.encode(normalizedToken, "UTF-8")}"
+            auth = mapOf("token" to normalizedToken)
         }
 
         val socketManager = this
-        val currentSocket = IO.socket(sfuURL, opts)
+        val currentSocket = IO.socket(normalizedSfuURL, opts)
         val currentManager = currentSocket.io()
         socket = currentSocket
         manager = currentManager
@@ -271,6 +306,8 @@ internal class SocketIOManager {
                             activeRoomId = null
                             activeRoomAliases = emptySet()
                             pendingRoomAliases = emptySet()
+                            activeAuthToken = null
+                            activeSfuURL = null
                             routerRtpCapabilitiesJson = null
                         }
                     }
@@ -321,7 +358,7 @@ internal class SocketIOManager {
 
                     currentManager.on(Manager.EVENT_ERROR, Emitter.Listener { args ->
                         if (socketManager.socket !== currentSocket || socketManager.manager !== currentManager) return@Listener
-                        val error = ErrorException(args.firstOrNull()?.toString() ?: "Socket error")
+                        val error = ErrorException(socketClientErrorMessage(args.firstOrNull(), "Socket error"))
                         connectionError = error
                         onError?.invoke(error)
                         fail(error)
@@ -329,7 +366,7 @@ internal class SocketIOManager {
 
                     currentSocket.on(Socket.EVENT_CONNECT_ERROR, Emitter.Listener { args ->
                         if (socketManager.socket !== currentSocket) return@Listener
-                        val error = ErrorException(args.firstOrNull()?.toString() ?: "Connection error")
+                        val error = ErrorException(socketClientErrorMessage(args.firstOrNull(), "Connection error"))
                         connectionError = error
                         onError?.invoke(error)
                         fail(error)
@@ -381,6 +418,8 @@ internal class SocketIOManager {
         activeRoomId = null
         activeRoomAliases = emptySet()
         pendingRoomAliases = emptySet()
+        activeAuthToken = null
+        activeSfuURL = null
         routerRtpCapabilitiesJson = null
         isConnected = false
     }
@@ -401,26 +440,57 @@ internal class SocketIOManager {
             webinarInviteCode = webinarInviteCode,
             meetingInviteCode = meetingInviteCode
         )
+
+        var followedRedirects = 0
+        while (true) {
+            try {
+                return joinRoomOnce(request, roomId)
+            } catch (redirect: JoinRoomRedirectException) {
+                if (followedRedirects >= MAX_JOIN_ROOM_REDIRECTS) {
+                    throw ErrorException(redirect.message ?: "Room is hosted by another SFU instance.")
+                }
+                val token = activeAuthToken
+                    ?: throw ErrorException("Missing token for routed SFU connection")
+                followedRedirects += 1
+                val redirectedURL = SfuJoinService.platformReachableURLString(redirect.redirectUrl)
+                disconnect()
+                connect(redirectedURL, token)
+            }
+        }
+    }
+
+    private suspend fun joinRoomOnce(request: JoinRoomRequest, requestedRoomId: String): JoinRoomResponse {
         activeRoomId = null
         activeRoomAliases = emptySet()
-        pendingRoomAliases = roomAliasSet(requestedRoomId = roomId, resolvedRoomId = null)
+        pendingRoomAliases = roomAliasSet(requestedRoomId = requestedRoomId, resolvedRoomId = null)
         routerRtpCapabilitiesJson = null
 
         try {
-            val data = emit(SocketEvent.joinRoom, request)
+            val data = emitAllowingServerError(SocketEvent.joinRoom, request)
+            val errorObject = jsonObject(dataToString(data))
+            val errorMessage = errorObject?.let { stringField(it, "error") }
+            if (errorMessage != null) {
+                pendingRoomAliases = emptySet()
+                val redirectUrl = normalizeJoinRedirectURL(errorObject?.let { stringField(it, "redirectUrl") })
+                if (redirectUrl != null) {
+                    throw JoinRoomRedirectException(errorMessage, redirectUrl)
+                }
+                throw ErrorException(errorMessage)
+            }
+
             // Stash the router rtpCapabilities verbatim BEFORE decoding — mediasoup
             // Device.load() wants this JSON, and re-encoding the decoded struct
             // crashes Skip's JSONEncoder (AnyCodable codec params -> Tuple2).
             extractRawObjectField(data, "rtpCapabilities")?.let { routerRtpCapabilitiesJson = it }
             val response = JSONDecoder().decode(JoinRoomResponse::class, from = data)
-            val resolvedRoomId = response.roomId ?: roomId
+            val resolvedRoomId = response.roomId ?: requestedRoomId
             if (response.status == "waiting") {
                 activeRoomId = null
                 activeRoomAliases = emptySet()
-                pendingRoomAliases = roomAliasSet(requestedRoomId = roomId, resolvedRoomId = resolvedRoomId)
+                pendingRoomAliases = roomAliasSet(requestedRoomId = requestedRoomId, resolvedRoomId = resolvedRoomId)
             } else {
                 activeRoomId = resolvedRoomId
-                activeRoomAliases = roomAliasSet(requestedRoomId = roomId, resolvedRoomId = resolvedRoomId)
+                activeRoomAliases = roomAliasSet(requestedRoomId = requestedRoomId, resolvedRoomId = resolvedRoomId)
                 pendingRoomAliases = emptySet()
             }
             return response
@@ -490,11 +560,28 @@ internal class SocketIOManager {
     /// Consume using the router rtpCapabilities verbatim JSON, and return the
     /// server's rtpParameters as raw JSON for mediasoup `RecvTransport.consume()`.
     /// Same rationale as produceRaw: avoid the AnyCodable encode crash.
-    internal suspend fun consumeRaw(producerId: String, rtpCapabilitiesJson: String, transportId: String): ConsumeRawResult {
+    internal suspend fun consumeRaw(
+        producerId: String,
+        rtpCapabilitiesJson: String,
+        transportId: String,
+        preferredSpatialLayer: Int? = null,
+        preferredTemporalLayer: Int? = null,
+        priority: Int? = null
+    ): ConsumeRawResult {
         val request = JSONObject()
         request.put("transportId", transportId)
         request.put("producerId", producerId)
         request.put("rtpCapabilities", JSONObject(rtpCapabilitiesJson))
+        if (preferredSpatialLayer != null) {
+            val preferredLayers = JSONObject().put("spatialLayer", preferredSpatialLayer)
+            if (preferredTemporalLayer != null) {
+                preferredLayers.put("temporalLayer", preferredTemporalLayer)
+            }
+            request.put("preferredLayers", preferredLayers)
+        }
+        if (priority != null) {
+            request.put("priority", priority)
+        }
         val data = emit(SocketEvent.consume, request)
         val obj = JSONObject(dataToString(data))
         return ConsumeRawResult(
@@ -508,6 +595,38 @@ internal class SocketIOManager {
     internal suspend fun resumeConsumer(consumerId: String, requestKeyFrame: Boolean = false) {
         val request = ResumeConsumerRequest(consumerId = consumerId, requestKeyFrame = requestKeyFrame)
         emit(SocketEvent.resumeConsumer, request)
+    }
+
+    internal suspend fun setConsumerPreferences(
+        consumerId: String,
+        spatialLayer: Int? = null,
+        temporalLayer: Int? = null,
+        priority: Int? = null,
+        paused: Boolean? = null,
+        requestKeyFrame: Boolean = false
+    ) {
+        val trimmedConsumerId = consumerId.trim()
+        if (trimmedConsumerId.isEmpty()) return
+
+        val payload = JSONObject().put("consumerId", trimmedConsumerId)
+        if (spatialLayer != null) {
+            val preferredLayers = JSONObject().put("spatialLayer", spatialLayer)
+            if (temporalLayer != null) {
+                preferredLayers.put("temporalLayer", temporalLayer)
+            }
+            payload.put("preferredLayers", preferredLayers)
+        }
+        if (priority != null) {
+            payload.put("priority", priority)
+        }
+        if (paused != null) {
+            payload.put("paused", paused)
+        }
+        if (requestKeyFrame) {
+            payload.put("requestKeyFrame", true)
+        }
+
+        emit(SocketEvent.setConsumerPreferences, payload)
     }
 
     /// Snapshot the room's current producers (producer-sync safety net). The SFU
@@ -744,6 +863,15 @@ internal class SocketIOManager {
         emit(SocketEvent.kickUser, mapOf("userId" to userId))
     }
 
+    internal suspend fun closeRemoteProducer(producerId: String): CloseRemoteProducerResponse {
+        val trimmedProducerId = producerId.trim()
+        if (trimmedProducerId.isEmpty()) {
+            throw ErrorException("Invalid producer ID")
+        }
+        val data = emit(SocketEvent.closeRemoteProducer, mapOf("producerId" to trimmedProducerId))
+        return JSONDecoder().decode(CloseRemoteProducerResponse::class, from = data)
+    }
+
     internal suspend fun muteUser(userId: String): AdminMediaActionResponse {
         val data = emit(SocketEvent.adminMuteUser, mapOf("userId" to userId))
         return JSONDecoder().decode(AdminMediaActionResponse::class, from = data)
@@ -756,6 +884,26 @@ internal class SocketIOManager {
 
     internal suspend fun closeUserVideo(userId: String): AdminMediaActionResponse {
         val data = emit(SocketEvent.adminCloseUserVideo, mapOf("userId" to userId))
+        return JSONDecoder().decode(AdminMediaActionResponse::class, from = data)
+    }
+
+    internal suspend fun closeUserMedia(
+        userId: String,
+        kinds: skip.lib.Array<String>? = null,
+        types: skip.lib.Array<String>? = null,
+        reason: String? = null
+    ): AdminMediaActionResponse {
+        val payload = JSONObject().put("userId", userId)
+        if (kinds != null) {
+            payload.put("kinds", jsonArray(kinds))
+        }
+        if (types != null) {
+            payload.put("types", jsonArray(types))
+        }
+        if (reason != null) {
+            payload.put("reason", reason)
+        }
+        val data = emit(SocketEvent.adminCloseUserMedia, payload)
         return JSONDecoder().decode(AdminMediaActionResponse::class, from = data)
     }
 
@@ -778,6 +926,45 @@ internal class SocketIOManager {
         emitAckOnly(SocketEvent.adminClearRaisedHands)
     }
 
+    internal suspend fun getAccessLists(): AdminAccessListSnapshot {
+        val data = emitAckOnly(SocketEvent.adminGetAccessLists)
+        return JSONDecoder().decode(AdminAccessListsResponse::class, from = data).access
+    }
+
+    internal suspend fun allowUsers(userKeys: skip.lib.Array<String>, allowWhenLocked: Boolean = true): AdminAccessListSnapshot {
+        val payload = JSONObject()
+            .put("userKeys", jsonArray(userKeys))
+            .put("allowWhenLocked", allowWhenLocked)
+        val data = emit(SocketEvent.adminAllowUsers, payload)
+        return decodeAdminAccessMutation(data)
+    }
+
+    internal suspend fun blockUsers(userKeys: skip.lib.Array<String>, kickPresent: Boolean = true, reason: String? = null): AdminAccessListSnapshot {
+        val payload = JSONObject()
+            .put("userKeys", jsonArray(userKeys))
+            .put("kickPresent", kickPresent)
+        if (reason == null) {
+            payload.put("reason", JSONObject.NULL)
+        } else {
+            payload.put("reason", reason)
+        }
+        val data = emit(SocketEvent.adminBlockUsers, payload)
+        return decodeAdminAccessMutation(data)
+    }
+
+    internal suspend fun unblockUsers(userKeys: skip.lib.Array<String>): AdminAccessListSnapshot {
+        val data = emit(SocketEvent.adminUnblockUsers, JSONObject().put("userKeys", jsonArray(userKeys)))
+        return decodeAdminAccessMutation(data)
+    }
+
+    internal suspend fun revokeAllowedUsers(userKeys: skip.lib.Array<String>, revokeLocked: Boolean = true): AdminAccessListSnapshot {
+        val payload = JSONObject()
+            .put("userKeys", jsonArray(userKeys))
+            .put("revokeLocked", revokeLocked)
+        val data = emit(SocketEvent.adminRevokeAllowedUsers, payload)
+        return decodeAdminAccessMutation(data)
+    }
+
     internal suspend fun broadcastAdminNotice(message: String, level: AdminNoticeLevel): AdminNoticeResponse {
         val request = AdminNoticeRequest(message = message, level = level.rawValue)
         val data = emit(SocketEvent.adminBroadcastNotice, request)
@@ -790,8 +977,28 @@ internal class SocketIOManager {
         return JSONDecoder().decode(AdminEndRoomResponse::class, from = data)
     }
 
+    internal suspend fun endRoomNow(message: String?): AdminEndRoomResponse {
+        return endRoom(message = message, delayMs = 0)
+    }
+
     internal suspend fun promoteHost(userId: String) {
         emit(SocketEvent.promoteHost, mapOf("userId" to userId))
+    }
+
+    private fun decodeAdminAccessMutation(data: Data): AdminAccessListSnapshot {
+        val response = JSONDecoder().decode(AdminAccessMutationResponse::class, from = data)
+        if (response.success == false) {
+            throw ErrorException(response.error ?: "Access list update failed.")
+        }
+        return response.access ?: throw ErrorException("Access list update did not return access state.")
+    }
+
+    private fun jsonArray(values: skip.lib.Array<String>): JSONArray {
+        val array = JSONArray()
+        values.forEach { value ->
+            array.put(value)
+        }
+        return array
     }
 
     /// Emit an event whose SFU handler takes ONLY the ack callback (no data
@@ -843,6 +1050,28 @@ internal class SocketIOManager {
                         }
 
                         val data = jsonData(first) ?: Data()
+                        cont.resume(data)
+                    }
+                })
+            }
+        }
+    }
+
+    private suspend fun emitAllowingServerError(event: String, payload: Any): Data {
+        val socket = socket ?: throw ErrorException("Socket not connected")
+        val socketPayload = toSocketPayload(payload)
+
+        return withAckTimeout(event) {
+            suspendCancellableCoroutine { cont ->
+                socket.emit(event, socketPayload, object : io.socket.client.Ack {
+                    override fun call(vararg args: Any?) {
+                        if (!cont.isActive) return
+                        if (this@SocketIOManager.socket !== socket) {
+                            cont.resumeWithException(ErrorException("Socket changed before $event acknowledgement"))
+                            return
+                        }
+
+                        val data = jsonData(args.firstOrNull()) ?: Data()
                         cont.resume(data)
                     }
                 })
@@ -953,6 +1182,18 @@ internal class SocketIOManager {
         return trimmed.ifEmpty { null }
     }
 
+    private fun normalizeJoinRedirectURL(value: String?): String? {
+        val trimmed = value?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+        return try {
+            val uri = java.net.URI(trimmed)
+            val scheme = uri.scheme?.lowercase()
+            if (scheme != "http" && scheme != "https") return null
+            uri.toString().trimEnd('/')
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
     private fun intField(obj: JSONObject, field: String): Int? {
         if (!obj.has(field) || obj.isNull(field)) return null
         return when (val value = obj.opt(field)) {
@@ -961,9 +1202,9 @@ internal class SocketIOManager {
         }
     }
 
-    private fun byteData(value: Any?): Data? {
+    private fun byteData(value: Any?, allowEmpty: Boolean = false): Data? {
         return when (value) {
-            is ByteArray -> if (value.isEmpty()) null else Data(platformValue = value)
+            is ByteArray -> if (value.isEmpty() && !allowEmpty) null else Data(platformValue = value)
             is JSONArray -> {
                 val bytes = ByteArray(value.length())
                 for (i in 0 until value.length()) {
@@ -971,11 +1212,11 @@ internal class SocketIOManager {
                     if (number !in 0..255) return null
                     bytes[i] = number.toByte()
                 }
-                if (bytes.isEmpty()) null else Data(platformValue = bytes)
+                if (bytes.isEmpty() && !allowEmpty) null else Data(platformValue = bytes)
             }
             is JSONObject -> {
                 if (stringField(value, "type") == "Buffer") {
-                    byteData(value.opt("data"))
+                    byteData(value.opt("data"), allowEmpty)
                 } else {
                     null
                 }
@@ -983,7 +1224,7 @@ internal class SocketIOManager {
             is String -> {
                 val trimmed = value.trim()
                 if (trimmed.isEmpty()) {
-                    null
+                    if (allowEmpty) Data(platformValue = ByteArray(0)) else null
                 } else {
                     try {
                         Data(platformValue = Base64.getDecoder().decode(trimmed))
@@ -1002,10 +1243,10 @@ internal class SocketIOManager {
         } catch (_: Throwable) {
             return null
         }
-        val syncMessage = byteData(obj.opt("syncMessage")) ?: return null
+        val syncMessage = byteData(obj.opt("syncMessage"), allowEmpty = true) ?: return null
         return AppsSyncResponse(
             syncMessage = syncMessage,
-            stateVector = byteData(obj.opt("stateVector")),
+            stateVector = byteData(obj.opt("stateVector"), allowEmpty = true),
             awarenessUpdate = byteData(obj.opt("awarenessUpdate"))
         )
     }
@@ -1055,10 +1296,28 @@ internal class SocketIOManager {
     }
 
     private fun extractError(value: Any?): String? {
-        if (value is JSONObject && value.has("error")) {
-            return value.optString("error", null)
+        if (value is JSONObject) {
+            normalizedErrorMessage(value.opt("error"))?.let { return it }
+            normalizedErrorMessage(value.opt("message"))?.let { return it }
         }
-        return null
+        if (value is Map<*, *>) {
+            normalizedErrorMessage(value["error"])?.let { return it }
+            normalizedErrorMessage(value["message"])?.let { return it }
+        }
+        return normalizedErrorMessage(value)
+    }
+
+    private fun socketClientErrorMessage(value: Any?, fallback: String): String {
+        return extractError(value) ?: fallback
+    }
+
+    private fun normalizedErrorMessage(value: Any?): String? {
+        return when (value) {
+            null, JSONObject.NULL -> null
+            is String -> value.trim().ifEmpty { null }
+            is Throwable -> value.localizedMessage?.trim()?.ifEmpty { null }
+            else -> null
+        }
     }
 
     private inline fun <reified T : Decodable> decode(value: Any?): T? {
@@ -1084,25 +1343,13 @@ internal class SocketIOManager {
         if (normalized == null) {
             return activeRoomAliases.isNotEmpty() || pendingRoomAliases.isNotEmpty()
         }
-        if (normalized in activeRoomAliases || normalized in pendingRoomAliases) {
-            return true
-        }
-        if (activeRoomAliases.isNotEmpty() || pendingRoomAliases.isEmpty()) {
-            return false
-        }
-        pendingRoomAliases = pendingRoomAliases + normalized
-        return true
+        return normalized in activeRoomAliases || normalized in pendingRoomAliases
     }
 
     private fun pendingRoomEventMatches(roomId: String?): Boolean {
         if (pendingRoomAliases.isEmpty()) return false
         val normalized = normalizedRoomId(roomId) ?: return true
-        if (normalized in pendingRoomAliases) {
-            return true
-        }
-        if (activeRoomAliases.isNotEmpty()) return false
-        pendingRoomAliases = pendingRoomAliases + normalized
-        return true
+        return normalized in pendingRoomAliases
     }
 
     private fun ChatMessageNotification.toChatMessage(taggedRoomId: String? = null): ChatMessage {
@@ -1371,6 +1618,13 @@ internal class SocketIOManager {
             val notification = decode<ParticipantCameraOffNotification>( args.firstOrNull()) ?: return@Listener
             if (!eventRoomIdMatchesActiveOrPending(notification.roomId)) return@Listener
             onParticipantCameraOff?.invoke(notification)
+        })
+
+        socket.on(SocketEvent.participantConnectionState, Emitter.Listener { args ->
+            if (this.socket !== socket) return@Listener
+            val notification = decode<ParticipantConnectionStateNotification>(args.firstOrNull()) ?: return@Listener
+            if (!eventRoomIdMatchesActiveOrPending(notification.roomId)) return@Listener
+            onParticipantConnectionState?.invoke(notification)
         })
 
         socket.on(SocketEvent.setVideoQuality, Emitter.Listener { args ->

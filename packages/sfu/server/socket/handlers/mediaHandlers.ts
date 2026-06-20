@@ -134,6 +134,10 @@ const getDefaultConsumerPriority = (
   consumer: Consumer,
   producerInfo: ProducerInfo,
 ): number | undefined => {
+  if (consumer.kind === "audio") {
+    return 255;
+  }
+
   if (consumer.kind !== "video") {
     return undefined;
   }
@@ -564,7 +568,10 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
           priority:
             requestedPriority.value ??
             getDefaultConsumerPriority(consumer, producerInfo),
-          explicitLayers: requestedLayers.value !== undefined,
+          // Initial consume-time layer preferences are startup hints. If a
+          // browser/producer cannot expose layers, keep the consumer alive and let
+          // the later explicit setConsumerPreferences path report/fallback.
+          explicitLayers: false,
         });
 
         consumer.on("transportclose", () => {

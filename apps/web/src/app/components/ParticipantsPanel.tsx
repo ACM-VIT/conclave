@@ -87,6 +87,7 @@ function ParticipantsPanel({
           screenShareAudioProducerId: null,
           isMuted: localState.isMuted,
           isCameraOff: localState.isCameraOff,
+          isVideoAdaptivelyPaused: false,
           isHandRaised: localState.isHandRaised,
           isGhost: false,
         }

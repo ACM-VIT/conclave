@@ -239,6 +239,20 @@ const routerMediaCodecs: RouterRtpCodecCapability[] = [
     mimeType: "audio/opus",
     clockRate: 48000,
     channels: 2,
+    rtcpFeedback: [{ type: "transport-cc" }],
+  },
+  {
+    kind: "video",
+    mimeType: "video/VP8",
+    clockRate: 90000,
+    parameters: {},
+    rtcpFeedback: [
+      { type: "nack" },
+      { type: "nack", parameter: "pli" },
+      { type: "ccm", parameter: "fir" },
+      { type: "goog-remb" },
+      { type: "transport-cc" },
+    ],
   },
   {
     kind: "video",
@@ -249,12 +263,13 @@ const routerMediaCodecs: RouterRtpCodecCapability[] = [
       "profile-level-id": "42e01f",
       "level-asymmetry-allowed": 1,
     },
-  },
-  {
-    kind: "video",
-    mimeType: "video/VP8",
-    clockRate: 90000,
-    parameters: {},
+    rtcpFeedback: [
+      { type: "nack" },
+      { type: "nack", parameter: "pli" },
+      { type: "ccm", parameter: "fir" },
+      { type: "goog-remb" },
+      { type: "transport-cc" },
+    ],
   },
 ];
 
@@ -281,12 +296,12 @@ export const config = {
     logTags: ["info", "ice", "dtls", "rtp", "srtp", "rtcp"] as WorkerLogTag[],
   },
   videoQuality: {
-    lowThreshold: toNumber(process.env.VIDEO_QUALITY_LOW_THRESHOLD, 1000, {
+    lowThreshold: toNumber(process.env.VIDEO_QUALITY_LOW_THRESHOLD, 6, {
       min: 1,
     }),
     standardThreshold: toNumber(
       process.env.VIDEO_QUALITY_STANDARD_THRESHOLD,
-      900,
+      4,
       { min: 1 },
     ),
   },
@@ -344,12 +359,12 @@ export const config = {
     ],
     maxIncomingBitrate: toNumber(
       process.env.SFU_WEBRTC_MAX_INCOMING_BITRATE,
-      25000000,
+      4000000,
       { min: 1 },
     ),
     initialAvailableOutgoingBitrate: toNumber(
       process.env.SFU_WEBRTC_INITIAL_OUTGOING_BITRATE,
-      25000000,
+      1500000,
       { min: 1 },
     ),
   },

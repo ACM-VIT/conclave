@@ -80,11 +80,17 @@ private struct NativeCurrentSessionResponse: Decodable {
     let session: Session?
 }
 
+private struct NativeDeleteUserResponse: Decodable {
+    let success: Bool?
+    let error: String?
+    let message: String?
+}
+
 enum NativeAuthService {
-    static func fetchEnabledProviders() async -> Set<NativeAuthProvider> {
+    static func fetchEnabledProviders() async throws -> Set<NativeAuthProvider> {
         guard let baseURL = resolveAppBaseURL(),
               let url = authURL(path: "/api/auth/providers", baseURL: baseURL) else {
-            return []
+            throw NativeAuthError(message: "Authentication server is not configured.")
         }
 
         var request = URLRequest(url: url)
@@ -92,18 +98,15 @@ enum NativeAuthService {
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         prepareAuthRequest(&request, url: url)
 
-        guard let result = try? await URLSession.shared.data(for: request) else {
-            return []
-        }
-        let (data, response) = result
+        let (data, response) = try await URLSession.shared.data(for: request)
         storeAuthCookies(from: response, url: url)
 
         guard let statusCode = (response as? HTTPURLResponse)?.statusCode,
-              (200...299).contains(statusCode),
-              let decoded = try? JSONDecoder().decode(NativeAuthProvidersResponse.self, from: data) else {
-            return []
+              (200...299).contains(statusCode) else {
+            throw NativeAuthError(message: responseSummary(from: data) ?? "Couldn't load sign-in providers.")
         }
 
+        let decoded = try JSONDecoder().decode(NativeAuthProvidersResponse.self, from: data)
         return Set((decoded.providers ?? []).compactMap { NativeAuthProvider(rawValue: $0) })
     }
 
@@ -142,7 +145,11 @@ enum NativeAuthService {
         }
 
         let decoded = try JSONDecoder().decode(NativeCurrentSessionResponse.self, from: data)
-        return decoded.user ?? decoded.session?.user
+        let user = decoded.user ?? decoded.session?.user
+        guard let user, hasUsableIdentity(user) else {
+            return nil
+        }
+        return user
     }
 
     static func signInWithSocialToken(
@@ -192,8 +199,13 @@ enum NativeAuthService {
             throw NativeAuthError(message: message)
         }
 
+        if let sessionUser = try? await fetchCurrentSessionUser(),
+           hasUsableIdentity(sessionUser) {
+            return sessionUser
+        }
+
         guard let user = decoded?.user ?? decoded?.session?.user,
-              normalizedOptional(user.id) != nil || normalizedOptional(user.email) != nil else {
+              hasUsableIdentity(user) else {
             let message = decoded?.error ?? decoded?.message ?? "Sign-in completed, but no user was returned."
             throw NativeAuthError(message: message)
         }
@@ -220,6 +232,37 @@ enum NativeAuthService {
         clearStoredSessionCookies(matching: baseURL)
     }
 
+    static func deleteCurrentUser() async throws {
+        guard let baseURL = resolveAppBaseURL(),
+              let url = authURL(path: "/api/auth/delete-user", baseURL: baseURL) else {
+            throw NativeAuthError(message: "Authentication server is not configured.")
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue(originString(from: trustedAuthBaseURL(from: baseURL)), forHTTPHeaderField: "Origin")
+        request.httpBody = Data("{}".utf8)
+        prepareAuthRequest(&request, url: url)
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        storeAuthCookies(from: response, url: url)
+        let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
+        let decoded = try? JSONDecoder().decode(NativeDeleteUserResponse.self, from: data)
+
+        guard (200...299).contains(statusCode) else {
+            let message = decoded?.error ?? decoded?.message ?? responseSummary(from: data) ?? "Unable to delete account."
+            throw NativeAuthError(message: message)
+        }
+
+        if decoded?.success == false {
+            throw NativeAuthError(message: decoded?.error ?? decoded?.message ?? "Unable to delete account.")
+        }
+
+        clearStoredSessionCookies(matching: baseURL)
+    }
+
     static func clearStoredSessionCookies() {
         clearStoredSessionCookies(matching: resolveAppBaseURL())
     }
@@ -228,6 +271,7 @@ enum NativeAuthService {
         for key in [
             "CONCLAVE_AUTH_BASE_URL",
             "AUTH_BASE_URL",
+            "BETTER_AUTH_BASE_URL",
             "BETTER_AUTH_URL",
             "APP_BASE_URL",
             "NEXT_PUBLIC_APP_URL",
@@ -238,8 +282,11 @@ enum NativeAuthService {
                let url = configuredBaseURL(from: value) {
                 return url
             }
-            if let value = Bundle.main.object(forInfoDictionaryKey: key) as? String,
+            if let value = NativeRuntimeConfig.bundledString(forKey: key),
                let url = configuredBaseURL(from: value) {
+                if shouldIgnoreBundledProductionBaseURL(url) {
+                    continue
+                }
                 return url
             }
         }
@@ -316,6 +363,18 @@ enum NativeAuthService {
         return baseURL(from: url)
     }
 
+    private static func shouldIgnoreBundledProductionBaseURL(_ url: URL) -> Bool {
+        guard let host = url.host else { return false }
+        #if SKIP
+        return SfuJoinService.isAndroidDebugRuntime() &&
+            SfuJoinService.isProductionHost(host)
+        #elseif DEBUG && targetEnvironment(simulator)
+        return SfuJoinService.isProductionHost(host)
+        #else
+        return false
+        #endif
+    }
+
     private static func baseURL(from url: URL) -> URL? {
         guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false),
               components.host?.isEmpty == false else {
@@ -361,35 +420,21 @@ enum NativeAuthService {
 
     private static func prepareAuthRequest(_ request: inout URLRequest, url: URL) {
         request.httpShouldHandleCookies = true
-        #if SKIP
-        if let cookieHeader = NativeAuthSessionBridge.cookieHeader(forURL: url.absoluteString),
-           !cookieHeader.isEmpty {
-            request.setValue(cookieHeader, forHTTPHeaderField: "Cookie")
-        }
-        #else
+        NativeCookieSupport.attachCookies(to: &request)
         _ = url
-        #endif
     }
 
     private static func storeAuthCookies(from response: URLResponse, url: URL) {
-        #if SKIP
-        guard let httpResponse = response as? HTTPURLResponse,
-              let setCookieHeader = httpResponse.value(forHTTPHeaderField: "Set-Cookie") else {
-            return
-        }
-        NativeAuthSessionBridge.storeSetCookieHeader(
-            setCookieHeader: setCookieHeader,
-            forURL: url.absoluteString
-        )
-        #else
-        _ = response
-        _ = url
-        #endif
+        NativeCookieSupport.storeCookies(from: response, url: url)
     }
 
     private static func normalizedOptional(_ value: String?) -> String? {
         let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private static func hasUsableIdentity(_ user: NativeAuthenticatedUser) -> Bool {
+        normalizedOptional(user.id) != nil || normalizedOptional(user.email) != nil
     }
 
     private static func socialUserPayload(
@@ -438,7 +483,11 @@ enum NativeAuthService {
 
     private static func clearStoredSessionCookies(matching baseURL: URL? = nil) {
         #if SKIP
-        NativeAuthSessionBridge.clearCookies()
+        if let baseURL {
+            NativeAuthSessionBridge.clearCookies(forURL: baseURL.absoluteString)
+        } else {
+            NativeAuthSessionBridge.clearCookies()
+        }
         #else
         let storage = HTTPCookieStorage.shared
         guard let cookies = storage.cookies else { return }
@@ -548,7 +597,7 @@ private enum NativeGoogleSignInBridgeIOS {
                 return normalized
             }
 
-            if let value = Bundle.main.object(forInfoDictionaryKey: key) as? String,
+            if let value = NativeRuntimeConfig.bundledString(forKey: key),
                let normalized = normalizedOptional(value),
                !isUnresolvedBuildSetting(normalized) {
                 return normalized

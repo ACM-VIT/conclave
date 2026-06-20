@@ -36,6 +36,10 @@ final class MeetingState {
     var isDmEnabled: Bool = true
     var isTtsDisabled: Bool = false
     var meetingRequiresInviteCode: Bool = false
+    var adminAllowedUserKeys: [String] = []
+    var adminLockedAllowedUserKeys: [String] = []
+    var adminBlockedUserKeys: [String] = []
+    var isAdminAccessListRefreshing: Bool = false
 
     // Webinar State
     var webinarRole: String?
@@ -142,7 +146,7 @@ final class MeetingState {
     }
 
     static func isSystemUserId(_ userId: String) -> Bool {
-        isBrowserAudioUserId(userId) || isBrowserVideoUserId(userId) || isVoiceAgentUserId(userId)
+        isBrowserAudioUserId(userId) || isBrowserVideoUserId(userId)
     }
 
     static func systemDisplayName(for userId: String) -> String? {

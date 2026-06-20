@@ -13,24 +13,46 @@ const REDIS_TRANSIENT_ERROR_NAMES = new Set([
 ]);
 
 const REDIS_TRANSIENT_ERROR_CODES = new Set([
+  "EAI_AGAIN",
   "ECONNRESET",
   "ECONNREFUSED",
+  "ECONNABORTED",
+  "EPIPE",
   "EHOSTUNREACH",
+  "ENOTFOUND",
   "ENETUNREACH",
   "ETIMEDOUT",
 ]);
 
 export const isRedisTransientError = (error: unknown): boolean => {
-  if (!(error instanceof Error)) {
-    return false;
-  }
+  const candidate =
+    typeof error === "object" && error !== null
+      ? (error as {
+          name?: unknown;
+          code?: unknown;
+          message?: unknown;
+          constructor?: { name?: unknown };
+        })
+      : null;
+  const name =
+    typeof candidate?.name === "string"
+      ? candidate.name
+      : typeof candidate?.constructor?.name === "string"
+        ? candidate.constructor.name
+        : null;
+  const code = typeof candidate?.code === "string" ? candidate.code : null;
+  const message =
+    typeof candidate?.message === "string" ? candidate.message : "";
 
-  const errorWithCode = error as Error & { code?: string };
-  if (REDIS_TRANSIENT_ERROR_NAMES.has(error.name)) {
+  if (name && REDIS_TRANSIENT_ERROR_NAMES.has(name)) {
     return true;
   }
 
-  if (errorWithCode.code && REDIS_TRANSIENT_ERROR_CODES.has(errorWithCode.code)) {
+  if (code && REDIS_TRANSIENT_ERROR_CODES.has(code)) {
+    return true;
+  }
+
+  if (/redis/i.test(message) && /timeout|closed|offline|connect/i.test(message)) {
     return true;
   }
 

@@ -22,13 +22,31 @@ type SegmentationProcessorRequest =
 
 const TASKS_VISION_VERSION = "0.10.35";
 const TASKS_VISION_WASM_LOCAL_PATH = `/mediapipe/tasks-vision/${TASKS_VISION_VERSION}/wasm`;
-const TASKS_SELFIE_SEGMENTER_MODEL_LOCAL_PATH =
+const TASKS_SELFIE_SEGMENTER_SQUARE_MODEL_LOCAL_PATH =
+  "/mediapipe/models/image_segmenter/selfie_segmenter/float16/latest/selfie_segmenter.tflite";
+const TASKS_SELFIE_SEGMENTER_SQUARE_MODEL_CDN =
+  "https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter/float16/latest/selfie_segmenter.tflite";
+const TASKS_SELFIE_SEGMENTER_LANDSCAPE_MODEL_LOCAL_PATH =
   "/mediapipe/models/image_segmenter/selfie_segmenter_landscape/float16/latest/selfie_segmenter_landscape.tflite";
-const TASKS_SELFIE_SEGMENTER_MODEL_CDN =
+const TASKS_SELFIE_SEGMENTER_LANDSCAPE_MODEL_CDN =
   "https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter_landscape/float16/latest/selfie_segmenter_landscape.tflite";
 const TASKS_SELFIE_SEGMENTER_MODELS = [
-  { source: "same-origin", url: TASKS_SELFIE_SEGMENTER_MODEL_LOCAL_PATH },
-  { source: "google-storage", url: TASKS_SELFIE_SEGMENTER_MODEL_CDN },
+  {
+    source: "same-origin-square",
+    url: TASKS_SELFIE_SEGMENTER_SQUARE_MODEL_LOCAL_PATH,
+  },
+  {
+    source: "google-storage-square",
+    url: TASKS_SELFIE_SEGMENTER_SQUARE_MODEL_CDN,
+  },
+  {
+    source: "same-origin-landscape",
+    url: TASKS_SELFIE_SEGMENTER_LANDSCAPE_MODEL_LOCAL_PATH,
+  },
+  {
+    source: "google-storage-landscape",
+    url: TASKS_SELFIE_SEGMENTER_LANDSCAPE_MODEL_CDN,
+  },
 ] as const;
 
 let imageSegmenter: ImageSegmenter | null = null;

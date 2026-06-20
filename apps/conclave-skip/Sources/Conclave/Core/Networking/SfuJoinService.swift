@@ -13,6 +13,63 @@ struct SfuJoinInfo: Decodable {
         guard let data = try? JSONEncoder().encode(iceServers) else { return nil }
         return String(data: data, encoding: .utf8)
     }
+
+    func localIdentity(sessionId fallbackSessionId: String) -> SfuJoinIdentity? {
+        guard let claims = decodedTokenClaims() else { return nil }
+        let sessionId = Self.normalizedIdentityPart(claims.sessionId, maxLength: 128)
+            ?? Self.normalizedIdentityPart(fallbackSessionId, maxLength: 128)
+        guard let sessionId else { return nil }
+
+        let userKey = Self.normalizedEmail(claims.email)
+            ?? Self.normalizedIdentityPart(claims.userId, maxLength: 320)
+        guard let userKey else { return nil }
+        return SfuJoinIdentity(userKey: userKey, userId: "\(userKey)#\(sessionId)")
+    }
+
+    private func decodedTokenClaims() -> SfuJoinTokenClaims? {
+        let parts = token.split(separator: ".")
+        guard parts.count >= 2 else { return nil }
+        var payload = String(parts[1])
+            .replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        let padding = payload.count % 4
+        if padding > 0 {
+            payload += String(repeating: "=", count: 4 - padding)
+        }
+        guard let data = Data(base64Encoded: payload) else { return nil }
+        return try? JSONDecoder().decode(SfuJoinTokenClaims.self, from: data)
+    }
+
+    private static func normalizedEmail(_ value: String?) -> String? {
+        let normalized = value?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        guard !normalized.isEmpty, !isSyntheticGuestEmail(normalized) else { return nil }
+        return normalized
+    }
+
+    private static func isSyntheticGuestEmail(_ value: String) -> Bool {
+        guard value.hasPrefix("guest-") else { return false }
+        let suffixes = ["@guest.conclave", "@guest.com"]
+        return suffixes.contains { suffix in
+            value.hasSuffix(suffix) && value.count > "guest-".count + suffix.count
+        }
+    }
+
+    private static func normalizedIdentityPart(_ value: String?, maxLength: Int) -> String? {
+        let normalized = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !normalized.isEmpty, normalized.count <= maxLength else { return nil }
+        return normalized
+    }
+}
+
+struct SfuJoinIdentity {
+    let userKey: String
+    let userId: String
+}
+
+private struct SfuJoinTokenClaims: Decodable {
+    let userId: String?
+    let email: String?
+    let sessionId: String?
 }
 
 struct SfuIceServer: Codable {
@@ -59,6 +116,8 @@ struct SfuJoinRequest: Encodable {
     let clientId: String
     let allowRoomCreation: Bool
     let joinMode: JoinMode
+    let meetingInviteCode: String?
+    let webinarInviteCode: String?
 }
 
 struct SfuJoinError: Decodable {
@@ -81,16 +140,18 @@ enum SfuJoinService {
         isHost: Bool,
         clientId: String,
         allowRoomCreation: Bool = false,
-        joinMode: JoinMode = .meeting
+        joinMode: JoinMode = .meeting,
+        meetingInviteCode: String? = nil,
+        webinarInviteCode: String? = nil
     ) async throws -> SfuJoinInfo {
         var request = URLRequest(url: resolveJoinURL())
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpShouldHandleCookies = user?.id != nil || user?.email != nil
+        request.httpShouldHandleCookies = true
         if !clientId.isEmpty {
             request.setValue(clientId, forHTTPHeaderField: "x-sfu-client")
         }
-        attachNativeAuthCookies(to: &request)
+        NativeCookieSupport.attachCookies(to: &request)
 
         let payload = SfuJoinRequest(
             roomId: roomId,
@@ -100,13 +161,15 @@ enum SfuJoinService {
             isAdmin: isHost,
             clientId: clientId,
             allowRoomCreation: allowRoomCreation,
-            joinMode: joinMode
+            joinMode: joinMode,
+            meetingInviteCode: meetingInviteCode,
+            webinarInviteCode: webinarInviteCode
         )
 
         request.httpBody = try JSONEncoder().encode(payload)
 
         let (data, response) = try await URLSession.shared.data(for: request)
-        storeNativeAuthCookies(from: response, url: request.url)
+        NativeCookieSupport.storeCookies(from: response, url: request.url)
         let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
 
         if !(200...299).contains(statusCode) {
@@ -117,44 +180,12 @@ enum SfuJoinService {
         return try JSONDecoder().decode(SfuJoinInfo.self, from: data)
     }
 
-    private static func attachNativeAuthCookies(to request: inout URLRequest) {
-        #if SKIP
-        guard request.httpShouldHandleCookies,
-              let url = request.url?.absoluteString,
-              let cookieHeader = NativeAuthSessionBridge.cookieHeader(forURL: url),
-              !cookieHeader.isEmpty else {
-            return
-        }
-        request.setValue(cookieHeader, forHTTPHeaderField: "Cookie")
-        #else
-        _ = request
-        #endif
-    }
-
-    private static func storeNativeAuthCookies(from response: URLResponse, url: URL?) {
-        #if SKIP
-        guard let url,
-              let httpResponse = response as? HTTPURLResponse,
-              let setCookieHeader = httpResponse.value(forHTTPHeaderField: "Set-Cookie"),
-              !setCookieHeader.isEmpty else {
-            return
-        }
-        NativeAuthSessionBridge.storeSetCookieHeader(
-            setCookieHeader: setCookieHeader,
-            forURL: url.absoluteString
-        )
-        #else
-        _ = response
-        _ = url
-        #endif
-    }
-
     static func resolveClientId() -> String {
         if let envClient = ProcessInfo.processInfo.environment["SFU_CLIENT_ID"], !envClient.isEmpty {
             return envClient
         }
 
-        if let plistClient = Bundle.main.object(forInfoDictionaryKey: "SFU_CLIENT_ID") as? String,
+        if let plistClient = NativeRuntimeConfig.bundledString(forKey: "SFU_CLIENT_ID"),
            !plistClient.isEmpty {
             return plistClient
         }
@@ -211,7 +242,7 @@ enum SfuJoinService {
     }
 
     static func resolveBundledJoinURL(allowProductionHost: Bool) -> URL? {
-        guard let plistUrl = Bundle.main.object(forInfoDictionaryKey: "SFU_JOIN_URL") as? String else {
+        guard let plistUrl = NativeRuntimeConfig.bundledString(forKey: "SFU_JOIN_URL") else {
             return nil
         }
 
@@ -242,7 +273,15 @@ enum SfuJoinService {
     }
 
     static func isProductionJoinURL(_ urlString: String) -> Bool {
-        URLComponents(string: urlString)?.host?.lowercased() == "conclave.acmvit.in"
+        guard let host = URLComponents(string: urlString)?.host else {
+            return false
+        }
+        return isProductionHost(host)
+    }
+
+    static func isProductionHost(_ host: String) -> Bool {
+        let normalized = host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return normalized == "conclave.acmvit.in" || normalized == "www.conclave.acmvit.in"
     }
 
     static func productionJoinURL() -> URL {

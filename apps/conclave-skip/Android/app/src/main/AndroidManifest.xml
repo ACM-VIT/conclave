@@ -19,8 +19,8 @@
         android:label="${PRODUCT_NAME}"
         android:name=".AndroidAppMain"
         android:supportsRtl="true"
-        android:allowBackup="true"
-        android:usesCleartextTraffic="true"
+        android:allowBackup="false"
+        android:usesCleartextTraffic="${USES_CLEARTEXT_TRAFFIC}"
         android:icon="@mipmap/ic_launcher">
         <meta-data
             android:name="GOOGLE_SIGN_IN_WEB_CLIENT_ID"

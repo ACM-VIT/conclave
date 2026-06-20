@@ -3,6 +3,7 @@
 import { Crop, Ghost, Hand, Info, Maximize2, MicOff, Pin, PinOff } from "lucide-react";
 import { memo, useEffect, useRef } from "react";
 import { createPlaybackRecoveryScheduler } from "../lib/playback-recovery";
+import { getRenderableParticipantVideoStream } from "../lib/participant-media";
 import type { Participant } from "../lib/types";
 import { truncateDisplayName } from "../lib/utils";
 import ParticipantAudio from "./ParticipantAudio";
@@ -53,7 +54,7 @@ function ParticipantVideo({
   const videoRef = useRef<HTMLVideoElement>(null);
   const labelWidthClass = compact ? "max-w-[65%]" : "max-w-[75%]";
   const displayLabel = truncateDisplayName(displayName, compact ? 12 : 18);
-  const videoStream = participant.isCameraOff ? null : participant.videoStream;
+  const videoStream = getRenderableParticipantVideoStream(participant);
   const videoTrack = videoStream?.getVideoTracks()[0] ?? null;
   const connectionStatus = participant.connectionStatus;
   const isReconnecting = connectionStatus?.state === "reconnecting";
@@ -177,6 +178,9 @@ function ParticipantVideo({
       } ${speakerHighlight} ${handRaisedHighlight} ${
         isAdmin && onAdminClick ? "cursor-pointer hover:border-[#F95F4A]/40" : ""
       }`}
+      data-meet-video-adaptively-paused={
+        participant.isVideoAdaptivelyPaused ? "true" : "false"
+      }
       style={{ fontFamily: "'PolySans Trial', sans-serif" }}
     >
       <video

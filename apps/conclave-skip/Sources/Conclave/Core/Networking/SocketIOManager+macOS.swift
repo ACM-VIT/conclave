@@ -42,6 +42,7 @@ final class SocketIOManager {
     var onDisplayNameUpdated: ((DisplayNameUpdatedNotification) -> Void)?
     var onParticipantMuted: ((ParticipantMutedNotification) -> Void)?
     var onParticipantCameraOff: ((ParticipantCameraOffNotification) -> Void)?
+    var onParticipantConnectionState: ((ParticipantConnectionStateNotification) -> Void)?
 
     var onNewProducer: ((ProducerInfo) -> Void)?
     var onProducerClosed: ((ProducerClosedNotification) -> Void)?
@@ -108,6 +109,14 @@ final class SocketIOManager {
         throw NSError(domain: "Conclave", code: -1, userInfo: [NSLocalizedDescriptionKey: "SocketIO not available on macOS"])
     }
     func resumeConsumer(consumerId: String, requestKeyFrame: Bool = false) async throws { }
+    func setConsumerPreferences(
+        consumerId: String,
+        spatialLayer: Int? = nil,
+        temporalLayer: Int? = nil,
+        priority: Int? = nil,
+        paused: Bool? = nil,
+        requestKeyFrame: Bool = false
+    ) async throws { }
     func getProducers() async throws -> GetProducersResponse { GetProducersResponse(producers: []) }
 
     func toggleMute(producerId: String, paused: Bool) async throws { }
@@ -188,6 +197,9 @@ final class SocketIOManager {
     func admitAllPending() async throws { }
     func rejectAllPending() async throws { }
     func kickUser(userId: String) async throws { }
+    func closeRemoteProducer(producerId: String) async throws -> CloseRemoteProducerResponse {
+        CloseRemoteProducerResponse(success: true, error: nil, userId: nil, kind: nil, type: nil)
+    }
     func muteUser(userId: String) async throws -> AdminMediaActionResponse {
         AdminMediaActionResponse(success: true, error: nil, userId: userId, affectedProducers: nil, producers: nil)
     }
@@ -195,6 +207,9 @@ final class SocketIOManager {
         AdminBulkMediaActionResponse(success: true, error: nil, count: nil, affectedProducers: nil, users: nil)
     }
     func closeUserVideo(userId: String) async throws -> AdminMediaActionResponse {
+        AdminMediaActionResponse(success: true, error: nil, userId: userId, affectedProducers: nil, producers: nil)
+    }
+    func closeUserMedia(userId: String, kinds: [String]? = nil, types: [String]? = nil, reason: String? = nil) async throws -> AdminMediaActionResponse {
         AdminMediaActionResponse(success: true, error: nil, userId: userId, affectedProducers: nil, producers: nil)
     }
     func stopUserScreenShare(userId: String) async throws -> AdminMediaActionResponse {
@@ -207,11 +222,29 @@ final class SocketIOManager {
         AdminBulkMediaActionResponse(success: true, error: nil, count: nil, affectedProducers: nil, users: nil)
     }
     func clearRaisedHands() async throws { }
+    func getAccessLists() async throws -> AdminAccessListSnapshot {
+        AdminAccessListSnapshot(allowedUserKeys: [], lockedAllowedUserKeys: [], blockedUserKeys: [])
+    }
+    func allowUsers(_ userKeys: [String], allowWhenLocked: Bool = true) async throws -> AdminAccessListSnapshot {
+        AdminAccessListSnapshot(allowedUserKeys: userKeys, lockedAllowedUserKeys: allowWhenLocked ? userKeys : [], blockedUserKeys: [])
+    }
+    func blockUsers(_ userKeys: [String], kickPresent: Bool = true, reason: String? = nil) async throws -> AdminAccessListSnapshot {
+        AdminAccessListSnapshot(allowedUserKeys: [], lockedAllowedUserKeys: [], blockedUserKeys: userKeys)
+    }
+    func unblockUsers(_ userKeys: [String]) async throws -> AdminAccessListSnapshot {
+        AdminAccessListSnapshot(allowedUserKeys: [], lockedAllowedUserKeys: [], blockedUserKeys: [])
+    }
+    func revokeAllowedUsers(_ userKeys: [String], revokeLocked: Bool = true) async throws -> AdminAccessListSnapshot {
+        AdminAccessListSnapshot(allowedUserKeys: [], lockedAllowedUserKeys: [], blockedUserKeys: [])
+    }
     func broadcastAdminNotice(message: String, level: AdminNoticeLevel) async throws -> AdminNoticeResponse {
         AdminNoticeResponse(success: true, error: nil)
     }
     func endRoom(message: String? = nil, delayMs: Int? = nil) async throws -> AdminEndRoomResponse {
         AdminEndRoomResponse(success: true, roomId: nil, delayMs: delayMs, error: nil)
+    }
+    func endRoomNow(message: String?) async throws -> AdminEndRoomResponse {
+        try await endRoom(message: message, delayMs: 0)
     }
     func promoteHost(userId: String) async throws { }
 }

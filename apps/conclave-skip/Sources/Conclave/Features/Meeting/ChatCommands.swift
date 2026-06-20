@@ -1,8 +1,3 @@
-//
-//  ChatCommands.swift
-//  Conclave
-//
-
 import Foundation
 
 // MARK: - Chat Command Types
@@ -230,10 +225,7 @@ enum SystemMessageType {
     case info(String)
 }
 
-/// A unified chat-log entry so user messages and system notes (slash-command
-/// feedback) render in one timestamp-ordered timeline. Previously the chat view
-/// iterated only `chatMessages`, so `systemMessages` (appended by every executed
-/// command) were never shown and commands ran with no visible confirmation.
+/// A unified chat-log entry for user messages and slash-command feedback.
 enum ChatTimelineEntry: Identifiable {
     case message(ChatMessage)
     case system(SystemMessage)

@@ -1,13 +1,7 @@
-//
-//  CallAudioSession.swift
-//  Conclave
-//
 //  iOS audio-session lifecycle for an in-progress call: keeps .playAndRecord
 //  active in the background and RE-ACTIVATES it after an interruption (an
 //  incoming phone call, Siri, an alarm, another app grabbing audio). Without
 //  this, audio stays dead after a competing interruption ends.
-//
-
 #if os(iOS) && !SKIP
 import Foundation
 import AVFoundation

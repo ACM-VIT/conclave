@@ -10,6 +10,14 @@ struct ChatOverlayView: View {
     @Bindable var viewModel: MeetingViewModel
     @State private var messageText = ""
     @FocusState private var isInputFocused: Bool
+    private let maxChatInputLength = 1000
+
+    private var messageTextBinding: Binding<String> {
+        Binding(
+            get: { messageText },
+            set: { messageText = String($0.prefix(maxChatInputLength)) }
+        )
+    }
 
     private var isGhostChatDisabled: Bool {
         viewModel.state.isGhostMode
@@ -23,11 +31,18 @@ struct ChatOverlayView: View {
         viewModel.state.isChatLocked && !viewModel.state.isAdmin
     }
 
+    private var isConnectionChatDisabled: Bool {
+        viewModel.state.connectionState != .joined
+    }
+
     private var isChatDisabled: Bool {
-        isGhostChatDisabled || isWatchOnlyChatDisabled || isHostChatLocked
+        isConnectionChatDisabled || isGhostChatDisabled || isWatchOnlyChatDisabled || isHostChatLocked
     }
 
     private var placeholder: String {
+        if isConnectionChatDisabled {
+            return "Chat unavailable until joined"
+        }
         if isGhostChatDisabled {
             return "Ghost mode: chat disabled"
         }
@@ -100,6 +115,8 @@ struct ChatOverlayView: View {
         let timeline = (viewModel.state.chatMessages.map { ChatTimelineEntry.message($0) }
             + viewModel.state.systemMessages.map { ChatTimelineEntry.system($0) })
             .sorted { $0.timestamp < $1.timestamp }
+        let canSendMessage = !messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isChatDisabled
+
         VStack(spacing: 0) {
             HStack {
                 Text("Chat")
@@ -182,7 +199,7 @@ struct ChatOverlayView: View {
                 }
 
                 HStack(spacing: 10) {
-                    TextField(placeholder, text: $messageText)
+                    TextField(placeholder, text: messageTextBinding)
                         .textFieldStyle(.plain)
                         .font(ACMFont.trial(14))
                         .foregroundStyle(ACMColors.text)
@@ -207,12 +224,12 @@ struct ChatOverlayView: View {
                         sendMessage()
                     } label: {
                         ACMSystemIcon.icon("arrow.up", android: "send", size: 16)
-                            .foregroundStyle(messageText.isEmpty ? ACMColors.textFaint : Color.white)
+                            .foregroundStyle(canSendMessage ? Color.white : ACMColors.textFaint)
                             .frame(width: 40, height: 40)
-                            .acmColorBackground(messageText.isEmpty ? ACMColors.surfaceRaised : ACMColors.primaryOrange)
+                            .acmColorBackground(canSendMessage ? ACMColors.primaryOrange : ACMColors.surfaceRaised)
                             .clipShape(Circle())
                     }
-                    .disabled(messageText.isEmpty || isChatDisabled)
+                    .disabled(!canSendMessage)
                 }
             }
             .padding(.horizontal, 16)
@@ -233,7 +250,7 @@ struct ChatOverlayView: View {
     
     func sendMessage() {
         let trimmed = messageText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
+        guard !trimmed.isEmpty, !isChatDisabled else { return }
         viewModel.sendChatMessage(trimmed)
         messageText = ""
     }

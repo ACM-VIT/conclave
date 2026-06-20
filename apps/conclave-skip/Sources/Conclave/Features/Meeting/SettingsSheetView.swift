@@ -53,9 +53,19 @@ struct SettingsSheetView: View {
     @State private var didCopyWebinarLink = false
     @State private var webinarLinkCopyFeedbackGeneration = 0
     @State private var isConfirmingWebinarLinkRotation = false
+    @State private var isSigningOut = false
+    @State private var isUpdatingDisplayName = false
 
-    private var isDisplayNameEmpty: Bool {
-        displayNameInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    private var displayNameDraft: String {
+        displayNameInput.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var canUpdateDisplayName: Bool {
+        !isUpdatingDisplayName
+            && !displayNameDraft.isEmpty
+            && displayNameDraft != viewModel.state.displayName
+            && viewModel.state.connectionState == .joined
+            && !viewModel.state.isWebinarAttendee
     }
 
     private var isMeetingInviteCodeEmpty: Bool {
@@ -77,6 +87,16 @@ struct SettingsSheetView: View {
 
     private var meetingInviteCodeSummary: String {
         viewModel.state.meetingRequiresInviteCode ? "Required before joining" : "Not required"
+    }
+
+    private var mediaControlsDisabled: Bool {
+        viewModel.state.connectionState != .joined || viewModel.state.mediaPublishingDisabled
+    }
+
+    private var canUseHostControls: Bool {
+        viewModel.state.isAdmin
+            && viewModel.state.connectionState == .joined
+            && !viewModel.state.isWebinarAttendee
     }
 
     private var webinarAccessSummary: String {
@@ -101,17 +121,23 @@ struct SettingsSheetView: View {
     }
 
     private var microphoneSummary: String {
+        if viewModel.state.connectionState != .joined {
+            return "Unavailable until joined"
+        }
         if viewModel.state.mediaPublishingDisabled {
             return "Publishing disabled"
         }
         let state = viewModel.state.isMuted ? "Muted" : "On"
-        guard let label = selectedAudioInputLabel() else { return state }
+        let label = selectedAudioInputLabel() ?? "System default"
         return "\(state), \(label)"
     }
 
     private var cameraSummary: String {
         let cameraState = viewModel.state.isCameraOff ? "Off" : "On"
         let quality = viewModel.state.videoQuality == .low ? "low bandwidth" : "standard"
+        if viewModel.state.connectionState != .joined {
+            return "Unavailable until joined"
+        }
         if viewModel.state.mediaPublishingDisabled {
             return "Publishing disabled, \(quality)"
         }
@@ -185,6 +211,11 @@ struct SettingsSheetView: View {
         syncWebinarLinkDraftFromState()
     }
 
+    private func resetInviteCodeDrafts() {
+        meetingInviteCodeInput = ""
+        webinarInviteCodeInput = ""
+    }
+
     private func selectedAudioInputLabel() -> String? {
         guard let selectedId = viewModel.currentAudioInputId(), !selectedId.isEmpty else { return nil }
         return viewModel.availableAudioInputs().first { $0.id == selectedId }?.label
@@ -220,11 +251,16 @@ struct SettingsSheetView: View {
                 Text(title)
                     .font(ACMFont.trial(15, weight: .medium))
                     .foregroundStyle(isDisabled ? ACMColors.textFaint : ACMColors.text)
-                    .lineLimit(1)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                    #if !SKIP
+                    .fixedSize(horizontal: false, vertical: true)
+                    .layoutPriority(1)
+                    #endif
             }
         }
         .padding(.horizontal, ACMSpacing.sm)
-        .frame(height: 52)
+        .frame(minHeight: 52)
         .disabled(isDisabled)
         .opacity(isDisabled ? 0.62 : 1.0)
     }
@@ -236,46 +272,61 @@ struct SettingsSheetView: View {
         icon: String,
         androidIcon: String,
         isActive: Bool = false,
+        isDisabled: Bool = false,
         action: @escaping () -> Void
     ) -> some View {
+        let iconTint = isDisabled ? ACMColors.textFaint : (isActive ? ACMColors.primaryOrange : ACMColors.textMuted)
+        let androidTint = isDisabled ? "faint" : (isActive ? "accent" : "muted")
+
         Button(action: action) {
             HStack(spacing: ACMSpacing.sm) {
                 MeetingSheetIconBox(
                     icon: icon,
                     androidIcon: androidIcon,
-                    tint: isActive ? ACMColors.primaryOrange : ACMColors.textMuted,
-                    androidTint: isActive ? "accent" : "muted"
+                    tint: iconTint,
+                    androidTint: androidTint
                 )
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title)
                         .font(ACMFont.trial(15, weight: .medium))
-                        .foregroundStyle(ACMColors.text)
-                        .lineLimit(1)
+                        .foregroundStyle(isDisabled ? ACMColors.textFaint : ACMColors.text)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
                     Text(subtitle)
                         .font(ACMFont.trial(12))
                         .foregroundStyle(ACMColors.textFaint)
-                        .lineLimit(1)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
                 }
+                #if !SKIP
+                .fixedSize(horizontal: false, vertical: true)
+                .layoutPriority(1)
+                #endif
 
-                Spacer()
+                Spacer(minLength: 8)
 
                 ACMSystemIcon.icon("chevron.right", android: "arrow.forward", size: 16, tint: "faint")
                     .foregroundStyle(ACMColors.textFaint)
                     .frame(width: 24, height: 24)
             }
             .padding(.horizontal, ACMSpacing.sm)
-            .frame(height: 58)
+            .frame(minHeight: 58)
             .frame(maxWidth: .infinity, alignment: .leading)
             #if !SKIP
             .contentShape(Rectangle())
             #endif
         }
         .buttonStyle(.plain)
+        .disabled(isDisabled)
+        .opacity(isDisabled ? 0.62 : 1.0)
     }
 
     @ViewBuilder
     private func meetingInviteCodeRow() -> some View {
+        let canSetInviteCode = canUseHostControls && !isMeetingInviteCodeEmpty
+        let canClearInviteCode = canUseHostControls && viewModel.state.meetingRequiresInviteCode
+
         VStack(alignment: .leading, spacing: ACMSpacing.sm) {
             HStack(spacing: ACMSpacing.sm) {
                 MeetingSheetIconBox(
@@ -309,6 +360,7 @@ struct SettingsSheetView: View {
 #endif
 #endif
                 .autocorrectionDisabled(true)
+                .disabled(!canUseHostControls)
                 .padding(.horizontal, ACMSpacing.sm)
                 .frame(height: 44)
                 .acmColorBackground(ACMColors.surfaceRaised)
@@ -322,38 +374,39 @@ struct SettingsSheetView: View {
             HStack(spacing: ACMSpacing.sm) {
                 Button {
                     viewModel.setMeetingInviteCode(meetingInviteCodeInput)
+                    meetingInviteCodeInput = ""
                 } label: {
                     HStack(spacing: 6) {
-                        ACMSystemIcon.icon("checkmark", android: "check", size: 13, tint: isMeetingInviteCodeEmpty ? "faint" : "white")
+                        ACMSystemIcon.icon("checkmark", android: "check", size: 13, tint: canSetInviteCode ? "white" : "faint")
                         Text("Set")
                             .font(ACMFont.trial(14, weight: .medium))
                     }
-                    .foregroundStyle(isMeetingInviteCodeEmpty ? ACMColors.textFaint : Color.white)
+                    .foregroundStyle(canSetInviteCode ? Color.white : ACMColors.textFaint)
                     .frame(maxWidth: .infinity)
                     .frame(height: 40)
-                    .acmColorBackground(isMeetingInviteCodeEmpty ? ACMColors.surfaceRaised : ACMColors.primaryOrange)
+                    .acmColorBackground(canSetInviteCode ? ACMColors.primaryOrange : ACMColors.surfaceRaised)
                     .clipShape(RoundedRectangle(cornerRadius: ACMRadius.sm))
                 }
                 .buttonStyle(.plain)
-                .disabled(isMeetingInviteCodeEmpty)
+                .disabled(!canSetInviteCode)
 
                 Button {
                     viewModel.clearMeetingInviteCode()
                     meetingInviteCodeInput = ""
                 } label: {
                     HStack(spacing: 6) {
-                        ACMSystemIcon.icon("trash", android: "delete", size: 13, tint: viewModel.state.meetingRequiresInviteCode ? "danger" : "faint")
+                        ACMSystemIcon.icon("trash", android: "delete", size: 13, tint: canClearInviteCode ? "danger" : "faint")
                         Text("Remove")
                             .font(ACMFont.trial(14, weight: .medium))
                     }
-                    .foregroundStyle(viewModel.state.meetingRequiresInviteCode ? ACMColors.error : ACMColors.textFaint)
+                    .foregroundStyle(canClearInviteCode ? ACMColors.error : ACMColors.textFaint)
                     .frame(maxWidth: .infinity)
                     .frame(height: 40)
                     .acmColorBackground(ACMColors.surfaceRaised)
                     .clipShape(RoundedRectangle(cornerRadius: ACMRadius.sm))
                 }
                 .buttonStyle(.plain)
-                .disabled(!viewModel.state.meetingRequiresInviteCode)
+                .disabled(!canClearInviteCode)
             }
         }
         .padding(ACMSpacing.sm)
@@ -377,7 +430,8 @@ struct SettingsSheetView: View {
                             }
                         }
                     ),
-                    isActive: viewModel.state.isWebinarEnabled
+                    isActive: viewModel.state.isWebinarEnabled,
+                    isDisabled: !canUseHostControls
                 )
 
                 if viewModel.state.isWebinarEnabled {
@@ -387,7 +441,8 @@ struct SettingsSheetView: View {
                         subtitle: webinarAccessSummary,
                         icon: viewModel.state.isWebinarLocked ? "lock.fill" : "globe",
                         androidIcon: viewModel.state.isWebinarLocked ? "lock" : "public",
-                        isActive: viewModel.state.isWebinarPublicAccess || viewModel.state.isWebinarLocked
+                        isActive: viewModel.state.isWebinarPublicAccess || viewModel.state.isWebinarLocked,
+                        isDisabled: !canUseHostControls
                     ) {
                         onOpenWebinarAccessSettings?()
                     }
@@ -396,7 +451,8 @@ struct SettingsSheetView: View {
                         "Capacity",
                         subtitle: webinarCapacitySummary,
                         icon: "person.2.fill",
-                        androidIcon: "participants"
+                        androidIcon: "participants",
+                        isDisabled: !canUseHostControls
                     ) {
                         onOpenWebinarCapacitySettings?()
                     }
@@ -406,7 +462,8 @@ struct SettingsSheetView: View {
                         subtitle: webinarInviteCodeSummary,
                         icon: "key.fill",
                         androidIcon: "key",
-                        isActive: viewModel.state.webinarRequiresInviteCode
+                        isActive: viewModel.state.webinarRequiresInviteCode,
+                        isDisabled: !canUseHostControls
                     ) {
                         onOpenWebinarInviteCodeSettings?()
                     }
@@ -416,7 +473,8 @@ struct SettingsSheetView: View {
                         subtitle: webinarLinkSummary,
                         icon: "link",
                         androidIcon: "link",
-                        isActive: viewModel.state.webinarLinkSlug != nil
+                        isActive: viewModel.state.webinarLinkSlug != nil,
+                        isDisabled: !canUseHostControls
                     ) {
                         onOpenWebinarLinkSettings?()
                     }
@@ -451,7 +509,8 @@ struct SettingsSheetView: View {
                             }
                         }
                     ),
-                    isActive: viewModel.state.isWebinarPublicAccess
+                    isActive: viewModel.state.isWebinarPublicAccess,
+                    isDisabled: !canUseHostControls
                 )
                 MoreRowDivider()
                 settingsToggleRow(
@@ -466,7 +525,8 @@ struct SettingsSheetView: View {
                             }
                         }
                     ),
-                    isActive: viewModel.state.isWebinarLocked
+                    isActive: viewModel.state.isWebinarLocked,
+                    isDisabled: !canUseHostControls
                 )
             }
         }
@@ -507,6 +567,8 @@ struct SettingsSheetView: View {
 
     @ViewBuilder
     private func webinarCapacityRow() -> some View {
+        let canSaveCapacity = canUseHostControls && webinarMaxAttendeesValue != nil
+
         VStack(alignment: .leading, spacing: ACMSpacing.sm) {
             HStack(spacing: ACMSpacing.sm) {
                 MeetingSheetIconBox(
@@ -540,6 +602,7 @@ struct SettingsSheetView: View {
                     .keyboardType(.numberPad)
 #endif
 #endif
+                    .disabled(!canUseHostControls)
                     .padding(.horizontal, ACMSpacing.sm)
                     .frame(height: 40)
                     .acmColorBackground(ACMColors.surfaceRaised)
@@ -558,13 +621,13 @@ struct SettingsSheetView: View {
                 } label: {
                     Text("Save")
                         .font(ACMFont.trial(14, weight: .medium))
-                        .foregroundStyle(webinarMaxAttendeesValue == nil ? ACMColors.textFaint : Color.white)
+                        .foregroundStyle(canSaveCapacity ? Color.white : ACMColors.textFaint)
                         .frame(width: 72, height: 40)
-                        .acmColorBackground(webinarMaxAttendeesValue == nil ? ACMColors.surfaceRaised : ACMColors.primaryOrange)
+                        .acmColorBackground(canSaveCapacity ? ACMColors.primaryOrange : ACMColors.surfaceRaised)
                         .clipShape(RoundedRectangle(cornerRadius: ACMRadius.sm))
                 }
                 .buttonStyle(.plain)
-                .disabled(webinarMaxAttendeesValue == nil)
+                .disabled(!canSaveCapacity)
             }
         }
         .padding(ACMSpacing.sm)
@@ -572,6 +635,10 @@ struct SettingsSheetView: View {
 
     @ViewBuilder
     private func webinarInviteCodeRow() -> some View {
+        let isEmpty = webinarInviteCodeInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let canSetInviteCode = canUseHostControls && !isEmpty
+        let canClearInviteCode = canUseHostControls && viewModel.state.webinarRequiresInviteCode
+
         VStack(alignment: .leading, spacing: ACMSpacing.sm) {
             HStack(spacing: ACMSpacing.sm) {
                 MeetingSheetIconBox(
@@ -605,6 +672,7 @@ struct SettingsSheetView: View {
 #endif
 #endif
                 .autocorrectionDisabled(true)
+                .disabled(!canUseHostControls)
                 .padding(.horizontal, ACMSpacing.sm)
                 .frame(height: 40)
                 .acmColorBackground(ACMColors.surfaceRaised)
@@ -616,20 +684,20 @@ struct SettingsSheetView: View {
                 .clipShape(RoundedRectangle(cornerRadius: ACMRadius.sm))
 
             HStack(spacing: ACMSpacing.sm) {
-                let isEmpty = webinarInviteCodeInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 Button {
                     viewModel.setWebinarInviteCode(webinarInviteCodeInput)
+                    webinarInviteCodeInput = ""
                 } label: {
                     Text("Set")
                         .font(ACMFont.trial(14, weight: .medium))
-                        .foregroundStyle(isEmpty ? ACMColors.textFaint : Color.white)
+                        .foregroundStyle(canSetInviteCode ? Color.white : ACMColors.textFaint)
                         .frame(maxWidth: .infinity)
                         .frame(height: 40)
-                        .acmColorBackground(isEmpty ? ACMColors.surfaceRaised : ACMColors.primaryOrange)
+                        .acmColorBackground(canSetInviteCode ? ACMColors.primaryOrange : ACMColors.surfaceRaised)
                         .clipShape(RoundedRectangle(cornerRadius: ACMRadius.sm))
                 }
                 .buttonStyle(.plain)
-                .disabled(isEmpty)
+                .disabled(!canSetInviteCode)
 
                 Button {
                     viewModel.clearWebinarInviteCode()
@@ -637,14 +705,14 @@ struct SettingsSheetView: View {
                 } label: {
                     Text("Remove")
                         .font(ACMFont.trial(14, weight: .medium))
-                        .foregroundStyle(viewModel.state.webinarRequiresInviteCode ? ACMColors.error : ACMColors.textFaint)
+                        .foregroundStyle(canClearInviteCode ? ACMColors.error : ACMColors.textFaint)
                         .frame(maxWidth: .infinity)
                         .frame(height: 40)
                         .acmColorBackground(ACMColors.surfaceRaised)
                         .clipShape(RoundedRectangle(cornerRadius: ACMRadius.sm))
                 }
                 .buttonStyle(.plain)
-                .disabled(!viewModel.state.webinarRequiresInviteCode)
+                .disabled(!canClearInviteCode)
             }
         }
         .padding(ACMSpacing.sm)
@@ -652,6 +720,13 @@ struct SettingsSheetView: View {
 
     @ViewBuilder
     private func webinarLinkRow() -> some View {
+        let hasWebinarLink = viewModel.state.webinarLinkSlug != nil
+        let canSetLink = canUseHostControls && isWebinarLinkInputValid && !sanitizedWebinarLinkInput.isEmpty
+        let canClearLink = canUseHostControls && hasWebinarLink
+        let canUsePrimaryLinkAction = hasWebinarLink || canUseHostControls
+        let canConfirmLinkRotation = canUseHostControls && isConfirmingWebinarLinkRotation
+        let canStartLinkRotation = canUseHostControls && hasWebinarLink && !isConfirmingWebinarLinkRotation
+
         VStack(alignment: .leading, spacing: ACMSpacing.sm) {
             HStack(spacing: ACMSpacing.sm) {
                 MeetingSheetIconBox(
@@ -692,6 +767,7 @@ struct SettingsSheetView: View {
 #endif
 #endif
                 .autocorrectionDisabled(true)
+                .disabled(!canUseHostControls)
                 .padding(.horizontal, ACMSpacing.sm)
                 .frame(height: 40)
                 .acmColorBackground(ACMColors.surfaceRaised)
@@ -710,14 +786,14 @@ struct SettingsSheetView: View {
                 } label: {
                     Text("Set link")
                         .font(ACMFont.trial(14, weight: .medium))
-                        .foregroundStyle(!isWebinarLinkInputValid || sanitizedWebinarLinkInput.isEmpty ? ACMColors.textFaint : Color.white)
+                        .foregroundStyle(canSetLink ? Color.white : ACMColors.textFaint)
                         .frame(maxWidth: .infinity)
                         .frame(height: 40)
-                        .acmColorBackground(!isWebinarLinkInputValid || sanitizedWebinarLinkInput.isEmpty ? ACMColors.surfaceRaised : ACMColors.primaryOrange)
+                        .acmColorBackground(canSetLink ? ACMColors.primaryOrange : ACMColors.surfaceRaised)
                         .clipShape(RoundedRectangle(cornerRadius: ACMRadius.sm))
                 }
                 .buttonStyle(.plain)
-                .disabled(!isWebinarLinkInputValid || sanitizedWebinarLinkInput.isEmpty)
+                .disabled(!canSetLink)
 
                 Button {
                     viewModel.clearWebinarLinkSlug()
@@ -726,18 +802,19 @@ struct SettingsSheetView: View {
                 } label: {
                     Text("Clear")
                         .font(ACMFont.trial(14, weight: .medium))
-                        .foregroundStyle(viewModel.state.webinarLinkSlug == nil ? ACMColors.textFaint : ACMColors.error)
+                        .foregroundStyle(canClearLink ? ACMColors.error : ACMColors.textFaint)
                         .frame(maxWidth: .infinity)
                         .frame(height: 40)
                         .acmColorBackground(ACMColors.surfaceRaised)
                         .clipShape(RoundedRectangle(cornerRadius: ACMRadius.sm))
                 }
                 .buttonStyle(.plain)
-                .disabled(viewModel.state.webinarLinkSlug == nil)
+                .disabled(!canClearLink)
             }
 
             HStack(spacing: ACMSpacing.sm) {
                 Button {
+                    guard canUsePrimaryLinkAction else { return }
                     Task {
                         if let link = await viewModel.copyableWebinarLink() {
                             isConfirmingWebinarLinkRotation = false
@@ -745,18 +822,20 @@ struct SettingsSheetView: View {
                         }
                     }
                 } label: {
-                    Text(didCopyWebinarLink ? "Copied" : (viewModel.state.webinarLinkSlug == nil ? "Generate" : "Copy"))
+                    Text(didCopyWebinarLink ? "Copied" : (hasWebinarLink ? "Copy" : "Generate"))
                         .font(ACMFont.trial(14, weight: .medium))
-                        .foregroundStyle(Color.white)
+                        .foregroundStyle(canUsePrimaryLinkAction ? Color.white : ACMColors.textFaint)
                         .frame(maxWidth: .infinity)
                         .frame(height: 40)
-                        .acmColorBackground(didCopyWebinarLink ? ACMColors.success : ACMColors.primaryOrange)
+                        .acmColorBackground(didCopyWebinarLink ? ACMColors.success : (canUsePrimaryLinkAction ? ACMColors.primaryOrange : ACMColors.surfaceRaised))
                         .clipShape(RoundedRectangle(cornerRadius: ACMRadius.sm))
                 }
                 .buttonStyle(.plain)
+                .disabled(!canUsePrimaryLinkAction)
 
                 if isConfirmingWebinarLinkRotation {
                     Button {
+                        guard canConfirmLinkRotation else { return }
                         Task {
                             if let link = await viewModel.rotateWebinarLink() {
                                 webinarLinkCodeInput = viewModel.state.webinarLinkSlug ?? ""
@@ -767,13 +846,14 @@ struct SettingsSheetView: View {
                     } label: {
                         Text("Confirm")
                             .font(ACMFont.trial(14, weight: .medium))
-                            .foregroundStyle(Color.white)
+                            .foregroundStyle(canConfirmLinkRotation ? Color.white : ACMColors.textFaint)
                             .frame(maxWidth: .infinity)
                             .frame(height: 40)
-                            .acmColorBackground(ACMColors.error)
+                            .acmColorBackground(canConfirmLinkRotation ? ACMColors.error : ACMColors.surfaceRaised)
                             .clipShape(RoundedRectangle(cornerRadius: ACMRadius.sm))
                     }
                     .buttonStyle(.plain)
+                    .disabled(!canConfirmLinkRotation)
 
                     Button {
                         isConfirmingWebinarLinkRotation = false
@@ -787,19 +867,21 @@ struct SettingsSheetView: View {
                             .clipShape(RoundedRectangle(cornerRadius: ACMRadius.sm))
                     }
                     .buttonStyle(.plain)
-                } else if viewModel.state.webinarLinkSlug != nil {
+                } else if hasWebinarLink {
                     Button {
+                        guard canStartLinkRotation else { return }
                         isConfirmingWebinarLinkRotation = true
                     } label: {
                         Text("Rotate")
                             .font(ACMFont.trial(14, weight: .medium))
-                            .foregroundStyle(ACMColors.text)
+                            .foregroundStyle(canStartLinkRotation ? ACMColors.text : ACMColors.textFaint)
                             .frame(maxWidth: .infinity)
                             .frame(height: 40)
                             .acmColorBackground(ACMColors.surfaceRaised)
                             .clipShape(RoundedRectangle(cornerRadius: ACMRadius.sm))
                     }
                     .buttonStyle(.plain)
+                    .disabled(!canStartLinkRotation)
                 }
             }
         }
@@ -878,20 +960,20 @@ struct SettingsSheetView: View {
     @ViewBuilder
     private func updateDisplayNameRow() -> some View {
         Button {
-            viewModel.updateDisplayName(displayNameInput)
+            submitDisplayNameUpdate()
         } label: {
             HStack(spacing: ACMSpacing.sm) {
                 MeetingSheetIconBox(
                     icon: "paperplane.fill",
                     androidIcon: "send",
-                    tint: isDisplayNameEmpty ? ACMColors.textFaint : Color.white,
-                    androidTint: isDisplayNameEmpty ? "faint" : "white",
-                    background: isDisplayNameEmpty ? ACMColors.surfaceRaised : ACMColors.primaryOrange
+                    tint: canUpdateDisplayName ? Color.white : ACMColors.textFaint,
+                    androidTint: canUpdateDisplayName ? "white" : "faint",
+                    background: canUpdateDisplayName ? ACMColors.primaryOrange : ACMColors.surfaceRaised
                 )
 
-                Text("Update display name")
+                Text(isUpdatingDisplayName ? "Updating display name" : "Update display name")
                     .font(ACMFont.trial(15, weight: .medium))
-                    .foregroundStyle(isDisplayNameEmpty ? ACMColors.textFaint : ACMColors.text)
+                    .foregroundStyle(canUpdateDisplayName ? ACMColors.text : ACMColors.textFaint)
                     .lineLimit(1)
 
                 Spacer()
@@ -904,8 +986,20 @@ struct SettingsSheetView: View {
 #endif
         }
         .buttonStyle(.plain)
-        .disabled(isDisplayNameEmpty)
-        .opacity(isDisplayNameEmpty ? 0.62 : 1.0)
+        .disabled(!canUpdateDisplayName)
+        .opacity(canUpdateDisplayName ? 1.0 : 0.62)
+    }
+
+    private func submitDisplayNameUpdate() {
+        guard canUpdateDisplayName else { return }
+        isUpdatingDisplayName = true
+        Task { @MainActor in
+            let updated = await viewModel.updateDisplayName(displayNameInput)
+            if updated {
+                displayNameInput = viewModel.state.displayName
+            }
+            isUpdatingDisplayName = false
+        }
     }
 
     @ViewBuilder
@@ -938,7 +1032,13 @@ struct SettingsSheetView: View {
     @ViewBuilder
     private func signOutRow() -> some View {
         Button {
-            appState.clearAuthentication()
+            guard !isSigningOut else { return }
+            isSigningOut = true
+            Task { @MainActor in
+                viewModel.handleLocalSignOutDuringMeeting()
+                await appState.clearAuthenticationAndWait()
+                isSigningOut = false
+            }
         } label: {
             HStack(spacing: ACMSpacing.sm) {
                 MeetingSheetIconBox(
@@ -948,7 +1048,7 @@ struct SettingsSheetView: View {
                     androidTint: "danger"
                 )
 
-                Text("Sign out")
+                Text(isSigningOut ? "Signing out" : "Sign out")
                     .font(ACMFont.trial(15, weight: .medium))
                     .foregroundStyle(ACMColors.error)
                     .lineLimit(1)
@@ -963,6 +1063,8 @@ struct SettingsSheetView: View {
 #endif
         }
         .buttonStyle(.plain)
+        .disabled(isSigningOut)
+        .opacity(isSigningOut ? 0.62 : 1.0)
     }
 
     private func accountTitle(for user: AppState.User) -> String {
@@ -997,20 +1099,24 @@ struct SettingsSheetView: View {
 
             Spacer()
 
-            Picker("", selection: Binding(
-                get: { viewModel.currentAudioInputId() ?? "" },
-                set: { next in
-                    if !next.isEmpty {
+            if inputs.isEmpty {
+                Text("System default")
+                    .font(ACMFont.trial(14))
+                    .foregroundStyle(ACMColors.textMuted)
+            } else {
+                Picker("", selection: Binding(
+                    get: { viewModel.currentAudioInputId() ?? "" },
+                    set: { next in
                         viewModel.setAudioInput(next)
                     }
+                )) {
+                    Text("System default").tag("")
+                    ForEach(inputs) { device in
+                        Text(device.label).tag(device.id)
+                    }
                 }
-            )) {
-                ForEach(inputs) { device in
-                    Text(device.label).tag(device.id)
-                }
+                .tint(ACMColors.primaryOrange)
             }
-            .tint(ACMColors.primaryOrange)
-            .disabled(inputs.isEmpty)
         }
         .padding(.horizontal, ACMSpacing.sm)
         .frame(height: 52)
@@ -1034,11 +1140,10 @@ struct SettingsSheetView: View {
             Picker("", selection: Binding(
                 get: { viewModel.currentAudioOutputId() ?? "" },
                 set: { next in
-                    if !next.isEmpty {
-                        viewModel.setAudioOutput(next)
-                    }
+                    viewModel.setAudioOutput(next)
                 }
             )) {
+                Text("System default").tag("")
                 ForEach(outputs) { device in
                     Text(device.label).tag(device.id)
                 }
@@ -1154,10 +1259,11 @@ struct SettingsSheetView: View {
                 MeetingSheetSectionCard {
                     settingsNavigationRow(
                         "Room controls",
-                        subtitle: viewModel.state.meetingRequiresInviteCode ? "Invite code required" : "Locks, guests, chat, invite code",
+                        subtitle: viewModel.state.meetingRequiresInviteCode ? "Invite code required" : "Locks, guests, chat",
                         icon: viewModel.state.isRoomLocked ? "lock.fill" : "lock.open.fill",
                         androidIcon: viewModel.state.isRoomLocked ? "lock" : "lock.open",
-                        isActive: viewModel.state.isRoomLocked || viewModel.state.isChatLocked || viewModel.state.isNoGuests || viewModel.state.meetingRequiresInviteCode
+                        isActive: viewModel.state.isRoomLocked || viewModel.state.isChatLocked || viewModel.state.isNoGuests || viewModel.state.meetingRequiresInviteCode,
+                        isDisabled: !canUseHostControls
                     ) {
                         onOpenRoomSettings?()
                     }
@@ -1167,7 +1273,8 @@ struct SettingsSheetView: View {
                         subtitle: viewModel.state.isWebinarEnabled ? "\(viewModel.state.webinarAttendeeCount) attendees" : "Mode, access, links",
                         icon: "person.2.fill",
                         androidIcon: "participants",
-                        isActive: viewModel.state.isWebinarEnabled
+                        isActive: viewModel.state.isWebinarEnabled,
+                        isDisabled: !canUseHostControls
                     ) {
                         onOpenWebinarSettings?()
                     }
@@ -1190,10 +1297,10 @@ struct SettingsSheetView: View {
                 MoreRowDivider()
                 settingsNavigationRow(
                     "Audio and video",
-                    subtitle: viewModel.state.mediaPublishingDisabled ? "Publishing disabled" : "Mic, camera, speaker",
+                    subtitle: mediaControlsDisabled ? "Mic and camera unavailable" : "Mic, camera, speaker",
                     icon: viewModel.state.isMuted ? "mic.slash.fill" : "mic.fill",
                     androidIcon: viewModel.state.isMuted ? "mic.off" : "mic",
-                    isActive: !viewModel.state.isMuted || !viewModel.state.isCameraOff
+                    isActive: (!viewModel.state.isMuted || !viewModel.state.isCameraOff) && !mediaControlsDisabled
                 ) {
                     onOpenAudioVideoSettings?()
                 }
@@ -1212,7 +1319,8 @@ struct SettingsSheetView: View {
                     subtitle: roomAccessSummary,
                     icon: viewModel.state.isRoomLocked ? "lock.fill" : "lock.open.fill",
                     androidIcon: viewModel.state.isRoomLocked ? "lock" : "lock.open",
-                    isActive: viewModel.state.isRoomLocked || viewModel.state.isNoGuests
+                    isActive: viewModel.state.isRoomLocked || viewModel.state.isNoGuests,
+                    isDisabled: !canUseHostControls
                 ) {
                     onOpenRoomAccessSettings?()
                 }
@@ -1222,7 +1330,8 @@ struct SettingsSheetView: View {
                     subtitle: roomCommunicationSummary,
                     icon: "message.fill",
                     androidIcon: "chat",
-                    isActive: viewModel.state.isChatLocked || !viewModel.state.isDmEnabled || viewModel.state.isTtsDisabled
+                    isActive: viewModel.state.isChatLocked || !viewModel.state.isDmEnabled || viewModel.state.isTtsDisabled,
+                    isDisabled: !canUseHostControls
                 ) {
                     onOpenRoomCommunicationSettings?()
                 }
@@ -1232,7 +1341,8 @@ struct SettingsSheetView: View {
                     subtitle: meetingInviteCodeSummary,
                     icon: "key.fill",
                     androidIcon: "key",
-                    isActive: viewModel.state.meetingRequiresInviteCode
+                    isActive: viewModel.state.meetingRequiresInviteCode,
+                    isDisabled: !canUseHostControls
                 ) {
                     onOpenMeetingInviteCodeSettings?()
                 }
@@ -1258,7 +1368,8 @@ struct SettingsSheetView: View {
                             }
                         }
                     ),
-                    isActive: viewModel.state.isRoomLocked
+                    isActive: viewModel.state.isRoomLocked,
+                    isDisabled: !canUseHostControls
                 )
                 MoreRowDivider()
                 settingsToggleRow(
@@ -1273,7 +1384,8 @@ struct SettingsSheetView: View {
                             }
                         }
                     ),
-                    isActive: viewModel.state.isNoGuests
+                    isActive: viewModel.state.isNoGuests,
+                    isDisabled: !canUseHostControls
                 )
             }
         }
@@ -1297,7 +1409,8 @@ struct SettingsSheetView: View {
                             }
                         }
                     ),
-                    isActive: viewModel.state.isChatLocked
+                    isActive: viewModel.state.isChatLocked,
+                    isDisabled: !canUseHostControls
                 )
                 MoreRowDivider()
                 settingsToggleRow(
@@ -1312,7 +1425,8 @@ struct SettingsSheetView: View {
                             }
                         }
                     ),
-                    isActive: viewModel.state.isDmEnabled
+                    isActive: viewModel.state.isDmEnabled,
+                    isDisabled: !canUseHostControls
                 )
                 MoreRowDivider()
                 settingsToggleRow(
@@ -1327,7 +1441,8 @@ struct SettingsSheetView: View {
                             }
                         }
                     ),
-                    isActive: !viewModel.state.isTtsDisabled
+                    isActive: !viewModel.state.isTtsDisabled,
+                    isDisabled: !canUseHostControls
                 )
             }
         }
@@ -1376,7 +1491,7 @@ struct SettingsSheetView: View {
                     subtitle: microphoneSummary,
                     icon: viewModel.state.isMuted ? "mic.slash.fill" : "mic.fill",
                     androidIcon: viewModel.state.isMuted ? "mic.off" : "mic",
-                    isActive: !viewModel.state.isMuted && !viewModel.state.mediaPublishingDisabled
+                    isActive: !viewModel.state.isMuted && !mediaControlsDisabled
                 ) {
                     onOpenMicrophoneSettings?()
                 }
@@ -1386,7 +1501,7 @@ struct SettingsSheetView: View {
                     subtitle: cameraSummary,
                     icon: viewModel.state.isCameraOff ? "video.slash.fill" : "video.fill",
                     androidIcon: viewModel.state.isCameraOff ? "video.off" : "video",
-                    isActive: (!viewModel.state.isCameraOff || viewModel.state.videoQuality == .low) && !viewModel.state.mediaPublishingDisabled
+                    isActive: (!viewModel.state.isCameraOff || viewModel.state.videoQuality == .low) && !mediaControlsDisabled
                 ) {
                     onOpenCameraSettings?()
                 }
@@ -1423,7 +1538,7 @@ struct SettingsSheetView: View {
                         }
                     ),
                     isActive: !viewModel.state.isMuted,
-                    isDisabled: viewModel.state.mediaPublishingDisabled
+                    isDisabled: mediaControlsDisabled
                 )
                 MeetingSheetRowDivider(inset: ACMSpacing.sm + 32 + ACMSpacing.sm)
                 microphoneInputRow()
@@ -1451,7 +1566,7 @@ struct SettingsSheetView: View {
                         }
                     ),
                     isActive: !viewModel.state.isCameraOff,
-                    isDisabled: viewModel.state.mediaPublishingDisabled
+                    isDisabled: mediaControlsDisabled
                 )
                 MeetingSheetRowDivider(inset: ACMSpacing.sm + 32 + ACMSpacing.sm)
                 qualityRow()
@@ -1477,15 +1592,15 @@ struct SettingsSheetView: View {
             MeetingSheetHeader(title: title, onBack: onBack, onDone: { dismiss() })
 
             if bodyReady {
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: ACMSpacing.md) {
-                    settingsContent
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: ACMSpacing.md) {
+                        settingsContent
+                    }
+                    .padding(.horizontal, ACMSpacing.lg)
+                    .padding(.top, ACMSpacing.md)
+                    .padding(.bottom, ACMSpacing.lg)
                 }
-                .padding(.horizontal, ACMSpacing.lg)
-                .padding(.top, ACMSpacing.md)
-                .padding(.bottom, ACMSpacing.lg)
-            }
-            .transition(.opacity)
+                .transition(.opacity)
             } else {
                 Spacer()
             }
@@ -1500,12 +1615,14 @@ struct SettingsSheetView: View {
                 viewModel.refreshMeetingConfig()
                 viewModel.refreshWebinarConfig()
                 syncWebinarDraftsFromState()
+                resetInviteCodeDrafts()
             }
         }
         .onDisappear {
             webinarLinkCopyFeedbackGeneration += 1
             didCopyWebinarLink = false
             isConfirmingWebinarLinkRotation = false
+            resetInviteCodeDrafts()
         }
         .onChange(of: viewModel.state.webinarMaxAttendees) { _, _ in
             syncWebinarCapacityDraftFromState()
@@ -1513,6 +1630,16 @@ struct SettingsSheetView: View {
         .onChange(of: viewModel.state.webinarLinkSlug) { _, _ in
             syncWebinarLinkDraftFromState()
             isConfirmingWebinarLinkRotation = false
+        }
+        .onChange(of: viewModel.state.meetingRequiresInviteCode) { _, requiresInviteCode in
+            if !requiresInviteCode {
+                meetingInviteCodeInput = ""
+            }
+        }
+        .onChange(of: viewModel.state.webinarRequiresInviteCode) { _, requiresInviteCode in
+            if !requiresInviteCode {
+                webinarInviteCodeInput = ""
+            }
         }
     }
 }

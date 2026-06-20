@@ -1,10 +1,3 @@
-//
-//  Haptics.swift
-//  Conclave
-//
-//  Haptic feedback manager for iOS
-//
-
 #if canImport(UIKit)
 import UIKit
 

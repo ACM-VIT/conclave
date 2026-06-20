@@ -141,6 +141,8 @@ struct SpotlightLayoutView: View {
     @ViewBuilder
     func tileFor(userId: String) -> some View {
         if viewModel.state.isLocalParticipantUserId(userId) {
+            let localVideoTrack = viewModel.webRTCClient.getLocalVideoTrack()
+            let captureSession = (!viewModel.state.isCameraOff && localVideoTrack == nil) ? viewModel.webRTCClient.getCaptureSession() : nil
             VideoGridItem(
                 displayName: viewModel.state.displayName,
                 isMuted: viewModel.state.isMuted,
@@ -149,8 +151,8 @@ struct SpotlightLayoutView: View {
                 isGhost: viewModel.state.isGhostMode,
                 isSpeaking: viewModel.state.effectiveActiveSpeakerId.map { viewModel.state.isLocalParticipantUserId($0) } == true,
                 isLocal: true,
-                captureSession: viewModel.webRTCClient.getCaptureSession(),
-                localVideoTrack: viewModel.webRTCClient.getLocalVideoTrack()
+                captureSession: captureSession,
+                localVideoTrack: localVideoTrack
             )
         } else if let participant = viewModel.state.participants[userId] {
             VideoGridItem(
@@ -161,6 +163,7 @@ struct SpotlightLayoutView: View {
                 isGhost: participant.isGhost,
                 isSpeaking: viewModel.state.effectiveActiveSpeakerId == participant.id,
                 isLocal: false,
+                connectionStatus: participant.connectionStatus,
                 trackWrapper: viewModel.webRTCClient.remoteVideoTracks[participant.id]
             )
         } else {

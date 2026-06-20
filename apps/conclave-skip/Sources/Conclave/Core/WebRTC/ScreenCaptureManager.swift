@@ -26,6 +26,42 @@ import ReplayKit
 import WebRTC
 import Combine
 
+private final class ScreenShareFrameRateGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var minFrameIntervalNs: UInt64 = 41_666_666
+    private var lastAcceptedFrameNs: UInt64 = 0
+
+    func update(maxFrameRate: Double) {
+        let clampedFrameRate = Swift.max(1.0, Swift.min(maxFrameRate, 60.0))
+        let nextInterval = UInt64(1_000_000_000.0 / clampedFrameRate)
+        lock.lock()
+        minFrameIntervalNs = Swift.max(1, nextInterval)
+        lastAcceptedFrameNs = 0
+        lock.unlock()
+    }
+
+    func reset() {
+        lock.lock()
+        lastAcceptedFrameNs = 0
+        lock.unlock()
+    }
+
+    func shouldAcceptFrame(
+        nowNanoseconds: UInt64 = DispatchTime.now().uptimeNanoseconds
+    ) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+
+        if lastAcceptedFrameNs != 0,
+           nowNanoseconds - lastAcceptedFrameNs < minFrameIntervalNs {
+            return false
+        }
+
+        lastAcceptedFrameNs = nowNanoseconds
+        return true
+    }
+}
+
 /// Manages screen capture coordination between the broadcast extension and WebRTC.
 @MainActor
 final class ScreenCaptureManager: NSObject {
@@ -55,11 +91,16 @@ final class ScreenCaptureManager: NSObject {
     private var connected = false
     private var startGeneration = 0
     private var pendingStartContinuation: CheckedContinuation<Void, Error>?
+    private let frameGate = ScreenShareFrameRateGate()
 
     // MARK: - Public Methods
 
     var isCaptureActive: Bool {
         server != nil && connected
+    }
+
+    func updateMaxFrameRate(_ maxFrameRate: Double) {
+        frameGate.update(maxFrameRate: maxFrameRate)
     }
 
     /// Stand up the socket server and present the system broadcast picker. The
@@ -74,6 +115,7 @@ final class ScreenCaptureManager: NSObject {
 
         self.webRTCClient = webRTCClient
         self.connected = false
+        frameGate.update(maxFrameRate: webRTCClient.screenShareCaptureMaxFramerate)
         startGeneration &+= 1
         let generation = startGeneration
 
@@ -90,6 +132,9 @@ final class ScreenCaptureManager: NSObject {
                     guard self?.startGeneration == generation else { return }
                     self?.webRTCClient?.feedScreenFrame(box.frame)
                 }
+            },
+            shouldDecodeFrame: { [frameGate] in
+                frameGate.shouldAcceptFrame()
             },
             onConnect: { [weak self] in
                 DispatchQueue.main.async { [weak self] in
@@ -148,6 +193,7 @@ final class ScreenCaptureManager: NSObject {
     func stopCapture() async {
         startGeneration &+= 1
         connected = false
+        frameGate.reset()
         server?.stop()
         server = nil
         webRTCClient = nil
@@ -161,6 +207,7 @@ final class ScreenCaptureManager: NSObject {
         guard server != nil else { return }
         startGeneration &+= 1
         connected = false
+        frameGate.reset()
         server?.stop()
         server = nil
         webRTCClient = nil
@@ -174,6 +221,7 @@ final class ScreenCaptureManager: NSObject {
               pendingStartContinuation != nil else { return }
         startGeneration &+= 1
         connected = false
+        frameGate.reset()
         server?.stop()
         server = nil
         webRTCClient = nil

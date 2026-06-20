@@ -95,6 +95,15 @@ export type FaceFilterId =
   | "mustache"
   | "thin-mustache"
   | "sparkles"
+  | "high-ponytail"
+  | "graduation-cap"
+  | "strawberry"
+  | "santa-beard"
+  | "dreidel"
+  | "valentines-panda"
+  | "spring"
+  | "dragon"
+  | "cowboy"
   | "aviator"
   | "cat-eye-beret"
   | "cute-glasses"
@@ -107,6 +116,23 @@ export type FaceFilterId =
   | "velvety-dog"
   | "hair-medium-beard"
   | "long-wavy-hair"
+  | "rusty-robot"
+  | "feathery-dinosaur"
+  | "diwali-2023"
+  | "film-noir"
+  | "octopus-on-head"
+  | "fried-eggs"
+  | "fascinator"
+  | "rainbow-wig"
+  | "pride-heart"
+  | "unicorn-headband"
+  | "scifi-helmet"
+  | "puffer-fish"
+  | "sloth"
+  | "owl"
+  | "pig"
+  | "safety-helmet"
+  | "cozy-blanket"
   | "bunny"
   | "working-bunny"
   | "bunny-ears"
@@ -296,6 +322,15 @@ const FACE_FILTER_IDS = new Set<FaceFilterId>([
   "mustache",
   "thin-mustache",
   "sparkles",
+  "high-ponytail",
+  "graduation-cap",
+  "strawberry",
+  "santa-beard",
+  "dreidel",
+  "valentines-panda",
+  "spring",
+  "dragon",
+  "cowboy",
   "aviator",
   "cat-eye-beret",
   "cute-glasses",
@@ -308,6 +343,23 @@ const FACE_FILTER_IDS = new Set<FaceFilterId>([
   "velvety-dog",
   "hair-medium-beard",
   "long-wavy-hair",
+  "rusty-robot",
+  "feathery-dinosaur",
+  "diwali-2023",
+  "film-noir",
+  "octopus-on-head",
+  "fried-eggs",
+  "fascinator",
+  "rainbow-wig",
+  "pride-heart",
+  "unicorn-headband",
+  "scifi-helmet",
+  "puffer-fish",
+  "sloth",
+  "owl",
+  "pig",
+  "safety-helmet",
+  "cozy-blanket",
   "bunny",
   "working-bunny",
   "bunny-ears",
@@ -601,11 +653,77 @@ export const FACE_FILTER_EFFECT_GRAPHS: Partial<
     "face-prop",
     "beach_day_v2_4288ff378ab723a6f289a2616184ae04.png",
   ),
+  "high-ponytail": createMeetFaceGraph(
+    "high_ponytail_icon",
+    7,
+    "face-hair",
+    "high_ponytail_icon_82225c06f6983cc72ea337b1a8d85f67.png",
+  ),
+  "graduation-cap": createMeetFaceGraph(
+    "graduation_cap_v2",
+    66,
+    "face-costume",
+    "graduation_cap_v2_4a677f623a44e04d40f40ab393b48fe7.png",
+  ),
+  strawberry: createMeetFaceGraph(
+    "strawberry_js_v2",
+    332,
+    "face-costume",
+    "strawberry_js_v2_f73238b1d7a86197d30b921681e49df3.png",
+  ),
+  "santa-beard": createMeetFaceGraph(
+    "santa_beard",
+    371,
+    "face-costume",
+    "santa_beard_e93f924d975eddeba2b4b9a54d6c7e7f.png",
+  ),
+  dreidel: createMeetFaceGraph(
+    "dreidel_js",
+    372,
+    "face-costume",
+    "dreidel_js_c65da9c99635ba3b998a8eaeb6f87591.png",
+  ),
+  "valentines-panda": createMeetFaceGraph(
+    "valentines_day_panda_v2",
+    394,
+    "face-costume",
+    "valentines_day_panda_v2_452978af72189fe44f6ffd06fc1f3fb9.png",
+  ),
+  spring: createMeetFaceGraph(
+    "spring_js_v2",
+    410,
+    "face-costume",
+    "spring_js_v2_47fdab782b0e24277f3db9c59f430c59.png",
+  ),
+  idea: createMeetFaceGraph(
+    "lightbulb_js_v2",
+    358,
+    "face-prop",
+    "lightbulb_js_v2_2a6824762e5b71649f47d04eaa60afdf.png",
+  ),
+  dragon: createMeetFaceGraph(
+    "dragon_v2",
+    416,
+    "face-costume",
+    "dragon_v2_e48e290de91ae05f22cf01509e31f596.png",
+  ),
+  cowboy: createMeetFaceGraph(
+    "cowboy_v2",
+    419,
+    "face-costume",
+    "cowboy_v2_25f3b2e4df7e8fdc7d7d284ae72c8beb.png",
+  ),
   aviator: createMeetFaceGraph(
     "aviator_glasses_and_mustache_v2",
     520,
     "face-prop",
     "aviator_glasses_and_mustache_v2_fd3b2895c2ea96665eb2df184cc8524d.png",
+  ),
+  "cute-glasses": createMeetFaceGraph(
+    "cute_glasses_v2",
+    414,
+    "face-prop",
+    "cute_glasses_v2_842930c9a58ed8bbc28c8cdb9480c2a7.png",
   ),
   "cat-eye-beret": createMeetFaceGraph(
     "beret_and_cat_eye_glasses_v2",
@@ -613,11 +731,29 @@ export const FACE_FILTER_EFFECT_GRAPHS: Partial<
     "face-prop",
     "beret_and_cat_eye_glasses_v2_22a4822de24dc7049e1ee78d7aaeddc8.png",
   ),
+  "cyber-glasses": createMeetFaceGraph(
+    "cyber_glasses_v2",
+    550,
+    "face-prop",
+    "cyber_glasses_v2_035f21f48f1676f9b890ca54d9470363.png",
+  ),
   "cat-ear-headphones": createMeetFaceGraph(
     "cat_ear_headphones",
     552,
     "face-prop",
     "cat_ear_headphones_1ac9a811cf18abc4a04cad39e8de6192.png",
+  ),
+  crown: createMeetFaceGraph(
+    "crown",
+    619,
+    "face-prop",
+    "crown_72bd8bd065f88579c5546ac48c3b837a.png",
+  ),
+  "bunny-ears": createMeetFaceGraph(
+    "bunny_ears_v2",
+    532,
+    "face-costume",
+    "bunny_ears_v2_2ba936a45e47edd1530cd0c5d7e7507d.png",
   ),
   bunny: createMeetFaceGraph(
     "bunny_v2",
@@ -637,11 +773,35 @@ export const FACE_FILTER_EFFECT_GRAPHS: Partial<
     "face-costume",
     "cute_alien_150945fb2cae3359b98d8c35d841c019.png",
   ),
+  "cat-on-head": createMeetFaceGraph(
+    "cat_on_head_js_v2",
+    359,
+    "face-costume",
+    "cat_on_head_js_v2_e940a4b1ef134c37d9074423bf3e26c4.png",
+  ),
   "cat-ears-glasses": createMeetFaceGraph(
     "cat_ears_and_glasses",
     560,
     "face-costume",
     "cat_ears_and_glasses_33fb90ca39d651cc6a87b927db5c2b6d.png",
+  ),
+  "fuzzy-cat": createMeetFaceGraph(
+    "fuzzy_cat_v2",
+    429,
+    "face-costume",
+    "fuzzy_cat_v2_ce73d089c60bd99c98bb63368b2054e4.png",
+  ),
+  "halloween-cat": createMeetFaceGraph(
+    "halloween_cat_v2",
+    360,
+    "face-costume",
+    "halloween_cat_v2_18a216608b581c9a108d18ad5d9084c9.png",
+  ),
+  "velvety-dog": createMeetFaceGraph(
+    "velvety_dog_v2",
+    446,
+    "face-costume",
+    "velvety_dog_v2_92fc3ce424d05ba7d2f9b7fd78269dff.png",
   ),
   "hair-medium-beard": createMeetFaceGraph(
     "hair_medium_beard",
@@ -655,11 +815,179 @@ export const FACE_FILTER_EFFECT_GRAPHS: Partial<
     "face-hair",
     "long_wavy_hair_14e0e61bf57ccd06fe641a48357ad085.png",
   ),
+  "rusty-robot": createMeetFaceGraph(
+    "rusty_robot_v2",
+    511,
+    "face-costume",
+    "rusty_robot_v2_c5461e2f4eeff5eac43f1b2d5cc9a034.png",
+  ),
+  "feathery-dinosaur": createMeetFaceGraph(
+    "feathery_dinousaur_v2",
+    484,
+    "face-costume",
+    "feathery_dinousaur_v2_e6e4ce401183a17e1b66c75b530b6f3f.png",
+  ),
+  "diwali-2023": createMeetFaceGraph(
+    "diwali_2023",
+    488,
+    "face-costume",
+    "diwali_2023_a0edba9497f8a246b2f61da5b20f8f20.png",
+  ),
+  "film-noir": createMeetFaceGraph(
+    "film_noir_v2",
+    505,
+    "face-lighting",
+    "film_noir_v2_343e63dc224c2eedcc7b8664ded7c434.png",
+  ),
+  "octopus-on-head": createMeetFaceGraph(
+    "octopus_on_head_v2",
+    523,
+    "face-costume",
+    "octopus_on_head_v2_f9fbfddfe86bbf52fa6ce3582238b6c8.png",
+  ),
+  "fried-eggs": createMeetFaceGraph(
+    "fried_eggs_v2",
+    533,
+    "face-costume",
+    "fried_eggs_v2_90399085e1cebc5e07c1ec7856da1a97.png",
+  ),
+  fascinator: createMeetFaceGraph(
+    "fascinator_v2",
+    536,
+    "face-costume",
+    "fascinator_v2_9eea468dfbda1ac4972b038fb9321736.png",
+  ),
+  "rainbow-wig": createMeetFaceGraph(
+    "rainbow_wig_and_eyelashes_v2",
+    539,
+    "face-costume",
+    "rainbow_wig_and_eyelashes_v2_f95c87006b4a37876ec9bb96783781d9.png",
+  ),
+  "pride-heart": createMeetFaceGraph(
+    "pride_rainbow_heart",
+    540,
+    "face-costume",
+    "pride_rainbow_heart_6debbf70a2a2f97e877ccf6adc856551.png",
+  ),
+  "unicorn-headband": createMeetFaceGraph(
+    "unicorn_headband",
+    557,
+    "face-costume",
+    "unicorn_headband_0b7759130a891a38b8fd326a9fb6c475.png",
+  ),
+  "scifi-helmet": createMeetFaceGraph(
+    "scifi_space_helmet",
+    563,
+    "face-costume",
+    "scifi_space_helmet_4038b38571ba81621e13323f18c3ac1c.png",
+  ),
+  "puffer-fish": createMeetFaceGraph(
+    "puffer_fish_v2",
+    569,
+    "face-costume",
+    "puffer_fish_v2_b44e456f2da58a593c6fd7d56dea8e67.png",
+  ),
+  sloth: createMeetFaceGraph(
+    "sloth",
+    590,
+    "face-costume",
+    "sloth_51f96af4f48a7264f9697a90bf7fe56c.png",
+  ),
+  owl: createMeetFaceGraph(
+    "owl",
+    591,
+    "face-costume",
+    "owl_4446490fb2a753746ce5d4ec5f207c12.png",
+  ),
+  pig: createMeetFaceGraph(
+    "pig",
+    592,
+    "face-costume",
+    "pig_f7bdec065e007a904d248df0f9e3b9b6.png",
+  ),
+  "safety-helmet": createMeetFaceGraph(
+    "safety_helmet",
+    602,
+    "face-costume",
+    "safety_helmet_333dea4ecf3bc3c10cde1f41389b3e26.png",
+  ),
+  "cozy-blanket": createMeetFaceGraph(
+    "cozy_blanket",
+    624,
+    "face-costume",
+    "cozy_blanket_24d960c8acb0abce989e1e73d0b519e3.png",
+  ),
   "cute-astronaut": createMeetFaceGraph(
     "cute_astronaut_v2",
     559,
     "face-costume",
     "cute_astronaut_v2_826f7f71c44e370ad7032c4532b4eb48.png",
+  ),
+  cake: createMeetFaceGraph(
+    "cake_v2",
+    535,
+    "face-costume",
+    "cake_v2_6f9585a8b2b5bf1bcc7bb55260fe9e39.png",
+  ),
+  "party-hat": createMeetFaceGraph(
+    "party_hat",
+    622,
+    "face-costume",
+    "party_hat_2dfa634c933ab6b444d62494fef6a7aa.png",
+  ),
+  "pilot-hat": createMeetFaceGraph(
+    "pilot_hat",
+    620,
+    "face-costume",
+    "pilot_hat_abe8dbd4527b875940e81cb5759c7184.png",
+  ),
+  "trucker-hat": createMeetFaceGraph(
+    "trucker_hat_v2",
+    530,
+    "face-costume",
+    "trucker_hat_v2_50ed22c658e4b076ab136c8cb52337e4.png",
+  ),
+  "glowing-hat": createMeetFaceGraph(
+    "glowing_hat_js_v2",
+    369,
+    "face-costume",
+    "glowing_hat_js_v2_41f6fc7956fa5846d67e5587317c30a7.png",
+  ),
+  "noogler-hat": createMeetFaceGraph(
+    "hat_noogler",
+    271,
+    "face-costume",
+    "hat_noogler_102085b9e2820839dc24b6ad95af0196.png",
+  ),
+  "intern-hat": createMeetFaceGraph(
+    "hat_intern",
+    561,
+    "face-costume",
+    "hat_intern_ebdf53db94b6e876dd2ef73dee941daa.png",
+  ),
+  "winter-hat-scarf": createMeetFaceGraph(
+    "winter_hat_and_scarf",
+    516,
+    "face-costume",
+    "winter_hat_and_scarf_935b03038d18c74a7548fd5075aa7757.png",
+  ),
+  "wizard-hat": createMeetFaceGraph(
+    "wizard_hat",
+    582,
+    "face-costume",
+    "wizard_hat_81542e045cb3fe2c6ac323559ebe1aaa.png",
+  ),
+  "dia-de-los-muertos": createMeetFaceGraph(
+    "dia_de_los_muertos_with_hat_and_mustache",
+    494,
+    "face-costume",
+    "dia_de_los_muertos_with_hat_and_mustache_5497080b9e14182200dd800116f7f9b1.png",
+  ),
+  "dia-de-los-muertos-flower": createMeetFaceGraph(
+    "dia_de_los_muertos_with_flower",
+    493,
+    "face-costume",
+    "dia_de_los_muertos_with_flower_5332dfb53eacabe0140f0aa6b97a5223.png",
   ),
   pirate: createMeetFaceGraph(
     "pirate_v2",
@@ -672,6 +1000,12 @@ export const FACE_FILTER_EFFECT_GRAPHS: Partial<
     334,
     "face-lighting",
     "alien_spaceship_js_v2_e4b827b62e026fb12d48fc655bf5bc36.png",
+  ),
+  "thin-mustache": createMeetFaceGraph(
+    "hair_thin_mustache",
+    657,
+    "face-hair",
+    "hair_thin_mustache_9de00a67ccbce2e2b28807cd1df13224.png",
   ),
 };
 
@@ -761,6 +1095,32 @@ const HIDDEN_FACE_FILTER_IDS = new Set<FaceFilterId>([
   "sparkles",
   "idea",
   "glasses",
+  "high-ponytail",
+  "graduation-cap",
+  "strawberry",
+  "santa-beard",
+  "dreidel",
+  "valentines-panda",
+  "spring",
+  "dragon",
+  "cowboy",
+  "rusty-robot",
+  "feathery-dinosaur",
+  "diwali-2023",
+  "film-noir",
+  "octopus-on-head",
+  "fried-eggs",
+  "fascinator",
+  "rainbow-wig",
+  "pride-heart",
+  "unicorn-headband",
+  "scifi-helmet",
+  "puffer-fish",
+  "sloth",
+  "owl",
+  "pig",
+  "safety-helmet",
+  "cozy-blanket",
   "cute-glasses",
   "cyber-glasses",
   "crown",
@@ -1304,6 +1664,48 @@ const ALL_FACE_FILTERS: VideoEffectOption<FaceFilterId>[] = [
     category: "New",
   },
   {
+    id: "film-noir",
+    label: "Film noir",
+    icon: Palette,
+    tone: "#18181b",
+    category: "New",
+  },
+  {
+    id: "diwali-2023",
+    label: "Diwali",
+    icon: Sparkles,
+    tone: "#f97316",
+    category: "New",
+  },
+  {
+    id: "strawberry",
+    label: "Strawberry",
+    icon: Sparkles,
+    tone: "#e11d48",
+    category: "New",
+  },
+  {
+    id: "pride-heart",
+    label: "Rainbow heart",
+    icon: Flower2,
+    tone: "#7c3aed",
+    category: "New",
+  },
+  {
+    id: "spring",
+    label: "Spring",
+    icon: Flower2,
+    tone: "#16a34a",
+    category: "New",
+  },
+  {
+    id: "valentines-panda",
+    label: "Valentine panda",
+    icon: Flower2,
+    tone: "#db2777",
+    category: "New",
+  },
+  {
     id: "idea",
     label: "Idea bulb",
     description: "Open your mouth to light it.",
@@ -1354,6 +1756,55 @@ const ALL_FACE_FILTERS: VideoEffectOption<FaceFilterId>[] = [
     category: "Accessories",
   },
   {
+    id: "graduation-cap",
+    label: "Graduation cap",
+    icon: HatGlasses,
+    tone: "#111827",
+    category: "Accessories",
+  },
+  {
+    id: "cowboy",
+    label: "Cowboy",
+    icon: HatGlasses,
+    tone: "#92400e",
+    category: "Accessories",
+  },
+  {
+    id: "fascinator",
+    label: "Fascinator",
+    icon: Flower2,
+    tone: "#be123c",
+    category: "Accessories",
+  },
+  {
+    id: "rainbow-wig",
+    label: "Rainbow wig",
+    icon: Sparkles,
+    tone: "#7c3aed",
+    category: "Accessories",
+  },
+  {
+    id: "unicorn-headband",
+    label: "Unicorn headband",
+    icon: WandSparkles,
+    tone: "#db2777",
+    category: "Accessories",
+  },
+  {
+    id: "scifi-helmet",
+    label: "Sci-fi helmet",
+    icon: Rocket,
+    tone: "#2563eb",
+    category: "Accessories",
+  },
+  {
+    id: "safety-helmet",
+    label: "Safety helmet",
+    icon: HatGlasses,
+    tone: "#ca8a04",
+    category: "Accessories",
+  },
+  {
     id: "crown",
     label: "Gold crown",
     icon: Crown,
@@ -1396,6 +1847,55 @@ const ALL_FACE_FILTERS: VideoEffectOption<FaceFilterId>[] = [
     category: "Costumes",
   },
   {
+    id: "dragon",
+    label: "Dragon",
+    icon: WandSparkles,
+    tone: "#16a34a",
+    category: "Costumes",
+  },
+  {
+    id: "rusty-robot",
+    label: "Rusty robot",
+    icon: Rocket,
+    tone: "#a16207",
+    category: "Costumes",
+  },
+  {
+    id: "feathery-dinosaur",
+    label: "Feathery dinosaur",
+    icon: VenetianMask,
+    tone: "#65a30d",
+    category: "Costumes",
+  },
+  {
+    id: "puffer-fish",
+    label: "Puffer fish",
+    icon: VenetianMask,
+    tone: "#f97316",
+    category: "Costumes",
+  },
+  {
+    id: "sloth",
+    label: "Sloth",
+    icon: VenetianMask,
+    tone: "#854d0e",
+    category: "Costumes",
+  },
+  {
+    id: "owl",
+    label: "Owl",
+    icon: VenetianMask,
+    tone: "#78716c",
+    category: "Costumes",
+  },
+  {
+    id: "pig",
+    label: "Pig",
+    icon: VenetianMask,
+    tone: "#f472b6",
+    category: "Costumes",
+  },
+  {
     id: "cat-ears-glasses",
     label: "Cat ears and glasses",
     icon: VenetianMask,
@@ -1431,6 +1931,13 @@ const ALL_FACE_FILTERS: VideoEffectOption<FaceFilterId>[] = [
     category: "Costumes",
   },
   {
+    id: "high-ponytail",
+    label: "High ponytail",
+    icon: Scissors,
+    tone: "#7c2d12",
+    category: "Costumes",
+  },
+  {
     id: "hair-medium-beard",
     label: "Medium hair and beard",
     icon: Scissors,
@@ -1463,6 +1970,41 @@ const ALL_FACE_FILTERS: VideoEffectOption<FaceFilterId>[] = [
     label: "Cake",
     icon: CakeSlice,
     tone: "#ec4899",
+    category: "Costumes",
+  },
+  {
+    id: "fried-eggs",
+    label: "Fried eggs",
+    icon: CakeSlice,
+    tone: "#eab308",
+    category: "Costumes",
+  },
+  {
+    id: "octopus-on-head",
+    label: "Octopus on head",
+    icon: VenetianMask,
+    tone: "#7c3aed",
+    category: "Costumes",
+  },
+  {
+    id: "cozy-blanket",
+    label: "Cozy blanket",
+    icon: Snowflake,
+    tone: "#0ea5e9",
+    category: "Costumes",
+  },
+  {
+    id: "santa-beard",
+    label: "Santa beard",
+    icon: Snowflake,
+    tone: "#dc2626",
+    category: "Costumes",
+  },
+  {
+    id: "dreidel",
+    label: "Dreidel",
+    icon: WandSparkles,
+    tone: "#2563eb",
     category: "Costumes",
   },
   {

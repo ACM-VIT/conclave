@@ -114,6 +114,19 @@ enum MeetingViewConstants {
 
 // MARK: - Participant
 
+enum ParticipantConnectionState: String, Codable, Equatable {
+    case reconnecting
+    case reconnected
+}
+
+struct ParticipantConnectionStatus: Codable, Equatable {
+    let state: ParticipantConnectionState
+    let reason: String?
+    let graceMs: Int?
+    let downtimeMs: Int?
+    let updatedAt: Double?
+}
+
 struct Participant: Identifiable, Equatable {
     let id: String
     var userId: String { id }
@@ -124,6 +137,7 @@ struct Participant: Identifiable, Equatable {
     var isGhost: Bool = false
     var isLeaving: Bool = false
     var isScreenSharing: Bool = false
+    var connectionStatus: ParticipantConnectionStatus?
 }
 
 // MARK: - Chat
@@ -308,10 +322,17 @@ enum VideoQuality: String, Codable {
 // MARK: - Connection Quality
 
 enum ConnectionQuality: String, Codable {
+    case emergency
     case good
     case fair
     case poor
     case unknown
+}
+
+struct ConnectionQualitySample {
+    let publishQuality: ConnectionQuality
+    let receiveQuality: ConnectionQuality
+    let overallQuality: ConnectionQuality
 }
 
 // MARK: - Audio Device

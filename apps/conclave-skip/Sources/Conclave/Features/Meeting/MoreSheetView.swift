@@ -19,7 +19,9 @@ struct MoreSheetView: View {
     private let assetReactions = MeetingReactionConstants.assetOptions
 
     var body: some View {
-        let canUseParticipantActions = !viewModel.state.isGhostMode && !viewModel.state.isWebinarAttendee
+        let canUseParticipantActions = viewModel.state.connectionState == .joined
+            && !viewModel.state.isGhostMode
+            && !viewModel.state.isWebinarAttendee
 
         VStack(spacing: 0) {
             MeetingSheetHeader(title: "More", onDone: { dismiss() })
@@ -184,10 +186,13 @@ struct MoreSheetView: View {
     }
 
     private var canManageSharedBrowser: Bool {
-        viewModel.state.isAdmin && !viewModel.state.isWebinarAttendee
+        viewModel.state.isAdmin
+            && viewModel.state.connectionState == .joined
+            && !viewModel.state.isWebinarAttendee
     }
 
     private var canShowSharedBrowser: Bool {
+        viewModel.state.connectionState == .joined &&
         !viewModel.state.isWebinarAttendee &&
         (canManageSharedBrowser || viewModel.state.isBrowserActive || viewModel.state.hasBrowserAudio)
     }
@@ -197,11 +202,15 @@ struct MoreSheetView: View {
     }
 
     private var canShowAdminControls: Bool {
-        viewModel.state.isAdmin && !viewModel.state.isWebinarAttendee
+        viewModel.state.isAdmin
+            && viewModel.state.connectionState == .joined
+            && !viewModel.state.isWebinarAttendee
     }
 
     private var canShowAppsSection: Bool {
-        (viewModel.state.isAdmin && !viewModel.state.isWebinarAttendee) || viewModel.state.activeAppId != nil
+        viewModel.state.connectionState == .joined &&
+        !viewModel.state.isWebinarAttendee &&
+        (viewModel.state.isAdmin || viewModel.state.activeAppId != nil)
     }
 }
 
@@ -228,6 +237,7 @@ struct AdminControlsSheetView: View {
     @State private var isNoticeSending = false
     @State private var showEndMeetingConfirmation = false
     @State private var isEndingMeeting = false
+    @State private var accessUserKeyInput = ""
 
     private var title: String {
         switch page {
@@ -250,6 +260,17 @@ struct AdminControlsSheetView: View {
         return "\(roomState), \(chatState)"
     }
 
+    private var trimmedAccessUserKey: String {
+        accessUserKeyInput.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var canSubmitAccessUserKey: Bool {
+        canUseHostControls
+            && !trimmedAccessUserKey.isEmpty
+            && trimmedAccessUserKey.count <= 256
+            && !viewModel.state.isAdminAccessListRefreshing
+    }
+
     private var participantMediaSummary: String {
         let count = viewModel.state.participantCount
         let noun = count == 1 ? "participant" : "participants"
@@ -266,6 +287,12 @@ struct AdminControlsSheetView: View {
             }
         }
         return false
+    }
+
+    private var canUseHostControls: Bool {
+        viewModel.state.isAdmin
+            && viewModel.state.connectionState == .joined
+            && !viewModel.state.isWebinarAttendee
     }
 
     var body: some View {
@@ -302,6 +329,11 @@ struct AdminControlsSheetView: View {
         } message: {
             Text("Everyone in the room, including people waiting to join, will be disconnected.")
         }
+        .onAppear {
+            if page == .access {
+                viewModel.refreshAdminAccessLists()
+            }
+        }
     }
 
     @ViewBuilder
@@ -336,7 +368,8 @@ struct AdminControlsSheetView: View {
                         icon: viewModel.state.isRoomLocked ? "lock.fill" : "lock.open.fill",
                         androidIcon: viewModel.state.isRoomLocked ? "lock" : "lock.open",
                         iconTint: viewModel.state.isRoomLocked || viewModel.state.isChatLocked ? ACMColors.primaryOrange : ACMColors.textMuted,
-                        androidIconTint: viewModel.state.isRoomLocked || viewModel.state.isChatLocked ? "accent" : "muted"
+                        androidIconTint: viewModel.state.isRoomLocked || viewModel.state.isChatLocked ? "accent" : "muted",
+                        isDisabled: !canUseHostControls
                     ) {
                         onOpenAdminAccessControls?()
                     }
@@ -349,7 +382,8 @@ struct AdminControlsSheetView: View {
                         icon: "mic.slash.fill",
                         androidIcon: "mic.off",
                         iconTint: hasRaisedHands || viewModel.state.activeScreenShareUserId != nil ? ACMColors.primaryOrange : ACMColors.textMuted,
-                        androidIconTint: hasRaisedHands || viewModel.state.activeScreenShareUserId != nil ? "accent" : "muted"
+                        androidIconTint: hasRaisedHands || viewModel.state.activeScreenShareUserId != nil ? "accent" : "muted",
+                        isDisabled: !canUseHostControls
                     ) {
                         onOpenAdminMediaControls?()
                     }
@@ -360,7 +394,8 @@ struct AdminControlsSheetView: View {
                         "Room notice",
                         subtitle: "Send a banner to everyone",
                         icon: "megaphone.fill",
-                        androidIcon: "info"
+                        androidIcon: "info",
+                        isDisabled: !canUseHostControls
                     ) {
                         onOpenAdminNoticeControls?()
                     }
@@ -374,7 +409,8 @@ struct AdminControlsSheetView: View {
                         androidIcon: "close",
                         iconTint: ACMColors.error,
                         androidIconTint: "danger",
-                        titleTint: ACMColors.error
+                        titleTint: ACMColors.error,
+                        isDisabled: !canUseHostControls
                     ) {
                         onOpenAdminDangerControls?()
                     }
@@ -394,7 +430,8 @@ struct AdminControlsSheetView: View {
                         androidIcon: viewModel.state.isRoomLocked ? "lock.open" : "lock",
                         title: viewModel.state.isRoomLocked ? "Unlock meeting" : "Lock meeting",
                         tint: viewModel.state.isRoomLocked ? ACMColors.primaryOrange : ACMColors.text,
-                        androidTint: viewModel.state.isRoomLocked ? "accent" : "text"
+                        androidTint: viewModel.state.isRoomLocked ? "accent" : "text",
+                        isDisabled: !canUseHostControls
                     ) {
                         viewModel.toggleRoomLock()
                     }
@@ -406,7 +443,8 @@ struct AdminControlsSheetView: View {
                         androidIcon: "block",
                         title: viewModel.state.isNoGuests ? "Allow guests" : "Block guests",
                         tint: viewModel.state.isNoGuests ? ACMColors.primaryOrange : ACMColors.text,
-                        androidTint: viewModel.state.isNoGuests ? "accent" : "text"
+                        androidTint: viewModel.state.isNoGuests ? "accent" : "text",
+                        isDisabled: !canUseHostControls
                     ) {
                         viewModel.toggleNoGuests()
                     }
@@ -418,7 +456,8 @@ struct AdminControlsSheetView: View {
                         androidIcon: "chat",
                         title: viewModel.state.isChatLocked ? "Enable chat" : "Disable chat",
                         tint: viewModel.state.isChatLocked ? ACMColors.primaryOrange : ACMColors.text,
-                        androidTint: viewModel.state.isChatLocked ? "accent" : "text"
+                        androidTint: viewModel.state.isChatLocked ? "accent" : "text",
+                        isDisabled: !canUseHostControls
                     ) {
                         viewModel.toggleChatLock()
                     }
@@ -430,7 +469,8 @@ struct AdminControlsSheetView: View {
                         androidIcon: viewModel.state.isTtsDisabled ? "volume" : "volume.off",
                         title: viewModel.state.isTtsDisabled ? "Enable TTS" : "Disable TTS",
                         tint: viewModel.state.isTtsDisabled ? ACMColors.primaryOrange : ACMColors.text,
-                        androidTint: viewModel.state.isTtsDisabled ? "accent" : "text"
+                        androidTint: viewModel.state.isTtsDisabled ? "accent" : "text",
+                        isDisabled: !canUseHostControls
                     ) {
                         viewModel.toggleTtsDisabled()
                     }
@@ -442,13 +482,272 @@ struct AdminControlsSheetView: View {
                         androidIcon: "chat",
                         title: viewModel.state.isDmEnabled ? "Disable DMs" : "Enable DMs",
                         tint: viewModel.state.isDmEnabled ? ACMColors.text : ACMColors.primaryOrange,
-                        androidTint: viewModel.state.isDmEnabled ? "text" : "accent"
+                        androidTint: viewModel.state.isDmEnabled ? "text" : "accent",
+                        isDisabled: !canUseHostControls
                     ) {
                         viewModel.toggleDmEnabled()
                     }
                 }
             }
+
+            VStack(alignment: .leading, spacing: ACMSpacing.xs) {
+                acmListSectionHeader("User access lists")
+
+                MeetingSheetSectionCard {
+                    accessUserKeyInputRow
+
+                    MoreRowDivider()
+
+                    HStack(spacing: ACMSpacing.xs) {
+                        accessCommandButton(
+                            title: "Allow",
+                            icon: "person.crop.circle.badge.checkmark",
+                            androidIcon: "check",
+                            tint: ACMColors.success,
+                            androidTint: "success",
+                            isDisabled: !canSubmitAccessUserKey
+                        ) {
+                            let key = trimmedAccessUserKey
+                            viewModel.allowAccessUserKey(key)
+                            accessUserKeyInput = ""
+                        }
+
+                        accessCommandButton(
+                            title: "Block",
+                            icon: "person.crop.circle.badge.xmark",
+                            androidIcon: "block",
+                            tint: ACMColors.error,
+                            androidTint: "danger",
+                            isDisabled: !canSubmitAccessUserKey
+                        ) {
+                            let key = trimmedAccessUserKey
+                            viewModel.blockAccessUserKey(key)
+                            accessUserKeyInput = ""
+                        }
+                    }
+                    .padding(.horizontal, ACMSpacing.sm)
+                    .padding(.vertical, ACMSpacing.sm)
+
+                    MoreRowDivider()
+
+                    if viewModel.state.isAdminAccessListRefreshing {
+                        Text("Refreshing access lists...")
+                            .font(ACMFont.trial(12))
+                            .foregroundStyle(ACMColors.textFaint)
+                            .padding(.horizontal, ACMSpacing.sm)
+                            .padding(.vertical, ACMSpacing.sm)
+
+                        MoreRowDivider()
+                    }
+
+                    accessListSection(
+                        title: "Allowed",
+                        emptyText: "No users are explicitly allowed.",
+                        keys: viewModel.state.adminAllowedUserKeys,
+                        actionTitle: "Revoke",
+                        actionIcon: "xmark.circle.fill",
+                        actionAndroidIcon: "close",
+                        actionTint: ACMColors.textMuted,
+                        actionAndroidTint: "muted"
+                    ) { key in
+                        viewModel.revokeAllowedAccessUserKey(key)
+                    }
+
+                    MoreRowDivider()
+
+                    accessListSection(
+                        title: "Allowed while locked",
+                        emptyText: "No users bypass the lock.",
+                        keys: viewModel.state.adminLockedAllowedUserKeys,
+                        actionTitle: "Revoke",
+                        actionIcon: "lock.slash.fill",
+                        actionAndroidIcon: "lock.open",
+                        actionTint: ACMColors.primaryOrange,
+                        actionAndroidTint: "accent"
+                    ) { key in
+                        viewModel.revokeAllowedAccessUserKey(key)
+                    }
+
+                    MoreRowDivider()
+
+                    accessListSection(
+                        title: "Blocked",
+                        emptyText: "No users are blocked.",
+                        keys: viewModel.state.adminBlockedUserKeys,
+                        actionTitle: "Unblock",
+                        actionIcon: "checkmark.circle.fill",
+                        actionAndroidIcon: "check",
+                        actionTint: ACMColors.success,
+                        actionAndroidTint: "success"
+                    ) { key in
+                        viewModel.unblockAccessUserKey(key)
+                    }
+                }
+            }
         }
+    }
+
+    private var accessUserKeyInputRow: some View {
+        HStack(spacing: ACMSpacing.sm) {
+            MeetingSheetIconBox(
+                icon: "person.crop.circle.badge.plus",
+                androidIcon: "person.add",
+                tint: canUseHostControls ? ACMColors.textMuted : ACMColors.textFaint,
+                androidTint: canUseHostControls ? "muted" : "faint",
+                background: ACMColors.surfaceRaised
+            )
+
+            TextField("", text: $accessUserKeyInput, prompt: Text("User key or email").foregroundStyle(ACMColors.textFaint))
+                .textFieldStyle(.plain)
+                .font(ACMFont.trial(15))
+                .foregroundStyle(ACMColors.text)
+                .tint(ACMColors.primaryOrange)
+                .disabled(!canUseHostControls || viewModel.state.isAdminAccessListRefreshing)
+            #if !SKIP
+            #if os(iOS)
+                .textInputAutocapitalization(.never)
+                .keyboardType(.emailAddress)
+            #endif
+            #endif
+                .autocorrectionDisabled(true)
+        }
+        .padding(.horizontal, ACMSpacing.sm)
+        .frame(minHeight: 52)
+        .opacity(canUseHostControls ? 1.0 : 0.55)
+    }
+
+    private func accessCommandButton(
+        title: String,
+        icon: String,
+        androidIcon: String,
+        tint: Color,
+        androidTint: String,
+        isDisabled: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        let resolvedTint = isDisabled ? ACMColors.textFaint : tint
+        let resolvedAndroidTint = isDisabled ? "faint" : androidTint
+
+        return Button {
+            guard !isDisabled else { return }
+            action()
+        } label: {
+            HStack(spacing: 6) {
+                ACMSystemIcon.icon(icon, android: androidIcon, size: 15, tint: resolvedAndroidTint)
+                    .foregroundStyle(resolvedTint)
+                    .frame(width: 18, height: 18)
+
+                Text(title)
+                    .font(ACMFont.trial(12, weight: .medium))
+                    .foregroundStyle(resolvedTint)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: 36)
+            .acmColorBackground(isDisabled ? ACMColors.surfaceRaised : tint.opacity(0.14))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+        }
+        .buttonStyle(.plain)
+        .disabled(isDisabled)
+        .opacity(isDisabled ? 0.55 : 1.0)
+    }
+
+    private func accessListSection(
+        title: String,
+        emptyText: String,
+        keys: [String],
+        actionTitle: String,
+        actionIcon: String,
+        actionAndroidIcon: String,
+        actionTint: Color,
+        actionAndroidTint: String,
+        action: @escaping (String) -> Void
+    ) -> some View {
+        VStack(alignment: .leading, spacing: ACMSpacing.xs) {
+            HStack(spacing: ACMSpacing.xs) {
+                Text(title)
+                    .font(ACMFont.trial(12, weight: .medium))
+                    .foregroundStyle(ACMColors.textMuted)
+                    .lineLimit(1)
+
+                Spacer()
+
+                Text("\(keys.count)")
+                    .font(ACMFont.trial(11, weight: .medium))
+                    .foregroundStyle(ACMColors.textFaint)
+                    .padding(.horizontal, 8)
+                    .frame(height: 22)
+                    .acmColorBackground(ACMColors.surfaceRaised)
+                    .clipShape(Capsule())
+            }
+            .padding(.horizontal, ACMSpacing.sm)
+            .padding(.top, ACMSpacing.sm)
+
+            if keys.isEmpty {
+                Text(emptyText)
+                    .font(ACMFont.trial(12))
+                    .foregroundStyle(ACMColors.textFaint)
+                    .padding(.horizontal, ACMSpacing.sm)
+                    .padding(.bottom, ACMSpacing.sm)
+            } else {
+                VStack(spacing: 0) {
+                    ForEach(keys, id: \.self) { key in
+                        accessListRow(
+                            key: key,
+                            actionTitle: actionTitle,
+                            actionIcon: actionIcon,
+                            actionAndroidIcon: actionAndroidIcon,
+                            actionTint: actionTint,
+                            actionAndroidTint: actionAndroidTint,
+                            action: action
+                        )
+                    }
+                }
+                .padding(.bottom, ACMSpacing.xs)
+            }
+        }
+    }
+
+    private func accessListRow(
+        key: String,
+        actionTitle: String,
+        actionIcon: String,
+        actionAndroidIcon: String,
+        actionTint: Color,
+        actionAndroidTint: String,
+        action: @escaping (String) -> Void
+    ) -> some View {
+        Button {
+            guard canUseHostControls && !viewModel.state.isAdminAccessListRefreshing else { return }
+            action(key)
+        } label: {
+            HStack(spacing: ACMSpacing.xs) {
+                Text(key)
+                    .font(ACMFont.trial(13, weight: .medium))
+                    .foregroundStyle(ACMColors.text)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+
+                Spacer(minLength: ACMSpacing.xs)
+
+                HStack(spacing: 4) {
+                    ACMSystemIcon.icon(actionIcon, android: actionAndroidIcon, size: 14, tint: actionAndroidTint)
+                        .foregroundStyle(actionTint)
+                        .frame(width: 16, height: 16)
+
+                    Text(actionTitle)
+                        .font(ACMFont.trial(11, weight: .medium))
+                        .foregroundStyle(actionTint)
+                        .lineLimit(1)
+                }
+            }
+            .padding(.horizontal, ACMSpacing.sm)
+            .frame(minHeight: 38)
+        }
+        .buttonStyle(.plain)
+        .disabled(!canUseHostControls || viewModel.state.isAdminAccessListRefreshing)
+        .opacity(canUseHostControls ? 1.0 : 0.55)
     }
 
     private var participantMediaContent: some View {
@@ -457,20 +756,20 @@ struct AdminControlsSheetView: View {
                 acmListSectionHeader("Participant media")
 
                 MeetingSheetSectionCard {
-                    MoreRow(icon: "mic.slash.fill", androidIcon: "mic.off", title: "Mute everyone") {
+                    MoreRow(icon: "mic.slash.fill", androidIcon: "mic.off", title: "Mute everyone", isDisabled: !canUseHostControls) {
                         viewModel.muteAllParticipants()
                     }
 
                     MoreRowDivider()
 
-                    MoreRow(icon: "video.slash.fill", androidIcon: "video.off", title: "Turn off cameras") {
+                    MoreRow(icon: "video.slash.fill", androidIcon: "video.off", title: "Turn off cameras", isDisabled: !canUseHostControls) {
                         viewModel.turnOffAllParticipantCameras()
                     }
 
                     if viewModel.state.activeScreenShareUserId != nil {
                         MoreRowDivider()
 
-                        MoreRow(icon: "rectangle.on.rectangle.slash", androidIcon: "screen.share.off", title: "Stop screen shares") {
+                        MoreRow(icon: "rectangle.on.rectangle.slash", androidIcon: "screen.share.off", title: "Stop screen shares", isDisabled: !canUseHostControls) {
                             viewModel.stopAllScreenShares()
                         }
                     }
@@ -478,7 +777,7 @@ struct AdminControlsSheetView: View {
                     if hasRaisedHands {
                         MoreRowDivider()
 
-                        MoreRow(icon: "hand.raised.slash.fill", androidIcon: "raise.hand.off", title: "Clear raised hands") {
+                        MoreRow(icon: "hand.raised.slash.fill", androidIcon: "raise.hand.off", title: "Clear raised hands", isDisabled: !canUseHostControls) {
                             viewModel.clearAllRaisedHands()
                         }
                     }
@@ -495,22 +794,27 @@ struct AdminControlsSheetView: View {
         iconTint: Color = ACMColors.textMuted,
         androidIconTint: String = "muted",
         titleTint: Color = ACMColors.text,
+        isDisabled: Bool = false,
         action: @escaping () -> Void
     ) -> some View {
-        Button(action: action) {
+        let rowIconTint = isDisabled ? ACMColors.textFaint : iconTint
+        let rowAndroidIconTint = isDisabled ? "faint" : androidIconTint
+        let rowTitleTint = isDisabled ? ACMColors.textFaint : titleTint
+
+        return Button(action: action) {
             HStack(spacing: ACMSpacing.sm) {
                 MeetingSheetIconBox(
                     icon: icon,
                     androidIcon: androidIcon,
-                    tint: iconTint,
-                    androidTint: androidIconTint,
+                    tint: rowIconTint,
+                    androidTint: rowAndroidIconTint,
                     background: ACMColors.surfaceRaised
                 )
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title)
                         .font(ACMFont.trial(15, weight: .medium))
-                        .foregroundStyle(titleTint)
+                        .foregroundStyle(rowTitleTint)
                         .lineLimit(1)
 
                     Text(subtitle)
@@ -533,6 +837,8 @@ struct AdminControlsSheetView: View {
             #endif
         }
         .buttonStyle(.plain)
+        .disabled(isDisabled)
+        .opacity(isDisabled ? 0.62 : 1.0)
     }
 
     private var noticeSection: some View {
@@ -600,7 +906,7 @@ struct AdminControlsSheetView: View {
                     title: isEndingMeeting ? "Ending meeting..." : "End meeting for everyone",
                     tint: ACMColors.error,
                     androidTint: "danger",
-                    isDisabled: isEndingMeeting
+                    isDisabled: isEndingMeeting || !canUseHostControls
                 ) {
                     showEndMeetingConfirmation = true
                 }
@@ -609,7 +915,9 @@ struct AdminControlsSheetView: View {
     }
 
     private var canSendNotice: Bool {
-        !isNoticeSending && !noticeInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        canUseHostControls
+            && !isNoticeSending
+            && !noticeInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private func noticeLevelButton(_ level: AdminNoticeLevel, title: String) -> some View {
@@ -628,12 +936,12 @@ struct AdminControlsSheetView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 8))
         }
         .buttonStyle(.plain)
-        .disabled(isNoticeSending)
+        .disabled(isNoticeSending || !canUseHostControls)
     }
 
     private func sendNotice() {
         let message = noticeInput.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !message.isEmpty, !isNoticeSending else { return }
+        guard canUseHostControls, !message.isEmpty, !isNoticeSending else { return }
         isNoticeSending = true
         Task { @MainActor in
             let sent = await viewModel.broadcastAdminNotice(message: message, level: noticeLevel)
@@ -645,7 +953,7 @@ struct AdminControlsSheetView: View {
     }
 
     private func endMeetingForEveryone() {
-        guard !isEndingMeeting else { return }
+        guard canUseHostControls, !isEndingMeeting else { return }
         isEndingMeeting = true
         Task { @MainActor in
             let ended = await viewModel.endMeetingForEveryone()
@@ -717,7 +1025,14 @@ struct SharedBrowserSheetView: View {
                                 if viewModel.state.isBrowserActive {
                                     activeBrowserStatusRow
 
-                                    if viewModel.state.hasBrowserAudio {
+                                    if canManageSharedBrowser {
+                                        MoreRowDivider()
+                                        browserURLRow
+                                        MoreRowDivider()
+                                        navigateBrowserRow
+                                    }
+
+                                    if canToggleBrowserAudio {
                                         MoreRowDivider()
                                         browserAudioRow
                                     }
@@ -730,7 +1045,8 @@ struct SharedBrowserSheetView: View {
                                             androidIcon: "close",
                                             title: "Close shared browser",
                                             tint: ACMColors.error,
-                                            androidTint: "error"
+                                            androidTint: "error",
+                                            isDisabled: !canManageSharedBrowser
                                         ) {
                                             viewModel.closeSharedBrowser()
                                         }
@@ -741,7 +1057,7 @@ struct SharedBrowserSheetView: View {
                                     browserQuickLaunchGrid
                                     MoreRowDivider()
                                     launchBrowserRow
-                                } else if viewModel.state.hasBrowserAudio {
+                                } else if canToggleBrowserAudio {
                                     browserAudioRow
                                 }
                             }
@@ -761,6 +1077,13 @@ struct SharedBrowserSheetView: View {
         #else
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         #endif
+        .onAppear(perform: syncBrowserURLInput)
+        .onChange(of: viewModel.state.isBrowserActive) { _, _ in
+            syncBrowserURLInput()
+        }
+        .onChange(of: viewModel.state.browserURL) { _, _ in
+            syncBrowserURLInput()
+        }
     }
 
     private var activeBrowserStatusRow: some View {
@@ -800,7 +1123,7 @@ struct SharedBrowserSheetView: View {
                 background: ACMColors.surfaceRaised
             )
 
-            TextField("", text: $browserURLInput, prompt: Text("example.com").foregroundStyle(ACMColors.textFaint))
+            TextField("", text: $browserURLInput, prompt: Text(browserURLPrompt).foregroundStyle(ACMColors.textFaint))
                 .textFieldStyle(.plain)
                 .font(ACMFont.trial(15))
                 .foregroundStyle(ACMColors.text)
@@ -808,6 +1131,7 @@ struct SharedBrowserSheetView: View {
 #if !SKIP
 #if os(iOS)
                 .textInputAutocapitalization(.never)
+                .keyboardType(.URL)
 #endif
 #endif
                 .autocorrectionDisabled(true)
@@ -836,12 +1160,12 @@ struct SharedBrowserSheetView: View {
                         #endif
                 }
                 .buttonStyle(.plain)
-                .disabled(viewModel.state.isBrowserLaunching)
+                .disabled(!canManageSharedBrowser || viewModel.state.isBrowserLaunching)
             }
         }
         .padding(.horizontal, ACMSpacing.sm)
         .padding(.vertical, ACMSpacing.sm)
-        .opacity(viewModel.state.isBrowserLaunching ? 0.45 : 1.0)
+        .opacity(canManageSharedBrowser && !viewModel.state.isBrowserLaunching ? 1.0 : 0.45)
     }
 
     private var launchBrowserRow: some View {
@@ -854,6 +1178,19 @@ struct SharedBrowserSheetView: View {
             isDisabled: !canLaunchSharedBrowser
         ) {
             viewModel.launchSharedBrowser(url: browserURLInput)
+        }
+    }
+
+    private var navigateBrowserRow: some View {
+        MoreRow(
+            icon: "arrow.right",
+            androidIcon: "arrow.forward",
+            title: viewModel.state.isBrowserNavigating ? "Navigating..." : "Navigate shared browser",
+            tint: canNavigateSharedBrowser ? ACMColors.text : ACMColors.textFaint,
+            androidTint: canNavigateSharedBrowser ? "text" : "faint",
+            isDisabled: !canNavigateSharedBrowser
+        ) {
+            viewModel.navigateSharedBrowser(url: browserURLInput)
         }
     }
 
@@ -870,12 +1207,40 @@ struct SharedBrowserSheetView: View {
     }
 
     private var canLaunchSharedBrowser: Bool {
+        canManageSharedBrowser &&
         !viewModel.state.isBrowserLaunching &&
         !browserURLInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    private var browserURLPrompt: String {
+        viewModel.state.isBrowserActive ? "Navigate to URL" : "Launch URL"
+    }
+
+    private var canNavigateSharedBrowser: Bool {
+        canManageSharedBrowser &&
+        viewModel.state.isBrowserActive &&
+        !viewModel.state.isBrowserNavigating &&
+        !browserURLInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     private var canManageSharedBrowser: Bool {
-        viewModel.state.isAdmin && !viewModel.state.isWebinarAttendee
+        viewModel.state.isAdmin
+            && viewModel.state.connectionState == .joined
+            && !viewModel.state.isWebinarAttendee
+    }
+
+    private var canToggleBrowserAudio: Bool {
+        viewModel.state.connectionState == .joined &&
+        !viewModel.state.isWebinarAttendee &&
+        (viewModel.state.hasBrowserAudio || viewModel.state.isBrowserActive)
+    }
+
+    private func syncBrowserURLInput() {
+        guard viewModel.state.isBrowserActive else {
+            browserURLInput = ""
+            return
+        }
+        browserURLInput = viewModel.state.browserURL ?? ""
     }
 }
 
@@ -1031,7 +1396,9 @@ struct AppsSheetView: View {
     }
 
     private var canManageApps: Bool {
-        viewModel.state.isAdmin && !viewModel.state.isWebinarAttendee
+        viewModel.state.isAdmin
+            && viewModel.state.connectionState == .joined
+            && !viewModel.state.isWebinarAttendee
     }
 
     private var canManageActiveApp: Bool {
@@ -1276,16 +1643,23 @@ struct ViewSettingsSheetView: View {
     }
 
     private func tileLimitButton(icon: String, androidIcon: String, delta: Int) -> some View {
-        Button {
+        let nextValue = MeetingViewConstants.clampTiles(viewModel.state.viewMaxTiles + delta)
+        let isDisabled = nextValue == viewModel.state.viewMaxTiles
+
+        return Button {
+            guard !isDisabled else { return }
             viewModel.adjustViewMaxTiles(by: delta)
         } label: {
-            ACMSystemIcon.icon(icon, android: androidIcon, size: 14, tint: "text")
-                .foregroundStyle(ACMColors.text)
+            ACMSystemIcon.icon(icon, android: androidIcon, size: 14, tint: isDisabled ? "faint" : "text")
+                .foregroundStyle(isDisabled ? ACMColors.textFaint : ACMColors.text)
                 .frame(width: 30, height: 30)
                 .acmColorBackground(ACMColors.surfaceRaised)
                 .clipShape(Circle())
         }
         .buttonStyle(.plain)
+        .disabled(isDisabled)
+        .opacity(isDisabled ? 0.55 : 1.0)
+        .accessibilityLabel(delta < 0 ? "Decrease maximum tiles" : "Increase maximum tiles")
     }
 
     @ViewBuilder
@@ -1357,9 +1731,14 @@ struct MoreRow: View {
                 Text(title)
                     .font(ACMFont.trial(15, weight: .medium))
                     .foregroundStyle(tint)
-                    .lineLimit(1)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                    #if !SKIP
+                    .fixedSize(horizontal: false, vertical: true)
+                    .layoutPriority(1)
+                    #endif
 
-                Spacer()
+                Spacer(minLength: 8)
 
                 if showsChevron {
                     ACMSystemIcon.icon("chevron.right", android: "arrow.forward", size: 16, tint: "faint")
@@ -1368,7 +1747,7 @@ struct MoreRow: View {
                 }
             }
             .padding(.horizontal, ACMSpacing.sm)
-            .frame(height: 52)
+            .frame(minHeight: 52)
             .frame(maxWidth: .infinity, alignment: .leading)
             #if !SKIP
             .contentShape(Rectangle())

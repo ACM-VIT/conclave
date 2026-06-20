@@ -43,6 +43,7 @@ final class SocketIOManager {
     var onDisplayNameUpdated: ((DisplayNameUpdatedNotification) -> Void)?
     var onParticipantMuted: ((ParticipantMutedNotification) -> Void)?
     var onParticipantCameraOff: ((ParticipantCameraOffNotification) -> Void)?
+    var onParticipantConnectionState: ((ParticipantConnectionStateNotification) -> Void)?
 
     var onNewProducer: ((ProducerInfo) -> Void)?
     var onProducerClosed: ((ProducerClosedNotification) -> Void)?
@@ -99,6 +100,14 @@ final class SocketIOManager {
 
     func consume(producerId: String, rtpCapabilities: RtpCapabilities, transportId: String?) async throws -> ConsumeResponse { fatalError() }
     func resumeConsumer(consumerId: String, requestKeyFrame: Bool = false) async throws { fatalError() }
+    func setConsumerPreferences(
+        consumerId: String,
+        spatialLayer: Int? = nil,
+        temporalLayer: Int? = nil,
+        priority: Int? = nil,
+        paused: Bool? = nil,
+        requestKeyFrame: Bool = false
+    ) async throws { fatalError() }
     func getProducers() async throws -> GetProducersResponse { fatalError() }
 
     func toggleMute(producerId: String, paused: Bool) async throws { fatalError() }
@@ -143,14 +152,23 @@ final class SocketIOManager {
     func admitAllPending() async throws { fatalError() }
     func rejectAllPending() async throws { fatalError() }
     func kickUser(userId: String) async throws { fatalError() }
+    func closeRemoteProducer(producerId: String) async throws -> CloseRemoteProducerResponse { fatalError() }
     func muteUser(userId: String) async throws -> AdminMediaActionResponse { fatalError() }
     func muteAll() async throws -> AdminBulkMediaActionResponse { fatalError() }
     func closeUserVideo(userId: String) async throws -> AdminMediaActionResponse { fatalError() }
+    func closeUserMedia(userId: String, kinds: [String]? = nil, types: [String]? = nil, reason: String? = nil) async throws -> AdminMediaActionResponse { fatalError() }
     func stopUserScreenShare(userId: String) async throws -> AdminMediaActionResponse { fatalError() }
     func closeAllVideo() async throws -> AdminBulkMediaActionResponse { fatalError() }
     func stopAllScreenShares() async throws -> AdminBulkMediaActionResponse { fatalError() }
     func clearRaisedHands() async throws { fatalError() }
+    func getAccessLists() async throws -> AdminAccessListSnapshot { fatalError() }
+    func allowUsers(_ userKeys: [String], allowWhenLocked: Bool = true) async throws -> AdminAccessListSnapshot { fatalError() }
+    func blockUsers(_ userKeys: [String], kickPresent: Bool = true, reason: String? = nil) async throws -> AdminAccessListSnapshot { fatalError() }
+    func unblockUsers(_ userKeys: [String]) async throws -> AdminAccessListSnapshot { fatalError() }
+    func revokeAllowedUsers(_ userKeys: [String], revokeLocked: Bool = true) async throws -> AdminAccessListSnapshot { fatalError() }
     func broadcastAdminNotice(message: String, level: AdminNoticeLevel) async throws -> AdminNoticeResponse { fatalError() }
+    func endRoom(message: String?, delayMs: Int?) async throws -> AdminEndRoomResponse { fatalError() }
+    func endRoomNow(message: String?) async throws -> AdminEndRoomResponse { fatalError() }
     func promoteHost(userId: String) async throws { fatalError() }
 }
 #endif

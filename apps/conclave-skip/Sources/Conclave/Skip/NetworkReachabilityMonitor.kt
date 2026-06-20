@@ -9,6 +9,7 @@ import skip.foundation.ProcessInfo
 
 internal class NetworkReachabilityMonitor {
     internal var onStatusChanged: ((Boolean) -> Unit)? = null
+    internal var onQualityHintChanged: ((ConnectionQuality) -> Unit)? = null
 
     private val connectivityManager =
         ProcessInfo.processInfo.androidContext.applicationContext
@@ -45,7 +46,9 @@ internal class NetworkReachabilityMonitor {
     }
 
     private fun notifyCurrentStatus() {
+        val qualityHint = currentQualityHint()
         onStatusChanged?.invoke(!hasValidatedNetwork())
+        onQualityHintChanged?.invoke(qualityHint)
     }
 
     private fun hasValidatedNetwork(): Boolean {
@@ -53,5 +56,48 @@ internal class NetworkReachabilityMonitor {
         val capabilities = connectivityManager.getNetworkCapabilities(network) ?: return false
         return capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
             capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+    }
+
+    private fun currentQualityHint(): ConnectionQuality {
+        val network = connectivityManager.activeNetwork ?: return ConnectionQuality.unknown
+        val capabilities =
+            connectivityManager.getNetworkCapabilities(network) ?: return ConnectionQuality.unknown
+        val validated =
+            capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+                capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+        if (!validated) return ConnectionQuality.unknown
+
+        val metered = !capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
+        val congested = !capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_CONGESTED)
+        val suspended = !capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_SUSPENDED)
+        val cellular = capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)
+        val bandwidthQuality = bandwidthQualityHint(
+            upstreamKbps = capabilities.linkUpstreamBandwidthKbps,
+            downstreamKbps = capabilities.linkDownstreamBandwidthKbps,
+        )
+
+        if ((congested || suspended) && (metered || cellular)) return ConnectionQuality.emergency
+        if (congested || suspended) return ConnectionQuality.poor
+        if (bandwidthQuality != ConnectionQuality.unknown) return bandwidthQuality
+        if (metered || cellular) return ConnectionQuality.fair
+        return ConnectionQuality.good
+    }
+
+    private fun bandwidthQualityHint(upstreamKbps: Int, downstreamKbps: Int): ConnectionQuality {
+        val upstream = upstreamKbps.takeIf { it > 0 }
+        val downstream = downstreamKbps.takeIf { it > 0 }
+        if (upstream == null && downstream == null) return ConnectionQuality.unknown
+
+        if ((upstream != null && upstream <= 120) || (downstream != null && downstream <= 300)) {
+            return ConnectionQuality.emergency
+        }
+        if ((upstream != null && upstream <= 240) || (downstream != null && downstream <= 800)) {
+            return ConnectionQuality.poor
+        }
+        if ((upstream != null && upstream <= 500) || (downstream != null && downstream <= 1_500)) {
+            return ConnectionQuality.fair
+        }
+
+        return ConnectionQuality.unknown
     }
 }

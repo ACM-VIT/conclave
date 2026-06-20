@@ -75,13 +75,22 @@ final class AppState {
     }
 
     func clearAuthentication(signOutRemote: Bool = true) {
-        currentUser = nil
-        authProvider = .none
-        isAuthenticated = false
-        UserDefaults.standard.removeObject(forKey: Self.storedUserKey)
-        guard signOutRemote else { return }
-        Task {
+        clearLocalAuthenticationState()
+        if signOutRemote {
+            Task {
+                await NativeAuthService.signOut()
+            }
+        } else {
+            NativeAuthService.clearStoredSessionCookies()
+        }
+    }
+
+    func clearAuthenticationAndWait(signOutRemote: Bool = true) async {
+        clearLocalAuthenticationState()
+        if signOutRemote {
             await NativeAuthService.signOut()
+        } else {
+            NativeAuthService.clearStoredSessionCookies()
         }
     }
 
@@ -106,7 +115,8 @@ final class AppState {
         guard let raw = UserDefaults.standard.string(forKey: Self.storedUserKey),
               let data = raw.data(using: .utf8),
               let stored = try? JSONDecoder().decode(StoredAuthUser.self, from: data),
-              stored.provider != AppState.AuthProvider.guest else {
+              stored.provider != AppState.AuthProvider.none,
+              !stored.id.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines).isEmpty else {
             return
         }
 
@@ -117,11 +127,20 @@ final class AppState {
             provider: stored.provider
         )
         authProvider = stored.provider
-        isAuthenticated = true
+        isAuthenticated = stored.provider != AppState.AuthProvider.guest
+    }
+
+    private func clearLocalAuthenticationState() {
+        currentUser = nil
+        authProvider = .none
+        isAuthenticated = false
+        UserDefaults.standard.removeObject(forKey: Self.storedUserKey)
     }
 
     private func persistAuthState() {
-        guard let currentUser, currentUser.provider != .guest else {
+        guard let currentUser,
+              currentUser.provider != .none,
+              !currentUser.id.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines).isEmpty else {
             UserDefaults.standard.removeObject(forKey: Self.storedUserKey)
             return
         }

@@ -18,6 +18,7 @@ import {
 } from "@conclave/meeting-core";
 import { Avatar } from "@conclave/ui-tokens/web";
 import { useSmartParticipantOrderWithMetadata } from "../../hooks/useSmartParticipantOrder";
+import { getRenderableParticipantVideoStream } from "../../lib/participant-media";
 import type { Participant } from "../../lib/types";
 import { isSystemUserId, truncateDisplayName } from "../../lib/utils";
 import ParticipantAudio from "../ParticipantAudio";
@@ -1139,6 +1140,8 @@ const ParticipantTile = memo(function ParticipantTile({
   isActiveSpeaker: boolean;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const videoStream = getRenderableParticipantVideoStream(participant);
+  const videoTrack = videoStream?.getVideoTracks()[0] ?? null;
   const connectionStatus = participant.connectionStatus;
   const isReconnecting = connectionStatus?.state === "reconnecting";
 
@@ -1146,15 +1149,15 @@ const ParticipantTile = memo(function ParticipantTile({
     const video = videoRef.current;
     if (!video) return;
 
-    if (!participant.videoStream || participant.isCameraOff) {
+    if (!videoStream) {
       if (video.srcObject) {
         video.srcObject = null;
       }
       return;
     }
 
-    if (video.srcObject !== participant.videoStream) {
-      video.srcObject = participant.videoStream;
+    if (video.srcObject !== videoStream) {
+      video.srcObject = videoStream;
     }
 
     const playVideo = () => {
@@ -1163,8 +1166,6 @@ const ParticipantTile = memo(function ParticipantTile({
 
     playVideo();
 
-    const videoStream = participant.videoStream;
-    const videoTrack = videoStream.getVideoTracks()[0];
     if (videoTrack) {
       videoTrack.addEventListener("unmute", playVideo);
     }
@@ -1178,12 +1179,11 @@ const ParticipantTile = memo(function ParticipantTile({
       }
     };
   }, [
-    participant.videoStream,
-    participant.videoProducerId,
-    participant.isCameraOff,
+    videoStream,
+    videoTrack,
   ]);
 
-  const showPlaceholder = !participant.videoStream || participant.isCameraOff;
+  const showPlaceholder = !videoStream;
   const label = truncateDisplayName(displayName, variant === "rail" ? 14 : 20);
 
   return (
@@ -1193,6 +1193,9 @@ const ParticipantTile = memo(function ParticipantTile({
         isActiveSpeaker,
         isHandRaised: participant.isHandRaised,
       })}
+      data-meet-video-adaptively-paused={
+        participant.isVideoAdaptivelyPaused ? "true" : "false"
+      }
     >
       <video
         ref={videoRef}
@@ -1232,20 +1235,22 @@ const ParticipantTile = memo(function ParticipantTile({
 
 function WarmRemoteVideo({ participant }: { participant: Participant }) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const videoStream = getRenderableParticipantVideoStream(participant);
+  const videoTrack = videoStream?.getVideoTracks()[0] ?? null;
 
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
 
-    if (!participant.videoStream || participant.isCameraOff) {
+    if (!videoStream) {
       if (video.srcObject) {
         video.srcObject = null;
       }
       return;
     }
 
-    if (video.srcObject !== participant.videoStream) {
-      video.srcObject = participant.videoStream;
+    if (video.srcObject !== videoStream) {
+      video.srcObject = videoStream;
     }
 
     const playVideo = () => {
@@ -1254,8 +1259,6 @@ function WarmRemoteVideo({ participant }: { participant: Participant }) {
 
     playVideo();
 
-    const videoStream = participant.videoStream;
-    const videoTrack = videoStream.getVideoTracks()[0];
     if (videoTrack) {
       videoTrack.addEventListener("unmute", playVideo);
     }
@@ -1269,12 +1272,11 @@ function WarmRemoteVideo({ participant }: { participant: Participant }) {
       }
     };
   }, [
-    participant.videoStream,
-    participant.videoProducerId,
-    participant.isCameraOff,
+    videoStream,
+    videoTrack,
   ]);
 
-  if (!participant.videoStream || participant.isCameraOff) {
+  if (!videoStream) {
     return null;
   }
 
@@ -1392,8 +1394,9 @@ function getAvatarSize(variant: TileVariant) {
 }
 
 function hasLiveVideo(participant: Participant) {
-  if (!participant.videoStream || participant.isCameraOff) return false;
-  return participant.videoStream
+  const videoStream = getRenderableParticipantVideoStream(participant);
+  if (!videoStream) return false;
+  return videoStream
     .getVideoTracks()
     .some((track) => track.readyState === "live");
 }

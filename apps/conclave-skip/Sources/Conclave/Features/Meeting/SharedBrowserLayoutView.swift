@@ -204,6 +204,10 @@ struct SharedBrowserLayoutView: View {
 
             Spacer()
 
+            if canToggleBrowserAudio {
+                browserAudioButton
+            }
+
             Circle()
                 .fill(ACMColors.success)
                 .frame(width: 7, height: 7)
@@ -221,9 +225,42 @@ struct SharedBrowserLayoutView: View {
         }
     }
 
+    private var browserAudioButton: some View {
+        let isMuted = viewModel.state.isBrowserAudioMuted
+        let label = isMuted ? "Unmute shared browser audio" : "Mute shared browser audio"
+
+        return Button {
+            viewModel.toggleBrowserAudio()
+        } label: {
+            ZStack {
+                ACMSystemIcon.icon(
+                    isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill",
+                    android: isMuted ? "volume.off" : "volume",
+                    size: 14,
+                    tint: isMuted ? "accent" : "text"
+                )
+                .foregroundStyle(isMuted ? ACMColors.primaryOrange : ACMColors.text)
+
+#if SKIP
+                ACMAndroidSemanticText(label)
+#endif
+            }
+            .frame(width: 30, height: 30)
+            .acmGlassCapsule(interactive: true)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+    }
+
     private var canNavigate: Bool {
         !viewModel.state.isBrowserNavigating &&
         !navInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var canToggleBrowserAudio: Bool {
+        viewModel.state.connectionState == .joined &&
+        !viewModel.state.isWebinarAttendee &&
+        (viewModel.state.hasBrowserAudio || viewModel.state.isBrowserActive)
     }
 
     private var displayBrowserHost: String {
@@ -245,7 +282,9 @@ struct SharedBrowserLayoutView: View {
     private var thumbnailHeight: CGFloat { isCompact ? 68.0 : 70.0 }
 
     private var localThumbnail: some View {
-        VideoGridItem(
+        let localVideoTrack = viewModel.webRTCClient.getLocalVideoTrack()
+        let captureSession = (!viewModel.state.isCameraOff && localVideoTrack == nil) ? viewModel.webRTCClient.getCaptureSession() : nil
+        return VideoGridItem(
             displayName: viewModel.state.displayName,
             isMuted: viewModel.state.isMuted,
             isCameraOff: viewModel.state.isCameraOff,
@@ -253,8 +292,8 @@ struct SharedBrowserLayoutView: View {
             isGhost: viewModel.state.isGhostMode,
             isSpeaking: viewModel.state.effectiveActiveSpeakerId.map { viewModel.state.isLocalParticipantUserId($0) } == true,
             isLocal: true,
-            captureSession: viewModel.webRTCClient.getCaptureSession(),
-            localVideoTrack: viewModel.webRTCClient.getLocalVideoTrack()
+            captureSession: captureSession,
+            localVideoTrack: localVideoTrack
         )
         .frame(width: thumbnailWidth, height: thumbnailHeight)
     }
@@ -268,6 +307,7 @@ struct SharedBrowserLayoutView: View {
             isGhost: participant.isGhost,
             isSpeaking: viewModel.state.effectiveActiveSpeakerId == participant.id,
             isLocal: false,
+            connectionStatus: participant.connectionStatus,
             trackWrapper: viewModel.webRTCClient.remoteVideoTracks[participant.id]
         )
         .frame(width: thumbnailWidth, height: thumbnailHeight)

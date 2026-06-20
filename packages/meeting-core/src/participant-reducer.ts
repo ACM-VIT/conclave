@@ -18,6 +18,12 @@ export type ParticipantAction =
     }
   | { type: "UPDATE_MUTED"; userId: string; muted: boolean }
   | { type: "UPDATE_CAMERA_OFF"; userId: string; cameraOff: boolean }
+  | {
+      type: "UPDATE_VIDEO_ADAPTIVE_PAUSED";
+      userId: string;
+      producerId: string;
+      adaptivelyPaused: boolean;
+    }
   | { type: "UPDATE_HAND_RAISED"; userId: string; raised: boolean }
   | {
       type: "UPDATE_CONNECTION_STATUS";
@@ -41,6 +47,7 @@ const createEmptyParticipant = (
   screenShareAudioProducerId: null,
   isMuted: false,
   isCameraOff: false,
+  isVideoAdaptivelyPaused: false,
   isHandRaised: false,
   isGhost,
 });
@@ -119,6 +126,7 @@ export function participantReducer(
       } else if (action.kind === "video") {
         updated.videoStream = action.stream;
         updated.videoProducerId = action.stream ? action.producerId : null;
+        updated.isVideoAdaptivelyPaused = false;
         if (action.stream) updated.isCameraOff = false;
       } else if (action.kind === "audio") {
         updated.audioStream = action.stream;
@@ -139,6 +147,8 @@ export function participantReducer(
         updated.screenShareAudioProducerId ===
           participant.screenShareAudioProducerId &&
         updated.isCameraOff === participant.isCameraOff &&
+        updated.isVideoAdaptivelyPaused ===
+          participant.isVideoAdaptivelyPaused &&
         updated.isMuted === participant.isMuted
       ) {
         return state;
@@ -155,12 +165,36 @@ export function participantReducer(
     }
     case "UPDATE_CAMERA_OFF": {
       const participant = state.get(action.userId);
-      if (participant && participant.isCameraOff === action.cameraOff) {
+      const nextVideoAdaptivelyPaused =
+        action.cameraOff ? false : participant?.isVideoAdaptivelyPaused ?? false;
+      if (
+        participant &&
+        participant.isCameraOff === action.cameraOff &&
+        participant.isVideoAdaptivelyPaused === nextVideoAdaptivelyPaused
+      ) {
         return state;
       }
       return withParticipant(state, action.userId, {
         ...(participant || createEmptyParticipant(action.userId)),
         isCameraOff: action.cameraOff,
+        isVideoAdaptivelyPaused: nextVideoAdaptivelyPaused,
+      });
+    }
+    case "UPDATE_VIDEO_ADAPTIVE_PAUSED": {
+      const participant = state.get(action.userId);
+      if (!participant || participant.videoProducerId !== action.producerId) {
+        return state;
+      }
+      const nextVideoAdaptivelyPaused =
+        action.adaptivelyPaused &&
+        !participant.isCameraOff &&
+        Boolean(participant.videoStream);
+      if (participant.isVideoAdaptivelyPaused === nextVideoAdaptivelyPaused) {
+        return state;
+      }
+      return withParticipant(state, action.userId, {
+        ...participant,
+        isVideoAdaptivelyPaused: nextVideoAdaptivelyPaused,
       });
     }
     case "UPDATE_HAND_RAISED": {

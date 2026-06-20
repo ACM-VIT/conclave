@@ -143,7 +143,9 @@ struct PresentationLayoutView: View {
     private var thumbnailHeight: CGFloat { isCompact ? 68.0 : 70.0 }
 
     var localThumbnail: some View {
-        VideoGridItem(
+        let localVideoTrack = viewModel.webRTCClient.getLocalVideoTrack()
+        let captureSession = (!viewModel.state.isCameraOff && localVideoTrack == nil) ? viewModel.webRTCClient.getCaptureSession() : nil
+        return VideoGridItem(
             displayName: viewModel.state.displayName,
             isMuted: viewModel.state.isMuted,
             isCameraOff: viewModel.state.isCameraOff,
@@ -151,8 +153,8 @@ struct PresentationLayoutView: View {
             isGhost: viewModel.state.isGhostMode,
             isSpeaking: viewModel.state.effectiveActiveSpeakerId.map { viewModel.state.isLocalParticipantUserId($0) } == true,
             isLocal: true,
-            captureSession: viewModel.webRTCClient.getCaptureSession(),
-            localVideoTrack: viewModel.webRTCClient.getLocalVideoTrack()
+            captureSession: captureSession,
+            localVideoTrack: localVideoTrack
         )
         .frame(width: thumbnailWidth, height: thumbnailHeight)
     }
@@ -166,6 +168,7 @@ struct PresentationLayoutView: View {
             isGhost: participant.isGhost,
             isSpeaking: viewModel.state.effectiveActiveSpeakerId == participant.id,
             isLocal: false,
+            connectionStatus: participant.connectionStatus,
             trackWrapper: viewModel.webRTCClient.remoteVideoTracks[participant.id]
         )
         .frame(width: thumbnailWidth, height: thumbnailHeight)
