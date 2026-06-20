@@ -26,6 +26,8 @@ const files = {
   webPresentationLayout: "apps/web/src/app/components/PresentationLayout.tsx",
   webMobilePresentationLayout:
     "apps/web/src/app/components/mobile/MobilePresentationLayout.tsx",
+  webMobileBrowserLayout:
+    "apps/web/src/app/components/mobile/MobileBrowserLayout.tsx",
   webMeetClient: "apps/web/src/app/meets-client.tsx",
   webMeetMedia: "apps/web/src/app/hooks/useMeetMedia.ts",
   webMeetSocket: "apps/web/src/app/hooks/useMeetSocket.ts",
@@ -331,6 +333,7 @@ for (const [key, label] of [
   ["webGridLayout", "grid video"],
   ["webPresentationLayout", "presentation video"],
   ["webMobilePresentationLayout", "mobile presentation video"],
+  ["webMobileBrowserLayout", "mobile browser video"],
 ]) {
   assertNotIncludes(
     key,
@@ -367,6 +370,21 @@ assertRegex(
   "webMobileGridLayout",
   /function WarmRemoteVideo[\s\S]*createPlaybackRecoveryScheduler[\s\S]*shouldAttemptAnimationFrameReplay[\s\S]*video\.addEventListener\("stalled", scheduleReplay\)[\s\S]*document\.addEventListener\("visibilitychange", handleVisibilityChange\)[\s\S]*window\.addEventListener\("orientationchange", handleOrientationChange\)/,
   "web mobile grid warm remote video keeps decoder playback live",
+);
+assertRegex(
+  "webGridLayout",
+  /const OverflowGalleryTile = memo\(function OverflowGalleryTile[\s\S]*createPlaybackRecoveryScheduler[\s\S]*shouldAttemptAnimationFrameReplay[\s\S]*video\.addEventListener\("stalled", scheduleReplay\)[\s\S]*document\.addEventListener\("visibilitychange", handleVisibilityChange\)[\s\S]*window\.addEventListener\("orientationchange", handleWindowChange\)/,
+  "web overflow gallery remote video keeps decoder playback live",
+);
+assertRegex(
+  "webMobilePresentationLayout",
+  /const VideoThumbnail = memo\(function VideoThumbnail[\s\S]*createPlaybackRecoveryScheduler[\s\S]*shouldAttemptAnimationFrameReplay[\s\S]*video\.addEventListener\("stalled", scheduleReplay\)[\s\S]*document\.addEventListener\("visibilitychange", handleVisibilityChange\)[\s\S]*window\.addEventListener\("orientationchange", handleWindowChange\)/,
+  "web mobile presentation thumbnails keep decoder playback live",
+);
+assertRegex(
+  "webMobileBrowserLayout",
+  /const VideoThumbnail = memo\(function VideoThumbnail[\s\S]*createPlaybackRecoveryScheduler[\s\S]*shouldAttemptAnimationFrameReplay[\s\S]*video\.addEventListener\("stalled", scheduleReplay\)[\s\S]*document\.addEventListener\("visibilitychange", handleVisibilityChange\)[\s\S]*window\.addEventListener\("orientationchange", handleWindowChange\)/,
+  "web mobile browser thumbnails keep decoder playback live",
 );
 assertRegex(
   "webAdaptiveConsumerPreferences",
@@ -1531,9 +1549,8 @@ assertRegex(
   "Android fair bandwidth quality hint",
 );
 
-// Bandwidth-heavy video effects assets must not auto-load on constrained links.
-// Camera/screen publishing should stay raw and cheap unless the user has enough
-// bandwidth and real effects are active.
+// Bandwidth-heavy video effects assets must not auto-load on constrained links,
+// but selected effects must stay active once the user asks for them.
 assertIncludes(
   "webNetworkInformation",
   "export function shouldDeferBandwidthHeavyPreload",
@@ -1544,15 +1561,25 @@ assertIncludes(
   "if (!connection) return isLikelyMobileOrTabletNavigator();",
   "web mobile no-NetworkInformation preload deferral",
 );
-assertIncludes(
+assertNotIncludes(
+  "webNetworkInformation",
+  "shouldSuppressBandwidthHeavyVideoEffects",
+  "web network hints must not expose an effects disable gate",
+);
+assertNotIncludes(
   "webMeetClient",
-  "const shouldSuppressVideoEffectsForBandwidth =\n    useBandwidthHeavyVideoEffectsSuppressed();",
-  "web meet-shell video effects bandwidth suppression",
+  "useBandwidthHeavyVideoEffectsSuppressed",
+  "web meet-shell must not import an effects suppression hook",
+);
+assertNotIncludes(
+  "webMeetClient",
+  "shouldSuppressVideoEffectsForBandwidth",
+  "web meet-shell must not disable selected video effects for bandwidth",
 );
 assertRegex(
   "webMeetClient",
-  /const shouldRunVisualVideoEffects =\s*activeVideoEffectsCount > 0 &&\s*!shouldSuppressVideoEffectsForBandwidth;[\s\S]*const shouldRunVideoEffects = shouldRunVisualVideoEffects;[\s\S]*const shouldPublishProcessedVideo = shouldRunVisualVideoEffects;/,
-  "web meet-shell effects stay active across visibility changes unless constrained",
+  /const shouldRunVisualVideoEffects = activeVideoEffectsCount > 0;[\s\S]*const shouldRunVideoEffects = shouldRunVisualVideoEffects;[\s\S]*const shouldPublishProcessedVideo = shouldRunVisualVideoEffects;/,
+  "web meet-shell effects stay active across visibility and bandwidth changes",
 );
 assertNotIncludes(
   "webMeetClient",
@@ -1616,17 +1643,17 @@ assertRegex(
 );
 assertRegex(
   "webMeetClient",
-  /if \(activeVideoEffectsCount <= 0\) return;[\s\S]*if \(!isDocumentVisible\) return;[\s\S]*if \(shouldSuppressVideoEffectsForBandwidth\) return;[\s\S]*prewarmVideoEffectsRuntimeDeferred/,
+  /if \(activeVideoEffectsCount <= 0\) return;[\s\S]*if \(!isDocumentVisible\) return;[\s\S]*if \(shouldDeferVideoEffectsPreload\) return;[\s\S]*prewarmVideoEffectsRuntimeDeferred/,
   "web meet-shell runtime prewarm constrained-link guard",
 );
 assertRegex(
   "webMeetClient",
-  /if \(restoredVideoEffectsPrewarmDoneRef\.current\) return;[\s\S]*if \(!isDocumentVisible\) return;[\s\S]*if \(shouldSuppressVideoEffectsForBandwidth\) return;[\s\S]*reason: "restored-effects-state"/,
+  /if \(restoredVideoEffectsPrewarmDoneRef\.current\) return;[\s\S]*if \(!isDocumentVisible\) return;[\s\S]*if \(shouldDeferVideoEffectsPreload\) return;[\s\S]*reason: "restored-effects-state"/,
   "web restored-effects asset prewarm constrained-link guard",
 );
 assertRegex(
   "webMeetClient",
-  /if \(activeVideoEffectsCount <= 0\) return;[\s\S]*if \(isCameraOff \|\| !hasLiveVideoTrack\(localStream\)\) return;[\s\S]*if \(!isDocumentVisible\) return;[\s\S]*if \(shouldSuppressVideoEffectsForBandwidth\) return;[\s\S]*reason: "camera-live"/,
+  /if \(activeVideoEffectsCount <= 0\) return;[\s\S]*if \(isCameraOff \|\| !hasLiveVideoTrack\(localStream\)\) return;[\s\S]*if \(!isDocumentVisible\) return;[\s\S]*if \(shouldDeferVideoEffectsPreload\) return;[\s\S]*reason: "camera-live"/,
   "web live-camera asset prewarm constrained-link guard",
 );
 assertRegex(
@@ -1645,8 +1672,8 @@ for (const [key, label] of [
 ]) {
   assertRegex(
     key,
-    /const shouldRunPreviewVideoEffects =\s*activeVideoEffectsCount > 0 &&\s*!shouldSuppressPreviewVideoEffectsForBandwidth;/,
-    `${label} effects only run when active and not constrained`,
+    /const shouldRunPreviewVideoEffects = activeVideoEffectsCount > 0;/,
+    `${label} effects run whenever selected`,
   );
   assertRegex(
     key,

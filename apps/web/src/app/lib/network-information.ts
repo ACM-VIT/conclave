@@ -204,19 +204,3 @@ export function shouldDeferBandwidthHeavyPreload(
     quality === "poor"
   );
 }
-
-export function shouldSuppressBandwidthHeavyVideoEffects(
-  connection = getBrowserNetworkInformation(),
-): boolean {
-  if (typeof navigator !== "undefined" && navigator.onLine === false) {
-    return true;
-  }
-  if (!connection) return false;
-  if (connection.saveData === true) return true;
-  const quality = classifyBrowserNetworkQuality(connection);
-  return (
-    isEmergencyBrowserNetwork(connection) ||
-    quality === "fair" ||
-    quality === "poor"
-  );
-}

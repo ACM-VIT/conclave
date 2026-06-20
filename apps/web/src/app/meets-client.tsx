@@ -42,7 +42,6 @@ import { useMeetTts } from "./hooks/useMeetTts";
 import { MeetVolumeProvider } from "./hooks/useMeetVolume";
 import {
   useBandwidthHeavyPreloadDeferred,
-  useBandwidthHeavyVideoEffectsSuppressed,
 } from "./hooks/useBandwidthHeavyPreloadDeferred";
 import {
   useAdaptiveConsumerPreferences,
@@ -579,11 +578,7 @@ export default function MeetsClient({
   );
   const shouldDeferVideoEffectsPreload =
     useBandwidthHeavyPreloadDeferred();
-  const shouldSuppressVideoEffectsForBandwidth =
-    useBandwidthHeavyVideoEffectsSuppressed();
-  const shouldRunVisualVideoEffects =
-    activeVideoEffectsCount > 0 &&
-    !shouldSuppressVideoEffectsForBandwidth;
+  const shouldRunVisualVideoEffects = activeVideoEffectsCount > 0;
   const [videoEffectsBridgeState, setVideoEffectsBridgeState] =
     useState<VideoEffectsBridgeState>(VIDEO_EFFECTS_OFF_STATE);
   const handleVideoEffectsBridgeStateChange = useCallback(
@@ -637,7 +632,7 @@ export default function MeetsClient({
       if (cancelled) return;
       if (activeVideoEffectsCount <= 0) return;
       if (!isDocumentVisible) return;
-      if (shouldSuppressVideoEffectsForBandwidth) return;
+      if (shouldDeferVideoEffectsPreload) return;
       void prewarmVideoEffectsRuntimeDeferred({
         reason: "meet-shell-runtime",
         outputWriter: true,
@@ -670,7 +665,7 @@ export default function MeetsClient({
   }, [
     activeVideoEffectsCount,
     isDocumentVisible,
-    shouldSuppressVideoEffectsForBandwidth,
+    shouldDeferVideoEffectsPreload,
   ]);
 
   useEffect(() => {
@@ -750,7 +745,7 @@ export default function MeetsClient({
     }
     if (restoredVideoEffectsPrewarmDoneRef.current) return;
     if (!isDocumentVisible) return;
-    if (shouldSuppressVideoEffectsForBandwidth) return;
+    if (shouldDeferVideoEffectsPreload) return;
     restoredVideoEffectsPrewarmDoneRef.current = true;
     const backgroundNeedsSegmentation =
       videoEffects.background !== "none" &&
@@ -772,14 +767,14 @@ export default function MeetsClient({
       backgrounds,
       reason: "restored-effects-state",
     });
-  }, [isDocumentVisible, shouldSuppressVideoEffectsForBandwidth, videoEffects]);
+  }, [isDocumentVisible, shouldDeferVideoEffectsPreload, videoEffects]);
 
   useEffect(() => {
     if (cameraLiveEffectsPrewarmDoneRef.current) return;
     if (activeVideoEffectsCount <= 0) return;
     if (isCameraOff || !hasLiveVideoTrack(localStream)) return;
     if (!isDocumentVisible) return;
-    if (shouldSuppressVideoEffectsForBandwidth) return;
+    if (shouldDeferVideoEffectsPreload) return;
 
     cameraLiveEffectsPrewarmDoneRef.current = true;
     void prewarmVideoEffectsAssetsDeferred({
@@ -792,7 +787,7 @@ export default function MeetsClient({
     isDocumentVisible,
     isCameraOff,
     localStream,
-    shouldSuppressVideoEffectsForBandwidth,
+    shouldDeferVideoEffectsPreload,
   ]);
 
   const [browserAudioNeedsGesture, setBrowserAudioNeedsGesture] =
@@ -1557,7 +1552,7 @@ export default function MeetsClient({
         ),
         isDocumentVisible,
         activeVideoEffectsCount,
-        shouldSuppressVideoEffectsForBandwidth,
+        shouldDeferVideoEffectsPreload,
         shouldRunVideoEffects,
         videoEffects: getMeetVideoEffectsDebugSnapshot(videoEffects),
         videoEffectsStatus,
@@ -1626,7 +1621,7 @@ export default function MeetsClient({
       refs.videoProducerRef,
       shouldPublishProcessedVideo,
       shouldRunVideoEffects,
-      shouldSuppressVideoEffectsForBandwidth,
+      shouldDeferVideoEffectsPreload,
       videoEffects,
       videoEffectsError,
       videoEffectsDebugStats,

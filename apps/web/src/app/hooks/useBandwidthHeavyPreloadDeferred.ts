@@ -4,7 +4,6 @@ import { useEffect, useState } from "react";
 import {
   getBrowserNetworkInformation,
   shouldDeferBandwidthHeavyPreload,
-  shouldSuppressBandwidthHeavyVideoEffects,
 } from "../lib/network-information";
 
 const useNetworkBoolean = (readValue: () => boolean): boolean => {
@@ -31,8 +30,4 @@ const useNetworkBoolean = (readValue: () => boolean): boolean => {
 
 export function useBandwidthHeavyPreloadDeferred(): boolean {
   return useNetworkBoolean(shouldDeferBandwidthHeavyPreload);
-}
-
-export function useBandwidthHeavyVideoEffectsSuppressed(): boolean {
-  return useNetworkBoolean(shouldSuppressBandwidthHeavyVideoEffects);
 }

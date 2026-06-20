@@ -42,7 +42,6 @@ import MeetsErrorBanner from "./MeetsErrorBanner";
 import { useCameraPermissionState } from "../hooks/useCameraPermissionState";
 import {
   useBandwidthHeavyPreloadDeferred,
-  useBandwidthHeavyVideoEffectsSuppressed,
 } from "../hooks/useBandwidthHeavyPreloadDeferred";
 import {
   countActiveVideoEffects,
@@ -286,11 +285,7 @@ function JoinScreen({
   const activeVideoEffectsCount = countActiveVideoEffects(videoEffects);
   const shouldDeferPreviewVideoEffectsPreload =
     useBandwidthHeavyPreloadDeferred();
-  const shouldSuppressPreviewVideoEffectsForBandwidth =
-    useBandwidthHeavyVideoEffectsSuppressed();
-  const shouldRunPreviewVideoEffects =
-    activeVideoEffectsCount > 0 &&
-    !shouldSuppressPreviewVideoEffectsForBandwidth;
+  const shouldRunPreviewVideoEffects = activeVideoEffectsCount > 0;
   const [videoEffectsBridgeState, setVideoEffectsBridgeState] =
     useState<VideoEffectsBridgeState>(VIDEO_EFFECTS_OFF_STATE);
   const processedPreviewStream = shouldRunPreviewVideoEffects

@@ -6,6 +6,7 @@ import { Avatar } from "@conclave/ui-tokens/web";
 import { useMeetVolume } from "../../hooks/useMeetVolume";
 import { useSmartParticipantOrder } from "../../hooks/useSmartParticipantOrder";
 import { getRenderableParticipantVideoStream } from "../../lib/participant-media";
+import { createPlaybackRecoveryScheduler } from "../../lib/playback-recovery";
 import type { Participant } from "../../lib/types";
 import {
   isSystemUserId,
@@ -339,20 +340,56 @@ const VideoThumbnail = memo(function VideoThumbnail({
       video.srcObject = videoStream;
     }
 
+    let cancelled = false;
+
     const playVideo = () => {
+      if (cancelled) return;
       video.play().catch(() => {});
     };
 
-    playVideo();
+    const playbackRecovery = createPlaybackRecoveryScheduler({
+      attemptPlayback: playVideo,
+      shouldAttemptAnimationFrameReplay: () =>
+        !cancelled &&
+        (video.paused ||
+          video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA),
+    });
+    const scheduleReplay = playbackRecovery.schedule;
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        scheduleReplay();
+      }
+    };
+    const handleWindowChange = () => {
+      scheduleReplay();
+    };
+
+    scheduleReplay();
 
     if (videoTrack) {
-      videoTrack.addEventListener("unmute", playVideo);
+      videoTrack.addEventListener("unmute", scheduleReplay);
     }
+    video.addEventListener("loadedmetadata", scheduleReplay);
+    video.addEventListener("loadeddata", scheduleReplay);
+    video.addEventListener("canplay", scheduleReplay);
+    video.addEventListener("stalled", scheduleReplay);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("resize", handleWindowChange);
+    window.addEventListener("orientationchange", handleWindowChange);
 
     return () => {
+      cancelled = true;
       if (videoTrack) {
-        videoTrack.removeEventListener("unmute", playVideo);
+        videoTrack.removeEventListener("unmute", scheduleReplay);
       }
+      video.removeEventListener("loadedmetadata", scheduleReplay);
+      video.removeEventListener("loadeddata", scheduleReplay);
+      video.removeEventListener("canplay", scheduleReplay);
+      video.removeEventListener("stalled", scheduleReplay);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("resize", handleWindowChange);
+      window.removeEventListener("orientationchange", handleWindowChange);
+      playbackRecovery.clear();
       if (video.srcObject === videoStream) {
         video.srcObject = null;
       }
