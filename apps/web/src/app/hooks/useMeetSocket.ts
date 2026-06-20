@@ -7,12 +7,12 @@ import {
   MAX_RECONNECT_ATTEMPTS,
   MEETS_ICE_SERVERS,
   MEETS_TURN_ICE_SERVERS,
-  OPUS_MAX_AVERAGE_BITRATE,
   RECONNECT_DELAY_MS,
   SOCKET_TIMEOUT_MS,
   SOCKET_CONNECT_TIMEOUT_MS,
   TRANSPORT_DISCONNECT_GRACE_MS,
   PRODUCER_SYNC_INTERVAL_MS,
+  buildMicrophoneOpusCodecOptions,
 } from "../lib/constants";
 import type {
   AdminNoticeNotification,
@@ -51,8 +51,18 @@ import { telemetry } from "../lib/telemetry";
 import {
   getPreferredWebcamCodec,
   produceWebcamTrack,
+  type WebcamProducerNetworkProfile,
 } from "../lib/webcam-codec";
-import type { MeetRefs } from "./useMeetRefs";
+import { getBrowserNetworkSnapshot } from "../lib/network-information";
+import type {
+  ConsumerTelemetrySnapshot,
+  MeetRefs,
+} from "./useMeetRefs";
+
+type ConsumerTelemetryPayload = Omit<
+  ConsumerTelemetrySnapshot,
+  "receivedAt"
+>;
 
 type JoinInfo = {
   token: string;
@@ -67,6 +77,135 @@ const ADMIN_NOTICE_DURATION_MS = 60000;
 const VIDEO_STALL_KEYFRAME_REQUEST_DELAY_MS = 2500;
 const STALE_CONSUMER_RECOVERY_DELAY_MS = 9000;
 const TURN_URL_PATTERN = /^turns?:/i;
+const TRANSPORT_CC_FEEDBACK_TYPE = "transport-cc";
+
+const getBrowserPublishNetworkProfile = (): WebcamProducerNetworkProfile => {
+  const snapshot = getBrowserNetworkSnapshot();
+  const quality =
+    snapshot.quality === "unknown" ? snapshot.startupQuality : snapshot.quality;
+  if (snapshot.emergency) return "emergency";
+  if (quality === "poor") return "poor";
+  if (quality === "fair") return "fair";
+  return "good";
+};
+
+type InitialConsumerPreferences = {
+  preferredLayers?: {
+    spatialLayer: number;
+    temporalLayer?: number;
+  };
+  priority?: number;
+};
+
+const getInitialConsumerPreferences = (
+  producerInfo: ProducerInfo,
+  options: { preferHighWebcamLayer?: boolean } = {},
+): InitialConsumerPreferences => {
+  if (producerInfo.kind === "audio") {
+    return { priority: 255 };
+  }
+
+  if (producerInfo.kind !== "video") {
+    return {};
+  }
+
+  const networkProfile = getBrowserPublishNetworkProfile();
+
+  if (producerInfo.type === "screen") {
+    return {
+      preferredLayers: {
+        spatialLayer: 0,
+        temporalLayer:
+          networkProfile === "emergency" ? 0 : networkProfile === "poor" ? 1 : 2,
+      },
+      priority: 240,
+    };
+  }
+
+  if (producerInfo.type !== "webcam") {
+    return {};
+  }
+
+  if (options.preferHighWebcamLayer) {
+    if (networkProfile === "good") {
+      return {
+        preferredLayers: {
+          spatialLayer: 2,
+          temporalLayer: 2,
+        },
+        priority: 180,
+      };
+    }
+
+    if (networkProfile === "fair") {
+      return {
+        preferredLayers: {
+          spatialLayer: 1,
+          temporalLayer: 2,
+        },
+        priority: 150,
+      };
+    }
+
+    return {
+      preferredLayers: {
+        spatialLayer: 0,
+        temporalLayer: networkProfile === "emergency" ? 0 : 1,
+      },
+      priority: networkProfile === "emergency" ? 145 : 120,
+    };
+  }
+
+  if (networkProfile === "good") {
+    return { priority: 100 };
+  }
+
+  return {
+    preferredLayers: {
+      spatialLayer: 0,
+      temporalLayer:
+        networkProfile === "emergency" || networkProfile === "poor" ? 0 : 1,
+    },
+    priority: networkProfile === "fair" ? 90 : 70,
+  };
+};
+
+const normalizeReceiveRtpParametersForCongestionFeedback = (
+  rtpParameters: RtpParameters,
+): RtpParameters => {
+  let changed = false;
+  const codecs = rtpParameters.codecs.map((codec) => {
+    if (codec.mimeType.toLowerCase() !== "audio/opus") return codec;
+
+    const rtcpFeedback = codec.rtcpFeedback ?? [];
+    if (
+      rtcpFeedback.some(
+        (feedback) => feedback.type === TRANSPORT_CC_FEEDBACK_TYPE,
+      )
+    ) {
+      return codec;
+    }
+
+    changed = true;
+    return {
+      ...codec,
+      rtcpFeedback: [
+        ...rtcpFeedback,
+        { type: TRANSPORT_CC_FEEDBACK_TYPE },
+      ],
+    };
+  });
+
+  if (!changed) return rtpParameters;
+
+  // Chrome applies one congestion-control feedback mode to a bundled RTP
+  // transport. Mediasoup's audio consumer params can omit Opus transport-cc
+  // while video consumers include it, which makes Chrome ignore video TWCC.
+  return {
+    ...rtpParameters,
+    codecs,
+  };
+};
 
 class JoinRoomRedirectError extends Error {
   readonly redirectUrl: string;
@@ -281,10 +420,13 @@ interface UseMeetSocketOptions {
   setIsTtsDisabled: (value: boolean) => void;
   setIsDmEnabled: (value: boolean) => void;
   setActiveScreenShareId: (value: string | null) => void;
-  setVideoQuality: (value: VideoQuality) => void;
+  setNetworkManagedVideoQuality: (value: VideoQuality) => void;
   videoQualityRef: React.MutableRefObject<VideoQuality>;
   updateVideoQualityRef: React.MutableRefObject<
-    (quality: VideoQuality) => Promise<void>
+    (
+      quality: VideoQuality,
+      networkProfileOverride?: WebcamProducerNetworkProfile,
+    ) => Promise<void>
   >;
   requestMediaPermissions: () => Promise<MediaStream | null>;
   stopLocalTrack: (track?: MediaStreamTrack | null) => void;
@@ -363,7 +505,7 @@ export function useMeetSocket({
   setIsTtsDisabled,
   setIsDmEnabled,
   setActiveScreenShareId,
-  setVideoQuality,
+  setNetworkManagedVideoQuality,
   videoQualityRef,
   updateVideoQualityRef,
   requestMediaPermissions,
@@ -425,7 +567,10 @@ export function useMeetSocket({
     audioProducerRef,
     videoProducerRef,
     screenProducerRef,
+    intentionalLocalProducerCloseIdsRef,
     consumersRef,
+    adaptivelyPausedConsumerProducerIdsRef,
+    consumerTelemetryRef,
     producerMapRef,
     pendingProducersRef,
     leaveTimeoutsRef,
@@ -544,8 +689,10 @@ export function useMeetSocket({
       producerPausedStateRef.current.clear();
       videoFreezeStatsRef.current.clear();
       consumerRecoveryInFlightRef.current.clear();
+      consumerTelemetryRef.current.clear();
       producerMapRef.current.clear();
       pendingProducersRef.current.clear();
+      intentionalLocalProducerCloseIdsRef.current.clear();
       consumeRetryAttemptsRef.current.clear();
       leaveTimeoutsRef.current.forEach((timeoutId) => {
         window.clearTimeout(timeoutId);
@@ -622,10 +769,12 @@ export function useMeetSocket({
       dispatchParticipants,
       leaveTimeoutsRef,
       pendingProducersRef,
+      consumerTelemetryRef,
       producerMapRef,
       producerTransportRef,
       serverRoomIdRef,
       screenProducerRef,
+      intentionalLocalProducerCloseIdsRef,
       setActiveScreenShareId,
       setDisplayNames,
       setIsHandRaised,
@@ -949,6 +1098,10 @@ export function useMeetSocket({
 
       // The consume path leaves paused producers paused server-side, so resume
       // immediately when the producer unmutes instead of waiting for sync.
+      if (adaptivelyPausedConsumerProducerIdsRef.current.has(producerId)) {
+        return;
+      }
+
       const consumer = consumersRef.current.get(producerId);
       const socket = socketRef.current;
       if (consumer && socket) {
@@ -962,7 +1115,12 @@ export function useMeetSocket({
         );
       }
     },
-    [clearStaleConsumerRecoveryTimeout, consumersRef, socketRef],
+    [
+      adaptivelyPausedConsumerProducerIdsRef,
+      clearStaleConsumerRecoveryTimeout,
+      consumersRef,
+      socketRef,
+    ],
   );
 
   const setProducerPausedByUser = useCallback(
@@ -998,6 +1156,8 @@ export function useMeetSocket({
       clearStaleConsumerRecoveryTimeout(producerId);
       mutedConsumerSinceRef.current.delete(producerId);
       producerPausedStateRef.current.delete(producerId);
+      adaptivelyPausedConsumerProducerIdsRef.current.delete(producerId);
+      consumerTelemetryRef.current.delete(producerId);
       videoFreezeStatsRef.current.delete(producerId);
       consumerRecoveryInFlightRef.current.delete(producerId);
       const consumer = consumersRef.current.get(producerId);
@@ -1051,6 +1211,8 @@ export function useMeetSocket({
       pendingProducersRef,
       consumeRetryAttemptsRef,
       videoStallRecoveryTimeoutsRef,
+      adaptivelyPausedConsumerProducerIdsRef,
+      consumerTelemetryRef,
       clearStaleConsumerRecoveryTimeout,
       mutedConsumerSinceRef,
       producerPausedStateRef,
@@ -1483,14 +1645,14 @@ export function useMeetSocket({
       const audioTrack = getFirstLiveTrack(stream.getAudioTracks());
       if (audioTrack) {
         try {
+          if ("contentHint" in audioTrack) {
+            audioTrack.contentHint = "speech";
+          }
           const audioProducer = await transport.produce({
             track: audioTrack,
-            codecOptions: {
-              opusStereo: true,
-              opusFec: true,
-              opusDtx: false,
-              opusMaxAverageBitrate: OPUS_MAX_AVERAGE_BITRATE,
-            },
+            codecOptions: buildMicrophoneOpusCodecOptions(
+              getBrowserPublishNetworkProfile(),
+            ),
             appData: {
               type: "webcam" as ProducerType,
               paused: shouldPauseAudio,
@@ -1565,6 +1727,7 @@ export function useMeetSocket({
             transport,
             track: videoTrack,
             quality,
+            networkProfile: getBrowserPublishNetworkProfile(),
             paused: shouldPauseVideo,
             preferredCodec: preferredWebcamCodec,
           });
@@ -1612,6 +1775,7 @@ export function useMeetSocket({
                 transport,
                 track: rawFallbackTrack,
                 quality,
+                networkProfile: getBrowserPublishNetworkProfile(),
                 paused: shouldPauseVideo,
                 preferredCodec: preferredWebcamCodec,
               });
@@ -1683,95 +1847,6 @@ export function useMeetSocket({
     ],
   );
 
-  const reproduceCameraProducer = useCallback(
-    async (stream: MediaStream | null, reason: string): Promise<boolean> => {
-      if (isCameraOffRef.current) {
-        console.warn("[Meets] Skipping camera republish; camera is off:", {
-          reason,
-          stream: summarizeStreamForLog(stream),
-        });
-        return false;
-      }
-
-      const transport = producerTransportRef.current;
-      if (!transport || transport.closed) {
-        console.warn("[Meets] Cannot republish camera; producer transport missing:", {
-          reason,
-          transportState: transport?.connectionState,
-        });
-        return false;
-      }
-      if (videoProducerRef.current && !videoProducerRef.current.closed) {
-        return true;
-      }
-
-      const requestedVideoTrack = getVideoPublishTrack?.(stream) ?? null;
-      let videoTrack =
-        requestedVideoTrack?.readyState === "live" ? requestedVideoTrack : null;
-      if (requestedVideoTrack && requestedVideoTrack.readyState !== "live") {
-        console.warn("[Meets] Ignoring ended requested camera republish track:", {
-          reason,
-          requestedVideoTrack: summarizeTrackForLog(requestedVideoTrack),
-          stream: summarizeStreamForLog(stream),
-        });
-        if (refs.processedVideoTrackRef.current?.id === requestedVideoTrack.id) {
-          refs.processedVideoTrackRef.current = null;
-        }
-      }
-      if (!videoTrack) {
-        videoTrack = getFirstLiveTrack(stream?.getVideoTracks() ?? []);
-      }
-      if (!videoTrack) {
-        console.warn("[Meets] Cannot republish camera; no live video track:", {
-          reason,
-          stream: summarizeStreamForLog(stream),
-        });
-        return false;
-      }
-
-      try {
-        const quality = videoQualityRef.current;
-        const preferredWebcamCodec = getPreferredWebcamCodec(deviceRef.current);
-        const videoProducer = await produceWebcamTrack({
-          transport,
-          track: videoTrack,
-          quality,
-          paused: false,
-          preferredCodec: preferredWebcamCodec,
-        });
-
-        videoProducerRef.current = videoProducer;
-        const videoProducerId = videoProducer.id;
-        videoProducer.on("transportclose", () => {
-          if (videoProducerRef.current?.id === videoProducerId) {
-            videoProducerRef.current = null;
-          }
-        });
-
-        console.log("[Meets] Republished camera producer:", {
-          reason,
-          producerId: videoProducerId,
-          track: summarizeTrackForLog(videoTrack),
-        });
-        isCameraOffRef.current = false;
-        setIsCameraOff(false);
-        return true;
-      } catch (err) {
-        console.error("[Meets] Failed to republish camera producer:", err);
-        return false;
-      }
-    },
-    [
-      producerTransportRef,
-      videoProducerRef,
-      getVideoPublishTrack,
-      refs.processedVideoTrackRef,
-      videoQualityRef,
-      deviceRef,
-      setIsCameraOff,
-    ],
-  );
-
   const consumeProducer = useCallback(
     async (producerInfo: ProducerInfo): Promise<void> => {
       if (producerInfo.producerUserId === userId) {
@@ -1798,6 +1873,9 @@ export function useMeetSocket({
             transportId: transport.id,
             producerId: producerInfo.producerId,
             rtpCapabilities: device.rtpCapabilities,
+            ...getInitialConsumerPreferences(producerInfo, {
+              preferHighWebcamLayer: joinMode === "webinar_attendee",
+            }),
           },
           async (response: ConsumeResponse | { error: string }) => {
             if ("error" in response) {
@@ -1812,29 +1890,11 @@ export function useMeetSocket({
                 id: response.id,
                 producerId: response.producerId,
                 kind: response.kind,
-                rtpParameters: response.rtpParameters,
+                rtpParameters:
+                  normalizeReceiveRtpParametersForCongestionFeedback(
+                    response.rtpParameters,
+                  ),
               });
-              if (
-                joinMode === "webinar_attendee" &&
-                response.kind === "video" &&
-                producerInfo.type === "webcam"
-              ) {
-                try {
-                  const layerConsumer = consumer as typeof consumer & {
-                    setPreferredLayers?: (layers: {
-                      spatialLayer: number;
-                      temporalLayer?: number;
-                    }) => Promise<void>;
-                  };
-                  await layerConsumer.setPreferredLayers?.({
-                    spatialLayer: 2,
-                    temporalLayer: 2,
-                  });
-                } catch {
-                  // Some producer paths publish fewer simulcast layers; the SFU
-                  // will keep the best available layer in that case.
-                }
-              }
 
               consumersRef.current.set(producerInfo.producerId, consumer);
               consumeRetryAttemptsRef.current.delete(producerInfo.producerId);
@@ -1893,6 +1953,13 @@ export function useMeetSocket({
                   if (producerPausedStateRef.current.get(producerInfo.producerId)) {
                     return;
                   }
+                  if (
+                    adaptivelyPausedConsumerProducerIdsRef.current.has(
+                      producerInfo.producerId,
+                    )
+                  ) {
+                    return;
+                  }
                   void recoverStaleConsumerRef.current(
                     producerInfo,
                     `${response.kind} consumer stayed muted`,
@@ -1905,6 +1972,26 @@ export function useMeetSocket({
               };
 
               const handleTrackMuted = () => {
+                if (
+                  response.kind === "video" &&
+                  adaptivelyPausedConsumerProducerIdsRef.current.has(
+                    producerInfo.producerId,
+                  )
+                ) {
+                  mutedConsumerSinceRef.current.delete(producerInfo.producerId);
+                  clearStaleConsumerRecoveryTimeout(producerInfo.producerId);
+                  const existingTimeout = videoStallRecoveryTimeoutsRef.current.get(
+                    producerInfo.producerId,
+                  );
+                  if (existingTimeout != null) {
+                    window.clearTimeout(existingTimeout);
+                    videoStallRecoveryTimeoutsRef.current.delete(
+                      producerInfo.producerId,
+                    );
+                  }
+                  return;
+                }
+
                 if (!mutedConsumerSinceRef.current.has(producerInfo.producerId)) {
                   mutedConsumerSinceRef.current.set(
                     producerInfo.producerId,
@@ -1939,6 +2026,13 @@ export function useMeetSocket({
                     }
                     const track = activeConsumer.track;
                     if (!track || track.readyState !== "live" || !track.muted) {
+                      return;
+                    }
+                    if (
+                      adaptivelyPausedConsumerProducerIdsRef.current.has(
+                        producerInfo.producerId,
+                      )
+                    ) {
                       return;
                     }
                     socket.emit(
@@ -2048,6 +2142,7 @@ export function useMeetSocket({
       setActiveScreenShareId,
       videoStallRecoveryTimeoutsRef,
       staleConsumerRecoveryTimeoutsRef,
+      adaptivelyPausedConsumerProducerIdsRef,
       clearStaleConsumerRecoveryTimeout,
       mutedConsumerSinceRef,
       producerPausedStateRef,
@@ -2173,6 +2268,10 @@ export function useMeetSocket({
               stats.delete(producerId);
               return;
             }
+            if (adaptivelyPausedConsumerProducerIdsRef.current.has(producerId)) {
+              stats.delete(producerId);
+              return;
+            }
 
             const prev = stats.get(producerId);
             let stalls = 0;
@@ -2216,6 +2315,7 @@ export function useMeetSocket({
     socketRef,
     consumersRef,
     producerMapRef,
+    adaptivelyPausedConsumerProducerIdsRef,
     producerPausedStateRef,
     videoFreezeStatsRef,
   ]);
@@ -2285,6 +2385,17 @@ export function useMeetSocket({
       for (const producerInfo of producers) {
         const consumer = consumersRef.current.get(producerInfo.producerId);
         if (consumer) {
+          if (
+            adaptivelyPausedConsumerProducerIdsRef.current.has(
+              producerInfo.producerId,
+            )
+          ) {
+            mutedConsumerSinceRef.current.delete(producerInfo.producerId);
+            clearStaleConsumerRecoveryTimeout(producerInfo.producerId);
+            videoFreezeStatsRef.current.delete(producerInfo.producerId);
+            continue;
+          }
+
           const track = consumer.track;
           const trackIsStuckMuted =
             track?.readyState === "live" &&
@@ -2368,8 +2479,10 @@ export function useMeetSocket({
     consumeProducer,
     handleProducerClosed,
     setProducerPausedState,
+    adaptivelyPausedConsumerProducerIdsRef,
     mutedConsumerSinceRef,
     clearStaleConsumerRecoveryTimeout,
+    videoFreezeStatsRef,
   ]);
 
   const applyWebinarFeedProducers = useCallback(
@@ -2861,6 +2974,31 @@ export function useMeetSocket({
             });
 
             socket.on(
+              "consumerTelemetry",
+              (notification: ConsumerTelemetryPayload) => {
+                if (!isRoomEvent(notification?.roomId)) return;
+                if (
+                  !notification?.producerId ||
+                  !notification.consumerId ||
+                  (notification.kind !== "audio" &&
+                    notification.kind !== "video")
+                ) {
+                  return;
+                }
+
+                if (notification.event === "closed") {
+                  consumerTelemetryRef.current.delete(notification.producerId);
+                  return;
+                }
+
+                consumerTelemetryRef.current.set(notification.producerId, {
+                  ...notification,
+                  receivedAt: Date.now(),
+                });
+              },
+            );
+
+            socket.on(
               "hostChanged",
               ({
                 roomId: eventRoomId,
@@ -2918,6 +3056,45 @@ export function useMeetSocket({
                   localAudioProducer?.id === producerId ||
                   localVideoProducer?.id === producerId ||
                   localScreenProducer?.id === producerId;
+                const wasIntentionalLocalClose =
+                  intentionalLocalProducerCloseIdsRef.current.delete(producerId);
+
+                if (
+                  wasIntentionalLocalClose &&
+                  (producerUserId === userId ||
+                    producerUserId == null ||
+                    matchesLocalProducer)
+                ) {
+                  console.debug(
+                    "[Meets] Ignoring intentional local producer close:",
+                    producerId,
+                  );
+                  if (localAudioProducer?.id === producerId) {
+                    try {
+                      localAudioProducer.close();
+                    } catch {}
+                    if (audioProducerRef.current?.id === producerId) {
+                      audioProducerRef.current = null;
+                    }
+                  }
+                  if (localVideoProducer?.id === producerId) {
+                    try {
+                      localVideoProducer.close();
+                    } catch {}
+                    if (videoProducerRef.current?.id === producerId) {
+                      videoProducerRef.current = null;
+                    }
+                  }
+                  if (localScreenProducer?.id === producerId) {
+                    try {
+                      localScreenProducer.close();
+                    } catch {}
+                    if (screenProducerRef.current?.id === producerId) {
+                      screenProducerRef.current = null;
+                    }
+                  }
+                  return;
+                }
 
                 if (
                   producerUserId === userId ||
@@ -2958,15 +3135,6 @@ export function useMeetSocket({
                     if (shouldRecoverCamera) {
                       isCameraOffRef.current = false;
                       setIsCameraOff(false);
-                      void reproduceCameraProducer(
-                        currentStream,
-                        "local video producer closed",
-                      ).then((republished) => {
-                        if (!republished) {
-                          isCameraOffRef.current = true;
-                          setIsCameraOff(true);
-                        }
-                      });
                       return;
                     }
                     isCameraOffRef.current = true;
@@ -3434,9 +3602,16 @@ export function useMeetSocket({
               "setVideoQuality",
               async ({ quality }: { quality: VideoQuality }) => {
                 console.log(`[Meets] Setting video quality to: ${quality}`);
+                const previousQuality = videoQualityRef.current;
                 videoQualityRef.current = quality;
-                setVideoQuality(quality);
-                await updateVideoQualityRef.current(quality);
+                setNetworkManagedVideoQuality(quality);
+                try {
+                  await updateVideoQualityRef.current(quality);
+                } catch (error) {
+                  videoQualityRef.current = previousQuality;
+                  setNetworkManagedVideoQuality(previousQuality);
+                  console.warn("[Meets] Failed to apply SFU video quality:", error);
+                }
               },
             );
 
@@ -3879,7 +4054,6 @@ export function useMeetSocket({
       applyWebinarFeedProducers,
       producerMapRef,
       reconnectAttemptsRef,
-      reproduceCameraProducer,
       screenProducerRef,
       setActiveScreenShareId,
       setConnectionState,
@@ -3902,7 +4076,7 @@ export function useMeetSocket({
       setMeetError,
       setPendingUsers,
       setWaitingMessage,
-      setVideoQuality,
+      setNetworkManagedVideoQuality,
       socketRef,
       stopLocalTrack,
       syncProducers,

@@ -102,6 +102,11 @@ object NativeGoogleSignInBridge {
             val envValue = ProcessInfo.processInfo.environment[key]?.trim()
             if (!envValue.isNullOrEmpty() && !isUnresolvedBuildSetting(envValue)) return envValue
 
+            val metadataValue = AndroidRuntimeConfig.metadataValue(key)?.trim()
+            if (!metadataValue.isNullOrEmpty() && !isUnresolvedBuildSetting(metadataValue)) {
+                return metadataValue
+            }
+
             val bundledValue = (Bundle.main.object_(forInfoDictionaryKey = key) as? String)?.trim()
             if (!bundledValue.isNullOrEmpty() && !isUnresolvedBuildSetting(bundledValue)) {
                 return bundledValue

@@ -15,6 +15,28 @@ import type {
 } from "../lib/types";
 import { getOrCreateSessionId } from "../lib/utils";
 
+export type ConsumerTelemetryLayerPreference = {
+  spatialLayer: number;
+  temporalLayer?: number;
+};
+
+export type ConsumerTelemetrySnapshot = {
+  event: string;
+  roomId?: string;
+  userId?: string;
+  consumerId: string;
+  producerId: string;
+  kind: "audio" | "video";
+  score: unknown;
+  paused: boolean;
+  producerPaused: boolean;
+  priority: number;
+  preferredLayers?: ConsumerTelemetryLayerPreference;
+  currentLayers?: ConsumerTelemetryLayerPreference;
+  timestamp?: number;
+  receivedAt: number;
+};
+
 export function useMeetRefs() {
   const socketRef = useRef<Socket | null>(null);
   const deviceRef = useRef<Device | null>(null);
@@ -24,7 +46,14 @@ export function useMeetRefs() {
   const videoProducerRef = useRef<Producer | null>(null);
   const screenProducerRef = useRef<Producer | null>(null);
   const screenAudioProducerRef = useRef<Producer | null>(null);
+  const intentionalLocalProducerCloseIdsRef = useRef<Set<string>>(new Set());
   const consumersRef = useRef<Map<string, Consumer>>(new Map());
+  const adaptivelyPausedConsumerProducerIdsRef = useRef<Set<string>>(
+    new Set(),
+  );
+  const consumerTelemetryRef = useRef<Map<string, ConsumerTelemetrySnapshot>>(
+    new Map(),
+  );
   const producerMapRef = useRef<Map<string, ProducerMapEntry>>(new Map());
   const pendingProducersRef = useRef<Map<string, ProducerInfo>>(new Map());
   const leaveTimeoutsRef = useRef<Map<string, number>>(new Map());
@@ -90,7 +119,10 @@ export function useMeetRefs() {
     videoProducerRef,
     screenProducerRef,
     screenAudioProducerRef,
+    intentionalLocalProducerCloseIdsRef,
     consumersRef,
+    adaptivelyPausedConsumerProducerIdsRef,
+    consumerTelemetryRef,
     producerMapRef,
     pendingProducersRef,
     leaveTimeoutsRef,

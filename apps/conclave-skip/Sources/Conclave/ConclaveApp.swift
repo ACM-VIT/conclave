@@ -16,12 +16,18 @@ public struct ConclaveRootView: View {
             .onOpenURL { url in
                 _ = ConclaveAppDelegate.shared.onOpenURL(url)
             }
+            .onContinueUserActivity(NSUserActivityTypeBrowsingWeb) { activity in
+                guard let url = activity.webpageURL else { return }
+                _ = ConclaveAppDelegate.shared.onOpenURL(url)
+            }
             #endif
     }
 }
 
 public final class ConclaveAppDelegate: Sendable {
     public static let shared = ConclaveAppDelegate()
+    @MainActor private var lastOpenURLString: String?
+    @MainActor private var lastOpenURLAt = Date.distantPast
 
     init() {
     }
@@ -47,6 +53,9 @@ public final class ConclaveAppDelegate: Sendable {
     @discardableResult
     @MainActor
     public func onOpenURL(_ url: URL) -> Bool {
+        guard shouldHandleOpenURL(url.absoluteString) else {
+            return true
+        }
         if NativeAuthService.handleOpenURL(url) {
             return true
         }
@@ -56,6 +65,7 @@ public final class ConclaveAppDelegate: Sendable {
 
     public func onOpenURL(_ urlString: String) {
         Task { @MainActor in
+            guard shouldHandleOpenURL(urlString) else { return }
             if let url = URL(string: urlString), NativeAuthService.handleOpenURL(url) {
                 return
             }
@@ -73,5 +83,18 @@ public final class ConclaveAppDelegate: Sendable {
     }
 
     public func onLowMemory() {
+    }
+
+    @MainActor
+    private func shouldHandleOpenURL(_ rawValue: String) -> Bool {
+        let value = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return false }
+        let now = Date()
+        if lastOpenURLString == value, now.timeIntervalSince(lastOpenURLAt) < 1.0 {
+            return false
+        }
+        lastOpenURLString = value
+        lastOpenURLAt = now
+        return true
     }
 }

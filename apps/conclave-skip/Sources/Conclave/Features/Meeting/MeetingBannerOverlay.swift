@@ -1,10 +1,5 @@
-//
-//  MeetingBannerOverlay.swift
-//  Conclave
-//
 //  In-flow under the header because top-aligned overlays can make Skip duplicate
 //  Compose-backed icons at the top of the stage.
-//
 
 import SwiftUI
 import Observation

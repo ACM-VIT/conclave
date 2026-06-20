@@ -27,19 +27,23 @@ object NativeAuthSessionBridge {
         install()
         val headers = mutableListOf<String>()
 
-        try {
-            AndroidCookieManager.getInstance().getCookie(forURL)?.let { value ->
-                if (value.isNotBlank()) headers.add(value)
+        for (url in cookieURLStrings(forURL)) {
+            try {
+                AndroidCookieManager.getInstance().getCookie(url)?.let { value ->
+                    if (value.isNotBlank()) headers.add(value)
+                }
+            } catch (_: Throwable) {
             }
-        } catch (_: Throwable) {
         }
 
-        try {
-            val cookieMap = javaCookieManager.get(uri(forURL), emptyMap())
-            cookieMap["Cookie"]?.let { values ->
-                headers.add(values.joinToString("; "))
+        for (uri in cookieURIs(forURL)) {
+            try {
+                val cookieMap = javaCookieManager.get(uri, emptyMap())
+                cookieMap["Cookie"]?.let { values ->
+                    headers.add(values.joinToString("; "))
+                }
+            } catch (_: Throwable) {
             }
-        } catch (_: Throwable) {
         }
 
         return normalizedCookieHeader(headers)
@@ -55,19 +59,24 @@ object NativeAuthSessionBridge {
         } catch (_: Throwable) {
             null
         }
-        val uri = uri(forURL)
+        val urls = cookieURLStrings(forURL)
+        val uris = cookieURIs(forURL)
 
         for (cookie in cookies) {
-            try {
-                androidCookieManager?.setCookie(forURL, cookie)
-            } catch (_: Throwable) {
+            for (url in urls) {
+                try {
+                    androidCookieManager?.setCookie(url, cookie)
+                } catch (_: Throwable) {
+                }
             }
 
-            try {
-                HttpCookie.parse(cookie).forEach { parsedCookie ->
-                    javaCookieManager.cookieStore.add(uri, parsedCookie)
+            for (uri in uris) {
+                try {
+                    HttpCookie.parse(cookie).forEach { parsedCookie ->
+                        javaCookieManager.cookieStore.add(uri, parsedCookie)
+                    }
+                } catch (_: Throwable) {
                 }
-            } catch (_: Throwable) {
             }
         }
 
@@ -100,10 +109,181 @@ object NativeAuthSessionBridge {
         }
     }
 
+    fun clearCookies(forURL: String) {
+        install()
+        val urls = cookieURLStrings(forURL)
+        val uris = cookieURIs(forURL)
+        val targetHosts = uris.mapNotNull { it.host?.lowercase() }.toSet()
+        val authCookieNames = authCookieNames(urls, targetHosts)
+
+        try {
+            val cookieManager = AndroidCookieManager.getInstance()
+            for (url in urls) {
+                for (name in authCookieNames) {
+                    expireAndroidCookie(cookieManager, url, name)
+                    for (domain in cookieDomainCandidates(targetHosts)) {
+                        expireAndroidCookie(cookieManager, url, name, domain)
+                    }
+                }
+            }
+            cookieManager.flush()
+        } catch (_: Throwable) {
+        }
+
+        removeScopedAuthCookies(javaCookieManager, uris, targetHosts)
+
+        try {
+            val cookieHandler = CookieHandler.getDefault()
+            if (cookieHandler is JavaCookieManager && cookieHandler !== javaCookieManager) {
+                removeScopedAuthCookies(cookieHandler, uris, targetHosts)
+            }
+        } catch (_: Throwable) {
+        }
+    }
+
     private fun uri(urlString: String): URI = try {
         URI(urlString)
     } catch (_: Throwable) {
         URI.create("http://localhost")
+    }
+
+    private fun cookieURLStrings(urlString: String): List<String> =
+        cookieURIs(urlString).map { it.toString() }.distinct()
+
+    private fun cookieURIs(urlString: String): List<URI> {
+        val original = uri(urlString)
+        val host = original.host?.lowercase() ?: return listOf(original)
+        if (host !in loopbackCookieHosts) return listOf(original)
+
+        val aliases = loopbackCookieHosts + host
+        return aliases.mapNotNull { alias ->
+            try {
+                URI(
+                    original.scheme ?: "http",
+                    original.userInfo,
+                    alias,
+                    original.port,
+                    original.path,
+                    original.query,
+                    original.fragment
+                )
+            } catch (_: Throwable) {
+                null
+            }
+        }.distinct()
+    }
+
+    private val loopbackCookieHosts = linkedSetOf(
+        "localhost",
+        "127.0.0.1",
+        "10.0.2.2",
+        "10.0.3.2",
+        "0.0.0.0"
+    )
+
+    private val fallbackAuthCookieNames = linkedSetOf(
+        "better-auth.session_token",
+        "__Secure-better-auth.session_token",
+        "__Host-better-auth.session_token",
+        "better-auth.session_data",
+        "__Secure-better-auth.session_data",
+        "__Host-better-auth.session_data",
+        "better-auth.csrf_token",
+        "__Secure-better-auth.csrf_token",
+        "__Host-better-auth.csrf_token"
+    )
+
+    private fun authCookieNames(urls: List<String>, targetHosts: Set<String>): Set<String> {
+        val names = linkedSetOf<String>()
+        try {
+            val cookieManager = AndroidCookieManager.getInstance()
+            for (url in urls) {
+                cookieManager.getCookie(url)
+                    ?.split(";")
+                    ?.map { it.trim() }
+                    ?.filter { it.contains("=") }
+                    ?.map { it.substringBefore("=").trim() }
+                    ?.filter { isAuthCookieName(it) }
+                    ?.forEach(names::add)
+            }
+        } catch (_: Throwable) {
+        }
+
+        try {
+            javaCookieManager.cookieStore.cookies
+                .filter { cookie -> isAuthCookieName(cookie.name) && cookieMatchesHost(cookie, targetHosts) }
+                .map { cookie -> cookie.name }
+                .forEach(names::add)
+        } catch (_: Throwable) {
+        }
+
+        names.addAll(fallbackAuthCookieNames)
+        return names
+    }
+
+    private fun expireAndroidCookie(
+        cookieManager: AndroidCookieManager,
+        url: String,
+        name: String,
+        domain: String? = null
+    ) {
+        val domainAttribute = domain?.let { "; Domain=$it" } ?: ""
+        try {
+            cookieManager.setCookie(
+                url,
+                "$name=; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Path=/$domainAttribute"
+            )
+        } catch (_: Throwable) {
+        }
+    }
+
+    private fun removeScopedAuthCookies(
+        cookieManager: JavaCookieManager,
+        uris: List<URI>,
+        targetHosts: Set<String>
+    ) {
+        try {
+            val store = cookieManager.cookieStore
+            for (cookie in store.cookies.toList()) {
+                if (!isAuthCookieName(cookie.name) || !cookieMatchesHost(cookie, targetHosts)) {
+                    continue
+                }
+                for (uri in uris) {
+                    try {
+                        store.remove(uri, cookie)
+                    } catch (_: Throwable) {
+                    }
+                }
+            }
+        } catch (_: Throwable) {
+        }
+    }
+
+    private fun cookieDomainCandidates(targetHosts: Set<String>): List<String> {
+        val domains = linkedSetOf<String>()
+        for (host in targetHosts) {
+            if (host.isBlank()) continue
+            domains.add(host)
+            if (!host.startsWith(".")) {
+                domains.add(".$host")
+            }
+        }
+        return domains.toList()
+    }
+
+    private fun cookieMatchesHost(cookie: HttpCookie, targetHosts: Set<String>): Boolean {
+        val domain = cookie.domain?.trim('.')?.lowercase()
+        if (domain.isNullOrBlank()) return true
+        return targetHosts.any { host ->
+            host == domain || host.endsWith(".$domain") || domain.endsWith(".$host")
+        }
+    }
+
+    private fun isAuthCookieName(name: String): Boolean {
+        val normalized = name.lowercase()
+        return normalized.contains("better-auth") ||
+            normalized.contains("session") ||
+            normalized.contains("auth")
     }
 
     private fun normalizedCookieHeader(headers: List<String>): String? {

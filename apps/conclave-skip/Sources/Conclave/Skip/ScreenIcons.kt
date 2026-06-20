@@ -21,6 +21,7 @@ import androidx.compose.material.icons.rounded.CallEnd
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.ContentCopy
+import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.EmojiEmotions
 import androidx.compose.material.icons.rounded.Forum
 import androidx.compose.material.icons.rounded.Groups
@@ -35,7 +36,9 @@ import androidx.compose.material.icons.rounded.MicOff
 import androidx.compose.material.icons.rounded.MoreHoriz
 import androidx.compose.material.icons.rounded.NorthEast
 import androidx.compose.material.icons.rounded.NorthWest
+import androidx.compose.material.icons.rounded.OpenInFull
 import androidx.compose.material.icons.rounded.PanTool
+import androidx.compose.material.icons.rounded.PersonAdd
 import androidx.compose.material.icons.rounded.PersonRemove
 import androidx.compose.material.icons.rounded.Public
 import androidx.compose.material.icons.rounded.ScreenShare
@@ -55,10 +58,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 
-/// Maps the app's stable icon keys to REAL material-icons-extended ImageVectors.
-/// SkipUI's `Image(systemName:)` only resolves a tiny core glyph set, so the
-/// proper meeting glyphs (Mic, Videocam, ScreenShare, Chat, CallEnd, …) must be
-/// referenced directly in Kotlin and rendered via a Compose `Icon`.
+/// Maps stable icon keys to material-icons-extended vectors for Android.
+/// SkipUI's `Image(systemName:)` only resolves a small core glyph set.
 internal fun meetingIconVector(name: String): ImageVector = when (name) {
     "mic"             -> Icons.Rounded.Mic
     "mic.off"         -> Icons.Rounded.MicOff
@@ -80,24 +81,28 @@ internal fun meetingIconVector(name: String): ImageVector = when (name) {
     "send"            -> Icons.AutoMirrored.Rounded.Send
     "close"           -> Icons.Rounded.Close
     "copy"            -> Icons.Rounded.ContentCopy
+    "delete"          -> Icons.Rounded.Delete
     "pin.off"         -> Icons.Outlined.PushPin
     "ghost"           -> Icons.Rounded.VisibilityOff
     "host"            -> Icons.Rounded.WorkspacePremium
     "key"             -> Icons.Rounded.Key
     "link"            -> Icons.Rounded.Link
     "public"          -> Icons.Rounded.Public
+    "person.add"      -> Icons.Rounded.PersonAdd
     "remove.person"   -> Icons.Rounded.PersonRemove
     "arrow.forward"   -> Icons.AutoMirrored.Rounded.ArrowForward
     "back"            -> Icons.AutoMirrored.Rounded.ArrowBack
     "account"         -> Icons.Outlined.AccountCircle
     "block"           -> Icons.Rounded.Block
     "forum"           -> Icons.Rounded.Forum
+    "group"           -> Icons.Rounded.Groups
     "check"           -> Icons.Rounded.CheckCircle
     "volume"          -> Icons.AutoMirrored.Rounded.VolumeUp
     "volume.off"      -> Icons.AutoMirrored.Rounded.VolumeOff
     "add"             -> Icons.Rounded.Add
     "info"            -> Icons.Rounded.Info
     "warning"         -> Icons.Rounded.Warning
+    "open.in.full"    -> Icons.Rounded.OpenInFull
     "north.east"      -> Icons.Rounded.NorthEast
     "north.west"      -> Icons.Rounded.NorthWest
     "south.east"      -> Icons.Rounded.SouthEast
@@ -122,24 +127,16 @@ internal fun meetingIconTint(key: String): Color = when (key) {
     else            -> Color(0xFFFAFAFA)
 }
 
-/// Pre-builds every meeting ImageVector off the UI thread so the first sheet /
-/// controls render doesn't stall on the lazy `material-icons-extended` build.
-/// Each `Icons.Rounded.X` getter lazily constructs its ImageVector and caches it
-/// in a top-level backing field on first access; touching them all once at app
-/// start populates that process-global cache, so every later `MeetingIcon`
-/// reuses the prebuilt vector instead of building ~12 of them synchronously while
-/// a sheet is opening. Building an ImageVector is pure data (no Android UI / main
-/// thread dependency), and the getter is idempotent, so warming on a background
-/// thread is safe. Fire-and-forget — returns immediately.
+/// Warms lazily-built ImageVectors off the UI thread before the first sheet opens.
 fun warmMeetingIcons() {
     val warm = Thread {
         val keys = listOf(
             "mic", "mic.off", "video", "video.off", "screen.share", "screen.share.off",
             "hangup", "more", "chat", "chat.outline", "participants", "settings",
             "raise.hand", "raise.hand.off", "reactions", "lock", "lock.open", "send",
-            "close", "copy", "pin.off", "ghost", "host", "remove.person",
-            "key", "link", "public", "arrow.forward", "back", "account", "block", "forum", "volume",
-            "volume.off", "add", "info", "warning", "check",
+            "close", "copy", "delete", "pin.off", "ghost", "host", "person.add", "remove.person",
+            "key", "link", "public", "arrow.forward", "back", "account", "block", "forum", "group", "volume",
+            "volume.off", "add", "info", "warning", "check", "open.in.full",
             "north.east", "north.west", "south.east", "south.west"
         )
         for (k in keys) {

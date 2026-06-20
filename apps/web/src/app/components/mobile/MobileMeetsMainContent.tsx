@@ -1,5 +1,6 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { Ghost, RefreshCw, Users, X } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Dispatch, PointerEvent, SetStateAction } from "react";
@@ -28,29 +29,37 @@ import MobileChatPanel from "./MobileChatPanel";
 import MobileControlsBar from "./MobileControlsBar";
 import MobileBrowserLayout from "./MobileBrowserLayout";
 import MobileGridLayout from "./MobileGridLayout";
-import MobileJoinScreen from "./MobileJoinScreen";
 import MobileParticipantsPanel from "./MobileParticipantsPanel";
 import MobilePresentationLayout from "./MobilePresentationLayout";
 import MobileWhiteboardLayout from "./MobileWhiteboardLayout";
 import AndroidUpsellSheet from "./AndroidUpsellSheet";
 import ScreenShareAudioPlayers from "../ScreenShareAudioPlayers";
 import SystemAudioPlayers from "../SystemAudioPlayers";
-import VideoEffectsPanel from "../VideoEffectsPanel";
 import { formatDisplayName, isSystemUserId } from "../../lib/utils";
 import { useApps } from "@conclave/apps-sdk";
 import DevPlaygroundLayout from "../DevPlaygroundLayout";
-import DevMeetToolsPanel from "../DevMeetToolsPanel";
 import ParticipantVideo from "../ParticipantVideo";
 import { useCameraPermissionState } from "../../hooks/useCameraPermissionState";
 import { useStableSpeakerId } from "../../hooks/useStableSpeakerId";
-import {
-  prewarmVideoEffectsAssets,
-  type VideoEffectsDebugStats,
-  type VideoEffectsRuntimeStatus,
+import type {
+  VideoEffectsDebugStats,
+  VideoEffectsRuntimeStatus,
 } from "../../hooks/useVideoEffects";
 import {
   type VideoEffectsState,
 } from "../../lib/video-effects";
+import { getRenderableParticipantVideoStream } from "../../lib/participant-media";
+import { prewarmVideoEffectsAssetsDeferred } from "../../lib/video-effects-lazy";
+
+const MobileJoinScreen = dynamic(() => import("./MobileJoinScreen"), {
+  ssr: false,
+});
+const VideoEffectsPanel = dynamic(() => import("../VideoEffectsPanel"), {
+  ssr: false,
+});
+const DevMeetToolsPanel = dynamic(() => import("../DevMeetToolsPanel"), {
+  ssr: false,
+});
 
 interface MobileMeetsMainContentProps {
   isJoined: boolean;
@@ -86,13 +95,14 @@ interface MobileMeetsMainContentProps {
   videoEffectsError: string | null;
   videoEffectsDebugStats?: VideoEffectsDebugStats | null;
   activeVideoEffectsCount: number;
+  deferVideoEffectsPreload?: boolean;
   onPrejoinMediaCommit?: (handoff: PrejoinMediaHandoff) => void;
   isCameraOff: boolean;
   isMuted: boolean;
   isMuteTogglePending?: boolean;
   isHandRaised: boolean;
   participants: Map<string, Participant>;
-  isMirrorCamera: boolean;
+  mirrorLocalPreview: boolean;
   activeSpeakerId: string | null;
   currentUserId: string;
   selectedAudioInputDeviceId?: string;
@@ -271,13 +281,14 @@ function MobileMeetsMainContent({
   videoEffectsError,
   videoEffectsDebugStats = null,
   activeVideoEffectsCount,
+  deferVideoEffectsPreload = false,
   onPrejoinMediaCommit,
   isCameraOff,
   isMuted,
   isMuteTogglePending = false,
   isHandRaised,
   participants,
-  isMirrorCamera,
+  mirrorLocalPreview,
   activeSpeakerId,
   currentUserId,
   selectedAudioInputDeviceId,
@@ -534,12 +545,13 @@ function MobileMeetsMainContent({
       (cameraPermissionState === "prompt" ||
         cameraPermissionState === "denied"));
   const prewarmEffectsPanelOpen = useCallback(() => {
-    void prewarmVideoEffectsAssets({
+    if (deferVideoEffectsPreload) return;
+    void prewarmVideoEffectsAssetsDeferred({
       segmentation: true,
       face: true,
       reason: "mobile-effects-panel-open",
     });
-  }, []);
+  }, [deferVideoEffectsPreload]);
   const handleToggleVideoEffects = useCallback(() => {
     if (isCameraPermissionBlocked) return;
     const opening = !isVideoEffectsOpen;
@@ -596,7 +608,7 @@ function MobileMeetsMainContent({
         const mainAudioStream =
           screenShareParticipant.audioStream ?? fallbackAudioStream;
         const presenterCameraStream = getLiveVideoStream(
-          screenShareParticipant.videoStream,
+          getRenderableParticipantVideoStream(screenShareParticipant),
         );
 
         return {
@@ -606,6 +618,7 @@ function MobileMeetsMainContent({
               videoStream: screenShareStream,
               audioStream: mainAudioStream,
               isCameraOff: false,
+              isVideoAdaptivelyPaused: false,
             },
             displayName: resolveDisplayName(screenShareParticipant.userId),
           },
@@ -618,6 +631,7 @@ function MobileMeetsMainContent({
                   audioStream: null,
                   isMuted: true,
                   isCameraOff: false,
+                  isVideoAdaptivelyPaused: false,
                 },
                 displayName: resolveDisplayName(screenShareParticipant.userId),
               }
@@ -641,7 +655,7 @@ function MobileMeetsMainContent({
       .find((participant) => participant !== undefined);
     const preferredVideoParticipant =
       preferredParticipant &&
-      getLiveVideoStream(preferredParticipant.videoStream)
+      getLiveVideoStream(getRenderableParticipantVideoStream(preferredParticipant))
         ? preferredParticipant
         : null;
     const preferredAudioParticipant =
@@ -653,16 +667,17 @@ function MobileMeetsMainContent({
       preferredVideoParticipant ??
       webinarParticipants.find(
         (participant) =>
-          !participant.isCameraOff &&
-          getLiveVideoStream(participant.videoStream),
+          getLiveVideoStream(getRenderableParticipantVideoStream(participant)),
       ) ??
       webinarParticipants.find((participant) =>
-        getLiveVideoStream(participant.videoStream),
+        getLiveVideoStream(getRenderableParticipantVideoStream(participant)),
       ) ??
       preferredAudioParticipant ??
       webinarParticipants.find((participant) => participant.audioStream) ??
       webinarParticipants[0];
-    const cameraStream = getLiveVideoStream(cameraParticipant.videoStream);
+    const cameraStream = getLiveVideoStream(
+      getRenderableParticipantVideoStream(cameraParticipant),
+    );
     const mainAudioStream = cameraParticipant.audioStream ?? fallbackAudioStream;
 
     return {
@@ -673,6 +688,7 @@ function MobileMeetsMainContent({
           screenShareStream: null,
           audioStream: mainAudioStream,
           isCameraOff: !cameraStream,
+          isVideoAdaptivelyPaused: false,
         },
         displayName: resolveDisplayName(cameraParticipant.userId),
       },
@@ -987,7 +1003,7 @@ function MobileMeetsMainContent({
             isGhost={ghostEnabled}
             participants={participants}
             userEmail={userEmail}
-            isMirrorCamera={isMirrorCamera}
+            isMirrorCamera={mirrorLocalPreview}
             activeSpeakerId={activeSpeakerId}
             currentUserId={currentUserId}
             audioOutputDeviceId={audioOutputDeviceId}
@@ -1006,7 +1022,7 @@ function MobileMeetsMainContent({
             isGhost={ghostEnabled}
             participants={participants}
             userEmail={userEmail}
-            isMirrorCamera={isMirrorCamera}
+            isMirrorCamera={mirrorLocalPreview}
             activeSpeakerId={activeSpeakerId}
             currentUserId={currentUserId}
             audioOutputDeviceId={audioOutputDeviceId}
@@ -1025,7 +1041,7 @@ function MobileMeetsMainContent({
             isGhost={ghostEnabled}
             participants={participants}
             userEmail={userEmail}
-            isMirrorCamera={isMirrorCamera}
+            isMirrorCamera={mirrorLocalPreview}
             activeSpeakerId={activeSpeakerId}
             currentUserId={currentUserId}
             audioOutputDeviceId={audioOutputDeviceId}
@@ -1040,7 +1056,7 @@ function MobileMeetsMainContent({
             isGhost={ghostEnabled}
             participants={participants}
             userEmail={userEmail}
-            isMirrorCamera={isMirrorCamera}
+            isMirrorCamera={mirrorLocalPreview}
             activeSpeakerId={activeSpeakerId}
             currentUserId={currentUserId}
             audioOutputDeviceId={audioOutputDeviceId}
@@ -1199,6 +1215,7 @@ function MobileMeetsMainContent({
           error={videoEffectsError}
           debugStats={videoEffectsDebugStats}
           activeCount={activeVideoEffectsCount}
+          deferPreload={deferVideoEffectsPreload}
           cameraPermissionBlocked={isCameraPermissionBlocked}
           onToggleCamera={toggleCamera}
           onClose={handleCloseVideoEffects}

@@ -38,7 +38,6 @@ open class AndroidAppMain: Application {
 
     override fun onCreate() {
         super.onCreate()
-        logger.info("starting app")
         ProcessInfo.launch(applicationContext)
         AppDelegate.shared.onInit()
         // Prebuild the meeting icon vectors on a background thread now, so the
@@ -58,7 +57,6 @@ open class MainActivity: AppCompatActivity {
 
     override fun onCreate(savedInstanceState: android.os.Bundle?) {
         super.onCreate(savedInstanceState)
-        logger.info("starting activity")
         UIApplication.launch(this)
         // Register the MediaProjection consent launcher (must happen at onCreate
         // before the Activity reaches STARTED) so screen-share can request it.
@@ -84,11 +82,6 @@ open class MainActivity: AppCompatActivity {
 
         AppDelegate.shared.onLaunch()
         handleIncomingDeepLink(intent)
-    }
-
-    override fun onStart() {
-        logger.info("onStart")
-        super.onStart()
     }
 
     override fun onResume() {
@@ -142,6 +135,9 @@ open class MainActivity: AppCompatActivity {
     }
 
     override fun onDestroy() {
+        if (isFinishing) {
+            NativeGoogleSignInBridge.cancel()
+        }
         super.onDestroy()
         AppDelegate.shared.onDestroy()
     }
@@ -151,21 +147,10 @@ open class MainActivity: AppCompatActivity {
         AppDelegate.shared.onLowMemory()
     }
 
-    override fun onRestart() {
-        logger.info("onRestart")
-        super.onRestart()
-    }
-
     override fun onSaveInstanceState(outState: android.os.Bundle): Unit = super.onSaveInstanceState(outState)
-
-    override fun onRestoreInstanceState(bundle: android.os.Bundle) {
-        logger.info("onRestoreInstanceState")
-        super.onRestoreInstanceState(bundle)
-    }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: kotlin.Array<String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        logger.info("onRequestPermissionsResult: ${requestCode}")
         PermissionHelper.handleRequestPermissionsResult(requestCode, permissions, grantResults)
     }
 

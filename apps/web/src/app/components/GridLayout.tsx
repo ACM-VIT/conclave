@@ -30,6 +30,7 @@ import {
 } from "react";
 import { useSmartParticipantOrder } from "../hooks/useSmartParticipantOrder";
 import { useStableSpeakerId } from "../hooks/useStableSpeakerId";
+import { getRenderableParticipantVideoStream } from "../lib/participant-media";
 import type { Participant } from "../lib/types";
 import { isSystemUserId, truncateDisplayName } from "../lib/utils";
 import ParticipantAudio from "./ParticipantAudio";
@@ -224,6 +225,7 @@ type MeetRoomTilingMetadataBase = {
   presenting: boolean;
   pinnedId: string | null;
   primaryIds: string[];
+  focusIds: string[];
   visibleRemoteIds: string[];
   hiddenIds: string[];
   warmIds: string[];
@@ -315,7 +317,7 @@ const hasLiveVideo = (stream: MediaStream | null | undefined) =>
   hasLiveTrack(stream, "video");
 
 const participantHasLiveVideo = (participant: Participant) =>
-  !participant.isCameraOff && hasLiveVideo(participant.videoStream);
+  hasLiveVideo(getRenderableParticipantVideoStream(participant));
 
 const participantHasLiveAudio = (participant: Participant) =>
   !participant.isMuted && hasLiveTrack(participant.audioStream, "audio");
@@ -1637,6 +1639,25 @@ function GridLayout({
     usesStageLayout,
     visibleParticipants,
   ]);
+  const roomTilingFocusIds = useMemo(() => {
+    const ids: string[] = [];
+    if (usesStageLayout && stageMainKind === "remote" && stageMainParticipantId) {
+      ids.push(stageMainParticipantId);
+    }
+    if (activeSpeakerId) {
+      ids.push(activeSpeakerId);
+    }
+    if (featuredSpeakerId) {
+      ids.push(featuredSpeakerId);
+    }
+    return Array.from(new Set(ids.filter(Boolean)));
+  }, [
+    activeSpeakerId,
+    featuredSpeakerId,
+    stageMainKind,
+    stageMainParticipantId,
+    usesStageLayout,
+  ]);
   const roomTilingHiddenIds = useMemo(
     () => overflowParticipants.map((participant) => participant.userId),
     [overflowParticipants],
@@ -1871,6 +1892,7 @@ function GridLayout({
       presenting: hasPresentation,
       pinnedId,
       primaryIds: roomTilingPrimaryIds,
+      focusIds: roomTilingFocusIds,
       visibleRemoteIds: roomTilingRemoteVisibleIds,
       hiddenIds: roomTilingHiddenIds,
       warmIds: roomTilingWarmIds,
@@ -1988,6 +2010,7 @@ function GridLayout({
       roomTilingHiddenIds,
       roomTilingFallbackLevel,
       roomTilingPrimaryIds,
+      roomTilingFocusIds,
       roomTilingRemoteVisibleIds,
       roomTilingWarmReasons,
       roomTilingScores,
@@ -3503,7 +3526,7 @@ const OverflowGalleryTile = memo(function OverflowGalleryTile({
   onParticipantClick?: (userId: string) => void;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const videoStream = participant.isCameraOff ? null : participant.videoStream;
+  const videoStream = getRenderableParticipantVideoStream(participant);
   const videoTrack = videoStream?.getVideoTracks()[0] ?? null;
   const connectionStatus = participant.connectionStatus;
   const isReconnecting = connectionStatus?.state === "reconnecting";
@@ -3561,6 +3584,9 @@ const OverflowGalleryTile = memo(function OverflowGalleryTile({
       className={`acm-video-tile group relative flex h-28 w-44 shrink-0 snap-start flex-col overflow-hidden text-left ${
         isActiveSpeaker ? "speaking" : ""
       } ${isClickable ? "cursor-pointer hover:border-[#F95F4A]/40" : "cursor-default opacity-85"}`}
+      data-meet-video-adaptively-paused={
+        participant.isVideoAdaptivelyPaused ? "true" : "false"
+      }
     >
       <div className="relative h-full w-full">
         <video

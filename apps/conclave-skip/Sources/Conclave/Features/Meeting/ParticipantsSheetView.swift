@@ -39,20 +39,29 @@ struct ParticipantsSheetView: View {
         return false
     }
 
+    private var canUseHostControls: Bool {
+        viewModel.state.isAdmin
+            && viewModel.state.connectionState == .joined
+            && !viewModel.state.isWebinarAttendee
+    }
+
     @ViewBuilder
-    private func hostActionButton(_ title: String, icon: String, androidIcon: String, tint: Color = ACMColors.text, androidTint: String = "text", action: @escaping () -> Void) -> some View {
+    private func hostActionButton(_ title: String, icon: String, androidIcon: String, tint: Color = ACMColors.text, androidTint: String = "text", isDisabled: Bool = false, action: @escaping () -> Void) -> some View {
+        let rowTint = isDisabled ? ACMColors.textFaint : tint
+        let rowAndroidTint = isDisabled ? "faint" : androidTint
+
         Button(action: action) {
             HStack(spacing: ACMSpacing.sm) {
                 MeetingSheetIconBox(
                     icon: icon,
                     androidIcon: androidIcon,
-                    tint: tint,
-                    androidTint: androidTint
+                    tint: rowTint,
+                    androidTint: rowAndroidTint
                 )
 
                 Text(title)
                     .font(ACMFont.trial(15, weight: .medium))
-                    .foregroundStyle(tint)
+                    .foregroundStyle(rowTint)
                     .lineLimit(1)
 
                 Spacer()
@@ -65,6 +74,25 @@ struct ParticipantsSheetView: View {
 #endif
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(title)
+        .disabled(isDisabled)
+        .opacity(isDisabled ? 0.62 : 1.0)
+    }
+
+    private func participantAccessibilityStatus(
+        isHandRaised: Bool,
+        isMuted: Bool,
+        isCameraOff: Bool,
+        isScreenSharing: Bool,
+        isGhost: Bool = false
+    ) -> String {
+        var parts: [String] = []
+        if isHandRaised { parts.append("hand raised") }
+        parts.append(isMuted ? "muted" : "microphone on")
+        parts.append(isCameraOff ? "camera off" : "camera on")
+        if isScreenSharing { parts.append("screen sharing") }
+        if isGhost { parts.append("ghost mode") }
+        return parts.joined(separator: ", ")
     }
 
     @ViewBuilder
@@ -161,6 +189,8 @@ struct ParticipantsSheetView: View {
 
     @ViewBuilder
     private func pendingUserRow(userId: String, name: String) -> some View {
+        let canAct = canUseHostControls
+
         HStack(spacing: ACMSpacing.sm) {
             avatarView(name, size: 36)
 
@@ -176,13 +206,14 @@ struct ParticipantsSheetView: View {
             } label: {
                 Text("Admit")
                     .font(ACMFont.trial(13, weight: .medium))
-                    .foregroundStyle(Color.white)
+                    .foregroundStyle(canAct ? Color.white : ACMColors.textFaint)
                     .padding(.horizontal, ACMSpacing.sm)
                     .frame(height: 32)
-                    .acmColorBackground(ACMColors.primaryOrange)
+                    .acmColorBackground(canAct ? ACMColors.primaryOrange : ACMColors.surfaceRaised)
                     .clipShape(RoundedRectangle(cornerRadius: ACMRadius.sm))
             }
             .buttonStyle(.plain)
+            .disabled(!canAct)
 
             Button {
                 Task { @MainActor in
@@ -191,7 +222,7 @@ struct ParticipantsSheetView: View {
             } label: {
                 Text("Deny")
                     .font(ACMFont.trial(13, weight: .medium))
-                    .foregroundStyle(ACMColors.error)
+                    .foregroundStyle(canAct ? ACMColors.error : ACMColors.textFaint)
                     .padding(.horizontal, ACMSpacing.sm)
                     .frame(height: 32)
                     .acmColorBackground(ACMColors.surfaceRaised)
@@ -203,13 +234,16 @@ struct ParticipantsSheetView: View {
                     .clipShape(RoundedRectangle(cornerRadius: ACMRadius.sm))
             }
             .buttonStyle(.plain)
+            .disabled(!canAct)
         }
         .padding(.horizontal, ACMSpacing.sm)
         .frame(height: 56)
     }
 
     private func pendingBulkActionRow() -> some View {
-        HStack(spacing: ACMSpacing.sm) {
+        let canAct = canUseHostControls
+
+        return HStack(spacing: ACMSpacing.sm) {
             Text("Requests to join")
                 .font(ACMFont.trial(13, weight: .medium))
                 .foregroundStyle(ACMColors.textMuted)
@@ -222,20 +256,21 @@ struct ParticipantsSheetView: View {
             } label: {
                 Text("Admit all")
                     .font(ACMFont.trial(13, weight: .medium))
-                    .foregroundStyle(Color.white)
+                    .foregroundStyle(canAct ? Color.white : ACMColors.textFaint)
                     .padding(.horizontal, ACMSpacing.sm)
                     .frame(height: 32)
-                    .acmColorBackground(ACMColors.primaryOrange)
+                    .acmColorBackground(canAct ? ACMColors.primaryOrange : ACMColors.surfaceRaised)
                     .clipShape(RoundedRectangle(cornerRadius: ACMRadius.sm))
             }
             .buttonStyle(.plain)
+            .disabled(!canAct)
 
             Button {
                 viewModel.rejectAllPending()
             } label: {
                 Text("Deny all")
                     .font(ACMFont.trial(13, weight: .medium))
-                    .foregroundStyle(ACMColors.error)
+                    .foregroundStyle(canAct ? ACMColors.error : ACMColors.textFaint)
                     .padding(.horizontal, ACMSpacing.sm)
                     .frame(height: 32)
                     .acmColorBackground(ACMColors.surfaceRaised)
@@ -247,6 +282,7 @@ struct ParticipantsSheetView: View {
                     .clipShape(RoundedRectangle(cornerRadius: ACMRadius.sm))
             }
             .buttonStyle(.plain)
+            .disabled(!canAct)
         }
         .padding(.horizontal, ACMSpacing.sm)
         .frame(height: 56)
@@ -254,6 +290,14 @@ struct ParticipantsSheetView: View {
 
     @ViewBuilder
     private func currentUserRow() -> some View {
+        let isHost = viewModel.state.isHostUser(viewModel.state.userId)
+        let mediaStatus = participantAccessibilityStatus(
+            isHandRaised: viewModel.state.isHandRaised,
+            isMuted: viewModel.state.isMuted,
+            isCameraOff: viewModel.state.isCameraOff,
+            isScreenSharing: viewModel.state.isScreenSharing
+        )
+
         HStack(spacing: ACMSpacing.sm) {
             avatarView(viewModel.state.displayName)
 
@@ -267,7 +311,7 @@ struct ParticipantsSheetView: View {
                     MeetingSheetStatusPill("You")
                 }
 
-                if viewModel.state.isHostUser(viewModel.state.userId) {
+                if isHost {
                     MeetingSheetStatusPill(
                         "Host",
                         tint: ACMColors.primaryOrange,
@@ -288,19 +332,32 @@ struct ParticipantsSheetView: View {
         }
         .padding(.horizontal, ACMSpacing.sm)
         .frame(height: 56)
+        .accessibilityLabel("\(viewModel.state.displayName), You\(isHost ? ", Host" : ""), \(mediaStatus)")
     }
 
     @ViewBuilder
     private func participantRow(_ participant: Participant) -> some View {
         let displayName = viewModel.displayNameForUser(participant.id)
         let isScreenSharing = participant.isScreenSharing || viewModel.state.activeScreenShareUserId == participant.id
-        let canPromoteParticipant = viewModel.state.isAdmin
+        let canPromoteParticipant = canUseHostControls
             && !viewModel.state.isHostUser(participant.id)
             && !participant.isGhost
         let isPendingHostPromotion = pendingHostPromotionUserId == participant.id
         let isPromotingHost = promotingHostUserId == participant.id
         let isPendingRemoval = pendingKickUserId == participant.id
         let isRemovingUser = removingUserId == participant.id
+        let audioProducerId = viewModel.remoteAudioProducerId(for: participant.id)
+        let cameraProducerId = viewModel.remoteCameraProducerId(for: participant.id)
+        let screenShareProducerId = viewModel.remoteScreenShareProducerId(for: participant.id)
+        let screenShareAudioProducerId = viewModel.remoteScreenShareAudioProducerId(for: participant.id)
+        let isHost = viewModel.state.isHostUser(participant.id)
+        let mediaStatus = participantAccessibilityStatus(
+            isHandRaised: participant.isHandRaised,
+            isMuted: participant.isMuted,
+            isCameraOff: participant.isCameraOff,
+            isScreenSharing: isScreenSharing,
+            isGhost: participant.isGhost
+        )
 
         HStack(spacing: ACMSpacing.sm) {
             avatarView(displayName)
@@ -311,7 +368,7 @@ struct ParticipantsSheetView: View {
                     .foregroundStyle(ACMColors.text)
                     .lineLimit(1)
 
-                if viewModel.state.isHostUser(participant.id) {
+                if isHost {
                     MeetingSheetStatusPill(
                         "Host",
                         tint: ACMColors.primaryOrange,
@@ -331,11 +388,15 @@ struct ParticipantsSheetView: View {
                 isGhost: participant.isGhost
             )
 
-            if viewModel.state.isAdmin {
+            if canUseHostControls {
                 Menu {
                     if !participant.isCameraOff {
                         Button {
-                            viewModel.turnOffParticipantCamera(userId: participant.id)
+                            if let cameraProducerId {
+                                viewModel.stopRemoteProducer(producerId: cameraProducerId)
+                            } else {
+                                viewModel.turnOffParticipantCamera(userId: participant.id)
+                            }
                         } label: {
                             Label {
                                 Text("Turn off camera")
@@ -348,7 +409,11 @@ struct ParticipantsSheetView: View {
 
                     if isScreenSharing {
                         Button {
-                            viewModel.stopParticipantScreenShare(userId: participant.id)
+                            if let screenShareProducerId {
+                                viewModel.stopRemoteProducer(producerId: screenShareProducerId)
+                            } else {
+                                viewModel.stopParticipantScreenShare(userId: participant.id)
+                            }
                         } label: {
                             Label {
                                 Text("Stop screen share")
@@ -359,9 +424,26 @@ struct ParticipantsSheetView: View {
                         }
                     }
 
+                    if let screenShareAudioProducerId {
+                        Button {
+                            viewModel.stopRemoteProducer(producerId: screenShareAudioProducerId)
+                        } label: {
+                            Label {
+                                Text("Stop screen audio")
+                            } icon: {
+                                ACMSystemIcon.icon("speaker.slash.fill", android: "volume.off", size: 16, tint: "danger")
+                                    .foregroundStyle(ACMColors.error)
+                            }
+                        }
+                    }
+
                     if !participant.isMuted {
                         Button {
-                            viewModel.muteParticipant(userId: participant.id)
+                            if let audioProducerId {
+                                viewModel.stopRemoteProducer(producerId: audioProducerId)
+                            } else {
+                                viewModel.muteParticipant(userId: participant.id)
+                            }
                         } label: {
                             Label {
                                 Text("Mute")
@@ -466,6 +548,7 @@ struct ParticipantsSheetView: View {
         }
         .padding(.horizontal, ACMSpacing.sm)
         .frame(height: 56)
+        .accessibilityLabel("\(displayName)\(isHost ? ", Host" : ""), \(mediaStatus)")
     }
 
     var body: some View {
@@ -484,22 +567,22 @@ struct ParticipantsSheetView: View {
                             acmListSectionHeader("Host controls")
 
                             MeetingSheetSectionCard {
-                                hostActionButton("Mute everyone", icon: "mic.slash.fill", androidIcon: "mic.off") {
+                                hostActionButton("Mute everyone", icon: "mic.slash.fill", androidIcon: "mic.off", isDisabled: !canUseHostControls) {
                                     viewModel.muteAllParticipants()
                                 }
                                 MeetingSheetRowDivider(inset: ACMSpacing.sm + 32 + ACMSpacing.sm)
-                                hostActionButton("Turn off cameras", icon: "video.slash.fill", androidIcon: "video.off") {
+                                hostActionButton("Turn off cameras", icon: "video.slash.fill", androidIcon: "video.off", isDisabled: !canUseHostControls) {
                                     viewModel.turnOffAllParticipantCameras()
                                 }
                                 MeetingSheetRowDivider(inset: ACMSpacing.sm + 32 + ACMSpacing.sm)
                                 if viewModel.state.activeScreenShareUserId != nil {
-                                    hostActionButton("Stop screen share", icon: "rectangle.on.rectangle.slash", androidIcon: "screen.share.off") {
+                                    hostActionButton("Stop screen share", icon: "rectangle.on.rectangle.slash", androidIcon: "screen.share.off", isDisabled: !canUseHostControls) {
                                         viewModel.stopAllScreenShares()
                                     }
                                     MeetingSheetRowDivider(inset: ACMSpacing.sm + 32 + ACMSpacing.sm)
                                 }
                                 if hasRaisedHands {
-                                    hostActionButton("Clear raised hands", icon: "hand.raised.slash.fill", androidIcon: "raise.hand.off") {
+                                    hostActionButton("Clear raised hands", icon: "hand.raised.slash.fill", androidIcon: "raise.hand.off", isDisabled: !canUseHostControls) {
                                         viewModel.clearAllRaisedHands()
                                     }
                                     MeetingSheetRowDivider(inset: ACMSpacing.sm + 32 + ACMSpacing.sm)
@@ -509,7 +592,8 @@ struct ParticipantsSheetView: View {
                                     icon: viewModel.state.isRoomLocked ? "lock.fill" : "lock.open.fill",
                                     androidIcon: viewModel.state.isRoomLocked ? "lock" : "lock.open",
                                     tint: viewModel.state.isRoomLocked ? ACMColors.primaryOrange : ACMColors.text,
-                                    androidTint: viewModel.state.isRoomLocked ? "accent" : "text"
+                                    androidTint: viewModel.state.isRoomLocked ? "accent" : "text",
+                                    isDisabled: !canUseHostControls
                                 ) {
                                     viewModel.toggleRoomLock()
                                 }
@@ -519,7 +603,8 @@ struct ParticipantsSheetView: View {
                                     icon: "message.fill",
                                     androidIcon: "chat",
                                     tint: viewModel.state.isChatLocked ? ACMColors.primaryOrange : ACMColors.text,
-                                    androidTint: viewModel.state.isChatLocked ? "accent" : "text"
+                                    androidTint: viewModel.state.isChatLocked ? "accent" : "text",
+                                    isDisabled: !canUseHostControls
                                 ) {
                                     viewModel.toggleChatLock()
                                 }
@@ -588,7 +673,7 @@ struct ParticipantsSheetView: View {
     }
 
     private func promoteHost(_ userId: String) {
-        guard promotingHostUserId == nil else { return }
+        guard canUseHostControls, promotingHostUserId == nil else { return }
         promotingHostUserId = userId
         Task { @MainActor in
             await viewModel.makeHost(userId: userId)
@@ -602,7 +687,7 @@ struct ParticipantsSheetView: View {
     }
 
     private func removeParticipant(_ userId: String) {
-        guard removingUserId == nil else { return }
+        guard canUseHostControls, removingUserId == nil else { return }
         removingUserId = userId
         Task { @MainActor in
             await viewModel.removeUser(userId: userId)

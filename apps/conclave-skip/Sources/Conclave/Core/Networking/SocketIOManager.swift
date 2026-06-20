@@ -13,6 +13,7 @@ private enum SocketEvent {
     static let produce = SfuClientEvent.produce.rawValue
     static let consume = SfuClientEvent.consume.rawValue
     static let resumeConsumer = SfuClientEvent.resumeConsumer.rawValue
+    static let setConsumerPreferences = SfuClientEvent.setConsumerPreferences.rawValue
     static let getProducers = SfuClientEvent.getProducers.rawValue
     static let toggleMute = SfuClientEvent.toggleMute.rawValue
     static let toggleCamera = SfuClientEvent.toggleCamera.rawValue
@@ -31,15 +32,22 @@ private enum SocketEvent {
     static let admitAllPending = SfuClientEvent.adminAdmitAllPending.rawValue
     static let rejectAllPending = SfuClientEvent.adminRejectAllPending.rawValue
     static let kickUser = SfuClientEvent.kickUser.rawValue
+    static let closeRemoteProducer = SfuClientEvent.closeRemoteProducer.rawValue
     static let muteAll = SfuClientEvent.muteAll.rawValue
     static let closeAllVideo = SfuClientEvent.closeAllVideo.rawValue
     static let promoteHost = SfuClientEvent.promoteHost.rawValue
     static let adminMuteUser = SfuClientEvent.adminMuteUser.rawValue
     static let adminCloseUserVideo = SfuClientEvent.adminCloseUserVideo.rawValue
+    static let adminCloseUserMedia = SfuClientEvent.adminCloseUserMedia.rawValue
     static let adminStopUserScreenShare = SfuClientEvent.adminStopUserScreenShare.rawValue
     static let adminStopAllScreenShare = SfuClientEvent.adminStopAllScreenShare.rawValue
     static let adminClearRaisedHands = SfuClientEvent.adminClearRaisedHands.rawValue
     static let adminBroadcastNotice = SfuClientEvent.adminBroadcastNotice.rawValue
+    static let adminGetAccessLists = SfuClientEvent.adminGetAccessLists.rawValue
+    static let adminAllowUsers = SfuClientEvent.adminAllowUsers.rawValue
+    static let adminBlockUsers = SfuClientEvent.adminBlockUsers.rawValue
+    static let adminUnblockUsers = SfuClientEvent.adminUnblockUsers.rawValue
+    static let adminRevokeAllowedUsers = SfuClientEvent.adminRevokeAllowedUsers.rawValue
     static let adminEndRoom = SfuClientEvent.adminEndRoom.rawValue
     static let meetingGetConfig = SfuClientEvent.meetingGetConfig.rawValue
     static let meetingUpdateConfig = SfuClientEvent.meetingUpdateConfig.rawValue
@@ -89,6 +97,8 @@ private enum SocketEvent {
     static let adminUsersChanged = SfuServerEvent.adminUsersChanged.rawValue
     static let participantMuted = SfuServerEvent.participantMuted.rawValue
     static let participantCameraOff = SfuServerEvent.participantCameraOff.rawValue
+    // SFU emits this today, but the generated event registry does not include it yet.
+    static let participantConnectionState = "participantConnectionState"
     static let setVideoQuality = SfuServerEvent.setVideoQuality.rawValue
     static let redirect = SfuServerEvent.redirect.rawValue
     static let kicked = SfuServerEvent.kicked.rawValue
@@ -134,6 +144,20 @@ enum SocketError: LocalizedError {
         case .connectionFailed(let message):
             return message
         }
+    }
+}
+
+private struct JoinRoomErrorAck: Decodable {
+    let error: String?
+    let redirectUrl: String?
+}
+
+private struct JoinRoomRedirectAck: LocalizedError {
+    let message: String
+    let redirectUrl: String
+
+    var errorDescription: String? {
+        message
     }
 }
 
@@ -185,6 +209,7 @@ final class SocketIOManager {
     var onDisplayNameUpdated: ((DisplayNameUpdatedNotification) -> Void)?
     var onParticipantMuted: ((ParticipantMutedNotification) -> Void)?
     var onParticipantCameraOff: ((ParticipantCameraOffNotification) -> Void)?
+    var onParticipantConnectionState: ((ParticipantConnectionStateNotification) -> Void)?
 
     // Producer events
     var onNewProducer: ((ProducerInfo) -> Void)?
@@ -221,28 +246,41 @@ final class SocketIOManager {
     private var activeRoomId: String?
     private var activeRoomAliases: Set<String> = []
     private var pendingRoomAliases: Set<String> = []
+    private var activeAuthToken: String?
+    private var activeSfuURL: String?
     private var pendingConnectFailure: (@MainActor (Error) -> Void)?
     private var pendingConnectAttemptId: UUID?
     private static let connectTimeout: TimeInterval = 15
+    private static let maxJoinRoomRedirects = 1
 
     // MARK: - Connection
 
     func connect(sfuURL: String, token: String) async throws {
-        if isConnected { return }
-        if socket != nil || manager != nil {
-            disconnect()
-        }
-        guard !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        let normalizedToken = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedSfuURL = sfuURL.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !normalizedToken.isEmpty else {
             let error = SocketError.connectionFailed("Missing token for SFU connection")
             connectionError = error
             onError?(error)
             throw error
         }
+        if isConnected {
+            if activeAuthToken == normalizedToken, activeSfuURL == normalizedSfuURL {
+                return
+            }
+            disconnect()
+        }
+        if socket != nil || manager != nil {
+            disconnect()
+        }
 
-        guard let url = URL(string: sfuURL) else {
+        guard let url = URL(string: normalizedSfuURL) else {
             throw SocketError.invalidURL
         }
 
+        activeAuthToken = normalizedToken
+        activeSfuURL = normalizedSfuURL
         isIntentionalDisconnect = false
 
         let manager = SocketManager(
@@ -363,7 +401,7 @@ final class SocketIOManager {
                     }
                 }
 
-                socket.connect(withPayload: ["token": token])
+                socket.connect(withPayload: ["token": normalizedToken])
             }
         } onCancel: { [weak self] in
             Task { @MainActor in
@@ -387,6 +425,8 @@ final class SocketIOManager {
         activeRoomId = nil
         activeRoomAliases.removeAll()
         pendingRoomAliases.removeAll()
+        activeAuthToken = nil
+        activeSfuURL = nil
         pendingConnectAttemptId = nil
     }
 
@@ -409,6 +449,8 @@ final class SocketIOManager {
         activeRoomId = nil
         activeRoomAliases.removeAll()
         pendingRoomAliases.removeAll()
+        activeAuthToken = nil
+        activeSfuURL = nil
         isConnected = false
     }
 
@@ -430,12 +472,42 @@ final class SocketIOManager {
             webinarInviteCode: webinarInviteCode,
             meetingInviteCode: meetingInviteCode
         )
+
+        var followedRedirects = 0
+        while true {
+            do {
+                return try await joinRoomOnce(request: request, requestedRoomId: roomId)
+            } catch let redirect as JoinRoomRedirectAck {
+                guard followedRedirects < Self.maxJoinRoomRedirects else {
+                    throw SocketError.serverError(redirect.message)
+                }
+                guard let token = activeAuthToken else {
+                    throw SocketError.connectionFailed("Missing token for routed SFU connection")
+                }
+                followedRedirects += 1
+                let redirectedURL = SfuJoinService.platformReachableURLString(redirect.redirectUrl)
+                disconnect()
+                try await connect(sfuURL: redirectedURL, token: token)
+            }
+        }
+    }
+
+    private func joinRoomOnce(request: JoinRoomRequest, requestedRoomId roomId: String) async throws -> JoinRoomResponse {
         activeRoomId = nil
         activeRoomAliases.removeAll()
         pendingRoomAliases = roomAliasSet(requestedRoomId: roomId, resolvedRoomId: nil)
 
         do {
-            let data = try await emit(event: SocketEvent.joinRoom, payload: request)
+            let data = try await emitAllowingServerError(event: SocketEvent.joinRoom, payload: request)
+            if let errorAck = try? JSONDecoder().decode(JoinRoomErrorAck.self, from: data),
+               let errorMessage = errorAck.error {
+                pendingRoomAliases.removeAll()
+                if let redirectUrl = normalizedJoinRedirectURL(errorAck.redirectUrl) {
+                    throw JoinRoomRedirectAck(message: errorMessage, redirectUrl: redirectUrl)
+                }
+                throw SocketError.serverError(errorMessage)
+            }
+
             let response = try JSONDecoder().decode(JoinRoomResponse.self, from: data)
             let resolvedRoomId = response.roomId ?? roomId
             if response.status == "waiting" {
@@ -503,12 +575,22 @@ final class SocketIOManager {
     func consume(
         producerId: String,
         rtpCapabilities: RtpCapabilities,
-        transportId: String?
+        transportId: String?,
+        preferredSpatialLayer: Int? = nil,
+        preferredTemporalLayer: Int? = nil,
+        priority: Int? = nil
     ) async throws -> ConsumeResponse {
         let request = ConsumeRequest(
             producerId: producerId,
             rtpCapabilities: rtpCapabilities,
-            transportId: transportId
+            transportId: transportId,
+            preferredLayers: preferredSpatialLayer.map {
+                ConsumerLayerPreferenceRequest(
+                    spatialLayer: $0,
+                    temporalLayer: preferredTemporalLayer
+                )
+            },
+            priority: priority
         )
         let data = try await emit(event: SocketEvent.consume, payload: request)
         return try JSONDecoder().decode(ConsumeResponse.self, from: data)
@@ -517,6 +599,38 @@ final class SocketIOManager {
     func resumeConsumer(consumerId: String, requestKeyFrame: Bool = false) async throws {
         let request = ResumeConsumerRequest(consumerId: consumerId, requestKeyFrame: requestKeyFrame)
         _ = try await emit(event: SocketEvent.resumeConsumer, payload: request)
+    }
+
+    func setConsumerPreferences(
+        consumerId: String,
+        spatialLayer: Int? = nil,
+        temporalLayer: Int? = nil,
+        priority: Int? = nil,
+        paused: Bool? = nil,
+        requestKeyFrame: Bool = false
+    ) async throws {
+        let trimmedConsumerId = consumerId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedConsumerId.isEmpty else { return }
+
+        var payload: [String: Any] = ["consumerId": trimmedConsumerId]
+        if let spatialLayer {
+            var preferredLayers: [String: Any] = ["spatialLayer": spatialLayer]
+            if let temporalLayer {
+                preferredLayers["temporalLayer"] = temporalLayer
+            }
+            payload["preferredLayers"] = preferredLayers
+        }
+        if let priority {
+            payload["priority"] = priority
+        }
+        if let paused {
+            payload["paused"] = paused
+        }
+        if requestKeyFrame {
+            payload["requestKeyFrame"] = true
+        }
+
+        _ = try await emitSocketData(event: SocketEvent.setConsumerPreferences, payloadObject: payload)
     }
 
     /// Snapshot the room's current producers (producer-sync safety net). The SFU
@@ -751,6 +865,15 @@ final class SocketIOManager {
         _ = try await emit(event: SocketEvent.kickUser, payload: ["userId": userId])
     }
 
+    func closeRemoteProducer(producerId: String) async throws -> CloseRemoteProducerResponse {
+        let trimmedProducerId = producerId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedProducerId.isEmpty else {
+            throw SocketError.serverError("Invalid producer ID")
+        }
+        let data = try await emit(event: SocketEvent.closeRemoteProducer, payload: ["producerId": trimmedProducerId])
+        return try JSONDecoder().decode(CloseRemoteProducerResponse.self, from: data)
+    }
+
     func muteUser(userId: String) async throws -> AdminMediaActionResponse {
         let data = try await emit(event: SocketEvent.adminMuteUser, payload: ["userId": userId])
         return try JSONDecoder().decode(AdminMediaActionResponse.self, from: data)
@@ -763,6 +886,22 @@ final class SocketIOManager {
 
     func closeUserVideo(userId: String) async throws -> AdminMediaActionResponse {
         let data = try await emit(event: SocketEvent.adminCloseUserVideo, payload: ["userId": userId])
+        return try JSONDecoder().decode(AdminMediaActionResponse.self, from: data)
+    }
+
+    func closeUserMedia(
+        userId: String,
+        kinds: [String]? = nil,
+        types: [String]? = nil,
+        reason: String? = nil
+    ) async throws -> AdminMediaActionResponse {
+        let request = AdminCloseUserMediaRequest(
+            userId: userId,
+            kinds: kinds,
+            types: types,
+            reason: reason
+        )
+        let data = try await emit(event: SocketEvent.adminCloseUserMedia, payload: request)
         return try JSONDecoder().decode(AdminMediaActionResponse.self, from: data)
     }
 
@@ -785,6 +924,35 @@ final class SocketIOManager {
         _ = try await emitAckOnly(event: SocketEvent.adminClearRaisedHands)
     }
 
+    func getAccessLists() async throws -> AdminAccessListSnapshot {
+        let data = try await emitAckOnly(event: SocketEvent.adminGetAccessLists)
+        return try JSONDecoder().decode(AdminAccessListsResponse.self, from: data).access
+    }
+
+    func allowUsers(_ userKeys: [String], allowWhenLocked: Bool = true) async throws -> AdminAccessListSnapshot {
+        let request = AdminAllowUsersRequest(userKeys: userKeys, allowWhenLocked: allowWhenLocked)
+        let data = try await emit(event: SocketEvent.adminAllowUsers, payload: request)
+        return try decodeAdminAccessMutation(data)
+    }
+
+    func blockUsers(_ userKeys: [String], kickPresent: Bool = true, reason: String? = nil) async throws -> AdminAccessListSnapshot {
+        let request = AdminBlockUsersRequest(userKeys: userKeys, kickPresent: kickPresent, reason: reason)
+        let data = try await emit(event: SocketEvent.adminBlockUsers, payload: request)
+        return try decodeAdminAccessMutation(data)
+    }
+
+    func unblockUsers(_ userKeys: [String]) async throws -> AdminAccessListSnapshot {
+        let request = AdminUserKeysRequest(userKeys: userKeys)
+        let data = try await emit(event: SocketEvent.adminUnblockUsers, payload: request)
+        return try decodeAdminAccessMutation(data)
+    }
+
+    func revokeAllowedUsers(_ userKeys: [String], revokeLocked: Bool = true) async throws -> AdminAccessListSnapshot {
+        let request = AdminRevokeAllowedUsersRequest(userKeys: userKeys, revokeLocked: revokeLocked)
+        let data = try await emit(event: SocketEvent.adminRevokeAllowedUsers, payload: request)
+        return try decodeAdminAccessMutation(data)
+    }
+
     func broadcastAdminNotice(message: String, level: AdminNoticeLevel) async throws -> AdminNoticeResponse {
         let request = AdminNoticeRequest(message: message, level: level.rawValue)
         let data = try await emit(event: SocketEvent.adminBroadcastNotice, payload: request)
@@ -797,8 +965,23 @@ final class SocketIOManager {
         return try JSONDecoder().decode(AdminEndRoomResponse.self, from: data)
     }
 
+    func endRoomNow(message: String?) async throws -> AdminEndRoomResponse {
+        try await endRoom(message: message, delayMs: 0)
+    }
+
     func promoteHost(userId: String) async throws {
         _ = try await emit(event: SocketEvent.promoteHost, payload: ["userId": userId])
+    }
+
+    private func decodeAdminAccessMutation(_ data: Data) throws -> AdminAccessListSnapshot {
+        let response = try JSONDecoder().decode(AdminAccessMutationResponse.self, from: data)
+        if response.success == false {
+            throw SocketError.serverError(response.error ?? "Access list update failed.")
+        }
+        guard let access = response.access else {
+            throw SocketError.serverError("Access list update did not return access state.")
+        }
+        return access
     }
 
     // MARK: - Private: Emit with Ack
@@ -884,6 +1067,40 @@ final class SocketIOManager {
         }
     }
 
+    private func emitAllowingServerError<T: Encodable>(event: String, payload: T) async throws -> Data {
+        guard let socket = socket else {
+            throw SocketError.notConnected
+        }
+
+        let payloadObject = try jsonObject(from: payload)
+
+        return try await withCheckedThrowingContinuation { continuation in
+            socket.emitWithAck(event, payloadObject).timingOut(after: 30) { [weak self] data in
+                guard let self else {
+                    continuation.resume(returning: Data())
+                    return
+                }
+                guard self.socket === socket else {
+                    continuation.resume(throwing: SocketError.notConnected)
+                    return
+                }
+                guard let first = data.first else {
+                    continuation.resume(returning: Data())
+                    return
+                }
+                if self.isAckTimeout(first) {
+                    continuation.resume(throwing: SocketError.timeout)
+                    return
+                }
+                if let responseData = self.jsonData(from: first) {
+                    continuation.resume(returning: responseData)
+                } else {
+                    continuation.resume(returning: Data())
+                }
+            }
+        }
+    }
+
     private func updateWebinarConfigPayload(_ payload: SocketData) async throws -> WebinarConfigSnapshot {
         let data = try await emitSocketData(event: SocketEvent.webinarUpdateConfig, payloadObject: payload)
         let response = try JSONDecoder().decode(WebinarConfigUpdateResponse.self, from: data)
@@ -941,25 +1158,76 @@ final class SocketIOManager {
     }
 
     func jsonData(from value: Any) -> Data? {
-        if let dict = value as? [String: Any] {
+        guard let normalizedValue = jsonSerializableValue(from: value) else {
+            return nil
+        }
+
+        if let dict = normalizedValue as? [String: Any] {
             return try? JSONSerialization.data(withJSONObject: dict, options: [])
         }
 
-        if let array = value as? [Any] {
+        if let array = normalizedValue as? [Any] {
             return try? JSONSerialization.data(withJSONObject: array, options: [])
         }
 
-        if let string = value as? String {
+        if let string = normalizedValue as? String {
             return string.data(using: .utf8)
         }
 
         return nil
     }
 
+    private func jsonSerializableValue(from value: Any) -> Any? {
+        if let data = value as? Data {
+            return data.base64EncodedString()
+        }
+        if let data = value as? NSData {
+            return (data as Data).base64EncodedString()
+        }
+        if let dict = value as? [String: Any] {
+            var normalized: [String: Any] = [:]
+            for (key, rawValue) in dict {
+                guard let safeValue = jsonSerializableValue(from: rawValue) else {
+                    continue
+                }
+                normalized[key] = safeValue
+            }
+            return normalized
+        }
+        if let array = value as? [Any] {
+            return array.compactMap { jsonSerializableValue(from: $0) }
+        }
+        if value is NSNull ||
+            value is String ||
+            value is NSNumber {
+            return value
+        }
+        return nil
+    }
+
     func extractError(from value: Any) -> String? {
-        if let dict = value as? [String: Any],
-           let error = dict["error"] as? String {
-            return error
+        if let dict = value as? [String: Any] {
+            for key in ["error", "message"] {
+                if let message = normalizedErrorMessage(dict[key]) {
+                    return message
+                }
+            }
+        }
+        if let message = normalizedErrorMessage(value) {
+            return message
+        }
+        return nil
+    }
+
+    private func normalizedErrorMessage(_ value: Any?) -> String? {
+        guard let value else { return nil }
+        if let string = value as? String {
+            let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        }
+        if let error = value as? Error {
+            let trimmed = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
         }
         return nil
     }
@@ -996,6 +1264,22 @@ final class SocketIOManager {
         return trimmed.isEmpty ? nil : trimmed
     }
 
+    private func normalizedJoinRedirectURL(_ value: String?) -> String? {
+        guard let raw = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !raw.isEmpty,
+              let url = URL(string: raw),
+              let scheme = url.scheme?.lowercased(),
+              scheme == "http" || scheme == "https" else {
+            return nil
+        }
+
+        var absolute = url.absoluteString
+        while absolute.hasSuffix("/") {
+            absolute.removeLast()
+        }
+        return absolute
+    }
+
     private func roomAliasSet(requestedRoomId: String?, resolvedRoomId: String?) -> Set<String> {
         var aliases = Set<String>()
         if let requestedRoomId = normalizedRoomId(requestedRoomId) {
@@ -1011,25 +1295,13 @@ final class SocketIOManager {
         guard let roomId = normalizedRoomId(roomId) else {
             return !activeRoomAliases.isEmpty || !pendingRoomAliases.isEmpty
         }
-        if activeRoomAliases.contains(roomId) || pendingRoomAliases.contains(roomId) {
-            return true
-        }
-        guard activeRoomAliases.isEmpty, !pendingRoomAliases.isEmpty else {
-            return false
-        }
-        pendingRoomAliases.insert(roomId)
-        return true
+        return activeRoomAliases.contains(roomId) || pendingRoomAliases.contains(roomId)
     }
 
     private func pendingRoomEventMatches(_ roomId: String?) -> Bool {
         guard !pendingRoomAliases.isEmpty else { return false }
         guard let roomId = normalizedRoomId(roomId) else { return true }
-        if pendingRoomAliases.contains(roomId) {
-            return true
-        }
-        guard activeRoomAliases.isEmpty else { return false }
-        pendingRoomAliases.insert(roomId)
-        return true
+        return pendingRoomAliases.contains(roomId)
     }
 
     func decode<T: Decodable>(_ type: T.Type, from data: Any) -> T? {
@@ -1064,12 +1336,15 @@ final class SocketIOManager {
         return nil
     }
 
-    private func byteData(from value: Any?) -> Data? {
+    private func byteData(from value: Any?, allowEmpty: Bool = false) -> Data? {
         if let data = value as? Data {
-            return data.isEmpty ? nil : data
+            return data.isEmpty && !allowEmpty ? nil : data
         }
         if let bytes = value as? [UInt8] {
-            return bytes.isEmpty ? nil : Data(bytes)
+            if bytes.isEmpty && !allowEmpty {
+                return nil
+            }
+            return Data(bytes)
         }
         if let array = value as? [Any] {
             var bytes: [UInt8] = []
@@ -1086,15 +1361,20 @@ final class SocketIOManager {
                 guard let number, (0...255).contains(number) else { return nil }
                 bytes.append(UInt8(number))
             }
-            return bytes.isEmpty ? nil : Data(bytes)
+            if bytes.isEmpty && !allowEmpty {
+                return nil
+            }
+            return Data(bytes)
         }
         if let dict = value as? [String: Any],
            stringField(dict, "type") == "Buffer" {
-            return byteData(from: dict["data"])
+            return byteData(from: dict["data"], allowEmpty: allowEmpty)
         }
         if let string = value as? String {
             let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else { return nil }
+            if trimmed.isEmpty {
+                return allowEmpty ? Data() : nil
+            }
             return Data(base64Encoded: trimmed)
         }
         return nil
@@ -1103,12 +1383,12 @@ final class SocketIOManager {
     private func decodeAppsSyncResponse(from data: Data) -> AppsSyncResponse? {
         guard let object = try? JSONSerialization.jsonObject(with: data, options: []),
               let dict = object as? [String: Any],
-              let syncMessage = byteData(from: dict["syncMessage"]) else {
+              let syncMessage = byteData(from: dict["syncMessage"], allowEmpty: true) else {
             return nil
         }
         return AppsSyncResponse(
             syncMessage: syncMessage,
-            stateVector: byteData(from: dict["stateVector"]),
+            stateVector: byteData(from: dict["stateVector"], allowEmpty: true),
             awarenessUpdate: byteData(from: dict["awarenessUpdate"])
         )
     }
@@ -1429,6 +1709,14 @@ final class SocketIOManager {
                   let notification = self.decode(ParticipantCameraOffNotification.self, from: first),
                   self.eventRoomIdMatchesActiveOrPending(notification.roomId) else { return }
             self.onParticipantCameraOff?(notification)
+        }
+
+        socket.on(SocketEvent.participantConnectionState) { [weak self] data, _ in
+            guard let self, let first = data.first,
+                  self.socket === socket,
+                  let notification = self.decode(ParticipantConnectionStateNotification.self, from: first),
+                  self.eventRoomIdMatchesActiveOrPending(notification.roomId) else { return }
+            self.onParticipantConnectionState?(notification)
         }
 
         socket.on(SocketEvent.setVideoQuality) { [weak self] data, _ in

@@ -4,6 +4,7 @@ import { Globe, Loader2, MicOff, VenetianMask } from "lucide-react";
 import { memo, useEffect, useRef, useState, type FormEvent } from "react";
 import { Avatar } from "@conclave/ui-tokens/web";
 import { useSmartParticipantOrder } from "../../hooks/useSmartParticipantOrder";
+import { getRenderableParticipantVideoStream } from "../../lib/participant-media";
 import type { Participant } from "../../lib/types";
 import {
   isSystemUserId,
@@ -261,11 +262,8 @@ function MobileBrowserLayout({
                 : ""
             }`}
           >
-            {participant.videoStream && !participant.isCameraOff ? (
-              <VideoThumbnail
-                participant={participant}
-                isCameraOff={participant.isCameraOff}
-              />
+            {getRenderableParticipantVideoStream(participant) ? (
+              <VideoThumbnail participant={participant} />
             ) : (
               <div className="absolute inset-0 flex items-center justify-center bg-[#131316]">
                 <div className="absolute inset-0 bg-[rgba(249,95,74,0.15)]" />
@@ -318,28 +316,27 @@ function MobileBrowserLayout({
 
 const VideoThumbnail = memo(function VideoThumbnail({
   participant,
-  isCameraOff,
 }: {
   participant: Participant;
-  isCameraOff: boolean;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const videoStream = getRenderableParticipantVideoStream(participant);
+  const videoTrack = videoStream?.getVideoTracks()[0] ?? null;
 
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
 
-    if (!participant.videoStream || isCameraOff) {
+    if (!videoStream) {
       if (video.srcObject) {
         video.srcObject = null;
       }
       return;
     }
 
-    if (video.srcObject !== participant.videoStream) {
-      video.srcObject = participant.videoStream;
+    if (video.srcObject !== videoStream) {
+      video.srcObject = videoStream;
     }
-    const videoStream = participant.videoStream;
 
     const playVideo = () => {
       video.play().catch(() => {});
@@ -347,7 +344,6 @@ const VideoThumbnail = memo(function VideoThumbnail({
 
     playVideo();
 
-    const videoTrack = participant.videoStream.getVideoTracks()[0];
     if (videoTrack) {
       videoTrack.addEventListener("unmute", playVideo);
     }
@@ -360,7 +356,7 @@ const VideoThumbnail = memo(function VideoThumbnail({
         video.srcObject = null;
       }
     };
-  }, [participant.videoStream, participant.videoProducerId, isCameraOff]);
+  }, [videoStream, videoTrack]);
 
   return (
     <video

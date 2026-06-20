@@ -239,6 +239,7 @@ const routerMediaCodecs: RouterRtpCodecCapability[] = [
     mimeType: "audio/opus",
     clockRate: 48000,
     channels: 2,
+    rtcpFeedback: [{ type: "transport-cc" }],
   },
   {
     kind: "video",
@@ -249,12 +250,26 @@ const routerMediaCodecs: RouterRtpCodecCapability[] = [
       "profile-level-id": "42e01f",
       "level-asymmetry-allowed": 1,
     },
+    rtcpFeedback: [
+      { type: "nack" },
+      { type: "nack", parameter: "pli" },
+      { type: "ccm", parameter: "fir" },
+      { type: "goog-remb" },
+      { type: "transport-cc" },
+    ],
   },
   {
     kind: "video",
     mimeType: "video/VP8",
     clockRate: 90000,
     parameters: {},
+    rtcpFeedback: [
+      { type: "nack" },
+      { type: "nack", parameter: "pli" },
+      { type: "ccm", parameter: "fir" },
+      { type: "goog-remb" },
+      { type: "transport-cc" },
+    ],
   },
 ];
 
@@ -344,12 +359,12 @@ export const config = {
     ],
     maxIncomingBitrate: toNumber(
       process.env.SFU_WEBRTC_MAX_INCOMING_BITRATE,
-      25000000,
+      4000000,
       { min: 1 },
     ),
     initialAvailableOutgoingBitrate: toNumber(
       process.env.SFU_WEBRTC_INITIAL_OUTGOING_BITRATE,
-      25000000,
+      4000000,
       { min: 1 },
     ),
   },

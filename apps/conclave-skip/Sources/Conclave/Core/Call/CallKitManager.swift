@@ -1,7 +1,3 @@
-//
-//  CallKitManager.swift
-//  Conclave
-//
 //  iOS VoIP system call presence via CallKit. While in a meeting this reports
 //  an ongoing call to the OS so the user gets:
 //    - the system call UI on the lock screen + Dynamic Island
@@ -28,6 +24,7 @@ final class CallKitManager: NSObject {
     /// The UUID of the call currently reported to CallKit, if any.
     private(set) var activeCallUUID: UUID?
     private var reportedMuted: Bool?
+    private var didReportConnectedCall = false
 
     private override init() {
         let configuration = CXProviderConfiguration()
@@ -50,6 +47,7 @@ final class CallKitManager: NSObject {
         let uuid = UUID()
         activeCallUUID = uuid
         reportedMuted = nil
+        didReportConnectedCall = false
 
         let handle = CXHandle(type: .generic, value: title)
         let startCallAction = CXStartCallAction(call: uuid, handle: handle)
@@ -66,6 +64,7 @@ final class CallKitManager: NSObject {
                     if self?.activeCallUUID == uuid {
                         self?.activeCallUUID = nil
                         self?.reportedMuted = nil
+                        self?.didReportConnectedCall = false
                     }
                 }
                 return
@@ -76,6 +75,7 @@ final class CallKitManager: NSObject {
             Task { @MainActor in
                 guard let self = self, self.activeCallUUID == uuid else { return }
                 self.provider.reportOutgoingCall(with: uuid, connectedAt: Date())
+                self.didReportConnectedCall = true
             }
         }
     }
@@ -87,6 +87,7 @@ final class CallKitManager: NSObject {
         provider.reportCall(with: uuid, endedAt: Date(), reason: .remoteEnded)
         activeCallUUID = nil
         reportedMuted = nil
+        didReportConnectedCall = false
     }
 
     /// Reflect the in-app mute state onto the CallKit call UI so the system mute
@@ -116,11 +117,12 @@ final class CallKitManager: NSObject {
 
 extension CallKitManager: CXProviderDelegate {
     nonisolated func providerDidReset(_ provider: CXProvider) {
-        // The provider was reset by the system — tear the call down rather than
-        // leaving the VM + audio session running with no CallKit presence.
         Task { @MainActor in
+            let shouldLeaveCall = self.didReportConnectedCall
             self.activeCallUUID = nil
             self.reportedMuted = nil
+            self.didReportConnectedCall = false
+            guard shouldLeaveCall else { return }
             CallSessionCoordinator.shared.leaveCall()
         }
     }

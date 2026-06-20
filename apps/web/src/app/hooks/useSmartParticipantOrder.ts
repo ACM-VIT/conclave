@@ -7,6 +7,7 @@ interface ParticipantWithMediaHints {
   videoStream?: MediaStream | null;
   audioStream?: MediaStream | null;
   isCameraOff?: boolean;
+  isVideoAdaptivelyPaused?: boolean;
   isMuted?: boolean;
   isHandRaised?: boolean;
 }
@@ -34,7 +35,9 @@ const hasLiveTrack = (
 
 const getMediaPriority = (participant: ParticipantWithMediaHints): number => {
   const hasVideo =
-    !participant.isCameraOff && hasLiveTrack(participant.videoStream, "video");
+    !participant.isCameraOff &&
+    !participant.isVideoAdaptivelyPaused &&
+    hasLiveTrack(participant.videoStream, "video");
   if (hasVideo) return 2;
   const hasAudio =
     !participant.isMuted && hasLiveTrack(participant.audioStream, "audio");

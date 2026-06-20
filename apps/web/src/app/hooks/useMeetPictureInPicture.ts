@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { getRenderableParticipantVideoStream } from "../lib/participant-media";
 import type { Participant } from "../lib/types";
 
 interface UseMeetPictureInPictureOptions {
@@ -76,7 +77,9 @@ export function useMeetPictureInPicture({
         if (activeSpeakerId && activeSpeakerId !== currentUserId) {
             const speakerParticipant = participants.get(activeSpeakerId);
             return {
-                stream: speakerParticipant?.videoStream ?? null,
+                stream: speakerParticipant
+                    ? getRenderableParticipantVideoStream(speakerParticipant)
+                    : null,
                 name: getDisplayName(activeSpeakerId),
             };
         }
@@ -86,7 +89,9 @@ export function useMeetPictureInPicture({
             if (lastSpeakerId !== currentUserId) {
                 const lastSpeaker = participants.get(lastSpeakerId);
                 return {
-                    stream: lastSpeaker?.videoStream ?? null,
+                    stream: lastSpeaker
+                        ? getRenderableParticipantVideoStream(lastSpeaker)
+                        : null,
                     name: getDisplayName(lastSpeakerId),
                 };
             }
@@ -94,8 +99,13 @@ export function useMeetPictureInPicture({
 
         for (const [userId, participant] of participants) {
             if (userId === currentUserId) continue;
-            if (participant.videoStream && !participant.isCameraOff) {
-                return { stream: participant.videoStream, name: getDisplayName(userId) };
+            const participantVideoStream =
+                getRenderableParticipantVideoStream(participant);
+            if (participantVideoStream) {
+                return {
+                    stream: participantVideoStream,
+                    name: getDisplayName(userId),
+                };
             }
         }
 

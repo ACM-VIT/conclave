@@ -45,6 +45,16 @@ const mobileUserAgent =
 const mobilePlatform = /android/i.test(mobileUserAgent)
   ? "Linux armv8l"
   : "iPhone";
+const selectedBackgroundLabel =
+  process.env.MEET_OBSERVER_BACKGROUND_LABEL ?? "";
+const selectedFilterLabel = process.env.MEET_OBSERVER_FILTER_LABEL ?? "";
+const selectedStyleLabel = process.env.MEET_OBSERVER_STYLE_LABEL ?? "";
+const enableStudioLook = /^(1|true|yes)$/i.test(
+  process.env.MEET_OBSERVER_ENABLE_STUDIO_LOOK ?? "",
+);
+const waitAfterEffectMs = Number(
+  process.env.MEET_OBSERVER_WAIT_AFTER_EFFECT_MS ?? 6000,
+);
 
 const emit = (event, payload = {}) => {
   process.stdout.write(
@@ -513,6 +523,19 @@ const collectEvidence = async (cdp, networkRecorder, label) => {
   return state;
 };
 
+const clickEffectAndCollect = async (
+  cdp,
+  networkRecorder,
+  label,
+  candidates,
+) => {
+  const clicked = await clickFirstAvailable(cdp, candidates);
+  emit(`${label}_click`, { clicked, candidates });
+  if (!clicked) return null;
+  await sleep(waitAfterEffectMs);
+  return collectEvidence(cdp, networkRecorder, label);
+};
+
 if (fakeVideoPath && !existsSync(fakeVideoPath)) {
   throw new Error(`MEET_OBSERVER_FAKE_VIDEO does not exist: ${fakeVideoPath}`);
 }
@@ -718,6 +741,20 @@ try {
     );
     await sleep(1000);
     await collectEvidence(cdp, networkRecorder, "state_effects_backgrounds");
+    if (selectedBackgroundLabel) {
+      await clickEffectAndCollect(cdp, networkRecorder, "state_background_selected", [
+        selectedBackgroundLabel,
+      ]);
+    }
+    if (selectedFilterLabel) {
+      const filtersClick = await clickFirstAvailable(cdp, ["Filters"]);
+      emit("filters_click", { clicked: filtersClick });
+      await sleep(1000);
+      await collectEvidence(cdp, networkRecorder, "state_effects_filters");
+      await clickEffectAndCollect(cdp, networkRecorder, "state_filter_selected", [
+        selectedFilterLabel,
+      ]);
+    }
     const appearanceClick = await clickFirstAvailable(cdp, [
       "Appearance",
       "Touch-up appearance",
@@ -725,6 +762,16 @@ try {
     emit("appearance_click", { clicked: appearanceClick });
     await sleep(1000);
     await collectEvidence(cdp, networkRecorder, "state_effects_appearance");
+    if (enableStudioLook) {
+      await clickEffectAndCollect(cdp, networkRecorder, "state_studio_look_enabled", [
+        "Studio look",
+      ]);
+    }
+    if (selectedStyleLabel) {
+      await clickEffectAndCollect(cdp, networkRecorder, "state_style_selected", [
+        selectedStyleLabel,
+      ]);
+    }
     emit("result", {
       ok: true,
       limited: false,

@@ -27,8 +27,6 @@ struct RemoteVideoView: View {
     var contentMode: VideoContentMode = .fill
 
     var body: some View {
-        // Render the remote track on Android via the Compose SurfaceViewRenderer
-        // (was a black stub) so remote video — incl. a screen-share — appears.
         AndroidVideoView(trackWrapper: trackWrapper, isMirrored: false, contentMode: contentMode)
     }
 }
@@ -41,7 +39,8 @@ struct VideoGridItem: View {
     let isGhost: Bool
     let isSpeaking: Bool
     let isLocal: Bool
-    // Fills the tile (immersive solo avatar) when set AND camera off; video keeps 16:9.
+    var connectionStatus: ParticipantConnectionStatus? = nil
+    // Expands camera-off avatars on stage while leaving video aspect handling to the renderer.
     var fillStage: Bool = false
 
     var captureSession: Any? = nil
@@ -112,6 +111,10 @@ struct VideoGridItem: View {
                 handRaisedBadge
             }
 
+            if let connectionStatus, !isLocal {
+                connectionStatusBadge(connectionStatus)
+            }
+
             nameLabel
         }
     }
@@ -159,6 +162,45 @@ struct VideoGridItem: View {
             Spacer()
         }
         .padding(12)
+    }
+
+    func connectionStatusBadge(_ status: ParticipantConnectionStatus) -> some View {
+        let isReconnecting = status.state == .reconnecting
+        let label = isReconnecting ? "Reconnecting" : "Back online"
+        let tint = isReconnecting ? ACMColors.primaryOrange : ACMColors.success
+        let androidTint = isReconnecting ? "accent" : "success"
+        let icon = isReconnecting ? "exclamationmark.triangle.fill" : "checkmark.circle.fill"
+        let androidIcon = isReconnecting ? "warning" : "check"
+
+        return VStack {
+            HStack {
+                Spacer()
+
+                HStack(spacing: 6) {
+                    ACMSystemIcon.icon(icon, android: androidIcon, size: 14, tint: androidTint)
+                        .foregroundStyle(tint)
+
+                    Text(label)
+                        .font(ACMFont.trial(11, weight: .medium))
+                        .foregroundStyle(ACMColors.text)
+                        .lineLimit(1)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .acmColorBackground(ACMColors.scrim)
+                .overlay {
+                    Capsule()
+                        .strokeBorder(lineWidth: 1)
+                        .foregroundStyle(ACMColors.creamFaint)
+                }
+                .clipShape(Capsule())
+
+                Spacer()
+            }
+            .padding(.top, 10)
+
+            Spacer()
+        }
     }
 
     var nameLabel: some View {

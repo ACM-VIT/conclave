@@ -102,9 +102,13 @@ struct ControlsBarView: View {
             return "ellipsis"
             #endif
         }()
-        let mediaPublishingDisabled = viewModel.state.mediaPublishingDisabled
+        let isJoinedCall = viewModel.state.connectionState == .joined
+        let mediaControlsDisabled = !isJoinedCall || viewModel.state.mediaPublishingDisabled
         let isWebinarAttendee = viewModel.state.isWebinarAttendee
-        let isScreenShareDisabled = mediaPublishingDisabled ||
+        let canUseParticipantActions = isJoinedCall
+            && !viewModel.state.isGhostMode
+            && !isWebinarAttendee
+        let isScreenShareDisabled = mediaControlsDisabled ||
             (viewModel.state.activeScreenShareUserId != nil && !viewModel.state.isScreenSharing)
 
         HStack(spacing: isCompact ? 12.0 : 4.0) {
@@ -134,22 +138,22 @@ struct ControlsBarView: View {
                 ControlButton(
                     icon: micIcon,
                     isMuted: viewModel.state.isMuted,
-                    isGhostDisabled: mediaPublishingDisabled,
+                    isGhostDisabled: mediaControlsDisabled,
                     accessibilityLabel: viewModel.state.isMuted ? "Unmute microphone" : "Mute microphone"
                 ) {
                     viewModel.toggleMute()
                 }
-                .disabled(mediaPublishingDisabled)
+                .disabled(mediaControlsDisabled)
 
                 ControlButton(
                     icon: cameraIcon,
                     isMuted: viewModel.state.isCameraOff,
-                    isGhostDisabled: mediaPublishingDisabled,
+                    isGhostDisabled: mediaControlsDisabled,
                     accessibilityLabel: viewModel.state.isCameraOff ? "Turn camera on" : "Turn camera off"
                 ) {
                     viewModel.toggleCamera()
                 }
-                .disabled(mediaPublishingDisabled)
+                .disabled(mediaControlsDisabled)
 
                 if viewModel.state.isScreenShareSupported {
                     ControlButton(
@@ -177,22 +181,22 @@ struct ControlsBarView: View {
                         icon: handRaiseIcon,
                         isActive: viewModel.state.isHandRaised,
                         activeColor: ACMColors.handRaised,
-                        isGhostDisabled: viewModel.state.isGhostMode,
+                        isGhostDisabled: !canUseParticipantActions,
                         accessibilityLabel: viewModel.state.isHandRaised ? "Lower hand" : "Raise hand"
                     ) {
                         viewModel.toggleHandRaise()
                     }
-                    .disabled(viewModel.state.isGhostMode)
+                    .disabled(!canUseParticipantActions)
 
                     ControlButton(
                         icon: reactionIcon,
                         isActive: showReactionPicker,
-                        isGhostDisabled: viewModel.state.isGhostMode,
+                        isGhostDisabled: !canUseParticipantActions,
                         accessibilityLabel: "Reactions"
                     ) {
                         showReactionPicker = !showReactionPicker
                     }
-                    .disabled(viewModel.state.isGhostMode)
+                    .disabled(!canUseParticipantActions)
                     .overlay(alignment: .top) {
                         if showReactionPicker {
                             ReactionPickerView { option in
@@ -257,6 +261,11 @@ struct ControlsBarView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
         .acmGlassCapsule()
+        .onChange(of: canUseParticipantActions) { _, canUse in
+            if !canUse {
+                showReactionPicker = false
+            }
+        }
     }
 }
 

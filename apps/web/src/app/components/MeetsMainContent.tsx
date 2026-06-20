@@ -1,5 +1,6 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Dispatch, PointerEvent, SetStateAction } from "react";
 import type { Socket } from "socket.io-client";
@@ -10,14 +11,12 @@ import ControlsBar from "./ControlsBar";
 import GridLayout from "./GridLayout";
 import ConnectionBanner from "./ConnectionBanner";
 import AdminNoticePill from "./AdminNoticePill";
-import JoinScreen from "./JoinScreen";
 import ParticipantsPanel from "./ParticipantsPanel";
 import MeetSettingsPanel from "./MeetSettingsPanel";
 import MeetViewPanel from "./MeetViewPanel";
 import ReactionOverlay from "./ReactionOverlay";
 import BrowserLayout from "./BrowserLayout";
 import DevPlaygroundLayout from "./DevPlaygroundLayout";
-import DevMeetToolsPanel from "./DevMeetToolsPanel";
 import ScreenShareAudioPlayers from "./ScreenShareAudioPlayers";
 import SystemAudioPlayers from "./SystemAudioPlayers";
 import WhiteboardLayout from "./WhiteboardLayout";
@@ -26,11 +25,9 @@ import MeetingIdentity from "./MeetingIdentity";
 import ToastQueue from "./ToastQueue";
 import type { BrowserState } from "../hooks/useSharedBrowser";
 import type { ConnectionQuality } from "../hooks/useConnectionQuality";
-import VideoEffectsPanel from "./VideoEffectsPanel";
-import {
-  prewarmVideoEffectsAssets,
-  type VideoEffectsDebugStats,
-  type VideoEffectsRuntimeStatus,
+import type {
+  VideoEffectsDebugStats,
+  VideoEffectsRuntimeStatus,
 } from "../hooks/useVideoEffects";
 import type {
   AdminNoticeNotification,
@@ -63,6 +60,18 @@ import {
   normalizeMeetViewSettings,
   type MeetViewSettings,
 } from "../lib/meet-view";
+import { getRenderableParticipantVideoStream } from "../lib/participant-media";
+import { prewarmVideoEffectsAssetsDeferred } from "../lib/video-effects-lazy";
+
+const JoinScreen = dynamic(() => import("./JoinScreen"), {
+  ssr: false,
+});
+const VideoEffectsPanel = dynamic(() => import("./VideoEffectsPanel"), {
+  ssr: false,
+});
+const DevMeetToolsPanel = dynamic(() => import("./DevMeetToolsPanel"), {
+  ssr: false,
+});
 
 interface MeetsMainContentProps {
   isJoined: boolean;
@@ -101,6 +110,7 @@ interface MeetsMainContentProps {
   videoEffectsError: string | null;
   videoEffectsDebugStats?: VideoEffectsDebugStats | null;
   activeVideoEffectsCount: number;
+  deferVideoEffectsPreload?: boolean;
   onDevCameraStreamChange?: (stream: MediaStream | null) => void;
   onPrejoinMediaCommit?: (handoff: PrejoinMediaHandoff) => void;
   isCameraOff: boolean;
@@ -109,6 +119,7 @@ interface MeetsMainContentProps {
   isHandRaised: boolean;
   participants: Map<string, Participant>;
   isMirrorCamera: boolean;
+  mirrorLocalPreview: boolean;
   onToggleMirror?: () => void;
   selectedAudioInputDeviceId?: string;
   selectedAudioOutputDeviceId?: string;
@@ -319,6 +330,7 @@ export default function MeetsMainContent({
   videoEffectsError,
   videoEffectsDebugStats = null,
   activeVideoEffectsCount,
+  deferVideoEffectsPreload = false,
   onDevCameraStreamChange,
   onPrejoinMediaCommit,
   isCameraOff,
@@ -327,6 +339,7 @@ export default function MeetsMainContent({
   isHandRaised,
   participants,
   isMirrorCamera,
+  mirrorLocalPreview,
   onToggleMirror,
   selectedAudioInputDeviceId,
   selectedAudioOutputDeviceId,
@@ -557,7 +570,7 @@ export default function MeetsMainContent({
         const mainAudioStream =
           screenShareParticipant.audioStream ?? fallbackAudioStream;
         const presenterCameraStream = getLiveVideoStream(
-          screenShareParticipant.videoStream,
+          getRenderableParticipantVideoStream(screenShareParticipant),
         );
 
         return {
@@ -567,6 +580,7 @@ export default function MeetsMainContent({
               videoStream: screenShareStream,
               audioStream: mainAudioStream,
               isCameraOff: false,
+              isVideoAdaptivelyPaused: false,
             },
             displayName: resolveDisplayName(screenShareParticipant.userId),
           },
@@ -579,6 +593,7 @@ export default function MeetsMainContent({
                   audioStream: null,
                   isMuted: true,
                   isCameraOff: false,
+                  isVideoAdaptivelyPaused: false,
                 },
                 displayName: resolveDisplayName(screenShareParticipant.userId),
               }
@@ -602,7 +617,7 @@ export default function MeetsMainContent({
       .find((participant) => participant !== undefined);
     const preferredVideoParticipant =
       preferredParticipant &&
-      getLiveVideoStream(preferredParticipant.videoStream)
+      getLiveVideoStream(getRenderableParticipantVideoStream(preferredParticipant))
         ? preferredParticipant
         : null;
     const preferredAudioParticipant =
@@ -614,16 +629,17 @@ export default function MeetsMainContent({
       preferredVideoParticipant ??
       nonSystemParticipants.find(
         (participant) =>
-          !participant.isCameraOff &&
-          getLiveVideoStream(participant.videoStream),
+          getLiveVideoStream(getRenderableParticipantVideoStream(participant)),
       ) ??
       nonSystemParticipants.find((participant) =>
-        getLiveVideoStream(participant.videoStream),
+        getLiveVideoStream(getRenderableParticipantVideoStream(participant)),
       ) ??
       preferredAudioParticipant ??
       nonSystemParticipants.find((participant) => participant.audioStream) ??
       nonSystemParticipants[0];
-    const cameraStream = getLiveVideoStream(cameraParticipant.videoStream);
+    const cameraStream = getLiveVideoStream(
+      getRenderableParticipantVideoStream(cameraParticipant),
+    );
     const mainAudioStream = cameraParticipant.audioStream ?? fallbackAudioStream;
 
     return {
@@ -634,6 +650,7 @@ export default function MeetsMainContent({
           screenShareStream: null,
           audioStream: mainAudioStream,
           isCameraOff: !cameraStream,
+          isVideoAdaptivelyPaused: false,
         },
         displayName: resolveDisplayName(cameraParticipant.userId),
       },
@@ -836,14 +853,15 @@ export default function MeetsMainContent({
   );
 
   const prewarmEffectsPanelOpen = useCallback(() => {
-    void prewarmVideoEffectsAssets({
+    if (deferVideoEffectsPreload) return;
+    void prewarmVideoEffectsAssetsDeferred({
       segmentation: true,
       face: true,
       faceFilter:
         videoEffects.filter !== "none" ? videoEffects.filter : undefined,
       reason: "effects-panel-open",
     });
-  }, [videoEffects.filter]);
+  }, [deferVideoEffectsPreload, videoEffects.filter]);
 
   const handleToggleVideoEffects = useCallback(() => {
     if (isCameraPermissionBlocked) return;
@@ -907,15 +925,17 @@ export default function MeetsMainContent({
   }, []);
 
   const handleToggleVideoFraming = useCallback(() => {
-    void prewarmVideoEffectsAssets({
-      face: true,
-      reason: "meeting-framing-toggle:select",
-    });
+    if (!deferVideoEffectsPreload) {
+      void prewarmVideoEffectsAssetsDeferred({
+        face: true,
+        reason: "meeting-framing-toggle:select",
+      });
+    }
     onVideoEffectsChange((current) => ({
       ...current,
       framing: !current.framing,
     }));
-  }, [onVideoEffectsChange]);
+  }, [deferVideoEffectsPreload, onVideoEffectsChange]);
   useEffect(() => {
     if (!isChatOpen || chatOverlayMessages.length === 0) return;
     setChatOverlayMessages([]);
@@ -1240,7 +1260,7 @@ export default function MeetsMainContent({
           isGhost={ghostEnabled}
           participants={participants}
           userEmail={userEmail}
-          isMirrorCamera={isMirrorCamera}
+          isMirrorCamera={mirrorLocalPreview}
           activeSpeakerId={activeSpeakerId}
           currentUserId={currentUserId}
           audioOutputDeviceId={audioOutputDeviceId}
@@ -1255,7 +1275,7 @@ export default function MeetsMainContent({
           isGhost={ghostEnabled}
           participants={participants}
           userEmail={userEmail}
-          isMirrorCamera={isMirrorCamera}
+          isMirrorCamera={mirrorLocalPreview}
           activeSpeakerId={activeSpeakerId}
           currentUserId={currentUserId}
           audioOutputDeviceId={audioOutputDeviceId}
@@ -1275,7 +1295,7 @@ export default function MeetsMainContent({
           isGhost={ghostEnabled}
           participants={participants}
           userEmail={userEmail}
-          isMirrorCamera={isMirrorCamera}
+          isMirrorCamera={mirrorLocalPreview}
           activeSpeakerId={activeSpeakerId}
           currentUserId={currentUserId}
           audioOutputDeviceId={audioOutputDeviceId}
@@ -1294,7 +1314,7 @@ export default function MeetsMainContent({
           isGhost={ghostEnabled}
           participants={participants}
           userEmail={userEmail}
-          isMirrorCamera={isMirrorCamera}
+          isMirrorCamera={mirrorLocalPreview}
           activeSpeakerId={effectiveActiveSpeakerId}
           currentUserId={currentUserId}
           audioOutputDeviceId={audioOutputDeviceId}
@@ -1525,6 +1545,7 @@ export default function MeetsMainContent({
           error={videoEffectsError}
           debugStats={videoEffectsDebugStats}
           activeCount={activeVideoEffectsCount}
+          deferPreload={deferVideoEffectsPreload}
           cameraPermissionBlocked={isCameraPermissionBlocked}
           onToggleCamera={toggleCamera}
           onClose={handleCloseVideoEffects}

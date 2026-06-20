@@ -23,6 +23,19 @@ const seed = (userId: string, overrides: Partial<Participant> = {}) => {
   return state;
 };
 
+const videoAction = (
+  userId: string,
+  stream: MediaStream | null,
+  producerId = "vp1",
+): ParticipantAction => ({
+  type: "UPDATE_STREAM",
+  userId,
+  kind: "video",
+  streamType: "webcam",
+  stream,
+  producerId,
+});
+
 describe("participantReducer — ADD_PARTICIPANT (join)", () => {
   it("adds a brand-new participant with default flags", () => {
     const next = participantReducer(empty(), {
@@ -34,6 +47,7 @@ describe("participantReducer — ADD_PARTICIPANT (join)", () => {
       userId: "a",
       isMuted: false,
       isCameraOff: false,
+      isVideoAdaptivelyPaused: false,
       isHandRaised: false,
       isGhost: false,
       videoStream: null,
@@ -155,27 +169,18 @@ describe("participantReducer — MARK_LEAVING", () => {
 });
 
 describe("participantReducer — UPDATE_STREAM", () => {
-  const videoAction = (
-    userId: string,
-    stream: MediaStream | null,
-    producerId = "vp1",
-  ): ParticipantAction => ({
-    type: "UPDATE_STREAM",
-    userId,
-    kind: "video",
-    streamType: "webcam",
-    stream,
-    producerId,
-  });
-
   it("attaches a webcam video stream and clears isCameraOff", () => {
-    const state = seed("a", { isCameraOff: true });
+    const state = seed("a", {
+      isCameraOff: true,
+      isVideoAdaptivelyPaused: true,
+    });
     const s = fakeStream("v");
     const next = participantReducer(state, videoAction("a", s));
     const p = next.get("a")!;
     expect(p.videoStream).toBe(s);
     expect(p.videoProducerId).toBe("vp1");
     expect(p.isCameraOff).toBe(false);
+    expect(p.isVideoAdaptivelyPaused).toBe(false);
   });
 
   it("clears the producer id when the stream is removed", () => {
@@ -293,6 +298,48 @@ describe("participantReducer — mute / camera / hand transitions", () => {
       cameraOff: true,
     });
     expect(again).toBe(off);
+  });
+
+  it("UPDATE_CAMERA_OFF clears adaptive video pause when the camera is actually off", () => {
+    const state = seed("a", {
+      isCameraOff: false,
+      isVideoAdaptivelyPaused: true,
+    });
+    const off = participantReducer(state, {
+      type: "UPDATE_CAMERA_OFF",
+      userId: "a",
+      cameraOff: true,
+    });
+    expect(off.get("a")!.isCameraOff).toBe(true);
+    expect(off.get("a")!.isVideoAdaptivelyPaused).toBe(false);
+  });
+
+  it("UPDATE_VIDEO_ADAPTIVE_PAUSED toggles receiver-side video pause for the matching producer only", () => {
+    const stream = fakeStream("v");
+    const state = participantReducer(seed("a"), videoAction("a", stream, "vp1"));
+    const paused = participantReducer(state, {
+      type: "UPDATE_VIDEO_ADAPTIVE_PAUSED",
+      userId: "a",
+      producerId: "vp1",
+      adaptivelyPaused: true,
+    });
+    expect(paused.get("a")!.isVideoAdaptivelyPaused).toBe(true);
+
+    const staleClear = participantReducer(paused, {
+      type: "UPDATE_VIDEO_ADAPTIVE_PAUSED",
+      userId: "a",
+      producerId: "old-producer",
+      adaptivelyPaused: false,
+    });
+    expect(staleClear).toBe(paused);
+
+    const resumed = participantReducer(paused, {
+      type: "UPDATE_VIDEO_ADAPTIVE_PAUSED",
+      userId: "a",
+      producerId: "vp1",
+      adaptivelyPaused: false,
+    });
+    expect(resumed.get("a")!.isVideoAdaptivelyPaused).toBe(false);
   });
 
   it("UPDATE_HAND_RAISED toggles isHandRaised and is a no-op when unchanged", () => {

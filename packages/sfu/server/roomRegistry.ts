@@ -258,7 +258,8 @@ class RedisRoomRegistry implements RoomRegistry {
       commandsQueueMaxLength: 1000,
     });
     this.client.on("error", (error) => {
-      Logger.error("[RoomRegistry] Redis client error", error);
+      const log = isRedisTransientError(error) ? Logger.warn : Logger.error;
+      log("[RoomRegistry] Redis client error", error);
     });
   }
 

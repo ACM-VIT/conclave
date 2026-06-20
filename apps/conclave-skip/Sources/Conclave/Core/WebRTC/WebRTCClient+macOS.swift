@@ -38,14 +38,31 @@ final class WebRTCClient {
     func createTransports() async throws { }
     func restartIce() async -> Bool { false }
     func restartIce(transportKind: String) async -> Bool { false }
-    func consumeProducer(producerId: String, producerUserId: String, producerType: String = "webcam") async throws { }
+    func consumeProducer(producerId: String, producerUserId: String, producerKind: String? = nil, producerType: String = "webcam", preferHighWebcamLayer: Bool = false) async throws { }
     func closeConsumer(producerId: String, userId: String) { }
+    func applyRemoteConsumerBandwidthPolicy(
+        focusedUserIds: Set<String>,
+        visibleUserIds: Set<String>,
+        connectionQuality: ConnectionQuality,
+        videoQuality: VideoQuality
+    ) async { }
     func updateVideoQuality(_ quality: VideoQuality) { }
+    func applyLocalBandwidthProfile(connectionQuality: ConnectionQuality) { }
+    func refreshLocalAudioProducerForBandwidthProfile(connectionQuality: ConnectionQuality) async { }
+    func refreshLocalVideoProducerForBandwidthProfile(connectionQuality: ConnectionQuality) async { }
+    func refreshLocalScreenProducerForBandwidthProfile(connectionQuality: ConnectionQuality) async { }
     func startProducingAudio() async throws { }
     func startProducingVideo() async throws { }
     func cleanup(notifyLocalState: Bool = true) async { }
     func checkVideoFreezes() async { }
     func sampleConnectionQuality() -> ConnectionQuality { .unknown }
+    func sampleConnectionQualitySample() -> ConnectionQualitySample {
+        ConnectionQualitySample(
+            publishQuality: .unknown,
+            receiveQuality: .unknown,
+            overallQuality: .unknown
+        )
+    }
     func consumerId(forProducer producerId: String) -> String? { nil }
     func closeConsumers(exceptProducerIds producerIds: [String]) { }
     func hasAudioConsumer(userIdPrefix: String) -> Bool { false }

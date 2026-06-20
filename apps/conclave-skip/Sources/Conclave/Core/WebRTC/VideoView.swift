@@ -1,11 +1,4 @@
 #if os(iOS) && !SKIP && canImport(WebRTC)
-//
-//  VideoView.swift
-//  Conclave
-//
-//  SwiftUI view for rendering WebRTC video tracks
-//
-
 import SwiftUI
 import AVFoundation
 import WebRTC
@@ -214,6 +207,7 @@ struct VideoGridItem: View {
     let isGhost: Bool
     let isSpeaking: Bool
     let isLocal: Bool
+    var connectionStatus: ParticipantConnectionStatus? = nil
     // When set AND camera off, the tile fills its frame (immersive solo avatar)
     // rather than locking to 16:9. Video tiles always keep 16:9.
     var fillStage: Bool = false
@@ -294,6 +288,10 @@ struct VideoGridItem: View {
             if isHandRaised {
                 handRaisedBadge
             }
+
+            if let connectionStatus, !isLocal {
+                connectionStatusBadge(connectionStatus)
+            }
             
             nameLabel
         }
@@ -344,6 +342,45 @@ struct VideoGridItem: View {
             Spacer()
         }
         .padding(12)
+    }
+
+    func connectionStatusBadge(_ status: ParticipantConnectionStatus) -> some View {
+        let isReconnecting = status.state == .reconnecting
+        let label = isReconnecting ? "Reconnecting" : "Back online"
+        let tint = isReconnecting ? ACMColors.primaryOrange : ACMColors.success
+        let androidTint = isReconnecting ? "accent" : "success"
+        let icon = isReconnecting ? "exclamationmark.triangle.fill" : "checkmark.circle.fill"
+        let androidIcon = isReconnecting ? "warning" : "check"
+
+        return VStack {
+            HStack {
+                Spacer()
+
+                HStack(spacing: 6) {
+                    ACMSystemIcon.icon(icon, android: androidIcon, size: 14, tint: androidTint)
+                        .foregroundStyle(tint)
+
+                    Text(label)
+                        .font(ACMFont.trial(11, weight: .medium))
+                        .foregroundStyle(ACMColors.text)
+                        .lineLimit(1)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .acmColorBackground(ACMColors.scrim)
+                .overlay {
+                    Capsule()
+                        .strokeBorder(lineWidth: 1)
+                        .foregroundStyle(ACMColors.creamFaint)
+                }
+                .clipShape(Capsule())
+
+                Spacer()
+            }
+            .padding(.top, 10)
+
+            Spacer()
+        }
     }
     
     var nameLabel: some View {

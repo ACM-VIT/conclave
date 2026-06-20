@@ -76,6 +76,8 @@ private struct ConnectionQualityDot: View {
 
     private var color: Color {
         switch quality {
+        case .emergency:
+            return ACMColors.error
         case .good:
             return ACMColors.success
         case .fair:
@@ -89,6 +91,8 @@ private struct ConnectionQualityDot: View {
 
     private var label: String {
         switch quality {
+        case .emergency:
+            return "Very poor connection"
         case .good:
             return "Good connection"
         case .fair:

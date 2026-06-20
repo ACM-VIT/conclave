@@ -209,7 +209,9 @@ struct GridLayoutView: View {
     }
 
     func localTile(fill: Bool = false) -> some View {
-        VideoGridItem(
+        let localVideoTrack = viewModel.webRTCClient.getLocalVideoTrack()
+        let captureSession = (!viewModel.state.isCameraOff && localVideoTrack == nil) ? viewModel.webRTCClient.getCaptureSession() : nil
+        return VideoGridItem(
             displayName: viewModel.state.displayName,
             isMuted: viewModel.state.isMuted,
             isCameraOff: viewModel.state.isCameraOff,
@@ -218,8 +220,8 @@ struct GridLayoutView: View {
             isSpeaking: viewModel.state.effectiveActiveSpeakerId.map { viewModel.state.isLocalParticipantUserId($0) } == true,
             isLocal: true,
             fillStage: fill,
-            captureSession: viewModel.webRTCClient.getCaptureSession(),
-            localVideoTrack: viewModel.webRTCClient.getLocalVideoTrack()
+            captureSession: captureSession,
+            localVideoTrack: localVideoTrack
         )
     }
 
@@ -232,6 +234,7 @@ struct GridLayoutView: View {
             isGhost: participant.isGhost,
             isSpeaking: viewModel.state.effectiveActiveSpeakerId == participant.id,
             isLocal: false,
+            connectionStatus: participant.connectionStatus,
             trackWrapper: viewModel.webRTCClient.remoteVideoTracks[participant.id]
         )
         .opacity(participant.isLeaving ? 0.5 : 1.0)

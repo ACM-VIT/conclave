@@ -1,6 +1,8 @@
 package conclave.module
 
 import android.Manifest
+import android.content.Context
+import android.content.ContextWrapper
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -25,7 +27,7 @@ import androidx.lifecycle.LifecycleOwner
 @Composable
 internal fun CameraPreviewView(onPermissionChanged: (Boolean) -> Unit) {
     val context = LocalContext.current
-    val lifecycleOwner = context as? LifecycleOwner
+    val lifecycleOwner = remember(context) { context.findLifecycleOwner() }
 
     var hasPermission by remember {
         mutableStateOf(
@@ -59,24 +61,33 @@ internal fun CameraPreviewView(onPermissionChanged: (Boolean) -> Unit) {
     }
 
     if (hasPermission && lifecycleOwner != null) {
-        DisposableEffect(previewView) {
+        DisposableEffect(previewView, lifecycleOwner) {
             val providerFuture = ProcessCameraProvider.getInstance(context)
             var boundProvider: ProcessCameraProvider? = null
+            var boundPreview: Preview? = null
+            var disposed = false
 
             val listener = Runnable {
-                val cameraProvider = providerFuture.get()
-                boundProvider = cameraProvider
-
-                val preview = Preview.Builder().build().also {
-                    it.setSurfaceProvider(previewView.surfaceProvider)
-                }
-
-                val selector = CameraSelector.DEFAULT_FRONT_CAMERA
-
                 try {
-                    cameraProvider.unbindAll()
+                    val cameraProvider = providerFuture.get()
+                    if (disposed) {
+                        return@Runnable
+                    }
+
+                    val preview = Preview.Builder().build().also {
+                        it.setSurfaceProvider(previewView.surfaceProvider)
+                    }
+
+                    val selector = CameraSelector.DEFAULT_FRONT_CAMERA
+
+                    boundPreview?.let { cameraProvider.unbind(it) }
                     cameraProvider.bindToLifecycle(lifecycleOwner, selector, preview)
+                    boundProvider = cameraProvider
+                    boundPreview = preview
                 } catch (t: Throwable) {
+                    if (disposed) {
+                        return@Runnable
+                    }
                     logger.error("CameraPreviewView bind failed: ${t}")
                     hasPermission = false
                     onPermissionChanged(false)
@@ -85,7 +96,10 @@ internal fun CameraPreviewView(onPermissionChanged: (Boolean) -> Unit) {
             providerFuture.addListener(listener, ContextCompat.getMainExecutor(context))
 
             onDispose {
-                boundProvider?.unbindAll()
+                disposed = true
+                boundPreview?.let { preview ->
+                    boundProvider?.unbind(preview)
+                }
             }
         }
     }
@@ -94,4 +108,12 @@ internal fun CameraPreviewView(onPermissionChanged: (Boolean) -> Unit) {
         modifier = Modifier.fillMaxSize(),
         factory = { previewView }
     )
+}
+
+private tailrec fun Context.findLifecycleOwner(): LifecycleOwner? {
+    return when (this) {
+        is LifecycleOwner -> this
+        is ContextWrapper -> baseContext.findLifecycleOwner()
+        else -> null
+    }
 }

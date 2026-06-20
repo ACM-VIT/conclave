@@ -1,0 +1,484 @@
+import { readFileSync } from "node:fs";
+import { relative, resolve } from "node:path";
+
+const root = resolve(import.meta.dirname, "..");
+
+const files = {
+  webConstants: "apps/web/src/app/lib/constants.ts",
+  webCodec: "apps/web/src/app/lib/webcam-codec.ts",
+  webNetworkInformation: "apps/web/src/app/lib/network-information.ts",
+  webConnectionQuality: "apps/web/src/app/hooks/useConnectionQuality.ts",
+  webMeetClient: "apps/web/src/app/meets-client.tsx",
+  webMeetMedia: "apps/web/src/app/hooks/useMeetMedia.ts",
+  webJoinScreen: "apps/web/src/app/components/JoinScreen.tsx",
+  webMobileJoinScreen: "apps/web/src/app/components/mobile/MobileJoinScreen.tsx",
+  webLowBandwidthProbe: "scripts/probe-low-bandwidth-meet.mjs",
+  iosWebrtc:
+    "apps/conclave-skip/Sources/Conclave/Core/WebRTC/WebRTCClient.swift",
+  androidWebrtc:
+    "apps/conclave-skip/Sources/Conclave/Skip/WebRTCClient+Android.kt",
+  nativeMeetingViewModel:
+    "apps/conclave-skip/Sources/Conclave/Features/Meeting/MeetingViewModel.swift",
+  iosReachability:
+    "apps/conclave-skip/Sources/Conclave/Core/Networking/NetworkReachabilityMonitor.swift",
+  androidReachability:
+    "apps/conclave-skip/Sources/Conclave/Skip/NetworkReachabilityMonitor.kt",
+};
+
+const source = Object.fromEntries(
+  Object.entries(files).map(([key, file]) => [
+    key,
+    readFileSync(resolve(root, file), "utf8"),
+  ]),
+);
+
+const failures = [];
+
+const assertIncludes = (key, snippet, label) => {
+  if (!source[key].includes(snippet)) {
+    failures.push(`${label} missing in ${relative(root, resolve(root, files[key]))}`);
+  }
+};
+
+const assertRegex = (key, regex, label) => {
+  if (!regex.test(source[key])) {
+    failures.push(`${label} missing in ${relative(root, resolve(root, files[key]))}`);
+  }
+};
+
+const compact = (value) => value.replace(/\s+/g, " ");
+const includesAny = (value, needles) =>
+  needles.some((needle) => value.includes(needle));
+
+// Audio has to stay codec-identical per profile for bundled audio m-lines.
+assertRegex(
+  "webConstants",
+  /fair:\s*32000,[\s\S]*poor:\s*24000,[\s\S]*emergency:\s*18000,/,
+  "web microphone Opus constrained ladder",
+);
+assertRegex(
+  "webConstants",
+  /fair:\s*MICROPHONE_OPUS_MAX_AVERAGE_BITRATE_BY_PROFILE\.fair,[\s\S]*poor:\s*MICROPHONE_OPUS_MAX_AVERAGE_BITRATE_BY_PROFILE\.poor,[\s\S]*emergency:\s*18000,/,
+  "web screen-audio Opus constrained ladder",
+);
+assertRegex(
+  "iosWebrtc",
+  /case \.emergency:\s*return 18_000[\s\S]*case \.poor:\s*return 24_000[\s\S]*case \.fair:\s*return 32_000/,
+  "iOS microphone Opus constrained ladder",
+);
+assertRegex(
+  "androidWebrtc",
+  /ConnectionQuality\.emergency -> 18_000[\s\S]*ConnectionQuality\.poor -> 24_000[\s\S]*ConnectionQuality\.fair -> 32_000/,
+  "Android microphone Opus constrained ladder",
+);
+
+// Webcam publish must keep poor distinct from emergency: poor preserves more
+// motion/detail, while emergency is the survival floor.
+assertIncludes(
+  "webCodec",
+  "layerRank === 0 ? 120000 : 160000",
+  "web poor webcam bitrate cap",
+);
+assertIncludes(
+  "webCodec",
+  "maxFramerate: Math.min(base.maxFramerate, 12)",
+  "web poor webcam framerate cap",
+);
+assertIncludes(
+  "webCodec",
+  "layerRank === 0 ? 65000 : 90000",
+  "web emergency webcam bitrate cap",
+);
+assertIncludes(
+  "webCodec",
+  "maxFramerate: Math.min(base.maxFramerate, 8)",
+  "web emergency webcam framerate cap",
+);
+assertIncludes(
+  "webCodec",
+  "return 1;",
+  "web constrained active webcam layer avoids double scaling",
+);
+assertIncludes(
+  "iosWebrtc",
+  "case .poor:\n            let bitrateCaps = [120_000, 160_000, 180_000]\n            let framerateCaps: [Double] = [12, 12, 15]",
+  "iOS poor webcam caps",
+);
+assertIncludes(
+  "iosWebrtc",
+  "case .emergency:\n            let bitrateCaps = [65_000, 90_000, 120_000]\n            let framerateCaps: [Double] = [8, 8, 8]",
+  "iOS emergency webcam caps",
+);
+assertIncludes(
+  "iosWebrtc",
+  "return min(spec.scaleResolutionDownBy, 2)",
+  "iOS constrained active webcam layer avoids 160x90",
+);
+assertIncludes(
+  "androidWebrtc",
+  "ConnectionQuality.poor -> {\n                bitrateCaps = listOf(120_000, 160_000, 180_000)\n                framerateCaps = listOf(12, 12, 15)",
+  "Android poor webcam caps",
+);
+assertIncludes(
+  "androidWebrtc",
+  "ConnectionQuality.emergency -> {\n                bitrateCaps = listOf(65_000, 90_000, 120_000)\n                framerateCaps = listOf(8, 8, 8)",
+  "Android emergency webcam caps",
+);
+assertIncludes(
+  "androidWebrtc",
+  "minOf(spec.scaleResolutionDownBy, 2.0)",
+  "Android constrained active webcam layer avoids 160x90",
+);
+
+// Screen share must preserve text/detail by maintaining resolution and cutting
+// frame rate first.
+for (const [key, label] of [
+  ["webCodec", "web"],
+  ["iosWebrtc", "iOS"],
+  ["androidWebrtc", "Android"],
+]) {
+  const text = compact(source[key]);
+  if (
+    !text.includes("emergency") ||
+    !includesAny(text, ["220_000", "220000"]) ||
+    !includesAny(text, ["maxFramerate: 3", "maxFramerate = 3"])
+  ) {
+    failures.push(`${label} emergency screen-share cap missing`);
+  }
+  if (
+    !text.includes("poor") ||
+    !includesAny(text, ["450_000", "450000"]) ||
+    !includesAny(text, ["maxFramerate: 5", "maxFramerate = 5"])
+  ) {
+    failures.push(`${label} poor screen-share cap missing`);
+  }
+}
+assertIncludes(
+  "webCodec",
+  "SCREEN_SHARE_DEGRADATION_PREFERENCE",
+  "web screen share maintain-resolution preference",
+);
+assertIncludes(
+  "iosWebrtc",
+  "next.degradationPreference = .maintainResolution",
+  "iOS screen share maintain-resolution preference",
+);
+assertIncludes(
+  "androidWebrtc",
+  "screenShareTemporalLayerCount",
+  "Android screen share temporal layering",
+);
+
+// Multi-stream rooms should not downgrade because one RTP stream has a short
+// startup jitter spike. Use aggregate/weighted jitter and leave the first loss
+// downgrade tolerant enough for otherwise healthy links.
+assertIncludes(
+  "webConnectionQuality",
+  "const LOSS_FAIR = 0.05; // 5%",
+  "web fair packet-loss threshold",
+);
+assertIncludes(
+  "webConnectionQuality",
+  "const JITTER_EMERGENCY_MS = 120;",
+  "web emergency jitter threshold",
+);
+assertIncludes(
+  "webConnectionQuality",
+  "inboundJitterWeightedMs += jitter * 1000 * jitterWeight",
+  "web weighted inbound jitter",
+);
+assertIncludes(
+  "iosWebrtc",
+  "(packetLoss ?? 0) >= 0.05",
+  "iOS fair packet-loss threshold",
+);
+assertIncludes(
+  "iosWebrtc",
+  "(jitterMs ?? 0) >= 120",
+  "iOS emergency jitter threshold",
+);
+assertIncludes(
+  "iosWebrtc",
+  "inboundJitterWeightedMs += jitter * 1000 * weight",
+  "iOS weighted inbound RTP jitter",
+);
+assertIncludes(
+  "iosWebrtc",
+  "remoteInboundJitterWeightedMs += jitter * 1000 * weight",
+  "iOS weighted remote-inbound RTP jitter",
+);
+assertIncludes(
+  "androidWebrtc",
+  "(packetLoss ?: 0.0) >= 0.05",
+  "Android fair packet-loss threshold",
+);
+assertIncludes(
+  "androidWebrtc",
+  "(jitterMs ?: 0.0) >= 120.0",
+  "Android emergency jitter threshold",
+);
+assertIncludes(
+  "androidWebrtc",
+  "inboundJitterWeightedMs += value * 1000.0 * weight",
+  "Android weighted inbound RTP jitter",
+);
+assertIncludes(
+  "androidWebrtc",
+  "remoteInboundJitterWeightedMs += value * 1000.0 * weight",
+  "Android weighted remote-inbound RTP jitter",
+);
+assertIncludes(
+  "iosWebrtc",
+  "remoteInboundLossFraction = max(remoteInboundLossFraction ?? 0, fractionLost)",
+  "iOS remote-inbound publish loss fraction",
+);
+assertIncludes(
+  "androidWebrtc",
+  "normalizeFractionLost(jsonNumber(obj, \"fractionLost\"))",
+  "Android remote-inbound publish loss fraction",
+);
+
+// Native clients must apply bandwidth hints before and during calls. Android
+// must re-produce where sender parameters cannot be updated reliably.
+assertIncludes(
+  "nativeMeetingViewModel",
+  "webRTCClient.applyLocalBandwidthProfile(connectionQuality: startupQuality)",
+  "native startup bandwidth profile",
+);
+assertIncludes(
+  "nativeMeetingViewModel",
+  "self.networkQualityHint = quality",
+  "native reachability quality hint wiring",
+);
+assertIncludes(
+  "nativeMeetingViewModel",
+  "self.applyAdaptiveVideoQuality(self.publishConnectionQuality)",
+  "native publish-side adaptive quality application",
+);
+assertIncludes(
+  "nativeMeetingViewModel",
+  "publishConnectionQuality = combinedConnectionQuality(sample.publishQuality)",
+  "native publish quality sample split",
+);
+assertIncludes(
+  "nativeMeetingViewModel",
+  "receiveConnectionQuality = combinedConnectionQuality(sample.receiveQuality)",
+  "native receive quality sample split",
+);
+assertIncludes(
+  "nativeMeetingViewModel",
+  "connectionQuality: receiveConnectionQuality",
+  "native receive-side remote consumer policy",
+);
+assertIncludes(
+  "nativeMeetingViewModel",
+  "self.publishConnectionQuality == quality",
+  "native publish-side producer refresh guard",
+);
+assertIncludes(
+  "nativeMeetingViewModel",
+  "scheduleLocalVideoBandwidthProfileRefresh(quality, allowGoodRecovery: allowGoodRecovery)",
+  "native webcam producer refresh scheduling",
+);
+assertIncludes(
+  "nativeMeetingViewModel",
+  "scheduleLocalAudioBandwidthProfileRefresh(quality, allowGoodRecovery: allowGoodRecovery)",
+  "native audio producer refresh scheduling",
+);
+assertIncludes(
+  "nativeMeetingViewModel",
+  "scheduleLocalScreenBandwidthProfileRefresh(quality, allowGoodRecovery: allowGoodRecovery)",
+  "native screen producer refresh scheduling",
+);
+assertIncludes(
+  "nativeMeetingViewModel",
+  "await webRTCClient.applyRemoteConsumerBandwidthPolicy(",
+  "native remote consumer bandwidth policy application",
+);
+assertRegex(
+  "nativeMeetingViewModel",
+  /emergencyVideoDowngradeSeconds\s*:\s*TimeInterval\s*=\s*2\.5[\s\S]*goodVideoRestoreSeconds\s*:\s*TimeInterval\s*=\s*45/,
+  "native adaptive downgrade/recovery windows",
+);
+assertIncludes(
+  "iosReachability",
+  "if path.isConstrained && path.isExpensive { return .emergency }",
+  "iOS constrained+expensive emergency quality hint",
+);
+assertIncludes(
+  "iosReachability",
+  "if path.isConstrained { return .poor }",
+  "iOS constrained poor quality hint",
+);
+assertIncludes(
+  "iosReachability",
+  "if path.isExpensive { return .fair }",
+  "iOS expensive fair quality hint",
+);
+assertRegex(
+  "androidReachability",
+  /if \(\(upstream != null && upstream <= 120\) \|\| \(downstream != null && downstream <= 300\)\)[\s\S]*return ConnectionQuality\.emergency/,
+  "Android emergency bandwidth quality hint",
+);
+assertRegex(
+  "androidReachability",
+  /if \(\(upstream != null && upstream <= 240\) \|\| \(downstream != null && downstream <= 800\)\)[\s\S]*return ConnectionQuality\.poor/,
+  "Android poor bandwidth quality hint",
+);
+assertRegex(
+  "androidReachability",
+  /if \(\(upstream != null && upstream <= 500\) \|\| \(downstream != null && downstream <= 1_500\)\)[\s\S]*return ConnectionQuality\.fair/,
+  "Android fair bandwidth quality hint",
+);
+
+// Bandwidth-heavy video effects assets must not auto-load on constrained links.
+// Camera/screen publishing should stay raw and cheap unless the user has enough
+// bandwidth and real effects are active.
+assertIncludes(
+  "webNetworkInformation",
+  "export function shouldDeferBandwidthHeavyPreload",
+  "web constrained-link heavy preload gate",
+);
+assertIncludes(
+  "webNetworkInformation",
+  "if (!connection) return isLikelyMobileOrTabletNavigator();",
+  "web mobile no-NetworkInformation preload deferral",
+);
+assertIncludes(
+  "webMeetClient",
+  "const shouldSuppressVideoEffectsForBandwidth =\n    useBandwidthHeavyVideoEffectsSuppressed();",
+  "web meet-shell video effects bandwidth suppression",
+);
+assertRegex(
+  "webMeetClient",
+  /const shouldRunVideoEffects =\s*activeVideoEffectsCount > 0 &&\s*!shouldSuppressVideoEffectsForBandwidth;/,
+  "web meet-shell effects only run when active and not constrained",
+);
+assertRegex(
+  "webMeetClient",
+  /if \(activeVideoEffectsCount <= 0\) return;[\s\S]*if \(shouldSuppressVideoEffectsForBandwidth\) return;[\s\S]*prewarmVideoEffectsRuntimeDeferred/,
+  "web meet-shell runtime prewarm constrained-link guard",
+);
+assertRegex(
+  "webMeetClient",
+  /if \(restoredVideoEffectsPrewarmDoneRef\.current\) return;[\s\S]*if \(shouldSuppressVideoEffectsForBandwidth\) return;[\s\S]*reason: "restored-effects-state"/,
+  "web restored-effects asset prewarm constrained-link guard",
+);
+assertRegex(
+  "webMeetClient",
+  /if \(activeVideoEffectsCount <= 0\) return;[\s\S]*if \(isCameraOff \|\| !hasLiveVideoTrack\(localStream\)\) return;[\s\S]*if \(shouldSuppressVideoEffectsForBandwidth\) return;[\s\S]*reason: "camera-live"/,
+  "web live-camera asset prewarm constrained-link guard",
+);
+assertRegex(
+  "webMeetClient",
+  /\{shouldRunVideoEffects \? \([\s\S]*<VideoEffectsBridge[\s\S]*mirrorOutput=\{false\}/,
+  "web mirror preview does not activate published effects pipeline",
+);
+assertRegex(
+  "webMeetMedia",
+  /activeVideoEffectsCount > 0 &&\s*!shouldDeferBandwidthHeavyPreload\(\)[\s\S]*reason: "camera-toggle-live"/,
+  "web camera-toggle effects prewarm constrained-link guard",
+);
+for (const [key, label] of [
+  ["webJoinScreen", "web prejoin"],
+  ["webMobileJoinScreen", "web mobile prejoin"],
+]) {
+  assertRegex(
+    key,
+    /const shouldRunPreviewVideoEffects =\s*activeVideoEffectsCount > 0 &&\s*!shouldSuppressPreviewVideoEffectsForBandwidth;/,
+    `${label} effects only run when active and not constrained`,
+  );
+  assertRegex(
+    key,
+    /if \(shouldDeferPreviewVideoEffectsPreload\) return;[\s\S]*prewarmVideoEffectsAssetsDeferred/,
+    `${label} effects prewarm constrained-link guard`,
+  );
+  assertIncludes(
+    key,
+    "deferPreload={shouldDeferPreviewVideoEffectsPreload}",
+    `${label} effects panel preload deferral`,
+  );
+}
+assertIncludes(
+  "webLowBandwidthProbe",
+  "videoEffectsNetworkResourceCount",
+  "low-bandwidth browser probe tracks video effects resource loads",
+);
+assertIncludes(
+  "webLowBandwidthProbe",
+  "/mediapipe/models/",
+  "low-bandwidth browser probe treats MediaPipe model fetches as heavy resources",
+);
+assertIncludes(
+  "iosWebrtc",
+  "audioProducer.updateSenderParameters",
+  "iOS live audio sender parameter update",
+);
+assertIncludes(
+  "iosWebrtc",
+  "next.degradationPreference = .maintainFramerate",
+  "iOS webcam maintain-framerate preference",
+);
+assertIncludes(
+  "iosWebrtc",
+  "ScreenCaptureManager.shared.updateMaxFrameRate(cap.maxFramerate)",
+  "iOS screen capture frame limiter update",
+);
+assertIncludes(
+  "iosWebrtc",
+  "scalabilityMode: Self.screenShareScalabilityMode",
+  "iOS screen-share temporal scalability on refresh",
+);
+assertRegex(
+  "androidWebrtc",
+  /refreshLocalVideoProducerForBandwidthProfile[\s\S]*transport\.produce\([\s\S]*webcamEncodings\(currentVideoQuality, connectionQuality\)[\s\S]*nextProducer\.setMaxSpatialLayer[\s\S]*socket\.closeProducer\(oldProducer\.id\)/,
+  "Android webcam producer refresh for new bandwidth profile",
+);
+assertRegex(
+  "androidWebrtc",
+  /refreshLocalAudioProducerForBandwidthProfile[\s\S]*socket\.closeProducer\(oldProducerId\)[\s\S]*startProducingAudio\(\)/,
+  "Android microphone producer refresh for new Opus profile",
+);
+assertRegex(
+  "androidWebrtc",
+  /refreshLocalScreenProducerForBandwidthProfile[\s\S]*transport\.produce\([\s\S]*screenShareEncodings\(connectionQuality\)[\s\S]*socket\.closeProducer\(oldProducer\.id\)/,
+  "Android screen producer refresh for new bandwidth profile",
+);
+
+// Native receive adaptation must keep audio crisp, preserve screen shares, and
+// pause extra webcam video only in emergency mode.
+for (const [key, label] of [
+  ["iosWebrtc", "iOS"],
+  ["androidWebrtc", "Android"],
+]) {
+  assertRegex(
+    key,
+    /kind == "audio"[\s\S]*priority\s*[:=]\s*255[\s\S]*paused\s*[:=]\s*false/,
+    `${label} remote audio protected from adaptive pausing`,
+  );
+  assertRegex(
+    key,
+    /type == ProducerType\.screen\.rawValue[\s\S]*(case \.emergency|ConnectionQuality\.emergency)[\s\S]*(temporalLayer\s*=\s*0|->\s*0)[\s\S]*(case \.poor|ConnectionQuality\.poor)[\s\S]*(temporalLayer\s*=\s*1|->\s*1)[\s\S]*priority\s*[:=]\s*240[\s\S]*paused\s*[:=]\s*false/,
+    `${label} screen-share receive temporal adaptation`,
+  );
+  assertRegex(
+    key,
+    /(if isEmergency && !emergencyKeepVideo|if \(isEmergency && !emergencyKeepVideo\))[\s\S]*spatialLayer\s*[:=]\s*0[\s\S]*temporalLayer\s*[:=]\s*0[\s\S]*priority\s*[:=]\s*8[\s\S]*paused\s*[:=]\s*true/,
+    `${label} emergency pauses extra remote webcams`,
+  );
+  assertRegex(
+    key,
+    /isFocused[\s\S]*spatialLayer\s*[:=][\s\S]*(isEmergency|\? 0)[\s\S]*temporalLayer\s*[:=][\s\S]*(isEmergency|\? 0)[\s\S]*priority\s*[:=][\s\S]*145[\s\S]*paused\s*[:=]\s*false/,
+    `${label} emergency keeps focused webcam live`,
+  );
+}
+
+if (failures.length > 0) {
+  console.error("Low-bandwidth profile check failed:");
+  for (const failure of failures) {
+    console.error(`- ${failure}`);
+  }
+  process.exit(1);
+}
+
+console.log("Low-bandwidth profile check passed.");

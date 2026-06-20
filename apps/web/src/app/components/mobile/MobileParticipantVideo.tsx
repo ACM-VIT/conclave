@@ -3,6 +3,7 @@
 import { Hand, MicOff, VenetianMask } from "lucide-react";
 import { memo, useEffect, useRef } from "react";
 import { Avatar } from "@conclave/ui-tokens/web";
+import { getRenderableParticipantVideoStream } from "../../lib/participant-media";
 import type { Participant } from "../../lib/types";
 import { truncateDisplayName } from "../../lib/utils";
 import ParticipantConnectionOverlay from "../ParticipantConnectionOverlay";
@@ -24,6 +25,8 @@ function MobileParticipantVideo({
 }: MobileParticipantVideoProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
+  const videoStream = getRenderableParticipantVideoStream(participant);
+  const videoTrack = videoStream?.getVideoTracks()[0] ?? null;
   const connectionStatus = participant.connectionStatus;
   const isReconnecting = connectionStatus?.state === "reconnecting";
 
@@ -31,17 +34,16 @@ function MobileParticipantVideo({
     const video = videoRef.current;
     if (!video) return;
 
-    if (!participant.videoStream || participant.isCameraOff) {
+    if (!videoStream) {
       if (video.srcObject) {
         video.srcObject = null;
       }
       return;
     }
 
-    if (video.srcObject !== participant.videoStream) {
-      video.srcObject = participant.videoStream;
+    if (video.srcObject !== videoStream) {
+      video.srcObject = videoStream;
     }
-    const videoStream = participant.videoStream;
 
     const playVideo = () => {
       video.play().catch((err) => {
@@ -53,7 +55,6 @@ function MobileParticipantVideo({
 
     playVideo();
 
-    const videoTrack = participant.videoStream.getVideoTracks()[0];
     if (videoTrack) {
       videoTrack.addEventListener("unmute", playVideo);
     }
@@ -66,7 +67,7 @@ function MobileParticipantVideo({
         video.srcObject = null;
       }
     };
-  }, [participant.videoStream, participant.videoProducerId, participant.isCameraOff]);
+  }, [videoStream, videoTrack]);
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -125,7 +126,7 @@ function MobileParticipantVideo({
     audioOutputDeviceId,
   ]);
 
-  const showPlaceholder = !participant.videoStream || participant.isCameraOff;
+  const showPlaceholder = !videoStream;
 
   const sizeClasses = {
     small: "w-20 h-20",
@@ -150,6 +151,9 @@ function MobileParticipantVideo({
   return (
     <div
       className={`mobile-tile ${sizeClasses[size]} ${speakerRing}`}
+      data-meet-video-adaptively-paused={
+        participant.isVideoAdaptivelyPaused ? "true" : "false"
+      }
     >
       <video
         ref={videoRef}

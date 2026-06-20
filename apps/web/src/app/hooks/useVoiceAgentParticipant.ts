@@ -12,7 +12,11 @@ import type {
   RtpParameters,
   TransportResponse,
 } from "../lib/types";
-import { OPUS_MAX_AVERAGE_BITRATE } from "../lib/constants";
+import {
+  buildMicrophoneOpusCodecOptions,
+  type AudioProducerNetworkProfile,
+} from "../lib/constants";
+import { getBrowserNetworkSnapshot } from "../lib/network-information";
 
 type VoiceAgentStatus = "idle" | "starting" | "running" | "error";
 
@@ -59,6 +63,14 @@ const AGENT_DISPLAY_NAME = "Voice Agent";
 const SOCKET_CONNECT_TIMEOUT_MS = 8000;
 const SOCKET_ACK_TIMEOUT_MS = 10000;
 const MAX_JOIN_ROOM_REDIRECTS = 1;
+
+const getBrowserAudioNetworkProfile = (): AudioProducerNetworkProfile => {
+  const snapshot = getBrowserNetworkSnapshot();
+  if (snapshot.emergency) return "emergency";
+  if (snapshot.quality === "poor") return "poor";
+  if (snapshot.quality === "fair") return "fair";
+  return "good";
+};
 
 class JoinRoomRedirectError extends Error {
   readonly redirectUrl: string;
@@ -657,15 +669,15 @@ export function useVoiceAgentParticipant({
     if (!pendingTrack || !runtime.producerTransport || runtime.producer) {
       return;
     }
+    if ("contentHint" in pendingTrack) {
+      pendingTrack.contentHint = "speech";
+    }
 
     const producer = await runtime.producerTransport.produce({
       track: pendingTrack,
-      codecOptions: {
-        opusStereo: true,
-        opusFec: true,
-        opusDtx: false,
-        opusMaxAverageBitrate: OPUS_MAX_AVERAGE_BITRATE,
-      },
+      codecOptions: buildMicrophoneOpusCodecOptions(
+        getBrowserAudioNetworkProfile(),
+      ),
       appData: { type: "webcam", paused: false },
     });
     runtime.producer = producer;

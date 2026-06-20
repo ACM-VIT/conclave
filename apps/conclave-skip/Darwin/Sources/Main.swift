@@ -21,9 +21,7 @@ private typealias AppDelegate = ConclaveAppDelegate
             case .background:
                 AppDelegate.shared.onStop()
             @unknown default:
-                #if DEBUG
-                print("unknown app phase: \(newPhase)")
-                #endif
+                break
             }
         }
     }
@@ -55,6 +53,14 @@ typealias AppType = NSApplication
 
     func application(_ application: UIApplication, open url: URL, options: [UIApplication.OpenURLOptionsKey : Any] = [:]) -> Bool {
         AppDelegate.shared.onOpenURL(url)
+    }
+
+    func application(_ application: UIApplication, continue userActivity: NSUserActivity, restorationHandler: @escaping ([UIUserActivityRestoring]?) -> Void) -> Bool {
+        guard userActivity.activityType == NSUserActivityTypeBrowsingWeb,
+              let url = userActivity.webpageURL else {
+            return false
+        }
+        return AppDelegate.shared.onOpenURL(url)
     }
 
     func applicationWillTerminate(_ application: UIApplication) {

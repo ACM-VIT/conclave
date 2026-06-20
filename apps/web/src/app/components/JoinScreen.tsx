@@ -1,5 +1,6 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import {
   Loader2,
   WandSparkles,
@@ -25,8 +26,8 @@ import type {
   PrejoinMediaHandoff,
 } from "../lib/types";
 import {
+  buildCameraVideoConstraints,
   DEFAULT_AUDIO_CONSTRAINTS,
-  STANDARD_QUALITY_CONSTRAINTS,
 } from "../lib/constants";
 import {
   generateRoomCode,
@@ -38,20 +39,50 @@ import {
 } from "../lib/utils";
 import MeetsErrorBanner from "./MeetsErrorBanner";
 // import ScheduledMeetingsPanel from "./ScheduledMeetingsPanel";
-import VideoEffectsPanel from "./VideoEffectsPanel";
-import {
-  prewarmVideoEffectsAssets,
-  useVideoEffects,
-} from "../hooks/useVideoEffects";
 import { useCameraPermissionState } from "../hooks/useCameraPermissionState";
+import {
+  useBandwidthHeavyPreloadDeferred,
+  useBandwidthHeavyVideoEffectsSuppressed,
+} from "../hooks/useBandwidthHeavyPreloadDeferred";
 import {
   countActiveVideoEffects,
   type VideoEffectsState,
 } from "../lib/video-effects";
+import { getBrowserNetworkSnapshot } from "../lib/network-information";
+import { prewarmVideoEffectsAssetsDeferred } from "../lib/video-effects-lazy";
+import type { VideoEffectsBridgeState } from "./VideoEffectsBridge";
 
 const normalizeGuestName = (value: string): string =>
   value.trim().replace(/\s+/g, " ");
 const GUEST_USER_STORAGE_KEY = "conclave:guest-user";
+
+const VideoEffectsPanel = dynamic(() => import("./VideoEffectsPanel"), {
+  ssr: false,
+});
+const VideoEffectsBridge = dynamic(() => import("./VideoEffectsBridge"), {
+  ssr: false,
+});
+
+const VIDEO_EFFECTS_OFF_STATE: VideoEffectsBridgeState = {
+  effectiveStream: null,
+  processedTrackVersion: 0,
+  processedTrackReady: false,
+  status: "off",
+  error: null,
+  debugStats: null,
+};
+
+const getPrejoinVideoConstraints = () => {
+  const snapshot = getBrowserNetworkSnapshot();
+  const profile = snapshot.emergency
+    ? "emergency"
+    : snapshot.startupQuality === "poor"
+    ? "poor"
+    : snapshot.startupQuality === "fair"
+    ? "fair"
+    : "good";
+  return buildCameraVideoConstraints("standard", profile);
+};
 
 const createGuestId = (): string => {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
@@ -252,18 +283,29 @@ function JoinScreen({
     normalizeGuestName(user?.name || "") ||
     (userEmail ? userEmail.split("@")[0] : "") ||
     "You";
-  const {
-    effectiveStream: processedPreviewStream,
-    status: videoEffectsStatus,
-    error: videoEffectsError,
-    debugStats: videoEffectsDebugStats,
-  } = useVideoEffects({
-    sourceStream: localStream,
-    effects: videoEffects,
-    processedVideoTrackRef: processedPreviewTrackRef,
-  });
-  const previewStream = processedPreviewStream ?? localStream;
   const activeVideoEffectsCount = countActiveVideoEffects(videoEffects);
+  const shouldDeferPreviewVideoEffectsPreload =
+    useBandwidthHeavyPreloadDeferred();
+  const shouldSuppressPreviewVideoEffectsForBandwidth =
+    useBandwidthHeavyVideoEffectsSuppressed();
+  const shouldRunPreviewVideoEffects =
+    activeVideoEffectsCount > 0 &&
+    !shouldSuppressPreviewVideoEffectsForBandwidth;
+  const [videoEffectsBridgeState, setVideoEffectsBridgeState] =
+    useState<VideoEffectsBridgeState>(VIDEO_EFFECTS_OFF_STATE);
+  const processedPreviewStream = shouldRunPreviewVideoEffects
+    ? videoEffectsBridgeState.effectiveStream
+    : null;
+  const videoEffectsStatus = shouldRunPreviewVideoEffects
+    ? videoEffectsBridgeState.status
+    : "off";
+  const videoEffectsError = shouldRunPreviewVideoEffects
+    ? videoEffectsBridgeState.error
+    : null;
+  const videoEffectsDebugStats = shouldRunPreviewVideoEffects
+    ? videoEffectsBridgeState.debugStats
+    : null;
+  const previewStream = processedPreviewStream ?? localStream;
   const cameraPermissionState = useCameraPermissionState();
   const hasLivePreviewCamera = Boolean(
     localStream
@@ -282,7 +324,9 @@ function JoinScreen({
       cameraPermissionState === "denied" ||
       meetError?.code === "PERMISSION_DENIED");
   const prewarmLiveCameraEffects = (reason: string) => {
-    void prewarmVideoEffectsAssets({
+    if (activeVideoEffectsCount <= 0 && !isEffectsOpen) return;
+    if (shouldDeferPreviewVideoEffectsPreload) return;
+    void prewarmVideoEffectsAssetsDeferred({
       segmentation: true,
       face: true,
       reason,
@@ -299,13 +343,14 @@ function JoinScreen({
     setIsRequestingPermissions(true);
     setPermissionRequestError(null);
     try {
+      const videoConstraints = getPrejoinVideoConstraints();
       logJoinMedia("get_user_media_full_request", {
         audio: DEFAULT_AUDIO_CONSTRAINTS,
-        video: STANDARD_QUALITY_CONSTRAINTS,
+        video: videoConstraints,
       });
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: DEFAULT_AUDIO_CONSTRAINTS,
-        video: STANDARD_QUALITY_CONSTRAINTS,
+        video: videoConstraints,
       });
       const liveTracks = stream
         .getTracks()
@@ -511,11 +556,12 @@ function JoinScreen({
         return;
       }
       try {
+        const videoConstraints = getPrejoinVideoConstraints();
         logJoinMedia("get_user_media_video_request", {
-          constraints: STANDARD_QUALITY_CONSTRAINTS,
+          constraints: videoConstraints,
         });
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: STANDARD_QUALITY_CONSTRAINTS,
+          video: videoConstraints,
         });
         const videoTrack = stream.getVideoTracks()[0];
         if (!videoTrack) {
@@ -985,6 +1031,14 @@ function JoinScreen({
           </div>
         </div>
       </main>
+      {shouldRunPreviewVideoEffects ? (
+        <VideoEffectsBridge
+          sourceStream={localStream}
+          effects={videoEffects}
+          processedVideoTrackRef={processedPreviewTrackRef}
+          onStateChange={setVideoEffectsBridgeState}
+        />
+      ) : null}
       {isEffectsOpen && (
         <VideoEffectsPanel
           variant="dialog"
@@ -996,6 +1050,7 @@ function JoinScreen({
           error={videoEffectsError}
           debugStats={videoEffectsDebugStats}
           activeCount={activeVideoEffectsCount}
+          deferPreload={shouldDeferPreviewVideoEffectsPreload}
           cameraPermissionBlocked={isCameraPermissionBlocked}
           showFilters={!isCameraPermissionBlocked}
           onToggleCamera={toggleCamera}

@@ -1,5 +1,6 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import {
   AlertCircle,
   ArrowRight,
@@ -23,8 +24,8 @@ import type {
   PrejoinMediaHandoff,
 } from "../../lib/types";
 import {
+  buildCameraVideoConstraints,
   DEFAULT_AUDIO_CONSTRAINTS,
-  STANDARD_QUALITY_CONSTRAINTS,
 } from "../../lib/constants";
 import {
   generateRoomCode,
@@ -36,21 +37,51 @@ import {
 } from "../../lib/utils";
 import MeetsErrorBanner from "../MeetsErrorBanner";
 // import ScheduledMeetingsPanel from "../ScheduledMeetingsPanel";
-import VideoEffectsPanel from "../VideoEffectsPanel";
 import AndroidUpsellSheet from "./AndroidUpsellSheet";
-import {
-  prewarmVideoEffectsAssets,
-  useVideoEffects,
-} from "../../hooks/useVideoEffects";
 import { useCameraPermissionState } from "../../hooks/useCameraPermissionState";
+import {
+  useBandwidthHeavyPreloadDeferred,
+  useBandwidthHeavyVideoEffectsSuppressed,
+} from "../../hooks/useBandwidthHeavyPreloadDeferred";
 import {
   countActiveVideoEffects,
   type VideoEffectsState,
 } from "../../lib/video-effects";
+import { getBrowserNetworkSnapshot } from "../../lib/network-information";
+import { prewarmVideoEffectsAssetsDeferred } from "../../lib/video-effects-lazy";
+import type { VideoEffectsBridgeState } from "../VideoEffectsBridge";
 
 const normalizeGuestName = (value: string): string =>
   value.trim().replace(/\s+/g, " ");
 const GUEST_USER_STORAGE_KEY = "conclave:guest-user";
+
+const VideoEffectsPanel = dynamic(() => import("../VideoEffectsPanel"), {
+  ssr: false,
+});
+const VideoEffectsBridge = dynamic(() => import("../VideoEffectsBridge"), {
+  ssr: false,
+});
+
+const VIDEO_EFFECTS_OFF_STATE: VideoEffectsBridgeState = {
+  effectiveStream: null,
+  processedTrackVersion: 0,
+  processedTrackReady: false,
+  status: "off",
+  error: null,
+  debugStats: null,
+};
+
+const getPrejoinVideoConstraints = () => {
+  const snapshot = getBrowserNetworkSnapshot();
+  const profile = snapshot.emergency
+    ? "emergency"
+    : snapshot.startupQuality === "poor"
+    ? "poor"
+    : snapshot.startupQuality === "fair"
+    ? "fair"
+    : "good";
+  return buildCameraVideoConstraints("standard", profile);
+};
 
 const getSignInHref = (): string => {
   if (typeof window === "undefined") return "/sign-in";
@@ -196,18 +227,29 @@ function MobileJoinScreen({
       : "";
   const [isSigningOut, setIsSigningOut] = useState(false);
   const [showAndroidUpsell, setShowAndroidUpsell] = useState(false);
-  const {
-    effectiveStream: processedPreviewStream,
-    status: videoEffectsStatus,
-    error: videoEffectsError,
-    debugStats: videoEffectsDebugStats,
-  } = useVideoEffects({
-    sourceStream: localStream,
-    effects: videoEffects,
-    processedVideoTrackRef: processedPreviewTrackRef,
-  });
-  const previewStream = processedPreviewStream ?? localStream;
   const activeVideoEffectsCount = countActiveVideoEffects(videoEffects);
+  const shouldDeferPreviewVideoEffectsPreload =
+    useBandwidthHeavyPreloadDeferred();
+  const shouldSuppressPreviewVideoEffectsForBandwidth =
+    useBandwidthHeavyVideoEffectsSuppressed();
+  const shouldRunPreviewVideoEffects =
+    activeVideoEffectsCount > 0 &&
+    !shouldSuppressPreviewVideoEffectsForBandwidth;
+  const [videoEffectsBridgeState, setVideoEffectsBridgeState] =
+    useState<VideoEffectsBridgeState>(VIDEO_EFFECTS_OFF_STATE);
+  const processedPreviewStream = shouldRunPreviewVideoEffects
+    ? videoEffectsBridgeState.effectiveStream
+    : null;
+  const videoEffectsStatus = shouldRunPreviewVideoEffects
+    ? videoEffectsBridgeState.status
+    : "off";
+  const videoEffectsError = shouldRunPreviewVideoEffects
+    ? videoEffectsBridgeState.error
+    : null;
+  const videoEffectsDebugStats = shouldRunPreviewVideoEffects
+    ? videoEffectsBridgeState.debugStats
+    : null;
+  const previewStream = processedPreviewStream ?? localStream;
   const cameraPermissionState = useCameraPermissionState();
   const hasLivePreviewCamera = Boolean(
     localStream
@@ -230,27 +272,43 @@ function MobileJoinScreen({
       cameraPermissionState === "denied" ||
       meetError?.code === "PERMISSION_DENIED");
 
-  const prewarmLiveCameraEffects = useCallback((reason: string) => {
-    void prewarmVideoEffectsAssets({
-      segmentation: true,
-      face: true,
-      reason,
-    });
-  }, []);
+  const prewarmLiveCameraEffects = useCallback(
+    (reason: string) => {
+      if (activeVideoEffectsCount <= 0 && !isEffectsOpen) return;
+      if (shouldDeferPreviewVideoEffectsPreload) return;
+      void prewarmVideoEffectsAssetsDeferred({
+        segmentation: true,
+        face: true,
+        reason,
+      });
+    },
+    [
+      activeVideoEffectsCount,
+      isEffectsOpen,
+      shouldDeferPreviewVideoEffectsPreload,
+    ],
+  );
 
   const prewarmBackgroundBlur = useCallback(() => {
     if (isCameraPermissionBlocked) return;
-    void prewarmVideoEffectsAssets({
+    if (shouldDeferPreviewVideoEffectsPreload) return;
+    void prewarmVideoEffectsAssetsDeferred({
       segmentation: true,
       reason: "mobile-prejoin-quick-blur",
     });
-  }, [isCameraPermissionBlocked]);
+  }, [
+    isCameraPermissionBlocked,
+    shouldDeferPreviewVideoEffectsPreload,
+  ]);
 
   const toggleBackgroundBlur = useCallback(() => {
     if (isCameraPermissionBlocked) return;
     const nextBackground = isBackgroundBlurActive ? "none" : "blur-strong";
-    if (nextBackground !== "none") {
-      void prewarmVideoEffectsAssets({
+    if (
+      nextBackground !== "none" &&
+      !shouldDeferPreviewVideoEffectsPreload
+    ) {
+      void prewarmVideoEffectsAssetsDeferred({
         segmentation: true,
         reason: "mobile-prejoin-quick-blur:select",
       });
@@ -263,17 +321,23 @@ function MobileJoinScreen({
     isBackgroundBlurActive,
     isCameraPermissionBlocked,
     onVideoEffectsChange,
+    shouldDeferPreviewVideoEffectsPreload,
   ]);
 
   const openEffectsPanel = useCallback(() => {
     if (isCameraPermissionBlocked) return;
-    void prewarmVideoEffectsAssets({
-      segmentation: true,
-      face: true,
-      reason: "mobile-prejoin-effects-panel-open",
-    });
+    if (!shouldDeferPreviewVideoEffectsPreload) {
+      void prewarmVideoEffectsAssetsDeferred({
+        segmentation: true,
+        face: true,
+        reason: "mobile-prejoin-effects-panel-open",
+      });
+    }
     setIsEffectsOpen(true);
-  }, [isCameraPermissionBlocked]);
+  }, [
+    isCameraPermissionBlocked,
+    shouldDeferPreviewVideoEffectsPreload,
+  ]);
 
   const { data: session } = useSession();
   const canSignOut = Boolean(session?.user || user?.id || user?.email);
@@ -385,9 +449,10 @@ function MobileJoinScreen({
     setIsRequestingPermissions(true);
     setPermissionRequestError(null);
     try {
+      const videoConstraints = getPrejoinVideoConstraints();
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: DEFAULT_AUDIO_CONSTRAINTS,
-        video: STANDARD_QUALITY_CONSTRAINTS,
+        video: videoConstraints,
       });
       const liveTracks = stream
         .getTracks()
@@ -431,9 +496,10 @@ function MobileJoinScreen({
       setLocalStream(nextTracks.length > 0 ? new MediaStream(nextTracks) : null);
       setIsCameraOn(false);
     } else {
+      const videoConstraints = getPrejoinVideoConstraints();
       await navigator.mediaDevices
         .getUserMedia({
-          video: STANDARD_QUALITY_CONSTRAINTS,
+          video: videoConstraints,
         })
         .then((stream) => {
           const videoTrack = stream.getVideoTracks()[0];
@@ -1074,6 +1140,15 @@ function MobileJoinScreen({
         </div>
       )}
 
+      {shouldRunPreviewVideoEffects ? (
+        <VideoEffectsBridge
+          sourceStream={localStream}
+          effects={videoEffects}
+          processedVideoTrackRef={processedPreviewTrackRef}
+          onStateChange={setVideoEffectsBridgeState}
+        />
+      ) : null}
+
       {isEffectsOpen && (
         <VideoEffectsPanel
           variant="dialog"
@@ -1085,6 +1160,7 @@ function MobileJoinScreen({
           error={videoEffectsError}
           debugStats={videoEffectsDebugStats}
           activeCount={activeVideoEffectsCount}
+          deferPreload={shouldDeferPreviewVideoEffectsPreload}
           cameraPermissionBlocked={isCameraPermissionBlocked}
           showFilters={!isCameraPermissionBlocked}
           onToggleCamera={toggleCamera}

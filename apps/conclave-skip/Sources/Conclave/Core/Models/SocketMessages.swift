@@ -1,18 +1,3 @@
-//
-//  SocketMessages.swift
-//  Conclave
-//
-//  Socket.IO message payloads — the native mirror of the SFU wire protocol.
-//
-//  SINGLE SOURCE OF TRUTH for the protocol:
-//    • Event names → packages/meeting-core/src/sfu-events.ts
-//      (generated into SfuEvents.swift — use `SfuClientEvent`/`SfuServerEvent`,
-//       never raw strings).
-//    • Payload shapes → packages/meeting-core/src/types.ts + sfu-types.ts
-//      (web's exact types). Keep these structs field-compatible with those;
-//      decode-only structs may add OPTIONAL fields freely (absent = nil).
-//
-
 import Foundation
 
 // MARK: - Outgoing Messages
@@ -57,13 +42,18 @@ struct ConsumeRequest: Codable {
     let producerId: String
     let rtpCapabilities: RtpCapabilities
     let transportId: String?
+    let preferredLayers: ConsumerLayerPreferenceRequest?
+    let priority: Int?
+}
+
+struct ConsumerLayerPreferenceRequest: Codable {
+    let spatialLayer: Int
+    let temporalLayer: Int?
 }
 
 struct ResumeConsumerRequest: Codable {
     let consumerId: String
-    // When true, the SFU also sends an RTCP keyframe (PLI) request to the
-    // producer so the decoder gets a fresh IDR immediately — the only way to
-    // un-freeze a stalled video decoder (the server already branches on this).
+    // Requests a fresh keyframe while resuming to recover a stalled decoder.
     let requestKeyFrame: Bool?
 }
 
@@ -74,8 +64,7 @@ struct ToggleMediaRequest: Codable {
 
 struct SendChatRequest: Codable {
     let content: String
-    // Optional explicit DM recipient (web parity: the server also resolves DMs
-    // from a leading "/dm <name>" / "@<name>" in `content`). Encoded only when set.
+    // The SFU also resolves DMs from "/dm <name>" and "@<name>" content.
     let recipient: String?
 
     init(content: String, recipient: String? = nil) {
@@ -143,7 +132,7 @@ struct AdminNoticeRequest: Codable {
 struct JoinRoomResponse: Codable {
     let rtpCapabilities: RtpCapabilities
     let existingProducers: [ProducerInfo]
-    let status: String
+    let status: String?
     // Mirrors the rest of meeting-core JoinRoomResponse (all optional so older
     // servers / partial payloads still decode).
     let roomId: String?
@@ -243,12 +232,27 @@ struct AdminMediaActionResponse: Codable {
     let producers: [AdminMediaProducer]?
 }
 
+struct AdminCloseUserMediaRequest: Codable {
+    let userId: String
+    let kinds: [String]?
+    let types: [String]?
+    let reason: String?
+}
+
 struct AdminBulkMediaActionResponse: Codable {
     let success: Bool?
     let error: String?
     let count: Int?
     let affectedProducers: Int?
     let users: [String]?
+}
+
+struct CloseRemoteProducerResponse: Codable {
+    let success: Bool?
+    let error: String?
+    let userId: String?
+    let kind: String?
+    let type: String?
 }
 
 struct AdminNoticeResponse: Codable {
@@ -390,6 +394,16 @@ struct ParticipantCameraOffNotification: Codable {
     let roomId: String?
 }
 
+struct ParticipantConnectionStateNotification: Codable {
+    let userId: String?
+    let roomId: String?
+    let state: String?
+    let reason: String?
+    let graceMs: Int?
+    let downtimeMs: Int?
+    let updatedAt: Double?
+}
+
 struct RoomLockChangedNotification: Codable {
     let locked: Bool
     let roomId: String?
@@ -495,6 +509,7 @@ struct AdminRoomSnapshot: Codable {
     let screenShareProducerId: String?
     let quality: VideoQuality?
     let policies: AdminRoomPolicySnapshot?
+    let access: AdminAccessListSnapshot?
     let appsState: AdminRoomAppsStateSnapshot?
     let participants: [AdminRoomParticipantSnapshot]?
     let pendingUsers: [PendingUserSnapshot]?
@@ -531,6 +546,50 @@ struct AdminRoomPolicySnapshot: Codable {
 struct AdminRoomAppsStateSnapshot: Codable {
     let activeAppId: String?
     let locked: Bool?
+}
+
+struct AdminAccessListSnapshot: Codable {
+    let allowedUserKeys: [String]
+    let lockedAllowedUserKeys: [String]
+    let blockedUserKeys: [String]
+}
+
+struct AdminAccessListsResponse: Codable {
+    let roomId: String?
+    let access: AdminAccessListSnapshot
+}
+
+struct AdminAccessMutationResponse: Codable {
+    let success: Bool?
+    let error: String?
+    let access: AdminAccessListSnapshot?
+    let allowed: [String]?
+    let admitted: [String]?
+    let blocked: [String]?
+    let unblocked: [String]?
+    let revoked: [String]?
+    let rejectedPending: [String]?
+    let kickedUserIds: [String]?
+}
+
+struct AdminAllowUsersRequest: Encodable {
+    let userKeys: [String]
+    let allowWhenLocked: Bool
+}
+
+struct AdminBlockUsersRequest: Encodable {
+    let userKeys: [String]
+    let kickPresent: Bool
+    let reason: String?
+}
+
+struct AdminUserKeysRequest: Encodable {
+    let userKeys: [String]
+}
+
+struct AdminRevokeAllowedUsersRequest: Encodable {
+    let userKeys: [String]
+    let revokeLocked: Bool
 }
 
 struct MeetingConfigSnapshot: Codable {
@@ -578,7 +637,7 @@ struct WebinarConfigUpdateResponse: Codable {
 }
 
 struct WebinarLinkResponse: Codable {
-    let slug: String
+    let slug: String?
     let link: String
     let publicAccess: Bool
     let linkVersion: Int

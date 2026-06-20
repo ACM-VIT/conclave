@@ -44,7 +44,9 @@ struct DetachedSelfViewOverlay: View {
     }
 
     private var localTile: some View {
-        VideoGridItem(
+        let localVideoTrack = viewModel.webRTCClient.getLocalVideoTrack()
+        let captureSession = (!viewModel.state.isCameraOff && localVideoTrack == nil) ? viewModel.webRTCClient.getCaptureSession() : nil
+        return VideoGridItem(
             displayName: viewModel.state.displayName,
             isMuted: viewModel.state.isMuted,
             isCameraOff: viewModel.state.isCameraOff,
@@ -52,8 +54,8 @@ struct DetachedSelfViewOverlay: View {
             isGhost: viewModel.state.isGhostMode,
             isSpeaking: viewModel.state.effectiveActiveSpeakerId.map { viewModel.state.isLocalParticipantUserId($0) } == true,
             isLocal: true,
-            captureSession: viewModel.webRTCClient.getCaptureSession(),
-            localVideoTrack: viewModel.webRTCClient.getLocalVideoTrack()
+            captureSession: captureSession,
+            localVideoTrack: localVideoTrack
         )
     }
 }

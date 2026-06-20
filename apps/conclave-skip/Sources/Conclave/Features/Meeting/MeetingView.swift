@@ -1,7 +1,3 @@
-//
-//  MeetingView.swift
-//  Conclave
-
 import SwiftUI
 import Observation
 #if canImport(UIKit) && !SKIP

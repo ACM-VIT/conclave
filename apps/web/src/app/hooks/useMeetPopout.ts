@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useSmartParticipantOrder } from "./useSmartParticipantOrder";
+import { getRenderableParticipantVideoStream } from "../lib/participant-media";
 import type { Participant } from "../lib/types";
 import { isSystemUserId } from "../lib/utils";
 
@@ -32,6 +33,7 @@ export interface UseMeetPopoutOptions {
   currentUserId: string;
   isCameraOff: boolean;
   isMuted: boolean;
+  mirrorLocalPreview: boolean;
   userEmail: string;
   getDisplayName: (userId: string) => string;
   onToggleMute: () => void;
@@ -295,6 +297,7 @@ export function useMeetPopout({
   currentUserId,
   isCameraOff,
   isMuted,
+  mirrorLocalPreview,
   userEmail,
   getDisplayName,
   onToggleMute,
@@ -326,6 +329,7 @@ export function useMeetPopout({
         displayName: getDisplayName(userId),
         videoStream: participant.videoStream ?? null,
         isCameraOff: participant.isCameraOff,
+        isVideoAdaptivelyPaused: participant.isVideoAdaptivelyPaused,
         isMuted: participant.isMuted,
         isLocal: false,
         isActiveSpeaker: activeSpeakerId === userId,
@@ -339,6 +343,7 @@ export function useMeetPopout({
       displayName: string;
       videoStream: MediaStream | null;
       isCameraOff: boolean;
+      isVideoAdaptivelyPaused: boolean;
       isMuted: boolean;
       isLocal: boolean;
       isActiveSpeaker: boolean;
@@ -349,6 +354,7 @@ export function useMeetPopout({
       displayName: "You",
       videoStream: localStream,
       isCameraOff,
+      isVideoAdaptivelyPaused: false,
       isMuted,
       isLocal: true,
       isActiveSpeaker: activeSpeakerId === currentUserId,
@@ -443,17 +449,19 @@ export function useMeetPopout({
       const labelName = tile.querySelector(".label-name") as HTMLElement;
       const labelMuted = tile.querySelector(".label-muted") as HTMLElement;
 
-      if (participant.videoStream && !participant.isCameraOff) {
+      const participantVideoStream = participant.isLocal
+        ? participant.videoStream
+        : getRenderableParticipantVideoStream(participant);
+      if (participantVideoStream && !participant.isCameraOff) {
         video.style.display = "block";
         avatar.style.display = "none";
-        if (video.srcObject !== participant.videoStream) {
-          video.srcObject = participant.videoStream;
+        if (video.srcObject !== participantVideoStream) {
+          video.srcObject = participantVideoStream;
           videoElementsRef.current.set(participant.userId, video);
         }
         video.play().catch(() => {});
-        if (participant.isLocal) {
-          video.style.transform = "scaleX(-1)";
-        }
+        video.style.transform =
+          participant.isLocal && mirrorLocalPreview ? "scaleX(-1)" : "";
       } else {
         video.style.display = "none";
         avatar.style.display = "flex";
@@ -478,7 +486,7 @@ export function useMeetPopout({
       camBtn.className = `ctrl-btn${isCameraOff ? " muted" : ""}`;
       camBtn.innerHTML = isCameraOff ? CAM_OFF_SVG : CAM_ON_SVG;
     }
-  }, [getVisibleParticipants, isMuted, isCameraOff]);
+  }, [getVisibleParticipants, isMuted, isCameraOff, mirrorLocalPreview]);
 
   useEffect(() => { updatePopoutRef.current = updatePopoutContent; }, [updatePopoutContent]);
 

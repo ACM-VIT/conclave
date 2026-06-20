@@ -10,6 +10,9 @@ import UIKit
 #if !SKIP
 import AuthenticationServices
 #endif
+#if !SKIP && canImport(CryptoKit)
+import CryptoKit
+#endif
 #if SKIP
 import androidx.compose.foundation.layout.__
 import androidx.compose.ui.unit.__
@@ -35,16 +38,29 @@ struct JoinView: View {
     @State private var isCameraOn = false
     @State private var isMicOn = false
     @State private var isSigningIn = false
+    @State private var isSigningOut = false
+    @State private var isDeletingAccount = false
+    @State private var isContinuingAsGuest = false
+    @State private var showDeleteAccountConfirmation = false
     @State private var signingInProvider: AppState.AuthProvider = .none
+    @State private var isRefreshingStoredAuth = false
     @State private var enabledAuthProviders: Set<NativeAuthProvider> = []
     @State private var isLoadingAuthProviders = false
+    @State private var didLoadAuthProviders = false
+    @State private var authProviderStatusMessage: String?
     @State private var authErrorMessage: String?
     @State private var appleSignInNonce: String?
     @State private var pendingLinkJoinTarget: ParsedJoinTarget?
+    @State private var linkCreationRoomId: String?
+    @State private var generatedRoomCreationId: String?
     @State private var shouldShowInviteCodeInput = false
     @State private var inviteCodePromptRoomId: String?
     @State private var inviteCodePromptJoinMode: JoinMode?
+    @State private var scheduledWebinarStatusRoomId: String?
+    @State private var scheduledWebinarStatusMessage: String?
+    @State private var webinarAutoJoinGeneration = 0
     @State private var authTransitionGeneration = 0
+    @State private var authProviderRefreshGeneration = 0
     @State private var inputFocusClearGeneration = 0
     @State private var cameraPreviewGeneration = 0
 #if !SKIP
@@ -83,6 +99,13 @@ struct JoinView: View {
         let meetingInviteCode: String?
         let webinarInviteCode: String?
         let allowRoomCreation: Bool
+
+        var preservesRetryContext: Bool {
+            joinMode != .meeting ||
+                meetingInviteCode != nil ||
+                webinarInviteCode != nil ||
+                allowRoomCreation
+        }
     }
 
     private var isGoogleSignInEnabled: Bool {
@@ -98,7 +121,34 @@ struct JoinView: View {
     }
 
     private var shouldShowSocialSignIn: Bool {
-        isLoadingAuthProviders || isGoogleSignInEnabled || isAppleSignInEnabled
+        isLoadingAuthProviders || isGoogleSignInEnabled || isAppleSignInEnabled || didLoadAuthProviders
+    }
+
+    private var authPhaseSubtitle: String {
+        if isGoogleSignInEnabled || isAppleSignInEnabled {
+            return "Sign in, or continue as a guest."
+        }
+        if isLoadingAuthProviders {
+            return "Checking sign-in options."
+        }
+        return "Continue as a guest."
+    }
+
+    private var shouldShowGuestDivider: Bool {
+        isGoogleSignInEnabled || isAppleSignInEnabled
+    }
+
+    private var isAuthActionBlocked: Bool {
+        isSigningIn || isSigningOut || isDeletingAccount || isContinuingAsGuest || isRefreshingStoredAuth
+    }
+
+    private var signedInAccountUser: AppState.User? {
+        guard let user = appState.currentUser,
+              user.provider != .guest,
+              user.provider != .none else {
+            return nil
+        }
+        return user
     }
 
     private var canShowGhostModeToggle: Bool {
@@ -163,11 +213,30 @@ struct JoinView: View {
         .onChange(of: viewModel.state.joinFormErrorMessage) { _, message in
             if shouldRevealInviteCodeInput(for: message) {
                 revealInviteCodeInputForCurrentTarget()
+            } else if message?.isEmpty == false {
+                resetInviteCodePrompt()
             }
+            restartCameraPreviewIfNeeded(afterJoinFormError: message)
+        }
+        .confirmationDialog(
+            "Delete this account?",
+            isPresented: $showDeleteAccountConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Delete account", role: .destructive) {
+                handleDeleteAccount()
+            }
+            Button("Cancel", role: .cancel) {
+            }
+        } message: {
+            Text("This permanently deletes the signed-in account and signs you out on this device.")
         }
         .onDisappear {
             authTransitionGeneration += 1
+            authProviderRefreshGeneration += 1
+            isLoadingAuthProviders = false
             inputFocusClearGeneration += 1
+            clearJoinOnlyPromptState()
 #if SKIP
             PermissionHelper.onRecordAudioPermissionResult = nil
             PermissionHelper.onCameraPermissionResult = nil
@@ -183,11 +252,9 @@ struct JoinView: View {
             Spacer()
 
             VStack(spacing: 16) {
-                // Brand glyph — a small refined bracket mark, not the heavy logo.
                 Text("[ ]")
                     .font(ACMFont.trial(26, weight: .bold))
                     .foregroundStyle(ACMColors.primaryOrange)
-                    .tracking(-2)
                     .padding(.bottom, 4)
 
                 VStack(spacing: 10) {
@@ -198,7 +265,6 @@ struct JoinView: View {
                     Text("c0nclav3")
                         .font(ACMFont.trial(46, weight: .bold))
                         .foregroundStyle(ACMColors.text)
-                        .tracking(-1.5)
                 }
 
                 Text("ACM-VIT's video conferencing,\nreimagined.")
@@ -214,7 +280,7 @@ struct JoinView: View {
             joinActionSurface(
                 accessibilityLabel: "Get started",
                 isEnabled: true,
-                action: { phase = .auth }
+                action: enterAuthPhase
             ) {
                 HStack(spacing: 8) {
                     Text("Get started")
@@ -244,9 +310,8 @@ struct JoinView: View {
                     Text("Join Conclave")
                         .font(ACMFont.trial(30, weight: .bold))
                         .foregroundStyle(ACMColors.text)
-                        .tracking(-0.5)
 
-                    Text("Sign in, or continue as a guest.")
+                    Text(authPhaseSubtitle)
                         .font(ACMFont.trial(15))
                         .foregroundStyle(ACMColors.textFaint)
                 }
@@ -256,20 +321,19 @@ struct JoinView: View {
                     ACMGlassGroup(spacing: 12) {
                         VStack(spacing: 12) {
                             if isLoadingAuthProviders && !isGoogleSignInEnabled && !isAppleSignInEnabled {
-                                HStack(spacing: 10) {
-                                    ProgressView()
-#if !SKIP
-                                        .progressViewStyle(CircularProgressViewStyle(tint: ACMColors.cream))
-#endif
-                                        .scaleEffect(0.8)
+                                authStatusRow(
+                                    message: "Checking sign-in options",
+                                    icon: nil,
+                                    showProgress: true
+                                )
+                            }
 
-                                    Text("Checking sign-in options")
-                                        .font(ACMFont.trial(14, weight: .medium))
-                                        .foregroundStyle(ACMColors.textMuted)
-                                }
-                                .frame(maxWidth: .infinity)
-                                .frame(height: 50)
-                                .acmGlassRoundedRect(cornerRadius: ACMRadius.lg)
+                            if didLoadAuthProviders && !isLoadingAuthProviders && !isGoogleSignInEnabled && !isAppleSignInEnabled {
+                                authStatusRow(
+                                    message: authProviderStatusMessage ?? "No supported native sign-in providers are enabled.",
+                                    icon: ("exclamationmark.triangle.fill", "warning"),
+                                    showProgress: false
+                                )
                             }
 
                             if isGoogleSignInEnabled {
@@ -296,15 +360,16 @@ struct JoinView: View {
                                     .acmGlassRoundedRect(cornerRadius: ACMRadius.lg, interactive: true)
                                 }
                                 .buttonStyle(.plain)
-                                .disabled(isSigningIn)
+                                .disabled(isAuthActionBlocked)
                             }
 
 #if !SKIP
                             if isAppleSignInEnabled {
                                 SignInWithAppleButton(.continue) { request in
                                     let nonce = createAuthNonce()
-                                    appleSignInNonce = nonce
-                                    request.nonce = nonce
+                                    let hashedNonce = sha256Hex(nonce)
+                                    appleSignInNonce = hashedNonce
+                                    request.nonce = hashedNonce
                                     request.requestedScopes = [.fullName, .email]
                                 } onCompletion: { result in
                                     handleAppleSignIn(result: result)
@@ -312,7 +377,7 @@ struct JoinView: View {
                                 .signInWithAppleButtonStyle(.whiteOutline)
                                 .frame(height: 48)
                                 .clipShape(RoundedRectangle(cornerRadius: ACMRadius.lg))
-                                .disabled(isSigningIn)
+                                .disabled(isAuthActionBlocked)
                                 .overlay {
                                     if isSigningIn && signingInProvider == .apple {
                                         RoundedRectangle(cornerRadius: ACMRadius.lg)
@@ -329,20 +394,22 @@ struct JoinView: View {
                         }
                     }
 
-                    HStack(spacing: 16) {
-                        Rectangle()
-                            .fill(ACMColors.creamFaint)
-                            .frame(height: 1)
+                    if shouldShowGuestDivider {
+                        HStack(spacing: 16) {
+                            Rectangle()
+                                .fill(ACMColors.creamFaint)
+                                .frame(height: 1)
 
-                        Text("or")
-                            .font(ACMFont.trial(13))
-                            .foregroundStyle(ACMColors.textFaint)
+                            Text("or")
+                                .font(ACMFont.trial(13))
+                                .foregroundStyle(ACMColors.textFaint)
 
-                        Rectangle()
-                            .fill(ACMColors.creamFaint)
-                            .frame(height: 1)
+                            Rectangle()
+                                .fill(ACMColors.creamFaint)
+                                .frame(height: 1)
+                        }
+                        .padding(EdgeInsets(top: 8, leading: 0, bottom: 8, trailing: 0))
                     }
-                    .padding(EdgeInsets(top: 8, leading: 0, bottom: 8, trailing: 0))
                 }
 
                 authErrorBanner
@@ -358,6 +425,10 @@ struct JoinView: View {
                         .foregroundStyle(ACMColors.text)
 #if !SKIP
                         .focused($focusedInput, equals: .guestName)
+#if os(iOS)
+                        .textInputAutocapitalization(.words)
+                        .autocorrectionDisabled(true)
+#endif
 #endif
                         .submitLabel(SubmitLabel.done)
                         .frame(height: 52)
@@ -370,7 +441,7 @@ struct JoinView: View {
                         }
                         .clipShape(RoundedRectangle(cornerRadius: ACMRadius.lg))
                         .onSubmit {
-                            if !trimWhitespace(guestName).isEmpty {
+                            if !isAuthActionBlocked && !trimWhitespace(guestName).isEmpty {
                                 clearInputFocus()
                                 handleGuest()
                             }
@@ -380,19 +451,31 @@ struct JoinView: View {
                         clearInputFocus()
                         handleGuest()
                     } label: {
-                        Text("Continue as guest")
-                            .font(ACMFont.trial(16, weight: .medium))
-                            .foregroundStyle(Color.white)
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 54)
-                            .acmColorBackground(ACMColors.primaryOrange)
-                            .clipShape(RoundedRectangle(cornerRadius: ACMRadius.lg))
+                        HStack(spacing: 8) {
+                            if isContinuingAsGuest {
+                                ProgressView()
+#if !SKIP
+                                    .progressViewStyle(CircularProgressViewStyle(tint: Color.white))
+#endif
+                                    .scaleEffect(0.8)
+                            }
+                            Text(isContinuingAsGuest ? "Continuing" : "Continue as guest")
+                                .font(ACMFont.trial(16, weight: .medium))
+                        }
+                        .foregroundStyle(Color.white)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 54)
+                        .acmColorBackground(ACMColors.primaryOrange)
+                        .clipShape(RoundedRectangle(cornerRadius: ACMRadius.lg))
                     }
                     .padding(.top, 2)
+                    .disabled(isAuthActionBlocked)
+                    .opacity(isAuthActionBlocked ? 0.55 : 1.0)
                 }
 
                 Button {
                     authTransitionGeneration += 1
+                    finishSignInAttempt()
                     phase = .welcome
                 } label: {
                     Text("Back")
@@ -406,6 +489,35 @@ struct JoinView: View {
             
             Spacer()
         }
+    }
+
+    private func authStatusRow(
+        message: String,
+        icon: (system: String, android: String)?,
+        showProgress: Bool
+    ) -> some View {
+        HStack(spacing: 10) {
+            if showProgress {
+                ProgressView()
+#if !SKIP
+                    .progressViewStyle(CircularProgressViewStyle(tint: ACMColors.cream))
+#endif
+                    .scaleEffect(0.8)
+            } else if let icon {
+                ACMSystemIcon.icon(icon.system, android: icon.android, size: 16, tint: "muted")
+                    .foregroundStyle(ACMColors.textMuted)
+            }
+
+            Text(message)
+                .font(ACMFont.trial(14, weight: .medium))
+                .foregroundStyle(ACMColors.textMuted)
+                .multilineTextAlignment(.leading)
+                .lineLimit(2)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(minHeight: 50)
+        .padding(.horizontal, 14)
+        .acmGlassRoundedRect(cornerRadius: ACMRadius.lg)
     }
     
     // MARK: - Join Phase (Camera preview + Form)
@@ -424,8 +536,6 @@ struct JoinView: View {
                 .padding(EdgeInsets(top: 24, leading: 0, bottom: 24, trailing: 0))
             } else {
                 ScrollView {
-                    // Fill the viewport and center the camera + form as one block
-                    // so it isn't cramped at the top with dead space below.
                     VStack(spacing: 22) {
                         Spacer(minLength: 8)
 
@@ -454,7 +564,6 @@ struct JoinView: View {
             RoundedRectangle(cornerRadius: ACMRadius.xl)
                 .fill(ACMColors.bgAlt)
 
-            // Camera feed or avatar
             if isCameraOn {
 #if SKIP
                 ComposeView { _ in
@@ -475,8 +584,6 @@ struct JoinView: View {
 #endif
             } else {
                 VStack(spacing: 14) {
-                    // Brand-tinted avatar (same hash as the in-meeting tiles) so
-                    // the camera-off state has warmth instead of a flat grey disc.
                     Circle()
                         .fill(ACMColors.avatarColor(for: previewDisplayName))
                         .frame(width: 96, height: 96)
@@ -492,7 +599,6 @@ struct JoinView: View {
                 }
             }
 
-            // Overlays: name (top-left) + mic/cam controls (bottom-center)
             VStack {
                 HStack {
                     Text(previewDisplayName)
@@ -508,8 +614,6 @@ struct JoinView: View {
 
                 Spacer()
 
-                // Contained control cluster — toggles read as a deliberate bar,
-                // not two floating red alerts.
                 HStack(spacing: 10) {
                     previewToggle(
                         on: isMicOn,
@@ -593,6 +697,10 @@ struct JoinView: View {
     private var joinTabButton: some View {
         Button {
             activeTab = .join
+            if generatedRoomCreationId != nil {
+                generatedRoomCreationId = nil
+                linkCreationRoomId = nil
+            }
         } label: {
             Text("Join")
                 .font(ACMFont.trial(14, weight: .medium))
@@ -608,6 +716,8 @@ struct JoinView: View {
     
     private var newMeetingForm: some View {
         VStack(spacing: 16) {
+            accountSection
+            authErrorBanner
             displayNameInputSection
             if canShowGhostModeToggle {
                 ghostModeToggleRow
@@ -684,6 +794,10 @@ struct JoinView: View {
                 .foregroundStyle(ACMColors.text)
 #if !SKIP
                 .focused($focusedInput, equals: .displayName)
+#if os(iOS)
+                .textInputAutocapitalization(.words)
+                .autocorrectionDisabled(true)
+#endif
 #endif
                 .submitLabel(SubmitLabel.done)
                 .frame(height: 52)
@@ -701,14 +815,10 @@ struct JoinView: View {
         }
     }
 
-    private var displayNameInputSection2: some View {
-        displayNameInputSection
-    }
-    
     private var startMeetingButton: some View {
         joinActionSurface(
             accessibilityLabel: "Start meeting",
-            isEnabled: !isJoinInProgress,
+            isEnabled: !isJoinInProgress && !isRefreshingStoredAuth && !isSigningOut && !isDeletingAccount && !isContinuingAsGuest,
             action: triggerCreateRoom
         ) {
             HStack(spacing: 8) {
@@ -750,9 +860,113 @@ struct JoinView: View {
             if shouldRenderInviteCodeInput {
                 inviteCodeInputSection
             }
-            displayNameInputSection2
+            accountSection
+            authErrorBanner
+            displayNameInputSection
+            scheduledWebinarStatusBanner
             joinFormErrorBanner
             joinMeetingButton
+        }
+    }
+
+    @ViewBuilder
+    private var accountSection: some View {
+        if let user = signedInAccountUser {
+            HStack(spacing: 12) {
+                ACMSystemIcon.icon("person.crop.circle.badge.checkmark", android: "account", size: 20, tint: "accent")
+                    .foregroundStyle(ACMColors.primaryOrange)
+                    .frame(width: 28, height: 28)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(accountTitle(for: user))
+                        .font(ACMFont.trial(14, weight: .medium))
+                        .foregroundStyle(ACMColors.text)
+                        .lineLimit(1)
+                    Text(accountSubtitle(for: user))
+                        .font(ACMFont.trial(12))
+                        .foregroundStyle(ACMColors.textFaint)
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: 8)
+
+                HStack(spacing: 8) {
+                    Button {
+                        showDeleteAccountConfirmation = true
+                    } label: {
+                        ACMSystemIcon.icon("trash", android: "delete", size: 15, tint: "danger")
+                            .foregroundStyle(ACMColors.error)
+                            .frame(width: 34, height: 34)
+                            .acmColorBackground(ACMColors.error.opacity(0.12))
+                            .clipShape(Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(isSigningOut || isDeletingAccount || isJoinInProgress)
+                    .opacity((isSigningOut || isDeletingAccount || isJoinInProgress) ? 0.55 : 1.0)
+
+                    Button {
+                        handlePrejoinSignOut()
+                    } label: {
+                        Text(isSigningOut ? "Signing out" : "Sign out")
+                            .font(ACMFont.trial(13, weight: .medium))
+                            .foregroundStyle(ACMColors.textMuted)
+                            .lineLimit(1)
+                    }
+                    .disabled(isSigningOut || isDeletingAccount || isJoinInProgress)
+                    .opacity((isSigningOut || isDeletingAccount || isJoinInProgress) ? 0.55 : 1.0)
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 14)
+            .frame(height: 58)
+            .acmColorBackground(ACMColors.surface)
+            .overlay {
+                RoundedRectangle(cornerRadius: ACMRadius.lg)
+                    .strokeBorder(lineWidth: 1)
+                    .foregroundStyle(ACMColors.border)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: ACMRadius.lg))
+        } else if let user = appState.currentUser, user.provider == .guest {
+            HStack(spacing: 12) {
+                ACMSystemIcon.icon("person.crop.circle", android: "account", size: 20, tint: "muted")
+                    .foregroundStyle(ACMColors.textMuted)
+                    .frame(width: 28, height: 28)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(accountTitle(for: user))
+                        .font(ACMFont.trial(14, weight: .medium))
+                        .foregroundStyle(ACMColors.text)
+                        .lineLimit(1)
+                    Text("Guest")
+                        .font(ACMFont.trial(12))
+                        .foregroundStyle(ACMColors.textFaint)
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: 8)
+
+                Button {
+                    handleGuestSwitchToSignIn()
+                } label: {
+                    Text("Sign in")
+                        .font(ACMFont.trial(13, weight: .medium))
+                        .foregroundStyle(ACMColors.primaryOrange)
+                        .lineLimit(1)
+                }
+                .buttonStyle(.plain)
+                .disabled(isSigningOut || isDeletingAccount || isJoinInProgress)
+                .opacity((isSigningOut || isDeletingAccount || isJoinInProgress) ? 0.55 : 1.0)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 14)
+            .frame(height: 58)
+            .acmColorBackground(ACMColors.surface)
+            .overlay {
+                RoundedRectangle(cornerRadius: ACMRadius.lg)
+                    .strokeBorder(lineWidth: 1)
+                    .foregroundStyle(ACMColors.border)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: ACMRadius.lg))
         }
     }
 
@@ -805,6 +1019,33 @@ struct JoinView: View {
             .clipShape(RoundedRectangle(cornerRadius: ACMRadius.md))
         }
     }
+
+    @ViewBuilder
+    private var scheduledWebinarStatusBanner: some View {
+        if let message = scheduledWebinarStatusMessage,
+           !message.isEmpty,
+           scheduledWebinarStatusRoomId == resolvedJoinTarget(from: roomCode).roomId {
+            HStack(alignment: .top, spacing: 8) {
+                ACMSystemIcon.icon("info.circle.fill", android: "info", size: 14, tint: "accent")
+                    .foregroundStyle(ACMColors.primaryOrange)
+                    .frame(width: 18, height: 18)
+
+                Text(message)
+                    .font(ACMFont.trial(13))
+                    .foregroundStyle(ACMColors.textMuted)
+                    .multilineTextAlignment(.leading)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(12)
+            .acmColorBackground(ACMColors.primaryOrange.opacity(0.12))
+            .overlay {
+                RoundedRectangle(cornerRadius: ACMRadius.md)
+                    .strokeBorder(lineWidth: 1)
+                    .foregroundStyle(ACMColors.primaryOrange.opacity(0.28))
+            }
+            .clipShape(RoundedRectangle(cornerRadius: ACMRadius.md))
+        }
+    }
     
     private var roomNameInputSection: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -817,10 +1058,11 @@ struct JoinView: View {
                 .font(ACMFont.trial(16))
                 .foregroundStyle(ACMColors.text)
 #if os(iOS)
-                .keyboardType(.URL)
+                .keyboardType(.asciiCapable)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled(true)
 #endif
+                .submitLabel(SubmitLabel.join)
                 .frame(height: 52)
                 .padding(.horizontal, 16)
                 .acmColorBackground(ACMColors.surface)
@@ -839,7 +1081,11 @@ struct JoinView: View {
     }
 
     private var isJoinEnabled: Bool {
-        !parseJoinTarget(from: roomCode).roomId.isEmpty && !isJoinInProgress
+        guard !parseJoinTarget(from: roomCode).roomId.isEmpty else { return false }
+        if shouldRenderInviteCodeInput && trimWhitespaceAndNewlines(inviteCode).isEmpty {
+            return false
+        }
+        return !isJoinInProgress && !isRefreshingStoredAuth && !isSigningOut && !isDeletingAccount && !isContinuingAsGuest
     }
 
     private var shouldRenderInviteCodeInput: Bool {
@@ -874,6 +1120,7 @@ struct JoinView: View {
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled(true)
 #endif
+                .submitLabel(SubmitLabel.join)
                 .frame(height: 52)
                 .padding(.horizontal, 16)
                 .acmColorBackground(ACMColors.surface)
@@ -930,6 +1177,7 @@ struct JoinView: View {
         ZStack {
             content()
                 .allowsHitTesting(false)
+                .accessibilityHidden(true)
 
             NativeTapButtonSurface(
                 accessibilityLabel: accessibilityLabel,
@@ -940,6 +1188,8 @@ struct JoinView: View {
             .frame(height: 54)
             .clipShape(RoundedRectangle(cornerRadius: ACMRadius.lg))
         }
+        .frame(maxWidth: .infinity)
+        .frame(height: 54)
 #else
         Button(action: action) {
             content()
@@ -1034,10 +1284,6 @@ struct JoinView: View {
         return trimmed.isEmpty ? "Guest" : trimmed
     }
 
-    private var userEmail: String {
-        appState.currentUser?.email ?? resolvedGuestName
-    }
-    
     private var userInitial: String {
         String(previewDisplayName.prefix(1)).uppercased()
     }
@@ -1051,37 +1297,192 @@ struct JoinView: View {
         if !typedName.isEmpty {
             return typedName
         }
-        if let accountName = appState.currentUser?.name {
-            let trimmedAccountName = trimWhitespaceAndNewlines(accountName)
-            if !trimmedAccountName.isEmpty {
-                return trimmedAccountName
+        if let user = signedInAccountUser {
+            let accountName = accountDisplayName(for: user, fallback: "")
+            if !accountName.isEmpty {
+                return accountName
+            }
+        } else if let accountName = appState.currentUser?.name {
+            let name = trimWhitespaceAndNewlines(accountName)
+            if !name.isEmpty {
+                return name
             }
         }
         return fallback
     }
 
     private func sfuJoinUserPayload(displayName: String) -> SfuJoinUser {
-        guard let user = appState.currentUser, user.provider != .guest else {
+        guard let user = appState.currentUser else {
             return SfuJoinUser(id: nil, email: nil, name: displayName)
         }
 
-        return SfuJoinUser(id: user.id, email: user.email, name: displayName)
+        let userId = trimWhitespaceAndNewlines(user.id)
+        let email = trimWhitespaceAndNewlines(user.email ?? "")
+        return SfuJoinUser(
+            id: userId.isEmpty ? nil : userId,
+            email: email.isEmpty ? nil : email,
+            name: displayName
+        )
+    }
+
+    private func socketDisplayNameForJoin(isHost: Bool) -> String? {
+        guard isHost else { return nil }
+        let name = trimWhitespaceAndNewlines(viewModel.state.displayName)
+        return name.isEmpty ? nil : name
+    }
+
+    private func accountDisplayName(for user: AppState.User, fallback: String) -> String {
+        let name = sanitizedInstitutionDisplayName(name: user.name, email: user.email)
+        if !name.isEmpty {
+            return name
+        }
+        let email = trimWhitespaceAndNewlines(user.email ?? "")
+        if !email.isEmpty {
+            return email
+        }
+        let userId = trimWhitespaceAndNewlines(user.id)
+        if !userId.isEmpty {
+            return userId
+        }
+        return fallback
+    }
+
+    private func sanitizedInstitutionDisplayName(name: String?, email: String?) -> String {
+        let trimmedName = trimWhitespaceAndNewlines(name ?? "")
+        guard !trimmedName.isEmpty else { return "" }
+        let normalizedEmail = trimWhitespaceAndNewlines(email ?? "").lowercased()
+        guard normalizedEmail.hasSuffix("@vitstudent.ac.in") else {
+            return trimmedName
+        }
+
+        var parts = trimmedName
+            .components(separatedBy: " ")
+            .filter { !$0.isEmpty }
+        guard parts.count > 1,
+              let registration = parts.last,
+              isVITRegistrationToken(registration) else {
+            return trimmedName
+        }
+
+        parts.removeLast()
+        let sanitized = parts.joined(separator: " ")
+        return sanitized.isEmpty ? trimmedName : sanitized
+    }
+
+    private func isVITRegistrationToken(_ value: String) -> Bool {
+        let token = value.uppercased()
+        let length = token.count
+        guard length >= 8, length <= 10 else { return false }
+
+        var index = 0
+        var digitCount = 0
+        for character in token {
+            if index < 2 {
+                guard isAsciiDigit(character) else { return false }
+            } else if index < 5 {
+                guard isAsciiLetter(character) else { return false }
+            } else if isAsciiDigit(character) {
+                digitCount += 1
+            } else {
+                guard index == length - 1,
+                      isAsciiLetter(character),
+                      digitCount == 3 || digitCount == 4 else {
+                    return false
+                }
+            }
+            index += 1
+        }
+        return digitCount == 3 || digitCount == 4
+    }
+
+    private func isAsciiDigit(_ character: Character) -> Bool {
+        switch character {
+        case "0", "1", "2", "3", "4", "5", "6", "7", "8", "9":
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func isAsciiLetter(_ character: Character) -> Bool {
+        switch character {
+        case "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M",
+             "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z":
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func accountTitle(for user: AppState.User) -> String {
+        let name = accountDisplayName(for: user, fallback: "")
+        if !name.isEmpty {
+            return name
+        }
+        let email = trimWhitespaceAndNewlines(user.email ?? "")
+        if !email.isEmpty {
+            return email
+        }
+        return "Signed in"
+    }
+
+    private func accountSubtitle(for user: AppState.User) -> String {
+        let email = trimWhitespaceAndNewlines(user.email ?? "")
+        if !email.isEmpty {
+            return email
+        }
+        switch user.provider {
+        case .apple:
+            return "Apple account"
+        case .google:
+            return "Google account"
+        case .guest:
+            return "Guest"
+        case .none:
+            return "Account"
+        }
     }
     
     // MARK: - Actions
 
+    private func enterAuthPhase() {
+        phase = .auth
+        refreshAuthProviders()
+    }
+
     private func refreshAuthProviders() {
         guard !isLoadingAuthProviders else { return }
+        authProviderRefreshGeneration += 1
+        let generation = authProviderRefreshGeneration
+        authProviderStatusMessage = nil
         isLoadingAuthProviders = true
         Task { @MainActor in
-            let providers = await NativeAuthService.fetchEnabledProviders()
-            enabledAuthProviders = providers
+            do {
+                let providers = try await NativeAuthService.fetchEnabledProviders()
+                guard authProviderRefreshGeneration == generation else { return }
+                enabledAuthProviders = providers
+                authProviderStatusMessage = providers.isEmpty ? "No supported native sign-in providers are enabled." : nil
+            } catch {
+                guard authProviderRefreshGeneration == generation else { return }
+                enabledAuthProviders = []
+                authProviderStatusMessage = error.localizedDescription
+            }
+            didLoadAuthProviders = true
             isLoadingAuthProviders = false
         }
     }
 
     private func createAuthNonce() -> String {
         "\(UUID().uuidString)-\(UUID().uuidString)"
+    }
+
+    private func sha256Hex(_ value: String) -> String {
+#if !SKIP && canImport(CryptoKit)
+        let digest = SHA256.hash(data: Data(value.utf8))
+        return digest.map { String(format: "%02x", $0) }.joined()
+#else
+        return value
+#endif
     }
 
     private func applyAuthenticatedUser(
@@ -1129,6 +1530,8 @@ struct JoinView: View {
         guestName = resolvedName
         clearAuthError()
         if moveToJoin {
+            viewModel.state.joinFormErrorMessage = nil
+            resetInviteCodePrompt()
             phase = .join
             clearInputFocusAfterLayout()
         }
@@ -1140,10 +1543,12 @@ struct JoinView: View {
     }
 
     private func handleGoogleSignIn() {
-        guard !isSigningIn else { return }
+        guard !isAuthActionBlocked else { return }
         clearAuthError()
         isSigningIn = true
         signingInProvider = .google
+        authTransitionGeneration += 1
+        let generation = authTransitionGeneration
         Task { @MainActor in
             do {
                 let identityToken = try await NativeAuthService.requestNativeGoogleIdentityToken()
@@ -1153,6 +1558,7 @@ struct JoinView: View {
                     userName: identityToken.name,
                     userEmail: identityToken.email
                 )
+                guard authTransitionGeneration == generation else { return }
                 applyAuthenticatedUser(
                     user,
                     provider: .google,
@@ -1160,9 +1566,14 @@ struct JoinView: View {
                     fallbackEmail: identityToken.email
                 )
             } catch {
-                showAuthError(error.localizedDescription)
+                guard authTransitionGeneration == generation else { return }
+                if !isSignInCancellation(error) {
+                    showAuthError(error.localizedDescription)
+                }
             }
-            finishSignInAttempt()
+            if authTransitionGeneration == generation {
+                finishSignInAttempt()
+            }
         }
     }
 
@@ -1183,14 +1594,27 @@ struct JoinView: View {
         authErrorMessage = message
     }
 
+    private func isSignInCancellation(_ error: Error) -> Bool {
+        let message = error.localizedDescription.lowercased()
+        return message.contains("cancel")
+            || message.contains("dismiss")
+            || message.contains("user closed")
+    }
+
 #if !SKIP
     private func handleAppleSignIn(result: Result<ASAuthorization, Error>) {
+        guard !isAuthActionBlocked else { return }
+        clearAuthError()
         isSigningIn = true
         signingInProvider = .apple
+        authTransitionGeneration += 1
+        let generation = authTransitionGeneration
 
         switch result {
         case .success(let authorization):
             guard let credential = authorization.credential as? ASAuthorizationAppleIDCredential else {
+                appleSignInNonce = nil
+                guard authTransitionGeneration == generation else { return }
                 finishSignInAttempt()
                 showAuthError("Apple Sign-In did not return a valid credential.")
                 return
@@ -1199,6 +1623,8 @@ struct JoinView: View {
             guard let identityTokenData = credential.identityToken,
                   let identityToken = String(data: identityTokenData, encoding: .utf8),
                   !identityToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                appleSignInNonce = nil
+                guard authTransitionGeneration == generation else { return }
                 finishSignInAttempt()
                 showAuthError("Apple Sign-In did not return an identity token.")
                 return
@@ -1225,45 +1651,149 @@ struct JoinView: View {
                         userName: displayName,
                         userEmail: email
                     )
+                    guard authTransitionGeneration == generation else { return }
                     applyAuthenticatedUser(user, provider: .apple, fallbackName: displayName, fallbackEmail: email)
                 } catch {
+                    guard authTransitionGeneration == generation else { return }
                     logger.error("Apple Sign-In exchange failed: \(error.localizedDescription)")
                     showAuthError(error.localizedDescription)
                 }
-                finishSignInAttempt()
+                if authTransitionGeneration == generation {
+                    finishSignInAttempt()
+                }
             }
 
         case .failure(let error):
-            logger.error("Apple Sign-In failed: \(error.localizedDescription)")
+            appleSignInNonce = nil
+            guard authTransitionGeneration == generation else { return }
             finishSignInAttempt()
             if let authError = error as? ASAuthorizationError, authError.code == .canceled {
                 return
             }
+            logger.error("Apple Sign-In failed: \(error.localizedDescription)")
             showAuthError("Apple Sign-In failed. Try again or continue as guest.")
         }
     }
 #endif
 
     private func handleGuest() {
+        guard !isAuthActionBlocked else { return }
         clearInputFocus()
         let trimmedName = resolvedGuestName
-        let guestId = "guest-\(UUID().uuidString)"
-        appState.setGuestUser(AppState.User(
-            id: guestId,
-            name: trimmedName,
-            email: "\(guestId)@guest.conclave",
-            provider: .guest
-        ))
-        displayNameInput = trimmedName
         clearAuthError()
+        isContinuingAsGuest = true
         authTransitionGeneration += 1
         let generation = authTransitionGeneration
         Task { @MainActor in
+            guard authTransitionGeneration == generation else {
+                isContinuingAsGuest = false
+                return
+            }
+
+            appState.clearAuthentication(signOutRemote: false)
+            guard authTransitionGeneration == generation else {
+                isContinuingAsGuest = false
+                return
+            }
+
+            let guestId = "guest-\(UUID().uuidString)"
+            appState.setGuestUser(AppState.User(
+                id: guestId,
+                name: trimmedName,
+                email: "\(guestId)@guest.conclave",
+                provider: .guest
+            ))
+            displayNameInput = trimmedName
+            isContinuingAsGuest = false
+
             await Task.yield()
             try? await Task.sleep(nanoseconds: 150_000_000)
             guard authTransitionGeneration == generation else { return }
             phase = .join
             clearInputFocusAfterLayout()
+        }
+    }
+
+    private func handlePrejoinSignOut() {
+        guard !isSigningOut, !isDeletingAccount, !isContinuingAsGuest, !isJoinInProgress else { return }
+        clearInputFocus()
+        isSigningOut = true
+        authTransitionGeneration += 1
+        let generation = authTransitionGeneration
+        inputFocusClearGeneration += 1
+        clearAuthError()
+        viewModel.state.joinFormErrorMessage = nil
+        resetInviteCodePrompt()
+        stopPreviewCapture()
+        isMicOn = false
+        isGhostMode = false
+        displayNameInput = ""
+        guestName = ""
+
+        Task { @MainActor in
+            await appState.clearAuthenticationAndWait()
+            guard authTransitionGeneration == generation else {
+                isSigningOut = false
+                return
+            }
+            enterAuthPhase()
+            isSigningOut = false
+        }
+    }
+
+    private func handleGuestSwitchToSignIn() {
+        guard !isSigningOut, !isDeletingAccount, !isContinuingAsGuest, !isJoinInProgress else { return }
+        clearInputFocus()
+        authTransitionGeneration += 1
+        inputFocusClearGeneration += 1
+        clearAuthError()
+        viewModel.state.joinFormErrorMessage = nil
+        resetInviteCodePrompt()
+        stopPreviewCapture()
+        isMicOn = false
+        isGhostMode = false
+        let currentName = trimWhitespaceAndNewlines(displayNameInput)
+        guestName = currentName.isEmpty ? (appState.currentUser?.name ?? "") : currentName
+        appState.clearAuthentication(signOutRemote: false)
+        enterAuthPhase()
+    }
+
+    private func handleDeleteAccount() {
+        guard !isSigningOut, !isDeletingAccount, !isContinuingAsGuest, !isJoinInProgress else { return }
+        clearInputFocus()
+        isDeletingAccount = true
+        authTransitionGeneration += 1
+        let generation = authTransitionGeneration
+        inputFocusClearGeneration += 1
+        clearAuthError()
+        viewModel.state.joinFormErrorMessage = nil
+        resetInviteCodePrompt()
+        stopPreviewCapture()
+        isMicOn = false
+        isGhostMode = false
+        let deletingUserId = appState.currentUser?.id
+
+        Task { @MainActor in
+            do {
+                try await NativeAuthService.deleteCurrentUser()
+                if deletingUserId == nil || appState.currentUser?.id == deletingUserId {
+                    appState.clearAuthentication(signOutRemote: false)
+                }
+                guard authTransitionGeneration == generation else {
+                    isDeletingAccount = false
+                    return
+                }
+                displayNameInput = ""
+                guestName = ""
+                enterAuthPhase()
+            } catch {
+                guard authTransitionGeneration == generation else {
+                    isDeletingAccount = false
+                    return
+                }
+                showAuthError(error.localizedDescription)
+            }
+            isDeletingAccount = false
         }
     }
 
@@ -1297,7 +1827,7 @@ struct JoinView: View {
     }
 
     private func triggerCreateRoom() {
-        guard !isJoinInProgress else { return }
+        guard !isJoinInProgress, !isRefreshingStoredAuth, !isSigningOut, !isDeletingAccount, !isContinuingAsGuest else { return }
         clearInputFocus()
         handleCreateRoom()
     }
@@ -1313,9 +1843,15 @@ struct JoinView: View {
         HapticManager.shared.trigger(.success)
         #endif
         let shouldJoinWithCameraOn = isCameraOn
-        stopPreviewCapture()
+        stopPreviewCapture(preserveToggle: true)
         viewModel.state.isAdmin = true
         let roomId = generateRoomCode()
+        roomCode = roomId
+        pendingLinkJoinTarget = nil
+        linkCreationRoomId = roomId
+        generatedRoomCreationId = roomId
+        resetInviteCodePrompt()
+        resetScheduledWebinarStatus()
         viewModel.state.displayName = resolvedDisplayName(fallback: "Host")
         viewModel.state.isMuted = !isMicOn
         viewModel.state.isCameraOff = !shouldJoinWithCameraOn
@@ -1323,6 +1859,7 @@ struct JoinView: View {
         viewModel.joinRoom(
             roomId: roomId,
             displayName: viewModel.state.displayName,
+            socketDisplayName: socketDisplayNameForJoin(isHost: true),
             isGhost: isGhostMode,
             user: userPayload,
             isHost: true
@@ -1335,11 +1872,13 @@ struct JoinView: View {
         #endif
         let joinTarget = resolvedJoinTarget(from: roomCode)
         guard !joinTarget.roomId.isEmpty else { return }
+        resetScheduledWebinarStatus()
         if joinTarget.roomId != roomCode {
             roomCode = joinTarget.roomId
         }
+        pendingLinkJoinTarget = joinTarget.preservesRetryContext ? joinTarget : nil
         let shouldJoinWithCameraOn = isCameraOn
-        stopPreviewCapture()
+        stopPreviewCapture(preserveToggle: joinTarget.joinMode == .meeting)
         let enteredInviteCode = trimWhitespaceAndNewlines(inviteCode)
         let meetingInviteCode = resolvedMeetingInviteCode(for: joinTarget, enteredInviteCode: enteredInviteCode)
         let webinarInviteCode = resolvedWebinarInviteCode(for: joinTarget, enteredInviteCode: enteredInviteCode)
@@ -1356,6 +1895,7 @@ struct JoinView: View {
         viewModel.joinRoom(
             roomId: joinTarget.roomId,
             displayName: viewModel.state.displayName,
+            socketDisplayName: socketDisplayNameForJoin(isHost: false),
             isGhost: isGhostMode,
             user: userPayload,
             isHost: false,
@@ -1364,7 +1904,6 @@ struct JoinView: View {
             webinarInviteCode: webinarInviteCode,
             allowRoomCreation: joinTarget.allowRoomCreation
         )
-        pendingLinkJoinTarget = nil
     }
     
     private func generateRoomCode() -> String {
@@ -1439,11 +1978,21 @@ struct JoinView: View {
         }
 
         let normalizedUrlInput = normalizeJoinUrlInput(trimmed)
-        if let components = URLComponents(string: normalizedUrlInput) {
-            let segments = joinPathSegments(from: components)
-            if !segments.isEmpty {
-                return buildJoinTarget(from: segments, queryItems: components.queryItems ?? [])
+        if hasUrlScheme(normalizedUrlInput) {
+            guard let components = URLComponents(string: normalizedUrlInput),
+                  isSupportedJoinUrlScheme(components.scheme) else {
+                return invalidJoinTarget()
             }
+            let segments = joinPathSegments(from: components)
+            guard !isWebOnlyConclavePath(components: components, segments: segments),
+                  !segments.isEmpty else {
+                return invalidJoinTarget()
+            }
+            return buildJoinTarget(
+                from: segments,
+                queryItems: components.queryItems ?? [],
+                allowRoomCreation: true
+            )
         }
 
         let parts = trimmed.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false)
@@ -1452,7 +2001,11 @@ struct JoinView: View {
         if path.contains("/") {
             let segments = pathSegments(from: path)
             if !segments.isEmpty {
-                return buildJoinTarget(from: segments, queryItems: queryItems)
+                return buildJoinTarget(
+                    from: segments,
+                    queryItems: queryItems,
+                    allowRoomCreation: false
+                )
             }
         }
 
@@ -1467,7 +2020,11 @@ struct JoinView: View {
         )
     }
 
-    private func buildJoinTarget(from segments: [String], queryItems: [URLQueryItem]) -> ParsedJoinTarget {
+    private func buildJoinTarget(
+        from segments: [String],
+        queryItems: [URLQueryItem],
+        allowRoomCreation: Bool
+    ) -> ParsedJoinTarget {
         let pathJoinMode: JoinMode?
         let rawRoomId: String
 
@@ -1486,27 +2043,60 @@ struct JoinView: View {
             joinMode: joinMode,
             meetingInviteCode: inviteCodeValue(from: queryItems, joinMode: joinMode, target: .meeting),
             webinarInviteCode: inviteCodeValue(from: queryItems, joinMode: joinMode, target: .webinarAttendee),
-            allowRoomCreation: joinMode == .meeting
+            allowRoomCreation: allowRoomCreation && joinMode == .meeting
+        )
+    }
+
+    private func invalidJoinTarget() -> ParsedJoinTarget {
+        ParsedJoinTarget(
+            roomId: "",
+            joinMode: .meeting,
+            meetingInviteCode: nil,
+            webinarInviteCode: nil,
+            allowRoomCreation: false
         )
     }
 
     private func normalizeJoinUrlInput(_ input: String) -> String {
         let lowercased = input.lowercased()
-        if hasUrlScheme(input) {
-            return input
-        }
         if lowercased.hasPrefix("conclave.acmvit.in") || lowercased.hasPrefix("www.conclave.acmvit.in") {
             return "https://\(input)"
         }
+        if isLocalConclaveWebHostWithoutScheme(lowercased) {
+            return "http://\(input)"
+        }
         return input
+    }
+
+    private func isLocalConclaveWebHostWithoutScheme(_ input: String) -> Bool {
+        let authority = joinUrlAuthorityPrefix(in: input)
+        let host: String
+        if authority.hasPrefix("["),
+           let closingBracketIndex = authority.firstIndex(of: "]") {
+            host = String(authority[...closingBracketIndex])
+        } else if let colonIndex = authority.firstIndex(of: ":") {
+            host = String(authority[..<colonIndex])
+        } else {
+            host = authority
+        }
+        return localConclaveWebHosts.contains(host)
+    }
+
+    private func joinUrlAuthorityPrefix(in input: String) -> String {
+        var authority = ""
+        for character in input {
+            if character == "/" || character == "?" || character == "#" {
+                break
+            }
+            authority += String(character)
+        }
+        return authority
     }
 
     private func hasUrlScheme(_ input: String) -> Bool {
         guard let colonIndex = input.firstIndex(of: ":") else { return false }
         let scheme = String(input[..<colonIndex])
         guard let first = scheme.first else { return false }
-        let afterColon = input[input.index(after: colonIndex)...]
-        guard afterColon.hasPrefix("//") else { return false }
         let letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
         let allowed = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+.-"
         guard letters.contains(first) else { return false }
@@ -1518,6 +2108,15 @@ struct JoinView: View {
         return true
     }
 
+    private func isSupportedJoinUrlScheme(_ scheme: String?) -> Bool {
+        switch scheme?.lowercased() {
+        case "http", "https", "conclave":
+            return true
+        default:
+            return false
+        }
+    }
+
     private func joinPathSegments(from components: URLComponents) -> [String] {
         var segments = pathSegments(from: components.path)
         if components.scheme?.lowercased() == "conclave",
@@ -1526,6 +2125,28 @@ struct JoinView: View {
             segments.insert(host, at: 0)
         }
         return segments
+    }
+
+    private func isWebOnlyConclavePath(components: URLComponents, segments: [String]) -> Bool {
+        guard let scheme = components.scheme?.lowercased(),
+              scheme == "http" || scheme == "https",
+              isConclaveWebHost(components.host),
+              let firstSegment = segments.first?.lowercased() else {
+            return false
+        }
+
+        if firstSegment.contains(".") {
+            return true
+        }
+
+        return webOnlyConclavePathPrefixes.contains(firstSegment)
+    }
+
+    private func isConclaveWebHost(_ host: String?) -> Bool {
+        let normalized = host?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        return normalized == "conclave.acmvit.in" ||
+            normalized == "www.conclave.acmvit.in" ||
+            localConclaveWebHosts.contains(normalized)
     }
 
     private func pathSegments(from path: String) -> [String] {
@@ -1592,17 +2213,35 @@ struct JoinView: View {
 
     private func resolvedJoinTarget(from input: String) -> ParsedJoinTarget {
         let parsed = parseJoinTarget(from: input)
-        guard let pendingLinkJoinTarget,
-              pendingLinkJoinTarget.roomId == parsed.roomId,
-              !input.contains("/") && !input.contains(":") else {
+        guard !input.contains("/") && !input.contains(":") else {
             return parsed
         }
+
+        let target: ParsedJoinTarget
+        if let pendingLinkJoinTarget,
+           pendingLinkJoinTarget.roomId == parsed.roomId {
+            target = ParsedJoinTarget(
+                roomId: parsed.roomId,
+                joinMode: pendingLinkJoinTarget.joinMode,
+                meetingInviteCode: pendingLinkJoinTarget.meetingInviteCode,
+                webinarInviteCode: pendingLinkJoinTarget.webinarInviteCode,
+                allowRoomCreation: pendingLinkJoinTarget.allowRoomCreation
+            )
+        } else {
+            target = parsed
+        }
+
+        guard target.joinMode == .meeting,
+              linkCreationRoomId == parsed.roomId else {
+            return target
+        }
+
         return ParsedJoinTarget(
-            roomId: parsed.roomId,
-            joinMode: pendingLinkJoinTarget.joinMode,
-            meetingInviteCode: pendingLinkJoinTarget.meetingInviteCode,
-            webinarInviteCode: pendingLinkJoinTarget.webinarInviteCode,
-            allowRoomCreation: pendingLinkJoinTarget.allowRoomCreation
+            roomId: target.roomId,
+            joinMode: target.joinMode,
+            meetingInviteCode: target.meetingInviteCode,
+            webinarInviteCode: target.webinarInviteCode,
+            allowRoomCreation: true
         )
     }
 
@@ -1642,6 +2281,30 @@ struct JoinView: View {
     private let roomWordSeparator = "-"
     private let roomCodeMaxLength = 64
     private let webinarLinkCodeMaxLength = 32
+    private let webOnlyConclavePathPrefixes: Set<String> = [
+        "_next",
+        "api",
+        "assets",
+        "effects",
+        "mediapipe",
+        "reactions",
+        "workers",
+        "delete-account",
+        "privacy",
+        "sfu-admin",
+        "sign-in"
+    ]
+    private let localConclaveWebHosts: Set<String> = [
+        "localhost",
+        "127.0.0.1",
+        "0.0.0.0",
+        "10.0.2.2",
+        "[::1]",
+        "::1"
+    ]
+    private let cameraPermissionMessage = "Allow camera access in Settings, then try again."
+    private let microphonePermissionMessage = "Allow microphone access in Settings, then try again."
+    private let noCameraMessage = "No camera is available on this device."
 
     private var sanitizedRoomCodeBinding: Binding<String> {
         Binding(
@@ -1649,14 +2312,17 @@ struct JoinView: View {
             set: { newValue in
                 let previousRoomCode = roomCode
                 viewModel.state.joinFormErrorMessage = nil
-                pendingLinkJoinTarget = nil
                 if newValue.contains("/") || newValue.contains(":") {
                     roomCode = newValue
                 } else {
                     roomCode = sanitizeRoomCodeInput(newValue)
                 }
                 if roomCode != previousRoomCode {
+                    pendingLinkJoinTarget = nil
+                    linkCreationRoomId = nil
+                    generatedRoomCreationId = nil
                     resetInviteCodePrompt()
+                    resetScheduledWebinarStatus()
                 }
             }
         )
@@ -1689,13 +2355,36 @@ struct JoinView: View {
         }
     }
 
+    private func clearJoinOnlyPromptState() {
+        resetInviteCodePrompt()
+        resetScheduledWebinarStatus()
+    }
+
+    private func showMediaPermissionError(_ message: String) {
+        viewModel.state.joinFormErrorMessage = message
+        #if !SKIP
+        HapticManager.shared.trigger(.error)
+        #endif
+    }
+
+    private func clearMediaPermissionErrorIfNeeded() {
+        let message = viewModel.state.joinFormErrorMessage
+        guard message == cameraPermissionMessage ||
+            message == microphonePermissionMessage ||
+            message == noCameraMessage else {
+            return
+        }
+        viewModel.state.joinFormErrorMessage = nil
+    }
+
     private func restoreJoinFormAfterRecoverableError() {
         guard viewModel.state.joinFormErrorMessage != nil else { return }
         phase = .join
-        activeTab = .join
-        if !viewModel.state.roomId.isEmpty {
-            roomCode = viewModel.state.roomId
+        let failedRoomId = viewModel.state.roomId
+        if !failedRoomId.isEmpty {
+            roomCode = failedRoomId
         }
+        activeTab = !failedRoomId.isEmpty && generatedRoomCreationId == failedRoomId ? .new : .join
         if !viewModel.state.displayName.isEmpty {
             displayNameInput = viewModel.state.displayName
         }
@@ -1711,7 +2400,11 @@ struct JoinView: View {
         phase = .join
 
         if displayNameInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            displayNameInput = user.name ?? ""
+            if let signedInUser = signedInAccountUser {
+                displayNameInput = accountDisplayName(for: signedInUser, fallback: "")
+            } else {
+                displayNameInput = user.name ?? ""
+            }
         }
         if user.id.hasPrefix("guest-"),
            guestName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -1728,13 +2421,19 @@ struct JoinView: View {
 
         let storedUserId = storedUser.id
         let storedProvider = storedUser.provider
+        isRefreshingStoredAuth = true
 
         Task { @MainActor in
+            defer {
+                isRefreshingStoredAuth = false
+                applyPendingJoinLinkIfPossible()
+            }
+
             do {
                 guard let sessionUser = try await NativeAuthService.fetchCurrentSessionUser() else {
                     guard appState.currentUser?.id == storedUserId else { return }
                     appState.clearAuthentication(signOutRemote: false)
-                    phase = .auth
+                    enterAuthPhase()
                     showAuthError("Your sign-in session expired. Sign in again or continue as guest.")
                     return
                 }
@@ -1748,7 +2447,8 @@ struct JoinView: View {
                     moveToJoin: false
                 )
             } catch {
-                // Keep the stored identity when the auth server cannot be reached.
+                guard appState.currentUser?.id == storedUserId else { return }
+                showAuthError("Couldn't verify your sign-in. We'll keep your saved account and try again later.")
             }
         }
     }
@@ -1766,9 +2466,13 @@ struct JoinView: View {
     }
 
     private func applyPendingJoinLinkIfPossible() {
+        guard !isRefreshingStoredAuth,
+              !isSigningOut,
+              !isDeletingAccount,
+              !isContinuingAsGuest else { return }
         guard appState.pendingJoinURLString != nil else { return }
         guard appState.isAuthenticated || appState.currentUser != nil else {
-            phase = .auth
+            enterAuthPhase()
             activeTab = .join
             return
         }
@@ -1782,15 +2486,20 @@ struct JoinView: View {
         activeTab = .join
         viewModel.state.joinFormErrorMessage = nil
         resetInviteCodePrompt()
+        resetScheduledWebinarStatus()
 
         guard !joinTarget.roomId.isEmpty else {
             pendingLinkJoinTarget = nil
+            linkCreationRoomId = nil
+            generatedRoomCreationId = nil
             roomCode = ""
             viewModel.state.joinFormErrorMessage = "That meeting link is invalid."
             return
         }
 
         pendingLinkJoinTarget = joinTarget
+        linkCreationRoomId = joinTarget.allowRoomCreation ? joinTarget.roomId : nil
+        generatedRoomCreationId = nil
         roomCode = joinTarget.roomId
         if joinTarget.joinMode == .meeting {
             inviteCode = joinTarget.meetingInviteCode ?? ""
@@ -1801,6 +2510,65 @@ struct JoinView: View {
             isCameraOn = false
             isMicOn = false
             stopPreviewCapture()
+            autoJoinWebinarLinkIfReady(for: joinTarget)
+        }
+    }
+
+    private func autoJoinWebinarLinkIfReady(for joinTarget: ParsedJoinTarget) {
+        guard joinTarget.joinMode == .webinarAttendee else { return }
+        webinarAutoJoinGeneration += 1
+        let generation = webinarAutoJoinGeneration
+
+        Task { @MainActor in
+            await Task.yield()
+            guard webinarAutoJoinGeneration == generation,
+                  isJoinEnabled,
+                  isCurrentWebinarAutoJoinTarget(joinTarget) else { return }
+
+            if let webinar = await NativeWebinarLookupService.fetchScheduledWebinar(slug: joinTarget.roomId) {
+                guard webinarAutoJoinGeneration == generation,
+                      isCurrentWebinarAutoJoinTarget(joinTarget) else { return }
+                guard webinar.isOpenForAttendee else {
+                    scheduledWebinarStatusRoomId = joinTarget.roomId
+                    scheduledWebinarStatusMessage = scheduledWebinarStatusText(for: webinar)
+                    viewModel.state.joinFormErrorMessage = nil
+                    return
+                }
+            }
+
+            guard webinarAutoJoinGeneration == generation,
+                  isJoinEnabled,
+                  isCurrentWebinarAutoJoinTarget(joinTarget) else { return }
+            handleJoinRoom()
+        }
+    }
+
+    private func isCurrentWebinarAutoJoinTarget(_ joinTarget: ParsedJoinTarget) -> Bool {
+        let currentTarget = resolvedJoinTarget(from: roomCode)
+        return activeTab == .join
+            && currentTarget.roomId == joinTarget.roomId
+            && currentTarget.joinMode == joinTarget.joinMode
+            && currentTarget.meetingInviteCode == joinTarget.meetingInviteCode
+            && currentTarget.webinarInviteCode == joinTarget.webinarInviteCode
+            && currentTarget.allowRoomCreation == joinTarget.allowRoomCreation
+    }
+
+    private func resetScheduledWebinarStatus() {
+        webinarAutoJoinGeneration += 1
+        scheduledWebinarStatusRoomId = nil
+        scheduledWebinarStatusMessage = nil
+    }
+
+    private func scheduledWebinarStatusText(for webinar: NativeScheduledWebinar) -> String {
+        let title = trimWhitespaceAndNewlines(webinar.title ?? "")
+        let subject = title.isEmpty ? "This webinar" : title
+        switch webinar.status?.lowercased() {
+        case "ended":
+            return "\(subject) has ended."
+        case "cancelled":
+            return "\(subject) was cancelled."
+        default:
+            return "\(subject) is not open yet. The lobby opens before the scheduled start."
         }
     }
 
@@ -1826,16 +2594,28 @@ struct JoinView: View {
 #endif
     }
 
-    private func stopPreviewCapture() {
+    private func stopPreviewCapture(preserveToggle: Bool = false) {
         cameraPreviewGeneration += 1
 #if SKIP
-        isCameraOn = false
+        if !preserveToggle {
+            isCameraOn = false
+        }
 #else
         if let captureSession {
             stopPreviewSession(captureSession)
         }
         captureSession = nil
-        isCameraOn = false
+        if !preserveToggle {
+            isCameraOn = false
+        }
+#endif
+    }
+
+    private func restartCameraPreviewIfNeeded(afterJoinFormError message: String?) {
+        guard message?.isEmpty == false, isCameraOn else { return }
+#if !SKIP
+        guard captureSession == nil else { return }
+        setupCamera()
 #endif
     }
     
@@ -1862,11 +2642,17 @@ struct JoinView: View {
     private func requestAndroidCameraPermission() {
         if PermissionHelper.hasCameraPermission() {
             isCameraOn = true
+            clearMediaPermissionErrorIfNeeded()
             return
         }
 
         PermissionHelper.onCameraPermissionResult = { granted in
             isCameraOn = granted
+            if granted {
+                clearMediaPermissionErrorIfNeeded()
+            } else {
+                showMediaPermissionError(cameraPermissionMessage)
+            }
         }
         PermissionHelper.requestCameraPermission()
     }
@@ -1874,11 +2660,17 @@ struct JoinView: View {
     private func requestAndroidMicrophonePermission() {
         if PermissionHelper.hasRecordAudioPermission() {
             isMicOn = true
+            clearMediaPermissionErrorIfNeeded()
             return
         }
 
         PermissionHelper.onRecordAudioPermissionResult = { granted in
             isMicOn = granted
+            if granted {
+                clearMediaPermissionErrorIfNeeded()
+            } else {
+                showMediaPermissionError(microphonePermissionMessage)
+            }
         }
         PermissionHelper.requestRecordAudioPermission()
     }
@@ -1887,16 +2679,24 @@ struct JoinView: View {
         switch AVAudioApplication.shared.recordPermission {
         case .granted:
             isMicOn = true
+            clearMediaPermissionErrorIfNeeded()
         case .denied:
             isMicOn = false
+            showMediaPermissionError(microphonePermissionMessage)
         case .undetermined:
             AVAudioApplication.requestRecordPermission { granted in
                 DispatchQueue.main.async {
                     isMicOn = granted
+                    if granted {
+                        clearMediaPermissionErrorIfNeeded()
+                    } else {
+                        showMediaPermissionError(microphonePermissionMessage)
+                    }
                 }
             }
         @unknown default:
             isMicOn = false
+            showMediaPermissionError(microphonePermissionMessage)
         }
     }
     #endif
@@ -1906,7 +2706,14 @@ struct JoinView: View {
         cameraPreviewGeneration += 1
         let generation = cameraPreviewGeneration
         AVCaptureDevice.requestAccess(for: .video) { granted in
-            guard granted else { return }
+            guard granted else {
+                DispatchQueue.main.async {
+                    guard cameraPreviewGeneration == generation else { return }
+                    isCameraOn = false
+                    showMediaPermissionError(cameraPermissionMessage)
+                }
+                return
+            }
 
             DispatchQueue.global(qos: .userInitiated).async {
                 let session = AVCaptureSession()
@@ -1915,6 +2722,11 @@ struct JoinView: View {
                 guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .front),
                       let input = try? AVCaptureDeviceInput(device: device),
                       session.canAddInput(input) else {
+                    DispatchQueue.main.async {
+                        guard cameraPreviewGeneration == generation else { return }
+                        isCameraOn = false
+                        showMediaPermissionError(noCameraMessage)
+                    }
                     return
                 }
 
@@ -1929,6 +2741,7 @@ struct JoinView: View {
 
                     self.captureSession = session
                     self.isCameraOn = true
+                    clearMediaPermissionErrorIfNeeded()
                 }
             }
         }
@@ -2015,6 +2828,7 @@ private struct NativeTapButtonSurface: UIViewRepresentable {
         uiView.isUserInteractionEnabled = isEnabled
         uiView.isAccessibilityElement = true
         uiView.accessibilityLabel = accessibilityLabel
+        uiView.accessibilityIdentifier = accessibilityLabel
         uiView.accessibilityTraits = isEnabled ? [.button] : [.button, .notEnabled]
     }
 

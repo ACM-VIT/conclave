@@ -1,7 +1,3 @@
-//
-//  CallSessionCoordinator.swift
-//  Conclave
-//
 //  Single source of truth for "is there an active call right now?" that
 //  decoupled system surfaces (iOS CallKit + AVAudioSession interruption
 //  recovery, the Android foreground-service notification, Android
@@ -12,8 +8,6 @@
 //  unregisters on leave. Everything that presents a system call presence is
 //  gated on `isInCall` so we never show a call notification / PiP / CallKit
 //  call when the user isn't actually in a meeting.
-//
-
 import Foundation
 import Observation
 

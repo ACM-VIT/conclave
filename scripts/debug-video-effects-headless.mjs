@@ -98,63 +98,21 @@ const headlessTouchEnabled = /^(1|true|yes)$/i.test(
 const headlessWindowSize = `${headlessViewportWidth},${headlessViewportHeight}`;
 const defaultFaceFilterLabels = expectFaceLandmarks
   ? [
-      "Sparkles",
-      "Butterflies",
-      "Barely there",
-      "Simply radiant",
-      "Dewy fresh",
-      "Warm glow",
-      "Coral hint",
-      "Berry blush",
-      "Cat eye",
-      "Dramatic eye",
-      "Lip gloss",
-      "Pink dewy",
-      "Red lipstick",
-      "Rosy pink",
-      "Signature statement",
-      "Goth chic",
-      "Mummy",
-      "Zombie",
       "Beach day",
-      "Glasses",
-      "Cute glasses",
       "Aviator",
       "Cat-eye beret",
-      "Cyber glasses",
       "Cat ear headphones",
       "Cat ears and glasses",
-      "Cat on head",
-      "Fuzzy cat",
-      "Halloween cat",
-      "Velvety dog",
       "Medium hair and beard",
       "Long wavy hair",
-      "Gold crown",
-      "Light halo",
-      "Bunny ears",
       "Bunny",
       "Working bunny",
       "Cute alien",
       "Cute astronaut",
       "Pirate",
-      "Cake",
-      "Party hat",
-      "Pilot hat",
-      "Trucker hat",
-      "Glowing hat",
-      "Noogler hat",
-      "Intern hat",
-      "Winter hat and scarf",
-      "Wizard hat",
-      "Dia de los Muertos",
-      "Dia de los Muertos flower",
       "Alien ship",
-      "Thin mustache",
-      "Mustache",
-      "Idea bulb",
     ]
-  : ["Sparkles"];
+  : ["Beach day"];
 const parseConfiguredLabels = (value, fallback) => {
   if (value === undefined) return fallback;
   if (/^(0|false|none|off|no)$/i.test(value.trim())) return [];
@@ -224,8 +182,11 @@ const faceFilterIdByLabel = new Map([
   ["Mustache", "mustache"],
   ["Idea bulb", "idea"],
 ]);
-const primaryFaceFilterLabel = faceFilterLabels[0] ?? "Zombie";
-const primaryFaceFilterId = faceFilterIdByLabel.get(primaryFaceFilterLabel) ?? null;
+const primaryFaceFilterLabel =
+  faceFilterLabels.length > 0 ? faceFilterLabels[0] : null;
+const primaryFaceFilterId = primaryFaceFilterLabel
+  ? faceFilterIdByLabel.get(primaryFaceFilterLabel) ?? null
+  : null;
 const secondaryFaceFilterLabel =
   faceFilterLabels.find((label) => label !== primaryFaceFilterLabel) ?? null;
 const secondaryFaceFilterId = secondaryFaceFilterLabel
@@ -461,6 +422,15 @@ const minEffectsOutputWidth = Number(
       : 0),
 );
 const headlessProbe = process.env.CONCLAVE_HEADLESS_PROBE ?? "all";
+const initialEffectsOnly = /^(1|true|yes)$/i.test(
+  process.env.CONCLAVE_INITIAL_EFFECTS_ONLY ?? "",
+);
+const backgroundRenderOnly = /^(1|true|yes)$/i.test(
+  process.env.CONCLAVE_BACKGROUND_RENDER_ONLY ?? "",
+);
+const backgroundFilterComboOnly = /^(1|true|yes)$/i.test(
+  process.env.CONCLAVE_BACKGROUND_FILTER_COMBO_ONLY ?? "",
+);
 const allowedHeadlessProbes = new Set([
   "all",
   "effects",
@@ -680,9 +650,12 @@ class CdpClient {
         source: "exception",
         level: "error",
         text:
-          event.params.exceptionDetails.text ??
           event.params.exceptionDetails.exception?.description ??
+          event.params.exceptionDetails.text ??
           "Runtime exception",
+        url: event.params.exceptionDetails.url,
+        lineNumber: event.params.exceptionDetails.lineNumber,
+        columnNumber: event.params.exceptionDetails.columnNumber,
       });
     }
   }
@@ -787,6 +760,25 @@ const collectProbe = async (cdp) => {
   }
 };
 
+const isGenericErrorPageProbe = (probe) => {
+  const bodyText = String(probe?.bodyText ?? "");
+  return (
+    /something went wrong/i.test(bodyText) ||
+    /we couldn't load this screen/i.test(bodyText)
+  );
+};
+
+const collectFailureDiagnostics = async (cdp, label, probe = null) => {
+  const resolvedProbe = probe ?? (await collectProbe(cdp));
+  const recentLogs = cdp.logs.slice(-80);
+  emit("failure_diagnostics", {
+    label,
+    probe: resolvedProbe,
+    recentLogs,
+  });
+  return { probe: resolvedProbe, recentLogs };
+};
+
 const meetingToolbarControlsExpression = `(() => {
   const normalize = (value) => (value || "").replace(/\\s+/g, " ").trim();
   const buttons = Array.from(document.querySelectorAll("button"));
@@ -843,20 +835,29 @@ const waitFor = async (cdp, label, expression, timeout = timeoutMs) => {
     const elapsedMs = Date.now() - started;
     if (elapsedMs - lastProbeAt > 5000) {
       lastProbeAt = elapsedMs;
+      const probe = await collectProbe(cdp);
       emit("wait_for_progress", {
         label,
         elapsedMs,
-        probe: await collectProbe(cdp),
+        probe,
       });
+      if (isGenericErrorPageProbe(probe)) {
+        await collectFailureDiagnostics(cdp, `${label} generic error page`, probe);
+        throw new Error(
+          `Conclave displayed the generic error page while waiting for ${label}`,
+        );
+      }
     }
     await sleep(300);
   }
+  const probe = await collectProbe(cdp);
   emit("wait_for_timeout", {
     label,
     elapsedMs: Date.now() - started,
     lastValue: value,
-    probe: await collectProbe(cdp),
+    probe,
   });
+  await collectFailureDiagnostics(cdp, `${label} timeout`, probe);
   throw new Error(`Timed out waiting for ${label}`);
 };
 
@@ -987,6 +988,30 @@ const clickTestId = async (cdp, testId, timeout = 5000) => {
     probe: await collectProbe(cdp),
   });
   throw new Error(`Element not found or disabled: ${testId}`);
+};
+
+const clickSelector = async (cdp, selector, timeout = 5000) => {
+  const started = Date.now();
+  while (Date.now() - started < timeout) {
+    const ok = await evalValue(
+      cdp,
+      `(() => {
+        const element = document.querySelector(${JSON.stringify(selector)});
+        if (!(element instanceof HTMLElement)) return false;
+        if (element instanceof HTMLButtonElement && element.disabled) return false;
+        element.click();
+        return true;
+      })()`,
+    ).catch(() => false);
+    if (ok) return;
+    await sleep(150);
+  }
+  emit("click_selector_failed", {
+    selector,
+    elapsedMs: Date.now() - started,
+    probe: await collectProbe(cdp),
+  });
+  throw new Error(`Element not found or disabled: ${selector}`);
 };
 
 const turnCameraOnIfNeeded = async (cdp, label) => {
@@ -1596,6 +1621,35 @@ const assertOutputWriterQuality = (state, label) => {
   return quality;
 };
 
+const waitForOutputWriterQuality = async (
+  cdp,
+  label,
+  { initialState = null, timeout = 5000 } = {},
+) => {
+  const started = Date.now();
+  let state = initialState;
+  let quality = state ? getOutputWriterQuality(state, label) : null;
+
+  while (Date.now() - started < timeout) {
+    if (quality?.ok) {
+      emit("output_writer_quality_probe", quality);
+      return state;
+    }
+    await sleep(250);
+    state = await evalValue(cdp, collectStateExpression, 5000).catch(() => null);
+    quality = state ? getOutputWriterQuality(state, label) : null;
+  }
+
+  if (quality) {
+    emit("output_writer_quality_probe", quality);
+  }
+  throw new Error(
+    `Output writer quality regression at ${label}: ${JSON.stringify(
+      quality,
+    )}`,
+  );
+};
+
 const parseEffectSwitchLatencyLogs = (logs, options = {}) => {
   const startIndex = Math.max(0, Number(options.fromIndex || 0));
   const samples = [];
@@ -1870,7 +1924,7 @@ const runMeetVideoPipeProbe = async (
   const probeLogStartIndex = cdp.logs.length;
   const selectCombinedBackground = async () => {
     if (!meetVideoPipeCombinedBackgroundId) return;
-    await clickButton(cdp, "Backgrounds");
+    await clickSelector(cdp, "#video-effects-tab-backgrounds");
     await sleep(75);
     await clickButton(cdp, meetVideoPipeCombinedBackgroundLabel, 10000);
     await waitFor(
@@ -1893,7 +1947,7 @@ const runMeetVideoPipeProbe = async (
     );
   };
   const selectPrimaryMeetVideoPipeFilter = async () => {
-    await clickButton(cdp, "Filters");
+    await clickSelector(cdp, "#video-effects-tab-filters");
     await sleep(75);
     await clickButton(cdp, primaryFaceFilterLabel, 10000);
   };
@@ -3441,14 +3495,218 @@ const run = async () => {
       return;
     }
 
+    if (backgroundFilterComboOnly) {
+      const comboBackgroundLabel =
+        backgroundLabels.length > 0
+          ? backgroundLabels[backgroundLabels.length - 1]
+          : null;
+      const comboBackgroundId = comboBackgroundLabel
+        ? backgroundIdByLabel.get(comboBackgroundLabel) ?? null
+        : null;
+      if (!comboBackgroundLabel || !comboBackgroundId) {
+        throw new Error(
+          "CONCLAVE_BACKGROUND_FILTER_COMBO_ONLY requires a configured background",
+        );
+      }
+      if (!imageBackedBackgroundIds.has(comboBackgroundId)) {
+        throw new Error(
+          `Combo-only probe requires an image-backed background: ${comboBackgroundLabel}`,
+        );
+      }
+      if (!primaryFaceFilterLabel || !primaryFaceFilterId) {
+        throw new Error(
+          "CONCLAVE_BACKGROUND_FILTER_COMBO_ONLY requires a configured face filter",
+        );
+      }
+
+      const waitForCombinedImageEffects = async (label, order) => {
+        await waitFor(
+          cdp,
+          label,
+          `(() => {
+            const panel = document.querySelector('[data-testid="video-effects-panel"]');
+            const raw = panel?.getAttribute("data-video-effects-stats");
+            let stats = null;
+            try { stats = raw ? JSON.parse(raw) : null; } catch {}
+            const debug =
+              typeof window.__conclaveGetMeetVideoDebug === "function"
+                ? window.__conclaveGetMeetVideoDebug()
+                : window.__conclaveMeetVideoDebug ?? null;
+            const backgroundRender = stats?.backgroundRender;
+            const faceRender = stats?.faceFilterRender;
+            const outputHealthy =
+              panel?.getAttribute("data-video-effects-status") === "running" &&
+              panel?.getAttribute("data-video-effects-output-published") === "true" &&
+              panel?.getAttribute("data-video-effects-preview-matches-output") === "true" &&
+              Number(panel?.getAttribute("data-video-effects-black-output-count") || 1) === 0 &&
+              stats?.effects?.background === ${JSON.stringify(comboBackgroundId)} &&
+              stats?.effects?.filter === ${JSON.stringify(primaryFaceFilterId)} &&
+              stats?.needsSegmentation === true &&
+              stats?.needsFace === true &&
+              backgroundRender?.background === ${JSON.stringify(comboBackgroundId)} &&
+              backgroundRender?.active === true &&
+              backgroundRender?.hasBackgroundImage === true &&
+              backgroundRender?.edgeUnderlayActive === false &&
+              Number(backgroundRender?.edgeUnderlayAlpha || 0) <= 0.001 &&
+              Number(backgroundRender?.outerEdgeUnderlayAlpha || 0) <= 0.001 &&
+              Number(backgroundRender?.edgeUnderlayRawHaloSuppression ?? 0) >= 0.98 &&
+              Number(backgroundRender?.changedPixels || 0) > 0 &&
+              faceRender?.filter === ${JSON.stringify(primaryFaceFilterId)} &&
+              debug?.publish?.shouldPublishProcessed === true &&
+              debug?.publish?.usingProcessedTrack === true &&
+              debug?.publish?.usingRawTrack === false &&
+              debug?.publish?.producerTrackLive === true;
+            if (!${JSON.stringify(expectFaceLandmarks)}) return outputHealthy;
+            return outputHealthy &&
+              Number(stats?.faceLandmarkCount || 0) > 0 &&
+              faceRender?.drawn === true &&
+              Number(faceRender?.changedPixels || 0) > 0;
+          })()`,
+          30000,
+        );
+        state = await collectState(cdp, `state_after_${order}_combo_only`);
+        await waitForMeetVideoPublish(
+          cdp,
+          `${label} producer uses processed output`,
+          "processed",
+        );
+        emit("background_filter_combo_probe", {
+          order,
+          backgroundLabel: comboBackgroundLabel,
+          expectedBackgroundId: comboBackgroundId,
+          filterLabel: primaryFaceFilterLabel,
+          expectedFilterId: primaryFaceFilterId,
+          expectFaceLandmarks,
+          faceLandmarkCount: Number(state.panelStats?.faceLandmarkCount ?? 0),
+          outputTrackPublished: state.panelStats?.outputTrackPublished === true,
+          previewMatchesOutput:
+            state.panelAttrs?.["data-video-effects-preview-matches-output"] ===
+            "true",
+          publish: state.meetVideoDebug?.publish ?? null,
+          backgroundRender: state.panelStats?.backgroundRender ?? null,
+          faceFilterRender: state.panelStats?.faceFilterRender ?? null,
+        });
+      };
+
+      await clickSelector(cdp, "#video-effects-tab-backgrounds");
+      await clickButton(cdp, comboBackgroundLabel);
+      await waitFor(
+        cdp,
+        `${comboBackgroundLabel} image background before combo-only filter`,
+        `(() => {
+          const panel = document.querySelector('[data-testid="video-effects-panel"]');
+          const raw = panel?.getAttribute("data-video-effects-stats");
+          let stats = null;
+          try { stats = raw ? JSON.parse(raw) : null; } catch {}
+          const render = stats?.backgroundRender;
+          return panel?.getAttribute("data-video-effects-status") === "running" &&
+            panel?.getAttribute("data-video-effects-output-published") === "true" &&
+            panel?.getAttribute("data-video-effects-preview-matches-output") === "true" &&
+            Number(panel?.getAttribute("data-video-effects-black-output-count") || 1) === 0 &&
+            stats?.effects?.background === ${JSON.stringify(comboBackgroundId)} &&
+            stats?.effects?.filter === "none" &&
+            render?.background === ${JSON.stringify(comboBackgroundId)} &&
+            render?.active === true &&
+            render?.hasBackgroundImage === true &&
+            Number(render?.changedPixels || 0) > 0;
+        })()`,
+        30000,
+      );
+      await clickSelector(cdp, "#video-effects-tab-filters");
+      await clickButton(cdp, primaryFaceFilterLabel);
+      await waitForCombinedImageEffects(
+        `${comboBackgroundLabel} background with ${primaryFaceFilterLabel} filter`,
+        "background-first",
+      );
+
+      await clickButton(cdp, "No filter");
+      await clickSelector(cdp, "#video-effects-tab-backgrounds");
+      await clickButton(cdp, "No background");
+      await waitFor(
+        cdp,
+        "combo-only reset before filter-first probe",
+        `(() => {
+          const panel = document.querySelector('[data-testid="video-effects-panel"]');
+          const raw = panel?.getAttribute("data-video-effects-stats");
+          let stats = null;
+          try { stats = raw ? JSON.parse(raw) : null; } catch {}
+          const debug =
+            typeof window.__conclaveGetMeetVideoDebug === "function"
+              ? window.__conclaveGetMeetVideoDebug()
+              : window.__conclaveMeetVideoDebug ?? null;
+          const effects = stats?.effects ?? debug?.videoEffects;
+          return effects?.background === "none" &&
+            effects?.filter === "none" &&
+            panel?.getAttribute("data-video-effects-status") === "off" &&
+            panel?.getAttribute("data-video-effects-output-published") === "false" &&
+            ["raw", "none"].includes(
+              panel?.getAttribute("data-video-effects-frame-source")
+            ) &&
+            Number(panel?.getAttribute("data-video-effects-black-output-count") || 0) === 0;
+        })()`,
+        20000,
+      );
+      await clickSelector(cdp, "#video-effects-tab-filters");
+      await clickButton(cdp, primaryFaceFilterLabel);
+      await waitFor(
+        cdp,
+        `${primaryFaceFilterLabel} filter before combo-only image background`,
+        `(() => {
+          const panel = document.querySelector('[data-testid="video-effects-panel"]');
+          const raw = panel?.getAttribute("data-video-effects-stats");
+          let stats = null;
+          try { stats = raw ? JSON.parse(raw) : null; } catch {}
+          const debug =
+            typeof window.__conclaveGetMeetVideoDebug === "function"
+              ? window.__conclaveGetMeetVideoDebug()
+              : window.__conclaveMeetVideoDebug ?? null;
+          const faceRender = stats?.faceFilterRender;
+          const outputHealthy =
+            panel?.getAttribute("data-video-effects-status") === "running" &&
+            panel?.getAttribute("data-video-effects-output-published") === "true" &&
+            panel?.getAttribute("data-video-effects-preview-matches-output") === "true" &&
+            Number(panel?.getAttribute("data-video-effects-black-output-count") || 1) === 0 &&
+            stats?.effects?.background === "none" &&
+            stats?.effects?.filter === ${JSON.stringify(primaryFaceFilterId)} &&
+            stats?.needsSegmentation === false &&
+            stats?.needsFace === true &&
+            faceRender?.filter === ${JSON.stringify(primaryFaceFilterId)} &&
+            debug?.publish?.shouldPublishProcessed === true &&
+            debug?.publish?.usingProcessedTrack === true &&
+            debug?.publish?.usingRawTrack === false &&
+            debug?.publish?.producerTrackLive === true;
+          if (!${JSON.stringify(expectFaceLandmarks)}) return outputHealthy;
+          return outputHealthy &&
+            Number(stats?.faceLandmarkCount || 0) > 0 &&
+            faceRender?.drawn === true &&
+            Number(faceRender?.changedPixels || 0) > 0;
+        })()`,
+        30000,
+      );
+      await clickSelector(cdp, "#video-effects-tab-backgrounds");
+      await clickButton(cdp, comboBackgroundLabel);
+      await waitForCombinedImageEffects(
+        `${primaryFaceFilterLabel} filter with ${comboBackgroundLabel} background`,
+        "filter-first",
+      );
+      emit("result", {
+        ok: true,
+        probe: headlessProbe,
+        backgroundFilterComboOnly: true,
+      });
+      return;
+    }
+
     await clickButton(cdp, "Blur your background");
-    await sleep(75);
-    await clickButton(cdp, "Filters");
-    await sleep(75);
-    await clickButton(cdp, "Sparkles");
-    await sleep(75);
-    await clickButton(cdp, "Backgrounds");
-    await sleep(75);
+    if (primaryFaceFilterId) {
+      await sleep(75);
+      await clickSelector(cdp, "#video-effects-tab-filters");
+      await sleep(75);
+      await clickTestId(cdp, `video-effects-filter-${primaryFaceFilterId}`);
+      await sleep(75);
+      await clickSelector(cdp, "#video-effects-tab-backgrounds");
+      await sleep(75);
+    }
     await clickButton(cdp, "Slightly blur your background");
     await sleep(75);
     await clickButton(cdp, "Blur your background");
@@ -3497,14 +3755,20 @@ const run = async () => {
                   modelProcessingConfigId &&
                 Number(faceProcessor?.latestWorkerResult?.width || 0) > 0 &&
                 Number(faceProcessor?.latestWorkerResult?.height || 0) > 0 &&
-                faceProcessor?.latestWorkerResult?.inputSource === "video-frame"
+                (
+                  faceProcessor?.latestWorkerResult?.inputSource === "video-frame" ||
+                  faceProcessor?.latestWorkerResult?.inputSource === "image-bitmap"
+                )
               )
               : Number(faceProcessor?.latestWorkerResult?.sequence || 0) > 0 &&
               faceProcessor?.latestWorkerResult?.processingConfigId ===
                 modelProcessingConfigId &&
               Number(faceProcessor?.latestWorkerResult?.width || 0) > 0 &&
               Number(faceProcessor?.latestWorkerResult?.height || 0) > 0 &&
-              faceProcessor?.latestWorkerResult?.inputSource === "video-frame" &&
+              (
+                faceProcessor?.latestWorkerResult?.inputSource === "video-frame" ||
+                faceProcessor?.latestWorkerResult?.inputSource === "image-bitmap"
+              ) &&
               Number(faceProcessor?.latestWorkerResult?.landmarkCount || 0) > 0;
         const adaptationHealthy =
           [1400, 1200, 1100, 1000].includes(Number(adaptation?.adaptationTier)) &&
@@ -3606,7 +3870,10 @@ const run = async () => {
             modelProcessingConfigId &&
           Number(segmentationProcessor?.latestWorkerResult?.width || 0) > 0 &&
           Number(segmentationProcessor?.latestWorkerResult?.height || 0) > 0 &&
-          segmentationProcessor?.latestWorkerResult?.inputSource === "video-frame" &&
+          (
+            segmentationProcessor?.latestWorkerResult?.inputSource === "video-frame" ||
+            segmentationProcessor?.latestWorkerResult?.inputSource === "image-bitmap"
+          ) &&
           ["tasks-confidence", "tasks-category"].includes(
             segmentationProcessor?.latestWorkerResult?.source
           ) &&
@@ -3616,20 +3883,25 @@ const run = async () => {
           Number(
             segmentationProcessor?.latestWorkerResult?.confidenceMaskCount ?? 0
           ) >= 0 &&
-          faceProcessor?.mode === "worker" &&
-          faceProcessor?.workerSupported === true &&
-          faceProcessor?.workerReady === true &&
-          ["GPU", "CPU"].includes(faceProcessor?.workerDelegate) &&
-          Number(faceProcessor?.workerFramesSent || 0) >= 1 &&
-          Number(faceProcessor?.workerResults || 0) >= 1 &&
-          Number(faceProcessor?.workerStaleResults ?? 0) >= 0 &&
-          Number(faceProcessor?.workerFailures || 0) === 0 &&
-          faceProcessor?.workerFirstResultSeen === true &&
-          Number(faceProcessor?.latestWorkerSequence || 0) > 0 &&
-          Number(faceProcessor?.latestWorkerAckSequence || 0) > 0 &&
-          Number(faceProcessor?.latestWorkerProcessingMs ?? -1) >= 0 &&
-          Number(faceProcessor?.latestWorkerRoundTripMs ?? -1) >= 0 &&
-          faceProcessorResultHealthy;
+          (
+            !${JSON.stringify(expectFaceLandmarks)} ||
+            (
+              faceProcessor?.mode === "worker" &&
+              faceProcessor?.workerSupported === true &&
+              faceProcessor?.workerReady === true &&
+              ["GPU", "CPU"].includes(faceProcessor?.workerDelegate) &&
+              Number(faceProcessor?.workerFramesSent || 0) >= 1 &&
+              Number(faceProcessor?.workerResults || 0) >= 1 &&
+              Number(faceProcessor?.workerStaleResults ?? 0) >= 0 &&
+              Number(faceProcessor?.workerFailures || 0) === 0 &&
+              faceProcessor?.workerFirstResultSeen === true &&
+              Number(faceProcessor?.latestWorkerSequence || 0) > 0 &&
+              Number(faceProcessor?.latestWorkerAckSequence || 0) > 0 &&
+              Number(faceProcessor?.latestWorkerProcessingMs ?? -1) >= 0 &&
+              Number(faceProcessor?.latestWorkerRoundTripMs ?? -1) >= 0 &&
+              faceProcessorResultHealthy
+            )
+          );
         const frameMetadataHealthy =
           frameMetadata?.type === "FRAME_METADATA" &&
           frameMetadata?.source === "client-video-effects" &&
@@ -3664,22 +3936,64 @@ const run = async () => {
           (temporalMask?.source === "tasks-confidence" ||
             temporalMask?.source === "tasks-category") &&
           Number(temporalMask?.alpha || 0) > 0 &&
+          Number(temporalMask?.riseAlpha || 0) >= 0.75 &&
+          Number(temporalMask?.fallAlpha || 0) >= 0.45 &&
+          Number(temporalMask?.fallAlpha || 0) <=
+            Number(temporalMask?.riseAlpha || 0) &&
+          Number(temporalMask?.confidenceFloor ?? 1) <= 0.35 &&
+          Number(temporalMask?.confidenceCeiling ?? 0) >= 0.78 &&
+          Number(temporalMask?.edgeGrowAlpha || 0) > 0 &&
+          Number(temporalMask?.edgeErodeAlpha || 1) <= 0.42 &&
+          Number(temporalMask?.edgeErodePasses || 0) >= 1 &&
+          Number(temporalMask?.edgeFeatherPx || 0) >= 0.25 &&
+          Number(temporalMask?.edgeFeatherPx || 0) <= 0.6 &&
+          Number(temporalMask?.edgeReinforceAlpha || 0) >= 0.8 &&
           Number(temporalMask?.frameCount || 0) > 0 &&
           Number(temporalMask?.shapeFrameCount || 0) > 0 &&
           Number(temporalMask?.smoothedFrameCount || 0) > 0 &&
+          Number(temporalMask?.edgeGrowFrameCount || 0) > 0 &&
           Number(temporalMask?.pixelCount || 0) > 0 &&
           temporalMask?.hasHistory === true;
+        const debug =
+          typeof window.__conclaveGetMeetVideoDebug === "function"
+            ? window.__conclaveGetMeetVideoDebug()
+            : window.__conclaveMeetVideoDebug ?? null;
+        const selectedFilter =
+          debug?.videoEffects?.filter ??
+          stats?.meetVideoPipe?.gate?.selectedFilter ??
+          stats?.effects?.filter ??
+          null;
+        const expectedFilter = ${JSON.stringify(primaryFaceFilterId ?? "none")};
+        const filterHealthy =
+          expectedFilter === "none"
+            ? !selectedFilter || selectedFilter === "none"
+            : selectedFilter === expectedFilter ||
+              faceRender?.filter === expectedFilter;
+        const publishHealthy =
+          debug?.publish?.shouldPublishProcessed === true &&
+          debug?.publish?.usingProcessedTrack === true &&
+          debug?.publish?.usingRawTrack === false &&
+          debug?.publish?.producerTrackLive === true;
         const outputHealthy = panel?.getAttribute("data-video-effects-status") === "running" &&
-          panel?.getAttribute("data-video-effects-active-count") === "2" &&
+          panel?.getAttribute("data-video-effects-active-count") ===
+            ${JSON.stringify(primaryFaceFilterId ? "2" : "1")} &&
           panel?.getAttribute("data-video-effects-output-published") === "true" &&
           panel?.getAttribute("data-video-effects-preview-matches-output") === "true" &&
           Number(panel?.getAttribute("data-video-effects-black-output-count") || 1) === 0 &&
           backgroundRender?.background === "blur-strong" &&
           backgroundRender?.active === true &&
+          backgroundRender?.edgeUnderlayActive === true &&
+          Number(backgroundRender?.edgeUnderlayAlpha || 0) > 0 &&
+          Number(backgroundRender?.edgeUnderlayBlurPx || 0) >= 2 &&
+          Number(backgroundRender?.outerEdgeUnderlayAlpha || 0) > 0 &&
+          Number(backgroundRender?.outerEdgeUnderlayBlurPx || 0) >= 4 &&
+          Number(backgroundRender?.edgeUnderlayStaleMaskBoost ?? -1) >= 0 &&
+          backgroundRender?.edgeUnderlaySourceBackedBackground === true &&
+          Number(backgroundRender?.edgeUnderlayRawHaloSuppression ?? -1) === 0 &&
           Number(backgroundRender?.changedPixels || 0) > 0 &&
-          stats?.needsFace === true &&
+          filterHealthy &&
+          publishHealthy &&
           ((stats?.framePipeline?.segmentationProcessor?.mode === "worker" && Number(stats?.framePipeline?.segmentationProcessor?.workerResults || 0) > 0) || Number(stats?.closedSegmentationMasks || 0) > 0) &&
-          faceRender?.filter === "sparkles" &&
           ["video-frame", "track-processor"].includes(stats?.schedulerMode) &&
           stats?.outputMode === "track-generator" &&
           framePipelineHealthy &&
@@ -3695,7 +4009,11 @@ const run = async () => {
       30000,
     );
     state = await collectState(cdp, "state_after_camera_off_rapid_effect_start");
-    assertOutputWriterQuality(state, "camera-off rapid effect start");
+    state = await waitForOutputWriterQuality(
+      cdp,
+      "camera-off rapid effect start",
+      { initialState: state },
+    );
     await waitForMeetVideoPublish(
       cdp,
       "rapid start producer uses processed effects",
@@ -3733,6 +4051,14 @@ const run = async () => {
       temporalMask: state.panelStats?.temporalMask ?? null,
       adaptation: state.panelStats?.adaptation ?? null,
     });
+    if (initialEffectsOnly) {
+      emit("result", {
+        ok: true,
+        probe: headlessProbe,
+        initialEffectsOnly: true,
+      });
+      return;
+    }
 
     if (headlessMobileViewport && headlessProbe === "effects") {
       const badLogs = cdp.logs.filter((log) =>
@@ -3839,21 +4165,22 @@ const run = async () => {
       return;
     }
 
-    await clickButton(cdp, "Appearance");
-    await clickButton(cdp, "Adjust video lighting");
-    await sleep(75);
-    await clickButton(cdp, "Framing");
-    await waitFor(
-      cdp,
-      "appearance low-light and framing output healthy",
-      `(() => {
+    if (!backgroundRenderOnly) {
+      await clickSelector(cdp, "#video-effects-tab-appearance");
+      await clickButton(cdp, "Studio lighting");
+      await sleep(75);
+      await clickButton(cdp, "Framing");
+      await waitFor(
+        cdp,
+        "appearance low-light and framing output healthy",
+        `(() => {
         const panel = document.querySelector('[data-testid="video-effects-panel"]');
         const raw = panel?.getAttribute("data-video-effects-stats");
         let stats = null;
         try { stats = raw ? JSON.parse(raw) : null; } catch {}
         const switches = Array.from(panel?.querySelectorAll('[role="switch"]') ?? []);
         const lightingSwitch = switches.find((button) =>
-          (button.textContent || "").includes("Adjust video lighting")
+          (button.textContent || "").includes("Studio lighting")
         );
         const framingSwitch = switches.find((button) =>
           (button.textContent || "").includes("Framing")
@@ -3930,7 +4257,7 @@ const run = async () => {
           Number(backgroundRender?.changedPixels || 0) > 0 &&
           stats?.needsFace === true &&
           ((stats?.framePipeline?.segmentationProcessor?.mode === "worker" && Number(stats?.framePipeline?.segmentationProcessor?.workerResults || 0) > 0) || Number(stats?.closedSegmentationMasks || 0) > 0) &&
-          faceRender?.filter === "sparkles" &&
+          faceRender?.filter === "beach-day" &&
           ["video-frame", "track-processor"].includes(stats?.schedulerMode) &&
           stats?.outputMode === "track-generator" &&
           frameMetadataHealthy &&
@@ -3943,47 +4270,47 @@ const run = async () => {
           faceRender?.drawn === true &&
           Number(faceRender?.changedPixels || 0) > 0;
       })()`,
-      30000,
-    );
-    state = await collectState(cdp, "state_after_appearance_low_light_framing");
-    assertOutputWriterQuality(state, "appearance low-light and framing");
-    await waitForMeetVideoPublish(
-      cdp,
-      "appearance producer uses processed effects",
-      "processed",
-    );
-    emit("appearance_low_light_framing_probe", {
-      status: state.panelAttrs?.["data-video-effects-status"],
-      activeCount: state.panelAttrs?.["data-video-effects-active-count"],
-      outputPublished: state.panelStats?.outputTrackPublished === true,
-      previewMatchesOutput:
-        state.panelAttrs?.["data-video-effects-preview-matches-output"] ===
-        "true",
-      blackOutputFrameCount: Number(
-        state.panelAttrs?.["data-video-effects-black-output-count"] ?? 1,
-      ),
-      schedulerMode: state.panelStats?.schedulerMode ?? null,
-      outputMode: state.panelStats?.outputMode ?? null,
-      backgroundRender: state.panelStats?.backgroundRender ?? null,
-      faceFilterRender: state.panelStats?.faceFilterRender ?? null,
-      lowLightRender: state.panelStats?.lowLightRender ?? null,
-      autoFrame: state.panelStats?.autoFrame ?? null,
-      frameMetadata:
-        state.panelStats?.frameMetadata ??
-        state.videoEffectsFrameMetadataDebug?.current ??
-        null,
-      frameMetadataDebug: state.videoEffectsFrameMetadataDebug ?? null,
-      adaptation: state.panelStats?.adaptation ?? null,
-    });
+        30000,
+      );
+      state = await collectState(cdp, "state_after_appearance_low_light_framing");
+      assertOutputWriterQuality(state, "appearance low-light and framing");
+      await waitForMeetVideoPublish(
+        cdp,
+        "appearance producer uses processed effects",
+        "processed",
+      );
+      emit("appearance_low_light_framing_probe", {
+        status: state.panelAttrs?.["data-video-effects-status"],
+        activeCount: state.panelAttrs?.["data-video-effects-active-count"],
+        outputPublished: state.panelStats?.outputTrackPublished === true,
+        previewMatchesOutput:
+          state.panelAttrs?.["data-video-effects-preview-matches-output"] ===
+          "true",
+        blackOutputFrameCount: Number(
+          state.panelAttrs?.["data-video-effects-black-output-count"] ?? 1,
+        ),
+        schedulerMode: state.panelStats?.schedulerMode ?? null,
+        outputMode: state.panelStats?.outputMode ?? null,
+        backgroundRender: state.panelStats?.backgroundRender ?? null,
+        faceFilterRender: state.panelStats?.faceFilterRender ?? null,
+        lowLightRender: state.panelStats?.lowLightRender ?? null,
+        autoFrame: state.panelStats?.autoFrame ?? null,
+        frameMetadata:
+          state.panelStats?.frameMetadata ??
+          state.videoEffectsFrameMetadataDebug?.current ??
+          null,
+        frameMetadataDebug: state.videoEffectsFrameMetadataDebug ?? null,
+        adaptation: state.panelStats?.adaptation ?? null,
+      });
 
-    const recenterCountBefore = Number(
-      state.panelStats?.autoFrame?.recenterCount ?? 0,
-    );
-    await clickButton(cdp, "Recenter");
-    await waitFor(
-      cdp,
-      "framing recenter signal processed",
-      `(() => {
+      const recenterCountBefore = Number(
+        state.panelStats?.autoFrame?.recenterCount ?? 0,
+      );
+      await clickButton(cdp, "Recenter");
+      await waitFor(
+        cdp,
+        "framing recenter signal processed",
+        `(() => {
         const panel = document.querySelector('[data-testid="video-effects-panel"]');
         const raw = panel?.getAttribute("data-video-effects-stats");
         let stats = null;
@@ -4005,33 +4332,33 @@ const run = async () => {
           Number(autoFrame?.zoom || 0) > 1 &&
           ["face", "foreground", "center"].includes(autoFrame?.source);
       })()`,
-      10000,
-    );
-    state = await collectState(cdp, "state_after_framing_recenter");
-    await waitForMeetVideoPublish(
-      cdp,
-      "framing recenter producer stays processed",
-      "processed",
-    );
-    emit("framing_recenter_probe", {
-      status: state.panelAttrs?.["data-video-effects-status"],
-      activeCount: state.panelAttrs?.["data-video-effects-active-count"],
-      outputPublished: state.panelStats?.outputTrackPublished === true,
-      previewMatchesOutput:
-        state.panelAttrs?.["data-video-effects-preview-matches-output"] ===
-        "true",
-      blackOutputFrameCount: Number(
-        state.panelAttrs?.["data-video-effects-black-output-count"] ?? 1,
-      ),
-      autoFrame: state.panelStats?.autoFrame ?? null,
-    });
-
-    if (expectFaceLandmarks) {
-      await clickButton(cdp, "Active effects");
-      await waitFor(
+        10000,
+      );
+      state = await collectState(cdp, "state_after_framing_recenter");
+      await waitForMeetVideoPublish(
         cdp,
-        "active effects stack opened before framing-only static crop",
-        `(() => {
+        "framing recenter producer stays processed",
+        "processed",
+      );
+      emit("framing_recenter_probe", {
+        status: state.panelAttrs?.["data-video-effects-status"],
+        activeCount: state.panelAttrs?.["data-video-effects-active-count"],
+        outputPublished: state.panelStats?.outputTrackPublished === true,
+        previewMatchesOutput:
+          state.panelAttrs?.["data-video-effects-preview-matches-output"] ===
+          "true",
+        blackOutputFrameCount: Number(
+          state.panelAttrs?.["data-video-effects-black-output-count"] ?? 1,
+        ),
+        autoFrame: state.panelStats?.autoFrame ?? null,
+      });
+
+      if (expectFaceLandmarks) {
+        await clickButton(cdp, "Active effects");
+        await waitFor(
+          cdp,
+          "active effects stack opened before framing-only static crop",
+          `(() => {
           const panel = document.querySelector('[data-testid="video-effects-panel"]');
           const stack = panel?.querySelector("[data-video-effects-active-stack='true']");
           const removeAll = Array.from(stack?.querySelectorAll("button") ?? []).some(
@@ -4042,26 +4369,26 @@ const run = async () => {
             stack?.getAttribute("data-video-effects-active-stack-open") === "true" &&
             removeAll;
         })()`,
-        10000,
-      );
-      await clickButton(cdp, "Remove all visual effects");
-      await waitFor(
-        cdp,
-        "effects disabled before framing-only static crop",
-        `(() => {
+          10000,
+        );
+        await clickButton(cdp, "Remove all visual effects");
+        await waitFor(
+          cdp,
+          "effects disabled before framing-only static crop",
+          `(() => {
           const panel = document.querySelector('[data-testid="video-effects-panel"]');
           return panel?.getAttribute("data-video-effects-status") === "off" &&
             panel?.getAttribute("data-video-effects-active-count") === "0" &&
             panel?.getAttribute("data-video-effects-output-published") === "false";
         })()`,
-        10000,
-      );
-      await clickButton(cdp, "Appearance");
-      await clickButton(cdp, "Framing");
-      await waitFor(
-        cdp,
-        "framing-only static crop active",
-        `(() => {
+          10000,
+        );
+        await clickSelector(cdp, "#video-effects-tab-appearance");
+        await clickButton(cdp, "Framing");
+        await waitFor(
+          cdp,
+          "framing-only static crop active",
+          `(() => {
           const panel = document.querySelector('[data-testid="video-effects-panel"]');
           const raw = panel?.getAttribute("data-video-effects-stats");
           let stats = null;
@@ -4106,30 +4433,31 @@ const run = async () => {
             frameMetadata?.continuousAutozoomMetadata?.enabled === true &&
             frameMetadata?.continuousAutozoomMetadata?.source === "face";
         })()`,
-        30000,
-      );
-      state = await collectState(cdp, "state_after_framing_only_static_crop");
-      await waitForMeetVideoPublish(
-        cdp,
-        "framing-only static crop producer uses processed output",
-        "processed",
-      );
-      emit("framing_only_static_crop_probe", {
-        status: state.panelAttrs?.["data-video-effects-status"],
-        activeCount: state.panelAttrs?.["data-video-effects-active-count"],
-        outputPublished: state.panelStats?.outputTrackPublished === true,
-        previewMatchesOutput:
-          state.panelAttrs?.["data-video-effects-preview-matches-output"] ===
-          "true",
-        blackOutputFrameCount: Number(
-          state.panelAttrs?.["data-video-effects-black-output-count"] ?? 1,
-        ),
-        autoFrame: state.panelStats?.autoFrame ?? null,
-        intervals: state.panelStats?.intervals ?? null,
-        adaptation: state.panelStats?.adaptation ?? null,
-      });
+          30000,
+        );
+        state = await collectState(cdp, "state_after_framing_only_static_crop");
+        await waitForMeetVideoPublish(
+          cdp,
+          "framing-only static crop producer uses processed output",
+          "processed",
+        );
+        emit("framing_only_static_crop_probe", {
+          status: state.panelAttrs?.["data-video-effects-status"],
+          activeCount: state.panelAttrs?.["data-video-effects-active-count"],
+          outputPublished: state.panelStats?.outputTrackPublished === true,
+          previewMatchesOutput:
+            state.panelAttrs?.["data-video-effects-preview-matches-output"] ===
+            "true",
+          blackOutputFrameCount: Number(
+            state.panelAttrs?.["data-video-effects-black-output-count"] ?? 1,
+          ),
+          autoFrame: state.panelStats?.autoFrame ?? null,
+          intervals: state.panelStats?.intervals ?? null,
+          adaptation: state.panelStats?.adaptation ?? null,
+        });
+      }
     }
-    await clickButton(cdp, "Backgrounds");
+    await clickSelector(cdp, "#video-effects-tab-backgrounds");
 
     const backgroundProbes = [];
     for (const label of backgroundLabels) {
@@ -4148,10 +4476,42 @@ const run = async () => {
           let stats = null;
           try { stats = raw ? JSON.parse(raw) : null; } catch {}
           const render = stats?.backgroundRender;
+          const temporalMask = stats?.temporalMask;
           const previewMatchesOutput =
             panel?.getAttribute("data-video-effects-preview-matches-output") === "true";
           const imageReady = ${JSON.stringify(imageBackedBackgroundIds.has(expectedBackgroundId))}
             ? render?.hasBackgroundImage === true
+            : true;
+          const replacementCadenceHealthy = ${JSON.stringify(imageBackedBackgroundIds.has(expectedBackgroundId))}
+            ? Number(stats?.intervals?.segmentationIntervalMs || 999) <= 72 &&
+              Number(stats?.adaptation?.targetSegmentationIntervalMs || 999) <= 72
+            : true;
+          const imageHaloSuppressed = ${JSON.stringify(imageBackedBackgroundIds.has(expectedBackgroundId))}
+            ? render?.edgeUnderlaySourceBackedBackground === false &&
+              Number(render?.edgeUnderlayRawHaloSuppression ?? 0) >= 0.98 &&
+              render?.edgeUnderlayActive === false &&
+              Number(render?.edgeUnderlayAlpha || 0) <= 0.001 &&
+              Number(render?.outerEdgeUnderlayAlpha || 0) <= 0.001 &&
+              Number(render?.foregroundMatteGatePasses || 0) >= 1 &&
+              render?.foregroundColorBleedActive === true &&
+              Number(render?.foregroundColorBleedAlpha || 0) > 0 &&
+              Number(render?.foregroundColorBleedBlurPx || 0) > 0 &&
+              Number(render?.foregroundColorBleedBlurPx || 0) <= 1 &&
+              render?.foregroundCoreRestoreActive === true &&
+              Number(render?.foregroundCoreRestoreAlpha || 0) > 0 &&
+              Number(render?.foregroundCoreRestoreGatePasses || 0) >= 2 &&
+              Number(temporalMask?.riseAlpha || 0) >= 0.9 &&
+              Number(temporalMask?.fallAlpha || 1) <= 0.6 &&
+              Number(temporalMask?.edgeGrowAlpha || 0) >= 0.2 &&
+              Number(temporalMask?.edgeErodeAlpha || 1) <= 0.32 &&
+              Number(temporalMask?.edgeFeatherPx || 0) >= 0.45 &&
+              Number(render?.sourceMotionScore ?? -1) >= 0 &&
+              Number(render?.sourceMotionChangedPixelRatio ?? -1) >= 0 &&
+              Number(render?.sourceMotionAverageLumaDelta ?? -1) >= 0 &&
+              Number(render?.sourceMotionEdgeBoost ?? -1) >= 0 &&
+              typeof render?.sourceMotionMaskActive === "boolean" &&
+              Number(render?.sourceMotionForegroundRestoreAlpha ?? -1) >= 0 &&
+              Number(render?.sourceMotionForegroundRestoreBlurPx ?? -1) >= 0
             : true;
           return panel?.getAttribute("data-video-effects-status") === "running" &&
             panel?.getAttribute("data-video-effects-output-published") === "true" &&
@@ -4160,7 +4520,9 @@ const run = async () => {
             render?.background === ${JSON.stringify(expectedBackgroundId)} &&
             render?.active === true &&
             Number(render?.changedPixels || 0) > 0 &&
-            imageReady;
+            imageReady &&
+            imageHaloSuppressed &&
+            replacementCadenceHealthy;
         })()`,
         30000,
       );
@@ -4180,11 +4542,262 @@ const run = async () => {
           state.panelAttrs?.["data-video-effects-preview-matches-output"] ===
           "true",
         render,
+        temporalMask: state.panelStats?.temporalMask ?? null,
+        sourceMotion:
+          state.panelStats?.sourceMotion ??
+          (render
+            ? {
+                score: render.sourceMotionScore ?? 0,
+                boost: render.sourceMotionEdgeBoost ?? 0,
+                changedPixelRatio: render.sourceMotionChangedPixelRatio ?? 0,
+                averageLumaDelta: render.sourceMotionAverageLumaDelta ?? 0,
+                maskActive: render.sourceMotionMaskActive ?? false,
+                foregroundRestoreAlpha:
+                  render.sourceMotionForegroundRestoreAlpha ?? 0,
+                foregroundRestoreBlurPx:
+                  render.sourceMotionForegroundRestoreBlurPx ?? 0,
+              }
+            : null),
+        intervals: state.panelStats?.intervals ?? null,
+        adaptation: state.panelStats?.adaptation ?? null,
       };
       backgroundProbes.push(backgroundProbe);
       emit("background_probe", backgroundProbe);
     }
     emit("background_probe_summary", { backgroundProbes });
+
+    const combinedBackgroundLabel =
+      backgroundLabels.length > 0
+        ? backgroundLabels[backgroundLabels.length - 1]
+        : null;
+    const combinedBackgroundId = combinedBackgroundLabel
+      ? backgroundIdByLabel.get(combinedBackgroundLabel) ?? null
+      : null;
+    const shouldProbeCombinedImageEffects =
+      Boolean(primaryFaceFilterLabel && primaryFaceFilterId) &&
+      Boolean(combinedBackgroundLabel && combinedBackgroundId) &&
+      imageBackedBackgroundIds.has(combinedBackgroundId);
+
+    if (shouldProbeCombinedImageEffects) {
+      await clickSelector(cdp, "#video-effects-tab-filters");
+      await clickButton(cdp, primaryFaceFilterLabel);
+      await waitFor(
+        cdp,
+        `${combinedBackgroundLabel} background with ${primaryFaceFilterLabel} filter`,
+        `(() => {
+          const panel = document.querySelector('[data-testid="video-effects-panel"]');
+          const raw = panel?.getAttribute("data-video-effects-stats");
+          let stats = null;
+          try { stats = raw ? JSON.parse(raw) : null; } catch {}
+          const debug =
+            typeof window.__conclaveGetMeetVideoDebug === "function"
+              ? window.__conclaveGetMeetVideoDebug()
+              : window.__conclaveMeetVideoDebug ?? null;
+          const backgroundRender = stats?.backgroundRender;
+          const faceRender = stats?.faceFilterRender;
+          const outputHealthy =
+            panel?.getAttribute("data-video-effects-status") === "running" &&
+            panel?.getAttribute("data-video-effects-output-published") === "true" &&
+            panel?.getAttribute("data-video-effects-preview-matches-output") === "true" &&
+            Number(panel?.getAttribute("data-video-effects-black-output-count") || 1) === 0 &&
+            stats?.effects?.background === ${JSON.stringify(combinedBackgroundId)} &&
+            stats?.effects?.filter === ${JSON.stringify(primaryFaceFilterId)} &&
+            stats?.needsSegmentation === true &&
+            stats?.needsFace === true &&
+            backgroundRender?.background === ${JSON.stringify(combinedBackgroundId)} &&
+            backgroundRender?.active === true &&
+            backgroundRender?.hasBackgroundImage === true &&
+            backgroundRender?.edgeUnderlayActive === false &&
+            Number(backgroundRender?.edgeUnderlayAlpha || 0) <= 0.001 &&
+            Number(backgroundRender?.outerEdgeUnderlayAlpha || 0) <= 0.001 &&
+            Number(backgroundRender?.edgeUnderlayRawHaloSuppression ?? 0) >= 0.98 &&
+            Number(backgroundRender?.changedPixels || 0) > 0 &&
+            faceRender?.filter === ${JSON.stringify(primaryFaceFilterId)} &&
+            debug?.publish?.shouldPublishProcessed === true &&
+            debug?.publish?.usingProcessedTrack === true &&
+            debug?.publish?.producerTrackLive === true;
+          if (!${JSON.stringify(expectFaceLandmarks)}) return outputHealthy;
+          return outputHealthy &&
+            Number(stats?.faceLandmarkCount || 0) > 0 &&
+            faceRender?.drawn === true &&
+            Number(faceRender?.changedPixels || 0) > 0;
+        })()`,
+        30000,
+      );
+      state = await collectState(
+        cdp,
+        "state_after_image_background_then_filter",
+      );
+      await waitForMeetVideoPublish(
+        cdp,
+        `${combinedBackgroundLabel} plus ${primaryFaceFilterLabel} producer uses processed output`,
+        "processed",
+      );
+      emit("background_filter_combo_probe", {
+        order: "background-first",
+        backgroundLabel: combinedBackgroundLabel,
+        expectedBackgroundId: combinedBackgroundId,
+        filterLabel: primaryFaceFilterLabel,
+        expectedFilterId: primaryFaceFilterId,
+        outputTrackPublished: state.panelStats?.outputTrackPublished === true,
+        previewMatchesOutput:
+          state.panelAttrs?.["data-video-effects-preview-matches-output"] ===
+          "true",
+        publish: state.meetVideoDebug?.publish ?? null,
+        backgroundRender: state.panelStats?.backgroundRender ?? null,
+        faceFilterRender: state.panelStats?.faceFilterRender ?? null,
+      });
+
+      await clickButton(cdp, "No filter");
+      await clickSelector(cdp, "#video-effects-tab-backgrounds");
+      await clickButton(cdp, "No background");
+      await waitFor(
+        cdp,
+        "combined effect reset before filter-first probe",
+        `(() => {
+          const panel = document.querySelector('[data-testid="video-effects-panel"]');
+          const raw = panel?.getAttribute("data-video-effects-stats");
+          let stats = null;
+          try { stats = raw ? JSON.parse(raw) : null; } catch {}
+          const debug =
+            typeof window.__conclaveGetMeetVideoDebug === "function"
+              ? window.__conclaveGetMeetVideoDebug()
+              : window.__conclaveMeetVideoDebug ?? null;
+          const effects = stats?.effects ?? debug?.videoEffects;
+          return effects?.background === "none" &&
+            effects?.filter === "none" &&
+            panel?.getAttribute("data-video-effects-status") === "off" &&
+            panel?.getAttribute("data-video-effects-output-published") === "false" &&
+            ["raw", "none"].includes(
+              panel?.getAttribute("data-video-effects-frame-source")
+            ) &&
+            Number(panel?.getAttribute("data-video-effects-black-output-count") || 0) === 0;
+        })()`,
+        20000,
+      );
+      await clickSelector(cdp, "#video-effects-tab-filters");
+      await clickButton(cdp, primaryFaceFilterLabel);
+      await waitFor(
+        cdp,
+        `${primaryFaceFilterLabel} filter before image background`,
+        `(() => {
+          const panel = document.querySelector('[data-testid="video-effects-panel"]');
+          const raw = panel?.getAttribute("data-video-effects-stats");
+          let stats = null;
+          try { stats = raw ? JSON.parse(raw) : null; } catch {}
+          const debug =
+            typeof window.__conclaveGetMeetVideoDebug === "function"
+              ? window.__conclaveGetMeetVideoDebug()
+              : window.__conclaveMeetVideoDebug ?? null;
+          const faceRender = stats?.faceFilterRender;
+          const outputHealthy =
+            panel?.getAttribute("data-video-effects-status") === "running" &&
+            panel?.getAttribute("data-video-effects-output-published") === "true" &&
+            panel?.getAttribute("data-video-effects-preview-matches-output") === "true" &&
+            Number(panel?.getAttribute("data-video-effects-black-output-count") || 1) === 0 &&
+            stats?.effects?.background === "none" &&
+            stats?.effects?.filter === ${JSON.stringify(primaryFaceFilterId)} &&
+            stats?.needsSegmentation === false &&
+            stats?.needsFace === true &&
+            faceRender?.filter === ${JSON.stringify(primaryFaceFilterId)} &&
+            debug?.publish?.shouldPublishProcessed === true &&
+            debug?.publish?.usingProcessedTrack === true &&
+            debug?.publish?.producerTrackLive === true;
+          if (!${JSON.stringify(expectFaceLandmarks)}) return outputHealthy;
+          return outputHealthy &&
+            Number(stats?.faceLandmarkCount || 0) > 0 &&
+            faceRender?.drawn === true &&
+            Number(faceRender?.changedPixels || 0) > 0;
+        })()`,
+        30000,
+      );
+      await clickSelector(cdp, "#video-effects-tab-backgrounds");
+      await clickButton(cdp, combinedBackgroundLabel);
+      await waitFor(
+        cdp,
+        `${primaryFaceFilterLabel} filter with ${combinedBackgroundLabel} background`,
+        `(() => {
+          const panel = document.querySelector('[data-testid="video-effects-panel"]');
+          const raw = panel?.getAttribute("data-video-effects-stats");
+          let stats = null;
+          try { stats = raw ? JSON.parse(raw) : null; } catch {}
+          const debug =
+            typeof window.__conclaveGetMeetVideoDebug === "function"
+              ? window.__conclaveGetMeetVideoDebug()
+              : window.__conclaveMeetVideoDebug ?? null;
+          const backgroundRender = stats?.backgroundRender;
+          const faceRender = stats?.faceFilterRender;
+          const outputHealthy =
+            panel?.getAttribute("data-video-effects-status") === "running" &&
+            panel?.getAttribute("data-video-effects-output-published") === "true" &&
+            panel?.getAttribute("data-video-effects-preview-matches-output") === "true" &&
+            Number(panel?.getAttribute("data-video-effects-black-output-count") || 1) === 0 &&
+            stats?.effects?.background === ${JSON.stringify(combinedBackgroundId)} &&
+            stats?.effects?.filter === ${JSON.stringify(primaryFaceFilterId)} &&
+            stats?.needsSegmentation === true &&
+            stats?.needsFace === true &&
+            backgroundRender?.background === ${JSON.stringify(combinedBackgroundId)} &&
+            backgroundRender?.active === true &&
+            backgroundRender?.hasBackgroundImage === true &&
+            backgroundRender?.edgeUnderlayActive === false &&
+            Number(backgroundRender?.edgeUnderlayAlpha || 0) <= 0.001 &&
+            Number(backgroundRender?.outerEdgeUnderlayAlpha || 0) <= 0.001 &&
+            Number(backgroundRender?.edgeUnderlayRawHaloSuppression ?? 0) >= 0.98 &&
+            Number(backgroundRender?.changedPixels || 0) > 0 &&
+            faceRender?.filter === ${JSON.stringify(primaryFaceFilterId)} &&
+            debug?.publish?.shouldPublishProcessed === true &&
+            debug?.publish?.usingProcessedTrack === true &&
+            debug?.publish?.producerTrackLive === true;
+          if (!${JSON.stringify(expectFaceLandmarks)}) return outputHealthy;
+          return outputHealthy &&
+            Number(stats?.faceLandmarkCount || 0) > 0 &&
+            faceRender?.drawn === true &&
+            Number(faceRender?.changedPixels || 0) > 0;
+        })()`,
+        30000,
+      );
+      state = await collectState(
+        cdp,
+        "state_after_filter_then_image_background",
+      );
+      await waitForMeetVideoPublish(
+        cdp,
+        `${primaryFaceFilterLabel} plus ${combinedBackgroundLabel} producer uses processed output`,
+        "processed",
+      );
+      emit("background_filter_combo_probe", {
+        order: "filter-first",
+        backgroundLabel: combinedBackgroundLabel,
+        expectedBackgroundId: combinedBackgroundId,
+        filterLabel: primaryFaceFilterLabel,
+        expectedFilterId: primaryFaceFilterId,
+        outputTrackPublished: state.panelStats?.outputTrackPublished === true,
+        previewMatchesOutput:
+          state.panelAttrs?.["data-video-effects-preview-matches-output"] ===
+          "true",
+        publish: state.meetVideoDebug?.publish ?? null,
+        backgroundRender: state.panelStats?.backgroundRender ?? null,
+        faceFilterRender: state.panelStats?.faceFilterRender ?? null,
+      });
+
+      if (backgroundFilterComboOnly) {
+        emit("result", {
+          ok: true,
+          probe: headlessProbe,
+          backgroundFilterComboOnly: true,
+        });
+        return;
+      }
+    }
+
+    if (backgroundRenderOnly) {
+      emit("result", {
+        ok: true,
+        probe: headlessProbe,
+        backgroundRenderOnly: true,
+      });
+      return;
+    }
 
     await uploadCustomBackground(cdp);
     await waitFor(
@@ -4349,7 +4962,7 @@ const run = async () => {
       30000,
     );
 
-    await clickButton(cdp, "Filters");
+    await clickSelector(cdp, "#video-effects-tab-filters");
     await sleep(500);
 
     const faceProbes = [];
@@ -4528,7 +5141,9 @@ const run = async () => {
         return panel?.getAttribute("data-video-effects-status") === "off" &&
           panel?.getAttribute("data-video-effects-active-count") === "0" &&
           panel?.getAttribute("data-video-effects-output-published") === "false" &&
-          panel?.getAttribute("data-video-effects-frame-source") === "raw" &&
+          ["raw", "none"].includes(
+            panel?.getAttribute("data-video-effects-frame-source")
+          ) &&
           Number(panel?.getAttribute("data-video-effects-black-output-count") || 0) === 0 &&
           rawPublishHealthy;
       })()`,
@@ -4550,7 +5165,7 @@ const run = async () => {
       videos: disabledState.videos,
     });
 
-    await clickButton(cdp, "Backgrounds");
+    await clickSelector(cdp, "#video-effects-tab-backgrounds");
     await clickButton(cdp, "Blur your background");
     const reenabledPassthrough = await waitFor(
       cdp,
@@ -4593,8 +5208,8 @@ const run = async () => {
       })()`,
       30000,
     );
-    await clickButton(cdp, "Filters");
-    await clickButton(cdp, "Sparkles");
+    await clickSelector(cdp, "#video-effects-tab-filters");
+    await clickTestId(cdp, "video-effects-filter-beach-day");
     await waitFor(
       cdp,
       "filter output after effects disabled",
@@ -4612,7 +5227,7 @@ const run = async () => {
         if (!${JSON.stringify(expectFaceLandmarks)}) return outputHealthy;
         return outputHealthy &&
           Number(stats?.faceLandmarkCount || 0) > 0 &&
-          render?.filter === "sparkles" &&
+          render?.filter === "beach-day" &&
           render?.drawn === true &&
           Number(render?.changedPixels || 0) > 0;
       })()`,
@@ -4636,16 +5251,16 @@ const run = async () => {
       "processed",
     );
 
-    await clickButton(cdp, "Backgrounds");
+    await clickSelector(cdp, "#video-effects-tab-backgrounds");
     rapidEffectSwitchLogIndex = cdp.logs.length;
     for (const label of ["Office shelf", "Color field", "Slight blur", "Blur"]) {
       await clickButton(cdp, label);
       await sleep(75);
     }
-    await clickButton(cdp, "Filters");
+    await clickSelector(cdp, "#video-effects-tab-filters");
     const rapidFilterLabels = expectFaceLandmarks
-      ? ["Glasses", "No filter", "Light halo", "Sparkles"]
-      : ["No filter", "Sparkles"];
+      ? ["Glasses", "No filter", "Light halo", "Beach day"]
+      : ["No filter", "Beach day"];
     for (const label of rapidFilterLabels) {
       await clickButton(cdp, label);
       await sleep(75);
@@ -4765,7 +5380,10 @@ const run = async () => {
             modelProcessingConfigId &&
           Number(faceProcessor?.latestWorkerResult?.width || 0) > 0 &&
           Number(faceProcessor?.latestWorkerResult?.height || 0) > 0 &&
-          faceProcessor?.latestWorkerResult?.inputSource === "video-frame" &&
+          (
+            faceProcessor?.latestWorkerResult?.inputSource === "video-frame" ||
+            faceProcessor?.latestWorkerResult?.inputSource === "image-bitmap"
+          ) &&
           (!${JSON.stringify(expectFaceLandmarks)} ||
             Number(faceProcessor?.latestWorkerResult?.landmarkCount || 0) > 0);
         const segmentationProcessorHealthy =
@@ -4787,7 +5405,10 @@ const run = async () => {
             modelProcessingConfigId &&
           Number(segmentationProcessor?.latestWorkerResult?.width || 0) > 0 &&
           Number(segmentationProcessor?.latestWorkerResult?.height || 0) > 0 &&
-          segmentationProcessor?.latestWorkerResult?.inputSource === "video-frame" &&
+          (
+            segmentationProcessor?.latestWorkerResult?.inputSource === "video-frame" ||
+            segmentationProcessor?.latestWorkerResult?.inputSource === "image-bitmap"
+          ) &&
           ["tasks-confidence", "tasks-category"].includes(
             segmentationProcessor?.latestWorkerResult?.source
           ) &&
@@ -4841,7 +5462,7 @@ const run = async () => {
           backgroundRender?.active === true &&
           Number(backgroundRender?.changedPixels || 0) > 0 &&
           stats?.needsFace === true &&
-          faceRender?.filter === "sparkles" &&
+          faceRender?.filter === "beach-day" &&
           ["video-frame", "track-processor"].includes(stats?.schedulerMode) &&
           stats?.outputMode === "track-generator" &&
           transitionHealthy &&
@@ -4945,7 +5566,7 @@ const run = async () => {
     await clickButton(cdp, "Active effects");
     await waitFor(
       cdp,
-      "active effects stack contains blur and sparkles",
+      "active effects stack contains blur and beach day",
       `(() => {
         const panel = document.querySelector('[data-testid="video-effects-panel"]');
         if (!panel) return false;
@@ -4956,15 +5577,15 @@ const run = async () => {
         const removeBlur = Array.from(stack.querySelectorAll("button")).some(
           (button) => button.getAttribute("aria-label") === "Remove Blur"
         );
-        const removeSparkles = Array.from(stack.querySelectorAll("button")).some(
-          (button) => button.getAttribute("aria-label") === "Remove Sparkles"
+        const removeBeachDay = Array.from(stack.querySelectorAll("button")).some(
+          (button) => button.getAttribute("aria-label") === "Remove Beach day"
         );
         return panel.getAttribute("data-video-effects-active-count") === "2" &&
           stack.getAttribute("data-video-effects-active-stack-open") === "true" &&
           Boolean(backgroundItem) &&
           Boolean(filterItem) &&
           removeBlur &&
-          removeSparkles;
+          removeBeachDay;
       })()`,
       10000,
     );
@@ -4986,7 +5607,7 @@ const run = async () => {
         const hasFilterItem = Boolean(stack?.querySelector("[data-video-effects-active-item='filter']"));
         const faceRender = stats?.faceFilterRender;
         const outputHealthy = stored?.background === "none" &&
-          stored?.filter === "sparkles" &&
+          stored?.filter === "beach-day" &&
           panel?.getAttribute("data-video-effects-status") === "running" &&
           panel?.getAttribute("data-video-effects-active-count") === "1" &&
           panel?.getAttribute("data-video-effects-output-published") === "true" &&
@@ -4995,7 +5616,7 @@ const run = async () => {
           hasFilterItem &&
           !hasBackgroundItem &&
           stats?.needsFace === true &&
-          faceRender?.filter === "sparkles";
+          faceRender?.filter === "beach-day";
         if (!${JSON.stringify(expectFaceLandmarks)}) return outputHealthy;
         return outputHealthy &&
           Number(stats?.faceLandmarkCount || 0) > 0 &&
@@ -5017,7 +5638,7 @@ const run = async () => {
       faceFilterRender: state.panelStats?.faceFilterRender ?? null,
     });
 
-    await clickButton(cdp, "Backgrounds");
+    await clickSelector(cdp, "#video-effects-tab-backgrounds");
     await clickButton(cdp, "Blur your background");
     await waitFor(
       cdp,
@@ -5032,16 +5653,16 @@ const run = async () => {
           stored = JSON.parse(localStorage.getItem("conclave:video-effects") || "null");
         } catch {}
         return stored?.background === "blur-strong" &&
-          stored?.filter === "sparkles" &&
+          stored?.filter === "beach-day" &&
           panel?.getAttribute("data-video-effects-status") === "running" &&
           panel?.getAttribute("data-video-effects-active-count") === "2" &&
           stats?.backgroundRender?.background === "blur-strong" &&
-          stats?.faceFilterRender?.filter === "sparkles";
+          stats?.faceFilterRender?.filter === "beach-day";
       })()`,
       30000,
     );
 
-    await clickButton(cdp, "Appearance");
+    await clickSelector(cdp, "#video-effects-tab-appearance");
     await clickTestId(cdp, "video-effects-appearance-studio-look");
     await clickTestId(cdp, "video-effects-appearance-style-mono");
     await waitFor(
@@ -5058,7 +5679,7 @@ const run = async () => {
         } catch {}
         const switches = Array.from(panel?.querySelectorAll('[role="switch"]') ?? []);
         const touchUpSwitch = switches.find((button) =>
-          (button.textContent || "").includes("Touch-up appearance")
+          (button.textContent || "").includes("Studio look")
         );
         const selected = Array.from(panel?.querySelectorAll("button") ?? []).some(
           (button) =>
@@ -5067,7 +5688,7 @@ const run = async () => {
         );
         const effects = stats?.effects;
         return stored?.background === "blur-strong" &&
-          stored?.filter === "sparkles" &&
+          stored?.filter === "beach-day" &&
           stored?.style === "mono" &&
           stored?.studioLook === true &&
           effects?.style === "mono" &&
@@ -5113,7 +5734,7 @@ const run = async () => {
           stored = JSON.parse(localStorage.getItem("conclave:video-effects") || "null");
         } catch {}
         return stored?.background === "blur-strong" &&
-          stored?.filter === "sparkles" &&
+          stored?.filter === "beach-day" &&
           stored?.style === "mono" &&
           stored?.studioLighting === false &&
           stored?.studioLook === true &&
@@ -5156,7 +5777,7 @@ const run = async () => {
           }
         })();
         const outputHealthy = stored?.background === "blur-strong" &&
-          stored?.filter === "sparkles" &&
+          stored?.filter === "beach-day" &&
           stored?.style === "mono" &&
           stored?.studioLook === true &&
           stats?.effects?.style === "mono" &&
@@ -5170,7 +5791,7 @@ const run = async () => {
           backgroundRender?.active === true &&
           Number(backgroundRender?.changedPixels || 0) > 0 &&
           stats?.needsFace === true &&
-          faceRender?.filter === "sparkles";
+          faceRender?.filter === "beach-day";
         if (!${JSON.stringify(expectFaceLandmarks)}) return outputHealthy;
         return outputHealthy &&
           Number(stats?.faceLandmarkCount || 0) > 0 &&
