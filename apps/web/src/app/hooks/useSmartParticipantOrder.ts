@@ -36,7 +36,6 @@ const hasLiveTrack = (
 const getMediaPriority = (participant: ParticipantWithMediaHints): number => {
   const hasVideo =
     !participant.isCameraOff &&
-    !participant.isVideoAdaptivelyPaused &&
     hasLiveTrack(participant.videoStream, "video");
   if (hasVideo) return 2;
   const hasAudio =

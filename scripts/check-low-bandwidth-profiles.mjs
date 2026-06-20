@@ -9,6 +9,9 @@ const files = {
   webCodec: "apps/web/src/app/lib/webcam-codec.ts",
   webNetworkInformation: "apps/web/src/app/lib/network-information.ts",
   webConnectionQuality: "apps/web/src/app/hooks/useConnectionQuality.ts",
+  webParticipantMedia: "apps/web/src/app/lib/participant-media.ts",
+  webSmartParticipantOrder:
+    "apps/web/src/app/hooks/useSmartParticipantOrder.ts",
   webAdaptivePublishQuality:
     "apps/web/src/app/hooks/useAdaptivePublishQuality.ts",
   webAdaptiveConsumerPreferences:
@@ -431,6 +434,16 @@ assertNotIncludes(
   "webAdaptiveConsumerPreferences",
   "priority: 8,\n        paused: true,",
   "web emergency receive adaptation must not silently pause remote webcams",
+);
+assertNotIncludes(
+  "webParticipantMedia",
+  "participant.isCameraOff || participant.isVideoAdaptivelyPaused",
+  "web adaptive receive state must not hide remote webcam streams",
+);
+assertNotIncludes(
+  "webSmartParticipantOrder",
+  "!participant.isVideoAdaptivelyPaused",
+  "web adaptive receive state must not reshuffle remote webcams as video-off",
 );
 assertIncludes(
   "webAdaptiveConsumerPreferences",

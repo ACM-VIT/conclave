@@ -10,7 +10,7 @@ type ParticipantVideoState = Pick<
 export function getRenderableParticipantVideoStream(
   participant: ParticipantVideoState,
 ): MediaStream | null {
-  if (participant.isCameraOff || participant.isVideoAdaptivelyPaused) {
+  if (participant.isCameraOff) {
     return null;
   }
   return participant.videoStream;
