@@ -1237,7 +1237,6 @@ function GridLayout({
     video.addEventListener("loadeddata", scheduleReplay);
     video.addEventListener("canplay", scheduleReplay);
     video.addEventListener("stalled", scheduleReplay);
-    video.addEventListener("suspend", scheduleReplay);
     document.addEventListener("visibilitychange", handleVisibilityChange);
 
     return () => {
@@ -1247,7 +1246,6 @@ function GridLayout({
       video.removeEventListener("loadeddata", scheduleReplay);
       video.removeEventListener("canplay", scheduleReplay);
       video.removeEventListener("stalled", scheduleReplay);
-      video.removeEventListener("suspend", scheduleReplay);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
       playbackRecovery.clear();
       if (video.srcObject === localStream) {
@@ -3201,7 +3199,6 @@ const PresentationVideoTile = memo(function PresentationVideoTile({
     video.addEventListener("loadeddata", scheduleReplay);
     video.addEventListener("canplay", scheduleReplay);
     video.addEventListener("stalled", scheduleReplay);
-    video.addEventListener("suspend", scheduleReplay);
     document.addEventListener("visibilitychange", handleVisibilityChange);
 
     return () => {
@@ -3211,7 +3208,6 @@ const PresentationVideoTile = memo(function PresentationVideoTile({
       video.removeEventListener("loadeddata", scheduleReplay);
       video.removeEventListener("canplay", scheduleReplay);
       video.removeEventListener("stalled", scheduleReplay);
-      video.removeEventListener("suspend", scheduleReplay);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
       playbackRecovery.clear();
       if (video.srcObject === stream) {

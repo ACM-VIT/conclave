@@ -1,5 +1,6 @@
-const DEFAULT_REPLAY_DELAYS_MS = [80, 220, 480, 900, 1500];
-const MAX_ANIMATION_FRAME_REPLAYS = 24;
+const DEFAULT_REPLAY_DELAYS_MS = [120, 420, 900];
+const MAX_ANIMATION_FRAME_REPLAYS = 8;
+const MIN_SCHEDULE_INTERVAL_MS = 350;
 
 type PlaybackRecoverySchedulerOptions = {
   attemptPlayback: () => void;
@@ -12,6 +13,7 @@ export const createPlaybackRecoveryScheduler = ({
 }: PlaybackRecoverySchedulerOptions) => {
   const timeoutIds = new Set<number>();
   let animationFrameId: number | null = null;
+  let lastScheduleAt = 0;
 
   const clear = () => {
     timeoutIds.forEach((timeoutId) => {
@@ -26,6 +28,14 @@ export const createPlaybackRecoveryScheduler = ({
   };
 
   const schedule = () => {
+    const now = Date.now();
+    if (
+      (timeoutIds.size > 0 || animationFrameId !== null) &&
+      now - lastScheduleAt < MIN_SCHEDULE_INTERVAL_MS
+    ) {
+      return;
+    }
+    lastScheduleAt = now;
     clear();
     attemptPlayback();
 

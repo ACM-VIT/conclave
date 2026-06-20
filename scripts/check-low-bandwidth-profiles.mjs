@@ -12,6 +12,12 @@ const files = {
     "apps/web/src/app/hooks/useAdaptivePublishQuality.ts",
   webAdaptiveConsumerPreferences:
     "apps/web/src/app/hooks/useAdaptiveConsumerPreferences.ts",
+  webPlaybackRecovery: "apps/web/src/app/lib/playback-recovery.ts",
+  webParticipantVideo: "apps/web/src/app/components/ParticipantVideo.tsx",
+  webGridLayout: "apps/web/src/app/components/GridLayout.tsx",
+  webPresentationLayout: "apps/web/src/app/components/PresentationLayout.tsx",
+  webMobilePresentationLayout:
+    "apps/web/src/app/components/mobile/MobilePresentationLayout.tsx",
   webMeetClient: "apps/web/src/app/meets-client.tsx",
   webMeetMedia: "apps/web/src/app/hooks/useMeetMedia.ts",
   webJoinScreen: "apps/web/src/app/components/JoinScreen.tsx",
@@ -200,6 +206,28 @@ assertIncludes(
   "inboundJitterWeightedMs += jitter * 1000 * jitterWeight",
   "web weighted inbound jitter",
 );
+assertIncludes(
+  "webPlaybackRecovery",
+  "const MAX_ANIMATION_FRAME_REPLAYS = 8;",
+  "web playback recovery animation-frame replay cap",
+);
+assertIncludes(
+  "webPlaybackRecovery",
+  "const MIN_SCHEDULE_INTERVAL_MS = 350;",
+  "web playback recovery schedule throttle",
+);
+for (const [key, label] of [
+  ["webParticipantVideo", "participant video"],
+  ["webGridLayout", "grid video"],
+  ["webPresentationLayout", "presentation video"],
+  ["webMobilePresentationLayout", "mobile presentation video"],
+]) {
+  assertNotIncludes(
+    key,
+    'addEventListener("suspend", scheduleReplay)',
+    `web ${label} should not replay on benign suspend events`,
+  );
+}
 assertRegex(
   "webAdaptiveConsumerPreferences",
   /const effectiveQuality = worstQuality\([\s\S]*options\.quality === "good" \|\| options\.quality === "fair"[\s\S]*\? "unknown"[\s\S]*: getConsumerScoreQualityHint/,

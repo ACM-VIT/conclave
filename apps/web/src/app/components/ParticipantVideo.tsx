@@ -123,7 +123,6 @@ function ParticipantVideo({
     video.addEventListener("loadeddata", scheduleReplay);
     video.addEventListener("canplay", scheduleReplay);
     video.addEventListener("stalled", scheduleReplay);
-    video.addEventListener("suspend", scheduleReplay);
     document.addEventListener("visibilitychange", handleVisibilityChange);
     window.addEventListener("resize", handleResize);
     window.addEventListener("orientationchange", handleOrientationChange);
@@ -137,7 +136,6 @@ function ParticipantVideo({
       video.removeEventListener("loadeddata", scheduleReplay);
       video.removeEventListener("canplay", scheduleReplay);
       video.removeEventListener("stalled", scheduleReplay);
-      video.removeEventListener("suspend", scheduleReplay);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
       window.removeEventListener("resize", handleResize);
       window.removeEventListener("orientationchange", handleOrientationChange);

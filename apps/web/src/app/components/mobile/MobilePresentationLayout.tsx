@@ -5,6 +5,7 @@ import { memo, useEffect, useRef } from "react";
 import { Avatar } from "@conclave/ui-tokens/web";
 import { useSmartParticipantOrder } from "../../hooks/useSmartParticipantOrder";
 import { getRenderableParticipantVideoStream } from "../../lib/participant-media";
+import { createPlaybackRecoveryScheduler } from "../../lib/playback-recovery";
 import type { Participant } from "../../lib/types";
 import { isSystemUserId, truncateDisplayName } from "../../lib/utils";
 
@@ -50,8 +51,6 @@ function MobilePresentationLayout({
     }
 
     let cancelled = false;
-    const replayTimeouts: number[] = [];
-    let replayRafId: number | null = null;
 
     const playVideo = () => {
       if (cancelled) return;
@@ -67,26 +66,14 @@ function MobilePresentationLayout({
       });
     };
 
-    const scheduleReplay = () => {
-      playVideo();
-      if (typeof window !== "undefined") {
-        for (const delay of [80, 220, 480, 900, 1500]) {
-          replayTimeouts.push(window.setTimeout(playVideo, delay));
-        }
-        let frameAttempts = 0;
-        const replayOnFrame = () => {
-          if (cancelled) return;
-          if (video.paused || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
-            playVideo();
-          }
-          frameAttempts += 1;
-          if (frameAttempts < 24) {
-            replayRafId = window.requestAnimationFrame(replayOnFrame);
-          }
-        };
-        replayRafId = window.requestAnimationFrame(replayOnFrame);
-      }
-    };
+    const playbackRecovery = createPlaybackRecoveryScheduler({
+      attemptPlayback: playVideo,
+      shouldAttemptAnimationFrameReplay: () =>
+        !cancelled &&
+        (video.paused ||
+          video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA),
+    });
+    const scheduleReplay = playbackRecovery.schedule;
 
     scheduleReplay();
 
@@ -107,7 +94,6 @@ function MobilePresentationLayout({
     video.addEventListener("loadeddata", scheduleReplay);
     video.addEventListener("canplay", scheduleReplay);
     video.addEventListener("stalled", scheduleReplay);
-    video.addEventListener("suspend", scheduleReplay);
     document.addEventListener("visibilitychange", handleVisibilityChange);
 
     return () => {
@@ -119,14 +105,8 @@ function MobilePresentationLayout({
       video.removeEventListener("loadeddata", scheduleReplay);
       video.removeEventListener("canplay", scheduleReplay);
       video.removeEventListener("stalled", scheduleReplay);
-      video.removeEventListener("suspend", scheduleReplay);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
-      for (const timeoutId of replayTimeouts) {
-        window.clearTimeout(timeoutId);
-      }
-      if (replayRafId !== null) {
-        window.cancelAnimationFrame(replayRafId);
-      }
+      playbackRecovery.clear();
       if (video.srcObject === presentationStream) {
         video.srcObject = null;
       }
