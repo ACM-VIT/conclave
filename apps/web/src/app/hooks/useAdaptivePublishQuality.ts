@@ -556,7 +556,11 @@ export function useAdaptivePublishQuality({
         return;
       }
       if (shouldRestoreStableStandardCapture) {
-        void restoreStandardCaptureIfNeeded();
+        void restoreStandardCaptureIfNeeded().finally(() => {
+          if (!updateInFlightRef.current) {
+            void applyLiveProducerProfile("good");
+          }
+        });
       } else {
         applyStableLiveProfile();
       }

@@ -1086,8 +1086,8 @@ assertRegex(
 );
 assertRegex(
   "webAdaptivePublishQuality",
-  /shouldRestoreStableStandardCapture[\s\S]*capRecoveryQuality === "good"[\s\S]*capRecoveryElapsedMs >= GOOD_LIVE_RESTORE_AFTER_MS[\s\S]*currentPublishQuality === "standard"[\s\S]*void restoreStandardCaptureIfNeeded\(\);[\s\S]*applyStableLiveProfile\(\);/,
-  "web adaptive good-link restore is serialized against live profile cap updates",
+  /shouldRestoreStableStandardCapture[\s\S]*capRecoveryQuality === "good"[\s\S]*capRecoveryElapsedMs >= GOOD_LIVE_RESTORE_AFTER_MS[\s\S]*currentPublishQuality === "standard"[\s\S]*void restoreStandardCaptureIfNeeded\(\)\.finally\(\(\) => \{[\s\S]*applyLiveProducerProfile\("good"\)[\s\S]*\} else \{[\s\S]*applyStableLiveProfile\(\);/,
+  "web adaptive good-link capture restore also restores good publish profiles",
 );
 {
   const text = source.webAdaptivePublishQuality;
