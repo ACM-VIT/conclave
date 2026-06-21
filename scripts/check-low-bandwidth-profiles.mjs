@@ -1772,8 +1772,8 @@ assertRegex(
 );
 assertRegex(
   "webMeetSocket",
-  /const handleReconnect = useCallback\(async \(\) => \{[\s\S]*reconnectInFlightRef\.current = true;[\s\S]*const shouldSurfaceReconnectState =[\s\S]*cleanupRoomResources\(\{[\s\S]*preserveMeetingState: true[\s\S]*await joinRoomInternal[\s\S]*\} finally \{[\s\S]*reconnectInFlightRef\.current = false;/,
-  "web hidden-tab reconnect keeps internal media recovery blocked across cleanup and rejoin",
+  /const reconnectGenerationRef = useRef\(0\);[\s\S]*const handleReconnect = useCallback\(async \(\) => \{[\s\S]*const reconnectGeneration = reconnectGenerationRef\.current;[\s\S]*reconnectInFlightRef\.current = true;[\s\S]*reconnectGeneration !== reconnectGenerationRef\.current[\s\S]*cleanupRoomResources\(\{[\s\S]*preserveMeetingState: true[\s\S]*await joinRoomInternal[\s\S]*\} finally \{[\s\S]*if \(reconnectGeneration === reconnectGenerationRef\.current\) \{[\s\S]*reconnectInFlightRef\.current = false;/,
+  "web hidden-tab reconnect keeps internal media recovery blocked and ignores stale manual-retry loops",
 );
 assertRegex(
   "webMeetSocket",
@@ -1792,8 +1792,23 @@ assertIncludes(
 );
 assertIncludes(
   "webMeetsMainContent",
+  "retryReconnect",
+  "web reconnect recovery overlay uses the reconnect retry path",
+);
+assertIncludes(
+  "webMeetSocket",
+  "const retryReconnect = useCallback",
+  "web reconnect flow exposes manual reconnect retry",
+);
+assertIncludes(
+  "webMeetSocket",
+  "reconnectGenerationRef.current += 1;",
+  "web reconnect retry cancels stale reconnect loops",
+);
+assertIncludes(
+  "webMeetsMainContent",
   "void joinRoomById(roomId);",
-  "web reconnect recovery overlay can retry without leaving the meeting surface",
+  "web reconnect recovery overlay has a join fallback without leaving the meeting surface",
 );
 assertIncludes(
   "webMeetsMainContent",

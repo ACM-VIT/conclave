@@ -3,7 +3,7 @@
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Dispatch, PointerEvent, SetStateAction } from "react";
-import { Loader2, LogOut, RefreshCw } from "lucide-react";
+import { LogOut, RefreshCw } from "lucide-react";
 import type { Socket } from "socket.io-client";
 import type { RoomInfo } from "@/lib/sfu-types";
 import ChatOverlay from "./ChatOverlay";
@@ -88,6 +88,7 @@ interface MeetsMainContentProps {
   roomId: string;
   setRoomId: Dispatch<SetStateAction<string>>;
   joinRoomById: (roomId: string) => void;
+  retryReconnect?: () => void;
   hideJoinUI?: boolean;
   isWebinarAttendee?: boolean;
   enableRoomRouting: boolean;
@@ -318,6 +319,7 @@ export default function MeetsMainContent({
   roomId,
   setRoomId,
   joinRoomById,
+  retryReconnect,
   hideJoinUI = false,
   isWebinarAttendee = false,
   enableRoomRouting,
@@ -1092,9 +1094,7 @@ export default function MeetsMainContent({
   const isRecoveringMeeting = isJoined && connectionState !== "joined";
   const isTerminalMeetingError =
     Boolean(meetError) && meetError?.recoverable === false;
-  const canRetryRecovery =
-    !isTerminalMeetingError &&
-    (connectionState === "disconnected" || connectionState === "error");
+  const canRetryRecovery = !isTerminalMeetingError && !isNetworkOffline;
   const recoveryTitle = isNetworkOffline
     ? "Waiting for internet"
     : isTerminalMeetingError
@@ -1130,47 +1130,42 @@ export default function MeetsMainContent({
       )}
       {isRecoveringMeeting && (
         <div
-          className="absolute inset-0 z-[95] flex items-start justify-center bg-[#050506]/45 px-4 pt-[clamp(5.5rem,16vh,8.5rem)] backdrop-blur-[1.5px]"
+          className="absolute inset-0 z-[95] flex items-center justify-center bg-[#050506]/70 px-4 backdrop-blur-md animate-fade-in"
           aria-live="assertive"
           aria-label="Reconnecting to the meeting"
         >
           <section
-            className="w-full max-w-[520px] rounded-lg border border-[#fafafa]/12 bg-[#111113]/95 p-4 text-left shadow-[0_18px_80px_rgba(0,0,0,0.42)]"
+            className="w-full max-w-[400px] animate-scale-in rounded-2xl border border-[#fafafa]/12 bg-[#131316]/95 px-7 py-8 text-center shadow-2xl"
             style={{ fontFamily: "'PolySans Trial', sans-serif" }}
+            role="dialog"
+            aria-modal="true"
           >
-            <div className="flex items-start gap-3.5">
-              <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-[#F95F4A]/24 bg-[#F95F4A]/10">
-                <Loader2
-                  size={19}
-                  strokeWidth={1.8}
-                  className="animate-spin text-[#F95F4A]"
-                />
-              </div>
-              <div className="min-w-0 flex-1">
-                <div className="flex flex-wrap items-center gap-2">
-                  <h2
-                    className="text-[16px] leading-tight text-[#fafafa]"
-                    style={{ fontFamily: "'PolySans Bulky Wide', sans-serif" }}
-                  >
-                    {recoveryTitle}
-                  </h2>
-                  <span className="rounded-full border border-[#F95F4A]/20 bg-[#F95F4A]/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.12em] text-[#F95F4A]">
-                    Meeting still open
-                  </span>
-                </div>
-                <p className="mt-1.5 text-[12.5px] leading-snug text-[#fafafa]/64">
-                  {recoveryDetail}
-                </p>
-              </div>
+            <div className="relative mx-auto h-11 w-11">
+              <div className="absolute inset-0 rounded-full border-2 border-[#fafafa]/10" />
+              <div className="absolute inset-0 animate-spin rounded-full border-2 border-transparent border-t-[#F95F4A]" />
+              <div className="absolute inset-[5px] rounded-full bg-[#F95F4A]/10" />
             </div>
-            <div className="mt-4 flex flex-wrap items-center justify-end gap-2">
+            <h2
+              className="mt-5 text-balance text-[17px] leading-tight text-[#fafafa]"
+              style={{ fontFamily: "'PolySans Bulky Wide', sans-serif" }}
+            >
+              {recoveryTitle}
+            </h2>
+            <p className="mx-auto mt-2 max-w-[280px] text-pretty text-[12.5px] leading-relaxed text-[#fafafa]/60">
+              {recoveryDetail}
+            </p>
+            <div className="mt-5 flex items-center justify-center gap-2.5">
               {canRetryRecovery ? (
                 <button
                   type="button"
                   onClick={() => {
+                    if (retryReconnect) {
+                      retryReconnect();
+                      return;
+                    }
                     void joinRoomById(roomId);
                   }}
-                  className="inline-flex h-9 items-center justify-center gap-2 rounded-md bg-[#F95F4A] px-3.5 text-[12.5px] font-medium text-white transition-[filter] hover:brightness-110"
+                  className="inline-flex h-9 items-center justify-center gap-2 rounded-full border border-[#F95F4A]/45 bg-[#F95F4A]/20 px-4 text-[12.5px] font-medium text-[#fafafa] transition-all hover:border-[#F95F4A]/70 hover:bg-[#F95F4A]/35"
                 >
                   <RefreshCw size={14} strokeWidth={1.8} />
                   Retry now
@@ -1179,7 +1174,7 @@ export default function MeetsMainContent({
               <button
                 type="button"
                 onClick={leaveRoom}
-                className="inline-flex h-9 items-center justify-center gap-2 rounded-md border border-[#fafafa]/12 px-3.5 text-[12.5px] font-medium text-[#fafafa]/76 transition-colors hover:border-[#fafafa]/24 hover:bg-[#fafafa]/[0.06] hover:text-[#fafafa]"
+                className="inline-flex h-9 items-center justify-center gap-2 rounded-full border border-[#fafafa]/15 px-4 text-[12.5px] font-medium text-[#fafafa]/76 transition-all hover:border-[#fafafa]/35 hover:bg-[#fafafa]/10 hover:text-[#fafafa]"
               >
                 <LogOut size={14} strokeWidth={1.8} />
                 Leave

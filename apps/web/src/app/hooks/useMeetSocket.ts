@@ -605,6 +605,7 @@ export function useMeetSocket({
   const runtimeStunIceServersRef = useRef<RTCIceServer[] | null>(null);
   const runtimeTurnIceServersRef = useRef<RTCIceServer[] | null>(null);
   const useTurnFallbackRef = useRef(false);
+  const reconnectGenerationRef = useRef(0);
   const serverRestartNoticeRef = useRef<string | null>(null);
   const adminNoticeTimeoutRef = useRef<number | null>(null);
   const consumeRetryAttemptsRef = useRef<Map<string, number>>(new Map());
@@ -4857,10 +4858,12 @@ export function useMeetSocket({
 
   const handleReconnect = useCallback(async () => {
     if (reconnectInFlightRef.current) return;
+    const reconnectGeneration = reconnectGenerationRef.current;
     reconnectInFlightRef.current = true;
 
     try {
       while (reconnectAttemptsRef.current < MAX_RECONNECT_ATTEMPTS) {
+        if (reconnectGeneration !== reconnectGenerationRef.current) return;
         // A terminal event (kick / ban / roomEnded / roomClosed / explicit
         // leave) sets intentionalDisconnectRef via cleanup(). If it lands while
         // this loop is already retrying a transient drop, stop fighting it —
@@ -4892,6 +4895,7 @@ export function useMeetSocket({
         await new Promise((r) => setTimeout(r, delay));
         // The terminal event may have arrived during the backoff wait.
         if (intentionalDisconnectRef.current) return;
+        if (reconnectGeneration !== reconnectGenerationRef.current) return;
 
         try {
           const reconnectRoomId = currentRoomIdRef.current;
@@ -4911,6 +4915,7 @@ export function useMeetSocket({
           } else {
             setMeetError(null);
           }
+          if (reconnectGeneration !== reconnectGenerationRef.current) return;
           // …or while the socket was (re)connecting — bail before rejoining so
           // we don't re-enter a room we were just removed from.
           if (intentionalDisconnectRef.current) return;
@@ -4951,6 +4956,7 @@ export function useMeetSocket({
           } else {
             throw new Error("Missing live local media for reconnect");
           }
+          if (reconnectGeneration !== reconnectGenerationRef.current) return;
           telemetry.capture("meet_reconnect_success", {
             roomId: reconnectRoomId ?? undefined,
             attempt: reconnectAttemptsRef.current,
@@ -4959,6 +4965,7 @@ export function useMeetSocket({
           reconnectAttemptsRef.current = 0;
           return;
         } catch (_err) {
+          if (reconnectGeneration !== reconnectGenerationRef.current) return;
           // retry
         }
       }
@@ -4966,6 +4973,7 @@ export function useMeetSocket({
       // Don't surface a reconnect-failure error if the user was kicked / the
       // room ended mid-loop — that terminal notice + state must stand.
       if (intentionalDisconnectRef.current) return;
+      if (reconnectGeneration !== reconnectGenerationRef.current) return;
 
       telemetry.capture("meet_reconnect_give_up", {
         roomId: currentRoomIdRef.current ?? undefined,
@@ -4979,7 +4987,9 @@ export function useMeetSocket({
       });
       setConnectionState("error");
     } finally {
-      reconnectInFlightRef.current = false;
+      if (reconnectGeneration === reconnectGenerationRef.current) {
+        reconnectInFlightRef.current = false;
+      }
     }
   }, [
     cleanupRoomResources,
@@ -5294,6 +5304,33 @@ export function useMeetSocket({
     [startJoin],
   );
 
+  const retryReconnect = useCallback(async () => {
+    const targetRoomId = currentRoomIdRef.current || roomId;
+    if (!targetRoomId) return;
+
+    reconnectGenerationRef.current += 1;
+    reconnectAttemptsRef.current = 0;
+    reconnectInFlightRef.current = false;
+    setMeetError(null);
+    setConnectionState("reconnecting");
+
+    if (currentRoomIdRef.current) {
+      await handleReconnect();
+      return;
+    }
+
+    await startJoin(targetRoomId);
+  }, [
+    currentRoomIdRef,
+    handleReconnect,
+    reconnectAttemptsRef,
+    reconnectInFlightRef,
+    roomId,
+    setConnectionState,
+    setMeetError,
+    startJoin,
+  ]);
+
   useEffect(() => {
     if (shouldAutoJoinRef.current) {
       console.log("[Meets] Auto-joining new room...");
@@ -5537,6 +5574,7 @@ export function useMeetSocket({
     ensureProducerTransport,
     joinRoom,
     joinRoomById,
+    retryReconnect,
     toggleRoomLock,
     toggleNoGuests,
     toggleChatLock,
