@@ -102,11 +102,17 @@ struct GridLayoutView: View {
             let scrollThreshold = isCompact ? 7 : 10
 
             if count <= 1 {
-                // Solo: camera-on fills the stage (FaceTime self-view); camera-off
-                // shows an invite affordance (Meet "you're the only one here")
-                // instead of a lone avatar in an empty tile.
                 Group {
-                    if viewModel.state.isCameraOff {
+                    if let onlyUserId = ids.first,
+                       !viewModel.state.isLocalParticipantUserId(onlyUserId),
+                       onlyUserId != MeetingState.overflowTileId {
+                        Button {
+                            viewModel.togglePin(onlyUserId)
+                        } label: {
+                            tileFor(userId: onlyUserId)
+                        }
+                        .buttonStyle(.plain)
+                    } else if viewModel.state.participantCount <= 1 && viewModel.state.isCameraOff {
                         soloWaitingView
                     } else {
                         localTile(fill: true)

@@ -42,6 +42,7 @@ struct VideoGridItem: View {
     var connectionStatus: ParticipantConnectionStatus? = nil
     // Expands camera-off avatars on stage while leaving video aspect handling to the renderer.
     var fillStage: Bool = false
+    var isThumbnail: Bool = false
 
     var captureSession: Any? = nil
     var localVideoTrack: Any? = nil
@@ -85,7 +86,7 @@ struct VideoGridItem: View {
         // cell). Avoids a nested GeometryReader per tile — on Android those
         // stacked GeometryReaders re-trigger Skip's ComposeView ghosting (a faint
         // duplicate of the controls bar appeared across the top of the grid).
-        let avatarSize: CGFloat = fillStage ? 200.0 : 84.0
+        let avatarSize: CGFloat = isThumbnail ? 44.0 : (fillStage ? 200.0 : 84.0)
         return ZStack {
             ACMColors.bgAlt
 
@@ -123,15 +124,15 @@ struct VideoGridItem: View {
         ZStack {
             ACMColors.blackOverlay(0.4)
 
-            VStack(spacing: 8) {
-                ACMSystemIcon.icon("theatermasks.fill", android: "ghost", size: 48)
+            VStack(spacing: isThumbnail ? 4.0 : 8.0) {
+                ACMSystemIcon.icon("theatermasks.fill", android: "ghost", size: isThumbnail ? 24.0 : 48.0)
                     .foregroundStyle(ACMColors.primaryPink)
 
                 Text("Ghost")
-                    .font(ACMFont.trial(11, weight: .medium))
+                    .font(ACMFont.trial(isThumbnail ? 10.0 : 11.0, weight: .medium))
                     .foregroundStyle(ACMColors.primaryPink)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 4)
+                    .padding(.horizontal, isThumbnail ? 8.0 : 12.0)
+                    .padding(.vertical, isThumbnail ? 3.0 : 4.0)
                     .acmColorBackground(ACMColors.blackOverlay(0.6))
                     .overlay {
                         Capsule()
@@ -146,9 +147,9 @@ struct VideoGridItem: View {
     var handRaisedBadge: some View {
         VStack {
             HStack {
-                ACMSystemIcon.icon("hand.raised.fill", android: "raise.hand", size: 14)
+                ACMSystemIcon.icon("hand.raised.fill", android: "raise.hand", size: isThumbnail ? 12.0 : 14.0)
                     .foregroundStyle(ACMColors.handRaised)
-                    .padding(8)
+                    .padding(isThumbnail ? 6.0 : 8.0)
                     .acmColorBackground(ACMColors.handRaisedBackground)
                     .overlay {
                         Circle()
@@ -161,7 +162,7 @@ struct VideoGridItem: View {
             }
             Spacer()
         }
-        .padding(12)
+        .padding(isThumbnail ? 6.0 : 12.0)
     }
 
     func connectionStatusBadge(_ status: ParticipantConnectionStatus) -> some View {
@@ -176,17 +177,17 @@ struct VideoGridItem: View {
             HStack {
                 Spacer()
 
-                HStack(spacing: 6) {
-                    ACMSystemIcon.icon(icon, android: androidIcon, size: 14, tint: androidTint)
+                HStack(spacing: isThumbnail ? 4.0 : 6.0) {
+                    ACMSystemIcon.icon(icon, android: androidIcon, size: isThumbnail ? 12.0 : 14.0, tint: androidTint)
                         .foregroundStyle(tint)
 
                     Text(label)
-                        .font(ACMFont.trial(11, weight: .medium))
+                        .font(ACMFont.trial(isThumbnail ? 10.0 : 11.0, weight: .medium))
                         .foregroundStyle(ACMColors.text)
                         .lineLimit(1)
                 }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 5)
+                .padding(.horizontal, isThumbnail ? 8.0 : 10.0)
+                .padding(.vertical, isThumbnail ? 4.0 : 5.0)
                 .acmColorBackground(ACMColors.scrim)
                 .overlay {
                     Capsule()
@@ -197,7 +198,7 @@ struct VideoGridItem: View {
 
                 Spacer()
             }
-            .padding(.top, 10)
+            .padding(.top, isThumbnail ? 6.0 : 10.0)
 
             Spacer()
         }
@@ -210,23 +211,23 @@ struct VideoGridItem: View {
             HStack {
                 HStack(spacing: 5) {
                     if isMuted {
-                        ACMSystemIcon.icon("mic.slash.fill", android: "mic.off", size: 10)
+                        ACMSystemIcon.icon("mic.slash.fill", android: "mic.off", size: isThumbnail ? 9.0 : 10.0)
                             .foregroundStyle(ACMColors.error)
                     }
 
                     Text(isLocal ? "You" : displayName)
-                        .font(ACMFont.trial(12, weight: .medium))
+                        .font(ACMFont.trial(isThumbnail ? 11.0 : 12.0, weight: .medium))
                         .foregroundStyle(ACMColors.text)
                         .lineLimit(1)
                 }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 5)
+                .padding(.horizontal, isThumbnail ? 8.0 : 10.0)
+                .padding(.vertical, isThumbnail ? 4.0 : 5.0)
                 .acmColorBackground(ACMColors.scrim)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .clipShape(RoundedRectangle(cornerRadius: isThumbnail ? 7.0 : 8.0))
 
                 Spacer()
             }
-            .padding(10)
+            .padding(isThumbnail ? 6.0 : 10.0)
         }
     }
 }

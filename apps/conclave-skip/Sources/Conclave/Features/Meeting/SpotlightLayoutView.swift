@@ -129,7 +129,7 @@ struct SpotlightLayoutView: View {
         Button {
             viewModel.togglePin(userId)
         } label: {
-            tileFor(userId: userId)
+            tileFor(userId: userId, isThumbnail: true)
                 .frame(width: 124, height: 76)
                 .padding(2)
                 .acmColorBackground(ACMColors.surface)
@@ -139,7 +139,7 @@ struct SpotlightLayoutView: View {
     }
 
     @ViewBuilder
-    func tileFor(userId: String) -> some View {
+    func tileFor(userId: String, isThumbnail: Bool = false) -> some View {
         if viewModel.state.isLocalParticipantUserId(userId) {
             let localVideoTrack = viewModel.webRTCClient.getLocalVideoTrack()
             let captureSession = (!viewModel.state.isCameraOff && localVideoTrack == nil) ? viewModel.webRTCClient.getCaptureSession() : nil
@@ -151,6 +151,7 @@ struct SpotlightLayoutView: View {
                 isGhost: viewModel.state.isGhostMode,
                 isSpeaking: viewModel.state.effectiveActiveSpeakerId.map { viewModel.state.isLocalParticipantUserId($0) } == true,
                 isLocal: true,
+                isThumbnail: isThumbnail,
                 captureSession: captureSession,
                 localVideoTrack: localVideoTrack
             )
@@ -164,6 +165,7 @@ struct SpotlightLayoutView: View {
                 isSpeaking: viewModel.state.effectiveActiveSpeakerId == participant.id,
                 isLocal: false,
                 connectionStatus: participant.connectionStatus,
+                isThumbnail: isThumbnail,
                 trackWrapper: viewModel.webRTCClient.remoteVideoTracks[participant.id]
             )
         } else {

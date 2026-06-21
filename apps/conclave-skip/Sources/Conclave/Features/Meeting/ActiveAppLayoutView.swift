@@ -361,6 +361,7 @@ struct ActiveAppLayoutView: View {
             isGhost: viewModel.state.isGhostMode,
             isSpeaking: viewModel.state.effectiveActiveSpeakerId.map { viewModel.state.isLocalParticipantUserId($0) } == true,
             isLocal: true,
+            isThumbnail: true,
             captureSession: captureSession,
             localVideoTrack: localVideoTrack
         )
@@ -377,6 +378,7 @@ struct ActiveAppLayoutView: View {
             isSpeaking: viewModel.state.effectiveActiveSpeakerId == participant.id,
             isLocal: false,
             connectionStatus: participant.connectionStatus,
+            isThumbnail: true,
             trackWrapper: viewModel.webRTCClient.remoteVideoTracks[participant.id]
         )
         .frame(width: thumbnailWidth, height: thumbnailHeight)

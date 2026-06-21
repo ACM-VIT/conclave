@@ -857,14 +857,11 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             videoTrack.setEnabled(true)
 
             val appData = encodeJSONString(ProducerAppData(type = ProducerType.webcam.rawValue, paused = false))
-            val preferredCodec = preferredVideoCodecJson()
-            val producer = sendTransport.produce(
-                this,
-                videoTrack as MediaStreamTrack,
-                webcamEncodings(currentVideoQuality, currentLocalBandwidthQuality),
-                null,
-                preferredCodec,
-                appData
+            val producer = produceWebcamVideo(
+                sendTransport,
+                videoTrack,
+                appData,
+                currentLocalBandwidthQuality
             )
             pendingProducer = producer
             producer.resume()
@@ -881,11 +878,10 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
                 currentVideoQuality,
                 currentLocalBandwidthQuality,
             )
-            localVideoEnabled = true
-            onLocalVideoEnabledChanged?.invoke(true)
-
             val wrapper = VideoTrackWrapper(id = producer.id, userId = "local", isLocal = true, track = videoTrack)
             localVideoTrackWrapper = wrapper
+            localVideoEnabled = true
+            onLocalVideoEnabledChanged?.invoke(true)
         } catch (t: Throwable) {
             pendingProducer?.close()
             localVideoTrack?.setEnabled(false)
@@ -1393,6 +1389,40 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         }
     }
 
+    private fun produceWebcamVideo(
+        transport: SendTransport,
+        track: VideoTrack,
+        appData: String,
+        connectionQuality: ConnectionQuality,
+    ): Producer {
+        val mediaTrack = track as MediaStreamTrack
+        val preferredCodec = preferredVideoCodecJson()
+        return try {
+            transport.produce(
+                this,
+                mediaTrack,
+                webcamEncodings(currentVideoQuality, connectionQuality),
+                null,
+                preferredCodec,
+                appData
+            )
+        } catch (error: Throwable) {
+            android.util.Log.w(
+                "ConclaveWebRTC",
+                "Webcam simulcast produce failed; retrying single-layer",
+                error
+            )
+            transport.produce(
+                this,
+                mediaTrack,
+                null as List<RtpParameters.Encoding>?,
+                null,
+                null,
+                appData
+            )
+        }
+    }
+
     internal fun updateVideoQuality(quality: VideoQuality) {
         currentVideoQuality = quality
         lastAppliedLocalBandwidthSignature = null
@@ -1463,15 +1493,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         videoBandwidthRefreshInFlight = true
         try {
             val appData = encodeJSONString(ProducerAppData(type = ProducerType.webcam.rawValue, paused = false))
-            val preferredCodec = preferredVideoCodecJson()
-            val nextProducer = transport.produce(
-                this,
-                track as MediaStreamTrack,
-                webcamEncodings(currentVideoQuality, connectionQuality),
-                null,
-                preferredCodec,
-                appData,
-            )
+            val nextProducer = produceWebcamVideo(transport, track, appData, connectionQuality)
             nextProducer.resume()
             try {
                 nextProducer.setMaxSpatialLayer(
@@ -2751,6 +2773,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
                 )
             } catch (t: Throwable) {
                 debugLog("[WebRTC] Produce failed: ${t}")
+                android.util.Log.e("ConclaveWebRTC", "Produce failed", t)
                 ""
             }
         }

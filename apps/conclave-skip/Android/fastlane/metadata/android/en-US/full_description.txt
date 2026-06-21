@@ -1,1 +1,1 @@
-A great new app built with Skip!
+Conclave is a fast video meeting app for creating rooms, joining calls, chatting, sharing screens, and collaborating across web and native devices.

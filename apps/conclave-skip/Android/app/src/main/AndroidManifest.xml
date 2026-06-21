@@ -21,7 +21,8 @@
         android:supportsRtl="true"
         android:allowBackup="false"
         android:usesCleartextTraffic="${USES_CLEARTEXT_TRAFFIC}"
-        android:icon="@mipmap/ic_launcher">
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher">
         <meta-data
             android:name="GOOGLE_SIGN_IN_WEB_CLIENT_ID"
             android:value="${GOOGLE_SIGN_IN_WEB_CLIENT_ID}" />

@@ -54,6 +54,7 @@ struct DetachedSelfViewOverlay: View {
             isGhost: viewModel.state.isGhostMode,
             isSpeaking: viewModel.state.effectiveActiveSpeakerId.map { viewModel.state.isLocalParticipantUserId($0) } == true,
             isLocal: true,
+            isThumbnail: true,
             captureSession: captureSession,
             localVideoTrack: localVideoTrack
         )

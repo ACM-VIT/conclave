@@ -201,7 +201,7 @@ enum SfuJoinService {
 
         #if SKIP
         let isDebugRuntime = isAndroidDebugRuntime()
-        if let bundledUrl = resolveBundledJoinURL(allowProductionHost: !isDebugRuntime) {
+        if let bundledUrl = resolveBundledJoinURL(allowProductionHost: true) {
             return bundledUrl
         }
 

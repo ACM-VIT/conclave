@@ -63,6 +63,9 @@ struct JoinView: View {
     @State private var authProviderRefreshGeneration = 0
     @State private var inputFocusClearGeneration = 0
     @State private var cameraPreviewGeneration = 0
+#if SKIP
+    @State private var shouldRestoreCameraPreviewAfterJoinError = false
+#endif
 #if !SKIP
     @FocusState private var focusedInput: FocusedInput?
 #endif
@@ -2597,9 +2600,9 @@ struct JoinView: View {
     private func stopPreviewCapture(preserveToggle: Bool = false) {
         cameraPreviewGeneration += 1
 #if SKIP
-        if !preserveToggle {
-            isCameraOn = false
-        }
+        shouldRestoreCameraPreviewAfterJoinError = preserveToggle && isCameraOn
+        PermissionHelper.onCameraPermissionResult = nil
+        isCameraOn = false
 #else
         if let captureSession {
             stopPreviewSession(captureSession)
@@ -2612,8 +2615,13 @@ struct JoinView: View {
     }
 
     private func restartCameraPreviewIfNeeded(afterJoinFormError message: String?) {
-        guard message?.isEmpty == false, isCameraOn else { return }
-#if !SKIP
+        guard message?.isEmpty == false else { return }
+#if SKIP
+        guard shouldRestoreCameraPreviewAfterJoinError else { return }
+        shouldRestoreCameraPreviewAfterJoinError = false
+        requestAndroidCameraPermission()
+#else
+        guard isCameraOn else { return }
         guard captureSession == nil else { return }
         setupCamera()
 #endif

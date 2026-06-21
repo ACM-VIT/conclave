@@ -211,6 +211,7 @@ struct VideoGridItem: View {
     // When set AND camera off, the tile fills its frame (immersive solo avatar)
     // rather than locking to 16:9. Video tiles always keep 16:9.
     var fillStage: Bool = false
+    var isThumbnail: Bool = false
 
     var captureSession: AVCaptureSession? = nil
 
@@ -262,7 +263,9 @@ struct VideoGridItem: View {
         GeometryReader { geo in
             // Scale the avatar to the tile so it reads well in a big solo tile
             // and isn't oversized in a small grid tile (Meet-style).
-            let avatarSize = min(max((geo.size.width + geo.size.height) * 0.10, 44.0), 240.0)
+            let minAvatarSize: CGFloat = isThumbnail ? 34.0 : 44.0
+            let maxAvatarSize: CGFloat = isThumbnail ? 48.0 : 240.0
+            let avatarSize = min(max((geo.size.width + geo.size.height) * 0.10, minAvatarSize), maxAvatarSize)
             ZStack {
                 ACMColors.bgAlt
 
@@ -301,16 +304,16 @@ struct VideoGridItem: View {
         ZStack {
             ACMColors.blackOverlay(0.4)
 
-            VStack(spacing: 8) {
+            VStack(spacing: isThumbnail ? 4.0 : 8.0) {
                 Image(systemName: "theatermasks.fill")
-                    .font(.system(size: 48))
+                    .font(.system(size: isThumbnail ? 24.0 : 48.0))
                     .foregroundStyle(ACMColors.primaryPink)
 
                 Text("Ghost")
-                    .font(ACMFont.trial(11, weight: .medium))
+                    .font(ACMFont.trial(isThumbnail ? 10.0 : 11.0, weight: .medium))
                     .foregroundStyle(ACMColors.primaryPink)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 4)
+                    .padding(.horizontal, isThumbnail ? 8.0 : 12.0)
+                    .padding(.vertical, isThumbnail ? 3.0 : 4.0)
                     .acmColorBackground(ACMColors.blackOverlay(0.6))
                     .overlay {
                         Capsule()
@@ -326,9 +329,9 @@ struct VideoGridItem: View {
         VStack {
             HStack {
                 Image(systemName: "hand.raised.fill")
-                    .font(.system(size: 14))
+                    .font(.system(size: isThumbnail ? 12.0 : 14.0))
                     .foregroundStyle(ACMColors.handRaised)
-                    .padding(8)
+                    .padding(isThumbnail ? 6.0 : 8.0)
                     .acmColorBackground(ACMColors.handRaisedBackground)
                     .overlay {
                         Circle()
@@ -341,7 +344,7 @@ struct VideoGridItem: View {
             }
             Spacer()
         }
-        .padding(12)
+        .padding(isThumbnail ? 6.0 : 12.0)
     }
 
     func connectionStatusBadge(_ status: ParticipantConnectionStatus) -> some View {
@@ -356,17 +359,17 @@ struct VideoGridItem: View {
             HStack {
                 Spacer()
 
-                HStack(spacing: 6) {
-                    ACMSystemIcon.icon(icon, android: androidIcon, size: 14, tint: androidTint)
+                HStack(spacing: isThumbnail ? 4.0 : 6.0) {
+                    ACMSystemIcon.icon(icon, android: androidIcon, size: isThumbnail ? 12.0 : 14.0, tint: androidTint)
                         .foregroundStyle(tint)
 
                     Text(label)
-                        .font(ACMFont.trial(11, weight: .medium))
+                        .font(ACMFont.trial(isThumbnail ? 10.0 : 11.0, weight: .medium))
                         .foregroundStyle(ACMColors.text)
                         .lineLimit(1)
                 }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 5)
+                .padding(.horizontal, isThumbnail ? 8.0 : 10.0)
+                .padding(.vertical, isThumbnail ? 4.0 : 5.0)
                 .acmColorBackground(ACMColors.scrim)
                 .overlay {
                     Capsule()
@@ -377,7 +380,7 @@ struct VideoGridItem: View {
 
                 Spacer()
             }
-            .padding(.top, 10)
+            .padding(.top, isThumbnail ? 6.0 : 10.0)
 
             Spacer()
         }
@@ -391,23 +394,23 @@ struct VideoGridItem: View {
                 HStack(spacing: 5) {
                     if isMuted {
                         Image(systemName: "mic.slash.fill")
-                            .font(.system(size: 10, weight: .semibold))
+                            .font(.system(size: isThumbnail ? 9.0 : 10.0, weight: .semibold))
                             .foregroundStyle(ACMColors.error)
                     }
 
                     Text(isLocal ? "You" : displayName)
-                        .font(ACMFont.trial(12, weight: .medium))
+                        .font(ACMFont.trial(isThumbnail ? 11.0 : 12.0, weight: .medium))
                         .foregroundStyle(ACMColors.text)
                         .lineLimit(1)
                 }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 5)
+                .padding(.horizontal, isThumbnail ? 8.0 : 10.0)
+                .padding(.vertical, isThumbnail ? 4.0 : 5.0)
                 .acmColorBackground(ACMColors.scrim)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .clipShape(RoundedRectangle(cornerRadius: isThumbnail ? 7.0 : 8.0))
 
                 Spacer()
             }
-            .padding(10)
+            .padding(isThumbnail ? 6.0 : 10.0)
         }
     }
 }

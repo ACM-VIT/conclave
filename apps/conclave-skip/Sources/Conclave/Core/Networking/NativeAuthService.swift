@@ -366,8 +366,7 @@ enum NativeAuthService {
     private static func shouldIgnoreBundledProductionBaseURL(_ url: URL) -> Bool {
         guard let host = url.host else { return false }
         #if SKIP
-        return SfuJoinService.isAndroidDebugRuntime() &&
-            SfuJoinService.isProductionHost(host)
+        return false
         #elseif DEBUG && targetEnvironment(simulator)
         return SfuJoinService.isProductionHost(host)
         #else
