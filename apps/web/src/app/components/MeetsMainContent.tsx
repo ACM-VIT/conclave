@@ -1101,6 +1101,29 @@ export default function MeetsMainContent({
   const isReconnectRetryBusy =
     reconnectRecoveryStatus?.phase === "connecting" ||
     reconnectRecoveryStatus?.phase === "joining";
+  const reconnectRetryAt = reconnectRecoveryStatus?.retryAt ?? null;
+  const [reconnectCountdownSeconds, setReconnectCountdownSeconds] =
+    useState<number | null>(null);
+
+  useEffect(() => {
+    if (!reconnectRetryAt) {
+      setReconnectCountdownSeconds(null);
+      return;
+    }
+
+    const updateCountdown = () => {
+      setReconnectCountdownSeconds(
+        Math.max(0, Math.ceil((reconnectRetryAt - Date.now()) / 1000)),
+      );
+    };
+
+    updateCountdown();
+    const intervalId = window.setInterval(updateCountdown, 250);
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [reconnectRetryAt]);
+
   const reconnectAttemptLabel =
     reconnectRecoveryStatus && reconnectRecoveryStatus.attempt > 0
       ? `Attempt ${Math.min(
@@ -1124,6 +1147,10 @@ export default function MeetsMainContent({
       ? "Connection is back. Restoring media, participants, and room state."
       : isTerminalMeetingError
         ? meetError?.message
+      : reconnectRetryAt && reconnectCountdownSeconds !== null
+        ? reconnectCountdownSeconds > 0
+          ? `Retrying automatically in ${reconnectCountdownSeconds}s.`
+          : "Retrying reconnect now."
       : reconnectRecoveryStatus?.message
         ? reconnectRecoveryStatus.message
       : canRetryRecovery
@@ -1173,16 +1200,16 @@ export default function MeetsMainContent({
               {recoveryDetail}
             </p>
             {reconnectAttemptLabel ? (
-              <p className="mt-3 text-[11px] font-medium uppercase tracking-[0.14em] text-[#fafafa]/40">
+              <p className="mt-2.5 text-[11px] font-medium uppercase tracking-[0.16em] text-[#fafafa]/38">
                 {reconnectAttemptLabel}
               </p>
             ) : null}
             {reconnectLastError ? (
-              <div className="mx-auto mt-3 max-w-[315px] rounded-xl border border-[#F95F4A]/20 bg-[#F95F4A]/10 px-3.5 py-3 text-left">
-                <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[#F95F4A]/80">
+              <div className="mx-auto mt-4 w-full max-w-[320px] rounded-xl border border-[#fafafa]/8 bg-[#fafafa]/[0.03] px-3.5 py-2.5 text-left">
+                <p className="text-[9.5px] font-semibold uppercase tracking-[0.16em] text-[#fafafa]/40">
                   Last error
                 </p>
-                <p className="mt-1 text-[12px] leading-relaxed text-[#fafafa]/70">
+                <p className="mt-1 break-words text-[11.5px] leading-relaxed text-[#fafafa]/55">
                   {reconnectLastError}
                 </p>
               </div>

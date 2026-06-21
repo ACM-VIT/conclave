@@ -12,6 +12,7 @@ export interface ReconnectRecoveryStatus {
   maxAttempts: number;
   message: string;
   lastError: string | null;
+  retryAt: number | null;
   updatedAt: number;
 }
 

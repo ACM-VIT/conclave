@@ -1807,6 +1807,16 @@ assertIncludes(
 );
 assertIncludes(
   "webMeetSocket",
+  "reconnectBackoffCancelRef",
+  "web reconnect flow can cancel backoff without starting a concurrent reconnect",
+);
+assertIncludes(
+  "webMeetSocket",
+  "waitForReconnectBackoff(delay)",
+  "web reconnect flow uses cancellable backoff waits",
+);
+assertIncludes(
+  "webMeetSocket",
   "describeReconnectFailure",
   "web reconnect flow surfaces clean retry failure reasons",
 );
@@ -1835,6 +1845,26 @@ assertIncludes(
   "await handleReconnect({ immediate: true });",
   "web reconnect retry skips the first automatic backoff",
 );
+{
+  const text = source.webMeetSocket ?? "";
+  const start = text.indexOf("const retryReconnect = useCallback");
+  const end = text.indexOf("useEffect(() => {\n    if (shouldAutoJoinRef.current)", start);
+  const section = start >= 0 && end > start ? text.slice(start, end) : "";
+  if (!section) {
+    failures.push("web reconnect retry callback missing in apps/web/src/app/hooks/useMeetSocket.ts");
+  } else {
+    if (section.includes("reconnectInFlightRef.current = false")) {
+      failures.push(
+        "web reconnect retry must not clear the in-flight guard before the active reconnect finishes",
+      );
+    }
+    if (!section.includes("if (reconnectInFlightRef.current)")) {
+      failures.push(
+        "web reconnect retry must respect the in-flight reconnect guard",
+      );
+    }
+  }
+}
 assertRegex(
   "webMeetSocket",
   /connect_error[\s\S]*describeReconnectFailure\(err\)[\s\S]*code: "CONNECTION_FAILED"[\s\S]*recoverable: true/,
@@ -1859,6 +1889,16 @@ assertIncludes(
   "webMeetsMainContent",
   "reconnectRecoveryStatus",
   "web reconnect recovery overlay reads retry status",
+);
+assertIncludes(
+  "webMeetsMainContent",
+  "reconnectRetryAt",
+  "web reconnect recovery overlay reads retry deadline",
+);
+assertIncludes(
+  "webMeetsMainContent",
+  "setReconnectCountdownSeconds",
+  "web reconnect recovery overlay renders a live countdown",
 );
 assertIncludes(
   "webMeetsMainContent",
