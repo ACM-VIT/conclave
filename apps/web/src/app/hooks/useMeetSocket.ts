@@ -668,6 +668,7 @@ export function useMeetSocket({
   bypassMediaPermissions = false,
 }: UseMeetSocketOptions) {
   const participantIdsRef = useRef<Set<string>>(new Set([userId]));
+  const departedParticipantIdsRef = useRef<Set<string>>(new Set());
   const isMutedRef = useRef(isMuted);
   const isCameraOffRef = useRef(isCameraOff);
   const serverRoomIdRef = useRef<string | null>(null);
@@ -826,7 +827,26 @@ export function useMeetSocket({
 
   useEffect(() => {
     participantIdsRef.current = new Set([userId]);
+    departedParticipantIdsRef.current.clear();
   }, [userId]);
+
+  const markRemoteParticipantPresent = useCallback((targetUserId: string) => {
+    departedParticipantIdsRef.current.delete(targetUserId);
+  }, []);
+
+  const markRemoteParticipantDeparted = useCallback(
+    (targetUserId: string) => {
+      if (targetUserId === userId) return;
+      departedParticipantIdsRef.current.add(targetUserId);
+    },
+    [userId],
+  );
+
+  const shouldIgnoreDepartedParticipant = useCallback(
+    (targetUserId: string): boolean =>
+      targetUserId !== userId && departedParticipantIdsRef.current.has(targetUserId),
+    [userId],
+  );
 
   useEffect(() => {
     isMutedRef.current = isMuted;
@@ -1135,6 +1155,7 @@ export function useMeetSocket({
         setWebinarRole(null);
         setWebinarSpeakerUserId(null);
         participantIdsRef.current = new Set([userId]);
+        departedParticipantIdsRef.current.clear();
         serverRoomIdRef.current = null;
       }
 
@@ -1523,6 +1544,8 @@ export function useMeetSocket({
 
   const applyParticipantConnectionStatus = useCallback(
     (targetUserId: string, status: ParticipantConnectionStatus) => {
+      if (shouldIgnoreDepartedParticipant(targetUserId)) return;
+
       if (
         status.state === "reconnected" &&
         !visibleParticipantReconnectingIdsRef.current.has(targetUserId)
@@ -1576,6 +1599,7 @@ export function useMeetSocket({
       clearParticipantConnectionStatus,
       clearParticipantConnectionStatusTimer,
       dispatchParticipants,
+      shouldIgnoreDepartedParticipant,
     ],
   );
 
@@ -2611,7 +2635,10 @@ export function useMeetSocket({
       producerInfo: ProducerInfo,
       options: ConsumeProducerOptions = {},
     ): Promise<void> => {
-      if (producerInfo.producerUserId === userId) {
+      if (
+        producerInfo.producerUserId === userId ||
+        shouldIgnoreDepartedParticipant(producerInfo.producerUserId)
+      ) {
         return;
       }
       const existingConsumer = consumersRef.current.get(producerInfo.producerId);
@@ -2648,6 +2675,14 @@ export function useMeetSocket({
             }),
           },
           async (response: ConsumeResponse | { error: string }) => {
+            if (shouldIgnoreDepartedParticipant(producerInfo.producerUserId)) {
+              announcedRemoteProducersRef.current.delete(producerInfo.producerId);
+              pendingProducersRef.current.delete(producerInfo.producerId);
+              consumeRetryAttemptsRef.current.delete(producerInfo.producerId);
+              resolve();
+              return;
+            }
+
             if ("error" in response) {
               console.error("[Meets] Consume error:", response.error);
               queueProducerConsumeRetry(producerInfo, 300);
@@ -2665,6 +2700,21 @@ export function useMeetSocket({
                     response.rtpParameters,
                   ),
               });
+              if (shouldIgnoreDepartedParticipant(producerInfo.producerUserId)) {
+                try {
+                  consumer.track.onmute = null;
+                  consumer.track.onunmute = null;
+                  consumer.track.stop();
+                  consumer.close();
+                } catch {}
+                announcedRemoteProducersRef.current.delete(
+                  producerInfo.producerId,
+                );
+                pendingProducersRef.current.delete(producerInfo.producerId);
+                consumeRetryAttemptsRef.current.delete(producerInfo.producerId);
+                resolve();
+                return;
+              }
 
               consumersRef.current.set(producerInfo.producerId, consumer);
               announcedRemoteProducersRef.current.delete(
@@ -2916,6 +2966,7 @@ export function useMeetSocket({
       joinMode,
       queueProducerConsumeRetry,
       setActiveScreenShareId,
+      shouldIgnoreDepartedParticipant,
       videoStallRecoveryTimeoutsRef,
       staleConsumerRecoveryTimeoutsRef,
       adaptivelyPausedConsumerProducerIdsRef,
@@ -3144,6 +3195,11 @@ export function useMeetSocket({
       }
 
       for (const producerInfo of producers) {
+        if (shouldIgnoreDepartedParticipant(producerInfo.producerUserId)) {
+          announcedRemoteProducersRef.current.delete(producerInfo.producerId);
+          pendingProducersRef.current.delete(producerInfo.producerId);
+          continue;
+        }
         setProducerPausedState(
           producerInfo.producerId,
           Boolean(producerInfo.paused),
@@ -3269,6 +3325,7 @@ export function useMeetSocket({
     consumeProducer,
     handleProducerClosed,
     setProducerPausedState,
+    shouldIgnoreDepartedParticipant,
     adaptivelyPausedConsumerProducerIdsRef,
     mutedConsumerSinceRef,
     clearStaleConsumerRecoveryTimeout,
@@ -3876,6 +3933,12 @@ export function useMeetSocket({
 
             socket.on("newProducer", async (data: ProducerInfo) => {
               console.log("[Meets] New producer:", data);
+              if (shouldIgnoreDepartedParticipant(data.producerUserId)) {
+                announcedRemoteProducersRef.current.delete(data.producerId);
+                pendingProducersRef.current.delete(data.producerId);
+                consumeRetryAttemptsRef.current.delete(data.producerId);
+                return;
+              }
               setProducerPausedState(data.producerId, Boolean(data.paused));
               if (data.producerUserId === userId) {
                 return;
@@ -4053,6 +4116,7 @@ export function useMeetSocket({
                 if (joinedUserId === userId) {
                   return;
                 }
+                markRemoteParticipantPresent(joinedUserId);
                 if (shouldPlayJoinLeaveSound("join", joinedUserId)) {
                   playNotificationSound("join");
                 }
@@ -4081,6 +4145,7 @@ export function useMeetSocket({
               "userLeft",
               ({ userId: leftUserId }: { userId: string }) => {
                 console.log("[Meets] User left:", leftUserId);
+                markRemoteParticipantDeparted(leftUserId);
                 if (
                   leftUserId !== userId &&
                   shouldPlayJoinLeaveSound("leave", leftUserId)
@@ -4189,6 +4254,7 @@ export function useMeetSocket({
                       snapshot.set(snapshotUserId, displayName);
                     }
                     if (snapshotUserId !== userId) {
+                      markRemoteParticipantPresent(snapshotUserId);
                       if (!isSystemUserId(snapshotUserId)) {
                         nextParticipantIds.add(snapshotUserId);
                       }
@@ -4214,6 +4280,7 @@ export function useMeetSocket({
                     continue;
                   }
                   const leaveTimeout = leaveTimeoutsRef.current.get(previousUserId);
+                  markRemoteParticipantDeparted(previousUserId);
                   if (leaveTimeout) {
                     window.clearTimeout(leaveTimeout);
                     leaveTimeoutsRef.current.delete(previousUserId);
@@ -4251,6 +4318,7 @@ export function useMeetSocket({
                     setIsHandRaised(raised);
                     return;
                   }
+                  if (shouldIgnoreDepartedParticipant(raisedUserId)) return;
                   dispatchParticipants({
                     type: "UPDATE_HAND_RAISED",
                     userId: raisedUserId,
@@ -4325,6 +4393,7 @@ export function useMeetSocket({
                   setIsMuted(muted);
                   return;
                 }
+                if (shouldIgnoreDepartedParticipant(mutedUserId)) return;
                 dispatchParticipants({
                   type: "UPDATE_MUTED",
                   userId: mutedUserId,
@@ -4350,6 +4419,7 @@ export function useMeetSocket({
                   setIsCameraOff(cameraOff);
                   return;
                 }
+                if (shouldIgnoreDepartedParticipant(camUserId)) return;
                 dispatchParticipants({
                   type: "UPDATE_CAMERA_OFF",
                   userId: camUserId,
@@ -4557,6 +4627,7 @@ export function useMeetSocket({
                   setIsHandRaised(raised);
                   return;
                 }
+                if (shouldIgnoreDepartedParticipant(raisedUserId)) return;
                 dispatchParticipants({
                   type: "UPDATE_HAND_RAISED",
                   userId: raisedUserId,
@@ -4935,6 +5006,8 @@ export function useMeetSocket({
       joinOptionsRef,
       joinRoomInternal,
       leaveTimeoutsRef,
+      markRemoteParticipantDeparted,
+      markRemoteParticipantPresent,
       clearParticipantConnectionStatus,
       localStream,
       localStreamRef,
@@ -4942,6 +5015,7 @@ export function useMeetSocket({
       pendingProducersRef,
       playNotificationSound,
       shouldPlayJoinLeaveSound,
+      shouldIgnoreDepartedParticipant,
       applyWebinarFeedProducers,
       producerMapRef,
       requestAudioProducerRecovery,
