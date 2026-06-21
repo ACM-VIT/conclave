@@ -3,6 +3,9 @@ import Observation
 #if canImport(UIKit) && !SKIP
 import UIKit
 #endif
+#if SKIP
+import androidx.compose.foundation.layout.__
+#endif
 
 struct MeetingView: View {
     @Bindable var viewModel: MeetingViewModel
@@ -16,6 +19,14 @@ struct MeetingView: View {
 
     private func meetingSheetDetentHeight(for availableHeight: CGFloat) -> CGFloat {
         availableHeight * MeetingSheetView.detentFraction
+    }
+
+    private func chatOverlayWidth(for width: CGFloat) -> CGFloat {
+        isRegularSizeClass ? 380.0 : min(340.0, width * 0.85)
+    }
+
+    private func chatOverlayMaxHeight(for height: CGFloat) -> CGFloat {
+        min(560.0, max(280.0, height - 88.0))
     }
 
 #if !os(macOS) && !SKIP
@@ -86,9 +97,13 @@ struct MeetingView: View {
                             Spacer()
 
                             ChatOverlayView(viewModel: viewModel)
-                                .frame(width: isRegularSizeClass ? 380.0 : min(340.0, geometry.size.width * 0.85))
-                                .transition(.move(edge: .trailing).combined(with: AnyTransition.opacity))
+                                .frame(width: chatOverlayWidth(for: geometry.size.width))
+                                .frame(maxHeight: chatOverlayMaxHeight(for: geometry.size.height))
+                                .transition(AnyTransition.move(edge: Edge.trailing).combined(with: AnyTransition.opacity))
                         }
+                        #if SKIP
+                        .composeModifier { $0.imePadding() }
+                        #endif
                     }
 
                     if !viewModel.state.isChatOpen &&

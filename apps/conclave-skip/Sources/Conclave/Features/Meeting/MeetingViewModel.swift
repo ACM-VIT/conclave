@@ -131,6 +131,9 @@ final class MeetingViewModel {
     private var activeSpeakerTask: Task<Void, Never>?
     private var lastActiveSpeakerId: String?
     private var lastActiveSpeakerAt: Date?
+    #if SKIP
+    private var lastObservedPipMode = false
+    #endif
     private let activeSpeakerThreshold: Double = 0.03
     private let activeSpeakerHoldSeconds: Double = 1.5
     private let freezeWatchdogTickInterval = 8
@@ -613,10 +616,7 @@ final class MeetingViewModel {
                 guard self.state.isRemoteParticipantUserId(userId) else { return }
                 self.ensureParticipantPresent(userId)
                 self.clearParticipantConnectionStatus(userId)
-                if let displayName = notification.displayName?.trimmingCharacters(in: .whitespacesAndNewlines),
-                   !displayName.isEmpty {
-                    self.state.displayNames[userId] = displayName
-                }
+                self.applyDisplayName(notification.displayName, for: userId)
                 if let isGhost = notification.isGhost {
                     self.state.participants[userId]?.isGhost = isGhost
                 }
@@ -664,10 +664,8 @@ final class MeetingViewModel {
                     return
                 }
                 guard self.state.isRemoteParticipantUserId(userId) else { return }
-                if !displayName.isEmpty {
-                    self.state.displayNames[userId] = displayName
-                }
                 self.ensureParticipantPresent(userId)
+                self.applyDisplayName(displayName, for: userId)
             }
         }
 
@@ -1552,17 +1550,34 @@ final class MeetingViewModel {
         )
     }
 
+    private func applyDisplayName(_ rawDisplayName: String?, for rawUserId: String) {
+        guard let userId = normalizedParticipantUserId(rawUserId) else { return }
+        let displayName = rawDisplayName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !displayName.isEmpty else { return }
+
+        if state.isLocalParticipantUserId(userId) {
+            state.displayName = displayName
+            state.displayNames[userId] = displayName
+            return
+        }
+
+        guard state.isRemoteParticipantUserId(userId) else { return }
+        ensureParticipantPresent(userId)
+        state.displayNames[userId] = displayName
+        state.participants[userId]?.displayName = displayName
+    }
+
     private func applyDisplayNameSnapshot(_ snapshot: DisplayNameSnapshotNotification) {
         guard isCurrentRoomEvent(snapshot.roomId) else { return }
 
-        var nextNames: [String: String] = [:]
+        var nextNames = state.displayNames
 
         for user in snapshot.users {
-            let userId = user.userId.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !userId.isEmpty else { continue }
+            guard let userId = normalizedParticipantUserId(user.userId) else { continue }
 
             if state.isRemoteParticipantUserId(userId) {
                 ensureParticipantPresent(userId)
+                clearParticipantConnectionStatus(userId)
             }
 
             if let displayName = user.displayName?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -1570,6 +1585,8 @@ final class MeetingViewModel {
                 nextNames[userId] = displayName
                 if state.isLocalParticipantUserId(userId) {
                     state.displayName = displayName
+                } else if state.isRemoteParticipantUserId(userId) {
+                    state.participants[userId]?.displayName = displayName
                 }
             }
         }
@@ -3088,7 +3105,17 @@ final class MeetingViewModel {
                 if Task.isCancelled { return }
                 guard let self = self else { return }
                 guard self.isCurrentSocketEvent(pollContext) else { return }
+                #if SKIP
+                let wasInPip = self.lastObservedPipMode
+                #endif
                 self.updateActiveSpeaker()
+                #if SKIP
+                let isInPip = PipController.inPipMode
+                if isInPip && !wasInPip {
+                    await self.refreshPipVideoAfterEntry()
+                }
+                self.lastObservedPipMode = isInPip
+                #endif
                 // Run the video freeze watchdog ~every 2s:
                 // un-freezes a stuck remote decoder via a keyframe request.
                 freezeTick += 1
@@ -3330,6 +3357,9 @@ final class MeetingViewModel {
         activeSpeakerTask = nil
         lastActiveSpeakerId = nil
         lastActiveSpeakerAt = nil
+        #if SKIP
+        lastObservedPipMode = false
+        #endif
     }
 
     /// Picks the loudest participant above `activeSpeakerThreshold`. When
@@ -3630,8 +3660,9 @@ final class MeetingViewModel {
     /// Pushes the active speaker's (or local, when nobody else is talking) video
     /// track to the Picture-in-Picture window. Called on each active-speaker poll
     /// tick so PiP always shows whoever is talking.
-    private func updatePipVideo() {
-        guard PipController.isInCall else { return }
+    @discardableResult
+    private func updatePipVideo() -> String? {
+        guard PipController.isInCall else { return nil }
         // Prefer the active speaker; fall back to the local user so PiP is never
         // blank when nobody else is talking.
         let targetId = state.effectiveActiveSpeakerId ?? state.userId
@@ -3646,6 +3677,12 @@ final class MeetingViewModel {
         }
         let name = state.displayName(for: targetId)
         PipController.setPipVideo(track: track, cameraOff: cameraOff, displayName: name)
+        return isLocal ? nil : targetId
+    }
+
+    private func refreshPipVideoAfterEntry() async {
+        guard let targetId = updatePipVideo() else { return }
+        await webRTCClient.refreshVideoDecoders(userId: targetId)
     }
     #endif
 

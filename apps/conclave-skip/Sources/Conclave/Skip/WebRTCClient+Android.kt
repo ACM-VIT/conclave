@@ -601,6 +601,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     private var videoProducerBandwidthQuality: ConnectionQuality = ConnectionQuality.unknown
     private var videoProducerBandwidthSignature: String? = null
     private var screenProducerBandwidthQuality: ConnectionQuality = ConnectionQuality.unknown
+    private var selectedAudioOutputDeviceId: String? = null
     private var audioBandwidthRefreshInFlight = false
     private var videoBandwidthRefreshInFlight = false
     private var screenBandwidthRefreshInFlight = false
@@ -777,6 +778,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
 
     internal suspend fun startProducingAudio() {
         val sendTransport = sendTransport ?: throw ErrorException("Send transport not ready")
+        configureCallAudioMode(unmuted = true)
         ensurePeerConnectionFactory(ProcessInfo.processInfo.androidContext)
 
         if (!ensureRecordAudioPermission()) {
@@ -784,7 +786,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         }
 
         if (audioSource == null) {
-            audioSource = peerConnectionFactory?.createAudioSource(MediaConstraints())
+            audioSource = peerConnectionFactory?.createAudioSource(microphoneAudioConstraints())
         }
 
         localAudioTrack = peerConnectionFactory?.createAudioTrack("audio0", audioSource)
@@ -1147,6 +1149,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
 
         try {
             if (enabled) {
+                configureCallAudioMode(unmuted = true)
                 producer.resume()
             } else {
                 producer.pause()
@@ -1350,6 +1353,14 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     private fun clearAudioSource() {
         audioSource?.dispose()
         audioSource = null
+    }
+
+    private fun microphoneAudioConstraints(): MediaConstraints {
+        return MediaConstraints().apply {
+            optional.add(MediaConstraints.KeyValuePair("googEchoCancellation", "true"))
+            optional.add(MediaConstraints.KeyValuePair("googAutoGainControl", "true"))
+            optional.add(MediaConstraints.KeyValuePair("googNoiseSuppression", "true"))
+        }
     }
 
     private fun clearVideoSource() {
@@ -1878,6 +1889,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         localAudioTrack = null
         clearVideoSource()
         clearAudioSource()
+        releaseCallAudioMode()
 
         // Reset the produce-state flags (mirrors the Swift WebRTCClient.cleanup
         // fix). The client is reused across calls via the singleton VM, so a
@@ -1926,6 +1938,38 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         return context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
     }
 
+    private fun configureCallAudioMode(unmuted: Boolean = false) {
+        val manager = audioManager() ?: return
+        try {
+            manager.mode = AudioManager.MODE_IN_COMMUNICATION
+            if (unmuted) {
+                manager.isMicrophoneMute = false
+            }
+            applyPreferredCommunicationRoute(manager)
+        } catch (error: Throwable) {
+            debugLog("[WebRTC] Failed to configure call audio mode: ${error}")
+        }
+    }
+
+    private fun releaseCallAudioMode() {
+        val manager = audioManager() ?: return
+        try {
+            if (Build.VERSION.SDK_INT >= 31) {
+                manager.clearCommunicationDevice()
+            } else {
+                @Suppress("DEPRECATION")
+                manager.stopBluetoothSco()
+                @Suppress("DEPRECATION")
+                manager.isBluetoothScoOn = false
+                @Suppress("DEPRECATION")
+                manager.isSpeakerphoneOn = false
+            }
+            manager.mode = AudioManager.MODE_NORMAL
+        } catch (error: Throwable) {
+            debugLog("[WebRTC] Failed to release call audio mode: ${error}")
+        }
+    }
+
     // Friendly label for an AudioDeviceInfo type, mirroring the route names the
     // web/iOS clients surface (Speaker / Earpiece / Bluetooth / Wired headset).
     private fun deviceLabel(info: AudioDeviceInfo): String {
@@ -1943,6 +1987,69 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
                 val name = info.productName?.toString()
                 if (name.isNullOrBlank()) "Audio device" else name
             }
+        }
+    }
+
+    private fun isExternalCallRoute(info: AudioDeviceInfo): Boolean {
+        return when (info.type) {
+            AudioDeviceInfo.TYPE_WIRED_HEADSET,
+            AudioDeviceInfo.TYPE_WIRED_HEADPHONES,
+            AudioDeviceInfo.TYPE_USB_HEADSET,
+            AudioDeviceInfo.TYPE_USB_DEVICE,
+            AudioDeviceInfo.TYPE_BLUETOOTH_SCO,
+            AudioDeviceInfo.TYPE_BLUETOOTH_A2DP -> true
+            else -> false
+        }
+    }
+
+    private fun applyPreferredCommunicationRoute(manager: AudioManager) {
+        val selected = selectedAudioOutputDeviceId
+        if (Build.VERSION.SDK_INT >= 31) {
+            val devices = manager.availableCommunicationDevices
+            val target = when {
+                !selected.isNullOrBlank() -> devices.firstOrNull { it.id.toString() == selected }
+                else -> devices.firstOrNull { isExternalCallRoute(it) }
+                    ?: devices.firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
+            }
+            try {
+                if (target != null) {
+                    manager.setCommunicationDevice(target)
+                } else {
+                    manager.clearCommunicationDevice()
+                }
+            } catch (error: Throwable) {
+                debugLog("[WebRTC] Failed to apply communication route: ${error}")
+            }
+            return
+        }
+
+        @Suppress("DEPRECATION")
+        if (!selected.isNullOrBlank()) {
+            val target = manager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
+                .firstOrNull { it.id.toString() == selected }
+            val useSpeaker = target?.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER
+            manager.isSpeakerphoneOn = useSpeaker
+            setBluetoothScoEnabled(manager, target?.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO)
+            return
+        }
+
+        val outputs = manager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
+        val external = outputs.firstOrNull { isExternalCallRoute(it) }
+        @Suppress("DEPRECATION")
+        manager.isSpeakerphoneOn = external == null
+        setBluetoothScoEnabled(manager, external?.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO)
+    }
+
+    private fun setBluetoothScoEnabled(manager: AudioManager, enabled: Boolean) {
+        @Suppress("DEPRECATION")
+        try {
+            manager.isBluetoothScoOn = enabled
+            if (enabled) {
+                manager.startBluetoothSco()
+            } else {
+                manager.stopBluetoothSco()
+            }
+        } catch (_: Throwable) {
         }
     }
 
@@ -1991,16 +2098,13 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
 
     internal fun selectAudioOutput(deviceId: String) {
         val manager = audioManager() ?: return
+        selectedAudioOutputDeviceId = deviceId.trim().ifEmpty { null }
         // Audio routing only takes effect while the session is in communication
         // mode (the call mode). Set it defensively; the WebRTC ADM also uses it.
         manager.mode = AudioManager.MODE_IN_COMMUNICATION
 
         if (deviceId.isBlank()) {
-            if (Build.VERSION.SDK_INT >= 31) {
-                manager.clearCommunicationDevice()
-            } else {
-                manager.isSpeakerphoneOn = false
-            }
+            applyPreferredCommunicationRoute(manager)
             return
         }
 
@@ -2705,6 +2809,26 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
                 remoteConsumerPreferenceSignatures.remove(key)
                 remoteConsumerLayerPreferenceUnsupportedIds.remove(key)
                 remoteConsumerPreferenceInFlightIds.remove(key)
+            }
+        }
+    }
+
+    internal suspend fun refreshVideoDecoders(userId: String? = null) {
+        val socket = socketManager ?: return
+        val targetUserId = userId?.trim()?.takeIf { it.isNotEmpty() }
+        for ((consumerId, info) in consumers) {
+            if (info.kind != "video") continue
+            if (
+                targetUserId != null &&
+                info.userId != targetUserId &&
+                info.trackKey != targetUserId
+            ) {
+                continue
+            }
+            videoFreezeStats.remove(consumerId)
+            try {
+                socket.resumeConsumer(consumerId, true)
+            } catch (_: Throwable) {
             }
         }
     }

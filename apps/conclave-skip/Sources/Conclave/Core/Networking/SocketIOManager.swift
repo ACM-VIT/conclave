@@ -1295,13 +1295,24 @@ final class SocketIOManager {
         guard let roomId = normalizedRoomId(roomId) else {
             return !activeRoomAliases.isEmpty || !pendingRoomAliases.isEmpty
         }
-        return activeRoomAliases.contains(roomId) || pendingRoomAliases.contains(roomId)
+        if activeRoomAliases.contains(roomId) || pendingRoomAliases.contains(roomId) {
+            return true
+        }
+        if !pendingRoomAliases.isEmpty {
+            pendingRoomAliases.insert(roomId)
+            return true
+        }
+        return false
     }
 
     private func pendingRoomEventMatches(_ roomId: String?) -> Bool {
         guard !pendingRoomAliases.isEmpty else { return false }
         guard let roomId = normalizedRoomId(roomId) else { return true }
-        return pendingRoomAliases.contains(roomId)
+        if pendingRoomAliases.contains(roomId) {
+            return true
+        }
+        pendingRoomAliases.insert(roomId)
+        return true
     }
 
     func decode<T: Decodable>(_ type: T.Type, from data: Any) -> T? {

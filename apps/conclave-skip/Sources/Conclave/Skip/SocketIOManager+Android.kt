@@ -1343,13 +1343,22 @@ internal class SocketIOManager {
         if (normalized == null) {
             return activeRoomAliases.isNotEmpty() || pendingRoomAliases.isNotEmpty()
         }
-        return normalized in activeRoomAliases || normalized in pendingRoomAliases
+        if (normalized in activeRoomAliases || normalized in pendingRoomAliases) {
+            return true
+        }
+        if (pendingRoomAliases.isNotEmpty()) {
+            pendingRoomAliases = pendingRoomAliases + normalized
+            return true
+        }
+        return false
     }
 
     private fun pendingRoomEventMatches(roomId: String?): Boolean {
         if (pendingRoomAliases.isEmpty()) return false
         val normalized = normalizedRoomId(roomId) ?: return true
-        return normalized in pendingRoomAliases
+        if (normalized in pendingRoomAliases) return true
+        pendingRoomAliases = pendingRoomAliases + normalized
+        return true
     }
 
     private fun ChatMessageNotification.toChatMessage(taggedRoomId: String? = null): ChatMessage {

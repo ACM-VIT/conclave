@@ -56,6 +56,7 @@ final class WebRTCClient {
     func startProducingVideo() async throws { fatalError() }
     func cleanup(notifyLocalState: Bool = true) async { fatalError() }
     func checkVideoFreezes() async { fatalError() }
+    func refreshVideoDecoders(userId: String? = nil) async { fatalError() }
     func sampleConnectionQuality() -> ConnectionQuality { fatalError() }
     func sampleConnectionQualitySample() -> ConnectionQualitySample { fatalError() }
     func consumerId(forProducer producerId: String) -> String? { fatalError() }

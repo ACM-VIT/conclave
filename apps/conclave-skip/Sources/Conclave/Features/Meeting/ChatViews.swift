@@ -62,6 +62,14 @@ struct ChatOverlayView: View {
         return ChatCommandParser.matchesPartialCommand(messageText)
     }
 
+    private var inputHeight: CGFloat {
+        #if SKIP
+        return 56.0
+        #else
+        return 40.0
+        #endif
+    }
+
     private var mentionContext: ChatMentionContext? {
         guard !isChatDisabled, viewModel.state.isDmEnabled else { return nil }
         let value = messageText.trimmingCharacters(in: .whitespaces)
@@ -205,15 +213,14 @@ struct ChatOverlayView: View {
                         .foregroundStyle(ACMColors.text)
                         .tint(ACMColors.primaryOrange)
                         .padding(.horizontal, 14)
-                        .frame(height: 40)
+                        .frame(height: inputHeight)
                         .acmColorBackground(ACMColors.bgAlt)
                         .overlay {
                             Capsule().strokeBorder(lineWidth: 1).foregroundStyle(ACMColors.border)
                         }
                         .clipShape(Capsule())
-#if !SKIP
                         .focused($isInputFocused)
-#endif
+                        .lineLimit(1)
                         .submitLabel(SubmitLabel.send)
                         .onSubmit {
                             sendMessage()
@@ -225,7 +232,7 @@ struct ChatOverlayView: View {
                     } label: {
                         ACMSystemIcon.icon("arrow.up", android: "send", size: 16)
                             .foregroundStyle(canSendMessage ? Color.white : ACMColors.textFaint)
-                            .frame(width: 40, height: 40)
+                            .frame(width: inputHeight, height: inputHeight)
                             .acmColorBackground(canSendMessage ? ACMColors.primaryOrange : ACMColors.surfaceRaised)
                             .clipShape(Circle())
                     }
@@ -271,9 +278,7 @@ struct ChatOverlayView: View {
     }
 
     private func focusInput() {
-#if !SKIP
         isInputFocused = true
-#endif
     }
 }
 

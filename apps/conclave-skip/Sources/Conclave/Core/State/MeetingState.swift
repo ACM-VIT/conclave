@@ -402,7 +402,15 @@ final class MeetingState {
         if let systemName = Self.systemDisplayName(for: normalized) {
             return systemName
         }
-        return displayNames[normalized] ?? "Guest"
+        if let displayName = displayNames[normalized]?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !displayName.isEmpty {
+            return displayName
+        }
+        if let displayName = participants[normalized]?.displayName?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !displayName.isEmpty {
+            return displayName
+        }
+        return "Guest"
     }
 
     func isHostUser(_ id: String) -> Bool {
