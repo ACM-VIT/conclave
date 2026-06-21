@@ -5337,8 +5337,15 @@ final class MeetingViewModel {
         guard let raw = state.browserNoVncURL?.trimmingCharacters(in: .whitespacesAndNewlines),
               !raw.isEmpty else { return nil }
         #if SKIP
-        let host = browserServiceHost(defaultLoopbackHost: "10.0.2.2") ?? "10.0.2.2"
+        #if DEBUG
+        let host = browserServiceHost(defaultLoopbackHost: SfuJoinService.androidEmulatorLoopbackHost()) ?? SfuJoinService.androidEmulatorLoopbackHost()
         return SfuJoinService.rewriteAndroidLoopbackURLString(raw, fallbackHost: host)
+        #else
+        guard let host = browserServiceHost(defaultLoopbackHost: nil) else {
+            return raw
+        }
+        return SfuJoinService.rewriteAndroidLoopbackURLString(raw, fallbackHost: host)
+        #endif
         #elseif targetEnvironment(simulator)
         let host = browserServiceHost(defaultLoopbackHost: "127.0.0.1") ?? "127.0.0.1"
         return SfuJoinService.rewriteLoopbackURLString(raw, fallbackHost: host)

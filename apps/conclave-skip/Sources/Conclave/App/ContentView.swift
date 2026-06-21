@@ -412,14 +412,19 @@ struct ContentView: View {
         "sfu-admin",
         "sign-in"
     ]
-    private let localConclaveWebHosts: Set<String> = [
-        "localhost",
-        "127.0.0.1",
-        "0.0.0.0",
-        "10.0.2.2",
-        "[::1]",
-        "::1"
-    ]
+    private let localConclaveWebHosts: Set<String> = {
+        var hosts: Set<String> = [
+            "localhost",
+            "127.0.0.1",
+            "0.0.0.0",
+            "[::1]",
+            "::1"
+        ]
+        #if DEBUG
+        hosts.insert(SfuJoinService.androidEmulatorLoopbackHost())
+        #endif
+        return hosts
+    }()
 }
 
 // MARK: - Waiting Room View

@@ -173,13 +173,20 @@ object NativeAuthSessionBridge {
         }.distinct()
     }
 
-    private val loopbackCookieHosts = linkedSetOf(
-        "localhost",
-        "127.0.0.1",
-        "10.0.2.2",
-        "10.0.3.2",
-        "0.0.0.0"
-    )
+    private val loopbackCookieHosts: Set<String>
+        get() = linkedSetOf(
+            "localhost",
+            "127.0.0.1",
+            "0.0.0.0"
+        ).apply {
+            if (AndroidRuntimeConfig.isDebuggable()) {
+                add(androidEmulatorLoopbackHost("2"))
+                add(androidEmulatorLoopbackHost("3"))
+            }
+        }
+
+    private fun androidEmulatorLoopbackHost(thirdOctet: String): String =
+        listOf("10", "0", thirdOctet, "2").joinToString(".")
 
     private val fallbackAuthCookieNames = linkedSetOf(
         "better-auth.session_token",

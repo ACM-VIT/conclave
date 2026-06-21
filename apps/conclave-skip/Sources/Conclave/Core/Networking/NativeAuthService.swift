@@ -406,8 +406,9 @@ enum NativeAuthService {
 
     private static func trustedAuthBaseURL(from baseURL: URL) -> URL {
         #if SKIP
+        #if DEBUG
         guard var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false),
-              components.host == "10.0.2.2" || components.host == "10.0.3.2" else {
+              isAndroidAuthLoopbackHost(components.host) else {
             return baseURL
         }
         components.host = "localhost"
@@ -415,6 +416,15 @@ enum NativeAuthService {
         #else
         return baseURL
         #endif
+        #else
+        return baseURL
+        #endif
+    }
+
+    private static func isAndroidAuthLoopbackHost(_ host: String?) -> Bool {
+        guard let host else { return false }
+        return host == SfuJoinService.androidEmulatorLoopbackHost() ||
+            host == ["10", "0", "3", "2"].joined(separator: ".")
     }
 
     private static func prepareAuthRequest(_ request: inout URLRequest, url: URL) {

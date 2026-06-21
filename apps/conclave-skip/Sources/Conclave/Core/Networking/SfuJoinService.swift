@@ -205,9 +205,11 @@ enum SfuJoinService {
             return bundledUrl
         }
 
+        #if DEBUG
         if isDebugRuntime {
-            return URL(string: "http://10.0.2.2:3000/api/sfu/join")!
+            return URL(string: "http://\(androidEmulatorLoopbackHost()):3000/api/sfu/join")!
         }
+        #endif
 
         return productionJoinURL()
         #elseif DEBUG
@@ -300,8 +302,18 @@ enum SfuJoinService {
 
     static func rewriteAndroidLoopbackURLString(_ urlString: String, fallbackHost: String? = nil) -> String {
         let fallback = fallbackHost?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let reachableHost = fallback.flatMap { isLoopbackHost($0) ? nil : $0 } ?? "10.0.2.2"
+        let defaultReachableHost: String
+        #if DEBUG
+        defaultReachableHost = androidEmulatorLoopbackHost()
+        #else
+        defaultReachableHost = "127.0.0.1"
+        #endif
+        let reachableHost = fallback.flatMap { isLoopbackHost($0) ? nil : $0 } ?? defaultReachableHost
         return rewriteLoopbackURLString(urlString, fallbackHost: reachableHost)
+    }
+
+    static func androidEmulatorLoopbackHost() -> String {
+        ["10", "0", "2", "2"].joined(separator: ".")
     }
 
     static func rewriteLoopbackURLString(_ urlString: String, fallbackHost: String) -> String {
