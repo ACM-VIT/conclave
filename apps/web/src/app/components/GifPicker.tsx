@@ -199,13 +199,28 @@ function GifPicker({
         >
           <div className="flex items-center gap-2 border-b border-white/10 px-2.5 py-2">
             <Search size={15} strokeWidth={1.75} className="text-[#a1a1aa]" />
-            <input
-              ref={inputRef}
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="Search GIFs"
-              className="min-w-0 flex-1 bg-transparent text-[13px] text-[#fafafa] placeholder:text-[#a1a1aa] focus:outline-none"
-            />
+            <div className="relative min-w-0 flex-1">
+              {!query ? (
+                <div className="pointer-events-none absolute left-0 top-1/2 -translate-y-1/2 whitespace-nowrap text-[13px] leading-none text-[#a1a1aa]">
+                  <span>Search</span>
+                  <span aria-hidden="true"> </span>
+                  <img
+                    src="/klipy.svg"
+                    alt=""
+                    aria-hidden="true"
+                    className="inline h-[0.92em] w-auto opacity-60"
+                    style={{ verticalAlign: "-0.18em" }}
+                  />
+                </div>
+              ) : null}
+              <input
+                ref={inputRef}
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                aria-label="Search Klipy GIFs"
+                className="w-full bg-transparent text-[13px] text-[#fafafa] focus:outline-none"
+              />
+            </div>
             {query ? (
               <button
                 type="button"
@@ -258,9 +273,15 @@ function GifPicker({
               href="https://klipy.com"
               target="_blank"
               rel="noopener noreferrer"
-              className="text-[11px] font-medium text-[#a1a1aa] transition-colors hover:text-[#fafafa]"
+              className="inline-flex h-5 items-center opacity-75 transition-opacity hover:opacity-100"
+              aria-label="Powered by Klipy"
             >
-              Powered by Klipy
+              <img
+                src="/pow-by-klipy.svg"
+                alt=""
+                aria-hidden="true"
+                className="h-4 w-auto"
+              />
             </a>
             {hasNext && !isLoading ? (
               <button

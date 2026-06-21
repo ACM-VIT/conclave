@@ -241,6 +241,13 @@ function ControlsBar(props: ControlsBarProps) {
     enabled: hasEffects,
     delay: 1800,
   });
+  const hasChatControl = config.left.some(
+    (row) => row.id === "chat" && !row.disabled,
+  );
+  const gifsTip = useOneTimeHint("chat-gifs", {
+    enabled: !compact && hasChatControl && !props.isChatOpen,
+    delay: 2400,
+  });
 
   const lastReactionRef = useRef(0);
   const handleReaction = useCallback(
@@ -477,9 +484,39 @@ function ControlsBar(props: ControlsBarProps) {
       </div>
 
       <div className="flex min-w-0 shrink-0 items-center justify-self-end gap-0.5">
-        {config.left.map((d) => (
-          <PanelButton key={d.id} d={d} />
-        ))}
+        {config.left.map((d) => {
+          if (d.id !== "chat") {
+            return <PanelButton key={d.id} d={d} />;
+          }
+
+          return (
+            <div key={d.id} className="relative flex">
+              <PanelButton
+                d={{
+                  ...d,
+                  onPress: () => {
+                    gifsTip.dismiss();
+                    d.onPress?.();
+                  },
+                }}
+              />
+              {gifsTip.visible &&
+              !props.isChatOpen &&
+              !filtersTip.visible &&
+              !moreOpen &&
+              !reactionsOpen &&
+              !browserOpen ? (
+                <Coachmark
+                  title="GIFs are here!"
+                  description="You can send your fav reactions on Conclave"
+                  onDismiss={gifsTip.dismiss}
+                  arrowLeft="calc(100% - 1.25rem)"
+                  className="!left-auto right-0 !translate-x-0"
+                />
+              ) : null}
+            </div>
+          );
+        })}
 
         {showHost && onToggleHostControls && (
           <button
