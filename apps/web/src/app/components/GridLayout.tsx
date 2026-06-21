@@ -45,6 +45,7 @@ import {
   computeGridLayout,
   computeStageRailLayout,
   type GridTilePosition,
+  type GridLayoutResult,
 } from "@conclave/meeting-core";
 import {
   clampMeetViewTiles,
@@ -120,6 +121,112 @@ const STAGE_RAIL_TILE_HEIGHT = 112;
 const SIDE_BY_SIDE_RAIL_HEIGHT_RATIO = 0.35;
 const AUTO_GRID_MIN_TILE_WIDTH = 176;
 const AUTO_GRID_MIN_TILE_HEIGHT = 99;
+// On a portrait phone the desktop "fit everyone into the viewport" packer is the
+// wrong model: with many people it either squashes tiles into short 16:9
+// "capsules" (wasted height) or shrinks square tiles to nothing (wasted width).
+// Phones instead get a fixed-size, vertically-SCROLLING 2-up gallery — the
+// standard mobile video-call layout (Meet/Zoom). Tiles fill the column width,
+// stay a usable size, and you scroll when there are more than fit. See
+// computeMobilePortraitGridLayout below. A landscape phone keeps the 16:9
+// packer but with a lower column cap.
+const MOBILE_PORTRAIT_COLS = 2;
+// Tiles are square by default; for small calls that fit on screen they grow
+// taller (up to this width-multiple) to fill the viewport instead of leaving a
+// gap below.
+const MOBILE_PORTRAIT_MAX_TILE_ASPECT = 1.5; // height up to 1.5× width
+const MOBILE_LANDSCAPE_MAX_COLS = 4;
+
+/**
+ * Device-/orientation-aware packing parameters for the desktop/landscape Meet
+ * grid (the 16:9 optimal packer). Portrait phones bypass this entirely and use
+ * computeMobilePortraitGridLayout instead.
+ */
+const getGridPackingParams = (isMobile: boolean) => ({
+  maxCols: isMobile ? MOBILE_LANDSCAPE_MAX_COLS : GRID_MAX_COLS,
+  targetAspect: 16 / 9,
+  minTileWidth: AUTO_GRID_MIN_TILE_WIDTH,
+  minTileHeight: AUTO_GRID_MIN_TILE_HEIGHT,
+});
+
+const isMobilePortrait = (isMobile: boolean, width: number, height: number) =>
+  isMobile && height >= width;
+
+/**
+ * Fixed-size, vertically-scrolling 2-column gallery for portrait phones.
+ *
+ * Unlike the desktop packer (computeGridLayout), this does NOT shrink tiles to
+ * cram everyone into the viewport. Each tile fills half the width; height is
+ * square by default. When the whole grid fits with room to spare (small calls)
+ * tiles grow taller to fill the screen; when it doesn't (many people) tiles keep
+ * their size and the grid overflows so the container scrolls. Returns the same
+ * GridLayoutResult shape the renderer/FLIP already consume.
+ */
+const computeMobilePortraitGridLayout = (
+  count: number,
+  width: number,
+  height: number,
+  gap: number,
+  maxTilesPerPage: number,
+): GridLayoutResult => {
+  const total = Math.max(1, Math.floor(count));
+  const perPage = Math.min(total, Math.max(1, Math.floor(maxTilesPerPage)));
+  const pages = Math.ceil(total / perPage);
+  const cols = Math.min(perPage, MOBILE_PORTRAIT_COLS);
+  const rows = Math.ceil(perPage / cols);
+  const tileWidth = Math.max(0, Math.floor((width - (cols - 1) * gap) / cols));
+
+  // Square by default; grow to fill the viewport height only if the whole grid
+  // already fits, capped so tiles never become absurdly tall.
+  let tileHeight = tileWidth;
+  const squareContentHeight = rows * tileHeight + (rows - 1) * gap;
+  if (squareContentHeight < height) {
+    const fitHeight = Math.floor((height - (rows - 1) * gap) / rows);
+    const maxHeight = Math.floor(tileWidth * MOBILE_PORTRAIT_MAX_TILE_ASPECT);
+    tileHeight = Math.max(tileWidth, Math.min(fitHeight, maxHeight));
+  }
+  tileHeight = Math.max(0, tileHeight);
+
+  const contentWidth = cols * tileWidth + Math.max(0, cols - 1) * gap;
+  const contentHeight = rows * tileHeight + Math.max(0, rows - 1) * gap;
+  const offsetX = Math.max(0, (width - contentWidth) / 2);
+  // Center vertically when it fits; pin to the top when it overflows (scroll).
+  const offsetY = contentHeight <= height ? Math.max(0, (height - contentHeight) / 2) : 0;
+
+  const positions: GridTilePosition[] = [];
+  for (let index = 0; index < perPage; index += 1) {
+    const row = Math.floor(index / cols);
+    const rowStartIndex = row * cols;
+    const rowCount = Math.min(cols, perPage - rowStartIndex);
+    const rowWidth = rowCount * tileWidth + Math.max(0, rowCount - 1) * gap;
+    const rowOffsetX = offsetX + Math.max(0, (contentWidth - rowWidth) / 2);
+    const col = index - rowStartIndex;
+    positions.push({
+      index,
+      row,
+      col: col + Math.max(0, cols - rowCount) / 2,
+      x: rowOffsetX + col * (tileWidth + gap),
+      y: offsetY + row * (tileHeight + gap),
+      width: tileWidth,
+      height: tileHeight,
+    });
+  }
+
+  const lastRowCount = perPage - (rows - 1) * cols;
+  return {
+    cols,
+    rows,
+    tileWidth,
+    tileHeight,
+    lastRowCount: Math.max(1, lastRowCount),
+    pages,
+    perPage,
+    contentWidth,
+    contentHeight,
+    offsetX,
+    offsetY,
+    positions,
+  };
+};
 const ROOM_TILING_METADATA_INTERVAL_MS = 200;
 const ROOM_TILING_PROMOTE_DELAY_MS = 220;
 const ROOM_TILING_MIN_SWITCH_INTERVAL_MS = 2200;
@@ -610,6 +717,7 @@ const computeMeetAutoTileLimit = (
   requestedMaxTiles: number,
   gridWidth: number,
   gridHeight: number,
+  isMobile = false,
 ) => {
   const usableWidth = Math.max(0, gridWidth - GRID_PADDING * 2);
   const usableHeight = Math.max(0, gridHeight - GRID_PADDING * 2);
@@ -618,6 +726,16 @@ const computeMeetAutoTileLimit = (
     return requestedMaxTiles;
   }
 
+  // Portrait phones use a fixed-size scrolling gallery — tiles never shrink to
+  // fit, so the cram-to-fit reduction doesn't apply. Show up to the requested
+  // cap and let the rest spill into the overflow tile / scroll.
+  if (isMobilePortrait(isMobile, usableWidth, usableHeight)) {
+    return requestedMaxTiles;
+  }
+
+  const { maxCols, targetAspect, minTileWidth, minTileHeight } =
+    getGridPackingParams(isMobile);
+
   for (
     let tileCount = requestedMaxTiles;
     tileCount >= MEET_VIEW_MIN_TILES;
@@ -625,13 +743,13 @@ const computeMeetAutoTileLimit = (
   ) {
     const candidate = computeGridLayout(tileCount, usableWidth, usableHeight, {
       gap: GRID_GAP,
-      maxCols: GRID_MAX_COLS,
+      maxCols,
       maxTilesPerPage: tileCount,
-      targetAspect: 16 / 9,
+      targetAspect,
     });
     if (
-      candidate.tileWidth >= AUTO_GRID_MIN_TILE_WIDTH &&
-      candidate.tileHeight >= AUTO_GRID_MIN_TILE_HEIGHT
+      candidate.tileWidth >= minTileWidth &&
+      candidate.tileHeight >= minTileHeight
     ) {
       return tileCount;
     }
@@ -1122,11 +1240,13 @@ function GridLayout({
             requestedMaxTiles,
             gridSize.width,
             gridSize.height,
+            isMobile,
           )
         : requestedMaxTiles,
     [
       gridSize.height,
       gridSize.width,
+      isMobile,
       renderedViewMode,
       requestedMaxTiles,
       viewSettings.mode,
@@ -1808,21 +1928,26 @@ function GridLayout({
   // Optimal-packing grid (shared @conclave/meeting-core engine — same logic web,
   // RN, and the Swift port use). Tiles are sized and placed exactly by the core
   // packer so every renderer gets the same centered rows and group offsets.
-  const layout = useMemo(
-    () =>
-      computeGridLayout(
+  const layout = useMemo(() => {
+    const usableWidth = Math.max(0, gridSize.width - GRID_PADDING * 2);
+    const usableHeight = Math.max(0, gridSize.height - GRID_PADDING * 2);
+    if (isMobilePortrait(isMobile, usableWidth, usableHeight)) {
+      return computeMobilePortraitGridLayout(
         totalParticipants,
-        Math.max(0, gridSize.width - GRID_PADDING * 2),
-        Math.max(0, gridSize.height - GRID_PADDING * 2),
-        {
-          gap: GRID_GAP,
-          maxCols: GRID_MAX_COLS,
-          maxTilesPerPage: maxGridTiles,
-          targetAspect: 16 / 9,
-        }
-      ),
-    [totalParticipants, gridSize.width, gridSize.height, maxGridTiles]
-  );
+        usableWidth,
+        usableHeight,
+        GRID_GAP,
+        maxGridTiles,
+      );
+    }
+    const { maxCols, targetAspect } = getGridPackingParams(isMobile);
+    return computeGridLayout(totalParticipants, usableWidth, usableHeight, {
+      gap: GRID_GAP,
+      maxCols,
+      maxTilesPerPage: maxGridTiles,
+      targetAspect,
+    });
+  }, [totalParticipants, gridSize.width, gridSize.height, maxGridTiles, isMobile]);
   const tiledGridTileIds = useMemo(() => {
     if (usesStageLayout) return [];
     const ids: string[] = [];
@@ -1876,6 +2001,16 @@ function GridLayout({
   const tileClass = layout.tileWidth > 0
     ? "absolute will-change-transform"
     : "relative h-full w-full will-change-transform";
+  // Portrait-phone tiled view is a fixed-size, vertically-scrolling gallery
+  // (see computeMobilePortraitGridLayout) — let the grid container scroll when
+  // the tiles overflow instead of clipping them.
+  const usesMobileScrollGrid =
+    !usesStageLayout &&
+    isMobilePortrait(
+      isMobile,
+      Math.max(0, gridSize.width - GRID_PADDING * 2),
+      Math.max(0, gridSize.height - GRID_PADDING * 2),
+    );
   // Include the measured stage size so a panel toggle that shifts tile POSITION
   // (the centered group re-centers) WITHOUT changing tile SIZE still re-runs the
   // FLIP effect on the settle commit — otherwise the pending reflow would be
@@ -2459,7 +2594,11 @@ function GridLayout({
         data-meet-room-tiling-warm-hold={RECENTLY_VISIBLE_WARM_HOLD_MS}
         data-meet-room-tiling-warm-reasons={roomTilingWarmReasonsJson}
         data-meet-room-tiling-scores={roomTilingScoresJson}
-        className={`relative flex flex-1 min-h-0 overflow-hidden p-4 ${
+        className={`relative flex flex-1 min-h-0 p-4 ${
+          usesMobileScrollGrid
+            ? "overflow-y-auto overflow-x-hidden"
+            : "overflow-hidden"
+        } ${
           usesStageLayout ? "flex-wrap content-center justify-center" : ""
         } ${
           hasMeasuredGrid ? "opacity-100" : "opacity-0"
