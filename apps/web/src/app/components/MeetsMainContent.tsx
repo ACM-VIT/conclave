@@ -43,6 +43,7 @@ import type {
   MeetingConfigSnapshot,
   MeetingUpdateRequest,
   Participant,
+  ReconnectRecoveryStatus,
   ReactionEvent,
   ReactionOption,
   WebinarConfigSnapshot,
@@ -88,7 +89,8 @@ interface MeetsMainContentProps {
   roomId: string;
   setRoomId: Dispatch<SetStateAction<string>>;
   joinRoomById: (roomId: string) => void;
-  retryReconnect?: () => void;
+  retryReconnect?: () => Promise<void> | void;
+  reconnectRecoveryStatus?: ReconnectRecoveryStatus | null;
   hideJoinUI?: boolean;
   isWebinarAttendee?: boolean;
   enableRoomRouting: boolean;
@@ -320,6 +322,7 @@ export default function MeetsMainContent({
   setRoomId,
   joinRoomById,
   retryReconnect,
+  reconnectRecoveryStatus,
   hideJoinUI = false,
   isWebinarAttendee = false,
   enableRoomRouting,
@@ -1095,19 +1098,34 @@ export default function MeetsMainContent({
   const isTerminalMeetingError =
     Boolean(meetError) && meetError?.recoverable === false;
   const canRetryRecovery = !isTerminalMeetingError && !isNetworkOffline;
+  const isReconnectRetryBusy =
+    reconnectRecoveryStatus?.phase === "connecting" ||
+    reconnectRecoveryStatus?.phase === "joining";
+  const reconnectAttemptLabel =
+    reconnectRecoveryStatus && reconnectRecoveryStatus.attempt > 0
+      ? `Attempt ${Math.min(
+          reconnectRecoveryStatus.attempt,
+          reconnectRecoveryStatus.maxAttempts,
+        )} of ${reconnectRecoveryStatus.maxAttempts}`
+      : null;
+  const reconnectLastError = reconnectRecoveryStatus?.lastError ?? null;
   const recoveryTitle = isNetworkOffline
     ? "Waiting for internet"
     : isTerminalMeetingError
       ? "Meeting unavailable"
-    : canRetryRecovery
-      ? "Connection interrupted"
-      : "Reconnecting";
+      : reconnectRecoveryStatus?.phase === "failed"
+        ? "Reconnect failed"
+        : canRetryRecovery
+          ? "Connection interrupted"
+          : "Reconnecting";
   const recoveryDetail = isNetworkOffline
     ? "We are keeping the room open and will restore media when your connection returns."
     : connectionState === "connected" || connectionState === "joining"
       ? "Connection is back. Restoring media, participants, and room state."
       : isTerminalMeetingError
         ? meetError?.message
+      : reconnectRecoveryStatus?.message
+        ? reconnectRecoveryStatus.message
       : canRetryRecovery
         ? (meetError?.message ?? "We could not restore the connection yet.")
         : "Keeping your meeting open while the connection is restored.";
@@ -1154,21 +1172,45 @@ export default function MeetsMainContent({
             <p className="mx-auto mt-2 max-w-[280px] text-pretty text-[12.5px] leading-relaxed text-[#fafafa]/60">
               {recoveryDetail}
             </p>
+            {reconnectAttemptLabel ? (
+              <p className="mt-3 text-[11px] font-medium uppercase tracking-[0.14em] text-[#fafafa]/40">
+                {reconnectAttemptLabel}
+              </p>
+            ) : null}
+            {reconnectLastError ? (
+              <div className="mx-auto mt-3 max-w-[315px] rounded-xl border border-[#F95F4A]/20 bg-[#F95F4A]/10 px-3.5 py-3 text-left">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[#F95F4A]/80">
+                  Last error
+                </p>
+                <p className="mt-1 text-[12px] leading-relaxed text-[#fafafa]/70">
+                  {reconnectLastError}
+                </p>
+              </div>
+            ) : null}
             <div className="mt-5 flex items-center justify-center gap-2.5">
               {canRetryRecovery ? (
                 <button
                   type="button"
+                  disabled={isReconnectRetryBusy}
                   onClick={() => {
                     if (retryReconnect) {
-                      retryReconnect();
+                      void retryReconnect();
                       return;
                     }
                     void joinRoomById(roomId);
                   }}
-                  className="inline-flex h-9 items-center justify-center gap-2 rounded-full border border-[#F95F4A]/45 bg-[#F95F4A]/20 px-4 text-[12.5px] font-medium text-[#fafafa] transition-all hover:border-[#F95F4A]/70 hover:bg-[#F95F4A]/35"
+                  className="inline-flex h-9 items-center justify-center gap-2 rounded-full border border-[#F95F4A]/45 bg-[#F95F4A]/20 px-4 text-[12.5px] font-medium text-[#fafafa] transition-all hover:border-[#F95F4A]/70 hover:bg-[#F95F4A]/35 disabled:cursor-not-allowed disabled:border-[#fafafa]/12 disabled:bg-[#fafafa]/8 disabled:text-[#fafafa]/42"
                 >
-                  <RefreshCw size={14} strokeWidth={1.8} />
-                  Retry now
+                  <RefreshCw
+                    size={14}
+                    strokeWidth={1.8}
+                    className={isReconnectRetryBusy ? "animate-spin" : undefined}
+                  />
+                  {isReconnectRetryBusy
+                    ? "Retrying"
+                    : reconnectRecoveryStatus?.phase === "failed"
+                      ? "Try again"
+                      : "Retry now"}
                 </button>
               ) : null}
               <button

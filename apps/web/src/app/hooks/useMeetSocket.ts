@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { Socket } from "socket.io-client";
 import type { Device } from "mediasoup-client";
 import {
@@ -35,6 +35,7 @@ import type {
   ParticipantConnectionStatus,
   ProducerInfo,
   ProducerType,
+  ReconnectRecoveryStatus,
   ReactionNotification,
   ReactionPayload,
   DtlsParameters,
@@ -137,6 +138,49 @@ const getTransportDisconnectGraceMs = (): number => {
 
 const shouldDeferTransportRecoveryUntilVisible = (): boolean =>
   typeof document !== "undefined" && document.visibilityState !== "visible";
+
+const getRawReconnectErrorMessage = (error: unknown): string => {
+  if (error instanceof Error) return error.message;
+  if (typeof error === "string") return error;
+  return "";
+};
+
+const describeReconnectFailure = (error: unknown): string => {
+  const message = getRawReconnectErrorMessage(error).trim();
+  if (!message) {
+    return "The meeting server did not return an error reason.";
+  }
+  if (/timeout/i.test(message)) {
+    return "The meeting server did not respond before the timeout.";
+  }
+  if (/permission|notallowed/i.test(message)) {
+    return "Browser permission is blocking camera or microphone access.";
+  }
+  if (/missing live local media/i.test(message)) {
+    return "Camera or microphone access was lost during reconnect.";
+  }
+  if (/missing room id/i.test(message)) {
+    return "The meeting room could not be found for reconnect.";
+  }
+  if (/xhr poll|websocket|transport|socket|network|fetch/i.test(message)) {
+    return "The browser could not reach the meeting server.";
+  }
+  return message;
+};
+
+const buildReconnectRecoveryStatus = (
+  phase: ReconnectRecoveryStatus["phase"],
+  attempt: number,
+  message: string,
+  lastError: string | null = null,
+): ReconnectRecoveryStatus => ({
+  phase,
+  attempt,
+  maxAttempts: MAX_RECONNECT_ATTEMPTS,
+  message,
+  lastError,
+  updatedAt: Date.now(),
+});
 
 type InitialConsumerPreferences = {
   preferredLayers?: {
@@ -696,6 +740,8 @@ export function useMeetSocket({
     iceRestartInFlightRef,
     producerSyncIntervalRef,
   } = refs;
+  const [reconnectRecoveryStatus, setReconnectRecoveryStatus] =
+    useState<ReconnectRecoveryStatus | null>(null);
 
   const getPublishNetworkProfile = useCallback(
     () =>
@@ -1178,6 +1224,7 @@ export function useMeetSocket({
     setWaitingMessage(null);
     serverRestartNoticeRef.current = null;
     setServerRestartNotice(null);
+    setReconnectRecoveryStatus(null);
     if (adminNoticeTimeoutRef.current) {
       window.clearTimeout(adminNoticeTimeoutRef.current);
       adminNoticeTimeoutRef.current = null;
@@ -3627,7 +3674,12 @@ export function useMeetSocket({
             socket.on("connect_error", (err) => {
               clearTimeout(connectionTimeout);
               console.error("[Meets] Connection error:", err);
-              setMeetError(createMeetError(err, "CONNECTION_FAILED"));
+              const reconnectFailure = describeReconnectFailure(err);
+              setMeetError({
+                code: "CONNECTION_FAILED",
+                message: reconnectFailure,
+                recoverable: true,
+              });
               setConnectionState("error");
               reject(err);
             });
@@ -4768,10 +4820,11 @@ export function useMeetSocket({
             onSocketReady?.(socket);
           } catch (err) {
             console.error("Failed to get join info:", err);
+            const reconnectFailure = describeReconnectFailure(err);
             setMeetError({
               code: "CONNECTION_FAILED",
-              message: "Authentication failed",
-              recoverable: false,
+              message: reconnectFailure,
+              recoverable: true,
             });
             setConnectionState("error");
             reject(err);
@@ -4856,10 +4909,31 @@ export function useMeetSocket({
     ],
   );
 
-  const handleReconnect = useCallback(async () => {
-    if (reconnectInFlightRef.current) return;
+  const handleReconnect = useCallback(async (options?: { immediate?: boolean }) => {
+    if (reconnectInFlightRef.current) {
+      setReconnectRecoveryStatus((current) =>
+        current
+          ? {
+              ...current,
+              message:
+                current.phase === "waiting"
+                  ? "Reconnect is waiting for the next attempt. Use Retry now to restart immediately."
+                  : "Reconnect is already in progress.",
+              updatedAt: Date.now(),
+            }
+          : buildReconnectRecoveryStatus(
+              "connecting",
+              Math.max(1, reconnectAttemptsRef.current),
+              "Reconnect is already in progress.",
+            ),
+      );
+      return;
+    }
     const reconnectGeneration = reconnectGenerationRef.current;
+    const skipInitialDelay = options?.immediate === true;
+    let lastReconnectError: unknown = null;
     reconnectInFlightRef.current = true;
+    setMeetError(null);
 
     try {
       while (reconnectAttemptsRef.current < MAX_RECONNECT_ATTEMPTS) {
@@ -4879,20 +4953,40 @@ export function useMeetSocket({
             "[Meets] Background reconnect in progress; preserving joined UI state.",
           );
         }
-        reconnectAttemptsRef.current++;
+        const attempt = reconnectAttemptsRef.current + 1;
         const delay =
-          RECONNECT_DELAY_MS * 2 ** (reconnectAttemptsRef.current - 1);
+          skipInitialDelay && attempt === 1
+            ? 0
+            : RECONNECT_DELAY_MS * 2 ** (attempt - 1);
+        reconnectAttemptsRef.current = attempt;
+
+        if (shouldSurfaceReconnectState) {
+          setReconnectRecoveryStatus(
+            buildReconnectRecoveryStatus(
+              delay > 0 ? "waiting" : "connecting",
+              attempt,
+              delay > 0
+                ? `Retrying automatically in ${Math.ceil(delay / 1000)}s.`
+                : "Retrying reconnect now.",
+              lastReconnectError
+                ? describeReconnectFailure(lastReconnectError)
+                : null,
+            ),
+          );
+        }
 
         console.log(
-          `[Meets] Reconnecting in ${delay}ms (attempt ${reconnectAttemptsRef.current})`,
+          `[Meets] Reconnecting in ${delay}ms (attempt ${attempt})`,
         );
         telemetry.capture("meet_reconnect_attempt", {
           roomId: currentRoomIdRef.current ?? undefined,
-          attempt: reconnectAttemptsRef.current,
+          attempt,
           maxAttempts: MAX_RECONNECT_ATTEMPTS,
           usingTurnFallback: useTurnFallbackRef.current,
         });
-        await new Promise((r) => setTimeout(r, delay));
+        if (delay > 0) {
+          await new Promise((r) => setTimeout(r, delay));
+        }
         // The terminal event may have arrived during the backoff wait.
         if (intentionalDisconnectRef.current) return;
         if (reconnectGeneration !== reconnectGenerationRef.current) return;
@@ -4901,6 +4995,18 @@ export function useMeetSocket({
           const reconnectRoomId = currentRoomIdRef.current;
           if (!reconnectRoomId) {
             throw new Error("Missing room ID for reconnect");
+          }
+          if (shouldSurfaceReconnectState) {
+            setReconnectRecoveryStatus(
+              buildReconnectRecoveryStatus(
+                "connecting",
+                attempt,
+                "Connecting to the meeting server.",
+                lastReconnectError
+                  ? describeReconnectFailure(lastReconnectError)
+                  : null,
+              ),
+            );
           }
           const canReuseSocket = socketRef.current?.connected === true;
           cleanupRoomResources({
@@ -4926,6 +5032,18 @@ export function useMeetSocket({
             joinOptions,
             "reconnect",
           );
+          if (shouldSurfaceReconnectState) {
+            setReconnectRecoveryStatus(
+              buildReconnectRecoveryStatus(
+                "joining",
+                attempt,
+                "Restoring media, participants, and room state.",
+                lastReconnectError
+                  ? describeReconnectFailure(lastReconnectError)
+                  : null,
+              ),
+            );
+          }
           if (
             reconnectRoomId &&
             (stream ||
@@ -4959,14 +5077,40 @@ export function useMeetSocket({
           if (reconnectGeneration !== reconnectGenerationRef.current) return;
           telemetry.capture("meet_reconnect_success", {
             roomId: reconnectRoomId ?? undefined,
-            attempt: reconnectAttemptsRef.current,
+            attempt,
             usingTurnFallback: useTurnFallbackRef.current,
           });
           reconnectAttemptsRef.current = 0;
+          setReconnectRecoveryStatus(null);
+          setMeetError(null);
           return;
-        } catch (_err) {
+        } catch (err) {
           if (reconnectGeneration !== reconnectGenerationRef.current) return;
-          // retry
+          lastReconnectError = err;
+          const reconnectFailure = describeReconnectFailure(err);
+          console.warn(
+            `[Meets] Reconnect attempt ${attempt} failed:`,
+            err,
+          );
+          telemetry.capture("meet_reconnect_attempt_failure", {
+            roomId: currentRoomIdRef.current ?? undefined,
+            attempt,
+            maxAttempts: MAX_RECONNECT_ATTEMPTS,
+            error: reconnectFailure,
+            usingTurnFallback: useTurnFallbackRef.current,
+          });
+          if (shouldSurfaceReconnectState) {
+            setReconnectRecoveryStatus(
+              buildReconnectRecoveryStatus(
+                attempt >= MAX_RECONNECT_ATTEMPTS ? "failed" : "waiting",
+                attempt,
+                attempt >= MAX_RECONNECT_ATTEMPTS
+                  ? "Could not reconnect to the meeting."
+                  : "Reconnect attempt failed. Retrying automatically.",
+                reconnectFailure,
+              ),
+            );
+          }
         }
       }
 
@@ -4975,15 +5119,25 @@ export function useMeetSocket({
       if (intentionalDisconnectRef.current) return;
       if (reconnectGeneration !== reconnectGenerationRef.current) return;
 
+      const reconnectFailure = describeReconnectFailure(lastReconnectError);
       telemetry.capture("meet_reconnect_give_up", {
         roomId: currentRoomIdRef.current ?? undefined,
         attempts: reconnectAttemptsRef.current,
+        error: reconnectFailure,
         usingTurnFallback: useTurnFallbackRef.current,
       });
+      setReconnectRecoveryStatus(
+        buildReconnectRecoveryStatus(
+          "failed",
+          reconnectAttemptsRef.current,
+          "Could not reconnect after several attempts.",
+          reconnectFailure,
+        ),
+      );
       setMeetError({
         code: "CONNECTION_FAILED",
-        message: "Failed to reconnect after multiple attempts",
-        recoverable: false,
+        message: reconnectFailure,
+        recoverable: true,
       });
       setConnectionState("error");
     } finally {
@@ -5099,6 +5253,7 @@ export function useMeetSocket({
       });
 
       setMeetError(null);
+      setReconnectRecoveryStatus(null);
       setConnectionState("connecting");
       primeAudioOutput();
       refs.intentionalDisconnectRef.current = false;
@@ -5306,16 +5461,40 @@ export function useMeetSocket({
 
   const retryReconnect = useCallback(async () => {
     const targetRoomId = currentRoomIdRef.current || roomId;
-    if (!targetRoomId) return;
+    if (!targetRoomId) {
+      const reconnectFailure = "No meeting room is available to reconnect.";
+      setReconnectRecoveryStatus(
+        buildReconnectRecoveryStatus(
+          "failed",
+          0,
+          "Could not start reconnect.",
+          reconnectFailure,
+        ),
+      );
+      setMeetError({
+        code: "CONNECTION_FAILED",
+        message: reconnectFailure,
+        recoverable: true,
+      });
+      setConnectionState("error");
+      return;
+    }
 
     reconnectGenerationRef.current += 1;
     reconnectAttemptsRef.current = 0;
     reconnectInFlightRef.current = false;
     setMeetError(null);
+    setReconnectRecoveryStatus(
+      buildReconnectRecoveryStatus(
+        "connecting",
+        1,
+        "Retrying reconnect now.",
+      ),
+    );
     setConnectionState("reconnecting");
 
     if (currentRoomIdRef.current) {
-      await handleReconnect();
+      await handleReconnect({ immediate: true });
       return;
     }
 
@@ -5575,6 +5754,7 @@ export function useMeetSocket({
     joinRoom,
     joinRoomById,
     retryReconnect,
+    reconnectRecoveryStatus,
     toggleRoomLock,
     toggleNoGuests,
     toggleChatLock,
