@@ -98,6 +98,7 @@ export function useMeetChat({
       content: message.gif ? message.gif.title || "GIF" : message.content,
       hasGif: Boolean(message.gif),
       isDirect: message.isDirect,
+      dmTargetUserId: message.dmTargetUserId,
     });
   }, []);
 

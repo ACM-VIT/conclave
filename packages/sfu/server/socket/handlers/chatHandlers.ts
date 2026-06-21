@@ -96,53 +96,103 @@ const normalizeChatGifAttachment = (
   };
 };
 
-// Resolve the quoted message from the room's broadcast history whenever
-// possible so a reply can't be used to put fabricated words in someone
-// else's mouth. Direct messages aren't retained server-side (see
-// Room.recordChatMessage), so replies to a DM fall back to the client's
-// own (sanitized) snapshot of a message it already has in its own thread.
+type ReplyNormalizeResult =
+  | { replyTo?: ChatReplyPreview }
+  | { error: string };
+
+interface ReplyNormalizeOptions {
+  allowDirectSnapshot: boolean;
+  senderUserId: string;
+  dmTargetUserId?: string | null;
+}
+
+// Resolve public quoted messages from broadcast history so a reply cannot put
+// fabricated words in someone else's mouth. Direct messages are never retained
+// in public room history, so client snapshots are accepted only for replies
+// that remain in the same private thread.
 const normalizeReplyTo = (
   value: unknown,
   room: Room,
-): ChatReplyPreview | undefined => {
-  if (!value || typeof value !== "object") return undefined;
+  options: ReplyNormalizeOptions,
+): ReplyNormalizeResult => {
+  if (!value || typeof value !== "object") return {};
 
   const candidate = value as Record<string, unknown>;
   const id = typeof candidate.id === "string" ? candidate.id.trim() : "";
-  if (!id) return undefined;
+  if (!id) return {};
 
   const original = room
     .getChatHistorySnapshot()
     .find((message) => message.id === id);
   if (original) {
+    if (original.isDirect) {
+      const staysInSamePrivateThread =
+        options.allowDirectSnapshot &&
+        options.dmTargetUserId &&
+        (original.userId === options.dmTargetUserId ||
+          (original.userId === options.senderUserId &&
+            original.dmTargetUserId === options.dmTargetUserId));
+      if (!staysInSamePrivateThread) return {};
+    }
+
     return {
-      id: original.id,
-      userId: original.userId,
-      displayName: original.displayName,
-      content: original.gif
-        ? original.gif.title || "GIF"
-        : original.content.slice(0, MAX_REPLY_CONTENT_LENGTH),
-      hasGif: Boolean(original.gif),
+      replyTo: {
+        id: original.id,
+        userId: original.userId,
+        displayName: original.displayName,
+        content: original.gif
+          ? original.gif.title || "GIF"
+          : original.content.slice(0, MAX_REPLY_CONTENT_LENGTH),
+        hasGif: Boolean(original.gif),
+        isDirect: original.isDirect,
+        dmTargetUserId: original.dmTargetUserId,
+      },
     };
+  }
+
+  const isDirectSnapshot = candidate.isDirect === true;
+  if (!isDirectSnapshot) {
+    return { error: "Reply target is no longer available." };
+  }
+
+  if (!options.allowDirectSnapshot || !options.dmTargetUserId) {
+    return {};
   }
 
   const userId =
     typeof candidate.userId === "string" ? candidate.userId.trim() : "";
+  const dmTargetUserId =
+    typeof candidate.dmTargetUserId === "string"
+      ? candidate.dmTargetUserId.trim()
+      : "";
+  const staysInSamePrivateThread =
+    userId === options.dmTargetUserId ||
+    (userId === options.senderUserId &&
+      dmTargetUserId === options.dmTargetUserId);
+  if (!staysInSamePrivateThread) {
+    return { error: "Private replies must stay in the same private thread." };
+  }
+
   const displayName =
     typeof candidate.displayName === "string"
       ? candidate.displayName.trim()
       : "";
   const content =
     typeof candidate.content === "string" ? candidate.content.trim() : "";
-  if (!userId || !displayName || !content) return undefined;
+  if (!userId || !displayName || !content) {
+    return { error: "Invalid reply target." };
+  }
 
   return {
-    id,
-    userId: userId.slice(0, MAX_REPLY_NAME_LENGTH),
-    displayName: displayName.slice(0, MAX_REPLY_NAME_LENGTH),
-    content: content.slice(0, MAX_REPLY_CONTENT_LENGTH),
-    hasGif: Boolean(candidate.hasGif),
-    isDirect: Boolean(candidate.isDirect),
+    replyTo: {
+      id,
+      userId: userId.slice(0, MAX_REPLY_NAME_LENGTH),
+      displayName: displayName.slice(0, MAX_REPLY_NAME_LENGTH),
+      content: content.slice(0, MAX_REPLY_CONTENT_LENGTH),
+      hasGif: Boolean(candidate.hasGif),
+      isDirect: true,
+      dmTargetUserId: options.dmTargetUserId,
+    },
   };
 };
 
@@ -344,7 +394,6 @@ export const registerChatHandlers = (context: ConnectionContext): void => {
         }
 
         const gif = normalizedGif ?? undefined;
-        const replyTo = normalizeReplyTo(data.replyTo, room);
         const content =
           typeof data.content === "string" ? data.content.trim() : "";
         if (!content && !gif) {
@@ -378,6 +427,17 @@ export const registerChatHandlers = (context: ConnectionContext): void => {
           }
           dmTarget = resolvedTarget;
         }
+
+        const normalizedReply = normalizeReplyTo(data.replyTo, room, {
+          allowDirectSnapshot: Boolean(dmTarget),
+          senderUserId: sender.id,
+          dmTargetUserId: dmTarget?.userId,
+        });
+        if ("error" in normalizedReply) {
+          respond(callback, { error: normalizedReply.error });
+          return;
+        }
+        const replyTo = normalizedReply.replyTo;
 
         let messageContent = directMessageIntent
           ? directMessageIntent.messageBody

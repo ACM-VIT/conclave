@@ -419,6 +419,7 @@ export interface ChatReplyPreview {
   content: string;
   hasGif?: boolean;
   isDirect?: boolean;
+  dmTargetUserId?: string;
 }
 
 export interface ChatGifAttachment {

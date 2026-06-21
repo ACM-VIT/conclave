@@ -516,10 +516,24 @@ export default function MeetsMainContent({
   const [isHostControlsOpen, setIsHostControlsOpen] = useState(false);
   const [isVideoEffectsOpen, setIsVideoEffectsOpen] = useState(false);
   const [isViewPanelOpen, setIsViewPanelOpen] = useState(false);
+  const [canReserveDockedPanel, setCanReserveDockedPanel] = useState(false);
   const [showAndroidUpsell, setShowAndroidUpsell] = useState(false);
   const [viewSettings, setViewSettings] = useState<MeetViewSettings>(
     readStoredMeetViewSettings,
   );
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const mediaQuery = window.matchMedia("(min-width: 640px)");
+    const updateReserveBreakpoint = () => {
+      setCanReserveDockedPanel(mediaQuery.matches);
+    };
+
+    updateReserveBreakpoint();
+    mediaQuery.addEventListener("change", updateReserveBreakpoint);
+    return () => {
+      mediaQuery.removeEventListener("change", updateReserveBreakpoint);
+    };
+  }, []);
   useEffect(() => {
     writeStoredMeetViewSettings(viewSettings);
   }, [viewSettings]);
@@ -1062,7 +1076,7 @@ export default function MeetsMainContent({
     return videoParticipant?.screenShareStream ?? null;
   }, [participantsArray]);
   const dockedPanelReserve =
-    !isMobile &&
+    canReserveDockedPanel &&
     isJoined &&
     !isWebinarAttendee &&
     (isChatOpen ||

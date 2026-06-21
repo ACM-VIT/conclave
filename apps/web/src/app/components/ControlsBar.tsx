@@ -517,6 +517,14 @@ function OverflowItem({ row, onActivate }: { row: OverflowRow; onActivate: () =>
     >
       <Icon size={MENU_ICON} strokeWidth={STROKE} className="shrink-0" />
       <span className="flex-1">{row.label}</span>
+      {typeof row.badge === "number" && row.badge > 0 ? (
+        <span
+          className="inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-full px-1 text-[10px] font-semibold leading-none text-white"
+          style={{ backgroundColor: color.accent }}
+        >
+          {row.badge > 9 ? "9+" : row.badge}
+        </span>
+      ) : null}
     </button>
   );
 }
