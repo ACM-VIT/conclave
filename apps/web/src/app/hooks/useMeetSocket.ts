@@ -177,8 +177,14 @@ const getResponseStatusFromError = (error: unknown): number | null => {
   return typeof fallbackStatus === "number" ? fallbackStatus : null;
 };
 
+const isRecoverableJoinInfoStatus = (status: number): boolean =>
+  status >= 500 && status < 600;
+
 const isRecoverableReconnectFailure = (error: unknown): boolean => {
-  if (getResponseStatusFromError(error) !== null) return false;
+  const responseStatus = getResponseStatusFromError(error);
+  if (responseStatus !== null) {
+    return isRecoverableJoinInfoStatus(responseStatus);
+  }
   const message = getRawReconnectErrorMessage(error).trim();
   if (!message) return true;
   return /timeout|xhr poll|websocket|transport|socket|network|fetch|load failed|connection/i.test(

@@ -1832,6 +1832,11 @@ assertIncludes(
   "web reconnect flow classifies recoverable transport failures explicitly",
 );
 assertIncludes(
+  "webMeetSocket",
+  "const isRecoverableJoinInfoStatus = (status: number): boolean =>\n  status >= 500 && status < 600;",
+  "web reconnect flow must retry transient 5xx join-info failures",
+);
+assertIncludes(
   "webMeetClientPage",
   "error.responseStatus = response.status;",
   "web join-info fetch preserves HTTP response status for reconnect classification",
