@@ -157,7 +157,7 @@ const describeReconnectFailure = (error: unknown): string => {
     return "Browser permission is blocking camera or microphone access.";
   }
   if (/missing live local media/i.test(message)) {
-    return "Camera or microphone access was lost during reconnect.";
+    return "Local media was not ready yet. We will rejoin the room first and retry your devices.";
   }
   if (/missing room id/i.test(message)) {
     return "The meeting room could not be found for reconnect.";
@@ -5027,52 +5027,61 @@ export function useMeetSocket({
           if (intentionalDisconnectRef.current) return;
 
           const joinOptions = joinOptionsRef.current;
+          const mediaNeeds = getJoinMediaNeeds(
+            localStreamRef.current || localStream,
+          );
           const stream = await ensureLiveLocalMediaForJoin(
             localStreamRef.current || localStream,
             joinOptions,
             "reconnect",
           );
+          const shouldRetryLocalMediaAfterJoin =
+            !stream &&
+            !joinOptions.isGhost &&
+            !joinOptions.isRecorder &&
+            !bypassMediaPermissions &&
+            joinOptions.joinMode !== "webinar_attendee" &&
+            (mediaNeeds.needsAudio || mediaNeeds.needsVideo);
           if (shouldSurfaceReconnectState) {
             setReconnectRecoveryStatus(
               buildReconnectRecoveryStatus(
                 "joining",
                 attempt,
-                "Restoring media, participants, and room state.",
+                shouldRetryLocalMediaAfterJoin
+                  ? "Rejoining the room first. Your devices will be retried after the meeting is back."
+                  : "Restoring media, participants, and room state.",
                 lastReconnectError
                   ? describeReconnectFailure(lastReconnectError)
                   : null,
               ),
             );
           }
-          if (
-            reconnectRoomId &&
-            (stream ||
-              joinOptions.isGhost ||
-              joinOptions.isRecorder ||
-              bypassMediaPermissions ||
-              joinOptions.joinMode === "webinar_attendee")
-          ) {
-            try {
-              await joinRoomInternal(reconnectRoomId, stream, joinOptions);
-            } catch (joinError) {
-              if (!(joinError instanceof JoinRoomRedirectError)) {
-                throw joinError;
-              }
-              cleanupRoomResources({
-                resetRoomId: false,
-                preserveMeetingState: true,
-              });
-              socketRef.current?.disconnect();
-              socketRef.current = null;
-              onSocketReady?.(null);
-              await connectSocket(reconnectRoomId, {
-                sfuUrlOverride: joinError.redirectUrl,
-              });
-              if (intentionalDisconnectRef.current) return;
-              await joinRoomInternal(reconnectRoomId, stream, joinOptions);
+          try {
+            await joinRoomInternal(reconnectRoomId, stream, joinOptions);
+          } catch (joinError) {
+            if (!(joinError instanceof JoinRoomRedirectError)) {
+              throw joinError;
             }
-          } else {
-            throw new Error("Missing live local media for reconnect");
+            cleanupRoomResources({
+              resetRoomId: false,
+              preserveMeetingState: true,
+            });
+            socketRef.current?.disconnect();
+            socketRef.current = null;
+            onSocketReady?.(null);
+            await connectSocket(reconnectRoomId, {
+              sfuUrlOverride: joinError.redirectUrl,
+            });
+            if (intentionalDisconnectRef.current) return;
+            await joinRoomInternal(reconnectRoomId, stream, joinOptions);
+          }
+          if (shouldRetryLocalMediaAfterJoin) {
+            if (mediaNeeds.needsAudio) {
+              requestAudioProducerRecovery();
+            }
+            if (mediaNeeds.needsVideo) {
+              requestCameraProducerRecovery();
+            }
           }
           if (reconnectGeneration !== reconnectGenerationRef.current) return;
           telemetry.capture("meet_reconnect_success", {
@@ -5150,6 +5159,7 @@ export function useMeetSocket({
     connectSocket,
     currentRoomIdRef,
     ensureLiveLocalMediaForJoin,
+    getJoinMediaNeeds,
     intentionalDisconnectRef,
     joinOptionsRef,
     joinRoomInternal,
@@ -5157,6 +5167,8 @@ export function useMeetSocket({
     localStreamRef,
     reconnectAttemptsRef,
     reconnectInFlightRef,
+    requestAudioProducerRecovery,
+    requestCameraProducerRecovery,
     setConnectionState,
     setMeetError,
     socketRef,

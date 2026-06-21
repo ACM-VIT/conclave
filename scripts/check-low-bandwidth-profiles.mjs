@@ -1810,6 +1810,21 @@ assertIncludes(
   "describeReconnectFailure",
   "web reconnect flow surfaces clean retry failure reasons",
 );
+assertNotIncludes(
+  "webMeetSocket",
+  "Camera or microphone access was lost during reconnect.",
+  "web reconnect copy must not blame camera or microphone loss",
+);
+assertNotIncludes(
+  "webMeetSocket",
+  'throw new Error("Missing live local media for reconnect")',
+  "web reconnect must not fail the room reconnect when local media is temporarily unavailable",
+);
+assertRegex(
+  "webMeetSocket",
+  /const shouldRetryLocalMediaAfterJoin =[\s\S]*!stream[\s\S]*await joinRoomInternal\(reconnectRoomId, stream, joinOptions\)[\s\S]*if \(shouldRetryLocalMediaAfterJoin\) \{[\s\S]*requestAudioProducerRecovery\(\);[\s\S]*requestCameraProducerRecovery\(\);/,
+  "web reconnect must rejoin first and queue local media recovery when devices are not ready",
+);
 assertIncludes(
   "webMeetSocket",
   "reconnectGenerationRef.current += 1;",
