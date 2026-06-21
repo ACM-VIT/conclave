@@ -339,6 +339,18 @@ describe("participantReducer — mute / camera / hand transitions", () => {
     expect(next.get("x")!.isMuted).toBe(true);
   });
 
+  it("UPDATE_MUTED can skip materializing an absent participant", () => {
+    const state = empty();
+    const next = participantReducer(state, {
+      type: "UPDATE_MUTED",
+      userId: "x",
+      muted: true,
+      addIfMissing: false,
+    });
+    expect(next).toBe(state);
+    expect(next.has("x")).toBe(false);
+  });
+
   it("UPDATE_CAMERA_OFF toggles isCameraOff and is a no-op when unchanged", () => {
     const state = seed("a");
     const off = participantReducer(state, {
@@ -367,6 +379,18 @@ describe("participantReducer — mute / camera / hand transitions", () => {
     });
     expect(off.get("a")!.isCameraOff).toBe(true);
     expect(off.get("a")!.isVideoAdaptivelyPaused).toBe(false);
+  });
+
+  it("UPDATE_CAMERA_OFF can skip materializing an absent participant", () => {
+    const state = empty();
+    const next = participantReducer(state, {
+      type: "UPDATE_CAMERA_OFF",
+      userId: "x",
+      cameraOff: true,
+      addIfMissing: false,
+    });
+    expect(next).toBe(state);
+    expect(next.has("x")).toBe(false);
   });
 
   it("UPDATE_VIDEO_ADAPTIVE_PAUSED toggles receiver-side video pause for the matching producer only", () => {

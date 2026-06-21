@@ -1816,12 +1816,14 @@ export function useMeetSocket({
                 type: "UPDATE_CAMERA_OFF",
                 userId: info.userId,
                 cameraOff: true,
+                addIfMissing: false,
               });
             } else if (info.kind === "audio" && info.type === "webcam") {
               dispatchParticipants({
                 type: "UPDATE_MUTED",
                 userId: info.userId,
                 muted: true,
+                addIfMissing: false,
               });
             }
           }

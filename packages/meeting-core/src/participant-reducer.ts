@@ -16,8 +16,18 @@ export type ParticipantAction =
       stream: MediaStream | null;
       producerId: string;
     }
-  | { type: "UPDATE_MUTED"; userId: string; muted: boolean }
-  | { type: "UPDATE_CAMERA_OFF"; userId: string; cameraOff: boolean }
+  | {
+      type: "UPDATE_MUTED";
+      userId: string;
+      muted: boolean;
+      addIfMissing?: boolean;
+    }
+  | {
+      type: "UPDATE_CAMERA_OFF";
+      userId: string;
+      cameraOff: boolean;
+      addIfMissing?: boolean;
+    }
   | {
       type: "UPDATE_VIDEO_ADAPTIVE_PAUSED";
       userId: string;
@@ -173,6 +183,7 @@ export function participantReducer(
     }
     case "UPDATE_MUTED": {
       const participant = state.get(action.userId);
+      if (!participant && action.addIfMissing === false) return state;
       if (participant && participant.isMuted === action.muted) return state;
       return withParticipant(state, action.userId, {
         ...(participant || createEmptyParticipant(action.userId)),
@@ -181,6 +192,7 @@ export function participantReducer(
     }
     case "UPDATE_CAMERA_OFF": {
       const participant = state.get(action.userId);
+      if (!participant && action.addIfMissing === false) return state;
       const nextVideoAdaptivelyPaused =
         action.cameraOff ? false : participant?.isVideoAdaptivelyPaused ?? false;
       if (
