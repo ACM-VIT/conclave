@@ -1925,6 +1925,43 @@ export function useMeetSocket({
     ],
   );
 
+  const closeServerConsumer = useCallback(
+    (consumerId?: string | null) => {
+      if (!consumerId) return;
+      const socket = socketRef.current;
+      if (!socket?.connected) return;
+      socket.emit("closeConsumer", { consumerId }, () => {});
+    },
+    [socketRef],
+  );
+
+  const dropDepartedProducer = useCallback(
+    (producerInfo: ProducerInfo) => {
+      const producerId = producerInfo.producerId;
+      if (
+        consumersRef.current.has(producerId) ||
+        producerMapRef.current.has(producerId)
+      ) {
+        handleProducerClosed(producerId);
+        return;
+      }
+
+      announcedRemoteProducersRef.current.delete(producerId);
+      pendingProducersRef.current.delete(producerId);
+      consumeRetryAttemptsRef.current.delete(producerId);
+      producerPausedStateRef.current.delete(producerId);
+    },
+    [
+      announcedRemoteProducersRef,
+      consumeRetryAttemptsRef,
+      consumersRef,
+      handleProducerClosed,
+      pendingProducersRef,
+      producerMapRef,
+      producerPausedStateRef,
+    ],
+  );
+
   const queueProducerConsumeRetry = useCallback(
     (producerInfo: ProducerInfo, delayMs = 300) => {
       const attemptCount =
@@ -2636,10 +2673,11 @@ export function useMeetSocket({
       producerInfo: ProducerInfo,
       options: ConsumeProducerOptions = {},
     ): Promise<void> => {
-      if (
-        producerInfo.producerUserId === userId ||
-        shouldIgnoreDepartedParticipant(producerInfo.producerUserId)
-      ) {
+      if (producerInfo.producerUserId === userId) {
+        return;
+      }
+      if (shouldIgnoreDepartedParticipant(producerInfo.producerUserId)) {
+        dropDepartedProducer(producerInfo);
         return;
       }
       const existingConsumer = consumersRef.current.get(producerInfo.producerId);
@@ -2677,9 +2715,10 @@ export function useMeetSocket({
           },
           async (response: ConsumeResponse | { error: string }) => {
             if (shouldIgnoreDepartedParticipant(producerInfo.producerUserId)) {
-              announcedRemoteProducersRef.current.delete(producerInfo.producerId);
-              pendingProducersRef.current.delete(producerInfo.producerId);
-              consumeRetryAttemptsRef.current.delete(producerInfo.producerId);
+              if (!("error" in response)) {
+                closeServerConsumer(response.id);
+              }
+              dropDepartedProducer(producerInfo);
               resolve();
               return;
             }
@@ -2702,17 +2741,14 @@ export function useMeetSocket({
                   ),
               });
               if (shouldIgnoreDepartedParticipant(producerInfo.producerUserId)) {
+                closeServerConsumer(response.id);
                 try {
                   consumer.track.onmute = null;
                   consumer.track.onunmute = null;
                   consumer.track.stop();
                   consumer.close();
                 } catch {}
-                announcedRemoteProducersRef.current.delete(
-                  producerInfo.producerId,
-                );
-                pendingProducersRef.current.delete(producerInfo.producerId);
-                consumeRetryAttemptsRef.current.delete(producerInfo.producerId);
+                dropDepartedProducer(producerInfo);
                 resolve();
                 return;
               }
@@ -2944,6 +2980,7 @@ export function useMeetSocket({
               );
               resolve();
             } catch (err) {
+              closeServerConsumer(response.id);
               console.error("[Meets] Failed to create consumer:", err);
               queueProducerConsumeRetry(producerInfo, 350);
               resolve();
@@ -2963,6 +3000,8 @@ export function useMeetSocket({
       dispatchParticipants,
       handleProducerClosed,
       closeConsumerForSameProducerReconsume,
+      closeServerConsumer,
+      dropDepartedProducer,
       getReceiveNetworkProfile,
       joinMode,
       queueProducerConsumeRetry,
@@ -3197,14 +3236,7 @@ export function useMeetSocket({
 
       for (const producerInfo of producers) {
         if (shouldIgnoreDepartedParticipant(producerInfo.producerUserId)) {
-          if (
-            consumersRef.current.has(producerInfo.producerId) ||
-            producerMapRef.current.has(producerInfo.producerId)
-          ) {
-            handleProducerClosed(producerInfo.producerId);
-          }
-          announcedRemoteProducersRef.current.delete(producerInfo.producerId);
-          pendingProducersRef.current.delete(producerInfo.producerId);
+          dropDepartedProducer(producerInfo);
           continue;
         }
         setProducerPausedState(
@@ -3330,6 +3362,7 @@ export function useMeetSocket({
     pendingProducersRef,
     dispatchParticipants,
     consumeProducer,
+    dropDepartedProducer,
     handleProducerClosed,
     setProducerPausedState,
     shouldIgnoreDepartedParticipant,
@@ -3342,17 +3375,34 @@ export function useMeetSocket({
 
   const applyWebinarFeedProducers = useCallback(
     async (producers: ProducerInfo[]) => {
+      const activeProducers = producers.filter((producer) => {
+        const isDeparted = shouldIgnoreDepartedParticipant(
+          producer.producerUserId,
+        );
+        if (isDeparted) {
+          dropDepartedProducer(producer);
+        }
+        return !isDeparted;
+      });
       const serverProducerIds = new Set(
-        producers.map((producer) => producer.producerId),
+        activeProducers.map((producer) => producer.producerId),
       );
       for (const producerId of producerMapRef.current.keys()) {
         if (!serverProducerIds.has(producerId)) {
           handleProducerClosed(producerId);
         }
       }
-      await Promise.all(producers.map((producer) => consumeProducer(producer)));
+      await Promise.all(
+        activeProducers.map((producer) => consumeProducer(producer)),
+      );
     },
-    [consumeProducer, handleProducerClosed, producerMapRef],
+    [
+      consumeProducer,
+      dropDepartedProducer,
+      handleProducerClosed,
+      producerMapRef,
+      shouldIgnoreDepartedParticipant,
+    ],
   );
 
   const startProducerSync = useCallback(() => {
@@ -3529,6 +3579,7 @@ export function useMeetSocket({
               );
               currentRoomIdRef.current = targetRoomId;
               serverRoomIdRef.current = response.roomId ?? targetRoomId;
+              departedParticipantIdsRef.current.clear();
               setIsRoomLocked(response.isLocked ?? false);
               setMeetingRequiresInviteCode(
                 response.meetingRequiresInviteCode ?? false,
@@ -3941,9 +3992,7 @@ export function useMeetSocket({
             socket.on("newProducer", async (data: ProducerInfo) => {
               console.log("[Meets] New producer:", data);
               if (shouldIgnoreDepartedParticipant(data.producerUserId)) {
-                announcedRemoteProducersRef.current.delete(data.producerId);
-                pendingProducersRef.current.delete(data.producerId);
-                consumeRetryAttemptsRef.current.delete(data.producerId);
+                dropDepartedProducer(data);
                 return;
               }
               setProducerPausedState(data.producerId, Boolean(data.paused));
@@ -4173,9 +4222,11 @@ export function useMeetSocket({
                   .filter(([, info]) => info.userId === leftUserId)
                   .map(([producerId]) => producerId);
 
-                for (const [producerId, info] of pendingProducersRef.current) {
+                for (const info of Array.from(
+                  pendingProducersRef.current.values(),
+                )) {
                   if (info.producerUserId === leftUserId) {
-                    pendingProducersRef.current.delete(producerId);
+                    dropDepartedProducer(info);
                   }
                 }
 
@@ -4298,9 +4349,11 @@ export function useMeetSocket({
                   )
                     .filter(([, info]) => info.userId === previousUserId)
                     .map(([producerId]) => producerId);
-                  for (const [producerId, info] of pendingProducersRef.current) {
+                  for (const info of Array.from(
+                    pendingProducersRef.current.values(),
+                  )) {
                     if (info.producerUserId === previousUserId) {
-                      pendingProducersRef.current.delete(producerId);
+                      dropDepartedProducer(info);
                     }
                   }
                   for (const producerId of producersToClose) {
@@ -4989,9 +5042,15 @@ export function useMeetSocket({
               (notification: WebinarFeedChangedNotification) => {
                 if (joinMode !== "webinar_attendee") return;
                 if (!isRoomEvent(notification.roomId)) return;
+                const activeFeedProducers = notification.producers.filter(
+                  (producer) =>
+                    !shouldIgnoreDepartedParticipant(producer.producerUserId),
+                );
                 setWebinarSpeakerUserId(
-                  notification.speakerUserId ??
-                    notification.producers?.[0]?.producerUserId ??
+                  notification.speakerUserId &&
+                    !shouldIgnoreDepartedParticipant(notification.speakerUserId)
+                    ? notification.speakerUserId
+                    : activeFeedProducers[0]?.producerUserId ??
                     null,
                 );
                 void applyWebinarFeedProducers(notification.producers).finally(() => {

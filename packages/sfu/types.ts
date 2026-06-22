@@ -122,6 +122,10 @@ export interface ConsumeData {
   priority?: number;
 }
 
+export interface CloseConsumerData {
+  consumerId: string;
+}
+
 export interface ConsumeResponse {
   id: string;
   producerId: string;

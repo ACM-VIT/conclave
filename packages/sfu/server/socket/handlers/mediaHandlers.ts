@@ -1,5 +1,6 @@
 import type { Consumer, ConsumerLayers } from "mediasoup/types";
 import type {
+  CloseConsumerData,
   ConsumeData,
   ConsumeResponse,
   ConsumerTelemetryNotification,
@@ -707,6 +708,41 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
           { room, client: currentClient, consumer },
           wasPaused ? "resume" : "preferences",
         );
+        respond(callback, { success: true });
+      } catch (error) {
+        respond(callback, { error: (error as Error).message });
+      }
+    },
+  );
+
+  socket.on(
+    "closeConsumer",
+    (
+      data: CloseConsumerData,
+      callback: (response: { success: boolean } | { error: string }) => void,
+    ) => {
+      try {
+        const room = context.currentRoom;
+        const currentClient = context.currentClient;
+        if (!room || !currentClient) {
+          respond(callback, { error: "Not in a room" });
+          return;
+        }
+
+        const consumerId = normalizeMediaId(data?.consumerId);
+        if (!consumerId) {
+          respond(callback, { error: "Consumer ID is required" });
+          return;
+        }
+
+        const consumer = currentClient.getConsumerById(consumerId);
+        if (!consumer) {
+          respond(callback, { success: true });
+          return;
+        }
+
+        emitConsumerTelemetry({ room, client: currentClient, consumer }, "closed");
+        consumer.close();
         respond(callback, { success: true });
       } catch (error) {
         respond(callback, { error: (error as Error).message });
