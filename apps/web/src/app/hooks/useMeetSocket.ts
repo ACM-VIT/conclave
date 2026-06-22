@@ -3197,6 +3197,12 @@ export function useMeetSocket({
 
       for (const producerInfo of producers) {
         if (shouldIgnoreDepartedParticipant(producerInfo.producerUserId)) {
+          if (
+            consumersRef.current.has(producerInfo.producerId) ||
+            producerMapRef.current.has(producerInfo.producerId)
+          ) {
+            handleProducerClosed(producerInfo.producerId);
+          }
           announcedRemoteProducersRef.current.delete(producerInfo.producerId);
           pendingProducersRef.current.delete(producerInfo.producerId);
           continue;
