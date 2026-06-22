@@ -832,7 +832,7 @@ export function useMeetSocket({
   }, [userId]);
 
   const markRemoteParticipantPresent = useCallback((targetUserId: string) => {
-    departedParticipantIdsRef.current.delete(targetUserId);
+    return departedParticipantIdsRef.current.delete(targetUserId);
   }, []);
 
   const markRemoteParticipantDeparted = useCallback(
@@ -4172,7 +4172,8 @@ export function useMeetSocket({
                 if (joinedUserId === userId) {
                   return;
                 }
-                markRemoteParticipantPresent(joinedUserId);
+                const clearedDepartedParticipant =
+                  markRemoteParticipantPresent(joinedUserId);
                 if (shouldPlayJoinLeaveSound("join", joinedUserId)) {
                   playNotificationSound("join");
                 }
@@ -4194,6 +4195,9 @@ export function useMeetSocket({
                   userId: joinedUserId,
                   isGhost,
                 });
+                if (clearedDepartedParticipant) {
+                  void syncProducers();
+                }
               },
             );
 
@@ -4306,13 +4310,16 @@ export function useMeetSocket({
                 const snapshot = new Map<string, string>();
                 const nextParticipantIds = new Set<string>([userId]);
                 const previousParticipantIds = participantIdsRef.current;
+                let clearedDepartedParticipant = false;
                 (users || []).forEach(
                   ({ userId: snapshotUserId, displayName }) => {
                     if (displayName) {
                       snapshot.set(snapshotUserId, displayName);
                     }
                     if (snapshotUserId !== userId) {
-                      markRemoteParticipantPresent(snapshotUserId);
+                      clearedDepartedParticipant =
+                        markRemoteParticipantPresent(snapshotUserId) ||
+                        clearedDepartedParticipant;
                       if (!isSystemUserId(snapshotUserId)) {
                         nextParticipantIds.add(snapshotUserId);
                       }
@@ -4366,6 +4373,9 @@ export function useMeetSocket({
                 }
                 participantIdsRef.current = nextParticipantIds;
                 setDisplayNames(snapshot);
+                if (clearedDepartedParticipant) {
+                  void syncProducers();
+                }
               },
             );
 
@@ -5013,7 +5023,8 @@ export function useMeetSocket({
                 if (!isRoomEvent(notification.roomId)) return;
                 if (notification.userId === userId) return;
 
-                markRemoteParticipantPresent(notification.userId);
+                const clearedDepartedParticipant =
+                  markRemoteParticipantPresent(notification.userId);
                 const displayName = notification.displayName;
                 if (displayName) {
                   setDisplayNames((prev) => {
@@ -5034,6 +5045,9 @@ export function useMeetSocket({
                   type: "ADD_PARTICIPANT",
                   userId: notification.userId,
                 });
+                if (clearedDepartedParticipant) {
+                  void syncProducers();
+                }
               },
             );
 
