@@ -731,9 +731,24 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
               });
             }
           } else if (!context.currentClient.isWebinarAttendee) {
-            emitUserJoined(context.currentRoom, userId, resolvedDisplayName, {
-              excludeUserId: userId,
-            });
+            for (const [clientId, client] of context.currentRoom.clients) {
+              if (clientId === userId) {
+                continue;
+              }
+              if (client.isWebinarAttendee) {
+                client.socket.emit("webinar:participantJoined", {
+                  userId,
+                  displayName: resolvedDisplayName,
+                  roomId: context.currentRoom.id,
+                });
+                continue;
+              }
+              client.socket.emit("userJoined", {
+                userId,
+                displayName: resolvedDisplayName,
+                roomId: context.currentRoom.id,
+              });
+            }
           }
         } else if (wasReconnectNoticeEmitted) {
           Logger.info(`User ${userId} reconnected to room ${roomId}.`);
