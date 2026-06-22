@@ -4969,7 +4969,18 @@ export function useMeetSocket({
                     return next;
                   });
                 }
+                const leaveTimeout = leaveTimeoutsRef.current.get(
+                  notification.userId,
+                );
+                if (leaveTimeout) {
+                  window.clearTimeout(leaveTimeout);
+                  leaveTimeoutsRef.current.delete(notification.userId);
+                }
                 clearParticipantConnectionStatus(notification.userId);
+                dispatchParticipants({
+                  type: "ADD_PARTICIPANT",
+                  userId: notification.userId,
+                });
               },
             );
 
