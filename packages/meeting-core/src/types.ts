@@ -233,6 +233,12 @@ export interface WebinarFeedChangedNotification {
   producers: ProducerInfo[];
 }
 
+export interface WebinarParticipantJoinedNotification {
+  roomId: string;
+  userId: string;
+  displayName?: string;
+}
+
 export interface ServerRestartNotification {
   roomId?: string;
   message?: string;

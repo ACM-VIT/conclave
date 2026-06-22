@@ -184,6 +184,7 @@ export const SFU_EVENTS = {
 
     // Webinar
     webinarFeedChanged: "webinar:feedChanged",
+    webinarParticipantJoined: "webinar:participantJoined",
     webinarAttendeeCountChanged: "webinar:attendeeCountChanged",
 
     // Meeting / webinar config broadcasts

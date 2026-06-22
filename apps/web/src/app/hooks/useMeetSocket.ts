@@ -47,6 +47,7 @@ import type {
   WebinarConfigSnapshot,
   WebinarFeedChangedNotification,
   WebinarLinkResponse,
+  WebinarParticipantJoinedNotification,
   ServerRestartNotification,
   WebinarUpdateRequest,
 } from "../lib/types";
@@ -4943,6 +4944,26 @@ export function useMeetSocket({
                   linkSlug: previous?.linkSlug ?? null,
                   feedMode: previous?.feedMode ?? "active-speaker",
                 }));
+              },
+            );
+
+            socket.on(
+              "webinar:participantJoined",
+              (notification: WebinarParticipantJoinedNotification) => {
+                if (joinMode !== "webinar_attendee") return;
+                if (!isRoomEvent(notification.roomId)) return;
+                if (notification.userId === userId) return;
+
+                markRemoteParticipantPresent(notification.userId);
+                const displayName = notification.displayName;
+                if (displayName) {
+                  setDisplayNames((prev) => {
+                    const next = new Map(prev);
+                    next.set(notification.userId, displayName);
+                    return next;
+                  });
+                }
+                clearParticipantConnectionStatus(notification.userId);
               },
             );
 

@@ -329,6 +329,12 @@ export interface WebinarFeedChangedNotification {
   producers: ProducerInfo[];
 }
 
+export interface WebinarParticipantJoinedNotification {
+  roomId: string;
+  userId: string;
+  displayName?: string;
+}
+
 export interface WebinarAttendeeCountChangedNotification {
   roomId: string;
   attendeeCount: number;
