@@ -729,6 +729,13 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
           return;
         }
 
+        if (!takeToken(socket, "closeConsumer", RATE_LIMITS.consumerControl)) {
+          respond(callback, {
+            error: "Too many consumer control requests; please retry shortly",
+          });
+          return;
+        }
+
         const consumerId = normalizeMediaId(data?.consumerId);
         if (!consumerId) {
           respond(callback, { error: "Consumer ID is required" });
