@@ -3579,6 +3579,8 @@ export function useMeetSocket({
               return;
             }
 
+            departedParticipantIdsRef.current.clear();
+
             if (response.status === "waiting") {
               setConnectionState("waiting");
               setHostUserId(response.hostUserId ?? null);
@@ -3629,7 +3631,6 @@ export function useMeetSocket({
               );
               currentRoomIdRef.current = targetRoomId;
               serverRoomIdRef.current = response.roomId ?? targetRoomId;
-              departedParticipantIdsRef.current.clear();
               setIsRoomLocked(response.isLocked ?? false);
               setMeetingRequiresInviteCode(
                 response.meetingRequiresInviteCode ?? false,
