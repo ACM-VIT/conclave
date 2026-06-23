@@ -5044,6 +5044,7 @@ export function useMeetSocket({
                 dispatchParticipants({
                   type: "ADD_PARTICIPANT",
                   userId: notification.userId,
+                  addIfMissing: false,
                 });
                 if (clearedDepartedParticipant) {
                   void syncProducers();

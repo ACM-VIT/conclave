@@ -33,6 +33,7 @@ export const SFU_EVENTS = {
     consume: "consume",
     resumeConsumer: "resumeConsumer",
     setConsumerPreferences: "setConsumerPreferences",
+    closeConsumer: "closeConsumer",
     closeProducer: "closeProducer",
     getProducers: "getProducers",
     restartIce: "restartIce",
@@ -134,6 +135,7 @@ export const SFU_EVENTS = {
     producerClosed: "producerClosed",
     participantMuted: "participantMuted",
     participantCameraOff: "participantCameraOff",
+    participantConnectionState: "participantConnectionState",
     setVideoQuality: "setVideoQuality",
     consumerTelemetry: "consumerTelemetry",
 

@@ -5,7 +5,12 @@ import type {
 } from "./types";
 
 export type ParticipantAction =
-  | { type: "ADD_PARTICIPANT"; userId: string; isGhost?: boolean }
+  | {
+      type: "ADD_PARTICIPANT";
+      userId: string;
+      isGhost?: boolean;
+      addIfMissing?: boolean;
+    }
   | { type: "REMOVE_PARTICIPANT"; userId: string }
   | { type: "MARK_LEAVING"; userId: string }
   | {
@@ -96,6 +101,7 @@ export function participantReducer(
           connectionStatus: undefined,
         });
       }
+      if (action.addIfMissing === false) return state;
       return withParticipant(
         state,
         action.userId,

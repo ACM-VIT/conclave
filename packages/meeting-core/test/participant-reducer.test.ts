@@ -87,6 +87,18 @@ describe("participantReducer — ADD_PARTICIPANT (join)", () => {
     expect(next.get("a")!.isLeaving).toBe(false);
   });
 
+  it("does not add a missing participant when addIfMissing is false", () => {
+    const state = empty();
+    const next = participantReducer(state, {
+      type: "ADD_PARTICIPANT",
+      userId: "hidden",
+      addIfMissing: false,
+    });
+
+    expect(next).toBe(state);
+    expect(next.has("hidden")).toBe(false);
+  });
+
   it("promotes a ghost to a real participant on re-add (ghost flag change)", () => {
     const state = seed("a", { isGhost: true });
     const next = participantReducer(state, {
