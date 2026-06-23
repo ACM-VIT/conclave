@@ -88,6 +88,7 @@ export function participantReducer(
     case "ADD_PARTICIPANT": {
       const existing = state.get(action.userId);
       if (existing) {
+        if (action.addIfMissing === false && existing.isLeaving) return state;
         const nextGhost = action.isGhost ?? existing.isGhost;
         // Re-add of an already-present, non-leaving participant with the same
         // ghost flag is a no-op (server re-sync) — keep the same reference.

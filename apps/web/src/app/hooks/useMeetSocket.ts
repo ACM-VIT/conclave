@@ -2004,10 +2004,12 @@ export function useMeetSocket({
   const dropDepartedProducer = useCallback(
     (producerInfo: ProducerInfo) => {
       const producerId = producerInfo.producerId;
+      const existingConsumer = consumersRef.current.get(producerId);
       if (
-        consumersRef.current.has(producerId) ||
+        existingConsumer ||
         producerMapRef.current.has(producerId)
       ) {
+        closeServerConsumer(existingConsumer?.id);
         handleProducerClosed(producerId);
         return;
       }
@@ -2020,6 +2022,7 @@ export function useMeetSocket({
     [
       announcedRemoteProducersRef,
       consumeRetryAttemptsRef,
+      closeServerConsumer,
       consumersRef,
       handleProducerClosed,
       pendingProducersRef,
@@ -4294,7 +4297,14 @@ export function useMeetSocket({
                   producerMapRef.current.entries(),
                 )
                   .filter(([, info]) => info.userId === leftUserId)
-                  .map(([producerId]) => producerId);
+                  .map(
+                    ([producerId, info]): ProducerInfo => ({
+                      producerId,
+                      producerUserId: leftUserId,
+                      kind: info.kind,
+                      type: info.type,
+                    }),
+                  );
 
                 for (const info of Array.from(
                   pendingProducersRef.current.values(),
@@ -4304,8 +4314,8 @@ export function useMeetSocket({
                   }
                 }
 
-                for (const producerId of producersToClose) {
-                  handleProducerClosed(producerId);
+                for (const producerInfo of producersToClose) {
+                  dropDepartedProducer(producerInfo);
                 }
 
                 dispatchParticipants({
@@ -4425,7 +4435,14 @@ export function useMeetSocket({
                     producerMapRef.current.entries(),
                   )
                     .filter(([, info]) => info.userId === previousUserId)
-                    .map(([producerId]) => producerId);
+                    .map(
+                      ([producerId, info]): ProducerInfo => ({
+                        producerId,
+                        producerUserId: previousUserId,
+                        kind: info.kind,
+                        type: info.type,
+                      }),
+                    );
                   for (const info of Array.from(
                     pendingProducersRef.current.values(),
                   )) {
@@ -4433,8 +4450,8 @@ export function useMeetSocket({
                       dropDepartedProducer(info);
                     }
                   }
-                  for (const producerId of producersToClose) {
-                    handleProducerClosed(producerId);
+                  for (const producerInfo of producersToClose) {
+                    dropDepartedProducer(producerInfo);
                   }
                   dispatchParticipants({
                     type: "REMOVE_PARTICIPANT",
