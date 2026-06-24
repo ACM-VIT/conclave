@@ -104,6 +104,7 @@ const SCREEN_SHARE_STALE_REPLACEMENT_CLEANUP_DELAY_MS = 1500;
 const CLOSE_CONSUMER_RETRY_DELAY_MS = 500;
 const CLOSE_CONSUMER_MAX_ATTEMPTS = 4;
 const CLOSE_CONSUMER_RETRY_WINDOW_MS = 30000;
+const WEBINAR_FEED_JOIN_SYNC_DELAY_MS = 300;
 const TURN_URL_PATTERN = /^turns?:/i;
 const TRANSPORT_CC_FEEDBACK_TYPE = "transport-cc";
 
@@ -705,6 +706,7 @@ export function useMeetSocket({
     new Map(),
   );
   const closeConsumerRetryTimeoutsRef = useRef<Map<string, number>>(new Map());
+  const webinarFeedJoinSyncTimeoutRef = useRef<number | null>(null);
   const mutedConsumerSinceRef = useRef<Map<string, number>>(new Map());
   const producerPausedStateRef = useRef<Map<string, boolean>>(new Map());
   // Per-video-consumer decode progress for the freeze watchdog: last
@@ -1114,6 +1116,10 @@ export function useMeetSocket({
         window.clearTimeout(pendingProducerRetryTimeoutRef.current);
         pendingProducerRetryTimeoutRef.current = null;
       }
+      if (webinarFeedJoinSyncTimeoutRef.current != null) {
+        window.clearTimeout(webinarFeedJoinSyncTimeoutRef.current);
+        webinarFeedJoinSyncTimeoutRef.current = null;
+      }
 
       consumersRef.current.forEach((consumer) => {
         try {
@@ -1297,6 +1303,7 @@ export function useMeetSocket({
       producerTransportDisconnectTimeoutRef,
       consumerTransportDisconnectTimeoutRef,
       pendingProducerRetryTimeoutRef,
+      webinarFeedJoinSyncTimeoutRef,
       prejoinMediaIntentRef,
       producerSyncIntervalRef,
       consumeRetryAttemptsRef,
@@ -5166,6 +5173,7 @@ export function useMeetSocket({
                 const nextVisibleParticipantIds = new Set<string>();
                 const restoredVisibleParticipantIds = new Set<string>();
                 let clearedDepartedParticipant = false;
+                let sawDepartedFeedProducerWithoutJoinSignal = false;
                 for (const producer of notification.producers) {
                   const producerUserId = producer.producerUserId;
                   const hasJoinedSignal =
@@ -5174,6 +5182,7 @@ export function useMeetSocket({
                     shouldIgnoreDepartedParticipant(producerUserId) &&
                     !hasJoinedSignal
                   ) {
+                    sawDepartedFeedProducerWithoutJoinSignal = true;
                     continue;
                   }
 
@@ -5219,6 +5228,14 @@ export function useMeetSocket({
                 void applyWebinarFeedProducers(notification.producers).finally(() => {
                   if (clearedDepartedParticipant) {
                     void syncProducers();
+                  } else if (sawDepartedFeedProducerWithoutJoinSignal) {
+                    if (webinarFeedJoinSyncTimeoutRef.current != null) {
+                      window.clearTimeout(webinarFeedJoinSyncTimeoutRef.current);
+                    }
+                    webinarFeedJoinSyncTimeoutRef.current = window.setTimeout(() => {
+                      webinarFeedJoinSyncTimeoutRef.current = null;
+                      void syncProducers();
+                    }, WEBINAR_FEED_JOIN_SYNC_DELAY_MS);
                   }
                 });
               },

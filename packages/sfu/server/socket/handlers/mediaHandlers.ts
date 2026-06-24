@@ -748,8 +748,18 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
           return;
         }
 
-        emitConsumerTelemetry({ room, client: currentClient, consumer }, "closed");
         consumer.close();
+        try {
+          emitConsumerTelemetry({ room, client: currentClient, consumer }, "closed");
+        } catch (telemetryError) {
+          Logger.warn(
+            `Failed to emit close telemetry for consumer ${consumerId}: ${
+              telemetryError instanceof Error
+                ? telemetryError.message
+                : String(telemetryError)
+            }`,
+          );
+        }
         respond(callback, { success: true });
       } catch (error) {
         respond(callback, { error: (error as Error).message });
