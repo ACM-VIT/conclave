@@ -83,6 +83,18 @@ const normalizeChatGifAttachment = (
   const title = (rawTitle || "GIF").slice(0, MAX_GIF_TITLE_LENGTH);
   const width = normalizeGifDimension(candidate.width);
   const height = normalizeGifDimension(candidate.height);
+  const kind =
+    candidate.kind === "sticker" ||
+    candidate.kind === "clip" ||
+    candidate.kind === "gif"
+      ? candidate.kind
+      : undefined;
+  // Clips carry an MP4 alongside the GIF fallback in `url`; only clips may
+  // declare one, and it must live on the same trusted Klipy media host.
+  const videoUrl =
+    kind === "clip"
+      ? (normalizeHttpsUrl(candidate.videoUrl, KLIPY_MEDIA_HOSTS) ?? undefined)
+      : undefined;
 
   return {
     id,
@@ -92,6 +104,8 @@ const normalizeChatGifAttachment = (
     ...(pageUrl ? { pageUrl } : {}),
     ...(width ? { width } : {}),
     ...(height ? { height } : {}),
+    ...(kind ? { kind } : {}),
+    ...(videoUrl ? { videoUrl } : {}),
     source: "klipy",
   };
 };

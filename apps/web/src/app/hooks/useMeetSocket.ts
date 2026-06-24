@@ -104,7 +104,6 @@ const SCREEN_SHARE_STALE_REPLACEMENT_CLEANUP_DELAY_MS = 1500;
 const CLOSE_CONSUMER_RETRY_DELAY_MS = 500;
 const CLOSE_CONSUMER_MAX_ATTEMPTS = 4;
 const CLOSE_CONSUMER_RETRY_WINDOW_MS = 30000;
-const WEBINAR_FEED_JOIN_SYNC_DELAY_MS = 300;
 const TURN_URL_PATTERN = /^turns?:/i;
 const TRANSPORT_CC_FEEDBACK_TYPE = "transport-cc";
 
@@ -706,7 +705,6 @@ export function useMeetSocket({
     new Map(),
   );
   const closeConsumerRetryTimeoutsRef = useRef<Map<string, number>>(new Map());
-  const webinarFeedJoinSyncTimeoutRef = useRef<number | null>(null);
   const mutedConsumerSinceRef = useRef<Map<string, number>>(new Map());
   const producerPausedStateRef = useRef<Map<string, boolean>>(new Map());
   // Per-video-consumer decode progress for the freeze watchdog: last
@@ -1116,10 +1114,6 @@ export function useMeetSocket({
         window.clearTimeout(pendingProducerRetryTimeoutRef.current);
         pendingProducerRetryTimeoutRef.current = null;
       }
-      if (webinarFeedJoinSyncTimeoutRef.current != null) {
-        window.clearTimeout(webinarFeedJoinSyncTimeoutRef.current);
-        webinarFeedJoinSyncTimeoutRef.current = null;
-      }
 
       consumersRef.current.forEach((consumer) => {
         try {
@@ -1303,7 +1297,6 @@ export function useMeetSocket({
       producerTransportDisconnectTimeoutRef,
       consumerTransportDisconnectTimeoutRef,
       pendingProducerRetryTimeoutRef,
-      webinarFeedJoinSyncTimeoutRef,
       prejoinMediaIntentRef,
       producerSyncIntervalRef,
       consumeRetryAttemptsRef,
@@ -1558,6 +1551,40 @@ export function useMeetSocket({
       });
     },
     [clearParticipantConnectionStatusTimer, dispatchParticipants],
+  );
+
+  const restoreWebinarFeedParticipant = useCallback(
+    (targetUserId: string, displayName?: string) => {
+      const clearedDepartedParticipant =
+        markRemoteParticipantPresent(targetUserId);
+      if (displayName) {
+        setDisplayNames((prev) => {
+          const next = new Map(prev);
+          next.set(targetUserId, displayName);
+          return next;
+        });
+      }
+      const leaveTimeout = leaveTimeoutsRef.current.get(targetUserId);
+      if (leaveTimeout) {
+        window.clearTimeout(leaveTimeout);
+        leaveTimeoutsRef.current.delete(targetUserId);
+      }
+      clearParticipantConnectionStatus(targetUserId);
+      dispatchParticipants({
+        type: "ADD_PARTICIPANT",
+        userId: targetUserId,
+        addIfMissing: false,
+        reviveIfPresent: true,
+      });
+      return clearedDepartedParticipant;
+    },
+    [
+      clearParticipantConnectionStatus,
+      dispatchParticipants,
+      leaveTimeoutsRef,
+      markRemoteParticipantPresent,
+      setDisplayNames,
+    ],
   );
 
   const clearExpiredParticipantConnectionStatuses = useCallback(() => {
@@ -3322,8 +3349,17 @@ export function useMeetSocket({
 
       for (const producerInfo of producers) {
         if (shouldIgnoreDepartedParticipant(producerInfo.producerUserId)) {
-          dropDepartedProducer(producerInfo);
-          continue;
+          if (
+            joinMode === "webinar_attendee" &&
+            webinarJoinedParticipantIdsRef.current.has(
+              producerInfo.producerUserId,
+            )
+          ) {
+            restoreWebinarFeedParticipant(producerInfo.producerUserId);
+          } else {
+            dropDepartedProducer(producerInfo);
+            continue;
+          }
         }
         setProducerPausedState(
           producerInfo.producerId,
@@ -3450,6 +3486,8 @@ export function useMeetSocket({
     consumeProducer,
     dropDepartedProducer,
     handleProducerClosed,
+    joinMode,
+    restoreWebinarFeedParticipant,
     setProducerPausedState,
     shouldIgnoreDepartedParticipant,
     adaptivelyPausedConsumerProducerIdsRef,
@@ -3468,6 +3506,12 @@ export function useMeetSocket({
         );
         if (isDeparted) {
           departedProducerIds.add(producer.producerId);
+          if (
+            webinarJoinedParticipantIdsRef.current.has(producer.producerUserId)
+          ) {
+            restoreWebinarFeedParticipant(producer.producerUserId);
+            return true;
+          }
           dropDepartedProducer(producer);
         }
         return !isDeparted;
@@ -3490,6 +3534,7 @@ export function useMeetSocket({
       dropDepartedProducer,
       handleProducerClosed,
       producerMapRef,
+      restoreWebinarFeedParticipant,
       shouldIgnoreDepartedParticipant,
     ],
   );
@@ -5127,39 +5172,22 @@ export function useMeetSocket({
                 if (!isRoomEvent(notification.roomId)) return;
                 if (notification.userId === userId) return;
 
-                webinarJoinedParticipantIdsRef.current.add(notification.userId);
-                if (
-                  !webinarVisibleParticipantIdsRef.current.has(
-                    notification.userId,
-                  )
-                ) {
-                  return;
-                }
-
-                const clearedDepartedParticipant =
-                  markRemoteParticipantPresent(notification.userId);
                 const displayName = notification.displayName;
                 if (displayName) {
                   setDisplayNames((prev) => {
+                    if (prev.get(notification.userId) === displayName) {
+                      return prev;
+                    }
                     const next = new Map(prev);
                     next.set(notification.userId, displayName);
                     return next;
                   });
                 }
-                const leaveTimeout = leaveTimeoutsRef.current.get(
-                  notification.userId,
-                );
-                if (leaveTimeout) {
-                  window.clearTimeout(leaveTimeout);
-                  leaveTimeoutsRef.current.delete(notification.userId);
-                }
-                clearParticipantConnectionStatus(notification.userId);
-                dispatchParticipants({
-                  type: "ADD_PARTICIPANT",
-                  userId: notification.userId,
-                  addIfMissing: false,
-                });
-                if (clearedDepartedParticipant) {
+                webinarJoinedParticipantIdsRef.current.add(notification.userId);
+                if (
+                  shouldIgnoreDepartedParticipant(notification.userId) ||
+                  webinarVisibleParticipantIdsRef.current.has(notification.userId)
+                ) {
                   void syncProducers();
                 }
               },
@@ -5171,72 +5199,34 @@ export function useMeetSocket({
                 if (joinMode !== "webinar_attendee") return;
                 if (!isRoomEvent(notification.roomId)) return;
                 const nextVisibleParticipantIds = new Set<string>();
-                const restoredVisibleParticipantIds = new Set<string>();
-                let clearedDepartedParticipant = false;
-                let sawDepartedFeedProducerWithoutJoinSignal = false;
                 for (const producer of notification.producers) {
-                  const producerUserId = producer.producerUserId;
-                  const hasJoinedSignal =
-                    webinarJoinedParticipantIdsRef.current.has(producerUserId);
-                  if (
-                    shouldIgnoreDepartedParticipant(producerUserId) &&
-                    !hasJoinedSignal
-                  ) {
-                    sawDepartedFeedProducerWithoutJoinSignal = true;
-                    continue;
-                  }
-
-                  nextVisibleParticipantIds.add(producerUserId);
-                  if (
-                    hasJoinedSignal &&
-                    shouldIgnoreDepartedParticipant(producerUserId) &&
-                    !restoredVisibleParticipantIds.has(producerUserId)
-                  ) {
-                    restoredVisibleParticipantIds.add(producerUserId);
-                    clearedDepartedParticipant =
-                      markRemoteParticipantPresent(producerUserId) ||
-                      clearedDepartedParticipant;
-                    const leaveTimeout =
-                      leaveTimeoutsRef.current.get(producerUserId);
-                    if (leaveTimeout) {
-                      window.clearTimeout(leaveTimeout);
-                      leaveTimeoutsRef.current.delete(producerUserId);
-                    }
-                    clearParticipantConnectionStatus(producerUserId);
-                    dispatchParticipants({
-                      type: "ADD_PARTICIPANT",
-                      userId: producerUserId,
-                      addIfMissing: false,
-                    });
-                  }
+                  nextVisibleParticipantIds.add(producer.producerUserId);
                 }
                 webinarVisibleParticipantIdsRef.current =
                   nextVisibleParticipantIds;
                 const activeFeedProducers = notification.producers.filter(
-                  (producer) =>
-                    nextVisibleParticipantIds.has(producer.producerUserId) &&
-                    !shouldIgnoreDepartedParticipant(producer.producerUserId),
+                  (producer) => {
+                    const producerUserId = producer.producerUserId;
+                    return (
+                      nextVisibleParticipantIds.has(producerUserId) &&
+                      (!shouldIgnoreDepartedParticipant(producerUserId) ||
+                        webinarJoinedParticipantIdsRef.current.has(producerUserId))
+                    );
+                  },
                 );
                 setWebinarSpeakerUserId(
                   notification.speakerUserId &&
                     nextVisibleParticipantIds.has(notification.speakerUserId) &&
-                    !shouldIgnoreDepartedParticipant(notification.speakerUserId)
+                    (!shouldIgnoreDepartedParticipant(notification.speakerUserId) ||
+                      webinarJoinedParticipantIdsRef.current.has(
+                        notification.speakerUserId,
+                      ))
                     ? notification.speakerUserId
                     : activeFeedProducers[0]?.producerUserId ??
                     null,
                 );
                 void applyWebinarFeedProducers(notification.producers).finally(() => {
-                  if (clearedDepartedParticipant) {
-                    void syncProducers();
-                  } else if (sawDepartedFeedProducerWithoutJoinSignal) {
-                    if (webinarFeedJoinSyncTimeoutRef.current != null) {
-                      window.clearTimeout(webinarFeedJoinSyncTimeoutRef.current);
-                    }
-                    webinarFeedJoinSyncTimeoutRef.current = window.setTimeout(() => {
-                      webinarFeedJoinSyncTimeoutRef.current = null;
-                      void syncProducers();
-                    }, WEBINAR_FEED_JOIN_SYNC_DELAY_MS);
-                  }
+                  void syncProducers();
                 });
               },
             );
@@ -5300,6 +5290,7 @@ export function useMeetSocket({
       requestAudioProducerRecovery,
       requestCameraProducerRecovery,
       reconnectAttemptsRef,
+      restoreWebinarFeedParticipant,
       screenAudioProducerRef,
       screenProducerRef,
       setActiveScreenShareId,
