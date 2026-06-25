@@ -522,6 +522,8 @@ export default function MeetsClient({
     setIsTtsDisabled,
     isDmEnabled,
     setIsDmEnabled,
+    isReactionsDisabled,
+    setIsReactionsDisabled,
     isBrowserAudioMuted,
     setIsBrowserAudioMuted,
     meetVolume,
@@ -2064,6 +2066,7 @@ export default function MeetsClient({
     isTtsDisabled,
     setIsTtsDisabled,
     setIsDmEnabled,
+    setIsReactionsDisabled,
     setActiveScreenShareId,
     setNetworkManagedVideoQuality,
     videoQualityRef: refs.videoQualityRef,
@@ -2821,6 +2824,7 @@ export default function MeetsClient({
         isRoomLocked={isRoomLocked}
         isTtsDisabled={isTtsDisabled}
         isDmEnabled={isDmEnabled}
+        isReactionsDisabled={isReactionsDisabled}
         onToggleLock={() => socket.toggleRoomLock(!isRoomLocked)}
         isNoGuests={isNoGuests}
         onToggleNoGuests={() => socket.toggleNoGuests(!isNoGuests)}

@@ -66,6 +66,7 @@ export interface JoinRoomResponse {
   isTtsDisabled?: boolean;
   isChatLocked?: boolean;
   isDmEnabled?: boolean;
+  isReactionsDisabled?: boolean;
   meetingRequiresInviteCode?: boolean;
   webinarRole?: "attendee" | "participant" | "host";
   isWebinarEnabled?: boolean;

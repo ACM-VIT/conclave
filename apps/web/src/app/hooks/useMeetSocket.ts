@@ -562,6 +562,7 @@ interface UseMeetSocketOptions {
   isTtsDisabled: boolean;
   setIsTtsDisabled: (value: boolean) => void;
   setIsDmEnabled: (value: boolean) => void;
+  setIsReactionsDisabled: (value: boolean) => void;
   setActiveScreenShareId: (value: string | null) => void;
   setNetworkManagedVideoQuality: (value: VideoQuality) => void;
   videoQualityRef: React.MutableRefObject<VideoQuality>;
@@ -651,6 +652,7 @@ export function useMeetSocket({
   isTtsDisabled,
   setIsTtsDisabled,
   setIsDmEnabled,
+  setIsReactionsDisabled,
   setActiveScreenShareId,
   setNetworkManagedVideoQuality,
   videoQualityRef,
@@ -3703,6 +3705,7 @@ export function useMeetSocket({
               setIsTtsDisabled(response.isTtsDisabled ?? false);
               setIsChatLocked(response.isChatLocked ?? false);
               setIsDmEnabled(response.isDmEnabled ?? true);
+              setIsReactionsDisabled(response.isReactionsDisabled ?? false);
               resolve("waiting");
               return;
             }
@@ -3722,6 +3725,7 @@ export function useMeetSocket({
               setIsTtsDisabled(response.isTtsDisabled ?? false);
               setIsChatLocked(response.isChatLocked ?? false);
               setIsDmEnabled(response.isDmEnabled ?? true);
+              setIsReactionsDisabled(response.isReactionsDisabled ?? false);
               setWebinarRole(response.webinarRole ?? null);
               setWebinarSpeakerUserId(
                 response.existingProducers?.[0]?.producerUserId ?? null,
@@ -5094,6 +5098,21 @@ export function useMeetSocket({
             );
 
             socket.on(
+              "reactionsDisabledChanged",
+              ({
+                disabled,
+                roomId: eventRoomId,
+              }: {
+                disabled: boolean;
+                roomId?: string;
+              }) => {
+                if (!isRoomEvent(eventRoomId)) return;
+                console.log("[Meets] Room reactions disabled changed:", disabled);
+                setIsReactionsDisabled(disabled);
+              },
+            );
+
+            socket.on(
               "noGuestsChanged",
               ({
                 noGuests,
@@ -5304,6 +5323,7 @@ export function useMeetSocket({
       setMeetingRequiresInviteCode,
       setIsTtsDisabled,
       setIsDmEnabled,
+      setIsReactionsDisabled,
       setHostUserId,
       setWebinarRole,
       setWebinarSpeakerUserId,

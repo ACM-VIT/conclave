@@ -70,6 +70,7 @@ export type RoomSnapshot = {
     noGuests: boolean;
     ttsDisabled: boolean;
     dmEnabled: boolean;
+    reactionsDisabled: boolean;
     requiresMeetingInviteCode: boolean;
   };
   access: {
@@ -144,6 +145,7 @@ export type RoomPolicyUpdate = {
   noGuests?: boolean;
   ttsDisabled?: boolean;
   dmEnabled?: boolean;
+  reactionsDisabled?: boolean;
 };
 
 type ProducerInfo = ReturnType<Client["getProducerInfos"]>[number];
@@ -334,6 +336,7 @@ export const toRoomSnapshot = (room: Room): RoomSnapshot => {
       noGuests: room.noGuests,
       ttsDisabled: room.isTtsDisabled,
       dmEnabled: room.isDmEnabled,
+      reactionsDisabled: room.isReactionsDisabled,
       requiresMeetingInviteCode: room.requiresMeetingInviteCode,
     },
     access: {
@@ -708,6 +711,18 @@ export const applyRoomPolicyUpdate = (
     changed.dmEnabled = update.dmEnabled;
     io.to(room.channelId).emit("dmStateChanged", {
       enabled: update.dmEnabled,
+      roomId: room.id,
+    });
+  }
+
+  if (
+    typeof update.reactionsDisabled === "boolean" &&
+    update.reactionsDisabled !== room.isReactionsDisabled
+  ) {
+    room.setReactionsDisabled(update.reactionsDisabled);
+    changed.reactionsDisabled = update.reactionsDisabled;
+    io.to(room.channelId).emit("reactionsDisabledChanged", {
+      disabled: update.reactionsDisabled,
       roomId: room.id,
     });
   }

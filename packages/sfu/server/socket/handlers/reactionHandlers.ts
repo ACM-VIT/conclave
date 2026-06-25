@@ -1,6 +1,7 @@
 import type { ReactionNotification, SendReactionData } from "../../../types.js";
 import { allowedEmojiReactions } from "../../constants.js";
 import { isValidReactionAssetPath } from "../../reactions.js";
+import { Admin } from "../../../config/classes/Admin.js";
 import type { ConnectionContext } from "../context.js";
 import { respond } from "./ack.js";
 import { RATE_LIMITS, takeToken } from "../rateLimit.js";
@@ -37,6 +38,17 @@ export const registerReactionHandlers = (
         if (context.currentClient.isObserver) {
           respond(callback, {
             error: "Watch-only attendees cannot send reactions",
+          });
+          return;
+        }
+
+        // reactionsDisabled policy: non-hosts cannot send reactions.
+        if (
+          context.currentRoom.isReactionsDisabled &&
+          !(context.currentClient instanceof Admin)
+        ) {
+          respond(callback, {
+            error: "Reactions disabled by host",
           });
           return;
         }

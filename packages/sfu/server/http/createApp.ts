@@ -627,6 +627,10 @@ export const createSfuApp = ({
         typeof req.body?.dmEnabled === "boolean"
           ? req.body.dmEnabled
           : undefined,
+      reactionsDisabled:
+        typeof req.body?.reactionsDisabled === "boolean"
+          ? req.body.reactionsDisabled
+          : undefined,
     };
 
     const hasUpdates = Object.values(update).some((value) => value !== undefined);
