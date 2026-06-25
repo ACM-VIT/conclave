@@ -83,6 +83,7 @@ export interface ControlsBarProps {
   isDmEnabled?: boolean;
   onToggleDmEnabled?: () => void;
   isReactionsDisabled?: boolean;
+  onToggleReactionsDisabled?: () => void;
   isBrowserActive?: boolean;
   isBrowserLaunching?: boolean;
   showBrowserControls?: boolean;
