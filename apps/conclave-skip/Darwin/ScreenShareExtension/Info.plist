@@ -21,7 +21,7 @@
     <key>CFBundleVersion</key>
     <string>$(CURRENT_PROJECT_VERSION)</string>
     <key>RTCAppGroupIdentifier</key>
-    <string>group.com.acmvit.conclave</string>
+    <string>group.com.acmvit.conclave.screenshare</string>
     <key>NSExtension</key>
     <dict>
         <key>NSExtensionPointIdentifier</key>

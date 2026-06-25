@@ -79,7 +79,7 @@ final class ScreenCaptureManager: NSObject {
     static let shared = ScreenCaptureManager()
 
     // MARK: - Configuration
-    private let appGroupIdentifier = "group.com.acmvit.conclave"
+    private let appGroupIdentifier = "group.com.acmvit.conclave.screenshare"
     private let broadcastExtensionBundleId = "com.acmvit.conclave.ScreenShareExtension"
 
     // MARK: - Publishers

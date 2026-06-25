@@ -13,7 +13,7 @@
     </array>
     <key>com.apple.security.application-groups</key>
     <array>
-        <string>group.com.acmvit.conclave</string>
+        <string>group.com.acmvit.conclave.screenshare</string>
     </array>
 </dict>
 </plist>

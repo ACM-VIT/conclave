@@ -23,7 +23,7 @@ final class SampleHandler: RPBroadcastSampleHandler {
     {
       return value
     }
-    return "group.com.acmvit.conclave"
+    return "group.com.acmvit.conclave.screenshare"
   }()
   private let outputColorSpace = CGColorSpaceCreateDeviceRGB()
   private lazy var imageContext: CIContext = {
