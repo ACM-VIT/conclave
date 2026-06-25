@@ -875,6 +875,15 @@ final class MeetingViewModel {
             }
         }
 
+        socketManager.onReactionsDisabledChanged = { [weak self] notification in
+            guard let self = self else { return }
+            let eventContext = self.currentSocketEventContext()
+            Task { @MainActor in
+                guard self.isCurrentSocketEvent(eventContext, roomId: notification.roomId) else { return }
+                self.state.isReactionsDisabled = notification.disabled
+            }
+        }
+
         socketManager.onMeetingConfigChanged = { [weak self] snapshot in
             guard let self = self else { return }
             let eventContext = self.currentSocketEventContext()
@@ -4818,6 +4827,7 @@ final class MeetingViewModel {
     func sendReaction(_ option: MeetingReactionOption) {
         guard state.connectionState == .joined else { return }
         guard !state.isGhostMode && !state.isWebinarAttendee else { return }
+        guard !state.isReactionsDisabled || state.isAdmin else { return }
         guard MeetingReactionConstants.isAllowedOption(option) else { return }
         let now = Date()
         guard now.timeIntervalSince(lastReactionSentAt) >= reactionCooldownSeconds else { return }
@@ -4987,6 +4997,24 @@ final class MeetingViewModel {
                 try await socketManager.setTtsDisabled(next)
                 guard isCurrentJoinedCall(actionContext) else { return }
                 applyTtsDisabled(next)
+            } catch {
+                applyActionError(error, context: actionContext)
+            }
+        }
+    }
+
+    func toggleReactionsDisabled() {
+        let actionKey = "reactionsDisabled"
+        guard let actionToken = beginAdminAction(actionKey) else { return }
+        let actionContext = currentCallActionContext()
+        let next = !state.isReactionsDisabled
+
+        Task {
+            defer { finishAdminAction(actionKey, token: actionToken) }
+            do {
+                try await socketManager.setReactionsDisabled(next)
+                guard isCurrentJoinedCall(actionContext) else { return }
+                state.isReactionsDisabled = next
             } catch {
                 applyActionError(error, context: actionContext)
             }
