@@ -188,30 +188,32 @@ struct ControlsBarView: View {
                     }
                     .disabled(!canUseParticipantActions)
 
-                    ControlButton(
-                        icon: reactionIcon,
-                        isActive: showReactionPicker,
-                        isGhostDisabled: !canUseParticipantActions,
-                        accessibilityLabel: "Reactions"
-                    ) {
-                        showReactionPicker = !showReactionPicker
-                    }
-                    .disabled(!canUseParticipantActions)
-                    .overlay(alignment: .top) {
-                        if showReactionPicker {
-                            ReactionPickerView { option in
-                                viewModel.sendReaction(option)
-                                showReactionPicker = false
-                            }
-                            .offset(y: -64)
-#if !SKIP
-                            .transition(.scale(scale: 0.9, anchor: UnitPoint.bottom).combined(with: AnyTransition.opacity))
-#else
-                            .transition(AnyTransition.opacity)
-#endif
+                    if !viewModel.state.isReactionsDisabled || viewModel.state.isAdmin {
+                        ControlButton(
+                            icon: reactionIcon,
+                            isActive: showReactionPicker,
+                            isGhostDisabled: !canUseParticipantActions,
+                            accessibilityLabel: "Reactions"
+                        ) {
+                            showReactionPicker = !showReactionPicker
                         }
+                        .disabled(!canUseParticipantActions)
+                        .overlay(alignment: .top) {
+                            if showReactionPicker {
+                                ReactionPickerView { option in
+                                    viewModel.sendReaction(option)
+                                    showReactionPicker = false
+                                }
+                                .offset(y: -64)
+#if !SKIP
+                                .transition(.scale(scale: 0.9, anchor: UnitPoint.bottom).combined(with: AnyTransition.opacity))
+#else
+                                .transition(AnyTransition.opacity)
+#endif
+                            }
+                        }
+                        .animation(Animation.easeOut(duration: 0.12), value: showReactionPicker)
                     }
-                    .animation(Animation.easeOut(duration: 0.12), value: showReactionPicker)
 
                     ControlButton(
                         icon: chatIcon,

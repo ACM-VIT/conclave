@@ -215,6 +215,7 @@ interface MeetsMainContentProps {
   adminNotice?: AdminNoticeNotification | null;
   isTtsDisabled: boolean;
   isDmEnabled: boolean;
+  isReactionsDisabled: boolean;
   meetingRequiresInviteCode: boolean;
   webinarConfig?: WebinarConfigSnapshot | null;
   webinarRole?: "attendee" | "participant" | "host" | null;
@@ -441,6 +442,7 @@ export default function MeetsMainContent({
   adminNotice = null,
   isTtsDisabled,
   isDmEnabled,
+  isReactionsDisabled,
   meetingRequiresInviteCode,
   webinarConfig,
   webinarRole,
@@ -1040,6 +1042,20 @@ export default function MeetsMainContent({
       },
     );
   }, [socket, isDmEnabled]);
+
+  const handleToggleReactionsDisabled = useCallback(() => {
+    if (!socket) return;
+    socket.emit(
+      "setReactionsDisabled",
+      { disabled: !isReactionsDisabled },
+      (res: { error?: string }) => {
+        if (res?.error) {
+          console.error("Failed to toggle reactions:", res.error);
+        }
+      },
+    );
+  }, [socket, isReactionsDisabled]);
+
   const handleToggleChat = useCallback(() => {
     if (!isChatOpen) {
       if (isParticipantsOpen) {
@@ -1631,6 +1647,8 @@ export default function MeetsMainContent({
                 onToggleTtsDisabled={handleToggleTtsDisabled}
                 isDmEnabled={isDmEnabled}
                 onToggleDmEnabled={handleToggleDmEnabled}
+                isReactionsDisabled={isReactionsDisabled}
+                onToggleReactionsDisabled={handleToggleReactionsDisabled}
                 isBrowserActive={browserState?.active ?? false}
                 isBrowserLaunching={isBrowserLaunching}
                 showBrowserControls={showBrowserControls}
@@ -1736,6 +1754,8 @@ export default function MeetsMainContent({
             onToggleTtsDisabled={handleToggleTtsDisabled}
             isDmEnabled={isDmEnabled}
             onToggleDmEnabled={handleToggleDmEnabled}
+            isReactionsDisabled={isReactionsDisabled}
+            onToggleReactionsDisabled={handleToggleReactionsDisabled}
             meetingRequiresInviteCode={meetingRequiresInviteCode}
             onGetMeetingConfig={onGetMeetingConfig}
             onUpdateMeetingConfig={onUpdateMeetingConfig}

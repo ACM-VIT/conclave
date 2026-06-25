@@ -44,6 +44,7 @@ export function useMeetState({ initialRoomId }: UseMeetStateOptions) {
   const [isChatLocked, setIsChatLocked] = useState(false);
   const [isTtsDisabled, setIsTtsDisabled] = useState(false);
   const [isDmEnabled, setIsDmEnabled] = useState(true);
+  const [isReactionsDisabled, setIsReactionsDisabled] = useState(false);
   const [isBrowserAudioMuted, setIsBrowserAudioMuted] = useState(false);
   const [meetVolume, setMeetVolumeValue] = useState(DEFAULT_MEET_VOLUME);
   const setMeetVolume = useCallback((value: SetStateAction<number>) => {
@@ -114,6 +115,8 @@ export function useMeetState({ initialRoomId }: UseMeetStateOptions) {
     setIsTtsDisabled,
     isDmEnabled,
     setIsDmEnabled,
+    isReactionsDisabled,
+    setIsReactionsDisabled,
     isBrowserAudioMuted,
     setIsBrowserAudioMuted,
     meetVolume,

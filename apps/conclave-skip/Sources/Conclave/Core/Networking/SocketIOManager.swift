@@ -27,6 +27,7 @@ private enum SocketEvent {
     static let setNoGuests = SfuClientEvent.setNoGuests.rawValue
     static let setDmEnabled = SfuClientEvent.setDmEnabled.rawValue
     static let setTtsDisabled = SfuClientEvent.setTtsDisabled.rawValue
+    static let setReactionsDisabled = SfuClientEvent.setReactionsDisabled.rawValue
     static let admitUser = SfuClientEvent.admitUser.rawValue
     static let rejectUser = SfuClientEvent.rejectUser.rawValue
     static let admitAllPending = SfuClientEvent.adminAdmitAllPending.rawValue
@@ -84,6 +85,7 @@ private enum SocketEvent {
     static let noGuestsChanged = SfuServerEvent.noGuestsChanged.rawValue
     static let dmStateChanged = SfuServerEvent.dmStateChanged.rawValue
     static let ttsDisabledChanged = SfuServerEvent.ttsDisabledChanged.rawValue
+    static let reactionsDisabledChanged = SfuServerEvent.reactionsDisabledChanged.rawValue
     static let userRequestedJoin = SfuServerEvent.userRequestedJoin.rawValue
     static let pendingUsersSnapshot = SfuServerEvent.pendingUsersSnapshot.rawValue
     static let userAdmitted = SfuServerEvent.userAdmitted.rawValue
@@ -230,6 +232,7 @@ final class SocketIOManager {
     var onNoGuestsChanged: ((NoGuestsChangedNotification) -> Void)?
     var onDmStateChanged: ((DmStateChangedNotification) -> Void)?
     var onTtsDisabledChanged: ((TtsDisabledChangedNotification) -> Void)?
+    var onReactionsDisabledChanged: ((ReactionsDisabledChangedNotification) -> Void)?
     var onPendingUsersSnapshot: ((PendingUsersSnapshotNotification) -> Void)?
     var onUserRequestedJoin: ((UserRequestedJoinNotification) -> Void)?
     var onPendingUserChanged: ((PendingUserChangedNotification) -> Void)?
@@ -713,6 +716,10 @@ final class SocketIOManager {
 
     func setTtsDisabled(_ disabled: Bool) async throws {
         _ = try await emit(event: SocketEvent.setTtsDisabled, payload: ["disabled": disabled])
+    }
+
+    func setReactionsDisabled(_ disabled: Bool) async throws {
+        _ = try await emit(event: SocketEvent.setReactionsDisabled, payload: ["disabled": disabled])
     }
 
     func getMeetingConfig() async throws -> MeetingConfigSnapshot {
@@ -1618,6 +1625,14 @@ final class SocketIOManager {
                   let notification = self.decode(TtsDisabledChangedNotification.self, from: first),
                   self.eventRoomIdMatchesActiveOrPending(notification.roomId) else { return }
             self.onTtsDisabledChanged?(notification)
+        }
+
+        socket.on(SocketEvent.reactionsDisabledChanged) { [weak self] data, _ in
+            guard let self, let first = data.first,
+                  self.socket === socket,
+                  let notification = self.decode(ReactionsDisabledChangedNotification.self, from: first),
+                  self.eventRoomIdMatchesActiveOrPending(notification.roomId) else { return }
+            self.onReactionsDisabledChanged?(notification)
         }
 
         socket.on(SocketEvent.userRequestedJoin) { [weak self] data, _ in

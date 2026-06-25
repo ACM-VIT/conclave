@@ -35,6 +35,7 @@ final class MeetingState {
     var isNoGuests: Bool = false
     var isDmEnabled: Bool = true
     var isTtsDisabled: Bool = false
+    var isReactionsDisabled: Bool = false
     var meetingRequiresInviteCode: Bool = false
     var adminAllowedUserKeys: [String] = []
     var adminLockedAllowedUserKeys: [String] = []

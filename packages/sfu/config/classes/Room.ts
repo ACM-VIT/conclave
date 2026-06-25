@@ -135,6 +135,7 @@ export class Room {
   private _noGuests: boolean = false;
   private _isTtsDisabled: boolean = false;
   private _isDmEnabled: boolean = true;
+  private _reactionsDisabled: boolean = false;
   private _meetingInviteCodeHash: string | null = null;
   public appsState: { activeAppId: string | null; locked: boolean } = {
     activeAppId: null,
@@ -743,6 +744,14 @@ export class Room {
 
   setDmEnabled(enabled: boolean): void {
     this._isDmEnabled = enabled;
+  }
+
+  get isReactionsDisabled(): boolean {
+    return this._reactionsDisabled;
+  }
+
+  setReactionsDisabled(disabled: boolean): void {
+    this._reactionsDisabled = disabled;
   }
 
   get requiresMeetingInviteCode(): boolean {

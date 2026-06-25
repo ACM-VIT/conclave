@@ -143,6 +143,7 @@ struct JoinRoomResponse: Codable {
     let noGuests: Bool?
     let isTtsDisabled: Bool?
     let isDmEnabled: Bool?
+    let isReactionsDisabled: Bool?
     let meetingRequiresInviteCode: Bool?
     let webinarRole: String?
     let isWebinarEnabled: Bool?
@@ -425,6 +426,11 @@ struct DmStateChangedNotification: Codable {
 }
 
 struct TtsDisabledChangedNotification: Codable {
+    let disabled: Bool
+    let roomId: String?
+}
+
+struct ReactionsDisabledChangedNotification: Codable {
     let disabled: Bool
     let roomId: String?
 }

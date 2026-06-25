@@ -200,6 +200,7 @@ function ControlsBar(props: ControlsBarProps) {
     onLaunchBrowser,
     isHostControlsOpen = false,
     onToggleHostControls,
+    isReactionsDisabled = false,
     selectedAudioInputDeviceId,
     selectedAudioOutputDeviceId,
     selectedVideoInputDeviceId,
@@ -323,7 +324,7 @@ function ControlsBar(props: ControlsBarProps) {
           return <BarButton key={d.id} d={d} />;
         })}
 
-        {!compact && (
+        {!compact && (!isReactionsDisabled || isAdmin) && (
           <div ref={reactionRef} className="relative">
             <HotkeyTooltip label="Reactions" hotkey="">
               <ControlButton
@@ -404,7 +405,7 @@ function ControlsBar(props: ControlsBarProps) {
               className={popoverPanelClass + " w-full"}
               style={{ backgroundColor: color.surfaceRaised, borderColor: color.border }}
             >
-              {compact && !isGhostMode && reactionOptions.length > 0 && (
+              {compact && !isGhostMode && (!isReactionsDisabled || isAdmin) && reactionOptions.length > 0 && (
                 <div
                   className="mb-1 flex items-center gap-1 overflow-x-auto border-b px-1 pb-1.5"
                   style={{ borderColor: color.border }}

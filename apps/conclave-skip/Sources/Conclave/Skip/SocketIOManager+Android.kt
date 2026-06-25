@@ -223,6 +223,7 @@ internal class SocketIOManager {
     internal var onNoGuestsChanged: ((NoGuestsChangedNotification) -> Unit)? = null
     internal var onDmStateChanged: ((DmStateChangedNotification) -> Unit)? = null
     internal var onTtsDisabledChanged: ((TtsDisabledChangedNotification) -> Unit)? = null
+    internal var onReactionsDisabledChanged: ((ReactionsDisabledChangedNotification) -> Unit)? = null
     internal var onPendingUsersSnapshot: ((PendingUsersSnapshotNotification) -> Unit)? = null
     internal var onUserRequestedJoin: ((UserRequestedJoinNotification) -> Unit)? = null
     internal var onPendingUserChanged: ((PendingUserChangedNotification) -> Unit)? = null
@@ -1536,6 +1537,13 @@ internal class SocketIOManager {
             val notification = decode<TtsDisabledChangedNotification>( args.firstOrNull()) ?: return@Listener
             if (!eventRoomIdMatchesActiveOrPending(notification.roomId)) return@Listener
             onTtsDisabledChanged?.invoke(notification)
+        })
+
+        socket.on(SocketEvent.reactionsDisabledChanged, Emitter.Listener { args ->
+            if (this.socket !== socket) return@Listener
+            val notification = decode<ReactionsDisabledChangedNotification>( args.firstOrNull()) ?: return@Listener
+            if (!eventRoomIdMatchesActiveOrPending(notification.roomId)) return@Listener
+            onReactionsDisabledChanged?.invoke(notification)
         })
 
         socket.on(SocketEvent.userRequestedJoin, Emitter.Listener { args ->
