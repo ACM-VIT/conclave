@@ -42,11 +42,11 @@ private struct ReactionPickerButton: View {
                     Text(option.value)
                         .font(.system(size: 25))
                 } else {
-                    Text(option.label)
-                        .font(ACMFont.trial(10, weight: .medium))
-                        .foregroundStyle(ACMColors.text)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.7)
+                    ReactionAssetThumbnailView(
+                        value: option.value,
+                        label: option.label,
+                        size: 30
+                    )
                 }
             }
             .frame(width: option.kind == .emoji ? 38.0 : 50.0, height: 38)
@@ -107,16 +107,11 @@ private struct ReactionBubbleView: View {
                     Text(reaction.value)
                         .font(.system(size: 30))
                 } else {
-                    VStack(spacing: 1) {
-                        ACMSystemIcon.icon("sparkles", android: "reactions", size: 17, tint: "accent")
-                            .foregroundStyle(ACMColors.primaryOrange)
-                        Text(MeetingReactionConstants.assetLabel(value: reaction.value, label: reaction.label))
-                            .font(ACMFont.trial(9, weight: .medium))
-                            .foregroundStyle(ACMColors.text)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.72)
-                    }
-                    .padding(.horizontal, 5)
+                    ReactionAssetThumbnailView(
+                        value: reaction.value,
+                        label: reaction.label,
+                        size: 42
+                    )
                 }
             }
             .frame(width: 58, height: 58)
@@ -129,6 +124,53 @@ private struct ReactionBubbleView: View {
                 .padding(.vertical, 3)
                 .acmColorBackground(ACMColors.surface.opacity(0.9))
                 .clipShape(Capsule())
+        }
+    }
+}
+
+struct ReactionAssetThumbnailView: View {
+    let value: String
+    let label: String?
+    let size: CGFloat
+
+    private var imageURL: URL? {
+        MeetingReactionConstants.assetURL(
+            value: value,
+            baseURL: NativeAuthService.resolveAppBaseURL()
+        )
+    }
+
+    private var displayLabel: String {
+        MeetingReactionConstants.assetLabel(value: value, label: label)
+    }
+
+    var body: some View {
+        Group {
+            if let imageURL {
+                AsyncImage(url: imageURL) { image in
+                    image
+                        .resizable()
+                        .scaledToFit()
+                } placeholder: {
+                    fallback
+                }
+            } else {
+                fallback
+            }
+        }
+        .frame(width: size, height: size)
+        .accessibilityLabel(displayLabel)
+    }
+
+    private var fallback: some View {
+        VStack(spacing: 1) {
+            ACMSystemIcon.icon("sparkles", android: "reactions", size: max(14.0, size * 0.42), tint: "accent")
+                .foregroundStyle(ACMColors.primaryOrange)
+            Text(displayLabel)
+                .font(ACMFont.trial(max(8.0, size * 0.21), weight: .medium))
+                .foregroundStyle(ACMColors.text)
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
         }
     }
 }

@@ -13,10 +13,9 @@
 //  to a CVPixelBuffer, and emits an RTCVideoFrame the WebRTCClient feeds into
 //  the screen-share producer.
 //
-//  This mirrors the working React Native (react-native-webrtc) broadcast
-//  pipeline — the extension side is copied near-verbatim; this reader is the
-//  piece that lived inside react-native-webrtc, re-authored from the wire
-//  protocol the extension emits.
+//  The wire format matches the ReplayKit/WebRTC broadcast pipeline used by the
+//  mobile stack, but the socket reader is owned here so the main app controls
+//  frame backpressure and teardown.
 //
 
 #if os(iOS) && !SKIP
@@ -338,8 +337,9 @@ final class ScreenShareSocketServer: @unchecked Sendable {
             let now = Date().timeIntervalSince1970
             if now - lastDecodeFailureLogAt >= 1.0 {
                 lastDecodeFailureLogAt = now
-                NSLog("[ScreenShare] decode failed: jpegBytes=%d w=%d h=%d orient=%d",
-                      jpeg.count, width, height, orientation)
+                debugLog(
+                    "[ScreenShare] decode failed: jpegBytes=\(jpeg.count) w=\(width) h=\(height) orient=\(orientation)"
+                )
             }
             return
         }

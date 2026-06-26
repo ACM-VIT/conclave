@@ -17,14 +17,13 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
-/// The minimal Picture-in-Picture layout: ONLY the active speaker's video (or
-/// their avatar when their camera is off) on the Carbon background — no chrome.
-/// Mute / Leave live in the system PiP action bar (PipManager RemoteActions).
+/**
+ * Minimal Picture-in-Picture surface: active speaker video when available,
+ * otherwise their avatar. Mute and Leave stay in Android's PiP action bar.
+ */
 @Composable
 fun PipContent() {
-    val track = PipController.pipVideoTrack
-    val cameraOff = PipController.pipVideoIsCameraOff
-    val name = PipController.pipDisplayName
+    val videoState = PipController.pipVideoState
 
     Box(
         modifier = Modifier
@@ -32,10 +31,18 @@ fun PipContent() {
             .background(Color(0xFF0A0A0B)),
         contentAlignment = Alignment.Center
     ) {
-        if (track != null && !cameraOff) {
-            VideoTrackView(track = track, mirror = false, fit = false)
+        if (videoState.track != null && !videoState.cameraOff) {
+            val trackKey = videoState.track.id()
+            VideoTrackView(
+                track = videoState.track,
+                mirror = false,
+                fit = false,
+                useOverlaySurface = false,
+                rendererKey = "pip:${videoState.surfaceVersion}:${videoState.targetId}:$trackKey",
+                clearBeforeAttach = false
+            )
         } else {
-            PipAvatar(name)
+            PipAvatar(videoState.displayName)
         }
     }
 }

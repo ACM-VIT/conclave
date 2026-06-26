@@ -1,47 +1,53 @@
-# Conclave
+# Conclave Native
 
-This is a [Skip](https://skip.tools) dual-platform app project.
+Conclave's native app lives here. The shared Swift source is compiled for iOS and transpiled through Skip for Android; keep behavior aligned with the web client while making platform-specific media, permission, and release handling explicit.
 
-## Building
+## Structure
 
-This project is both a stand-alone Swift Package Manager module,
-as well as an Xcode project that builds and translates the project
-into a Kotlin Gradle project for Android using the skipstone plugin.
+- `Sources/Conclave`: shared SwiftUI, meeting state, networking, WebRTC, and platform bridges.
+- `Sources/Conclave/Skip`: Android-only Kotlin helpers used by the Skip build.
+- `Darwin`: iOS app target, assets, entitlements, ReplayKit screen-share extension, and fastlane release config.
+- `Android`: Android Gradle project, manifest, resources, native Kotlin entry points, and fastlane release config.
+- `Skip.env`: shared app identity, version/build numbers, bundle ids, and production backend URLs.
 
-Building the module requires that Skip be installed using
-[Homebrew](https://brew.sh) with `brew install skiptools/skip/skip`.
+Do not use `apps/mobile` for new native work; it is deprecated.
 
-This will also install the necessary Skip prerequisites:
-Kotlin, Gradle, and the Android build tools.
+## Build And Test
 
-Installation prerequisites can be confirmed by running
-`skip checkup`. The project can be validated with `skip verify`.
+From this directory:
 
-## Running
+```sh
+swift build
+swift test -q
+```
 
-Xcode and Android Studio must be downloaded and installed in order to
-run the app in the iOS simulator / Android emulator.
-An Android emulator must already be running, which can be launched from
-Android Studio's Device Manager.
+Android compile check:
 
-The project can be opened and run in Xcode from
-`Project.xcworkspace`, which also enabled parallel
-development of any Skip library dependencies.
+```sh
+cd Android
+gradle --no-daemon --max-workers=1 -Dorg.gradle.jvmargs='-Xmx1536m -XX:MaxMetaspaceSize=512m -Dfile.encoding=UTF-8' :Conclave:compileDebugKotlin --console=plain
+```
 
-To run both the Swift and Kotlin apps simultaneously,
-launch the "Conclave App" target from Xcode.
-A build phases runs the "Launch Android APK" script that
-will deploy the Skip app to a running Android emulator or connected device.
-Logging output for the iOS app can be viewed in the Xcode console, and in
-Android Studio's logcat tab for the transpiled Kotlin app, or
-using `adb logcat` from a terminal.
+iOS simulator build:
 
-## Testing
+```sh
+xcodebuild -project Darwin/Conclave.xcodeproj -scheme "Conclave App" -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 17' CODE_SIGNING_ALLOWED=NO build
+```
 
-The module can be tested using the standard `swift test` command
-or by running the test target for the macOS destination in Xcode,
-which will run the Swift tests as well as the transpiled
-Kotlin JUnit tests in the Robolectric Android simulation environment.
+Use `Darwin/fastlane` and `Android/fastlane` for release automation. Release builds should use the production Conclave host from `Skip.env`, not emulator loopback URLs.
 
-Parity testing can be performed with `skip test`,
-which will output a table of the test results for both platforms.
+## Runtime Notes
+
+- Native auth, SFU join, socket events, media lifecycle, and admin controls should follow `apps/web` behavior unless a platform API forces a documented difference.
+- iOS whole-screen sharing uses the ReplayKit broadcast extension in `Darwin/ScreenShareExtension`.
+- Android screen sharing uses MediaProjection plus a foreground service; do not start WebRTC screen capture before the service is foregrounded.
+- Android call audio routing must preserve microphone capture across speaker, earpiece, wired, Bluetooth, and background call states.
+
+## Verification Expectations
+
+For meeting changes, run the smallest relevant native checks and, when a device is visible, smoke test:
+
+- solo join shows one participant and no duplicate self tile
+- another participant appears with the correct display name
+- mic/camera toggles recover after permission denial or route change
+- leave/reconnect cleans producers, consumers, transports, and room UI state

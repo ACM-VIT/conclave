@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { NextResponse } from "next/server";
 import { resolveHostGrant } from "@conclave/meeting-core";
 import { auth } from "@/lib/auth";
+import { isSfuAllowlistedUser } from "@/lib/sfu-admin-auth";
 import { lookupScheduledWebinarByRoomId } from "@/lib/sfu-user-auth";
 import {
   normalizeRoutedSfuUrl,
@@ -37,6 +38,7 @@ type JoinRequestBody = {
   };
   isHost?: boolean;
   isAdmin?: boolean;
+  isGhost?: boolean;
   allowRoomCreation?: boolean;
   clientId?: string;
 };
@@ -289,11 +291,19 @@ export async function POST(request: Request) {
   const baseUserId = email || providedId || `guest-${sessionId}`;
   const isWebinarAttendeeJoin = joinMode === "webinar_attendee";
   const isScheduledHostRoom = isScheduledRoomId(roomId);
+  const requestedGhost = Boolean(body?.isGhost);
+  const isSuperAdmin =
+    Boolean(sessionUser?.id) &&
+    isSfuAllowlistedUser({
+      id: sessionUser!.id,
+      email: sessionUser!.email,
+    });
   const isForcedHost =
     !isWebinarAttendeeJoin &&
-    Boolean(
+    (Boolean(
       normalizedSessionEmail && alwaysHostEmails.has(normalizedSessionEmail),
-    );
+    ) ||
+      (isSuperAdmin && requestedGhost));
   const requestedHost = Boolean(body?.isHost ?? body?.isAdmin);
 
   // For scheduled webinar rooms, only the actual host or a registered co-host

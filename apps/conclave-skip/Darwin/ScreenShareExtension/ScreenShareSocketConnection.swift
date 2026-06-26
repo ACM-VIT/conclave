@@ -2,10 +2,10 @@
 //  ScreenShareSocketConnection.swift
 //  ScreenShareExtension
 //
-//  AF_UNIX stream-socket CLIENT the broadcast extension uses to reach the main
-//  app's ScreenShareSocketServer over the shared App Group container
-//  (`<group>/rtc_SSFD`). Ported verbatim from the working react-native-webrtc
-//  broadcast extension. Pure Darwin/Foundation — no Skip, no app module.
+//  AF_UNIX stream-socket client used by the broadcast extension to reach the
+//  main app's ScreenShareSocketServer over the shared App Group container
+//  (`<group>/rtc_SSFD`). Keep this pure Darwin/Foundation with no Skip or app
+//  module dependency.
 //
 
 import Darwin

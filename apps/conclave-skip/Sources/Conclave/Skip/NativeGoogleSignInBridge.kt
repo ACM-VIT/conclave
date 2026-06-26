@@ -2,6 +2,8 @@ package conclave.module
 
 import android.app.Activity
 import android.content.Intent
+import android.os.Handler
+import android.os.Looper
 import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.android.gms.auth.api.signin.GoogleSignInOptions
 import com.google.android.gms.common.ConnectionResult
@@ -13,8 +15,11 @@ import skip.ui.UIApplication
 
 object NativeGoogleSignInBridge {
     private const val REQUEST_CODE = 43182
+    private const val SIGN_IN_TIMEOUT_MS = 120_000L
 
+    private val mainHandler = Handler(Looper.getMainLooper())
     private var pendingCallback: ((String?, String?, String?, String?) -> Unit)? = null
+    private var pendingTimeout: Runnable? = null
 
     fun isAvailable(): Boolean {
         if (webClientId().isBlank()) return false
@@ -42,6 +47,7 @@ object NativeGoogleSignInBridge {
         }
 
         pendingCallback = callback
+        scheduleTimeout()
         val options = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
             .requestEmail()
             .requestProfile()
@@ -86,9 +92,24 @@ object NativeGoogleSignInBridge {
     }
 
     private fun finish(token: String?, name: String?, email: String?, error: String?) {
+        clearTimeout()
         val callback = pendingCallback
         pendingCallback = null
         callback?.invoke(token, name, email, error)
+    }
+
+    private fun scheduleTimeout() {
+        clearTimeout()
+        val timeout = Runnable {
+            finish(null, null, null, "Google Sign-In timed out.")
+        }
+        pendingTimeout = timeout
+        mainHandler.postDelayed(timeout, SIGN_IN_TIMEOUT_MS)
+    }
+
+    private fun clearTimeout() {
+        pendingTimeout?.let { mainHandler.removeCallbacks(it) }
+        pendingTimeout = null
     }
 
     private fun webClientId(): String {

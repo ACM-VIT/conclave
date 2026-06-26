@@ -17,6 +17,35 @@ func acmListSectionHeader(_ title: String) -> some View {
         #endif
 }
 
+enum ParticipantScreenShareDisplayPolicy {
+    static func isScreenSharing(participantFlag: Bool, screenShareProducerId: String?) -> Bool {
+        participantFlag || ParticipantProducerActionPolicy.hasProducer(screenShareProducerId)
+    }
+}
+
+enum ParticipantProducerActionPolicy {
+    static func hasProducer(_ producerId: String?) -> Bool {
+        normalizedProducerId(producerId) != nil
+    }
+
+    static func normalizedProducerId(_ producerId: String?) -> String? {
+        let normalizedProducerId = producerId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return normalizedProducerId.isEmpty ? nil : normalizedProducerId
+    }
+}
+
+enum ParticipantSheetAdminActionPolicy {
+    static func shouldApplyCompletion(
+        generation: Int,
+        currentGeneration: Int,
+        actionRoomId: String,
+        currentRoomId: String
+    ) -> Bool {
+        return generation == currentGeneration &&
+            NativeRoomIdNormalizer.matches(actionRoomId, currentRoomId)
+    }
+}
+
 struct ParticipantsSheetView: View {
     @Bindable var viewModel: MeetingViewModel
     var bodyReady: Bool = true
@@ -26,12 +55,14 @@ struct ParticipantsSheetView: View {
     @State private var promotingHostUserId: String?
     @State private var pendingKickUserId: String?
     @State private var removingUserId: String?
+    @State private var hostPromotionActionGeneration = 0
+    @State private var participantRemovalActionGeneration = 0
 
     private var hasRaisedHands: Bool {
         if viewModel.state.isHandRaised {
             return true
         }
-        for participant in viewModel.state.sortedParticipants {
+        for participant in viewModel.state.presentParticipants {
             if participant.isHandRaised {
                 return true
             }
@@ -290,6 +321,7 @@ struct ParticipantsSheetView: View {
 
     @ViewBuilder
     private func currentUserRow() -> some View {
+        let displayName = viewModel.state.displayName(for: viewModel.state.userId)
         let isHost = viewModel.state.isHostUser(viewModel.state.userId)
         let mediaStatus = participantAccessibilityStatus(
             isHandRaised: viewModel.state.isHandRaised,
@@ -299,11 +331,11 @@ struct ParticipantsSheetView: View {
         )
 
         HStack(spacing: ACMSpacing.sm) {
-            avatarView(viewModel.state.displayName)
+            avatarView(displayName)
 
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: ACMSpacing.xs) {
-                    Text(viewModel.state.displayName)
+                    Text(displayName)
                         .font(ACMFont.trial(15, weight: .medium))
                         .foregroundStyle(ACMColors.text)
                         .lineLimit(1)
@@ -332,16 +364,14 @@ struct ParticipantsSheetView: View {
         }
         .padding(.horizontal, ACMSpacing.sm)
         .frame(height: 56)
-        .accessibilityLabel("\(viewModel.state.displayName), You\(isHost ? ", Host" : ""), \(mediaStatus)")
+        .accessibilityLabel("\(displayName), You\(isHost ? ", Host" : ""), \(mediaStatus)")
     }
 
     @ViewBuilder
     private func participantRow(_ participant: Participant) -> some View {
         let displayName = viewModel.displayNameForUser(participant.id)
-        let isScreenSharing = participant.isScreenSharing || viewModel.state.activeScreenShareUserId == participant.id
         let canPromoteParticipant = canUseHostControls
-            && !viewModel.state.isHostUser(participant.id)
-            && !participant.isGhost
+            && viewModel.state.canPromoteHost(userId: participant.id)
         let isPendingHostPromotion = pendingHostPromotionUserId == participant.id
         let isPromotingHost = promotingHostUserId == participant.id
         let isPendingRemoval = pendingKickUserId == participant.id
@@ -350,6 +380,10 @@ struct ParticipantsSheetView: View {
         let cameraProducerId = viewModel.remoteCameraProducerId(for: participant.id)
         let screenShareProducerId = viewModel.remoteScreenShareProducerId(for: participant.id)
         let screenShareAudioProducerId = viewModel.remoteScreenShareAudioProducerId(for: participant.id)
+        let isScreenSharing = ParticipantScreenShareDisplayPolicy.isScreenSharing(
+            participantFlag: participant.isScreenSharing,
+            screenShareProducerId: screenShareProducerId
+        )
         let isHost = viewModel.state.isHostUser(participant.id)
         let mediaStatus = participantAccessibilityStatus(
             isHandRaised: participant.isHandRaised,
@@ -390,13 +424,9 @@ struct ParticipantsSheetView: View {
 
             if canUseHostControls {
                 Menu {
-                    if !participant.isCameraOff {
+                    if let cameraProducerId = ParticipantProducerActionPolicy.normalizedProducerId(cameraProducerId) {
                         Button {
-                            if let cameraProducerId {
-                                viewModel.stopRemoteProducer(producerId: cameraProducerId)
-                            } else {
-                                viewModel.turnOffParticipantCamera(userId: participant.id)
-                            }
+                            viewModel.stopRemoteProducer(producerId: cameraProducerId)
                         } label: {
                             Label {
                                 Text("Turn off camera")
@@ -407,13 +437,9 @@ struct ParticipantsSheetView: View {
                         }
                     }
 
-                    if isScreenSharing {
+                    if let screenShareProducerId = ParticipantProducerActionPolicy.normalizedProducerId(screenShareProducerId) {
                         Button {
-                            if let screenShareProducerId {
-                                viewModel.stopRemoteProducer(producerId: screenShareProducerId)
-                            } else {
-                                viewModel.stopParticipantScreenShare(userId: participant.id)
-                            }
+                            viewModel.stopRemoteProducer(producerId: screenShareProducerId)
                         } label: {
                             Label {
                                 Text("Stop screen share")
@@ -424,7 +450,7 @@ struct ParticipantsSheetView: View {
                         }
                     }
 
-                    if let screenShareAudioProducerId {
+                    if let screenShareAudioProducerId = ParticipantProducerActionPolicy.normalizedProducerId(screenShareAudioProducerId) {
                         Button {
                             viewModel.stopRemoteProducer(producerId: screenShareAudioProducerId)
                         } label: {
@@ -437,13 +463,9 @@ struct ParticipantsSheetView: View {
                         }
                     }
 
-                    if !participant.isMuted {
+                    if let audioProducerId = ParticipantProducerActionPolicy.normalizedProducerId(audioProducerId) {
                         Button {
-                            if let audioProducerId {
-                                viewModel.stopRemoteProducer(producerId: audioProducerId)
-                            } else {
-                                viewModel.muteParticipant(userId: participant.id)
-                            }
+                            viewModel.stopRemoteProducer(producerId: audioProducerId)
                         } label: {
                             Label {
                                 Text("Mute")
@@ -552,7 +574,7 @@ struct ParticipantsSheetView: View {
     }
 
     var body: some View {
-        let participants = viewModel.state.sortedParticipants
+        let participants = viewModel.state.presentParticipants
         let pendingUsers = viewModel.state.pendingUsers.sorted(by: { $0.value < $1.value })
         let dividerInset = ACMSpacing.sm + 40 + ACMSpacing.sm
 
@@ -575,7 +597,7 @@ struct ParticipantsSheetView: View {
                                     viewModel.turnOffAllParticipantCameras()
                                 }
                                 MeetingSheetRowDivider(inset: ACMSpacing.sm + 32 + ACMSpacing.sm)
-                                if viewModel.state.activeScreenShareUserId != nil {
+                                if viewModel.state.hasActiveScreenShare {
                                     hostActionButton("Stop screen share", icon: "rectangle.on.rectangle.slash", androidIcon: "screen.share.off", isDisabled: !canUseHostControls) {
                                         viewModel.stopAllScreenShares()
                                     }
@@ -670,13 +692,29 @@ struct ParticipantsSheetView: View {
         #else
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         #endif
+        .onChange(of: viewModel.state.roomId) { _, _ in
+            resetTransientAdminActionState()
+        }
+        .onChange(of: viewModel.state.connectionState) { _, state in
+            if state != .joined {
+                resetTransientAdminActionState()
+            }
+        }
+        .onDisappear {
+            resetTransientAdminActionState()
+        }
     }
 
     private func promoteHost(_ userId: String) {
         guard canUseHostControls, promotingHostUserId == nil else { return }
+        let actionRoomId = viewModel.state.roomId
+        let generation = nextHostPromotionActionGeneration()
         promotingHostUserId = userId
         Task { @MainActor in
             await viewModel.makeHost(userId: userId)
+            guard shouldApplyHostPromotionCompletion(generation: generation, roomId: actionRoomId) else {
+                return
+            }
             if pendingHostPromotionUserId == userId {
                 pendingHostPromotionUserId = nil
             }
@@ -688,9 +726,14 @@ struct ParticipantsSheetView: View {
 
     private func removeParticipant(_ userId: String) {
         guard canUseHostControls, removingUserId == nil else { return }
+        let actionRoomId = viewModel.state.roomId
+        let generation = nextParticipantRemovalActionGeneration()
         removingUserId = userId
         Task { @MainActor in
             await viewModel.removeUser(userId: userId)
+            guard shouldApplyParticipantRemovalCompletion(generation: generation, roomId: actionRoomId) else {
+                return
+            }
             if pendingKickUserId == userId {
                 pendingKickUserId = nil
             }
@@ -698,5 +741,42 @@ struct ParticipantsSheetView: View {
                 removingUserId = nil
             }
         }
+    }
+
+    private func nextHostPromotionActionGeneration() -> Int {
+        hostPromotionActionGeneration += 1
+        return hostPromotionActionGeneration
+    }
+
+    private func nextParticipantRemovalActionGeneration() -> Int {
+        participantRemovalActionGeneration += 1
+        return participantRemovalActionGeneration
+    }
+
+    private func shouldApplyHostPromotionCompletion(generation: Int, roomId: String) -> Bool {
+        ParticipantSheetAdminActionPolicy.shouldApplyCompletion(
+            generation: generation,
+            currentGeneration: hostPromotionActionGeneration,
+            actionRoomId: roomId,
+            currentRoomId: viewModel.state.roomId
+        )
+    }
+
+    private func shouldApplyParticipantRemovalCompletion(generation: Int, roomId: String) -> Bool {
+        ParticipantSheetAdminActionPolicy.shouldApplyCompletion(
+            generation: generation,
+            currentGeneration: participantRemovalActionGeneration,
+            actionRoomId: roomId,
+            currentRoomId: viewModel.state.roomId
+        )
+    }
+
+    private func resetTransientAdminActionState() {
+        hostPromotionActionGeneration += 1
+        participantRemovalActionGeneration += 1
+        pendingHostPromotionUserId = nil
+        promotingHostUserId = nil
+        pendingKickUserId = nil
+        removingUserId = nil
     }
 }

@@ -1,7 +1,3 @@
-//  A single persistent bottom sheet swaps pages in place; chained native
-//  ModalBottomSheet presentations leave visible gaps on Skip/Android.
-//
-
 import SwiftUI
 import Observation
 
@@ -97,6 +93,20 @@ private enum MeetingSheetNavigationDirection {
     }
 }
 
+enum MeetingSheetRevealPolicy {
+    static func shouldRevealImmediately(after delayNanoseconds: UInt64) -> Bool {
+        delayNanoseconds == UInt64(0)
+    }
+
+    static func shouldHideBodyBeforeReveal(after delayNanoseconds: UInt64) -> Bool {
+        !shouldRevealImmediately(after: delayNanoseconds)
+    }
+
+    static func shouldApply(generation: Int, currentGeneration: Int) -> Bool {
+        generation == currentGeneration
+    }
+}
+
 struct MeetingSheetView: View {
     @Bindable var viewModel: MeetingViewModel
     @Binding var page: MeetingSheetPage
@@ -105,10 +115,13 @@ struct MeetingSheetView: View {
     @State private var pageTransitionsEnabled = false
     @State private var bodyReady = false
     @State private var bodyRevealGeneration = 0
+    @State private var bodyRevealTask: Task<Void, Never>?
 
     static let detentFraction: CGFloat = 0.62
+    static let androidInitialBodyRevealDelayNanoseconds = UInt64(0)
+    static let androidNavigationBodyRevealDelayNanoseconds = UInt64(0)
     private static let fallbackAndroidDetentHeight: CGFloat = 420.0
-    private static let pageAnimation = Animation.easeInOut(duration: 0.18)
+    private static let pageAnimation = Animation.easeInOut(duration: 0.16)
 
     private var resolvedAndroidDetentHeight: CGFloat {
         max(1.0, androidDetentHeight ?? Self.fallbackAndroidDetentHeight)
@@ -118,6 +131,10 @@ struct MeetingSheetView: View {
         guard page != nextPage else { return }
 
         navigationDirection = nextPage.depth <= page.depth ? .pop : .push
+        #if SKIP
+        scheduleAndroidBodyReveal(after: Self.androidNavigationBodyRevealDelayNanoseconds)
+        #endif
+
         guard pageTransitionsEnabled else {
             page = nextPage
             return
@@ -127,6 +144,59 @@ struct MeetingSheetView: View {
             page = nextPage
         }
     }
+
+    #if SKIP
+    private func scheduleAndroidBodyReveal(
+        after delayNanoseconds: UInt64,
+        enableTransitionsAfterReveal: Bool = false,
+        animated: Bool = true
+    ) {
+        bodyRevealTask?.cancel()
+        bodyRevealTask = nil
+        bodyRevealGeneration += 1
+        let generation = bodyRevealGeneration
+        if MeetingSheetRevealPolicy.shouldRevealImmediately(after: delayNanoseconds) {
+            if !bodyReady {
+                bodyReady = true
+            }
+            if enableTransitionsAfterReveal {
+                pageTransitionsEnabled = true
+            }
+            return
+        }
+        bodyReady = false
+        bodyRevealTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: delayNanoseconds)
+            guard !Task.isCancelled,
+                  MeetingSheetRevealPolicy.shouldApply(
+                    generation: generation,
+                    currentGeneration: bodyRevealGeneration
+                  ) else { return }
+            guard animated else {
+                bodyReady = true
+                if enableTransitionsAfterReveal {
+                    pageTransitionsEnabled = true
+                }
+                bodyRevealTask = nil
+                return
+            }
+            withAnimation(.easeOut(duration: 0.08)) {
+                bodyReady = true
+            }
+            if enableTransitionsAfterReveal {
+                pageTransitionsEnabled = true
+            }
+            bodyRevealTask = nil
+        }
+    }
+
+    private func resetAndroidBodyReveal() {
+        bodyRevealTask?.cancel()
+        bodyRevealTask = nil
+        bodyRevealGeneration += 1
+        bodyReady = false
+    }
+    #endif
 
     @ViewBuilder
     private func pageView<Content: View>(_ content: Content) -> some View {
@@ -293,26 +363,27 @@ struct MeetingSheetView: View {
         .presentationDetents([.fraction(Self.detentFraction)])
         #endif
         .onAppear {
-            pageTransitionsEnabled = true
-            bodyRevealGeneration += 1
-            let generation = bodyRevealGeneration
             #if SKIP
-            // Keep the first Android sheet frame light while the open slide settles.
-            bodyReady = false
-            Task { @MainActor in
-                try? await Task.sleep(nanoseconds: 90_000_000)
-                guard bodyRevealGeneration == generation else { return }
-                withAnimation(.easeOut(duration: 0.10)) {
-                    bodyReady = true
-                }
-            }
+            pageTransitionsEnabled = false
+            scheduleAndroidBodyReveal(
+                after: Self.androidInitialBodyRevealDelayNanoseconds,
+                enableTransitionsAfterReveal: true,
+                animated: false
+            )
             #else
+            pageTransitionsEnabled = true
             bodyReady = true
             #endif
         }
         .onDisappear {
+            #if SKIP
+            resetAndroidBodyReveal()
+            #else
             bodyRevealGeneration += 1
             bodyReady = false
+            #endif
+            pageTransitionsEnabled = false
+            navigationDirection = .push
         }
         #if !SKIP
         .presentationDragIndicator(.visible)

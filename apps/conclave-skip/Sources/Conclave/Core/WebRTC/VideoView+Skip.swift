@@ -25,9 +25,62 @@ struct RTCLocalVideoView: View {
 struct RemoteVideoView: View {
     let trackWrapper: VideoTrackWrapper
     var contentMode: VideoContentMode = .fill
+    var fallbackDisplayName: String = "Guest"
 
     var body: some View {
-        AndroidVideoView(trackWrapper: trackWrapper, isMirrored: false, contentMode: contentMode)
+        ZStack {
+            AndroidVideoView(trackWrapper: trackWrapper, isMirrored: false, contentMode: contentMode)
+            if trackWrapper.rtcVideoTrack == nil {
+                VideoTrackFallbackView(
+                    displayName: MeetingState.mediaFallbackDisplayName(
+                        fallbackDisplayName,
+                        userId: trackWrapper.userId
+                    ),
+                    isEnabled: trackWrapper.isEnabled
+                )
+            }
+        }
+    }
+}
+
+private struct VideoTrackFallbackView: View {
+    let displayName: String
+    let isEnabled: Bool
+
+    private var resolvedDisplayName: String {
+        let trimmed = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "Guest" : trimmed
+    }
+
+    var body: some View {
+        GeometryReader { geo in
+            let avatarSize = min(max(min(geo.size.width, geo.size.height) * 0.28, 44.0), 112.0)
+
+            ZStack {
+                ACMColors.bgAlt
+
+                Circle()
+                    .fill(ACMColors.avatarColor(for: resolvedDisplayName))
+                    .frame(width: avatarSize, height: avatarSize)
+                    .overlay {
+                        Text(String(resolvedDisplayName.prefix(1)).uppercased())
+                            .font(.system(size: avatarSize * 0.40, weight: .bold))
+                            .foregroundStyle(Color.white)
+                    }
+
+                if isEnabled {
+                    ProgressView()
+                        #if SKIP
+                        .progressViewStyle(.circular)
+                        #endif
+                        .tint(Color.white)
+                        .scaleEffect(0.8)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                        .padding(12)
+                }
+            }
+            .frame(width: geo.size.width, height: geo.size.height)
+        }
     }
 }
 
@@ -43,22 +96,37 @@ struct VideoGridItem: View {
     // Expands camera-off avatars on stage while leaving video aspect handling to the renderer.
     var fillStage: Bool = false
     var isThumbnail: Bool = false
+    var avatarSizeOverride: CGFloat? = nil
+    var usePlatformOverlaySurface: Bool = false
+    var localCameraFacing: LocalCameraFacing = .front
 
     var captureSession: Any? = nil
     var localVideoTrack: Any? = nil
     var trackWrapper: VideoTrackWrapper? = nil
 
+    private var resolvedDisplayName: String {
+        let trimmed = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty {
+            return trimmed
+        }
+        return isLocal ? "You" : "Guest"
+    }
+
+    private var avatarInitial: String {
+        String(resolvedDisplayName.prefix(1)).uppercased()
+    }
+
     var body: some View {
         aspectAdjustedContent
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .acmColorBackground(ACMColors.bgAlt)
+            .clipped()
             .clipShape(RoundedRectangle(cornerRadius: ACMRadius.lg))
             .overlay {
                 RoundedRectangle(cornerRadius: ACMRadius.lg)
                     .strokeBorder(lineWidth: isSpeaking ? 2.0 : 1.0)
                     .foregroundStyle(isSpeaking ? ACMColors.primaryOrange : ACMColors.creamFaint)
             }
-            // Ease the flat 2px orange active-speaker border in/out so it reads as
-            // responsive rather than snapping (Zoom/Teams do ~120ms). No glow.
-            .animation(.easeOut(duration: 0.12), value: isSpeaking)
     }
 
     @ViewBuilder
@@ -66,40 +134,60 @@ struct VideoGridItem: View {
         // Fill the frame the parent assigns (grid cell / stage / thumbnail).
         // Video crops to fill; the avatar centres. No 16:9 letterbox gaps.
         ZStack { videoContent; overlays }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     @ViewBuilder
     var videoContent: some View {
         if isCameraOff {
             avatarView
-        } else if isLocal, let wrapper = localVideoTrack as? VideoTrackWrapper {
-            AndroidVideoView(trackWrapper: wrapper, isMirrored: true)
+        } else if isLocal,
+                  let wrapper = localVideoTrack as? VideoTrackWrapper {
+            androidVideoSlot(trackWrapper: wrapper, isMirrored: localCameraFacing.shouldMirrorLocalVideo)
         } else if let wrapper = trackWrapper {
-            AndroidVideoView(trackWrapper: wrapper, isMirrored: false)
+            androidVideoSlot(trackWrapper: wrapper, isMirrored: false)
         } else {
-            Color.black
+            avatarView
+        }
+    }
+
+    @ViewBuilder
+    func androidVideoSlot(trackWrapper: VideoTrackWrapper, isMirrored: Bool) -> some View {
+        ZStack {
+            AndroidVideoView(
+                trackWrapper: trackWrapper,
+                isMirrored: isMirrored,
+                useOverlaySurface: usePlatformOverlaySurface
+            )
+            if trackWrapper.rtcVideoTrack == nil {
+                avatarView
+            }
         }
     }
 
     var avatarView: some View {
-        // Fixed avatar size (large on the solo/spotlight stage, compact in a grid
-        // cell). Avoids a nested GeometryReader per tile — on Android those
-        // stacked GeometryReaders re-trigger Skip's ComposeView ghosting (a faint
-        // duplicate of the controls bar appeared across the top of the grid).
-        let avatarSize: CGFloat = isThumbnail ? 44.0 : (fillStage ? 200.0 : 84.0)
-        return ZStack {
-            ACMColors.bgAlt
+        GeometryReader { geo in
+            let labelClearance: CGFloat = isThumbnail ? 30.0 : 44.0
+            let shortestSide = min(geo.size.width, max(1.0, geo.size.height - labelClearance))
+            let minAvatarSize = min(isThumbnail ? 24.0 : 44.0, shortestSide)
+            let maxAvatarSize = min(isThumbnail ? 40.0 : (fillStage ? 220.0 : 104.0), shortestSide)
+            let proportionalSize = shortestSide * (isThumbnail ? 0.46 : 0.42)
+            let avatarSize = min(max(avatarSizeOverride ?? proportionalSize, minAvatarSize), maxAvatarSize)
 
-            Circle()
-                .fill(ACMColors.avatarColor(for: displayName))
-                .frame(width: avatarSize, height: avatarSize)
-                .overlay {
-                    Text(String(displayName.prefix(1)).uppercased())
-                        .font(.system(size: avatarSize * 0.40, weight: .bold))
-                        .foregroundStyle(Color.white)
-                }
+            ZStack {
+                ACMColors.bgAlt
+
+                Circle()
+                    .fill(ACMColors.avatarColor(for: resolvedDisplayName))
+                    .frame(width: avatarSize, height: avatarSize)
+                    .overlay {
+                        Text(avatarInitial)
+                            .font(.system(size: avatarSize * 0.40, weight: .bold))
+                            .foregroundStyle(Color.white)
+                    }
+            }
+            .frame(width: geo.size.width, height: geo.size.height)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     var overlays: some View {
@@ -215,15 +303,13 @@ struct VideoGridItem: View {
                             .foregroundStyle(ACMColors.error)
                     }
 
-                    Text(isLocal ? "You" : displayName)
+                    Text(isLocal ? "You" : resolvedDisplayName)
                         .font(ACMFont.trial(isThumbnail ? 11.0 : 12.0, weight: .medium))
                         .foregroundStyle(ACMColors.text)
                         .lineLimit(1)
                 }
-                .padding(.horizontal, isThumbnail ? 8.0 : 10.0)
-                .padding(.vertical, isThumbnail ? 4.0 : 5.0)
-                .acmColorBackground(ACMColors.scrim)
-                .clipShape(RoundedRectangle(cornerRadius: isThumbnail ? 7.0 : 8.0))
+                .frame(maxWidth: isThumbnail ? 112.0 : 220.0, alignment: .leading)
+                .shadow(color: ACMColors.blackOverlay(0.9), radius: 2.0, x: 0.0, y: 1.0)
 
                 Spacer()
             }
@@ -236,12 +322,21 @@ struct AndroidVideoView: View {
     let trackWrapper: VideoTrackWrapper
     var isMirrored: Bool
     var contentMode: VideoContentMode = .fill
+    var useOverlaySurface = false
+    var rendererKey: Any? = nil
 
     var body: some View {
         let fit = (contentMode == VideoContentMode.fit)
+        let stableRendererKey = rendererKey ?? trackWrapper.id
         ComposeView { _ in
             #if SKIP
-            VideoTrackView(track: trackWrapper.rtcVideoTrack as? org.webrtc.VideoTrack, mirror: isMirrored, fit: fit)
+            VideoTrackView(
+                track: trackWrapper.rtcVideoTrack as? org.webrtc.VideoTrack,
+                mirror: isMirrored,
+                fit: fit,
+                useOverlaySurface: useOverlaySurface,
+                rendererKey: stableRendererKey
+            )
             #else
             VideoTrackView(track: nil, mirror: isMirrored, fit: fit)
             #endif

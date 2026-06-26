@@ -8,7 +8,10 @@ import skip.ui.*
 import android.app.Application
 import android.content.Intent
 import android.graphics.Color as AndroidColor
+import android.os.Handler
+import android.os.Looper
 import androidx.activity.compose.setContent
+import androidx.activity.compose.LocalActivity
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.SystemBarStyle
 import androidx.activity.ComponentActivity
@@ -18,20 +21,18 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.luminance
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.material3.MaterialTheme
 
 internal val logger: SkipLogger = SkipLogger(subsystem = "conclave.module", category = "Conclave")
 
 private typealias AppRootView = ConclaveRootView
 private typealias AppDelegate = ConclaveAppDelegate
+private const val FULL_ROOT_SAVEABLE_KEY = "conclave-full-root"
 
-/// AndroidAppMain is the `android.app.Application` entry point, and must match `application android:name` in AndroidManifest.xml.
 open class AndroidAppMain: Application {
     constructor() {
     }
@@ -50,7 +51,6 @@ open class AndroidAppMain: Application {
     }
 }
 
-/// MainActivity is the initial `androidx.appcompat.app.AppCompatActivity`, and must match `activity android:name` in AndroidManifest.xml.
 open class MainActivity: AppCompatActivity {
     constructor() {
     }
@@ -64,18 +64,12 @@ open class MainActivity: AppCompatActivity {
         enableEdgeToEdge()
 
         setContent {
-            // While in Picture-in-Picture, render ONLY the minimal active-speaker
-            // layout (no controls/chrome — Mute/Leave live in the system PiP
-            // action bar). Restore the full meeting UI when leaving PiP. Reading
-            // PipController.inPipMode (a Compose mutableState) recomposes on the
-            // PiP-mode transition.
+            val saveableStateHolder = rememberSaveableStateHolder()
             if (PipController.inPipMode && PipController.isInCall) {
                 PipContent()
             } else {
-                val saveableStateHolder = rememberSaveableStateHolder()
-                saveableStateHolder.SaveableStateProvider(true) {
+                saveableStateHolder.SaveableStateProvider(FULL_ROOT_SAVEABLE_KEY) {
                     PresentationRootView(ComposeContext())
-                    SideEffect { saveableStateHolder.removeState(true) }
                 }
             }
         }
@@ -86,6 +80,9 @@ open class MainActivity: AppCompatActivity {
 
     override fun onResume() {
         super.onResume()
+        if (android.os.Build.VERSION.SDK_INT >= 26) {
+            PipManager.handleActivityResumed(this)
+        }
         AppDelegate.shared.onResume()
     }
 
@@ -99,17 +96,30 @@ open class MainActivity: AppCompatActivity {
         AppDelegate.shared.onStop()
     }
 
-    /// Fired when the user is leaving the activity (Home / Recents). If a call is
-    /// active, enter Picture-in-Picture showing the active speaker's video so the
-    /// call stays visible. The foreground service already keeps audio alive.
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
         if (
             PipController.isInCall &&
+            !PipController.inPipMode &&
             !ScreenCaptureManager.isRequestingCapture() &&
             android.os.Build.VERSION.SDK_INT >= 26
         ) {
-            PipManager.enterPip(this, PipController.muted)
+            PipController.refreshPipContent()
+            CallActionDispatcher.pictureInPictureContentRefresh()
+            Handler(Looper.getMainLooper()).post {
+                if (
+                    PipController.isInCall &&
+                    !PipController.inPipMode &&
+                    !ScreenCaptureManager.isRequestingCapture() &&
+                    !isFinishing &&
+                    !isDestroyed &&
+                    !isInPictureInPictureMode
+                ) {
+                    PipManager.enterPip(this, PipController.muted)
+                } else if (!isInPictureInPictureMode) {
+                    PipController.inPipMode = false
+                }
+            }
         }
     }
 
@@ -130,8 +140,17 @@ open class MainActivity: AppCompatActivity {
         newConfig: android.content.res.Configuration
     ) {
         super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
-        // Swap the Compose content to / from the minimal PiP layout.
         PipController.inPipMode = isInPictureInPictureMode
+        if (android.os.Build.VERSION.SDK_INT >= 26) {
+            PipManager.handlePictureInPictureModeChanged(
+                this,
+                isInPictureInPictureMode,
+                PipController.muted
+            )
+        }
+        if (isInPictureInPictureMode) {
+            CallActionDispatcher.pictureInPictureEntered()
+        }
     }
 
     override fun onDestroy() {
@@ -176,7 +195,7 @@ internal fun SyncSystemBarsWithTheme() {
         SystemBarStyle.light(transparent, transparent)
     }
 
-    val activity = LocalContext.current as? ComponentActivity
+    val activity = LocalActivity.current as? ComponentActivity
     DisposableEffect(style) {
         activity?.enableEdgeToEdge(
             statusBarStyle = style,

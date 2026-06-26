@@ -27,9 +27,16 @@ final class WebRTCClient {
     var onLocalAudioEnabledChanged: ((Bool) -> Void)?
     var onLocalVideoEnabledChanged: ((Bool) -> Void)?
     var onTransportConnectionStateChanged: ((String, String) -> Void)?
+    var onCallAudioRouteChanged: (() -> Void)?
+    var onLocalAudioProducerLost: (() -> Void)?
+    var onLocalVideoProducerLost: (() -> Void)?
 
     private(set) var localAudioEnabled: Bool = false
+    var hasLocalAudioProducer: Bool { false }
+    var isLocalAudioPublishingHealthy: Bool { false }
     private(set) var localVideoEnabled: Bool = false
+    var hasLocalVideoProducer: Bool { false }
+    var currentCameraFacing: LocalCameraFacing { .front }
     var remoteVideoTracks: [String: VideoTrackWrapper] = [:]
     var isConfigured: Bool { false }
     func hasBrokenTransport() -> Bool { false }
@@ -51,6 +58,7 @@ final class WebRTCClient {
     func refreshLocalAudioProducerForBandwidthProfile(connectionQuality: ConnectionQuality) async { }
     func refreshLocalVideoProducerForBandwidthProfile(connectionQuality: ConnectionQuality) async { }
     func refreshLocalScreenProducerForBandwidthProfile(connectionQuality: ConnectionQuality) async { }
+    func activateCallAudioSession() { }
     func startProducingAudio() async throws { }
     func startProducingVideo() async throws { }
     func cleanup(notifyLocalState: Bool = true) async { }
@@ -65,16 +73,28 @@ final class WebRTCClient {
     }
     func consumerId(forProducer producerId: String) -> String? { nil }
     func closeConsumers(exceptProducerIds producerIds: [String]) { }
+    func closeConsumers(userIdPrefix: String) { }
+    func applyConsumerTelemetry(_ notification: ConsumerTelemetryNotification) { }
     func hasAudioConsumer(userIdPrefix: String) -> Bool { false }
     func setAudioConsumersEnabled(userIdPrefix: String, enabled: Bool) { }
     func setAudioEnabled(_ enabled: Bool) async throws { }
+    func reassertLocalAudioProducerUnmuted() async throws { }
     func setVideoEnabled(_ enabled: Bool) async throws { }
+    func canSwitchCamera() -> Bool { false }
+    func setPreferredCameraFacing(_ facing: LocalCameraFacing) { }
+    func switchCamera() async throws { }
+    func closeLocalAudioProducer() async { }
     func closeLocalVideoProducer() async { }
     func closeLocalScreenProducer() async { }
     func closeLocalMedia(kind: String, type: String, producerId: String? = nil) async -> Bool { false }
 
     func getCaptureSession() -> Any? { nil }
     func getLocalVideoTrack() -> Any? { nil }
+    func remoteVideoTrack(forUserId userId: String) -> VideoTrackWrapper? {
+        let normalized = userId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else { return nil }
+        return remoteVideoTracks[normalized]
+    }
 
     func sampleAudioLevels(localUserId: String? = nil) -> [String: Double] { [:] }
 

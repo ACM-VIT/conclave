@@ -6,12 +6,28 @@ import UIKit
 
 // MARK: - Presentation Layout
 
+enum PresentationCompactLayout {
+    static let stripHeight: CGFloat = 84.0
+    static let spacing: CGFloat = 8.0
+    static let verticalPadding: CGFloat = 16.0
+
+    static func screenShareHeight(availableHeight: CGFloat) -> CGFloat {
+        let available = max(0.0, availableHeight)
+        let preferredHeight = available * 0.74
+        let maxFittingHeight = max(0.0, available - stripHeight - spacing - verticalPadding)
+        return min(preferredHeight, maxFittingHeight)
+    }
+}
+
 struct PresentationLayoutView: View {
     @Bindable var viewModel: MeetingViewModel
     let isCompact: Bool
     let containerSize: CGSize
 
     private let controlsOverlap: CGFloat = 8
+    private var detachedSelfEdgeInsets: EdgeInsets {
+        MeetingDetachedSelfLayout.edgeInsets(isCompact: isCompact)
+    }
 
     var body: some View {
         if isCompact {
@@ -27,11 +43,15 @@ struct PresentationLayoutView: View {
         GeometryReader { geo in
             // Reserve clearance for the floating controls bar so the filmstrip
             // never hides behind it.
-            let avail = geo.size.height - controlsOverlap
+            let avail = MeetingStageLayout.visibleHeight(
+                containerHeight: geo.size.height,
+                controlsOverlap: controlsOverlap
+            )
+            let strip = viewModel.state.tileStripSnapshot()
             VStack(spacing: 8) {
                 screenshareView
                     .frame(maxWidth: .infinity)
-                    .frame(height: avail * 0.74)
+                    .frame(height: PresentationCompactLayout.screenShareHeight(availableHeight: avail))
                     .clipShape(RoundedRectangle(cornerRadius: ACMRadius.lg))
                     .overlay {
                         RoundedRectangle(cornerRadius: ACMRadius.lg)
@@ -41,26 +61,27 @@ struct PresentationLayoutView: View {
 
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
-                        if viewModel.state.shouldShowSelfTile {
+                        if strip.shouldShowSelfTile {
                             localThumbnail
                         }
-                        ForEach(viewModel.state.visibleTileParticipants.prefix(max(0, viewModel.state.viewMaxTiles - (viewModel.state.shouldShowSelfTile ? 1 : 0)))) { participant in
+                        ForEach(strip.participants) { participant in
                             remoteThumbnail(participant: participant)
                         }
                     }
                     .padding(.horizontal, 8)
                 }
-                .frame(height: 84)
+                .frame(height: PresentationCompactLayout.stripHeight)
             }
-            .frame(width: geo.size.width, height: avail, alignment: .top)
             .padding(8)
+            .frame(width: geo.size.width, height: avail, alignment: .top)
         }
     }
 
     // MARK: Tablet / landscape: side-by-side
 
     var regularLayout: some View {
-        HStack(spacing: 8) {
+        let strip = viewModel.state.tileStripSnapshot()
+        return HStack(spacing: 8) {
             screenshareView
                 .clipShape(RoundedRectangle(cornerRadius: ACMRadius.lg))
                 .overlay {
@@ -71,10 +92,10 @@ struct PresentationLayoutView: View {
 
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(spacing: 8) {
-                    if viewModel.state.shouldShowSelfTile {
+                    if strip.shouldShowSelfTile {
                         localThumbnail
                     }
-                    ForEach(viewModel.state.visibleTileParticipants.prefix(max(0, viewModel.state.viewMaxTiles - (viewModel.state.shouldShowSelfTile ? 1 : 0)))) { participant in
+                    ForEach(strip.participants) { participant in
                         remoteThumbnail(participant: participant)
                     }
                 }
@@ -95,11 +116,15 @@ struct PresentationLayoutView: View {
             RoundedRectangle(cornerRadius: ACMRadius.lg)
                 .fill(Color.black)
 
-            if let screenShareUserId = viewModel.state.activeScreenShareUserId {
-                if let trackWrapper = viewModel.webRTCClient.remoteVideoTracks["\(screenShareUserId)-screen"] {
+            if let screenShareUserId = viewModel.state.presentationScreenShareUserId {
+                if let trackWrapper = viewModel.webRTCClient.remoteVideoTrack(forUserId: "\(screenShareUserId)-screen") {
                     // .fit = letterbox the shared screen on the black fill so a
                     // landscape-desktop or portrait-phone capture is never cropped.
-                    RemoteVideoView(trackWrapper: trackWrapper, contentMode: .fit)
+                    RemoteVideoView(
+                        trackWrapper: trackWrapper,
+                        contentMode: .fit,
+                        fallbackDisplayName: viewModel.displayNameForUser(screenShareUserId)
+                    )
                         .overlay {
                             // Persistent presenter attribution (always know who's
                             // sharing) — same flat name-plate tokens as the tiles.
@@ -133,8 +158,7 @@ struct PresentationLayoutView: View {
         }
         .overlay {
             if viewModel.state.shouldShowDetachedSelfView && !viewModel.state.shouldShowSelfTile {
-                DetachedSelfViewOverlay(viewModel: viewModel)
-                    .padding(16)
+                DetachedSelfViewOverlay(viewModel: viewModel, isCompact: isCompact, edgeInsets: detachedSelfEdgeInsets)
             }
         }
     }
@@ -146,14 +170,16 @@ struct PresentationLayoutView: View {
         let localVideoTrack = viewModel.webRTCClient.getLocalVideoTrack()
         let captureSession = (!viewModel.state.isCameraOff && localVideoTrack == nil) ? viewModel.webRTCClient.getCaptureSession() : nil
         return VideoGridItem(
-            displayName: viewModel.state.displayName,
+            displayName: viewModel.displayNameForUser(viewModel.state.userId),
             isMuted: viewModel.state.isMuted,
             isCameraOff: viewModel.state.isCameraOff,
             isHandRaised: viewModel.state.isHandRaised,
             isGhost: viewModel.state.isGhostMode,
-            isSpeaking: viewModel.state.effectiveActiveSpeakerId.map { viewModel.state.isLocalParticipantUserId($0) } == true,
+            isSpeaking: viewModel.state.isEffectiveActiveSpeaker(viewModel.state.userId),
             isLocal: true,
             isThumbnail: true,
+            avatarSizeOverride: 34.0,
+            localCameraFacing: viewModel.localCameraFacing,
             captureSession: captureSession,
             localVideoTrack: localVideoTrack
         )
@@ -167,11 +193,12 @@ struct PresentationLayoutView: View {
             isCameraOff: participant.isCameraOff,
             isHandRaised: participant.isHandRaised,
             isGhost: participant.isGhost,
-            isSpeaking: viewModel.state.effectiveActiveSpeakerId == participant.id,
+            isSpeaking: viewModel.state.isEffectiveActiveSpeaker(participant.id),
             isLocal: false,
             connectionStatus: participant.connectionStatus,
             isThumbnail: true,
-            trackWrapper: viewModel.webRTCClient.remoteVideoTracks[participant.id]
+            avatarSizeOverride: 34.0,
+            trackWrapper: viewModel.webRTCClient.remoteVideoTrack(forUserId: participant.id)
         )
         .frame(width: thumbnailWidth, height: thumbnailHeight)
     }

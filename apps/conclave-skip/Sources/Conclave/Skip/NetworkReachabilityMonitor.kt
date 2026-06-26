@@ -1,10 +1,13 @@
 package conclave.module
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
+import android.os.Handler
+import android.os.Looper
 import skip.foundation.ProcessInfo
 
 internal class NetworkReachabilityMonitor {
@@ -15,7 +18,9 @@ internal class NetworkReachabilityMonitor {
         ProcessInfo.processInfo.androidContext.applicationContext
             .getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
     private var callback: ConnectivityManager.NetworkCallback? = null
+    private val mainHandler = Handler(Looper.getMainLooper())
 
+    @SuppressLint("MissingPermission")
     internal fun start() {
         if (callback != null) return
         val networkCallback = object : ConnectivityManager.NetworkCallback() {
@@ -31,11 +36,18 @@ internal class NetworkReachabilityMonitor {
                 notifyCurrentStatus()
             }
         }
-        callback = networkCallback
         val request = NetworkRequest.Builder()
             .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
             .build()
-        connectivityManager.registerNetworkCallback(request, networkCallback)
+        try {
+            connectivityManager.registerNetworkCallback(request, networkCallback)
+            callback = networkCallback
+        } catch (error: Throwable) {
+            callback = null
+            debugLog("[Network] Failed to register reachability callback: ${error}")
+            notifyStatusSnapshot()
+            return
+        }
         notifyCurrentStatus()
     }
 
@@ -46,11 +58,26 @@ internal class NetworkReachabilityMonitor {
     }
 
     private fun notifyCurrentStatus() {
+        val activeCallback = callback ?: return
         val qualityHint = currentQualityHint()
-        onStatusChanged?.invoke(!hasValidatedNetwork())
-        onQualityHintChanged?.invoke(qualityHint)
+        val isOffline = !hasValidatedNetwork()
+        mainHandler.post {
+            if (callback !== activeCallback) return@post
+            onStatusChanged?.invoke(isOffline)
+            onQualityHintChanged?.invoke(qualityHint)
+        }
     }
 
+    private fun notifyStatusSnapshot() {
+        val qualityHint = currentQualityHint()
+        val isOffline = !hasValidatedNetwork()
+        mainHandler.post {
+            onStatusChanged?.invoke(isOffline)
+            onQualityHintChanged?.invoke(qualityHint)
+        }
+    }
+
+    @SuppressLint("MissingPermission")
     private fun hasValidatedNetwork(): Boolean {
         val network = connectivityManager.activeNetwork ?: return false
         val capabilities = connectivityManager.getNetworkCapabilities(network) ?: return false
@@ -58,6 +85,7 @@ internal class NetworkReachabilityMonitor {
             capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
     }
 
+    @SuppressLint("MissingPermission")
     private fun currentQualityHint(): ConnectionQuality {
         val network = connectivityManager.activeNetwork ?: return ConnectionQuality.unknown
         val capabilities =

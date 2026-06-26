@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowRight, Ghost, Globe, Hand, Loader2, Mic, MicOff } from "lucide-react";
+import { ArrowRight, Globe, Hand, Loader2, Mic, MicOff } from "lucide-react";
 import { memo, useEffect, useRef, useState, type FormEvent } from "react";
 import { useSmartParticipantOrder } from "../hooks/useSmartParticipantOrder";
 import type { Participant } from "../lib/types";
@@ -9,7 +9,9 @@ import {
     normalizeBrowserUrl,
     resolveNoVncUrl,
 } from "../lib/utils";
+import { isRemoteParticipantVisible } from "../lib/participant-visibility";
 import ParticipantVideo from "./ParticipantVideo";
+import { GhostParticipantOverlay } from "./GhostParticipantChrome";
 import { Avatar, NamePlate } from "@conclave/ui-tokens/web";
 import { color } from "@conclave/ui-tokens";
 
@@ -144,7 +146,8 @@ function BrowserLayout({
         Array.from(participants.values()).filter(
             (participant) =>
                 participant.userId !== currentUserId &&
-                !isSystemUserId(participant.userId)
+                !isSystemUserId(participant.userId) &&
+                isRemoteParticipantVisible(participant, isGhost, currentUserId),
         ),
         activeSpeakerId
     );
@@ -341,23 +344,7 @@ function BrowserLayout({
                             <Avatar name={localName} id={currentUserId} size={48} />
                         </div>
                     )}
-                    {isGhost && (
-                        <div className="absolute inset-0 flex items-center justify-center pointer-events-none bg-black/40">
-                            <div className="flex flex-col items-center gap-1.5">
-                                <Ghost size={40} strokeWidth={1.75} style={{ color: color.accentSecondary }} />
-                                <span
-                                    className="rounded-full px-2.5 py-0.5 text-[11px] font-medium"
-                                    style={{
-                                        color: color.accentSecondary,
-                                        backgroundColor: color.scrim,
-                                        border: `1px solid ${color.border}`,
-                                    }}
-                                >
-                                    Ghost
-                                </span>
-                            </div>
-                        </div>
-                    )}
+                    {isGhost && <GhostParticipantOverlay compact />}
                     {isHandRaised && (
                         <div
                             className="absolute top-3 left-3 rounded-full p-1.5 text-amber-300"

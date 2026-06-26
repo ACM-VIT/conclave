@@ -2,8 +2,8 @@
 //  an ongoing call to the OS so the user gets:
 //    - the system call UI on the lock screen + Dynamic Island
 //    - mute + end controls that drive the real call (via CallSessionCoordinator)
-//    - audio that keeps flowing in the background (UIBackgroundModes already has
-//      audio + voip; CallKit activates the audio session for us)
+//    - audio that keeps flowing in the background (UIBackgroundModes has audio;
+//      CallKit activates the audio session for us)
 //
 //  Apple's CallKit is the canonical VoIP background path, so we use it instead
 //  of a bare local notification.
@@ -180,7 +180,7 @@ extension CallKitManager: CXProviderDelegate {
             try session.setCategory(
                 .playAndRecord,
                 mode: .voiceChat,
-                options: [.defaultToSpeaker, .allowBluetoothHFP]
+                options: CallAudioSession.voiceCallCategoryOptions(for: session)
             )
         } catch {
             debugLog("[CallKit] configureAudioSession failed: \(error.localizedDescription)")

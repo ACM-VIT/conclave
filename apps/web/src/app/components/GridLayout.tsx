@@ -34,8 +34,13 @@ import {
 import { useSmartParticipantOrder } from "../hooks/useSmartParticipantOrder";
 import { useStableSpeakerId } from "../hooks/useStableSpeakerId";
 import { getRenderableParticipantVideoStream } from "../lib/participant-media";
+import { isRemoteParticipantVisible } from "../lib/participant-visibility";
 import type { Participant } from "../lib/types";
 import { isSystemUserId, truncateDisplayName } from "../lib/utils";
+import {
+  GhostParticipantOverlay,
+  GHOST_ACCENT_CLASS,
+} from "./GhostParticipantChrome";
 import ParticipantAudio from "./ParticipantAudio";
 import ParticipantConnectionOverlay from "./ParticipantConnectionOverlay";
 import ParticipantVideo from "./ParticipantVideo";
@@ -1101,6 +1106,7 @@ function GridLayout({
         (participant) =>
           !isSystemUserId(participant.userId) &&
           participant.userId !== currentUserId &&
+          isRemoteParticipantVisible(participant, isGhost, currentUserId) &&
           (!viewSettings.hideTilesWithoutVideo ||
             participantHasLiveVideo(participant) ||
             participant.userId === activeSpeakerId ||
@@ -1109,6 +1115,7 @@ function GridLayout({
     [
       activeSpeakerId,
       currentUserId,
+      isGhost,
       participants,
       pinnedId,
       viewSettings.hideTilesWithoutVideo,
@@ -2975,16 +2982,7 @@ function GridLayout({
                   />
                 </div>
               )}
-              {isGhost && (
-                <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/40">
-                  <div className="flex flex-col items-center gap-2.5">
-                    <Ghost size={48} strokeWidth={1.75} className="text-[#FF007A]" />
-                    <span className="rounded-full border border-[#FF007A]/30 bg-black/60 px-2.5 py-1 text-[12px] font-medium text-[#FF007A]">
-                      Ghost mode
-                    </span>
-                  </div>
-                </div>
-              )}
+              {isGhost && <GhostParticipantOverlay label="Ghost mode" />}
               <button
                 type="button"
                 onClick={(event) => {
@@ -3842,15 +3840,7 @@ const LocalVideoTile = memo(function LocalVideoTile({
           />
         </div>
       ) : null}
-      {isGhost ? (
-        <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/40">
-          <Ghost
-            size={compact ? 30 : 48}
-            strokeWidth={1.75}
-            className="text-[#FF007A]"
-          />
-        </div>
-      ) : null}
+      {isGhost ? <GhostParticipantOverlay compact /> : null}
       {isHandRaised ? (
         <div
           className={`absolute flex items-center justify-center rounded-full border border-amber-400/40 bg-amber-500/20 text-amber-300 ${
@@ -3973,7 +3963,7 @@ const MinimizedSelfViewPill = memo(function MinimizedSelfViewPill({
         <Hand size={14} strokeWidth={1.75} className="shrink-0 text-amber-300" />
       ) : null}
       {isGhost ? (
-        <Ghost size={14} strokeWidth={1.75} className="shrink-0 text-[#FF007A]" />
+        <Ghost size={14} strokeWidth={1.75} className={`shrink-0 ${GHOST_ACCENT_CLASS}`} />
       ) : null}
       <button
         type="button"
@@ -4119,11 +4109,7 @@ const OverflowGalleryTile = memo(function OverflowGalleryTile({
           </div>
         )}
         <ParticipantConnectionOverlay status={connectionStatus} compact />
-        {participant.isGhost && (
-          <div className="absolute inset-0 flex items-center justify-center bg-black/35">
-            <Ghost size={28} strokeWidth={1.75} className="text-[#FF007A]" />
-          </div>
-        )}
+        {participant.isGhost && <GhostParticipantOverlay compact />}
         {participant.isHandRaised && (
           <div className="absolute left-2 top-2 flex h-7 w-7 items-center justify-center rounded-full border border-amber-400/40 bg-amber-500/20 text-amber-300">
             <Hand size={18} strokeWidth={1.75} />

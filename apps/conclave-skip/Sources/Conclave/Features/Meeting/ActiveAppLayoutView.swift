@@ -6,6 +6,9 @@ struct ActiveAppLayoutView: View {
     let isCompact: Bool
 
     private let controlsOverlap: CGFloat = 8
+    private var detachedSelfEdgeInsets: EdgeInsets {
+        MeetingDetachedSelfLayout.edgeInsets(isCompact: isCompact)
+    }
 
     private var canUseAppHostControls: Bool {
         viewModel.state.isAdmin
@@ -24,7 +27,11 @@ struct ActiveAppLayoutView: View {
     }
 
     private func compactLayout(size: CGSize) -> some View {
-        let availableHeight = size.height - controlsOverlap
+        let availableHeight = MeetingStageLayout.visibleHeight(
+            containerHeight: size.height,
+            controlsOverlap: controlsOverlap
+        )
+        let strip = viewModel.state.tileStripSnapshot()
         return VStack(spacing: 8) {
             appStage
                 .frame(maxWidth: .infinity)
@@ -32,10 +39,10 @@ struct ActiveAppLayoutView: View {
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
-                    if viewModel.state.shouldShowSelfTile {
+                    if strip.shouldShowSelfTile {
                         localThumbnail
                     }
-                    ForEach(viewModel.state.visibleTileParticipants.prefix(max(0, viewModel.state.viewMaxTiles - (viewModel.state.shouldShowSelfTile ? 1 : 0)))) { participant in
+                    ForEach(strip.participants) { participant in
                         remoteThumbnail(participant: participant)
                     }
                 }
@@ -48,15 +55,16 @@ struct ActiveAppLayoutView: View {
     }
 
     private var regularLayout: some View {
-        HStack(spacing: 8) {
+        let strip = viewModel.state.tileStripSnapshot()
+        return HStack(spacing: 8) {
             appStage
 
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(spacing: 8) {
-                    if viewModel.state.shouldShowSelfTile {
+                    if strip.shouldShowSelfTile {
                         localThumbnail
                     }
-                    ForEach(viewModel.state.visibleTileParticipants.prefix(max(0, viewModel.state.viewMaxTiles - (viewModel.state.shouldShowSelfTile ? 1 : 0)))) { participant in
+                    ForEach(strip.participants) { participant in
                         remoteThumbnail(participant: participant)
                     }
                 }
@@ -81,8 +89,6 @@ struct ActiveAppLayoutView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-            appStatusBar
         }
         .acmColorBackground(ACMColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: ACMRadius.lg))
@@ -93,8 +99,7 @@ struct ActiveAppLayoutView: View {
         }
         .overlay {
             if viewModel.state.shouldShowDetachedSelfView && !viewModel.state.shouldShowSelfTile {
-                DetachedSelfViewOverlay(viewModel: viewModel)
-                    .padding(16)
+                DetachedSelfViewOverlay(viewModel: viewModel, isCompact: isCompact, edgeInsets: detachedSelfEdgeInsets)
             }
         }
     }
@@ -193,40 +198,12 @@ struct ActiveAppLayoutView: View {
         GeometryReader { geo in
             ZStack {
                 ACMColors.bg
-                whiteboardGrid(size: geo.size)
+                WhiteboardGridView(size: geo.size)
+                    .equatable()
 
                 if viewModel.state.isAppsLocked {
                     lockedOverlay
                 }
-            }
-        }
-    }
-
-    private func whiteboardGrid(size: CGSize) -> some View {
-        ZStack {
-            ForEach(gridOffsets(upTo: size.width, step: 24), id: \.self) { x in
-                Rectangle()
-                    .fill(ACMColors.creamGhost)
-                    .frame(width: 1)
-                    .position(x: x, y: size.height / 2)
-            }
-            ForEach(gridOffsets(upTo: size.height, step: 24), id: \.self) { y in
-                Rectangle()
-                    .fill(ACMColors.creamGhost)
-                    .frame(height: 1)
-                    .position(x: size.width / 2, y: y)
-            }
-            ForEach(gridOffsets(upTo: size.width, step: 120), id: \.self) { x in
-                Rectangle()
-                    .fill(ACMColors.border)
-                    .frame(width: 1)
-                    .position(x: x, y: size.height / 2)
-            }
-            ForEach(gridOffsets(upTo: size.height, step: 120), id: \.self) { y in
-                Rectangle()
-                    .fill(ACMColors.border)
-                    .frame(height: 1)
-                    .position(x: size.width / 2, y: y)
             }
         }
     }
@@ -273,33 +250,6 @@ struct ActiveAppLayoutView: View {
         .acmColorBackground(ACMColors.bg)
     }
 
-    private var appStatusBar: some View {
-        HStack(spacing: ACMSpacing.sm) {
-            Circle()
-                .fill(viewModel.state.isAppsLocked ? ACMColors.primaryOrange : ACMColors.success)
-                .frame(width: 7, height: 7)
-
-            Text(statusBarText)
-                .font(ACMFont.trial(12, weight: .medium))
-                .foregroundStyle(ACMColors.text)
-                .lineLimit(1)
-
-            Spacer()
-
-            Text(activeAppIdLabel)
-                .font(ACMFont.trial(12))
-                .foregroundStyle(ACMColors.textFaint)
-                .lineLimit(1)
-        }
-        .padding(.horizontal, ACMSpacing.sm)
-        .frame(height: 38)
-        .overlay(alignment: .top) {
-            Rectangle()
-                .fill(ACMColors.border)
-                .frame(height: 1)
-        }
-    }
-
     private var activeAppName: String {
         viewModel.state.activeAppName ?? "Shared app"
     }
@@ -309,14 +259,6 @@ struct ActiveAppLayoutView: View {
             return "Editing locked"
         }
         return hasActiveAppSyncSnapshot ? "Synced with room" : "Live in room"
-    }
-
-    private var statusBarText: String {
-        viewModel.state.isAppsLocked ? "App editing locked" : "App editing open"
-    }
-
-    private var activeAppIdLabel: String {
-        viewModel.state.activeAppId ?? "app"
     }
 
     private var hasActiveAppSyncSnapshot: Bool {
@@ -336,17 +278,6 @@ struct ActiveAppLayoutView: View {
         }
     }
 
-    private func gridOffsets(upTo length: CGFloat, step: CGFloat) -> [CGFloat] {
-        guard length > 0, step > 0 else { return [] }
-        var offsets: [CGFloat] = []
-        var current: CGFloat = 0
-        while current <= length {
-            offsets.append(current)
-            current += step
-        }
-        return offsets
-    }
-
     private var thumbnailWidth: CGFloat { isCompact ? 120.0 : 124.0 }
     private var thumbnailHeight: CGFloat { isCompact ? 68.0 : 70.0 }
 
@@ -354,14 +285,16 @@ struct ActiveAppLayoutView: View {
         let localVideoTrack = viewModel.webRTCClient.getLocalVideoTrack()
         let captureSession = (!viewModel.state.isCameraOff && localVideoTrack == nil) ? viewModel.webRTCClient.getCaptureSession() : nil
         return VideoGridItem(
-            displayName: viewModel.state.displayName,
+            displayName: viewModel.displayNameForUser(viewModel.state.userId),
             isMuted: viewModel.state.isMuted,
             isCameraOff: viewModel.state.isCameraOff,
             isHandRaised: viewModel.state.isHandRaised,
             isGhost: viewModel.state.isGhostMode,
-            isSpeaking: viewModel.state.effectiveActiveSpeakerId.map { viewModel.state.isLocalParticipantUserId($0) } == true,
+            isSpeaking: viewModel.state.isEffectiveActiveSpeaker(viewModel.state.userId),
             isLocal: true,
             isThumbnail: true,
+            avatarSizeOverride: 34.0,
+            localCameraFacing: viewModel.localCameraFacing,
             captureSession: captureSession,
             localVideoTrack: localVideoTrack
         )
@@ -375,12 +308,57 @@ struct ActiveAppLayoutView: View {
             isCameraOff: participant.isCameraOff,
             isHandRaised: participant.isHandRaised,
             isGhost: participant.isGhost,
-            isSpeaking: viewModel.state.effectiveActiveSpeakerId == participant.id,
+            isSpeaking: viewModel.state.isEffectiveActiveSpeaker(participant.id),
             isLocal: false,
             connectionStatus: participant.connectionStatus,
             isThumbnail: true,
-            trackWrapper: viewModel.webRTCClient.remoteVideoTracks[participant.id]
+            avatarSizeOverride: 34.0,
+            trackWrapper: viewModel.webRTCClient.remoteVideoTrack(forUserId: participant.id)
         )
         .frame(width: thumbnailWidth, height: thumbnailHeight)
+    }
+}
+
+private struct WhiteboardGridView: View, Equatable {
+    let size: CGSize
+
+    var body: some View {
+        ZStack {
+            ForEach(gridOffsets(upTo: size.width, step: 24), id: \.self) { x in
+                Rectangle()
+                    .fill(ACMColors.creamGhost)
+                    .frame(width: 1)
+                    .position(x: x, y: size.height / 2)
+            }
+            ForEach(gridOffsets(upTo: size.height, step: 24), id: \.self) { y in
+                Rectangle()
+                    .fill(ACMColors.creamGhost)
+                    .frame(height: 1)
+                    .position(x: size.width / 2, y: y)
+            }
+            ForEach(gridOffsets(upTo: size.width, step: 120), id: \.self) { x in
+                Rectangle()
+                    .fill(ACMColors.border)
+                    .frame(width: 1)
+                    .position(x: x, y: size.height / 2)
+            }
+            ForEach(gridOffsets(upTo: size.height, step: 120), id: \.self) { y in
+                Rectangle()
+                    .fill(ACMColors.border)
+                    .frame(height: 1)
+                    .position(x: size.width / 2, y: y)
+            }
+        }
+    }
+
+    private func gridOffsets(upTo length: CGFloat, step: CGFloat) -> [CGFloat] {
+        guard length > 0, step > 0 else { return [] }
+        var offsets: [CGFloat] = []
+        var current: CGFloat = 0
+        while current <= length {
+            offsets.append(current)
+            current += step
+        }
+        return offsets
     }
 }

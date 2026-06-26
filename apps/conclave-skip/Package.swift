@@ -30,5 +30,9 @@ let package = Package(
             .product(name: "SocketIO", package: "socket.io-client-swift", condition: .when(platforms: [.iOS])),
             .product(name: "Mediasoup", package: "mediasoup-client-swift", condition: .when(platforms: [.iOS]))
         ], resources: [.process("Resources")], plugins: [.plugin(name: "skipstone", package: "skip")]),
+        .testTarget(name: "ConclaveTests", dependencies: [
+            "Conclave",
+            .product(name: "SkipTest", package: "skip", condition: .when(platforms: [.macOS, .linux])),
+        ], resources: [.process("Resources")], plugins: [.plugin(name: "skipstone", package: "skip")]),
     ]
 )

@@ -28,9 +28,16 @@ final class WebRTCClient {
     var onLocalAudioEnabledChanged: ((Bool) -> Void)?
     var onLocalVideoEnabledChanged: ((Bool) -> Void)?
     var onTransportConnectionStateChanged: ((String, String) -> Void)?
+    var onCallAudioRouteChanged: (() -> Void)?
+    var onLocalAudioProducerLost: (() -> Void)?
+    var onLocalVideoProducerLost: (() -> Void)?
 
     private(set) var localAudioEnabled: Bool = false
+    var hasLocalAudioProducer: Bool { fatalError() }
+    var isLocalAudioPublishingHealthy: Bool { fatalError() }
     private(set) var localVideoEnabled: Bool = false
+    var hasLocalVideoProducer: Bool { fatalError() }
+    var currentCameraFacing: LocalCameraFacing { fatalError() }
     var remoteVideoTracks: [String: VideoTrackWrapper] = [:]
     var isConfigured: Bool { fatalError() }
     func hasBrokenTransport() -> Bool { fatalError() }
@@ -52,6 +59,7 @@ final class WebRTCClient {
     func refreshLocalAudioProducerForBandwidthProfile(connectionQuality: ConnectionQuality) async { fatalError() }
     func refreshLocalVideoProducerForBandwidthProfile(connectionQuality: ConnectionQuality) async { fatalError() }
     func refreshLocalScreenProducerForBandwidthProfile(connectionQuality: ConnectionQuality) async { fatalError() }
+    func activateCallAudioSession() { fatalError() }
     func startProducingAudio() async throws { fatalError() }
     func startProducingVideo() async throws { fatalError() }
     func cleanup(notifyLocalState: Bool = true) async { fatalError() }
@@ -61,10 +69,17 @@ final class WebRTCClient {
     func sampleConnectionQualitySample() -> ConnectionQualitySample { fatalError() }
     func consumerId(forProducer producerId: String) -> String? { fatalError() }
     func closeConsumers(exceptProducerIds producerIds: [String]) { fatalError() }
+    func closeConsumers(userIdPrefix: String) { fatalError() }
+    func applyConsumerTelemetry(_ notification: ConsumerTelemetryNotification) { fatalError() }
     func hasAudioConsumer(userIdPrefix: String) -> Bool { fatalError() }
     func setAudioConsumersEnabled(userIdPrefix: String, enabled: Bool) { fatalError() }
     func setAudioEnabled(_ enabled: Bool) async throws { fatalError() }
+    func reassertLocalAudioProducerUnmuted() async throws { fatalError() }
     func setVideoEnabled(_ enabled: Bool) async throws { fatalError() }
+    func canSwitchCamera() -> Bool { fatalError() }
+    func setPreferredCameraFacing(_ facing: LocalCameraFacing) { fatalError() }
+    func switchCamera() async throws { fatalError() }
+    func closeLocalAudioProducer() async { fatalError() }
     func closeLocalVideoProducer() async { fatalError() }
     func closeLocalScreenProducer() async { fatalError() }
     func closeLocalMedia(kind: String, type: String, producerId: String? = nil) async -> Bool { fatalError() }
@@ -73,6 +88,7 @@ final class WebRTCClient {
 
     func getCaptureSession() -> Any? { nil }
     func getLocalVideoTrack() -> Any? { nil }
+    func remoteVideoTrack(forUserId userId: String) -> VideoTrackWrapper? { fatalError() }
 
     func sampleAudioLevels(localUserId: String? = nil) -> [String: Double] { fatalError() }
 

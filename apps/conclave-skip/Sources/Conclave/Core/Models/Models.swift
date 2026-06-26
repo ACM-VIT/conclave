@@ -30,6 +30,46 @@ enum AdminNoticeLevel: String, Equatable {
     }
 }
 
+enum NativeDisplayNameNormalizer {
+    static let maxLength = 40
+
+    static func normalize(_ value: String?) -> String {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !trimmed.isEmpty else { return "" }
+        var normalized = ""
+        var needsSeparator = false
+        for character in trimmed {
+            if character.isWhitespace || character.isNewline {
+                needsSeparator = !normalized.isEmpty
+            } else {
+                if needsSeparator {
+                    guard normalized.count < maxLength else { return normalized }
+                    normalized += " "
+                    needsSeparator = false
+                }
+                guard normalized.count < maxLength else { return normalized }
+                normalized += String(character)
+            }
+        }
+        return normalized
+    }
+}
+
+enum NativeRoomIdNormalizer {
+    static func normalize(_ value: String?) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    static func matches(_ first: String?, _ second: String?) -> Bool {
+        guard let first = normalize(first),
+              let second = normalize(second) else {
+            return false
+        }
+        return first == second
+    }
+}
+
 enum MeetingViewMode: String, Codable, Equatable {
     case auto
     case tiled
@@ -135,6 +175,7 @@ struct Participant: Identifiable, Equatable {
     var isCameraOff: Bool = true
     var isHandRaised: Bool = false
     var isGhost: Bool = false
+    var isWebinarAttendee: Bool = false
     var isLeaving: Bool = false
     var isScreenSharing: Bool = false
     var connectionStatus: ParticipantConnectionStatus?
@@ -142,28 +183,67 @@ struct Participant: Identifiable, Equatable {
 
 // MARK: - Chat
 
+struct ChatReplyPreview: Codable, Equatable {
+    let id: String
+    let userId: String
+    let displayName: String
+    let content: String
+    let hasGif: Bool
+    let isDirect: Bool?
+    let dmTargetUserId: String?
+}
+
+struct ChatGifAttachment: Codable, Equatable {
+    let id: String
+    let title: String
+    let url: String
+    let previewUrl: String?
+    let pageUrl: String?
+    let width: Double?
+    let height: Double?
+    let kind: String?
+    let videoUrl: String?
+    let source: String
+}
+
 struct ChatMessage: Identifiable, Equatable {
     let id: String
     let userId: String
     let displayName: String
     let content: String
     let timestamp: Date
+    let gif: ChatGifAttachment?
     // Direct-message metadata (web chat parity). Set only on private messages.
     let isDirect: Bool
     let dmTargetUserId: String?
     let dmTargetDisplayName: String?
     let roomId: String?
+    let replyTo: ChatReplyPreview?
 
-    init(id: String = UUID().uuidString, userId: String, displayName: String, content: String, timestamp: Date = Date(), isDirect: Bool = false, dmTargetUserId: String? = nil, dmTargetDisplayName: String? = nil, roomId: String? = nil) {
+    init(
+        id: String = UUID().uuidString,
+        userId: String,
+        displayName: String,
+        content: String,
+        timestamp: Date = Date(),
+        gif: ChatGifAttachment? = nil,
+        isDirect: Bool = false,
+        dmTargetUserId: String? = nil,
+        dmTargetDisplayName: String? = nil,
+        roomId: String? = nil,
+        replyTo: ChatReplyPreview? = nil
+    ) {
         self.id = id
         self.userId = userId
         self.displayName = displayName
         self.content = content
         self.timestamp = timestamp
+        self.gif = gif
         self.isDirect = isDirect
         self.dmTargetUserId = dmTargetUserId
         self.dmTargetDisplayName = dmTargetDisplayName
         self.roomId = roomId
+        self.replyTo = replyTo
     }
 }
 
@@ -214,7 +294,7 @@ struct MeetingReactionOption: Identifiable, Equatable, Hashable {
 }
 
 enum MeetingReactionConstants {
-    static let emojiOptions = ["👍", "👏", "😂", "❤️", "🎉", "😮", "😢", "🤔"]
+    static let emojiOptions = ["👍", "👏", "😂", "❤️", "🎉", "😮"]
     static var emojiReactionOptions: [MeetingReactionOption] {
         emojiOptions.map { MeetingReactionOption.emoji($0) }
     }
@@ -251,6 +331,7 @@ enum MeetingReactionConstants {
         guard trimmed.hasPrefix(assetPrefix), !trimmed.contains("..") else { return false }
 
         let decoded = trimmed.removingPercentEncoding ?? trimmed
+        guard decoded.hasPrefix(assetPrefix), !decoded.contains("..") else { return false }
         let lowercased = decoded.lowercased()
         return assetExtensions.contains { lowercased.hasSuffix($0) }
     }
@@ -262,6 +343,22 @@ enum MeetingReactionConstants {
         case .asset:
             return isAllowedAsset(option.value)
         }
+    }
+
+    static func assetURL(value: String, baseURL: URL?) -> URL? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard isAllowedAsset(trimmed),
+              let baseURL,
+              var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else {
+            return nil
+        }
+
+        let decodedPath = trimmed.removingPercentEncoding ?? trimmed
+        let encodedPath = decodedPath.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? trimmed
+        components.percentEncodedPath = encodedPath
+        components.query = nil
+        components.fragment = nil
+        return components.url
     }
 
     static func assetLabel(value: String, label: String?) -> String {

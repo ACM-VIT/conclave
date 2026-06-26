@@ -3,6 +3,18 @@ import Foundation
 import FoundationNetworking
 #endif
 
+enum AndroidPhysicalDebugURLPolicy {
+    static func shouldIgnoreLocalDevelopmentURL(
+        _ urlString: String,
+        isDebugRuntime: Bool,
+        isEmulatorRuntime: Bool
+    ) -> Bool {
+        guard isDebugRuntime, !isEmulatorRuntime else { return false }
+        guard let host = URLComponents(string: urlString)?.host else { return false }
+        return SfuJoinService.isAndroidLocalDevelopmentHost(host)
+    }
+}
+
 struct SfuJoinInfo: Decodable {
     let token: String
     let sfuUrl: String
@@ -16,12 +28,12 @@ struct SfuJoinInfo: Decodable {
 
     func localIdentity(sessionId fallbackSessionId: String) -> SfuJoinIdentity? {
         guard let claims = decodedTokenClaims() else { return nil }
-        let sessionId = Self.normalizedIdentityPart(claims.sessionId, maxLength: 128)
-            ?? Self.normalizedIdentityPart(fallbackSessionId, maxLength: 128)
+        let sessionId = Self.normalizedSessionId(claims.sessionId)
+            ?? Self.normalizedSessionId(fallbackSessionId)
         guard let sessionId else { return nil }
 
         let userKey = Self.normalizedEmail(claims.email)
-            ?? Self.normalizedIdentityPart(claims.userId, maxLength: 320)
+            ?? Self.normalizedUserKey(claims.userId)
         guard let userKey else { return nil }
         return SfuJoinIdentity(userKey: userKey, userId: "\(userKey)#\(sessionId)")
     }
@@ -42,7 +54,9 @@ struct SfuJoinInfo: Decodable {
 
     private static func normalizedEmail(_ value: String?) -> String? {
         let normalized = value?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
-        guard !normalized.isEmpty, !isSyntheticGuestEmail(normalized) else { return nil }
+        guard !normalized.isEmpty,
+              !isSyntheticGuestEmail(normalized),
+              isValidIdentityPart(normalized, allowDelimiter: false) else { return nil }
         return normalized
     }
 
@@ -54,10 +68,40 @@ struct SfuJoinInfo: Decodable {
         }
     }
 
-    private static func normalizedIdentityPart(_ value: String?, maxLength: Int) -> String? {
+    private static func normalizedSessionId(_ value: String?) -> String? {
+        normalizedIdentityPart(value, maxLength: 128, allowDelimiter: false)
+    }
+
+    private static func normalizedUserKey(_ value: String?) -> String? {
+        normalizedIdentityPart(value, maxLength: 320, allowDelimiter: false)
+    }
+
+    private static func normalizedIdentityPart(
+        _ value: String?,
+        maxLength: Int,
+        allowDelimiter: Bool
+    ) -> String? {
         let normalized = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !normalized.isEmpty, normalized.count <= maxLength else { return nil }
+        guard !normalized.isEmpty,
+              normalized.count <= maxLength,
+              !containsControlCharacter(normalized),
+              isValidIdentityPart(normalized, allowDelimiter: allowDelimiter) else { return nil }
         return normalized
+    }
+
+    private static func containsControlCharacter(_ value: String) -> Bool {
+        let controlUpperBound = UInt8(0x1F)
+        let deleteCharacter = UInt8(0x7F)
+        for byte in value.utf8 {
+            if byte <= controlUpperBound || byte == deleteCharacter {
+                return true
+            }
+        }
+        return false
+    }
+
+    private static func isValidIdentityPart(_ value: String, allowDelimiter: Bool) -> Bool {
+        allowDelimiter || !value.contains("#")
     }
 }
 
@@ -132,6 +176,14 @@ struct SfuJoinErrorResponse: LocalizedError {
     }
 }
 
+#if SKIP
+private struct AndroidSfuJoinHTTPResponse: Decodable {
+    let statusCode: Int
+    let body: String
+    let setCookieHeaders: [String]
+}
+#endif
+
 enum SfuJoinService {
     static func fetchJoinInfo(
         roomId: String,
@@ -146,6 +198,7 @@ enum SfuJoinService {
     ) async throws -> SfuJoinInfo {
         var request = URLRequest(url: resolveJoinURL())
         request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpShouldHandleCookies = true
         if !clientId.isEmpty {
@@ -166,8 +219,12 @@ enum SfuJoinService {
             webinarInviteCode: webinarInviteCode
         )
 
-        request.httpBody = try JSONEncoder().encode(payload)
+        let requestBody = try JSONEncoder().encode(payload)
+        request.httpBody = requestBody
 
+        #if SKIP
+        return try await fetchJoinInfoWithAndroidHTTP(request: request, body: requestBody, clientId: clientId)
+        #else
         let (data, response) = try await URLSession.shared.data(for: request)
         NativeCookieSupport.storeCookies(from: response, url: request.url)
         let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
@@ -178,7 +235,72 @@ enum SfuJoinService {
         }
 
         return try JSONDecoder().decode(SfuJoinInfo.self, from: data)
+        #endif
     }
+
+    #if SKIP
+    private static func fetchJoinInfoWithAndroidHTTP(
+        request: URLRequest,
+        body: Data,
+        clientId: String
+    ) async throws -> SfuJoinInfo {
+        guard let url = request.url else {
+            throw SfuJoinErrorResponse(message: "Join request URL is missing.")
+        }
+
+        let bodyString = String(data: body, encoding: .utf8) ?? ""
+        let cookieHeader = request.value(forHTTPHeaderField: "Cookie")
+        let rawResponse: String = try await withCheckedThrowingContinuation { continuation in
+            var didResume = false
+            AndroidNativeHttpClient.requestJson(
+                method: request.httpMethod ?? "POST",
+                url: url.absoluteString,
+                body: bodyString,
+                accept: request.value(forHTTPHeaderField: "Accept"),
+                contentType: request.value(forHTTPHeaderField: "Content-Type"),
+                origin: request.value(forHTTPHeaderField: "Origin"),
+                clientId: clientId,
+                cookieHeader: cookieHeader
+            ) { response, errorMessage in
+                guard !didResume else { return }
+                didResume = true
+
+                if let errorMessage,
+                   !errorMessage.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines).isEmpty {
+                    continuation.resume(throwing: SfuJoinErrorResponse(message: errorMessage))
+                    return
+                }
+
+                guard let response else {
+                    continuation.resume(throwing: SfuJoinErrorResponse(message: "Join request failed."))
+                    return
+                }
+
+                continuation.resume(returning: response)
+            }
+        }
+
+        let responseEnvelope = try JSONDecoder().decode(
+            AndroidSfuJoinHTTPResponse.self,
+            from: Data(rawResponse.utf8)
+        )
+
+        for setCookieHeader in responseEnvelope.setCookieHeaders {
+            NativeAuthSessionBridge.storeSetCookieHeader(
+                setCookieHeader: setCookieHeader,
+                forURL: url.absoluteString
+            )
+        }
+
+        let data = responseEnvelope.body.data(using: String.Encoding.utf8) ?? Data()
+        if !(200...299).contains(responseEnvelope.statusCode) {
+            let errorResponse = try? JSONDecoder().decode(SfuJoinError.self, from: data)
+            throw SfuJoinErrorResponse(message: errorResponse?.error ?? "Join request failed")
+        }
+
+        return try JSONDecoder().decode(SfuJoinInfo.self, from: data)
+    }
+    #endif
 
     static func resolveClientId() -> String {
         if let envClient = ProcessInfo.processInfo.environment["SFU_CLIENT_ID"], !envClient.isEmpty {
@@ -194,25 +316,31 @@ enum SfuJoinService {
     }
 
     static func resolveJoinURL() -> URL {
+        #if SKIP
+        let isDebugRuntime = isAndroidDebugRuntime()
+        if let envUrl = ProcessInfo.processInfo.environment["SFU_JOIN_URL"],
+           !shouldIgnoreAndroidPhysicalDebugLocalURL(envUrl),
+           (isDebugRuntime || isProductionJoinURL(envUrl)),
+           let url = configuredJoinURL(from: envUrl, allowProductionHost: true) {
+            return url
+        }
+
+        if isDebugRuntime {
+            if let bundledUrl = resolveBundledJoinURL(allowProductionHost: true) {
+                return bundledUrl
+            }
+
+            return productionJoinURL()
+        }
+
+        return productionJoinURL()
+        #else
+        #if DEBUG
         if let envUrl = ProcessInfo.processInfo.environment["SFU_JOIN_URL"],
            let url = configuredJoinURL(from: envUrl, allowProductionHost: true) {
             return url
         }
 
-        #if SKIP
-        let isDebugRuntime = isAndroidDebugRuntime()
-        if let bundledUrl = resolveBundledJoinURL(allowProductionHost: true) {
-            return bundledUrl
-        }
-
-        #if DEBUG
-        if isDebugRuntime {
-            return URL(string: "http://\(androidEmulatorLoopbackHost()):3000/api/sfu/join")!
-        }
-        #endif
-
-        return productionJoinURL()
-        #elseif DEBUG
         #if targetEnvironment(simulator)
         if let bundledUrl = resolveBundledJoinURL(allowProductionHost: false) {
             return bundledUrl
@@ -227,11 +355,17 @@ enum SfuJoinService {
         return productionJoinURL()
         #endif
         #else
-        if let bundledUrl = resolveBundledJoinURL(allowProductionHost: true) {
+        if let envUrl = ProcessInfo.processInfo.environment["SFU_JOIN_URL"],
+           let url = configuredProductionJoinURL(from: envUrl) {
+            return url
+        }
+
+        if let bundledUrl = resolveBundledProductionJoinURL() {
             return bundledUrl
         }
 
         return productionJoinURL()
+        #endif
         #endif
     }
 
@@ -243,12 +377,31 @@ enum SfuJoinService {
         #endif
     }
 
+    static func isAndroidEmulatorRuntime() -> Bool {
+        #if SKIP
+        return AndroidRuntimeConfig.isProbablyEmulator()
+        #else
+        return false
+        #endif
+    }
+
     static func resolveBundledJoinURL(allowProductionHost: Bool) -> URL? {
         guard let plistUrl = NativeRuntimeConfig.bundledString(forKey: "SFU_JOIN_URL") else {
             return nil
         }
+        guard !shouldIgnoreAndroidPhysicalDebugLocalURL(plistUrl) else {
+            return nil
+        }
 
         return configuredJoinURL(from: plistUrl, allowProductionHost: allowProductionHost)
+    }
+
+    static func resolveBundledProductionJoinURL() -> URL? {
+        guard let plistUrl = NativeRuntimeConfig.bundledString(forKey: "SFU_JOIN_URL") else {
+            return nil
+        }
+
+        return configuredProductionJoinURL(from: plistUrl)
     }
 
     static func configuredJoinURL(from urlString: String, allowProductionHost: Bool) -> URL? {
@@ -266,8 +419,18 @@ enum SfuJoinService {
               url.host?.isEmpty == false else {
             return nil
         }
+        if let host = url.host,
+           isProductionHost(host),
+           !isProductionJoinEndpointURL(reachableURLString) {
+            return nil
+        }
 
         return url
+    }
+
+    static func configuredProductionJoinURL(from urlString: String) -> URL? {
+        guard isProductionJoinEndpointURL(urlString) else { return nil }
+        return configuredJoinURL(from: urlString, allowProductionHost: true)
     }
 
     static func isUnresolvedBuildSetting(_ value: String) -> Bool {
@@ -284,6 +447,19 @@ enum SfuJoinService {
     static func isProductionHost(_ host: String) -> Bool {
         let normalized = host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return normalized == "conclave.acmvit.in" || normalized == "www.conclave.acmvit.in"
+    }
+
+    static func isProductionJoinEndpointURL(_ urlString: String) -> Bool {
+        let trimmed = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let components = URLComponents(string: trimmed),
+              components.scheme?.lowercased() == "https",
+              let host = components.host,
+              isProductionHost(host),
+              components.query == nil,
+              components.fragment == nil else {
+            return false
+        }
+        return components.path == "/api/sfu/join"
     }
 
     static func productionJoinURL() -> URL {
@@ -304,7 +480,7 @@ enum SfuJoinService {
         let fallback = fallbackHost?.trimmingCharacters(in: .whitespacesAndNewlines)
         let defaultReachableHost: String
         #if DEBUG
-        defaultReachableHost = androidEmulatorLoopbackHost()
+        defaultReachableHost = isAndroidEmulatorRuntime() ? androidEmulatorLoopbackHost() : "127.0.0.1"
         #else
         defaultReachableHost = "127.0.0.1"
         #endif
@@ -337,5 +513,42 @@ enum SfuJoinService {
             normalized == "127.0.0.1" ||
             normalized == "::1" ||
             normalized == "0.0.0.0"
+    }
+
+    static func isAndroidLocalDevelopmentHost(_ host: String) -> Bool {
+        let normalized = host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return isLoopbackHost(normalized) ||
+            normalized == androidEmulatorLoopbackHost() ||
+            normalized == ["10", "0", "3", "2"].joined(separator: ".") ||
+            isPrivateIPv4Host(normalized)
+    }
+
+    private static func isPrivateIPv4Host(_ host: String) -> Bool {
+        let parts = host.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 4 else { return false }
+        var octets: [Int] = []
+        for part in parts {
+            guard let value = Int(part), value >= 0, value <= 255 else { return false }
+            octets.append(value)
+        }
+
+        let first = octets[0]
+        let second = octets[1]
+        return first == 10 ||
+            (first == 172 && second >= 16 && second <= 31) ||
+            (first == 192 && second == 168) ||
+            (first == 169 && second == 254)
+    }
+
+    static func shouldIgnoreAndroidPhysicalDebugLocalURL(_ urlString: String) -> Bool {
+        #if SKIP
+        return AndroidPhysicalDebugURLPolicy.shouldIgnoreLocalDevelopmentURL(
+            urlString,
+            isDebugRuntime: isAndroidDebugRuntime(),
+            isEmulatorRuntime: isAndroidEmulatorRuntime()
+        )
+        #else
+        return false
+        #endif
     }
 }

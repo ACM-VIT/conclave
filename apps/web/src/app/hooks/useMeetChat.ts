@@ -14,6 +14,10 @@ import {
 const DIRECT_MESSAGE_INTENT_PATTERN =
   /^(?:@\S+\s+[\s\S]+|\/dm\s+\S+\s+[\s\S]+)$/i;
 
+type LocalRenderChatMessage = ChatMessage & {
+  clientRenderKey?: string;
+};
+
 interface UseMeetChatOptions {
   socketRef: React.MutableRefObject<Socket | null>;
   ghostEnabled: boolean;
@@ -160,7 +164,11 @@ export function useMeetChat({
                 return [...prev, message];
               }
               const next = [...prev];
-              next[optimisticIndex] = message;
+              const acknowledgedMessage: LocalRenderChatMessage = {
+                ...message,
+                clientRenderKey: optimisticMessage.id,
+              };
+              next[optimisticIndex] = acknowledgedMessage;
               return next;
             });
             if (ttsText && !isTtsDisabled) {

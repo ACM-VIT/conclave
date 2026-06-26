@@ -29,53 +29,51 @@ struct MoreSheetView: View {
             if bodyReady {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: ACMSpacing.md) {
-                        VStack(alignment: .leading, spacing: ACMSpacing.xs) {
-                            acmListSectionHeader("Quick reactions")
+                        if canShowQuickReactions {
+                            VStack(alignment: .leading, spacing: ACMSpacing.xs) {
+                                acmListSectionHeader("Quick reactions")
 
-                            HStack(spacing: 0) {
-                                ForEach(emojiReactions) { option in
-                                    Button {
-                                        viewModel.sendReaction(option)
-                                        dismiss()
-                                    } label: {
-                                        Text(option.value)
-                                            .font(.system(size: 26))
-                                            .frame(maxWidth: .infinity)
-                                            .frame(height: 48)
-                                        #if !SKIP
-                                            .contentShape(Rectangle())
-                                        #endif
+                                HStack(spacing: 0) {
+                                    ForEach(emojiReactions) { option in
+                                        Button {
+                                            viewModel.sendReaction(option)
+                                            dismiss()
+                                        } label: {
+                                            Text(option.value)
+                                                .font(.system(size: 26))
+                                                .frame(maxWidth: .infinity)
+                                                .frame(height: 48)
+                                            #if !SKIP
+                                                .contentShape(Rectangle())
+                                            #endif
+                                        }
+                                        .buttonStyle(.plain)
                                     }
-                                    .buttonStyle(.plain)
-                                    .disabled(!canUseParticipantActions)
+                                }
+
+                                HStack(spacing: ACMSpacing.xs) {
+                                    ForEach(assetReactions) { option in
+                                        Button {
+                                            viewModel.sendReaction(option)
+                                            dismiss()
+                                        } label: {
+                                            ReactionAssetThumbnailView(
+                                                value: option.value,
+                                                label: option.label,
+                                                size: 26
+                                            )
+                                                .frame(maxWidth: .infinity)
+                                                .frame(height: 38)
+                                                .acmColorBackground(ACMColors.surfaceRaised)
+                                                .clipShape(Capsule())
+                                            #if !SKIP
+                                                .contentShape(Rectangle())
+                                            #endif
+                                        }
+                                        .buttonStyle(.plain)
+                                    }
                                 }
                             }
-                            .opacity(canUseParticipantActions ? 1.0 : 0.45)
-
-                            HStack(spacing: ACMSpacing.xs) {
-                                ForEach(assetReactions) { option in
-                                    Button {
-                                        viewModel.sendReaction(option)
-                                        dismiss()
-                                    } label: {
-                                        Text(option.label)
-                                            .font(ACMFont.trial(11, weight: .medium))
-                                            .foregroundStyle(ACMColors.text)
-                                            .lineLimit(1)
-                                            .minimumScaleFactor(0.72)
-                                            .frame(maxWidth: .infinity)
-                                            .frame(height: 34)
-                                            .acmColorBackground(ACMColors.surfaceRaised)
-                                            .clipShape(Capsule())
-                                        #if !SKIP
-                                            .contentShape(Rectangle())
-                                        #endif
-                                    }
-                                    .buttonStyle(.plain)
-                                    .disabled(!canUseParticipantActions)
-                                }
-                            }
-                            .opacity(canUseParticipantActions ? 1.0 : 0.45)
                         }
 
                         VStack(alignment: .leading, spacing: ACMSpacing.xs) {
@@ -99,7 +97,9 @@ struct MoreSheetView: View {
                                 }
                                 MoreRowDivider()
                                 MoreRow(icon: "message.fill", androidIcon: "chat", title: "Chat") {
-                                    viewModel.toggleChat()
+                                    withAnimation(.easeInOut(duration: 0.12)) {
+                                        viewModel.toggleChat()
+                                    }
                                     dismiss()
                                 }
                                 MoreRowDivider()
@@ -107,16 +107,17 @@ struct MoreSheetView: View {
                                     onOpenParticipants()
                                 }
                                 MoreRowDivider()
-                                MoreRow(icon: "rectangle.grid.2x2", androidIcon: "participants", title: "Layout", showsChevron: true) {
+                                MoreRow(icon: "rectangle.grid.2x2", androidIcon: "grid", title: "Layout", showsChevron: true) {
                                     onOpenViewSettings()
                                 }
                                 MoreRowDivider()
                                 MoreRow(icon: "person.badge.plus", androidIcon: "link", title: "Invite people") {
-                                    MeetingShare.shareMeetingLink(
+                                    if MeetingShare.shareMeetingLink(
                                         viewModel.state.meetingLink,
                                         roomId: viewModel.state.roomId
-                                    )
-                                    dismiss()
+                                    ) {
+                                        dismiss()
+                                    }
                                 }
                                 MoreRowDivider()
                                 MoreRow(icon: "doc.on.doc", androidIcon: "copy", title: "Copy meeting link") {
@@ -201,6 +202,15 @@ struct MoreSheetView: View {
         canShowAdminControls || canShowSharedBrowser || canShowAppsSection
     }
 
+    private var canShowQuickReactions: Bool {
+        let canUseParticipantActions = viewModel.state.connectionState == .joined
+            && !viewModel.state.isGhostMode
+            && !viewModel.state.isWebinarAttendee
+        return canUseParticipantActions &&
+            (!viewModel.state.isReactionsDisabled || viewModel.state.isAdmin) &&
+            (!emojiReactions.isEmpty || !assetReactions.isEmpty)
+    }
+
     private var canShowAdminControls: Bool {
         viewModel.state.isAdmin
             && viewModel.state.connectionState == .joined
@@ -222,6 +232,18 @@ enum AdminControlsSheetPage {
     case danger
 }
 
+enum AdminControlsActionCompletionPolicy {
+    static func shouldApplyCompletion(
+        generation: Int,
+        currentGeneration: Int,
+        actionRoomId: String,
+        currentRoomId: String
+    ) -> Bool {
+        return generation == currentGeneration &&
+            NativeRoomIdNormalizer.matches(actionRoomId, currentRoomId)
+    }
+}
+
 struct AdminControlsSheetView: View {
     @Bindable var viewModel: MeetingViewModel
     var bodyReady: Bool = true
@@ -238,6 +260,8 @@ struct AdminControlsSheetView: View {
     @State private var showEndMeetingConfirmation = false
     @State private var isEndingMeeting = false
     @State private var accessUserKeyInput = ""
+    @State private var noticeActionGeneration = 0
+    @State private var endMeetingActionGeneration = 0
 
     private var title: String {
         switch page {
@@ -254,10 +278,18 @@ struct AdminControlsSheetView: View {
         }
     }
 
-    private var accessSummary: String {
-        let roomState = viewModel.state.isRoomLocked ? "Room locked" : "Room open"
-        let chatState = viewModel.state.isChatLocked ? "chat locked" : "chat open"
-        return "\(roomState), \(chatState)"
+    private var accessSummary: String? {
+        var states: [String] = []
+        if viewModel.state.isRoomLocked {
+            states.append("Room locked")
+        }
+        if viewModel.state.isChatLocked {
+            states.append("Chat locked")
+        }
+        if viewModel.state.isNoGuests {
+            states.append("Guests blocked")
+        }
+        return states.isEmpty ? nil : states.joined(separator: ", ")
     }
 
     private var trimmedAccessUserKey: String {
@@ -274,14 +306,14 @@ struct AdminControlsSheetView: View {
     private var participantMediaSummary: String {
         let count = viewModel.state.participantCount
         let noun = count == 1 ? "participant" : "participants"
-        return "\(count) \(noun), mute and camera controls"
+        return "\(count) \(noun)"
     }
 
     private var hasRaisedHands: Bool {
         if viewModel.state.isHandRaised {
             return true
         }
-        for participant in viewModel.state.sortedParticipants {
+        for participant in viewModel.state.presentParticipants {
             if participant.isHandRaised {
                 return true
             }
@@ -334,6 +366,27 @@ struct AdminControlsSheetView: View {
                 viewModel.refreshAdminAccessLists()
             }
         }
+        .onChange(of: viewModel.state.roomId) { _, _ in
+            resetTransientAdminActions()
+        }
+        .onChange(of: viewModel.state.connectionState) { _, state in
+            if state != .joined {
+                resetTransientAdminActions()
+            }
+        }
+        .onChange(of: viewModel.state.isAdmin) { _, isAdmin in
+            if !isAdmin {
+                resetTransientAdminActions()
+            }
+        }
+        .onChange(of: viewModel.state.isWebinarAttendee) { _, isWebinarAttendee in
+            if isWebinarAttendee {
+                resetTransientAdminActions()
+            }
+        }
+        .onDisappear {
+            resetTransientAdminActions()
+        }
     }
 
     @ViewBuilder
@@ -381,8 +434,8 @@ struct AdminControlsSheetView: View {
                         subtitle: participantMediaSummary,
                         icon: "mic.slash.fill",
                         androidIcon: "mic.off",
-                        iconTint: hasRaisedHands || viewModel.state.activeScreenShareUserId != nil ? ACMColors.primaryOrange : ACMColors.textMuted,
-                        androidIconTint: hasRaisedHands || viewModel.state.activeScreenShareUserId != nil ? "accent" : "muted",
+                        iconTint: hasRaisedHands || viewModel.state.hasActiveScreenShare ? ACMColors.primaryOrange : ACMColors.textMuted,
+                        androidIconTint: hasRaisedHands || viewModel.state.hasActiveScreenShare ? "accent" : "muted",
                         isDisabled: !canUseHostControls
                     ) {
                         onOpenAdminMediaControls?()
@@ -392,7 +445,6 @@ struct AdminControlsSheetView: View {
 
                     adminNavigationRow(
                         "Room notice",
-                        subtitle: "Send a banner to everyone",
                         icon: "megaphone.fill",
                         androidIcon: "info",
                         isDisabled: !canUseHostControls
@@ -404,7 +456,6 @@ struct AdminControlsSheetView: View {
 
                     adminNavigationRow(
                         "End meeting",
-                        subtitle: "Disconnect everyone in this room",
                         icon: "xmark.octagon.fill",
                         androidIcon: "close",
                         iconTint: ACMColors.error,
@@ -508,8 +559,9 @@ struct AdminControlsSheetView: View {
                             isDisabled: !canSubmitAccessUserKey
                         ) {
                             let key = trimmedAccessUserKey
-                            viewModel.allowAccessUserKey(key)
-                            accessUserKeyInput = ""
+                            if viewModel.allowAccessUserKey(key) {
+                                accessUserKeyInput = ""
+                            }
                         }
 
                         accessCommandButton(
@@ -521,8 +573,9 @@ struct AdminControlsSheetView: View {
                             isDisabled: !canSubmitAccessUserKey
                         ) {
                             let key = trimmedAccessUserKey
-                            viewModel.blockAccessUserKey(key)
-                            accessUserKeyInput = ""
+                            if viewModel.blockAccessUserKey(key) {
+                                accessUserKeyInput = ""
+                            }
                         }
                     }
                     .padding(.horizontal, ACMSpacing.sm)
@@ -766,7 +819,7 @@ struct AdminControlsSheetView: View {
                         viewModel.turnOffAllParticipantCameras()
                     }
 
-                    if viewModel.state.activeScreenShareUserId != nil {
+                    if viewModel.state.hasActiveScreenShare {
                         MoreRowDivider()
 
                         MoreRow(icon: "rectangle.on.rectangle.slash", androidIcon: "screen.share.off", title: "Stop screen shares", isDisabled: !canUseHostControls) {
@@ -788,7 +841,7 @@ struct AdminControlsSheetView: View {
 
     private func adminNavigationRow(
         _ title: String,
-        subtitle: String,
+        subtitle: String? = nil,
         icon: String,
         androidIcon: String,
         iconTint: Color = ACMColors.textMuted,
@@ -800,6 +853,8 @@ struct AdminControlsSheetView: View {
         let rowIconTint = isDisabled ? ACMColors.textFaint : iconTint
         let rowAndroidIconTint = isDisabled ? "faint" : androidIconTint
         let rowTitleTint = isDisabled ? ACMColors.textFaint : titleTint
+        let rowSubtitle = subtitle?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let hasSubtitle = rowSubtitle?.isEmpty == false
 
         return Button(action: action) {
             HStack(spacing: ACMSpacing.sm) {
@@ -817,10 +872,12 @@ struct AdminControlsSheetView: View {
                         .foregroundStyle(rowTitleTint)
                         .lineLimit(1)
 
-                    Text(subtitle)
-                        .font(ACMFont.trial(12))
-                        .foregroundStyle(ACMColors.textFaint)
-                        .lineLimit(1)
+                    if let rowSubtitle, !rowSubtitle.isEmpty {
+                        Text(rowSubtitle)
+                            .font(ACMFont.trial(12))
+                            .foregroundStyle(ACMColors.textFaint)
+                            .lineLimit(1)
+                    }
                 }
 
                 Spacer()
@@ -830,7 +887,7 @@ struct AdminControlsSheetView: View {
                     .frame(width: 24, height: 24)
             }
             .padding(.horizontal, ACMSpacing.sm)
-            .frame(height: 56)
+            .frame(height: hasSubtitle ? 56.0 : 52.0)
             .frame(maxWidth: .infinity, alignment: .leading)
             #if !SKIP
             .contentShape(Rectangle())
@@ -942,9 +999,15 @@ struct AdminControlsSheetView: View {
     private func sendNotice() {
         let message = noticeInput.trimmingCharacters(in: .whitespacesAndNewlines)
         guard canUseHostControls, !message.isEmpty, !isNoticeSending else { return }
+        let actionRoomId = viewModel.state.roomId
+        let generation = nextNoticeActionGeneration()
+        let level = noticeLevel
         isNoticeSending = true
         Task { @MainActor in
-            let sent = await viewModel.broadcastAdminNotice(message: message, level: noticeLevel)
+            let sent = await viewModel.broadcastAdminNotice(message: message, level: level)
+            guard shouldApplyNoticeCompletion(generation: generation, roomId: actionRoomId) else {
+                return
+            }
             if sent {
                 noticeInput = ""
             }
@@ -954,14 +1017,55 @@ struct AdminControlsSheetView: View {
 
     private func endMeetingForEveryone() {
         guard canUseHostControls, !isEndingMeeting else { return }
+        let actionRoomId = viewModel.state.roomId
+        let generation = nextEndMeetingActionGeneration()
         isEndingMeeting = true
         Task { @MainActor in
             let ended = await viewModel.endMeetingForEveryone()
+            guard shouldApplyEndMeetingCompletion(generation: generation, roomId: actionRoomId) else {
+                return
+            }
             isEndingMeeting = false
             if ended {
                 dismiss()
             }
         }
+    }
+
+    private func nextNoticeActionGeneration() -> Int {
+        noticeActionGeneration += 1
+        return noticeActionGeneration
+    }
+
+    private func nextEndMeetingActionGeneration() -> Int {
+        endMeetingActionGeneration += 1
+        return endMeetingActionGeneration
+    }
+
+    private func shouldApplyNoticeCompletion(generation: Int, roomId: String) -> Bool {
+        AdminControlsActionCompletionPolicy.shouldApplyCompletion(
+            generation: generation,
+            currentGeneration: noticeActionGeneration,
+            actionRoomId: roomId,
+            currentRoomId: viewModel.state.roomId
+        )
+    }
+
+    private func shouldApplyEndMeetingCompletion(generation: Int, roomId: String) -> Bool {
+        AdminControlsActionCompletionPolicy.shouldApplyCompletion(
+            generation: generation,
+            currentGeneration: endMeetingActionGeneration,
+            actionRoomId: roomId,
+            currentRoomId: viewModel.state.roomId
+        )
+    }
+
+    private func resetTransientAdminActions() {
+        noticeActionGeneration += 1
+        endMeetingActionGeneration += 1
+        isNoticeSending = false
+        isEndingMeeting = false
+        showEndMeetingConfirmation = false
     }
 
     private func noticeTint(for level: AdminNoticeLevel) -> Color {
@@ -1004,6 +1108,7 @@ struct SharedBrowserSheetView: View {
     var onBack: (() -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
     @State private var browserURLInput = ""
+    @State private var hasEditedBrowserURLInput = false
 
     private let browserLaunchOptions = BrowserLaunchOption.defaults
     private let browserLaunchColumns = [
@@ -1078,9 +1183,15 @@ struct SharedBrowserSheetView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         #endif
         .onAppear(perform: syncBrowserURLInput)
+        #if SKIP
+        .onChange(of: viewModel.state.isBrowserActive ? "active" : "inactive") { _, _ in
+            syncBrowserURLInput()
+        }
+        #else
         .onChange(of: viewModel.state.isBrowserActive) { _, _ in
             syncBrowserURLInput()
         }
+        #endif
         .onChange(of: viewModel.state.browserURL) { _, _ in
             syncBrowserURLInput()
         }
@@ -1123,7 +1234,13 @@ struct SharedBrowserSheetView: View {
                 background: ACMColors.surfaceRaised
             )
 
-            TextField("", text: $browserURLInput, prompt: Text(browserURLPrompt).foregroundStyle(ACMColors.textFaint))
+            TextField("", text: Binding(
+                get: { browserURLInput },
+                set: {
+                    browserURLInput = $0
+                    hasEditedBrowserURLInput = true
+                }
+            ), prompt: Text(browserURLPrompt).foregroundStyle(ACMColors.textFaint))
                 .textFieldStyle(.plain)
                 .font(ACMFont.trial(15))
                 .foregroundStyle(ACMColors.text)
@@ -1144,7 +1261,9 @@ struct SharedBrowserSheetView: View {
         LazyVGrid(columns: browserLaunchColumns, spacing: ACMSpacing.xs) {
             ForEach(browserLaunchOptions) { option in
                 Button {
-                    viewModel.launchSharedBrowser(url: option.url)
+                    if viewModel.launchSharedBrowser(url: option.url) {
+                        hasEditedBrowserURLInput = false
+                    }
                 } label: {
                     Text(option.name)
                         .font(ACMFont.trial(13, weight: .medium))
@@ -1177,7 +1296,9 @@ struct SharedBrowserSheetView: View {
             androidTint: canLaunchSharedBrowser ? "text" : "faint",
             isDisabled: !canLaunchSharedBrowser
         ) {
-            viewModel.launchSharedBrowser(url: browserURLInput)
+            if viewModel.launchSharedBrowser(url: browserURLInput) {
+                hasEditedBrowserURLInput = false
+            }
         }
     }
 
@@ -1190,7 +1311,9 @@ struct SharedBrowserSheetView: View {
             androidTint: canNavigateSharedBrowser ? "text" : "faint",
             isDisabled: !canNavigateSharedBrowser
         ) {
-            viewModel.navigateSharedBrowser(url: browserURLInput)
+            if viewModel.navigateSharedBrowser(url: browserURLInput) {
+                hasEditedBrowserURLInput = false
+            }
         }
     }
 
@@ -1236,11 +1359,28 @@ struct SharedBrowserSheetView: View {
     }
 
     private func syncBrowserURLInput() {
-        guard viewModel.state.isBrowserActive else {
-            browserURLInput = ""
-            return
-        }
-        browserURLInput = viewModel.state.browserURL ?? ""
+        let nextInput = SharedBrowserURLDraftSyncPolicy.nextInput(
+            currentInput: browserURLInput,
+            browserURL: viewModel.state.browserURL,
+            isBrowserActive: viewModel.state.isBrowserActive,
+            hasLocalEdits: hasEditedBrowserURLInput
+        )
+        guard nextInput != browserURLInput else { return }
+        browserURLInput = nextInput
+        hasEditedBrowserURLInput = false
+    }
+}
+
+enum SharedBrowserURLDraftSyncPolicy {
+    static func nextInput(
+        currentInput: String,
+        browserURL: String?,
+        isBrowserActive: Bool,
+        hasLocalEdits: Bool
+    ) -> String {
+        guard !hasLocalEdits else { return currentInput }
+        guard isBrowserActive else { return "" }
+        return browserURL ?? ""
     }
 }
 
@@ -1498,11 +1638,11 @@ struct ViewSettingsSheetView: View {
                 acmListSectionHeader("Layout")
 
                 MeetingSheetSectionCard {
-                    MoreRow(icon: "rectangle.grid.2x2", androidIcon: "settings", title: "\(viewModel.state.viewMode.title) view", showsChevron: true) {
+                    MoreRow(icon: "rectangle.grid.2x2", androidIcon: "grid", title: "\(viewModel.state.viewMode.title) view", showsChevron: true) {
                         onOpenViewModeSettings?()
                     }
                     MoreRowDivider()
-                    MoreRow(icon: "square.grid.2x2", androidIcon: "participants", title: "\(viewModel.state.viewMaxTiles) maximum tiles", showsChevron: true) {
+                    MoreRow(icon: "square.grid.2x2", androidIcon: "grid", title: "\(viewModel.state.viewMaxTiles) maximum tiles", showsChevron: true) {
                         onOpenGridSettings?()
                     }
                     MoreRowDivider()
@@ -1524,13 +1664,13 @@ struct ViewSettingsSheetView: View {
                 acmListSectionHeader("View")
 
                 MeetingSheetSectionCard {
-                    viewModeRow(.auto, icon: "rectangle.grid.2x2", androidIcon: "settings")
+                    viewModeRow(.auto, icon: "rectangle.grid.2x2", androidIcon: "grid")
                     MoreRowDivider()
-                    viewModeRow(.tiled, icon: "square.grid.2x2", androidIcon: "participants")
+                    viewModeRow(.tiled, icon: "square.grid.2x2", androidIcon: "grid")
                     MoreRowDivider()
-                    viewModeRow(.spotlight, icon: "rectangle.inset.filled", androidIcon: "pin.off")
+                    viewModeRow(.spotlight, icon: "rectangle.inset.filled", androidIcon: "spotlight")
                     MoreRowDivider()
-                    viewModeRow(.sidebar, icon: "sidebar.right", androidIcon: "participants")
+                    viewModeRow(.sidebar, icon: "sidebar.right", androidIcon: "sidebar")
                 }
             }
         }
@@ -1564,13 +1704,13 @@ struct ViewSettingsSheetView: View {
                 acmListSectionHeader("Self-view")
 
                 MeetingSheetSectionCard {
-                    selfViewModeRow(.auto, icon: "rectangle.grid.2x2", androidIcon: "settings")
+                    selfViewModeRow(.auto, icon: "rectangle.grid.2x2", androidIcon: "grid")
                     MoreRowDivider()
                     selfViewModeRow(.tile, icon: "person.crop.rectangle", androidIcon: "account")
                     MoreRowDivider()
-                    selfViewModeRow(.floating, icon: "pip", androidIcon: "info")
+                    selfViewModeRow(.floating, icon: "pip", androidIcon: "pip")
                     MoreRowDivider()
-                    selfViewModeRow(.minimized, icon: "minus.rectangle", androidIcon: "remove.person")
+                    selfViewModeRow(.minimized, icon: "minus.rectangle", androidIcon: "collapse")
                 }
             }
         }
@@ -1612,26 +1752,20 @@ struct ViewSettingsSheetView: View {
         HStack(spacing: ACMSpacing.sm) {
             MeetingSheetIconBox(
                 icon: "square.grid.2x2",
-                androidIcon: "participants",
+                androidIcon: "grid",
                 tint: ACMColors.text,
                 androidTint: "text",
                 background: ACMColors.surfaceRaised
             )
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Maximum tiles")
-                    .font(ACMFont.trial(15, weight: .medium))
-                    .foregroundStyle(ACMColors.text)
-                    .lineLimit(1)
-                Text("\(viewModel.state.viewMaxTiles) visible")
-                    .font(ACMFont.trial(12))
-                    .foregroundStyle(ACMColors.textFaint)
-                    .lineLimit(1)
-            }
+            Text("Maximum tiles")
+                .font(ACMFont.trial(15, weight: .medium))
+                .foregroundStyle(ACMColors.text)
+                .lineLimit(1)
 
             Spacer()
 
-            tileLimitButton(icon: "minus", androidIcon: "close", delta: -1)
+            tileLimitButton(icon: "minus", androidIcon: "remove", delta: -1)
             Text("\(viewModel.state.viewMaxTiles)")
                 .font(ACMFont.trial(13, weight: .semibold))
                 .foregroundStyle(ACMColors.text)
@@ -1639,7 +1773,7 @@ struct ViewSettingsSheetView: View {
             tileLimitButton(icon: "plus", androidIcon: "add", delta: 1)
         }
         .padding(.horizontal, ACMSpacing.sm)
-        .frame(height: 58)
+        .frame(height: 52)
     }
 
     private func tileLimitButton(icon: String, androidIcon: String, delta: Int) -> some View {

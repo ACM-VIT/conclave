@@ -1,6 +1,6 @@
 "use client";
 
-import { Crop, Ghost, Hand, Info, Maximize2, MicOff, Pin, PinOff } from "lucide-react";
+import { Crop, Hand, Info, Maximize2, MicOff, Pin, PinOff } from "lucide-react";
 import { memo, useEffect, useRef } from "react";
 import { createPlaybackRecoveryScheduler } from "../lib/playback-recovery";
 import { getRenderableParticipantVideoStream } from "../lib/participant-media";
@@ -8,6 +8,7 @@ import type { Participant } from "../lib/types";
 import { truncateDisplayName } from "../lib/utils";
 import ParticipantAudio from "./ParticipantAudio";
 import ParticipantConnectionOverlay from "./ParticipantConnectionOverlay";
+import { GhostParticipantOverlay } from "./GhostParticipantChrome";
 import { Avatar } from "@conclave/ui-tokens/web";
 
 interface ParticipantVideoProps {
@@ -156,6 +157,7 @@ function ParticipantVideo({
 
   const speakerHighlight = isActiveSpeaker ? "speaking" : "";
   const handRaisedHighlight = participant.isHandRaised ? "!border-amber-400/60" : "";
+  const ghostHighlight = participant.isGhost ? "!ring-1 !ring-inset !ring-[#F95F4A]/25" : "";
   const showFullVideoToggle =
     isDynamicCropEnabled && Boolean(videoStream) && Boolean(onToggleFullVideo);
   const fullVideoToggleLabel = isFullVideoShown
@@ -173,7 +175,7 @@ function ParticipantVideo({
       onClick={handleClick}
       className={`acm-video-tile group ${
         compact ? "h-36 w-48 shrink-0 sm:w-auto" : "w-full h-full"
-      } ${speakerHighlight} ${handRaisedHighlight} ${
+      } ${speakerHighlight} ${handRaisedHighlight} ${ghostHighlight} ${
         isAdmin && onAdminClick ? "cursor-pointer hover:border-[#F95F4A]/40" : ""
       }`}
       data-meet-video-adaptively-paused={
@@ -212,28 +214,7 @@ function ParticipantVideo({
         status={connectionStatus}
         compact={compact}
       />
-      {participant.isGhost && (
-        <div className="absolute inset-0 flex items-center justify-center pointer-events-none bg-black/40">
-          <div
-            className={`flex flex-col items-center ${
-              compact ? "gap-1" : "gap-2"
-            }`}
-          >
-            <Ghost
-              className={`${
-                compact ? "w-10 h-10" : "w-16 h-16"
-              } text-[#FF007A]`}
-            />
-            <span
-              className={`${
-                compact ? "text-[9px]" : "text-xs"
-              } text-[#FF007A] bg-black/60 border border-[#FF007A]/30 px-3 py-1 rounded-full uppercase tracking-wider font-medium`}
-            >
-              Ghost
-            </span>
-          </div>
-        </div>
-      )}
+      {participant.isGhost && <GhostParticipantOverlay compact={compact} />}
       {!disableAudio && (
         <ParticipantAudio
           participant={participant}

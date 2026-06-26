@@ -2,15 +2,12 @@
 //  SampleHandler.swift
 //  ScreenShareExtension
 //
-//  ReplayKit Broadcast Upload Extension. Captures the whole device screen,
-//  throttles to ~12fps, JPEG-encodes each frame, and streams it (framed as a
-//  serialized CFHTTPMessage carrying Content-Length / Buffer-Width /
-//  Buffer-Height / Buffer-Orientation) over the App-Group AF_UNIX socket the
-//  main app's ScreenShareSocketServer is listening on.
+//  ReplayKit Broadcast Upload Extension. Captures the device screen, throttles
+//  frames, JPEG-encodes them, and streams the framed payload over the App Group
+//  AF_UNIX socket owned by the main app's ScreenShareSocketServer.
 //
-//  Ported near-verbatim from the working react-native-webrtc broadcast handler.
-//  This target is PURE Swift + ReplayKit — it must NOT import the Skip-transpiled
-//  Conclave module.
+//  This target stays pure Swift + ReplayKit so it can run inside the broadcast
+//  extension without importing the Skip-transpiled Conclave module.
 //
 
 import CoreGraphics
@@ -26,7 +23,7 @@ final class SampleHandler: RPBroadcastSampleHandler {
     {
       return value
     }
-    return "group.com.acmvit.conclave"
+    return "group.com.acmvit.conclave.screenshare"
   }()
   private let outputColorSpace = CGColorSpaceCreateDeviceRGB()
   private lazy var imageContext: CIContext = {

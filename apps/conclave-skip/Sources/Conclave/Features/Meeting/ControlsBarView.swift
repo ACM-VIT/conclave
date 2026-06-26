@@ -4,6 +4,98 @@ import Observation
 import UIKit
 #endif
 
+struct MeetingControlsBarMetrics {
+    let itemSpacing: CGFloat
+    let horizontalPadding: CGFloat
+    let verticalPadding: CGFloat
+    let separatorHorizontalPadding: CGFloat
+    let contentMaxWidth: CGFloat
+}
+
+enum MeetingControlsBarLayout {
+    static let buttonSize: CGFloat = 44.0
+    static let separatorWidth: CGFloat = 1.0
+
+    static func metrics(availableWidth: CGFloat, isCompact: Bool) -> MeetingControlsBarMetrics {
+        let horizontalPadding = horizontalPadding(availableWidth: availableWidth, isCompact: isCompact)
+        return MeetingControlsBarMetrics(
+            itemSpacing: itemSpacing(availableWidth: availableWidth, isCompact: isCompact),
+            horizontalPadding: horizontalPadding,
+            verticalPadding: 10.0,
+            separatorHorizontalPadding: separatorHorizontalPadding(
+                availableWidth: availableWidth,
+                isCompact: isCompact
+            ),
+            contentMaxWidth: contentMaxWidth(
+                availableWidth: availableWidth,
+                isCompact: isCompact,
+                resolvedHorizontalPadding: horizontalPadding
+            )
+        )
+    }
+
+    static func itemSpacing(availableWidth: CGFloat, isCompact: Bool) -> CGFloat {
+        guard isCompact else { return 4.0 }
+        if availableWidth < 300.0 { return 4.0 }
+        if availableWidth < 340.0 { return 6.0 }
+        return 8.0
+    }
+
+    static func horizontalPadding(availableWidth: CGFloat, isCompact: Bool) -> CGFloat {
+        guard isCompact else { return 12.0 }
+        return availableWidth < 300.0 ? 8.0 : 12.0
+    }
+
+    static func separatorHorizontalPadding(availableWidth: CGFloat, isCompact: Bool) -> CGFloat {
+        guard isCompact else { return 4.0 }
+        return availableWidth < 320.0 ? 1.0 : 2.0
+    }
+
+    static func outerMaxWidth(availableWidth: CGFloat, isCompact: Bool) -> CGFloat {
+        let width = max(0.0, availableWidth)
+        return isCompact ? min(384.0, width) : width
+    }
+
+    static func contentMaxWidth(
+        availableWidth: CGFloat,
+        isCompact: Bool,
+        resolvedHorizontalPadding: CGFloat? = nil
+    ) -> CGFloat {
+        let padding = resolvedHorizontalPadding ?? horizontalPadding(
+            availableWidth: availableWidth,
+            isCompact: isCompact
+        )
+        return max(0.0, outerMaxWidth(availableWidth: availableWidth, isCompact: isCompact) - (padding * 2.0))
+    }
+
+    static func minimumOuterWidth(
+        controlButtonCount: Int,
+        includesSeparator: Bool,
+        availableWidth: CGFloat,
+        isCompact: Bool
+    ) -> CGFloat {
+        let metrics = metrics(availableWidth: availableWidth, isCompact: isCompact)
+        let separatorFootprint = includesSeparator
+            ? separatorWidth + (metrics.separatorHorizontalPadding * 2.0)
+            : 0.0
+        let visibleItemCount = controlButtonCount + (includesSeparator ? 1 : 0)
+        let gapCount = max(0, visibleItemCount - 1)
+
+        return (CGFloat(max(0, controlButtonCount)) * buttonSize) +
+            separatorFootprint +
+            (CGFloat(gapCount) * metrics.itemSpacing) +
+            (metrics.horizontalPadding * 2.0)
+    }
+}
+
+enum MeetingControlsBarCopy {
+    static func webinarAttendeeStatus(count: Int) -> String {
+        let safeCount = max(0, count)
+        let noun = safeCount == 1 ? "attendee" : "attendees"
+        return "\(safeCount) \(noun) watching"
+    }
+}
+
 // MARK: - Controls Bar
 
 struct ControlsBarView: View {
@@ -30,8 +122,10 @@ struct ControlsBarView: View {
 
     var body: some View {
         let isCompact = !isRegularSizeClass
-        // iOS = SF Symbol; Android (#if SKIP) = a semantic key the Kotlin
-        // meetingIconVector maps to a real material-icons-extended glyph.
+        let layout = MeetingControlsBarLayout.metrics(
+            availableWidth: availableWidth,
+            isCompact: isCompact
+        )
         let participantsIcon: String = {
             #if SKIP
             return "participants"
@@ -109,9 +203,9 @@ struct ControlsBarView: View {
             && !viewModel.state.isGhostMode
             && !isWebinarAttendee
         let isScreenShareDisabled = mediaControlsDisabled ||
-            (viewModel.state.activeScreenShareUserId != nil && !viewModel.state.isScreenSharing)
+            viewModel.state.hasActiveRemoteScreenShare
 
-        HStack(spacing: isCompact ? 12.0 : 4.0) {
+        HStack(spacing: layout.itemSpacing) {
             if !isWebinarAttendee {
                 if !isCompact {
                     ControlButton(
@@ -188,30 +282,32 @@ struct ControlsBarView: View {
                     }
                     .disabled(!canUseParticipantActions)
 
-                    ControlButton(
-                        icon: reactionIcon,
-                        isActive: showReactionPicker,
-                        isGhostDisabled: !canUseParticipantActions,
-                        accessibilityLabel: "Reactions"
-                    ) {
-                        showReactionPicker = !showReactionPicker
-                    }
-                    .disabled(!canUseParticipantActions)
-                    .overlay(alignment: .top) {
-                        if showReactionPicker {
-                            ReactionPickerView { option in
-                                viewModel.sendReaction(option)
-                                showReactionPicker = false
-                            }
-                            .offset(y: -64)
-#if !SKIP
-                            .transition(.scale(scale: 0.9, anchor: UnitPoint.bottom).combined(with: AnyTransition.opacity))
-#else
-                            .transition(AnyTransition.opacity)
-#endif
+                    if !viewModel.state.isReactionsDisabled || viewModel.state.isAdmin {
+                        ControlButton(
+                            icon: reactionIcon,
+                            isActive: showReactionPicker,
+                            isGhostDisabled: !canUseParticipantActions,
+                            accessibilityLabel: "Reactions"
+                        ) {
+                            showReactionPicker = !showReactionPicker
                         }
+                        .disabled(!canUseParticipantActions)
+                        .overlay(alignment: .top) {
+                            if showReactionPicker {
+                                ReactionPickerView { option in
+                                    viewModel.sendReaction(option)
+                                    showReactionPicker = false
+                                }
+                                .offset(y: -64)
+#if !SKIP
+                                .transition(.scale(scale: 0.9, anchor: UnitPoint.bottom).combined(with: AnyTransition.opacity))
+#else
+                                .transition(AnyTransition.opacity)
+#endif
+                            }
+                        }
+                        .animation(Animation.easeOut(duration: 0.12), value: showReactionPicker)
                     }
-                    .animation(Animation.easeOut(duration: 0.12), value: showReactionPicker)
 
                     ControlButton(
                         icon: chatIcon,
@@ -219,7 +315,9 @@ struct ControlsBarView: View {
                         badge: viewModel.state.unreadChatCount > 0 ? viewModel.state.unreadChatCount : nil,
                         accessibilityLabel: "Chat"
                     ) {
-                        viewModel.toggleChat()
+                        withAnimation(.easeInOut(duration: 0.12)) {
+                            viewModel.toggleChat()
+                        }
                     }
 
                     ControlButton(
@@ -234,9 +332,9 @@ struct ControlsBarView: View {
                 Rectangle()
                     .fill(ACMColors.creamFaint)
                     .frame(width: 1, height: 24)
-                    .padding(.horizontal, isCompact ? 2.0 : 4.0)
+                    .padding(.horizontal, layout.separatorHorizontalPadding)
             } else {
-                Text("\(viewModel.state.webinarAttendeeCount) watching")
+                Text(MeetingControlsBarCopy.webinarAttendeeStatus(count: viewModel.state.webinarAttendeeCount))
                     .font(ACMFont.trial(11, weight: .medium))
                     .foregroundStyle(ACMColors.textMuted)
                     .lineLimit(1)
@@ -257,15 +355,23 @@ struct ControlsBarView: View {
             .acmControlButtonStyle(isDanger: true)
             .accessibilityLabel("Hang Up")
         }
-        .frame(maxWidth: isCompact ? min(360.0, availableWidth - 24.0) : availableWidth - 24.0)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
+        .frame(maxWidth: layout.contentMaxWidth)
+        .padding(.horizontal, layout.horizontalPadding)
+        .padding(.vertical, layout.verticalPadding)
         .acmGlassCapsule()
+        #if SKIP
+        .onChange(of: canUseParticipantActions ? "enabled" : "disabled") { _, _ in
+            if !canUseParticipantActions {
+                showReactionPicker = false
+            }
+        }
+        #else
         .onChange(of: canUseParticipantActions) { _, canUse in
             if !canUse {
                 showReactionPicker = false
             }
         }
+        #endif
     }
 }
 

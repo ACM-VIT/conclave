@@ -21,7 +21,92 @@
     <key>CFBundleVersion</key>
     <string>$(CURRENT_PROJECT_VERSION)</string>
     <key>RTCAppGroupIdentifier</key>
-    <string>group.com.acmvit.conclave</string>
+    <string>group.com.acmvit.conclave.screenshare</string>
+    <key>NSCameraUsageDescription</key>
+    <string>Conclave uses the camera so you can turn on your video in a meeting.</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Conclave can include microphone audio when you share your screen in a meeting.</string>
+    <key>NSBluetoothAlwaysUsageDescription</key>
+    <string>Conclave uses Bluetooth so meeting audio can route through supported headphones and speakers.</string>
+    <key>NSBluetoothPeripheralUsageDescription</key>
+    <string>Conclave uses Bluetooth so meeting audio can route through supported headphones and speakers.</string>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>Conclave uses the local network to connect meeting audio, video, and screen sharing reliably.</string>
+    <key>NSScreenCaptureUsageDescription</key>
+    <string>Conclave uses screen capture so you can share your screen in a meeting.</string>
+    <key>NSPhotoLibraryUsageDescription</key>
+    <string>Conclave uses photo library access only when you choose an image from your library.</string>
+    <key>NSPhotoLibraryAddUsageDescription</key>
+    <string>Conclave saves images to your photo library only when you choose to save them.</string>
+    <key>NSLocationWhenInUseUsageDescription</key>
+    <string>Conclave uses your location only when you explicitly choose to share it.</string>
+    <key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+    <string>Conclave uses background location only while a location-sharing action you started remains active.</string>
+    <key>NSLocationAlwaysUsageDescription</key>
+    <string>Conclave uses background location only while a location-sharing action you started remains active.</string>
+    <key>NSLocationUsageDescription</key>
+    <string>Conclave uses your location only when you explicitly choose to share it.</string>
+    <key>NSLocationTemporaryUsageDescriptionDictionary</key>
+    <dict>
+        <key>MeetingLocationSharing</key>
+        <string>Conclave uses precise location only when you explicitly choose to share your current location in a meeting.</string>
+    </dict>
+    <key>NSFaceIDUsageDescription</key>
+    <string>Conclave uses Face ID only when you choose biometric verification for account access.</string>
+    <key>NSContactsUsageDescription</key>
+    <string>Conclave uses contacts only when you choose to select someone to invite to a meeting.</string>
+    <key>NSCalendarsUsageDescription</key>
+    <string>Conclave uses calendar access only when you choose to create or view meeting calendar events.</string>
+    <key>NSCalendarsFullAccessUsageDescription</key>
+    <string>Conclave uses calendar access only when you choose to create or view meeting calendar events.</string>
+    <key>NSCalendarsWriteOnlyAccessUsageDescription</key>
+    <string>Conclave can add meeting events to your calendar only when you choose to save them.</string>
+    <key>NSRemindersUsageDescription</key>
+    <string>Conclave uses reminders only when you choose to create a meeting reminder.</string>
+    <key>NSRemindersFullAccessUsageDescription</key>
+    <string>Conclave uses reminders only when you choose to create a meeting reminder.</string>
+    <key>NSDocumentsFolderUsageDescription</key>
+    <string>Conclave accesses files in Documents only when you choose a file to share or attach in a meeting.</string>
+    <key>NSDownloadsFolderUsageDescription</key>
+    <string>Conclave accesses files in Downloads only when you choose a file to share or attach in a meeting.</string>
+    <key>NSDesktopFolderUsageDescription</key>
+    <string>Conclave accesses files on the Desktop only when you choose a file to share or attach in a meeting.</string>
+    <key>NSNetworkVolumesUsageDescription</key>
+    <string>Conclave accesses network volumes only when you choose a file from one to share or attach in a meeting.</string>
+    <key>NSRemovableVolumesUsageDescription</key>
+    <string>Conclave accesses removable volumes only when you choose a file from one to share or attach in a meeting.</string>
+    <key>NSSpeechRecognitionUsageDescription</key>
+    <string>Conclave uses speech recognition only when you choose a meeting voice feature such as transcription.</string>
+    <key>NSSiriUsageDescription</key>
+    <string>Conclave uses Siri only when you choose a voice shortcut or Siri action for Conclave.</string>
+    <key>NSFocusStatusUsageDescription</key>
+    <string>Conclave uses Focus status only to respect notification and call availability settings you enable.</string>
+    <key>NSMotionUsageDescription</key>
+    <string>Conclave uses device motion only when needed to keep meeting video oriented correctly.</string>
+    <key>NSSensorKitUsageDescription</key>
+    <string>Conclave uses sensor data only when you explicitly choose a sensor-based meeting feature.</string>
+    <key>NSUserTrackingUsageDescription</key>
+    <string>Conclave does not track you across apps or websites.</string>
+    <key>NSUserNotificationsUsageDescription</key>
+    <string>Conclave sends notifications for meeting calls, reminders, and updates you enable.</string>
+    <key>NFCReaderUsageDescription</key>
+    <string>Conclave uses NFC only when you choose an NFC-based join or sharing action.</string>
+    <key>NSAppleMusicUsageDescription</key>
+    <string>Conclave uses media library access only when you choose media to share in a meeting.</string>
+    <key>NSNearbyInteractionUsageDescription</key>
+    <string>Conclave uses nearby interaction only when you choose a nearby-device meeting action.</string>
+    <key>NSVideoSubscriberAccountUsageDescription</key>
+    <string>Conclave uses video subscriber account access only when you choose an account-based video feature.</string>
+    <key>NSHomeKitUsageDescription</key>
+    <string>Conclave uses HomeKit only when you choose a home-device meeting action.</string>
+    <key>NSGKFriendListUsageDescription</key>
+    <string>Conclave uses Game Center friends only when you choose to invite them to a meeting.</string>
+    <key>NSHealthShareUsageDescription</key>
+    <string>Conclave uses health data only when you explicitly choose a health-sharing action.</string>
+    <key>NSHealthClinicalHealthRecordsShareUsageDescription</key>
+    <string>Conclave uses clinical health records only when you explicitly choose a health-record sharing action.</string>
+    <key>NSHealthUpdateUsageDescription</key>
+    <string>Conclave updates health data only when you explicitly choose a health-sharing action.</string>
     <key>NSExtension</key>
     <dict>
         <key>NSExtensionPointIdentifier</key>

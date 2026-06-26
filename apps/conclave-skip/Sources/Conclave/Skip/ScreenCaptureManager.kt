@@ -119,7 +119,15 @@ object ScreenCaptureManager {
                 requestServiceStop()
             }
         }
-        val pm = activity.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+        val pm = activity.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as? MediaProjectionManager
+        if (pm == null) {
+            debugLog("[ScreenShare] MediaProjection service is unavailable")
+            synchronized(stateLock) {
+                resultIntent = null
+            }
+            resumeAll(false)
+            return@suspendCancellableCoroutine
+        }
         try {
             launcher.launch(pm.createScreenCaptureIntent())
         } catch (t: Throwable) {
@@ -245,6 +253,10 @@ object ScreenCaptureManager {
         try {
             ctx.startService(intent)
         } catch (_: Throwable) {
+            try {
+                ctx.stopService(Intent(ctx, ScreenCaptureService::class.java))
+            } catch (_: Throwable) {
+            }
         }
     }
 }

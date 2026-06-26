@@ -61,7 +61,23 @@ val conclaveAuthBaseUrl = configuredValue(
     "NEXT_PUBLIC_SITE_URL"
 )
 
-val sfuJoinUrl = configuredValue("SFU_JOIN_URL")
+val productionConclaveBaseUrl = "https://conclave.acmvit.in"
+val productionSfuJoinUrl = "$productionConclaveBaseUrl/api/sfu/join"
+val sfuJoinUrl = configuredValue("SFU_JOIN_URL").ifBlank { productionSfuJoinUrl }
+val releaseArtifactRequested = gradle.startParameter.taskNames.any { taskName ->
+    val lower = taskName.substringAfterLast(":").lowercase()
+    lower in setOf("assemble", "bundle", "build") ||
+        ("release" in lower && (
+            "assemble" in lower ||
+                "bundle" in lower ||
+                "package" in lower ||
+                "install" in lower ||
+                "publish" in lower ||
+                "upload" in lower
+        ))
+}
+val allowDebugReleaseSigning = configuredValue("ALLOW_DEBUG_RELEASE_SIGNING")
+    .equals("true", ignoreCase = true)
 
 plugins {
     alias(libs.plugins.kotlin.android)
@@ -90,7 +106,6 @@ android {
         jniLibs {
             keepDebugSymbols.add("**/*.so")
             pickFirsts.add("**/*.so")
-            // this option will compress JNI .so files
             useLegacyPackaging = true
         }
     }
@@ -118,14 +133,10 @@ android {
     }
 
     dependenciesInfo {
-        // Disables dependency metadata when building APKs.
         includeInApk = false
-        // Disables dependency metadata when building Android App Bundles.
         includeInBundle = false
     }
 
-    // default signing configuration tries to load from keystore.properties
-    // see: https://skip.tools/docs/deployment/#export-signing
     signingConfigs {
         val keystorePropertiesFile = file("keystore.properties")
         create("release") {
@@ -137,7 +148,12 @@ android {
                 storeFile = file(keystoreProperties.getProperty("storeFile"))
                 storePassword = keystoreProperties.getProperty("storePassword")
             } else {
-                // when there is no keystore.properties file, fall back to signing with debug config
+                if (releaseArtifactRequested && !allowDebugReleaseSigning) {
+                    throw GradleException(
+                        "Missing Android/app/keystore.properties for release signing. " +
+                            "Set ALLOW_DEBUG_RELEASE_SIGNING=true only for local throwaway release artifacts."
+                    )
+                }
                 keyAlias = signingConfigs.getByName("debug").keyAlias
                 keyPassword = signingConfigs.getByName("debug").keyPassword
                 storeFile = signingConfigs.getByName("debug").storeFile
@@ -151,7 +167,9 @@ android {
             signingConfig = signingConfigs.findByName("release")
             isMinifyEnabled = true
             isShrinkResources = true
-            isDebuggable = false // can be set to true for debugging release build, but needs to be false when uploading to store
+            isDebuggable = false
+            manifestPlaceholders["CONCLAVE_AUTH_BASE_URL"] = productionConclaveBaseUrl
+            manifestPlaceholders["SFU_JOIN_URL"] = productionSfuJoinUrl
             manifestPlaceholders["USES_CLEARTEXT_TRAFFIC"] = "false"
             proguardFiles(getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro")
         }
@@ -159,6 +177,9 @@ android {
 }
 
 dependencies {
+    implementation(platform("com.squareup.okhttp3:okhttp-bom:4.12.0"))
+    implementation("com.squareup.okhttp3:okhttp")
+
     // The Activity theme (res/values/themes.xml) is `Theme.Material3.Dark.*`,
     // whose color attributes (colorOnPrimary, colorSurface, …) ship in the
     // Material Components XML library. Compose Material3 does NOT provide the

@@ -5,9 +5,9 @@ import skip.foundation.ProcessInfo
 import skip.ui.UIApplication
 
 object NativeMeetingShare {
-    fun shareMeetingLink(link: String, roomId: String) {
+    fun shareMeetingLink(link: String, roomId: String): Boolean {
         if (PermissionHelper.shouldSuppressShareFromNotificationPermissionPrompt()) {
-            return
+            return false
         }
 
         val activity = UIApplication.shared.androidActivity
@@ -25,9 +25,11 @@ object NativeMeetingShare {
 
         try {
             context.startActivity(chooser)
+            return true
         } catch (t: Throwable) {
             debugLog("[Share] Failed to open Android share sheet: ${t}")
             ClipboardHelper.copyToClipboard(text = link, label = "Meeting link")
+            return true
         }
     }
 }

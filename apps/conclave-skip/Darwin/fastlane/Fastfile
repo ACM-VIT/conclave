@@ -1,11 +1,11 @@
 # This file contains the fastlane.tools configuration
-# for the iOS half of the Skip app.
+# for the iOS release build.
 # You can find the documentation at https://docs.fastlane.tools
 
 default_platform(:ios)
 
 lane :assemble do |options|
-  # only build the iOS side of the app
+  # Build only the iOS side of the native app.
   ENV["SKIP_ZERO"] = "true"
   build_app(
     scheme: "Conclave App",
@@ -20,13 +20,11 @@ lane :assemble do |options|
 end
 
 lane :release do |options|
-  desc "Build and release app"
+  desc "Build and release Conclave iOS app"
 
   # see https://docs.fastlane.tools/uploading-app-privacy-details/
   #upload_app_privacy_details_to_app_store(json_path: "fastlane/app_privacy_details.json")
 
-  # if you have an apikey.json file (https://developer.apple.com/documentation/appstoreconnectapi/creating-api-keys-for-app-store-connect-api), fastlane can automatically fetch certificates and the ASC authentication information
-  #get_certificates(api_key_path: "fastlane/apikey.json")
   get_provisioning_profile(api_key_path: "fastlane/apikey.json")
 
   assemble
@@ -37,4 +35,3 @@ lane :release do |options|
     release_notes: { default: "Fixes and improvements." }
   )
 end
-

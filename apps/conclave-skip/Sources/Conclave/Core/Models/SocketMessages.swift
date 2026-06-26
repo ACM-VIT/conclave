@@ -51,6 +51,28 @@ struct ConsumerLayerPreferenceRequest: Codable {
     let temporalLayer: Int?
 }
 
+struct ConsumerScoreSnapshot: Codable {
+    let score: Double?
+    let producerScore: Double?
+    let producerScores: [Double]?
+}
+
+struct ConsumerTelemetryNotification: Codable {
+    let event: String
+    let roomId: String?
+    let userId: String?
+    let consumerId: String
+    let producerId: String
+    let kind: String
+    let score: ConsumerScoreSnapshot?
+    let paused: Bool
+    let producerPaused: Bool
+    let priority: Int
+    let preferredLayers: ConsumerLayerPreferenceRequest?
+    let currentLayers: ConsumerLayerPreferenceRequest?
+    let timestamp: Double?
+}
+
 struct ResumeConsumerRequest: Codable {
     let consumerId: String
     // Requests a fresh keyframe while resuming to recover a stalled decoder.
@@ -64,12 +86,16 @@ struct ToggleMediaRequest: Codable {
 
 struct SendChatRequest: Codable {
     let content: String
+    let gif: ChatGifAttachment?
     // The SFU also resolves DMs from "/dm <name>" and "@<name>" content.
     let recipient: String?
+    let replyTo: ChatReplyPreview?
 
-    init(content: String, recipient: String? = nil) {
+    init(content: String, gif: ChatGifAttachment? = nil, recipient: String? = nil, replyTo: ChatReplyPreview? = nil) {
         self.content = content
+        self.gif = gif
         self.recipient = recipient
+        self.replyTo = replyTo
     }
 }
 
@@ -143,6 +169,7 @@ struct JoinRoomResponse: Codable {
     let noGuests: Bool?
     let isTtsDisabled: Bool?
     let isDmEnabled: Bool?
+    let isReactionsDisabled: Bool?
     let meetingRequiresInviteCode: Bool?
     let webinarRole: String?
     let isWebinarEnabled: Bool?
@@ -150,6 +177,100 @@ struct JoinRoomResponse: Codable {
     let webinarRequiresInviteCode: Bool?
     let webinarAttendeeCount: Int?
     let webinarMaxAttendees: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case rtpCapabilities
+        case existingProducers
+        case status
+        case roomId
+        case hostUserId
+        case hostUserIds
+        case isLocked
+        case isChatLocked
+        case noGuests
+        case isTtsDisabled
+        case isDmEnabled
+        case isReactionsDisabled
+        case meetingRequiresInviteCode
+        case webinarRole
+        case isWebinarEnabled
+        case webinarLocked
+        case webinarRequiresInviteCode
+        case webinarAttendeeCount
+        case webinarMaxAttendees
+    }
+
+    init(
+        rtpCapabilities: RtpCapabilities,
+        existingProducers: [ProducerInfo],
+        status: String? = nil,
+        roomId: String? = nil,
+        hostUserId: String? = nil,
+        hostUserIds: [String]? = nil,
+        isLocked: Bool? = nil,
+        isChatLocked: Bool? = nil,
+        noGuests: Bool? = nil,
+        isTtsDisabled: Bool? = nil,
+        isDmEnabled: Bool? = nil,
+        isReactionsDisabled: Bool? = nil,
+        meetingRequiresInviteCode: Bool? = nil,
+        webinarRole: String? = nil,
+        isWebinarEnabled: Bool? = nil,
+        webinarLocked: Bool? = nil,
+        webinarRequiresInviteCode: Bool? = nil,
+        webinarAttendeeCount: Int? = nil,
+        webinarMaxAttendees: Int? = nil
+    ) {
+        self.rtpCapabilities = rtpCapabilities
+        self.existingProducers = existingProducers
+        self.status = status
+        self.roomId = roomId
+        self.hostUserId = hostUserId
+        self.hostUserIds = hostUserIds
+        self.isLocked = isLocked
+        self.isChatLocked = isChatLocked
+        self.noGuests = noGuests
+        self.isTtsDisabled = isTtsDisabled
+        self.isDmEnabled = isDmEnabled
+        self.isReactionsDisabled = isReactionsDisabled
+        self.meetingRequiresInviteCode = meetingRequiresInviteCode
+        self.webinarRole = webinarRole
+        self.isWebinarEnabled = isWebinarEnabled
+        self.webinarLocked = webinarLocked
+        self.webinarRequiresInviteCode = webinarRequiresInviteCode
+        self.webinarAttendeeCount = webinarAttendeeCount
+        self.webinarMaxAttendees = webinarMaxAttendees
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let status = try container.decodeIfPresent(String.self, forKey: .status)
+        if let rtpCapabilities = try container.decodeIfPresent(RtpCapabilities.self, forKey: .rtpCapabilities) {
+            self.rtpCapabilities = rtpCapabilities
+        } else if status == "waiting" {
+            self.rtpCapabilities = RtpCapabilities(codecs: nil, headerExtensions: nil)
+        } else {
+            self.rtpCapabilities = try container.decode(RtpCapabilities.self, forKey: .rtpCapabilities)
+        }
+        self.existingProducers = try container.decodeIfPresent([ProducerInfo].self, forKey: .existingProducers) ?? []
+        self.status = status
+        self.roomId = try container.decodeIfPresent(String.self, forKey: .roomId)
+        self.hostUserId = try container.decodeIfPresent(String.self, forKey: .hostUserId)
+        self.hostUserIds = try container.decodeIfPresent([String].self, forKey: .hostUserIds)
+        self.isLocked = try container.decodeIfPresent(Bool.self, forKey: .isLocked)
+        self.isChatLocked = try container.decodeIfPresent(Bool.self, forKey: .isChatLocked)
+        self.noGuests = try container.decodeIfPresent(Bool.self, forKey: .noGuests)
+        self.isTtsDisabled = try container.decodeIfPresent(Bool.self, forKey: .isTtsDisabled)
+        self.isDmEnabled = try container.decodeIfPresent(Bool.self, forKey: .isDmEnabled)
+        self.isReactionsDisabled = try container.decodeIfPresent(Bool.self, forKey: .isReactionsDisabled)
+        self.meetingRequiresInviteCode = try container.decodeIfPresent(Bool.self, forKey: .meetingRequiresInviteCode)
+        self.webinarRole = try container.decodeIfPresent(String.self, forKey: .webinarRole)
+        self.isWebinarEnabled = try container.decodeIfPresent(Bool.self, forKey: .isWebinarEnabled)
+        self.webinarLocked = try container.decodeIfPresent(Bool.self, forKey: .webinarLocked)
+        self.webinarRequiresInviteCode = try container.decodeIfPresent(Bool.self, forKey: .webinarRequiresInviteCode)
+        self.webinarAttendeeCount = try container.decodeIfPresent(Int.self, forKey: .webinarAttendeeCount)
+        self.webinarMaxAttendees = try container.decodeIfPresent(Int.self, forKey: .webinarMaxAttendees)
+    }
 }
 
 struct TransportResponse: Codable {
@@ -230,6 +351,8 @@ struct AdminMediaActionResponse: Codable {
     let userId: String?
     let affectedProducers: Int?
     let producers: [AdminMediaProducer]?
+    let closed: Bool?
+    let producerId: String?
 }
 
 struct AdminCloseUserMediaRequest: Codable {
@@ -258,6 +381,84 @@ struct CloseRemoteProducerResponse: Codable {
 struct AdminNoticeResponse: Codable {
     let success: Bool?
     let error: String?
+}
+
+struct RoomPolicyMutationResponse: Codable {
+    let success: Bool?
+    let error: String?
+    let changed: Bool?
+    let locked: Bool?
+    let noGuests: Bool?
+    let disabled: Bool?
+    let enabled: Bool?
+    let policies: AdminRoomPolicySnapshot?
+
+    enum CodingKeys: String, CodingKey {
+        case success
+        case error
+        case changed
+        case locked
+        case noGuests
+        case disabled
+        case enabled
+        case policies
+    }
+
+    init(
+        success: Bool?,
+        error: String?,
+        changed: Bool?,
+        locked: Bool?,
+        noGuests: Bool?,
+        disabled: Bool?,
+        enabled: Bool?,
+        policies: AdminRoomPolicySnapshot?
+    ) {
+        self.success = success
+        self.error = error
+        self.changed = changed
+        self.locked = locked
+        self.noGuests = noGuests
+        self.disabled = disabled
+        self.enabled = enabled
+        self.policies = policies
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        success = try container.decodeIfPresent(Bool.self, forKey: .success)
+        error = try container.decodeIfPresent(String.self, forKey: .error)
+        changed = try Self.decodeChangedFlag(from: container)
+        locked = try container.decodeIfPresent(Bool.self, forKey: .locked)
+        noGuests = try container.decodeIfPresent(Bool.self, forKey: .noGuests)
+        disabled = try container.decodeIfPresent(Bool.self, forKey: .disabled)
+        enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled)
+        policies = try container.decodeIfPresent(AdminRoomPolicySnapshot.self, forKey: .policies)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(success, forKey: .success)
+        try container.encodeIfPresent(error, forKey: .error)
+        try container.encodeIfPresent(changed, forKey: .changed)
+        try container.encodeIfPresent(locked, forKey: .locked)
+        try container.encodeIfPresent(noGuests, forKey: .noGuests)
+        try container.encodeIfPresent(disabled, forKey: .disabled)
+        try container.encodeIfPresent(enabled, forKey: .enabled)
+        try container.encodeIfPresent(policies, forKey: .policies)
+    }
+
+    private static func decodeChangedFlag(
+        from container: KeyedDecodingContainer<CodingKeys>
+    ) throws -> Bool? {
+        if let boolValue = try? container.decodeIfPresent(Bool.self, forKey: .changed) {
+            return boolValue
+        }
+        if let objectValue = try? container.decodeIfPresent([String: Bool].self, forKey: .changed) {
+            return !objectValue.isEmpty
+        }
+        return nil
+    }
 }
 
 struct AdminMediaEnforcedNotification: Codable {
@@ -289,11 +490,60 @@ struct AdminBulkMediaEnforcedNotification: Codable {
     let affectedProducers: Int?
 }
 
+private func decodeFirstString<Key: CodingKey>(
+    from container: KeyedDecodingContainer<Key>,
+    keys: [Key]
+) throws -> String? {
+    for key in keys {
+        if let value = try container.decodeIfPresent(String.self, forKey: key) {
+            return value
+        }
+    }
+    return nil
+}
+
 struct UserJoinedNotification: Codable {
     let userId: String
     let displayName: String?
     let isGhost: Bool?
     let roomId: String?
+
+    enum CodingKeys: String, CodingKey {
+        case userId
+        case displayName
+        case name
+        case fullName
+        case displayNameSnake = "display_name"
+        case username
+        case isGhost
+        case roomId
+    }
+
+    init(userId: String, displayName: String? = nil, isGhost: Bool? = nil, roomId: String? = nil) {
+        self.userId = userId
+        self.displayName = displayName
+        self.isGhost = isGhost
+        self.roomId = roomId
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        userId = try container.decode(String.self, forKey: .userId)
+        displayName = try decodeFirstString(
+            from: container,
+            keys: [.displayName, .name, .fullName, .displayNameSnake, .username]
+        )
+        isGhost = try container.decodeIfPresent(Bool.self, forKey: .isGhost)
+        roomId = try container.decodeIfPresent(String.self, forKey: .roomId)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(userId, forKey: .userId)
+        try container.encodeIfPresent(displayName, forKey: .displayName)
+        try container.encodeIfPresent(isGhost, forKey: .isGhost)
+        try container.encodeIfPresent(roomId, forKey: .roomId)
+    }
 }
 
 struct UserLeftNotification: Codable {
@@ -309,25 +559,90 @@ struct DisplayNameSnapshotNotification: Codable {
 struct DisplayNameSnapshotUser: Codable {
     let userId: String
     let displayName: String?
+
+    enum CodingKeys: String, CodingKey {
+        case userId
+        case displayName
+        case name
+        case fullName
+        case displayNameSnake = "display_name"
+        case username
+    }
+
+    init(userId: String, displayName: String? = nil) {
+        self.userId = userId
+        self.displayName = displayName
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        userId = try container.decode(String.self, forKey: .userId)
+        displayName = try decodeFirstString(
+            from: container,
+            keys: [.displayName, .name, .fullName, .displayNameSnake, .username]
+        )
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(userId, forKey: .userId)
+        try container.encodeIfPresent(displayName, forKey: .displayName)
+    }
 }
 
 struct DisplayNameUpdatedNotification: Codable {
     let userId: String
     let displayName: String
     let roomId: String?
+
+    enum CodingKeys: String, CodingKey {
+        case userId
+        case displayName
+        case name
+        case fullName
+        case displayNameSnake = "display_name"
+        case username
+        case roomId
+    }
+
+    init(userId: String, displayName: String, roomId: String? = nil) {
+        self.userId = userId
+        self.displayName = displayName
+        self.roomId = roomId
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        userId = try container.decode(String.self, forKey: .userId)
+        displayName = try decodeFirstString(
+            from: container,
+            keys: [.displayName, .name, .fullName, .displayNameSnake, .username]
+        )
+            ?? ""
+        roomId = try container.decodeIfPresent(String.self, forKey: .roomId)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(userId, forKey: .userId)
+        try container.encode(displayName, forKey: .displayName)
+        try container.encodeIfPresent(roomId, forKey: .roomId)
+    }
 }
 
 struct ChatMessageNotification: Codable {
     let id: String
     let userId: String
-    let displayName: String
+    let displayName: String?
     let content: String
     let timestamp: Double
+    let gif: ChatGifAttachment?
     // DM fields (meeting-core ChatMessage) — present only on direct messages.
     let isDirect: Bool?
     let dmTargetUserId: String?
     let dmTargetDisplayName: String?
     let roomId: String?
+    let replyTo: ChatReplyPreview?
 }
 
 struct ChatHistorySnapshotNotification: Codable {
@@ -344,13 +659,15 @@ extension ChatMessageNotification {
         ChatMessage(
             id: id,
             userId: userId,
-            displayName: displayName,
+            displayName: displayName ?? "",
             content: content,
             timestamp: Date(timeIntervalSince1970: timestamp / 1000),
+            gif: gif,
             isDirect: isDirect ?? false,
             dmTargetUserId: dmTargetUserId,
             dmTargetDisplayName: dmTargetDisplayName,
-            roomId: roomId ?? taggedRoomId
+            roomId: roomId ?? taggedRoomId,
+            replyTo: replyTo
         )
     }
 }
@@ -429,10 +746,48 @@ struct TtsDisabledChangedNotification: Codable {
     let roomId: String?
 }
 
+struct ReactionsDisabledChangedNotification: Codable {
+    let disabled: Bool
+    let roomId: String?
+}
+
 struct UserRequestedJoinNotification: Codable {
     let userId: String
     let displayName: String
     let roomId: String?
+
+    enum CodingKeys: String, CodingKey {
+        case userId
+        case displayName
+        case name
+        case fullName
+        case displayNameSnake = "display_name"
+        case username
+        case roomId
+    }
+
+    init(userId: String, displayName: String, roomId: String? = nil) {
+        self.userId = userId
+        self.displayName = displayName
+        self.roomId = roomId
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        userId = try container.decode(String.self, forKey: .userId)
+        displayName = try decodeFirstString(
+            from: container,
+            keys: [.displayName, .name, .fullName, .displayNameSnake, .username]
+        ) ?? userId
+        roomId = try container.decodeIfPresent(String.self, forKey: .roomId)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(userId, forKey: .userId)
+        try container.encode(displayName, forKey: .displayName)
+        try container.encodeIfPresent(roomId, forKey: .roomId)
+    }
 }
 
 struct PendingUsersSnapshotNotification: Codable {
@@ -443,6 +798,35 @@ struct PendingUsersSnapshotNotification: Codable {
 struct PendingUserSnapshot: Codable {
     let userId: String
     let displayName: String?
+
+    enum CodingKeys: String, CodingKey {
+        case userId
+        case displayName
+        case name
+        case fullName
+        case displayNameSnake = "display_name"
+        case username
+    }
+
+    init(userId: String, displayName: String? = nil) {
+        self.userId = userId
+        self.displayName = displayName
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        userId = try container.decode(String.self, forKey: .userId)
+        displayName = try decodeFirstString(
+            from: container,
+            keys: [.displayName, .name, .fullName, .displayNameSnake, .username]
+        )
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(userId, forKey: .userId)
+        try container.encodeIfPresent(displayName, forKey: .displayName)
+    }
 }
 
 struct PendingUserChangedNotification: Codable {
@@ -492,6 +876,23 @@ struct AdminEndRoomResponse: Codable {
     let error: String?
 }
 
+struct PromoteHostResponse: Codable {
+    let success: Bool?
+    let hostUserId: String?
+    let hostUserIds: [String]?
+    let promotedUserId: String?
+    let promotedUserKey: String?
+    let error: String?
+}
+
+struct TransferHostResponse: Codable {
+    let success: Bool?
+    let hostUserId: String?
+    let hostUserIds: [String]?
+    let transferredTo: String?
+    let error: String?
+}
+
 struct AdminHandsClearedNotification: Codable {
     let roomId: String?
     let count: Int?
@@ -500,6 +901,33 @@ struct AdminHandsClearedNotification: Codable {
 struct AdminRoomStateChangedNotification: Codable {
     let roomId: String?
     let snapshot: AdminRoomSnapshot
+}
+
+struct AdminRoomStateResponse: Codable {
+    let room: AdminRoomSnapshot
+}
+
+struct RoomInfo: Codable, Equatable {
+    let id: String
+    let userCount: Int
+}
+
+struct RoomListResponse: Codable {
+    let rooms: [RoomInfo]
+}
+
+struct AdminRoomsDetailedResponse: Codable {
+    let rooms: [AdminRoomSnapshot]
+}
+
+struct AdminParticipantsResponse: Codable {
+    let participants: [AdminRoomParticipantSnapshot]
+    let roomId: String?
+}
+
+struct AdminPendingUsersResponse: Codable {
+    let roomId: String?
+    let users: [PendingUserSnapshot]
 }
 
 struct AdminRoomSnapshot: Codable {
@@ -525,6 +953,73 @@ struct AdminRoomParticipantSnapshot: Codable {
     let cameraOff: Bool?
     let pendingDisconnect: Bool?
     let producers: [AdminRoomParticipantProducerSnapshot]?
+
+    enum CodingKeys: String, CodingKey {
+        case userId
+        case userKey
+        case displayName
+        case name
+        case fullName
+        case displayNameSnake = "display_name"
+        case username
+        case role
+        case mode
+        case muted
+        case cameraOff
+        case pendingDisconnect
+        case producers
+    }
+
+    init(
+        userId: String,
+        userKey: String? = nil,
+        displayName: String? = nil,
+        role: String? = nil,
+        mode: String? = nil,
+        muted: Bool? = nil,
+        cameraOff: Bool? = nil,
+        pendingDisconnect: Bool? = nil,
+        producers: [AdminRoomParticipantProducerSnapshot]? = nil
+    ) {
+        self.userId = userId
+        self.userKey = userKey
+        self.displayName = displayName
+        self.role = role
+        self.mode = mode
+        self.muted = muted
+        self.cameraOff = cameraOff
+        self.pendingDisconnect = pendingDisconnect
+        self.producers = producers
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        userId = try container.decode(String.self, forKey: .userId)
+        userKey = try container.decodeIfPresent(String.self, forKey: .userKey)
+        displayName = try decodeFirstString(
+            from: container,
+            keys: [.displayName, .name, .fullName, .displayNameSnake, .username]
+        )
+        role = try container.decodeIfPresent(String.self, forKey: .role)
+        mode = try container.decodeIfPresent(String.self, forKey: .mode)
+        muted = try container.decodeIfPresent(Bool.self, forKey: .muted)
+        cameraOff = try container.decodeIfPresent(Bool.self, forKey: .cameraOff)
+        pendingDisconnect = try container.decodeIfPresent(Bool.self, forKey: .pendingDisconnect)
+        producers = try container.decodeIfPresent([AdminRoomParticipantProducerSnapshot].self, forKey: .producers)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(userId, forKey: .userId)
+        try container.encodeIfPresent(userKey, forKey: .userKey)
+        try container.encodeIfPresent(displayName, forKey: .displayName)
+        try container.encodeIfPresent(role, forKey: .role)
+        try container.encodeIfPresent(mode, forKey: .mode)
+        try container.encodeIfPresent(muted, forKey: .muted)
+        try container.encodeIfPresent(cameraOff, forKey: .cameraOff)
+        try container.encodeIfPresent(pendingDisconnect, forKey: .pendingDisconnect)
+        try container.encodeIfPresent(producers, forKey: .producers)
+    }
 }
 
 struct AdminRoomParticipantProducerSnapshot: Codable {
@@ -540,6 +1035,7 @@ struct AdminRoomPolicySnapshot: Codable {
     let noGuests: Bool?
     let ttsDisabled: Bool?
     let dmEnabled: Bool?
+    let reactionsDisabled: Bool?
     let requiresMeetingInviteCode: Bool?
 }
 
@@ -592,6 +1088,25 @@ struct AdminRevokeAllowedUsersRequest: Encodable {
     let revokeLocked: Bool
 }
 
+struct AdminRoomPoliciesUpdateRequest: Encodable {
+    let locked: Bool?
+    let noGuests: Bool?
+    let chatLocked: Bool?
+    let ttsDisabled: Bool?
+    let dmEnabled: Bool?
+    let reactionsDisabled: Bool?
+}
+
+struct RedirectUserRequest: Encodable {
+    let userId: String
+    let newRoomId: String
+}
+
+struct RedirectUserResponse: Codable {
+    let success: Bool?
+    let error: String?
+}
+
 struct MeetingConfigSnapshot: Codable {
     let roomId: String?
     let requiresInviteCode: Bool?
@@ -629,6 +1144,76 @@ struct WebinarConfigSnapshot: Codable {
     let requiresInviteCode: Bool?
     let linkSlug: String?
     let feedMode: String?
+    let hasLinkSlug: Bool
+
+    init(
+        roomId: String?,
+        enabled: Bool?,
+        publicAccess: Bool?,
+        locked: Bool?,
+        maxAttendees: Int?,
+        attendeeCount: Int?,
+        requiresInviteCode: Bool?,
+        linkSlug: String?,
+        feedMode: String?,
+        hasLinkSlug: Bool? = nil
+    ) {
+        self.roomId = roomId
+        self.enabled = enabled
+        self.publicAccess = publicAccess
+        self.locked = locked
+        self.maxAttendees = maxAttendees
+        self.attendeeCount = attendeeCount
+        self.requiresInviteCode = requiresInviteCode
+        self.linkSlug = linkSlug
+        self.feedMode = feedMode
+        self.hasLinkSlug = hasLinkSlug ?? (linkSlug != nil)
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case roomId
+        case enabled
+        case publicAccess
+        case locked
+        case maxAttendees
+        case attendeeCount
+        case requiresInviteCode
+        case linkSlug
+        case feedMode
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        roomId = try container.decodeIfPresent(String.self, forKey: .roomId)
+        enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled)
+        publicAccess = try container.decodeIfPresent(Bool.self, forKey: .publicAccess)
+        locked = try container.decodeIfPresent(Bool.self, forKey: .locked)
+        maxAttendees = try container.decodeIfPresent(Int.self, forKey: .maxAttendees)
+        attendeeCount = try container.decodeIfPresent(Int.self, forKey: .attendeeCount)
+        requiresInviteCode = try container.decodeIfPresent(Bool.self, forKey: .requiresInviteCode)
+        linkSlug = try container.decodeIfPresent(String.self, forKey: .linkSlug)
+        feedMode = try container.decodeIfPresent(String.self, forKey: .feedMode)
+        hasLinkSlug = container.contains(.linkSlug)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(roomId, forKey: .roomId)
+        try container.encodeIfPresent(enabled, forKey: .enabled)
+        try container.encodeIfPresent(publicAccess, forKey: .publicAccess)
+        try container.encodeIfPresent(locked, forKey: .locked)
+        try container.encodeIfPresent(maxAttendees, forKey: .maxAttendees)
+        try container.encodeIfPresent(attendeeCount, forKey: .attendeeCount)
+        try container.encodeIfPresent(requiresInviteCode, forKey: .requiresInviteCode)
+        if hasLinkSlug {
+            if let linkSlug {
+                try container.encode(linkSlug, forKey: .linkSlug)
+            } else {
+                try container.encodeNil(forKey: .linkSlug)
+            }
+        }
+        try container.encodeIfPresent(feedMode, forKey: .feedMode)
+    }
 }
 
 struct WebinarConfigUpdateResponse: Codable {
@@ -653,6 +1238,45 @@ struct WebinarFeedChangedNotification: Codable {
     let roomId: String?
     let speakerUserId: String?
     let producers: [ProducerInfo]?
+}
+
+struct WebinarParticipantJoinedNotification: Codable {
+    let roomId: String?
+    let userId: String
+    let displayName: String?
+
+    enum CodingKeys: String, CodingKey {
+        case roomId
+        case userId
+        case displayName
+        case name
+        case fullName
+        case displayNameSnake = "display_name"
+        case username
+    }
+
+    init(roomId: String? = nil, userId: String, displayName: String? = nil) {
+        self.roomId = roomId
+        self.userId = userId
+        self.displayName = displayName
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        roomId = try container.decodeIfPresent(String.self, forKey: .roomId)
+        userId = try container.decode(String.self, forKey: .userId)
+        displayName = try decodeFirstString(
+            from: container,
+            keys: [.displayName, .name, .fullName, .displayNameSnake, .username]
+        )
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(roomId, forKey: .roomId)
+        try container.encode(userId, forKey: .userId)
+        try container.encodeIfPresent(displayName, forKey: .displayName)
+    }
 }
 
 struct WaitingRoomStatusNotification: Codable {
@@ -707,6 +1331,25 @@ struct AppsStateNotification: Codable {
     let activeAppId: String?
     let locked: Bool
     let roomId: String?
+
+    init(activeAppId: String? = nil, locked: Bool = false, roomId: String? = nil) {
+        self.activeAppId = activeAppId
+        self.locked = locked
+        self.roomId = roomId
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case activeAppId
+        case locked
+        case roomId
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        activeAppId = try container.decodeIfPresent(String.self, forKey: .activeAppId)
+        locked = try container.decodeIfPresent(Bool.self, forKey: .locked) ?? false
+        roomId = try container.decodeIfPresent(String.self, forKey: .roomId)
+    }
 }
 
 struct AppsOpenResponse: Codable {

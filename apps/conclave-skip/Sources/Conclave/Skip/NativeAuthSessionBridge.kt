@@ -13,7 +13,7 @@ object NativeAuthSessionBridge {
 
     fun install() {
         synchronized(lock) {
-            if (CookieHandler.getDefault() !is JavaCookieManager) {
+            if (CookieHandler.getDefault() !== javaCookieManager) {
                 CookieHandler.setDefault(javaCookieManager)
             }
             try {
@@ -141,17 +141,17 @@ object NativeAuthSessionBridge {
         }
     }
 
-    private fun uri(urlString: String): URI = try {
+    private fun uri(urlString: String): URI? = try {
         URI(urlString)
     } catch (_: Throwable) {
-        URI.create("http://localhost")
+        null
     }
 
     private fun cookieURLStrings(urlString: String): List<String> =
         cookieURIs(urlString).map { it.toString() }.distinct()
 
     private fun cookieURIs(urlString: String): List<URI> {
-        val original = uri(urlString)
+        val original = uri(urlString) ?: return emptyList()
         val host = original.host?.lowercase() ?: return listOf(original)
         if (host !in loopbackCookieHosts) return listOf(original)
 
@@ -179,7 +179,7 @@ object NativeAuthSessionBridge {
             "127.0.0.1",
             "0.0.0.0"
         ).apply {
-            if (AndroidRuntimeConfig.isDebuggable()) {
+            if (AndroidRuntimeConfig.isDebuggable() && AndroidRuntimeConfig.isProbablyEmulator()) {
                 add(androidEmulatorLoopbackHost("2"))
                 add(androidEmulatorLoopbackHost("3"))
             }

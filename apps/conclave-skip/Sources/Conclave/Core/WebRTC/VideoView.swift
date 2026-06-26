@@ -114,6 +114,7 @@ class CameraPreviewUIView: UIView {
 struct RemoteVideoView: View {
     @ObservedObject var trackWrapper: VideoTrackWrapper
     var contentMode: VideoContentMode = .fill
+    var fallbackDisplayName: String = "Guest"
 
     var body: some View {
         GeometryReader { geometry in
@@ -121,19 +122,32 @@ struct RemoteVideoView: View {
                 RTCVideoViewRepresentable(track: track, isMirrored: false, contentMode: contentMode)
                     .frame(width: geometry.size.width, height: geometry.size.height)
             } else {
+                let displayName = MeetingState.mediaFallbackDisplayName(
+                    fallbackDisplayName,
+                    userId: trackWrapper.userId
+                )
+                let avatarSize = min(max(min(geometry.size.width, geometry.size.height) * 0.28, 44.0), 112.0)
                 ZStack {
-                    Color.black
-                    
+                    ACMColors.bgAlt
+
+                    Circle()
+                        .fill(ACMColors.avatarColor(for: displayName))
+                        .frame(width: avatarSize, height: avatarSize)
+                        .overlay {
+                            Text(String(displayName.prefix(1)).uppercased())
+                                .font(.system(size: avatarSize * 0.40, weight: .bold))
+                                .foregroundStyle(Color.white)
+                        }
+
                     if trackWrapper.isEnabled {
                         ProgressView()
                             .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                            .scaleEffect(1.5)
-                    } else {
-                        Image(systemName: "video.slash.fill")
-                            .font(.system(size: 32))
-                            .foregroundStyle(.gray)
+                            .scaleEffect(0.8)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                            .padding(12)
                     }
                 }
+                .frame(width: geometry.size.width, height: geometry.size.height)
             }
         }
     }
@@ -212,6 +226,9 @@ struct VideoGridItem: View {
     // rather than locking to 16:9. Video tiles always keep 16:9.
     var fillStage: Bool = false
     var isThumbnail: Bool = false
+    var avatarSizeOverride: CGFloat? = nil
+    var usePlatformOverlaySurface: Bool = false
+    var localCameraFacing: LocalCameraFacing = .front
 
     var captureSession: AVCaptureSession? = nil
 
@@ -219,17 +236,29 @@ struct VideoGridItem: View {
 
     var trackWrapper: VideoTrackWrapper? = nil
 
+    private var resolvedDisplayName: String {
+        let trimmed = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty {
+            return trimmed
+        }
+        return isLocal ? "You" : "Guest"
+    }
+
+    private var avatarInitial: String {
+        String(resolvedDisplayName.prefix(1)).uppercased()
+    }
+
     var body: some View {
         aspectAdjustedContent
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .clipped()
             .clipShape(RoundedRectangle(cornerRadius: ACMRadius.lg))
             .overlay {
                 RoundedRectangle(cornerRadius: ACMRadius.lg)
                     .strokeBorder(lineWidth: isSpeaking ? 2.0 : 1.0)
                     .foregroundStyle(isSpeaking ? ACMColors.primaryOrange : ACMColors.creamFaint)
+                    .animation(.easeOut(duration: 0.12), value: isSpeaking)
             }
-            // Ease the flat 2px orange active-speaker border in/out (~120ms) so it
-            // reads as responsive rather than snapping. No glow.
-            .animation(.easeOut(duration: 0.12), value: isSpeaking)
     }
 
     @ViewBuilder
@@ -237,7 +266,14 @@ struct VideoGridItem: View {
         // Fill the frame the parent assigns (grid cell / stage / thumbnail).
         // Video crops via scaleAspectFill; the avatar centres. The grid packer
         // hands us correctly proportioned frames, so there are no letterbox gaps.
-        ZStack { videoContent; overlays }
+        ZStack {
+            videoContent
+                .transaction { transaction in
+                    transaction.animation = nil
+                }
+            overlays
+        }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
     
     @ViewBuilder
@@ -246,16 +282,16 @@ struct VideoGridItem: View {
             avatarView
         } else if isLocal {
             if let track = localVideoTrack {
-                RTCLocalVideoView(videoTrack: track, isMirrored: true)
+                RTCLocalVideoView(videoTrack: track, isMirrored: localCameraFacing.shouldMirrorLocalVideo)
             } else if let session = captureSession {
-                LocalVideoView(captureSession: session)
+                LocalVideoView(captureSession: session, isMirrored: localCameraFacing.shouldMirrorLocalVideo)
             } else {
-                Color.black
+                avatarView
             }
         } else if let wrapper = trackWrapper {
-            RemoteVideoView(trackWrapper: wrapper)
+            RemoteVideoView(trackWrapper: wrapper, fallbackDisplayName: resolvedDisplayName)
         } else {
-            Color.black
+            avatarView
         }
     }
     
@@ -263,17 +299,20 @@ struct VideoGridItem: View {
         GeometryReader { geo in
             // Scale the avatar to the tile so it reads well in a big solo tile
             // and isn't oversized in a small grid tile (Meet-style).
-            let minAvatarSize: CGFloat = isThumbnail ? 34.0 : 44.0
-            let maxAvatarSize: CGFloat = isThumbnail ? 48.0 : 240.0
-            let avatarSize = min(max((geo.size.width + geo.size.height) * 0.10, minAvatarSize), maxAvatarSize)
+            let labelClearance: CGFloat = isThumbnail ? 30.0 : 44.0
+            let shortestSide = min(geo.size.width, max(1.0, geo.size.height - labelClearance))
+            let minAvatarSize = min(isThumbnail ? 24.0 : 44.0, shortestSide)
+            let maxAvatarSize = min(isThumbnail ? 40.0 : 240.0, shortestSide)
+            let avatarSize = avatarSizeOverride
+                ?? min(max(shortestSide * (isThumbnail ? 0.46 : 0.42), minAvatarSize), maxAvatarSize)
             ZStack {
                 ACMColors.bgAlt
 
                 Circle()
-                    .fill(ACMColors.avatarColor(for: displayName))
+                    .fill(ACMColors.avatarColor(for: resolvedDisplayName))
                     .frame(width: avatarSize, height: avatarSize)
                     .overlay {
-                        Text(String(displayName.prefix(1)).uppercased())
+                        Text(avatarInitial)
                             .font(.system(size: avatarSize * 0.40, weight: .bold))
                             .foregroundStyle(Color.white)
                     }
@@ -398,15 +437,13 @@ struct VideoGridItem: View {
                             .foregroundStyle(ACMColors.error)
                     }
 
-                    Text(isLocal ? "You" : displayName)
+                    Text(isLocal ? "You" : resolvedDisplayName)
                         .font(ACMFont.trial(isThumbnail ? 11.0 : 12.0, weight: .medium))
                         .foregroundStyle(ACMColors.text)
                         .lineLimit(1)
                 }
-                .padding(.horizontal, isThumbnail ? 8.0 : 10.0)
-                .padding(.vertical, isThumbnail ? 4.0 : 5.0)
-                .acmColorBackground(ACMColors.scrim)
-                .clipShape(RoundedRectangle(cornerRadius: isThumbnail ? 7.0 : 8.0))
+                .frame(maxWidth: isThumbnail ? 112.0 : 220.0, alignment: .leading)
+                .shadow(color: ACMColors.blackOverlay(0.9), radius: 2.0, x: 0.0, y: 1.0)
 
                 Spacer()
             }

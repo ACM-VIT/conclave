@@ -78,6 +78,18 @@ export type AuthorizedSfuAdminUser = {
   name: string | null;
 };
 
+export const isSfuAllowlistedUser = (user: {
+  id: string;
+  email?: string | null;
+}): boolean => {
+  const normalizedUser: AuthorizedSfuAdminUser = {
+    id: user.id,
+    email: normalizeEmail(user.email),
+    name: null,
+  };
+  return isAllowlisted(normalizedUser);
+};
+
 const isAllowlisted = (user: AuthorizedSfuAdminUser): boolean => {
   if (allowlistedUserIds.has(user.id)) {
     return true;

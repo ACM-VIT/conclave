@@ -451,8 +451,12 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
         }
 
         producerAdvertised = true;
+        const producingClient = activeRoom.getClient(clientId);
         for (const [targetClientId, client] of activeRoom.clients) {
           if (targetClientId === clientId || client.isWebinarAttendee) {
+            continue;
+          }
+          if (producingClient?.isGhost && !client.isGhost) {
             continue;
           }
           client.socket.emit("newProducer", {
@@ -643,7 +647,9 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
 
         const producers = context.currentClient.isWebinarAttendee
           ? context.currentRoom.getWebinarFeedSnapshot().producers
-          : context.currentRoom.getAllProducers(context.currentClient.id);
+          : context.currentRoom.getAllProducers(context.currentClient.id, {
+              includeGhostProducers: context.currentClient.isGhost,
+            });
         respond(callback, { producers });
       } catch (error) {
         respond(callback, { error: (error as Error).message });

@@ -1,6 +1,14 @@
 import Foundation
 
 enum NativeRuntimeConfig {
+    static func isCurrentAppSuspendedBySystem() -> Bool {
+        #if SKIP
+        return AndroidRuntimeConfig.isCurrentPackageSuspended()
+        #else
+        return false
+        #endif
+    }
+
     static func bundledString(forKey key: String) -> String? {
         #if SKIP
         if let value = AndroidRuntimeConfig.metadataValue(forKey: key),

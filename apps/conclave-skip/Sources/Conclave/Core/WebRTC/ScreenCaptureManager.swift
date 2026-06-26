@@ -25,6 +25,17 @@ import UIKit
 import ReplayKit
 import WebRTC
 import Combine
+#endif
+
+enum ScreenCaptureStartPolicy {
+    static let startTimeoutNanoseconds = UInt64(12_000_000_000)
+
+    static func shouldApplyTimeout(generation: Int, currentGeneration: Int, hasServer: Bool, isConnected: Bool) -> Bool {
+        generation == currentGeneration && hasServer && !isConnected
+    }
+}
+
+#if canImport(UIKit) && !SKIP
 
 private final class ScreenShareFrameRateGate: @unchecked Sendable {
     private let lock = NSLock()
@@ -68,7 +79,7 @@ final class ScreenCaptureManager: NSObject {
     static let shared = ScreenCaptureManager()
 
     // MARK: - Configuration
-    private let appGroupIdentifier = "group.com.acmvit.conclave"
+    private let appGroupIdentifier = "group.com.acmvit.conclave.screenshare"
     private let broadcastExtensionBundleId = "com.acmvit.conclave.ScreenShareExtension"
 
     // MARK: - Publishers
@@ -80,17 +91,13 @@ final class ScreenCaptureManager: NSObject {
     /// its producer and reset UI state. Set by MeetingViewModel.
     var onBroadcastStopped: (() -> Void)?
 
-    /// How long to wait for the broadcast extension to actually connect after
-    /// presenting the picker. Covers the user cancelling / dismissing the
-    /// system sheet (matches the extension's own initialConnectionTimeout).
-    private let startTimeout: TimeInterval = 12
-
     // MARK: - Properties
     private weak var webRTCClient: WebRTCClient?
     private var server: ScreenShareSocketServer?
     private var connected = false
     private var startGeneration = 0
     private var pendingStartContinuation: CheckedContinuation<Void, Error>?
+    private var startTimeoutTask: Task<Void, Never>?
     private let frameGate = ScreenShareFrameRateGate()
 
     // MARK: - Public Methods
@@ -154,6 +161,9 @@ final class ScreenCaptureManager: NSObject {
             }
         )
         guard started else {
+            server.stop()
+            self.webRTCClient = nil
+            frameGate.reset()
             throw ScreenCaptureError.socketUnavailable
         }
         self.server = server
@@ -172,13 +182,7 @@ final class ScreenCaptureManager: NSObject {
                 // If the extension never connects (the user cancelled or dismissed
                 // the system sheet), tear everything back down so the share button
                 // never flips to a dead producer.
-                DispatchQueue.main.asyncAfter(deadline: .now() + startTimeout) { [weak self] in
-                    guard let self else { return }
-                    guard self.startGeneration == generation,
-                          self.server != nil,
-                          !self.connected else { return }
-                    self.handleExternalStop()
-                }
+                scheduleStartTimeout(generation: generation)
             }
         } onCancel: { [weak self] in
             Task { @MainActor in
@@ -192,6 +196,8 @@ final class ScreenCaptureManager: NSObject {
     /// gracefully.
     func stopCapture() async {
         startGeneration &+= 1
+        startTimeoutTask?.cancel()
+        startTimeoutTask = nil
         connected = false
         frameGate.reset()
         server?.stop()
@@ -205,7 +211,10 @@ final class ScreenCaptureManager: NSObject {
 
     private func handleExternalStop() {
         guard server != nil else { return }
+        let wasConnected = connected
         startGeneration &+= 1
+        startTimeoutTask?.cancel()
+        startTimeoutTask = nil
         connected = false
         frameGate.reset()
         server?.stop()
@@ -213,13 +222,17 @@ final class ScreenCaptureManager: NSObject {
         webRTCClient = nil
         isCapturing.send(false)
         finishPendingStart(.failure(ScreenCaptureError.cancelled))
-        onBroadcastStopped?()
+        if wasConnected {
+            onBroadcastStopped?()
+        }
     }
 
     private func cancelPendingStart(generation: Int) {
         guard startGeneration == generation,
               pendingStartContinuation != nil else { return }
         startGeneration &+= 1
+        startTimeoutTask?.cancel()
+        startTimeoutTask = nil
         connected = false
         frameGate.reset()
         server?.stop()
@@ -232,11 +245,31 @@ final class ScreenCaptureManager: NSObject {
     private func finishPendingStart(_ result: Result<Void, Error>) {
         guard let continuation = pendingStartContinuation else { return }
         pendingStartContinuation = nil
+        if case .success = result {
+            startTimeoutTask?.cancel()
+            startTimeoutTask = nil
+        }
         switch result {
         case .success:
             continuation.resume()
         case .failure(let error):
             continuation.resume(throwing: error)
+        }
+    }
+
+    private func scheduleStartTimeout(generation: Int) {
+        startTimeoutTask?.cancel()
+        startTimeoutTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: ScreenCaptureStartPolicy.startTimeoutNanoseconds)
+            guard !Task.isCancelled,
+                  let self,
+                  ScreenCaptureStartPolicy.shouldApplyTimeout(
+                    generation: generation,
+                    currentGeneration: self.startGeneration,
+                    hasServer: self.server != nil,
+                    isConnected: self.connected
+                  ) else { return }
+            self.handleExternalStop()
         }
     }
 

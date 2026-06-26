@@ -1,7 +1,7 @@
 
 copyright "#{Time.now.year}"
 
-force(true) # Skip HTML report verification
+force(true) # Skip fastlane's interactive HTML report prompt.
 automatic_release(true)
 skip_screenshots(false)
 precheck_include_in_app_purchases(false)

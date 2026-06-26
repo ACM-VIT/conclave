@@ -1,29 +1,27 @@
 # This file contains the fastlane.tools configuration
-# for the Android half of the Skip app.
+# for the Android release build.
 # You can find the documentation at https://docs.fastlane.tools
 
-# Load the shared Skip.env properties with the app info
+# Load the shared native app properties.
 require('dotenv')
 Dotenv.load '../../Skip.env'
 
 default_platform(:android)
 
-# use the Homebrew gradle rather than expecting a local gradlew
+# Use the Homebrew gradle rather than expecting a local gradlew.
 gradle_bin = (ENV['HOMEBREW_PREFIX'] ? ENV['HOMEBREW_PREFIX'] : "/opt/homebrew") + "/bin/gradle"
 
-default_platform(:android)
-
-desc "Build Skip Android App"
+desc "Build Conclave Android app"
 lane :build do |options|
   build_config = (options[:release] ? "Release" : "Debug")
   gradle(
-    task: "build${build_config}",
+    task: "assemble#{build_config}",
     gradle_path: gradle_bin,
     flags: "--warning-mode none -x lint"
   )
 end
 
-desc "Test Skip Android App"
+desc "Test Conclave Android app"
 lane :test do
   gradle(
     task: "test",
@@ -31,16 +29,15 @@ lane :test do
   )
 end
 
-desc "Assemble Skip Android App"
+desc "Assemble Conclave Android release bundle"
 lane :assemble do
   gradle(
     gradle_path: gradle_bin,
     task: "bundleRelease"
   )
-  # sh "your_script.sh"
 end
 
-desc "Deploy Skip Android App to Google Play"
+desc "Deploy Conclave Android app to Google Play"
 lane :release do
 
   assemble

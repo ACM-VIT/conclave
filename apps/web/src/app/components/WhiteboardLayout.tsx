@@ -1,12 +1,14 @@
 "use client";
 
-import { Ghost, Hand } from "lucide-react";
+import { Hand } from "lucide-react";
 import { memo, useEffect, useRef } from "react";
 import { WhiteboardWebApp } from "@conclave/apps-sdk/whiteboard/web";
 import { Avatar } from "@conclave/ui-tokens/web";
 import { useSmartParticipantOrder } from "../hooks/useSmartParticipantOrder";
 import type { Participant } from "../lib/types";
 import { getSpeakerHighlightClasses, isSystemUserId } from "../lib/utils";
+import { isRemoteParticipantVisible } from "../lib/participant-visibility";
+import { GhostParticipantOverlay } from "./GhostParticipantChrome";
 import ParticipantVideo from "./ParticipantVideo";
 
 interface WhiteboardLayoutProps {
@@ -70,7 +72,8 @@ function WhiteboardLayout({
     Array.from(participants.values()).filter(
       (participant) =>
         !isSystemUserId(participant.userId) &&
-        participant.userId !== currentUserId
+        participant.userId !== currentUserId &&
+        isRemoteParticipantVisible(participant, isGhost, currentUserId),
     ),
     activeSpeakerId
   );
@@ -100,16 +103,7 @@ function WhiteboardLayout({
               <Avatar id={userEmail} name={userEmail} size={48} />
             </div>
           )}
-          {isGhost && (
-            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-              <div className="flex flex-col items-center gap-1.5">
-                <Ghost className="w-12 h-12 text-blue-300" />
-                <span className="text-[10px] text-blue-200/90 bg-black/60 border border-blue-400/30 px-2 py-0.5 rounded-full">
-                  Ghost
-                </span>
-              </div>
-            </div>
-          )}
+          {isGhost && <GhostParticipantOverlay compact />}
           {isHandRaised && (
             <div
               className="absolute top-3 left-3 p-1.5 rounded-full bg-amber-500/20 border border-amber-400/40 text-amber-300"

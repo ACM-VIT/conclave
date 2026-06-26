@@ -8,9 +8,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.ArrowForward
 import androidx.compose.material.icons.automirrored.rounded.Chat
+import androidx.compose.material.icons.automirrored.rounded.Reply
 import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.material.icons.automirrored.rounded.VolumeOff
 import androidx.compose.material.icons.automirrored.rounded.VolumeUp
+import androidx.compose.material.icons.automirrored.rounded.ViewSidebar
 import androidx.compose.material.icons.outlined.AccountCircle
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.PanTool
@@ -18,12 +20,16 @@ import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Block
 import androidx.compose.material.icons.rounded.CallEnd
+import androidx.compose.material.icons.rounded.Cameraswitch
 import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.CloseFullscreen
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.EmojiEmotions
+import androidx.compose.material.icons.rounded.FeaturedVideo
 import androidx.compose.material.icons.rounded.Forum
+import androidx.compose.material.icons.rounded.GridView
 import androidx.compose.material.icons.rounded.Groups
 import androidx.compose.material.icons.rounded.HelpOutline
 import androidx.compose.material.icons.rounded.Info
@@ -38,9 +44,11 @@ import androidx.compose.material.icons.rounded.NorthEast
 import androidx.compose.material.icons.rounded.NorthWest
 import androidx.compose.material.icons.rounded.OpenInFull
 import androidx.compose.material.icons.rounded.PanTool
+import androidx.compose.material.icons.rounded.PictureInPictureAlt
 import androidx.compose.material.icons.rounded.PersonAdd
 import androidx.compose.material.icons.rounded.PersonRemove
 import androidx.compose.material.icons.rounded.Public
+import androidx.compose.material.icons.rounded.Remove
 import androidx.compose.material.icons.rounded.ScreenShare
 import androidx.compose.material.icons.rounded.SouthEast
 import androidx.compose.material.icons.rounded.SouthWest
@@ -65,13 +73,20 @@ internal fun meetingIconVector(name: String): ImageVector = when (name) {
     "mic.off"         -> Icons.Rounded.MicOff
     "video"           -> Icons.Rounded.Videocam
     "video.off"       -> Icons.Rounded.VideocamOff
+    "camera.flip"     -> Icons.Rounded.Cameraswitch
     "screen.share"    -> Icons.Rounded.ScreenShare
     "screen.share.off" -> Icons.Rounded.StopScreenShare
     "hangup"          -> Icons.Rounded.CallEnd
     "more"            -> Icons.Rounded.MoreHoriz   // iOS ellipsis is horizontal
     "chat"            -> Icons.AutoMirrored.Rounded.Chat
     "chat.outline"    -> Icons.Outlined.ChatBubbleOutline
+    "reply"           -> Icons.AutoMirrored.Rounded.Reply
     "participants"    -> Icons.Rounded.Groups
+    "grid"            -> Icons.Rounded.GridView
+    "sidebar"         -> Icons.AutoMirrored.Rounded.ViewSidebar
+    "spotlight"       -> Icons.Rounded.FeaturedVideo
+    "pip"             -> Icons.Rounded.PictureInPictureAlt
+    "collapse"        -> Icons.Rounded.CloseFullscreen
     "settings"        -> Icons.Rounded.Settings
     "raise.hand"      -> Icons.Rounded.PanTool
     "raise.hand.off"  -> Icons.Outlined.PanTool
@@ -100,6 +115,8 @@ internal fun meetingIconVector(name: String): ImageVector = when (name) {
     "volume"          -> Icons.AutoMirrored.Rounded.VolumeUp
     "volume.off"      -> Icons.AutoMirrored.Rounded.VolumeOff
     "add"             -> Icons.Rounded.Add
+    "remove"          -> Icons.Rounded.Remove
+    "minus"           -> Icons.Rounded.Remove
     "info"            -> Icons.Rounded.Info
     "warning"         -> Icons.Rounded.Warning
     "open.in.full"    -> Icons.Rounded.OpenInFull
@@ -132,11 +149,12 @@ fun warmMeetingIcons() {
     val warm = Thread {
         val keys = listOf(
             "mic", "mic.off", "video", "video.off", "screen.share", "screen.share.off",
-            "hangup", "more", "chat", "chat.outline", "participants", "settings",
-            "raise.hand", "raise.hand.off", "reactions", "lock", "lock.open", "send",
+            "hangup", "more", "chat", "chat.outline", "participants", "grid", "sidebar", "spotlight", "pip",
+            "collapse", "settings",
+            "raise.hand", "raise.hand.off", "reactions", "lock", "lock.open", "send", "reply",
             "close", "copy", "delete", "pin.off", "ghost", "host", "person.add", "remove.person",
             "key", "link", "public", "arrow.forward", "back", "account", "block", "forum", "group", "volume",
-            "volume.off", "add", "info", "warning", "check", "open.in.full",
+            "volume.off", "add", "remove", "minus", "info", "warning", "check", "open.in.full",
             "north.east", "north.west", "south.east", "south.west"
         )
         for (k in keys) {

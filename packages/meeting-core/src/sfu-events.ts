@@ -59,6 +59,8 @@ export const SFU_EVENTS = {
     getChatLockStatus: "getChatLockStatus",
     getDmEnabledStatus: "getDmEnabledStatus",
     getTtsDisabledStatus: "getTtsDisabledStatus",
+    setReactionsDisabled: "setReactionsDisabled",
+    getReactionsDisabledStatus: "getReactionsDisabledStatus",
     admitUser: "admitUser",
     rejectUser: "rejectUser",
     kickUser: "kickUser",
@@ -158,6 +160,7 @@ export const SFU_EVENTS = {
     noGuestsChanged: "noGuestsChanged",
     dmStateChanged: "dmStateChanged",
     ttsDisabledChanged: "ttsDisabledChanged",
+    reactionsDisabledChanged: "reactionsDisabledChanged",
 
     // Session lifecycle / disruptive
     kicked: "kicked",

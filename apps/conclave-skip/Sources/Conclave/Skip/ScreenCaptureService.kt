@@ -144,7 +144,7 @@ class ScreenCaptureService : Service() {
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Conclave")
             .setContentText("Sharing your screen")
-            .setSmallIcon(android.R.drawable.ic_menu_slideshow)
+            .setSmallIcon(notificationSmallIcon(android.R.drawable.ic_menu_slideshow))
             .setContentIntent(pendingIntent)
             .setOngoing(true)
             .addAction(
@@ -153,5 +153,10 @@ class ScreenCaptureService : Service() {
                 stopPendingIntent
             )
             .build()
+    }
+
+    private fun notificationSmallIcon(fallback: Int): Int {
+        val appIcon = resources.getIdentifier("ic_launcher_monochrome", "mipmap", packageName)
+        return if (appIcon != 0) appIcon else fallback
     }
 }

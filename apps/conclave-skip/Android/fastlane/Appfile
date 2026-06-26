@@ -1,11 +1,17 @@
 # This file contains the app distribution configuration
-# for the Android half of the Skip app.
+# for the Android release build.
 # You can find the documentation at https://docs.fastlane.tools
 
-# Load the shared Skip.env properties with the app info
+# Load the shared native app properties.
 require('dotenv')
 Dotenv.load('../../Skip.env')
-package_name(ENV['PRODUCT_BUNDLE_IDENTIFIER'].sub("-", "_"))
 
-# Path to the json secret file - Follow https://docs.fastlane.tools/actions/supply/#setup to get one
+android_package_name = [ENV['ANDROID_APPLICATION_ID'], ENV['PRODUCT_BUNDLE_IDENTIFIER']]
+  .map { |value| value.to_s.strip }
+  .find { |value| !value.empty? }
+raise "ANDROID_APPLICATION_ID or PRODUCT_BUNDLE_IDENTIFIER must be set" if android_package_name.nil?
+
+package_name(android_package_name.tr("-", "_"))
+
+# Path to the Google Play service-account JSON.
 json_key_file("fastlane/apikey.json")

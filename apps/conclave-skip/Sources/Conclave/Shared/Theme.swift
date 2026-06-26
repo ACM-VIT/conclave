@@ -1,8 +1,6 @@
-//  Design System — "Carbon" palette, shared 1:1 with the web app
-//  (packages/ui-tokens). Flat surfaces, brand hues, NO gradients / glows /
-//  monospace. Active speaker = 2px solid accent border (no halo). This file is
-//  the single source of truth for native color/spacing/type, mirroring the
-//  TypeScript token tree so web and native render identically.
+//  Native design tokens aligned with the web Carbon palette.
+//  Keep this file close to the TypeScript token tree so web, iOS, and Android
+//  stay visually consistent.
 //
 
 import SwiftUI
@@ -18,14 +16,12 @@ func acmColor01(red: Double, green: Double, blue: Double, opacity: Double = 1.0)
     Color(red: red, green: green, blue: blue, opacity: opacity)
 }
 
-// MARK: - Colors (Carbon — mirrors @conclave/ui-tokens `color`)
+// MARK: - Colors
 
 enum ACMColors {
-    // Brand hues (kept).
     static let primaryOrange = acmColor(red: 249.0, green: 95.0, blue: 74.0)   // accent  #F95F4A
     static let primaryPink = acmColor(red: 255.0, green: 0.0, blue: 122.0)     // accent2 #FF007A
 
-    // Semantic Carbon aliases (preferred names — match the web token tree).
     static let accent = primaryOrange
     static let accentSecondary = primaryPink
     static let bg = acmColor(red: 10.0, green: 10.0, blue: 11.0)               // #0a0a0b
@@ -39,15 +35,21 @@ enum ACMColors {
     static let scrim = acmColor(red: 0.0, green: 0.0, blue: 0.0, opacity: 0.7)
     static let speaking = primaryOrange
 
-    // Legacy names (kept so existing views compile) — repointed onto Carbon.
+    // Legacy aliases kept for existing views.
     static let cream = text                                                    // primary text → #fafafa
     static let dark = bg                                                       // app background
     static let darkAlt = bgAlt
     static let surface = acmColor(red: 24.0, green: 24.0, blue: 27.0)          // #18181b
     static let surfaceLight = surfaceRaised
     static let surfaceHover = acmColor(red: 46.0, green: 46.0, blue: 51.0)     // #2e2e33
+    static let lobbyPanel = acmColor(red: 14.0, green: 14.0, blue: 16.0)       // #0e0e10
+    static let lobbyPreview = acmColor(red: 18.0, green: 18.0, blue: 20.0)     // #121214
+    static let fieldBackground = acmColor(red: 250.0, green: 250.0, blue: 250.0, opacity: 0.03)
+    static let subtleFill = acmColor(red: 250.0, green: 250.0, blue: 250.0, opacity: 0.04)
+    static let subtleFillHover = acmColor(red: 250.0, green: 250.0, blue: 250.0, opacity: 0.08)
+    static let borderSubtle = acmColor(red: 250.0, green: 250.0, blue: 250.0, opacity: 0.10)
 
-    // Text tints (white-based, descending opacity — replaces the old cream tints).
+    // White-based text tints.
     static let creamLight = acmColor(red: 250.0, green: 250.0, blue: 250.0, opacity: 0.74)
     static let creamDim = acmColor(red: 250.0, green: 250.0, blue: 250.0, opacity: 0.56)
     static let creamMuted = acmColor(red: 250.0, green: 250.0, blue: 250.0, opacity: 0.40)
@@ -55,15 +57,13 @@ enum ACMColors {
     static let creamFaint = acmColor(red: 250.0, green: 250.0, blue: 250.0, opacity: 0.10)
     static let creamGhost = acmColor(red: 250.0, green: 250.0, blue: 250.0, opacity: 0.05)
 
-    // Accent tints.
     static let primaryOrangeDim = acmColor(red: 249.0, green: 95.0, blue: 74.0, opacity: 0.6)
     static let primaryOrangeFaint = acmColor(red: 249.0, green: 95.0, blue: 74.0, opacity: 0.15)
     static let primaryOrangeGhost = acmColor(red: 249.0, green: 95.0, blue: 74.0, opacity: 0.2)
     static let primaryPinkFaint = acmColor(red: 255.0, green: 0.0, blue: 122.0, opacity: 0.3)
     static let primaryPinkGhost = acmColor(red: 255.0, green: 0.0, blue: 122.0, opacity: 0.2)
 
-    // Glow tints — kept for source compatibility but NEUTRALISED (fully clear)
-    // so any lingering `.shadow(color:)` renders nothing. Flat design: no halos.
+    // Compatibility aliases. Intentionally clear to avoid old glow shadows.
     static let primaryOrangeSoft = Color.clear
     static let primaryPinkSoft = Color.clear
 
@@ -78,8 +78,8 @@ enum ACMColors {
         acmColor(red: 0.0, green: 0.0, blue: 0.0, opacity: opacity)
     }
 
-    // Avatar palette — mirrors `@conclave/ui-tokens` AVATAR_PALETTE EXACTLY so
-    // web + native give each person the same colour family. Flat solids only.
+    // Mirrors `@conclave/ui-tokens` AVATAR_PALETTE so users keep the same
+    // avatar color across web and native.
     static let avatarPalette: [Color] = [
         acmColor(red: 249.0, green: 95.0, blue: 74.0),    // #F95F4A orange
         acmColor(red: 255.0, green: 0.0, blue: 122.0),    // #FF007A pink
@@ -91,31 +91,21 @@ enum ACMColors {
         acmColor(red: 196.0, green: 78.0, blue: 207.0)    // #C44ECF magenta
     ]
 
-    /// Deterministic avatar fill. Ports the EXACT `@conclave/ui-tokens`
-    /// `avatarColor` algorithm so web + native map a given string to the same
-    /// palette index: trim the key, hash each UTF-16 code unit with the classic
-    /// `hash = (hash << 5) - hash + code` (forced to 32-bit signed after every
-    /// step, mirroring JS `hash |= 0`), then `abs(hash) % palette.count`.
-    /// Overflow-safe in Swift via `Int32` wrapping operators (`&<<`/`&-`/`&+`),
-    /// which truncate to 32 bits identically to JS `|0`.
+    /// Deterministic avatar fill matching the web `avatarColor` hash.
     static func avatarColor(for key: String) -> Color {
         let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
         if avatarPalette.isEmpty { return primaryOrange }
         if trimmed.isEmpty { return avatarPalette[0] }
         var hash: Int32 = 0
         for unit in trimmed.utf16 {
-            // (hash << 5) - hash == hash * 31, kept 32-bit signed via wrapping
-            // (`&*`/`&+` truncate to 32 bits identically to JS `hash |= 0`).
             hash = hash &* 31 &+ Int32(unit)
         }
-        // Math.abs(hash) % len, widened to 64-bit so Int32.min maps to
-        // 2147483648 (as JS does) instead of trapping on a 32-bit negate.
         let magnitude: Int64 = abs(Int64(hash))
         let index = Int(magnitude % Int64(avatarPalette.count))
         return avatarPalette[index]
     }
 
-    // MARK: - Hand Raised Colors (amber accent, matches web)
+    // MARK: - Hand Raised Colors
     static let handRaised = acmColor(red: 251.0, green: 191.0, blue: 36.0, opacity: 0.95)        // amber-400
     static let handRaisedBackground = acmColor(red: 251.0, green: 191.0, blue: 36.0, opacity: 0.2)
     static let handRaisedBorder = acmColor(red: 251.0, green: 191.0, blue: 36.0, opacity: 0.4)
@@ -145,7 +135,7 @@ enum ACMRadius {
     static let full: CGFloat = 999
 }
 
-// MARK: - Gradients (flattened to solids — no gradient fills anywhere)
+// MARK: - Gradients
 
 enum ACMGradients {
     static let primary: Color = ACMColors.primaryOrange
@@ -153,13 +143,20 @@ enum ACMGradients {
     static let cardBackground: Color = ACMColors.surface
 }
 
-// MARK: - Typography (single sans family — NO monospace)
+// MARK: - Typography
 
 enum ACMFont {
+    #if SKIP
+    static let regular = "polysans_neutral"
+    static let medium = "polysans_median"
+    static let bold = "polysans_bulky"
+    static let wideBold = "polysans_bulkywide"
+    #else
     static let regular = "PolySans Trial Neutral"
     static let medium = "PolySans Trial Median"
     static let bold = "PolySans Trial Bulky"
     static let wideBold = "PolySans Trial Bulky Wide"
+    #endif
 
     static func trial(_ size: CGFloat, weight: Font.Weight = .regular) -> Font {
         let name: String
@@ -174,8 +171,7 @@ enum ACMFont {
         return custom(name, size: size, fallback: .system(size: size, weight: weight, design: .default))
     }
 
-    /// Retained signature for call-site compatibility, but routes to the SANS
-    /// family (design: .default) — there is no monospace in the product.
+    /// Retained for call-site compatibility; routes to the sans family.
     static func mono(_ size: CGFloat, weight: Font.Weight = .medium) -> Font {
         return trial(size, weight: weight)
     }
@@ -186,7 +182,7 @@ enum ACMFont {
 
     static func custom(_ name: String, size: CGFloat, fallback: Font) -> Font {
         #if SKIP
-        return fallback
+        return .custom(name, size: size)
         #elseif canImport(UIKit)
         if UIFont(name: name, size: size) != nil {
             return .custom(name, size: size)
@@ -209,20 +205,13 @@ enum ACMSystemIcon {
         #endif
     }
 
-    /// Preferred for meeting glyphs. iOS → SF Symbol; Android → a REAL
-    /// material-icons-extended ImageVector via the Kotlin `MeetingIcon`
-    /// composable (SkipUI's `Image(systemName:)` only resolves a core glyph set,
-    /// so mic/cam/share/chat/etc. otherwise render wrong or as a warning
-    /// triangle). Android callers must pass an explicit semantic `tint`; SwiftUI
-    /// `.foregroundStyle(...)` is kept for iOS and does not cross the ComposeView.
+    /// Preferred for meeting glyphs. iOS uses SF Symbols; Android uses the
+    /// Kotlin `MeetingIcon` bridge because SkipUI only resolves a small core
+    /// glyph set through `Image(systemName:)`.
     @ViewBuilder
     static func icon(_ iosName: String, android key: String, size: CGFloat = 18, tint: String = "text") -> some View {
         #if SKIP
-        // Android Compose Icon needs an EXPLICIT tint — inherited LocalContentColor
-        // is dark inside .plain Buttons / sheets. iOS keeps using the caller's
-        // trailing `.foregroundStyle(...)`. The explicit `.frame` gives the
-        // ComposeView a definite size so Skip places it at its laid-out position
-        // (without it, icons inside a bottom-anchored overlay ghosted at the top).
+        // Compose needs explicit tint and size inside Skip-hosted buttons/sheets.
         ComposeView { context in
             MeetingIcon(name: key, size: Double(size), tint: tint, modifier: context.modifier)
         }
@@ -237,11 +226,7 @@ enum ACMSystemIcon {
 #if SKIP
 @ViewBuilder
 func ACMAndroidSemanticText(_ label: String) -> some View {
-    Text(label)
-        .font(Font.system(size: 1))
-        .foregroundStyle(Color.white.opacity(0.01))
-        .frame(width: 1, height: 1)
-        .lineLimit(1)
+    EmptyView()
 }
 #endif
 

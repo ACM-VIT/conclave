@@ -1368,6 +1368,34 @@ export const registerAdminHandlers = (
     respond(cb, { enabled: guard.room.isDmEnabled });
   });
 
+  socket.on("setReactionsDisabled", ({ disabled }: { disabled: boolean }, cb) => {
+    const guard = ensureAdminRoom(context);
+    if ("error" in guard) {
+      respond(cb, guard);
+      return;
+    }
+
+    const update = applyRoomPolicyUpdate(io, guard.room, { reactionsDisabled: disabled });
+    Logger.info(
+      `Room ${guard.room.id} reactions ${disabled ? "disabled" : "enabled"} by admin`,
+    );
+
+    respond(cb, {
+      success: true,
+      disabled: guard.room.isReactionsDisabled,
+      changed: update.changed,
+    });
+  });
+
+  socket.on("getReactionsDisabledStatus", (cb) => {
+    const guard = ensureAdminRoom(context);
+    if ("error" in guard) {
+      respond(cb, guard);
+      return;
+    }
+    respond(cb, { disabled: guard.room.isReactionsDisabled });
+  });
+
   socket.on(
     "admin:setPolicies",
     (
@@ -1377,6 +1405,7 @@ export const registerAdminHandlers = (
         chatLocked?: boolean;
         ttsDisabled?: boolean;
         dmEnabled?: boolean;
+        reactionsDisabled?: boolean;
       },
       cb,
     ) => {
@@ -1397,6 +1426,8 @@ export const registerAdminHandlers = (
           typeof data?.ttsDisabled === "boolean" ? data.ttsDisabled : undefined,
         dmEnabled:
           typeof data?.dmEnabled === "boolean" ? data.dmEnabled : undefined,
+        reactionsDisabled:
+          typeof data?.reactionsDisabled === "boolean" ? data.reactionsDisabled : undefined,
       });
 
       respond(cb, {
@@ -1408,6 +1439,7 @@ export const registerAdminHandlers = (
           chatLocked: guard.room.isChatLocked,
           ttsDisabled: guard.room.isTtsDisabled,
           dmEnabled: guard.room.isDmEnabled,
+          reactionsDisabled: guard.room.isReactionsDisabled,
         },
       });
     },

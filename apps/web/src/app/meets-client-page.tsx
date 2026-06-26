@@ -42,6 +42,7 @@ type MeetsClientPageProps = {
     name?: string | null;
   };
   isAdmin?: boolean;
+  canGhostJoin?: boolean;
 };
 
 export default function MeetsClientPage({
@@ -54,9 +55,11 @@ export default function MeetsClientPage({
   hideJoinUI = false,
   user,
   isAdmin = false,
+  canGhostJoin = false,
 }: MeetsClientPageProps) {
   const defaultUser = user;
   const resolvedIsAdmin = isAdmin;
+  const resolvedCanGhostJoin = canGhostJoin;
   const resolvedClientId = normalizeClientId(sfuClientId) || defaultClientId;
   const isPublicClient = resolvedClientId === "public";
 
@@ -67,11 +70,13 @@ export default function MeetsClientPage({
       options?: {
         user?: { id?: string; email?: string | null; name?: string | null };
         isHost?: boolean;
+        isGhost?: boolean;
         joinMode?: JoinMode;
       }
     ) => {
       const resolvedUser = options?.user ?? defaultUser;
       const isHost = Boolean(options?.isHost);
+      const isGhost = Boolean(options?.isGhost);
       const resolvedJoinMode = options?.joinMode ?? joinMode;
       const response = await fetch("/api/sfu/join", {
         method: "POST",
@@ -84,6 +89,7 @@ export default function MeetsClientPage({
           sessionId,
           user: resolvedUser,
           isHost,
+          isGhost,
           allowRoomCreation: forceJoinOnly,
           clientId: resolvedClientId,
           joinMode: resolvedJoinMode,
@@ -125,7 +131,7 @@ export default function MeetsClientPage({
         initialRoomId={resolvedInitialRoomId}
         enableRoomRouting={isPublicClient}
         forceJoinOnly={forceJoinOnly}
-        allowGhostMode={!isPublicClient}
+        allowGhostMode={true}
         bypassMediaPermissions={bypassMediaPermissions}
         joinMode={joinMode}
         autoJoinOnMount={autoJoinOnMount}
@@ -135,6 +141,7 @@ export default function MeetsClientPage({
         reactionAssets={reactionAssets}
         user={defaultUser}
         isAdmin={resolvedIsAdmin}
+        canGhostJoin={resolvedCanGhostJoin}
       />
     </div>
   );

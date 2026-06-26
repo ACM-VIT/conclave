@@ -15,6 +15,32 @@ struct ActiveAppBinaryMessage: Identifiable {
     let sequence: Int
 }
 
+struct MeetingGridSnapshot {
+    let userIds: [String]
+    let hiddenParticipantCount: Int
+    let includesLocalParticipant: Bool
+    let shouldShowDetachedSelfView: Bool
+
+    var tileCount: Int {
+        max(1, userIds.count)
+    }
+}
+
+struct MeetingTileStripSnapshot {
+    let shouldShowSelfTile: Bool
+    let participants: [Participant]
+}
+
+struct MeetingSpotlightSnapshot {
+    let pinnedUserId: String
+    let railUserIds: [String]
+    let usesSidebarRail: Bool
+
+    var hasRailTiles: Bool {
+        !railUserIds.isEmpty
+    }
+}
+
 @MainActor
 @Observable
 final class MeetingState {
@@ -35,6 +61,7 @@ final class MeetingState {
     var isNoGuests: Bool = false
     var isDmEnabled: Bool = true
     var isTtsDisabled: Bool = false
+    var isReactionsDisabled: Bool = false
     var meetingRequiresInviteCode: Bool = false
     var adminAllowedUserKeys: [String] = []
     var adminLockedAllowedUserKeys: [String] = []
@@ -68,6 +95,7 @@ final class MeetingState {
     var participants: [String: Participant] = [:]
     var displayNames: [String: String] = [:]
     var pendingUsers: [String: String] = [:]
+    var hasInitialPresenceSnapshot: Bool = false
 
     // Media State
     var isMuted: Bool = true
@@ -140,48 +168,50 @@ final class MeetingState {
         userId.hasPrefix(browserVideoUserIdPrefix)
     }
 
-    static func isVoiceAgentUserId(_ userId: String) -> Bool {
-        let normalized = userId.lowercased()
-        return normalized.hasPrefix("voice-agent-") || normalized.contains("@agent.conclave")
-    }
-
     static func isSystemUserId(_ userId: String) -> Bool {
         isBrowserAudioUserId(userId) || isBrowserVideoUserId(userId)
     }
 
     static func systemDisplayName(for userId: String) -> String? {
         if isBrowserVideoUserId(userId) {
-            return "Shared browser"
+            return "Shared Browser"
         }
         if isBrowserAudioUserId(userId) {
-            return "Shared browser audio"
-        }
-        if isVoiceAgentUserId(userId) {
-            return "Voice agent"
+            return "Shared Browser Audio"
         }
         return nil
     }
 
     func isLocalParticipantUserId(_ id: String) -> Bool {
+        isLocalIdentityUserId(id)
+    }
+
+    func isLocalIdentityUserId(_ id: String) -> Bool {
         let normalized = id.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalized.isEmpty else { return false }
-        return normalized == userId || normalized == sfuUserId
+        if normalized == userId || normalized == sfuUserId {
+            return true
+        }
+        guard !Self.hasSessionSuffix(normalized) else { return false }
+        let localKeys = [userId, sfuUserId].compactMap { $0 }.map { Self.userKeyPart(for: $0) }
+        let normalizedKey = Self.userKeyPart(for: normalized)
+        return localKeys.contains(normalizedKey)
     }
 
     func isRemoteParticipantUserId(_ id: String) -> Bool {
         let normalized = id.trimmingCharacters(in: .whitespacesAndNewlines)
         return !normalized.isEmpty
-            && !isLocalParticipantUserId(normalized)
+            && !isLocalIdentityUserId(normalized)
             && !Self.isSystemUserId(normalized)
+            && normalized != Self.overflowTileId
     }
 
     var sortedParticipants: [Participant] {
-        let speakerId = effectiveActiveSpeakerId
-        return participants.values
-            .filter { isRemoteParticipantUserId($0.id) }
+        let speakerParticipantId = resolvedRemoteParticipantId(for: effectiveActiveSpeakerId)
+        return uniqueRemoteParticipants
             .sorted { left, right in
-                let leftIsSpeaker = left.id == speakerId
-                let rightIsSpeaker = right.id == speakerId
+                let leftIsSpeaker = participant(left, matches: speakerParticipantId)
+                let rightIsSpeaker = participant(right, matches: speakerParticipantId)
                 if leftIsSpeaker != rightIsSpeaker {
                     return leftIsSpeaker
                 }
@@ -200,6 +230,58 @@ final class MeetingState {
             }
     }
 
+    private var uniqueRemoteParticipants: [Participant] {
+        var remotes: [Participant] = []
+        for participant in participants.values.sorted(by: { $0.id < $1.id })
+            where isRemoteParticipantUserId(participant.id) {
+            guard let index = remotes.firstIndex(where: { Self.userIdsMatch($0.id, participant.id) }) else {
+                remotes.append(participant)
+                continue
+            }
+            remotes[index] = Self.mergedRemoteParticipant(remotes[index], participant)
+        }
+        return remotes
+    }
+
+    private nonisolated static func mergedRemoteParticipant(_ left: Participant, _ right: Participant) -> Participant {
+        let preferredId = preferredRemoteParticipantId(left.id, right.id)
+        let primary = preferredId == right.id ? right : left
+        let secondary = preferredId == right.id ? left : right
+        return Participant(
+            id: preferredId,
+            displayName: preferredDisplayName(primary.displayName, secondary.displayName),
+            isMuted: left.isMuted && right.isMuted,
+            isCameraOff: left.isCameraOff && right.isCameraOff,
+            isHandRaised: left.isHandRaised || right.isHandRaised,
+            isGhost: left.isGhost || right.isGhost,
+            isWebinarAttendee: left.isWebinarAttendee || right.isWebinarAttendee,
+            isLeaving: left.isLeaving && right.isLeaving,
+            isScreenSharing: left.isScreenSharing || right.isScreenSharing,
+            connectionStatus: primary.connectionStatus ?? secondary.connectionStatus
+        )
+    }
+
+    private nonisolated static func preferredRemoteParticipantId(_ left: String, _ right: String) -> String {
+        let leftHasSession = hasSessionSuffix(left)
+        let rightHasSession = hasSessionSuffix(right)
+        if leftHasSession != rightHasSession {
+            return leftHasSession ? left : right
+        }
+        return left <= right ? left : right
+    }
+
+    private nonisolated static func preferredDisplayName(_ first: String?, _ second: String?) -> String? {
+        let firstName = normalizedDisplayName(first)
+        let secondName = normalizedDisplayName(second)
+        if let firstName, !isGenericGuestDisplayName(firstName) {
+            return firstName
+        }
+        if let secondName, !isGenericGuestDisplayName(secondName) {
+            return secondName
+        }
+        return firstName ?? secondName
+    }
+
     private func participantMediaPriority(_ participant: Participant) -> Int {
         if participant.isScreenSharing || !participant.isCameraOff {
             return 2
@@ -210,35 +292,79 @@ final class MeetingState {
         return 0
     }
 
+    var presentParticipants: [Participant] {
+        visibilityContext().presentParticipants
+    }
+
     var participantCount: Int {
-        1 + sortedParticipants.count
+        var count = 1
+        for participant in uniqueRemoteParticipants where !participant.isLeaving {
+            count += 1
+        }
+        return count
     }
 
     var visibleTileParticipants: [Participant] {
-        sortedParticipants.filter { participant in
+        visibilityContext().visibleTileParticipants
+    }
+
+    private struct ParticipantVisibilityContext {
+        let presentParticipants: [Participant]
+        let visibleTileParticipants: [Participant]
+        let resolvedSelfViewMode: MeetingSelfViewMode
+        let shouldShowSelfTile: Bool
+    }
+
+    private func visibilityContext() -> ParticipantVisibilityContext {
+        let present = sortedParticipants.filter { !$0.isLeaving }
+        let visible = visibleTileParticipants(from: present)
+        let canDetachSelfView = !present.isEmpty || hasPresentationSurface
+        let resolvedSelfViewMode: MeetingSelfViewMode
+        if !canDetachSelfView {
+            resolvedSelfViewMode = .tile
+        } else if selfViewMode != .auto {
+            resolvedSelfViewMode = selfViewMode
+        } else if viewMode == .auto && present.count == 1 && !hasPresentationSurface {
+            resolvedSelfViewMode = .floating
+        } else {
+            resolvedSelfViewMode = .tile
+        }
+        let shouldShowSelfTile = resolvedSelfViewMode == .tile || pinnedUserId.map(isLocalIdentityUserId) == true
+        return ParticipantVisibilityContext(
+            presentParticipants: present,
+            visibleTileParticipants: visible,
+            resolvedSelfViewMode: resolvedSelfViewMode,
+            shouldShowSelfTile: shouldShowSelfTile
+        )
+    }
+
+    private func visibleTileParticipants(from present: [Participant]) -> [Participant] {
+        let speakerParticipantId = resolvedRemoteParticipantId(for: effectiveActiveSpeakerId)
+        let pinnedParticipantId = resolvedRemoteParticipantId(for: pinnedUserId)
+        let visible = present.filter { participant in
             guard hideTilesWithoutVideo else { return true }
             return !participant.isCameraOff ||
                 participant.isScreenSharing ||
-                participant.id == effectiveActiveSpeakerId ||
-                participant.id == pinnedUserId
+                self.participant(participant, matches: speakerParticipantId) ||
+                self.participant(participant, matches: pinnedParticipantId)
         }
+        if visible.isEmpty, let firstRemote = present.first {
+            return [firstRemote]
+        }
+        return visible
     }
 
     var canDetachSelfView: Bool {
-        participantCount > 1 || hasActiveScreenShare || activeAppId != nil || isBrowserActive
+        let context = visibilityContext()
+        return !context.presentParticipants.isEmpty || hasPresentationSurface
     }
 
     var resolvedSelfViewMode: MeetingSelfViewMode {
-        guard canDetachSelfView else { return .tile }
-        guard selfViewMode == .auto else { return selfViewMode }
-        if participantCount == 2 || hasActiveScreenShare || activeAppId != nil || isBrowserActive || usesSpotlightLayout {
-            return .floating
-        }
-        return .tile
+        visibilityContext().resolvedSelfViewMode
     }
 
     var shouldShowSelfTile: Bool {
-        resolvedSelfViewMode == .tile || pinnedUserId.map(isLocalParticipantUserId) == true
+        visibilityContext().shouldShowSelfTile
     }
 
     var shouldShowDetachedSelfView: Bool {
@@ -246,50 +372,146 @@ final class MeetingState {
     }
 
     var visibleGridUserIds: [String] {
+        visibleGridSnapshot().userIds
+    }
+
+    func visibleGridSnapshot() -> MeetingGridSnapshot {
+        let context = visibilityContext()
         var ids: [String] = []
-        if shouldShowSelfTile {
+        if context.shouldShowSelfTile {
             ids.append(userId)
         }
 
         let capacity = MeetingViewConstants.clampTiles(viewMaxTiles)
         let remoteCapacity = max(0, capacity - ids.count)
-        if visibleTileParticipants.count > remoteCapacity {
+        let visibleParticipants = context.visibleTileParticipants
+        if visibleParticipants.count <= remoteCapacity {
+            for participant in visibleParticipants {
+                ids.append(participant.id)
+            }
+        } else if remoteCapacity == 1 {
+            if let participant = visibleParticipants.first {
+                ids.append(participant.id)
+            }
+        } else {
             let visibleRemoteCount = max(0, remoteCapacity - 1)
-            for participant in visibleTileParticipants.prefix(visibleRemoteCount) {
+            for participant in visibleParticipants.prefix(visibleRemoteCount) {
                 ids.append(participant.id)
             }
             ids.append(Self.overflowTileId)
-        } else {
-            for participant in visibleTileParticipants {
-                ids.append(participant.id)
-            }
         }
         if ids.isEmpty {
             ids.append(userId)
         }
-        return Array(ids.prefix(capacity))
+        let clippedIds = Array(ids.prefix(capacity))
+        let hiddenParticipantCount: Int
+        if visibleParticipants.count > remoteCapacity {
+            if remoteCapacity > 1 {
+                hiddenParticipantCount = visibleParticipants.count - max(0, remoteCapacity - 1)
+            } else {
+                hiddenParticipantCount = max(0, visibleParticipants.count - remoteCapacity)
+            }
+        } else {
+            hiddenParticipantCount = 0
+        }
+        return MeetingGridSnapshot(
+            userIds: clippedIds,
+            hiddenParticipantCount: hiddenParticipantCount,
+            includesLocalParticipant: clippedIds.contains { isLocalIdentityUserId($0) },
+            shouldShowDetachedSelfView: context.resolvedSelfViewMode == .floating ||
+                context.resolvedSelfViewMode == .minimized
+        )
+    }
+
+    var visibleGridIncludesLocalParticipant: Bool {
+        visibleGridSnapshot().includesLocalParticipant
+    }
+
+    func participant(for id: String) -> Participant? {
+        let normalized = id.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else { return nil }
+        guard isRemoteParticipantUserId(normalized) else {
+            return nil
+        }
+
+        if let participant = uniqueRemoteParticipants.first(where: { Self.userIdsMatch($0.id, normalized) }) {
+            return participant
+        }
+        return participants[normalized]
+    }
+
+    private func resolvedRemoteParticipantId(for id: String?) -> String? {
+        let normalized = id?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !normalized.isEmpty,
+              !isLocalIdentityUserId(normalized) else { return nil }
+        if let participant = participant(for: normalized) {
+            return participant.id
+        }
+        return normalized
+    }
+
+    func presentRemoteParticipantId(for id: String?) -> String? {
+        let normalized = id?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !normalized.isEmpty,
+              !isLocalIdentityUserId(normalized),
+              let participant = participant(for: normalized),
+              isRemoteParticipantUserId(participant.id),
+              !participant.isLeaving else { return nil }
+        return participant.id
+    }
+
+    private func participant(_ participant: Participant, matches resolvedId: String?) -> Bool {
+        guard let resolvedId else { return false }
+        return Self.userIdsMatch(participant.id, resolvedId)
     }
 
     var visibleGridTileCount: Int {
-        max(1, visibleGridUserIds.count)
+        visibleGridSnapshot().tileCount
     }
 
     var hiddenGridParticipantsCount: Int {
+        visibleGridSnapshot().hiddenParticipantCount
+    }
+
+    func tileStripSnapshot() -> MeetingTileStripSnapshot {
+        let context = visibilityContext()
         let capacity = MeetingViewConstants.clampTiles(viewMaxTiles)
-        let selfSlot = shouldShowSelfTile ? 1 : 0
-        let remoteCapacity = max(0, capacity - selfSlot)
-        guard visibleTileParticipants.count > remoteCapacity else { return 0 }
-        return visibleTileParticipants.count - max(0, remoteCapacity - 1)
+        let remoteLimit = max(0, capacity - (context.shouldShowSelfTile ? 1 : 0))
+        return MeetingTileStripSnapshot(
+            shouldShowSelfTile: context.shouldShowSelfTile,
+            participants: Array(context.visibleTileParticipants.prefix(remoteLimit))
+        )
+    }
+
+    func spotlightSnapshot() -> MeetingSpotlightSnapshot {
+        let context = visibilityContext()
+        let pinnedId = spotlightUserId ?? userId
+        let usesSidebar = usesSidebarLayout
+        let tileLimit = usesSidebar
+            ? MeetingViewConstants.clampStageRailTiles(viewMaxTiles)
+            : MeetingViewConstants.clampTiles(viewMaxTiles)
+        var ids: [String] = []
+        if !isLocalParticipantUserId(pinnedId) && context.shouldShowSelfTile {
+            ids.append(userId)
+        }
+        for participant in context.visibleTileParticipants where participant.id != pinnedId {
+            ids.append(participant.id)
+        }
+        return MeetingSpotlightSnapshot(
+            pinnedUserId: pinnedId,
+            railUserIds: Array(ids.prefix(max(0, tileLimit - 1))),
+            usesSidebarRail: usesSidebar
+        )
     }
 
     var resolvedViewMode: MeetingResolvedViewMode {
         if isWebinarAttendee {
-            return webinarSpeakerUserId == nil ? .tiled : .spotlight
+            return renderableStageUserId(webinarSpeakerUserId) == nil ? .tiled : .spotlight
         }
 
         switch viewMode {
         case .auto:
-            if pinnedUserId != nil || participantCount == 2 {
+            if hasRenderablePinnedUser || participantCount == 2 {
                 return .spotlight
             }
             if participantCount <= MeetingViewConstants.autoTiledThreshold {
@@ -309,12 +531,28 @@ final class MeetingState {
         resolvedViewMode == .sidebar
     }
 
+    private var hasRenderablePinnedUser: Bool {
+        renderableStageUserId(pinnedUserId) != nil
+    }
+
     var pendingUsersCount: Int {
         pendingUsers.count
     }
 
     var hasActiveScreenShare: Bool {
-        activeScreenShareUserId != nil
+        renderableScreenShareUserId != nil
+    }
+
+    var hasActiveRemoteScreenShare: Bool {
+        hasActiveScreenShare && !isScreenSharing
+    }
+
+    var presentationScreenShareUserId: String? {
+        renderableScreenShareUserId
+    }
+
+    var hasPresentationSurface: Bool {
+        hasActiveScreenShare || activeAppId != nil || isBrowserActive
     }
 
     var isScreenShareSupported: Bool {
@@ -348,18 +586,70 @@ final class MeetingState {
         if activeAppId == "dev-playground" {
             return "Dev playground"
         }
-        return activeAppId
+        return Self.fallbackAppName(for: activeAppId)
+    }
+
+    private nonisolated static func fallbackAppName(for appId: String) -> String {
+        var words: [String] = []
+        var currentWord = ""
+        for character in appId {
+            let value = String(character)
+            if value == "-" || value == "_" || character.isWhitespace || character.isNewline {
+                if !currentWord.isEmpty {
+                    words.append(currentWord)
+                    currentWord = ""
+                }
+            } else {
+                currentWord += value
+            }
+        }
+        if !currentWord.isEmpty {
+            words.append(currentWord)
+        }
+        guard !words.isEmpty else { return appId }
+
+        return words
+            .map { word in
+                let lowercased = word.lowercased()
+                return lowercased.prefix(1).uppercased() + lowercased.dropFirst()
+            }
+            .joined(separator: " ")
     }
 
     var spotlightUserId: String? {
-        if isWebinarAttendee, let webinarSpeakerUserId {
+        if isWebinarAttendee, let webinarSpeakerUserId = renderableStageUserId(webinarSpeakerUserId) {
             return webinarSpeakerUserId
         }
-        if let pinnedUserId {
+        if let pinnedUserId = renderableStageUserId(pinnedUserId) {
             return pinnedUserId
         }
         guard resolvedViewMode != .tiled else { return nil }
         return preferredStageUserId
+    }
+
+    private func renderableStageUserId(_ userId: String?) -> String? {
+        let normalized = userId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !normalized.isEmpty else { return nil }
+        if isLocalParticipantUserId(normalized) {
+            return self.userId
+        }
+        guard let participant = participant(for: normalized),
+              isRemoteParticipantUserId(participant.id),
+              !participant.isLeaving else { return nil }
+        return participant.id
+    }
+
+    private var renderableScreenShareUserId: String? {
+        let normalized = activeScreenShareUserId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !normalized.isEmpty else { return nil }
+        if isLocalIdentityUserId(normalized) {
+            return isScreenSharing ? userId : nil
+        }
+        guard let participant = participant(for: normalized),
+              isRemoteParticipantUserId(participant.id),
+              !participant.isLeaving,
+              participant.isScreenSharing else { return nil }
+        return participant.id
     }
 
     var usesSpotlightLayout: Bool {
@@ -371,17 +661,56 @@ final class MeetingState {
             if isLocalParticipantUserId(speakerId), !isCameraOff {
                 return userId
             }
-            if let participant = participants[speakerId],
+            if let participant = participant(for: speakerId),
                isRemoteParticipantUserId(participant.id),
+               !participant.isLeaving,
                !participant.isCameraOff {
                 return participant.id
             }
         }
-        return visibleTileParticipants.first?.id ?? sortedParticipants.first?.id ?? userId
+        return visibleTileParticipants.first?.id ?? presentParticipants.first?.id ?? userId
     }
 
     var effectiveActiveSpeakerId: String? {
         ttsSpeakerId ?? activeSpeakerId
+    }
+
+    func isEffectiveActiveSpeaker(_ id: String) -> Bool {
+        let normalized = id.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty,
+              let speakerId = effectiveActiveSpeakerId?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !speakerId.isEmpty else {
+            return false
+        }
+
+        if isLocalIdentityUserId(normalized) || isLocalIdentityUserId(speakerId) {
+            return isLocalIdentityUserId(normalized) && isLocalIdentityUserId(speakerId)
+        }
+
+        if let participant = participant(for: speakerId) {
+            return Self.userIdsMatch(participant.id, normalized)
+        }
+
+        return Self.userIdsMatch(speakerId, normalized)
+    }
+
+    func isPinnedParticipant(_ id: String) -> Bool {
+        let normalized = id.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty,
+              let pinnedUserId = pinnedUserId?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !pinnedUserId.isEmpty else {
+            return false
+        }
+
+        if isLocalIdentityUserId(normalized) || isLocalIdentityUserId(pinnedUserId) {
+            return isLocalIdentityUserId(normalized) && isLocalIdentityUserId(pinnedUserId)
+        }
+
+        if let participant = participant(for: pinnedUserId) {
+            return Self.userIdsMatch(participant.id, normalized)
+        }
+
+        return Self.userIdsMatch(pinnedUserId, normalized)
     }
 
     var meetingLink: String {
@@ -390,40 +719,207 @@ final class MeetingState {
 
     static func meetingLink(for roomId: String) -> String {
         let trimmed = roomId.trimmingCharacters(in: .whitespacesAndNewlines)
-        let encoded = trimmed.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? trimmed
+        let encoded = trimmed.addingPercentEncoding(withAllowedCharacters: meetingLinkPathAllowed) ?? trimmed
         return "https://conclave.acmvit.in/\(encoded)"
     }
 
+    private nonisolated static let meetingLinkPathAllowed: CharacterSet = {
+        var allowed = CharacterSet.urlPathAllowed
+        allowed.remove(charactersIn: "/?#")
+        return allowed
+    }()
+
     func displayName(for id: String) -> String {
         let normalized = id.trimmingCharacters(in: .whitespacesAndNewlines)
-        if isLocalParticipantUserId(normalized) {
+        if isLocalIdentityUserId(normalized) {
             return displayName.isEmpty ? "You" : displayName
         }
         if let systemName = Self.systemDisplayName(for: normalized) {
             return systemName
         }
-        if let displayName = displayNames[normalized]?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !displayName.isEmpty {
+        let exactSnapshotName = Self.normalizedDisplayName(displayNames[normalized])
+        if let displayName = exactSnapshotName,
+           !Self.isGenericGuestDisplayName(displayName) {
             return displayName
         }
-        if let displayName = participants[normalized]?.displayName?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !displayName.isEmpty {
+        let exactParticipantName = Self.normalizedDisplayName(participants[normalized]?.displayName)
+        if let displayName = exactParticipantName,
+           !Self.isGenericGuestDisplayName(displayName) {
             return displayName
         }
-        return "Guest"
+        let aliasName = aliasedDisplayName(for: normalized)
+        if let displayName = aliasName,
+           !Self.isGenericGuestDisplayName(displayName) {
+            return displayName
+        }
+        let fallbackName = Self.fallbackDisplayName(for: normalized)
+        if let displayName = exactSnapshotName {
+            return Self.shouldUseGenericDisplayName(displayName)
+                ? displayName
+                : fallbackName
+        }
+        if let displayName = exactParticipantName {
+            return Self.shouldUseGenericDisplayName(displayName)
+                ? displayName
+                : fallbackName
+        }
+        if let displayName = aliasName {
+            return Self.shouldUseGenericDisplayName(displayName)
+                ? displayName
+                : fallbackName
+        }
+        return fallbackName
+    }
+
+    private func aliasedDisplayName(for userId: String) -> String? {
+        let userKey = Self.userKeyPart(for: userId)
+        guard !userKey.isEmpty else { return nil }
+        var fallbackName: String?
+        for (candidateId, name) in displayNames {
+            guard Self.userKeyPart(for: candidateId) == userKey else { continue }
+            guard let displayName = Self.normalizedDisplayName(name) else { continue }
+            if !Self.isGenericGuestDisplayName(displayName) {
+                return displayName
+            }
+            fallbackName = fallbackName ?? displayName
+        }
+        for (candidateId, participant) in participants {
+            guard Self.userKeyPart(for: candidateId) == userKey else { continue }
+            guard let displayName = Self.normalizedDisplayName(participant.displayName) else { continue }
+            if !Self.isGenericGuestDisplayName(displayName) {
+                return displayName
+            }
+            fallbackName = fallbackName ?? displayName
+        }
+        return fallbackName
+    }
+
+    private nonisolated static func normalizedDisplayName(_ value: String?) -> String? {
+        let displayName = NativeDisplayNameNormalizer.normalize(value)
+        return displayName.isEmpty ? nil : displayName
+    }
+
+    private nonisolated static func isGenericGuestDisplayName(_ value: String) -> Bool {
+        let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !normalized.isEmpty else { return true }
+        if normalized == "guest" ||
+            normalized == "unknown" ||
+            normalized == "participant" ||
+            normalized == "anonymous" {
+            return true
+        }
+        if normalized.hasPrefix("guest ") {
+            let suffix = normalized.dropFirst("guest ".count).trimmingCharacters(in: .whitespacesAndNewlines)
+            if let first = suffix.first, "0123456789".contains(first) {
+                return true
+            }
+        }
+        if normalized.hasPrefix("guest-") {
+            return true
+        }
+        return normalized.hasSuffix("@guest.conclave") || normalized.hasSuffix("@guest.com")
+    }
+
+    private nonisolated static func shouldUseGenericDisplayName(_ value: String) -> Bool {
+        !isGenericGuestDisplayName(value)
+    }
+
+    nonisolated static func mediaFallbackDisplayName(_ displayName: String?, userId: String) -> String {
+        let normalizedName = normalizedDisplayName(displayName)
+        if let normalizedName,
+           !isGenericGuestDisplayName(normalizedName) {
+            return normalizedName
+        }
+
+        let normalizedUserId = userId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trackOwnerId = normalizedUserId.hasSuffix("-screen")
+            ? String(normalizedUserId.dropLast("-screen".count))
+            : normalizedUserId
+        let fallbackName = fallbackDisplayName(for: trackOwnerId)
+        return fallbackName
+    }
+
+    nonisolated static func fallbackDisplayName(for userId: String) -> String {
+        let normalized = userId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else { return "Guest" }
+
+        let withoutInstanceSuffix = userKeyPart(for: normalized)
+        if withoutInstanceSuffix.hasPrefix("guest-") {
+            return "Guest"
+        }
+        let handle = withoutInstanceSuffix.components(separatedBy: "@").first ?? withoutInstanceSuffix
+        let allowed = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+        var rawWords: [String] = []
+        var currentWord = ""
+        for character in handle {
+            if allowed.contains(character) {
+                currentWord += String(character)
+            } else if !currentWord.isEmpty {
+                rawWords.append(currentWord)
+                currentWord = ""
+                if rawWords.count >= 2 { break }
+            }
+        }
+        if rawWords.count < 2, !currentWord.isEmpty {
+            rawWords.append(currentWord)
+        }
+        if !rawWords.isEmpty {
+            var formattedWords: [String] = []
+            for word in rawWords.prefix(2) {
+                formattedWords.append(word.prefix(1).uppercased() + word.dropFirst().lowercased())
+            }
+            return formattedWords.joined(separator: " ")
+        }
+
+        return handle.isEmpty ? normalized : handle
+    }
+
+    private nonisolated static func userKeyPart(for userId: String) -> String {
+        let normalized = userId.trimmingCharacters(in: .whitespacesAndNewlines)
+        return normalized.components(separatedBy: "#").first ?? normalized
+    }
+
+    private nonisolated static func hasSessionSuffix(_ userId: String) -> Bool {
+        userId.contains("#")
+    }
+
+    private nonisolated static func userIdsMatch(_ lhs: String, _ rhs: String) -> Bool {
+        let left = lhs.trimmingCharacters(in: .whitespacesAndNewlines)
+        let right = rhs.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !left.isEmpty, !right.isEmpty else { return false }
+        if left == right { return true }
+        guard userKeyPart(for: left) == userKeyPart(for: right) else { return false }
+        return !left.contains("#") || !right.contains("#")
     }
 
     func isHostUser(_ id: String) -> Bool {
         let normalized = id.trimmingCharacters(in: .whitespacesAndNewlines)
         let localIds = [userId, sfuUserId].compactMap { $0 }
+        let isLocalIdentity = isLocalIdentityUserId(normalized)
         if !hostUserIds.isEmpty {
-            return hostUserIds.contains(normalized)
-                || (isLocalParticipantUserId(normalized) && localIds.contains { hostUserIds.contains($0) })
+            return hostUserIds.contains { Self.userIdsMatch($0, normalized) }
+                || (isLocalIdentity && localIds.contains { localId in
+                    hostUserIds.contains { Self.userIdsMatch($0, localId) }
+                })
         }
         if let hostUserId {
-            return hostUserId == normalized
-                || (isLocalParticipantUserId(normalized) && localIds.contains(hostUserId))
+            return Self.userIdsMatch(hostUserId, normalized)
+                || (isLocalIdentity && localIds.contains { Self.userIdsMatch(hostUserId, $0) })
         }
-        return isAdmin && isLocalParticipantUserId(normalized)
+        return isAdmin && isLocalIdentity
+    }
+
+    func canPromoteHost(userId: String) -> Bool {
+        let normalized = userId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard isAdmin,
+              !isWebinarAttendee,
+              !normalized.isEmpty,
+              !isHostUser(normalized) else {
+            return false
+        }
+        guard let participant = participant(for: normalized) else {
+            return true
+        }
+        return !participant.isGhost && !participant.isWebinarAttendee
     }
 }

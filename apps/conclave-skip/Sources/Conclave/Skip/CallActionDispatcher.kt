@@ -4,26 +4,32 @@ import android.os.Handler
 import android.os.Looper
 import java.util.concurrent.atomic.AtomicInteger
 
-/// Routes call-control actions originating OUTSIDE the SwiftUI view tree (the
-/// ongoing-call notification's Mute/Leave actions, and the Picture-in-Picture
-/// RemoteActions) back to the active MeetingViewModel.
-///
-/// The transpiled MeetingViewModel registers its `toggleMute` / `leaveCall`
-/// closures here while in a call (and clears them on leave). A notification
-/// BroadcastReceiver or the PiP action receiver runs on a binder/main thread,
-/// so every callback is hopped onto the main thread (the VM is @MainActor).
+/**
+ * Routes notification and PiP call controls back to the active MeetingViewModel.
+ * Receivers can run off the main thread, so every registered callback is posted
+ * to the main looper before invoking Swift/Skip UI state.
+ */
 object CallActionDispatcher {
     private val mainHandler = Handler(Looper.getMainLooper())
     private val actionLock = Any()
 
     @Volatile private var onToggleMute: (() -> Unit)? = null
     @Volatile private var onLeave: (() -> Unit)? = null
+    @Volatile private var onPipEntered: (() -> Unit)? = null
+    @Volatile private var onPipRefresh: (() -> Unit)? = null
     private val generation = AtomicInteger(0)
 
-    fun register(mute: () -> Unit, leave: () -> Unit) {
+    fun register(
+        mute: () -> Unit,
+        leave: () -> Unit,
+        pipEntered: (() -> Unit)? = null,
+        pipRefresh: (() -> Unit)? = null
+    ) {
         synchronized(actionLock) {
             onToggleMute = mute
             onLeave = leave
+            onPipEntered = pipEntered
+            onPipRefresh = pipRefresh
             generation.incrementAndGet()
         }
     }
@@ -32,6 +38,8 @@ object CallActionDispatcher {
         synchronized(actionLock) {
             onToggleMute = null
             onLeave = null
+            onPipEntered = null
+            onPipRefresh = null
             generation.incrementAndGet()
         }
     }
@@ -50,6 +58,20 @@ object CallActionDispatcher {
         }
     }
 
+    fun pictureInPictureEntered() {
+        val snapshot = pipEnteredSnapshot() ?: return
+        mainHandler.post {
+            actionIfCurrent(snapshot, ::onPipEntered)?.invoke()
+        }
+    }
+
+    fun pictureInPictureContentRefresh() {
+        val snapshot = pipRefreshSnapshot() ?: return
+        mainHandler.post {
+            actionIfCurrent(snapshot, ::onPipRefresh)?.invoke()
+        }
+    }
+
     private data class ActionSnapshot(
         val generation: Int,
         val action: () -> Unit
@@ -61,6 +83,14 @@ object CallActionDispatcher {
 
     private fun leaveSnapshot(): ActionSnapshot? = synchronized(actionLock) {
         onLeave?.let { ActionSnapshot(generation.get(), it) }
+    }
+
+    private fun pipEnteredSnapshot(): ActionSnapshot? = synchronized(actionLock) {
+        onPipEntered?.let { ActionSnapshot(generation.get(), it) }
+    }
+
+    private fun pipRefreshSnapshot(): ActionSnapshot? = synchronized(actionLock) {
+        onPipRefresh?.let { ActionSnapshot(generation.get(), it) }
     }
 
     private fun actionIfCurrent(

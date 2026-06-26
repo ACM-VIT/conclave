@@ -32,10 +32,6 @@ struct NativeAuthError: LocalizedError {
     }
 }
 
-private struct NativeAuthProvidersResponse: Decodable {
-    let providers: [String]?
-}
-
 private struct NativeSocialSignInRequest: Encodable {
     struct IdentityToken: Encodable {
         struct User: Encodable {
@@ -86,6 +82,103 @@ private struct NativeDeleteUserResponse: Decodable {
     let message: String?
 }
 
+private struct NativeAuthProvidersResponse: Decodable {
+    let providers: NativeAuthProviderList?
+}
+
+private struct NativeAuthProviderList: Decodable {
+    let ids: [String]
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let ids = try? container.decode([String].self) {
+            self.ids = ids
+            return
+        }
+        if let providers = try? container.decode([NativeAuthProviderDescriptor].self) {
+            self.ids = providers.compactMap(\.id)
+            return
+        }
+        if let providers = try? container.decode([String: NativeAuthIgnoredProviderValue].self) {
+            self.ids = providers.keys.sorted()
+            return
+        }
+        self.ids = []
+    }
+}
+
+private struct NativeAuthProviderDescriptor: Decodable {
+    let id: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case provider
+        case providerId
+        case name
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try Self.decodeFirstString(
+            from: container,
+            keys: [.id, .provider, .providerId, .name]
+        )
+    }
+
+    private static func decodeFirstString(
+        from container: KeyedDecodingContainer<CodingKeys>,
+        keys: [CodingKeys]
+    ) throws -> String? {
+        for key in keys {
+            if let value = try container.decodeIfPresent(String.self, forKey: key) {
+                return value
+            }
+        }
+        return nil
+    }
+}
+
+private struct NativeAuthIgnoredProviderValue: Decodable {
+    init(from decoder: Decoder) throws {}
+}
+
+enum NativeAuthCookiePolicy {
+    static func isAuthCookieName(_ name: String) -> Bool {
+        let normalized = name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return normalized.contains("better-auth") ||
+            normalized.contains("session") ||
+            normalized.contains("auth")
+    }
+
+    static func cookieDomainMatchesHost(cookieDomain rawDomain: String?, targetHost rawHost: String?) -> Bool {
+        guard let host = normalizedHost(rawHost) else { return false }
+        guard let domain = normalizedHost(rawDomain) else { return true }
+        return host == domain ||
+            host.hasSuffix(".\(domain)") ||
+            domain.hasSuffix(".\(host)")
+    }
+
+    private static func normalizedHost(_ value: String?) -> String? {
+        let normalized = value?
+            .trimmingCharacters(in: CharacterSet(charactersIn: ".").union(.whitespacesAndNewlines))
+            .lowercased() ?? ""
+        return normalized.isEmpty ? nil : normalized
+    }
+}
+
+private struct NativeAuthHTTPResult {
+    let data: Data
+    let statusCode: Int
+}
+
+#if SKIP
+private struct AndroidNativeHTTPResponse: Decodable {
+    let statusCode: Int
+    let body: String
+    let setCookieHeaders: [String]
+}
+#endif
+
 enum NativeAuthService {
     static func fetchEnabledProviders() async throws -> Set<NativeAuthProvider> {
         guard let baseURL = resolveAppBaseURL(),
@@ -98,16 +191,14 @@ enum NativeAuthService {
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         prepareAuthRequest(&request, url: url)
 
-        let (data, response) = try await URLSession.shared.data(for: request)
-        storeAuthCookies(from: response, url: url)
+        let result = try await performAuthRequest(request, url: url)
+        let data = result.data
 
-        guard let statusCode = (response as? HTTPURLResponse)?.statusCode,
-              (200...299).contains(statusCode) else {
+        guard (200...299).contains(result.statusCode) else {
             throw NativeAuthError(message: responseSummary(from: data) ?? "Couldn't load sign-in providers.")
         }
 
-        let decoded = try JSONDecoder().decode(NativeAuthProvidersResponse.self, from: data)
-        return Set((decoded.providers ?? []).compactMap { NativeAuthProvider(rawValue: $0) })
+        return try decodeEnabledProviders(from: data)
     }
 
     static func fetchCurrentSessionUser() async throws -> NativeAuthenticatedUser? {
@@ -121,9 +212,9 @@ enum NativeAuthService {
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         prepareAuthRequest(&request, url: url)
 
-        let (data, response) = try await URLSession.shared.data(for: request)
-        storeAuthCookies(from: response, url: url)
-        let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
+        let result = try await performAuthRequest(request, url: url)
+        let data = result.data
+        let statusCode = result.statusCode
 
         if statusCode == 401 || statusCode == 403 {
             return nil
@@ -189,9 +280,9 @@ enum NativeAuthService {
         request.httpBody = try JSONEncoder().encode(requestBody)
         prepareAuthRequest(&request, url: url)
 
-        let (data, response) = try await URLSession.shared.data(for: request)
-        storeAuthCookies(from: response, url: url)
-        let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
+        let result = try await performAuthRequest(request, url: url)
+        let data = result.data
+        let statusCode = result.statusCode
         let decoded = try? JSONDecoder().decode(NativeSocialSignInResponse.self, from: data)
 
         guard (200...299).contains(statusCode) else {
@@ -226,9 +317,7 @@ enum NativeAuthService {
         request.setValue(originString(from: trustedAuthBaseURL(from: baseURL)), forHTTPHeaderField: "Origin")
         prepareAuthRequest(&request, url: url)
 
-        if let (_, response) = try? await URLSession.shared.data(for: request) {
-            storeAuthCookies(from: response, url: url)
-        }
+        _ = try? await performAuthRequest(request, url: url)
         clearStoredSessionCookies(matching: baseURL)
     }
 
@@ -246,9 +335,9 @@ enum NativeAuthService {
         request.httpBody = Data("{}".utf8)
         prepareAuthRequest(&request, url: url)
 
-        let (data, response) = try await URLSession.shared.data(for: request)
-        storeAuthCookies(from: response, url: url)
-        let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
+        let result = try await performAuthRequest(request, url: url)
+        let data = result.data
+        let statusCode = result.statusCode
         let decoded = try? JSONDecoder().decode(NativeDeleteUserResponse.self, from: data)
 
         guard (200...299).contains(statusCode) else {
@@ -268,16 +357,35 @@ enum NativeAuthService {
     }
 
     static func resolveAppBaseURL() -> URL? {
-        for key in [
-            "CONCLAVE_AUTH_BASE_URL",
-            "AUTH_BASE_URL",
-            "BETTER_AUTH_BASE_URL",
-            "BETTER_AUTH_URL",
-            "APP_BASE_URL",
-            "NEXT_PUBLIC_APP_URL",
-            "NEXT_PUBLIC_SITE_URL",
-            "EXPO_PUBLIC_APP_URL"
-        ] {
+        #if SKIP
+        if SfuJoinService.isAndroidDebugRuntime() {
+            return resolveDebugAppBaseURL()
+        }
+        return resolveProductionAppBaseURL()
+        #elseif DEBUG
+        return resolveDebugAppBaseURL()
+        #else
+        return resolveProductionAppBaseURL()
+        #endif
+    }
+
+    private static func resolveProductionAppBaseURL() -> URL? {
+        for key in appBaseURLConfigKeys {
+            if let value = ProcessInfo.processInfo.environment[key],
+               let url = configuredProductionAppBaseURL(from: value) {
+                return url
+            }
+            if let value = NativeRuntimeConfig.bundledString(forKey: key),
+               let url = configuredProductionAppBaseURL(from: value) {
+                return url
+            }
+        }
+
+        return baseURL(from: SfuJoinService.productionJoinURL())
+    }
+
+    private static func resolveDebugAppBaseURL() -> URL? {
+        for key in appBaseURLConfigKeys {
             if let value = ProcessInfo.processInfo.environment[key],
                let url = configuredBaseURL(from: value) {
                 return url
@@ -295,6 +403,17 @@ enum NativeAuthService {
         return baseURL(from: joinURL)
     }
 
+    private static let appBaseURLConfigKeys = [
+        "CONCLAVE_AUTH_BASE_URL",
+        "AUTH_BASE_URL",
+        "BETTER_AUTH_BASE_URL",
+        "BETTER_AUTH_URL",
+        "APP_BASE_URL",
+        "NEXT_PUBLIC_APP_URL",
+        "NEXT_PUBLIC_SITE_URL",
+        "EXPO_PUBLIC_APP_URL"
+    ]
+
     static func isNativeGoogleSignInAvailable() -> Bool {
         #if SKIP
         NativeGoogleSignInBridge.isAvailable()
@@ -303,6 +422,20 @@ enum NativeAuthService {
         #else
         false
         #endif
+    }
+
+    static func decodeEnabledProviders(from data: Data) throws -> Set<NativeAuthProvider> {
+        let decoder = JSONDecoder()
+        let rawProviders: [String]
+
+        if let response = try? decoder.decode(NativeAuthProvidersResponse.self, from: data),
+           let providers = response.providers {
+            rawProviders = providers.ids
+        } else {
+            rawProviders = try decoder.decode(NativeAuthProviderList.self, from: data).ids
+        }
+
+        return Set(rawProviders.compactMap { NativeAuthProvider(rawValue: normalizedProviderId($0)) })
     }
 
     static func requestNativeGoogleIdentityToken() async throws -> NativeGoogleIdentityToken {
@@ -345,10 +478,31 @@ enum NativeAuthService {
         #endif
     }
 
+    static func cancelNativeGoogleSignIn() {
+        #if SKIP
+        NativeGoogleSignInBridge.cancel()
+        #endif
+    }
+
+    static func configuredAppBaseURL(from value: String) -> URL? {
+        configuredBaseURL(from: value)
+    }
+
+    static func configuredProductionAppBaseURL(from value: String) -> URL? {
+        guard let url = configuredBaseURL(from: value),
+              url.scheme?.lowercased() == "https",
+              let host = url.host,
+              SfuJoinService.isProductionHost(host) else {
+            return nil
+        }
+        return url
+    }
+
     private static func configuredBaseURL(from value: String) -> URL? {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty,
-              !SfuJoinService.isUnresolvedBuildSetting(trimmed) else {
+              !SfuJoinService.isUnresolvedBuildSetting(trimmed),
+              !SfuJoinService.shouldIgnoreAndroidPhysicalDebugLocalURL(trimmed) else {
             return nil
         }
 
@@ -361,6 +515,10 @@ enum NativeAuthService {
         }
 
         return baseURL(from: url)
+    }
+
+    private static func normalizedProviderId(_ value: String) -> String {
+        value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
 
     private static func shouldIgnoreBundledProductionBaseURL(_ url: URL) -> Bool {
@@ -433,6 +591,66 @@ enum NativeAuthService {
         _ = url
     }
 
+    private static func performAuthRequest(_ request: URLRequest, url: URL) async throws -> NativeAuthHTTPResult {
+        #if SKIP
+        let bodyString = request.httpBody.flatMap { String(data: $0, encoding: .utf8) }
+        let cookieHeader = request.value(forHTTPHeaderField: "Cookie")
+        let rawResponse: String = try await withCheckedThrowingContinuation { continuation in
+            var didResume = false
+            AndroidNativeHttpClient.requestJson(
+                method: request.httpMethod ?? "GET",
+                url: url.absoluteString,
+                body: bodyString,
+                accept: request.value(forHTTPHeaderField: "Accept"),
+                contentType: request.value(forHTTPHeaderField: "Content-Type"),
+                origin: request.value(forHTTPHeaderField: "Origin"),
+                clientId: nil,
+                cookieHeader: cookieHeader
+            ) { response, errorMessage in
+                guard !didResume else { return }
+                didResume = true
+
+                if let errorMessage,
+                   !errorMessage.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines).isEmpty {
+                    continuation.resume(throwing: NativeAuthError(message: errorMessage))
+                    return
+                }
+
+                guard let response else {
+                    continuation.resume(throwing: NativeAuthError(message: "Authentication request failed."))
+                    return
+                }
+
+                continuation.resume(returning: response)
+            }
+        }
+
+        let responseEnvelope = try JSONDecoder().decode(
+            AndroidNativeHTTPResponse.self,
+            from: Data(rawResponse.utf8)
+        )
+
+        for setCookieHeader in responseEnvelope.setCookieHeaders {
+            NativeAuthSessionBridge.storeSetCookieHeader(
+                setCookieHeader: setCookieHeader,
+                forURL: url.absoluteString
+            )
+        }
+
+        return NativeAuthHTTPResult(
+            data: responseEnvelope.body.data(using: String.Encoding.utf8) ?? Data(),
+            statusCode: responseEnvelope.statusCode
+        )
+        #else
+        let (data, response) = try await URLSession.shared.data(for: request)
+        storeAuthCookies(from: response, url: url)
+        return NativeAuthHTTPResult(
+            data: data,
+            statusCode: (response as? HTTPURLResponse)?.statusCode ?? 0
+        )
+        #endif
+    }
+
     private static func storeAuthCookies(from response: URLResponse, url: URL) {
         NativeCookieSupport.storeCookies(from: response, url: url)
     }
@@ -503,14 +721,13 @@ enum NativeAuthService {
 
         let targetHost = baseURL?.host?.lowercased()
         for cookie in cookies {
-            let cookieDomain = cookie.domain.trimmingCharacters(in: CharacterSet(charactersIn: ".")).lowercased()
-            let isAuthCookie =
-                cookie.name.contains("better-auth") ||
-                cookie.name.contains("session") ||
-                cookie.name.contains("auth")
-            let matchesHost = targetHost.map { host in
-                cookieDomain == host || host.hasSuffix(".\(cookieDomain)")
-            } ?? isAuthCookie
+            let isAuthCookie = NativeAuthCookiePolicy.isAuthCookieName(cookie.name)
+            let matchesHost = targetHost.map {
+                NativeAuthCookiePolicy.cookieDomainMatchesHost(
+                    cookieDomain: cookie.domain,
+                    targetHost: $0
+                )
+            } ?? true
 
             if matchesHost && isAuthCookie {
                 storage.deleteCookie(cookie)

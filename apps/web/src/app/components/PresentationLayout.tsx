@@ -1,12 +1,14 @@
 "use client";
 
-import { Ghost, Hand, Mic, MicOff, MonitorUp } from "lucide-react";
+import { Hand, Mic, MicOff, MonitorUp } from "lucide-react";
 import { memo, useEffect, useRef } from "react";
 import { createPlaybackRecoveryScheduler } from "../lib/playback-recovery";
 import { useSmartParticipantOrder } from "../hooks/useSmartParticipantOrder";
 import type { Participant } from "../lib/types";
 import { isSystemUserId } from "../lib/utils";
+import { isRemoteParticipantVisible } from "../lib/participant-visibility";
 import { Avatar } from "@conclave/ui-tokens/web";
+import { GhostParticipantOverlay } from "./GhostParticipantChrome";
 import ParticipantVideo from "./ParticipantVideo";
 
 interface PresentationLayoutProps {
@@ -145,7 +147,8 @@ function PresentationLayout({
     Array.from(participants.values()).filter(
       (participant) =>
         participant.userId !== currentUserId &&
-        !isSystemUserId(participant.userId)
+        !isSystemUserId(participant.userId) &&
+        isRemoteParticipantVisible(participant, isGhost, currentUserId),
     ),
     activeSpeakerId
   );
@@ -193,16 +196,7 @@ function PresentationLayout({
               <Avatar id={userEmail} name={localDisplayName || userEmail} size={48} />
             </div>
           )}
-          {isGhost && (
-            <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/40">
-              <div className="flex flex-col items-center gap-2">
-                <Ghost size={36} strokeWidth={1.75} className="text-[#FF007A]" />
-                <span className="rounded-full border border-[#FF007A]/30 bg-black/60 px-2.5 py-1 text-[12px] font-medium text-[#FF007A]">
-                  Ghost mode
-                </span>
-              </div>
-            </div>
-          )}
+          {isGhost && <GhostParticipantOverlay compact label="Ghost mode" />}
           {isHandRaised && (
             <div
               className="absolute left-3 top-3 flex h-8 w-8 items-center justify-center rounded-full border border-amber-400/40 bg-amber-500/20 text-amber-300"

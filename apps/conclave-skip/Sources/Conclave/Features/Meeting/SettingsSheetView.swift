@@ -6,7 +6,7 @@ import UIKit
 
 // MARK: - Settings Sheet
 
-enum SettingsSheetPage {
+enum SettingsSheetPage: Equatable {
     case overview
     case room
     case roomAccess
@@ -22,6 +22,138 @@ enum SettingsSheetPage {
     case microphone
     case camera
     case speaker
+}
+
+enum SettingsDraftSyncPolicy {
+    static func shouldSyncWebinarCapacityDraft(page: SettingsSheetPage, hasLocalEdits: Bool) -> Bool {
+        !(page == .webinarCapacity && hasLocalEdits)
+    }
+
+    static func shouldSyncWebinarLinkDraft(page: SettingsSheetPage, hasLocalEdits: Bool) -> Bool {
+        !(page == .webinarLink && hasLocalEdits)
+    }
+}
+
+enum SettingsTimingPolicy {
+    static let webinarLinkFeedbackNanoseconds = UInt64(1_600_000_000)
+    static let displayNameAutoSaveNanoseconds = UInt64(650_000_000)
+
+    static func shouldApply(generation: Int, currentGeneration: Int) -> Bool {
+        generation == currentGeneration
+    }
+}
+
+enum SettingsDisplayNameAutoSavePolicy {
+    static func canSave(
+        _ value: String,
+        currentDisplayName: String,
+        connectionState: ConnectionState,
+        isWebinarAttendee: Bool
+    ) -> Bool {
+        let trimmed = NativeDisplayNameNormalizer.normalize(value)
+        let current = NativeDisplayNameNormalizer.normalize(currentDisplayName)
+        return !trimmed.isEmpty &&
+            trimmed != current &&
+            connectionState == .joined &&
+            !isWebinarAttendee
+    }
+
+    static func shouldApplyForRoom(actionRoomId: String?, currentRoomId: String) -> Bool {
+        NativeRoomIdNormalizer.matches(actionRoomId, currentRoomId)
+    }
+
+    static func shouldSyncInputFromServer(
+        hasInFlightUpdate: Bool,
+        hasPendingAutoSave: Bool,
+        hasLocalSavableDraft: Bool
+    ) -> Bool {
+        !hasInFlightUpdate &&
+            !hasPendingAutoSave &&
+            !hasLocalSavableDraft
+    }
+}
+
+enum SettingsSignOutCompletionPolicy {
+    static func shouldApply(
+        generation: Int,
+        currentGeneration: Int,
+        actionRoomId: String,
+        currentRoomId: String
+    ) -> Bool {
+        generation == currentGeneration &&
+            NativeRoomIdNormalizer.matches(actionRoomId, currentRoomId)
+    }
+}
+
+enum SettingsConfigRefreshTarget: Equatable {
+    case meeting
+    case webinar
+}
+
+enum SettingsRefreshPolicy {
+    static func scheduledRefreshTargets(
+        page: SettingsSheetPage,
+        isAdmin: Bool,
+        bodyReady: Bool,
+        isWebinarEnabled: Bool
+    ) -> [SettingsConfigRefreshTarget] {
+        guard bodyReady else { return [] }
+        return refreshTargets(page: page, isAdmin: isAdmin, isWebinarEnabled: isWebinarEnabled)
+    }
+
+    static func refreshTargets(
+        page: SettingsSheetPage,
+        isAdmin: Bool,
+        isWebinarEnabled: Bool
+    ) -> [SettingsConfigRefreshTarget] {
+        guard isAdmin else { return [] }
+        switch page {
+        case .overview:
+            return isWebinarEnabled ? [.meeting, .webinar] : [.meeting]
+        case .room,
+             .roomAccess,
+             .roomCommunication,
+             .meetingInviteCode:
+            return [.meeting]
+        case .webinar,
+             .webinarAccess,
+             .webinarCapacity,
+             .webinarInviteCode,
+             .webinarLink:
+            return [.webinar]
+        case .profile,
+             .audioVideo,
+             .microphone,
+             .camera,
+             .speaker:
+            return []
+        }
+    }
+
+    static func hasRefreshTarget(_ target: SettingsConfigRefreshTarget, in targets: [SettingsConfigRefreshTarget]) -> Bool {
+        for candidate in targets {
+            if candidate == target {
+                return true
+            }
+        }
+        return false
+    }
+
+    static func shouldRefreshAdminConfig(page: SettingsSheetPage, isAdmin: Bool) -> Bool {
+        !refreshTargets(page: page, isAdmin: isAdmin, isWebinarEnabled: true).isEmpty
+    }
+
+    static func shouldApplyScheduledRefresh(
+        scheduledPage: SettingsSheetPage,
+        currentPage: SettingsSheetPage,
+        scheduledRoomId: String,
+        currentRoomId: String,
+        bodyReady: Bool
+    ) -> Bool {
+        bodyReady &&
+            scheduledPage == currentPage &&
+            NativeRoomIdNormalizer.matches(scheduledRoomId, currentRoomId)
+    }
 }
 
 struct SettingsSheetView: View {
@@ -50,43 +182,62 @@ struct SettingsSheetView: View {
     @State private var webinarInviteCodeInput = ""
     @State private var webinarMaxAttendeesInput = ""
     @State private var webinarLinkCodeInput = ""
+    @State private var hasEditedWebinarMaxAttendeesInput = false
+    @State private var hasEditedWebinarLinkCodeInput = false
     @State private var didCopyWebinarLink = false
     @State private var webinarLinkCopyFeedbackGeneration = 0
+    @State private var webinarLinkActionGeneration = 0
+    @State private var displayNameAutoSaveGeneration = 0
+    @State private var signOutGeneration = 0
+    @State private var webinarLinkCopyFeedbackTask: Task<Void, Never>?
+    @State private var webinarLinkActionTask: Task<Void, Never>?
+    @State private var displayNameAutoSaveTask: Task<Void, Never>?
+    @State private var queuedDisplayNameAutoSave: String?
+    @State private var queuedDisplayNameAutoSaveRoomId: String?
+    @State private var shouldFlushQueuedDisplayNameAfterUpdate = false
     @State private var isConfirmingWebinarLinkRotation = false
     @State private var isSigningOut = false
     @State private var isUpdatingDisplayName = false
+    @State private var settingsRefreshTask: Task<Void, Never>?
 
     private var displayNameDraft: String {
-        displayNameInput.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private var canUpdateDisplayName: Bool {
-        !isUpdatingDisplayName
-            && !displayNameDraft.isEmpty
-            && displayNameDraft != viewModel.state.displayName
-            && viewModel.state.connectionState == .joined
-            && !viewModel.state.isWebinarAttendee
+        NativeDisplayNameNormalizer.normalize(displayNameInput)
     }
 
     private var isMeetingInviteCodeEmpty: Bool {
         meetingInviteCodeInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    private var roomAccessSummary: String {
-        let lockState = viewModel.state.isRoomLocked ? "Locked" : "Open"
-        let guestState = viewModel.state.isNoGuests ? "Guests blocked" : "Guests allowed"
-        return "\(lockState), \(guestState)"
+    private var roomAccessSummary: String? {
+        var states: [String] = []
+        if viewModel.state.isRoomLocked {
+            states.append("Locked")
+        }
+        if viewModel.state.isNoGuests {
+            states.append("Guests blocked")
+        }
+        return states.isEmpty ? nil : states.joined(separator: ", ")
     }
 
-    private var roomCommunicationSummary: String {
-        let chatState = viewModel.state.isChatLocked ? "Chat locked" : "Chat open"
-        let dmState = viewModel.state.isDmEnabled ? "DMs on" : "DMs off"
-        let ttsState = viewModel.state.isTtsDisabled ? "TTS off" : "TTS on"
-        return "\(chatState), \(dmState), \(ttsState)"
+    private var roomCommunicationSummary: String? {
+        var states: [String] = []
+        if viewModel.state.isChatLocked {
+            states.append("Chat locked")
+        }
+        if !viewModel.state.isDmEnabled {
+            states.append("DMs off")
+        }
+        if viewModel.state.isTtsDisabled {
+            states.append("TTS off")
+        }
+        if viewModel.state.isReactionsDisabled {
+            states.append("Reactions off")
+        }
+        return states.isEmpty ? nil : states.joined(separator: ", ")
     }
 
-    private var meetingInviteCodeSummary: String {
-        viewModel.state.meetingRequiresInviteCode ? "Required before joining" : "Not required"
+    private var meetingInviteCodeSummary: String? {
+        viewModel.state.meetingRequiresInviteCode ? "Required before joining" : nil
     }
 
     private var mediaControlsDisabled: Bool {
@@ -99,25 +250,30 @@ struct SettingsSheetView: View {
             && !viewModel.state.isWebinarAttendee
     }
 
-    private var webinarAccessSummary: String {
-        let accessState = viewModel.state.isWebinarPublicAccess ? "Public access" : "Private access"
-        let lockState = viewModel.state.isWebinarLocked ? "Locked" : "Open"
-        return "\(accessState), \(lockState)"
+    private var webinarAccessSummary: String? {
+        var states: [String] = []
+        if viewModel.state.isWebinarPublicAccess {
+            states.append("Public access")
+        }
+        if viewModel.state.isWebinarLocked {
+            states.append("Locked")
+        }
+        return states.isEmpty ? nil : states.joined(separator: ", ")
     }
 
     private var webinarCapacitySummary: String {
         "\(viewModel.state.webinarAttendeeCount) / \(viewModel.state.webinarMaxAttendees) attendees"
     }
 
-    private var webinarInviteCodeSummary: String {
-        viewModel.state.webinarRequiresInviteCode ? "Required for attendees" : "Not required"
+    private var webinarInviteCodeSummary: String? {
+        viewModel.state.webinarRequiresInviteCode ? "Required for attendees" : nil
     }
 
-    private var webinarLinkSummary: String {
+    private var webinarLinkSummary: String? {
         if let slug = viewModel.state.webinarLinkSlug, !slug.isEmpty {
             return "/w/\(slug)"
         }
-        return "No link generated"
+        return nil
     }
 
     private var microphoneSummary: String {
@@ -199,11 +355,21 @@ struct SettingsSheetView: View {
     }
 
     private func syncWebinarCapacityDraftFromState() {
+        guard SettingsDraftSyncPolicy.shouldSyncWebinarCapacityDraft(
+            page: page,
+            hasLocalEdits: hasEditedWebinarMaxAttendeesInput
+        ) else { return }
         webinarMaxAttendeesInput = "\(viewModel.state.webinarMaxAttendees)"
+        hasEditedWebinarMaxAttendeesInput = false
     }
 
     private func syncWebinarLinkDraftFromState() {
+        guard SettingsDraftSyncPolicy.shouldSyncWebinarLinkDraft(
+            page: page,
+            hasLocalEdits: hasEditedWebinarLinkCodeInput
+        ) else { return }
         webinarLinkCodeInput = viewModel.state.webinarLinkSlug ?? ""
+        hasEditedWebinarLinkCodeInput = false
     }
 
     private func syncWebinarDraftsFromState() {
@@ -217,12 +383,12 @@ struct SettingsSheetView: View {
     }
 
     private func selectedAudioInputLabel() -> String? {
-        guard let selectedId = viewModel.currentAudioInputId(), !selectedId.isEmpty else { return nil }
+        guard let selectedId = viewModel.activeAudioInputId(), !selectedId.isEmpty else { return nil }
         return viewModel.availableAudioInputs().first { $0.id == selectedId }?.label
     }
 
     private func selectedAudioOutputLabel() -> String? {
-        guard let selectedId = viewModel.currentAudioOutputId(), !selectedId.isEmpty else { return nil }
+        guard let selectedId = viewModel.activeAudioOutputId(), !selectedId.isEmpty else { return nil }
         return viewModel.availableAudioOutputs().first { $0.id == selectedId }?.label
     }
 
@@ -268,7 +434,7 @@ struct SettingsSheetView: View {
     @ViewBuilder
     private func settingsNavigationRow(
         _ title: String,
-        subtitle: String,
+        subtitle: String? = nil,
         icon: String,
         androidIcon: String,
         isActive: Bool = false,
@@ -277,6 +443,8 @@ struct SettingsSheetView: View {
     ) -> some View {
         let iconTint = isDisabled ? ACMColors.textFaint : (isActive ? ACMColors.primaryOrange : ACMColors.textMuted)
         let androidTint = isDisabled ? "faint" : (isActive ? "accent" : "muted")
+        let rowSubtitle = subtitle?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let hasSubtitle = rowSubtitle?.isEmpty == false
 
         Button(action: action) {
             HStack(spacing: ACMSpacing.sm) {
@@ -293,11 +461,13 @@ struct SettingsSheetView: View {
                         .foregroundStyle(isDisabled ? ACMColors.textFaint : ACMColors.text)
                         .lineLimit(2)
                         .multilineTextAlignment(.leading)
-                    Text(subtitle)
-                        .font(ACMFont.trial(12))
-                        .foregroundStyle(ACMColors.textFaint)
-                        .lineLimit(2)
-                        .multilineTextAlignment(.leading)
+                    if let rowSubtitle, !rowSubtitle.isEmpty {
+                        Text(rowSubtitle)
+                            .font(ACMFont.trial(12))
+                            .foregroundStyle(ACMColors.textFaint)
+                            .lineLimit(2)
+                            .multilineTextAlignment(.leading)
+                    }
                 }
                 #if !SKIP
                 .fixedSize(horizontal: false, vertical: true)
@@ -311,7 +481,7 @@ struct SettingsSheetView: View {
                     .frame(width: 24, height: 24)
             }
             .padding(.horizontal, ACMSpacing.sm)
-            .frame(minHeight: 58)
+            .frame(minHeight: hasSubtitle ? 58.0 : 52.0)
             .frame(maxWidth: .infinity, alignment: .leading)
             #if !SKIP
             .contentShape(Rectangle())
@@ -373,8 +543,9 @@ struct SettingsSheetView: View {
 
             HStack(spacing: ACMSpacing.sm) {
                 Button {
-                    viewModel.setMeetingInviteCode(meetingInviteCodeInput)
-                    meetingInviteCodeInput = ""
+                    if viewModel.setMeetingInviteCode(meetingInviteCodeInput) {
+                        meetingInviteCodeInput = ""
+                    }
                 } label: {
                     HStack(spacing: 6) {
                         ACMSystemIcon.icon("checkmark", android: "check", size: 13, tint: canSetInviteCode ? "white" : "faint")
@@ -391,8 +562,9 @@ struct SettingsSheetView: View {
                 .disabled(!canSetInviteCode)
 
                 Button {
-                    viewModel.clearMeetingInviteCode()
-                    meetingInviteCodeInput = ""
+                    if viewModel.clearMeetingInviteCode() {
+                        meetingInviteCodeInput = ""
+                    }
                 } label: {
                     HStack(spacing: 6) {
                         ACMSystemIcon.icon("trash", android: "delete", size: 13, tint: canClearInviteCode ? "danger" : "faint")
@@ -415,8 +587,6 @@ struct SettingsSheetView: View {
     @ViewBuilder
     private func webinarSection() -> some View {
         VStack(alignment: .leading, spacing: ACMSpacing.xs) {
-            acmListSectionHeader("Webinar")
-
             MeetingSheetSectionCard {
                 settingsToggleRow(
                     viewModel.state.isWebinarEnabled ? "Webinar mode" : "Start webinar mode",
@@ -494,8 +664,6 @@ struct SettingsSheetView: View {
     @ViewBuilder
     private var webinarAccessSettingsContent: some View {
         VStack(alignment: .leading, spacing: ACMSpacing.xs) {
-            acmListSectionHeader("Attendee access")
-
             MeetingSheetSectionCard {
                 settingsToggleRow(
                     "Public access",
@@ -535,8 +703,6 @@ struct SettingsSheetView: View {
     @ViewBuilder
     private var webinarCapacitySettingsContent: some View {
         VStack(alignment: .leading, spacing: ACMSpacing.xs) {
-            acmListSectionHeader("Capacity")
-
             MeetingSheetSectionCard {
                 webinarCapacityRow()
             }
@@ -546,8 +712,6 @@ struct SettingsSheetView: View {
     @ViewBuilder
     private var webinarInviteCodeSettingsContent: some View {
         VStack(alignment: .leading, spacing: ACMSpacing.xs) {
-            acmListSectionHeader("Invite code")
-
             MeetingSheetSectionCard {
                 webinarInviteCodeRow()
             }
@@ -557,8 +721,6 @@ struct SettingsSheetView: View {
     @ViewBuilder
     private var webinarLinkSettingsContent: some View {
         VStack(alignment: .leading, spacing: ACMSpacing.xs) {
-            acmListSectionHeader("Webinar link")
-
             MeetingSheetSectionCard {
                 webinarLinkRow()
             }
@@ -592,7 +754,13 @@ struct SettingsSheetView: View {
             }
 
             HStack(spacing: ACMSpacing.sm) {
-                TextField("", text: $webinarMaxAttendeesInput, prompt: Text("500").foregroundStyle(ACMColors.textFaint))
+                TextField("", text: Binding(
+                    get: { webinarMaxAttendeesInput },
+                    set: {
+                        webinarMaxAttendeesInput = $0
+                        hasEditedWebinarMaxAttendeesInput = true
+                    }
+                ), prompt: Text("500").foregroundStyle(ACMColors.textFaint))
                     .textFieldStyle(.plain)
                     .font(ACMFont.trial(15))
                     .foregroundStyle(ACMColors.text)
@@ -615,8 +783,10 @@ struct SettingsSheetView: View {
 
                 Button {
                     if let value = webinarMaxAttendeesValue {
-                        viewModel.setWebinarMaxAttendees(value)
-                        webinarMaxAttendeesInput = "\(value)"
+                        if viewModel.setWebinarMaxAttendees(value) {
+                            webinarMaxAttendeesInput = "\(value)"
+                            hasEditedWebinarMaxAttendeesInput = false
+                        }
                     }
                 } label: {
                     Text("Save")
@@ -685,8 +855,9 @@ struct SettingsSheetView: View {
 
             HStack(spacing: ACMSpacing.sm) {
                 Button {
-                    viewModel.setWebinarInviteCode(webinarInviteCodeInput)
-                    webinarInviteCodeInput = ""
+                    if viewModel.setWebinarInviteCode(webinarInviteCodeInput) {
+                        webinarInviteCodeInput = ""
+                    }
                 } label: {
                     Text("Set")
                         .font(ACMFont.trial(14, weight: .medium))
@@ -700,8 +871,9 @@ struct SettingsSheetView: View {
                 .disabled(!canSetInviteCode)
 
                 Button {
-                    viewModel.clearWebinarInviteCode()
-                    webinarInviteCodeInput = ""
+                    if viewModel.clearWebinarInviteCode() {
+                        webinarInviteCodeInput = ""
+                    }
                 } label: {
                     Text("Remove")
                         .font(ACMFont.trial(14, weight: .medium))
@@ -744,18 +916,23 @@ struct SettingsSheetView: View {
                 Spacer()
             }
 
-            Text(viewModel.state.webinarLinkURL ?? webinarLinkLabel)
-                .font(ACMFont.trial(13))
-                .foregroundStyle(ACMColors.textFaint)
-                .lineLimit(1)
-                .padding(.horizontal, ACMSpacing.sm)
-                .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
-                .acmColorBackground(ACMColors.surfaceRaised)
-                .clipShape(RoundedRectangle(cornerRadius: ACMRadius.sm))
+            if let webinarLinkURL = viewModel.state.webinarLinkURL {
+                Text(webinarLinkURL)
+                    .font(ACMFont.trial(13))
+                    .foregroundStyle(ACMColors.textFaint)
+                    .lineLimit(1)
+                    .padding(.horizontal, ACMSpacing.sm)
+                    .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
+                    .acmColorBackground(ACMColors.surfaceRaised)
+                    .clipShape(RoundedRectangle(cornerRadius: ACMRadius.sm))
+            }
 
             TextField("", text: Binding(
                 get: { webinarLinkCodeInput },
-                set: { webinarLinkCodeInput = sanitizeWebinarLinkCode($0) }
+                set: {
+                    webinarLinkCodeInput = sanitizeWebinarLinkCode($0)
+                    hasEditedWebinarLinkCodeInput = true
+                }
             ), prompt: Text("custom-link").foregroundStyle(ACMColors.textFaint))
                 .textFieldStyle(.plain)
                 .font(ACMFont.trial(15))
@@ -780,9 +957,11 @@ struct SettingsSheetView: View {
 
             HStack(spacing: ACMSpacing.sm) {
                 Button {
-                    viewModel.setWebinarLinkSlug(sanitizedWebinarLinkInput)
-                    webinarLinkCodeInput = sanitizedWebinarLinkInput
-                    isConfirmingWebinarLinkRotation = false
+                    if viewModel.setWebinarLinkSlug(sanitizedWebinarLinkInput) {
+                        webinarLinkCodeInput = sanitizedWebinarLinkInput
+                        hasEditedWebinarLinkCodeInput = false
+                        isConfirmingWebinarLinkRotation = false
+                    }
                 } label: {
                     Text("Set link")
                         .font(ACMFont.trial(14, weight: .medium))
@@ -796,9 +975,11 @@ struct SettingsSheetView: View {
                 .disabled(!canSetLink)
 
                 Button {
-                    viewModel.clearWebinarLinkSlug()
-                    webinarLinkCodeInput = ""
-                    isConfirmingWebinarLinkRotation = false
+                    if viewModel.clearWebinarLinkSlug() {
+                        webinarLinkCodeInput = ""
+                        hasEditedWebinarLinkCodeInput = false
+                        isConfirmingWebinarLinkRotation = false
+                    }
                 } label: {
                     Text("Clear")
                         .font(ACMFont.trial(14, weight: .medium))
@@ -815,8 +996,9 @@ struct SettingsSheetView: View {
             HStack(spacing: ACMSpacing.sm) {
                 Button {
                     guard canUsePrimaryLinkAction else { return }
-                    Task {
+                    startWebinarLinkAction { generation in
                         if let link = await viewModel.copyableWebinarLink() {
+                            guard shouldApplyWebinarLinkAction(generation: generation) else { return }
                             isConfirmingWebinarLinkRotation = false
                             copyWebinarLink(link)
                         }
@@ -836,9 +1018,11 @@ struct SettingsSheetView: View {
                 if isConfirmingWebinarLinkRotation {
                     Button {
                         guard canConfirmLinkRotation else { return }
-                        Task {
+                        startWebinarLinkAction { generation in
                             if let link = await viewModel.rotateWebinarLink() {
+                                guard shouldApplyWebinarLinkAction(generation: generation) else { return }
                                 webinarLinkCodeInput = viewModel.state.webinarLinkSlug ?? ""
+                                hasEditedWebinarLinkCodeInput = false
                                 isConfirmingWebinarLinkRotation = false
                                 copyWebinarLink(link)
                             }
@@ -888,11 +1072,32 @@ struct SettingsSheetView: View {
         .padding(ACMSpacing.sm)
     }
 
-    private var webinarLinkLabel: String {
-        if let slug = viewModel.state.webinarLinkSlug, !slug.isEmpty {
-            return "/w/\(slug)"
+    private func startWebinarLinkAction(_ action: @escaping @MainActor (Int) async -> Void) {
+        webinarLinkActionTask?.cancel()
+        webinarLinkActionGeneration += 1
+        let generation = webinarLinkActionGeneration
+        webinarLinkActionTask = Task { @MainActor in
+            await action(generation)
+            guard SettingsTimingPolicy.shouldApply(
+                generation: generation,
+                currentGeneration: webinarLinkActionGeneration
+            ) else { return }
+            webinarLinkActionTask = nil
         }
-        return "No link generated"
+    }
+
+    private func shouldApplyWebinarLinkAction(generation: Int) -> Bool {
+        !Task.isCancelled &&
+            SettingsTimingPolicy.shouldApply(
+                generation: generation,
+                currentGeneration: webinarLinkActionGeneration
+            )
+    }
+
+    private func cancelWebinarLinkAction() {
+        webinarLinkActionTask?.cancel()
+        webinarLinkActionTask = nil
+        webinarLinkActionGeneration += 1
     }
 
     private func sanitizeWebinarLinkCode(_ value: String) -> String {
@@ -918,14 +1123,27 @@ struct SettingsSheetView: View {
         #else
         ClipboardHelper.copyToClipboard(text: link, label: "Webinar link")
         #endif
+        webinarLinkCopyFeedbackTask?.cancel()
         webinarLinkCopyFeedbackGeneration += 1
         let generation = webinarLinkCopyFeedbackGeneration
         didCopyWebinarLink = true
-        Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 1_600_000_000)
-            guard webinarLinkCopyFeedbackGeneration == generation else { return }
+        webinarLinkCopyFeedbackTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: SettingsTimingPolicy.webinarLinkFeedbackNanoseconds)
+            guard !Task.isCancelled,
+                  SettingsTimingPolicy.shouldApply(
+                    generation: generation,
+                    currentGeneration: webinarLinkCopyFeedbackGeneration
+                  ) else { return }
             didCopyWebinarLink = false
+            webinarLinkCopyFeedbackTask = nil
         }
+    }
+
+    private func resetWebinarLinkCopyFeedback() {
+        webinarLinkCopyFeedbackTask?.cancel()
+        webinarLinkCopyFeedbackTask = nil
+        webinarLinkCopyFeedbackGeneration += 1
+        didCopyWebinarLink = false
     }
 
     @ViewBuilder
@@ -949,61 +1167,180 @@ struct SettingsSheetView: View {
 #endif
 #endif
                 .autocorrectionDisabled(true)
+                .disabled(viewModel.state.connectionState != .joined || viewModel.state.isWebinarAttendee)
                 .onAppear {
-                    displayNameInput = viewModel.state.displayName
+                    syncDisplayNameInputFromServerIfIdle(viewModel.state.displayName)
                 }
         }
         .padding(.horizontal, ACMSpacing.sm)
         .frame(height: 52)
     }
 
-    @ViewBuilder
-    private func updateDisplayNameRow() -> some View {
-        Button {
-            submitDisplayNameUpdate()
-        } label: {
-            HStack(spacing: ACMSpacing.sm) {
-                MeetingSheetIconBox(
-                    icon: "paperplane.fill",
-                    androidIcon: "send",
-                    tint: canUpdateDisplayName ? Color.white : ACMColors.textFaint,
-                    androidTint: canUpdateDisplayName ? "white" : "faint",
-                    background: canUpdateDisplayName ? ACMColors.primaryOrange : ACMColors.surfaceRaised
-                )
-
-                Text(isUpdatingDisplayName ? "Updating display name" : "Update display name")
-                    .font(ACMFont.trial(15, weight: .medium))
-                    .foregroundStyle(canUpdateDisplayName ? ACMColors.text : ACMColors.textFaint)
-                    .lineLimit(1)
-
-                Spacer()
-            }
-            .padding(.horizontal, ACMSpacing.sm)
-            .frame(height: 52)
-            .frame(maxWidth: .infinity, alignment: .leading)
-#if !SKIP
-            .contentShape(Rectangle())
-#endif
-        }
-        .buttonStyle(.plain)
-        .disabled(!canUpdateDisplayName)
-        .opacity(canUpdateDisplayName ? 1.0 : 0.62)
+    private func canSaveDisplayName(_ value: String) -> Bool {
+        SettingsDisplayNameAutoSavePolicy.canSave(
+            value,
+            currentDisplayName: viewModel.state.displayName,
+            connectionState: viewModel.state.connectionState,
+            isWebinarAttendee: viewModel.state.isWebinarAttendee
+        )
     }
 
-    private func submitDisplayNameUpdate() {
-        guard canUpdateDisplayName else { return }
-        isUpdatingDisplayName = true
-        Task { @MainActor in
-            let updated = await viewModel.updateDisplayName(displayNameInput)
-            if updated {
-                displayNameInput = viewModel.state.displayName
+    private func shouldAutoSaveDisplayName(_ value: String) -> Bool {
+        !isUpdatingDisplayName && canSaveDisplayName(value)
+    }
+
+    private func shouldSyncDisplayNameInputFromServer() -> Bool {
+        SettingsDisplayNameAutoSavePolicy.shouldSyncInputFromServer(
+            hasInFlightUpdate: isUpdatingDisplayName,
+            hasPendingAutoSave: displayNameAutoSaveTask != nil || queuedDisplayNameAutoSave != nil,
+            hasLocalSavableDraft: canSaveDisplayName(displayNameInput)
+        )
+    }
+
+    private func syncDisplayNameInputFromServerIfIdle(_ name: String) {
+        guard shouldSyncDisplayNameInputFromServer() else { return }
+        displayNameInput = name
+    }
+
+    private func queueDisplayNameAutoSave(_ value: String, flushAfterCurrentUpdate: Bool = false) {
+        guard canSaveDisplayName(value) else {
+            queuedDisplayNameAutoSave = nil
+            queuedDisplayNameAutoSaveRoomId = nil
+            shouldFlushQueuedDisplayNameAfterUpdate = false
+            return
+        }
+        queuedDisplayNameAutoSave = value
+        queuedDisplayNameAutoSaveRoomId = viewModel.state.roomId
+        if flushAfterCurrentUpdate {
+            shouldFlushQueuedDisplayNameAfterUpdate = true
+        }
+    }
+
+    private func consumeQueuedDisplayNameAutoSave() -> (name: String, roomId: String?, shouldFlush: Bool)? {
+        let queuedName = queuedDisplayNameAutoSave
+        let queuedRoomId = queuedDisplayNameAutoSaveRoomId
+        let shouldFlush = shouldFlushQueuedDisplayNameAfterUpdate
+        queuedDisplayNameAutoSave = nil
+        queuedDisplayNameAutoSaveRoomId = nil
+        shouldFlushQueuedDisplayNameAfterUpdate = false
+        guard let queuedName else { return nil }
+        return (queuedName, queuedRoomId, shouldFlush)
+    }
+
+    private func scheduleDisplayNameAutoSave() {
+        displayNameAutoSaveTask?.cancel()
+        displayNameAutoSaveTask = nil
+        displayNameAutoSaveGeneration += 1
+        if isUpdatingDisplayName {
+            queueDisplayNameAutoSave(displayNameInput)
+            return
+        }
+        guard shouldAutoSaveDisplayName(displayNameInput) else { return }
+        let pendingName = displayNameInput
+        let generation = displayNameAutoSaveGeneration
+        displayNameAutoSaveTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: SettingsTimingPolicy.displayNameAutoSaveNanoseconds)
+            guard !Task.isCancelled,
+                  SettingsTimingPolicy.shouldApply(
+                    generation: generation,
+                    currentGeneration: displayNameAutoSaveGeneration
+                  ) else { return }
+            await submitDisplayNameUpdate(pendingName, generation: generation)
+            if SettingsTimingPolicy.shouldApply(
+                generation: generation,
+                currentGeneration: displayNameAutoSaveGeneration
+            ) {
+                displayNameAutoSaveTask = nil
             }
-            isUpdatingDisplayName = false
+        }
+    }
+
+    private func submitDisplayNameUpdate(
+        _ name: String,
+        generation: Int? = nil,
+        rescheduleIfNeeded: Bool = true
+    ) async {
+        if let generation,
+           !SettingsTimingPolicy.shouldApply(
+               generation: generation,
+               currentGeneration: displayNameAutoSaveGeneration
+           ) {
+            return
+        }
+        if isUpdatingDisplayName {
+            queueDisplayNameAutoSave(name)
+            return
+        }
+        guard shouldAutoSaveDisplayName(name) else { return }
+        isUpdatingDisplayName = true
+        let updated = await viewModel.updateDisplayName(name)
+        isUpdatingDisplayName = false
+        let isCurrentGeneration = generation.map {
+            SettingsTimingPolicy.shouldApply(
+                generation: $0,
+                currentGeneration: displayNameAutoSaveGeneration
+            )
+        } ?? true
+        if updated,
+           isCurrentGeneration,
+           NativeDisplayNameNormalizer.normalize(name) == displayNameDraft {
+            displayNameInput = viewModel.state.displayName
+        }
+        if let queued = consumeQueuedDisplayNameAutoSave(),
+           SettingsDisplayNameAutoSavePolicy.shouldApplyForRoom(
+               actionRoomId: queued.roomId,
+               currentRoomId: viewModel.state.roomId
+           ),
+           canSaveDisplayName(queued.name) {
+            if queued.shouldFlush {
+                await submitDisplayNameUpdate(queued.name, rescheduleIfNeeded: false)
+            } else if rescheduleIfNeeded {
+                displayNameInput = queued.name
+                scheduleDisplayNameAutoSave()
+            }
+            return
+        }
+        if rescheduleIfNeeded, shouldAutoSaveDisplayName(displayNameInput) {
+            scheduleDisplayNameAutoSave()
+        }
+    }
+
+    private func cancelDisplayNameAutoSave() {
+        displayNameAutoSaveTask?.cancel()
+        displayNameAutoSaveTask = nil
+        displayNameAutoSaveGeneration += 1
+    }
+
+    private func resetDisplayNameAutoSaveForRoomChange() {
+        cancelDisplayNameAutoSave()
+        queuedDisplayNameAutoSave = nil
+        queuedDisplayNameAutoSaveRoomId = nil
+        shouldFlushQueuedDisplayNameAfterUpdate = false
+        displayNameInput = viewModel.state.displayName
+    }
+
+    private func flushPendingDisplayNameAutoSave() {
+        let pendingName = displayNameInput
+        let pendingRoomId = viewModel.state.roomId
+        cancelDisplayNameAutoSave()
+        if isUpdatingDisplayName {
+            queueDisplayNameAutoSave(pendingName, flushAfterCurrentUpdate: true)
+            return
+        }
+        guard shouldAutoSaveDisplayName(pendingName) else { return }
+        Task { @MainActor in
+            guard SettingsDisplayNameAutoSavePolicy.shouldApplyForRoom(
+                actionRoomId: pendingRoomId,
+                currentRoomId: viewModel.state.roomId
+            ) else { return }
+            await submitDisplayNameUpdate(pendingName, rescheduleIfNeeded: false)
         }
     }
 
     @ViewBuilder
     private func accountRow(_ user: AppState.User) -> some View {
+        let subtitle = accountSubtitle(for: user)
+
         HStack(spacing: ACMSpacing.sm) {
             MeetingSheetIconBox(
                 icon: "person.crop.circle.badge.checkmark",
@@ -1017,10 +1354,12 @@ struct SettingsSheetView: View {
                     .font(ACMFont.trial(15, weight: .medium))
                     .foregroundStyle(ACMColors.text)
                     .lineLimit(1)
-                Text(accountSubtitle(for: user))
-                    .font(ACMFont.trial(12))
-                    .foregroundStyle(ACMColors.textFaint)
-                    .lineLimit(1)
+                if !subtitle.isEmpty {
+                    Text(subtitle)
+                        .font(ACMFont.trial(12))
+                        .foregroundStyle(ACMColors.textFaint)
+                        .lineLimit(1)
+                }
             }
 
             Spacer()
@@ -1033,10 +1372,13 @@ struct SettingsSheetView: View {
     private func signOutRow() -> some View {
         Button {
             guard !isSigningOut else { return }
+            let actionRoomId = viewModel.state.roomId
+            let generation = nextSignOutGeneration()
             isSigningOut = true
             Task { @MainActor in
                 viewModel.handleLocalSignOutDuringMeeting()
                 await appState.clearAuthenticationAndWait()
+                guard shouldApplySignOutCompletion(generation: generation, roomId: actionRoomId) else { return }
                 isSigningOut = false
             }
         } label: {
@@ -1067,6 +1409,25 @@ struct SettingsSheetView: View {
         .opacity(isSigningOut ? 0.62 : 1.0)
     }
 
+    private func nextSignOutGeneration() -> Int {
+        signOutGeneration += 1
+        return signOutGeneration
+    }
+
+    private func shouldApplySignOutCompletion(generation: Int, roomId: String) -> Bool {
+        SettingsSignOutCompletionPolicy.shouldApply(
+            generation: generation,
+            currentGeneration: signOutGeneration,
+            actionRoomId: roomId,
+            currentRoomId: viewModel.state.roomId
+        )
+    }
+
+    private func resetSignOutAction() {
+        signOutGeneration += 1
+        isSigningOut = false
+    }
+
     private func accountTitle(for user: AppState.User) -> String {
         if user.provider == .guest {
             return "Guest"
@@ -1077,7 +1438,7 @@ struct SettingsSheetView: View {
 
     private func accountSubtitle(for user: AppState.User) -> String {
         if user.provider == .guest {
-            return "Temporary meeting identity"
+            return ""
         }
         let provider = user.provider == .apple ? "Apple" : "Google"
         let email = user.email?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -1137,19 +1498,24 @@ struct SettingsSheetView: View {
 
             Spacer()
 
-            Picker("", selection: Binding(
-                get: { viewModel.currentAudioOutputId() ?? "" },
-                set: { next in
-                    viewModel.setAudioOutput(next)
+            if outputs.isEmpty {
+                Text("System default")
+                    .font(ACMFont.trial(14))
+                    .foregroundStyle(ACMColors.textMuted)
+            } else {
+                Picker("", selection: Binding(
+                    get: { viewModel.currentAudioOutputId() ?? "" },
+                    set: { next in
+                        viewModel.setAudioOutput(next)
+                    }
+                )) {
+                    Text("System default").tag("")
+                    ForEach(outputs) { device in
+                        Text(device.label).tag(device.id)
+                    }
                 }
-            )) {
-                Text("System default").tag("")
-                ForEach(outputs) { device in
-                    Text(device.label).tag(device.id)
-                }
+                .tint(ACMColors.primaryOrange)
             }
-            .tint(ACMColors.primaryOrange)
-            .disabled(outputs.isEmpty)
         }
         .padding(.horizontal, ACMSpacing.sm)
         .frame(height: 52)
@@ -1215,6 +1581,87 @@ struct SettingsSheetView: View {
     }
 
     @ViewBuilder
+    private func cameraFacingRow() -> some View {
+        let canSwitch = viewModel.canSwitchLocalCamera()
+
+        Button {
+            viewModel.switchLocalCamera()
+        } label: {
+            HStack(spacing: ACMSpacing.sm) {
+                MeetingSheetIconBox(
+                    icon: "arrow.triangle.2.circlepath.camera.fill",
+                    androidIcon: "camera.flip",
+                    tint: canSwitch ? ACMColors.primaryOrange : ACMColors.textFaint,
+                    androidTint: canSwitch ? "accent" : "faint"
+                )
+
+                rowLabel("Camera source")
+
+                Spacer()
+
+                Text(viewModel.localCameraFacing.label)
+                    .font(ACMFont.trial(14))
+                    .foregroundStyle(canSwitch ? ACMColors.textMuted : ACMColors.textFaint)
+                    .lineLimit(1)
+
+                ACMSystemIcon.icon("chevron.right", android: "arrow.forward", size: 15, tint: canSwitch ? "muted" : "faint")
+                    .foregroundStyle(canSwitch ? ACMColors.textMuted : ACMColors.textFaint)
+            }
+            .padding(.horizontal, ACMSpacing.sm)
+            .frame(height: 52)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            #if !SKIP
+            .contentShape(Rectangle())
+            #endif
+        }
+        .buttonStyle(.plain)
+        .disabled(!canSwitch)
+        .opacity(canSwitch ? 1.0 : 0.62)
+    }
+
+    private func scheduleSettingsRefreshIfReady() {
+        settingsRefreshTask?.cancel()
+        settingsRefreshTask = nil
+        let scheduledPage = page
+        let scheduledRoomId = viewModel.state.roomId
+        let refreshTargets = SettingsRefreshPolicy.scheduledRefreshTargets(
+            page: page,
+            isAdmin: viewModel.state.isAdmin,
+            bodyReady: bodyReady,
+            isWebinarEnabled: viewModel.state.isWebinarEnabled
+        )
+        guard !refreshTargets.isEmpty else { return }
+        settingsRefreshTask = Task { @MainActor in
+            #if SKIP
+            try? await Task.sleep(nanoseconds: 220_000_000)
+            guard !Task.isCancelled else { return }
+            #endif
+            guard SettingsRefreshPolicy.shouldApplyScheduledRefresh(
+                scheduledPage: scheduledPage,
+                currentPage: page,
+                scheduledRoomId: scheduledRoomId,
+                currentRoomId: viewModel.state.roomId,
+                bodyReady: bodyReady
+            ) else { return }
+            if SettingsRefreshPolicy.hasRefreshTarget(.meeting, in: refreshTargets) {
+                await viewModel.refreshMeetingConfigNow()
+            }
+            if SettingsRefreshPolicy.hasRefreshTarget(.webinar, in: refreshTargets) {
+                await viewModel.refreshWebinarConfigNow()
+            }
+            guard !Task.isCancelled,
+                  SettingsRefreshPolicy.shouldApplyScheduledRefresh(
+                    scheduledPage: scheduledPage,
+                    currentPage: page,
+                    scheduledRoomId: scheduledRoomId,
+                    currentRoomId: viewModel.state.roomId,
+                    bodyReady: bodyReady
+                  ) else { return }
+            syncWebinarDraftsFromState()
+        }
+    }
+
+    @ViewBuilder
     private var settingsContent: some View {
         switch page {
         case .overview:
@@ -1259,7 +1706,7 @@ struct SettingsSheetView: View {
                 MeetingSheetSectionCard {
                     settingsNavigationRow(
                         "Room controls",
-                        subtitle: viewModel.state.meetingRequiresInviteCode ? "Invite code required" : "Locks, guests, chat",
+                        subtitle: viewModel.state.meetingRequiresInviteCode ? "Invite code required" : nil,
                         icon: viewModel.state.isRoomLocked ? "lock.fill" : "lock.open.fill",
                         androidIcon: viewModel.state.isRoomLocked ? "lock" : "lock.open",
                         isActive: viewModel.state.isRoomLocked || viewModel.state.isChatLocked || viewModel.state.isNoGuests || viewModel.state.meetingRequiresInviteCode,
@@ -1270,7 +1717,7 @@ struct SettingsSheetView: View {
                     MoreRowDivider()
                     settingsNavigationRow(
                         "Webinar",
-                        subtitle: viewModel.state.isWebinarEnabled ? "\(viewModel.state.webinarAttendeeCount) attendees" : "Mode, access, links",
+                        subtitle: viewModel.state.isWebinarEnabled ? "\(viewModel.state.webinarAttendeeCount) attendees" : nil,
                         icon: "person.2.fill",
                         androidIcon: "participants",
                         isActive: viewModel.state.isWebinarEnabled,
@@ -1288,7 +1735,7 @@ struct SettingsSheetView: View {
             MeetingSheetSectionCard {
                 settingsNavigationRow(
                     "Profile",
-                    subtitle: viewModel.state.displayName.isEmpty ? "Display name" : viewModel.state.displayName,
+                    subtitle: viewModel.state.displayName.isEmpty ? nil : viewModel.state.displayName,
                     icon: "person.crop.circle",
                     androidIcon: "account"
                 ) {
@@ -1297,7 +1744,6 @@ struct SettingsSheetView: View {
                 MoreRowDivider()
                 settingsNavigationRow(
                     "Audio and video",
-                    subtitle: mediaControlsDisabled ? "Mic and camera unavailable" : "Mic, camera, speaker",
                     icon: viewModel.state.isMuted ? "mic.slash.fill" : "mic.fill",
                     androidIcon: viewModel.state.isMuted ? "mic.off" : "mic",
                     isActive: (!viewModel.state.isMuted || !viewModel.state.isCameraOff) && !mediaControlsDisabled
@@ -1311,8 +1757,6 @@ struct SettingsSheetView: View {
     @ViewBuilder
     private var roomSettingsContent: some View {
         VStack(alignment: .leading, spacing: ACMSpacing.xs) {
-            acmListSectionHeader("Room")
-
             MeetingSheetSectionCard {
                 settingsNavigationRow(
                     "Access",
@@ -1330,7 +1774,7 @@ struct SettingsSheetView: View {
                     subtitle: roomCommunicationSummary,
                     icon: "message.fill",
                     androidIcon: "chat",
-                    isActive: viewModel.state.isChatLocked || !viewModel.state.isDmEnabled || viewModel.state.isTtsDisabled,
+                    isActive: viewModel.state.isChatLocked || !viewModel.state.isDmEnabled || viewModel.state.isTtsDisabled || viewModel.state.isReactionsDisabled,
                     isDisabled: !canUseHostControls
                 ) {
                     onOpenRoomCommunicationSettings?()
@@ -1353,8 +1797,6 @@ struct SettingsSheetView: View {
     @ViewBuilder
     private var roomAccessSettingsContent: some View {
         VStack(alignment: .leading, spacing: ACMSpacing.xs) {
-            acmListSectionHeader("Access")
-
             MeetingSheetSectionCard {
                 settingsToggleRow(
                     "Lock room",
@@ -1394,8 +1836,6 @@ struct SettingsSheetView: View {
     @ViewBuilder
     private var roomCommunicationSettingsContent: some View {
         VStack(alignment: .leading, spacing: ACMSpacing.xs) {
-            acmListSectionHeader("Messages")
-
             MeetingSheetSectionCard {
                 settingsToggleRow(
                     "Lock chat",
@@ -1444,6 +1884,22 @@ struct SettingsSheetView: View {
                     isActive: !viewModel.state.isTtsDisabled,
                     isDisabled: !canUseHostControls
                 )
+                MoreRowDivider()
+                settingsToggleRow(
+                    "Reactions",
+                    icon: "face.smiling",
+                    androidIcon: "reactions",
+                    isOn: Binding(
+                        get: { !viewModel.state.isReactionsDisabled },
+                        set: { next in
+                            if next == viewModel.state.isReactionsDisabled {
+                                viewModel.toggleReactionsDisabled()
+                            }
+                        }
+                    ),
+                    isActive: !viewModel.state.isReactionsDisabled,
+                    isDisabled: !canUseHostControls
+                )
             }
         }
     }
@@ -1451,8 +1907,6 @@ struct SettingsSheetView: View {
     @ViewBuilder
     private var meetingInviteCodeSettingsContent: some View {
         VStack(alignment: .leading, spacing: ACMSpacing.xs) {
-            acmListSectionHeader("Invite code")
-
             MeetingSheetSectionCard {
                 meetingInviteCodeRow()
             }
@@ -1462,12 +1916,8 @@ struct SettingsSheetView: View {
     @ViewBuilder
     private var profileSettingsContent: some View {
         VStack(alignment: .leading, spacing: ACMSpacing.xs) {
-            acmListSectionHeader("Profile")
-
             MeetingSheetSectionCard {
                 displayNameRow()
-                MeetingSheetRowDivider(inset: ACMSpacing.sm + 32 + ACMSpacing.sm)
-                updateDisplayNameRow()
                 if let user = appState.currentUser {
                     MeetingSheetRowDivider(inset: ACMSpacing.sm + 32 + ACMSpacing.sm)
                     accountRow(user)
@@ -1483,8 +1933,6 @@ struct SettingsSheetView: View {
     @ViewBuilder
     private var audioVideoSettingsContent: some View {
         VStack(alignment: .leading, spacing: ACMSpacing.xs) {
-            acmListSectionHeader("Audio and video")
-
             MeetingSheetSectionCard {
                 settingsNavigationRow(
                     "Microphone",
@@ -1521,8 +1969,6 @@ struct SettingsSheetView: View {
     @ViewBuilder
     private var microphoneSettingsContent: some View {
         VStack(alignment: .leading, spacing: ACMSpacing.xs) {
-            acmListSectionHeader("Microphone")
-
             MeetingSheetSectionCard {
                 settingsToggleRow(
                     "Microphone",
@@ -1549,8 +1995,6 @@ struct SettingsSheetView: View {
     @ViewBuilder
     private var cameraSettingsContent: some View {
         VStack(alignment: .leading, spacing: ACMSpacing.xs) {
-            acmListSectionHeader("Camera")
-
             MeetingSheetSectionCard {
                 settingsToggleRow(
                     "Camera",
@@ -1569,6 +2013,8 @@ struct SettingsSheetView: View {
                     isDisabled: mediaControlsDisabled
                 )
                 MeetingSheetRowDivider(inset: ACMSpacing.sm + 32 + ACMSpacing.sm)
+                cameraFacingRow()
+                MeetingSheetRowDivider(inset: ACMSpacing.sm + 32 + ACMSpacing.sm)
                 qualityRow()
             }
         }
@@ -1577,8 +2023,6 @@ struct SettingsSheetView: View {
     @ViewBuilder
     private var speakerSettingsContent: some View {
         VStack(alignment: .leading, spacing: ACMSpacing.xs) {
-            acmListSectionHeader("Speaker")
-
             MeetingSheetSectionCard {
                 audioOutputRow()
                 MeetingSheetRowDivider(inset: ACMSpacing.sm + 32 + ACMSpacing.sm)
@@ -1611,19 +2055,29 @@ struct SettingsSheetView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         #endif
         .onAppear {
-            if viewModel.state.isAdmin {
-                viewModel.refreshMeetingConfig()
-                viewModel.refreshWebinarConfig()
-                syncWebinarDraftsFromState()
-                resetInviteCodeDrafts()
-            }
+            scheduleSettingsRefreshIfReady()
         }
         .onDisappear {
-            webinarLinkCopyFeedbackGeneration += 1
-            didCopyWebinarLink = false
+            flushPendingDisplayNameAutoSave()
+            settingsRefreshTask?.cancel()
+            settingsRefreshTask = nil
+            cancelWebinarLinkAction()
+            resetWebinarLinkCopyFeedback()
+            resetSignOutAction()
             isConfirmingWebinarLinkRotation = false
+            hasEditedWebinarMaxAttendeesInput = false
+            hasEditedWebinarLinkCodeInput = false
             resetInviteCodeDrafts()
         }
+        #if SKIP
+        .onChange(of: bodyReady ? "ready" : "pending") { _, _ in
+            scheduleSettingsRefreshIfReady()
+        }
+        #else
+        .onChange(of: bodyReady) { _, _ in
+            scheduleSettingsRefreshIfReady()
+        }
+        #endif
         .onChange(of: viewModel.state.webinarMaxAttendees) { _, _ in
             syncWebinarCapacityDraftFromState()
         }
@@ -1631,6 +2085,29 @@ struct SettingsSheetView: View {
             syncWebinarLinkDraftFromState()
             isConfirmingWebinarLinkRotation = false
         }
+        .onChange(of: viewModel.state.roomId) { _, _ in
+            resetDisplayNameAutoSaveForRoomChange()
+            resetSignOutAction()
+            scheduleSettingsRefreshIfReady()
+        }
+        .onChange(of: displayNameInput) { _, _ in
+            scheduleDisplayNameAutoSave()
+        }
+        .onChange(of: viewModel.state.displayName) { _, name in
+            syncDisplayNameInputFromServerIfIdle(name)
+        }
+        #if SKIP
+        .onChange(of: viewModel.state.meetingRequiresInviteCode ? "required" : "not-required") { _, _ in
+            if !viewModel.state.meetingRequiresInviteCode {
+                meetingInviteCodeInput = ""
+            }
+        }
+        .onChange(of: viewModel.state.webinarRequiresInviteCode ? "required" : "not-required") { _, _ in
+            if !viewModel.state.webinarRequiresInviteCode {
+                webinarInviteCodeInput = ""
+            }
+        }
+        #else
         .onChange(of: viewModel.state.meetingRequiresInviteCode) { _, requiresInviteCode in
             if !requiresInviteCode {
                 meetingInviteCodeInput = ""
@@ -1641,5 +2118,6 @@ struct SettingsSheetView: View {
                 webinarInviteCodeInput = ""
             }
         }
+        #endif
     }
 }

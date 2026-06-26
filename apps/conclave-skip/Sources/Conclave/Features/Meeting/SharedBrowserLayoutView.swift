@@ -6,8 +6,12 @@ struct SharedBrowserLayoutView: View {
     let isCompact: Bool
 
     @State private var navInput = ""
+    @State private var hasEditedNavInput = false
 
     private let controlsOverlap: CGFloat = 8
+    private var detachedSelfEdgeInsets: EdgeInsets {
+        MeetingDetachedSelfLayout.edgeInsets(isCompact: isCompact)
+    }
 
     var body: some View {
         GeometryReader { geo in
@@ -19,15 +23,28 @@ struct SharedBrowserLayoutView: View {
             }
         }
         .onAppear {
-            navInput = viewModel.state.browserURL ?? ""
+            syncNavInput()
         }
+        #if SKIP
+        .onChange(of: viewModel.state.isBrowserActive ? "active" : "inactive") { _, _ in
+            syncNavInput()
+        }
+        #else
+        .onChange(of: viewModel.state.isBrowserActive) { _, _ in
+            syncNavInput()
+        }
+        #endif
         .onChange(of: viewModel.state.browserURL) { _, newValue in
-            navInput = newValue ?? ""
+            syncNavInput(browserURL: newValue)
         }
     }
 
     private func compactLayout(size: CGSize, browserURL: String?) -> some View {
-        let availableHeight = size.height - controlsOverlap
+        let availableHeight = MeetingStageLayout.visibleHeight(
+            containerHeight: size.height,
+            controlsOverlap: controlsOverlap
+        )
+        let strip = viewModel.state.tileStripSnapshot()
         return VStack(spacing: 8) {
             browserCard(browserURL: browserURL)
                 .frame(maxWidth: .infinity)
@@ -35,10 +52,10 @@ struct SharedBrowserLayoutView: View {
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
-                    if viewModel.state.shouldShowSelfTile {
+                    if strip.shouldShowSelfTile {
                         localThumbnail
                     }
-                    ForEach(viewModel.state.visibleTileParticipants.prefix(max(0, viewModel.state.viewMaxTiles - (viewModel.state.shouldShowSelfTile ? 1 : 0)))) { participant in
+                    ForEach(strip.participants) { participant in
                         remoteThumbnail(participant: participant)
                     }
                 }
@@ -51,15 +68,16 @@ struct SharedBrowserLayoutView: View {
     }
 
     private func regularLayout(browserURL: String?) -> some View {
-        HStack(spacing: 8) {
+        let strip = viewModel.state.tileStripSnapshot()
+        return HStack(spacing: 8) {
             browserCard(browserURL: browserURL)
 
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(spacing: 8) {
-                    if viewModel.state.shouldShowSelfTile {
+                    if strip.shouldShowSelfTile {
                         localThumbnail
                     }
-                    ForEach(viewModel.state.visibleTileParticipants.prefix(max(0, viewModel.state.viewMaxTiles - (viewModel.state.shouldShowSelfTile ? 1 : 0)))) { participant in
+                    ForEach(strip.participants) { participant in
                         remoteThumbnail(participant: participant)
                     }
                 }
@@ -101,8 +119,7 @@ struct SharedBrowserLayoutView: View {
         }
         .overlay {
             if viewModel.state.shouldShowDetachedSelfView && !viewModel.state.shouldShowSelfTile {
-                DetachedSelfViewOverlay(viewModel: viewModel)
-                    .padding(16)
+                DetachedSelfViewOverlay(viewModel: viewModel, isCompact: isCompact, edgeInsets: detachedSelfEdgeInsets)
             }
         }
     }
@@ -112,7 +129,13 @@ struct SharedBrowserLayoutView: View {
             HStack(spacing: ACMSpacing.xs) {
                 ACMSystemIcon.icon("globe", android: "public", size: 16, tint: "muted")
                     .foregroundStyle(ACMColors.textMuted)
-                TextField("", text: $navInput, prompt: Text("Navigate to a URL").foregroundStyle(ACMColors.textFaint))
+                TextField("", text: Binding(
+                    get: { navInput },
+                    set: {
+                        navInput = $0
+                        hasEditedNavInput = true
+                    }
+                ), prompt: Text("Navigate to a URL").foregroundStyle(ACMColors.textFaint))
                     .textFieldStyle(.plain)
                     .font(ACMFont.trial(14))
                     .foregroundStyle(ACMColors.text)
@@ -285,14 +308,16 @@ struct SharedBrowserLayoutView: View {
         let localVideoTrack = viewModel.webRTCClient.getLocalVideoTrack()
         let captureSession = (!viewModel.state.isCameraOff && localVideoTrack == nil) ? viewModel.webRTCClient.getCaptureSession() : nil
         return VideoGridItem(
-            displayName: viewModel.state.displayName,
+            displayName: viewModel.displayNameForUser(viewModel.state.userId),
             isMuted: viewModel.state.isMuted,
             isCameraOff: viewModel.state.isCameraOff,
             isHandRaised: viewModel.state.isHandRaised,
             isGhost: viewModel.state.isGhostMode,
-            isSpeaking: viewModel.state.effectiveActiveSpeakerId.map { viewModel.state.isLocalParticipantUserId($0) } == true,
+            isSpeaking: viewModel.state.isEffectiveActiveSpeaker(viewModel.state.userId),
             isLocal: true,
             isThumbnail: true,
+            avatarSizeOverride: 34.0,
+            localCameraFacing: viewModel.localCameraFacing,
             captureSession: captureSession,
             localVideoTrack: localVideoTrack
         )
@@ -306,16 +331,31 @@ struct SharedBrowserLayoutView: View {
             isCameraOff: participant.isCameraOff,
             isHandRaised: participant.isHandRaised,
             isGhost: participant.isGhost,
-            isSpeaking: viewModel.state.effectiveActiveSpeakerId == participant.id,
+            isSpeaking: viewModel.state.isEffectiveActiveSpeaker(participant.id),
             isLocal: false,
             connectionStatus: participant.connectionStatus,
             isThumbnail: true,
-            trackWrapper: viewModel.webRTCClient.remoteVideoTracks[participant.id]
+            avatarSizeOverride: 34.0,
+            trackWrapper: viewModel.webRTCClient.remoteVideoTrack(forUserId: participant.id)
         )
         .frame(width: thumbnailWidth, height: thumbnailHeight)
     }
 
     private func submitNavigation() {
-        viewModel.navigateSharedBrowser(url: navInput)
+        if viewModel.navigateSharedBrowser(url: navInput) {
+            hasEditedNavInput = false
+        }
+    }
+
+    private func syncNavInput(browserURL: String? = nil) {
+        let nextInput = SharedBrowserURLDraftSyncPolicy.nextInput(
+            currentInput: navInput,
+            browserURL: browserURL ?? viewModel.state.browserURL,
+            isBrowserActive: viewModel.state.isBrowserActive,
+            hasLocalEdits: hasEditedNavInput
+        )
+        guard nextInput != navInput else { return }
+        navInput = nextInput
+        hasEditedNavInput = false
     }
 }

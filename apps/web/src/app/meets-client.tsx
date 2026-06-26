@@ -342,12 +342,14 @@ export type MeetsClientProps = {
     name?: string | null;
   };
   isAdmin?: boolean;
+  canGhostJoin?: boolean;
   getJoinInfo: (
     roomId: string,
     sessionId: string,
     options?: {
       user?: { id?: string; email?: string | null; name?: string | null };
       isHost?: boolean;
+      isGhost?: boolean;
       joinMode?: JoinMode;
     },
   ) => Promise<{
@@ -370,6 +372,7 @@ export default function MeetsClient({
   bypassMediaPermissions = false,
   user,
   isAdmin = false,
+  canGhostJoin = false,
   getJoinInfo,
   joinMode = "meeting",
   autoJoinOnMount = false,
@@ -381,6 +384,7 @@ export default function MeetsClient({
   const authSessionUser = authSession?.user;
   const [currentUser, setCurrentUser] = useState<MeetUser | undefined>(user);
   const [currentIsAdmin, setCurrentIsAdmin] = useState(isAdmin);
+  const [currentCanGhostJoin, setCurrentCanGhostJoin] = useState(canGhostJoin);
   const [guestStorageReady, setGuestStorageReady] = useState(false);
   const [isSigningOut, setIsSigningOut] = useState(false);
   const [appsSocket, setAppsSocket] = useState<Socket | null>(null);
@@ -438,6 +442,34 @@ export default function MeetsClient({
     });
     setCurrentIsAdmin(isAdmin);
   }, [clearGuestStorage, isAdmin, user]);
+
+  useEffect(() => {
+    setCurrentCanGhostJoin(canGhostJoin);
+  }, [canGhostJoin]);
+
+  useEffect(() => {
+    if (isAuthSessionPending) return;
+    if (!authSessionUser?.id) {
+      setCurrentCanGhostJoin(false);
+      return;
+    }
+
+    let cancelled = false;
+    void fetch("/api/sfu/session-capabilities", { cache: "no-store" })
+      .then((response) => response.json())
+      .then((data: { canGhostJoin?: boolean }) => {
+        if (cancelled) return;
+        setCurrentCanGhostJoin(Boolean(data?.canGhostJoin));
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setCurrentCanGhostJoin(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [authSessionUser?.id, isAuthSessionPending]);
 
   useEffect(() => {
     const nextUser = authSessionUser
@@ -522,6 +554,8 @@ export default function MeetsClient({
     setIsTtsDisabled,
     isDmEnabled,
     setIsDmEnabled,
+    isReactionsDisabled,
+    setIsReactionsDisabled,
     isBrowserAudioMuted,
     setIsBrowserAudioMuted,
     meetVolume,
@@ -889,9 +923,10 @@ export default function MeetsClient({
   });
 
   const isAdminFlag = Boolean(currentIsAdmin);
+  const canGhostJoinFlag = Boolean(currentCanGhostJoin);
   const isWebinarAttendee =
     joinMode === "webinar_attendee" || webinarRole === "attendee";
-  const ghostEnabled = allowGhostMode && isAdminFlag && isGhostMode;
+  const ghostEnabled = canGhostJoinFlag && isGhostMode;
   const shouldRunVideoEffects = shouldRunVisualVideoEffects;
   const shouldPublishProcessedVideo = shouldRunVisualVideoEffects;
   const canSignOut = Boolean(
@@ -2064,6 +2099,7 @@ export default function MeetsClient({
     isTtsDisabled,
     setIsTtsDisabled,
     setIsDmEnabled,
+    setIsReactionsDisabled,
     setActiveScreenShareId,
     setNetworkManagedVideoQuality,
     videoQualityRef: refs.videoQualityRef,
@@ -2111,7 +2147,7 @@ export default function MeetsClient({
   });
 
   useMeetGhostMode({
-    isAdmin: isAdminFlag,
+    canGhostJoin: canGhostJoinFlag,
     isGhostMode,
     setIsGhostMode,
     ghostEnabled,
@@ -2734,7 +2770,7 @@ export default function MeetsClient({
         isWebinarAttendee={isWebinarAttendee}
         enableRoomRouting={enableRoomRouting}
         forceJoinOnly={forceJoinOnly}
-        allowGhostMode={allowGhostMode}
+        allowGhostMode={canGhostJoinFlag}
         user={currentUser}
         userEmail={userEmail}
         isAdmin={isAdminFlag}
@@ -2745,6 +2781,7 @@ export default function MeetsClient({
         displayNameInput={displayNameInput}
         setDisplayNameInput={setDisplayNameInput}
         ghostEnabled={ghostEnabled}
+        isGhostMode={isGhostMode}
         setIsGhostMode={setIsGhostMode}
         presentationStream={presentationStream}
         presenterName={presenterName || ""}
@@ -2821,6 +2858,7 @@ export default function MeetsClient({
         isRoomLocked={isRoomLocked}
         isTtsDisabled={isTtsDisabled}
         isDmEnabled={isDmEnabled}
+        isReactionsDisabled={isReactionsDisabled}
         onToggleLock={() => socket.toggleRoomLock(!isRoomLocked)}
         isNoGuests={isNoGuests}
         onToggleNoGuests={() => socket.toggleNoGuests(!isNoGuests)}

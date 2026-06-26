@@ -10,6 +10,7 @@ import {
   MessageSquareLock,
   RotateCw,
   ShieldBan,
+  Smile,
   Users,
   Volume2,
   X,
@@ -59,6 +60,8 @@ interface MeetSettingsPanelProps {
   onToggleTtsDisabled?: () => void;
   isDmEnabled: boolean;
   onToggleDmEnabled?: () => void;
+  isReactionsDisabled: boolean;
+  onToggleReactionsDisabled?: () => void;
   meetingRequiresInviteCode: boolean;
   onGetMeetingConfig?: () => Promise<MeetingConfigSnapshot | null>;
   onUpdateMeetingConfig?: (
@@ -446,6 +449,8 @@ export default function MeetSettingsPanel({
   onToggleTtsDisabled,
   isDmEnabled,
   onToggleDmEnabled,
+  isReactionsDisabled,
+  onToggleReactionsDisabled,
   meetingRequiresInviteCode,
   onGetMeetingConfig,
   onUpdateMeetingConfig,
@@ -694,6 +699,14 @@ export default function MeetSettingsPanel({
             tone="success"
             onClick={onToggleTtsDisabled}
             disabled={!onToggleTtsDisabled}
+          />
+          <SwitchRow
+            icon={Smile}
+            label="Reactions"
+            isOn={!isReactionsDisabled}
+            tone="success"
+            onClick={onToggleReactionsDisabled}
+            disabled={!onToggleReactionsDisabled}
           />
 
           <Separator />

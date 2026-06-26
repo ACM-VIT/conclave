@@ -14,15 +14,7 @@ import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 
-/// The ongoing-call foreground service. While the user is in a meeting this is
-/// what keeps the call alive when the app is backgrounded — it runs with
-/// foregroundServiceType `microphone|camera|mediaPlayback` (declared in the
-/// manifest) so the OS does not kill the active media path, and it shows a persistent
-/// notification with Leave + Mute/unmute actions that deep-link back into the
-/// meeting (tap the body to return).
-///
-/// Actions are delivered to CallActionReceiver, which forwards them to the
-/// active MeetingViewModel via CallActionDispatcher.
+/// Keeps call media alive in the background and exposes Leave/Mute actions.
 class CallForegroundService : Service() {
     companion object {
         const val CHANNEL_ID = "conclave_call_channel"
@@ -53,7 +45,11 @@ class CallForegroundService : Service() {
             ACTION_UPDATE -> {
                 currentMuted = intent.getBooleanExtra(EXTRA_MUTED, currentMuted)
                 currentCameraOff = intent.getBooleanExtra(EXTRA_CAMERA_OFF, currentCameraOff)
-                startOrUpdateForeground()
+                try {
+                    startOrUpdateForeground()
+                } catch (t: Throwable) {
+                    debugLog("[Call] Failed to update foreground call service: ${t}")
+                }
                 return START_STICKY
             }
             ACTION_START -> {
@@ -62,7 +58,7 @@ class CallForegroundService : Service() {
                 try {
                     startOrUpdateForeground()
                 } catch (t: Throwable) {
-                    debugLog("[Call] Failed to foreground call service: ${t}")
+                    debugLog("[Call] Failed to start foreground call service: ${t}")
                     stopSelf()
                     return START_NOT_STICKY
                 }
@@ -83,7 +79,7 @@ class CallForegroundService : Service() {
             val micGranted = androidx.core.content.ContextCompat.checkSelfPermission(
                 this, android.Manifest.permission.RECORD_AUDIO
             ) == android.content.pm.PackageManager.PERMISSION_GRANTED
-            if (micGranted) {
+            if (!currentMuted && micGranted) {
                 type = type or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
             }
 
@@ -95,7 +91,7 @@ class CallForegroundService : Service() {
             }
         }
 
-        if (Build.VERSION.SDK_INT >= 30) {
+        if (Build.VERSION.SDK_INT >= 29) {
             type = type or ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
         }
 
@@ -141,7 +137,6 @@ class CallForegroundService : Service() {
     }
 
     private fun buildNotification(): Notification {
-        // Tap the body to return to the meeting.
         val launchIntent = (
             packageManager.getLaunchIntentForPackage(packageName)
                 ?: Intent().setClassName(packageName, "conclave.module.MainActivity")
@@ -181,8 +176,8 @@ class CallForegroundService : Service() {
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Conclave")
-            .setContentText(if (currentMuted) "In a meeting · Muted" else "In a meeting")
-            .setSmallIcon(android.R.drawable.ic_menu_call)
+            .setContentText(if (currentMuted) "In a meeting, muted" else "In a meeting")
+            .setSmallIcon(notificationSmallIcon(android.R.drawable.ic_menu_call))
             .setContentIntent(contentPending)
             .setOngoing(true)
             .setCategory(NotificationCompat.CATEGORY_CALL)
@@ -192,10 +187,13 @@ class CallForegroundService : Service() {
             .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Leave", leavePending)
             .build()
     }
+
+    private fun notificationSmallIcon(fallback: Int): Int {
+        val appIcon = resources.getIdentifier("ic_launcher_monochrome", "mipmap", packageName)
+        return if (appIcon != 0) appIcon else fallback
+    }
 }
 
-/// Receives the notification (and PiP) Leave / Mute actions and forwards them to
-/// the active MeetingViewModel through CallActionDispatcher.
 class CallActionReceiver : BroadcastReceiver() {
     companion object {
         const val ACTION_TOGGLE_MUTE = "conclave.app.action.CALL_TOGGLE_MUTE"

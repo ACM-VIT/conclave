@@ -68,6 +68,7 @@ import {
   type MeetViewSettings,
 } from "../lib/meet-view";
 import { getRenderableParticipantVideoStream } from "../lib/participant-media";
+import { isRemoteParticipantVisible } from "../lib/participant-visibility";
 import { prewarmVideoEffectsAssetsDeferred } from "../lib/video-effects-lazy";
 
 const JoinScreen = dynamic(() => import("./JoinScreen"), {
@@ -110,6 +111,7 @@ interface MeetsMainContentProps {
   displayNameInput: string;
   setDisplayNameInput: Dispatch<SetStateAction<string>>;
   ghostEnabled: boolean;
+  isGhostMode: boolean;
   setIsGhostMode: Dispatch<SetStateAction<boolean>>;
   presentationStream: MediaStream | null;
   presenterName: string;
@@ -215,6 +217,7 @@ interface MeetsMainContentProps {
   adminNotice?: AdminNoticeNotification | null;
   isTtsDisabled: boolean;
   isDmEnabled: boolean;
+  isReactionsDisabled: boolean;
   meetingRequiresInviteCode: boolean;
   webinarConfig?: WebinarConfigSnapshot | null;
   webinarRole?: "attendee" | "participant" | "host" | null;
@@ -338,6 +341,7 @@ export default function MeetsMainContent({
   displayNameInput,
   setDisplayNameInput,
   ghostEnabled,
+  isGhostMode,
   setIsGhostMode,
   presentationStream,
   presenterName,
@@ -441,6 +445,7 @@ export default function MeetsMainContent({
   adminNotice = null,
   isTtsDisabled,
   isDmEnabled,
+  isReactionsDisabled,
   meetingRequiresInviteCode,
   webinarConfig,
   webinarRole,
@@ -493,9 +498,14 @@ export default function MeetsMainContent({
       participantsArray.filter(
         (participant) =>
           participant.userId !== currentUserId &&
-          !isSystemUserId(participant.userId),
+          !isSystemUserId(participant.userId) &&
+          isRemoteParticipantVisible(
+            participant,
+            ghostEnabled,
+            currentUserId,
+          ),
       ),
-    [currentUserId, participantsArray],
+    [currentUserId, ghostEnabled, participantsArray],
   );
   const webinarParticipantIds = useMemo(
     () => nonSystemParticipants.map((participant) => participant.userId),
@@ -1040,6 +1050,20 @@ export default function MeetsMainContent({
       },
     );
   }, [socket, isDmEnabled]);
+
+  const handleToggleReactionsDisabled = useCallback(() => {
+    if (!socket) return;
+    socket.emit(
+      "setReactionsDisabled",
+      { disabled: !isReactionsDisabled },
+      (res: { error?: string }) => {
+        if (res?.error) {
+          console.error("Failed to toggle reactions:", res.error);
+        }
+      },
+    );
+  }, [socket, isReactionsDisabled]);
+
   const handleToggleChat = useCallback(() => {
     if (!isChatOpen) {
       if (isParticipantsOpen) {
@@ -1363,7 +1387,7 @@ export default function MeetsMainContent({
             onJoinRoom={joinRoomById}
             displayNameInput={displayNameInput}
             onDisplayNameInputChange={setDisplayNameInput}
-            isGhostMode={ghostEnabled}
+            isGhostMode={isGhostMode}
             onGhostModeChange={setIsGhostMode}
             onUserChange={onUserChange}
             onIsAdminChange={onIsAdminChange}
@@ -1631,6 +1655,8 @@ export default function MeetsMainContent({
                 onToggleTtsDisabled={handleToggleTtsDisabled}
                 isDmEnabled={isDmEnabled}
                 onToggleDmEnabled={handleToggleDmEnabled}
+                isReactionsDisabled={isReactionsDisabled}
+                onToggleReactionsDisabled={handleToggleReactionsDisabled}
                 isBrowserActive={browserState?.active ?? false}
                 isBrowserLaunching={isBrowserLaunching}
                 showBrowserControls={showBrowserControls}
@@ -1713,7 +1739,9 @@ export default function MeetsMainContent({
             isCameraOff,
             isHandRaised,
             isScreenSharing,
+            isGhost: ghostEnabled,
           }}
+          viewerIsGhost={ghostEnabled}
           getDisplayName={resolveDisplayName}
           onPendingUserStale={handlePendingUserStale}
           hostUserId={hostUserId}
@@ -1736,6 +1764,8 @@ export default function MeetsMainContent({
             onToggleTtsDisabled={handleToggleTtsDisabled}
             isDmEnabled={isDmEnabled}
             onToggleDmEnabled={handleToggleDmEnabled}
+            isReactionsDisabled={isReactionsDisabled}
+            onToggleReactionsDisabled={handleToggleReactionsDisabled}
             meetingRequiresInviteCode={meetingRequiresInviteCode}
             onGetMeetingConfig={onGetMeetingConfig}
             onUpdateMeetingConfig={onUpdateMeetingConfig}

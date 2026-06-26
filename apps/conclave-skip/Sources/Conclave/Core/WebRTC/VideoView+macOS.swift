@@ -22,6 +22,7 @@ struct RTCLocalVideoView: View {
 struct RemoteVideoView: View {
     let trackWrapper: VideoTrackWrapper
     var contentMode: VideoContentMode = .fill
+    var fallbackDisplayName: String = "Guest"
 
     var body: some View {
         Color.black
@@ -39,13 +40,30 @@ struct VideoGridItem: View {
     var connectionStatus: ParticipantConnectionStatus? = nil
     var fillStage: Bool = false
     var isThumbnail: Bool = false
+    var avatarSizeOverride: CGFloat? = nil
+    var usePlatformOverlaySurface: Bool = false
+    var localCameraFacing: LocalCameraFacing = .front
 
     var captureSession: Any? = nil
     var localVideoTrack: Any? = nil
     var trackWrapper: VideoTrackWrapper? = nil
 
+    private var resolvedDisplayName: String {
+        let trimmed = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty {
+            return trimmed
+        }
+        return isLocal ? "You" : "Guest"
+    }
+
+    private var avatarInitial: String {
+        String(resolvedDisplayName.prefix(1)).uppercased()
+    }
+
     var body: some View {
         aspectAdjustedContent
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .clipped()
             .clipShape(RoundedRectangle(cornerRadius: ACMRadius.lg))
             .overlay {
                 RoundedRectangle(cornerRadius: ACMRadius.lg)
@@ -58,6 +76,7 @@ struct VideoGridItem: View {
     var aspectAdjustedContent: some View {
         // Fill the frame the parent assigns (grid cell / stage / thumbnail).
         ZStack { videoContent; overlays }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     @ViewBuilder
@@ -73,17 +92,20 @@ struct VideoGridItem: View {
 
     var avatarView: some View {
         GeometryReader { geo in
-            let minAvatarSize: CGFloat = isThumbnail ? 34.0 : 44.0
-            let maxAvatarSize: CGFloat = isThumbnail ? 48.0 : 240.0
-            let avatarSize = min(max((geo.size.width + geo.size.height) * 0.10, minAvatarSize), maxAvatarSize)
+            let labelClearance: CGFloat = isThumbnail ? 30.0 : 44.0
+            let shortestSide = min(geo.size.width, max(1.0, geo.size.height - labelClearance))
+            let minAvatarSize = min(isThumbnail ? 24.0 : 44.0, shortestSide)
+            let maxAvatarSize = min(isThumbnail ? 40.0 : 240.0, shortestSide)
+            let avatarSize = avatarSizeOverride
+                ?? min(max(shortestSide * (isThumbnail ? 0.46 : 0.42), minAvatarSize), maxAvatarSize)
             ZStack {
                 ACMColors.bgAlt
 
                 Circle()
-                    .fill(ACMColors.avatarColor(for: displayName))
+                    .fill(ACMColors.avatarColor(for: resolvedDisplayName))
                     .frame(width: avatarSize, height: avatarSize)
                     .overlay {
-                        Text(String(displayName.prefix(1)).uppercased())
+                        Text(avatarInitial)
                             .font(.system(size: avatarSize * 0.40, weight: .bold))
                             .foregroundStyle(Color.white)
                     }
@@ -208,15 +230,13 @@ struct VideoGridItem: View {
                             .foregroundStyle(ACMColors.error)
                     }
 
-                    Text(isLocal ? "You" : displayName)
+                    Text(isLocal ? "You" : resolvedDisplayName)
                         .font(ACMFont.trial(isThumbnail ? 11.0 : 12.0, weight: .medium))
                         .foregroundStyle(ACMColors.text)
                         .lineLimit(1)
                 }
-                .padding(.horizontal, isThumbnail ? 8.0 : 10.0)
-                .padding(.vertical, isThumbnail ? 4.0 : 5.0)
-                .acmColorBackground(ACMColors.scrim)
-                .clipShape(RoundedRectangle(cornerRadius: isThumbnail ? 7.0 : 8.0))
+                .frame(maxWidth: isThumbnail ? 112.0 : 220.0, alignment: .leading)
+                .shadow(color: ACMColors.blackOverlay(0.9), radius: 2.0, x: 0.0, y: 1.0)
 
                 Spacer()
             }

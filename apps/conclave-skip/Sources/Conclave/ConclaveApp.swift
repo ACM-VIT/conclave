@@ -46,7 +46,7 @@ public final class ConclaveAppDelegate: Sendable {
 
     public func onResume() {
         Task { @MainActor in
-            await MeetingViewModel.shared.recoverActiveMeetingFromForeground()
+            MeetingViewModel.shared.handleAppBecameActive()
         }
     }
 
@@ -59,6 +59,9 @@ public final class ConclaveAppDelegate: Sendable {
         if NativeAuthService.handleOpenURL(url) {
             return true
         }
+        guard isJoinLinkURLString(url.absoluteString) else {
+            return false
+        }
         AppState.shared.openJoinURL(url)
         return true
     }
@@ -67,6 +70,9 @@ public final class ConclaveAppDelegate: Sendable {
         Task { @MainActor in
             guard shouldHandleOpenURL(urlString) else { return }
             if let url = URL(string: urlString), NativeAuthService.handleOpenURL(url) {
+                return
+            }
+            guard isJoinLinkURLString(urlString) else {
                 return
             }
             AppState.shared.openJoinURLString(urlString)
@@ -96,5 +102,9 @@ public final class ConclaveAppDelegate: Sendable {
         lastOpenURLString = value
         lastOpenURLAt = now
         return true
+    }
+
+    private func isJoinLinkURLString(_ rawValue: String) -> Bool {
+        !NativeJoinLinkParser.parse(rawValue, allowRoomCreationForURLs: true).roomId.isEmpty
     }
 }

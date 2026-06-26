@@ -7,55 +7,34 @@ import CoreGraphics
 #endif
 
 struct GridLayoutOptions {
-    /// Gap between tiles in pt. Subtracted from the container before dividing.
     var gap: CGFloat = 12
-    /// Hard cap on columns (device class: ~3 phone portrait, 4–6 tablet/landscape).
     var maxCols: Int = 7
-    /// Tiles shown per page before paging/overflow kicks in.
     var maxTilesPerPage: Int = 49
-    /// Target tile aspect ratio = width / height (16:9 = 1.7778 landscape).
     var targetAspect: CGFloat = 16.0 / 9.0
 }
 
 struct GridTilePosition {
-    /// Zero-based tile order on the current page.
     let index: Int
-    /// Zero-based visual row.
     let row: Int
-    /// Zero-based visual column within the logical grid. Partial rows may be fractional.
     let col: CGFloat
-    /// Left offset inside the measured layout area, in pt.
     let x: CGFloat
-    /// Top offset inside the measured layout area, in pt.
     let y: CGFloat
-    /// Tile width in pt.
     let width: CGFloat
-    /// Tile height in pt.
     let height: CGFloat
 }
 
 struct GridLayoutResult {
-    /// Columns and rows for a full page.
     let cols: Int
     let rows: Int
-    /// Size of each tile in pt (already aspect-constrained to targetAspect).
     let tileWidth: CGFloat
     let tileHeight: CGFloat
-    /// Tiles in the final (possibly partial) row — render centered.
     let lastRowCount: Int
-    /// Number of pages when count exceeds maxTilesPerPage.
     let pages: Int
-    /// Tiles laid out on a full page (<= maxTilesPerPage).
     let perPage: Int
-    /// Width of the centered tile group, in pt.
     let contentWidth: CGFloat
-    /// Height of the centered tile group, in pt.
     let contentHeight: CGFloat
-    /// Left offset of the centered tile group inside the measured layout area.
     let offsetX: CGFloat
-    /// Top offset of the centered tile group inside the measured layout area.
     let offsetY: CGFloat
-    /// Exact tile positions for the current page, including centered partial rows.
     let positions: [GridTilePosition]
 }
 
@@ -132,12 +111,15 @@ func computeGridLayout(
     height: CGFloat,
     options: GridLayoutOptions = GridLayoutOptions()
 ) -> GridLayoutResult {
-    let gap = options.gap
-    let targetAspect = options.targetAspect
+    let gap = options.gap.isFinite && options.gap > 0.0 ? options.gap : 0.0
+    let targetAspect = options.targetAspect.isFinite && options.targetAspect > 0.0
+        ? options.targetAspect
+        : 16.0 / 9.0
+    let maxTilesPerPage = max(1, options.maxTilesPerPage)
 
     let total = max(1, count)
-    let pages = Int(ceil(Double(total) / Double(options.maxTilesPerPage)))
-    let perPage = min(total, options.maxTilesPerPage)
+    let pages = Int(ceil(Double(total) / Double(maxTilesPerPage)))
+    let perPage = min(total, maxTilesPerPage)
 
     // Degenerate container — return a single column so the caller still renders.
     if !width.isFinite || !height.isFinite || width <= 0 || height <= 0 {
@@ -229,15 +211,10 @@ enum StageMode {
 }
 
 struct StageModeInput {
-    /// Visible participant count (incl. self).
     let count: Int
-    /// Someone is screen-sharing / presenting.
     let presenting: Bool
-    /// A tile is explicitly pinned to the stage.
     let pinned: Bool
-    /// There is an active *video* speaker (not just the presentation).
     let hasActiveVideoSpeaker: Bool
-    /// Above this count (no presentation) Meet uses a sidebar instead of tiled.
     var tiledThreshold: Int = 12
 }
 

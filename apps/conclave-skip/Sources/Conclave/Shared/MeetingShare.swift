@@ -5,15 +5,16 @@ import UIKit
 
 @MainActor
 enum MeetingShare {
-    static func shareMeetingLink(_ link: String, roomId: String) {
+    @discardableResult
+    static func shareMeetingLink(_ link: String, roomId: String) -> Bool {
         #if SKIP
-        NativeMeetingShare.shareMeetingLink(link: link, roomId: roomId)
+        return NativeMeetingShare.shareMeetingLink(link: link, roomId: roomId)
         #elseif canImport(UIKit)
         guard let presenter = topViewController(from: rootViewController()),
               let presenterView = presenter.view else {
             UIPasteboard.general.string = link
             HapticManager.shared.trigger(.success)
-            return
+            return true
         }
 
         let message = "Join me in this Conclave room.\n\(link)"
@@ -27,9 +28,11 @@ enum MeetingShare {
             height: 1
         )
         presenter.present(controller, animated: true)
+        return true
         #else
         _ = link
         _ = roomId
+        return false
         #endif
     }
 

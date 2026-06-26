@@ -773,8 +773,8 @@ function JoinScreen({
   return (
     <div className="relative min-h-screen w-full bg-[#0a0a0b] text-[#fafafa]">
       <main className="flex min-h-dvh w-full flex-col items-center justify-start px-0 pb-8 pt-32 sm:justify-center sm:px-4 sm:py-10">
-        <div className="animate-fade-in w-full overflow-hidden bg-[#0e0e10] sm:max-w-4xl sm:rounded-2xl sm:border sm:border-white/10 md:grid md:grid-cols-2">
-          <div className="relative aspect-[4/3] bg-[#121214] sm:aspect-video md:aspect-auto md:min-h-[440px]">
+        <div className="animate-fade-in w-full overflow-hidden bg-[#0e0e10] sm:max-w-4xl sm:rounded-2xl sm:border sm:border-white/10 md:grid md:min-h-[520px] md:grid-cols-2">
+          <div className="relative aspect-[4/3] bg-[#121214] sm:aspect-video md:aspect-auto md:min-h-[520px]">
                 <video
                   ref={videoRef}
                   autoPlay
@@ -867,7 +867,7 @@ function JoinScreen({
                 </div>
               </div>
 
-          <div className="safe-area-pb flex flex-col justify-center gap-4 p-5 sm:p-8">
+          <div className="safe-area-pb flex min-h-0 flex-col justify-start gap-4 p-5 sm:p-8 md:min-h-[520px] md:justify-center">
             <div className="space-y-1.5">
               <h1
                 className="text-[22px] leading-tight text-[#fafafa]"

@@ -4,54 +4,161 @@ import android.app.Activity
 import android.app.PendingIntent
 import android.app.RemoteAction
 import android.content.Intent
+import android.graphics.Rect
 import android.graphics.drawable.Icon
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.util.Rational
-import androidx.activity.ComponentActivity
 import androidx.annotation.RequiresApi
 import skip.ui.UIApplication
 
-/// Builds the PictureInPictureParams (aspect ratio + Mute / Leave RemoteActions)
-/// and enters PiP. The RemoteActions deep-link to CallActionReceiver, which
-/// forwards to the active MeetingViewModel via CallActionDispatcher — the same
-/// path the ongoing-call notification uses.
+/**
+ * Builds PictureInPictureParams and enters PiP. RemoteActions deep-link to
+ * CallActionReceiver, which forwards to the active MeetingViewModel through
+ * the same dispatcher used by ongoing-call notification actions.
+ */
 object PipManager {
+    private const val ENTER_AFTER_MINIMAL_LAYOUT_FALLBACK_MS = 180L
+    private const val ENTER_RESULT_FALLBACK_MS = 900L
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private var pendingEnterRunnable: Runnable? = null
+    private var enterAttemptGeneration = 0
 
-    /// Enter PiP for an active call. Safe to call only on API 26+.
+    // Enter PiP for an active call. Safe to call only on API 26+.
     @RequiresApi(Build.VERSION_CODES.O)
     fun enterPip(activity: Activity, muted: Boolean) {
+        cancelPendingEnterPip()
+        val generation = enterAttemptGeneration
+        if (!PipController.isInCall || activity.isFinishing || activity.isDestroyed) {
+            PipController.inPipMode = activity.isInPictureInPictureMode
+            return
+        }
+
+        // Switch Compose to the minimal active-speaker surface before asking
+        // Android to snapshot the activity into PiP. Keep the renderer surface
+        // stable here; recreating it during entry can produce visible black
+        // flashes on some devices.
+        PipController.inPipMode = true
+        refreshPipContent()
+        scheduleEnterAfterMinimalLayout(activity, muted, generation)
+    }
+
+    @RequiresApi(Build.VERSION_CODES.O)
+    private fun scheduleEnterAfterMinimalLayout(activity: Activity, muted: Boolean, generation: Int) {
+        val enter = object : Runnable {
+            override fun run() {
+                if (pendingEnterRunnable !== this) return
+                if (generation != enterAttemptGeneration) return
+                pendingEnterRunnable = null
+                enterPreparedPip(activity, muted, generation)
+            }
+        }
+        pendingEnterRunnable = enter
+
+        val decorView = activity.window?.decorView
+        if (decorView != null) {
+            decorView.postOnAnimation {
+                decorView.postOnAnimation {
+                    enter.run()
+                }
+            }
+        }
+
+        mainHandler.postDelayed(enter, ENTER_AFTER_MINIMAL_LAYOUT_FALLBACK_MS)
+    }
+
+    @RequiresApi(Build.VERSION_CODES.O)
+    private fun enterPreparedPip(activity: Activity, muted: Boolean, generation: Int) {
+        cancelPendingEnterPip(invalidateAttempt = false)
+        if (generation != enterAttemptGeneration) return
+        if (!PipController.isInCall || activity.isFinishing || activity.isDestroyed) {
+            PipController.inPipMode = activity.isInPictureInPictureMode
+            return
+        }
+        if (activity.isInPictureInPictureMode) {
+            PipController.inPipMode = true
+            refreshPipContent()
+            return
+        }
+
         try {
-            activity.enterPictureInPictureMode(buildParams(activity, muted))
+            val requested = activity.enterPictureInPictureMode(buildParams(activity, muted))
+            if (!requested) {
+                PipController.inPipMode = activity.isInPictureInPictureMode
+                return
+            }
+            mainHandler.post {
+                if (generation != enterAttemptGeneration) return@post
+                if (activity.isInPictureInPictureMode) {
+                    PipController.inPipMode = true
+                    refreshPipContent()
+                }
+            }
+            mainHandler.postDelayed({
+                if (generation != enterAttemptGeneration) return@postDelayed
+                if (!PipController.isInCall || activity.isFinishing || activity.isDestroyed) {
+                    PipController.inPipMode = activity.isInPictureInPictureMode
+                    return@postDelayed
+                }
+                if (activity.isInPictureInPictureMode) {
+                    PipController.inPipMode = true
+                    refreshPipContent()
+                } else {
+                    PipController.inPipMode = false
+                }
+            }, ENTER_RESULT_FALLBACK_MS)
         } catch (t: Throwable) {
+            PipController.inPipMode = activity.isInPictureInPictureMode
             debugLog("[PiP] Failed to enter picture-in-picture: ${t}")
         }
     }
 
-    /// Update the PiP RemoteActions (e.g. the Mute action flips to Unmute) while
-    /// already in PiP. API 26+.
+    // Update the PiP RemoteActions while already in PiP. API 26+.
     @RequiresApi(Build.VERSION_CODES.O)
     fun updateActions(activity: Activity, muted: Boolean) {
         try {
             activity.setPictureInPictureParams(buildParams(activity, muted))
-        } catch (_: Throwable) {
+        } catch (t: Throwable) {
+            debugLog("[PiP] Failed to update picture-in-picture actions: ${t}")
         }
     }
 
-    /// Refresh the Mute/Unmute RemoteAction while in PiP, resolving the current
-    /// Activity internally so the transpiled VM doesn't have to. No-op if there
-    /// is no Activity or on pre-API-26.
+    // Refresh Mute/Unmute while in PiP. No-op without an Activity or on pre-26.
     fun refreshActions(muted: Boolean) {
         if (Build.VERSION.SDK_INT < 26) return
         val activity = UIApplication.shared.androidActivity ?: return
         updateActions(activity, muted)
     }
 
-    /// Leave PiP when the call ends (Leave tapped in the PiP bar, host ended,
-    /// kicked, error). Android has no direct "exit PiP" API, so we relaunch the
-    /// activity to the front — the system collapses the PiP window back to a
-    /// full-screen activity, which then renders the join screen instead of a
-    /// dead/blank PiP tile. No-op if there's no Activity or we aren't in PiP.
+    @RequiresApi(Build.VERSION_CODES.O)
+    fun handleActivityResumed(activity: Activity) {
+        if (activity.isInPictureInPictureMode) return
+        val wasInPip = PipController.inPipMode
+        cancelPendingEnterPip()
+        PipController.inPipMode = false
+        if (wasInPip) {
+            CallActionDispatcher.pictureInPictureContentRefresh()
+        }
+    }
+
+    @RequiresApi(Build.VERSION_CODES.O)
+    fun handlePictureInPictureModeChanged(activity: Activity, inPip: Boolean, muted: Boolean) {
+        PipController.inPipMode = inPip
+        if (!inPip) {
+            cancelPendingEnterPip()
+            CallActionDispatcher.pictureInPictureContentRefresh()
+            return
+        }
+        cancelPendingEnterPip()
+        updateActions(activity, muted)
+        refreshPipContent()
+    }
+
+    // Android has no direct exit-PiP API. Relaunching the Activity collapses
+    // the PiP window back to full screen so the join screen can replace the call.
     fun exitPip() {
+        cancelPendingEnterPip()
         if (Build.VERSION.SDK_INT < 26) return
         val activity = UIApplication.shared.androidActivity ?: return
         if (!activity.isInPictureInPictureMode) return
@@ -68,12 +175,39 @@ object PipManager {
         }
     }
 
+    private fun cancelPendingEnterPip(invalidateAttempt: Boolean = true) {
+        pendingEnterRunnable?.let { mainHandler.removeCallbacks(it) }
+        pendingEnterRunnable = null
+        if (invalidateAttempt) {
+            enterAttemptGeneration += 1
+        }
+    }
+
+    private fun refreshPipContentSurface(recreateSurface: Boolean = false) {
+        PipController.refreshPipContent(recreateSurface = recreateSurface)
+        CallActionDispatcher.pictureInPictureContentRefresh()
+    }
+
+    private fun refreshPipContent() {
+        refreshPipContentSurface(recreateSurface = false)
+    }
+
     @RequiresApi(Build.VERSION_CODES.O)
     private fun buildParams(activity: Activity, muted: Boolean): android.app.PictureInPictureParams {
         val builder = android.app.PictureInPictureParams.Builder()
             .setAspectRatio(Rational(16, 9))
             .setActions(listOf(muteAction(activity, muted), leaveAction(activity)))
+        sourceRect(activity)?.let { builder.setSourceRectHint(it) }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            builder.setSeamlessResizeEnabled(true)
+        }
         return builder.build()
+    }
+
+    private fun sourceRect(activity: Activity): Rect? {
+        val decorView = activity.window?.decorView ?: return null
+        val rect = Rect()
+        return if (decorView.getGlobalVisibleRect(rect) && !rect.isEmpty) rect else null
     }
 
     @RequiresApi(Build.VERSION_CODES.O)

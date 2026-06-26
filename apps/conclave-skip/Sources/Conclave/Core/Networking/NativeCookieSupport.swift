@@ -13,7 +13,16 @@ enum NativeCookieSupport {
         }
         request.setValue(cookieHeader, forHTTPHeaderField: "Cookie")
         #else
-        _ = request
+        guard let url = request.url,
+              let cookies = HTTPCookieStorage.shared.cookies(for: url),
+              !cookies.isEmpty else {
+            return
+        }
+
+        let headers = HTTPCookie.requestHeaderFields(with: cookies)
+        if let cookieHeader = headers["Cookie"], !cookieHeader.isEmpty {
+            request.setValue(cookieHeader, forHTTPHeaderField: "Cookie")
+        }
         #endif
     }
 
@@ -31,8 +40,19 @@ enum NativeCookieSupport {
             )
         }
         #else
-        _ = response
-        _ = url
+        guard let url,
+              let httpResponse = response as? HTTPURLResponse else {
+            return
+        }
+
+        var headerFields: [String: String] = [:]
+        for (key, value) in httpResponse.allHeaderFields {
+            headerFields[String(describing: key)] = String(describing: value)
+        }
+
+        let cookies = HTTPCookie.cookies(withResponseHeaderFields: headerFields, for: url)
+        guard !cookies.isEmpty else { return }
+        HTTPCookieStorage.shared.setCookies(cookies, for: url, mainDocumentURL: nil)
         #endif
     }
 

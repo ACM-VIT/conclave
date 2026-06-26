@@ -42,6 +42,13 @@ interface ChatPanelProps {
   onCancelReply?: () => void;
 }
 
+type LocalRenderChatMessage = ChatMessage & {
+  clientRenderKey?: string;
+};
+
+const getMessageRenderKey = (message: ChatMessage): string =>
+  (message as LocalRenderChatMessage).clientRenderKey ?? message.id;
+
 const areGifsEqual = (
   previousGif?: ChatGifAttachment,
   nextGif?: ChatGifAttachment,
@@ -490,9 +497,10 @@ function ChatPanel({
     const nextNewIds = new Set<string>();
 
     messages.forEach((message) => {
-      currentIds.add(message.id);
-      if (!prevIds.has(message.id)) {
-        nextNewIds.add(message.id);
+      const renderKey = getMessageRenderKey(message);
+      currentIds.add(renderKey);
+      if (!prevIds.has(renderKey)) {
+        nextNewIds.add(renderKey);
       }
     });
 
@@ -535,8 +543,9 @@ function ChatPanel({
           ) : (
             messages.map((msg, index) => {
               const isOwn = msg.userId === currentUserId;
+              const messageRenderKey = getMessageRenderKey(msg);
               const isNew =
-                hasInitializedRef.current && newMessageIds.has(msg.id);
+                hasInitializedRef.current && newMessageIds.has(messageRenderKey);
               const displayName = formatDisplayName(msg.displayName || msg.userId);
               const actionText = getActionText(msg.content);
               const previousMessage = index > 0 ? messages[index - 1] : null;
@@ -580,7 +589,7 @@ function ChatPanel({
               if (actionText) {
                 return (
                   <div
-                    key={msg.id}
+                    key={messageRenderKey}
                     className={`${isNew ? "web-chat-action-new" : ""} px-2 py-1.5 text-center text-[12px] leading-relaxed text-[#a1a1aa]`}
                   >
                     {directMessageLabel ? (
@@ -654,7 +663,7 @@ function ChatPanel({
 
               return (
                 <div
-                  key={msg.id}
+                  key={messageRenderKey}
                   ref={(el) => {
                     if (el) messageNodeRefs.current.set(msg.id, el);
                     else messageNodeRefs.current.delete(msg.id);

@@ -66,8 +66,6 @@ final class HapticManager {
     }
 }
 #else
-// Stub implementation for non-UIKit platforms
-
 enum HapticType {
     case success
     case error
@@ -81,8 +79,6 @@ enum HapticType {
 final class HapticManager {
     static let shared = HapticManager()
     private init() {}
-    func trigger(_ type: HapticType) {
-        // No-op on non-UIKit platforms
-    }
+    func trigger(_ type: HapticType) {}
 }
 #endif

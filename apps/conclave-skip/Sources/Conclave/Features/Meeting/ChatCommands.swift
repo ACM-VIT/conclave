@@ -13,8 +13,6 @@ enum ChatCommand: String, CaseIterable {
     case mute = "mute"
     case unmute = "unmute"
     case camera = "camera"
-    case cameraOn = "cameraon"
-    case cameraOff = "cameraoff"
     case leave = "leave"
     case clear = "clear"
 
@@ -49,8 +47,6 @@ enum ChatCommand: String, CaseIterable {
         case .mute: return "Mute"
         case .unmute: return "Unmute"
         case .camera: return "Camera"
-        case .cameraOn: return "Camera On"
-        case .cameraOff: return "Camera Off"
         case .leave: return "Leave"
         case .clear: return "Clear chat"
         }
@@ -68,8 +64,6 @@ enum ChatCommand: String, CaseIterable {
         case .mute: return "Mute your microphone"
         case .unmute: return "Unmute your microphone"
         case .camera: return "Control your camera"
-        case .cameraOn: return "Turn on your camera"
-        case .cameraOff: return "Turn off your camera"
         case .leave: return "Leave the meeting"
         case .clear: return "Clear your local chat"
         }
@@ -87,8 +81,6 @@ enum ChatCommand: String, CaseIterable {
         case .mute: return "/mute"
         case .unmute: return "/unmute"
         case .camera: return "/camera on|off|toggle"
-        case .cameraOn: return "/cameraon"
-        case .cameraOff: return "/cameraoff"
         case .leave: return "/leave"
         case .clear: return "/clear"
         }
@@ -117,8 +109,6 @@ enum ChatCommand: String, CaseIterable {
         case .mute: return "mic.slash.fill"
         case .unmute: return "mic.fill"
         case .camera: return "video.fill"
-        case .cameraOn: return "video.fill"
-        case .cameraOff: return "video.slash.fill"
         case .leave: return "rectangle.portrait.and.arrow.right.fill"
         case .clear: return "trash.fill"
         }
@@ -146,16 +136,16 @@ struct ChatCommandParser {
         guard trimmed.hasPrefix("/") else { return nil }
 
         let withoutSlash = String(trimmed.dropFirst())
-        let components = withoutSlash.split(separator: " ", omittingEmptySubsequences: true)
+        let components = whitespaceSeparatedTokens(in: withoutSlash)
         
         guard let commandPart = components.first else { return nil }
         
-        let commandString = String(commandPart).lowercased()
+        let commandString = commandPart.lowercased()
         guard let command = ChatCommand(rawValue: commandString) else {
             return nil
         }
 
-        let arguments = components.dropFirst().map { String($0) }
+        let arguments = Array(components.dropFirst())
         
         return ParsedCommand(
             command: command,
@@ -173,10 +163,9 @@ struct ChatCommandParser {
     static func parseDirectMessage(_ text: String) -> (target: String, body: String)? {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let isAt = trimmed.hasPrefix("@")
-        let isDm = trimmed.lowercased().hasPrefix("/dm ")
+        let tokens = whitespaceSeparatedTokens(in: trimmed)
+        let isDm = tokens.first?.lowercased() == "/dm"
         guard isAt || isDm else { return nil }
-
-        let tokens = trimmed.split(separator: " ", omittingEmptySubsequences: true).map { String($0) }
 
         var target: String
         let bodyTokens: [String]
@@ -200,6 +189,27 @@ struct ChatCommandParser {
         guard !target.isEmpty, !body.isEmpty else { return nil }
         return (target, body)
     }
+
+    private static func whitespaceSeparatedTokens(in value: String) -> [String] {
+        var tokens: [String] = []
+        var current = ""
+
+        for character in value {
+            if character.isWhitespace || character.isNewline {
+                if !current.isEmpty {
+                    tokens.append(current)
+                    current = ""
+                }
+            } else {
+                current += String(character)
+            }
+        }
+
+        if !current.isEmpty {
+            tokens.append(current)
+        }
+        return tokens
+    }
     
     static func matchesPartialCommand(_ text: String) -> [ChatCommand] {
         guard text.hasPrefix("/") else { return [] }
@@ -210,10 +220,48 @@ struct ChatCommandParser {
             return ChatCommand.primaryCommands
         }
 
-        let searchableCommands = ChatCommand.primaryCommands + [.cameraOn, .cameraOff]
-        return searchableCommands.filter { command in
+        return ChatCommand.primaryCommands.filter { command in
             command.rawValue.hasPrefix(withoutSlash)
         }
+    }
+}
+
+enum ChatMessageContentPolicy {
+    static func ttsText(from content: String) -> String? {
+        commandText(in: content, command: "/tts")
+    }
+
+    static func actionText(from content: String) -> String? {
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let text = commandText(in: trimmed, command: "/me") {
+            return text
+        }
+        if let text = commandText(in: trimmed, command: "/action") {
+            return text
+        }
+        if trimmed.hasPrefix("* ") {
+            let text = String(trimmed.dropFirst(2)).trimmingCharacters(in: .whitespacesAndNewlines)
+            return text.isEmpty ? nil : text
+        }
+        return nil
+    }
+
+    private static func commandText(in content: String, command: String) -> String? {
+        guard content.lowercased().hasPrefix(command) else { return nil }
+
+        let remainder = content.dropFirst(command.count)
+        guard let separator = remainder.first, separator.isWhitespace || separator.isNewline else {
+            return nil
+        }
+
+        let bodyStart = remainder.drop { character in
+            character.isWhitespace || character.isNewline
+        }
+        let body = String(bodyStart.prefix { character in
+            !character.isNewline
+        })
+        let text = body.trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.isEmpty ? nil : text
     }
 }
 

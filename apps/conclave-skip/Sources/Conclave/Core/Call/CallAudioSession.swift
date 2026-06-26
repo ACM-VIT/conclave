@@ -13,8 +13,44 @@ final class CallAudioSession {
     private var isObserving = false
     /// Set while a call is active so we only re-activate audio when in a call.
     private var isCallActive = false
+    private var routeReassertionHandler: (() -> Void)?
+    private var categoryOptionsProvider: (() -> AVAudioSession.CategoryOptions)?
+    private var reactivationTask: Task<Void, Never>?
 
     private init() {}
+
+    nonisolated static func voiceCallCategoryOptions(defaultToSpeaker: Bool = true) -> AVAudioSession.CategoryOptions {
+        var options: AVAudioSession.CategoryOptions = [
+            // Prefer HFP for headset microphones, but allow output-only
+            // Bluetooth earphones to play call audio while the phone mic captures.
+            .allowBluetoothHFP,
+            .allowBluetoothA2DP
+        ]
+        if defaultToSpeaker {
+            options.insert(.defaultToSpeaker)
+        }
+        return options
+    }
+
+    nonisolated static func voiceCallCategoryOptions(for session: AVAudioSession) -> AVAudioSession.CategoryOptions {
+        voiceCallCategoryOptions(
+            defaultToSpeaker: CallAudioRoutePolicy.shouldDefaultToSpeaker(
+                selectedOutputId: nil,
+                hasExternalOutputRoute: hasExternalCallAudioOutputRoute(in: session)
+            )
+        )
+    }
+
+    nonisolated static func hasExternalCallAudioOutputRoute(in session: AVAudioSession) -> Bool {
+        let externalOutputPorts: Set<AVAudioSession.Port> = [
+            .bluetoothHFP,
+            .bluetoothA2DP,
+            .headphones,
+            .usbAudio,
+            .carAudio
+        ]
+        return session.currentRoute.outputs.contains { externalOutputPorts.contains($0.portType) }
+    }
 
     // MARK: - Lifecycle
 
@@ -29,6 +65,10 @@ final class CallAudioSession {
     /// End the call's audio lifecycle.
     func end() {
         isCallActive = false
+        reactivationTask?.cancel()
+        reactivationTask = nil
+        categoryOptionsProvider = nil
+        routeReassertionHandler = nil
         stopObserving()
         deactivateSession()
     }
@@ -40,6 +80,14 @@ final class CallAudioSession {
         activateSession()
     }
 
+    func setRouteReassertionHandler(_ handler: (() -> Void)?) {
+        routeReassertionHandler = handler
+    }
+
+    func setCategoryOptionsProvider(_ provider: (() -> AVAudioSession.CategoryOptions)?) {
+        categoryOptionsProvider = provider
+    }
+
     // MARK: - Session
 
     private func activateSession() {
@@ -48,15 +96,18 @@ final class CallAudioSession {
             try session.setCategory(
                 .playAndRecord,
                 mode: .voiceChat,
-                options: [.defaultToSpeaker, .allowBluetoothHFP]
+                options: categoryOptionsProvider?() ?? Self.voiceCallCategoryOptions()
             )
             try session.setActive(true)
+            routeReassertionHandler?()
         } catch {
             debugLog("[CallAudio] activate failed: \(error.localizedDescription)")
         }
     }
 
     private func deactivateSession() {
+        reactivationTask?.cancel()
+        reactivationTask = nil
         do {
             try AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
         } catch {
@@ -116,11 +167,11 @@ final class CallAudioSession {
             if let optionsValue = info[AVAudioSessionInterruptionOptionKey] as? UInt {
                 let options = AVAudioSession.InterruptionOptions(rawValue: optionsValue)
                 if options.contains(.shouldResume) {
-                    Task { @MainActor in self.handleCallKitActivation() }
+                    scheduleActivationReassertion()
                 }
             } else {
                 // No options provided — best-effort re-activate while in a call.
-                Task { @MainActor in self.handleCallKitActivation() }
+                scheduleActivationReassertion()
             }
         @unknown default:
             break
@@ -128,16 +179,37 @@ final class CallAudioSession {
     }
 
     @objc private func handleRouteChange(_ notification: Notification) {
-        // Headphones unplugged / Bluetooth disconnected etc. Re-assert the
-        // session so audio keeps routing somewhere sane while in a call.
         guard isCallActive else { return }
-        Task { @MainActor in self.handleCallKitActivation() }
+        if let reason = routeChangeReason(from: notification),
+           reason == .categoryChange {
+            return
+        }
+        scheduleActivationReassertion()
     }
 
     @objc private func handleMediaServicesReset(_ notification: Notification) {
         // The media server crashed and restarted — everything needs re-arming.
         guard isCallActive else { return }
-        Task { @MainActor in self.handleCallKitActivation() }
+        scheduleActivationReassertion()
+    }
+
+    private func scheduleActivationReassertion() {
+        reactivationTask?.cancel()
+        handleCallKitActivation()
+        reactivationTask = Task { @MainActor [weak self] in
+            for delay in [250_000_000, 1_000_000_000, 2_500_000_000] as [UInt64] {
+                try? await Task.sleep(nanoseconds: delay)
+                guard let self, self.isCallActive, !Task.isCancelled else { return }
+                self.handleCallKitActivation()
+            }
+        }
+    }
+
+    private func routeChangeReason(from notification: Notification) -> AVAudioSession.RouteChangeReason? {
+        guard let reasonValue = notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt else {
+            return nil
+        }
+        return AVAudioSession.RouteChangeReason(rawValue: reasonValue)
     }
 }
 #endif
