@@ -84,6 +84,12 @@ patch_conclave_framework() {
   set_plist_string "${plist_path}" "NSLocationAlwaysAndWhenInUseUsageDescription" "Conclave uses background location only while a location-sharing action you started remains active."
   set_plist_string "${plist_path}" "NSLocationAlwaysUsageDescription" "Conclave uses background location only while a location-sharing action you started remains active."
   set_plist_string "${plist_path}" "NSFaceIDUsageDescription" "Conclave uses Face ID only when you choose biometric verification for account access."
+  set_plist_string "${plist_path}" "NSContactsUsageDescription" "Conclave uses contacts only when you choose to select someone to invite to a meeting."
+  set_plist_string "${plist_path}" "NSCalendarsUsageDescription" "Conclave uses calendar access only when you choose to create or view meeting calendar events."
+  set_plist_string "${plist_path}" "NSCalendarsFullAccessUsageDescription" "Conclave uses calendar access only when you choose to create or view meeting calendar events."
+  set_plist_string "${plist_path}" "NSCalendarsWriteOnlyAccessUsageDescription" "Conclave can add meeting events to your calendar only when you choose to save them."
+  set_plist_string "${plist_path}" "NSRemindersUsageDescription" "Conclave uses reminders only when you choose to create a meeting reminder."
+  set_plist_string "${plist_path}" "NSRemindersFullAccessUsageDescription" "Conclave uses reminders only when you choose to create a meeting reminder."
   set_file_purpose_strings "${plist_path}"
 
   copy_privacy_manifest "ConclaveFramework.xcprivacy" "${framework_path}"

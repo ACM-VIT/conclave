@@ -5971,6 +5971,10 @@ final class ConclaveTests: XCTestCase {
         XCTAssertTrue(script.contains("\"NSCameraUsageDescription\""))
         XCTAssertTrue(script.contains("\"NSMicrophoneUsageDescription\""))
         XCTAssertTrue(script.contains("\"NSLocalNetworkUsageDescription\""))
+        XCTAssertTrue(script.contains("\"NSContactsUsageDescription\""))
+        XCTAssertTrue(script.contains("\"NSCalendarsFullAccessUsageDescription\""))
+        XCTAssertTrue(script.contains("\"NSCalendarsWriteOnlyAccessUsageDescription\""))
+        XCTAssertTrue(script.contains("\"NSRemindersFullAccessUsageDescription\""))
         XCTAssertTrue(script.contains("\"NSDocumentsFolderUsageDescription\""))
         XCTAssertEqual(script.components(separatedBy: "set_file_purpose_strings \"${plist_path}\"").count - 1, 3)
     }
