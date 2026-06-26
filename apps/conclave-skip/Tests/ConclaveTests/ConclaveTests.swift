@@ -6190,6 +6190,51 @@ final class ConclaveTests: XCTestCase {
         )
     }
 
+    func testDarwinAppTargetUsesCheckedInInfoPlistForPurposeStrings() throws {
+        let xcconfig = try sourceFileContents("Darwin/Conclave.xcconfig")
+        let appPlist = try sourcePlistDictionary("Darwin/Info.plist")
+
+        XCTAssertTrue(xcconfig.contains("INFOPLIST_FILE = Info.plist"))
+        XCTAssertTrue(xcconfig.contains("GENERATE_INFOPLIST_FILE = NO"))
+        XCTAssertFalse(
+            xcconfig.contains("GENERATE_INFOPLIST_FILE = YES"),
+            "The app target must not generate a replacement Info.plist without the checked-in purpose strings."
+        )
+        XCTAssertFalse(
+            xcconfig.contains("INFOPLIST_KEY_"),
+            "App metadata that affects archives should live in Darwin/Info.plist with the purpose strings."
+        )
+
+        let bundleKeys = [
+            "CFBundleDevelopmentRegion",
+            "CFBundleDisplayName",
+            "CFBundleExecutable",
+            "CFBundleIdentifier",
+            "CFBundleInfoDictionaryVersion",
+            "CFBundleName",
+            "CFBundlePackageType",
+            "CFBundleShortVersionString",
+            "CFBundleVersion",
+        ]
+        for key in bundleKeys {
+            XCTAssertNotNil(appPlist[key], "\(key) must be present when Info.plist generation is disabled")
+        }
+        XCTAssertNotNil(appPlist["UIApplicationSceneManifest"])
+        XCTAssertEqual(appPlist["UIApplicationSupportsIndirectInputEvents"] as? Bool, true)
+        XCTAssertNotNil(appPlist["UILaunchScreen"])
+        XCTAssertEqual(appPlist["UIStatusBarStyle"] as? String, "UIStatusBarStyleDefault")
+        let orientations = try XCTUnwrap(appPlist["UISupportedInterfaceOrientations"] as? [String])
+        XCTAssertEqual(
+            orientations,
+            [
+                "UIInterfaceOrientationLandscapeLeft",
+                "UIInterfaceOrientationLandscapeRight",
+                "UIInterfaceOrientationPortrait",
+                "UIInterfaceOrientationPortraitUpsideDown",
+            ]
+        )
+    }
+
     func testDarwinPrivacyManifestDeclaresRequiredReasonApis() throws {
         try assertPrivacyManifestReasons(
             "Darwin/PrivacyInfo.xcprivacy",
