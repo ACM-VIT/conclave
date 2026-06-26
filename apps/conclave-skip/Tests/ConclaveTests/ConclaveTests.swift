@@ -5885,21 +5885,29 @@ final class ConclaveTests: XCTestCase {
     }
 
     func testDarwinPrivacyManifestDeclaresRequiredReasonApis() throws {
-        let privacyManifest = try sourcePlistDictionary("Darwin/PrivacyInfo.xcprivacy")
-        let accessedApiTypes = try XCTUnwrap(privacyManifest["NSPrivacyAccessedAPITypes"] as? [[String: Any]])
-        let reasonsByCategory = Dictionary(uniqueKeysWithValues: accessedApiTypes.compactMap { entry -> (String, [String])? in
-            guard
-                let category = entry["NSPrivacyAccessedAPIType"] as? String,
-                let reasons = entry["NSPrivacyAccessedAPITypeReasons"] as? [String]
-            else {
-                return nil
-            }
-            return (category, reasons)
-        })
-
-        XCTAssertEqual(reasonsByCategory["NSPrivacyAccessedAPICategoryUserDefaults"], ["CA92.1"])
-        XCTAssertEqual(reasonsByCategory["NSPrivacyAccessedAPICategoryFileTimestamp"], ["C617.1"])
-        XCTAssertEqual(reasonsByCategory["NSPrivacyAccessedAPICategorySystemBootTime"], ["35F9.1"])
+        try assertPrivacyManifestReasons(
+            "Darwin/PrivacyInfo.xcprivacy",
+            expectedReasons: [
+                "NSPrivacyAccessedAPICategoryUserDefaults": ["CA92.1"],
+                "NSPrivacyAccessedAPICategoryFileTimestamp": ["C617.1"],
+                "NSPrivacyAccessedAPICategorySystemBootTime": ["35F9.1"],
+            ]
+        )
+        try assertPrivacyManifestReasons(
+            "Darwin/PrivacyManifests/ConclaveFramework.xcprivacy",
+            expectedReasons: [
+                "NSPrivacyAccessedAPICategoryUserDefaults": ["CA92.1"],
+                "NSPrivacyAccessedAPICategoryFileTimestamp": ["C617.1"],
+                "NSPrivacyAccessedAPICategorySystemBootTime": ["35F9.1"],
+            ]
+        )
+        try assertPrivacyManifestReasons(
+            "Darwin/PrivacyManifests/WebRTCFramework.xcprivacy",
+            expectedReasons: [
+                "NSPrivacyAccessedAPICategoryFileTimestamp": ["C617.1"],
+                "NSPrivacyAccessedAPICategorySystemBootTime": ["35F9.1"],
+            ]
+        )
     }
 #endif
 
@@ -6006,6 +6014,33 @@ private func assertPurposeStrings(
             file: file,
             line: line
         )
+    }
+}
+
+private func assertPrivacyManifestReasons(
+    _ relativePath: String,
+    expectedReasons: [String: [String]],
+    file: StaticString = #filePath,
+    line: UInt = #line
+) throws {
+    let privacyManifest = try sourcePlistDictionary(relativePath)
+    let accessedApiTypes = try XCTUnwrap(
+        privacyManifest["NSPrivacyAccessedAPITypes"] as? [[String: Any]],
+        file: file,
+        line: line
+    )
+    let reasonsByCategory = Dictionary(uniqueKeysWithValues: accessedApiTypes.compactMap { entry -> (String, [String])? in
+        guard
+            let category = entry["NSPrivacyAccessedAPIType"] as? String,
+            let reasons = entry["NSPrivacyAccessedAPITypeReasons"] as? [String]
+        else {
+            return nil
+        }
+        return (category, reasons)
+    })
+
+    for (category, reasons) in expectedReasons {
+        XCTAssertEqual(reasonsByCategory[category], reasons, "\(category) in \(relativePath)", file: file, line: line)
     }
 }
 

@@ -187,6 +187,7 @@
 				499CD43E2AC5B799001AE8D8 /* Resources */,
 				499CD4452AC5B869001AE8D8 /* Run skip gradle */,
 				499CD44A2AC5B9C6001AE8D8 /* Embed Frameworks */,
+				8D0E0D6B2E5A4A71B57E90C1 /* Apply embedded privacy metadata */,
 				DED5F813849FF18CBE9AFB5A /* Embed App Extensions */,
 			);
 			buildRules = (
@@ -292,6 +293,28 @@
 			shellPath = "/bin/sh -e";
 			shellScript = "if [ \"${SKIP_ZERO}\" != \"\" ]; then\n  echo \"note: skipping skip due to SKIP_ZERO\"\n  exit 0\nelif [ \"${ENABLE_PREVIEWS}\" = \"YES\" ]; then\n  echo \"note: skipping skip due to ENABLE_PREVIEWS\"\n  exit 0\nelif [ \"${ACTION}\" = \"install\" ]; then\n  echo \"note: skipping skip due to archive install\"\n  exit 0\nelif [ \"${SKIP_ACTION}\" = \"none\" ]; then\n  echo \"note: skipping skip due to SKIP_ACTION none\"\n  exit 0\nelse\n  SKIP_ACTION=\"${SKIP_ACTION:-launch}\"\nfi\nPATH=${BUILD_ROOT}/Release:${BUILD_ROOT}/Debug:${BUILD_ROOT}/../../SourcePackages/artifacts/skip/skip/skip.artifactbundle/macos:${PATH}:${HOMEBREW_PREFIX:-/opt/homebrew}/bin\necho \"note: running gradle build with: $(which skip) gradle -p ${PWD}/../Android ${SKIP_ACTION:-launch}${CONFIGURATION:-Debug}\"\nskip gradle -p ../Android ${SKIP_ACTION:-launch}${CONFIGURATION:-Debug}\n";
 		};
+		8D0E0D6B2E5A4A71B57E90C1 /* Apply embedded privacy metadata */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/Scripts/apply-embedded-privacy-metadata.sh",
+				"$(SRCROOT)/PrivacyManifests/ConclaveFramework.xcprivacy",
+				"$(SRCROOT)/PrivacyManifests/WebRTCFramework.xcprivacy",
+			);
+			name = "Apply embedded privacy metadata";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "sh \"${SRCROOT}/Scripts/apply-embedded-privacy-metadata.sh\"\n";
+		};
 /* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -332,7 +355,7 @@
 				"CODE_SIGNING_REQUIRED[sdk=iphonesimulator*]" = NO;
 				CODE_SIGN_ENTITLEMENTS = ScreenShareExtension/ScreenShareExtension.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 37;
+				CURRENT_PROJECT_VERSION = 38;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = ScreenShareExtension/Info.plist;
@@ -419,7 +442,7 @@
 				"CODE_SIGNING_REQUIRED[sdk=iphonesimulator*]" = NO;
 				CODE_SIGN_ENTITLEMENTS = ScreenShareExtension/ScreenShareExtension.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 37;
+				CURRENT_PROJECT_VERSION = 38;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = ScreenShareExtension/Info.plist;
