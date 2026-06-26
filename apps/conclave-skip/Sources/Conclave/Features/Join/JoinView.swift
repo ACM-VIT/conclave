@@ -236,6 +236,7 @@ enum JoinCompactPreviewLayoutPolicy {
         isJoinTab: Bool
     ) -> CGFloat {
         let hardMinimum: CGFloat = 96.0
+        let visibleMinimum: CGFloat = 72.0
         let relaxedMinimum: CGFloat = showsPrompt || containerHeight < 700.0 ? 124.0 : 184.0
         let maximum: CGFloat = 252.0
         let desired = min(maximum, max(relaxedMinimum, containerHeight * 0.29 - (showsPrompt ? 30.0 : 0.0)))
@@ -246,7 +247,8 @@ enum JoinCompactPreviewLayoutPolicy {
             showsGhostToggle: showsGhostToggle,
             isJoinTab: isJoinTab
         )
-        return max(hardMinimum, min(desired, available))
+        guard available >= visibleMinimum else { return 0.0 }
+        return max(min(hardMinimum, available), min(desired, available))
     }
 
     private static func estimatedVerticalChrome(

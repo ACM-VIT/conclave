@@ -353,9 +353,33 @@ final class ConclaveTests: XCTestCase {
             isJoinTab: true
         )
 
-        XCTAssertEqual(withFooter, 96)
+        XCTAssertEqual(withFooter, 0)
         XCTAssertGreaterThan(withoutFooter, withFooter)
         XCTAssertLessThanOrEqual(withoutFooter, 124)
+    }
+
+    func testJoinCompactPreviewLayoutAvoidsUnusablePreviewStrip() throws {
+        XCTAssertEqual(
+            JoinCompactPreviewLayoutPolicy.height(
+                containerHeight: 640,
+                showsPrompt: true,
+                showsTabs: true,
+                showsGuestFooter: true,
+                showsGhostToggle: false,
+                isJoinTab: true
+            ),
+            0
+        )
+
+        let usablePreviewHeight = JoinCompactPreviewLayoutPolicy.height(
+            containerHeight: 710,
+            showsPrompt: true,
+            showsTabs: true,
+            showsGuestFooter: true,
+            showsGhostToggle: false,
+            isJoinTab: true
+        )
+        XCTAssertGreaterThanOrEqual(usablePreviewHeight, 72)
     }
 
     func testSfuJoinInfoDerivesStableNativeIdentityFromTokenClaims() throws {
