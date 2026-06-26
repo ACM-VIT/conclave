@@ -22,6 +22,10 @@
     <string>$(CURRENT_PROJECT_VERSION)</string>
     <key>RTCAppGroupIdentifier</key>
     <string>group.com.acmvit.conclave.screenshare</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Conclave can include microphone audio when you share your screen in a meeting.</string>
+    <key>NSScreenCaptureUsageDescription</key>
+    <string>Conclave uses screen capture so you can share your screen in a meeting.</string>
     <key>NSExtension</key>
     <dict>
         <key>NSExtensionPointIdentifier</key>

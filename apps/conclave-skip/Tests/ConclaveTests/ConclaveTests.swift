@@ -5647,6 +5647,28 @@ final class ConclaveTests: XCTestCase {
         XCTAssertTrue(source.contains("changed.length() > 0"))
         XCTAssertTrue(source.contains("changed = changedFlagField(obj, \"changed\")"))
     }
+
+    func testDarwinPermissionPurposeStringsArePresentInAppAndExtensionPlists() throws {
+        let appPlist = try sourcePlistDictionary("Darwin/Info.plist")
+        let extensionPlist = try sourcePlistDictionary("Darwin/ScreenShareExtension/Info.plist")
+
+        try assertPurposeStrings(
+            appPlist,
+            keys: [
+                "NSCameraUsageDescription",
+                "NSMicrophoneUsageDescription",
+                "NSLocalNetworkUsageDescription",
+                "NSScreenCaptureUsageDescription",
+            ]
+        )
+        try assertPurposeStrings(
+            extensionPlist,
+            keys: [
+                "NSMicrophoneUsageDescription",
+                "NSScreenCaptureUsageDescription",
+            ]
+        )
+    }
 #endif
 
     func testLocalVideoMirrorPolicyMirrorsOnlyFrontCamera() throws {
@@ -5723,13 +5745,45 @@ private func registeredServerEventRawValues(
 }
 
 private func sourceFileContents(_ relativePath: String) throws -> String {
+    try String(contentsOf: sourceFileURL(relativePath), encoding: .utf8)
+}
+
+private func sourcePlistDictionary(_ relativePath: String) throws -> NSDictionary {
+    let data = try Data(contentsOf: sourceFileURL(relativePath))
+    let object = try PropertyListSerialization.propertyList(from: data, format: nil)
+    return try XCTUnwrap(object as? NSDictionary)
+}
+
+private func assertPurposeStrings(
+    _ plist: NSDictionary,
+    keys: [String],
+    file: StaticString = #filePath,
+    line: UInt = #line
+) throws {
+    for key in keys {
+        let value = try XCTUnwrap(plist[key] as? String, "\(key) is missing", file: file, line: line)
+        XCTAssertFalse(
+            value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+            "\(key) is empty",
+            file: file,
+            line: line
+        )
+        XCTAssertFalse(
+            value.contains("$("),
+            "\(key) must be a resolved user-facing purpose string",
+            file: file,
+            line: line
+        )
+    }
+}
+
+private func sourceFileURL(_ relativePath: String) -> URL {
     let testFile = URL(fileURLWithPath: #filePath)
     let packageRoot = testFile
         .deletingLastPathComponent()
         .deletingLastPathComponent()
         .deletingLastPathComponent()
-    let url = packageRoot.appendingPathComponent(relativePath)
-    return try String(contentsOf: url, encoding: .utf8)
+    return packageRoot.appendingPathComponent(relativePath)
 }
 
 private func repoFileContents(_ relativePath: String) throws -> String {

@@ -42,6 +42,8 @@
 	<string>Conclave uses the microphone so you can be heard in a meeting.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Conclave uses the local network to connect your call's audio and video to other people, for faster and more reliable meetings.</string>
+	<key>NSScreenCaptureUsageDescription</key>
+	<string>Conclave uses screen capture so you can share your screen in a meeting.</string>
 	<key>SFU_CLIENT_ID</key>
 	<string>public</string>
 	<key>SFU_JOIN_URL</key>
