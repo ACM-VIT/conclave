@@ -5659,6 +5659,11 @@ final class ConclaveTests: XCTestCase {
                 "NSMicrophoneUsageDescription",
                 "NSLocalNetworkUsageDescription",
                 "NSScreenCaptureUsageDescription",
+                "NSPhotoLibraryUsageDescription",
+                "NSPhotoLibraryAddUsageDescription",
+                "NSLocationWhenInUseUsageDescription",
+                "NSLocationAlwaysAndWhenInUseUsageDescription",
+                "NSFaceIDUsageDescription",
             ]
         )
         try assertPurposeStrings(
