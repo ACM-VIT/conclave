@@ -358,11 +358,18 @@ enum NativeAuthService {
 
     static func resolveAppBaseURL() -> URL? {
         #if SKIP
-        if !SfuJoinService.isAndroidDebugRuntime() {
-            return baseURL(from: SfuJoinService.productionJoinURL())
+        if SfuJoinService.isAndroidDebugRuntime() {
+            return resolveDebugAppBaseURL()
         }
+        return resolveProductionAppBaseURL()
+        #elseif DEBUG
+        return resolveDebugAppBaseURL()
         #else
-        #if !DEBUG
+        return resolveProductionAppBaseURL()
+        #endif
+    }
+
+    private static func resolveProductionAppBaseURL() -> URL? {
         for key in appBaseURLConfigKeys {
             if let value = ProcessInfo.processInfo.environment[key],
                let url = configuredProductionAppBaseURL(from: value) {
@@ -375,9 +382,9 @@ enum NativeAuthService {
         }
 
         return baseURL(from: SfuJoinService.productionJoinURL())
-        #endif
-        #endif
+    }
 
+    private static func resolveDebugAppBaseURL() -> URL? {
         for key in appBaseURLConfigKeys {
             if let value = ProcessInfo.processInfo.environment[key],
                let url = configuredBaseURL(from: value) {
