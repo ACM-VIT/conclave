@@ -32,12 +32,13 @@ fun PipContent() {
         contentAlignment = Alignment.Center
     ) {
         if (videoState.track != null && !videoState.cameraOff) {
+            val trackKey = videoState.track.id()
             VideoTrackView(
                 track = videoState.track,
                 mirror = false,
                 fit = false,
                 useOverlaySurface = false,
-                rendererKey = "pip:${videoState.surfaceVersion}",
+                rendererKey = "pip:${videoState.surfaceVersion}:${videoState.targetId}:$trackKey",
                 clearBeforeAttach = false
             )
         } else {

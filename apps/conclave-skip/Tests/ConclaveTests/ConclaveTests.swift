@@ -4898,6 +4898,14 @@ final class ConclaveTests: XCTestCase {
         XCTAssertTrue(source.contains("if (!inPip) {\n            cancelPendingEnterPip()\n            CallActionDispatcher.pictureInPictureContentRefresh()\n            return\n        }"))
     }
 
+    func testAndroidPipRendererKeyTracksTargetAndTrackIdentity() throws {
+        let source = try sourceFileContents("Sources/Conclave/Skip/PipContent.kt")
+
+        XCTAssertTrue(source.contains("val trackKey = videoState.track.id()"))
+        XCTAssertTrue(source.contains("rendererKey = \"pip:${videoState.surfaceVersion}:${videoState.targetId}:$trackKey\""))
+        XCTAssertTrue(source.contains("clearBeforeAttach = false"))
+    }
+
     func testPipTargetSelectionPrefersPresentCandidateWithoutWaitingForVideoTrack() throws {
         XCTAssertEqual(
             PipTargetSelectionPolicy.targetId(
