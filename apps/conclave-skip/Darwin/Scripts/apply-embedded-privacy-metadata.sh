@@ -116,6 +116,7 @@ patch_mediasoup_framework() {
   set_media_purpose_strings "${plist_path}"
   set_file_purpose_strings "${plist_path}"
 
+  copy_privacy_manifest "MediasoupFramework.xcprivacy" "${framework_path}"
   resign_framework_if_needed "${framework_path}"
 }
 

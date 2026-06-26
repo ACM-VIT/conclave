@@ -5950,6 +5950,13 @@ final class ConclaveTests: XCTestCase {
                 "NSPrivacyAccessedAPICategorySystemBootTime": ["35F9.1"],
             ]
         )
+        try assertPrivacyManifestReasons(
+            "Darwin/PrivacyManifests/MediasoupFramework.xcprivacy",
+            expectedReasons: [
+                "NSPrivacyAccessedAPICategoryFileTimestamp": ["C617.1"],
+                "NSPrivacyAccessedAPICategorySystemBootTime": ["35F9.1"],
+            ]
+        )
     }
 
     func testDarwinEmbeddedFrameworkPrivacyPatchCoversMediaFrameworks() throws {
@@ -5960,6 +5967,7 @@ final class ConclaveTests: XCTestCase {
         XCTAssertTrue(script.contains("patch_mediasoup_framework"))
         XCTAssertTrue(script.contains("${FRAMEWORKS_DIR}/WebRTC.framework"))
         XCTAssertTrue(script.contains("${FRAMEWORKS_DIR}/Mediasoup.framework"))
+        XCTAssertTrue(script.contains("copy_privacy_manifest \"MediasoupFramework.xcprivacy\""))
         XCTAssertTrue(script.contains("\"NSCameraUsageDescription\""))
         XCTAssertTrue(script.contains("\"NSMicrophoneUsageDescription\""))
         XCTAssertTrue(script.contains("\"NSLocalNetworkUsageDescription\""))
