@@ -5865,6 +5865,11 @@ final class ConclaveTests: XCTestCase {
                 "NSCalendarsWriteOnlyAccessUsageDescription",
                 "NSRemindersUsageDescription",
                 "NSRemindersFullAccessUsageDescription",
+                "NSDocumentsFolderUsageDescription",
+                "NSDownloadsFolderUsageDescription",
+                "NSDesktopFolderUsageDescription",
+                "NSNetworkVolumesUsageDescription",
+                "NSRemovableVolumesUsageDescription",
             ]
         )
         let temporaryLocationPurposes = try XCTUnwrap(
@@ -5880,6 +5885,11 @@ final class ConclaveTests: XCTestCase {
             keys: [
                 "NSMicrophoneUsageDescription",
                 "NSScreenCaptureUsageDescription",
+                "NSDocumentsFolderUsageDescription",
+                "NSDownloadsFolderUsageDescription",
+                "NSDesktopFolderUsageDescription",
+                "NSNetworkVolumesUsageDescription",
+                "NSRemovableVolumesUsageDescription",
             ]
         )
     }
@@ -5921,6 +5931,7 @@ final class ConclaveTests: XCTestCase {
         XCTAssertTrue(script.contains("\"NSCameraUsageDescription\""))
         XCTAssertTrue(script.contains("\"NSMicrophoneUsageDescription\""))
         XCTAssertTrue(script.contains("\"NSLocalNetworkUsageDescription\""))
+        XCTAssertTrue(script.contains("\"NSDocumentsFolderUsageDescription\""))
     }
 #endif
 

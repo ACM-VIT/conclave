@@ -77,6 +77,16 @@
 	<string>Conclave uses reminders only when you choose to create a meeting reminder.</string>
 	<key>NSRemindersFullAccessUsageDescription</key>
 	<string>Conclave uses reminders only when you choose to create a meeting reminder.</string>
+	<key>NSDocumentsFolderUsageDescription</key>
+	<string>Conclave accesses files in Documents only when you choose a file to share or attach in a meeting.</string>
+	<key>NSDownloadsFolderUsageDescription</key>
+	<string>Conclave accesses files in Downloads only when you choose a file to share or attach in a meeting.</string>
+	<key>NSDesktopFolderUsageDescription</key>
+	<string>Conclave accesses files on the Desktop only when you choose a file to share or attach in a meeting.</string>
+	<key>NSNetworkVolumesUsageDescription</key>
+	<string>Conclave accesses network volumes only when you choose a file from one to share or attach in a meeting.</string>
+	<key>NSRemovableVolumesUsageDescription</key>
+	<string>Conclave accesses removable volumes only when you choose a file from one to share or attach in a meeting.</string>
 	<key>SFU_CLIENT_ID</key>
 	<string>public</string>
 	<key>SFU_JOIN_URL</key>

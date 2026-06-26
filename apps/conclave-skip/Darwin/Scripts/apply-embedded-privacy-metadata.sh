@@ -68,6 +68,11 @@ patch_conclave_framework() {
   set_plist_string "${plist_path}" "NSLocationAlwaysAndWhenInUseUsageDescription" "Conclave uses background location only while a location-sharing action you started remains active."
   set_plist_string "${plist_path}" "NSLocationAlwaysUsageDescription" "Conclave uses background location only while a location-sharing action you started remains active."
   set_plist_string "${plist_path}" "NSFaceIDUsageDescription" "Conclave uses Face ID only when you choose biometric verification for account access."
+  set_plist_string "${plist_path}" "NSDocumentsFolderUsageDescription" "Conclave accesses files in Documents only when you choose a file to share or attach in a meeting."
+  set_plist_string "${plist_path}" "NSDownloadsFolderUsageDescription" "Conclave accesses files in Downloads only when you choose a file to share or attach in a meeting."
+  set_plist_string "${plist_path}" "NSDesktopFolderUsageDescription" "Conclave accesses files on the Desktop only when you choose a file to share or attach in a meeting."
+  set_plist_string "${plist_path}" "NSNetworkVolumesUsageDescription" "Conclave accesses network volumes only when you choose a file from one to share or attach in a meeting."
+  set_plist_string "${plist_path}" "NSRemovableVolumesUsageDescription" "Conclave accesses removable volumes only when you choose a file from one to share or attach in a meeting."
 
   copy_privacy_manifest "ConclaveFramework.xcprivacy" "${framework_path}"
   resign_framework_if_needed "${framework_path}"
