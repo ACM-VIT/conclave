@@ -57,6 +57,7 @@ internal object SocketEvent {
     val setDmEnabled = SfuClientEvent.setDmEnabled.rawValue
     val setTtsDisabled = SfuClientEvent.setTtsDisabled.rawValue
     val setReactionsDisabled = SfuClientEvent.setReactionsDisabled.rawValue
+    val adminSetPolicies = SfuClientEvent.adminSetPolicies.rawValue
     val admitUser = SfuClientEvent.admitUser.rawValue
     val rejectUser = SfuClientEvent.rejectUser.rawValue
     val admitAllPending = SfuClientEvent.adminAdmitAllPending.rawValue
@@ -765,6 +766,25 @@ internal class SocketIOManager {
 
     internal suspend fun setReactionsDisabled(disabled: Boolean): RoomPolicyMutationResponse {
         val data = emit(SocketEvent.setReactionsDisabled, mapOf("disabled" to disabled))
+        return decodeRoomPolicyMutationResponse(data)
+    }
+
+    internal suspend fun setRoomPolicies(
+        locked: Boolean? = null,
+        noGuests: Boolean? = null,
+        chatLocked: Boolean? = null,
+        ttsDisabled: Boolean? = null,
+        dmEnabled: Boolean? = null,
+        reactionsDisabled: Boolean? = null
+    ): RoomPolicyMutationResponse {
+        val payload = JSONObject()
+        if (locked != null) payload.put("locked", locked)
+        if (noGuests != null) payload.put("noGuests", noGuests)
+        if (chatLocked != null) payload.put("chatLocked", chatLocked)
+        if (ttsDisabled != null) payload.put("ttsDisabled", ttsDisabled)
+        if (dmEnabled != null) payload.put("dmEnabled", dmEnabled)
+        if (reactionsDisabled != null) payload.put("reactionsDisabled", reactionsDisabled)
+        val data = emit(SocketEvent.adminSetPolicies, payload)
         return decodeRoomPolicyMutationResponse(data)
     }
 

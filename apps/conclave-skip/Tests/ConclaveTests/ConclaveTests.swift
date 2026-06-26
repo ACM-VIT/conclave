@@ -7,6 +7,7 @@ final class ConclaveTests: XCTestCase {
 
     func testNativeSfuClientEventsIncludeConsumerClose() throws {
         XCTAssertEqual(SfuClientEvent.closeConsumer.rawValue, "closeConsumer")
+        XCTAssertEqual(SfuClientEvent.adminSetPolicies.rawValue, "admin:setPolicies")
         XCTAssertEqual(SfuServerEvent.participantConnectionState.rawValue, "participantConnectionState")
         XCTAssertEqual(SfuServerEvent.webinarParticipantJoined.rawValue, "webinar:participantJoined")
     }
@@ -5526,6 +5527,26 @@ final class ConclaveTests: XCTestCase {
         XCTAssertEqual(response.enabled, false)
     }
 
+    func testAdminRoomPoliciesUpdateRequestOmitsNilPolicyFields() throws {
+        let request = AdminRoomPoliciesUpdateRequest(
+            locked: true,
+            noGuests: nil,
+            chatLocked: false,
+            ttsDisabled: nil,
+            dmEnabled: true,
+            reactionsDisabled: nil
+        )
+        let data = try JSONEncoder().encode(request)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? NSDictionary)
+
+        XCTAssertEqual(object["locked"] as? Bool, true)
+        XCTAssertEqual(object["chatLocked"] as? Bool, false)
+        XCTAssertEqual(object["dmEnabled"] as? Bool, true)
+        XCTAssertNil(object["noGuests"])
+        XCTAssertNil(object["ttsDisabled"])
+        XCTAssertNil(object["reactionsDisabled"])
+    }
+
     func testMeetingConfigClearInviteCodeEncodesExplicitNull() throws {
         let data = try JSONEncoder().encode(MeetingConfigUpdateRequest(inviteCode: nil))
         let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? NSDictionary)
@@ -5673,6 +5694,14 @@ final class ConclaveTests: XCTestCase {
         XCTAssertTrue(source.contains("private fun changedFlagField(obj: JSONObject, field: String): Boolean?"))
         XCTAssertTrue(source.contains("changed.length() > 0"))
         XCTAssertTrue(source.contains("changed = changedFlagField(obj, \"changed\")"))
+    }
+
+    func testAndroidSocketManagerExposesBatchRoomPoliciesEvent() throws {
+        let source = try sourceFileContents("Sources/Conclave/Skip/SocketIOManager+Android.kt")
+
+        XCTAssertTrue(source.contains("val adminSetPolicies = SfuClientEvent.adminSetPolicies.rawValue"))
+        XCTAssertTrue(source.contains("internal suspend fun setRoomPolicies("))
+        XCTAssertTrue(source.contains("emit(SocketEvent.adminSetPolicies, payload)"))
     }
 
     func testDarwinPermissionPurposeStringsArePresentInAppAndExtensionPlists() throws {

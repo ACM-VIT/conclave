@@ -152,6 +152,33 @@ final class SocketIOManager {
     func setReactionsDisabled(_ disabled: Bool) async throws -> RoomPolicyMutationResponse {
         RoomPolicyMutationResponse(success: true, error: nil, changed: nil, locked: nil, noGuests: nil, disabled: disabled, enabled: nil, policies: nil)
     }
+    func setRoomPolicies(
+        locked: Bool? = nil,
+        noGuests: Bool? = nil,
+        chatLocked: Bool? = nil,
+        ttsDisabled: Bool? = nil,
+        dmEnabled: Bool? = nil,
+        reactionsDisabled: Bool? = nil
+    ) async throws -> RoomPolicyMutationResponse {
+        RoomPolicyMutationResponse(
+            success: true,
+            error: nil,
+            changed: nil,
+            locked: locked,
+            noGuests: noGuests,
+            disabled: ttsDisabled ?? reactionsDisabled,
+            enabled: dmEnabled,
+            policies: AdminRoomPolicySnapshot(
+                locked: locked,
+                chatLocked: chatLocked,
+                noGuests: noGuests,
+                ttsDisabled: ttsDisabled,
+                dmEnabled: dmEnabled,
+                reactionsDisabled: reactionsDisabled,
+                requiresMeetingInviteCode: nil
+            )
+        )
+    }
     func getMeetingConfig() async throws -> MeetingConfigSnapshot { MeetingConfigSnapshot(roomId: nil, requiresInviteCode: nil) }
     func updateMeetingConfig(inviteCode: String?) async throws -> MeetingConfigSnapshot { MeetingConfigSnapshot(roomId: nil, requiresInviteCode: inviteCode != nil) }
     func getWebinarConfig() async throws -> WebinarConfigSnapshot {

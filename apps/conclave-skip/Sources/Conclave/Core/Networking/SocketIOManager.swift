@@ -73,6 +73,7 @@ private enum SocketEvent {
     static let adminBlockUsers = SfuClientEvent.adminBlockUsers.rawValue
     static let adminUnblockUsers = SfuClientEvent.adminUnblockUsers.rawValue
     static let adminRevokeAllowedUsers = SfuClientEvent.adminRevokeAllowedUsers.rawValue
+    static let adminSetPolicies = SfuClientEvent.adminSetPolicies.rawValue
     static let adminEndRoom = SfuClientEvent.adminEndRoom.rawValue
     static let meetingGetConfig = SfuClientEvent.meetingGetConfig.rawValue
     static let meetingUpdateConfig = SfuClientEvent.meetingUpdateConfig.rawValue
@@ -778,6 +779,26 @@ final class SocketIOManager {
 
     func setReactionsDisabled(_ disabled: Bool) async throws -> RoomPolicyMutationResponse {
         let data = try await emit(event: SocketEvent.setReactionsDisabled, payload: ["disabled": disabled])
+        return try JSONDecoder().decode(RoomPolicyMutationResponse.self, from: data)
+    }
+
+    func setRoomPolicies(
+        locked: Bool? = nil,
+        noGuests: Bool? = nil,
+        chatLocked: Bool? = nil,
+        ttsDisabled: Bool? = nil,
+        dmEnabled: Bool? = nil,
+        reactionsDisabled: Bool? = nil
+    ) async throws -> RoomPolicyMutationResponse {
+        let request = AdminRoomPoliciesUpdateRequest(
+            locked: locked,
+            noGuests: noGuests,
+            chatLocked: chatLocked,
+            ttsDisabled: ttsDisabled,
+            dmEnabled: dmEnabled,
+            reactionsDisabled: reactionsDisabled
+        )
+        let data = try await emit(event: SocketEvent.adminSetPolicies, payload: request)
         return try JSONDecoder().decode(RoomPolicyMutationResponse.self, from: data)
     }
 

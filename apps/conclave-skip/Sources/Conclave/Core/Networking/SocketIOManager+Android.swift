@@ -129,6 +129,14 @@ final class SocketIOManager {
     func setDmEnabled(_ enabled: Bool) async throws -> RoomPolicyMutationResponse { fatalError() }
     func setTtsDisabled(_ disabled: Bool) async throws -> RoomPolicyMutationResponse { fatalError() }
     func setReactionsDisabled(_ disabled: Bool) async throws -> RoomPolicyMutationResponse { fatalError() }
+    func setRoomPolicies(
+        locked: Bool? = nil,
+        noGuests: Bool? = nil,
+        chatLocked: Bool? = nil,
+        ttsDisabled: Bool? = nil,
+        dmEnabled: Bool? = nil,
+        reactionsDisabled: Bool? = nil
+    ) async throws -> RoomPolicyMutationResponse { fatalError() }
     func getMeetingConfig() async throws -> MeetingConfigSnapshot { fatalError() }
     func updateMeetingConfig(inviteCode: String?) async throws -> MeetingConfigSnapshot { fatalError() }
     func getWebinarConfig() async throws -> WebinarConfigSnapshot { fatalError() }

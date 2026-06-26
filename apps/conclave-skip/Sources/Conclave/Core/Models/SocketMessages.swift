@@ -1057,6 +1057,15 @@ struct AdminRevokeAllowedUsersRequest: Encodable {
     let revokeLocked: Bool
 }
 
+struct AdminRoomPoliciesUpdateRequest: Encodable {
+    let locked: Bool?
+    let noGuests: Bool?
+    let chatLocked: Bool?
+    let ttsDisabled: Bool?
+    let dmEnabled: Bool?
+    let reactionsDisabled: Bool?
+}
+
 struct MeetingConfigSnapshot: Codable {
     let roomId: String?
     let requiresInviteCode: Bool?
