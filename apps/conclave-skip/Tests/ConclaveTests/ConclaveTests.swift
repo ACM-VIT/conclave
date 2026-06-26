@@ -5639,6 +5639,14 @@ final class ConclaveTests: XCTestCase {
         XCTAssertFalse(manifest.contains("android:path=\"/sign-in\""))
         XCTAssertFalse(manifest.contains("android:pathPrefix=\"/sign-in/\""))
     }
+
+    func testAndroidPolicyAckParserAcceptsObjectShapedChangedField() throws {
+        let source = try sourceFileContents("Sources/Conclave/Skip/SocketIOManager+Android.kt")
+
+        XCTAssertTrue(source.contains("private fun changedFlagField(obj: JSONObject, field: String): Boolean?"))
+        XCTAssertTrue(source.contains("changed.length() > 0"))
+        XCTAssertTrue(source.contains("changed = changedFlagField(obj, \"changed\")"))
+    }
 #endif
 
     func testLocalVideoMirrorPolicyMirrorsOnlyFrontCamera() throws {

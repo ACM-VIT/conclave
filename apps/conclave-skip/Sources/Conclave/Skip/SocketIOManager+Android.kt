@@ -1378,6 +1378,12 @@ internal class SocketIOManager {
         }
     }
 
+    private fun changedFlagField(obj: JSONObject, field: String): Boolean? {
+        boolField(obj, field)?.let { return it }
+        val changed = obj.optJSONObject(field) ?: return null
+        return changed.length() > 0
+    }
+
     private fun jsonArrayValue(value: Any?): JSONArray? {
         return when (value) {
             null, JSONObject.NULL -> null
@@ -2039,7 +2045,7 @@ internal class SocketIOManager {
         return RoomPolicyMutationResponse(
             success = boolField(obj, "success"),
             error = stringField(obj, "error"),
-            changed = boolField(obj, "changed"),
+            changed = changedFlagField(obj, "changed"),
             locked = boolField(obj, "locked"),
             noGuests = boolField(obj, "noGuests"),
             disabled = boolField(obj, "disabled"),
