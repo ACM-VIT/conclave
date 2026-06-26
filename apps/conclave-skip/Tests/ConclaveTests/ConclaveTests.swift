@@ -535,6 +535,24 @@ final class ConclaveTests: XCTestCase {
         XCTAssertEqual(payload.name, "Account Name")
     }
 
+    func testNativeJoinPayloadSanitizesInstitutionAccountNameWhenDisplayedNameIsEmpty() throws {
+        let user = AppState.User(
+            id: "auth-user-123",
+            name: "  Nikhil   Rao 23BCE1234  ",
+            email: "nikhil@vitstudent.ac.in",
+            provider: AppState.AuthProvider.google
+        )
+
+        let payload = JoinView.sfuJoinUserPayload(
+            currentUser: user,
+            displayName: "   "
+        )
+
+        XCTAssertEqual(payload.id, "auth-user-123")
+        XCTAssertEqual(payload.email, "nikhil@vitstudent.ac.in")
+        XCTAssertEqual(payload.name, "Nikhil Rao")
+    }
+
     func testNativeJoinPayloadKeepsGuestIdentitySessionScoped() throws {
         let user = AppState.User(
             id: "legacy-local-user",

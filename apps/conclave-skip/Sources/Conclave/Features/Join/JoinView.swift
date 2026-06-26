@@ -116,6 +116,75 @@ enum JoinAsyncPermissionPolicy {
     }
 }
 
+enum JoinInstitutionDisplayNamePolicy {
+    static func sanitizedName(name: String?, email: String?) -> String {
+        let trimmedName = NativeDisplayNameNormalizer.normalize(name)
+        guard !trimmedName.isEmpty else { return "" }
+        let normalizedEmail = (email ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard normalizedEmail.hasSuffix("@vitstudent.ac.in") else {
+            return trimmedName
+        }
+
+        var parts = trimmedName
+            .components(separatedBy: " ")
+            .filter { !$0.isEmpty }
+        guard parts.count > 1,
+              let registration = parts.last,
+              isVITRegistrationToken(registration) else {
+            return trimmedName
+        }
+
+        parts.removeLast()
+        let sanitized = parts.joined(separator: " ")
+        return sanitized.isEmpty ? trimmedName : sanitized
+    }
+
+    private static func isVITRegistrationToken(_ value: String) -> Bool {
+        let token = value.uppercased()
+        let length = token.count
+        guard length >= 8, length <= 10 else { return false }
+
+        var index = 0
+        var digitCount = 0
+        for character in token {
+            if index < 2 {
+                guard isAsciiDigit(character) else { return false }
+            } else if index < 5 {
+                guard isAsciiLetter(character) else { return false }
+            } else if isAsciiDigit(character) {
+                digitCount += 1
+            } else {
+                guard index == length - 1,
+                      isAsciiLetter(character),
+                      digitCount == 3 || digitCount == 4 else {
+                    return false
+                }
+            }
+            index += 1
+        }
+        return digitCount == 3 || digitCount == 4
+    }
+
+    private static func isAsciiDigit(_ character: Character) -> Bool {
+        switch character {
+        case "0", "1", "2", "3", "4", "5", "6", "7", "8", "9":
+            return true
+        default:
+            return false
+        }
+    }
+
+    private static func isAsciiLetter(_ character: Character) -> Bool {
+        switch character {
+        case "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M",
+             "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z":
+            return true
+        default:
+            return false
+        }
+    }
+}
+
 enum JoinGuestContinuationPolicy {
     static func canContinue(
         guestName: String,
@@ -1755,7 +1824,7 @@ struct JoinView: View {
 
         let userId = user.id.trimmingCharacters(in: .whitespacesAndNewlines)
         let email = (user.email ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        let accountName = NativeDisplayNameNormalizer.normalize(user.name)
+        let accountName = JoinInstitutionDisplayNamePolicy.sanitizedName(name: user.name, email: user.email)
         let fallbackName = [accountName, email, userId].first { !$0.isEmpty }
         let payloadName = joinedDisplayName.isEmpty ? fallbackName : joinedDisplayName
         return SfuJoinUser(
@@ -1790,7 +1859,7 @@ struct JoinView: View {
     }
 
     private func accountDisplayName(for user: AppState.User, fallback: String) -> String {
-        let name = sanitizedInstitutionDisplayName(name: user.name, email: user.email)
+        let name = JoinInstitutionDisplayNamePolicy.sanitizedName(name: user.name, email: user.email)
         if !name.isEmpty {
             return name
         }
@@ -1803,73 +1872,6 @@ struct JoinView: View {
             return userId
         }
         return fallback
-    }
-
-    private func sanitizedInstitutionDisplayName(name: String?, email: String?) -> String {
-        let trimmedName = NativeDisplayNameNormalizer.normalize(name)
-        guard !trimmedName.isEmpty else { return "" }
-        let normalizedEmail = trimWhitespaceAndNewlines(email ?? "").lowercased()
-        guard normalizedEmail.hasSuffix("@vitstudent.ac.in") else {
-            return trimmedName
-        }
-
-        var parts = trimmedName
-            .components(separatedBy: " ")
-            .filter { !$0.isEmpty }
-        guard parts.count > 1,
-              let registration = parts.last,
-              isVITRegistrationToken(registration) else {
-            return trimmedName
-        }
-
-        parts.removeLast()
-        let sanitized = parts.joined(separator: " ")
-        return sanitized.isEmpty ? trimmedName : sanitized
-    }
-
-    private func isVITRegistrationToken(_ value: String) -> Bool {
-        let token = value.uppercased()
-        let length = token.count
-        guard length >= 8, length <= 10 else { return false }
-
-        var index = 0
-        var digitCount = 0
-        for character in token {
-            if index < 2 {
-                guard isAsciiDigit(character) else { return false }
-            } else if index < 5 {
-                guard isAsciiLetter(character) else { return false }
-            } else if isAsciiDigit(character) {
-                digitCount += 1
-            } else {
-                guard index == length - 1,
-                      isAsciiLetter(character),
-                      digitCount == 3 || digitCount == 4 else {
-                    return false
-                }
-            }
-            index += 1
-        }
-        return digitCount == 3 || digitCount == 4
-    }
-
-    private func isAsciiDigit(_ character: Character) -> Bool {
-        switch character {
-        case "0", "1", "2", "3", "4", "5", "6", "7", "8", "9":
-            return true
-        default:
-            return false
-        }
-    }
-
-    private func isAsciiLetter(_ character: Character) -> Bool {
-        switch character {
-        case "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M",
-             "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z":
-            return true
-        default:
-            return false
-        }
     }
 
     private func accountTitle(for user: AppState.User) -> String {
