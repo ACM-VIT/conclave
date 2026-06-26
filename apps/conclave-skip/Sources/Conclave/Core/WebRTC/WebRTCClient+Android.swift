@@ -69,6 +69,7 @@ final class WebRTCClient {
     func sampleConnectionQualitySample() -> ConnectionQualitySample { fatalError() }
     func consumerId(forProducer producerId: String) -> String? { fatalError() }
     func closeConsumers(exceptProducerIds producerIds: [String]) { fatalError() }
+    func closeConsumers(userIdPrefix: String) { fatalError() }
     func applyConsumerTelemetry(_ notification: ConsumerTelemetryNotification) { fatalError() }
     func hasAudioConsumer(userIdPrefix: String) -> Bool { fatalError() }
     func setAudioConsumersEnabled(userIdPrefix: String, enabled: Bool) { fatalError() }

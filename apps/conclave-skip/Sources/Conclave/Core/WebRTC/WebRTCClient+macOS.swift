@@ -73,6 +73,7 @@ final class WebRTCClient {
     }
     func consumerId(forProducer producerId: String) -> String? { nil }
     func closeConsumers(exceptProducerIds producerIds: [String]) { }
+    func closeConsumers(userIdPrefix: String) { }
     func applyConsumerTelemetry(_ notification: ConsumerTelemetryNotification) { }
     func hasAudioConsumer(userIdPrefix: String) -> Bool { false }
     func setAudioConsumersEnabled(userIdPrefix: String, enabled: Bool) { }

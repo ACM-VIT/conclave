@@ -3689,6 +3689,7 @@ final class MeetingViewModel {
 
     private func clearBrowserState() {
         stopBrowserActivityLoop()
+        clearBrowserMediaState()
         state.isBrowserActive = false
         state.isBrowserLaunching = false
         state.isBrowserNavigating = false
@@ -3698,6 +3699,34 @@ final class MeetingViewModel {
         state.browserURL = nil
         state.browserNoVncURL = nil
         state.browserControllerUserId = nil
+    }
+
+    private func clearBrowserMediaState() {
+        let browserProducerIds = producerInfosById.compactMap { producerId, producer in
+            MeetingState.isBrowserAudioUserId(producer.producerUserId) ||
+                MeetingState.isBrowserVideoUserId(producer.producerUserId)
+                ? producerId
+                : nil
+        }
+
+        for producerId in browserProducerIds {
+            producerInfosById.removeValue(forKey: producerId)
+            pendingProducers.removeValue(forKey: producerId)
+            pendingProducerContexts.removeValue(forKey: producerId)
+            pendingProducerRetryAttempts.removeValue(forKey: producerId)
+            cancelRemoteProducerCloseGraceTask(producerId: producerId)
+        }
+
+        webRTCClient.closeConsumers(userIdPrefix: MeetingState.browserAudioUserIdPrefix)
+        webRTCClient.closeConsumers(userIdPrefix: MeetingState.browserVideoUserIdPrefix)
+
+        if let activeScreenShareUserId = state.activeScreenShareUserId,
+           MeetingState.isBrowserVideoUserId(activeScreenShareUserId) {
+            state.activeScreenShareUserId = nil
+        }
+        #if SKIP
+        refreshPipVideo()
+        #endif
     }
 
     private func startBrowserActivityLoop() {

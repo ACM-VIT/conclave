@@ -378,6 +378,18 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         }
     }
 
+    internal fun closeConsumers(userIdPrefix: String) {
+        val prefix = userIdPrefix.trim()
+        if (prefix.isEmpty()) return
+
+        val matchingConsumers = consumers
+            .filterValues { it.userId.startsWith(prefix) || it.trackKey.startsWith(prefix) }
+
+        for ((consumerId, info) in matchingConsumers) {
+            removeConsumer(consumerId, info, closeConsumer = true)
+        }
+    }
+
     internal fun applyConsumerTelemetry(notification: ConsumerTelemetryNotification) {
         val info = consumers[notification.consumerId] ?: return
         if (info.producerId != notification.producerId) return

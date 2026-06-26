@@ -179,6 +179,19 @@ final class WebRTCClient: NSObject, ObservableObject {
         }
     }
 
+    func closeConsumers(userIdPrefix: String) {
+        let prefix = userIdPrefix.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !prefix.isEmpty else { return }
+
+        let matchingConsumers = consumers.filter { _, info in
+            info.userId.hasPrefix(prefix) || info.trackKey.hasPrefix(prefix)
+        }
+
+        for (consumerId, info) in matchingConsumers {
+            removeConsumer(consumerId: consumerId, info: info, closeConsumer: true)
+        }
+    }
+
     func applyConsumerTelemetry(_ notification: ConsumerTelemetryNotification) {
         guard let info = consumers[notification.consumerId],
               info.producerId == notification.producerId else { return }

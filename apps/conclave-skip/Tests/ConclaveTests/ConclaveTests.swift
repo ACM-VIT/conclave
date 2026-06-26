@@ -5828,6 +5828,22 @@ final class ConclaveTests: XCTestCase {
         XCTAssertTrue(source.contains("changed = changedFlagField(obj, \"changed\")"))
     }
 
+    func testBrowserStateClearTearsDownSystemMediaConsumers() throws {
+        let viewModelSource = try sourceFileContents("Sources/Conclave/Features/Meeting/MeetingViewModel.swift")
+        let iosWebRTCSource = try sourceFileContents("Sources/Conclave/Core/WebRTC/WebRTCClient.swift")
+        let androidWebRTCSource = try sourceFileContents("Sources/Conclave/Skip/WebRTCClient+Android.kt")
+
+        XCTAssertTrue(viewModelSource.contains("private func clearBrowserMediaState()"))
+        XCTAssertTrue(viewModelSource.contains("MeetingState.isBrowserAudioUserId(producer.producerUserId)"))
+        XCTAssertTrue(viewModelSource.contains("MeetingState.isBrowserVideoUserId(producer.producerUserId)"))
+        XCTAssertTrue(viewModelSource.contains("webRTCClient.closeConsumers(userIdPrefix: MeetingState.browserAudioUserIdPrefix)"))
+        XCTAssertTrue(viewModelSource.contains("webRTCClient.closeConsumers(userIdPrefix: MeetingState.browserVideoUserIdPrefix)"))
+        XCTAssertTrue(iosWebRTCSource.contains("func closeConsumers(userIdPrefix: String)"))
+        XCTAssertTrue(iosWebRTCSource.contains("info.userId.hasPrefix(prefix) || info.trackKey.hasPrefix(prefix)"))
+        XCTAssertTrue(androidWebRTCSource.contains("internal fun closeConsumers(userIdPrefix: String)"))
+        XCTAssertTrue(androidWebRTCSource.contains("it.userId.startsWith(prefix) || it.trackKey.startsWith(prefix)"))
+    }
+
     func testAndroidSocketManagerExposesBatchRoomPoliciesEvent() throws {
         let source = try sourceFileContents("Sources/Conclave/Skip/SocketIOManager+Android.kt")
 
