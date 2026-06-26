@@ -40,6 +40,10 @@
 	<string>Conclave uses the camera so you can turn on your video in a meeting.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Conclave uses the microphone so you can be heard in a meeting.</string>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>Conclave uses Bluetooth so you can route meeting audio through supported headphones and speakers.</string>
+	<key>NSBluetoothPeripheralUsageDescription</key>
+	<string>Conclave uses Bluetooth so you can route meeting audio through supported headphones and speakers.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Conclave uses the local network to connect your call's audio and video to other people, for faster and more reliable meetings.</string>
 	<key>NSScreenCaptureUsageDescription</key>

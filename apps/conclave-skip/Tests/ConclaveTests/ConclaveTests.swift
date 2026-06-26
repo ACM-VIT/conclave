@@ -5848,6 +5848,8 @@ final class ConclaveTests: XCTestCase {
             keys: [
                 "NSCameraUsageDescription",
                 "NSMicrophoneUsageDescription",
+                "NSBluetoothAlwaysUsageDescription",
+                "NSBluetoothPeripheralUsageDescription",
                 "NSLocalNetworkUsageDescription",
                 "NSScreenCaptureUsageDescription",
                 "NSPhotoLibraryUsageDescription",
