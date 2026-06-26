@@ -68,8 +68,6 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="https" android:host="conclave.acmvit.in" android:pathPrefix="/w/" />
                 <data android:scheme="https" android:host="conclave.acmvit.in" android:pathPattern="/.*-.*-.*" />
-                <data android:scheme="https" android:host="conclave.acmvit.in" android:path="/sign-in" />
-                <data android:scheme="https" android:host="conclave.acmvit.in" android:pathPrefix="/sign-in/" />
             </intent-filter>
             <intent-filter android:autoVerify="true">
                 <action android:name="android.intent.action.VIEW" />
@@ -77,8 +75,6 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="https" android:host="www.conclave.acmvit.in" android:pathPrefix="/w/" />
                 <data android:scheme="https" android:host="www.conclave.acmvit.in" android:pathPattern="/.*-.*-.*" />
-                <data android:scheme="https" android:host="www.conclave.acmvit.in" android:path="/sign-in" />
-                <data android:scheme="https" android:host="www.conclave.acmvit.in" android:pathPrefix="/sign-in/" />
             </intent-filter>
         </activity>
         

@@ -5465,6 +5465,40 @@ final class ConclaveTests: XCTestCase {
         ))
     }
 
+    func testRoomPolicyMutationResponseDecodesObjectShapedChangedAck() throws {
+        let data = Data("""
+        {
+          "success": true,
+          "changed": {
+            "locked": true
+          },
+          "locked": true
+        }
+        """.utf8)
+
+        let response = try JSONDecoder().decode(RoomPolicyMutationResponse.self, from: data)
+
+        XCTAssertEqual(response.success, true)
+        XCTAssertEqual(response.changed, true)
+        XCTAssertEqual(response.locked, true)
+    }
+
+    func testRoomPolicyMutationResponseKeepsBooleanChangedAckSupport() throws {
+        let data = Data("""
+        {
+          "success": true,
+          "changed": false,
+          "enabled": false
+        }
+        """.utf8)
+
+        let response = try JSONDecoder().decode(RoomPolicyMutationResponse.self, from: data)
+
+        XCTAssertEqual(response.success, true)
+        XCTAssertEqual(response.changed, false)
+        XCTAssertEqual(response.enabled, false)
+    }
+
     func testMeetingConfigClearInviteCodeEncodesExplicitNull() throws {
         let data = try JSONEncoder().encode(MeetingConfigUpdateRequest(inviteCode: nil))
         let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? NSDictionary)
@@ -5595,6 +5629,17 @@ final class ConclaveTests: XCTestCase {
             isEmulatorRuntime: false
         ))
     }
+
+#if !SKIP
+    func testAndroidManifestDoesNotCaptureWebOnlySignInLinks() throws {
+        let manifest = try sourceFileContents("Android/app/src/main/AndroidManifest.xml")
+
+        XCTAssertTrue(manifest.contains("android:pathPrefix=\"/w/\""))
+        XCTAssertTrue(manifest.contains("android:pathPattern=\"/.*-.*-.*\""))
+        XCTAssertFalse(manifest.contains("android:path=\"/sign-in\""))
+        XCTAssertFalse(manifest.contains("android:pathPrefix=\"/sign-in/\""))
+    }
+#endif
 
     func testLocalVideoMirrorPolicyMirrorsOnlyFrontCamera() throws {
         XCTAssertTrue(LocalCameraFacing.front.shouldMirrorLocalVideo)

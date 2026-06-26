@@ -392,6 +392,73 @@ struct RoomPolicyMutationResponse: Codable {
     let disabled: Bool?
     let enabled: Bool?
     let policies: AdminRoomPolicySnapshot?
+
+    enum CodingKeys: String, CodingKey {
+        case success
+        case error
+        case changed
+        case locked
+        case noGuests
+        case disabled
+        case enabled
+        case policies
+    }
+
+    init(
+        success: Bool?,
+        error: String?,
+        changed: Bool?,
+        locked: Bool?,
+        noGuests: Bool?,
+        disabled: Bool?,
+        enabled: Bool?,
+        policies: AdminRoomPolicySnapshot?
+    ) {
+        self.success = success
+        self.error = error
+        self.changed = changed
+        self.locked = locked
+        self.noGuests = noGuests
+        self.disabled = disabled
+        self.enabled = enabled
+        self.policies = policies
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        success = try container.decodeIfPresent(Bool.self, forKey: .success)
+        error = try container.decodeIfPresent(String.self, forKey: .error)
+        changed = try Self.decodeChangedFlag(from: container)
+        locked = try container.decodeIfPresent(Bool.self, forKey: .locked)
+        noGuests = try container.decodeIfPresent(Bool.self, forKey: .noGuests)
+        disabled = try container.decodeIfPresent(Bool.self, forKey: .disabled)
+        enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled)
+        policies = try container.decodeIfPresent(AdminRoomPolicySnapshot.self, forKey: .policies)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(success, forKey: .success)
+        try container.encodeIfPresent(error, forKey: .error)
+        try container.encodeIfPresent(changed, forKey: .changed)
+        try container.encodeIfPresent(locked, forKey: .locked)
+        try container.encodeIfPresent(noGuests, forKey: .noGuests)
+        try container.encodeIfPresent(disabled, forKey: .disabled)
+        try container.encodeIfPresent(enabled, forKey: .enabled)
+        try container.encodeIfPresent(policies, forKey: .policies)
+    }
+
+    private static func decodeChangedFlag(
+        from container: KeyedDecodingContainer<CodingKeys>
+    ) throws -> Bool? {
+        if let boolValue = try? container.decodeIfPresent(Bool.self, forKey: .changed) {
+            return boolValue
+        }
+        if let objectValue = try? container.decodeIfPresent([String: Bool].self, forKey: .changed) {
+            return !objectValue.isEmpty
+        }
+        return nil
+    }
 }
 
 struct AdminMediaEnforcedNotification: Codable {
