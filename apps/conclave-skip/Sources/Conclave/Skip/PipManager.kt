@@ -134,8 +134,12 @@ object PipManager {
     @RequiresApi(Build.VERSION_CODES.O)
     fun handleActivityResumed(activity: Activity) {
         if (activity.isInPictureInPictureMode) return
+        val wasInPip = PipController.inPipMode
         cancelPendingEnterPip()
         PipController.inPipMode = false
+        if (wasInPip) {
+            CallActionDispatcher.pictureInPictureContentRefresh()
+        }
     }
 
     @RequiresApi(Build.VERSION_CODES.O)
@@ -143,6 +147,7 @@ object PipManager {
         PipController.inPipMode = inPip
         if (!inPip) {
             cancelPendingEnterPip()
+            CallActionDispatcher.pictureInPictureContentRefresh()
             return
         }
         cancelPendingEnterPip()

@@ -52,6 +52,8 @@
 	<string>Conclave uses your location only when you explicitly choose to share it.</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
 	<string>Conclave uses background location only while a location-sharing action you started remains active.</string>
+	<key>NSLocationAlwaysUsageDescription</key>
+	<string>Conclave uses background location only while a location-sharing action you started remains active.</string>
 	<key>NSFaceIDUsageDescription</key>
 	<string>Conclave uses Face ID only when you choose biometric verification for account access.</string>
 	<key>SFU_CLIENT_ID</key>

@@ -273,6 +273,15 @@ enum PipVideoRefreshPolicy {
     }
 }
 
+enum PipModeObservationPolicy {
+    static func shouldReapplyRemoteConsumerPolicy(
+        wasInPictureInPicture: Bool,
+        isInPictureInPicture: Bool
+    ) -> Bool {
+        wasInPictureInPicture != isInPictureInPicture
+    }
+}
+
 enum PipTargetSelectionPolicy {
     static func shouldSelectParticipant(isCameraOff: Bool, hasVideoTrack: Bool) -> Bool {
         isCameraOff || hasVideoTrack
@@ -5864,6 +5873,16 @@ final class MeetingViewModel {
     private func handlePictureInPictureRefresh() {
         guard state.connectionState == .joined,
               PipController.isInCall else { return }
+        let isInPictureInPicture = PipController.inPipMode
+        let shouldReapplyConsumerPolicy = PipModeObservationPolicy.shouldReapplyRemoteConsumerPolicy(
+            wasInPictureInPicture: lastObservedPipMode,
+            isInPictureInPicture: isInPictureInPicture
+        )
+        lastObservedPipMode = isInPictureInPicture
+        if shouldReapplyConsumerPolicy {
+            scheduleRemoteConsumerBandwidthPolicyUpdate()
+        }
+        guard isInPictureInPicture else { return }
         refreshPipVideo(requestKeyFrame: true)
     }
     #endif

@@ -4870,6 +4870,33 @@ final class ConclaveTests: XCTestCase {
         ))
     }
 
+    func testPipModeObservationReappliesConsumerPolicyOnlyOnTransitions() throws {
+        XCTAssertTrue(PipModeObservationPolicy.shouldReapplyRemoteConsumerPolicy(
+            wasInPictureInPicture: false,
+            isInPictureInPicture: true
+        ))
+        XCTAssertTrue(PipModeObservationPolicy.shouldReapplyRemoteConsumerPolicy(
+            wasInPictureInPicture: true,
+            isInPictureInPicture: false
+        ))
+        XCTAssertFalse(PipModeObservationPolicy.shouldReapplyRemoteConsumerPolicy(
+            wasInPictureInPicture: true,
+            isInPictureInPicture: true
+        ))
+        XCTAssertFalse(PipModeObservationPolicy.shouldReapplyRemoteConsumerPolicy(
+            wasInPictureInPicture: false,
+            isInPictureInPicture: false
+        ))
+    }
+
+    func testAndroidPipExitNotifiesMeetingViewModelForPolicyRefresh() throws {
+        let source = try sourceFileContents("Sources/Conclave/Skip/PipManager.kt")
+
+        XCTAssertTrue(source.contains("val wasInPip = PipController.inPipMode"))
+        XCTAssertTrue(source.contains("if (wasInPip) {\n            CallActionDispatcher.pictureInPictureContentRefresh()\n        }"))
+        XCTAssertTrue(source.contains("if (!inPip) {\n            cancelPendingEnterPip()\n            CallActionDispatcher.pictureInPictureContentRefresh()\n            return\n        }"))
+    }
+
     func testPipTargetSelectionPrefersPresentCandidateWithoutWaitingForVideoTrack() throws {
         XCTAssertEqual(
             PipTargetSelectionPolicy.targetId(
@@ -5663,6 +5690,7 @@ final class ConclaveTests: XCTestCase {
                 "NSPhotoLibraryAddUsageDescription",
                 "NSLocationWhenInUseUsageDescription",
                 "NSLocationAlwaysAndWhenInUseUsageDescription",
+                "NSLocationAlwaysUsageDescription",
                 "NSFaceIDUsageDescription",
             ]
         )
