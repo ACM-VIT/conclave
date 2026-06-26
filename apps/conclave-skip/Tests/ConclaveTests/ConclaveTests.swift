@@ -5866,6 +5866,14 @@ final class ConclaveTests: XCTestCase {
                 "NSRemindersFullAccessUsageDescription",
             ]
         )
+        let temporaryLocationPurposes = try XCTUnwrap(
+            appPlist["NSLocationTemporaryUsageDescriptionDictionary"] as? [String: String]
+        )
+        XCTAssertFalse(
+            temporaryLocationPurposes["MeetingLocationSharing", default: ""]
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .isEmpty
+        )
         try assertPurposeStrings(
             extensionPlist,
             keys: [

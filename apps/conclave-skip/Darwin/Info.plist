@@ -58,6 +58,11 @@
 	<string>Conclave uses background location only while a location-sharing action you started remains active.</string>
 	<key>NSLocationAlwaysUsageDescription</key>
 	<string>Conclave uses background location only while a location-sharing action you started remains active.</string>
+	<key>NSLocationTemporaryUsageDescriptionDictionary</key>
+	<dict>
+		<key>MeetingLocationSharing</key>
+		<string>Conclave uses precise location only when you explicitly choose to share your current location in a meeting.</string>
+	</dict>
 	<key>NSFaceIDUsageDescription</key>
 	<string>Conclave uses Face ID only when you choose biometric verification for account access.</string>
 	<key>NSContactsUsageDescription</key>
