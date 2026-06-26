@@ -328,7 +328,7 @@
 				"CODE_SIGNING_REQUIRED[sdk=iphonesimulator*]" = NO;
 				CODE_SIGN_ENTITLEMENTS = ScreenShareExtension/ScreenShareExtension.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 30;
+				CURRENT_PROJECT_VERSION = 31;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = ScreenShareExtension/Info.plist;
@@ -415,7 +415,7 @@
 				"CODE_SIGNING_REQUIRED[sdk=iphonesimulator*]" = NO;
 				CODE_SIGN_ENTITLEMENTS = ScreenShareExtension/ScreenShareExtension.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 30;
+				CURRENT_PROJECT_VERSION = 31;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = ScreenShareExtension/Info.plist;

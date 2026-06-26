@@ -5674,6 +5674,24 @@ final class ConclaveTests: XCTestCase {
             ]
         )
     }
+
+    func testDarwinPrivacyManifestDeclaresRequiredReasonApis() throws {
+        let privacyManifest = try sourcePlistDictionary("Darwin/PrivacyInfo.xcprivacy")
+        let accessedApiTypes = try XCTUnwrap(privacyManifest["NSPrivacyAccessedAPITypes"] as? [[String: Any]])
+        let reasonsByCategory = Dictionary(uniqueKeysWithValues: accessedApiTypes.compactMap { entry -> (String, [String])? in
+            guard
+                let category = entry["NSPrivacyAccessedAPIType"] as? String,
+                let reasons = entry["NSPrivacyAccessedAPITypeReasons"] as? [String]
+            else {
+                return nil
+            }
+            return (category, reasons)
+        })
+
+        XCTAssertEqual(reasonsByCategory["NSPrivacyAccessedAPICategoryUserDefaults"], ["CA92.1"])
+        XCTAssertEqual(reasonsByCategory["NSPrivacyAccessedAPICategoryFileTimestamp"], ["C617.1"])
+        XCTAssertEqual(reasonsByCategory["NSPrivacyAccessedAPICategorySystemBootTime"], ["35F9.1"])
+    }
 #endif
 
     func testLocalVideoMirrorPolicyMirrorsOnlyFrontCamera() throws {
