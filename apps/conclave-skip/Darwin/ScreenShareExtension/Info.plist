@@ -34,6 +34,30 @@
     <string>Conclave uses the local network to connect meeting audio, video, and screen sharing reliably.</string>
     <key>NSScreenCaptureUsageDescription</key>
     <string>Conclave uses screen capture so you can share your screen in a meeting.</string>
+    <key>NSPhotoLibraryUsageDescription</key>
+    <string>Conclave uses photo library access only when you choose an image from your library.</string>
+    <key>NSPhotoLibraryAddUsageDescription</key>
+    <string>Conclave saves images to your photo library only when you choose to save them.</string>
+    <key>NSLocationWhenInUseUsageDescription</key>
+    <string>Conclave uses your location only when you explicitly choose to share it.</string>
+    <key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+    <string>Conclave uses background location only while a location-sharing action you started remains active.</string>
+    <key>NSLocationAlwaysUsageDescription</key>
+    <string>Conclave uses background location only while a location-sharing action you started remains active.</string>
+    <key>NSFaceIDUsageDescription</key>
+    <string>Conclave uses Face ID only when you choose biometric verification for account access.</string>
+    <key>NSContactsUsageDescription</key>
+    <string>Conclave uses contacts only when you choose to select someone to invite to a meeting.</string>
+    <key>NSCalendarsUsageDescription</key>
+    <string>Conclave uses calendar access only when you choose to create or view meeting calendar events.</string>
+    <key>NSCalendarsFullAccessUsageDescription</key>
+    <string>Conclave uses calendar access only when you choose to create or view meeting calendar events.</string>
+    <key>NSCalendarsWriteOnlyAccessUsageDescription</key>
+    <string>Conclave can add meeting events to your calendar only when you choose to save them.</string>
+    <key>NSRemindersUsageDescription</key>
+    <string>Conclave uses reminders only when you choose to create a meeting reminder.</string>
+    <key>NSRemindersFullAccessUsageDescription</key>
+    <string>Conclave uses reminders only when you choose to create a meeting reminder.</string>
     <key>NSDocumentsFolderUsageDescription</key>
     <string>Conclave accesses files in Documents only when you choose a file to share or attach in a meeting.</string>
     <key>NSDownloadsFolderUsageDescription</key>

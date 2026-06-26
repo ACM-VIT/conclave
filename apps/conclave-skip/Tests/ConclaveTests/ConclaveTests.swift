@@ -5891,34 +5891,35 @@ final class ConclaveTests: XCTestCase {
     func testDarwinPermissionPurposeStringsArePresentInAppAndExtensionPlists() throws {
         let appPlist = try sourcePlistDictionary("Darwin/Info.plist")
         let extensionPlist = try sourcePlistDictionary("Darwin/ScreenShareExtension/Info.plist")
+        let purposeStringKeys = [
+            "NSCameraUsageDescription",
+            "NSMicrophoneUsageDescription",
+            "NSBluetoothAlwaysUsageDescription",
+            "NSBluetoothPeripheralUsageDescription",
+            "NSLocalNetworkUsageDescription",
+            "NSScreenCaptureUsageDescription",
+            "NSPhotoLibraryUsageDescription",
+            "NSPhotoLibraryAddUsageDescription",
+            "NSLocationWhenInUseUsageDescription",
+            "NSLocationAlwaysAndWhenInUseUsageDescription",
+            "NSLocationAlwaysUsageDescription",
+            "NSFaceIDUsageDescription",
+            "NSContactsUsageDescription",
+            "NSCalendarsUsageDescription",
+            "NSCalendarsFullAccessUsageDescription",
+            "NSCalendarsWriteOnlyAccessUsageDescription",
+            "NSRemindersUsageDescription",
+            "NSRemindersFullAccessUsageDescription",
+            "NSDocumentsFolderUsageDescription",
+            "NSDownloadsFolderUsageDescription",
+            "NSDesktopFolderUsageDescription",
+            "NSNetworkVolumesUsageDescription",
+            "NSRemovableVolumesUsageDescription",
+        ]
 
         try assertPurposeStrings(
             appPlist,
-            keys: [
-                "NSCameraUsageDescription",
-                "NSMicrophoneUsageDescription",
-                "NSBluetoothAlwaysUsageDescription",
-                "NSBluetoothPeripheralUsageDescription",
-                "NSLocalNetworkUsageDescription",
-                "NSScreenCaptureUsageDescription",
-                "NSPhotoLibraryUsageDescription",
-                "NSPhotoLibraryAddUsageDescription",
-                "NSLocationWhenInUseUsageDescription",
-                "NSLocationAlwaysAndWhenInUseUsageDescription",
-                "NSLocationAlwaysUsageDescription",
-                "NSFaceIDUsageDescription",
-                "NSContactsUsageDescription",
-                "NSCalendarsUsageDescription",
-                "NSCalendarsFullAccessUsageDescription",
-                "NSCalendarsWriteOnlyAccessUsageDescription",
-                "NSRemindersUsageDescription",
-                "NSRemindersFullAccessUsageDescription",
-                "NSDocumentsFolderUsageDescription",
-                "NSDownloadsFolderUsageDescription",
-                "NSDesktopFolderUsageDescription",
-                "NSNetworkVolumesUsageDescription",
-                "NSRemovableVolumesUsageDescription",
-            ]
+            keys: purposeStringKeys
         )
         let temporaryLocationPurposes = try XCTUnwrap(
             appPlist["NSLocationTemporaryUsageDescriptionDictionary"] as? [String: String]
@@ -5930,15 +5931,7 @@ final class ConclaveTests: XCTestCase {
         )
         try assertPurposeStrings(
             extensionPlist,
-            keys: [
-                "NSMicrophoneUsageDescription",
-                "NSScreenCaptureUsageDescription",
-                "NSDocumentsFolderUsageDescription",
-                "NSDownloadsFolderUsageDescription",
-                "NSDesktopFolderUsageDescription",
-                "NSNetworkVolumesUsageDescription",
-                "NSRemovableVolumesUsageDescription",
-            ]
+            keys: purposeStringKeys
         )
     }
 
@@ -5981,6 +5974,7 @@ final class ConclaveTests: XCTestCase {
         XCTAssertTrue(script.contains("patch_conclave_framework"))
         XCTAssertTrue(script.contains("patch_webrtc_framework"))
         XCTAssertTrue(script.contains("patch_mediasoup_framework"))
+        XCTAssertTrue(script.contains("patch_remaining_frameworks"))
         XCTAssertTrue(script.contains("${FRAMEWORKS_DIR}/WebRTC.framework"))
         XCTAssertTrue(script.contains("${FRAMEWORKS_DIR}/Mediasoup.framework"))
         XCTAssertTrue(script.contains("copy_privacy_manifest \"MediasoupFramework.xcprivacy\""))
@@ -5992,7 +5986,7 @@ final class ConclaveTests: XCTestCase {
         XCTAssertTrue(script.contains("\"NSCalendarsWriteOnlyAccessUsageDescription\""))
         XCTAssertTrue(script.contains("\"NSRemindersFullAccessUsageDescription\""))
         XCTAssertTrue(script.contains("\"NSDocumentsFolderUsageDescription\""))
-        XCTAssertEqual(script.components(separatedBy: "set_file_purpose_strings \"${plist_path}\"").count - 1, 3)
+        XCTAssertEqual(script.components(separatedBy: "set_all_purpose_strings \"${plist_path}\"").count - 1, 4)
     }
 #endif
 
