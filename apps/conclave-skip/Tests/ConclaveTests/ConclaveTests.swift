@@ -5858,6 +5858,12 @@ final class ConclaveTests: XCTestCase {
                 "NSLocationAlwaysAndWhenInUseUsageDescription",
                 "NSLocationAlwaysUsageDescription",
                 "NSFaceIDUsageDescription",
+                "NSContactsUsageDescription",
+                "NSCalendarsUsageDescription",
+                "NSCalendarsFullAccessUsageDescription",
+                "NSCalendarsWriteOnlyAccessUsageDescription",
+                "NSRemindersUsageDescription",
+                "NSRemindersFullAccessUsageDescription",
             ]
         )
         try assertPurposeStrings(

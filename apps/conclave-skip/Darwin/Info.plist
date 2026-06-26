@@ -60,6 +60,18 @@
 	<string>Conclave uses background location only while a location-sharing action you started remains active.</string>
 	<key>NSFaceIDUsageDescription</key>
 	<string>Conclave uses Face ID only when you choose biometric verification for account access.</string>
+	<key>NSContactsUsageDescription</key>
+	<string>Conclave uses contacts only when you choose to select someone to invite to a meeting.</string>
+	<key>NSCalendarsUsageDescription</key>
+	<string>Conclave uses calendar access only when you choose to create or view meeting calendar events.</string>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>Conclave uses calendar access only when you choose to create or view meeting calendar events.</string>
+	<key>NSCalendarsWriteOnlyAccessUsageDescription</key>
+	<string>Conclave can add meeting events to your calendar only when you choose to save them.</string>
+	<key>NSRemindersUsageDescription</key>
+	<string>Conclave uses reminders only when you choose to create a meeting reminder.</string>
+	<key>NSRemindersFullAccessUsageDescription</key>
+	<string>Conclave uses reminders only when you choose to create a meeting reminder.</string>
 	<key>SFU_CLIENT_ID</key>
 	<string>public</string>
 	<key>SFU_JOIN_URL</key>
