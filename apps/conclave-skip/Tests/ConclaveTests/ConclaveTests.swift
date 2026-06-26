@@ -5909,6 +5909,19 @@ final class ConclaveTests: XCTestCase {
             ]
         )
     }
+
+    func testDarwinEmbeddedFrameworkPrivacyPatchCoversMediaFrameworks() throws {
+        let script = try String(contentsOf: sourceFileURL("Darwin/Scripts/apply-embedded-privacy-metadata.sh"))
+
+        XCTAssertTrue(script.contains("patch_conclave_framework"))
+        XCTAssertTrue(script.contains("patch_webrtc_framework"))
+        XCTAssertTrue(script.contains("patch_mediasoup_framework"))
+        XCTAssertTrue(script.contains("${FRAMEWORKS_DIR}/WebRTC.framework"))
+        XCTAssertTrue(script.contains("${FRAMEWORKS_DIR}/Mediasoup.framework"))
+        XCTAssertTrue(script.contains("\"NSCameraUsageDescription\""))
+        XCTAssertTrue(script.contains("\"NSMicrophoneUsageDescription\""))
+        XCTAssertTrue(script.contains("\"NSLocalNetworkUsageDescription\""))
+    }
 #endif
 
     func testLocalVideoMirrorPolicyMirrorsOnlyFrontCamera() throws {

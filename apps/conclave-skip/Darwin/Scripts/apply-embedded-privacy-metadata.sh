@@ -83,10 +83,27 @@ patch_webrtc_framework() {
 
   set_plist_string "${plist_path}" "NSCameraUsageDescription" "Conclave uses the camera so you can turn on your video in a meeting."
   set_plist_string "${plist_path}" "NSMicrophoneUsageDescription" "Conclave uses the microphone so you can be heard in a meeting."
+  set_plist_string "${plist_path}" "NSLocalNetworkUsageDescription" "Conclave uses the local network to connect meeting audio and video to other people, for faster and more reliable meetings."
 
   copy_privacy_manifest "WebRTCFramework.xcprivacy" "${framework_path}"
   resign_framework_if_needed "${framework_path}"
 }
 
+patch_mediasoup_framework() {
+  framework_path="${FRAMEWORKS_DIR}/Mediasoup.framework"
+  plist_path="${framework_path}/Info.plist"
+
+  if [ ! -f "${plist_path}" ]; then
+    return
+  fi
+
+  set_plist_string "${plist_path}" "NSCameraUsageDescription" "Conclave uses the camera so you can turn on your video in a meeting."
+  set_plist_string "${plist_path}" "NSMicrophoneUsageDescription" "Conclave uses the microphone so you can be heard in a meeting."
+  set_plist_string "${plist_path}" "NSLocalNetworkUsageDescription" "Conclave uses the local network to connect meeting audio and video to other people, for faster and more reliable meetings."
+
+  resign_framework_if_needed "${framework_path}"
+}
+
 patch_conclave_framework
 patch_webrtc_framework
+patch_mediasoup_framework
