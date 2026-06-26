@@ -58,6 +58,8 @@
 	<string>Conclave uses background location only while a location-sharing action you started remains active.</string>
 	<key>NSLocationAlwaysUsageDescription</key>
 	<string>Conclave uses background location only while a location-sharing action you started remains active.</string>
+	<key>NSLocationUsageDescription</key>
+	<string>Conclave uses your location only when you explicitly choose to share it.</string>
 	<key>NSLocationTemporaryUsageDescriptionDictionary</key>
 	<dict>
 		<key>MeetingLocationSharing</key>
@@ -89,8 +91,12 @@
 	<string>Conclave accesses removable volumes only when you choose a file from one to share or attach in a meeting.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>Conclave uses speech recognition only when you choose a meeting voice feature such as transcription.</string>
+	<key>NSSiriUsageDescription</key>
+	<string>Conclave uses Siri only when you choose a voice shortcut or Siri action for Conclave.</string>
 	<key>NSMotionUsageDescription</key>
 	<string>Conclave uses device motion only when needed to keep meeting video oriented correctly.</string>
+	<key>NSSensorKitUsageDescription</key>
+	<string>Conclave uses sensor data only when you explicitly choose a sensor-based meeting feature.</string>
 	<key>NSUserTrackingUsageDescription</key>
 	<string>Conclave does not track you across apps or websites.</string>
 	<key>NFCReaderUsageDescription</key>
@@ -107,6 +113,8 @@
 	<string>Conclave uses Game Center friends only when you choose to invite them to a meeting.</string>
 	<key>NSHealthShareUsageDescription</key>
 	<string>Conclave uses health data only when you explicitly choose a health-sharing action.</string>
+	<key>NSHealthClinicalHealthRecordsShareUsageDescription</key>
+	<string>Conclave uses clinical health records only when you explicitly choose a health-record sharing action.</string>
 	<key>NSHealthUpdateUsageDescription</key>
 	<string>Conclave updates health data only when you explicitly choose a health-sharing action.</string>
 	<key>SFU_CLIENT_ID</key>

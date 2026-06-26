@@ -5952,6 +5952,7 @@ final class ConclaveTests: XCTestCase {
             "NSLocationWhenInUseUsageDescription",
             "NSLocationAlwaysAndWhenInUseUsageDescription",
             "NSLocationAlwaysUsageDescription",
+            "NSLocationUsageDescription",
             "NSFaceIDUsageDescription",
             "NSContactsUsageDescription",
             "NSCalendarsUsageDescription",
@@ -5965,7 +5966,9 @@ final class ConclaveTests: XCTestCase {
             "NSNetworkVolumesUsageDescription",
             "NSRemovableVolumesUsageDescription",
             "NSSpeechRecognitionUsageDescription",
+            "NSSiriUsageDescription",
             "NSMotionUsageDescription",
+            "NSSensorKitUsageDescription",
             "NSUserTrackingUsageDescription",
             "NFCReaderUsageDescription",
             "NSAppleMusicUsageDescription",
@@ -5974,6 +5977,7 @@ final class ConclaveTests: XCTestCase {
             "NSHomeKitUsageDescription",
             "NSGKFriendListUsageDescription",
             "NSHealthShareUsageDescription",
+            "NSHealthClinicalHealthRecordsShareUsageDescription",
             "NSHealthUpdateUsageDescription",
         ]
 
@@ -6058,9 +6062,12 @@ final class ConclaveTests: XCTestCase {
         XCTAssertTrue(script.contains("\"NSRemindersFullAccessUsageDescription\""))
         XCTAssertTrue(script.contains("\"NSDocumentsFolderUsageDescription\""))
         XCTAssertTrue(script.contains("\"NSSpeechRecognitionUsageDescription\""))
+        XCTAssertTrue(script.contains("\"NSSiriUsageDescription\""))
         XCTAssertTrue(script.contains("\"NSMotionUsageDescription\""))
+        XCTAssertTrue(script.contains("\"NSSensorKitUsageDescription\""))
         XCTAssertTrue(script.contains("\"NSUserTrackingUsageDescription\""))
         XCTAssertTrue(script.contains("\"NFCReaderUsageDescription\""))
+        XCTAssertTrue(script.contains("\"NSHealthClinicalHealthRecordsShareUsageDescription\""))
         XCTAssertEqual(script.components(separatedBy: "set_all_purpose_strings \"${plist_path}\"").count - 1, 5)
     }
 #endif
