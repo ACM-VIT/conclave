@@ -85,12 +85,6 @@ const fetchJson = async <T,>(url: string, init?: RequestInit): Promise<T> => {
   return response.json() as Promise<T>;
 };
 
-const startOfMonth = (date: Date): Date =>
-  new Date(date.getFullYear(), date.getMonth(), 1);
-
-const endOfMonth = (date: Date): Date =>
-  new Date(date.getFullYear(), date.getMonth() + 1, 1);
-
 const dateKey = (timestamp: number, timeZone: string): string => {
   const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone,
@@ -103,8 +97,63 @@ const dateKey = (timestamp: number, timeZone: string): string => {
   return `${value("year")}-${value("month")}-${value("day")}`;
 };
 
-const monthTitle = (date: Date): string =>
-  date.toLocaleDateString(undefined, { month: "long", year: "numeric" });
+const browserTimeZone = (): string => {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  } catch {
+    return "UTC";
+  }
+};
+
+const parseDateKey = (value: string): { year: number; month: number; day: number } => {
+  const [year, month, day] = value.split("-").map((part) => Number(part));
+  return { year, month, day };
+};
+
+const addDaysToDateKey = (value: string, days: number): string => {
+  const { year, month, day } = parseDateKey(value);
+  const next = new Date(Date.UTC(year, month - 1, day + days));
+  return `${next.getUTCFullYear()}-${String(next.getUTCMonth() + 1).padStart(
+    2,
+    "0",
+  )}-${String(next.getUTCDate()).padStart(2, "0")}`;
+};
+
+const addMonthsToMonthKey = (value: string, months: number): string => {
+  const [year, month] = value.split("-").map((part) => Number(part));
+  const next = new Date(Date.UTC(year, month - 1 + months, 1));
+  return `${next.getUTCFullYear()}-${String(next.getUTCMonth() + 1).padStart(
+    2,
+    "0",
+  )}`;
+};
+
+const weekdayForDateKey = (value: string): number => {
+  const { year, month, day } = parseDateKey(value);
+  return new Date(Date.UTC(year, month - 1, day)).getUTCDay();
+};
+
+const monthTitle = (monthKey: string): string => {
+  const [year, month] = monthKey.split("-").map((part) => Number(part));
+  return new Date(Date.UTC(year, month - 1, 1)).toLocaleDateString(undefined, {
+    month: "long",
+    year: "numeric",
+    timeZone: "UTC",
+  });
+};
+
+const formatDateKeyLong = (value: string): string => {
+  const { year, month, day } = parseDateKey(value);
+  return new Date(Date.UTC(year, month - 1, day, 12)).toLocaleDateString(
+    undefined,
+    {
+      timeZone: "UTC",
+      weekday: "long",
+      month: "long",
+      day: "numeric",
+    },
+  );
+};
 
 const formatLongDate = (timestamp: number, timeZone: string): string =>
   new Date(timestamp).toLocaleDateString(undefined, {
@@ -167,12 +216,15 @@ function TimeZoneSelect({
 }
 
 export default function BookingClient({ username, eventSlug }: Props) {
+  const initialTimeZone = useMemo(() => browserTimeZone(), []);
   const [page, setPage] = useState<PublicSchedulingPage | null>(null);
   const [slots, setSlots] = useState<AvailableSlot[]>([]);
-  const [visibleMonth, setVisibleMonth] = useState(() => startOfMonth(new Date()));
+  const [visibleMonth, setVisibleMonth] = useState(() =>
+    dateKey(Date.now(), initialTimeZone).slice(0, 7),
+  );
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [selectedSlot, setSelectedSlot] = useState<AvailableSlot | null>(null);
-  const [timeZone, setTimeZone] = useState("UTC");
+  const [timeZone, setTimeZone] = useState(initialTimeZone);
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [note, setNote] = useState("");
@@ -182,14 +234,6 @@ export default function BookingClient({ username, eventSlug }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [confirmation, setConfirmation] = useState<BookingConfirmation | null>(null);
   const [copied, setCopied] = useState(false);
-
-  useEffect(() => {
-    try {
-      setTimeZone(Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC");
-    } catch {
-      setTimeZone("UTC");
-    }
-  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -218,8 +262,9 @@ export default function BookingClient({ username, eventSlug }: Props) {
     setSlotStatus("loading");
     setError(null);
     try {
-      const from = startOfMonth(visibleMonth).getTime();
-      const to = endOfMonth(visibleMonth).getTime();
+      const [year, month] = visibleMonth.split("-").map((part) => Number(part));
+      const from = Date.UTC(year, month - 1, 1) - 7 * 24 * 60 * 60 * 1000;
+      const to = Date.UTC(year, month, 1) + 7 * 24 * 60 * 60 * 1000;
       const data = await fetchJson<{ slots?: AvailableSlot[] }>(
         `/api/scheduling/public/${encodeURIComponent(username)}/${encodeURIComponent(eventSlug)}/slots?from=${from}&to=${to}&timeZone=${encodeURIComponent(timeZone)}`,
       );
@@ -245,14 +290,19 @@ export default function BookingClient({ username, eventSlug }: Props) {
   }, [slots, timeZone]);
 
   const monthDays = useMemo(() => {
-    const days: Date[] = [];
-    const start = startOfMonth(visibleMonth);
-    const firstGridDay = new Date(start);
-    firstGridDay.setDate(firstGridDay.getDate() - firstGridDay.getDay());
+    const days: Array<{ key: string; day: number; inMonth: boolean }> = [];
+    const firstOfMonth = `${visibleMonth}-01`;
+    const firstGridDay = addDaysToDateKey(
+      firstOfMonth,
+      -weekdayForDateKey(firstOfMonth),
+    );
     for (let i = 0; i < 42; i += 1) {
-      const day = new Date(firstGridDay);
-      day.setDate(firstGridDay.getDate() + i);
-      days.push(day);
+      const key = addDaysToDateKey(firstGridDay, i);
+      days.push({
+        key,
+        day: parseDateKey(key).day,
+        inMonth: key.startsWith(`${visibleMonth}-`),
+      });
     }
     return days;
   }, [visibleMonth]);
@@ -493,9 +543,7 @@ export default function BookingClient({ username, eventSlug }: Props) {
                     className={ICON_BTN}
                     aria-label="Previous month"
                     onClick={() =>
-                      setVisibleMonth(
-                        new Date(visibleMonth.getFullYear(), visibleMonth.getMonth() - 1, 1),
-                      )
+                      setVisibleMonth(addMonthsToMonthKey(visibleMonth, -1))
                     }
                   >
                     <ChevronLeft className="h-4 w-4" />
@@ -506,9 +554,7 @@ export default function BookingClient({ username, eventSlug }: Props) {
                     className={ICON_BTN}
                     aria-label="Next month"
                     onClick={() =>
-                      setVisibleMonth(
-                        new Date(visibleMonth.getFullYear(), visibleMonth.getMonth() + 1, 1),
-                      )
+                      setVisibleMonth(addMonthsToMonthKey(visibleMonth, 1))
                     }
                   >
                     <ChevronRight className="h-4 w-4" />
@@ -522,9 +568,9 @@ export default function BookingClient({ username, eventSlug }: Props) {
                 </div>
                 <div className="mt-2 grid grid-cols-7 gap-1">
                   {monthDays.map((day) => {
-                    const key = dateKey(day.getTime(), timeZone);
+                    const key = day.key;
                     const available = slotsByDate.get(key)?.length ?? 0;
-                    const inMonth = day.getMonth() === visibleMonth.getMonth();
+                    const inMonth = day.inMonth;
                     const selected = key === selectedDate;
                     return (
                       <button
@@ -543,7 +589,7 @@ export default function BookingClient({ username, eventSlug }: Props) {
                               : "text-[#fafafa]/20"
                         } ${inMonth ? "" : "opacity-40"}`}
                       >
-                        {day.getDate()}
+                        {day.day}
                         {available && !selected ? (
                           <span className="absolute bottom-1 left-1/2 h-1 w-1 -translate-x-1/2 rounded-full bg-[#F95F4A]" />
                         ) : null}
@@ -572,7 +618,9 @@ export default function BookingClient({ username, eventSlug }: Props) {
                   ) : selectedDate ? (
                     <>
                       <p className={`${LABEL} mb-2.5`}>
-                        {formatLongDate(selectedSlots[0]?.startAt ?? Date.now(), timeZone)}
+                        {selectedSlots[0]
+                          ? formatLongDate(selectedSlots[0].startAt, timeZone)
+                          : formatDateKeyLong(selectedDate)}
                       </p>
                       {selectedSlots.length === 0 ? (
                         <p className="rounded-lg border border-dashed border-white/12 px-3 py-4 text-[13px] text-[#fafafa]/45">

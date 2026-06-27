@@ -6,6 +6,7 @@ import {
   ensureSchedulingProfile,
   generateAvailableSlots,
   isValidSchedulingSlug,
+  zonedTimeToUtc,
 } from "../server/scheduling.js";
 
 const eventType = (
@@ -141,5 +142,34 @@ describe("scheduling", () => {
     });
 
     expect(slots[0]?.startAt).toBe(Date.UTC(2026, 2, 9, 13));
+  });
+
+  it("converts local wall-clock times without double-applying DST offsets", () => {
+    expect(zonedTimeToUtc("2026-01-05", 9 * 60, "America/New_York")).toBe(
+      Date.UTC(2026, 0, 5, 14),
+    );
+    expect(zonedTimeToUtc("2026-03-09", 9 * 60, "America/New_York")).toBe(
+      Date.UTC(2026, 2, 9, 13),
+    );
+  });
+
+  it("removes slots that fall inside a previous booking after-buffer", () => {
+    const slots = generateAvailableSlots({
+      eventType: eventType(),
+      availability: availability("UTC", [
+        { day: 1, startMinutes: 9 * 60, endMinutes: 10 * 60 },
+      ]),
+      busyIntervals: [
+        {
+          startAt: Date.UTC(2026, 0, 5, 9),
+          endAt: Date.UTC(2026, 0, 5, 9, 45),
+        },
+      ],
+      from: Date.UTC(2026, 0, 5, 0),
+      to: Date.UTC(2026, 0, 5, 12),
+      now: Date.UTC(2026, 0, 4, 0),
+    });
+
+    expect(slots).toEqual([]);
   });
 });

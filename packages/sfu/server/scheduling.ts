@@ -767,9 +767,13 @@ export const zonedTimeToUtc = (
   const [year, month, day] = date.split("-").map((part) => Number(part));
   const hour = Math.floor(minutes / 60);
   const minute = minutes % 60;
-  let timestamp = Date.UTC(year, month - 1, day, hour, minute, 0, 0);
-  timestamp -= getTimeZoneOffsetMs(timestamp, timeZone);
-  timestamp -= getTimeZoneOffsetMs(timestamp, timeZone) - getTimeZoneOffsetMs(Date.UTC(year, month - 1, day, hour, minute, 0, 0), timeZone);
+  const localTimestamp = Date.UTC(year, month - 1, day, hour, minute, 0, 0);
+  let timestamp = localTimestamp;
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const next = localTimestamp - getTimeZoneOffsetMs(timestamp, timeZone);
+    if (Math.abs(next - timestamp) < 1000) return next;
+    timestamp = next;
+  }
   return timestamp;
 };
 

@@ -13,6 +13,12 @@ type RouteContext = {
   params: Promise<{ path?: string[] }>;
 };
 
+const MAX_PROXY_BODY_BYTES = 32 * 1024;
+
+type StreamingRequestInit = RequestInit & {
+  duplex?: "half";
+};
+
 const getOrigin = (request: Request): string => {
   const url = new URL(request.url);
   return url.origin;
@@ -58,14 +64,26 @@ const proxySchedulingRequest = async (
 
   resolvedHeaders.set("x-app-origin", getOrigin(request));
 
-  const init: RequestInit = {
+  const init: StreamingRequestInit = {
     method,
     headers: resolvedHeaders,
     cache: "no-store",
   };
   if (method !== "GET" && method !== "HEAD") {
-    const body = await request.text().catch(() => "");
-    if (body) init.body = body;
+    const contentLength = Number(request.headers.get("content-length") ?? 0);
+    if (
+      Number.isFinite(contentLength) &&
+      contentLength > MAX_PROXY_BODY_BYTES
+    ) {
+      return NextResponse.json(
+        { error: "Request body is too large" },
+        { status: 413 },
+      );
+    }
+    if (request.body) {
+      init.body = request.body;
+      init.duplex = "half";
+    }
   }
 
   try {

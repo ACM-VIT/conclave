@@ -124,6 +124,15 @@ const resolveAppOrigin = (req: Request): string => {
   ).replace(/\/$/, "");
 };
 
+const buildMeetingLink = (appOrigin: string, meeting: ScheduledMeeting): string => {
+  const url = new URL(
+    `/${encodeURIComponent(meeting.roomCode)}`,
+    `${appOrigin.replace(/\/$/, "")}/`,
+  );
+  url.searchParams.set("clientId", meeting.clientId);
+  return url.toString();
+};
+
 const publicCalendarSummary = (
   summary: CalendarConnectionSummary,
 ): CalendarConnectionSummary => ({
@@ -172,6 +181,21 @@ const requireConnectedCalendar = (
     return null;
   }
   return connection;
+};
+
+const hasCalendarConnectionProblem = (
+  state: SfuState,
+  profile: SchedulingProfile,
+): boolean => {
+  const summary = getCalendarSummary(state.scheduling, profile.id);
+  return summary.status !== "not_connected" && summary.status !== "connected";
+};
+
+const sendCalendarUnavailable = (res: Response): void => {
+  res.status(503).json({
+    error:
+      "Calendar availability is temporarily unavailable. Ask the host to reconnect Google Calendar.",
+  });
 };
 
 const bookingSlotLockKey = (
@@ -342,15 +366,7 @@ const fetchOptionalGoogleBusy = async (
   timeMax: number,
 ): Promise<BusyInterval[]> => {
   if (!connection) return [];
-  try {
-    return await fetchGoogleBusy(state, connection, timeMin, timeMax);
-  } catch (error) {
-    Logger.warn(
-      "Google Calendar busy lookup failed; continuing with Conclave availability",
-      error,
-    );
-    return [];
-  }
+  return fetchGoogleBusy(state, connection, timeMin, timeMax);
 };
 
 const createGoogleCalendarEvent = async (
@@ -406,6 +422,19 @@ const createGoogleCalendarEvent = async (
   }
 };
 
+const MINUTE_MS = 60 * 1000;
+
+const meetingMatchesProfile = (
+  meeting: ScheduledMeeting,
+  profile: SchedulingProfile,
+): boolean => {
+  if (meeting.clientId !== profile.clientId) return false;
+  if (meeting.hostUserId && profile.userId) {
+    return meeting.hostUserId === profile.userId;
+  }
+  return meeting.hostEmail.trim().toLowerCase() === profile.email.trim().toLowerCase();
+};
+
 const collectInternalBusy = (
   state: SfuState,
   profile: SchedulingProfile,
@@ -413,16 +442,27 @@ const collectInternalBusy = (
   to: number,
 ): BusyInterval[] =>
   Array.from(state.scheduledMeetings.byId.values())
-    .filter((meeting) => {
-      if (meeting.clientId !== profile.clientId) return false;
-      if (meeting.hostEmail !== profile.email) return false;
-      if (meeting.status === "cancelled" || meeting.status === "ended") return false;
-      return meeting.scheduledStartAt < to && from < meeting.scheduledEndAt;
-    })
     .map((meeting) => ({
-      startAt: meeting.scheduledStartAt,
-      endAt: meeting.scheduledEndAt,
-    }));
+      meeting,
+      eventType: meeting.eventTypeId
+        ? state.scheduling.eventTypesById.get(meeting.eventTypeId) ?? null
+        : null,
+    }))
+    .map(({ meeting, eventType }) => ({
+      meeting,
+      startAt:
+        meeting.scheduledStartAt -
+        (eventType?.bufferBeforeMinutes ?? 0) * MINUTE_MS,
+      endAt:
+        meeting.scheduledEndAt +
+        (eventType?.bufferAfterMinutes ?? 0) * MINUTE_MS,
+    }))
+    .filter(({ meeting, startAt, endAt }) => {
+      if (!meetingMatchesProfile(meeting, profile)) return false;
+      if (meeting.status === "cancelled" || meeting.status === "ended") return false;
+      return startAt < to && from < endAt;
+    })
+    .map(({ startAt, endAt }) => ({ startAt, endAt }));
 
 const resolvePublicTarget = (
   state: SfuState,
@@ -453,7 +493,7 @@ const buildConfirmation = (
   id: meeting.id,
   title: meeting.title,
   roomCode: meeting.roomCode,
-  meetingLink: `${appOrigin}/${encodeURIComponent(meeting.roomCode)}`,
+  meetingLink: buildMeetingLink(appOrigin, meeting),
   startsAt: meeting.scheduledStartAt,
   endsAt: meeting.scheduledEndAt,
   hostName: meeting.hostName,
@@ -492,6 +532,12 @@ export const registerSchedulingRoutes = (
         username: req.body?.username,
         timeZone: req.body?.timeZone,
       });
+      if (typeof req.body?.timeZone === "string") {
+        setProfileAvailability(state.scheduling, updated, {
+          ...getProfileAvailability(state.scheduling, updated),
+          timeZone: updated.timeZone,
+        });
+      }
       await persistScheduling(state.scheduling, state.schedulingPersistence);
       res.json(profilePayload(state, updated));
     } catch (error) {
@@ -627,8 +673,7 @@ export const registerSchedulingRoutes = (
     const bookings = Array.from(state.scheduledMeetings.byId.values())
       .filter(
         (meeting) =>
-          meeting.clientId === profile.clientId &&
-          meeting.hostEmail === profile.email &&
+          meetingMatchesProfile(meeting, profile) &&
           meeting.source === "booking_link",
       )
       .sort((a, b) => b.scheduledStartAt - a.scheduledStartAt);
@@ -682,6 +727,10 @@ export const registerSchedulingRoutes = (
       res.status(target.status).json({ error: target.error });
       return;
     }
+    if (hasCalendarConnectionProblem(state, target.profile)) {
+      sendCalendarUnavailable(res);
+      return;
+    }
     const from = Number(req.query.from ?? Date.now());
     const to = Number(req.query.to ?? Date.now() + 14 * 24 * 60 * 60 * 1000);
     if (!Number.isFinite(from) || !Number.isFinite(to) || to <= from) {
@@ -720,6 +769,10 @@ export const registerSchedulingRoutes = (
     );
     if ("error" in target) {
       res.status(target.status).json({ error: target.error });
+      return;
+    }
+    if (hasCalendarConnectionProblem(state, target.profile)) {
+      sendCalendarUnavailable(res);
       return;
     }
 
@@ -842,7 +895,7 @@ export const registerSchedulingRoutes = (
       }
 
       try {
-        const meetingLink = `${appOrigin}/${encodeURIComponent(meeting.roomCode)}`;
+        const meetingLink = buildMeetingLink(appOrigin, meeting);
         const calendarEventId = await createGoogleCalendarEvent(
           state,
           calendar,
