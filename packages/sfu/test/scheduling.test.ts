@@ -153,6 +153,30 @@ describe("scheduling", () => {
     );
   });
 
+  it("rejects nonexistent wall-clock times during spring-forward gaps", () => {
+    expect(
+      Number.isNaN(zonedTimeToUtc("2026-03-08", 2 * 60 + 30, "America/New_York")),
+    ).toBe(true);
+    expect(zonedTimeToUtc("2026-03-08", 3 * 60 + 30, "America/New_York")).toBe(
+      Date.UTC(2026, 2, 8, 7, 30),
+    );
+  });
+
+  it("skips availability windows that start inside a spring-forward gap", () => {
+    const slots = generateAvailableSlots({
+      eventType: eventType(),
+      availability: availability("America/New_York", [
+        { day: 0, startMinutes: 2 * 60 + 30, endMinutes: 3 * 60 + 30 },
+      ]),
+      busyIntervals: [],
+      from: Date.UTC(2026, 2, 8, 0),
+      to: Date.UTC(2026, 2, 9, 0),
+      now: Date.UTC(2026, 2, 7, 0),
+    });
+
+    expect(slots).toEqual([]);
+  });
+
   it("removes slots that fall inside a previous booking after-buffer", () => {
     const slots = generateAvailableSlots({
       eventType: eventType(),

@@ -768,13 +768,33 @@ export const zonedTimeToUtc = (
   const hour = Math.floor(minutes / 60);
   const minute = minutes % 60;
   const localTimestamp = Date.UTC(year, month - 1, day, hour, minute, 0, 0);
+  const target = new Date(localTimestamp);
+  const targetYear = target.getUTCFullYear();
+  const targetMonth = target.getUTCMonth() + 1;
+  const targetDay = target.getUTCDate();
+  const targetHour = target.getUTCHours();
+  const targetMinute = target.getUTCMinutes();
+  const matchesTarget = (timestamp: number): boolean => {
+    const parts = getZonedParts(timestamp, timeZone);
+    return (
+      parts.year === targetYear &&
+      parts.month === targetMonth &&
+      parts.day === targetDay &&
+      parts.hour === targetHour &&
+      parts.minute === targetMinute &&
+      parts.second === 0
+    );
+  };
   let timestamp = localTimestamp;
-  for (let attempt = 0; attempt < 4; attempt += 1) {
+  const seen = new Set<number>();
+  for (let attempt = 0; attempt < 8; attempt += 1) {
     const next = localTimestamp - getTimeZoneOffsetMs(timestamp, timeZone);
-    if (Math.abs(next - timestamp) < 1000) return next;
+    if (matchesTarget(next)) return next;
+    if (seen.has(next)) return Number.NaN;
+    seen.add(next);
     timestamp = next;
   }
-  return timestamp;
+  return Number.NaN;
 };
 
 const localDateKey = (timestamp: number, timeZone: string): string => {
@@ -847,6 +867,7 @@ export const generateAvailableSlots = ({
     for (const window of windowsForDate(availability, date)) {
       const windowStart = zonedTimeToUtc(date, window.startMinutes, timeZone);
       const windowEnd = zonedTimeToUtc(date, window.endMinutes, timeZone);
+      if (!Number.isFinite(windowStart) || !Number.isFinite(windowEnd)) continue;
       for (
         let startAt = windowStart;
         startAt + durationMs <= windowEnd;
