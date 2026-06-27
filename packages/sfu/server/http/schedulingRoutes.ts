@@ -186,9 +186,11 @@ const requireConnectedCalendar = (
 const hasCalendarConnectionProblem = (
   state: SfuState,
   profile: SchedulingProfile,
+  eventType: SchedulingEventType,
 ): boolean => {
+  if (!eventType.requiresCalendar) return false;
   const summary = getCalendarSummary(state.scheduling, profile.id);
-  return summary.status !== "not_connected" && summary.status !== "connected";
+  return summary.status !== "connected";
 };
 
 const sendCalendarUnavailable = (res: Response): void => {
@@ -369,11 +371,21 @@ const fetchGoogleBusy = async (
 const fetchOptionalGoogleBusy = async (
   state: SfuState,
   connection: SchedulingCalendarConnection | null,
+  eventType: SchedulingEventType,
   timeMin: number,
   timeMax: number,
 ): Promise<BusyInterval[]> => {
   if (!connection) return [];
-  return fetchGoogleBusy(state, connection, timeMin, timeMax);
+  try {
+    return await fetchGoogleBusy(state, connection, timeMin, timeMax);
+  } catch (error) {
+    if (eventType.requiresCalendar) throw error;
+    Logger.warn(
+      "Optional Google Calendar busy lookup failed; continuing with Conclave availability",
+      error,
+    );
+    return [];
+  }
 };
 
 const createGoogleCalendarEvent = async (
@@ -734,7 +746,7 @@ export const registerSchedulingRoutes = (
       res.status(target.status).json({ error: target.error });
       return;
     }
-    if (hasCalendarConnectionProblem(state, target.profile)) {
+    if (hasCalendarConnectionProblem(state, target.profile, target.eventType)) {
       sendCalendarUnavailable(res);
       return;
     }
@@ -749,6 +761,7 @@ export const registerSchedulingRoutes = (
       const googleBusy = await fetchOptionalGoogleBusy(
         state,
         target.calendar,
+        target.eventType,
         from,
         to,
       );
@@ -778,7 +791,7 @@ export const registerSchedulingRoutes = (
       res.status(target.status).json({ error: target.error });
       return;
     }
-    if (hasCalendarConnectionProblem(state, target.profile)) {
+    if (hasCalendarConnectionProblem(state, target.profile, target.eventType)) {
       sendCalendarUnavailable(res);
       return;
     }
@@ -826,6 +839,7 @@ export const registerSchedulingRoutes = (
         const googleBusy = await fetchOptionalGoogleBusy(
           state,
           target.calendar,
+          target.eventType,
           rangeFrom,
           rangeTo,
         );
