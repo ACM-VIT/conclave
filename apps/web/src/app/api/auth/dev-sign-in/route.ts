@@ -1,17 +1,10 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
+import { isLocalDevAuthRequest } from "@/lib/dev-auth";
 
 export const runtime = "nodejs";
 
 const DEV_AUTH_PASSWORD = "conclave-dev-password";
-
-const LOCAL_DEV_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
-
-const isDevAuthEnabled = (request: Request): boolean => {
-  if (process.env.NODE_ENV !== "development") return false;
-  const hostname = new URL(request.url).hostname;
-  return LOCAL_DEV_HOSTS.has(hostname);
-};
 
 const readString = (
   value: unknown,
@@ -94,7 +87,7 @@ const withAuthCookies = (data: unknown, authHeaders: Headers): NextResponse => {
 };
 
 export async function POST(request: Request) {
-  if (!isDevAuthEnabled(request)) {
+  if (!isLocalDevAuthRequest(request)) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 

@@ -1,10 +1,9 @@
 import { NextResponse } from "next/server";
+import { isLocalDevAuthRequest } from "@/lib/dev-auth";
 
 export const runtime = "nodejs";
 
 type AuthProviderId = "google" | "apple" | "roblox" | "vercel";
-
-const isDevAuthEnabled = (): boolean => process.env.NODE_ENV !== "production";
 
 const enabledProviders = (): AuthProviderId[] => {
   const providers: AuthProviderId[] = [];
@@ -23,9 +22,9 @@ const enabledProviders = (): AuthProviderId[] => {
   return providers;
 };
 
-export async function GET() {
+export async function GET(request: Request) {
   return NextResponse.json(
-    { providers: enabledProviders(), devAuth: isDevAuthEnabled() },
+    { providers: enabledProviders(), devAuth: isLocalDevAuthRequest(request) },
     { headers: { "Cache-Control": "no-store" } },
   );
 }

@@ -15,8 +15,50 @@ type RouteContext = {
 
 const MAX_PROXY_BODY_BYTES = 32 * 1024;
 
-type StreamingRequestInit = RequestInit & {
-  duplex?: "half";
+type LimitedBodyResult =
+  | { ok: true; body: ArrayBuffer | null }
+  | { ok: false };
+
+const bodyTooLargeResponse = (): NextResponse =>
+  NextResponse.json({ error: "Request body is too large" }, { status: 413 });
+
+const readLimitedBody = async (request: Request): Promise<LimitedBodyResult> => {
+  const rawContentLength = request.headers.get("content-length");
+  if (rawContentLength) {
+    const contentLength = Number(rawContentLength);
+    if (
+      !Number.isFinite(contentLength) ||
+      contentLength < 0 ||
+      contentLength > MAX_PROXY_BODY_BYTES
+    ) {
+      return { ok: false };
+    }
+  }
+  if (!request.body) return { ok: true, body: null };
+
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let received = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    received += value.byteLength;
+    if (received > MAX_PROXY_BODY_BYTES) {
+      await reader.cancel().catch(() => undefined);
+      return { ok: false };
+    }
+    chunks.push(value);
+  }
+  if (received === 0) return { ok: true, body: null };
+
+  const body = new ArrayBuffer(received);
+  const view = new Uint8Array(body);
+  let offset = 0;
+  for (const chunk of chunks) {
+    view.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return { ok: true, body };
 };
 
 const getOrigin = (request: Request): string => {
@@ -64,26 +106,15 @@ const proxySchedulingRequest = async (
 
   resolvedHeaders.set("x-app-origin", getOrigin(request));
 
-  const init: StreamingRequestInit = {
+  const init: RequestInit = {
     method,
     headers: resolvedHeaders,
     cache: "no-store",
   };
   if (method !== "GET" && method !== "HEAD") {
-    const contentLength = Number(request.headers.get("content-length") ?? 0);
-    if (
-      Number.isFinite(contentLength) &&
-      contentLength > MAX_PROXY_BODY_BYTES
-    ) {
-      return NextResponse.json(
-        { error: "Request body is too large" },
-        { status: 413 },
-      );
-    }
-    if (request.body) {
-      init.body = request.body;
-      init.duplex = "half";
-    }
+    const body = await readLimitedBody(request);
+    if (!body.ok) return bodyTooLargeResponse();
+    if (body.body) init.body = body.body;
   }
 
   try {

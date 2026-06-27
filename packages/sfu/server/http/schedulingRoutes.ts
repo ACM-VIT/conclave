@@ -259,13 +259,16 @@ const googleFetchJson = async <T>(
   init: RequestInit,
 ): Promise<T> => {
   const response = await fetch(url, init);
-  const data = await response.json().catch(() => null);
+  const data = await response.json().catch(() => undefined);
   if (!response.ok) {
     const message =
       data && typeof data === "object" && "error" in data
         ? JSON.stringify((data as { error?: unknown }).error)
         : response.statusText;
     throw new Error(message || "Google Calendar request failed.");
+  }
+  if (!data || typeof data !== "object") {
+    throw new Error("Google Calendar returned an invalid response.");
   }
   return data as T;
 };
@@ -344,7 +347,11 @@ const fetchGoogleBusy = async (
         items: [{ id: connection.calendarId || "primary" }],
       }),
     });
-    const busy = data.calendars?.[connection.calendarId || "primary"]?.busy ?? [];
+    const calendarId = connection.calendarId || "primary";
+    const busy = data.calendars?.[calendarId]?.busy;
+    if (!Array.isArray(busy)) {
+      throw new Error("Google Calendar returned an invalid freebusy response.");
+    }
     return busy
       .map((entry) => ({
         startAt: entry.start ? new Date(entry.start).getTime() : NaN,
