@@ -256,6 +256,29 @@ const persistMeetingChange = async (
   );
 };
 
+class GoogleCalendarApiError extends Error {
+  status: number;
+  code: string | null;
+
+  constructor(message: string, status: number, code: string | null = null) {
+    super(message);
+    this.name = "GoogleCalendarApiError";
+    this.status = status;
+    this.code = code;
+  }
+}
+
+const googleErrorCode = (data: unknown): string | null => {
+  if (!data || typeof data !== "object" || !("error" in data)) return null;
+  const error = (data as { error?: unknown }).error;
+  if (typeof error === "string") return error;
+  if (error && typeof error === "object" && "status" in error) {
+    const status = (error as { status?: unknown }).status;
+    return typeof status === "string" ? status : null;
+  }
+  return null;
+};
+
 const googleFetchJson = async <T>(
   url: string,
   init: RequestInit,
@@ -263,11 +286,17 @@ const googleFetchJson = async <T>(
   const response = await fetch(url, init);
   const data = await response.json().catch(() => undefined);
   if (!response.ok) {
-    const message =
-      data && typeof data === "object" && "error" in data
+    const code = googleErrorCode(data);
+    const message = code
+      ? code
+      : data && typeof data === "object" && "error" in data
         ? JSON.stringify((data as { error?: unknown }).error)
         : response.statusText;
-    throw new Error(message || "Google Calendar request failed.");
+    throw new GoogleCalendarApiError(
+      message || "Google Calendar request failed.",
+      response.status,
+      code,
+    );
   }
   if (!data || typeof data !== "object") {
     throw new Error("Google Calendar returned an invalid response.");
@@ -294,15 +323,27 @@ const refreshGoogleAccessToken = async (
     refresh_token: connection.refreshToken || "",
     grant_type: "refresh_token",
   });
-  const token = await googleFetchJson<{
+  let token: {
     access_token?: string;
     expires_in?: number;
     scope?: string;
-  }>(GOOGLE_TOKEN_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body,
-  });
+  };
+  try {
+    token = await googleFetchJson<{
+      access_token?: string;
+      expires_in?: number;
+      scope?: string;
+    }>(GOOGLE_TOKEN_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body,
+    });
+  } catch (error) {
+    if (shouldMarkCalendarReconnectRequired(error)) {
+      await markCalendarError(state, connection, error);
+    }
+    throw error;
+  }
   if (!token.access_token) {
     throw new Error("Google did not return an access token.");
   }
@@ -321,11 +362,18 @@ const markCalendarError = async (
   connection: SchedulingCalendarConnection,
   error: unknown,
 ): Promise<void> => {
-  connection.status = "error";
+  connection.status = "needs_reconnect";
   connection.error = (error as Error).message || "Google Calendar sync failed.";
   connection.updatedAt = Date.now();
   await persistScheduling(state.scheduling, state.schedulingPersistence);
 };
+
+const shouldMarkCalendarReconnectRequired = (error: unknown): boolean =>
+  error instanceof GoogleCalendarApiError &&
+  (error.status === 401 ||
+    error.code === "invalid_grant" ||
+    error.code === "invalid_client" ||
+    error.code === "unauthorized_client");
 
 const fetchGoogleBusy = async (
   state: SfuState,
@@ -333,39 +381,34 @@ const fetchGoogleBusy = async (
   timeMin: number,
   timeMax: number,
 ): Promise<BusyInterval[]> => {
-  try {
-    const accessToken = await refreshGoogleAccessToken(state, connection);
-    const data = await googleFetchJson<{
-      calendars?: Record<string, { busy?: Array<{ start?: string; end?: string }> }>;
-    }>(GOOGLE_FREEBUSY_URL, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        timeMin: new Date(timeMin).toISOString(),
-        timeMax: new Date(timeMax).toISOString(),
-        items: [{ id: connection.calendarId || "primary" }],
-      }),
-    });
-    const calendarId = connection.calendarId || "primary";
-    const busy = data.calendars?.[calendarId]?.busy;
-    if (!Array.isArray(busy)) {
-      throw new Error("Google Calendar returned an invalid freebusy response.");
-    }
-    return busy
-      .map((entry) => ({
-        startAt: entry.start ? new Date(entry.start).getTime() : NaN,
-        endAt: entry.end ? new Date(entry.end).getTime() : NaN,
-      }))
-      .filter(
-        (entry) => Number.isFinite(entry.startAt) && Number.isFinite(entry.endAt),
-      );
-  } catch (error) {
-    await markCalendarError(state, connection, error);
-    throw error;
+  const accessToken = await refreshGoogleAccessToken(state, connection);
+  const data = await googleFetchJson<{
+    calendars?: Record<string, { busy?: Array<{ start?: string; end?: string }> }>;
+  }>(GOOGLE_FREEBUSY_URL, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      timeMin: new Date(timeMin).toISOString(),
+      timeMax: new Date(timeMax).toISOString(),
+      items: [{ id: connection.calendarId || "primary" }],
+    }),
+  });
+  const calendarId = connection.calendarId || "primary";
+  const busy = data.calendars?.[calendarId]?.busy;
+  if (!Array.isArray(busy)) {
+    throw new Error("Google Calendar returned an invalid freebusy response.");
   }
+  return busy
+    .map((entry) => ({
+      startAt: entry.start ? new Date(entry.start).getTime() : NaN,
+      endAt: entry.end ? new Date(entry.end).getTime() : NaN,
+    }))
+    .filter(
+      (entry) => Number.isFinite(entry.startAt) && Number.isFinite(entry.endAt),
+    );
 };
 
 const fetchOptionalGoogleBusy = async (
@@ -436,7 +479,9 @@ const createGoogleCalendarEvent = async (
     if (!data.id) throw new Error("Google did not return an event id.");
     return data.id;
   } catch (error) {
-    await markCalendarError(state, connection, error);
+    if (shouldMarkCalendarReconnectRequired(error)) {
+      await markCalendarError(state, connection, error);
+    }
     throw error;
   }
 };
