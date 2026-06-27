@@ -785,16 +785,16 @@ export const zonedTimeToUtc = (
       parts.second === 0
     );
   };
-  let timestamp = localTimestamp;
-  const seen = new Set<number>();
-  for (let attempt = 0; attempt < 8; attempt += 1) {
-    const next = localTimestamp - getTimeZoneOffsetMs(timestamp, timeZone);
-    if (matchesTarget(next)) return next;
-    if (seen.has(next)) return Number.NaN;
-    seen.add(next);
-    timestamp = next;
-  }
-  return Number.NaN;
+  const sampleOffsets = [-36, -24, -12, 0, 12, 24, 36].map((hours) =>
+    getTimeZoneOffsetMs(localTimestamp + hours * 60 * 60 * 1000, timeZone),
+  );
+  const matches = Array.from(new Set(sampleOffsets))
+    .map((offset) => localTimestamp - offset)
+    .filter(matchesTarget)
+    .sort((a, b) => a - b);
+
+  // Fold policy: choose the later occurrence of repeated fall-back wall times.
+  return matches.at(-1) ?? Number.NaN;
 };
 
 const localDateKey = (timestamp: number, timeZone: string): string => {
@@ -869,11 +869,23 @@ export const generateAvailableSlots = ({
       const windowEnd = zonedTimeToUtc(date, window.endMinutes, timeZone);
       if (!Number.isFinite(windowStart) || !Number.isFinite(windowEnd)) continue;
       for (
-        let startAt = windowStart;
-        startAt + durationMs <= windowEnd;
-        startAt += durationMs
+        let startMinutes = window.startMinutes;
+        startMinutes + eventType.durationMinutes <= window.endMinutes;
+        startMinutes += eventType.durationMinutes
       ) {
-        const endAt = startAt + durationMs;
+        const startAt = zonedTimeToUtc(date, startMinutes, timeZone);
+        const endAt = zonedTimeToUtc(
+          date,
+          startMinutes + eventType.durationMinutes,
+          timeZone,
+        );
+        if (
+          !Number.isFinite(startAt) ||
+          !Number.isFinite(endAt) ||
+          endAt - startAt !== durationMs
+        ) {
+          continue;
+        }
         if (startAt < minStart || endAt > maxEnd) continue;
         const blockedInterval = {
           startAt: startAt - bufferBeforeMs,

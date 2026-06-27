@@ -177,6 +177,30 @@ describe("scheduling", () => {
     expect(slots).toEqual([]);
   });
 
+  it("uses the later occurrence for repeated fall-back wall times", () => {
+    expect(zonedTimeToUtc("2026-11-01", 1 * 60 + 30, "America/New_York")).toBe(
+      Date.UTC(2026, 10, 1, 6, 30),
+    );
+  });
+
+  it("does not expand availability across a fall-back fold", () => {
+    const slots = generateAvailableSlots({
+      eventType: eventType(),
+      availability: availability("America/New_York", [
+        { day: 0, startMinutes: 1 * 60, endMinutes: 2 * 60 },
+      ]),
+      busyIntervals: [],
+      from: Date.UTC(2026, 10, 1, 0),
+      to: Date.UTC(2026, 10, 2, 0),
+      now: Date.UTC(2026, 9, 31, 0),
+    });
+
+    expect(slots.map((slot) => slot.startAt)).toEqual([
+      Date.UTC(2026, 10, 1, 6),
+      Date.UTC(2026, 10, 1, 6, 30),
+    ]);
+  });
+
   it("removes slots that fall inside a previous booking after-buffer", () => {
     const slots = generateAvailableSlots({
       eventType: eventType(),
