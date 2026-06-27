@@ -1,14 +1,16 @@
 "use client";
 
 import Image from "next/image";
-import { ArrowLeft, Loader2 } from "lucide-react";
+import { ArrowLeft, FlaskConical, Loader2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { signIn, useSession } from "@/lib/auth-client";
 
 type AuthProviderId = "google" | "apple" | "roblox" | "vercel";
+type ActiveSignIn = AuthProviderId | "dev";
 
 type ProvidersResponse = {
   providers?: AuthProviderId[];
+  devAuth?: boolean;
 };
 
 type SignInClientProps = {
@@ -89,8 +91,9 @@ const providerIcon = (provider: AuthProviderId) => {
 export default function SignInClient({ next }: SignInClientProps) {
   const safeNext = useMemo(() => sanitizeNext(next), [next]);
   const [providers, setProviders] = useState<AuthProviderId[]>([]);
+  const [devAuthEnabled, setDevAuthEnabled] = useState(false);
   const [status, setStatus] = useState<"loading" | "idle" | "error">("loading");
-  const [activeProvider, setActiveProvider] = useState<AuthProviderId | null>(
+  const [activeProvider, setActiveProvider] = useState<ActiveSignIn | null>(
     null,
   );
   const [error, setError] = useState<string | null>(null);
@@ -113,11 +116,13 @@ export default function SignInClient({ next }: SignInClientProps) {
           enabled.includes(provider),
         );
         setProviders(ordered);
+        setDevAuthEnabled(Boolean(data?.devAuth));
         setStatus("idle");
       })
       .catch(() => {
         if (cancelled) return;
         setProviders([]);
+        setDevAuthEnabled(false);
         setStatus("error");
       });
     return () => {
@@ -146,6 +151,38 @@ export default function SignInClient({ next }: SignInClientProps) {
     },
     [activeProvider, safeNext],
   );
+
+  const handleDevSignIn = useCallback(async () => {
+    if (activeProvider) return;
+    setActiveProvider("dev");
+    setError(null);
+    try {
+      const response = await fetch("/api/auth/dev-sign-in", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: "Conclave Dev",
+          email: "dev@conclave.local",
+        }),
+      });
+      if (!response.ok) {
+        const data = await response.json().catch(() => null);
+        throw new Error(
+          data && typeof data === "object" && "error" in data
+            ? String((data as { error?: string }).error || "")
+            : "Unable to start dev sign-in.",
+        );
+      }
+      window.location.replace(safeNext);
+    } catch (devSignInError) {
+      setError(
+        devSignInError instanceof Error
+          ? devSignInError.message
+          : "Unable to start dev sign-in.",
+      );
+      setActiveProvider(null);
+    }
+  }, [activeProvider, safeNext]);
 
   return (
     <main className="flex min-h-dvh items-center justify-center bg-[#0a0a0b] px-4 py-10 text-[#fafafa]">
@@ -177,10 +214,28 @@ export default function SignInClient({ next }: SignInClientProps) {
             </div>
           ) : null}
 
-          {status !== "loading" && providers.length === 0 ? (
+          {status !== "loading" && providers.length === 0 && !devAuthEnabled ? (
             <div className="rounded-xl border border-white/10 bg-white/[0.04] p-4 text-sm text-[#fafafa]/55">
               Authentication is not configured for this deployment.
             </div>
+          ) : null}
+
+          {status !== "loading" && devAuthEnabled ? (
+            <button
+              type="button"
+              onClick={() => void handleDevSignIn()}
+              disabled={activeProvider !== null}
+              className="flex h-12 w-full items-center justify-center gap-3 rounded-xl border border-[#F95F4A]/30 bg-[#F95F4A]/10 text-[14px] font-medium text-[#ffd2cc] transition-colors hover:bg-[#F95F4A]/15 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {activeProvider === "dev" ? (
+                <Loader2 className="h-5 w-5 animate-spin" />
+              ) : (
+                <FlaskConical className="h-5 w-5" />
+              )}
+              {activeProvider === "dev"
+                ? "Starting dev session..."
+                : "Continue with local dev user"}
+            </button>
           ) : null}
 
           {providers.map((provider) => (

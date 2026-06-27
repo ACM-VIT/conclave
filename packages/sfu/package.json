@@ -7,7 +7,9 @@
     ".": "./index.ts"
   },
   "scripts": {
+    "predev": "node scripts/ensure-mediasoup-worker.mjs",
     "dev": "npx tsx server.ts",
+    "prestart": "node scripts/ensure-mediasoup-worker.mjs",
     "start": "npx tsx server.ts",
     "typecheck": "npx tsc --noEmit"
   },

@@ -12,6 +12,11 @@ import {
   type ScheduledMeetingPersistence,
   type ScheduledMeetingStore,
 } from "./scheduledMeetings.js";
+import {
+  createSchedulingStore,
+  type SchedulingPersistence,
+  type SchedulingStore,
+} from "./scheduling.js";
 import { createRoomRegistry, type RoomRegistry } from "./roomRegistry.js";
 
 export type EndedRoom = {
@@ -34,6 +39,8 @@ export type SfuState = {
   scheduledWebinarTimer: NodeJS.Timeout | null;
   scheduledMeetings: ScheduledMeetingStore;
   scheduledMeetingPersistence: ScheduledMeetingPersistence | null;
+  scheduling: SchedulingStore;
+  schedulingPersistence: SchedulingPersistence | null;
   roomRegistry: RoomRegistry;
   isDraining: boolean;
 };
@@ -54,6 +61,8 @@ export const createSfuState = (options?: {
     scheduledWebinarTimer: null,
     scheduledMeetings: createScheduledMeetingStore(),
     scheduledMeetingPersistence: null,
+    scheduling: createSchedulingStore(),
+    schedulingPersistence: null,
     roomRegistry: options?.roomRegistry ?? createRoomRegistry(config),
     isDraining: options?.isDraining ?? config.draining,
   };

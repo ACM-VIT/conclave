@@ -84,6 +84,7 @@ export default async function MeetRoomPage({
     ? getParamValue(resolvedSearchParams.name)
     : undefined;
   const sfuClientId = sanitizeClientId(resolvedSearchParams.clientId);
+  let resolvedSfuClientId = sfuClientId;
   const user = displayName ? { name: displayName } : undefined;
   const isAdmin =
     devOverridesEnabled && isTruthyParam(resolvedSearchParams.admin);
@@ -94,6 +95,9 @@ export default async function MeetRoomPage({
       clientIdForLookup,
       sanitizedRoomCode,
     );
+    if (scheduled) {
+      resolvedSfuClientId = clientIdForLookup;
+    }
     if (scheduled && !isMeetingJoinable(scheduled)) {
       const [sessionEmail, hostEmail] = await Promise.all([
         resolveSessionEmail(),
@@ -116,7 +120,7 @@ export default async function MeetRoomPage({
       initialRoomId={sanitizedRoomCode}
       forceJoinOnly={true}
       bypassMediaPermissions={bypassMediaPermissions}
-      sfuClientId={sfuClientId}
+      sfuClientId={resolvedSfuClientId}
       autoJoinOnMount={autoJoinOnMount}
       hideJoinUI={hideJoinUI}
       joinMode={joinMode}

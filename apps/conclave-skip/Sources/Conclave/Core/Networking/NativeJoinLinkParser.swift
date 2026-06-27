@@ -448,6 +448,7 @@ enum NativeJoinLinkParser {
         "reactions",
         "workers",
         "chat-qa",
+        "book",
         "delete-account",
         "privacy",
         "sfu-admin",

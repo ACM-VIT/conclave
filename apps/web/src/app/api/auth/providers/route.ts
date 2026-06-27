@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { isLocalDevAuthRequest } from "@/lib/dev-auth";
 
 export const runtime = "nodejs";
 
@@ -21,9 +22,9 @@ const enabledProviders = (): AuthProviderId[] => {
   return providers;
 };
 
-export async function GET() {
+export async function GET(request: Request) {
   return NextResponse.json(
-    { providers: enabledProviders() },
+    { providers: enabledProviders(), devAuth: isLocalDevAuthRequest(request) },
     { headers: { "Cache-Control": "no-store" } },
   );
 }

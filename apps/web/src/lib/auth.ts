@@ -1,5 +1,6 @@
 import { betterAuth } from "better-auth";
 import { createRemoteJWKSet, jwtVerify } from "jose";
+import { isLocalDevAuthRuntimeEnabled } from "@/lib/dev-auth";
 
 const appleAppBundleIdentifier =
   process.env.APPLE_APP_BUNDLE_IDENTIFIER ||
@@ -89,6 +90,7 @@ const resolveTrustedOrigins = (): string[] => {
 };
 
 const AUTH_SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 365;
+const isDevAuthEnabled = isLocalDevAuthRuntimeEnabled();
 
 export const auth = betterAuth({
   session: {
@@ -104,6 +106,11 @@ export const auth = betterAuth({
     deleteUser: {
       enabled: true,
     },
+  },
+  emailAndPassword: {
+    enabled: isDevAuthEnabled,
+    disableSignUp: !isDevAuthEnabled,
+    minPasswordLength: 8,
   },
 
   socialProviders: {

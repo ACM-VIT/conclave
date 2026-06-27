@@ -10,6 +10,7 @@
     "./chat-commands": "./src/chat-commands.ts",
     "./grid-layout": "./src/grid-layout.ts",
     "./participant-reducer": "./src/participant-reducer.ts",
+    "./scheduling": "./src/scheduling.ts",
     "./sfu-events": "./src/sfu-events.ts",
     "./sfu-types": "./src/sfu-types.ts",
     "./types": "./src/types.ts",

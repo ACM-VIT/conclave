@@ -14,6 +14,11 @@ import {
   loadPersistedMeetings,
   type ScheduledMeetingPersistence,
 } from "./scheduledMeetings.js";
+import {
+  createSchedulingPersistence,
+  loadPersistedScheduling,
+  type SchedulingPersistence,
+} from "./scheduling.js";
 
 const WORKER_RESTART_NOTICE =
   "The media server for this room restarted. Reconnecting...";
@@ -110,10 +115,23 @@ export const initScheduledWebinars = (
 export const initScheduledMeetings = (
   state: SfuState,
   persistence: ScheduledMeetingPersistence = createScheduledMeetingPersistence(),
-): void => {
+): Promise<void> => {
   state.scheduledMeetingPersistence = persistence;
-  const loaded = loadPersistedMeetings(state.scheduledMeetings, persistence);
-  if (loaded > 0) {
-    Logger.info(`Restored ${loaded} scheduled meeting(s) from persistence`);
-  }
+  return loadPersistedMeetings(state.scheduledMeetings, persistence).then((loaded) => {
+    if (loaded > 0) {
+      Logger.info(`Restored ${loaded} scheduled meeting(s) from persistence`);
+    }
+  });
+};
+
+export const initScheduling = (
+  state: SfuState,
+  persistence: SchedulingPersistence = createSchedulingPersistence(),
+): Promise<void> => {
+  state.schedulingPersistence = persistence;
+  return loadPersistedScheduling(state.scheduling, persistence).then((loaded) => {
+    if (loaded > 0) {
+      Logger.info(`Restored ${loaded} scheduling record(s) from persistence`);
+    }
+  });
 };

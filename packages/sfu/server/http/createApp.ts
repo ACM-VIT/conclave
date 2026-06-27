@@ -27,6 +27,7 @@ import { resolveCorsOrigins } from "../cors.js";
 import { secretsMatch } from "../secret.js";
 import { registerScheduledWebinarRoutes } from "./scheduledWebinarRoutes.js";
 import { registerScheduledMeetingRoutes } from "./scheduledMeetingRoutes.js";
+import { registerSchedulingRoutes } from "./schedulingRoutes.js";
 import type { SfuState } from "../state.js";
 import { resolveWebinarLinkTarget } from "../webinar.js";
 
@@ -1352,6 +1353,11 @@ export const createSfuApp = ({
   });
 
   registerScheduledMeetingRoutes(app, {
+    state,
+    sfuSecret: config.sfuSecret,
+  });
+
+  registerSchedulingRoutes(app, {
     state,
     sfuSecret: config.sfuSecret,
   });

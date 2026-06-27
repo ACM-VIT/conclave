@@ -15,6 +15,15 @@ import type {
   UpdateScheduledMeetingRequest,
 } from "../types.js";
 import { Logger } from "../utilities/loggers.js";
+import {
+  createRedisPersistenceClient,
+  resolveRedisPersistenceKeyPrefix,
+  resolveRedisPersistenceUrl,
+  shouldUseRedisPersistence,
+  type RedisPersistenceClient,
+} from "./redisPersistence.js";
+
+type MaybePromise<T> = T | Promise<T>;
 
 const MAX_TITLE_LENGTH = 140;
 const MIN_TITLE_LENGTH = 1;
@@ -40,6 +49,21 @@ const sanitizeRoomCode = (value: string | undefined): string => {
 
 const normalizeHostEmail = (value: string | undefined): string =>
   (value || "").trim().toLowerCase();
+
+const sanitizeOptionalText = (
+  value: string | undefined,
+  maxLength: number,
+): string | null => {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().replace(/\s+/g, " ").slice(0, maxLength);
+  return normalized || null;
+};
+
+const sanitizeOptionalEmail = (value: string | undefined): string | null => {
+  const normalized = normalizeHostEmail(value);
+  if (!normalized || !normalized.includes("@")) return null;
+  return normalized.slice(0, 320);
+};
 
 const generateRoomCode = (): string => {
   const adjectives = [
@@ -189,6 +213,21 @@ export const createScheduledMeeting = (
     createdAt: now,
     createdBy: options.createdBy,
     updatedAt: now,
+    source: request.source === "booking_link" ? "booking_link" : "manual",
+    eventTypeId: sanitizeOptionalText(request.eventTypeId, 128),
+    attendeeName: sanitizeOptionalText(request.attendeeName, 120),
+    attendeeEmail: sanitizeOptionalEmail(request.attendeeEmail),
+    attendeeNote: sanitizeOptionalText(request.attendeeNote, 2000),
+    attendeeTimeZone: sanitizeOptionalText(request.attendeeTimeZone, 80),
+    googleCalendarEventId: sanitizeOptionalText(
+      request.googleCalendarEventId,
+      512,
+    ),
+    calendarSyncStatus: request.calendarSyncStatus ?? "not_required",
+    calendarSyncError: sanitizeOptionalText(
+      request.calendarSyncError ?? undefined,
+      512,
+    ),
   };
 
   registerStore(store, meeting);
@@ -252,6 +291,21 @@ export const updateScheduledMeeting = (
       meeting.endedAt = now;
     }
   }
+  if (request.googleCalendarEventId !== undefined) {
+    meeting.googleCalendarEventId =
+      request.googleCalendarEventId === null
+        ? null
+        : sanitizeOptionalText(request.googleCalendarEventId, 512);
+  }
+  if (request.calendarSyncStatus) {
+    meeting.calendarSyncStatus = request.calendarSyncStatus;
+  }
+  if (request.calendarSyncError !== undefined) {
+    meeting.calendarSyncError =
+      request.calendarSyncError === null
+        ? null
+        : sanitizeOptionalText(request.calendarSyncError, 512);
+  }
 
   meeting.updatedAt = now;
   return meeting;
@@ -306,11 +360,26 @@ export const listScheduledMeetings = (
 };
 
 export type ScheduledMeetingPersistence = {
-  save: (snapshot: ScheduledMeeting[]) => void;
-  saveChanged?: (meetings: ScheduledMeeting[]) => void;
-  deleteIds?: (ids: string[]) => void;
-  load: () => ScheduledMeeting[];
-  close?: () => void;
+  save: (snapshot: ScheduledMeeting[]) => MaybePromise<void>;
+  saveChanged?: (meetings: ScheduledMeeting[]) => MaybePromise<void>;
+  deleteIds?: (ids: string[]) => MaybePromise<void>;
+  reserveBookingSlot?: (
+    reservation: BookingSlotReservation,
+  ) => MaybePromise<BookingSlotLease | null>;
+  load: () => MaybePromise<ScheduledMeeting[]>;
+  close?: () => MaybePromise<void>;
+  flush?: () => Promise<void>;
+};
+
+export type BookingSlotReservation = {
+  clientId: string;
+  hostEmail: string;
+  startAt: number;
+  endAt: number;
+};
+
+export type BookingSlotLease = {
+  release: () => MaybePromise<void>;
 };
 
 const scheduledMeetingsSqlitePath = (): string => {
@@ -403,6 +472,33 @@ const normalizeStoredMeeting = (raw: unknown): ScheduledMeeting | null => {
     updatedAt: Number.isFinite(Number(record.updatedAt))
       ? Number(record.updatedAt)
       : now,
+    source: record.source === "booking_link" ? "booking_link" : "manual",
+    eventTypeId:
+      typeof record.eventTypeId === "string" ? record.eventTypeId : null,
+    attendeeName:
+      typeof record.attendeeName === "string" ? record.attendeeName : null,
+    attendeeEmail:
+      typeof record.attendeeEmail === "string" ? record.attendeeEmail : null,
+    attendeeNote:
+      typeof record.attendeeNote === "string" ? record.attendeeNote : null,
+    attendeeTimeZone:
+      typeof record.attendeeTimeZone === "string"
+        ? record.attendeeTimeZone
+        : null,
+    googleCalendarEventId:
+      typeof record.googleCalendarEventId === "string"
+        ? record.googleCalendarEventId
+        : null,
+    calendarSyncStatus:
+      record.calendarSyncStatus === "pending" ||
+      record.calendarSyncStatus === "synced" ||
+      record.calendarSyncStatus === "failed"
+        ? record.calendarSyncStatus
+        : "not_required",
+    calendarSyncError:
+      typeof record.calendarSyncError === "string"
+        ? record.calendarSyncError
+        : null,
   };
 };
 
@@ -574,18 +670,227 @@ export const createFileScheduledMeetingPersistence = (
   },
 });
 
+const RELEASE_BOOKING_SLOT_LOCK_SCRIPT = `
+local key = KEYS[1]
+local token = ARGV[1]
+if redis.call("GET", key) == token then
+  return redis.call("DEL", key)
+end
+return 0
+`;
+
+const bookingSlotLockTtlMs = (): number => {
+  const parsed = Number(process.env.SFU_BOOKING_SLOT_LOCK_TTL_MS);
+  return Number.isFinite(parsed) && parsed >= 1000 ? parsed : 30000;
+};
+
+const bookingSlotLockKey = (
+  keyPrefix: string,
+  reservation: BookingSlotReservation,
+): string => {
+  const raw = [reservation.clientId, reservation.hostEmail.toLowerCase()].join("|");
+  return `${keyPrefix}:booking-slot-lock:${Buffer.from(raw).toString("base64url")}`;
+};
+
+class RedisScheduledMeetingPersistence implements ScheduledMeetingPersistence {
+  private client: RedisPersistenceClient;
+  private fallback: ScheduledMeetingPersistence;
+  private key: string;
+  private keyPrefix: string;
+  private startPromise: Promise<void> | null = null;
+  private started = false;
+  private pendingWrite: Promise<void> = Promise.resolve();
+  private knownMeetings = new Map<string, ScheduledMeeting>();
+
+  constructor(options: {
+    redisUrl: string;
+    keyPrefix: string;
+    fallback: ScheduledMeetingPersistence;
+  }) {
+    this.client = createRedisPersistenceClient(
+      "ScheduledMeetings",
+      options.redisUrl,
+    );
+    this.fallback = options.fallback;
+    this.keyPrefix = options.keyPrefix;
+    this.key = `${options.keyPrefix}:scheduled-meetings`;
+  }
+
+  async start(): Promise<void> {
+    if (this.started) return;
+    if (this.startPromise) {
+      await this.startPromise;
+      return;
+    }
+
+    this.startPromise = (async () => {
+      await this.client.connect();
+      this.started = true;
+      Logger.success("[ScheduledMeetings] Redis persistence connected");
+    })();
+
+    try {
+      await this.startPromise;
+    } catch (error) {
+      this.startPromise = null;
+      throw error;
+    }
+  }
+
+  save(snapshot: ScheduledMeeting[]): void {
+    this.knownMeetings = new Map(snapshot.map((meeting) => [meeting.id, meeting]));
+    void this.fallback.save(snapshot);
+    const payload = snapshot.map((meeting) => [
+      meeting.id,
+      JSON.stringify(meeting),
+    ] as const);
+    this.queueWrite("save snapshot", async () => {
+      const transaction = this.client.multi();
+      transaction.del(this.key);
+      if (payload.length > 0) {
+        transaction.hSet(this.key, Object.fromEntries(payload));
+      }
+      await transaction.exec();
+    });
+  }
+
+  saveChanged(meetings: ScheduledMeeting[]): void {
+    if (meetings.length === 0) return;
+    for (const meeting of meetings) {
+      this.knownMeetings.set(meeting.id, meeting);
+    }
+    void this.fallback.save(Array.from(this.knownMeetings.values()));
+    const payload = Object.fromEntries(
+      meetings.map((meeting) => [meeting.id, JSON.stringify(meeting)]),
+    );
+    this.queueWrite("save changed meetings", async () => {
+      await this.client.hSet(this.key, payload);
+    });
+  }
+
+  deleteIds(ids: string[]): void {
+    if (ids.length === 0) return;
+    for (const id of ids) {
+      this.knownMeetings.delete(id);
+    }
+    void this.fallback.save(Array.from(this.knownMeetings.values()));
+    this.queueWrite("delete meetings", async () => {
+      await this.client.hDel(this.key, ids);
+    });
+  }
+
+  async reserveBookingSlot(
+    reservation: BookingSlotReservation,
+  ): Promise<BookingSlotLease | null> {
+    await this.start();
+    const key = bookingSlotLockKey(this.keyPrefix, reservation);
+    const token = randomUUID();
+    const result = await this.client.sendCommand([
+      "SET",
+      key,
+      token,
+      "PX",
+      String(bookingSlotLockTtlMs()),
+      "NX",
+    ]);
+    if (String(result) !== "OK") return null;
+    return {
+      release: async () => {
+        await this.client.sendCommand([
+          "EVAL",
+          RELEASE_BOOKING_SLOT_LOCK_SCRIPT,
+          "1",
+          key,
+          token,
+        ]);
+      },
+    };
+  }
+
+  async load(): Promise<ScheduledMeeting[]> {
+    try {
+      await this.start();
+      const values = await this.client.hVals(this.key);
+      if (values.length > 0) {
+        const meetings = values
+          .map((value) => normalizeStoredMeeting(JSON.parse(value)))
+          .filter((entry): entry is ScheduledMeeting => Boolean(entry));
+        this.knownMeetings = new Map(
+          meetings.map((meeting) => [meeting.id, meeting]),
+        );
+        return meetings;
+      }
+
+      const fallbackMeetings = await this.fallback.load();
+      this.knownMeetings = new Map(
+        fallbackMeetings.map((meeting) => [meeting.id, meeting]),
+      );
+      if (fallbackMeetings.length > 0) {
+        this.save(fallbackMeetings);
+        await this.flush();
+        Logger.info(
+          `Migrated ${fallbackMeetings.length} scheduled meeting(s) into Redis persistence`,
+        );
+      }
+      return fallbackMeetings;
+    } catch (error) {
+      Logger.error(
+        "Failed to load scheduled meetings from Redis; falling back to local persistence",
+        error,
+      );
+      const fallbackMeetings = await this.fallback.load();
+      this.knownMeetings = new Map(
+        fallbackMeetings.map((meeting) => [meeting.id, meeting]),
+      );
+      return fallbackMeetings;
+    }
+  }
+
+  async flush(): Promise<void> {
+    await this.pendingWrite;
+  }
+
+  async close(): Promise<void> {
+    await this.flush();
+    await this.fallback.close?.();
+    if (!this.started) return;
+    this.started = false;
+    await this.client.quit();
+  }
+
+  private queueWrite(label: string, write: () => Promise<void>): void {
+    const writePromise = this.pendingWrite
+      .catch(() => undefined)
+      .then(async () => {
+        await this.start();
+        await write();
+      });
+    this.pendingWrite = writePromise.catch((error) => {
+      Logger.error(`Failed to persist scheduled meetings to Redis (${label})`, error);
+      throw error;
+    });
+  }
+}
+
+export const createRedisScheduledMeetingPersistence = (
+  redisUrl: string = resolveRedisPersistenceUrl(),
+  keyPrefix: string = resolveRedisPersistenceKeyPrefix(),
+  fallback: ScheduledMeetingPersistence = createSqliteScheduledMeetingPersistence(),
+): ScheduledMeetingPersistence =>
+  new RedisScheduledMeetingPersistence({ redisUrl, keyPrefix, fallback });
+
 const migrateJsonScheduledMeetingsToSqlite = (
   sqlite: ScheduledMeetingPersistence,
   json: ScheduledMeetingPersistence,
 ): number => {
-  const existing = sqlite.load();
+  const existing = sqlite.load() as ScheduledMeeting[];
   if (existing.length > 0) return 0;
 
-  const legacy = json.load();
+  const legacy = json.load() as ScheduledMeeting[];
   if (legacy.length === 0) return 0;
 
-  sqlite.save(legacy);
-  return sqlite.load().length;
+  void sqlite.save(legacy);
+  return (sqlite.load() as ScheduledMeeting[]).length;
 };
 
 export const createScheduledMeetingPersistence = (): ScheduledMeetingPersistence => {
@@ -595,6 +900,7 @@ export const createScheduledMeetingPersistence = (): ScheduledMeetingPersistence
   }
 
   const jsonPersistence = createFileScheduledMeetingPersistence();
+  const redisUrl = resolveRedisPersistenceUrl();
 
   try {
     const sqlitePersistence = createSqliteScheduledMeetingPersistence();
@@ -607,6 +913,18 @@ export const createScheduledMeetingPersistence = (): ScheduledMeetingPersistence
         `Migrated ${migrated} scheduled meeting(s) from JSON into SQLite`,
       );
     }
+    if (shouldUseRedisPersistence(mode, redisUrl)) {
+      if (!redisUrl) {
+        throw new Error(
+          "SCHEDULED_MEETINGS_PERSISTENCE=redis requires SFU_PERSISTENCE_REDIS_URL, SFU_REDIS_URL, or REDIS_URL.",
+        );
+      }
+      return createRedisScheduledMeetingPersistence(
+        redisUrl,
+        resolveRedisPersistenceKeyPrefix(),
+        sqlitePersistence,
+      );
+    }
     return sqlitePersistence;
   } catch (error) {
     if (mode === "sqlite") {
@@ -615,6 +933,18 @@ export const createScheduledMeetingPersistence = (): ScheduledMeetingPersistence
     Logger.warn(
       `SQLite scheduled-meeting persistence unavailable; falling back to JSON: ${(error as Error).message}`,
     );
+    if (shouldUseRedisPersistence(mode, redisUrl)) {
+      if (!redisUrl) {
+        throw new Error(
+          "SCHEDULED_MEETINGS_PERSISTENCE=redis requires SFU_PERSISTENCE_REDIS_URL, SFU_REDIS_URL, or REDIS_URL.",
+        );
+      }
+      return createRedisScheduledMeetingPersistence(
+        redisUrl,
+        resolveRedisPersistenceKeyPrefix(),
+        jsonPersistence,
+      );
+    }
     return jsonPersistence;
   }
 };
@@ -622,45 +952,47 @@ export const createScheduledMeetingPersistence = (): ScheduledMeetingPersistence
 export const loadPersistedMeetings = (
   store: ScheduledMeetingStore,
   persistence: ScheduledMeetingPersistence,
-): number => {
-  const meetings = persistence.load();
+): Promise<number> => Promise.resolve(persistence.load()).then((meetings) => {
   for (const meeting of meetings) {
     registerStore(store, meeting);
   }
   return meetings.length;
-};
+});
 
 export const persistScheduledMeetings = (
   store: ScheduledMeetingStore,
   persistence: ScheduledMeetingPersistence,
-): void => {
-  persistence.save(Array.from(store.byId.values()));
-};
+): Promise<void> =>
+  Promise.resolve(persistence.save(Array.from(store.byId.values()))).then(() =>
+    persistence.flush?.(),
+  );
 
 export const persistScheduledMeetingChanges = (
   store: ScheduledMeetingStore,
   persistence: ScheduledMeetingPersistence,
   meetings: ScheduledMeeting[],
-): void => {
-  if (meetings.length === 0) return;
+): Promise<void> => {
+  if (meetings.length === 0) return Promise.resolve();
   if (persistence.saveChanged) {
-    persistence.saveChanged(meetings);
-    return;
+    return Promise.resolve(persistence.saveChanged(meetings)).then(() =>
+      persistence.flush?.(),
+    );
   }
-  persistScheduledMeetings(store, persistence);
+  return persistScheduledMeetings(store, persistence);
 };
 
 export const persistScheduledMeetingDeletes = (
   store: ScheduledMeetingStore,
   persistence: ScheduledMeetingPersistence,
   ids: string[],
-): void => {
-  if (ids.length === 0) return;
+): Promise<void> => {
+  if (ids.length === 0) return Promise.resolve();
   if (persistence.deleteIds) {
-    persistence.deleteIds(ids);
-    return;
+    return Promise.resolve(persistence.deleteIds(ids)).then(() =>
+      persistence.flush?.(),
+    );
   }
-  persistScheduledMeetings(store, persistence);
+  return persistScheduledMeetings(store, persistence);
 };
 
 export const advanceScheduledMeetings = (

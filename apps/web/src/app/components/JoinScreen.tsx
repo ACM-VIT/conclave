@@ -2,6 +2,7 @@
 
 import dynamic from "next/dynamic";
 import {
+  CalendarClock,
   Loader2,
   WandSparkles,
   Video,
@@ -933,18 +934,18 @@ function JoinScreen({
               )}
 
               {!isRoutedRoom && (
-                <button
-                  onClick={startMeeting}
-                  disabled={isLoading || !nameReady}
-                  className={CTA_PRIMARY}
-                >
-                  {isStartingMeeting ? (
-                    <Loader2 size={18} className="animate-spin" />
-                  ) : (
-                    <Plus size={18} />
-                  )}
-                  New meeting
-                </button>
+                  <button
+                    onClick={startMeeting}
+                    disabled={isLoading || !nameReady}
+                    className={CTA_PRIMARY}
+                  >
+                    {isStartingMeeting ? (
+                      <Loader2 size={18} className="animate-spin" />
+                    ) : (
+                      <Plus size={18} />
+                    )}
+                    New meeting
+                  </button>
               )}
 
               {/* ScheduledMeetingsPanel disabled for now

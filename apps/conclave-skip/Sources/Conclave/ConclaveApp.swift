@@ -1,6 +1,12 @@
 import Foundation
 import OSLog
 import SwiftUI
+#if canImport(UIKit)
+import UIKit
+#endif
+#if os(macOS)
+import AppKit
+#endif
 
 let logger: Logger = Logger(subsystem: "com.acmvit.conclave", category: "Conclave")
 
@@ -59,6 +65,10 @@ public final class ConclaveAppDelegate: Sendable {
         if NativeAuthService.handleOpenURL(url) {
             return true
         }
+        if isWebBookingURL(url) {
+            openExternalWebURL(url)
+            return true
+        }
         guard isJoinLinkURLString(url.absoluteString) else {
             return false
         }
@@ -70,6 +80,10 @@ public final class ConclaveAppDelegate: Sendable {
         Task { @MainActor in
             guard shouldHandleOpenURL(urlString) else { return }
             if let url = URL(string: urlString), NativeAuthService.handleOpenURL(url) {
+                return
+            }
+            if let url = URL(string: urlString), self.isWebBookingURL(url) {
+                self.openExternalWebURL(url)
                 return
             }
             guard isJoinLinkURLString(urlString) else {
@@ -106,5 +120,28 @@ public final class ConclaveAppDelegate: Sendable {
 
     private func isJoinLinkURLString(_ rawValue: String) -> Bool {
         !NativeJoinLinkParser.parse(rawValue, allowRoomCreationForURLs: true).roomId.isEmpty
+    }
+
+    private func isWebBookingURL(_ url: URL) -> Bool {
+        guard ["http", "https"].contains(url.scheme?.lowercased() ?? "") else {
+            return false
+        }
+        let host = url.host?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        guard host == "conclave.acmvit.in" || host == "www.conclave.acmvit.in" else {
+            return false
+        }
+        let firstSegment = url.path
+            .split(separator: "/", omittingEmptySubsequences: true)
+            .first?
+            .lowercased()
+        return firstSegment == "book"
+    }
+
+    private func openExternalWebURL(_ url: URL) {
+        #if canImport(UIKit)
+        UIApplication.shared.open(url)
+        #elseif os(macOS)
+        NSWorkspace.shared.open(url)
+        #endif
     }
 }

@@ -128,10 +128,10 @@ export const registerScheduledMeetingRoutes = (
     return false;
   };
 
-  const persistChanged = (meeting: ScheduledMeeting): void => {
+  const persistChanged = async (meeting: ScheduledMeeting): Promise<void> => {
     if (state.scheduledMeetingPersistence) {
       try {
-        persistScheduledMeetingChanges(
+        await persistScheduledMeetingChanges(
           state.scheduledMeetings,
           state.scheduledMeetingPersistence,
           [meeting],
@@ -142,10 +142,10 @@ export const registerScheduledMeetingRoutes = (
     }
   };
 
-  const persistDeleted = (id: string): void => {
+  const persistDeleted = async (id: string): Promise<void> => {
     if (state.scheduledMeetingPersistence) {
       try {
-        persistScheduledMeetingDeletes(
+        await persistScheduledMeetingDeletes(
           state.scheduledMeetings,
           state.scheduledMeetingPersistence,
           [id],
@@ -173,7 +173,7 @@ export const registerScheduledMeetingRoutes = (
     res.json({ scheduledMeetings: list.map(serializeMeeting) });
   });
 
-  app.post("/scheduled-meetings", (req, res) => {
+  app.post("/scheduled-meetings", async (req, res) => {
     if (!requireSecret(req, res)) return;
     const user = resolveUserContext(req);
     if (!user.email) {
@@ -192,7 +192,7 @@ export const registerScheduledMeetingRoutes = (
         defaultHostUserId: user.userId,
       });
 
-      persistChanged(meeting);
+      await persistChanged(meeting);
       Logger.info(
         `Scheduled meeting created ${meeting.id} (${meeting.roomCode}) by ${user.email}`,
       );
@@ -279,7 +279,7 @@ export const registerScheduledMeetingRoutes = (
     res.json({ scheduledMeeting: serializeMeeting(meeting) });
   });
 
-  app.patch("/scheduled-meetings/:id", (req, res) => {
+  app.patch("/scheduled-meetings/:id", async (req, res) => {
     if (!requireSecret(req, res)) return;
     const target = requireMeetingAccess(req, res);
     if (!target) return;
@@ -290,14 +290,14 @@ export const registerScheduledMeetingRoutes = (
         target.id,
         body,
       );
-      persistChanged(meeting);
+      await persistChanged(meeting);
       res.json({ scheduledMeeting: serializeMeeting(meeting) });
     } catch (error) {
       res.status(400).json({ error: (error as Error).message });
     }
   });
 
-  app.delete("/scheduled-meetings/:id", (req, res) => {
+  app.delete("/scheduled-meetings/:id", async (req, res) => {
     if (!requireSecret(req, res)) return;
     const target = requireMeetingAccess(req, res);
     if (!target) return;
@@ -306,11 +306,11 @@ export const registerScheduledMeetingRoutes = (
       res.status(404).json({ error: "Scheduled meeting not found" });
       return;
     }
-    persistDeleted(meeting.id);
+    await persistDeleted(meeting.id);
     res.json({ success: true, id: meeting.id });
   });
 
-  app.post("/scheduled-meetings/:id/start", (req, res) => {
+  app.post("/scheduled-meetings/:id/start", async (req, res) => {
     if (!requireSecret(req, res)) return;
     const target = requireMeetingAccess(req, res);
     if (!target) return;
@@ -320,14 +320,14 @@ export const registerScheduledMeetingRoutes = (
         target.id,
         { status: "live" },
       );
-      persistChanged(meeting);
+      await persistChanged(meeting);
       res.json({ scheduledMeeting: serializeMeeting(meeting) });
     } catch (error) {
       res.status(400).json({ error: (error as Error).message });
     }
   });
 
-  app.post("/scheduled-meetings/:id/cancel", (req, res) => {
+  app.post("/scheduled-meetings/:id/cancel", async (req, res) => {
     if (!requireSecret(req, res)) return;
     const target = requireMeetingAccess(req, res);
     if (!target) return;
@@ -337,7 +337,7 @@ export const registerScheduledMeetingRoutes = (
         target.id,
         { status: "cancelled" },
       );
-      persistChanged(meeting);
+      await persistChanged(meeting);
       res.json({ scheduledMeeting: serializeMeeting(meeting) });
     } catch (error) {
       res.status(400).json({ error: (error as Error).message });

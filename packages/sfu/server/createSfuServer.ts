@@ -6,6 +6,7 @@ import { config as defaultConfig } from "../config/config.js";
 import { Logger } from "../utilities/loggers.js";
 import {
   initMediaSoup,
+  initScheduling,
   initScheduledMeetings,
   initScheduledWebinars,
 } from "./init.js";
@@ -72,7 +73,8 @@ export const createSfuServer = (
     socketAdapterLifecycle = await connectSocketAdapter(io, { config });
     await initMediaSoup(state, () => io);
     initScheduledWebinars(state);
-    initScheduledMeetings(state);
+    await initScheduledMeetings(state);
+    await initScheduling(state);
     startScheduledWebinarTimer(state, () => io, undefined);
     roomOwnershipRenewTimer = setInterval(() => {
       renewRoomOwnerships(state).catch((error) => {
@@ -85,17 +87,19 @@ export const createSfuServer = (
     scheduledMeetingTickTimer = setInterval(() => {
       const changedMeetings = advanceScheduledMeetings(state.scheduledMeetings);
       if (changedMeetings.length > 0 && state.scheduledMeetingPersistence) {
-        try {
-          persistScheduledMeetingChanges(
-            state.scheduledMeetings,
-            state.scheduledMeetingPersistence,
-            changedMeetings,
-          );
-        } catch (error) {
+        persistScheduledMeetingChanges(
+          state.scheduledMeetings,
+          state.scheduledMeetingPersistence,
+          changedMeetings,
+        ).catch((error) => {
           Logger.warn("Failed to persist scheduled-meeting tick", error);
-        }
+        });
       }
     }, 5000);
+
+    if (scheduledMeetingTickTimer.unref) {
+      scheduledMeetingTickTimer.unref();
+    }
 
     await new Promise<void>((resolve) => {
       httpServer.listen(config.port, () => {
@@ -115,10 +119,12 @@ export const createSfuServer = (
       clearInterval(roomOwnershipRenewTimer);
       roomOwnershipRenewTimer = null;
     }
-    state.scheduledWebinarPersistence?.close?.();
+    await state.scheduledWebinarPersistence?.close?.();
     state.scheduledWebinarPersistence = null;
-    state.scheduledMeetingPersistence?.close?.();
+    await state.scheduledMeetingPersistence?.close?.();
     state.scheduledMeetingPersistence = null;
+    await state.schedulingPersistence?.close?.();
+    state.schedulingPersistence = null;
     await releaseAllRoomOwnerships(state);
     await socketAdapterLifecycle?.close();
     socketAdapterLifecycle = null;
