@@ -171,12 +171,18 @@ export interface ProducerInfo {
   roomId?: string;
 }
 
+export interface DisplayNameSnapshotEntry {
+  userId: string;
+  displayName: string;
+}
+
 export type VideoQuality = "low" | "standard";
 
 export interface JoinRoomResponse {
   roomId?: string;
   rtpCapabilities: RtpCapabilities;
   existingProducers: ProducerInfo[];
+  displayNameSnapshot?: DisplayNameSnapshotEntry[];
   status?: "waiting" | "joined";
   hostUserId?: string | null;
   hostUserIds?: string[];

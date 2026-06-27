@@ -374,26 +374,75 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           }
         }
 
+        const existingClient = room.getClient(userId);
+        const staleSameIdentityUserIds = Array.from(
+          room.userKeysById.entries(),
+        )
+          .filter(([candidateUserId, candidateUserKey]) => {
+            if (candidateUserId === userId || candidateUserKey !== userKey) {
+              return false;
+            }
+            const candidateClient = room.getClient(candidateUserId);
+            return (
+              room.hasPendingDisconnect(candidateUserId) ||
+              candidateClient?.socket.connected === false
+            );
+          })
+          .map(([candidateUserId]) => candidateUserId);
         const pendingDisconnectStartedAt =
           room.getPendingDisconnectStartedAt(userId);
         const wasReconnectNoticeEmitted =
           room.wasPendingDisconnectNotified(userId);
         const wasReconnecting = room.clearPendingDisconnect(userId);
-        const existingClient = room.getClient(userId);
+        const isReclaimingExistingSeat =
+          wasReconnecting || staleSameIdentityUserIds.length > 0;
         const reclaimingWebinarSeat = existingClient
           ? Boolean(existingClient.isWebinarAttendee)
-          : false;
+          : staleSameIdentityUserIds.some((candidateUserId) =>
+              Boolean(room.getClient(candidateUserId)?.isWebinarAttendee),
+            );
 
-        if (existingClient) {
-          Logger.warn(`User ${userId} re-joining room ${roomId}`);
-          const awarenessRemovals = room.clearUserAwareness(userId);
+        const removeClientForRejoin = (
+          targetUserId: string,
+          options?: { notifyPeers?: boolean },
+        ) => {
+          const client = room.getClient(targetUserId);
+          if (!client) return;
+
+          const awarenessRemovals = room.clearUserAwareness(targetUserId);
           for (const removal of awarenessRemovals) {
             io.to(roomChannelId).emit("apps:awareness", {
               appId: removal.appId,
               awarenessUpdate: removal.awarenessUpdate,
             } satisfies AppsAwarenessData);
           }
-          room.removeClient(userId);
+
+          room.removeClient(targetUserId);
+
+          if (!options?.notifyPeers) return;
+          if (client.isGhost) {
+            emitUserLeft(room, targetUserId, {
+              ghostOnly: true,
+              excludeUserId: targetUserId,
+            });
+          } else if (!client.isWebinarAttendee) {
+            io.to(roomChannelId).emit("userLeft", {
+              userId: targetUserId,
+              roomId: room.id,
+            });
+          }
+        };
+
+        for (const staleUserId of staleSameIdentityUserIds) {
+          Logger.warn(
+            `Reclaiming stale session ${staleUserId} for identity ${userKey} in room ${roomId}`,
+          );
+          removeClientForRejoin(staleUserId, { notifyPeers: true });
+        }
+
+        if (existingClient) {
+          Logger.warn(`User ${userId} re-joining room ${roomId}`);
+          removeClientForRejoin(userId);
         }
 
         if (
@@ -454,7 +503,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           !isWebinarAttendeeJoin &&
           !isAdminJoin &&
           requiresMeetingInviteCode &&
-          !wasReconnecting &&
+          !isReclaimingExistingSeat &&
           !existingClient;
 
         if (shouldValidateMeetingInviteCode && !meetingInviteCode) {
@@ -843,7 +892,11 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         emitWebinarAttendeeCountChanged(io, state, context.currentRoom);
         emitWebinarFeedChanged(io, state, context.currentRoom);
 
-        if (webinarConfig.scheduledWebinarId && !wasReconnecting && !existingClient) {
+        if (
+          webinarConfig.scheduledWebinarId &&
+          !isReclaimingExistingSeat &&
+          !existingClient
+        ) {
           const attendeeCount = context.currentRoom.getWebinarAttendeeCount();
           const webinarWithJoinMetric = recordWebinarJoin(
             state.scheduledWebinars,
@@ -886,6 +939,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           roomId,
           rtpCapabilities: context.currentRoom.rtpCapabilities,
           existingProducers,
+          displayNameSnapshot,
           status: "joined",
           hostUserId: context.currentRoom.getHostUserId(),
           hostUserIds: context.currentRoom.getAdminUserIds(),
