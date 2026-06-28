@@ -229,10 +229,14 @@ function Segmented<T extends string | number>({
   options: { value: T; label: string }[];
   onChange: (value: T) => void;
 }) {
+  // Few options: a single equal-width segmented row. Many: wrap into chips so
+  // long labels never clip in the narrow dock.
+  const wrap = options.length > 4;
   return (
     <div
       style={{
         display: "flex",
+        flexWrap: wrap ? "wrap" : "nowrap",
         gap: 4,
         padding: 4,
         borderRadius: radius.md,
@@ -248,8 +252,8 @@ function Segmented<T extends string | number>({
             type="button"
             onClick={() => onChange(opt.value)}
             style={{
-              flex: 1,
-              padding: "7px 6px",
+              flex: wrap ? "0 0 auto" : 1,
+              padding: wrap ? "7px 13px" : "7px 6px",
               borderRadius: radius.sm,
               border: "none",
               background: active ? color.accent : "transparent",
@@ -257,6 +261,7 @@ function Segmented<T extends string | number>({
               fontFamily: HEAD_FONT,
               fontSize: 13,
               fontWeight: 500,
+              whiteSpace: "nowrap",
               cursor: "pointer",
               transition: "background 140ms ease, color 140ms ease",
             }}
