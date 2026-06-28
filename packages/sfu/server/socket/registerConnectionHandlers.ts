@@ -14,6 +14,7 @@ import { registerRouterHandlers } from "./handlers/routerHandlers.js";
 import { registerSharedBrowserHandlers } from "./handlers/sharedBrowserHandlers.js";
 import { registerTransportHandlers } from "./handlers/transportHandlers.js";
 import { registerAppsHandlers } from "./handlers/appsHandlers.js";
+import { registerGameHandlers } from "./handlers/gameHandlers.js";
 import { registerWebinarHandlers } from "./handlers/webinarHandlers.js";
 
 export const registerConnectionHandlers = (
@@ -35,6 +36,7 @@ export const registerConnectionHandlers = (
     registerReactionHandlers(context);
     registerHandHandlers(context);
     registerAppsHandlers(context);
+    registerGameHandlers(context);
     registerMeetingHandlers(context);
     registerWebinarHandlers(context);
     registerSharedBrowserHandlers(context);

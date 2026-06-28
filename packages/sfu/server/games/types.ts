@@ -30,9 +30,35 @@ export type GameRng = {
   pick<T>(items: readonly T[]): T;
 };
 
+/** Host-configurable option specs, declared by a module and rendered by the UI. */
+export type GameOptionSpec =
+  | {
+      id: string;
+      type: "number";
+      label: string;
+      min: number;
+      max: number;
+      default: number;
+      /** Quick presets surfaced as a segmented control. */
+      presets?: number[];
+      suffix?: string;
+    }
+  | {
+      id: string;
+      type: "select";
+      label: string;
+      default: string;
+      choices: { value: string; label: string }[];
+    };
+
+/** Resolved, validated config values keyed by option id. */
+export type GameConfig = Record<string, number | string>;
+
 export type GameContext = {
   players: GamePlayer[];
   rng: GameRng;
+  /** Host-chosen configuration (validated, with defaults filled in). */
+  config: GameConfig;
   /** Server clock (ms epoch) captured at the start of the operation. */
   now: number;
   isAdmin(playerId: string): boolean;
@@ -57,6 +83,11 @@ export type GameModule<S = unknown> = {
   maxPlayers: number;
   /** When set, the engine calls `onTick` on this cadence for timers/deadlines. */
   tickMs?: number;
+  /** Host-configurable options shown before the game starts. */
+  options?: GameOptionSpec[];
+  /** When true, the dock shows a live leaderboard (the publicView must expose a
+   *  `scoreboard` array of `{ id, name, score }`). */
+  hasLeaderboard?: boolean;
 
   setup(ctx: GameContext): S;
   /** Apply a validated move. Throw `GameMoveError` to reject it. */

@@ -1,4 +1,5 @@
 import {
+  Gamepad2,
   Globe,
   Hand,
   LayoutGrid,
@@ -69,6 +70,9 @@ export interface ControlsBarProps {
   isGhostMode?: boolean;
   isParticipantsOpen?: boolean;
   onToggleParticipants?: () => void;
+  isGamesOpen?: boolean;
+  onToggleGames?: () => void;
+  hasActiveGame?: boolean;
   isHostControlsOpen?: boolean;
   onToggleHostControls?: () => void;
   pendingUsersCount?: number;
@@ -193,6 +197,15 @@ export function buildControlsConfig(p: ControlsBarProps): ControlsConfig {
       variant: p.isParticipantsOpen ? "active" : "default",
       badge: p.pendingUsersCount,
       onPress: p.onToggleParticipants,
+    });
+  }
+  if (p.onToggleGames) {
+    sideControls.push({
+      id: "games",
+      icon: Gamepad2,
+      label: p.hasActiveGame ? "Game in progress" : "Games",
+      variant: p.isGamesOpen || p.hasActiveGame ? "active" : "default",
+      onPress: p.onToggleGames,
     });
   }
   sideControls.push({

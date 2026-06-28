@@ -375,32 +375,51 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         }
 
         const existingClient = room.getClient(userId);
-        const staleSameIdentityUserIds = Array.from(
+        const staleSameIdentitySeats = Array.from(
           room.userKeysById.entries(),
         )
-          .filter(([candidateUserId, candidateUserKey]) => {
+          .flatMap(([candidateUserId, candidateUserKey]) => {
             if (candidateUserId === userId || candidateUserKey !== userKey) {
-              return false;
+              return [];
             }
             const candidateClient = room.getClient(candidateUserId);
-            return (
-              room.hasPendingDisconnect(candidateUserId) ||
-              candidateClient?.socket.connected === false
-            );
-          })
-          .map(([candidateUserId]) => candidateUserId);
+            if (
+              !(
+                room.hasPendingDisconnect(candidateUserId) ||
+                candidateClient?.socket.connected === false
+              )
+            ) {
+              return [];
+            }
+            return [
+              {
+                userId: candidateUserId,
+                isMeetingParticipant: Boolean(
+                  candidateClient && !candidateClient.isObserver,
+                ),
+                isWebinarAttendee: Boolean(candidateClient?.isWebinarAttendee),
+              },
+            ];
+          });
         const pendingDisconnectStartedAt =
           room.getPendingDisconnectStartedAt(userId);
         const wasReconnectNoticeEmitted =
           room.wasPendingDisconnectNotified(userId);
         const wasReconnecting = room.clearPendingDisconnect(userId);
-        const isReclaimingExistingSeat =
-          wasReconnecting || staleSameIdentityUserIds.length > 0;
-        const reclaimingWebinarSeat = existingClient
-          ? Boolean(existingClient.isWebinarAttendee)
-          : staleSameIdentityUserIds.some((candidateUserId) =>
-              Boolean(room.getClient(candidateUserId)?.isWebinarAttendee),
-            );
+        const isReplacingExistingSeat =
+          Boolean(existingClient) || staleSameIdentitySeats.length > 0;
+        const isReclaimingMeetingParticipantSeat =
+          !isWebinarAttendeeJoin &&
+          Boolean(
+            (existingClient && !existingClient.isObserver) ||
+              staleSameIdentitySeats.some((seat) => seat.isMeetingParticipant),
+          );
+        const reclaimingWebinarSeat =
+          isWebinarAttendeeJoin &&
+          Boolean(
+            existingClient?.isWebinarAttendee ||
+              staleSameIdentitySeats.some((seat) => seat.isWebinarAttendee),
+          );
 
         const removeClientForRejoin = (
           targetUserId: string,
@@ -433,18 +452,6 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           }
         };
 
-        for (const staleUserId of staleSameIdentityUserIds) {
-          Logger.warn(
-            `Reclaiming stale session ${staleUserId} for identity ${userKey} in room ${roomId}`,
-          );
-          removeClientForRejoin(staleUserId, { notifyPeers: true });
-        }
-
-        if (existingClient) {
-          Logger.warn(`User ${userId} re-joining room ${roomId}`);
-          removeClientForRejoin(userId);
-        }
-
         if (
           isWebinarAttendeeJoin &&
           !reclaimingWebinarSeat &&
@@ -452,14 +459,6 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         ) {
           respond(callback, { error: "Webinar is full." });
           return;
-        }
-
-        const browserState = getBrowserState(roomChannelId);
-        if (browserState.active && room.clients.size === 0) {
-          Logger.info(
-            `[SharedBrowser] Clearing stale browser session for empty room ${roomId}`,
-          );
-          clearBrowserState(roomChannelId);
         }
 
         const isReturningPrimaryHost =
@@ -503,8 +502,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           !isWebinarAttendeeJoin &&
           !isAdminJoin &&
           requiresMeetingInviteCode &&
-          !isReclaimingExistingSeat &&
-          !existingClient;
+          !isReclaimingMeetingParticipantSeat;
 
         if (shouldValidateMeetingInviteCode && !meetingInviteCode) {
           respond(callback, { error: "Meeting invite code required." });
@@ -655,6 +653,30 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             meetingRequiresInviteCode: room.requiresMeetingInviteCode,
           });
           return;
+        }
+
+        for (const { userId: staleUserId } of staleSameIdentitySeats) {
+          Logger.warn(
+            `Reclaiming stale session ${staleUserId} for identity ${userKey} in room ${roomId}`,
+          );
+          removeClientForRejoin(staleUserId, { notifyPeers: true });
+        }
+
+        if (existingClient) {
+          Logger.warn(`User ${userId} re-joining room ${roomId}`);
+          removeClientForRejoin(userId);
+        }
+
+        const browserState = getBrowserState(roomChannelId);
+        if (
+          browserState.active &&
+          room.clients.size === 0 &&
+          !isReplacingExistingSeat
+        ) {
+          Logger.info(
+            `[SharedBrowser] Clearing stale browser session for empty room ${roomId}`,
+          );
+          clearBrowserState(roomChannelId);
         }
 
         if (
@@ -894,7 +916,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
 
         if (
           webinarConfig.scheduledWebinarId &&
-          !isReclaimingExistingSeat &&
+          !wasReconnecting &&
           !existingClient
         ) {
           const attendeeCount = context.currentRoom.getWebinarAttendeeCount();
