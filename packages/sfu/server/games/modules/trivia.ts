@@ -5,6 +5,13 @@ import {
   type GameMove,
 } from "../types.js";
 import { numberOption, selectOption } from "../config.js";
+import {
+  GAME_CONTENT_TOPIC_OPTION,
+  cleanGeneratedText,
+  generateStructuredGameContent,
+  gameContentTopic,
+  normalizeGeneratedKey,
+} from "../aiContent.js";
 
 /**
  * Trivia: a Kahoot/Deezer-style scored quiz.
@@ -70,6 +77,53 @@ const QUESTION_BANK: RawQuestion[] = [
   { category: "Chemistry", prompt: "What is the chemical symbol for gold?", options: ["Au", "Ag", "Gd", "Go"], answer: "Au" },
 ];
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  Boolean(value && typeof value === "object" && !Array.isArray(value));
+
+const parseGeneratedQuestions = (payload: unknown): RawQuestion[] | null => {
+  if (!isRecord(payload) || !Array.isArray(payload.questions)) return null;
+  const questions: RawQuestion[] = [];
+  const seenPrompts = new Set<string>();
+
+  for (const item of payload.questions) {
+    if (!isRecord(item)) continue;
+    const category = cleanGeneratedText(item.category, 32) ?? "Custom";
+    const prompt = cleanGeneratedText(item.prompt, 180);
+    const options = Array.isArray(item.options)
+      ? item.options
+          .map((option) => cleanGeneratedText(option, 80))
+          .filter((option): option is string => Boolean(option))
+      : [];
+    const answer = cleanGeneratedText(item.answer, 80);
+    if (!prompt || !answer || options.length !== 4) continue;
+
+    const uniqueOptions: string[] = [];
+    const seenOptions = new Set<string>();
+    for (const option of options) {
+      const key = normalizeGeneratedKey(option);
+      if (!key || seenOptions.has(key)) continue;
+      seenOptions.add(key);
+      uniqueOptions.push(option);
+    }
+    if (uniqueOptions.length !== 4) continue;
+
+    const normalizedAnswer = normalizeGeneratedKey(answer);
+    const matchedAnswer = uniqueOptions.find(
+      (option) => normalizeGeneratedKey(option) === normalizedAnswer,
+    );
+    const promptKey = normalizeGeneratedKey(prompt);
+    if (!matchedAnswer || seenPrompts.has(promptKey)) continue;
+    seenPrompts.add(promptKey);
+    questions.push({ category, prompt, options: uniqueOptions, answer: matchedAnswer });
+    if (questions.length >= 15) break;
+  }
+
+  return questions.length > 0 ? questions : null;
+};
+
+const generatedQuestionsFromContent = (content: unknown): RawQuestion[] =>
+  Array.isArray(content) ? (content as RawQuestion[]) : [];
+
 const otherPlayersAllAnswered = (state: TriviaState, total: number): boolean =>
   total > 0 && Object.keys(state.answers).length >= total;
 
@@ -107,6 +161,7 @@ export const triviaModule: GameModule<TriviaState> = {
   tickMs: 500,
   hasLeaderboard: true,
   options: [
+    GAME_CONTENT_TOPIC_OPTION,
     { id: "questions", type: "number", label: "Questions", min: 3, max: 15, default: 7, presets: [5, 7, 10] },
     {
       id: "pace",
@@ -121,19 +176,70 @@ export const triviaModule: GameModule<TriviaState> = {
     },
   ],
 
+  generateContent(ctx) {
+    const topic = gameContentTopic(ctx.config) || "fresh general knowledge trivia";
+    const questionCount = numberOption(ctx.config, "questions", QUESTIONS_PER_GAME);
+    return generateStructuredGameContent({
+      gameName: "Trivia",
+      topic,
+      instructions: [
+        `Create ${questionCount} unique multiple-choice trivia questions.`,
+        "Each question needs exactly four plausible options.",
+        "The answer must exactly match one option.",
+        "Avoid repeated facts and avoid questions that require private knowledge.",
+      ].join(" "),
+      schemaName: "trivia_questions",
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          questions: {
+            type: "array",
+            minItems: questionCount,
+            maxItems: questionCount,
+            items: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                category: { type: "string", maxLength: 32 },
+                prompt: { type: "string", maxLength: 180 },
+                options: {
+                  type: "array",
+                  minItems: 4,
+                  maxItems: 4,
+                  items: { type: "string", maxLength: 80 },
+                },
+                answer: { type: "string", maxLength: 80 },
+              },
+              required: ["category", "prompt", "options", "answer"],
+            },
+          },
+        },
+        required: ["questions"],
+      },
+      maxOutputTokens: 400 + questionCount * 150,
+      parse: parseGeneratedQuestions,
+    });
+  },
+
   setup(ctx: GameContext): TriviaState {
     const questionCount = numberOption(ctx.config, "questions", QUESTIONS_PER_GAME);
     const questionMs = PACE_MS[selectOption(ctx.config, "pace", "normal")] ?? QUESTION_MS;
+    const questionBank = generatedQuestionsFromContent(ctx.content);
+    const source = ctx.rng.shuffle(
+      questionBank.length > 0 ? questionBank : QUESTION_BANK,
+    );
     const picked = ctx.rng
-      .shuffle(QUESTION_BANK)
+      .shuffle(source.slice(0, Math.min(questionCount, source.length)))
       .slice(0, questionCount)
       .map((raw): LoadedQuestion => {
         const options = ctx.rng.shuffle(raw.options);
+        const correctIndex = Math.max(0, options.indexOf(raw.answer));
         return {
           category: raw.category,
           prompt: raw.prompt,
           options,
-          correctIndex: options.indexOf(raw.answer),
+          correctIndex,
         };
       });
     const scores: Record<string, number> = {};

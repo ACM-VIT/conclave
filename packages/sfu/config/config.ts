@@ -216,6 +216,25 @@ if (requireRedisAdapter && !socketRedisUrl) {
     "SFU_REQUIRE_REDIS_ADAPTER=1 requires SFU_REDIS_URL or REDIS_URL.",
   );
 }
+const cloudflareWorkersAiAccountId =
+  process.env.CLOUDFLARE_ACCOUNT_ID?.trim() ||
+  process.env.CLOUDFLARE_WORKERS_AI_ACCOUNT_ID?.trim() ||
+  "";
+const cloudflareWorkersAiToken =
+  process.env.CLOUDFLARE_AUTH_TOKEN?.trim() ||
+  process.env.CLOUDFLARE_API_TOKEN?.trim() ||
+  process.env.CLOUDFLARE_WORKERS_AI_TOKEN?.trim() ||
+  "";
+const gameAiDisabled =
+  process.env.SFU_GAME_AI_ENABLED === "0" ||
+  process.env.SFU_GAME_AI_ENABLED?.toLowerCase() === "false";
+const gameAiWebSearchDisabled =
+  process.env.SFU_GAME_AI_WEB_SEARCH_ENABLED === "0" ||
+  process.env.SFU_GAME_AI_WEB_SEARCH_ENABLED?.toLowerCase() === "false";
+const gameAiWebSearchContextSize = (() => {
+  const configured = process.env.SFU_GAME_AI_WEB_SEARCH_CONTEXT_SIZE?.trim();
+  return configured === "medium" || configured === "high" ? configured : "low";
+})();
 const instancePublicUrl =
   process.env.SFU_PUBLIC_URL?.trim() ||
   process.env.SFU_INSTANCE_URL?.trim() ||
@@ -288,6 +307,36 @@ export const config = {
   draining: toBoolean(process.env.SFU_DRAINING),
   sfuSecret,
   clientPolicies,
+  gameAi: {
+    enabled:
+      !gameAiDisabled &&
+      Boolean(
+        cloudflareWorkersAiAccountId &&
+          (cloudflareWorkersAiToken || process.env.NODE_ENV !== "production"),
+      ),
+    cloudflareAccountId: cloudflareWorkersAiAccountId,
+    apiToken: cloudflareWorkersAiToken,
+    model:
+      process.env.CLOUDFLARE_WORKERS_AI_MODEL?.trim() ||
+      "cf/zai-org/glm-4.7-flash",
+    timeoutMs: toNumber(process.env.SFU_GAME_AI_TIMEOUT_MS, 25000, {
+      integer: true,
+      min: 500,
+      max: 30000,
+    }),
+    maxOutputTokens: toNumber(process.env.SFU_GAME_AI_MAX_OUTPUT_TOKENS, 2200, {
+      integer: true,
+      min: 128,
+      max: 4096,
+    }),
+    topicMaxLength: toNumber(process.env.SFU_GAME_AI_TOPIC_MAX_LENGTH, 120, {
+      integer: true,
+      min: 1,
+      max: 500,
+    }),
+    webSearchEnabled: !gameAiWebSearchDisabled,
+    webSearchContextSize: gameAiWebSearchContextSize as "low" | "medium" | "high",
+  },
   workerSettings: {
     workerCount: toNumber(process.env.SFU_WORKER_COUNT, 0, {
       integer: true,

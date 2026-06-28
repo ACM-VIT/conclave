@@ -27,6 +27,14 @@ export type GameOptionSpec =
       label: string;
       default: string;
       choices: { value: string; label: string }[];
+    }
+  | {
+      id: string;
+      type: "text";
+      label: string;
+      default: string;
+      placeholder?: string;
+      maxLength?: number;
     };
 
 export type GameConfig = Record<string, number | string>;

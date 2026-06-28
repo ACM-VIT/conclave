@@ -5,6 +5,13 @@ import {
   type GameMove,
 } from "../types.js";
 import { numberOption } from "../config.js";
+import {
+  GAME_CONTENT_TOPIC_OPTION,
+  cleanGeneratedText,
+  generateStructuredGameContent,
+  gameContentTopic,
+  normalizeGeneratedKey,
+} from "../aiContent.js";
 
 /**
  * Would You Rather: a "split the room" party game for groups of any size.
@@ -44,6 +51,35 @@ const PROMPT_BANK: Prompt[] = [
   { a: "Never use a touchscreen again", b: "Never use a keyboard again" },
 ];
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  Boolean(value && typeof value === "object" && !Array.isArray(value));
+
+const parseGeneratedPrompts = (payload: unknown): Prompt[] | null => {
+  if (!isRecord(payload) || !Array.isArray(payload.prompts)) return null;
+  const prompts: Prompt[] = [];
+  const seen = new Set<string>();
+  for (const item of payload.prompts) {
+    if (!isRecord(item)) continue;
+    const a = cleanGeneratedText(item.a, 90);
+    const b = cleanGeneratedText(item.b, 90);
+    if (!a || !b) continue;
+    const aKey = normalizeGeneratedKey(a);
+    const bKey = normalizeGeneratedKey(b);
+    if (!aKey || !bKey || aKey === bKey) continue;
+    const pairKey = [aKey, bKey]
+      .sort()
+      .join("|");
+    if (seen.has(pairKey)) continue;
+    seen.add(pairKey);
+    prompts.push({ a, b });
+    if (prompts.length >= 10) break;
+  }
+  return prompts.length > 0 ? prompts : null;
+};
+
+const generatedPromptsFromContent = (content: unknown): Prompt[] =>
+  Array.isArray(content) ? (content as Prompt[]) : [];
+
 const splitCounts = (state: WyrState): [number, number] => {
   let a = 0;
   let b = 0;
@@ -67,14 +103,58 @@ export const wouldYouRatherModule: GameModule<WyrState> = {
   maxPlayers: 50,
   tickMs: 500,
   options: [
+    GAME_CONTENT_TOPIC_OPTION,
     { id: "rounds", type: "number", label: "Rounds", min: 3, max: 10, default: 6, presets: [4, 6, 8] },
   ],
 
+  generateContent(ctx) {
+    const topic = gameContentTopic(ctx.config) || "fresh party conversation";
+    const rounds = numberOption(ctx.config, "rounds", ROUNDS_PER_GAME);
+    return generateStructuredGameContent({
+      gameName: "Would You Rather",
+      topic,
+      instructions: [
+        `Create ${rounds} balanced would-you-rather prompts.`,
+        "Each prompt needs two distinct choices that are quick to read aloud.",
+        "Avoid choices that are offensive, sexual, or personally invasive.",
+      ].join(" "),
+      schemaName: "would_you_rather_prompts",
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          prompts: {
+            type: "array",
+            minItems: rounds,
+            maxItems: rounds,
+            items: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                a: { type: "string", maxLength: 90 },
+                b: { type: "string", maxLength: 90 },
+              },
+              required: ["a", "b"],
+            },
+          },
+        },
+        required: ["prompts"],
+      },
+      maxOutputTokens: 280 + rounds * 80,
+      parse: parseGeneratedPrompts,
+    });
+  },
+
   setup(ctx: GameContext): WyrState {
+    const generatedPrompts = generatedPromptsFromContent(ctx.content);
+    const promptBank = ctx.rng.shuffle(
+      generatedPrompts.length > 0 ? generatedPrompts : PROMPT_BANK,
+    );
     return {
       phase: "lobby",
       index: 0,
-      prompts: ctx.rng.shuffle(PROMPT_BANK).slice(0, numberOption(ctx.config, "rounds", ROUNDS_PER_GAME)),
+      prompts: ctx.rng
+        .shuffle(promptBank.slice(0, numberOption(ctx.config, "rounds", ROUNDS_PER_GAME))),
       deadline: 0,
       choices: {},
     };

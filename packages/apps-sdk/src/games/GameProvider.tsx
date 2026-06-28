@@ -19,6 +19,7 @@ import type {
 } from "./types";
 
 const ACK_TIMEOUT_MS = 8_000;
+const START_GAME_ACK_TIMEOUT_MS = 45_000;
 
 const GameContext = createContext<GameContextValue | null>(null);
 
@@ -37,6 +38,7 @@ const emitWithAck = <T,>(
   event: string,
   payload: unknown,
   fallback: T,
+  timeoutMs = ACK_TIMEOUT_MS,
 ): Promise<T> =>
   new Promise((resolve) => {
     let settled = false;
@@ -45,7 +47,7 @@ const emitWithAck = <T,>(
       settled = true;
       resolve(value);
     };
-    const timer = setTimeout(() => done(fallback), ACK_TIMEOUT_MS);
+    const timer = setTimeout(() => done(fallback), timeoutMs);
     const ack = (response: T) => {
       clearTimeout(timer);
       done(response);
@@ -172,6 +174,7 @@ export function GameProvider({
         "game:start",
         { gameId, options },
         { success: false, error: "Timed out" },
+        START_GAME_ACK_TIMEOUT_MS,
       );
     },
     [socket],

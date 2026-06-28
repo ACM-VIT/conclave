@@ -248,6 +248,10 @@ export function PrimaryButton({
       disabled={disabled}
       style={{
         width: full ? "100%" : undefined,
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 8,
         padding: "10px 18px",
         borderRadius: radius.pill,
         border: "none",

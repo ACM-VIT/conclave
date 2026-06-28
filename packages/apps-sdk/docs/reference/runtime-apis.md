@@ -175,7 +175,8 @@ Returns the game runtime context:
 Ack behavior:
 
 - methods resolve to `{ success: boolean, error?: string }`
-- methods use an 8 second timeout in the provider implementation
+- `startGame` uses a 30 second timeout because it may load generated content
+- other methods use an 8 second timeout in the provider implementation
 - `move` returns an error when no game is active
 
 ### `startGame(gameId, options?)`
@@ -222,6 +223,14 @@ Each `catalog` entry includes:
 - `hasLeaderboard`
 
 `options` drives the host setup UI in the games launcher.
+
+Option specs can be:
+
+- `number`: bounded integer, usually rendered as preset chips
+- `select`: one value from a fixed choice list
+- `text`: short host input such as a topic for generated questions
+
+Generated-content games use the same `startGame(gameId, options?)` path. The client sends ordinary config, then the SFU loads and validates generated content before creating the server-authoritative session.
 
 ## Doc Helpers
 

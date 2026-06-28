@@ -6,6 +6,14 @@ import {
 } from "../types.js";
 import { requirePlayerTarget } from "../validation.js";
 import { selectOption } from "../config.js";
+import {
+  GAME_CONTENT_TOPIC_OPTION,
+  cleanGeneratedStringArray,
+  cleanGeneratedText,
+  generateStructuredGameContent,
+  gameContentTopic,
+  normalizeGeneratedKey,
+} from "../aiContent.js";
 
 /**
  * Imposter: a Spyfall-style social deduction game, built for a video call.
@@ -52,6 +60,29 @@ const WORD_SETS: WordSet[] = [
   { category: "Sports", words: ["Tennis", "Surfing", "Boxing", "Curling", "Archery", "Skiing", "Cricket", "Fencing"] },
 ];
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  Boolean(value && typeof value === "object" && !Array.isArray(value));
+
+const parseGeneratedSet = (payload: unknown): WordSet | null => {
+  if (!isRecord(payload) || !isRecord(payload.set)) return null;
+  const category = cleanGeneratedText(payload.set.category, 40);
+  const words = cleanGeneratedStringArray(payload.set.words, {
+    maxItems: 12,
+    maxLength: 40,
+  });
+  if (!category || words.length < 6) return null;
+  const categoryKey = normalizeGeneratedKey(category);
+  if (!categoryKey) return null;
+  return { category, words };
+};
+
+const generatedSetFromContent = (content: unknown): WordSet | null =>
+  isRecord(content) &&
+  typeof content.category === "string" &&
+  Array.isArray(content.words)
+    ? (content as WordSet)
+    : null;
+
 const nameOf = (ctx: GameContext, playerId: string | null): string | null => {
   if (!playerId) return null;
   return ctx.players.find((player) => player.id === playerId)?.name ?? null;
@@ -96,6 +127,7 @@ export const imposterModule: GameModule<ImposterState> = {
   maxPlayers: 12,
   tickMs: 500,
   options: [
+    GAME_CONTENT_TOPIC_OPTION,
     {
       id: "category",
       type: "select",
@@ -108,12 +140,57 @@ export const imposterModule: GameModule<ImposterState> = {
     },
   ],
 
+  generateContent(ctx) {
+    const selectedCategory = selectOption(ctx.config, "category", "surprise");
+    const topic =
+      gameContentTopic(ctx.config) ||
+      (selectedCategory === "surprise"
+        ? "fresh party-friendly secret words"
+        : selectedCategory);
+    const wordCount = Math.max(8, Math.min(12, ctx.players.length + 3));
+    return generateStructuredGameContent({
+      gameName: "Imposter",
+      topic,
+      instructions: [
+        `Create one imposter word set with ${wordCount} related secret words.`,
+        "The category should be broad enough that the imposter can bluff.",
+        "Words should be familiar, distinct, and easy to describe out loud without saying the word.",
+      ].join(" "),
+      schemaName: "imposter_word_set",
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          set: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              category: { type: "string", maxLength: 40 },
+              words: {
+                type: "array",
+                minItems: wordCount,
+                maxItems: wordCount,
+                items: { type: "string", maxLength: 40 },
+              },
+            },
+            required: ["category", "words"],
+          },
+        },
+        required: ["set"],
+      },
+      maxOutputTokens: 220 + wordCount * 30,
+      parse: parseGeneratedSet,
+    });
+  },
+
   setup(ctx: GameContext): ImposterState {
+    const generatedSet = generatedSetFromContent(ctx.content);
     const chosen = selectOption(ctx.config, "category", "surprise");
     const set =
-      chosen === "surprise"
+      generatedSet ??
+      (chosen === "surprise"
         ? ctx.rng.pick(WORD_SETS)
-        : WORD_SETS.find((s) => s.category === chosen) ?? ctx.rng.pick(WORD_SETS);
+        : WORD_SETS.find((s) => s.category === chosen) ?? ctx.rng.pick(WORD_SETS));
     const word = ctx.rng.pick(set.words);
     const imposter = ctx.players.length > 0 ? ctx.rng.pick(ctx.players) : null;
     const starter = ctx.players.length > 0 ? ctx.rng.pick(ctx.players) : null;

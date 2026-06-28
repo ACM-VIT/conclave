@@ -25,6 +25,7 @@ export class GameSession {
   private readonly rng: GameRng;
   private readonly adminIds: Set<string>;
   private readonly config: GameConfig;
+  private readonly content: unknown | null;
   private state: unknown;
   private finished = false;
 
@@ -34,6 +35,7 @@ export class GameSession {
     adminIds: Iterable<string>;
     hostId: string;
     config?: GameConfig;
+    content?: unknown | null;
     seed?: number;
   }) {
     this.module = options.module;
@@ -42,6 +44,7 @@ export class GameSession {
     this.adminIds = new Set(options.adminIds);
     this.hostId = options.hostId;
     this.config = options.config ?? {};
+    this.content = options.content ?? null;
     this.rng = createRng(options.seed ?? createSeed());
     this.state = this.module.setup(this.context());
     this.finished = this.module.isFinished?.(this.state) ?? false;
@@ -72,6 +75,7 @@ export class GameSession {
       players: this.players.slice(),
       rng: this.rng,
       config: this.config,
+      content: this.content,
       now,
       isAdmin: (playerId: string) => this.adminIds.has(playerId),
     };

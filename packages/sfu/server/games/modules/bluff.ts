@@ -5,6 +5,13 @@ import {
   type GameMove,
 } from "../types.js";
 import { numberOption } from "../config.js";
+import {
+  GAME_CONTENT_TOPIC_OPTION,
+  cleanGeneratedText,
+  generateStructuredGameContent,
+  gameContentTopic,
+  normalizeGeneratedKey,
+} from "../aiContent.js";
 
 /**
  * Bluff: a Fibbage-style game. Players see a prompt with a blank, secretly
@@ -53,6 +60,30 @@ const PROMPT_BANK: Prompt[] = [
   { question: "The longest place name in the world is in ___.", answer: "New Zealand" },
   { question: "Bananas are botanically classified as ___.", answer: "berries" },
 ];
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  Boolean(value && typeof value === "object" && !Array.isArray(value));
+
+const parseGeneratedPrompts = (payload: unknown): Prompt[] | null => {
+  if (!isRecord(payload) || !Array.isArray(payload.prompts)) return null;
+  const prompts: Prompt[] = [];
+  const seen = new Set<string>();
+  for (const item of payload.prompts) {
+    if (!isRecord(item)) continue;
+    const question = cleanGeneratedText(item.question, 160);
+    const answer = cleanGeneratedText(item.answer, MAX_ANSWER_LEN);
+    if (!question || !answer || (question.match(/___/g)?.length ?? 0) !== 1) continue;
+    const key = normalizeGeneratedKey(question);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    prompts.push({ question, answer });
+    if (prompts.length >= 6) break;
+  }
+  return prompts.length > 0 ? prompts : null;
+};
+
+const generatedPromptsFromContent = (content: unknown): Prompt[] =>
+  Array.isArray(content) ? (content as Prompt[]) : [];
 
 const normalize = (text: string): string => text.trim().toLowerCase().replace(/\s+/g, " ");
 
@@ -110,18 +141,64 @@ export const bluffModule: GameModule<BluffState> = {
   tickMs: 500,
   hasLeaderboard: true,
   options: [
+    GAME_CONTENT_TOPIC_OPTION,
     { id: "rounds", type: "number", label: "Rounds", min: 2, max: 6, default: 4, presets: [3, 4, 5] },
   ],
+
+  generateContent(ctx) {
+    const topic = gameContentTopic(ctx.config) || "fresh obscure facts";
+    const rounds = numberOption(ctx.config, "rounds", TOTAL_ROUNDS);
+    return generateStructuredGameContent({
+      gameName: "Bluff",
+      topic,
+      instructions: [
+        `Create ${rounds} obscure but fair fact prompts.`,
+        'Each question must contain "___" exactly where the answer belongs.',
+        "Answers should be short enough that players can write believable fake answers.",
+      ].join(" "),
+      schemaName: "bluff_prompts",
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          prompts: {
+            type: "array",
+            minItems: rounds,
+            maxItems: rounds,
+            items: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                question: { type: "string", maxLength: 160 },
+                answer: { type: "string", maxLength: MAX_ANSWER_LEN },
+              },
+              required: ["question", "answer"],
+            },
+          },
+        },
+        required: ["prompts"],
+      },
+      maxOutputTokens: 320 + rounds * 90,
+      parse: parseGeneratedPrompts,
+    });
+  },
 
   setup(ctx: GameContext): BluffState {
     const scores: Record<string, number> = {};
     for (const p of ctx.players) scores[p.id] = 0;
-    const roundCount = Math.min(numberOption(ctx.config, "rounds", TOTAL_ROUNDS), PROMPT_BANK.length);
+    const generatedPrompts = generatedPromptsFromContent(ctx.content);
+    const promptBank = ctx.rng.shuffle(
+      generatedPrompts.length > 0 ? generatedPrompts : PROMPT_BANK,
+    );
+    const roundCount = Math.min(
+      numberOption(ctx.config, "rounds", TOTAL_ROUNDS),
+      promptBank.length,
+    );
     return {
       phase: "lobby",
       round: 0,
       totalRounds: roundCount,
-      prompts: ctx.rng.shuffle(PROMPT_BANK).slice(0, roundCount),
+      prompts: ctx.rng.shuffle(promptBank.slice(0, roundCount)),
       deadline: 0,
       fakes: {},
       options: [],

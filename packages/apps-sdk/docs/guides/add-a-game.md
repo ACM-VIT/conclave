@@ -217,19 +217,126 @@ options: [
       { value: "fast", label: "Fast" },
     ],
   },
+  {
+    id: "topic",
+    type: "text",
+    label: "Topic",
+    default: "",
+    placeholder: "Movies, space, team lore",
+    maxLength: 120,
+  },
 ],
 ```
 
 Read options in `setup`:
 
 ```ts
-import { numberOption, selectOption } from "../config.js";
+import { numberOption, selectOption, textOption } from "../config.js";
 
 const rounds = numberOption(ctx.config, "rounds", 5);
 const pace = selectOption(ctx.config, "pace", "normal");
+const topic = textOption(ctx.config, "topic", "");
 ```
 
 The server normalizes client input before the game starts. Unknown keys are dropped. Invalid values fall back to defaults.
+
+## Generated Content
+
+Use generated content when a game needs fresh prompts, questions, word sets, or scenarios. The runtime supports this as a reusable server-side primitive:
+
+1. Add a text option for the host input. Built-in games use `GAME_CONTENT_TOPIC_OPTION`.
+2. Implement `generateContent(ctx)` on the game module.
+3. Call `generateStructuredGameContent` with a JSON schema and a validator.
+4. Read `ctx.content` in `setup`.
+5. Keep a local fallback bank so the game still starts if AI is unavailable.
+
+Example:
+
+```ts
+import {
+  GAME_CONTENT_TOPIC_OPTION,
+  cleanGeneratedText,
+  generateStructuredGameContent,
+  gameContentTopic,
+} from "../aiContent.js";
+import { numberOption } from "../config.js";
+
+type Prompt = { text: string };
+
+const parseGeneratedPrompts = (payload: unknown): Prompt[] | null => {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
+  const prompts = (payload as { prompts?: unknown }).prompts;
+  if (!Array.isArray(prompts)) return null;
+  const out = prompts
+    .map((item) => cleanGeneratedText(item, 120))
+    .filter((item): item is string => Boolean(item))
+    .map((text) => ({ text }));
+  return out.length > 0 ? out : null;
+};
+
+export const quickDrawModule: GameModule<QuickDrawState> = {
+  // ...
+  options: [
+    GAME_CONTENT_TOPIC_OPTION,
+    { id: "rounds", type: "number", label: "Rounds", min: 3, max: 8, default: 5 },
+  ],
+
+  generateContent(ctx) {
+    const topic = gameContentTopic(ctx.config);
+    if (!topic) return Promise.resolve(null);
+    const rounds = numberOption(ctx.config, "rounds", 5);
+    return generateStructuredGameContent({
+      gameName: "Quick Draw",
+      topic,
+      instructions: `Create ${rounds} short drawing prompts.`,
+      schemaName: "quick_draw_prompts",
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          prompts: {
+            type: "array",
+            minItems: rounds,
+            maxItems: rounds,
+            items: { type: "string", maxLength: 120 },
+          },
+        },
+        required: ["prompts"],
+      },
+      parse: parseGeneratedPrompts,
+    });
+  },
+
+  setup(ctx) {
+    const generated = Array.isArray(ctx.content) ? (ctx.content as Prompt[]) : [];
+    const promptBank = generated.length > 0 ? generated : LOCAL_PROMPTS;
+    // Build initial state from promptBank.
+  },
+};
+```
+
+Generation runs before `GameSession` is created. Reducers still stay pure, and a game module does not need to edit socket handlers.
+
+SFU configuration:
+
+```bash
+CLOUDFLARE_ACCOUNT_ID=...
+CLOUDFLARE_API_TOKEN=...
+CLOUDFLARE_WORKERS_AI_MODEL=cf/zai-org/glm-4.7-flash
+SFU_GAME_AI_TIMEOUT_MS=25000
+SFU_GAME_AI_WEB_SEARCH_ENABLED=1
+SFU_GAME_AI_WEB_SEARCH_CONTEXT_SIZE=low
+```
+
+For local development, `npx wrangler login` can provide the OAuth token. The account id is still required. Production should use an API token with Workers AI access.
+
+Web search is enabled by default for generated game content. Keep the context size at `low` unless a game truly needs deeper current-event grounding.
+
+Run the live smoke test when changing generated content:
+
+```bash
+CLOUDFLARE_ACCOUNT_ID=... pnpm -C packages/sfu run test:game-ai
+```
 
 ## Leaderboards
 

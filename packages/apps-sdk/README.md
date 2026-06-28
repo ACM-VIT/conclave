@@ -172,6 +172,8 @@ Full workflow: [docs/guides/contributing-to-apps-sdk.md](./docs/guides/contribut
 
 Conclave games use the Apps SDK game hooks, but the rules run on the SFU so private information, timers, scoring, and validation stay server-authoritative.
 
+Prompt-based games can also use SFU-side generated content. Hosts enter a topic in the game setup panel, the SFU asks Workers AI for a schema-constrained object, then the game validates that object before setup.
+
 Start here: [docs/guides/add-a-game.md](./docs/guides/add-a-game.md)
 
 ## Development Playground

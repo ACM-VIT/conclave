@@ -1,4 +1,5 @@
 import { Admin } from "../../../config/classes/Admin.js";
+import { config as sfuConfig } from "../../../config/config.js";
 import type { Room } from "../../../config/classes/Room.js";
 import { GameSession } from "../../games/engine.js";
 import { normalizeConfig } from "../../games/config.js";
@@ -196,7 +197,7 @@ export const registerGameHandlers = (context: ConnectionContext): void => {
 
   socket.on(
     "game:start",
-    (data: GameStartData, callback: (response: GameStartResponse) => void) => {
+    async (data: GameStartData, callback: (response: GameStartResponse) => void) => {
       if (!context.currentRoom || !context.currentClient) {
         respond(callback, { success: false, error: "Not in a room" });
         return;
@@ -210,6 +211,7 @@ export const registerGameHandlers = (context: ConnectionContext): void => {
         return;
       }
       const room = context.currentRoom;
+      const hostId = context.currentClient.id;
       if (room.gameSession) {
         respond(callback, { success: false, error: "A game is already running" });
         return;
@@ -239,15 +241,46 @@ export const registerGameHandlers = (context: ConnectionContext): void => {
         });
         return;
       }
+      const gameConfig = normalizeConfig(module.options, data?.options);
+
+      let content: unknown | null = null;
+      if (module.generateContent) {
+        try {
+          content = await module.generateContent({
+            players,
+            config: gameConfig,
+            now: Date.now(),
+          });
+        } catch (error) {
+          Logger.warn(`[Games] content generation failed for ${gameId}`, error);
+        }
+        if (sfuConfig.gameAi.enabled && content == null) {
+          respond(callback, {
+            success: false,
+            error: "Failed to generate game content",
+          });
+          return;
+        }
+      }
 
       try {
+        if (room.gameSession) {
+          respond(callback, { success: false, error: "A game is already running" });
+          return;
+        }
+        const hostClient = room.clients.get(hostId);
+        if (!(hostClient instanceof Admin)) {
+          respond(callback, { success: false, error: "Only the host can start a game" });
+          return;
+        }
         stopGameLoop(room);
         room.gameSession = new GameSession({
           module,
           players,
           adminIds: collectAdminIds(room),
-          hostId: context.currentClient.id,
-          config: normalizeConfig(module.options, data?.options),
+          hostId,
+          config: gameConfig,
+          content,
         });
       } catch (error) {
         Logger.error("[Games] failed to start", error);

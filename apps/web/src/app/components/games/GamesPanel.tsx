@@ -1,7 +1,7 @@
 "use client";
 
-import React, { useState } from "react";
-import { ExternalLink } from "lucide-react";
+import React, { useEffect, useMemo, useState } from "react";
+import { ExternalLink, LoaderCircle } from "lucide-react";
 import { useGame } from "@conclave/apps-sdk";
 import type { GameConfig, GameOptionSpec } from "@conclave/apps-sdk";
 import { color, radius } from "@conclave/ui-tokens";
@@ -28,6 +28,9 @@ type CatalogEntry = {
 
 const ADD_GAME_DOCS_URL =
   "https://github.com/ACM-VIT/conclave/blob/main/packages/apps-sdk/docs/guides/add-a-game.md";
+const CURRENT_TOPIC_PATTERN =
+  /\b(latest|recent|current|news|today|this week|this month|this year|breaking|new)\b/i;
+const GENERATION_STEP_MS = 2_200;
 
 /** One clean list row, used for both the launcher and the vote. Neutral by
  * default; a single coral accent marks selection / progress. */
@@ -334,6 +337,34 @@ function GameConfigView({
 
   const setValue = (id: string, value: number | string) =>
     setConfig((prev) => ({ ...prev, [id]: value }));
+  const [progressStep, setProgressStep] = useState(0);
+  const topic = entry.options.reduce<string>((found, opt) => {
+    if (found || opt.type !== "text") return found;
+    const value = config[opt.id];
+    return typeof value === "string" ? value.trim() : "";
+  }, "");
+  const isGenerating =
+    busy &&
+    entry.options.some((opt) => opt.type === "text");
+  const progressLabels = useMemo(
+    () => buildGenerationProgressLabels(entry, topic),
+    [entry, topic],
+  );
+  useEffect(() => {
+    if (!busy) {
+      setProgressStep(0);
+      return;
+    }
+    const timer = window.setInterval(() => {
+      setProgressStep((step) => Math.min(step + 1, progressLabels.length - 1));
+    }, GENERATION_STEP_MS);
+    return () => window.clearInterval(timer);
+  }, [busy, progressLabels.length]);
+  const startLabel = busy
+    ? isGenerating
+      ? progressLabels[progressStep] ?? progressLabels[progressLabels.length - 1]
+      : "Starting game"
+    : `Start ${entry.name}`;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
@@ -353,21 +384,79 @@ function GameConfigView({
               }))}
               onChange={(v) => setValue(opt.id, v)}
             />
-          ) : (
+          ) : opt.type === "select" ? (
             <Segmented
               value={config[opt.id] as string}
               options={opt.choices.map((c) => ({ value: c.value, label: c.label }))}
               onChange={(v) => setValue(opt.id, v)}
+            />
+          ) : (
+            <input
+              value={(config[opt.id] as string) ?? ""}
+              maxLength={opt.maxLength}
+              placeholder={opt.placeholder}
+              onChange={(event) => setValue(opt.id, event.currentTarget.value)}
+              style={{
+                width: "100%",
+                minWidth: 0,
+                borderRadius: radius.md,
+                border: `1px solid ${color.border}`,
+                background: color.surface,
+                color: color.text,
+                fontFamily: HEAD_FONT,
+                fontSize: 13,
+                outline: "none",
+                padding: "10px 12px",
+              }}
             />
           )}
         </div>
       ))}
 
       <PrimaryButton full disabled={busy} onClick={() => onStart(config)}>
-        Start {entry.name}
+        {busy ? (
+          <span className="inline-flex min-w-0 items-center justify-center gap-2">
+            <LoaderCircle
+              size={15}
+              strokeWidth={2}
+              className="shrink-0 animate-spin"
+              aria-hidden="true"
+            />
+            <span className="truncate" aria-live="polite">
+              {startLabel}
+            </span>
+          </span>
+        ) : (
+          startLabel
+        )}
       </PrimaryButton>
     </div>
   );
+}
+
+function buildGenerationProgressLabels(
+  entry: CatalogEntry,
+  topic: string,
+): string[] {
+  const contentName =
+    entry.id === "trivia"
+      ? "questions"
+      : entry.id === "imposter"
+        ? "word set"
+        : "prompts";
+  const labels = [`Generating ${contentName}`];
+  if (CURRENT_TOPIC_PATTERN.test(topic)) {
+    labels.push("Searching recent context");
+  }
+  if (entry.id === "trivia") {
+    labels.push("Building answer choices");
+  } else if (entry.id === "imposter") {
+    labels.push("Balancing secret words");
+  } else {
+    labels.push("Polishing prompts");
+  }
+  labels.push(`Starting ${entry.name}`);
+  return labels;
 }
 
 function VoteView({

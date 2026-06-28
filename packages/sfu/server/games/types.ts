@@ -49,6 +49,14 @@ export type GameOptionSpec =
       label: string;
       default: string;
       choices: { value: string; label: string }[];
+    }
+  | {
+      id: string;
+      type: "text";
+      label: string;
+      default: string;
+      placeholder?: string;
+      maxLength?: number;
     };
 
 /** Resolved, validated config values keyed by option id. */
@@ -59,9 +67,19 @@ export type GameContext = {
   rng: GameRng;
   /** Host-chosen configuration (validated, with defaults filled in). */
   config: GameConfig;
+  /** Optional generated content loaded before the session starts. */
+  content: unknown | null;
   /** Server clock (ms epoch) captured at the start of the operation. */
   now: number;
   isAdmin(playerId: string): boolean;
+};
+
+export type GameContentContext = {
+  players: GamePlayer[];
+  /** Host-chosen configuration (validated, with defaults filled in). */
+  config: GameConfig;
+  /** Server clock (ms epoch) captured before content loading starts. */
+  now: number;
 };
 
 export type GameMove = {
@@ -89,6 +107,8 @@ export type GameModule<S = unknown> = {
    *  `scoreboard` array of `{ id, name, score }`). */
   hasLeaderboard?: boolean;
 
+  /** Optional async content loader, used before setup for AI-backed prompts. */
+  generateContent?(ctx: GameContentContext): Promise<unknown | null>;
   setup(ctx: GameContext): S;
   /** Apply a validated move. Throw `GameMoveError` to reject it. */
   onMove(state: S, move: GameMove, ctx: GameContext): S;

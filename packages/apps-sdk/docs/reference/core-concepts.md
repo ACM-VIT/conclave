@@ -18,6 +18,7 @@ Conclave supports two in-meeting extension shapes:
 
 - Collaborative apps use Yjs. Everyone converges on the same shared document. Use this for whiteboards, notes, polls, checklists, and tools where the shared state can be visible to all participants.
 - Games use the server-authoritative game runtime. The SFU owns rules, timers, scoring, and private player views. Use this for hidden roles, trivia answers, timed reactions, scoring, and any rule set that clients should not be able to forge.
+- Prompt-based games can opt into server-side generated content before the game starts. The host sends a normal config value such as a topic, and the SFU validates the generated object before it becomes game state.
 
 If you are adding a game, start with [Add a Game to Conclave](../guides/add-a-game.md).
 
