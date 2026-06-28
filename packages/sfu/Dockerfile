@@ -11,8 +11,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 ENV PYTHON=/usr/bin/python3
 
-COPY package.json package-lock.json* ./
-RUN if [ -f package-lock.json ]; then npm ci; else npm install; fi
+RUN corepack enable && corepack prepare pnpm@9.12.3 --activate
+
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY packages/sfu/package.json packages/sfu/package.json
+RUN pnpm install --filter @conclave/sfu... --frozen-lockfile
 
 COPY . .
 
@@ -22,4 +25,4 @@ RUN mkdir -p /var/lib/conclave && chown -R node:node /var/lib/conclave
 ENV CONCLAVE_SQLITE_PATH=/var/lib/conclave/conclave.sqlite
 
 ENTRYPOINT ["/usr/bin/dumb-init", "--"]
-CMD ["npm", "run", "start"]
+CMD ["pnpm", "-C", "packages/sfu", "run", "start"]

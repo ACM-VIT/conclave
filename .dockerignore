@@ -1,0 +1,12 @@
+**
+!package.json
+!pnpm-lock.yaml
+!pnpm-workspace.yaml
+!packages/
+!packages/sfu/
+!packages/sfu/**
+packages/sfu/node_modules
+packages/sfu/dist
+packages/sfu/.env
+packages/sfu/.env.*
+packages/sfu/*.log
