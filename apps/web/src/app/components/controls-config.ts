@@ -135,6 +135,7 @@ export interface ControlDescriptor {
   icon: LucideIcon;
   label: string;
   hotkey?: string;
+  showTooltipWithoutHotkey?: boolean;
   variant: ControlButtonVariant;
   badge?: number;
   disabled?: boolean;
@@ -204,6 +205,7 @@ export function buildControlsConfig(p: ControlsBarProps): ControlsConfig {
       id: "games",
       icon: Gamepad2,
       label: p.hasActiveGame ? "Game in progress" : "Games",
+      showTooltipWithoutHotkey: true,
       variant: p.isGamesOpen || p.hasActiveGame ? "active" : "default",
       onPress: p.onToggleGames,
     });
