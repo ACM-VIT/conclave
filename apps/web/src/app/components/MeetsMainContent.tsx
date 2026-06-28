@@ -85,7 +85,7 @@ const DevMeetToolsPanel = dynamic(() => import("./DevMeetToolsPanel"), {
 
 interface MeetsMainContentProps {
   isJoined: boolean;
-  /** True under the phone-width breakpoint — gates compact control/panel layout. */
+  /** True under the phone-width breakpoint. Gates compact control/panel layout. */
   isMobile?: boolean;
   connectionState: ConnectionState;
   isLoading: boolean;
@@ -468,7 +468,7 @@ export default function MeetsMainContent({
     setLocked,
     refreshState,
   } = useApps();
-  const { isActive: isGameActive } = useGame();
+  const { isActive: isGameActive, refresh: refreshGameState } = useGame();
   const [isGamesOpen, setIsGamesOpen] = useState(false);
   const isDevToolsEnabled = process.env.NODE_ENV === "development";
   const isDevPlaygroundEnabled = isDevToolsEnabled;
@@ -491,8 +491,9 @@ export default function MeetsMainContent({
   useEffect(() => {
     if (connectionState === "joined") {
       refreshState();
+      refreshGameState();
     }
-  }, [connectionState, refreshState]);
+  }, [connectionState, refreshState, refreshGameState]);
   const participantsArray = useMemo(
     () => Array.from(participants.values()),
     [participants],
@@ -594,7 +595,7 @@ export default function MeetsMainContent({
       !hasLiveDevCamera &&
       (cameraPermissionState === "prompt" ||
         cameraPermissionState === "denied"));
-  // You're the one sharing your screen — the stage tile defaults to a
+  // You're the one sharing your screen, so the stage tile defaults to a
   // chooser instead of mirroring your own share back at you (see
   // GridLayout's `isLocalPresenter` handling).
   const isLocalPresenter = isScreenSharing && Boolean(presentationStream);

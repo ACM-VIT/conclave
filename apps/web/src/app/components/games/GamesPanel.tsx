@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
+import { ExternalLink } from "lucide-react";
 import { useGame } from "@conclave/apps-sdk";
 import type { GameConfig, GameOptionSpec } from "@conclave/apps-sdk";
 import { color, radius } from "@conclave/ui-tokens";
@@ -23,6 +24,9 @@ type CatalogEntry = {
   options: GameOptionSpec[];
   hasLeaderboard: boolean;
 };
+
+const ADD_GAME_DOCS_URL =
+  "https://github.com/ACM-VIT/conclave/blob/main/packages/apps-sdk/docs/guides/add-a-game.md";
 
 /** One clean list row, used for both the launcher and the vote. Neutral by
  * default; a single coral accent marks selection / progress. */
@@ -216,6 +220,27 @@ function LauncherView({
           </PrimaryButton>
         </div>
       ) : null}
+      <a
+        href={ADD_GAME_DOCS_URL}
+        target="_blank"
+        rel="noreferrer"
+        className="group mt-2 flex items-center gap-3 rounded-lg border border-white/10 bg-white/[0.025] px-3 py-2.5 text-left transition-colors hover:border-white/15 hover:bg-white/[0.045]"
+      >
+        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <span className="text-[13px] font-medium text-[#fafafa]">
+            Add your own game
+          </span>
+          <span className="text-[12px] leading-snug text-[#a1a1aa]">
+            Build on the Apps SDK
+          </span>
+        </span>
+        <ExternalLink
+          size={15}
+          strokeWidth={1.75}
+          className="shrink-0 text-[#71717a] transition-colors group-hover:text-[#fafafa]"
+          aria-hidden="true"
+        />
+      </a>
     </div>
   );
 }

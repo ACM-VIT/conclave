@@ -21,6 +21,7 @@ export class GameSession {
   readonly module: GameModule;
   readonly hostId: string;
   private players: GamePlayer[];
+  private readonly playerIds: Set<string>;
   private readonly rng: GameRng;
   private readonly adminIds: Set<string>;
   private readonly config: GameConfig;
@@ -37,6 +38,7 @@ export class GameSession {
   }) {
     this.module = options.module;
     this.players = dedupePlayers(options.players);
+    this.playerIds = new Set(this.players.map((player) => player.id));
     this.adminIds = new Set(options.adminIds);
     this.hostId = options.hostId;
     this.config = options.config ?? {};
@@ -58,7 +60,7 @@ export class GameSession {
   }
 
   hasPlayer(playerId: string): boolean {
-    return this.players.some((player) => player.id === playerId);
+    return this.playerIds.has(playerId);
   }
 
   getPlayers(): GamePlayer[] {
@@ -77,7 +79,7 @@ export class GameSession {
 
   /**
    * Apply a player move. Returns `{ ok: true }` if the state advanced, or
-   * `{ ok: false, error }` if the module rejected it (illegal move) — in which
+   * `{ ok: false, error }` if the module rejected it (illegal move), in which
    * case state is unchanged. Unexpected errors are surfaced generically.
    */
   applyMove(

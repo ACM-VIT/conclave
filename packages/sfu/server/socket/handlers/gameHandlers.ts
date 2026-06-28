@@ -18,7 +18,7 @@ import type {
   GameVoteState,
 } from "../../games/types.js";
 import { Logger } from "../../../utilities/loggers.js";
-import type { Server as SocketIOServer } from "socket.io";
+import type { Server as SocketIOServer, Socket } from "socket.io";
 import type { ConnectionContext } from "../context.js";
 import { RATE_LIMITS, takeToken } from "../rateLimit.js";
 import { respond } from "./ack.js";
@@ -48,6 +48,14 @@ const snapshotPlayers = (room: Room): GamePlayer[] => {
   return players;
 };
 
+const countPlayers = (room: Room): number => {
+  let count = 0;
+  for (const client of room.clients.values()) {
+    if (!client.isObserver) count += 1;
+  }
+  return count;
+};
+
 const collectAdminIds = (room: Room): string[] => {
   const ids: string[] = [];
   for (const client of room.clients.values()) {
@@ -59,7 +67,7 @@ const collectAdminIds = (room: Room): string[] => {
 /**
  * Push the latest projections to the room: one public broadcast, plus a private
  * per-player view to each player's own socket. The private emit is the
- * hidden-information boundary — a player only ever receives their own view.
+ * hidden-information boundary. A player only ever receives their own view.
  */
 const broadcastGame = (io: SocketIOServer, room: Room): void => {
   const session = room.gameSession;
@@ -99,11 +107,50 @@ const buildVoteState = (room: Room): GameVoteState | null => {
   for (const choice of Object.values(vote.votes)) {
     tally[choice] = (tally[choice] ?? 0) + 1;
   }
-  return { candidates, tally, votes: vote.votes, totalPlayers: snapshotPlayers(room).length };
+  return {
+    candidates,
+    tally,
+    votes: vote.votes,
+    totalPlayers: countPlayers(room),
+  };
 };
 
 const broadcastVote = (io: SocketIOServer, room: Room): void => {
   io.to(room.channelId).emit("game:vote", buildVoteState(room));
+};
+
+export const buildGameStateResponse = (
+  room: Room | null | undefined,
+  playerId: string | null | undefined,
+): GameStateResponse => {
+  if (!room) {
+    return { active: false, vote: null };
+  }
+
+  const session = room.gameSession;
+  const vote = buildVoteState(room);
+  if (!session) {
+    return { active: false, vote };
+  }
+
+  const now = Date.now();
+  const response: GameStateResponse = {
+    active: true,
+    public: session.getPublicState(now),
+    vote,
+  };
+  if (playerId && session.hasPlayer(playerId)) {
+    response.view = session.getPlayerView(playerId, now);
+  }
+  return response;
+};
+
+export const emitGameSnapshot = (
+  socket: Socket,
+  room: Room,
+  playerId: string | null | undefined,
+): void => {
+  socket.emit("game:snapshot", buildGameStateResponse(room, playerId));
 };
 
 const stopGameLoop = (room: Room): void => {
@@ -364,20 +411,12 @@ export const registerGameHandlers = (context: ConnectionContext): void => {
   });
 
   socket.on("game:getState", (callback: (state: GameStateResponse) => void) => {
-    const room = context.currentRoom;
-    const session = room?.gameSession;
-    if (!session || !context.currentClient || !room) {
-      respond(callback, { active: false, vote: room ? buildVoteState(room) : null });
-      return;
-    }
-    const now = Date.now();
-    respond(callback, {
-      active: true,
-      public: session.getPublicState(now),
-      view: session.hasPlayer(context.currentClient.id)
-        ? session.getPlayerView(context.currentClient.id, now)
-        : undefined,
-      vote: buildVoteState(room),
-    });
+    respond(
+      callback,
+      buildGameStateResponse(
+        context.currentRoom,
+        context.currentClient?.id ?? null,
+      ),
+    );
   });
 };

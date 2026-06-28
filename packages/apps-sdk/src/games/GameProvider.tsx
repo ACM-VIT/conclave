@@ -78,36 +78,48 @@ export function GameProvider({
 
   const userId = user?.id ?? null;
 
+  const applySnapshot = useCallback((state: unknown) => {
+    if (!state || typeof state !== "object") return;
+    const record = state as {
+      active?: boolean;
+      public?: unknown;
+      view?: unknown;
+      vote?: unknown;
+    };
+    if (record.active && isPublicState(record.public)) {
+      activeGameIdRef.current = record.public.gameId;
+      setPublicState(record.public);
+      setView(record.view ?? null);
+    } else {
+      activeGameIdRef.current = null;
+      setPublicState(null);
+      setView(null);
+    }
+    setVote((record.vote as GameVote | null) ?? null);
+  }, []);
+
   const refresh = useCallback(() => {
     if (!socket) return;
     socket.emit("game:getState", (state: unknown) => {
-      if (!state || typeof state !== "object") return;
-      const record = state as { active?: boolean; public?: unknown; view?: unknown; vote?: unknown };
-      if (record.active && isPublicState(record.public)) {
-        activeGameIdRef.current = record.public.gameId;
-        setPublicState(record.public);
-        setView(record.view ?? null);
-      } else {
-        activeGameIdRef.current = null;
-        setPublicState(null);
-        setView(null);
-      }
-      setVote((record.vote as GameVote | null) ?? null);
+      applySnapshot(state);
     });
     socket.emit("game:list", (entries: unknown) => {
       if (Array.isArray(entries)) {
         setCatalog(entries as GameCatalogEntry[]);
       }
     });
-  }, [socket]);
+  }, [socket, applySnapshot]);
 
   useEffect(() => {
     if (!socket) {
       setPublicState(null);
       setView(null);
+      setVote(null);
       activeGameIdRef.current = null;
       return;
     }
+
+    const onSnapshot = (state: unknown) => applySnapshot(state);
 
     const onState = (state: unknown) => {
       if (!isPublicState(state)) return;
@@ -128,6 +140,7 @@ export function GameProvider({
       activeGameIdRef.current = null;
       setPublicState(null);
       setView(null);
+      setVote(null);
     };
     const onVote = (payload: unknown) => {
       setVote((payload as GameVote | null) ?? null);
@@ -135,6 +148,7 @@ export function GameProvider({
 
     socket.on("game:state", onState);
     socket.on("game:view", onView);
+    socket.on("game:snapshot", onSnapshot);
     socket.on("game:ended", onEnded);
     socket.on("game:vote", onVote);
     socket.on("connect", refresh);
@@ -143,11 +157,12 @@ export function GameProvider({
     return () => {
       socket.off("game:state", onState);
       socket.off("game:view", onView);
+      socket.off("game:snapshot", onSnapshot);
       socket.off("game:ended", onEnded);
       socket.off("game:vote", onVote);
       socket.off("connect", refresh);
     };
-  }, [socket, refresh]);
+  }, [socket, refresh, applySnapshot]);
 
   const startGame = useCallback(
     async (gameId: string, options?: GameConfig): Promise<GameMoveResult> => {

@@ -51,6 +51,7 @@ import type { ConnectionContext } from "../context.js";
 import { registerAdminHandlers } from "./adminHandlers.js";
 import { respond } from "./ack.js";
 import { emitChatHistorySnapshot } from "./chatHistory.js";
+import { emitGameSnapshot } from "./gameHandlers.js";
 import {
   clearBrowserState,
   getBrowserState,
@@ -889,6 +890,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           locked: context.currentRoom.appsState.locked,
           roomId: context.currentRoom.id,
         });
+        emitGameSnapshot(socket, context.currentRoom, context.currentClient.id);
 
         const newQuality = context.currentRoom.updateVideoQuality();
         if (newQuality) {
