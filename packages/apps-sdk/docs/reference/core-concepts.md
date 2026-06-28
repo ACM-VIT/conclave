@@ -12,6 +12,15 @@ An app is a collaborative in-meeting surface with:
 
 Apps are defined with `defineApp(...)` and registered with `registerApps(...)`.
 
+## Collaborative Apps and Games
+
+Conclave supports two in-meeting extension shapes:
+
+- Collaborative apps use Yjs. Everyone converges on the same shared document. Use this for whiteboards, notes, polls, checklists, and tools where the shared state can be visible to all participants.
+- Games use the server-authoritative game runtime. The SFU owns rules, timers, scoring, and private player views. Use this for hidden roles, trivia answers, timed reactions, scoring, and any rule set that clients should not be able to forge.
+
+If you are adding a game, start with [Add a Game to Conclave](../guides/add-a-game.md).
+
 ## Runtime Layers
 
 Think of the system in four layers:

@@ -11,6 +11,7 @@
     "dev": "npx tsx server.ts",
     "prestart": "node scripts/ensure-mediasoup-worker.mjs",
     "start": "npx tsx server.ts",
+    "new:game": "node ./scripts/new-game.mjs",
     "typecheck": "npx tsc --noEmit"
   },
   "keywords": [],

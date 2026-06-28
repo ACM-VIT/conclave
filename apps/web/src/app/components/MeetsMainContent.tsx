@@ -56,7 +56,9 @@ import {
   isBrowserVideoUserId,
   isSystemUserId,
 } from "../lib/utils";
-import { useApps } from "@conclave/apps-sdk";
+import { useApps, useGame } from "@conclave/apps-sdk";
+import { GamePanel } from "./games/GamePanel";
+import { GamesPanel } from "./games/GamesPanel";
 import { useCameraPermissionState } from "../hooks/useCameraPermissionState";
 import { useStableSpeakerId } from "../hooks/useStableSpeakerId";
 import {
@@ -83,7 +85,7 @@ const DevMeetToolsPanel = dynamic(() => import("./DevMeetToolsPanel"), {
 
 interface MeetsMainContentProps {
   isJoined: boolean;
-  /** True under the phone-width breakpoint — gates compact control/panel layout. */
+  /** True under the phone-width breakpoint. Gates compact control/panel layout. */
   isMobile?: boolean;
   connectionState: ConnectionState;
   isLoading: boolean;
@@ -466,6 +468,8 @@ export default function MeetsMainContent({
     setLocked,
     refreshState,
   } = useApps();
+  const { isActive: isGameActive, refresh: refreshGameState } = useGame();
+  const [isGamesOpen, setIsGamesOpen] = useState(false);
   const isDevToolsEnabled = process.env.NODE_ENV === "development";
   const isDevPlaygroundEnabled = isDevToolsEnabled;
   const isWhiteboardActive = appsState.activeAppId === "whiteboard";
@@ -487,8 +491,9 @@ export default function MeetsMainContent({
   useEffect(() => {
     if (connectionState === "joined") {
       refreshState();
+      refreshGameState();
     }
-  }, [connectionState, refreshState]);
+  }, [connectionState, refreshState, refreshGameState]);
   const participantsArray = useMemo(
     () => Array.from(participants.values()),
     [participants],
@@ -532,6 +537,7 @@ export default function MeetsMainContent({
   const [isVideoEffectsOpen, setIsVideoEffectsOpen] = useState(false);
   const [isViewPanelOpen, setIsViewPanelOpen] = useState(false);
   const [canReserveDockedPanel, setCanReserveDockedPanel] = useState(false);
+  const [viewportWidth, setViewportWidth] = useState(1280);
   const [showAndroidUpsell, setShowAndroidUpsell] = useState(false);
   const [viewSettings, setViewSettings] = useState<MeetViewSettings>(
     readStoredMeetViewSettings,
@@ -548,6 +554,14 @@ export default function MeetsMainContent({
     return () => {
       mediaQuery.removeEventListener("change", updateReserveBreakpoint);
     };
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const onResize = () => setViewportWidth(window.innerWidth);
+    onResize();
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
   }, []);
   useEffect(() => {
     writeStoredMeetViewSettings(viewSettings);
@@ -581,7 +595,7 @@ export default function MeetsMainContent({
       !hasLiveDevCamera &&
       (cameraPermissionState === "prompt" ||
         cameraPermissionState === "denied"));
-  // You're the one sharing your screen — the stage tile defaults to a
+  // You're the one sharing your screen, so the stage tile defaults to a
   // chooser instead of mirroring your own share back at you (see
   // GridLayout's `isLocalPresenter` handling).
   const isLocalPresenter = isScreenSharing && Boolean(presentationStream);
@@ -900,6 +914,31 @@ export default function MeetsMainContent({
     [setIsParticipantsOpen],
   );
 
+  // The game dock (launcher / active game) is independent of the chat &
+  // participants panels: on wide screens it docks side-by-side with them, so
+  // you can chat while a game runs. Toggling it does NOT close the others.
+  const handleToggleGames = useCallback(() => {
+    setIsGamesOpen((open) => !open);
+  }, []);
+
+  // Once a game is actually running, the active GamePanel takes the dock slot,
+  // so collapse the (now-redundant) launcher.
+  useEffect(() => {
+    if (isGameActive) setIsGamesOpen(false);
+  }, [isGameActive]);
+
+  // Secondary right-dock panels (chat, participants, etc). The game dock sits to
+  // the left of these when both are open on a wide enough screen.
+  const isSecondaryPanelOpen =
+    isChatOpen ||
+    isParticipantsOpen ||
+    isHostControlsOpen ||
+    isVideoEffectsOpen ||
+    isViewPanelOpen;
+  const isGameDockPresent = isGameActive || isGamesOpen;
+  const gameDockOffset =
+    canReserveDockedPanel && isSecondaryPanelOpen ? DOCKED_PANEL_WIDTH : 0;
+
   const handleToggleHostControls = useCallback(() => {
     const opening = !isHostControlsOpen;
     // One right-dock panel at a time. Fire the side effects OUTSIDE the setState
@@ -1105,19 +1144,19 @@ export default function MeetsMainContent({
     return videoParticipant?.screenShareStream ?? null;
   }, [participantsArray]);
   const dockedPanelReserve =
-    canReserveDockedPanel &&
-    isJoined &&
-    !isWebinarAttendee &&
-    (isChatOpen ||
-      isParticipantsOpen ||
-      isHostControlsOpen ||
-      isVideoEffectsOpen ||
-      isViewPanelOpen)
-      ? DOCKED_PANEL_WIDTH
+    canReserveDockedPanel && isJoined && !isWebinarAttendee
+      ? (isSecondaryPanelOpen ? DOCKED_PANEL_WIDTH : 0) +
+        (isGameDockPresent ? DOCKED_PANEL_WIDTH : 0)
       : 0;
   const mainContentStyle = isJoined
     ? { paddingRight: `calc(1rem + ${dockedPanelReserve}px)` }
     : undefined;
+  // When docked panels eat into the stage, the full controls bar (clock +
+  // center + side cluster) gets cramped. Fold it to its compact layout once the
+  // remaining width is tight so it stays comfortable instead of squeezing.
+  const stageWidth = viewportWidth - dockedPanelReserve;
+  const isControlsBarTight = !isMobile && isJoined && stageWidth < 900;
+  const useCompactControls = isMobile || isControlsBarTight;
   const isRecoveringMeeting = isJoined && connectionState !== "joined";
   const isTerminalMeetingError =
     Boolean(meetError) && meetError?.recoverable === false;
@@ -1604,7 +1643,7 @@ export default function MeetsMainContent({
         ) : (
           <div className="safe-area-pb flex w-full flex-col items-center gap-2">
             <ControlsBar
-                compact={isMobile}
+                compact={useCompactControls}
                 roomId={roomId}
                 isMuted={isMuted}
                 isMuteTogglePending={isMuteTogglePending}
@@ -1640,6 +1679,9 @@ export default function MeetsMainContent({
                 isGhostMode={ghostEnabled}
                 isParticipantsOpen={isParticipantsOpen}
                 onToggleParticipants={handleToggleParticipants}
+                isGamesOpen={isGamesOpen}
+                onToggleGames={handleToggleGames}
+                hasActiveGame={isGameActive}
                 isHostControlsOpen={isHostControlsOpen}
                 onToggleHostControls={
                   isAdmin ? handleToggleHostControls : undefined
@@ -1705,6 +1747,14 @@ export default function MeetsMainContent({
             )}
           </div>
         ))}
+
+      {isJoined && !isWebinarAttendee && isGameActive && (
+        <GamePanel rightOffset={gameDockOffset} />
+      )}
+
+      {isJoined && !isWebinarAttendee && isGamesOpen && !isGameActive && (
+        <GamesPanel rightOffset={gameDockOffset} onClose={() => setIsGamesOpen(false)} />
+      )}
 
       {isJoined && !isWebinarAttendee && isChatOpen && (
         <ChatPanel

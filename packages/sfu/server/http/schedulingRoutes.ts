@@ -46,6 +46,8 @@ const MAX_ID_LENGTH = 256;
 const MAX_EMAIL_LENGTH = 320;
 const MAX_NAME_LENGTH = 120;
 const MAX_TEXT_LENGTH = 2000;
+const MINUTE_MS = 60 * 1000;
+const DAY_MS = 24 * 60 * MINUTE_MS;
 const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/;
 const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
 const GOOGLE_FREEBUSY_URL = "https://www.googleapis.com/calendar/v3/freeBusy";
@@ -486,8 +488,6 @@ const createGoogleCalendarEvent = async (
   }
 };
 
-const MINUTE_MS = 60 * 1000;
-
 const meetingMatchesProfile = (
   meeting: ScheduledMeeting,
   profile: SchedulingProfile,
@@ -795,27 +795,53 @@ export const registerSchedulingRoutes = (
       sendCalendarUnavailable(res);
       return;
     }
-    const from = Number(req.query.from ?? Date.now());
-    const to = Number(req.query.to ?? Date.now() + 14 * 24 * 60 * 60 * 1000);
-    if (!Number.isFinite(from) || !Number.isFinite(to) || to <= from) {
+    const now = Date.now();
+    const requestedFrom = Number(req.query.from ?? now);
+    const requestedTo = Number(req.query.to ?? now + 14 * DAY_MS);
+    if (
+      !Number.isFinite(requestedFrom) ||
+      !Number.isFinite(requestedTo) ||
+      requestedTo <= requestedFrom
+    ) {
       res.status(400).json({ error: "Invalid slot range." });
       return;
     }
+    const slotFrom = Math.max(
+      requestedFrom,
+      now + target.eventType.minimumNoticeMinutes * MINUTE_MS,
+    );
+    const slotTo = Math.min(
+      requestedTo,
+      now + target.eventType.bookingWindowDays * DAY_MS,
+    );
+    if (slotTo <= slotFrom) {
+      res.json({ slots: [] });
+      return;
+    }
+    const busyFrom =
+      slotFrom - target.eventType.bufferBeforeMinutes * MINUTE_MS;
+    const busyTo = slotTo + target.eventType.bufferAfterMinutes * MINUTE_MS;
     try {
-      const internalBusy = collectInternalBusy(state, target.profile, from, to);
+      const internalBusy = collectInternalBusy(
+        state,
+        target.profile,
+        busyFrom,
+        busyTo,
+      );
       const googleBusy = await fetchOptionalGoogleBusy(
         state,
         target.calendar,
         target.eventType,
-        from,
-        to,
+        busyFrom,
+        busyTo,
       );
       const slots = generateAvailableSlots({
         eventType: target.eventType,
         availability: getProfileAvailability(state.scheduling, target.profile),
         busyIntervals: [...internalBusy, ...googleBusy],
-        from,
-        to,
+        from: slotFrom,
+        to: slotTo,
+        now,
         timeZone: target.profile.timeZone,
       });
       res.json({ slots });

@@ -5,9 +5,10 @@ import type { ReactNode } from "react";
 
 interface HotkeyTooltipProps {
   label: string;
-  hotkey: string;
+  hotkey?: string;
   children: ReactNode;
   className?: string;
+  showWithoutHotkey?: boolean;
 }
 
 export default function HotkeyTooltip({
@@ -15,10 +16,13 @@ export default function HotkeyTooltip({
   hotkey,
   children,
   className = "",
+  showWithoutHotkey = false,
 }: HotkeyTooltipProps) {
+  const hasHotkey = Boolean(hotkey);
+  const displayedHotkey = hotkey ? formatForDisplay(hotkey) : null;
   // With no hotkey to surface, the tooltip would just duplicate the control's
   // own aria-label/title — so skip the hover chrome entirely.
-  if (!hotkey) {
+  if (!hasHotkey && !showWithoutHotkey) {
     return <>{children}</>;
   }
   return (
@@ -27,9 +31,11 @@ export default function HotkeyTooltip({
       <div className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 z-50 mb-1.5 flex flex-col items-center opacity-0 transition-opacity duration-150 group-hover/tooltip:opacity-100">
         <div className="flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-[#fafafa]/10 bg-[#131316]/95 px-2.5 py-1.5 backdrop-blur-sm">
           <span className="text-[11px] text-[#fafafa]/75">{label}</span>
-          <kbd className="rounded border border-[#fafafa]/15 bg-[#fafafa]/[0.06] px-1.5 py-px text-[10px] text-[#fafafa]/75">
-            {formatForDisplay(hotkey)}
-          </kbd>
+          {hasHotkey ? (
+            <kbd className="rounded border border-[#fafafa]/15 bg-[#fafafa]/[0.06] px-1.5 py-px text-[10px] text-[#fafafa]/75">
+              {displayedHotkey}
+            </kbd>
+          ) : null}
         </div>
         {/* downward arrow */}
         <div className="relative h-[7px] w-[14px] overflow-hidden">

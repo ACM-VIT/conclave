@@ -71,6 +71,7 @@ function MeetingClock({ roomId }: { roomId?: string }) {
 }
 
 function BarButton({ d, size = 48 }: { d: ControlDescriptor; size?: number }) {
+  const shouldShowTooltip = Boolean(d.hotkey || d.showTooltipWithoutHotkey);
   const button = (
     <ControlButton
       icon={d.icon}
@@ -83,8 +84,12 @@ function BarButton({ d, size = 48 }: { d: ControlDescriptor; size?: number }) {
       onClick={d.onPress}
     />
   );
-  return d.hotkey ? (
-    <HotkeyTooltip label={d.label} hotkey={d.hotkey}>
+  return shouldShowTooltip ? (
+    <HotkeyTooltip
+      label={d.label}
+      hotkey={d.hotkey}
+      showWithoutHotkey={d.showTooltipWithoutHotkey}
+    >
       {button}
     </HotkeyTooltip>
   ) : (
@@ -133,6 +138,7 @@ function MediaClusterButton({
 function PanelButton({ d }: { d: ControlDescriptor }) {
   const Icon = d.icon;
   const active = d.variant === "active";
+  const shouldShowTooltip = Boolean(d.hotkey || d.showTooltipWithoutHotkey);
   const btn = (
     <button
       type="button"
@@ -157,8 +163,12 @@ function PanelButton({ d }: { d: ControlDescriptor }) {
       ) : null}
     </button>
   );
-  return d.hotkey ? (
-    <HotkeyTooltip label={d.label} hotkey={d.hotkey}>
+  return shouldShowTooltip ? (
+    <HotkeyTooltip
+      label={d.label}
+      hotkey={d.hotkey}
+      showWithoutHotkey={d.showTooltipWithoutHotkey}
+    >
       {btn}
     </HotkeyTooltip>
   ) : (
@@ -245,6 +255,17 @@ function ControlsBar(props: ControlsBarProps) {
   const hasChatControl = config.left.some(
     (row) => row.id === "chat" && !row.disabled,
   );
+  const hasGamesControl = config.left.some(
+    (row) => row.id === "games" && !row.disabled,
+  );
+  const gamesTip = useOneTimeHint("games-launcher", {
+    enabled:
+      !compact &&
+      hasGamesControl &&
+      !props.isGamesOpen &&
+      !props.hasActiveGame,
+    delay: 3000,
+  });
   const gifsTip = useOneTimeHint("chat-gifs", {
     enabled: !compact && hasChatControl && !props.isChatOpen,
     delay: 2400,
@@ -486,6 +507,36 @@ function ControlsBar(props: ControlsBarProps) {
 
       <div className="flex min-w-0 shrink-0 items-center justify-self-end gap-0.5">
         {config.left.map((d) => {
+          if (d.id === "games") {
+            return (
+              <div key={d.id} className="relative flex">
+                <PanelButton
+                  d={{
+                    ...d,
+                    onPress: () => {
+                      gamesTip.dismiss();
+                      d.onPress?.();
+                    },
+                  }}
+                />
+                {gamesTip.visible &&
+                !props.isGamesOpen &&
+                !props.hasActiveGame &&
+                !filtersTip.visible &&
+                !gifsTip.visible &&
+                !moreOpen &&
+                !reactionsOpen &&
+                !browserOpen ? (
+                  <Coachmark
+                    title="Games are here!"
+                    description="Start a quick room game with everyone."
+                    onDismiss={gamesTip.dismiss}
+                  />
+                ) : null}
+              </div>
+            );
+          }
+
           if (d.id !== "chat") {
             return <PanelButton key={d.id} d={d} />;
           }
@@ -504,6 +555,7 @@ function ControlsBar(props: ControlsBarProps) {
               {gifsTip.visible &&
               !props.isChatOpen &&
               !filtersTip.visible &&
+              !gamesTip.visible &&
               !moreOpen &&
               !reactionsOpen &&
               !browserOpen ? (
@@ -520,21 +572,23 @@ function ControlsBar(props: ControlsBarProps) {
         })}
 
         {showHost && onToggleHostControls && (
-          <button
-            type="button"
-            onClick={onToggleHostControls}
-            aria-label="Host controls"
-            aria-pressed={isHostControlsOpen}
-            title="Host controls"
-            className={
-              "inline-flex h-10 w-10 items-center justify-center rounded-full " +
-              "transition-[background-color,color] duration-[120ms] hover:bg-white/[0.08] " +
-              (isHostControlsOpen ? "" : "hover:!text-[#fafafa]")
-            }
-            style={{ color: isHostControlsOpen ? color.accent : color.textMuted }}
-          >
-            <Shield size={ICON} strokeWidth={STROKE} />
-          </button>
+          <HotkeyTooltip label="Host controls" showWithoutHotkey>
+            <button
+              type="button"
+              onClick={onToggleHostControls}
+              aria-label="Host controls"
+              aria-pressed={isHostControlsOpen}
+              title="Host controls"
+              className={
+                "inline-flex h-10 w-10 items-center justify-center rounded-full " +
+                "transition-[background-color,color] duration-[120ms] hover:bg-white/[0.08] " +
+                (isHostControlsOpen ? "" : "hover:!text-[#fafafa]")
+              }
+              style={{ color: isHostControlsOpen ? color.accent : color.textMuted }}
+            >
+              <Shield size={ICON} strokeWidth={STROKE} />
+            </button>
+          </HotkeyTooltip>
         )}
       </div>
     </div>

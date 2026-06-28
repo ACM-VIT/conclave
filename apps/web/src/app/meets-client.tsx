@@ -11,6 +11,7 @@ import { signOut, useSession } from "@/lib/auth-client";
 import type { AssetUploadHandler } from "@conclave/apps-sdk";
 import {
   AppsProvider,
+  GameProvider,
   createAssetUploadHandler,
   registerApps,
 } from "@conclave/apps-sdk";
@@ -2583,12 +2584,14 @@ export default function MeetsClient({
         isAdmin={isAdminFlag}
         uploadAsset={uploadAsset}
       >
-        <MeetVolumeProvider
-          meetVolume={meetVolume}
-          setMeetVolume={setMeetVolume}
-        >
-          {content}
-        </MeetVolumeProvider>
+        <GameProvider socket={appsSocket} user={appsUser} isAdmin={isAdminFlag}>
+          <MeetVolumeProvider
+            meetVolume={meetVolume}
+            setMeetVolume={setMeetVolume}
+          >
+            {content}
+          </MeetVolumeProvider>
+        </GameProvider>
       </AppsProvider>
     </>
   );

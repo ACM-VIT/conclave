@@ -22,6 +22,7 @@ import { config } from "../config.js";
 import { Admin } from "./Admin.js";
 import type { Client } from "./Client.js";
 import type { ProducerType } from "./Client.js";
+import type { GameSession } from "../../server/games/engine.js";
 
 export interface RoomOptions {
   id: string;
@@ -145,6 +146,13 @@ export class Room {
   private appsAwareness: Map<string, Awareness> = new Map();
   private appAwarenessClientIdsByUser: Map<string, Map<string, Set<number>>> =
     new Map();
+  // Server-authoritative game runtime (parallel to the collaborative apps
+  // relay above). At most one game runs per room. The tick timer is owned here
+  // so it is torn down with the room; the handler layer drives broadcasts.
+  public gameSession: GameSession | null = null;
+  public gameTickTimer: NodeJS.Timeout | null = null;
+  // Pre-game vote: the host can let the room vote on which game to play.
+  public gameVote: { candidates: string[]; votes: Record<string, string> } | null = null;
   private systemProducers: Map<
     string,
     { producer: Producer; userId: string; type: ProducerType }
@@ -1255,6 +1263,15 @@ export class Room {
     this.appsState.locked = false;
   }
 
+  clearGame(): void {
+    if (this.gameTickTimer) {
+      clearInterval(this.gameTickTimer);
+      this.gameTickTimer = null;
+    }
+    this.gameSession = null;
+    this.gameVote = null;
+  }
+
   close(): void {
     this.stopCleanupTimer();
     for (const pending of this.pendingDisconnects.values()) {
@@ -1272,6 +1289,7 @@ export class Room {
     this.webinarAttendeeCount = 0;
     this.meetingParticipantCount = 0;
     this.clearApps();
+    this.clearGame();
     if (this.webinarAudioLevelObserver) {
       try {
         this.webinarAudioLevelObserver.close();

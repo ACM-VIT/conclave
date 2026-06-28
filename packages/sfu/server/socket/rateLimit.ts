@@ -122,4 +122,8 @@ export const RATE_LIMITS = {
   consumerControl: { capacity: 30, refillPerSec: 10 },
   // Shared browser controls proxy to a separate service; keep them coalesced.
   sharedBrowserControl: { capacity: 10, refillPerSec: 2 },
+  // Game moves (answers, votes): tapping should feel instant, abuse should not.
+  gameMove: { capacity: 20, refillPerSec: 8 },
+  // Game lifecycle (start/end/state): low frequency, admin-driven.
+  gameControl: { capacity: 10, refillPerSec: 2 },
 } as const satisfies Record<string, TokenBucketOptions>;

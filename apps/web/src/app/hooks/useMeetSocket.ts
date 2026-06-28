@@ -23,6 +23,7 @@ import type {
   ConnectionState,
   Consumer,
   ConsumeResponse,
+  DisplayNameSnapshotEntry,
   HandRaisedNotification,
   HandRaisedSnapshot,
   JoinMode,
@@ -3500,6 +3501,100 @@ export function useMeetSocket({
     announcedRemoteProducersRef,
   ]);
 
+  const applyDisplayNameSnapshot = useCallback(
+    (users: DisplayNameSnapshotEntry[] = []) => {
+      const snapshot = new Map<string, string>();
+      const nextParticipantIds = new Set<string>([userId]);
+      const previousParticipantIds = participantIdsRef.current;
+      let clearedDepartedParticipant = false;
+
+      for (const { userId: snapshotUserId, displayName } of users) {
+        if (displayName) {
+          snapshot.set(snapshotUserId, displayName);
+        }
+        if (snapshotUserId === userId) {
+          continue;
+        }
+
+        clearedDepartedParticipant =
+          markRemoteParticipantPresent(snapshotUserId) ||
+          clearedDepartedParticipant;
+        if (!isSystemUserId(snapshotUserId)) {
+          nextParticipantIds.add(snapshotUserId);
+        }
+        const leaveTimeout = leaveTimeoutsRef.current.get(snapshotUserId);
+        if (leaveTimeout) {
+          window.clearTimeout(leaveTimeout);
+          leaveTimeoutsRef.current.delete(snapshotUserId);
+        }
+        clearParticipantConnectionStatus(snapshotUserId);
+        dispatchParticipants({
+          type: "ADD_PARTICIPANT",
+          userId: snapshotUserId,
+        });
+      }
+
+      for (const previousUserId of previousParticipantIds) {
+        if (
+          previousUserId === userId ||
+          nextParticipantIds.has(previousUserId)
+        ) {
+          continue;
+        }
+
+        const leaveTimeout = leaveTimeoutsRef.current.get(previousUserId);
+        markRemoteParticipantDeparted(previousUserId);
+        if (leaveTimeout) {
+          window.clearTimeout(leaveTimeout);
+          leaveTimeoutsRef.current.delete(previousUserId);
+        }
+        clearParticipantConnectionStatus(previousUserId);
+
+        const producersToClose = Array.from(producerMapRef.current.entries())
+          .filter(([, info]) => info.userId === previousUserId)
+          .map(
+            ([producerId, info]): ProducerInfo => ({
+              producerId,
+              producerUserId: previousUserId,
+              kind: info.kind,
+              type: info.type,
+            }),
+          );
+        for (const info of Array.from(pendingProducersRef.current.values())) {
+          if (info.producerUserId === previousUserId) {
+            dropDepartedProducer(info);
+          }
+        }
+        for (const producerInfo of producersToClose) {
+          dropDepartedProducer(producerInfo);
+        }
+        dispatchParticipants({
+          type: "REMOVE_PARTICIPANT",
+          userId: previousUserId,
+        });
+      }
+
+      participantIdsRef.current = nextParticipantIds;
+      setDisplayNames(snapshot);
+      if (clearedDepartedParticipant) {
+        void syncProducers();
+      }
+    },
+    [
+      clearParticipantConnectionStatus,
+      dispatchParticipants,
+      dropDepartedProducer,
+      leaveTimeoutsRef,
+      markRemoteParticipantDeparted,
+      markRemoteParticipantPresent,
+      pendingProducersRef,
+      producerMapRef,
+      setDisplayNames,
+      syncProducers,
+      userId,
+    ],
+  );
+
   const applyWebinarFeedProducers = useCallback(
     async (producers: ProducerInfo[]) => {
       const departedProducerIds = new Set<string>();
@@ -3750,6 +3845,9 @@ export function useMeetSocket({
                 linkSlug: previous?.linkSlug ?? null,
                 feedMode: previous?.feedMode ?? "active-speaker",
               }));
+              if (Array.isArray(response.displayNameSnapshot)) {
+                applyDisplayNameSnapshot(response.displayNameSnapshot);
+              }
 
               // Use pre-warmed Device if available, otherwise dynamic import
               const DeviceClass = prewarm?.Device
@@ -3835,6 +3933,7 @@ export function useMeetSocket({
       setWebinarRole,
       setWebinarSpeakerUserId,
       currentRoomIdRef,
+      applyDisplayNameSnapshot,
       deviceRef,
       createProducerTransport,
       createConsumerTransport,
@@ -4455,86 +4554,11 @@ export function useMeetSocket({
                 users,
                 roomId: eventRoomId,
               }: {
-                users: { userId: string; displayName?: string }[];
+                users: DisplayNameSnapshotEntry[];
                 roomId?: string;
               }) => {
                 if (!isRoomEvent(eventRoomId)) return;
-                const snapshot = new Map<string, string>();
-                const nextParticipantIds = new Set<string>([userId]);
-                const previousParticipantIds = participantIdsRef.current;
-                let clearedDepartedParticipant = false;
-                (users || []).forEach(
-                  ({ userId: snapshotUserId, displayName }) => {
-                    if (displayName) {
-                      snapshot.set(snapshotUserId, displayName);
-                    }
-                    if (snapshotUserId !== userId) {
-                      clearedDepartedParticipant =
-                        markRemoteParticipantPresent(snapshotUserId) ||
-                        clearedDepartedParticipant;
-                      if (!isSystemUserId(snapshotUserId)) {
-                        nextParticipantIds.add(snapshotUserId);
-                      }
-                      const leaveTimeout =
-                        leaveTimeoutsRef.current.get(snapshotUserId);
-                      if (leaveTimeout) {
-                        window.clearTimeout(leaveTimeout);
-                        leaveTimeoutsRef.current.delete(snapshotUserId);
-                      }
-                      clearParticipantConnectionStatus(snapshotUserId);
-                      dispatchParticipants({
-                        type: "ADD_PARTICIPANT",
-                        userId: snapshotUserId,
-                      });
-                    }
-                  },
-                );
-                for (const previousUserId of previousParticipantIds) {
-                  if (
-                    previousUserId === userId ||
-                    nextParticipantIds.has(previousUserId)
-                  ) {
-                    continue;
-                  }
-                  const leaveTimeout = leaveTimeoutsRef.current.get(previousUserId);
-                  markRemoteParticipantDeparted(previousUserId);
-                  if (leaveTimeout) {
-                    window.clearTimeout(leaveTimeout);
-                    leaveTimeoutsRef.current.delete(previousUserId);
-                  }
-                  clearParticipantConnectionStatus(previousUserId);
-                  const producersToClose = Array.from(
-                    producerMapRef.current.entries(),
-                  )
-                    .filter(([, info]) => info.userId === previousUserId)
-                    .map(
-                      ([producerId, info]): ProducerInfo => ({
-                        producerId,
-                        producerUserId: previousUserId,
-                        kind: info.kind,
-                        type: info.type,
-                      }),
-                    );
-                  for (const info of Array.from(
-                    pendingProducersRef.current.values(),
-                  )) {
-                    if (info.producerUserId === previousUserId) {
-                      dropDepartedProducer(info);
-                    }
-                  }
-                  for (const producerInfo of producersToClose) {
-                    dropDepartedProducer(producerInfo);
-                  }
-                  dispatchParticipants({
-                    type: "REMOVE_PARTICIPANT",
-                    userId: previousUserId,
-                  });
-                }
-                participantIdsRef.current = nextParticipantIds;
-                setDisplayNames(snapshot);
-                if (clearedDepartedParticipant) {
-                  void syncProducers();
-                }
+                applyDisplayNameSnapshot(users || []);
               },
             );
 
@@ -5286,6 +5310,7 @@ export function useMeetSocket({
       handleProducerClosed,
       handleRedirectRef,
       handleReconnectRef,
+      applyDisplayNameSnapshot,
       applyParticipantConnectionStatus,
       ensureLiveLocalMediaForJoin,
       getVideoPublishTrack,

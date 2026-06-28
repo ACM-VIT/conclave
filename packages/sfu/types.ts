@@ -59,6 +59,7 @@ export interface JoinRoomResponse {
   roomId?: string;
   rtpCapabilities: RtpCapabilities;
   existingProducers: ProducerInfo[];
+  displayNameSnapshot?: DisplayNameSnapshotEntry[];
   status?: "waiting" | "joined";
   hostUserId?: string | null;
   hostUserIds?: string[];
@@ -167,6 +168,11 @@ export interface ProducerInfo {
   type: "webcam" | "screen";
   paused?: boolean;
   roomId?: string;
+}
+
+export interface DisplayNameSnapshotEntry {
+  userId: string;
+  displayName: string;
 }
 
 export type WebinarFeedMode = "active-speaker";

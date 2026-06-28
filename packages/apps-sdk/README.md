@@ -2,12 +2,13 @@
 
 In-meeting app runtime SDK for Conclave (`web` + `native`).
 
-This package gives you a shared runtime for collaborative meeting apps:
+This package gives you a shared runtime for collaborative meeting apps and server-authoritative games:
 
 - app registry and discovery
 - room-level app state (`activeAppId`, `locked`)
 - Yjs doc sync and awareness sync over SFU socket events
 - React provider + hooks for app and host UI
+- game provider + hooks for server-owned rules, scoring, and private views
 - optional cross-platform asset uploads
 
 ## Documentation
@@ -18,6 +19,7 @@ This package gives you a shared runtime for collaborative meeting apps:
 - Permissions and locking: [docs/reference/permissions-and-locking.md](./docs/reference/permissions-and-locking.md)
 - Socket events and sync protocol: [docs/reference/socket-events-and-sync.md](./docs/reference/socket-events-and-sync.md)
 - Add an app: [docs/guides/add-a-new-app-integration.md](./docs/guides/add-a-new-app-integration.md)
+- Add a game: [docs/guides/add-a-game.md](./docs/guides/add-a-game.md)
 - App cookbook: [docs/guides/app-cookbook.md](./docs/guides/app-cookbook.md)
 - Troubleshooting: [docs/guides/troubleshooting.md](./docs/guides/troubleshooting.md)
 - Contributing guide: [docs/guides/contributing-to-apps-sdk.md](./docs/guides/contributing-to-apps-sdk.md)
@@ -26,6 +28,7 @@ This package gives you a shared runtime for collaborative meeting apps:
 ## Who Should Use This Package
 
 - App authors: building a collaborative meeting surface (polls, notes, timers, etc.)
+- Game authors: building a game where the SFU owns rules, scoring, timers, or hidden information
 - Host integrators: wiring app menu and layout into Conclave web/mobile meeting shells
 - Reviewers/maintainers: validating permissions, sync behavior, and cross-platform wiring
 
@@ -36,6 +39,7 @@ This package gives you a shared runtime for collaborative meeting apps:
 | Understand how the runtime fits together | [Core concepts](./docs/reference/core-concepts.md) |
 | Know what each hook/API does | [Runtime APIs](./docs/reference/runtime-apis.md) |
 | Add a brand-new app integration | [Add a new app integration](./docs/guides/add-a-new-app-integration.md) |
+| Add a server-authoritative game | [Add a game to Conclave](./docs/guides/add-a-game.md) |
 | Start from a proven app shape | [App cookbook](./docs/guides/app-cookbook.md) |
 | Debug sync or permission behavior | [Socket events and sync](./docs/reference/socket-events-and-sync.md) + [Troubleshooting](./docs/guides/troubleshooting.md) |
 | Contribute safely and pass review quickly | [Contributing guide](./docs/guides/contributing-to-apps-sdk.md) |
@@ -164,6 +168,12 @@ Full workflow: [docs/guides/contributing-to-apps-sdk.md](./docs/guides/contribut
 - Dev playground (web): `@conclave/apps-sdk/dev-playground/web`
 - Dev playground (core): `@conclave/apps-sdk/dev-playground/core`
 
+## Games
+
+Conclave games use the Apps SDK game hooks, but the rules run on the SFU so private information, timers, scoring, and validation stay server-authoritative.
+
+Start here: [docs/guides/add-a-game.md](./docs/guides/add-a-game.md)
+
 ## Development Playground
 
 This repo includes a dev-only sample app for learning SDK patterns.
@@ -192,5 +202,6 @@ It demonstrates:
 - [docs/reference/core-concepts.md](./docs/reference/core-concepts.md)
 - [docs/reference/runtime-apis.md](./docs/reference/runtime-apis.md)
 - [docs/reference/socket-events-and-sync.md](./docs/reference/socket-events-and-sync.md)
+- [docs/guides/add-a-game.md](./docs/guides/add-a-game.md)
 - [docs/guides/app-cookbook.md](./docs/guides/app-cookbook.md)
 - [docs/guides/troubleshooting.md](./docs/guides/troubleshooting.md)
