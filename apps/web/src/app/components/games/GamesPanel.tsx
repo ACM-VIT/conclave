@@ -10,6 +10,7 @@ import {
   GAME_DOCK_PANEL_CLASS,
   GAME_DOCK_TITLE_CLASS,
   GameDockCloseButton,
+  GameDockResizeHandle,
   GhostButton,
   HEAD_FONT,
   PrimaryButton,
@@ -93,7 +94,19 @@ function Row({
  * The docked Games launcher. The host can start a game directly, or put the
  * choice to a room vote; everyone else votes or waits.
  */
-export function GamesPanel({ onClose, rightOffset = 0 }: { onClose: () => void; rightOffset?: number }) {
+export function GamesPanel({
+  onClose,
+  rightOffset = 0,
+  dockWidth,
+  maxDockWidth,
+  onDockWidthChange,
+}: {
+  onClose: () => void;
+  rightOffset?: number;
+  dockWidth?: number;
+  maxDockWidth?: number;
+  onDockWidthChange?: (width: number) => void;
+}) {
   const { catalog, vote, isAdmin, userId, startGame, openVote, castVote, cancelVote } = useGame();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -119,9 +132,14 @@ export function GamesPanel({ onClose, rightOffset = 0 }: { onClose: () => void; 
   return (
     <aside
       className={GAME_DOCK_PANEL_CLASS}
-      style={{ right: rightOffset, fontFamily: HEAD_FONT }}
+      style={{ right: rightOffset, width: dockWidth, fontFamily: HEAD_FONT }}
       aria-label="Games"
     >
+      <GameDockResizeHandle
+        width={dockWidth}
+        maxWidth={maxDockWidth}
+        onWidthChange={onDockWidthChange}
+      />
       <div className={GAME_DOCK_HEADER_CLASS}>
         {configuring && !vote ? (
           <button

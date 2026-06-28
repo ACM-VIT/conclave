@@ -59,6 +59,11 @@ import {
 import { useApps, useGame } from "@conclave/apps-sdk";
 import { GamePanel } from "./games/GamePanel";
 import { GamesPanel } from "./games/GamesPanel";
+import {
+  GAME_DOCK_DEFAULT_WIDTH,
+  GAME_DOCK_MAX_WIDTH,
+  GAME_DOCK_MIN_WIDTH,
+} from "./games/gameUi";
 import { useCameraPermissionState } from "../hooks/useCameraPermissionState";
 import { useStableSpeakerId } from "../hooks/useStableSpeakerId";
 import {
@@ -303,6 +308,17 @@ const clamp = (value: number, min: number, max: number) =>
 const WEBINAR_SPEAKER_PROMOTE_DELAY_MS = 450;
 const WEBINAR_SPEAKER_MIN_SWITCH_INTERVAL_MS = 1800;
 const DOCKED_PANEL_WIDTH = 360;
+const GAME_DOCK_MIN_STAGE_WIDTH = 420;
+
+const getGameDockMaxWidth = (
+  viewportWidth: number,
+  rightOffset: number,
+): number =>
+  clamp(
+    viewportWidth - rightOffset - GAME_DOCK_MIN_STAGE_WIDTH,
+    GAME_DOCK_MIN_WIDTH,
+    GAME_DOCK_MAX_WIDTH,
+  );
 
 const getPipCornerClass = (corner: PipCorner): string => {
   switch (corner) {
@@ -538,6 +554,9 @@ export default function MeetsMainContent({
   const [isViewPanelOpen, setIsViewPanelOpen] = useState(false);
   const [canReserveDockedPanel, setCanReserveDockedPanel] = useState(false);
   const [viewportWidth, setViewportWidth] = useState(1280);
+  const [gameDockWidth, setGameDockWidth] = useState(
+    GAME_DOCK_DEFAULT_WIDTH,
+  );
   const [showAndroidUpsell, setShowAndroidUpsell] = useState(false);
   const [viewSettings, setViewSettings] = useState<MeetViewSettings>(
     readStoredMeetViewSettings,
@@ -938,6 +957,26 @@ export default function MeetsMainContent({
   const isGameDockPresent = isGameActive || isGamesOpen;
   const gameDockOffset =
     canReserveDockedPanel && isSecondaryPanelOpen ? DOCKED_PANEL_WIDTH : 0;
+  const gameDockMaxWidth = useMemo(
+    () => getGameDockMaxWidth(viewportWidth, gameDockOffset),
+    [gameDockOffset, viewportWidth],
+  );
+  const handleGameDockWidthChange = useCallback(
+    (nextWidth: number) => {
+      setGameDockWidth(
+        clamp(Math.round(nextWidth), GAME_DOCK_MIN_WIDTH, gameDockMaxWidth),
+      );
+    },
+    [gameDockMaxWidth],
+  );
+  useEffect(() => {
+    setGameDockWidth((currentWidth) =>
+      clamp(currentWidth, GAME_DOCK_MIN_WIDTH, gameDockMaxWidth),
+    );
+  }, [gameDockMaxWidth]);
+  const gameDockPanelWidth = canReserveDockedPanel
+    ? gameDockWidth
+    : undefined;
 
   const handleToggleHostControls = useCallback(() => {
     const opening = !isHostControlsOpen;
@@ -1146,7 +1185,7 @@ export default function MeetsMainContent({
   const dockedPanelReserve =
     canReserveDockedPanel && isJoined && !isWebinarAttendee
       ? (isSecondaryPanelOpen ? DOCKED_PANEL_WIDTH : 0) +
-        (isGameDockPresent ? DOCKED_PANEL_WIDTH : 0)
+        (isGameDockPresent ? gameDockWidth : 0)
       : 0;
   const mainContentStyle = isJoined
     ? { paddingRight: `calc(1rem + ${dockedPanelReserve}px)` }
@@ -1749,11 +1788,22 @@ export default function MeetsMainContent({
         ))}
 
       {isJoined && !isWebinarAttendee && isGameActive && (
-        <GamePanel rightOffset={gameDockOffset} />
+        <GamePanel
+          rightOffset={gameDockOffset}
+          dockWidth={gameDockPanelWidth}
+          maxDockWidth={gameDockMaxWidth}
+          onDockWidthChange={handleGameDockWidthChange}
+        />
       )}
 
       {isJoined && !isWebinarAttendee && isGamesOpen && !isGameActive && (
-        <GamesPanel rightOffset={gameDockOffset} onClose={() => setIsGamesOpen(false)} />
+        <GamesPanel
+          rightOffset={gameDockOffset}
+          dockWidth={gameDockPanelWidth}
+          maxDockWidth={gameDockMaxWidth}
+          onDockWidthChange={handleGameDockWidthChange}
+          onClose={() => setIsGamesOpen(false)}
+        />
       )}
 
       {isJoined && !isWebinarAttendee && isChatOpen && (

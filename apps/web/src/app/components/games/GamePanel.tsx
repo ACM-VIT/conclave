@@ -6,6 +6,7 @@ import {
   GAME_DOCK_HEADER_CLASS,
   GAME_DOCK_PANEL_CLASS,
   GAME_DOCK_TITLE_CLASS,
+  GameDockResizeHandle,
   HEAD_FONT,
   Leaderboard,
 } from "./gameUi";
@@ -28,7 +29,17 @@ const readScoreboard = (view: unknown): ScoreRow[] | null => {
  * game sits beside the group instead of taking over an empty stage. On mobile it
  * becomes a full-width sheet that respects the safe-area insets.
  */
-export function GamePanel({ rightOffset = 0 }: { rightOffset?: number }) {
+export function GamePanel({
+  rightOffset = 0,
+  dockWidth,
+  maxDockWidth,
+  onDockWidthChange,
+}: {
+  rightOffset?: number;
+  dockWidth?: number;
+  maxDockWidth?: number;
+  onDockWidthChange?: (width: number) => void;
+}) {
   const { publicState, view, isAdmin, userId, move, endGame } = useGame();
   if (!publicState) return null;
 
@@ -40,9 +51,14 @@ export function GamePanel({ rightOffset = 0 }: { rightOffset?: number }) {
   return (
     <aside
       className={GAME_DOCK_PANEL_CLASS}
-      style={{ right: rightOffset, fontFamily: HEAD_FONT }}
+      style={{ right: rightOffset, width: dockWidth, fontFamily: HEAD_FONT }}
       aria-label={`${publicState.name} game`}
     >
+      <GameDockResizeHandle
+        width={dockWidth}
+        maxWidth={maxDockWidth}
+        onWidthChange={onDockWidthChange}
+      />
       <div className={GAME_DOCK_HEADER_CLASS}>
         <div className="flex h-8 min-w-0 items-center gap-2">
           <h2 className={GAME_DOCK_TITLE_CLASS}>{publicState.name}</h2>

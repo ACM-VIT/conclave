@@ -7,12 +7,147 @@ import type { GameMoveResult, GamePlayer } from "@conclave/apps-sdk";
 import { accentFor, nameFor } from "./covers";
 
 export const HEAD_FONT = "'PolySans Trial', sans-serif";
+export const GAME_DOCK_DEFAULT_WIDTH = 360;
+export const GAME_DOCK_MIN_WIDTH = 320;
+export const GAME_DOCK_MAX_WIDTH = 560;
 export const GAME_DOCK_PANEL_CLASS =
   "safe-area-pt safe-area-pb fixed right-0 top-0 bottom-0 z-40 flex w-full sm:w-[360px] flex-col border-l border-white/10 bg-[#18181b] animate-[meet-panel-in_280ms_cubic-bezier(0.22,1,0.36,1)]";
 export const GAME_DOCK_HEADER_CLASS =
   "flex shrink-0 items-center justify-between border-b border-white/10 px-4 py-3";
 export const GAME_DOCK_TITLE_CLASS =
   "min-w-0 truncate text-[15px] font-semibold text-[#fafafa]";
+
+const clampDockWidth = (width: number, minWidth: number, maxWidth: number) =>
+  Math.min(Math.max(width, minWidth), maxWidth);
+
+export function GameDockResizeHandle({
+  width,
+  minWidth = GAME_DOCK_MIN_WIDTH,
+  maxWidth = GAME_DOCK_MAX_WIDTH,
+  onWidthChange,
+}: {
+  width?: number;
+  minWidth?: number;
+  maxWidth?: number;
+  onWidthChange?: (width: number) => void;
+}) {
+  const [dragging, setDragging] = useState(false);
+  const cleanupRef = useRef<(() => void) | null>(null);
+  const frameRef = useRef<number | null>(null);
+  const pendingWidthRef = useRef(width ?? GAME_DOCK_DEFAULT_WIDTH);
+  const panelRef = useRef<HTMLElement | null>(null);
+
+  useEffect(
+    () => () => {
+      cleanupRef.current?.();
+      if (frameRef.current !== null) {
+        window.cancelAnimationFrame(frameRef.current);
+      }
+    },
+    [],
+  );
+
+  if (!onWidthChange || typeof width !== "number") return null;
+
+  const previewWidth = (nextWidth: number) => {
+    pendingWidthRef.current = nextWidth;
+    if (frameRef.current !== null) return;
+    frameRef.current = window.requestAnimationFrame(() => {
+      frameRef.current = null;
+      if (panelRef.current) {
+        panelRef.current.style.width = `${pendingWidthRef.current}px`;
+      }
+    });
+  };
+
+  const flushPreview = () => {
+    if (frameRef.current !== null) {
+      window.cancelAnimationFrame(frameRef.current);
+      frameRef.current = null;
+    }
+    if (panelRef.current) {
+      panelRef.current.style.width = `${pendingWidthRef.current}px`;
+    }
+  };
+
+  const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    panelRef.current = event.currentTarget.parentElement;
+    const startX = event.clientX;
+    const startWidth = width;
+    const previousCursor = document.body.style.cursor;
+    const previousUserSelect = document.body.style.userSelect;
+    let finishDrag: (() => void) | null = null;
+    let cancelDrag: (() => void) | null = null;
+
+    const handlePointerMove = (moveEvent: PointerEvent) => {
+      const delta = startX - moveEvent.clientX;
+      previewWidth(clampDockWidth(startWidth + delta, minWidth, maxWidth));
+    };
+
+    const stopDrag = (commit: boolean) => {
+      document.removeEventListener("pointermove", handlePointerMove);
+      if (finishDrag) document.removeEventListener("pointerup", finishDrag);
+      if (cancelDrag) document.removeEventListener("pointercancel", cancelDrag);
+      document.body.style.cursor = previousCursor;
+      document.body.style.userSelect = previousUserSelect;
+      cleanupRef.current = null;
+      if (commit) {
+        setDragging(false);
+        flushPreview();
+        onWidthChange(pendingWidthRef.current);
+      }
+    };
+    finishDrag = () => stopDrag(true);
+    cancelDrag = () => stopDrag(true);
+
+    cleanupRef.current?.();
+    cleanupRef.current = () => stopDrag(false);
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    setDragging(true);
+    document.addEventListener("pointermove", handlePointerMove);
+    document.addEventListener("pointerup", finishDrag);
+    document.addEventListener("pointercancel", cancelDrag);
+  };
+
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    const step = event.shiftKey ? 40 : 16;
+    if (event.key === "ArrowLeft") {
+      event.preventDefault();
+      onWidthChange(clampDockWidth(width + step, minWidth, maxWidth));
+    }
+    if (event.key === "ArrowRight") {
+      event.preventDefault();
+      onWidthChange(clampDockWidth(width - step, minWidth, maxWidth));
+    }
+    if (event.key === "Home") {
+      event.preventDefault();
+      onWidthChange(minWidth);
+    }
+    if (event.key === "End") {
+      event.preventDefault();
+      onWidthChange(maxWidth);
+    }
+  };
+
+  return (
+    <div
+      role="separator"
+      aria-orientation="vertical"
+      aria-label="Resize games panel"
+      aria-valuemin={minWidth}
+      aria-valuemax={maxWidth}
+      aria-valuenow={Math.round(width)}
+      tabIndex={0}
+      onPointerDown={handlePointerDown}
+      onKeyDown={handleKeyDown}
+      className={`absolute bottom-0 left-0 top-0 z-10 w-3 -translate-x-1/2 cursor-col-resize touch-none outline-none transition-colors before:absolute before:bottom-3 before:left-1/2 before:top-3 before:w-px before:-translate-x-1/2 before:rounded-full before:bg-white/10 before:transition-colors hover:before:bg-white/25 focus-visible:before:bg-white/35 ${
+        dragging ? "before:bg-white/35" : ""
+      }`}
+    />
+  );
+}
 
 export function GameDockCloseButton({
   onClose,
