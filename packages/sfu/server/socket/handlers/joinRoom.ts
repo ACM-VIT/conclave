@@ -408,11 +408,10 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         const wasReconnecting = room.clearPendingDisconnect(userId);
         const isReplacingExistingSeat =
           Boolean(existingClient) || staleSameIdentitySeats.length > 0;
-        const isReclaimingMeetingParticipantSeat =
+        const isSameSessionMeetingParticipantRejoin =
           !isWebinarAttendeeJoin &&
           Boolean(
-            (existingClient && !existingClient.isObserver) ||
-              staleSameIdentitySeats.some((seat) => seat.isMeetingParticipant),
+            wasReconnecting || (existingClient && !existingClient.isObserver),
           );
         const reclaimingWebinarSeat =
           isWebinarAttendeeJoin &&
@@ -502,7 +501,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           !isWebinarAttendeeJoin &&
           !isAdminJoin &&
           requiresMeetingInviteCode &&
-          !isReclaimingMeetingParticipantSeat;
+          !isSameSessionMeetingParticipantRejoin;
 
         if (shouldValidateMeetingInviteCode && !meetingInviteCode) {
           respond(callback, { error: "Meeting invite code required." });
