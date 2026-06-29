@@ -1857,6 +1857,7 @@ internal class SocketIOManager {
             noGuests = boolField(obj, "noGuests"),
             isTtsDisabled = boolField(obj, "isTtsDisabled"),
             isDmEnabled = boolField(obj, "isDmEnabled"),
+            isReactionsDisabled = boolField(obj, "isReactionsDisabled"),
             meetingRequiresInviteCode = boolField(obj, "meetingRequiresInviteCode"),
             webinarRole = stringField(obj, "webinarRole"),
             isWebinarEnabled = boolField(obj, "isWebinarEnabled"),

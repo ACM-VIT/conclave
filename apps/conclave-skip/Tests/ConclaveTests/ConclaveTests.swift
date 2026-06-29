@@ -6107,6 +6107,14 @@ final class ConclaveTests: XCTestCase {
         XCTAssertTrue(source.contains("changed = changedFlagField(obj, \"changed\")"))
     }
 
+    func testAndroidJoinRoomResponseDecoderKeepsInitialPolicyFields() throws {
+        let source = try sourceFileContents("Sources/Conclave/Skip/SocketIOManager+Android.kt")
+
+        XCTAssertTrue(source.contains("isDmEnabled = boolField(obj, \"isDmEnabled\")"))
+        XCTAssertTrue(source.contains("isReactionsDisabled = boolField(obj, \"isReactionsDisabled\")"))
+        XCTAssertTrue(source.contains("meetingRequiresInviteCode = boolField(obj, \"meetingRequiresInviteCode\")"))
+    }
+
     func testBrowserStateClearTearsDownSystemMediaConsumers() throws {
         let viewModelSource = try sourceFileContents("Sources/Conclave/Features/Meeting/MeetingViewModel.swift")
         let iosWebRTCSource = try sourceFileContents("Sources/Conclave/Core/WebRTC/WebRTCClient.swift")
