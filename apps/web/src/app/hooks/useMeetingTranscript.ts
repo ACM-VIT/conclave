@@ -24,6 +24,7 @@ import {
   TranscriptAudioRelay,
   type TranscriptRelaySource,
 } from "../lib/transcript-audio";
+import { resolveSnapshotViewerConnectionId } from "../lib/transcript-connection";
 
 export type TranscriptConnectionStatus =
   | "idle"
@@ -368,7 +369,9 @@ export function useMeetingTranscript({
 
       switch (message.type) {
         case "snapshot": {
-          setViewerConnectionId(message.viewerConnectionId ?? null);
+          setViewerConnectionId((current) =>
+            resolveSnapshotViewerConnectionId(current, message),
+          );
           setHasGlobalOpenAiKey(message.globalOpenAiKeyAvailable === true);
           applyServiceVersion(message.serviceVersion);
           setSession(message.session);

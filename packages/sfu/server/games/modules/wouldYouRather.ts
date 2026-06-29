@@ -54,31 +54,107 @@ const PROMPT_BANK: Prompt[] = [
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   Boolean(value && typeof value === "object" && !Array.isArray(value));
 
-const parseGeneratedPrompts = (payload: unknown): Prompt[] | null => {
-  if (!isRecord(payload) || !Array.isArray(payload.prompts)) return null;
-  const prompts: Prompt[] = [];
+const generatedTextFromKeys = (
+  item: Record<string, unknown>,
+  keys: string[],
+): string | null => {
+  for (const key of keys) {
+    const text = cleanGeneratedText(item[key], 90);
+    if (text) return text;
+  }
+  return null;
+};
+
+const uniquePrompts = (prompts: Prompt[], maxItems: number): Prompt[] => {
+  const unique: Prompt[] = [];
   const seen = new Set<string>();
-  for (const item of payload.prompts) {
-    if (!isRecord(item)) continue;
-    const a = cleanGeneratedText(item.a, 90);
-    const b = cleanGeneratedText(item.b, 90);
-    if (!a || !b) continue;
-    const aKey = normalizeGeneratedKey(a);
-    const bKey = normalizeGeneratedKey(b);
+  for (const prompt of prompts) {
+    const aKey = normalizeGeneratedKey(prompt.a);
+    const bKey = normalizeGeneratedKey(prompt.b);
     if (!aKey || !bKey || aKey === bKey) continue;
     const pairKey = [aKey, bKey]
       .sort()
       .join("|");
     if (seen.has(pairKey)) continue;
     seen.add(pairKey);
+    unique.push(prompt);
+    if (unique.length >= maxItems) break;
+  }
+  return unique;
+};
+
+const parseGeneratedPrompts = (payload: unknown): Prompt[] | null => {
+  if (!isRecord(payload) || !Array.isArray(payload.prompts)) return null;
+  const prompts: Prompt[] = [];
+  for (const item of payload.prompts) {
+    if (!isRecord(item)) continue;
+    const a = generatedTextFromKeys(item, ["a", "optionA", "choiceA", "left"]);
+    const b = generatedTextFromKeys(item, ["b", "optionB", "choiceB", "right"]);
+    if (!a || !b) continue;
     prompts.push({ a, b });
     if (prompts.length >= 10) break;
   }
-  return prompts.length > 0 ? prompts : null;
+  const unique = uniquePrompts(prompts, 10);
+  return unique.length > 0 ? unique : null;
 };
 
 const generatedPromptsFromContent = (content: unknown): Prompt[] =>
   Array.isArray(content) ? (content as Prompt[]) : [];
+
+const topicFallbackPrompts = (topic: string): Prompt[] => {
+  const label = cleanGeneratedText(topic, 45);
+  if (!label) return [];
+  return uniquePrompts(
+    [
+      {
+        a: `Know every insider detail about ${label}`,
+        b: `Be surprised by every ${label} twist`,
+      },
+      {
+        a: `Make one bold ${label} prediction that comes true`,
+        b: `Explain one confusing ${label} story perfectly`,
+      },
+      {
+        a: `Have unlimited budget for a ${label} project`,
+        b: `Have perfect timing for every ${label} decision`,
+      },
+      {
+        a: `Spend a week only talking about ${label}`,
+        b: `Avoid all ${label} updates for a year`,
+      },
+      {
+        a: `Be first to discover the next big ${label} story`,
+        b: `Be best at making ${label} fun for everyone`,
+      },
+      {
+        a: `Get front-row access to a major ${label} moment`,
+        b: `Get a private briefing on what happens next in ${label}`,
+      },
+      {
+        a: `Only use tools related to ${label}`,
+        b: `Never use tools related to ${label}`,
+      },
+      {
+        a: `Host a room debate about ${label}`,
+        b: `Judge everyone else's ${label} takes silently`,
+      },
+      {
+        a: `Have your favorite ${label} idea become real`,
+        b: `Have your funniest ${label} idea go viral`,
+      },
+      {
+        a: `Be known for one brilliant ${label} take`,
+        b: `Be forgiven for one terrible ${label} take`,
+      },
+    ]
+      .map((prompt) => ({
+        a: cleanGeneratedText(prompt.a, 90) ?? "",
+        b: cleanGeneratedText(prompt.b, 90) ?? "",
+      }))
+      .filter((prompt) => prompt.a && prompt.b),
+    10,
+  );
+};
 
 const splitCounts = (state: WyrState): [number, number] => {
   let a = 0;
@@ -115,6 +191,8 @@ export const wouldYouRatherModule: GameModule<WyrState> = {
       topic,
       instructions: [
         `Create ${rounds} balanced would-you-rather prompts.`,
+        "Every choice must clearly depend on the topic. Do not return generic superpower, food, travel, or lifestyle choices unless the topic itself asks for them.",
+        "Use concrete topic-specific nouns, people, events, products, places, or scenarios when they fit.",
         "Each prompt needs two distinct choices that are quick to read aloud.",
         "Avoid choices that are offensive, sexual, or personally invasive.",
       ].join(" "),
@@ -147,8 +225,13 @@ export const wouldYouRatherModule: GameModule<WyrState> = {
 
   setup(ctx: GameContext): WyrState {
     const generatedPrompts = generatedPromptsFromContent(ctx.content);
+    const fallbackPrompts = topicFallbackPrompts(gameContentTopic(ctx.config));
     const promptBank = ctx.rng.shuffle(
-      generatedPrompts.length > 0 ? generatedPrompts : PROMPT_BANK,
+      generatedPrompts.length > 0
+        ? generatedPrompts
+        : fallbackPrompts.length > 0
+          ? fallbackPrompts
+          : PROMPT_BANK,
     );
     return {
       phase: "lobby",
