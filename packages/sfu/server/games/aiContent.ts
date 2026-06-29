@@ -23,7 +23,7 @@ type GeneratedContentRequest<T> = {
 
 const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/g;
 const MAX_GENERATED_TEXT_LENGTH = 240;
-const CURRENT_TOPIC_TIMEOUT_MS = 25_000;
+const CURRENT_TOPIC_TIMEOUT_MS = 60_000;
 const CURRENT_TOPIC_PATTERN =
   /\b(latest|recent|current|news|today|this week|this month|this year|breaking|new)\b/i;
 

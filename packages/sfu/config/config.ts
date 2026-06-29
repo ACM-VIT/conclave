@@ -322,7 +322,7 @@ export const config = {
     timeoutMs: toNumber(process.env.SFU_GAME_AI_TIMEOUT_MS, 25000, {
       integer: true,
       min: 500,
-      max: 30000,
+      max: 120000,
     }),
     maxOutputTokens: toNumber(process.env.SFU_GAME_AI_MAX_OUTPUT_TOKENS, 2200, {
       integer: true,

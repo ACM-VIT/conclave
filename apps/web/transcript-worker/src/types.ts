@@ -55,6 +55,7 @@ export type PersistedSnapshot = {
   segments: TranscriptSegment[];
   minutes: TranscriptMinutesSnapshot;
   sequence: number;
+  serviceVersion?: TranscriptServiceVersion;
 };
 
 export type ClientEnvelope =
@@ -88,6 +89,7 @@ export type QaAskEnvelope = Extract<ClientEnvelope, { type: "qa.ask" }>;
 export type OpenAiRealtimeEvent = {
   type?: string;
   item_id?: string;
+  previous_item_id?: string;
   delta?: string;
   transcript?: string;
   error?: {

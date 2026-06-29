@@ -36,6 +36,8 @@ import {
   type TranscriptRateBucketName,
 } from "./rate-limit";
 import { getTranscriptServiceVersion } from "./service-version";
+import { recoverPersistedTranscriptSession } from "./session-recovery";
+import { TranscriptSpeakerAttribution } from "./speaker-attribution";
 import {
   canRefreshTranscriptMinutes,
   canStopTranscriptSession,
@@ -85,7 +87,7 @@ export class TranscriptRoom {
   private readonly loaded: Promise<void>;
   private readonly viewers = new Map<WebSocket, Viewer>();
   private readonly partialSegments = new Map<string, TranscriptSegment>();
-  private pendingSpeakers: TranscriptSpeaker[] = [];
+  private readonly speakerAttribution = new TranscriptSpeakerAttribution();
   private latestSpeaker: TranscriptSpeaker | null = null;
   private hasPendingAudio = false;
   private pendingAudioSamples = 0;
@@ -192,22 +194,14 @@ export class TranscriptRoom {
   private async load(): Promise<void> {
     const snapshot = await this.state.storage.get<PersistedSnapshot>("snapshot");
     if (!snapshot) return;
-    this.session = snapshot.session;
+    this.session = recoverPersistedTranscriptSession(
+      snapshot.session,
+      snapshot.serviceVersion,
+      this.serviceVersion(),
+    );
     this.segments = snapshot.segments ?? [];
     this.minutes = snapshot.minutes ?? createEmptyMinutes(this.session.qaModel);
     this.sequence = snapshot.sequence ?? this.segments.length;
-    if (
-      this.session.status === "live" ||
-      this.session.status === "starting" ||
-      this.session.status === "stopping"
-    ) {
-      this.session = {
-        ...this.session,
-        status: "takeover_needed",
-        updatedAt: Date.now(),
-        error: "Transcript relay recovered without the in-memory OpenAI key.",
-      };
-    }
   }
 
   private ensureSession(roomId: string): TranscriptSessionState {
@@ -344,10 +338,10 @@ export class TranscriptRoom {
       this.markTakeoverNeeded("Transcript controller disconnected.");
       this.broadcast({
         type: "handoff.requested",
-      session: this.session,
-      globalOpenAiKeyAvailable: this.hasGlobalOpenAiKey(),
-      serviceVersion: this.serviceVersion(),
-    });
+        session: this.session,
+        globalOpenAiKeyAvailable: this.hasGlobalOpenAiKey(),
+        serviceVersion: this.serviceVersion(),
+      });
       await this.persist();
     }
     await this.armCleanupAlarm();
@@ -559,7 +553,7 @@ export class TranscriptRoom {
       this.openAiSocket.send(
         JSON.stringify({ type: "input_audio_buffer.commit" }),
       );
-      this.pendingSpeakers.push(speaker);
+      this.speakerAttribution.enqueueCommit(speaker);
       this.hasPendingAudio = false;
       this.pendingAudioSamples = 0;
       return true;
@@ -696,7 +690,7 @@ export class TranscriptRoom {
   private resetOpenAiAudioState(): void {
     const hadPartials = this.partialSegments.size > 0;
     this.partialSegments.clear();
-    this.pendingSpeakers = [];
+    this.speakerAttribution.reset();
     this.latestSpeaker = null;
     this.hasPendingAudio = false;
     this.pendingAudioSamples = 0;
@@ -713,6 +707,13 @@ export class TranscriptRoom {
       await this.handleOpenAiFailure(
         event.error?.message || "Realtime transcription error.",
       );
+      return;
+    }
+    if (event.type === "input_audio_buffer.committed" && event.item_id) {
+      const speaker = this.speakerAttribution.bindCommittedItem(event.item_id);
+      if (speaker) {
+        this.reassignSegmentSpeaker(event.item_id, speaker);
+      }
       return;
     }
     if (
@@ -754,7 +755,8 @@ export class TranscriptRoom {
     const existing = this.partialSegments.get(itemId);
     if (existing) return existing;
     const speaker =
-      this.pendingSpeakers.shift() ??
+      this.speakerAttribution.getItemSpeaker(itemId) ??
+      this.speakerAttribution.peekPendingSpeaker() ??
       this.latestSpeaker ??
       normalizeSpeaker(undefined, {
         userId: this.session?.controller?.userId || "unknown",
@@ -779,6 +781,77 @@ export class TranscriptRoom {
     return segment;
   }
 
+  private reassignSegmentSpeaker(
+    itemId: string,
+    speaker: TranscriptSpeaker,
+  ): void {
+    const partial = this.partialSegments.get(itemId);
+    if (partial && !this.hasSegmentSpeaker(partial, speaker)) {
+      const now = Date.now();
+      const next: TranscriptSegment = {
+        ...partial,
+        speakerUserId: speaker.userId,
+        speakerDisplayName: speaker.displayName,
+        source: speaker.source,
+        updatedAt: now,
+      };
+      this.partialSegments.set(itemId, next);
+      this.broadcast({
+        type: "segment.delta",
+        delta: this.toSegmentDelta(next, "", now),
+      });
+    }
+
+    const finalIndex = this.segments.findIndex(
+      (candidate) => candidate.itemId === itemId,
+    );
+    if (finalIndex < 0) return;
+
+    const finalSegment = this.segments[finalIndex];
+    if (!finalSegment || this.hasSegmentSpeaker(finalSegment, speaker)) return;
+    const nextFinal: TranscriptSegment = {
+      ...finalSegment,
+      speakerUserId: speaker.userId,
+      speakerDisplayName: speaker.displayName,
+      source: speaker.source,
+      updatedAt: Date.now(),
+    };
+    this.segments[finalIndex] = nextFinal;
+    this.broadcast({ type: "segment.final", segment: nextFinal });
+  }
+
+  private hasSegmentSpeaker(
+    segment: TranscriptSegment,
+    speaker: TranscriptSpeaker,
+  ): boolean {
+    return (
+      segment.speakerUserId === speaker.userId &&
+      segment.speakerDisplayName === speaker.displayName &&
+      segment.source === speaker.source
+    );
+  }
+
+  private toSegmentDelta(
+    segment: TranscriptSegment,
+    delta: string,
+    updatedAt: number,
+  ): TranscriptSegmentDelta {
+    return {
+      id: segment.id,
+      itemId: segment.itemId,
+      sequence: segment.sequence,
+      speaker: {
+        userId: segment.speakerUserId,
+        displayName: segment.speakerDisplayName,
+        source: segment.source,
+      },
+      text: segment.text,
+      delta,
+      startMs: segment.startMs,
+      updatedAt,
+    };
+  }
+
   private applyTranscriptDelta(itemId: string, delta: string): void {
     const segment = this.allocateSegment(itemId);
     const now = Date.now();
@@ -788,21 +861,10 @@ export class TranscriptRoom {
       updatedAt: now,
     };
     this.partialSegments.set(itemId, next);
-    const envelope: TranscriptSegmentDelta = {
-      id: next.id,
-      itemId: next.itemId,
-      sequence: next.sequence,
-      speaker: {
-        userId: next.speakerUserId,
-        displayName: next.speakerDisplayName,
-        source: next.source,
-      },
-      text: next.text,
-      delta,
-      startMs: next.startMs,
-      updatedAt: now,
-    };
-    this.broadcast({ type: "segment.delta", delta: envelope });
+    this.broadcast({
+      type: "segment.delta",
+      delta: this.toSegmentDelta(next, delta, now),
+    });
   }
 
   private async applyTranscriptFinal(
@@ -1005,6 +1067,7 @@ export class TranscriptRoom {
       segments: this.segments,
       minutes: this.minutes,
       sequence: this.sequence,
+      serviceVersion: this.serviceVersion(),
     } satisfies PersistedSnapshot);
     await this.armCleanupAlarm();
   }

@@ -169,6 +169,7 @@ export function useMeetingTranscript({
   isMuted,
   localStream,
   participants,
+  activeSpeakerId,
   isViewOnly = false,
   resolveDisplayName,
   getTranscriptToken,
@@ -205,11 +206,22 @@ export function useMeetingTranscript({
   const subscribedRef = useRef(false);
   const connectRef = useRef<(() => Promise<boolean>) | null>(null);
   const serviceVersionRef = useRef<TranscriptServiceVersion | null>(null);
+  const autoTakeoverAttemptRef = useRef<string | null>(null);
 
   const transcriptSources = useMemo<TranscriptRelaySource[]>(() => {
     const sources: TranscriptRelaySource[] = [];
     if (isViewOnly) return sources;
-    if (!isMuted && isLiveAudioStream(localStream)) {
+    const activeRemoteParticipant =
+      activeSpeakerId && activeSpeakerId !== currentUserId
+        ? participants.get(activeSpeakerId)
+        : null;
+    const activeRemoteHasAudio = Boolean(
+      activeRemoteParticipant &&
+        ((!activeRemoteParticipant.isMuted &&
+          isLiveAudioStream(activeRemoteParticipant.audioStream)) ||
+          isLiveAudioStream(activeRemoteParticipant.screenShareAudioStream)),
+    );
+    if (!activeRemoteHasAudio && !isMuted && isLiveAudioStream(localStream)) {
       sources.push({
         id: `local:${localStream!.id}`,
         stream: localStream!,
@@ -246,6 +258,7 @@ export function useMeetingTranscript({
     }
     return sources;
   }, [
+    activeSpeakerId,
     currentDisplayName,
     currentUserId,
     isMuted,
@@ -616,6 +629,38 @@ export function useMeetingTranscript({
       setPermissionError,
     ],
   );
+
+  useEffect(() => {
+    if (
+      isViewOnly ||
+      !hasGlobalOpenAiKey ||
+      session.status !== "takeover_needed" ||
+      session.controller?.userId !== currentUserId ||
+      tokenInfo?.capabilities.takeover === false
+    ) {
+      return;
+    }
+
+    const attemptKey = [
+      session.controller.connectionId,
+      session.updatedAt,
+      serviceVersion?.id ?? "unknown",
+    ].join(":");
+    if (autoTakeoverAttemptRef.current === attemptKey) return;
+    autoTakeoverAttemptRef.current = attemptKey;
+    void takeover({});
+  }, [
+    currentUserId,
+    hasGlobalOpenAiKey,
+    isViewOnly,
+    serviceVersion?.id,
+    session.controller?.connectionId,
+    session.controller?.userId,
+    session.status,
+    session.updatedAt,
+    takeover,
+    tokenInfo?.capabilities.takeover,
+  ]);
 
   const stop = useCallback(() => {
     if (!canStop) {
