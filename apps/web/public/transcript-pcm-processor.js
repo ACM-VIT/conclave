@@ -11,6 +11,7 @@ class TranscriptPcmProcessor extends AudioWorkletProcessor {
     this.port.onmessage = (event) => {
       if (event.data && event.data.type === "flush") {
         this.flush();
+        this.port.postMessage({ type: "flushed" });
       }
     };
   }

@@ -13,7 +13,6 @@ export interface TranscriptRelaySource {
 export interface TranscriptAudioRelayOptions {
   onAudioChunk: (audioBase64: string, speaker: TranscriptSpeaker) => void;
   onCommit: (speaker: TranscriptSpeaker) => void;
-  onClear: (speaker: TranscriptSpeaker) => void;
 }
 
 type ConnectedSource = {
@@ -27,6 +26,7 @@ type ConnectedSource = {
   lastCommitAt: number;
   pendingChunks: Int16Array[];
   pendingSampleCount: number;
+  flushResolvers: Array<() => void>;
 };
 
 const TARGET_SAMPLE_RATE = 24000;
@@ -111,6 +111,14 @@ const isAudioWorkletProcessor = (
   typeof AudioWorkletNode !== "undefined" &&
   processor instanceof AudioWorkletNode;
 
+const isSameRelaySpeaker = (
+  left: TranscriptSpeaker,
+  right: TranscriptSpeaker,
+): boolean =>
+  left.userId === right.userId &&
+  left.displayName === right.displayName &&
+  left.source === right.source;
+
 export class TranscriptAudioRelay {
   private readonly options: TranscriptAudioRelayOptions;
   private context: AudioContext | null = null;
@@ -152,12 +160,7 @@ export class TranscriptAudioRelay {
 
     for (const [id, connected] of this.connectedSources) {
       if (liveIds.has(id)) continue;
-      if (connected.speaker.source === "local") {
-        this.clearQueuedAudio(connected);
-        this.options.onClear(connected.speaker);
-      } else {
-        this.commitIfNeeded(connected);
-      }
+      await this.flushAndCommit(connected);
       this.disconnectSource(connected);
       this.connectedSources.delete(id);
     }
@@ -165,8 +168,11 @@ export class TranscriptAudioRelay {
     for (const source of liveSources) {
       const existing = this.connectedSources.get(source.id);
       if (existing) {
+        if (!isSameRelaySpeaker(existing.speaker, source.speaker)) {
+          await this.flushAndCommit(existing);
+        }
         existing.speaker = source.speaker;
-        existing.speechGateEnabled = source.speaker.source !== "local";
+        existing.speechGateEnabled = true;
         continue;
       }
       const connected = await this.connectSource(source);
@@ -174,14 +180,13 @@ export class TranscriptAudioRelay {
     }
   }
 
-  stop(): void {
+  async stop(): Promise<void> {
     if (this.commitTimer !== null) {
       window.clearInterval(this.commitTimer);
       this.commitTimer = null;
     }
     for (const connected of this.connectedSources.values()) {
-      this.clearQueuedAudio(connected);
-      this.options.onClear(connected.speaker);
+      await this.flushAndCommit(connected);
       this.disconnectSource(connected);
     }
     this.connectedSources.clear();
@@ -207,12 +212,13 @@ export class TranscriptAudioRelay {
       gain,
       processor: await this.createProcessor(),
       speaker: relaySource.speaker,
-      speechGateEnabled: relaySource.speaker.source !== "local",
+      speechGateEnabled: true,
       speechUntil: 0,
       lastChunkAt: 0,
       lastCommitAt: 0,
       pendingChunks: [],
       pendingSampleCount: 0,
+      flushResolvers: [],
     };
 
     this.attachProcessorHandler(connected);
@@ -262,6 +268,10 @@ export class TranscriptAudioRelay {
           buffer?: ArrayBuffer;
           level?: number;
         };
+        if (data.type === "flushed") {
+          this.resolveProcessorFlushes(connected);
+          return;
+        }
         if (data.type !== "pcm" || !data.buffer) return;
         if (!isSpeechFrame(connected, data.level ?? 0)) return;
         this.queueAudioSamples(connected, new Int16Array(data.buffer));
@@ -309,6 +319,35 @@ export class TranscriptAudioRelay {
     this.options.onCommit(connected.speaker);
   }
 
+  private async flushAndCommit(connected: ConnectedSource): Promise<void> {
+    await this.flushProcessor(connected);
+    this.commitIfNeeded(connected);
+  }
+
+  private flushProcessor(connected: ConnectedSource): Promise<void> {
+    if (!isAudioWorkletProcessor(connected.processor)) {
+      return Promise.resolve();
+    }
+    const processor = connected.processor;
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timeout);
+        resolve();
+      };
+      const timeout = window.setTimeout(finish, 80);
+      connected.flushResolvers.push(finish);
+      processor.port.postMessage({ type: "flush" });
+    });
+  }
+
+  private resolveProcessorFlushes(connected: ConnectedSource): void {
+    const resolvers = connected.flushResolvers.splice(0);
+    for (const resolve of resolvers) resolve();
+  }
+
   private queueAudioSamples(
     connected: ConnectedSource,
     samples: Int16Array,
@@ -338,10 +377,4 @@ export class TranscriptAudioRelay {
     );
   }
 
-  private clearQueuedAudio(connected: ConnectedSource): void {
-    connected.pendingChunks = [];
-    connected.pendingSampleCount = 0;
-    connected.lastChunkAt = 0;
-    connected.lastCommitAt = 0;
-  }
 }

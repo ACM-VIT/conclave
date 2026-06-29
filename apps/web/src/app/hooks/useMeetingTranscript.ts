@@ -83,6 +83,7 @@ type ServerEnvelope =
       delta: Parameters<typeof mergeTranscriptDelta>[1];
     }
   | { type: "segment.final"; segment: TranscriptSegment }
+  | { type: "partials.reset" }
   | { type: "minutes.updated"; minutes: TranscriptMinutesSnapshot }
   | {
       type: "qa.delta";
@@ -385,6 +386,9 @@ export function useMeetingTranscript({
           });
           setSegments((prev) => mergeTranscriptFinal(prev, message.segment));
           return;
+        case "partials.reset":
+          setPartials(new Map());
+          return;
         case "minutes.updated":
           setMinutes(message.minutes);
           return;
@@ -505,7 +509,7 @@ export function useMeetingTranscript({
   }, [connect]);
 
   const reconnect = useCallback(async (): Promise<boolean> => {
-    relayRef.current?.stop();
+    const relay = relayRef.current;
     relayRef.current = null;
     const socket = socketRef.current;
     socketRef.current = null;
@@ -513,6 +517,7 @@ export function useMeetingTranscript({
     setViewerConnectionId(null);
     setIsStreamingAudio(false);
     setAvailableServiceVersion(null);
+    if (relay) await relay.stop();
     try {
       socket?.close();
     } catch {}
@@ -683,10 +688,21 @@ export function useMeetingTranscript({
   useEffect(() => {
     if (!isJoined) {
       subscribedRef.current = false;
-      relayRef.current?.stop();
+      const relay = relayRef.current;
       relayRef.current = null;
-      socketRef.current?.close();
+      const socket = socketRef.current;
       socketRef.current = null;
+      if (relay) {
+        void relay.stop().finally(() => {
+          try {
+            socket?.close();
+          } catch {}
+        });
+      } else {
+        try {
+          socket?.close();
+        } catch {}
+      }
       setConnectionStatus("idle");
       setSession(buildIdleSession(roomId));
       setSegments([]);
@@ -708,8 +724,21 @@ export function useMeetingTranscript({
 
   useEffect(() => {
     return () => {
-      relayRef.current?.stop();
-      socketRef.current?.close();
+      const relay = relayRef.current;
+      const socket = socketRef.current;
+      relayRef.current = null;
+      socketRef.current = null;
+      if (relay) {
+        void relay.stop().finally(() => {
+          try {
+            socket?.close();
+          } catch {}
+        });
+      } else {
+        try {
+          socket?.close();
+        } catch {}
+      }
     };
   }, []);
 
@@ -721,7 +750,7 @@ export function useMeetingTranscript({
       session.controller.connectionId === viewerConnectionId &&
       hasUsableOpenSocket(socketRef.current);
     if (!shouldStream) {
-      relayRef.current?.stop();
+      void relayRef.current?.stop();
       relayRef.current = null;
       setIsStreamingAudio(false);
       return;
@@ -734,9 +763,6 @@ export function useMeetingTranscript({
         },
         onCommit: (speaker) => {
           send({ type: "audio.commit", speaker });
-        },
-        onClear: (speaker) => {
-          send({ type: "audio.clear", speaker });
         },
       });
     }

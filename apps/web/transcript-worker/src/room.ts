@@ -571,6 +571,13 @@ export class TranscriptRoom {
 
   private clearAudio(viewer: Viewer): void {
     if (!this.isController(viewer) || !this.openAiSocket) return;
+    if (this.hasPendingAudio && this.latestSpeaker) {
+      this.commitOpenAiBuffer(
+        this.latestSpeaker,
+        "Transcript audio commit failed.",
+      );
+      return;
+    }
     try {
       this.openAiSocket.send(
         JSON.stringify({ type: "input_audio_buffer.clear" }),
@@ -579,8 +586,6 @@ export class TranscriptRoom {
       void this.handleOpenAiFailure("Transcript audio clear failed.");
       return;
     }
-    this.pendingSpeakers = [];
-    this.latestSpeaker = null;
     this.hasPendingAudio = false;
     this.pendingAudioSamples = 0;
   }
@@ -689,11 +694,15 @@ export class TranscriptRoom {
   }
 
   private resetOpenAiAudioState(): void {
+    const hadPartials = this.partialSegments.size > 0;
     this.partialSegments.clear();
     this.pendingSpeakers = [];
     this.latestSpeaker = null;
     this.hasPendingAudio = false;
     this.pendingAudioSamples = 0;
+    if (hadPartials) {
+      this.broadcast({ type: "partials.reset" });
+    }
   }
 
   private async handleOpenAiEvent(raw: string): Promise<void> {
