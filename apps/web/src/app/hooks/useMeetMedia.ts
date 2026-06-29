@@ -3067,7 +3067,10 @@ export function useMeetMedia({
       const producer = await transport.produce({
         track,
         encodings: [
-          buildScreenShareEncodingForNetworkProfile(screenNetworkProfile),
+          buildScreenShareEncodingForNetworkProfile(
+            screenNetworkProfile,
+            track,
+          ),
         ],
         stopTracks: false,
         ...(preferredScreenShareCodec ? { codec: preferredScreenShareCodec } : {}),

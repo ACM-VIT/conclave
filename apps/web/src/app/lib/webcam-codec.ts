@@ -616,26 +616,81 @@ const applyWebcamEncodingCaps = async (
   } as RTCRtpEncodingParameters);
 };
 
-const SCREEN_SHARE_CAPS: Record<
-  WebcamProducerNetworkProfile,
-  WebcamEncodingCap
-> = {
+type ScreenShareEncoding = ReturnType<typeof buildScreenShareEncoding> & {
+  scaleResolutionDownBy?: number;
+};
+
+type ScreenShareCap = WebcamEncodingCap & {
+  idealWidth: number;
+  idealHeight: number;
+  maxWidth: number;
+  maxHeight: number;
+};
+
+const SCREEN_SHARE_CAPS: Record<WebcamProducerNetworkProfile, ScreenShareCap> = {
   good: {
     maxBitrate: SCREEN_SHARE_MAX_BITRATE,
     maxFramerate: SCREEN_SHARE_MAX_FRAMERATE,
+    idealWidth: 1920,
+    idealHeight: 1080,
+    maxWidth: 3840,
+    maxHeight: 2160,
   },
   fair: {
     maxBitrate: 1200000,
     maxFramerate: 12,
+    idealWidth: 1920,
+    idealHeight: 1080,
+    maxWidth: 2560,
+    maxHeight: 1440,
   },
   poor: {
     maxBitrate: 450000,
     maxFramerate: 5,
+    idealWidth: 1600,
+    idealHeight: 900,
+    maxWidth: 1920,
+    maxHeight: 1080,
   },
   emergency: {
     maxBitrate: 220000,
     maxFramerate: 3,
+    idealWidth: 1280,
+    idealHeight: 720,
+    maxWidth: 1280,
+    maxHeight: 720,
   },
+};
+
+const getCaptureScaleToFit = (
+  captureSize: CaptureSize,
+  target: { width: number; height: number },
+): number | null => {
+  const widthScale =
+    captureSize.width !== null && captureSize.width > target.width
+      ? captureSize.width / target.width
+      : 1;
+  const heightScale =
+    captureSize.height !== null && captureSize.height > target.height
+      ? captureSize.height / target.height
+      : 1;
+  const targetScale = Math.max(widthScale, heightScale);
+  if (!Number.isFinite(targetScale) || targetScale <= 1) return null;
+  return Number(targetScale.toFixed(1));
+};
+
+const getScreenShareScaleResolutionDownBy = (
+  profile: WebcamProducerNetworkProfile,
+  captureSize: CaptureSize,
+): number => {
+  if (profile === "good") return 1;
+  const cap = SCREEN_SHARE_CAPS[profile];
+  return (
+    getCaptureScaleToFit(captureSize, {
+      width: cap.maxWidth,
+      height: cap.maxHeight,
+    }) ?? 1
+  );
 };
 
 export function buildScreenShareVideoConstraintsForNetworkProfile(
@@ -644,8 +699,8 @@ export function buildScreenShareVideoConstraintsForNetworkProfile(
   const cap = SCREEN_SHARE_CAPS[profile];
   return {
     frameRate: { ideal: cap.maxFramerate, max: cap.maxFramerate },
-    width: { ideal: 1920, max: 3840 },
-    height: { ideal: 1080, max: 2160 },
+    width: { ideal: cap.idealWidth, max: cap.maxWidth },
+    height: { ideal: cap.idealHeight, max: cap.maxHeight },
     cursor: "always",
   };
 }
@@ -699,6 +754,10 @@ export async function applyScreenShareProducerNetworkProfile(
 
   const cap = SCREEN_SHARE_CAPS[profile];
   await applyScreenShareTrackNetworkProfile(producer.track, profile);
+  const scaleResolutionDownBy = getScreenShareScaleResolutionDownBy(
+    profile,
+    getTrackCaptureSize(producer.track),
+  );
   const sender = producer.rtpSender;
   if (sender) {
     const parameters = sender.getParameters();
@@ -712,6 +771,7 @@ export async function applyScreenShareProducerNetworkProfile(
             ...encoding,
             maxBitrate: cap.maxBitrate,
             maxFramerate: cap.maxFramerate,
+            scaleResolutionDownBy,
           })),
         },
         {
@@ -726,6 +786,7 @@ export async function applyScreenShareProducerNetworkProfile(
   await producer.setRtpEncodingParameters({
     maxBitrate: cap.maxBitrate,
     maxFramerate: cap.maxFramerate,
+    scaleResolutionDownBy,
   } as RTCRtpEncodingParameters);
 }
 
@@ -736,14 +797,22 @@ export async function applyScreenShareTrackNetworkProfile(
   if (!track || track.readyState !== "live") return;
 
   try {
+    const constraints = buildScreenShareVideoConstraintsForNetworkProfile(
+      profile,
+    );
     await track.applyConstraints({
-      frameRate: buildScreenShareVideoConstraintsForNetworkProfile(profile)
-        .frameRate,
+      frameRate: constraints.frameRate,
+      ...(profile === "good"
+        ? {}
+        : {
+            width: constraints.width,
+            height: constraints.height,
+          }),
     });
   } catch (error) {
     if (profile !== "good") {
       console.debug(
-        "[Meets] Screen-share capture frame-rate cap was not applied:",
+        "[Meets] Screen-share capture network constraints were not applied:",
         error,
       );
     }
@@ -752,13 +821,19 @@ export async function applyScreenShareTrackNetworkProfile(
 
 export function buildScreenShareEncodingForNetworkProfile(
   profile: WebcamProducerNetworkProfile,
-): ReturnType<typeof buildScreenShareEncoding> {
+  track?: MediaStreamTrack | null,
+): ScreenShareEncoding {
   const base = buildScreenShareEncoding();
   const cap = SCREEN_SHARE_CAPS[profile];
+  const scaleResolutionDownBy = getScreenShareScaleResolutionDownBy(
+    profile,
+    getTrackCaptureSize(track),
+  );
   return {
     ...base,
     maxBitrate: Math.min(base.maxBitrate, cap.maxBitrate),
     maxFramerate: Math.min(base.maxFramerate, cap.maxFramerate),
+    scaleResolutionDownBy,
   };
 }
 

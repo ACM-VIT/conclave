@@ -289,8 +289,8 @@ assertIncludes(
   "Android constrained active webcam layer avoids 160x90",
 );
 
-// Screen share must preserve text/detail by maintaining resolution and cutting
-// frame rate first.
+// Screen share must preserve text/detail by bounding excessive source
+// resolution and cutting frame rate before dropping readable content.
 for (const [key, label] of [
   ["webCodec", "web"],
   ["iosWebrtc", "iOS"],
@@ -321,6 +321,26 @@ assertIncludes(
   "webCodec",
   'const SCREEN_SHARE_RTP_PRIORITY: RTCPriorityType = "high";',
   "web screen share sender priority beats webcam under congestion",
+);
+assertRegex(
+  "webCodec",
+  /emergency: \{[\s\S]*maxBitrate: 220000,[\s\S]*maxFramerate: 3,[\s\S]*idealWidth: 1280,[\s\S]*idealHeight: 720,[\s\S]*maxWidth: 1280,[\s\S]*maxHeight: 720,/,
+  "web emergency screen share bounds excessive capture resolution",
+);
+assertRegex(
+  "webCodec",
+  /getScreenShareScaleResolutionDownBy[\s\S]*profile === "good"\) return 1[\s\S]*getCaptureScaleToFit[\s\S]*\?\? 1[\s\S]*scaleResolutionDownBy,/,
+  "web screen share RTP encoding scales oversized captures and explicitly restores full resolution",
+);
+assertRegex(
+  "webMeetMedia",
+  /buildScreenShareEncodingForNetworkProfile\([\s\S]*screenNetworkProfile,[\s\S]*track,[\s\S]*\)/,
+  "web screen-share initial publish passes capture size into encoding caps",
+);
+assertRegex(
+  "webMeetSocket",
+  /buildScreenShareEncodingForNetworkProfile\([\s\S]*screenNetworkProfile,[\s\S]*videoTrack,[\s\S]*\)/,
+  "web screen-share reconnect publish passes capture size into encoding caps",
 );
 assertIncludes(
   "iosWebrtc",

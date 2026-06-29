@@ -1000,7 +1000,10 @@ export function useMeetSocket({
       const producer = await transport.produce({
         track: videoTrack,
         encodings: [
-          buildScreenShareEncodingForNetworkProfile(screenNetworkProfile),
+          buildScreenShareEncodingForNetworkProfile(
+            screenNetworkProfile,
+            videoTrack,
+          ),
         ],
         stopTracks: false,
         ...(preferredScreenShareCodec ? { codec: preferredScreenShareCodec } : {}),
