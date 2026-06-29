@@ -39,6 +39,7 @@ import { useMeetRooms } from "./hooks/useMeetRooms";
 import { useMeetSocket } from "./hooks/useMeetSocket";
 import { useMeetState } from "./hooks/useMeetState";
 import { useMeetTts } from "./hooks/useMeetTts";
+import { useMeetingTranscript } from "./hooks/useMeetingTranscript";
 import { MeetVolumeProvider } from "./hooks/useMeetVolume";
 import {
   useBandwidthHeavyPreloadDeferred,
@@ -362,6 +363,7 @@ export type MeetsClientProps = {
   autoJoinOnMount?: boolean;
   hideJoinUI?: boolean;
   getRooms?: () => Promise<RoomInfo[]>;
+  getRoom?: (roomId: string) => Promise<RoomInfo | null>;
   reactionAssets?: string[];
 };
 
@@ -379,6 +381,7 @@ export default function MeetsClient({
   autoJoinOnMount = false,
   hideJoinUI = false,
   getRooms,
+  getRoom,
   reactionAssets,
 }: MeetsClientProps) {
   const { data: authSession, isPending: isAuthSessionPending } = useSession();
@@ -997,6 +1000,7 @@ export default function MeetsClient({
   const { availableRooms, roomsStatus, refreshRooms } = useMeetRooms({
     isAdmin: isAdminFlag,
     getRooms,
+    getRoom,
   });
 
   const {
@@ -2147,6 +2151,24 @@ export default function MeetsClient({
     lastActiveSpeakerRef: refs.lastActiveSpeakerRef,
   });
 
+  const transcript = useMeetingTranscript({
+    roomId,
+    isJoined: connectionState === "joined" && !isWebinarAttendee,
+    currentUserId: userId,
+    currentDisplayName:
+      displayNameInput ||
+      normalizedCurrentUserName ||
+      currentUser?.email ||
+      currentUser?.id ||
+      "You",
+    isMuted,
+    localStream,
+    participants,
+    activeSpeakerId: effectiveActiveSpeakerId,
+    resolveDisplayName,
+    getTranscriptToken: socket.getTranscriptToken,
+  });
+
   useMeetGhostMode({
     canGhostJoin: canGhostJoinFlag,
     isGhostMode,
@@ -2282,12 +2304,18 @@ export default function MeetsClient({
   // see who's already there before joining); admins also get a one-shot refresh.
   useEffect(() => {
     if (connectionState === "joined") return;
-    const hasRoom = roomId.trim().length > 0;
+    const normalizedRoomId = roomId.trim();
+    const hasRoom = normalizedRoomId.length > 0;
     if (!hasRoom && !isAdminFlag) return;
-    refreshRooms();
+
+    const refresh = () => {
+      refreshRooms(isAdminFlag ? undefined : normalizedRoomId);
+    };
+
+    refresh();
     if (!hasRoom) return;
     const interval = setInterval(() => {
-      refreshRooms();
+      refresh();
     }, 10000);
     return () => clearInterval(interval);
   }, [roomId, isAdminFlag, connectionState, refreshRooms]);
@@ -2912,6 +2940,7 @@ export default function MeetsClient({
         onUpdateWebinarConfig={socket.updateWebinarConfig}
         onGenerateWebinarLink={socket.generateWebinarLink}
         onRotateWebinarLink={socket.rotateWebinarLink}
+        transcript={transcript}
         isVoiceAgentRunning={voiceAgent.isRunning}
         isVoiceAgentStarting={voiceAgent.isStarting}
         voiceAgentError={voiceAgent.error}

@@ -13,6 +13,8 @@
     "./scheduling": "./src/scheduling.ts",
     "./sfu-events": "./src/sfu-events.ts",
     "./sfu-types": "./src/sfu-types.ts",
+    "./transcript-models": "./src/transcript-models.ts",
+    "./transcript-types": "./src/transcript-types.ts",
     "./types": "./src/types.ts",
     "./video-encodings": "./src/video-encodings.ts"
   },

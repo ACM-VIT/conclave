@@ -8,6 +8,7 @@ services:
       SFU_PORT: "3031"
       SFU_INSTANCE_ID: "sfu-a"
       SFU_SECRET: ${SFU_SECRET}
+      TRANSCRIPT_WORKER_URL: ${TRANSCRIPT_WORKER_URL:-http://localhost:8788}
       SFU_DRAINING: "false"
       RTC_MIN_PORT: "40000"
       RTC_MAX_PORT: "41000"
@@ -51,6 +52,7 @@ services:
       SFU_PORT: "3032"
       SFU_INSTANCE_ID: "sfu-b"
       SFU_SECRET: ${SFU_SECRET}
+      TRANSCRIPT_WORKER_URL: ${TRANSCRIPT_WORKER_URL:-http://localhost:8788}
       SFU_DRAINING: "false"
       RTC_MIN_PORT: "41001"
       RTC_MAX_PORT: "42000"

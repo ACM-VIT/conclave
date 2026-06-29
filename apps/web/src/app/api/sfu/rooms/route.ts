@@ -1,29 +1,42 @@
 import { NextResponse } from "next/server";
-import { resolveSfuUrl } from "@/lib/sfu-url";
+import {
+  requireSfuAdminUser,
+  resolveSfuClientId,
+  resolveSfuSecret,
+  resolveSfuUrl,
+} from "@/lib/sfu-admin-auth";
 
 export const runtime = "nodejs";
 
 type RoomsResponse = {
-  rooms?: Array<{ id: string; clients?: number; userCount?: number }>;
-};
-
-const resolveClientId = (request: Request) => {
-  const envClientId =
-    process.env.SFU_CLIENT_ID || process.env.NEXT_PUBLIC_SFU_CLIENT_ID;
-  if (envClientId?.trim()) {
-    return envClientId.trim();
-  }
-
-  return request.headers.get("x-sfu-client")?.trim() || "public";
+  rooms?: Array<{
+    id: string;
+    clients?: number;
+    userCount?: number;
+    counts?: { participants?: number };
+  }>;
 };
 
 export async function GET(request: Request) {
+  const authResult = await requireSfuAdminUser(request);
+  if (!authResult.ok) {
+    return NextResponse.json(
+      { error: authResult.error },
+      { status: authResult.status },
+    );
+  }
+
   const sfuUrl = resolveSfuUrl();
-  const secret = process.env.SFU_SECRET || "development-secret";
-  const clientId = resolveClientId(request);
+  const secret = resolveSfuSecret();
+  const clientId = resolveSfuClientId(request, { fallback: "public" });
 
   try {
-    const response = await fetch(`${sfuUrl}/rooms`, {
+    const targetUrl = new URL("/admin/rooms", sfuUrl);
+    if (clientId) {
+      targetUrl.searchParams.set("clientId", clientId);
+    }
+
+    const response = await fetch(targetUrl.toString(), {
       headers: {
         "x-sfu-secret": secret,
         ...(clientId ? { "x-sfu-client": clientId } : {}),
@@ -34,7 +47,7 @@ export async function GET(request: Request) {
     if (!response.ok) {
       return NextResponse.json(
         { error: "Failed to load rooms" },
-        { status: response.status }
+        { status: response.status },
       );
     }
 
@@ -42,11 +55,19 @@ export async function GET(request: Request) {
     const rooms = Array.isArray(data?.rooms)
       ? data.rooms.map((room) => ({
           id: room.id,
-          userCount: room.userCount ?? room.clients ?? 0,
+          userCount:
+            room.userCount ?? room.clients ?? room.counts?.participants ?? 0,
         }))
       : [];
 
-    return NextResponse.json({ rooms });
+    return NextResponse.json(
+      { rooms },
+      {
+        headers: {
+          "Cache-Control": "no-store",
+        },
+      },
+    );
   } catch (_error) {
     return NextResponse.json({ error: "Failed to load rooms" }, { status: 500 });
   }

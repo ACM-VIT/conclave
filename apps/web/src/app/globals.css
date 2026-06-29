@@ -1,6 +1,10 @@
 @import "tailwindcss";
 @import "@conclave/ui-tokens/tokens.css";
 
+/* Streamdown ships its own utility classes (used by the AI Elements Response
+   component); let Tailwind scan them so markdown rendering is styled. */
+@source "../../../../node_modules/streamdown/dist/**/*.js";
+
 @font-face {
   font-family: "Virgil";
   src: url("/assets/fonts/Virgil-Regular.woff2") format("woff2");

@@ -121,6 +121,31 @@ export default function MeetsClientPage({
     return Array.isArray(data?.rooms) ? data.rooms : [];
   }, [resolvedClientId]);
 
+  const getRoom = useCallback(async (roomId: string) => {
+    const normalizedRoomId = roomId.trim();
+    if (!normalizedRoomId) return null;
+
+    const response = await fetch(
+      `/api/sfu/rooms/${encodeURIComponent(normalizedRoomId)}`,
+      {
+        cache: "no-store",
+        headers: { "x-sfu-client": resolvedClientId },
+      },
+    );
+    if (!response.ok) {
+      throw new Error(await readError(response));
+    }
+
+    const data = (await response.json()) as { room?: unknown };
+    const room = data.room;
+    if (!room || typeof room !== "object") return null;
+    const id = (room as { id?: unknown }).id;
+    const userCount = (room as { userCount?: unknown }).userCount;
+    if (typeof id !== "string" || typeof userCount !== "number") {
+      return null;
+    }
+    return { id, userCount };
+  }, [resolvedClientId]);
 
   const resolvedInitialRoomId =
     initialRoomId ?? (isPublicClient ? "" : "default-room");
@@ -138,6 +163,7 @@ export default function MeetsClientPage({
         hideJoinUI={hideJoinUI}
         getJoinInfo={getJoinInfo}
         getRooms={getRooms}
+        getRoom={getRoom}
         reactionAssets={reactionAssets}
         user={defaultUser}
         isAdmin={resolvedIsAdmin}

@@ -4,8 +4,16 @@ import { fileURLToPath } from "url";
 
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
 const workspaceRoot = path.resolve(currentDir, "../..");
-const yjsAlias = "./node_modules/yjs/dist/yjs.mjs";
-const yProtocolsAlias = "./node_modules/y-protocols";
+const yjsTurbopackAlias = "./node_modules/yjs/dist/yjs.mjs";
+const yProtocolsTurbopackAlias = "./node_modules/y-protocols";
+const yjsWebpackAlias = path.resolve(
+  workspaceRoot,
+  "node_modules/yjs/dist/yjs.mjs",
+);
+const yProtocolsWebpackAlias = path.resolve(
+  workspaceRoot,
+  "node_modules/y-protocols",
+);
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
@@ -13,18 +21,39 @@ const nextConfig: NextConfig = {
   images: {
     unoptimized: true,
   },
-  transpilePackages: ["@conclave/apps-sdk", "@conclave/meeting-core", "@conclave/ui-tokens"],
+  transpilePackages: [
+    "@conclave/apps-sdk",
+    "@conclave/meeting-core",
+    "@conclave/ui-tokens",
+  ],
   turbopack: {
     root: workspaceRoot,
     resolveAlias: {
-      yjs: yjsAlias,
-      "yjs/dist/yjs.mjs": yjsAlias,
-      "yjs/dist/yjs.cjs": yjsAlias,
-      "y-protocols": yProtocolsAlias,
+      yjs: yjsTurbopackAlias,
+      "yjs/dist/yjs.mjs": yjsTurbopackAlias,
+      "yjs/dist/yjs.cjs": yjsTurbopackAlias,
+      "y-protocols": yProtocolsTurbopackAlias,
     },
   },
   async headers() {
     return [
+      {
+        source: "/transcript-pcm-processor.js",
+        headers: [
+          {
+            key: "Cache-Control",
+            value: "public, max-age=31536000, immutable",
+          },
+          {
+            key: "Content-Type",
+            value: "application/javascript; charset=utf-8",
+          },
+          {
+            key: "Cross-Origin-Resource-Policy",
+            value: "same-origin",
+          },
+        ],
+      },
       {
         source: "/mediapipe/:path*",
         headers: [
@@ -97,10 +126,10 @@ const nextConfig: NextConfig = {
     config.resolve = config.resolve ?? {};
     config.resolve.alias = {
       ...(config.resolve.alias ?? {}),
-      yjs: path.resolve(workspaceRoot, yjsAlias),
-      "yjs/dist/yjs.mjs": path.resolve(workspaceRoot, yjsAlias),
-      "yjs/dist/yjs.cjs": path.resolve(workspaceRoot, yjsAlias),
-      "y-protocols": path.resolve(workspaceRoot, yProtocolsAlias),
+      yjs: yjsWebpackAlias,
+      "yjs/dist/yjs.mjs": yjsWebpackAlias,
+      "yjs/dist/yjs.cjs": yjsWebpackAlias,
+      "y-protocols": yProtocolsWebpackAlias,
     };
     return config;
   },

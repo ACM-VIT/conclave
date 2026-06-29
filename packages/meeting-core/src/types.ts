@@ -115,6 +115,37 @@ export interface ChatHistorySnapshot {
   roomId?: string;
 }
 
+export type {
+  TranscriptAudioSource,
+  TranscriptController,
+  TranscriptMinutesEntry,
+  TranscriptMinutesSnapshot,
+  TranscriptQuestionRequest,
+  TranscriptQuestionResponse,
+  TranscriptSegment,
+  TranscriptSegmentDelta,
+  TranscriptSessionState,
+  TranscriptSessionStatus,
+  TranscriptSpeaker,
+  TranscriptTokenCapabilities,
+  TranscriptTokenResponse,
+} from "./transcript-types";
+
+export {
+  DEFAULT_TRANSCRIPT_QA_MODEL,
+  DEFAULT_TRANSCRIPT_TRANSCRIPTION_MODEL,
+  LIVE_TRANSCRIPT_TRANSCRIPTION_MODELS,
+  normalizeRealtimeTranscriptModel,
+  TRANSCRIPT_QA_MODELS,
+  TRANSCRIPT_TRANSCRIPTION_MODELS,
+} from "./transcript-models";
+export type {
+  TranscriptReasoningEffort,
+  TranscriptResponseModelConfig,
+  TranscriptTextVerbosity,
+  TranscriptTranscriptionModelConfig,
+} from "./transcript-models";
+
 export interface ReactionPayload {
   userId: string;
   kind: ReactionKind;

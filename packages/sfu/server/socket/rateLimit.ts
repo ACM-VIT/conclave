@@ -103,6 +103,8 @@ export const RATE_LIMITS = {
   appsYjsUpdate: { capacity: 60, refillPerSec: 30 },
   // Chat messages: ~5/s sustained, small burst.
   chat: { capacity: 10, refillPerSec: 5 },
+  // Transcript token minting is user-triggered but should tolerate reconnects.
+  transcriptToken: { capacity: 8, refillPerSec: 1 },
   // Reactions: ~5/s sustained, small burst.
   reaction: { capacity: 10, refillPerSec: 5 },
   // Hand raise toggles: low frequency.

@@ -23,12 +23,14 @@ import SystemAudioPlayers from "./SystemAudioPlayers";
 import WhiteboardLayout from "./WhiteboardLayout";
 import ParticipantVideo from "./ParticipantVideo";
 import ToastQueue from "./ToastQueue";
+import TranscriptPanel from "./TranscriptPanel";
 import AndroidUpsellSheet from "./AndroidUpsellSheet";
 import type { BrowserState } from "../hooks/useSharedBrowser";
 import type {
   VideoEffectsDebugStats,
   VideoEffectsRuntimeStatus,
 } from "../hooks/useVideoEffects";
+import type { MeetingTranscriptController } from "../hooks/useMeetingTranscript";
 import type {
   CapturedSurfaceControlState,
   CaptureControllerLike,
@@ -241,6 +243,7 @@ interface MeetsMainContentProps {
   ) => Promise<WebinarConfigSnapshot | null>;
   onGenerateWebinarLink?: () => Promise<WebinarLinkResponse | null>;
   onRotateWebinarLink?: () => Promise<WebinarLinkResponse | null>;
+  transcript: MeetingTranscriptController;
 }
 
 const MEET_VIEW_STORAGE_KEY = "conclave:meet-view";
@@ -476,6 +479,7 @@ export default function MeetsMainContent({
   onUpdateWebinarConfig,
   onGenerateWebinarLink,
   onRotateWebinarLink,
+  transcript,
 }: MeetsMainContentProps) {
   const {
     state: appsState,
@@ -552,6 +556,7 @@ export default function MeetsMainContent({
   const [isHostControlsOpen, setIsHostControlsOpen] = useState(false);
   const [isVideoEffectsOpen, setIsVideoEffectsOpen] = useState(false);
   const [isViewPanelOpen, setIsViewPanelOpen] = useState(false);
+  const [isTranscriptOpen, setIsTranscriptOpen] = useState(false);
   const [canReserveDockedPanel, setCanReserveDockedPanel] = useState(false);
   const [viewportWidth, setViewportWidth] = useState(1280);
   const [gameDockWidth, setGameDockWidth] = useState(
@@ -909,6 +914,7 @@ export default function MeetsMainContent({
       setIsHostControlsOpen(false);
       setIsVideoEffectsOpen(false);
       setIsViewPanelOpen(false);
+      setIsTranscriptOpen(false);
     }
     setIsParticipantsOpen(opening);
   }, [isParticipantsOpen, isChatOpen, setIsParticipantsOpen, toggleChat]);
@@ -925,6 +931,7 @@ export default function MeetsMainContent({
     setIsHostControlsOpen(false);
     setIsVideoEffectsOpen(false);
     setIsViewPanelOpen(false);
+    setIsTranscriptOpen(false);
     setIsParticipantsOpen(true);
   }, [toggleChat, setIsParticipantsOpen]);
 
@@ -953,7 +960,8 @@ export default function MeetsMainContent({
     isParticipantsOpen ||
     isHostControlsOpen ||
     isVideoEffectsOpen ||
-    isViewPanelOpen;
+    isViewPanelOpen ||
+    isTranscriptOpen;
   const isGameDockPresent = isGameActive || isGamesOpen;
   const gameDockOffset =
     canReserveDockedPanel && isSecondaryPanelOpen ? DOCKED_PANEL_WIDTH : 0;
@@ -990,6 +998,7 @@ export default function MeetsMainContent({
       setIsParticipantsOpen(false);
       setIsVideoEffectsOpen(false);
       setIsViewPanelOpen(false);
+      setIsTranscriptOpen(false);
     }
     setIsHostControlsOpen(opening);
   }, [isHostControlsOpen, toggleChat, setIsParticipantsOpen]);
@@ -1023,6 +1032,7 @@ export default function MeetsMainContent({
       setIsParticipantsOpen(false);
       setIsHostControlsOpen(false);
       setIsViewPanelOpen(false);
+      setIsTranscriptOpen(false);
     }
     setIsVideoEffectsOpen(opening);
   }, [
@@ -1046,6 +1056,7 @@ export default function MeetsMainContent({
     setIsParticipantsOpen(false);
     setIsHostControlsOpen(false);
     setIsViewPanelOpen(false);
+    setIsTranscriptOpen(false);
     setIsVideoEffectsOpen(true);
   }, [
     isCameraPermissionBlocked,
@@ -1063,12 +1074,31 @@ export default function MeetsMainContent({
       setIsParticipantsOpen(false);
       setIsHostControlsOpen(false);
       setIsVideoEffectsOpen(false);
+      setIsTranscriptOpen(false);
     }
     setIsViewPanelOpen(opening);
   }, [isViewPanelOpen, setIsParticipantsOpen, toggleChat]);
 
   const handleCloseViewPanel = useCallback(() => {
     setIsViewPanelOpen(false);
+  }, []);
+
+  const handleToggleTranscript = useCallback(() => {
+    const opening = !isTranscriptOpen;
+    if (opening && isChatOpenRef.current) {
+      toggleChat();
+    }
+    if (opening) {
+      setIsParticipantsOpen(false);
+      setIsHostControlsOpen(false);
+      setIsVideoEffectsOpen(false);
+      setIsViewPanelOpen(false);
+    }
+    setIsTranscriptOpen(opening);
+  }, [isTranscriptOpen, setIsParticipantsOpen, toggleChat]);
+
+  const handleCloseTranscript = useCallback(() => {
+    setIsTranscriptOpen(false);
   }, []);
 
   const handleToggleVideoFraming = useCallback(() => {
@@ -1150,6 +1180,7 @@ export default function MeetsMainContent({
       setIsHostControlsOpen(false);
       setIsVideoEffectsOpen(false);
       setIsViewPanelOpen(false);
+      setIsTranscriptOpen(false);
     }
     toggleChat();
   }, [isChatOpen, isParticipantsOpen, setIsParticipantsOpen, toggleChat]);
@@ -1258,7 +1289,6 @@ export default function MeetsMainContent({
       : canRetryRecovery
         ? (meetError?.message ?? "We could not restore the connection yet.")
         : "Keeping your meeting open while the connection is restored.";
-
   return (
     <div
       className={`flex-1 flex flex-col relative ${
@@ -1690,6 +1720,9 @@ export default function MeetsMainContent({
                 isScreenSharing={isScreenSharing}
                 activeScreenShareId={activeScreenShareId}
                 isChatOpen={isChatOpen}
+                isTranscriptOpen={isTranscriptOpen}
+                isTranscriptLive={transcript.isLive}
+                transcriptStatus={transcript.session.status}
                 unreadCount={unreadCount}
                 isHandRaised={isHandRaised}
                 reactionOptions={reactionOptions}
@@ -1697,6 +1730,7 @@ export default function MeetsMainContent({
                 onToggleCamera={toggleCamera}
                 onToggleScreenShare={toggleScreenShare}
                 onToggleChat={handleToggleChat}
+                onToggleTranscript={handleToggleTranscript}
                 onToggleHandRaised={toggleHandRaised}
                 onSendReaction={sendReaction}
                 onLeave={leaveRoom}
@@ -1823,6 +1857,13 @@ export default function MeetsMainContent({
           replyTarget={replyTarget}
           onReply={onReplyToMessage}
           onCancelReply={onCancelReply}
+        />
+      )}
+
+      {isJoined && !isWebinarAttendee && isTranscriptOpen && (
+        <TranscriptPanel
+          transcript={transcript}
+          onClose={handleCloseTranscript}
         />
       )}
 

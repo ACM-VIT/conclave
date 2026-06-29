@@ -1,0 +1,32 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "conclave-transcript",
+  "main": "transcript-worker/src/index.ts",
+  "account_id": "4ee36e42cabfd44e8ce61b2a6bd637c5",
+  "compatibility_date": "2026-06-17",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "vars": {
+    "TRANSCRIPT_IDLE_TTL_MS": "1200000",
+    "TRANSCRIPT_MAX_SEGMENTS": "500",
+    "TRANSCRIPT_TRANSCRIPTION_LANGUAGE": "en",
+    "TRANSCRIPT_TRANSCRIPTION_LOCALE": "en-IN",
+    "TRANSCRIPT_TRANSCRIPTION_PROMPT": "Locale: Indian English. Expect Indian accents, Hinglish code-switching, Hindi proper nouns, Indian names, college or team names, acronyms, and technical terms. Preserve spoken wording without expanding or correcting domain terms unless the audio makes it clear."
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "TRANSCRIPT_ROOM",
+        "class_name": "TranscriptRoom"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["TranscriptRoom"]
+    }
+  ],
+  "observability": {
+    "enabled": true
+  }
+}

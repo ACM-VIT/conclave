@@ -42,6 +42,7 @@ import type {
   DtlsParameters,
   RtpParameters,
   TransportResponse,
+  TranscriptTokenResponse,
   RestartIceResponse,
   Transport,
   VideoQuality,
@@ -6164,6 +6165,29 @@ export function useMeetSocket({
     [socketRef]
   );
 
+  const getTranscriptToken =
+    useCallback((): Promise<TranscriptTokenResponse | null> => {
+      const socket = socketRef.current;
+      if (!socket) return Promise.resolve(null);
+
+      return new Promise((resolve) => {
+        socket.emit(
+          "transcript:getToken",
+          (response: TranscriptTokenResponse | { error: string }) => {
+            if ("error" in response) {
+              console.error(
+                "[Meets] Failed to fetch transcript token:",
+                response.error,
+              );
+              resolve(null);
+              return;
+            }
+            resolve(response);
+          },
+        );
+      });
+    }, [socketRef]);
+
   const getMeetingConfig = useCallback(
     (): Promise<MeetingConfigSnapshot | null> => {
       const socket = socketRef.current;
@@ -6324,6 +6348,7 @@ export function useMeetSocket({
     toggleRoomLock,
     toggleNoGuests,
     toggleChatLock,
+    getTranscriptToken,
     getMeetingConfig,
     updateMeetingConfig,
     getWebinarConfig,

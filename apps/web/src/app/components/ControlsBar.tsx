@@ -115,44 +115,112 @@ function MediaClusterButton({
   return cluster;
 }
 
-function PanelButton({ d }: { d: ControlDescriptor }) {
+type PanelStatus = "live" | "attention" | null;
+
+function PanelClusterItem({
+  d,
+  status,
+}: {
+  d: ControlDescriptor;
+  status?: PanelStatus;
+}) {
   const Icon = d.icon;
   const active = d.variant === "active";
-  const shouldShowTooltip = Boolean(d.hotkey || d.showTooltipWithoutHotkey);
-  const btn = (
-    <button
-      type="button"
-      onClick={d.onPress}
-      aria-label={d.label}
-      title={d.label}
-      className={
-        "relative inline-flex h-10 w-10 items-center justify-center rounded-full " +
-        "transition-[background-color,color] duration-[120ms] hover:bg-white/[0.08] " +
-        (active ? "" : "hover:!text-[#fafafa]")
-      }
-      style={{ color: active ? color.accent : color.textMuted }}
-    >
-      <Icon size={ICON} strokeWidth={STROKE} />
-      {typeof d.badge === "number" && d.badge > 0 ? (
-        <span
-          className="absolute -right-0.5 -top-0.5 inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-full px-1 text-[10px] font-semibold leading-none text-white"
-          style={{ backgroundColor: color.accent }}
-        >
-          {d.badge > 9 ? "9+" : d.badge}
-        </span>
-      ) : null}
-    </button>
-  );
-  return shouldShowTooltip ? (
+  return (
     <HotkeyTooltip
       label={d.label}
       hotkey={d.hotkey}
       showWithoutHotkey={d.showTooltipWithoutHotkey}
     >
-      {btn}
+      <button
+        type="button"
+        onClick={d.onPress}
+        aria-label={d.label}
+        title={d.label}
+        className={
+          "relative inline-flex h-10 w-10 items-center justify-center rounded-full " +
+          "transition-[background-color,color] duration-[120ms] hover:bg-white/[0.08] " +
+          (active ? "" : "hover:!text-[#fafafa]")
+        }
+        style={{ color: active ? color.accent : color.textMuted }}
+      >
+        <Icon size={ICON} strokeWidth={STROKE} />
+        {typeof d.badge === "number" && d.badge > 0 ? (
+          <span
+            className="absolute -right-0.5 -top-0.5 inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-full px-1 text-[10px] font-semibold leading-none text-white"
+            style={{ backgroundColor: color.accent }}
+          >
+            {d.badge > 9 ? "9+" : d.badge}
+          </span>
+        ) : null}
+        {status ? (
+          <span
+            aria-hidden
+            className={
+              "absolute right-1 top-1 h-2 w-2 rounded-full " +
+              (status === "attention" ? "animate-pulse" : "")
+            }
+            style={{
+              backgroundColor: status === "live" ? "#32d583" : "#f97066",
+              boxShadow: "0 0 0 2px #131316",
+            }}
+          />
+        ) : null}
+      </button>
     </HotkeyTooltip>
-  ) : (
-    btn
+  );
+}
+
+/**
+ * The side-panel toggles (participants, games, transcript, chat) collapse into
+ * one overlapping "squabble" of icons to keep the bar uncrowded. Hover (or
+ * keyboard focus) fans them out so any one can be picked. Badges and the
+ * transcript live/paused dot stay visible even while collapsed, so the cluster
+ * still surfaces unread chat and transcript state at a glance.
+ */
+function PanelCluster({
+  items,
+  transcriptStatus,
+  forceOpen = false,
+}: {
+  items: ControlDescriptor[];
+  transcriptStatus?: PanelStatus;
+  forceOpen?: boolean;
+}) {
+  const [hovered, setHovered] = useState(false);
+  const open = hovered || forceOpen;
+
+  return (
+    <div
+      className="relative flex items-center rounded-full transition-colors duration-150"
+      style={{ backgroundColor: open ? "rgba(255,255,255,0.04)" : "transparent" }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      onFocusCapture={() => setHovered(true)}
+      onBlurCapture={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node)) {
+          setHovered(false);
+        }
+      }}
+    >
+      {items.map((d, index) => {
+        const status = d.id === "transcript" ? (transcriptStatus ?? null) : null;
+        const raised =
+          d.variant === "active" || Boolean(status) || (d.badge ?? 0) > 0;
+        return (
+          <div
+            key={d.id}
+            className="transition-[margin] duration-200 ease-out"
+            style={{
+              marginLeft: index === 0 ? 0 : open ? 2 : -12,
+              zIndex: raised ? 20 : 10 - index,
+            }}
+          >
+            <PanelClusterItem d={d} status={status} />
+          </div>
+        );
+      })}
+    </div>
   );
 }
 
@@ -301,6 +369,56 @@ function ControlsBar(props: ControlsBarProps) {
 
   const showHost = Boolean(isAdmin);
   const VolumeIcon = meetVolumePercent === 0 ? VolumeX : Volume2;
+
+  const transcriptClusterStatus: PanelStatus =
+    props.transcriptStatus === "live" || props.transcriptStatus === "starting"
+      ? "live"
+      : props.transcriptStatus === "takeover_needed" ||
+          props.transcriptStatus === "error"
+        ? "attention"
+        : null;
+  const panelCoachmarkVisible =
+    !moreOpen &&
+    !reactionsOpen &&
+    !browserOpen &&
+    !filtersTip.visible &&
+    ((gamesTip.visible && !props.isGamesOpen && !props.hasActiveGame) ||
+      (gifsTip.visible && !props.isChatOpen));
+
+  // Side-panel toggles fold into one hover-to-pick cluster. Host controls join
+  // it as a final item so the right rail stays a single tidy group.
+  const panelItems: ControlDescriptor[] = config.left.map((d) => {
+    if (d.id === "games") {
+      return {
+        ...d,
+        onPress: () => {
+          gamesTip.dismiss();
+          d.onPress?.();
+        },
+      };
+    }
+    if (d.id === "chat") {
+      return {
+        ...d,
+        onPress: () => {
+          gifsTip.dismiss();
+          d.onPress?.();
+        },
+      };
+    }
+    return d;
+  });
+  if (showHost && !compact && onToggleHostControls) {
+    panelItems.push({
+      id: "host-controls",
+      icon: Shield,
+      label: "Host controls",
+      showTooltipWithoutHotkey: true,
+      variant: isHostControlsOpen ? "active" : "default",
+      badge: props.pendingUsersCount,
+      onPress: onToggleHostControls,
+    });
+  }
 
   return (
     <div className="relative flex w-full items-center gap-2 px-4 py-3 sm:grid sm:grid-cols-[1fr_auto_1fr]">
@@ -650,89 +768,29 @@ function ControlsBar(props: ControlsBarProps) {
       </div>
 
       <div className="flex min-w-0 shrink-0 items-center justify-self-end gap-0.5">
-        {config.left.map((d) => {
-          if (d.id === "games") {
-            return (
-              <div key={d.id} className="relative flex">
-                <PanelButton
-                  d={{
-                    ...d,
-                    onPress: () => {
-                      gamesTip.dismiss();
-                      d.onPress?.();
-                    },
-                  }}
-                />
-                {gamesTip.visible &&
-                !props.isGamesOpen &&
-                !props.hasActiveGame &&
-                !filtersTip.visible &&
-                !gifsTip.visible &&
-                !moreOpen &&
-                !reactionsOpen &&
-                !browserOpen ? (
-                  <Coachmark
-                    title="Games are here!"
-                    description="Start a quick room game with everyone."
-                    onDismiss={gamesTip.dismiss}
-                  />
-                ) : null}
-              </div>
-            );
-          }
-
-          if (d.id !== "chat") {
-            return <PanelButton key={d.id} d={d} />;
-          }
-
-          return (
-            <div key={d.id} className="relative flex">
-              <PanelButton
-                d={{
-                  ...d,
-                  onPress: () => {
-                    gifsTip.dismiss();
-                    d.onPress?.();
-                  },
-                }}
+        {panelItems.length > 0 && (
+          <div className="relative flex">
+            <PanelCluster
+              items={panelItems}
+              transcriptStatus={transcriptClusterStatus}
+              forceOpen={panelCoachmarkVisible}
+            />
+            {panelCoachmarkVisible && gamesTip.visible ? (
+              <Coachmark
+                title="Games are here!"
+                description="Start a quick room game with everyone."
+                onDismiss={gamesTip.dismiss}
               />
-              {gifsTip.visible &&
-              !props.isChatOpen &&
-              !filtersTip.visible &&
-              !gamesTip.visible &&
-              !moreOpen &&
-              !reactionsOpen &&
-              !browserOpen ? (
-                <Coachmark
-                  title="GIFs are here!"
-                  description="You can send your fav reactions on Conclave"
-                  onDismiss={gifsTip.dismiss}
-                  arrowLeft="calc(100% - 1.25rem)"
-                  className="!left-auto right-0 !translate-x-0"
-                />
-              ) : null}
-            </div>
-          );
-        })}
-
-        {showHost && !compact && onToggleHostControls && (
-          <HotkeyTooltip label="Host controls" showWithoutHotkey>
-            <button
-              type="button"
-              onClick={onToggleHostControls}
-              aria-label="Host controls"
-              aria-pressed={isHostControlsOpen}
-              title="Host controls"
-              className={
-                "inline-flex h-10 w-10 items-center justify-center rounded-full " +
-                "transition-[background-color,color] duration-[120ms] hover:bg-white/[0.08] " +
-                (isHostControlsOpen ? "" : "hover:!text-[#fafafa]")
-              }
-              style={{ color: isHostControlsOpen ? color.accent : color.textMuted }}
-            >
-              <Shield size={ICON} strokeWidth={STROKE} />
-            </button>
-          </HotkeyTooltip>
+            ) : panelCoachmarkVisible && gifsTip.visible ? (
+              <Coachmark
+                title="GIFs are here!"
+                description="You can send your fav reactions on Conclave"
+                onDismiss={gifsTip.dismiss}
+                arrowLeft="calc(100% - 1.25rem)"
+                className="!left-auto right-0 !translate-x-0"
+              />
+            ) : null}
+          </div>
         )}
       </div>
     </div>

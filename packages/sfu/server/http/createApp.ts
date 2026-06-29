@@ -461,15 +461,34 @@ export const createSfuApp = ({
       return res.status(401).json({ error: "Unauthorized" });
     }
 
-    const clientId = normalizeIdentifier(req.header("x-sfu-client")) || "default";
-    const roomDetails = Array.from(state.rooms.values())
-      .filter((room) => room.clientId === clientId)
-      .map((room) => ({
-        id: room.id,
-        clients: room.clientCount,
-      }));
+    res.set("Cache-Control", "no-store");
+    return res.status(403).json({ error: "Use /admin/rooms for room lists" });
+  });
 
-    return res.json({ rooms: roomDetails });
+  app.get("/rooms/:roomId", (req, res) => {
+    if (!hasValidSecret(req, config.sfuSecret)) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    const roomId = normalizeIdentifier(req.params.roomId);
+    if (!roomId) {
+      return res.status(400).json({ error: "Room ID is required" });
+    }
+
+    const clientId = resolveClientId(req) || "default";
+    const channelId = getRoomChannelId(clientId, roomId);
+    const room = state.rooms.get(channelId);
+    res.set("Cache-Control", "no-store");
+    if (!room) {
+      return res.json({ room: null });
+    }
+
+    return res.json({
+      room: {
+        id: room.id,
+        userCount: room.clientCount,
+      },
+    });
   });
 
   app.get("/routing/rooms/:clientId/:roomId", async (req, res) => {

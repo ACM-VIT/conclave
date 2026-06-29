@@ -15,6 +15,12 @@
   "dependencies": {
     "facehash": "^0.1.0"
   },
+  "devDependencies": {
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7"
+  },
   "peerDependencies": {
     "lucide-react": "*",
     "lucide-react-native": "*",

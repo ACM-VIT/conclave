@@ -13,7 +13,7 @@
     "start": "npx tsx server.ts",
     "new:game": "node ./scripts/new-game.mjs",
     "test:game-ai": "npx tsx scripts/test-game-ai.ts",
-    "typecheck": "npx tsc --noEmit"
+    "typecheck": "tsc --noEmit"
   },
   "keywords": [],
   "author": "",
@@ -39,6 +39,7 @@
     "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^20.19.43",
     "tsx": "^4.22.4",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.6"
   }
 }

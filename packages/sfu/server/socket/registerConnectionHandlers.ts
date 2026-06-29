@@ -13,6 +13,7 @@ import { registerReactionHandlers } from "./handlers/reactionHandlers.js";
 import { registerRouterHandlers } from "./handlers/routerHandlers.js";
 import { registerSharedBrowserHandlers } from "./handlers/sharedBrowserHandlers.js";
 import { registerTransportHandlers } from "./handlers/transportHandlers.js";
+import { registerTranscriptHandlers } from "./handlers/transcriptHandlers.js";
 import { registerAppsHandlers } from "./handlers/appsHandlers.js";
 import { registerGameHandlers } from "./handlers/gameHandlers.js";
 import { registerWebinarHandlers } from "./handlers/webinarHandlers.js";
@@ -40,6 +41,7 @@ export const registerConnectionHandlers = (
     registerMeetingHandlers(context);
     registerWebinarHandlers(context);
     registerSharedBrowserHandlers(context);
+    registerTranscriptHandlers(context);
     registerDisconnectHandlers(context);
   });
 };
