@@ -56,6 +56,7 @@ export const verifyTranscriptToken = async (
     channelId: data.channelId,
     isAdmin: data.isAdmin,
     isHost: data.isHost,
+    isGhost: data.isGhost,
     capabilities: data.capabilities,
   };
 };

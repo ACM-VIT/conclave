@@ -13,6 +13,11 @@ export const DEFAULT_TRANSCRIPTION_LOCALIZATION_PROMPT =
   "Locale: Indian English. Expect Indian accents, Hinglish code-switching, Hindi proper nouns, Indian names, college or team names, acronyms, and technical terms. Preserve spoken wording without expanding or correcting domain terms unless the audio makes it clear.";
 export const DEFAULT_IDLE_TTL_MS = 20 * 60 * 1000;
 export const DEFAULT_MAX_SEGMENTS = 500;
+export const TRANSCRIPT_PCM_SAMPLE_RATE = 24_000;
+export const MIN_OPENAI_COMMIT_AUDIO_MS = 100;
+export const MIN_OPENAI_COMMIT_AUDIO_SAMPLES = Math.ceil(
+  (TRANSCRIPT_PCM_SAMPLE_RATE * MIN_OPENAI_COMMIT_AUDIO_MS) / 1000,
+);
 export const MIN_MINUTES_REFRESH_MS = 18_000;
 export const MAX_CLIENT_MESSAGE_BYTES = 192 * 1024;
 export const MAX_AUDIO_CHUNK_BASE64_BYTES = 48 * 1024;

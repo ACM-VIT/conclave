@@ -2,7 +2,7 @@ class TranscriptPcmProcessor extends AudioWorkletProcessor {
   constructor() {
     super();
     this.targetSampleRate = 24000;
-    this.chunkSamples = 2048;
+    this.chunkSamples = 2400;
     this.buffer = new Int16Array(this.chunkSamples);
     this.writeIndex = 0;
     this.carry = 0;

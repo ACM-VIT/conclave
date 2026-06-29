@@ -34,6 +34,7 @@ export type TranscriptTokenPayload = {
   channelId?: string;
   isAdmin?: boolean;
   isHost?: boolean;
+  isGhost?: boolean;
   capabilities?: Partial<TranscriptTokenCapabilities>;
 };
 

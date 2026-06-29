@@ -38,7 +38,7 @@ export const registerTranscriptHandlers = (
         return;
       }
 
-      if (client.isObserver) {
+      if (client.isWebinarAttendee) {
         respond(callback, {
           error: "Transcript is available to meeting participants only",
         });
@@ -56,11 +56,12 @@ export const registerTranscriptHandlers = (
       const expiresAt = (nowSeconds + TRANSCRIPT_TOKEN_TTL_SECONDS) * 1000;
       const isAdmin = client instanceof Admin;
       const isHost = room.getHostUserId() === client.id;
+      const isGhost = client.isGhost;
       const capabilities: TranscriptTokenCapabilities = {
-        start: true,
-        takeover: true,
-        stop: isAdmin || isHost,
-        ask: true,
+        start: !isGhost,
+        takeover: !isGhost,
+        stop: !isGhost && (isAdmin || isHost),
+        ask: !isGhost,
       };
       const displayName = room.getDisplayNameForUser(client.id) || client.id;
       const payload = {
@@ -74,6 +75,7 @@ export const registerTranscriptHandlers = (
         channelId: room.channelId,
         isAdmin,
         isHost,
+        isGhost,
         capabilities,
       };
 

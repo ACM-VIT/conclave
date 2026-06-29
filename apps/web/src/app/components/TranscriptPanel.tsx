@@ -7,6 +7,7 @@ import {
   Copy,
   Download,
   FileText,
+  Ghost,
   HelpCircle,
   ListChecks,
   ListTodo,
@@ -161,6 +162,9 @@ function StartStage({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const needsTakeover = transcript.session.status === "takeover_needed";
   const isOnTheHouse = transcript.hasGlobalOpenAiKey;
+  const canSubmit = needsTakeover
+    ? transcript.canTakeover
+    : transcript.canStart;
 
   useEffect(() => {
     setTranscriptModel(transcript.session.transcriptModel);
@@ -169,7 +173,7 @@ function StartStage({
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
-    if ((!isOnTheHouse && !apiKey.trim()) || isSubmitting) return;
+    if (!canSubmit || (!isOnTheHouse && !apiKey.trim()) || isSubmitting) return;
     setIsSubmitting(true);
     const startOptions = {
       apiKey: isOnTheHouse ? undefined : apiKey,
@@ -203,86 +207,102 @@ function StartStage({
           {needsTakeover ? "Pick up the live notes" : "Turn on live notes"}
         </p>
         <p className="mt-3 max-w-[280px] text-[13.5px] leading-relaxed text-[#a1a1aa]">
-          {needsTakeover
-            ? isOnTheHouse
-              ? "The last host stepped away. Resume it with Conclave's shared key."
-              : "The last host stepped away. Bring your key to keep the room transcribed."
-            : "Transcribe the room, ask it questions, and get minutes as the meeting happens."}
+          {transcript.isViewOnly
+            ? "Ghost mode can follow live transcript and minutes without controlling the room."
+            : needsTakeover
+              ? isOnTheHouse
+                ? "The last host stepped away. Resume it with Conclave's shared key."
+                : "The last host stepped away. Bring your key to keep the room transcribed."
+              : "Transcribe the room, ask it questions, and get minutes as the meeting happens."}
         </p>
 
-        <form onSubmit={submit} className="mt-7 w-full max-w-[300px] space-y-2.5">
-          <input
-            value={isOnTheHouse ? "On the house" : apiKey}
-            onChange={(event) => setApiKey(event.target.value)}
-            type={isOnTheHouse ? "text" : "password"}
-            placeholder={isOnTheHouse ? "On the house" : "OpenAI API key"}
-            autoComplete="off"
-            autoFocus={!isOnTheHouse}
-            readOnly={isOnTheHouse}
-            disabled={isSubmitting}
-            className="h-11 w-full rounded-xl border border-white/10 bg-black/20 px-3.5 text-center text-[13px] text-[#fafafa] outline-none transition-colors placeholder:text-[#71717a] focus:border-[#4F9CF9]/60 disabled:opacity-60"
-          />
-          <div className="grid grid-cols-2 gap-2 text-left">
-            <label className="space-y-1">
-              <span className="block px-0.5 text-[11px] text-[#a1a1aa]">
-                Transcription
-              </span>
-              <select
-                value={transcriptModel}
-                onChange={(event) => setTranscriptModel(event.target.value)}
-                disabled={isSubmitting}
-                className="h-9 w-full rounded-lg border border-white/10 bg-black/20 px-2 text-[12px] text-[#fafafa] outline-none focus:border-[#4F9CF9]/60 disabled:opacity-60"
-              >
-              {LIVE_TRANSCRIPT_TRANSCRIPTION_MODELS.map((model) => (
-                <option key={model.id} value={model.id}>
-                  {model.label}
-                </option>
-                ))}
-              </select>
-            </label>
-            <label className="space-y-1">
-              <span className="block px-0.5 text-[11px] text-[#a1a1aa]">
-                Assistant
-              </span>
-              <select
-                value={qaModel}
-                onChange={(event) => setQaModel(event.target.value)}
-                disabled={isSubmitting}
-                className="h-9 w-full rounded-lg border border-white/10 bg-black/20 px-2 text-[12px] text-[#fafafa] outline-none focus:border-[#4F9CF9]/60 disabled:opacity-60"
-              >
-                {TRANSCRIPT_QA_MODELS.map((model) => (
-                  <option key={model.id} value={model.id}>
-                    {model.label}
-                  </option>
-                ))}
-              </select>
-            </label>
+        {transcript.isViewOnly ? (
+          <div className="mt-7 inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3.5 py-2.5 text-[12.5px] font-semibold text-[#d4d4d8]">
+            <Ghost size={15} strokeWidth={1.8} className="text-[#F95F4A]" />
+            View only
           </div>
-          <button
-            type="submit"
-            disabled={(!isOnTheHouse && !apiKey.trim()) || isSubmitting}
-            className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-[#F95F4A] px-3 text-[13.5px] font-semibold text-white transition-colors hover:bg-[#ff735f] disabled:cursor-not-allowed disabled:bg-white/10 disabled:text-[#71717a]"
+        ) : (
+          <form
+            onSubmit={submit}
+            className="mt-7 w-full max-w-[300px] space-y-2.5"
           >
-            {isSubmitting ? (
-              <Loader2 size={15} className="animate-spin" />
-            ) : null}
-            {isSubmitting
-              ? "Starting"
-              : needsTakeover
-                ? "Resume notes"
-                : "Start notes"}
-          </button>
-          <p className="flex items-center justify-center gap-1.5 pt-0.5 text-[11px] text-[#71717a]">
-            {isOnTheHouse ? (
-              <CheckCircle2 size={11} strokeWidth={2} />
-            ) : (
-              <Lock size={11} strokeWidth={2} />
-            )}
-            {isOnTheHouse
-              ? "Covered by Conclave. No key needed."
-              : "Used only for this session, never stored."}
-          </p>
-        </form>
+            <input
+              value={isOnTheHouse ? "On the house" : apiKey}
+              onChange={(event) => setApiKey(event.target.value)}
+              type={isOnTheHouse ? "text" : "password"}
+              placeholder={isOnTheHouse ? "On the house" : "OpenAI API key"}
+              autoComplete="off"
+              autoFocus={!isOnTheHouse}
+              readOnly={isOnTheHouse}
+              disabled={isSubmitting}
+              className="h-11 w-full rounded-xl border border-white/10 bg-black/20 px-3.5 text-center text-[13px] text-[#fafafa] outline-none transition-colors placeholder:text-[#71717a] focus:border-[#4F9CF9]/60 disabled:opacity-60"
+            />
+            <div className="grid grid-cols-2 gap-2 text-left">
+              <label className="space-y-1">
+                <span className="block px-0.5 text-[11px] text-[#a1a1aa]">
+                  Transcription
+                </span>
+                <select
+                  value={transcriptModel}
+                  onChange={(event) => setTranscriptModel(event.target.value)}
+                  disabled={isSubmitting}
+                  className="h-9 w-full rounded-lg border border-white/10 bg-black/20 px-2 text-[12px] text-[#fafafa] outline-none focus:border-[#4F9CF9]/60 disabled:opacity-60"
+                >
+                  {LIVE_TRANSCRIPT_TRANSCRIPTION_MODELS.map((model) => (
+                    <option key={model.id} value={model.id}>
+                      {model.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="space-y-1">
+                <span className="block px-0.5 text-[11px] text-[#a1a1aa]">
+                  Assistant
+                </span>
+                <select
+                  value={qaModel}
+                  onChange={(event) => setQaModel(event.target.value)}
+                  disabled={isSubmitting}
+                  className="h-9 w-full rounded-lg border border-white/10 bg-black/20 px-2 text-[12px] text-[#fafafa] outline-none focus:border-[#4F9CF9]/60 disabled:opacity-60"
+                >
+                  {TRANSCRIPT_QA_MODELS.map((model) => (
+                    <option key={model.id} value={model.id}>
+                      {model.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <button
+              type="submit"
+              disabled={
+                !canSubmit ||
+                (!isOnTheHouse && !apiKey.trim()) ||
+                isSubmitting
+              }
+              className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-[#F95F4A] px-3 text-[13.5px] font-semibold text-white transition-colors hover:bg-[#ff735f] disabled:cursor-not-allowed disabled:bg-white/10 disabled:text-[#71717a]"
+            >
+              {isSubmitting ? (
+                <Loader2 size={15} className="animate-spin" />
+              ) : null}
+              {isSubmitting
+                ? "Starting"
+                : needsTakeover
+                  ? "Resume notes"
+                  : "Start notes"}
+            </button>
+            <p className="flex items-center justify-center gap-1.5 pt-0.5 text-[11px] text-[#71717a]">
+              {isOnTheHouse ? (
+                <CheckCircle2 size={11} strokeWidth={2} />
+              ) : (
+                <Lock size={11} strokeWidth={2} />
+              )}
+              {isOnTheHouse
+                ? "Covered by Conclave. No key needed."
+                : "Used only for this session, never stored."}
+            </p>
+          </form>
+        )}
       </div>
     </div>
   );
@@ -696,16 +716,29 @@ export default function TranscriptPanel({
     "idle",
   );
   const session = transcript.session;
-  const canStop =
-    transcript.isControllerUser || transcript.tokenInfo?.capabilities.stop;
   const hasExportContent =
     transcript.allSegments.length > 0 || hasMinutesContent(transcript.minutes);
+  const canExport = hasExportContent && !transcript.isViewOnly;
   const isRunning =
     session.status === "starting" ||
     session.status === "live" ||
     session.status === "stopping";
+  const tabs = useMemo<TranscriptTab[]>(
+    () =>
+      transcript.isViewOnly
+        ? ["transcript", "minutes"]
+        : ["transcript", "ask", "minutes"],
+    [transcript.isViewOnly],
+  );
+
+  useEffect(() => {
+    if (!tabs.includes(activeTab)) {
+      setActiveTab("transcript");
+    }
+  }, [activeTab, tabs]);
 
   const handleCopy = async () => {
+    if (!canExport) return;
     const markdown = transcript.exportMarkdown();
     try {
       await copyMarkdown(markdown);
@@ -717,7 +750,11 @@ export default function TranscriptPanel({
   };
 
   const handleDownload = () => {
-    downloadMarkdown(`conclave-${session.roomId}-transcript.md`, transcript.exportMarkdown());
+    if (!canExport) return;
+    downloadMarkdown(
+      `conclave-${session.roomId}-transcript.md`,
+      transcript.exportMarkdown(),
+    );
   };
 
   return (
@@ -736,6 +773,10 @@ export default function TranscriptPanel({
                 Hosted by {session.controller.displayName}
                 {session.keySource === "global" ? " · On the house" : ""}
               </p>
+            ) : transcript.isViewOnly ? (
+              <p className="mt-0.5 truncate text-[11.5px] text-[#a1a1aa]">
+                Ghost mode · view only
+              </p>
             ) : null}
           </div>
           <button
@@ -750,7 +791,7 @@ export default function TranscriptPanel({
 
         {isRunning ? (
           <div className="mt-3 flex items-center gap-2">
-            {(["transcript", "ask", "minutes"] as const).map((tab) => {
+            {tabs.map((tab) => {
               const Icon =
                 tab === "transcript"
                   ? FileText
@@ -803,15 +844,17 @@ export default function TranscriptPanel({
               </span>
             </div>
             <div className="flex shrink-0 items-center gap-1">
-              <button
-                onClick={transcript.refreshMinutes}
-                aria-label="Refresh minutes"
-                title="Refresh minutes"
-                className="inline-flex h-7 w-7 items-center justify-center rounded-lg text-[#a1a1aa] transition-colors hover:bg-white/[0.06] hover:text-[#fafafa]"
-              >
-                <RefreshCw size={14} strokeWidth={1.8} />
-              </button>
-              {canStop ? (
+              {transcript.canRefreshMinutes ? (
+                <button
+                  onClick={transcript.refreshMinutes}
+                  aria-label="Refresh minutes"
+                  title="Refresh minutes"
+                  className="inline-flex h-7 w-7 items-center justify-center rounded-lg text-[#a1a1aa] transition-colors hover:bg-white/[0.06] hover:text-[#fafafa]"
+                >
+                  <RefreshCw size={14} strokeWidth={1.8} />
+                </button>
+              ) : null}
+              {transcript.canStop ? (
                 <button
                   onClick={transcript.stop}
                   aria-label="Stop transcript"
@@ -827,7 +870,7 @@ export default function TranscriptPanel({
           <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
             {activeTab === "transcript" ? (
               <TranscriptView segments={transcript.allSegments} />
-            ) : activeTab === "ask" ? (
+            ) : activeTab === "ask" && !transcript.isViewOnly ? (
               <AskView messages={transcript.qaMessages} onAsk={transcript.ask} />
             ) : (
               <MinutesView transcript={transcript} />
@@ -837,7 +880,7 @@ export default function TranscriptPanel({
           <div className="flex shrink-0 items-center gap-2 border-t border-white/10 bg-[#18181b] px-3 py-3">
             <button
               onClick={handleCopy}
-              disabled={!hasExportContent}
+              disabled={!canExport}
               className="inline-flex h-9 flex-1 items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/[0.04] px-3 text-[12px] font-semibold text-[#d4d4d8] transition-colors hover:bg-white/[0.08] hover:text-[#fafafa] disabled:cursor-not-allowed disabled:bg-white/[0.02] disabled:text-[#71717a]"
             >
               <ClipboardCopy size={14} strokeWidth={1.8} />
@@ -849,7 +892,7 @@ export default function TranscriptPanel({
             </button>
             <button
               onClick={handleDownload}
-              disabled={!hasExportContent}
+              disabled={!canExport}
               className="inline-flex h-9 flex-1 items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/[0.04] px-3 text-[12px] font-semibold text-[#d4d4d8] transition-colors hover:bg-white/[0.08] hover:text-[#fafafa] disabled:cursor-not-allowed disabled:bg-white/[0.02] disabled:text-[#71717a]"
             >
               <Download size={14} strokeWidth={1.8} />

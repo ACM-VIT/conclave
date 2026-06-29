@@ -49,6 +49,7 @@ interface UseMeetingTranscriptOptions {
   localStream: MediaStream | null;
   participants: Map<string, Participant>;
   activeSpeakerId: string | null;
+  isViewOnly?: boolean;
   resolveDisplayName: (userId: string) => string;
   getTranscriptToken: () => Promise<TranscriptTokenResponse | null>;
 }
@@ -145,6 +146,7 @@ export function useMeetingTranscript({
   isMuted,
   localStream,
   participants,
+  isViewOnly = false,
   resolveDisplayName,
   getTranscriptToken,
 }: UseMeetingTranscriptOptions) {
@@ -178,6 +180,7 @@ export function useMeetingTranscript({
 
   const transcriptSources = useMemo<TranscriptRelaySource[]>(() => {
     const sources: TranscriptRelaySource[] = [];
+    if (isViewOnly) return sources;
     if (!isMuted && isLiveAudioStream(localStream)) {
       sources.push({
         id: `local:${localStream!.id}`,
@@ -218,10 +221,32 @@ export function useMeetingTranscript({
     currentDisplayName,
     currentUserId,
     isMuted,
+    isViewOnly,
     localStream,
     participants,
     resolveDisplayName,
   ]);
+
+  const canStart = !isViewOnly && (tokenInfo?.capabilities.start ?? true);
+  const canTakeover =
+    !isViewOnly && (tokenInfo?.capabilities.takeover ?? true);
+  const canAsk = !isViewOnly && (tokenInfo?.capabilities.ask ?? true);
+  const canRefreshMinutes = canAsk;
+  const rawIsController =
+    Boolean(viewerConnectionId) &&
+    session.controller?.connectionId === viewerConnectionId;
+  const rawIsControllerUser = session.controller?.userId === currentUserId;
+  const canStop =
+    !isViewOnly &&
+    (rawIsControllerUser || tokenInfo?.capabilities.stop === true);
+
+  const setPermissionError = useCallback(() => {
+    setError(
+      isViewOnly
+        ? "Ghost mode can view transcript and minutes only."
+        : "You do not have permission to control this transcript.",
+    );
+  }, [isViewOnly]);
 
   const send = useCallback((payload: unknown): boolean => {
     const socket = socketRef.current;
@@ -440,6 +465,10 @@ export function useMeetingTranscript({
 
   const start = useCallback(
     async (options: StartTranscriptOptions): Promise<boolean> => {
+      if (!canStart) {
+        setPermissionError();
+        return false;
+      }
       const connected = await connect();
       if (!connected) return false;
       return send({
@@ -450,11 +479,15 @@ export function useMeetingTranscript({
         qaModel: options.qaModel ?? DEFAULT_TRANSCRIPT_QA_MODEL,
       });
     },
-    [connect, send],
+    [canStart, connect, send, setPermissionError],
   );
 
   const takeover = useCallback(
     async (options: StartTranscriptOptions): Promise<boolean> => {
+      if (!canTakeover) {
+        setPermissionError();
+        return false;
+      }
       const connected = await connect();
       if (!connected) return false;
       return send({
@@ -465,17 +498,32 @@ export function useMeetingTranscript({
         qaModel: options.qaModel ?? session.qaModel,
       });
     },
-    [connect, send, session.qaModel, session.transcriptModel],
+    [
+      canTakeover,
+      connect,
+      send,
+      session.qaModel,
+      session.transcriptModel,
+      setPermissionError,
+    ],
   );
 
   const stop = useCallback(() => {
+    if (!canStop) {
+      setPermissionError();
+      return;
+    }
     send({ type: "session.stop" });
-  }, [send]);
+  }, [canStop, send, setPermissionError]);
 
   const ask = useCallback(
     async (question: string): Promise<boolean> => {
       const trimmed = question.trim();
       if (!trimmed) return false;
+      if (!canAsk) {
+        setPermissionError();
+        return false;
+      }
       const connected = await connect();
       if (!connected) return false;
       const id = `qa-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -501,14 +549,18 @@ export function useMeetingTranscript({
       ]);
       return send({ type: "qa.ask", id, question: trimmed });
     },
-    [connect, send],
+    [canAsk, connect, send, setPermissionError],
   );
 
   const refreshMinutes = useCallback(async (): Promise<boolean> => {
+    if (!canRefreshMinutes) {
+      setPermissionError();
+      return false;
+    }
     const connected = await connect();
     if (!connected) return false;
     return send({ type: "minutes.refresh" });
-  }, [connect, send]);
+  }, [canRefreshMinutes, connect, send, setPermissionError]);
 
   const partialSegments = useMemo(
     () => orderTranscriptSegments(Array.from(partials.values())),
@@ -556,6 +608,7 @@ export function useMeetingTranscript({
 
   useEffect(() => {
     const shouldStream =
+      !isViewOnly &&
       session.status === "live" &&
       session.controller?.userId === currentUserId &&
       session.controller.connectionId === viewerConnectionId &&
@@ -588,7 +641,14 @@ export function useMeetingTranscript({
             : "Could not start transcript audio.",
         );
       });
-  }, [currentUserId, send, session, transcriptSources, viewerConnectionId]);
+  }, [
+    currentUserId,
+    isViewOnly,
+    send,
+    session,
+    transcriptSources,
+    viewerConnectionId,
+  ]);
 
   return {
     connectionStatus,
@@ -601,11 +661,15 @@ export function useMeetingTranscript({
     error,
     tokenInfo,
     hasGlobalOpenAiKey,
+    isViewOnly,
+    canStart,
+    canTakeover,
+    canStop,
+    canAsk,
+    canRefreshMinutes,
     isStreamingAudio,
-    isController:
-      Boolean(viewerConnectionId) &&
-      session.controller?.connectionId === viewerConnectionId,
-    isControllerUser: session.controller?.userId === currentUserId,
+    isController: !isViewOnly && rawIsController,
+    isControllerUser: !isViewOnly && rawIsControllerUser,
     isLive: session.status === "live",
     connect,
     start,

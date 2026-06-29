@@ -95,6 +95,27 @@ export const normalizeSpeaker = (
 export const trimText = (value: string, maxLength: number): string =>
   value.replace(/\s+/g, " ").trim().slice(0, maxLength);
 
+export const estimatePcm16Base64SampleCount = (value: string): number => {
+  const normalized = value.replace(/\s+/g, "");
+  if (!normalized) return 0;
+  const padding = normalized.endsWith("==")
+    ? 2
+    : normalized.endsWith("=")
+      ? 1
+      : 0;
+  const byteLength = Math.max(
+    0,
+    Math.floor((normalized.length * 3) / 4) - padding,
+  );
+  return Math.floor(byteLength / 2);
+};
+
+export const createSilentPcm16Base64 = (samples: number): string => {
+  const sampleCount = Math.max(0, Math.floor(samples));
+  if (sampleCount === 0) return "";
+  return btoa("\0".repeat(sampleCount * 2));
+};
+
 export const redactSensitiveText = (value: string): string =>
   value.replace(/\bsk-[A-Za-z0-9_-]{8,}\b/g, "sk-...[redacted]");
 
