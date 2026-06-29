@@ -14,6 +14,8 @@ import {
   Loader2,
   Lock,
   MessageSquareText,
+  Pause,
+  Play,
   RefreshCw,
   Square,
   Tag,
@@ -31,7 +33,6 @@ import {
 import type {
   TranscriptMinutesEntry,
   TranscriptSegment,
-  TranscriptTransportMode,
 } from "../lib/types";
 import { formatTranscriptTimestamp } from "../lib/transcript-reducer";
 import {
@@ -147,6 +148,64 @@ const hasMinutesContent = (
   minutes.openQuestions.length > 0 ||
   minutes.followUps.length > 0;
 
+const formatRelativeTime = (timestamp: number, now: number): string => {
+  const diff = Math.max(0, now - timestamp);
+  if (diff < 5_000) return "just now";
+  if (diff < 60_000) return `${Math.floor(diff / 1_000)}s ago`;
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
+  return `${Math.floor(diff / 3_600_000)}h ago`;
+};
+
+// Live "Updated Xs ago / Updating…" line for the minutes tab. Replaces the old
+// manual-only refresh button: minutes regenerate on their own, this just shows
+// where they stand and offers an optional nudge.
+function MinutesStatusBar({
+  transcript,
+}: {
+  transcript: MeetingTranscriptController;
+}) {
+  const [now, setNow] = useState(() => Date.now());
+  const status = transcript.minutesStatus;
+  const isWorking = status === "pending" || status === "generating";
+
+  useEffect(() => {
+    const interval = window.setInterval(() => setNow(Date.now()), 10_000);
+    return () => window.clearInterval(interval);
+  }, []);
+
+  const updatedAt = transcript.minutes.updatedAt;
+  return (
+    <div className="flex items-center justify-between gap-2 px-0.5 text-[11.5px] text-[#71717a]">
+      <span className="flex min-w-0 items-center gap-1.5">
+        {isWorking ? (
+          <>
+            <Loader2 size={11} className="animate-spin text-[#4F9CF9]" />
+            <Shimmer className="text-[11.5px]">Updating minutes</Shimmer>
+          </>
+        ) : (
+          <span className="truncate">
+            {updatedAt ? `Updated ${formatRelativeTime(updatedAt, now)}` : "Up to date"}
+          </span>
+        )}
+      </span>
+      {transcript.canRefreshMinutes ? (
+        <button
+          type="button"
+          onClick={() => {
+            void transcript.refreshMinutes();
+          }}
+          disabled={isWorking}
+          aria-label="Refresh minutes now"
+          title="Refresh minutes now"
+          className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[#71717a] transition-colors hover:bg-white/[0.06] hover:text-[#d4d4d8] disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          <RefreshCw size={12} strokeWidth={1.8} />
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
 // Calm blue spotlight tint for the start stage, distinct from the brand orange.
 const START_ACCENT = "#4F9CF9";
 
@@ -160,9 +219,6 @@ function StartStage({
     transcript.session.transcriptModel,
   );
   const [qaModel, setQaModel] = useState(transcript.session.qaModel);
-  const [transportMode, setTransportMode] = useState<TranscriptTransportMode>(
-    transcript.session.transportMode,
-  );
   const [isSubmitting, setIsSubmitting] = useState(false);
   const needsTakeover = transcript.session.status === "takeover_needed";
   const isOnTheHouse = transcript.hasGlobalOpenAiKey;
@@ -173,11 +229,9 @@ function StartStage({
   useEffect(() => {
     setTranscriptModel(transcript.session.transcriptModel);
     setQaModel(transcript.session.qaModel);
-    setTransportMode(transcript.session.transportMode);
   }, [
     transcript.session.qaModel,
     transcript.session.transcriptModel,
-    transcript.session.transportMode,
   ]);
 
   const submit = async (event: React.FormEvent) => {
@@ -188,7 +242,7 @@ function StartStage({
       apiKey: isOnTheHouse ? undefined : apiKey,
       transcriptModel,
       qaModel,
-      transportMode,
+      transportMode: "sfu" as const,
     };
     const ok = needsTakeover
       ? await transcript.takeover(startOptions)
@@ -283,34 +337,6 @@ function StartStage({
                 </select>
               </label>
             </div>
-            <div className="space-y-1 text-left">
-              <span className="block px-0.5 text-[11px] text-[#a1a1aa]">
-                Audio route
-              </span>
-              <div className="grid grid-cols-2 gap-1 rounded-xl border border-white/10 bg-black/20 p-1">
-                {(["browser", "sfu"] as const).map((mode) => (
-                  <button
-                    key={mode}
-                    type="button"
-                    onClick={() => setTransportMode(mode)}
-                    disabled={isSubmitting}
-                    className={[
-                      "h-8 rounded-lg text-[12px] font-semibold transition-colors disabled:opacity-60",
-                      transportMode === mode
-                        ? "bg-white/[0.12] text-[#fafafa]"
-                        : "text-[#a1a1aa] hover:bg-white/[0.06] hover:text-[#fafafa]",
-                    ].join(" ")}
-                  >
-                    {mode === "browser" ? "Client audio" : "SFU relay"}
-                  </button>
-                ))}
-              </div>
-              {transportMode === "sfu" && transcript.sfuRelayStatus?.reason ? (
-                <p className="px-0.5 text-[11px] leading-snug text-[#fda29b]">
-                  {transcript.sfuRelayStatus.reason}
-                </p>
-              ) : null}
-            </div>
             <button
               type="submit"
               disabled={
@@ -356,7 +382,7 @@ function FallbackState({
   rootClassName = "h-full",
 }: {
   preview: React.ReactNode;
-  title: string;
+  title: React.ReactNode;
   description: string;
   rootClassName?: string;
 }) {
@@ -459,35 +485,53 @@ function AskFallback() {
   );
 }
 
+const MinutesGhostPreview = (
+  <div className="space-y-3.5 text-left">
+    {[
+      { label: "w-16", lines: ["w-full", "w-3/4"] },
+      { label: "w-20", lines: ["w-5/6"] },
+    ].map((section, index) => (
+      <div key={index} className="space-y-2">
+        <div className="flex items-center gap-2">
+          <div className="h-3.5 w-3.5 rounded bg-white/[0.07]" />
+          <Bar className={`h-2.5 ${section.label}`} />
+          <div className="ml-auto h-4 w-5 rounded-full bg-white/[0.05]" />
+        </div>
+        <div className="space-y-1.5 border-l-2 border-white/10 pl-3">
+          {section.lines.map((line, lineIndex) => (
+            <Bar key={lineIndex} className={`h-2 ${line} bg-white/[0.06]`} />
+          ))}
+        </div>
+      </div>
+    ))}
+  </div>
+);
+
 function MinutesFallback() {
   return (
     <FallbackState
       title="Minutes build as you talk"
       description="Topics, decisions, action items, and open questions fill in on their own."
-      preview={
-        <div className="space-y-3.5 text-left">
-          {[
-            { label: "w-16", lines: ["w-full", "w-3/4"] },
-            { label: "w-20", lines: ["w-5/6"] },
-          ].map((section, index) => (
-            <div key={index} className="space-y-2">
-              <div className="flex items-center gap-2">
-                <div className="h-3.5 w-3.5 rounded bg-white/[0.07]" />
-                <Bar className={`h-2.5 ${section.label}`} />
-                <div className="ml-auto h-4 w-5 rounded-full bg-white/[0.05]" />
-              </div>
-              <div className="space-y-1.5 border-l-2 border-white/10 pl-3">
-                {section.lines.map((line, lineIndex) => (
-                  <Bar
-                    key={lineIndex}
-                    className={`h-2 ${line} bg-white/[0.06]`}
-                  />
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
+      preview={MinutesGhostPreview}
+    />
+  );
+}
+
+// Shown once a session is live but there isn't yet enough said to summarize, so
+// we promise minutes are coming instead of echoing a few words back as a summary.
+function MinutesBuilding() {
+  return (
+    <FallbackState
+      title={
+        <span className="inline-flex items-center gap-2">
+          <Loader2 size={13} className="animate-spin text-[#4F9CF9]" />
+          <Shimmer className="text-[14px] font-semibold">
+            Cooking up minutes
+          </Shimmer>
+        </span>
       }
+      description="We'll lay out topics, decisions, and action items once there's enough of the conversation to summarize."
+      preview={MinutesGhostPreview}
     />
   );
 }
@@ -700,13 +744,18 @@ function MinutesView({
 }) {
   const minutes = transcript.minutes;
   const hasMinutes = hasMinutesContent(minutes);
+  const status = transcript.session.status;
+  const isRunning = status === "live" || status === "paused";
 
   if (!hasMinutes) {
-    return <MinutesFallback />;
+    // While a session is live we're actively working toward minutes; only fall
+    // back to the static "build as you talk" hint when nothing is running.
+    return isRunning ? <MinutesBuilding /> : <MinutesFallback />;
   }
 
   return (
     <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-4">
+      <MinutesStatusBar transcript={transcript} />
       {minutes.summary.trim() ? (
         <div className="rounded-xl border border-white/10 bg-white/[0.03] px-3.5 py-3">
           <div className="mb-1.5 flex items-center gap-2 text-[12.5px] font-semibold text-[#e4e4e7]">
@@ -760,6 +809,7 @@ export default function TranscriptPanel({
   const isRunning =
     session.status === "starting" ||
     session.status === "live" ||
+    session.status === "paused" ||
     session.status === "stopping";
   const tabs = useMemo<TranscriptTab[]>(
     () =>
@@ -811,8 +861,7 @@ export default function TranscriptPanel({
             </h2>
             {isRunning && session.controller ? (
               <p className="mt-0.5 truncate text-[11.5px] text-[#a1a1aa]">
-                Hosted by {session.controller.displayName} ·{" "}
-                {session.transportMode === "sfu" ? "SFU relay" : "Client audio"}
+                Hosted by {session.controller.displayName}
                 {session.keySource === "global" ? "" : ""}
               </p>
             ) : transcript.isViewOnly ? (
@@ -891,34 +940,59 @@ export default function TranscriptPanel({
         <>
           <div className="flex shrink-0 items-center justify-between gap-2 border-b border-white/10 px-4 py-2">
             <div className="flex min-w-0 items-center gap-2 text-[11.5px] text-[#a1a1aa]">
-              {session.status === "live" ? (
+              {session.status === "paused" ? (
+                <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-[#fbbf24]" />
+              ) : session.status === "live" ? (
                 <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-[#32d583]" />
               ) : (
                 <Loader size={12} />
               )}
               <span className="truncate">
-                {session.status !== "live"
-                  ? "Connecting"
-                  : session.transportMode === "sfu"
-                    ? transcript.isController
-                      ? "SFU relay listening"
-                      : "Following SFU relay"
-                    : transcript.isController
-                    ? transcript.isStreamingAudio
-                      ? "Listening to the room"
-                      : "Connecting audio"
-                    : "Following live"}
+                {session.status === "paused"
+                  ? "Paused"
+                  : session.status !== "live"
+                    ? "Connecting"
+                    : session.transportMode === "sfu"
+                      ? transcript.isController
+                        ? "Listening to the room"
+                        : "Following live"
+                      : transcript.isController
+                      ? transcript.isStreamingAudio
+                        ? "Listening to the room"
+                        : "Connecting audio"
+                      : "Following live"}
               </span>
             </div>
             <div className="flex shrink-0 items-center gap-1">
-              {transcript.canRefreshMinutes ? (
+              {transcript.canPause &&
+              (session.status === "live" || session.status === "paused") ? (
                 <button
-                  onClick={transcript.refreshMinutes}
-                  aria-label="Refresh minutes"
-                  title="Refresh minutes"
-                  className="inline-flex h-7 w-7 items-center justify-center rounded-lg text-[#a1a1aa] transition-colors hover:bg-white/[0.06] hover:text-[#fafafa]"
+                  onClick={
+                    transcript.isPaused ? transcript.resume : transcript.pause
+                  }
+                  aria-label={
+                    transcript.isPaused
+                      ? "Resume transcription"
+                      : "Pause transcription"
+                  }
+                  title={
+                    transcript.isPaused
+                      ? "Resume transcription"
+                      : "Pause transcription"
+                  }
+                  className={[
+                    "inline-flex h-7 items-center gap-1.5 rounded-lg px-2 text-[11.5px] font-semibold transition-colors",
+                    transcript.isPaused
+                      ? "bg-[#fbbf24]/15 text-[#fbbf24] hover:bg-[#fbbf24]/25"
+                      : "text-[#a1a1aa] hover:bg-white/[0.06] hover:text-[#fafafa]",
+                  ].join(" ")}
                 >
-                  <RefreshCw size={14} strokeWidth={1.8} />
+                  {transcript.isPaused ? (
+                    <Play size={13} strokeWidth={2} />
+                  ) : (
+                    <Pause size={13} strokeWidth={2} />
+                  )}
+                  {transcript.isPaused ? "Resume" : "Pause"}
                 </button>
               ) : null}
               {transcript.canStop ? (

@@ -261,7 +261,7 @@ export const registerTranscriptHandlers = (
 
   socket.on(
     "transcript:sfuRelayStop",
-    (
+    async (
       callback: (
         response: TranscriptSfuRelayStopResponse | { error: string },
       ) => void,
@@ -282,7 +282,7 @@ export const registerTranscriptHandlers = (
       const isHost = room.getHostUserId() === client.id;
       respond(
         callback,
-        context.state.transcriptRelays.stopRoomForUser({
+        await context.state.transcriptRelays.stopRoomForUser({
           roomKey: room.channelId,
           userId: client.id,
           canStopAnyRelay: isAdmin || isHost,

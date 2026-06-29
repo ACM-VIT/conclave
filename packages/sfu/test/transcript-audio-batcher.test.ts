@@ -151,4 +151,16 @@ describe("TranscriptAudioBatcher", () => {
     expect(batcher.commitIfNeeded()).toBe(false);
     expect(events).toEqual([]);
   });
+
+  it("does not clear the worker buffer when nothing was committed", () => {
+    const events: AudioEvent[] = [];
+    const batcher = new TranscriptAudioBatcher({
+      speaker: speaker("u1", "Ada"),
+      sink: createSink(events),
+      batchTargetSamples: 4,
+    });
+
+    expect(batcher.flushAndCommit()).toBe(false);
+    expect(events).toEqual([]);
+  });
 });

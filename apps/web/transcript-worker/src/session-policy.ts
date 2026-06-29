@@ -32,7 +32,9 @@ export const resolveTranscriptStartPermission = ({
   }
   if (
     !isTakeover &&
-    (existingStatus === "live" || existingStatus === "starting")
+    (existingStatus === "live" ||
+      existingStatus === "starting" ||
+      existingStatus === "paused")
   ) {
     return { ok: false, message: "Transcript is already running." };
   }
@@ -59,6 +61,17 @@ export const canRefreshTranscriptMinutes = (options: {
   viewerCanAsk: boolean;
 }): boolean => options.viewerCanAsk;
 
+export const shouldDropPausedTranscriptAudio = (options: {
+  audioPaused: boolean;
+  viewerCanRelayAudio: boolean;
+  messageType: string;
+}): boolean =>
+  options.audioPaused &&
+  options.viewerCanRelayAudio &&
+  (options.messageType === "audio.chunk" ||
+    options.messageType === "audio.commit" ||
+    options.messageType === "audio.clear");
+
 export const shouldRequestControllerHandoff = (options: {
   closingConnectionId?: string;
   closingUserId: string;
@@ -83,4 +96,6 @@ export const shouldRequestSfuRelayHandoff = (options: {
 }): boolean =>
   options.closingViewerCanRelayAudio &&
   options.transportMode === "sfu" &&
-  (options.sessionStatus === "live" || options.sessionStatus === "starting");
+  (options.sessionStatus === "live" ||
+    options.sessionStatus === "starting" ||
+    options.sessionStatus === "paused");

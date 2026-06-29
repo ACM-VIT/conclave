@@ -472,7 +472,9 @@ function ControlsBar(props: ControlsBarProps) {
   const VolumeIcon = meetVolumePercent === 0 ? VolumeX : Volume2;
 
   const transcriptClusterStatus: PanelStatus =
-    props.transcriptStatus === "live" || props.transcriptStatus === "starting"
+    props.transcriptStatus === "live" ||
+    props.transcriptStatus === "starting" ||
+    props.transcriptStatus === "paused"
       ? "live"
       : props.transcriptStatus === "takeover_needed" ||
           props.transcriptStatus === "error"

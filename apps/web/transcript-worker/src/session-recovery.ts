@@ -13,6 +13,7 @@ const ACTIVE_RECOVERY_STATUSES = new Set<TranscriptSessionState["status"]>([
   "live",
   "starting",
   "stopping",
+  "paused",
 ]);
 
 const shouldTreatAsServiceUpdate = (

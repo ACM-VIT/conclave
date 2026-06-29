@@ -29,7 +29,7 @@ export type TranscriptRelayRegistry = {
     roomKey: string;
     userId: string;
     canStopAnyRelay: boolean;
-  }) => TranscriptSfuRelayStopResponse | { error: string };
+  }) => Promise<TranscriptSfuRelayStopResponse | { error: string }>;
   syncRoom: (room: Room) => Promise<void>;
   closeAll: () => void;
 };
@@ -170,7 +170,7 @@ export const createTranscriptRelayRegistry = (options: {
       relays.delete(roomKey);
       return { success: true };
     },
-    stopRoomForUser({ roomKey, userId, canStopAnyRelay }) {
+    async stopRoomForUser({ roomKey, userId, canStopAnyRelay }) {
       const relay = relays.get(roomKey);
       if (!relay) return { success: true };
       if (!canStopAnyRelay && relay.controllerUserId !== userId) {
@@ -178,7 +178,13 @@ export const createTranscriptRelayRegistry = (options: {
           error: "Only the transcript relay controller, host, or admin can stop the SFU relay.",
         };
       }
-      relay.close();
+      const handoffReady = await relay.prepareHandoff();
+      if (!handoffReady) {
+        Logger.warn(
+          `Transcript SFU relay stop for room ${roomKey} could not prepare worker disconnect suppression.`,
+        );
+      }
+      relay.close({ flushBufferedAudio: true });
       relays.delete(roomKey);
       return { success: true };
     },

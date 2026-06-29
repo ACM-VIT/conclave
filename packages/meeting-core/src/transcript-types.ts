@@ -2,9 +2,14 @@ export type TranscriptSessionStatus =
   | "idle"
   | "starting"
   | "live"
+  | "paused"
   | "takeover_needed"
   | "stopping"
   | "error";
+
+// Lifecycle of the rolling meeting minutes, surfaced to viewers so the UI can
+// show "Updating…" / "Updated Xs ago" instead of relying on a manual refresh.
+export type TranscriptMinutesStatus = "idle" | "pending" | "generating" | "live";
 
 export interface TranscriptController {
   userId: string;

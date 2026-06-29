@@ -899,6 +899,7 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
           roomId: context.currentRoom.id,
         });
         emitWebinarFeedChanged(io, state, context.currentRoom);
+        void state.transcriptRelays.syncRoom(context.currentRoom);
 
         respond(callback, { success: true });
       } catch (error) {

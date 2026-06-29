@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   Participant,
   TranscriptMinutesSnapshot,
+  TranscriptMinutesStatus,
   TranscriptSegment,
   TranscriptServiceVersion,
   TranscriptSfuRelayStartRequest,
@@ -84,6 +85,7 @@ type ServerEnvelope =
       segments?: TranscriptSegment[];
       partials?: TranscriptSegment[];
       minutes?: TranscriptMinutesSnapshot;
+      minutesStatus?: TranscriptMinutesStatus;
     }
   | {
       type: "session.state";
@@ -98,6 +100,11 @@ type ServerEnvelope =
   | { type: "segment.final"; segment: TranscriptSegment }
   | { type: "partials.reset" }
   | { type: "minutes.updated"; minutes: TranscriptMinutesSnapshot }
+  | {
+      type: "minutes.status";
+      status: TranscriptMinutesStatus;
+      updatedAt?: number;
+    }
   | {
       type: "qa.delta";
       id: string;
@@ -163,6 +170,7 @@ const toWorkerWebSocketUrl = (token: TranscriptTokenResponse): string => {
 const VERSION_POLL_INTERVAL_MS = 30_000;
 const SFU_SESSION_READY_TIMEOUT_MS = 12_000;
 const SFU_RELAY_TOKEN_TIMEOUT_MS = 5_000;
+const SFU_RELAY_STOP_TIMEOUT_MS = 3_000;
 
 const toWorkerVersionUrl = (workerUrl: string): string => {
   const base = workerUrl.replace(/\/+$/, "");
@@ -188,6 +196,17 @@ const isLiveAudioStream = (stream: MediaStream | null | undefined): boolean =>
 
 const hasUsableOpenSocket = (socket: WebSocket | null): boolean =>
   Boolean(socket && socket.readyState === WebSocket.OPEN);
+
+const withTimeout = async <T,>(
+  promise: Promise<T>,
+  timeoutMs: number,
+): Promise<T | null> =>
+  Promise.race([
+    promise,
+    new Promise<null>((resolve) =>
+      window.setTimeout(() => resolve(null), timeoutMs),
+    ),
+  ]);
 
 export function useMeetingTranscript({
   roomId,
@@ -217,6 +236,8 @@ export function useMeetingTranscript({
   const [minutes, setMinutes] = useState<TranscriptMinutesSnapshot>(() =>
     createEmptyTranscriptMinutes(),
   );
+  const [minutesStatus, setMinutesStatus] =
+    useState<TranscriptMinutesStatus>("idle");
   const [qaMessages, setQaMessages] = useState<TranscriptQaMessage[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [isStreamingAudio, setIsStreamingAudio] = useState(false);
@@ -510,6 +531,7 @@ export function useMeetingTranscript({
             message.minutes ??
               createEmptyTranscriptMinutes(message.session.qaModel),
           );
+          setMinutesStatus(message.minutesStatus ?? "idle");
           return;
         }
         case "session.state":
@@ -534,6 +556,9 @@ export function useMeetingTranscript({
           return;
         case "minutes.updated":
           setMinutes(message.minutes);
+          return;
+        case "minutes.status":
+          setMinutesStatus(message.status);
           return;
         case "qa.delta":
           upsertAssistantMessage({
@@ -930,16 +955,19 @@ export function useMeetingTranscript({
     tokenInfo?.capabilities.takeover,
   ]);
 
-  const stop = useCallback(() => {
+  const stop = useCallback(async (): Promise<void> => {
     if (!canStop) {
       setPermissionError();
       return;
     }
     const transportMode = session.transportMode;
-    send({ type: "session.stop" });
     if (transportMode === "sfu") {
-      void stopTranscriptSfuRelay?.();
+      await withTimeout(
+        stopTranscriptSfuRelay?.() ?? Promise.resolve(null),
+        SFU_RELAY_STOP_TIMEOUT_MS,
+      );
     }
+    send({ type: "session.stop" });
   }, [
     canStop,
     send,
@@ -947,6 +975,22 @@ export function useMeetingTranscript({
     setPermissionError,
     stopTranscriptSfuRelay,
   ]);
+
+  const pause = useCallback((): boolean => {
+    if (!canStop) {
+      setPermissionError();
+      return false;
+    }
+    return send({ type: "session.pause" });
+  }, [canStop, send, setPermissionError]);
+
+  const resume = useCallback((): boolean => {
+    if (!canStop) {
+      setPermissionError();
+      return false;
+    }
+    return send({ type: "session.resume" });
+  }, [canStop, send, setPermissionError]);
 
   const ask = useCallback(
     async (question: string): Promise<boolean> => {
@@ -1036,6 +1080,7 @@ export function useMeetingTranscript({
       setSegments([]);
       setPartials(new Map());
       setMinutes(createEmptyTranscriptMinutes());
+      setMinutesStatus("idle");
       setQaMessages([]);
       setTokenInfo(null);
       setHasGlobalOpenAiKey(false);
@@ -1152,6 +1197,7 @@ export function useMeetingTranscript({
     partialSegments,
     allSegments,
     minutes,
+    minutesStatus,
     qaMessages,
     error,
     tokenInfo,
@@ -1164,17 +1210,21 @@ export function useMeetingTranscript({
     canStart,
     canTakeover,
     canStop,
+    canPause: canStop,
     canAsk,
     canRefreshMinutes,
     isStreamingAudio,
     isController: !isViewOnly && rawIsController,
     isControllerUser: !isViewOnly && rawIsControllerUser,
     isLive: session.status === "live",
+    isPaused: session.status === "paused",
     connect,
     reconnect,
     start,
     takeover,
     stop,
+    pause,
+    resume,
     ask,
     refreshMinutes,
     exportMarkdown,

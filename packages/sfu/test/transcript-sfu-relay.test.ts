@@ -336,6 +336,31 @@ describe("SfuTranscriptRelay realistic audio flow", () => {
     relay.close();
   });
 
+  it("does not flush buffered audio during intentional relay shutdown", async () => {
+    const ada = producerEntry("producer-a", "u1", "Ada");
+    const { directTransport, relay, workerEvents } = createHarness([ada]);
+    await relay.start();
+
+    const consumer = directTransport.consumers.get("producer-a")!;
+    for (const packet of encodeOpusFrames(3, {
+      frequencyHz: 440,
+      amplitude: 9000,
+      ssrc: 101,
+    })) {
+      consumer.emitRtp(packet);
+    }
+    relay.close();
+
+    expect(
+      workerEvents.filter(
+        (event) =>
+          event.type === "chunk" ||
+          event.type === "commit" ||
+          event.type === "clear",
+      ),
+    ).toEqual([]);
+  });
+
   it("closes SFU consumers when the transcript worker relay socket drops", async () => {
     const ada = producerEntry("producer-a", "u1", "Ada");
     const { directTransport, relay, workerClient, workerEvents } =

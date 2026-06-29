@@ -78,6 +78,8 @@ export type ClientEnvelope =
       delay?: string;
     }
   | { type: "session.stop" }
+  | { type: "session.pause" }
+  | { type: "session.resume" }
   | {
       type: "audio.chunk";
       audio?: string;

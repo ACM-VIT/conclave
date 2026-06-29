@@ -3,6 +3,7 @@ import {
   canRefreshTranscriptMinutes,
   canStopTranscriptSession,
   resolveTranscriptStartPermission,
+  shouldDropPausedTranscriptAudio,
   shouldRequestControllerHandoff,
   shouldRequestSfuRelayHandoff,
 } from "../transcript-worker/src/session-policy";
@@ -81,6 +82,56 @@ describe("canRefreshTranscriptMinutes", () => {
   it("uses the ask capability for model-backed shared minutes refreshes", () => {
     expect(canRefreshTranscriptMinutes({ viewerCanAsk: true })).toBe(true);
     expect(canRefreshTranscriptMinutes({ viewerCanAsk: false })).toBe(false);
+  });
+});
+
+describe("shouldDropPausedTranscriptAudio", () => {
+  it("drops authorized audio messages while paused before rate limiting", () => {
+    expect(
+      shouldDropPausedTranscriptAudio({
+        audioPaused: true,
+        viewerCanRelayAudio: true,
+        messageType: "audio.chunk",
+      }),
+    ).toBe(true);
+    expect(
+      shouldDropPausedTranscriptAudio({
+        audioPaused: true,
+        viewerCanRelayAudio: true,
+        messageType: "audio.commit",
+      }),
+    ).toBe(true);
+    expect(
+      shouldDropPausedTranscriptAudio({
+        audioPaused: true,
+        viewerCanRelayAudio: true,
+        messageType: "audio.clear",
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps unauthorized or non-audio messages on the normal rate-limit path", () => {
+    expect(
+      shouldDropPausedTranscriptAudio({
+        audioPaused: true,
+        viewerCanRelayAudio: false,
+        messageType: "audio.chunk",
+      }),
+    ).toBe(false);
+    expect(
+      shouldDropPausedTranscriptAudio({
+        audioPaused: false,
+        viewerCanRelayAudio: true,
+        messageType: "audio.chunk",
+      }),
+    ).toBe(false);
+    expect(
+      shouldDropPausedTranscriptAudio({
+        audioPaused: true,
+        viewerCanRelayAudio: true,
+        messageType: "qa.ask",
+      }),
+    ).toBe(false);
   });
 });
 

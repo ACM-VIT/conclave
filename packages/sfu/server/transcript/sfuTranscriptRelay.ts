@@ -157,14 +157,16 @@ export class SfuTranscriptRelay implements TranscriptAudioBatchSink {
     }
   }
 
-  close(): void {
+  close(options: { flushBufferedAudio?: boolean } = {}): void {
     this.started = false;
     if (this.commitTimer) {
       clearInterval(this.commitTimer);
       this.commitTimer = null;
     }
-    for (const [producerId, active] of this.consumers) {
-      this.flushAndCommit(active);
+    for (const [producerId, active] of Array.from(this.consumers)) {
+      if (options.flushBufferedAudio) {
+        this.flushAndCommit(active);
+      }
       this.closeConsumer(producerId, active);
     }
     this.consumers.clear();
@@ -359,9 +361,8 @@ export class SfuTranscriptRelay implements TranscriptAudioBatchSink {
     producerId: string,
     active: ActiveAudioConsumer,
   ): void {
-    if (this.consumers.get(producerId) === active) {
-      this.consumers.delete(producerId);
-    }
+    if (this.consumers.get(producerId) !== active) return;
+    this.consumers.delete(producerId);
     try {
       active.consumer.close();
     } catch {}

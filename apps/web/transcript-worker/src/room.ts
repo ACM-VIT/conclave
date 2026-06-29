@@ -1,5 +1,6 @@
 import type {
   TranscriptMinutesSnapshot,
+  TranscriptMinutesStatus,
   TranscriptSegment,
   TranscriptSegmentDelta,
   TranscriptSfuRelayStartToken,
@@ -15,7 +16,9 @@ import {
   MAX_AUDIO_CHUNK_BASE64_BYTES,
   MAX_CLIENT_MESSAGE_BYTES,
   MIN_OPENAI_COMMIT_AUDIO_SAMPLES,
-  MIN_MINUTES_REFRESH_MS,
+  MINUTES_QUIET_DEBOUNCE_MS,
+  MINUTES_MAX_WAIT_MS,
+  MINUTES_MIN_WORDS,
 } from "./constants";
 import {
   signTranscriptSfuRelayStartToken,
@@ -50,6 +53,7 @@ import {
   canRefreshTranscriptMinutes,
   canStopTranscriptSession,
   resolveTranscriptStartPermission,
+  shouldDropPausedTranscriptAudio,
   shouldRequestControllerHandoff,
   shouldRequestSfuRelayHandoff,
 } from "./session-policy";
@@ -110,6 +114,17 @@ export class TranscriptRoom {
   private openAiSocket: WebSocket | null = null;
   private openAiGeneration = 0;
   private lastMinutesRefreshAt = 0;
+  // Auto-minutes scheduler state. We debounce regeneration so AI minutes are
+  // never clobbered mid-conversation; the crude fallback is only ever a seed.
+  private minutesTimer: ReturnType<typeof setTimeout> | null = null;
+  private minutesDirtySince = 0;
+  private minutesGenerating = false;
+  private minutesRerunRequested = false;
+  private hasAiMinutes = false;
+  private minutesStatus: TranscriptMinutesStatus = "idle";
+  // When the controller pauses, we keep the session + OpenAI socket alive but
+  // gate audio so nothing is transcribed until they resume.
+  private audioPaused = false;
   private suppressSfuRelayDisconnectsUntil = 0;
   private suppressSfuRelayDisconnectCount = 0;
 
@@ -173,6 +188,7 @@ export class TranscriptRoom {
       segments: this.segments,
       partials: Array.from(this.partialSegments.values()),
       minutes: this.minutes,
+      minutesStatus: this.minutesStatus,
     });
     this.broadcastSession();
 
@@ -194,7 +210,11 @@ export class TranscriptRoom {
     await this.loaded;
     if (this.viewers.size !== 0) return;
 
-    if (this.session?.status === "live" || this.session?.status === "starting") {
+    if (
+      this.session?.status === "live" ||
+      this.session?.status === "starting" ||
+      this.session?.status === "paused"
+    ) {
       this.markTakeoverNeeded("Transcript controller disconnected.");
     }
     if (
@@ -279,6 +299,16 @@ export class TranscriptRoom {
     }
 
     const message = parsed as ClientEnvelope;
+    if (
+      shouldDropPausedTranscriptAudio({
+        audioPaused: this.audioPaused,
+        viewerCanRelayAudio: this.canRelayAudio(viewer),
+        messageType: message.type,
+      })
+    ) {
+      return;
+    }
+
     const rateBucket = this.rateBucketForMessage(message);
     if (
       rateBucket &&
@@ -295,6 +325,12 @@ export class TranscriptRoom {
         return;
       case "session.stop":
         await this.stopSession(viewer);
+        return;
+      case "session.pause":
+        await this.setPaused(viewer, true);
+        return;
+      case "session.resume":
+        await this.setPaused(viewer, false);
         return;
       case "audio.chunk":
         if ((message.audio?.length ?? 0) > MAX_AUDIO_CHUNK_BASE64_BYTES) {
@@ -321,7 +357,7 @@ export class TranscriptRoom {
           this.sendError(viewer, "You cannot refresh transcript minutes.");
           return;
         }
-        await this.refreshMinutes({ force: true });
+        await this.forceRefreshMinutes();
         return;
       case "export.snapshot":
         this.send(viewer.socket, {
@@ -333,6 +369,7 @@ export class TranscriptRoom {
           segments: this.segments,
           partials: Array.from(this.partialSegments.values()),
           minutes: this.minutes,
+          minutesStatus: this.minutesStatus,
         });
         return;
       case "relay.handoff.prepare":
@@ -445,11 +482,13 @@ export class TranscriptRoom {
       error: null,
     };
     this.resetOpenAiAudioState();
+    this.audioPaused = false;
     if (wasIdle) {
       this.segments = [];
       this.sequence = 0;
       this.minutes = createEmptyMinutes(qaModel);
       this.lastMinutesRefreshAt = 0;
+      this.resetMinutesScheduler();
     }
     this.broadcastSession();
     await this.persist();
@@ -508,6 +547,8 @@ export class TranscriptRoom {
     };
     this.segments = [];
     this.resetOpenAiAudioState();
+    this.resetMinutesScheduler();
+    this.audioPaused = false;
     this.sequence = 0;
     this.lastMinutesRefreshAt = 0;
     this.minutes = createEmptyMinutes(this.session.qaModel);
@@ -520,7 +561,56 @@ export class TranscriptRoom {
       segments: [],
       partials: [],
       minutes: this.minutes,
+      minutesStatus: this.minutesStatus,
     });
+  }
+
+  // Pause/resume transcription without ending the session: the OpenAI socket
+  // and accumulated transcript stay intact, we just stop feeding audio. Only
+  // the controller (or a host/admin who could stop it) may toggle this.
+  private async setPaused(viewer: Viewer, paused: boolean): Promise<void> {
+    if (!this.session) {
+      this.sendError(viewer, "No transcript session is running.");
+      return;
+    }
+    if (
+      !canStopTranscriptSession({
+        controllerUserId: this.session.controller?.userId,
+        viewerCanStop: viewer.capabilities.stop,
+        viewerUserId: viewer.userId,
+      })
+    ) {
+      this.sendError(viewer, "Only the controller, host, or admin can pause.");
+      return;
+    }
+    const status = this.session.status;
+    if (paused && status !== "live") {
+      this.sendError(viewer, "Transcript must be live to pause.");
+      return;
+    }
+    if (!paused && status !== "paused") {
+      return;
+    }
+    if (paused) {
+      // Flush whatever is buffered so the last utterance finalizes cleanly.
+      if (this.hasPendingAudio && this.latestSpeaker) {
+        this.commitOpenAiBuffer(
+          this.latestSpeaker,
+          "Transcript audio commit failed.",
+        );
+      }
+      this.audioPaused = true;
+    } else {
+      this.audioPaused = false;
+    }
+    this.session = {
+      ...this.session,
+      status: paused ? "paused" : "live",
+      updatedAt: Date.now(),
+      error: null,
+    };
+    this.broadcastSession();
+    await this.persist();
   }
 
   private appendAudio(
@@ -528,6 +618,7 @@ export class TranscriptRoom {
     audio: string | undefined,
     speaker: Partial<TranscriptSpeaker> | undefined,
   ): void {
+    if (this.audioPaused) return;
     if (!this.canRelayAudio(viewer)) return;
     if (!audio || !this.openAiSocket) return;
     const sampleCount = estimatePcm16Base64SampleCount(audio);
@@ -564,6 +655,7 @@ export class TranscriptRoom {
     speaker: Partial<TranscriptSpeaker> | undefined,
   ): void {
     if (
+      this.audioPaused ||
       !this.canRelayAudio(viewer) ||
       !this.openAiSocket ||
       !this.hasPendingAudio
@@ -994,13 +1086,8 @@ export class TranscriptRoom {
     this.segments.sort((left, right) => left.sequence - right.sequence);
     this.trimSegments();
     this.broadcast({ type: "segment.final", segment: finalSegment });
-    this.minutes = fallbackMinutes(
-      this.segments,
-      this.session?.qaModel || DEFAULT_QA_MODEL,
-    );
-    this.broadcast({ type: "minutes.updated", minutes: this.minutes });
     await this.persist();
-    void this.refreshMinutes({ force: false });
+    this.scheduleMinutes();
   }
 
   private trimSegments(): void {
@@ -1016,6 +1103,13 @@ export class TranscriptRoom {
     this.closeOpenAi();
     this.apiKey = null;
     this.resetOpenAiAudioState();
+    this.audioPaused = false;
+    if (this.minutesTimer !== null) {
+      clearTimeout(this.minutesTimer);
+      this.minutesTimer = null;
+    }
+    this.minutesGenerating = false;
+    if (this.minutesStatus !== "idle") this.minutesStatus = "live";
     if (!this.session) return;
     this.session = {
       ...this.session,
@@ -1025,16 +1119,101 @@ export class TranscriptRoom {
     };
   }
 
-  private async refreshMinutes(options: { force: boolean }): Promise<void> {
-    if (!this.apiKey || this.segments.length === 0 || !this.session) return;
-    const now = Date.now();
-    if (
-      !options.force &&
-      now - this.lastMinutesRefreshAt < MIN_MINUTES_REFRESH_MS
-    ) {
+  private hasMinutesContent(minutes: TranscriptMinutesSnapshot): boolean {
+    return Boolean(
+      minutes.summary.trim() ||
+        minutes.topics.length ||
+        minutes.decisions.length ||
+        minutes.actionItems.length ||
+        minutes.openQuestions.length ||
+        minutes.followUps.length,
+    );
+  }
+
+  // There's no point summarizing two words of small talk — wait until there's
+  // enough spoken content that minutes are meaningful.
+  private hasEnoughContentForMinutes(): boolean {
+    let words = 0;
+    for (const segment of this.segments) {
+      if (!segment.isFinal) continue;
+      const text = segment.text.trim();
+      if (!text) continue;
+      words += text.split(/\s+/).length;
+      if (words >= MINUTES_MIN_WORDS) return true;
+    }
+    return false;
+  }
+
+  private setMinutesStatus(status: TranscriptMinutesStatus): void {
+    if (this.minutesStatus === status) return;
+    this.minutesStatus = status;
+    this.broadcast({
+      type: "minutes.status",
+      status: this.minutesStatus,
+      updatedAt: this.minutes.updatedAt,
+    });
+  }
+
+  private resetMinutesScheduler(): void {
+    if (this.minutesTimer !== null) {
+      clearTimeout(this.minutesTimer);
+      this.minutesTimer = null;
+    }
+    this.minutesDirtySince = 0;
+    this.minutesGenerating = false;
+    this.minutesRerunRequested = false;
+    this.hasAiMinutes = false;
+    this.minutesStatus = "idle";
+  }
+
+  // Debounced auto-refresh: regenerate after the room is quiet for the quiet
+  // window, but never wait longer than the hard cap during continuous talk.
+  private scheduleMinutes(): void {
+    if (!this.apiKey || this.segments.length === 0) return;
+    if (!this.hasAiMinutes && !this.hasEnoughContentForMinutes()) return;
+    if (this.minutesGenerating) {
+      this.minutesRerunRequested = true;
       return;
     }
-    this.lastMinutesRefreshAt = now;
+    const now = Date.now();
+    if (this.minutesDirtySince === 0) this.minutesDirtySince = now;
+    const elapsed = now - this.minutesDirtySince;
+    const delay = Math.max(
+      0,
+      Math.min(MINUTES_QUIET_DEBOUNCE_MS, MINUTES_MAX_WAIT_MS - elapsed),
+    );
+    if (this.minutesTimer !== null) clearTimeout(this.minutesTimer);
+    this.setMinutesStatus("pending");
+    this.minutesTimer = setTimeout(() => {
+      this.minutesTimer = null;
+      void this.regenerateMinutes();
+    }, delay);
+  }
+
+  // Manual "refresh now" from a viewer: skip the debounce and run immediately.
+  private async forceRefreshMinutes(): Promise<void> {
+    if (this.minutesTimer !== null) {
+      clearTimeout(this.minutesTimer);
+      this.minutesTimer = null;
+    }
+    this.minutesDirtySince = this.minutesDirtySince || Date.now();
+    await this.regenerateMinutes();
+  }
+
+  private async regenerateMinutes(): Promise<void> {
+    if (!this.apiKey || this.segments.length === 0 || !this.session) {
+      this.minutesDirtySince = 0;
+      this.setMinutesStatus("idle");
+      return;
+    }
+    if (this.minutesGenerating) {
+      this.minutesRerunRequested = true;
+      return;
+    }
+    this.minutesGenerating = true;
+    this.minutesDirtySince = 0;
+    this.lastMinutesRefreshAt = Date.now();
+    this.setMinutesStatus("generating");
 
     const transcript = this.segments
       .slice(-80)
@@ -1056,13 +1235,30 @@ export class TranscriptRoom {
         transcript,
         fallback,
       });
-      if (!minutes) return;
-      this.minutes = minutes;
-      this.broadcast({ type: "minutes.updated", minutes: this.minutes });
-      await this.persist();
+      if (minutes) {
+        this.minutes = minutes;
+        this.hasAiMinutes = true;
+        this.broadcast({ type: "minutes.updated", minutes: this.minutes });
+        await this.persist();
+      }
     } catch {
-      this.minutes = fallback;
-      this.broadcast({ type: "minutes.updated", minutes: this.minutes });
+      // Only fall back to the heuristic when the AI pass fails AND there's
+      // enough content to be worth it — never echo a few words of small talk.
+      if (
+        !this.hasAiMinutes &&
+        !this.hasMinutesContent(this.minutes) &&
+        this.hasEnoughContentForMinutes()
+      ) {
+        this.minutes = fallback;
+        this.broadcast({ type: "minutes.updated", minutes: this.minutes });
+      }
+    } finally {
+      this.minutesGenerating = false;
+      this.setMinutesStatus("live");
+      if (this.minutesRerunRequested) {
+        this.minutesRerunRequested = false;
+        this.scheduleMinutes();
+      }
     }
   }
 
@@ -1153,6 +1349,8 @@ export class TranscriptRoom {
       case "relay.handoff.prepare":
       case "session.start":
       case "session.stop":
+      case "session.pause":
+      case "session.resume":
       case "session.takeover":
         return "session";
       default:
@@ -1185,6 +1383,8 @@ export class TranscriptRoom {
     this.apiKey = null;
     this.segments = [];
     this.resetOpenAiAudioState();
+    this.resetMinutesScheduler();
+    this.audioPaused = false;
     this.sequence = 0;
     this.lastMinutesRefreshAt = 0;
     this.session = {

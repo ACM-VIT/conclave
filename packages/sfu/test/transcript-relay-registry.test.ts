@@ -19,6 +19,11 @@ const createRegistry = (registryOptions: {
   handoffFailsFor?: Set<string>;
 } = {}) => {
   const closed: string[] = [];
+  const handoffsPrepared: string[] = [];
+  const closeOptions: Array<{
+    controllerUserId: string;
+    flushBufferedAudio?: boolean;
+  }> = [];
   const relays = new Map<string, { onClosed?: (message: string) => void }>();
   const registry = createTranscriptRelayRegistry({
     enabled: true,
@@ -33,16 +38,22 @@ const createRegistry = (registryOptions: {
             throw new Error("start failed");
           }
         },
-        prepareHandoff: async () =>
-          !registryOptions.handoffFailsFor?.has(options.controllerUserId),
+        prepareHandoff: async () => {
+          handoffsPrepared.push(options.controllerUserId);
+          return !registryOptions.handoffFailsFor?.has(options.controllerUserId);
+        },
         syncProducers: async () => {},
-        close: () => {
+        close: (closeOption?: { flushBufferedAudio?: boolean }) => {
           closed.push(options.controllerUserId);
+          closeOptions.push({
+            controllerUserId: options.controllerUserId,
+            flushBufferedAudio: closeOption?.flushBufferedAudio,
+          });
         },
       };
     },
     });
-  return { closed, registry, relays };
+  return { closed, closeOptions, handoffsPrepared, registry, relays };
 };
 
 describe("TranscriptRelayRegistry", () => {
@@ -208,5 +219,31 @@ describe("TranscriptRelayRegistry", () => {
       reason: "Transcript worker did not prepare SFU relay handoff.",
     });
     expect(closed).toEqual(["u2"]);
+  });
+
+  it("flushes buffered audio when the controller intentionally stops the relay", async () => {
+    const { closeOptions, handoffsPrepared, registry } = createRegistry();
+
+    await registry.start({
+      room,
+      workerUrl: "http://worker.test",
+      workerToken: "token-a",
+      controllerUserId: "u1",
+      controllerDisplayName: "Ada",
+      canReplaceExistingRelay: false,
+    });
+
+    await expect(
+      registry.stopRoomForUser({
+        roomKey: room.channelId,
+        userId: "u1",
+        canStopAnyRelay: false,
+      }),
+    ).resolves.toEqual({ success: true });
+
+    expect(handoffsPrepared).toEqual(["u1"]);
+    expect(closeOptions).toEqual([
+      { controllerUserId: "u1", flushBufferedAudio: true },
+    ]);
   });
 });

@@ -27,6 +27,7 @@ import type {
   MeetingConfigSnapshot,
   MeetingUpdateRequest,
   ReactionOption,
+  TranscriptSessionStatus,
   WebinarConfigSnapshot,
   WebinarLinkResponse,
   WebinarUpdateRequest,
@@ -46,13 +47,7 @@ export interface ControlsBarProps {
   isChatOpen: boolean;
   isTranscriptOpen?: boolean;
   isTranscriptLive?: boolean;
-  transcriptStatus?:
-    | "idle"
-    | "starting"
-    | "live"
-    | "takeover_needed"
-    | "stopping"
-    | "error";
+  transcriptStatus?: TranscriptSessionStatus;
   unreadCount: number;
   isHandRaised: boolean;
   reactionOptions: ReactionOption[];

@@ -49,9 +49,12 @@ export class TranscriptAudioBatcher {
     return this.options.sink.commitAudio(this.options.speaker);
   }
 
-  flushAndCommit(): void {
-    this.commitIfNeeded();
-    this.options.sink.clearAudio(this.options.speaker);
+  flushAndCommit(): boolean {
+    const committed = this.commitIfNeeded();
+    if (committed) {
+      this.options.sink.clearAudio(this.options.speaker);
+    }
+    return committed;
   }
 
   private flushQueuedAudio(): void {
