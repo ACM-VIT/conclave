@@ -3944,6 +3944,47 @@ final class ConclaveTests: XCTestCase {
     }
 
     @MainActor
+    func testDelayedStableLeaveCleanupDoesNotRemoveQuickSessionRejoin() async throws {
+        let viewModel = MeetingViewModel()
+        viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
+        viewModel.state.sfuUserId = "local@example.com"
+        viewModel.state.displayName = "Local"
+        viewModel.state.roomId = "room-a"
+        viewModel.state.connectionState = ConnectionState.joined
+
+        let stableRemoteId = "alex@example.com"
+        let newSessionId = "alex@example.com#new-session"
+        viewModel.state.participants[stableRemoteId] = Participant(
+            id: stableRemoteId,
+            displayName: "Alex"
+        )
+
+        viewModel.socketManager.onUserLeft?(UserLeftNotification(
+            userId: stableRemoteId,
+            roomId: "room-a"
+        ))
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertEqual(viewModel.state.participants[stableRemoteId]?.isLeaving, true)
+
+        viewModel.handleProducerState(ProducerInfo(
+            producerId: "new-webcam",
+            producerUserId: newSessionId,
+            kind: "video",
+            type: ProducerType.webcam.rawValue,
+            paused: false,
+            roomId: "room-a"
+        ))
+        XCTAssertEqual(viewModel.state.participants[newSessionId]?.id, newSessionId)
+        XCTAssertEqual(viewModel.state.participants[newSessionId]?.isLeaving, false)
+
+        try? await Task.sleep(nanoseconds: 250_000_000)
+
+        XCTAssertNil(viewModel.state.participants[stableRemoteId])
+        XCTAssertEqual(viewModel.state.participants[newSessionId]?.id, newSessionId)
+        XCTAssertEqual(viewModel.state.visibleGridUserIds, [newSessionId])
+    }
+
+    @MainActor
     func testDepartedExactSessionCanBeMarkedPresentAgain() throws {
         let viewModel = MeetingViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")

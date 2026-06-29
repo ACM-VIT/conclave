@@ -2541,7 +2541,8 @@ final class MeetingViewModel {
     func shouldIgnoreDepartedParticipant(_ userId: String) -> Bool {
         guard let userId = normalizedParticipantUserId(userId),
               state.isRemoteParticipantUserId(userId) else { return false }
-        for aliasId in participantLifecycleAliasIds(for: userId) where departedParticipantUserIds.contains(aliasId) {
+        for aliasId in participantLifecycleAliasIds(for: userId, includeLeavingAliases: false)
+            where departedParticipantUserIds.contains(aliasId) {
             return true
         }
         return false
@@ -2567,19 +2568,20 @@ final class MeetingViewModel {
         guard isCurrentSocketEvent(context, roomId: notification.roomId),
               let userId = normalizedParticipantUserId(notification.userId),
               state.isRemoteParticipantUserId(userId) else { return }
+        let leavingAliasIds = participantLeaveAliasIds(for: userId)
         clearParticipantConnectionStatus(userId)
         markRemoteParticipantDeparted(userId)
         let leaveToken = UUID()
-        setParticipantLeaveToken(leaveToken, for: userId)
-        closeRemoteParticipantMedia(userId)
-        for aliasId in remoteParticipantAliasIds(for: userId) {
+        setParticipantLeaveToken(leaveToken, forAliasIds: leavingAliasIds)
+        closeRemoteParticipantMedia(userId, aliasIds: leavingAliasIds)
+        for aliasId in leavingAliasIds {
             state.participants[aliasId]?.isLeaving = true
         }
 
         try? await Task.sleep(nanoseconds: 200_000_000)
         guard isCurrentSocketEvent(context, roomId: notification.roomId) else { return }
-        guard isParticipantLeaveTokenCurrent(leaveToken, for: userId) else { return }
-        removeRemoteParticipant(userId)
+        guard isParticipantLeaveTokenCurrent(leaveToken, forAliasIds: leavingAliasIds) else { return }
+        removeRemoteParticipant(userId, aliasIds: leavingAliasIds)
     }
 
     private func applyDisplayNameUpdatedNotification(_ update: DisplayNameUpdatedNotification) {
@@ -2706,6 +2708,14 @@ final class MeetingViewModel {
         if state.participants[normalized] != nil {
             return normalized
         }
+        if participantIdHasSessionSuffix(normalized) {
+            if let activeAlias = state.participants.keys.first(where: {
+                participantIdsMatch($0, normalized) && state.participants[$0]?.isLeaving != true
+            }) {
+                return activeAlias
+            }
+            return normalized
+        }
         return state.participants.keys.first { participantIdsMatch($0, normalized) } ?? normalized
     }
 
@@ -2768,6 +2778,14 @@ final class MeetingViewModel {
             aliasIds.insert(participantId)
         }
         return aliasIds.filter { state.isRemoteParticipantUserId($0) }
+    }
+
+    private func participantLeaveAliasIds(for userId: String) -> Set<String> {
+        guard let userId = normalizedParticipantUserId(userId) else { return [] }
+        let stateId = participantStateId(for: userId)
+        return remoteParticipantAliasIds(for: userId)
+            .union([userId, stateId])
+            .filter { state.isRemoteParticipantUserId($0) }
     }
 
     func applyParticipantConnectionState(_ notification: ParticipantConnectionStateNotification) {
@@ -2864,12 +2882,21 @@ final class MeetingViewModel {
         Array(Set([state.userId, state.sfuUserId].compactMap { normalizedParticipantUserId($0) }))
     }
 
-    private func participantLifecycleAliasIds(for userId: String) -> Set<String> {
+    private func participantLifecycleAliasIds(
+        for userId: String,
+        includeLeavingAliases: Bool = true
+    ) -> Set<String> {
         guard let normalized = normalizedParticipantUserId(userId) else { return [] }
         var ids = Set([normalized])
         let stateId = participantStateId(for: userId)
         ids.insert(stateId)
         for participantId in state.participants.keys where participantIdsMatch(participantId, normalized) {
+            if !includeLeavingAliases,
+               participantId != normalized,
+               participantIdHasSessionSuffix(normalized),
+               state.participants[participantId]?.isLeaving == true {
+                continue
+            }
             ids.insert(participantId)
         }
         return ids
@@ -2884,7 +2911,7 @@ final class MeetingViewModel {
     }
 
     private func clearParticipantLeaveToken(_ userId: String) {
-        for aliasId in participantLifecycleAliasIds(for: userId) {
+        for aliasId in participantLifecycleAliasIds(for: userId, includeLeavingAliases: false) {
             participantLeaveTokens.removeValue(forKey: aliasId)
         }
     }
@@ -2895,8 +2922,18 @@ final class MeetingViewModel {
         }
     }
 
+    private func setParticipantLeaveToken(_ token: UUID, forAliasIds aliasIds: Set<String>) {
+        for aliasId in aliasIds {
+            participantLeaveTokens[aliasId] = token
+        }
+    }
+
     private func isParticipantLeaveTokenCurrent(_ token: UUID, for userId: String) -> Bool {
         participantLifecycleAliasIds(for: userId).contains(where: { participantLeaveTokens[$0] == token })
+    }
+
+    private func isParticipantLeaveTokenCurrent(_ token: UUID, forAliasIds aliasIds: Set<String>) -> Bool {
+        aliasIds.contains(where: { participantLeaveTokens[$0] == token })
     }
 
     private func displayNameAliasIds(for userId: String) -> [String] {
@@ -3117,58 +3154,75 @@ final class MeetingViewModel {
         }
     }
 
-    private func removeRemoteParticipant(_ userId: String) {
+    private func removeRemoteParticipant(_ userId: String, aliasIds explicitAliasIds: Set<String>? = nil) {
         let stateId = participantStateId(for: userId)
-        let aliasIds = remoteParticipantAliasIds(for: userId)
-        for aliasId in aliasIds.union([userId, stateId]) {
+        let aliasIds = explicitAliasIds ?? remoteParticipantAliasIds(for: userId).union([userId, stateId])
+        let scopedAliasIds = aliasIds.filter { state.isRemoteParticipantUserId($0) }
+        for aliasId in scopedAliasIds {
             clearParticipantLeaveToken(aliasId)
             clearParticipantConnectionStatusTimer(aliasId)
         }
-        closeRemoteParticipantMedia(userId)
+        closeRemoteParticipantMedia(userId, aliasIds: explicitAliasIds)
         markRemoteParticipantDeparted(userId)
-        for aliasId in aliasIds {
+        for aliasId in scopedAliasIds {
             state.participants.removeValue(forKey: aliasId)
         }
+        let displaySourceIds = explicitAliasIds == nil
+            ? scopedAliasIds.union([userId, stateId])
+            : scopedAliasIds
         let displayAliasIds = Set(
-            aliasIds.flatMap { displayNameAliasIds(for: $0) }
-                + displayNameAliasIds(for: userId)
-                + displayNameAliasIds(for: stateId)
+            displaySourceIds.flatMap { displayNameAliasIds(for: $0) }
         )
         for aliasId in displayAliasIds {
             state.displayNames.removeValue(forKey: aliasId)
         }
-        if let pinnedUserId = state.pinnedUserId,
-           aliasIds.contains(where: { participantIdsMatch($0, pinnedUserId) }) ||
-            participantIdsMatch(userId, pinnedUserId) ||
-            participantIdsMatch(stateId, pinnedUserId) {
-            state.pinnedUserId = nil
+        if let pinnedUserId = state.pinnedUserId {
+            let shouldClearPinned = explicitAliasIds == nil
+                ? scopedAliasIds.contains(where: { participantIdsMatch($0, pinnedUserId) }) ||
+                    participantIdsMatch(userId, pinnedUserId) ||
+                    participantIdsMatch(stateId, pinnedUserId)
+                : scopedAliasIds.contains(pinnedUserId)
+            if shouldClearPinned {
+                state.pinnedUserId = nil
+            }
         }
     }
 
-    private func closeRemoteParticipantMedia(_ userId: String, force: Bool = false) {
-        guard force || state.isRemoteParticipantUserId(userId) else { return }
+    private func closeRemoteParticipantMedia(
+        _ userId: String,
+        force: Bool = false,
+        aliasIds explicitAliasIds: Set<String>? = nil
+    ) {
         let stateId = participantStateId(for: userId)
-        let aliasIds = remoteParticipantAliasIds(for: userId).union([userId, stateId])
+        let aliasIds = (explicitAliasIds ?? remoteParticipantAliasIds(for: userId).union([userId, stateId]))
+            .filter { state.isRemoteParticipantUserId($0) }
+        guard force || state.isRemoteParticipantUserId(userId) || !aliasIds.isEmpty else { return }
+        let usesExactAliases = explicitAliasIds != nil
         for aliasId in aliasIds {
             clearHeldActiveSpeakerIfNeeded(aliasId)
         }
         if let activeScreenShareUserId = state.activeScreenShareUserId,
-           aliasIds.contains(where: { participantIdsMatch($0, activeScreenShareUserId) }) {
+           aliases(aliasIds, contain: activeScreenShareUserId, exactOnly: usesExactAliases) {
             state.activeScreenShareUserId = nil
             for aliasId in aliasIds {
                 state.participants[aliasId]?.isScreenSharing = false
             }
         }
         if let ttsSpeakerId = state.ttsSpeakerId,
-           aliasIds.contains(where: { participantIdsMatch($0, ttsSpeakerId) }) {
+           aliases(aliasIds, contain: ttsSpeakerId, exactOnly: usesExactAliases) {
             state.ttsSpeakerId = nil
         }
 
-        clearPendingProducers(for: userId)
-        cancelRemoteProducerCloseGraceTasks(for: userId)
+        if usesExactAliases {
+            clearPendingProducers(forAliasIds: aliasIds)
+            cancelRemoteProducerCloseGraceTasks(forAliasIds: aliasIds)
+        } else {
+            clearPendingProducers(for: userId)
+            cancelRemoteProducerCloseGraceTasks(for: userId)
+        }
 
         let staleProducerIds = producerInfosById.compactMap { producerId, info in
-            participantIdsMatch(info.producerUserId, userId)
+            (usesExactAliases ? aliasIds.contains(info.producerUserId) : participantIdsMatch(info.producerUserId, userId))
                 ? producerId
                 : nil
         }
@@ -3185,11 +3239,36 @@ final class MeetingViewModel {
         }
     }
 
+    private func aliases(_ aliasIds: Set<String>, contain userId: String, exactOnly: Bool) -> Bool {
+        if exactOnly {
+            return aliasIds.contains(userId)
+        }
+        return aliasIds.contains(where: { participantIdsMatch($0, userId) })
+    }
+
     private func clearPendingProducers(for userId: String) {
         let stalePendingProducerIds = pendingProducers.compactMap { producerId, producer in
             participantIdsMatch(producer.producerUserId, userId)
                 ? producerId
                 : nil
+        }
+
+        for producerId in stalePendingProducerIds {
+            pendingProducers.removeValue(forKey: producerId)
+            pendingProducerContexts.removeValue(forKey: producerId)
+            pendingProducerRetryAttempts.removeValue(forKey: producerId)
+            cancelRemoteProducerCloseGraceTask(producerId: producerId)
+        }
+
+        if pendingProducers.isEmpty {
+            pendingProducerRetryTask?.cancel()
+            pendingProducerRetryTask = nil
+        }
+    }
+
+    private func clearPendingProducers(forAliasIds aliasIds: Set<String>) {
+        let stalePendingProducerIds = pendingProducers.compactMap { producerId, producer in
+            aliasIds.contains(producer.producerUserId) ? producerId : nil
         }
 
         for producerId in stalePendingProducerIds {
@@ -4405,6 +4484,15 @@ final class MeetingViewModel {
     private func cancelRemoteProducerCloseGraceTasks(for userId: String) {
         let producerIds = remoteProducerCloseGraceProducers.compactMap { producerId, producer in
             participantIdsMatch(producer.producerUserId, userId) ? producerId : nil
+        }
+        for producerId in producerIds {
+            cancelRemoteProducerCloseGraceTask(producerId: producerId)
+        }
+    }
+
+    private func cancelRemoteProducerCloseGraceTasks(forAliasIds aliasIds: Set<String>) {
+        let producerIds = remoteProducerCloseGraceProducers.compactMap { producerId, producer in
+            aliasIds.contains(producer.producerUserId) ? producerId : nil
         }
         for producerId in producerIds {
             cancelRemoteProducerCloseGraceTask(producerId: producerId)
