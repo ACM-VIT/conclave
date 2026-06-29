@@ -173,6 +173,7 @@ export function GamesPanel({
           />
         ) : configuring ? (
           <GameConfigView
+            key={configuring.id}
             entry={configuring}
             busy={busy}
             onStart={async (cfg) => {
