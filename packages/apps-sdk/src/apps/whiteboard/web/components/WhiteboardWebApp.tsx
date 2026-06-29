@@ -9,13 +9,13 @@ import { WhiteboardCanvas, type WhiteboardStressResult } from "./WhiteboardCanva
 import { useWhiteboardPages } from "../../shared/hooks/useWhiteboardPages";
 
 export function WhiteboardWebApp() {
-  const { user, isAdmin } = useApps();
+  const { user, isAdmin, isReadOnly: appReadOnly } = useApps();
   const { doc, awareness, locked } = useAppDoc("whiteboard");
   const { states } = useAppPresence("whiteboard");
   const { tool, setTool, settings, setSettings } = useToolState();
   const { viewport, panBy, zoomAt, resetViewport, panStartRef } = useViewport();
   const lastPanPosRef = useRef<{ x: number; y: number } | null>(null);
-  const isReadOnly = locked && !isAdmin;
+  const isReadOnly = Boolean(appReadOnly) || (locked && !isAdmin);
   const {
     pages,
     activePageId,

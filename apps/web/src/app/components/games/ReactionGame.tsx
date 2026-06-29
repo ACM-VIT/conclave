@@ -56,6 +56,7 @@ export default function ReactionGame({
   players,
   userId,
   isAdmin,
+  readOnly = false,
   move,
 }: GameViewProps<ReactionPublic, ReactionMe>) {
   const elapsed = useElapsed(pub.goAt, pub.serverNow);
@@ -69,6 +70,7 @@ export default function ReactionGame({
         players={players}
         userId={userId}
         isAdmin={isAdmin}
+        readOnly={readOnly}
         startLabel="Start"
         onStart={() => move("start")}
       />
@@ -91,7 +93,7 @@ export default function ReactionGame({
       title = tappedValid ? `${me.reactionMs} ms` : "TAP!";
       sub = tappedValid ? "Locked in" : `${pub.tappedCount}/${pub.totalPlayers} tapped`;
     }
-    const canTap = !me.tapped;
+    const canTap = !readOnly && !me.tapped;
     const handleTap = () => {
       void move("tap");
     };
@@ -133,7 +135,7 @@ export default function ReactionGame({
             {title}
           </span>
           <span style={{ fontSize: 13, opacity: 0.85 }}>{sub}</span>
-          {isGo && !me.tapped ? (
+          {isGo && !readOnly && !me.tapped ? (
             <span style={{ fontSize: 12, opacity: 0.7, marginTop: 4 }}>{elapsed} ms</span>
           ) : null}
         </button>
@@ -194,7 +196,7 @@ export default function ReactionGame({
           </div>
         ))}
       </div>
-      {isAdmin ? (
+      {isAdmin && !readOnly ? (
         <div style={{ display: "flex", justifyContent: "flex-end" }}>
           <GhostButton onClick={() => move("next")}>Next</GhostButton>
         </div>

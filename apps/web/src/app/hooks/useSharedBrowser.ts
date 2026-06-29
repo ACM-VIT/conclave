@@ -119,7 +119,7 @@ export function useSharedBrowser({
 
     useEffect(() => {
         const socket = socketRef.current;
-        if (!socket || !browserState.active) {
+        if (!socket || !browserState.active || !isAdmin) {
             if (activityIntervalRef.current) {
                 clearInterval(activityIntervalRef.current);
                 activityIntervalRef.current = null;
@@ -137,7 +137,7 @@ export function useSharedBrowser({
                 activityIntervalRef.current = null;
             }
         };
-    }, [browserState.active, socketRef]);
+    }, [browserState.active, isAdmin, socketRef]);
 
     const launchBrowser = useCallback(
         async (url: string): Promise<boolean> => {

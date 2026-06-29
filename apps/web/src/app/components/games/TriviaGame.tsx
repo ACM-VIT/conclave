@@ -49,6 +49,7 @@ export default function TriviaGame({
   players,
   userId,
   isAdmin,
+  readOnly = false,
   move,
 }: GameViewProps<TriviaPublic, TriviaMe>) {
   const remaining = useRemaining(pub.deadline, pub.serverNow);
@@ -62,6 +63,7 @@ export default function TriviaGame({
         players={players}
         userId={userId}
         isAdmin={isAdmin}
+        readOnly={readOnly}
         startLabel="Start quiz"
         onStart={() => move("start")}
       />
@@ -148,7 +150,7 @@ export default function TriviaGame({
             bg = color.accentSoft;
             bd = color.accent;
           }
-          const locked = reveal || me.answered;
+          const locked = readOnly || reveal || me.answered;
           return (
             <button
               key={index}
@@ -207,7 +209,9 @@ export default function TriviaGame({
               : me.answered
                 ? "Not quite"
                 : "Time's up"
-            : me.answered
+            : readOnly
+              ? "Watching only"
+              : me.answered
               ? "Locked in"
               : "Pick an answer"}
         </span>
@@ -216,7 +220,7 @@ export default function TriviaGame({
         </span>
       </div>
 
-      {isAdmin ? (
+      {isAdmin && !readOnly ? (
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
           {reveal ? (
             <GhostButton onClick={() => move("next")}>Next →</GhostButton>

@@ -1875,9 +1875,9 @@ export default function MeetsMainContent({
           isDmEnabled={isDmEnabled}
           isAdmin={isAdmin}
           mentionableParticipants={mentionableParticipants}
-          replyTarget={replyTarget}
-          onReply={onReplyToMessage}
-          onCancelReply={onCancelReply}
+          replyTarget={ghostEnabled ? null : replyTarget}
+          onReply={ghostEnabled ? undefined : onReplyToMessage}
+          onCancelReply={ghostEnabled ? undefined : onCancelReply}
         />
       )}
 
@@ -1965,7 +1965,7 @@ export default function MeetsMainContent({
         <MeetViewPanel
           settings={viewSettings}
           onSettingsChange={setViewSettings}
-          participantCount={visibleParticipantCount + 1}
+          participantCount={visibleParticipantCount + (ghostEnabled ? 0 : 1)}
           onClose={handleCloseViewPanel}
         />
       )}

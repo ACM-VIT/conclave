@@ -11,7 +11,6 @@ import {
 } from "../lib/utils";
 import { isRemoteParticipantVisible } from "../lib/participant-visibility";
 import ParticipantVideo from "./ParticipantVideo";
-import { GhostParticipantOverlay } from "./GhostParticipantChrome";
 import { Avatar, NamePlate } from "@conclave/ui-tokens/web";
 import { color } from "@conclave/ui-tokens";
 
@@ -252,8 +251,12 @@ function BrowserLayout({
                                 src={`${resolvedNoVncUrl}${resolvedNoVncUrl.includes("?") ? "&" : "?"}autoconnect=true&resize=scale&quality=0&compression=9`}
                                 onLoad={() => setIsReady(true)}
                                 className="absolute inset-0 w-full h-full border-0"
-                                style={{ opacity: 0, pointerEvents: "auto" }}
+                                style={{
+                                    opacity: 0,
+                                    pointerEvents: isGhost ? "none" : "auto",
+                                }}
                                 allow="clipboard-read; clipboard-write"
+                                tabIndex={isGhost ? -1 : undefined}
                                 title="Shared Browser Input"
                             />
                         </div>
@@ -263,8 +266,12 @@ function BrowserLayout({
                                 src={resolvedNoVncUrl}
                                 onLoad={() => setIsReady(true)}
                                 className="h-full w-full border-0 transition-opacity duration-200"
-                                style={{ opacity: isReady ? 1 : 0 }}
+                                style={{
+                                    opacity: isReady ? 1 : 0,
+                                    pointerEvents: isGhost ? "none" : "auto",
+                                }}
                                 allow="clipboard-read; clipboard-write"
+                                tabIndex={isGhost ? -1 : undefined}
                                 title="Shared Browser"
                             />
                             {!isReady && (
@@ -327,66 +334,67 @@ function BrowserLayout({
             </div>
 
             <div className="flex h-36 w-full shrink-0 flex-row gap-3 overflow-x-auto overflow-y-visible pb-1 sm:h-auto sm:w-64 sm:flex-col sm:overflow-y-auto sm:overflow-x-visible sm:px-1 sm:pb-0">
-                <div className={`acm-video-tile h-36 w-48 shrink-0 sm:w-auto ${isLocalActiveSpeaker ? "speaking" : ""}`}>
-                    <video
-                        ref={localVideoRef}
-                        autoPlay
-                        muted
-                        playsInline
-                        className={`w-full h-full object-cover ${isCameraOff ? "hidden" : ""
-                            } ${isMirrorCamera ? "scale-x-[-1]" : ""}`}
-                    />
-                    {isCameraOff && (
-                        <div
-                            className="absolute inset-0 flex items-center justify-center"
-                            style={{ backgroundColor: color.surface }}
-                        >
-                            <Avatar name={localName} id={currentUserId} size={48} />
-                        </div>
-                    )}
-                    {isGhost && <GhostParticipantOverlay compact />}
-                    {isHandRaised && (
-                        <div
-                            className="absolute top-3 left-3 rounded-full p-1.5 text-amber-300"
-                            style={{
-                                backgroundColor: "rgba(251, 191, 36, 0.2)",
-                                border: "1px solid rgba(251, 191, 36, 0.4)",
-                            }}
-                            title="Hand raised"
-                        >
-                            <Hand size={18} strokeWidth={1.75} className="h-3.5 w-3.5" />
-                        </div>
-                    )}
-                    <div className="absolute bottom-3 left-3 flex max-w-[80%] items-center gap-1.5">
-                        <NamePlate name="You" isLocal />
-                        {isLocalActiveSpeaker && !isMuted ? (
-                            <span
-                                className="rounded-full px-2 py-1"
-                                style={{
-                                    backgroundColor: color.scrim,
-                                    border: `1px solid ${color.border}`,
-                                }}
+                {!isGhost && (
+                    <div className={`acm-video-tile h-36 w-48 shrink-0 sm:w-auto ${isLocalActiveSpeaker ? "speaking" : ""}`}>
+                        <video
+                            ref={localVideoRef}
+                            autoPlay
+                            muted
+                            playsInline
+                            className={`w-full h-full object-cover ${isCameraOff ? "hidden" : ""
+                                } ${isMirrorCamera ? "scale-x-[-1]" : ""}`}
+                        />
+                        {isCameraOff && (
+                            <div
+                                className="absolute inset-0 flex items-center justify-center"
+                                style={{ backgroundColor: color.surface }}
                             >
-                                <span className="acm-voice-activity" aria-label="Speaking">
-                                    <span />
-                                    <span />
-                                    <span />
-                                </span>
-                            </span>
-                        ) : null}
-                    </div>
-                    <div
-                        className="absolute bottom-3 right-3 inline-flex items-center justify-center rounded-full p-1.5"
-                        style={{ backgroundColor: color.scrim, border: `1px solid ${color.border}` }}
-                        title={isMuted ? "Microphone off" : "Microphone on"}
-                    >
-                        {isMuted ? (
-                            <MicOff size={18} strokeWidth={1.75} className="h-3.5 w-3.5" style={{ color: color.accent }} />
-                        ) : (
-                            <Mic size={18} strokeWidth={1.75} className="h-3.5 w-3.5" style={{ color: color.success }} />
+                                <Avatar name={localName} id={currentUserId} size={48} />
+                            </div>
                         )}
+                        {isHandRaised && (
+                            <div
+                                className="absolute top-3 left-3 rounded-full p-1.5 text-amber-300"
+                                style={{
+                                    backgroundColor: "rgba(251, 191, 36, 0.2)",
+                                    border: "1px solid rgba(251, 191, 36, 0.4)",
+                                }}
+                                title="Hand raised"
+                            >
+                                <Hand size={18} strokeWidth={1.75} className="h-3.5 w-3.5" />
+                            </div>
+                        )}
+                        <div className="absolute bottom-3 left-3 flex max-w-[80%] items-center gap-1.5">
+                            <NamePlate name="You" isLocal />
+                            {isLocalActiveSpeaker && !isMuted ? (
+                                <span
+                                    className="rounded-full px-2 py-1"
+                                    style={{
+                                        backgroundColor: color.scrim,
+                                        border: `1px solid ${color.border}`,
+                                    }}
+                                >
+                                    <span className="acm-voice-activity" aria-label="Speaking">
+                                        <span />
+                                        <span />
+                                        <span />
+                                    </span>
+                                </span>
+                            ) : null}
+                        </div>
+                        <div
+                            className="absolute bottom-3 right-3 inline-flex items-center justify-center rounded-full p-1.5"
+                            style={{ backgroundColor: color.scrim, border: `1px solid ${color.border}` }}
+                            title={isMuted ? "Microphone off" : "Microphone on"}
+                        >
+                            {isMuted ? (
+                                <MicOff size={18} strokeWidth={1.75} className="h-3.5 w-3.5" style={{ color: color.accent }} />
+                            ) : (
+                                <Mic size={18} strokeWidth={1.75} className="h-3.5 w-3.5" style={{ color: color.success }} />
+                            )}
+                        </div>
                     </div>
-                </div>
+                )}
 
                 {remoteParticipants.map((participant) => (
                         <ParticipantVideo

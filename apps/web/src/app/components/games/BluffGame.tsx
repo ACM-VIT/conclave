@@ -65,6 +65,7 @@ export default function BluffGame({
   players,
   userId,
   isAdmin,
+  readOnly = false,
   move,
 }: GameViewProps<BluffPublic, BluffMe>) {
   const remaining = useRemaining(pub.deadline, pub.serverNow);
@@ -79,6 +80,7 @@ export default function BluffGame({
         players={players}
         userId={userId}
         isAdmin={isAdmin}
+        readOnly={readOnly}
         canStart={pub.totalPlayers >= 2}
         disabledLabel="Need at least 2 players"
         onStart={() => move("start")}
@@ -156,6 +158,7 @@ export default function BluffGame({
             <textarea
               value={draft}
               onChange={(e) => setDraft(e.target.value.slice(0, 60))}
+              disabled={readOnly}
               placeholder="Make up a believable answer"
               rows={2}
               style={{
@@ -173,13 +176,16 @@ export default function BluffGame({
             />
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <span style={{ fontSize: 11, color: color.textFaint }}>{draft.length}/60</span>
-              <PrimaryButton disabled={!draft.trim()} onClick={() => move("submit", { text: draft.trim() })}>
+              <PrimaryButton
+                disabled={readOnly || !draft.trim()}
+                onClick={() => move("submit", { text: draft.trim() })}
+              >
                 Submit bluff
               </PrimaryButton>
             </div>
           </>
         )}
-        {isAdmin ? (
+        {isAdmin && !readOnly ? (
           <div style={{ display: "flex", justifyContent: "flex-end" }}>
             <GhostButton onClick={() => move("skip")}>Skip</GhostButton>
           </div>
@@ -200,7 +206,7 @@ export default function BluffGame({
           {(pub.options as ChooseOption[]).map((option) => {
             const isOwn = me.ownOptionId === option.id;
             const isMyPick = me.yourPick === option.id;
-            const locked = isOwn || me.yourPick !== null;
+            const locked = readOnly || isOwn || me.yourPick !== null;
             return (
               <button
                 key={option.id}
@@ -230,7 +236,7 @@ export default function BluffGame({
             );
           })}
         </div>
-        {isAdmin ? (
+        {isAdmin && !readOnly ? (
           <div style={{ display: "flex", justifyContent: "flex-end" }}>
             <GhostButton onClick={() => move("skip")}>Reveal</GhostButton>
           </div>
@@ -282,7 +288,7 @@ export default function BluffGame({
           {pub.roundPoints.map((r) => `${r.name} +${r.points}`).join(" · ")}
         </p>
       ) : null}
-      {isAdmin ? (
+      {isAdmin && !readOnly ? (
         <div style={{ display: "flex", justifyContent: "flex-end" }}>
           <GhostButton onClick={() => move("next")}>Next</GhostButton>
         </div>

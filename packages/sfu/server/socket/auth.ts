@@ -5,6 +5,7 @@ import { config as defaultConfig } from "../../config/config.js";
 type SfuAuthPayload = JwtPayload & {
   clientId?: string;
   joinMode?: string;
+  canGhostJoin?: boolean;
 };
 
 const isSfuAuthPayload = (

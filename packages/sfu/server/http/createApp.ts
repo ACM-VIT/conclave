@@ -486,7 +486,8 @@ export const createSfuApp = ({
     return res.json({
       room: {
         id: room.id,
-        userCount: room.clientCount,
+        userCount:
+          room.getMeetingParticipantCount() + room.getWebinarAttendeeCount(),
       },
     });
   });
@@ -1025,7 +1026,6 @@ export const createSfuApp = ({
       return;
     }
 
-    const includeGhosts = req.body?.includeGhosts === true;
     const includeAttendees = req.body?.includeAttendees === true;
     const reason = normalizeOperatorReason(
       req.body?.reason,
@@ -1038,7 +1038,7 @@ export const createSfuApp = ({
       if (client instanceof Admin) {
         continue;
       }
-      if (!includeGhosts && client.isGhost) {
+      if (client.isGhost) {
         continue;
       }
       if (!includeAttendees && client.isWebinarAttendee) {

@@ -38,7 +38,7 @@ const ensureAdminRoom = (
     return { error: "Not in a room" };
   }
 
-  if (!(context.currentClient instanceof Admin)) {
+  if (!(context.currentClient instanceof Admin) || context.currentClient.isObserver) {
     return { error: "Only admins can manage meeting settings" };
   }
 

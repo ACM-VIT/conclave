@@ -63,6 +63,7 @@ export type GameProviderProps = {
   socket: Socket | null;
   user?: GameUser;
   isAdmin?: boolean;
+  isReadOnly?: boolean;
   children: React.ReactNode;
 };
 
@@ -70,6 +71,7 @@ export function GameProvider({
   socket,
   user,
   isAdmin = false,
+  isReadOnly = false,
   children,
 }: GameProviderProps) {
   const [catalog, setCatalog] = useState<GameCatalogEntry[]>([]);
@@ -168,6 +170,9 @@ export function GameProvider({
 
   const startGame = useCallback(
     async (gameId: string, options?: GameConfig): Promise<GameMoveResult> => {
+      if (isReadOnly) {
+        return { success: false, error: "Observer mode is read-only" };
+      }
       if (!socket) return { success: false, error: "Not connected" };
       return emitWithAck<GameMoveResult>(
         socket,
@@ -177,10 +182,13 @@ export function GameProvider({
         START_GAME_ACK_TIMEOUT_MS,
       );
     },
-    [socket],
+    [socket, isReadOnly],
   );
 
   const endGame = useCallback(async (): Promise<GameMoveResult> => {
+    if (isReadOnly) {
+      return { success: false, error: "Observer mode is read-only" };
+    }
     if (!socket) return { success: false, error: "Not connected" };
     return emitWithAck<GameMoveResult>(
       socket,
@@ -188,10 +196,13 @@ export function GameProvider({
       undefined,
       { success: false, error: "Timed out" },
     );
-  }, [socket]);
+  }, [socket, isReadOnly]);
 
   const move = useCallback(
     async (type: string, payload?: unknown): Promise<GameMoveResult> => {
+      if (isReadOnly) {
+        return { success: false, error: "Observer mode is read-only" };
+      }
       if (!socket) return { success: false, error: "Not connected" };
       const gameId = activeGameIdRef.current;
       if (!gameId) return { success: false, error: "No active game" };
@@ -202,11 +213,14 @@ export function GameProvider({
         { success: false, error: "Timed out" },
       );
     },
-    [socket],
+    [socket, isReadOnly],
   );
 
   const openVote = useCallback(
     async (candidateIds?: string[]): Promise<GameMoveResult> => {
+      if (isReadOnly) {
+        return { success: false, error: "Observer mode is read-only" };
+      }
       if (!socket) return { success: false, error: "Not connected" };
       return emitWithAck<GameMoveResult>(
         socket,
@@ -215,11 +229,14 @@ export function GameProvider({
         { success: false, error: "Timed out" },
       );
     },
-    [socket],
+    [socket, isReadOnly],
   );
 
   const castVote = useCallback(
     async (gameId: string): Promise<GameMoveResult> => {
+      if (isReadOnly) {
+        return { success: false, error: "Observer mode is read-only" };
+      }
       if (!socket) return { success: false, error: "Not connected" };
       return emitWithAck<GameMoveResult>(
         socket,
@@ -228,10 +245,13 @@ export function GameProvider({
         { success: false, error: "Timed out" },
       );
     },
-    [socket],
+    [socket, isReadOnly],
   );
 
   const cancelVote = useCallback(async (): Promise<GameMoveResult> => {
+    if (isReadOnly) {
+      return { success: false, error: "Observer mode is read-only" };
+    }
     if (!socket) return { success: false, error: "Not connected" };
     return emitWithAck<GameMoveResult>(
       socket,
@@ -239,7 +259,7 @@ export function GameProvider({
       undefined,
       { success: false, error: "Timed out" },
     );
-  }, [socket]);
+  }, [socket, isReadOnly]);
 
   const value = useMemo<GameContextValue>(
     () => ({
@@ -248,7 +268,8 @@ export function GameProvider({
       view,
       vote,
       isActive: publicState !== null,
-      isAdmin,
+      isAdmin: isReadOnly ? false : isAdmin,
+      isReadOnly,
       userId,
       startGame,
       endGame,
@@ -258,7 +279,22 @@ export function GameProvider({
       cancelVote,
       refresh,
     }),
-    [catalog, publicState, view, vote, isAdmin, userId, startGame, endGame, move, openVote, castVote, cancelVote, refresh],
+    [
+      catalog,
+      publicState,
+      view,
+      vote,
+      isAdmin,
+      isReadOnly,
+      userId,
+      startGame,
+      endGame,
+      move,
+      openVote,
+      castVote,
+      cancelVote,
+      refresh,
+    ],
   );
 
   return <GameContext.Provider value={value}>{children}</GameContext.Provider>;

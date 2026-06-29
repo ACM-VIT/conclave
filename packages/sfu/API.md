@@ -201,7 +201,7 @@ curl -X POST "http://localhost:3031/admin/rooms/room-123/access/block?clientId=d
 curl -X POST "http://localhost:3031/admin/rooms/room-123/users/remove-non-admins?clientId=default" \
   -H "content-type: application/json" \
   -H "x-sfu-secret: development-secret" \
-  -d '{"includeGhosts":false,"includeAttendees":true,"reason":"Stage reset"}'
+  -d '{"includeAttendees":true,"reason":"Stage reset"}'
 ```
 
 ### End room

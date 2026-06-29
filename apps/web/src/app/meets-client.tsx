@@ -934,6 +934,8 @@ export default function MeetsClient({
   const isWebinarAttendee =
     joinMode === "webinar_attendee" || webinarRole === "attendee";
   const ghostEnabled = canGhostJoinFlag && isGhostMode;
+  const isReadOnlyObserver = ghostEnabled || isWebinarAttendee;
+  const canModerateMeeting = isAdminFlag && !isReadOnlyObserver;
   const shouldRunVideoEffects = shouldRunVisualVideoEffects;
   const shouldPublishProcessedVideo = shouldRunVisualVideoEffects;
   const canSignOut = Boolean(
@@ -2197,7 +2199,7 @@ export default function MeetsClient({
     clearError: clearBrowserError,
   } = useSharedBrowser({
     socketRef: refs.socketRef,
-    isAdmin: isAdminFlag,
+    isAdmin: canModerateMeeting,
   });
   const showBrowserControls = Boolean(
     browserState?.active || isBrowserServiceAvailable,
@@ -2206,7 +2208,7 @@ export default function MeetsClient({
   const voiceAgent = useVoiceAgentParticipant({
     roomId,
     isJoined: connectionState === "joined",
-    isAdmin: isAdminFlag,
+    isAdmin: canModerateMeeting,
     isMuted,
     activeSpeakerId,
     localUserId: userId,
@@ -2335,10 +2337,10 @@ export default function MeetsClient({
 
   useEffect(() => {
     if (connectionState !== "joined") return;
-    if (!isAdminFlag) return;
+    if (!canModerateMeeting) return;
     void getMeetingConfig?.();
     void getWebinarConfig?.();
-  }, [connectionState, isAdminFlag, getMeetingConfig, getWebinarConfig]);
+  }, [connectionState, canModerateMeeting, getMeetingConfig, getWebinarConfig]);
 
   const handleGoHome = useCallback(() => {
     handleStopVoiceAgent();
@@ -2556,7 +2558,7 @@ export default function MeetsClient({
     });
 
   useHotkey(HOTKEYS.toggleLockMeeting.keys as RegisterableHotkey, () => {
-    if (isAdminFlag) {
+    if (canModerateMeeting) {
       socket.toggleRoomLock(!isRoomLocked);
     }
   }, {
@@ -2676,10 +2678,16 @@ export default function MeetsClient({
       <AppsProvider
         socket={appsSocket}
         user={appsUser}
-        isAdmin={isAdminFlag}
+        isAdmin={canModerateMeeting}
+        isReadOnly={isReadOnlyObserver}
         uploadAsset={uploadAsset}
       >
-        <GameProvider socket={appsSocket} user={appsUser} isAdmin={isAdminFlag}>
+        <GameProvider
+          socket={appsSocket}
+          user={appsUser}
+          isAdmin={canModerateMeeting}
+          isReadOnly={isReadOnlyObserver}
+        >
           <MeetVolumeProvider
             meetVolume={meetVolume}
             setMeetVolume={setMeetVolume}
@@ -2827,7 +2835,7 @@ export default function MeetsClient({
         waitingTitle={waitingTitle}
         waitingIntro={waitingIntro}
         roomId={roomId}
-        isAdmin={isAdminFlag}
+        isAdmin={canModerateMeeting}
       />,
     );
   }
@@ -2871,7 +2879,7 @@ export default function MeetsClient({
         allowGhostMode={canGhostJoinFlag}
         user={currentUser}
         userEmail={userEmail}
-        isAdmin={isAdminFlag}
+        isAdmin={canModerateMeeting}
         showPermissionHint={showPermissionHint}
         availableRooms={availableRooms}
         roomsStatus={roomsStatus}
@@ -2927,7 +2935,9 @@ export default function MeetsClient({
         toggleHandRaised={toggleHandRaised}
         sendReaction={sendReaction}
         leaveRoom={leaveRoom}
-        endRoomForEveryone={socket.endRoomForEveryone}
+        endRoomForEveryone={
+          canModerateMeeting ? socket.endRoomForEveryone : undefined
+        }
         onGoHome={handleGoHome}
         onStartNewMeeting={
           joinMode === "meeting" ? handleStartNewMeeting : undefined
@@ -2962,11 +2972,17 @@ export default function MeetsClient({
         isTtsDisabled={isTtsDisabled}
         isDmEnabled={isDmEnabled}
         isReactionsDisabled={isReactionsDisabled}
-        onToggleLock={() => socket.toggleRoomLock(!isRoomLocked)}
+        onToggleLock={() => {
+          if (canModerateMeeting) socket.toggleRoomLock(!isRoomLocked);
+        }}
         isNoGuests={isNoGuests}
-        onToggleNoGuests={() => socket.toggleNoGuests(!isNoGuests)}
+        onToggleNoGuests={() => {
+          if (canModerateMeeting) socket.toggleNoGuests(!isNoGuests);
+        }}
         isChatLocked={isChatLocked}
-        onToggleChatLock={() => socket.toggleChatLock(!isChatLocked)}
+        onToggleChatLock={() => {
+          if (canModerateMeeting) socket.toggleChatLock(!isChatLocked);
+        }}
         browserState={browserState}
         isBrowserLaunching={isBrowserLaunching}
         browserLaunchError={browserLaunchError}
@@ -2997,18 +3013,30 @@ export default function MeetsClient({
         webinarSpeakerUserId={webinarSpeakerUserId}
         webinarLink={webinarLink}
         onSetWebinarLink={setWebinarLink}
-        onGetMeetingConfig={socket.getMeetingConfig}
-        onUpdateMeetingConfig={socket.updateMeetingConfig}
-        onGetWebinarConfig={socket.getWebinarConfig}
-        onUpdateWebinarConfig={socket.updateWebinarConfig}
-        onGenerateWebinarLink={socket.generateWebinarLink}
-        onRotateWebinarLink={socket.rotateWebinarLink}
+        onGetMeetingConfig={
+          canModerateMeeting ? socket.getMeetingConfig : undefined
+        }
+        onUpdateMeetingConfig={
+          canModerateMeeting ? socket.updateMeetingConfig : undefined
+        }
+        onGetWebinarConfig={
+          canModerateMeeting ? socket.getWebinarConfig : undefined
+        }
+        onUpdateWebinarConfig={
+          canModerateMeeting ? socket.updateWebinarConfig : undefined
+        }
+        onGenerateWebinarLink={
+          canModerateMeeting ? socket.generateWebinarLink : undefined
+        }
+        onRotateWebinarLink={
+          canModerateMeeting ? socket.rotateWebinarLink : undefined
+        }
         transcript={transcript}
         isVoiceAgentRunning={voiceAgent.isRunning}
         isVoiceAgentStarting={voiceAgent.isStarting}
         voiceAgentError={voiceAgent.error}
-        onStartVoiceAgent={handleStartVoiceAgent}
-        onStopVoiceAgent={handleStopVoiceAgent}
+        onStartVoiceAgent={canModerateMeeting ? handleStartVoiceAgent : undefined}
+        onStopVoiceAgent={canModerateMeeting ? handleStopVoiceAgent : undefined}
         onClearVoiceAgentError={voiceAgent.clearError}
       />
       {inviteCodePrompt}

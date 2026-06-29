@@ -534,12 +534,12 @@ function ChatPanel({
         >
           {messages.length === 0 ? (
             (() => {
-              const restricted = isGhostMode
-                ? {
-                    icon: <Ghost size={20} strokeWidth={1.75} />,
-                    title: "You're in ghost mode",
-                    body: "Chat is hidden while you're invisible. Turn off ghost mode to join in.",
-                  }
+                  const restricted = isGhostMode
+                    ? {
+                        icon: <Ghost size={20} strokeWidth={1.75} />,
+                        title: "You're in ghost mode",
+                        body: "Messages stay visible here, but sending and replying are disabled while you're invisible.",
+                      }
                 : isChatLocked && !isAdmin
                   ? {
                       icon: <Lock size={20} strokeWidth={1.75} />,
@@ -710,7 +710,7 @@ function ChatPanel({
                 </button>
               ) : null;
 
-              const replyButton = onReply ? (
+              const replyButton = onReply && !isChatDisabled ? (
                 <button
                   type="button"
                   onClick={() => onReply(msg)}
@@ -900,7 +900,7 @@ function ChatPanel({
               })}
             </div>
           )}
-          {replyTarget && (
+          {replyTarget && !isChatDisabled && (
             <div className="mb-2 flex items-stretch gap-2.5 overflow-hidden rounded-xl bg-white/[0.04] pr-1.5">
               <span
                 className="w-[3px] shrink-0 bg-[#F95F4A]"
@@ -944,7 +944,7 @@ function ChatPanel({
               onKeyDown={handleKeyDown}
               placeholder={
                 isGhostMode
-                  ? "Ghost mode: chat disabled"
+                  ? "Ghost mode: watching chat"
                   : isChatLocked && !isAdmin
                     ? "Chat locked by host"
                     : "Send a message"

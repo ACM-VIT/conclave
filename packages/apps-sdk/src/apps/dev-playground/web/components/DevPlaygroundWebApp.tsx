@@ -56,13 +56,13 @@ const formatTime = (value: number | null): string => {
 
 export function DevPlaygroundWebApp() {
   const { doc, locked } = useAppDoc(APP_ID);
-  const { user, isAdmin } = useApps();
+  const { user, isAdmin, isReadOnly } = useApps();
   const { states, setLocalState } = useAppPresence(APP_ID);
 
   const [snapshot, setSnapshot] = useState<Snapshot>(() => readSnapshot(doc));
   const [draftItem, setDraftItem] = useState("");
 
-  const canEdit = !locked || Boolean(isAdmin);
+  const canEdit = !isReadOnly && (!locked || Boolean(isAdmin));
   const userId = user?.id ?? "guest";
   const userName = user?.name ?? user?.email ?? userId;
   const presenceColor = useMemo(() => stringToColor(userId), [userId]);

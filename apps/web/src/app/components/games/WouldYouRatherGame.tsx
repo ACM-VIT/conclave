@@ -74,6 +74,7 @@ export default function WouldYouRatherGame({
   players,
   userId,
   isAdmin,
+  readOnly = false,
   move,
 }: GameViewProps<WyrPublic, WyrMe>) {
   const remaining = useRemaining(pub.deadline, pub.serverNow);
@@ -87,6 +88,7 @@ export default function WouldYouRatherGame({
         players={players}
         userId={userId}
         isAdmin={isAdmin}
+        readOnly={readOnly}
         onStart={() => move("start")}
       />
     );
@@ -135,14 +137,14 @@ export default function WouldYouRatherGame({
           text={pub.optionA ?? ""}
           picked={me.choice === 0}
           accent={accentA}
-          disabled={reveal || me.choice !== null}
+          disabled={readOnly || reveal || me.choice !== null}
           onClick={() => move("choose", { option: 0 })}
         />
         <OptionCard
           text={pub.optionB ?? ""}
           picked={me.choice === 1}
           accent={accentB}
-          disabled={reveal || me.choice !== null}
+          disabled={readOnly || reveal || me.choice !== null}
           onClick={() => move("choose", { option: 1 })}
         />
       </div>
@@ -170,11 +172,15 @@ export default function WouldYouRatherGame({
         </div>
       ) : (
         <p style={{ fontSize: 12, color: color.textMuted, textAlign: "center", margin: 0 }}>
-          {me.choice !== null ? "Locked in" : "Pick a side"}
+          {readOnly
+            ? "Watching only"
+            : me.choice !== null
+              ? "Locked in"
+              : "Pick a side"}
         </p>
       )}
 
-      {isAdmin ? (
+      {isAdmin && !readOnly ? (
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
           {reveal ? (
             <GhostButton onClick={() => move("next")}>Next</GhostButton>

@@ -433,7 +433,7 @@ export const registerSharedBrowserHandlers = (context: ConnectionContext): void 
                     return;
                 }
 
-                if (!(context.currentClient instanceof Admin)) {
+                if (!(context.currentClient instanceof Admin) || context.currentClient.isObserver) {
                     respond(callback, { error: "Only admins can launch the shared browser" });
                     return;
                 }
@@ -532,7 +532,7 @@ export const registerSharedBrowserHandlers = (context: ConnectionContext): void 
                     return;
                 }
 
-                if (!(context.currentClient instanceof Admin)) {
+                if (!(context.currentClient instanceof Admin) || context.currentClient.isObserver) {
                     respond(callback, { error: "Only admins can control the shared browser" });
                     return;
                 }
@@ -615,7 +615,7 @@ export const registerSharedBrowserHandlers = (context: ConnectionContext): void 
                     return;
                 }
 
-                if (!(context.currentClient instanceof Admin)) {
+                if (!(context.currentClient instanceof Admin) || context.currentClient.isObserver) {
                     respond(callback, { error: "Only admins can close the shared browser" });
                     return;
                 }
@@ -680,6 +680,7 @@ export const registerSharedBrowserHandlers = (context: ConnectionContext): void 
 
     socket.on("browser:activity", async () => {
         if (!context.currentRoom || !context.currentClient) return;
+        if (!(context.currentClient instanceof Admin) || context.currentClient.isObserver) return;
         if (!takeToken(socket, "browser:activity", RATE_LIMITS.sharedBrowserControl)) return;
 
         const channelId = context.currentRoom.channelId;

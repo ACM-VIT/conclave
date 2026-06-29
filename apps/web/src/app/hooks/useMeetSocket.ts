@@ -3989,12 +3989,14 @@ export function useMeetSocket({
               ? Promise.resolve({ io: prewarm.io })
               : import("socket.io-client");
 
-            const cachedToken = prewarm?.getCachedToken?.(roomIdForJoin);
+            const cachedToken = ghostEnabled
+              ? null
+              : prewarm?.getCachedToken?.(roomIdForJoin);
             const tokenPromise = cachedToken
               ? Promise.resolve(cachedToken)
                 : getJoinInfo(roomIdForJoin, sessionIdRef.current, {
                     user,
-                    isHost: isAdmin || ghostEnabled,
+                    isHost: isAdmin,
                     isGhost: ghostEnabled,
                     joinMode,
                   });

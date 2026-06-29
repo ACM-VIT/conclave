@@ -136,7 +136,7 @@ export const registerTranscriptHandlers = (
 
       const nowSeconds = Math.floor(Date.now() / 1000);
       const expiresAt = (nowSeconds + TRANSCRIPT_TOKEN_TTL_SECONDS) * 1000;
-      const isAdmin = client instanceof Admin;
+      const isAdmin = client instanceof Admin && !client.isObserver;
       const isHost = room.getHostUserId() === client.id;
       const isGhost = client.isGhost;
       const capabilities: TranscriptTokenCapabilities = {
@@ -239,7 +239,7 @@ export const registerTranscriptHandlers = (
       }
 
       const displayName = room.getDisplayNameForUser(client.id) || client.id;
-      const isAdmin = client instanceof Admin;
+      const isAdmin = client instanceof Admin && !client.isObserver;
       const isHost = room.getHostUserId() === client.id;
       const workerToken = createTranscriptRelayToken({
         roomId: room.id,
@@ -278,7 +278,7 @@ export const registerTranscriptHandlers = (
         });
         return;
       }
-      const isAdmin = client instanceof Admin;
+      const isAdmin = client instanceof Admin && !client.isObserver;
       const isHost = room.getHostUserId() === client.id;
       respond(
         callback,

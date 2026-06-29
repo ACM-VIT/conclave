@@ -11,7 +11,6 @@ import type { Room } from "../../config/classes/Room.js";
 import type { AppsAwarenessData } from "../../types.js";
 import { isGuestUserKey } from "../identity.js";
 import { cleanupRoom, getRoomChannelId } from "../rooms.js";
-import { emitUserLeft } from "../notifications.js";
 import type { SfuState } from "../state.js";
 import {
   emitWebinarAttendeeCountChanged,
@@ -296,6 +295,7 @@ export const toPendingUserSnapshots = (room: Room): PendingUserSnapshot[] => {
 
 export const toRoomSnapshot = (room: Room): RoomSnapshot => {
   const participants = Array.from(room.clients.values())
+    .filter((client) => !client.isGhost)
     .map((client) => toParticipantSnapshot(room, client));
   const pendingUsers = toPendingUserSnapshots(room);
   const adminCount = participants.filter(
@@ -309,8 +309,7 @@ export const toRoomSnapshot = (room: Room): RoomSnapshot => {
     (sum, participant) => sum + participant.consumerCount,
     0,
   );
-  const ghosts = participants.filter((participant) => participant.role === "ghost")
-    .length;
+  const ghosts = 0;
   const attendees = participants.filter(
     (participant) => participant.role === "attendee",
   ).length;
@@ -345,7 +344,7 @@ export const toRoomSnapshot = (room: Room): RoomSnapshot => {
       blockedUserKeys: Array.from(room.blockedUsers.values()).sort(),
     },
     counts: {
-      participants: room.clients.size,
+      participants: participants.length,
       activeParticipants: room.getMeetingParticipantCount(),
       admins: adminCount,
       guests,
@@ -371,7 +370,8 @@ export const toClusterSnapshot = (state: SfuState): ClusterSnapshot => {
         channelId: room.channelId,
         roomId: room.id,
         clientId: room.clientId,
-        participantCount: room.clients.size,
+        participantCount:
+          room.getMeetingParticipantCount() + room.getWebinarAttendeeCount(),
         pendingUserCount: room.pendingClients.size,
         adminCount: room.getAdmins().length,
       };
@@ -379,7 +379,11 @@ export const toClusterSnapshot = (state: SfuState): ClusterSnapshot => {
     .sort((a, b) => b.participantCount - a.participantCount)
     .slice(0, 10);
 
-  const participants = rooms.reduce((sum, room) => sum + room.clients.size, 0);
+  const participants = rooms.reduce(
+    (sum, room) =>
+      sum + room.getMeetingParticipantCount() + room.getWebinarAttendeeCount(),
+    0,
+  );
   const pendingUsers = rooms.reduce(
     (sum, room) => sum + room.pendingClients.size,
     0,
@@ -391,14 +395,14 @@ export const toClusterSnapshot = (state: SfuState): ClusterSnapshot => {
   );
   const producers = rooms.reduce((sum, room) => {
     const roomProducers = Array.from(room.clients.values()).reduce(
-      (inner, client) => inner + client.producers.size,
+      (inner, client) => inner + (client.isGhost ? 0 : client.producers.size),
       0,
     );
     return sum + roomProducers;
   }, 0);
   const consumers = rooms.reduce((sum, room) => {
     const roomConsumers = Array.from(room.clients.values()).reduce(
-      (inner, client) => inner + client.consumers.size,
+      (inner, client) => inner + (client.isGhost ? 0 : client.consumers.size),
       0,
     );
     return sum + roomConsumers;
@@ -830,7 +834,7 @@ export const forceRemoveClientNow = (options: {
   }
 
   const roomChannelId = room.channelId;
-  const wasAdmin = target instanceof Admin;
+  const wasAdmin = target instanceof Admin && !target.isObserver;
   const isGhost = target.isGhost;
   const isWebinarAttendee = target.isWebinarAttendee;
 
@@ -839,24 +843,26 @@ export const forceRemoveClientNow = (options: {
 
   // Clear awareness before removing the client so peers stop seeing its cursor.
   const awarenessRemovals = room.clearUserAwareness(userId);
-  for (const removal of awarenessRemovals) {
-    io.to(roomChannelId).emit("apps:awareness", {
-      appId: removal.appId,
-      awarenessUpdate: removal.awarenessUpdate,
-    } satisfies AppsAwarenessData);
+  if (!isGhost) {
+    for (const removal of awarenessRemovals) {
+      io.to(roomChannelId).emit("apps:awareness", {
+        appId: removal.appId,
+        awarenessUpdate: removal.awarenessUpdate,
+      } satisfies AppsAwarenessData);
+    }
   }
 
   // removeClient() closes the client's producers + transports => media stops now.
   room.removeClient(userId);
 
-  if (isGhost) {
-    emitUserLeft(room, userId, { ghostOnly: true, excludeUserId: userId });
-  } else if (!isWebinarAttendee) {
+  if (!isGhost && !isWebinarAttendee) {
     io.to(roomChannelId).emit("userLeft", { userId, roomId: room.id });
   }
 
-  emitWebinarAttendeeCountChanged(io, state, room);
-  emitWebinarFeedChanged(io, state, room);
+  if (!isGhost) {
+    emitWebinarAttendeeCountChanged(io, state, room);
+    emitWebinarFeedChanged(io, state, room);
+  }
 
   if (wasAdmin) {
     handleAdminRemoved(io, state, room);

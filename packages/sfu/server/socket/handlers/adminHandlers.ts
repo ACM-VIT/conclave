@@ -121,7 +121,7 @@ const ensureAdminRoom = (
     return { error: "Room not found" };
   }
 
-  if (!(currentClient instanceof Admin)) {
+  if (!(currentClient instanceof Admin) || currentClient.isObserver) {
     return { error: "Admin privileges required" };
   }
 
@@ -140,26 +140,22 @@ const toBulkMediaOptions = (
   value: unknown,
 ): {
   includeAdmins: boolean;
-  includeGhosts: boolean;
   includeAttendees: boolean;
 } => {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return {
       includeAdmins: false,
-      includeGhosts: false,
       includeAttendees: false,
     };
   }
 
   const data = value as {
     includeAdmins?: unknown;
-    includeGhosts?: unknown;
     includeAttendees?: unknown;
   };
 
   return {
     includeAdmins: data.includeAdmins === true,
-    includeGhosts: data.includeGhosts === true,
     includeAttendees: data.includeAttendees === true,
   };
 };
@@ -262,7 +258,6 @@ const performBulkMediaClosure = (options: {
   };
   reason: string;
   includeAdmins?: boolean;
-  includeGhosts?: boolean;
   includeAttendees?: boolean;
 }): {
   affectedUsers: number;
@@ -282,7 +277,7 @@ const performBulkMediaClosure = (options: {
     if (!options.includeAdmins && client instanceof Admin) {
       continue;
     }
-    if (!options.includeGhosts && client.isGhost) {
+    if (client.isGhost) {
       continue;
     }
     if (!options.includeAttendees && client.isWebinarAttendee) {
@@ -591,7 +586,6 @@ export const registerAdminHandlers = (
       selector: { kinds: ["audio"] },
       reason: "Muted by host",
       includeAdmins: bulkOptions.includeAdmins,
-      includeGhosts: bulkOptions.includeGhosts,
       includeAttendees: bulkOptions.includeAttendees,
     });
 
@@ -620,7 +614,6 @@ export const registerAdminHandlers = (
       selector: { kinds: ["video"], types: ["webcam"] },
       reason: "Camera turned off by host",
       includeAdmins: bulkOptions.includeAdmins,
-      includeGhosts: bulkOptions.includeGhosts,
       includeAttendees: bulkOptions.includeAttendees,
     });
 
@@ -649,7 +642,6 @@ export const registerAdminHandlers = (
       selector: { types: ["screen"] },
       reason: "Screen share stopped by host",
       includeAdmins: bulkOptions.includeAdmins,
-      includeGhosts: bulkOptions.includeGhosts,
       includeAttendees: bulkOptions.includeAttendees,
     });
 
@@ -672,11 +664,9 @@ export const registerAdminHandlers = (
     }
 
     const currentRoom = context.currentRoom;
-    const isActiveAdmin = context.currentClient instanceof Admin;
-    const hasPersistedAdminRole = Boolean(
-      context.currentUserKey && currentRoom.isAdminUserKey(context.currentUserKey),
-    );
-    if (!isActiveAdmin && !hasPersistedAdminRole) {
+    const isActiveAdmin =
+      context.currentClient instanceof Admin && !context.currentClient.isObserver;
+    if (!isActiveAdmin) {
       respond(cb, { error: "Only hosts can promote another host." });
       return;
     }
@@ -806,7 +796,8 @@ export const registerAdminHandlers = (
       .filter((room) => room.clientId === clientId)
       .map((room) => ({
         id: room.id,
-        userCount: room.clientCount,
+        userCount:
+          room.getMeetingParticipantCount() + room.getWebinarAttendeeCount(),
       }));
     respond(cb, { rooms: roomList });
   });

@@ -25,6 +25,7 @@ export type AppsProviderProps = {
   socket: Socket | null;
   user?: AppUser;
   isAdmin?: boolean;
+  isReadOnly?: boolean;
   uploadAsset?: AssetUploadHandler;
   children: React.ReactNode;
 };
@@ -114,6 +115,7 @@ export function AppsProvider({
   socket,
   user,
   isAdmin,
+  isReadOnly = false,
   uploadAsset,
   children,
 }: AppsProviderProps) {
@@ -131,6 +133,11 @@ export function AppsProvider({
     Map<string, (event: AwarenessUpdateEvent, origin: unknown) => void>
   >(new Map());
   const socketRef = useRef<Socket | null>(null);
+  const isReadOnlyRef = useRef(isReadOnly);
+
+  useEffect(() => {
+    isReadOnlyRef.current = isReadOnly;
+  }, [isReadOnly]);
 
   const resetLocalData = useCallback(() => {
     for (const [appId, doc] of docsRef.current.entries()) {
@@ -180,6 +187,7 @@ export function AppsProvider({
 
     const handler = (update: Uint8Array, origin: unknown) => {
       if (origin === "remote") return;
+      if (isReadOnlyRef.current) return;
       const currentSocket = socketRef.current;
       if (!currentSocket) return;
       const payload: AppsUpdatePayload = { appId, update };
@@ -192,6 +200,7 @@ export function AppsProvider({
 
   const queueInitialUpdate = useCallback((appId: string, doc: Y.Doc) => {
     if (initialUpdateSentRef.current.has(appId)) return;
+    if (isReadOnlyRef.current) return;
 
     const update = Y.encodeStateAsUpdate(doc);
     if (update.length === 0) return;
@@ -212,6 +221,7 @@ export function AppsProvider({
 
     const handler = ({ added, updated, removed }: AwarenessUpdateEvent, origin: unknown) => {
       if (origin === "remote") return;
+      if (isReadOnlyRef.current) return;
 
       const currentSocket = socketRef.current;
       if (!currentSocket || !currentSocket.connected) return;
@@ -309,7 +319,7 @@ export function AppsProvider({
           const serverVector = toUint8Array(response.stateVector);
           if (!serverVector) return;
           const updateForServer = Y.encodeStateAsUpdate(doc, serverVector);
-          if (updateForServer.length > 0) {
+          if (updateForServer.length > 0 && !isReadOnlyRef.current) {
             currentSocket.emit("apps:yjs:update", { appId, update: updateForServer });
           }
         }
@@ -367,6 +377,7 @@ export function AppsProvider({
     if (!socket) return;
 
     const flushPending = () => {
+      if (isReadOnlyRef.current) return;
       const pending = pendingInitialUpdatesRef.current;
       if (pending.size === 0) return;
 
@@ -392,6 +403,7 @@ export function AppsProvider({
   const openApp = useCallback(async (appId: string, options?: Record<string, unknown>) => {
     const currentSocket = socketRef.current;
     if (!currentSocket) return false;
+    if (isReadOnlyRef.current) return false;
     if (!getAppById(appId)) {
       console.warn(`[Apps] Attempted to open unregistered app: ${appId}`);
       return false;
@@ -418,6 +430,7 @@ export function AppsProvider({
   const closeApp = useCallback(async () => {
     const currentSocket = socketRef.current;
     if (!currentSocket) return false;
+    if (isReadOnlyRef.current) return false;
 
     return new Promise<boolean>((resolve) => {
       let completed = false;
@@ -439,6 +452,7 @@ export function AppsProvider({
   const setLocked = useCallback(async (locked: boolean) => {
     const currentSocket = socketRef.current;
     if (!currentSocket) return false;
+    if (isReadOnlyRef.current) return false;
 
     return new Promise<boolean>((resolve) => {
       let completed = false;
@@ -470,6 +484,7 @@ export function AppsProvider({
       getAwareness,
       user,
       isAdmin,
+      isReadOnly,
       uploadAsset,
     }),
     [
@@ -483,6 +498,7 @@ export function AppsProvider({
       getAwareness,
       user,
       isAdmin,
+      isReadOnly,
       uploadAsset,
     ]
   );

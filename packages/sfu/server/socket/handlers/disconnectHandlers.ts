@@ -4,7 +4,6 @@ import { config } from "../../../config/config.js";
 import type { AppsAwarenessData } from "../../../types.js";
 import { Logger } from "../../../utilities/loggers.js";
 import { cleanupRoom } from "../../rooms.js";
-import { emitUserLeft } from "../../notifications.js";
 import {
   emitWebinarAttendeeCountChanged,
   emitWebinarFeedChanged,
@@ -61,16 +60,18 @@ export const registerDisconnectHandlers = (
           return;
         }
 
-        const wasAdmin = activeClient instanceof Admin;
+        const wasAdmin = activeClient instanceof Admin && !activeClient.isObserver;
         const isGhost = activeClient.isGhost;
         const isWebinarAttendee = activeClient.isWebinarAttendee;
         const awarenessRemovals = activeRoom.clearUserAwareness(userId);
 
-        for (const removal of awarenessRemovals) {
-          io.to(roomChannelId).emit("apps:awareness", {
-            appId: removal.appId,
-            awarenessUpdate: removal.awarenessUpdate,
-          } satisfies AppsAwarenessData);
+        if (!isGhost) {
+          for (const removal of awarenessRemovals) {
+            io.to(roomChannelId).emit("apps:awareness", {
+              appId: removal.appId,
+              awarenessUpdate: removal.awarenessUpdate,
+            } satisfies AppsAwarenessData);
+          }
         }
 
         activeRoom.removeClient(userId);
@@ -80,19 +81,16 @@ export const registerDisconnectHandlers = (
           canStopAnyRelay: false,
         });
         void state.transcriptRelays.syncRoom(activeRoom);
-        if (isGhost) {
-          emitUserLeft(activeRoom, userId, {
-            ghostOnly: true,
-            excludeUserId: userId,
-          });
-        } else if (!isWebinarAttendee) {
+        if (!isGhost && !isWebinarAttendee) {
           io.to(roomChannelId).emit("userLeft", {
             userId,
             roomId: activeRoom.id,
           });
         }
-        emitWebinarAttendeeCountChanged(io, state, activeRoom);
-        emitWebinarFeedChanged(io, state, activeRoom);
+        if (!isGhost) {
+          emitWebinarAttendeeCountChanged(io, state, activeRoom);
+          emitWebinarFeedChanged(io, state, activeRoom);
+        }
 
         if (wasAdmin) {
           if (!activeRoom.hasActiveAdmin()) {

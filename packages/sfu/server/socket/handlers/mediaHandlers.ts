@@ -656,9 +656,7 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
 
         const producers = context.currentClient.isWebinarAttendee
           ? context.currentRoom.getWebinarFeedSnapshot().producers
-          : context.currentRoom.getAllProducers(context.currentClient.id, {
-              includeGhostProducers: context.currentClient.isGhost,
-            });
+          : context.currentRoom.getAllProducers(context.currentClient.id);
         respond(callback, { producers });
       } catch (error) {
         respond(callback, { error: (error as Error).message });

@@ -74,6 +74,7 @@ export type AppsContextValue = {
   getAwareness: (appId: string) => Awareness;
   user?: AppUser;
   isAdmin?: boolean;
+  isReadOnly?: boolean;
   uploadAsset?: AssetUploadHandler;
 };
 

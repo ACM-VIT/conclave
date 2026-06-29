@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { Awareness } from "y-protocols/awareness";
 import { useAppDoc } from "./useAppDoc";
+import { useApps } from "./useApps";
 
 export type PresenceState = {
   clientId: number;
@@ -55,6 +56,7 @@ const snapshotAwareness = (awareness: Awareness): PresenceState[] => {
 
 export const useAppPresence = (appId: string) => {
   const { awareness } = useAppDoc(appId);
+  const { isReadOnly } = useApps();
   const [states, setStates] = useState<PresenceState[]>(() => snapshotAwareness(awareness));
 
   useEffect(() => {
@@ -67,9 +69,17 @@ export const useAppPresence = (appId: string) => {
     };
   }, [awareness]);
 
+  useEffect(() => {
+    if (!isReadOnly) return;
+    awareness.setLocalState(null);
+  }, [awareness, isReadOnly]);
+
   const setLocalState = useMemo(
-    () => awareness.setLocalState.bind(awareness) as (state: unknown) => void,
-    [awareness]
+    () =>
+      isReadOnly
+        ? ((() => {}) as (state: unknown) => void)
+        : (awareness.setLocalState.bind(awareness) as (state: unknown) => void),
+    [awareness, isReadOnly]
   );
 
   return { awareness, states, setLocalState };

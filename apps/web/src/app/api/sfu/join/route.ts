@@ -515,12 +515,18 @@ export async function POST(request: Request) {
       id: sessionUser!.id,
       email: sessionUser!.email,
     });
+  const canGhostJoin = !isWebinarAttendeeJoin && requestedGhost && isSuperAdmin;
+  if (requestedGhost && !canGhostJoin) {
+    return NextResponse.json(
+      { error: "Ghost mode is not available for this session" },
+      { status: 403 },
+    );
+  }
   const isForcedHost =
     !isWebinarAttendeeJoin &&
-    (Boolean(
+    Boolean(
       normalizedSessionEmail && alwaysHostEmails.has(normalizedSessionEmail),
-    ) ||
-      (isSuperAdmin && requestedGhost));
+    );
   const requestedHost = Boolean(body?.isHost ?? body?.isAdmin);
 
   // For scheduled webinar rooms, only the actual host or a registered co-host
@@ -572,6 +578,7 @@ export async function POST(request: Request) {
       isHost,
       isAdmin: isHost,
       allowRoomCreation,
+      canGhostJoin,
       clientId,
       sessionId,
       joinMode,

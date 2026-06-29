@@ -117,7 +117,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
         return;
       }
 
-      if (!(context.currentClient instanceof Admin)) {
+      if (!(context.currentClient instanceof Admin) || context.currentClient.isObserver) {
         respond(callback, { success: false, error: "Only admins can open apps" });
         return;
       }
@@ -153,7 +153,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
       return;
     }
 
-    if (!(context.currentClient instanceof Admin)) {
+    if (!(context.currentClient instanceof Admin) || context.currentClient.isObserver) {
       respond(callback, { success: false, error: "Only admins can close apps" });
       return;
     }
@@ -182,7 +182,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
         return;
       }
 
-      if (!(context.currentClient instanceof Admin)) {
+      if (!(context.currentClient instanceof Admin) || context.currentClient.isObserver) {
         respond(callback, { success: false, error: "Only admins can lock apps" });
         return;
       }
@@ -204,10 +204,6 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
     (data: AppsSyncData, callback: (response: AppsSyncResponse | { error: string }) => void) => {
       if (!context.currentRoom) {
         respond(callback, { error: "Not in a room" });
-        return;
-      }
-      if (context.currentClient?.isObserver) {
-        respond(callback, { error: "Watch-only attendees cannot use shared apps" });
         return;
       }
       if (!takeToken(socket, "apps:yjs:sync", RATE_LIMITS.appsYjsSync)) {
@@ -265,7 +261,10 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
     if (!appId) return;
     if (context.currentRoom.appsState.activeAppId !== appId) return;
 
-    if (context.currentRoom.appsState.locked && !(context.currentClient instanceof Admin)) {
+    if (
+      context.currentRoom.appsState.locked &&
+      (!(context.currentClient instanceof Admin) || context.currentClient.isObserver)
+    ) {
       return;
     }
 

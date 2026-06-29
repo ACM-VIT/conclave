@@ -90,6 +90,7 @@ export type GameContextValue = {
   vote: GameVote | null;
   isActive: boolean;
   isAdmin: boolean;
+  isReadOnly: boolean;
   userId: string | null;
   startGame: (gameId: string, options?: GameConfig) => Promise<GameMoveResult>;
   endGame: () => Promise<GameMoveResult>;

@@ -38,6 +38,7 @@ export default function MostLikelyToGame({
   players,
   userId,
   isAdmin,
+  readOnly = false,
   move,
 }: GameViewProps<MltPublic, MltMe>) {
   const remaining = useRemaining(pub.deadline, pub.serverNow);
@@ -51,6 +52,7 @@ export default function MostLikelyToGame({
         players={players}
         userId={userId}
         isAdmin={isAdmin}
+        readOnly={readOnly}
         canStart={pub.totalPlayers >= 3}
         disabledLabel="Need at least 3 players"
         onStart={() => move("start")}
@@ -127,7 +129,7 @@ export default function MostLikelyToGame({
             <button
               key={player.id}
               type="button"
-              disabled={reveal || me.yourVote !== null}
+              disabled={readOnly || reveal || me.yourVote !== null}
               onClick={() => move("vote", { target: player.id })}
               style={{
                 position: "relative",
@@ -139,7 +141,10 @@ export default function MostLikelyToGame({
                 border: `1.5px solid ${isMyVote || isWinner ? color.accent : color.border}`,
                 background: color.surfaceRaised,
                 color: color.text,
-                cursor: reveal || me.yourVote !== null ? "default" : "pointer",
+                cursor:
+                  readOnly || reveal || me.yourVote !== null
+                    ? "default"
+                    : "pointer",
                 overflow: "hidden",
               }}
             >
@@ -170,7 +175,7 @@ export default function MostLikelyToGame({
         })}
       </div>
 
-      {isAdmin ? (
+      {isAdmin && !readOnly ? (
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
           {reveal ? (
             <GhostButton onClick={() => move("next")}>Next</GhostButton>

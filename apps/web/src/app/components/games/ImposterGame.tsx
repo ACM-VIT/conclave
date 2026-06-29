@@ -85,6 +85,7 @@ export default function ImposterGame({
   players,
   userId,
   isAdmin,
+  readOnly = false,
   move,
 }: GameViewProps<ImposterPublic, ImposterMe>) {
   const remaining = useRemaining(pub.deadline, pub.serverNow);
@@ -98,6 +99,7 @@ export default function ImposterGame({
         players={players}
         userId={userId}
         isAdmin={isAdmin}
+        readOnly={readOnly}
         canStart={pub.totalPlayers >= 3}
         startLabel="Deal secret words"
         disabledLabel="Need at least 3 players"
@@ -179,7 +181,7 @@ export default function ImposterGame({
             <button
               key={player.id}
               type="button"
-              disabled={!voting || isMe}
+              disabled={readOnly || !voting || isMe}
               onClick={() => move("vote", { target: player.id })}
               style={{
                 display: "flex",
@@ -190,7 +192,7 @@ export default function ImposterGame({
                 border: `1.5px solid ${isMyVote ? color.accent : color.border}`,
                 background: isMyVote ? color.accentSoft : color.surfaceRaised,
                 color: color.text,
-                cursor: voting && !isMe ? "pointer" : "default",
+                cursor: !readOnly && voting && !isMe ? "pointer" : "default",
                 opacity: isMe && voting ? 0.55 : 1,
               }}
             >
@@ -209,7 +211,7 @@ export default function ImposterGame({
         })}
       </div>
 
-      {isAdmin ? (
+      {isAdmin && !readOnly ? (
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
           {pub.phase === "discuss" ? (
             <PrimaryButton onClick={() => move("callVote")}>Call vote</PrimaryButton>

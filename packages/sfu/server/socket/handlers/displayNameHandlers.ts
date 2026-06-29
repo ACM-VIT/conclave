@@ -76,6 +76,8 @@ export const registerDisplayNameHandlers = (
         );
 
         for (const userId of updatedUserIds) {
+          const client = context.currentRoom.getClient(userId);
+          if (!client || client.isObserver) continue;
           io.to(context.currentRoom.channelId).emit("displayNameUpdated", {
             userId,
             displayName,

@@ -270,7 +270,8 @@ const resolveDirectMessageTarget = (
   );
 
   const candidates: DirectMessageTargetCandidate[] = [];
-  for (const [candidateUserId] of room.clients.entries()) {
+  for (const [candidateUserId, candidateClient] of room.clients.entries()) {
+    if (candidateClient.isObserver) continue;
     const displayName =
       room.getDisplayNameForUser(candidateUserId) ||
       fallbackDisplayNameFromUserId(candidateUserId);

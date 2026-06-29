@@ -73,7 +73,7 @@ const validatePlayerCount = (
 const collectAdminIds = (room: Room): string[] => {
   const ids: string[] = [];
   for (const client of room.clients.values()) {
-    if (client instanceof Admin) ids.push(client.id);
+    if (client instanceof Admin && !client.isObserver) ids.push(client.id);
   }
   return ids;
 };
@@ -215,7 +215,7 @@ export const registerGameHandlers = (context: ConnectionContext): void => {
         respond(callback, { success: false, error: "Not in a room" });
         return;
       }
-      if (!(context.currentClient instanceof Admin)) {
+      if (!(context.currentClient instanceof Admin) || context.currentClient.isObserver) {
         respond(callback, { success: false, error: "Only the host can start a game" });
         return;
       }
@@ -269,7 +269,7 @@ export const registerGameHandlers = (context: ConnectionContext): void => {
           return;
         }
         const hostClient = room.clients.get(hostId);
-        if (!(hostClient instanceof Admin)) {
+        if (!(hostClient instanceof Admin) || hostClient.isObserver) {
           respond(callback, { success: false, error: "Only the host can start a game" });
           return;
         }
@@ -310,7 +310,7 @@ export const registerGameHandlers = (context: ConnectionContext): void => {
         respond(callback, { success: false, error: "Not in a room" });
         return;
       }
-      if (!(context.currentClient instanceof Admin)) {
+      if (!(context.currentClient instanceof Admin) || context.currentClient.isObserver) {
         respond(callback, { success: false, error: "Only the host can open a vote" });
         return;
       }
@@ -372,7 +372,7 @@ export const registerGameHandlers = (context: ConnectionContext): void => {
       respond(callback, { success: false, error: "Not in a room" });
       return;
     }
-    if (!(context.currentClient instanceof Admin)) {
+    if (!(context.currentClient instanceof Admin) || context.currentClient.isObserver) {
       respond(callback, { success: false, error: "Only the host can cancel the vote" });
       return;
     }
@@ -436,7 +436,7 @@ export const registerGameHandlers = (context: ConnectionContext): void => {
       respond(callback, { success: false, error: "Not in a room" });
       return;
     }
-    if (!(context.currentClient instanceof Admin)) {
+    if (!(context.currentClient instanceof Admin) || context.currentClient.isObserver) {
       respond(callback, { success: false, error: "Only the host can end the game" });
       return;
     }

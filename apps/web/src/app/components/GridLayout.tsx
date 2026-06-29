@@ -1003,9 +1003,21 @@ function GridLayout({
       return next;
     });
   }, []);
-  const isLocalActiveSpeaker = activeSpeakerId === currentUserId;
-  const isLocalPinned = pinnedId === LOCAL_STAGE_ID;
+  const canRenderSelfView = !isGhost;
+  const isLocalActiveSpeaker =
+    canRenderSelfView && activeSpeakerId === currentUserId;
+  const isLocalPinned = canRenderSelfView && pinnedId === LOCAL_STAGE_ID;
   const hasPresentation = hasLiveVideo(presentationStream);
+  useEffect(() => {
+    if (!isGhost) return;
+    setPinnedId((current) => (current === LOCAL_STAGE_ID ? null : current));
+    setFullVideoTileIds((current) => {
+      if (!current.has("local")) return current;
+      const next = new Set(current);
+      next.delete("local");
+      return next;
+    });
+  }, [isGhost]);
   // Default to the placeholder (not your own mirrored screen) each time a
   // new share session starts; reset happens the moment sharing stops so the
   // NEXT share starts fresh rather than carrying over the last choice.
@@ -1143,10 +1155,10 @@ function GridLayout({
   );
   const roomSpeakerParticipantIds = useMemo(
     () => [
-      currentUserId,
+      ...(canRenderSelfView ? [currentUserId] : []),
       ...remoteInput.map((participant) => participant.userId),
     ],
-    [currentUserId, remoteInput],
+    [canRenderSelfView, currentUserId, remoteInput],
   );
   const featuredSpeakerId = useStableSpeakerId({
     primarySpeakerId: activeSpeakerId,
@@ -1162,12 +1174,13 @@ function GridLayout({
     requestedSelfViewMode === "auto"
       ? autoSelfViewMode
       : requestedSelfViewMode;
-  const canDetachSelfView = remoteInput.length > 0 || hasPresentation;
+  const canDetachSelfView =
+    canRenderSelfView && (remoteInput.length > 0 || hasPresentation);
   const effectiveSelfViewMode: ResolvedSelfViewMode = canDetachSelfView
     ? detachedSelfViewMode
     : "tile";
   const shouldShowSelfAsTile =
-    effectiveSelfViewMode === "tile" || isLocalPinned;
+    canRenderSelfView && (effectiveSelfViewMode === "tile" || isLocalPinned);
   const isLocalFeaturedSpeaker = featuredSpeakerId === currentUserId;
   const featuredRemoteParticipant =
     featuredSpeakerId && featuredSpeakerId !== currentUserId
@@ -1182,7 +1195,7 @@ function GridLayout({
             participantHasLiveVideo(featuredRemoteParticipant),
         );
   const autoStageMode = chooseStageMode({
-    count: remoteInput.length + 1,
+    count: remoteInput.length + (canRenderSelfView ? 1 : 0),
     presenting: hasPresentation,
     pinned: Boolean(pinnedId),
     hasActiveVideoSpeaker: hasFeaturedVideoSpeaker,

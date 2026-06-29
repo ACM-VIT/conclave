@@ -110,7 +110,17 @@ export function GamesPanel({
   maxDockWidth?: number;
   onDockWidthChange?: (width: number) => void;
 }) {
-  const { catalog, vote, isAdmin, userId, startGame, openVote, castVote, cancelVote } = useGame();
+  const {
+    catalog,
+    vote,
+    isAdmin,
+    isReadOnly,
+    userId,
+    startGame,
+    openVote,
+    castVote,
+    cancelVote,
+  } = useGame();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [configuring, setConfiguring] = useState<CatalogEntry | null>(null);
@@ -165,6 +175,7 @@ export function GamesPanel({
           <VoteView
             vote={vote}
             isAdmin={isAdmin}
+            readOnly={isReadOnly}
             userId={userId}
             busy={busy}
             onCast={(id) => run(() => castVote(id))}
@@ -176,6 +187,7 @@ export function GamesPanel({
             key={configuring.id}
             entry={configuring}
             busy={busy}
+            readOnly={isReadOnly}
             onStart={async (cfg) => {
               const ok = await run(() => startGame(configuring.id, cfg));
               if (ok) setConfiguring(null);
@@ -185,6 +197,7 @@ export function GamesPanel({
           <LauncherView
             catalog={catalog}
             isAdmin={isAdmin}
+            readOnly={isReadOnly}
             busy={busy}
             onPick={pick}
             onOpenVote={() => run(() => openVote())}
@@ -199,12 +212,14 @@ export function GamesPanel({
 function LauncherView({
   catalog,
   isAdmin,
+  readOnly,
   busy,
   onPick,
   onOpenVote,
 }: {
   catalog: CatalogEntry[];
   isAdmin: boolean;
+  readOnly: boolean;
   busy: boolean;
   onPick: (entry: CatalogEntry) => void;
   onOpenVote: () => void;
@@ -212,21 +227,25 @@ function LauncherView({
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
       <p style={{ fontSize: 13, color: color.textMuted, margin: "0 0 4px", lineHeight: 1.5 }}>
-        {isAdmin ? "Pick a game, or let the room vote." : "The host is picking a game."}
+        {readOnly
+          ? "Observer mode can watch games but cannot start one."
+          : isAdmin
+            ? "Pick a game, or let the room vote."
+            : "The host is picking a game."}
       </p>
       {catalog.map((entry) => (
         <Row
           key={entry.id}
           name={entry.name}
           sub={entry.description}
-          disabled={!isAdmin || busy}
-          onClick={isAdmin ? () => onPick(entry) : undefined}
+          disabled={readOnly || !isAdmin || busy}
+          onClick={!readOnly && isAdmin ? () => onPick(entry) : undefined}
           trailing={
             <span style={{ display: "flex", alignItems: "center", gap: 8, color: color.textFaint }}>
               <span style={{ fontSize: 11, whiteSpace: "nowrap" }}>
                 {entry.minPlayers} to {entry.maxPlayers}
               </span>
-              {isAdmin ? (
+              {isAdmin && !readOnly ? (
                 <svg width={16} height={16} viewBox="0 0 24 24" fill="none" aria-hidden>
                   <path d="M9 6l6 6-6 6" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" />
                 </svg>
@@ -235,7 +254,7 @@ function LauncherView({
           }
         />
       ))}
-      {isAdmin ? (
+      {isAdmin && !readOnly ? (
         <div style={{ marginTop: 6 }}>
           <PrimaryButton full tone="neutral" disabled={busy} onClick={onOpenVote}>
             Put it to a vote
@@ -324,10 +343,12 @@ function Segmented<T extends string | number>({
 function GameConfigView({
   entry,
   busy,
+  readOnly,
   onStart,
 }: {
   entry: CatalogEntry;
   busy: boolean;
+  readOnly: boolean;
   onStart: (config: GameConfig) => void;
 }) {
   const [config, setConfig] = useState<GameConfig>(() => {
@@ -414,7 +435,7 @@ function GameConfigView({
         </div>
       ))}
 
-      <PrimaryButton full disabled={busy} onClick={() => onStart(config)}>
+      <PrimaryButton full disabled={readOnly || busy} onClick={() => onStart(config)}>
         {busy ? (
           <span className="inline-flex min-w-0 items-center justify-center gap-2">
             <LoaderCircle
@@ -463,6 +484,7 @@ function buildGenerationProgressLabels(
 function VoteView({
   vote,
   isAdmin,
+  readOnly,
   userId,
   busy,
   onCast,
@@ -471,6 +493,7 @@ function VoteView({
 }: {
   vote: { candidates: CatalogEntry[]; tally: Record<string, number>; votes: Record<string, string>; totalPlayers: number };
   isAdmin: boolean;
+  readOnly: boolean;
   userId: string | null;
   busy: boolean;
   onCast: (id: string) => void;
@@ -494,7 +517,11 @@ function VoteView({
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
       <p style={{ fontSize: 13, color: color.textMuted, margin: "0 0 4px" }}>
-        {isAdmin ? "Vote too, then start the winner." : "Tap the game you want."}{" "}
+        {readOnly
+          ? "Observer mode can watch this vote."
+          : isAdmin
+            ? "Vote too, then start the winner."
+            : "Tap the game you want."}{" "}
         <span style={{ color: color.textFaint }}>
           {voters} of {vote.totalPlayers} voted
         </span>
@@ -507,9 +534,9 @@ function VoteView({
             key={entry.id}
             name={entry.name}
             sub={entry.description}
-            disabled={busy}
+            disabled={readOnly || busy}
             selected={mine}
-            onClick={() => onCast(entry.id)}
+            onClick={readOnly ? undefined : () => onCast(entry.id)}
             fillRatio={count / maxVotes}
             trailing={
               <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -520,7 +547,7 @@ function VoteView({
           />
         );
       })}
-      {isAdmin ? (
+      {isAdmin && !readOnly ? (
         <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
           <GhostButton onClick={onCancel}>Cancel</GhostButton>
           <div style={{ flex: 1 }}>

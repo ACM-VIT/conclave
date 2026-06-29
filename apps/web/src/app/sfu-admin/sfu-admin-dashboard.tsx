@@ -275,7 +275,6 @@ export default function SfuAdminDashboard() {
   const [kickPresent, setKickPresent] = useState(true);
 
   const [removeReason, setRemoveReason] = useState("Stage reset by operator");
-  const [includeGhosts, setIncludeGhosts] = useState(false);
   const [includeAttendees, setIncludeAttendees] = useState(false);
   const [moderationReason, setModerationReason] = useState("Removed by operator");
 
@@ -1344,14 +1343,6 @@ export default function SfuAdminDashboard() {
                         placeholder="Remove non-admins reason"
                       />
                       <label className="flex items-center justify-between text-xs">
-                        <span>Include ghosts</span>
-                        <input
-                          type="checkbox"
-                          checked={includeGhosts}
-                          onChange={(event) => setIncludeGhosts(event.target.checked)}
-                        />
-                      </label>
-                      <label className="flex items-center justify-between text-xs">
                         <span>Include attendees</span>
                         <input
                           type="checkbox"
@@ -1368,7 +1359,6 @@ export default function SfuAdminDashboard() {
                             label: "Removed non-admins",
                             path: `rooms/${selectedRoomPath}/users/remove-non-admins`,
                             body: {
-                              includeGhosts,
                               includeAttendees,
                               reason: removeReason.trim() || undefined,
                             },

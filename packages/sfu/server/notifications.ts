@@ -4,19 +4,18 @@ export const emitUserJoined = (
   room: Room,
   userId: string,
   displayName: string,
-  options?: { ghostOnly?: boolean; excludeUserId?: string; isGhost?: boolean },
+  options?: { excludeUserId?: string },
 ): void => {
+  if (room.getClient(userId)?.isGhost) {
+    return;
+  }
   for (const client of room.clients.values()) {
     if (options?.excludeUserId && client.id === options.excludeUserId) {
-      continue;
-    }
-    if (options?.ghostOnly && !client.isGhost) {
       continue;
     }
     client.socket.emit("userJoined", {
       userId,
       displayName,
-      isGhost: options?.isGhost,
       roomId: room.id,
     });
   }
@@ -25,13 +24,13 @@ export const emitUserJoined = (
 export const emitUserLeft = (
   room: Room,
   userId: string,
-  options?: { ghostOnly?: boolean; excludeUserId?: string },
+  options?: { excludeUserId?: string },
 ): void => {
+  if (room.getClient(userId)?.isGhost) {
+    return;
+  }
   for (const client of room.clients.values()) {
     if (options?.excludeUserId && client.id === options.excludeUserId) {
-      continue;
-    }
-    if (options?.ghostOnly && !client.isGhost) {
       continue;
     }
     client.socket.emit("userLeft", { userId, roomId: room.id });

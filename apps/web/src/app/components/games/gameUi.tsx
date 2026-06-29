@@ -175,6 +175,7 @@ export type GameViewProps<Pub = unknown, Me = unknown> = {
   me: Me;
   players: GamePlayer[];
   isAdmin: boolean;
+  readOnly?: boolean;
   userId: string | null;
   hostId: string | null;
   phase: string;
@@ -413,6 +414,7 @@ export function GameLobby({
   blurb,
   players,
   isAdmin,
+  readOnly = false,
   canStart = true,
   startLabel = "Start",
   disabledLabel,
@@ -425,6 +427,7 @@ export function GameLobby({
   players: GamePlayer[];
   isAdmin: boolean;
   userId?: string | null;
+  readOnly?: boolean;
   canStart?: boolean;
   startLabel?: string;
   disabledLabel?: string;
@@ -473,7 +476,7 @@ export function GameLobby({
         </p>
 
         <div style={{ width: "100%", maxWidth: 300, marginTop: 26 }}>
-          {isAdmin ? (
+          {isAdmin && !readOnly ? (
             <PrimaryButton full disabled={!canStart} onClick={onStart}>
               {canStart ? startLabel : disabledLabel ?? startLabel}
             </PrimaryButton>
@@ -491,8 +494,12 @@ export function GameLobby({
               }}
             >
               <span style={{ width: 7, height: 7, borderRadius: radius.pill, background: accent }} />
-              <span style={{ fontSize: 13, color: color.text }}>You&apos;re in</span>
-              <span style={{ fontSize: 13, color: color.textMuted }}>· {waitingText}</span>
+              <span style={{ fontSize: 13, color: color.text }}>
+                {readOnly ? "Watching" : "You're in"}
+              </span>
+              <span style={{ fontSize: 13, color: color.textMuted }}>
+                · {readOnly ? "observer mode" : waitingText}
+              </span>
             </div>
           )}
           <p style={{ fontSize: 12, color: color.textFaint, margin: "12px 0 0" }}>{count}</p>

@@ -40,7 +40,8 @@ export function GamePanel({
   maxDockWidth?: number;
   onDockWidthChange?: (width: number) => void;
 }) {
-  const { publicState, view, isAdmin, userId, move, endGame } = useGame();
+  const { publicState, view, isAdmin, isReadOnly, userId, move, endGame } =
+    useGame();
   if (!publicState) return null;
 
   const Game = getGameRenderer(publicState.gameId);
@@ -63,7 +64,7 @@ export function GamePanel({
         <div className="flex h-8 min-w-0 items-center gap-2">
           <h2 className={GAME_DOCK_TITLE_CLASS}>{publicState.name}</h2>
         </div>
-        {isAdmin ? (
+        {isAdmin && !isReadOnly ? (
           <button
             type="button"
             onClick={() => endGame()}
@@ -104,6 +105,7 @@ export function GamePanel({
               me={view as never}
               players={publicState.players}
               isAdmin={isAdmin}
+              readOnly={isReadOnly}
               userId={userId}
               hostId={publicState.hostId}
               phase={publicState.phase}
