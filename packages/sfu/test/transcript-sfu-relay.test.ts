@@ -45,9 +45,11 @@ class FakeConsumer extends EventEmitter {
 
 class FakeDirectTransport {
   readonly consumers = new Map<string, FakeConsumer>();
+  readonly consumeCalls: string[] = [];
   closed = false;
 
   async consume(options: { producerId: string }): Promise<Consumer> {
+    this.consumeCalls.push(options.producerId);
     const consumer = new FakeConsumer(options.producerId);
     this.consumers.set(options.producerId, consumer);
     return consumer as unknown as Consumer;
@@ -294,6 +296,22 @@ describe("SfuTranscriptRelay realistic audio flow", () => {
         )
         .every((event) => event.speaker.userId === "u1"),
     ).toBe(true);
+
+    relay.close();
+  });
+
+  it("does not create duplicate consumers when producer syncs overlap", async () => {
+    const entries: TranscriptAudioProducerEntry[] = [];
+    const ada = producerEntry("producer-a", "u1", "Ada");
+    const { directTransport, relay } = createHarness(entries);
+    await relay.start();
+
+    entries.push(ada);
+    await Promise.all([relay.syncProducers(), relay.syncProducers()]);
+
+    expect(
+      directTransport.consumeCalls.filter((producerId) => producerId === "producer-a"),
+    ).toHaveLength(1);
 
     relay.close();
   });

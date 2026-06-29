@@ -35,7 +35,7 @@ type RelayStartTokenPayload = jwt.JwtPayload & {
   transportMode?: string;
 };
 
-const verifyTranscriptRelayStartToken = (
+export const verifyTranscriptRelayStartToken = (
   token: string | undefined,
   room: { id: string; clientId: string; channelId: string },
   userId: string,

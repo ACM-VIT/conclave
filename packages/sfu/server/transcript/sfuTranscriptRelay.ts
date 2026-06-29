@@ -44,6 +44,7 @@ export class SfuTranscriptRelay implements TranscriptAudioBatchSink {
   private directTransport: DirectTransport | null = null;
   private workerClient: TranscriptWorkerRelayConnection | null = null;
   private readonly consumers = new Map<string, ActiveAudioConsumer>();
+  private readonly pendingProducerIds = new Set<string>();
   private commitTimer: NodeJS.Timeout | null = null;
   private lastWorkerSendWarnAt = 0;
   private started = false;
@@ -132,14 +133,26 @@ export class SfuTranscriptRelay implements TranscriptAudioBatchSink {
     }
 
     for (const entry of entries) {
-      if (this.consumers.has(entry.producerId)) continue;
+      if (
+        this.consumers.has(entry.producerId) ||
+        this.pendingProducerIds.has(entry.producerId)
+      ) {
+        continue;
+      }
+      this.pendingProducerIds.add(entry.producerId);
       try {
-        await this.addConsumer(entry);
+        const active = await this.addConsumer(entry);
+        if (!active) continue;
+        if (!this.isProducerStillActive(entry.producerId)) {
+          this.closeConsumer(entry.producerId, active);
+        }
       } catch (error) {
         Logger.warn(
           `Transcript SFU relay could not attach audio producer ${entry.producerId} in room ${this.options.room.id}`,
           error,
         );
+      } finally {
+        this.pendingProducerIds.delete(entry.producerId);
       }
     }
   }
@@ -155,6 +168,7 @@ export class SfuTranscriptRelay implements TranscriptAudioBatchSink {
       this.closeConsumer(producerId, active);
     }
     this.consumers.clear();
+    this.pendingProducerIds.clear();
     try {
       this.directTransport?.close();
     } catch {}
@@ -174,8 +188,8 @@ export class SfuTranscriptRelay implements TranscriptAudioBatchSink {
 
   private async addConsumer(
     entry: TranscriptAudioProducerEntry,
-  ): Promise<void> {
-    if (!this.directTransport) return;
+  ): Promise<ActiveAudioConsumer | null> {
+    if (!this.directTransport) return null;
     const consumer = await this.directTransport.consume({
       producerId: entry.producerId,
       rtpCapabilities: this.options.room.router.rtpCapabilities,
@@ -188,6 +202,18 @@ export class SfuTranscriptRelay implements TranscriptAudioBatchSink {
         producerType: entry.type,
       },
     });
+    if (
+      !this.started ||
+      !this.directTransport ||
+      this.directTransport.closed ||
+      this.consumers.has(entry.producerId) ||
+      !this.isProducerStillActive(entry.producerId)
+    ) {
+      try {
+        consumer.close();
+      } catch {}
+      return null;
+    }
     const speaker = toTranscriptSpeaker(entry);
     const active: ActiveAudioConsumer = {
       consumer,
@@ -220,6 +246,18 @@ export class SfuTranscriptRelay implements TranscriptAudioBatchSink {
     consumer.observer.on("close", () => {
       this.closeConsumer(entry.producerId, active);
     });
+    return active;
+  }
+
+  private isProducerStillActive(producerId: string): boolean {
+    return this.options.room
+      .getTranscriptAudioProducerEntries()
+      .some(
+        (entry) =>
+          entry.producerId === producerId &&
+          !entry.paused &&
+          !entry.producer.closed,
+      );
   }
 
   private handleRtpPacket(producerId: string, packet: Buffer): void {
