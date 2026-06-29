@@ -2165,6 +2165,7 @@ export default function MeetsClient({
     localStream,
     participants,
     activeSpeakerId: effectiveActiveSpeakerId,
+    isViewOnly: ghostEnabled,
     resolveDisplayName,
     getTranscriptToken: socket.getTranscriptToken,
   });
