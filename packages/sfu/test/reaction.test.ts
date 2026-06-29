@@ -43,45 +43,51 @@ const playerView = (
   };
 
 describe("reaction game", () => {
-  it("scores taps from the bounded client-side server timestamp", () => {
+  it("scores taps from server receive time with server-owned latency allowance", () => {
     const state = reactionModule.onMove(
       startGoRound(),
-      { playerId: "player", type: "tap", payload: { serverTapAt: 2_637 } },
+      { playerId: "player", type: "tap", payload: undefined },
       context(2_900),
     );
 
     expect(playerView(state)).toMatchObject({
       tapped: true,
       early: false,
-      reactionMs: 137,
+      reactionMs: 325,
     });
   });
 
-  it("keeps a pre-green client tap early even when it arrives after go", () => {
+  it("ignores client supplied tap timestamps during scoring", () => {
     const state = reactionModule.onMove(
       startGoRound(),
-      { playerId: "player", type: "tap", payload: { serverTapAt: 2_499 } },
-      context(2_650),
+      { playerId: "player", type: "tap", payload: { serverTapAt: 2_501 } },
+      context(2_900),
+    );
+
+    expect(playerView(state)).toMatchObject({
+      tapped: true,
+      early: false,
+      reactionMs: 325,
+    });
+  });
+
+  it("marks taps received during arming as early", () => {
+    let state = reactionModule.setup(context(0));
+    state = reactionModule.onMove(
+      state,
+      { playerId: "host", type: "start", payload: undefined },
+      context(1_000),
+    );
+    state = reactionModule.onMove(
+      state,
+      { playerId: "player", type: "tap", payload: undefined },
+      context(2_400),
     );
 
     expect(playerView(state)).toMatchObject({
       tapped: true,
       early: true,
       reactionMs: null,
-    });
-  });
-
-  it("falls back to receive time for stale client timestamps", () => {
-    const state = reactionModule.onMove(
-      startGoRound(),
-      { playerId: "player", type: "tap", payload: { serverTapAt: 1 } },
-      context(2_900),
-    );
-
-    expect(playerView(state)).toMatchObject({
-      tapped: true,
-      early: false,
-      reactionMs: 400,
     });
   });
 });

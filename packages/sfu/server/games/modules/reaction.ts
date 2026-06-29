@@ -9,9 +9,9 @@ import { numberOption } from "../config.js";
 /**
  * Reaction: a reflex arena. Each round the panel waits ("do not tap"), then
  * flips to "TAP" at a random moment. Fastest valid tap wins; tapping early is a
- * fault. The go moment stays server-authoritative, while taps may include a
- * bounded client-side server-time estimate so normal network transit is not
- * counted as player reaction time.
+ * fault. Reaction time is measured from the server-authoritative go moment and
+ * the server receive time, with a small server-owned latency allowance so
+ * clients cannot forge the clock.
  */
 
 const TOTAL_ROUNDS = 5;
@@ -21,8 +21,7 @@ const GO_WINDOW_MS = 4_000;
 const REVEAL_MS = 4_500;
 const RANK_POINTS = [100, 80, 65, 55, 45];
 const MIN_VALID_POINTS = 30;
-const MAX_CLIENT_TAP_AGE_MS = 2_000;
-const MAX_CLIENT_TAP_FUTURE_MS = 250;
+const SERVER_TAP_LATENCY_ALLOWANCE_MS = 75;
 
 type Phase = "lobby" | "arming" | "go" | "reveal" | "results";
 
@@ -36,24 +35,6 @@ type ReactionState = {
   deadline: number;
   taps: Record<string, Tap>;
   scores: Record<string, number>;
-};
-
-const clientTapAt = (payload: unknown): number | null => {
-  if (!payload || typeof payload !== "object") return null;
-  const value = (payload as { serverTapAt?: unknown }).serverTapAt;
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
-};
-
-const boundedTapAt = (payload: unknown, now: number): number => {
-  const tapAt = clientTapAt(payload);
-  if (
-    tapAt == null ||
-    tapAt < now - MAX_CLIENT_TAP_AGE_MS ||
-    tapAt > now + MAX_CLIENT_TAP_FUTURE_MS
-  ) {
-    return now;
-  }
-  return Math.round(Math.min(tapAt, now));
 };
 
 const startRound = (state: ReactionState, ctx: GameContext, round: number): ReactionState => ({
@@ -111,12 +92,16 @@ export const reactionModule: GameModule<ReactionState> = {
           throw new GameMoveError("Not now");
         }
         if (state.taps[move.playerId]) throw new GameMoveError("Already tapped");
-        const tapAt = boundedTapAt(move.payload, ctx.now);
-        const early = state.phase === "arming" || tapAt < state.goAt;
         const tap: Tap =
-          early
+          state.phase === "arming"
             ? { reactionMs: null, early: true }
-            : { reactionMs: Math.max(0, tapAt - state.goAt), early: false };
+            : {
+                reactionMs: Math.max(
+                  0,
+                  ctx.now - state.goAt - SERVER_TAP_LATENCY_ALLOWANCE_MS,
+                ),
+                early: false,
+              };
         return { ...state, taps: { ...state.taps, [move.playerId]: tap } };
       }
       case "next": {

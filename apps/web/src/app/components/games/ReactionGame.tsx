@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { color, radius } from "@conclave/ui-tokens";
 import { GameLobby, GhostButton, HEAD_FONT, type GameViewProps } from "./gameUi";
 
@@ -26,66 +26,28 @@ type ReactionMe = {
   score: number;
 };
 
-type ServerClockSample = {
-  goAt: number | null;
-  serverNow: number | null;
-  at: number;
-};
-
-const localNow = (): number =>
-  typeof performance !== "undefined" && typeof performance.now === "function"
-    ? performance.now()
-    : Date.now();
-
-const localEventTime = (timeStamp: number): number => {
-  const hasPerformance =
-    typeof performance !== "undefined" &&
-    typeof performance.now === "function";
-  if (!Number.isFinite(timeStamp)) return localNow();
-  if (!hasPerformance) return Date.now();
-  if (
-    timeStamp > 1_000_000_000_000 &&
-    typeof performance.timeOrigin === "number"
-  ) {
-    return timeStamp - performance.timeOrigin;
-  }
-  return timeStamp;
-};
-
-/** Counts UP from the server go moment, and estimates server time for local input events. */
-function useServerClock(goAt: number | null, serverNow: number | null): {
-  elapsedMs: number;
-  estimateServerAt: (eventTimeStamp: number) => number | null;
-} {
+/** Counts UP from the server go moment, skew-free. */
+function useElapsed(goAt: number | null, serverNow: number | null): number {
   const [ms, setMs] = useState(0);
-  const sample = useMemo<ServerClockSample>(
-    () => ({ goAt, serverNow, at: localNow() }),
-    [goAt, serverNow],
-  );
+  const baseRef = useRef({ goAt, serverNow, at: Date.now() });
+  useEffect(() => {
+    baseRef.current = { goAt, serverNow, at: Date.now() };
+  }, [goAt, serverNow]);
   useEffect(() => {
     if (goAt == null || serverNow == null) {
       setMs(0);
       return;
     }
     const tick = () => {
-      setMs(Math.max(0, serverNow - goAt + (localNow() - sample.at)));
+      const b = baseRef.current;
+      if (b.goAt == null || b.serverNow == null) return;
+      setMs(Math.max(0, b.serverNow - b.goAt + (Date.now() - b.at)));
     };
     tick();
     const id = window.setInterval(tick, 40);
     return () => window.clearInterval(id);
-  }, [goAt, serverNow, sample]);
-  const estimateServerAt = useCallback(
-    (eventTimeStamp: number): number | null => {
-      if (sample.serverNow == null) return null;
-      const elapsedSinceSample = Math.max(
-        0,
-        localEventTime(eventTimeStamp) - sample.at,
-      );
-      return Math.round(sample.serverNow + elapsedSinceSample);
-    },
-    [sample],
-  );
-  return { elapsedMs: ms, estimateServerAt };
+  }, [goAt, serverNow]);
+  return ms;
 }
 
 export default function ReactionGame({
@@ -96,10 +58,7 @@ export default function ReactionGame({
   isAdmin,
   move,
 }: GameViewProps<ReactionPublic, ReactionMe>) {
-  const { elapsedMs: elapsed, estimateServerAt } = useServerClock(
-    pub.goAt,
-    pub.serverNow,
-  );
+  const elapsed = useElapsed(pub.goAt, pub.serverNow);
 
   if (pub.phase === "lobby") {
     return (
@@ -133,12 +92,8 @@ export default function ReactionGame({
       sub = tappedValid ? "Locked in" : `${pub.tappedCount}/${pub.totalPlayers} tapped`;
     }
     const canTap = !me.tapped;
-    const handleTap = (eventTimeStamp: number) => {
-      const serverTapAt = estimateServerAt(eventTimeStamp);
-      void move(
-        "tap",
-        serverTapAt == null ? undefined : { serverTapAt },
-      );
+    const handleTap = () => {
+      void move("tap");
     };
     return (
       <div style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 340 }}>
@@ -149,13 +104,13 @@ export default function ReactionGame({
             if (!canTap) return;
             if (event.pointerType === "mouse" && event.button !== 0) return;
             event.preventDefault();
-            handleTap(event.timeStamp);
+            handleTap();
           }}
           onKeyDown={(event) => {
             if (!canTap || event.repeat) return;
             if (event.key !== "Enter" && event.key !== " ") return;
             event.preventDefault();
-            handleTap(event.timeStamp);
+            handleTap();
           }}
           style={{
             flex: 1,
