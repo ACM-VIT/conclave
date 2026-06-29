@@ -71,6 +71,7 @@ export type ClientEnvelope =
       speaker?: Partial<TranscriptSpeaker>;
     }
   | { type: "audio.commit"; speaker?: Partial<TranscriptSpeaker> }
+  | { type: "audio.clear"; speaker?: Partial<TranscriptSpeaker> }
   | { type: "qa.ask"; id?: string; question?: string; model?: string }
   | { type: "minutes.refresh" }
   | { type: "export.snapshot" };

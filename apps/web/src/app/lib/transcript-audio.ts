@@ -13,6 +13,7 @@ export interface TranscriptRelaySource {
 export interface TranscriptAudioRelayOptions {
   onAudioChunk: (audioBase64: string, speaker: TranscriptSpeaker) => void;
   onCommit: (speaker: TranscriptSpeaker) => void;
+  onClear: (speaker: TranscriptSpeaker) => void;
 }
 
 type ConnectedSource = {
@@ -20,14 +21,19 @@ type ConnectedSource = {
   gain: GainNode;
   processor: AudioWorkletNode | ScriptProcessorNode;
   speaker: TranscriptSpeaker;
+  speechGateEnabled: boolean;
   speechUntil: number;
   lastChunkAt: number;
   lastCommitAt: number;
+  pendingChunks: Int16Array[];
+  pendingSampleCount: number;
 };
 
 const TARGET_SAMPLE_RATE = 24000;
+const AUDIO_BATCH_TARGET_SAMPLES = 6000;
 const COMMIT_INTERVAL_MS = 1200;
 const FALLBACK_PROCESSOR_SIZE = 8192;
+const PROCESSOR_KEEPALIVE_GAIN = 0.000001;
 const SPEECH_RMS_THRESHOLD = 0.004;
 const SPEECH_HANGOVER_MS = 450;
 
@@ -62,10 +68,10 @@ const computeRms = (input: Float32Array): number => {
   return Math.sqrt(sumSquares / input.length);
 };
 
-const floatToPcm16Base64 = (
+const floatToPcm16Samples = (
   input: Float32Array,
   inputSampleRate: number,
-): string => {
+): Int16Array => {
   const ratio = inputSampleRate / TARGET_SAMPLE_RATE;
   const length = Math.max(1, Math.floor(input.length / ratio));
   const samples = new Int16Array(length);
@@ -86,10 +92,11 @@ const floatToPcm16Base64 = (
     );
   }
 
-  return arrayBufferToPcm16Base64(samples.buffer);
+  return samples;
 };
 
 const isSpeechFrame = (connected: ConnectedSource, level: number): boolean => {
+  if (!connected.speechGateEnabled) return true;
   const now = Date.now();
   if (level >= SPEECH_RMS_THRESHOLD) {
     connected.speechUntil = now + SPEECH_HANGOVER_MS;
@@ -128,7 +135,7 @@ export class TranscriptAudioRelay {
     if (!this.context) {
       this.context = new AudioContextConstructor();
       this.outputGain = this.context.createGain();
-      this.outputGain.gain.value = 0;
+      this.outputGain.gain.value = PROCESSOR_KEEPALIVE_GAIN;
       this.outputGain.connect(this.context.destination);
     }
     if (this.context.state === "suspended") {
@@ -145,7 +152,12 @@ export class TranscriptAudioRelay {
 
     for (const [id, connected] of this.connectedSources) {
       if (liveIds.has(id)) continue;
-      this.commitIfNeeded(connected);
+      if (connected.speaker.source === "local") {
+        this.clearQueuedAudio(connected);
+        this.options.onClear(connected.speaker);
+      } else {
+        this.commitIfNeeded(connected);
+      }
       this.disconnectSource(connected);
       this.connectedSources.delete(id);
     }
@@ -154,6 +166,7 @@ export class TranscriptAudioRelay {
       const existing = this.connectedSources.get(source.id);
       if (existing) {
         existing.speaker = source.speaker;
+        existing.speechGateEnabled = source.speaker.source !== "local";
         continue;
       }
       const connected = await this.connectSource(source);
@@ -167,10 +180,8 @@ export class TranscriptAudioRelay {
       this.commitTimer = null;
     }
     for (const connected of this.connectedSources.values()) {
-      this.commitIfNeeded(connected);
-      if (isAudioWorkletProcessor(connected.processor)) {
-        connected.processor.port.postMessage({ type: "flush" });
-      }
+      this.clearQueuedAudio(connected);
+      this.options.onClear(connected.speaker);
       this.disconnectSource(connected);
     }
     this.connectedSources.clear();
@@ -196,9 +207,12 @@ export class TranscriptAudioRelay {
       gain,
       processor: await this.createProcessor(),
       speaker: relaySource.speaker,
+      speechGateEnabled: relaySource.speaker.source !== "local",
       speechUntil: 0,
       lastChunkAt: 0,
       lastCommitAt: 0,
+      pendingChunks: [],
+      pendingSampleCount: 0,
     };
 
     this.attachProcessorHandler(connected);
@@ -250,11 +264,7 @@ export class TranscriptAudioRelay {
         };
         if (data.type !== "pcm" || !data.buffer) return;
         if (!isSpeechFrame(connected, data.level ?? 0)) return;
-        connected.lastChunkAt = Date.now();
-        this.options.onAudioChunk(
-          arrayBufferToPcm16Base64(data.buffer),
-          connected.speaker,
-        );
+        this.queueAudioSamples(connected, new Int16Array(data.buffer));
       };
       return;
     }
@@ -263,10 +273,9 @@ export class TranscriptAudioRelay {
       const channel = event.inputBuffer.getChannelData(0);
       const level = computeRms(channel);
       if (!isSpeechFrame(connected, level)) return;
-      connected.lastChunkAt = Date.now();
-      this.options.onAudioChunk(
-        floatToPcm16Base64(channel, this.context!.sampleRate),
-        connected.speaker,
+      this.queueAudioSamples(
+        connected,
+        floatToPcm16Samples(channel, this.context!.sampleRate),
       );
     };
   }
@@ -294,8 +303,45 @@ export class TranscriptAudioRelay {
   }
 
   private commitIfNeeded(connected: ConnectedSource): void {
+    this.flushQueuedAudio(connected);
     if (connected.lastChunkAt <= connected.lastCommitAt) return;
     connected.lastCommitAt = Date.now();
     this.options.onCommit(connected.speaker);
+  }
+
+  private queueAudioSamples(
+    connected: ConnectedSource,
+    samples: Int16Array,
+  ): void {
+    if (samples.length === 0) return;
+    connected.pendingChunks.push(samples);
+    connected.pendingSampleCount += samples.length;
+    if (connected.pendingSampleCount >= AUDIO_BATCH_TARGET_SAMPLES) {
+      this.flushQueuedAudio(connected);
+    }
+  }
+
+  private flushQueuedAudio(connected: ConnectedSource): void {
+    if (connected.pendingSampleCount === 0) return;
+    const merged = new Int16Array(connected.pendingSampleCount);
+    let offset = 0;
+    for (const chunk of connected.pendingChunks) {
+      merged.set(chunk, offset);
+      offset += chunk.length;
+    }
+    connected.pendingChunks = [];
+    connected.pendingSampleCount = 0;
+    connected.lastChunkAt = Date.now();
+    this.options.onAudioChunk(
+      arrayBufferToPcm16Base64(merged.buffer),
+      connected.speaker,
+    );
+  }
+
+  private clearQueuedAudio(connected: ConnectedSource): void {
+    connected.pendingChunks = [];
+    connected.pendingSampleCount = 0;
+    connected.lastChunkAt = 0;
+    connected.lastCommitAt = 0;
   }
 }

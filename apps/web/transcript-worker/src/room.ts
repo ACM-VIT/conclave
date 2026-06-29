@@ -289,6 +289,9 @@ export class TranscriptRoom {
       case "audio.commit":
         this.commitAudio(viewer, message.speaker);
         return;
+      case "audio.clear":
+        this.clearAudio(viewer);
+        return;
       case "qa.ask":
         await this.answerQuestion(viewer, message);
         return;
@@ -554,6 +557,22 @@ export class TranscriptRoom {
       void this.handleOpenAiFailure(failureMessage);
       return false;
     }
+  }
+
+  private clearAudio(viewer: Viewer): void {
+    if (!this.isController(viewer) || !this.openAiSocket) return;
+    try {
+      this.openAiSocket.send(
+        JSON.stringify({ type: "input_audio_buffer.clear" }),
+      );
+    } catch {
+      void this.handleOpenAiFailure("Transcript audio clear failed.");
+      return;
+    }
+    this.pendingSpeakers = [];
+    this.latestSpeaker = null;
+    this.hasPendingAudio = false;
+    this.pendingAudioSamples = 0;
   }
 
   private isSameAudioSpeaker(
@@ -943,6 +962,7 @@ export class TranscriptRoom {
     switch (message.type) {
       case "audio.chunk":
       case "audio.commit":
+      case "audio.clear":
         return "audio";
       case "export.snapshot":
         return "export";

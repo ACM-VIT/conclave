@@ -19,7 +19,7 @@ const limits: Record<
   TranscriptRateBucketName,
   { max: number; windowMs: number }
 > = {
-  audio: { max: 160, windowMs: 10_000 },
+  audio: { max: 600, windowMs: 10_000 },
   export: { max: 20, windowMs: 60_000 },
   minutes: { max: 12, windowMs: 60_000 },
   qa: { max: 10, windowMs: 60_000 },
