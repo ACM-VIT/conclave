@@ -327,6 +327,16 @@ assertIncludes(
   "screenShareTemporalLayerCount",
   "Android screen share temporal layering",
 );
+assertRegex(
+  "webAdaptiveConsumerPreferences",
+  /if \(info\.type === "screen"\) \{[\s\S]*const screenShareQuality = worstQuality\([\s\S]*getConsumerScoreQualityHint\(options\.consumerScoreQuality\)[\s\S]*options\.emergencyMode \? 0 : screenShareQuality === "poor" \? 1 : 2[\s\S]*priority: 240,[\s\S]*paused: false,/,
+  "web screen-share receive adaptation lowers temporal layer on poor per-stream score",
+);
+assertRegex(
+  "sfuMediaHandlers",
+  /producerInfo\.type === "screen"[\s\S]*spatialLayer: 0,[\s\S]*temporalLayer: room\.currentQuality === "low" \? 1 : 2[\s\S]*producerInfo\.type === "screen"[\s\S]*return 240;/,
+  "SFU screen-share consumers default to crisp high-priority low-FPS layers",
+);
 
 // Multi-stream rooms should not downgrade because one RTP stream has a short
 // startup jitter spike. Use aggregate/weighted jitter and leave the first loss
