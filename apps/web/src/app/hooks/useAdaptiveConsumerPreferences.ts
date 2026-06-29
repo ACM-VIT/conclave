@@ -397,6 +397,7 @@ const getDesiredPreferences = (
     layout: LayoutRole | null;
     emergencyMode: boolean;
     emergencyKeepVideo: boolean;
+    screenShareVideoActive: boolean;
     consumerScoreQuality: ConsumerScoreQuality;
   },
 ): DesiredConsumerPreferences | null => {
@@ -484,8 +485,9 @@ const getDesiredPreferences = (
   const keepFull =
     quality === "good" &&
     (isFocus ||
-      isVisible ||
-      options.webcamVideoCount <= MAX_WEBCAMS_TO_KEEP_FULL_ON_GOOD_LINKS);
+      (!options.screenShareVideoActive &&
+        (isVisible ||
+          options.webcamVideoCount <= MAX_WEBCAMS_TO_KEEP_FULL_ON_GOOD_LINKS)));
 
   if (quality === "poor") {
     return {
@@ -740,6 +742,9 @@ export function useAdaptiveConsumerPreferences({
     ).filter(
       (info) => info.kind === "video" && info.type === "webcam",
     ).length;
+    const screenShareVideoActive = Array.from(
+      refs.producerMapRef.current.values(),
+    ).some((info) => info.kind === "video" && info.type === "screen");
     const fallbackWebcamRanks = new Map<string, number>();
     if (!layoutHints) {
       Array.from(refs.consumersRef.current.entries())
@@ -880,6 +885,7 @@ export function useAdaptiveConsumerPreferences({
         layout,
         emergencyMode,
         emergencyKeepVideo,
+        screenShareVideoActive,
         consumerScoreQuality,
       });
       if (!desired) return;

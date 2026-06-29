@@ -492,8 +492,13 @@ assertRegex(
 );
 assertIncludes(
   "webAdaptiveConsumerPreferences",
-  "isFocus ||\n      isVisible ||",
-  "web visible good-link webcams keep full spatial layer",
+  "(!options.screenShareVideoActive &&",
+  "web active screen share prevents non-focused webcams from keeping full layers",
+);
+assertRegex(
+  "webAdaptiveConsumerPreferences",
+  /const screenShareVideoActive = Array\.from\([\s\S]*refs\.producerMapRef\.current\.values\(\),[\s\S]*info\.kind === "video" && info\.type === "screen"[\s\S]*screenShareVideoActive,/,
+  "web receive policy detects active screen-share video",
 );
 assertIncludes(
   "webAdaptiveConsumerPreferences",
