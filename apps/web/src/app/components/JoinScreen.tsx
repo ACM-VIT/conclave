@@ -1073,7 +1073,7 @@ function JoinScreen({
                 </div>
               </div>
 
-          <div className="safe-area-pb flex min-h-0 shrink-0 flex-col justify-start gap-3 p-5 sm:gap-4 sm:p-8 md:min-h-[520px] md:justify-center">
+          <div className="safe-area-pb flex min-h-0 shrink-0 flex-col justify-start gap-3 p-5 pb-8 sm:gap-4 sm:p-8 sm:pb-12 md:min-h-[520px] md:justify-center">
             <div className="space-y-1.5">
               <h1
                 className="text-[22px] leading-tight text-[#fafafa]"
