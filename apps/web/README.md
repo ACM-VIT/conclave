@@ -24,6 +24,7 @@ The meeting transcript dock uses a Cloudflare Durable Object worker in
 Required production configuration:
 - `TRANSCRIPT_TOKEN_SECRET`: shared by the SFU and transcript worker for token verification.
 - `TRANSCRIPT_WORKER_URL`: SFU-facing worker URL. Production uses `https://transcribe.conclave.acmvit.in`. `NEXT_PUBLIC_TRANSCRIPT_WORKER_URL` is accepted as a fallback for local environments.
+- `OPENAI_API_KEY`: optional transcript worker secret. When set, meeting participants see the start field as `On the house` and do not need to bring their own OpenAI key.
 - `TRANSCRIPT_ALLOWED_ORIGIN`: optional worker CORS/origin lock for browser WebSocket upgrades.
 
 Optional worker configuration:
@@ -52,4 +53,5 @@ Cloudflare main-branch linking:
 - Config file: `apps/web/wrangler.transcript.jsonc`
 - Build/deploy command: `pnpm -C apps/web run transcript:deploy`
 - Required Cloudflare secret: `TRANSCRIPT_TOKEN_SECRET`
+- Optional Cloudflare secret for free room-wide transcript starts: `OPENAI_API_KEY`
 - Branch: `main`

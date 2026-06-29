@@ -120,6 +120,7 @@ export type {
   TranscriptController,
   TranscriptMinutesEntry,
   TranscriptMinutesSnapshot,
+  TranscriptOpenAiKeySource,
   TranscriptQuestionRequest,
   TranscriptQuestionResponse,
   TranscriptSegment,

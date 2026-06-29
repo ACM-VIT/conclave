@@ -3,11 +3,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   Participant,
-  TranscriptAudioSource,
   TranscriptMinutesSnapshot,
   TranscriptSegment,
   TranscriptSessionState,
-  TranscriptSpeaker,
   TranscriptTokenResponse,
 } from "../lib/types";
 import {
@@ -56,7 +54,7 @@ interface UseMeetingTranscriptOptions {
 }
 
 interface StartTranscriptOptions {
-  apiKey: string;
+  apiKey?: string;
   transcriptModel?: string;
   qaModel?: string;
 }
@@ -65,12 +63,17 @@ type ServerEnvelope =
   | {
       type: "snapshot";
       viewerConnectionId?: string;
+      globalOpenAiKeyAvailable?: boolean;
       session: TranscriptSessionState;
       segments?: TranscriptSegment[];
       partials?: TranscriptSegment[];
       minutes?: TranscriptMinutesSnapshot;
     }
-  | { type: "session.state"; session: TranscriptSessionState }
+  | {
+      type: "session.state";
+      session: TranscriptSessionState;
+      globalOpenAiKeyAvailable?: boolean;
+    }
   | {
       type: "segment.delta";
       delta: Parameters<typeof mergeTranscriptDelta>[1];
@@ -93,7 +96,11 @@ type ServerEnvelope =
       status: "done" | "error";
       error?: string;
     }
-  | { type: "handoff.requested"; session: TranscriptSessionState }
+  | {
+      type: "handoff.requested";
+      session: TranscriptSessionState;
+      globalOpenAiKeyAvailable?: boolean;
+    }
   | { type: "error"; message?: string };
 
 const buildIdleSession = (roomId: string): TranscriptSessionState => ({
@@ -102,6 +109,7 @@ const buildIdleSession = (roomId: string): TranscriptSessionState => ({
   controller: null,
   transcriptModel: DEFAULT_TRANSCRIPT_TRANSCRIPTION_MODEL,
   qaModel: DEFAULT_TRANSCRIPT_QA_MODEL,
+  keySource: null,
   startedAt: null,
   updatedAt: Date.now(),
   error: null,
@@ -126,10 +134,6 @@ const isLiveAudioStream = (stream: MediaStream | null | undefined): boolean =>
       .some((track) => track.enabled && track.readyState === "live"),
   );
 
-const toBaseSpeakerSource = (
-  source: TranscriptAudioSource,
-): TranscriptAudioSource => source;
-
 const hasUsableOpenSocket = (socket: WebSocket | null): boolean =>
   Boolean(socket && socket.readyState === WebSocket.OPEN);
 
@@ -141,7 +145,6 @@ export function useMeetingTranscript({
   isMuted,
   localStream,
   participants,
-  activeSpeakerId,
   resolveDisplayName,
   getTranscriptToken,
 }: UseMeetingTranscriptOptions) {
@@ -163,6 +166,7 @@ export function useMeetingTranscript({
   const [tokenInfo, setTokenInfo] = useState<TranscriptTokenResponse | null>(
     null,
   );
+  const [hasGlobalOpenAiKey, setHasGlobalOpenAiKey] = useState(false);
   const [viewerConnectionId, setViewerConnectionId] = useState<string | null>(
     null,
   );
@@ -171,63 +175,53 @@ export function useMeetingTranscript({
   const connectPromiseRef = useRef<Promise<boolean> | null>(null);
   const subscribedRef = useRef(false);
   const connectRef = useRef<(() => Promise<boolean>) | null>(null);
-  const getSpeakerRef = useRef<() => TranscriptSpeaker>(() => ({
-    userId: currentUserId,
-    displayName: currentDisplayName,
-    source: "local",
-  }));
 
   const transcriptSources = useMemo<TranscriptRelaySource[]>(() => {
     const sources: TranscriptRelaySource[] = [];
     if (!isMuted && isLiveAudioStream(localStream)) {
-      sources.push({ id: `local:${localStream!.id}`, stream: localStream! });
+      sources.push({
+        id: `local:${localStream!.id}`,
+        stream: localStream!,
+        speaker: {
+          userId: currentUserId,
+          displayName: currentDisplayName,
+          source: "local",
+        },
+      });
     }
     for (const participant of participants.values()) {
       if (!participant.isMuted && isLiveAudioStream(participant.audioStream)) {
         sources.push({
           id: `remote:${participant.userId}:${participant.audioStream!.id}`,
           stream: participant.audioStream!,
+          speaker: {
+            userId: participant.userId,
+            displayName: resolveDisplayName(participant.userId),
+            source: "remote",
+          },
         });
       }
       if (isLiveAudioStream(participant.screenShareAudioStream)) {
         sources.push({
           id: `screen:${participant.userId}:${participant.screenShareAudioStream!.id}`,
           stream: participant.screenShareAudioStream!,
+          speaker: {
+            userId: participant.userId,
+            displayName: resolveDisplayName(participant.userId),
+            source: "screen",
+          },
         });
       }
     }
     return sources;
-  }, [isMuted, localStream, participants]);
-
-  const getCurrentSpeaker = useCallback((): TranscriptSpeaker => {
-    const speakerId = activeSpeakerId || currentUserId;
-    if (speakerId === currentUserId) {
-      return {
-        userId: currentUserId,
-        displayName: currentDisplayName,
-        source: toBaseSpeakerSource("local"),
-      };
-    }
-    const participant = participants.get(speakerId);
-    const source: TranscriptAudioSource = participant?.screenShareAudioStream
-      ? "remote"
-      : "remote";
-    return {
-      userId: speakerId,
-      displayName: resolveDisplayName(speakerId),
-      source,
-    };
   }, [
-    activeSpeakerId,
     currentDisplayName,
     currentUserId,
+    isMuted,
+    localStream,
     participants,
     resolveDisplayName,
   ]);
-
-  useEffect(() => {
-    getSpeakerRef.current = getCurrentSpeaker;
-  }, [getCurrentSpeaker]);
 
   const send = useCallback((payload: unknown): boolean => {
     const socket = socketRef.current;
@@ -297,6 +291,7 @@ export function useMeetingTranscript({
       switch (message.type) {
         case "snapshot": {
           setViewerConnectionId(message.viewerConnectionId ?? null);
+          setHasGlobalOpenAiKey(message.globalOpenAiKeyAvailable === true);
           setSession(message.session);
           setSegments(message.segments ?? []);
           setPartials(
@@ -310,6 +305,7 @@ export function useMeetingTranscript({
         }
         case "session.state":
         case "handoff.requested":
+          setHasGlobalOpenAiKey(message.globalOpenAiKeyAvailable === true);
           setSession(message.session);
           return;
         case "segment.delta":
@@ -542,6 +538,7 @@ export function useMeetingTranscript({
       setMinutes(createEmptyTranscriptMinutes());
       setQaMessages([]);
       setTokenInfo(null);
+      setHasGlobalOpenAiKey(false);
       setViewerConnectionId(null);
       return;
     }
@@ -572,7 +569,6 @@ export function useMeetingTranscript({
 
     if (!relayRef.current) {
       relayRef.current = new TranscriptAudioRelay({
-        getSpeaker: () => getSpeakerRef.current(),
         onAudioChunk: (audio, speaker) => {
           send({ type: "audio.chunk", audio, speaker });
         },
@@ -604,6 +600,7 @@ export function useMeetingTranscript({
     qaMessages,
     error,
     tokenInfo,
+    hasGlobalOpenAiKey,
     isStreamingAudio,
     isController:
       Boolean(viewerConnectionId) &&
