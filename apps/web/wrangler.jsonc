@@ -16,7 +16,8 @@
     "BETTER_AUTH_URL": "https://conclave.acmvit.in",
     "BETTER_AUTH_TRUSTED_ORIGINS": "https://conclave.acmvit.in",
     "NEXT_PUBLIC_APP_URL": "https://conclave.acmvit.in",
-    "NEXT_PUBLIC_SITE_URL": "https://conclave.acmvit.in"
+    "NEXT_PUBLIC_SITE_URL": "https://conclave.acmvit.in",
+    "SFU_URLS": "https://sfu-a.acmvit.in,https://sfu-b.acmvit.in"
   },
   "services": [
     {
