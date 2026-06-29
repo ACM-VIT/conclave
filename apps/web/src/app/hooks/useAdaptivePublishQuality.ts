@@ -184,6 +184,14 @@ const getPublishProducerDebugSnapshot = (
   };
 };
 
+const getScreenShareAwareWebcamProfile = (
+  profile: WebcamProducerNetworkProfile,
+): WebcamProducerNetworkProfile => {
+  if (profile === "good") return "fair";
+  if (profile === "fair") return "poor";
+  return profile;
+};
+
 export function useAdaptivePublishQuality({
   enabled,
   connectionQuality,
@@ -287,6 +295,9 @@ export function useAdaptivePublishQuality({
 
   const applyLiveProducerProfile = useCallback(
     async (profile: WebcamProducerNetworkProfile) => {
+      const screenShareVideoActive = Boolean(
+        screenProducerRef.current && !screenProducerRef.current.closed,
+      );
       const audioProducer = audioProducerRef.current;
       if (audioProducer && !audioProducer.closed) {
         const signature = `${audioProducer.id}:${profile}`;
@@ -308,13 +319,16 @@ export function useAdaptivePublishQuality({
       const webcamProducer = videoProducerRef.current;
       if (webcamProducer && !webcamProducer.closed) {
         const quality = videoQualityRef.current;
-        const signature = `${webcamProducer.id}:${quality}:${profile}`;
+        const webcamProfile = screenShareVideoActive
+          ? getScreenShareAwareWebcamProfile(profile)
+          : profile;
+        const signature = `${webcamProducer.id}:${quality}:${webcamProfile}`;
         if (lastAppliedProfilesRef.current.webcam !== signature) {
           try {
             await applyWebcamProducerNetworkProfile(
               webcamProducer,
               quality,
-              profile,
+              webcamProfile,
             );
             lastAppliedProfilesRef.current.webcam = signature;
             writeDebugSnapshot();
