@@ -1,6 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { createElement, useCallback, useEffect, useRef, useState } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { Avatar } from "@conclave/ui-tokens/web";
 import { useSmartParticipantOrder } from "./useSmartParticipantOrder";
 import { getRenderableParticipantVideoStream } from "../lib/participant-media";
 import type { Participant } from "../lib/types";
@@ -104,7 +106,10 @@ const POPOUT_CSS = `
     overflow: hidden;
     background: #131316;
     border: 1px solid rgba(250, 250, 250, 0.08);
-    transition: all 0.3s ease;
+    /* Active-speaker ring is an INSET shadow (matching the in-call tile), not a
+       border-width change — toggling 1px→2px resized the video box on every
+       speaker change and read as jitter. */
+    transition: border-color 0.12s ease, box-shadow 0.12s ease;
     min-width: 0;
     min-height: 0;
   }
@@ -114,7 +119,10 @@ const POPOUT_CSS = `
   }
 
   .video-tile.speaking {
-    border: 2px solid #F95F4A;
+    border-color: transparent;
+    box-shadow:
+      inset 0 0 0 1px rgba(249, 95, 74, 0.72),
+      0 0 0 1px rgba(249, 95, 74, 0.14);
   }
 
   .video-tile video {
@@ -129,55 +137,87 @@ const POPOUT_CSS = `
     display: flex;
     align-items: center;
     justify-content: center;
-    background: #131316;
+    background: #18181b;
   }
 
-  .video-tile .avatar-circle {
-    width: 44px;
-    height: 44px;
-    border-radius: 50%;
-    object-fit: cover;
-    box-shadow: inset 0 0 0 1px rgba(250, 250, 250, 0.18);
+  .video-tile .avatar-mount {
+    display: flex;
+    align-items: center;
+    justify-content: center;
   }
 
   .video-tile .label {
     position: absolute;
     bottom: 8px;
     left: 8px;
-    padding: 4px 10px;
+    max-width: calc(100% - 16px);
+    padding: 5px 12px;
     background: rgba(0, 0, 0, 0.7);
-    backdrop-filter: blur(8px);
-    -webkit-backdrop-filter: blur(8px);
     border: 1px solid rgba(250, 250, 250, 0.1);
     border-radius: 9999px;
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     font-family: 'PolySans Trial', sans-serif;
   }
 
   .video-tile .label-name {
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 500;
     color: #fafafa;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    max-width: 90px;
+    min-width: 0;
+  }
+
+  .video-tile .label-you {
+    flex-shrink: 0;
+    font-size: 11px;
+    font-weight: 500;
+    color: #F95F4A;
   }
 
   .video-tile .label-muted {
     flex-shrink: 0;
     color: #F95F4A;
-    display: flex;
+    display: none;
     align-items: center;
   }
 
   .video-tile .label-muted svg {
-    width: 10px;
+    width: 11px;
+    height: 11px;
+  }
+
+  /* Active-speaker voice bars — mirrors .acm-voice-activity in the call UI. */
+  .video-tile .label-voice {
+    display: none;
+    width: 13px;
     height: 10px;
+    flex-shrink: 0;
+    align-items: flex-end;
+    gap: 2px;
+    color: #F95F4A;
+  }
+
+  .video-tile .label-voice > span {
+    width: 2px;
+    height: 7px;
+    border-radius: 999px;
+    background: currentColor;
+    opacity: 0.7;
+    transform: scaleY(0.5);
+    transform-origin: center bottom;
+    animation: popout-voice 780ms ease-in-out infinite;
+  }
+
+  .video-tile .label-voice > span:nth-child(2) { animation-delay: 120ms; }
+  .video-tile .label-voice > span:nth-child(3) { animation-delay: 240ms; }
+
+  @keyframes popout-voice {
+    0%, 100% { opacity: 0.48; transform: scaleY(0.42); }
+    45% { opacity: 1; transform: scaleY(1); }
   }
 
   .popout-controls {
@@ -187,9 +227,10 @@ const POPOUT_CSS = `
     transform: translateX(-50%);
     display: flex;
     align-items: center;
-    gap: 4px;
-    padding: 6px 10px;
-    background: rgba(0, 0, 0, 0.4);
+    gap: 3px;
+    padding: 4px 6px;
+    background: rgba(10, 10, 11, 0.72);
+    border: 1px solid rgba(250, 250, 250, 0.08);
     backdrop-filter: blur(12px);
     -webkit-backdrop-filter: blur(12px);
     border-radius: 9999px;
@@ -197,86 +238,63 @@ const POPOUT_CSS = `
     font-family: 'PolySans Trial', sans-serif;
   }
 
+  /* Flat ghost icon buttons — matches the redesigned in-call control bar. */
   .ctrl-btn {
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 32px;
-    height: 32px;
+    width: 30px;
+    height: 30px;
     border-radius: 9999px;
     border: none;
     background: transparent;
-    color: rgba(250, 250, 250, 0.8);
+    color: rgba(250, 250, 250, 0.7);
     cursor: pointer;
-    transition: all 0.15s ease;
+    transition: background-color 0.12s ease, color 0.12s ease;
     outline: none;
   }
 
   .ctrl-btn:hover {
     color: #fafafa;
-    background: rgba(250, 250, 250, 0.1);
+    background: rgba(255, 255, 255, 0.08);
   }
 
+  /* Toggled-off (muted mic / camera off) reads in accent, like the call bar. */
   .ctrl-btn.muted {
     color: #F95F4A;
-    background: rgba(249, 95, 74, 0.15);
   }
 
   .ctrl-btn.muted:hover {
-    background: rgba(249, 95, 74, 0.25);
+    color: #F95F4A;
+    background: rgba(249, 95, 74, 0.12);
   }
 
   .ctrl-btn svg {
-    width: 16px;
-    height: 16px;
+    width: 15px;
+    height: 15px;
   }
 
   .ctrl-divider {
     width: 1px;
-    height: 20px;
+    height: 18px;
     background: rgba(250, 250, 250, 0.1);
-    margin: 0 2px;
+    margin: 0 1px;
   }
 
+  /* Leave = solid red pill, identical intent to the in-call hang-up button. */
   .ctrl-btn.leave {
-    color: #ea4335;
-    background: transparent;
+    width: 42px;
+    color: #ffffff;
+    background: #ea4335;
   }
 
   .ctrl-btn.leave:hover {
-    background: rgba(234, 67, 53, 0.2);
+    color: #ffffff;
+    background: #e8533f;
   }
 
   .ctrl-btn.leave svg {
     transform: rotate(135deg);
-  }
-
-  .popout-badge {
-    position: absolute;
-    top: 12px;
-    left: 12px;
-    display: flex;
-    align-items: center;
-    gap: 5px;
-    padding: 4px 10px;
-    background: rgba(0, 0, 0, 0.6);
-    backdrop-filter: blur(8px);
-    -webkit-backdrop-filter: blur(8px);
-    border: 1px solid rgba(250, 250, 250, 0.1);
-    border-radius: 9999px;
-    font-family: 'PolySans Trial', sans-serif;
-    font-size: 10px;
-    color: rgba(250, 250, 250, 0.6);
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    z-index: 10;
-  }
-
-  .popout-badge-dot {
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background: #34d399;
   }
 `;
 
@@ -308,6 +326,7 @@ export function useMeetPopout({
   const popoutWindowRef = useRef<Window | null>(null);
   const updateIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const videoElementsRef = useRef<Map<string, HTMLVideoElement>>(new Map());
+  const avatarRootsRef = useRef<Map<string, Root>>(new Map());
   const popoutListenerCleanupsRef = useRef<Array<() => void>>([]);
 
   const onToggleMuteRef = useRef(onToggleMute);
@@ -351,7 +370,7 @@ export function useMeetPopout({
 
     visible.push({
       userId: currentUserId,
-      displayName: "You",
+      displayName: getDisplayName(currentUserId),
       videoStream: localStream,
       isCameraOff,
       isVideoAdaptivelyPaused: false,
@@ -370,6 +389,7 @@ export function useMeetPopout({
     isMuted,
     activeSpeakerId,
     remoteParticipants,
+    getDisplayName,
   ]);
 
   const updatePopoutContent = useCallback(() => {
@@ -390,9 +410,6 @@ export function useMeetPopout({
       const others = allParticipants.filter((p) => !p.isLocal && !p.isActiveSpeaker);
       showParticipants = [local, activeSpeaker, ...others].filter(Boolean).slice(0, 4) as typeof allParticipants;
     }
-
-    const countEl = doc.getElementById("p-count");
-    if (countEl) countEl.textContent = `${totalCount} in call`;
 
     const grid = doc.getElementById("p-videos");
     if (!grid) return;
@@ -415,6 +432,11 @@ export function useMeetPopout({
           vid.srcObject = null;
           videoElementsRef.current.delete(tileUserId);
         }
+        const root = avatarRootsRef.current.get(tileUserId);
+        if (root) {
+          root.unmount();
+          avatarRootsRef.current.delete(tileUserId);
+        }
         child.remove();
       }
     }
@@ -430,12 +452,14 @@ export function useMeetPopout({
         tile.dataset.userId = participant.userId;
         tile.innerHTML = `
           <div class="avatar-placeholder" style="display: none;">
-            <img class="avatar-circle" alt="" />
+            <div class="avatar-mount"></div>
           </div>
           <video autoplay playsinline muted style="display: none;"></video>
           <div class="label">
             <span class="label-name"></span>
-            <span class="label-muted" style="display: none;">${MIC_OFF_SMALL_SVG}</span>
+            <span class="label-you" style="display: none;">You</span>
+            <span class="label-voice"><span></span><span></span><span></span></span>
+            <span class="label-muted">${MIC_OFF_SMALL_SVG}</span>
           </div>
         `;
         grid.appendChild(tile);
@@ -445,8 +469,10 @@ export function useMeetPopout({
 
       const video = tile.querySelector("video") as HTMLVideoElement;
       const avatar = tile.querySelector(".avatar-placeholder") as HTMLElement;
-      const avatarCircle = tile.querySelector(".avatar-circle") as HTMLImageElement;
+      const avatarMount = tile.querySelector(".avatar-mount") as HTMLElement;
       const labelName = tile.querySelector(".label-name") as HTMLElement;
+      const labelYou = tile.querySelector(".label-you") as HTMLElement;
+      const labelVoice = tile.querySelector(".label-voice") as HTMLElement;
       const labelMuted = tile.querySelector(".label-muted") as HTMLElement;
 
       const participantVideoStream = participant.isLocal
@@ -465,7 +491,25 @@ export function useMeetPopout({
       } else {
         video.style.display = "none";
         avatar.style.display = "flex";
-        avatarCircle.src = avatarUrl(participant.displayName, participant.userId);
+        // Render the SAME Facehash <Avatar> the in-call tiles use, into the PiP
+        // document (shared JS realm). Only re-render when the seed changes so
+        // the 250ms refresh loop stays a no-op for a stable participant.
+        const seed = `${participant.displayName}:${participant.userId}`;
+        if (avatarMount && avatarMount.dataset.seed !== seed) {
+          let root = avatarRootsRef.current.get(participant.userId);
+          if (!root) {
+            root = createRoot(avatarMount);
+            avatarRootsRef.current.set(participant.userId, root);
+          }
+          root.render(
+            createElement(Avatar, {
+              name: participant.displayName,
+              id: participant.userId,
+              size: 72,
+            }),
+          );
+          avatarMount.dataset.seed = seed;
+        }
         if (video.srcObject) {
           video.srcObject = null;
           videoElementsRef.current.delete(participant.userId);
@@ -473,6 +517,11 @@ export function useMeetPopout({
       }
 
       labelName.textContent = participant.displayName;
+      labelYou.style.display = participant.isLocal ? "inline" : "none";
+      // Voice bars only when actively speaking and not muted; otherwise the
+      // mic-off glyph takes over (the two never show together).
+      const showVoice = participant.isActiveSpeaker && !participant.isMuted;
+      labelVoice.style.display = showVoice ? "inline-flex" : "none";
       labelMuted.style.display = participant.isMuted ? "flex" : "none";
     }
 
@@ -501,6 +550,10 @@ export function useMeetPopout({
       vid.srcObject = null;
     }
     videoElementsRef.current.clear();
+    for (const root of avatarRootsRef.current.values()) {
+      root.unmount();
+    }
+    avatarRootsRef.current.clear();
   }, []);
 
   const openPopout = useCallback(async () => {
@@ -557,10 +610,6 @@ export function useMeetPopout({
 
       pipWin.document.body.innerHTML = `
         <div class="popout-root">
-          <div class="popout-badge">
-            <span class="popout-badge-dot"></span>
-            <span id="p-count"></span>
-          </div>
           <div id="p-videos" class="popout-videos single"></div>
           <div class="popout-controls">
             <button id="btn-mute" class="ctrl-btn" title="Toggle Mute">${MIC_ON_SVG}</button>
@@ -664,15 +713,4 @@ export function useMeetPopout({
     openPopout,
     closePopout,
   };
-}
-
-function avatarUrl(name: string, id: string) {
-  const seed = id.trim() ? `${name || id}:${id}` : name || "?";
-  const params = new URLSearchParams({
-    format: "svg",
-    name: seed,
-    showInitial: "false",
-    size: "96",
-  });
-  return `/api/avatar?${params.toString()}`;
 }

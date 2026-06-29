@@ -26,7 +26,9 @@ const IN_USE_TOGGLE = "#4F86F7";
 
 type DeviceOption = { deviceId: string; label: string };
 
-function useEnumeratedDevices(active: boolean) {
+export type DeviceOptionList = DeviceOption[];
+
+export function useEnumeratedDevices(active: boolean) {
   const [audioInput, setAudioInput] = useState<DeviceOption[]>([]);
   const [audioOutput, setAudioOutput] = useState<DeviceOption[]>([]);
   const [videoInput, setVideoInput] = useState<DeviceOption[]>([]);
@@ -127,6 +129,84 @@ function EmptyDevices({ kind }: { kind: "mic" | "video" }) {
         ? "No microphones or speakers found. Allow microphone access, then reopen this menu."
         : "No cameras found. Allow camera access, then reopen this menu."}
     </p>
+  );
+}
+
+export type DeviceSettingsProps = Pick<
+  MediaControlClusterProps,
+  | "selectedAudioInputDeviceId"
+  | "selectedAudioOutputDeviceId"
+  | "selectedVideoInputDeviceId"
+  | "onAudioInputDeviceChange"
+  | "onAudioOutputDeviceChange"
+  | "onVideoInputDeviceChange"
+  | "isMirrorCamera"
+  | "onToggleMirror"
+>;
+
+/**
+ * Standalone device picker (microphone / speaker / camera + mirror toggle) for
+ * surfaces without the inline caret cluster — e.g. the mobile More drawer, where
+ * the compact mic/cam buttons have no caret. `active` gates enumeration so the
+ * device list is only fetched while the containing sheet is open.
+ */
+export function DeviceSettingsSection({
+  active,
+  bare = false,
+  selectedAudioInputDeviceId,
+  selectedAudioOutputDeviceId,
+  selectedVideoInputDeviceId,
+  onAudioInputDeviceChange,
+  onAudioOutputDeviceChange,
+  onVideoInputDeviceChange,
+  isMirrorCamera,
+  onToggleMirror,
+}: DeviceSettingsProps & { active: boolean; bare?: boolean }) {
+  const { audioInput, audioOutput, videoInput } = useEnumeratedDevices(active);
+  const hasDevices =
+    audioInput.length > 0 || audioOutput.length > 0 || videoInput.length > 0;
+  if (!hasDevices && !onToggleMirror) return null;
+  return (
+    <div
+      className={bare ? "" : "mt-1.5 border-t pt-2"}
+      style={bare ? undefined : { borderColor: color.border }}
+    >
+      {hasDevices ? (
+        <>
+          <DeviceList
+            heading="Microphone"
+            devices={audioInput}
+            selectedId={selectedAudioInputDeviceId}
+            onSelect={onAudioInputDeviceChange}
+          />
+          <DeviceList
+            heading="Speaker"
+            devices={audioOutput}
+            selectedId={selectedAudioOutputDeviceId}
+            onSelect={onAudioOutputDeviceChange}
+          />
+          <DeviceList
+            heading="Camera"
+            devices={videoInput}
+            selectedId={selectedVideoInputDeviceId}
+            onSelect={onVideoInputDeviceChange}
+          />
+        </>
+      ) : (
+        <p className="px-3 py-2 text-[12.5px]" style={{ color: color.textFaint }}>
+          Allow microphone and camera access to switch devices.
+        </p>
+      )}
+      {onToggleMirror && (
+        <SwitchRow
+          icon={FlipHorizontal2}
+          label="Mirror my video"
+          checked={Boolean(isMirrorCamera)}
+          onChange={() => onToggleMirror?.()}
+          className="rounded-lg"
+        />
+      )}
+    </div>
   );
 }
 

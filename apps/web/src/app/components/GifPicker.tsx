@@ -2,6 +2,7 @@
 
 import { Images, Loader2, Search, X } from "lucide-react";
 import {
+  Activity,
   memo,
   useCallback,
   useEffect,
@@ -46,6 +47,10 @@ function GifPicker({
   const rootRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const [isOpen, setIsOpen] = useState(false);
+  // Latches true on first open. Drives data loading instead of `isOpen` so that
+  // <Activity> can keep the closed panel mounted (preserving results + scroll)
+  // without the load effect refetching page 1 every time it reopens.
+  const [hasOpened, setHasOpened] = useState(false);
   const [mediaKind, setMediaKind] = useState<KlipyMediaKind>("gifs");
   const [query, setQuery] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
@@ -111,7 +116,7 @@ function GifPicker({
   }, [isOpen]);
 
   useEffect(() => {
-    if (!isOpen) return;
+    if (!hasOpened) return;
 
     const controller = new AbortController();
     const loadItems = async () => {
@@ -155,7 +160,7 @@ function GifPicker({
 
     void loadItems();
     return () => controller.abort();
-  }, [debouncedQuery, isOpen, mediaKind, noun]);
+  }, [debouncedQuery, hasOpened, mediaKind, noun]);
 
   const loadMore = useCallback(async () => {
     if (isLoading || isLoadingMore || !hasNext) return;
@@ -189,13 +194,48 @@ function GifPicker({
     } finally {
       setIsLoadingMore(false);
     }
-  }, [debouncedQuery, hasNext, isLoading, isLoadingMore, mediaKind, noun, page]);
+  }, [
+    debouncedQuery,
+    hasNext,
+    isLoading,
+    isLoadingMore,
+    mediaKind,
+    noun,
+    page,
+  ]);
+
+  // Point the scroll observer at the freshest loadMore without rebuilding the
+  // IntersectionObserver every time paging state changes. Writing the ref during
+  // render is intentional: it only caches the latest closure, it renders nothing.
+  const loadMoreRef = useRef(loadMore);
+  loadMoreRef.current = loadMore;
+
+  // Auto-load the next page when the bottom sentinel scrolls into view, so the
+  // user never has to click "More". The callback ref owns the observer's whole
+  // lifecycle: it (re)attaches when the sentinel mounts and disconnects on unmount.
+  const observerRef = useRef<IntersectionObserver | null>(null);
+  const sentinelRef = useCallback((node: HTMLDivElement | null) => {
+    observerRef.current?.disconnect();
+    observerRef.current = null;
+    if (!node?.parentElement) return;
+    observerRef.current = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          void loadMoreRef.current();
+        }
+      },
+      { root: node.parentElement, rootMargin: "150px 0px" },
+    );
+    observerRef.current.observe(node);
+  }, []);
 
   const panelClassName = useMemo(
     () =>
       variant === "mobile"
         ? "absolute bottom-full left-0 z-20 mb-2 w-[min(22rem,calc(100vw-2rem))]"
-        : "absolute bottom-full left-0 z-20 mb-2 w-[20rem]",
+        : // Anchor to the composer wrapper so the panel spans the full input
+          // width and aligns edge-to-edge with it instead of floating off the button.
+          "absolute bottom-full left-0 right-0 z-20 mb-2",
     [variant],
   );
 
@@ -215,12 +255,15 @@ function GifPicker({
   };
 
   return (
-    <div ref={rootRef} className="relative shrink-0">
+    <div ref={rootRef} className="shrink-0">
       <button
         type="button"
         disabled={disabled}
         onClick={() => {
-          if (!isOpen) stickersClipsTip.dismiss();
+          if (!isOpen) {
+            stickersClipsTip.dismiss();
+            setHasOpened(true);
+          }
           setIsOpen((prev) => !prev);
         }}
         aria-label="GIFs, stickers, and clips"
@@ -245,160 +288,173 @@ function GifPicker({
         />
       ) : null}
 
-      {isOpen ? (
-        <div
-          className={`${panelClassName} overflow-hidden rounded-xl border border-white/10 bg-[#232327] shadow-2xl shadow-black/40`}
-        >
-          <div className="flex items-center gap-2 border-b border-white/10 px-2.5 py-2">
-            <Search size={15} strokeWidth={1.75} className="text-[#a1a1aa]" />
-            <div className="relative min-w-0 flex-1">
-              {!query ? (
-                <div className="pointer-events-none absolute left-0 top-1/2 -translate-y-1/2 whitespace-nowrap text-[13px] leading-none text-[#a1a1aa]">
-                  <span>Search</span>
-                  <span aria-hidden="true"> </span>
-                  <img
-                    src="/klipy.svg"
-                    alt=""
-                    aria-hidden="true"
-                    className="inline h-[0.92em] w-auto opacity-60"
-                    style={{ verticalAlign: "-0.18em" }}
-                  />
-                </div>
-              ) : null}
-              <input
-                ref={inputRef}
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                aria-label={`Search Klipy ${noun}`}
-                className="w-full bg-transparent text-[13px] text-[#fafafa] focus:outline-none"
-              />
-            </div>
-            {query ? (
-              <button
-                type="button"
-                onClick={() => setQuery("")}
-                aria-label="Clear search"
-                className="inline-flex h-6 w-6 items-center justify-center rounded-md text-[#a1a1aa] transition-colors hover:bg-white/[0.08] hover:text-[#fafafa]"
-              >
-                <X size={14} strokeWidth={1.75} />
-              </button>
-            ) : null}
-          </div>
-
+      {/* Once opened, keep the panel mounted but hidden via <Activity> so its
+          loaded media, search query, and scroll position survive close/reopen
+          and the next open is instant. React skips rendering work while hidden. */}
+      {hasOpened ? (
+        <Activity mode={isOpen ? "visible" : "hidden"}>
           <div
-            role="tablist"
-            aria-label="Media type"
-            className="flex items-center gap-1 border-b border-white/10 px-2 py-1.5"
+            className={`${panelClassName} overflow-hidden rounded-xl border border-white/10 bg-[#232327] shadow-2xl shadow-black/40`}
           >
-            {MEDIA_TABS.map((tab) => {
-              const isActive = tab.kind === mediaKind;
-              return (
+            <div className="flex items-center gap-2 border-b border-white/10 px-2.5 py-2">
+              <Search size={15} strokeWidth={1.75} className="text-[#a1a1aa]" />
+              <div className="relative min-w-0 flex-1">
+                {!query ? (
+                  <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center gap-1.5 whitespace-nowrap text-[13px] leading-none text-[#a1a1aa]">
+                    <span>Search</span>
+                    <img
+                      src="/klipy.svg"
+                      alt=""
+                      aria-hidden="true"
+                      className="h-[12px] w-auto opacity-60"
+                    />
+                  </div>
+                ) : null}
+                <input
+                  ref={inputRef}
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  aria-label={`Search Klipy ${noun}`}
+                  className="w-full bg-transparent text-[13px] text-[#fafafa] focus:outline-none"
+                />
+              </div>
+              {query ? (
                 <button
-                  key={tab.kind}
                   type="button"
-                  role="tab"
-                  aria-selected={isActive}
-                  onClick={() => handleSelectTab(tab.kind)}
-                  className={`inline-flex h-7 flex-1 items-center justify-center rounded-md text-[12px] font-medium transition-colors ${
-                    isActive
-                      ? "bg-white/[0.12] text-[#fafafa]"
-                      : "text-[#a1a1aa] hover:bg-white/[0.06] hover:text-[#fafafa]"
-                  }`}
+                  onClick={() => setQuery("")}
+                  aria-label="Clear search"
+                  className="inline-flex h-6 w-6 items-center justify-center rounded-md text-[#a1a1aa] transition-colors hover:bg-white/[0.08] hover:text-[#fafafa]"
                 >
-                  {tab.label}
+                  <X size={14} strokeWidth={1.75} />
                 </button>
-              );
-            })}
-          </div>
+              ) : null}
+            </div>
 
-          <div className="h-[18rem] overflow-y-auto p-2">
-            {isLoading ? (
-              <div className="flex h-full items-center justify-center text-[#a1a1aa]">
-                <Loader2 size={20} strokeWidth={1.75} className="animate-spin" />
-              </div>
-            ) : error ? (
-              <div className="flex h-full items-center justify-center px-4 text-center text-[13px] text-[#a1a1aa]">
-                {error}
-              </div>
-            ) : items.length === 0 ? (
-              <div className="flex h-full items-center justify-center px-4 text-center text-[13px] text-[#a1a1aa]">
-                No {noun} found
-              </div>
-            ) : (
-              <div className="grid grid-cols-2 gap-1.5">
-                {items.map((item) => (
-                  <button
-                    key={`${item.id}-${item.url}`}
-                    type="button"
-                    onClick={() => handleSelectMedia(item)}
-                    className="group relative aspect-[4/3] overflow-hidden rounded-lg bg-black/30 outline-none ring-1 ring-white/[0.06] transition-[filter,ring-color] hover:brightness-110 hover:ring-white/20 focus-visible:ring-2 focus-visible:ring-[#F95F4A]"
-                    title={item.title}
-                  >
-                    {item.kind === "clip" && item.videoUrl ? (
-                      <video
-                        src={item.videoUrl}
-                        poster={item.previewUrl}
-                        muted
-                        loop
-                        autoPlay
-                        playsInline
-                        preload="metadata"
-                        aria-label={item.title}
-                        className="h-full w-full object-cover"
-                      />
-                    ) : (
-                      <img
-                        src={item.previewUrl}
-                        alt={item.title}
-                        loading="lazy"
-                        className={`h-full w-full ${
-                          item.kind === "sticker"
-                            ? "object-contain"
-                            : "object-cover"
-                        }`}
-                      />
-                    )}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-
-          <div className="flex items-center justify-between gap-2 border-t border-white/10 px-2.5 py-2">
-            <a
-              href="https://klipy.com"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex h-5 items-center opacity-75 transition-opacity hover:opacity-100"
-              aria-label="Powered by Klipy"
+            <div
+              role="tablist"
+              aria-label="Media type"
+              className="flex items-center gap-1 border-b border-white/10 px-2 py-1.5"
             >
-              <img
-                src="/pow-by-klipy.svg"
-                alt=""
-                aria-hidden="true"
-                className="h-4 w-auto"
-              />
-            </a>
-            {hasNext && !isLoading ? (
-              <button
-                type="button"
-                onClick={loadMore}
-                disabled={isLoadingMore}
-                className="inline-flex h-7 items-center justify-center rounded-md bg-white/[0.07] px-2.5 text-[12px] font-medium text-[#fafafa] transition-colors hover:bg-white/[0.12] disabled:opacity-50"
-              >
-                {isLoadingMore ? (
+              {MEDIA_TABS.map((tab) => {
+                const isActive = tab.kind === mediaKind;
+                return (
+                  <button
+                    key={tab.kind}
+                    type="button"
+                    role="tab"
+                    aria-selected={isActive}
+                    onClick={() => handleSelectTab(tab.kind)}
+                    className={`inline-flex h-7 flex-1 items-center justify-center rounded-md text-[12px] font-medium transition-colors ${
+                      isActive
+                        ? "bg-white/[0.12] text-[#fafafa]"
+                        : "text-[#a1a1aa] hover:bg-white/[0.06] hover:text-[#fafafa]"
+                    }`}
+                  >
+                    {tab.label}
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="h-[18rem] overflow-y-auto p-2">
+              {isLoading ? (
+                <div className="flex h-full items-center justify-center text-[#a1a1aa]">
                   <Loader2
-                    size={14}
+                    size={20}
                     strokeWidth={1.75}
                     className="animate-spin"
                   />
-                ) : (
-                  "More"
-                )}
-              </button>
-            ) : null}
+                </div>
+              ) : error && items.length === 0 ? (
+                <div className="flex h-full items-center justify-center px-4 text-center text-[13px] text-[#a1a1aa]">
+                  {error}
+                </div>
+              ) : items.length === 0 ? (
+                <div className="flex h-full items-center justify-center px-4 text-center text-[13px] text-[#a1a1aa]">
+                  No {noun} found
+                </div>
+              ) : (
+                <>
+                  <div className="grid grid-cols-2 gap-1.5">
+                    {items.map((item) => (
+                      <button
+                        key={`${item.id}-${item.url}`}
+                        type="button"
+                        onClick={() => handleSelectMedia(item)}
+                        className="group relative aspect-[4/3] overflow-hidden rounded-lg bg-black/30 outline-none ring-1 ring-white/[0.06] transition-[filter,ring-color] hover:brightness-110 hover:ring-white/20 focus-visible:ring-2 focus-visible:ring-[#F95F4A]"
+                        title={item.title}
+                      >
+                        {item.kind === "clip" && item.videoUrl ? (
+                          <video
+                            src={item.videoUrl}
+                            poster={item.previewUrl}
+                            muted
+                            loop
+                            autoPlay
+                            playsInline
+                            preload="metadata"
+                            aria-label={item.title}
+                            className="h-full w-full object-cover"
+                          />
+                        ) : (
+                          <img
+                            src={item.previewUrl}
+                            alt={item.title}
+                            loading="lazy"
+                            className={`h-full w-full ${
+                              item.kind === "sticker"
+                                ? "object-contain"
+                                : "object-cover"
+                            }`}
+                          />
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                  {hasNext ? (
+                    <div
+                      ref={sentinelRef}
+                      className="flex h-10 items-center justify-center"
+                    >
+                      {error ? (
+                        <button
+                          type="button"
+                          onClick={() => void loadMore()}
+                          className="text-[12px] font-medium text-[#a1a1aa] transition-colors hover:text-[#fafafa]"
+                        >
+                          Couldn&apos;t load more. Retry
+                        </button>
+                      ) : (
+                        <Loader2
+                          size={16}
+                          strokeWidth={1.75}
+                          className="animate-spin text-[#a1a1aa]"
+                        />
+                      )}
+                    </div>
+                  ) : null}
+                </>
+              )}
+            </div>
+
+            <div className="flex items-center border-t border-white/10 px-2.5 py-2">
+              <a
+                href="https://klipy.com"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex h-5 items-center opacity-75 transition-opacity hover:opacity-100"
+                aria-label="Powered by Klipy"
+              >
+                <img
+                  src="/pow-by-klipy.svg"
+                  alt=""
+                  aria-hidden="true"
+                  className="h-4 w-auto"
+                />
+              </a>
+            </div>
           </div>
-        </div>
+        </Activity>
       ) : null}
     </div>
   );

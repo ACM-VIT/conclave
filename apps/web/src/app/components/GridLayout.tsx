@@ -174,6 +174,26 @@ const computeMobilePortraitGridLayout = (
   maxTilesPerPage: number,
 ): GridLayoutResult => {
   const total = Math.max(1, Math.floor(count));
+  // Solo fills the whole stage (Meet/FaceTime self-view) instead of a centered
+  // letterboxed tile with dead black space above and below.
+  if (total === 1) {
+    return {
+      cols: 1,
+      rows: 1,
+      tileWidth: width,
+      tileHeight: height,
+      lastRowCount: 1,
+      pages: 1,
+      perPage: 1,
+      contentWidth: width,
+      contentHeight: height,
+      offsetX: 0,
+      offsetY: 0,
+      positions: [
+        { index: 0, row: 0, col: 0, x: 0, y: 0, width, height },
+      ],
+    };
+  }
   const perPage = Math.min(total, Math.max(1, Math.floor(maxTilesPerPage)));
   const pages = Math.ceil(total / perPage);
   const cols = Math.min(perPage, MOBILE_PORTRAIT_COLS);
@@ -3050,13 +3070,20 @@ function GridLayout({
                   <MicOff size={14} strokeWidth={1.75} className="shrink-0 text-[#F95F4A]" />
                 )}
               </div>
-              {isSolo && !isCameraOff ? (
-              // Camera is on — don't cover the live self-view with the full card;
-              // show a compact corner invite pill instead.
+              {isSolo && (isMobile || !isCameraOff) ? (
+              // On mobile, or when the camera is on, don't cover the stage with
+              // the full card — show a slim invite pill. Mobile pins it to the
+              // top-center (clear of the bottom-left name plate); desktop keeps
+              // it in the bottom-left corner next to the live self-view.
               <button
                 type="button"
                 onClick={handleInvite}
-                className="absolute bottom-3 left-3 flex items-center gap-2 rounded-full border border-[#fafafa]/14 bg-[#18181b] px-3.5 py-2 text-[13px] font-medium text-[#fafafa] transition-colors hover:bg-[#232327] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F95F4A]/40"
+                className={
+                  "absolute z-10 flex items-center gap-2 rounded-full border border-[#fafafa]/14 bg-[#18181b]/90 px-3.5 py-2 text-[13px] font-medium text-[#fafafa] backdrop-blur transition-colors hover:bg-[#232327] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F95F4A]/40 " +
+                  (isMobile
+                    ? "left-1/2 top-3 -translate-x-1/2"
+                    : "bottom-3 left-3")
+                }
               >
                 <UserPlus size={16} strokeWidth={1.75} className="text-[#F95F4A]" />
                 {inviteStatus === "shared"

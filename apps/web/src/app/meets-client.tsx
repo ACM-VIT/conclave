@@ -2277,11 +2277,20 @@ export default function MeetsClient({
     }
   }, [connectionState]);
 
+  // Pre-join occupancy: keep the room-presence indicator fresh while the user is
+  // still on the join screen. Poll when there's a room code to inspect (so guests
+  // see who's already there before joining); admins also get a one-shot refresh.
   useEffect(() => {
-    if (isAdminFlag && connectionState !== "joined") {
+    if (connectionState === "joined") return;
+    const hasRoom = roomId.trim().length > 0;
+    if (!hasRoom && !isAdminFlag) return;
+    refreshRooms();
+    if (!hasRoom) return;
+    const interval = setInterval(() => {
       refreshRooms();
-    }
-  }, [isAdminFlag, connectionState, refreshRooms]);
+    }, 10000);
+    return () => clearInterval(interval);
+  }, [roomId, isAdminFlag, connectionState, refreshRooms]);
 
   const joinRoomById = socket.joinRoomById;
   const retryReconnect = socket.retryReconnect;

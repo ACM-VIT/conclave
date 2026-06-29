@@ -1261,8 +1261,8 @@ export default function MeetsMainContent({
 
   return (
     <div
-      className={`flex-1 flex flex-col overflow-hidden relative ${
-        isJoined ? "p-4" : "p-0"
+      className={`flex-1 flex flex-col relative ${
+        isJoined ? "overflow-hidden p-4" : "overflow-y-auto p-0"
       }`}
       style={mainContentStyle}
     >

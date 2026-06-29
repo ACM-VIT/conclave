@@ -1,10 +1,13 @@
 "use client";
 
 import {
+  ArrowLeft,
   MoreHorizontal,
   PhoneOff,
+  Settings,
   Shield,
   Smile,
+  SwitchCamera,
   Volume2,
   VolumeX,
 } from "lucide-react";
@@ -16,13 +19,20 @@ import {
   useState,
   type FormEvent,
 } from "react";
+import { Drawer } from "vaul";
 import { ControlButton } from "@conclave/ui-tokens/web";
 import { color } from "@conclave/ui-tokens";
-import { MediaControlCluster, type MediaControlClusterProps } from "./DeviceCaretMenu";
+import {
+  DeviceSettingsSection,
+  MediaControlCluster,
+  useEnumeratedDevices,
+  type MediaControlClusterProps,
+} from "./DeviceCaretMenu";
 import type { ReactionOption } from "../lib/types";
 import { normalizeBrowserUrl } from "../lib/utils";
 import HotkeyTooltip from "./HotkeyTooltip";
 import Coachmark from "./Coachmark";
+import MeetingInfoTag from "./MeetingInfoTag";
 import { useOneTimeHint } from "../hooks/useOneTimeHint";
 import { useMeetVolume } from "../hooks/useMeetVolume";
 import { clampMeetVolume } from "../lib/meet-volume";
@@ -39,36 +49,6 @@ export type { ControlsBarProps } from "./controls-config";
 const ICON = 20;
 const MENU_ICON = 18;
 const STROKE = 1.75;
-
-function MeetingClock({ roomId }: { roomId?: string }) {
-  const [time, setTime] = useState("");
-  useEffect(() => {
-    const fmt = () =>
-      new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-    setTime(fmt());
-    const id = window.setInterval(() => setTime(fmt()), 15000);
-    return () => window.clearInterval(id);
-  }, []);
-  return (
-    <div className="flex items-center gap-2 text-[13px] font-medium leading-none">
-      <span className="tabular-nums" style={{ color: color.text }}>
-        {time}
-      </span>
-      {roomId ? (
-        <>
-          <span
-            aria-hidden
-            className="inline-block h-[3px] w-[3px] rounded-full"
-            style={{ backgroundColor: color.textFaint }}
-          />
-          <span className="truncate" style={{ color: color.textMuted }}>
-            {roomId}
-          </span>
-        </>
-      ) : null}
-    </div>
-  );
-}
 
 function BarButton({ d, size = 48 }: { d: ControlDescriptor; size?: number }) {
   const shouldShowTooltip = Boolean(d.hotkey || d.showTooltipWithoutHotkey);
@@ -229,18 +209,39 @@ function ControlsBar(props: ControlsBarProps) {
 
   const [reactionsOpen, setReactionsOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
+  // The compact More drawer has two views: the action grid ("main") and a nested
+  // "settings" page (device pickers + mirror).
+  const [moreView, setMoreView] = useState<"main" | "settings">("main");
   const [browserOpen, setBrowserOpen] = useState(false);
   const [browserUrl, setBrowserUrl] = useState("");
   const [browserError, setBrowserError] = useState<string | null>(null);
   const { meetVolume, setMeetVolume } = useMeetVolume();
   const meetVolumePercent = Math.round(clampMeetVolume(meetVolume) * 100);
 
+  // Enumerate cameras only while the compact drawer is open, to power the quick
+  // front/rear flip (and to decide whether the flip action is even available).
+  const { videoInput: drawerCameras } = useEnumeratedDevices(
+    compact && moreOpen,
+  );
+  const canFlipCamera =
+    Boolean(onVideoInputDeviceChange) && drawerCameras.length >= 2;
+  const flipCamera = useCallback(() => {
+    if (!onVideoInputDeviceChange || drawerCameras.length < 2) return;
+    const currentId =
+      selectedVideoInputDeviceId || drawerCameras[0]?.deviceId;
+    const index = drawerCameras.findIndex((d) => d.deviceId === currentId);
+    const next = drawerCameras[(index + 1) % drawerCameras.length];
+    if (next) onVideoInputDeviceChange(next.deviceId);
+  }, [onVideoInputDeviceChange, drawerCameras, selectedVideoInputDeviceId]);
+
   const reactionRef = useRef<HTMLDivElement>(null);
   const moreRef = useRef<HTMLDivElement>(null);
   const browserRef = useRef<HTMLDivElement>(null);
 
   useClickOutside(reactionsOpen, reactionRef, () => setReactionsOpen(false));
-  useClickOutside(moreOpen, moreRef, () => setMoreOpen(false));
+  // The compact More menu uses a vaul Drawer (portaled outside moreRef + its own
+  // overlay dismissal), so only the desktop popover needs click-outside handling.
+  useClickOutside(moreOpen && !compact, moreRef, () => setMoreOpen(false));
   useClickOutside(browserOpen, browserRef, () => setBrowserOpen(false));
 
   // One-time nudge toward the backgrounds/filters tucked inside More — only
@@ -304,10 +305,10 @@ function ControlsBar(props: ControlsBarProps) {
   return (
     <div className="relative flex w-full items-center gap-2 px-4 py-3 sm:grid sm:grid-cols-[1fr_auto_1fr]">
       {/* Equal side columns keep center controls from overlapping side content
-          at sm+; below that the clock is dropped and the center group grows
-          to fill the row (flex-1) so the bar can't overlap itself. */}
+          at sm+; below that the tag is dropped and the center group grows to
+          fill the row (flex-1) so the bar can't overlap itself. */}
       <div className="flex min-w-0 shrink-0 items-center justify-self-start">
-        {!compact && <MeetingClock roomId={roomId} />}
+        {!compact && <MeetingInfoTag roomId={roomId} />}
       </div>
 
       <div className="flex flex-1 items-center justify-center justify-self-center gap-2.5">
@@ -417,7 +418,7 @@ function ControlsBar(props: ControlsBarProps) {
               onDismiss={filtersTip.dismiss}
             />
           ) : null}
-          {moreOpen && (
+          {moreOpen && !compact && (
             <div
               ref={browserRef}
               className={popoverWrapClass + " left-1/2 w-60 -translate-x-1/2"}
@@ -426,36 +427,6 @@ function ControlsBar(props: ControlsBarProps) {
               className={popoverPanelClass + " w-full"}
               style={{ backgroundColor: color.surfaceRaised, borderColor: color.border }}
             >
-              {compact && !isGhostMode && (!isReactionsDisabled || isAdmin) && reactionOptions.length > 0 && (
-                <div
-                  className="mb-1 flex items-center gap-1 overflow-x-auto border-b px-1 pb-1.5"
-                  style={{ borderColor: color.border }}
-                >
-                  {reactionOptions.map((reaction) => (
-                    <button
-                      key={reaction.id}
-                      onClick={() => {
-                        handleReaction(reaction);
-                        setMoreOpen(false);
-                      }}
-                      className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-lg transition-[background-color] duration-[120ms] hover:bg-white/[0.08]"
-                      title={`React with ${reaction.label}`}
-                      aria-label={`React with ${reaction.label}`}
-                    >
-                      {reaction.kind === "emoji" ? (
-                        reaction.value
-                      ) : (
-                        <img
-                          src={reaction.value}
-                          alt={reaction.label}
-                          className="h-5 w-5 object-contain"
-                          loading="lazy"
-                        />
-                      )}
-                    </button>
-                  ))}
-                </div>
-              )}
               {config.overflow.map((row) => (
                 <OverflowItem
                   key={row.id}
@@ -489,6 +460,113 @@ function ControlsBar(props: ControlsBarProps) {
               )}
             </div>
             </div>
+          )}
+          {/* Phone: present More as a full-width drag-to-dismiss bottom sheet
+              (vaul, Meet-style) instead of a cramped anchored dropdown. */}
+          {compact && (
+            <Drawer.Root
+              open={moreOpen}
+              onOpenChange={(open) => {
+                if (!open) setBrowserOpen(false);
+                setMoreOpen(open);
+              }}
+            >
+              <Drawer.Portal>
+                <Drawer.Overlay className="fixed inset-0 z-[90] bg-black/55" />
+                <Drawer.Content
+                  aria-label="More options"
+                  className="fixed inset-x-0 bottom-0 z-[91] flex max-h-[85vh] flex-col rounded-t-3xl border-t outline-none"
+                  style={{ backgroundColor: color.surfaceRaised, borderColor: color.border }}
+                >
+                  <Drawer.Title className="sr-only">More options</Drawer.Title>
+                  <div
+                    aria-hidden
+                    className="mx-auto mt-3 h-1 w-9 shrink-0 rounded-full"
+                    style={{ backgroundColor: color.border }}
+                  />
+                  <div className="overflow-y-auto px-4 pb-[max(1rem,env(safe-area-inset-bottom))] pt-3">
+                    {!isGhostMode && (!isReactionsDisabled || isAdmin) && reactionOptions.length > 0 && (
+                      <div
+                        className="mb-3 flex flex-wrap items-center justify-center gap-1 rounded-2xl p-1.5"
+                        style={{ backgroundColor: color.surface }}
+                      >
+                        {reactionOptions.map((reaction) => (
+                          <button
+                            key={reaction.id}
+                            onClick={() => {
+                              handleReaction(reaction);
+                              setMoreOpen(false);
+                            }}
+                            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-2xl transition-[background-color] duration-[120ms] active:bg-white/[0.1]"
+                            title={`React with ${reaction.label}`}
+                            aria-label={`React with ${reaction.label}`}
+                          >
+                            {reaction.kind === "emoji" ? (
+                              reaction.value
+                            ) : (
+                              <img
+                                src={reaction.value}
+                                alt={reaction.label}
+                                className="h-6 w-6 object-contain"
+                                loading="lazy"
+                              />
+                            )}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    {config.overflow.length > 0 && (
+                      <div className="grid grid-cols-3 gap-2">
+                        {config.overflow.map((row) => (
+                          <MoreTile
+                            key={row.id}
+                            row={row}
+                            onActivate={() => {
+                              if (row.opensBrowserLauncher) {
+                                setBrowserOpen((v) => !v);
+                              } else {
+                                row.onPress?.();
+                                setMoreOpen(false);
+                              }
+                            }}
+                          />
+                        ))}
+                      </div>
+                    )}
+                    {!isGhostMode && (hasAudioDevicePicker || hasVideoDevicePicker) && (
+                      <DeviceSettingsSection
+                        active={moreOpen}
+                        selectedAudioInputDeviceId={selectedAudioInputDeviceId}
+                        selectedAudioOutputDeviceId={selectedAudioOutputDeviceId}
+                        selectedVideoInputDeviceId={selectedVideoInputDeviceId}
+                        onAudioInputDeviceChange={onAudioInputDeviceChange}
+                        onAudioOutputDeviceChange={onAudioOutputDeviceChange}
+                        onVideoInputDeviceChange={onVideoInputDeviceChange}
+                        isMirrorCamera={isMirrorCamera}
+                        onToggleMirror={onToggleMirror}
+                      />
+                    )}
+                    <MeetVolumeOverflowControl
+                      icon={VolumeIcon}
+                      volumePercent={meetVolumePercent}
+                      onVolumePercentChange={(value) => setMeetVolume(value / 100)}
+                    />
+                    {browserOpen && onLaunchBrowser && (
+                      <BrowserLauncher
+                        url={browserUrl}
+                        error={browserError}
+                        busy={isBrowserLaunching}
+                        onUrlChange={(v) => {
+                          setBrowserUrl(v);
+                          if (browserError) setBrowserError(null);
+                        }}
+                        onLaunch={launchBrowser}
+                      />
+                    )}
+                  </div>
+                </Drawer.Content>
+              </Drawer.Portal>
+            </Drawer.Root>
           )}
         </div>
 
@@ -571,7 +649,7 @@ function ControlsBar(props: ControlsBarProps) {
           );
         })}
 
-        {showHost && onToggleHostControls && (
+        {showHost && !compact && onToggleHostControls && (
           <HotkeyTooltip label="Host controls" showWithoutHotkey>
             <button
               type="button"
@@ -617,6 +695,44 @@ function OverflowItem({ row, onActivate }: { row: OverflowRow; onActivate: () =>
           {row.badge > 9 ? "9+" : row.badge}
         </span>
       ) : null}
+    </button>
+  );
+}
+
+function MoreTile({ row, onActivate }: { row: OverflowRow; onActivate: () => void }) {
+  const Icon = row.icon;
+  return (
+    <button
+      type="button"
+      aria-label={row.label}
+      title={row.label}
+      disabled={row.disabled}
+      onClick={onActivate}
+      className="relative flex flex-col items-center gap-2 rounded-2xl px-1.5 py-3.5 transition-[background-color] duration-[120ms] active:bg-white/[0.06] disabled:opacity-40"
+    >
+      <span
+        className="relative flex h-12 w-12 items-center justify-center rounded-full"
+        style={{
+          backgroundColor: row.active ? color.accent : "rgba(250,250,250,0.08)",
+          color: row.active ? "#fff" : color.text,
+        }}
+      >
+        <Icon size={22} strokeWidth={STROKE} />
+        {typeof row.badge === "number" && row.badge > 0 ? (
+          <span
+            className="absolute -right-0.5 -top-0.5 inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-full px-1 text-[10px] font-semibold leading-none text-white"
+            style={{ backgroundColor: color.accent }}
+          >
+            {row.badge > 9 ? "9+" : row.badge}
+          </span>
+        ) : null}
+      </span>
+      <span
+        className="line-clamp-2 text-center text-[12px] font-medium leading-tight"
+        style={{ color: row.active ? color.accent : color.textMuted }}
+      >
+        {row.label}
+      </span>
     </button>
   );
 }

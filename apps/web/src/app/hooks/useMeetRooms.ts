@@ -4,18 +4,20 @@ import { useCallback, useState } from "react";
 import type { RoomInfo } from "@/lib/sfu-types";
 
 interface UseMeetRoomsOptions {
-  isAdmin: boolean;
+  // Kept for call-site compatibility; occupancy is now fetched for everyone so
+  // guests can see who's already in a room before joining.
+  isAdmin?: boolean;
   getRooms?: () => Promise<RoomInfo[]>;
 }
 
-export function useMeetRooms({ isAdmin, getRooms }: UseMeetRoomsOptions) {
+export function useMeetRooms({ getRooms }: UseMeetRoomsOptions) {
   const [availableRooms, setAvailableRooms] = useState<RoomInfo[]>([]);
   const [roomsStatus, setRoomsStatus] = useState<"idle" | "loading" | "error">(
     "idle"
   );
 
   const refreshRooms = useCallback(async () => {
-    if (!isAdmin || !getRooms) return;
+    if (!getRooms) return;
     setRoomsStatus("loading");
 
     try {
@@ -26,7 +28,7 @@ export function useMeetRooms({ isAdmin, getRooms }: UseMeetRoomsOptions) {
       setRoomsStatus("error");
       setAvailableRooms([]);
     }
-  }, [getRooms, isAdmin]);
+  }, [getRooms]);
 
   return {
     availableRooms,

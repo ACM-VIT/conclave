@@ -2,8 +2,9 @@
 
 import {
   ArrowDown,
+  Ghost,
   Image as ImageIcon,
-  MessageSquare,
+  Lock,
   Reply,
   Send,
   X,
@@ -532,14 +533,74 @@ function ChatPanel({
           className="web-chat-scroll h-full min-h-0 overflow-y-auto overflow-x-hidden px-4 py-4"
         >
           {messages.length === 0 ? (
-            <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
-              <div className="flex h-12 w-12 items-center justify-center rounded-full border border-white/10 bg-white/[0.03] text-[#a1a1aa]">
-                <MessageSquare size={18} strokeWidth={1.75} />
-              </div>
-              <div className="space-y-1">
-                <p className="text-[14px] font-medium text-[#fafafa]">No messages yet</p>
-              </div>
-            </div>
+            (() => {
+              const restricted = isGhostMode
+                ? {
+                    icon: <Ghost size={20} strokeWidth={1.75} />,
+                    title: "You're in ghost mode",
+                    body: "Chat is hidden while you're invisible. Turn off ghost mode to join in.",
+                  }
+                : isChatLocked && !isAdmin
+                  ? {
+                      icon: <Lock size={20} strokeWidth={1.75} />,
+                      title: "Chat is locked",
+                      body: "The host has paused messaging. You'll be able to chat when it reopens.",
+                    }
+                  : null;
+
+              if (restricted) {
+                return (
+                  <div className="flex h-full flex-col items-center justify-center gap-3 px-8 text-center">
+                    <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-white/10 bg-white/[0.03] text-[#a1a1aa]">
+                      {restricted.icon}
+                    </div>
+                    <div className="max-w-[16rem] space-y-1.5">
+                      <p className="text-[14px] font-semibold text-[#fafafa]">
+                        {restricted.title}
+                      </p>
+                      <p className="text-[12.5px] leading-relaxed text-[#a1a1aa]">
+                        {restricted.body}
+                      </p>
+                    </div>
+                  </div>
+                );
+              }
+
+              return (
+                <div className="flex h-full flex-col items-center justify-center gap-5 px-8 text-center">
+                  {/* Ghosted preview of a conversation, hinting at where messages land */}
+                  <div
+                    aria-hidden="true"
+                    className="flex w-full max-w-[14rem] flex-col gap-2 [mask-image:linear-gradient(to_bottom,transparent,#000_55%)]"
+                  >
+                    <div className="flex items-end gap-2">
+                      <div className="h-6 w-6 shrink-0 rounded-full bg-white/[0.06]" />
+                      <div className="h-7 w-32 rounded-[16px] rounded-bl-md bg-white/[0.05]" />
+                    </div>
+                    <div className="flex justify-end">
+                      <div className="h-7 w-24 rounded-[16px] rounded-br-md bg-[#F95F4A]/25" />
+                    </div>
+                    <div className="flex items-end gap-2">
+                      <div className="h-6 w-6 shrink-0 rounded-full bg-white/[0.06]" />
+                      <div className="flex h-7 items-center gap-1 rounded-[16px] rounded-bl-md bg-white/[0.05] px-3">
+                        <span className="web-chat-typing-dot h-1.5 w-1.5 rounded-full bg-[#a1a1aa]/70" />
+                        <span className="web-chat-typing-dot h-1.5 w-1.5 rounded-full bg-[#a1a1aa]/70" />
+                        <span className="web-chat-typing-dot h-1.5 w-1.5 rounded-full bg-[#a1a1aa]/70" />
+                      </div>
+                    </div>
+                  </div>
+                  <div className="max-w-[15rem] space-y-1.5">
+                    <p className="text-[14px] font-semibold text-[#fafafa]">
+                      No messages yet
+                    </p>
+                    <p className="text-[12.5px] leading-relaxed text-[#a1a1aa]">
+                      Be the first to say something. Drop a GIF, share a link, or
+                      just say hi.
+                    </p>
+                  </div>
+                </div>
+              );
+            })()
           ) : (
             messages.map((msg, index) => {
               const isOwn = msg.userId === currentUserId;

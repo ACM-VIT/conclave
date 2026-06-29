@@ -11,8 +11,12 @@ import {
   MicOff,
   Plus,
   Ghost,
+  ChevronDown,
+  Check,
+  Link2,
+  type LucideIcon,
 } from "lucide-react";
-import { memo, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import type {
   Dispatch,
   SetStateAction,
@@ -39,6 +43,7 @@ import {
   sanitizeRoomCode,
 } from "../lib/utils";
 import MeetsErrorBanner from "./MeetsErrorBanner";
+import RoomPresenceBadge from "./RoomPresenceBadge";
 // import ScheduledMeetingsPanel from "./ScheduledMeetingsPanel";
 import { useCameraPermissionState } from "../hooks/useCameraPermissionState";
 import {
@@ -213,6 +218,53 @@ const warnJoinMedia = (event: string, payload?: unknown) => {
   console.warn(`[JoinScreen media] ${event}`, payload);
 };
 
+type DeviceOption = { deviceId: string; label: string };
+
+// Compact device dropdown for the prejoin actions column (mic / camera). Styled
+// to match the FIELD inputs; uses a native <select> so it stays accessible.
+function DeviceSelect({
+  icon: Icon,
+  value,
+  options,
+  onChange,
+  ariaLabel,
+}: {
+  icon: LucideIcon;
+  value: string;
+  options: DeviceOption[];
+  onChange: (deviceId: string) => void;
+  ariaLabel: string;
+}) {
+  return (
+    <div className="relative">
+      <Icon
+        size={15}
+        className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[#fafafa]/45"
+      />
+      <select
+        aria-label={ariaLabel}
+        value={value || options[0]?.deviceId || ""}
+        onChange={(event) => onChange(event.target.value)}
+        className="h-10 w-full cursor-pointer appearance-none rounded-xl border border-white/10 bg-white/[0.03] pl-9 pr-9 text-[13px] text-[#fafafa] transition-colors duration-150 hover:bg-white/[0.05] focus:border-[#F95F4A]/60 focus:outline-none"
+      >
+        {options.map((option) => (
+          <option
+            key={option.deviceId}
+            value={option.deviceId}
+            className="bg-[#18181b] text-[#fafafa]"
+          >
+            {option.label}
+          </option>
+        ))}
+      </select>
+      <ChevronDown
+        size={15}
+        className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[#fafafa]/45"
+      />
+    </div>
+  );
+}
+
 function JoinScreen({
   roomId,
   onRoomIdChange,
@@ -225,6 +277,8 @@ function JoinScreen({
   enableRoomRouting,
   allowGhostMode,
   showPermissionHint,
+  rooms,
+  roomsStatus,
   displayNameInput,
   onDisplayNameInputChange,
   isGhostMode,
@@ -261,6 +315,20 @@ function JoinScreen({
   const [guestName, setGuestName] = useState("");
   const [isSigningOut, setIsSigningOut] = useState(false);
   const [activeJoinAction, setActiveJoinAction] = useState<"new" | "join" | null>(null);
+  // presenceChecked: a check has started (pill may appear, possibly as "Checking…").
+  // presenceSettled: a check has completed at least once, so we show a real count
+  // and keep showing it through background polls instead of flickering to "Checking…".
+  const [presenceChecked, setPresenceChecked] = useState(false);
+  const [presenceSettled, setPresenceSettled] = useState(false);
+  // Prejoin device selection + copy-link. Device pickers only act on a live
+  // track (a clean swap on the local preview, which the handoff then carries
+  // into the call), so none of the toggle/permission paths need to change.
+  const [audioInputs, setAudioInputs] = useState<DeviceOption[]>([]);
+  const [videoInputs, setVideoInputs] = useState<DeviceOption[]>([]);
+  const [selectedAudioId, setSelectedAudioId] = useState("");
+  const [selectedVideoId, setSelectedVideoId] = useState("");
+  const [linkCopied, setLinkCopied] = useState(false);
+  const copyResetRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Deferred join: both the guest user (onUserChange) and the host flag
   // (onIsAdminChange) propagate through the parent asynchronously, and the
   // parent rebuilds onJoinRoom with the new isHost only on the next render.
@@ -762,6 +830,143 @@ function JoinScreen({
 
   const canJoin = normalizedRoomId.trim().length > 0;
   const nameReady = hasIdentity || liveDisplayName.length > 0;
+
+  // Resolve how many people are already in the room we're about to join, matched
+  // against the polled occupancy list (see useMeetRooms). A room with no one in
+  // it simply isn't in the list, which reads as 0 — "no one else is here yet".
+  const presenceTarget = enforceShortCode
+    ? sanitizeRoomCode(normalizedRoomId)
+    : normalizedRoomId.trim();
+  useEffect(() => {
+    if (roomsStatus === "loading") setPresenceChecked(true);
+    else if (roomsStatus === "idle" && presenceChecked) setPresenceSettled(true);
+  }, [roomsStatus, presenceChecked]);
+  const matchedRoom = presenceTarget
+    ? rooms.find(
+        (room) => room.id.toLowerCase() === presenceTarget.toLowerCase(),
+      )
+    : undefined;
+  const showPresence = presenceTarget.length > 0 && presenceChecked;
+  // Until the first check settles show "Checking…"; afterwards always show the
+  // real count (a room with no one in it isn't in the list, so that's 0).
+  const presenceCount = presenceSettled ? matchedRoom?.userCount ?? 0 : null;
+  const presenceLoading = !presenceSettled;
+
+  const refreshDevices = useCallback(async () => {
+    if (!navigator.mediaDevices?.enumerateDevices) return;
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      setAudioInputs(
+        devices
+          .filter((d) => d.kind === "audioinput" && d.deviceId)
+          .map((d, i) => ({ deviceId: d.deviceId, label: d.label || `Microphone ${i + 1}` })),
+      );
+      setVideoInputs(
+        devices
+          .filter((d) => d.kind === "videoinput" && d.deviceId)
+          .map((d, i) => ({ deviceId: d.deviceId, label: d.label || `Camera ${i + 1}` })),
+      );
+    } catch {
+      // enumeration can fail before permission — leave the lists as-is.
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshDevices();
+    if (!navigator.mediaDevices?.addEventListener) return;
+    navigator.mediaDevices.addEventListener("devicechange", refreshDevices);
+    return () =>
+      navigator.mediaDevices.removeEventListener("devicechange", refreshDevices);
+  }, [refreshDevices]);
+
+  // Once a stream is live the OS exposes device labels + the active deviceId,
+  // so re-enumerate and sync the dropdowns to whatever is actually in use.
+  useEffect(() => {
+    void refreshDevices();
+    const videoId = localStream?.getVideoTracks()[0]?.getSettings().deviceId;
+    if (videoId) setSelectedVideoId(videoId);
+    const audioId = localStream?.getAudioTracks()[0]?.getSettings().deviceId;
+    if (audioId) setSelectedAudioId(audioId);
+  }, [localStream, refreshDevices]);
+
+  useEffect(() => () => {
+    if (copyResetRef.current) clearTimeout(copyResetRef.current);
+  }, []);
+
+  const handleSelectVideoDevice = async (deviceId: string) => {
+    setSelectedVideoId(deviceId);
+    if (!isCameraOn || toggleCameraInFlightRef.current) return;
+    toggleCameraInFlightRef.current = true;
+    try {
+      const base = getPrejoinVideoConstraints();
+      const videoConstraints =
+        base && typeof base === "object"
+          ? { ...base, deviceId: { exact: deviceId } }
+          : { deviceId: { exact: deviceId } };
+      const stream = await navigator.mediaDevices.getUserMedia({ video: videoConstraints });
+      const newTrack = stream.getVideoTracks()[0];
+      if (!newTrack) return;
+      if ("contentHint" in newTrack) newTrack.contentHint = "motion";
+      const current = localStreamRef.current;
+      const oldTrack = current?.getVideoTracks()[0] ?? null;
+      oldTrack?.stop();
+      const others = current?.getTracks().filter((t) => t !== oldTrack) ?? [];
+      setLocalStream(new MediaStream([...others, newTrack]));
+      cameraIntentRef.current = true;
+    } catch (err) {
+      warnJoinMedia("select_video_device_failed", {
+        error: err instanceof Error ? { name: err.name, message: err.message } : err,
+      });
+    } finally {
+      toggleCameraInFlightRef.current = false;
+    }
+  };
+
+  const handleSelectAudioDevice = async (deviceId: string) => {
+    setSelectedAudioId(deviceId);
+    if (!isMicOn) return;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { ...DEFAULT_AUDIO_CONSTRAINTS, deviceId: { exact: deviceId } },
+      });
+      const newTrack = stream.getAudioTracks()[0];
+      if (!newTrack) return;
+      const current = localStreamRef.current;
+      const oldTrack = current?.getAudioTracks()[0] ?? null;
+      oldTrack?.stop();
+      const others = current?.getTracks().filter((t) => t !== oldTrack) ?? [];
+      setLocalStream(new MediaStream([...others, newTrack]));
+      micIntentRef.current = true;
+    } catch (err) {
+      warnJoinMedia("select_audio_device_failed", {
+        error: err instanceof Error ? { name: err.name, message: err.message } : err,
+      });
+    }
+  };
+
+  const inviteLink =
+    typeof window === "undefined"
+      ? ""
+      : isRoutedRoom
+        ? window.location.href
+        : presenceTarget
+          ? `${window.location.origin}/${presenceTarget}`
+          : "";
+  const handleCopyLink = async () => {
+    if (!inviteLink || !navigator.clipboard?.writeText) return;
+    try {
+      await navigator.clipboard.writeText(inviteLink);
+      setLinkCopied(true);
+      if (copyResetRef.current) clearTimeout(copyResetRef.current);
+      copyResetRef.current = setTimeout(() => setLinkCopied(false), 1800);
+    } catch {
+      // clipboard can be blocked; nothing actionable.
+    }
+  };
+
+  const showVideoPicker = isCameraOn && videoInputs.length > 0;
+  const showAudioPicker = isMicOn && audioInputs.length > 0;
+  const showDevicePickers = showVideoPicker || showAudioPicker;
   const isStartingMeeting =
     pending?.mode === "new" || (isLoading && activeJoinAction === "new");
   const isJoiningMeeting =
@@ -773,9 +978,9 @@ function JoinScreen({
 
   return (
     <div className="relative min-h-screen w-full bg-[#0a0a0b] text-[#fafafa]">
-      <main className="flex min-h-dvh w-full flex-col items-center justify-start px-0 pb-8 pt-32 sm:justify-center sm:px-4 sm:py-10">
-        <div className="animate-fade-in w-full overflow-hidden bg-[#0e0e10] sm:max-w-4xl sm:rounded-2xl sm:border sm:border-white/10 md:grid md:min-h-[520px] md:grid-cols-2">
-          <div className="relative aspect-[4/3] bg-[#121214] sm:aspect-video md:aspect-auto md:min-h-[520px]">
+      <main className="flex min-h-dvh w-full flex-col items-stretch px-0 pb-6 pt-[calc(env(safe-area-inset-top,0px)+5rem)] sm:items-center sm:justify-center sm:px-4 sm:py-10 sm:pt-10">
+        <div className="animate-fade-in flex w-full flex-1 flex-col overflow-hidden bg-[#0e0e10] sm:block sm:flex-none sm:max-w-4xl sm:rounded-2xl sm:border sm:border-white/10 md:grid md:min-h-[520px] md:grid-cols-2">
+          <div className="relative min-h-[176px] flex-1 bg-[#121214] sm:aspect-video sm:h-auto sm:flex-none md:aspect-auto md:min-h-[520px]">
                 <video
                   ref={videoRef}
                   autoPlay
@@ -784,8 +989,8 @@ function JoinScreen({
                   className={`absolute inset-0 h-full w-full -scale-x-100 object-cover ${isCameraOn ? "" : "hidden"}`}
                 />
                 {!isCameraOn && (
-                  <div className="absolute inset-0 flex flex-col items-center justify-center gap-3">
-                    <Avatar id={user?.id || previewName} name={previewName} size={88} />
+                  <div className="absolute inset-0 flex flex-col items-center justify-center gap-2.5 pb-14">
+                    <Avatar id={user?.id || previewName} name={previewName} size={76} />
                     <span className="text-[13.5px] text-[#fafafa]/45">Camera is off</span>
                   </div>
                 )}
@@ -794,18 +999,18 @@ function JoinScreen({
                     type="button"
                     onClick={requestMicrophoneAndCamera}
                     disabled={isRequestingPermissions}
-                    className="absolute left-3 top-3 z-10 inline-flex min-h-9 max-w-[calc(100%-1.5rem)] items-center gap-2 rounded-full bg-[#F95F4A] px-3.5 text-[13px] font-medium text-white transition-[background-color,opacity] duration-150 hover:bg-[#e8553f] disabled:cursor-wait disabled:opacity-75"
+                    className="absolute left-3 top-3 z-10 inline-flex h-8 max-w-[calc(100%-1.5rem)] items-center gap-1.5 rounded-full bg-[#F95F4A] px-3 text-[12.5px] font-medium text-white transition-[background-color,opacity] duration-150 hover:bg-[#e8553f] disabled:cursor-wait disabled:opacity-75"
                   >
                     {isRequestingPermissions ? (
-                      <Loader2 size={16} className="shrink-0 animate-spin" />
+                      <Loader2 size={14} className="shrink-0 animate-spin" />
                     ) : (
-                      <Video size={16} className="shrink-0" />
+                      <Video size={14} className="shrink-0" />
                     )}
                     <span className="truncate">Allow microphone and camera</span>
                   </button>
                 ) : null}
                 <div
-                  className={`pointer-events-none absolute top-3 rounded-full bg-black/55 px-3 py-1 text-[12.5px] font-medium backdrop-blur-sm ${
+                  className={`pointer-events-none absolute top-3 inline-flex h-8 items-center rounded-full bg-black/55 px-3 text-[12.5px] font-medium backdrop-blur-sm ${
                     shouldShowPermissionCta ? "right-3" : "left-3"
                   }`}
                 >
@@ -868,7 +1073,7 @@ function JoinScreen({
                 </div>
               </div>
 
-          <div className="safe-area-pb flex min-h-0 flex-col justify-start gap-4 p-5 sm:p-8 md:min-h-[520px] md:justify-center">
+          <div className="safe-area-pb flex min-h-0 shrink-0 flex-col justify-start gap-3 p-5 sm:gap-4 sm:p-8 md:min-h-[520px] md:justify-center">
             <div className="space-y-1.5">
               <h1
                 className="text-[22px] leading-tight text-[#fafafa]"
@@ -933,6 +1138,29 @@ function JoinScreen({
                 </div>
               )}
 
+              {showDevicePickers && (
+                <div className="space-y-2">
+                  {showVideoPicker && (
+                    <DeviceSelect
+                      icon={Video}
+                      ariaLabel="Camera"
+                      value={selectedVideoId}
+                      options={videoInputs}
+                      onChange={handleSelectVideoDevice}
+                    />
+                  )}
+                  {showAudioPicker && (
+                    <DeviceSelect
+                      icon={Mic}
+                      ariaLabel="Microphone"
+                      value={selectedAudioId}
+                      options={audioInputs}
+                      onChange={handleSelectAudioDevice}
+                    />
+                  )}
+                </div>
+              )}
+
               {!isRoutedRoom && (
                   <button
                     onClick={startMeeting}
@@ -987,9 +1215,17 @@ function JoinScreen({
               )}
 
               <div className="space-y-1.5">
-                <label className="block text-[11.5px] font-semibold text-[#fafafa]/40">
-                  {isRoutedRoom ? "Room" : "Join with a code"}
-                </label>
+                <div className="flex min-h-[16px] items-center justify-between gap-3">
+                  <label className="text-[11.5px] font-semibold text-[#fafafa]/40">
+                    {isRoutedRoom ? "Room" : "Join with a code"}
+                  </label>
+                  {showPresence ? (
+                    <RoomPresenceBadge
+                      count={presenceCount}
+                      loading={presenceLoading}
+                    />
+                  ) : null}
+                </div>
                 <input
                   type="text"
                   value={normalizedRoomId}
@@ -1011,6 +1247,23 @@ function JoinScreen({
                   Join
                 </button>
               </div>
+
+              {inviteLink && (
+                <button
+                  type="button"
+                  onClick={handleCopyLink}
+                  className="flex h-11 w-full items-center gap-2.5 rounded-xl border border-white/10 bg-white/[0.03] px-4 text-[13.5px] text-[#fafafa]/70 transition-colors duration-150 hover:bg-white/[0.06]"
+                >
+                  {linkCopied ? (
+                    <Check size={16} className="shrink-0 text-[#22c55e]" />
+                  ) : (
+                    <Link2 size={16} className="shrink-0 text-[#fafafa]/45" />
+                  )}
+                  <span className="truncate">
+                    {linkCopied ? "Link copied" : "Copy joining link"}
+                  </span>
+                </button>
+              )}
 
               {!isSignedInUser && (
                 <>

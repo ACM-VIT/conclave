@@ -522,37 +522,139 @@ export function useMeetMedia({
       const audioContext = getAudioContext();
       if (!audioContext) return;
 
-      const playPattern = () => {
-        const now = audioContext.currentTime;
-        const frequencies =
-          type === "join"
-            ? [523.25, 659.25]
-            : type === "waiting"
-            ? [440.0, 523.25, 659.25]
-            : type === "handRaise"
-            ? [587.33]
-            : [392.0, 261.63];
-        const duration =
-          type === "waiting" ? 0.1 : type === "handRaise" ? 0.12 : 0.12;
-        const gap = 0.03;
-        const basePeakGain = type === "handRaise" ? 0.13 : 0.16;
-        const peakGain = basePeakGain * notificationVolume;
+      // Lazily build (and cache) a short reverb tail so the cues feel like
+      // they exist in a space rather than sounding like dry, cheap beeps.
+      const ctxWithReverb = audioContext as AudioContext & {
+        __notificationReverb?: ConvolverNode;
+      };
+      const getReverb = (): ConvolverNode => {
+        if (ctxWithReverb.__notificationReverb) {
+          return ctxWithReverb.__notificationReverb;
+        }
+        const seconds = 0.9;
+        const length = Math.floor(audioContext.sampleRate * seconds);
+        const impulse = audioContext.createBuffer(
+          2,
+          length,
+          audioContext.sampleRate
+        );
+        for (let channel = 0; channel < 2; channel += 1) {
+          const data = impulse.getChannelData(channel);
+          // Pseudo-random but deterministic noise burst with exponential decay.
+          let seed = channel === 0 ? 0x9e3779b9 : 0x85ebca6b;
+          for (let i = 0; i < length; i += 1) {
+            seed = (seed * 1664525 + 1013904223) >>> 0;
+            const white = (seed / 0xffffffff) * 2 - 1;
+            data[i] = white * Math.pow(1 - i / length, 2.6);
+          }
+        }
+        const convolver = audioContext.createConvolver();
+        convolver.buffer = impulse;
+        ctxWithReverb.__notificationReverb = convolver;
+        return convolver;
+      };
 
-        frequencies.forEach((frequency, index) => {
-          const start = now + index * (duration + gap);
+      // Plays one bell/marimba-like note built from a few decaying partials
+      // with a soft, click-free envelope, gentle stereo warmth and a hint of
+      // reverb. This is what makes the cues feel polished instead of harsh.
+      const playVoice = (
+        frequency: number,
+        start: number,
+        duration: number,
+        peak: number,
+        masterIn: AudioNode
+      ) => {
+        // Inharmonic partials give a natural, bell-like shimmer; higher
+        // partials are quieter and decay faster.
+        const partials: Array<{ ratio: number; gain: number; decay: number }> = [
+          { ratio: 1, gain: 1, decay: 1 },
+          { ratio: 2.0, gain: 0.22, decay: 0.7 },
+          { ratio: 3.01, gain: 0.07, decay: 0.5 },
+        ];
+        const attack = 0.008;
+
+        partials.forEach(({ ratio, gain: partialGain, decay }) => {
           const oscillator = audioContext.createOscillator();
-          const gain = audioContext.createGain();
+          const env = audioContext.createGain();
           oscillator.type = "sine";
-          oscillator.frequency.value = frequency;
+          oscillator.frequency.value = frequency * ratio;
+          // Tiny detune adds chorus-like warmth without sounding out of tune.
+          oscillator.detune.value = (ratio - 1) * 1.5;
 
-          gain.gain.setValueAtTime(0, start);
-          gain.gain.linearRampToValueAtTime(peakGain, start + 0.02);
-          gain.gain.exponentialRampToValueAtTime(0.0001, start + duration);
+          const partialPeak = peak * partialGain;
+          const end = start + duration * decay;
+          env.gain.setValueAtTime(0.0001, start);
+          env.gain.linearRampToValueAtTime(partialPeak, start + attack);
+          env.gain.exponentialRampToValueAtTime(0.0001, end);
 
-          oscillator.connect(gain);
-          gain.connect(audioContext.destination);
+          oscillator.connect(env);
+          env.connect(masterIn);
           oscillator.start(start);
-          oscillator.stop(start + duration + 0.02);
+          oscillator.stop(end + 0.05);
+        });
+      };
+
+      const playPattern = () => {
+        const now = audioContext.currentTime + 0.02;
+
+        // Shared output chain: soft low-pass to tame harshness, a master
+        // level, plus a parallel reverb send for a short, airy tail.
+        const lowpass = audioContext.createBiquadFilter();
+        lowpass.type = "lowpass";
+        lowpass.frequency.value = 3200;
+        lowpass.Q.value = 0.4;
+
+        const master = audioContext.createGain();
+        master.gain.value = 1;
+
+        const dry = audioContext.createGain();
+        dry.gain.value = 1;
+        const wet = audioContext.createGain();
+        wet.gain.value = type === "handRaise" ? 0.18 : 0.26;
+
+        lowpass.connect(master);
+        master.connect(dry);
+        dry.connect(audioContext.destination);
+        master.connect(wet);
+        wet.connect(getReverb());
+        getReverb().connect(audioContext.destination);
+
+        // Musical, pleasant note sequences per cue.
+        const notes: Array<{ freq: number; dur: number }> =
+          type === "join"
+            ? // Warm ascending major third + octave shimmer (C4 → E4 → C5)
+              [
+                { freq: 261.63, dur: 0.55 },
+                { freq: 329.63, dur: 0.55 },
+                { freq: 523.25, dur: 0.8 },
+              ]
+            : type === "leave"
+            ? // Gentle descending two-note (E4 → C4)
+              [
+                { freq: 329.63, dur: 0.6 },
+                { freq: 261.63, dur: 0.9 },
+              ]
+            : type === "waiting"
+            ? // Soft three-note rising prompt (A3 → C4 → E4)
+              [
+                { freq: 220.0, dur: 0.46 },
+                { freq: 261.63, dur: 0.46 },
+                { freq: 329.63, dur: 0.7 },
+              ]
+            : // handRaise: single soft marimba pop (A4)
+              [{ freq: 440.0, dur: 0.55 }];
+
+        const stride =
+          type === "join" ? 0.11 : type === "waiting" ? 0.13 : 0.14;
+        const basePeak = type === "handRaise" ? 0.16 : 0.2;
+        const peak = basePeak * notificationVolume;
+
+        let cursor = now;
+        notes.forEach((note, index) => {
+          // Slight fall-off so trailing notes don't pile up in volume.
+          const notePeak = peak * (1 - index * 0.08);
+          playVoice(note.freq, cursor, note.dur, notePeak, lowpass);
+          cursor += stride;
         });
       };
 

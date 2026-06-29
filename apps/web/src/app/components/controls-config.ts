@@ -11,6 +11,7 @@ import {
   Monitor,
   PictureInPicture2,
   ScanFace,
+  Shield,
   StickyNote,
   TerminalSquare,
   Users,
@@ -249,6 +250,17 @@ export function buildControlsConfig(p: ControlsBarProps): ControlsConfig {
       disabled: ghost,
       onPress: p.onToggleCamera,
     },
+    // Raise hand lives directly on the bar (every layout, incl. phone) rather
+    // than buried in the More overflow menu.
+    {
+      id: "hand",
+      icon: Hand,
+      label: p.isHandRaised ? "Lower hand" : "Raise hand",
+      hotkey: HOTKEYS.toggleHandRaise.keys,
+      variant: p.isHandRaised ? "active" : "default",
+      disabled: ghost,
+      onPress: p.onToggleHandRaised,
+    },
   ];
 
   const screenShareDescriptor: ControlDescriptor = {
@@ -294,15 +306,6 @@ export function buildControlsConfig(p: ControlsBarProps): ControlsConfig {
   } else {
     center.push(screenShareDescriptor);
   }
-  overflow.push({
-    id: "hand",
-    icon: Hand,
-    label: p.isHandRaised ? "Lower hand" : "Raise hand",
-    hotkey: HOTKEYS.toggleHandRaise.keys,
-    active: p.isHandRaised,
-    disabled: ghost,
-    onPress: p.onToggleHandRaised,
-  });
   if (p.isPopoutSupported && (p.onOpenPopout || p.onClosePopout)) {
     overflow.push({
       id: "popout",
@@ -393,6 +396,19 @@ export function buildControlsConfig(p: ControlsBarProps): ControlsConfig {
       label: p.isAppsLocked ? "Unlock app editing" : "Lock app editing",
       active: p.isAppsLocked,
       onPress: p.onToggleAppsLock,
+    });
+  }
+  // Phone-width: the standalone host-controls shield is dropped from the right
+  // cluster (see ControlsBar) and folded into the More menu like everything else
+  // so the compact bar stays mic/cam/More/leave.
+  if (p.compact && p.isAdmin && p.onToggleHostControls) {
+    overflow.push({
+      id: "host-controls",
+      icon: Shield,
+      label: "Host controls",
+      active: p.isHostControlsOpen,
+      badge: p.pendingUsersCount,
+      onPress: p.onToggleHostControls,
     });
   }
 
