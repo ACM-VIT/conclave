@@ -9,7 +9,7 @@
     "cf:build": "opennextjs-cloudflare build && node scripts/prune-open-next-og.mjs",
     "cf:preview": "opennextjs-cloudflare build && opennextjs-cloudflare preview",
     "cf:deploy": "pnpm run cf:build && pnpm run cf:deploy:direct",
-    "cf:deploy:direct": "wrangler deploy .open-next/worker.js --assets .open-next/assets --name conclave-web --compatibility-date 2026-06-17 --compatibility-flag nodejs_compat --compatibility-flag global_fetch_strictly_public --domain conclave.acmvit.in --var BETTER_AUTH_URL:https://conclave.acmvit.in --var BETTER_AUTH_TRUSTED_ORIGINS:https://conclave.acmvit.in --var NEXT_PUBLIC_APP_URL:https://conclave.acmvit.in --var NEXT_PUBLIC_SITE_URL:https://conclave.acmvit.in --autoconfig false",
+    "cf:deploy:direct": "wrangler deploy --config wrangler.jsonc --domain conclave.acmvit.in --autoconfig false",
     "transcript:dev": "wrangler dev --config wrangler.transcript.jsonc --port 8788",
     "transcript:deploy": "wrangler deploy --config wrangler.transcript.jsonc",
     "transcript:typecheck": "tsc --noEmit -p transcript-worker/tsconfig.json",

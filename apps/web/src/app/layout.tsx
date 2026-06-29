@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import type { ReactNode } from "react";
 import "./globals.css";
+import ConclaveUpdatePill from "./components/ConclaveUpdatePill";
 import TelemetryProvider from "./components/TelemetryProvider";
 
 const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
@@ -59,7 +60,10 @@ export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en">
       <body suppressHydrationWarning>
-        <TelemetryProvider>{children}</TelemetryProvider>
+        <TelemetryProvider>
+          {children}
+          <ConclaveUpdatePill />
+        </TelemetryProvider>
       </body>
     </html>
   );

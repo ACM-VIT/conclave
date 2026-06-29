@@ -125,6 +125,7 @@ export type {
   TranscriptQuestionResponse,
   TranscriptSegment,
   TranscriptSegmentDelta,
+  TranscriptServiceVersion,
   TranscriptSessionState,
   TranscriptSessionStatus,
   TranscriptSpeaker,

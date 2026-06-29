@@ -109,6 +109,12 @@ export interface TranscriptTokenCapabilities {
   ask: boolean;
 }
 
+export interface TranscriptServiceVersion {
+  id: string;
+  tag: string | null;
+  timestamp: string | null;
+}
+
 export interface TranscriptTokenResponse {
   roomId: string;
   workerUrl: string;

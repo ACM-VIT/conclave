@@ -5,6 +5,7 @@ import type {
   Participant,
   TranscriptMinutesSnapshot,
   TranscriptSegment,
+  TranscriptServiceVersion,
   TranscriptSessionState,
   TranscriptTokenResponse,
 } from "../lib/types";
@@ -65,6 +66,7 @@ type ServerEnvelope =
       type: "snapshot";
       viewerConnectionId?: string;
       globalOpenAiKeyAvailable?: boolean;
+      serviceVersion?: TranscriptServiceVersion;
       session: TranscriptSessionState;
       segments?: TranscriptSegment[];
       partials?: TranscriptSegment[];
@@ -74,6 +76,7 @@ type ServerEnvelope =
       type: "session.state";
       session: TranscriptSessionState;
       globalOpenAiKeyAvailable?: boolean;
+      serviceVersion?: TranscriptServiceVersion;
     }
   | {
       type: "segment.delta";
@@ -101,6 +104,7 @@ type ServerEnvelope =
       type: "handoff.requested";
       session: TranscriptSessionState;
       globalOpenAiKeyAvailable?: boolean;
+      serviceVersion?: TranscriptServiceVersion;
     }
   | { type: "error"; message?: string };
 
@@ -127,6 +131,24 @@ const toWorkerWebSocketUrl = (token: TranscriptTokenResponse): string => {
   url.searchParams.set("token", token.token);
   return url.toString();
 };
+
+// Matches ConclaveUpdatePill's cadence so both update prompts behave alike.
+const VERSION_POLL_INTERVAL_MS = 30_000;
+
+const toWorkerVersionUrl = (workerUrl: string): string => {
+  const base = workerUrl.replace(/\/+$/, "");
+  return new URL("/version", `${base}/`).toString();
+};
+
+const isTranscriptServiceVersion = (
+  value: unknown,
+): value is TranscriptServiceVersion =>
+  Boolean(
+    value &&
+      typeof value === "object" &&
+      "id" in value &&
+      typeof (value as { id?: unknown }).id === "string",
+  );
 
 const isLiveAudioStream = (stream: MediaStream | null | undefined): boolean =>
   Boolean(
@@ -169,6 +191,10 @@ export function useMeetingTranscript({
     null,
   );
   const [hasGlobalOpenAiKey, setHasGlobalOpenAiKey] = useState(false);
+  const [serviceVersion, setServiceVersion] =
+    useState<TranscriptServiceVersion | null>(null);
+  const [availableServiceVersion, setAvailableServiceVersion] =
+    useState<TranscriptServiceVersion | null>(null);
   const [viewerConnectionId, setViewerConnectionId] = useState<string | null>(
     null,
   );
@@ -177,6 +203,7 @@ export function useMeetingTranscript({
   const connectPromiseRef = useRef<Promise<boolean> | null>(null);
   const subscribedRef = useRef(false);
   const connectRef = useRef<(() => Promise<boolean>) | null>(null);
+  const serviceVersionRef = useRef<TranscriptServiceVersion | null>(null);
 
   const transcriptSources = useMemo<TranscriptRelaySource[]>(() => {
     const sources: TranscriptRelaySource[] = [];
@@ -255,6 +282,18 @@ export function useMeetingTranscript({
     return true;
   }, []);
 
+  const applyServiceVersion = useCallback(
+    (version: TranscriptServiceVersion | undefined): void => {
+      if (!version?.id) return;
+      serviceVersionRef.current = version;
+      setServiceVersion(version);
+      setAvailableServiceVersion((available) =>
+        available?.id === version.id ? null : available,
+      );
+    },
+    [],
+  );
+
   const upsertAssistantMessage = useCallback(
     (payload: {
       id: string;
@@ -317,6 +356,7 @@ export function useMeetingTranscript({
         case "snapshot": {
           setViewerConnectionId(message.viewerConnectionId ?? null);
           setHasGlobalOpenAiKey(message.globalOpenAiKeyAvailable === true);
+          applyServiceVersion(message.serviceVersion);
           setSession(message.session);
           setSegments(message.segments ?? []);
           setPartials(
@@ -331,6 +371,7 @@ export function useMeetingTranscript({
         case "session.state":
         case "handoff.requested":
           setHasGlobalOpenAiKey(message.globalOpenAiKeyAvailable === true);
+          applyServiceVersion(message.serviceVersion);
           setSession(message.session);
           return;
         case "segment.delta":
@@ -374,7 +415,7 @@ export function useMeetingTranscript({
         }
       }
     },
-    [upsertAssistantMessage],
+    [applyServiceVersion, upsertAssistantMessage],
   );
 
   const connect = useCallback(async (): Promise<boolean> => {
@@ -462,6 +503,69 @@ export function useMeetingTranscript({
   useEffect(() => {
     connectRef.current = connect;
   }, [connect]);
+
+  const reconnect = useCallback(async (): Promise<boolean> => {
+    relayRef.current?.stop();
+    relayRef.current = null;
+    const socket = socketRef.current;
+    socketRef.current = null;
+    connectPromiseRef.current = null;
+    setViewerConnectionId(null);
+    setIsStreamingAudio(false);
+    setAvailableServiceVersion(null);
+    try {
+      socket?.close();
+    } catch {}
+    return connect();
+  }, [connect]);
+
+  useEffect(() => {
+    if (
+      !isJoined ||
+      connectionStatus !== "connected" ||
+      !tokenInfo?.workerUrl
+    ) {
+      return;
+    }
+
+    let cancelled = false;
+    const checkVersion = async () => {
+      try {
+        const response = await fetch(toWorkerVersionUrl(tokenInfo.workerUrl), {
+          cache: "no-store",
+          headers: { Accept: "application/json" },
+        });
+        if (!response.ok) return;
+        const payload = (await response.json()) as {
+          serviceVersion?: unknown;
+        };
+        if (!isTranscriptServiceVersion(payload.serviceVersion)) return;
+        const current = serviceVersionRef.current;
+        if (
+          !cancelled &&
+          current?.id &&
+          payload.serviceVersion.id !== current.id
+        ) {
+          setAvailableServiceVersion(payload.serviceVersion);
+        }
+      } catch {
+        // A version probe should never interrupt the live transcript.
+      }
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") void checkVersion();
+    };
+
+    void checkVersion();
+    const interval = window.setInterval(checkVersion, VERSION_POLL_INTERVAL_MS);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [connectionStatus, isJoined, tokenInfo?.workerUrl]);
 
   const start = useCallback(
     async (options: StartTranscriptOptions): Promise<boolean> => {
@@ -591,6 +695,9 @@ export function useMeetingTranscript({
       setQaMessages([]);
       setTokenInfo(null);
       setHasGlobalOpenAiKey(false);
+      setServiceVersion(null);
+      serviceVersionRef.current = null;
+      setAvailableServiceVersion(null);
       setViewerConnectionId(null);
       return;
     }
@@ -653,6 +760,10 @@ export function useMeetingTranscript({
     viewerConnectionId,
   ]);
 
+  const isServiceUpdateAvailable =
+    availableServiceVersion !== null &&
+    availableServiceVersion.id !== serviceVersion?.id;
+
   return {
     connectionStatus,
     session,
@@ -664,6 +775,9 @@ export function useMeetingTranscript({
     error,
     tokenInfo,
     hasGlobalOpenAiKey,
+    serviceVersion,
+    availableServiceVersion,
+    isServiceUpdateAvailable,
     isViewOnly,
     canStart,
     canTakeover,
@@ -675,6 +789,7 @@ export function useMeetingTranscript({
     isControllerUser: !isViewOnly && rawIsControllerUser,
     isLive: session.status === "live",
     connect,
+    reconnect,
     start,
     takeover,
     stop,

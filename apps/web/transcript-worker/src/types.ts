@@ -1,6 +1,7 @@
 import type {
   TranscriptMinutesSnapshot,
   TranscriptSegment,
+  TranscriptServiceVersion,
   TranscriptSpeaker,
   TranscriptSessionState,
   TranscriptTokenCapabilities,
@@ -9,6 +10,7 @@ import type { TranscriptRateLimitState } from "./rate-limit";
 
 export interface Env {
   TRANSCRIPT_ROOM: DurableObjectNamespace;
+  CF_VERSION_METADATA?: Partial<TranscriptServiceVersion>;
   TRANSCRIPT_TOKEN_SECRET: string;
   TRANSCRIPT_ALLOWED_ORIGIN?: string;
   TRANSCRIPT_IDLE_TTL_MS?: string;

@@ -35,6 +35,7 @@ import {
   takeTranscriptRateLimit,
   type TranscriptRateBucketName,
 } from "./rate-limit";
+import { getTranscriptServiceVersion } from "./service-version";
 import {
   canRefreshTranscriptMinutes,
   canStopTranscriptSession,
@@ -150,6 +151,7 @@ export class TranscriptRoom {
       viewerConnectionId: viewer.id,
       session: this.session,
       globalOpenAiKeyAvailable: this.hasGlobalOpenAiKey(),
+      serviceVersion: this.serviceVersion(),
       segments: this.segments,
       partials: Array.from(this.partialSegments.values()),
       minutes: this.minutes,
@@ -235,11 +237,16 @@ export class TranscriptRoom {
       type: "session.state",
       session: this.session,
       globalOpenAiKeyAvailable: this.hasGlobalOpenAiKey(),
+      serviceVersion: this.serviceVersion(),
     });
   }
 
   private hasGlobalOpenAiKey(): boolean {
     return hasGlobalOpenAiApiKey(this.env);
+  }
+
+  private serviceVersion() {
+    return getTranscriptServiceVersion(this.env);
   }
 
   private sendError(viewer: Viewer, message: string): void {
@@ -312,6 +319,7 @@ export class TranscriptRoom {
           viewerConnectionId: viewer.id,
           session: this.session,
           globalOpenAiKeyAvailable: this.hasGlobalOpenAiKey(),
+          serviceVersion: this.serviceVersion(),
           segments: this.segments,
           partials: Array.from(this.partialSegments.values()),
           minutes: this.minutes,
@@ -336,9 +344,10 @@ export class TranscriptRoom {
       this.markTakeoverNeeded("Transcript controller disconnected.");
       this.broadcast({
         type: "handoff.requested",
-        session: this.session,
-        globalOpenAiKeyAvailable: this.hasGlobalOpenAiKey(),
-      });
+      session: this.session,
+      globalOpenAiKeyAvailable: this.hasGlobalOpenAiKey(),
+      serviceVersion: this.serviceVersion(),
+    });
       await this.persist();
     }
     await this.armCleanupAlarm();
@@ -469,6 +478,7 @@ export class TranscriptRoom {
       type: "snapshot",
       session: this.session,
       globalOpenAiKeyAvailable: this.hasGlobalOpenAiKey(),
+      serviceVersion: this.serviceVersion(),
       segments: [],
       partials: [],
       minutes: this.minutes,

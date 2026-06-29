@@ -824,6 +824,27 @@ export default function TranscriptPanel({
         </div>
       )}
 
+      {transcript.isServiceUpdateAvailable ? (
+        <div className="flex shrink-0 items-center justify-between gap-3 border-b border-[#F95F4A]/20 bg-[#F95F4A]/[0.08] px-4 py-2 text-[12px] text-[#fafafa]">
+          <span className="flex min-w-0 items-center gap-2">
+            <span className="h-2 w-2 shrink-0 rounded-full bg-[#F95F4A]" />
+            <span className="min-w-0 truncate">
+              New transcript version ready
+            </span>
+          </span>
+          <button
+            type="button"
+            onClick={() => {
+              void transcript.reconnect();
+            }}
+            className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-lg bg-[#F95F4A]/15 px-2.5 text-[11.5px] font-semibold text-[#fafafa] transition-colors hover:bg-[#F95F4A]/25"
+          >
+            <RefreshCw size={12} strokeWidth={1.8} />
+            Reconnect
+          </button>
+        </div>
+      ) : null}
+
       {isRunning ? (
         <>
           <div className="flex shrink-0 items-center justify-between gap-2 border-b border-white/10 px-4 py-2">
