@@ -227,10 +227,10 @@ function StartStage({
             className="mt-7 w-full max-w-[300px] space-y-2.5"
           >
             <input
-              value={isOnTheHouse ? "On the house" : apiKey}
+              value={isOnTheHouse ? "API Key on the house" : apiKey}
               onChange={(event) => setApiKey(event.target.value)}
               type={isOnTheHouse ? "text" : "password"}
-              placeholder={isOnTheHouse ? "On the house" : "OpenAI API key"}
+              placeholder={isOnTheHouse ? "API Key on the house" : "OpenAI API key"}
               autoComplete="off"
               autoFocus={!isOnTheHouse}
               readOnly={isOnTheHouse}
@@ -771,7 +771,7 @@ export default function TranscriptPanel({
             {isRunning && session.controller ? (
               <p className="mt-0.5 truncate text-[11.5px] text-[#a1a1aa]">
                 Hosted by {session.controller.displayName}
-                {session.keySource === "global" ? " · On the house" : ""}
+                {session.keySource === "global" ? "" : ""}
               </p>
             ) : transcript.isViewOnly ? (
               <p className="mt-0.5 truncate text-[11.5px] text-[#a1a1aa]">
