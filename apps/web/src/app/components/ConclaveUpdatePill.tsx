@@ -114,11 +114,11 @@ export function ConclaveUpdatePill() {
           type="button"
           onClick={handleRefresh}
           disabled={isRefreshing}
-          className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.06] px-2.5 text-[11px] font-semibold text-[#fafafa] transition-colors hover:bg-white/[0.12] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#F95F4A] disabled:cursor-wait disabled:opacity-70"
+          className="group inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.06] px-2.5 text-[11px] font-semibold text-[#fafafa] transition-colors hover:bg-white/[0.12] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#F95F4A] disabled:cursor-wait disabled:opacity-70"
         >
           <RefreshCw
             aria-hidden="true"
-            className={`h-3.5 w-3.5 ${isRefreshing ? "animate-spin" : ""}`}
+            className={`h-3.5 w-3.5 transition-transform duration-500 ease-out group-hover:rotate-180 ${isRefreshing ? "animate-spin" : ""}`}
           />
           <span>{isRefreshing ? "Refreshing" : "Refresh"}</span>
         </button>
