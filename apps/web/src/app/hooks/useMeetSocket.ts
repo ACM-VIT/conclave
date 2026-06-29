@@ -6159,6 +6159,39 @@ export function useMeetSocket({
     [socketRef]
   );
 
+  const endRoomForEveryone = useCallback(
+    (
+      options: { message?: string; delayMs?: number } = {},
+    ): Promise<boolean> => {
+      const socket = socketRef.current;
+      if (!socket) return Promise.resolve(false);
+
+      return new Promise((resolve) => {
+        socket.emit(
+          "admin:endRoom",
+          {
+            message:
+              options.message || "This meeting has been ended by the host.",
+            delayMs: options.delayMs ?? 0,
+          },
+          (
+            response:
+              | { success: boolean; roomId?: string; delayMs?: number }
+              | { error: string },
+          ) => {
+            if ("error" in response) {
+              console.error("[Meets] Failed to end room:", response.error);
+              resolve(false);
+              return;
+            }
+            resolve(response.success);
+          },
+        );
+      });
+    },
+    [socketRef],
+  );
+
   const getTranscriptToken =
     useCallback((): Promise<TranscriptTokenResponse | null> => {
       const socket = socketRef.current;
@@ -6342,6 +6375,7 @@ export function useMeetSocket({
     toggleRoomLock,
     toggleNoGuests,
     toggleChatLock,
+    endRoomForEveryone,
     getTranscriptToken,
     getMeetingConfig,
     updateMeetingConfig,

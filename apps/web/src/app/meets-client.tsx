@@ -2165,6 +2165,7 @@ export default function MeetsClient({
     localStream,
     participants,
     activeSpeakerId: effectiveActiveSpeakerId,
+    isViewOnly: ghostEnabled,
     resolveDisplayName,
     getTranscriptToken: socket.getTranscriptToken,
   });
@@ -2869,6 +2870,7 @@ export default function MeetsClient({
         toggleHandRaised={toggleHandRaised}
         sendReaction={sendReaction}
         leaveRoom={leaveRoom}
+        endRoomForEveryone={socket.endRoomForEveryone}
         isParticipantsOpen={isParticipantsOpen}
         setIsParticipantsOpen={setIsParticipantsOpen}
         pendingUsers={pendingUsers}

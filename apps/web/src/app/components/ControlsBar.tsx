@@ -8,6 +8,7 @@ import {
   Shield,
   Smile,
   SwitchCamera,
+  Users,
   Volume2,
   VolumeX,
 } from "lucide-react";
@@ -244,6 +245,105 @@ function useClickOutside(
   }, [open, ref, close]);
 }
 
+// Leave button. For hosts, hovering (desktop) or long-pressing (mobile) reveals
+// an "End call for everyone" action above it; a plain click still leaves solo.
+function LeaveControl({
+  onLeave,
+  onEndForEveryone,
+  iconSize,
+  strokeWidth,
+}: {
+  onLeave: () => void;
+  onEndForEveryone?: () => void;
+  iconSize: number;
+  strokeWidth: number;
+}) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const longPressTriggered = useRef(false);
+
+  useClickOutside(menuOpen, ref, () => setMenuOpen(false));
+
+  // If there's no host action available, fall back to a plain leave button.
+  if (!onEndForEveryone) {
+    return (
+      <HotkeyTooltip label="Leave call" hotkey="">
+        <button
+          type="button"
+          onClick={onLeave}
+          aria-label="Leave call"
+          title="Leave call"
+          className="ml-1 inline-flex h-12 w-[68px] items-center justify-center rounded-full bg-[#ea4335] text-white transition-colors duration-[120ms] hover:bg-[#e8533f] active:bg-[#d24a37]"
+        >
+          <PhoneOff size={iconSize} strokeWidth={strokeWidth} />
+        </button>
+      </HotkeyTooltip>
+    );
+  }
+
+  const clearLongPress = () => {
+    if (longPressTimer.current) {
+      clearTimeout(longPressTimer.current);
+      longPressTimer.current = null;
+    }
+  };
+
+  return (
+    <div
+      ref={ref}
+      className="relative ml-1"
+      onMouseEnter={() => setMenuOpen(true)}
+      onMouseLeave={() => setMenuOpen(false)}
+    >
+      {menuOpen && (
+        // pb-2 bridges the visual gap so the hover area stays continuous
+        // between the button and the pill — no dead zone to cross.
+        <div className="absolute bottom-full left-1/2 z-20 -translate-x-1/2 pb-2">
+          <button
+            type="button"
+            onClick={() => {
+              setMenuOpen(false);
+              onEndForEveryone();
+            }}
+            className="flex origin-bottom items-center gap-2.5 whitespace-nowrap rounded-full border border-[#ea4335]/40 bg-[#2a1d1d]/95 py-2.5 pl-3.5 pr-4 text-sm font-semibold text-[#ff7a6e] shadow-[0_10px_30px_rgba(0,0,0,0.45)] backdrop-blur-md transition-colors will-change-transform hover:border-[#ea4335] hover:bg-[#ea4335] hover:text-white hover:shadow-[0_10px_30px_rgba(234,67,53,0.4)] animate-[meet-popover-in_150ms_cubic-bezier(0.22,1,0.36,1)]"
+          >
+            <Users size={17} strokeWidth={strokeWidth} className="shrink-0" />
+            End call for everyone
+          </button>
+        </div>
+      )}
+      <button
+        type="button"
+        onClick={() => {
+          if (longPressTriggered.current) {
+            longPressTriggered.current = false;
+            return;
+          }
+          setMenuOpen(false);
+          onLeave();
+        }}
+        onTouchStart={() => {
+          clearLongPress();
+          longPressTriggered.current = false;
+          longPressTimer.current = setTimeout(() => {
+            longPressTriggered.current = true;
+            setMenuOpen(true);
+          }, 450);
+        }}
+        onTouchEnd={clearLongPress}
+        onTouchMove={clearLongPress}
+        onContextMenu={(e) => e.preventDefault()}
+        aria-label="Leave call"
+        title="Leave call"
+        className="inline-flex h-12 w-[68px] items-center justify-center rounded-full bg-[#ea4335] text-white transition-colors duration-[120ms] hover:bg-[#e8533f] active:bg-[#d24a37]"
+      >
+        <PhoneOff size={iconSize} strokeWidth={strokeWidth} />
+      </button>
+    </div>
+  );
+}
+
 function ControlsBar(props: ControlsBarProps) {
   const config = buildControlsConfig(props);
   const {
@@ -252,6 +352,7 @@ function ControlsBar(props: ControlsBarProps) {
     reactionOptions,
     onSendReaction,
     onLeave,
+    onEndForEveryone,
     isAdmin,
     isGhostMode = false,
     isBrowserLaunching = false,
@@ -754,17 +855,12 @@ function ControlsBar(props: ControlsBarProps) {
           )}
         </div>
 
-        <HotkeyTooltip label="Leave call" hotkey="">
-          <button
-            type="button"
-            onClick={onLeave}
-            aria-label="Leave call"
-            title="Leave call"
-            className="ml-1 inline-flex h-12 w-[68px] items-center justify-center rounded-full bg-[#ea4335] text-white transition-colors duration-[120ms] hover:bg-[#e8533f] active:bg-[#d24a37]"
-          >
-            <PhoneOff size={ICON} strokeWidth={STROKE} />
-          </button>
-        </HotkeyTooltip>
+        <LeaveControl
+          onLeave={onLeave}
+          onEndForEveryone={showHost ? onEndForEveryone : undefined}
+          iconSize={ICON}
+          strokeWidth={STROKE}
+        />
       </div>
 
       <div className="flex min-w-0 shrink-0 items-center justify-self-end gap-0.5">

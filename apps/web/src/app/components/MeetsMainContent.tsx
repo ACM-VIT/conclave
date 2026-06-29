@@ -166,6 +166,7 @@ interface MeetsMainContentProps {
   toggleHandRaised: () => void;
   sendReaction: (reaction: ReactionOption) => void;
   leaveRoom: () => void;
+  endRoomForEveryone?: () => Promise<boolean> | boolean;
   isParticipantsOpen: boolean;
   setIsParticipantsOpen: Dispatch<SetStateAction<boolean>>;
   pendingUsers: Map<string, string>;
@@ -408,6 +409,7 @@ export default function MeetsMainContent({
   toggleHandRaised,
   sendReaction,
   leaveRoom,
+  endRoomForEveryone,
   isParticipantsOpen,
   setIsParticipantsOpen,
   pendingUsers,
@@ -1734,6 +1736,7 @@ export default function MeetsMainContent({
                 onToggleHandRaised={toggleHandRaised}
                 onSendReaction={sendReaction}
                 onLeave={leaveRoom}
+                onEndForEveryone={endRoomForEveryone}
                 selectedAudioInputDeviceId={selectedAudioInputDeviceId}
                 selectedAudioOutputDeviceId={selectedAudioOutputDeviceId}
                 selectedVideoInputDeviceId={selectedVideoInputDeviceId}

@@ -13,6 +13,7 @@ import {
   DEFAULT_IDLE_TTL_MS,
   MAX_AUDIO_CHUNK_BASE64_BYTES,
   MAX_CLIENT_MESSAGE_BYTES,
+  MIN_OPENAI_COMMIT_AUDIO_SAMPLES,
   MIN_MINUTES_REFRESH_MS,
 } from "./constants";
 import { verifyTranscriptRoomToken } from "./auth";
@@ -60,6 +61,8 @@ import {
   parsePositiveInt,
   redactSensitiveText,
   safeJsonParse,
+  createSilentPcm16Base64,
+  estimatePcm16Base64SampleCount,
   trimText,
 } from "./utils";
 
@@ -84,6 +87,7 @@ export class TranscriptRoom {
   private pendingSpeakers: TranscriptSpeaker[] = [];
   private latestSpeaker: TranscriptSpeaker | null = null;
   private hasPendingAudio = false;
+  private pendingAudioSamples = 0;
   private session: TranscriptSessionState | null = null;
   private segments: TranscriptSegment[] = [];
   private minutes: TranscriptMinutesSnapshot = createEmptyMinutes();
@@ -396,6 +400,7 @@ export class TranscriptRoom {
       this.pendingSpeakers = [];
       this.latestSpeaker = null;
       this.hasPendingAudio = false;
+      this.pendingAudioSamples = 0;
       this.sequence = 0;
       this.minutes = createEmptyMinutes(qaModel);
     }
@@ -458,6 +463,7 @@ export class TranscriptRoom {
     this.pendingSpeakers = [];
     this.latestSpeaker = null;
     this.hasPendingAudio = false;
+    this.pendingAudioSamples = 0;
     this.sequence = 0;
     this.minutes = createEmptyMinutes(this.session.qaModel);
     await this.state.storage.delete("snapshot");
@@ -478,6 +484,8 @@ export class TranscriptRoom {
   ): void {
     if (!this.isController(viewer)) return;
     if (!audio || !this.openAiSocket) return;
+    const sampleCount = estimatePcm16Base64SampleCount(audio);
+    if (sampleCount <= 0) return;
     const normalizedSpeaker = normalizeSpeaker(speaker, viewer);
     if (
       this.hasPendingAudio &&
@@ -496,6 +504,7 @@ export class TranscriptRoom {
       );
       this.latestSpeaker = normalizedSpeaker;
       this.hasPendingAudio = true;
+      this.pendingAudioSamples += sampleCount;
       if (this.session?.controller) {
         this.session.controller.lastSeenAt = Date.now();
       }
@@ -529,11 +538,22 @@ export class TranscriptRoom {
   ): boolean {
     if (!this.openAiSocket || !this.hasPendingAudio) return false;
     try {
+      const paddingSamples =
+        MIN_OPENAI_COMMIT_AUDIO_SAMPLES - this.pendingAudioSamples;
+      if (paddingSamples > 0) {
+        this.openAiSocket.send(
+          JSON.stringify({
+            type: "input_audio_buffer.append",
+            audio: createSilentPcm16Base64(paddingSamples),
+          }),
+        );
+      }
       this.openAiSocket.send(
         JSON.stringify({ type: "input_audio_buffer.commit" }),
       );
       this.pendingSpeakers.push(speaker);
       this.hasPendingAudio = false;
+      this.pendingAudioSamples = 0;
       return true;
     } catch {
       void this.handleOpenAiFailure(failureMessage);
@@ -629,6 +649,7 @@ export class TranscriptRoom {
     const socket = this.openAiSocket;
     this.openAiSocket = null;
     this.hasPendingAudio = false;
+    this.pendingAudioSamples = 0;
     try {
       socket?.close();
     } catch {}
@@ -954,6 +975,7 @@ export class TranscriptRoom {
     this.pendingSpeakers = [];
     this.latestSpeaker = null;
     this.hasPendingAudio = false;
+    this.pendingAudioSamples = 0;
     this.sequence = 0;
     this.session = {
       ...createIdleSession(roomId),

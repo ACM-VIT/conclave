@@ -1073,7 +1073,7 @@ function JoinScreen({
                 </div>
               </div>
 
-          <div className="safe-area-pb flex min-h-0 shrink-0 flex-col justify-start gap-3 p-5 pb-8 sm:gap-4 sm:p-8 sm:pb-12 md:min-h-[520px] md:justify-center">
+          <div className="safe-area-pb flex min-h-0 shrink-0 flex-col justify-start gap-3 p-5 pb-10 sm:gap-4 sm:p-8 sm:pb-14 md:min-h-[520px] md:justify-center">
             <div className="space-y-1.5">
               <h1
                 className="text-[22px] leading-tight text-[#fafafa]"
@@ -1189,26 +1189,28 @@ function JoinScreen({
                 >
                   <Ghost
                     size={18}
-                    style={{ color: isGhostMode ? "#F95F4A" : "rgba(250,250,250,0.6)" }}
+                    className={`shrink-0 transition-colors duration-[120ms] ${
+                      isGhostMode ? "text-[#F95F4A]" : "text-[#fafafa]/60"
+                    }`}
                   />
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-[14px] text-[#fafafa]">
                       Join as ghost
                     </span>
-                    <span className="block truncate text-[12.5px] text-white/60">
+                    <span className="block truncate text-[12.5px] text-[#fafafa]/60">
                       Others won&apos;t see you join
                     </span>
                   </span>
                   <span
                     aria-hidden
-                    className="relative inline-flex h-[22px] w-[38px] shrink-0 items-center rounded-full transition-colors duration-[120ms]"
-                    style={{
-                      backgroundColor: isGhostMode ? "#F95F4A" : "rgba(250,250,250,0.14)",
-                    }}
+                    className={`relative inline-flex h-[22px] w-[38px] shrink-0 items-center rounded-full transition-colors duration-[120ms] ${
+                      isGhostMode ? "bg-[#F95F4A]" : "bg-[#fafafa]/[0.14]"
+                    }`}
                   >
                     <span
-                      className="absolute h-[16px] w-[16px] rounded-full bg-white transition-transform duration-[120ms]"
-                      style={{ transform: isGhostMode ? "translateX(19px)" : "translateX(3px)" }}
+                      className={`absolute h-[16px] w-[16px] rounded-full bg-white transition-transform duration-[120ms] ${
+                        isGhostMode ? "translate-x-[19px]" : "translate-x-[3px]"
+                      }`}
                     />
                   </span>
                 </button>

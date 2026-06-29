@@ -64,6 +64,7 @@ export interface ControlsBarProps {
   onToggleHandRaised: () => void;
   onSendReaction: (reaction: ReactionOption) => void;
   onLeave: () => void;
+  onEndForEveryone?: () => void;
   selectedAudioInputDeviceId?: string;
   selectedAudioOutputDeviceId?: string;
   selectedVideoInputDeviceId?: string;
