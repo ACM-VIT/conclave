@@ -276,12 +276,9 @@ function ParticipantsPanel({
 
       {isAdmin && (
         <section className="border-b border-white/10 px-4 py-3">
-          <div className="mb-2.5 flex items-center gap-2">
-            <Shield size={ICON} strokeWidth={STROKE} className="text-[#a1a1aa]" />
-            <h3 className="text-[12.5px] font-semibold text-[#fafafa]">
-              Host controls
-            </h3>
-          </div>
+          <h3 className="mb-2.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-[#71717a]">
+            Host controls
+          </h3>
           {hostActionError && (
             <div className="mb-2.5 rounded-md border border-[#ea4335]/25 bg-[#ea4335]/10 px-2.5 py-1.5 text-[12px] text-[#ea4335]">
               {hostActionError}
