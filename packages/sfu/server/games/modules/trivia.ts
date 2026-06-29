@@ -80,7 +80,10 @@ const QUESTION_BANK: RawQuestion[] = [
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   Boolean(value && typeof value === "object" && !Array.isArray(value));
 
-const parseGeneratedQuestions = (payload: unknown): RawQuestion[] | null => {
+const parseGeneratedQuestions = (
+  payload: unknown,
+  minItems = 1,
+): RawQuestion[] | null => {
   if (!isRecord(payload) || !Array.isArray(payload.questions)) return null;
   const questions: RawQuestion[] = [];
   const seenPrompts = new Set<string>();
@@ -114,11 +117,16 @@ const parseGeneratedQuestions = (payload: unknown): RawQuestion[] | null => {
     const promptKey = normalizeGeneratedKey(prompt);
     if (!matchedAnswer || seenPrompts.has(promptKey)) continue;
     seenPrompts.add(promptKey);
-    questions.push({ category, prompt, options: uniqueOptions, answer: matchedAnswer });
+    questions.push({
+      category,
+      prompt,
+      options: uniqueOptions,
+      answer: matchedAnswer,
+    });
     if (questions.length >= 15) break;
   }
 
-  return questions.length > 0 ? questions : null;
+  return questions.length >= minItems ? questions : null;
 };
 
 const generatedQuestionsFromContent = (content: unknown): RawQuestion[] =>
@@ -184,6 +192,9 @@ export const triviaModule: GameModule<TriviaState> = {
       topic,
       instructions: [
         `Create ${questionCount} unique multiple-choice trivia questions.`,
+        "Every question, option set, and answer must clearly depend on the topic.",
+        "Do not return generic geography, science, film, food, sport, or history facts unless the topic asks for them.",
+        "Use concrete topic-specific nouns, people, events, products, places, or scenarios when they fit.",
         "Each question needs exactly four plausible options.",
         "The answer must exactly match one option.",
         "Avoid repeated facts and avoid questions that require private knowledge.",
@@ -218,7 +229,7 @@ export const triviaModule: GameModule<TriviaState> = {
         required: ["questions"],
       },
       maxOutputTokens: 400 + questionCount * 150,
-      parse: parseGeneratedQuestions,
+      parse: (payload) => parseGeneratedQuestions(payload, questionCount),
     });
   },
 

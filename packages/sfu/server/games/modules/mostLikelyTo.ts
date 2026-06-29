@@ -61,20 +61,33 @@ const normalizePromptText = (value: unknown): string | null => {
   return text.match(/^to\s+/i) ? text : `to ${text}`;
 };
 
-const parseGeneratedPrompts = (payload: unknown): string[] | null => {
-  if (!isRecord(payload) || !Array.isArray(payload.prompts)) return null;
-  const prompts: string[] = [];
+const promptValue = (value: unknown): unknown => {
+  if (!isRecord(value)) return value;
+  return value.prompt ?? value.text ?? value.suffix;
+};
+
+const uniquePrompts = (prompts: unknown[], maxItems: number): string[] => {
+  const unique: string[] = [];
   const seen = new Set<string>();
-  for (const item of payload.prompts) {
-    const prompt = normalizePromptText(item);
-    if (!prompt) continue;
-    const key = normalizeGeneratedKey(prompt);
+  for (const prompt of prompts) {
+    const normalized = normalizePromptText(prompt);
+    if (!normalized) continue;
+    const key = normalizeGeneratedKey(normalized);
     if (!key || seen.has(key)) continue;
     seen.add(key);
-    prompts.push(prompt);
-    if (prompts.length >= 10) break;
+    unique.push(normalized);
+    if (unique.length >= maxItems) break;
   }
-  return prompts.length > 0 ? prompts : null;
+  return unique;
+};
+
+const parseGeneratedPrompts = (
+  payload: unknown,
+  minItems = 1,
+): string[] | null => {
+  if (!isRecord(payload) || !Array.isArray(payload.prompts)) return null;
+  const prompts = uniquePrompts(payload.prompts.map(promptValue), 10);
+  return prompts.length >= minItems ? prompts : null;
 };
 
 const generatedPromptsFromContent = (content: unknown): string[] =>
@@ -108,6 +121,9 @@ export const mostLikelyToModule: GameModule<MltState> = {
       topic,
       instructions: [
         `Create ${rounds} light, funny prompts that complete this sentence: "Who is most likely ...?"`,
+        "Every prompt must clearly depend on the topic.",
+        "Do not return generic personality or party prompts unless the topic asks for them.",
+        "Use concrete topic-specific nouns, people, events, products, places, or scenarios when they fit.",
         'Return each prompt as the suffix only, usually starting with "to".',
         "Avoid insults, sensitive traits, and anything that would embarrass one person too hard.",
       ].join(" "),
@@ -126,7 +142,7 @@ export const mostLikelyToModule: GameModule<MltState> = {
         required: ["prompts"],
       },
       maxOutputTokens: 220 + rounds * 60,
-      parse: parseGeneratedPrompts,
+      parse: (payload) => parseGeneratedPrompts(payload, rounds),
     });
   },
 

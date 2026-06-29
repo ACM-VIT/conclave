@@ -64,13 +64,46 @@ const PROMPT_BANK: Prompt[] = [
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   Boolean(value && typeof value === "object" && !Array.isArray(value));
 
-const parseGeneratedPrompts = (payload: unknown): Prompt[] | null => {
+const truncateAtWord = (text: string, maxLength: number): string => {
+  const clean = cleanGeneratedText(text, maxLength + 40);
+  if (!clean || clean.length <= maxLength) return clean ?? "";
+  const sliced = clean.slice(0, maxLength).replace(/\s+\S*$/g, "").trim();
+  return sliced || clean.slice(0, maxLength).trim();
+};
+
+const normalizeGeneratedQuestion = (question: string): string | null => {
+  const normalizedQuestion = question.replace(/_{3,}/g, "___");
+  const blankCount = normalizedQuestion.match(/___/g)?.length ?? 0;
+  if (blankCount === 1) {
+    const [before = "", after = ""] = normalizedQuestion.split("___");
+    const normalized = [
+      truncateAtWord(before, 116),
+      "___",
+      truncateAtWord(after, 36),
+    ]
+      .filter(Boolean)
+      .join(" ");
+    return (normalized.match(/___/g)?.length ?? 0) === 1
+      ? normalized
+      : null;
+  }
+  if (blankCount > 1) return null;
+  const trimmed = normalizedQuestion.replace(/[.?!]+$/g, "").trim();
+  const stem = truncateAtWord(trimmed, 154);
+  return stem ? `${stem} ___` : null;
+};
+
+const parseGeneratedPrompts = (
+  payload: unknown,
+  minItems = 1,
+): Prompt[] | null => {
   if (!isRecord(payload) || !Array.isArray(payload.prompts)) return null;
   const prompts: Prompt[] = [];
   const seen = new Set<string>();
   for (const item of payload.prompts) {
     if (!isRecord(item)) continue;
-    const question = cleanGeneratedText(item.question, 160);
+    const rawQuestion = cleanGeneratedText(item.question ?? item.prompt, 220);
+    const question = rawQuestion ? normalizeGeneratedQuestion(rawQuestion) : null;
     const answer = cleanGeneratedText(item.answer, MAX_ANSWER_LEN);
     if (!question || !answer || (question.match(/___/g)?.length ?? 0) !== 1) continue;
     const key = normalizeGeneratedKey(question);
@@ -79,7 +112,7 @@ const parseGeneratedPrompts = (payload: unknown): Prompt[] | null => {
     prompts.push({ question, answer });
     if (prompts.length >= 6) break;
   }
-  return prompts.length > 0 ? prompts : null;
+  return prompts.length >= minItems ? prompts : null;
 };
 
 const generatedPromptsFromContent = (content: unknown): Prompt[] =>
@@ -153,6 +186,9 @@ export const bluffModule: GameModule<BluffState> = {
       topic,
       instructions: [
         `Create ${rounds} obscure but fair fact prompts.`,
+        "Every prompt and answer must clearly depend on the topic.",
+        "Do not return generic trivia facts unless the topic asks for them.",
+        "Use concrete topic-specific nouns, people, events, products, places, or scenarios when they fit.",
         'Each question must contain "___" exactly where the answer belongs.',
         "Answers should be short enough that players can write believable fake answers.",
       ].join(" "),
@@ -179,7 +215,7 @@ export const bluffModule: GameModule<BluffState> = {
         required: ["prompts"],
       },
       maxOutputTokens: 320 + rounds * 90,
-      parse: parseGeneratedPrompts,
+      parse: (payload) => parseGeneratedPrompts(payload, rounds),
     });
   },
 

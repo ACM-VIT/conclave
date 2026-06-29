@@ -63,14 +63,24 @@ const WORD_SETS: WordSet[] = [
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   Boolean(value && typeof value === "object" && !Array.isArray(value));
 
-const parseGeneratedSet = (payload: unknown): WordSet | null => {
-  if (!isRecord(payload) || !isRecord(payload.set)) return null;
-  const category = cleanGeneratedText(payload.set.category, 40);
-  const words = cleanGeneratedStringArray(payload.set.words, {
+const generatedSetRecord = (payload: Record<string, unknown>): Record<string, unknown> | null => {
+  const set = payload.set ?? payload.wordSet ?? payload.category;
+  return isRecord(set) ? set : payload;
+};
+
+const parseGeneratedSet = (
+  payload: unknown,
+  minWords = 6,
+): WordSet | null => {
+  if (!isRecord(payload)) return null;
+  const set = generatedSetRecord(payload);
+  if (!set) return null;
+  const category = cleanGeneratedText(set.category ?? set.name, 40);
+  const words = cleanGeneratedStringArray(set.words ?? set.items ?? set.secretWords, {
     maxItems: 12,
     maxLength: 40,
   });
-  if (!category || words.length < 6) return null;
+  if (!category || words.length < minWords) return null;
   const categoryKey = normalizeGeneratedKey(category);
   if (!categoryKey) return null;
   return { category, words };
@@ -153,6 +163,9 @@ export const imposterModule: GameModule<ImposterState> = {
       topic,
       instructions: [
         `Create one imposter word set with ${wordCount} related secret words.`,
+        "The category and every secret word must clearly depend on the topic.",
+        "Do not return generic places, foods, animals, movies, jobs, or sports unless the topic asks for them.",
+        "Use concrete topic-specific nouns, people, events, products, places, or scenarios when they fit.",
         "The category should be broad enough that the imposter can bluff.",
         "Words should be familiar, distinct, and easy to describe out loud without saying the word.",
       ].join(" "),
@@ -179,7 +192,7 @@ export const imposterModule: GameModule<ImposterState> = {
         required: ["set"],
       },
       maxOutputTokens: 220 + wordCount * 30,
-      parse: parseGeneratedSet,
+      parse: (payload) => parseGeneratedSet(payload, wordCount),
     });
   },
 
