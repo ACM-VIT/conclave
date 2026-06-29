@@ -9,6 +9,7 @@ import {
   normalizeRoutedSfuUrl,
   normalizeSfuUrl,
   resolveSfuUrl,
+  resolveSfuUrls,
 } from "@/lib/sfu-url";
 
 export const runtime = "nodejs";
@@ -63,11 +64,21 @@ const CLOUDFLARE_TURN_CREDENTIALS_URL =
 const CLOUDFLARE_TURN_DEFAULT_TTL_SECONDS = 86400;
 const CLOUDFLARE_TURN_MAX_TTL_SECONDS = 86400;
 const CLOUDFLARE_TURN_REQUEST_TIMEOUT_MS = 1500;
+const SFU_ROUTING_REQUEST_TIMEOUT_MS = 1000;
+const SFU_STATUS_REQUEST_TIMEOUT_MS = 1000;
 
 type RoomRoutingResponse = {
+  local?: boolean;
   owner?: {
+    instanceId?: string;
     instanceUrl?: string;
   } | null;
+};
+
+type SfuStatusResponse = {
+  instanceId?: string;
+  draining?: boolean;
+  rooms?: number;
 };
 
 const splitUrls = (value: string | undefined): string[] =>
@@ -117,45 +128,173 @@ const isScheduledRoomId = (value: string): boolean =>
   /^sched-[a-f0-9]{8}$/i.test(value);
 
 let roomRoutingWarningLogged = false;
+let sfuStatusWarningLogged = false;
+
+const fetchWithTimeout = async (
+  input: string,
+  init: RequestInit,
+  timeoutMs: number,
+): Promise<Response> => {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(input, {
+      ...init,
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
+};
+
+const resolveRoomOwnerSfuUrl = async (options: {
+  candidateSfuUrls: string[];
+  secret: string;
+  clientId: string;
+  roomId: string;
+}): Promise<string | null> => {
+  const lookups = await Promise.allSettled(
+    options.candidateSfuUrls.map(async (candidateSfuUrl) => {
+      const routingUrl =
+        `${candidateSfuUrl}/routing/rooms/` +
+        `${encodeURIComponent(options.clientId)}/` +
+        encodeURIComponent(options.roomId);
+      const response = await fetchWithTimeout(
+        routingUrl,
+        {
+          method: "GET",
+          headers: {
+            "x-sfu-secret": options.secret,
+            accept: "application/json",
+          },
+          cache: "no-store",
+        },
+        SFU_ROUTING_REQUEST_TIMEOUT_MS,
+      );
+      if (!response.ok) {
+        return null;
+      }
+
+      const data = (await response.json()) as RoomRoutingResponse;
+      const ownerUrl = normalizeRoutedSfuUrl(data.owner?.instanceUrl);
+      if (ownerUrl) {
+        return ownerUrl;
+      }
+      if (data.owner && data.local) {
+        return candidateSfuUrl;
+      }
+      return null;
+    }),
+  );
+
+  let sawFailure = false;
+  for (const lookup of lookups) {
+    if (lookup.status === "rejected") {
+      sawFailure = true;
+      continue;
+    }
+    if (lookup.value) {
+      return lookup.value;
+    }
+  }
+
+  if (sawFailure && !roomRoutingWarningLogged) {
+    console.warn(
+      "[SFU Join] Some room routing lookups failed; continuing with available SFUs.",
+    );
+    roomRoutingWarningLogged = true;
+  }
+
+  return null;
+};
+
+const resolveNonDrainingSfuUrl = async (options: {
+  candidateSfuUrls: string[];
+  secret: string;
+}): Promise<string | null> => {
+  const statuses = await Promise.allSettled(
+    options.candidateSfuUrls.map(async (candidateSfuUrl, index) => {
+      const response = await fetchWithTimeout(
+        `${candidateSfuUrl}/status`,
+        {
+          method: "GET",
+          headers: {
+            "x-sfu-secret": options.secret,
+            accept: "application/json",
+          },
+          cache: "no-store",
+        },
+        SFU_STATUS_REQUEST_TIMEOUT_MS,
+      );
+      if (!response.ok) {
+        return null;
+      }
+
+      const status = (await response.json()) as SfuStatusResponse;
+      if (status.draining) {
+        return null;
+      }
+
+      const rooms =
+        typeof status.rooms === "number" && Number.isFinite(status.rooms)
+          ? status.rooms
+          : Number.MAX_SAFE_INTEGER;
+      return { index, rooms, url: candidateSfuUrl };
+    }),
+  );
+
+  let sawFailure = false;
+  const available = statuses.flatMap((status) => {
+    if (status.status === "rejected") {
+      sawFailure = true;
+      return [];
+    }
+    return status.value ? [status.value] : [];
+  });
+
+  if (available.length === 0) {
+    if (
+      (sawFailure || options.candidateSfuUrls.length > 1) &&
+      !sfuStatusWarningLogged
+    ) {
+      console.warn(
+        "[SFU Join] No non-draining SFU status response was available; falling back to the first configured SFU.",
+      );
+      sfuStatusWarningLogged = true;
+    }
+    return null;
+  }
+
+  available.sort((a, b) => a.rooms - b.rooms || a.index - b.index);
+  return available[0]?.url ?? null;
+};
+
 const resolveRoutedSfuUrl = async (options: {
-  baseSfuUrl: string;
+  candidateSfuUrls: string[];
   secret: string;
   clientId: string;
   roomId: string;
 }): Promise<string> => {
-  const baseSfuUrl = normalizeSfuUrl(options.baseSfuUrl);
-  try {
-    const routingUrl =
-      `${baseSfuUrl}/routing/rooms/` +
-      `${encodeURIComponent(options.clientId)}/` +
-      encodeURIComponent(options.roomId);
-    const response = await fetch(
-      routingUrl,
-      {
-        method: "GET",
-        headers: {
-          "x-sfu-secret": options.secret,
-          accept: "application/json",
-        },
-        cache: "no-store",
-      },
-    );
-    if (!response.ok) {
-      return baseSfuUrl;
-    }
+  const candidateSfuUrls = options.candidateSfuUrls
+    .map((url) => normalizeSfuUrl(url))
+    .filter(Boolean);
+  const fallbackSfuUrl = candidateSfuUrls[0] ?? normalizeSfuUrl(resolveSfuUrl());
 
-    const data = (await response.json()) as RoomRoutingResponse;
-    return normalizeRoutedSfuUrl(data.owner?.instanceUrl) ?? baseSfuUrl;
-  } catch (error) {
-    if (!roomRoutingWarningLogged) {
-      console.warn(
-        "[SFU Join] Room routing lookup failed; using default SFU URL.",
-        error,
-      );
-      roomRoutingWarningLogged = true;
-    }
-    return baseSfuUrl;
+  const ownerSfuUrl = await resolveRoomOwnerSfuUrl({
+    candidateSfuUrls,
+    secret: options.secret,
+    clientId: options.clientId,
+    roomId: options.roomId,
+  });
+  if (ownerSfuUrl) {
+    return ownerSfuUrl;
   }
+
+  const availableSfuUrl = await resolveNonDrainingSfuUrl({
+    candidateSfuUrls,
+    secret: options.secret,
+  });
+  return availableSfuUrl ?? fallbackSfuUrl;
 };
 
 const alwaysHostEmails = parseEmailList(
@@ -418,7 +557,7 @@ export async function POST(request: Request) {
 
   const secret = process.env.SFU_SECRET || "development-secret";
   const routedSfuUrl = await resolveRoutedSfuUrl({
-    baseSfuUrl: resolveSfuUrl(),
+    candidateSfuUrls: resolveSfuUrls(),
     secret,
     clientId,
     roomId,

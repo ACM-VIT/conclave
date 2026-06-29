@@ -38,6 +38,20 @@ Base routes live in `packages/sfu/server/http/createApp.ts`.
 | POST | `/drain` | toggle draining and optionally force-drain |
 | POST | `/admin/drain` | alias of `/drain` |
 
+### Draining + Multi-SFU Join Routing
+
+To let new meetings move from SFU A to SFU B while A drains:
+
+- Run all SFUs with the same `SFU_SECRET`.
+- Run all SFUs against the same Redis room registry (`SFU_REDIS_URL` or `REDIS_URL`) so room ownership is shared.
+- Give each SFU a unique `SFU_INSTANCE_ID` and a direct public `SFU_PUBLIC_URL`.
+- Configure the web app join endpoint with every SFU URL:
+  - `SFU_URLS=https://sfu-a.example.com,https://sfu-b.example.com`
+  - or `SFU_POOL=sfu-a=https://sfu-a.example.com,sfu-b=https://sfu-b.example.com`
+- Mark the old SFU draining with `POST /drain {"draining": true}` or `SFU_DRAINING=1`.
+
+The web `/api/sfu/join` endpoint still routes existing rooms to their recorded owner. For a room with no owner yet, it skips SFUs whose `/status` reports `draining: true` and chooses a non-draining instance.
+
 ### Cluster/Workers/Rooms
 
 | Method | Path | Purpose |
