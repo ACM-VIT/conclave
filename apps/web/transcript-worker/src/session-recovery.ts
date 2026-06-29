@@ -28,14 +28,21 @@ export const recoverPersistedTranscriptSession = (
   snapshotVersion: TranscriptServiceVersion | undefined,
   currentVersion: TranscriptServiceVersion,
 ): TranscriptSessionState => {
+  const recoveredSession: TranscriptSessionState = {
+    ...session,
+    transportMode:
+      session.transportMode === "sfu" || session.transportMode === "browser"
+        ? session.transportMode
+        : "browser",
+  };
   const serviceUpdated = shouldTreatAsServiceUpdate(
     snapshotVersion,
     currentVersion,
   );
 
-  if (ACTIVE_RECOVERY_STATUSES.has(session.status)) {
+  if (ACTIVE_RECOVERY_STATUSES.has(recoveredSession.status)) {
     return {
-      ...session,
+      ...recoveredSession,
       status: "takeover_needed",
       updatedAt: Date.now(),
       error: serviceUpdated
@@ -45,16 +52,16 @@ export const recoverPersistedTranscriptSession = (
   }
 
   if (
-    session.status === "takeover_needed" &&
+    recoveredSession.status === "takeover_needed" &&
     serviceUpdated &&
-    isLegacyControllerDisconnect(session.error)
+    isLegacyControllerDisconnect(recoveredSession.error)
   ) {
     return {
-      ...session,
+      ...recoveredSession,
       updatedAt: Date.now(),
       error: TRANSCRIPT_WORKER_UPDATED_MESSAGE,
     };
   }
 
-  return session;
+  return recoveredSession;
 };

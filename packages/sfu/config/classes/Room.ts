@@ -43,6 +43,15 @@ type ProducerIndexEntry = {
   system: boolean;
 };
 
+export type TranscriptAudioProducerEntry = {
+  producer: Producer;
+  producerId: string;
+  userId: string;
+  displayName: string;
+  type: ProducerType;
+  paused: boolean;
+};
+
 const WEBINAR_AUDIO_LEVEL_THRESHOLD = -70;
 const WEBINAR_AUDIO_LEVEL_INTERVAL_MS = 350;
 const CHAT_HISTORY_LIMIT = 100;
@@ -667,6 +676,32 @@ export class Room {
       return null;
     }
     return this.producerInfoFromIndexEntry(entry);
+  }
+
+  getTranscriptAudioProducerEntries(): TranscriptAudioProducerEntry[] {
+    const entries: TranscriptAudioProducerEntry[] = [];
+    for (const [producerId, entry] of this.producerIndex) {
+      if (!this.isProducerIndexEntryActive(producerId, entry)) {
+        this.producerIndex.delete(producerId);
+        continue;
+      }
+      if (entry.producer.kind !== "audio") {
+        continue;
+      }
+      const owner = this.clients.get(entry.userId);
+      if (!owner || owner.isGhost || owner.isWebinarAttendee) {
+        continue;
+      }
+      entries.push({
+        producer: entry.producer,
+        producerId,
+        userId: entry.userId,
+        displayName: this.getDisplayNameForUser(entry.userId) || entry.userId,
+        type: entry.type,
+        paused: entry.producer.paused,
+      });
+    }
+    return entries;
   }
 
   indexClientProducer(

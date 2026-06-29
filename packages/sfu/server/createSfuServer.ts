@@ -129,6 +129,7 @@ export const createSfuServer = (
     await socketAdapterLifecycle?.close();
     socketAdapterLifecycle = null;
     await state.roomRegistry.close();
+    state.transcriptRelays.closeAll();
     io.close();
 
     await new Promise<void>((resolve, reject) => {

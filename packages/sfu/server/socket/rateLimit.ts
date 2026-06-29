@@ -105,6 +105,8 @@ export const RATE_LIMITS = {
   chat: { capacity: 10, refillPerSec: 5 },
   // Transcript token minting is user-triggered but should tolerate reconnects.
   transcriptToken: { capacity: 8, refillPerSec: 1 },
+  // SFU transcript relay start/stop is heavier because it opens mediasoup consumers.
+  transcriptRelay: { capacity: 4, refillPerSec: 0.5 },
   // Reactions: ~5/s sustained, small burst.
   reaction: { capacity: 10, refillPerSec: 5 },
   // Hand raise toggles: low frequency.

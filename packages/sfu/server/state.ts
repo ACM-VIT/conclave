@@ -18,6 +18,10 @@ import {
   type SchedulingStore,
 } from "./scheduling.js";
 import { createRoomRegistry, type RoomRegistry } from "./roomRegistry.js";
+import {
+  createTranscriptRelayRegistry,
+  type TranscriptRelayRegistry,
+} from "./transcript/relayRegistry.js";
 
 export type EndedRoom = {
   roomId: string;
@@ -42,6 +46,7 @@ export type SfuState = {
   scheduling: SchedulingStore;
   schedulingPersistence: SchedulingPersistence | null;
   roomRegistry: RoomRegistry;
+  transcriptRelays: TranscriptRelayRegistry;
   isDraining: boolean;
 };
 
@@ -64,6 +69,7 @@ export const createSfuState = (options?: {
     scheduling: createSchedulingStore(),
     schedulingPersistence: null,
     roomRegistry: options?.roomRegistry ?? createRoomRegistry(config),
+    transcriptRelays: createTranscriptRelayRegistry(config.transcriptRelay),
     isDraining: options?.isDraining ?? config.draining,
   };
 };

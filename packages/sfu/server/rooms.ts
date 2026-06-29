@@ -164,6 +164,7 @@ const cleanupRoomState = (state: SfuState, channelId: string): Room | null => {
   }
 
   room.close();
+  state.transcriptRelays.stopRoom(room.channelId);
   state.rooms.delete(channelId);
   void state.roomRegistry.releaseRoom(channelId).catch((error) => {
     Logger.warn(`Failed to release room ownership for ${channelId}`, error);

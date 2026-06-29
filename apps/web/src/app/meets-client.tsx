@@ -2171,6 +2171,9 @@ export default function MeetsClient({
     isViewOnly: ghostEnabled,
     resolveDisplayName,
     getTranscriptToken: socket.getTranscriptToken,
+    getTranscriptSfuRelayStatus: socket.getTranscriptSfuRelayStatus,
+    startTranscriptSfuRelay: socket.startTranscriptSfuRelay,
+    stopTranscriptSfuRelay: socket.stopTranscriptSfuRelay,
   });
 
   useMeetGhostMode({

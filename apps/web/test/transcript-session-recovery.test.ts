@@ -29,6 +29,7 @@ const session = (
   },
   transcriptModel: "gpt-realtime-whisper",
   qaModel: "gpt-5.5",
+  transportMode: "browser",
   keySource: "global",
   startedAt: 1,
   updatedAt: 2,

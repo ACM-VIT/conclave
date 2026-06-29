@@ -1,6 +1,16 @@
 import type { TranscriptTokenPayload } from "./types";
 import { safeJsonParse } from "./utils";
 
+const TOKEN_HEADER = { alg: "HS256", typ: "JWT" };
+
+const base64UrlEncode = (value: Uint8Array | string): string => {
+  const binary =
+    typeof value === "string"
+      ? value
+      : String.fromCharCode(...Array.from(value));
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+};
+
 const base64UrlToBytes = (value: string): Uint8Array<ArrayBuffer> => {
   const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
   const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
@@ -10,6 +20,63 @@ const base64UrlToBytes = (value: string): Uint8Array<ArrayBuffer> => {
     bytes[index] = binary.charCodeAt(index);
   }
   return bytes;
+};
+
+const signHs256Jwt = async (
+  payload: TranscriptTokenPayload,
+  secret: string,
+): Promise<string> => {
+  const header = base64UrlEncode(JSON.stringify(TOKEN_HEADER));
+  const body = base64UrlEncode(JSON.stringify(payload));
+  const input = `${header}.${body}`;
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const signature = await crypto.subtle.sign(
+    "HMAC",
+    key,
+    new TextEncoder().encode(input),
+  );
+  return `${input}.${base64UrlEncode(new Uint8Array(signature))}`;
+};
+
+export const signTranscriptSfuRelayStartToken = async (
+  options: {
+    userId: string;
+    displayName: string;
+    roomId: string;
+    clientId?: string;
+    channelId?: string;
+    connectionId: string;
+  },
+  secret: string,
+  ttlSeconds = 30,
+): Promise<{ token: string; expiresAt: number }> => {
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  const expiresAt = (nowSeconds + ttlSeconds) * 1000;
+  const token = await signHs256Jwt(
+    {
+      iss: "conclave-transcript-worker",
+      aud: "conclave-sfu",
+      sub: options.userId,
+      tokenUse: "transcript:sfuRelayStart",
+      userId: options.userId,
+      displayName: options.displayName,
+      roomId: options.roomId,
+      clientId: options.clientId,
+      channelId: options.channelId,
+      connectionId: options.connectionId,
+      sessionStatus: "live",
+      transportMode: "sfu",
+      exp: nowSeconds + ttlSeconds,
+    },
+    secret,
+  );
+  return { token, expiresAt };
 };
 
 export const verifyTranscriptToken = async (

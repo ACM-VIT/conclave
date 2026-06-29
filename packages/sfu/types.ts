@@ -637,12 +637,53 @@ export interface TranscriptController {
   lastSeenAt: number;
 }
 
+export type TranscriptOpenAiKeySource = "controller" | "global";
+
+export type TranscriptTransportMode = "browser" | "sfu";
+
+export type TranscriptSfuRelayStatus =
+  | "available"
+  | "disabled"
+  | "unsupported"
+  | "error";
+
+export interface TranscriptSfuRelayStatusResponse {
+  mode: "sfu";
+  status: TranscriptSfuRelayStatus;
+  available: boolean;
+  reason?: string;
+  updatedAt: number;
+}
+
+export interface TranscriptSfuRelayStartResponse {
+  mode: "sfu";
+  success: boolean;
+  status: TranscriptSfuRelayStatus;
+  reason?: string;
+  updatedAt: number;
+}
+
+export interface TranscriptSfuRelayStartToken {
+  token: string;
+  expiresAt: number;
+}
+
+export interface TranscriptSfuRelayStartRequest {
+  relayStartToken: string;
+}
+
+export interface TranscriptSfuRelayStopResponse {
+  success: boolean;
+}
+
 export interface TranscriptSessionState {
   roomId: string;
   status: TranscriptSessionStatus;
   controller: TranscriptController | null;
   transcriptModel: string;
   qaModel: string;
+  transportMode: TranscriptTransportMode;
+  keySource?: TranscriptOpenAiKeySource | null;
   startedAt: number | null;
   updatedAt: number;
   error?: string | null;
@@ -727,6 +768,7 @@ export interface TranscriptTokenCapabilities {
   takeover: boolean;
   stop: boolean;
   ask: boolean;
+  relayAudio?: boolean;
 }
 
 export interface TranscriptTokenResponse {

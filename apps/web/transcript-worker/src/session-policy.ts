@@ -1,4 +1,7 @@
-import type { TranscriptSessionStatus } from "@conclave/meeting-core/transcript-types";
+import type {
+  TranscriptSessionStatus,
+  TranscriptTransportMode,
+} from "@conclave/meeting-core/transcript-types";
 
 export type TranscriptStartPermissionInput = {
   canStart: boolean;
@@ -72,3 +75,12 @@ export const shouldRequestControllerHandoff = (options: {
   }
   return true;
 };
+
+export const shouldRequestSfuRelayHandoff = (options: {
+  closingViewerCanRelayAudio: boolean;
+  sessionStatus: TranscriptSessionStatus | null | undefined;
+  transportMode: TranscriptTransportMode | null | undefined;
+}): boolean =>
+  options.closingViewerCanRelayAudio &&
+  options.transportMode === "sfu" &&
+  (options.sessionStatus === "live" || options.sessionStatus === "starting");

@@ -2,6 +2,7 @@ import type {
   TranscriptMinutesSnapshot,
   TranscriptSegment,
   TranscriptSegmentDelta,
+  TranscriptSfuRelayStartToken,
   TranscriptSessionState,
   TranscriptSpeaker,
 } from "@conclave/meeting-core/transcript-types";
@@ -16,7 +17,14 @@ import {
   MIN_OPENAI_COMMIT_AUDIO_SAMPLES,
   MIN_MINUTES_REFRESH_MS,
 } from "./constants";
-import { verifyTranscriptRoomToken } from "./auth";
+import {
+  signTranscriptSfuRelayStartToken,
+  verifyTranscriptRoomToken,
+} from "./auth";
+import {
+  canCommitPendingAudioForSpeaker,
+  isSameTranscriptAudioSpeaker,
+} from "./audio-speaker";
 import {
   createEmptyMinutes,
   fallbackMinutes,
@@ -43,6 +51,7 @@ import {
   canStopTranscriptSession,
   resolveTranscriptStartPermission,
   shouldRequestControllerHandoff,
+  shouldRequestSfuRelayHandoff,
 } from "./session-policy";
 import type {
   ClientEnvelope,
@@ -61,6 +70,7 @@ import {
   normalizeModel,
   normalizeRoomIdFromPath,
   normalizeSpeaker,
+  normalizeTransportMode,
   parsePositiveInt,
   redactSensitiveText,
   safeJsonParse,
@@ -75,6 +85,7 @@ const createIdleSession = (roomId: string): TranscriptSessionState => ({
   controller: null,
   transcriptModel: DEFAULT_TRANSCRIPT_MODEL,
   qaModel: DEFAULT_QA_MODEL,
+  transportMode: "browser",
   keySource: null,
   startedAt: null,
   updatedAt: Date.now(),
@@ -99,6 +110,8 @@ export class TranscriptRoom {
   private openAiSocket: WebSocket | null = null;
   private openAiGeneration = 0;
   private lastMinutesRefreshAt = 0;
+  private suppressSfuRelayDisconnectsUntil = 0;
+  private suppressSfuRelayDisconnectCount = 0;
 
   constructor(state: DurableObjectState, env: Env) {
     this.state = state;
@@ -135,11 +148,14 @@ export class TranscriptRoom {
       socket: server,
       userId: payload.userId!,
       displayName: payload.displayName || payload.userId!,
+      clientId: payload.clientId,
+      channelId: payload.channelId,
       capabilities: {
         start: payload.capabilities?.start !== false,
         takeover: payload.capabilities?.takeover !== false,
         stop: payload.capabilities?.stop === true,
         ask: payload.capabilities?.ask !== false,
+        relayAudio: payload.capabilities?.relayAudio === true,
       },
       connectedAt: Date.now(),
       rateLimits: {},
@@ -319,6 +335,9 @@ export class TranscriptRoom {
           minutes: this.minutes,
         });
         return;
+      case "relay.handoff.prepare":
+        this.prepareSfuRelayHandoff(viewer, message.id);
+        return;
       default:
         this.sendError(viewer, "Unsupported transcript message.");
     }
@@ -326,6 +345,28 @@ export class TranscriptRoom {
 
   private async handleClose(viewer: Viewer): Promise<void> {
     this.viewers.delete(viewer.socket);
+    if (
+      shouldRequestSfuRelayHandoff({
+        closingViewerCanRelayAudio: viewer.capabilities.relayAudio === true,
+        sessionStatus: this.session?.status,
+        transportMode: this.session?.transportMode,
+      })
+    ) {
+      if (this.consumeSuppressedSfuRelayDisconnect()) {
+        await this.armCleanupAlarm();
+        return;
+      }
+      this.markTakeoverNeeded("Transcript SFU relay disconnected.");
+      this.broadcast({
+        type: "handoff.requested",
+        session: this.session,
+        globalOpenAiKeyAvailable: this.hasGlobalOpenAiKey(),
+        serviceVersion: this.serviceVersion(),
+      });
+      await this.persist();
+      await this.armCleanupAlarm();
+      return;
+    }
     if (
       shouldRequestControllerHandoff({
         closingConnectionId: viewer.id,
@@ -382,6 +423,7 @@ export class TranscriptRoom {
       DEFAULT_TRANSCRIPT_MODEL,
     );
     const qaModel = normalizeModel(message.qaModel, DEFAULT_QA_MODEL);
+    const transportMode = normalizeTransportMode(message.transportMode);
     const wasIdle = existingStatus === "idle" || existingStatus === "error";
     this.apiKey = keyResolution.apiKey;
     this.session = {
@@ -396,6 +438,7 @@ export class TranscriptRoom {
       },
       transcriptModel,
       qaModel,
+      transportMode,
       keySource: keyResolution.source,
       startedAt: wasIdle ? now : (this.session?.startedAt ?? now),
       updatedAt: now,
@@ -429,6 +472,7 @@ export class TranscriptRoom {
         error: null,
       };
       this.broadcastSession();
+      await this.sendSfuRelayStartToken(viewer);
       await this.persist();
     } catch (error) {
       this.markTakeoverNeeded(
@@ -484,7 +528,7 @@ export class TranscriptRoom {
     audio: string | undefined,
     speaker: Partial<TranscriptSpeaker> | undefined,
   ): void {
-    if (!this.isController(viewer)) return;
+    if (!this.canRelayAudio(viewer)) return;
     if (!audio || !this.openAiSocket) return;
     const sampleCount = estimatePcm16Base64SampleCount(audio);
     if (sampleCount <= 0) return;
@@ -492,7 +536,7 @@ export class TranscriptRoom {
     if (
       this.hasPendingAudio &&
       this.latestSpeaker &&
-      !this.isSameAudioSpeaker(this.latestSpeaker, normalizedSpeaker) &&
+      !isSameTranscriptAudioSpeaker(this.latestSpeaker, normalizedSpeaker) &&
       !this.commitOpenAiBuffer(
         this.latestSpeaker,
         "Transcript speaker handoff failed.",
@@ -507,7 +551,7 @@ export class TranscriptRoom {
       this.latestSpeaker = normalizedSpeaker;
       this.hasPendingAudio = true;
       this.pendingAudioSamples += sampleCount;
-      if (this.session?.controller) {
+      if (this.isController(viewer) && this.session?.controller) {
         this.session.controller.lastSeenAt = Date.now();
       }
     } catch {
@@ -520,7 +564,7 @@ export class TranscriptRoom {
     speaker: Partial<TranscriptSpeaker> | undefined,
   ): void {
     if (
-      !this.isController(viewer) ||
+      !this.canRelayAudio(viewer) ||
       !this.openAiSocket ||
       !this.hasPendingAudio
     ) {
@@ -530,6 +574,11 @@ export class TranscriptRoom {
       speaker,
       this.latestSpeaker ?? viewer,
     );
+    if (
+      !canCommitPendingAudioForSpeaker(this.latestSpeaker, normalizedSpeaker)
+    ) {
+      return;
+    }
     this.latestSpeaker = normalizedSpeaker;
     this.commitOpenAiBuffer(normalizedSpeaker, "Transcript audio commit failed.");
   }
@@ -564,7 +613,7 @@ export class TranscriptRoom {
   }
 
   private clearAudio(viewer: Viewer): void {
-    if (!this.isController(viewer) || !this.openAiSocket) return;
+    if (!this.canRelayAudio(viewer) || !this.openAiSocket) return;
     if (this.hasPendingAudio && this.latestSpeaker) {
       this.commitOpenAiBuffer(
         this.latestSpeaker,
@@ -584,18 +633,68 @@ export class TranscriptRoom {
     this.pendingAudioSamples = 0;
   }
 
-  private isSameAudioSpeaker(
-    left: TranscriptSpeaker,
-    right: TranscriptSpeaker,
-  ): boolean {
-    return left.userId === right.userId && left.source === right.source;
-  }
-
   private isController(viewer: Viewer): boolean {
     const controller = this.session?.controller;
     if (!controller) return false;
     if (controller.connectionId) return controller.connectionId === viewer.id;
     return controller.userId === viewer.userId;
+  }
+
+  private canRelayAudio(viewer: Viewer): boolean {
+    if (this.isController(viewer)) return true;
+    return (
+      this.session?.transportMode === "sfu" &&
+      viewer.capabilities.relayAudio === true
+    );
+  }
+
+  private async sendSfuRelayStartToken(viewer: Viewer): Promise<void> {
+    if (
+      this.session?.status !== "live" ||
+      this.session.transportMode !== "sfu" ||
+      this.session.controller?.userId !== viewer.userId ||
+      this.session.controller.connectionId !== viewer.id
+    ) {
+      return;
+    }
+
+    const relayToken = await signTranscriptSfuRelayStartToken(
+      {
+        userId: viewer.userId,
+        displayName: viewer.displayName,
+        roomId: this.session.roomId,
+        clientId: viewer.clientId,
+        channelId: viewer.channelId,
+        connectionId: viewer.id,
+      },
+      this.env.TRANSCRIPT_TOKEN_SECRET,
+    );
+    this.send(viewer.socket, {
+      type: "sfu.relayStartToken",
+      ...relayToken,
+    } satisfies { type: "sfu.relayStartToken" } & TranscriptSfuRelayStartToken);
+  }
+
+  private prepareSfuRelayHandoff(viewer: Viewer, id?: string): void {
+    if (!this.canRelayAudio(viewer)) return;
+    this.suppressSfuRelayDisconnectsUntil = Date.now() + 5000;
+    this.suppressSfuRelayDisconnectCount += 1;
+    this.send(viewer.socket, {
+      type: "relay.handoff.ready",
+      id: trimText(id ?? "", 120),
+    });
+  }
+
+  private consumeSuppressedSfuRelayDisconnect(): boolean {
+    if (
+      this.suppressSfuRelayDisconnectCount <= 0 ||
+      Date.now() > this.suppressSfuRelayDisconnectsUntil
+    ) {
+      this.suppressSfuRelayDisconnectCount = 0;
+      return false;
+    }
+    this.suppressSfuRelayDisconnectCount -= 1;
+    return true;
   }
 
   private async connectOpenAi(options: {
@@ -1051,6 +1150,7 @@ export class TranscriptRoom {
         return "minutes";
       case "qa.ask":
         return "qa";
+      case "relay.handoff.prepare":
       case "session.start":
       case "session.stop":
       case "session.takeover":

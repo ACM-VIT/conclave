@@ -1,6 +1,7 @@
 import type {
   TranscriptAudioSource,
   TranscriptSpeaker,
+  TranscriptTransportMode,
 } from "@conclave/meeting-core/transcript-types";
 import {
   DEFAULT_LANGUAGE,
@@ -66,6 +67,10 @@ export const normalizeLocale = (value: unknown): string => {
     ? candidate
     : DEFAULT_TRANSCRIPTION_LOCALE;
 };
+
+export const normalizeTransportMode = (
+  value: unknown,
+): TranscriptTransportMode => (value === "sfu" ? "sfu" : "browser");
 
 export const normalizeSpeaker = (
   value: Partial<TranscriptSpeaker> | undefined,

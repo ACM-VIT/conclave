@@ -41,6 +41,10 @@ import type {
   DtlsParameters,
   RtpParameters,
   TransportResponse,
+  TranscriptSfuRelayStartResponse,
+  TranscriptSfuRelayStartRequest,
+  TranscriptSfuRelayStatusResponse,
+  TranscriptSfuRelayStopResponse,
   TranscriptTokenResponse,
   RestartIceResponse,
   Transport,
@@ -6215,6 +6219,84 @@ export function useMeetSocket({
       });
     }, [socketRef]);
 
+  const getTranscriptSfuRelayStatus =
+    useCallback((): Promise<TranscriptSfuRelayStatusResponse | null> => {
+      const socket = socketRef.current;
+      if (!socket) return Promise.resolve(null);
+
+      return new Promise((resolve) => {
+        socket.emit(
+          "transcript:sfuRelayStatus",
+          (response: TranscriptSfuRelayStatusResponse | { error: string }) => {
+            if ("error" in response) {
+              console.error(
+                "[Meets] Failed to fetch transcript SFU relay status:",
+                response.error,
+              );
+              resolve(null);
+              return;
+            }
+            resolve(response);
+          },
+        );
+      });
+    }, [socketRef]);
+
+  const startTranscriptSfuRelay =
+    useCallback((
+      request: TranscriptSfuRelayStartRequest,
+    ): Promise<TranscriptSfuRelayStartResponse | null> => {
+      const socket = socketRef.current;
+      if (!socket) return Promise.resolve(null);
+
+      return new Promise((resolve) => {
+        socket.emit(
+          "transcript:sfuRelayStart",
+          request,
+          (response: TranscriptSfuRelayStartResponse | { error: string }) => {
+            if ("error" in response) {
+              console.error(
+                "[Meets] Failed to start transcript SFU relay:",
+                response.error,
+              );
+              resolve({
+                mode: "sfu",
+                success: false,
+                status: "error",
+                reason: response.error,
+                updatedAt: Date.now(),
+              });
+              return;
+            }
+            resolve(response);
+          },
+        );
+      });
+    }, [socketRef]);
+
+  const stopTranscriptSfuRelay =
+    useCallback((): Promise<TranscriptSfuRelayStopResponse | null> => {
+      const socket = socketRef.current;
+      if (!socket) return Promise.resolve(null);
+
+      return new Promise((resolve) => {
+        socket.emit(
+          "transcript:sfuRelayStop",
+          (response: TranscriptSfuRelayStopResponse | { error: string }) => {
+            if ("error" in response) {
+              console.error(
+                "[Meets] Failed to stop transcript SFU relay:",
+                response.error,
+              );
+              resolve(null);
+              return;
+            }
+            resolve(response);
+          },
+        );
+      });
+    }, [socketRef]);
+
   const getMeetingConfig = useCallback(
     (): Promise<MeetingConfigSnapshot | null> => {
       const socket = socketRef.current;
@@ -6377,6 +6459,9 @@ export function useMeetSocket({
     toggleChatLock,
     endRoomForEveryone,
     getTranscriptToken,
+    getTranscriptSfuRelayStatus,
+    startTranscriptSfuRelay,
+    stopTranscriptSfuRelay,
     getMeetingConfig,
     updateMeetingConfig,
     getWebinarConfig,

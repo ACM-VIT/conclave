@@ -4,7 +4,9 @@ import type {
   TranscriptServiceVersion,
   TranscriptSpeaker,
   TranscriptSessionState,
+  TranscriptSessionStatus,
   TranscriptTokenCapabilities,
+  TranscriptTransportMode,
 } from "@conclave/meeting-core/transcript-types";
 import type { TranscriptRateLimitState } from "./rate-limit";
 
@@ -29,11 +31,16 @@ export type TranscriptTokenPayload = {
   aud?: string;
   exp?: number;
   sub?: string;
+  iss?: string;
+  tokenUse?: string;
   userId?: string;
   displayName?: string;
   roomId?: string;
   clientId?: string;
   channelId?: string;
+  connectionId?: string;
+  sessionStatus?: TranscriptSessionStatus;
+  transportMode?: TranscriptTransportMode;
   isAdmin?: boolean;
   isHost?: boolean;
   isGhost?: boolean;
@@ -45,6 +52,8 @@ export type Viewer = {
   socket: WebSocket;
   userId: string;
   displayName: string;
+  clientId?: string;
+  channelId?: string;
   capabilities: TranscriptTokenCapabilities;
   connectedAt: number;
   rateLimits: TranscriptRateLimitState;
@@ -64,6 +73,7 @@ export type ClientEnvelope =
       apiKey?: string;
       transcriptModel?: string;
       qaModel?: string;
+      transportMode?: TranscriptTransportMode;
       language?: string;
       delay?: string;
     }
@@ -77,7 +87,8 @@ export type ClientEnvelope =
   | { type: "audio.clear"; speaker?: Partial<TranscriptSpeaker> }
   | { type: "qa.ask"; id?: string; question?: string; model?: string }
   | { type: "minutes.refresh" }
-  | { type: "export.snapshot" };
+  | { type: "export.snapshot" }
+  | { type: "relay.handoff.prepare"; id?: string };
 
 export type SessionStartEnvelope = Extract<
   ClientEnvelope,

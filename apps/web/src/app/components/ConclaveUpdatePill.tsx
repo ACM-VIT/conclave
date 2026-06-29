@@ -1,6 +1,6 @@
 "use client";
 
-import { RefreshCw } from "lucide-react";
+import { RefreshCw, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   type ConclaveSiteVersion,
@@ -10,6 +10,7 @@ import {
 } from "../lib/site-version";
 
 const VERSION_POLL_INTERVAL_MS = 30_000;
+const AUTO_DISMISS_MS = 15_000;
 
 const shouldIgnoreVersion = (version: ConclaveSiteVersion): boolean =>
   version.id === "local";
@@ -21,6 +22,7 @@ export function ConclaveUpdatePill() {
   const [availableVersion, setAvailableVersion] =
     useState<ConclaveSiteVersion | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isDismissed, setIsDismissed] = useState(false);
 
   const checkVersion = useCallback(async () => {
     try {
@@ -71,19 +73,34 @@ export function ConclaveUpdatePill() {
     };
   }, [checkVersion]);
 
+  // Auto-dismiss the pill a short while after it appears.
+  useEffect(() => {
+    if (!availableVersion || isDismissed) return;
+
+    const timeoutId = window.setTimeout(
+      () => setIsDismissed(true),
+      AUTO_DISMISS_MS,
+    );
+    return () => window.clearTimeout(timeoutId);
+  }, [availableVersion, isDismissed]);
+
   const handleRefresh = useCallback(() => {
     setIsRefreshing(true);
     window.location.reload();
   }, []);
 
-  if (!availableVersion) return null;
+  const handleDismiss = useCallback(() => {
+    setIsDismissed(true);
+  }, []);
+
+  if (!availableVersion || isDismissed) return null;
 
   const versionLabel = formatConclaveSiteVersionLabel(availableVersion);
 
   return (
     <div
       aria-live="polite"
-      className="pointer-events-none fixed bottom-[calc(env(safe-area-inset-bottom,0px)+6.25rem)] left-1/2 z-[80] w-[min(calc(100vw-1.5rem),28rem)] -translate-x-1/2 sm:bottom-[calc(env(safe-area-inset-bottom,0px)+5.75rem)]"
+      className="pointer-events-none fixed top-[calc(env(safe-area-inset-top,0px)+0.75rem)] left-1/2 z-[80] w-[min(calc(100vw-1.5rem),28rem)] -translate-x-1/2"
     >
       <div
         className="pointer-events-auto mx-auto flex w-fit max-w-full items-center gap-2 rounded-full border border-white/10 bg-[#0a0a0b]/90 px-3 py-2 text-[12px] font-medium text-[#fafafa] shadow-[0_8px_24px_rgba(0,0,0,0.35)] backdrop-blur-xl"
@@ -97,13 +114,21 @@ export function ConclaveUpdatePill() {
           type="button"
           onClick={handleRefresh}
           disabled={isRefreshing}
-          className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.06] px-2.5 text-[11px] font-semibold text-[#fafafa] transition-colors hover:bg-white/[0.12] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#F95F4A] disabled:cursor-wait disabled:opacity-70"
+          className="group inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.06] px-2.5 text-[11px] font-semibold text-[#fafafa] transition-colors hover:bg-white/[0.12] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#F95F4A] disabled:cursor-wait disabled:opacity-70"
         >
           <RefreshCw
             aria-hidden="true"
-            className={`h-3.5 w-3.5 ${isRefreshing ? "animate-spin" : ""}`}
+            className={`h-3.5 w-3.5 transition-transform duration-500 ease-out group-hover:rotate-180 ${isRefreshing ? "animate-spin" : ""}`}
           />
           <span>{isRefreshing ? "Refreshing" : "Refresh"}</span>
+        </button>
+        <button
+          type="button"
+          onClick={handleDismiss}
+          aria-label="Dismiss"
+          className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[#fafafa]/70 transition-colors hover:bg-white/[0.12] hover:text-[#fafafa] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#F95F4A]"
+        >
+          <X aria-hidden="true" className="h-3.5 w-3.5" />
         </button>
       </div>
     </div>

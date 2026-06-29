@@ -31,6 +31,7 @@ import {
 import type {
   TranscriptMinutesEntry,
   TranscriptSegment,
+  TranscriptTransportMode,
 } from "../lib/types";
 import { formatTranscriptTimestamp } from "../lib/transcript-reducer";
 import {
@@ -159,6 +160,9 @@ function StartStage({
     transcript.session.transcriptModel,
   );
   const [qaModel, setQaModel] = useState(transcript.session.qaModel);
+  const [transportMode, setTransportMode] = useState<TranscriptTransportMode>(
+    transcript.session.transportMode,
+  );
   const [isSubmitting, setIsSubmitting] = useState(false);
   const needsTakeover = transcript.session.status === "takeover_needed";
   const isOnTheHouse = transcript.hasGlobalOpenAiKey;
@@ -169,7 +173,12 @@ function StartStage({
   useEffect(() => {
     setTranscriptModel(transcript.session.transcriptModel);
     setQaModel(transcript.session.qaModel);
-  }, [transcript.session.qaModel, transcript.session.transcriptModel]);
+    setTransportMode(transcript.session.transportMode);
+  }, [
+    transcript.session.qaModel,
+    transcript.session.transcriptModel,
+    transcript.session.transportMode,
+  ]);
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -179,6 +188,7 @@ function StartStage({
       apiKey: isOnTheHouse ? undefined : apiKey,
       transcriptModel,
       qaModel,
+      transportMode,
     };
     const ok = needsTakeover
       ? await transcript.takeover(startOptions)
@@ -272,6 +282,34 @@ function StartStage({
                   ))}
                 </select>
               </label>
+            </div>
+            <div className="space-y-1 text-left">
+              <span className="block px-0.5 text-[11px] text-[#a1a1aa]">
+                Audio route
+              </span>
+              <div className="grid grid-cols-2 gap-1 rounded-xl border border-white/10 bg-black/20 p-1">
+                {(["browser", "sfu"] as const).map((mode) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    onClick={() => setTransportMode(mode)}
+                    disabled={isSubmitting}
+                    className={[
+                      "h-8 rounded-lg text-[12px] font-semibold transition-colors disabled:opacity-60",
+                      transportMode === mode
+                        ? "bg-white/[0.12] text-[#fafafa]"
+                        : "text-[#a1a1aa] hover:bg-white/[0.06] hover:text-[#fafafa]",
+                    ].join(" ")}
+                  >
+                    {mode === "browser" ? "Client audio" : "SFU relay"}
+                  </button>
+                ))}
+              </div>
+              {transportMode === "sfu" && transcript.sfuRelayStatus?.reason ? (
+                <p className="px-0.5 text-[11px] leading-snug text-[#fda29b]">
+                  {transcript.sfuRelayStatus.reason}
+                </p>
+              ) : null}
             </div>
             <button
               type="submit"
@@ -773,7 +811,8 @@ export default function TranscriptPanel({
             </h2>
             {isRunning && session.controller ? (
               <p className="mt-0.5 truncate text-[11.5px] text-[#a1a1aa]">
-                Hosted by {session.controller.displayName}
+                Hosted by {session.controller.displayName} ·{" "}
+                {session.transportMode === "sfu" ? "SFU relay" : "Client audio"}
                 {session.keySource === "global" ? "" : ""}
               </p>
             ) : transcript.isViewOnly ? (
@@ -860,7 +899,11 @@ export default function TranscriptPanel({
               <span className="truncate">
                 {session.status !== "live"
                   ? "Connecting"
-                  : transcript.isController
+                  : session.transportMode === "sfu"
+                    ? transcript.isController
+                      ? "SFU relay listening"
+                      : "Following SFU relay"
+                    : transcript.isController
                     ? transcript.isStreamingAudio
                       ? "Listening to the room"
                       : "Connecting audio"

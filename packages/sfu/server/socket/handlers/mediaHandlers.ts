@@ -383,6 +383,9 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
           }
 
           emitWebinarFeedChanged(io, state, activeRoom);
+          if (kind === "audio") {
+            void state.transcriptRelays.syncRoom(activeRoom);
+          }
         };
 
         producer.on("transportclose", notifyProducerClosed);
@@ -417,6 +420,9 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
             }
           }
           emitWebinarFeedChanged(io, state, activeRoom);
+          if (kind === "audio") {
+            void state.transcriptRelays.syncRoom(activeRoom);
+          }
         };
 
         producer.observer.on("pause", () => {
@@ -437,6 +443,9 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
           producer,
           type,
         );
+        if (kind === "audio") {
+          void state.transcriptRelays.syncRoom(room);
+        }
 
         const activeRoom = state.rooms.get(roomChannelId);
         const activeClient = activeRoom?.getClient(clientId);
@@ -1004,6 +1013,9 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
             });
           }
           emitWebinarFeedChanged(io, state, context.currentRoom);
+          if (removed.kind === "audio") {
+            void state.transcriptRelays.syncRoom(context.currentRoom);
+          }
 
           respond(callback, { success: true });
           return;

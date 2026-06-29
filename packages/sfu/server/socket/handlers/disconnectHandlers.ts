@@ -74,6 +74,12 @@ export const registerDisconnectHandlers = (
         }
 
         activeRoom.removeClient(userId);
+        state.transcriptRelays.stopRoomForUser({
+          roomKey: activeRoom.channelId,
+          userId,
+          canStopAnyRelay: false,
+        });
+        void state.transcriptRelays.syncRoom(activeRoom);
         if (isGhost) {
           emitUserLeft(activeRoom, userId, {
             ghostOnly: true,

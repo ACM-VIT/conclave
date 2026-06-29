@@ -4,6 +4,7 @@ import {
   canStopTranscriptSession,
   resolveTranscriptStartPermission,
   shouldRequestControllerHandoff,
+  shouldRequestSfuRelayHandoff,
 } from "../transcript-worker/src/session-policy";
 
 describe("resolveTranscriptStartPermission", () => {
@@ -126,5 +127,34 @@ describe("shouldRequestControllerHandoff", () => {
         remainingUserIds: ["viewer"],
       }),
     ).toBe(true);
+  });
+});
+
+describe("shouldRequestSfuRelayHandoff", () => {
+  it("requests handoff when the SFU audio relay disconnects during a live SFU session", () => {
+    expect(
+      shouldRequestSfuRelayHandoff({
+        closingViewerCanRelayAudio: true,
+        sessionStatus: "live",
+        transportMode: "sfu",
+      }),
+    ).toBe(true);
+  });
+
+  it("ignores relay-capable viewers outside active SFU mode", () => {
+    expect(
+      shouldRequestSfuRelayHandoff({
+        closingViewerCanRelayAudio: true,
+        sessionStatus: "live",
+        transportMode: "browser",
+      }),
+    ).toBe(false);
+    expect(
+      shouldRequestSfuRelayHandoff({
+        closingViewerCanRelayAudio: true,
+        sessionStatus: "idle",
+        transportMode: "sfu",
+      }),
+    ).toBe(false);
   });
 });

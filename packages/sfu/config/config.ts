@@ -235,6 +235,9 @@ const gameAiWebSearchContextSize = (() => {
   const configured = process.env.SFU_GAME_AI_WEB_SEARCH_CONTEXT_SIZE?.trim();
   return configured === "medium" || configured === "high" ? configured : "low";
 })();
+const transcriptRelayDisabled =
+  process.env.SFU_TRANSCRIPT_RELAY_ENABLED === "0" ||
+  process.env.SFU_TRANSCRIPT_RELAY_ENABLED?.toLowerCase() === "false";
 const instancePublicUrl =
   process.env.SFU_PUBLIC_URL?.trim() ||
   process.env.SFU_INSTANCE_URL?.trim() ||
@@ -336,6 +339,9 @@ export const config = {
     }),
     webSearchEnabled: !gameAiWebSearchDisabled,
     webSearchContextSize: gameAiWebSearchContextSize as "low" | "medium" | "high",
+  },
+  transcriptRelay: {
+    enabled: !transcriptRelayDisabled,
   },
   workerSettings: {
     workerCount: toNumber(process.env.SFU_WORKER_COUNT, 0, {
