@@ -3,7 +3,7 @@
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Dispatch, PointerEvent, SetStateAction } from "react";
-import { LogOut, RefreshCw } from "lucide-react";
+import { Home, LogOut, Plus, RefreshCw } from "lucide-react";
 import type { Socket } from "socket.io-client";
 import type { RoomInfo } from "@/lib/sfu-types";
 import ChatOverlay from "./ChatOverlay";
@@ -167,6 +167,8 @@ interface MeetsMainContentProps {
   sendReaction: (reaction: ReactionOption) => void;
   leaveRoom: () => void;
   endRoomForEveryone?: () => Promise<boolean> | boolean;
+  onGoHome?: () => void;
+  onStartNewMeeting?: () => void;
   isParticipantsOpen: boolean;
   setIsParticipantsOpen: Dispatch<SetStateAction<boolean>>;
   pendingUsers: Map<string, string>;
@@ -410,6 +412,8 @@ export default function MeetsMainContent({
   sendReaction,
   leaveRoom,
   endRoomForEveryone,
+  onGoHome,
+  onStartNewMeeting,
   isParticipantsOpen,
   setIsParticipantsOpen,
   pendingUsers,
@@ -1348,7 +1352,7 @@ export default function MeetsMainContent({
                 </p>
               </div>
             ) : null}
-            <div className="mt-5 flex items-center justify-center gap-2.5">
+            <div className="mt-5 flex flex-wrap items-center justify-center gap-2.5">
               {canRetryRecovery ? (
                 <button
                   type="button"
@@ -1374,13 +1378,27 @@ export default function MeetsMainContent({
                       : "Retry now"}
                 </button>
               ) : null}
+              {isTerminalMeetingError && onStartNewMeeting ? (
+                <button
+                  type="button"
+                  onClick={onStartNewMeeting}
+                  className="inline-flex h-9 items-center justify-center gap-2 rounded-full border border-[#F95F4A]/45 bg-[#F95F4A]/20 px-4 text-[12.5px] font-medium text-[#fafafa] transition-all hover:border-[#F95F4A]/70 hover:bg-[#F95F4A]/35"
+                >
+                  <Plus size={14} strokeWidth={1.8} />
+                  New Meeting
+                </button>
+              ) : null}
               <button
                 type="button"
-                onClick={leaveRoom}
+                onClick={isTerminalMeetingError ? (onGoHome ?? leaveRoom) : leaveRoom}
                 className="inline-flex h-9 items-center justify-center gap-2 rounded-full border border-[#fafafa]/15 px-4 text-[12.5px] font-medium text-[#fafafa]/76 transition-all hover:border-[#fafafa]/35 hover:bg-[#fafafa]/10 hover:text-[#fafafa]"
               >
-                <LogOut size={14} strokeWidth={1.8} />
-                Leave
+                {isTerminalMeetingError ? (
+                  <Home size={14} strokeWidth={1.8} />
+                ) : (
+                  <LogOut size={14} strokeWidth={1.8} />
+                )}
+                {isTerminalMeetingError ? "Go home" : "Leave"}
               </button>
             </div>
           </section>

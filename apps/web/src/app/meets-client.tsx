@@ -78,6 +78,7 @@ import {
   prewarmVideoEffectsRuntimeDeferred,
 } from "./lib/video-effects-lazy";
 import {
+  generateRoomCode,
   isSystemUserId,
   sanitizeInstitutionDisplayName,
   sanitizeRoomCode,
@@ -389,6 +390,8 @@ export default function MeetsClient({
   const [currentUser, setCurrentUser] = useState<MeetUser | undefined>(user);
   const [currentIsAdmin, setCurrentIsAdmin] = useState(isAdmin);
   const [currentCanGhostJoin, setCurrentCanGhostJoin] = useState(canGhostJoin);
+  const [pendingNewMeetingRoomId, setPendingNewMeetingRoomId] =
+    useState<string | null>(null);
   const [guestStorageReady, setGuestStorageReady] = useState(false);
   const [isSigningOut, setIsSigningOut] = useState(false);
   const [appsSocket, setAppsSocket] = useState<Socket | null>(null);
@@ -2334,6 +2337,57 @@ export default function MeetsClient({
     void getWebinarConfig?.();
   }, [connectionState, isAdminFlag, getMeetingConfig, getWebinarConfig]);
 
+  const handleGoHome = useCallback(() => {
+    handleStopVoiceAgent();
+    socket.cleanup();
+    setMeetError(null);
+    setWaitingMessage(null);
+    setPendingNewMeetingRoomId(null);
+    setCurrentIsAdmin(false);
+    setIsGhostMode(false);
+    setRoomId("");
+    if (typeof window !== "undefined") {
+      window.location.assign("/");
+    }
+  }, [
+    handleStopVoiceAgent,
+    setIsGhostMode,
+    setMeetError,
+    setRoomId,
+    setWaitingMessage,
+    socket.cleanup,
+  ]);
+
+  const handleStartNewMeeting = useCallback(() => {
+    const targetRoomId = generateRoomCode();
+    handleStopVoiceAgent();
+    socket.cleanup();
+    setMeetError(null);
+    setWaitingMessage(null);
+    setIsGhostMode(false);
+    setCurrentIsAdmin(true);
+    setRoomId(targetRoomId);
+    if (enableRoomRouting && typeof window !== "undefined") {
+      window.history.pushState(null, "", `/${targetRoomId}`);
+    }
+    setPendingNewMeetingRoomId(targetRoomId);
+  }, [
+    enableRoomRouting,
+    handleStopVoiceAgent,
+    setIsGhostMode,
+    setMeetError,
+    setRoomId,
+    setWaitingMessage,
+    socket.cleanup,
+  ]);
+
+  useEffect(() => {
+    if (!pendingNewMeetingRoomId || !isAdminFlag) return;
+    const targetRoomId = pendingNewMeetingRoomId;
+    setPendingNewMeetingRoomId(null);
+    void joinRoomById(targetRoomId);
+  }, [isAdminFlag, joinRoomById, pendingNewMeetingRoomId]);
+
   const handleSignOut = useCallback(async () => {
     if (isSigningOut) return;
     setIsSigningOut(true);
@@ -2871,6 +2925,10 @@ export default function MeetsClient({
         sendReaction={sendReaction}
         leaveRoom={leaveRoom}
         endRoomForEveryone={socket.endRoomForEveryone}
+        onGoHome={handleGoHome}
+        onStartNewMeeting={
+          joinMode === "meeting" ? handleStartNewMeeting : undefined
+        }
         isParticipantsOpen={isParticipantsOpen}
         setIsParticipantsOpen={setIsParticipantsOpen}
         pendingUsers={pendingUsers}
