@@ -318,6 +318,11 @@ assertIncludes(
   "web screen share maintain-resolution preference",
 );
 assertIncludes(
+  "webCodec",
+  'const SCREEN_SHARE_RTP_PRIORITY: RTCPriorityType = "high";',
+  "web screen share sender priority beats webcam under congestion",
+);
+assertIncludes(
   "iosWebrtc",
   "next.degradationPreference = .maintainResolution",
   "iOS screen share maintain-resolution preference",

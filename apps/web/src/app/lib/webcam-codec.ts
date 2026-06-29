@@ -161,7 +161,7 @@ const WEBCAM_DEGRADATION_PREFERENCE: RTCDegradationPreference =
 const SCREEN_SHARE_DEGRADATION_PREFERENCE: RTCDegradationPreference =
   "maintain-resolution";
 const AUDIO_RTP_PRIORITY: RTCPriorityType = "high";
-const SCREEN_SHARE_RTP_PRIORITY: RTCPriorityType = "medium";
+const SCREEN_SHARE_RTP_PRIORITY: RTCPriorityType = "high";
 const WEBRTC_ENCODING_ORDER = ["q", "h", "f"] as const;
 const MIN_CRISP_BASE_LAYER_WIDTH = 300;
 const MIN_CRISP_BASE_LAYER_HEIGHT = 160;
