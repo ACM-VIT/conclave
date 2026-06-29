@@ -123,6 +123,16 @@ assertRegex(
   "web screen-audio Opus tracks microphone ladder",
 );
 assertRegex(
+  "webMeetMedia",
+  /buildScreenShareAudioOpusCodecOptions\([\s\S]*screenNetworkProfile[\s\S]*applyAudioProducerNetworkProfile\([\s\S]*audioProducer,[\s\S]*"screen",[\s\S]*screenNetworkProfile/,
+  "web screen audio initial publish immediately applies RTP network profile",
+);
+assertRegex(
+  "webMeetSocket",
+  /buildScreenShareAudioOpusCodecOptions\([\s\S]*screenNetworkProfile[\s\S]*applyAudioProducerNetworkProfile\([\s\S]*audioProducer,[\s\S]*"screen",[\s\S]*screenNetworkProfile/,
+  "web screen audio reconnect publish immediately applies RTP network profile",
+);
+assertRegex(
   "iosWebrtc",
   /case \.emergency:\s*return 18_000[\s\S]*case \.poor:\s*return 24_000[\s\S]*case \.fair:\s*return 32_000/,
   "iOS microphone Opus constrained ladder",

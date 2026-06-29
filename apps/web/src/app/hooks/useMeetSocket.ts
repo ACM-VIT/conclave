@@ -61,6 +61,7 @@ import { createMeetError, isSystemUserId, normalizeDisplayName } from "../lib/ut
 import { normalizeChatMessage } from "../lib/chat-commands";
 import { telemetry } from "../lib/telemetry";
 import {
+  applyAudioProducerNetworkProfile,
   applyScreenShareTrackNetworkProfile,
   buildScreenShareEncodingForNetworkProfile,
   getPreferredScreenShareCodec,
@@ -1065,6 +1066,18 @@ export function useMeetSocket({
             stopTracks: false,
             appData: { type: "screen" as ProducerType },
           });
+          try {
+            await applyAudioProducerNetworkProfile(
+              audioProducer,
+              "screen",
+              screenNetworkProfile,
+            );
+          } catch (profileErr) {
+            console.warn(
+              "[Meets] Failed to restore screen audio network profile:",
+              profileErr,
+            );
+          }
           if (
             screenVideoEnded ||
             videoTrack.readyState !== "live" ||

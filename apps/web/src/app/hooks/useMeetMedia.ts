@@ -32,6 +32,7 @@ import {
 } from "../lib/captured-surface-control";
 import { prewarmVideoEffectsAssetsDeferred } from "../lib/video-effects-lazy";
 import {
+  applyAudioProducerNetworkProfile,
   applyWebcamProducerNetworkProfile,
   applyScreenShareTrackNetworkProfile,
   buildScreenShareEncodingForNetworkProfile,
@@ -3162,6 +3163,18 @@ export function useMeetMedia({
             stopTracks: false,
             appData: { type: "screen" as ProducerType },
           });
+          try {
+            await applyAudioProducerNetworkProfile(
+              audioProducer,
+              "screen",
+              screenNetworkProfile,
+            );
+          } catch (profileErr) {
+            console.warn(
+              "[Meets] Failed to apply screen audio network profile:",
+              profileErr,
+            );
+          }
 
           if (
             screenVideoEnded ||
