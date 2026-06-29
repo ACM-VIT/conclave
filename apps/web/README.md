@@ -23,7 +23,7 @@ The meeting transcript dock uses a Cloudflare Durable Object worker in
 
 Required production configuration:
 - `TRANSCRIPT_TOKEN_SECRET`: shared by the SFU and transcript worker for token verification.
-- `TRANSCRIPT_WORKER_URL`: SFU-facing worker URL. `NEXT_PUBLIC_TRANSCRIPT_WORKER_URL` is accepted as a fallback for local environments.
+- `TRANSCRIPT_WORKER_URL`: SFU-facing worker URL. Production uses `https://transcribe.conclave.acmvit.in`. `NEXT_PUBLIC_TRANSCRIPT_WORKER_URL` is accepted as a fallback for local environments.
 - `TRANSCRIPT_ALLOWED_ORIGIN`: optional worker CORS/origin lock for browser WebSocket upgrades.
 
 Optional worker configuration:
@@ -42,6 +42,14 @@ session. It stays in Durable Object memory, is not persisted to Durable Object
 storage, and is redacted from worker errors before responses are sent.
 
 Deployment and verification:
+- Production Worker name: `conclave-transcript`
+- Production Worker domain: `https://transcribe.conclave.acmvit.in`
 - Dry-run deploy: `pnpm -C apps/web exec wrangler deploy --config wrangler.transcript.jsonc --dry-run`
 - Deploy: `pnpm -C apps/web run transcript:deploy`
 - Required gates: `pnpm -C apps/web run lint`, `pnpm -C apps/web exec tsc --noEmit`, `pnpm -C apps/web run transcript:typecheck`, and `pnpm -C apps/web run test:unit`.
+
+Cloudflare main-branch linking:
+- Config file: `apps/web/wrangler.transcript.jsonc`
+- Build/deploy command: `pnpm -C apps/web run transcript:deploy`
+- Required Cloudflare secret: `TRANSCRIPT_TOKEN_SECRET`
+- Branch: `main`
