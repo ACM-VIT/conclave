@@ -62,7 +62,7 @@ const CLOUDFLARE_TURN_CREDENTIALS_URL =
   "https://rtc.live.cloudflare.com/v1/turn/keys";
 const CLOUDFLARE_TURN_DEFAULT_TTL_SECONDS = 86400;
 const CLOUDFLARE_TURN_MAX_TTL_SECONDS = 86400;
-const CLOUDFLARE_TURN_REQUEST_TIMEOUT_MS = 5000;
+const CLOUDFLARE_TURN_REQUEST_TIMEOUT_MS = 1500;
 
 type RoomRoutingResponse = {
   owner?: {
@@ -337,6 +337,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Missing session ID" }, { status: 400 });
   }
 
+  const iceServersPromise = resolveIceServers();
   const clientId = resolveClientId(request, body);
   const joinMode =
     body?.joinMode === "webinar_attendee" ? "webinar_attendee" : "meeting";
@@ -440,7 +441,7 @@ export async function POST(request: Request) {
     { expiresIn: "12h" },
   );
 
-  const iceServers = await resolveIceServers();
+  const iceServers = await iceServersPromise;
 
   return NextResponse.json({
     token,
