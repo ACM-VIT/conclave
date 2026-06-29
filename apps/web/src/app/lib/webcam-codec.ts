@@ -796,26 +796,35 @@ export async function applyScreenShareTrackNetworkProfile(
 ): Promise<void> {
   if (!track || track.readyState !== "live") return;
 
+  const constraints = buildScreenShareVideoConstraintsForNetworkProfile(
+    profile,
+  );
+
   try {
-    const constraints = buildScreenShareVideoConstraintsForNetworkProfile(
-      profile,
-    );
     await track.applyConstraints({
       frameRate: constraints.frameRate,
-      ...(profile === "good"
-        ? {}
-        : {
-            width: constraints.width,
-            height: constraints.height,
-          }),
     });
   } catch (error) {
     if (profile !== "good") {
       console.debug(
-        "[Meets] Screen-share capture network constraints were not applied:",
+        "[Meets] Screen-share capture frame-rate cap was not applied:",
         error,
       );
     }
+  }
+
+  if (profile === "good" || track.readyState !== "live") return;
+
+  try {
+    await track.applyConstraints({
+      width: constraints.width,
+      height: constraints.height,
+    });
+  } catch (error) {
+    console.debug(
+      "[Meets] Screen-share capture dimension cap was not applied:",
+      error,
+    );
   }
 }
 

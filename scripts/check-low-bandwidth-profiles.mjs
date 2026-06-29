@@ -333,9 +333,19 @@ assertRegex(
   "web screen share RTP encoding scales oversized captures and explicitly restores full resolution",
 );
 assertRegex(
+  "webCodec",
+  /applyScreenShareTrackNetworkProfile[\s\S]*applyConstraints\(\{[\s\S]*frameRate: constraints\.frameRate[\s\S]*frame-rate cap was not applied[\s\S]*if \(profile === "good" \|\| track\.readyState !== "live"\) return;[\s\S]*applyConstraints\(\{[\s\S]*width: constraints\.width,[\s\S]*height: constraints\.height,[\s\S]*dimension cap was not applied/,
+  "web screen-share frame-rate cap is independent from dimension cap failures",
+);
+assertRegex(
   "webMeetMedia",
   /buildScreenShareEncodingForNetworkProfile\([\s\S]*screenNetworkProfile,[\s\S]*track,[\s\S]*\)/,
   "web screen-share initial publish passes capture size into encoding caps",
+);
+assertRegex(
+  "webMeetMedia",
+  /relaxedDisplayVideoConstraints[\s\S]*isRecoverableDisplayConstraintError[\s\S]*OverconstrainedError[\s\S]*getDisplayMedia\(\{[\s\S]*video: relaxedDisplayVideoConstraints,[\s\S]*audio: true,[\s\S]*\}\)/,
+  "web screen-share start falls back when display dimension constraints are rejected",
 );
 assertRegex(
   "webMeetSocket",

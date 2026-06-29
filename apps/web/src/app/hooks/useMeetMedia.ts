@@ -3020,6 +3020,12 @@ export function useMeetMedia({
         ...videoConstraints,
         displaySurface: "browser",
       };
+      const relaxedDisplayVideoConstraints: MediaTrackConstraints & {
+        cursor?: "always" | "motion" | "never";
+      } = {
+        displaySurface: "browser",
+        cursor: "always",
+      };
       const displayMediaOptions: DisplayMediaStreamOptions & {
         controller?: CaptureControllerLike;
       } = {
@@ -3027,20 +3033,41 @@ export function useMeetMedia({
         audio: true,
         ...(captureController ? { controller: captureController } : {}),
       };
+      const isRecoverableDisplayConstraintError = (err: unknown) => {
+        const name = (err as Error).name;
+        return name === "TypeError" || name === "OverconstrainedError";
+      };
 
       let stream: MediaStream;
       try {
         stream =
           await navigator.mediaDevices.getDisplayMedia(displayMediaOptions);
       } catch (err) {
-        if (!captureController || (err as Error).name !== "TypeError") {
+        if (!isRecoverableDisplayConstraintError(err)) {
           throw err;
         }
-        captureController = null;
-        stream = await navigator.mediaDevices.getDisplayMedia({
-          video: displayVideoConstraints,
-          audio: true,
-        });
+        if (captureController) {
+          captureController = null;
+          try {
+            stream = await navigator.mediaDevices.getDisplayMedia({
+              video: displayVideoConstraints,
+              audio: true,
+            });
+          } catch (fallbackErr) {
+            if (!isRecoverableDisplayConstraintError(fallbackErr)) {
+              throw fallbackErr;
+            }
+            stream = await navigator.mediaDevices.getDisplayMedia({
+              video: relaxedDisplayVideoConstraints,
+              audio: true,
+            });
+          }
+        } else {
+          stream = await navigator.mediaDevices.getDisplayMedia({
+            video: relaxedDisplayVideoConstraints,
+            audio: true,
+          });
+        }
       }
       const track = stream.getVideoTracks()[0];
       if (!track) {
