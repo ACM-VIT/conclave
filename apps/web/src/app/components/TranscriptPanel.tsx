@@ -160,6 +160,7 @@ function StartStage({
   const [qaModel, setQaModel] = useState(transcript.session.qaModel);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const needsTakeover = transcript.session.status === "takeover_needed";
+  const isOnTheHouse = transcript.hasGlobalOpenAiKey;
 
   useEffect(() => {
     setTranscriptModel(transcript.session.transcriptModel);
@@ -168,11 +169,16 @@ function StartStage({
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (!apiKey.trim() || isSubmitting) return;
+    if ((!isOnTheHouse && !apiKey.trim()) || isSubmitting) return;
     setIsSubmitting(true);
+    const startOptions = {
+      apiKey: isOnTheHouse ? undefined : apiKey,
+      transcriptModel,
+      qaModel,
+    };
     const ok = needsTakeover
-      ? await transcript.takeover({ apiKey, transcriptModel, qaModel })
-      : await transcript.start({ apiKey, transcriptModel, qaModel });
+      ? await transcript.takeover(startOptions)
+      : await transcript.start(startOptions);
     if (ok) {
       setApiKey("");
     }
@@ -198,18 +204,21 @@ function StartStage({
         </p>
         <p className="mt-3 max-w-[280px] text-[13.5px] leading-relaxed text-[#a1a1aa]">
           {needsTakeover
-            ? "The last host stepped away. Bring your key to keep the room transcribed."
+            ? isOnTheHouse
+              ? "The last host stepped away. Resume it with Conclave's shared key."
+              : "The last host stepped away. Bring your key to keep the room transcribed."
             : "Transcribe the room, ask it questions, and get minutes as the meeting happens."}
         </p>
 
         <form onSubmit={submit} className="mt-7 w-full max-w-[300px] space-y-2.5">
           <input
-            value={apiKey}
+            value={isOnTheHouse ? "On the house" : apiKey}
             onChange={(event) => setApiKey(event.target.value)}
-            type="password"
-            placeholder="OpenAI API key"
+            type={isOnTheHouse ? "text" : "password"}
+            placeholder={isOnTheHouse ? "On the house" : "OpenAI API key"}
             autoComplete="off"
-            autoFocus
+            autoFocus={!isOnTheHouse}
+            readOnly={isOnTheHouse}
             disabled={isSubmitting}
             className="h-11 w-full rounded-xl border border-white/10 bg-black/20 px-3.5 text-center text-[13px] text-[#fafafa] outline-none transition-colors placeholder:text-[#71717a] focus:border-[#4F9CF9]/60 disabled:opacity-60"
           />
@@ -251,7 +260,7 @@ function StartStage({
           </div>
           <button
             type="submit"
-            disabled={!apiKey.trim() || isSubmitting}
+            disabled={(!isOnTheHouse && !apiKey.trim()) || isSubmitting}
             className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-[#F95F4A] px-3 text-[13.5px] font-semibold text-white transition-colors hover:bg-[#ff735f] disabled:cursor-not-allowed disabled:bg-white/10 disabled:text-[#71717a]"
           >
             {isSubmitting ? (
@@ -264,8 +273,14 @@ function StartStage({
                 : "Start notes"}
           </button>
           <p className="flex items-center justify-center gap-1.5 pt-0.5 text-[11px] text-[#71717a]">
-            <Lock size={11} strokeWidth={2} />
-            Used only for this session, never stored.
+            {isOnTheHouse ? (
+              <CheckCircle2 size={11} strokeWidth={2} />
+            ) : (
+              <Lock size={11} strokeWidth={2} />
+            )}
+            {isOnTheHouse
+              ? "Covered by Conclave. No key needed."
+              : "Used only for this session, never stored."}
           </p>
         </form>
       </div>
@@ -719,6 +734,7 @@ export default function TranscriptPanel({
             {isRunning && session.controller ? (
               <p className="mt-0.5 truncate text-[11.5px] text-[#a1a1aa]">
                 Hosted by {session.controller.displayName}
+                {session.keySource === "global" ? " · On the house" : ""}
               </p>
             ) : null}
           </div>

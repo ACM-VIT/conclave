@@ -14,12 +14,15 @@ export interface TranscriptController {
   lastSeenAt: number;
 }
 
+export type TranscriptOpenAiKeySource = "controller" | "global";
+
 export interface TranscriptSessionState {
   roomId: string;
   status: TranscriptSessionStatus;
   controller: TranscriptController | null;
   transcriptModel: string;
   qaModel: string;
+  keySource?: TranscriptOpenAiKeySource | null;
   startedAt: number | null;
   updatedAt: number;
   error?: string | null;
