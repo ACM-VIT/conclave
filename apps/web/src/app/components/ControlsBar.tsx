@@ -209,19 +209,19 @@ function ControlsBar(props: ControlsBarProps) {
 
   const [reactionsOpen, setReactionsOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
-  // The compact More drawer has two views: the action grid ("main") and a nested
-  // "settings" page (device pickers + mirror).
-  const [moreView, setMoreView] = useState<"main" | "settings">("main");
+  // Settings is its own drawer, opened from a tile in the More drawer (devices,
+  // flip camera, mirror).
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [browserOpen, setBrowserOpen] = useState(false);
   const [browserUrl, setBrowserUrl] = useState("");
   const [browserError, setBrowserError] = useState<string | null>(null);
   const { meetVolume, setMeetVolume } = useMeetVolume();
   const meetVolumePercent = Math.round(clampMeetVolume(meetVolume) * 100);
 
-  // Enumerate cameras only while the compact drawer is open, to power the quick
+  // Enumerate cameras only while a compact drawer is open, to power the quick
   // front/rear flip (and to decide whether the flip action is even available).
   const { videoInput: drawerCameras } = useEnumeratedDevices(
-    compact && moreOpen,
+    compact && (moreOpen || settingsOpen),
   );
   const canFlipCamera =
     Boolean(onVideoInputDeviceChange) && drawerCameras.length >= 2;
@@ -515,37 +515,49 @@ function ControlsBar(props: ControlsBarProps) {
                         ))}
                       </div>
                     )}
-                    {config.overflow.length > 0 && (
-                      <div className="grid grid-cols-3 gap-2">
-                        {config.overflow.map((row) => (
+                    <div className="grid grid-cols-3 gap-2">
+                      {config.overflow.map((row) => (
+                        <MoreTile
+                          key={row.id}
+                          row={row}
+                          onActivate={() => {
+                            if (row.opensBrowserLauncher) {
+                              setBrowserOpen((v) => !v);
+                            } else {
+                              row.onPress?.();
+                              setMoreOpen(false);
+                            }
+                          }}
+                        />
+                      ))}
+                      {!isGhostMode && canFlipCamera && (
+                        <MoreTile
+                          row={{
+                            id: "flip-camera",
+                            icon: SwitchCamera,
+                            label: "Flip camera",
+                          }}
+                          onActivate={() => {
+                            flipCamera();
+                            setMoreOpen(false);
+                          }}
+                        />
+                      )}
+                      {!isGhostMode &&
+                        (hasAudioDevicePicker || hasVideoDevicePicker) && (
                           <MoreTile
-                            key={row.id}
-                            row={row}
+                            row={{
+                              id: "settings",
+                              icon: Settings,
+                              label: "Settings",
+                            }}
                             onActivate={() => {
-                              if (row.opensBrowserLauncher) {
-                                setBrowserOpen((v) => !v);
-                              } else {
-                                row.onPress?.();
-                                setMoreOpen(false);
-                              }
+                              setMoreOpen(false);
+                              setSettingsOpen(true);
                             }}
                           />
-                        ))}
-                      </div>
-                    )}
-                    {!isGhostMode && (hasAudioDevicePicker || hasVideoDevicePicker) && (
-                      <DeviceSettingsSection
-                        active={moreOpen}
-                        selectedAudioInputDeviceId={selectedAudioInputDeviceId}
-                        selectedAudioOutputDeviceId={selectedAudioOutputDeviceId}
-                        selectedVideoInputDeviceId={selectedVideoInputDeviceId}
-                        onAudioInputDeviceChange={onAudioInputDeviceChange}
-                        onAudioOutputDeviceChange={onAudioOutputDeviceChange}
-                        onVideoInputDeviceChange={onVideoInputDeviceChange}
-                        isMirrorCamera={isMirrorCamera}
-                        onToggleMirror={onToggleMirror}
-                      />
-                    )}
+                        )}
+                    </div>
                     <MeetVolumeOverflowControl
                       icon={VolumeIcon}
                       volumePercent={meetVolumePercent}
@@ -563,6 +575,60 @@ function ControlsBar(props: ControlsBarProps) {
                         onLaunch={launchBrowser}
                       />
                     )}
+                  </div>
+                </Drawer.Content>
+              </Drawer.Portal>
+            </Drawer.Root>
+          )}
+          {/* Settings drawer — opened from the More drawer's Settings tile. */}
+          {compact && (
+            <Drawer.Root open={settingsOpen} onOpenChange={setSettingsOpen}>
+              <Drawer.Portal>
+                <Drawer.Overlay className="fixed inset-0 z-[90] bg-black/55" />
+                <Drawer.Content
+                  aria-label="Settings"
+                  className="fixed inset-x-0 bottom-0 z-[91] flex max-h-[85vh] flex-col rounded-t-3xl border-t outline-none"
+                  style={{ backgroundColor: color.surfaceRaised, borderColor: color.border }}
+                >
+                  <Drawer.Title className="sr-only">Settings</Drawer.Title>
+                  <div
+                    aria-hidden
+                    className="mx-auto mt-3 h-1 w-9 shrink-0 rounded-full"
+                    style={{ backgroundColor: color.border }}
+                  />
+                  <div className="flex items-center gap-2 px-4 pb-1 pt-3">
+                    <button
+                      type="button"
+                      aria-label="Back"
+                      onClick={() => {
+                        setSettingsOpen(false);
+                        setMoreOpen(true);
+                      }}
+                      className="-ml-1.5 inline-flex h-8 w-8 items-center justify-center rounded-full transition-[background-color] duration-[120ms] active:bg-white/[0.08]"
+                      style={{ color: color.textMuted }}
+                    >
+                      <ArrowLeft size={MENU_ICON} strokeWidth={STROKE} />
+                    </button>
+                    <span
+                      className="text-[15px] font-semibold"
+                      style={{ color: color.text }}
+                    >
+                      Settings
+                    </span>
+                  </div>
+                  <div className="overflow-y-auto px-4 pb-[max(1rem,env(safe-area-inset-bottom))] pt-1">
+                    <DeviceSettingsSection
+                      bare
+                      active={settingsOpen}
+                      selectedAudioInputDeviceId={selectedAudioInputDeviceId}
+                      selectedAudioOutputDeviceId={selectedAudioOutputDeviceId}
+                      selectedVideoInputDeviceId={selectedVideoInputDeviceId}
+                      onAudioInputDeviceChange={onAudioInputDeviceChange}
+                      onAudioOutputDeviceChange={onAudioOutputDeviceChange}
+                      onVideoInputDeviceChange={onVideoInputDeviceChange}
+                      isMirrorCamera={isMirrorCamera}
+                      onToggleMirror={onToggleMirror}
+                    />
                   </div>
                 </Drawer.Content>
               </Drawer.Portal>
