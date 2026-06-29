@@ -765,8 +765,11 @@ export default function TranscriptPanel({
       <div className="shrink-0 border-b border-white/10 px-4 py-3">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <h2 className="text-[15px] font-semibold text-[#fafafa]">
+            <h2 className="flex items-center gap-2 text-[15px] font-semibold text-[#fafafa]">
               Transcript
+              <span className="inline-flex shrink-0 items-center rounded-md border border-[#F95F4A]/30 bg-[#F95F4A]/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[#F95F4A]">
+                Beta
+              </span>
             </h2>
             {isRunning && session.controller ? (
               <p className="mt-0.5 truncate text-[11.5px] text-[#a1a1aa]">
