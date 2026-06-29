@@ -37,7 +37,6 @@ import {
   applyWebcamProducerNetworkProfile,
   applyScreenShareTrackNetworkProfile,
   buildScreenShareEncodingForNetworkProfile,
-  buildScreenShareVideoConstraintsForNetworkProfile,
   getFallbackWebcamCodec,
   getPreferredScreenShareCodec,
   getPreferredWebcamCodec,
@@ -2796,19 +2795,21 @@ export function useMeetMedia({
         return;
       }
 
-      const currentScreenTrack =
-        producer.track?.readyState === "live" &&
-        producer.track.enabled &&
-        !producer.track.muted
-          ? producer.track
-          : null;
+      const currentScreenTrack = producer.track ?? null;
+      const currentScreenTrackLive =
+        currentScreenTrack?.readyState === "live" &&
+        currentScreenTrack.enabled &&
+        !currentScreenTrack.muted;
       const liveScreenTrack =
-        currentScreenTrack ??
         getFirstLiveTrack(
           (screenShareStreamRef.current?.getVideoTracks() ?? []).filter(
-            (track) => track.enabled && !track.muted,
+            (track) =>
+              track.id !== currentScreenTrack?.id &&
+              track.enabled &&
+              !track.muted,
           ),
-        );
+        ) ??
+        (currentScreenTrackLive ? currentScreenTrack : null);
       if (
         !liveScreenTrack ||
         liveScreenTrack.readyState !== "live" ||
@@ -2818,6 +2819,7 @@ export function useMeetMedia({
       }
 
       screenProducerTrackRepairInFlightRef.current = true;
+      let detachedForRefresh = false;
       try {
         if (
           disposed ||
@@ -2831,7 +2833,10 @@ export function useMeetMedia({
         if ("contentHint" in liveScreenTrack) {
           liveScreenTrack.contentHint = "detail";
         }
+        await producer.replaceTrack({ track: null });
+        detachedForRefresh = true;
         await producer.replaceTrack({ track: liveScreenTrack });
+        detachedForRefresh = false;
         await applyScreenShareProducerNetworkProfile(
           producer,
           getPublishNetworkProfile(),
@@ -2851,6 +2856,15 @@ export function useMeetMedia({
           bytes: sample.bytes,
         });
       } catch (err) {
+        if (
+          detachedForRefresh &&
+          !producer.closed &&
+          liveScreenTrack.readyState === "live"
+        ) {
+          try {
+            await producer.replaceTrack({ track: liveScreenTrack });
+          } catch {}
+        }
         screenOutboundStallStateRef.current = {
           ...state,
           lastRecoveryAtMs: performance.now(),
@@ -3249,16 +3263,8 @@ export function useMeetMedia({
       }
 
       const screenNetworkProfile = getPublishNetworkProfile();
-      const videoConstraints =
-        buildScreenShareVideoConstraintsForNetworkProfile(
-          screenNetworkProfile,
-        );
 
       let captureController = createCaptureController();
-      const displayVideoConstraints: MediaTrackConstraints = {
-        ...videoConstraints,
-        displaySurface: "browser",
-      };
       const relaxedDisplayVideoConstraints: MediaTrackConstraints & {
         cursor?: "always" | "motion" | "never";
       } = {
@@ -3268,13 +3274,9 @@ export function useMeetMedia({
       const displayMediaOptions: DisplayMediaStreamOptions & {
         controller?: CaptureControllerLike;
       } = {
-        video: displayVideoConstraints,
+        video: relaxedDisplayVideoConstraints,
         audio: true,
         ...(captureController ? { controller: captureController } : {}),
-      };
-      const isRecoverableDisplayConstraintError = (err: unknown) => {
-        const name = (err as Error).name;
-        return name === "TypeError" || name === "OverconstrainedError";
       };
 
       let stream: MediaStream;
@@ -3282,31 +3284,14 @@ export function useMeetMedia({
         stream =
           await navigator.mediaDevices.getDisplayMedia(displayMediaOptions);
       } catch (err) {
-        if (!isRecoverableDisplayConstraintError(err)) {
+        if (!captureController || (err as Error).name !== "TypeError") {
           throw err;
         }
-        if (captureController) {
-          captureController = null;
-          try {
-            stream = await navigator.mediaDevices.getDisplayMedia({
-              video: displayVideoConstraints,
-              audio: true,
-            });
-          } catch (fallbackErr) {
-            if (!isRecoverableDisplayConstraintError(fallbackErr)) {
-              throw fallbackErr;
-            }
-            stream = await navigator.mediaDevices.getDisplayMedia({
-              video: relaxedDisplayVideoConstraints,
-              audio: true,
-            });
-          }
-        } else {
-          stream = await navigator.mediaDevices.getDisplayMedia({
-            video: relaxedDisplayVideoConstraints,
-            audio: true,
-          });
-        }
+        captureController = null;
+        stream = await navigator.mediaDevices.getDisplayMedia({
+          video: relaxedDisplayVideoConstraints,
+          audio: true,
+        });
       }
       const track = stream.getVideoTracks()[0];
       if (!track) {

@@ -676,7 +676,7 @@ const getCaptureScaleToFit = (
       : 1;
   const targetScale = Math.max(widthScale, heightScale);
   if (!Number.isFinite(targetScale) || targetScale <= 1) return null;
-  return Number(targetScale.toFixed(1));
+  return Number((Math.ceil(targetScale * 10) / 10).toFixed(1));
 };
 
 const getScreenShareScaleResolutionDownBy = (

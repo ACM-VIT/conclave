@@ -339,7 +339,7 @@ assertRegex(
 );
 assertRegex(
   "webCodec",
-  /getScreenShareScaleResolutionDownBy[\s\S]*profile === "good"\) return 1[\s\S]*getCaptureScaleToFit[\s\S]*\?\? 1[\s\S]*scaleResolutionDownBy,/,
+  /getCaptureScaleToFit[\s\S]*Math\.ceil\(targetScale \* 10\) \/ 10[\s\S]*getScreenShareScaleResolutionDownBy[\s\S]*profile === "good"\) return 1[\s\S]*getCaptureScaleToFit[\s\S]*\?\? 1[\s\S]*scaleResolutionDownBy,/,
   "web screen share RTP encoding scales oversized captures and explicitly restores full resolution",
 );
 assertRegex(
@@ -354,8 +354,8 @@ assertRegex(
 );
 assertRegex(
   "webMeetMedia",
-  /relaxedDisplayVideoConstraints[\s\S]*isRecoverableDisplayConstraintError[\s\S]*OverconstrainedError[\s\S]*getDisplayMedia\(\{[\s\S]*video: relaxedDisplayVideoConstraints,[\s\S]*audio: true,[\s\S]*\}\)/,
-  "web screen-share start falls back when display dimension constraints are rejected",
+  /const relaxedDisplayVideoConstraints[\s\S]*displayMediaOptions[\s\S]*video: relaxedDisplayVideoConstraints,[\s\S]*getDisplayMedia\(displayMediaOptions\)[\s\S]*applyScreenShareTrackNetworkProfile\(track, screenNetworkProfile\)[\s\S]*buildScreenShareEncodingForNetworkProfile\([\s\S]*screenNetworkProfile,[\s\S]*track,[\s\S]*\)/,
+  "web screen-share start captures relaxed before applying size and RTP caps",
 );
 assertRegex(
   "webMeetSocket",
@@ -364,7 +364,7 @@ assertRegex(
 );
 assertRegex(
   "webMeetMedia",
-  /screenProducerTrackRepairInFlightRef[\s\S]*screenOutboundStallStateRef[\s\S]*currentScreenTrack[\s\S]*screenShareStreamRef\.current\?\.getVideoTracks\(\)[\s\S]*producer\.replaceTrack\(\{ track: liveScreenTrack \}\);[\s\S]*applyScreenShareProducerNetworkProfile\([\s\S]*producer,[\s\S]*getPublishNetworkProfile\(\),/,
+  /screenProducerTrackRepairInFlightRef[\s\S]*screenOutboundStallStateRef[\s\S]*currentScreenTrack[\s\S]*screenShareStreamRef\.current\?\.getVideoTracks\(\)[\s\S]*track\.id !== currentScreenTrack\?\.id[\s\S]*producer\.replaceTrack\(\{ track: null \}\);[\s\S]*producer\.replaceTrack\(\{ track: liveScreenTrack \}\);[\s\S]*applyScreenShareProducerNetworkProfile\([\s\S]*producer,[\s\S]*getPublishNetworkProfile\(\),/,
   "web screen-share outbound sender watchdog refreshes stalled producers without stop/start",
 );
 assertRegex(
