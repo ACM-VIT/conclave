@@ -817,6 +817,7 @@ export async function applyScreenShareTrackNetworkProfile(
 
   try {
     await track.applyConstraints({
+      frameRate: constraints.frameRate,
       width: constraints.width,
       height: constraints.height,
     });

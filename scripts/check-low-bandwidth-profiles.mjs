@@ -344,7 +344,7 @@ assertRegex(
 );
 assertRegex(
   "webCodec",
-  /applyScreenShareTrackNetworkProfile[\s\S]*applyConstraints\(\{[\s\S]*frameRate: constraints\.frameRate[\s\S]*frame-rate cap was not applied[\s\S]*if \(profile === "good" \|\| track\.readyState !== "live"\) return;[\s\S]*applyConstraints\(\{[\s\S]*width: constraints\.width,[\s\S]*height: constraints\.height,[\s\S]*dimension cap was not applied/,
+  /applyScreenShareTrackNetworkProfile[\s\S]*applyConstraints\(\{[\s\S]*frameRate: constraints\.frameRate[\s\S]*frame-rate cap was not applied[\s\S]*if \(profile === "good" \|\| track\.readyState !== "live"\) return;[\s\S]*applyConstraints\(\{[\s\S]*frameRate: constraints\.frameRate,[\s\S]*width: constraints\.width,[\s\S]*height: constraints\.height,[\s\S]*dimension cap was not applied/,
   "web screen-share frame-rate cap is independent from dimension cap failures",
 );
 assertRegex(
