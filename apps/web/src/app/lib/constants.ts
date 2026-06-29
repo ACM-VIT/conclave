@@ -161,38 +161,6 @@ export const MEETS_STUN_ICE_SERVERS: RTCIceServer[] = (() => {
   ];
 })();
 
-export const MEETS_TURN_ICE_SERVERS: RTCIceServer[] = (() => {
-  const urls = splitIceUrls(
-    process.env.NEXT_PUBLIC_TURN_URLS ?? process.env.NEXT_PUBLIC_TURN_URL ?? "",
-  );
-
-  if (!urls.length) return [];
-
-  const iceServer: RTCIceServer = {
-    urls: urls.length === 1 ? urls[0] : urls,
-  };
-  const username = process.env.NEXT_PUBLIC_TURN_USERNAME;
-  const credential = process.env.NEXT_PUBLIC_TURN_PASSWORD;
-
-  if ((username && !credential) || (!username && credential)) {
-    console.warn(
-      "[Meets] TURN credentials are partially configured. Set both NEXT_PUBLIC_TURN_USERNAME and NEXT_PUBLIC_TURN_PASSWORD.",
-    );
-  } else if (!username && !credential && urls.some((url) => /^turns?:/i.test(url))) {
-    console.warn(
-      "[Meets] TURN URLs are configured without credentials. Relay candidates may fail if your TURN server requires auth.",
-    );
-  } else if (username && credential) {
-    iceServer.username = username;
-    iceServer.credential = credential;
-  }
-
-  return [iceServer];
-})();
-
-export const MEETS_ICE_SERVERS = [
-  ...MEETS_STUN_ICE_SERVERS,
-  ...MEETS_TURN_ICE_SERVERS,
-];
+export const MEETS_ICE_SERVERS = MEETS_STUN_ICE_SERVERS;
 
 export type ReactionEmoji = (typeof EMOJI_REACTIONS)[number];

@@ -794,8 +794,6 @@ final class WebRTCClient: NSObject, ObservableObject {
             throw WebRTCError.notConfigured
         }
 
-        let iceServers = runtimeIceServersJSON ?? resolveIceServersJSON()
-
         let generation = configurationGeneration
         let producerTransportParams = try await socket.createProducerTransport()
         guard generation == configurationGeneration else { throw WebRTCError.staleConfiguration }
@@ -808,7 +806,7 @@ final class WebRTCClient: NSObject, ObservableObject {
             iceCandidates: try encodeJSONString(producerTransportParams.iceCandidates),
             dtlsParameters: try encodeJSONString(producerTransportParams.dtlsParameters),
             sctpParameters: nil,
-            iceServers: iceServers,
+            iceServers: runtimeIceServersJSON,
             appData: nil
         )
         nextSendTransport.delegate = self
@@ -819,7 +817,7 @@ final class WebRTCClient: NSObject, ObservableObject {
             iceCandidates: try encodeJSONString(consumerTransportParams.iceCandidates),
             dtlsParameters: try encodeJSONString(consumerTransportParams.dtlsParameters),
             sctpParameters: nil,
-            iceServers: iceServers,
+            iceServers: runtimeIceServersJSON,
             appData: nil
         )
         nextReceiveTransport.delegate = self
@@ -2846,35 +2844,6 @@ final class WebRTCClient: NSObject, ObservableObject {
         return try JSONDecoder().decode(T.self, from: data)
     }
 
-    func resolveIceServersJSON() -> String? {
-        let env = ProcessInfo.processInfo.environment
-
-        let urlsRaw =
-            env["TURN_URLS"] ??
-            env["TURN_URL"] ??
-            (Bundle.main.object(forInfoDictionaryKey: "TURN_URLS") as? String) ??
-            (Bundle.main.object(forInfoDictionaryKey: "TURN_URL") as? String)
-
-        let urls = (urlsRaw ?? "")
-            .split(separator: ",")
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-
-        guard !urls.isEmpty else { return nil }
-
-        let username =
-            env["TURN_USERNAME"] ??
-            (Bundle.main.object(forInfoDictionaryKey: "TURN_USERNAME") as? String)
-
-        let credential =
-            env["TURN_PASSWORD"] ??
-            env["TURN_CREDENTIAL"] ??
-            (Bundle.main.object(forInfoDictionaryKey: "TURN_PASSWORD") as? String) ??
-            (Bundle.main.object(forInfoDictionaryKey: "TURN_CREDENTIAL") as? String)
-
-        let iceServers = [IceServer(urls: urls, username: username, credential: credential)]
-        return try? encodeJSONString(iceServers)
-    }
 }
 
 // MARK: - Mediasoup Delegates

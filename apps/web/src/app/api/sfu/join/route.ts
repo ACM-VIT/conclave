@@ -49,11 +49,20 @@ type IceServer = {
   credential?: string;
 };
 
+type CloudflareTurnCredentialsResponse = {
+  iceServers?: IceServer[];
+};
+
 const DEFAULT_PUBLIC_STUN_URLS = [
   "stun:stun.l.google.com:19302",
   "stun:stun1.l.google.com:19302",
   "stun:stun2.l.google.com:19302",
 ];
+const CLOUDFLARE_TURN_CREDENTIALS_URL =
+  "https://rtc.live.cloudflare.com/v1/turn/keys";
+const CLOUDFLARE_TURN_DEFAULT_TTL_SECONDS = 86400;
+const CLOUDFLARE_TURN_MAX_TTL_SECONDS = 86400;
+const CLOUDFLARE_TURN_REQUEST_TIMEOUT_MS = 5000;
 
 type RoomRoutingResponse = {
   owner?: {
@@ -159,11 +168,8 @@ const alwaysHostEmails = parseEmailList(
 );
 
 let turnCredentialWarningLogged = false;
-let turnMissingCredentialWarningLogged = false;
 
-const resolveIceServers = (): IceServer[] => {
-  const servers: IceServer[] = [];
-
+const resolveStunIceServers = (): IceServer[] => {
   const configuredStunUrls = splitUrls(
     firstNonEmpty(
       process.env.STUN_URLS,
@@ -175,58 +181,129 @@ const resolveIceServers = (): IceServer[] => {
   const stunUrls =
     configuredStunUrls.length > 0 ? configuredStunUrls : DEFAULT_PUBLIC_STUN_URLS;
 
-  if (stunUrls.length > 0) {
-    servers.push({
+  if (stunUrls.length === 0) return [];
+
+  return [
+    {
       urls: stunUrls.length === 1 ? stunUrls[0] : stunUrls,
+    },
+  ];
+};
+
+const normalizeIceServerUrls = (urls: IceServer["urls"] | undefined): string[] => {
+  if (!urls) return [];
+  return (Array.isArray(urls) ? urls : [urls])
+    .map((url) => url.trim())
+    .filter(Boolean)
+    .filter((url) => !/^turns?:turn\.cloudflare\.com:53[/?]/i.test(url))
+    .filter((url) => !/^stun:stun\.cloudflare\.com:53$/i.test(url));
+};
+
+const normalizeIceServers = (iceServers: IceServer[] | undefined): IceServer[] => {
+  const normalized: IceServer[] = [];
+
+  for (const iceServer of iceServers ?? []) {
+    const urls = normalizeIceServerUrls(iceServer.urls);
+    if (urls.length === 0) continue;
+
+    normalized.push({
+      urls: urls.length === 1 ? urls[0] : urls,
+      ...(iceServer.username ? { username: iceServer.username } : {}),
+      ...(iceServer.credential ? { credential: iceServer.credential } : {}),
     });
   }
 
-  const turnUrls = splitUrls(
+  return normalized;
+};
+
+const resolveCloudflareTurnTtl = (): number => {
+  const configured = Number(
     firstNonEmpty(
-      process.env.TURN_URLS,
-      process.env.TURN_URL,
-      process.env.NEXT_PUBLIC_TURN_URLS,
-      process.env.NEXT_PUBLIC_TURN_URL,
+      process.env.CLOUDFLARE_TURN_TTL_SECONDS,
+      process.env.CF_TURN_TTL_SECONDS,
     ),
   );
+  if (
+    Number.isInteger(configured) &&
+    configured > 0 &&
+    configured <= CLOUDFLARE_TURN_MAX_TTL_SECONDS
+  ) {
+    return configured;
+  }
+  return CLOUDFLARE_TURN_DEFAULT_TTL_SECONDS;
+};
 
-  if (turnUrls.length > 0) {
-    const turnUsername = firstNonEmpty(
-      process.env.TURN_USERNAME,
-      process.env.NEXT_PUBLIC_TURN_USERNAME,
-    );
-    const turnCredential = firstNonEmpty(
-      process.env.TURN_PASSWORD,
-      process.env.TURN_CREDENTIAL,
-      process.env.NEXT_PUBLIC_TURN_PASSWORD,
-      process.env.NEXT_PUBLIC_TURN_CREDENTIAL,
-    );
+const resolveCloudflareTurnIceServers = async (): Promise<IceServer[]> => {
+  const turnTokenId = firstNonEmpty(
+    process.env.CLOUDFLARE_TURN_TOKEN_ID,
+    process.env.CLOUDFLARE_TURN_KEY_ID,
+    process.env.CF_TURN_TOKEN_ID,
+    process.env.CF_TURN_KEY_ID,
+  );
+  const turnApiToken = firstNonEmpty(
+    process.env.CLOUDFLARE_TURN_API_TOKEN,
+    process.env.CLOUDFLARE_TURN_KEY_API_TOKEN,
+    process.env.CF_TURN_API_TOKEN,
+    process.env.CF_TURN_KEY_API_TOKEN,
+  );
 
-    const turnServer: IceServer = {
-      urls: turnUrls.length === 1 ? turnUrls[0] : turnUrls,
-    };
-
-    if (turnUsername && turnCredential) {
-      turnServer.username = turnUsername;
-      turnServer.credential = turnCredential;
-    } else if (turnUsername || turnCredential) {
-      if (!turnCredentialWarningLogged) {
-        console.warn(
-          "[SFU Join] TURN credential configuration is incomplete; ignoring username/password.",
-        );
-        turnCredentialWarningLogged = true;
-      }
-    } else if (!turnMissingCredentialWarningLogged) {
+  if (!turnTokenId && !turnApiToken) return [];
+  if (!turnTokenId || !turnApiToken) {
+    if (!turnCredentialWarningLogged) {
       console.warn(
-        "[SFU Join] TURN URLs configured without credentials. Relay candidates may fail if TURN auth is required.",
+        "[SFU Join] Cloudflare TURN configuration is incomplete; using STUN-only ICE servers.",
       );
-      turnMissingCredentialWarningLogged = true;
+      turnCredentialWarningLogged = true;
     }
-
-    servers.push(turnServer);
+    return [];
   }
 
-  return servers;
+  const controller = new AbortController();
+  const timeout = setTimeout(
+    () => controller.abort(),
+    CLOUDFLARE_TURN_REQUEST_TIMEOUT_MS,
+  );
+
+  try {
+    const response = await fetch(
+      `${CLOUDFLARE_TURN_CREDENTIALS_URL}/${encodeURIComponent(turnTokenId)}/credentials/generate-ice-servers`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${turnApiToken}`,
+          "content-type": "application/json",
+          accept: "application/json",
+        },
+        body: JSON.stringify({ ttl: resolveCloudflareTurnTtl() }),
+        cache: "no-store",
+        signal: controller.signal,
+      },
+    );
+
+    if (!response.ok) {
+      throw new Error(`Cloudflare TURN credential request failed with ${response.status}`);
+    }
+
+    const payload = (await response.json()) as CloudflareTurnCredentialsResponse;
+    return normalizeIceServers(payload.iceServers);
+  } catch (error) {
+    console.warn(
+      "[SFU Join] Cloudflare TURN credentials unavailable; using STUN-only ICE servers.",
+      error,
+    );
+    return [];
+  } finally {
+    clearTimeout(timeout);
+  }
+};
+
+const resolveIceServers = async (): Promise<IceServer[]> => {
+  const cloudflareTurnIceServers = await resolveCloudflareTurnIceServers();
+  if (cloudflareTurnIceServers.length > 0) {
+    return cloudflareTurnIceServers;
+  }
+
+  return resolveStunIceServers();
 };
 
 const resolveClientId = (request: Request, body?: JoinRequestBody) => {
@@ -363,7 +440,7 @@ export async function POST(request: Request) {
     { expiresIn: "12h" },
   );
 
-  const iceServers = resolveIceServers();
+  const iceServers = await resolveIceServers();
 
   return NextResponse.json({
     token,

@@ -7,7 +7,6 @@ import {
   BACKGROUND_TRANSPORT_DISCONNECT_GRACE_MS,
   MAX_RECONNECT_ATTEMPTS,
   MEETS_ICE_SERVERS,
-  MEETS_TURN_ICE_SERVERS,
   RECONNECT_DELAY_MS,
   SOCKET_TIMEOUT_MS,
   SOCKET_CONNECT_TIMEOUT_MS,
@@ -895,10 +894,7 @@ export function useMeetSocket({
   const enableTurnFallback = useCallback((reason: string): boolean => {
     if (useTurnFallbackRef.current) return false;
 
-    const turnIceServers =
-      runtimeTurnIceServersRef.current && runtimeTurnIceServersRef.current.length > 0
-        ? runtimeTurnIceServersRef.current
-        : MEETS_TURN_ICE_SERVERS;
+    const turnIceServers = runtimeTurnIceServersRef.current ?? [];
     if (turnIceServers.length === 0) return false;
 
     useTurnFallbackRef.current = true;
@@ -917,9 +913,7 @@ export function useMeetSocket({
         : MEETS_ICE_SERVERS;
 
     const turnIceServers = useTurnFallbackRef.current
-      ? runtimeTurnIceServersRef.current && runtimeTurnIceServersRef.current.length > 0
-        ? runtimeTurnIceServersRef.current
-        : MEETS_TURN_ICE_SERVERS
+      ? runtimeTurnIceServersRef.current
       : undefined;
 
     return mergeIceServers(stunIceServers, turnIceServers);
