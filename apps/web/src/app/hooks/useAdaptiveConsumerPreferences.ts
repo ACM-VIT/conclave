@@ -417,11 +417,15 @@ const getDesiredPreferences = (
   const quality = effectiveQuality === "unknown" ? "good" : effectiveQuality;
 
   if (info.type === "screen") {
+    const screenShareQuality = worstQuality(
+      quality,
+      getConsumerScoreQualityHint(options.consumerScoreQuality),
+    );
     return {
       preferredLayers: bounds
         ? buildLayerPreference(
             0,
-            options.emergencyMode ? 0 : quality === "poor" ? 1 : 2,
+            options.emergencyMode ? 0 : screenShareQuality === "poor" ? 1 : 2,
             bounds,
           )
         : undefined,

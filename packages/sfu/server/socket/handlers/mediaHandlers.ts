@@ -117,7 +117,18 @@ const getDefaultConsumerLayers = (
   consumer: Consumer,
   producerInfo: ProducerInfo,
 ): ConsumerLayers | undefined => {
-  if (!isLayerCapableConsumer(consumer) || producerInfo.type !== "webcam") {
+  if (!isLayerCapableConsumer(consumer)) {
+    return undefined;
+  }
+
+  if (producerInfo.type === "screen") {
+    return {
+      spatialLayer: 0,
+      temporalLayer: room.currentQuality === "low" ? 1 : 2,
+    };
+  }
+
+  if (producerInfo.type !== "webcam") {
     return undefined;
   }
 
@@ -145,7 +156,7 @@ const getDefaultConsumerPriority = (
   }
 
   if (producerInfo.type === "screen") {
-    return 200;
+    return 240;
   }
 
   return 100;

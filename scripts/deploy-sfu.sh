@@ -63,16 +63,6 @@ if [[ "$HAS_UPSTASH" != "true" && -z "${REDIS_PASSWORD:-}" && -z "${REDIS_URL:-}
   exit 1
 fi
 
-COMPOSE_ENV_FILES=(--env-file "$ENV_FILE")
-if [[ -f "$SFU_ENV_FILE" ]]; then
-  COMPOSE_ENV_FILES+=(--env-file "$SFU_ENV_FILE")
-fi
-COMPOSE=(docker compose "${COMPOSE_ENV_FILES[@]}" -f "$COMPOSE_FILE")
-HAS_REDIS_SERVICE="false"
-if "${COMPOSE[@]}" config --services | rg -x "redis" >/dev/null 2>&1; then
-  HAS_REDIS_SERVICE="true"
-fi
-
 trim() {
   local value="$1"
   value="${value#"${value%%[![:space:]]*}"}"
@@ -80,24 +70,104 @@ trim() {
   printf "%s" "$value"
 }
 
-get_pool_url() {
-  local id="$1"
-  local pool="${SFU_POOL:-}"
+get_pool_entry() {
+  local pool="$1"
+  local id="$2"
   if [[ -n "$pool" ]]; then
     IFS=',' read -ra entries <<< "$pool"
     for entry in "${entries[@]}"; do
       entry="$(trim "$entry")"
       if [[ "$entry" == "$id="* ]]; then
-        printf "%s" "${entry#*=}"
+        trim "${entry#*=}"
         return 0
       fi
     done
+  fi
+  return 1
+}
+
+get_pool_list_entry() {
+  local pool="$1"
+  local index="$2"
+  local current_index=0
+  if [[ -n "$pool" ]]; then
+    IFS=',' read -ra entries <<< "$pool"
+    for entry in "${entries[@]}"; do
+      entry="$(trim "$entry")"
+      if [[ -z "$entry" || "$entry" == *"="* ]]; then
+        continue
+      fi
+      current_index=$((current_index + 1))
+      if [[ "$current_index" == "$index" ]]; then
+        printf "%s" "$entry"
+        return 0
+      fi
+    done
+  fi
+  return 1
+}
+
+get_deploy_url() {
+  local id="$1"
+  local pooled=""
+  pooled="$(get_pool_entry "${SFU_DEPLOY_POOL:-}" "$id" || true)"
+  if [[ -z "$pooled" ]]; then
+    pooled="$(get_pool_entry "${SFU_POOL:-}" "$id" || true)"
+  fi
+  if [[ -n "$pooled" ]]; then
+    printf "%s" "$pooled"
+    return 0
   fi
 
   if [[ "$id" == "sfu-a" ]]; then
     printf "%s" "${SFU_A_URL:-http://127.0.0.1:3031}"
   else
     printf "%s" "${SFU_B_URL:-http://127.0.0.1:3032}"
+  fi
+}
+
+is_local_url() {
+  local url="$1"
+  [[ "$url" =~ ^https?://(127\.0\.0\.1|localhost)(:|/|$) ]]
+}
+
+get_public_url() {
+  local id="$1"
+  local deploy_url="$2"
+  local pooled=""
+  local list_index="1"
+  if [[ "$id" == "sfu-b" ]]; then
+    list_index="2"
+  fi
+  pooled="$(get_pool_entry "${SFU_PUBLIC_POOL:-}" "$id" || true)"
+  if [[ -z "$pooled" ]]; then
+    pooled="$(get_pool_entry "${SFU_PUBLIC_URLS:-}" "$id" || true)"
+  fi
+  if [[ -z "$pooled" ]]; then
+    pooled="$(get_pool_entry "${SFU_URLS:-}" "$id" || true)"
+  fi
+  if [[ -z "$pooled" ]]; then
+    pooled="$(get_pool_list_entry "${SFU_PUBLIC_URLS:-}" "$list_index" || true)"
+  fi
+  if [[ -z "$pooled" ]]; then
+    pooled="$(get_pool_list_entry "${SFU_URLS:-}" "$list_index" || true)"
+  fi
+  if [[ -n "$pooled" ]]; then
+    printf "%s" "$pooled"
+    return 0
+  fi
+
+  if [[ "$id" == "sfu-a" && -n "${SFU_A_PUBLIC_URL:-}" ]]; then
+    printf "%s" "${SFU_A_PUBLIC_URL}"
+    return 0
+  fi
+  if [[ "$id" == "sfu-b" && -n "${SFU_B_PUBLIC_URL:-}" ]]; then
+    printf "%s" "${SFU_B_PUBLIC_URL}"
+    return 0
+  fi
+
+  if ! is_local_url "$deploy_url"; then
+    printf "%s" "$deploy_url"
   fi
 }
 
@@ -115,11 +185,49 @@ status_json() {
   curl -fsS --connect-timeout 3 --max-time 5 -H "x-sfu-secret: ${SFU_SECRET}" "${url}/status" 2>/dev/null || true
 }
 
-SFU_A_URL="$(get_pool_url "sfu-a")"
-SFU_B_URL="$(get_pool_url "sfu-b")"
+validate_public_route() {
+  local id="$1"
+  local url="$2"
+  if [[ -z "$url" ]]; then
+    echo "No public URL configured for ${id}; cross-SFU join redirects will omit redirectUrl." >&2
+    return 0
+  fi
 
-echo "Using SFU A: ${SFU_A_URL}"
-echo "Using SFU B: ${SFU_B_URL}"
+  local status=""
+  status="$(status_json "$url")"
+  if [[ -z "$status" ]]; then
+    echo "Public URL for ${id} is not reachable yet: ${url}" >&2
+    return 0
+  fi
+
+  local instance_id=""
+  instance_id="$(printf "%s" "$status" | json_field instanceId || true)"
+  if [[ "$instance_id" != "$id" ]]; then
+    echo "Public URL for ${id} returned instance '${instance_id:-unknown}': ${url}" >&2
+  fi
+}
+
+SFU_A_URL="$(get_deploy_url "sfu-a")"
+SFU_B_URL="$(get_deploy_url "sfu-b")"
+SFU_A_PUBLIC_URL="$(get_public_url "sfu-a" "$SFU_A_URL")"
+SFU_B_PUBLIC_URL="$(get_public_url "sfu-b" "$SFU_B_URL")"
+export SFU_A_PUBLIC_URL
+export SFU_B_PUBLIC_URL
+
+COMPOSE_ENV_FILES=(--env-file "$ENV_FILE")
+if [[ -f "$SFU_ENV_FILE" ]]; then
+  COMPOSE_ENV_FILES+=(--env-file "$SFU_ENV_FILE")
+fi
+COMPOSE=(docker compose "${COMPOSE_ENV_FILES[@]}" -f "$COMPOSE_FILE")
+HAS_REDIS_SERVICE="false"
+if "${COMPOSE[@]}" config --services | rg -x "redis" >/dev/null 2>&1; then
+  HAS_REDIS_SERVICE="true"
+fi
+
+echo "Using SFU A deploy URL: ${SFU_A_URL}"
+echo "Using SFU B deploy URL: ${SFU_B_URL}"
+echo "Using SFU A public URL: ${SFU_A_PUBLIC_URL:-<unset>}"
+echo "Using SFU B public URL: ${SFU_B_PUBLIC_URL:-<unset>}"
 
 echo "Pulling latest code..."
 git -C "$ROOT_DIR" pull
@@ -207,6 +315,11 @@ echo "Inactive service: ${INACTIVE_SERVICE}"
 
 echo "Building and starting ${INACTIVE_SERVICE}..."
 "${COMPOSE[@]}" up -d --build "$INACTIVE_SERVICE"
+if [[ "$INACTIVE_SERVICE" == "sfu-a" ]]; then
+  validate_public_route "sfu-a" "$SFU_A_PUBLIC_URL"
+else
+  validate_public_route "sfu-b" "$SFU_B_PUBLIC_URL"
+fi
 
 FORCED_DRAIN_ACTIVE="false"
 if [[ "$ACTIVE_SERVICE" == "sfu-a" && "$HAS_STATUS_A" != "true" ]]; then
@@ -272,6 +385,11 @@ fi
 
 echo "Rebuilding and starting ${ACTIVE_SERVICE}..."
 "${COMPOSE[@]}" up -d --build "$ACTIVE_SERVICE"
+if [[ "$ACTIVE_SERVICE" == "sfu-a" ]]; then
+  validate_public_route "sfu-a" "$SFU_A_PUBLIC_URL"
+else
+  validate_public_route "sfu-b" "$SFU_B_PUBLIC_URL"
+fi
 
 if [[ "$DEPLOY_BROWSER_LOCAL" == "true" ]]; then
   echo ""
