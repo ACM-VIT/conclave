@@ -48,10 +48,29 @@ const MAX_TRIES = 6;
 
 const moduleDir = dirname(fileURLToPath(import.meta.url));
 const wordsPath = resolve(moduleDir, "wordleWords.txt");
-const ALL_WORDS: string[] = readFileSync(wordsPath, "utf8")
-  .split("\n")
-  .map((word) => word.trim().toUpperCase())
-  .filter((word) => /^[A-Z]{5}$/.test(word));
+
+const loadWordList = (): string[] => {
+  let fileContents: string;
+  try {
+    fileContents = readFileSync(wordsPath, "utf8");
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(`Failed to load Wordle word list at ${wordsPath}: ${reason}`);
+  }
+
+  const words = fileContents
+    .split("\n")
+    .map((word) => word.trim().toUpperCase())
+    .filter((word) => /^[A-Z]{5}$/.test(word));
+
+  if (words.length === 0) {
+    throw new Error(`Wordle word list at ${wordsPath} did not contain any 5-letter words`);
+  }
+
+  return words;
+};
+
+const ALL_WORDS: string[] = loadWordList();
 const WORD_SET = new Set<string>(ALL_WORDS);
 
 const setterName = (ctx: GameContext, setterId: string | null): string | null => {
@@ -327,7 +346,7 @@ export const wordleModule: GameModule<WordleState> = {
         });
 
         const players: Record<string, PlayerRoundState> = {};
-        for (const playerId of contestantIds(state, ctx)) {
+        for (const playerId of contestantIds(currentState, ctx)) {
           players[playerId] = {
             guesses: [],
             outcome: null,

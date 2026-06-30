@@ -75,6 +75,7 @@ describe("wordle game", () => {
       phase: "playing",
       setterId: "guesser",
     });
+    expect(Object.keys(state.players)).toEqual(["host"]);
     expect(publicView.standings.map((entry) => entry.playerId)).toEqual(["host"]);
   });
 });
