@@ -7820,8 +7820,8 @@ final class MeetingViewModel {
             return
         }
 
-        if gif == nil, ChatCommandParser.parseConclaveMention(trimmed) != nil {
-            addSystemMessage(.info("Conclave AI is not available in the native app yet."))
+        if gif == nil, let conclaveQuestion = ChatCommandParser.parseConclaveMention(trimmed) {
+            sendConclaveQuestion(trimmed, question: conclaveQuestion, replyTo: replyTo)
             return
         }
 
@@ -7864,6 +7864,124 @@ final class MeetingViewModel {
                 applyChatSendError(error, context: actionContext)
             }
         }
+    }
+
+    private func sendConclaveQuestion(
+        _ originalMessage: String,
+        question: String,
+        replyTo: ChatReplyPreview?
+    ) {
+        #if !SKIP
+        HapticManager.shared.trigger(.light)
+        #endif
+
+        let actionContext = currentCallActionContext()
+        Task {
+            do {
+                let questionMessage = try await sendChatContentOptimistically(
+                    originalMessage,
+                    replyTo: replyTo,
+                    context: actionContext
+                )
+                guard isCurrentJoinedCall(actionContext) else { return }
+                await requestConclaveAssistantAnswer(
+                    question: question,
+                    questionMessageId: questionMessage.id,
+                    context: actionContext
+                )
+            } catch {
+                applyChatSendError(error, context: actionContext)
+            }
+        }
+    }
+
+    private func requestConclaveAssistantAnswer(
+        question: String,
+        questionMessageId: String,
+        context: CallActionContext
+    ) async {
+        let normalizedQuestion = question.trimmingCharacters(in: .whitespacesAndNewlines)
+        let prompt = normalizedQuestion.isEmpty ? NativeConclaveAssistantService.defaultQuestion : normalizedQuestion
+        let answerId = "conclave-\(Int(Date().timeIntervalSince1970 * 1000))-\(String(UUID().uuidString.prefix(6)).lowercased())"
+
+        do {
+            let authorization = try await socketManager.requestConclaveAuthorization(
+                answerId: answerId,
+                questionMessageId: questionMessageId
+            )
+            let relayToken = authorization.token?.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines) ?? ""
+            guard !relayToken.isEmpty else {
+                throw MeetingActionResponseError(message: authorization.error ?? "Conclave could not authorize this answer.")
+            }
+            guard isCurrentJoinedCall(context) else { return }
+
+            let result = try await NativeConclaveAssistantService.ask(
+                answerId: answerId,
+                question: prompt,
+                relayToken: relayToken,
+                history: nativeConclaveAssistantHistory()
+            )
+
+            guard isCurrentJoinedCall(context) else { return }
+            if let relay = result.relay {
+                socketManager.relayConclaveAnswer(relay)
+                appendConclaveAssistantAnswer(relay: relay, fallbackContent: result.content)
+            } else {
+                appendConclaveAssistantAnswer(
+                    id: answerId,
+                    content: result.content,
+                    timestamp: Date(),
+                    roomId: state.roomId
+                )
+            }
+        } catch {
+            guard isSameCallContext(context) else { return }
+            addSystemMessage(.info(NativeConclaveAssistantService.presentationMessage(for: error)))
+            debugLog("[Meeting] Conclave assistant error: \(error.localizedDescription)")
+        }
+    }
+
+    private func nativeConclaveAssistantHistory() -> [ConclaveAssistantHistoryItem] {
+        state.chatMessages.compactMap { message in
+            guard message.gif == nil else { return nil }
+            let content = message.content.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !content.isEmpty else { return nil }
+            return ConclaveAssistantHistoryItem(
+                name: message.displayName,
+                isAssistant: message.userId == ConclaveAssistantChatIdentity.userId,
+                content: content
+            )
+        }
+    }
+
+    private func appendConclaveAssistantAnswer(relay: ConclaveAssistantRelayPacket, fallbackContent: String) {
+        let content = relay.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? fallbackContent
+            : relay.content
+        appendConclaveAssistantAnswer(
+            id: relay.id,
+            content: content,
+            timestamp: Date(timeIntervalSince1970: relay.timestamp / 1000),
+            roomId: state.roomId
+        )
+    }
+
+    private func appendConclaveAssistantAnswer(
+        id: String,
+        content: String,
+        timestamp: Date,
+        roomId: String?
+    ) {
+        let trimmedContent = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedContent.isEmpty else { return }
+        _ = appendChatMessage(ChatMessage(
+            id: id,
+            userId: ConclaveAssistantChatIdentity.userId,
+            displayName: ConclaveAssistantChatIdentity.displayName,
+            content: trimmedContent,
+            timestamp: timestamp,
+            roomId: roomId
+        ))
     }
 
     func toggleChat() {

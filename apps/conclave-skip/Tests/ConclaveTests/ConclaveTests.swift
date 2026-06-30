@@ -4021,24 +4021,14 @@ final class ConclaveTests: XCTestCase {
         XCTAssertNil(viewModel.state.errorMessage)
     }
 
-    @MainActor
-    func testNativeConclaveMentionIsBlockedBeforeBrokenAssistantSend() async throws {
-        let viewModel = MeetingViewModel()
-        viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
-        viewModel.state.sfuUserId = "local@example.com"
-        viewModel.state.roomId = "room-a"
-        viewModel.state.connectionState = ConnectionState.joined
+    func testNativeConclaveMentionUsesAssistantFlowInsteadOfNativeBlocker() throws {
+        let source = try sourceFileContents("Sources/Conclave/Features/Meeting/MeetingViewModel.swift")
 
-        viewModel.sendChatMessage("@Conclave summarize the last few minutes")
-
-        try? await Task.sleep(nanoseconds: 50_000_000)
-
-        XCTAssertTrue(viewModel.state.chatMessages.isEmpty)
-        XCTAssertEqual(
-            viewModel.state.systemMessages.last?.displayText,
-            "Conclave AI is not available in the native app yet."
-        )
-        XCTAssertNil(viewModel.state.errorMessage)
+        XCTAssertTrue(source.contains("sendConclaveQuestion(trimmed, question: conclaveQuestion, replyTo: replyTo)"))
+        XCTAssertTrue(source.contains("socketManager.requestConclaveAuthorization("))
+        XCTAssertTrue(source.contains("NativeConclaveAssistantService.ask("))
+        XCTAssertTrue(source.contains("socketManager.relayConclaveAnswer(relay)"))
+        XCTAssertFalse(source.contains("Conclave AI is not available in the native app yet."))
     }
 
     @MainActor
@@ -6594,6 +6584,76 @@ final class ConclaveTests: XCTestCase {
         XCTAssertEqual(object["timestamp"] as? Double, 1_783_000_100_000)
         XCTAssertEqual(object["expiresAt"] as? Double, 1_783_000_160_000)
         XCTAssertEqual(object["signature"] as? String, "signed-packet")
+    }
+
+    func testNativeConclaveAssistantURLUsesWebEndpointPath() throws {
+        let productionURL = try XCTUnwrap(NativeConclaveAssistantService.assistantURL(
+            baseURL: URL(string: "https://conclave.acmvit.in")
+        ))
+        let nestedURL = try XCTUnwrap(NativeConclaveAssistantService.assistantURL(
+            baseURL: URL(string: "https://conclave.acmvit.in/custom")
+        ))
+
+        XCTAssertEqual(productionURL.absoluteString, "https://conclave.acmvit.in/api/conclave/assistant")
+        XCTAssertEqual(nestedURL.absoluteString, "https://conclave.acmvit.in/custom/api/conclave/assistant")
+    }
+
+    func testNativeConclaveAssistantStreamUsesFinalSignedRelay() throws {
+        let packet = ConclaveAssistantRelayPacket(
+            id: "answer-1",
+            roomId: "room-a",
+            channelId: "room:room-a",
+            requesterUserId: "user@example.com#session",
+            questionMessageId: "question-1",
+            content: "Final native answer.",
+            done: true,
+            timestamp: 1_783_000_100_000,
+            expiresAt: 1_783_000_160_000,
+            signature: "signed-packet"
+        )
+        let relayObject = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(packet)) as? NSDictionary)
+        let deltaData = try JSONSerialization.data(withJSONObject: [
+            "type": "delta",
+            "delta": "Draft "
+        ])
+        let doneData = try JSONSerialization.data(withJSONObject: [
+            "type": "done",
+            "relay": relayObject
+        ])
+        let body = [
+            "data: \(String(data: deltaData, encoding: .utf8)!)",
+            "",
+            "data: \(String(data: doneData, encoding: .utf8)!)",
+            ""
+        ].joined(separator: "\n")
+
+        let result = try NativeConclaveAssistantService.parseAssistantStream(body: body)
+
+        XCTAssertEqual(result.content, "Final native answer.")
+        XCTAssertEqual(result.relay?.id, "answer-1")
+        XCTAssertEqual(result.relay?.signature, "signed-packet")
+    }
+
+    func testNativeConclaveAssistantStreamSurfacesServerError() throws {
+        let errorData = try JSONSerialization.data(withJSONObject: [
+            "type": "error",
+            "error": "Enter an OpenAI API key to use Conclave AI."
+        ])
+        let body = "data: \(String(data: errorData, encoding: .utf8)!)\n\n"
+
+        XCTAssertThrowsError(try NativeConclaveAssistantService.parseAssistantStream(body: body)) { error in
+            XCTAssertEqual(error.localizedDescription, "Enter an OpenAI API key to use Conclave AI.")
+        }
+    }
+
+    func testNativeConclaveAssistantAndroidBridgeUsesLongRunningRequestPath() throws {
+        let source = try sourceFileContents("Sources/Conclave/Skip/AndroidNativeHttpClient.kt")
+
+        XCTAssertTrue(source.contains("private val assistantClient = client.newBuilder()"))
+        XCTAssertTrue(source.contains(".readTimeout(120, TimeUnit.SECONDS)"))
+        XCTAssertTrue(source.contains(".callTimeout(150, TimeUnit.SECONDS)"))
+        XCTAssertTrue(source.contains("fun requestAssistant("))
+        XCTAssertTrue(source.contains("httpClient = assistantClient"))
     }
 
     func testTerminalRoomEventsAllowMissingRoomIdOnlyDuringKnownCall() throws {
