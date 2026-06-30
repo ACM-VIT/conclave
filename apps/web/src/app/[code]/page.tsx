@@ -1,5 +1,4 @@
 import { Suspense } from "react";
-import type { Viewport } from "next";
 import { headers as nextHeaders } from "next/headers";
 import MeetsClientShell from "../meets-client-shell";
 import RouteLoadingState from "../components/RouteLoadingState";
@@ -19,12 +18,6 @@ type MeetRoomPageProps = {
 
 export const instant = true;
 export const prefetch = "allow-runtime";
-export const viewport: Viewport = {
-  width: "device-width",
-  initialScale: 1,
-  themeColor: "#131316",
-  colorScheme: "dark",
-};
 
 const getParamValue = (
   value: string | string[] | undefined,

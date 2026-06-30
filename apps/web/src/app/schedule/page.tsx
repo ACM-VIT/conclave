@@ -1,5 +1,4 @@
 import { Suspense } from "react";
-import type { Viewport } from "next";
 import { headers as nextHeaders } from "next/headers";
 import { redirect } from "next/navigation";
 import { auth } from "@/lib/auth";
@@ -8,12 +7,6 @@ import ScheduleClient from "./schedule-client";
 
 export const instant = true;
 export const prefetch = "allow-runtime";
-export const viewport: Viewport = {
-  width: "device-width",
-  initialScale: 1,
-  themeColor: "#131316",
-  colorScheme: "dark",
-};
 
 export default function SchedulePage() {
   return (

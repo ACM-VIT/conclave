@@ -1,15 +1,8 @@
 import { Suspense } from "react";
-import type { Viewport } from "next";
 import RouteLoadingState from "../../../components/RouteLoadingState";
 import BookingClient from "./booking-client";
 
 export const instant = true;
-export const viewport: Viewport = {
-  width: "device-width",
-  initialScale: 1,
-  themeColor: "#131316",
-  colorScheme: "dark",
-};
 
 type BookingPageProps = {
   params: Promise<{ username: string; eventSlug: string }>;

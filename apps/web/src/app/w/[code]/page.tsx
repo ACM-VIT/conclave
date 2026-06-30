@@ -1,5 +1,4 @@
 import { Suspense } from "react";
-import type { Viewport } from "next";
 import { headers as nextHeaders } from "next/headers";
 import RouteLoadingState from "../../components/RouteLoadingState";
 import { sanitizeWebinarLinkCode } from "../../lib/utils";
@@ -18,12 +17,6 @@ type WebinarRoomPageProps = {
 
 export const instant = true;
 export const prefetch = "allow-runtime";
-export const viewport: Viewport = {
-  width: "device-width",
-  initialScale: 1,
-  themeColor: "#131316",
-  colorScheme: "dark",
-};
 
 const lookupScheduledWebinar = async (
   slug: string,
