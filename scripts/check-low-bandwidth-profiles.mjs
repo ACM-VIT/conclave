@@ -1870,7 +1870,7 @@ assertRegex(
 );
 assertRegex(
   "webMeetSocket",
-  /"displayNameSnapshot"[\s\S]*clearParticipantConnectionStatus\(snapshotUserId\);[\s\S]*type: "ADD_PARTICIPANT"/,
+  /const applyDisplayNameSnapshot = useCallback\([\s\S]*clearParticipantConnectionStatus\(snapshotUserId\);[\s\S]*type: "ADD_PARTICIPANT"[\s\S]*"displayNameSnapshot"[\s\S]*applyDisplayNameSnapshot\(users \|\| \[\]\);/,
   "web participant snapshots clear stale reconnect badges for already-present participants",
 );
 assertRegex(
