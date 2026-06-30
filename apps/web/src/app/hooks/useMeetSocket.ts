@@ -59,6 +59,12 @@ import type {
 import type { ParticipantAction } from "../lib/participant-reducer";
 import { createMeetError, isSystemUserId, normalizeDisplayName } from "../lib/utils";
 import { normalizeChatMessage } from "../lib/chat-commands";
+import {
+  type AssistantChatMessage,
+  type ConclaveAssistantStatus,
+  CONCLAVE_ASSISTANT_NAME,
+  CONCLAVE_ASSISTANT_USER_ID,
+} from "../lib/conclave-assistant";
 import { telemetry } from "../lib/telemetry";
 import {
   applyAudioProducerNetworkProfile,
@@ -5121,6 +5127,68 @@ export function useMeetSocket({
                 chat.setUnreadCount((prev) => prev + 1);
               }
             });
+
+            // Streamed "@Conclave" AI answers fanned out by the asking client.
+            // Upsert by id so the bubble fills in live for everyone in the room.
+            socket.on(
+              "conclaveMessage",
+              (payload: {
+                id?: string;
+                content?: string;
+                done?: boolean;
+                timestamp?: number;
+              }) => {
+                if (!payload?.id) return;
+                const status: ConclaveAssistantStatus = payload.done
+                  ? "done"
+                  : "streaming";
+                let isNew = false;
+                chat.setChatMessages((prev) => {
+                  const index = prev.findIndex((m) => m.id === payload.id);
+                  const previous =
+                    index >= 0
+                      ? (prev[index] as AssistantChatMessage)
+                      : undefined;
+                  if (
+                    previous?.assistantStatus === "done" &&
+                    payload.done !== true
+                  ) {
+                    return prev;
+                  }
+                  const incomingContent = payload.content ?? "";
+                  const content =
+                    payload.done === true
+                      ? incomingContent || previous?.content || ""
+                      : previous && previous.content.length > incomingContent.length
+                        ? previous.content
+                        : incomingContent || previous?.content || "";
+                  const base: AssistantChatMessage = {
+                    id: payload.id as string,
+                    userId: CONCLAVE_ASSISTANT_USER_ID,
+                    displayName: CONCLAVE_ASSISTANT_NAME,
+                    content,
+                    timestamp:
+                      index >= 0
+                        ? prev[index].timestamp
+                        : (payload.timestamp ?? Date.now()),
+                    isAssistant: true,
+                    assistantStatus: status,
+                    reasoning: previous?.reasoning,
+                    tasks: previous?.tasks,
+                  };
+                  if (index === -1) {
+                    isNew = true;
+                    return [...prev, base];
+                  }
+                  const next = [...prev];
+                  next[index] = base;
+                  return next;
+                });
+                if (isNew && !chat.isChatOpenRef.current) {
+                  chat.setUnreadCount((prev) => prev + 1);
+                }
+              },
+            );
 
             socket.on("reaction", (reaction: ReactionNotification) => {
               if (reaction.kind && reaction.value) {

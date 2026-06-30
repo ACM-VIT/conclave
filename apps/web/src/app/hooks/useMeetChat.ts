@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { Socket } from "socket.io-client";
 import type { ChatGifAttachment, ChatMessage, ChatReplyPreview } from "../lib/types";
 import {
@@ -10,13 +10,48 @@ import {
   normalizeChatMessage,
   parseChatCommand,
 } from "../lib/chat-commands";
+import {
+  ConclaveAssistantApiKeyRequiredError,
+  type AssistantChatMessage,
+  type ConclaveAssistantModel,
+  type ConclaveAssistantRelayPacket,
+  type ConclaveAssistantHistoryItem,
+  CONCLAVE_ASSISTANT_GLOBAL_MODEL,
+  CONCLAVE_ASSISTANT_NAME,
+  CONCLAVE_ASSISTANT_USER_ID,
+  completeAssistantTasks,
+  mergeAssistantTask,
+  parseConclaveMention,
+  streamConclaveAssistant,
+} from "../lib/conclave-assistant";
+
+export interface ConclaveAssistantContext {
+  transcript: string;
+  transcriptActive: boolean;
+}
+
+export interface ConclaveAssistantApiKeyPromptState {
+  visible: boolean;
+  error: string | null;
+  model: ConclaveAssistantModel;
+}
 
 const DIRECT_MESSAGE_INTENT_PATTERN =
   /^(?:@\S+\s+[\s\S]+|\/dm\s+\S+\s+[\s\S]+)$/i;
+const CONCLAVE_AUTHORIZATION_TIMEOUT_MS = 8000;
 
 type LocalRenderChatMessage = ChatMessage & {
   clientRenderKey?: string;
 };
+
+interface PendingConclaveAssistantRequest {
+  answerId: string;
+  questionMessageId: string;
+  questionMessageContent: string;
+  question: string;
+  history: ConclaveAssistantHistoryItem[];
+  context: ConclaveAssistantContext;
+}
 
 interface UseMeetChatOptions {
   socketRef: React.MutableRefObject<Socket | null>;
@@ -39,6 +74,8 @@ interface UseMeetChatOptions {
     text: string;
   }) => void;
   isTtsDisabled?: boolean;
+  assistantEnabled?: boolean;
+  getAssistantContext?: () => ConclaveAssistantContext;
 }
 
 export function useMeetChat({
@@ -58,6 +95,8 @@ export function useMeetChat({
   onLeaveRoom,
   onTtsMessage,
   isTtsDisabled,
+  assistantEnabled = true,
+  getAssistantContext,
 }: UseMeetChatOptions) {
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatOverlayMessages, setChatOverlayMessages] = useState<ChatMessage[]>(
@@ -67,7 +106,35 @@ export function useMeetChat({
   const [unreadCount, setUnreadCount] = useState(0);
   const [chatInput, setChatInput] = useState("");
   const [replyTarget, setReplyTarget] = useState<ChatReplyPreview | null>(null);
+  const [assistantApiKeyPrompt, setAssistantApiKeyPrompt] =
+    useState<ConclaveAssistantApiKeyPromptState>({
+      visible: false,
+      error: null,
+      model: CONCLAVE_ASSISTANT_GLOBAL_MODEL,
+    });
   const isChatOpenRef = useRef(false);
+  const chatMessagesRef = useRef<ChatMessage[]>([]);
+  const assistantControllersRef = useRef<Set<AbortController>>(new Set());
+  const assistantApiKeyRef = useRef("");
+  const assistantModelRef = useRef<ConclaveAssistantModel>(
+    CONCLAVE_ASSISTANT_GLOBAL_MODEL,
+  );
+  const pendingAssistantRequestRef =
+    useRef<PendingConclaveAssistantRequest | null>(null);
+
+  useEffect(() => {
+    chatMessagesRef.current = chatMessages;
+  }, [chatMessages]);
+
+  useEffect(
+    () => () => {
+      for (const controller of assistantControllersRef.current) {
+        controller.abort();
+      }
+      assistantControllersRef.current.clear();
+    },
+    [],
+  );
 
   const appendLocalMessage = useCallback(
     (content: string) => {
@@ -75,6 +142,305 @@ export function useMeetChat({
     },
     [setChatMessages],
   );
+
+  const patchAssistantMessage = useCallback(
+    (answerId: string, patch: Partial<AssistantChatMessage>) => {
+      setChatMessages((prev) =>
+        prev.map((message) =>
+          message.id === answerId
+            ? ({ ...(message as AssistantChatMessage), ...patch })
+            : message,
+        ),
+      );
+    },
+    [setChatMessages],
+  );
+
+  const requestConclaveAuthorization = useCallback(
+    (
+      answerId: string,
+      questionMessageId: string,
+      questionMessageContent: string,
+    ): Promise<{ token: string }> => {
+      const socket = socketRef.current;
+      if (!socket) {
+        return Promise.reject(new Error("Conclave is not connected."));
+      }
+
+      return new Promise((resolve, reject) => {
+        const timeoutId = window.setTimeout(() => {
+          reject(new Error("Conclave authorization timed out."));
+        }, CONCLAVE_AUTHORIZATION_TIMEOUT_MS);
+
+        socket.emit(
+          "conclave:authorize",
+          {
+            id: answerId,
+            questionMessageId,
+            questionContent: questionMessageContent,
+          },
+          (response: { token?: string } | { error: string }) => {
+            window.clearTimeout(timeoutId);
+            if (!response || "error" in response) {
+              reject(
+                new Error(
+                  response?.error || "Conclave could not authorize this answer.",
+                ),
+              );
+              return;
+            }
+            if (!response.token) {
+              reject(new Error("Conclave authorization response was empty."));
+              return;
+            }
+            resolve({ token: response.token });
+          },
+        );
+      });
+    },
+    [socketRef],
+  );
+
+  const relayConclavePacket = useCallback(
+    (packet: ConclaveAssistantRelayPacket) => {
+      socketRef.current?.emit("conclaveAnswer", packet);
+    },
+    [socketRef],
+  );
+
+  const startConclaveStream = useCallback(
+    (
+      request: PendingConclaveAssistantRequest,
+      apiKey?: string,
+      model?: ConclaveAssistantModel,
+    ) => {
+      const controller = new AbortController();
+      assistantControllersRef.current.add(controller);
+      patchAssistantMessage(request.answerId, {
+        content: "",
+        assistantStatus: "streaming",
+        reasoning: "",
+        reasoningStatus: undefined,
+        tasks: [],
+      });
+
+      requestConclaveAuthorization(
+        request.answerId,
+        request.questionMessageId,
+        request.questionMessageContent,
+      )
+        .then(({ token }) =>
+          streamConclaveAssistant({
+            answerId: request.answerId,
+            question: request.question,
+            relayToken: token,
+            apiKey,
+            model,
+            history: request.history,
+            transcript: request.context.transcript,
+            transcriptActive: request.context.transcriptActive,
+            signal: controller.signal,
+            onDelta: (fullText) => {
+              if (controller.signal.aborted) return;
+              patchAssistantMessage(request.answerId, { content: fullText });
+            },
+            onReasoning: (fullReasoning) => {
+              if (controller.signal.aborted) return;
+              patchAssistantMessage(request.answerId, {
+                reasoning: fullReasoning,
+                reasoningStatus: "streaming",
+              });
+            },
+            onReasoningDone: () => {
+              if (controller.signal.aborted) return;
+              patchAssistantMessage(request.answerId, {
+                reasoningStatus: "done",
+              });
+            },
+            onTask: (task) => {
+              if (controller.signal.aborted) return;
+              setChatMessages((prev) =>
+                prev.map((message) =>
+                  message.id === request.answerId
+                    ? {
+                        ...(message as AssistantChatMessage),
+                        tasks: mergeAssistantTask(
+                          (message as AssistantChatMessage).tasks,
+                          task,
+                        ),
+                      }
+                    : message,
+                ),
+              );
+            },
+            onRelay: (packet) => {
+              if (controller.signal.aborted) return;
+              relayConclavePacket(packet);
+            },
+            onDone: (finalText) => {
+              if (controller.signal.aborted) return;
+              patchAssistantMessage(request.answerId, {
+                content: finalText.trim() || "I didn't catch anything to answer.",
+                assistantStatus: "done",
+                reasoningStatus: "done",
+              });
+              setChatMessages((prev) =>
+                prev.map((message) =>
+                  message.id === request.answerId
+                    ? {
+                        ...(message as AssistantChatMessage),
+                        tasks: completeAssistantTasks(
+                          (message as AssistantChatMessage).tasks,
+                        ),
+                      }
+                    : message,
+                ),
+              );
+            },
+          }),
+        )
+        .then((finalText) => {
+          if (controller.signal.aborted) return;
+          patchAssistantMessage(request.answerId, {
+            content: finalText.trim() || "I didn't catch anything to answer.",
+            assistantStatus: "done",
+            reasoningStatus: "done",
+          });
+        })
+        .catch((error) => {
+          if (controller.signal.aborted) return;
+          if (error instanceof ConclaveAssistantApiKeyRequiredError) {
+            pendingAssistantRequestRef.current = request;
+            setAssistantApiKeyPrompt({
+              visible: true,
+              error: null,
+              model: assistantModelRef.current,
+            });
+            patchAssistantMessage(request.answerId, {
+              content:
+                "Enter an OpenAI API key below to use Conclave AI in this room.",
+              assistantStatus: "error",
+            });
+            return;
+          }
+          patchAssistantMessage(request.answerId, {
+            content:
+              error instanceof Error
+                ? error.message
+                : "Conclave could not answer right now.",
+            assistantStatus: "error",
+          });
+        })
+        .finally(() => {
+          assistantControllersRef.current.delete(controller);
+        });
+    },
+    [
+      patchAssistantMessage,
+      relayConclavePacket,
+      requestConclaveAuthorization,
+      setChatMessages,
+    ],
+  );
+
+  // "@Conclave …" summons the room AI. The question is first accepted as a
+  // public chat line, then the SFU issues a short-lived token for the answer.
+  const askConclave = useCallback(
+    (
+      rawQuestion: string,
+      questionMessageId: string,
+      questionMessageContent: string,
+    ) => {
+      if (!assistantEnabled) {
+        appendLocalMessage("Conclave AI isn't available in this room.");
+        return;
+      }
+
+      const question =
+        rawQuestion.trim() ||
+        "Introduce yourself and briefly tell me what you can help with in this meeting.";
+
+      const history: ConclaveAssistantHistoryItem[] = chatMessagesRef.current
+        .filter((message) => message.userId !== "system" && !message.gif)
+        .map((message) => ({
+          name: message.displayName,
+          isAssistant:
+            (message as AssistantChatMessage).isAssistant === true ||
+            message.userId === CONCLAVE_ASSISTANT_USER_ID,
+          content: message.content,
+        }));
+
+      const answerId = `conclave-${Date.now()}-${Math.random()
+        .toString(36)
+        .slice(2, 8)}`;
+      const answerMessage: AssistantChatMessage = {
+        id: answerId,
+        userId: CONCLAVE_ASSISTANT_USER_ID,
+        displayName: CONCLAVE_ASSISTANT_NAME,
+        content: "",
+        timestamp: Date.now(),
+        isAssistant: true,
+        assistantStatus: "streaming",
+      };
+      setChatMessages((prev) => [...prev, answerMessage]);
+
+      const request: PendingConclaveAssistantRequest = {
+        answerId,
+        questionMessageId,
+        questionMessageContent,
+        question,
+        history,
+        context: getAssistantContext?.() ?? {
+          transcript: "",
+          transcriptActive: false,
+        },
+      };
+      startConclaveStream(
+        request,
+        assistantApiKeyRef.current || undefined,
+        assistantApiKeyRef.current ? assistantModelRef.current : undefined,
+      );
+    },
+    [
+      assistantEnabled,
+      appendLocalMessage,
+      getAssistantContext,
+      setChatMessages,
+      startConclaveStream,
+    ],
+  );
+
+  const submitAssistantApiKey = useCallback(
+    (apiKey: string, model: ConclaveAssistantModel) => {
+      const trimmed = apiKey.trim();
+      if (!trimmed) {
+        setAssistantApiKeyPrompt({
+          visible: true,
+          error: "Enter an OpenAI API key.",
+          model,
+        });
+        return;
+      }
+      assistantApiKeyRef.current = trimmed;
+      assistantModelRef.current = model;
+      const pendingRequest = pendingAssistantRequestRef.current;
+      pendingAssistantRequestRef.current = null;
+      setAssistantApiKeyPrompt({ visible: false, error: null, model });
+      if (pendingRequest) {
+        startConclaveStream(pendingRequest, trimmed, model);
+      }
+    },
+    [startConclaveStream],
+  );
+
+  const cancelAssistantApiKeyPrompt = useCallback(() => {
+    pendingAssistantRequestRef.current = null;
+    setAssistantApiKeyPrompt({
+      visible: false,
+      error: null,
+      model: assistantModelRef.current,
+    });
+  }, []);
 
   const buildOptimisticMessage = useCallback(
     (
@@ -118,10 +484,16 @@ export function useMeetChat({
   }, [setChatMessages, setChatOverlayMessages, setUnreadCount]);
 
   const sendChatInternal = useCallback(
-    (content: string, gif?: ChatGifAttachment, replyTo?: ChatReplyPreview) => {
+    (
+      content: string,
+      gif?: ChatGifAttachment,
+      replyTo?: ChatReplyPreview,
+    ): Promise<ChatMessage | null> => {
       const socket = socketRef.current;
       const trimmedContent = content.trim();
-      if (!socket || (!trimmedContent && !gif)) return;
+      if (!socket || (!trimmedContent && !gif)) {
+        return Promise.resolve(null);
+      }
 
       const messageContent = trimmedContent || gif?.title || "GIF";
       const optimisticMessage = buildOptimisticMessage(
@@ -131,60 +503,65 @@ export function useMeetChat({
       );
       setChatMessages((prev) => [...prev, optimisticMessage]);
 
-      socket.emit(
-        "sendChat",
-        {
-          content: messageContent,
-          ...(gif ? { gif } : {}),
-          ...(replyTo ? { replyTo } : {}),
-        },
-        (
-          response:
-            | { success: boolean; message?: ChatMessage }
-            | { error: string },
-        ) => {
-          if ("error" in response) {
-            console.error("[Meets] Chat error:", response.error);
+      return new Promise((resolve) => {
+        socket.emit(
+          "sendChat",
+          {
+            content: messageContent,
+            ...(gif ? { gif } : {}),
+            ...(replyTo ? { replyTo } : {}),
+          },
+          (
+            response:
+              | { success: boolean; message?: ChatMessage }
+              | { error: string },
+          ) => {
+            if ("error" in response) {
+              console.error("[Meets] Chat error:", response.error);
+              setChatMessages((prev) =>
+                prev.filter((message) => message.id !== optimisticMessage.id),
+              );
+              appendLocalMessage(response.error);
+              resolve(null);
+              return;
+            }
+            if (response.message) {
+              const { message, ttsText } = normalizeChatMessage(response.message);
+              setChatMessages((prev) => {
+                const optimisticIndex = prev.findIndex(
+                  (item) => item.id === optimisticMessage.id,
+                );
+                if (optimisticIndex === -1) {
+                  if (prev.some((item) => item.id === message.id)) {
+                    return prev;
+                  }
+                  return [...prev, message];
+                }
+                const next = [...prev];
+                const acknowledgedMessage: LocalRenderChatMessage = {
+                  ...message,
+                  clientRenderKey: optimisticMessage.id,
+                };
+                next[optimisticIndex] = acknowledgedMessage;
+                return next;
+              });
+              if (ttsText && !isTtsDisabled) {
+                onTtsMessage?.({
+                  userId: message.userId,
+                  displayName: message.displayName,
+                  text: ttsText,
+                });
+              }
+              resolve(message);
+              return;
+            }
             setChatMessages((prev) =>
               prev.filter((message) => message.id !== optimisticMessage.id),
             );
-            appendLocalMessage(response.error);
-            return;
-          }
-          if (response.message) {
-            const { message, ttsText } = normalizeChatMessage(response.message);
-            setChatMessages((prev) => {
-              const optimisticIndex = prev.findIndex(
-                (item) => item.id === optimisticMessage.id,
-              );
-              if (optimisticIndex === -1) {
-                if (prev.some((item) => item.id === message.id)) {
-                  return prev;
-                }
-                return [...prev, message];
-              }
-              const next = [...prev];
-              const acknowledgedMessage: LocalRenderChatMessage = {
-                ...message,
-                clientRenderKey: optimisticMessage.id,
-              };
-              next[optimisticIndex] = acknowledgedMessage;
-              return next;
-            });
-            if (ttsText && !isTtsDisabled) {
-              onTtsMessage?.({
-                userId: message.userId,
-                displayName: message.displayName,
-                text: ttsText,
-              });
-            }
-            return;
-          }
-          setChatMessages((prev) =>
-            prev.filter((message) => message.id !== optimisticMessage.id),
-          );
-        },
-      );
+            resolve(null);
+          },
+        );
+      });
     },
     [
       socketRef,
@@ -215,6 +592,17 @@ export function useMeetChat({
       }
       const trimmed = content.trim();
       if (!trimmed) return;
+
+      const conclaveQuestion = parseConclaveMention(trimmed);
+      if (conclaveQuestion !== null) {
+        void sendChatInternal(trimmed).then((message) => {
+          if (message) {
+            askConclave(conclaveQuestion, message.id, message.content);
+          }
+        });
+        return;
+      }
+
       if (DIRECT_MESSAGE_INTENT_PATTERN.test(trimmed) && !isDmEnabled) {
         appendLocalMessage("Private messages are disabled by the host.");
         return;
@@ -324,6 +712,7 @@ export function useMeetChat({
       onLeaveRoom,
       isTtsDisabled,
       replyTarget,
+      askConclave,
     ],
   );
 
@@ -366,5 +755,8 @@ export function useMeetChat({
     replyTarget,
     startReply,
     cancelReply,
+    assistantApiKeyPrompt,
+    submitAssistantApiKey,
+    cancelAssistantApiKeyPrompt,
   };
 }

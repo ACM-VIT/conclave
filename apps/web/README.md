@@ -15,6 +15,16 @@ Integration notes
 - Reaction assets are served from `public/reactions` and passed via `reactionAssets`.
 - Set `NEXT_PUBLIC_SFU_CLIENT_ID` to tag requests with `x-sfu-client` so the SFU can apply per-client policies.
 
+## Main web worker
+
+The in-chat `@Conclave` assistant runs through the Next.js app route in the
+main web Worker.
+
+- `OPENAI_API_KEY`: optional server-side key for room-wide assistant answers. If
+  unset, the chat dock prompts the asking participant for their own OpenAI key
+  and keeps it in browser memory for the current page session only.
+- Set the production secret with `pnpm -C apps/web exec wrangler secret put OPENAI_API_KEY --config wrangler.jsonc`.
+
 ## Meeting transcript worker
 
 The meeting transcript dock uses a Cloudflare Durable Object worker in

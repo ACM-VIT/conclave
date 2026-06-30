@@ -1,7 +1,6 @@
 "use client";
 
 import {
-  ArrowDown,
   Ghost,
   Image as ImageIcon,
   Lock,
@@ -11,10 +10,27 @@ import {
 } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Avatar } from "@conclave/ui-tokens/web";
+import type { ConclaveAssistantApiKeyPromptState } from "../hooks/useMeetChat";
 import type { ChatGifAttachment, ChatMessage, ChatReplyPreview } from "../lib/types";
 import { getActionText, getCommandSuggestions } from "../lib/chat-commands";
+import {
+  type AssistantTask,
+  type AssistantChatMessage,
+  type ConclaveAssistantModel,
+  CONCLAVE_ASSISTANT_BYOK_MODELS,
+  CONCLAVE_ASSISTANT_NAME,
+  CONCLAVE_ASSISTANT_USER_ID,
+  CONCLAVE_MENTION_TOKEN,
+  isConclaveAssistantModel,
+} from "../lib/conclave-assistant";
 import { formatDisplayName, getChatMessageSegments } from "../lib/utils";
+import {
+  Conversation,
+  ConversationContent,
+  ConversationScrollButton,
+} from "./ai-elements/conversation";
 import ChatGifAttachmentView from "./ChatGifAttachmentView";
+import ConclaveMessage from "./ConclaveMessage";
 import GifPicker from "./GifPicker";
 
 interface MentionableParticipant {
@@ -37,6 +53,13 @@ interface ChatPanelProps {
   isChatLocked?: boolean;
   isDmEnabled?: boolean;
   isAdmin?: boolean;
+  assistantEnabled?: boolean;
+  assistantApiKeyPrompt?: ConclaveAssistantApiKeyPromptState;
+  onSubmitAssistantApiKey?: (
+    apiKey: string,
+    model: ConclaveAssistantModel,
+  ) => void;
+  onCancelAssistantApiKey?: () => void;
   mentionableParticipants?: MentionableParticipant[];
   replyTarget?: ChatReplyPreview | null;
   onReply?: (message: ChatMessage) => void;
@@ -68,6 +91,55 @@ const areGifsEqual = (
   );
 };
 
+const isAssistantMessageLike = (message: ChatMessage): boolean =>
+  (message as AssistantChatMessage).isAssistant === true ||
+  message.userId === CONCLAVE_ASSISTANT_USER_ID;
+
+const areAssistantTasksEqual = (
+  previousTasks?: AssistantTask[],
+  nextTasks?: AssistantTask[],
+): boolean => {
+  if (previousTasks === nextTasks) return true;
+  const previousList = previousTasks ?? [];
+  const nextList = nextTasks ?? [];
+  if (previousList.length !== nextList.length) return false;
+
+  for (let index = 0; index < previousList.length; index += 1) {
+    const previousTask = previousList[index];
+    const nextTask = nextList[index];
+    if (
+      previousTask.id !== nextTask.id ||
+      previousTask.kind !== nextTask.kind ||
+      previousTask.status !== nextTask.status ||
+      (previousTask.query ?? "") !== (nextTask.query ?? "")
+    ) {
+      return false;
+    }
+  }
+
+  return true;
+};
+
+const areAssistantFieldsEqual = (
+  previousMessage: ChatMessage,
+  nextMessage: ChatMessage,
+): boolean => {
+  const previousIsAssistant = isAssistantMessageLike(previousMessage);
+  const nextIsAssistant = isAssistantMessageLike(nextMessage);
+  if (previousIsAssistant !== nextIsAssistant) return false;
+  if (!previousIsAssistant && !nextIsAssistant) return true;
+
+  const previousAssistant = previousMessage as AssistantChatMessage;
+  const nextAssistant = nextMessage as AssistantChatMessage;
+  return (
+    previousAssistant.assistantStatus === nextAssistant.assistantStatus &&
+    previousAssistant.reasoningStatus === nextAssistant.reasoningStatus &&
+    (previousAssistant.reasoning ?? "") ===
+      (nextAssistant.reasoning ?? "") &&
+    areAssistantTasksEqual(previousAssistant.tasks, nextAssistant.tasks)
+  );
+};
+
 const areMessagesEqual = (
   previousMessages: ChatMessage[],
   nextMessages: ChatMessage[],
@@ -87,6 +159,7 @@ const areMessagesEqual = (
       previousMessage.content !== nextMessage.content ||
       previousMessage.timestamp !== nextMessage.timestamp ||
       !areGifsEqual(previousMessage.gif, nextMessage.gif) ||
+      !areAssistantFieldsEqual(previousMessage, nextMessage) ||
       (previousMessage.isDirect ?? false) !== (nextMessage.isDirect ?? false) ||
       (previousMessage.dmTargetUserId ?? "") !==
         (nextMessage.dmTargetUserId ?? "") ||
@@ -153,6 +226,18 @@ const areChatPanelPropsEqual = (
   const nextIsDmEnabled = nextProps.isDmEnabled ?? true;
   const previousIsAdmin = previousProps.isAdmin ?? false;
   const nextIsAdmin = nextProps.isAdmin ?? false;
+  const previousAssistantEnabled = previousProps.assistantEnabled ?? true;
+  const nextAssistantEnabled = nextProps.assistantEnabled ?? true;
+  const previousAssistantApiKeyPrompt = previousProps.assistantApiKeyPrompt ?? {
+    visible: false,
+    error: null,
+    model: "gpt-5.4-mini" as ConclaveAssistantModel,
+  };
+  const nextAssistantApiKeyPrompt = nextProps.assistantApiKeyPrompt ?? {
+    visible: false,
+    error: null,
+    model: "gpt-5.4-mini" as ConclaveAssistantModel,
+  };
 
   if (
     previousProps.chatInput !== nextProps.chatInput ||
@@ -161,12 +246,20 @@ const areChatPanelPropsEqual = (
     previousIsChatLocked !== nextIsChatLocked ||
     previousIsDmEnabled !== nextIsDmEnabled ||
     previousIsAdmin !== nextIsAdmin ||
+    previousAssistantEnabled !== nextAssistantEnabled ||
+    previousAssistantApiKeyPrompt.visible !==
+      nextAssistantApiKeyPrompt.visible ||
+    previousAssistantApiKeyPrompt.error !== nextAssistantApiKeyPrompt.error ||
+    previousAssistantApiKeyPrompt.model !== nextAssistantApiKeyPrompt.model ||
     previousProps.onInputChange !== nextProps.onInputChange ||
     previousProps.onSend !== nextProps.onSend ||
     previousProps.onSendGif !== nextProps.onSendGif ||
     previousProps.onClose !== nextProps.onClose ||
     previousProps.onReply !== nextProps.onReply ||
-    previousProps.onCancelReply !== nextProps.onCancelReply
+    previousProps.onCancelReply !== nextProps.onCancelReply ||
+    previousProps.onSubmitAssistantApiKey !==
+      nextProps.onSubmitAssistantApiKey ||
+    previousProps.onCancelAssistantApiKey !== nextProps.onCancelAssistantApiKey
   ) {
     return false;
   }
@@ -199,25 +292,31 @@ function ChatPanel({
   isChatLocked = false,
   isDmEnabled = true,
   isAdmin = false,
+  assistantEnabled = true,
+  assistantApiKeyPrompt = {
+    visible: false,
+    error: null,
+    model: "gpt-5.4-mini",
+  },
+  onSubmitAssistantApiKey,
+  onCancelAssistantApiKey,
   mentionableParticipants = [],
   replyTarget = null,
   onReply,
   onCancelReply,
 }: ChatPanelProps) {
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  const scrollContainerRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const shouldAutoScrollRef = useRef(true);
   const sendAnimationTimeoutRef = useRef<number | null>(null);
   const prevMessageIdsRef = useRef<Set<string>>(new Set());
-  const previousMessageCountRef = useRef(messages.length);
   const hasInitializedRef = useRef(false);
   const messageNodeRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const highlightTimeoutRef = useRef<number | null>(null);
   const [activeCommandIndex, setActiveCommandIndex] = useState(0);
   const [activeMentionIndex, setActiveMentionIndex] = useState(0);
   const [isSendAnimating, setIsSendAnimating] = useState(false);
-  const [unseenCount, setUnseenCount] = useState(0);
+  const [assistantApiKeyInput, setAssistantApiKeyInput] = useState("");
+  const [assistantModel, setAssistantModel] =
+    useState<ConclaveAssistantModel>(assistantApiKeyPrompt.model);
   const [highlightedMessageId, setHighlightedMessageId] = useState<
     string | null
   >(null);
@@ -296,28 +395,61 @@ function ChatPanel({
   const showMentionSuggestions =
     !showCommandSuggestions && mentionQuery !== null && mentionSuggestions.length > 0;
 
+  // The "@Conclave" AI hint is independent of the DM/participant mention system
+  // so it shows even when private messages are disabled. It tracks the "@handle"
+  // the user is typing at the caret — anywhere in the message ("Hey @Con…"), not
+  // just at the start — and disappears once the handle is complete with a space.
+  const showConclaveSuggestion = useMemo(() => {
+    if (!assistantEnabled || isChatDisabled || showCommandSuggestions) {
+      return false;
+    }
+    const match = chatInput.match(/(?:^|\s)@([A-Za-z]*)$/);
+    if (!match) return false;
+    return CONCLAVE_MENTION_TOKEN.toLowerCase().startsWith(
+      (match[1] ?? "").toLowerCase(),
+    );
+  }, [assistantEnabled, isChatDisabled, showCommandSuggestions, chatInput]);
+
+  const applyConclaveSuggestion = useCallback(() => {
+    // Replace just the "@handle" token being typed, preserving any text before
+    // it ("Hey @Con" -> "Hey @Conclave ").
+    const next = chatInput.replace(
+      /((?:^|\s)@)[A-Za-z]*$/,
+      `$1${CONCLAVE_MENTION_TOKEN} `,
+    );
+    onInputChange(next === chatInput ? `@${CONCLAVE_MENTION_TOKEN} ` : next);
+    textareaRef.current?.focus();
+  }, [chatInput, onInputChange]);
+
+  const startConclavePrompt = useCallback(() => {
+    onInputChange(`@${CONCLAVE_MENTION_TOKEN} `);
+    textareaRef.current?.focus();
+  }, [onInputChange]);
+
+  const submitAssistantApiKey = useCallback(() => {
+    onSubmitAssistantApiKey?.(assistantApiKeyInput, assistantModel);
+    setAssistantApiKeyInput("");
+  }, [assistantApiKeyInput, assistantModel, onSubmitAssistantApiKey]);
+
+  const cancelAssistantApiKey = useCallback(() => {
+    setAssistantApiKeyInput("");
+    onCancelAssistantApiKey?.();
+  }, [onCancelAssistantApiKey]);
+
+  useEffect(() => {
+    if (!assistantApiKeyPrompt.visible) {
+      setAssistantApiKeyInput("");
+    }
+  }, [assistantApiKeyPrompt.visible]);
+
+  useEffect(() => {
+    setAssistantModel(assistantApiKeyPrompt.model);
+  }, [assistantApiKeyPrompt.model, assistantApiKeyPrompt.visible]);
+
   useEffect(() => {
     setActiveCommandIndex(0);
     setActiveMentionIndex(0);
   }, [chatInput]);
-
-  useEffect(() => {
-    const previousCount = previousMessageCountRef.current;
-    const addedMessages = messages.length - previousCount;
-    if (addedMessages > 0) {
-      if (shouldAutoScrollRef.current) {
-        const frameId = window.requestAnimationFrame(() => {
-          messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-        });
-        setUnseenCount(0);
-        previousMessageCountRef.current = messages.length;
-        return () => window.cancelAnimationFrame(frameId);
-      } else {
-        setUnseenCount((prev) => prev + addedMessages);
-      }
-    }
-    previousMessageCountRef.current = messages.length;
-  }, [messages]);
 
   useEffect(
     () => () => {
@@ -338,15 +470,6 @@ function ChatPanel({
   }, [replyTarget]);
 
   useEffect(() => {
-    const frameId = window.requestAnimationFrame(() => {
-      shouldAutoScrollRef.current = true;
-      setUnseenCount(0);
-      messagesEndRef.current?.scrollIntoView({ behavior: "auto" });
-    });
-    return () => window.cancelAnimationFrame(frameId);
-  }, []);
-
-  useEffect(() => {
     hasInitializedRef.current = true;
   }, []);
 
@@ -356,25 +479,6 @@ function ChatPanel({
     textarea.style.height = "auto";
     textarea.style.height = `${Math.min(textarea.scrollHeight, 112)}px`;
   }, [chatInput]);
-
-  const handleScroll = () => {
-    const container = scrollContainerRef.current;
-    if (!container) return;
-    const threshold = 64;
-    const distanceFromBottom =
-      container.scrollHeight - container.scrollTop - container.clientHeight;
-    const isNearBottom = distanceFromBottom <= threshold;
-    shouldAutoScrollRef.current = isNearBottom;
-    if (isNearBottom && unseenCount > 0) {
-      setUnseenCount(0);
-    }
-  };
-
-  const scrollToLatest = () => {
-    shouldAutoScrollRef.current = true;
-    setUnseenCount(0);
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -416,6 +520,14 @@ function ChatPanel({
       }
       onClose();
       return;
+    }
+
+    if (showConclaveSuggestion && !showMentionSuggestions) {
+      if (e.key === "Tab" || e.key === "Enter") {
+        e.preventDefault();
+        applyConclaveSuggestion();
+        return;
+      }
     }
 
     if (showMentionSuggestions) {
@@ -526,14 +638,9 @@ function ChatPanel({
         </button>
       </div>
 
-      <div className="relative min-h-0 flex-1">
-        <div
-          ref={scrollContainerRef}
-          onScroll={handleScroll}
-          className="web-chat-scroll h-full min-h-0 overflow-y-auto overflow-x-hidden px-4 py-4"
-        >
-          {messages.length === 0 ? (
-            (() => {
+      {messages.length === 0 ? (
+        <div className="web-chat-scroll min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-4 py-4">
+          {(() => {
                   const restricted = isGhostMode
                     ? {
                         icon: <Ghost size={20} strokeWidth={1.75} />,
@@ -598,16 +705,55 @@ function ChatPanel({
                       just say hi.
                     </p>
                   </div>
+                  {assistantEnabled && !isChatDisabled ? (
+                    <div className="flex flex-col items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={startConclavePrompt}
+                        className="inline-flex items-center gap-2 rounded-full border border-[#F95F4A]/30 bg-[#F95F4A]/[0.08] px-3 py-1.5 text-[12.5px] font-medium text-[#fafafa] transition-colors hover:bg-[#F95F4A]/[0.14]"
+                      >
+                        <span className="flex h-5 w-5 items-center justify-center rounded-full bg-[#F95F4A] text-[10px] font-semibold text-white">
+                          C
+                        </span>
+                        Ask Conclave AI anything
+                      </button>
+                      <p className="text-[11px] text-[#a1a1aa]/70">
+                        Summon it with{" "}
+                        <span className="font-medium text-[#a1a1aa]">
+                          @{CONCLAVE_MENTION_TOKEN}
+                        </span>{" "}
+                        anywhere in a message.
+                      </p>
+                    </div>
+                  ) : null}
                 </div>
               );
-            })()
-          ) : (
-            messages.map((msg, index) => {
+          })()}
+        </div>
+      ) : (
+        <Conversation className="min-h-0 flex-1">
+          <ConversationContent className="gap-0 px-4 py-4">
+            {messages.map((msg, index) => {
               const isOwn = msg.userId === currentUserId;
               const messageRenderKey = getMessageRenderKey(msg);
               const isNew =
                 hasInitializedRef.current && newMessageIds.has(messageRenderKey);
               const displayName = formatDisplayName(msg.displayName || msg.userId);
+
+              const assistantMsg = msg as AssistantChatMessage;
+              if (
+                assistantMsg.isAssistant ||
+                msg.userId === CONCLAVE_ASSISTANT_USER_ID
+              ) {
+                return (
+                  <ConclaveMessage
+                    key={messageRenderKey}
+                    message={assistantMsg}
+                    isNew={isNew}
+                  />
+                );
+              }
+
               const actionText = getActionText(msg.content);
               const previousMessage = index > 0 ? messages[index - 1] : null;
               const nextMessage =
@@ -823,31 +969,40 @@ function ChatPanel({
                   </div>
                 </div>
               );
-            })
-          )}
-          <div ref={messagesEndRef} />
-        </div>
-        {unseenCount > 0 && (
-          <button
-            type="button"
-            onClick={scrollToLatest}
-            className="absolute bottom-3 left-1/2 inline-flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-white/10 bg-[#232327] px-3 py-1.5 text-[12.5px] font-medium text-[#fafafa] transition-colors hover:bg-[#2e2e33]"
-            style={{ fontFamily: "'PolySans Trial', sans-serif" }}
-          >
-            <ArrowDown size={14} strokeWidth={1.75} />
-            {unseenCount} new {unseenCount === 1 ? "message" : "messages"}
-          </button>
-        )}
-      </div>
+            })}
+          </ConversationContent>
+          <ConversationScrollButton />
+        </Conversation>
+      )}
 
       <form
         onSubmit={handleSubmit}
         className="shrink-0 border-t border-white/10 px-3 py-3"
       >
         <div className="relative">
-          {showMentionSuggestions && (
+          {(showConclaveSuggestion || showMentionSuggestions) && (
             <div className="absolute bottom-full left-0 right-0 z-10 mb-2 max-h-48 overflow-y-auto rounded-xl border border-white/10 bg-[#232327] p-1">
-              {mentionSuggestions.map((participant, index) => {
+              {showConclaveSuggestion && (
+                <button
+                  type="button"
+                  onClick={applyConclaveSuggestion}
+                  className="flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-white/[0.04]"
+                >
+                  <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[#F95F4A] text-[11px] font-semibold text-white">
+                    C
+                  </span>
+                  <span className="flex min-w-0 flex-col">
+                    <span className="truncate text-[13px] font-medium text-[#fafafa]">
+                      {CONCLAVE_ASSISTANT_NAME}
+                    </span>
+                    <span className="truncate text-[11px] text-[#a1a1aa]">
+                      Ask the meeting AI · everyone sees the reply
+                    </span>
+                  </span>
+                </button>
+              )}
+              {showMentionSuggestions &&
+                mentionSuggestions.map((participant, index) => {
                 const isActive = index === activeMentionIndex;
                 return (
                   <button
@@ -898,6 +1053,86 @@ function ChatPanel({
                   </button>
                 );
               })}
+            </div>
+          )}
+          {assistantApiKeyPrompt.visible && !isChatDisabled && (
+            <div className="mb-2 rounded-xl border border-white/10 bg-white/[0.04] p-2.5">
+              <div className="mb-2 flex items-start justify-between gap-3">
+                <div className="flex min-w-0 items-start gap-2.5">
+                  <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[#F95F4A]/15 text-[#F95F4A]">
+                    <Lock size={13} strokeWidth={1.9} />
+                  </span>
+                  <span className="min-w-0">
+                    <span className="block text-[12.5px] font-medium text-[#fafafa]">
+                      OpenAI API key
+                    </span>
+                    <span className="block text-[11.5px] leading-snug text-[#a1a1aa]">
+                      Used in memory for this session only.
+                    </span>
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={cancelAssistantApiKey}
+                  className="rounded-md p-1 text-[#a1a1aa] transition-colors hover:bg-white/[0.06] hover:text-[#fafafa]"
+                  aria-label="Cancel OpenAI API key prompt"
+                >
+                  <X size={14} strokeWidth={1.8} />
+                </button>
+              </div>
+              <div className="flex gap-2">
+                <input
+                  type="password"
+                  value={assistantApiKeyInput}
+                  onChange={(event) =>
+                    setAssistantApiKeyInput(event.target.value)
+                  }
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      submitAssistantApiKey();
+                    }
+                    if (event.key === "Escape") {
+                      event.preventDefault();
+                      cancelAssistantApiKey();
+                    }
+                  }}
+                  placeholder="sk-..."
+                  autoComplete="off"
+                  autoCapitalize="none"
+                  spellCheck={false}
+                  className="min-w-0 flex-1 rounded-lg border border-white/10 bg-black/20 px-2.5 py-1.5 text-[12.5px] text-[#fafafa] outline-none transition-colors placeholder:text-[#71717a] focus:border-[#F95F4A]/50"
+                />
+                <button
+                  type="button"
+                  onClick={submitAssistantApiKey}
+                  className="shrink-0 rounded-lg bg-[#F95F4A] px-2.5 py-1.5 text-[12px] font-semibold text-white transition-colors hover:bg-[#ff725f]"
+                >
+                  Use key
+                </button>
+              </div>
+              <select
+                value={assistantModel}
+                onChange={(event) => {
+                  const next = event.target.value;
+                  if (isConclaveAssistantModel(next)) {
+                    setAssistantModel(next);
+                  }
+                }}
+                className="mt-2 w-full rounded-lg border border-white/10 bg-black/20 px-2.5 py-1.5 text-[12.5px] text-[#fafafa] outline-none transition-colors focus:border-[#F95F4A]/50"
+                aria-label="Conclave AI model"
+              >
+                {CONCLAVE_ASSISTANT_BYOK_MODELS.map((model) => (
+                  <option key={model.id} value={model.id}>
+                    {model.label} - {model.description}
+                  </option>
+                ))}
+              </select>
+              {assistantApiKeyPrompt.error ? (
+                <p className="mt-1.5 text-[11.5px] text-red-300">
+                  {assistantApiKeyPrompt.error}
+                </p>
+              ) : null}
             </div>
           )}
           {replyTarget && !isChatDisabled && (

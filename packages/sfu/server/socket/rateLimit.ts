@@ -103,6 +103,11 @@ export const RATE_LIMITS = {
   appsYjsUpdate: { capacity: 60, refillPerSec: 30 },
   // Chat messages: ~5/s sustained, small burst.
   chat: { capacity: 10, refillPerSec: 5 },
+  // Assistant answer authorization is user-triggered and should stay sparse.
+  conclaveAuthorize: { capacity: 4, refillPerSec: 0.2 },
+  // Conclave AI answer relay: streamed in throttled chunks, so allow a higher
+  // sustained rate and burst than normal chat.
+  conclave: { capacity: 30, refillPerSec: 10 },
   // Transcript token minting is user-triggered but should tolerate reconnects.
   transcriptToken: { capacity: 8, refillPerSec: 1 },
   // SFU transcript relay start/stop is heavier because it opens mediasoup consumers.

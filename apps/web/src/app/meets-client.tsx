@@ -23,7 +23,8 @@ import MeetsMainContent from "./components/MeetsMainContent";
 import MeetsWaitingScreen from "./components/MeetsWaitingScreen";
 
 import { useMeetAudioActivity } from "./hooks/useMeetAudioActivity";
-import { useMeetChat } from "./hooks/useMeetChat";
+import { useMeetChat, type ConclaveAssistantContext } from "./hooks/useMeetChat";
+import { formatTranscriptForAssistant } from "./lib/conclave-assistant";
 import { useMeetDisplayName } from "./hooks/useMeetDisplayName";
 import { useMeetGhostMode } from "./hooks/useMeetGhostMode";
 import { useMeetHandRaise } from "./hooks/useMeetHandRaise";
@@ -1025,6 +1026,14 @@ export default function MeetsClient({
   const { ttsSpeakerId, handleTtsMessage } = useMeetTts({ meetVolume });
   const effectiveActiveSpeakerId = ttsSpeakerId ?? activeSpeakerId;
 
+  // Latest transcript snapshot for the "@Conclave" assistant. Updated from the
+  // transcript hook below; read lazily so useMeetChat stays decoupled from it.
+  const assistantContextRef = useRef<ConclaveAssistantContext>({
+    transcript: "",
+    transcriptActive: false,
+  });
+  const getAssistantContextRef = useRef(() => assistantContextRef.current);
+
   const {
     chatMessages,
     setChatMessages,
@@ -1042,6 +1051,9 @@ export default function MeetsClient({
     replyTarget,
     startReply,
     cancelReply,
+    assistantApiKeyPrompt,
+    submitAssistantApiKey,
+    cancelAssistantApiKeyPrompt,
   } = useMeetChat({
     socketRef: refs.socketRef,
     ghostEnabled,
@@ -1064,6 +1076,7 @@ export default function MeetsClient({
     onLeaveRoom: handleLeaveCommand,
     onTtsMessage: handleTtsMessage,
     isTtsDisabled,
+    getAssistantContext: getAssistantContextRef.current,
   });
 
   const handlePreferredVideoPublishTrackRejected = useCallback(
@@ -2178,6 +2191,18 @@ export default function MeetsClient({
     stopTranscriptSfuRelay: socket.stopTranscriptSfuRelay,
   });
 
+  // Feed the live transcript to "@Conclave" only while a session is running, so
+  // the assistant cites the transcript when it's on and ignores it when it's off.
+  const transcriptActive = transcript.isLive || transcript.isPaused;
+  useEffect(() => {
+    assistantContextRef.current = {
+      transcript: transcriptActive
+        ? formatTranscriptForAssistant(transcript.allSegments)
+        : "",
+      transcriptActive,
+    };
+  }, [transcriptActive, transcript.allSegments]);
+
   useMeetGhostMode({
     canGhostJoin: canGhostJoinFlag,
     isGhostMode,
@@ -2957,6 +2982,9 @@ export default function MeetsClient({
         replyTarget={replyTarget}
         onReplyToMessage={startReply}
         onCancelReply={cancelReply}
+        assistantApiKeyPrompt={assistantApiKeyPrompt}
+        onSubmitAssistantApiKey={submitAssistantApiKey}
+        onCancelAssistantApiKey={cancelAssistantApiKeyPrompt}
         socket={refs.socketRef.current}
         setPendingUsers={setPendingUsers}
         resolveDisplayName={resolveDisplayName}

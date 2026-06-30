@@ -27,6 +27,10 @@ import TranscriptPanel from "./TranscriptPanel";
 import AndroidUpsellSheet from "./AndroidUpsellSheet";
 import type { BrowserState } from "../hooks/useSharedBrowser";
 import type {
+  ConclaveAssistantApiKeyPromptState,
+} from "../hooks/useMeetChat";
+import type { ConclaveAssistantModel } from "../lib/conclave-assistant";
+import type {
   VideoEffectsDebugStats,
   VideoEffectsRuntimeStatus,
 } from "../hooks/useVideoEffects";
@@ -182,6 +186,12 @@ interface MeetsMainContentProps {
   replyTarget: ChatReplyPreview | null;
   onReplyToMessage: (message: ChatMessage) => void;
   onCancelReply: () => void;
+  assistantApiKeyPrompt: ConclaveAssistantApiKeyPromptState;
+  onSubmitAssistantApiKey: (
+    apiKey: string,
+    model: ConclaveAssistantModel,
+  ) => void;
+  onCancelAssistantApiKey: () => void;
   socket: Socket | null;
   setPendingUsers: Dispatch<SetStateAction<Map<string, string>>>;
   resolveDisplayName: (userId: string) => string;
@@ -427,6 +437,9 @@ export default function MeetsMainContent({
   replyTarget,
   onReplyToMessage,
   onCancelReply,
+  assistantApiKeyPrompt,
+  onSubmitAssistantApiKey,
+  onCancelAssistantApiKey,
   socket,
   setPendingUsers,
   resolveDisplayName,
@@ -1906,6 +1919,9 @@ export default function MeetsMainContent({
           replyTarget={ghostEnabled ? null : replyTarget}
           onReply={ghostEnabled ? undefined : onReplyToMessage}
           onCancelReply={ghostEnabled ? undefined : onCancelReply}
+          assistantApiKeyPrompt={assistantApiKeyPrompt}
+          onSubmitAssistantApiKey={onSubmitAssistantApiKey}
+          onCancelAssistantApiKey={onCancelAssistantApiKey}
         />
       )}
 

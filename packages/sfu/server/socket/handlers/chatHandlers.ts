@@ -1,3 +1,5 @@
+import jwt from "jsonwebtoken";
+import { createHmac, timingSafeEqual } from "node:crypto";
 import type {
   ChatGifAttachment,
   ChatMessage,
@@ -5,6 +7,7 @@ import type {
   SendChatData,
 } from "../../../types.js";
 import { Admin } from "../../../config/classes/Admin.js";
+import { config } from "../../../config/config.js";
 import { Logger } from "../../../utilities/loggers.js";
 import type Room from "../../../config/classes/Room.js";
 import type { ConnectionContext } from "../context.js";
@@ -13,6 +16,18 @@ import { RATE_LIMITS, takeToken } from "../rateLimit.js";
 
 const AT_DIRECT_MESSAGE_PATTERN = /^@(\S+)\s+([\s\S]+)$/;
 const DM_COMMAND_PATTERN = /^\/dm\s+(\S+)\s+([\s\S]+)$/i;
+// "@Conclave …" summons the room AI. It must stay a public message (never a DM),
+// so we detect it before direct-message parsing. The mention may appear anywhere
+// ("Hey @Conclave …"); the (^|\s) boundary avoids matching emails like
+// "foo@conclave.ai".
+const CONCLAVE_MENTION_PATTERN = /(^|\s)@conclave\b/i;
+const CONCLAVE_BOT_USER_ID = "conclave-assistant";
+const CONCLAVE_BOT_DISPLAY_NAME = "Conclave";
+const MAX_CONCLAVE_CONTENT_LENGTH = 6000;
+const CONCLAVE_AUTH_TOKEN_TTL_SECONDS = 5 * 60;
+
+const isConclaveMention = (content: string): boolean =>
+  CONCLAVE_MENTION_PATTERN.test(content.trim());
 const TRAILING_MENTION_PUNCTUATION_PATTERN = /[,:;.!?]+$/;
 const DIRECT_MESSAGE_USAGE_ERROR =
   "Use private messages as @username <message> or /dm <username> <message>.";
@@ -219,6 +234,158 @@ interface DirectMessageTargetCandidate {
   normalizedDisplayName: string;
 }
 
+type ConclaveAuthorizeData = {
+  id?: unknown;
+  questionMessageId?: unknown;
+  questionContent?: unknown;
+};
+
+type ConclaveAnswerData = {
+  id?: unknown;
+  roomId?: unknown;
+  channelId?: unknown;
+  requesterUserId?: unknown;
+  questionMessageId?: unknown;
+  content?: unknown;
+  done?: unknown;
+  timestamp?: unknown;
+  expiresAt?: unknown;
+  signature?: unknown;
+};
+
+const relaySigningInput = (packet: {
+  id: string;
+  roomId: string;
+  channelId: string;
+  requesterUserId: string;
+  questionMessageId: string;
+  content: string;
+  done: boolean;
+  timestamp: number;
+  expiresAt: number;
+}): string =>
+  JSON.stringify({
+    id: packet.id,
+    roomId: packet.roomId,
+    channelId: packet.channelId,
+    requesterUserId: packet.requesterUserId,
+    questionMessageId: packet.questionMessageId,
+    content: packet.content,
+    done: packet.done,
+    timestamp: packet.timestamp,
+    expiresAt: packet.expiresAt,
+  });
+
+const signRelayPacket = (packet: {
+  id: string;
+  roomId: string;
+  channelId: string;
+  requesterUserId: string;
+  questionMessageId: string;
+  content: string;
+  done: boolean;
+  timestamp: number;
+  expiresAt: number;
+}): string =>
+  createHmac("sha256", config.sfuSecret)
+    .update(relaySigningInput(packet))
+    .digest("base64url");
+
+const safeSignatureEquals = (left: string, right: string): boolean => {
+  const leftBuffer = Buffer.from(left);
+  const rightBuffer = Buffer.from(right);
+  if (leftBuffer.length !== rightBuffer.length) return false;
+  return timingSafeEqual(leftBuffer, rightBuffer);
+};
+
+const normalizeConclaveAnswer = (
+  data: ConclaveAnswerData,
+): (Required<ConclaveAnswerData> & {
+  id: string;
+  roomId: string;
+  channelId: string;
+  requesterUserId: string;
+  questionMessageId: string;
+  content: string;
+  done: boolean;
+  timestamp: number;
+  expiresAt: number;
+  signature: string;
+}) | null => {
+  const id = typeof data.id === "string" ? data.id.trim().slice(0, 120) : "";
+  const roomId = typeof data.roomId === "string" ? data.roomId.trim() : "";
+  const channelId =
+    typeof data.channelId === "string" ? data.channelId.trim() : "";
+  const requesterUserId =
+    typeof data.requesterUserId === "string"
+      ? data.requesterUserId.trim()
+      : "";
+  const questionMessageId =
+    typeof data.questionMessageId === "string"
+      ? data.questionMessageId.trim()
+      : "";
+  const content =
+    typeof data.content === "string"
+      ? data.content.slice(0, MAX_CONCLAVE_CONTENT_LENGTH)
+      : "";
+  const done = data.done === true;
+  const timestamp = typeof data.timestamp === "number" ? data.timestamp : 0;
+  const expiresAt = typeof data.expiresAt === "number" ? data.expiresAt : 0;
+  const signature =
+    typeof data.signature === "string" ? data.signature.trim() : "";
+
+  if (
+    !id ||
+    !roomId ||
+    !channelId ||
+    !requesterUserId ||
+    !questionMessageId ||
+    !timestamp ||
+    !expiresAt ||
+    !signature
+  ) {
+    return null;
+  }
+
+  return {
+    id,
+    roomId,
+    channelId,
+    requesterUserId,
+    questionMessageId,
+    content,
+    done,
+    timestamp,
+    expiresAt,
+    signature,
+  };
+};
+
+const createConclaveAuthorizationToken = (options: {
+  answerId: string;
+  questionMessageId: string;
+  userId: string;
+  room: Room;
+}): string =>
+  jwt.sign(
+    {
+      tokenUse: "conclave:assistant",
+      answerId: options.answerId,
+      questionMessageId: options.questionMessageId,
+      userId: options.userId,
+      roomId: options.room.id,
+      clientId: options.room.clientId,
+      channelId: options.room.channelId,
+    },
+    config.sfuSecret,
+    {
+      algorithm: "HS256",
+      audience: "conclave-web",
+      issuer: "conclave-sfu",
+      expiresIn: CONCLAVE_AUTH_TOKEN_TTL_SECONDS,
+    },
+  );
+
 const parseDirectMessageIntent = (
   content: string,
 ):
@@ -416,7 +583,11 @@ export const registerChatHandlers = (context: ConnectionContext): void => {
           return;
         }
 
-        const directMessageIntent = parseDirectMessageIntent(content);
+        // "@Conclave …" is always a public message so the whole room sees the
+        // question; skip the direct-message path it would otherwise match.
+        const directMessageIntent = isConclaveMention(content)
+          ? null
+          : parseDirectMessageIntent(content);
         if (directMessageIntent && "error" in directMessageIntent) {
           respond(callback, { error: directMessageIntent.error });
           return;
@@ -524,6 +695,154 @@ export const registerChatHandlers = (context: ConnectionContext): void => {
         respond(callback, { success: true, message });
       } catch (error) {
         respond(callback, { error: (error as Error).message });
+      }
+    },
+  );
+
+  socket.on(
+    "conclave:authorize",
+    (
+      data: ConclaveAuthorizeData,
+      callback: (response: { token: string } | { error: string }) => void,
+    ) => {
+      try {
+        if (!context.currentClient || !context.currentRoom) {
+          respond(callback, { error: "Not in a room" });
+          return;
+        }
+        if (
+          !takeToken(
+            socket,
+            "conclaveAuthorize",
+            RATE_LIMITS.conclaveAuthorize,
+          )
+        ) {
+          respond(callback, { error: "Conclave is being asked too quickly" });
+          return;
+        }
+
+        const room = context.currentRoom;
+        const sender = context.currentClient;
+        if (sender.isObserver) {
+          respond(callback, {
+            error: "Watch-only attendees cannot ask Conclave",
+          });
+          return;
+        }
+        if (room.isChatLocked && !(sender instanceof Admin)) {
+          respond(callback, { error: "Chat is locked by the host" });
+          return;
+        }
+
+        const answerId =
+          typeof data.id === "string" ? data.id.trim().slice(0, 120) : "";
+        const questionMessageId =
+          typeof data.questionMessageId === "string"
+            ? data.questionMessageId.trim()
+            : "";
+        const questionContent =
+          typeof data.questionContent === "string"
+            ? data.questionContent.trim()
+            : "";
+        if (!answerId || !questionMessageId) {
+          respond(callback, { error: "Invalid Conclave request" });
+          return;
+        }
+
+        const questionMessage = room
+          .getChatHistorySnapshot()
+          .find((message) => message.id === questionMessageId);
+        const hasPublicQuestionMessage =
+          questionMessage?.userId === sender.id &&
+          isConclaveMention(questionMessage.content);
+        const hasAcknowledgedQuestionContent =
+          !questionMessage &&
+          questionContent.length > 0 &&
+          isConclaveMention(questionContent);
+        if (!hasPublicQuestionMessage && !hasAcknowledgedQuestionContent) {
+          respond(callback, {
+            error: "Conclave answers must be tied to a public @Conclave question",
+          });
+          return;
+        }
+
+        respond(callback, {
+          token: createConclaveAuthorizationToken({
+            answerId,
+            questionMessageId,
+            userId: sender.id,
+            room,
+          }),
+        });
+      } catch (error) {
+        respond(callback, { error: (error as Error).message });
+      }
+    },
+  );
+
+  // The web app signs every streamed assistant packet after it has generated it
+  // from an SFU-issued token. The SFU only fans out packets that match the
+  // current room/client and have not been tampered with.
+  socket.on(
+    "conclaveAnswer",
+    (data: ConclaveAnswerData) => {
+      try {
+        if (!context.currentClient || !context.currentRoom) return;
+        if (!takeToken(socket, "conclaveAnswer", RATE_LIMITS.conclave)) return;
+
+        const room = context.currentRoom;
+        const sender = context.currentClient;
+        if (sender.isObserver) return;
+        if (room.isChatLocked && !(sender instanceof Admin)) return;
+
+        const packet = normalizeConclaveAnswer(data);
+        if (!packet) return;
+        if (
+          packet.roomId !== room.id ||
+          packet.channelId !== room.channelId ||
+          packet.requesterUserId !== sender.id ||
+          packet.expiresAt < Date.now()
+        ) {
+          return;
+        }
+
+        const expectedSignature = signRelayPacket({
+          id: packet.id,
+          roomId: packet.roomId,
+          channelId: packet.channelId,
+          requesterUserId: packet.requesterUserId,
+          questionMessageId: packet.questionMessageId,
+          content: packet.content,
+          done: packet.done,
+          timestamp: packet.timestamp,
+          expiresAt: packet.expiresAt,
+        });
+        if (!safeSignatureEquals(packet.signature, expectedSignature)) return;
+
+        const message: ChatMessage = {
+          id: packet.id,
+          userId: CONCLAVE_BOT_USER_ID,
+          displayName: CONCLAVE_BOT_DISPLAY_NAME,
+          content: packet.content,
+          timestamp: packet.timestamp,
+        };
+
+        socket.to(room.channelId).emit("conclaveMessage", {
+          ...message,
+          done: packet.done,
+        });
+
+        if (
+          packet.done &&
+          packet.content.trim() &&
+          !room
+            .getChatHistorySnapshot()
+            .some((existingMessage) => existingMessage.id === packet.id)
+        ) {
+          room.recordChatMessage(message);
+        }
+      } catch (error) {
+        Logger.warn(`conclaveAnswer relay failed: ${(error as Error).message}`);
       }
     },
   );
