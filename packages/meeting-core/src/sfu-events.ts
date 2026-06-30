@@ -44,7 +44,9 @@ export const SFU_EVENTS = {
 
     // Chat / reactions / hand / identity
     sendChat: "sendChat",
-    // A participant relays a streamed "@Conclave" AI answer for the whole room.
+    // Issues a short-lived token for a visible public "@Conclave" question.
+    conclaveAuthorize: "conclave:authorize",
+    // Relays a signed streamed "@Conclave" AI answer for the whole room.
     conclaveAnswer: "conclaveAnswer",
     sendReaction: "sendReaction",
     setHandRaised: "setHandRaised",

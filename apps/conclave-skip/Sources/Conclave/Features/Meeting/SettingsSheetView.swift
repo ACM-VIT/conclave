@@ -1245,13 +1245,8 @@ struct SettingsSheetView: View {
                     generation: generation,
                     currentGeneration: displayNameAutoSaveGeneration
                   ) else { return }
+            displayNameAutoSaveTask = nil
             await submitDisplayNameUpdate(pendingName, generation: generation)
-            if SettingsTimingPolicy.shouldApply(
-                generation: generation,
-                currentGeneration: displayNameAutoSaveGeneration
-            ) {
-                displayNameAutoSaveTask = nil
-            }
         }
     }
 

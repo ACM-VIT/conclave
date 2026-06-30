@@ -43,6 +43,7 @@ private enum SocketEvent {
     static let toggleCamera = SfuClientEvent.toggleCamera.rawValue
     static let closeProducer = SfuClientEvent.closeProducer.rawValue
     static let sendChat = SfuClientEvent.sendChat.rawValue
+    static let conclaveAuthorize = SfuClientEvent.conclaveAuthorize.rawValue
     static let conclaveAnswer = SfuClientEvent.conclaveAnswer.rawValue
     static let sendReaction = SfuClientEvent.sendReaction.rawValue
     static let setHandRaised = SfuClientEvent.setHandRaised.rawValue

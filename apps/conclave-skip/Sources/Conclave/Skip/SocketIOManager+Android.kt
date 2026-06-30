@@ -52,6 +52,7 @@ internal object SocketEvent {
     val toggleCamera = SfuClientEvent.toggleCamera.rawValue
     val closeProducer = SfuClientEvent.closeProducer.rawValue
     val sendChat = SfuClientEvent.sendChat.rawValue
+    val conclaveAuthorize = SfuClientEvent.conclaveAuthorize.rawValue
     val conclaveAnswer = SfuClientEvent.conclaveAnswer.rawValue
     val sendReaction = SfuClientEvent.sendReaction.rawValue
     val setHandRaised = SfuClientEvent.setHandRaised.rawValue

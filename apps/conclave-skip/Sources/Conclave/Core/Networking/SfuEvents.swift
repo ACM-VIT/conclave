@@ -39,6 +39,7 @@ enum SfuClientEvent: String {
     case closeRemoteProducer = "closeRemoteProducer"
     case closeAllVideo = "closeAllVideo"
     case sendChat = "sendChat"
+    case conclaveAuthorize = "conclave:authorize"
     case conclaveAnswer = "conclaveAnswer"
     case sendReaction = "sendReaction"
     case setHandRaised = "setHandRaised"

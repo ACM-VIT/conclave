@@ -5085,6 +5085,19 @@ final class ConclaveTests: XCTestCase {
         ))
     }
 
+    func testSettingsDisplayNameAutoSaveClearsDebounceBeforeSubmitting() throws {
+        let source = try sourceFileContents("Sources/Conclave/Features/Meeting/SettingsSheetView.swift")
+        let guardNeedle = "generation: generation,\n                    currentGeneration: displayNameAutoSaveGeneration\n                  ) else { return }"
+        let clearNeedle = "displayNameAutoSaveTask = nil"
+        let submitNeedle = "await submitDisplayNameUpdate(pendingName, generation: generation)"
+
+        let guardRange = try XCTUnwrap(source.range(of: guardNeedle))
+        let clearRange = try XCTUnwrap(source.range(of: clearNeedle, range: guardRange.upperBound..<source.endIndex))
+        let submitRange = try XCTUnwrap(source.range(of: submitNeedle, range: clearRange.upperBound..<source.endIndex))
+
+        XCTAssertLessThan(clearRange.lowerBound, submitRange.lowerBound)
+    }
+
     func testCallAudioRoutePolicyDefaultsToSpeakerOnlyWhenOutputIsNotExternal() throws {
         XCTAssertTrue(CallAudioRoutePolicy.shouldDefaultToSpeaker(
             selectedOutputId: nil,
@@ -6373,10 +6386,12 @@ final class ConclaveTests: XCTestCase {
         let androidSource = try sourceFileContents("Sources/Conclave/Skip/SocketIOManager+Android.kt")
         let viewModelSource = try sourceFileContents("Sources/Conclave/Features/Meeting/MeetingViewModel.swift")
 
+        XCTAssertTrue(iosSource.contains("static let conclaveAuthorize = SfuClientEvent.conclaveAuthorize.rawValue"))
         XCTAssertTrue(iosSource.contains("static let conclaveMessage = SfuServerEvent.conclaveMessage.rawValue"))
         XCTAssertTrue(iosSource.contains("socket.on(SocketEvent.conclaveMessage)"))
         XCTAssertTrue(iosSource.contains("self.onChatMessage?(notification.chatMessage(taggedRoomId: activeRoomId))"))
 
+        XCTAssertTrue(androidSource.contains("val conclaveAuthorize = SfuClientEvent.conclaveAuthorize.rawValue"))
         XCTAssertTrue(androidSource.contains("val conclaveMessage = SfuServerEvent.conclaveMessage.rawValue"))
         XCTAssertTrue(androidSource.contains("socket.on(SocketEvent.conclaveMessage"))
         XCTAssertTrue(androidSource.contains("onChatMessage?.invoke(notification.toChatMessage(roomId))"))
