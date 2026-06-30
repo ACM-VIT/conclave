@@ -47,7 +47,6 @@ type LocalRenderChatMessage = ChatMessage & {
 interface PendingConclaveAssistantRequest {
   answerId: string;
   questionMessageId: string;
-  questionMessageContent: string;
   question: string;
   history: ConclaveAssistantHistoryItem[];
   context: ConclaveAssistantContext;
@@ -157,11 +156,7 @@ export function useMeetChat({
   );
 
   const requestConclaveAuthorization = useCallback(
-    (
-      answerId: string,
-      questionMessageId: string,
-      questionMessageContent: string,
-    ): Promise<{ token: string }> => {
+    (answerId: string, questionMessageId: string): Promise<{ token: string }> => {
       const socket = socketRef.current;
       if (!socket) {
         return Promise.reject(new Error("Conclave is not connected."));
@@ -177,7 +172,6 @@ export function useMeetChat({
           {
             id: answerId,
             questionMessageId,
-            questionContent: questionMessageContent,
           },
           (response: { token?: string } | { error: string }) => {
             window.clearTimeout(timeoutId);
@@ -227,7 +221,6 @@ export function useMeetChat({
       requestConclaveAuthorization(
         request.answerId,
         request.questionMessageId,
-        request.questionMessageContent,
       )
         .then(({ token }) =>
           streamConclaveAssistant({
@@ -346,11 +339,7 @@ export function useMeetChat({
   // "@Conclave …" summons the room AI. The question is first accepted as a
   // public chat line, then the SFU issues a short-lived token for the answer.
   const askConclave = useCallback(
-    (
-      rawQuestion: string,
-      questionMessageId: string,
-      questionMessageContent: string,
-    ) => {
+    (rawQuestion: string, questionMessageId: string) => {
       if (!assistantEnabled) {
         appendLocalMessage("Conclave AI isn't available in this room.");
         return;
@@ -387,7 +376,6 @@ export function useMeetChat({
       const request: PendingConclaveAssistantRequest = {
         answerId,
         questionMessageId,
-        questionMessageContent,
         question,
         history,
         context: getAssistantContext?.() ?? {
@@ -597,7 +585,7 @@ export function useMeetChat({
       if (conclaveQuestion !== null) {
         void sendChatInternal(trimmed).then((message) => {
           if (message) {
-            askConclave(conclaveQuestion, message.id, message.content);
+            askConclave(conclaveQuestion, message.id);
           }
         });
         return;

@@ -237,7 +237,6 @@ interface DirectMessageTargetCandidate {
 type ConclaveAuthorizeData = {
   id?: unknown;
   questionMessageId?: unknown;
-  questionContent?: unknown;
 };
 
 type ConclaveAnswerData = {
@@ -740,10 +739,6 @@ export const registerChatHandlers = (context: ConnectionContext): void => {
           typeof data.questionMessageId === "string"
             ? data.questionMessageId.trim()
             : "";
-        const questionContent =
-          typeof data.questionContent === "string"
-            ? data.questionContent.trim()
-            : "";
         if (!answerId || !questionMessageId) {
           respond(callback, { error: "Invalid Conclave request" });
           return;
@@ -755,11 +750,7 @@ export const registerChatHandlers = (context: ConnectionContext): void => {
         const hasPublicQuestionMessage =
           questionMessage?.userId === sender.id &&
           isConclaveMention(questionMessage.content);
-        const hasAcknowledgedQuestionContent =
-          !questionMessage &&
-          questionContent.length > 0 &&
-          isConclaveMention(questionContent);
-        if (!hasPublicQuestionMessage && !hasAcknowledgedQuestionContent) {
+        if (!hasPublicQuestionMessage) {
           respond(callback, {
             error: "Conclave answers must be tied to a public @Conclave question",
           });

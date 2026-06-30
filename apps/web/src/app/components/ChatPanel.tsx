@@ -1,6 +1,9 @@
 "use client";
 
 import {
+  Check,
+  ChevronDown,
+  ExternalLink,
   Ghost,
   Image as ImageIcon,
   Lock,
@@ -317,10 +320,17 @@ function ChatPanel({
   const [assistantApiKeyInput, setAssistantApiKeyInput] = useState("");
   const [assistantModel, setAssistantModel] =
     useState<ConclaveAssistantModel>(assistantApiKeyPrompt.model);
+  const [isAssistantModelMenuOpen, setIsAssistantModelMenuOpen] =
+    useState(false);
+  const assistantModelMenuRef = useRef<HTMLDivElement>(null);
   const [highlightedMessageId, setHighlightedMessageId] = useState<
     string | null
   >(null);
   const isChatDisabled = isGhostMode || (isChatLocked && !isAdmin);
+  const selectedAssistantModel =
+    CONCLAVE_ASSISTANT_BYOK_MODELS.find(
+      (model) => model.id === assistantModel,
+    ) ?? CONCLAVE_ASSISTANT_BYOK_MODELS[0];
 
   const scrollToMessage = useCallback((id: string) => {
     const node = messageNodeRefs.current.get(id);
@@ -439,12 +449,27 @@ function ChatPanel({
   useEffect(() => {
     if (!assistantApiKeyPrompt.visible) {
       setAssistantApiKeyInput("");
+      setIsAssistantModelMenuOpen(false);
     }
   }, [assistantApiKeyPrompt.visible]);
 
   useEffect(() => {
     setAssistantModel(assistantApiKeyPrompt.model);
   }, [assistantApiKeyPrompt.model, assistantApiKeyPrompt.visible]);
+
+  useEffect(() => {
+    if (!isAssistantModelMenuOpen) return;
+    const handlePointerDown = (event: MouseEvent) => {
+      if (
+        assistantModelMenuRef.current &&
+        !assistantModelMenuRef.current.contains(event.target as Node)
+      ) {
+        setIsAssistantModelMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handlePointerDown);
+    return () => document.removeEventListener("mousedown", handlePointerDown);
+  }, [isAssistantModelMenuOpen]);
 
   useEffect(() => {
     setActiveCommandIndex(0);
@@ -1056,30 +1081,28 @@ function ChatPanel({
             </div>
           )}
           {assistantApiKeyPrompt.visible && !isChatDisabled && (
-            <div className="mb-2 rounded-xl border border-white/10 bg-white/[0.04] p-2.5">
-              <div className="mb-2 flex items-start justify-between gap-3">
-                <div className="flex min-w-0 items-start gap-2.5">
-                  <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[#F95F4A]/15 text-[#F95F4A]">
-                    <Lock size={13} strokeWidth={1.9} />
-                  </span>
+            <div className="mb-2 rounded-2xl border border-white/10 bg-white/[0.04] p-3">
+              <div className="mb-2.5 flex items-center justify-between gap-3">
+                <div className="flex min-w-0 items-center gap-2.5">
                   <span className="min-w-0">
-                    <span className="block text-[12.5px] font-medium text-[#fafafa]">
-                      OpenAI API key
+                    <span className="block text-[12.5px] font-semibold text-[#fafafa]">
+                      Connect Conclave AI
                     </span>
-                    <span className="block text-[11.5px] leading-snug text-[#a1a1aa]">
-                      Used in memory for this session only.
+                    <span className="block text-[11px] leading-snug text-[#a1a1aa]">
+                      Your OpenAI key, used only this session.
                     </span>
                   </span>
                 </div>
                 <button
                   type="button"
                   onClick={cancelAssistantApiKey}
-                  className="rounded-md p-1 text-[#a1a1aa] transition-colors hover:bg-white/[0.06] hover:text-[#fafafa]"
-                  aria-label="Cancel OpenAI API key prompt"
+                  className="shrink-0 rounded-md p-1 text-[#a1a1aa] transition-colors hover:bg-white/[0.06] hover:text-[#fafafa]"
+                  aria-label="Dismiss Conclave AI key prompt"
                 >
                   <X size={14} strokeWidth={1.8} />
                 </button>
               </div>
+
               <div className="flex gap-2">
                 <input
                   type="password"
@@ -1101,38 +1124,106 @@ function ChatPanel({
                   autoComplete="off"
                   autoCapitalize="none"
                   spellCheck={false}
-                  className="min-w-0 flex-1 rounded-lg border border-white/10 bg-black/20 px-2.5 py-1.5 text-[12.5px] text-[#fafafa] outline-none transition-colors placeholder:text-[#71717a] focus:border-[#F95F4A]/50"
+                  className="min-w-0 flex-1 rounded-lg border border-white/10 bg-black/25 px-2.5 py-1.5 text-[12.5px] text-[#fafafa] outline-none transition-colors placeholder:text-[#71717a] focus:border-[#F95F4A]/60"
                 />
                 <button
                   type="button"
                   onClick={submitAssistantApiKey}
-                  className="shrink-0 rounded-lg bg-[#F95F4A] px-2.5 py-1.5 text-[12px] font-semibold text-white transition-colors hover:bg-[#ff725f]"
+                  disabled={!assistantApiKeyInput.trim()}
+                  className="shrink-0 rounded-lg bg-[#F95F4A] px-3 py-1.5 text-[12px] font-semibold text-white transition-[background-color,opacity] hover:bg-[#ff725f] disabled:cursor-not-allowed disabled:opacity-40"
                 >
-                  Use key
+                  Connect
                 </button>
               </div>
-              <select
-                value={assistantModel}
-                onChange={(event) => {
-                  const next = event.target.value;
-                  if (isConclaveAssistantModel(next)) {
-                    setAssistantModel(next);
-                  }
-                }}
-                className="mt-2 w-full rounded-lg border border-white/10 bg-black/20 px-2.5 py-1.5 text-[12.5px] text-[#fafafa] outline-none transition-colors focus:border-[#F95F4A]/50"
-                aria-label="Conclave AI model"
-              >
-                {CONCLAVE_ASSISTANT_BYOK_MODELS.map((model) => (
-                  <option key={model.id} value={model.id}>
-                    {model.label} - {model.description}
-                  </option>
-                ))}
-              </select>
+
+              {/* Custom model picker so the closed state stays on-brand rather
+                  than rendering a native browser <select>. */}
+              <div ref={assistantModelMenuRef} className="relative mt-2">
+                <button
+                  type="button"
+                  onClick={() => setIsAssistantModelMenuOpen((open) => !open)}
+                  aria-haspopup="listbox"
+                  aria-expanded={isAssistantModelMenuOpen}
+                  className="flex w-full items-center justify-between gap-2 rounded-lg border border-white/10 bg-black/25 px-2.5 py-1.5 text-left transition-colors hover:border-white/20"
+                >
+                  <span className="flex min-w-0 flex-col">
+                    <span className="truncate text-[12.5px] font-medium text-[#fafafa]">
+                      {selectedAssistantModel.label}
+                    </span>
+                    <span className="truncate text-[11px] text-[#a1a1aa]">
+                      {selectedAssistantModel.description}
+                    </span>
+                  </span>
+                  <ChevronDown
+                    size={15}
+                    strokeWidth={1.9}
+                    className={`shrink-0 text-[#a1a1aa] transition-transform ${
+                      isAssistantModelMenuOpen ? "rotate-180" : ""
+                    }`}
+                  />
+                </button>
+                {isAssistantModelMenuOpen && (
+                  <div
+                    role="listbox"
+                    className="absolute bottom-full left-0 right-0 z-20 mb-1.5 max-h-56 overflow-y-auto rounded-xl border border-white/10 bg-[#232327] p-1 shadow-lg shadow-black/40"
+                  >
+                    {CONCLAVE_ASSISTANT_BYOK_MODELS.map((model) => {
+                      const isSelected = model.id === assistantModel;
+                      return (
+                        <button
+                          key={model.id}
+                          type="button"
+                          role="option"
+                          aria-selected={isSelected}
+                          onClick={() => {
+                            if (isConclaveAssistantModel(model.id)) {
+                              setAssistantModel(model.id);
+                            }
+                            setIsAssistantModelMenuOpen(false);
+                          }}
+                          className={`flex w-full items-start gap-2 rounded-lg px-2 py-1.5 text-left transition-colors ${
+                            isSelected
+                              ? "bg-white/[0.08]"
+                              : "hover:bg-white/[0.04]"
+                          }`}
+                        >
+                          <span className="min-w-0 flex-1">
+                            <span className="block text-[12.5px] font-medium text-[#fafafa]">
+                              {model.label}
+                            </span>
+                            <span className="block text-[11px] leading-snug text-[#a1a1aa]">
+                              {model.description}
+                            </span>
+                          </span>
+                          {isSelected ? (
+                            <Check
+                              size={14}
+                              strokeWidth={2}
+                              className="mt-0.5 shrink-0 text-[#F95F4A]"
+                            />
+                          ) : null}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
               {assistantApiKeyPrompt.error ? (
-                <p className="mt-1.5 text-[11.5px] text-red-300">
+                <p className="mt-2 text-[11.5px] text-red-300">
                   {assistantApiKeyPrompt.error}
                 </p>
-              ) : null}
+              ) : (
+                <a
+                  href="https://platform.openai.com/api-keys"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="mt-2 inline-flex items-center gap-1 text-[11px] text-[#a1a1aa]/70 transition-colors hover:text-[#a1a1aa]"
+                >
+                  Get a key
+                  <ExternalLink size={11} strokeWidth={1.9} />
+                </a>
+              )}
             </div>
           )}
           {replyTarget && !isChatDisabled && (
