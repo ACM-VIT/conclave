@@ -45,6 +45,7 @@ describe("Sarvam transcription provider helpers", () => {
     expect(url.searchParams.get("sample_rate")).toBe("16000");
     expect(url.searchParams.get("input_audio_codec")).toBe("pcm_s16le");
     expect(url.searchParams.get("flush_signal")).toBe("true");
+    expect(url.searchParams.get("high_vad_sensitivity")).toBe("true");
   });
 
   it("normalizes websocket schemes for Cloudflare Worker fetch", () => {
@@ -103,6 +104,37 @@ describe("Sarvam transcription provider helpers", () => {
       type: "final",
       itemId: "sarvam-req-1",
       transcript: "hello everyone",
+    });
+  });
+
+  it("parses Sarvam streaming guide transcript response shapes", () => {
+    expect(
+      parseSarvamEvent(
+        JSON.stringify({
+          type: "transcript",
+          request_id: "req-2",
+          text: "top level text",
+        }),
+      ),
+    ).toEqual({
+      type: "final",
+      itemId: "sarvam-req-2",
+      transcript: "top level text",
+    });
+    expect(
+      parseSarvamEvent(
+        JSON.stringify({
+          type: "data",
+          data: {
+            request_id: "req-3",
+            text: "nested text",
+          },
+        }),
+      ),
+    ).toEqual({
+      type: "final",
+      itemId: "sarvam-req-3",
+      transcript: "nested text",
     });
   });
 

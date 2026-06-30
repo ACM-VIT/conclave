@@ -63,7 +63,10 @@ export type GameOptionSpec =
 export type GameConfig = Record<string, number | string>;
 
 export type GameContext = {
+  /** Game seats captured when the session starts. */
   players: GamePlayer[];
+  /** Currently connected non-observer players that still hold a game seat. */
+  activePlayers: GamePlayer[];
   rng: GameRng;
   /** Host-chosen configuration (validated, with defaults filled in). */
   config: GameConfig;

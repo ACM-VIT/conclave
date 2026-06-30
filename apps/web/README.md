@@ -37,7 +37,7 @@ Required production configuration:
 - `TRANSCRIPT_TOKEN_SECRET`: shared by the SFU and transcript worker for token verification.
 - `TRANSCRIPT_WORKER_URL`: SFU-facing worker URL. Production uses `https://transcribe.conclave.acmvit.in`. `NEXT_PUBLIC_TRANSCRIPT_WORKER_URL` is accepted as a fallback for local environments.
 - `OPENAI_API_KEY`: optional transcript worker secret for OpenAI transcription plus Ask/Minutes. When set, meeting participants see the OpenAI key field as `On the house`.
-- `SARVAM_API_KEY`: optional transcript worker secret for Sarvam Saaras v3 transcription. Sarvam sessions still need `OPENAI_API_KEY` or a participant-supplied OpenAI assistant key for Ask/Minutes.
+- `SARVAM_API_KEY`: optional transcript worker secret for Sarvam Saaras v3 transcription. When set, meeting participants see the Sarvam key field as covered by Conclave. Sarvam sessions still need `OPENAI_API_KEY` or a participant-supplied OpenAI assistant key for Ask/Minutes.
 - `TRANSCRIPT_ALLOWED_ORIGIN`: optional worker CORS/origin lock for browser WebSocket upgrades.
 
 Optional worker configuration:

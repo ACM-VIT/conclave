@@ -78,13 +78,23 @@ const collectAdminIds = (room: Room): string[] => {
   return ids;
 };
 
+const syncGameSessionRoomMembership = (room: Room): GameSession | null => {
+  const session = room.gameSession;
+  if (!session) return null;
+  session.updateRoomMembership({
+    players: snapshotPlayers(room),
+    adminIds: collectAdminIds(room),
+  });
+  return session;
+};
+
 /**
  * Push the latest projections to the room: one public broadcast, plus a private
  * per-player view to each player's own socket. The private emit is the
  * hidden-information boundary. A player only ever receives their own view.
  */
 const broadcastGame = (io: SocketIOServer, room: Room): void => {
-  const session = room.gameSession;
+  const session = syncGameSessionRoomMembership(room);
   if (!session) return;
   const now = Date.now();
   io.to(room.channelId).emit("game:state", session.getPublicState(now));
@@ -141,7 +151,7 @@ export const buildGameStateResponse = (
     return { active: false, vote: null };
   }
 
-  const session = room.gameSession;
+  const session = syncGameSessionRoomMembership(room);
   const vote = buildVoteState(room);
   if (!session) {
     return { active: false, vote };
@@ -185,6 +195,7 @@ const startGameLoop = (io: SocketIOServer, room: Room): void => {
       return;
     }
     try {
+      syncGameSessionRoomMembership(room);
       if (active.tick()) {
         broadcastGame(io, room);
       }
@@ -410,6 +421,7 @@ export const registerGameHandlers = (context: ConnectionContext): void => {
 
       let result: { ok: true } | { ok: false; error: string };
       try {
+        syncGameSessionRoomMembership(room);
         result = session.applyMove(context.currentClient.id, data.type, data.payload);
       } catch (error) {
         Logger.warn("[Games] move failed", error);

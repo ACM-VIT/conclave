@@ -16,6 +16,7 @@ const rng: GameRng = {
 
 const context = (now: number): GameContext => ({
   players,
+  activePlayers: players,
   rng,
   config: { rounds: 3 },
   content: null,

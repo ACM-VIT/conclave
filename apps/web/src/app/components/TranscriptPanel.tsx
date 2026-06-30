@@ -249,6 +249,8 @@ function StartStage({
   const needsProviderKey = !hasGlobalProviderKey;
   const needsAssistantKey = provider === "sarvam" && !hasGlobalAssistantKey;
   const isOnTheHouse = !needsProviderKey && !needsAssistantKey;
+  const providerCoveredLabel =
+    provider === "sarvam" ? "Sarvam on the house" : "On the house";
   const canSubmit = needsTakeover
     ? transcript.canTakeover
     : transcript.canStart;
@@ -337,9 +339,9 @@ function StartStage({
             onSubmit={submit}
             className="mt-7 w-full max-w-[300px] space-y-2.5"
           >
-            {isOnTheHouse ? (
+            {hasGlobalProviderKey ? (
               <input
-                value="On the house"
+                value={providerCoveredLabel}
                 type="text"
                 autoComplete="off"
                 readOnly
@@ -441,6 +443,8 @@ function StartStage({
               )}
               {isOnTheHouse
                 ? "Covered by Conclave. No key needed."
+                : hasGlobalProviderKey && needsAssistantKey
+                  ? "Sarvam is covered. Add an OpenAI key for Ask and Minutes."
                 : "Keys are used only for this session, never stored."}
             </p>
           </form>

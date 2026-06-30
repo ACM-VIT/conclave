@@ -32,6 +32,7 @@ export const getPublicSiteUrl = (): string =>
       process.env.NEXT_PUBLIC_SITE_URL,
       process.env.NEXT_PUBLIC_APP_URL,
       process.env.BETTER_AUTH_URL,
+      process.env.BETTER_AUTH_BASE_URL,
       process.env.VERCEL_URL,
     ),
   ) ?? defaultSiteUrl;
@@ -40,6 +41,7 @@ export const getAuthBaseUrl = (): string =>
   normalizeOrigin(
     firstNonEmpty(
       process.env.BETTER_AUTH_URL,
+      process.env.BETTER_AUTH_BASE_URL,
       process.env.NEXT_PUBLIC_APP_URL,
       process.env.NEXT_PUBLIC_SITE_URL,
       process.env.VERCEL_URL,

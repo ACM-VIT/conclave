@@ -6,7 +6,6 @@ import {
   resolveSfuUrl,
 } from "@/lib/sfu-admin-auth";
 
-
 type RoomsResponse = {
   rooms?: Array<{
     id: string;
@@ -21,13 +20,18 @@ export async function GET(request: Request) {
   if (!authResult.ok) {
     return NextResponse.json(
       { error: authResult.error },
-      { status: authResult.status },
+      {
+        status: authResult.status,
+        headers: {
+          "Cache-Control": "no-store",
+        },
+      },
     );
   }
 
   const sfuUrl = resolveSfuUrl();
   const secret = resolveSfuSecret();
-  const clientId = resolveSfuClientId(request);
+  const clientId = resolveSfuClientId(request, { fallback: "conclave" });
 
   try {
     const targetUrl = new URL("/admin/rooms", sfuUrl);

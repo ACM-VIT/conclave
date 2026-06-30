@@ -21,9 +21,10 @@ export class GameSession {
   readonly module: GameModule;
   readonly hostId: string;
   private players: GamePlayer[];
+  private activePlayers: GamePlayer[];
   private readonly playerIds: Set<string>;
   private readonly rng: GameRng;
-  private readonly adminIds: Set<string>;
+  private adminIds: Set<string>;
   private readonly config: GameConfig;
   private readonly content: unknown | null;
   private state: unknown;
@@ -41,6 +42,7 @@ export class GameSession {
     this.module = options.module;
     this.players = dedupePlayers(options.players);
     this.playerIds = new Set(this.players.map((player) => player.id));
+    this.activePlayers = this.players.slice();
     this.adminIds = new Set(options.adminIds);
     this.hostId = options.hostId;
     this.config = options.config ?? {};
@@ -70,9 +72,20 @@ export class GameSession {
     return this.players.slice();
   }
 
+  updateRoomMembership(options: {
+    players: GamePlayer[];
+    adminIds: Iterable<string>;
+  }): void {
+    this.activePlayers = dedupePlayers(options.players).filter((player) =>
+      this.playerIds.has(player.id),
+    );
+    this.adminIds = new Set(options.adminIds);
+  }
+
   private context(now: number = Date.now()): GameContext {
     return {
       players: this.players.slice(),
+      activePlayers: this.activePlayers.slice(),
       rng: this.rng,
       config: this.config,
       content: this.content,

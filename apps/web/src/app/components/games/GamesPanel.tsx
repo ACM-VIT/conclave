@@ -391,7 +391,7 @@ function GameConfigView({
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
       <p style={{ fontSize: 13, color: color.textMuted, margin: 0, lineHeight: 1.5 }}>
-        {entry.description}. Set it up, then start.
+        {entry.description}.
       </p>
 
       {entry.options.map((opt) => (
