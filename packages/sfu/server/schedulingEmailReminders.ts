@@ -148,16 +148,49 @@ const persistMeetingChange = async (
   );
 };
 
-const sendReminderForMeeting = async (
+const claimReminderForMeeting = async (
   state: SfuState,
   meeting: ScheduledMeeting,
-): Promise<ScheduledMeeting> => {
+  now: number,
+  leadMs: number,
+): Promise<ScheduledMeeting | null> => {
+  if (state.scheduledMeetingPersistence?.claimEmailReminder) {
+    const claimed = await state.scheduledMeetingPersistence.claimEmailReminder({
+      meetingId: meeting.id,
+      now,
+      leadMs,
+    });
+    if (!claimed) return null;
+    const local = state.scheduledMeetings.byId.get(claimed.id);
+    if (local) {
+      Object.assign(local, claimed);
+      return local;
+    }
+    state.scheduledMeetings.byId.set(claimed.id, claimed);
+    state.scheduledMeetings.byRoomCode.set(
+      `${claimed.clientId}:${claimed.roomCode}`,
+      claimed.id,
+    );
+    return claimed;
+  }
+
   const pending = updateScheduledMeeting(state.scheduledMeetings, meeting.id, {
     emailReminderStatus: "pending",
     emailReminderError: null,
     emailReminderSentAt: null,
   });
   await persistMeetingChange(state, pending);
+  return pending;
+};
+
+const sendReminderForMeeting = async (
+  state: SfuState,
+  meeting: ScheduledMeeting,
+  now: number,
+  leadMs: number,
+): Promise<ScheduledMeeting | null> => {
+  const pending = await claimReminderForMeeting(state, meeting, now, leadMs);
+  if (!pending) return null;
 
   const eventType = resolveEventType(state, pending);
   const profile = resolveProfile(state, pending, eventType);
@@ -196,7 +229,8 @@ export const sendDueSchedulingEmailReminders = async (
     for (const meeting of dueMeetings) {
       reminderInFlight.add(meeting.id);
       try {
-        changed.push(await sendReminderForMeeting(state, meeting));
+        const updated = await sendReminderForMeeting(state, meeting, now, leadMs);
+        if (updated) changed.push(updated);
       } catch (error) {
         Logger.warn("Failed to send scheduling reminder", error);
         try {
