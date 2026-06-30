@@ -3558,7 +3558,7 @@ final class ConclaveTests: XCTestCase {
     func testChatMentionContextPolicyMatchesWebWhitespace() throws {
         XCTAssertEqual(
             ChatMentionContextPolicy.context(for: "  @Remote.User", isChatDisabled: false, isDmEnabled: true),
-            ChatMentionContext(mode: ChatMentionMode.at, query: "remote.user")
+            ChatMentionContext(mode: ChatMentionMode.at, query: "remote.user", replacementPrefix: "  ")
         )
         XCTAssertNil(ChatMentionContextPolicy.context(for: "@remote ", isChatDisabled: false, isDmEnabled: true))
 
@@ -3573,6 +3573,19 @@ final class ConclaveTests: XCTestCase {
         XCTAssertNil(ChatMentionContextPolicy.context(for: "/dm remote hello", isChatDisabled: false, isDmEnabled: true))
         XCTAssertNil(ChatMentionContextPolicy.context(for: "/dm remote", isChatDisabled: true, isDmEnabled: true))
         XCTAssertNil(ChatMentionContextPolicy.context(for: "/dm remote", isChatDisabled: false, isDmEnabled: false))
+    }
+
+    func testChatMentionContextPolicySupportsTrailingAtMentionsLikeWeb() throws {
+        XCTAssertEqual(
+            ChatMentionContextPolicy.context(for: "hey @Remote.User", isChatDisabled: false, isDmEnabled: true),
+            ChatMentionContext(mode: ChatMentionMode.at, query: "remote.user", replacementPrefix: "hey ")
+        )
+        XCTAssertEqual(
+            ChatMentionContextPolicy.replacedTrailingAtMention(in: "hey @Rem", with: "remote.user"),
+            "hey @remote.user "
+        )
+        XCTAssertNil(ChatMentionContextPolicy.context(for: "hey @remote ", isChatDisabled: false, isDmEnabled: true))
+        XCTAssertNil(ChatMentionContextPolicy.context(for: "email me@remote", isChatDisabled: false, isDmEnabled: true))
     }
 
     func testChatSubmitReplyPolicyKeepsReplyForNonDmCommands() throws {

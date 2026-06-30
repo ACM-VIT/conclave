@@ -281,7 +281,7 @@ struct ChatOverlayView: View {
                         suggestions: mentionSuggestions,
                         maxHeight: mentionSuggestionsMaxHeight,
                         onSelect: { suggestion in
-                            applyMentionSuggestion(suggestion, mode: context.mode)
+                            applyMentionSuggestion(suggestion, context: context)
                         }
                     )
                 } else if !commandSuggestions.isEmpty {
@@ -442,10 +442,10 @@ struct ChatOverlayView: View {
         focusInput()
     }
 
-    private func applyMentionSuggestion(_ suggestion: ChatMentionSuggestion, mode: ChatMentionMode) {
-        switch mode {
+    private func applyMentionSuggestion(_ suggestion: ChatMentionSuggestion, context: ChatMentionContext) {
+        switch context.mode {
         case .at:
-            messageText = "@\(suggestion.mentionToken) "
+            messageText = "\(context.replacementPrefix)@\(suggestion.mentionToken) "
         case .dm:
             messageText = "/dm \(suggestion.mentionToken) "
         }
@@ -714,6 +714,13 @@ enum ChatMentionMode: Equatable {
 struct ChatMentionContext: Equatable {
     let mode: ChatMentionMode
     let query: String
+    let replacementPrefix: String
+
+    init(mode: ChatMentionMode, query: String, replacementPrefix: String = "") {
+        self.mode = mode
+        self.query = query
+        self.replacementPrefix = replacementPrefix
+    }
 }
 
 enum ChatMentionContextPolicy {
@@ -724,17 +731,43 @@ enum ChatMentionContextPolicy {
     ) -> ChatMentionContext? {
         guard !isChatDisabled, isDmEnabled else { return nil }
 
-        let value = trimLeadingWhitespace(text)
-        if value.hasPrefix("@") {
-            let query = String(value.dropFirst())
-            guard !containsWhitespace(query) else { return nil }
-            return ChatMentionContext(mode: .at, query: query.lowercased())
+        if let atContext = trailingAtMentionContext(in: text) {
+            return atContext
         }
 
+        let value = trimLeadingWhitespace(text)
         guard value.lowercased().hasPrefix("/dm") else { return nil }
         let query = trimLeadingWhitespace(String(value.dropFirst(3)))
         guard !containsWhitespace(query) else { return nil }
         return ChatMentionContext(mode: .dm, query: query.lowercased())
+    }
+
+    static func replacedTrailingAtMention(in text: String, with mentionToken: String) -> String? {
+        guard let context = trailingAtMentionContext(in: text) else { return nil }
+        return "\(context.replacementPrefix)@\(mentionToken) "
+    }
+
+    private static func trailingAtMentionContext(in text: String) -> ChatMentionContext? {
+        let trailingTokenStart = lastTokenStartIndex(in: text)
+        let trailingToken = String(text[trailingTokenStart...])
+        guard trailingToken.hasPrefix("@") else { return nil }
+        let query = String(trailingToken.dropFirst())
+        guard !containsWhitespace(query) else { return nil }
+        let prefix = String(text[..<trailingTokenStart])
+        return ChatMentionContext(mode: .at, query: query.lowercased(), replacementPrefix: prefix)
+    }
+
+    private static func lastTokenStartIndex(in text: String) -> String.Index {
+        var index = text.endIndex
+        while index > text.startIndex {
+            let previous = text.index(before: index)
+            let character = text[previous]
+            if character.isWhitespace || character.isNewline {
+                break
+            }
+            index = previous
+        }
+        return index
     }
 
     private static func trimLeadingWhitespace(_ value: String) -> String {
