@@ -26,6 +26,7 @@ import SocketIO
 
 private enum SocketEvent {
     static let joinRoom = SfuClientEvent.joinRoom.rawValue
+    static let getRouterRtpCapabilities = SfuClientEvent.getRouterRtpCapabilities.rawValue
     static let createProducerTransport = SfuClientEvent.createProducerTransport.rawValue
     static let createConsumerTransport = SfuClientEvent.createConsumerTransport.rawValue
     static let connectProducerTransport = SfuClientEvent.connectProducerTransport.rawValue
@@ -42,6 +43,7 @@ private enum SocketEvent {
     static let toggleCamera = SfuClientEvent.toggleCamera.rawValue
     static let closeProducer = SfuClientEvent.closeProducer.rawValue
     static let sendChat = SfuClientEvent.sendChat.rawValue
+    static let conclaveAnswer = SfuClientEvent.conclaveAnswer.rawValue
     static let sendReaction = SfuClientEvent.sendReaction.rawValue
     static let setHandRaised = SfuClientEvent.setHandRaised.rawValue
     static let updateDisplayName = SfuClientEvent.updateDisplayName.rawValue

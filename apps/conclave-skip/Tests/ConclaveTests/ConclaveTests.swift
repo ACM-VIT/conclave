@@ -270,6 +270,29 @@ final class ConclaveTests: XCTestCase {
             "Android socket manager is missing server events: \(expectedRawValues.subtracting(androidRegisteredRawValues).sorted())"
         )
     }
+
+    func testNativeSocketManagersMirrorEverySfuClientEventConstant() throws {
+        let clientEventRawValues = try parseSfuClientEventRawValues()
+        let expectedRawValues = Set(clientEventRawValues.values)
+        let iosMirroredRawValues = try mirroredClientEventRawValues(
+            in: "Sources/Conclave/Core/Networking/SocketIOManager.swift",
+            clientEventRawValues: clientEventRawValues
+        )
+        let androidMirroredRawValues = try mirroredClientEventRawValues(
+            in: "Sources/Conclave/Skip/SocketIOManager+Android.kt",
+            clientEventRawValues: clientEventRawValues
+        )
+
+        XCTAssertFalse(clientEventRawValues.isEmpty)
+        XCTAssertTrue(
+            expectedRawValues.subtracting(iosMirroredRawValues).isEmpty,
+            "iOS socket manager is missing client event constants: \(expectedRawValues.subtracting(iosMirroredRawValues).sorted())"
+        )
+        XCTAssertTrue(
+            expectedRawValues.subtracting(androidMirroredRawValues).isEmpty,
+            "Android socket manager is missing client event constants: \(expectedRawValues.subtracting(androidMirroredRawValues).sorted())"
+        )
+    }
 #endif
 
     func testNativeReactionEmojiOptionsMatchWebSurface() throws {
@@ -6784,6 +6807,24 @@ private func parseSwiftSfuEventRawValues(enumName: String) throws -> [String: St
 
 private func parseSfuServerEventRawValues() throws -> [String: String] {
     try parseSwiftSfuEventRawValues(enumName: "SfuServerEvent")
+}
+
+private func parseSfuClientEventRawValues() throws -> [String: String] {
+    try parseSwiftSfuEventRawValues(enumName: "SfuClientEvent")
+}
+
+private func mirroredClientEventRawValues(
+    in relativePath: String,
+    clientEventRawValues: [String: String]
+) throws -> Set<String> {
+    let source = try sourceFileContents(relativePath)
+    let mirroredConstants = regexMatches(
+        pattern: #"(?:static let|val)\s+\w+\s*=\s*SfuClientEvent\.(\w+)\.rawValue"#,
+        in: source
+    ).compactMap { match in
+        clientEventRawValues[match[0]]
+    }
+    return Set(mirroredConstants)
 }
 
 private func registeredServerEventRawValues(

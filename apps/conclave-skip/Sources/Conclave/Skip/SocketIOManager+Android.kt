@@ -35,6 +35,7 @@ private class JoinRoomRedirectException(
 
 internal object SocketEvent {
     val joinRoom = SfuClientEvent.joinRoom.rawValue
+    val getRouterRtpCapabilities = SfuClientEvent.getRouterRtpCapabilities.rawValue
     val createProducerTransport = SfuClientEvent.createProducerTransport.rawValue
     val createConsumerTransport = SfuClientEvent.createConsumerTransport.rawValue
     val connectProducerTransport = SfuClientEvent.connectProducerTransport.rawValue
@@ -51,6 +52,7 @@ internal object SocketEvent {
     val toggleCamera = SfuClientEvent.toggleCamera.rawValue
     val closeProducer = SfuClientEvent.closeProducer.rawValue
     val sendChat = SfuClientEvent.sendChat.rawValue
+    val conclaveAnswer = SfuClientEvent.conclaveAnswer.rawValue
     val sendReaction = SfuClientEvent.sendReaction.rawValue
     val setHandRaised = SfuClientEvent.setHandRaised.rawValue
     val updateDisplayName = SfuClientEvent.updateDisplayName.rawValue
