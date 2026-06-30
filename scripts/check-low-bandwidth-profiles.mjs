@@ -158,12 +158,12 @@ assertRegex(
 );
 assertRegex(
   "iosWebrtc",
-  /case \.emergency:\s*return 18_000[\s\S]*case \.poor:\s*return 24_000[\s\S]*case \.fair:\s*return 32_000/,
+  /case \.emergency:\s*return 24_000[\s\S]*case \.poor:\s*return 32_000[\s\S]*case \.fair:\s*return 48_000[\s\S]*case \.good, \.unknown:\s*return 96_000/,
   "iOS microphone Opus constrained ladder",
 );
 assertRegex(
   "androidWebrtc",
-  /ConnectionQuality\.emergency -> 18_000[\s\S]*ConnectionQuality\.poor -> 24_000[\s\S]*ConnectionQuality\.fair -> 32_000/,
+  /ConnectionQuality\.emergency -> 24_000[\s\S]*ConnectionQuality\.poor -> 32_000[\s\S]*ConnectionQuality\.fair -> 48_000[\s\S]*ConnectionQuality\.good, ConnectionQuality\.unknown -> 96_000/,
   "Android microphone Opus constrained ladder",
 );
 assertRegex(
@@ -2557,17 +2557,17 @@ assertIncludes(
 );
 assertRegex(
   "androidWebrtc",
-  /refreshLocalVideoProducerForBandwidthProfile[\s\S]*transport\.produce\([\s\S]*webcamEncodings\(currentVideoQuality, connectionQuality\)[\s\S]*nextProducer\.setMaxSpatialLayer[\s\S]*socket\.closeProducer\(oldProducer\.id\)/,
+  /refreshLocalVideoProducerForBandwidthProfile[\s\S]*produceWebcamVideo\(transport, track, appData, connectionQuality\)[\s\S]*nextProducer\.setMaxSpatialLayer[\s\S]*socket\.closeProducer\(oldProducer\.id\)/,
   "Android webcam producer refresh for new bandwidth profile",
 );
 assertRegex(
   "androidWebrtc",
-  /refreshLocalAudioProducerForBandwidthProfile[\s\S]*socket\.closeProducer\(oldProducerId\)[\s\S]*startProducingAudio\(\)/,
+  /refreshLocalAudioProducerForBandwidthProfile[\s\S]*produceMicrophoneAudio\(transport, track\)[\s\S]*markMicrophoneProducerUnmuted\(nextProducer\.id, "bandwidth refresh"\)[\s\S]*socket\.closeProducer\(oldProducer\.id\)/,
   "Android microphone producer refresh for new Opus profile",
 );
 assertRegex(
   "androidWebrtc",
-  /refreshLocalScreenProducerForBandwidthProfile[\s\S]*transport\.produce\([\s\S]*screenShareEncodings\(connectionQuality\)[\s\S]*socket\.closeProducer\(oldProducer\.id\)/,
+  /refreshLocalScreenProducerForBandwidthProfile[\s\S]*transport\.produce\([\s\S]*screenShareEncodings\(connectionQuality\)[\s\S]*screenProducerBandwidthQuality = connectionQuality[\s\S]*socket\.closeProducer\(oldProducer\.id\)/,
   "Android screen producer refresh for new bandwidth profile",
 );
 
