@@ -225,6 +225,23 @@ function StartStage({
   const needsTakeover = transcript.session.status === "takeover_needed";
   const provider = getTranscriptTranscriptionProvider(transcriptModel);
   const providerLabel = provider === "sarvam" ? "Sarvam" : "OpenAI";
+  const isSarvam = provider === "sarvam";
+  // One realtime model per provider; the toggle picks the provider's model.
+  const transcriptProviderOptions = useMemo(() => {
+    const seen = new Set<string>();
+    const opts: { provider: string; label: string; modelId: string }[] = [];
+    for (const model of LIVE_TRANSCRIPT_TRANSCRIPTION_MODELS) {
+      if (seen.has(model.provider)) continue;
+      seen.add(model.provider);
+      opts.push({
+        provider: model.provider,
+        label: model.provider === "sarvam" ? "Sarvam" : "OpenAI",
+        modelId: model.id,
+      });
+    }
+    // Keep OpenAI first so it stays the default-looking left option.
+    return opts.sort((a) => (a.provider === "openai" ? -1 : 1));
+  }, []);
   const hasGlobalProviderKey =
     transcript.globalProviderKeysAvailable[provider] === true;
   const hasGlobalAssistantKey =
@@ -272,13 +289,28 @@ function StartStage({
     <div className="relative flex h-full min-h-0 flex-col justify-center overflow-y-auto px-5 py-6">
       <div
         aria-hidden
-        className="pointer-events-none absolute left-1/2 top-[6%] h-72 w-72 -translate-x-1/2 rounded-full opacity-20 blur-[72px]"
-        style={{ background: START_ACCENT }}
+        className="pointer-events-none absolute left-1/2 top-[6%] h-72 w-72 -translate-x-1/2 rounded-full opacity-20 blur-[72px] transition-all duration-500"
+        style={{
+          background: isSarvam
+            ? "linear-gradient(90deg, #FF9933 0%, #FFFFFF 50%, #138808 100%)"
+            : START_ACCENT,
+        }}
       />
       <div className="relative z-10 flex flex-col items-center text-center">
         <span
           className="text-[13px] font-medium"
-          style={{ color: START_ACCENT }}
+          style={
+            isSarvam
+              ? {
+                  background:
+                    "linear-gradient(90deg, #FF9933 0%, #f5f5f5 50%, #138808 100%)",
+                  WebkitBackgroundClip: "text",
+                  backgroundClip: "text",
+                  WebkitTextFillColor: "transparent",
+                  color: "transparent",
+                }
+              : { color: START_ACCENT }
+          }
         >
           Live notes
         </span>
@@ -339,25 +371,32 @@ function StartStage({
                 className="h-11 w-full rounded-xl border border-white/10 bg-black/20 px-3.5 text-center text-[13px] text-[#fafafa] outline-none transition-colors placeholder:text-[#71717a] focus:border-[#4F9CF9]/60 disabled:opacity-60"
               />
             ) : null}
-            <div className="grid grid-cols-2 gap-2 text-left">
-              <label className="space-y-1">
+            <div className="space-y-2.5 text-left">
+              <div className="space-y-1">
                 <span className="block px-0.5 text-[11px] text-[#a1a1aa]">
                   Provider
                 </span>
-                <select
-                  value={transcriptModel}
-                  onChange={(event) => setTranscriptModel(event.target.value)}
-                  disabled={isSubmitting}
-                  className="h-9 w-full rounded-lg border border-white/10 bg-black/20 px-2 text-[12px] text-[#fafafa] outline-none focus:border-[#4F9CF9]/60 disabled:opacity-60"
-                >
-                  {LIVE_TRANSCRIPT_TRANSCRIPTION_MODELS.map((model) => (
-                    <option key={model.id} value={model.id}>
-                      {model.provider === "sarvam" ? "Sarvam" : "OpenAI"} -{" "}
-                      {model.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
+                <div className="grid grid-cols-2 gap-1 rounded-lg border border-white/10 bg-black/20 p-1">
+                  {transcriptProviderOptions.map((option) => {
+                    const active = provider === option.provider;
+                    return (
+                      <button
+                        key={option.provider}
+                        type="button"
+                        disabled={isSubmitting}
+                        onClick={() => setTranscriptModel(option.modelId)}
+                        className={`h-8 rounded-md text-[12px] font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
+                          active
+                            ? "bg-[#F95F4A] text-white shadow-sm"
+                            : "text-[#a1a1aa] hover:text-[#fafafa]"
+                        }`}
+                      >
+                        {option.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
               <label className="space-y-1">
                 <span className="block px-0.5 text-[11px] text-[#a1a1aa]">
                   Assistant
