@@ -264,7 +264,7 @@ const routerMediaCodecs: RouterRtpCodecCapability[] = [
     mimeType: "audio/opus",
     clockRate: 48000,
     channels: 2,
-    rtcpFeedback: [{ type: "transport-cc" }],
+    rtcpFeedback: [{ type: "nack" }, { type: "transport-cc" }],
   },
   {
     kind: "video",

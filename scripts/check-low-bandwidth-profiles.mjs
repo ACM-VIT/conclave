@@ -127,9 +127,39 @@ assertRegex(
   "web screen-audio Opus tracks microphone ladder",
 );
 assertRegex(
+  "sfuConfig",
+  /mimeType:\s*"audio\/opus"[\s\S]*rtcpFeedback:\s*\[\{ type: "nack" \}, \{ type: "transport-cc" \}\]/,
+  "SFU Opus router codec advertises NACK and transport-cc",
+);
+assertRegex(
+  "webConstants",
+  /buildMicrophoneOpusCodecOptions[\s\S]*opusDtx:\s*true,[\s\S]*opusNack:\s*true,[\s\S]*buildScreenShareAudioOpusCodecOptions[\s\S]*opusDtx:\s*true,[\s\S]*opusNack:\s*true,/,
+  "web Opus producers request NACK",
+);
+assertRegex(
   "webLowBandwidthProbe",
   /opusMaxAverageBitrateByProfile = \{[\s\S]*good:\s*96000,[\s\S]*fair:\s*48000,[\s\S]*poor:\s*32000,[\s\S]*emergency:\s*24000,[\s\S]*maxAllowedAudioBitrateFor/,
   "low-bandwidth probe expects the web Opus constrained ladder",
+);
+assertRegex(
+  "webLowBandwidthProbe",
+  /assertNegotiatedOpusCodecOptions[\s\S]*getSdpCodecParameter\(codec, "useinbandfec"\)[\s\S]*getSdpCodecParameter\(codec, "usedtx"\)[\s\S]*negotiated SDP missing Opus FEC[\s\S]*negotiated SDP missing Opus DTX/,
+  "low-bandwidth probe verifies negotiated Opus FEC and DTX",
+);
+assertRegex(
+  "webLowBandwidthProbe",
+  /hasPlainNackFeedback[\s\S]*negotiated SDP missing Opus NACK[\s\S]*Opus NACK not enabled/,
+  "low-bandwidth probe verifies producer and negotiated Opus NACK",
+);
+assertRegex(
+  "iosWebrtc",
+  /let opusNack: Bool[\s\S]*opusNack: true/,
+  "iOS Skip microphone Opus producer requests NACK",
+);
+assertRegex(
+  "androidWebrtc",
+  /\.put\("opusNack", true\)/,
+  "Android Skip microphone Opus producer requests NACK",
 );
 assertRegex(
   "webMeetMedia",
