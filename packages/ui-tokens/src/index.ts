@@ -4,5 +4,5 @@
  * "@conclave/ui-tokens/native" so the wrong platform's React renderer is never
  * pulled into a bundle.
  */
-export * from "./tokens";
-export * from "./core";
+export * from "./tokens.js";
+export * from "./core/index.js";

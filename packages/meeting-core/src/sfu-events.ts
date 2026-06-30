@@ -84,6 +84,22 @@ export const SFU_EVENTS = {
     appsYjsUpdate: "apps:yjs:update",
     appsAwareness: "apps:awareness",
 
+    // Server-authoritative room games
+    gameList: "game:list",
+    gameStart: "game:start",
+    gameMove: "game:move",
+    gameEnd: "game:end",
+    gameGetState: "game:getState",
+    gameVoteOpen: "game:vote:open",
+    gameVoteCast: "game:vote:cast",
+    gameVoteCancel: "game:vote:cancel",
+
+    // Live transcript
+    transcriptGetToken: "transcript:getToken",
+    transcriptSfuRelayStatus: "transcript:sfuRelayStatus",
+    transcriptSfuRelayStart: "transcript:sfuRelayStart",
+    transcriptSfuRelayStop: "transcript:sfuRelayStop",
+
     // Meeting / webinar configuration (host)
     meetingGetConfig: "meeting:getConfig",
     meetingUpdateConfig: "meeting:updateConfig",
@@ -186,6 +202,13 @@ export const SFU_EVENTS = {
     appsState: "apps:state",
     appsYjsUpdate: "apps:yjs:update",
     appsAwareness: "apps:awareness",
+
+    // Server-authoritative room games
+    gameState: "game:state",
+    gameView: "game:view",
+    gameSnapshot: "game:snapshot",
+    gameEnded: "game:ended",
+    gameVote: "game:vote",
 
     // Webinar
     webinarFeedChanged: "webinar:feedChanged",

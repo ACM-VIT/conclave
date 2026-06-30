@@ -11,6 +11,7 @@
     "dev": "npx tsx server.ts",
     "prestart": "node scripts/ensure-mediasoup-worker.mjs",
     "start": "npx tsx server.ts",
+    "email:dev": "react-email dev --dir server/email --port 3002",
     "new:game": "node ./scripts/new-game.mjs",
     "test:game-ai": "npx tsx scripts/test-game-ai.ts",
     "typecheck": "tsc --noEmit"
@@ -20,6 +21,7 @@
   "license": "ISC",
   "type": "module",
   "dependencies": {
+    "@conclave/ui-tokens": "workspace:*",
     "@socket.io/redis-adapter": "^8.3.0",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
@@ -29,6 +31,9 @@
     "mediasoup": "^3.20.10",
     "opusscript": "0.1.1",
     "puppeteer-core": "^23.11.1",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "react-email": "^6.6.5",
     "redis": "^6.0.1",
     "socket.io": "^4.8.3",
     "y-protocols": "^1.0.7",
@@ -39,6 +44,8 @@
     "@types/express": "^5.0.6",
     "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^20.19.43",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
     "tsx": "^4.22.4",
     "typescript": "^5.9.3",
     "vitest": "^3.2.6"

@@ -379,6 +379,11 @@ export default function BookingClient({ username, eventSlug }: Props) {
               The Conclave room is booked. Calendar sync did not complete.
             </p>
           ) : null}
+          {confirmation.emailNotificationStatus === "failed" ? (
+            <p className="mt-3 rounded-xl border border-[#F95F4A]/25 bg-[#F95F4A]/[0.08] px-3 py-2 text-[12.5px] text-[#ffb2a8]">
+              The Conclave room is booked. Confirmation email did not send.
+            </p>
+          ) : null}
           <div className="mt-6 rounded-xl border border-white/10 bg-white/[0.02] p-4 text-left">
             <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-[#fafafa]/40">
               Conclave room
@@ -450,9 +455,7 @@ export default function BookingClient({ username, eventSlug }: Props) {
               </div>
               <div className="flex items-center gap-2.5">
                 <Mail className="h-4 w-4 shrink-0 text-[#fafafa]/35" />
-                {page.calendar.status === "connected"
-                  ? "Calendar invite on booking"
-                  : "Room link on booking"}
+                Email confirmation on booking
               </div>
             </div>
             <div className="mt-6 hidden md:block">

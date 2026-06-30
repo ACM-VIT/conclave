@@ -37,6 +37,11 @@ final class SocketIOManager {
     var onAppsState: ((AppsStateNotification) -> Void)?
     var onAppsYjsUpdate: ((AppsYjsUpdateNotification) -> Void)?
     var onAppsAwareness: ((AppsAwarenessNotification) -> Void)?
+    var onGameState: ((GamePublicState) -> Void)?
+    var onGameView: ((GamePlayerViewNotification) -> Void)?
+    var onGameSnapshot: ((GameStateResponse) -> Void)?
+    var onGameEnded: ((GameEndedNotification) -> Void)?
+    var onGameVote: ((GameVoteState?) -> Void)?
 
     var onUserJoined: ((UserJoinedNotification) -> Void)?
     var onUserLeft: ((UserLeftNotification) -> Void)?
@@ -166,6 +171,18 @@ final class SocketIOManager {
     func syncApp(appId: String, stateVector: Data) async throws -> AppsSyncResponse { fatalError() }
     func sendAppYjsUpdate(appId: String, update: Data) { fatalError() }
     func sendAppAwareness(appId: String, awarenessUpdate: Data, clientId: Int? = nil) { fatalError() }
+    func getGameCatalog() async throws -> [GameCatalogEntry] { fatalError() }
+    func getGameState() async throws -> GameStateResponse { fatalError() }
+    func startGame(gameId: String, options: [String: GameConfigValue]? = nil) async throws -> GameActionResponse { fatalError() }
+    func endGame() async throws -> GameActionResponse { fatalError() }
+    func sendGameMove(gameId: String, type: String, payload: GameJSONValue? = nil) async throws -> GameMoveResponse { fatalError() }
+    func openGameVote(candidateIds: [String]? = nil) async throws -> GameActionResponse { fatalError() }
+    func castGameVote(gameId: String) async throws -> GameActionResponse { fatalError() }
+    func cancelGameVote() async throws -> GameActionResponse { fatalError() }
+    func getTranscriptToken() async throws -> TranscriptTokenResponse { fatalError() }
+    func getTranscriptSfuRelayStatus() async throws -> TranscriptSfuRelayStatusResponse { fatalError() }
+    func startTranscriptSfuRelay(relayStartToken: String) async throws -> TranscriptSfuRelayStartResponse { fatalError() }
+    func stopTranscriptSfuRelay() async throws -> TranscriptSfuRelayStopResponse { fatalError() }
     func admitUser(userId: String) async throws { fatalError() }
     func rejectUser(userId: String) async throws { fatalError() }
     func admitAllPending() async throws { fatalError() }

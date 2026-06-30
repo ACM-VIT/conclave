@@ -11,6 +11,7 @@ import { dirname, resolve } from "node:path";
 import type {
   CreateScheduledMeetingRequest,
   ScheduledMeeting,
+  ScheduledMeetingEmailNotificationStatus,
   ScheduledMeetingStatus,
   UpdateScheduledMeetingRequest,
 } from "../types.js";
@@ -64,6 +65,13 @@ const sanitizeOptionalEmail = (value: string | undefined): string | null => {
   if (!normalized || !normalized.includes("@")) return null;
   return normalized.slice(0, 320);
 };
+
+const normalizeEmailNotificationStatus = (
+  value: unknown,
+): ScheduledMeetingEmailNotificationStatus =>
+  value === "pending" || value === "sent" || value === "failed"
+    ? value
+    : "not_configured";
 
 const generateRoomCode = (): string => {
   const adjectives = [
@@ -228,6 +236,30 @@ export const createScheduledMeeting = (
       request.calendarSyncError ?? undefined,
       512,
     ),
+    emailNotificationStatus: normalizeEmailNotificationStatus(
+      request.emailNotificationStatus,
+    ),
+    emailNotificationError: sanitizeOptionalText(
+      request.emailNotificationError ?? undefined,
+      512,
+    ),
+    emailNotificationSentAt:
+      Number.isFinite(Number(request.emailNotificationSentAt)) &&
+      Number(request.emailNotificationSentAt) > 0
+        ? Number(request.emailNotificationSentAt)
+        : null,
+    emailReminderStatus: normalizeEmailNotificationStatus(
+      request.emailReminderStatus,
+    ),
+    emailReminderError: sanitizeOptionalText(
+      request.emailReminderError ?? undefined,
+      512,
+    ),
+    emailReminderSentAt:
+      Number.isFinite(Number(request.emailReminderSentAt)) &&
+      Number(request.emailReminderSentAt) > 0
+        ? Number(request.emailReminderSentAt)
+        : null,
   };
 
   registerStore(store, meeting);
@@ -305,6 +337,46 @@ export const updateScheduledMeeting = (
       request.calendarSyncError === null
         ? null
         : sanitizeOptionalText(request.calendarSyncError, 512);
+  }
+  if (request.emailNotificationStatus) {
+    meeting.emailNotificationStatus = normalizeEmailNotificationStatus(
+      request.emailNotificationStatus,
+    );
+  }
+  if (request.emailNotificationError !== undefined) {
+    meeting.emailNotificationError =
+      request.emailNotificationError === null
+        ? null
+        : sanitizeOptionalText(request.emailNotificationError, 512);
+  }
+  if (request.emailNotificationSentAt !== undefined) {
+    meeting.emailNotificationSentAt =
+      request.emailNotificationSentAt === null
+        ? null
+        : Number.isFinite(Number(request.emailNotificationSentAt)) &&
+            Number(request.emailNotificationSentAt) > 0
+          ? Number(request.emailNotificationSentAt)
+          : null;
+  }
+  if (request.emailReminderStatus) {
+    meeting.emailReminderStatus = normalizeEmailNotificationStatus(
+      request.emailReminderStatus,
+    );
+  }
+  if (request.emailReminderError !== undefined) {
+    meeting.emailReminderError =
+      request.emailReminderError === null
+        ? null
+        : sanitizeOptionalText(request.emailReminderError, 512);
+  }
+  if (request.emailReminderSentAt !== undefined) {
+    meeting.emailReminderSentAt =
+      request.emailReminderSentAt === null
+        ? null
+        : Number.isFinite(Number(request.emailReminderSentAt)) &&
+            Number(request.emailReminderSentAt) > 0
+          ? Number(request.emailReminderSentAt)
+          : null;
   }
 
   meeting.updatedAt = now;
@@ -499,6 +571,28 @@ const normalizeStoredMeeting = (raw: unknown): ScheduledMeeting | null => {
       typeof record.calendarSyncError === "string"
         ? record.calendarSyncError
         : null,
+    emailNotificationStatus: normalizeEmailNotificationStatus(
+      record.emailNotificationStatus,
+    ),
+    emailNotificationError:
+      typeof record.emailNotificationError === "string"
+        ? record.emailNotificationError
+        : null,
+    emailNotificationSentAt: Number.isFinite(
+      Number(record.emailNotificationSentAt),
+    )
+      ? Number(record.emailNotificationSentAt)
+      : null,
+    emailReminderStatus: normalizeEmailNotificationStatus(
+      record.emailReminderStatus,
+    ),
+    emailReminderError:
+      typeof record.emailReminderError === "string"
+        ? record.emailReminderError
+        : null,
+    emailReminderSentAt: Number.isFinite(Number(record.emailReminderSentAt))
+      ? Number(record.emailReminderSentAt)
+      : null,
   };
 };
 

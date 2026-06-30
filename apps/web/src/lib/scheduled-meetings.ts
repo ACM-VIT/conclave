@@ -10,6 +10,12 @@ export type ScheduledMeetingStatus =
   | "ended"
   | "cancelled";
 
+export type ScheduledMeetingEmailNotificationStatus =
+  | "not_configured"
+  | "pending"
+  | "sent"
+  | "failed";
+
 export interface ScheduledMeeting {
   id: string;
   clientId: string;
@@ -26,6 +32,12 @@ export interface ScheduledMeeting {
   createdAt: number;
   createdBy: string;
   updatedAt: number;
+  emailNotificationStatus?: ScheduledMeetingEmailNotificationStatus;
+  emailNotificationError?: string | null;
+  emailNotificationSentAt?: number | null;
+  emailReminderStatus?: ScheduledMeetingEmailNotificationStatus;
+  emailReminderError?: string | null;
+  emailReminderSentAt?: number | null;
 }
 
 export interface CreateScheduledMeetingPayload {

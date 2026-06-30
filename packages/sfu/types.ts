@@ -292,6 +292,12 @@ export type ScheduledMeetingStatus =
   | "ended"
   | "cancelled";
 
+export type ScheduledMeetingEmailNotificationStatus =
+  | "not_configured"
+  | "pending"
+  | "sent"
+  | "failed";
+
 export interface ScheduledMeeting {
   id: string;
   clientId: string;
@@ -317,6 +323,12 @@ export interface ScheduledMeeting {
   googleCalendarEventId?: string | null;
   calendarSyncStatus?: "not_required" | "pending" | "synced" | "failed";
   calendarSyncError?: string | null;
+  emailNotificationStatus?: ScheduledMeetingEmailNotificationStatus;
+  emailNotificationError?: string | null;
+  emailNotificationSentAt?: number | null;
+  emailReminderStatus?: ScheduledMeetingEmailNotificationStatus;
+  emailReminderError?: string | null;
+  emailReminderSentAt?: number | null;
 }
 
 export interface CreateScheduledMeetingRequest {
@@ -335,6 +347,12 @@ export interface CreateScheduledMeetingRequest {
   googleCalendarEventId?: string;
   calendarSyncStatus?: "not_required" | "pending" | "synced" | "failed";
   calendarSyncError?: string | null;
+  emailNotificationStatus?: ScheduledMeetingEmailNotificationStatus;
+  emailNotificationError?: string | null;
+  emailNotificationSentAt?: number | null;
+  emailReminderStatus?: ScheduledMeetingEmailNotificationStatus;
+  emailReminderError?: string | null;
+  emailReminderSentAt?: number | null;
 }
 
 export interface UpdateScheduledMeetingRequest {
@@ -346,6 +364,12 @@ export interface UpdateScheduledMeetingRequest {
   googleCalendarEventId?: string | null;
   calendarSyncStatus?: "not_required" | "pending" | "synced" | "failed";
   calendarSyncError?: string | null;
+  emailNotificationStatus?: ScheduledMeetingEmailNotificationStatus;
+  emailNotificationError?: string | null;
+  emailNotificationSentAt?: number | null;
+  emailReminderStatus?: ScheduledMeetingEmailNotificationStatus;
+  emailReminderError?: string | null;
+  emailReminderSentAt?: number | null;
 }
 
 export type SchedulingWeekday = 0 | 1 | 2 | 3 | 4 | 5 | 6;
@@ -475,6 +499,7 @@ export interface BookingConfirmation {
   attendeeEmail: string;
   calendarEventId: string | null;
   syncStatus: "not_required" | "pending" | "synced" | "failed";
+  emailNotificationStatus: ScheduledMeetingEmailNotificationStatus;
 }
 
 export interface WebinarLinkResponse {

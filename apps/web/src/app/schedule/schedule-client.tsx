@@ -39,6 +39,7 @@ type Booking = {
   scheduledStartAt: number;
   scheduledEndAt: number;
   calendarSyncStatus?: string;
+  emailNotificationStatus?: string;
 };
 
 const DAYS = [
@@ -112,6 +113,30 @@ const formatDateTime = (value: number): string =>
     hour: "numeric",
     minute: "2-digit",
   });
+
+const emailStatusLabel = (status: string | undefined): string => {
+  switch (status) {
+    case "sent":
+      return "Email sent";
+    case "failed":
+      return "Email failed";
+    case "pending":
+      return "Email pending";
+    default:
+      return "Email off";
+  }
+};
+
+const emailStatusClass = (status: string | undefined): string => {
+  switch (status) {
+    case "sent":
+      return "border-[#2BA84A]/25 bg-[#2BA84A]/10 text-[#7BE495]";
+    case "failed":
+      return "border-[#F95F4A]/25 bg-[#F95F4A]/10 text-[#ffb2a8]";
+    default:
+      return "border-white/10 bg-white/[0.04] text-[#fafafa]/55";
+  }
+};
 
 const readError = async (response: Response): Promise<string> => {
   const data = await response.json().catch(() => null);
@@ -613,7 +638,16 @@ export default function ScheduleClient({ user }: Props) {
                           {formatDateTime(booking.scheduledStartAt)}
                         </p>
                       </div>
-                      <span className={CHIP}>Open room</span>
+                      <div className="flex shrink-0 items-center gap-2">
+                        <span
+                          className={`hidden h-8 items-center rounded-lg border px-2.5 text-[12px] font-medium sm:inline-flex ${emailStatusClass(
+                            booking.emailNotificationStatus,
+                          )}`}
+                        >
+                          {emailStatusLabel(booking.emailNotificationStatus)}
+                        </span>
+                        <span className={CHIP}>Open room</span>
+                      </div>
                     </a>
                   ))}
                 </div>

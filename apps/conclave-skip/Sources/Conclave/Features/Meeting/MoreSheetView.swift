@@ -13,6 +13,7 @@ struct MoreSheetView: View {
     let onOpenAdminControls: () -> Void
     let onOpenSharedBrowser: () -> Void
     let onOpenApps: () -> Void
+    let onOpenGames: () -> Void
     @Environment(\.dismiss) private var dismiss
 
     private let emojiReactions = MeetingReactionConstants.emojiReactionOptions
@@ -173,7 +174,17 @@ struct MoreSheetView: View {
                     }
                 }
 
-                if (canShowAdminControls || canShowSharedBrowser) && canShowAppsSection {
+                if (canShowAdminControls || canShowSharedBrowser) && canShowGamesSection {
+                    MoreRowDivider()
+                }
+
+                if canShowGamesSection {
+                    MoreRow(icon: "gamecontroller.fill", androidIcon: "sports_esports", title: "Games", showsChevron: true) {
+                        onOpenGames()
+                    }
+                }
+
+                if (canShowAdminControls || canShowSharedBrowser || canShowGamesSection) && canShowAppsSection {
                     MoreRowDivider()
                 }
 
@@ -199,7 +210,7 @@ struct MoreSheetView: View {
     }
 
     private var canShowToolsSection: Bool {
-        canShowAdminControls || canShowSharedBrowser || canShowAppsSection
+        canShowAdminControls || canShowSharedBrowser || canShowGamesSection || canShowAppsSection
     }
 
     private var canShowQuickReactions: Bool {
@@ -221,6 +232,12 @@ struct MoreSheetView: View {
         viewModel.state.connectionState == .joined &&
         !viewModel.state.isWebinarAttendee &&
         (viewModel.state.isAdmin || viewModel.state.activeAppId != nil)
+    }
+
+    private var canShowGamesSection: Bool {
+        viewModel.state.connectionState == .joined &&
+        !viewModel.state.isWebinarAttendee &&
+        (viewModel.state.isAdmin || viewModel.state.gamePublicState != nil || viewModel.state.gameVote != nil)
     }
 }
 
@@ -1381,6 +1398,1431 @@ enum SharedBrowserURLDraftSyncPolicy {
         guard !hasLocalEdits else { return currentInput }
         guard isBrowserActive else { return "" }
         return browserURL ?? ""
+    }
+}
+
+struct GamesSheetView: View {
+    @Bindable var viewModel: MeetingViewModel
+    var bodyReady: Bool = true
+    var onBack: (() -> Void)? = nil
+    @Environment(\.dismiss) private var dismiss
+    @State private var configuringGame: GameCatalogEntry?
+    @State private var gameConfigDrafts: [String: GameConfigValue] = [:]
+    @State private var bluffAnswerInput = ""
+
+    var body: some View {
+        VStack(spacing: 0) {
+            MeetingSheetHeader(
+                title: configuringGame?.name ?? "Games",
+                onBack: configuringGame == nil ? onBack : { cancelConfiguringGame() },
+                onDone: { dismiss() }
+            )
+
+            if bodyReady {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: ACMSpacing.md) {
+                        if let message = viewModel.state.gameErrorMessage {
+                            errorSection(message)
+                        }
+
+                        if let configuringGame,
+                           canManageGames,
+                           viewModel.state.gamePublicState == nil,
+                           viewModel.state.gameVote == nil {
+                            configSection(configuringGame)
+                        } else if let activeGame = viewModel.state.gamePublicState {
+                            activeGameSection(activeGame)
+                        }
+
+                        if configuringGame == nil,
+                           let vote = viewModel.state.gameVote {
+                            voteSection(vote)
+                        }
+
+                        if configuringGame == nil &&
+                            canManageGames &&
+                            viewModel.state.gamePublicState == nil {
+                            catalogSection
+                        } else if configuringGame == nil &&
+                                    viewModel.state.gamePublicState == nil &&
+                                    viewModel.state.gameVote == nil {
+                            idleSection
+                        }
+                    }
+                    .padding(.horizontal, ACMSpacing.lg)
+                    .padding(.top, ACMSpacing.md)
+                    .padding(.bottom, ACMSpacing.lg)
+                }
+                .transition(.opacity)
+            } else {
+                Spacer()
+            }
+        }
+        #if SKIP
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        #else
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        #endif
+        .onAppear {
+            viewModel.refreshGameState()
+        }
+        .onChange(of: viewModel.state.gamePublicState?.gameId ?? "") { _, gameId in
+            if !gameId.isEmpty {
+                cancelConfiguringGame()
+            }
+            bluffAnswerInput = ""
+        }
+        .onChange(of: viewModel.state.gameVote?.totalPlayers ?? -1) { _, _ in
+            if viewModel.state.gameVote != nil {
+                cancelConfiguringGame()
+            }
+        }
+    }
+
+    private func errorSection(_ message: String) -> some View {
+        MeetingSheetSectionCard {
+            gameRow(
+                icon: "exclamationmark.triangle.fill",
+                androidIcon: "warning",
+                title: message,
+                tint: ACMColors.error,
+                androidTint: "error",
+                isDisabled: true
+            ) {}
+        }
+    }
+
+    private func activeGameSection(_ activeGame: GamePublicState) -> some View {
+        VStack(alignment: .leading, spacing: ACMSpacing.xs) {
+            acmListSectionHeader("Active game")
+
+            MeetingSheetSectionCard {
+                gameRow(
+                    icon: "gamecontroller.fill",
+                    androidIcon: "sports_esports",
+                    title: activeGame.name,
+                    subtitle: activeGameSubtitle(activeGame),
+                    trailing: activeGame.phase,
+                    tint: ACMColors.primaryOrange,
+                    androidTint: "accent",
+                    isDisabled: true
+                ) {}
+
+                MoreRowDivider()
+                activeGameDetails(activeGame)
+
+                if canManageGames {
+                    MoreRowDivider()
+                    MoreRow(
+                        icon: "xmark",
+                        androidIcon: "close",
+                        title: "End game",
+                        tint: ACMColors.error,
+                        androidTint: "error",
+                        isDisabled: viewModel.state.isGameActionInFlight
+                    ) {
+                        viewModel.endActiveGame()
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func activeGameDetails(_ activeGame: GamePublicState) -> some View {
+        if !isLocalGamePlayer(activeGame) && activeGame.phase != "lobby" {
+            gameStatusBlock(
+                title: "Game in progress",
+                subtitle: "You can watch this round and join the next one."
+            )
+        } else if activeGame.phase == "lobby" {
+            lobbyGameDetails(activeGame)
+        } else {
+            switch activeGame.gameId {
+            case "trivia":
+                triviaGameDetails(activeGame)
+            case "reaction":
+                reactionGameDetails(activeGame)
+            case "most-likely-to":
+                mostLikelyGameDetails(activeGame)
+            case "would-you-rather":
+                wouldYouRatherGameDetails(activeGame)
+            case "bluff":
+                bluffGameDetails(activeGame)
+            case "imposter":
+                imposterGameDetails(activeGame)
+            default:
+                genericGameDetails(activeGame)
+            }
+        }
+    }
+
+    private func lobbyGameDetails(_ activeGame: GamePublicState) -> some View {
+        VStack(alignment: .leading, spacing: ACMSpacing.sm) {
+            gameStatusBlock(
+                title: "Waiting to start",
+                subtitle: activeGame.players.map(\.name).filter { !$0.isEmpty }.joined(separator: ", ")
+            )
+
+            if canManageGames {
+                gameActionButton(
+                    title: "Start",
+                    tint: ACMColors.primaryOrange,
+                    isDisabled: viewModel.state.isGameActionInFlight
+                ) {
+                    viewModel.sendGameMove(type: "start")
+                }
+            }
+        }
+        .padding(.horizontal, ACMSpacing.sm)
+        .padding(.vertical, ACMSpacing.sm)
+    }
+
+    private func triviaGameDetails(_ activeGame: GamePublicState) -> some View {
+        let publicView = activeGame.view
+        let playerView = playerGameView(for: activeGame)
+        let phase = publicView?.string("phase") ?? activeGame.phase
+        let options = publicView?.stringArray("options") ?? []
+        let reveal = phase == "reveal"
+        let answered = playerView?.bool("answered") ?? false
+        let selectedChoice = playerView?.int("choice")
+        let correctChoice = publicView?.int("correctIndex")
+        let counts = publicView?.intArray("optionCounts") ?? []
+        let canAnswer = canPlayActiveGame(activeGame) && phase == "question" && !answered && !viewModel.state.isGameActionInFlight
+
+        return VStack(alignment: .leading, spacing: ACMSpacing.sm) {
+            gameStatusBlock(
+                title: gameProgressTitle(publicView, fallback: "Question"),
+                subtitle: publicView?.string("prompt") ?? "Waiting for the question."
+            )
+
+            ForEach(Array(options.enumerated()), id: \.offset) { index, option in
+                gameChoiceButton(
+                    title: option,
+                    subtitle: reveal && index < counts.count ? "\(counts[index]) picked" : nil,
+                    isSelected: selectedChoice == index,
+                    isCorrect: reveal ? correctChoice == index : nil,
+                    isDisabled: !canAnswer
+                ) {
+                    viewModel.sendGameMove(
+                        type: "answer",
+                        payload: GameJSONValue.object(["choice": index])
+                    )
+                }
+            }
+
+            if let playerView {
+                let score = playerView.int("score") ?? 0
+                let rank = playerView.int("rank")
+                gameMetaLine(rank == nil ? "\(score) points" : "\(score) points - #\(rank!)")
+            }
+
+            hostRoundControls(phase: phase)
+        }
+        .padding(.horizontal, ACMSpacing.sm)
+        .padding(.vertical, ACMSpacing.sm)
+    }
+
+    private func reactionGameDetails(_ activeGame: GamePublicState) -> some View {
+        let publicView = activeGame.view
+        let playerView = playerGameView(for: activeGame)
+        let phase = publicView?.string("phase") ?? activeGame.phase
+        let tapped = playerView?.bool("tapped") ?? false
+        let early = playerView?.bool("early") ?? false
+        let reactionMs = playerView?.int("reactionMs")
+        let canTap = canPlayActiveGame(activeGame)
+            && (phase == "arming" || phase == "go")
+            && !tapped
+            && !viewModel.state.isGameActionInFlight
+
+        return VStack(alignment: .leading, spacing: ACMSpacing.sm) {
+            gameStatusBlock(
+                title: reactionTitle(phase: phase, tapped: tapped, early: early, reactionMs: reactionMs),
+                subtitle: reactionSubtitle(publicView, phase: phase)
+            )
+
+            if phase == "arming" || phase == "go" {
+                gameActionButton(
+                    title: phase == "go" ? "TAP" : "Wait",
+                    tint: phase == "go" ? ACMColors.success : ACMColors.textMuted,
+                    isDisabled: !canTap
+                ) {
+                    viewModel.sendGameMove(type: "tap")
+                }
+            }
+
+            hostRoundControls(phase: phase)
+        }
+        .padding(.horizontal, ACMSpacing.sm)
+        .padding(.vertical, ACMSpacing.sm)
+    }
+
+    private func mostLikelyGameDetails(_ activeGame: GamePublicState) -> some View {
+        let publicView = activeGame.view
+        let playerView = playerGameView(for: activeGame)
+        let phase = publicView?.string("phase") ?? activeGame.phase
+        let players = publicView?.objectArray("players") ?? []
+        let votedFor = playerView?.string("yourVote")
+        let canVote = canPlayActiveGame(activeGame)
+            && phase == "vote"
+            && !viewModel.state.isGameActionInFlight
+
+        return VStack(alignment: .leading, spacing: ACMSpacing.sm) {
+            gameStatusBlock(
+                title: gameProgressTitle(publicView, fallback: "Vote"),
+                subtitle: publicView?.string("prompt") ?? "Waiting for the prompt."
+            )
+
+            if phase == "vote" {
+                ForEach(players.compactMap(gamePlayerOption), id: \.id) { player in
+                    gameChoiceButton(
+                        title: player.name,
+                        isSelected: votedFor == player.id,
+                        isDisabled: !canVote
+                    ) {
+                        viewModel.sendGameMove(
+                            type: "vote",
+                            payload: GameJSONValue.object(["target": player.id])
+                        )
+                    }
+                }
+            } else if let winner = publicView?.string("winnerName") {
+                gameMetaLine("Most votes: \(winner)")
+            }
+
+            hostRoundControls(phase: phase)
+        }
+        .padding(.horizontal, ACMSpacing.sm)
+        .padding(.vertical, ACMSpacing.sm)
+    }
+
+    private func wouldYouRatherGameDetails(_ activeGame: GamePublicState) -> some View {
+        let publicView = activeGame.view
+        let playerView = playerGameView(for: activeGame)
+        let phase = publicView?.string("phase") ?? activeGame.phase
+        let selected = playerView?.int("choice")
+        let canChoose = canPlayActiveGame(activeGame)
+            && phase == "choose"
+            && !viewModel.state.isGameActionInFlight
+        let counts = publicView?.intArray("counts") ?? []
+
+        return VStack(alignment: .leading, spacing: ACMSpacing.sm) {
+            gameStatusBlock(
+                title: gameProgressTitle(publicView, fallback: "Choose"),
+                subtitle: "Pick a side."
+            )
+
+            gameChoiceButton(
+                title: publicView?.string("optionA") ?? "Option A",
+                subtitle: phase == "reveal" && !counts.isEmpty ? "\(counts[0]) picked" : nil,
+                isSelected: selected == 0,
+                isDisabled: !canChoose
+            ) {
+                viewModel.sendGameMove(
+                    type: "choose",
+                    payload: GameJSONValue.object(["option": 0])
+                )
+            }
+
+            gameChoiceButton(
+                title: publicView?.string("optionB") ?? "Option B",
+                subtitle: phase == "reveal" && counts.count > 1 ? "\(counts[1]) picked" : nil,
+                isSelected: selected == 1,
+                isDisabled: !canChoose
+            ) {
+                viewModel.sendGameMove(
+                    type: "choose",
+                    payload: GameJSONValue.object(["option": 1])
+                )
+            }
+
+            hostRoundControls(phase: phase)
+        }
+        .padding(.horizontal, ACMSpacing.sm)
+        .padding(.vertical, ACMSpacing.sm)
+    }
+
+    private func bluffGameDetails(_ activeGame: GamePublicState) -> some View {
+        let publicView = activeGame.view
+        let playerView = playerGameView(for: activeGame)
+        let phase = publicView?.string("phase") ?? activeGame.phase
+        let question = publicView?.string("question") ?? "Waiting for the prompt."
+        let submitted = playerView?.bool("submitted") ?? false
+        let yourFake = playerView?.string("yourFake")
+        let yourPick = playerView?.string("yourPick")
+        let ownOptionId = playerView?.string("ownOptionId")
+        let score = playerView?.int("score")
+        let optionRows = publicView?.objectArray("options") ?? []
+        let options = optionRows.compactMap(bluffOption)
+        let canSubmit = canPlayActiveGame(activeGame)
+            && phase == "write"
+            && !submitted
+            && !trimmedBluffAnswer.isEmpty
+            && !viewModel.state.isGameActionInFlight
+        let canChoose = canPlayActiveGame(activeGame)
+            && phase == "choose"
+            && !viewModel.state.isGameActionInFlight
+
+        return VStack(alignment: .leading, spacing: ACMSpacing.sm) {
+            gameStatusBlock(
+                title: bluffTitle(publicView, phase: phase),
+                subtitle: question
+            )
+
+            if phase == "write" {
+                if submitted {
+                    gameMetaLine(bluffSubmittedText(yourFake))
+                } else {
+                    TextField("", text: bluffAnswerBinding, prompt: Text("Your bluff").foregroundStyle(ACMColors.textFaint))
+                        .font(ACMFont.trial(14))
+                        .foregroundStyle(ACMColors.text)
+                        #if !SKIP
+                        .autocorrectionDisabled(false)
+                        #endif
+                        .padding(.horizontal, ACMSpacing.sm)
+                        .frame(minHeight: 44)
+                        .background {
+                            RoundedRectangle(cornerRadius: ACMRadius.md, style: .continuous)
+                                .fill(ACMColors.surfaceRaised)
+                        }
+                        .overlay {
+                            RoundedRectangle(cornerRadius: ACMRadius.md, style: .continuous)
+                                .strokeBorder(lineWidth: 1)
+                                .foregroundStyle(ACMColors.border)
+                        }
+
+                    gameActionButton(
+                        title: "Submit bluff",
+                        tint: ACMColors.primaryOrange,
+                        isDisabled: !canSubmit
+                    ) {
+                        submitBluffAnswer()
+                    }
+                }
+            } else if phase == "choose" {
+                ForEach(options) { option in
+                    let isOwnOption = option.id == ownOptionId
+                    gameChoiceButton(
+                        title: option.text,
+                        subtitle: isOwnOption ? "Your bluff" : nil,
+                        isSelected: yourPick == option.id,
+                        isDisabled: !canChoose || isOwnOption
+                    ) {
+                        viewModel.sendGameMove(
+                            type: "choose",
+                            payload: GameJSONValue.object(["optionId": option.id])
+                        )
+                    }
+                }
+            } else if phase == "reveal" {
+                ForEach(options) { option in
+                    gameChoiceButton(
+                        title: option.text,
+                        subtitle: option.subtitle,
+                        isSelected: yourPick == option.id,
+                        isCorrect: option.isReal,
+                        isDisabled: true
+                    ) {}
+                }
+            } else if phase == "results" {
+                scoreboardBlock(publicView)
+            }
+
+            if let score {
+                gameMetaLine("\(score) points")
+            }
+
+            hostBluffControls(phase: phase)
+        }
+        .padding(.horizontal, ACMSpacing.sm)
+        .padding(.vertical, ACMSpacing.sm)
+    }
+
+    private func imposterGameDetails(_ activeGame: GamePublicState) -> some View {
+        let publicView = activeGame.view
+        let playerView = playerGameView(for: activeGame)
+        let phase = publicView?.string("phase") ?? activeGame.phase
+        let playerRows = publicView?.objectArray("players") ?? []
+        let players = playerRows.compactMap(gamePlayerOption)
+        let yourVote = playerView?.string("yourVote")
+        let canVote = canPlayActiveGame(activeGame)
+            && phase == "vote"
+            && !viewModel.state.isGameActionInFlight
+
+        return VStack(alignment: .leading, spacing: ACMSpacing.sm) {
+            gameStatusBlock(
+                title: imposterTitle(publicView: publicView, playerView: playerView, phase: phase),
+                subtitle: imposterSubtitle(publicView: publicView, playerView: playerView, phase: phase)
+            )
+
+            if phase == "vote" {
+                ForEach(players) { player in
+                    let isSelf = viewModel.state.isLocalIdentityUserId(player.id)
+                    gameChoiceButton(
+                        title: player.name,
+                        subtitle: imposterVoteSubtitle(publicView, playerId: player.id, isSelf: isSelf),
+                        isSelected: yourVote == player.id,
+                        isDisabled: !canVote || isSelf
+                    ) {
+                        viewModel.sendGameMove(
+                            type: "vote",
+                            payload: GameJSONValue.object(["target": player.id])
+                        )
+                    }
+                }
+            } else if phase == "result" {
+                imposterResultBlock(publicView)
+            }
+
+            hostImposterControls(phase: phase)
+        }
+        .padding(.horizontal, ACMSpacing.sm)
+        .padding(.vertical, ACMSpacing.sm)
+    }
+
+    private func genericGameDetails(_ activeGame: GamePublicState) -> some View {
+        VStack(alignment: .leading, spacing: ACMSpacing.sm) {
+            gameStatusBlock(
+                title: activeGame.phase.capitalized,
+                subtitle: activeGameSubtitle(activeGame)
+            )
+            hostRoundControls(phase: activeGame.phase)
+        }
+        .padding(.horizontal, ACMSpacing.sm)
+        .padding(.vertical, ACMSpacing.sm)
+    }
+
+    private func gameStatusBlock(title: String, subtitle: String?) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(title)
+                .font(ACMFont.trial(16, weight: .semibold))
+                .foregroundStyle(ACMColors.text)
+                .lineLimit(2)
+
+            if let subtitle = subtitle?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !subtitle.isEmpty {
+                Text(subtitle)
+                    .font(ACMFont.trial(13))
+                    .foregroundStyle(ACMColors.textMuted)
+                    .lineLimit(4)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func gameMetaLine(_ text: String) -> some View {
+        Text(text)
+            .font(ACMFont.trial(12, weight: .medium))
+            .foregroundStyle(ACMColors.textFaint)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func gameChoiceButton(
+        title: String,
+        subtitle: String? = nil,
+        isSelected: Bool = false,
+        isCorrect: Bool? = nil,
+        isDisabled: Bool = false,
+        action: @escaping () -> Void
+    ) -> some View {
+        let resolvedTint: Color = {
+            if isCorrect == true { return ACMColors.success }
+            if isCorrect == false && isSelected { return ACMColors.error }
+            if isSelected { return ACMColors.primaryOrange }
+            return ACMColors.text
+        }()
+
+        return Button(action: action) {
+            HStack(spacing: ACMSpacing.sm) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(ACMFont.trial(14, weight: .medium))
+                        .foregroundStyle(resolvedTint)
+                        .lineLimit(3)
+                    if let subtitle = subtitle?.trimmingCharacters(in: .whitespacesAndNewlines),
+                       !subtitle.isEmpty {
+                        Text(subtitle)
+                            .font(ACMFont.trial(12))
+                            .foregroundStyle(ACMColors.textFaint)
+                            .lineLimit(1)
+                    }
+                }
+
+                Spacer(minLength: ACMSpacing.sm)
+
+                if isSelected {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(resolvedTint)
+                }
+            }
+            .padding(.horizontal, ACMSpacing.sm)
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background {
+                RoundedRectangle(cornerRadius: ACMRadius.md, style: .continuous)
+                    .fill(isSelected ? resolvedTint.opacity(0.12) : ACMColors.surfaceRaised)
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: ACMRadius.md, style: .continuous)
+                    .strokeBorder(isSelected ? resolvedTint.opacity(0.44) : ACMColors.border, lineWidth: 1)
+            }
+        }
+        .buttonStyle(.plain)
+        .disabled(isDisabled)
+        .opacity(isDisabled && !isSelected ? 0.56 : 1.0)
+    }
+
+    private func gameActionButton(
+        title: String,
+        tint: Color,
+        isDisabled: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(ACMFont.trial(14, weight: .semibold))
+                .foregroundStyle(Color.white)
+                .lineLimit(1)
+                .frame(maxWidth: .infinity)
+                .frame(minHeight: 42)
+                .background(
+                    isDisabled ? ACMColors.surfaceRaised : tint,
+                    in: RoundedRectangle(cornerRadius: ACMRadius.md, style: .continuous)
+                )
+        }
+        .buttonStyle(.plain)
+        .disabled(isDisabled)
+        .opacity(isDisabled ? 0.62 : 1.0)
+    }
+
+    @ViewBuilder
+    private func hostRoundControls(phase: String) -> some View {
+        if canManageGames {
+            if phase == "question" || phase == "vote" || phase == "choose" {
+                gameActionButton(
+                    title: phase == "question" ? "Skip" : "Reveal",
+                    tint: ACMColors.primaryOrange,
+                    isDisabled: viewModel.state.isGameActionInFlight
+                ) {
+                    viewModel.sendGameMove(type: "skip")
+                }
+            } else if phase == "reveal" {
+                gameActionButton(
+                    title: "Next",
+                    tint: ACMColors.primaryOrange,
+                    isDisabled: viewModel.state.isGameActionInFlight
+                ) {
+                    viewModel.sendGameMove(type: "next")
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func hostBluffControls(phase: String) -> some View {
+        if canManageGames {
+            if phase == "write" || phase == "choose" {
+                gameActionButton(
+                    title: phase == "write" ? "Skip writing" : "Reveal",
+                    tint: ACMColors.primaryOrange,
+                    isDisabled: viewModel.state.isGameActionInFlight
+                ) {
+                    viewModel.sendGameMove(type: "skip")
+                }
+            } else if phase == "reveal" {
+                gameActionButton(
+                    title: "Next",
+                    tint: ACMColors.primaryOrange,
+                    isDisabled: viewModel.state.isGameActionInFlight
+                ) {
+                    viewModel.sendGameMove(type: "next")
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func hostImposterControls(phase: String) -> some View {
+        if canManageGames {
+            if phase == "discuss" {
+                gameActionButton(
+                    title: "Call vote",
+                    tint: ACMColors.primaryOrange,
+                    isDisabled: viewModel.state.isGameActionInFlight
+                ) {
+                    viewModel.sendGameMove(type: "callVote")
+                }
+            } else if phase == "vote" {
+                gameActionButton(
+                    title: "End vote",
+                    tint: ACMColors.primaryOrange,
+                    isDisabled: viewModel.state.isGameActionInFlight
+                ) {
+                    viewModel.sendGameMove(type: "tally")
+                }
+            }
+        }
+    }
+
+    private func playerGameView(for activeGame: GamePublicState) -> GameJSONValue? {
+        guard viewModel.state.gamePlayerView?.gameId == activeGame.gameId else { return nil }
+        return viewModel.state.gamePlayerView?.view
+    }
+
+    private func canPlayActiveGame(_ activeGame: GamePublicState) -> Bool {
+        viewModel.state.connectionState == .joined
+            && !viewModel.state.isGhostMode
+            && !viewModel.state.isWebinarAttendee
+            && isLocalGamePlayer(activeGame)
+    }
+
+    private func isLocalGamePlayer(_ activeGame: GamePublicState) -> Bool {
+        viewModel.state.hasLocalGamePlayer(in: activeGame.players)
+    }
+
+    private func gameProgressTitle(_ view: GameJSONValue?, fallback: String) -> String {
+        let index = view?.int("questionIndex") ?? view?.int("index")
+        let total = view?.int("totalQuestions") ?? view?.int("total")
+        let category = view?.string("category")
+        if let index, let total, total > 0 {
+            let prefix = category?.isEmpty == false ? "\(category!) - " : ""
+            return "\(prefix)\(index + 1)/\(total)"
+        }
+        if let category, !category.isEmpty {
+            return category
+        }
+        return fallback
+    }
+
+    private func reactionTitle(phase: String, tapped: Bool, early: Bool, reactionMs: Int?) -> String {
+        if early { return "Too early" }
+        if let reactionMs { return "\(reactionMs) ms" }
+        if tapped { return "Locked in" }
+        if phase == "go" { return "TAP" }
+        if phase == "reveal" { return "Round result" }
+        return "Wait"
+    }
+
+    private func reactionSubtitle(_ view: GameJSONValue?, phase: String) -> String {
+        if let winner = view?.string("winnerName"), !winner.isEmpty {
+            return "Fastest: \(winner)"
+        }
+        let tapped = view?.int("tappedCount") ?? 0
+        let total = view?.int("totalPlayers") ?? 0
+        if total > 0 {
+            return "\(tapped)/\(total) tapped"
+        }
+        return phase.capitalized
+    }
+
+    private var trimmedBluffAnswer: String {
+        bluffAnswerInput.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var bluffAnswerBinding: Binding<String> {
+        Binding(
+            get: { bluffAnswerInput },
+            set: { value in
+                bluffAnswerInput = String(value.prefix(60))
+            }
+        )
+    }
+
+    private func submitBluffAnswer() {
+        let answer = trimmedBluffAnswer
+        guard !answer.isEmpty else { return }
+        viewModel.sendGameMove(
+            type: "submit",
+            payload: GameJSONValue.object(["text": answer])
+        )
+        bluffAnswerInput = ""
+    }
+
+    private func bluffTitle(_ view: GameJSONValue?, phase: String) -> String {
+        let round = view?.int("round")
+        let total = view?.int("totalRounds")
+        let prefix: String
+        if let round, let total, total > 0 {
+            prefix = "\(round + 1)/\(total) - "
+        } else {
+            prefix = ""
+        }
+        switch phase {
+        case "write":
+            return "\(prefix)Write a bluff"
+        case "choose":
+            return "\(prefix)Find the truth"
+        case "reveal":
+            return "\(prefix)Reveal"
+        case "results":
+            return "Final scores"
+        default:
+            return phase.capitalized
+        }
+    }
+
+    private func bluffSubmittedText(_ value: String?) -> String {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? "Bluff submitted" : "Submitted: \(trimmed)"
+    }
+
+    private func bluffOption(_ row: [String: Any]) -> GameChoiceOption? {
+        guard let id = row["id"] as? String else { return nil }
+        let text = (row["text"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let text, !text.isEmpty else { return nil }
+        let kind = row["kind"] as? String
+        let votes = intValue(row["votes"])
+        let ownerName = (row["ownerName"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let subtitleParts = [
+            kind == "real" ? "Truth" : (ownerName?.isEmpty == false ? ownerName : nil),
+            votes.map { count in count == 1 ? "1 vote" : "\(count) votes" }
+        ].compactMap { $0 }
+        return GameChoiceOption(
+            id: id,
+            text: text,
+            subtitle: subtitleParts.isEmpty ? nil : subtitleParts.joined(separator: " - "),
+            isReal: kind == nil ? nil : kind == "real"
+        )
+    }
+
+    @ViewBuilder
+    private func scoreboardBlock(_ view: GameJSONValue?) -> some View {
+        let rows = view?.objectArray("scoreboard").compactMap(scoreboardRow) ?? []
+        if rows.isEmpty {
+            gameMetaLine("Scores are not available yet.")
+        } else {
+            ForEach(rows) { row in
+                gameChoiceButton(
+                    title: row.name,
+                    subtitle: "\(row.score) points",
+                    isDisabled: true
+                ) {}
+            }
+        }
+    }
+
+    private func scoreboardRow(_ row: [String: Any]) -> GameScoreRow? {
+        guard let id = row["id"] as? String else { return nil }
+        let name = (row["name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return GameScoreRow(
+            id: id,
+            name: name?.isEmpty == false ? name! : id,
+            score: intValue(row["score"]) ?? 0
+        )
+    }
+
+    private func imposterTitle(publicView: GameJSONValue?, playerView: GameJSONValue?, phase: String) -> String {
+        switch phase {
+        case "reveal", "discuss":
+            if playerView?.string("role") == "imposter" {
+                return "You are the imposter"
+            }
+            let word = playerView?.string("word")?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return word.isEmpty ? "Secret word" : "Secret word: \(word)"
+        case "vote":
+            return "Vote out the imposter"
+        case "result":
+            return imposterResultTitle(publicView)
+        default:
+            return phase.capitalized
+        }
+    }
+
+    private func imposterSubtitle(publicView: GameJSONValue?, playerView: GameJSONValue?, phase: String) -> String? {
+        if phase == "vote" {
+            let voted = publicView?.stringArray("votedPlayerIds").count ?? 0
+            let total = publicView?.int("totalPlayers") ?? 0
+            return total > 0 ? "\(voted)/\(total) voted" : nil
+        }
+
+        let category = playerView?.string("category") ?? publicView?.string("category")
+        let starter = publicView?.string("starterName")
+        if phase == "discuss",
+           let starter,
+           !starter.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return category?.isEmpty == false ? "\(category!) - \(starter) starts" : "\(starter) starts"
+        }
+        return category?.isEmpty == false ? category : nil
+    }
+
+    private func imposterVoteSubtitle(_ view: GameJSONValue?, playerId: String, isSelf: Bool) -> String? {
+        if isSelf { return "You" }
+        let counts = view?.dictionaryValue?["voteCounts"] as? [String: Any]
+        guard let count = intValue(counts?[playerId]), count > 0 else { return nil }
+        return count == 1 ? "1 vote" : "\(count) votes"
+    }
+
+    @ViewBuilder
+    private func imposterResultBlock(_ view: GameJSONValue?) -> some View {
+        if let result = view?.dictionaryValue?["result"] as? [String: Any] {
+            let word = (result["word"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let imposter = (result["imposterName"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let votedOut = (result["votedOutName"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !word.isEmpty {
+                gameMetaLine("Word: \(word)")
+            }
+            if !imposter.isEmpty {
+                gameMetaLine("Imposter: \(imposter)")
+            }
+            if !votedOut.isEmpty {
+                gameMetaLine("Voted out: \(votedOut)")
+            }
+        } else {
+            gameMetaLine("Result pending")
+        }
+    }
+
+    private func imposterResultTitle(_ view: GameJSONValue?) -> String {
+        guard let result = view?.dictionaryValue?["result"] as? [String: Any] else {
+            return "Result"
+        }
+        if boolValue(result["tie"]) == true {
+            return "Vote tied"
+        }
+        return boolValue(result["crewWon"]) == true ? "Crew wins" : "Imposter wins"
+    }
+
+    private func gamePlayerOption(_ row: [String: Any]) -> GamePlayer? {
+        guard let id = row["id"] as? String else { return nil }
+        let name = (row["name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return GamePlayer(id: id, name: name?.isEmpty == false ? name! : id)
+    }
+
+    private func voteSection(_ vote: GameVoteState) -> some View {
+        VStack(alignment: .leading, spacing: ACMSpacing.xs) {
+            acmListSectionHeader("Vote")
+
+            MeetingSheetSectionCard {
+                let localVoteGameId = viewModel.state.localGameVoteId(in: vote)
+                ForEach(vote.candidates) { entry in
+                    let isSelected = localVoteGameId == entry.id
+                    gameRow(
+                        icon: "gamecontroller",
+                        androidIcon: "sports_esports",
+                        title: entry.name,
+                        subtitle: entry.description,
+                        trailing: "\(vote.tally[entry.id] ?? 0)",
+                        selectedLabel: isSelected ? "You" : nil,
+                        tint: isSelected ? ACMColors.primaryOrange : ACMColors.text,
+                        androidTint: isSelected ? "accent" : "text",
+                        isDisabled: !canVote || viewModel.state.isGameActionInFlight
+                    ) {
+                        viewModel.castGameVote(gameId: entry.id)
+                    }
+
+                    MoreRowDivider()
+                }
+
+                if canManageGames {
+                    MoreRow(
+                        icon: "play.fill",
+                        androidIcon: "play",
+                        title: startLeaderTitle(vote),
+                        tint: ACMColors.primaryOrange,
+                        androidTint: "accent",
+                        isDisabled: viewModel.state.isGameActionInFlight || voteLeader(in: vote) == nil
+                    ) {
+                        if let leader = voteLeader(in: vote) {
+                            viewModel.startGame(leader, options: defaultOptions(for: leader))
+                        }
+                    }
+
+                    MoreRowDivider()
+                    MoreRow(
+                        icon: "xmark",
+                        androidIcon: "close",
+                        title: "Cancel vote",
+                        tint: ACMColors.error,
+                        androidTint: "error",
+                        isDisabled: viewModel.state.isGameActionInFlight
+                    ) {
+                        viewModel.cancelGameVote()
+                    }
+                }
+            }
+        }
+    }
+
+    private func configSection(_ game: GameCatalogEntry) -> some View {
+        VStack(alignment: .leading, spacing: ACMSpacing.xs) {
+            acmListSectionHeader("Setup")
+
+            MeetingSheetSectionCard {
+                ForEach(game.options) { option in
+                    optionControl(option)
+                    MoreRowDivider()
+                }
+
+                MoreRow(
+                    icon: "play.fill",
+                    androidIcon: "play",
+                    title: viewModel.state.isGameActionInFlight ? "Starting" : "Start \(game.name)",
+                    tint: ACMColors.primaryOrange,
+                    androidTint: "accent",
+                    isDisabled: viewModel.state.isGameActionInFlight
+                ) {
+                    startConfiguredGame(game)
+                }
+            }
+        }
+    }
+
+    private func optionControl(_ option: GameOptionSpec) -> some View {
+        VStack(alignment: .leading, spacing: ACMSpacing.xs) {
+            Text(option.label)
+                .font(ACMFont.trial(13, weight: .medium))
+                .foregroundStyle(ACMColors.text)
+                .lineLimit(1)
+
+            switch option.type {
+            case "number":
+                numberOptionControl(option)
+            case "select":
+                selectOptionControl(option)
+            default:
+                textOptionControl(option)
+            }
+        }
+        .padding(.horizontal, ACMSpacing.sm)
+        .padding(.vertical, ACMSpacing.sm)
+    }
+
+    private func numberOptionControl(_ option: GameOptionSpec) -> some View {
+        let presets = GameConfigDraftPolicy.numberPresets(for: option)
+
+        return HStack(spacing: 4) {
+            ForEach(presets) { preset in
+                optionChip(
+                    title: preset.label,
+                    isSelected: GameConfigDraftPolicy.numbersMatch(currentNumber(for: option), preset.value)
+                ) {
+                    setDraft(option, value: .number(preset.value))
+                }
+            }
+        }
+        .padding(4)
+        .background {
+            RoundedRectangle(cornerRadius: ACMRadius.md, style: .continuous)
+                .fill(ACMColors.surface)
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: ACMRadius.md, style: .continuous)
+                .strokeBorder(lineWidth: 1)
+                .foregroundStyle(ACMColors.border)
+        }
+    }
+
+    private func selectOptionControl(_ option: GameOptionSpec) -> some View {
+        let selected = currentString(for: option)
+
+        return HStack(spacing: 4) {
+            ForEach(option.choices ?? []) { choice in
+                optionChip(
+                    title: choice.label,
+                    isSelected: selected == choice.value
+                ) {
+                    setDraft(option, value: .string(choice.value))
+                }
+            }
+        }
+        .padding(4)
+        .background {
+            RoundedRectangle(cornerRadius: ACMRadius.md, style: .continuous)
+                .fill(ACMColors.surface)
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: ACMRadius.md, style: .continuous)
+                .strokeBorder(lineWidth: 1)
+                .foregroundStyle(ACMColors.border)
+        }
+    }
+
+    private func textOptionControl(_ option: GameOptionSpec) -> some View {
+        TextField("", text: textBinding(for: option), prompt: Text(option.placeholder ?? "").foregroundStyle(ACMColors.textFaint))
+            .font(ACMFont.trial(14))
+            .foregroundStyle(ACMColors.text)
+            #if !SKIP
+            .autocorrectionDisabled(false)
+            #endif
+            .padding(.horizontal, ACMSpacing.sm)
+            .frame(minHeight: 44)
+            .background {
+                RoundedRectangle(cornerRadius: ACMRadius.md, style: .continuous)
+                    .fill(ACMColors.surface)
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: ACMRadius.md, style: .continuous)
+                    .strokeBorder(lineWidth: 1)
+                    .foregroundStyle(ACMColors.border)
+            }
+    }
+
+    private func optionChip(title: String, isSelected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(ACMFont.trial(13, weight: .medium))
+                .foregroundStyle(isSelected ? ACMColors.text : ACMColors.textMuted)
+                .lineLimit(1)
+                .minimumScaleFactor(0.82)
+                .frame(maxWidth: .infinity)
+                .padding(.horizontal, ACMSpacing.xs)
+                .frame(minHeight: 34)
+                .background(
+                    isSelected ? ACMColors.primaryOrange : Color.clear,
+                    in: RoundedRectangle(cornerRadius: ACMRadius.sm, style: .continuous)
+                )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var catalogSection: some View {
+        VStack(alignment: .leading, spacing: ACMSpacing.xs) {
+            acmListSectionHeader("Catalog")
+
+            MeetingSheetSectionCard {
+                let catalog = Array(viewModel.state.gameCatalog)
+                if catalog.isEmpty {
+                    gameRow(
+                        icon: "gamecontroller",
+                        androidIcon: "sports_esports",
+                        title: "No games available",
+                        isDisabled: true
+                    ) {}
+                } else {
+                    ForEach(viewModel.state.gameCatalog) { entry in
+                        gameRow(
+                            icon: "play.fill",
+                            androidIcon: "play",
+                            title: entry.name,
+                            subtitle: catalogSubtitle(entry),
+                            trailing: playerRange(entry),
+                            isDisabled: viewModel.state.isGameActionInFlight
+                        ) {
+                            if entry.options.isEmpty {
+                                viewModel.startGame(entry, options: [:])
+                            } else {
+                                beginConfiguringGame(entry)
+                            }
+                        }
+
+                        MoreRowDivider()
+                    }
+
+                    MoreRow(
+                        icon: "person.3.fill",
+                        androidIcon: "participants",
+                        title: viewModel.state.gameVote == nil ? "Open vote" : "Restart vote",
+                        isDisabled: viewModel.state.isGameActionInFlight || catalog.count < 2
+                    ) {
+                        viewModel.openGameVote(candidateIds: nil)
+                    }
+                }
+            }
+        }
+    }
+
+    private var idleSection: some View {
+        MeetingSheetSectionCard {
+            gameRow(
+                icon: "gamecontroller",
+                androidIcon: "sports_esports",
+                title: "No active game",
+                isDisabled: true
+            ) {}
+        }
+    }
+
+    private func gameRow(
+        icon: String,
+        androidIcon: String,
+        title: String,
+        subtitle: String? = nil,
+        trailing: String? = nil,
+        selectedLabel: String? = nil,
+        tint: Color = ACMColors.text,
+        androidTint: String = "text",
+        isDisabled: Bool = false,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: ACMSpacing.sm) {
+                MeetingSheetIconBox(
+                    icon: icon,
+                    androidIcon: androidIcon,
+                    tint: tint,
+                    androidTint: androidTint,
+                    background: ACMColors.surfaceRaised
+                )
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(ACMFont.trial(15, weight: .medium))
+                        .foregroundStyle(tint)
+                        .lineLimit(1)
+                    if let subtitle = subtitle?.trimmingCharacters(in: .whitespacesAndNewlines),
+                       !subtitle.isEmpty {
+                        Text(subtitle)
+                            .font(ACMFont.trial(12))
+                            .foregroundStyle(ACMColors.textFaint)
+                            .lineLimit(2)
+                    }
+                }
+                #if !SKIP
+                .layoutPriority(1)
+                #endif
+
+                Spacer(minLength: ACMSpacing.xs)
+
+                if let selectedLabel {
+                    MeetingSheetStatusPill(
+                        selectedLabel,
+                        tint: ACMColors.primaryOrange,
+                        background: ACMColors.primaryOrange.opacity(0.14),
+                        border: ACMColors.primaryOrange.opacity(0.34)
+                    )
+                }
+
+                if let trailing = trailing?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   !trailing.isEmpty {
+                    Text(trailing)
+                        .font(ACMFont.trial(13, weight: .semibold))
+                        .foregroundStyle(ACMColors.textMuted)
+                        .lineLimit(1)
+                }
+            }
+            .padding(.horizontal, ACMSpacing.sm)
+            .frame(minHeight: subtitle == nil ? 52.0 : 60.0)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            #if !SKIP
+            .contentShape(Rectangle())
+            #endif
+        }
+        .buttonStyle(.plain)
+        .disabled(isDisabled)
+        .opacity(isDisabled ? 0.55 : 1.0)
+    }
+
+    private var canManageGames: Bool {
+        viewModel.state.isAdmin
+            && viewModel.state.connectionState == .joined
+            && !viewModel.state.isWebinarAttendee
+    }
+
+    private var canVote: Bool {
+        viewModel.state.connectionState == .joined
+            && !viewModel.state.isGhostMode
+            && !viewModel.state.isWebinarAttendee
+    }
+
+    private func voteLeader(in vote: GameVoteState) -> GameCatalogEntry? {
+        var leader: GameCatalogEntry?
+        var leaderVotes = -1
+        for entry in vote.candidates {
+            let count = vote.tally[entry.id] ?? 0
+            if count > leaderVotes {
+                leader = entry
+                leaderVotes = count
+            }
+        }
+        return leader
+    }
+
+    private func startLeaderTitle(_ vote: GameVoteState) -> String {
+        guard let leader = voteLeader(in: vote) else { return "Start leader" }
+        let votes = vote.tally[leader.id] ?? 0
+        return votes > 0 ? "Start \(leader.name)" : "Start leader"
+    }
+
+    private func activeGameSubtitle(_ game: GamePublicState) -> String {
+        let count = game.players.count
+        let noun = count == 1 ? "player" : "players"
+        return "\(count) \(noun)"
+    }
+
+    private func catalogSubtitle(_ game: GameCatalogEntry) -> String {
+        let description = game.description.trimmingCharacters(in: .whitespacesAndNewlines)
+        return description.isEmpty ? playerRange(game) : description
+    }
+
+    private func playerRange(_ game: GameCatalogEntry) -> String {
+        if game.minPlayers == game.maxPlayers {
+            return "\(game.minPlayers)"
+        }
+        return "\(game.minPlayers)-\(game.maxPlayers)"
+    }
+
+    private func beginConfiguringGame(_ game: GameCatalogEntry) {
+        configuringGame = game
+        gameConfigDrafts = GameConfigDraftPolicy.initialDrafts(for: game)
+    }
+
+    private func cancelConfiguringGame() {
+        configuringGame = nil
+        gameConfigDrafts = [:]
+    }
+
+    private func startConfiguredGame(_ game: GameCatalogEntry) {
+        let options = GameConfigDraftPolicy.resolvedOptions(for: game, drafts: gameConfigDrafts)
+        viewModel.startGame(game, options: options)
+    }
+
+    private func currentNumber(for option: GameOptionSpec) -> Double {
+        GameConfigDraftPolicy.resolvedValue(for: option, draft: gameConfigDrafts[option.id]).numberValue
+            ?? option.defaultConfigValue.numberValue
+            ?? 0.0
+    }
+
+    private func currentString(for option: GameOptionSpec) -> String {
+        GameConfigDraftPolicy.resolvedValue(for: option, draft: gameConfigDrafts[option.id]).stringValue
+            ?? option.defaultConfigValue.stringValue
+            ?? ""
+    }
+
+    private func setDraft(_ option: GameOptionSpec, value: GameConfigValue) {
+        var next = gameConfigDrafts
+        next[option.id] = GameConfigDraftPolicy.resolvedValue(for: option, draft: value)
+        gameConfigDrafts = next
+    }
+
+    private func textBinding(for option: GameOptionSpec) -> Binding<String> {
+        Binding(
+            get: { currentString(for: option) },
+            set: { rawValue in
+                setDraft(option, value: .string(rawValue))
+            }
+        )
+    }
+
+    private func defaultOptions(for game: GameCatalogEntry) -> [String: GameConfigValue] {
+        GameConfigDraftPolicy.initialDrafts(for: game)
+    }
+
+    private func intValue(_ value: Any?) -> Int? {
+        if let intValue = value as? Int { return intValue }
+        if let doubleValue = value as? Double { return Int(doubleValue) }
+        if let numberValue = value as? NSNumber { return numberValue.intValue }
+        return nil
+    }
+
+    private func boolValue(_ value: Any?) -> Bool? {
+        if let boolValue = value as? Bool { return boolValue }
+        if let intValue = value as? Int { return intValue != 0 }
+        if let doubleValue = value as? Double { return doubleValue != 0.0 }
+        if let numberValue = value as? NSNumber { return numberValue.intValue != 0 }
+        return nil
+    }
+}
+
+struct GameChoiceOption: Identifiable {
+    let id: String
+    let text: String
+    let subtitle: String?
+    let isReal: Bool?
+}
+
+struct GameScoreRow: Identifiable {
+    let id: String
+    let name: String
+    let score: Int
+}
+
+struct GameNumberPreset: Identifiable {
+    let value: Double
+    let label: String
+
+    var id: String { label }
+}
+
+enum GameConfigDraftPolicy {
+    static func initialDrafts(for game: GameCatalogEntry) -> [String: GameConfigValue] {
+        var options: [String: GameConfigValue] = [:]
+        for option in game.options {
+            let id = option.id.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !id.isEmpty else { continue }
+            options[id] = resolvedValue(for: option, draft: option.defaultConfigValue)
+        }
+        return options
+    }
+
+    static func resolvedOptions(
+        for game: GameCatalogEntry,
+        drafts: [String: GameConfigValue]
+    ) -> [String: GameConfigValue] {
+        var options: [String: GameConfigValue] = [:]
+        for option in game.options {
+            let id = option.id.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !id.isEmpty else { continue }
+            options[id] = resolvedValue(for: option, draft: drafts[option.id])
+        }
+        return options
+    }
+
+    static func resolvedValue(for option: GameOptionSpec, draft: GameConfigValue?) -> GameConfigValue {
+        switch option.type {
+        case "number":
+            let raw = draft?.numberValue ?? option.defaultConfigValue.numberValue ?? option.min ?? 0.0
+            return .number(clamp(raw, min: option.min, max: option.max))
+        case "select":
+            let choices = option.choices ?? []
+            let defaultValue = option.defaultConfigValue.stringValue ?? choices.first?.value ?? ""
+            let raw = draft?.stringValue ?? defaultValue
+            if choices.contains(where: { $0.value == raw }) {
+                return .string(raw)
+            }
+            return .string(defaultValue)
+        default:
+            let maxLength = max(0, option.maxLength ?? Int.max)
+            let raw = draft?.stringValue ?? option.defaultConfigValue.stringValue ?? ""
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.count <= maxLength {
+                return .string(trimmed)
+            }
+            return .string(String(trimmed.prefix(maxLength)))
+        }
+    }
+
+    static func numberPresets(for option: GameOptionSpec) -> [GameNumberPreset] {
+        let source = option.presets ?? [
+            option.min ?? option.defaultConfigValue.numberValue ?? 0.0,
+            option.defaultConfigValue.numberValue ?? option.min ?? 0.0,
+            option.max ?? option.defaultConfigValue.numberValue ?? 0.0
+        ]
+        var seen: [Double] = []
+        var presets: [GameNumberPreset] = []
+        for raw in source {
+            let value = clamp(raw, min: option.min, max: option.max)
+            if seen.contains(where: { numbersMatch($0, value) }) { continue }
+            seen.append(value)
+            presets.append(GameNumberPreset(
+                value: value,
+                label: formattedNumber(value, suffix: option.suffix)
+            ))
+        }
+        return presets
+    }
+
+    static func numbersMatch(_ lhs: Double, _ rhs: Double) -> Bool {
+        abs(lhs - rhs) < 0.0001
+    }
+
+    private static func clamp(_ value: Double, min: Double?, max: Double?) -> Double {
+        var next = value
+        if let min {
+            next = Swift.max(min, next)
+        }
+        if let max {
+            next = Swift.min(max, next)
+        }
+        return next
+    }
+
+    private static func formattedNumber(_ value: Double, suffix: String?) -> String {
+        let rounded = value.rounded()
+        let base = numbersMatch(value, rounded) ? "\(Int(rounded))" : "\(value)"
+        guard let suffix = suffix?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !suffix.isEmpty else { return base }
+        return "\(base) \(suffix)"
     }
 }
 

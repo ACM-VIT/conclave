@@ -17,6 +17,7 @@ enum MeetingSheetPage: Equatable {
     case adminDangerControls
     case sharedBrowser
     case apps
+    case games
     case roomSettings
     case roomAccessSettings
     case roomCommunicationSettings
@@ -38,7 +39,7 @@ private extension MeetingSheetPage {
         switch self {
         case .more:
             return 0
-        case .participants, .settings, .viewSettings, .adminControls, .sharedBrowser, .apps:
+        case .participants, .settings, .viewSettings, .adminControls, .sharedBrowser, .apps, .games:
             return 1
         case .viewModeSettings, .gridSettings, .selfViewSettings, .selfViewPositionSettings,
              .adminAccessControls, .adminMediaControls, .adminNoticeControls, .adminDangerControls,
@@ -55,7 +56,7 @@ private extension MeetingSheetPage {
         switch self {
         case .more:
             return nil
-        case .participants, .settings, .viewSettings, .adminControls, .sharedBrowser, .apps:
+        case .participants, .settings, .viewSettings, .adminControls, .sharedBrowser, .apps, .games:
             return .more
         case .viewModeSettings, .gridSettings, .selfViewSettings, .selfViewPositionSettings:
             return .viewSettings
@@ -221,7 +222,8 @@ struct MeetingSheetView: View {
                             onOpenParticipants: { navigate(to: .participants) },
                             onOpenAdminControls: { navigate(to: .adminControls) },
                             onOpenSharedBrowser: { navigate(to: .sharedBrowser) },
-                            onOpenApps: { navigate(to: .apps) }
+                            onOpenApps: { navigate(to: .apps) },
+                            onOpenGames: { navigate(to: .games) }
                         )
                     )
                 case .participants:
@@ -279,6 +281,8 @@ struct MeetingSheetView: View {
                     pageView(SharedBrowserSheetView(viewModel: viewModel, bodyReady: bodyReady, onBack: { navigate(to: .more) }))
                 case .apps:
                     pageView(AppsSheetView(viewModel: viewModel, bodyReady: bodyReady, onBack: { navigate(to: .more) }))
+                case .games:
+                    pageView(GamesSheetView(viewModel: viewModel, bodyReady: bodyReady, onBack: { navigate(to: .more) }))
                 case .roomSettings:
                     pageView(SettingsSheetView(
                         viewModel: viewModel,

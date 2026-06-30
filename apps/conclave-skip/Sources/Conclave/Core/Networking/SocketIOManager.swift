@@ -105,6 +105,18 @@ private enum SocketEvent {
     static let appsYjsSync = SfuClientEvent.appsYjsSync.rawValue
     static let appsYjsUpdate = SfuClientEvent.appsYjsUpdate.rawValue
     static let appsAwareness = SfuClientEvent.appsAwareness.rawValue
+    static let gameList = SfuClientEvent.gameList.rawValue
+    static let gameStart = SfuClientEvent.gameStart.rawValue
+    static let gameMove = SfuClientEvent.gameMove.rawValue
+    static let gameEnd = SfuClientEvent.gameEnd.rawValue
+    static let gameGetState = SfuClientEvent.gameGetState.rawValue
+    static let gameVoteOpen = SfuClientEvent.gameVoteOpen.rawValue
+    static let gameVoteCast = SfuClientEvent.gameVoteCast.rawValue
+    static let gameVoteCancel = SfuClientEvent.gameVoteCancel.rawValue
+    static let transcriptGetToken = SfuClientEvent.transcriptGetToken.rawValue
+    static let transcriptSfuRelayStatus = SfuClientEvent.transcriptSfuRelayStatus.rawValue
+    static let transcriptSfuRelayStart = SfuClientEvent.transcriptSfuRelayStart.rawValue
+    static let transcriptSfuRelayStop = SfuClientEvent.transcriptSfuRelayStop.rawValue
 
     static let userJoined = SfuServerEvent.userJoined.rawValue
     static let userLeft = SfuServerEvent.userLeft.rawValue
@@ -160,6 +172,11 @@ private enum SocketEvent {
     static let appsState = SfuServerEvent.appsState.rawValue
     static let appsYjsServerUpdate = SfuServerEvent.appsYjsUpdate.rawValue
     static let appsServerAwareness = SfuServerEvent.appsAwareness.rawValue
+    static let gameState = SfuServerEvent.gameState.rawValue
+    static let gameView = SfuServerEvent.gameView.rawValue
+    static let gameSnapshot = SfuServerEvent.gameSnapshot.rawValue
+    static let gameEnded = SfuServerEvent.gameEnded.rawValue
+    static let gameVote = SfuServerEvent.gameVote.rawValue
 }
 
 // MARK: - Socket Manager
@@ -242,6 +259,11 @@ final class SocketIOManager {
     var onAppsState: ((AppsStateNotification) -> Void)?
     var onAppsYjsUpdate: ((AppsYjsUpdateNotification) -> Void)?
     var onAppsAwareness: ((AppsAwarenessNotification) -> Void)?
+    var onGameState: ((GamePublicState) -> Void)?
+    var onGameView: ((GamePlayerViewNotification) -> Void)?
+    var onGameSnapshot: ((GameStateResponse) -> Void)?
+    var onGameEnded: ((GameEndedNotification) -> Void)?
+    var onGameVote: ((GameVoteState?) -> Void)?
 
     // Participant events
     var onUserJoined: ((UserJoinedNotification) -> Void)?
@@ -299,6 +321,7 @@ final class SocketIOManager {
     private static let closeConsumerMaxAttempts = 4
     private static let closeConsumerRetryDelayNanoseconds: UInt64 = 500_000_000
     private static let closeConsumerRetryWindowSeconds: TimeInterval = 30
+    private static let startGameAckTimeout: TimeInterval = 45
 
     // MARK: - Connection
 
@@ -1006,6 +1029,75 @@ final class SocketIOManager {
         }
     }
 
+    func getGameCatalog() async throws -> [GameCatalogEntry] {
+        let data = try await emitAckOnly(event: SocketEvent.gameList)
+        return try JSONDecoder().decode([GameCatalogEntry].self, from: data)
+    }
+
+    func getGameState() async throws -> GameStateResponse {
+        let data = try await emitAckOnly(event: SocketEvent.gameGetState)
+        return try JSONDecoder().decode(GameStateResponse.self, from: data)
+    }
+
+    func startGame(gameId: String, options: [String: GameConfigValue]? = nil) async throws -> GameActionResponse {
+        let request = GameStartRequest(gameId: gameId, options: options)
+        let data = try await emit(
+            event: SocketEvent.gameStart,
+            payload: request,
+            timeoutSeconds: Self.startGameAckTimeout
+        )
+        return try JSONDecoder().decode(GameActionResponse.self, from: data)
+    }
+
+    func endGame() async throws -> GameActionResponse {
+        let data = try await emitAckOnly(event: SocketEvent.gameEnd)
+        return try JSONDecoder().decode(GameActionResponse.self, from: data)
+    }
+
+    func sendGameMove(gameId: String, type: String, payload: GameJSONValue? = nil) async throws -> GameMoveResponse {
+        let request = GameMoveRequest(gameId: gameId, type: type, payload: payload)
+        let data = try await emit(event: SocketEvent.gameMove, payload: request)
+        return try JSONDecoder().decode(GameMoveResponse.self, from: data)
+    }
+
+    func openGameVote(candidateIds: [String]? = nil) async throws -> GameActionResponse {
+        let request = GameVoteOpenRequest(candidates: candidateIds)
+        let data = try await emit(event: SocketEvent.gameVoteOpen, payload: request)
+        return try JSONDecoder().decode(GameActionResponse.self, from: data)
+    }
+
+    func castGameVote(gameId: String) async throws -> GameActionResponse {
+        let request = GameVoteCastRequest(gameId: gameId)
+        let data = try await emit(event: SocketEvent.gameVoteCast, payload: request)
+        return try JSONDecoder().decode(GameActionResponse.self, from: data)
+    }
+
+    func cancelGameVote() async throws -> GameActionResponse {
+        let data = try await emitAckOnly(event: SocketEvent.gameVoteCancel)
+        return try JSONDecoder().decode(GameActionResponse.self, from: data)
+    }
+
+    func getTranscriptToken() async throws -> TranscriptTokenResponse {
+        let data = try await emitAckOnly(event: SocketEvent.transcriptGetToken)
+        return try JSONDecoder().decode(TranscriptTokenResponse.self, from: data)
+    }
+
+    func getTranscriptSfuRelayStatus() async throws -> TranscriptSfuRelayStatusResponse {
+        let data = try await emitAckOnly(event: SocketEvent.transcriptSfuRelayStatus)
+        return try JSONDecoder().decode(TranscriptSfuRelayStatusResponse.self, from: data)
+    }
+
+    func startTranscriptSfuRelay(relayStartToken: String) async throws -> TranscriptSfuRelayStartResponse {
+        let request = TranscriptSfuRelayStartRequest(relayStartToken: relayStartToken)
+        let data = try await emit(event: SocketEvent.transcriptSfuRelayStart, payload: request)
+        return try JSONDecoder().decode(TranscriptSfuRelayStartResponse.self, from: data)
+    }
+
+    func stopTranscriptSfuRelay() async throws -> TranscriptSfuRelayStopResponse {
+        let data = try await emitAckOnly(event: SocketEvent.transcriptSfuRelayStop)
+        return try JSONDecoder().decode(TranscriptSfuRelayStopResponse.self, from: data)
+    }
+
     func admitUser(userId: String) async throws {
         _ = try await emit(event: SocketEvent.admitUser, payload: ["userId": userId])
     }
@@ -1236,7 +1328,11 @@ final class SocketIOManager {
         }
     }
 
-    func emit<T: Encodable>(event: String, payload: T) async throws -> Data {
+    func emit<T: Encodable>(
+        event: String,
+        payload: T,
+        timeoutSeconds: TimeInterval = 30
+    ) async throws -> Data {
         guard let socket = socket else {
             throw SocketError.notConnected
         }
@@ -1244,7 +1340,7 @@ final class SocketIOManager {
         let payloadObject = try jsonObject(from: payload)
 
         return try await withCheckedThrowingContinuation { continuation in
-            socket.emitWithAck(event, payloadObject).timingOut(after: 30) { [weak self] data in
+            socket.emitWithAck(event, payloadObject).timingOut(after: timeoutSeconds) { [weak self] data in
                 guard let self else {
                     continuation.resume(returning: Data())
                     return
@@ -2183,6 +2279,50 @@ final class SocketIOManager {
                   let notification = self.decodeAppsAwareness(from: first),
                   self.eventRoomIdMatchesActiveOrPending(notification.roomId, allowMissingRoomId: true) else { return }
             self.onAppsAwareness?(notification)
+        }
+
+        socket.on(SocketEvent.gameState) { [weak self] data, _ in
+            guard let self, let first = data.first,
+                  self.socket === socket,
+                  let notification = self.decode(GamePublicState.self, from: first),
+                  self.eventRoomIdMatchesActiveOrPending(notification.roomId, allowMissingRoomId: true) else { return }
+            self.onGameState?(notification)
+        }
+
+        socket.on(SocketEvent.gameView) { [weak self] data, _ in
+            guard let self, let first = data.first,
+                  self.socket === socket,
+                  let notification = self.decode(GamePlayerViewNotification.self, from: first),
+                  self.eventRoomIdMatchesActiveOrPending(notification.roomId, allowMissingRoomId: true) else { return }
+            self.onGameView?(notification)
+        }
+
+        socket.on(SocketEvent.gameSnapshot) { [weak self] data, _ in
+            guard let self, let first = data.first,
+                  self.socket === socket,
+                  let snapshot = self.decode(GameStateResponse.self, from: first),
+                  self.eventRoomIdMatchesActiveOrPending(
+                    snapshot.publicState?.roomId ?? snapshot.vote?.roomId,
+                    allowMissingRoomId: true
+                  ) else { return }
+            self.onGameSnapshot?(snapshot)
+        }
+
+        socket.on(SocketEvent.gameEnded) { [weak self] data, _ in
+            guard let self,
+                  self.socket === socket else { return }
+            let notification = data.first.flatMap { self.decode(GameEndedNotification.self, from: $0) }
+                ?? GameEndedNotification(gameId: nil, roomId: nil)
+            guard self.eventRoomIdMatchesActiveOrPending(notification.roomId, allowMissingRoomId: true) else { return }
+            self.onGameEnded?(notification)
+        }
+
+        socket.on(SocketEvent.gameVote) { [weak self] data, _ in
+            guard let self,
+                  self.socket === socket,
+                  self.eventRoomIdMatchesActiveOrPending(nil, allowMissingRoomId: true) else { return }
+            let vote = data.first.flatMap { self.decode(GameVoteState.self, from: $0) }
+            self.onGameVote?(vote)
         }
 
         socket.on(SocketEvent.adminMediaEnforced) { [weak self] data, _ in

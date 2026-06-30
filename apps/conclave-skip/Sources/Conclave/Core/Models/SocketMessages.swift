@@ -148,6 +148,426 @@ struct AppsAwarenessRequest: Codable {
     let clientId: Int?
 }
 
+struct GameConfigValue: Codable, Equatable {
+    let numberValue: Double?
+    let stringValue: String?
+
+    init(numberValue: Double?, stringValue: String?) {
+        self.numberValue = numberValue
+        self.stringValue = stringValue
+    }
+
+    static func number(_ value: Double) -> GameConfigValue {
+        GameConfigValue(numberValue: value, stringValue: nil)
+    }
+
+    static func string(_ value: String) -> GameConfigValue {
+        GameConfigValue(numberValue: nil, stringValue: value)
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let number = try? container.decode(Double.self) {
+            self.numberValue = number
+            self.stringValue = nil
+            return
+        }
+        if let string = try? container.decode(String.self) {
+            self.numberValue = nil
+            self.stringValue = string
+            return
+        }
+        throw DecodingError.typeMismatch(
+            GameConfigValue.self,
+            DecodingError.Context(codingPath: decoder.codingPath, debugDescription: "Expected a game config number or string.")
+        )
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        if let number = numberValue {
+            try container.encode(number)
+        } else if let string = stringValue {
+            try container.encode(string)
+        } else {
+            try container.encode("")
+        }
+    }
+}
+
+struct GameJSONValue: Codable, Equatable {
+    let rawJSON: String
+
+    init(rawJSON: String) {
+        self.rawJSON = rawJSON.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    init(from decoder: Decoder) throws {
+        #if SKIP
+        let container = try decoder.singleValueContainer()
+        if let stringValue = try? container.decode(String.self) {
+            rawJSON = stringValue
+        } else if let doubleValue = try? container.decode(Double.self) {
+            rawJSON = "\(doubleValue)"
+        } else if let boolValue = try? container.decode(Bool.self) {
+            rawJSON = boolValue ? "true" : "false"
+        } else {
+            rawJSON = "null"
+        }
+        #else
+        let value = try AnyCodable(from: decoder).value
+        rawJSON = GameJSONValue.rawJSONString(from: value)
+        #endif
+    }
+
+    func encode(to encoder: Encoder) throws {
+        #if SKIP
+        var container = encoder.singleValueContainer()
+        try container.encode(rawJSON)
+        #else
+        var container = encoder.singleValueContainer()
+        if let value = GameJSONValue.jsonObject(from: rawJSON) {
+            try container.encode(AnyCodable(value))
+        } else {
+            try container.encodeNil()
+        }
+        #endif
+    }
+
+    var dictionaryValue: [String: Any]? {
+        GameJSONValue.jsonObject(from: rawJSON) as? [String: Any]
+    }
+
+    var arrayValue: [Any]? {
+        GameJSONValue.jsonObject(from: rawJSON) as? [Any]
+    }
+
+    func string(_ key: String) -> String? {
+        dictionaryValue?[key] as? String
+    }
+
+    func int(_ key: String) -> Int? {
+        if let intValue = dictionaryValue?[key] as? Int { return intValue }
+        if let doubleValue = dictionaryValue?[key] as? Double { return Int(doubleValue) }
+        if let numberValue = dictionaryValue?[key] as? NSNumber { return numberValue.intValue }
+        return nil
+    }
+
+    func double(_ key: String) -> Double? {
+        if let doubleValue = dictionaryValue?[key] as? Double { return doubleValue }
+        if let intValue = dictionaryValue?[key] as? Int { return Double(intValue) }
+        if let numberValue = dictionaryValue?[key] as? NSNumber { return numberValue.doubleValue }
+        return nil
+    }
+
+    func bool(_ key: String) -> Bool? {
+        if let boolValue = dictionaryValue?[key] as? Bool { return boolValue }
+        if let intValue = dictionaryValue?[key] as? Int { return intValue != 0 }
+        if let doubleValue = dictionaryValue?[key] as? Double { return doubleValue != 0.0 }
+        if let numberValue = dictionaryValue?[key] as? NSNumber { return numberValue.intValue != 0 }
+        if let stringValue = dictionaryValue?[key] as? String {
+            switch stringValue.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+            case "true", "1": return true
+            case "false", "0": return false
+            default: return nil
+            }
+        }
+        return nil
+    }
+
+    func stringArray(_ key: String) -> [String] {
+        (dictionaryValue?[key] as? [String]) ?? []
+    }
+
+    func intArray(_ key: String) -> [Int] {
+        guard let values = dictionaryValue?[key] as? [Any] else { return [] }
+        return values.compactMap { value in
+            if let intValue = value as? Int { return intValue }
+            if let doubleValue = value as? Double { return Int(doubleValue) }
+            if let numberValue = value as? NSNumber { return numberValue.intValue }
+            return nil
+        }
+    }
+
+    func objectArray(_ key: String) -> [[String: Any]] {
+        (dictionaryValue?[key] as? [[String: Any]]) ?? []
+    }
+
+    static func object(_ fields: [String: Any]) -> GameJSONValue {
+        GameJSONValue(rawJSON: rawJSONString(from: fields))
+    }
+
+    private static func jsonObject(from rawJSON: String) -> Any? {
+        guard let data = rawJSON.data(using: .utf8) else { return nil }
+        return try? JSONSerialization.jsonObject(with: data)
+    }
+
+    private static func rawJSONString(from value: Any) -> String {
+        if value is NSNull { return "null" }
+        if JSONSerialization.isValidJSONObject(value),
+           let data = try? JSONSerialization.data(withJSONObject: value, options: []),
+           let string = String(data: data, encoding: .utf8) {
+            return string
+        }
+        if let string = value as? String,
+           let data = try? JSONSerialization.data(withJSONObject: [string], options: []),
+           let arrayString = String(data: data, encoding: .utf8),
+           arrayString.count >= 2 {
+            return String(arrayString.dropFirst().dropLast())
+        }
+        if let boolValue = value as? Bool {
+            return boolValue ? "true" : "false"
+        }
+        if let numberValue = value as? NSNumber {
+            return "\(numberValue)"
+        }
+        return "null"
+    }
+}
+
+struct GameOptionChoice: Codable, Identifiable {
+    let value: String
+    let label: String
+
+    var id: String { value }
+}
+
+struct GameOptionSpec: Codable, Identifiable {
+    let id: String
+    let type: String
+    let label: String
+    let min: Double?
+    let max: Double?
+    let defaultNumber: Double?
+    let defaultString: String?
+    let presets: [Double]?
+    let suffix: String?
+    let choices: [GameOptionChoice]?
+    let placeholder: String?
+    let maxLength: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case type
+        case label
+        case min
+        case max
+        case defaultValue = "default"
+        case presets
+        case suffix
+        case choices
+        case placeholder
+        case maxLength
+    }
+
+    init(
+        id: String,
+        type: String,
+        label: String,
+        min: Double? = nil,
+        max: Double? = nil,
+        defaultNumber: Double? = nil,
+        defaultString: String? = nil,
+        presets: [Double]? = nil,
+        suffix: String? = nil,
+        choices: [GameOptionChoice]? = nil,
+        placeholder: String? = nil,
+        maxLength: Int? = nil
+    ) {
+        self.id = id
+        self.type = type
+        self.label = label
+        self.min = min
+        self.max = max
+        self.defaultNumber = defaultNumber
+        self.defaultString = defaultString
+        self.presets = presets
+        self.suffix = suffix
+        self.choices = choices
+        self.placeholder = placeholder
+        self.maxLength = maxLength
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        type = try container.decode(String.self, forKey: .type)
+        label = try container.decode(String.self, forKey: .label)
+        min = try container.decodeIfPresent(Double.self, forKey: .min)
+        max = try container.decodeIfPresent(Double.self, forKey: .max)
+        if let numberDefault = try? container.decodeIfPresent(Double.self, forKey: .defaultValue) {
+            defaultNumber = numberDefault
+            defaultString = nil
+        } else {
+            defaultNumber = nil
+            defaultString = try container.decodeIfPresent(String.self, forKey: .defaultValue)
+        }
+        presets = try container.decodeIfPresent([Double].self, forKey: .presets)
+        suffix = try container.decodeIfPresent(String.self, forKey: .suffix)
+        choices = try container.decodeIfPresent([GameOptionChoice].self, forKey: .choices)
+        placeholder = try container.decodeIfPresent(String.self, forKey: .placeholder)
+        maxLength = try container.decodeIfPresent(Int.self, forKey: .maxLength)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(type, forKey: .type)
+        try container.encode(label, forKey: .label)
+        try container.encodeIfPresent(min, forKey: .min)
+        try container.encodeIfPresent(max, forKey: .max)
+        if let defaultNumber {
+            try container.encode(defaultNumber, forKey: .defaultValue)
+        } else {
+            try container.encodeIfPresent(defaultString, forKey: .defaultValue)
+        }
+        try container.encodeIfPresent(presets, forKey: .presets)
+        try container.encodeIfPresent(suffix, forKey: .suffix)
+        try container.encodeIfPresent(choices, forKey: .choices)
+        try container.encodeIfPresent(placeholder, forKey: .placeholder)
+        try container.encodeIfPresent(maxLength, forKey: .maxLength)
+    }
+
+    var defaultConfigValue: GameConfigValue {
+        switch type {
+        case "number":
+            return .number(defaultNumber ?? min ?? 0.0)
+        default:
+            return .string(defaultString ?? "")
+        }
+    }
+}
+
+struct GameCatalogEntry: Codable, Identifiable {
+    let id: String
+    let name: String
+    let description: String
+    let minPlayers: Int
+    let maxPlayers: Int
+    let options: [GameOptionSpec]
+    let hasLeaderboard: Bool
+}
+
+struct GamePlayer: Codable, Identifiable {
+    let id: String
+    let name: String
+}
+
+struct GamePublicState: Codable {
+    let gameId: String
+    let name: String
+    let phase: String
+    let players: [GamePlayer]
+    let hostId: String?
+    let view: GameJSONValue?
+    let finished: Bool
+    let hasLeaderboard: Bool
+    let roomId: String?
+}
+
+struct GamePlayerViewNotification: Codable {
+    let gameId: String
+    let view: GameJSONValue?
+    let roomId: String?
+}
+
+struct GameVoteState: Codable {
+    let candidates: [GameCatalogEntry]
+    let tally: [String: Int]
+    let votes: [String: String]
+    let totalPlayers: Int
+    let roomId: String?
+}
+
+struct GameStateResponse: Codable {
+    let active: Bool
+    let publicState: GamePublicState?
+    let view: GameJSONValue?
+    let vote: GameVoteState?
+
+    enum CodingKeys: String, CodingKey {
+        case active
+        case publicState = "public"
+        case view
+        case vote
+    }
+}
+
+struct GameStartRequest: Codable {
+    let gameId: String
+    let options: [String: GameConfigValue]?
+}
+
+struct GameVoteOpenRequest: Codable {
+    let candidates: [String]?
+}
+
+struct GameVoteCastRequest: Codable {
+    let gameId: String
+}
+
+struct GameMoveRequest: Codable {
+    let gameId: String
+    let type: String
+    let payload: GameJSONValue?
+}
+
+struct GameActionResponse: Codable {
+    let success: Bool
+    let gameId: String?
+    let error: String?
+}
+
+struct GameMoveResponse: Codable {
+    let success: Bool
+    let error: String?
+}
+
+struct GameEndedNotification: Codable {
+    let gameId: String?
+    let roomId: String?
+}
+
+struct TranscriptTokenCapabilities: Codable {
+    let start: Bool
+    let takeover: Bool
+    let stop: Bool
+    let ask: Bool
+    let relayAudio: Bool?
+}
+
+struct TranscriptTokenResponse: Codable {
+    let roomId: String
+    let workerUrl: String
+    let token: String
+    let expiresAt: Double
+    let capabilities: TranscriptTokenCapabilities
+}
+
+struct TranscriptSfuRelayStatusResponse: Codable {
+    let mode: String
+    let status: String
+    let available: Bool
+    let reason: String?
+    let updatedAt: Double
+}
+
+struct TranscriptSfuRelayStartRequest: Codable {
+    let relayStartToken: String
+}
+
+struct TranscriptSfuRelayStartResponse: Codable {
+    let mode: String
+    let success: Bool
+    let status: String
+    let reason: String?
+    let updatedAt: Double
+}
+
+struct TranscriptSfuRelayStopResponse: Codable {
+    let success: Bool
+}
+
 struct AdminNoticeRequest: Codable {
     let message: String
     let level: String

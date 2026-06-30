@@ -47,11 +47,13 @@ import androidx.compose.material.icons.rounded.PanTool
 import androidx.compose.material.icons.rounded.PictureInPictureAlt
 import androidx.compose.material.icons.rounded.PersonAdd
 import androidx.compose.material.icons.rounded.PersonRemove
+import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Public
 import androidx.compose.material.icons.rounded.Remove
 import androidx.compose.material.icons.rounded.ScreenShare
 import androidx.compose.material.icons.rounded.SouthEast
 import androidx.compose.material.icons.rounded.SouthWest
+import androidx.compose.material.icons.rounded.SportsEsports
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.StopScreenShare
 import androidx.compose.material.icons.rounded.Videocam
@@ -110,6 +112,8 @@ internal fun meetingIconVector(name: String): ImageVector = when (name) {
     "account"         -> Icons.Outlined.AccountCircle
     "block"           -> Icons.Rounded.Block
     "forum"           -> Icons.Rounded.Forum
+    "play"            -> Icons.Rounded.PlayArrow
+    "sports_esports"  -> Icons.Rounded.SportsEsports
     "group"           -> Icons.Rounded.Groups
     "check"           -> Icons.Rounded.CheckCircle
     "volume"          -> Icons.AutoMirrored.Rounded.VolumeUp
@@ -153,7 +157,8 @@ fun warmMeetingIcons() {
             "collapse", "settings",
             "raise.hand", "raise.hand.off", "reactions", "lock", "lock.open", "send", "reply",
             "close", "copy", "delete", "pin.off", "ghost", "host", "person.add", "remove.person",
-            "key", "link", "public", "arrow.forward", "back", "account", "block", "forum", "group", "volume",
+            "key", "link", "public", "arrow.forward", "back", "account", "block", "forum", "play",
+            "sports_esports", "group", "volume",
             "volume.off", "add", "remove", "minus", "info", "warning", "check", "open.in.full",
             "north.east", "north.west", "south.east", "south.west"
         )

@@ -128,6 +128,14 @@ final class MeetingState {
     var appYjsUpdateSequence: Int = 0
     var appAwarenessUpdateSequence: Int = 0
 
+    // Games
+    var gameCatalog: [GameCatalogEntry] = []
+    var gamePublicState: GamePublicState?
+    var gamePlayerView: GamePlayerViewNotification?
+    var gameVote: GameVoteState?
+    var isGameActionInFlight: Bool = false
+    var gameErrorMessage: String?
+
     // Active States
     var activeScreenShareUserId: String?
     var activeSpeakerId: String?
@@ -196,6 +204,17 @@ final class MeetingState {
         let localKeys = [userId, sfuUserId].compactMap { $0 }.map { Self.userKeyPart(for: $0) }
         let normalizedKey = Self.userKeyPart(for: normalized)
         return localKeys.contains(normalizedKey)
+    }
+
+    func hasLocalGamePlayer(in players: [GamePlayer]) -> Bool {
+        players.contains { isLocalIdentityUserId($0.id) }
+    }
+
+    func localGameVoteId(in vote: GameVoteState) -> String? {
+        for (userId, gameId) in vote.votes where isLocalIdentityUserId(userId) {
+            return gameId
+        }
+        return nil
     }
 
     func isRemoteParticipantUserId(_ id: String) -> Bool {

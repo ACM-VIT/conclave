@@ -26,6 +26,12 @@ import {
   updateScheduledMeeting,
   type BookingSlotLease,
 } from "../scheduledMeetings.js";
+import {
+  isSchedulingEmailConfigured,
+  sendSchedulingBookingEmails,
+  type SchedulingEmailDeliveryResult,
+} from "../schedulingEmails.js";
+import { buildSchedulingMeetingLink } from "../schedulingLinks.js";
 import type { SfuState } from "../state.js";
 import type {
   BookingConfirmation,
@@ -124,15 +130,6 @@ const resolveAppOrigin = (req: Request): string => {
     process.env.BETTER_AUTH_BASE_URL ||
     "https://conclave.acmvit.in"
   ).replace(/\/$/, "");
-};
-
-const buildMeetingLink = (appOrigin: string, meeting: ScheduledMeeting): string => {
-  const url = new URL(
-    `/${encodeURIComponent(meeting.roomCode)}`,
-    `${appOrigin.replace(/\/$/, "")}/`,
-  );
-  url.searchParams.set("clientId", meeting.clientId);
-  return url.toString();
 };
 
 const publicCalendarSummary = (
@@ -451,7 +448,7 @@ const createGoogleCalendarEvent = async (
     const accessToken = await refreshGoogleAccessToken(state, connection);
     const url = `${GOOGLE_CALENDAR_API}/calendars/${encodeURIComponent(
       connection.calendarId || "primary",
-    )}/events?sendUpdates=all`;
+    )}/events?sendUpdates=none`;
     const data = await googleFetchJson<{ id?: string }>(url, {
       method: "POST",
       headers: {
@@ -557,7 +554,7 @@ const buildConfirmation = (
   id: meeting.id,
   title: meeting.title,
   roomCode: meeting.roomCode,
-  meetingLink: buildMeetingLink(appOrigin, meeting),
+  meetingLink: buildSchedulingMeetingLink(appOrigin, meeting),
   startsAt: meeting.scheduledStartAt,
   endsAt: meeting.scheduledEndAt,
   hostName: meeting.hostName,
@@ -565,7 +562,35 @@ const buildConfirmation = (
   attendeeEmail: meeting.attendeeEmail || "",
   calendarEventId: meeting.googleCalendarEventId ?? null,
   syncStatus: meeting.calendarSyncStatus ?? "not_required",
+  emailNotificationStatus: meeting.emailNotificationStatus ?? "not_configured",
 });
+
+const sendBookingEmailNotifications = async (
+  state: SfuState,
+  input: {
+    profile: SchedulingProfile;
+    eventType: SchedulingEventType;
+    meeting: ScheduledMeeting;
+    appOrigin: string;
+    calendarError?: string | null;
+  },
+): Promise<{
+  meeting: ScheduledMeeting;
+  emailResult: SchedulingEmailDeliveryResult;
+}> => {
+  const emailResult = await sendSchedulingBookingEmails(input);
+  const next = updateScheduledMeeting(state.scheduledMeetings, input.meeting.id, {
+    emailNotificationStatus: emailResult.status,
+    emailNotificationError: emailResult.error,
+    emailNotificationSentAt: emailResult.sentAt,
+  });
+  try {
+    await persistMeetingChange(state, next);
+  } catch (error) {
+    Logger.warn("Failed to persist scheduling email status", error);
+  }
+  return { meeting: next, emailResult };
+};
 
 export const registerSchedulingRoutes = (
   app: Express,
@@ -954,6 +979,9 @@ export const registerSchedulingRoutes = (
             attendeeNote,
             attendeeTimeZone,
             calendarSyncStatus: target.calendar ? "pending" : "not_required",
+            emailNotificationStatus: isSchedulingEmailConfigured()
+              ? "pending"
+              : "not_configured",
           },
           {
             clientId: target.profile.clientId,
@@ -982,12 +1010,22 @@ export const registerSchedulingRoutes = (
 
       const calendar = target.calendar;
       if (!calendar) {
-        res.status(201).json({ booking: buildConfirmation(meeting, appOrigin) });
+        const { meeting: notified, emailResult } =
+          await sendBookingEmailNotifications(state, {
+            profile: target.profile,
+            eventType: target.eventType,
+            meeting,
+            appOrigin,
+          });
+        res.status(201).json({
+          booking: buildConfirmation(notified, appOrigin),
+          ...(emailResult.error ? { emailError: emailResult.error } : {}),
+        });
         return;
       }
 
       try {
-        const meetingLink = buildMeetingLink(appOrigin, meeting);
+        const meetingLink = buildSchedulingMeetingLink(appOrigin, meeting);
         const calendarEventId = await createGoogleCalendarEvent(
           state,
           calendar,
@@ -1008,7 +1046,17 @@ export const registerSchedulingRoutes = (
           calendarSyncError: null,
         });
         await persistMeetingChange(state, synced);
-        res.status(201).json({ booking: buildConfirmation(synced, appOrigin) });
+        const { meeting: notified, emailResult } =
+          await sendBookingEmailNotifications(state, {
+            profile: target.profile,
+            eventType: target.eventType,
+            meeting: synced,
+            appOrigin,
+          });
+        res.status(201).json({
+          booking: buildConfirmation(notified, appOrigin),
+          ...(emailResult.error ? { emailError: emailResult.error } : {}),
+        });
       } catch (calendarError) {
         const message =
           (calendarError as Error).message || "Could not create the calendar event.";
@@ -1017,9 +1065,19 @@ export const registerSchedulingRoutes = (
           calendarSyncError: message,
         });
         await persistMeetingChange(state, failed);
-        res
-          .status(201)
-          .json({ booking: buildConfirmation(failed, appOrigin), calendarError: message });
+        const { meeting: notified, emailResult } =
+          await sendBookingEmailNotifications(state, {
+            profile: target.profile,
+            eventType: target.eventType,
+            meeting: failed,
+            appOrigin,
+            calendarError: message,
+          });
+        res.status(201).json({
+          booking: buildConfirmation(notified, appOrigin),
+          calendarError: message,
+          ...(emailResult.error ? { emailError: emailResult.error } : {}),
+        });
       }
     } catch (error) {
       Logger.warn("Booking request failed", error);

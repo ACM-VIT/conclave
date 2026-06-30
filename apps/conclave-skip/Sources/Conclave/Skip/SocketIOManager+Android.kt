@@ -9,6 +9,7 @@ import io.socket.emitter.Emitter
 import org.json.JSONArray
 import org.json.JSONObject
 import skip.foundation.*
+import skip.lib.*
 import skip.lib.Decodable
 import skip.lib.Error
 import skip.lib.ErrorException
@@ -20,6 +21,7 @@ import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withTimeout
 
 private const val ACK_TIMEOUT_MS = 30_000L
+private const val START_GAME_ACK_TIMEOUT_MS = 45_000L
 private const val CONNECT_TIMEOUT_MS = 15_000L
 private const val MAX_JOIN_ROOM_REDIRECTS = 1
 private const val CLOSE_CONSUMER_MAX_ATTEMPTS = 4
@@ -112,6 +114,18 @@ internal object SocketEvent {
     val appsYjsSync = SfuClientEvent.appsYjsSync.rawValue
     val appsYjsUpdate = SfuClientEvent.appsYjsUpdate.rawValue
     val appsAwareness = SfuClientEvent.appsAwareness.rawValue
+    val gameList = SfuClientEvent.gameList.rawValue
+    val gameStart = SfuClientEvent.gameStart.rawValue
+    val gameMove = SfuClientEvent.gameMove.rawValue
+    val gameEnd = SfuClientEvent.gameEnd.rawValue
+    val gameGetState = SfuClientEvent.gameGetState.rawValue
+    val gameVoteOpen = SfuClientEvent.gameVoteOpen.rawValue
+    val gameVoteCast = SfuClientEvent.gameVoteCast.rawValue
+    val gameVoteCancel = SfuClientEvent.gameVoteCancel.rawValue
+    val transcriptGetToken = SfuClientEvent.transcriptGetToken.rawValue
+    val transcriptSfuRelayStatus = SfuClientEvent.transcriptSfuRelayStatus.rawValue
+    val transcriptSfuRelayStart = SfuClientEvent.transcriptSfuRelayStart.rawValue
+    val transcriptSfuRelayStop = SfuClientEvent.transcriptSfuRelayStop.rawValue
 
     val userJoined = SfuServerEvent.userJoined.rawValue
     val userLeft = SfuServerEvent.userLeft.rawValue
@@ -167,6 +181,11 @@ internal object SocketEvent {
     val appsState = SfuServerEvent.appsState.rawValue
     val appsYjsServerUpdate = SfuServerEvent.appsYjsUpdate.rawValue
     val appsServerAwareness = SfuServerEvent.appsAwareness.rawValue
+    val gameState = SfuServerEvent.gameState.rawValue
+    val gameView = SfuServerEvent.gameView.rawValue
+    val gameSnapshot = SfuServerEvent.gameSnapshot.rawValue
+    val gameEnded = SfuServerEvent.gameEnded.rawValue
+    val gameVote = SfuServerEvent.gameVote.rawValue
 }
 
 /// Raw consume-response fields, carrying rtpParameters as the verbatim JSON
@@ -224,6 +243,11 @@ internal class SocketIOManager {
     internal var onAppsState: ((AppsStateNotification) -> Unit)? = null
     internal var onAppsYjsUpdate: ((AppsYjsUpdateNotification) -> Unit)? = null
     internal var onAppsAwareness: ((AppsAwarenessNotification) -> Unit)? = null
+    internal var onGameState: ((GamePublicState) -> Unit)? = null
+    internal var onGameView: ((GamePlayerViewNotification) -> Unit)? = null
+    internal var onGameSnapshot: ((GameStateResponse) -> Unit)? = null
+    internal var onGameEnded: ((GameEndedNotification) -> Unit)? = null
+    internal var onGameVote: ((GameVoteState?) -> Unit)? = null
 
     internal var onUserJoined: ((UserJoinedNotification) -> Unit)? = null
     internal var onUserLeft: ((UserLeftNotification) -> Unit)? = null
@@ -929,6 +953,109 @@ internal class SocketIOManager {
         return JSONDecoder().decode(AppsStateNotification::class, from = data)
     }
 
+    internal suspend fun getGameCatalog(): skip.lib.Array<GameCatalogEntry> {
+        val data = emitAckOnly(SocketEvent.gameList)
+        return decodeGameCatalog(data)
+    }
+
+    internal suspend fun getGameState(): GameStateResponse {
+        val data = emitAckOnly(SocketEvent.gameGetState)
+        return decodeGameStateResponse(data)
+    }
+
+    internal suspend fun startGame(
+        gameId: String,
+        options: Dictionary<String, GameConfigValue>? = null
+    ): GameActionResponse {
+        val trimmedGameId = gameId.trim()
+        if (trimmedGameId.isEmpty()) {
+            throw ErrorException("Invalid game ID")
+        }
+        val payload = JSONObject().put("gameId", trimmedGameId)
+        val optionsObject = gameConfigOptionsObject(options)
+        if (optionsObject != null) {
+            payload.put("options", optionsObject)
+        }
+        val data = emit(SocketEvent.gameStart, payload, timeoutMs = START_GAME_ACK_TIMEOUT_MS)
+        return decodeGameActionResponse(data)
+    }
+
+    internal suspend fun sendGameMove(
+        gameId: String,
+        type: String,
+        payload: GameJSONValue? = null
+    ): GameMoveResponse {
+        val trimmedGameId = gameId.trim()
+        val trimmedType = type.trim()
+        if (trimmedGameId.isEmpty() || trimmedType.isEmpty()) {
+            throw ErrorException("Invalid game move")
+        }
+        val request = JSONObject()
+            .put("gameId", trimmedGameId)
+            .put("type", trimmedType)
+        val rawPayload = payload?.rawJSON?.trim()
+        if (!rawPayload.isNullOrEmpty() && rawPayload != "null") {
+            request.put("payload", jsonValueFromRaw(rawPayload))
+        }
+        val data = emit(SocketEvent.gameMove, request)
+        return decodeGameMoveResponse(data)
+    }
+
+    internal suspend fun endGame(): GameActionResponse {
+        val data = emitAckOnly(SocketEvent.gameEnd)
+        return decodeGameActionResponse(data)
+    }
+
+    internal suspend fun openGameVote(candidateIds: skip.lib.Array<String>? = null): GameActionResponse {
+        val payload = JSONObject()
+        if (candidateIds != null) {
+            payload.put("candidates", jsonArray(candidateIds))
+        }
+        val data = emit(SocketEvent.gameVoteOpen, payload)
+        return decodeGameActionResponse(data)
+    }
+
+    internal suspend fun castGameVote(gameId: String): GameActionResponse {
+        val trimmedGameId = gameId.trim()
+        if (trimmedGameId.isEmpty()) {
+            throw ErrorException("Invalid game ID")
+        }
+        val data = emit(SocketEvent.gameVoteCast, JSONObject().put("gameId", trimmedGameId))
+        return decodeGameActionResponse(data)
+    }
+
+    internal suspend fun cancelGameVote(): GameActionResponse {
+        val data = emitAckOnly(SocketEvent.gameVoteCancel)
+        return decodeGameActionResponse(data)
+    }
+
+    internal suspend fun getTranscriptToken(): TranscriptTokenResponse {
+        val data = emitAckOnly(SocketEvent.transcriptGetToken)
+        return decodeTranscriptTokenResponse(data)
+    }
+
+    internal suspend fun getTranscriptSfuRelayStatus(): TranscriptSfuRelayStatusResponse {
+        val data = emitAckOnly(SocketEvent.transcriptSfuRelayStatus)
+        return decodeTranscriptSfuRelayStatusResponse(data)
+    }
+
+    internal suspend fun startTranscriptSfuRelay(relayStartToken: String): TranscriptSfuRelayStartResponse {
+        val trimmedToken = relayStartToken.trim()
+        if (trimmedToken.isEmpty()) {
+            throw ErrorException("Missing transcript relay start token")
+        }
+        val data = emit(
+            SocketEvent.transcriptSfuRelayStart,
+            JSONObject().put("relayStartToken", trimmedToken)
+        )
+        return decodeTranscriptSfuRelayStartResponse(data)
+    }
+
+    internal suspend fun stopTranscriptSfuRelay(): TranscriptSfuRelayStopResponse {
+        val data = emitAckOnly(SocketEvent.transcriptSfuRelayStop)
+        return decodeTranscriptSfuRelayStopResponse(data)
+    }
+
     internal suspend fun openApp(appId: String): AppsOpenResponse {
         val request = AppsOpenRequest(appId = appId)
         val data = emit(SocketEvent.appsOpen, request)
@@ -1232,11 +1359,11 @@ internal class SocketIOManager {
         }
     }
 
-    private suspend fun emit(event: String, payload: Any): Data {
+    private suspend fun emit(event: String, payload: Any, timeoutMs: Long = ACK_TIMEOUT_MS): Data {
         val socket = socket ?: throw ErrorException("Socket not connected")
         val socketPayload = toSocketPayload(payload)
 
-        return withAckTimeout(event) {
+        return withAckTimeout(event, timeoutMs) {
             suspendCancellableCoroutine { cont ->
                 socket.emit(event, socketPayload, object : io.socket.client.Ack {
                     override fun call(vararg args: Any?) {
@@ -1322,9 +1449,13 @@ internal class SocketIOManager {
             normalized.contains("retry shortly")
     }
 
-    private suspend fun withAckTimeout(event: String, block: suspend () -> Data): Data {
+    private suspend fun withAckTimeout(
+        event: String,
+        timeoutMs: Long = ACK_TIMEOUT_MS,
+        block: suspend () -> Data
+    ): Data {
         return try {
-            withTimeout(ACK_TIMEOUT_MS) {
+            withTimeout(timeoutMs) {
                 block()
             }
         } catch (_: TimeoutCancellationException) {
@@ -1450,6 +1581,33 @@ internal class SocketIOManager {
         return array
     }
 
+    private fun rawJsonField(obj: JSONObject, field: String): GameJSONValue? {
+        if (!obj.has(field) || obj.isNull(field)) return null
+        return GameJSONValue(rawJSON = rawJson(obj.opt(field)))
+    }
+
+    private fun rawJson(value: Any?): String {
+        return when (val compatible = jsonCompatibleValue(value)) {
+            null, JSONObject.NULL -> "null"
+            is JSONObject -> compatible.toString()
+            is JSONArray -> compatible.toString()
+            is String -> JSONObject.quote(compatible)
+            is Number -> compatible.toString()
+            is Boolean -> compatible.toString()
+            else -> JSONObject.quote(compatible.toString())
+        }
+    }
+
+    private fun jsonValueFromRaw(raw: String): Any {
+        val trimmed = raw.trim()
+        if (trimmed.isEmpty()) return JSONObject.NULL
+        return try {
+            jsonCompatibleValue(JSONArray("[$trimmed]").opt(0))
+        } catch (_: Throwable) {
+            trimmed
+        }
+    }
+
     private fun stringField(obj: JSONObject, field: String): String? {
         if (!obj.has(field) || obj.isNull(field)) return null
         val trimmed = obj.optString(field, "").trim()
@@ -1549,6 +1707,36 @@ internal class SocketIOManager {
         return skip.lib.Array(values)
     }
 
+    private fun intMapField(obj: JSONObject, field: String): Dictionary<String, Int>? {
+        val raw = obj.optJSONObject(field) ?: return null
+        var values: Dictionary<String, Int> = dictionaryOf()
+        val keys = raw.keys()
+        while (keys.hasNext()) {
+            val key = keys.next()
+            val value = when (val rawValue = raw.opt(key)) {
+                is Number -> rawValue.toInt()
+                is String -> rawValue.trim().toIntOrNull()
+                else -> null
+            }
+            if (value != null) {
+                values[key] = value
+            }
+        }
+        return values
+    }
+
+    private fun stringMapField(obj: JSONObject, field: String): Dictionary<String, String>? {
+        val raw = obj.optJSONObject(field) ?: return null
+        var values: Dictionary<String, String> = dictionaryOf()
+        val keys = raw.keys()
+        while (keys.hasNext()) {
+            val key = keys.next()
+            val value = stringField(raw, key) ?: continue
+            values[key] = value
+        }
+        return values
+    }
+
     private fun doubleArrayField(obj: JSONObject, field: String): skip.lib.Array<Double>? {
         val rawValues = jsonArrayField(obj, field) ?: return null
         val values = mutableListOf<Double>()
@@ -1636,6 +1824,237 @@ internal class SocketIOManager {
             clientId = intField(obj, "clientId"),
             roomId = stringField(obj, "roomId")
         )
+    }
+
+    private fun decodeGameCatalog(data: Data): skip.lib.Array<GameCatalogEntry> {
+        val raw = try {
+            jsonToAny(dataToString(data))
+        } catch (_: Throwable) {
+            return skip.lib.Array()
+        }
+        val array = when (raw) {
+            is JSONArray -> raw
+            is JSONObject -> raw.optJSONArray("games") ?: raw.optJSONArray("catalog") ?: JSONArray()
+            else -> JSONArray()
+        }
+        val entries = mutableListOf<GameCatalogEntry>()
+        for (index in 0 until array.length()) {
+            val entry = array.optJSONObject(index)?.let { decodeGameCatalogEntryObject(it) } ?: continue
+            entries.add(entry)
+        }
+        return skip.lib.Array(entries)
+    }
+
+    private fun decodeGameOptionChoiceObject(obj: JSONObject): GameOptionChoice? {
+        return GameOptionChoice(
+            value = stringField(obj, "value") ?: return null,
+            label = stringField(obj, "label") ?: stringField(obj, "value") ?: return null
+        )
+    }
+
+    private fun decodeGameOptionSpecObject(obj: JSONObject): GameOptionSpec? {
+        val type = stringField(obj, "type") ?: return null
+        val choices = mutableListOf<GameOptionChoice>()
+        val rawChoices = obj.optJSONArray("choices") ?: JSONArray()
+        for (index in 0 until rawChoices.length()) {
+            val choice = rawChoices.optJSONObject(index)
+                ?.let { decodeGameOptionChoiceObject(it) } ?: continue
+            choices.add(choice)
+        }
+        return GameOptionSpec(
+            id = stringField(obj, "id") ?: return null,
+            type = type,
+            label = stringField(obj, "label") ?: stringField(obj, "id") ?: return null,
+            min = doubleField(obj, "min"),
+            max = doubleField(obj, "max"),
+            defaultNumber = doubleField(obj, "default"),
+            defaultString = stringField(obj, "default"),
+            presets = doubleArrayField(obj, "presets"),
+            suffix = stringField(obj, "suffix"),
+            choices = skip.lib.Array(choices),
+            placeholder = stringField(obj, "placeholder"),
+            maxLength = intField(obj, "maxLength")
+        )
+    }
+
+    private fun decodeGameCatalogEntryObject(obj: JSONObject): GameCatalogEntry? {
+        val rawOptions = obj.optJSONArray("options") ?: JSONArray()
+        val options = mutableListOf<GameOptionSpec>()
+        for (index in 0 until rawOptions.length()) {
+            val option = rawOptions.optJSONObject(index)?.let { decodeGameOptionSpecObject(it) } ?: continue
+            options.add(option)
+        }
+        return GameCatalogEntry(
+            id = stringField(obj, "id") ?: return null,
+            name = stringField(obj, "name") ?: stringField(obj, "id") ?: return null,
+            description = stringField(obj, "description") ?: "",
+            minPlayers = intField(obj, "minPlayers") ?: 1,
+            maxPlayers = intField(obj, "maxPlayers") ?: 0,
+            options = skip.lib.Array(options),
+            hasLeaderboard = boolField(obj, "hasLeaderboard") ?: false
+        )
+    }
+
+    private fun decodeGamePlayerObject(obj: JSONObject): GamePlayer? {
+        return GamePlayer(
+            id = stringField(obj, "id") ?: return null,
+            name = stringField(obj, "name") ?: ""
+        )
+    }
+
+    private fun decodeGamePublicStateObject(obj: JSONObject): GamePublicState? {
+        val rawPlayers = obj.optJSONArray("players") ?: JSONArray()
+        val players = mutableListOf<GamePlayer>()
+        for (index in 0 until rawPlayers.length()) {
+            val player = rawPlayers.optJSONObject(index)?.let { decodeGamePlayerObject(it) } ?: continue
+            players.add(player)
+        }
+        return GamePublicState(
+            gameId = stringField(obj, "gameId") ?: return null,
+            name = stringField(obj, "name") ?: stringField(obj, "gameId") ?: return null,
+            phase = stringField(obj, "phase") ?: "",
+            players = skip.lib.Array(players),
+            hostId = stringField(obj, "hostId"),
+            view = rawJsonField(obj, "view"),
+            finished = boolField(obj, "finished") ?: false,
+            hasLeaderboard = boolField(obj, "hasLeaderboard") ?: false,
+            roomId = stringField(obj, "roomId")
+        )
+    }
+
+    private fun decodeGamePlayerViewNotificationObject(obj: JSONObject): GamePlayerViewNotification? {
+        return GamePlayerViewNotification(
+            gameId = stringField(obj, "gameId") ?: return null,
+            view = rawJsonField(obj, "view"),
+            roomId = stringField(obj, "roomId")
+        )
+    }
+
+    private fun decodeGameVoteStateObject(obj: JSONObject): GameVoteState? {
+        val rawCandidates = obj.optJSONArray("candidates") ?: JSONArray()
+        val candidates = mutableListOf<GameCatalogEntry>()
+        for (index in 0 until rawCandidates.length()) {
+            val candidate = rawCandidates.optJSONObject(index)
+                ?.let { decodeGameCatalogEntryObject(it) } ?: continue
+            candidates.add(candidate)
+        }
+        return GameVoteState(
+            candidates = skip.lib.Array(candidates),
+            tally = intMapField(obj, "tally") ?: dictionaryOf(),
+            votes = stringMapField(obj, "votes") ?: dictionaryOf(),
+            totalPlayers = intField(obj, "totalPlayers") ?: 0,
+            roomId = stringField(obj, "roomId")
+        )
+    }
+
+    private fun decodeGameStateResponse(data: Data): GameStateResponse {
+        val obj = dataObject(data) ?: throw ErrorException("Invalid game state acknowledgement.")
+        return GameStateResponse(
+            active = boolField(obj, "active") ?: false,
+            publicState = obj.optJSONObject("public")?.let { decodeGamePublicStateObject(it) },
+            view = rawJsonField(obj, "view"),
+            vote = obj.optJSONObject("vote")?.let { decodeGameVoteStateObject(it) }
+        )
+    }
+
+    private fun decodeGameActionResponse(data: Data): GameActionResponse {
+        val obj = dataObject(data)
+        if (obj == null) {
+            return JSONDecoder().decode(GameActionResponse::class, from = data)
+        }
+        return GameActionResponse(
+            success = boolField(obj, "success") ?: false,
+            gameId = stringField(obj, "gameId"),
+            error = stringField(obj, "error")
+        )
+    }
+
+    private fun decodeGameMoveResponse(data: Data): GameMoveResponse {
+        val obj = dataObject(data)
+        if (obj == null) {
+            return JSONDecoder().decode(GameMoveResponse::class, from = data)
+        }
+        return GameMoveResponse(
+            success = boolField(obj, "success") ?: false,
+            error = stringField(obj, "error")
+        )
+    }
+
+    private fun decodeGameEnded(value: Any?): GameEndedNotification? {
+        val obj = jsonObject(value)
+        if (obj == null) {
+            return decode<GameEndedNotification>(value)
+        }
+        return GameEndedNotification(
+            gameId = stringField(obj, "gameId"),
+            roomId = stringField(obj, "roomId")
+        )
+    }
+
+    private fun decodeTranscriptTokenResponse(data: Data): TranscriptTokenResponse {
+        val obj = dataObject(data) ?: throw ErrorException("Invalid transcript token acknowledgement.")
+        val capabilitiesObj = obj.optJSONObject("capabilities") ?: JSONObject()
+        return TranscriptTokenResponse(
+            roomId = stringField(obj, "roomId") ?: activeRoomId ?: "",
+            workerUrl = stringField(obj, "workerUrl")
+                ?: throw ErrorException("Invalid transcript token acknowledgement."),
+            token = stringField(obj, "token")
+                ?: throw ErrorException("Invalid transcript token acknowledgement."),
+            expiresAt = doubleField(obj, "expiresAt") ?: 0.0,
+            capabilities = TranscriptTokenCapabilities(
+                start = boolField(capabilitiesObj, "start") ?: false,
+                takeover = boolField(capabilitiesObj, "takeover") ?: false,
+                stop = boolField(capabilitiesObj, "stop") ?: false,
+                ask = boolField(capabilitiesObj, "ask") ?: false,
+                relayAudio = boolField(capabilitiesObj, "relayAudio")
+            )
+        )
+    }
+
+    private fun decodeTranscriptSfuRelayStatusResponse(data: Data): TranscriptSfuRelayStatusResponse {
+        val obj = dataObject(data) ?: throw ErrorException("Invalid transcript relay status acknowledgement.")
+        return TranscriptSfuRelayStatusResponse(
+            mode = stringField(obj, "mode") ?: "sfu",
+            status = stringField(obj, "status") ?: "error",
+            available = boolField(obj, "available") ?: false,
+            reason = stringField(obj, "reason"),
+            updatedAt = doubleField(obj, "updatedAt") ?: 0.0
+        )
+    }
+
+    private fun decodeTranscriptSfuRelayStartResponse(data: Data): TranscriptSfuRelayStartResponse {
+        val obj = dataObject(data) ?: throw ErrorException("Invalid transcript relay start acknowledgement.")
+        return TranscriptSfuRelayStartResponse(
+            mode = stringField(obj, "mode") ?: "sfu",
+            success = boolField(obj, "success") ?: false,
+            status = stringField(obj, "status") ?: "error",
+            reason = stringField(obj, "reason"),
+            updatedAt = doubleField(obj, "updatedAt") ?: 0.0
+        )
+    }
+
+    private fun decodeTranscriptSfuRelayStopResponse(data: Data): TranscriptSfuRelayStopResponse {
+        val obj = dataObject(data) ?: throw ErrorException("Invalid transcript relay stop acknowledgement.")
+        return TranscriptSfuRelayStopResponse(
+            success = boolField(obj, "success") ?: false
+        )
+    }
+
+    private fun gameConfigOptionsObject(options: Dictionary<String, GameConfigValue>?): JSONObject? {
+        if (options == null) return null
+        val obj = JSONObject()
+        for ((key, value) in options) {
+            val trimmedKey = key.trim()
+            if (trimmedKey.isEmpty()) continue
+            obj.put(trimmedKey, gameConfigPrimitive(value))
+        }
+        return obj
+    }
+
+    private fun gameConfigPrimitive(value: GameConfigValue): Any {
+        value.numberValue?.let { return it }
+        value.stringValue?.let { return it }
+        return ""
     }
 
     /// Pull a nested JSON object field out of an ack payload as its verbatim
@@ -2915,6 +3334,52 @@ internal class SocketIOManager {
             val notification = decodeAppsAwareness(args.firstOrNull()) ?: return@Listener
             if (!eventRoomIdMatchesActiveOrPending(notification.roomId, allowMissingRoomId = true)) return@Listener
             onAppsAwareness?.invoke(notification)
+        })
+
+        socket.on(SocketEvent.gameState, Emitter.Listener { args ->
+            if (this.socket !== socket) return@Listener
+            val notification = jsonObject(args.firstOrNull())
+                ?.let { decodeGamePublicStateObject(it) } ?: return@Listener
+            if (!eventRoomIdMatchesActiveOrPending(notification.roomId, allowMissingRoomId = true)) return@Listener
+            onGameState?.invoke(notification)
+        })
+
+        socket.on(SocketEvent.gameView, Emitter.Listener { args ->
+            if (this.socket !== socket) return@Listener
+            val notification = jsonObject(args.firstOrNull())
+                ?.let { decodeGamePlayerViewNotificationObject(it) } ?: return@Listener
+            if (!eventRoomIdMatchesActiveOrPending(notification.roomId, allowMissingRoomId = true)) return@Listener
+            onGameView?.invoke(notification)
+        })
+
+        socket.on(SocketEvent.gameSnapshot, Emitter.Listener { args ->
+            if (this.socket !== socket) return@Listener
+            val data = jsonData(args.firstOrNull()) ?: return@Listener
+            val snapshot = try {
+                decodeGameStateResponse(data)
+            } catch (_: Throwable) {
+                return@Listener
+            }
+            val roomId = snapshot.publicState?.roomId ?: snapshot.vote?.roomId
+            if (!eventRoomIdMatchesActiveOrPending(roomId, allowMissingRoomId = true)) return@Listener
+            onGameSnapshot?.invoke(snapshot)
+        })
+
+        socket.on(SocketEvent.gameEnded, Emitter.Listener { args ->
+            if (this.socket !== socket) return@Listener
+            val notification = decodeGameEnded(args.firstOrNull())
+                ?: GameEndedNotification(gameId = null, roomId = null)
+            if (!eventRoomIdMatchesActiveOrPending(notification.roomId, allowMissingRoomId = true)) return@Listener
+            onGameEnded?.invoke(notification)
+        })
+
+        socket.on(SocketEvent.gameVote, Emitter.Listener { args ->
+            if (this.socket !== socket) return@Listener
+            val notification = jsonObject(args.firstOrNull())
+                ?.let { decodeGameVoteStateObject(it) }
+            val roomId = notification?.roomId
+            if (!eventRoomIdMatchesActiveOrPending(roomId, allowMissingRoomId = true)) return@Listener
+            onGameVote?.invoke(notification)
         })
 
         socket.on(SocketEvent.adminMediaEnforced, Emitter.Listener { args ->

@@ -481,6 +481,12 @@ final class MeetingViewModel {
     private var pendingAppsState: AppsStateNotification?
     private var pendingAppsYjsUpdates: [AppsYjsUpdateNotification] = []
     private var pendingAppsAwarenessUpdates: [AppsAwarenessNotification] = []
+    private var pendingGameSnapshot: GameStateResponse?
+    private var pendingGamePublicState: GamePublicState?
+    private var pendingGamePlayerView: GamePlayerViewNotification?
+    private var pendingGameEnded: GameEndedNotification?
+    private var pendingGameVote: GameVoteState?
+    private var pendingGameVoteClear = false
     private var webRTCJoinAttemptId: UUID?
     private var pendingProducerRetryTask: Task<Void, Never>?
     private var ttsHighlightTask: Task<Void, Never>?
@@ -1524,6 +1530,71 @@ final class MeetingViewModel {
             }
         }
 
+        socketManager.onGameState = { [weak self] notification in
+            guard let self = self else { return }
+            let eventContext = self.currentSocketEventContext()
+            Task { @MainActor in
+                guard self.isCurrentSocketEvent(eventContext, roomId: notification.roomId) else { return }
+                if self.shouldBufferRoomSnapshotDuringJoin {
+                    self.bufferPendingGamePublicState(notification)
+                    return
+                }
+                self.applyGamePublicState(notification)
+            }
+        }
+
+        socketManager.onGameView = { [weak self] notification in
+            guard let self = self else { return }
+            let eventContext = self.currentSocketEventContext()
+            Task { @MainActor in
+                guard self.isCurrentSocketEvent(eventContext, roomId: notification.roomId) else { return }
+                if self.shouldBufferRoomSnapshotDuringJoin {
+                    self.bufferPendingGamePlayerView(notification)
+                    return
+                }
+                self.applyGamePlayerView(notification)
+            }
+        }
+
+        socketManager.onGameSnapshot = { [weak self] snapshot in
+            guard let self = self else { return }
+            let eventContext = self.currentSocketEventContext()
+            Task { @MainActor in
+                guard self.isCurrentSocketEvent(eventContext, roomId: self.roomId(for: snapshot)) else { return }
+                if self.shouldBufferRoomSnapshotDuringJoin {
+                    self.bufferPendingGameSnapshot(snapshot)
+                    return
+                }
+                self.applyGameSnapshot(snapshot)
+            }
+        }
+
+        socketManager.onGameEnded = { [weak self] notification in
+            guard let self = self else { return }
+            let eventContext = self.currentSocketEventContext()
+            Task { @MainActor in
+                guard self.isCurrentSocketEvent(eventContext, roomId: notification.roomId) else { return }
+                if self.shouldBufferRoomSnapshotDuringJoin {
+                    self.bufferPendingGameEnded(notification)
+                    return
+                }
+                self.applyGameEnded(notification)
+            }
+        }
+
+        socketManager.onGameVote = { [weak self] vote in
+            guard let self = self else { return }
+            let eventContext = self.currentSocketEventContext()
+            Task { @MainActor in
+                guard self.isCurrentSocketEvent(eventContext, roomId: vote?.roomId) else { return }
+                if self.shouldBufferRoomSnapshotDuringJoin {
+                    self.bufferPendingGameVote(vote)
+                    return
+                }
+                self.applyGameVote(vote)
+            }
+        }
+
         socketManager.onUserRequestedJoin = { [weak self] notification in
             guard let self = self else { return }
             let eventContext = self.currentSocketEventContext()
@@ -1925,6 +1996,7 @@ final class MeetingViewModel {
             refreshAdminConfigQuietly()
             refreshBrowserState()
             refreshAppsState()
+            refreshGameState()
         } catch {
             guard isCurrentJoinAttempt(joinAttemptId) else {
                 await cleanupAbandonedJoinAttempt(cleanupMedia: true, joinAttemptId: joinAttemptId)
@@ -2004,6 +2076,7 @@ final class MeetingViewModel {
         state.webinarSpeakerUserId = nil
         clearBrowserState()
         clearAppsState()
+        clearGameState(clearCatalog: false)
         clearReactions()
         stopTtsPlayback()
     }
@@ -2061,6 +2134,44 @@ final class MeetingViewModel {
     func bufferPendingAppsState(_ notification: AppsStateNotification) {
         guard isCurrentRoomEvent(notification.roomId) else { return }
         pendingAppsState = notification
+    }
+
+    func bufferPendingGameSnapshot(_ snapshot: GameStateResponse) {
+        guard isCurrentRoomEvent(roomId(for: snapshot)) else { return }
+        pendingGameSnapshot = snapshot
+        pendingGamePublicState = nil
+        pendingGameEnded = nil
+        pendingGameVote = nil
+        pendingGameVoteClear = false
+    }
+
+    func bufferPendingGamePublicState(_ notification: GamePublicState) {
+        guard isCurrentRoomEvent(notification.roomId) else { return }
+        pendingGamePublicState = notification
+        pendingGameSnapshot = nil
+        pendingGameEnded = nil
+    }
+
+    func bufferPendingGamePlayerView(_ notification: GamePlayerViewNotification) {
+        guard isCurrentRoomEvent(notification.roomId) else { return }
+        pendingGamePlayerView = notification
+        pendingGameEnded = nil
+    }
+
+    func bufferPendingGameEnded(_ notification: GameEndedNotification) {
+        guard isCurrentRoomEvent(notification.roomId) else { return }
+        pendingGameEnded = notification
+        pendingGameSnapshot = nil
+        pendingGamePublicState = nil
+        pendingGamePlayerView = nil
+        pendingGameVote = nil
+        pendingGameVoteClear = true
+    }
+
+    func bufferPendingGameVote(_ vote: GameVoteState?) {
+        guard isCurrentRoomEvent(vote?.roomId) else { return }
+        pendingGameVote = vote
+        pendingGameVoteClear = vote == nil
     }
 
     func bufferPendingWebinarFeedChanged(_ notification: WebinarFeedChangedNotification) {
@@ -2229,6 +2340,12 @@ final class MeetingViewModel {
         let appsState = includeDeferredRoomState ? pendingAppsState : nil
         let appsYjsUpdates = includeDeferredRoomState ? pendingAppsYjsUpdates : []
         let appsAwarenessUpdates = includeDeferredRoomState ? pendingAppsAwarenessUpdates : []
+        let gameSnapshot = includeDeferredRoomState ? pendingGameSnapshot : nil
+        let gamePublicState = includeDeferredRoomState ? pendingGamePublicState : nil
+        let gamePlayerView = includeDeferredRoomState ? pendingGamePlayerView : nil
+        let gameEnded = includeDeferredRoomState ? pendingGameEnded : nil
+        let gameVote = includeDeferredRoomState ? pendingGameVote : nil
+        let shouldClearGameVote = includeDeferredRoomState && pendingGameVoteClear
         guard displayNameSnapshot != nil ||
             !rosterEvents.isEmpty ||
             !waitingRoomEvents.isEmpty ||
@@ -2242,7 +2359,13 @@ final class MeetingViewModel {
             browserClosed != nil ||
             appsState != nil ||
             !appsYjsUpdates.isEmpty ||
-            !appsAwarenessUpdates.isEmpty else { return }
+            !appsAwarenessUpdates.isEmpty ||
+            gameSnapshot != nil ||
+            gamePublicState != nil ||
+            gamePlayerView != nil ||
+            gameEnded != nil ||
+            gameVote != nil ||
+            shouldClearGameVote else { return }
 
         pendingDisplayNameSnapshot = nil
         if includeDeferredRoomState {
@@ -2266,6 +2389,12 @@ final class MeetingViewModel {
             pendingAppsState = nil
             pendingAppsYjsUpdates.removeAll()
             pendingAppsAwarenessUpdates.removeAll()
+            pendingGameSnapshot = nil
+            pendingGamePublicState = nil
+            pendingGamePlayerView = nil
+            pendingGameEnded = nil
+            pendingGameVote = nil
+            pendingGameVoteClear = false
         }
 
         if let displayNameSnapshot {
@@ -2319,6 +2448,24 @@ final class MeetingViewModel {
         for update in appsAwarenessUpdates {
             applyAppsAwareness(update)
         }
+        if let gameEnded {
+            applyGameEnded(gameEnded)
+        } else {
+            if let gameSnapshot {
+                applyGameSnapshot(gameSnapshot)
+            }
+            if let gamePublicState {
+                applyGamePublicState(gamePublicState)
+            }
+            if let gamePlayerView {
+                applyGamePlayerView(gamePlayerView)
+            }
+            if shouldClearGameVote {
+                applyGameVote(nil)
+            } else if let gameVote {
+                applyGameVote(gameVote)
+            }
+        }
         if let webinarFeedChanged {
             await applyWebinarFeedChanged(webinarFeedChanged, context: currentSocketEventContext())
         }
@@ -2347,6 +2494,12 @@ final class MeetingViewModel {
         pendingAppsState = nil
         pendingAppsYjsUpdates.removeAll()
         pendingAppsAwarenessUpdates.removeAll()
+        pendingGameSnapshot = nil
+        pendingGamePublicState = nil
+        pendingGamePlayerView = nil
+        pendingGameEnded = nil
+        pendingGameVote = nil
+        pendingGameVoteClear = false
     }
 
     private func isCurrentJoinAttempt(_ joinAttemptId: UUID?) -> Bool {
@@ -2391,6 +2544,10 @@ final class MeetingViewModel {
             aliases.insert(resolvedRoomId)
         }
         return aliases
+    }
+
+    private func roomId(for snapshot: GameStateResponse) -> String? {
+        snapshot.publicState?.roomId ?? snapshot.vote?.roomId
     }
 
     private func isCurrentRoomEvent(_ roomId: String?) -> Bool {
@@ -3934,6 +4091,76 @@ final class MeetingViewModel {
         clearAppSyncState()
     }
 
+    private func applyGameSnapshot(_ snapshot: GameStateResponse) {
+        guard isCurrentRoomEvent(roomId(for: snapshot)) else { return }
+        state.gamePublicState = snapshot.active ? snapshot.publicState : nil
+        if snapshot.active,
+           let gameId = snapshot.publicState?.gameId {
+            state.gamePlayerView = GamePlayerViewNotification(
+                gameId: gameId,
+                view: snapshot.view,
+                roomId: roomId(for: snapshot)
+            )
+        } else {
+            state.gamePlayerView = nil
+        }
+        state.gameVote = snapshot.vote
+        state.isGameActionInFlight = false
+        state.gameErrorMessage = nil
+    }
+
+    private func applyGamePublicState(_ notification: GamePublicState) {
+        guard isCurrentRoomEvent(notification.roomId) else { return }
+        if notification.finished {
+            state.gamePublicState = nil
+            state.gamePlayerView = nil
+        } else {
+            state.gamePublicState = notification
+            if state.gamePlayerView?.gameId != notification.gameId {
+                state.gamePlayerView = nil
+            }
+        }
+        state.isGameActionInFlight = false
+        state.gameErrorMessage = nil
+    }
+
+    private func applyGamePlayerView(_ notification: GamePlayerViewNotification) {
+        guard isCurrentRoomEvent(notification.roomId),
+              state.gamePublicState?.gameId == notification.gameId else { return }
+        state.gamePlayerView = notification
+        state.isGameActionInFlight = false
+        state.gameErrorMessage = nil
+    }
+
+    private func applyGameVote(_ vote: GameVoteState?) {
+        guard isCurrentRoomEvent(vote?.roomId) else { return }
+        state.gameVote = vote
+        state.isGameActionInFlight = false
+        if vote != nil {
+            state.gameErrorMessage = nil
+        }
+    }
+
+    private func applyGameEnded(_ notification: GameEndedNotification) {
+        guard isCurrentRoomEvent(notification.roomId) else { return }
+        if let gameId = notification.gameId,
+           state.gamePublicState?.gameId != gameId {
+            return
+        }
+        clearGameState(clearCatalog: false)
+    }
+
+    private func clearGameState(clearCatalog: Bool = true) {
+        if clearCatalog {
+            state.gameCatalog.removeAll()
+        }
+        state.gamePublicState = nil
+        state.gamePlayerView = nil
+        state.gameVote = nil
+        state.isGameActionInFlight = false
+        state.gameErrorMessage = nil
+    }
+
     private func clearAppSyncState() {
         activeAppSyncTask?.cancel()
         activeAppSyncTask = nil
@@ -4999,6 +5226,7 @@ final class MeetingViewModel {
         refreshAdminConfigQuietly()
         refreshBrowserState()
         refreshAppsState()
+        refreshGameState()
     }
 
     private func handleRedirect(_ notification: RedirectNotification) async {
@@ -6120,6 +6348,7 @@ final class MeetingViewModel {
         state.webinarSpeakerUserId = nil
         clearBrowserState()
         clearAppsState()
+        clearGameState(clearCatalog: false)
         state.isGhostMode = false
         state.isChatOpen = false
         state.roomId = ""
@@ -8164,6 +8393,162 @@ final class MeetingViewModel {
                 debugLog("[Meeting] Apps state refresh skipped: \(error.localizedDescription)")
             }
         }
+    }
+
+    func refreshGameState() {
+        guard state.connectionState == .joined,
+              !state.isWebinarAttendee else { return }
+        let actionContext = currentCallActionContext()
+
+        Task {
+            guard isCurrentJoinedCall(actionContext) else { return }
+            do {
+                let catalog = try await socketManager.getGameCatalog()
+                let snapshot = try await socketManager.getGameState()
+                guard isCurrentJoinedCall(actionContext) else { return }
+                state.gameCatalog = catalog
+                applyGameSnapshot(snapshot)
+            } catch {
+                guard isCurrentJoinedCall(actionContext) else { return }
+                state.isGameActionInFlight = false
+                debugLog("[Meeting] Game state refresh skipped: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    func startGame(_ game: GameCatalogEntry, options: [String: GameConfigValue] = [:]) {
+        performGameAction(requiresAdmin: true) {
+            try await self.socketManager.startGame(
+                gameId: game.id,
+                options: options.isEmpty ? nil : options
+            )
+        }
+    }
+
+    func endActiveGame() {
+        performGameAction(requiresAdmin: true) {
+            try await self.socketManager.endGame()
+        }
+    }
+
+    func openGameVote(candidateIds: [String]? = nil) {
+        performGameAction(requiresAdmin: true) {
+            try await self.socketManager.openGameVote(candidateIds: candidateIds)
+        }
+    }
+
+    func castGameVote(gameId: String) {
+        performGameAction(requiresAdmin: false) {
+            try await self.socketManager.castGameVote(gameId: gameId)
+        }
+    }
+
+    func cancelGameVote() {
+        performGameAction(requiresAdmin: true) {
+            try await self.socketManager.cancelGameVote()
+        }
+    }
+
+    func sendGameMove(type: String, payload: GameJSONValue? = nil) {
+        guard let gameId = state.gamePublicState?.gameId else { return }
+        performGameMove(gameId: gameId, type: type, payload: payload)
+    }
+
+    private func performGameAction(
+        requiresAdmin: Bool,
+        operation: @escaping () async throws -> GameActionResponse
+    ) {
+        guard state.connectionState == .joined,
+              !state.isWebinarAttendee,
+              !state.isGameActionInFlight,
+              !requiresAdmin || state.isAdmin else { return }
+        let actionContext = currentCallActionContext()
+        state.isGameActionInFlight = true
+        state.gameErrorMessage = nil
+
+        Task {
+            defer {
+                if isSameCallContext(actionContext) {
+                    state.isGameActionInFlight = false
+                }
+            }
+            guard isCurrentJoinedCall(actionContext) else { return }
+            do {
+                let response = try await operation()
+                guard isCurrentJoinedCall(actionContext) else { return }
+                try validateGameActionResponse(response)
+                refreshGameState()
+            } catch {
+                guard isSameCallContext(actionContext) else { return }
+                state.gameErrorMessage = gameActionErrorMessage(error)
+            }
+        }
+    }
+
+    private func performGameMove(gameId: String, type: String, payload: GameJSONValue?) {
+        let trimmedGameId = gameId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedType = type.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard state.connectionState == .joined,
+              !state.isWebinarAttendee,
+              !state.isGhostMode,
+              !state.isGameActionInFlight,
+              !trimmedGameId.isEmpty,
+              !trimmedType.isEmpty,
+              state.gamePublicState.map({ state.hasLocalGamePlayer(in: $0.players) }) == true else { return }
+        let actionContext = currentCallActionContext()
+        state.isGameActionInFlight = true
+        state.gameErrorMessage = nil
+
+        Task {
+            defer {
+                if isSameCallContext(actionContext) {
+                    state.isGameActionInFlight = false
+                }
+            }
+            guard isCurrentJoinedCall(actionContext) else { return }
+            do {
+                let response = try await socketManager.sendGameMove(
+                    gameId: trimmedGameId,
+                    type: trimmedType,
+                    payload: payload
+                )
+                guard isCurrentJoinedCall(actionContext) else { return }
+                try validateGameMoveResponse(response)
+            } catch {
+                guard isSameCallContext(actionContext) else { return }
+                state.gameErrorMessage = gameActionErrorMessage(error)
+            }
+        }
+    }
+
+    private func validateGameActionResponse(_ response: GameActionResponse) throws {
+        if response.success == false {
+            let message = response.error?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let resolvedMessage: String
+            if let message, !message.isEmpty {
+                resolvedMessage = message
+            } else {
+                resolvedMessage = "Game action failed."
+            }
+            throw MeetingActionResponseError(
+                message: resolvedMessage
+            )
+        }
+    }
+
+    private func validateGameMoveResponse(_ response: GameMoveResponse) throws {
+        if response.success == false {
+            let message = response.error?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let resolvedMessage = message?.isEmpty == false ? message! : "Game move failed."
+            throw MeetingActionResponseError(
+                message: resolvedMessage
+            )
+        }
+    }
+
+    private func gameActionErrorMessage(_ error: Error) -> String {
+        let rawMessage = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+        return rawMessage.isEmpty ? "Game action failed." : rawMessage
     }
 
     private func requireActiveAppRuntimeId() throws -> String {

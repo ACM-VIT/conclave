@@ -36,6 +36,11 @@ final class SocketIOManager {
     var onAppsState: ((AppsStateNotification) -> Void)?
     var onAppsYjsUpdate: ((AppsYjsUpdateNotification) -> Void)?
     var onAppsAwareness: ((AppsAwarenessNotification) -> Void)?
+    var onGameState: ((GamePublicState) -> Void)?
+    var onGameView: ((GamePlayerViewNotification) -> Void)?
+    var onGameSnapshot: ((GameStateResponse) -> Void)?
+    var onGameEnded: ((GameEndedNotification) -> Void)?
+    var onGameVote: ((GameVoteState?) -> Void)?
 
     var onUserJoined: ((UserJoinedNotification) -> Void)?
     var onUserLeft: ((UserLeftNotification) -> Void)?
@@ -242,6 +247,46 @@ final class SocketIOManager {
     }
     func sendAppYjsUpdate(appId: String, update: Data) { }
     func sendAppAwareness(appId: String, awarenessUpdate: Data, clientId: Int? = nil) { }
+    func getGameCatalog() async throws -> [GameCatalogEntry] { [] }
+    func getGameState() async throws -> GameStateResponse {
+        GameStateResponse(active: false, publicState: nil, view: nil, vote: nil)
+    }
+    func startGame(gameId: String, options: [String: GameConfigValue]? = nil) async throws -> GameActionResponse {
+        GameActionResponse(success: true, gameId: gameId, error: nil)
+    }
+    func endGame() async throws -> GameActionResponse {
+        GameActionResponse(success: true, gameId: nil, error: nil)
+    }
+    func sendGameMove(gameId: String, type: String, payload: GameJSONValue? = nil) async throws -> GameMoveResponse {
+        GameMoveResponse(success: true, error: nil)
+    }
+    func openGameVote(candidateIds: [String]? = nil) async throws -> GameActionResponse {
+        GameActionResponse(success: true, gameId: nil, error: nil)
+    }
+    func castGameVote(gameId: String) async throws -> GameActionResponse {
+        GameActionResponse(success: true, gameId: gameId, error: nil)
+    }
+    func cancelGameVote() async throws -> GameActionResponse {
+        GameActionResponse(success: true, gameId: nil, error: nil)
+    }
+    func getTranscriptToken() async throws -> TranscriptTokenResponse {
+        TranscriptTokenResponse(
+            roomId: "",
+            workerUrl: "",
+            token: "",
+            expiresAt: 0,
+            capabilities: TranscriptTokenCapabilities(start: false, takeover: false, stop: false, ask: false, relayAudio: false)
+        )
+    }
+    func getTranscriptSfuRelayStatus() async throws -> TranscriptSfuRelayStatusResponse {
+        TranscriptSfuRelayStatusResponse(mode: "sfu", status: "unsupported", available: false, reason: nil, updatedAt: 0)
+    }
+    func startTranscriptSfuRelay(relayStartToken: String) async throws -> TranscriptSfuRelayStartResponse {
+        TranscriptSfuRelayStartResponse(mode: "sfu", success: false, status: "unsupported", reason: nil, updatedAt: 0)
+    }
+    func stopTranscriptSfuRelay() async throws -> TranscriptSfuRelayStopResponse {
+        TranscriptSfuRelayStopResponse(success: true)
+    }
     func admitUser(userId: String) async throws { }
     func rejectUser(userId: String) async throws { }
     func admitAllPending() async throws { }

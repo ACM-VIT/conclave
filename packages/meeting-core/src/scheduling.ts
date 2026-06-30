@@ -8,6 +8,12 @@ export type SchedulingSyncStatus =
   | "synced"
   | "failed";
 
+export type SchedulingEmailNotificationStatus =
+  | "not_configured"
+  | "pending"
+  | "sent"
+  | "failed";
+
 export type SchedulingCalendarProvider = "google";
 
 export type SchedulingCalendarStatus =
@@ -117,4 +123,5 @@ export interface BookingConfirmation {
   attendeeEmail: string;
   calendarEventId: string | null;
   syncStatus: SchedulingSyncStatus;
+  emailNotificationStatus: SchedulingEmailNotificationStatus;
 }

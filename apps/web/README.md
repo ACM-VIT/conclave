@@ -5,6 +5,8 @@ Development
 - Start dev server: `pnpm -C apps/web run dev`
 - Start transcript worker locally: `pnpm -C apps/web run transcript:dev`
 - Run transcript worker typecheck: `pnpm -C apps/web run transcript:typecheck`
+- Start scheduling email worker locally: `pnpm -C apps/web run scheduling-email:dev`
+- Run scheduling email worker typecheck: `pnpm -C apps/web run scheduling-email:typecheck`
 - Run web unit tests: `pnpm -C apps/web run test:unit`
 
 Integration notes
@@ -59,3 +61,32 @@ Cloudflare main-branch linking:
 - Required Cloudflare secret: `TRANSCRIPT_TOKEN_SECRET`
 - Optional Cloudflare secrets for free room-wide transcript starts: `OPENAI_API_KEY`, `SARVAM_API_KEY`
 - Branch: `main`
+
+## Scheduling email worker
+
+Scheduling confirmations and reminders are rendered with React Email in
+`packages/sfu/server/email/` and delivered through a Cloudflare Email Service
+Worker in `scheduling-email-worker/`. The SFU calls the signed worker endpoint
+after a booking is persisted and optional Google Calendar sync has completed.
+Google Calendar event creation uses `sendUpdates=none`; the Worker owns attendee
+and host email for all booking-link meetings.
+
+Required production configuration:
+- Cloudflare Email Routing/Email Service must verify `scheduling@conclave.acmvit.in`.
+- Worker secret: `SCHEDULING_EMAIL_WORKER_SECRET`, set with `pnpm -C apps/web exec wrangler secret put SCHEDULING_EMAIL_WORKER_SECRET --config wrangler.scheduling-email.jsonc`.
+- SFU env: `SCHEDULING_EMAIL_WORKER_URL=https://scheduling-email.conclave.acmvit.in`.
+- SFU env: `SCHEDULING_EMAIL_WORKER_SECRET=<same secret as the Worker>`.
+
+Optional SFU configuration:
+- `SCHEDULING_EMAIL_ENABLED=0`: disables scheduling email delivery.
+- `SCHEDULING_EMAIL_TIMEOUT_MS`: worker request timeout, default `8000`.
+- `SCHEDULING_EMAIL_REMINDERS_ENABLED=0`: disables reminder email delivery.
+- `SCHEDULING_EMAIL_REMINDER_MINUTES`: reminder lead time, default `30`.
+- React Email preview: `pnpm -C packages/sfu run email:dev`.
+
+Deployment and verification:
+- Production Worker name: `conclave-scheduling-email`
+- Production Worker domain: `https://scheduling-email.conclave.acmvit.in`
+- Dry-run deploy: `pnpm -C apps/web exec wrangler deploy --config wrangler.scheduling-email.jsonc --dry-run`
+- Deploy: `pnpm -C apps/web run scheduling-email:deploy`
+- Required gates: `pnpm -C apps/web run scheduling-email:typecheck`, `pnpm -C packages/sfu run typecheck`, and `pnpm run typecheck`.

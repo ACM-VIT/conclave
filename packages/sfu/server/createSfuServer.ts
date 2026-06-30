@@ -14,6 +14,7 @@ import {
   advanceScheduledMeetings,
   persistScheduledMeetingChanges,
 } from "./scheduledMeetings.js";
+import { sendDueSchedulingEmailReminders } from "./schedulingEmailReminders.js";
 import { createSfuApp } from "./http/createApp.js";
 import {
   startScheduledWebinarTimer,
@@ -95,6 +96,9 @@ export const createSfuServer = (
           Logger.warn("Failed to persist scheduled-meeting tick", error);
         });
       }
+      sendDueSchedulingEmailReminders(state).catch((error) => {
+        Logger.warn("Failed to send scheduling reminders", error);
+      });
     }, 5000);
 
     if (scheduledMeetingTickTimer.unref) {

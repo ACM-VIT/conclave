@@ -45,6 +45,12 @@ export type SchedulingBookingsResponse = {
     scheduledEndAt: number;
     googleCalendarEventId?: string | null;
     calendarSyncStatus?: string;
+    emailNotificationStatus?: string;
+    emailNotificationError?: string | null;
+    emailNotificationSentAt?: number | null;
+    emailReminderStatus?: string;
+    emailReminderError?: string | null;
+    emailReminderSentAt?: number | null;
   }>;
 };
 
@@ -73,4 +79,3 @@ export const buildPublicSchedulingHeaders = (request?: Request): Headers => {
 };
 
 export const readSchedulingError = readScheduledMeetingError;
-

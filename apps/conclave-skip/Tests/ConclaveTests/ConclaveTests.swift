@@ -8,8 +8,233 @@ final class ConclaveTests: XCTestCase {
     func testNativeSfuClientEventsIncludeConsumerClose() throws {
         XCTAssertEqual(SfuClientEvent.closeConsumer.rawValue, "closeConsumer")
         XCTAssertEqual(SfuClientEvent.adminSetPolicies.rawValue, "admin:setPolicies")
+        XCTAssertEqual(SfuClientEvent.gameStart.rawValue, "game:start")
+        XCTAssertEqual(SfuClientEvent.gameVoteOpen.rawValue, "game:vote:open")
+        XCTAssertEqual(SfuClientEvent.transcriptGetToken.rawValue, "transcript:getToken")
+        XCTAssertEqual(SfuClientEvent.transcriptSfuRelayStatus.rawValue, "transcript:sfuRelayStatus")
+        XCTAssertEqual(SfuClientEvent.transcriptSfuRelayStart.rawValue, "transcript:sfuRelayStart")
+        XCTAssertEqual(SfuClientEvent.transcriptSfuRelayStop.rawValue, "transcript:sfuRelayStop")
         XCTAssertEqual(SfuServerEvent.participantConnectionState.rawValue, "participantConnectionState")
         XCTAssertEqual(SfuServerEvent.webinarParticipantJoined.rawValue, "webinar:participantJoined")
+        XCTAssertEqual(SfuServerEvent.gameView.rawValue, "game:view")
+        XCTAssertEqual(SfuServerEvent.gameSnapshot.rawValue, "game:snapshot")
+    }
+
+    func testNativeTranscriptRelayWireModelsDecodeWebSfuAcks() throws {
+        let token = try JSONDecoder().decode(TranscriptTokenResponse.self, from: Data("""
+        {
+          "roomId": "room-a",
+          "workerUrl": "wss://conclave.acmvit.in/transcript",
+          "token": "tok_123",
+          "expiresAt": 1781047107221,
+          "capabilities": {
+            "start": true,
+            "takeover": false,
+            "stop": true,
+            "ask": true,
+            "relayAudio": true
+          }
+        }
+        """.utf8))
+        let status = try JSONDecoder().decode(TranscriptSfuRelayStatusResponse.self, from: Data("""
+        { "mode": "sfu", "status": "available", "available": true, "updatedAt": 1781047107222 }
+        """.utf8))
+        let start = try JSONDecoder().decode(TranscriptSfuRelayStartResponse.self, from: Data("""
+        { "mode": "sfu", "success": true, "status": "available", "updatedAt": 1781047107223 }
+        """.utf8))
+        let stop = try JSONDecoder().decode(TranscriptSfuRelayStopResponse.self, from: Data("""
+        { "success": true }
+        """.utf8))
+
+        XCTAssertEqual(token.roomId, "room-a")
+        XCTAssertEqual(token.capabilities.relayAudio, true)
+        XCTAssertEqual(status.status, "available")
+        XCTAssertTrue(status.available)
+        XCTAssertTrue(start.success)
+        XCTAssertTrue(stop.success)
+    }
+
+    func testNativeGameWireModelsDecodeServerShapes() throws {
+        let json = """
+        {
+          "active": true,
+          "public": {
+            "gameId": "trivia",
+            "name": "Trivia",
+            "phase": "question",
+            "players": [{ "id": "u1", "name": "Ishaan" }],
+            "hostId": "u1",
+            "view": { "round": 1 },
+            "finished": false,
+            "hasLeaderboard": true
+          },
+          "view": { "answer": "hidden" },
+          "vote": {
+            "candidates": [{
+              "id": "trivia",
+              "name": "Trivia",
+              "description": "Quick quiz",
+              "minPlayers": 2,
+              "maxPlayers": 12,
+              "options": [{ "id": "rounds", "type": "number", "label": "Rounds", "min": 1, "max": 10, "default": 3 }],
+              "hasLeaderboard": true
+            }],
+            "tally": { "trivia": 1 },
+            "votes": { "u1": "trivia" },
+            "totalPlayers": 1
+          }
+        }
+        """
+
+        let response = try JSONDecoder().decode(GameStateResponse.self, from: Data(json.utf8))
+
+        XCTAssertTrue(response.active)
+        XCTAssertEqual(response.publicState?.gameId, "trivia")
+        XCTAssertEqual(response.publicState?.players.first?.name, "Ishaan")
+        XCTAssertEqual(response.publicState?.view?.int("round"), 1)
+        XCTAssertEqual(response.view?.string("answer"), "hidden")
+        XCTAssertEqual(response.vote?.tally["trivia"], 1)
+        XCTAssertEqual(response.vote?.candidates.first?.options.first?.defaultConfigValue.numberValue, 3)
+    }
+
+    func testNativeGameViewAndMovePayloadWireModelsPreserveObjects() throws {
+        let notification = try JSONDecoder().decode(GamePlayerViewNotification.self, from: Data("""
+        {
+          "gameId": "trivia",
+          "view": { "answered": true, "choice": 2, "score": 700 }
+        }
+        """.utf8))
+
+        XCTAssertEqual(notification.gameId, "trivia")
+        XCTAssertEqual(notification.view?.bool("answered"), true)
+        XCTAssertEqual(notification.view?.int("choice"), 2)
+        XCTAssertEqual(notification.view?.int("score"), 700)
+
+        let request = GameMoveRequest(
+            gameId: "trivia",
+            type: "answer",
+            payload: GameJSONValue.object(["choice": 2])
+        )
+        let encoded = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(request)) as? NSDictionary)
+        let payload = try XCTUnwrap(encoded["payload"] as? NSDictionary)
+
+        XCTAssertEqual(encoded["gameId"] as? String, "trivia")
+        XCTAssertEqual(encoded["type"] as? String, "answer")
+        XCTAssertEqual((payload["choice"] as? NSNumber)?.intValue, 2)
+    }
+
+    @MainActor
+    func testNativeGamePlayerIdentityAcceptsSfuAndSessionAliases() throws {
+        let state = MeetingState(
+            userId: "local@example.com#native-session",
+            sessionId: "native-session"
+        )
+        state.sfuUserId = "local@example.com"
+
+        XCTAssertTrue(state.hasLocalGamePlayer(in: [
+            GamePlayer(id: "local@example.com", name: "Local")
+        ]))
+        XCTAssertTrue(state.hasLocalGamePlayer(in: [
+            GamePlayer(id: "local@example.com#native-session", name: "Local")
+        ]))
+        XCTAssertFalse(state.hasLocalGamePlayer(in: [
+            GamePlayer(id: "local@example.com#other-session", name: "Other session")
+        ]))
+        XCTAssertFalse(state.hasLocalGamePlayer(in: [
+            GamePlayer(id: "remote@example.com", name: "Remote")
+        ]))
+    }
+
+    @MainActor
+    func testNativeGameVoteIdentityAcceptsSfuAndSessionAliases() throws {
+        let state = MeetingState(
+            userId: "local@example.com#native-session",
+            sessionId: "native-session"
+        )
+        state.sfuUserId = "local@example.com"
+
+        XCTAssertEqual(
+            state.localGameVoteId(in: GameVoteState(
+                candidates: [],
+                tally: [:],
+                votes: ["local@example.com": "trivia"],
+                totalPlayers: 1,
+                roomId: nil
+            )),
+            "trivia"
+        )
+        XCTAssertEqual(
+            state.localGameVoteId(in: GameVoteState(
+                candidates: [],
+                tally: [:],
+                votes: ["local@example.com#native-session": "reaction"],
+                totalPlayers: 1,
+                roomId: nil
+            )),
+            "reaction"
+        )
+        XCTAssertNil(state.localGameVoteId(in: GameVoteState(
+            candidates: [],
+            tally: [:],
+            votes: ["local@example.com#other-session": "bluff"],
+            totalPlayers: 1,
+            roomId: nil
+        )))
+    }
+
+    func testNativeGameConfigDraftPolicyMatchesWebLauncherDefaults() throws {
+        let game = GameCatalogEntry(
+            id: "trivia",
+            name: "Trivia",
+            description: "Quick-fire quiz",
+            minPlayers: 1,
+            maxPlayers: 24,
+            options: [
+                GameOptionSpec(
+                    id: "questions",
+                    type: "number",
+                    label: "Questions",
+                    min: 3,
+                    max: 15,
+                    defaultNumber: 7,
+                    presets: [5, 7, 10]
+                ),
+                GameOptionSpec(
+                    id: "pace",
+                    type: "select",
+                    label: "Pace",
+                    defaultString: "normal",
+                    choices: [
+                        GameOptionChoice(value: "relaxed", label: "Relaxed"),
+                        GameOptionChoice(value: "normal", label: "Normal"),
+                        GameOptionChoice(value: "fast", label: "Fast")
+                    ]
+                ),
+                GameOptionSpec(
+                    id: "topic",
+                    type: "text",
+                    label: "Topic",
+                    defaultString: "",
+                    placeholder: "Anything",
+                    maxLength: 10
+                )
+            ],
+            hasLeaderboard: true
+        )
+
+        let initial = GameConfigDraftPolicy.initialDrafts(for: game)
+        let resolved = GameConfigDraftPolicy.resolvedOptions(for: game, drafts: [
+            "questions": GameConfigValue.number(99),
+            "pace": GameConfigValue.string("invalid"),
+            "topic": GameConfigValue.string("  production design  ")
+        ])
+
+        XCTAssertEqual(initial["questions"]?.numberValue, 7)
+        XCTAssertEqual(initial["pace"]?.stringValue, "normal")
+        XCTAssertEqual(initial["topic"]?.stringValue, "")
+        XCTAssertEqual(resolved["questions"]?.numberValue, 15)
+        XCTAssertEqual(resolved["pace"]?.stringValue, "normal")
+        XCTAssertEqual(resolved["topic"]?.stringValue, "production")
     }
 
 #if !SKIP
