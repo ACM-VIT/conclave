@@ -68,7 +68,8 @@ final class WebRTCClient {
         ConnectionQualitySample(
             publishQuality: .unknown,
             receiveQuality: .unknown,
-            overallQuality: .unknown
+            overallQuality: .unknown,
+            screenSharePublishQuality: .unknown
         )
     }
     func consumerId(forProducer producerId: String) -> String? { nil }

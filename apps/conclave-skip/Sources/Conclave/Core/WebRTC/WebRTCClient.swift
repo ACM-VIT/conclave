@@ -1956,6 +1956,10 @@ final class WebRTCClient: NSObject, ObservableObject {
             producer.resume()
             screenProducer = producer
             screenProducerBandwidthQuality = connectionQuality
+            ScreenCaptureManager.shared.updateMaxFrameRate(
+                screenShareEncodingCap(connectionQuality: connectionQuality).maxFramerate
+            )
+            resetScreenFrameLimiter()
 
             do {
                 try await socketManager.closeProducer(producerId: oldProducer.id)
@@ -1978,9 +1982,9 @@ final class WebRTCClient: NSObject, ObservableObject {
     }
 
     private func shouldRefreshScreenProducerForBandwidthProfile(_ connectionQuality: ConnectionQuality) -> Bool {
-        guard connectionQuality != .unknown, connectionQuality != .good else { return false }
+        guard connectionQuality != .unknown else { return false }
         guard screenProducer != nil, rtcScreenTrack != nil else { return false }
-        return connectionQualityRank(connectionQuality) > connectionQualityRank(screenProducerBandwidthQuality)
+        return connectionQuality != screenProducerBandwidthQuality
     }
 
     private func connectionQualityRank(_ quality: ConnectionQuality) -> Int {
@@ -2264,7 +2268,8 @@ final class WebRTCClient: NSObject, ObservableObject {
             return ConnectionQualitySample(
                 publishQuality: .unknown,
                 receiveQuality: .unknown,
-                overallQuality: .unknown
+                overallQuality: .unknown,
+                screenSharePublishQuality: .unknown
             )
         }
 
@@ -2350,10 +2355,15 @@ final class WebRTCClient: NSObject, ObservableObject {
             receiveTransportQuality,
             receiveBandwidthQuality
         )
+        let screenSharePublishQuality = ScreenSharePublishProfilePolicy.quality(
+            availableOutgoingBitrate: publish.availableBitrate,
+            emergencyMode: publishQuality == .emergency
+        )
         return ConnectionQualitySample(
             publishQuality: publishQuality,
             receiveQuality: receiveQuality,
-            overallQuality: Self.worstConnectionQuality(publishQuality, receiveQuality)
+            overallQuality: Self.worstConnectionQuality(publishQuality, receiveQuality),
+            screenSharePublishQuality: screenSharePublishQuality
         )
     }
 

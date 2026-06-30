@@ -621,6 +621,44 @@ final class ConclaveTests: XCTestCase {
         )
     }
 
+    func testScreenSharePublishProfilePolicyMatchesWebThresholds() throws {
+        XCTAssertEqual(
+            ScreenSharePublishProfilePolicy.quality(availableOutgoingBitrate: nil),
+            ConnectionQuality.unknown
+        )
+        XCTAssertEqual(
+            ScreenSharePublishProfilePolicy.quality(availableOutgoingBitrate: 0),
+            ConnectionQuality.unknown
+        )
+        XCTAssertEqual(
+            ScreenSharePublishProfilePolicy.quality(availableOutgoingBitrate: 280_000),
+            ConnectionQuality.emergency
+        )
+        XCTAssertEqual(
+            ScreenSharePublishProfilePolicy.quality(availableOutgoingBitrate: 550_000),
+            ConnectionQuality.poor
+        )
+        XCTAssertEqual(
+            ScreenSharePublishProfilePolicy.quality(availableOutgoingBitrate: 1_500_000),
+            ConnectionQuality.fair
+        )
+        XCTAssertEqual(
+            ScreenSharePublishProfilePolicy.quality(availableOutgoingBitrate: 1_500_001),
+            ConnectionQuality.good
+        )
+        XCTAssertEqual(
+            ScreenSharePublishProfilePolicy.quality(
+                availableOutgoingBitrate: 4_000_000,
+                emergencyMode: true
+            ),
+            ConnectionQuality.emergency
+        )
+        XCTAssertEqual(
+            ScreenSharePublishProfilePolicy.mostConstrained(ConnectionQuality.good, ConnectionQuality.fair),
+            ConnectionQuality.fair
+        )
+    }
+
     func testJoinCompactPreviewLayoutKeepsTallScreensSpaciousAndShortScreensFitted() throws {
         let tallHeight = JoinCompactPreviewLayoutPolicy.height(
             containerHeight: 844,
@@ -6587,6 +6625,11 @@ final class ConclaveTests: XCTestCase {
         let source = try sourceFileContents("Sources/Conclave/Skip/WebRTCClient+Android.kt")
 
         XCTAssertTrue(source.contains("private data class ScreenShareCaptureProfile("))
+        XCTAssertTrue(source.contains("private val screenShareOutgoingFairBps = 1_500_000.0"))
+        XCTAssertTrue(source.contains("private val screenShareOutgoingPoorBps = 550_000.0"))
+        XCTAssertTrue(source.contains("private val screenShareOutgoingEmergencyBps = 280_000.0"))
+        XCTAssertTrue(source.contains("private fun deriveScreenSharePublishQuality("))
+        XCTAssertTrue(source.contains("screenSharePublishQuality = screenSharePublishQuality"))
         XCTAssertTrue(source.contains("maxWidth = 3840"))
         XCTAssertTrue(source.contains("maxHeight = 2160"))
         XCTAssertTrue(source.contains("maxWidth = 2560"))
@@ -6600,6 +6643,21 @@ final class ConclaveTests: XCTestCase {
         XCTAssertTrue(source.contains("sourceHeight.toDouble() / cap.maxHeight.toDouble()"))
         XCTAssertTrue(source.contains("capturer.startCapture(\n                capture.width,\n                capture.height,\n                capture.maxFramerate,"))
         XCTAssertTrue(source.contains("screenCapturer?.changeCaptureFormat(\n                    capture.width,\n                    capture.height,\n                    capture.maxFramerate,"))
+    }
+
+    func testNativeScreenShareUsesSeparatePublishNetworkProfile() throws {
+        let modelsSource = try sourceFileContents("Sources/Conclave/Core/Models/Models.swift")
+        let viewModelSource = try sourceFileContents("Sources/Conclave/Features/Meeting/MeetingViewModel.swift")
+        let iosWebRTCSource = try sourceFileContents("Sources/Conclave/Core/WebRTC/WebRTCClient.swift")
+        let androidWebRTCSource = try sourceFileContents("Sources/Conclave/Skip/WebRTCClient+Android.kt")
+
+        XCTAssertTrue(modelsSource.contains("let screenSharePublishQuality: ConnectionQuality"))
+        XCTAssertTrue(iosWebRTCSource.contains("ScreenSharePublishProfilePolicy.quality("))
+        XCTAssertTrue(viewModelSource.contains("private var screenSharePublishConnectionQuality: ConnectionQuality = .unknown"))
+        XCTAssertTrue(viewModelSource.contains("ScreenSharePublishProfilePolicy.mostConstrained("))
+        XCTAssertTrue(viewModelSource.contains("self.screenSharePublishConnectionQuality == quality"))
+        XCTAssertTrue(iosWebRTCSource.contains("ScreenCaptureManager.shared.updateMaxFrameRate(\n                screenShareEncodingCap(connectionQuality: connectionQuality).maxFramerate"))
+        XCTAssertTrue(androidWebRTCSource.contains("screenShareCaptureProfile(\n                metrics.widthPixels,\n                metrics.heightPixels,\n                connectionQuality,"))
     }
 
     func testBrowserStateClearTearsDownSystemMediaConsumers() throws {

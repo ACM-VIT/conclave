@@ -1959,6 +1959,20 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             nextProducer.resume()
             screenProducer = nextProducer
             screenProducerBandwidthQuality = connectionQuality
+            val metrics = ProcessInfo.processInfo.androidContext.resources.displayMetrics
+            val capture = screenShareCaptureProfile(
+                metrics.widthPixels,
+                metrics.heightPixels,
+                connectionQuality,
+            )
+            try {
+                screenCapturer?.changeCaptureFormat(
+                    capture.width,
+                    capture.height,
+                    capture.maxFramerate,
+                )
+            } catch (_: Throwable) {
+            }
 
             try {
                 socket.closeProducer(oldProducer.id)
@@ -3723,6 +3737,9 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     private val outgoingBandwidthFairBps = 500_000.0
     private val outgoingBandwidthPoorBps = 240_000.0
     private val outgoingBandwidthEmergencyBps = 120_000.0
+    private val screenShareOutgoingFairBps = 1_500_000.0
+    private val screenShareOutgoingPoorBps = 550_000.0
+    private val screenShareOutgoingEmergencyBps = 280_000.0
     private val incomingBandwidthFairBps = 500_000.0
     private val incomingBandwidthPoorBps = 240_000.0
     private val incomingBandwidthEmergencyBps = 120_000.0
@@ -3872,6 +3889,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
                 publishQuality = ConnectionQuality.unknown,
                 receiveQuality = ConnectionQuality.unknown,
                 overallQuality = ConnectionQuality.unknown,
+                screenSharePublishQuality = ConnectionQuality.unknown,
             )
         }
 
@@ -3955,10 +3973,15 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             receiveTransportQuality,
             receiveBandwidthQuality,
         )
+        val screenSharePublishQuality = deriveScreenSharePublishQuality(
+            availableBitrate = publish.availableBitrate,
+            emergencyMode = publishQuality == ConnectionQuality.emergency,
+        )
         return ConnectionQualitySample(
             publishQuality = publishQuality,
             receiveQuality = receiveQuality,
             overallQuality = worstConnectionQuality(publishQuality, receiveQuality),
+            screenSharePublishQuality = screenSharePublishQuality,
         )
     }
 
@@ -4211,6 +4234,27 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             return ConnectionQuality.poor
         }
         return ConnectionQuality.fair
+    }
+
+    private fun deriveScreenSharePublishQuality(
+        availableBitrate: Double?,
+        emergencyMode: Boolean,
+    ): ConnectionQuality {
+        if (emergencyMode) return ConnectionQuality.emergency
+        val bitrate = availableBitrate ?: return ConnectionQuality.unknown
+        if (bitrate <= 0.0 || bitrate.isNaN() || bitrate.isInfinite()) {
+            return ConnectionQuality.unknown
+        }
+        if (bitrate <= screenShareOutgoingEmergencyBps) {
+            return ConnectionQuality.emergency
+        }
+        if (bitrate <= screenShareOutgoingPoorBps) {
+            return ConnectionQuality.poor
+        }
+        if (bitrate <= screenShareOutgoingFairBps) {
+            return ConnectionQuality.fair
+        }
+        return ConnectionQuality.good
     }
 
     private fun isLowAvailableBitrate(

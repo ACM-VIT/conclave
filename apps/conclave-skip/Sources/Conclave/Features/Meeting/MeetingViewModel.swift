@@ -502,6 +502,7 @@ final class MeetingViewModel {
     private var networkMonitorReportsOffline = false
     private var networkQualityHint: ConnectionQuality = .unknown
     private var publishConnectionQuality: ConnectionQuality = .unknown
+    private var screenSharePublishConnectionQuality: ConnectionQuality = .unknown
     private var receiveConnectionQuality: ConnectionQuality = .unknown
     private var adminActionsInFlight: [String: UUID] = [:]
     private var lastReactionSentAt = Date.distantPast
@@ -580,6 +581,10 @@ final class MeetingViewModel {
     @discardableResult
     private func applyConnectionQualitySample(_ sample: ConnectionQualitySample) -> ConnectionQuality {
         publishConnectionQuality = combinedConnectionQuality(sample.publishQuality)
+        screenSharePublishConnectionQuality = ScreenSharePublishProfilePolicy.mostConstrained(
+            publishConnectionQuality,
+            combinedConnectionQuality(sample.screenSharePublishQuality)
+        )
         receiveConnectionQuality = combinedConnectionQuality(sample.receiveQuality)
         let overallQuality = combinedConnectionQuality(sample.overallQuality)
         if state.connectionQuality != overallQuality {
@@ -591,6 +596,7 @@ final class MeetingViewModel {
     private func applyStartupBandwidthProfile() {
         let startupQuality = combinedConnectionQuality(.unknown)
         publishConnectionQuality = startupQuality
+        screenSharePublishConnectionQuality = startupQuality
         receiveConnectionQuality = startupQuality
         if state.connectionQuality != startupQuality {
             state.connectionQuality = startupQuality
@@ -6365,6 +6371,7 @@ final class MeetingViewModel {
         webRTCClient.updateVideoQuality(.standard)
         state.connectionQuality = .unknown
         publishConnectionQuality = .unknown
+        screenSharePublishConnectionQuality = .unknown
         receiveConnectionQuality = .unknown
         lastJoinContext = nil
     }
@@ -6882,9 +6889,17 @@ final class MeetingViewModel {
 
         let stableSeconds = now.timeIntervalSince(adaptiveConnectionQualitySince)
         let allowGoodRecovery = quality == .good && stableSeconds >= goodBandwidthRestoreSeconds
+        let screenShareQuality = screenSharePublishConnectionQuality
+        let allowScreenShareGoodRecovery =
+            quality == .good &&
+            screenShareQuality == .good &&
+            stableSeconds >= goodBandwidthRestoreSeconds
         scheduleLocalVideoBandwidthProfileRefresh(quality, allowGoodRecovery: allowGoodRecovery)
         scheduleLocalAudioBandwidthProfileRefresh(quality, allowGoodRecovery: allowGoodRecovery)
-        scheduleLocalScreenBandwidthProfileRefresh(quality, allowGoodRecovery: allowGoodRecovery)
+        scheduleLocalScreenBandwidthProfileRefresh(
+            screenShareQuality,
+            allowGoodRecovery: allowScreenShareGoodRecovery
+        )
 
         switch quality {
         case .emergency:
@@ -6990,7 +7005,7 @@ final class MeetingViewModel {
                   self.state.connectionState == .joined,
                   !self.state.mediaPublishingDisabled,
                   self.state.isScreenSharing,
-                  self.publishConnectionQuality == quality else { return }
+                  self.screenSharePublishConnectionQuality == quality else { return }
             await self.webRTCClient.refreshLocalScreenProducerForBandwidthProfile(connectionQuality: quality)
         }
     }

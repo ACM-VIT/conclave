@@ -426,10 +426,68 @@ enum ConnectionQuality: String, Codable {
     case unknown
 }
 
+enum ScreenSharePublishProfilePolicy {
+    static let fairBitrateBps = 1_500_000.0
+    static let poorBitrateBps = 550_000.0
+    static let emergencyBitrateBps = 280_000.0
+
+    static func quality(
+        availableOutgoingBitrate: Double?,
+        emergencyMode: Bool = false
+    ) -> ConnectionQuality {
+        if emergencyMode { return .emergency }
+        guard let availableOutgoingBitrate,
+              availableOutgoingBitrate.isFinite,
+              availableOutgoingBitrate > 0 else {
+            return .unknown
+        }
+        if availableOutgoingBitrate <= emergencyBitrateBps {
+            return .emergency
+        }
+        if availableOutgoingBitrate <= poorBitrateBps {
+            return .poor
+        }
+        if availableOutgoingBitrate <= fairBitrateBps {
+            return .fair
+        }
+        return .good
+    }
+
+    static func mostConstrained(
+        _ first: ConnectionQuality,
+        _ second: ConnectionQuality
+    ) -> ConnectionQuality {
+        rank(first) >= rank(second) ? first : second
+    }
+
+    private static func rank(_ quality: ConnectionQuality) -> Int {
+        switch quality {
+        case .unknown: return 0
+        case .good: return 1
+        case .fair: return 2
+        case .poor: return 3
+        case .emergency: return 4
+        }
+    }
+}
+
 struct ConnectionQualitySample {
     let publishQuality: ConnectionQuality
     let receiveQuality: ConnectionQuality
     let overallQuality: ConnectionQuality
+    let screenSharePublishQuality: ConnectionQuality
+
+    init(
+        publishQuality: ConnectionQuality,
+        receiveQuality: ConnectionQuality,
+        overallQuality: ConnectionQuality,
+        screenSharePublishQuality: ConnectionQuality = .unknown
+    ) {
+        self.publishQuality = publishQuality
+        self.receiveQuality = receiveQuality
+        self.overallQuality = overallQuality
+        self.screenSharePublishQuality = screenSharePublishQuality
+    }
 }
 
 // MARK: - Audio Device
