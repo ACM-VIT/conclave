@@ -413,13 +413,13 @@ assertIncludes(
 );
 assertRegex(
   "webAdaptiveConsumerPreferences",
-  /if \(info\.type === "screen"\) \{[\s\S]*const screenShareQuality = worstQuality\([\s\S]*getConsumerScoreQualityHint\(options\.consumerScoreQuality\)[\s\S]*screenShareQuality === "poor" \|\| screenShareQuality === "fair"[\s\S]*\? 1[\s\S]*: 2[\s\S]*priority: 240,[\s\S]*paused: false,/,
-  "web screen-share receive adaptation lowers temporal layer on fair or poor per-stream score",
+  /if \(info\.type === "screen"\) \{[\s\S]*const screenShareQuality = worstQuality\([\s\S]*getConsumerScoreQualityHint\(options\.consumerScoreQuality\)[\s\S]*screenShareEmergency[\s\S]*\? 0[\s\S]*: screenShareQuality === "poor"[\s\S]*\? 1[\s\S]*: bounds\.maxTemporalLayer[\s\S]*priority: 240,[\s\S]*paused: false,/,
+  "web screen-share receive adaptation keeps full temporal FPS on fair links",
 );
 assertRegex(
   "webMeetSocket",
-  /producerInfo\.type === "screen"[\s\S]*networkProfile === "emergency"[\s\S]*networkProfile === "poor" \|\| networkProfile === "fair"[\s\S]*\? 1[\s\S]*: 2,[\s\S]*priority: 240,/,
-  "web initial screen-share consume starts fair links on middle temporal layer",
+  /producerInfo\.type === "screen"[\s\S]*networkProfile === "emergency"[\s\S]*\? 0[\s\S]*: networkProfile === "poor"[\s\S]*\? 1[\s\S]*: 2,[\s\S]*priority: 240,/,
+  "web initial screen-share consume keeps fair links on full temporal FPS",
 );
 assertRegex(
   "sfuMediaHandlers",
@@ -631,8 +631,8 @@ assertRegex(
 );
 assertRegex(
   "webAdaptiveConsumerPreferences",
-  /SCREEN_SHARE_RECEIVE_FAIR_BPS = 1500000[\s\S]*SCREEN_SHARE_RECEIVE_POOR_BPS = 550000[\s\S]*SCREEN_SHARE_RECEIVE_EMERGENCY_BPS = 300000[\s\S]*getScreenShareReceiveQualityForAvailableBitrate[\s\S]*availableIncomingBitrateBps <= SCREEN_SHARE_RECEIVE_POOR_BPS[\s\S]*availableIncomingBitrateBps <= SCREEN_SHARE_RECEIVE_FAIR_BPS[\s\S]*isScreenShareReceiveEmergencyBitrate[\s\S]*screenShareEmergency[\s\S]*screenShareQuality === "poor" \|\| screenShareQuality === "fair"/,
-  "web screen-share receive layers use incoming bitrate before full temporal FPS",
+  /SCREEN_SHARE_RECEIVE_FAIR_BPS = 1500000[\s\S]*SCREEN_SHARE_RECEIVE_POOR_BPS = 550000[\s\S]*SCREEN_SHARE_RECEIVE_EMERGENCY_BPS = 300000[\s\S]*getScreenShareReceiveQualityForAvailableBitrate[\s\S]*availableIncomingBitrateBps <= SCREEN_SHARE_RECEIVE_POOR_BPS[\s\S]*availableIncomingBitrateBps <= SCREEN_SHARE_RECEIVE_FAIR_BPS[\s\S]*isScreenShareReceiveEmergencyBitrate[\s\S]*screenShareEmergency[\s\S]*screenShareQuality === "poor"[\s\S]*bounds\.maxTemporalLayer/,
+  "web screen-share receive layers use incoming bitrate while keeping fair-link FPS",
 );
 assertIncludes(
   "webAdaptiveConsumerPreferences",

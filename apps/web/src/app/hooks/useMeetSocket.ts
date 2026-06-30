@@ -320,7 +320,7 @@ const getInitialConsumerPreferences = (
         temporalLayer:
           networkProfile === "emergency"
             ? 0
-            : networkProfile === "poor" || networkProfile === "fair"
+            : networkProfile === "poor"
             ? 1
             : 2,
       },

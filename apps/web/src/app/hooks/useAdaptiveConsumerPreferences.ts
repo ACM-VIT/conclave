@@ -468,9 +468,9 @@ const getDesiredPreferences = (
             0,
             screenShareEmergency
               ? 0
-              : screenShareQuality === "poor" || screenShareQuality === "fair"
+              : screenShareQuality === "poor"
                 ? 1
-                : 2,
+                : bounds.maxTemporalLayer,
             bounds,
           )
         : undefined,
