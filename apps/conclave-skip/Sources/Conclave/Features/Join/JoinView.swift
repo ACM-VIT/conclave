@@ -254,10 +254,11 @@ enum JoinAdminIntentPolicy {
         joinMode: JoinMode
     ) -> Bool {
         guard joinMode == .meeting else { return false }
-        return effectiveClientId(
+        let clientId = effectiveClientId(
             resolvedClientId: resolvedClientId,
             targetClientId: targetClientId
-        ).lowercased() != "public"
+        ).lowercased()
+        return clientId != "conclave" && clientId != "public"
     }
 
     static func effectiveClientId(
@@ -269,7 +270,7 @@ enum JoinAdminIntentPolicy {
             return target
         }
         let resolved = resolvedClientId.trimmingCharacters(in: .whitespacesAndNewlines)
-        return resolved.isEmpty ? "public" : resolved
+        return resolved.isEmpty ? "conclave" : resolved
     }
 }
 

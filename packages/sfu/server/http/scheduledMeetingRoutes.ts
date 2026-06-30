@@ -30,6 +30,12 @@ const MAX_EMAIL_LENGTH = 320;
 const MAX_NAME_LENGTH = 120;
 const MAX_STATUS_FILTER_LENGTH = 128;
 const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/;
+const CONCLAVE_CLIENT_ID = "conclave";
+
+const resolveDefaultClientId = (): string =>
+  process.env.SFU_CLIENT_ID?.trim() ||
+  process.env.NEXT_PUBLIC_SFU_CLIENT_ID?.trim() ||
+  CONCLAVE_CLIENT_ID;
 
 const hasValidSecret = (req: Request, secret: string): boolean => {
   const provided = req.header("x-sfu-secret");
@@ -57,7 +63,10 @@ const normalizeEmail = (value: unknown): string | null => {
   return normalized || null;
 };
 
-const resolveClientId = (req: Request, fallback = "default"): string => {
+const resolveClientId = (
+  req: Request,
+  fallback = resolveDefaultClientId(),
+): string => {
   const fromQuery = normalizeIdentifier(req.query.clientId) || "";
   const fromHeader = normalizeIdentifier(req.header("x-sfu-client")) || "";
   return fromQuery || fromHeader || fallback;

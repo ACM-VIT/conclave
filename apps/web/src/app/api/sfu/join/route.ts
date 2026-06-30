@@ -4,6 +4,7 @@ import { NextResponse } from "next/server";
 import { resolveHostGrant } from "@conclave/meeting-core";
 import { auth } from "@/lib/auth";
 import { isSfuAllowlistedUser } from "@/lib/sfu-admin-auth";
+import { resolveServerSfuClientId } from "@/lib/sfu-client-id";
 import { lookupScheduledWebinarByRoomId } from "@/lib/sfu-user-auth";
 import {
   normalizeRoutedSfuUrl,
@@ -445,15 +446,9 @@ const resolveIceServers = async (): Promise<IceServer[]> => {
 };
 
 const resolveClientId = (request: Request, body?: JoinRequestBody) => {
-  const envClientId =
-    process.env.SFU_CLIENT_ID || process.env.NEXT_PUBLIC_SFU_CLIENT_ID;
-  if (envClientId?.trim()) {
-    return envClientId.trim();
-  }
-
   const headerClientId = request.headers.get("x-sfu-client")?.trim() || "";
   const bodyClientId = body?.clientId?.trim() || "";
-  return headerClientId || bodyClientId || "default";
+  return headerClientId || bodyClientId || resolveServerSfuClientId();
 };
 
 export async function POST(request: Request) {

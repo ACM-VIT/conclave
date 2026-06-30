@@ -41,7 +41,7 @@ export async function GET(request: Request, context: RouteContext) {
     return NextResponse.json({ error: "Missing room ID" }, { status: 400 });
   }
 
-  const clientId = resolveSfuClientId(request, { fallback: "public" });
+  const clientId = resolveSfuClientId(request);
   const targetUrl = new URL(
     `/rooms/${encodeURIComponent(normalizedRoomId)}`,
     resolveSfuUrl(),

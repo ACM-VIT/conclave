@@ -27,7 +27,7 @@ export async function GET(request: Request) {
 
   const sfuUrl = resolveSfuUrl();
   const secret = resolveSfuSecret();
-  const clientId = resolveSfuClientId(request, { fallback: "public" });
+  const clientId = resolveSfuClientId(request);
 
   try {
     const targetUrl = new URL("/admin/rooms", sfuUrl);

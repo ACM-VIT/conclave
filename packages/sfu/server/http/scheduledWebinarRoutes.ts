@@ -72,7 +72,10 @@ const normalizeEmail = (value: unknown): string | null => {
 
 const resolveClientId = (
   req: Request,
-  fallback = "default",
+  fallback =
+    process.env.SFU_CLIENT_ID?.trim() ||
+    process.env.NEXT_PUBLIC_SFU_CLIENT_ID?.trim() ||
+    "conclave",
 ): string => {
   const fromQuery = normalizeIdentifier(req.query.clientId) || "";
   const fromHeader = normalizeIdentifier(req.header("x-sfu-client")) || "";

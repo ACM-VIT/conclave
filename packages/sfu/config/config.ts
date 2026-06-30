@@ -140,6 +140,12 @@ const defaultClientPolicies: Record<string, ClientPolicy> = {
     useWaitingRoom: false,
     allowDisplayNameUpdate: true,
   },
+  conclave: {
+    allowNonHostRoomCreation: false,
+    allowHostJoin: false,
+    useWaitingRoom: false,
+    allowDisplayNameUpdate: true,
+  },
   internal: {
     allowNonHostRoomCreation: false,
     allowHostJoin: true,

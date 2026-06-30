@@ -312,7 +312,7 @@ enum SfuJoinService {
             return plistClient
         }
 
-        return "public"
+        return "conclave"
     }
 
     static func resolveJoinURL() -> URL {

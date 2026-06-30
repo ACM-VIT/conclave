@@ -1,5 +1,6 @@
 import { SignJWT } from "jose";
 import { NextResponse } from "next/server";
+import { resolveServerSfuClientId } from "@/lib/sfu-client-id";
 import { requireSfuSessionUser } from "@/lib/sfu-user-auth";
 
 
@@ -48,9 +49,7 @@ export async function GET(request: Request) {
     userId: authResult.user.id,
     clientId:
       request.headers.get("x-sfu-client") ||
-      process.env.SFU_CLIENT_ID ||
-      process.env.NEXT_PUBLIC_SFU_CLIENT_ID ||
-      "default",
+      resolveServerSfuClientId(),
   })
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
@@ -81,4 +80,3 @@ export async function GET(request: Request) {
   });
   return response;
 }
-

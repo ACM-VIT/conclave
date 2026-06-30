@@ -8,8 +8,10 @@ import {
   isMeetingJoinable,
   lookupPublicScheduledMeetingByRoomCode,
   lookupScheduledMeetingHostEmail,
+  type PublicScheduledMeeting,
 } from "@/lib/scheduled-meetings";
 import { auth } from "@/lib/auth";
+import { resolveSfuClientIdCandidates } from "@/lib/sfu-client-id";
 
 type MeetRoomPageProps = {
   params: Promise<{ code: string }>;
@@ -51,6 +53,22 @@ const resolveSessionEmail = async (): Promise<string | null> => {
   } catch {
     return null;
   }
+};
+
+const lookupScheduledMeetingCandidate = async (
+  roomCode: string,
+  preferredClientId?: string,
+): Promise<{ clientId: string; meeting: PublicScheduledMeeting } | null> => {
+  for (const clientId of resolveSfuClientIdCandidates(preferredClientId)) {
+    const meeting = await lookupPublicScheduledMeetingByRoomCode(
+      clientId,
+      roomCode,
+    );
+    if (meeting) {
+      return { clientId, meeting };
+    }
+  }
+  return null;
 };
 
 export default function MeetRoomPage({
@@ -108,18 +126,22 @@ async function MeetRoomContent({ params, searchParams }: MeetRoomPageProps) {
     devOverridesEnabled && isTruthyParam(resolvedSearchParams.admin);
 
   if (sanitizedRoomCode && !bypassMediaPermissions) {
-    const clientIdForLookup = sfuClientId || "default";
-    const scheduled = await lookupPublicScheduledMeetingByRoomCode(
-      clientIdForLookup,
+    const scheduledCandidate = await lookupScheduledMeetingCandidate(
       sanitizedRoomCode,
+      sfuClientId,
     );
-    if (scheduled) {
-      resolvedSfuClientId = clientIdForLookup;
+    const scheduled = scheduledCandidate?.meeting ?? null;
+    if (scheduledCandidate) {
+      resolvedSfuClientId = scheduledCandidate.clientId;
     }
-    if (scheduled && !isMeetingJoinable(scheduled)) {
+    if (scheduledCandidate && scheduled && !isMeetingJoinable(scheduled)) {
+      const scheduledClientId = scheduledCandidate.clientId;
       const [sessionEmail, hostEmail] = await Promise.all([
         resolveSessionEmail(),
-        lookupScheduledMeetingHostEmail(clientIdForLookup, sanitizedRoomCode),
+        lookupScheduledMeetingHostEmail(
+          scheduledClientId,
+          sanitizedRoomCode,
+        ),
       ]);
       const viewerIsHost = Boolean(
         sessionEmail && hostEmail && sessionEmail === hostEmail,

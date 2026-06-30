@@ -22,7 +22,7 @@ const lookupScheduledWebinar = async (
   const sfuUrl = resolveSfuUrl();
   const headers = await nextHeaders();
   const fakeRequest = new Request("http://internal/lookup", { headers });
-  const clientId = resolveSfuClientId(fakeRequest, { fallback: "default" });
+  const clientId = resolveSfuClientId(fakeRequest);
 
   try {
     const response = await fetch(

@@ -25,7 +25,7 @@ const parseNumberInput = (
   return clampNumber(parsed, min, max);
 };
 
-const clientId = process.env.NEXT_PUBLIC_SFU_CLIENT_ID || "public";
+const clientId = process.env.NEXT_PUBLIC_SFU_CLIENT_ID || "conclave";
 
 const readError = async (response: Response) => {
   const data = await response.json().catch(() => null);

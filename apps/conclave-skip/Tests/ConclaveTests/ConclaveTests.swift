@@ -535,7 +535,7 @@ final class ConclaveTests: XCTestCase {
         ))
     }
 
-    func testJoinAdminIntentRequestsMeetingAdminForNonPublicClients() throws {
+    func testJoinAdminIntentRequestsMeetingAdminForCustomClients() throws {
         XCTAssertTrue(JoinAdminIntentPolicy.shouldRequestAdminJoin(
             resolvedClientId: "internal",
             targetClientId: nil,
@@ -548,7 +548,17 @@ final class ConclaveTests: XCTestCase {
         ))
     }
 
-    func testJoinAdminIntentDoesNotRequestAdminForPublicOrWebinarJoins() throws {
+    func testJoinAdminIntentDoesNotRequestAdminForSharedConclaveOrWebinarJoins() throws {
+        XCTAssertFalse(JoinAdminIntentPolicy.shouldRequestAdminJoin(
+            resolvedClientId: "conclave",
+            targetClientId: nil,
+            joinMode: JoinMode.meeting
+        ))
+        XCTAssertFalse(JoinAdminIntentPolicy.shouldRequestAdminJoin(
+            resolvedClientId: " Conclave ",
+            targetClientId: nil,
+            joinMode: JoinMode.meeting
+        ))
         XCTAssertFalse(JoinAdminIntentPolicy.shouldRequestAdminJoin(
             resolvedClientId: "public",
             targetClientId: nil,
