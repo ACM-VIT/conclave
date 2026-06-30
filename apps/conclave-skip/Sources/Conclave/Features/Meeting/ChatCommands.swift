@@ -131,6 +131,7 @@ struct ParsedCommand {
 
 struct ChatCommandParser {
     private static let reservedRoomMentionTargets: Set<String> = ["conclave"]
+    private static let conclaveMentionToken = "conclave"
     
     static func parse(_ text: String) -> ParsedCommand? {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -157,6 +158,33 @@ struct ChatCommandParser {
     
     static func isCommandPrefix(_ text: String) -> Bool {
         return text.hasPrefix("/") && text.count == 1
+    }
+
+    static func parseConclaveMention(_ text: String) -> String? {
+        var foundMention = false
+        var result = ""
+        var index = text.startIndex
+
+        while index < text.endIndex {
+            let character = text[index]
+            if character == "@",
+               isConclaveMentionBoundaryBefore(index, in: text),
+               let tokenEnd = conclaveMentionEnd(startingAfterAt: text.index(after: index), in: text),
+               isConclaveMentionBoundaryAfter(tokenEnd, in: text) {
+                foundMention = true
+                result += " "
+                index = tokenEnd
+                while index < text.endIndex, isConclaveMentionTrailingSeparator(text[index]) {
+                    index = text.index(after: index)
+                }
+                continue
+            }
+            result += String(character)
+            index = text.index(after: index)
+        }
+
+        guard foundMention else { return nil }
+        return whitespaceSeparatedTokens(in: result).joined(separator: " ")
     }
 
     /// Mirrors the SFU DM parser so native can block disabled private-message
@@ -211,6 +239,35 @@ struct ChatCommandParser {
             tokens.append(current)
         }
         return tokens
+    }
+
+    private static func conclaveMentionEnd(startingAfterAt start: String.Index, in text: String) -> String.Index? {
+        var textIndex = start
+        var tokenIndex = conclaveMentionToken.startIndex
+        while tokenIndex < conclaveMentionToken.endIndex {
+            guard textIndex < text.endIndex else { return nil }
+            guard String(text[textIndex]).lowercased() == String(conclaveMentionToken[tokenIndex]) else {
+                return nil
+            }
+            textIndex = text.index(after: textIndex)
+            tokenIndex = conclaveMentionToken.index(after: tokenIndex)
+        }
+        return textIndex
+    }
+
+    private static func isConclaveMentionBoundaryBefore(_ index: String.Index, in text: String) -> Bool {
+        guard index > text.startIndex else { return true }
+        let previous = text[text.index(before: index)]
+        return previous.isWhitespace || previous.isNewline
+    }
+
+    private static func isConclaveMentionBoundaryAfter(_ index: String.Index, in text: String) -> Bool {
+        guard index < text.endIndex else { return true }
+        return isConclaveMentionTrailingSeparator(text[index])
+    }
+
+    private static func isConclaveMentionTrailingSeparator(_ character: Character) -> Bool {
+        character.isWhitespace || character.isNewline || character == "," || character == ":"
     }
     
     static func matchesPartialCommand(_ text: String) -> [ChatCommand] {

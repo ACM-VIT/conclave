@@ -3657,6 +3657,15 @@ final class ConclaveTests: XCTestCase {
         XCTAssertNotNil(ChatCommandParser.parseDirectMessage("@conclave-team hello"))
     }
 
+    func testConclaveMentionParserMatchesNativeAssistantGuard() throws {
+        XCTAssertEqual(ChatCommandParser.parseConclaveMention("@Conclave summarize this"), "summarize this")
+        XCTAssertEqual(ChatCommandParser.parseConclaveMention("Hey @Conclave, what did I miss?"), "Hey what did I miss?")
+        XCTAssertEqual(ChatCommandParser.parseConclaveMention("@CONCLAVE: recap"), "recap")
+        XCTAssertEqual(ChatCommandParser.parseConclaveMention("@Conclave"), "")
+        XCTAssertNil(ChatCommandParser.parseConclaveMention("foo@conclave.ai"))
+        XCTAssertNil(ChatCommandParser.parseConclaveMention("@conclave-team hello"))
+    }
+
     func testChatMentionContextPolicyMatchesWebWhitespace() throws {
         XCTAssertEqual(
             ChatMentionContextPolicy.context(for: "  @Remote.User", isChatDisabled: false, isDmEnabled: true),
@@ -4009,6 +4018,26 @@ final class ConclaveTests: XCTestCase {
 
         XCTAssertTrue(viewModel.state.chatMessages.isEmpty)
         XCTAssertEqual(viewModel.state.systemMessages.last?.displayText, "Private messages are disabled by the host.")
+        XCTAssertNil(viewModel.state.errorMessage)
+    }
+
+    @MainActor
+    func testNativeConclaveMentionIsBlockedBeforeBrokenAssistantSend() async throws {
+        let viewModel = MeetingViewModel()
+        viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
+        viewModel.state.sfuUserId = "local@example.com"
+        viewModel.state.roomId = "room-a"
+        viewModel.state.connectionState = ConnectionState.joined
+
+        viewModel.sendChatMessage("@Conclave summarize the last few minutes")
+
+        try? await Task.sleep(nanoseconds: 50_000_000)
+
+        XCTAssertTrue(viewModel.state.chatMessages.isEmpty)
+        XCTAssertEqual(
+            viewModel.state.systemMessages.last?.displayText,
+            "Conclave AI is not available in the native app yet."
+        )
         XCTAssertNil(viewModel.state.errorMessage)
     }
 

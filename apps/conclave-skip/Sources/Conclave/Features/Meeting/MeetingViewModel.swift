@@ -7820,6 +7820,11 @@ final class MeetingViewModel {
             return
         }
 
+        if gif == nil, ChatCommandParser.parseConclaveMention(trimmed) != nil {
+            addSystemMessage(.info("Conclave AI is not available in the native app yet."))
+            return
+        }
+
         let dmIntent = ChatCommandParser.parseDirectMessage(trimmed)
         if dmIntent != nil && !state.isDmEnabled {
             addSystemMessage(.info("Private messages are disabled by the host."))
