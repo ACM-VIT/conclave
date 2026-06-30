@@ -2396,6 +2396,29 @@ internal class SocketIOManager {
         return decodeChatMessageObject(obj)
     }
 
+    private fun decodeConclaveMessage(value: Any?): ChatMessageNotification? {
+        return decodeChatMessage(value) ?: decodeConclaveAssistantMessage(value)
+    }
+
+    private fun decodeConclaveAssistantMessage(value: Any?): ChatMessageNotification? {
+        val obj = jsonObject(value) ?: return null
+        val id = stringField(obj, "id") ?: return null
+        val content = if (obj.has("content") && !obj.isNull("content")) obj.optString("content") else ""
+        return ChatMessageNotification(
+            id = id,
+            userId = ConclaveAssistantChatIdentity.userId,
+            displayName = ConclaveAssistantChatIdentity.displayName,
+            content = content,
+            timestamp = doubleField(obj, "timestamp") ?: System.currentTimeMillis().toDouble(),
+            gif = null,
+            isDirect = false,
+            dmTargetUserId = null,
+            dmTargetDisplayName = null,
+            roomId = stringField(obj, "roomId"),
+            replyTo = null
+        )
+    }
+
     private fun decodeChatMessageObject(obj: JSONObject): ChatMessageNotification? {
         return ChatMessageNotification(
             id = stringField(obj, "id") ?: return null,
@@ -3012,7 +3035,7 @@ internal class SocketIOManager {
 
         socket.on(SocketEvent.conclaveMessage, Emitter.Listener { args ->
             if (this.socket !== socket) return@Listener
-            val notification = decodeChatMessage(args.firstOrNull()) ?: return@Listener
+            val notification = decodeConclaveMessage(args.firstOrNull()) ?: return@Listener
             val roomId = activeRoomId ?: return@Listener
             if (!eventRoomIdMatchesActiveOrPending(notification.roomId, allowMissingRoomId = true)) return@Listener
             onChatMessage?.invoke(notification.toChatMessage(roomId))

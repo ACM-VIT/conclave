@@ -184,15 +184,22 @@ final class MeetingState {
             normalized.contains(voiceAgentEmailSuffix)
     }
 
+    static func isConclaveAssistantUserId(_ userId: String) -> Bool {
+        userId.trimmingCharacters(in: .whitespacesAndNewlines) == ConclaveAssistantChatIdentity.userId
+    }
+
     static func isSystemUserId(_ userId: String) -> Bool {
         isBrowserAudioUserId(userId) || isBrowserVideoUserId(userId)
     }
 
     static func isSyntheticRosterUserId(_ userId: String) -> Bool {
-        isSystemUserId(userId) || isVoiceAgentUserId(userId)
+        isSystemUserId(userId) || isVoiceAgentUserId(userId) || isConclaveAssistantUserId(userId)
     }
 
     static func systemDisplayName(for userId: String) -> String? {
+        if isConclaveAssistantUserId(userId) {
+            return ConclaveAssistantChatIdentity.displayName
+        }
         if isVoiceAgentUserId(userId) {
             return "Voice Agent"
         }

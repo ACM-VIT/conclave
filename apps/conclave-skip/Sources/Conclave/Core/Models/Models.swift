@@ -206,6 +206,11 @@ struct ChatGifAttachment: Codable, Equatable {
     let source: String
 }
 
+enum ConclaveAssistantChatIdentity {
+    static let userId = "conclave-assistant"
+    static let displayName = "Conclave"
+}
+
 struct ChatMessage: Identifiable, Equatable {
     let id: String
     let userId: String

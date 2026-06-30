@@ -1070,6 +1070,14 @@ struct ChatMessageNotification: Codable {
     let replyTo: ChatReplyPreview?
 }
 
+struct ConclaveAssistantMessageNotification: Codable {
+    let id: String
+    let content: String?
+    let done: Bool?
+    let timestamp: Double?
+    let roomId: String?
+}
+
 struct ChatHistorySnapshotNotification: Codable {
     let messages: [ChatMessageNotification]
     let roomId: String?
@@ -1093,6 +1101,19 @@ extension ChatMessageNotification {
             dmTargetDisplayName: dmTargetDisplayName,
             roomId: roomId ?? taggedRoomId,
             replyTo: replyTo
+        )
+    }
+}
+
+extension ConclaveAssistantMessageNotification {
+    func chatMessage(taggedRoomId: String?) -> ChatMessage {
+        ChatMessage(
+            id: id,
+            userId: ConclaveAssistantChatIdentity.userId,
+            displayName: ConclaveAssistantChatIdentity.displayName,
+            content: content ?? "",
+            timestamp: timestamp.map { Date(timeIntervalSince1970: $0 / 1000) } ?? Date(),
+            roomId: roomId ?? taggedRoomId
         )
     }
 }

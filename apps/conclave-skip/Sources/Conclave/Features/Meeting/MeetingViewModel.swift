@@ -423,8 +423,6 @@ enum BrowserActivityLoopPolicy {
 @MainActor
 @Observable
 final class MeetingViewModel {
-    private static let conclaveAssistantUserId = "conclave-assistant"
-
     // Process-wide so Activity/SwiftUI recreation can reattach to an active call.
     static let shared = MeetingViewModel()
 
@@ -1238,7 +1236,7 @@ final class MeetingViewModel {
             let eventContext = self.currentSocketEventContext()
             Task { @MainActor in
                 guard self.isCurrentSocketEvent(eventContext, roomId: message.roomId) else { return }
-                let appendedMessage = self.appendChatMessage(message, shouldSpeakTts: true)
+                let appendedMessage = self.receiveChatMessage(message, shouldSpeakTts: true)
                 guard let appendedMessage else { return }
                 let isFromCurrentUser = self.state.isLocalIdentityUserId(appendedMessage.userId)
                 if !isFromCurrentUser && !self.state.isChatOpen {
@@ -7518,7 +7516,7 @@ final class MeetingViewModel {
     }
 
     @discardableResult
-    private func appendChatMessage(_ message: ChatMessage, shouldSpeakTts: Bool = false) -> ChatMessage? {
+    func receiveChatMessage(_ message: ChatMessage, shouldSpeakTts: Bool = false) -> ChatMessage? {
         let normalized = normalizedChatMessage(message)
         guard isCurrentRoomEvent(normalized.roomId) else {
             return nil
@@ -7527,15 +7525,42 @@ final class MeetingViewModel {
             return nil
         }
         if let existingIndex = state.chatMessages.firstIndex(where: { $0.id == normalized.id }) {
-            guard normalized.userId == Self.conclaveAssistantUserId else {
+            guard normalized.userId == ConclaveAssistantChatIdentity.userId else {
                 return nil
             }
-            state.chatMessages[existingIndex] = normalized
+            state.chatMessages[existingIndex] = mergedConclaveAssistantMessage(
+                existing: state.chatMessages[existingIndex],
+                incoming: normalized
+            )
             return nil
         }
         state.chatMessages.append(normalized)
         playTtsIfNeeded(for: normalized, sourceContent: message.content, shouldSpeakTts: shouldSpeakTts)
         return normalized
+    }
+
+    @discardableResult
+    private func appendChatMessage(_ message: ChatMessage, shouldSpeakTts: Bool = false) -> ChatMessage? {
+        receiveChatMessage(message, shouldSpeakTts: shouldSpeakTts)
+    }
+
+    private func mergedConclaveAssistantMessage(existing: ChatMessage, incoming: ChatMessage) -> ChatMessage {
+        let shouldKeepExistingContent =
+            !existing.content.isEmpty &&
+            (incoming.content.isEmpty || incoming.content.count < existing.content.count)
+        return ChatMessage(
+            id: incoming.id,
+            userId: incoming.userId,
+            displayName: incoming.displayName,
+            content: shouldKeepExistingContent ? existing.content : incoming.content,
+            timestamp: existing.timestamp,
+            gif: incoming.gif ?? existing.gif,
+            isDirect: incoming.isDirect,
+            dmTargetUserId: incoming.dmTargetUserId,
+            dmTargetDisplayName: incoming.dmTargetDisplayName,
+            roomId: incoming.roomId ?? existing.roomId,
+            replyTo: incoming.replyTo ?? existing.replyTo
+        )
     }
 
     @discardableResult

@@ -1912,8 +1912,13 @@ final class SocketIOManager {
         socket.on(SocketEvent.conclaveMessage) { [weak self] data, _ in
             guard let self, let first = data.first,
                   self.socket === socket,
-                  let notification = self.decode(ChatMessageNotification.self, from: first),
-                  let activeRoomId = self.activeRoomId,
+                  let activeRoomId = self.activeRoomId else { return }
+            if let notification = self.decode(ChatMessageNotification.self, from: first) {
+                guard self.eventRoomIdMatchesActiveOrPending(notification.roomId, allowMissingRoomId: true) else { return }
+                self.onChatMessage?(notification.chatMessage(taggedRoomId: activeRoomId))
+                return
+            }
+            guard let notification = self.decode(ConclaveAssistantMessageNotification.self, from: first),
                   self.eventRoomIdMatchesActiveOrPending(notification.roomId, allowMissingRoomId: true) else { return }
 
             self.onChatMessage?(notification.chatMessage(taggedRoomId: activeRoomId))

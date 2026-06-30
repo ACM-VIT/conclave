@@ -3482,6 +3482,70 @@ final class ConclaveTests: XCTestCase {
     }
 
     @MainActor
+    func testConclaveAssistantStreamPayloadDecodesToNativeChatMessage() throws {
+        let notification = try JSONDecoder().decode(ConclaveAssistantMessageNotification.self, from: Data("""
+        {
+          "id": "assistant-message-1",
+          "content": "Here is the answer",
+          "done": false,
+          "timestamp": 1781047107221
+        }
+        """.utf8))
+
+        let message = notification.chatMessage(taggedRoomId: "room-a")
+
+        XCTAssertEqual(message.id, "assistant-message-1")
+        XCTAssertEqual(message.userId, ConclaveAssistantChatIdentity.userId)
+        XCTAssertEqual(message.displayName, ConclaveAssistantChatIdentity.displayName)
+        XCTAssertEqual(message.content, "Here is the answer")
+        XCTAssertEqual(message.timestamp, Date(timeIntervalSince1970: 1_781_047_107.221))
+        XCTAssertEqual(message.roomId, "room-a")
+        XCTAssertTrue(MeetingState.isSyntheticRosterUserId(ConclaveAssistantChatIdentity.userId))
+    }
+
+    @MainActor
+    func testConclaveAssistantStreamUpdatesSingleNativeChatMessage() throws {
+        let viewModel = MeetingViewModel()
+        viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
+        viewModel.state.sfuUserId = "local@example.com"
+        viewModel.state.roomId = "room-a"
+
+        let firstTimestamp = Date(timeIntervalSince1970: 1)
+        let first = viewModel.receiveChatMessage(ChatMessage(
+            id: "assistant-message-1",
+            userId: ConclaveAssistantChatIdentity.userId,
+            displayName: ConclaveAssistantChatIdentity.displayName,
+            content: "The full answer",
+            timestamp: firstTimestamp,
+            roomId: "room-a"
+        ))
+        let shorterChunk = viewModel.receiveChatMessage(ChatMessage(
+            id: "assistant-message-1",
+            userId: ConclaveAssistantChatIdentity.userId,
+            displayName: ConclaveAssistantChatIdentity.displayName,
+            content: "The full",
+            timestamp: Date(timeIntervalSince1970: 2),
+            roomId: "room-a"
+        ))
+        let longerChunk = viewModel.receiveChatMessage(ChatMessage(
+            id: "assistant-message-1",
+            userId: ConclaveAssistantChatIdentity.userId,
+            displayName: ConclaveAssistantChatIdentity.displayName,
+            content: "The full answer with more detail",
+            timestamp: Date(timeIntervalSince1970: 3),
+            roomId: "room-a"
+        ))
+
+        XCTAssertNotNil(first)
+        XCTAssertNil(shorterChunk)
+        XCTAssertNil(longerChunk)
+        XCTAssertEqual(viewModel.state.chatMessages.count, 1)
+        XCTAssertEqual(viewModel.state.chatMessages.first?.content, "The full answer with more detail")
+        XCTAssertEqual(viewModel.state.chatMessages.first?.timestamp, firstTimestamp)
+        XCTAssertEqual(viewModel.state.chatMessages.first?.displayName, ConclaveAssistantChatIdentity.displayName)
+    }
+
+    @MainActor
     func testStaleChatCommandDoesNotMutateNextRoom() async throws {
         let viewModel = MeetingViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
@@ -6502,16 +6566,19 @@ final class ConclaveTests: XCTestCase {
         XCTAssertTrue(iosSource.contains("static let conclaveAuthorize = SfuClientEvent.conclaveAuthorize.rawValue"))
         XCTAssertTrue(iosSource.contains("static let conclaveMessage = SfuServerEvent.conclaveMessage.rawValue"))
         XCTAssertTrue(iosSource.contains("socket.on(SocketEvent.conclaveMessage)"))
+        XCTAssertTrue(iosSource.contains("self.decode(ConclaveAssistantMessageNotification.self, from: first)"))
         XCTAssertTrue(iosSource.contains("self.onChatMessage?(notification.chatMessage(taggedRoomId: activeRoomId))"))
 
         XCTAssertTrue(androidSource.contains("val conclaveAuthorize = SfuClientEvent.conclaveAuthorize.rawValue"))
         XCTAssertTrue(androidSource.contains("val conclaveMessage = SfuServerEvent.conclaveMessage.rawValue"))
         XCTAssertTrue(androidSource.contains("socket.on(SocketEvent.conclaveMessage"))
+        XCTAssertTrue(androidSource.contains("private fun decodeConclaveMessage(value: Any?): ChatMessageNotification?"))
+        XCTAssertTrue(androidSource.contains("decodeChatMessage(value) ?: decodeConclaveAssistantMessage(value)"))
         XCTAssertTrue(androidSource.contains("onChatMessage?.invoke(notification.toChatMessage(roomId))"))
 
-        XCTAssertTrue(viewModelSource.contains(#"private static let conclaveAssistantUserId = "conclave-assistant""#))
-        XCTAssertTrue(viewModelSource.contains("guard normalized.userId == Self.conclaveAssistantUserId else"))
-        XCTAssertTrue(viewModelSource.contains("state.chatMessages[existingIndex] = normalized"))
+        XCTAssertTrue(viewModelSource.contains("guard normalized.userId == ConclaveAssistantChatIdentity.userId else"))
+        XCTAssertTrue(viewModelSource.contains("private func mergedConclaveAssistantMessage(existing: ChatMessage, incoming: ChatMessage) -> ChatMessage"))
+        XCTAssertTrue(viewModelSource.contains("incoming.content.isEmpty || incoming.content.count < existing.content.count"))
     }
 
     func testPayloadLessBrowserClosedCanClearOnlyKnownRoomState() throws {
