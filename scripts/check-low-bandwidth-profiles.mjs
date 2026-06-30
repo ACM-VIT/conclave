@@ -409,6 +409,16 @@ assertRegex(
   /producerInfo\.type === "screen"[\s\S]*spatialLayer: 0,[\s\S]*temporalLayer: room\.currentQuality === "low" \? 1 : 2[\s\S]*producerInfo\.type === "screen"[\s\S]*return 240;/,
   "SFU screen-share consumers default to crisp high-priority low-FPS layers",
 );
+assertRegex(
+  "sfuRoom",
+  /replaceScreenShareProducerForUser\([\s\S]*entry\.userId !== userId[\s\S]*entry\.type !== "screen"[\s\S]*entry\.producer\.kind !== "video"[\s\S]*clearScreenShareProducer\(producerId\)[\s\S]*removeProducerIndexById\(producerId, entry\.producer\)[\s\S]*entry\.producer\.close\(\)/,
+  "SFU can close stale same-user screen-share producers before replacement",
+);
+assertRegex(
+  "sfuMediaHandlers",
+  /const existingScreenShare = room\.screenShareProducerId[\s\S]*const existingScreenShareInfo =[\s\S]*room\.getProducerInfoById\(existingScreenShare\)[\s\S]*!existingScreenShareInfo[\s\S]*room\.clearScreenShareProducer\(existingScreenShare\)[\s\S]*existingScreenShareInfo\.producerUserId !== currentClient\.id[\s\S]*Screen is already being shared[\s\S]*room\.replaceScreenShareProducerForUser\(/,
+  "SFU screen-share publish allows same-user replacement but rejects other active sharers",
+);
 
 // Multi-stream rooms should not downgrade because one RTP stream has a short
 // startup jitter spike. Use aggregate/weighted jitter and leave the first loss

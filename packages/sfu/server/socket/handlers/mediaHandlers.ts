@@ -344,8 +344,19 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
         if (isScreenShareVideo) {
           const existingScreenShare = room.screenShareProducerId;
           if (existingScreenShare) {
-            respond(callback, { error: "Screen is already being shared" });
-            return;
+            const existingScreenShareInfo =
+              room.getProducerInfoById(existingScreenShare);
+            if (!existingScreenShareInfo) {
+              room.clearScreenShareProducer(existingScreenShare);
+            } else if (existingScreenShareInfo.producerUserId !== currentClient.id) {
+              respond(callback, { error: "Screen is already being shared" });
+              return;
+            } else {
+              room.replaceScreenShareProducerForUser(
+                existingScreenShare,
+                currentClient.id,
+              );
+            }
           }
         } else if (isScreenShareAudio) {
           const existingScreenVideo = currentClient.getProducer("video", "screen");
