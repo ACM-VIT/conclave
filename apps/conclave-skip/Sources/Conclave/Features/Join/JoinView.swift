@@ -99,6 +99,17 @@ enum JoinRestoredAuthRefreshPolicy {
     }
 }
 
+enum JoinAuthenticatedProviderPolicy {
+    static func restoredSessionProvider(currentProvider: AppState.AuthProvider?) -> AppState.AuthProvider {
+        guard let currentProvider,
+              currentProvider != .guest,
+              currentProvider != .none else {
+            return .account
+        }
+        return currentProvider
+    }
+}
+
 enum JoinPermissionCleanupPolicy {
     static func shouldCancelCallPermissionRequests(onDisappearFrom state: ConnectionState) -> Bool {
         switch state {
@@ -1896,6 +1907,8 @@ struct JoinView: View {
             return "Apple account"
         case .google:
             return "Google account"
+        case .account:
+            return "Signed in account"
         case .guest:
             return "Guest"
         case .none:
@@ -2396,13 +2409,9 @@ struct JoinView: View {
     }
 
     private func restoredSessionProvider() -> AppState.AuthProvider {
-        if enabledAuthProviders.contains(.google) {
-            return .google
-        }
-        if enabledAuthProviders.contains(.apple) {
-            return .apple
-        }
-        return .google
+        JoinAuthenticatedProviderPolicy.restoredSessionProvider(
+            currentProvider: signedInAccountUser?.provider
+        )
     }
     
     private func handleCreateRoom() {

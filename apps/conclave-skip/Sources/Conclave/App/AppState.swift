@@ -25,6 +25,7 @@ final class AppState {
 
     enum AuthProvider: String, Codable {
         case none
+        case account
         case google
         case apple
         case guest

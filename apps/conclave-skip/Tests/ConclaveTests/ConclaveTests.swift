@@ -828,6 +828,24 @@ final class ConclaveTests: XCTestCase {
         XCTAssertEqual(payload.name, "Nikhil Rao")
     }
 
+    func testNativeJoinPayloadPreservesNeutralSignedInAccountIdentity() throws {
+        let user = AppState.User(
+            id: "auth-user-unknown-provider",
+            name: "Account Name",
+            email: "person@example.com",
+            provider: AppState.AuthProvider.account
+        )
+
+        let payload = JoinView.sfuJoinUserPayload(
+            currentUser: user,
+            displayName: "   "
+        )
+
+        XCTAssertEqual(payload.id, "auth-user-unknown-provider")
+        XCTAssertEqual(payload.email, "person@example.com")
+        XCTAssertEqual(payload.name, "Account Name")
+    }
+
     func testNativeJoinPayloadKeepsGuestIdentitySessionScoped() throws {
         let user = AppState.User(
             id: "legacy-local-user",
@@ -932,6 +950,36 @@ final class ConclaveTests: XCTestCase {
             currentUserId: "user-b",
             storedUserId: "user-a"
         ))
+    }
+
+    func testJoinAuthenticatedProviderPolicyPreservesKnownProvider() throws {
+        XCTAssertEqual(
+            JoinAuthenticatedProviderPolicy.restoredSessionProvider(currentProvider: AppState.AuthProvider.apple),
+            AppState.AuthProvider.apple
+        )
+        XCTAssertEqual(
+            JoinAuthenticatedProviderPolicy.restoredSessionProvider(currentProvider: AppState.AuthProvider.google),
+            AppState.AuthProvider.google
+        )
+        XCTAssertEqual(
+            JoinAuthenticatedProviderPolicy.restoredSessionProvider(currentProvider: AppState.AuthProvider.account),
+            AppState.AuthProvider.account
+        )
+    }
+
+    func testJoinAuthenticatedProviderPolicyUsesNeutralAccountForUnknownSessionProvider() throws {
+        XCTAssertEqual(
+            JoinAuthenticatedProviderPolicy.restoredSessionProvider(currentProvider: nil),
+            AppState.AuthProvider.account
+        )
+        XCTAssertEqual(
+            JoinAuthenticatedProviderPolicy.restoredSessionProvider(currentProvider: AppState.AuthProvider.guest),
+            AppState.AuthProvider.account
+        )
+        XCTAssertEqual(
+            JoinAuthenticatedProviderPolicy.restoredSessionProvider(currentProvider: AppState.AuthProvider.none),
+            AppState.AuthProvider.account
+        )
     }
 
     func testScreenCaptureStartPolicyTimesOutOnlyPendingCurrentStart() throws {
