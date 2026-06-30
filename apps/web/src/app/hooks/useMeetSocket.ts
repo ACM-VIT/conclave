@@ -3230,6 +3230,12 @@ export function useMeetSocket({
               });
               consumer.track.onmute = handleTrackMuted;
               consumer.track.onunmute = handleTrackUnmuted;
+              if (
+                consumer.track.muted &&
+                !producerPausedStateRef.current.get(producerInfo.producerId)
+              ) {
+                handleTrackMuted();
+              }
               const stream = new MediaStream([consumer.track]);
               dispatchParticipants({
                 type: "UPDATE_STREAM",

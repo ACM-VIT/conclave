@@ -744,6 +744,11 @@ assertRegex(
   /const isScreenShareVideo =[\s\S]*info\.kind === "video" && info\.type === "screen"[\s\S]*requestKeyFrame =[\s\S]*isScreenShareVideo[\s\S]*!sameConsumerLayers\(previousLayers, preferredLayers!\)[\s\S]*isConsumerLayerUpgrade\(previousLayers, preferredLayers!\)/,
   "web screen-share receive layer changes request keyframes for fast recovery",
 );
+assertRegex(
+  "webMeetSocket",
+  /consumer\.track\.onmute = handleTrackMuted;[\s\S]*consumer\.track\.onunmute = handleTrackUnmuted;[\s\S]*consumer\.track\.muted[\s\S]*!producerPausedStateRef\.current\.get\(producerInfo\.producerId\)[\s\S]*handleTrackMuted\(\);/,
+  "web initially muted screen-share consumers seed stale recovery after handler attach",
+);
 assertIncludes(
   "webAdaptiveConsumerPreferences",
   "const UNSUPPORTED_LAYER_RETRY_AFTER_MS = 30000;",
