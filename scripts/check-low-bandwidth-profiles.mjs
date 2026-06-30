@@ -378,8 +378,8 @@ assertRegex(
 );
 assertRegex(
   "webCodec",
-  /applyScreenShareTrackNetworkProfile[\s\S]*applyConstraints\(\{[\s\S]*frameRate: constraints\.frameRate[\s\S]*frame-rate cap was not applied[\s\S]*if \(track\.readyState !== "live"\) return;[\s\S]*const dimensionConstraints[\s\S]*profile === "good"[\s\S]*width: \{ max: SCREEN_SHARE_CAPS\.good\.maxWidth \}[\s\S]*height: \{ max: SCREEN_SHARE_CAPS\.good\.maxHeight \}[\s\S]*width: constraints\.width[\s\S]*height: constraints\.height[\s\S]*applyConstraints\(dimensionConstraints\)[\s\S]*dimension cap was not applied/,
-  "web screen-share frame-rate cap is independent and good recovery clears low dimension caps",
+  /applyScreenShareTrackNetworkProfile[\s\S]*applyConstraints\(\{[\s\S]*frameRate: constraints\.frameRate[\s\S]*frame-rate cap was not applied[\s\S]*if \(track\.readyState !== "live"\) return;[\s\S]*const dimensionConstraints: MediaTrackConstraints = \{[\s\S]*frameRate: constraints\.frameRate,[\s\S]*width: constraints\.width,[\s\S]*height: constraints\.height,[\s\S]*applyConstraints\(dimensionConstraints\)[\s\S]*dimension cap was not applied/,
+  "web screen-share frame-rate cap is independent and recovery reapplies profile ideal dimensions",
 );
 assertRegex(
   "webMeetMedia",

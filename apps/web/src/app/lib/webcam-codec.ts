@@ -819,18 +819,11 @@ export async function applyScreenShareTrackNetworkProfile(
 
   if (track.readyState !== "live") return;
 
-  const dimensionConstraints: MediaTrackConstraints =
-    profile === "good"
-      ? {
-          frameRate: constraints.frameRate,
-          width: { max: SCREEN_SHARE_CAPS.good.maxWidth },
-          height: { max: SCREEN_SHARE_CAPS.good.maxHeight },
-        }
-      : {
-          frameRate: constraints.frameRate,
-          width: constraints.width,
-          height: constraints.height,
-        };
+  const dimensionConstraints: MediaTrackConstraints = {
+    frameRate: constraints.frameRate,
+    width: constraints.width,
+    height: constraints.height,
+  };
 
   try {
     await track.applyConstraints(dimensionConstraints);
