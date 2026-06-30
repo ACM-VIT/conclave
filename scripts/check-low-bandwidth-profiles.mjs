@@ -498,6 +498,11 @@ assertRegex(
   "web overflow gallery remote video keeps decoder playback live",
 );
 assertRegex(
+  "webGridLayout",
+  /PRESENTATION_WARM_BUFFER_TILES = 1[\s\S]*PRESENTATION_RECENTLY_VISIBLE_WARM_BUFFER_TILES = 1[\s\S]*PRESENTATION_PRIORITY_WARM_BUFFER_TILES = 2[\s\S]*const boundaryWarmLimit = hasPresentation[\s\S]*const recentlyVisibleWarmLimit = hasPresentation[\s\S]*const priorityWarmLimit = hasPresentation[\s\S]*\.slice\(0, boundaryWarmLimit\)[\s\S]*\.slice\(0, recentlyVisibleWarmLimit\)[\s\S]*\.slice\(0, priorityWarmLimit\)/,
+  "web presentation mode limits hidden webcam warm decode budget",
+);
+assertRegex(
   "webMobilePresentationLayout",
   /const VideoThumbnail = memo\(function VideoThumbnail[\s\S]*createPlaybackRecoveryScheduler[\s\S]*shouldAttemptAnimationFrameReplay[\s\S]*video\.addEventListener\("stalled", scheduleReplay\)[\s\S]*document\.addEventListener\("visibilitychange", handleVisibilityChange\)[\s\S]*window\.addEventListener\("orientationchange", handleWindowChange\)/,
   "web mobile presentation thumbnails keep decoder playback live",
