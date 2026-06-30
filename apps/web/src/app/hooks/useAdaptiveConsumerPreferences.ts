@@ -508,6 +508,20 @@ const getDesiredPreferences = (
     };
   }
 
+  if (options.screenShareVideoActive && !isFocus) {
+    return {
+      preferredLayers: bounds
+        ? buildLayerPreference(
+            0,
+            quality === "poor" ? 0 : isVisible ? 1 : 0,
+            bounds,
+          )
+        : undefined,
+      priority: isVisible ? (quality === "poor" ? 45 : 65) : isWarm ? 28 : 20,
+      paused: false,
+    };
+  }
+
   if (isHidden && !isWarm && !isFocus) {
     return {
       preferredLayers: bounds ? buildLayerPreference(0, 0, bounds) : undefined,

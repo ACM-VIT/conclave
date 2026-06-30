@@ -574,6 +574,11 @@ assertIncludes(
 );
 assertRegex(
   "webAdaptiveConsumerPreferences",
+  /if \(options\.screenShareVideoActive && !isFocus\) \{[\s\S]*buildLayerPreference\([\s\S]*0,[\s\S]*quality === "poor" \? 0 : isVisible \? 1 : 0,[\s\S]*priority: isVisible \? \(quality === "poor" \? 45 : 65\) : isWarm \? 28 : 20,[\s\S]*paused: false,/,
+  "web active screen share down-layers non-focused webcams without pausing",
+);
+assertRegex(
+  "webAdaptiveConsumerPreferences",
   /const screenShareVideoActive = Array\.from\([\s\S]*refs\.producerMapRef\.current\.values\(\),[\s\S]*info\.kind === "video" && info\.type === "screen"[\s\S]*screenShareVideoActive,/,
   "web receive policy detects active screen-share video",
 );
