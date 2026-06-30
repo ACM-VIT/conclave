@@ -37,6 +37,7 @@ import {
   applyWebcamProducerNetworkProfile,
   applyScreenShareTrackNetworkProfile,
   buildScreenShareEncodingForNetworkProfile,
+  buildScreenShareVideoConstraintsForNetworkProfile,
   getFallbackWebcamCodec,
   getPreferredScreenShareCodec,
   getPreferredWebcamCodec,
@@ -145,6 +146,18 @@ const getUsableProducerTransport = (
     return null;
   }
   return transport;
+};
+
+const isDisplayMediaConstraintRetryableError = (error: unknown): boolean => {
+  const name =
+    error && typeof error === "object" && "name" in error
+      ? String((error as { name?: unknown }).name)
+      : "";
+  return (
+    name === "TypeError" ||
+    name === "OverconstrainedError" ||
+    name === "ConstraintNotSatisfiedError"
+  );
 };
 
 type OutboundVideoProgressSample = {
@@ -3287,33 +3300,64 @@ export function useMeetMedia({
       const screenNetworkProfile = getScreenSharePublishNetworkProfile();
 
       let captureController = createCaptureController();
+      const constrainedDisplayVideoConstraints:
+        MediaTrackConstraints & {
+          cursor?: "always" | "motion" | "never";
+          displaySurface?: "application" | "browser" | "monitor" | "window";
+        } = {
+          ...buildScreenShareVideoConstraintsForNetworkProfile(
+            screenNetworkProfile,
+          ),
+          displaySurface: "browser",
+          cursor: "always",
+        };
       const relaxedDisplayVideoConstraints: MediaTrackConstraints & {
         cursor?: "always" | "motion" | "never";
+        displaySurface?: "application" | "browser" | "monitor" | "window";
       } = {
         displaySurface: "browser",
         cursor: "always",
       };
-      const displayMediaOptions: DisplayMediaStreamOptions & {
-        controller?: CaptureControllerLike;
-      } = {
-        video: relaxedDisplayVideoConstraints,
-        audio: true,
-        ...(captureController ? { controller: captureController } : {}),
+      const getDisplayMedia = (
+        video: typeof constrainedDisplayVideoConstraints,
+        controller: CaptureControllerLike | null,
+      ): Promise<MediaStream> => {
+        const options: DisplayMediaStreamOptions & {
+          controller?: CaptureControllerLike;
+        } = {
+          video,
+          audio: true,
+          ...(controller ? { controller } : {}),
+        };
+        return navigator.mediaDevices.getDisplayMedia(options);
       };
 
       let stream: MediaStream;
       try {
         stream =
-          await navigator.mediaDevices.getDisplayMedia(displayMediaOptions);
+          await getDisplayMedia(
+            constrainedDisplayVideoConstraints,
+            captureController,
+          );
       } catch (err) {
-        if (!captureController || (err as Error).name !== "TypeError") {
+        if (
+          !captureController &&
+          !isDisplayMediaConstraintRetryableError(err)
+        ) {
           throw err;
         }
         captureController = null;
-        stream = await navigator.mediaDevices.getDisplayMedia({
-          video: relaxedDisplayVideoConstraints,
-          audio: true,
-        });
+        try {
+          stream = await getDisplayMedia(
+            constrainedDisplayVideoConstraints,
+            null,
+          );
+        } catch (retryErr) {
+          if (!isDisplayMediaConstraintRetryableError(retryErr)) {
+            throw retryErr;
+          }
+          stream = await getDisplayMedia(relaxedDisplayVideoConstraints, null);
+        }
       }
       const track = stream.getVideoTracks()[0];
       if (!track) {

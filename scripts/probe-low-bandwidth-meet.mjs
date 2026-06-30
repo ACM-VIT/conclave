@@ -744,6 +744,11 @@ const getProbeSnapshotExpression = `(() => {
           }))
           .slice(0, 40)
       : [];
+  const displayMediaDebug =
+    typeof window !== "undefined" &&
+    typeof window.__conclaveGetDisplayMediaDebug === "function"
+      ? window.__conclaveGetDisplayMediaDebug()
+      : null;
   return {
     debugReady: Boolean(debug),
     connectionState: debug?.connectionState ?? null,
@@ -755,12 +760,13 @@ const getProbeSnapshotExpression = `(() => {
     shouldRunVideoEffects: debug?.shouldRunVideoEffects ?? null,
     videoEffects: debug?.videoEffects ?? null,
     publish: debug?.publish ?? null,
-	    videoProducer: debug?.videoProducer ?? null,
-	    renderedVideos,
-      adaptivePausedVideoTiles,
-	    videoEffectsNetworkResources,
-	    rtcSdpDebug,
-	    network: network
+    videoProducer: debug?.videoProducer ?? null,
+    renderedVideos,
+    adaptivePausedVideoTiles,
+    displayMediaDebug,
+    videoEffectsNetworkResources,
+    rtcSdpDebug,
+    network: network
       ? {
           quality: network.quality,
           publishQuality: network.publishQuality,
@@ -2131,13 +2137,67 @@ const installFakeDisplayMediaOverride = async (cdp) => {
           value: true,
         });
 
+        const displayMediaCalls = [];
+        const sanitizeDisplayMediaOptions = (value, depth = 0) => {
+          if (depth > 6) return "[max-depth]";
+          if (
+            value === null ||
+            typeof value === "string" ||
+            typeof value === "number" ||
+            typeof value === "boolean"
+          ) {
+            return value;
+          }
+          if (Array.isArray(value)) {
+            return value.map((entry) =>
+              sanitizeDisplayMediaOptions(entry, depth + 1),
+            );
+          }
+          if (typeof value !== "object") return String(typeof value);
+          const output = {};
+          for (const [key, entry] of Object.entries(value)) {
+            if (key === "controller") continue;
+            output[key] = sanitizeDisplayMediaOptions(entry, depth + 1);
+          }
+          return output;
+        };
+        const readConstraintNumber = (constraint, preferredKey) => {
+          if (typeof constraint === "number" && Number.isFinite(constraint)) {
+            return constraint;
+          }
+          if (!constraint || typeof constraint !== "object") return null;
+          const preferred = constraint[preferredKey];
+          if (typeof preferred === "number" && Number.isFinite(preferred)) {
+            return preferred;
+          }
+          for (const key of ["max", "ideal"]) {
+            const value = constraint[key];
+            if (typeof value === "number" && Number.isFinite(value)) {
+              return value;
+            }
+          }
+          return null;
+        };
+        window.__conclaveGetDisplayMediaDebug = () => ({
+          callCount: displayMediaCalls.length,
+          calls: displayMediaCalls.slice(-5),
+        });
+
         Object.defineProperty(mediaDevices, "getDisplayMedia", {
           configurable: true,
-          value: async () => {
+          value: async (options = {}) => {
+            displayMediaCalls.push(sanitizeDisplayMediaOptions(options));
             const canvas = document.createElement("canvas");
             canvas.width = 1920;
             canvas.height = 1080;
             const context = canvas.getContext("2d", { alpha: false });
+            const requestedFrameRate = Math.max(
+              1,
+              Math.min(
+                30,
+                readConstraintNumber(options?.video?.frameRate, "max") ?? 15,
+              ),
+            );
             let frame = 0;
             const paint = () => {
               if (!context) return;
@@ -2187,8 +2247,11 @@ const installFakeDisplayMediaOverride = async (cdp) => {
             };
 
             paint();
-            const interval = window.setInterval(paint, 100);
-            const stream = canvas.captureStream(15);
+            const interval = window.setInterval(
+              paint,
+              Math.max(16, Math.round(1000 / requestedFrameRate)),
+            );
+            const stream = canvas.captureStream(requestedFrameRate);
             const [videoTrack] = stream.getVideoTracks();
             if (videoTrack && "contentHint" in videoTrack) {
               videoTrack.contentHint = "detail";
@@ -2884,11 +2947,36 @@ const maxActiveEncodingValue = (encodings, key) =>
       .map((encoding) => Number(encoding[key]) || 0),
   );
 
+const getConstraintNumber = (constraint, preferredKey) => {
+  if (typeof constraint === "number" && Number.isFinite(constraint)) {
+    return constraint;
+  }
+  if (!constraint || typeof constraint !== "object") return null;
+  const preferred = constraint[preferredKey];
+  if (typeof preferred === "number" && Number.isFinite(preferred)) {
+    return preferred;
+  }
+  for (const key of ["max", "ideal"]) {
+    const value = constraint[key];
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+  }
+  return null;
+};
+
 const screenShareCaptureBoundsByProfile = {
-  good: { maxWidth: 3840, maxHeight: 2160 },
-  fair: { maxWidth: 2560, maxHeight: 1440 },
-  poor: { maxWidth: 1920, maxHeight: 1080 },
-  emergency: { maxWidth: 1280, maxHeight: 720 },
+  good: { maxWidth: 3840, maxHeight: 2160, maxFramerate: 24 },
+  fair: { maxWidth: 2560, maxHeight: 1440, maxFramerate: 12 },
+  poor: { maxWidth: 1920, maxHeight: 1080, maxFramerate: 5 },
+  emergency: { maxWidth: 1280, maxHeight: 720, maxFramerate: 3 },
+};
+
+const screenShareDecodedMinimumByProfile = {
+  good: { width: 1920, height: 1080 },
+  fair: { width: 1920, height: 1080 },
+  poor: { width: 1600, height: 900 },
+  emergency: { width: 1280, height: 720 },
 };
 
 const getMaxExpectedScreenShareScaleResolutionDownBy = (
@@ -2931,6 +3019,20 @@ const validateScreenPublishSnapshot = (
   const screenScaleResolutionDownBy = Math.max(
     1,
     maxActiveEncodingValue(screenEncodings, "scaleResolutionDownBy"),
+  );
+  const displayMediaVideoRequest =
+    snapshot.displayMediaDebug?.calls?.[0]?.video ?? null;
+  const displayMediaRequestedMaxFramerate = getConstraintNumber(
+    displayMediaVideoRequest?.frameRate,
+    "max",
+  );
+  const displayMediaRequestedMaxWidth = getConstraintNumber(
+    displayMediaVideoRequest?.width,
+    "max",
+  );
+  const displayMediaRequestedMaxHeight = getConstraintNumber(
+    displayMediaVideoRequest?.height,
+    "max",
   );
   const screenAudioMaxBitrate = maxActiveEncodingValue(
     screenAudioEncodings,
@@ -3018,6 +3120,37 @@ const validateScreenPublishSnapshot = (
     errors.push(
       `expected ${expectedPublishAdaptiveProfile} screen profile, got ${screenProfile}`,
     );
+  }
+  const expectedCaptureBounds =
+    screenShareCaptureBoundsByProfile[expectedPublishAdaptiveProfile];
+  if (!displayMediaVideoRequest) {
+    errors.push("missing display-media screen capture request debug");
+  } else if (expectedCaptureBounds) {
+    if (
+      displayMediaRequestedMaxFramerate !== null &&
+      displayMediaRequestedMaxFramerate >
+        expectedCaptureBounds.maxFramerate + 0.05
+    ) {
+      errors.push(
+        `screen capture requested too much frame rate for ${expectedPublishAdaptiveProfile}: ${displayMediaRequestedMaxFramerate}`,
+      );
+    }
+    if (
+      displayMediaRequestedMaxWidth !== null &&
+      displayMediaRequestedMaxWidth > expectedCaptureBounds.maxWidth
+    ) {
+      errors.push(
+        `screen capture requested too much width for ${expectedPublishAdaptiveProfile}: ${displayMediaRequestedMaxWidth}`,
+      );
+    }
+    if (
+      displayMediaRequestedMaxHeight !== null &&
+      displayMediaRequestedMaxHeight > expectedCaptureBounds.maxHeight
+    ) {
+      errors.push(
+        `screen capture requested too much height for ${expectedPublishAdaptiveProfile}: ${displayMediaRequestedMaxHeight}`,
+      );
+    }
   }
   const maxExpectedScreenScale =
     getMaxExpectedScreenShareScaleResolutionDownBy(
@@ -3160,6 +3293,10 @@ const validateScreenPublishSnapshot = (
       screenAudioProfile,
       audioProfile,
       screenVideoCodec,
+      displayMediaVideoRequest,
+      displayMediaRequestedMaxFramerate,
+      displayMediaRequestedMaxWidth,
+      displayMediaRequestedMaxHeight,
       screenMaxBitrate,
       screenMaxFramerate,
       screenScaleResolutionDownBy,
@@ -3291,13 +3428,19 @@ const validateScreenReceiveSnapshot = (
   }
   if (!largestRenderedScreenVideo) {
     errors.push("missing visible decoded remote screen-share video");
-  } else if (
-    largestRenderedScreenVideo.videoWidth < 1920 ||
-    largestRenderedScreenVideo.videoHeight < 1080
-  ) {
-    errors.push(
-      `expected full-resolution decoded screen-share video, got ${largestRenderedScreenVideo.videoWidth}x${largestRenderedScreenVideo.videoHeight}`,
-    );
+  } else {
+    const decodedMinimum =
+      screenShareDecodedMinimumByProfile[
+        expectEmergencyMode ? "emergency" : expected
+      ] ?? screenShareDecodedMinimumByProfile.good;
+    if (
+      largestRenderedScreenVideo.videoWidth < decodedMinimum.width ||
+      largestRenderedScreenVideo.videoHeight < decodedMinimum.height
+    ) {
+      errors.push(
+        `expected profile-crisp decoded screen-share video >=${decodedMinimum.width}x${decodedMinimum.height}, got ${largestRenderedScreenVideo.videoWidth}x${largestRenderedScreenVideo.videoHeight}`,
+      );
+    }
   }
   if (scoreAwareEntryErrors.length > 0) {
     errors.push(

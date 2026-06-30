@@ -388,8 +388,8 @@ assertRegex(
 );
 assertRegex(
   "webMeetMedia",
-  /getScreenSharePublishNetworkProfile[\s\S]*getScreenSharePublishNetworkProfileForAvailableOutgoingBitrate\([\s\S]*stats\?\.availableOutgoingBitrate[\s\S]*getMostConstrainedWebcamProducerNetworkProfile\([\s\S]*const screenNetworkProfile = getScreenSharePublishNetworkProfile\(\);[\s\S]*const relaxedDisplayVideoConstraints[\s\S]*displayMediaOptions[\s\S]*video: relaxedDisplayVideoConstraints,[\s\S]*getDisplayMedia\(displayMediaOptions\)[\s\S]*applyScreenShareTrackNetworkProfile\(track, screenNetworkProfile\)[\s\S]*buildScreenShareEncodingForNetworkProfile\([\s\S]*screenNetworkProfile,[\s\S]*track,[\s\S]*\)/,
-  "web screen-share start captures relaxed before applying BWE size and RTP caps",
+  /buildScreenShareVideoConstraintsForNetworkProfile[\s\S]*getScreenSharePublishNetworkProfile[\s\S]*getScreenSharePublishNetworkProfileForAvailableOutgoingBitrate\([\s\S]*stats\?\.availableOutgoingBitrate[\s\S]*getMostConstrainedWebcamProducerNetworkProfile\([\s\S]*const screenNetworkProfile = getScreenSharePublishNetworkProfile\(\);[\s\S]*const constrainedDisplayVideoConstraints[\s\S]*buildScreenShareVideoConstraintsForNetworkProfile\([\s\S]*screenNetworkProfile[\s\S]*const relaxedDisplayVideoConstraints[\s\S]*getDisplayMedia\([\s\S]*constrainedDisplayVideoConstraints,[\s\S]*captureController[\s\S]*getDisplayMedia\([\s\S]*constrainedDisplayVideoConstraints,[\s\S]*null[\s\S]*getDisplayMedia\(relaxedDisplayVideoConstraints, null\)[\s\S]*applyScreenShareTrackNetworkProfile\(track, screenNetworkProfile\)[\s\S]*buildScreenShareEncodingForNetworkProfile\([\s\S]*screenNetworkProfile,[\s\S]*track,[\s\S]*\)/,
+  "web screen-share start requests BWE capture constraints before applying RTP caps",
 );
 assertRegex(
   "webMeetSocket",
@@ -691,8 +691,8 @@ assertRegex(
 );
 assertRegex(
   "webLowBandwidthProbe",
-  /meetVideoStreamType: video\.dataset\.meetVideoStreamType[\s\S]*visibleScreenRenderedVideos = visibleRenderedVideos\.filter[\s\S]*meetVideoStreamType === "screen"[\s\S]*largestRenderedScreenVideo[\s\S]*expected full-resolution decoded screen-share video/,
-  "web screen receive probe verifies the actual rendered screen-share video",
+  /meetVideoStreamType: video\.dataset\.meetVideoStreamType[\s\S]*screenShareDecodedMinimumByProfile[\s\S]*visibleScreenRenderedVideos = visibleRenderedVideos\.filter[\s\S]*meetVideoStreamType === "screen"[\s\S]*largestRenderedScreenVideo[\s\S]*expected profile-crisp decoded screen-share video/,
+  "web screen receive probe verifies profile-crisp rendered screen-share video",
 );
 assertRegex(
   "webLowBandwidthProbe",
@@ -931,8 +931,13 @@ assertRegex(
 );
 assertRegex(
   "webLowBandwidthProbe",
-  /screenShareCaptureBoundsByProfile = \{[\s\S]*fair: \{ maxWidth: 2560, maxHeight: 1440 \}[\s\S]*poor: \{ maxWidth: 1920, maxHeight: 1080 \}[\s\S]*emergency: \{ maxWidth: 1280, maxHeight: 720 \}[\s\S]*getMaxExpectedScreenShareScaleResolutionDownBy[\s\S]*screenScaleResolutionDownBy > maxExpectedScreenScale/,
+  /screenShareCaptureBoundsByProfile = \{[\s\S]*fair: \{ maxWidth: 2560, maxHeight: 1440, maxFramerate: 12 \}[\s\S]*poor: \{ maxWidth: 1920, maxHeight: 1080, maxFramerate: 5 \}[\s\S]*emergency: \{ maxWidth: 1280, maxHeight: 720, maxFramerate: 3 \}[\s\S]*getMaxExpectedScreenShareScaleResolutionDownBy[\s\S]*screenScaleResolutionDownBy > maxExpectedScreenScale/,
   "web screen publish probe rejects avoidable screen-share downscaling",
+);
+assertRegex(
+  "webLowBandwidthProbe",
+  /window\.__conclaveGetDisplayMediaDebug[\s\S]*displayMediaCalls\.push\(sanitizeDisplayMediaOptions\(options\)\)[\s\S]*requestedFrameRate[\s\S]*canvas\.captureStream\(requestedFrameRate\)[\s\S]*displayMediaDebug[\s\S]*displayMediaVideoRequest[\s\S]*displayMediaRequestedMaxFramerate[\s\S]*screen capture requested too much frame rate/,
+  "web screen publish probe validates profile-bound display capture requests",
 );
 assertRegex(
   "webScreenShareNetworkProfile",
