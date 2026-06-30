@@ -3,8 +3,9 @@ import type { ReactNode } from "react";
 import "./globals.css";
 import ConclaveUpdatePill from "./components/ConclaveUpdatePill";
 import TelemetryProvider from "./components/TelemetryProvider";
+import { getPublicSiteUrl } from "@/lib/site-url";
 
-const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
+const siteUrl = getPublicSiteUrl();
 
 export const metadata: Metadata = {
   title: {

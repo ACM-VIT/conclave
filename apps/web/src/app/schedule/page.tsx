@@ -1,19 +1,14 @@
 import { Suspense } from "react";
-import type { Viewport } from "next";
 import { headers as nextHeaders } from "next/headers";
 import { redirect } from "next/navigation";
 import { auth } from "@/lib/auth";
 import RouteLoadingState from "../components/RouteLoadingState";
 import ScheduleClient from "./schedule-client";
 
-export const instant = true;
+// Cloudflare workerd currently throws a Cache Components viewport bailout
+// when resuming this route's partial-prerender payload.
+export const instant = false;
 export const prefetch = "allow-runtime";
-export const viewport: Viewport = {
-  width: "device-width",
-  initialScale: 1,
-  themeColor: "#131316",
-  colorScheme: "dark",
-};
 
 export default function SchedulePage() {
   return (

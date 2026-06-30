@@ -1,5 +1,4 @@
 import { Suspense } from "react";
-import type { Viewport } from "next";
 import { headers as nextHeaders } from "next/headers";
 import MeetsClientShell from "../meets-client-shell";
 import RouteLoadingState from "../components/RouteLoadingState";
@@ -17,14 +16,10 @@ type MeetRoomPageProps = {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
 };
 
-export const instant = true;
+// Cloudflare workerd currently throws a Cache Components viewport bailout
+// when resuming this route's partial-prerender payload.
+export const instant = false;
 export const prefetch = "allow-runtime";
-export const viewport: Viewport = {
-  width: "device-width",
-  initialScale: 1,
-  themeColor: "#131316",
-  colorScheme: "dark",
-};
 
 const getParamValue = (
   value: string | string[] | undefined,
