@@ -6,7 +6,9 @@ type SignInPageProps = {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
 };
 
-export const instant = true;
+// Cloudflare workerd currently throws a Cache Components viewport bailout
+// when resuming this route's partial-prerender payload.
+export const instant = false;
 export const prefetch = "allow-runtime";
 
 const getParamValue = (
