@@ -1693,6 +1693,11 @@ assertIncludes(
   "retrying consumer later",
   "web stale consumer recovery retries only the affected consumer",
 );
+assertRegex(
+  "webMeetSocket",
+  /SCREEN_SHARE_VIDEO_STALL_KEYFRAME_REQUEST_DELAY_MS = 900[\s\S]*SCREEN_SHARE_STALE_CONSUMER_RECOVERY_DELAY_MS = 4500[\s\S]*SCREEN_SHARE_FREEZE_KEYFRAME_REQUEST_COOLDOWN_MS = 2000[\s\S]*getVideoStallKeyFrameRequestDelayMs[\s\S]*SCREEN_SHARE_VIDEO_STALL_KEYFRAME_REQUEST_DELAY_MS[\s\S]*getStaleConsumerRecoveryDelayMs[\s\S]*SCREEN_SHARE_STALE_CONSUMER_RECOVERY_DELAY_MS/,
+  "web screen-share consumers use faster recovery timers than webcam consumers",
+);
 assertIncludes(
   "webMeetSocket",
   "if (consumer.paused || shouldRequestKeyFrame)",
@@ -1700,8 +1705,8 @@ assertIncludes(
 );
 assertRegex(
   "webMeetSocket",
-  /STALL_SAMPLES_BEFORE_PLI = 1[\s\S]*KEYFRAME_REQUEST_COOLDOWN_MS = 3500[\s\S]*bytesNow - prev\.bytes >= MIN_STALL_BYTE_DELTA[\s\S]*sampleNow - lastKeyFrameRequestAt >= KEYFRAME_REQUEST_COOLDOWN_MS[\s\S]*requestKeyFrame: true[\s\S]*lastKeyFrameRequestAt = sampleNow/,
-  "web frozen remote video decoders request keyframes after one stalled decode sample with cooldown",
+  /STALL_SAMPLES_BEFORE_PLI = 1[\s\S]*KEYFRAME_REQUEST_COOLDOWN_MS = 3500[\s\S]*bytesNow - prev\.bytes >= MIN_STALL_BYTE_DELTA[\s\S]*sampleNow - lastKeyFrameRequestAt >=[\s\S]*info\.type === "screen"[\s\S]*SCREEN_SHARE_FREEZE_KEYFRAME_REQUEST_COOLDOWN_MS[\s\S]*: KEYFRAME_REQUEST_COOLDOWN_MS[\s\S]*requestKeyFrame: true[\s\S]*lastKeyFrameRequestAt = sampleNow/,
+  "web frozen remote video decoders request keyframes after one stalled decode sample with screen-share cooldown",
 );
 {
   const text = source.webMeetSocket;
@@ -1722,6 +1727,15 @@ assertRegex(
     if (!section.includes("scheduleStaleConsumerRecovery();")) {
       failures.push(
         "web remote track mute should still schedule stale consumer recovery",
+      );
+    }
+    if (
+      !section.includes(
+        "}, getVideoStallKeyFrameRequestDelayMs(producerInfo));",
+      )
+    ) {
+      failures.push(
+        "web screen-share remote video mute should request keyframes on the faster screen-share delay",
       );
     }
   }
@@ -1772,6 +1786,11 @@ assertRegex(
     }
   }
 }
+assertRegex(
+  "webMeetSocket",
+  /scheduleStaleConsumerRecovery[\s\S]*getStaleConsumerRecoveryDelayMs\(producerInfo\)[\s\S]*Date\.now\(\) - mutedSince >=[\s\S]*getStaleConsumerRecoveryDelayMs\(producerInfo\)/,
+  "web screen-share stale consumer recovery uses faster screen-share reconsume timers",
+);
 {
   const text = source.webAdaptivePublishQuality;
   const start = text.indexOf("const applyLiveProducerProfile = useCallback(");

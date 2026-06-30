@@ -103,7 +103,9 @@ const DEFAULT_SERVER_RESTART_NOTICE =
   "Meeting server is restarting. You will be reconnected automatically.";
 const ADMIN_NOTICE_DURATION_MS = 60000;
 const VIDEO_STALL_KEYFRAME_REQUEST_DELAY_MS = 2500;
+const SCREEN_SHARE_VIDEO_STALL_KEYFRAME_REQUEST_DELAY_MS = 900;
 const STALE_CONSUMER_RECOVERY_DELAY_MS = 9000;
+const SCREEN_SHARE_STALE_CONSUMER_RECOVERY_DELAY_MS = 4500;
 const RESTART_ICE_ACK_TIMEOUT_MS = 5000;
 const PARTICIPANT_RECONNECTING_STATUS_FALLBACK_MS = 30000;
 const PARTICIPANT_RECONNECTING_STATUS_BUFFER_MS = 5000;
@@ -113,6 +115,26 @@ const STALE_REPLACEMENT_CLEANUP_DELAY_MS = 5000;
 const SCREEN_SHARE_STALE_REPLACEMENT_CLEANUP_DELAY_MS = 1500;
 const CLOSE_CONSUMER_RETRY_DELAY_MS = 500;
 const CLOSE_CONSUMER_MAX_ATTEMPTS = 4;
+const SCREEN_SHARE_FREEZE_KEYFRAME_REQUEST_COOLDOWN_MS = 2000;
+
+const isScreenShareVideoProducer = (
+  producerInfo: Pick<ProducerInfo, "kind" | "type">,
+): boolean => producerInfo.kind === "video" && producerInfo.type === "screen";
+
+const getVideoStallKeyFrameRequestDelayMs = (
+  producerInfo: Pick<ProducerInfo, "kind" | "type">,
+): number =>
+  isScreenShareVideoProducer(producerInfo)
+    ? SCREEN_SHARE_VIDEO_STALL_KEYFRAME_REQUEST_DELAY_MS
+    : VIDEO_STALL_KEYFRAME_REQUEST_DELAY_MS;
+
+const getStaleConsumerRecoveryDelayMs = (
+  producerInfo: Pick<ProducerInfo, "type">,
+): number =>
+  producerInfo.type === "screen"
+    ? SCREEN_SHARE_STALE_CONSUMER_RECOVERY_DELAY_MS
+    : STALE_CONSUMER_RECOVERY_DELAY_MS;
+
 const CLOSE_CONSUMER_RETRY_WINDOW_MS = 30000;
 const TURN_URL_PATTERN = /^turns?:/i;
 const TRANSPORT_CC_FEEDBACK_TYPE = "transport-cc";
@@ -3050,7 +3072,7 @@ export function useMeetSocket({
                     producerInfo,
                     `${response.kind} consumer stayed muted`,
                   );
-                }, STALE_CONSUMER_RECOVERY_DELAY_MS);
+                }, getStaleConsumerRecoveryDelayMs(producerInfo));
                 staleConsumerRecoveryTimeoutsRef.current.set(
                   producerInfo.producerId,
                   timeoutId,
@@ -3124,7 +3146,7 @@ export function useMeetSocket({
                       },
                       () => {},
                     );
-                  }, VIDEO_STALL_KEYFRAME_REQUEST_DELAY_MS);
+                  }, getVideoStallKeyFrameRequestDelayMs(producerInfo));
                   videoStallRecoveryTimeoutsRef.current.set(
                     producerInfo.producerId,
                     timeoutId,
@@ -3379,7 +3401,10 @@ export function useMeetSocket({
             const sampleNow = Date.now();
             if (
               stalls >= STALL_SAMPLES_BEFORE_PLI &&
-              sampleNow - lastKeyFrameRequestAt >= KEYFRAME_REQUEST_COOLDOWN_MS
+              sampleNow - lastKeyFrameRequestAt >=
+                (info.type === "screen"
+                  ? SCREEN_SHARE_FREEZE_KEYFRAME_REQUEST_COOLDOWN_MS
+                  : KEYFRAME_REQUEST_COOLDOWN_MS)
             ) {
               // Decoder is frozen but real media is flowing → force a keyframe.
               const socket2 = socketRef.current;
@@ -3534,7 +3559,8 @@ export function useMeetSocket({
               () => {},
             );
             if (
-              Date.now() - mutedSince >= STALE_CONSUMER_RECOVERY_DELAY_MS
+              Date.now() - mutedSince >=
+                getStaleConsumerRecoveryDelayMs(producerInfo)
             ) {
               void recoverStaleConsumerRef.current(
                 producerInfo,
