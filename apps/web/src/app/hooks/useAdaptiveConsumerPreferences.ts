@@ -48,6 +48,7 @@ interface UseAdaptiveConsumerPreferencesOptions {
   enabled: boolean;
   connectionQuality: ConnectionQuality;
   emergencyMode: boolean;
+  availableIncomingBitrateBps?: number | null;
   activeSpeakerId: string | null;
   debugStateRef?: React.MutableRefObject<
     AdaptiveConsumerPreferencesDebugSnapshot | null
@@ -66,6 +67,9 @@ const CONSUMER_PREFERENCE_ACK_TIMEOUT_MS = 3000;
 const AUDIO_CONSUMER_PRIORITY = 255;
 const CONSUMER_SCORE_STALE_AFTER_MS = 15000;
 const UNSUPPORTED_LAYER_RETRY_AFTER_MS = 30000;
+const SCREEN_SHARE_RECEIVE_FAIR_BPS = 1500000;
+const SCREEN_SHARE_RECEIVE_POOR_BPS = 550000;
+const SCREEN_SHARE_RECEIVE_EMERGENCY_BPS = 300000;
 
 type LayoutRole = {
   primary: boolean;
@@ -377,6 +381,33 @@ const getConsumerScoreQualityHint = (
   scoreQuality: ConsumerScoreQuality,
 ): ConnectionQuality => (scoreQuality === "unknown" ? "unknown" : scoreQuality);
 
+const getScreenShareReceiveQualityForAvailableBitrate = (
+  availableIncomingBitrateBps: number | null | undefined,
+): ConnectionQuality => {
+  if (
+    typeof availableIncomingBitrateBps !== "number" ||
+    !Number.isFinite(availableIncomingBitrateBps) ||
+    availableIncomingBitrateBps <= 0
+  ) {
+    return "unknown";
+  }
+  if (availableIncomingBitrateBps <= SCREEN_SHARE_RECEIVE_POOR_BPS) {
+    return "poor";
+  }
+  if (availableIncomingBitrateBps <= SCREEN_SHARE_RECEIVE_FAIR_BPS) {
+    return "fair";
+  }
+  return "good";
+};
+
+const isScreenShareReceiveEmergencyBitrate = (
+  availableIncomingBitrateBps: number | null | undefined,
+): boolean =>
+  typeof availableIncomingBitrateBps === "number" &&
+  Number.isFinite(availableIncomingBitrateBps) &&
+  availableIncomingBitrateBps > 0 &&
+  availableIncomingBitrateBps <= SCREEN_SHARE_RECEIVE_EMERGENCY_BPS;
+
 const buildLayerPreference = (
   targetSpatialLayer: number,
   targetTemporalLayer: number,
@@ -398,6 +429,7 @@ const getDesiredPreferences = (
     emergencyMode: boolean;
     emergencyKeepVideo: boolean;
     screenShareVideoActive: boolean;
+    availableIncomingBitrateBps: number | null;
     consumerScoreQuality: ConsumerScoreQuality;
   },
 ): DesiredConsumerPreferences | null => {
@@ -419,14 +451,22 @@ const getDesiredPreferences = (
 
   if (info.type === "screen") {
     const screenShareQuality = worstQuality(
-      quality,
+      worstQuality(
+        quality,
+        getScreenShareReceiveQualityForAvailableBitrate(
+          options.availableIncomingBitrateBps,
+        ),
+      ),
       getConsumerScoreQualityHint(options.consumerScoreQuality),
     );
+    const screenShareEmergency =
+      options.emergencyMode ||
+      isScreenShareReceiveEmergencyBitrate(options.availableIncomingBitrateBps);
     return {
       preferredLayers: bounds
         ? buildLayerPreference(
             0,
-            options.emergencyMode
+            screenShareEmergency
               ? 0
               : screenShareQuality === "poor" || screenShareQuality === "fair"
                 ? 1
@@ -593,6 +633,7 @@ export function useAdaptiveConsumerPreferences({
   enabled,
   connectionQuality,
   emergencyMode,
+  availableIncomingBitrateBps = null,
   activeSpeakerId,
   debugStateRef,
   onVideoAdaptivePauseStateChange,
@@ -890,6 +931,7 @@ export function useAdaptiveConsumerPreferences({
         emergencyMode,
         emergencyKeepVideo,
         screenShareVideoActive,
+        availableIncomingBitrateBps,
         consumerScoreQuality,
       });
       if (!desired) return;
@@ -1347,6 +1389,7 @@ export function useAdaptiveConsumerPreferences({
     writeDebugSnapshot(debugContext);
   }, [
     activeSpeakerId,
+    availableIncomingBitrateBps,
     clearScheduledPreferenceWork,
     connectionQuality,
     emergencyMode,

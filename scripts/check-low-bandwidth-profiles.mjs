@@ -555,6 +555,16 @@ assertRegex(
   /const screenShareVideoActive = Array\.from\([\s\S]*refs\.producerMapRef\.current\.values\(\),[\s\S]*info\.kind === "video" && info\.type === "screen"[\s\S]*screenShareVideoActive,/,
   "web receive policy detects active screen-share video",
 );
+assertRegex(
+  "webMeetClient",
+  /useAdaptiveConsumerPreferences\(\{[\s\S]*availableIncomingBitrateBps: selfConnectionStats\.availableIncomingBitrate,/,
+  "web screen-share receive adaptation receives measured incoming bitrate",
+);
+assertRegex(
+  "webAdaptiveConsumerPreferences",
+  /SCREEN_SHARE_RECEIVE_FAIR_BPS = 1500000[\s\S]*SCREEN_SHARE_RECEIVE_POOR_BPS = 550000[\s\S]*SCREEN_SHARE_RECEIVE_EMERGENCY_BPS = 300000[\s\S]*getScreenShareReceiveQualityForAvailableBitrate[\s\S]*availableIncomingBitrateBps <= SCREEN_SHARE_RECEIVE_POOR_BPS[\s\S]*availableIncomingBitrateBps <= SCREEN_SHARE_RECEIVE_FAIR_BPS[\s\S]*isScreenShareReceiveEmergencyBitrate[\s\S]*screenShareEmergency[\s\S]*screenShareQuality === "poor" \|\| screenShareQuality === "fair"/,
+  "web screen-share receive layers use incoming bitrate before full temporal FPS",
+);
 assertIncludes(
   "webAdaptiveConsumerPreferences",
   "isVisible ? bounds.maxTemporalLayer : 0",
@@ -752,8 +762,18 @@ assertRegex(
 );
 assertRegex(
   "webAdaptivePublishQuality",
-  /getLiveProfileForObservedQuality[\s\S]*quality === "poor"[\s\S]*emergencyMode \? "emergency" : "poor"[\s\S]*screenShareVideoActive[\s\S]*screenShareImmediateProfile[\s\S]*getLiveProfileForObservedQuality\(connectionQuality, emergencyMode\)[\s\S]*getLiveProfileForObservedQuality\(capRecoveryQuality, emergencyMode\)[\s\S]*const profile = liveProfile \?\? screenShareImmediateProfile[\s\S]*applyLiveProducerProfile\(profile\)/,
+  /getLiveProfileForObservedQuality[\s\S]*quality === "poor"[\s\S]*emergencyMode \? "emergency" : "poor"[\s\S]*screenShareVideoActive[\s\S]*screenShareImmediateProfile[\s\S]*getMostConstrainedProducerProfile\(\[[\s\S]*getLiveProfileForObservedQuality\([\s\S]*connectionQuality,[\s\S]*emergencyMode,[\s\S]*getLiveProfileForObservedQuality\([\s\S]*capRecoveryQuality,[\s\S]*emergencyMode,[\s\S]*const profile = liveProfile \?\? screenShareImmediateProfile[\s\S]*applyLiveProducerProfile\(profile\)/,
   "web screen sharing reserves uplink immediately without waiting for normal stability window",
+);
+assertRegex(
+  "webMeetClient",
+  /useAdaptivePublishQuality\(\{[\s\S]*availableOutgoingBitrateBps: selfConnectionStats\.availableOutgoingBitrate,/,
+  "web screen-share publish adaptation receives measured outgoing bitrate",
+);
+assertRegex(
+  "webAdaptivePublishQuality",
+  /SCREEN_SHARE_OUTGOING_FAIR_BPS = 1500000[\s\S]*SCREEN_SHARE_OUTGOING_POOR_BPS = 550000[\s\S]*SCREEN_SHARE_OUTGOING_EMERGENCY_BPS = 280000[\s\S]*getScreenShareProfileForAvailableOutgoingBitrate[\s\S]*availableOutgoingBitrateBps <= SCREEN_SHARE_OUTGOING_EMERGENCY_BPS[\s\S]*availableOutgoingBitrateBps <= SCREEN_SHARE_OUTGOING_POOR_BPS[\s\S]*availableOutgoingBitrateBps <= SCREEN_SHARE_OUTGOING_FAIR_BPS[\s\S]*getMostConstrainedProducerProfile\(\[[\s\S]*getScreenShareProfileForAvailableOutgoingBitrate\(/,
+  "web screen-share publish caps use outgoing bitrate before full-FPS profile",
 );
 assertRegex(
   "webMeetClient",
