@@ -7903,6 +7903,7 @@ final class MeetingViewModel {
         let normalizedQuestion = question.trimmingCharacters(in: .whitespacesAndNewlines)
         let prompt = normalizedQuestion.isEmpty ? NativeConclaveAssistantService.defaultQuestion : normalizedQuestion
         let answerId = "conclave-\(Int(Date().timeIntervalSince1970 * 1000))-\(String(UUID().uuidString.prefix(6)).lowercased())"
+        appendConclaveAssistantPlaceholder(id: answerId, timestamp: Date(), roomId: state.roomId)
 
         do {
             let authorization = try await socketManager.requestConclaveAuthorization(
@@ -7913,7 +7914,10 @@ final class MeetingViewModel {
             guard !relayToken.isEmpty else {
                 throw MeetingActionResponseError(message: authorization.error ?? "Conclave could not authorize this answer.")
             }
-            guard isCurrentJoinedCall(context) else { return }
+            guard isCurrentJoinedCall(context) else {
+                removeOptimisticChatMessage(id: answerId)
+                return
+            }
 
             let result = try await NativeConclaveAssistantService.ask(
                 answerId: answerId,
@@ -7922,7 +7926,10 @@ final class MeetingViewModel {
                 history: nativeConclaveAssistantHistory()
             )
 
-            guard isCurrentJoinedCall(context) else { return }
+            guard isCurrentJoinedCall(context) else {
+                removeOptimisticChatMessage(id: answerId)
+                return
+            }
             if let relay = result.relay {
                 socketManager.relayConclaveAnswer(relay)
                 appendConclaveAssistantAnswer(relay: relay, fallbackContent: result.content)
@@ -7936,7 +7943,12 @@ final class MeetingViewModel {
             }
         } catch {
             guard isSameCallContext(context) else { return }
-            addSystemMessage(.info(NativeConclaveAssistantService.presentationMessage(for: error)))
+            appendConclaveAssistantAnswer(
+                id: answerId,
+                content: NativeConclaveAssistantService.presentationMessage(for: error),
+                timestamp: Date(),
+                roomId: state.roomId
+            )
             debugLog("[Meeting] Conclave assistant error: \(error.localizedDescription)")
         }
     }
@@ -7952,6 +7964,17 @@ final class MeetingViewModel {
                 content: content
             )
         }
+    }
+
+    private func appendConclaveAssistantPlaceholder(id: String, timestamp: Date, roomId: String?) {
+        _ = appendChatMessage(ChatMessage(
+            id: id,
+            userId: ConclaveAssistantChatIdentity.userId,
+            displayName: ConclaveAssistantChatIdentity.displayName,
+            content: "",
+            timestamp: timestamp,
+            roomId: roomId
+        ))
     }
 
     private func appendConclaveAssistantAnswer(relay: ConclaveAssistantRelayPacket, fallbackContent: String) {

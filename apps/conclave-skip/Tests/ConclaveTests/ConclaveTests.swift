@@ -3546,6 +3546,38 @@ final class ConclaveTests: XCTestCase {
     }
 
     @MainActor
+    func testEmptyConclaveAssistantPlaceholderIsReplacedByFinalAnswer() throws {
+        let viewModel = MeetingViewModel()
+        viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
+        viewModel.state.sfuUserId = "local@example.com"
+        viewModel.state.roomId = "room-a"
+
+        let placeholderTimestamp = Date(timeIntervalSince1970: 1)
+        let placeholder = viewModel.receiveChatMessage(ChatMessage(
+            id: "assistant-message-1",
+            userId: ConclaveAssistantChatIdentity.userId,
+            displayName: ConclaveAssistantChatIdentity.displayName,
+            content: "",
+            timestamp: placeholderTimestamp,
+            roomId: "room-a"
+        ))
+        let finalAnswer = viewModel.receiveChatMessage(ChatMessage(
+            id: "assistant-message-1",
+            userId: ConclaveAssistantChatIdentity.userId,
+            displayName: ConclaveAssistantChatIdentity.displayName,
+            content: "Ok.",
+            timestamp: Date(timeIntervalSince1970: 2),
+            roomId: "room-a"
+        ))
+
+        XCTAssertNotNil(placeholder)
+        XCTAssertNil(finalAnswer)
+        XCTAssertEqual(viewModel.state.chatMessages.count, 1)
+        XCTAssertEqual(viewModel.state.chatMessages.first?.content, "Ok.")
+        XCTAssertEqual(viewModel.state.chatMessages.first?.timestamp, placeholderTimestamp)
+    }
+
+    @MainActor
     func testStaleChatCommandDoesNotMutateNextRoom() async throws {
         let viewModel = MeetingViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
@@ -4023,12 +4055,16 @@ final class ConclaveTests: XCTestCase {
 
     func testNativeConclaveMentionUsesAssistantFlowInsteadOfNativeBlocker() throws {
         let source = try sourceFileContents("Sources/Conclave/Features/Meeting/MeetingViewModel.swift")
+        let chatViewsSource = try sourceFileContents("Sources/Conclave/Features/Meeting/ChatViews.swift")
 
         XCTAssertTrue(source.contains("sendConclaveQuestion(trimmed, question: conclaveQuestion, replyTo: replyTo)"))
+        XCTAssertTrue(source.contains("appendConclaveAssistantPlaceholder(id: answerId"))
         XCTAssertTrue(source.contains("socketManager.requestConclaveAuthorization("))
         XCTAssertTrue(source.contains("NativeConclaveAssistantService.ask("))
         XCTAssertTrue(source.contains("socketManager.relayConclaveAnswer(relay)"))
         XCTAssertFalse(source.contains("Conclave AI is not available in the native app yet."))
+        XCTAssertTrue(chatViewsSource.contains("return \"Thinking...\""))
+        XCTAssertTrue(chatViewsSource.contains("content: ChatMessagePresentation.content(for: message)"))
     }
 
     @MainActor
