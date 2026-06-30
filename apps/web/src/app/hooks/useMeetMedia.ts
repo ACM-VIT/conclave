@@ -3340,10 +3340,7 @@ export function useMeetMedia({
             captureController,
           );
       } catch (err) {
-        if (
-          !captureController &&
-          !isDisplayMediaConstraintRetryableError(err)
-        ) {
+        if (!isDisplayMediaConstraintRetryableError(err)) {
           throw err;
         }
         captureController = null;
