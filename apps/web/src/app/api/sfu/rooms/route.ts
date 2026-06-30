@@ -19,9 +19,9 @@ export async function GET(request: Request) {
   const authResult = await requireSfuAdminUser(request);
   if (!authResult.ok) {
     return NextResponse.json(
-      { rooms: [] },
+      { error: authResult.error },
       {
-        status: 200,
+        status: authResult.status,
         headers: {
           "Cache-Control": "no-store",
         },
