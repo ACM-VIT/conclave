@@ -219,6 +219,8 @@ interface MeetsMainContentProps {
   isBrowserAudioMuted: boolean;
   onToggleBrowserAudio: () => void;
   meetError?: MeetError | null;
+  meetingEndedNotice?: string | null;
+  onDismissMeetingEndedNotice?: () => void;
   browserAudioNeedsGesture: boolean;
   onBrowserAudioAutoplayBlocked: () => void;
   isVoiceAgentRunning?: boolean;
@@ -472,6 +474,8 @@ export default function MeetsMainContent({
   onStopVoiceAgent,
   onClearVoiceAgentError,
   meetError,
+  meetingEndedNotice,
+  onDismissMeetingEndedNotice,
   isPopoutActive,
   isPopoutSupported,
   onOpenPopout,
@@ -1239,6 +1243,12 @@ export default function MeetsMainContent({
     },
     [onPendingUserStale, setPendingUsers],
   );
+
+  const handleEndRoomForEveryone = useCallback(() => {
+    if (!endRoomForEveryone) return;
+    void endRoomForEveryone();
+  }, [endRoomForEveryone]);
+
   const hasBrowserAudio = useMemo(
     () =>
       participantsArray.some(
@@ -1558,6 +1568,8 @@ export default function MeetsMainContent({
             onUserChange={onUserChange}
             onIsAdminChange={onIsAdminChange}
             meetError={meetError}
+            meetingEndedNotice={meetingEndedNotice}
+            onDismissMeetingEndedNotice={onDismissMeetingEndedNotice}
             videoEffects={videoEffects}
             onVideoEffectsChange={onVideoEffectsChange}
             onPrejoinMediaCommit={onPrejoinMediaCommit}
@@ -1792,7 +1804,9 @@ export default function MeetsMainContent({
                 onToggleHandRaised={toggleHandRaised}
                 onSendReaction={sendReaction}
                 onLeave={leaveRoom}
-                onEndForEveryone={endRoomForEveryone}
+                onEndForEveryone={
+                  endRoomForEveryone ? handleEndRoomForEveryone : undefined
+                }
                 selectedAudioInputDeviceId={selectedAudioInputDeviceId}
                 selectedAudioOutputDeviceId={selectedAudioOutputDeviceId}
                 selectedVideoInputDeviceId={selectedVideoInputDeviceId}

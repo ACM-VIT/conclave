@@ -742,6 +742,7 @@ struct JoinView: View {
                 }
 
                 authErrorBanner
+                meetingEndedNoticeBanner
                 
                 VStack(alignment: .leading, spacing: 10) {
                     Text("Your name")
@@ -1174,6 +1175,7 @@ struct JoinView: View {
     private var newMeetingForm: some View {
         VStack(spacing: joinFormContentSpacing) {
             authErrorBanner
+            meetingEndedNoticeBanner
             identityInputSection
             joinFormErrorBanner
             startMeetingButton
@@ -1319,6 +1321,7 @@ struct JoinView: View {
     private var joinMeetingForm: some View {
         VStack(spacing: joinFormContentSpacing) {
             authErrorBanner
+            meetingEndedNoticeBanner
             identityInputSection
             roomNameInputSection
             if shouldRenderInviteCodeInput {
@@ -1517,6 +1520,41 @@ struct JoinView: View {
                 RoundedRectangle(cornerRadius: ACMRadius.md)
                     .strokeBorder(lineWidth: 1)
                     .foregroundStyle(ACMColors.error.opacity(0.28))
+            }
+            .clipShape(RoundedRectangle(cornerRadius: ACMRadius.md))
+        }
+    }
+
+    @ViewBuilder
+    private var meetingEndedNoticeBanner: some View {
+        if let message = viewModel.state.meetingEndedNoticeMessage, !message.isEmpty {
+            HStack(alignment: .top, spacing: 8) {
+                ACMSystemIcon.icon("info.circle.fill", android: "info", size: 14, tint: "accent")
+                    .foregroundStyle(ACMColors.primaryOrange)
+                    .frame(width: 18, height: 18)
+
+                Text(message)
+                    .font(ACMFont.trial(13))
+                    .foregroundStyle(ACMColors.text)
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                Button {
+                    viewModel.dismissMeetingEndedNotice()
+                } label: {
+                    ACMSystemIcon.icon("xmark", android: "close", size: 12, tint: "muted")
+                        .foregroundStyle(ACMColors.textMuted)
+                        .frame(width: 22, height: 22)
+                }
+                .buttonStyle(.plain)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(12)
+            .acmColorBackground(ACMColors.primaryOrange.opacity(0.12))
+            .overlay {
+                RoundedRectangle(cornerRadius: ACMRadius.md)
+                    .strokeBorder(lineWidth: 1)
+                    .foregroundStyle(ACMColors.primaryOrange.opacity(0.28))
             }
             .clipShape(RoundedRectangle(cornerRadius: ACMRadius.md))
         }

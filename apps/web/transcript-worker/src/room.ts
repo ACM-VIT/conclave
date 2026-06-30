@@ -102,7 +102,7 @@ const createIdleSession = (roomId: string): TranscriptSessionState => ({
   updatedAt: Date.now(),
   error: null,
 });
-
+  
 const TRANSCRIPT_AUDIO_DEBUG_INTERVAL_MS = 15_000;
 
 type TranscriptAudioDebugStats = {

@@ -609,6 +609,28 @@ const streamNeedsMediaRefresh = (
   return false;
 };
 
+const isRoomEndedByLocalUser = (
+  endedBy: string | null | undefined,
+  localUserId: string,
+): boolean => {
+  const normalizedEndedBy = endedBy?.trim() ?? "";
+  if (!normalizedEndedBy) return false;
+
+  const normalizedLocalUserId = localUserId.trim();
+  if (normalizedEndedBy === normalizedLocalUserId) return true;
+
+  const localUserKey = normalizedLocalUserId.split("#")[0] ?? "";
+  return localUserKey.length > 0 && normalizedEndedBy === localUserKey;
+};
+
+const resolveRoomEndedNoticeMessage = (message?: string): string => {
+  const trimmed = message?.trim() ?? "";
+  if (!trimmed || trimmed === "This meeting has been ended by the host.") {
+    return "The host ended this meeting. You are no longer connected.";
+  }
+  return trimmed;
+};
+
 interface UseMeetSocketOptions {
   refs: MeetRefs;
   roomId: string;
@@ -644,6 +666,7 @@ interface UseMeetSocketOptions {
   setPendingUsers: React.Dispatch<React.SetStateAction<Map<string, string>>>;
   setConnectionState: (state: ConnectionState) => void;
   setMeetError: (error: MeetError | null) => void;
+  setMeetingEndedNotice?: (message: string | null) => void;
   setWaitingMessage: (message: string | null) => void;
   setHostUserId: (userId: string | null) => void;
   setHostUserIds: React.Dispatch<React.SetStateAction<string[]>>;
@@ -710,6 +733,7 @@ interface UseMeetSocketOptions {
     getCachedToken?: (roomId: string) => JoinInfo | null;
   };
   onSocketReady?: (socket: Socket | null) => void;
+  onLocalRoomEnded?: () => void;
   bypassMediaPermissions?: boolean;
 }
 
@@ -736,6 +760,7 @@ export function useMeetSocket({
   setPendingUsers,
   setConnectionState,
   setMeetError,
+  setMeetingEndedNotice,
   setWaitingMessage,
   setHostUserId,
   setHostUserIds,
@@ -776,6 +801,7 @@ export function useMeetSocket({
   onTtsMessage,
   prewarm,
   onSocketReady,
+  onLocalRoomEnded,
   bypassMediaPermissions = false,
 }: UseMeetSocketOptions) {
   const participantIdsRef = useRef<Set<string>>(new Set([userId]));
@@ -812,6 +838,7 @@ export function useMeetSocket({
     new Map(),
   );
   const closeConsumerRetryTimeoutsRef = useRef<Map<string, number>>(new Map());
+  const localRoomEndedHandledRef = useRef(false);
   const mutedConsumerSinceRef = useRef<Map<string, number>>(new Map());
   const producerPausedStateRef = useRef<Map<string, boolean>>(new Map());
   // Per-video-consumer decode progress for the freeze watchdog: last
@@ -1540,6 +1567,22 @@ export function useMeetSocket({
     producerSyncIntervalRef,
     updateReconnectRecoveryStatus,
     onSocketReady,
+  ]);
+
+  const finishLocalRoomEnded = useCallback(() => {
+    if (localRoomEndedHandledRef.current) return;
+    localRoomEndedHandledRef.current = true;
+    setMeetError(null);
+    setMeetingEndedNotice?.(null);
+    setWaitingMessage(null);
+    cleanup();
+    onLocalRoomEnded?.();
+  }, [
+    cleanup,
+    onLocalRoomEnded,
+    setMeetError,
+    setMeetingEndedNotice,
+    setWaitingMessage,
   ]);
 
   const resolveMediaPublishIntent = useCallback(
@@ -4369,18 +4412,25 @@ export function useMeetSocket({
               cleanup();
             });
 
-            // Host ended the meeting (admin:endRoom). The SFU emits roomEnded to
-            // everyone (incl. pending) then disconnects them; without this the
-            // client just went silently dark. Tear down + show a terminal notice.
+            // Host ended the meeting (admin:endRoom). Local hosts go straight
+            // home; everyone else lands back in the lobby with a non-error note.
             socket.on(
               "roomEnded",
-              ({ message }: { message?: string }) => {
-                console.log("[Meets] Room ended by host");
-                setMeetError({
-                  code: "UNKNOWN",
-                  message: message || "The host ended the meeting.",
-                  recoverable: false,
-                });
+              ({
+                message,
+                endedBy,
+              }: {
+                message?: string;
+                endedBy?: string;
+              }) => {
+                console.log("[Meets] Room ended", { endedBy });
+                if (isRoomEndedByLocalUser(endedBy, userId)) {
+                  finishLocalRoomEnded();
+                  return;
+                }
+
+                setMeetError(null);
+                setMeetingEndedNotice?.(resolveRoomEndedNoticeMessage(message));
                 setWaitingMessage(null);
                 cleanup();
               },
@@ -5693,6 +5743,7 @@ export function useMeetSocket({
       isMuted,
       isAdmin,
       ghostEnabled,
+      finishLocalRoomEnded,
       setIsAdmin,
       isRoomEvent,
       joinOptionsRef,
@@ -5736,6 +5787,7 @@ export function useMeetSocket({
       setAdminNotice,
       setLocalStream,
       setMeetError,
+      setMeetingEndedNotice,
       setPendingUsers,
       setWaitingMessage,
       setNetworkManagedVideoQuality,
@@ -6189,7 +6241,9 @@ export function useMeetSocket({
         isAdmin,
       });
 
+      localRoomEndedHandledRef.current = false;
       setMeetError(null);
+      setMeetingEndedNotice?.(null);
       updateReconnectRecoveryStatus(null);
       setConnectionState("connecting");
       primeAudioOutput();
@@ -6378,6 +6432,7 @@ export function useMeetSocket({
       setConnectionState,
       setLocalStream,
       setMeetError,
+      setMeetingEndedNotice,
       setRoomId,
       socketRef,
       stopLocalTrack,
@@ -6566,12 +6621,15 @@ export function useMeetSocket({
               resolve(false);
               return;
             }
+            if (response.success) {
+              finishLocalRoomEnded();
+            }
             resolve(response.success);
           },
         );
       });
     },
-    [socketRef],
+    [finishLocalRoomEnded, socketRef],
   );
 
   const getTranscriptToken =

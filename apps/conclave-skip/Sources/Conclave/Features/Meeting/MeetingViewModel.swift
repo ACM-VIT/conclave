@@ -1078,7 +1078,10 @@ final class MeetingViewModel {
             Task { @MainActor in
                 guard self.isCurrentSocketEvent(eventContext, roomId: notification.roomId) else { return }
                 let message = notification.message?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                await self.finishTerminalRoomError(message.isEmpty ? "The host ended the meeting" : message)
+                await self.finishRoomEnded(
+                    message.isEmpty ? "This meeting has been ended by the host." : message,
+                    endedBy: notification.endedBy
+                )
             }
         }
 
@@ -5045,6 +5048,7 @@ final class MeetingViewModel {
         // (ErrorView) still show it after teardown — so the fresh-join path is
         // where we wipe it, or it would leak into the next meeting's banner.
         self.state.errorMessage = nil
+        self.state.meetingEndedNoticeMessage = nil
         self.isIntentionalLeave = false
         self.isIntentionalTeardownInProgress = false
         self.shouldRejoinAfterReconnect = false
@@ -5897,6 +5901,7 @@ final class MeetingViewModel {
         shouldRejoinAfterReconnect = false
         isRejoinInFlight = false
         resetReconnectRetryState()
+        state.meetingEndedNoticeMessage = nil
         socketManager.disconnect()
         Task {
             await cleanup(lifecycleGeneration: leavingGeneration)
@@ -5915,12 +5920,61 @@ final class MeetingViewModel {
         state.errorMessage = message
         state.waitingMessage = nil
         state.joinFormErrorMessage = nil
+        state.meetingEndedNoticeMessage = nil
         state.serverRestartNotice = nil
         socketManager.disconnect()
         #if !SKIP
         HapticManager.shared.trigger(.error)
         #endif
         await cleanup()
+    }
+
+    private func finishRoomEnded(_ message: String, endedBy: String?) async {
+        await finishMeetingEnded(showNotice: !isRoomEndedByLocalUser(endedBy), message: message)
+    }
+
+    private func finishLocalMeetingEnded() async {
+        await finishMeetingEnded(showNotice: false, message: nil)
+    }
+
+    private func finishMeetingEnded(showNotice: Bool, message: String?) async {
+        guard !isIntentionalTeardownInProgress else { return }
+        let endingGeneration = meetingLifecycleGeneration
+        isIntentionalLeave = true
+        isIntentionalTeardownInProgress = true
+        shouldRejoinAfterReconnect = false
+        isRejoinInFlight = false
+        resetReconnectRetryState()
+        state.connectionState = ConnectionState.disconnected
+        state.errorMessage = nil
+        state.waitingMessage = nil
+        state.joinFormErrorMessage = nil
+        state.meetingEndedNoticeMessage = showNotice ? meetingEndedNotice(message) : nil
+        state.serverRestartNotice = nil
+        clearAdminNotice()
+        socketManager.disconnect()
+        await cleanup(lifecycleGeneration: endingGeneration)
+        guard meetingLifecycleGeneration == endingGeneration else { return }
+        isIntentionalTeardownInProgress = false
+    }
+
+    private func isRoomEndedByLocalUser(_ endedBy: String?) -> Bool {
+        let normalizedEndedBy = endedBy?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !normalizedEndedBy.isEmpty else { return false }
+
+        let localUserId = state.userId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let localSfuUserId = state.sfuUserId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if normalizedEndedBy == localUserId || normalizedEndedBy == localSfuUserId {
+            return true
+        }
+
+        let localUserKey = localUserId.components(separatedBy: "#").first ?? ""
+        return !localUserKey.isEmpty && normalizedEndedBy == localUserKey
+    }
+
+    private func meetingEndedNotice(_ message: String?) -> String {
+        let trimmed = message?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? "The host ended this meeting. You are back on the home screen." : trimmed
     }
 
     private func finishJoinFailure(_ message: String) async {
@@ -6378,6 +6432,7 @@ final class MeetingViewModel {
         state.connectionState = ConnectionState.disconnected
         state.errorMessage = nil
         state.joinFormErrorMessage = nil
+        state.meetingEndedNoticeMessage = nil
         state.serverRestartNotice = nil
         clearAdminNotice()
         state.waitingMessage = nil
@@ -6389,6 +6444,10 @@ final class MeetingViewModel {
     /// surfaces visibly instead of being silently dropped while still joined.
     func dismissError() {
         state.errorMessage = nil
+    }
+
+    func dismissMeetingEndedNotice() {
+        state.meetingEndedNoticeMessage = nil
     }
 
     func dismissAdminNotice() {
@@ -9478,6 +9537,7 @@ final class MeetingViewModel {
             if response.success == false {
                 throw MeetingActionResponseError(message: response.error ?? "Failed to end meeting.")
             }
+            await finishLocalMeetingEnded()
             return true
         } catch {
             applyActionError(error, context: actionContext)

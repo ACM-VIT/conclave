@@ -394,6 +394,9 @@ export default function MeetsClient({
   const [currentCanGhostJoin, setCurrentCanGhostJoin] = useState(canGhostJoin);
   const [pendingNewMeetingRoomId, setPendingNewMeetingRoomId] =
     useState<string | null>(null);
+  const [meetingEndedNotice, setMeetingEndedNotice] = useState<string | null>(
+    null,
+  );
   const [guestStorageReady, setGuestStorageReady] = useState(false);
   const [isSigningOut, setIsSigningOut] = useState(false);
   const [appsSocket, setAppsSocket] = useState<Socket | null>(null);
@@ -2079,6 +2082,19 @@ export default function MeetsClient({
     };
   }, []);
 
+  const handleLocalRoomEnded = useCallback(() => {
+    setMeetingEndedNotice(null);
+    setMeetError(null);
+    setWaitingMessage(null);
+    setPendingNewMeetingRoomId(null);
+    setCurrentIsAdmin(false);
+    setIsGhostMode(false);
+    setRoomId("");
+    if (typeof window !== "undefined") {
+      window.location.assign("/");
+    }
+  }, [setIsGhostMode, setMeetError, setRoomId, setWaitingMessage]);
+
   const socket = useMeetSocket({
     refs,
     roomId,
@@ -2103,6 +2119,7 @@ export default function MeetsClient({
     setPendingUsers,
     setConnectionState,
     setMeetError,
+    setMeetingEndedNotice,
     setWaitingMessage,
     setHostUserId,
     setHostUserIds,
@@ -2148,6 +2165,7 @@ export default function MeetsClient({
     onTtsMessage: handleTtsMessage,
     prewarm,
     onSocketReady: setAppsSocket,
+    onLocalRoomEnded: handleLocalRoomEnded,
     bypassMediaPermissions,
   });
 
@@ -2373,6 +2391,7 @@ export default function MeetsClient({
     handleStopVoiceAgent();
     socket.cleanup();
     setMeetError(null);
+    setMeetingEndedNotice(null);
     setWaitingMessage(null);
     setPendingNewMeetingRoomId(null);
     setCurrentIsAdmin(false);
@@ -2395,6 +2414,7 @@ export default function MeetsClient({
     handleStopVoiceAgent();
     socket.cleanup();
     setMeetError(null);
+    setMeetingEndedNotice(null);
     setWaitingMessage(null);
     setIsGhostMode(false);
     setCurrentIsAdmin(true);
@@ -2687,6 +2707,7 @@ export default function MeetsClient({
   const handleEnterMeetingStart = useCallback(
     (action: "new" | "join") => {
       setMeetError(null);
+      setMeetingEndedNotice(null);
       setEnterErrored(false);
       setEnterAction(action);
     },
@@ -2695,6 +2716,7 @@ export default function MeetsClient({
 
   const handleEnterRetry = useCallback(() => {
     setMeetError(null);
+    setMeetingEndedNotice(null);
     setEnterErrored(false);
     setConnectionState("connecting");
     if (enterAction === "new") {
@@ -2715,6 +2737,7 @@ export default function MeetsClient({
     setEnterAction(null);
     setEnterErrored(false);
     setMeetError(null);
+    setMeetingEndedNotice(null);
     setConnectionState("disconnected");
   }, [setConnectionState, setMeetError]);
 
@@ -3115,6 +3138,8 @@ export default function MeetsClient({
         browserAudioNeedsGesture={browserAudioNeedsGesture}
         onBrowserAudioAutoplayBlocked={handleBrowserAudioAutoplayBlocked}
         meetError={meetError}
+        meetingEndedNotice={meetingEndedNotice}
+        onDismissMeetingEndedNotice={() => setMeetingEndedNotice(null)}
         isPopoutActive={isPopoutActive}
         isPopoutSupported={isPopoutSupported}
         onOpenPopout={openPopout}

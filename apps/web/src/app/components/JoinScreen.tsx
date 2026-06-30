@@ -14,6 +14,8 @@ import {
   ChevronDown,
   Check,
   Link2,
+  Info,
+  X,
   type LucideIcon,
 } from "lucide-react";
 import { memo, useCallback, useEffect, useRef, useState } from "react";
@@ -139,6 +141,8 @@ interface JoinScreenProps {
   onUserChange: (user: { id: string; email: string; name: string } | null) => void;
   onIsAdminChange: (isAdmin: boolean) => void;
   meetError?: MeetError | null;
+  meetingEndedNotice?: string | null;
+  onDismissMeetingEndedNotice?: () => void;
   videoEffects: VideoEffectsState;
   onVideoEffectsChange: Dispatch<SetStateAction<VideoEffectsState>>;
   onPrejoinMediaCommit?: (handoff: PrejoinMediaHandoff) => void;
@@ -286,6 +290,8 @@ function JoinScreen({
   onUserChange,
   onIsAdminChange,
   meetError,
+  meetingEndedNotice,
+  onDismissMeetingEndedNotice,
   videoEffects,
   onVideoEffectsChange,
   onPrejoinMediaCommit,
@@ -1082,6 +1088,29 @@ function JoinScreen({
                   : "Create a room, or join one with a code."}
               </p>
             </div>
+            {meetingEndedNotice ? (
+              <div
+                role="status"
+                className="flex items-start gap-2 rounded-xl border border-[#F95F4A]/25 bg-[#F95F4A]/10 px-3.5 py-3 text-left text-[13px] leading-snug text-[#fafafa]"
+              >
+                <Info
+                  size={16}
+                  className="mt-0.5 shrink-0 text-[#F95F4A]"
+                  aria-hidden="true"
+                />
+                <p className="min-w-0 flex-1">{meetingEndedNotice}</p>
+                {onDismissMeetingEndedNotice ? (
+                  <button
+                    type="button"
+                    onClick={onDismissMeetingEndedNotice}
+                    aria-label="Dismiss meeting ended notice"
+                    className="-mr-1 -mt-1 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[#fafafa]/55 transition-colors hover:bg-white/[0.08] hover:text-[#fafafa]"
+                  >
+                    <X size={14} aria-hidden="true" />
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
               {isSignedInUser ? (
                 <div className="flex items-center justify-between rounded-xl border border-white/10 bg-white/[0.04] px-4 py-3">
                   <div className="min-w-0">
