@@ -124,7 +124,7 @@ const getDefaultConsumerLayers = (
   if (producerInfo.type === "screen") {
     return {
       spatialLayer: 0,
-      temporalLayer: room.currentQuality === "low" ? 1 : 2,
+      temporalLayer: 2,
     };
   }
 

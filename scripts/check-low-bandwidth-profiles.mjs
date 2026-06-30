@@ -433,8 +433,8 @@ assertRegex(
 );
 assertRegex(
   "sfuMediaHandlers",
-  /producerInfo\.type === "screen"[\s\S]*spatialLayer: 0,[\s\S]*temporalLayer: room\.currentQuality === "low" \? 1 : 2[\s\S]*producerInfo\.type === "screen"[\s\S]*return 240;/,
-  "SFU screen-share consumers default to crisp high-priority low-FPS layers",
+  /producerInfo\.type === "screen"[\s\S]*spatialLayer: 0,[\s\S]*temporalLayer: 2,[\s\S]*producerInfo\.type === "screen"[\s\S]*return 240;/,
+  "SFU screen-share consumers default to high-priority full temporal FPS",
 );
 assertRegex(
   "sfuRoom",
