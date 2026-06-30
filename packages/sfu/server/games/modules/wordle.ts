@@ -11,24 +11,28 @@ import { numberOption } from "../config.js";
 
 type WordleTile = "green" | "yellow" | "gray";
 
-type Outcome = "win" | "lose" | "timeout";
+type PlayerOutcome = "win" | "lose" | "timeout";
 
 type GuessResult = {
-  playerId: string;
   word: string;
   feedback: WordleTile[];
   at: number;
+};
+
+type PlayerRoundState = {
+  guesses: GuessResult[];
+  outcome: PlayerOutcome | null;
+  solvedAt: number | null;
 };
 
 type WordleState = {
   phase: "lobby" | "set-word" | "playing" | "results";
   setterId: string | null;
   targetWord: string | null;
-  guesses: GuessResult[];
+  players: Record<string, PlayerRoundState>;
   maxTries: number;
   timeLimitMs: number;
   deadline: number;
-  outcome: Outcome | null;
   winnerId: string | null;
 };
 
@@ -53,7 +57,10 @@ const winnerName = (ctx: GameContext, winnerId: string | null): string | null =>
   return ctx.players.find((player) => player.id === winnerId)?.name ?? null;
 };
 
-const normalizeWord = (value: unknown, options?: { role?: "guess" | "secret" }): string => {
+const normalizeWord = (
+  value: unknown,
+  options?: { role?: "guess" | "secret" },
+): string => {
   const label = options?.role === "secret" ? "Word" : "Guess";
   if (typeof value !== "string") {
     throw new GameMoveError(`${label} must be exactly 5 letters`);
@@ -99,6 +106,49 @@ const evaluateGuess = (target: string, guess: string): WordleTile[] => {
 const isSolved = (feedback: WordleTile[]): boolean =>
   feedback.length === WORD_LENGTH && feedback.every((tile) => tile === "green");
 
+const contestantIds = (state: WordleState, ctx: GameContext): string[] =>
+  ctx.players
+    .map((player) => player.id)
+    .filter((playerId) => playerId !== state.setterId);
+
+const allContestantsFinished = (state: WordleState, ctx: GameContext): boolean => {
+  const ids = contestantIds(state, ctx);
+  return ids.length > 0 && ids.every((id) => Boolean(state.players[id]?.outcome));
+};
+
+const computeWinnerId = (state: WordleState, ctx: GameContext): string | null => {
+  const winners = contestantIds(state, ctx)
+    .map((id) => ({ id, progress: state.players[id] }))
+    .filter(
+      (
+        entry,
+      ): entry is {
+        id: string;
+        progress: PlayerRoundState;
+      } =>
+        Boolean(entry.progress) &&
+        entry.progress.outcome === "win" &&
+        entry.progress.solvedAt != null,
+    )
+    .sort((a, b) => {
+      const tries = a.progress.guesses.length - b.progress.guesses.length;
+      if (tries !== 0) return tries;
+      return (a.progress.solvedAt ?? Number.MAX_SAFE_INTEGER) -
+        (b.progress.solvedAt ?? Number.MAX_SAFE_INTEGER);
+    });
+
+  return winners[0]?.id ?? null;
+};
+
+const withResultsIfComplete = (state: WordleState, ctx: GameContext): WordleState => {
+  if (!allContestantsFinished(state, ctx)) return state;
+  return {
+    ...state,
+    phase: "results",
+    winnerId: computeWinnerId(state, ctx),
+  };
+};
+
 export const wordleModule: GameModule<WordleState> = {
   id: "wordle",
   name: "Wordle",
@@ -124,11 +174,10 @@ export const wordleModule: GameModule<WordleState> = {
       phase: "lobby",
       setterId: null,
       targetWord: null,
-      guesses: [],
+      players: {},
       maxTries: MAX_TRIES,
       timeLimitMs: numberOption(ctx.config, "timeLimitMinutes", 3) * 60_000,
       deadline: 0,
-      outcome: null,
       winnerId: null,
     };
   },
@@ -151,9 +200,8 @@ export const wordleModule: GameModule<WordleState> = {
           phase: "set-word",
           setterId: setter.id,
           targetWord: null,
-          guesses: [],
+          players: {},
           deadline: 0,
-          outcome: null,
           winnerId: null,
         };
       }
@@ -167,13 +215,22 @@ export const wordleModule: GameModule<WordleState> = {
         const word = normalizeWord((move.payload as { word?: unknown })?.word, {
           role: "secret",
         });
+
+        const players: Record<string, PlayerRoundState> = {};
+        for (const playerId of contestantIds(state, ctx)) {
+          players[playerId] = {
+            guesses: [],
+            outcome: null,
+            solvedAt: null,
+          };
+        }
+
         return {
           ...state,
           phase: "playing",
           targetWord: word,
-          guesses: [],
+          players,
           deadline: ctx.now + state.timeLimitMs,
-          outcome: null,
           winnerId: null,
         };
       }
@@ -187,44 +244,51 @@ export const wordleModule: GameModule<WordleState> = {
         if (state.setterId && move.playerId === state.setterId) {
           throw new GameMoveError("The selected player cannot submit guesses");
         }
+
+        const progress = state.players[move.playerId];
+        if (!progress) {
+          throw new GameMoveError("You are not an active player in this round");
+        }
+        if (progress.outcome) {
+          throw new GameMoveError("You already finished your board");
+        }
+
         const guess = normalizeWord((move.payload as { word?: unknown })?.word, {
           role: "guess",
         });
         const feedback = evaluateGuess(state.targetWord, guess);
         const guesses = [
-          ...state.guesses,
+          ...progress.guesses,
           {
-            playerId: move.playerId,
             word: guess,
             feedback,
             at: ctx.now,
           },
         ];
 
-        if (isSolved(feedback)) {
-          return {
-            ...state,
-            phase: "results",
-            guesses,
-            outcome: "win",
-            winnerId: move.playerId,
-          };
-        }
-
-        if (guesses.length >= state.maxTries) {
-          return {
-            ...state,
-            phase: "results",
-            guesses,
-            outcome: "lose",
-            winnerId: null,
-          };
-        }
-
-        return {
-          ...state,
+        const nextProgress: PlayerRoundState = {
           guesses,
+          outcome: progress.outcome,
+          solvedAt: progress.solvedAt,
         };
+
+        if (isSolved(feedback)) {
+          nextProgress.outcome = "win";
+          nextProgress.solvedAt = ctx.now;
+        } else if (guesses.length >= state.maxTries) {
+          nextProgress.outcome = "lose";
+          nextProgress.solvedAt = null;
+        }
+
+        const nextState: WordleState = {
+          ...state,
+          players: {
+            ...state.players,
+            [move.playerId]: nextProgress,
+          },
+        };
+
+        return withResultsIfComplete(nextState, ctx);
       }
       default:
         throw new GameMoveError(`Unknown move: ${move.type}`);
@@ -232,20 +296,74 @@ export const wordleModule: GameModule<WordleState> = {
   },
 
   onTick(state, ctx): WordleState {
-    if (state.phase === "playing" && state.deadline > 0 && ctx.now >= state.deadline) {
+    if (state.phase !== "playing") return state;
+
+    if (allContestantsFinished(state, ctx)) {
       return {
         ...state,
         phase: "results",
-        outcome: "timeout",
-        winnerId: null,
+        winnerId: computeWinnerId(state, ctx),
       };
     }
+
+    if (state.deadline > 0 && ctx.now >= state.deadline) {
+      const players: Record<string, PlayerRoundState> = { ...state.players };
+      for (const playerId of contestantIds(state, ctx)) {
+        const progress = players[playerId];
+        if (!progress || progress.outcome) continue;
+        players[playerId] = {
+          ...progress,
+          outcome: "timeout",
+          solvedAt: null,
+        };
+      }
+      const timedOutState: WordleState = {
+        ...state,
+        players,
+      };
+      return {
+        ...timedOutState,
+        phase: "results",
+        winnerId: computeWinnerId(timedOutState, ctx),
+      };
+    }
+
     return state;
   },
 
   getPhase: (state) => state.phase,
 
   publicView(state, ctx) {
+    const standings = contestantIds(state, ctx)
+      .map((playerId) => {
+        const progress = state.players[playerId] ?? {
+          guesses: [],
+          outcome: null,
+          solvedAt: null,
+        };
+        const playerName =
+          ctx.players.find((player) => player.id === playerId)?.name ?? "Unknown";
+        return {
+          playerId,
+          playerName,
+          triesUsed: progress.guesses.length,
+          outcome: progress.outcome,
+          solvedAt: progress.solvedAt,
+        };
+      })
+      .sort((a, b) => {
+        const aSolved = a.outcome === "win";
+        const bSolved = b.outcome === "win";
+        if (aSolved !== bSolved) return aSolved ? -1 : 1;
+        if (aSolved && bSolved) {
+          const tries = a.triesUsed - b.triesUsed;
+          if (tries !== 0) return tries;
+          return (a.solvedAt ?? Number.MAX_SAFE_INTEGER) -
+            (b.solvedAt ?? Number.MAX_SAFE_INTEGER);
+        }
+        return a.playerName.localeCompare(b.playerName);
+      });
+
     return {
       phase: state.phase,
       setterId: state.setterId,
@@ -255,20 +373,12 @@ export const wordleModule: GameModule<WordleState> = {
       timeLimitMs: state.timeLimitMs,
       wordLength: WORD_LENGTH,
       maxTries: state.maxTries,
-      triesUsed: state.guesses.length,
-      triesLeft: Math.max(0, state.maxTries - state.guesses.length),
-      guesses: state.guesses.map((entry) => ({
-        playerId: entry.playerId,
-        playerName:
-          ctx.players.find((player) => player.id === entry.playerId)?.name ??
-          "Unknown",
-        word: entry.word,
-        feedback: entry.feedback,
-      })),
+      standings,
+      finishedCount: standings.filter((entry) => Boolean(entry.outcome)).length,
+      totalContestants: standings.length,
       result:
         state.phase === "results"
           ? {
-              outcome: state.outcome,
               targetWord: state.targetWord,
               winnerId: state.winnerId,
               winnerName: winnerName(ctx, state.winnerId),
@@ -279,11 +389,16 @@ export const wordleModule: GameModule<WordleState> = {
 
   playerView(state, playerId) {
     const isSetter = state.setterId === playerId;
+    const progress = state.players[playerId] ?? null;
+
     return {
       isSetter,
       canSetWord: state.phase === "set-word" && isSetter,
-      canGuess: state.phase === "playing" && !isSetter,
+      canGuess: state.phase === "playing" && !isSetter && progress?.outcome == null,
       secretWord: isSetter || state.phase === "results" ? state.targetWord : null,
+      myGuesses: progress?.guesses ?? [],
+      myOutcome: progress?.outcome ?? null,
+      mySolvedAt: progress?.solvedAt ?? null,
     };
   },
 

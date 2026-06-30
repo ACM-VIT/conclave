@@ -12,6 +12,7 @@ import {
 } from "./gameUi";
 
 type TileState = "green" | "yellow" | "gray";
+type PlayerOutcome = "win" | "lose" | "timeout";
 
 type WordlePublic = {
   phase: "lobby" | "set-word" | "playing" | "results";
@@ -22,16 +23,16 @@ type WordlePublic = {
   timeLimitMs: number;
   wordLength: number;
   maxTries: number;
-  triesUsed: number;
-  triesLeft: number;
-  guesses: Array<{
+  standings: Array<{
     playerId: string;
     playerName: string;
-    word: string;
-    feedback: TileState[];
+    triesUsed: number;
+    outcome: PlayerOutcome | null;
+    solvedAt: number | null;
   }>;
+  finishedCount: number;
+  totalContestants: number;
   result: {
-    outcome: "win" | "lose" | "timeout" | null;
     targetWord: string | null;
     winnerId: string | null;
     winnerName: string | null;
@@ -43,6 +44,9 @@ type WordleMe = {
   canSetWord: boolean;
   canGuess: boolean;
   secretWord: string | null;
+  myGuesses: Array<{ word: string; feedback: TileState[]; at: number }>;
+  myOutcome: PlayerOutcome | null;
+  mySolvedAt: number | null;
 };
 
 const letterBg = (state: TileState | "empty"): string => {
@@ -50,6 +54,13 @@ const letterBg = (state: TileState | "empty"): string => {
   if (state === "yellow") return "#b79f3b";
   if (state === "gray") return "#3a3a3c";
   return "#232327";
+};
+
+const statusText = (outcome: PlayerOutcome | null): string => {
+  if (outcome === "win") return "Solved";
+  if (outcome === "lose") return "Out of tries";
+  if (outcome === "timeout") return "Timed out";
+  return "Playing";
 };
 
 const WORD_API_BASE = "https://api.dictionaryapi.dev/api/v2/entries/en/";
@@ -92,7 +103,6 @@ export default function WordleGame({
   pub,
   me,
   players,
-  userId,
   isAdmin,
   readOnly = false,
   move,
@@ -151,16 +161,20 @@ export default function WordleGame({
   };
 
   const gridRows = useMemo(() => {
-    const rows: Array<{ letters: string[]; states: (TileState | "empty")[]; by: string | null }> = [];
+    const rows: Array<{ letters: string[]; states: (TileState | "empty")[] }> = [];
     for (let i = 0; i < pub.maxTries; i += 1) {
-      const entry = pub.guesses[i];
+      const entry = me.myGuesses[i];
       if (entry) {
         rows.push({
           letters: entry.word.split(""),
           states: entry.feedback,
-          by: entry.playerName,
         });
-      } else if (pub.phase === "playing" && me.canGuess && i === pub.guesses.length) {
+      } else if (
+        pub.phase === "playing" &&
+        me.canGuess &&
+        me.myOutcome == null &&
+        i === me.myGuesses.length
+      ) {
         const letters = guessDraft
           .toUpperCase()
           .replace(/[^A-Z]/g, "")
@@ -170,25 +184,23 @@ export default function WordleGame({
         rows.push({
           letters,
           states: Array(pub.wordLength).fill("empty"),
-          by: "typing…",
         });
       } else {
         rows.push({
           letters: Array(pub.wordLength).fill(""),
           states: Array(pub.wordLength).fill("empty"),
-          by: null,
         });
       }
     }
     return rows;
-  }, [guessDraft, me.canGuess, pub.guesses, pub.maxTries, pub.phase, pub.wordLength]);
+  }, [guessDraft, me.canGuess, me.myGuesses, me.myOutcome, pub.maxTries, pub.phase, pub.wordLength]);
 
   if (pub.phase === "lobby") {
     return (
       <GameLobby
         gameId="wordle"
-        title="Wordle party round"
-        blurb="One random player sets a secret five-letter word. Everyone else has six shared tries to crack it."
+        title="Same word, solo boards"
+        blurb="One random player sets a 5-letter word. Everyone else solves it on their own board. Lowest tries wins."
         players={players}
         isAdmin={isAdmin}
         readOnly={readOnly}
@@ -210,12 +222,16 @@ export default function WordleGame({
             {pub.setterName ? `Word setter: ${pub.setterName}` : "Word setter"}
           </p>
           <p style={{ margin: "3px 0 0", color: color.textFaint, fontSize: 12 }}>
-            {pub.triesUsed}/{pub.maxTries} tries used
+            {pub.finishedCount}/{pub.totalContestants} players finished
             {pub.phase === "playing" ? ` · ${formatMmSs(remainingMs)} left` : ""}
           </p>
         </div>
         {pub.phase === "playing" ? (
-          <CountdownRing remainingMs={remainingMs} totalMs={pub.timeLimitMs} label={`${pub.triesLeft} left`} />
+          <CountdownRing
+            remainingMs={remainingMs}
+            totalMs={pub.timeLimitMs}
+            label={`${pub.finishedCount}/${pub.totalContestants}`}
+          />
         ) : null}
       </div>
 
@@ -226,7 +242,7 @@ export default function WordleGame({
               You were chosen to set the word
             </p>
             <p style={{ margin: 0, color: color.textMuted, fontSize: 13, lineHeight: 1.5 }}>
-              Enter a valid 5-letter English word. It is hidden from everyone until the round ends.
+              Enter a valid 5-letter English word. It is hidden until results.
             </p>
             <div style={{ display: "flex", gap: 8 }}>
               <input
@@ -280,83 +296,122 @@ export default function WordleGame({
         )
       ) : null}
 
-      <div style={{ display: "grid", gap: 8 }}>
-        {gridRows.map((row, rowIndex) => (
-          <div key={`row-${rowIndex}`} style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <div style={{ display: "grid", gridTemplateColumns: `repeat(${pub.wordLength}, minmax(0, 1fr))`, gap: 6, flex: 1 }}>
-              {row.letters.map((letter, colIndex) => (
-                <div
-                  key={`tile-${rowIndex}-${colIndex}`}
-                  style={{
-                    height: 42,
-                    borderRadius: radius.sm,
-                    border: `1px solid ${row.states[colIndex] === "empty" ? color.border : "transparent"}`,
-                    background: letterBg(row.states[colIndex]),
-                    color: "#ffffff",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    fontFamily: HEAD_FONT,
-                    fontSize: 18,
-                    fontWeight: 600,
-                    letterSpacing: "0.06em",
-                    textTransform: "uppercase",
-                  }}
-                >
-                  {letter}
-                </div>
-              ))}
+      <div
+        style={{
+          borderRadius: radius.md,
+          border: `1px solid ${color.border}`,
+          background: color.surfaceRaised,
+          padding: "10px 12px",
+        }}
+      >
+        <p style={{ margin: 0, fontFamily: HEAD_FONT, color: color.text, fontSize: 14 }}>
+          Player standings
+        </p>
+        <div style={{ marginTop: 8, display: "grid", gap: 6 }}>
+          {pub.standings.map((entry) => (
+            <div
+              key={entry.playerId}
+              style={{
+                display: "grid",
+                gridTemplateColumns: "1fr auto auto",
+                gap: 8,
+                alignItems: "center",
+                fontSize: 12,
+              }}
+            >
+              <span style={{ color: color.text }}>{entry.playerName}</span>
+              <span style={{ color: color.textMuted }}>{entry.triesUsed}/{pub.maxTries} tries</span>
+              <span style={{ color: entry.outcome === "win" ? color.success : color.textFaint }}>
+                {statusText(entry.outcome)}
+              </span>
             </div>
-            <span style={{ width: 72, textAlign: "right", color: color.textFaint, fontSize: 11 }}>
-              {row.by ?? ""}
-            </span>
-          </div>
-        ))}
+          ))}
+        </div>
       </div>
 
-      {pub.phase === "playing" && me.canGuess ? (
-        <div style={{ display: "flex", gap: 8 }}>
-          <input
-            value={guessDraft}
-            maxLength={5}
-            disabled={busy || readOnly}
-            onChange={(event) => setGuessDraft(event.currentTarget.value.toUpperCase())}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") {
-                event.preventDefault();
-                if (!busy && !readOnly) {
-                  void submitGuess();
-                }
-              }
-            }}
-            placeholder="ENTER GUESS"
-            style={{
-              flex: 1,
-              padding: "10px 12px",
-              borderRadius: radius.md,
-              border: `1px solid ${color.border}`,
-              background: color.surfaceRaised,
-              color: color.text,
-              letterSpacing: "0.18em",
-              fontFamily: HEAD_FONT,
-            }}
-          />
-          <PrimaryButton
-            disabled={busy || readOnly}
-            onClick={() => {
-              void submitGuess();
-            }}
-          >
-            Guess
-          </PrimaryButton>
-        </div>
-      ) : null}
+      {!me.isSetter ? (
+        <>
+          <div style={{ display: "grid", gap: 8 }}>
+            {gridRows.map((row, rowIndex) => (
+              <div key={`row-${rowIndex}`} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: `repeat(${pub.wordLength}, minmax(0, 1fr))`,
+                    gap: 6,
+                    flex: 1,
+                  }}
+                >
+                  {row.letters.map((letter, colIndex) => (
+                    <div
+                      key={`tile-${rowIndex}-${colIndex}`}
+                      style={{
+                        height: 42,
+                        borderRadius: radius.sm,
+                        border: `1px solid ${row.states[colIndex] === "empty" ? color.border : "transparent"}`,
+                        background: letterBg(row.states[colIndex]),
+                        color: "#ffffff",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        fontFamily: HEAD_FONT,
+                        fontSize: 18,
+                        fontWeight: 600,
+                        letterSpacing: "0.06em",
+                        textTransform: "uppercase",
+                      }}
+                    >
+                      {letter}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
 
-      {pub.phase === "playing" && me.isSetter ? (
+          {pub.phase === "playing" && me.canGuess ? (
+            <div style={{ display: "flex", gap: 8 }}>
+              <input
+                value={guessDraft}
+                maxLength={5}
+                disabled={busy || readOnly}
+                onChange={(event) => setGuessDraft(event.currentTarget.value.toUpperCase())}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    if (!busy && !readOnly) {
+                      void submitGuess();
+                    }
+                  }
+                }}
+                placeholder="ENTER GUESS"
+                style={{
+                  flex: 1,
+                  padding: "10px 12px",
+                  borderRadius: radius.md,
+                  border: `1px solid ${color.border}`,
+                  background: color.surfaceRaised,
+                  color: color.text,
+                  letterSpacing: "0.18em",
+                  fontFamily: HEAD_FONT,
+                }}
+              />
+              <PrimaryButton
+                disabled={busy || readOnly}
+                onClick={() => {
+                  void submitGuess();
+                }}
+              >
+                Guess
+              </PrimaryButton>
+            </div>
+          ) : null}
+        </>
+      ) : (
         <p style={{ margin: 0, color: color.textMuted, fontSize: 12 }}>
-          You are the setter. Watch the guesses roll in.
+          You are the setter for this round.
         </p>
-      ) : null}
+      )}
 
       {pub.phase === "results" && pub.result ? (
         <div
@@ -368,11 +423,9 @@ export default function WordleGame({
           }}
         >
           <p style={{ margin: 0, color: color.text, fontFamily: HEAD_FONT, fontSize: 16 }}>
-            {pub.result.outcome === "win"
-              ? `Solved by ${pub.result.winnerName ?? "a player"}`
-              : pub.result.outcome === "timeout"
-                ? "Time is up"
-                : "No tries left"}
+            {pub.result.winnerName
+              ? `Winner: ${pub.result.winnerName}`
+              : "No winner this round"}
           </p>
           <p style={{ margin: "6px 0 0", color: color.textMuted, fontSize: 13 }}>
             Secret word: <span style={{ color: color.text, fontFamily: HEAD_FONT }}>{pub.result.targetWord ?? "—"}</span>
@@ -386,14 +439,9 @@ export default function WordleGame({
           Observer mode is read-only.
         </p>
       ) : null}
-      {!error && pub.phase === "playing" && !me.canGuess && !me.isSetter ? (
+      {!error && me.myOutcome ? (
         <p style={{ margin: 0, color: color.textFaint, fontSize: 12 }}>
-          Waiting for the round to begin.
-        </p>
-      ) : null}
-      {pub.phase === "playing" && userId === null ? (
-        <p style={{ margin: 0, color: color.textFaint, fontSize: 12 }}>
-          Join as a player to submit guesses.
+          Your board is finished: {statusText(me.myOutcome)}.
         </p>
       ) : null}
     </div>
