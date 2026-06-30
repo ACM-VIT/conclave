@@ -126,13 +126,13 @@ assertRegex(
 );
 assertRegex(
   "webMeetMedia",
-  /buildScreenShareAudioOpusCodecOptions\([\s\S]*screenNetworkProfile[\s\S]*applyAudioProducerNetworkProfile\([\s\S]*audioProducer,[\s\S]*"screen",[\s\S]*screenNetworkProfile/,
-  "web screen audio initial publish immediately applies RTP network profile",
+  /audioTrack\.contentHint = "music"[\s\S]*buildScreenShareAudioOpusCodecOptions\([\s\S]*screenNetworkProfile[\s\S]*applyAudioProducerNetworkProfile\([\s\S]*audioProducer,[\s\S]*"screen",[\s\S]*screenNetworkProfile/,
+  "web screen audio initial publish marks media audio and immediately applies RTP network profile",
 );
 assertRegex(
   "webMeetSocket",
-  /buildScreenShareAudioOpusCodecOptions\([\s\S]*screenNetworkProfile[\s\S]*applyAudioProducerNetworkProfile\([\s\S]*audioProducer,[\s\S]*"screen",[\s\S]*screenNetworkProfile/,
-  "web screen audio reconnect publish immediately applies RTP network profile",
+  /audioTrack\.contentHint = "music"[\s\S]*buildScreenShareAudioOpusCodecOptions\([\s\S]*screenNetworkProfile[\s\S]*applyAudioProducerNetworkProfile\([\s\S]*audioProducer,[\s\S]*"screen",[\s\S]*screenNetworkProfile/,
+  "web screen audio reconnect publish marks media audio and immediately applies RTP network profile",
 );
 assertRegex(
   "iosWebrtc",

@@ -3400,6 +3400,9 @@ export function useMeetMedia({
       const audioTrack = stream.getAudioTracks()[0];
       if (audioTrack && audioTrack.readyState === "live") {
         try {
+          if ("contentHint" in audioTrack) {
+            audioTrack.contentHint = "music";
+          }
           const audioProducer = await transport.produce({
             track: audioTrack,
             codecOptions: buildScreenShareAudioOpusCodecOptions(

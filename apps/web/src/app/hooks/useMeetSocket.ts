@@ -1149,6 +1149,9 @@ export function useMeetSocket({
       const audioTrack = getFirstLiveTrack(screenStream.getAudioTracks());
       if (audioTrack) {
         try {
+          if ("contentHint" in audioTrack) {
+            audioTrack.contentHint = "music";
+          }
           const audioProducer = await transport.produce({
             track: audioTrack,
             codecOptions: buildScreenShareAudioOpusCodecOptions(
