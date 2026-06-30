@@ -5,7 +5,6 @@ import {
   resolveSfuUrl,
 } from "@/lib/sfu-admin-auth";
 
-export const runtime = "nodejs";
 
 type RouteContext = {
   params: Promise<{

@@ -1,4 +1,6 @@
+import { Suspense } from "react";
 import { headers as nextHeaders } from "next/headers";
+import RouteLoadingState from "../../components/RouteLoadingState";
 import { sanitizeWebinarLinkCode } from "../../lib/utils";
 import {
   resolveSfuClientId,
@@ -12,6 +14,9 @@ import WebinarLandingClient, {
 type WebinarRoomPageProps = {
   params: Promise<{ code: string }>;
 };
+
+export const instant = true;
+export const prefetch = "allow-runtime";
 
 const lookupScheduledWebinar = async (
   slug: string,
@@ -66,7 +71,23 @@ const lookupScheduledWebinar = async (
   }
 };
 
-export default async function WebinarRoomPage({ params }: WebinarRoomPageProps) {
+export default function WebinarRoomPage({ params }: WebinarRoomPageProps) {
+  return (
+    <Suspense
+      fallback={
+        <RouteLoadingState
+          eyebrow="Webinar"
+          title="Opening webinar"
+          detail="Resolving the event details and attendee lobby."
+        />
+      }
+    >
+      <WebinarRoomContent params={params} />
+    </Suspense>
+  );
+}
+
+async function WebinarRoomContent({ params }: WebinarRoomPageProps) {
   const { code } = await params;
 
   const rawCode = typeof code === "string" ? code : "";

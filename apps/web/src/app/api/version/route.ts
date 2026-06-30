@@ -5,8 +5,6 @@ import {
   normalizeConclaveSiteVersion,
 } from "@/app/lib/site-version";
 
-export const dynamic = "force-dynamic";
-export const revalidate = 0;
 
 type VersionedCloudflareEnv = {
   CF_VERSION_METADATA?: unknown;

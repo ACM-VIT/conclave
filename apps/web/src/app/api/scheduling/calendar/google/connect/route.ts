@@ -2,7 +2,6 @@ import { SignJWT } from "jose";
 import { NextResponse } from "next/server";
 import { requireSfuSessionUser } from "@/lib/sfu-user-auth";
 
-export const runtime = "nodejs";
 
 const GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const STATE_COOKIE = "conclave_google_calendar_state";

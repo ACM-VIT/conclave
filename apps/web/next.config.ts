@@ -18,6 +18,8 @@ const yProtocolsWebpackAlias = path.resolve(
 const nextConfig: NextConfig = {
   reactStrictMode: true,
   reactCompiler: true,
+  cacheComponents: true,
+  partialPrefetching: true,
   images: {
     unoptimized: true,
   },
@@ -34,6 +36,9 @@ const nextConfig: NextConfig = {
       "yjs/dist/yjs.cjs": yjsTurbopackAlias,
       "y-protocols": yProtocolsTurbopackAlias,
     },
+  },
+  experimental: {
+    turbopackFileSystemCacheForBuild: true,
   },
   async headers() {
     return [

@@ -2,7 +2,6 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { ASSET_ID_PATTERN, readAppAsset } from "../_assets";
 
-export const runtime = "nodejs";
 
 // Content types we serve INLINE with their declared type. Everything else —
 // notably text/html and image/svg+xml, which can execute script on our OWN
