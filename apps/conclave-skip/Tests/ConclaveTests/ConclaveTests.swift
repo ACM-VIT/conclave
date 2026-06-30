@@ -123,6 +123,13 @@ final class ConclaveTests: XCTestCase {
         XCTAssertEqual((payload["choice"] as? NSNumber)?.intValue, 2)
     }
 
+    func testNativeGameSheetAvoidsForcedUnwrapsForOptionalServerMetadata() throws {
+        let source = try sourceFileContents("Sources/Conclave/Features/Meeting/MoreSheetView.swift")
+
+        XCTAssertFalse(source.contains("rank!"))
+        XCTAssertFalse(source.contains("category!"))
+    }
+
     @MainActor
     func testNativeGamePlayerIdentityAcceptsSfuAndSessionAliases() throws {
         let state = MeetingState(

@@ -1614,7 +1614,8 @@ struct GamesSheetView: View {
             if let playerView {
                 let score = playerView.int("score") ?? 0
                 let rank = playerView.int("rank")
-                gameMetaLine(rank == nil ? "\(score) points" : "\(score) points - #\(rank!)")
+                let rankSuffix = rank.map { " - #\($0)" } ?? ""
+                gameMetaLine("\(score) points\(rankSuffix)")
             }
 
             hostRoundControls(phase: phase)
@@ -2086,7 +2087,7 @@ struct GamesSheetView: View {
         let total = view?.int("totalQuestions") ?? view?.int("total")
         let category = view?.string("category")
         if let index, let total, total > 0 {
-            let prefix = category?.isEmpty == false ? "\(category!) - " : ""
+            let prefix = category.flatMap { $0.isEmpty ? nil : "\($0) - " } ?? ""
             return "\(prefix)\(index + 1)/\(total)"
         }
         if let category, !category.isEmpty {
@@ -2241,7 +2242,8 @@ struct GamesSheetView: View {
         if phase == "discuss",
            let starter,
            !starter.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return category?.isEmpty == false ? "\(category!) - \(starter) starts" : "\(starter) starts"
+            let prefix = category.flatMap { $0.isEmpty ? nil : "\($0) - " } ?? ""
+            return "\(prefix)\(starter) starts"
         }
         return category?.isEmpty == false ? category : nil
     }
