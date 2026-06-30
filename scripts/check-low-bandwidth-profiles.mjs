@@ -7,6 +7,8 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const files = {
   webConstants: "apps/web/src/app/lib/constants.ts",
   webCodec: "apps/web/src/app/lib/webcam-codec.ts",
+  webScreenShareNetworkProfile:
+    "apps/web/src/app/lib/screen-share-network-profile.ts",
   webNetworkInformation: "apps/web/src/app/lib/network-information.ts",
   webConnectionQuality: "apps/web/src/app/hooks/useConnectionQuality.ts",
   webParticipantMedia: "apps/web/src/app/lib/participant-media.ts",
@@ -354,13 +356,13 @@ assertRegex(
 );
 assertRegex(
   "webMeetMedia",
-  /const relaxedDisplayVideoConstraints[\s\S]*displayMediaOptions[\s\S]*video: relaxedDisplayVideoConstraints,[\s\S]*getDisplayMedia\(displayMediaOptions\)[\s\S]*applyScreenShareTrackNetworkProfile\(track, screenNetworkProfile\)[\s\S]*buildScreenShareEncodingForNetworkProfile\([\s\S]*screenNetworkProfile,[\s\S]*track,[\s\S]*\)/,
-  "web screen-share start captures relaxed before applying size and RTP caps",
+  /getScreenSharePublishNetworkProfile[\s\S]*getScreenSharePublishNetworkProfileForAvailableOutgoingBitrate\([\s\S]*stats\?\.availableOutgoingBitrate[\s\S]*getMostConstrainedWebcamProducerNetworkProfile\([\s\S]*const screenNetworkProfile = getScreenSharePublishNetworkProfile\(\);[\s\S]*const relaxedDisplayVideoConstraints[\s\S]*displayMediaOptions[\s\S]*video: relaxedDisplayVideoConstraints,[\s\S]*getDisplayMedia\(displayMediaOptions\)[\s\S]*applyScreenShareTrackNetworkProfile\(track, screenNetworkProfile\)[\s\S]*buildScreenShareEncodingForNetworkProfile\([\s\S]*screenNetworkProfile,[\s\S]*track,[\s\S]*\)/,
+  "web screen-share start captures relaxed before applying BWE size and RTP caps",
 );
 assertRegex(
   "webMeetSocket",
-  /buildScreenShareEncodingForNetworkProfile\([\s\S]*screenNetworkProfile,[\s\S]*videoTrack,[\s\S]*\)/,
-  "web screen-share reconnect publish passes capture size into encoding caps",
+  /getScreenSharePublishNetworkProfile[\s\S]*getScreenSharePublishNetworkProfileForAvailableOutgoingBitrate\([\s\S]*stats\?\.availableOutgoingBitrate[\s\S]*getMostConstrainedWebcamProducerNetworkProfile\([\s\S]*const screenNetworkProfile = getScreenSharePublishNetworkProfile\(\);[\s\S]*buildScreenShareEncodingForNetworkProfile\([\s\S]*screenNetworkProfile,[\s\S]*videoTrack,[\s\S]*\)/,
+  "web screen-share reconnect publish starts with BWE capture-size encoding caps",
 );
 assertRegex(
   "webMeetMedia",
@@ -727,7 +729,7 @@ assertRegex(
 );
 assertRegex(
   "webMeetSocket",
-  /const screenNetworkProfile = getPublishNetworkProfile\(\);[\s\S]*buildMicrophoneOpusCodecOptions\(\s*getPublishNetworkProfile\(\),\s*\)[\s\S]*networkProfile: getPublishNetworkProfile\(\)[\s\S]*networkProfile: getPublishNetworkProfile\(\)/,
+  /const getScreenSharePublishNetworkProfile[\s\S]*const screenNetworkProfile = getScreenSharePublishNetworkProfile\(\);[\s\S]*buildMicrophoneOpusCodecOptions\(\s*getPublishNetworkProfile\(\),\s*\)[\s\S]*networkProfile: getPublishNetworkProfile\(\)[\s\S]*networkProfile: getPublishNetworkProfile\(\)/,
   "web socket publish paths use measured publish profile for recreated producers",
 );
 assertRegex(
@@ -767,7 +769,7 @@ assertRegex(
 );
 assertRegex(
   "webAdaptivePublishQuality",
-  /getLiveProfileForObservedQuality[\s\S]*quality === "poor"[\s\S]*emergencyMode \? "emergency" : "poor"[\s\S]*screenShareVideoActive[\s\S]*screenShareTargetProfile[\s\S]*getMostConstrainedProducerProfile\(\[[\s\S]*liveProfile,[\s\S]*getLiveProfileForObservedQuality\([\s\S]*connectionQuality,[\s\S]*emergencyMode,[\s\S]*getLiveProfileForObservedQuality\([\s\S]*capRecoveryQuality,[\s\S]*emergencyMode,[\s\S]*effectiveLiveProfile[\s\S]*const profile = effectiveLiveProfile \?\? screenShareImmediateProfile[\s\S]*applyLiveProducerProfile\(profile\)/,
+  /getLiveProfileForObservedQuality[\s\S]*quality === "poor"[\s\S]*emergencyMode \? "emergency" : "poor"[\s\S]*screenShareVideoActive[\s\S]*screenShareTargetProfile[\s\S]*getMostConstrainedWebcamProducerNetworkProfile\(\[[\s\S]*liveProfile,[\s\S]*getLiveProfileForObservedQuality\([\s\S]*connectionQuality,[\s\S]*emergencyMode,[\s\S]*getLiveProfileForObservedQuality\([\s\S]*capRecoveryQuality,[\s\S]*emergencyMode,[\s\S]*effectiveLiveProfile[\s\S]*const profile = effectiveLiveProfile \?\? screenShareImmediateProfile[\s\S]*applyLiveProducerProfile\(profile\)/,
   "web screen sharing reserves uplink immediately without waiting for normal stability window",
 );
 assertRegex(
@@ -776,9 +778,14 @@ assertRegex(
   "web screen-share publish adaptation receives measured outgoing bitrate",
 );
 assertRegex(
-  "webAdaptivePublishQuality",
-  /SCREEN_SHARE_OUTGOING_FAIR_BPS = 1500000[\s\S]*SCREEN_SHARE_OUTGOING_POOR_BPS = 550000[\s\S]*SCREEN_SHARE_OUTGOING_EMERGENCY_BPS = 280000[\s\S]*getScreenShareProfileForAvailableOutgoingBitrate[\s\S]*availableOutgoingBitrateBps <= SCREEN_SHARE_OUTGOING_EMERGENCY_BPS[\s\S]*availableOutgoingBitrateBps <= SCREEN_SHARE_OUTGOING_POOR_BPS[\s\S]*availableOutgoingBitrateBps <= SCREEN_SHARE_OUTGOING_FAIR_BPS[\s\S]*screenShareTargetProfile[\s\S]*liveProfile,[\s\S]*getScreenShareProfileForAvailableOutgoingBitrate\([\s\S]*effectiveLiveProfile[\s\S]*restoreStandardCaptureIfNeeded\(\)[\s\S]*applyLiveProducerProfile\(effectiveLiveProfile \?\? "good"\)/,
+  "webScreenShareNetworkProfile",
+  /SCREEN_SHARE_OUTGOING_FAIR_BPS = 1500000[\s\S]*SCREEN_SHARE_OUTGOING_POOR_BPS = 550000[\s\S]*SCREEN_SHARE_OUTGOING_EMERGENCY_BPS = 280000[\s\S]*getScreenSharePublishNetworkProfileForAvailableOutgoingBitrate[\s\S]*availableOutgoingBitrateBps <= SCREEN_SHARE_OUTGOING_EMERGENCY_BPS[\s\S]*availableOutgoingBitrateBps <= SCREEN_SHARE_OUTGOING_POOR_BPS[\s\S]*availableOutgoingBitrateBps <= SCREEN_SHARE_OUTGOING_FAIR_BPS/,
   "web screen-share publish caps use outgoing bitrate before full-FPS profile",
+);
+assertRegex(
+  "webAdaptivePublishQuality",
+  /screenShareTargetProfile[\s\S]*liveProfile,[\s\S]*getScreenSharePublishNetworkProfileForAvailableOutgoingBitrate\([\s\S]*effectiveLiveProfile[\s\S]*restoreStandardCaptureIfNeeded\(\)[\s\S]*applyLiveProducerProfile\(effectiveLiveProfile \?\? "good"\)/,
+  "web adaptive screen-share BWE caps stay active after stable live profile",
 );
 assertRegex(
   "webMeetClient",

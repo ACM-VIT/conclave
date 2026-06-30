@@ -69,6 +69,10 @@ import {
   produceWebcamTrack,
   type WebcamProducerNetworkProfile,
 } from "../lib/webcam-codec";
+import {
+  getMostConstrainedWebcamProducerNetworkProfile,
+  getScreenSharePublishNetworkProfileForAvailableOutgoingBitrate,
+} from "../lib/screen-share-network-profile";
 import { getBrowserNetworkSnapshot } from "../lib/network-information";
 import type {
   ConsumerTelemetrySnapshot,
@@ -882,6 +886,26 @@ export function useMeetSocket({
     [connectionQualityRef],
   );
 
+  const getScreenSharePublishNetworkProfile =
+    useCallback((): WebcamProducerNetworkProfile => {
+      const baseProfile = getPublishNetworkProfile();
+      const stats = connectionQualityRef?.current;
+      const browserNetwork = stats?.browserNetwork ?? getBrowserNetworkSnapshot();
+      const screenShareProfile =
+        getScreenSharePublishNetworkProfileForAvailableOutgoingBitrate(
+          stats?.availableOutgoingBitrate,
+          browserNetwork.emergency ||
+            (stats?.publishEmergencyMode === true &&
+              stats.publishQuality !== "good"),
+        );
+      return (
+        getMostConstrainedWebcamProducerNetworkProfile([
+          baseProfile,
+          screenShareProfile,
+        ]) ?? baseProfile
+      );
+    }, [connectionQualityRef, getPublishNetworkProfile]);
+
   const getReceiveNetworkProfile = useCallback(
     () =>
       getConnectionStatsNetworkProfile(connectionQualityRef?.current, "receive"),
@@ -1060,7 +1084,7 @@ export function useMeetSocket({
         videoTrack.contentHint = "detail";
       }
 
-      const screenNetworkProfile = getPublishNetworkProfile();
+      const screenNetworkProfile = getScreenSharePublishNetworkProfile();
       await applyScreenShareTrackNetworkProfile(videoTrack, screenNetworkProfile);
       const preferredScreenShareCodec = getPreferredScreenShareCodec(
         deviceRef.current,
@@ -1176,7 +1200,7 @@ export function useMeetSocket({
       deviceRef,
       emitCloseProducer,
       flushPendingScreenProducerCloses,
-      getPublishNetworkProfile,
+      getScreenSharePublishNetworkProfile,
       producerTransportRef,
       screenAudioProducerRef,
       screenProducerRef,

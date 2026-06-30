@@ -44,6 +44,10 @@ import {
   shouldUseWebcamSimulcast,
   type WebcamProducerNetworkProfile,
 } from "../lib/webcam-codec";
+import {
+  getMostConstrainedWebcamProducerNetworkProfile,
+  getScreenSharePublishNetworkProfileForAvailableOutgoingBitrate,
+} from "../lib/screen-share-network-profile";
 import type { ConnectionQualityStats } from "./useConnectionQuality";
 
 interface UseMeetMediaOptions {
@@ -818,6 +822,24 @@ export function useMeetMedia({
       if (quality === "fair") return "fair";
       return "good";
     }, [connectionQualityRef]);
+
+  const getScreenSharePublishNetworkProfile =
+    useCallback((): WebcamProducerNetworkProfile => {
+      const baseProfile = getPublishNetworkProfile();
+      const stats = connectionQualityRef?.current;
+      const browserNetwork = stats?.browserNetwork ?? getBrowserNetworkSnapshot();
+      const screenShareProfile =
+        getScreenSharePublishNetworkProfileForAvailableOutgoingBitrate(
+          stats?.availableOutgoingBitrate,
+          isPublishEmergencyProfile(stats, browserNetwork),
+        );
+      return (
+        getMostConstrainedWebcamProducerNetworkProfile([
+          baseProfile,
+          screenShareProfile,
+        ]) ?? baseProfile
+      );
+    }, [connectionQualityRef, getPublishNetworkProfile]);
 
   const waitForPreferredVideoPublishTrack = useCallback(
     async (stream: MediaStream, rawTrack: MediaStreamTrack) => {
@@ -3262,7 +3284,7 @@ export function useMeetMedia({
         }
       }
 
-      const screenNetworkProfile = getPublishNetworkProfile();
+      const screenNetworkProfile = getScreenSharePublishNetworkProfile();
 
       let captureController = createCaptureController();
       const relaxedDisplayVideoConstraints: MediaTrackConstraints & {
@@ -3449,7 +3471,7 @@ export function useMeetMedia({
     socketRef,
     setMeetError,
     ensureProducerTransportRef,
-    getPublishNetworkProfile,
+    getScreenSharePublishNetworkProfile,
     stopScreenShareStream,
     stopLocalTrack,
   ]);

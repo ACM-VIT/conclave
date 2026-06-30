@@ -7,6 +7,10 @@ import {
   applyWebcamProducerNetworkProfile,
   type WebcamProducerNetworkProfile,
 } from "../lib/webcam-codec";
+import {
+  getMostConstrainedWebcamProducerNetworkProfile,
+  getScreenSharePublishNetworkProfileForAvailableOutgoingBitrate,
+} from "../lib/screen-share-network-profile";
 import type { Producer, VideoQuality } from "../lib/types";
 import type { ConnectionQuality } from "./useConnectionQuality";
 
@@ -50,9 +54,6 @@ const STANDARD_CAPTURE_RESTORE_COOLDOWN_MS = 120000;
 const STANDARD_CAPTURE_MIN_WIDTH = 960;
 const STANDARD_CAPTURE_MIN_HEIGHT = 540;
 const STANDARD_CAPTURE_MIN_FRAMERATE = 24;
-const SCREEN_SHARE_OUTGOING_FAIR_BPS = 1500000;
-const SCREEN_SHARE_OUTGOING_POOR_BPS = 550000;
-const SCREEN_SHARE_OUTGOING_EMERGENCY_BPS = 280000;
 
 type QualityWindow = {
   quality: ConnectionQuality;
@@ -205,48 +206,6 @@ const getLiveProfileForObservedQuality = (
   if (quality === "fair") return "fair";
   if (quality === "good") return "good";
   return null;
-};
-
-const producerProfileRank: Record<WebcamProducerNetworkProfile, number> = {
-  good: 1,
-  fair: 2,
-  poor: 3,
-  emergency: 4,
-};
-
-const getMostConstrainedProducerProfile = (
-  profiles: Array<WebcamProducerNetworkProfile | null>,
-): WebcamProducerNetworkProfile | null =>
-  profiles.reduce<WebcamProducerNetworkProfile | null>((selected, profile) => {
-    if (!profile) return selected;
-    if (!selected) return profile;
-    return producerProfileRank[profile] > producerProfileRank[selected]
-      ? profile
-      : selected;
-  }, null);
-
-const getScreenShareProfileForAvailableOutgoingBitrate = (
-  availableOutgoingBitrateBps: number | null | undefined,
-  emergencyMode: boolean,
-): WebcamProducerNetworkProfile | null => {
-  if (emergencyMode) return "emergency";
-  if (
-    typeof availableOutgoingBitrateBps !== "number" ||
-    !Number.isFinite(availableOutgoingBitrateBps) ||
-    availableOutgoingBitrateBps <= 0
-  ) {
-    return null;
-  }
-  if (availableOutgoingBitrateBps <= SCREEN_SHARE_OUTGOING_EMERGENCY_BPS) {
-    return "emergency";
-  }
-  if (availableOutgoingBitrateBps <= SCREEN_SHARE_OUTGOING_POOR_BPS) {
-    return "poor";
-  }
-  if (availableOutgoingBitrateBps <= SCREEN_SHARE_OUTGOING_FAIR_BPS) {
-    return "fair";
-  }
-  return "good";
 };
 
 export function useAdaptivePublishQuality({
@@ -662,7 +621,7 @@ export function useAdaptivePublishQuality({
         screenProducerRef.current && !screenProducerRef.current.closed,
       );
       const screenShareTargetProfile = screenShareVideoActive
-        ? getMostConstrainedProducerProfile([
+        ? getMostConstrainedWebcamProducerNetworkProfile([
             liveProfile,
             !liveProfile
               ? getLiveProfileForObservedQuality(
@@ -676,7 +635,7 @@ export function useAdaptivePublishQuality({
                   emergencyMode,
                 )
               : null,
-            getScreenShareProfileForAvailableOutgoingBitrate(
+            getScreenSharePublishNetworkProfileForAvailableOutgoingBitrate(
               availableOutgoingBitrateBps,
               emergencyMode,
             ),
