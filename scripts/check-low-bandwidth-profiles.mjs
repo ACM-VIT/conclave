@@ -127,6 +127,11 @@ assertRegex(
   "web screen-audio Opus tracks microphone ladder",
 );
 assertRegex(
+  "webLowBandwidthProbe",
+  /opusMaxAverageBitrateByProfile = \{[\s\S]*good:\s*96000,[\s\S]*fair:\s*48000,[\s\S]*poor:\s*32000,[\s\S]*emergency:\s*24000,[\s\S]*maxAllowedAudioBitrateFor/,
+  "low-bandwidth probe expects the web Opus constrained ladder",
+);
+assertRegex(
   "webMeetMedia",
   /audioTrack\.contentHint = "music"[\s\S]*buildScreenShareAudioOpusCodecOptions\([\s\S]*screenNetworkProfile[\s\S]*applyAudioProducerNetworkProfile\([\s\S]*audioProducer,[\s\S]*"screen",[\s\S]*screenNetworkProfile/,
   "web screen audio initial publish marks media audio and immediately applies RTP network profile",

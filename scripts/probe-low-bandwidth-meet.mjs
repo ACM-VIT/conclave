@@ -229,22 +229,24 @@ const expectedAdaptiveProfile =
   profileName === "emergency" ? "emergency" : profile.expectedQuality;
 const expectEmergencyMode = profileName === "emergency";
 const expectedOpusPacketTimeMs = 20;
+const opusMaxAverageBitrateByProfile = {
+  good: 96000,
+  fair: 48000,
+  poor: 32000,
+  emergency: 24000,
+};
 const microphoneOpusMaxAverageBitrateFor = ({ emergency, quality }) =>
   emergency
-    ? 18000
-    : quality === "poor"
-      ? 24000
-      : quality === "fair"
-        ? 32000
-        : 48000;
+    ? opusMaxAverageBitrateByProfile.emergency
+    : (opusMaxAverageBitrateByProfile[quality] ??
+      opusMaxAverageBitrateByProfile.good);
 const screenAudioOpusMaxAverageBitrateFor = ({ emergency, quality }) =>
   emergency
-    ? 18000
-    : quality === "poor"
-      ? 24000
-      : quality === "fair"
-        ? 32000
-        : 48000;
+    ? opusMaxAverageBitrateByProfile.emergency
+    : (opusMaxAverageBitrateByProfile[quality] ??
+      opusMaxAverageBitrateByProfile.good);
+const maxAllowedAudioBitrateFor = (maxAverageBitrate) =>
+  maxAverageBitrate + 2000;
 const expectedMicrophoneOpusMaxAverageBitrate =
   microphoneOpusMaxAverageBitrateFor({
     emergency: profileName === "emergency",
@@ -1872,12 +1874,13 @@ const validateFinalSnapshot = (snapshot, { consoleEvents = [] } = {}) => {
       );
     }
     if (
-      expected === "poor" &&
-      audioMaxBitrate > (effectiveEmergencyMode ? 20000 : 26000)
+      expected !== "good" &&
+      audioMaxBitrate >
+        maxAllowedAudioBitrateFor(expectedPublishMicrophoneOpusMaxAverageBitrate)
     ) {
-      errors.push(`audio cap too high for poor profile: ${audioMaxBitrate}`);
-    } else if (expected === "fair" && audioMaxBitrate > 34000) {
-      errors.push(`audio cap too high for fair profile: ${audioMaxBitrate}`);
+      errors.push(
+        `audio cap too high for ${effectiveAdaptiveProfile} profile: ${audioMaxBitrate}`,
+      );
     }
   }
   if (
@@ -3029,10 +3032,13 @@ const validateScreenPublishSnapshot = (
       );
     }
     if (
-      expected === "poor" &&
-      audioMaxBitrate > (expectPublishEmergencyMode ? 20000 : 26000)
+      expected !== "good" &&
+      audioMaxBitrate >
+        maxAllowedAudioBitrateFor(expectedPublishMicrophoneOpusMaxAverageBitrate)
     ) {
-      errors.push(`microphone cap too high for poor profile: ${audioMaxBitrate}`);
+      errors.push(
+        `microphone cap too high for ${expectedPublishAdaptiveProfile} profile: ${audioMaxBitrate}`,
+      );
     }
   }
 
@@ -3052,11 +3058,14 @@ const validateScreenPublishSnapshot = (
       );
     }
     if (
-      expected === "poor" &&
-      screenAudioMaxBitrate > (expectPublishEmergencyMode ? 20000 : 30000)
+      expected !== "good" &&
+      screenAudioMaxBitrate >
+        maxAllowedAudioBitrateFor(
+          expectedPublishScreenAudioOpusMaxAverageBitrate,
+        )
     ) {
       errors.push(
-        `screen audio cap too high for poor profile: ${screenAudioMaxBitrate}`,
+        `screen audio cap too high for ${expectedPublishAdaptiveProfile} profile: ${screenAudioMaxBitrate}`,
       );
     }
   }
@@ -3624,6 +3633,11 @@ const validateTransitionSnapshot = (
   const targetAdaptiveProfile = targetEmergencyMode
     ? "emergency"
     : targetExpectedQuality;
+  const targetMicrophoneOpusMaxAverageBitrate =
+    microphoneOpusMaxAverageBitrateFor({
+      emergency: targetEmergencyMode,
+      quality: targetExpectedQuality,
+    });
   const network = snapshot.network;
   const adaptivePublish = snapshot.adaptivePublish;
   const webcamProfile =
@@ -3854,13 +3868,10 @@ const validateTransitionSnapshot = (
     }
 
     if (
-      targetExpectedQuality === "poor" &&
-      audioMaxBitrate > (targetEmergencyMode ? 20000 : 26000)
+      targetExpectedQuality !== "good" &&
+      audioMaxBitrate >
+        maxAllowedAudioBitrateFor(targetMicrophoneOpusMaxAverageBitrate)
     ) {
-      errors.push(
-        `audio cap too high after ${transitionTargetName} transition: ${audioMaxBitrate}`,
-      );
-    } else if (targetExpectedQuality === "fair" && audioMaxBitrate > 34000) {
       errors.push(
         `audio cap too high after ${transitionTargetName} transition: ${audioMaxBitrate}`,
       );
