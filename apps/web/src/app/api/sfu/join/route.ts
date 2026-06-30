@@ -12,7 +12,6 @@ import {
   resolveSfuUrls,
 } from "@/lib/sfu-url";
 
-export const runtime = "nodejs";
 
 let loggedSecretFingerprint = false;
 const logSecretFingerprint = (secret: string): void => {

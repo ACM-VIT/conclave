@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { saveAppAsset, AssetStoreFullError } from "./_assets";
 
-export const runtime = "nodejs";
 
 const MAX_ASSET_BYTES = 5 * 1024 * 1024; // 5 MB per file
 

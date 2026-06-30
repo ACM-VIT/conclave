@@ -1,5 +1,7 @@
+import { Suspense } from "react";
 import { headers as nextHeaders } from "next/headers";
 import MeetsClientShell from "../meets-client-shell";
+import RouteLoadingState from "../components/RouteLoadingState";
 import { sanitizeRoomCode, sanitizeWebinarLinkCode } from "../lib/utils";
 import ScheduledMeetingLanding from "../components/ScheduledMeetingLanding";
 import {
@@ -13,6 +15,9 @@ type MeetRoomPageProps = {
   params: Promise<{ code: string }>;
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
 };
+
+export const instant = true;
+export const prefetch = "allow-runtime";
 
 const getParamValue = (
   value: string | string[] | undefined,
@@ -51,10 +56,26 @@ const resolveSessionEmail = async (): Promise<string | null> => {
   }
 };
 
-export default async function MeetRoomPage({
+export default function MeetRoomPage({
   params,
   searchParams,
 }: MeetRoomPageProps) {
+  return (
+    <Suspense
+      fallback={
+        <RouteLoadingState
+          eyebrow="Meeting"
+          title="Joining room"
+          detail="Checking room details before the call opens."
+        />
+      }
+    >
+      <MeetRoomContent params={params} searchParams={searchParams} />
+    </Suspense>
+  );
+}
+
+async function MeetRoomContent({ params, searchParams }: MeetRoomPageProps) {
   const { code } = await params;
   const resolvedSearchParams = (await (searchParams ?? Promise.resolve(
     {} as Record<string, string | string[] | undefined>,

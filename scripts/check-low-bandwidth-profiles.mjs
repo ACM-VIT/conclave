@@ -137,9 +137,19 @@ assertRegex(
   "web screen audio initial publish marks media audio and immediately applies RTP network profile",
 );
 assertRegex(
+  "webMeetMedia",
+  /buildScreenShareAudioOpusCodecOptions\([\s\S]*screenNetworkProfile[\s\S]*appData: \{[\s\S]*type: "screen" as ProducerType,[\s\S]*networkProfile: screenNetworkProfile/,
+  "web screen audio initial publish records the negotiated network profile",
+);
+assertRegex(
   "webMeetSocket",
   /audioTrack\.contentHint = "music"[\s\S]*buildScreenShareAudioOpusCodecOptions\([\s\S]*screenNetworkProfile[\s\S]*applyAudioProducerNetworkProfile\([\s\S]*audioProducer,[\s\S]*"screen",[\s\S]*screenNetworkProfile/,
   "web screen audio reconnect publish marks media audio and immediately applies RTP network profile",
+);
+assertRegex(
+  "webMeetSocket",
+  /buildScreenShareAudioOpusCodecOptions\([\s\S]*screenNetworkProfile[\s\S]*appData: \{[\s\S]*type: "screen" as ProducerType,[\s\S]*networkProfile: screenNetworkProfile/,
+  "web screen audio reconnect publish records the negotiated network profile",
 );
 assertRegex(
   "webScreenShareAudioPlayers",
@@ -940,9 +950,24 @@ assertRegex(
   "web screen-share publish adaptation receives measured outgoing bitrate",
 );
 assertRegex(
+  "webMeetClient",
+  /refreshScreenAudioProducerForNetworkProfile,[\s\S]*useAdaptivePublishQuality\(\{[\s\S]*refreshScreenAudioProducerForNetworkProfile,/,
+  "web adaptive publish can refresh screen-audio producers after network recovery",
+);
+assertRegex(
   "webAdaptivePublishQuality",
   /getScreenShareProducerProfileSignature[\s\S]*track\?\.getSettings\(\)[\s\S]*settings\?\.width[\s\S]*settings\?\.height[\s\S]*settings\?\.frameRate[\s\S]*const screenProducer = screenProducerRef\.current[\s\S]*getScreenShareProducerProfileSignature\([\s\S]*screenProducer,[\s\S]*profile,[\s\S]*applyScreenShareProducerNetworkProfile/,
   "web adaptive screen-share caps are re-applied when captured surface dimensions change",
+);
+assertRegex(
+  "webAdaptivePublishQuality",
+  /SCREEN_AUDIO_CODEC_REFRESH_RETRY_MS = 15000[\s\S]*getProducerCreationNetworkProfile[\s\S]*isLessConstrainedNetworkProfile[\s\S]*shouldRefreshCodecProfile[\s\S]*SCREEN_AUDIO_CODEC_REFRESH_RETRY_MS[\s\S]*await refreshScreenAudioProducerForNetworkProfile\(profile\)/,
+  "web adaptive screen audio refreshes Opus codec caps on profile recovery",
+);
+assertRegex(
+  "webMeetSocket",
+  /const localScreenAudioProducer = screenAudioProducerRef\.current[\s\S]*matchesLocalProducer[\s\S]*localScreenAudioProducer\?\.id === producerId[\s\S]*wasIntentionalLocalClose[\s\S]*localScreenAudioProducer\?\.id === producerId[\s\S]*screenAudioProducerRef\.current = null/,
+  "web producer close handling recognizes intentional screen-audio replacements",
 );
 assertRegex(
   "webAdaptivePublishQuality",

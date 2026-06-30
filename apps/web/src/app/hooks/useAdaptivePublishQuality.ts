@@ -35,6 +35,9 @@ interface UseAdaptivePublishQualityOptions {
       networkProfileOverride?: WebcamProducerNetworkProfile,
     ) => Promise<void>
   >;
+  refreshScreenAudioProducerForNetworkProfile?: (
+    profile: WebcamProducerNetworkProfile,
+  ) => Promise<boolean>;
   debugStateRef?: React.MutableRefObject<
     AdaptivePublishQualityDebugSnapshot | null
   >;
@@ -54,6 +57,14 @@ const STANDARD_CAPTURE_RESTORE_COOLDOWN_MS = 120000;
 const STANDARD_CAPTURE_MIN_WIDTH = 960;
 const STANDARD_CAPTURE_MIN_HEIGHT = 540;
 const STANDARD_CAPTURE_MIN_FRAMERATE = 24;
+const SCREEN_AUDIO_CODEC_REFRESH_RETRY_MS = 15000;
+
+const networkProfileRank: Record<WebcamProducerNetworkProfile, number> = {
+  good: 1,
+  fair: 2,
+  poor: 3,
+  emergency: 4,
+};
 
 type QualityWindow = {
   quality: ConnectionQuality;
@@ -233,6 +244,27 @@ const getScreenShareAwareWebcamProfile = (
   return profile;
 };
 
+const isWebcamProducerNetworkProfile = (
+  value: unknown,
+): value is WebcamProducerNetworkProfile =>
+  value === "good" ||
+  value === "fair" ||
+  value === "poor" ||
+  value === "emergency";
+
+const getProducerCreationNetworkProfile = (
+  producer: Producer,
+): WebcamProducerNetworkProfile | null => {
+  const profile = (producer.appData as { networkProfile?: unknown } | undefined)
+    ?.networkProfile;
+  return isWebcamProducerNetworkProfile(profile) ? profile : null;
+};
+
+const isLessConstrainedNetworkProfile = (
+  nextProfile: WebcamProducerNetworkProfile,
+  previousProfile: WebcamProducerNetworkProfile,
+): boolean => networkProfileRank[nextProfile] < networkProfileRank[previousProfile];
+
 const getLiveProfileForObservedQuality = (
   quality: ConnectionQuality,
   emergencyMode: boolean,
@@ -259,6 +291,7 @@ export function useAdaptivePublishQuality({
   networkManagedVideoQualityRef,
   setVideoQuality,
   updateVideoQualityRef,
+  refreshScreenAudioProducerForNetworkProfile,
   debugStateRef,
 }: UseAdaptivePublishQualityOptions) {
   const qualityWindowRef = useRef<QualityWindow>({
@@ -278,6 +311,10 @@ export function useAdaptivePublishQuality({
     screenAudio: string | null;
   }>({ audio: null, webcam: null, screen: null, screenAudio: null });
   const lastStandardCaptureRestoreAttemptRef = useRef<{
+    signature: string;
+    at: number;
+  } | null>(null);
+  const lastScreenAudioCodecRefreshAttemptRef = useRef<{
     signature: string;
     at: number;
   } | null>(null);
@@ -421,14 +458,54 @@ export function useAdaptivePublishQuality({
       const screenAudioProducer = screenAudioProducerRef.current;
       if (screenAudioProducer && !screenAudioProducer.closed) {
         const signature = `${screenAudioProducer.id}:${profile}`;
-        if (lastAppliedProfilesRef.current.screenAudio !== signature) {
+        const creationProfile =
+          getProducerCreationNetworkProfile(screenAudioProducer);
+        const codecRefreshSignature = creationProfile
+          ? `${screenAudioProducer.id}:${creationProfile}->${profile}`
+          : null;
+        const now = Date.now();
+        const lastCodecRefreshAttempt =
+          lastScreenAudioCodecRefreshAttemptRef.current;
+        const shouldRefreshCodecProfile =
+          Boolean(refreshScreenAudioProducerForNetworkProfile) &&
+          Boolean(codecRefreshSignature) &&
+          creationProfile !== null &&
+          isLessConstrainedNetworkProfile(profile, creationProfile) &&
+          (!lastCodecRefreshAttempt ||
+            lastCodecRefreshAttempt.signature !== codecRefreshSignature ||
+            now - lastCodecRefreshAttempt.at >=
+              SCREEN_AUDIO_CODEC_REFRESH_RETRY_MS);
+        if (
+          lastAppliedProfilesRef.current.screenAudio !== signature ||
+          shouldRefreshCodecProfile
+        ) {
           try {
-            await applyAudioProducerNetworkProfile(
-              screenAudioProducer,
-              "screen",
-              profile,
-            );
-            lastAppliedProfilesRef.current.screenAudio = signature;
+            if (lastAppliedProfilesRef.current.screenAudio !== signature) {
+              await applyAudioProducerNetworkProfile(
+                screenAudioProducer,
+                "screen",
+                profile,
+              );
+              lastAppliedProfilesRef.current.screenAudio = signature;
+            }
+            if (
+              shouldRefreshCodecProfile &&
+              codecRefreshSignature &&
+              refreshScreenAudioProducerForNetworkProfile
+            ) {
+              lastScreenAudioCodecRefreshAttemptRef.current = {
+                signature: codecRefreshSignature,
+                at: now,
+              };
+              const refreshed =
+                await refreshScreenAudioProducerForNetworkProfile(profile);
+              const refreshedProducer = screenAudioProducerRef.current;
+              if (refreshed && refreshedProducer && !refreshedProducer.closed) {
+                lastAppliedProfilesRef.current.screenAudio =
+                  `${refreshedProducer.id}:${profile}`;
+                lastScreenAudioCodecRefreshAttemptRef.current = null;
+              }
+            }
             writeDebugSnapshot();
           } catch (error) {
             console.warn(
@@ -441,6 +518,7 @@ export function useAdaptivePublishQuality({
     },
     [
       audioProducerRef,
+      refreshScreenAudioProducerForNetworkProfile,
       screenAudioProducerRef,
       screenProducerRef,
       videoProducerRef,

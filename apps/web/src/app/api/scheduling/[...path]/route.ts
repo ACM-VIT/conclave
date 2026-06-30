@@ -7,7 +7,6 @@ import {
 } from "@/lib/scheduling";
 import { requireSfuSessionUser } from "@/lib/sfu-user-auth";
 
-export const runtime = "nodejs";
 
 type RouteContext = {
   params: Promise<{ path?: string[] }>;

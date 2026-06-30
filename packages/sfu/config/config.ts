@@ -321,7 +321,7 @@ export const config = {
     apiToken: cloudflareWorkersAiToken,
     model:
       process.env.CLOUDFLARE_WORKERS_AI_MODEL?.trim() ||
-      "cf/zai-org/glm-4.7-flash",
+      "cf/zai-org/glm-5.2",
     timeoutMs: toNumber(process.env.SFU_GAME_AI_TIMEOUT_MS, 25000, {
       integer: true,
       min: 500,

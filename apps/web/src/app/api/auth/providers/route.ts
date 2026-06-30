@@ -1,11 +1,13 @@
+import { cacheLife } from "next/cache";
 import { NextResponse } from "next/server";
 import { isLocalDevAuthRequest } from "@/lib/dev-auth";
 
-export const runtime = "nodejs";
-
 type AuthProviderId = "google" | "apple" | "roblox" | "vercel";
 
-const enabledProviders = (): AuthProviderId[] => {
+const enabledProviders = async (): Promise<AuthProviderId[]> => {
+  "use cache";
+  cacheLife("max");
+
   const providers: AuthProviderId[] = [];
   if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
     providers.push("google");
@@ -24,7 +26,10 @@ const enabledProviders = (): AuthProviderId[] => {
 
 export async function GET(request: Request) {
   return NextResponse.json(
-    { providers: enabledProviders(), devAuth: isLocalDevAuthRequest(request) },
+    {
+      providers: await enabledProviders(),
+      devAuth: isLocalDevAuthRequest(request),
+    },
     { headers: { "Cache-Control": "no-store" } },
   );
 }

@@ -99,6 +99,29 @@ struct SendChatRequest: Codable {
     }
 }
 
+struct ConclaveAuthorizeRequest: Codable {
+    let id: String
+    let questionMessageId: String
+}
+
+struct ConclaveAuthorizeResponse: Codable {
+    let token: String?
+    let error: String?
+}
+
+struct ConclaveAssistantRelayPacket: Codable {
+    let id: String
+    let roomId: String
+    let channelId: String
+    let requesterUserId: String
+    let questionMessageId: String
+    let content: String
+    let done: Bool
+    let timestamp: Double
+    let expiresAt: Double
+    let signature: String
+}
+
 struct SendReactionRequest: Codable {
     let emoji: String?
     let kind: String?

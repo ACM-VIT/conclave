@@ -304,6 +304,11 @@ type InitialConsumerPreferences = {
   priority?: number;
 };
 
+type ScreenAudioProducerAppData = {
+  type: ProducerType;
+  networkProfile?: WebcamProducerNetworkProfile;
+};
+
 const getInitialConsumerPreferences = (
   producerInfo: ProducerInfo,
   options: {
@@ -1213,7 +1218,10 @@ export function useMeetSocket({
               screenNetworkProfile,
             ),
             stopTracks: false,
-            appData: { type: "screen" as ProducerType },
+            appData: {
+              type: "screen" as ProducerType,
+              networkProfile: screenNetworkProfile,
+            } satisfies ScreenAudioProducerAppData,
           });
           try {
             await applyAudioProducerNetworkProfile(
@@ -4538,10 +4546,12 @@ export function useMeetSocket({
                 const localAudioProducer = audioProducerRef.current;
                 const localVideoProducer = videoProducerRef.current;
                 const localScreenProducer = screenProducerRef.current;
+                const localScreenAudioProducer = screenAudioProducerRef.current;
                 const matchesLocalProducer =
                   localAudioProducer?.id === producerId ||
                   localVideoProducer?.id === producerId ||
-                  localScreenProducer?.id === producerId;
+                  localScreenProducer?.id === producerId ||
+                  localScreenAudioProducer?.id === producerId;
                 const wasIntentionalLocalClose =
                   intentionalLocalProducerCloseIdsRef.current.delete(producerId);
 
@@ -4577,6 +4587,17 @@ export function useMeetSocket({
                     } catch {}
                     if (screenProducerRef.current?.id === producerId) {
                       screenProducerRef.current = null;
+                    }
+                  }
+                  if (localScreenAudioProducer?.id === producerId) {
+                    try {
+                      localScreenAudioProducer.close();
+                    } catch {}
+                    if (localScreenAudioProducer.track) {
+                      localScreenAudioProducer.track.onended = null;
+                    }
+                    if (screenAudioProducerRef.current?.id === producerId) {
+                      screenAudioProducerRef.current = null;
                     }
                   }
                   return;
@@ -4650,7 +4671,6 @@ export function useMeetSocket({
                     try {
                       localScreenProducer.close();
                     } catch {}
-                    const localScreenAudioProducer = screenAudioProducerRef.current;
                     if (localScreenAudioProducer) {
                       emitCloseProducer(localScreenAudioProducer.id);
                       try {
@@ -4667,6 +4687,19 @@ export function useMeetSocket({
                     stopScreenShareCapture();
                     setIsScreenSharing(false);
                     setActiveScreenShareId(null);
+                    return;
+                  }
+
+                  if (localScreenAudioProducer?.id === producerId) {
+                    try {
+                      localScreenAudioProducer.close();
+                    } catch {}
+                    if (localScreenAudioProducer.track) {
+                      localScreenAudioProducer.track.onended = null;
+                    }
+                    if (screenAudioProducerRef.current?.id === producerId) {
+                      screenAudioProducerRef.current = null;
+                    }
                     return;
                   }
                 }

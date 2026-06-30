@@ -23,6 +23,11 @@ object AndroidNativeHttpClient {
         .callTimeout(30, TimeUnit.SECONDS)
         .build()
 
+    private val assistantClient = client.newBuilder()
+        .readTimeout(120, TimeUnit.SECONDS)
+        .callTimeout(150, TimeUnit.SECONDS)
+        .build()
+
     fun requestJson(
         method: String,
         url: String,
@@ -56,6 +61,39 @@ object AndroidNativeHttpClient {
         }
     }
 
+    fun requestAssistant(
+        method: String,
+        url: String,
+        body: String?,
+        accept: String?,
+        contentType: String?,
+        origin: String?,
+        cookieHeader: String?,
+        callback: (String?, String?) -> Unit
+    ) {
+        thread(name = "ConclaveAssistantHttp") {
+            try {
+                callback(
+                    requestJsonBlocking(
+                        method = method,
+                        url = url,
+                        body = body,
+                        accept = accept,
+                        contentType = contentType,
+                        origin = origin,
+                        clientId = null,
+                        cookieHeader = cookieHeader,
+                        httpClient = assistantClient
+                    ),
+                    null
+                )
+            } catch (error: Throwable) {
+                debugLog("[HTTP] Android native assistant request failed: ${error}")
+                callback(null, error.localizedMessage ?: error.toString())
+            }
+        }
+    }
+
     private fun requestJsonBlocking(
         method: String,
         url: String,
@@ -64,7 +102,8 @@ object AndroidNativeHttpClient {
         contentType: String?,
         origin: String?,
         clientId: String?,
-        cookieHeader: String?
+        cookieHeader: String?,
+        httpClient: OkHttpClient = client
     ): String {
         val normalizedMethod = method.trim().uppercase().ifEmpty { "GET" }
         val requestBuilder = Request.Builder().url(url)
@@ -95,7 +134,7 @@ object AndroidNativeHttpClient {
             requestBuilder.header("Cookie", normalizedCookieHeader)
         }
 
-        client.newCall(requestBuilder.build()).execute().use { response ->
+        httpClient.newCall(requestBuilder.build()).execute().use { response ->
             val setCookieHeaders = JSONArray()
             for (header in response.headers("Set-Cookie")) {
                 setCookieHeaders.put(header)

@@ -6,8 +6,6 @@ import {
   type KlipyMediaSearchResponse,
 } from "../../../lib/klipy-gifs";
 
-export const runtime = "nodejs";
-export const dynamic = "force-dynamic";
 
 const KLIPY_API_BASE_URL = "https://api.klipy.com/api/v1";
 const KLIPY_MEDIA_HOST = "static.klipy.com";

@@ -2,7 +2,6 @@ import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { isLocalDevAuthRequest } from "@/lib/dev-auth";
 
-export const runtime = "nodejs";
 
 const DEV_AUTH_PASSWORD = "conclave-dev-password";
 

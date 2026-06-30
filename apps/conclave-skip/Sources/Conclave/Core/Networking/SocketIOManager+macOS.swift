@@ -136,6 +136,10 @@ final class SocketIOManager {
     func sendChat(content: String, gif: ChatGifAttachment? = nil, recipient: String? = nil, replyTo: ChatReplyPreview? = nil) async throws -> ChatMessage {
         ChatMessage(userId: "local", displayName: "You", content: content, gif: gif)
     }
+    func requestConclaveAuthorization(answerId: String, questionMessageId: String) async throws -> ConclaveAuthorizeResponse {
+        throw NSError(domain: "Conclave", code: -1, userInfo: [NSLocalizedDescriptionKey: "SocketIO not available on macOS"])
+    }
+    func relayConclaveAnswer(_ packet: ConclaveAssistantRelayPacket) { }
     func sendReaction(emoji: String?, kind: String?, value: String?, label: String?) async throws { }
     func setHandRaised(_ raised: Bool) async throws { }
     func updateDisplayName(_ name: String) async throws { }

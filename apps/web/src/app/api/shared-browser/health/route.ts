@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
 
-export const runtime = "nodejs";
 
 const resolveBrowserServiceUrl = () =>
   process.env.BROWSER_SERVICE_URL ||

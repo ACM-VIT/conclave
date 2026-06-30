@@ -438,6 +438,9 @@ export type ScheduledMeetingPersistence = {
   reserveBookingSlot?: (
     reservation: BookingSlotReservation,
   ) => MaybePromise<BookingSlotLease | null>;
+  claimEmailReminder?: (
+    claim: EmailReminderClaim,
+  ) => MaybePromise<ScheduledMeeting | null>;
   load: () => MaybePromise<ScheduledMeeting[]>;
   close?: () => MaybePromise<void>;
   flush?: () => Promise<void>;
@@ -452,6 +455,12 @@ export type BookingSlotReservation = {
 
 export type BookingSlotLease = {
   release: () => MaybePromise<void>;
+};
+
+export type EmailReminderClaim = {
+  meetingId: string;
+  now: number;
+  leadMs: number;
 };
 
 const scheduledMeetingsSqlitePath = (): string => {
@@ -773,6 +782,61 @@ end
 return 0
 `;
 
+const CLAIM_EMAIL_REMINDER_SCRIPT = `
+local key = KEYS[1]
+local meetingId = ARGV[1]
+local now = tonumber(ARGV[2]) or 0
+local leadMs = tonumber(ARGV[3]) or 0
+
+if leadMs <= 0 then
+  return nil
+end
+
+local payload = redis.call("HGET", key, meetingId)
+if not payload then
+  return nil
+end
+
+local ok, meeting = pcall(cjson.decode, payload)
+if not ok or type(meeting) ~= "table" then
+  return nil
+end
+
+if meeting["source"] ~= "booking_link" then
+  return nil
+end
+if meeting["status"] ~= "scheduled" then
+  return nil
+end
+if type(meeting["attendeeEmail"]) ~= "string" or meeting["attendeeEmail"] == "" then
+  return nil
+end
+
+local reminderStatus = meeting["emailReminderStatus"]
+if reminderStatus == "pending" or reminderStatus == "sent" or reminderStatus == "failed" then
+  return nil
+end
+
+local scheduledStartAt = tonumber(meeting["scheduledStartAt"]) or 0
+local createdAt = tonumber(meeting["createdAt"]) or 0
+local reminderDueAt = scheduledStartAt - leadMs
+if createdAt > reminderDueAt then
+  return nil
+end
+if now < reminderDueAt or now >= scheduledStartAt then
+  return nil
+end
+
+meeting["emailReminderStatus"] = "pending"
+meeting["emailReminderError"] = cjson.null
+meeting["emailReminderSentAt"] = cjson.null
+meeting["updatedAt"] = now
+
+local nextPayload = cjson.encode(meeting)
+redis.call("HSET", key, meetingId, nextPayload)
+return nextPayload
+`;
+
 const bookingSlotLockTtlMs = (): number => {
   const parsed = Number(process.env.SFU_BOOKING_SLOT_LOCK_TTL_MS);
   return Number.isFinite(parsed) && parsed >= 1000 ? parsed : 30000;
@@ -899,6 +963,33 @@ class RedisScheduledMeetingPersistence implements ScheduledMeetingPersistence {
         ]);
       },
     };
+  }
+
+  async claimEmailReminder(
+    claim: EmailReminderClaim,
+  ): Promise<ScheduledMeeting | null> {
+    await this.start();
+    const result = await this.client.sendCommand([
+      "EVAL",
+      CLAIM_EMAIL_REMINDER_SCRIPT,
+      "1",
+      this.key,
+      claim.meetingId,
+      String(claim.now),
+      String(claim.leadMs),
+    ]);
+    if (typeof result !== "string" || !result) return null;
+    const meeting = normalizeStoredMeeting(JSON.parse(result));
+    if (!meeting) return null;
+    this.knownMeetings.set(meeting.id, meeting);
+    if (this.fallback.saveChanged) {
+      await Promise.resolve(this.fallback.saveChanged([meeting]));
+    } else {
+      await Promise.resolve(
+        this.fallback.save(Array.from(this.knownMeetings.values())),
+      );
+    }
+    return meeting;
   }
 
   async load(): Promise<ScheduledMeeting[]> {

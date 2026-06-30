@@ -125,6 +125,8 @@ final class SocketIOManager {
     func closeProducer(producerId: String) async throws { fatalError() }
 
     func sendChat(content: String, gif: ChatGifAttachment? = nil, recipient: String? = nil, replyTo: ChatReplyPreview? = nil) async throws -> ChatMessage { fatalError() }
+    func requestConclaveAuthorization(answerId: String, questionMessageId: String) async throws -> ConclaveAuthorizeResponse { fatalError() }
+    func relayConclaveAnswer(_ packet: ConclaveAssistantRelayPacket) { fatalError() }
     func sendReaction(emoji: String?, kind: String?, value: String?, label: String?) async throws { fatalError() }
     func setHandRaised(_ raised: Bool) async throws { fatalError() }
     func updateDisplayName(_ name: String) async throws { fatalError() }
