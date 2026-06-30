@@ -762,7 +762,7 @@ assertRegex(
 );
 assertRegex(
   "webAdaptivePublishQuality",
-  /getLiveProfileForObservedQuality[\s\S]*quality === "poor"[\s\S]*emergencyMode \? "emergency" : "poor"[\s\S]*screenShareVideoActive[\s\S]*screenShareImmediateProfile[\s\S]*getMostConstrainedProducerProfile\(\[[\s\S]*getLiveProfileForObservedQuality\([\s\S]*connectionQuality,[\s\S]*emergencyMode,[\s\S]*getLiveProfileForObservedQuality\([\s\S]*capRecoveryQuality,[\s\S]*emergencyMode,[\s\S]*const profile = liveProfile \?\? screenShareImmediateProfile[\s\S]*applyLiveProducerProfile\(profile\)/,
+  /getLiveProfileForObservedQuality[\s\S]*quality === "poor"[\s\S]*emergencyMode \? "emergency" : "poor"[\s\S]*screenShareVideoActive[\s\S]*screenShareTargetProfile[\s\S]*getMostConstrainedProducerProfile\(\[[\s\S]*liveProfile,[\s\S]*getLiveProfileForObservedQuality\([\s\S]*connectionQuality,[\s\S]*emergencyMode,[\s\S]*getLiveProfileForObservedQuality\([\s\S]*capRecoveryQuality,[\s\S]*emergencyMode,[\s\S]*effectiveLiveProfile[\s\S]*const profile = effectiveLiveProfile \?\? screenShareImmediateProfile[\s\S]*applyLiveProducerProfile\(profile\)/,
   "web screen sharing reserves uplink immediately without waiting for normal stability window",
 );
 assertRegex(
@@ -772,7 +772,7 @@ assertRegex(
 );
 assertRegex(
   "webAdaptivePublishQuality",
-  /SCREEN_SHARE_OUTGOING_FAIR_BPS = 1500000[\s\S]*SCREEN_SHARE_OUTGOING_POOR_BPS = 550000[\s\S]*SCREEN_SHARE_OUTGOING_EMERGENCY_BPS = 280000[\s\S]*getScreenShareProfileForAvailableOutgoingBitrate[\s\S]*availableOutgoingBitrateBps <= SCREEN_SHARE_OUTGOING_EMERGENCY_BPS[\s\S]*availableOutgoingBitrateBps <= SCREEN_SHARE_OUTGOING_POOR_BPS[\s\S]*availableOutgoingBitrateBps <= SCREEN_SHARE_OUTGOING_FAIR_BPS[\s\S]*getMostConstrainedProducerProfile\(\[[\s\S]*getScreenShareProfileForAvailableOutgoingBitrate\(/,
+  /SCREEN_SHARE_OUTGOING_FAIR_BPS = 1500000[\s\S]*SCREEN_SHARE_OUTGOING_POOR_BPS = 550000[\s\S]*SCREEN_SHARE_OUTGOING_EMERGENCY_BPS = 280000[\s\S]*getScreenShareProfileForAvailableOutgoingBitrate[\s\S]*availableOutgoingBitrateBps <= SCREEN_SHARE_OUTGOING_EMERGENCY_BPS[\s\S]*availableOutgoingBitrateBps <= SCREEN_SHARE_OUTGOING_POOR_BPS[\s\S]*availableOutgoingBitrateBps <= SCREEN_SHARE_OUTGOING_FAIR_BPS[\s\S]*screenShareTargetProfile[\s\S]*liveProfile,[\s\S]*getScreenShareProfileForAvailableOutgoingBitrate\([\s\S]*effectiveLiveProfile[\s\S]*restoreStandardCaptureIfNeeded\(\)[\s\S]*applyLiveProducerProfile\(effectiveLiveProfile \?\? "good"\)/,
   "web screen-share publish caps use outgoing bitrate before full-FPS profile",
 );
 assertRegex(
@@ -1784,8 +1784,8 @@ assertRegex(
 );
 assertRegex(
   "webAdaptivePublishQuality",
-  /shouldRestoreStableStandardCapture[\s\S]*capRecoveryQuality === "good"[\s\S]*capRecoveryElapsedMs >= GOOD_LIVE_RESTORE_AFTER_MS[\s\S]*currentPublishQuality === "standard"[\s\S]*void restoreStandardCaptureIfNeeded\(\)\.finally\(\(\) => \{[\s\S]*applyLiveProducerProfile\("good"\)[\s\S]*\} else \{[\s\S]*applyStableLiveProfile\(\);/,
-  "web adaptive good-link capture restore also restores good publish profiles",
+  /shouldRestoreStableStandardCapture[\s\S]*capRecoveryQuality === "good"[\s\S]*capRecoveryElapsedMs >= GOOD_LIVE_RESTORE_AFTER_MS[\s\S]*currentPublishQuality === "standard"[\s\S]*void restoreStandardCaptureIfNeeded\(\)\.finally\(\(\) => \{[\s\S]*applyLiveProducerProfile\(effectiveLiveProfile \?\? "good"\)[\s\S]*\} else \{[\s\S]*applyStableLiveProfile\(\);/,
+  "web adaptive good-link capture restore restores BWE-constrained publish profiles",
 );
 {
   const text = source.webAdaptivePublishQuality;

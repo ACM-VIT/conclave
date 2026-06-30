@@ -661,25 +661,36 @@ export function useAdaptivePublishQuality({
       const screenShareVideoActive = Boolean(
         screenProducerRef.current && !screenProducerRef.current.closed,
       );
+      const screenShareTargetProfile = screenShareVideoActive
+        ? getMostConstrainedProducerProfile([
+            liveProfile,
+            !liveProfile
+              ? getLiveProfileForObservedQuality(
+                  connectionQuality,
+                  emergencyMode,
+                )
+              : null,
+            !liveProfile
+              ? getLiveProfileForObservedQuality(
+                  capRecoveryQuality,
+                  emergencyMode,
+                )
+              : null,
+            getScreenShareProfileForAvailableOutgoingBitrate(
+              availableOutgoingBitrateBps,
+              emergencyMode,
+            ),
+          ]) ?? (!liveProfile ? "good" : null)
+        : null;
+      const effectiveLiveProfile = screenShareVideoActive
+        ? screenShareTargetProfile
+        : liveProfile;
       const screenShareImmediateProfile =
         screenShareVideoActive && !liveProfile
-          ? getMostConstrainedProducerProfile([
-              getLiveProfileForObservedQuality(
-                connectionQuality,
-                emergencyMode,
-              ),
-              getLiveProfileForObservedQuality(
-                capRecoveryQuality,
-                emergencyMode,
-              ),
-              getScreenShareProfileForAvailableOutgoingBitrate(
-                availableOutgoingBitrateBps,
-                emergencyMode,
-              ),
-            ]) ?? "good"
+          ? screenShareTargetProfile ?? "good"
           : null;
       const applyStableLiveProfile = () => {
-        const profile = liveProfile ?? screenShareImmediateProfile;
+        const profile = effectiveLiveProfile ?? screenShareImmediateProfile;
         if (profile && !updateInFlightRef.current) {
           void applyLiveProducerProfile(profile);
         }
@@ -741,7 +752,7 @@ export function useAdaptivePublishQuality({
       if (shouldRestoreStableStandardCapture) {
         void restoreStandardCaptureIfNeeded().finally(() => {
           if (!updateInFlightRef.current) {
-            void applyLiveProducerProfile("good");
+            void applyLiveProducerProfile(effectiveLiveProfile ?? "good");
           }
         });
       } else {
