@@ -126,6 +126,7 @@ private enum SocketEvent {
     static let producerClosed = SfuServerEvent.producerClosed.rawValue
     static let consumerTelemetry = SfuServerEvent.consumerTelemetry.rawValue
     static let chatMessage = SfuServerEvent.chatMessage.rawValue
+    static let conclaveMessage = SfuServerEvent.conclaveMessage.rawValue
     static let chatHistorySnapshot = SfuServerEvent.chatHistorySnapshot.rawValue
     static let reaction = SfuServerEvent.reaction.rawValue
     static let handRaised = SfuServerEvent.handRaised.rawValue
@@ -1905,6 +1906,16 @@ final class SocketIOManager {
             self.onChatMessage?(notification.chatMessage(taggedRoomId: activeRoomId))
         }
 
+        socket.on(SocketEvent.conclaveMessage) { [weak self] data, _ in
+            guard let self, let first = data.first,
+                  self.socket === socket,
+                  let notification = self.decode(ChatMessageNotification.self, from: first),
+                  let activeRoomId = self.activeRoomId,
+                  self.eventRoomIdMatchesActiveOrPending(notification.roomId, allowMissingRoomId: true) else { return }
+
+            self.onChatMessage?(notification.chatMessage(taggedRoomId: activeRoomId))
+        }
+
         socket.on(SocketEvent.chatHistorySnapshot) { [weak self] data, _ in
             guard let self, let first = data.first,
                   self.socket === socket,
@@ -2319,9 +2330,9 @@ final class SocketIOManager {
 
         socket.on(SocketEvent.gameVote) { [weak self] data, _ in
             guard let self,
-                  self.socket === socket,
-                  self.eventRoomIdMatchesActiveOrPending(nil, allowMissingRoomId: true) else { return }
+                  self.socket === socket else { return }
             let vote = data.first.flatMap { self.decode(GameVoteState.self, from: $0) }
+            guard self.eventRoomIdMatchesActiveOrPending(vote?.roomId, allowMissingRoomId: true) else { return }
             self.onGameVote?(vote)
         }
 

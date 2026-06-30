@@ -6322,6 +6322,35 @@ final class ConclaveTests: XCTestCase {
         ))
     }
 
+    func testIosGameVoteSocketEventFiltersDecodedVoteRoomIdLikeAndroid() throws {
+        let iosSource = try sourceFileContents("Sources/Conclave/Core/Networking/SocketIOManager.swift")
+        let androidSource = try sourceFileContents("Sources/Conclave/Skip/SocketIOManager+Android.kt")
+
+        XCTAssertTrue(iosSource.contains("let vote = data.first.flatMap { self.decode(GameVoteState.self, from: $0) }"))
+        XCTAssertTrue(iosSource.contains("self.eventRoomIdMatchesActiveOrPending(vote?.roomId, allowMissingRoomId: true)"))
+        XCTAssertFalse(iosSource.contains("self.eventRoomIdMatchesActiveOrPending(nil, allowMissingRoomId: true) else { return }\n            let vote"))
+        XCTAssertTrue(androidSource.contains("val roomId = notification?.roomId"))
+        XCTAssertTrue(androidSource.contains("eventRoomIdMatchesActiveOrPending(roomId, allowMissingRoomId = true)"))
+    }
+
+    func testConclaveMessageRoutesThroughNativeChatPipeline() throws {
+        let iosSource = try sourceFileContents("Sources/Conclave/Core/Networking/SocketIOManager.swift")
+        let androidSource = try sourceFileContents("Sources/Conclave/Skip/SocketIOManager+Android.kt")
+        let viewModelSource = try sourceFileContents("Sources/Conclave/Features/Meeting/MeetingViewModel.swift")
+
+        XCTAssertTrue(iosSource.contains("static let conclaveMessage = SfuServerEvent.conclaveMessage.rawValue"))
+        XCTAssertTrue(iosSource.contains("socket.on(SocketEvent.conclaveMessage)"))
+        XCTAssertTrue(iosSource.contains("self.onChatMessage?(notification.chatMessage(taggedRoomId: activeRoomId))"))
+
+        XCTAssertTrue(androidSource.contains("val conclaveMessage = SfuServerEvent.conclaveMessage.rawValue"))
+        XCTAssertTrue(androidSource.contains("socket.on(SocketEvent.conclaveMessage"))
+        XCTAssertTrue(androidSource.contains("onChatMessage?.invoke(notification.toChatMessage(roomId))"))
+
+        XCTAssertTrue(viewModelSource.contains(#"private static let conclaveAssistantUserId = "conclave-assistant""#))
+        XCTAssertTrue(viewModelSource.contains("guard normalized.userId == Self.conclaveAssistantUserId else"))
+        XCTAssertTrue(viewModelSource.contains("state.chatMessages[existingIndex] = normalized"))
+    }
+
     func testPayloadLessBrowserClosedCanClearOnlyKnownRoomState() throws {
         XCTAssertEqual(SfuServerEvent.browserClosed.rawValue, "browser:closed")
         XCTAssertTrue(SocketRoomEventPolicy.shouldAllowMissingTerminalRoomId(

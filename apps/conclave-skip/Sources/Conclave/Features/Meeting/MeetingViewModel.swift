@@ -423,6 +423,7 @@ enum BrowserActivityLoopPolicy {
 @MainActor
 @Observable
 final class MeetingViewModel {
+    private static let conclaveAssistantUserId = "conclave-assistant"
 
     // Process-wide so Activity/SwiftUI recreation can reattach to an active call.
     static let shared = MeetingViewModel()
@@ -7510,7 +7511,11 @@ final class MeetingViewModel {
         guard isVisibleChatMessage(normalized) else {
             return nil
         }
-        guard !state.chatMessages.contains(where: { $0.id == normalized.id }) else {
+        if let existingIndex = state.chatMessages.firstIndex(where: { $0.id == normalized.id }) {
+            guard normalized.userId == Self.conclaveAssistantUserId else {
+                return nil
+            }
+            state.chatMessages[existingIndex] = normalized
             return nil
         }
         state.chatMessages.append(normalized)
