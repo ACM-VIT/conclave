@@ -256,6 +256,9 @@ export const wordleModule: GameModule<WordleState> = {
         const guess = normalizeWord((move.payload as { word?: unknown })?.word, {
           role: "guess",
         });
+        if (progress.guesses.some((entry) => entry.word === guess)) {
+          throw new GameMoveError("You already guessed that word");
+        }
         const feedback = evaluateGuess(state.targetWord, guess);
         const guesses = [
           ...progress.guesses,
