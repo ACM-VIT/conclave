@@ -37,6 +37,10 @@ type WordleState = {
   timeLimitMs: number;
   deadline: number;
   winnerId: string | null;
+  totalRounds: number;
+  currentRound: number;
+  scores: Record<string, number>;
+  usedWords: string[];
 };
 
 const WORD_LENGTH = 5;
@@ -172,19 +176,38 @@ const computeWinnerId = (state: WordleState, ctx: GameContext): string | null =>
   return winners[0]?.id ?? null;
 };
 
+const roundScore = (progress: PlayerRoundState, maxTries: number): number => {
+  if (progress.outcome !== "win") return 0;
+  return maxTries - progress.guesses.length + 1;
+};
+
+const accumulateScores = (state: WordleState, ctx: GameContext): Record<string, number> => {
+  const scores = { ...state.scores };
+  for (const playerId of contestantIds(state, ctx)) {
+    const progress = state.players[playerId];
+    if (!progress) continue;
+    scores[playerId] = (scores[playerId] ?? 0) + roundScore(progress, state.maxTries);
+  }
+  return scores;
+};
+
 const withResultsIfComplete = (state: WordleState, ctx: GameContext): WordleState => {
   if (!allContestantsFinished(state, ctx)) return state;
   return {
     ...state,
     phase: "results",
     winnerId: computeWinnerId(state, ctx),
+    scores: accumulateScores(state, ctx),
+    usedWords: state.targetWord
+      ? [...state.usedWords, state.targetWord]
+      : state.usedWords,
   };
 };
 
 export const wordleModule: GameModule<WordleState> = {
   id: "wordle",
   name: "Wordle",
-  description: "Guess a hidden five-letter word in six tries",
+  description: "Guess a hidden five-letter word",
   minPlayers: 1,
   maxPlayers: 32,
   tickMs: 500,
@@ -198,6 +221,16 @@ export const wordleModule: GameModule<WordleState> = {
         { value: "random", label: "Random" },
         { value: "setter", label: "Player sets" },
       ],
+    },
+    {
+      id: "rounds",
+      type: "number",
+      label: "Rounds",
+      min: 1,
+      max: 10,
+      default: 1,
+      presets: [1, 3, 5, 10],
+      suffix: "",
     },
     {
       id: "timeLimitMinutes",
@@ -222,6 +255,10 @@ export const wordleModule: GameModule<WordleState> = {
       timeLimitMs: numberOption(ctx.config, "timeLimitMinutes", 3) * 60_000,
       deadline: 0,
       winnerId: null,
+      totalRounds: numberOption(ctx.config, "rounds", 1),
+      currentRound: 0,
+      scores: {},
+      usedWords: [],
     };
   },
 
@@ -257,6 +294,9 @@ export const wordleModule: GameModule<WordleState> = {
             players,
             deadline: ctx.now + state.timeLimitMs,
             winnerId: null,
+            currentRound: 1,
+            scores: {},
+            usedWords: [],
           };
         }
 
@@ -269,6 +309,9 @@ export const wordleModule: GameModule<WordleState> = {
           players: {},
           deadline: 0,
           winnerId: null,
+          currentRound: 1,
+          scores: {},
+          usedWords: [],
         };
       }
       case "setWord": {
@@ -360,6 +403,49 @@ export const wordleModule: GameModule<WordleState> = {
 
         return withResultsIfComplete(nextState, ctx);
       }
+      case "nextRound": {
+        if (!ctx.isAdmin(move.playerId)) {
+          throw new GameMoveError("Only the host can advance rounds");
+        }
+        if (state.phase !== "results") {
+          throw new GameMoveError("Round is not finished yet");
+        }
+        if (state.currentRound >= state.totalRounds) {
+          throw new GameMoveError("All rounds are complete");
+        }
+        const nextRound = state.currentRound + 1;
+
+        if (state.wordSource === "random") {
+          const candidates = ALL_WORDS.filter((w) => !state.usedWords.includes(w));
+          const word = ctx.rng.pick(candidates.length > 0 ? candidates : ALL_WORDS);
+          const players: Record<string, PlayerRoundState> = {};
+          for (const player of ctx.players) {
+            players[player.id] = { guesses: [], outcome: null, solvedAt: null };
+          }
+          return {
+            ...state,
+            phase: "playing" as const,
+            setterId: null,
+            targetWord: word,
+            players,
+            deadline: ctx.now + state.timeLimitMs,
+            winnerId: null,
+            currentRound: nextRound,
+          };
+        }
+
+        const setter = ctx.rng.pick(ctx.players);
+        return {
+          ...state,
+          phase: "set-word" as const,
+          setterId: setter.id,
+          targetWord: null,
+          players: {},
+          deadline: 0,
+          winnerId: null,
+          currentRound: nextRound,
+        };
+      }
       default:
         throw new GameMoveError(`Unknown move: ${move.type}`);
     }
@@ -375,6 +461,10 @@ export const wordleModule: GameModule<WordleState> = {
         ...state,
         phase: "results",
         winnerId: computeWinnerId(state, ctx),
+        scores: accumulateScores(state, ctx),
+        usedWords: state.targetWord
+          ? [...state.usedWords, state.targetWord]
+          : state.usedWords,
       };
     }
 
@@ -397,6 +487,10 @@ export const wordleModule: GameModule<WordleState> = {
         ...timedOutState,
         phase: "results",
         winnerId: computeWinnerId(timedOutState, ctx),
+        scores: accumulateScores(timedOutState, ctx),
+        usedWords: state.targetWord
+          ? [...state.usedWords, state.targetWord]
+          : state.usedWords,
       };
     }
 
@@ -436,6 +530,15 @@ export const wordleModule: GameModule<WordleState> = {
         return a.playerName.localeCompare(b.playerName);
       });
 
+    const scoreEntries = Object.entries(state.scores)
+      .map(([playerId, score]) => ({
+        playerId,
+        playerName:
+          ctx.players.find((p) => p.id === playerId)?.name ?? "Unknown",
+        score,
+      }))
+      .sort((a, b) => b.score - a.score);
+
     return {
       phase: state.phase,
       wordSource: state.wordSource,
@@ -449,6 +552,10 @@ export const wordleModule: GameModule<WordleState> = {
       standings,
       finishedCount: standings.filter((entry) => Boolean(entry.outcome)).length,
       totalContestants: standings.length,
+      currentRound: state.currentRound,
+      totalRounds: state.totalRounds,
+      isFinalRound: state.currentRound >= state.totalRounds,
+      scores: scoreEntries,
       result:
         state.phase === "results"
           ? {
@@ -475,5 +582,6 @@ export const wordleModule: GameModule<WordleState> = {
     };
   },
 
-  isFinished: (state) => state.phase === "results",
+  isFinished: (state) =>
+    state.phase === "results" && state.currentRound >= state.totalRounds,
 };

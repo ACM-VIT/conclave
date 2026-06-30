@@ -21,7 +21,7 @@ const context = (
 ): GameContext => ({
   players: options?.currentPlayers ?? players,
   rng: rng(options?.pickIndex),
-  config: { timeLimitMinutes: 3, wordSource: "setter" },
+  config: { timeLimitMinutes: 3, wordSource: "setter", rounds: 1 },
   content: null,
   now,
   isAdmin: (playerId) => playerId === "host",

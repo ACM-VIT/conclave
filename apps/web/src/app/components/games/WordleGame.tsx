@@ -6,7 +6,6 @@ import {
   CountdownRing,
   GameLobby,
   HEAD_FONT,
-  PrimaryButton,
   useRemaining,
   type GameViewProps,
 } from "./gameUi";
@@ -33,6 +32,10 @@ type WordlePublic = {
   }>;
   finishedCount: number;
   totalContestants: number;
+  currentRound: number;
+  totalRounds: number;
+  isFinalRound: boolean;
+  scores: Array<{ playerId: string; playerName: string; score: number }>;
   result: {
     targetWord: string | null;
     winnerId: string | null;
@@ -50,9 +53,10 @@ type WordleMe = {
   mySolvedAt: number | null;
 };
 
-const WORDLE_GREEN = "#6AAA64";
-const WORDLE_YELLOW = "#C9B458";
+const WORDLE_GREEN = "#538d4e";
+const WORDLE_YELLOW = "#b59f3b";
 const WORDLE_GRAY = "#3a3a3c";
+const KEY_BG = "#818384";
 
 const letterBg = (state: TileState | "empty"): string => {
   if (state === "green") return WORDLE_GREEN;
@@ -64,6 +68,13 @@ const letterBg = (state: TileState | "empty"): string => {
 const tileBorder = (state: TileState | "empty", hasLetter: boolean): string => {
   if (state !== "empty") return "transparent";
   return hasLetter ? color.borderStrong : color.border;
+};
+
+const keyBg = (state: TileState | undefined): string => {
+  if (state === "green") return WORDLE_GREEN;
+  if (state === "yellow") return WORDLE_YELLOW;
+  if (state === "gray") return WORDLE_GRAY;
+  return KEY_BG;
 };
 
 const statusText = (outcome: PlayerOutcome | null): string => {
@@ -96,6 +107,101 @@ const formatMmSs = (ms: number): string => {
   return `${minutes}:${seconds}`;
 };
 
+const KEYBOARD_ROWS = [
+  ["Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P"],
+  ["A", "S", "D", "F", "G", "H", "J", "K", "L"],
+  ["Z", "X", "C", "V", "B", "N", "M"],
+];
+
+const FLIP_STYLE = `
+@keyframes wordle-flip {
+  0% { transform: rotateX(0deg); }
+  50% { transform: rotateX(90deg); }
+  100% { transform: rotateX(180deg); }
+}
+`;
+
+const TILE_STYLE: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  fontFamily: HEAD_FONT,
+  fontSize: 20,
+  fontWeight: 700,
+  textTransform: "uppercase",
+  color: "#ffffff",
+};
+
+function Tile({
+  letter,
+  state,
+  animateReveal,
+  colIndex,
+}: {
+  letter: string;
+  state: TileState | "empty";
+  animateReveal: boolean;
+  colIndex: number;
+}) {
+  const hasLetter = letter.trim().length > 0;
+  const isRevealed = state !== "empty";
+
+  if (!animateReveal) {
+    return (
+      <div
+        style={{
+          ...TILE_STYLE,
+          aspectRatio: "1",
+          border: `2px solid ${isRevealed ? "transparent" : tileBorder("empty", hasLetter)}`,
+          background: isRevealed ? letterBg(state) : "transparent",
+        }}
+      >
+        {letter}
+      </div>
+    );
+  }
+
+  const delay = colIndex * 300;
+  return (
+    <div style={{ aspectRatio: "1", perspective: 300 }}>
+      <div
+        style={{
+          width: "100%",
+          height: "100%",
+          position: "relative",
+          transformStyle: "preserve-3d",
+          animation: `wordle-flip 500ms ease-in-out ${delay}ms both`,
+        }}
+      >
+        <div
+          style={{
+            ...TILE_STYLE,
+            position: "absolute",
+            inset: 0,
+            backfaceVisibility: "hidden",
+            border: `2px solid ${tileBorder("empty", hasLetter)}`,
+            background: "transparent",
+          }}
+        >
+          {letter}
+        </div>
+        <div
+          style={{
+            ...TILE_STYLE,
+            position: "absolute",
+            inset: 0,
+            backfaceVisibility: "hidden",
+            transform: "rotateX(180deg)",
+            background: letterBg(state),
+          }}
+        >
+          {letter}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function WordleGame({
   pub,
   me,
@@ -109,6 +215,14 @@ export default function WordleGame({
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
+  const prevGuessCountRef = useRef(me.myGuesses.length);
+  const animateRow = useRef(-1);
+
+  const currentCount = me.myGuesses.length;
+  if (currentCount > prevGuessCountRef.current) {
+    animateRow.current = currentCount - 1;
+    prevGuessCountRef.current = currentCount;
+  }
 
   const remainingMs = useRemaining(pub.deadline, pub.serverNow);
   const wordLengthLabel = `${pub.wordLength}-letter`;
@@ -237,10 +351,16 @@ export default function WordleGame({
   }
 
   if (pub.phase === "results" && pub.result) {
+    const multiRound = pub.totalRounds > 1;
     return (
       <div style={{ padding: "4px 2px" }}>
+        {multiRound ? (
+          <p style={{ fontSize: 11, color: color.textFaint, fontFamily: HEAD_FONT, textAlign: "center", margin: "0 0 2px" }}>
+            Round {pub.currentRound} of {pub.totalRounds}
+          </p>
+        ) : null}
         <p style={{ fontFamily: HEAD_FONT, fontSize: 18, color: color.text, margin: "0 0 4px", textAlign: "center" }}>
-          {pub.result.winnerName ? "Round complete" : "No winner"}
+          {pub.isFinalRound ? (multiRound ? "Game over" : pub.result.winnerName ? "Round complete" : "No winner") : pub.result.winnerName ? "Round complete" : "No winner"}
         </p>
         {pub.result.winnerName ? (
           <p style={{ fontSize: 13, color: wordleAccent, textAlign: "center", margin: "0 0 6px" }}>
@@ -253,41 +373,103 @@ export default function WordleGame({
             {pub.result.targetWord ?? "—"}
           </span>
         </p>
-        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-          {pub.standings.map((entry, i) => (
-            <div
-              key={entry.playerId}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 10,
-                padding: "7px 10px",
-                borderRadius: radius.sm,
-                background: entry.outcome === "win" ? `${wordleAccent}22` : "transparent",
-              }}
-            >
-              <span style={{ width: 16, fontSize: 12, color: i === 0 && entry.outcome === "win" ? wordleAccent : color.textFaint, fontFamily: HEAD_FONT, fontWeight: 500 }}>
-                {i + 1}
-              </span>
-              <span style={{ flex: 1, minWidth: 0, fontSize: 13.5, color: color.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                {entry.playerName}
-              </span>
-              <span style={{ fontSize: 12, color: color.textMuted, fontFamily: HEAD_FONT }}>
-                {entry.outcome === "win" ? `${entry.triesUsed}/${pub.maxTries}` : statusText(entry.outcome)}
-              </span>
+
+        {multiRound && pub.scores.length > 0 ? (
+          <div style={{ marginBottom: 12 }}>
+            <p style={{ fontSize: 11, color: color.textFaint, fontFamily: HEAD_FONT, margin: "0 0 6px" }}>
+              {pub.isFinalRound ? "Final scores" : "Scores"}
+            </p>
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              {pub.scores.map((entry, i) => (
+                <div
+                  key={entry.playerId}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 10,
+                    padding: "7px 10px",
+                    borderRadius: radius.sm,
+                    background: i === 0 && pub.isFinalRound ? `${wordleAccent}22` : "transparent",
+                  }}
+                >
+                  <span style={{ width: 16, fontSize: 12, color: i === 0 ? wordleAccent : color.textFaint, fontFamily: HEAD_FONT, fontWeight: 500 }}>
+                    {i + 1}
+                  </span>
+                  <span style={{ flex: 1, minWidth: 0, fontSize: 13.5, color: color.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {entry.playerName}
+                  </span>
+                  <span style={{ fontSize: 12, color: wordleAccent, fontFamily: HEAD_FONT, fontWeight: 600 }}>
+                    {entry.score} pt{entry.score !== 1 ? "s" : ""}
+                  </span>
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
+          </div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 12 }}>
+            {pub.standings.map((entry, i) => (
+              <div
+                key={entry.playerId}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 10,
+                  padding: "7px 10px",
+                  borderRadius: radius.sm,
+                  background: entry.outcome === "win" ? `${wordleAccent}22` : "transparent",
+                }}
+              >
+                <span style={{ width: 16, fontSize: 12, color: i === 0 && entry.outcome === "win" ? wordleAccent : color.textFaint, fontFamily: HEAD_FONT, fontWeight: 500 }}>
+                  {i + 1}
+                </span>
+                <span style={{ flex: 1, minWidth: 0, fontSize: 13.5, color: color.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {entry.playerName}
+                </span>
+                <span style={{ fontSize: 12, color: color.textMuted, fontFamily: HEAD_FONT }}>
+                  {entry.outcome === "win" ? `${entry.triesUsed}/${pub.maxTries}` : statusText(entry.outcome)}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {!pub.isFinalRound && isAdmin && !readOnly ? (
+          <button
+            disabled={busy}
+            onClick={() => void runMove("nextRound")}
+            style={{
+              width: "100%",
+              padding: "10px 0",
+              borderRadius: radius.md,
+              border: "none",
+              background: WORDLE_GREEN,
+              color: "#fff",
+              fontFamily: HEAD_FONT,
+              fontWeight: 700,
+              fontSize: 15,
+              cursor: busy ? "default" : "pointer",
+              opacity: busy ? 0.5 : 1,
+            }}
+          >
+            Next Round
+          </button>
+        ) : !pub.isFinalRound ? (
+          <p style={{ fontSize: 12, color: color.textMuted, textAlign: "center", margin: 0 }}>
+            Waiting for host to start next round...
+          </p>
+        ) : null}
       </div>
     );
   }
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      <style>{FLIP_STYLE}</style>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div>
           <p style={{ margin: 0, color: wordleAccent, fontFamily: HEAD_FONT, fontSize: 12 }}>
             {isRandomMode ? "Wordle" : pub.setterName ? `Set by ${pub.setterName}` : "Wordle"}
+            {pub.totalRounds > 1 ? ` · Round ${pub.currentRound}/${pub.totalRounds}` : ""}
           </p>
           <p style={{ margin: "2px 0 0", color: color.textFaint, fontSize: 11 }}>
             {pub.finishedCount}/{pub.totalContestants} finished
@@ -338,12 +520,24 @@ export default function WordleGame({
                   textAlign: "center",
                 }}
               />
-              <PrimaryButton
+              <button
                 disabled={busy || readOnly}
                 onClick={() => void submitSecretWord()}
+                style={{
+                  padding: "10px 28px",
+                  borderRadius: radius.md,
+                  border: "none",
+                  background: WORDLE_GREEN,
+                  color: "#fff",
+                  fontFamily: HEAD_FONT,
+                  fontWeight: 700,
+                  fontSize: 15,
+                  cursor: busy || readOnly ? "default" : "pointer",
+                  opacity: busy || readOnly ? 0.5 : 1,
+                }}
               >
                 Set
-              </PrimaryButton>
+              </button>
             </div>
           </div>
         ) : (
@@ -370,49 +564,32 @@ export default function WordleGame({
       {!me.isSetter && pub.phase !== "set-word" ? (
         <>
           <div style={{ display: "flex", justifyContent: "center" }}>
-            <div style={{ display: "grid", gap: 4 }}>
+            <div style={{ display: "grid", gap: 5, maxWidth: 260, width: "100%" }}>
               {gridRows.map((row, rowIndex) => (
                 <div
                   key={`row-${rowIndex}`}
                   style={{
                     display: "grid",
-                    gridTemplateColumns: `repeat(${pub.wordLength}, 48px)`,
-                    gap: 4,
+                    gridTemplateColumns: `repeat(${pub.wordLength}, 1fr)`,
+                    gap: 5,
                   }}
                 >
-                  {row.letters.map((letter, colIndex) => {
-                    const state = row.states[colIndex];
-                    const hasLetter = letter.trim().length > 0;
-                    return (
-                      <div
-                        key={`tile-${rowIndex}-${colIndex}`}
-                        style={{
-                          width: 48,
-                          height: 48,
-                          borderRadius: 3,
-                          border: `2px solid ${tileBorder(state, hasLetter)}`,
-                          background: letterBg(state),
-                          color: "#ffffff",
-                          display: "flex",
-                          alignItems: "center",
-                          justifyContent: "center",
-                          fontFamily: HEAD_FONT,
-                          fontSize: 22,
-                          fontWeight: 700,
-                          textTransform: "uppercase",
-                        }}
-                      >
-                        {letter}
-                      </div>
-                    );
-                  })}
+                  {row.letters.map((letter, colIndex) => (
+                    <Tile
+                      key={`tile-${rowIndex}-${colIndex}`}
+                      letter={letter}
+                      state={row.states[colIndex]}
+                      animateReveal={rowIndex === animateRow.current}
+                      colIndex={colIndex}
+                    />
+                  ))}
                 </div>
               ))}
             </div>
           </div>
 
           {pub.phase === "playing" && me.canGuess && !me.myOutcome ? (
-            <div style={{ display: "flex", justifyContent: "center" }}>
+            <div style={{ display: "flex", gap: 8, maxWidth: 300, width: "100%", alignSelf: "center" }}>
               <input
                 value={guessDraft}
                 maxLength={pub.wordLength}
@@ -424,10 +601,10 @@ export default function WordleGame({
                     if (!busy && !readOnly) void submitGuess();
                   }
                 }}
-                placeholder="Type and press Enter"
+                placeholder="GUESS"
                 style={{
-                  width: pub.wordLength * 48 + (pub.wordLength - 1) * 4,
-                  padding: "10px 14px",
+                  flex: 1,
+                  padding: "10px 12px",
                   borderRadius: radius.md,
                   border: `1px solid ${color.border}`,
                   background: color.surfaceRaised,
@@ -438,35 +615,56 @@ export default function WordleGame({
                   textAlign: "center",
                 }}
               />
+              <button
+                disabled={busy || readOnly}
+                onClick={() => void submitGuess()}
+                style={{
+                  padding: "10px 28px",
+                  borderRadius: radius.md,
+                  border: "none",
+                  background: WORDLE_GREEN,
+                  color: "#fff",
+                  fontFamily: HEAD_FONT,
+                  fontWeight: 700,
+                  fontSize: 15,
+                  cursor: busy || readOnly ? "default" : "pointer",
+                  opacity: busy || readOnly ? 0.5 : 1,
+                }}
+              >
+                Go
+              </button>
             </div>
           ) : null}
 
           {me.myGuesses.length > 0 ? (
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 3, justifyContent: "center", maxWidth: pub.wordLength * 48 + (pub.wordLength - 1) * 4, alignSelf: "center" }}>
-              {"ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("").map((ch) => {
-                const st = letterStates[ch];
-                return (
-                  <span
-                    key={ch}
-                    style={{
-                      width: 24,
-                      height: 28,
-                      borderRadius: 3,
-                      background: st ? letterBg(st) : color.surfaceRaised,
-                      border: st ? "none" : `1px solid ${color.border}`,
-                      color: st ? "#fff" : color.textFaint,
-                      display: "inline-flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      fontSize: 10,
-                      fontFamily: HEAD_FONT,
-                      fontWeight: 600,
-                    }}
-                  >
-                    {ch}
-                  </span>
-                );
-              })}
+            <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "center" }}>
+              {KEYBOARD_ROWS.map((row, ri) => (
+                <div key={ri} style={{ display: "flex", gap: 4, justifyContent: "center" }}>
+                  {row.map((ch) => {
+                    const st = letterStates[ch];
+                    return (
+                      <span
+                        key={ch}
+                        style={{
+                          width: 26,
+                          height: 32,
+                          borderRadius: 4,
+                          background: keyBg(st),
+                          color: "#fff",
+                          display: "inline-flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          fontSize: 11,
+                          fontFamily: HEAD_FONT,
+                          fontWeight: 700,
+                        }}
+                      >
+                        {ch}
+                      </span>
+                    );
+                  })}
+                </div>
+              ))}
             </div>
           ) : null}
         </>
@@ -489,7 +687,7 @@ export default function WordleGame({
         </div>
       ) : null}
 
-      {pub.standings.length > 1 && pub.phase === "playing" ? (
+      {pub.standings.length > 0 && pub.phase === "playing" ? (
         <div style={{ paddingTop: 10, borderTop: `1px solid ${color.border}` }}>
           <p style={{ fontSize: 11, color: color.textFaint, fontFamily: HEAD_FONT, margin: "0 0 6px" }}>Standings</p>
           <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
@@ -519,6 +717,18 @@ export default function WordleGame({
           </div>
         </div>
       ) : null}
+
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", minHeight: 24 }}>
+        <span style={{ fontSize: 12, color: color.textMuted }}>
+          {me.myOutcome
+            ? statusText(me.myOutcome)
+            : readOnly
+              ? "Watching only"
+              : pub.phase === "playing" && me.canGuess
+                ? `${me.myGuesses.length}/${pub.maxTries} tries`
+                : ""}
+        </span>
+      </div>
 
       {error ? <p style={{ margin: 0, color: color.danger, fontSize: 12 }}>{error}</p> : null}
     </div>
