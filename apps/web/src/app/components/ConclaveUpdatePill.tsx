@@ -15,6 +15,9 @@ const AUTO_DISMISS_MS = 15_000;
 const shouldIgnoreVersion = (version: ConclaveSiteVersion): boolean =>
   version.id === "local";
 
+const getVersionDismissalKey = (version: ConclaveSiteVersion): string =>
+  [version.id, version.tag ?? "", version.timestamp ?? ""].join(":");
+
 export function ConclaveUpdatePill() {
   // The first real version we observe becomes the baseline; any later
   // version that differs from it means a deploy happened mid-session.
@@ -22,7 +25,14 @@ export function ConclaveUpdatePill() {
   const [availableVersion, setAvailableVersion] =
     useState<ConclaveSiteVersion | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [isDismissed, setIsDismissed] = useState(false);
+  const [dismissedVersionKey, setDismissedVersionKey] = useState<string | null>(
+    null,
+  );
+  const availableVersionKey = availableVersion
+    ? getVersionDismissalKey(availableVersion)
+    : null;
+  const isDismissed =
+    availableVersionKey !== null && dismissedVersionKey === availableVersionKey;
 
   const checkVersion = useCallback(async () => {
     try {
@@ -75,14 +85,14 @@ export function ConclaveUpdatePill() {
 
   // Auto-dismiss the pill a short while after it appears.
   useEffect(() => {
-    if (!availableVersion || isDismissed) return;
+    if (!availableVersionKey || isDismissed) return;
 
     const timeoutId = window.setTimeout(
-      () => setIsDismissed(true),
+      () => setDismissedVersionKey(availableVersionKey),
       AUTO_DISMISS_MS,
     );
     return () => window.clearTimeout(timeoutId);
-  }, [availableVersion, isDismissed]);
+  }, [availableVersionKey, isDismissed]);
 
   const handleRefresh = useCallback(() => {
     setIsRefreshing(true);
@@ -90,8 +100,10 @@ export function ConclaveUpdatePill() {
   }, []);
 
   const handleDismiss = useCallback(() => {
-    setIsDismissed(true);
-  }, []);
+    if (availableVersionKey) {
+      setDismissedVersionKey(availableVersionKey);
+    }
+  }, [availableVersionKey]);
 
   if (!availableVersion || isDismissed) return null;
 
@@ -100,7 +112,7 @@ export function ConclaveUpdatePill() {
   return (
     <div
       aria-live="polite"
-      className="pointer-events-none fixed top-[calc(env(safe-area-inset-top,0px)+0.75rem)] left-1/2 z-[80] w-[min(calc(100vw-1.5rem),28rem)] -translate-x-1/2"
+      className="pointer-events-none fixed top-[calc(env(safe-area-inset-top,0px)+0.75rem)] left-1/2 z-[160] w-[min(calc(100vw-1.5rem),28rem)] -translate-x-1/2"
     >
       <div
         className="pointer-events-auto mx-auto flex w-fit max-w-full items-center gap-2 rounded-full border border-white/10 bg-[#0a0a0b]/90 px-3 py-2 text-[12px] font-medium text-[#fafafa] shadow-[0_8px_24px_rgba(0,0,0,0.35)] backdrop-blur-xl"
