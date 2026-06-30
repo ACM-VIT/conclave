@@ -130,6 +130,7 @@ struct ParsedCommand {
 // MARK: - Command Parser
 
 struct ChatCommandParser {
+    private static let reservedRoomMentionTargets: Set<String> = ["conclave"]
     
     static func parse(_ text: String) -> ParsedCommand? {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -187,6 +188,7 @@ struct ChatCommandParser {
 
         let body = bodyTokens.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
         guard !target.isEmpty, !body.isEmpty else { return nil }
+        guard !reservedRoomMentionTargets.contains(target.lowercased()) else { return nil }
         return (target, body)
     }
 

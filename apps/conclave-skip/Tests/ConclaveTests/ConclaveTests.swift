@@ -3470,6 +3470,13 @@ final class ConclaveTests: XCTestCase {
         XCTAssertEqual(mention.body, "secret")
     }
 
+    func testConclaveMentionIsNotParsedAsDirectMessage() throws {
+        XCTAssertNil(ChatCommandParser.parseDirectMessage("@Conclave hello"))
+        XCTAssertNil(ChatCommandParser.parseDirectMessage("@conclave: summarize this"))
+        XCTAssertNil(ChatCommandParser.parseDirectMessage("@CONCLAVE, what did I miss?"))
+        XCTAssertNotNil(ChatCommandParser.parseDirectMessage("@conclave-team hello"))
+    }
+
     func testChatMentionContextPolicyMatchesWebWhitespace() throws {
         XCTAssertEqual(
             ChatMentionContextPolicy.context(for: "  @Remote.User", isChatDisabled: false, isDmEnabled: true),
@@ -3518,6 +3525,11 @@ final class ConclaveTests: XCTestCase {
         XCTAssertFalse(ChatSubmitReplyPolicy.shouldClearDraftAfterSubmit("/dm\tremote hello", isDmEnabled: false))
         XCTAssertTrue(ChatSubmitReplyPolicy.shouldClearDraftAfterSubmit("hello", isDmEnabled: false))
         XCTAssertTrue(ChatSubmitReplyPolicy.shouldClearDraftAfterSubmit("/dm remote hello", isDmEnabled: true))
+    }
+
+    func testChatSubmitReplyPolicyTreatsConclaveMentionAsRoomMessage() throws {
+        XCTAssertTrue(ChatSubmitReplyPolicy.shouldClearReplyAfterSubmit("@Conclave hello", isDmEnabled: false))
+        XCTAssertTrue(ChatSubmitReplyPolicy.shouldClearDraftAfterSubmit("@Conclave hello", isDmEnabled: false))
     }
 
     func testChatMessageLinkParserNormalizesBareDomainsAndPunctuation() throws {
