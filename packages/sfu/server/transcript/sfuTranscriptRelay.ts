@@ -27,6 +27,8 @@ type ActiveAudioConsumer = {
   packetsReceived: number;
   decodedFrames: number;
   queuedFrames: number;
+  decodeFailures: number;
+  lastDecodeFailureLogAt: number;
   lastDropLogAt: number;
 };
 
@@ -227,6 +229,8 @@ export class SfuTranscriptRelay implements TranscriptAudioBatchSink {
       packetsReceived: 0,
       decodedFrames: 0,
       queuedFrames: 0,
+      decodeFailures: 0,
+      lastDecodeFailureLogAt: 0,
       lastDropLogAt: 0,
     };
     this.consumers.set(entry.producerId, active);
@@ -278,13 +282,11 @@ export class SfuTranscriptRelay implements TranscriptAudioBatchSink {
     try {
       pcm = active.decoder.decodeTo24kMono(payload);
     } catch (error) {
-      Logger.warn(
-        `Transcript Opus decode failed for producer ${producerId}`,
-        error,
-      );
+      this.warnDecodeFailure(producerId, active, error);
       return;
     }
     if (!pcm || pcm.length === 0) return;
+    active.decodeFailures = 0;
     active.decodedFrames += 1;
     const queued = active.batcher.pushPcm(pcm);
     if (queued) {
@@ -354,6 +356,26 @@ export class SfuTranscriptRelay implements TranscriptAudioBatchSink {
     this.lastWorkerSendWarnAt = now;
     Logger.warn(
       `Transcript SFU relay could not send ${action} to worker for room ${this.options.room.id}; worker socket is not open.`,
+    );
+  }
+
+  private warnDecodeFailure(
+    producerId: string,
+    active: ActiveAudioConsumer,
+    error: unknown,
+  ): void {
+    active.decodeFailures += 1;
+    const now = Date.now();
+    if (
+      active.decodeFailures > 1 &&
+      now - active.lastDecodeFailureLogAt < WORKER_SEND_WARN_INTERVAL_MS
+    ) {
+      return;
+    }
+    active.lastDecodeFailureLogAt = now;
+    Logger.warn(
+      `Transcript Opus decode failed for producer ${producerId} in room ${this.options.room.id}; packet dropped and decoder reset.`,
+      error,
     );
   }
 
