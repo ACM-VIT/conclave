@@ -153,13 +153,21 @@ const createOpenAiClient = (env: Env, apiKey: string): OpenAI => {
   });
 };
 
-export const realtimeEndpoint = (env: Env): string => {
+export const realtimeEndpoint = (env: Env, model?: string): string => {
   const base = (env.OPENAI_REALTIME_URL || OPENAI_REALTIME_URL).replace(
     /\/+$/,
     "",
   );
   const url = new URL(base);
+  if (url.protocol === "wss:") {
+    url.protocol = "https:";
+  } else if (url.protocol === "ws:") {
+    url.protocol = "http:";
+  }
   url.searchParams.set("intent", OPENAI_REALTIME_TRANSCRIPTION_INTENT);
+  if (model) {
+    url.searchParams.set("model", normalizeRealtimeTranscriptModel(model));
+  }
   return url.toString();
 };
 

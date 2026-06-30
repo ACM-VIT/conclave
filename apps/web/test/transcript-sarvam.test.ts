@@ -46,6 +46,7 @@ describe("Sarvam transcription provider helpers", () => {
     expect(url.searchParams.get("input_audio_codec")).toBe("pcm_s16le");
     expect(url.searchParams.get("flush_signal")).toBe("true");
     expect(url.searchParams.get("high_vad_sensitivity")).toBe("true");
+    expect(url.searchParams.get("vad_signals")).toBe("true");
   });
 
   it("normalizes websocket schemes for Cloudflare Worker fetch", () => {

@@ -8,10 +8,12 @@ import type {
 
 const SARVAM_STT_WS_URL = "wss://api.sarvam.ai/speech-to-text/ws";
 const SARVAM_SAMPLE_RATE = 16_000;
+const SARVAM_SAMPLE_RATE_PARAM = String(SARVAM_SAMPLE_RATE);
 const SARVAM_AUDIO_ENCODING = "audio/wav";
 const SARVAM_INPUT_AUDIO_CODEC = "pcm_s16le";
 const SARVAM_DEFAULT_LANGUAGE_CODE = "unknown";
 const SARVAM_DEFAULT_MODE = "codemix";
+const SARVAM_EVENT_LOG_INTERVAL_MS = 15_000;
 const SARVAM_SUPPORTED_LANGUAGE_CODES = new Set([
   "unknown",
   "en-IN",
@@ -100,10 +102,11 @@ export const sarvamEndpoint = (options: {
   );
   url.searchParams.set("model", options.model || "saaras:v3");
   url.searchParams.set("mode", normalizeSarvamMode(options.mode));
-  url.searchParams.set("sample_rate", String(SARVAM_SAMPLE_RATE));
+  url.searchParams.set("sample_rate", SARVAM_SAMPLE_RATE_PARAM);
   url.searchParams.set("input_audio_codec", SARVAM_INPUT_AUDIO_CODEC);
   url.searchParams.set("flush_signal", "true");
   url.searchParams.set("high_vad_sensitivity", "true");
+  url.searchParams.set("vad_signals", "true");
   return url.toString();
 };
 
@@ -182,10 +185,44 @@ export const buildSarvamAudioMessage = (audioBase64: string): string =>
   JSON.stringify({
     audio: {
       data: audioBase64,
-      sample_rate: String(SARVAM_SAMPLE_RATE),
+      sample_rate: SARVAM_SAMPLE_RATE_PARAM,
       encoding: SARVAM_AUDIO_ENCODING,
     },
   });
+
+const summarizeSarvamEvent = (
+  raw: string,
+): Record<string, unknown> | null => {
+  const parsed = safeJsonParse(raw);
+  if (!parsed || typeof parsed !== "object") {
+    return { validJson: false };
+  }
+  const response = parsed as SarvamResponse;
+  const data =
+    response.data && typeof response.data === "object"
+      ? (response.data as Record<string, unknown>)
+      : {};
+  return {
+    validJson: true,
+    responseType: response.type ?? null,
+    dataKeys: Object.keys(data),
+    hasTranscript:
+      typeof data.transcript === "string" ||
+      typeof response.transcript === "string",
+    hasText:
+      typeof data.text === "string" || typeof response.text === "string",
+    requestId:
+      typeof data.request_id === "string"
+        ? data.request_id
+        : typeof response.request_id === "string"
+          ? response.request_id
+          : null,
+    hasError:
+      typeof data.error === "string" ||
+      typeof response.error === "string" ||
+      typeof response.message === "string",
+  };
+};
 
 export const createSarvamSegmentItemId = (
   baseItemId: string,
@@ -257,6 +294,9 @@ class SarvamTranscriptionSession implements LiveTranscriptionSession {
   private closed = false;
   private readonly downsampler = new Pcm24To16Downsampler();
   private finalSequence = 0;
+  private receivedEvents = 0;
+  private ignoredEvents = 0;
+  private lastEventLogAt = 0;
 
   constructor(
     private readonly socket: WebSocket,
@@ -301,8 +341,14 @@ class SarvamTranscriptionSession implements LiveTranscriptionSession {
   }
 
   private async handleEvent(raw: string): Promise<void> {
+    this.receivedEvents += 1;
     const event = parseSarvamEvent(raw);
-    if (event.type === "ignore") return;
+    if (event.type === "ignore") {
+      this.ignoredEvents += 1;
+      this.logProviderEvent("ignored", raw, this.ignoredEvents === 1);
+      return;
+    }
+    this.logProviderEvent(event.type, raw, this.receivedEvents === 1);
     if (event.type === "error") {
       await this.callbacks.onFailure(event.message);
       return;
@@ -314,6 +360,24 @@ class SarvamTranscriptionSession implements LiveTranscriptionSession {
     );
     this.callbacks.onCommitted(itemId);
     await this.callbacks.onFinal(itemId, event.transcript);
+  }
+
+  private logProviderEvent(
+    outcome: string,
+    raw: string,
+    force = false,
+  ): void {
+    const now = Date.now();
+    if (!force && now - this.lastEventLogAt < SARVAM_EVENT_LOG_INTERVAL_MS) {
+      return;
+    }
+    this.lastEventLogAt = now;
+    console.info("[TranscriptWorker] sarvam event", {
+      outcome,
+      receivedEvents: this.receivedEvents,
+      ignoredEvents: this.ignoredEvents,
+      ...summarizeSarvamEvent(raw),
+    });
   }
 }
 

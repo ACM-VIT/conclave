@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { TranscriptSegment } from "@conclave/meeting-core/transcript-types";
+import type { Env } from "../transcript-worker/src/types";
 import {
   QA_SYSTEM_PROMPT,
   buildQaTranscriptContext,
   buildRealtimeTranscriptionConfig,
   buildTranscriptionPrompt,
+  realtimeEndpoint,
 } from "../transcript-worker/src/openai";
 
 const segment = (
@@ -26,6 +28,20 @@ const segment = (
 });
 
 describe("transcript OpenAI request helpers", () => {
+  it("builds realtime transcription endpoint with intent and model", () => {
+    const endpoint = realtimeEndpoint(
+      {
+        OPENAI_REALTIME_URL: "wss://api.openai.com/v1/realtime",
+      } as Partial<Env> as Env,
+      "gpt-realtime-whisper",
+    );
+    const url = new URL(endpoint);
+
+    expect(url.protocol).toBe("https:");
+    expect(url.searchParams.get("intent")).toBe("transcription");
+    expect(url.searchParams.get("model")).toBe("gpt-realtime-whisper");
+  });
+
   it("sends delay only for gpt-realtime-whisper", () => {
     expect(
       buildRealtimeTranscriptionConfig({
