@@ -95,6 +95,7 @@ interface GridLayoutProps {
   onViewSettingsChange?: Dispatch<SetStateAction<MeetViewSettings>>;
   presentationStream?: MediaStream | null;
   presenterName?: string;
+  presentationPresenterId?: string | null;
   /** True when the presentation stream above is YOUR own screen share —
    *  the stage tile defaults to a chooser instead of mirroring it back. */
   isLocalPresenter?: boolean;
@@ -383,6 +384,13 @@ type MeetRoomTilingMetadataBase = {
   autoStageMode: string;
   dynamicCrop: boolean;
   presenting: boolean;
+  presentation: {
+    tileId: string;
+    presenterId: string | null;
+    visible: boolean;
+    primary: boolean;
+    focus: boolean;
+  };
   pinnedId: string | null;
   primaryIds: string[];
   focusIds: string[];
@@ -963,6 +971,7 @@ function GridLayout({
   onViewSettingsChange,
   presentationStream = null,
   presenterName = "Someone",
+  presentationPresenterId = null,
   isLocalPresenter = false,
   screenShareControlState,
   screenShareCaptureController = null,
@@ -2135,6 +2144,17 @@ function GridLayout({
       autoStageMode,
       dynamicCrop: usesAutoDynamicCrop,
       presenting: hasPresentation,
+      presentation: {
+        tileId: PRESENTATION_TILE_ID,
+        presenterId: presentationPresenterId,
+        visible: hasPresentation,
+        primary:
+          hasGridPresentationTile ||
+          (usesStageLayout && stageMainKind === "presentation"),
+        focus:
+          hasGridPresentationTile ||
+          (usesStageLayout && stageMainKind === "presentation"),
+      },
       pinnedId,
       primaryIds: roomTilingPrimaryIds,
       focusIds: roomTilingFocusIds,
@@ -2233,6 +2253,7 @@ function GridLayout({
       gridSize.height,
       gridSize.width,
       gridVideoObjectFit,
+      hasGridPresentationTile,
       hasPresentation,
       hiddenParticipantsCount,
       gridTilePlacements,
@@ -2247,6 +2268,7 @@ function GridLayout({
       localVideoTracking,
       maxGridTiles,
       orderedRemoteParticipants,
+      presentationPresenterId,
       pinnedId,
       renderedViewMode,
       requestedMaxTiles,
@@ -2576,6 +2598,7 @@ function GridLayout({
           viewSettings.mode === "auto" ? autoStageMode : undefined
         }
         data-meet-view-presenting={hasPresentation ? "true" : "false"}
+        data-meet-view-presentation-presenter={presentationPresenterId ?? ""}
         data-meet-view-grid-presentation={
           hasGridPresentationTile ? "true" : "false"
         }
@@ -2641,6 +2664,9 @@ function GridLayout({
         data-meet-room-tiling-fallback-level={roomTilingFallbackLevel}
         data-meet-room-tiling-active-speaker={activeSpeakerId ?? ""}
         data-meet-room-tiling-featured-speaker={featuredSpeakerId ?? ""}
+        data-meet-room-tiling-presentation-presenter={
+          presentationPresenterId ?? ""
+        }
         data-meet-room-tiling-primary-ids={roomTilingPrimaryIds.join(",")}
         data-meet-room-tiling-visible-ids={roomTilingRemoteVisibleIds.join(",")}
         data-meet-room-tiling-hidden-ids={roomTilingHiddenIds.join(",")}
@@ -2677,6 +2703,7 @@ function GridLayout({
               <PresentationVideoTile
                 stream={presentationStream}
                 presenterName={presenterName}
+                presenterId={presentationPresenterId}
                 size="stage"
                 selfView={presentationSelfView}
                 captureControl={presentationCaptureControl}
@@ -2824,6 +2851,7 @@ function GridLayout({
                 <PresentationVideoTile
                   stream={presentationStream}
                   presenterName={presenterName}
+                  presenterId={presentationPresenterId}
                   size="stage"
                   selfView={presentationSelfView}
                   captureControl={presentationCaptureControl}
@@ -2903,6 +2931,7 @@ function GridLayout({
                     <PresentationVideoTile
                       stream={presentationStream}
                       presenterName={presenterName}
+                      presenterId={presentationPresenterId}
                       size="rail"
                       captureControl={presentationCaptureControl}
                       isPinned={pinnedId === PRESENTATION_TILE_ID}
@@ -2975,6 +3004,7 @@ function GridLayout({
             <PresentationVideoTile
               stream={presentationStream}
               presenterName={presenterName}
+              presenterId={presentationPresenterId}
               size="grid"
               selfView={presentationSelfView}
               captureControl={presentationCaptureControl}
@@ -3416,6 +3446,7 @@ const OverflowPreviewTile = memo(function OverflowPreviewTile({
 const PresentationVideoTile = memo(function PresentationVideoTile({
   stream,
   presenterName,
+  presenterId,
   size,
   selfView,
   captureControl,
@@ -3424,6 +3455,7 @@ const PresentationVideoTile = memo(function PresentationVideoTile({
 }: {
   stream: MediaStream;
   presenterName: string;
+  presenterId?: string | null;
   size: "stage" | "grid" | "rail";
   /** Only set when this presentation IS your own screen share — lets the
    *  presenter choose between a flat "you're presenting" placeholder and an
@@ -3646,6 +3678,7 @@ const PresentationVideoTile = memo(function PresentationVideoTile({
         compact ? "h-28 shrink-0" : "h-full w-full"
       }`}
       data-meet-presentation-tile
+      data-meet-presentation-presenter-id={presenterId ?? undefined}
       data-meet-captured-surface-control={
         showCaptureControls ? "available" : "unavailable"
       }
@@ -3656,6 +3689,7 @@ const PresentationVideoTile = memo(function PresentationVideoTile({
         muted
         playsInline
         data-meet-presentation-video="true"
+        data-meet-video-stream-type="screen"
         className={`h-full w-full bg-black object-contain ${
           showChooser ? "opacity-0" : ""
         }`}

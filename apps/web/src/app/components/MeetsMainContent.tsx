@@ -636,6 +636,32 @@ export default function MeetsMainContent({
     : devPresentationStream
       ? "Dev presentation"
       : presenterName;
+  const presentationPresenterId = useMemo(() => {
+    if (!presentationStream) return null;
+
+    const activeScreenShareParticipant = activeScreenShareId
+      ? nonSystemParticipants.find(
+          (participant) =>
+            participant.screenShareProducerId === activeScreenShareId &&
+            getLiveVideoStream(participant.screenShareStream),
+        )
+      : null;
+    const fallbackScreenShareParticipant = nonSystemParticipants.find(
+      (participant) => getLiveVideoStream(participant.screenShareStream),
+    );
+
+    return (
+      activeScreenShareParticipant?.userId ??
+      fallbackScreenShareParticipant?.userId ??
+      (isScreenSharing ? currentUserId : null)
+    );
+  }, [
+    activeScreenShareId,
+    currentUserId,
+    isScreenSharing,
+    nonSystemParticipants,
+    presentationStream,
+  ]);
   const shouldUseDevCameraStream =
     Boolean(devCameraStream) && !getLiveVideoStream(localStream);
   const effectiveLocalStream = shouldUseDevCameraStream
@@ -1680,6 +1706,7 @@ export default function MeetsMainContent({
           onViewSettingsChange={setViewSettings}
           presentationStream={effectivePresentationStream}
           presenterName={effectivePresenterName}
+          presentationPresenterId={presentationPresenterId}
           isLocalPresenter={isLocalPresenter}
           screenShareControlState={screenShareControlState}
           screenShareCaptureController={screenShareCaptureController}

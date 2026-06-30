@@ -418,13 +418,13 @@ assertIncludes(
 );
 assertRegex(
   "webAdaptiveConsumerPreferences",
-  /if \(info\.type === "screen"\) \{[\s\S]*const screenShareQuality = worstQuality\([\s\S]*getConsumerScoreQualityHint\(options\.consumerScoreQuality\)[\s\S]*screenShareEmergency[\s\S]*\? 0[\s\S]*: screenShareQuality === "poor"[\s\S]*\? 1[\s\S]*: bounds\.maxTemporalLayer[\s\S]*priority: 240,[\s\S]*paused: false,/,
-  "web screen-share receive adaptation keeps full temporal FPS on fair links",
+  /if \(info\.type === "screen"\) \{[\s\S]*const screenShareQuality = worstQuality\([\s\S]*getConsumerScoreQualityHint\(options\.consumerScoreQuality\)[\s\S]*const screenShareVisible =[\s\S]*options\.layout\.primary[\s\S]*screenShareEmergency[\s\S]*\? 0[\s\S]*: screenShareQuality === "poor" && !screenShareVisible[\s\S]*\? 1[\s\S]*: bounds\.maxTemporalLayer[\s\S]*priority: 240,[\s\S]*paused: false,/,
+  "web visible screen-share receive adaptation keeps full temporal FPS above emergency bitrate",
 );
 assertRegex(
   "webMeetSocket",
-  /producerInfo\.type === "screen"[\s\S]*networkProfile === "emergency"[\s\S]*\? 0[\s\S]*: networkProfile === "poor"[\s\S]*\? 1[\s\S]*: 2,[\s\S]*priority: 240,/,
-  "web initial screen-share consume keeps fair links on full temporal FPS",
+  /producerInfo\.type === "screen"[\s\S]*networkProfile === "emergency"[\s\S]*\? 0[\s\S]*: 2,[\s\S]*priority: 240,/,
+  "web initial screen-share consume keeps full temporal FPS above emergency bitrate",
 );
 assertRegex(
   "sfuMediaHandlers",
@@ -498,6 +498,21 @@ assertRegex(
   "webGridLayout",
   /isRenderingParticipantScreenShare\([\s\S]*data-meet-video-stream-type=\{[\s\S]*isRenderingScreenShare \? "screen" : "webcam"/,
   "web overflow gallery video tags rendered screen-share streams",
+);
+assertRegex(
+  "webGridLayout",
+  /data-meet-presentation-video="true"[\s\S]*data-meet-video-stream-type="screen"/,
+  "web presentation tile tags rendered screen-share streams",
+);
+assertRegex(
+  "webPresentationLayout",
+  /data-meet-presentation-video="true"[\s\S]*data-meet-video-stream-type="screen"/,
+  "web legacy presentation layout tags rendered screen-share streams",
+);
+assertRegex(
+  "webMeetsMainContent",
+  /const presentationPresenterId = useMemo\([\s\S]*participant\.screenShareProducerId === activeScreenShareId[\s\S]*presentationPresenterId=\{presentationPresenterId\}/,
+  "web screen-share presenter id flows into grid tiling metadata",
 );
 assertIncludes(
   "webMobileParticipantVideo",
@@ -651,13 +666,18 @@ assertRegex(
 );
 assertRegex(
   "webAdaptiveConsumerPreferences",
-  /SCREEN_SHARE_RECEIVE_FAIR_BPS = 1500000[\s\S]*SCREEN_SHARE_RECEIVE_POOR_BPS = 550000[\s\S]*SCREEN_SHARE_RECEIVE_EMERGENCY_BPS = 300000[\s\S]*getScreenShareReceiveQualityForAvailableBitrate[\s\S]*availableIncomingBitrateBps <= SCREEN_SHARE_RECEIVE_POOR_BPS[\s\S]*availableIncomingBitrateBps <= SCREEN_SHARE_RECEIVE_FAIR_BPS[\s\S]*isScreenShareReceiveEmergencyBitrate[\s\S]*screenShareEmergency[\s\S]*screenShareQuality === "poor"[\s\S]*bounds\.maxTemporalLayer/,
-  "web screen-share receive layers use incoming bitrate while keeping fair-link FPS",
+  /SCREEN_SHARE_RECEIVE_FAIR_BPS = 1500000[\s\S]*SCREEN_SHARE_RECEIVE_POOR_BPS = 550000[\s\S]*SCREEN_SHARE_RECEIVE_EMERGENCY_BPS = 300000[\s\S]*getScreenShareReceiveQualityForAvailableBitrate[\s\S]*availableIncomingBitrateBps <= SCREEN_SHARE_RECEIVE_POOR_BPS[\s\S]*availableIncomingBitrateBps <= SCREEN_SHARE_RECEIVE_FAIR_BPS[\s\S]*isScreenShareReceiveEmergencyBitrate[\s\S]*screenShareEmergency[\s\S]*screenShareVisible[\s\S]*screenShareQuality === "poor" && !screenShareVisible[\s\S]*bounds\.maxTemporalLayer/,
+  "web visible screen-share receive layers use incoming bitrate while preserving FPS",
 );
 assertRegex(
   "webLowBandwidthProbe",
   /meetVideoStreamType: video\.dataset\.meetVideoStreamType[\s\S]*visibleScreenRenderedVideos = visibleRenderedVideos\.filter[\s\S]*meetVideoStreamType === "screen"[\s\S]*largestRenderedScreenVideo[\s\S]*expected full-resolution decoded screen-share video/,
   "web screen receive probe verifies the actual rendered screen-share video",
+);
+assertRegex(
+  "webLowBandwidthProbe",
+  /const isVisibleScreenShare =[\s\S]*entry\.layout\?\.visible === true[\s\S]*entry\.layout\?\.primary === true[\s\S]*entry\.bounds\?\.maxTemporalLayer \?\? 2/,
+  "web screen receive probe allows visible presentations to keep full temporal FPS",
 );
 assertIncludes(
   "webAdaptiveConsumerPreferences",

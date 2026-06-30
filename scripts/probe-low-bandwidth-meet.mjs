@@ -3323,7 +3323,15 @@ const validateScreenReceiveSnapshot = (
             `expected screen spatial layer 0 for ${entry.producerId}, got ${layers.spatialLayer}`,
           );
         }
-        const maxTemporalLayer = expectEmergencyMode ? 0 : 1;
+        const isVisibleScreenShare =
+          entry.layout?.visible === true ||
+          entry.layout?.primary === true ||
+          entry.layout?.focus === true;
+        const maxTemporalLayer = expectEmergencyMode
+          ? 0
+          : isVisibleScreenShare
+            ? entry.bounds?.maxTemporalLayer ?? 2
+            : 1;
         if ((layers.temporalLayer ?? 0) > maxTemporalLayer) {
           errors.push(
             `expected screen temporal layer <=${maxTemporalLayer} for ${entry.producerId}, got ${layers.temporalLayer}`,

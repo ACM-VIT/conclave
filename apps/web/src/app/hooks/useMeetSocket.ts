@@ -320,8 +320,6 @@ const getInitialConsumerPreferences = (
         temporalLayer:
           networkProfile === "emergency"
             ? 0
-            : networkProfile === "poor"
-            ? 1
             : 2,
       },
       priority: 240,

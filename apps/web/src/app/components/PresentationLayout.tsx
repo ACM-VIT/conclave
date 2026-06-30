@@ -181,6 +181,8 @@ function PresentationLayout({
           autoPlay
           muted
           playsInline
+          data-meet-presentation-video="true"
+          data-meet-video-stream-type="screen"
           className="max-h-full max-w-full object-contain"
         />
         <div className="absolute left-3 top-3 flex max-w-[calc(100%-1.5rem)] items-center gap-2 rounded-full border border-[#fafafa]/10 bg-[#0a0a0b]/70 px-3 py-1.5">

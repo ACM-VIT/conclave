@@ -87,6 +87,12 @@ type RoomTilingHints = {
   hiddenIds: Set<string>;
   warmIds: Set<string>;
   orderedRemoteRanks: Map<string, number>;
+  presentation: {
+    presenterId: string | null;
+    visible: boolean;
+    primary: boolean;
+    focus: boolean;
+  };
 };
 
 type ConsumerPreferenceDebugStatus =
@@ -200,6 +206,22 @@ const readStringArray = (
   return raw.filter((entry): entry is string => typeof entry === "string");
 };
 
+const readNullableString = (value: unknown, key: string): string | null => {
+  if (!isRecord(value)) return null;
+  const raw = value[key];
+  return typeof raw === "string" && raw.length > 0 ? raw : null;
+};
+
+const readBoolean = (
+  value: unknown,
+  key: string,
+  fallback = false,
+): boolean => {
+  if (!isRecord(value)) return fallback;
+  const raw = value[key];
+  return typeof raw === "boolean" ? raw : fallback;
+};
+
 const readRoomTilingHints = (): RoomTilingHints | null => {
   if (typeof window === "undefined") return null;
 
@@ -209,6 +231,9 @@ const readRoomTilingHints = (): RoomTilingHints | null => {
     debugWindow.__conclaveMeetRoomTilingDebug;
   const current = snapshot?.current;
   if (!isRecord(current)) return null;
+  const presentation = isRecord(current.presentation)
+    ? current.presentation
+    : null;
 
   return {
     primaryIds: new Set(readStringArray(current, "primaryIds")),
@@ -222,19 +247,34 @@ const readRoomTilingHints = (): RoomTilingHints | null => {
         index,
       ]),
     ),
+    presentation: {
+      presenterId: readNullableString(presentation, "presenterId"),
+      visible: readBoolean(presentation, "visible"),
+      primary: readBoolean(presentation, "primary"),
+      focus: readBoolean(presentation, "focus"),
+    },
   };
 };
 
 const getLayoutRole = (
   hints: RoomTilingHints | null,
   userId: string,
+  type: ProducerMapEntry["type"],
 ): LayoutRole | null => {
   if (!hints) return null;
+  const isPresentedScreen =
+    type === "screen" &&
+    hints.presentation.visible &&
+    hints.presentation.presenterId === userId;
   return {
-    primary: hints.primaryIds.has(userId),
-    focus: hints.focusIds.has(userId),
-    visible: hints.visibleRemoteIds.has(userId),
-    hidden: hints.hiddenIds.has(userId),
+    primary:
+      hints.primaryIds.has(userId) ||
+      (isPresentedScreen && hints.presentation.primary),
+    focus:
+      hints.focusIds.has(userId) ||
+      (isPresentedScreen && hints.presentation.focus),
+    visible: hints.visibleRemoteIds.has(userId) || isPresentedScreen,
+    hidden: hints.hiddenIds.has(userId) && !isPresentedScreen,
     warm: hints.warmIds.has(userId),
     rank: hints.orderedRemoteRanks.get(userId) ?? null,
   };
@@ -462,13 +502,18 @@ const getDesiredPreferences = (
     const screenShareEmergency =
       options.emergencyMode ||
       isScreenShareReceiveEmergencyBitrate(options.availableIncomingBitrateBps);
+    const screenShareVisible =
+      !options.layout ||
+      options.layout.visible ||
+      options.layout.primary ||
+      options.layout.focus;
     return {
       preferredLayers: bounds
         ? buildLayerPreference(
             0,
             screenShareEmergency
               ? 0
-              : screenShareQuality === "poor"
+              : screenShareQuality === "poor" && !screenShareVisible
                 ? 1
                 : bounds.maxTemporalLayer,
             bounds,
@@ -856,7 +901,7 @@ export function useAdaptiveConsumerPreferences({
             return null;
           }
 
-          const layout = getLayoutRole(layoutHints, info.userId);
+          const layout = getLayoutRole(layoutHints, info.userId, info.type);
           return {
             producerId,
             active: info.userId === activeSpeakerId,
@@ -921,7 +966,7 @@ export function useAdaptiveConsumerPreferences({
       }
 
       const bounds = inferLayerBounds(consumer, info);
-      const layout = getLayoutRole(layoutHints, info.userId);
+      const layout = getLayoutRole(layoutHints, info.userId, info.type);
       const emergencyKeepVideo =
         emergencyMode &&
         info.kind === "video" &&
