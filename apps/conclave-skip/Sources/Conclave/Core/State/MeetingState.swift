@@ -166,6 +166,8 @@ final class MeetingState {
 
     static let browserAudioUserIdPrefix = "shared-browser:"
     static let browserVideoUserIdPrefix = "shared-browser-video:"
+    static let voiceAgentUserIdPrefix = "voice-agent-"
+    static let voiceAgentEmailSuffix = "@agent.conclave"
     static let overflowTileId = "__conclave_overflow__"
 
     static func isBrowserAudioUserId(_ userId: String) -> Bool {
@@ -176,11 +178,24 @@ final class MeetingState {
         userId.hasPrefix(browserVideoUserIdPrefix)
     }
 
+    static func isVoiceAgentUserId(_ userId: String) -> Bool {
+        let normalized = userId.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return normalized.hasPrefix(voiceAgentUserIdPrefix) ||
+            normalized.contains(voiceAgentEmailSuffix)
+    }
+
     static func isSystemUserId(_ userId: String) -> Bool {
         isBrowserAudioUserId(userId) || isBrowserVideoUserId(userId)
     }
 
+    static func isSyntheticRosterUserId(_ userId: String) -> Bool {
+        isSystemUserId(userId) || isVoiceAgentUserId(userId)
+    }
+
     static func systemDisplayName(for userId: String) -> String? {
+        if isVoiceAgentUserId(userId) {
+            return "Voice Agent"
+        }
         if isBrowserVideoUserId(userId) {
             return "Shared Browser"
         }
@@ -221,7 +236,7 @@ final class MeetingState {
         let normalized = id.trimmingCharacters(in: .whitespacesAndNewlines)
         return !normalized.isEmpty
             && !isLocalIdentityUserId(normalized)
-            && !Self.isSystemUserId(normalized)
+            && !Self.isSyntheticRosterUserId(normalized)
             && normalized != Self.overflowTileId
     }
 

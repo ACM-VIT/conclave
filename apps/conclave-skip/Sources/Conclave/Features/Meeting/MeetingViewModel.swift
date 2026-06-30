@@ -4813,6 +4813,9 @@ final class MeetingViewModel {
             }
             return
         }
+        if MeetingState.isVoiceAgentUserId(producerUserId) {
+            return
+        }
         guard !MeetingState.isSystemUserId(producerUserId) else { return }
         if state.isLocalIdentityUserId(producerUserId) {
             if producer.kind == "audio", producer.type == ProducerType.webcam.rawValue {

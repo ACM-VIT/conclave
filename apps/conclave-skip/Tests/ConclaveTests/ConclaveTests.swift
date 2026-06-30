@@ -970,6 +970,54 @@ final class ConclaveTests: XCTestCase {
     }
 
     @MainActor
+    func testVoiceAgentIdentityIsHiddenFromNativeRosterAndLayout() throws {
+        let state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
+        state.sfuUserId = "local@example.com"
+        state.displayName = "Local"
+        state.connectionState = ConnectionState.joined
+        state.viewMode = MeetingViewMode.auto
+        state.selfViewMode = MeetingSelfViewMode.auto
+        let agentUserId = "voice-agent-123@agent.conclave#agent-session"
+        state.participants["remote@example.com#remote-session"] = Participant(
+            id: "remote@example.com#remote-session",
+            displayName: "Remote"
+        )
+        state.participants[agentUserId] = Participant(
+            id: agentUserId,
+            displayName: "Voice Agent"
+        )
+
+        XCTAssertTrue(MeetingState.isVoiceAgentUserId("voice-agent-123"))
+        XCTAssertTrue(MeetingState.isVoiceAgentUserId(agentUserId))
+        XCTAssertTrue(MeetingState.isSyntheticRosterUserId(agentUserId))
+        XCTAssertFalse(MeetingState.isSystemUserId(agentUserId))
+        XCTAssertEqual(state.displayName(for: agentUserId), "Voice Agent")
+        XCTAssertNil(state.participant(for: agentUserId))
+        XCTAssertEqual(state.participantCount, 2)
+        XCTAssertEqual(state.sortedParticipants.map(\.id), ["remote@example.com#remote-session"])
+        XCTAssertEqual(state.visibleGridUserIds, ["remote@example.com#remote-session"])
+    }
+
+    @MainActor
+    func testVoiceAgentProducerStateDoesNotCreateNativeRosterParticipant() throws {
+        let viewModel = MeetingViewModel()
+        let agentUserId = "voice-agent-456@agent.conclave#agent-session"
+
+        viewModel.handleProducerState(ProducerInfo(
+            producerId: "agent-audio-producer",
+            producerUserId: agentUserId,
+            kind: "audio",
+            type: ProducerType.webcam.rawValue,
+            paused: false,
+            roomId: "room-a"
+        ))
+
+        XCTAssertNil(viewModel.state.participants[agentUserId])
+        XCTAssertEqual(viewModel.state.participantCount, 1)
+        XCTAssertEqual(viewModel.state.visibleGridUserIds, [viewModel.state.userId])
+    }
+
+    @MainActor
     func testVisibleLayoutSnapshotsPreserveGridAndRailSemantics() throws {
         let state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         state.sfuUserId = "local@example.com"
@@ -6604,12 +6652,18 @@ final class ConclaveTests: XCTestCase {
 
     func testDarwinEmbeddedFrameworkPrivacyPatchCoversMediaFrameworks() throws {
         let script = try String(contentsOf: sourceFileURL("Darwin/Scripts/apply-embedded-privacy-metadata.sh"))
+        let project = try sourceFileContents("Darwin/Conclave.xcodeproj/project.pbxproj")
 
+        XCTAssertTrue(script.contains("patch_host_app_plist"))
         XCTAssertTrue(script.contains("patch_conclave_framework"))
         XCTAssertTrue(script.contains("patch_webrtc_framework"))
         XCTAssertTrue(script.contains("patch_mediasoup_framework"))
         XCTAssertTrue(script.contains("patch_remaining_frameworks"))
         XCTAssertTrue(script.contains("patch_embedded_bundles"))
+        XCTAssertTrue(script.contains("patch_embedded_app_extensions"))
+        XCTAssertTrue(script.contains("${APP_INFO_PLIST}"))
+        XCTAssertTrue(script.contains("${PLUGINS_DIR}"))
+        XCTAssertTrue(script.contains("resign_code_bundle_if_needed \"$(dirname \""))
         XCTAssertTrue(script.contains("${FRAMEWORKS_DIR}/WebRTC.framework"))
         XCTAssertTrue(script.contains("${FRAMEWORKS_DIR}/Mediasoup.framework"))
         XCTAssertTrue(script.contains("\"*.bundle/Info.plist\""))
@@ -6632,7 +6686,9 @@ final class ConclaveTests: XCTestCase {
         XCTAssertTrue(script.contains("\"NSUserNotificationsUsageDescription\""))
         XCTAssertTrue(script.contains("\"NFCReaderUsageDescription\""))
         XCTAssertTrue(script.contains("\"NSHealthClinicalHealthRecordsShareUsageDescription\""))
-        XCTAssertEqual(script.components(separatedBy: "set_all_purpose_strings \"${plist_path}\"").count - 1, 5)
+        XCTAssertEqual(script.components(separatedBy: "set_all_purpose_strings \"${plist_path}\"").count - 1, 6)
+        XCTAssertTrue(project.contains("DED5F813849FF18CBE9AFB5A /* Embed App Extensions */,\n\t\t\t\t8D0E0D6B2E5A4A71B57E90C1 /* Apply embedded privacy metadata */,"))
+        XCTAssertTrue(project.contains("\"$(SRCROOT)/PrivacyManifests/MediasoupFramework.xcprivacy\""))
     }
 #endif
 

@@ -3,9 +3,11 @@ set -eu
 
 FRAMEWORKS_DIR="${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH:-${WRAPPER_NAME}/Frameworks}"
 APP_RESOURCES_DIR="${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH:-${WRAPPER_NAME}}"
+APP_INFO_PLIST="${TARGET_BUILD_DIR}/${INFOPLIST_PATH:-${WRAPPER_NAME}/Info.plist}"
+PLUGINS_DIR="${TARGET_BUILD_DIR}/${PLUGINS_FOLDER_PATH:-${WRAPPER_NAME}/PlugIns}"
 MANIFEST_DIR="${SRCROOT}/PrivacyManifests"
 
-if [ ! -d "${FRAMEWORKS_DIR}" ] && [ ! -d "${APP_RESOURCES_DIR}" ]; then
+if [ ! -f "${APP_INFO_PLIST}" ] && [ ! -d "${FRAMEWORKS_DIR}" ] && [ ! -d "${APP_RESOURCES_DIR}" ] && [ ! -d "${PLUGINS_DIR}" ]; then
   exit 0
 fi
 
@@ -100,8 +102,8 @@ set_all_purpose_strings() {
   set_file_purpose_strings "${plist_path}"
 }
 
-resign_framework_if_needed() {
-  framework_path="$1"
+resign_code_bundle_if_needed() {
+  bundle_path="$1"
 
   if [ "${CODE_SIGNING_ALLOWED:-YES}" = "NO" ] || [ "${CODE_SIGNING_REQUIRED:-NO}" = "NO" ]; then
     return
@@ -109,7 +111,7 @@ resign_framework_if_needed() {
 
   identity="${EXPANDED_CODE_SIGN_IDENTITY:-}"
   if [ -z "${identity}" ] || [ "${identity}" = "-" ]; then
-    echo "warning: skipping privacy metadata re-sign for ${framework_path}; no code signing identity is available"
+    echo "warning: skipping privacy metadata re-sign for ${bundle_path}; no code signing identity is available"
     return
   fi
 
@@ -118,7 +120,15 @@ resign_framework_if_needed() {
     --sign "${identity}" \
     --preserve-metadata=identifier,entitlements,flags \
     --timestamp=none \
-    "${framework_path}"
+    "${bundle_path}"
+}
+
+patch_host_app_plist() {
+  if [ ! -f "${APP_INFO_PLIST}" ]; then
+    return
+  fi
+
+  set_all_purpose_strings "${APP_INFO_PLIST}"
 }
 
 patch_conclave_framework() {
@@ -132,7 +142,7 @@ patch_conclave_framework() {
   set_all_purpose_strings "${plist_path}"
 
   copy_privacy_manifest "ConclaveFramework.xcprivacy" "${framework_path}"
-  resign_framework_if_needed "${framework_path}"
+  resign_code_bundle_if_needed "${framework_path}"
 }
 
 patch_webrtc_framework() {
@@ -146,7 +156,7 @@ patch_webrtc_framework() {
   set_all_purpose_strings "${plist_path}"
 
   copy_privacy_manifest "WebRTCFramework.xcprivacy" "${framework_path}"
-  resign_framework_if_needed "${framework_path}"
+  resign_code_bundle_if_needed "${framework_path}"
 }
 
 patch_mediasoup_framework() {
@@ -160,7 +170,7 @@ patch_mediasoup_framework() {
   set_all_purpose_strings "${plist_path}"
 
   copy_privacy_manifest "MediasoupFramework.xcprivacy" "${framework_path}"
-  resign_framework_if_needed "${framework_path}"
+  resign_code_bundle_if_needed "${framework_path}"
 }
 
 patch_remaining_frameworks() {
@@ -182,7 +192,7 @@ patch_remaining_frameworks() {
     fi
 
     set_all_purpose_strings "${plist_path}"
-    resign_framework_if_needed "${framework_path}"
+    resign_code_bundle_if_needed "${framework_path}"
   done
 }
 
@@ -200,8 +210,22 @@ patch_embedded_bundles() {
     done
 }
 
+patch_embedded_app_extensions() {
+  if [ ! -d "${PLUGINS_DIR}" ]; then
+    return
+  fi
+
+  find "${PLUGINS_DIR}" -path "*.appex/Info.plist" -print |
+    while IFS= read -r plist_path; do
+      set_all_purpose_strings "${plist_path}"
+      resign_code_bundle_if_needed "$(dirname "${plist_path}")"
+    done
+}
+
+patch_host_app_plist
 patch_conclave_framework
 patch_webrtc_framework
 patch_mediasoup_framework
 patch_remaining_frameworks
 patch_embedded_bundles
+patch_embedded_app_extensions

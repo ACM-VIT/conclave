@@ -187,8 +187,8 @@
 				499CD43E2AC5B799001AE8D8 /* Resources */,
 				499CD4452AC5B869001AE8D8 /* Run skip gradle */,
 				499CD44A2AC5B9C6001AE8D8 /* Embed Frameworks */,
-				8D0E0D6B2E5A4A71B57E90C1 /* Apply embedded privacy metadata */,
 				DED5F813849FF18CBE9AFB5A /* Embed App Extensions */,
+				8D0E0D6B2E5A4A71B57E90C1 /* Apply embedded privacy metadata */,
 			);
 			buildRules = (
 			);
@@ -305,6 +305,7 @@
 				"$(SRCROOT)/Scripts/apply-embedded-privacy-metadata.sh",
 				"$(SRCROOT)/PrivacyManifests/ConclaveFramework.xcprivacy",
 				"$(SRCROOT)/PrivacyManifests/WebRTCFramework.xcprivacy",
+				"$(SRCROOT)/PrivacyManifests/MediasoupFramework.xcprivacy",
 			);
 			name = "Apply embedded privacy metadata";
 			outputFileListPaths = (
