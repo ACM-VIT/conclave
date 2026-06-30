@@ -28,7 +28,7 @@ const decodePcm16Base64 = (base64: string): number[] => {
 };
 
 describe("Sarvam transcription provider helpers", () => {
-  it("builds a Saaras v3 websocket endpoint for Indian code-mixed speech", () => {
+  it("builds a Saaras v3 fetch endpoint for Indian code-mixed speech", () => {
     const endpoint = sarvamEndpoint({
       model: "saaras:v3",
       language: "en",
@@ -36,7 +36,7 @@ describe("Sarvam transcription provider helpers", () => {
     });
     const url = new URL(endpoint);
 
-    expect(url.origin).toBe("wss://api.sarvam.ai");
+    expect(url.origin).toBe("https://api.sarvam.ai");
     expect(url.pathname).toBe("/speech-to-text/ws");
     expect(url.searchParams.get("model")).toBe("saaras:v3");
     expect(url.searchParams.get("language-code")).toBe("en-IN");
@@ -44,6 +44,23 @@ describe("Sarvam transcription provider helpers", () => {
     expect(url.searchParams.get("sample_rate")).toBe("16000");
     expect(url.searchParams.get("input_audio_codec")).toBe("pcm_s16le");
     expect(url.searchParams.get("flush_signal")).toBe("true");
+  });
+
+  it("normalizes websocket schemes for Cloudflare Worker fetch", () => {
+    expect(
+      sarvamEndpoint({
+        baseUrl: "wss://example.com/speech-to-text/ws",
+        model: "saaras:v3",
+        language: "unknown",
+      }).startsWith("https://example.com/speech-to-text/ws?"),
+    ).toBe(true);
+    expect(
+      sarvamEndpoint({
+        baseUrl: "ws://example.com/speech-to-text/ws",
+        model: "saaras:v3",
+        language: "unknown",
+      }).startsWith("http://example.com/speech-to-text/ws?"),
+    ).toBe(true);
   });
 
   it("downsamples 24k PCM into 16k PCM across chunk boundaries", () => {

@@ -81,6 +81,11 @@ export const sarvamEndpoint = (options: {
 }): string => {
   const base = (options.baseUrl || SARVAM_STT_WS_URL).replace(/\/+$/, "");
   const url = new URL(base);
+  if (url.protocol === "wss:") {
+    url.protocol = "https:";
+  } else if (url.protocol === "ws:") {
+    url.protocol = "http:";
+  }
   url.searchParams.set(
     "language-code",
     normalizeSarvamLanguageCode(
