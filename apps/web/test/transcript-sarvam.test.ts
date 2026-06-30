@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   Pcm24To16Downsampler,
   buildSarvamAudioMessage,
+  createSarvamSegmentItemId,
   parseSarvamEvent,
   sarvamEndpoint,
 } from "../transcript-worker/src/transcription/sarvam";
@@ -103,6 +104,15 @@ describe("Sarvam transcription provider helpers", () => {
       itemId: "sarvam-req-1",
       transcript: "hello everyone",
     });
+  });
+
+  it("creates unique segment item ids when Sarvam reuses request ids", () => {
+    expect(createSarvamSegmentItemId("sarvam-req-1", 1)).toBe(
+      "sarvam-req-1-1",
+    );
+    expect(createSarvamSegmentItemId("sarvam-req-1", 2)).toBe(
+      "sarvam-req-1-2",
+    );
   });
 
   it("surfaces Sarvam errors without leaking raw response payloads", () => {

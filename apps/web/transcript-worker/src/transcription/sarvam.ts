@@ -181,6 +181,11 @@ export const buildSarvamAudioMessage = (audioBase64: string): string =>
     },
   });
 
+export const createSarvamSegmentItemId = (
+  baseItemId: string,
+  sequence: number,
+): string => `${baseItemId}-${Math.max(1, sequence).toString(36)}`;
+
 export const parseSarvamEvent = (raw: string): ParsedSarvamEvent => {
   const parsed = safeJsonParse(raw);
   if (!parsed || typeof parsed !== "object") return { type: "ignore" };
@@ -220,6 +225,7 @@ class SarvamTranscriptionSession implements LiveTranscriptionSession {
 
   private closed = false;
   private readonly downsampler = new Pcm24To16Downsampler();
+  private finalSequence = 0;
 
   constructor(
     private readonly socket: WebSocket,
@@ -270,8 +276,13 @@ class SarvamTranscriptionSession implements LiveTranscriptionSession {
       await this.callbacks.onFailure(event.message);
       return;
     }
-    this.callbacks.onCommitted(event.itemId);
-    await this.callbacks.onFinal(event.itemId, event.transcript);
+    this.finalSequence += 1;
+    const itemId = createSarvamSegmentItemId(
+      event.itemId,
+      this.finalSequence,
+    );
+    this.callbacks.onCommitted(itemId);
+    await this.callbacks.onFinal(itemId, event.transcript);
   }
 }
 
