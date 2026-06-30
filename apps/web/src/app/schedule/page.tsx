@@ -5,11 +5,6 @@ import { auth } from "@/lib/auth";
 import RouteLoadingState from "../components/RouteLoadingState";
 import ScheduleClient from "./schedule-client";
 
-// Cloudflare workerd currently throws a Cache Components viewport bailout
-// when resuming this route's partial-prerender payload.
-export const instant = false;
-export const prefetch = "allow-runtime";
-
 export default function SchedulePage() {
   return (
     <Suspense

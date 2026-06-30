@@ -2,10 +2,6 @@ import { Suspense } from "react";
 import RouteLoadingState from "../../../components/RouteLoadingState";
 import BookingClient from "./booking-client";
 
-// Cloudflare workerd currently throws a Cache Components viewport bailout
-// when resuming this route's partial-prerender payload.
-export const instant = false;
-
 type BookingPageProps = {
   params: Promise<{ username: string; eventSlug: string }>;
 };
