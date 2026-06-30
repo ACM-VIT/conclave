@@ -11,7 +11,7 @@ import { SfuTranscriptRelay } from "../server/transcript/sfuTranscriptRelay.js";
 import type { TranscriptWorkerRelayConnection } from "../server/transcript/workerClient.js";
 
 const SAMPLE_RATE = 48000;
-const CHANNELS = 2;
+const DEFAULT_CHANNELS = 2;
 const FRAME_SIZE = 960;
 const RTP_PAYLOAD_TYPE = 120;
 
@@ -119,6 +119,17 @@ const fakeProducer = (
     kind: "audio",
     closed: options.closed ?? false,
     paused: options.paused ?? false,
+    rtpParameters: {
+      codecs: [
+        {
+          mimeType: "audio/opus",
+          clockRate: SAMPLE_RATE,
+          channels: DEFAULT_CHANNELS,
+          payloadType: RTP_PAYLOAD_TYPE,
+        },
+      ],
+      encodings: [],
+    },
   }) as unknown as Producer;
 
 const producerEntry = (
@@ -163,31 +174,45 @@ const createHarness = (entries: TranscriptAudioProducerEntry[]) => {
   return { directTransport, relay, workerClient: () => workerClient!, workerEvents };
 };
 
-const pcmFrame = (frequencyHz: number, amplitude: number): Buffer => {
-  const buffer = Buffer.alloc(FRAME_SIZE * CHANNELS * 2);
+const pcmFrame = (
+  frequencyHz: number,
+  amplitude: number,
+  channels: number,
+): Buffer => {
+  const buffer = Buffer.alloc(FRAME_SIZE * channels * 2);
   for (let frame = 0; frame < FRAME_SIZE; frame += 1) {
     const sample = Math.round(
       Math.sin((2 * Math.PI * frequencyHz * frame) / SAMPLE_RATE) * amplitude,
     );
-    buffer.writeInt16LE(sample, frame * 4);
-    buffer.writeInt16LE(sample, frame * 4 + 2);
+    for (let channel = 0; channel < channels; channel += 1) {
+      buffer.writeInt16LE(sample, (frame * channels + channel) * 2);
+    }
   }
   return buffer;
 };
 
 const encodeOpusFrames = (
   count: number,
-  options: { frequencyHz: number; amplitude: number; ssrc: number },
+  options: {
+    frequencyHz: number;
+    amplitude: number;
+    ssrc: number;
+    channels?: number;
+  },
 ): Buffer[] => {
+  const channels = options.channels ?? DEFAULT_CHANNELS;
   const encoder = new OpusScript(
     SAMPLE_RATE,
-    CHANNELS,
+    channels,
     OpusScript.Application.AUDIO,
   );
   try {
     return Array.from({ length: count }, (_, index) =>
       wrapRtp(
-        encoder.encode(pcmFrame(options.frequencyHz, options.amplitude), FRAME_SIZE),
+        encoder.encode(
+          pcmFrame(options.frequencyHz, options.amplitude, channels),
+          FRAME_SIZE,
+        ),
         {
           sequence: index,
           timestamp: index * FRAME_SIZE,
@@ -257,6 +282,35 @@ describe("SfuTranscriptRelay realistic audio flow", () => {
       "u1",
       "u2",
     ]);
+
+    relay.close();
+  });
+
+  it("forwards mono browser mic Opus RTP to the worker", async () => {
+    vi.useFakeTimers();
+    const ada = producerEntry("producer-a", "u1", "Ada");
+    const { directTransport, relay, workerEvents } = createHarness([ada]);
+    await relay.start();
+
+    const consumer = directTransport.consumers.get("producer-a")!;
+    for (const packet of encodeOpusFrames(13, {
+      frequencyHz: 440,
+      amplitude: 9000,
+      ssrc: 101,
+      channels: 1,
+    })) {
+      consumer.emitRtp(packet);
+    }
+
+    const chunkEvents = workerEvents.filter((event) => event.type === "chunk");
+    expect(chunkEvents).toHaveLength(1);
+    expect(chunkEvents[0]?.speaker.userId).toBe("u1");
+    expect(chunkEvents[0]?.bytes).toBeGreaterThan(10_000);
+
+    await vi.advanceTimersByTimeAsync(1200);
+    expect(workerEvents.filter((event) => event.type === "commit")).toHaveLength(
+      1,
+    );
 
     relay.close();
   });

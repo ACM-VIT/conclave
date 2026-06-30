@@ -47,8 +47,13 @@ const SARVAM_SUPPORTED_MODES = new Set([
 ]);
 
 type SarvamResponse = {
-  type?: "data" | "error" | "events";
+  type?: string;
   data?: unknown;
+  request_id?: unknown;
+  text?: unknown;
+  transcript?: unknown;
+  error?: unknown;
+  message?: unknown;
 };
 
 type ParsedSarvamEvent =
@@ -98,6 +103,7 @@ export const sarvamEndpoint = (options: {
   url.searchParams.set("sample_rate", String(SARVAM_SAMPLE_RATE));
   url.searchParams.set("input_audio_codec", SARVAM_INPUT_AUDIO_CODEC);
   url.searchParams.set("flush_signal", "true");
+  url.searchParams.set("high_vad_sensitivity", "true");
   return url.toString();
 };
 
@@ -195,24 +201,49 @@ export const parseSarvamEvent = (raw: string): ParsedSarvamEvent => {
       ? (response.data as Record<string, unknown>)
       : {};
 
-  if (response.type === "error" || typeof data.error === "string") {
+  const errorText =
+    typeof data.error === "string"
+      ? data.error
+      : typeof response.error === "string"
+        ? response.error
+        : typeof response.message === "string"
+          ? response.message
+          : "";
+  if (response.type === "error" || errorText) {
     return {
       type: "error",
       message: trimText(
-        typeof data.error === "string" ? data.error : "Sarvam transcription error.",
+        errorText || "Sarvam transcription error.",
         500,
       ),
     };
   }
 
-  if (response.type !== "data") return { type: "ignore" };
+  const responseType = response.type ?? "";
+  if (
+    responseType !== "data" &&
+    responseType !== "transcript" &&
+    responseType !== "translation"
+  ) {
+    return { type: "ignore" };
+  }
   const transcript =
-    typeof data.transcript === "string" ? data.transcript.trim() : "";
+    typeof data.transcript === "string"
+      ? data.transcript.trim()
+      : typeof data.text === "string"
+        ? data.text.trim()
+        : typeof response.transcript === "string"
+          ? response.transcript.trim()
+          : typeof response.text === "string"
+            ? response.text.trim()
+            : "";
   if (!transcript) return { type: "ignore" };
   const requestId =
     typeof data.request_id === "string" && data.request_id.trim()
       ? data.request_id.trim()
-      : crypto.randomUUID();
+      : typeof response.request_id === "string" && response.request_id.trim()
+        ? response.request_id.trim()
+        : crypto.randomUUID();
   return {
     type: "final",
     itemId: `sarvam-${requestId}`,

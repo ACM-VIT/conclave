@@ -136,7 +136,7 @@ export const auth = betterAuth({
     ...vercelProvider,
   },
   trustedOrigins: resolveTrustedOrigins,
-  
+
   advanced: {
     useSecureCookies: process.env.NODE_ENV === "production",
   },

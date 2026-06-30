@@ -8,6 +8,7 @@ export const GAME_ACCENTS: Record<string, string> = {
   "most-likely-to": "#E06392",
   reaction: "#E85046",
   imposter: "#E0863A",
+  wordle: "#6AAA64",
 };
 
 export const GAME_NAMES: Record<string, string> = {
@@ -17,6 +18,7 @@ export const GAME_NAMES: Record<string, string> = {
   "most-likely-to": "Most Likely To",
   reaction: "Reaction",
   imposter: "Imposter",
+  wordle: "Wordle",
 };
 
 export const accentFor = (gameId?: string): string =>

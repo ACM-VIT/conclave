@@ -22,7 +22,7 @@
     "TRANSCRIPT_TRANSCRIPTION_LANGUAGE": "en",
     "TRANSCRIPT_TRANSCRIPTION_LOCALE": "en-IN",
     "TRANSCRIPT_TRANSCRIPTION_PROMPT": "Locale: Indian English. Expect Indian accents, Hinglish code-switching, Hindi proper nouns, Indian names, college or team names, acronyms, and technical terms. Preserve spoken wording without expanding or correcting domain terms unless the audio makes it clear.",
-    "TRANSCRIPT_SARVAM_LANGUAGE_CODE": "unknown",
+    "TRANSCRIPT_SARVAM_LANGUAGE_CODE": "en-IN",
     "TRANSCRIPT_SARVAM_MODE": "codemix"
   },
   "durable_objects": {
