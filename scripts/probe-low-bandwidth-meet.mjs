@@ -3208,6 +3208,9 @@ const validateScreenReceiveSnapshot = (
   const screenAudioEntries = entries.filter(
     (entry) => entry.kind === "audio" && entry.type === "screen",
   );
+  const webcamVideoEntries = entries.filter(
+    (entry) => entry.kind === "video" && entry.type === "webcam",
+  );
   const failedEntries = entries.filter((entry) => entry.status === "error");
   const deferredEntries = entries.filter(
     (entry) => entry.status === "deferred",
@@ -3216,6 +3219,9 @@ const validateScreenReceiveSnapshot = (
     ["applied", "fallback"].includes(entry.status),
   );
   const usableScreenAudioEntries = screenAudioEntries.filter((entry) =>
+    ["applied", "fallback"].includes(entry.status),
+  );
+  const usableWebcamVideoEntries = webcamVideoEntries.filter((entry) =>
     ["applied", "fallback"].includes(entry.status),
   );
   const visibleRenderedVideos = getVisibleRenderedVideos(snapshot);
@@ -3279,6 +3285,9 @@ const validateScreenReceiveSnapshot = (
   }
   if (requireScreenAudio && usableScreenAudioEntries.length === 0) {
     errors.push("missing applied remote screen audio consumer preference");
+  }
+  if (usableWebcamVideoEntries.length === 0) {
+    errors.push("missing supporting remote webcam consumer preference");
   }
   if (!largestRenderedScreenVideo) {
     errors.push("missing visible decoded remote screen-share video");
@@ -3352,6 +3361,37 @@ const validateScreenReceiveSnapshot = (
     }
   }
 
+  for (const entry of usableWebcamVideoEntries) {
+    const layers = entry.requestedLayers ?? entry.preferredLayers;
+    if (entry.requestedPaused === true || entry.paused === true) {
+      errors.push(
+        `supporting webcam was paused unexpectedly: ${entry.producerId}`,
+      );
+    }
+    if (!layers) {
+      errors.push(
+        `missing supporting webcam layer request for ${entry.producerId}`,
+      );
+      continue;
+    }
+    if (layers.spatialLayer !== 0) {
+      errors.push(
+        `expected supporting webcam spatial layer 0 while screen is active for ${entry.producerId}, got ${layers.spatialLayer}`,
+      );
+    }
+    const maxTemporalLayer = expected === "poor" || expectEmergencyMode ? 0 : 1;
+    if ((layers.temporalLayer ?? 0) > maxTemporalLayer) {
+      errors.push(
+        `expected supporting webcam temporal layer <=${maxTemporalLayer} while screen is active for ${entry.producerId}, got ${layers.temporalLayer}`,
+      );
+    }
+    if (entry.priority > 105) {
+      errors.push(
+        `supporting webcam priority too high while screen is active: ${entry.priority}`,
+      );
+    }
+  }
+
   return {
     ok: errors.length === 0,
     errors,
@@ -3364,6 +3404,7 @@ const validateScreenReceiveSnapshot = (
       emergencyMode: adaptiveConsumers?.emergencyMode ?? null,
       screenVideoPreferenceCount: usableScreenVideoEntries.length,
       screenAudioPreferenceCount: usableScreenAudioEntries.length,
+      supportingWebcamPreferenceCount: usableWebcamVideoEntries.length,
       deferredCount: adaptiveConsumers?.deferredCount ?? null,
       deferredEntries: deferredEntries.slice(0, 8),
       visibleScreenRenderedVideoCount: visibleScreenRenderedVideos.length,
@@ -3384,6 +3425,7 @@ const validateScreenReceiveSnapshot = (
       ]),
       firstScreenVideoPreference: usableScreenVideoEntries[0] ?? null,
       firstScreenAudioPreference: usableScreenAudioEntries[0] ?? null,
+      firstSupportingWebcamPreference: usableWebcamVideoEntries[0] ?? null,
       requireScreenAudio,
       consoleRegressionEventCount: getReceiveConsoleRegressionErrors(
         consoleEvents,
@@ -3452,6 +3494,8 @@ const runScreenReceiveScenario = async () => {
       fakeDisplayMedia: true,
     });
     await waitForJoined(publisher.cdp, "screen-publisher");
+    await clickButton(publisher.cdp, "Turn on camera", 15000);
+    await waitForCameraProducer(publisher.cdp, "screen-publisher");
     await clickButton(publisher.cdp, "Share screen", 15000);
     await waitForScreenProducer(publisher.cdp, "screen-publisher");
 

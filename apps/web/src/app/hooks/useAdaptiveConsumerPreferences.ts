@@ -481,6 +481,13 @@ const getDesiredPreferences = (
 
   if (info.kind !== "video") return null;
 
+  const screenShareReceiveQuality =
+    getScreenShareReceiveQualityForAvailableBitrate(
+      options.availableIncomingBitrateBps,
+    );
+  const screenShareReceiveEmergency = isScreenShareReceiveEmergencyBitrate(
+    options.availableIncomingBitrateBps,
+  );
   const effectiveQuality = worstQuality(
     options.quality,
     options.quality === "good" || options.quality === "fair"
@@ -493,15 +500,12 @@ const getDesiredPreferences = (
     const screenShareQuality = worstQuality(
       worstQuality(
         quality,
-        getScreenShareReceiveQualityForAvailableBitrate(
-          options.availableIncomingBitrateBps,
-        ),
+        screenShareReceiveQuality,
       ),
       getConsumerScoreQualityHint(options.consumerScoreQuality),
     );
     const screenShareEmergency =
-      options.emergencyMode ||
-      isScreenShareReceiveEmergencyBitrate(options.availableIncomingBitrateBps);
+      options.emergencyMode || screenShareReceiveEmergency;
     const screenShareVisible =
       !options.layout ||
       options.layout.visible ||
@@ -553,16 +557,45 @@ const getDesiredPreferences = (
     };
   }
 
-  if (options.screenShareVideoActive && !isFocus) {
+  const screenShareReserveQuality = options.screenShareVideoActive
+    ? worstQuality(quality, screenShareReceiveQuality)
+    : quality;
+
+  if (
+    options.screenShareVideoActive &&
+    (!isFocus ||
+      screenShareReserveQuality !== "good" ||
+      screenShareReceiveEmergency)
+  ) {
+    const screenShareConstrained =
+      screenShareReserveQuality === "poor" || screenShareReceiveEmergency;
     return {
       preferredLayers: bounds
         ? buildLayerPreference(
             0,
-            quality === "poor" ? 0 : isVisible ? 1 : 0,
+            screenShareConstrained ? 0 : isVisible || isFocus ? 1 : 0,
             bounds,
           )
         : undefined,
-      priority: isVisible ? (quality === "poor" ? 45 : 65) : isWarm ? 28 : 20,
+      priority: screenShareReceiveEmergency
+        ? isFocus
+          ? 55
+          : isVisible
+            ? 35
+            : isWarm
+              ? 16
+              : 10
+        : isFocus
+          ? screenShareReserveQuality === "poor"
+            ? 75
+            : 105
+          : isVisible
+            ? screenShareReserveQuality === "poor"
+              ? 45
+              : 65
+            : isWarm
+              ? 28
+              : 20,
       paused: false,
     };
   }

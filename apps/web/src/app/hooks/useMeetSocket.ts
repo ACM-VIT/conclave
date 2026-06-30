@@ -90,6 +90,7 @@ type ConsumerTelemetryPayload = Omit<
 
 type ConsumeProducerOptions = {
   replaceExisting?: boolean;
+  knownScreenShareVideoActive?: boolean;
 };
 
 type JoinInfo = {
@@ -301,6 +302,7 @@ const getInitialConsumerPreferences = (
   options: {
     preferHighWebcamLayer?: boolean;
     networkProfile?: WebcamProducerNetworkProfile;
+    screenShareVideoActive?: boolean;
   } = {},
 ): InitialConsumerPreferences => {
   if (producerInfo.kind === "audio") {
@@ -328,6 +330,18 @@ const getInitialConsumerPreferences = (
 
   if (producerInfo.type !== "webcam") {
     return {};
+  }
+
+  if (options.screenShareVideoActive) {
+    return {
+      preferredLayers: {
+        spatialLayer: 0,
+        temporalLayer:
+          networkProfile === "poor" || networkProfile === "emergency" ? 0 : 1,
+      },
+      priority:
+        networkProfile === "good" ? 70 : networkProfile === "fair" ? 55 : 40,
+    };
   }
 
   if (options.preferHighWebcamLayer) {
@@ -2948,6 +2962,15 @@ export function useMeetSocket({
           producerMapRef.current.values(),
         ).filter((info) => info.kind === "video" && info.type === "webcam")
           .length;
+        const knownScreenShareVideoActive =
+          options.knownScreenShareVideoActive === true ||
+          (producerInfo.kind === "video" && producerInfo.type === "screen") ||
+          Array.from(producerMapRef.current.values()).some(
+            (info) => info.kind === "video" && info.type === "screen",
+          ) ||
+          Array.from(pendingProducersRef.current.values()).some(
+            (info) => info.kind === "video" && info.type === "screen",
+          );
         socket.emit(
           "consume",
           {
@@ -2956,9 +2979,11 @@ export function useMeetSocket({
             rtpCapabilities: device.rtpCapabilities,
             ...getInitialConsumerPreferences(producerInfo, {
               preferHighWebcamLayer:
-                joinMode === "webinar_attendee" ||
-                existingWebcamVideoConsumerCount < 4,
+                !knownScreenShareVideoActive &&
+                (joinMode === "webinar_attendee" ||
+                  existingWebcamVideoConsumerCount < 4),
               networkProfile: getInitialConsumerNetworkProfile(producerInfo),
+              screenShareVideoActive: knownScreenShareVideoActive,
             }),
           },
           async (response: ConsumeResponse | { error: string }) => {
@@ -3594,10 +3619,18 @@ export function useMeetSocket({
       }
 
       const consumeTasks: Promise<void>[] = [];
+      const snapshotHasScreenShareVideo = producers.some(
+        (producerInfo) =>
+          producerInfo.kind === "video" && producerInfo.type === "screen",
+      );
       for (const producerInfo of producers) {
         if (consumersRef.current.has(producerInfo.producerId)) continue;
         if (pendingProducersRef.current.has(producerInfo.producerId)) continue;
-        consumeTasks.push(consumeProducer(producerInfo));
+        consumeTasks.push(
+          consumeProducer(producerInfo, {
+            knownScreenShareVideoActive: snapshotHasScreenShareVideo,
+          }),
+        );
       }
       if (consumeTasks.length > 0) {
         await Promise.all(consumeTasks);
@@ -3758,8 +3791,15 @@ export function useMeetSocket({
           handleProducerClosed(producerId);
         }
       }
+      const snapshotHasScreenShareVideo = activeProducers.some(
+        (producer) => producer.kind === "video" && producer.type === "screen",
+      );
       await Promise.all(
-        activeProducers.map((producer) => consumeProducer(producer)),
+        activeProducers.map((producer) =>
+          consumeProducer(producer, {
+            knownScreenShareVideoActive: snapshotHasScreenShareVideo,
+          }),
+        ),
       );
     },
     [
@@ -3785,8 +3825,16 @@ export function useMeetSocket({
     if (!pendingProducersRef.current.size) return;
     const pending = Array.from(pendingProducersRef.current.values());
     pendingProducersRef.current.clear();
+    const snapshotHasScreenShareVideo = pending.some(
+      (producerInfo) =>
+        producerInfo.kind === "video" && producerInfo.type === "screen",
+    );
     await Promise.all(
-      pending.map((producerInfo) => consumeProducer(producerInfo)),
+      pending.map((producerInfo) =>
+        consumeProducer(producerInfo, {
+          knownScreenShareVideoActive: snapshotHasScreenShareVideo,
+        }),
+      ),
     );
   }, [pendingProducersRef, consumeProducer]);
 
@@ -4067,8 +4115,16 @@ export function useMeetSocket({
               const producePromise =
                 shouldProduce && stream ? produce(stream) : Promise.resolve();
 
+              const snapshotHasScreenShareVideo =
+                response.existingProducers.some(
+                  (producer) =>
+                    producer.kind === "video" && producer.type === "screen",
+                );
               const consumePromises = response.existingProducers.map(
-                (producer) => consumeProducer(producer),
+                (producer) =>
+                  consumeProducer(producer, {
+                    knownScreenShareVideoActive: snapshotHasScreenShareVideo,
+                  }),
               );
 
               await Promise.all([producePromise, ...consumePromises]);

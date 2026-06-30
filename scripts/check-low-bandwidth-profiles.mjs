@@ -641,8 +641,23 @@ assertIncludes(
 );
 assertRegex(
   "webMeetSocket",
-  /const existingWebcamVideoConsumerCount = Array\.from\([\s\S]*producerMapRef\.current\.values\(\)[\s\S]*info\.kind === "video" && info\.type === "webcam"[\s\S]*preferHighWebcamLayer:[\s\S]*joinMode === "webinar_attendee" \|\|[\s\S]*existingWebcamVideoConsumerCount < 4/,
+  /const existingWebcamVideoConsumerCount = Array\.from\([\s\S]*producerMapRef\.current\.values\(\)[\s\S]*info\.kind === "video" && info\.type === "webcam"[\s\S]*knownScreenShareVideoActive[\s\S]*preferHighWebcamLayer:[\s\S]*!knownScreenShareVideoActive[\s\S]*joinMode === "webinar_attendee" \|\|[\s\S]*existingWebcamVideoConsumerCount < 4/,
   "web initial small-call webcam consumers request high layers immediately",
+);
+assertRegex(
+  "webMeetSocket",
+  /screenShareVideoActive\?: boolean[\s\S]*if \(options\.screenShareVideoActive\) \{[\s\S]*preferredLayers:[\s\S]*spatialLayer: 0,[\s\S]*networkProfile === "poor" \|\| networkProfile === "emergency" \? 0 : 1,[\s\S]*priority:[\s\S]*networkProfile === "good" \? 70 : networkProfile === "fair" \? 55 : 40/,
+  "web initial webcam consumes start as supporting layers while a screen share is active",
+);
+assertRegex(
+  "webMeetSocket",
+  /snapshotHasScreenShareVideo\s*=\s*producers\.some\([\s\S]*producerInfo\.kind === "video" && producerInfo\.type === "screen"[\s\S]*knownScreenShareVideoActive: snapshotHasScreenShareVideo/,
+  "web producer sync snapshots reserve initial receive bandwidth for active screen shares",
+);
+assertRegex(
+  "webMeetSocket",
+  /snapshotHasScreenShareVideo\s*=\s*response\.existingProducers\.some\([\s\S]*producer\.kind === "video" && producer\.type === "screen"[\s\S]*knownScreenShareVideoActive: snapshotHasScreenShareVideo/,
+  "web join snapshots reserve initial receive bandwidth for active screen shares",
 );
 assertIncludes(
   "webAdaptiveConsumerPreferences",
@@ -651,8 +666,8 @@ assertIncludes(
 );
 assertRegex(
   "webAdaptiveConsumerPreferences",
-  /if \(options\.screenShareVideoActive && !isFocus\) \{[\s\S]*buildLayerPreference\([\s\S]*0,[\s\S]*quality === "poor" \? 0 : isVisible \? 1 : 0,[\s\S]*priority: isVisible \? \(quality === "poor" \? 45 : 65\) : isWarm \? 28 : 20,[\s\S]*paused: false,/,
-  "web active screen share down-layers non-focused webcams without pausing",
+  /const screenShareReserveQuality = options\.screenShareVideoActive[\s\S]*worstQuality\(quality, screenShareReceiveQuality\)[\s\S]*options\.screenShareVideoActive[\s\S]*!isFocus \|\|[\s\S]*screenShareReserveQuality !== "good"[\s\S]*screenShareConstrained[\s\S]*screenShareReserveQuality === "poor" \|\| screenShareReceiveEmergency[\s\S]*buildLayerPreference\([\s\S]*0,[\s\S]*screenShareConstrained \? 0 : isVisible \|\| isFocus \? 1 : 0,[\s\S]*paused: false,/,
+  "web active screen share down-layers supporting webcams without pausing",
 );
 assertRegex(
   "webAdaptiveConsumerPreferences",
@@ -678,6 +693,16 @@ assertRegex(
   "webLowBandwidthProbe",
   /const isVisibleScreenShare =[\s\S]*entry\.layout\?\.visible === true[\s\S]*entry\.layout\?\.primary === true[\s\S]*entry\.bounds\?\.maxTemporalLayer \?\? 2/,
   "web screen receive probe allows visible presentations to keep full temporal FPS",
+);
+assertRegex(
+  "webLowBandwidthProbe",
+  /const webcamVideoEntries = entries\.filter\([\s\S]*entry\.kind === "video" && entry\.type === "webcam"[\s\S]*usableWebcamVideoEntries[\s\S]*missing supporting remote webcam consumer preference[\s\S]*expected supporting webcam spatial layer 0 while screen is active[\s\S]*supporting webcam priority too high while screen is active/,
+  "web screen receive probe validates supporting webcam down-layering",
+);
+assertRegex(
+  "webLowBandwidthProbe",
+  /await clickButton\(publisher\.cdp, "Turn on camera", 15000\);[\s\S]*await waitForCameraProducer\(publisher\.cdp, "screen-publisher"\);[\s\S]*await clickButton\(publisher\.cdp, "Share screen", 15000\);/,
+  "web screen receive probe publishes presenter webcam alongside the screen share",
 );
 assertIncludes(
   "webAdaptiveConsumerPreferences",
