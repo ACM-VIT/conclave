@@ -722,7 +722,7 @@ assertRegex(
 );
 assertRegex(
   "webMeetSocket",
-  /connectionQualityRef\?: React\.MutableRefObject<ConnectionQualityStats \| null>[\s\S]*const getPublishNetworkProfile = useCallback\([\s\S]*getConnectionStatsNetworkProfile\(connectionQualityRef\?\.current, "publish"\)[\s\S]*const getReceiveNetworkProfile = useCallback\([\s\S]*getConnectionStatsNetworkProfile\(connectionQualityRef\?\.current, "receive"\)/,
+  /connectionQualityRef\?: React\.MutableRefObject<ConnectionQualityStats \| null>[\s\S]*const getPublishNetworkProfile = useCallback\([\s\S]*getConnectionStatsNetworkProfile\(connectionQualityRef\?\.current, "publish"\)[\s\S]*const getReceiveNetworkProfile = useCallback\([\s\S]*getConnectionStatsNetworkProfile\(connectionQualityRef\?\.current, "receive"\)[\s\S]*const getInitialConsumerNetworkProfile = useCallback/,
   "web socket publish and receive setup uses measured directional network profiles",
 );
 assertRegex(
@@ -732,7 +732,12 @@ assertRegex(
 );
 assertRegex(
   "webMeetSocket",
-  /getInitialConsumerPreferences\(producerInfo, \{[\s\S]*preferHighWebcamLayer:[\s\S]*networkProfile: getReceiveNetworkProfile\(\)/,
+  /SCREEN_SHARE_RECEIVE_INITIAL_FAIR_BPS = 1500000[\s\S]*SCREEN_SHARE_RECEIVE_INITIAL_POOR_BPS = 550000[\s\S]*SCREEN_SHARE_RECEIVE_INITIAL_EMERGENCY_BPS = 300000[\s\S]*getScreenShareReceiveNetworkProfileForAvailableBitrate[\s\S]*availableIncomingBitrate <= SCREEN_SHARE_RECEIVE_INITIAL_EMERGENCY_BPS[\s\S]*availableIncomingBitrate <= SCREEN_SHARE_RECEIVE_INITIAL_POOR_BPS[\s\S]*availableIncomingBitrate <= SCREEN_SHARE_RECEIVE_INITIAL_FAIR_BPS[\s\S]*getInitialConsumerNetworkProfile[\s\S]*producerInfo\.kind !== "video" \|\| producerInfo\.type !== "screen"[\s\S]*stats\?\.availableIncomingBitrate[\s\S]*getMostConstrainedNetworkProfile\(\[baseProfile, screenShareProfile\]\)/,
+  "web initial screen-share consume uses incoming BWE profile",
+);
+assertRegex(
+  "webMeetSocket",
+  /getInitialConsumerPreferences\(producerInfo, \{[\s\S]*preferHighWebcamLayer:[\s\S]*networkProfile: getInitialConsumerNetworkProfile\(producerInfo\)/,
   "web initial consumer preferences use measured receive profile",
 );
 assertRegex(

@@ -112,6 +112,16 @@ const CLOSE_CONSUMER_MAX_ATTEMPTS = 4;
 const CLOSE_CONSUMER_RETRY_WINDOW_MS = 30000;
 const TURN_URL_PATTERN = /^turns?:/i;
 const TRANSPORT_CC_FEEDBACK_TYPE = "transport-cc";
+const SCREEN_SHARE_RECEIVE_INITIAL_FAIR_BPS = 1500000;
+const SCREEN_SHARE_RECEIVE_INITIAL_POOR_BPS = 550000;
+const SCREEN_SHARE_RECEIVE_INITIAL_EMERGENCY_BPS = 300000;
+
+const networkProfileRank: Record<WebcamProducerNetworkProfile, number> = {
+  good: 1,
+  fair: 2,
+  poor: 3,
+  emergency: 4,
+};
 
 const getConnectionStatsNetworkProfile = (
   stats: ConnectionQualityStats | null | undefined,
@@ -136,6 +146,39 @@ const getConnectionStatsNetworkProfile = (
   }
   if (quality === "poor") return "poor";
   if (quality === "fair") return "fair";
+  return "good";
+};
+
+const getMostConstrainedNetworkProfile = (
+  profiles: Array<WebcamProducerNetworkProfile | null>,
+): WebcamProducerNetworkProfile | null =>
+  profiles.reduce<WebcamProducerNetworkProfile | null>((selected, profile) => {
+    if (!profile) return selected;
+    if (!selected) return profile;
+    return networkProfileRank[profile] > networkProfileRank[selected]
+      ? profile
+      : selected;
+  }, null);
+
+const getScreenShareReceiveNetworkProfileForAvailableBitrate = (
+  availableIncomingBitrate: number | null | undefined,
+): WebcamProducerNetworkProfile | null => {
+  if (
+    typeof availableIncomingBitrate !== "number" ||
+    !Number.isFinite(availableIncomingBitrate) ||
+    availableIncomingBitrate <= 0
+  ) {
+    return null;
+  }
+  if (availableIncomingBitrate <= SCREEN_SHARE_RECEIVE_INITIAL_EMERGENCY_BPS) {
+    return "emergency";
+  }
+  if (availableIncomingBitrate <= SCREEN_SHARE_RECEIVE_INITIAL_POOR_BPS) {
+    return "poor";
+  }
+  if (availableIncomingBitrate <= SCREEN_SHARE_RECEIVE_INITIAL_FAIR_BPS) {
+    return "fair";
+  }
   return "good";
 };
 
@@ -843,6 +886,26 @@ export function useMeetSocket({
     () =>
       getConnectionStatsNetworkProfile(connectionQualityRef?.current, "receive"),
     [connectionQualityRef],
+  );
+
+  const getInitialConsumerNetworkProfile = useCallback(
+    (producerInfo: ProducerInfo): WebcamProducerNetworkProfile => {
+      const baseProfile = getReceiveNetworkProfile();
+      if (producerInfo.kind !== "video" || producerInfo.type !== "screen") {
+        return baseProfile;
+      }
+
+      const stats = connectionQualityRef?.current;
+      const screenShareProfile =
+        getScreenShareReceiveNetworkProfileForAvailableBitrate(
+          stats?.availableIncomingBitrate,
+        );
+      return (
+        getMostConstrainedNetworkProfile([baseProfile, screenShareProfile]) ??
+        baseProfile
+      );
+    },
+    [connectionQualityRef, getReceiveNetworkProfile],
   );
 
   useEffect(() => {
@@ -2846,7 +2909,7 @@ export function useMeetSocket({
               preferHighWebcamLayer:
                 joinMode === "webinar_attendee" ||
                 existingWebcamVideoConsumerCount < 4,
-              networkProfile: getReceiveNetworkProfile(),
+              networkProfile: getInitialConsumerNetworkProfile(producerInfo),
             }),
           },
           async (response: ConsumeResponse | { error: string }) => {
@@ -3138,7 +3201,7 @@ export function useMeetSocket({
       closeConsumerForSameProducerReconsume,
       closeServerConsumer,
       dropDepartedProducer,
-      getReceiveNetworkProfile,
+      getInitialConsumerNetworkProfile,
       joinMode,
       queueProducerConsumeRetry,
       setActiveScreenShareId,
