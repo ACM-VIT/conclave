@@ -27,6 +27,7 @@ type ActiveAudioConsumer = {
   packetsReceived: number;
   decodedFrames: number;
   queuedFrames: number;
+  commitsSent: number;
   decodeFailures: number;
   lastDecodeFailureLogAt: number;
   lastDropLogAt: number;
@@ -229,6 +230,7 @@ export class SfuTranscriptRelay implements TranscriptAudioBatchSink {
       packetsReceived: 0,
       decodedFrames: 0,
       queuedFrames: 0,
+      commitsSent: 0,
       decodeFailures: 0,
       lastDecodeFailureLogAt: 0,
       lastDropLogAt: 0,
@@ -321,11 +323,25 @@ export class SfuTranscriptRelay implements TranscriptAudioBatchSink {
   }
 
   private commitIfNeeded(active: ActiveAudioConsumer): void {
-    active.batcher.commitIfNeeded();
+    const committed = active.batcher.commitIfNeeded();
+    if (!committed) return;
+    active.commitsSent += 1;
+    if (active.commitsSent === 1) {
+      Logger.info(
+        `Transcript SFU relay committed first audio batch for producer ${active.consumer.producerId} in room ${this.options.room.id}.`,
+      );
+    }
   }
 
   private flushAndCommit(active: ActiveAudioConsumer): void {
-    active.batcher.flushAndCommit();
+    const committed = active.batcher.flushAndCommit();
+    if (!committed) return;
+    active.commitsSent += 1;
+    if (active.commitsSent === 1) {
+      Logger.info(
+        `Transcript SFU relay committed first audio batch for producer ${active.consumer.producerId} in room ${this.options.room.id}.`,
+      );
+    }
   }
 
   sendAudioChunk(audio: string, speaker: TranscriptSpeaker): boolean {

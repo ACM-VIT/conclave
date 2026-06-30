@@ -177,6 +177,7 @@ const VERSION_POLL_INTERVAL_MS = 30_000;
 const SFU_SESSION_READY_TIMEOUT_MS = 12_000;
 const SFU_RELAY_TOKEN_TIMEOUT_MS = 5_000;
 const SFU_RELAY_STOP_TIMEOUT_MS = 3_000;
+const SFU_EXPLICIT_STOP_SUPPRESS_TAKEOVER_MS = 10_000;
 
 const toWorkerVersionUrl = (workerUrl: string): string => {
   const base = workerUrl.replace(/\/+$/, "");
@@ -277,6 +278,7 @@ export function useMeetingTranscript({
   >(new Set());
   const serviceVersionRef = useRef<TranscriptServiceVersion | null>(null);
   const autoTakeoverAttemptRef = useRef<string | null>(null);
+  const suppressAutoTakeoverUntilRef = useRef(0);
 
   const transcriptSources = useMemo<TranscriptRelaySource[]>(() => {
     const sources: TranscriptRelaySource[] = [];
@@ -848,6 +850,7 @@ export function useMeetingTranscript({
       }
       const connected = await connect();
       if (!connected) return false;
+      suppressAutoTakeoverUntilRef.current = 0;
       const transportMode = options.transportMode ?? "browser";
       if (transportMode === "sfu" && !(await ensureSfuRelayAvailable())) {
         return false;
@@ -908,6 +911,7 @@ export function useMeetingTranscript({
       }
       const connected = await connect();
       if (!connected) return false;
+      suppressAutoTakeoverUntilRef.current = 0;
       const transportMode = options.transportMode ?? session.transportMode;
       if (transportMode === "sfu" && !(await ensureSfuRelayAvailable())) {
         return false;
@@ -973,6 +977,9 @@ export function useMeetingTranscript({
     ) {
       return;
     }
+    if (Date.now() < suppressAutoTakeoverUntilRef.current) {
+      return;
+    }
 
     const attemptKey = [
       session.controller.connectionId,
@@ -1002,13 +1009,15 @@ export function useMeetingTranscript({
       return;
     }
     const transportMode = session.transportMode;
+    suppressAutoTakeoverUntilRef.current =
+      Date.now() + SFU_EXPLICIT_STOP_SUPPRESS_TAKEOVER_MS;
+    send({ type: "session.stop" });
     if (transportMode === "sfu") {
       await withTimeout(
         stopTranscriptSfuRelay?.() ?? Promise.resolve(null),
         SFU_RELAY_STOP_TIMEOUT_MS,
       );
     }
-    send({ type: "session.stop" });
   }, [
     canStop,
     send,
