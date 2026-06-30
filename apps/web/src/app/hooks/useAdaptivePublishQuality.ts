@@ -112,6 +112,31 @@ const getStandardCaptureRestoreSignature = (track: MediaStreamTrack): string => 
   ].join(":");
 };
 
+const getRoundedTrackSetting = (
+  value: number | undefined,
+  fallback: string,
+): number | string =>
+  typeof value === "number" && Number.isFinite(value)
+    ? Math.round(value)
+    : fallback;
+
+const getScreenShareProducerProfileSignature = (
+  producer: Producer,
+  profile: WebcamProducerNetworkProfile,
+): string => {
+  const track = producer.track ?? null;
+  const settings = track?.getSettings();
+  return [
+    producer.id,
+    profile,
+    track?.id ?? "no-track",
+    track?.readyState ?? "unknown-state",
+    getRoundedTrackSetting(settings?.width, "unknown-width"),
+    getRoundedTrackSetting(settings?.height, "unknown-height"),
+    getRoundedTrackSetting(settings?.frameRate, "unknown-fps"),
+  ].join(":");
+};
+
 export type AdaptivePublishQualityDebugSnapshot = {
   enabled: boolean;
   timestamp: number;
@@ -362,7 +387,10 @@ export function useAdaptivePublishQuality({
 
       const screenProducer = screenProducerRef.current;
       if (screenProducer && !screenProducer.closed) {
-        const signature = `${screenProducer.id}:${profile}`;
+        const signature = getScreenShareProducerProfileSignature(
+          screenProducer,
+          profile,
+        );
         if (lastAppliedProfilesRef.current.screen !== signature) {
           try {
             await applyScreenShareProducerNetworkProfile(

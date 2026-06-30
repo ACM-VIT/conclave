@@ -845,6 +845,11 @@ assertRegex(
   "web screen-share publish adaptation receives measured outgoing bitrate",
 );
 assertRegex(
+  "webAdaptivePublishQuality",
+  /getScreenShareProducerProfileSignature[\s\S]*track\?\.getSettings\(\)[\s\S]*settings\?\.width[\s\S]*settings\?\.height[\s\S]*settings\?\.frameRate[\s\S]*const screenProducer = screenProducerRef\.current[\s\S]*getScreenShareProducerProfileSignature\([\s\S]*screenProducer,[\s\S]*profile,[\s\S]*applyScreenShareProducerNetworkProfile/,
+  "web adaptive screen-share caps are re-applied when captured surface dimensions change",
+);
+assertRegex(
   "webScreenShareNetworkProfile",
   /SCREEN_SHARE_OUTGOING_FAIR_BPS = 1500000[\s\S]*SCREEN_SHARE_OUTGOING_POOR_BPS = 550000[\s\S]*SCREEN_SHARE_OUTGOING_EMERGENCY_BPS = 280000[\s\S]*getScreenSharePublishNetworkProfileForAvailableOutgoingBitrate[\s\S]*availableOutgoingBitrateBps <= SCREEN_SHARE_OUTGOING_EMERGENCY_BPS[\s\S]*availableOutgoingBitrateBps <= SCREEN_SHARE_OUTGOING_POOR_BPS[\s\S]*availableOutgoingBitrateBps <= SCREEN_SHARE_OUTGOING_FAIR_BPS/,
   "web screen-share publish caps use outgoing bitrate before full-FPS profile",
