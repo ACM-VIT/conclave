@@ -24,7 +24,8 @@ The meeting transcript dock uses a Cloudflare Durable Object worker in
 Required production configuration:
 - `TRANSCRIPT_TOKEN_SECRET`: shared by the SFU and transcript worker for token verification.
 - `TRANSCRIPT_WORKER_URL`: SFU-facing worker URL. Production uses `https://transcribe.conclave.acmvit.in`. `NEXT_PUBLIC_TRANSCRIPT_WORKER_URL` is accepted as a fallback for local environments.
-- `OPENAI_API_KEY`: optional transcript worker secret. When set, meeting participants see the start field as `On the house` and do not need to bring their own OpenAI key.
+- `OPENAI_API_KEY`: optional transcript worker secret for OpenAI transcription plus Ask/Minutes. When set, meeting participants see the OpenAI key field as `On the house`.
+- `SARVAM_API_KEY`: optional transcript worker secret for Sarvam Saaras v3 transcription. Sarvam sessions still need `OPENAI_API_KEY` or a participant-supplied OpenAI assistant key for Ask/Minutes.
 - `TRANSCRIPT_ALLOWED_ORIGIN`: optional worker CORS/origin lock for browser WebSocket upgrades.
 
 Optional worker configuration:
@@ -33,14 +34,17 @@ Optional worker configuration:
 - `TRANSCRIPT_TRANSCRIPTION_LANGUAGE`: transcription language hint, defaults to `en`.
 - `TRANSCRIPT_TRANSCRIPTION_LOCALE`: prompt-localization locale, defaults to `en-IN`.
 - `TRANSCRIPT_TRANSCRIPTION_PROMPT`: extra prompt-localization terms for prompt-capable transcription models. Use this for team names, Indian names, Hinglish words, acronyms, and domain-specific vocabulary.
+- `TRANSCRIPT_SARVAM_LANGUAGE_CODE`: Sarvam language-code hint. Defaults to `unknown` so Saaras v3 can auto-detect Indian languages.
+- `TRANSCRIPT_SARVAM_MODE`: Sarvam Saaras v3 output mode. Defaults to `codemix` for Hinglish/code-mixed meetings.
+- `SARVAM_STT_WS_URL`: override for the Sarvam speech-to-text WebSocket endpoint.
 - `CLOUDFLARE_AI_GATEWAY_OPENAI_URL`: OpenAI-compatible AI Gateway URL for responses/minutes.
 - `OPENAI_BASE_URL`: fallback OpenAI-compatible Responses API base URL.
 - `OPENAI_REALTIME_URL`: override for the OpenAI Realtime WebSocket endpoint.
 - `OPENAI_RESPONSES_URL`: override for the Responses API endpoint.
 
-The active controller's OpenAI key is sent to the worker only for the live
-session. It stays in Durable Object memory, is not persisted to Durable Object
-storage, and is redacted from worker errors before responses are sent.
+The active controller's provider keys are sent to the worker only for the live
+session. They stay in Durable Object memory, are not persisted to Durable Object
+storage, and are redacted from worker errors before responses are sent.
 
 Deployment and verification:
 - Production Worker name: `conclave-transcript`
@@ -53,5 +57,5 @@ Cloudflare main-branch linking:
 - Config file: `apps/web/wrangler.transcript.jsonc`
 - Build/deploy command: `pnpm -C apps/web run transcript:deploy`
 - Required Cloudflare secret: `TRANSCRIPT_TOKEN_SECRET`
-- Optional Cloudflare secret for free room-wide transcript starts: `OPENAI_API_KEY`
+- Optional Cloudflare secrets for free room-wide transcript starts: `OPENAI_API_KEY`, `SARVAM_API_KEY`
 - Branch: `main`

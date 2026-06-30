@@ -27,6 +27,7 @@ import type {
   TranscriptQaMessage,
 } from "../hooks/useMeetingTranscript";
 import {
+  getTranscriptTranscriptionProvider,
   LIVE_TRANSCRIPT_TRANSCRIPTION_MODELS,
   TRANSCRIPT_QA_MODELS,
 } from "../lib/transcript-models";
@@ -215,16 +216,28 @@ function StartStage({
   transcript: MeetingTranscriptController;
 }) {
   const [apiKey, setApiKey] = useState("");
+  const [assistantApiKey, setAssistantApiKey] = useState("");
   const [transcriptModel, setTranscriptModel] = useState(
     transcript.session.transcriptModel,
   );
   const [qaModel, setQaModel] = useState(transcript.session.qaModel);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const needsTakeover = transcript.session.status === "takeover_needed";
-  const isOnTheHouse = transcript.hasGlobalOpenAiKey;
+  const provider = getTranscriptTranscriptionProvider(transcriptModel);
+  const providerLabel = provider === "sarvam" ? "Sarvam" : "OpenAI";
+  const hasGlobalProviderKey =
+    transcript.globalProviderKeysAvailable[provider] === true;
+  const hasGlobalAssistantKey =
+    transcript.globalProviderKeysAvailable.openai === true;
+  const needsProviderKey = !hasGlobalProviderKey;
+  const needsAssistantKey = provider === "sarvam" && !hasGlobalAssistantKey;
+  const isOnTheHouse = !needsProviderKey && !needsAssistantKey;
   const canSubmit = needsTakeover
     ? transcript.canTakeover
     : transcript.canStart;
+  const hasRequiredKeys =
+    (!needsProviderKey || apiKey.trim().length > 0) &&
+    (!needsAssistantKey || assistantApiKey.trim().length > 0);
 
   useEffect(() => {
     setTranscriptModel(transcript.session.transcriptModel);
@@ -236,10 +249,11 @@ function StartStage({
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (!canSubmit || (!isOnTheHouse && !apiKey.trim()) || isSubmitting) return;
+    if (!canSubmit || !hasRequiredKeys || isSubmitting) return;
     setIsSubmitting(true);
     const startOptions = {
-      apiKey: isOnTheHouse ? undefined : apiKey,
+      apiKey: needsProviderKey ? apiKey : undefined,
+      assistantApiKey: needsAssistantKey ? assistantApiKey : undefined,
       transcriptModel,
       qaModel,
       transportMode: "sfu" as const,
@@ -249,6 +263,7 @@ function StartStage({
       : await transcript.start(startOptions);
     if (ok) {
       setApiKey("");
+      setAssistantApiKey("");
     }
     setIsSubmitting(false);
   };
@@ -290,21 +305,44 @@ function StartStage({
             onSubmit={submit}
             className="mt-7 w-full max-w-[300px] space-y-2.5"
           >
-            <input
-              value={isOnTheHouse ? "API Key on the house" : apiKey}
-              onChange={(event) => setApiKey(event.target.value)}
-              type={isOnTheHouse ? "text" : "password"}
-              placeholder={isOnTheHouse ? "API Key on the house" : "OpenAI API key"}
-              autoComplete="off"
-              autoFocus={!isOnTheHouse}
-              readOnly={isOnTheHouse}
-              disabled={isSubmitting}
-              className="h-11 w-full rounded-xl border border-white/10 bg-black/20 px-3.5 text-center text-[13px] text-[#fafafa] outline-none transition-colors placeholder:text-[#71717a] focus:border-[#4F9CF9]/60 disabled:opacity-60"
-            />
+            {isOnTheHouse ? (
+              <input
+                value="On the house"
+                type="text"
+                autoComplete="off"
+                readOnly
+                disabled={isSubmitting}
+                className="h-11 w-full rounded-xl border border-white/10 bg-black/20 px-3.5 text-center text-[13px] text-[#fafafa] outline-none transition-colors placeholder:text-[#71717a] focus:border-[#4F9CF9]/60 disabled:opacity-60"
+              />
+            ) : null}
+            {needsProviderKey ? (
+              <input
+                value={apiKey}
+                onChange={(event) => setApiKey(event.target.value)}
+                type="password"
+                placeholder={`${providerLabel} API key`}
+                autoComplete="off"
+                autoFocus
+                disabled={isSubmitting}
+                className="h-11 w-full rounded-xl border border-white/10 bg-black/20 px-3.5 text-center text-[13px] text-[#fafafa] outline-none transition-colors placeholder:text-[#71717a] focus:border-[#4F9CF9]/60 disabled:opacity-60"
+              />
+            ) : null}
+            {needsAssistantKey ? (
+              <input
+                value={assistantApiKey}
+                onChange={(event) => setAssistantApiKey(event.target.value)}
+                type="password"
+                placeholder="OpenAI key for Ask and Minutes"
+                autoComplete="off"
+                autoFocus={!needsProviderKey}
+                disabled={isSubmitting}
+                className="h-11 w-full rounded-xl border border-white/10 bg-black/20 px-3.5 text-center text-[13px] text-[#fafafa] outline-none transition-colors placeholder:text-[#71717a] focus:border-[#4F9CF9]/60 disabled:opacity-60"
+              />
+            ) : null}
             <div className="grid grid-cols-2 gap-2 text-left">
               <label className="space-y-1">
                 <span className="block px-0.5 text-[11px] text-[#a1a1aa]">
-                  Transcription
+                  Provider
                 </span>
                 <select
                   value={transcriptModel}
@@ -314,6 +352,7 @@ function StartStage({
                 >
                   {LIVE_TRANSCRIPT_TRANSCRIPTION_MODELS.map((model) => (
                     <option key={model.id} value={model.id}>
+                      {model.provider === "sarvam" ? "Sarvam" : "OpenAI"} -{" "}
                       {model.label}
                     </option>
                   ))}
@@ -341,7 +380,7 @@ function StartStage({
               type="submit"
               disabled={
                 !canSubmit ||
-                (!isOnTheHouse && !apiKey.trim()) ||
+                !hasRequiredKeys ||
                 isSubmitting
               }
               className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-[#F95F4A] px-3 text-[13.5px] font-semibold text-white transition-colors hover:bg-[#ff735f] disabled:cursor-not-allowed disabled:bg-white/10 disabled:text-[#71717a]"
@@ -363,7 +402,7 @@ function StartStage({
               )}
               {isOnTheHouse
                 ? "Covered by Conclave. No key needed."
-                : "Used only for this session, never stored."}
+                : "Keys are used only for this session, never stored."}
             </p>
           </form>
         )}

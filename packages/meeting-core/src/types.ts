@@ -150,10 +150,12 @@ export {
   TRANSCRIPT_TRANSCRIPTION_MODELS,
 } from "./transcript-models";
 export type {
+  TranscriptProviderKeyAvailability,
   TranscriptReasoningEffort,
   TranscriptResponseModelConfig,
   TranscriptTextVerbosity,
   TranscriptTranscriptionModelConfig,
+  TranscriptTranscriptionProvider,
 } from "./transcript-models";
 
 export interface ReactionPayload {

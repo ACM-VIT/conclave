@@ -7,6 +7,10 @@ import {
   applyWebcamProducerNetworkProfile,
   type WebcamProducerNetworkProfile,
 } from "../lib/webcam-codec";
+import {
+  getMostConstrainedWebcamProducerNetworkProfile,
+  getScreenSharePublishNetworkProfileForAvailableOutgoingBitrate,
+} from "../lib/screen-share-network-profile";
 import type { Producer, VideoQuality } from "../lib/types";
 import type { ConnectionQuality } from "./useConnectionQuality";
 
@@ -15,6 +19,7 @@ interface UseAdaptivePublishQualityOptions {
   connectionQuality: ConnectionQuality;
   capRecoveryQuality: ConnectionQuality;
   emergencyMode: boolean;
+  availableOutgoingBitrateBps?: number | null;
   isCameraOff: boolean;
   participantCount: number;
   audioProducerRef: React.MutableRefObject<Producer | null>;
@@ -113,6 +118,7 @@ export type AdaptivePublishQualityDebugSnapshot = {
   connectionQuality: ConnectionQuality;
   capRecoveryQuality: ConnectionQuality;
   emergencyMode: boolean;
+  availableOutgoingBitrateBps: number | null;
   isCameraOff: boolean;
   participantCount: number;
   videoQuality: VideoQuality;
@@ -184,11 +190,30 @@ const getPublishProducerDebugSnapshot = (
   };
 };
 
+const getScreenShareAwareWebcamProfile = (
+  profile: WebcamProducerNetworkProfile,
+): WebcamProducerNetworkProfile => {
+  if (profile === "good") return "fair";
+  if (profile === "fair") return "poor";
+  return profile;
+};
+
+const getLiveProfileForObservedQuality = (
+  quality: ConnectionQuality,
+  emergencyMode: boolean,
+): WebcamProducerNetworkProfile | null => {
+  if (quality === "poor") return emergencyMode ? "emergency" : "poor";
+  if (quality === "fair") return "fair";
+  if (quality === "good") return "good";
+  return null;
+};
+
 export function useAdaptivePublishQuality({
   enabled,
   connectionQuality,
   capRecoveryQuality,
   emergencyMode,
+  availableOutgoingBitrateBps = null,
   isCameraOff,
   participantCount,
   audioProducerRef,
@@ -234,6 +259,7 @@ export function useAdaptivePublishQuality({
         connectionQuality,
         capRecoveryQuality,
         emergencyMode,
+        availableOutgoingBitrateBps,
         isCameraOff,
         participantCount,
         videoQuality: videoQualityRef.current,
@@ -271,6 +297,7 @@ export function useAdaptivePublishQuality({
     [
       connectionQuality,
       capRecoveryQuality,
+      availableOutgoingBitrateBps,
       debugStateRef,
       enabled,
       emergencyMode,
@@ -287,6 +314,9 @@ export function useAdaptivePublishQuality({
 
   const applyLiveProducerProfile = useCallback(
     async (profile: WebcamProducerNetworkProfile) => {
+      const screenShareVideoActive = Boolean(
+        screenProducerRef.current && !screenProducerRef.current.closed,
+      );
       const audioProducer = audioProducerRef.current;
       if (audioProducer && !audioProducer.closed) {
         const signature = `${audioProducer.id}:${profile}`;
@@ -308,13 +338,16 @@ export function useAdaptivePublishQuality({
       const webcamProducer = videoProducerRef.current;
       if (webcamProducer && !webcamProducer.closed) {
         const quality = videoQualityRef.current;
-        const signature = `${webcamProducer.id}:${quality}:${profile}`;
+        const webcamProfile = screenShareVideoActive
+          ? getScreenShareAwareWebcamProfile(profile)
+          : profile;
+        const signature = `${webcamProducer.id}:${quality}:${webcamProfile}`;
         if (lastAppliedProfilesRef.current.webcam !== signature) {
           try {
             await applyWebcamProducerNetworkProfile(
               webcamProducer,
               quality,
-              profile,
+              webcamProfile,
             );
             lastAppliedProfilesRef.current.webcam = signature;
             writeDebugSnapshot();
@@ -520,14 +553,15 @@ export function useAdaptivePublishQuality({
       quality: ConnectionQuality,
       elapsedMs: number,
     ): WebcamProducerNetworkProfile | null => {
-      if (quality === "poor") {
+      const profile = getLiveProfileForObservedQuality(quality, emergencyMode);
+      if (profile === "poor" || profile === "emergency") {
         if (elapsedMs < POOR_LIVE_CAP_AFTER_MS) return null;
-        return emergencyMode ? "emergency" : "poor";
+        return profile;
       }
-      if (quality === "fair") {
+      if (profile === "fair") {
         return elapsedMs >= FAIR_LIVE_CAP_AFTER_MS ? "fair" : null;
       }
-      if (quality === "good") {
+      if (profile === "good") {
         return elapsedMs >= GOOD_LIVE_RESTORE_AFTER_MS ? "good" : null;
       }
       return null;
@@ -583,9 +617,41 @@ export function useAdaptivePublishQuality({
       const liveProfile =
         getStableLiveProfile(capRecoveryQuality, capRecoveryElapsedMs) ??
         getStableLiveProfile(connectionQuality, elapsedMs);
+      const screenShareVideoActive = Boolean(
+        screenProducerRef.current && !screenProducerRef.current.closed,
+      );
+      const screenShareTargetProfile = screenShareVideoActive
+        ? getMostConstrainedWebcamProducerNetworkProfile([
+            liveProfile,
+            !liveProfile
+              ? getLiveProfileForObservedQuality(
+                  connectionQuality,
+                  emergencyMode,
+                )
+              : null,
+            !liveProfile
+              ? getLiveProfileForObservedQuality(
+                  capRecoveryQuality,
+                  emergencyMode,
+                )
+              : null,
+            getScreenSharePublishNetworkProfileForAvailableOutgoingBitrate(
+              availableOutgoingBitrateBps,
+              emergencyMode,
+            ),
+          ]) ?? (!liveProfile ? "good" : null)
+        : null;
+      const effectiveLiveProfile = screenShareVideoActive
+        ? screenShareTargetProfile
+        : liveProfile;
+      const screenShareImmediateProfile =
+        screenShareVideoActive && !liveProfile
+          ? screenShareTargetProfile ?? "good"
+          : null;
       const applyStableLiveProfile = () => {
-        if (liveProfile && !updateInFlightRef.current) {
-          void applyLiveProducerProfile(liveProfile);
+        const profile = effectiveLiveProfile ?? screenShareImmediateProfile;
+        if (profile && !updateInFlightRef.current) {
+          void applyLiveProducerProfile(profile);
         }
       };
       const shouldRestoreStableStandardCapture =
@@ -645,7 +711,7 @@ export function useAdaptivePublishQuality({
       if (shouldRestoreStableStandardCapture) {
         void restoreStandardCaptureIfNeeded().finally(() => {
           if (!updateInFlightRef.current) {
-            void applyLiveProducerProfile("good");
+            void applyLiveProducerProfile(effectiveLiveProfile ?? "good");
           }
         });
       } else {
@@ -665,6 +731,7 @@ export function useAdaptivePublishQuality({
     };
   }, [
     applyLiveProducerProfile,
+    availableOutgoingBitrateBps,
     capRecoveryQuality,
     connectionQuality,
     enabled,

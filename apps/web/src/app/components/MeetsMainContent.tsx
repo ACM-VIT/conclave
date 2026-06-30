@@ -1414,6 +1414,7 @@ export default function MeetsMainContent({
       <ScreenShareAudioPlayers
         participants={participants}
         currentUserId={currentUserId}
+        activeScreenShareId={activeScreenShareId}
         audioOutputDeviceId={audioOutputDeviceId}
         onAutoplayBlocked={
           isWebinarAttendee ? handleWebinarAudioAutoplayBlocked : undefined

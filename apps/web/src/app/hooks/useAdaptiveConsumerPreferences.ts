@@ -48,6 +48,7 @@ interface UseAdaptiveConsumerPreferencesOptions {
   enabled: boolean;
   connectionQuality: ConnectionQuality;
   emergencyMode: boolean;
+  availableIncomingBitrateBps?: number | null;
   activeSpeakerId: string | null;
   debugStateRef?: React.MutableRefObject<
     AdaptiveConsumerPreferencesDebugSnapshot | null
@@ -66,6 +67,9 @@ const CONSUMER_PREFERENCE_ACK_TIMEOUT_MS = 3000;
 const AUDIO_CONSUMER_PRIORITY = 255;
 const CONSUMER_SCORE_STALE_AFTER_MS = 15000;
 const UNSUPPORTED_LAYER_RETRY_AFTER_MS = 30000;
+const SCREEN_SHARE_RECEIVE_FAIR_BPS = 1500000;
+const SCREEN_SHARE_RECEIVE_POOR_BPS = 550000;
+const SCREEN_SHARE_RECEIVE_EMERGENCY_BPS = 300000;
 
 type LayoutRole = {
   primary: boolean;
@@ -377,6 +381,33 @@ const getConsumerScoreQualityHint = (
   scoreQuality: ConsumerScoreQuality,
 ): ConnectionQuality => (scoreQuality === "unknown" ? "unknown" : scoreQuality);
 
+const getScreenShareReceiveQualityForAvailableBitrate = (
+  availableIncomingBitrateBps: number | null | undefined,
+): ConnectionQuality => {
+  if (
+    typeof availableIncomingBitrateBps !== "number" ||
+    !Number.isFinite(availableIncomingBitrateBps) ||
+    availableIncomingBitrateBps <= 0
+  ) {
+    return "unknown";
+  }
+  if (availableIncomingBitrateBps <= SCREEN_SHARE_RECEIVE_POOR_BPS) {
+    return "poor";
+  }
+  if (availableIncomingBitrateBps <= SCREEN_SHARE_RECEIVE_FAIR_BPS) {
+    return "fair";
+  }
+  return "good";
+};
+
+const isScreenShareReceiveEmergencyBitrate = (
+  availableIncomingBitrateBps: number | null | undefined,
+): boolean =>
+  typeof availableIncomingBitrateBps === "number" &&
+  Number.isFinite(availableIncomingBitrateBps) &&
+  availableIncomingBitrateBps > 0 &&
+  availableIncomingBitrateBps <= SCREEN_SHARE_RECEIVE_EMERGENCY_BPS;
+
 const buildLayerPreference = (
   targetSpatialLayer: number,
   targetTemporalLayer: number,
@@ -397,6 +428,8 @@ const getDesiredPreferences = (
     layout: LayoutRole | null;
     emergencyMode: boolean;
     emergencyKeepVideo: boolean;
+    screenShareVideoActive: boolean;
+    availableIncomingBitrateBps: number | null;
     consumerScoreQuality: ConsumerScoreQuality;
   },
 ): DesiredConsumerPreferences | null => {
@@ -418,14 +451,26 @@ const getDesiredPreferences = (
 
   if (info.type === "screen") {
     const screenShareQuality = worstQuality(
-      quality,
+      worstQuality(
+        quality,
+        getScreenShareReceiveQualityForAvailableBitrate(
+          options.availableIncomingBitrateBps,
+        ),
+      ),
       getConsumerScoreQualityHint(options.consumerScoreQuality),
     );
+    const screenShareEmergency =
+      options.emergencyMode ||
+      isScreenShareReceiveEmergencyBitrate(options.availableIncomingBitrateBps);
     return {
       preferredLayers: bounds
         ? buildLayerPreference(
             0,
-            options.emergencyMode ? 0 : screenShareQuality === "poor" ? 1 : 2,
+            screenShareEmergency
+              ? 0
+              : screenShareQuality === "poor" || screenShareQuality === "fair"
+                ? 1
+                : 2,
             bounds,
           )
         : undefined,
@@ -463,6 +508,20 @@ const getDesiredPreferences = (
     };
   }
 
+  if (options.screenShareVideoActive && !isFocus) {
+    return {
+      preferredLayers: bounds
+        ? buildLayerPreference(
+            0,
+            quality === "poor" ? 0 : isVisible ? 1 : 0,
+            bounds,
+          )
+        : undefined,
+      priority: isVisible ? (quality === "poor" ? 45 : 65) : isWarm ? 28 : 20,
+      paused: false,
+    };
+  }
+
   if (isHidden && !isWarm && !isFocus) {
     return {
       preferredLayers: bounds ? buildLayerPreference(0, 0, bounds) : undefined,
@@ -484,8 +543,9 @@ const getDesiredPreferences = (
   const keepFull =
     quality === "good" &&
     (isFocus ||
-      isVisible ||
-      options.webcamVideoCount <= MAX_WEBCAMS_TO_KEEP_FULL_ON_GOOD_LINKS);
+      (!options.screenShareVideoActive &&
+        (isVisible ||
+          options.webcamVideoCount <= MAX_WEBCAMS_TO_KEEP_FULL_ON_GOOD_LINKS)));
 
   if (quality === "poor") {
     return {
@@ -587,6 +647,7 @@ export function useAdaptiveConsumerPreferences({
   enabled,
   connectionQuality,
   emergencyMode,
+  availableIncomingBitrateBps = null,
   activeSpeakerId,
   debugStateRef,
   onVideoAdaptivePauseStateChange,
@@ -740,6 +801,9 @@ export function useAdaptiveConsumerPreferences({
     ).filter(
       (info) => info.kind === "video" && info.type === "webcam",
     ).length;
+    const screenShareVideoActive = Array.from(
+      refs.producerMapRef.current.values(),
+    ).some((info) => info.kind === "video" && info.type === "screen");
     const fallbackWebcamRanks = new Map<string, number>();
     if (!layoutHints) {
       Array.from(refs.consumersRef.current.entries())
@@ -880,6 +944,8 @@ export function useAdaptiveConsumerPreferences({
         layout,
         emergencyMode,
         emergencyKeepVideo,
+        screenShareVideoActive,
+        availableIncomingBitrateBps,
         consumerScoreQuality,
       });
       if (!desired) return;
@@ -914,11 +980,15 @@ export function useAdaptiveConsumerPreferences({
         ...desired,
         preferredLayers,
       };
+      const isScreenShareVideo =
+        info.kind === "video" && info.type === "screen";
       const requestKeyFrame =
         preferences.paused === false &&
         Boolean(preferredLayers) &&
         (wasPaused ||
-          isConsumerLayerUpgrade(previousLayers, preferredLayers!));
+          (isScreenShareVideo
+            ? !sameConsumerLayers(previousLayers, preferredLayers!)
+            : isConsumerLayerUpgrade(previousLayers, preferredLayers!)));
       const debugEntryBase = {
         producerId,
         consumerId: consumer.id,
@@ -1333,6 +1403,7 @@ export function useAdaptiveConsumerPreferences({
     writeDebugSnapshot(debugContext);
   }, [
     activeSpeakerId,
+    availableIncomingBitrateBps,
     clearScheduledPreferenceWork,
     connectionQuality,
     emergencyMode,

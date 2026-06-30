@@ -8,9 +8,16 @@ export type TranscriptReasoningEffort =
 
 export type TranscriptTextVerbosity = "low" | "medium" | "high";
 
+export type TranscriptTranscriptionProvider = "openai" | "sarvam";
+
+export type TranscriptProviderKeyAvailability = Partial<
+  Record<TranscriptTranscriptionProvider, boolean>
+>;
+
 export interface TranscriptTranscriptionModelConfig {
   id: string;
   label: string;
+  provider: TranscriptTranscriptionProvider;
   description: string;
   supportsPrompt: boolean;
   supportsLanguageHint: boolean;
@@ -37,6 +44,7 @@ export const TRANSCRIPT_TRANSCRIPTION_MODELS = [
   {
     id: "gpt-realtime-whisper",
     label: "Realtime Whisper",
+    provider: "openai",
     description:
       "Best live transcription latency and word error rate for Realtime audio.",
     supportsPrompt: false,
@@ -47,6 +55,7 @@ export const TRANSCRIPT_TRANSCRIPTION_MODELS = [
   {
     id: "gpt-4o-transcribe",
     label: "GPT-4o Transcribe",
+    provider: "openai",
     description: "Higher-accuracy request-response transcription model.",
     supportsPrompt: true,
     supportsLanguageHint: true,
@@ -56,11 +65,23 @@ export const TRANSCRIPT_TRANSCRIPTION_MODELS = [
   {
     id: "gpt-4o-mini-transcribe",
     label: "GPT-4o Mini Transcribe",
+    provider: "openai",
     description: "Lower-cost request-response transcription model.",
     supportsPrompt: true,
     supportsLanguageHint: true,
     supportsDelay: false,
     supportsRealtime: false,
+  },
+  {
+    id: "saaras:v3",
+    label: "Sarvam Saaras v3",
+    provider: "sarvam",
+    description:
+      "Indian language and code-mixed live transcription through Sarvam.",
+    supportsPrompt: false,
+    supportsLanguageHint: true,
+    supportsDelay: false,
+    supportsRealtime: true,
   },
 ] as const satisfies readonly TranscriptTranscriptionModelConfig[];
 
@@ -136,12 +157,18 @@ export const getTranscriptTranscriptionModelConfig = (
   TRANSCRIPT_TRANSCRIPTION_MODELS.find((model) => model.id === modelId) ?? {
     id: modelId,
     label: modelId,
+    provider: "openai",
     description: "Custom transcription model",
     supportsPrompt: false,
     supportsLanguageHint: true,
     supportsDelay: false,
     supportsRealtime: false,
   };
+
+export const getTranscriptTranscriptionProvider = (
+  modelId: string,
+): TranscriptTranscriptionProvider =>
+  getTranscriptTranscriptionModelConfig(modelId).provider;
 
 export const normalizeRealtimeTranscriptModel = (
   modelId: string,

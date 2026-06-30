@@ -32,10 +32,11 @@ import {
 } from "../lib/captured-surface-control";
 import { prewarmVideoEffectsAssetsDeferred } from "../lib/video-effects-lazy";
 import {
+  applyAudioProducerNetworkProfile,
+  applyScreenShareProducerNetworkProfile,
   applyWebcamProducerNetworkProfile,
   applyScreenShareTrackNetworkProfile,
   buildScreenShareEncodingForNetworkProfile,
-  buildScreenShareVideoConstraintsForNetworkProfile,
   getFallbackWebcamCodec,
   getPreferredScreenShareCodec,
   getPreferredWebcamCodec,
@@ -43,6 +44,10 @@ import {
   shouldUseWebcamSimulcast,
   type WebcamProducerNetworkProfile,
 } from "../lib/webcam-codec";
+import {
+  getMostConstrainedWebcamProducerNetworkProfile,
+  getScreenSharePublishNetworkProfileForAvailableOutgoingBitrate,
+} from "../lib/screen-share-network-profile";
 import type { ConnectionQualityStats } from "./useConnectionQuality";
 
 interface UseMeetMediaOptions {
@@ -442,6 +447,10 @@ export function useMeetMedia({
   const cameraOutboundStallStateRef = useRef<CameraOutboundStallState>(
     createCameraOutboundStallState(),
   );
+  const screenProducerTrackRepairInFlightRef = useRef(false);
+  const screenOutboundStallStateRef = useRef<CameraOutboundStallState>(
+    createCameraOutboundStallState(),
+  );
   const connectionStateRef = useRef(connectionState);
   if (connectionStateRef.current !== connectionState) {
     connectionStateRef.current = connectionState;
@@ -813,6 +822,24 @@ export function useMeetMedia({
       if (quality === "fair") return "fair";
       return "good";
     }, [connectionQualityRef]);
+
+  const getScreenSharePublishNetworkProfile =
+    useCallback((): WebcamProducerNetworkProfile => {
+      const baseProfile = getPublishNetworkProfile();
+      const stats = connectionQualityRef?.current;
+      const browserNetwork = stats?.browserNetwork ?? getBrowserNetworkSnapshot();
+      const screenShareProfile =
+        getScreenSharePublishNetworkProfileForAvailableOutgoingBitrate(
+          stats?.availableOutgoingBitrate,
+          isPublishEmergencyProfile(stats, browserNetwork),
+        );
+      return (
+        getMostConstrainedWebcamProducerNetworkProfile([
+          baseProfile,
+          screenShareProfile,
+        ]) ?? baseProfile
+      );
+    }, [connectionQualityRef, getPublishNetworkProfile]);
 
   const waitForPreferredVideoPublishTrack = useCallback(
     async (stream: MediaStream, rawTrack: MediaStreamTrack) => {
@@ -2737,6 +2764,254 @@ export function useMeetMedia({
   ]);
 
   useEffect(() => {
+    if (ghostEnabled || isObserverMode) {
+      screenOutboundStallStateRef.current = createCameraOutboundStallState();
+      return;
+    }
+    if (
+      connectionState !== "joined" ||
+      !isScreenSharing ||
+      isMediaRecoveryBlocked()
+    ) {
+      screenOutboundStallStateRef.current = createCameraOutboundStallState();
+      return;
+    }
+
+    let disposed = false;
+
+    const resetStallState = (
+      producerId: string | null = null,
+      trackId: string | null = null,
+    ) => {
+      screenOutboundStallStateRef.current =
+        createCameraOutboundStallState(producerId, trackId);
+    };
+
+    const refreshStalledScreenProducer = async ({
+      producer,
+      producerTrack,
+      sample,
+      state,
+    }: {
+      producer: Producer;
+      producerTrack: MediaStreamTrack;
+      sample: OutboundVideoProgressSample;
+      state: CameraOutboundStallState;
+    }) => {
+      if (disposed) return;
+      if (screenProducerTrackRepairInFlightRef.current) return;
+      if (isMediaRecoveryBlocked()) {
+        screenOutboundStallStateRef.current = {
+          ...state,
+          lastRecoveryAtMs: performance.now(),
+        };
+        return;
+      }
+
+      const now = performance.now();
+      if (
+        state.lastRecoveryAtMs > 0 &&
+        now - state.lastRecoveryAtMs <
+          CAMERA_OUTBOUND_STALL_RECOVERY_COOLDOWN_MS
+      ) {
+        return;
+      }
+
+      const currentScreenTrack = producer.track ?? null;
+      const currentScreenTrackLive =
+        currentScreenTrack?.readyState === "live" &&
+        currentScreenTrack.enabled &&
+        !currentScreenTrack.muted;
+      const liveScreenTrack =
+        getFirstLiveTrack(
+          (screenShareStreamRef.current?.getVideoTracks() ?? []).filter(
+            (track) =>
+              track.id !== currentScreenTrack?.id &&
+              track.enabled &&
+              !track.muted,
+          ),
+        ) ??
+        (currentScreenTrackLive ? currentScreenTrack : null);
+      if (
+        !liveScreenTrack ||
+        liveScreenTrack.readyState !== "live" ||
+        liveScreenTrack.muted
+      ) {
+        return;
+      }
+
+      screenProducerTrackRepairInFlightRef.current = true;
+      let detachedForRefresh = false;
+      try {
+        if (
+          disposed ||
+          screenProducerRef.current?.id !== producer.id ||
+          producer.closed ||
+          isMediaRecoveryBlocked()
+        ) {
+          return;
+        }
+
+        if ("contentHint" in liveScreenTrack) {
+          liveScreenTrack.contentHint = "detail";
+        }
+        await producer.replaceTrack({ track: null });
+        detachedForRefresh = true;
+        await producer.replaceTrack({ track: liveScreenTrack });
+        detachedForRefresh = false;
+        await applyScreenShareProducerNetworkProfile(
+          producer,
+          getScreenSharePublishNetworkProfile(),
+        );
+        screenOutboundStallStateRef.current = {
+          ...createCameraOutboundStallState(producer.id, liveScreenTrack.id),
+          frames: sample.frames,
+          bytes: sample.bytes,
+          lastRecoveryAtMs: now,
+        };
+        console.warn("[Meets] Refreshed stalled screen-share sender:", {
+          producerId: producer.id,
+          previousTrackId: producerTrack.id,
+          screenTrackId: liveScreenTrack.id,
+          stalledSamples: state.stalledSamples,
+          frames: sample.frames,
+          bytes: sample.bytes,
+        });
+      } catch (err) {
+        if (
+          detachedForRefresh &&
+          !producer.closed &&
+          liveScreenTrack.readyState === "live"
+        ) {
+          try {
+            await producer.replaceTrack({ track: liveScreenTrack });
+          } catch {}
+        }
+        screenOutboundStallStateRef.current = {
+          ...state,
+          lastRecoveryAtMs: performance.now(),
+        };
+        console.warn(
+          "[Meets] Stalled screen-share sender refresh failed; keeping producer open:",
+          err,
+        );
+      } finally {
+        screenProducerTrackRepairInFlightRef.current = false;
+      }
+    };
+
+    const pollOutboundProgress = () => {
+      if (disposed) return;
+      if (isMediaRecoveryBlocked()) {
+        resetStallState();
+        return;
+      }
+      if (screenProducerTrackRepairInFlightRef.current) {
+        return;
+      }
+
+      const producer = screenProducerRef.current;
+      const producerTrack = producer?.track ?? null;
+      if (!producer || producer.closed || producer.paused || !producerTrack) {
+        resetStallState();
+        return;
+      }
+      if (
+        producerTrack.readyState !== "live" ||
+        !producerTrack.enabled ||
+        producerTrack.muted
+      ) {
+        resetStallState(producer.id, producerTrack.id);
+        return;
+      }
+
+      void producer
+        .getStats()
+        .then((report) => {
+          if (disposed || isMediaRecoveryBlocked()) return;
+          if (
+            screenProducerRef.current?.id !== producer.id ||
+            producer.closed ||
+            producer.paused ||
+            producer.track?.id !== producerTrack.id ||
+            producerTrack.readyState !== "live" ||
+            !producerTrack.enabled ||
+            producerTrack.muted
+          ) {
+            resetStallState(
+              screenProducerRef.current?.id ?? null,
+              screenProducerRef.current?.track?.id ?? null,
+            );
+            return;
+          }
+
+          const sample = readOutboundVideoProgressSample(report);
+          const currentState = screenOutboundStallStateRef.current;
+          const previous =
+            currentState.producerId === producer.id &&
+            currentState.trackId === producerTrack.id
+              ? currentState
+              : createCameraOutboundStallState(producer.id, producerTrack.id);
+          const hasBaseline =
+            previous.frames !== null || previous.bytes !== null;
+          const stalledSamples =
+            hasBaseline && !hasOutboundVideoProgress(previous, sample)
+              ? previous.stalledSamples + 1
+              : 0;
+          const nextState: CameraOutboundStallState = {
+            ...previous,
+            producerId: producer.id,
+            trackId: producerTrack.id,
+            frames: sample.frames,
+            bytes: sample.bytes,
+            stalledSamples,
+          };
+          screenOutboundStallStateRef.current = nextState;
+
+          if (
+            stalledSamples < CAMERA_OUTBOUND_STALL_SAMPLES_BEFORE_RECOVERY ||
+            isEncoderLimitedOutboundSample(sample)
+          ) {
+            return;
+          }
+
+          void refreshStalledScreenProducer({
+            producer,
+            producerTrack,
+            sample,
+            state: nextState,
+          });
+        })
+        .catch(() => {
+          resetStallState(
+            screenProducerRef.current?.id ?? null,
+            screenProducerRef.current?.track?.id ?? null,
+          );
+        });
+    };
+
+    pollOutboundProgress();
+    const interval = window.setInterval(
+      pollOutboundProgress,
+      CAMERA_OUTBOUND_STALL_CHECK_MS,
+    );
+
+    return () => {
+      disposed = true;
+      window.clearInterval(interval);
+    };
+  }, [
+    connectionState,
+    ghostEnabled,
+    isObserverMode,
+    isMediaRecoveryBlocked,
+    isScreenSharing,
+    getScreenSharePublishNetworkProfile,
+    screenProducerRef,
+    screenShareStreamRef,
+  ]);
+
+  useEffect(() => {
     if (ghostEnabled || isObserverMode) return;
     if (connectionState !== "joined") return;
     if (isCameraOff) return;
@@ -3009,21 +3284,19 @@ export function useMeetMedia({
         }
       }
 
-      const screenNetworkProfile = getPublishNetworkProfile();
-      const videoConstraints =
-        buildScreenShareVideoConstraintsForNetworkProfile(
-          screenNetworkProfile,
-        );
+      const screenNetworkProfile = getScreenSharePublishNetworkProfile();
 
       let captureController = createCaptureController();
-      const displayVideoConstraints: MediaTrackConstraints = {
-        ...videoConstraints,
+      const relaxedDisplayVideoConstraints: MediaTrackConstraints & {
+        cursor?: "always" | "motion" | "never";
+      } = {
         displaySurface: "browser",
+        cursor: "always",
       };
       const displayMediaOptions: DisplayMediaStreamOptions & {
         controller?: CaptureControllerLike;
       } = {
-        video: displayVideoConstraints,
+        video: relaxedDisplayVideoConstraints,
         audio: true,
         ...(captureController ? { controller: captureController } : {}),
       };
@@ -3038,7 +3311,7 @@ export function useMeetMedia({
         }
         captureController = null;
         stream = await navigator.mediaDevices.getDisplayMedia({
-          video: displayVideoConstraints,
+          video: relaxedDisplayVideoConstraints,
           audio: true,
         });
       }
@@ -3067,7 +3340,10 @@ export function useMeetMedia({
       const producer = await transport.produce({
         track,
         encodings: [
-          buildScreenShareEncodingForNetworkProfile(screenNetworkProfile),
+          buildScreenShareEncodingForNetworkProfile(
+            screenNetworkProfile,
+            track,
+          ),
         ],
         stopTracks: false,
         ...(preferredScreenShareCodec ? { codec: preferredScreenShareCodec } : {}),
@@ -3124,6 +3400,9 @@ export function useMeetMedia({
       const audioTrack = stream.getAudioTracks()[0];
       if (audioTrack && audioTrack.readyState === "live") {
         try {
+          if ("contentHint" in audioTrack) {
+            audioTrack.contentHint = "music";
+          }
           const audioProducer = await transport.produce({
             track: audioTrack,
             codecOptions: buildScreenShareAudioOpusCodecOptions(
@@ -3132,6 +3411,18 @@ export function useMeetMedia({
             stopTracks: false,
             appData: { type: "screen" as ProducerType },
           });
+          try {
+            await applyAudioProducerNetworkProfile(
+              audioProducer,
+              "screen",
+              screenNetworkProfile,
+            );
+          } catch (profileErr) {
+            console.warn(
+              "[Meets] Failed to apply screen audio network profile:",
+              profileErr,
+            );
+          }
 
           if (
             screenVideoEnded ||
@@ -3183,7 +3474,7 @@ export function useMeetMedia({
     socketRef,
     setMeetError,
     ensureProducerTransportRef,
-    getPublishNetworkProfile,
+    getScreenSharePublishNetworkProfile,
     stopScreenShareStream,
     stopLocalTrack,
   ]);

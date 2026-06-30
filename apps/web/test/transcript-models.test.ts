@@ -3,6 +3,7 @@ import {
   DEFAULT_TRANSCRIPT_QA_MODEL,
   getTranscriptResponseModelConfig,
   getTranscriptTranscriptionModelConfig,
+  getTranscriptTranscriptionProvider,
   LIVE_TRANSCRIPT_TRANSCRIPTION_MODELS,
   TRANSCRIPT_QA_MODELS,
 } from "@conclave/meeting-core/transcript-models";
@@ -47,7 +48,11 @@ describe("transcript model registry", () => {
 
   it("only exposes live-capable transcription models for room sessions", () => {
     expect(LIVE_TRANSCRIPT_TRANSCRIPTION_MODELS.map((model) => model.id)).toEqual(
-      ["gpt-realtime-whisper"],
+      ["gpt-realtime-whisper", "saaras:v3"],
+    );
+    expect(getTranscriptTranscriptionProvider("saaras:v3")).toBe("sarvam");
+    expect(getTranscriptTranscriptionProvider("gpt-realtime-whisper")).toBe(
+      "openai",
     );
   });
 });

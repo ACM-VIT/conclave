@@ -61,6 +61,7 @@ import { createMeetError, isSystemUserId, normalizeDisplayName } from "../lib/ut
 import { normalizeChatMessage } from "../lib/chat-commands";
 import { telemetry } from "../lib/telemetry";
 import {
+  applyAudioProducerNetworkProfile,
   applyScreenShareTrackNetworkProfile,
   buildScreenShareEncodingForNetworkProfile,
   getPreferredScreenShareCodec,
@@ -68,6 +69,10 @@ import {
   produceWebcamTrack,
   type WebcamProducerNetworkProfile,
 } from "../lib/webcam-codec";
+import {
+  getMostConstrainedWebcamProducerNetworkProfile,
+  getScreenSharePublishNetworkProfileForAvailableOutgoingBitrate,
+} from "../lib/screen-share-network-profile";
 import { getBrowserNetworkSnapshot } from "../lib/network-information";
 import type {
   ConsumerTelemetrySnapshot,
@@ -98,7 +103,9 @@ const DEFAULT_SERVER_RESTART_NOTICE =
   "Meeting server is restarting. You will be reconnected automatically.";
 const ADMIN_NOTICE_DURATION_MS = 60000;
 const VIDEO_STALL_KEYFRAME_REQUEST_DELAY_MS = 2500;
+const SCREEN_SHARE_VIDEO_STALL_KEYFRAME_REQUEST_DELAY_MS = 900;
 const STALE_CONSUMER_RECOVERY_DELAY_MS = 9000;
+const SCREEN_SHARE_STALE_CONSUMER_RECOVERY_DELAY_MS = 4500;
 const RESTART_ICE_ACK_TIMEOUT_MS = 5000;
 const PARTICIPANT_RECONNECTING_STATUS_FALLBACK_MS = 30000;
 const PARTICIPANT_RECONNECTING_STATUS_BUFFER_MS = 5000;
@@ -108,9 +115,40 @@ const STALE_REPLACEMENT_CLEANUP_DELAY_MS = 5000;
 const SCREEN_SHARE_STALE_REPLACEMENT_CLEANUP_DELAY_MS = 1500;
 const CLOSE_CONSUMER_RETRY_DELAY_MS = 500;
 const CLOSE_CONSUMER_MAX_ATTEMPTS = 4;
+const SCREEN_SHARE_FREEZE_KEYFRAME_REQUEST_COOLDOWN_MS = 2000;
+const SCREEN_SHARE_FOREGROUND_KEYFRAME_REQUEST_COOLDOWN_MS = 1200;
+
+const isScreenShareVideoProducer = (
+  producerInfo: Pick<ProducerInfo, "kind" | "type">,
+): boolean => producerInfo.kind === "video" && producerInfo.type === "screen";
+
+const getVideoStallKeyFrameRequestDelayMs = (
+  producerInfo: Pick<ProducerInfo, "kind" | "type">,
+): number =>
+  isScreenShareVideoProducer(producerInfo)
+    ? SCREEN_SHARE_VIDEO_STALL_KEYFRAME_REQUEST_DELAY_MS
+    : VIDEO_STALL_KEYFRAME_REQUEST_DELAY_MS;
+
+const getStaleConsumerRecoveryDelayMs = (
+  producerInfo: Pick<ProducerInfo, "type">,
+): number =>
+  producerInfo.type === "screen"
+    ? SCREEN_SHARE_STALE_CONSUMER_RECOVERY_DELAY_MS
+    : STALE_CONSUMER_RECOVERY_DELAY_MS;
+
 const CLOSE_CONSUMER_RETRY_WINDOW_MS = 30000;
 const TURN_URL_PATTERN = /^turns?:/i;
 const TRANSPORT_CC_FEEDBACK_TYPE = "transport-cc";
+const SCREEN_SHARE_RECEIVE_INITIAL_FAIR_BPS = 1500000;
+const SCREEN_SHARE_RECEIVE_INITIAL_POOR_BPS = 550000;
+const SCREEN_SHARE_RECEIVE_INITIAL_EMERGENCY_BPS = 300000;
+
+const networkProfileRank: Record<WebcamProducerNetworkProfile, number> = {
+  good: 1,
+  fair: 2,
+  poor: 3,
+  emergency: 4,
+};
 
 const getConnectionStatsNetworkProfile = (
   stats: ConnectionQualityStats | null | undefined,
@@ -135,6 +173,39 @@ const getConnectionStatsNetworkProfile = (
   }
   if (quality === "poor") return "poor";
   if (quality === "fair") return "fair";
+  return "good";
+};
+
+const getMostConstrainedNetworkProfile = (
+  profiles: Array<WebcamProducerNetworkProfile | null>,
+): WebcamProducerNetworkProfile | null =>
+  profiles.reduce<WebcamProducerNetworkProfile | null>((selected, profile) => {
+    if (!profile) return selected;
+    if (!selected) return profile;
+    return networkProfileRank[profile] > networkProfileRank[selected]
+      ? profile
+      : selected;
+  }, null);
+
+const getScreenShareReceiveNetworkProfileForAvailableBitrate = (
+  availableIncomingBitrate: number | null | undefined,
+): WebcamProducerNetworkProfile | null => {
+  if (
+    typeof availableIncomingBitrate !== "number" ||
+    !Number.isFinite(availableIncomingBitrate) ||
+    availableIncomingBitrate <= 0
+  ) {
+    return null;
+  }
+  if (availableIncomingBitrate <= SCREEN_SHARE_RECEIVE_INITIAL_EMERGENCY_BPS) {
+    return "emergency";
+  }
+  if (availableIncomingBitrate <= SCREEN_SHARE_RECEIVE_INITIAL_POOR_BPS) {
+    return "poor";
+  }
+  if (availableIncomingBitrate <= SCREEN_SHARE_RECEIVE_INITIAL_FAIR_BPS) {
+    return "fair";
+  }
   return "good";
 };
 
@@ -247,7 +318,11 @@ const getInitialConsumerPreferences = (
       preferredLayers: {
         spatialLayer: 0,
         temporalLayer:
-          networkProfile === "emergency" ? 0 : networkProfile === "poor" ? 1 : 2,
+          networkProfile === "emergency"
+            ? 0
+            : networkProfile === "poor" || networkProfile === "fair"
+            ? 1
+            : 2,
       },
       priority: 240,
     };
@@ -731,6 +806,7 @@ export function useMeetSocket({
       }
     >
   >(new Map());
+  const foregroundScreenShareKeyFrameAtRef = useRef(0);
   const consumerRecoveryInFlightRef = useRef<Set<string>>(new Set());
   const announcedRemoteProducersRef = useRef<Map<string, ProducerInfo>>(
     new Map(),
@@ -834,10 +910,50 @@ export function useMeetSocket({
     [connectionQualityRef],
   );
 
+  const getScreenSharePublishNetworkProfile =
+    useCallback((): WebcamProducerNetworkProfile => {
+      const baseProfile = getPublishNetworkProfile();
+      const stats = connectionQualityRef?.current;
+      const browserNetwork = stats?.browserNetwork ?? getBrowserNetworkSnapshot();
+      const screenShareProfile =
+        getScreenSharePublishNetworkProfileForAvailableOutgoingBitrate(
+          stats?.availableOutgoingBitrate,
+          browserNetwork.emergency ||
+            (stats?.publishEmergencyMode === true &&
+              stats.publishQuality !== "good"),
+        );
+      return (
+        getMostConstrainedWebcamProducerNetworkProfile([
+          baseProfile,
+          screenShareProfile,
+        ]) ?? baseProfile
+      );
+    }, [connectionQualityRef, getPublishNetworkProfile]);
+
   const getReceiveNetworkProfile = useCallback(
     () =>
       getConnectionStatsNetworkProfile(connectionQualityRef?.current, "receive"),
     [connectionQualityRef],
+  );
+
+  const getInitialConsumerNetworkProfile = useCallback(
+    (producerInfo: ProducerInfo): WebcamProducerNetworkProfile => {
+      const baseProfile = getReceiveNetworkProfile();
+      if (producerInfo.kind !== "video" || producerInfo.type !== "screen") {
+        return baseProfile;
+      }
+
+      const stats = connectionQualityRef?.current;
+      const screenShareProfile =
+        getScreenShareReceiveNetworkProfileForAvailableBitrate(
+          stats?.availableIncomingBitrate,
+        );
+      return (
+        getMostConstrainedNetworkProfile([baseProfile, screenShareProfile]) ??
+        baseProfile
+      );
+    },
+    [connectionQualityRef, getReceiveNetworkProfile],
   );
 
   useEffect(() => {
@@ -992,7 +1108,7 @@ export function useMeetSocket({
         videoTrack.contentHint = "detail";
       }
 
-      const screenNetworkProfile = getPublishNetworkProfile();
+      const screenNetworkProfile = getScreenSharePublishNetworkProfile();
       await applyScreenShareTrackNetworkProfile(videoTrack, screenNetworkProfile);
       const preferredScreenShareCodec = getPreferredScreenShareCodec(
         deviceRef.current,
@@ -1000,7 +1116,10 @@ export function useMeetSocket({
       const producer = await transport.produce({
         track: videoTrack,
         encodings: [
-          buildScreenShareEncodingForNetworkProfile(screenNetworkProfile),
+          buildScreenShareEncodingForNetworkProfile(
+            screenNetworkProfile,
+            videoTrack,
+          ),
         ],
         stopTracks: false,
         ...(preferredScreenShareCodec ? { codec: preferredScreenShareCodec } : {}),
@@ -1054,6 +1173,9 @@ export function useMeetSocket({
       const audioTrack = getFirstLiveTrack(screenStream.getAudioTracks());
       if (audioTrack) {
         try {
+          if ("contentHint" in audioTrack) {
+            audioTrack.contentHint = "music";
+          }
           const audioProducer = await transport.produce({
             track: audioTrack,
             codecOptions: buildScreenShareAudioOpusCodecOptions(
@@ -1062,6 +1184,18 @@ export function useMeetSocket({
             stopTracks: false,
             appData: { type: "screen" as ProducerType },
           });
+          try {
+            await applyAudioProducerNetworkProfile(
+              audioProducer,
+              "screen",
+              screenNetworkProfile,
+            );
+          } catch (profileErr) {
+            console.warn(
+              "[Meets] Failed to restore screen audio network profile:",
+              profileErr,
+            );
+          }
           if (
             screenVideoEnded ||
             videoTrack.readyState !== "live" ||
@@ -1093,7 +1227,7 @@ export function useMeetSocket({
       deviceRef,
       emitCloseProducer,
       flushPendingScreenProducerCloses,
-      getPublishNetworkProfile,
+      getScreenSharePublishNetworkProfile,
       producerTransportRef,
       screenAudioProducerRef,
       screenProducerRef,
@@ -2826,7 +2960,7 @@ export function useMeetSocket({
               preferHighWebcamLayer:
                 joinMode === "webinar_attendee" ||
                 existingWebcamVideoConsumerCount < 4,
-              networkProfile: getReceiveNetworkProfile(),
+              networkProfile: getInitialConsumerNetworkProfile(producerInfo),
             }),
           },
           async (response: ConsumeResponse | { error: string }) => {
@@ -2940,7 +3074,7 @@ export function useMeetSocket({
                     producerInfo,
                     `${response.kind} consumer stayed muted`,
                   );
-                }, STALE_CONSUMER_RECOVERY_DELAY_MS);
+                }, getStaleConsumerRecoveryDelayMs(producerInfo));
                 staleConsumerRecoveryTimeoutsRef.current.set(
                   producerInfo.producerId,
                   timeoutId,
@@ -3014,7 +3148,7 @@ export function useMeetSocket({
                       },
                       () => {},
                     );
-                  }, VIDEO_STALL_KEYFRAME_REQUEST_DELAY_MS);
+                  }, getVideoStallKeyFrameRequestDelayMs(producerInfo));
                   videoStallRecoveryTimeoutsRef.current.set(
                     producerInfo.producerId,
                     timeoutId,
@@ -3118,7 +3252,7 @@ export function useMeetSocket({
       closeConsumerForSameProducerReconsume,
       closeServerConsumer,
       dropDepartedProducer,
-      getReceiveNetworkProfile,
+      getInitialConsumerNetworkProfile,
       joinMode,
       queueProducerConsumeRetry,
       setActiveScreenShareId,
@@ -3269,7 +3403,10 @@ export function useMeetSocket({
             const sampleNow = Date.now();
             if (
               stalls >= STALL_SAMPLES_BEFORE_PLI &&
-              sampleNow - lastKeyFrameRequestAt >= KEYFRAME_REQUEST_COOLDOWN_MS
+              sampleNow - lastKeyFrameRequestAt >=
+                (info.type === "screen"
+                  ? SCREEN_SHARE_FREEZE_KEYFRAME_REQUEST_COOLDOWN_MS
+                  : KEYFRAME_REQUEST_COOLDOWN_MS)
             ) {
               // Decoder is frozen but real media is flowing → force a keyframe.
               const socket2 = socketRef.current;
@@ -3424,7 +3561,8 @@ export function useMeetSocket({
               () => {},
             );
             if (
-              Date.now() - mutedSince >= STALE_CONSUMER_RECOVERY_DELAY_MS
+              Date.now() - mutedSince >=
+                getStaleConsumerRecoveryDelayMs(producerInfo)
             ) {
               void recoverStaleConsumerRef.current(
                 producerInfo,
@@ -3723,6 +3861,58 @@ export function useMeetSocket({
       syncProducers,
     ],
   );
+
+  const requestForegroundScreenShareKeyFrames = useCallback(() => {
+    const socket = socketRef.current;
+    if (!socket?.connected) return;
+
+    const now = Date.now();
+    if (
+      now - foregroundScreenShareKeyFrameAtRef.current <
+      SCREEN_SHARE_FOREGROUND_KEYFRAME_REQUEST_COOLDOWN_MS
+    ) {
+      return;
+    }
+
+    let requested = false;
+    consumersRef.current.forEach((consumer, producerId) => {
+      const info = producerMapRef.current.get(producerId);
+      if (!info || !isScreenShareVideoProducer(info)) return;
+      if (producerPausedStateRef.current.get(producerId)) return;
+      if (adaptivelyPausedConsumerProducerIdsRef.current.has(producerId)) return;
+      if (consumer.closed || consumer.paused) return;
+
+      const track = consumer.track;
+      if (!track || track.readyState !== "live") return;
+
+      socket.emit(
+        "resumeConsumer",
+        { consumerId: consumer.id, requestKeyFrame: true },
+        () => {},
+      );
+
+      const freezeStats = videoFreezeStatsRef.current.get(producerId);
+      if (freezeStats) {
+        videoFreezeStatsRef.current.set(producerId, {
+          ...freezeStats,
+          stalls: 0,
+          lastKeyFrameRequestAt: now,
+        });
+      }
+      requested = true;
+    });
+
+    if (requested) {
+      foregroundScreenShareKeyFrameAtRef.current = now;
+    }
+  }, [
+    adaptivelyPausedConsumerProducerIdsRef,
+    consumersRef,
+    producerMapRef,
+    producerPausedStateRef,
+    socketRef,
+    videoFreezeStatsRef,
+  ]);
 
   const joinRoomInternal = useCallback(
     async (
@@ -5755,6 +5945,7 @@ export function useMeetSocket({
       foregroundRecoveryTimeoutRef.current = window.setTimeout(() => {
         foregroundRecoveryTimeoutRef.current = null;
         clearExpiredParticipantConnectionStatuses();
+        requestForegroundScreenShareKeyFrames();
         recoverActiveMeeting("foreground");
       }, 150);
     };
@@ -5785,7 +5976,11 @@ export function useMeetSocket({
         foregroundRecoveryTimeoutRef.current = null;
       }
     };
-  }, [clearExpiredParticipantConnectionStatuses, recoverActiveMeeting]);
+  }, [
+    clearExpiredParticipantConnectionStatuses,
+    recoverActiveMeeting,
+    requestForegroundScreenShareKeyFrames,
+  ]);
 
   const handleRedirectCallback = useCallback(
     async (newRoomId: string) => {

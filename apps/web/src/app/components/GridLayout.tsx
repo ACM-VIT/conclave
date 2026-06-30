@@ -117,6 +117,9 @@ const WARM_BUFFER_TILES = 4;
 const RECENTLY_VISIBLE_WARM_BUFFER_TILES = 4;
 const RECENTLY_VISIBLE_WARM_HOLD_MS = 3500;
 const PRIORITY_WARM_BUFFER_TILES = 4;
+const PRESENTATION_WARM_BUFFER_TILES = 1;
+const PRESENTATION_RECENTLY_VISIBLE_WARM_BUFFER_TILES = 1;
+const PRESENTATION_PRIORITY_WARM_BUFFER_TILES = 2;
 // Spacing of the measured stage. GRID_PADDING mirrors `p-4`; GRID_GAP is the
 // inter-tile gap fed to the Meet packer so it reserves the same gutters we draw.
 const GRID_PADDING = 16;
@@ -1026,10 +1029,8 @@ function GridLayout({
   useEffect(() => {
     if (!isLocalPresenter) {
       setSelfPresentationView("placeholder");
-    } else if (screenShareControlState?.available) {
-      setSelfPresentationView("preview");
     }
-  }, [isLocalPresenter, screenShareControlState?.available]);
+  }, [isLocalPresenter]);
   const presentationSelfView = isLocalPresenter
     ? { mode: selfPresentationView, onModeChange: setSelfPresentationView }
     : undefined;
@@ -1748,9 +1749,18 @@ function GridLayout({
       reasons.add(reason);
       reasonSets.set(participant.userId, reasons);
     };
+    const boundaryWarmLimit = hasPresentation
+      ? PRESENTATION_WARM_BUFFER_TILES
+      : WARM_BUFFER_TILES;
+    const recentlyVisibleWarmLimit = hasPresentation
+      ? PRESENTATION_RECENTLY_VISIBLE_WARM_BUFFER_TILES
+      : RECENTLY_VISIBLE_WARM_BUFFER_TILES;
+    const priorityWarmLimit = hasPresentation
+      ? PRESENTATION_PRIORITY_WARM_BUFFER_TILES
+      : PRIORITY_WARM_BUFFER_TILES;
 
     overflowParticipants
-      .slice(0, WARM_BUFFER_TILES)
+      .slice(0, boundaryWarmLimit)
       .forEach((participant) => addWarm(participant, "boundary"));
 
     const now = performance.now();
@@ -1761,7 +1771,7 @@ function GridLayout({
     );
     overflowParticipants
       .filter((participant) => recentlyVisibleWarmIds.has(participant.userId))
-      .slice(0, RECENTLY_VISIBLE_WARM_BUFFER_TILES)
+      .slice(0, recentlyVisibleWarmLimit)
       .forEach((participant) => addWarm(participant, "recently-visible"));
 
     // Also warm the active speaker even if they're hidden BEYOND the buffer —
@@ -1787,7 +1797,7 @@ function GridLayout({
 
     overflowParticipants
       .filter((participant) => participant.isHandRaised)
-      .slice(0, PRIORITY_WARM_BUFFER_TILES)
+      .slice(0, priorityWarmLimit)
       .forEach((participant) => addWarm(participant, "hand-raised"));
 
     return {
@@ -1802,6 +1812,7 @@ function GridLayout({
   }, [
     activeSpeakerId,
     featuredSpeakerId,
+    hasPresentation,
     isOverflowOpen,
     overflowParticipants,
     recentlyVisibleWarmRevision,
@@ -3543,6 +3554,13 @@ const PresentationVideoTile = memo(function PresentationVideoTile({
     const video = videoRef.current;
     if (!video) return;
 
+    if (showChooser) {
+      if (video.srcObject) {
+        video.srcObject = null;
+      }
+      return;
+    }
+
     if (video.srcObject !== stream) {
       video.srcObject = stream;
     }
@@ -3575,6 +3593,9 @@ const PresentationVideoTile = memo(function PresentationVideoTile({
         scheduleReplay();
       }
     };
+    const handleWindowChange = () => {
+      scheduleReplay();
+    };
 
     scheduleReplay();
     videoTrack?.addEventListener("unmute", scheduleReplay);
@@ -3582,7 +3603,12 @@ const PresentationVideoTile = memo(function PresentationVideoTile({
     video.addEventListener("loadeddata", scheduleReplay);
     video.addEventListener("canplay", scheduleReplay);
     video.addEventListener("stalled", scheduleReplay);
+    video.addEventListener("waiting", scheduleReplay);
     document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("focus", handleWindowChange);
+    window.addEventListener("pageshow", handleWindowChange);
+    window.addEventListener("resize", handleWindowChange);
+    window.addEventListener("orientationchange", handleWindowChange);
 
     return () => {
       cancelled = true;
@@ -3591,13 +3617,18 @@ const PresentationVideoTile = memo(function PresentationVideoTile({
       video.removeEventListener("loadeddata", scheduleReplay);
       video.removeEventListener("canplay", scheduleReplay);
       video.removeEventListener("stalled", scheduleReplay);
+      video.removeEventListener("waiting", scheduleReplay);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("focus", handleWindowChange);
+      window.removeEventListener("pageshow", handleWindowChange);
+      window.removeEventListener("resize", handleWindowChange);
+      window.removeEventListener("orientationchange", handleWindowChange);
       playbackRecovery.clear();
       if (video.srcObject === stream) {
         video.srcObject = null;
       }
     };
-  }, [stream, videoTrack]);
+  }, [showChooser, stream, videoTrack]);
 
   return (
     <div

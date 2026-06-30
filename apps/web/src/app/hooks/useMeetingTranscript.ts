@@ -5,6 +5,7 @@ import type {
   Participant,
   TranscriptMinutesSnapshot,
   TranscriptMinutesStatus,
+  TranscriptProviderKeyAvailability,
   TranscriptSegment,
   TranscriptServiceVersion,
   TranscriptSfuRelayStartRequest,
@@ -19,6 +20,7 @@ import type {
 import {
   DEFAULT_TRANSCRIPT_QA_MODEL,
   DEFAULT_TRANSCRIPT_TRANSCRIPTION_MODEL,
+  getTranscriptTranscriptionProvider,
 } from "../lib/transcript-models";
 import {
   createEmptyTranscriptMinutes,
@@ -70,6 +72,7 @@ interface UseMeetingTranscriptOptions {
 
 interface StartTranscriptOptions {
   apiKey?: string;
+  assistantApiKey?: string;
   transcriptModel?: string;
   qaModel?: string;
   transportMode?: TranscriptTransportMode;
@@ -80,6 +83,7 @@ type ServerEnvelope =
       type: "snapshot";
       viewerConnectionId?: string;
       globalOpenAiKeyAvailable?: boolean;
+      globalProviderKeysAvailable?: TranscriptProviderKeyAvailability;
       serviceVersion?: TranscriptServiceVersion;
       session: TranscriptSessionState;
       segments?: TranscriptSegment[];
@@ -91,6 +95,7 @@ type ServerEnvelope =
       type: "session.state";
       session: TranscriptSessionState;
       globalOpenAiKeyAvailable?: boolean;
+      globalProviderKeysAvailable?: TranscriptProviderKeyAvailability;
       serviceVersion?: TranscriptServiceVersion;
     }
   | {
@@ -125,6 +130,7 @@ type ServerEnvelope =
       type: "handoff.requested";
       session: TranscriptSessionState;
       globalOpenAiKeyAvailable?: boolean;
+      globalProviderKeysAvailable?: TranscriptProviderKeyAvailability;
       serviceVersion?: TranscriptServiceVersion;
     }
   | ({ type: "sfu.relayStartToken" } & TranscriptSfuRelayStartToken)
@@ -247,6 +253,8 @@ export function useMeetingTranscript({
   const [sfuRelayStatus, setSfuRelayStatus] =
     useState<TranscriptSfuRelayStatusResponse | null>(null);
   const [hasGlobalOpenAiKey, setHasGlobalOpenAiKey] = useState(false);
+  const [globalProviderKeysAvailable, setGlobalProviderKeysAvailable] =
+    useState<TranscriptProviderKeyAvailability>({});
   const [serviceVersion, setServiceVersion] =
     useState<TranscriptServiceVersion | null>(null);
   const [availableServiceVersion, setAvailableServiceVersion] =
@@ -366,6 +374,24 @@ export function useMeetingTranscript({
       setAvailableServiceVersion((available) =>
         available?.id === version.id ? null : available,
       );
+    },
+    [],
+  );
+
+  const applyProviderKeyAvailability = useCallback(
+    (options: {
+      globalOpenAiKeyAvailable?: boolean;
+      globalProviderKeysAvailable?: TranscriptProviderKeyAvailability;
+    }) => {
+      const openai =
+        options.globalProviderKeysAvailable?.openai ??
+        options.globalOpenAiKeyAvailable === true;
+      const next = {
+        ...options.globalProviderKeysAvailable,
+        openai,
+      };
+      setHasGlobalOpenAiKey(openai);
+      setGlobalProviderKeysAvailable(next);
     },
     [],
   );
@@ -520,7 +546,7 @@ export function useMeetingTranscript({
           setViewerConnectionId((current) =>
             resolveSnapshotViewerConnectionId(current, message),
           );
-          setHasGlobalOpenAiKey(message.globalOpenAiKeyAvailable === true);
+          applyProviderKeyAvailability(message);
           applyServiceVersion(message.serviceVersion);
           applySessionState(message.session);
           setSegments(message.segments ?? []);
@@ -536,7 +562,7 @@ export function useMeetingTranscript({
         }
         case "session.state":
         case "handoff.requested":
-          setHasGlobalOpenAiKey(message.globalOpenAiKeyAvailable === true);
+          applyProviderKeyAvailability(message);
           applyServiceVersion(message.serviceVersion);
           applySessionState(message.session);
           return;
@@ -594,6 +620,7 @@ export function useMeetingTranscript({
       }
     },
     [
+      applyProviderKeyAvailability,
       applyServiceVersion,
       applySessionState,
       applySfuRelayStartToken,
@@ -754,6 +781,17 @@ export function useMeetingTranscript({
     return connect();
   }, [connect]);
 
+  const hasGlobalKeysForTranscriptModel = useCallback(
+    (transcriptModel: string): boolean => {
+      const provider = getTranscriptTranscriptionProvider(transcriptModel);
+      return (
+        globalProviderKeysAvailable.openai === true &&
+        globalProviderKeysAvailable[provider] === true
+      );
+    },
+    [globalProviderKeysAvailable],
+  );
+
   useEffect(() => {
     if (
       !isJoined ||
@@ -819,6 +857,7 @@ export function useMeetingTranscript({
       const sent = send({
         type: "session.start",
         apiKey: options.apiKey,
+        assistantApiKey: options.assistantApiKey,
         transcriptModel:
           options.transcriptModel ?? DEFAULT_TRANSCRIPT_TRANSCRIPTION_MODEL,
         qaModel: options.qaModel ?? DEFAULT_TRANSCRIPT_QA_MODEL,
@@ -878,6 +917,7 @@ export function useMeetingTranscript({
       const sent = send({
         type: "session.takeover",
         apiKey: options.apiKey,
+        assistantApiKey: options.assistantApiKey,
         transcriptModel:
           options.transcriptModel ?? session.transcriptModel,
         qaModel: options.qaModel ?? session.qaModel,
@@ -926,7 +966,7 @@ export function useMeetingTranscript({
   useEffect(() => {
     if (
       isViewOnly ||
-      !hasGlobalOpenAiKey ||
+      !hasGlobalKeysForTranscriptModel(session.transcriptModel) ||
       session.status !== "takeover_needed" ||
       session.controller?.userId !== currentUserId ||
       tokenInfo?.capabilities.takeover === false
@@ -944,12 +984,13 @@ export function useMeetingTranscript({
     void takeover({});
   }, [
     currentUserId,
-    hasGlobalOpenAiKey,
+    hasGlobalKeysForTranscriptModel,
     isViewOnly,
     serviceVersion?.id,
     session.controller?.connectionId,
     session.controller?.userId,
     session.status,
+    session.transcriptModel,
     session.updatedAt,
     takeover,
     tokenInfo?.capabilities.takeover,
@@ -1084,6 +1125,7 @@ export function useMeetingTranscript({
       setQaMessages([]);
       setTokenInfo(null);
       setHasGlobalOpenAiKey(false);
+      setGlobalProviderKeysAvailable({});
       setServiceVersion(null);
       serviceVersionRef.current = null;
       setAvailableServiceVersion(null);
@@ -1203,6 +1245,8 @@ export function useMeetingTranscript({
     tokenInfo,
     sfuRelayStatus,
     hasGlobalOpenAiKey,
+    globalProviderKeysAvailable,
+    hasGlobalKeysForTranscriptModel,
     serviceVersion,
     availableServiceVersion,
     isServiceUpdateAvailable,

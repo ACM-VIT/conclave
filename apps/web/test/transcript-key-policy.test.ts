@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  getGlobalTranscriptProviderKeyAvailability,
   hasGlobalOpenAiApiKey,
+  hasGlobalTranscriptProviderApiKey,
+  resolveTranscriptProviderApiKey,
   resolveTranscriptOpenAiApiKey,
 } from "../transcript-worker/src/key-policy";
 
@@ -9,6 +12,44 @@ describe("hasGlobalOpenAiApiKey", () => {
     expect(hasGlobalOpenAiApiKey({})).toBe(false);
     expect(hasGlobalOpenAiApiKey({ OPENAI_API_KEY: "   " })).toBe(false);
     expect(hasGlobalOpenAiApiKey({ OPENAI_API_KEY: "sk-global" })).toBe(true);
+  });
+});
+
+describe("transcript provider key policy", () => {
+  it("reports global keys by provider", () => {
+    expect(getGlobalTranscriptProviderKeyAvailability({})).toEqual({
+      openai: false,
+      sarvam: false,
+    });
+    expect(
+      getGlobalTranscriptProviderKeyAvailability({
+        OPENAI_API_KEY: "sk-global",
+        SARVAM_API_KEY: "sarvam-global",
+      }),
+    ).toEqual({
+      openai: true,
+      sarvam: true,
+    });
+    expect(
+      hasGlobalTranscriptProviderApiKey(
+        { SARVAM_API_KEY: " sarvam-global " },
+        "sarvam",
+      ),
+    ).toBe(true);
+  });
+
+  it("does not apply OpenAI key shape rules to Sarvam keys", () => {
+    expect(
+      resolveTranscriptProviderApiKey({
+        provider: "sarvam",
+        providedApiKey: " sarvam-user ",
+        globalApiKey: "sarvam-global",
+      }),
+    ).toEqual({
+      ok: true,
+      apiKey: "sarvam-user",
+      source: "controller",
+    });
   });
 });
 

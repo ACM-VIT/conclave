@@ -7,7 +7,12 @@ import type {
   TranscriptSessionState,
   TranscriptSpeaker,
 } from "@conclave/meeting-core/transcript-types";
-import { normalizeRealtimeTranscriptModel } from "@conclave/meeting-core/transcript-models";
+import {
+  getTranscriptTranscriptionProvider,
+  normalizeRealtimeTranscriptModel,
+  type TranscriptProviderKeyAvailability,
+  type TranscriptTranscriptionProvider,
+} from "@conclave/meeting-core/transcript-models";
 import {
   DEFAULT_MAX_SEGMENTS,
   DEFAULT_QA_MODEL,
@@ -33,13 +38,12 @@ import {
   fallbackMinutes,
 } from "./minutes";
 import {
+  getGlobalTranscriptProviderKeyAvailability,
   hasGlobalOpenAiApiKey,
-  resolveTranscriptOpenAiApiKey,
+  resolveTranscriptProviderApiKey,
 } from "./key-policy";
 import {
-  buildRealtimeTranscriptionConfig,
   generateMinutes,
-  realtimeEndpoint,
   streamQuestionAnswer,
 } from "./openai";
 import {
@@ -60,12 +64,15 @@ import {
 import type {
   ClientEnvelope,
   Env,
-  OpenAiRealtimeEvent,
   PersistedSnapshot,
   QaAskEnvelope,
   SessionStartEnvelope,
   Viewer,
 } from "./types";
+import {
+  connectLiveTranscriptionProvider,
+  type LiveTranscriptionSession,
+} from "./transcription";
 import {
   json,
   normalizeDelay,
@@ -110,9 +117,8 @@ export class TranscriptRoom {
   private segments: TranscriptSegment[] = [];
   private minutes: TranscriptMinutesSnapshot = createEmptyMinutes();
   private sequence = 0;
-  private apiKey: string | null = null;
-  private openAiSocket: WebSocket | null = null;
-  private openAiGeneration = 0;
+  private responseApiKey: string | null = null;
+  private transcriptionSession: LiveTranscriptionSession | null = null;
   private lastMinutesRefreshAt = 0;
   // Auto-minutes scheduler state. We debounce regeneration so AI minutes are
   // never clobbered mid-conversation; the crude fallback is only ever a seed.
@@ -184,6 +190,7 @@ export class TranscriptRoom {
       viewerConnectionId: viewer.id,
       session: this.session,
       globalOpenAiKeyAvailable: this.hasGlobalOpenAiKey(),
+      globalProviderKeysAvailable: this.globalProviderKeysAvailable(),
       serviceVersion: this.serviceVersion(),
       segments: this.segments,
       partials: Array.from(this.partialSegments.values()),
@@ -267,12 +274,49 @@ export class TranscriptRoom {
       type: "session.state",
       session: this.session,
       globalOpenAiKeyAvailable: this.hasGlobalOpenAiKey(),
+      globalProviderKeysAvailable: this.globalProviderKeysAvailable(),
       serviceVersion: this.serviceVersion(),
     });
   }
 
   private hasGlobalOpenAiKey(): boolean {
     return hasGlobalOpenAiApiKey(this.env);
+  }
+
+  private globalProviderKeysAvailable(): TranscriptProviderKeyAvailability {
+    return getGlobalTranscriptProviderKeyAvailability(this.env);
+  }
+
+  private resolveTranscriptionKey(
+    provider: TranscriptTranscriptionProvider,
+    providedApiKey: string | undefined,
+  ) {
+    return resolveTranscriptProviderApiKey({
+      provider,
+      providedApiKey,
+      globalApiKey:
+        provider === "sarvam" ? this.env.SARVAM_API_KEY : this.env.OPENAI_API_KEY,
+    });
+  }
+
+  private resolveResponseKey(
+    transcriptionProvider: TranscriptTranscriptionProvider,
+    transcriptionApiKey: string | undefined,
+    assistantApiKey: string | undefined,
+  ) {
+    return resolveTranscriptProviderApiKey({
+      provider: "openai",
+      providedApiKey:
+        transcriptionProvider === "openai"
+          ? (transcriptionApiKey ?? assistantApiKey)
+          : assistantApiKey,
+      globalApiKey: this.env.OPENAI_API_KEY,
+      missingMessage:
+        transcriptionProvider === "sarvam"
+          ? "A valid OpenAI API key is required for Ask and Minutes when Sarvam transcription is selected."
+          : "A valid OpenAI API key is required.",
+      misconfiguredMessage: "The shared OpenAI API key is misconfigured.",
+    });
   }
 
   private serviceVersion() {
@@ -365,6 +409,7 @@ export class TranscriptRoom {
           viewerConnectionId: viewer.id,
           session: this.session,
           globalOpenAiKeyAvailable: this.hasGlobalOpenAiKey(),
+          globalProviderKeysAvailable: this.globalProviderKeysAvailable(),
           serviceVersion: this.serviceVersion(),
           segments: this.segments,
           partials: Array.from(this.partialSegments.values()),
@@ -398,6 +443,7 @@ export class TranscriptRoom {
         type: "handoff.requested",
         session: this.session,
         globalOpenAiKeyAvailable: this.hasGlobalOpenAiKey(),
+        globalProviderKeysAvailable: this.globalProviderKeysAvailable(),
         serviceVersion: this.serviceVersion(),
       });
       await this.persist();
@@ -418,6 +464,7 @@ export class TranscriptRoom {
         type: "handoff.requested",
         session: this.session,
         globalOpenAiKeyAvailable: this.hasGlobalOpenAiKey(),
+        globalProviderKeysAvailable: this.globalProviderKeysAvailable(),
         serviceVersion: this.serviceVersion(),
       });
       await this.persist();
@@ -444,25 +491,36 @@ export class TranscriptRoom {
       return;
     }
 
-    const keyResolution = resolveTranscriptOpenAiApiKey({
-      providedApiKey: message.apiKey,
-      globalApiKey: this.env.OPENAI_API_KEY,
-    });
-    if (!keyResolution.ok) {
-      this.sendError(viewer, keyResolution.message);
-      return;
-    }
-
     const roomId = this.session?.roomId || "unknown";
     const now = Date.now();
     const transcriptModel = normalizeRealtimeTranscriptModel(
       normalizeModel(message.transcriptModel, DEFAULT_TRANSCRIPT_MODEL),
       DEFAULT_TRANSCRIPT_MODEL,
     );
+    const transcriptionProvider =
+      getTranscriptTranscriptionProvider(transcriptModel);
+    const transcriptionKey = this.resolveTranscriptionKey(
+      transcriptionProvider,
+      message.apiKey,
+    );
+    if (!transcriptionKey.ok) {
+      this.sendError(viewer, transcriptionKey.message);
+      return;
+    }
+    const responseKey = this.resolveResponseKey(
+      transcriptionProvider,
+      message.apiKey,
+      message.assistantApiKey,
+    );
+    if (!responseKey.ok) {
+      this.sendError(viewer, responseKey.message);
+      return;
+    }
+
     const qaModel = normalizeModel(message.qaModel, DEFAULT_QA_MODEL);
     const transportMode = normalizeTransportMode(message.transportMode);
     const wasIdle = existingStatus === "idle" || existingStatus === "error";
-    this.apiKey = keyResolution.apiKey;
+    this.responseApiKey = responseKey.apiKey;
     this.session = {
       roomId,
       status: "starting",
@@ -476,12 +534,12 @@ export class TranscriptRoom {
       transcriptModel,
       qaModel,
       transportMode,
-      keySource: keyResolution.source,
+      keySource: transcriptionKey.source,
       startedAt: wasIdle ? now : (this.session?.startedAt ?? now),
       updatedAt: now,
       error: null,
     };
-    this.resetOpenAiAudioState();
+    this.resetTranscriptionAudioState();
     this.audioPaused = false;
     if (wasIdle) {
       this.segments = [];
@@ -494,8 +552,8 @@ export class TranscriptRoom {
     await this.persist();
 
     try {
-      await this.connectOpenAi({
-        apiKey: keyResolution.apiKey,
+      await this.connectTranscriptionProvider({
+        apiKey: transcriptionKey.apiKey,
         transcriptModel,
         language: normalizeLanguage(
           message.language ?? this.env.TRANSCRIPT_TRANSCRIPTION_LANGUAGE,
@@ -537,16 +595,16 @@ export class TranscriptRoom {
       return;
     }
 
-    this.closeOpenAi();
+    this.closeTranscriptionProvider();
     const roomId = this.session?.roomId || "unknown";
-    this.apiKey = null;
+    this.responseApiKey = null;
     this.session = {
       ...createIdleSession(roomId),
       transcriptModel: this.session?.transcriptModel ?? DEFAULT_TRANSCRIPT_MODEL,
       qaModel: this.session?.qaModel ?? DEFAULT_QA_MODEL,
     };
     this.segments = [];
-    this.resetOpenAiAudioState();
+    this.resetTranscriptionAudioState();
     this.resetMinutesScheduler();
     this.audioPaused = false;
     this.sequence = 0;
@@ -557,6 +615,7 @@ export class TranscriptRoom {
       type: "snapshot",
       session: this.session,
       globalOpenAiKeyAvailable: this.hasGlobalOpenAiKey(),
+      globalProviderKeysAvailable: this.globalProviderKeysAvailable(),
       serviceVersion: this.serviceVersion(),
       segments: [],
       partials: [],
@@ -594,7 +653,7 @@ export class TranscriptRoom {
     if (paused) {
       // Flush whatever is buffered so the last utterance finalizes cleanly.
       if (this.hasPendingAudio && this.latestSpeaker) {
-        this.commitOpenAiBuffer(
+        this.commitTranscriptionBuffer(
           this.latestSpeaker,
           "Transcript audio commit failed.",
         );
@@ -620,7 +679,7 @@ export class TranscriptRoom {
   ): void {
     if (this.audioPaused) return;
     if (!this.canRelayAudio(viewer)) return;
-    if (!audio || !this.openAiSocket) return;
+    if (!audio || !this.transcriptionSession) return;
     const sampleCount = estimatePcm16Base64SampleCount(audio);
     if (sampleCount <= 0) return;
     const normalizedSpeaker = normalizeSpeaker(speaker, viewer);
@@ -628,7 +687,7 @@ export class TranscriptRoom {
       this.hasPendingAudio &&
       this.latestSpeaker &&
       !isSameTranscriptAudioSpeaker(this.latestSpeaker, normalizedSpeaker) &&
-      !this.commitOpenAiBuffer(
+      !this.commitTranscriptionBuffer(
         this.latestSpeaker,
         "Transcript speaker handoff failed.",
       )
@@ -636,9 +695,7 @@ export class TranscriptRoom {
       return;
     }
     try {
-      this.openAiSocket.send(
-        JSON.stringify({ type: "input_audio_buffer.append", audio }),
-      );
+      this.transcriptionSession.appendAudio(audio);
       this.latestSpeaker = normalizedSpeaker;
       this.hasPendingAudio = true;
       this.pendingAudioSamples += sampleCount;
@@ -646,7 +703,7 @@ export class TranscriptRoom {
         this.session.controller.lastSeenAt = Date.now();
       }
     } catch {
-      void this.handleOpenAiFailure("Transcript audio stream failed.");
+      void this.handleTranscriptionFailure("Transcript audio stream failed.");
     }
   }
 
@@ -657,7 +714,7 @@ export class TranscriptRoom {
     if (
       this.audioPaused ||
       !this.canRelayAudio(viewer) ||
-      !this.openAiSocket ||
+      !this.transcriptionSession ||
       !this.hasPendingAudio
     ) {
       return;
@@ -672,53 +729,51 @@ export class TranscriptRoom {
       return;
     }
     this.latestSpeaker = normalizedSpeaker;
-    this.commitOpenAiBuffer(normalizedSpeaker, "Transcript audio commit failed.");
+    this.commitTranscriptionBuffer(
+      normalizedSpeaker,
+      "Transcript audio commit failed.",
+    );
   }
 
-  private commitOpenAiBuffer(
+  private commitTranscriptionBuffer(
     speaker: TranscriptSpeaker,
     failureMessage: string,
   ): boolean {
-    if (!this.openAiSocket || !this.hasPendingAudio) return false;
+    if (!this.transcriptionSession || !this.hasPendingAudio) return false;
     try {
-      const paddingSamples =
-        MIN_OPENAI_COMMIT_AUDIO_SAMPLES - this.pendingAudioSamples;
-      if (paddingSamples > 0) {
-        this.openAiSocket.send(
-          JSON.stringify({
-            type: "input_audio_buffer.append",
-            audio: createSilentPcm16Base64(paddingSamples),
-          }),
-        );
+      if (this.transcriptionSession.provider === "openai") {
+        const paddingSamples =
+          MIN_OPENAI_COMMIT_AUDIO_SAMPLES - this.pendingAudioSamples;
+        if (paddingSamples > 0) {
+          this.transcriptionSession.appendAudio(
+            createSilentPcm16Base64(paddingSamples),
+          );
+        }
       }
-      this.openAiSocket.send(
-        JSON.stringify({ type: "input_audio_buffer.commit" }),
-      );
+      this.transcriptionSession.commitAudio();
       this.speakerAttribution.enqueueCommit(speaker);
       this.hasPendingAudio = false;
       this.pendingAudioSamples = 0;
       return true;
     } catch {
-      void this.handleOpenAiFailure(failureMessage);
+      void this.handleTranscriptionFailure(failureMessage);
       return false;
     }
   }
 
   private clearAudio(viewer: Viewer): void {
-    if (!this.canRelayAudio(viewer) || !this.openAiSocket) return;
+    if (!this.canRelayAudio(viewer) || !this.transcriptionSession) return;
     if (this.hasPendingAudio && this.latestSpeaker) {
-      this.commitOpenAiBuffer(
+      this.commitTranscriptionBuffer(
         this.latestSpeaker,
         "Transcript audio commit failed.",
       );
       return;
     }
     try {
-      this.openAiSocket.send(
-        JSON.stringify({ type: "input_audio_buffer.clear" }),
-      );
+      this.transcriptionSession.clearAudio();
     } catch {
-      void this.handleOpenAiFailure("Transcript audio clear failed.");
+      void this.handleTranscriptionFailure("Transcript audio clear failed.");
       return;
     }
     this.hasPendingAudio = false;
@@ -789,7 +844,7 @@ export class TranscriptRoom {
     return true;
   }
 
-  private async connectOpenAi(options: {
+  private async connectTranscriptionProvider(options: {
     apiKey: string;
     transcriptModel: string;
     language: string;
@@ -797,88 +852,30 @@ export class TranscriptRoom {
     locale: string;
     localizationPrompt?: string;
   }): Promise<void> {
-    this.closeOpenAi();
-    const response = await fetch(
-      realtimeEndpoint(this.env),
-      {
-        headers: {
-          Authorization: `Bearer ${options.apiKey}`,
-          Upgrade: "websocket",
-        },
+    this.closeTranscriptionProvider();
+    this.transcriptionSession = await connectLiveTranscriptionProvider({
+      env: this.env,
+      ...options,
+      callbacks: {
+        onCommitted: (itemId) => this.handleTranscriptItemCommitted(itemId),
+        onDelta: (itemId, delta) => this.applyTranscriptDelta(itemId, delta),
+        onFinal: (itemId, transcript) =>
+          this.applyTranscriptFinal(itemId, transcript),
+        onFailure: (message) => this.handleTranscriptionFailure(message),
       },
-    );
-    const socket = response.webSocket;
-    if (!socket) {
-      throw new Error(
-        `Realtime transcription connection failed (${response.status}).`,
-      );
-    }
-
-    socket.accept();
-    const generation = this.openAiGeneration + 1;
-    this.openAiGeneration = generation;
-    this.openAiSocket = socket;
-    socket.addEventListener("message", (event) => {
-      if (!this.isCurrentOpenAiSocket(socket, generation)) return;
-      void this.handleOpenAiEvent(String(event.data ?? ""));
     });
-    socket.addEventListener("close", () => {
-      if (!this.isCurrentOpenAiSocket(socket, generation)) return;
-      if (
-        this.session?.status === "live" ||
-        this.session?.status === "starting"
-      ) {
-        void this.handleOpenAiFailure("Transcription model disconnected.");
-      }
-    });
-    socket.addEventListener("error", () => {
-      if (!this.isCurrentOpenAiSocket(socket, generation)) return;
-      void this.handleOpenAiFailure("Transcription model connection errored.");
-    });
-
-    const transcription = buildRealtimeTranscriptionConfig({
-      model: options.transcriptModel,
-      language: options.language,
-      delay: options.delay,
-      locale: options.locale,
-      localizationPrompt: options.localizationPrompt,
-    });
-
-    socket.send(
-      JSON.stringify({
-        type: "session.update",
-        session: {
-          type: "transcription",
-          audio: {
-            input: {
-              format: {
-                type: "audio/pcm",
-                rate: 24000,
-              },
-              transcription,
-              turn_detection: null,
-            },
-          },
-        },
-      }),
-    );
   }
 
-  private closeOpenAi(): void {
-    const socket = this.openAiSocket;
-    this.openAiGeneration += 1;
-    this.openAiSocket = null;
-    this.resetOpenAiAudioState();
+  private closeTranscriptionProvider(): void {
+    const session = this.transcriptionSession;
+    this.transcriptionSession = null;
+    this.resetTranscriptionAudioState();
     try {
-      socket?.close();
+      session?.close();
     } catch {}
   }
 
-  private isCurrentOpenAiSocket(socket: WebSocket, generation: number): boolean {
-    return this.openAiSocket === socket && this.openAiGeneration === generation;
-  }
-
-  private resetOpenAiAudioState(): void {
+  private resetTranscriptionAudioState(): void {
     const hadPartials = this.partialSegments.size > 0;
     this.partialSegments.clear();
     this.speakerAttribution.reset();
@@ -890,40 +887,14 @@ export class TranscriptRoom {
     }
   }
 
-  private async handleOpenAiEvent(raw: string): Promise<void> {
-    const parsed = safeJsonParse(raw);
-    if (!parsed || typeof parsed !== "object") return;
-    const event = parsed as OpenAiRealtimeEvent;
-    if (event.type === "error") {
-      await this.handleOpenAiFailure(
-        event.error?.message || "Realtime transcription error.",
-      );
-      return;
-    }
-    if (event.type === "input_audio_buffer.committed" && event.item_id) {
-      const speaker = this.speakerAttribution.bindCommittedItem(event.item_id);
-      if (speaker) {
-        this.reassignSegmentSpeaker(event.item_id, speaker);
-      }
-      return;
-    }
-    if (
-      event.type === "conversation.item.input_audio_transcription.delta" &&
-      event.item_id &&
-      event.delta
-    ) {
-      this.applyTranscriptDelta(event.item_id, event.delta);
-      return;
-    }
-    if (
-      event.type === "conversation.item.input_audio_transcription.completed" &&
-      event.item_id
-    ) {
-      void this.applyTranscriptFinal(event.item_id, event.transcript || "");
+  private handleTranscriptItemCommitted(itemId: string): void {
+    const speaker = this.speakerAttribution.bindCommittedItem(itemId);
+    if (speaker) {
+      this.reassignSegmentSpeaker(itemId, speaker);
     }
   }
 
-  private async handleOpenAiFailure(message: string): Promise<void> {
+  private async handleTranscriptionFailure(message: string): Promise<void> {
     const redactedMessage = redactSensitiveText(message);
     this.broadcast({
       type: "error",
@@ -1100,9 +1071,9 @@ export class TranscriptRoom {
   }
 
   private markTakeoverNeeded(error: string): void {
-    this.closeOpenAi();
-    this.apiKey = null;
-    this.resetOpenAiAudioState();
+    this.closeTranscriptionProvider();
+    this.responseApiKey = null;
+    this.resetTranscriptionAudioState();
     this.audioPaused = false;
     if (this.minutesTimer !== null) {
       clearTimeout(this.minutesTimer);
@@ -1169,7 +1140,7 @@ export class TranscriptRoom {
   // Debounced auto-refresh: regenerate after the room is quiet for the quiet
   // window, but never wait longer than the hard cap during continuous talk.
   private scheduleMinutes(): void {
-    if (!this.apiKey || this.segments.length === 0) return;
+    if (!this.responseApiKey || this.segments.length === 0) return;
     if (!this.hasAiMinutes && !this.hasEnoughContentForMinutes()) return;
     if (this.minutesGenerating) {
       this.minutesRerunRequested = true;
@@ -1201,7 +1172,7 @@ export class TranscriptRoom {
   }
 
   private async regenerateMinutes(): Promise<void> {
-    if (!this.apiKey || this.segments.length === 0 || !this.session) {
+    if (!this.responseApiKey || this.segments.length === 0 || !this.session) {
       this.minutesDirtySince = 0;
       this.setMinutesStatus("idle");
       return;
@@ -1230,7 +1201,7 @@ export class TranscriptRoom {
     try {
       const minutes = await generateMinutes({
         env: this.env,
-        apiKey: this.apiKey,
+        apiKey: this.responseApiKey,
         model: this.session.qaModel,
         transcript,
         fallback,
@@ -1270,7 +1241,7 @@ export class TranscriptRoom {
       this.sendError(viewer, "You cannot ask transcript questions.");
       return;
     }
-    if (!this.apiKey || !this.session) {
+    if (!this.responseApiKey || !this.session) {
       this.sendError(viewer, "Transcript AI is waiting for a controller key.");
       return;
     }
@@ -1292,7 +1263,7 @@ export class TranscriptRoom {
       let answer = "";
       for await (const delta of streamQuestionAnswer({
         env: this.env,
-        apiKey: this.apiKey,
+        apiKey: this.responseApiKey,
         model,
         question,
         segments: [
@@ -1379,10 +1350,10 @@ export class TranscriptRoom {
   }
 
   private resetInMemorySession(roomId: string, qaModel = DEFAULT_QA_MODEL): void {
-    this.closeOpenAi();
-    this.apiKey = null;
+    this.closeTranscriptionProvider();
+    this.responseApiKey = null;
     this.segments = [];
-    this.resetOpenAiAudioState();
+    this.resetTranscriptionAudioState();
     this.resetMinutesScheduler();
     this.audioPaused = false;
     this.sequence = 0;

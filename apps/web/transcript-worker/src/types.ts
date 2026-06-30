@@ -25,6 +25,10 @@ export interface Env {
   OPENAI_REALTIME_URL?: string;
   OPENAI_RESPONSES_URL?: string;
   CLOUDFLARE_AI_GATEWAY_OPENAI_URL?: string;
+  SARVAM_API_KEY?: string;
+  SARVAM_STT_WS_URL?: string;
+  TRANSCRIPT_SARVAM_LANGUAGE_CODE?: string;
+  TRANSCRIPT_SARVAM_MODE?: string;
 }
 
 export type TranscriptTokenPayload = {
@@ -71,6 +75,7 @@ export type ClientEnvelope =
   | {
       type: "session.start" | "session.takeover";
       apiKey?: string;
+      assistantApiKey?: string;
       transcriptModel?: string;
       qaModel?: string;
       transportMode?: TranscriptTransportMode;
@@ -98,14 +103,3 @@ export type SessionStartEnvelope = Extract<
 >;
 
 export type QaAskEnvelope = Extract<ClientEnvelope, { type: "qa.ask" }>;
-
-export type OpenAiRealtimeEvent = {
-  type?: string;
-  item_id?: string;
-  previous_item_id?: string;
-  delta?: string;
-  transcript?: string;
-  error?: {
-    message?: string;
-  };
-};

@@ -585,6 +585,38 @@ export class Room {
     }
   }
 
+  replaceScreenShareProducerForUser(
+    producerId: string,
+    userId: string,
+  ): boolean {
+    const entry = this.producerIndex.get(producerId);
+    if (
+      !entry ||
+      entry.system ||
+      entry.userId !== userId ||
+      entry.type !== "screen" ||
+      entry.producer.kind !== "video"
+    ) {
+      this.clearScreenShareProducer(producerId);
+      return false;
+    }
+
+    this.clearScreenShareProducer(producerId);
+    this.removeProducerIndexById(producerId, entry.producer);
+    const owner = this.clients.get(userId);
+    const screenAudioProducer = owner?.getProducer("audio", "screen");
+    if (screenAudioProducer && screenAudioProducer.id !== producerId) {
+      this.removeProducerIndexById(screenAudioProducer.id, screenAudioProducer);
+      try {
+        screenAudioProducer.close();
+      } catch {}
+    }
+    try {
+      entry.producer.close();
+    } catch {}
+    return true;
+  }
+
   private producerInfoFromIndexEntry(entry: ProducerIndexEntry): ProducerInfo {
     return {
       producerId: entry.producer.id,
