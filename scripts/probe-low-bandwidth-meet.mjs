@@ -275,6 +275,15 @@ const expectedPublishScreenAudioOpusMaxAverageBitrate =
   });
 const minCrispReceiveWebcamWidth = 300;
 const minCrispReceiveWebcamHeight = 160;
+const adaptiveNetworkProfiles = new Set(["good", "fair", "poor", "emergency"]);
+
+const extractAdaptiveNetworkProfile = (signature) => {
+  if (typeof signature !== "string") return null;
+  return (
+    signature.split(":").find((part) => adaptiveNetworkProfiles.has(part)) ??
+    null
+  );
+};
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -1645,9 +1654,9 @@ const validateFinalSnapshot = (snapshot, { consoleEvents = [] } = {}) => {
   const adaptivePublish = snapshot.adaptivePublish;
   const webcamEncodings = adaptivePublish?.videoEncodings ?? [];
   const webcamProfile =
-    adaptivePublish?.lastAppliedProfiles?.webcam?.split(":").at(-1) ?? null;
+    extractAdaptiveNetworkProfile(adaptivePublish?.lastAppliedProfiles?.webcam);
   const audioProfile =
-    adaptivePublish?.lastAppliedProfiles?.audio?.split(":").at(-1) ?? null;
+    extractAdaptiveNetworkProfile(adaptivePublish?.lastAppliedProfiles?.audio);
   const audioProducer = adaptivePublish?.audioProducer ?? null;
   const audioOpusCodec = summarizeProducerOpusCodec(audioProducer);
   const webcamVideoCodec = summarizeProducerPrimaryVideoCodec(
@@ -2879,12 +2888,13 @@ const validateScreenPublishSnapshot = (
   const network = snapshot.network;
   const adaptivePublish = snapshot.adaptivePublish;
   const screenProfile =
-    adaptivePublish?.lastAppliedProfiles?.screen?.split(":").at(-1) ?? null;
+    extractAdaptiveNetworkProfile(adaptivePublish?.lastAppliedProfiles?.screen);
   const screenAudioProfile =
-    adaptivePublish?.lastAppliedProfiles?.screenAudio?.split(":").at(-1) ??
-    null;
+    extractAdaptiveNetworkProfile(
+      adaptivePublish?.lastAppliedProfiles?.screenAudio,
+    );
   const audioProfile =
-    adaptivePublish?.lastAppliedProfiles?.audio?.split(":").at(-1) ?? null;
+    extractAdaptiveNetworkProfile(adaptivePublish?.lastAppliedProfiles?.audio);
   const screenEncodings = adaptivePublish?.screenEncodings ?? [];
   const screenAudioEncodings = adaptivePublish?.screenAudioEncodings ?? [];
   const audioEncodings = adaptivePublish?.audioEncodings ?? [];
@@ -3617,9 +3627,9 @@ const validateTransitionSnapshot = (
   const network = snapshot.network;
   const adaptivePublish = snapshot.adaptivePublish;
   const webcamProfile =
-    adaptivePublish?.lastAppliedProfiles?.webcam?.split(":").at(-1) ?? null;
+    extractAdaptiveNetworkProfile(adaptivePublish?.lastAppliedProfiles?.webcam);
   const audioProfile =
-    adaptivePublish?.lastAppliedProfiles?.audio?.split(":").at(-1) ?? null;
+    extractAdaptiveNetworkProfile(adaptivePublish?.lastAppliedProfiles?.audio);
   const activeWebcamMaxBitrate = Math.max(
     0,
     ...(adaptivePublish?.videoEncodings ?? [])

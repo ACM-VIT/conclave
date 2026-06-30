@@ -2525,6 +2525,11 @@ assertIncludes(
   "/mediapipe/models/",
   "low-bandwidth browser probe treats MediaPipe model fetches as heavy resources",
 );
+assertRegex(
+  "webLowBandwidthProbe",
+  /adaptiveNetworkProfiles = new Set\(\["good", "fair", "poor", "emergency"\]\)[\s\S]*extractAdaptiveNetworkProfile[\s\S]*adaptivePublish\?\.lastAppliedProfiles\?\.screen\)[\s\S]*expected \$\{expectedPublishAdaptiveProfile\} screen profile/,
+  "web screen publish probe extracts profile from dimension-aware screen signatures",
+);
 assertIncludes(
   "iosWebrtc",
   "audioProducer.updateSenderParameters",
