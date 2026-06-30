@@ -1,11 +1,27 @@
+import { Suspense } from "react";
 import { headers as nextHeaders } from "next/headers";
 import { redirect } from "next/navigation";
 import { auth } from "@/lib/auth";
+import RouteLoadingState from "../components/RouteLoadingState";
 import ScheduleClient from "./schedule-client";
 
-export const runtime = "nodejs";
+export default function SchedulePage() {
+  return (
+    <Suspense
+      fallback={
+        <RouteLoadingState
+          eyebrow="Schedule"
+          title="Loading scheduler"
+          detail="Checking your account and calendar workspace."
+        />
+      }
+    >
+      <ScheduleContent />
+    </Suspense>
+  );
+}
 
-export default async function SchedulePage() {
+async function ScheduleContent() {
   const headers = await nextHeaders();
   const session = await auth.api.getSession({ headers }).catch(() => null);
   if (!session?.user?.id) {
@@ -21,4 +37,3 @@ export default async function SchedulePage() {
     />
   );
 }
-

@@ -430,7 +430,7 @@ struct ChatOverlayView: View {
             let title = gif.title.trimmingCharacters(in: .whitespacesAndNewlines)
             return title.isEmpty ? "GIF" : title
         }
-        let content = message.content.trimmingCharacters(in: .whitespacesAndNewlines)
+        let content = ChatMessagePresentation.content(for: message).trimmingCharacters(in: .whitespacesAndNewlines)
         if content.isEmpty {
             return "Message"
         }
@@ -670,7 +670,7 @@ private struct ChatPreviewRow: View {
                         .foregroundStyle(ACMColors.textMuted)
                         .lineLimit(2)
                 } else {
-                    Text(message.content)
+                    Text(ChatMessagePresentation.content(for: message))
                         .font(ACMFont.trial(12))
                         .foregroundStyle(ACMColors.textMuted)
                         .lineLimit(2)
@@ -967,6 +967,15 @@ private enum ChatMessagePresentation {
         return "Private message"
     }
 
+    static func content(for message: ChatMessage) -> String {
+        let content = message.content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard content.isEmpty,
+              message.userId == ConclaveAssistantChatIdentity.userId else {
+            return message.content
+        }
+        return "Thinking..."
+    }
+
     static func replyDisplayName(for reply: ChatReplyPreview, isFromCurrentUser: Bool) -> String {
         if isFromCurrentUser {
             return "You"
@@ -1085,7 +1094,7 @@ struct ChatBubbleView: View {
                     .frame(maxWidth: 260, alignment: isFromCurrentUser ? .trailing : .leading)
             } else {
                 ChatMessageTextBubble(
-                    content: message.content,
+                    content: ChatMessagePresentation.content(for: message),
                     isFromCurrentUser: isFromCurrentUser,
                     isDirect: message.isDirect
                 )

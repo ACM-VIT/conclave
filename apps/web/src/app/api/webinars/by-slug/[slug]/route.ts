@@ -5,7 +5,6 @@ import {
   resolveSfuUrl,
 } from "@/lib/sfu-admin-auth";
 
-export const runtime = "nodejs";
 
 type RouteContext = {
   params: Promise<{ slug: string }>;
@@ -56,7 +55,7 @@ const buildPublicProjection = (webinar: ScheduledWebinarSnapshot) => ({
 export async function GET(request: Request, context: RouteContext) {
   const { slug } = await context.params;
   const sfuUrl = resolveSfuUrl();
-  const clientId = resolveSfuClientId(request, { fallback: "default" });
+  const clientId = resolveSfuClientId(request);
   const url = `${sfuUrl}/scheduled-webinars/by-slug/${encodeURIComponent(slug)}`;
 
   try {

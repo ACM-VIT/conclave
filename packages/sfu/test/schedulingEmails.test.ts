@@ -142,6 +142,26 @@ describe("scheduling email notifications", () => {
     );
   });
 
+  it("deduplicates reminder messages when the host books with their own email", async () => {
+    const selfBookedMeeting = {
+      ...meeting(),
+      attendeeName: "Ada Host",
+      attendeeEmail: "host@example.com",
+    };
+    const messages = await buildSchedulingReminderEmailMessages({
+      profile: profile(),
+      eventType: eventType(),
+      meeting: selfBookedMeeting,
+      appOrigin: "https://conclave.test",
+    });
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.to.email).toBe("host@example.com");
+    expect(messages[0]?.headers?.["X-Conclave-Email-Type"]).toBe(
+      "booking-attendee-reminder",
+    );
+  });
+
   it("sends one reminder inside the reminder window for non-short-notice bookings", () => {
     const booked = meeting();
     const leadMs = 30 * 60 * 1000;

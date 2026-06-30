@@ -7,7 +7,6 @@ import {
 } from "@/lib/scheduling";
 import { requireSfuSessionUser } from "@/lib/sfu-user-auth";
 
-export const runtime = "nodejs";
 
 const STATE_COOKIE = "conclave_google_calendar_state";
 const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";

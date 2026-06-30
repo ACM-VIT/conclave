@@ -1,6 +1,11 @@
 import { betterAuth } from "better-auth";
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import { isLocalDevAuthRuntimeEnabled } from "@/lib/dev-auth";
+import {
+  getAuthBaseUrl,
+  getPublicSiteUrl,
+  normalizeOrigin,
+} from "@/lib/site-url";
 
 const appleAppBundleIdentifier =
   process.env.APPLE_APP_BUNDLE_IDENTIFIER ||
@@ -43,41 +48,21 @@ const googleJwks = createRemoteJWKSet(
   new URL("https://www.googleapis.com/oauth2/v3/certs")
 );
 
-const firstNonEmpty = (...values: Array<string | undefined>): string | undefined => {
-  for (const value of values) {
-    const normalized = value?.trim();
-    if (normalized) return normalized;
-  }
-  return undefined;
-};
-
 const parseCsv = (value: string | undefined): string[] =>
   (value || "")
     .split(",")
     .map((entry) => entry.trim())
     .filter(Boolean);
 
-const originFromUrl = (value: string | undefined): string | null => {
-  if (!value?.trim()) return null;
-  try {
-    const withProtocol = value.includes("://") ? value : `https://${value}`;
-    return new URL(withProtocol).origin;
-  } catch {
-    return null;
-  }
-};
+const authBaseURL = getAuthBaseUrl();
 
 const configuredAppOrigins = [
-  firstNonEmpty(
-    process.env.BETTER_AUTH_URL,
-    process.env.BETTER_AUTH_BASE_URL,
-    process.env.NEXT_PUBLIC_APP_URL,
-  ),
-  process.env.NEXT_PUBLIC_SITE_URL,
+  authBaseURL,
+  getPublicSiteUrl(),
   process.env.VERCEL_URL,
   ...parseCsv(process.env.BETTER_AUTH_TRUSTED_ORIGINS),
 ]
-  .map(originFromUrl)
+  .map(normalizeOrigin)
   .filter((origin): origin is string => Boolean(origin));
 
 const resolveTrustedOrigins = (): string[] => {
@@ -95,15 +80,9 @@ const resolveTrustedOrigins = (): string[] => {
 
 const AUTH_SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 365;
 const isDevAuthEnabled = isLocalDevAuthRuntimeEnabled();
-const authBaseURL = firstNonEmpty(
-  process.env.BETTER_AUTH_URL,
-  process.env.BETTER_AUTH_BASE_URL,
-  process.env.NEXT_PUBLIC_APP_URL,
-  process.env.NEXT_PUBLIC_SITE_URL,
-);
 
 export const auth = betterAuth({
-  ...(authBaseURL ? { baseURL: authBaseURL } : {}),
+  baseURL: authBaseURL,
   session: {
     expiresIn: AUTH_SESSION_MAX_AGE_SECONDS,
     cookieCache: {
@@ -157,7 +136,7 @@ export const auth = betterAuth({
     ...vercelProvider,
   },
   trustedOrigins: resolveTrustedOrigins,
-  
+
   advanced: {
     useSecureCookies: process.env.NODE_ENV === "production",
   },

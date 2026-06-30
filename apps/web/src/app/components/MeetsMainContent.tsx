@@ -173,6 +173,7 @@ interface MeetsMainContentProps {
   endRoomForEveryone?: () => Promise<boolean> | boolean;
   onGoHome?: () => void;
   onStartNewMeeting?: () => void;
+  onEnterMeetingStart?: (action: "new" | "join") => void;
   isParticipantsOpen: boolean;
   setIsParticipantsOpen: Dispatch<SetStateAction<boolean>>;
   pendingUsers: Map<string, string>;
@@ -218,7 +219,6 @@ interface MeetsMainContentProps {
   isBrowserAudioMuted: boolean;
   onToggleBrowserAudio: () => void;
   meetError?: MeetError | null;
-  onDismissMeetError?: () => void;
   browserAudioNeedsGesture: boolean;
   onBrowserAudioAutoplayBlocked: () => void;
   isVoiceAgentRunning?: boolean;
@@ -227,7 +227,6 @@ interface MeetsMainContentProps {
   onStartVoiceAgent?: () => void;
   onStopVoiceAgent?: () => void;
   onClearVoiceAgentError?: () => void;
-  onRetryMedia?: () => void;
   isPopoutActive?: boolean;
   isPopoutSupported?: boolean;
   onOpenPopout?: () => void;
@@ -424,6 +423,7 @@ export default function MeetsMainContent({
   endRoomForEveryone,
   onGoHome,
   onStartNewMeeting,
+  onEnterMeetingStart,
   isParticipantsOpen,
   setIsParticipantsOpen,
   pendingUsers,
@@ -472,8 +472,6 @@ export default function MeetsMainContent({
   onStopVoiceAgent,
   onClearVoiceAgentError,
   meetError,
-  onDismissMeetError,
-  onRetryMedia,
   isPopoutActive,
   isPopoutSupported,
   onOpenPopout,
@@ -1560,11 +1558,10 @@ export default function MeetsMainContent({
             onUserChange={onUserChange}
             onIsAdminChange={onIsAdminChange}
             meetError={meetError}
-            onDismissMeetError={onDismissMeetError}
-            onRetryMedia={onRetryMedia}
             videoEffects={videoEffects}
             onVideoEffectsChange={onVideoEffectsChange}
             onPrejoinMediaCommit={onPrejoinMediaCommit}
+            onEnterStart={onEnterMeetingStart}
           />
         )
       ) : isWebinarAttendee ? (

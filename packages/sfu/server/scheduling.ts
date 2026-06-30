@@ -432,6 +432,40 @@ export const getProfileByUser = (
   return id ? store.profilesById.get(id) ?? null : null;
 };
 
+export const moveSchedulingProfileToClient = (
+  store: SchedulingStore,
+  profile: SchedulingProfile,
+  clientId: string,
+): SchedulingProfile => {
+  const nextClientId = clientId.trim();
+  if (!nextClientId || profile.clientId === nextClientId) return profile;
+
+  store.profileIdByUserKey.delete(userKey(profile.clientId, profile.userId));
+  store.profileIdByUsername.delete(
+    `${profile.clientId}:${profile.username.toLowerCase()}`,
+  );
+
+  profile.clientId = nextClientId;
+  profile.username = uniqueUsername(store, nextClientId, profile.username, profile.id);
+  profile.updatedAt = Date.now();
+  registerProfile(store, profile);
+
+  for (const eventType of store.eventTypesById.values()) {
+    if (eventType.profileId !== profile.id) continue;
+    eventType.clientId = nextClientId;
+    eventType.updatedAt = profile.updatedAt;
+    registerEventType(store, eventType);
+  }
+
+  const calendar = store.calendarByProfileId.get(profile.id);
+  if (calendar) {
+    calendar.clientId = nextClientId;
+    calendar.updatedAt = profile.updatedAt;
+  }
+
+  return profile;
+};
+
 export const getPublicProfile = (
   store: SchedulingStore,
   clientId: string,
@@ -1063,7 +1097,7 @@ export const createSqliteSchedulingPersistence = (
           upsert.run(
             "availability",
             entry.profileId,
-            profile?.clientId ?? "default",
+            profile?.clientId ?? "conclave",
             Date.now(),
             JSON.stringify(entry),
           );

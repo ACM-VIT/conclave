@@ -3,6 +3,7 @@
 import { useCallback } from "react";
 import MeetsClient from "./meets-client";
 import type { JoinMode } from "./lib/types";
+import { resolveBrowserSfuClientId } from "@/lib/sfu-client-id";
 
 const reactionAssets = [
   "aura.gif",
@@ -21,7 +22,7 @@ const readError = async (response: Response) => {
   return response.statusText || "Request failed";
 };
 
-const defaultClientId = process.env.NEXT_PUBLIC_SFU_CLIENT_ID || "public";
+const defaultClientId = resolveBrowserSfuClientId();
 const normalizeClientId = (value: string | undefined): string | null => {
   const normalized = value?.trim();
   if (!normalized) return null;
@@ -61,7 +62,8 @@ export default function MeetsClientPage({
   const resolvedIsAdmin = isAdmin;
   const resolvedCanGhostJoin = canGhostJoin;
   const resolvedClientId = normalizeClientId(sfuClientId) || defaultClientId;
-  const isPublicClient = resolvedClientId === "public";
+  const usesRoomRouting =
+    resolvedClientId === "conclave" || resolvedClientId === "public";
 
   const getJoinInfo = useCallback(
     async (
@@ -148,13 +150,13 @@ export default function MeetsClientPage({
   }, [resolvedClientId]);
 
   const resolvedInitialRoomId =
-    initialRoomId ?? (isPublicClient ? "" : "default-room");
+    initialRoomId ?? (usesRoomRouting ? "" : "default-room");
 
   return (
     <div className="w-full h-full min-h-[100dvh] bg-[#0a0a0b] overflow-auto relative">
       <MeetsClient
         initialRoomId={resolvedInitialRoomId}
-        enableRoomRouting={isPublicClient}
+        enableRoomRouting={usesRoomRouting}
         forceJoinOnly={forceJoinOnly}
         allowGhostMode={true}
         bypassMediaPermissions={bypassMediaPermissions}

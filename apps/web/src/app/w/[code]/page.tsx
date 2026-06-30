@@ -1,4 +1,6 @@
+import { Suspense } from "react";
 import { headers as nextHeaders } from "next/headers";
+import RouteLoadingState from "../../components/RouteLoadingState";
 import { sanitizeWebinarLinkCode } from "../../lib/utils";
 import {
   resolveSfuClientId,
@@ -20,7 +22,7 @@ const lookupScheduledWebinar = async (
   const sfuUrl = resolveSfuUrl();
   const headers = await nextHeaders();
   const fakeRequest = new Request("http://internal/lookup", { headers });
-  const clientId = resolveSfuClientId(fakeRequest, { fallback: "default" });
+  const clientId = resolveSfuClientId(fakeRequest);
 
   try {
     const response = await fetch(
@@ -66,7 +68,23 @@ const lookupScheduledWebinar = async (
   }
 };
 
-export default async function WebinarRoomPage({ params }: WebinarRoomPageProps) {
+export default function WebinarRoomPage({ params }: WebinarRoomPageProps) {
+  return (
+    <Suspense
+      fallback={
+        <RouteLoadingState
+          eyebrow="Webinar"
+          title="Opening webinar"
+          detail="Resolving the event details and attendee lobby."
+        />
+      }
+    >
+      <WebinarRoomContent params={params} />
+    </Suspense>
+  );
+}
+
+async function WebinarRoomContent({ params }: WebinarRoomPageProps) {
   const { code } = await params;
 
   const rawCode = typeof code === "string" ? code : "";

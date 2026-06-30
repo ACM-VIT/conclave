@@ -35,6 +35,18 @@ const nextConfig: NextConfig = {
       "y-protocols": yProtocolsTurbopackAlias,
     },
   },
+  experimental: {
+    turbopackFileSystemCacheForBuild: true,
+  },
+  async redirects() {
+    return [
+      {
+        source: "/favicon.ico",
+        destination: "/favicon.svg",
+        permanent: true,
+      },
+    ];
+  },
   async headers() {
     return [
       {

@@ -362,22 +362,26 @@ const buildSchedulingEmailMessages = async (
         })
       : null;
 
-  return [
-    {
-      to: attendee,
-      replyTo: host,
-      subject: attendeeCopy.subject,
-      text: attendeeEmail.text,
-      html: attendeeEmail.html,
-      headers: {
-        "X-Conclave-Email-Type":
-          purpose === "reminder"
-            ? "booking-attendee-reminder"
-            : "booking-attendee-confirmation",
-        "X-Conclave-Meeting-Id": input.meeting.id,
-      },
-      ...(icsAttachment ? { attachments: [icsAttachment] } : {}),
+  const sameRecipient = attendee.email === host.email;
+  const attendeeMessage: SchedulingEmailMessage = {
+    to: attendee,
+    ...(sameRecipient ? {} : { replyTo: host }),
+    subject: attendeeCopy.subject,
+    text: attendeeEmail.text,
+    html: attendeeEmail.html,
+    headers: {
+      "X-Conclave-Email-Type":
+        purpose === "reminder"
+          ? "booking-attendee-reminder"
+          : "booking-attendee-confirmation",
+      "X-Conclave-Meeting-Id": input.meeting.id,
     },
+    ...(icsAttachment ? { attachments: [icsAttachment] } : {}),
+  };
+  if (sameRecipient) return [attendeeMessage];
+
+  return [
+    attendeeMessage,
     {
       to: host,
       replyTo: attendee,
