@@ -116,6 +116,9 @@ function PresentationLayout({
         scheduleReplay();
       }
     };
+    const handleWindowChange = () => {
+      scheduleReplay();
+    };
 
     if (videoTrack) {
       videoTrack.addEventListener("unmute", handleTrackUnmuted);
@@ -124,7 +127,12 @@ function PresentationLayout({
     video.addEventListener("loadeddata", scheduleReplay);
     video.addEventListener("canplay", scheduleReplay);
     video.addEventListener("stalled", scheduleReplay);
+    video.addEventListener("waiting", scheduleReplay);
     document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("focus", handleWindowChange);
+    window.addEventListener("pageshow", handleWindowChange);
+    window.addEventListener("resize", handleWindowChange);
+    window.addEventListener("orientationchange", handleWindowChange);
 
     return () => {
       cancelled = true;
@@ -135,7 +143,12 @@ function PresentationLayout({
       video.removeEventListener("loadeddata", scheduleReplay);
       video.removeEventListener("canplay", scheduleReplay);
       video.removeEventListener("stalled", scheduleReplay);
+      video.removeEventListener("waiting", scheduleReplay);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("focus", handleWindowChange);
+      window.removeEventListener("pageshow", handleWindowChange);
+      window.removeEventListener("resize", handleWindowChange);
+      window.removeEventListener("orientationchange", handleWindowChange);
       playbackRecovery.clear();
       if (video.srcObject === presentationStream) {
         video.srcObject = null;

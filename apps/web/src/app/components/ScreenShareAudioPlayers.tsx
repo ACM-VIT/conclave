@@ -2,6 +2,7 @@
 
 import { memo, useCallback, useEffect, useRef } from "react";
 import { useMeetVolume } from "../hooks/useMeetVolume";
+import { createPlaybackRecoveryScheduler } from "../lib/playback-recovery";
 import type { Participant } from "../lib/types";
 
 interface ScreenShareAudioPlayersProps {
@@ -71,6 +72,7 @@ function ScreenShareAudioPlayer({
   playbackAttemptToken,
 }: ScreenShareAudioPlayerProps) {
   const audioRef = useRef<HTMLAudioElement>(null);
+  const autoplayBlockedRef = useRef(false);
   const { meetVolume } = useMeetVolume();
 
   const attemptPlay = useCallback(() => {
@@ -78,11 +80,15 @@ function ScreenShareAudioPlayer({
     if (!audio || !stream) return;
     audio.play()
       .then(() => {
+        autoplayBlockedRef.current = false;
         onPlaybackStarted?.();
       })
       .catch((err) => {
         if (err.name === "NotAllowedError") {
-          onAutoplayBlocked?.();
+          if (!autoplayBlockedRef.current) {
+            autoplayBlockedRef.current = true;
+            onAutoplayBlocked?.();
+          }
           return;
         }
         if (err.name !== "AbortError") {
@@ -96,15 +102,70 @@ function ScreenShareAudioPlayer({
     if (!audio) return;
 
     if (!stream) {
+      autoplayBlockedRef.current = false;
       if (audio.srcObject) {
         audio.srcObject = null;
       }
       return;
     }
 
-    audio.srcObject = stream;
-    attemptPlay();
+    autoplayBlockedRef.current = false;
+    audio.autoplay = true;
+    audio.defaultMuted = false;
+    audio.muted = false;
+
+    if (audio.srcObject !== stream) {
+      audio.srcObject = null;
+      audio.srcObject = stream;
+    }
+
+    let cancelled = false;
+    const playbackRecovery = createPlaybackRecoveryScheduler({
+      attemptPlayback: () => {
+        if (cancelled) return;
+        attemptPlay();
+      },
+    });
+    const scheduleReplay = playbackRecovery.schedule;
+
+    scheduleReplay();
+
+    const audioTrack = stream.getAudioTracks()[0];
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        scheduleReplay();
+      }
+    };
+    const handleForegroundReplay = () => {
+      scheduleReplay();
+    };
+    const handleUserGesture = () => {
+      if (!autoplayBlockedRef.current) return;
+      scheduleReplay();
+    };
+
+    audioTrack?.addEventListener("unmute", scheduleReplay);
+    audio.addEventListener("loadedmetadata", scheduleReplay);
+    audio.addEventListener("loadeddata", scheduleReplay);
+    audio.addEventListener("canplay", scheduleReplay);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("focus", handleForegroundReplay);
+    window.addEventListener("pageshow", handleForegroundReplay);
+    window.addEventListener("pointerdown", handleUserGesture, true);
+    window.addEventListener("keydown", handleUserGesture, true);
+
     return () => {
+      cancelled = true;
+      audioTrack?.removeEventListener("unmute", scheduleReplay);
+      audio.removeEventListener("loadedmetadata", scheduleReplay);
+      audio.removeEventListener("loadeddata", scheduleReplay);
+      audio.removeEventListener("canplay", scheduleReplay);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("focus", handleForegroundReplay);
+      window.removeEventListener("pageshow", handleForegroundReplay);
+      window.removeEventListener("pointerdown", handleUserGesture, true);
+      window.removeEventListener("keydown", handleUserGesture, true);
+      playbackRecovery.clear();
       if (audio.srcObject === stream) {
         audio.srcObject = null;
       }

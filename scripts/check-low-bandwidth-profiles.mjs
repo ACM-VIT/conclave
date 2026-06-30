@@ -142,6 +142,11 @@ assertRegex(
   "web screen audio playback follows the active screen-share owner",
 );
 assertRegex(
+  "webScreenShareAudioPlayers",
+  /createPlaybackRecoveryScheduler[\s\S]*audio\.srcObject = null;[\s\S]*audio\.srcObject = stream;[\s\S]*document\.addEventListener\("visibilitychange", handleVisibilityChange\)[\s\S]*window\.addEventListener\("pageshow", handleForegroundReplay\)[\s\S]*window\.addEventListener\("pointerdown", handleUserGesture, true\)/,
+  "web screen audio retries playback after foregrounding and autoplay gestures",
+);
+assertRegex(
   "webMeetsMainContent",
   /<ScreenShareAudioPlayers[\s\S]*participants=\{participants\}[\s\S]*currentUserId=\{currentUserId\}[\s\S]*activeScreenShareId=\{activeScreenShareId\}/,
   "web screen audio player receives active screen-share id",
@@ -508,6 +513,16 @@ assertRegex(
   "webGridLayout",
   /const OverflowGalleryTile = memo\(function OverflowGalleryTile[\s\S]*createPlaybackRecoveryScheduler[\s\S]*shouldAttemptAnimationFrameReplay[\s\S]*video\.addEventListener\("stalled", scheduleReplay\)[\s\S]*document\.addEventListener\("visibilitychange", handleVisibilityChange\)[\s\S]*window\.addEventListener\("orientationchange", handleWindowChange\)/,
   "web overflow gallery remote video keeps decoder playback live",
+);
+assertRegex(
+  "webPresentationLayout",
+  /presentationVideoRef[\s\S]*createPlaybackRecoveryScheduler[\s\S]*shouldAttemptAnimationFrameReplay[\s\S]*video\.addEventListener\("stalled", scheduleReplay\)[\s\S]*video\.addEventListener\("waiting", scheduleReplay\)[\s\S]*document\.addEventListener\("visibilitychange", handleVisibilityChange\)[\s\S]*window\.addEventListener\("pageshow", handleWindowChange\)[\s\S]*window\.addEventListener\("orientationchange", handleWindowChange\)/,
+  "web presentation stage video retries playback after buffering and foreground resumes",
+);
+assertRegex(
+  "webGridLayout",
+  /const PresentationVideoTile = memo\(function PresentationVideoTile[\s\S]*const showChooser = Boolean\(selfView\)[\s\S]*createPlaybackRecoveryScheduler[\s\S]*shouldAttemptAnimationFrameReplay[\s\S]*video\.addEventListener\("stalled", scheduleReplay\)[\s\S]*video\.addEventListener\("waiting", scheduleReplay\)[\s\S]*document\.addEventListener\("visibilitychange", handleVisibilityChange\)[\s\S]*window\.addEventListener\("pageshow", handleWindowChange\)[\s\S]*window\.addEventListener\("orientationchange", handleWindowChange\)/,
+  "web grid presentation tile retries playback after buffering and foreground resumes",
 );
 assertRegex(
   "webGridLayout",
