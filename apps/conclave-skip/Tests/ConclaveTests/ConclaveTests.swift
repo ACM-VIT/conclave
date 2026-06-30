@@ -5556,6 +5556,13 @@ final class ConclaveTests: XCTestCase {
         XCTAssertTrue(source.contains("clearBeforeAttach = false"))
     }
 
+    func testAndroidMeetingVideoRendererDoesNotClearStableTrackReattachments() throws {
+        let source = try sourceFileContents("Sources/Conclave/Core/WebRTC/VideoView+Skip.swift")
+
+        XCTAssertTrue(source.contains("var clearBeforeAttach = false"))
+        XCTAssertTrue(source.contains("rendererKey: stableRendererKey,\n                clearBeforeAttach: clearBeforeAttach"))
+    }
+
     func testPipTargetSelectionPrefersPresentCandidateWithoutWaitingForVideoTrack() throws {
         XCTAssertEqual(
             PipTargetSelectionPolicy.targetId(

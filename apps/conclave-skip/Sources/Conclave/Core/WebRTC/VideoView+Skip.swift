@@ -324,6 +324,7 @@ struct AndroidVideoView: View {
     var contentMode: VideoContentMode = .fill
     var useOverlaySurface = false
     var rendererKey: Any? = nil
+    var clearBeforeAttach = false
 
     var body: some View {
         let fit = (contentMode == VideoContentMode.fit)
@@ -335,7 +336,8 @@ struct AndroidVideoView: View {
                 mirror: isMirrored,
                 fit: fit,
                 useOverlaySurface: useOverlaySurface,
-                rendererKey: stableRendererKey
+                rendererKey: stableRendererKey,
+                clearBeforeAttach: clearBeforeAttach
             )
             #else
             VideoTrackView(track: nil, mirror: isMirrored, fit: fit)
