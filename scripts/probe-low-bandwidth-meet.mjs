@@ -2882,6 +2882,26 @@ const maxActiveEncodingValue = (encodings, key) =>
       .map((encoding) => Number(encoding[key]) || 0),
   );
 
+const screenShareCaptureBoundsByProfile = {
+  good: { maxWidth: 3840, maxHeight: 2160 },
+  fair: { maxWidth: 2560, maxHeight: 1440 },
+  poor: { maxWidth: 1920, maxHeight: 1080 },
+  emergency: { maxWidth: 1280, maxHeight: 720 },
+};
+
+const getMaxExpectedScreenShareScaleResolutionDownBy = (
+  profile,
+  settings,
+) => {
+  const bounds = screenShareCaptureBoundsByProfile[profile];
+  const width = Number(settings?.width) || null;
+  const height = Number(settings?.height) || null;
+  if (!bounds || width === null || height === null) return null;
+
+  const scale = Math.max(width / bounds.maxWidth, height / bounds.maxHeight, 1);
+  return Number((Math.ceil(scale * 10) / 10).toFixed(1));
+};
+
 const validateScreenPublishSnapshot = (
   snapshot,
   { consoleEvents = [] } = {},
@@ -2905,6 +2925,10 @@ const validateScreenPublishSnapshot = (
   const screenMaxFramerate = maxActiveEncodingValue(
     screenEncodings,
     "maxFramerate",
+  );
+  const screenScaleResolutionDownBy = Math.max(
+    1,
+    maxActiveEncodingValue(screenEncodings, "scaleResolutionDownBy"),
   );
   const screenAudioMaxBitrate = maxActiveEncodingValue(
     screenAudioEncodings,
@@ -2991,6 +3015,19 @@ const validateScreenPublishSnapshot = (
   if (screenProfile !== expectedPublishAdaptiveProfile) {
     errors.push(
       `expected ${expectedPublishAdaptiveProfile} screen profile, got ${screenProfile}`,
+    );
+  }
+  const maxExpectedScreenScale =
+    getMaxExpectedScreenShareScaleResolutionDownBy(
+      expectedPublishAdaptiveProfile,
+      screenProducer?.trackSettings,
+    );
+  if (
+    maxExpectedScreenScale !== null &&
+    screenScaleResolutionDownBy > maxExpectedScreenScale + 0.05
+  ) {
+    errors.push(
+      `screen share was over-downscaled for ${expectedPublishAdaptiveProfile} profile: scale=${screenScaleResolutionDownBy}, expected<=${maxExpectedScreenScale}`,
     );
   }
 
@@ -3123,6 +3160,8 @@ const validateScreenPublishSnapshot = (
       screenVideoCodec,
       screenMaxBitrate,
       screenMaxFramerate,
+      screenScaleResolutionDownBy,
+      screenTrackSettings: screenProducer?.trackSettings ?? null,
       screenAudioMaxBitrate,
       audioMaxBitrate,
       audioOpusCodec,

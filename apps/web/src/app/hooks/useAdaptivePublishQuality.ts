@@ -67,6 +67,7 @@ type PublishProducerDebugSnapshot = {
   paused: boolean;
   trackId: string | null;
   trackReadyState: MediaStreamTrackState | null;
+  trackSettings: Record<string, unknown> | null;
   degradationPreference: RTCDegradationPreference | null;
   codecs: PublishProducerCodecDebugSnapshot[];
   encodings: PublishProducerEncodingDebugSnapshot[];
@@ -187,6 +188,14 @@ const getPublishProducerDebugSnapshot = (
 ): PublishProducerDebugSnapshot | null => {
   if (!producer) return null;
   const parameters = producer.rtpSender?.getParameters();
+  let trackSettings: Record<string, unknown> | null = null;
+  if (producer.track) {
+    try {
+      trackSettings = { ...producer.track.getSettings() };
+    } catch {
+      trackSettings = null;
+    }
+  }
   return {
     id: producer.id,
     kind: producer.kind,
@@ -194,6 +203,7 @@ const getPublishProducerDebugSnapshot = (
     paused: producer.paused,
     trackId: producer.track?.id ?? null,
     trackReadyState: producer.track?.readyState ?? null,
+    trackSettings,
     degradationPreference: parameters?.degradationPreference ?? null,
     codecs:
       producer.rtpParameters.codecs?.map((codec) => ({

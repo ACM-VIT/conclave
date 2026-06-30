@@ -855,6 +855,16 @@ assertRegex(
   "web adaptive screen-share caps are re-applied when captured surface dimensions change",
 );
 assertRegex(
+  "webAdaptivePublishQuality",
+  /trackSettings: Record<string, unknown> \| null[\s\S]*trackSettings = \{ \.\.\.producer\.track\.getSettings\(\) \}[\s\S]*trackSettings,/,
+  "web adaptive publish debug exposes producer track settings for screen-share crispness probes",
+);
+assertRegex(
+  "webLowBandwidthProbe",
+  /screenShareCaptureBoundsByProfile = \{[\s\S]*fair: \{ maxWidth: 2560, maxHeight: 1440 \}[\s\S]*poor: \{ maxWidth: 1920, maxHeight: 1080 \}[\s\S]*emergency: \{ maxWidth: 1280, maxHeight: 720 \}[\s\S]*getMaxExpectedScreenShareScaleResolutionDownBy[\s\S]*screenScaleResolutionDownBy > maxExpectedScreenScale/,
+  "web screen publish probe rejects avoidable screen-share downscaling",
+);
+assertRegex(
   "webScreenShareNetworkProfile",
   /SCREEN_SHARE_OUTGOING_FAIR_BPS = 1500000[\s\S]*SCREEN_SHARE_OUTGOING_POOR_BPS = 550000[\s\S]*SCREEN_SHARE_OUTGOING_EMERGENCY_BPS = 280000[\s\S]*getScreenSharePublishNetworkProfileForAvailableOutgoingBitrate[\s\S]*availableOutgoingBitrateBps <= SCREEN_SHARE_OUTGOING_EMERGENCY_BPS[\s\S]*availableOutgoingBitrateBps <= SCREEN_SHARE_OUTGOING_POOR_BPS[\s\S]*availableOutgoingBitrateBps <= SCREEN_SHARE_OUTGOING_FAIR_BPS/,
   "web screen-share publish caps use outgoing bitrate before full-FPS profile",
