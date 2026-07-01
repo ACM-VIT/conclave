@@ -614,8 +614,13 @@ assertRegex(
 );
 assertRegex(
   "webMeetMedia",
-  /SCREEN_SHARE_OUTBOUND_STALL_SAMPLES_BEFORE_REFRESH = 2[\s\S]*screenProducerTrackRepairInFlightRef[\s\S]*screenOutboundStallStateRef[\s\S]*void producer[\s\S]*\.getStats\(\)[\s\S]*readOutboundVideoProgressSample\(report\)[\s\S]*stalledSamples <[\s\S]*SCREEN_SHARE_OUTBOUND_STALL_SAMPLES_BEFORE_REFRESH[\s\S]*isEncoderLimitedOutboundSample\(sample\)[\s\S]*refreshStalledScreenProducer\(/,
-  "web screen-share outbound sender watchdog refreshes faster after real stats stalls",
+  /MIN_SCREEN_SHARE_OUTBOUND_BYTE_DELTA_FOR_STALL = 8000[\s\S]*hasOutboundScreenShareStallEvidence[\s\S]*byteDelta < MIN_SCREEN_SHARE_OUTBOUND_BYTE_DELTA_FOR_STALL[\s\S]*Static shared documents\/slides can legitimately produce no new encoded[\s\S]*return false;/,
+  "web screen-share outbound sender watchdog ignores static-share quiet stats",
+);
+assertRegex(
+  "webMeetMedia",
+  /screenOutboundStallStateRef\.current[\s\S]*const sample = readOutboundVideoProgressSample\(report\)[\s\S]*stalledSamples =[\s\S]*hasBaseline && hasOutboundScreenShareStallEvidence\(previous, sample\)[\s\S]*stalledSamples <[\s\S]*SCREEN_SHARE_OUTBOUND_STALL_SAMPLES_BEFORE_REFRESH[\s\S]*isEncoderLimitedOutboundSample\(sample\)[\s\S]*refreshStalledScreenProducer\(/,
+  "web screen-share outbound sender watchdog avoids refreshing static shares without real stall evidence",
 );
 assertIncludes(
   "iosWebrtc",

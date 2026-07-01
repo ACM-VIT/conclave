@@ -241,6 +241,7 @@ const CAMERA_OUTBOUND_STALL_SAMPLES_BEFORE_RECOVERY = 3;
 const SCREEN_SHARE_OUTBOUND_STALL_SAMPLES_BEFORE_REFRESH = 2;
 const CAMERA_OUTBOUND_STALL_RECOVERY_COOLDOWN_MS = 10000;
 const MIN_OUTBOUND_VIDEO_BYTE_DELTA_FOR_PROGRESS = 1200;
+const MIN_SCREEN_SHARE_OUTBOUND_BYTE_DELTA_FOR_STALL = 8000;
 const LOCAL_AUDIO_MUTED_RECOVERY_DELAY_MS = 4000;
 const LOCAL_AUDIO_MUTED_RECOVERY_COOLDOWN_MS = 15000;
 
@@ -356,6 +357,39 @@ const hasOutboundVideoProgress = (
     sample.bytes - previous.bytes >= MIN_OUTBOUND_VIDEO_BYTE_DELTA_FOR_PROGRESS
   ) {
     return true;
+  }
+
+  return false;
+};
+
+const hasOutboundScreenShareStallEvidence = (
+  previous: CameraOutboundStallState,
+  sample: OutboundVideoProgressSample,
+): boolean => {
+  const byteDelta =
+    previous.bytes !== null && sample.bytes !== null
+      ? sample.bytes - previous.bytes
+      : null;
+  if (
+    byteDelta === null ||
+    byteDelta < MIN_SCREEN_SHARE_OUTBOUND_BYTE_DELTA_FOR_STALL
+  ) {
+    // Static shared documents/slides can legitimately produce no new encoded
+    // frames and almost no RTP. Do not refresh the sender just because the
+    // screen is quiet.
+    return false;
+  }
+
+  if (previous.frames !== null && sample.frames !== null) {
+    if (sample.frames > previous.frames) return false;
+    if (sample.framesPerSecond !== null && sample.framesPerSecond > 0) {
+      return false;
+    }
+    return true;
+  }
+
+  if (sample.framesPerSecond !== null) {
+    return sample.framesPerSecond <= 0;
   }
 
   return false;
@@ -3480,7 +3514,7 @@ export function useMeetMedia({
           const hasBaseline =
             previous.frames !== null || previous.bytes !== null;
           const stalledSamples =
-            hasBaseline && !hasOutboundVideoProgress(previous, sample)
+            hasBaseline && hasOutboundScreenShareStallEvidence(previous, sample)
               ? previous.stalledSamples + 1
               : 0;
           const nextState: CameraOutboundStallState = {
