@@ -86,6 +86,10 @@ import {
   prewarmVideoEffectsRuntimeDeferred,
 } from "./lib/video-effects-lazy";
 import {
+  getBrowserNetworkInformation,
+  getBrowserNetworkSnapshot,
+} from "./lib/network-information";
+import {
   generateRoomCode,
   isSystemUserId,
   sanitizeInstitutionDisplayName,
@@ -409,6 +413,11 @@ export default function MeetsClient({
   const [viewSettings, setViewSettings] = useState<MeetViewSettings>(
     readStoredMeetViewSettings,
   );
+  const [browserSaveDataMode, setBrowserSaveDataMode] = useState(
+    () => getBrowserNetworkSnapshot().saveData === true,
+  );
+  const effectiveDataSaverMode =
+    viewSettings.dataSaverMode || browserSaveDataMode;
   const uploadAsset: AssetUploadHandler = useMemo(
     () => createAssetUploadHandler(),
     [],
@@ -417,6 +426,19 @@ export default function MeetsClient({
   useEffect(() => {
     writeStoredMeetViewSettings(viewSettings);
   }, [viewSettings]);
+
+  useEffect(() => {
+    const syncBrowserSaveDataMode = () => {
+      setBrowserSaveDataMode(getBrowserNetworkSnapshot().saveData === true);
+    };
+    const connection = getBrowserNetworkInformation();
+
+    syncBrowserSaveDataMode();
+    connection?.addEventListener?.("change", syncBrowserSaveDataMode);
+    return () => {
+      connection?.removeEventListener?.("change", syncBrowserSaveDataMode);
+    };
+  }, []);
 
   useEffect(() => {
     if (guestStorageReady || typeof window === "undefined") return;
@@ -2170,7 +2192,7 @@ export default function MeetsClient({
     setNetworkManagedVideoQuality,
     videoQualityRef: refs.videoQualityRef,
     connectionQualityRef: connectionQualityDebugRef,
-    dataSaverMode: viewSettings.dataSaverMode,
+    dataSaverMode: effectiveDataSaverMode,
     updateVideoQualityRef,
     requestMediaPermissions,
     requestAudioProducerRecovery,
@@ -2710,7 +2732,7 @@ export default function MeetsClient({
     emergencyMode: selfReceiveEmergencyMode,
     availableIncomingBitrateBps: selfConnectionStats.availableIncomingBitrate,
     activeSpeakerId: effectiveActiveSpeakerId,
-    dataSaverMode: viewSettings.dataSaverMode,
+    dataSaverMode: effectiveDataSaverMode,
     debugStateRef: adaptiveConsumerDebugRef,
     onVideoAdaptivePauseStateChange: handleVideoAdaptivePauseStateChange,
   });

@@ -833,8 +833,8 @@ assertRegex(
 );
 assertRegex(
   "webMeetClient",
-  /useState<MeetViewSettings>\(\s*readStoredMeetViewSettings,[\s\S]*writeStoredMeetViewSettings\(viewSettings\)[\s\S]*useMeetSocket\(\{[\s\S]*dataSaverMode: viewSettings\.dataSaverMode,[\s\S]*useAdaptiveConsumerPreferences\(\{[\s\S]*dataSaverMode: viewSettings\.dataSaverMode,[\s\S]*<MeetsMainContent[\s\S]*viewSettings=\{viewSettings\}[\s\S]*onViewSettingsChange=\{setViewSettings\}/,
-  "web meeting client owns persisted view settings for adaptive receive",
+  /useState<MeetViewSettings>\(\s*readStoredMeetViewSettings,[\s\S]*browserSaveDataMode[\s\S]*getBrowserNetworkSnapshot\(\)\.saveData === true[\s\S]*effectiveDataSaverMode =[\s\S]*viewSettings\.dataSaverMode \|\| browserSaveDataMode[\s\S]*writeStoredMeetViewSettings\(viewSettings\)[\s\S]*useMeetSocket\(\{[\s\S]*dataSaverMode: effectiveDataSaverMode,[\s\S]*useAdaptiveConsumerPreferences\(\{[\s\S]*dataSaverMode: effectiveDataSaverMode,[\s\S]*<MeetsMainContent[\s\S]*viewSettings=\{viewSettings\}[\s\S]*onViewSettingsChange=\{setViewSettings\}/,
+  "web meeting client honors persisted and browser Save-Data receive settings",
 );
 assertNotIncludes(
   "webMeetsMainContent",
