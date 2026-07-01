@@ -5619,7 +5619,8 @@ final class MeetingViewModel {
                 producerUserId: producer.producerUserId,
                 producerKind: producer.kind,
                 producerType: producer.type,
-                preferHighWebcamLayer: state.isWebinarAttendee
+                preferHighWebcamLayer: state.isWebinarAttendee,
+                initialReceiveConnectionQuality: receiveConnectionQuality
             )
             if let context {
                 guard isCurrentSocketEvent(context, roomId: producer.roomId) else {

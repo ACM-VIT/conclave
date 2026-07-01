@@ -2765,6 +2765,11 @@ assertIncludes(
 );
 assertIncludes(
   "nativeMeetingViewModel",
+  "initialReceiveConnectionQuality: receiveConnectionQuality",
+  "native initial remote consume uses receive-side quality",
+);
+assertIncludes(
+  "nativeMeetingViewModel",
   "self.publishConnectionQuality == quality",
   "native publish-side producer refresh guard",
 );
@@ -3191,6 +3196,19 @@ for (const [key, label] of [
     /initialScreenConsumerPreference[\s\S]*(case \.emergency|ConnectionQuality\.emergency)[\s\S]*(temporalLayer\s*=\s*1|->\s*1)[\s\S]*(case \.poor|ConnectionQuality\.poor)[\s\S]*(temporalLayer\s*=\s*1|->\s*1)[\s\S]*priority\s*[:=]\s*240/,
     `${label} initial screen-share consume starts emergency receivers at mid temporal FPS`,
   );
+  if (key === "iosWebrtc") {
+    assertRegex(
+      key,
+      /private func initialScreenConsumerPreference\(\s*connectionQuality: ConnectionQuality\s*\)[\s\S]*switch connectionQuality[\s\S]*priority:\s*240[\s\S]*initialScreenConsumerPreference\(\s*connectionQuality: initialReceiveConnectionQuality/,
+      `${label} initial screen-share consume is seeded from receive quality`,
+    );
+  } else {
+    assertRegex(
+      key,
+      /private fun initialScreenConsumerPreference\(\s*connectionQuality: ConnectionQuality,\s*\)[\s\S]*when \(connectionQuality\)[\s\S]*priority = 240[\s\S]*initialScreenConsumerPreference\(\s*connectionQuality = initialReceiveConnectionQuality,/,
+      `${label} initial screen-share consume is seeded from receive quality`,
+    );
+  }
   assertRegex(
     key,
     /(if isEmergency && !emergencyKeepVideo|if \(isEmergency && !emergencyKeepVideo\))[\s\S]*spatialLayer\s*[:=]\s*0[\s\S]*temporalLayer\s*[:=]\s*0[\s\S]*priority\s*[:=]\s*8[\s\S]*paused\s*[:=]\s*true/,

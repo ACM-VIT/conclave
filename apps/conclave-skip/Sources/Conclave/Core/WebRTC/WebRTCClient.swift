@@ -344,9 +344,11 @@ final class WebRTCClient: NSObject, ObservableObject {
         )
     }
 
-    private func initialScreenConsumerPreference() -> InitialConsumerPreference {
+    private func initialScreenConsumerPreference(
+        connectionQuality: ConnectionQuality
+    ) -> InitialConsumerPreference {
         let temporalLayer: Int
-        switch currentLocalBandwidthQuality {
+        switch connectionQuality {
         case .emergency:
             temporalLayer = 1
         case .poor:
@@ -365,7 +367,8 @@ final class WebRTCClient: NSObject, ObservableObject {
     private func initialConsumerPreference(
         producerKind: String?,
         producerType: String,
-        preferHighWebcamLayer: Bool
+        preferHighWebcamLayer: Bool,
+        initialReceiveConnectionQuality: ConnectionQuality
     ) -> InitialConsumerPreference {
         if producerKind == "audio" {
             return InitialConsumerPreference(
@@ -384,7 +387,9 @@ final class WebRTCClient: NSObject, ObservableObject {
         }
 
         if producerType == ProducerType.screen.rawValue {
-            return initialScreenConsumerPreference()
+            return initialScreenConsumerPreference(
+                connectionQuality: initialReceiveConnectionQuality
+            )
         }
 
         guard producerType == ProducerType.webcam.rawValue else {
@@ -1380,7 +1385,8 @@ final class WebRTCClient: NSObject, ObservableObject {
         producerUserId: String,
         producerKind: String? = nil,
         producerType: String = "webcam",
-        preferHighWebcamLayer: Bool = false
+        preferHighWebcamLayer: Bool = false,
+        initialReceiveConnectionQuality: ConnectionQuality = .unknown
     ) async throws {
         guard let socket = socketManager,
               let rtpCaps = serverRtpCapabilities,
@@ -1392,7 +1398,8 @@ final class WebRTCClient: NSObject, ObservableObject {
         let initialPreference = initialConsumerPreference(
             producerKind: producerKind,
             producerType: producerType,
-            preferHighWebcamLayer: preferHighWebcamLayer
+            preferHighWebcamLayer: preferHighWebcamLayer,
+            initialReceiveConnectionQuality: initialReceiveConnectionQuality
         )
 
         let response = try await socket.consume(

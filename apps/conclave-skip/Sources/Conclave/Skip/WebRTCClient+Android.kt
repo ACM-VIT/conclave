@@ -252,8 +252,10 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         )
     }
 
-    private fun initialScreenConsumerPreference(): InitialConsumerPreference {
-        val temporalLayer = when (currentLocalBandwidthQuality) {
+    private fun initialScreenConsumerPreference(
+        connectionQuality: ConnectionQuality,
+    ): InitialConsumerPreference {
+        val temporalLayer = when (connectionQuality) {
             ConnectionQuality.emergency -> 1
             ConnectionQuality.poor -> 1
             else -> 2
@@ -270,6 +272,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         producerKind: String?,
         producerType: String,
         preferHighWebcamLayer: Boolean,
+        initialReceiveConnectionQuality: ConnectionQuality,
     ): InitialConsumerPreference {
         if (producerKind == "audio") {
             return InitialConsumerPreference(
@@ -288,7 +291,9 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         }
 
         if (producerType == ProducerType.screen.rawValue) {
-            return initialScreenConsumerPreference()
+            return initialScreenConsumerPreference(
+                connectionQuality = initialReceiveConnectionQuality,
+            )
         }
 
         if (producerType != ProducerType.webcam.rawValue) {
@@ -1191,7 +1196,8 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         producerUserId: String,
         producerKind: String? = null,
         producerType: String = "webcam",
-        preferHighWebcamLayer: Boolean = false
+        preferHighWebcamLayer: Boolean = false,
+        initialReceiveConnectionQuality: ConnectionQuality = ConnectionQuality.unknown,
     ) {
         val socket = socketManager ?: throw ErrorException("Socket not configured")
         val rtpCapsJson = socket.routerRtpCapabilitiesJson ?: throw ErrorException("RTP caps missing")
@@ -1205,6 +1211,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             producerKind = producerKind,
             producerType = producerType,
             preferHighWebcamLayer = preferHighWebcamLayer,
+            initialReceiveConnectionQuality = initialReceiveConnectionQuality,
         )
         val response = socket.consumeRaw(
             producerId,

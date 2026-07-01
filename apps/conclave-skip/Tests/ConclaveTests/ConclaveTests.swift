@@ -6916,8 +6916,15 @@ final class ConclaveTests: XCTestCase {
         XCTAssertTrue(viewModelSource.contains("private var screenSharePublishConnectionQuality: ConnectionQuality = .unknown"))
         XCTAssertTrue(viewModelSource.contains("ScreenSharePublishProfilePolicy.mostConstrained("))
         XCTAssertTrue(viewModelSource.contains("self.screenSharePublishConnectionQuality == quality"))
+        XCTAssertTrue(viewModelSource.contains("initialReceiveConnectionQuality: receiveConnectionQuality"))
         XCTAssertTrue(iosWebRTCSource.contains("ScreenCaptureManager.shared.updateMaxFrameRate(\n                screenShareEncodingCap(connectionQuality: connectionQuality).maxFramerate"))
+        XCTAssertTrue(iosWebRTCSource.contains("private func initialScreenConsumerPreference(\n        connectionQuality: ConnectionQuality"))
+        XCTAssertTrue(iosWebRTCSource.contains("initialReceiveConnectionQuality: ConnectionQuality = .unknown"))
+        XCTAssertTrue(iosWebRTCSource.contains("initialScreenConsumerPreference(\n                connectionQuality: initialReceiveConnectionQuality"))
         XCTAssertTrue(androidWebRTCSource.contains("screenShareCaptureProfile(\n                metrics.widthPixels,\n                metrics.heightPixels,\n                connectionQuality,"))
+        XCTAssertTrue(androidWebRTCSource.contains("private fun initialScreenConsumerPreference(\n        connectionQuality: ConnectionQuality,"))
+        XCTAssertTrue(androidWebRTCSource.contains("initialReceiveConnectionQuality: ConnectionQuality = ConnectionQuality.unknown"))
+        XCTAssertTrue(androidWebRTCSource.contains("initialScreenConsumerPreference(\n                connectionQuality = initialReceiveConnectionQuality,"))
     }
 
     func testBrowserStateClearTearsDownSystemMediaConsumers() throws {
