@@ -330,8 +330,13 @@ assertRegex(
 );
 assertRegex(
   "webCodec",
-  /export const getPreferredScreenShareCodec[\s\S]*for \(const mimeType of SCREEN_SHARE_TEMPORAL_CODEC_MIME_TYPES\)/,
-  "web screen share prefers VP8 temporal layers without changing webcam codec policy",
+  /SCREEN_SHARE_TEMPORAL_CODEC_MIME_TYPES = \[[\s\S]*"video\/VP9"[\s\S]*"video\/VP8"[\s\S]*"video\/H264"[\s\S]*SOFTWARE_SENSITIVE_SCREEN_SHARE_CODEC_MIME_TYPES = \[[\s\S]*"video\/VP8"[\s\S]*"video\/H264"[\s\S]*const preferredMimeTypes = isLikelyHardwareAcceleratedH264Browser\(\)[\s\S]*SOFTWARE_SENSITIVE_SCREEN_SHARE_CODEC_MIME_TYPES[\s\S]*SCREEN_SHARE_TEMPORAL_CODEC_MIME_TYPES[\s\S]*for \(const mimeType of preferredMimeTypes\)/,
+  "web screen share prefers VP9 temporal layers on desktop with VP8 mobile fallback",
+);
+assertRegex(
+  "sfuConfig",
+  /mimeType: "video\/H264"[\s\S]*mimeType: "video\/VP8"[\s\S]*mimeType: "video\/VP9"[\s\S]*parameters: \{ "profile-id": 0 \}[\s\S]*\{ type: "transport-cc" \}/,
+  "SFU advertises VP9 for desktop screen-share codec negotiation without changing webcam preference order",
 );
 assertRegex(
   "webCodec",
