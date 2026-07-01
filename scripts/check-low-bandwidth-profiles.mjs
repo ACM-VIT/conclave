@@ -1005,6 +1005,16 @@ assertRegex(
 );
 assertRegex(
   "webMeetSocket",
+  /intentionallyClosedTransportsRef = useRef<WeakSet<Transport>>[\s\S]*intentionallyClosedTransportsRef\.current\.add\([\s\S]*producerTransportRef\.current,[\s\S]*producerTransportRef\.current\?\.close\(\);[\s\S]*intentionallyClosedTransportsRef\.current\.add\([\s\S]*consumerTransportRef\.current,[\s\S]*consumerTransportRef\.current\?\.close\(\);[\s\S]*intentionallyClosedTransportsRef\.current\.add\(existingTransport\);[\s\S]*existingTransport\.close\(\);/,
+  "web controlled reconnect cleanup marks intentional transport closes",
+);
+assertRegex(
+  "webMeetSocket",
+  /Producer transport state[\s\S]*state === "closed" &&[\s\S]*intentionallyClosedTransportsRef\.current\.delete\(transport\)[\s\S]*message: "Producer transport closed"[\s\S]*handleReconnectRef\.current\?\.\(\);[\s\S]*Consumer transport state[\s\S]*state === "closed" &&[\s\S]*intentionallyClosedTransportsRef\.current\.delete\(transport\)[\s\S]*if \(state === "closed"\) \{[\s\S]*handleReconnectRef\.current\?\.\(\);/,
+  "web unexpected closed producer and consumer transports trigger reconnect",
+);
+assertRegex(
+  "webMeetSocket",
   /RESTART_ICE_ACK_TIMEOUT_MS[\s\S]*const iceRestartPromiseRef = useRef[\s\S]*Promise<boolean> \| null[\s\S]*const existingRestart = iceRestartPromiseRef\.current\[transportKind\];[\s\S]*if \(existingRestart\) return existingRestart;[\s\S]*window\.setTimeout\([\s\S]*restartIce acknowledgement timeout[\s\S]*socket\.emit\([\s\S]*"restartIce"[\s\S]*window\.clearTimeout\(timeoutId\)[\s\S]*iceRestartPromiseRef\.current\[transportKind\] = restartPromise;[\s\S]*return restartPromise;/,
   "web ICE restart recovery waits for in-flight restart result",
 );

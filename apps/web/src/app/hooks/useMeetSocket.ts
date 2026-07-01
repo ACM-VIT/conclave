@@ -902,6 +902,9 @@ export function useMeetSocket({
     producer: null,
     consumer: null,
   });
+  const intentionallyClosedTransportsRef = useRef<WeakSet<Transport>>(
+    new WeakSet<Transport>(),
+  );
 
   const {
     socketRef,
@@ -1444,9 +1447,19 @@ export function useMeetSocket({
       screenAudioProducerRef.current = null;
 
       try {
+        if (producerTransportRef.current) {
+          intentionallyClosedTransportsRef.current.add(
+            producerTransportRef.current,
+          );
+        }
         producerTransportRef.current?.close();
       } catch {}
       try {
+        if (consumerTransportRef.current) {
+          intentionallyClosedTransportsRef.current.add(
+            consumerTransportRef.current,
+          );
+        }
         consumerTransportRef.current?.close();
       } catch {}
       producerTransportRef.current = null;
@@ -2500,6 +2513,12 @@ export function useMeetSocket({
 
             transport.on("connectionstatechange", (state: string) => {
               console.log("[Meets] Producer transport state:", state);
+              if (
+                state === "closed" &&
+                intentionallyClosedTransportsRef.current.delete(transport)
+              ) {
+                return;
+              }
               if (state === "connected") {
                 if (producerTransportDisconnectTimeoutRef.current) {
                   window.clearTimeout(
@@ -2591,6 +2610,7 @@ export function useMeetSocket({
                     message: "Producer transport closed",
                     recoverable: true,
                   });
+                  handleReconnectRef.current?.();
                 }
               }
             });
@@ -2618,6 +2638,7 @@ export function useMeetSocket({
     if (getUsableProducerTransport(existingTransport)) return true;
     if (existingTransport) {
       try {
+        intentionallyClosedTransportsRef.current.add(existingTransport);
         existingTransport.close();
       } catch {}
       producerTransportRef.current = null;
@@ -2695,6 +2716,12 @@ export function useMeetSocket({
 
             transport.on("connectionstatechange", (state: string) => {
               console.log("[Meets] Consumer transport state:", state);
+              if (
+                state === "closed" &&
+                intentionallyClosedTransportsRef.current.delete(transport)
+              ) {
+                return;
+              }
               if (state === "connected") {
                 if (consumerTransportDisconnectTimeoutRef.current) {
                   window.clearTimeout(
@@ -2768,6 +2795,11 @@ export function useMeetSocket({
                       handleReconnectRef.current?.();
                     }
                   });
+                }
+              }
+              if (state === "closed") {
+                if (!intentionalDisconnectRef.current) {
+                  handleReconnectRef.current?.();
                 }
               }
             });
