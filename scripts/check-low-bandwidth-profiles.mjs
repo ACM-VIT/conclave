@@ -204,6 +204,11 @@ assertRegex(
   "web prejoin retries audio and video separately when combined capture fails",
 );
 assertRegex(
+  "webJoinScreen",
+  /prejoinAudioRequestGenerationRef[\s\S]*prejoinVideoRequestGenerationRef[\s\S]*beginPrejoinMediaRequest[\s\S]*PrejoinMediaKind[\s\S]*getCurrentPrejoinMediaGeneration[\s\S]*isCurrentPrejoinMediaRequest[\s\S]*discard_stale_prejoin_media_request[\s\S]*requestMicrophoneAndCamera[\s\S]*beginPrejoinMediaRequest\(\["audio", "video"\]\)[\s\S]*discard_stale_prejoin_camera_toggle[\s\S]*toggle_mic_ignored_in_flight[\s\S]*discard_stale_prejoin_mic_toggle[\s\S]*discard_stale_prejoin_video_device_select[\s\S]*discard_stale_prejoin_audio_device_select/,
+  "web prejoin ignores stale getUserMedia completions",
+);
+assertRegex(
   "webNetworkInformation",
   /export const isLikelyMobileOrTabletNavigator = \(\): boolean =>/,
   "web exposes mobile browser detection for capture lifecycle workarounds",

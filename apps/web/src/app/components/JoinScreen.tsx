@@ -313,7 +313,10 @@ function JoinScreen({
   const processedPreviewTrackRef = useRef<MediaStreamTrack | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
   const handedOffTrackIdsRef = useRef<Set<string>>(new Set());
+  const prejoinAudioRequestGenerationRef = useRef(0);
+  const prejoinVideoRequestGenerationRef = useRef(0);
   const toggleCameraInFlightRef = useRef(false);
+  const toggleMicInFlightRef = useRef(false);
   const cameraIntentRef = useRef(false);
   const micIntentRef = useRef(false);
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
@@ -412,47 +415,164 @@ function JoinScreen({
     setIsEffectsOpen(true);
   };
 
+  type PrejoinMediaKind = "audio" | "video";
+  type PrejoinMediaRequestGeneration = Partial<
+    Record<PrejoinMediaKind, number>
+  >;
+
+  const beginPrejoinMediaRequest = (
+    kinds: readonly PrejoinMediaKind[],
+  ): PrejoinMediaRequestGeneration => {
+    const generation: PrejoinMediaRequestGeneration = {};
+    if (kinds.includes("audio")) {
+      prejoinAudioRequestGenerationRef.current += 1;
+      generation.audio = prejoinAudioRequestGenerationRef.current;
+    }
+    if (kinds.includes("video")) {
+      prejoinVideoRequestGenerationRef.current += 1;
+      generation.video = prejoinVideoRequestGenerationRef.current;
+    }
+    return generation;
+  };
+
+  const getCurrentPrejoinMediaGeneration = (kind: PrejoinMediaKind) =>
+    kind === "audio"
+      ? prejoinAudioRequestGenerationRef.current
+      : prejoinVideoRequestGenerationRef.current;
+
+  const isCurrentPrejoinMediaRequest = (
+    kind: PrejoinMediaKind,
+    generation: number | undefined,
+  ) =>
+    generation !== undefined &&
+    getCurrentPrejoinMediaGeneration(kind) === generation;
+
+  const stopTracks = (tracks: readonly MediaStreamTrack[]) => {
+    tracks.forEach((track) => track.stop());
+  };
+
+  const commitLocalPreviewStream = (stream: MediaStream | null) => {
+    localStreamRef.current = stream;
+    setLocalStream(stream);
+  };
+
   const commitRequestedPrejoinTracks = (
     tracks: MediaStreamTrack[],
     event: string,
+    requestGeneration: PrejoinMediaRequestGeneration,
   ) => {
-    const liveTracks = tracks.filter((track) => track.readyState === "live");
-    tracks.forEach((track) => {
-      if (!liveTracks.includes(track)) track.stop();
-    });
-    const hasAudio = liveTracks.some((track) => track.kind === "audio");
-    const hasVideo = liveTracks.some((track) => track.kind === "video");
-    const liveTrackIds = new Set(liveTracks.map((track) => track.id));
+    const acceptedTracks: MediaStreamTrack[] = [];
+    const staleKinds = new Set<PrejoinMediaKind>();
+    const currentRequestedKinds = new Set<PrejoinMediaKind>();
 
-    liveTracks.forEach((track) => {
+    (["audio", "video"] as const).forEach((kind) => {
+      if (requestGeneration[kind] === undefined) return;
+      if (isCurrentPrejoinMediaRequest(kind, requestGeneration[kind])) {
+        currentRequestedKinds.add(kind);
+      } else {
+        staleKinds.add(kind);
+      }
+    });
+
+    tracks.forEach((track) => {
+      const kind = track.kind === "audio" || track.kind === "video"
+        ? track.kind
+        : null;
+      if (
+        !kind ||
+        !currentRequestedKinds.has(kind) ||
+        track.readyState !== "live"
+      ) {
+        track.stop();
+        return;
+      }
+      acceptedTracks.push(track);
+    });
+
+    const staleKindList = Array.from(staleKinds);
+    if (staleKindList.length > 0) {
+      logJoinMedia("discard_stale_prejoin_media_request", {
+        event,
+        requestGeneration,
+        staleKinds: staleKindList,
+        currentGeneration: {
+          audio: prejoinAudioRequestGenerationRef.current,
+          video: prejoinVideoRequestGenerationRef.current,
+        },
+      });
+    }
+
+    const hasAcceptedAudio = acceptedTracks.some(
+      (track) => track.kind === "audio",
+    );
+    const hasAcceptedVideo = acceptedTracks.some(
+      (track) => track.kind === "video",
+    );
+    const acceptedTrackIds = new Set(
+      acceptedTracks.map((track) => track.id),
+    );
+
+    acceptedTracks.forEach((track) => {
       if (track.kind === "video" && "contentHint" in track) {
         track.contentHint = "motion";
       }
     });
+    const preservedTracks =
+      localStreamRef.current
+        ?.getTracks()
+        .filter((track) => {
+          if (
+            (track.kind === "audio" || track.kind === "video") &&
+            currentRequestedKinds.has(track.kind)
+          ) {
+            return false;
+          }
+          return track.readyState === "live";
+        }) ?? [];
     localStreamRef.current?.getTracks().forEach((track) => {
-      if (!liveTrackIds.has(track.id)) track.stop();
+      if (
+        acceptedTrackIds.has(track.id) ||
+        !(
+          (track.kind === "audio" || track.kind === "video") &&
+          currentRequestedKinds.has(track.kind)
+        )
+      ) {
+        return;
+      }
+      track.stop();
     });
+    const liveTracks = [...preservedTracks, ...acceptedTracks];
     const nextStream =
       liveTracks.length > 0 ? new MediaStream(liveTracks) : null;
-    setLocalStream(nextStream);
-    cameraIntentRef.current = hasVideo;
-    micIntentRef.current = hasAudio;
-    setIsMicOn(hasAudio);
-    setIsCameraOn(hasVideo);
-    if (hasVideo) {
+    commitLocalPreviewStream(nextStream);
+    if (currentRequestedKinds.has("video")) {
+      cameraIntentRef.current = hasAcceptedVideo;
+      setIsCameraOn(hasAcceptedVideo);
+    }
+    if (currentRequestedKinds.has("audio")) {
+      micIntentRef.current = hasAcceptedAudio;
+      setIsMicOn(hasAcceptedAudio);
+    }
+    if (hasAcceptedVideo) {
       prewarmLiveCameraEffects("prejoin-full-media-camera-live");
     }
     logJoinMedia(event, {
       stream: getJoinStreamDebugSnapshot(nextStream),
-      hasAudio,
-      hasVideo,
+      hasAudio: hasAcceptedAudio,
+      hasVideo: hasAcceptedVideo,
+      staleKinds: staleKindList,
     });
-    return { hasAudio, hasVideo };
+    return {
+      hasAudio: hasAcceptedAudio,
+      hasVideo: hasAcceptedVideo,
+      staleKinds: staleKindList,
+    };
   };
 
   const requestMicrophoneAndCamera = async () => {
     if (isRequestingPermissions) return;
 
+    const requestGeneration = beginPrejoinMediaRequest(["audio", "video"]);
     setIsRequestingPermissions(true);
     setPermissionRequestError(null);
     try {
@@ -468,6 +588,7 @@ function JoinScreen({
       commitRequestedPrejoinTracks(
         stream.getTracks(),
         "get_user_media_full_done",
+        requestGeneration,
       );
     } catch (err) {
       warnJoinMedia("get_user_media_full_failed", {
@@ -513,17 +634,21 @@ function JoinScreen({
         });
       }
 
-      const { hasAudio, hasVideo } = commitRequestedPrejoinTracks(
+      const { hasAudio, hasVideo, staleKinds } = commitRequestedPrejoinTracks(
         fallbackTracks,
         "get_user_media_separate_fallback_done",
+        requestGeneration,
       );
-      if (!hasAudio && !hasVideo) {
+      const audioStale = staleKinds.includes("audio");
+      const videoStale = staleKinds.includes("video");
+      if (audioStale && videoStale) return;
+      if (!hasAudio && !audioStale && !hasVideo && !videoStale) {
         cameraIntentRef.current = false;
         micIntentRef.current = false;
         setPermissionRequestError("Permission needed");
-      } else if (!hasAudio) {
+      } else if (!hasAudio && !audioStale) {
         setPermissionRequestError("Microphone unavailable");
-      } else if (!hasVideo) {
+      } else if (!hasVideo && !videoStale) {
         setPermissionRequestError("Camera unavailable");
       } else {
         setPermissionRequestError(null);
@@ -668,6 +793,7 @@ function JoinScreen({
       return;
     }
 
+    const requestGeneration = beginPrejoinMediaRequest(["video"]);
     toggleCameraInFlightRef.current = true;
     try {
       logJoinMedia("toggle_camera_start", {
@@ -675,19 +801,22 @@ function JoinScreen({
         localStream: getJoinStreamDebugSnapshot(localStream),
         videoEffects,
       });
-      if (isCameraOn && localStream) {
+      const currentStream = localStreamRef.current ?? localStream;
+      if (isCameraOn && currentStream) {
         cameraIntentRef.current = false;
-        const track = localStream.getVideoTracks()[0];
+        const track = currentStream.getVideoTracks()[0];
         if (track) {
           logJoinMedia("camera_track_stop", {
             track: getJoinTrackDebugSnapshot(track),
           });
           track.stop();
         }
-        const nextTracks = localStream
+        const nextTracks = currentStream
           .getTracks()
           .filter((candidate) => candidate !== track);
-        setLocalStream(nextTracks.length > 0 ? new MediaStream(nextTracks) : null);
+        commitLocalPreviewStream(
+          nextTracks.length > 0 ? new MediaStream(nextTracks) : null,
+        );
         setIsCameraOn(false);
         logJoinMedia("toggle_camera_off_done", {
           nextTrackCount: nextTracks.length,
@@ -704,24 +833,37 @@ function JoinScreen({
         });
         const videoTrack = stream.getVideoTracks()[0];
         if (!videoTrack) {
+          stopTracks(stream.getTracks());
           warnJoinMedia("get_user_media_video_missing_track", {
             stream: getJoinStreamDebugSnapshot(stream),
           });
           return;
         }
+        if (!isCurrentPrejoinMediaRequest("video", requestGeneration.video)) {
+          stopTracks(stream.getTracks());
+          logJoinMedia("discard_stale_prejoin_camera_toggle", {
+            requestGeneration,
+            currentGeneration: getCurrentPrejoinMediaGeneration("video"),
+          });
+          return;
+        }
         if ("contentHint" in videoTrack) videoTrack.contentHint = "motion";
-        if (localStream) {
-          const nextStream = new MediaStream([...localStream.getTracks(), videoTrack]);
+        const latestStream = localStreamRef.current;
+        if (latestStream) {
+          const nextStream = new MediaStream([
+            ...latestStream.getTracks(),
+            videoTrack,
+          ]);
           logJoinMedia("camera_track_add_to_existing_stream", {
             receivedStream: getJoinStreamDebugSnapshot(stream),
             nextStream: getJoinStreamDebugSnapshot(nextStream),
           });
-          setLocalStream(nextStream);
+          commitLocalPreviewStream(nextStream);
         } else {
           logJoinMedia("camera_stream_set", {
             stream: getJoinStreamDebugSnapshot(stream),
           });
-          setLocalStream(stream);
+          commitLocalPreviewStream(stream);
         }
         cameraIntentRef.current = true;
         setIsCameraOn(true);
@@ -744,30 +886,44 @@ function JoinScreen({
   };
 
   const toggleMic = async () => {
+    if (toggleMicInFlightRef.current) {
+      logJoinMedia("toggle_mic_ignored_in_flight", {
+        isMicOn,
+        localStream: getJoinStreamDebugSnapshot(localStream),
+      });
+      return;
+    }
+
+    const requestGeneration = beginPrejoinMediaRequest(["audio"]);
+    toggleMicInFlightRef.current = true;
     logJoinMedia("toggle_mic_start", {
       isMicOn,
       localStream: getJoinStreamDebugSnapshot(localStream),
     });
-    if (isMicOn && localStream) {
-      micIntentRef.current = false;
-      const track = localStream.getAudioTracks()[0];
-      if (track) {
-        logJoinMedia("mic_track_stop", {
-          track: getJoinTrackDebugSnapshot(track),
-        });
-        track.stop();
-      }
-      const nextTracks = localStream
-        .getTracks()
-        .filter((candidate) => candidate !== track);
-      setLocalStream(nextTracks.length > 0 ? new MediaStream(nextTracks) : null);
-      setIsMicOn(false);
-      logJoinMedia("toggle_mic_off_done", {
-        nextTrackCount: nextTracks.length,
-      });
-      return;
-    }
     try {
+      const currentStream = localStreamRef.current ?? localStream;
+      if (isMicOn && currentStream) {
+        micIntentRef.current = false;
+        const track = currentStream.getAudioTracks()[0];
+        if (track) {
+          logJoinMedia("mic_track_stop", {
+            track: getJoinTrackDebugSnapshot(track),
+          });
+          track.stop();
+        }
+        const nextTracks = currentStream
+          .getTracks()
+          .filter((candidate) => candidate !== track);
+        commitLocalPreviewStream(
+          nextTracks.length > 0 ? new MediaStream(nextTracks) : null,
+        );
+        setIsMicOn(false);
+        logJoinMedia("toggle_mic_off_done", {
+          nextTrackCount: nextTracks.length,
+        });
+        return;
+      }
+
       logJoinMedia("get_user_media_audio_request", {
         constraints: DEFAULT_AUDIO_CONSTRAINTS,
       });
@@ -776,23 +932,36 @@ function JoinScreen({
       });
       const audioTrack = stream.getAudioTracks()[0];
       if (!audioTrack) {
+        stopTracks(stream.getTracks());
         warnJoinMedia("get_user_media_audio_missing_track", {
           stream: getJoinStreamDebugSnapshot(stream),
         });
         return;
       }
-      if (localStream) {
-        const nextStream = new MediaStream([...localStream.getTracks(), audioTrack]);
+      if (!isCurrentPrejoinMediaRequest("audio", requestGeneration.audio)) {
+        stopTracks(stream.getTracks());
+        logJoinMedia("discard_stale_prejoin_mic_toggle", {
+          requestGeneration,
+          currentGeneration: getCurrentPrejoinMediaGeneration("audio"),
+        });
+        return;
+      }
+      const latestStream = localStreamRef.current;
+      if (latestStream) {
+        const nextStream = new MediaStream([
+          ...latestStream.getTracks(),
+          audioTrack,
+        ]);
         logJoinMedia("mic_track_add_to_existing_stream", {
           receivedStream: getJoinStreamDebugSnapshot(stream),
           nextStream: getJoinStreamDebugSnapshot(nextStream),
         });
-        setLocalStream(nextStream);
+        commitLocalPreviewStream(nextStream);
       } else {
         logJoinMedia("mic_stream_set", {
           stream: getJoinStreamDebugSnapshot(stream),
         });
-        setLocalStream(stream);
+        commitLocalPreviewStream(stream);
       }
       micIntentRef.current = true;
       setIsMicOn(true);
@@ -807,6 +976,8 @@ function JoinScreen({
             : err,
       });
       micIntentRef.current = false;
+    } finally {
+      toggleMicInFlightRef.current = false;
     }
   };
 
@@ -965,6 +1136,7 @@ function JoinScreen({
   const handleSelectVideoDevice = async (deviceId: string) => {
     setSelectedVideoId(deviceId);
     if (!isCameraOn || toggleCameraInFlightRef.current) return;
+    const requestGeneration = beginPrejoinMediaRequest(["video"]);
     toggleCameraInFlightRef.current = true;
     try {
       const base = getPrejoinVideoConstraints();
@@ -974,13 +1146,24 @@ function JoinScreen({
           : { deviceId: { exact: deviceId } };
       const stream = await navigator.mediaDevices.getUserMedia({ video: videoConstraints });
       const newTrack = stream.getVideoTracks()[0];
-      if (!newTrack) return;
+      if (!newTrack) {
+        stopTracks(stream.getTracks());
+        return;
+      }
+      if (!isCurrentPrejoinMediaRequest("video", requestGeneration.video)) {
+        stopTracks(stream.getTracks());
+        logJoinMedia("discard_stale_prejoin_video_device_select", {
+          requestGeneration,
+          currentGeneration: getCurrentPrejoinMediaGeneration("video"),
+        });
+        return;
+      }
       if ("contentHint" in newTrack) newTrack.contentHint = "motion";
       const current = localStreamRef.current;
       const oldTrack = current?.getVideoTracks()[0] ?? null;
       oldTrack?.stop();
       const others = current?.getTracks().filter((t) => t !== oldTrack) ?? [];
-      setLocalStream(new MediaStream([...others, newTrack]));
+      commitLocalPreviewStream(new MediaStream([...others, newTrack]));
       cameraIntentRef.current = true;
     } catch (err) {
       warnJoinMedia("select_video_device_failed", {
@@ -994,17 +1177,29 @@ function JoinScreen({
   const handleSelectAudioDevice = async (deviceId: string) => {
     setSelectedAudioId(deviceId);
     if (!isMicOn) return;
+    const requestGeneration = beginPrejoinMediaRequest(["audio"]);
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: { ...DEFAULT_AUDIO_CONSTRAINTS, deviceId: { exact: deviceId } },
       });
       const newTrack = stream.getAudioTracks()[0];
-      if (!newTrack) return;
+      if (!newTrack) {
+        stopTracks(stream.getTracks());
+        return;
+      }
+      if (!isCurrentPrejoinMediaRequest("audio", requestGeneration.audio)) {
+        stopTracks(stream.getTracks());
+        logJoinMedia("discard_stale_prejoin_audio_device_select", {
+          requestGeneration,
+          currentGeneration: getCurrentPrejoinMediaGeneration("audio"),
+        });
+        return;
+      }
       const current = localStreamRef.current;
       const oldTrack = current?.getAudioTracks()[0] ?? null;
       oldTrack?.stop();
       const others = current?.getTracks().filter((t) => t !== oldTrack) ?? [];
-      setLocalStream(new MediaStream([...others, newTrack]));
+      commitLocalPreviewStream(new MediaStream([...others, newTrack]));
       micIntentRef.current = true;
     } catch (err) {
       warnJoinMedia("select_audio_device_failed", {
