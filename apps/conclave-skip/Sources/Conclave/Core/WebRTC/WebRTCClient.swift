@@ -1322,7 +1322,7 @@ final class WebRTCClient: NSObject, ObservableObject {
         encoding.maxBitrateBps = NSNumber(value: cap.maxBitrateBps)
         encoding.maxFramerate = NSNumber(value: cap.maxFramerate)
         encoding.numTemporalLayers = NSNumber(value: Self.screenShareTemporalLayerCount)
-        encoding.networkPriority = .medium
+        encoding.networkPriority = .high
         return encoding
     }
 

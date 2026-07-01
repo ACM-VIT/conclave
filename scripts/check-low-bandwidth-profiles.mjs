@@ -431,6 +431,11 @@ assertIncludes(
   "next.degradationPreference = .maintainResolution",
   "iOS screen share maintain-resolution preference",
 );
+assertRegex(
+  "iosWebrtc",
+  /webcamEncodings[\s\S]*encoding\.networkPriority = spec\.rid == "f" \? \.low : \.veryLow[\s\S]*screenShareEncoding[\s\S]*encoding\.networkPriority = \.high/,
+  "iOS screen share sender priority beats webcam under congestion",
+);
 assertIncludes(
   "androidWebrtc",
   "screenShareTemporalLayerCount",
@@ -445,6 +450,11 @@ assertNotIncludes(
   "webAdaptiveConsumerPreferences",
   "!options.layout ||\n      options.layout.visible",
   "web missing layout hints must not make screen-share consumers visible",
+);
+assertRegex(
+  "webAdaptiveConsumerPreferences",
+  /OFFSCREEN_WEBCAM_PARK_PRIORITY = 5[\s\S]*if \(options\.emergencyMode\) \{[\s\S]*if \(isHidden && !isWarm && !isFocus\) \{[\s\S]*priority: OFFSCREEN_WEBCAM_PARK_PRIORITY,[\s\S]*paused: true,[\s\S]*const shouldParkOffscreenWebcamForScreenShare =[\s\S]*options\.screenShareVideoActive &&[\s\S]*isHidden &&[\s\S]*!isWarm &&[\s\S]*!isFocus &&[\s\S]*screenShareReserveQuality === "poor" \|\| screenShareReceiveEmergency[\s\S]*if \(shouldParkOffscreenWebcamForScreenShare\) \{[\s\S]*priority: OFFSCREEN_WEBCAM_PARK_PRIORITY,[\s\S]*paused: true,/,
+  "web Jitsi-style receiver LastN parks only offscreen webcams during emergency or screen-share pressure",
 );
 assertRegex(
   "webMeetSocket",

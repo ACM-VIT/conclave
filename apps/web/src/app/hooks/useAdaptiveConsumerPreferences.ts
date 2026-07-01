@@ -70,6 +70,7 @@ const UNSUPPORTED_LAYER_RETRY_AFTER_MS = 30000;
 const SCREEN_SHARE_RECEIVE_FAIR_BPS = 1500000;
 const SCREEN_SHARE_RECEIVE_POOR_BPS = 550000;
 const SCREEN_SHARE_RECEIVE_EMERGENCY_BPS = 300000;
+const OFFSCREEN_WEBCAM_PARK_PRIORITY = 5;
 
 type LayoutRole = {
   primary: boolean;
@@ -543,6 +544,14 @@ const getDesiredPreferences = (
   const isFocus = isActiveSpeaker || isLayoutFocus;
 
   if (options.emergencyMode) {
+    if (isHidden && !isWarm && !isFocus) {
+      return {
+        preferredLayers: bounds ? buildLayerPreference(0, 0, bounds) : undefined,
+        priority: OFFSCREEN_WEBCAM_PARK_PRIORITY,
+        paused: true,
+      };
+    }
+
     if (!options.emergencyKeepVideo) {
       return {
         preferredLayers: bounds ? buildLayerPreference(0, 0, bounds) : undefined,
@@ -561,6 +570,20 @@ const getDesiredPreferences = (
   const screenShareReserveQuality = options.screenShareVideoActive
     ? worstQuality(quality, screenShareReceiveQuality)
     : quality;
+  const shouldParkOffscreenWebcamForScreenShare =
+    options.screenShareVideoActive &&
+    isHidden &&
+    !isWarm &&
+    !isFocus &&
+    (screenShareReserveQuality === "poor" || screenShareReceiveEmergency);
+
+  if (shouldParkOffscreenWebcamForScreenShare) {
+    return {
+      preferredLayers: bounds ? buildLayerPreference(0, 0, bounds) : undefined,
+      priority: OFFSCREEN_WEBCAM_PARK_PRIORITY,
+      paused: true,
+    };
+  }
 
   if (
     options.screenShareVideoActive &&
