@@ -16,6 +16,7 @@ import {
   buildScreenShareAudioOpusCodecOptions,
 } from "../lib/constants";
 import type {
+  ActiveSpeakerChangedNotification,
   AdminNoticeNotification,
   ChatHistorySnapshot,
   ChatMessage,
@@ -70,15 +71,16 @@ import {
   applyAudioProducerNetworkProfile,
   applyScreenShareProducerNetworkProfile,
   applyScreenShareTrackNetworkProfile,
-  buildScreenShareEncodingForNetworkProfile,
   getPreferredScreenShareCodec,
   getPreferredWebcamCodec,
+  produceScreenShareTrack,
   produceWebcamTrack,
   type WebcamProducerNetworkProfile,
 } from "../lib/webcam-codec";
 import {
   getMostConstrainedWebcamProducerNetworkProfile,
-  getScreenSharePublishNetworkProfileForAvailableOutgoingBitrate,
+  getScreenShareReceiveNetworkProfileForAvailableIncomingBitrate,
+  selectScreenSharePublishNetworkProfile,
 } from "../lib/screen-share-network-profile";
 import { getBrowserNetworkSnapshot } from "../lib/network-information";
 import type {
@@ -89,6 +91,7 @@ import type {
   ConnectionQuality,
   ConnectionQualityStats,
 } from "./useConnectionQuality";
+import type { RequestMediaPermissionsOptions } from "./useMeetMedia";
 
 type ConsumerTelemetryPayload = Omit<
   ConsumerTelemetrySnapshot,
@@ -98,6 +101,7 @@ type ConsumerTelemetryPayload = Omit<
 type ConsumeProducerOptions = {
   replaceExisting?: boolean;
   knownScreenShareVideoActive?: boolean;
+  webcamVideoStartupRank?: number;
 };
 
 type JoinInfo = {
@@ -114,6 +118,8 @@ const VIDEO_STALL_KEYFRAME_REQUEST_DELAY_MS = 2500;
 const SCREEN_SHARE_VIDEO_STALL_KEYFRAME_REQUEST_DELAY_MS = 900;
 const STALE_CONSUMER_RECOVERY_DELAY_MS = 9000;
 const SCREEN_SHARE_STALE_CONSUMER_RECOVERY_DELAY_MS = 4500;
+const CRITICAL_SIGNALING_ACK_TIMEOUT_MS = 12000;
+const JOIN_ROOM_ACK_TIMEOUT_MS = 15000;
 const RESTART_ICE_ACK_TIMEOUT_MS = 5000;
 const PARTICIPANT_RECONNECTING_STATUS_FALLBACK_MS = 30000;
 const PARTICIPANT_RECONNECTING_STATUS_BUFFER_MS = 5000;
@@ -125,10 +131,43 @@ const CLOSE_CONSUMER_RETRY_DELAY_MS = 500;
 const CLOSE_CONSUMER_MAX_ATTEMPTS = 4;
 const SCREEN_SHARE_FREEZE_KEYFRAME_REQUEST_COOLDOWN_MS = 2000;
 const SCREEN_SHARE_FOREGROUND_KEYFRAME_REQUEST_COOLDOWN_MS = 1200;
+const FOREGROUND_RECOVERY_DELAY_MS = 150;
+const SUSPENDED_EVENT_LOOP_CHECK_MS = 5000;
+const SUSPENDED_EVENT_LOOP_GAP_MS = 30000;
 
 const isScreenShareVideoProducer = (
   producerInfo: Pick<ProducerInfo, "kind" | "type">,
 ): boolean => producerInfo.kind === "video" && producerInfo.type === "screen";
+
+const isWebcamVideoProducer = (
+  producerInfo: Pick<ProducerInfo, "kind" | "type">,
+): boolean => producerInfo.kind === "video" && producerInfo.type === "webcam";
+
+const HIGH_LAYER_STARTUP_WEBCAM_LIMIT = 4;
+
+const countWebcamVideoProducerEntries = (
+  producerMap: Map<
+    string,
+    { userId: string; kind: "audio" | "video"; type: ProducerType }
+  >,
+): number =>
+  Array.from(producerMap.values()).filter(isWebcamVideoProducer).length;
+
+const buildWebcamVideoStartupRanks = (
+  producers: ProducerInfo[],
+  existingWebcamVideoCount = 0,
+): Map<string, number> => {
+  const ranks = new Map<string, number>();
+  let rank = existingWebcamVideoCount;
+
+  for (const producer of producers) {
+    if (!isWebcamVideoProducer(producer)) continue;
+    ranks.set(producer.producerId, rank);
+    rank += 1;
+  }
+
+  return ranks;
+};
 
 const getVideoStallKeyFrameRequestDelayMs = (
   producerInfo: Pick<ProducerInfo, "kind" | "type">,
@@ -144,19 +183,29 @@ const getStaleConsumerRecoveryDelayMs = (
     ? SCREEN_SHARE_STALE_CONSUMER_RECOVERY_DELAY_MS
     : STALE_CONSUMER_RECOVERY_DELAY_MS;
 
+const startSocketAckTimeout = (
+  eventName: string,
+  onTimeout: (error: Error) => void,
+  timeoutMs = CRITICAL_SIGNALING_ACK_TIMEOUT_MS,
+) => {
+  let settled = false;
+  const timeoutId = window.setTimeout(() => {
+    if (settled) return;
+    settled = true;
+    onTimeout(new Error(`${eventName} acknowledgement timeout`));
+  }, timeoutMs);
+
+  return () => {
+    if (settled) return false;
+    settled = true;
+    window.clearTimeout(timeoutId);
+    return true;
+  };
+};
+
 const CLOSE_CONSUMER_RETRY_WINDOW_MS = 30000;
 const TURN_URL_PATTERN = /^turns?:/i;
 const TRANSPORT_CC_FEEDBACK_TYPE = "transport-cc";
-const SCREEN_SHARE_RECEIVE_INITIAL_FAIR_BPS = 1500000;
-const SCREEN_SHARE_RECEIVE_INITIAL_POOR_BPS = 550000;
-const SCREEN_SHARE_RECEIVE_INITIAL_EMERGENCY_BPS = 300000;
-
-const networkProfileRank: Record<WebcamProducerNetworkProfile, number> = {
-  good: 1,
-  fair: 2,
-  poor: 3,
-  emergency: 4,
-};
 
 const getConnectionStatsNetworkProfile = (
   stats: ConnectionQualityStats | null | undefined,
@@ -181,39 +230,6 @@ const getConnectionStatsNetworkProfile = (
   }
   if (quality === "poor") return "poor";
   if (quality === "fair") return "fair";
-  return "good";
-};
-
-const getMostConstrainedNetworkProfile = (
-  profiles: Array<WebcamProducerNetworkProfile | null>,
-): WebcamProducerNetworkProfile | null =>
-  profiles.reduce<WebcamProducerNetworkProfile | null>((selected, profile) => {
-    if (!profile) return selected;
-    if (!selected) return profile;
-    return networkProfileRank[profile] > networkProfileRank[selected]
-      ? profile
-      : selected;
-  }, null);
-
-const getScreenShareReceiveNetworkProfileForAvailableBitrate = (
-  availableIncomingBitrate: number | null | undefined,
-): WebcamProducerNetworkProfile | null => {
-  if (
-    typeof availableIncomingBitrate !== "number" ||
-    !Number.isFinite(availableIncomingBitrate) ||
-    availableIncomingBitrate <= 0
-  ) {
-    return null;
-  }
-  if (availableIncomingBitrate <= SCREEN_SHARE_RECEIVE_INITIAL_EMERGENCY_BPS) {
-    return "emergency";
-  }
-  if (availableIncomingBitrate <= SCREEN_SHARE_RECEIVE_INITIAL_POOR_BPS) {
-    return "poor";
-  }
-  if (availableIncomingBitrate <= SCREEN_SHARE_RECEIVE_INITIAL_FAIR_BPS) {
-    return "fair";
-  }
   return "good";
 };
 
@@ -601,13 +617,32 @@ const hasLiveTrackOfKind = (
 
 const streamNeedsMediaRefresh = (
   stream: MediaStream | null | undefined,
-  options: { needsAudio: boolean; needsVideo: boolean },
+  options: JoinMediaNeeds,
 ) => {
   if (!stream) return options.needsAudio || options.needsVideo;
   if (options.needsAudio && !hasLiveTrackOfKind(stream, "audio")) return true;
   if (options.needsVideo && !hasLiveTrackOfKind(stream, "video")) return true;
   return false;
 };
+
+type JoinMediaNeeds = {
+  needsAudio: boolean;
+  needsVideo: boolean;
+  requiredAudio: boolean;
+  requiredVideo: boolean;
+};
+
+const hasRequiredJoinMediaNeed = (mediaNeeds: JoinMediaNeeds): boolean =>
+  mediaNeeds.requiredAudio || mediaNeeds.requiredVideo;
+
+const buildRequestMediaPermissionsOptions = (
+  mediaNeeds: JoinMediaNeeds,
+): RequestMediaPermissionsOptions => ({
+  audio: mediaNeeds.needsAudio,
+  video: mediaNeeds.needsVideo,
+  audioRequired: mediaNeeds.requiredAudio,
+  videoRequired: mediaNeeds.requiredVideo,
+});
 
 const isRoomEndedByLocalUser = (
   endedBy: string | null | undefined,
@@ -692,16 +727,22 @@ interface UseMeetSocketOptions {
   setIsDmEnabled: (value: boolean) => void;
   setIsReactionsDisabled: (value: boolean) => void;
   setActiveScreenShareId: (value: string | null) => void;
+  setActiveSpeakerId: React.Dispatch<React.SetStateAction<string | null>>;
+  setServerActiveSpeakerAvailable: (value: boolean) => void;
   setNetworkManagedVideoQuality: (value: VideoQuality) => void;
   videoQualityRef: React.MutableRefObject<VideoQuality>;
   connectionQualityRef?: React.MutableRefObject<ConnectionQualityStats | null>;
+  dataSaverMode?: boolean;
+  isDocumentVisible?: boolean;
   updateVideoQualityRef: React.MutableRefObject<
     (
       quality: VideoQuality,
       networkProfileOverride?: WebcamProducerNetworkProfile,
     ) => Promise<void>
   >;
-  requestMediaPermissions: () => Promise<MediaStream | null>;
+  requestMediaPermissions: (
+    options?: RequestMediaPermissionsOptions,
+  ) => Promise<MediaStream | null>;
   requestAudioProducerRecovery: () => void;
   requestCameraProducerRecovery: () => void;
   stopLocalTrack: (track?: MediaStreamTrack | null) => void;
@@ -784,9 +825,13 @@ export function useMeetSocket({
   setIsDmEnabled,
   setIsReactionsDisabled,
   setActiveScreenShareId,
+  setActiveSpeakerId,
+  setServerActiveSpeakerAvailable,
   setNetworkManagedVideoQuality,
   videoQualityRef,
   connectionQualityRef,
+  dataSaverMode = false,
+  isDocumentVisible = true,
   updateVideoQualityRef,
   requestMediaPermissions,
   requestAudioProducerRecovery,
@@ -878,6 +923,9 @@ export function useMeetSocket({
     producer: null,
     consumer: null,
   });
+  const intentionallyClosedTransportsRef = useRef<WeakSet<Transport>>(
+    new WeakSet<Transport>(),
+  );
 
   const {
     socketRef,
@@ -889,6 +937,7 @@ export function useMeetSocket({
     screenProducerRef,
     screenAudioProducerRef,
     screenShareStreamRef,
+    lastActiveSpeakerRef,
     intentionalLocalProducerCloseIdsRef,
     consumersRef,
     adaptivelyPausedConsumerProducerIdsRef,
@@ -955,30 +1004,32 @@ export function useMeetSocket({
     });
   }, []);
 
-  const getPublishNetworkProfile = useCallback(
-    () =>
-      getConnectionStatsNetworkProfile(connectionQualityRef?.current, "publish"),
-    [connectionQualityRef],
-  );
+  const getPublishNetworkProfile = useCallback(() => {
+    const profile = getConnectionStatsNetworkProfile(
+      connectionQualityRef?.current,
+      "publish",
+    );
+    if (dataSaverMode && profile !== "emergency") {
+      return "poor";
+    }
+    return profile;
+  }, [connectionQualityRef, dataSaverMode]);
 
   const getScreenSharePublishNetworkProfile =
     useCallback((): WebcamProducerNetworkProfile => {
       const baseProfile = getPublishNetworkProfile();
       const stats = connectionQualityRef?.current;
       const browserNetwork = stats?.browserNetwork ?? getBrowserNetworkSnapshot();
-      const screenShareProfile =
-        getScreenSharePublishNetworkProfileForAvailableOutgoingBitrate(
-          stats?.availableOutgoingBitrate,
+      return selectScreenSharePublishNetworkProfile({
+        baseProfile,
+        availableOutgoingBitrateBps: stats?.availableOutgoingBitrate,
+        emergencyMode:
           browserNetwork.emergency ||
-            (stats?.publishEmergencyMode === true &&
-              stats.publishQuality !== "good"),
-        );
-      return (
-        getMostConstrainedWebcamProducerNetworkProfile([
-          baseProfile,
-          screenShareProfile,
-        ]) ?? baseProfile
-      );
+          (stats?.publishEmergencyMode === true &&
+            stats.publishQuality !== "good"),
+        browserNetwork,
+        observedPublishQuality: stats?.rtcPublishQuality,
+      });
     }, [connectionQualityRef, getPublishNetworkProfile]);
 
   const getReceiveNetworkProfile = useCallback(
@@ -996,12 +1047,14 @@ export function useMeetSocket({
 
       const stats = connectionQualityRef?.current;
       const screenShareProfile =
-        getScreenShareReceiveNetworkProfileForAvailableBitrate(
+        getScreenShareReceiveNetworkProfileForAvailableIncomingBitrate(
           stats?.availableIncomingBitrate,
         );
       return (
-        getMostConstrainedNetworkProfile([baseProfile, screenShareProfile]) ??
-        baseProfile
+        getMostConstrainedWebcamProducerNetworkProfile([
+          baseProfile,
+          screenShareProfile,
+        ]) ?? baseProfile
       );
     },
     [connectionQualityRef, getReceiveNetworkProfile],
@@ -1164,17 +1217,11 @@ export function useMeetSocket({
       const preferredScreenShareCodec = getPreferredScreenShareCodec(
         deviceRef.current,
       );
-      const producer = await transport.produce({
+      const producer = await produceScreenShareTrack({
+        transport,
         track: videoTrack,
-        encodings: [
-          buildScreenShareEncodingForNetworkProfile(
-            screenNetworkProfile,
-            videoTrack,
-          ),
-        ],
-        stopTracks: false,
-        ...(preferredScreenShareCodec ? { codec: preferredScreenShareCodec } : {}),
-        appData: { type: "screen" as ProducerType },
+        networkProfile: screenNetworkProfile,
+        preferredCodec: preferredScreenShareCodec,
       });
 
       screenProducerRef.current = producer;
@@ -1420,9 +1467,19 @@ export function useMeetSocket({
       screenAudioProducerRef.current = null;
 
       try {
+        if (producerTransportRef.current) {
+          intentionallyClosedTransportsRef.current.add(
+            producerTransportRef.current,
+          );
+        }
         producerTransportRef.current?.close();
       } catch {}
       try {
+        if (consumerTransportRef.current) {
+          intentionallyClosedTransportsRef.current.add(
+            consumerTransportRef.current,
+          );
+        }
         consumerTransportRef.current?.close();
       } catch {}
       producerTransportRef.current = null;
@@ -1449,6 +1506,9 @@ export function useMeetSocket({
       }
       if (!preserveMeetingState) {
         setActiveScreenShareId(null);
+        lastActiveSpeakerRef.current = null;
+        setActiveSpeakerId(null);
+        setServerActiveSpeakerAvailable(false);
         setIsHandRaised(false);
         setIsTtsDisabled(false);
         setIsDmEnabled(true);
@@ -1478,7 +1538,9 @@ export function useMeetSocket({
       screenProducerRef,
       screenShareStreamRef,
       intentionalLocalProducerCloseIdsRef,
+      lastActiveSpeakerRef,
       setActiveScreenShareId,
+      setActiveSpeakerId,
       setDisplayNames,
       setIsHandRaised,
       setIsScreenSharing,
@@ -1490,6 +1552,7 @@ export function useMeetSocket({
       setIsTtsDisabled,
       setIsDmEnabled,
       setMeetingRequiresInviteCode,
+      setServerActiveSpeakerAvailable,
       setWebinarConfig,
       clearReactions,
       videoProducerRef,
@@ -1615,8 +1678,12 @@ export function useMeetSocket({
     (stream: MediaStream | null | undefined) => {
       const mediaIntent = resolveMediaPublishIntent(stream);
       return {
-        needsAudio: mediaIntent.isMicOn,
+        // Keep a muted microphone track warm like production meeting clients do:
+        // the producer starts paused, but unmute does not need a fresh gUM call.
+        needsAudio: true,
         needsVideo: mediaIntent.isCameraOn,
+        requiredAudio: mediaIntent.isMicOn,
+        requiredVideo: mediaIntent.isCameraOn,
       };
     },
     [resolveMediaPublishIntent],
@@ -1683,11 +1750,14 @@ export function useMeetSocket({
         stream: summarizeStreamForLog(candidateStream),
       });
 
-      const refreshedStream = await requestMediaPermissions();
+      const refreshedStream = await requestMediaPermissions(
+        buildRequestMediaPermissionsOptions(mediaNeeds),
+      );
       if (!refreshedStream) {
         console.warn("[Meets] Local media refresh failed before join:", {
           reason,
           previousStream: summarizeStreamForLog(candidateStream),
+          mediaNeeds,
         });
         return candidateStream?.getTracks().some(
           (track) => track.readyState === "live",
@@ -1888,6 +1958,22 @@ export function useMeetSocket({
       );
     },
     [currentRoomIdRef, serverRoomIdRef],
+  );
+
+  const applyServerActiveSpeaker = useCallback(
+    (userId: string | null | undefined) => {
+      const nextSpeakerId =
+        typeof userId === "string" && userId.length > 0 ? userId : null;
+
+      setServerActiveSpeakerAvailable(true);
+      lastActiveSpeakerRef.current = nextSpeakerId
+        ? { id: nextSpeakerId, ts: Date.now() }
+        : null;
+      setActiveSpeakerId((current) =>
+        current === nextSpeakerId ? current : nextSpeakerId,
+      );
+    },
+    [lastActiveSpeakerRef, setActiveSpeakerId, setServerActiveSpeakerAvailable],
   );
 
   const clearStaleConsumerRecoveryTimeout = useCallback((producerId: string) => {
@@ -2410,9 +2496,14 @@ export function useMeetSocket({
   const createProducerTransport = useCallback(
     async (socket: Socket, device: Device): Promise<void> => {
       return new Promise((resolve, reject) => {
+        const settleCreateTransport = startSocketAckTimeout(
+          "createProducerTransport",
+          reject,
+        );
         socket.emit(
           "createProducerTransport",
           (response: TransportResponse | { error: string }) => {
+            if (!settleCreateTransport()) return;
             if ("error" in response) {
               reject(new Error(response.error));
               return;
@@ -2430,10 +2521,15 @@ export function useMeetSocket({
                 callback: () => void,
                 errback: (error: Error) => void,
               ) => {
+                const settleConnectTransport = startSocketAckTimeout(
+                  "connectProducerTransport",
+                  errback,
+                );
                 socket.emit(
                   "connectProducerTransport",
                   { transportId: transport.id, dtlsParameters },
                   (res: { success: boolean } | { error: string }) => {
+                    if (!settleConnectTransport()) return;
                     if ("error" in res) errback(new Error(res.error));
                     else callback();
                   },
@@ -2456,10 +2552,15 @@ export function useMeetSocket({
                 callback: (data: { id: string }) => void,
                 errback: (error: Error) => void,
               ) => {
+                const settleProduce = startSocketAckTimeout(
+                  "produce",
+                  errback,
+                );
                 socket.emit(
                   "produce",
                   { transportId: transport.id, kind, rtpParameters, appData },
                   (res: { producerId: string } | { error: string }) => {
+                    if (!settleProduce()) return;
                     if ("error" in res) errback(new Error(res.error));
                     else callback({ id: res.producerId });
                   },
@@ -2469,6 +2570,12 @@ export function useMeetSocket({
 
             transport.on("connectionstatechange", (state: string) => {
               console.log("[Meets] Producer transport state:", state);
+              if (
+                state === "closed" &&
+                intentionallyClosedTransportsRef.current.delete(transport)
+              ) {
+                return;
+              }
               if (state === "connected") {
                 if (producerTransportDisconnectTimeoutRef.current) {
                   window.clearTimeout(
@@ -2560,6 +2667,7 @@ export function useMeetSocket({
                     message: "Producer transport closed",
                     recoverable: true,
                   });
+                  handleReconnectRef.current?.();
                 }
               }
             });
@@ -2587,6 +2695,7 @@ export function useMeetSocket({
     if (getUsableProducerTransport(existingTransport)) return true;
     if (existingTransport) {
       try {
+        intentionallyClosedTransportsRef.current.add(existingTransport);
         existingTransport.close();
       } catch {}
       producerTransportRef.current = null;
@@ -2631,9 +2740,14 @@ export function useMeetSocket({
   const createConsumerTransport = useCallback(
     async (socket: Socket, device: Device): Promise<void> => {
       return new Promise((resolve, reject) => {
+        const settleCreateTransport = startSocketAckTimeout(
+          "createConsumerTransport",
+          reject,
+        );
         socket.emit(
           "createConsumerTransport",
           (response: TransportResponse | { error: string }) => {
+            if (!settleCreateTransport()) return;
             if ("error" in response) {
               reject(new Error(response.error));
               return;
@@ -2651,10 +2765,15 @@ export function useMeetSocket({
                 callback: () => void,
                 errback: (error: Error) => void,
               ) => {
+                const settleConnectTransport = startSocketAckTimeout(
+                  "connectConsumerTransport",
+                  errback,
+                );
                 socket.emit(
                   "connectConsumerTransport",
                   { transportId: transport.id, dtlsParameters },
                   (res: { success: boolean } | { error: string }) => {
+                    if (!settleConnectTransport()) return;
                     if ("error" in res) errback(new Error(res.error));
                     else callback();
                   },
@@ -2664,6 +2783,12 @@ export function useMeetSocket({
 
             transport.on("connectionstatechange", (state: string) => {
               console.log("[Meets] Consumer transport state:", state);
+              if (
+                state === "closed" &&
+                intentionallyClosedTransportsRef.current.delete(transport)
+              ) {
+                return;
+              }
               if (state === "connected") {
                 if (consumerTransportDisconnectTimeoutRef.current) {
                   window.clearTimeout(
@@ -2739,6 +2864,11 @@ export function useMeetSocket({
                   });
                 }
               }
+              if (state === "closed") {
+                if (!intentionalDisconnectRef.current) {
+                  handleReconnectRef.current?.();
+                }
+              }
             });
 
             consumerTransportRef.current = transport;
@@ -2773,6 +2903,7 @@ export function useMeetSocket({
           if ("contentHint" in audioTrack) {
             audioTrack.contentHint = "speech";
           }
+          audioTrack.enabled = !shouldPauseAudio;
           const audioProducer = await transport.produce({
             track: audioTrack,
             codecOptions: buildMicrophoneOpusCodecOptions(
@@ -3035,10 +3166,20 @@ export function useMeetSocket({
       }
 
       return new Promise((resolve) => {
-        const existingWebcamVideoConsumerCount = Array.from(
-          producerMapRef.current.values(),
-        ).filter((info) => info.kind === "video" && info.type === "webcam")
-          .length;
+        const settleConsume = startSocketAckTimeout("consume", (error) => {
+          console.warn("[Meets] Consume acknowledgement timed out:", {
+            producerId: producerInfo.producerId,
+            kind: producerInfo.kind,
+            type: producerInfo.type,
+            error: error.message,
+          });
+          queueProducerConsumeRetry(producerInfo, 450);
+          resolve();
+        });
+        const existingWebcamVideoConsumerCount =
+          countWebcamVideoProducerEntries(producerMapRef.current);
+        const webcamVideoStartupRank =
+          options.webcamVideoStartupRank ?? existingWebcamVideoConsumerCount;
         const knownScreenShareVideoActive =
           options.knownScreenShareVideoActive === true ||
           (producerInfo.kind === "video" && producerInfo.type === "screen") ||
@@ -3048,6 +3189,10 @@ export function useMeetSocket({
           Array.from(pendingProducersRef.current.values()).some(
             (info) => info.kind === "video" && info.type === "screen",
           );
+        const shouldStartWebcamConsumerPausedForReceiveBudget =
+          (dataSaverMode || !isDocumentVisible) &&
+          producerInfo.kind === "video" &&
+          producerInfo.type === "webcam";
         socket.emit(
           "consume",
           {
@@ -3058,12 +3203,13 @@ export function useMeetSocket({
               preferHighWebcamLayer:
                 !knownScreenShareVideoActive &&
                 (joinMode === "webinar_attendee" ||
-                  existingWebcamVideoConsumerCount < 4),
+                  webcamVideoStartupRank < HIGH_LAYER_STARTUP_WEBCAM_LIMIT),
               networkProfile: getInitialConsumerNetworkProfile(producerInfo),
               screenShareVideoActive: knownScreenShareVideoActive,
             }),
           },
           async (response: ConsumeResponse | { error: string }) => {
+            if (!settleConsume()) return;
             if (shouldIgnoreDepartedParticipant(producerInfo.producerUserId)) {
               if (!("error" in response)) {
                 closeServerConsumer(response.id);
@@ -3139,6 +3285,13 @@ export function useMeetSocket({
                 response.kind === "audio" && producerInfo.type === "webcam";
               const isWebcamVideo =
                 response.kind === "video" && producerInfo.type === "webcam";
+              const startsPausedForAdaptiveReceive =
+                shouldStartWebcamConsumerPausedForReceiveBudget && isWebcamVideo;
+              if (startsPausedForAdaptiveReceive) {
+                adaptivelyPausedConsumerProducerIdsRef.current.add(
+                  producerInfo.producerId,
+                );
+              }
 
               const scheduleStaleConsumerRecovery = () => {
                 clearStaleConsumerRecoveryTimeout(producerInfo.producerId);
@@ -3302,6 +3455,14 @@ export function useMeetSocket({
                 stream,
                 producerId: producerInfo.producerId,
               });
+              if (startsPausedForAdaptiveReceive) {
+                dispatchParticipants({
+                  type: "UPDATE_VIDEO_ADAPTIVE_PAUSED",
+                  userId: producerInfo.producerUserId,
+                  producerId: producerInfo.producerId,
+                  adaptivelyPaused: true,
+                });
+              }
 
               if (producerInfo.type === "screen" && response.kind === "video") {
                 setActiveScreenShareId(producerInfo.producerId);
@@ -3326,14 +3487,16 @@ export function useMeetSocket({
                 updateCameraState(false);
               }
 
-              socket.emit(
-                "resumeConsumer",
-                {
-                  consumerId: consumer.id,
-                  requestKeyFrame: response.kind === "video",
-                },
-                () => {},
-              );
+              if (!startsPausedForAdaptiveReceive) {
+                socket.emit(
+                  "resumeConsumer",
+                  {
+                    consumerId: consumer.id,
+                    requestKeyFrame: response.kind === "video",
+                  },
+                  () => {},
+                );
+              }
               resolve();
             } catch (err) {
               closeServerConsumer(response.id);
@@ -3371,6 +3534,8 @@ export function useMeetSocket({
       producerPausedStateRef,
       setProducerPausedState,
       announcedRemoteProducersRef,
+      dataSaverMode,
+      isDocumentVisible,
       userId,
     ],
   );
@@ -3701,22 +3866,32 @@ export function useMeetSocket({
         if (pendingProducersRef.current.has(producerInfo.producerId)) continue;
       }
 
-      const consumeTasks: Promise<void>[] = [];
       const snapshotHasScreenShareVideo = producers.some(
         (producerInfo) =>
           producerInfo.kind === "video" && producerInfo.type === "screen",
       );
-      for (const producerInfo of producers) {
-        if (consumersRef.current.has(producerInfo.producerId)) continue;
-        if (pendingProducersRef.current.has(producerInfo.producerId)) continue;
-        consumeTasks.push(
-          consumeProducer(producerInfo, {
-            knownScreenShareVideoActive: snapshotHasScreenShareVideo,
-          }),
+      const producersToConsume = producers.filter((producerInfo) => {
+        if (consumersRef.current.has(producerInfo.producerId)) return false;
+        if (pendingProducersRef.current.has(producerInfo.producerId)) {
+          return false;
+        }
+        return true;
+      });
+      if (producersToConsume.length > 0) {
+        const webcamVideoStartupRanks = buildWebcamVideoStartupRanks(
+          producersToConsume,
+          countWebcamVideoProducerEntries(producerMapRef.current),
         );
-      }
-      if (consumeTasks.length > 0) {
-        await Promise.all(consumeTasks);
+        await Promise.all(
+          producersToConsume.map((producerInfo) =>
+            consumeProducer(producerInfo, {
+              knownScreenShareVideoActive: snapshotHasScreenShareVideo,
+              webcamVideoStartupRank: webcamVideoStartupRanks.get(
+                producerInfo.producerId,
+              ),
+            }),
+          ),
+        );
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err ?? "");
@@ -3877,18 +4052,32 @@ export function useMeetSocket({
       const snapshotHasScreenShareVideo = activeProducers.some(
         (producer) => producer.kind === "video" && producer.type === "screen",
       );
+      const producersToConsume = activeProducers.filter(
+        (producer) =>
+          !consumersRef.current.has(producer.producerId) &&
+          !pendingProducersRef.current.has(producer.producerId),
+      );
+      const webcamVideoStartupRanks = buildWebcamVideoStartupRanks(
+        producersToConsume,
+        countWebcamVideoProducerEntries(producerMapRef.current),
+      );
       await Promise.all(
-        activeProducers.map((producer) =>
+        producersToConsume.map((producer) =>
           consumeProducer(producer, {
             knownScreenShareVideoActive: snapshotHasScreenShareVideo,
+            webcamVideoStartupRank: webcamVideoStartupRanks.get(
+              producer.producerId,
+            ),
           }),
         ),
       );
     },
     [
       consumeProducer,
+      consumersRef,
       dropDepartedProducer,
       handleProducerClosed,
+      pendingProducersRef,
       producerMapRef,
       restoreWebinarFeedParticipant,
       shouldIgnoreDepartedParticipant,
@@ -3912,14 +4101,21 @@ export function useMeetSocket({
       (producerInfo) =>
         producerInfo.kind === "video" && producerInfo.type === "screen",
     );
+    const webcamVideoStartupRanks = buildWebcamVideoStartupRanks(
+      pending,
+      countWebcamVideoProducerEntries(producerMapRef.current),
+    );
     await Promise.all(
       pending.map((producerInfo) =>
         consumeProducer(producerInfo, {
           knownScreenShareVideoActive: snapshotHasScreenShareVideo,
+          webcamVideoStartupRank: webcamVideoStartupRanks.get(
+            producerInfo.producerId,
+          ),
         }),
       ),
     );
-  }, [pendingProducersRef, consumeProducer]);
+  }, [pendingProducersRef, consumeProducer, producerMapRef]);
 
   const recoverActiveMeeting = useCallback(
     (reason: "online" | "foreground") => {
@@ -4063,6 +4259,11 @@ export function useMeetSocket({
       setConnectionState("joining");
 
       return new Promise<"joined" | "waiting">((resolve, reject) => {
+        const settleJoinRoom = startSocketAckTimeout(
+          "joinRoom",
+          reject,
+          JOIN_ROOM_ACK_TIMEOUT_MS,
+        );
         socket.emit(
           "joinRoom",
           {
@@ -4074,6 +4275,7 @@ export function useMeetSocket({
             meetingInviteCode: joinOptions.meetingInviteCode,
           },
           async (response: JoinRoomResponse | JoinRoomErrorResponse) => {
+            if (!settleJoinRoom()) return;
             if ("error" in response) {
               reject(getJoinRoomRedirectError(response) ?? new Error(response.error));
               return;
@@ -4083,6 +4285,7 @@ export function useMeetSocket({
 
             if (response.status === "waiting") {
               setConnectionState("waiting");
+              setServerActiveSpeakerAvailable(false);
               setHostUserId(response.hostUserId ?? null);
               setHostUserIds(
                 response.hostUserIds ??
@@ -4140,6 +4343,13 @@ export function useMeetSocket({
               setIsChatLocked(response.isChatLocked ?? false);
               setIsDmEnabled(response.isDmEnabled ?? true);
               setIsReactionsDisabled(response.isReactionsDisabled ?? false);
+              if (
+                Object.prototype.hasOwnProperty.call(response, "activeSpeakerId")
+              ) {
+                applyServerActiveSpeaker(response.activeSpeakerId);
+              } else {
+                setServerActiveSpeakerAvailable(false);
+              }
               setWebinarRole(response.webinarRole ?? null);
               setWebinarSpeakerUserId(
                 response.existingProducers?.[0]?.producerUserId ?? null,
@@ -4203,10 +4413,16 @@ export function useMeetSocket({
                   (producer) =>
                     producer.kind === "video" && producer.type === "screen",
                 );
+              const webcamVideoStartupRanks = buildWebcamVideoStartupRanks(
+                response.existingProducers,
+              );
               const consumePromises = response.existingProducers.map(
                 (producer) =>
                   consumeProducer(producer, {
                     knownScreenShareVideoActive: snapshotHasScreenShareVideo,
+                    webcamVideoStartupRank: webcamVideoStartupRanks.get(
+                      producer.producerId,
+                    ),
                   }),
               );
 
@@ -4562,6 +4778,26 @@ export function useMeetSocket({
               }) => {
                 if (!isRoomEvent(eventRoomId)) return;
                 setHostUserIds(Array.isArray(hostUserIds) ? hostUserIds : []);
+              },
+            );
+
+            socket.on(
+              "activeSpeakerChanged",
+              (notification: ActiveSpeakerChangedNotification) => {
+                if (!isRoomEvent(notification?.roomId)) return;
+                const nextSpeakerId =
+                  typeof notification?.userId === "string" &&
+                  notification.userId.length > 0
+                    ? notification.userId
+                    : null;
+                if (
+                  nextSpeakerId &&
+                  shouldIgnoreDepartedParticipant(nextSpeakerId)
+                ) {
+                  applyServerActiveSpeaker(null);
+                  return;
+                }
+                applyServerActiveSpeaker(nextSpeakerId);
               },
             );
 
@@ -5448,6 +5684,7 @@ export function useMeetSocket({
               if (
                 currentRoomIdRef.current &&
                 (stream ||
+                  !hasRequiredJoinMediaNeed(mediaNeeds) ||
                   !shouldRequestMedia ||
                   joinOptions.isGhost ||
                   joinOptions.isRecorder ||
@@ -5732,6 +5969,7 @@ export function useMeetSocket({
       handleProducerClosed,
       handleRedirectRef,
       handleReconnectRef,
+      applyServerActiveSpeaker,
       applyDisplayNameSnapshot,
       applyParticipantConnectionStatus,
       ensureLiveLocalMediaForJoin,
@@ -5785,6 +6023,7 @@ export function useMeetSocket({
       setWebinarConfig,
       setServerRestartNotice,
       setAdminNotice,
+      setServerActiveSpeakerAvailable,
       setLocalStream,
       setMeetError,
       setMeetingEndedNotice,
@@ -6170,6 +6409,8 @@ export function useMeetSocket({
   useEffect(() => {
     if (typeof window === "undefined") return;
 
+    let lastEventLoopHeartbeatAt = Date.now();
+
     const scheduleForegroundRecovery = () => {
       if (foregroundRecoveryTimeoutRef.current) {
         window.clearTimeout(foregroundRecoveryTimeoutRef.current);
@@ -6180,7 +6421,7 @@ export function useMeetSocket({
         clearExpiredParticipantConnectionStatuses();
         requestForegroundScreenShareKeyFrames();
         recoverActiveMeeting("foreground");
-      }, 150);
+      }, FOREGROUND_RECOVERY_DELAY_MS);
     };
 
     const handleVisibilityChange = () => {
@@ -6196,11 +6437,32 @@ export function useMeetSocket({
       scheduleForegroundRecovery();
     };
 
+    const handleEventLoopHeartbeat = () => {
+      const now = Date.now();
+      const gapMs = now - lastEventLoopHeartbeatAt;
+      lastEventLoopHeartbeatAt = now;
+
+      if (gapMs < SUSPENDED_EVENT_LOOP_GAP_MS) return;
+      if (document.visibilityState !== "visible") return;
+
+      console.warn(
+        "[Meets] Browser event loop was suspended; recovering meeting media.",
+        { gapMs },
+      );
+      scheduleForegroundRecovery();
+    };
+
+    const eventLoopHeartbeatInterval = window.setInterval(
+      handleEventLoopHeartbeat,
+      SUSPENDED_EVENT_LOOP_CHECK_MS,
+    );
+
     document.addEventListener("visibilitychange", handleVisibilityChange);
     window.addEventListener("pageshow", handlePageShow);
     window.addEventListener("focus", handleFocus);
 
     return () => {
+      window.clearInterval(eventLoopHeartbeatInterval);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
       window.removeEventListener("pageshow", handlePageShow);
       window.removeEventListener("focus", handleFocus);
@@ -6292,7 +6554,11 @@ export function useMeetSocket({
             : Promise.resolve(candidateStream),
         ]);
 
-        if (shouldRequestMedia && !stream) {
+        if (
+          shouldRequestMedia &&
+          !stream &&
+          hasRequiredJoinMediaNeed(mediaNeeds)
+        ) {
           setConnectionState("error");
           return;
         }

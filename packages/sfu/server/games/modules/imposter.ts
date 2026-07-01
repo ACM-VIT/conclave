@@ -4,7 +4,7 @@ import {
   type GameModule,
   type GameMove,
 } from "../types.js";
-import { requirePlayerTarget } from "../validation.js";
+import { payloadField, requirePlayerTarget } from "../validation.js";
 import { selectOption } from "../config.js";
 import {
   GAME_CONTENT_TOPIC_OPTION,
@@ -126,8 +126,33 @@ const tallyVotes = (state: ImposterState): ImposterResult => {
 };
 
 const everyoneVoted = (state: ImposterState, ctx: GameContext): boolean =>
-  ctx.players.length > 0 &&
-  ctx.players.every((player) => Boolean(state.votes[player.id]));
+  ctx.activePlayers.length > 0 &&
+  ctx.activePlayers.every((player) => Boolean(state.votes[player.id]));
+
+/**
+ * Typed move contract. Decoded from the untrusted `GameMove` at the top of
+ * `onMove`. The vote target stays `unknown` on the decoded move because it is
+ * validated against the live roster by `requirePlayerTarget` (which needs ctx)
+ * inside the case, preserving the "Invalid vote target" / self-vote messages.
+ */
+export type ImposterMove =
+  | { type: "start" }
+  | { type: "callVote" }
+  | { type: "vote"; target: unknown }
+  | { type: "tally" };
+
+const decodeImposterMove = (move: GameMove): ImposterMove => {
+  switch (move.type) {
+    case "start":
+    case "callVote":
+    case "tally":
+      return { type: move.type };
+    case "vote":
+      return { type: "vote", target: payloadField(move.payload, "target") };
+    default:
+      throw new GameMoveError(`Unknown move: ${move.type}`);
+  }
+};
 
 export const imposterModule: GameModule<ImposterState> = {
   id: "imposter",
@@ -220,7 +245,8 @@ export const imposterModule: GameModule<ImposterState> = {
   },
 
   onMove(state, move: GameMove, ctx): ImposterState {
-    switch (move.type) {
+    const m = decodeImposterMove(move);
+    switch (m.type) {
       case "start": {
         if (!ctx.isAdmin(move.playerId)) {
           throw new GameMoveError("Only the host can start the round");
@@ -246,16 +272,11 @@ export const imposterModule: GameModule<ImposterState> = {
         if (state.phase !== "vote") {
           throw new GameMoveError("Voting is not open");
         }
-        const target = requirePlayerTarget(
-          ctx,
-          move.playerId,
-          (move.payload as { target?: unknown })?.target,
-          {
-            allowSelf: false,
-            invalidMessage: "Invalid vote target",
-            selfMessage: "You cannot vote for yourself",
-          },
-        );
+        const target = requirePlayerTarget(ctx, move.playerId, m.target, {
+          allowSelf: false,
+          invalidMessage: "Invalid vote target",
+          selfMessage: "You cannot vote for yourself",
+        });
         const votes = { ...state.votes, [move.playerId]: target };
         const next = { ...state, votes };
         if (everyoneVoted(next, ctx)) {
@@ -272,8 +293,10 @@ export const imposterModule: GameModule<ImposterState> = {
         }
         return { ...state, phase: "result", result: tallyVotes(state) };
       }
-      default:
-        throw new GameMoveError(`Unknown move: ${move.type}`);
+      default: {
+        const _exhaustive: never = m;
+        throw new GameMoveError(`Unknown move: ${(_exhaustive as GameMove).type}`);
+      }
     }
   },
 
@@ -305,7 +328,7 @@ export const imposterModule: GameModule<ImposterState> = {
           ? Object.keys(state.votes)
           : [],
       voteCounts,
-      totalPlayers: ctx.players.length,
+      totalPlayers: ctx.activePlayers.length,
       result:
         state.phase === "result" && state.result
           ? {

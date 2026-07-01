@@ -2,7 +2,9 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import { color, radius } from "@conclave/ui-tokens";
+import { createTypedMove } from "@conclave/apps-sdk";
 import { GameLobby, GhostButton, HEAD_FONT, type GameViewProps } from "./gameUi";
+import type { ReactionMove } from "./moves";
 
 type ReactionResult = { id: string; name: string; reactionMs: number | null; early: boolean };
 
@@ -59,6 +61,7 @@ export default function ReactionGame({
   readOnly = false,
   move,
 }: GameViewProps<ReactionPublic, ReactionMe>) {
+  const send = createTypedMove<ReactionMove>(move);
   const elapsed = useElapsed(pub.goAt, pub.serverNow);
 
   if (pub.phase === "lobby") {
@@ -72,7 +75,7 @@ export default function ReactionGame({
         isAdmin={isAdmin}
         readOnly={readOnly}
         startLabel="Start"
-        onStart={() => move("start")}
+        onStart={() => send({ type: "start" })}
       />
     );
   }
@@ -95,7 +98,7 @@ export default function ReactionGame({
     }
     const canTap = !readOnly && !me.tapped;
     const handleTap = () => {
-      void move("tap");
+      void send({ type: "tap" });
     };
     return (
       <div style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 340 }}>
@@ -198,7 +201,7 @@ export default function ReactionGame({
       </div>
       {isAdmin && !readOnly ? (
         <div style={{ display: "flex", justifyContent: "flex-end" }}>
-          <GhostButton onClick={() => move("next")}>Next</GhostButton>
+          <GhostButton onClick={() => send({ type: "next" })}>Next</GhostButton>
         </div>
       ) : null}
     </div>

@@ -144,6 +144,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     private val remoteConsumerPreferenceScope = CoroutineScope(Dispatchers.Main.immediate + SupervisorJob())
     private val mainHandler = Handler(Looper.getMainLooper())
     private var remoteConsumerPreferenceRetryJob: Job? = null
+    private var remoteVideoReceiveEnabled = true
     private var serverRtpCapabilities: RtpCapabilities? = null
 
     companion object {
@@ -151,6 +152,8 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         private const val REMOTE_CONSUMER_PREFERENCE_EMIT_SPACING_MS = 75L
         private const val REMOTE_CONSUMER_PREFERENCE_RETRY_DELAY_MS = 1_000L
         private const val PRE_JOIN_CAMERA_RELEASE_SETTLE_MS = 350L
+        private const val WEBRTC_NETWORK_PRIORITY_VERY_LOW = 0
+        private const val WEBRTC_NETWORK_PRIORITY_HIGH = 3
     }
 
     private data class RemoteConsumerPreference(
@@ -250,8 +253,10 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         )
     }
 
-    private fun initialScreenConsumerPreference(): InitialConsumerPreference {
-        val temporalLayer = when (currentLocalBandwidthQuality) {
+    private fun initialScreenConsumerPreference(
+        connectionQuality: ConnectionQuality,
+    ): InitialConsumerPreference {
+        val temporalLayer = when (connectionQuality) {
             ConnectionQuality.emergency -> 1
             ConnectionQuality.poor -> 1
             else -> 2
@@ -268,6 +273,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         producerKind: String?,
         producerType: String,
         preferHighWebcamLayer: Boolean,
+        initialReceiveConnectionQuality: ConnectionQuality,
     ): InitialConsumerPreference {
         if (producerKind == "audio") {
             return InitialConsumerPreference(
@@ -286,7 +292,9 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         }
 
         if (producerType == ProducerType.screen.rawValue) {
-            return initialScreenConsumerPreference()
+            return initialScreenConsumerPreference(
+                connectionQuality = initialReceiveConnectionQuality,
+            )
         }
 
         if (producerType != ProducerType.webcam.rawValue) {
@@ -345,6 +353,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
                 visibleUserIds = visibleUserIds,
                 connectionQuality = connectionQuality,
                 videoQuality = videoQuality,
+                receiveVideo = remoteVideoReceiveEnabled,
             )
         }
     }
@@ -445,9 +454,12 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         visibleUserIds: skip.lib.Set<String>,
         connectionQuality: ConnectionQuality,
         videoQuality: VideoQuality,
+        receiveVideo: Boolean = true,
     ) {
+        remoteVideoReceiveEnabled = receiveVideo
         val socket = socketManager ?: return
 
+        val shouldReceiveVideo = receiveVideo
         val consumerSnapshot = consumers.toList()
         val emergencyKeepWebcamUserId: String? =
             if (connectionQuality == ConnectionQuality.emergency) {
@@ -470,6 +482,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
                 emergencyKeepWebcamUserId = emergencyKeepWebcamUserId,
                 connectionQuality = connectionQuality,
                 videoQuality = videoQuality,
+                receiveVideo = shouldReceiveVideo,
             ) ?: continue
             if (remoteConsumerPreferenceInFlightIds.contains(consumerId)) continue
 
@@ -588,6 +601,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         emergencyKeepWebcamUserId: String?,
         connectionQuality: ConnectionQuality,
         videoQuality: VideoQuality,
+        receiveVideo: Boolean,
     ): RemoteConsumerPreference? {
         if (info.kind == "audio") {
             return RemoteConsumerPreference(
@@ -599,6 +613,15 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         }
 
         if (info.kind != "video") return null
+
+        if (!receiveVideo) {
+            return RemoteConsumerPreference(
+                spatialLayer = 0,
+                temporalLayer = 0,
+                priority = 8,
+                paused = true,
+            )
+        }
 
         if (info.type == ProducerType.screen.rawValue) {
             val temporalLayer = when (connectionQuality) {
@@ -1189,7 +1212,8 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         producerUserId: String,
         producerKind: String? = null,
         producerType: String = "webcam",
-        preferHighWebcamLayer: Boolean = false
+        preferHighWebcamLayer: Boolean = false,
+        initialReceiveConnectionQuality: ConnectionQuality = ConnectionQuality.unknown,
     ) {
         val socket = socketManager ?: throw ErrorException("Socket not configured")
         val rtpCapsJson = socket.routerRtpCapabilitiesJson ?: throw ErrorException("RTP caps missing")
@@ -1203,6 +1227,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             producerKind = producerKind,
             producerType = producerType,
             preferHighWebcamLayer = preferHighWebcamLayer,
+            initialReceiveConnectionQuality = initialReceiveConnectionQuality,
         )
         val response = socket.consumeRaw(
             producerId,
@@ -2133,7 +2158,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             ).also { encoding ->
                 encoding.maxBitrateBps = spec.maxBitrateBps
                 encoding.maxFramerate = spec.maxFramerate
-                encoding.networkPriority = 0
+                encoding.networkPriority = WEBRTC_NETWORK_PRIORITY_VERY_LOW
             }
         }
     }
@@ -2233,6 +2258,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
                 encoding.maxBitrateBps = cap.maxBitrateBps
                 encoding.maxFramerate = cap.maxFramerate
                 encoding.numTemporalLayers = screenShareTemporalLayerCount
+                encoding.networkPriority = WEBRTC_NETWORK_PRIORITY_HIGH
             },
         )
     }

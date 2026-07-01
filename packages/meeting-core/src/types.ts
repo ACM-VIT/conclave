@@ -225,6 +225,7 @@ export interface JoinRoomResponse {
   roomId?: string;
   rtpCapabilities: RtpCapabilities;
   existingProducers: ProducerInfo[];
+  activeSpeakerId?: string | null;
   displayNameSnapshot?: DisplayNameSnapshotEntry[];
   status?: "waiting" | "joined";
   hostUserId?: string | null;
@@ -289,6 +290,11 @@ export interface WebinarFeedChangedNotification {
   roomId: string;
   speakerUserId: string | null;
   producers: ProducerInfo[];
+}
+
+export interface ActiveSpeakerChangedNotification {
+  roomId: string;
+  userId: string | null;
 }
 
 export interface WebinarParticipantJoinedNotification {

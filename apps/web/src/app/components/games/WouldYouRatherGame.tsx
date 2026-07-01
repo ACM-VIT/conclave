@@ -2,6 +2,7 @@
 
 import React from "react";
 import { color, radius } from "@conclave/ui-tokens";
+import { createTypedMove } from "@conclave/apps-sdk";
 import {
   CountdownRing,
   GameLobby,
@@ -10,6 +11,7 @@ import {
   useRemaining,
   type GameViewProps,
 } from "./gameUi";
+import type { WouldYouRatherMove } from "./moves";
 
 type WyrPublic = {
   phase: "lobby" | "choose" | "reveal" | "results";
@@ -77,6 +79,7 @@ export default function WouldYouRatherGame({
   readOnly = false,
   move,
 }: GameViewProps<WyrPublic, WyrMe>) {
+  const send = createTypedMove<WouldYouRatherMove>(move);
   const remaining = useRemaining(pub.deadline, pub.serverNow);
 
   if (pub.phase === "lobby") {
@@ -89,7 +92,7 @@ export default function WouldYouRatherGame({
         userId={userId}
         isAdmin={isAdmin}
         readOnly={readOnly}
-        onStart={() => move("start")}
+        onStart={() => send({ type: "start" })}
       />
     );
   }
@@ -138,14 +141,14 @@ export default function WouldYouRatherGame({
           picked={me.choice === 0}
           accent={accentA}
           disabled={readOnly || reveal || me.choice !== null}
-          onClick={() => move("choose", { option: 0 })}
+          onClick={() => send({ type: "choose", option: 0 })}
         />
         <OptionCard
           text={pub.optionB ?? ""}
           picked={me.choice === 1}
           accent={accentB}
           disabled={readOnly || reveal || me.choice !== null}
-          onClick={() => move("choose", { option: 1 })}
+          onClick={() => send({ type: "choose", option: 1 })}
         />
       </div>
 
@@ -183,9 +186,9 @@ export default function WouldYouRatherGame({
       {isAdmin && !readOnly ? (
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
           {reveal ? (
-            <GhostButton onClick={() => move("next")}>Next</GhostButton>
+            <GhostButton onClick={() => send({ type: "next" })}>Next</GhostButton>
           ) : (
-            <GhostButton onClick={() => move("skip")}>Reveal</GhostButton>
+            <GhostButton onClick={() => send({ type: "skip" })}>Reveal</GhostButton>
           )}
         </div>
       ) : null}

@@ -867,12 +867,14 @@ function ControlsBar(props: ControlsBarProps) {
 
       <div className="flex min-w-0 shrink-0 items-center justify-self-end gap-0.5">
         {panelItems.length > 0 && (
-          <div className="relative flex">
-            <PanelCluster
-              items={panelItems}
-              transcriptStatus={transcriptClusterStatus}
-              forceOpen={panelCoachmarkVisible}
-            />
+          <div className="relative flex pr-[max(0.5rem,env(safe-area-inset-right))]">
+            <div className="overflow-hidden rounded-full bg-white/[0.04]">
+              <PanelCluster
+                items={panelItems}
+                transcriptStatus={transcriptClusterStatus}
+                forceOpen={panelCoachmarkVisible}
+              />
+            </div>
             {panelCoachmarkVisible && gamesTip.visible ? (
               <Coachmark
                 title="Games are here!"

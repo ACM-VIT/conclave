@@ -59,6 +59,7 @@ export interface JoinRoomResponse {
   roomId?: string;
   rtpCapabilities: RtpCapabilities;
   existingProducers: ProducerInfo[];
+  activeSpeakerId?: string | null;
   displayNameSnapshot?: DisplayNameSnapshotEntry[];
   status?: "waiting" | "joined";
   hostUserId?: string | null;
@@ -82,6 +83,11 @@ export interface JoinRoomErrorResponse {
   roomId?: string;
   redirectInstanceId?: string;
   redirectUrl?: string;
+}
+
+export interface ActiveSpeakerChangedNotification {
+  roomId: string;
+  userId: string | null;
 }
 
 export interface CreateTransportResponse {
@@ -159,6 +165,22 @@ export interface SetConsumerPreferencesResponse {
   priority: number;
   preferredLayers?: ConsumerLayerPreference;
   currentLayers?: ConsumerLayerPreference;
+}
+
+export interface SetConsumerPreferencesBatchData {
+  updates: SetConsumerPreferencesData[];
+}
+
+export type SetConsumerPreferencesBatchItemResponse =
+  | SetConsumerPreferencesResponse
+  | {
+      error: string;
+      consumerId?: string;
+    };
+
+export interface SetConsumerPreferencesBatchResponse {
+  success: boolean;
+  results: SetConsumerPreferencesBatchItemResponse[];
 }
 
 export interface ProducerInfo {

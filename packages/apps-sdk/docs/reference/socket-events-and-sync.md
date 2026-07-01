@@ -118,6 +118,32 @@ Server -> peers (`apps:awareness`):
 - relayed to everyone else in room for active app
 - receiver applies awareness update with origin `"remote"`
 
+## Game Events
+
+Games use a separate, server-authoritative contract handled by `GameProvider`. The SFU owns canonical state; clients only ever receive projections.
+
+| Event | Direction | Ack | Purpose |
+| --- | --- | --- | --- |
+| `game:list` | client -> server | yes | fetch the game catalog (options, player bounds, leaderboard flag) |
+| `game:start` | client -> server | yes | host starts a game with validated config; also replaces a finished session (rematch) |
+| `game:move` | client -> server | yes | send a player move; the server decodes and validates it |
+| `game:end` | client -> server | yes | host ends the game early |
+| `game:getState` | client -> server | yes | full snapshot: public state, your private view, active vote, and `selfId` |
+| `game:state` | server -> room | no | public projection broadcast on every change |
+| `game:view` | server -> player | no | private per-player projection (the hidden-information boundary) |
+| `game:snapshot` | server -> client | no | targeted join/reconnect snapshot, same shape as `game:getState` |
+| `game:ended` | server -> room | no | the game was cleared |
+| `game:vote:open` | client -> server | yes | host opens a vote on which game to play |
+| `game:vote:cast` | client -> server | yes | player votes for a candidate game |
+| `game:vote:cancel` | client -> server | yes | host cancels the vote |
+| `game:vote` | server -> room | no | live vote state broadcast |
+
+Notes:
+
+- Snapshots and `game:getState` include `selfId`, the caller's canonical player id. `GameProvider` prefers it over any locally built identity, and `useGame().userId` returns it. Match yourself against this value everywhere.
+- The public projection (`game:state`) carries `config`, the host-chosen settings, so a results screen can restart the same game with the same options.
+- Private views are only ever emitted to the owning socket. Nothing secret rides `game:state`.
+
 ## Payload Encoding Rules
 
 Runtime accepts multiple binary-like payload forms:

@@ -4,6 +4,7 @@ import {
   type GameConfig,
   type GameContext,
   type GameModule,
+  type GameOptionSpec,
   type GamePlayer,
   type GamePublicState,
   type GameRng,
@@ -148,6 +149,7 @@ export class GameSession {
       view: this.module.publicView(this.state, ctx),
       finished: this.finished,
       hasLeaderboard: Boolean(this.module.hasLeaderboard),
+      config: publicRematchConfig(this.module.options, this.config),
     };
   }
 
@@ -165,4 +167,22 @@ const dedupePlayers = (players: GamePlayer[]): GamePlayer[] => {
     out.push({ id: player.id, name: player.name });
   }
   return out;
+};
+
+const publicRematchConfig = (
+  options: GameOptionSpec[] | undefined,
+  config: GameConfig,
+): GameConfig => {
+  const safe: GameConfig = {};
+  for (const opt of options ?? []) {
+    const value = config[opt.id];
+    if (opt.type === "number") {
+      if (typeof value === "number") safe[opt.id] = value;
+    } else if (opt.type === "select") {
+      if (typeof value === "string") safe[opt.id] = value;
+    }
+    // Text options can contain user-authored/private topic text. They are
+    // intentionally omitted from public state; rematches fall back to defaults.
+  }
+  return safe;
 };

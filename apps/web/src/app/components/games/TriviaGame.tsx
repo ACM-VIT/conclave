@@ -2,6 +2,7 @@
 
 import React from "react";
 import { color, radius } from "@conclave/ui-tokens";
+import { createTypedMove } from "@conclave/apps-sdk";
 import {
   CountdownRing,
   GameLobby,
@@ -10,6 +11,7 @@ import {
   useRemaining,
   type GameViewProps,
 } from "./gameUi";
+import type { TriviaMove } from "./moves";
 
 type Scoreboard = { id: string; name: string; score: number }[];
 
@@ -52,6 +54,7 @@ export default function TriviaGame({
   readOnly = false,
   move,
 }: GameViewProps<TriviaPublic, TriviaMe>) {
+  const send = createTypedMove<TriviaMove>(move);
   const remaining = useRemaining(pub.deadline, pub.serverNow);
 
   if (pub.phase === "lobby") {
@@ -65,7 +68,7 @@ export default function TriviaGame({
         isAdmin={isAdmin}
         readOnly={readOnly}
         startLabel="Start quiz"
-        onStart={() => move("start")}
+        onStart={() => send({ type: "start" })}
       />
     );
   }
@@ -156,7 +159,7 @@ export default function TriviaGame({
               key={index}
               type="button"
               disabled={locked}
-              onClick={() => move("answer", { choice: index })}
+              onClick={() => send({ type: "answer", choice: index })}
               style={{
                 display: "flex",
                 alignItems: "center",
@@ -223,9 +226,9 @@ export default function TriviaGame({
       {isAdmin && !readOnly ? (
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
           {reveal ? (
-            <GhostButton onClick={() => move("next")}>Next →</GhostButton>
+            <GhostButton onClick={() => send({ type: "next" })}>Next →</GhostButton>
           ) : (
-            <GhostButton onClick={() => move("skip")}>Skip</GhostButton>
+            <GhostButton onClick={() => send({ type: "skip" })}>Skip</GhostButton>
           )}
         </div>
       ) : null}

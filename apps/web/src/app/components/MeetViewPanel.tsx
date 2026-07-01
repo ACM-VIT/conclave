@@ -120,6 +120,10 @@ export default function MeetViewPanel({
     onSettingsChange((current) => ({ ...current, hideTilesWithoutVideo }));
   };
 
+  const setDataSaverMode = (dataSaverMode: boolean) => {
+    onSettingsChange((current) => ({ ...current, dataSaverMode }));
+  };
+
   const setSelfViewMode = (selfViewMode: MeetSelfViewMode) => {
     onSettingsChange((current) => ({ ...current, selfViewMode }));
   };
@@ -212,6 +216,22 @@ export default function MeetViewPanel({
               label="Hide tiles without video"
               checked={settings.hideTilesWithoutVideo}
               onChange={setHideTilesWithoutVideo}
+            />
+          </div>
+        </section>
+
+        <section
+          className="border-t border-white/10 px-4 py-3"
+          data-meet-data-saver-setting="true"
+        >
+          <div className="flex w-full items-center justify-between gap-3 px-1 py-1.5">
+            <span className="text-[13px] font-medium text-[#fafafa]">
+              Data saver
+            </span>
+            <Switch
+              label="Data saver"
+              checked={settings.dataSaverMode}
+              onChange={setDataSaverMode}
             />
           </div>
         </section>

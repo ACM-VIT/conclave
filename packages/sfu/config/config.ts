@@ -244,6 +244,20 @@ const gameAiWebSearchContextSize = (() => {
 const transcriptRelayDisabled =
   process.env.SFU_TRANSCRIPT_RELAY_ENABLED === "0" ||
   process.env.SFU_TRANSCRIPT_RELAY_ENABLED?.toLowerCase() === "false";
+// Product analytics (PostHog). Strictly opt-in: with no project key set, the
+// block is `enabled: false`, no client is ever constructed, and nothing is
+// sent (zero overhead). Never hardcode a key — it comes from the environment.
+const posthogProjectApiKey =
+  process.env.SFU_POSTHOG_KEY?.trim() ||
+  process.env.SFU_POSTHOG_PROJECT_API_KEY?.trim() ||
+  "";
+const posthogDisabled =
+  process.env.SFU_POSTHOG_ENABLED === "0" ||
+  process.env.SFU_POSTHOG_ENABLED?.toLowerCase() === "false";
+// Default to the PostHog EU cloud ingestion host (region-correct for this
+// deployment). Override with SFU_POSTHOG_HOST for self-hosted / US cloud.
+const posthogHost =
+  process.env.SFU_POSTHOG_HOST?.trim() || "https://eu.i.posthog.com";
 const instancePublicUrl =
   process.env.SFU_PUBLIC_URL?.trim() ||
   process.env.SFU_INSTANCE_URL?.trim() ||
@@ -302,6 +316,19 @@ const routerMediaCodecs: RouterRtpCodecCapability[] = [
       { type: "transport-cc" },
     ],
   },
+  {
+    kind: "video",
+    mimeType: "video/VP9",
+    clockRate: 90000,
+    parameters: { "profile-id": 0 },
+    rtcpFeedback: [
+      { type: "nack" },
+      { type: "nack", parameter: "pli" },
+      { type: "ccm", parameter: "fir" },
+      { type: "goog-remb" },
+      { type: "transport-cc" },
+    ],
+  },
 ];
 
 export const config = {
@@ -345,6 +372,31 @@ export const config = {
     }),
     webSearchEnabled: !gameAiWebSearchDisabled,
     webSearchContextSize: gameAiWebSearchContextSize as "low" | "medium" | "high",
+  },
+  analytics: {
+    // Enabled ONLY when a project key is present (and not explicitly disabled).
+    // When false, the analytics module constructs nothing and sends nothing.
+    enabled: !posthogDisabled && Boolean(posthogProjectApiKey),
+    projectApiKey: posthogProjectApiKey,
+    host: posthogHost,
+    // Batch tuning. A game meeting is long-lived and low-volume, so flush on a
+    // small batch or a short interval to keep events fresh without chattiness.
+    flushAt: toNumber(process.env.SFU_POSTHOG_FLUSH_AT, 20, {
+      integer: true,
+      min: 1,
+      max: 1000,
+    }),
+    flushIntervalMs: toNumber(process.env.SFU_POSTHOG_FLUSH_INTERVAL_MS, 10000, {
+      integer: true,
+      min: 0,
+      max: 300000,
+    }),
+    // Bounded time to flush buffered events on graceful shutdown.
+    shutdownTimeoutMs: toNumber(
+      process.env.SFU_POSTHOG_SHUTDOWN_TIMEOUT_MS,
+      5000,
+      { integer: true, min: 0, max: 60000 },
+    ),
   },
   transcriptRelay: {
     enabled: !transcriptRelayDisabled,

@@ -4,7 +4,9 @@ import {
   type GameModule,
   type GameMove,
 } from "../types.js";
+import { payloadField, requireInt } from "../validation.js";
 import { numberOption, selectOption } from "../config.js";
+import { allActivePlayersActed } from "../roundLoop.js";
 import {
   GAME_CONTENT_TOPIC_OPTION,
   cleanGeneratedText,
@@ -132,9 +134,6 @@ const parseGeneratedQuestions = (
 const generatedQuestionsFromContent = (content: unknown): RawQuestion[] =>
   Array.isArray(content) ? (content as RawQuestion[]) : [];
 
-const otherPlayersAllAnswered = (state: TriviaState, total: number): boolean =>
-  total > 0 && Object.keys(state.answers).length >= total;
-
 const scoreRound = (state: TriviaState): void => {
   const question = state.questions[state.questionIndex];
   const lastRound: Record<string, number> = {};
@@ -159,6 +158,35 @@ const scoreboard = (state: TriviaState, ctx: GameContext) =>
       score: state.scores[player.id] ?? 0,
     }))
     .sort((a, b) => b.score - a.score);
+
+/**
+ * Typed move contract. Decoded from the untrusted `GameMove` at the top of
+ * `onMove`, so the switch below works on validated, correctly-typed fields
+ * instead of `payload as` casts.
+ */
+export type TriviaMove =
+  | { type: "start" }
+  | { type: "answer"; choice: number }
+  | { type: "skip" }
+  | { type: "next" };
+
+const decodeTriviaMove = (move: GameMove): TriviaMove => {
+  switch (move.type) {
+    case "start":
+    case "skip":
+    case "next":
+      return { type: move.type };
+    case "answer": {
+      // Validate the shape here; the against-the-board range check stays in the
+      // case (it needs the current question). Both throw "Invalid answer".
+      const choice = requireInt(payloadField(move.payload, "choice"), "Invalid answer");
+      if (choice < 0) throw new GameMoveError("Invalid answer");
+      return { type: "answer", choice };
+    }
+    default:
+      throw new GameMoveError(`Unknown move: ${move.type}`);
+  }
+};
 
 export const triviaModule: GameModule<TriviaState> = {
   id: "trivia",
@@ -269,7 +297,8 @@ export const triviaModule: GameModule<TriviaState> = {
   },
 
   onMove(state, move: GameMove, ctx): TriviaState {
-    switch (move.type) {
+    const m = decodeTriviaMove(move);
+    switch (m.type) {
       case "start": {
         if (!ctx.isAdmin(move.playerId)) {
           throw new GameMoveError("Only the host can start the quiz");
@@ -291,14 +320,8 @@ export const triviaModule: GameModule<TriviaState> = {
         if (state.phase !== "question") {
           throw new GameMoveError("Not accepting answers right now");
         }
-        const choice = (move.payload as { choice?: unknown })?.choice;
         const question = state.questions[state.questionIndex];
-        if (
-          typeof choice !== "number" ||
-          !Number.isInteger(choice) ||
-          choice < 0 ||
-          choice >= question.options.length
-        ) {
+        if (m.choice >= question.options.length) {
           throw new GameMoveError("Invalid answer");
         }
         if (state.answers[move.playerId]) {
@@ -306,11 +329,11 @@ export const triviaModule: GameModule<TriviaState> = {
         }
         const answers = {
           ...state.answers,
-          [move.playerId]: { choice, at: ctx.now },
+          [move.playerId]: { choice: m.choice, at: ctx.now },
         };
-        const deadline = otherPlayersAllAnswered(
-          { ...state, answers },
-          ctx.players.length,
+        const next = { ...state, answers };
+        const deadline = allActivePlayersActed(ctx, (playerId) =>
+          Boolean(next.answers[playerId]),
         )
           ? ctx.now
           : state.deadline;
@@ -334,8 +357,10 @@ export const triviaModule: GameModule<TriviaState> = {
         }
         return { ...state, deadline: ctx.now };
       }
-      default:
-        throw new GameMoveError(`Unknown move: ${move.type}`);
+      default: {
+        const _exhaustive: never = m;
+        throw new GameMoveError(`Unknown move: ${(_exhaustive as GameMove).type}`);
+      }
     }
   },
 
@@ -382,6 +407,29 @@ export const triviaModule: GameModule<TriviaState> = {
               .length,
         )
       : [];
+    // Per-player tile status for the video-tile overlay. Non-secret: during the
+    // question phase it only says WHO has answered (never their choice); at
+    // reveal it says whether each answerer was right (the correct answer is
+    // already public at reveal) plus the points they gained.
+    const tiles: Record<
+      string,
+      { acted?: boolean; outcome?: "correct" | "wrong"; note?: string }
+    > = {};
+    if (state.phase === "question") {
+      for (const playerId of Object.keys(state.answers)) {
+        tiles[playerId] = { acted: true };
+      }
+    } else if (reveal && question) {
+      for (const [playerId, answer] of Object.entries(state.answers)) {
+        const isCorrect = answer.choice === question.correctIndex;
+        const gained = state.lastRound[playerId] ?? 0;
+        const entry: { outcome: "correct" | "wrong"; note?: string } = {
+          outcome: isCorrect ? "correct" : "wrong",
+        };
+        if (isCorrect && gained > 0) entry.note = `+${gained}`;
+        tiles[playerId] = entry;
+      }
+    }
     return {
       phase: state.phase,
       questionIndex: state.questionIndex,
@@ -395,8 +443,9 @@ export const triviaModule: GameModule<TriviaState> = {
       correctIndex: reveal ? question?.correctIndex ?? null : null,
       optionCounts: reveal ? optionCounts : [],
       answeredCount: Object.keys(state.answers).length,
-      totalPlayers: ctx.players.length,
+      totalPlayers: ctx.activePlayers.length,
       scoreboard: scoreboard(state, ctx),
+      tiles,
     };
   },
 

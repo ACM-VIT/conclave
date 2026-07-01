@@ -2,6 +2,7 @@
 
 import React from "react";
 import { color, radius } from "@conclave/ui-tokens";
+import { createTypedMove } from "@conclave/apps-sdk";
 import {
   Avatar,
   CountdownRing,
@@ -11,6 +12,7 @@ import {
   useRemaining,
   type GameViewProps,
 } from "./gameUi";
+import type { MostLikelyToMove } from "./moves";
 
 type MltPlayer = { id: string; name: string };
 
@@ -41,6 +43,7 @@ export default function MostLikelyToGame({
   readOnly = false,
   move,
 }: GameViewProps<MltPublic, MltMe>) {
+  const send = createTypedMove<MostLikelyToMove>(move);
   const remaining = useRemaining(pub.deadline, pub.serverNow);
 
   if (pub.phase === "lobby") {
@@ -55,7 +58,7 @@ export default function MostLikelyToGame({
         readOnly={readOnly}
         canStart={pub.totalPlayers >= 3}
         disabledLabel="Need at least 3 players"
-        onStart={() => move("start")}
+        onStart={() => send({ type: "start" })}
       />
     );
   }
@@ -130,7 +133,7 @@ export default function MostLikelyToGame({
               key={player.id}
               type="button"
               disabled={readOnly || reveal || me.yourVote !== null}
-              onClick={() => move("vote", { target: player.id })}
+              onClick={() => send({ type: "vote", target: player.id })}
               style={{
                 position: "relative",
                 display: "flex",
@@ -178,9 +181,9 @@ export default function MostLikelyToGame({
       {isAdmin && !readOnly ? (
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
           {reveal ? (
-            <GhostButton onClick={() => move("next")}>Next</GhostButton>
+            <GhostButton onClick={() => send({ type: "next" })}>Next</GhostButton>
           ) : (
-            <GhostButton onClick={() => move("skip")}>Reveal</GhostButton>
+            <GhostButton onClick={() => send({ type: "skip" })}>Reveal</GhostButton>
           )}
         </div>
       ) : null}

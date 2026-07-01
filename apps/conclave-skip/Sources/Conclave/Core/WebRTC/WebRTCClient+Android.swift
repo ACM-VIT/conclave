@@ -46,13 +46,14 @@ final class WebRTCClient {
     func createTransports() async throws { fatalError() }
     func restartIce() async -> Bool { fatalError() }
     func restartIce(transportKind: String) async -> Bool { fatalError() }
-    func consumeProducer(producerId: String, producerUserId: String, producerKind: String? = nil, producerType: String = "webcam", preferHighWebcamLayer: Bool = false) async throws { fatalError() }
+    func consumeProducer(producerId: String, producerUserId: String, producerKind: String? = nil, producerType: String = "webcam", preferHighWebcamLayer: Bool = false, initialReceiveConnectionQuality: ConnectionQuality = .unknown) async throws { fatalError() }
     func closeConsumer(producerId: String, userId: String) { fatalError() }
     func applyRemoteConsumerBandwidthPolicy(
         focusedUserIds: Set<String>,
         visibleUserIds: Set<String>,
         connectionQuality: ConnectionQuality,
-        videoQuality: VideoQuality
+        videoQuality: VideoQuality,
+        receiveVideo: Bool
     ) async { fatalError() }
     func updateVideoQuality(_ quality: VideoQuality) { fatalError() }
     func applyLocalBandwidthProfile(connectionQuality: ConnectionQuality) { fatalError() }

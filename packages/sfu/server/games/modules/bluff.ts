@@ -4,7 +4,9 @@ import {
   type GameModule,
   type GameMove,
 } from "../types.js";
+import { payloadField, requireString } from "../validation.js";
 import { numberOption } from "../config.js";
+import { createRoundLoop } from "../roundLoop.js";
 import {
   GAME_CONTENT_TOPIC_OPTION,
   cleanGeneratedText,
@@ -165,6 +167,95 @@ const scoreboard = (state: BluffState, ctx: GameContext) =>
     .map((p) => ({ id: p.id, name: p.name, score: state.scores[p.id] ?? 0 }))
     .sort((a, b) => b.score - a.score);
 
+const enterWrite = (state: BluffState, ctx: GameContext, round: number): BluffState => ({
+  ...state,
+  phase: "write",
+  round,
+  deadline: ctx.now + WRITE_MS,
+  fakes: {},
+  options: [],
+  picks: {},
+  roundPoints: {},
+});
+
+const loop = createRoundLoop<BluffState>({
+  getPhase: (state) => state.phase,
+  getDeadline: (state) => state.deadline,
+  withDeadline: (state, deadline) => ({ ...state, deadline }),
+  collectPhases: [
+    {
+      name: "write",
+      hasActed: (state, playerId) => Boolean(state.fakes[playerId]),
+      onEnter: (state, ctx) => enterWrite(state, ctx, state.round),
+    },
+    {
+      name: "choose",
+      hasActed: (state, playerId) => Boolean(state.picks[playerId]),
+      onEnter: (state, ctx) => ({
+        ...state,
+        phase: "choose",
+        options: buildOptions(state, ctx),
+        picks: {},
+        deadline: ctx.now + CHOOSE_MS,
+      }),
+    },
+  ],
+  reveal: {
+    name: "reveal",
+    onEnter: (state, ctx) => {
+      const next: BluffState = {
+        ...state,
+        options: state.options.map((o) => ({ ...o })),
+        picks: { ...state.picks },
+        scores: { ...state.scores },
+      };
+      scoreRound(next);
+      next.phase = "reveal";
+      next.deadline = ctx.now + REVEAL_MS;
+      return next;
+    },
+  },
+  isLastRound: (state) => state.round + 1 >= state.totalRounds,
+  startNextRound: (state, ctx) => enterWrite(state, ctx, state.round + 1),
+  toResults: (state) => ({ ...state, phase: "results" }),
+});
+
+/**
+ * Typed move contract. Decoded from the untrusted `GameMove` at the top of
+ * `onMove`. The `text`/`optionId` validation is centralized here; rules that
+ * need current state (does the option exist, is it your own bluff) stay in the
+ * switch and keep their original error messages.
+ */
+export type BluffMove =
+  | { type: "start" }
+  | { type: "submit"; text: string }
+  | { type: "choose"; optionId: string }
+  | { type: "next" }
+  | { type: "skip" };
+
+const decodeBluffMove = (move: GameMove): BluffMove => {
+  switch (move.type) {
+    case "start":
+    case "next":
+    case "skip":
+      return { type: move.type };
+    case "submit":
+      return {
+        type: "submit",
+        text: requireString(payloadField(move.payload, "text"), "Write something"),
+      };
+    case "choose":
+      // A missing/non-string optionId used to fall through to the options
+      // lookup and throw "Invalid choice"; keep that exact message here.
+      return {
+        type: "choose",
+        optionId: requireString(payloadField(move.payload, "optionId"), "Invalid choice"),
+      };
+    default:
+      throw new GameMoveError(`Unknown move: ${move.type}`);
+  }
+};
+
 export const bluffModule: GameModule<BluffState> = {
   id: "bluff",
   name: "Bluff",
@@ -245,37 +336,31 @@ export const bluffModule: GameModule<BluffState> = {
   },
 
   onMove(state, move: GameMove, ctx): BluffState {
-    switch (move.type) {
+    const m = decodeBluffMove(move);
+    switch (m.type) {
       case "start": {
         if (!ctx.isAdmin(move.playerId)) throw new GameMoveError("Only the host can start");
         if (state.phase !== "lobby") throw new GameMoveError("Already running");
         if (ctx.players.length < 2) throw new GameMoveError("Need at least 2 players");
-        return { ...state, phase: "write", round: 0, deadline: ctx.now + WRITE_MS, fakes: {} };
+        return enterWrite(state, ctx, 0);
       }
       case "submit": {
         if (state.phase !== "write") throw new GameMoveError("Not accepting answers");
-        const text = (move.payload as { text?: unknown })?.text;
-        if (typeof text !== "string" || !text.trim()) throw new GameMoveError("Write something");
-        const trimmed = text.trim().slice(0, MAX_ANSWER_LEN);
+        const trimmed = m.text.trim().slice(0, MAX_ANSWER_LEN);
         const real = state.prompts[state.round]?.answer ?? "";
         if (normalize(trimmed) === normalize(real)) {
           throw new GameMoveError("That is the real answer. Write a bluff.");
         }
         const fakes = { ...state.fakes, [move.playerId]: trimmed };
-        const everyone =
-          ctx.players.length > 0 && ctx.players.every((p) => fakes[p.id]);
-        return { ...state, fakes, deadline: everyone ? ctx.now : state.deadline };
+        return loop.recordAction({ ...state, fakes }, ctx);
       }
       case "choose": {
         if (state.phase !== "choose") throw new GameMoveError("Voting is closed");
-        const optionId = (move.payload as { optionId?: unknown })?.optionId;
-        const option = state.options.find((o) => o.id === optionId);
+        const option = state.options.find((o) => o.id === m.optionId);
         if (!option) throw new GameMoveError("Invalid choice");
         if (option.ownerId === move.playerId) throw new GameMoveError("You cannot pick your own bluff");
         const picks = { ...state.picks, [move.playerId]: option.id };
-        const everyone =
-          ctx.players.length > 0 && ctx.players.every((p) => picks[p.id]);
-        return { ...state, picks, deadline: everyone ? ctx.now : state.deadline };
+        return loop.recordAction({ ...state, picks }, ctx);
       }
       case "next": {
         if (!ctx.isAdmin(move.playerId)) throw new GameMoveError("Only the host can advance");
@@ -287,43 +372,15 @@ export const bluffModule: GameModule<BluffState> = {
         if (state.phase !== "write" && state.phase !== "choose") throw new GameMoveError("Nothing to skip");
         return { ...state, deadline: ctx.now };
       }
-      default:
-        throw new GameMoveError(`Unknown move: ${move.type}`);
+      default: {
+        const _exhaustive: never = m;
+        throw new GameMoveError(`Unknown move: ${(_exhaustive as GameMove).type}`);
+      }
     }
   },
 
   onTick(state, ctx): BluffState {
-    if (state.phase === "write" && ctx.now >= state.deadline) {
-      const options = buildOptions(state, ctx);
-      return { ...state, phase: "choose", options, picks: {}, deadline: ctx.now + CHOOSE_MS };
-    }
-    if (state.phase === "choose" && ctx.now >= state.deadline) {
-      const next: BluffState = {
-        ...state,
-        options: state.options.map((o) => ({ ...o })),
-        picks: { ...state.picks },
-        scores: { ...state.scores },
-      };
-      scoreRound(next);
-      next.phase = "reveal";
-      next.deadline = ctx.now + REVEAL_MS;
-      return next;
-    }
-    if (state.phase === "reveal" && ctx.now >= state.deadline) {
-      const isLast = state.round + 1 >= state.totalRounds;
-      if (isLast) return { ...state, phase: "results" };
-      return {
-        ...state,
-        phase: "write",
-        round: state.round + 1,
-        deadline: ctx.now + WRITE_MS,
-        fakes: {},
-        options: [],
-        picks: {},
-        roundPoints: {},
-      };
-    }
-    return state;
+    return loop.tick(state, ctx);
   },
 
   getPhase: (state) => state.phase,
@@ -343,7 +400,7 @@ export const bluffModule: GameModule<BluffState> = {
       question: state.phase === "lobby" ? null : prompt?.question ?? null,
       submittedCount: Object.keys(state.fakes).length,
       chosenCount: Object.keys(state.picks).length,
-      totalPlayers: ctx.players.length,
+      totalPlayers: ctx.activePlayers.length,
       // During choose, hand out text only - never the kind or author.
       options:
         state.phase === "choose"

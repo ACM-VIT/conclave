@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { useGame } from "@conclave/apps-sdk";
 import { color } from "@conclave/ui-tokens";
 import {
@@ -40,9 +41,23 @@ export function GamePanel({
   maxDockWidth?: number;
   onDockWidthChange?: (width: number) => void;
 }) {
-  const { publicState, view, isAdmin, isReadOnly, userId, move, endGame } =
+  const { publicState, view, isAdmin, isReadOnly, userId, move, endGame, startGame } =
     useGame();
+  const [rematchBusy, setRematchBusy] = useState(false);
   if (!publicState) return null;
+
+  const canControl = isAdmin && !isReadOnly;
+  const showRematch = canControl && publicState.finished;
+
+  const handleRematch = async () => {
+    if (rematchBusy) return;
+    setRematchBusy(true);
+    try {
+      await startGame(publicState.gameId, publicState.config);
+    } finally {
+      setRematchBusy(false);
+    }
+  };
 
   const Game = getGameRenderer(publicState.gameId);
   const isPlayer = Boolean(
@@ -64,14 +79,27 @@ export function GamePanel({
         <div className="flex h-8 min-w-0 items-center gap-2">
           <h2 className={GAME_DOCK_TITLE_CLASS}>{publicState.name}</h2>
         </div>
-        {isAdmin && !isReadOnly ? (
-          <button
-            type="button"
-            onClick={() => endGame()}
-            className="ml-2 inline-flex h-8 shrink-0 items-center justify-center rounded-lg border border-white/10 px-3 text-[12px] font-medium text-[#a1a1aa] transition-colors hover:bg-white/[0.06] hover:text-[#fafafa]"
-          >
-            End game
-          </button>
+        {canControl ? (
+          <div className="ml-2 flex shrink-0 items-center gap-2">
+            {showRematch ? (
+              <button
+                type="button"
+                onClick={handleRematch}
+                disabled={rematchBusy}
+                style={{ backgroundColor: color.accent }}
+                className="inline-flex h-8 items-center justify-center rounded-lg px-3 text-[12px] font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-60"
+              >
+                {rematchBusy ? "Starting" : "Play again"}
+              </button>
+            ) : null}
+            <button
+              type="button"
+              onClick={() => endGame()}
+              className="inline-flex h-8 items-center justify-center rounded-lg border border-white/10 px-3 text-[12px] font-medium text-[#a1a1aa] transition-colors hover:bg-white/[0.06] hover:text-[#fafafa]"
+            >
+              End game
+            </button>
+          </div>
         ) : null}
       </div>
 

@@ -47,6 +47,7 @@ import {
 import ParticipantAudio from "./ParticipantAudio";
 import ParticipantConnectionOverlay from "./ParticipantConnectionOverlay";
 import ParticipantVideo from "./ParticipantVideo";
+import GameTileOverlay from "./games/GameTileOverlay";
 import { Avatar } from "@conclave/ui-tokens/web";
 import {
   chooseStageMode,
@@ -96,6 +97,7 @@ interface GridLayoutProps {
   presentationStream?: MediaStream | null;
   presenterName?: string;
   presentationPresenterId?: string | null;
+  presentationProducerId?: string | null;
   /** True when the presentation stream above is YOUR own screen share —
    *  the stage tile defaults to a chooser instead of mirroring it back. */
   isLocalPresenter?: boolean;
@@ -387,6 +389,7 @@ type MeetRoomTilingMetadataBase = {
   presentation: {
     tileId: string;
     presenterId: string | null;
+    producerId: string | null;
     visible: boolean;
     primary: boolean;
     focus: boolean;
@@ -972,6 +975,7 @@ function GridLayout({
   presentationStream = null,
   presenterName = "Someone",
   presentationPresenterId = null,
+  presentationProducerId = null,
   isLocalPresenter = false,
   screenShareControlState,
   screenShareCaptureController = null,
@@ -1525,14 +1529,20 @@ function GridLayout({
       : stageMainKind !== "local")
       ? 1
       : 0;
-  const stageRailPresentationTileCount =
+  const presentationRenderedAsPrimary =
+    hasGridPresentationTile ||
+    usesSideBySideLayout ||
+    (usesStageLayout && stageMainKind === "presentation");
+  const presentationRenderedInRail =
     usesStageLayout &&
     !usesSpotlightLayout &&
     !usesSideBySideLayout &&
     hasPresentation &&
-    stageMainKind !== "presentation"
-      ? 1
-      : 0;
+    stageMainKind !== "presentation";
+  const isPresentationRendered =
+    hasPresentation &&
+    (presentationRenderedAsPrimary || presentationRenderedInRail);
+  const stageRailPresentationTileCount = presentationRenderedInRail ? 1 : 0;
   const stageRailFixedTileCount =
     stageRailLocalTileCount + stageRailPresentationTileCount;
   const stageBudgetCompanionTileCount =
@@ -1640,8 +1650,13 @@ function GridLayout({
     } else {
       visibleParticipants.forEach((participant) => ids.push(participant.userId));
     }
+    if (isOverflowOpen) {
+      overflowParticipants.forEach((participant) => ids.push(participant.userId));
+    }
     return Array.from(new Set(ids));
   }, [
+    isOverflowOpen,
+    overflowParticipants,
     sideBySideCompanionParticipantId,
     stageMainKind,
     stageMainParticipantId,
@@ -1898,8 +1913,11 @@ function GridLayout({
     usesStageLayout,
   ]);
   const roomTilingHiddenIds = useMemo(
-    () => overflowParticipants.map((participant) => participant.userId),
-    [overflowParticipants],
+    () =>
+      isOverflowOpen
+        ? []
+        : overflowParticipants.map((participant) => participant.userId),
+    [isOverflowOpen, overflowParticipants],
   );
   const roomTilingWarmIds = useMemo(
     () => warmParticipants.map((participant) => participant.userId),
@@ -2147,13 +2165,10 @@ function GridLayout({
       presentation: {
         tileId: PRESENTATION_TILE_ID,
         presenterId: presentationPresenterId,
-        visible: hasPresentation,
-        primary:
-          hasGridPresentationTile ||
-          (usesStageLayout && stageMainKind === "presentation"),
-        focus:
-          hasGridPresentationTile ||
-          (usesStageLayout && stageMainKind === "presentation"),
+        producerId: presentationProducerId,
+        visible: isPresentationRendered,
+        primary: presentationRenderedAsPrimary,
+        focus: presentationRenderedAsPrimary,
       },
       pinnedId,
       primaryIds: roomTilingPrimaryIds,
@@ -2256,6 +2271,7 @@ function GridLayout({
       hasGridPresentationTile,
       hasPresentation,
       hiddenParticipantsCount,
+      isPresentationRendered,
       gridTilePlacements,
       layout.cols,
       layout.contentHeight,
@@ -2269,6 +2285,8 @@ function GridLayout({
       maxGridTiles,
       orderedRemoteParticipants,
       presentationPresenterId,
+      presentationProducerId,
+      presentationRenderedAsPrimary,
       pinnedId,
       renderedViewMode,
       requestedMaxTiles,
@@ -3679,6 +3697,7 @@ const PresentationVideoTile = memo(function PresentationVideoTile({
       }`}
       data-meet-presentation-tile
       data-meet-presentation-presenter-id={presenterId ?? undefined}
+      data-meet-presentation-size={size}
       data-meet-captured-surface-control={
         showCaptureControls ? "available" : "unavailable"
       }
@@ -4009,6 +4028,7 @@ const LocalVideoTile = memo(function LocalVideoTile({
           />
         ) : null}
       </div>
+      <GameTileOverlay compact={compact} />
     </div>
   );
 });

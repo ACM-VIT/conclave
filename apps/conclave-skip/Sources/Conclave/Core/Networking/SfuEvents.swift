@@ -30,6 +30,7 @@ enum SfuClientEvent: String {
     case consume = "consume"
     case resumeConsumer = "resumeConsumer"
     case setConsumerPreferences = "setConsumerPreferences"
+    case setConsumerPreferencesBatch = "setConsumerPreferencesBatch"
     case closeConsumer = "closeConsumer"
     case closeProducer = "closeProducer"
     case getProducers = "getProducers"

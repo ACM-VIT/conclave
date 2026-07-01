@@ -5,6 +5,7 @@ import {
   type GameMove,
 } from "../types.js";
 import { numberOption } from "../config.js";
+import { createRoundLoop } from "../roundLoop.js";
 import {
   GAME_CONTENT_TOPIC_OPTION,
   cleanGeneratedText,
@@ -12,7 +13,7 @@ import {
   gameContentTopic,
   normalizeGeneratedKey,
 } from "../aiContent.js";
-import { requirePlayerTarget } from "../validation.js";
+import { payloadField, requirePlayerTarget } from "../validation.js";
 
 /**
  * Most Likely To: point the finger. Each round poses "who is most likely
@@ -101,6 +102,59 @@ const tally = (state: MltState): Record<string, number> => {
   return counts;
 };
 
+const enterVote = (state: MltState, ctx: GameContext, index: number): MltState => ({
+  ...state,
+  phase: "vote",
+  index,
+  deadline: ctx.now + VOTE_MS,
+  votes: {},
+});
+
+const loop = createRoundLoop<MltState>({
+  getPhase: (state) => state.phase,
+  getDeadline: (state) => state.deadline,
+  withDeadline: (state, deadline) => ({ ...state, deadline }),
+  collectPhases: [
+    {
+      name: "vote",
+      hasActed: (state, playerId) => state.votes[playerId] !== undefined,
+      onEnter: (state, ctx) => enterVote(state, ctx, state.index),
+    },
+  ],
+  reveal: {
+    name: "reveal",
+    onEnter: (state) => ({ ...state, phase: "reveal", deadline: 0 }),
+  },
+  isLastRound: (state) => state.index + 1 >= state.prompts.length,
+  startNextRound: (state, ctx) => enterVote(state, ctx, state.index + 1),
+  toResults: (state) => ({ ...state, phase: "results" }),
+});
+
+/**
+ * Typed move contract. Decoded from the untrusted `GameMove` at the top of
+ * `onMove`. The vote target stays `unknown` on the decoded move because it is
+ * validated against the live roster by `requirePlayerTarget` (which needs ctx)
+ * inside the case, preserving the "Invalid vote" message.
+ */
+export type MltMove =
+  | { type: "start" }
+  | { type: "vote"; target: unknown }
+  | { type: "next" }
+  | { type: "skip" };
+
+const decodeMltMove = (move: GameMove): MltMove => {
+  switch (move.type) {
+    case "start":
+    case "next":
+    case "skip":
+      return { type: move.type };
+    case "vote":
+      return { type: "vote", target: payloadField(move.payload, "target") };
+    default:
+      throw new GameMoveError(`Unknown move: ${move.type}`);
+  }
+};
+
 export const mostLikelyToModule: GameModule<MltState> = {
   id: "most-likely-to",
   name: "Most Likely To",
@@ -162,24 +216,21 @@ export const mostLikelyToModule: GameModule<MltState> = {
   },
 
   onMove(state, move: GameMove, ctx): MltState {
-    switch (move.type) {
+    const m = decodeMltMove(move);
+    switch (m.type) {
       case "start": {
         if (!ctx.isAdmin(move.playerId)) throw new GameMoveError("Only the host can start");
         if (state.phase !== "lobby") throw new GameMoveError("Already running");
         if (ctx.players.length < 3) throw new GameMoveError("Need at least 3 players");
-        return { ...state, phase: "vote", index: 0, deadline: ctx.now + VOTE_MS, votes: {} };
+        return enterVote(state, ctx, 0);
       }
       case "vote": {
         if (state.phase !== "vote") throw new GameMoveError("Voting is closed");
-        const target = requirePlayerTarget(
-          ctx,
-          move.playerId,
-          (move.payload as { target?: unknown })?.target,
-          { invalidMessage: "Invalid vote" },
-        );
+        const target = requirePlayerTarget(ctx, move.playerId, m.target, {
+          invalidMessage: "Invalid vote",
+        });
         const votes = { ...state.votes, [move.playerId]: target };
-        const everyone = ctx.players.length > 0 && Object.keys(votes).length >= ctx.players.length;
-        return { ...state, votes, deadline: everyone ? ctx.now : state.deadline };
+        return loop.recordAction({ ...state, votes }, ctx);
       }
       case "next": {
         if (!ctx.isAdmin(move.playerId)) throw new GameMoveError("Only the host can advance");
@@ -191,21 +242,15 @@ export const mostLikelyToModule: GameModule<MltState> = {
         if (state.phase !== "vote") throw new GameMoveError("Nothing to skip");
         return { ...state, deadline: ctx.now };
       }
-      default:
-        throw new GameMoveError(`Unknown move: ${move.type}`);
+      default: {
+        const _exhaustive: never = m;
+        throw new GameMoveError(`Unknown move: ${(_exhaustive as GameMove).type}`);
+      }
     }
   },
 
   onTick(state, ctx): MltState {
-    if (state.phase === "vote" && ctx.now >= state.deadline) {
-      return { ...state, phase: "reveal", deadline: 0 };
-    }
-    if (state.phase === "reveal" && ctx.now >= state.deadline && state.deadline > 0) {
-      const isLast = state.index + 1 >= state.prompts.length;
-      if (isLast) return { ...state, phase: "results" };
-      return { ...state, phase: "vote", index: state.index + 1, deadline: ctx.now + VOTE_MS, votes: {} };
-    }
-    return state;
+    return loop.tick(state, ctx);
   },
 
   getPhase: (state) => state.phase,
@@ -232,7 +277,7 @@ export const mostLikelyToModule: GameModule<MltState> = {
       players: ctx.players.map((player) => ({ id: player.id, name: player.name })),
       counts,
       answeredCount: Object.keys(state.votes).length,
-      totalPlayers: ctx.players.length,
+      totalPlayers: ctx.activePlayers.length,
       winnerId: reveal ? winnerId : null,
       winnerName: reveal && winnerId ? ctx.players.find((p) => p.id === winnerId)?.name ?? null : null,
     };

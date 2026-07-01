@@ -1,6 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useRef } from "react";
+import {
+  getScreenShareReceiveNetworkProfileForAvailableIncomingBitrate,
+  SCREEN_SHARE_RECEIVE_EMERGENCY_BPS,
+} from "../lib/screen-share-network-profile";
 import type { Consumer, ProducerMapEntry } from "../lib/types";
 import type { MeetRefs } from "./useMeetRefs";
 import type { ConnectionQuality } from "./useConnectionQuality";
@@ -36,6 +40,20 @@ type SetConsumerPreferencesResponse =
     }
   | { error: string };
 
+type SetConsumerPreferencesBatchItemResponse =
+  | SetConsumerPreferencesResponse
+  | {
+      error: string;
+      consumerId?: string;
+    };
+
+type SetConsumerPreferencesBatchResponse =
+  | {
+      success: true;
+      results: SetConsumerPreferencesBatchItemResponse[];
+    }
+  | { error: string };
+
 interface UseAdaptiveConsumerPreferencesOptions {
   refs: Pick<
     MeetRefs,
@@ -50,6 +68,8 @@ interface UseAdaptiveConsumerPreferencesOptions {
   emergencyMode: boolean;
   availableIncomingBitrateBps?: number | null;
   activeSpeakerId: string | null;
+  dataSaverMode?: boolean;
+  isDocumentVisible?: boolean;
   debugStateRef?: React.MutableRefObject<
     AdaptiveConsumerPreferencesDebugSnapshot | null
   >;
@@ -61,15 +81,27 @@ interface UseAdaptiveConsumerPreferencesOptions {
 const APPLY_INTERVAL_MS = 2500;
 const MAX_WEBCAMS_TO_KEEP_FULL_ON_GOOD_LINKS = 4;
 const MAX_CONSUMER_PREFERENCE_UPDATES_PER_CYCLE = 8;
+const SCREEN_SHARE_CONSUMER_PREFERENCE_UPDATES_PER_CYCLE = 16;
 const CONSUMER_PREFERENCE_EMIT_SPACING_MS = 75;
+const SCREEN_SHARE_CONSUMER_PREFERENCE_EMIT_SPACING_MS = 50;
 const RATE_LIMIT_RETRY_DELAY_MS = 1000;
 const CONSUMER_PREFERENCE_ACK_TIMEOUT_MS = 3000;
 const AUDIO_CONSUMER_PRIORITY = 255;
 const CONSUMER_SCORE_STALE_AFTER_MS = 15000;
 const UNSUPPORTED_LAYER_RETRY_AFTER_MS = 30000;
-const SCREEN_SHARE_RECEIVE_FAIR_BPS = 1500000;
-const SCREEN_SHARE_RECEIVE_POOR_BPS = 550000;
-const SCREEN_SHARE_RECEIVE_EMERGENCY_BPS = 300000;
+const SCREEN_SHARE_SMALL_RENDERED_HEIGHT = 220;
+const SCREEN_SHARE_FULL_FPS_RENDERED_HEIGHT = 540;
+const WEBCAM_STANDARD_RENDERED_HEIGHT = 260;
+const WEBCAM_FULL_RENDERED_HEIGHT = 540;
+const OFFSCREEN_WEBCAM_PARK_PRIORITY = 5;
+const HIDDEN_SCREEN_SHARE_KEEPALIVE_PRIORITY = 60;
+
+type PresentationTileSize = "stage" | "grid" | "rail";
+
+type RenderedTileMetrics = {
+  width: number;
+  height: number;
+};
 
 type LayoutRole = {
   primary: boolean;
@@ -78,6 +110,9 @@ type LayoutRole = {
   hidden: boolean;
   warm: boolean;
   rank: number | null;
+  renderedWidth: number | null;
+  renderedHeight: number | null;
+  presentationSize: PresentationTileSize | null;
 };
 
 type RoomTilingHints = {
@@ -87,11 +122,16 @@ type RoomTilingHints = {
   hiddenIds: Set<string>;
   warmIds: Set<string>;
   orderedRemoteRanks: Map<string, number>;
+  participantTileMetrics: Map<string, RenderedTileMetrics>;
   presentation: {
     presenterId: string | null;
+    producerId: string | null;
     visible: boolean;
     primary: boolean;
     focus: boolean;
+    renderedWidth: number | null;
+    renderedHeight: number | null;
+    size: PresentationTileSize | null;
   };
 };
 
@@ -137,6 +177,8 @@ export type AdaptiveConsumerPreferencesDebugSnapshot = {
   timestamp: number;
   connectionQuality: ConnectionQuality;
   emergencyMode: boolean;
+  dataSaverMode: boolean;
+  isDocumentVisible: boolean;
   activeSpeakerId: string | null;
   socketConnected: boolean;
   layoutHintsAvailable: boolean;
@@ -222,6 +264,99 @@ const readBoolean = (
   return typeof raw === "boolean" ? raw : fallback;
 };
 
+const readRoomTilingEventSignature = (event: Event): string | null => {
+  if (!("detail" in event)) return null;
+  const detail = (event as CustomEvent<unknown>).detail;
+  if (!isRecord(detail)) return null;
+  const signature = detail.signature;
+  return typeof signature === "string" && signature.length > 0
+    ? signature
+    : null;
+};
+
+const readRoomTilingCurrentSignature = (): string | null => {
+  if (typeof window === "undefined") return null;
+  const debugWindow = window as RoomTilingDebugWindow;
+  const snapshot =
+    debugWindow.__conclaveGetMeetRoomTilingDebug?.() ??
+    debugWindow.__conclaveMeetRoomTilingDebug;
+  const current = snapshot?.current;
+  if (!isRecord(current)) return null;
+  const signature = current.signature;
+  return typeof signature === "string" && signature.length > 0
+    ? signature
+    : null;
+};
+
+const readPresentationTileSize = (
+  value: string | undefined,
+): PresentationTileSize | null =>
+  value === "stage" || value === "grid" || value === "rail" ? value : null;
+
+const readPresentationElementMetrics = (
+  presenterId: string | null,
+): {
+  width: number | null;
+  height: number | null;
+  size: PresentationTileSize | null;
+} => {
+  if (typeof document === "undefined") {
+    return { width: null, height: null, size: null };
+  }
+
+  const tiles = Array.from(
+    document.querySelectorAll<HTMLElement>("[data-meet-presentation-tile]"),
+  );
+  const tile =
+    tiles.find(
+      (candidate) =>
+        !presenterId ||
+        candidate.dataset.meetPresentationPresenterId === presenterId,
+    ) ??
+    tiles[0] ??
+    null;
+  if (!tile) return { width: null, height: null, size: null };
+
+  const rect = tile.getBoundingClientRect();
+  const width = rect.width > 0 ? Math.round(rect.width) : null;
+  const height = rect.height > 0 ? Math.round(rect.height) : null;
+  return {
+    width,
+    height,
+    size: readPresentationTileSize(tile.dataset.meetPresentationSize),
+  };
+};
+
+const readParticipantTileMetrics = (
+  visibleRemoteIds: Set<string>,
+): Map<string, RenderedTileMetrics> => {
+  if (typeof document === "undefined" || visibleRemoteIds.size === 0) {
+    return new Map();
+  }
+
+  const metrics = new Map<string, RenderedTileMetrics>();
+  const tiles = Array.from(
+    document.querySelectorAll<HTMLElement>("[data-userid]"),
+  );
+
+  tiles.forEach((tile) => {
+    const userId = tile.dataset.userid;
+    if (!userId || !visibleRemoteIds.has(userId)) return;
+
+    const rect = tile.getBoundingClientRect();
+    const width = rect.width > 1 ? Math.round(rect.width) : 0;
+    const height = rect.height > 1 ? Math.round(rect.height) : 0;
+    if (width <= 1 || height <= 1) return;
+
+    const existing = metrics.get(userId);
+    if (!existing || width * height > existing.width * existing.height) {
+      metrics.set(userId, { width, height });
+    }
+  });
+
+  return metrics;
+};
+
 const readRoomTilingHints = (): RoomTilingHints | null => {
   if (typeof window === "undefined") return null;
 
@@ -234,11 +369,23 @@ const readRoomTilingHints = (): RoomTilingHints | null => {
   const presentation = isRecord(current.presentation)
     ? current.presentation
     : null;
+  const presentationPresenterId = readNullableString(
+    presentation,
+    "presenterId",
+  );
+  const presentationProducerId = readNullableString(
+    presentation,
+    "producerId",
+  );
+  const presentationMetrics = readPresentationElementMetrics(
+    presentationPresenterId,
+  );
+  const visibleRemoteIds = new Set(readStringArray(current, "visibleRemoteIds"));
 
   return {
     primaryIds: new Set(readStringArray(current, "primaryIds")),
     focusIds: new Set(readStringArray(current, "focusIds")),
-    visibleRemoteIds: new Set(readStringArray(current, "visibleRemoteIds")),
+    visibleRemoteIds,
     hiddenIds: new Set(readStringArray(current, "hiddenIds")),
     warmIds: new Set(readStringArray(current, "warmIds")),
     orderedRemoteRanks: new Map(
@@ -247,11 +394,16 @@ const readRoomTilingHints = (): RoomTilingHints | null => {
         index,
       ]),
     ),
+    participantTileMetrics: readParticipantTileMetrics(visibleRemoteIds),
     presentation: {
-      presenterId: readNullableString(presentation, "presenterId"),
+      presenterId: presentationPresenterId,
+      producerId: presentationProducerId,
       visible: readBoolean(presentation, "visible"),
       primary: readBoolean(presentation, "primary"),
       focus: readBoolean(presentation, "focus"),
+      renderedWidth: presentationMetrics.width,
+      renderedHeight: presentationMetrics.height,
+      size: presentationMetrics.size,
     },
   };
 };
@@ -260,23 +412,49 @@ const getLayoutRole = (
   hints: RoomTilingHints | null,
   userId: string,
   type: ProducerMapEntry["type"],
+  producerId: string,
 ): LayoutRole | null => {
   if (!hints) return null;
+  const isScreenShare = type === "screen";
+  const isPresentedScreenByProducer =
+    isScreenShare &&
+    Boolean(hints.presentation.producerId) &&
+    hints.presentation.producerId === producerId;
+  const isPresentedScreenByPresenter =
+    isScreenShare &&
+    !hints.presentation.producerId &&
+    hints.presentation.presenterId === userId;
   const isPresentedScreen =
     type === "screen" &&
     hints.presentation.visible &&
-    hints.presentation.presenterId === userId;
+    (isPresentedScreenByProducer || isPresentedScreenByPresenter);
+  const participantVideoVisible = hints.visibleRemoteIds.has(userId);
+  const participantVideoHidden = hints.hiddenIds.has(userId);
+  const participantTileMetrics = isScreenShare
+    ? null
+    : (hints.participantTileMetrics.get(userId) ?? null);
   return {
     primary:
-      hints.primaryIds.has(userId) ||
+      (!isScreenShare && hints.primaryIds.has(userId)) ||
       (isPresentedScreen && hints.presentation.primary),
     focus:
-      hints.focusIds.has(userId) ||
+      (!isScreenShare && hints.focusIds.has(userId)) ||
       (isPresentedScreen && hints.presentation.focus),
-    visible: hints.visibleRemoteIds.has(userId) || isPresentedScreen,
-    hidden: hints.hiddenIds.has(userId) && !isPresentedScreen,
-    warm: hints.warmIds.has(userId),
-    rank: hints.orderedRemoteRanks.get(userId) ?? null,
+    visible: isScreenShare ? isPresentedScreen : participantVideoVisible,
+    hidden: isScreenShare
+      ? hints.presentation.visible && !isPresentedScreen
+      : participantVideoHidden,
+    warm: isScreenShare ? false : hints.warmIds.has(userId),
+    rank: isScreenShare
+      ? null
+      : (hints.orderedRemoteRanks.get(userId) ?? null),
+    renderedWidth: isPresentedScreen
+      ? hints.presentation.renderedWidth
+      : participantTileMetrics?.width ?? null,
+    renderedHeight: isPresentedScreen
+      ? hints.presentation.renderedHeight
+      : participantTileMetrics?.height ?? null,
+    presentationSize: isPresentedScreen ? hints.presentation.size : null,
   };
 };
 
@@ -424,20 +602,12 @@ const getConsumerScoreQualityHint = (
 const getScreenShareReceiveQualityForAvailableBitrate = (
   availableIncomingBitrateBps: number | null | undefined,
 ): ConnectionQuality => {
-  if (
-    typeof availableIncomingBitrateBps !== "number" ||
-    !Number.isFinite(availableIncomingBitrateBps) ||
-    availableIncomingBitrateBps <= 0
-  ) {
-    return "unknown";
-  }
-  if (availableIncomingBitrateBps <= SCREEN_SHARE_RECEIVE_POOR_BPS) {
-    return "poor";
-  }
-  if (availableIncomingBitrateBps <= SCREEN_SHARE_RECEIVE_FAIR_BPS) {
-    return "fair";
-  }
-  return "good";
+  const profile =
+    getScreenShareReceiveNetworkProfileForAvailableIncomingBitrate(
+      availableIncomingBitrateBps,
+    );
+  if (profile === "emergency") return "poor";
+  return profile ?? "unknown";
 };
 
 const isScreenShareReceiveEmergencyBitrate = (
@@ -457,6 +627,62 @@ const buildLayerPreference = (
   temporalLayer: clampLayer(targetTemporalLayer, bounds.maxTemporalLayer),
 });
 
+const getScreenShareTargetTemporalLayer = (
+  bounds: LayerBounds,
+  options: {
+    quality: ConnectionQuality;
+    emergency: boolean;
+    visible: boolean;
+    primary: boolean;
+    renderedHeight: number | null;
+    presentationSize: PresentationTileSize | null;
+  },
+): number => {
+  const isSmallPresentation =
+    options.presentationSize === "rail" ||
+    (options.renderedHeight !== null &&
+      options.renderedHeight < SCREEN_SHARE_SMALL_RENDERED_HEIGHT);
+  const isLargePresentation =
+    options.primary ||
+    options.presentationSize === "stage" ||
+    (options.renderedHeight !== null &&
+      options.renderedHeight >= SCREEN_SHARE_FULL_FPS_RENDERED_HEIGHT);
+
+  if (!options.visible) {
+    return options.emergency || options.quality === "poor" ? 0 : 1;
+  }
+
+  if (options.emergency) {
+    return 1;
+  }
+
+  if (options.quality === "poor") {
+    return isLargePresentation ? 1 : 0;
+  }
+
+  if (isSmallPresentation) {
+    return 0;
+  }
+
+  if (options.quality === "fair") {
+    return 1;
+  }
+
+  return isLargePresentation ? bounds.maxTemporalLayer : 1;
+};
+
+const getWebcamTargetSpatialLayer = (
+  bounds: LayerBounds,
+  renderedHeight: number | null,
+): number => {
+  if (renderedHeight === null) return bounds.maxSpatialLayer;
+  if (renderedHeight < WEBCAM_STANDARD_RENDERED_HEIGHT) return 0;
+  if (renderedHeight < WEBCAM_FULL_RENDERED_HEIGHT) {
+    return Math.min(1, bounds.maxSpatialLayer);
+  }
+  return bounds.maxSpatialLayer;
+};
+
 const getDesiredPreferences = (
   info: ProducerMapEntry,
   bounds: LayerBounds | null,
@@ -465,10 +691,13 @@ const getDesiredPreferences = (
     activeSpeakerId: string | null;
     webcamVideoCount: number;
     fallbackRank: number | null;
+    fullResolutionEligible: boolean;
     layout: LayoutRole | null;
     emergencyMode: boolean;
     emergencyKeepVideo: boolean;
     screenShareVideoActive: boolean;
+    dataSaverMode: boolean;
+    isDocumentVisible: boolean;
     availableIncomingBitrateBps: number | null;
     consumerScoreQuality: ConsumerScoreQuality;
   },
@@ -488,44 +717,73 @@ const getDesiredPreferences = (
   const screenShareReceiveEmergency = isScreenShareReceiveEmergencyBitrate(
     options.availableIncomingBitrateBps,
   );
-  const effectiveQuality = worstQuality(
-    options.quality,
+  const consumerScoreReceiveQuality =
     options.quality === "good" || options.quality === "fair"
       ? "unknown"
-      : getConsumerScoreQualityHint(options.consumerScoreQuality),
+      : getConsumerScoreQualityHint(options.consumerScoreQuality);
+  const effectiveQuality = worstQuality(
+    options.quality,
+    consumerScoreReceiveQuality,
   );
   const quality = effectiveQuality === "unknown" ? "good" : effectiveQuality;
 
   if (info.type === "screen") {
+    if (!options.isDocumentVisible) {
+      return {
+        preferredLayers: bounds ? buildLayerPreference(0, 0, bounds) : undefined,
+        priority: HIDDEN_SCREEN_SHARE_KEEPALIVE_PRIORITY,
+        paused: false,
+      };
+    }
+
     const screenShareQuality = worstQuality(
       worstQuality(
         quality,
         screenShareReceiveQuality,
       ),
-      getConsumerScoreQualityHint(options.consumerScoreQuality),
+      consumerScoreReceiveQuality,
     );
     const screenShareEmergency =
       options.emergencyMode || screenShareReceiveEmergency;
     const screenShareVisible =
-      options.layout?.visible === true ||
+      options.layout === null ||
+      options.layout.visible === true ||
       options.layout?.primary === true ||
       options.layout?.focus === true;
+    const screenSharePrimary =
+      options.layout === null ||
+      options.layout.primary === true ||
+      options.layout.focus === true;
+    const screenSharePriority = screenSharePrimary
+      ? 240
+      : screenShareVisible
+        ? 220
+        : HIDDEN_SCREEN_SHARE_KEEPALIVE_PRIORITY;
     return {
       preferredLayers: bounds
         ? buildLayerPreference(
             0,
-            screenShareEmergency
-              ? screenShareVisible
-                ? 1
-                : 0
-              : screenShareQuality === "poor" && !screenShareVisible
-                ? 1
-                : bounds.maxTemporalLayer,
+            getScreenShareTargetTemporalLayer(bounds, {
+              quality: screenShareQuality,
+              emergency: screenShareEmergency,
+              visible: screenShareVisible,
+              primary: screenSharePrimary,
+              renderedHeight: options.layout?.renderedHeight ?? null,
+              presentationSize: options.layout?.presentationSize ?? null,
+            }),
             bounds,
           )
         : undefined,
-      priority: 240,
+      priority: screenSharePriority,
       paused: false,
+    };
+  }
+
+  if (!options.isDocumentVisible) {
+    return {
+      preferredLayers: bounds ? buildLayerPreference(0, 0, bounds) : undefined,
+      priority: OFFSCREEN_WEBCAM_PARK_PRIORITY,
+      paused: true,
     };
   }
 
@@ -541,8 +799,30 @@ const getDesiredPreferences = (
   const isWarm = layout?.warm === true || (!layout && !fallbackVisible);
   const isHidden = layout?.hidden === true && !isVisible;
   const isFocus = isActiveSpeaker || isLayoutFocus;
+  const webcamRenderedHeight = layout?.renderedHeight ?? null;
+  const webcamRenderedSpatialLayer = bounds
+    ? getWebcamTargetSpatialLayer(bounds, webcamRenderedHeight)
+    : null;
+  const hasRenderedWebcamTile =
+    isVisible || isPrimary || webcamRenderedHeight !== null;
+
+  if (options.dataSaverMode) {
+    return {
+      preferredLayers: bounds ? buildLayerPreference(0, 0, bounds) : undefined,
+      priority: OFFSCREEN_WEBCAM_PARK_PRIORITY,
+      paused: true,
+    };
+  }
 
   if (options.emergencyMode) {
+    if (isHidden && !isWarm && !isFocus && !options.emergencyKeepVideo) {
+      return {
+        preferredLayers: bounds ? buildLayerPreference(0, 0, bounds) : undefined,
+        priority: OFFSCREEN_WEBCAM_PARK_PRIORITY,
+        paused: true,
+      };
+    }
+
     if (!options.emergencyKeepVideo) {
       return {
         preferredLayers: bounds ? buildLayerPreference(0, 0, bounds) : undefined,
@@ -561,6 +841,20 @@ const getDesiredPreferences = (
   const screenShareReserveQuality = options.screenShareVideoActive
     ? worstQuality(quality, screenShareReceiveQuality)
     : quality;
+  const shouldParkOffscreenWebcamForScreenShare =
+    options.screenShareVideoActive &&
+    isHidden &&
+    !isWarm &&
+    !isFocus &&
+    (screenShareReserveQuality === "poor" || screenShareReceiveEmergency);
+
+  if (shouldParkOffscreenWebcamForScreenShare) {
+    return {
+      preferredLayers: bounds ? buildLayerPreference(0, 0, bounds) : undefined,
+      priority: OFFSCREEN_WEBCAM_PARK_PRIORITY,
+      paused: true,
+    };
+  }
 
   if (
     options.screenShareVideoActive &&
@@ -602,9 +896,17 @@ const getDesiredPreferences = (
   }
 
   if (isHidden && !isWarm && !isFocus) {
+    if (quality === "poor") {
+      return {
+        preferredLayers: bounds ? buildLayerPreference(0, 0, bounds) : undefined,
+        priority: OFFSCREEN_WEBCAM_PARK_PRIORITY,
+        paused: true,
+      };
+    }
+
     return {
       preferredLayers: bounds ? buildLayerPreference(0, 0, bounds) : undefined,
-      priority: quality === "poor" ? 10 : 25,
+      priority: 25,
       paused: false,
     };
   }
@@ -621,10 +923,13 @@ const getDesiredPreferences = (
 
   const keepFull =
     quality === "good" &&
-    (isFocus ||
+    (!bounds ||
+      (webcamRenderedSpatialLayer ?? bounds.maxSpatialLayer) >=
+        bounds.maxSpatialLayer) &&
+    ((isFocus && hasRenderedWebcamTile) ||
       (!options.screenShareVideoActive &&
-        (isVisible ||
-          options.webcamVideoCount <= MAX_WEBCAMS_TO_KEEP_FULL_ON_GOOD_LINKS)));
+        isVisible &&
+        options.fullResolutionEligible));
 
   if (quality === "poor") {
     return {
@@ -659,12 +964,17 @@ const getDesiredPreferences = (
             bounds,
           )
         : buildLayerPreference(
-            isVisible ? 1 : 0,
+            isVisible
+              ? Math.min(
+                  1,
+                  webcamRenderedSpatialLayer ?? bounds.maxSpatialLayer,
+                )
+              : 0,
             isVisible ? bounds.maxTemporalLayer : 0,
             bounds,
           )
       : undefined,
-    priority: keepFull ? 175 : isVisible ? 95 : 45,
+    priority: keepFull ? 175 : isFocus ? 130 : isVisible ? 95 : 45,
     paused: false,
   };
 };
@@ -728,6 +1038,8 @@ export function useAdaptiveConsumerPreferences({
   emergencyMode,
   availableIncomingBitrateBps = null,
   activeSpeakerId,
+  dataSaverMode = false,
+  isDocumentVisible = true,
   debugStateRef,
   onVideoAdaptivePauseStateChange,
 }: UseAdaptiveConsumerPreferencesOptions) {
@@ -743,6 +1055,7 @@ export function useAdaptiveConsumerPreferences({
   const preferenceDebugRef = useRef<
     Map<string, AdaptiveConsumerPreferenceDebugEntry>
   >(new Map());
+  const lastRoomTilingEventSignatureRef = useRef<string | null>(null);
   const lastPublishedAdaptiveVideoPauseRef = useRef<Map<string, string>>(
     new Map(),
   );
@@ -829,6 +1142,8 @@ export function useAdaptiveConsumerPreferences({
         timestamp: Date.now(),
         connectionQuality,
         emergencyMode,
+        dataSaverMode,
+        isDocumentVisible,
         activeSpeakerId,
         socketConnected: lastDebugContextRef.current.socketConnected,
         layoutHintsAvailable:
@@ -857,6 +1172,8 @@ export function useAdaptiveConsumerPreferences({
       debugStateRef,
       enabled,
       emergencyMode,
+      dataSaverMode,
+      isDocumentVisible,
       publishAdaptiveVideoPauseChanges,
       refs.adaptivelyPausedConsumerProducerIdsRef,
     ],
@@ -883,6 +1200,45 @@ export function useAdaptiveConsumerPreferences({
     const screenShareVideoActive = Array.from(
       refs.producerMapRef.current.values(),
     ).some((info) => info.kind === "video" && info.type === "screen");
+    const fullResolutionWebcamUserIds = new Set<string>();
+    if (layoutHints) {
+      Array.from(refs.producerMapRef.current.values())
+        .filter(
+          (info) => info.kind === "video" && info.type === "webcam",
+        )
+        .map((info) => ({
+          userId: info.userId,
+          focus:
+            info.userId === activeSpeakerId ||
+            layoutHints.focusIds.has(info.userId),
+          primary: layoutHints.primaryIds.has(info.userId),
+          visible: layoutHints.visibleRemoteIds.has(info.userId),
+          rank:
+            layoutHints.orderedRemoteRanks.get(info.userId) ??
+            Number.MAX_SAFE_INTEGER,
+        }))
+        .filter(
+          (candidate) =>
+            candidate.focus || candidate.primary || candidate.visible,
+        )
+        .sort(
+          (left, right) =>
+            Number(right.focus) - Number(left.focus) ||
+            Number(right.primary) - Number(left.primary) ||
+            left.rank - right.rank ||
+            left.userId.localeCompare(right.userId),
+        )
+        .forEach((candidate) => {
+          if (
+            fullResolutionWebcamUserIds.size >=
+              MAX_WEBCAMS_TO_KEEP_FULL_ON_GOOD_LINKS ||
+            fullResolutionWebcamUserIds.has(candidate.userId)
+          ) {
+            return;
+          }
+          fullResolutionWebcamUserIds.add(candidate.userId);
+        });
+    }
     const fallbackWebcamRanks = new Map<string, number>();
     if (!layoutHints) {
       Array.from(refs.consumersRef.current.entries())
@@ -935,7 +1291,12 @@ export function useAdaptiveConsumerPreferences({
             return null;
           }
 
-          const layout = getLayoutRole(layoutHints, info.userId, info.type);
+          const layout = getLayoutRole(
+            layoutHints,
+            info.userId,
+            info.type,
+            producerId,
+          );
           return {
             producerId,
             active: info.userId === activeSpeakerId,
@@ -1000,7 +1361,12 @@ export function useAdaptiveConsumerPreferences({
       }
 
       const bounds = inferLayerBounds(consumer, info);
-      const layout = getLayoutRole(layoutHints, info.userId, info.type);
+      const layout = getLayoutRole(
+        layoutHints,
+        info.userId,
+        info.type,
+        producerId,
+      );
       const emergencyKeepVideo =
         emergencyMode &&
         info.kind === "video" &&
@@ -1015,22 +1381,33 @@ export function useAdaptiveConsumerPreferences({
           : null;
       const consumerScoreQuality =
         classifyConsumerScoreQuality(consumerScore);
+      const fallbackRank = fallbackWebcamRanks.get(producerId) ?? null;
       const desired = getDesiredPreferences(info, bounds, {
         quality: connectionQuality,
         activeSpeakerId,
         webcamVideoCount,
-        fallbackRank: fallbackWebcamRanks.get(producerId) ?? null,
+        fallbackRank,
+        fullResolutionEligible:
+          webcamVideoCount <= MAX_WEBCAMS_TO_KEEP_FULL_ON_GOOD_LINKS ||
+          (layoutHints
+            ? fullResolutionWebcamUserIds.has(info.userId)
+            : fallbackRank !== null &&
+              fallbackRank < MAX_WEBCAMS_TO_KEEP_FULL_ON_GOOD_LINKS),
         layout,
         emergencyMode,
         emergencyKeepVideo,
         screenShareVideoActive,
+        dataSaverMode,
+        isDocumentVisible,
         availableIncomingBitrateBps,
         consumerScoreQuality,
       });
       if (!desired) return;
 
       const previousLayers = lastLayersRef.current.get(producerId);
-      const wasPaused = lastPausedRef.current.get(producerId) === true;
+      const wasPaused =
+        lastPausedRef.current.get(producerId) === true ||
+        refs.adaptivelyPausedConsumerProducerIdsRef.current.has(producerId);
       const desiredLayerSignature = getLayerPreferenceSignature(
         desired.preferredLayers,
       );
@@ -1199,12 +1576,18 @@ export function useAdaptiveConsumerPreferences({
         left.producerId.localeCompare(right.producerId),
     );
 
+    const maxUpdatesThisCycle = screenShareVideoActive
+      ? SCREEN_SHARE_CONSUMER_PREFERENCE_UPDATES_PER_CYCLE
+      : MAX_CONSUMER_PREFERENCE_UPDATES_PER_CYCLE;
+    const emitSpacingMs = screenShareVideoActive
+      ? SCREEN_SHARE_CONSUMER_PREFERENCE_EMIT_SPACING_MS
+      : CONSUMER_PREFERENCE_EMIT_SPACING_MS;
     const updatesToSend = pendingUpdates.slice(
       0,
-      MAX_CONSUMER_PREFERENCE_UPDATES_PER_CYCLE,
+      maxUpdatesThisCycle,
     );
     const deferredUpdates = pendingUpdates.slice(
-      MAX_CONSUMER_PREFERENCE_UPDATES_PER_CYCLE,
+      maxUpdatesThisCycle,
     );
 
     for (const update of deferredUpdates) {
@@ -1236,257 +1619,348 @@ export function useAdaptiveConsumerPreferences({
       }, RATE_LIMIT_RETRY_DELAY_MS);
     };
 
-    updatesToSend.forEach((update, index) => {
-      const {
-        producerId,
-        consumer,
-        preferences,
-        preferredLayers,
-        signature,
-        debugEntryBase,
-      } = update;
+    const buildPreferencePayload = (update: PendingConsumerPreferenceUpdate) => ({
+      consumerId: update.consumer.id,
+      priority: update.preferences.priority,
+      ...(update.preferredLayers
+        ? { preferredLayers: update.preferredLayers }
+        : {}),
+      ...(typeof update.preferences.paused === "boolean"
+        ? { paused: update.preferences.paused }
+        : {}),
+      requestKeyFrame: update.debugEntryBase.requestKeyFrame,
+    });
 
-      const markDeferredForRetry = (error: string) => {
-        preferenceDebugRef.current.set(producerId, {
-          ...debugEntryBase,
-          status: "deferred",
-          paused: preferences.paused ?? null,
-          producerPaused: null,
-          error,
-          appliedAt: Date.now(),
-        });
-        if (preferences.paused === true) {
-          refs.adaptivelyPausedConsumerProducerIdsRef.current.delete(
-            producerId,
-          );
-        }
-        writeDebugSnapshot(debugContext);
-        scheduleRateLimitRetry();
-      };
-
-      if (preferences.paused === true) {
-        refs.adaptivelyPausedConsumerProducerIdsRef.current.add(producerId);
-      } else if (preferences.paused === false) {
-        refs.adaptivelyPausedConsumerProducerIdsRef.current.delete(producerId);
+    const markDeferredForRetry = (
+      update: PendingConsumerPreferenceUpdate,
+      error: string,
+    ) => {
+      preferenceDebugRef.current.set(update.producerId, {
+        ...update.debugEntryBase,
+        status: "deferred",
+        paused: update.preferences.paused ?? null,
+        producerPaused: null,
+        error,
+        appliedAt: Date.now(),
+      });
+      if (update.preferences.paused === true) {
+        refs.adaptivelyPausedConsumerProducerIdsRef.current.delete(
+          update.producerId,
+        );
       }
+      writeDebugSnapshot(debugContext);
+      scheduleRateLimitRetry();
+    };
 
-      const emitPreferenceUpdate = () => {
-        scheduledPreferenceTimeoutsRef.current.delete(timeoutId);
+    const markError = (
+      update: PendingConsumerPreferenceUpdate,
+      error: string,
+      unsupportedLayers = false,
+    ) => {
+      preferenceDebugRef.current.set(update.producerId, {
+        ...update.debugEntryBase,
+        status: "error",
+        paused: update.preferences.paused ?? null,
+        producerPaused: null,
+        error,
+        appliedAt: Date.now(),
+        unsupportedLayers,
+      });
+      if (update.preferences.paused === true) {
+        refs.adaptivelyPausedConsumerProducerIdsRef.current.delete(
+          update.producerId,
+        );
+      }
+      writeDebugSnapshot(debugContext);
+    };
 
-        const liveConsumer = refs.consumersRef.current.get(producerId);
-        if (
-          !enabled ||
-          !socket.connected ||
-          consumer.closed ||
-          !liveConsumer ||
-          liveConsumer.id !== consumer.id
-        ) {
-          inFlightProducerIdsRef.current.delete(producerId);
-          return;
-        }
+    const markOptimisticPauseState = (
+      update: PendingConsumerPreferenceUpdate,
+    ) => {
+      if (update.preferences.paused === true) {
+        refs.adaptivelyPausedConsumerProducerIdsRef.current.add(
+          update.producerId,
+        );
+      } else if (update.preferences.paused === false) {
+        refs.adaptivelyPausedConsumerProducerIdsRef.current.delete(
+          update.producerId,
+        );
+      }
+    };
 
-        let settled = false;
-        const ackTimeoutId = window.setTimeout(() => {
-          if (settled) return;
-          settled = true;
-          scheduledPreferenceTimeoutsRef.current.delete(ackTimeoutId);
-          inFlightProducerIdsRef.current.delete(producerId);
-          markDeferredForRetry("setConsumerPreferences ack timeout");
-        }, CONSUMER_PREFERENCE_ACK_TIMEOUT_MS);
-        scheduledPreferenceTimeoutsRef.current.add(ackTimeoutId);
+    const isUpdateStillLive = (
+      update: PendingConsumerPreferenceUpdate,
+    ): boolean => {
+      const liveConsumer = refs.consumersRef.current.get(update.producerId);
+      return (
+        enabled &&
+        socket.connected &&
+        !update.consumer.closed &&
+        Boolean(liveConsumer) &&
+        liveConsumer!.id === update.consumer.id
+      );
+    };
 
-        socket.emit(
-          "setConsumerPreferences",
-          {
-            consumerId: consumer.id,
-            priority: preferences.priority,
-            ...(preferredLayers ? { preferredLayers } : {}),
-            ...(typeof preferences.paused === "boolean"
-              ? { paused: preferences.paused }
-              : {}),
-            requestKeyFrame: debugEntryBase.requestKeyFrame,
-          },
-          (response: SetConsumerPreferencesResponse) => {
-            if (settled) return;
-            settled = true;
-            scheduledPreferenceTimeoutsRef.current.delete(ackTimeoutId);
-            window.clearTimeout(ackTimeoutId);
-            if ("error" in response) {
-              if (isConsumerControlRateLimitError(response.error)) {
-                inFlightProducerIdsRef.current.delete(producerId);
-                markDeferredForRetry(response.error);
-                return;
-              }
-
-              preferenceDebugRef.current.set(producerId, {
-                ...debugEntryBase,
-                status: "error",
-                paused: preferences.paused ?? null,
-                producerPaused: null,
-                error: response.error,
-                appliedAt: Date.now(),
-              });
-              if (preferences.paused === true) {
-                refs.adaptivelyPausedConsumerProducerIdsRef.current.delete(
-                  producerId,
-                );
-              }
-              writeDebugSnapshot(debugContext);
-              if (preferredLayers && isUnsupportedLayerError(response.error)) {
-                unsupportedLayerPreferencesRef.current.set(producerId, {
-                  consumerId: consumer.id,
-                  signature: getLayerPreferenceSignature(preferredLayers),
-                  retryAt: Date.now() + UNSUPPORTED_LAYER_RETRY_AFTER_MS,
-                });
-                if (preferences.paused === true) {
-                  refs.adaptivelyPausedConsumerProducerIdsRef.current.add(
-                    producerId,
-                  );
-                }
-                let fallbackSettled = false;
-                const fallbackAckTimeoutId = window.setTimeout(() => {
-                  if (fallbackSettled) return;
-                  fallbackSettled = true;
-                  scheduledPreferenceTimeoutsRef.current.delete(
-                    fallbackAckTimeoutId,
-                  );
-                  inFlightProducerIdsRef.current.delete(producerId);
-                  markDeferredForRetry(
-                    "setConsumerPreferences priority-only ack timeout",
-                  );
-                }, CONSUMER_PREFERENCE_ACK_TIMEOUT_MS);
-                scheduledPreferenceTimeoutsRef.current.add(fallbackAckTimeoutId);
-                socket.emit(
-                  "setConsumerPreferences",
-                  {
-                    consumerId: consumer.id,
-                    priority: preferences.priority,
-                    ...(typeof preferences.paused === "boolean"
-                      ? { paused: preferences.paused }
-                      : {}),
-                  },
-                  (priorityOnlyResponse: SetConsumerPreferencesResponse) => {
-                    if (fallbackSettled) return;
-                    fallbackSettled = true;
-                    scheduledPreferenceTimeoutsRef.current.delete(
-                      fallbackAckTimeoutId,
-                    );
-                    window.clearTimeout(fallbackAckTimeoutId);
-                    if ("error" in priorityOnlyResponse) {
-                      inFlightProducerIdsRef.current.delete(producerId);
-                      if (
-                        isConsumerControlRateLimitError(
-                          priorityOnlyResponse.error,
-                        )
-                      ) {
-                        markDeferredForRetry(priorityOnlyResponse.error);
-                        return;
-                      }
-
-                      if (preferences.paused === true) {
-                        refs.adaptivelyPausedConsumerProducerIdsRef.current.delete(
-                          producerId,
-                        );
-                      }
-                      preferenceDebugRef.current.set(producerId, {
-                        ...debugEntryBase,
-                        status: "error",
-                        paused: preferences.paused ?? null,
-                        producerPaused: null,
-                        error: priorityOnlyResponse.error,
-                        appliedAt: Date.now(),
-                        unsupportedLayers: true,
-                      });
-                      writeDebugSnapshot(debugContext);
-                      return;
-                    }
-                    inFlightProducerIdsRef.current.delete(producerId);
-                    lastAppliedRef.current.set(
-                      producerId,
-                      getPreferenceSignature(consumer.id, {
-                        priority: preferences.priority,
-                        paused: preferences.paused,
-                      }),
-                    );
-                    lastPausedRef.current.set(
-                      producerId,
-                      priorityOnlyResponse.paused,
-                    );
-                    if (
-                      preferences.paused === true &&
-                      priorityOnlyResponse.paused
-                    ) {
-                      refs.adaptivelyPausedConsumerProducerIdsRef.current.add(
-                        producerId,
-                      );
-                    } else {
-                      refs.adaptivelyPausedConsumerProducerIdsRef.current.delete(
-                        producerId,
-                      );
-                    }
-                    preferenceDebugRef.current.set(producerId, {
-                      ...debugEntryBase,
-                      status: "fallback",
-                      paused: priorityOnlyResponse.paused,
-                      producerPaused: priorityOnlyResponse.producerPaused,
-                      currentLayers: priorityOnlyResponse.currentLayers,
-                      error: null,
-                      appliedAt: Date.now(),
-                      unsupportedLayers: true,
-                    });
-                    writeDebugSnapshot(debugContext);
-                  },
-                );
-                return;
-              }
-              inFlightProducerIdsRef.current.delete(producerId);
+    const sendPriorityOnlyFallback = (
+      update: PendingConsumerPreferenceUpdate,
+    ) => {
+      let fallbackSettled = false;
+      const fallbackAckTimeoutId = window.setTimeout(() => {
+        if (fallbackSettled) return;
+        fallbackSettled = true;
+        scheduledPreferenceTimeoutsRef.current.delete(fallbackAckTimeoutId);
+        inFlightProducerIdsRef.current.delete(update.producerId);
+        markDeferredForRetry(
+          update,
+          "setConsumerPreferences priority-only ack timeout",
+        );
+      }, CONSUMER_PREFERENCE_ACK_TIMEOUT_MS);
+      scheduledPreferenceTimeoutsRef.current.add(fallbackAckTimeoutId);
+      socket.emit(
+        "setConsumerPreferences",
+        {
+          consumerId: update.consumer.id,
+          priority: update.preferences.priority,
+          ...(typeof update.preferences.paused === "boolean"
+            ? { paused: update.preferences.paused }
+            : {}),
+        },
+        (priorityOnlyResponse: SetConsumerPreferencesResponse) => {
+          if (fallbackSettled) return;
+          fallbackSettled = true;
+          scheduledPreferenceTimeoutsRef.current.delete(fallbackAckTimeoutId);
+          window.clearTimeout(fallbackAckTimeoutId);
+          if ("error" in priorityOnlyResponse) {
+            inFlightProducerIdsRef.current.delete(update.producerId);
+            if (isConsumerControlRateLimitError(priorityOnlyResponse.error)) {
+              markDeferredForRetry(update, priorityOnlyResponse.error);
               return;
             }
 
-            inFlightProducerIdsRef.current.delete(producerId);
-            lastAppliedRef.current.set(producerId, signature);
-            if (preferredLayers) {
-              lastLayersRef.current.set(producerId, preferredLayers);
-            }
-            lastPausedRef.current.set(producerId, response.paused);
-            if (preferences.paused === true && response.paused) {
-              refs.adaptivelyPausedConsumerProducerIdsRef.current.add(
-                producerId,
-              );
-            } else {
-              refs.adaptivelyPausedConsumerProducerIdsRef.current.delete(
-                producerId,
-              );
-            }
-            preferenceDebugRef.current.set(producerId, {
-              ...debugEntryBase,
-              status: "applied",
-              paused: response.paused,
-              producerPaused: response.producerPaused,
-              preferredLayers: response.preferredLayers,
-              currentLayers: response.currentLayers,
-              error: null,
-              appliedAt: Date.now(),
-            });
-            writeDebugSnapshot(debugContext);
-          },
-        );
-      };
+            markError(update, priorityOnlyResponse.error, true);
+            return;
+          }
 
-      const timeoutId = window.setTimeout(
-        emitPreferenceUpdate,
-        index * CONSUMER_PREFERENCE_EMIT_SPACING_MS,
+          inFlightProducerIdsRef.current.delete(update.producerId);
+          lastAppliedRef.current.set(
+            update.producerId,
+            getPreferenceSignature(update.consumer.id, {
+              priority: update.preferences.priority,
+              paused: update.preferences.paused,
+            }),
+          );
+          lastPausedRef.current.set(
+            update.producerId,
+            priorityOnlyResponse.paused,
+          );
+          if (
+            update.preferences.paused === true &&
+            priorityOnlyResponse.paused
+          ) {
+            refs.adaptivelyPausedConsumerProducerIdsRef.current.add(
+              update.producerId,
+            );
+          } else {
+            refs.adaptivelyPausedConsumerProducerIdsRef.current.delete(
+              update.producerId,
+            );
+          }
+          preferenceDebugRef.current.set(update.producerId, {
+            ...update.debugEntryBase,
+            status: "fallback",
+            paused: priorityOnlyResponse.paused,
+            producerPaused: priorityOnlyResponse.producerPaused,
+            currentLayers: priorityOnlyResponse.currentLayers,
+            error: null,
+            appliedAt: Date.now(),
+            unsupportedLayers: true,
+          });
+          writeDebugSnapshot(debugContext);
+        },
       );
-      scheduledPreferenceTimeoutsRef.current.add(timeoutId);
-    });
+    };
+
+    const handlePreferenceResponse = (
+      update: PendingConsumerPreferenceUpdate,
+      response: SetConsumerPreferencesBatchItemResponse,
+    ) => {
+      if (!isUpdateStillLive(update)) {
+        inFlightProducerIdsRef.current.delete(update.producerId);
+        return;
+      }
+
+      if ("error" in response) {
+        if (isConsumerControlRateLimitError(response.error)) {
+          inFlightProducerIdsRef.current.delete(update.producerId);
+          markDeferredForRetry(update, response.error);
+          return;
+        }
+
+        markError(update, response.error);
+        if (
+          update.preferredLayers &&
+          isUnsupportedLayerError(response.error)
+        ) {
+          unsupportedLayerPreferencesRef.current.set(update.producerId, {
+            consumerId: update.consumer.id,
+            signature: getLayerPreferenceSignature(update.preferredLayers),
+            retryAt: Date.now() + UNSUPPORTED_LAYER_RETRY_AFTER_MS,
+          });
+          if (update.preferences.paused === true) {
+            refs.adaptivelyPausedConsumerProducerIdsRef.current.add(
+              update.producerId,
+            );
+          }
+          sendPriorityOnlyFallback(update);
+          return;
+        }
+        inFlightProducerIdsRef.current.delete(update.producerId);
+        return;
+      }
+
+      inFlightProducerIdsRef.current.delete(update.producerId);
+      lastAppliedRef.current.set(update.producerId, update.signature);
+      if (update.preferredLayers) {
+        lastLayersRef.current.set(update.producerId, update.preferredLayers);
+      }
+      lastPausedRef.current.set(update.producerId, response.paused);
+      if (update.preferences.paused === true && response.paused) {
+        refs.adaptivelyPausedConsumerProducerIdsRef.current.add(
+          update.producerId,
+        );
+      } else {
+        refs.adaptivelyPausedConsumerProducerIdsRef.current.delete(
+          update.producerId,
+        );
+      }
+      preferenceDebugRef.current.set(update.producerId, {
+        ...update.debugEntryBase,
+        status: "applied",
+        paused: response.paused,
+        producerPaused: response.producerPaused,
+        preferredLayers: response.preferredLayers,
+        currentLayers: response.currentLayers,
+        error: null,
+        appliedAt: Date.now(),
+      });
+      writeDebugSnapshot(debugContext);
+    };
+
+    const emitSinglePreferenceUpdate = (
+      update: PendingConsumerPreferenceUpdate,
+    ) => {
+      if (!isUpdateStillLive(update)) {
+        inFlightProducerIdsRef.current.delete(update.producerId);
+        return;
+      }
+
+      let settled = false;
+      const ackTimeoutId = window.setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        scheduledPreferenceTimeoutsRef.current.delete(ackTimeoutId);
+        inFlightProducerIdsRef.current.delete(update.producerId);
+        markDeferredForRetry(update, "setConsumerPreferences ack timeout");
+      }, CONSUMER_PREFERENCE_ACK_TIMEOUT_MS);
+      scheduledPreferenceTimeoutsRef.current.add(ackTimeoutId);
+
+      socket.emit(
+        "setConsumerPreferences",
+        buildPreferencePayload(update),
+        (response: SetConsumerPreferencesResponse) => {
+          if (settled) return;
+          settled = true;
+          scheduledPreferenceTimeoutsRef.current.delete(ackTimeoutId);
+          window.clearTimeout(ackTimeoutId);
+          handlePreferenceResponse(update, response);
+        },
+      );
+    };
+
+    const emitBatchPreferenceUpdates = (
+      batchUpdates: PendingConsumerPreferenceUpdate[],
+    ) => {
+      const liveUpdates = batchUpdates.filter((update) => {
+        if (isUpdateStillLive(update)) return true;
+        inFlightProducerIdsRef.current.delete(update.producerId);
+        return false;
+      });
+      if (liveUpdates.length === 0) return;
+
+      let settled = false;
+      const ackTimeoutId = window.setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        scheduledPreferenceTimeoutsRef.current.delete(ackTimeoutId);
+        for (const update of liveUpdates) {
+          emitSinglePreferenceUpdate(update);
+        }
+      }, CONSUMER_PREFERENCE_ACK_TIMEOUT_MS);
+      scheduledPreferenceTimeoutsRef.current.add(ackTimeoutId);
+
+      socket.emit(
+        "setConsumerPreferencesBatch",
+        {
+          updates: liveUpdates.map(buildPreferencePayload),
+        },
+        (response: SetConsumerPreferencesBatchResponse) => {
+          if (settled) return;
+          settled = true;
+          scheduledPreferenceTimeoutsRef.current.delete(ackTimeoutId);
+          window.clearTimeout(ackTimeoutId);
+          if ("error" in response) {
+            if (isConsumerControlRateLimitError(response.error)) {
+              for (const update of liveUpdates) {
+                inFlightProducerIdsRef.current.delete(update.producerId);
+                markDeferredForRetry(update, response.error);
+              }
+              return;
+            }
+
+            for (const update of liveUpdates) {
+              emitSinglePreferenceUpdate(update);
+            }
+            return;
+          }
+
+          liveUpdates.forEach((update, index) => {
+            handlePreferenceResponse(
+              update,
+              response.results[index] ?? {
+                error: "Missing consumer preference batch result",
+                consumerId: update.consumer.id,
+              },
+            );
+          });
+        },
+      );
+    };
+
+    for (const update of updatesToSend) {
+      markOptimisticPauseState(update);
+    }
+
+    if (screenShareVideoActive && updatesToSend.length > 1) {
+      emitBatchPreferenceUpdates(updatesToSend);
+    } else {
+      updatesToSend.forEach((update, index) => {
+        const timeoutId = window.setTimeout(() => {
+          scheduledPreferenceTimeoutsRef.current.delete(timeoutId);
+          emitSinglePreferenceUpdate(update);
+        }, index * emitSpacingMs);
+        scheduledPreferenceTimeoutsRef.current.add(timeoutId);
+      });
+    }
     writeDebugSnapshot(debugContext);
   }, [
     activeSpeakerId,
     availableIncomingBitrateBps,
     clearScheduledPreferenceWork,
     connectionQuality,
+    dataSaverMode,
     emergencyMode,
     enabled,
+    isDocumentVisible,
     refs.adaptivelyPausedConsumerProducerIdsRef,
     refs.consumerTelemetryRef,
     refs.consumersRef,
@@ -1503,6 +1977,7 @@ export function useAdaptiveConsumerPreferences({
       lastPausedRef.current.clear();
       unsupportedLayerPreferencesRef.current.clear();
       preferenceDebugRef.current.clear();
+      lastRoomTilingEventSignatureRef.current = null;
       refs.adaptivelyPausedConsumerProducerIdsRef.current.clear();
       writeDebugSnapshot({
         socketConnected: false,
@@ -1513,11 +1988,27 @@ export function useAdaptiveConsumerPreferences({
     }
 
     applyPreferences();
-    window.addEventListener("conclave:meet-room-tiling", applyPreferences);
+    lastRoomTilingEventSignatureRef.current =
+      readRoomTilingCurrentSignature();
+    const handleRoomTilingChange = (event: Event) => {
+      const signature = readRoomTilingEventSignature(event);
+      if (
+        signature &&
+        lastRoomTilingEventSignatureRef.current === signature
+      ) {
+        return;
+      }
+      lastRoomTilingEventSignatureRef.current = signature;
+      applyPreferences();
+    };
+    window.addEventListener("conclave:meet-room-tiling", handleRoomTilingChange);
     const interval = window.setInterval(applyPreferences, APPLY_INTERVAL_MS);
     return () => {
       window.clearInterval(interval);
-      window.removeEventListener("conclave:meet-room-tiling", applyPreferences);
+      window.removeEventListener(
+        "conclave:meet-room-tiling",
+        handleRoomTilingChange,
+      );
       clearScheduledPreferenceWork();
     };
   }, [

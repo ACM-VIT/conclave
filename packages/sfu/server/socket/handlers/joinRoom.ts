@@ -956,6 +956,9 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           roomId,
           rtpCapabilities: context.currentRoom.rtpCapabilities,
           existingProducers,
+          ...(context.currentRoom.isMeetingActiveSpeakerSignalAvailable
+            ? { activeSpeakerId: context.currentRoom.activeSpeakerUserId }
+            : {}),
           displayNameSnapshot,
           status: "joined",
           hostUserId: context.currentRoom.getHostUserId(),

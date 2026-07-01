@@ -2,6 +2,7 @@
 
 import React, { useState } from "react";
 import { color, radius } from "@conclave/ui-tokens";
+import { createTypedMove } from "@conclave/apps-sdk";
 import {
   CountdownRing,
   GameLobby,
@@ -11,6 +12,7 @@ import {
   useRemaining,
   type GameViewProps,
 } from "./gameUi";
+import type { BluffMove } from "./moves";
 
 type ChooseOption = { id: string; text: string };
 type RevealOption = {
@@ -68,6 +70,7 @@ export default function BluffGame({
   readOnly = false,
   move,
 }: GameViewProps<BluffPublic, BluffMe>) {
+  const send = createTypedMove<BluffMove>(move);
   const remaining = useRemaining(pub.deadline, pub.serverNow);
   const [draft, setDraft] = useState("");
 
@@ -83,7 +86,7 @@ export default function BluffGame({
         readOnly={readOnly}
         canStart={pub.totalPlayers >= 2}
         disabledLabel="Need at least 2 players"
-        onStart={() => move("start")}
+        onStart={() => send({ type: "start" })}
       />
     );
   }
@@ -178,7 +181,7 @@ export default function BluffGame({
               <span style={{ fontSize: 11, color: color.textFaint }}>{draft.length}/60</span>
               <PrimaryButton
                 disabled={readOnly || !draft.trim()}
-                onClick={() => move("submit", { text: draft.trim() })}
+                onClick={() => send({ type: "submit", text: draft.trim() })}
               >
                 Submit bluff
               </PrimaryButton>
@@ -187,7 +190,7 @@ export default function BluffGame({
         )}
         {isAdmin && !readOnly ? (
           <div style={{ display: "flex", justifyContent: "flex-end" }}>
-            <GhostButton onClick={() => move("skip")}>Skip</GhostButton>
+            <GhostButton onClick={() => send({ type: "skip" })}>Skip</GhostButton>
           </div>
         ) : null}
       </div>
@@ -212,7 +215,7 @@ export default function BluffGame({
                 key={option.id}
                 type="button"
                 disabled={locked}
-                onClick={() => move("choose", { optionId: option.id })}
+                onClick={() => send({ type: "choose", optionId: option.id })}
                 style={{
                   display: "flex",
                   alignItems: "center",
@@ -238,7 +241,7 @@ export default function BluffGame({
         </div>
         {isAdmin && !readOnly ? (
           <div style={{ display: "flex", justifyContent: "flex-end" }}>
-            <GhostButton onClick={() => move("skip")}>Reveal</GhostButton>
+            <GhostButton onClick={() => send({ type: "skip" })}>Reveal</GhostButton>
           </div>
         ) : null}
       </div>
@@ -290,7 +293,7 @@ export default function BluffGame({
       ) : null}
       {isAdmin && !readOnly ? (
         <div style={{ display: "flex", justifyContent: "flex-end" }}>
-          <GhostButton onClick={() => move("next")}>Next</GhostButton>
+          <GhostButton onClick={() => send({ type: "next" })}>Next</GhostButton>
         </div>
       ) : null}
     </div>

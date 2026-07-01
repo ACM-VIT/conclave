@@ -5,6 +5,7 @@ import {
   type GameMove,
 } from "../types.js";
 import { numberOption } from "../config.js";
+import { allActivePlayersActed } from "../roundLoop.js";
 
 /**
  * Reaction: a reflex arena. Each round the panel waits ("do not tap"), then
@@ -61,6 +62,27 @@ const scoreboard = (state: ReactionState, ctx: GameContext) =>
     .map((p) => ({ id: p.id, name: p.name, score: state.scores[p.id] ?? 0 }))
     .sort((a, b) => b.score - a.score);
 
+/**
+ * Typed move contract. Decoded from the untrusted `GameMove` at the top of
+ * `onMove`. Reaction moves carry no payload, so the decoder only narrows the
+ * type and rejects unknown moves.
+ */
+export type ReactionMove =
+  | { type: "start" }
+  | { type: "tap" }
+  | { type: "next" };
+
+const decodeReactionMove = (move: GameMove): ReactionMove => {
+  switch (move.type) {
+    case "start":
+    case "tap":
+    case "next":
+      return { type: move.type };
+    default:
+      throw new GameMoveError(`Unknown move: ${move.type}`);
+  }
+};
+
 export const reactionModule: GameModule<ReactionState> = {
   id: "reaction",
   name: "Reaction",
@@ -81,7 +103,8 @@ export const reactionModule: GameModule<ReactionState> = {
   },
 
   onMove(state, move: GameMove, ctx): ReactionState {
-    switch (move.type) {
+    const m = decodeReactionMove(move);
+    switch (m.type) {
       case "start": {
         if (!ctx.isAdmin(move.playerId)) throw new GameMoveError("Only the host can start");
         if (state.phase !== "lobby") throw new GameMoveError("Already running");
@@ -109,8 +132,10 @@ export const reactionModule: GameModule<ReactionState> = {
         if (state.phase !== "reveal") throw new GameMoveError("Wait for the reveal");
         return { ...state, deadline: ctx.now };
       }
-      default:
-        throw new GameMoveError(`Unknown move: ${move.type}`);
+      default: {
+        const _exhaustive: never = m;
+        throw new GameMoveError(`Unknown move: ${(_exhaustive as GameMove).type}`);
+      }
     }
   },
 
@@ -119,8 +144,9 @@ export const reactionModule: GameModule<ReactionState> = {
       return { ...state, phase: "go", deadline: ctx.now + GO_WINDOW_MS };
     }
     if (state.phase === "go") {
-      const everyone =
-        ctx.players.length > 0 && ctx.players.every((p) => state.taps[p.id]);
+      const everyone = allActivePlayersActed(ctx, (playerId) =>
+        Boolean(state.taps[playerId]),
+      );
       if (ctx.now >= state.deadline || everyone) {
         const next: ReactionState = { ...state, taps: { ...state.taps }, scores: { ...state.scores } };
         scoreRound(next);
@@ -162,7 +188,7 @@ export const reactionModule: GameModule<ReactionState> = {
       serverNow: ctx.now,
       goAt: state.phase === "go" ? state.goAt : null,
       tappedCount: Object.keys(state.taps).length,
-      totalPlayers: ctx.players.length,
+      totalPlayers: ctx.activePlayers.length,
       results,
       winnerName: winner?.name ?? null,
       scoreboard: scoreboard(state, ctx),

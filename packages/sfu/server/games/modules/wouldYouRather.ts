@@ -4,7 +4,9 @@ import {
   type GameModule,
   type GameMove,
 } from "../types.js";
+import { payloadField, requireOneOf } from "../validation.js";
 import { numberOption } from "../config.js";
+import { createRoundLoop } from "../roundLoop.js";
 import {
   GAME_CONTENT_TOPIC_OPTION,
   cleanGeneratedText,
@@ -135,6 +137,61 @@ const namesFor = (state: WyrState, ctx: GameContext, option: 0 | 1): string[] =>
     .filter((player) => state.choices[player.id] === option)
     .map((player) => player.name);
 
+const enterChoose = (state: WyrState, ctx: GameContext, index: number): WyrState => ({
+  ...state,
+  phase: "choose",
+  index,
+  deadline: ctx.now + CHOOSE_MS,
+  choices: {},
+});
+
+const loop = createRoundLoop<WyrState>({
+  getPhase: (state) => state.phase,
+  getDeadline: (state) => state.deadline,
+  withDeadline: (state, deadline) => ({ ...state, deadline }),
+  collectPhases: [
+    {
+      name: "choose",
+      hasActed: (state, playerId) => state.choices[playerId] !== undefined,
+      onEnter: (state, ctx) => enterChoose(state, ctx, state.index),
+    },
+  ],
+  reveal: {
+    name: "reveal",
+    onEnter: (state) => ({ ...state, phase: "reveal", deadline: 0 }),
+  },
+  isLastRound: (state) => state.index + 1 >= state.prompts.length,
+  startNextRound: (state, ctx) => enterChoose(state, ctx, state.index + 1),
+  toResults: (state) => ({ ...state, phase: "results" }),
+});
+
+/**
+ * Typed move contract. Decoded from the untrusted `GameMove` at the top of
+ * `onMove`. The side pick is validated here to 0 or 1 (throwing "Invalid pick"),
+ * replacing the inline payload cast.
+ */
+export type WyrMove =
+  | { type: "start" }
+  | { type: "choose"; option: 0 | 1 }
+  | { type: "next" }
+  | { type: "skip" };
+
+const decodeWyrMove = (move: GameMove): WyrMove => {
+  switch (move.type) {
+    case "start":
+    case "next":
+    case "skip":
+      return { type: move.type };
+    case "choose":
+      return {
+        type: "choose",
+        option: requireOneOf(payloadField(move.payload, "option"), [0, 1] as const, "Invalid pick"),
+      };
+    default:
+      throw new GameMoveError(`Unknown move: ${move.type}`);
+  }
+};
+
 export const wouldYouRatherModule: GameModule<WyrState> = {
   id: "would-you-rather",
   name: "Would You Rather",
@@ -203,20 +260,17 @@ export const wouldYouRatherModule: GameModule<WyrState> = {
   },
 
   onMove(state, move: GameMove, ctx): WyrState {
-    switch (move.type) {
+    const m = decodeWyrMove(move);
+    switch (m.type) {
       case "start": {
         if (!ctx.isAdmin(move.playerId)) throw new GameMoveError("Only the host can start");
         if (state.phase !== "lobby") throw new GameMoveError("Already running");
-        return { ...state, phase: "choose", index: 0, deadline: ctx.now + CHOOSE_MS, choices: {} };
+        return enterChoose(state, ctx, 0);
       }
       case "choose": {
         if (state.phase !== "choose") throw new GameMoveError("Not accepting picks");
-        const option = (move.payload as { option?: unknown })?.option;
-        if (option !== 0 && option !== 1) throw new GameMoveError("Invalid pick");
-        const pick: 0 | 1 = option;
-        const choices: Record<string, 0 | 1> = { ...state.choices, [move.playerId]: pick };
-        const everyone = ctx.players.length > 0 && Object.keys(choices).length >= ctx.players.length;
-        return { ...state, choices, deadline: everyone ? ctx.now : state.deadline };
+        const choices: Record<string, 0 | 1> = { ...state.choices, [move.playerId]: m.option };
+        return loop.recordAction({ ...state, choices }, ctx);
       }
       case "next": {
         if (!ctx.isAdmin(move.playerId)) throw new GameMoveError("Only the host can advance");
@@ -228,21 +282,15 @@ export const wouldYouRatherModule: GameModule<WyrState> = {
         if (state.phase !== "choose") throw new GameMoveError("Nothing to skip");
         return { ...state, deadline: ctx.now };
       }
-      default:
-        throw new GameMoveError(`Unknown move: ${move.type}`);
+      default: {
+        const _exhaustive: never = m;
+        throw new GameMoveError(`Unknown move: ${(_exhaustive as GameMove).type}`);
+      }
     }
   },
 
   onTick(state, ctx): WyrState {
-    if (state.phase === "choose" && ctx.now >= state.deadline) {
-      return { ...state, phase: "reveal", deadline: 0 };
-    }
-    if (state.phase === "reveal" && ctx.now >= state.deadline && state.deadline > 0) {
-      const isLast = state.index + 1 >= state.prompts.length;
-      if (isLast) return { ...state, phase: "results" };
-      return { ...state, phase: "choose", index: state.index + 1, deadline: ctx.now + CHOOSE_MS, choices: {} };
-    }
-    return state;
+    return loop.tick(state, ctx);
   },
 
   getPhase: (state) => state.phase,
@@ -262,7 +310,7 @@ export const wouldYouRatherModule: GameModule<WyrState> = {
       optionB: prompt?.b ?? null,
       counts: state.phase === "lobby" ? [0, 0] : [a, b],
       answeredCount: Object.keys(state.choices).length,
-      totalPlayers: ctx.players.length,
+      totalPlayers: ctx.activePlayers.length,
       namesA: reveal ? namesFor(state, ctx, 0) : [],
       namesB: reveal ? namesFor(state, ctx, 1) : [],
     };

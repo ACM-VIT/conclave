@@ -142,8 +142,9 @@ Wraps meeting UI that needs game controls or active game rendering.
 Props:
 
 - `socket`: connected room socket, or `null`
-- `user`: current player identity
+- `user`: current player identity, used as a fallback id until the server snapshot arrives
 - `isAdmin`: role flag used for host-only game controls
+- `isReadOnly`: observer mode; all game methods refuse locally and the UI should render read-only
 
 Provider responsibilities:
 
@@ -163,7 +164,8 @@ Returns the game runtime context:
 - `vote`: active game vote, or `null`
 - `isActive`: `true` when a game is running
 - `isAdmin`: current role flag
-- `userId`: current player id
+- `isReadOnly`: observer mode flag
+- `userId`: the current player id. This is the server-canonical `selfId` carried on game snapshots whenever available, falling back to the host-provided `user.id` before the first snapshot. Always match against this value when looking yourself up in `players`, scoreboards, or tile state; never rebuild the id client-side, because the server may normalize identity (lowercased email, token session id)
 - `startGame(gameId, options?)`
 - `endGame()`
 - `move(type, payload?)`
@@ -175,7 +177,7 @@ Returns the game runtime context:
 Ack behavior:
 
 - methods resolve to `{ success: boolean, error?: string }`
-- `startGame` uses a 30 second timeout because it may load generated content
+- `startGame` uses a 45 second timeout because it may load generated content
 - other methods use an 8 second timeout in the provider implementation
 - `move` returns an error when no game is active
 
@@ -194,6 +196,8 @@ await startGame("trivia", {
 
 The SFU validates options against the selected game module. Unknown keys are ignored. Invalid values fall back to defaults or are clamped to the allowed range.
 
+Rematch: `game:start` replaces a session that has already finished, so calling `startGame(publicState.gameId, publicState.config)` from the results phase restarts the same game with the same settings. `publicState.config` carries the host-chosen settings for exactly this purpose.
+
 ### `move(type, payload?)`
 
 Sends a player action to the active game:
@@ -204,9 +208,29 @@ await move("answer", { choice: 2 });
 
 Client code should keep payloads small and simple. The server validates every move and can reject it with a user-facing error.
 
+### Typed Moves: `createTypedMove<M>()`
+
+Each game module exports a discriminated union of its legal moves, mirrored on the client. `createTypedMove` wraps the game-agnostic `move` so a renderer cannot send a misnamed move or a malformed payload without a compile error:
+
+```ts
+import { createTypedMove } from "@conclave/apps-sdk";
+import type { TriviaMove } from "./moves";
+
+const send = createTypedMove<TriviaMove>(move);
+await send({ type: "answer", choice: 2 });
+```
+
+The wire payload is unchanged: the discriminant becomes the move type and the remaining fields become the payload. The server still decodes and validates every move independently.
+
+### Tile Adornments
+
+Games can light up the participant video tiles (state such as locked in, correct, eliminated, winner) and make tiles tappable during votes. The APIs are `registerTileResolver`, `registerTileAction`, `resolveTileAdornment`, and `resolveTileToneColor`. See [Tile Adornments](./tile-adornments.md) for the full contract.
+
 ### `publicState` and `view`
 
 Use `publicState.view` for information everyone can see. Use `view` for the current player's private projection.
+
+`publicState` also carries `gameId`, `name`, `phase`, `players` (the seats snapshotted at start), `hostId`, `finished`, `hasLeaderboard`, and `config` (the host-chosen settings, used by the rematch flow).
 
 Do not assume both arrive in the same tick. Render loading or waiting states when `publicState` exists but `view` is still `null`.
 

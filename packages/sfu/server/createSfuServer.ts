@@ -30,6 +30,7 @@ import {
   releaseAllRoomOwnerships,
   renewRoomOwnerships,
 } from "./rooms.js";
+import { shutdownAnalytics } from "./analytics/posthog.js";
 import { createSfuState } from "./state.js";
 import type { SfuState } from "./state.js";
 
@@ -160,6 +161,10 @@ export const createSfuServer = (
       }
     }
     state.workers = [];
+
+    // Flush and close product analytics last so any buffered game events are
+    // delivered before the process exits. No-op when analytics is disabled.
+    await shutdownAnalytics();
   };
 
   return {

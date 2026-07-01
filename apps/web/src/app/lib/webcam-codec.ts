@@ -24,6 +24,11 @@ const SIMULCAST_FRIENDLY_CODEC_MIME_TYPES = [
   "video/H264",
 ] as const;
 const SCREEN_SHARE_TEMPORAL_CODEC_MIME_TYPES = [
+  "video/VP9",
+  "video/VP8",
+  "video/H264",
+] as const;
+const SOFTWARE_SENSITIVE_SCREEN_SHARE_CODEC_MIME_TYPES = [
   "video/VP8",
   "video/H264",
 ] as const;
@@ -116,8 +121,11 @@ export const getPreferredScreenShareCodec = (
   device: Pick<Device, "rtpCapabilities"> | null | undefined,
 ): RtpCodecCapability | undefined => {
   const codecs = device?.rtpCapabilities?.codecs ?? [];
+  const preferredMimeTypes = isLikelyHardwareAcceleratedH264Browser()
+    ? SOFTWARE_SENSITIVE_SCREEN_SHARE_CODEC_MIME_TYPES
+    : SCREEN_SHARE_TEMPORAL_CODEC_MIME_TYPES;
 
-  for (const mimeType of SCREEN_SHARE_TEMPORAL_CODEC_MIME_TYPES) {
+  for (const mimeType of preferredMimeTypes) {
     const codec = codecs.find((candidate) =>
       isPreferredVideoCodec(candidate, mimeType),
     );
@@ -139,11 +147,23 @@ type ProduceWebcamTrackOptions = {
   forceSingleLayer?: boolean;
 };
 
+type ProduceScreenShareTrackOptions = {
+  transport: Transport;
+  track: MediaStreamTrack;
+  networkProfile: WebcamProducerNetworkProfile;
+  preferredCodec?: RtpCodecCapability;
+};
+
 export type WebcamProducerNetworkProfile =
   | "good"
   | "fair"
   | "poor"
   | "emergency";
+
+type ScreenProducerAppData = {
+  type: ProducerType;
+  networkProfile: WebcamProducerNetworkProfile;
+};
 
 type WebcamEncodingCap = {
   maxBitrate: number;
@@ -624,6 +644,8 @@ type ScreenShareEncoding = ReturnType<typeof buildScreenShareEncoding> & {
   scaleResolutionDownBy?: number;
 };
 
+type FallbackScreenShareEncoding = Omit<ScreenShareEncoding, "scalabilityMode">;
+
 type ScreenShareCap = WebcamEncodingCap & {
   idealWidth: number;
   idealHeight: number;
@@ -851,6 +873,70 @@ export function buildScreenShareEncodingForNetworkProfile(
     maxFramerate: Math.min(base.maxFramerate, cap.maxFramerate),
     scaleResolutionDownBy,
   };
+}
+
+const withoutScreenShareScalabilityMode = (
+  encoding: ScreenShareEncoding,
+): FallbackScreenShareEncoding => {
+  const { scalabilityMode: _scalabilityMode, ...fallbackEncoding } = encoding;
+  return fallbackEncoding;
+};
+
+export async function produceScreenShareTrack({
+  transport,
+  track,
+  networkProfile,
+  preferredCodec,
+}: ProduceScreenShareTrackOptions): Promise<Producer> {
+  const encoding = buildScreenShareEncodingForNetworkProfile(
+    networkProfile,
+    track,
+  );
+  const buildOptions = (
+    nextEncoding: ScreenShareEncoding | FallbackScreenShareEncoding,
+    codec: RtpCodecCapability | undefined,
+  ) => ({
+    track,
+    encodings: [nextEncoding],
+    stopTracks: false,
+    ...(codec ? { codec } : {}),
+    appData: {
+      type: "screen" as ProducerType,
+      networkProfile,
+    } satisfies ScreenProducerAppData,
+  });
+
+  try {
+    return await transport.produce(buildOptions(encoding, preferredCodec));
+  } catch (primaryError) {
+    if (!preferredCodec) {
+      console.warn(
+        "[Meets] Screen-share temporal scalability produce failed, retrying without scalability mode:",
+        primaryError,
+      );
+      return transport.produce(
+        buildOptions(withoutScreenShareScalabilityMode(encoding), undefined),
+      );
+    }
+
+    console.warn(
+      "[Meets] Preferred screen-share codec failed, retrying router default codec:",
+      primaryError,
+    );
+  }
+
+  try {
+    return await transport.produce(buildOptions(encoding, undefined));
+  } catch (defaultCodecError) {
+    console.warn(
+      "[Meets] Screen-share temporal scalability produce failed on router default codec, retrying without scalability mode:",
+      defaultCodecError,
+    );
+  }
+
+  return transport.produce(
+    buildOptions(withoutScreenShareScalabilityMode(encoding), undefined),
+  );
 }
 
 export async function produceWebcamTrack({

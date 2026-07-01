@@ -154,6 +154,7 @@ final class WebRTCClient: NSObject, ObservableObject {
     private var remoteConsumerLayerPreferenceUnsupportedIds: Set<String> = []
     private var remoteConsumerPreferenceInFlightIds: Set<String> = []
     private var remoteConsumerPreferenceRetryTask: Task<Void, Never>?
+    private var remoteVideoReceiveEnabled = true
     private static let maxRemoteConsumerPreferenceUpdatesPerCycle = 8
     private static let remoteConsumerPreferenceEmitSpacingNanoseconds: UInt64 = 75_000_000
     private static let remoteConsumerPreferenceRetryDelayNanoseconds: UInt64 = 1_000_000_000
@@ -344,9 +345,11 @@ final class WebRTCClient: NSObject, ObservableObject {
         )
     }
 
-    private func initialScreenConsumerPreference() -> InitialConsumerPreference {
+    private func initialScreenConsumerPreference(
+        connectionQuality: ConnectionQuality
+    ) -> InitialConsumerPreference {
         let temporalLayer: Int
-        switch currentLocalBandwidthQuality {
+        switch connectionQuality {
         case .emergency:
             temporalLayer = 1
         case .poor:
@@ -365,7 +368,8 @@ final class WebRTCClient: NSObject, ObservableObject {
     private func initialConsumerPreference(
         producerKind: String?,
         producerType: String,
-        preferHighWebcamLayer: Bool
+        preferHighWebcamLayer: Bool,
+        initialReceiveConnectionQuality: ConnectionQuality
     ) -> InitialConsumerPreference {
         if producerKind == "audio" {
             return InitialConsumerPreference(
@@ -384,7 +388,9 @@ final class WebRTCClient: NSObject, ObservableObject {
         }
 
         if producerType == ProducerType.screen.rawValue {
-            return initialScreenConsumerPreference()
+            return initialScreenConsumerPreference(
+                connectionQuality: initialReceiveConnectionQuality
+            )
         }
 
         guard producerType == ProducerType.webcam.rawValue else {
@@ -444,7 +450,8 @@ final class WebRTCClient: NSObject, ObservableObject {
                 focusedUserIds: focusedUserIds,
                 visibleUserIds: visibleUserIds,
                 connectionQuality: connectionQuality,
-                videoQuality: videoQuality
+                videoQuality: videoQuality,
+                receiveVideo: self.remoteVideoReceiveEnabled
             )
         }
     }
@@ -453,10 +460,13 @@ final class WebRTCClient: NSObject, ObservableObject {
         focusedUserIds: Set<String>,
         visibleUserIds: Set<String>,
         connectionQuality: ConnectionQuality,
-        videoQuality: VideoQuality
+        videoQuality: VideoQuality,
+        receiveVideo: Bool = true
     ) async {
+        remoteVideoReceiveEnabled = receiveVideo
         guard let socketManager else { return }
 
+        let shouldReceiveVideo = receiveVideo
         let consumerSnapshot = consumers
         let emergencyKeepWebcamUserId: String? = {
             guard connectionQuality == .emergency else { return nil }
@@ -480,7 +490,8 @@ final class WebRTCClient: NSObject, ObservableObject {
                 visibleUserIds: visibleUserIds,
                 emergencyKeepWebcamUserId: emergencyKeepWebcamUserId,
                 connectionQuality: connectionQuality,
-                videoQuality: videoQuality
+                videoQuality: videoQuality,
+                receiveVideo: shouldReceiveVideo
             ) else { continue }
             guard !remoteConsumerPreferenceInFlightIds.contains(consumerId) else { continue }
 
@@ -599,7 +610,8 @@ final class WebRTCClient: NSObject, ObservableObject {
         visibleUserIds: Set<String>,
         emergencyKeepWebcamUserId: String?,
         connectionQuality: ConnectionQuality,
-        videoQuality: VideoQuality
+        videoQuality: VideoQuality,
+        receiveVideo: Bool
     ) -> RemoteConsumerPreference? {
         if info.kind == "audio" {
             return RemoteConsumerPreference(
@@ -611,6 +623,15 @@ final class WebRTCClient: NSObject, ObservableObject {
         }
 
         guard info.kind == "video" else { return nil }
+
+        if !receiveVideo {
+            return RemoteConsumerPreference(
+                spatialLayer: 0,
+                temporalLayer: 0,
+                priority: 8,
+                paused: true
+            )
+        }
 
         if info.type == ProducerType.screen.rawValue {
             let temporalLayer: Int
@@ -1322,7 +1343,7 @@ final class WebRTCClient: NSObject, ObservableObject {
         encoding.maxBitrateBps = NSNumber(value: cap.maxBitrateBps)
         encoding.maxFramerate = NSNumber(value: cap.maxFramerate)
         encoding.numTemporalLayers = NSNumber(value: Self.screenShareTemporalLayerCount)
-        encoding.networkPriority = .medium
+        encoding.networkPriority = .high
         return encoding
     }
 
@@ -1380,7 +1401,8 @@ final class WebRTCClient: NSObject, ObservableObject {
         producerUserId: String,
         producerKind: String? = nil,
         producerType: String = "webcam",
-        preferHighWebcamLayer: Bool = false
+        preferHighWebcamLayer: Bool = false,
+        initialReceiveConnectionQuality: ConnectionQuality = .unknown
     ) async throws {
         guard let socket = socketManager,
               let rtpCaps = serverRtpCapabilities,
@@ -1392,7 +1414,8 @@ final class WebRTCClient: NSObject, ObservableObject {
         let initialPreference = initialConsumerPreference(
             producerKind: producerKind,
             producerType: producerType,
-            preferHighWebcamLayer: preferHighWebcamLayer
+            preferHighWebcamLayer: preferHighWebcamLayer,
+            initialReceiveConnectionQuality: initialReceiveConnectionQuality
         )
 
         let response = try await socket.consume(

@@ -7,6 +7,7 @@ import {
   type GameModule,
   type GameMove,
 } from "../types.js";
+import { payloadField } from "../validation.js";
 import { numberOption, selectOption } from "../config.js";
 
 type WordleTile = "green" | "yellow" | "gray";
@@ -231,6 +232,33 @@ const withResultsIfComplete = (state: WordleState, ctx: GameContext): WordleStat
   };
 };
 
+/**
+ * Typed move contract. Decoded from the untrusted `GameMove` at the top of
+ * `onMove`. The `word` field stays `unknown` on the decoded move: it is
+ * validated by `normalizeWord` inside each case, because that validation needs
+ * the role ("Word" vs "Guess") for its messages and must run after the phase and
+ * setter/guesser checks so the original error precedence is preserved.
+ */
+export type WordleMove =
+  | { type: "start" }
+  | { type: "setWord"; word: unknown }
+  | { type: "guess"; word: unknown }
+  | { type: "nextRound" };
+
+const decodeWordleMove = (move: GameMove): WordleMove => {
+  switch (move.type) {
+    case "start":
+    case "nextRound":
+      return { type: move.type };
+    case "setWord":
+      return { type: "setWord", word: payloadField(move.payload, "word") };
+    case "guess":
+      return { type: "guess", word: payloadField(move.payload, "word") };
+    default:
+      throw new GameMoveError(`Unknown move: ${move.type}`);
+  }
+};
+
 export const wordleModule: GameModule<WordleState> = {
   id: "wordle",
   name: "Wordle",
@@ -290,7 +318,8 @@ export const wordleModule: GameModule<WordleState> = {
   },
 
   onMove(state, move: GameMove, ctx): WordleState {
-    switch (move.type) {
+    const m = decodeWordleMove(move);
+    switch (m.type) {
       case "start": {
         if (!ctx.isAdmin(move.playerId)) {
           throw new GameMoveError("Only the host can start Wordle");
@@ -349,9 +378,7 @@ export const wordleModule: GameModule<WordleState> = {
         if (!currentState.setterId || move.playerId !== currentState.setterId) {
           throw new GameMoveError("Only the selected player can set the word");
         }
-        const word = normalizeWord((move.payload as { word?: unknown })?.word, {
-          role: "secret",
-        });
+        const word = normalizeWord(m.word, { role: "secret" });
 
         const players: Record<string, PlayerRoundState> = {};
         for (const playerId of contestantIds(currentState, ctx)) {
@@ -390,9 +417,7 @@ export const wordleModule: GameModule<WordleState> = {
           throw new GameMoveError("You already finished your board");
         }
 
-        const guess = normalizeWord((move.payload as { word?: unknown })?.word, {
-          role: "guess",
-        });
+        const guess = normalizeWord(m.word, { role: "guess" });
         if (progress.guesses.some((entry) => entry.word === guess)) {
           throw new GameMoveError("You already guessed that word");
         }
@@ -473,8 +498,10 @@ export const wordleModule: GameModule<WordleState> = {
           currentRound: nextRound,
         };
       }
-      default:
-        throw new GameMoveError(`Unknown move: ${move.type}`);
+      default: {
+        const _exhaustive: never = m;
+        throw new GameMoveError(`Unknown move: ${(_exhaustive as GameMove).type}`);
+      }
     }
   },
 

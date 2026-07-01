@@ -62,9 +62,15 @@ import {
 } from "./hooks/useConnectionQuality";
 import { useIsMobile } from "./hooks/useIsMobile";
 import { usePrewarmSocket } from "./hooks/usePrewarmSocket";
+import { useScreenWakeLock } from "./hooks/useScreenWakeLock";
 import { useSharedBrowser } from "./hooks/useSharedBrowser";
 import { useVoiceAgentParticipant } from "./hooks/useVoiceAgentParticipant";
 import type { JoinMode, PrejoinMediaHandoff } from "./lib/types";
+import {
+  readStoredMeetViewSettings,
+  writeStoredMeetViewSettings,
+  type MeetViewSettings,
+} from "./lib/meet-view";
 import {
   countActiveVideoEffects,
   DEFAULT_VIDEO_EFFECTS,
@@ -79,6 +85,10 @@ import {
   prewarmVideoEffectsAssetsDeferred,
   prewarmVideoEffectsRuntimeDeferred,
 } from "./lib/video-effects-lazy";
+import {
+  getBrowserNetworkInformation,
+  getBrowserNetworkSnapshot,
+} from "./lib/network-information";
 import {
   generateRoomCode,
   isSystemUserId,
@@ -400,10 +410,35 @@ export default function MeetsClient({
   const [guestStorageReady, setGuestStorageReady] = useState(false);
   const [isSigningOut, setIsSigningOut] = useState(false);
   const [appsSocket, setAppsSocket] = useState<Socket | null>(null);
+  const [viewSettings, setViewSettings] = useState<MeetViewSettings>(
+    readStoredMeetViewSettings,
+  );
+  const [browserSaveDataMode, setBrowserSaveDataMode] = useState(
+    () => getBrowserNetworkSnapshot().saveData === true,
+  );
+  const effectiveDataSaverMode =
+    viewSettings.dataSaverMode || browserSaveDataMode;
   const uploadAsset: AssetUploadHandler = useMemo(
     () => createAssetUploadHandler(),
     [],
   );
+
+  useEffect(() => {
+    writeStoredMeetViewSettings(viewSettings);
+  }, [viewSettings]);
+
+  useEffect(() => {
+    const syncBrowserSaveDataMode = () => {
+      setBrowserSaveDataMode(getBrowserNetworkSnapshot().saveData === true);
+    };
+    const connection = getBrowserNetworkInformation();
+
+    syncBrowserSaveDataMode();
+    connection?.addEventListener?.("change", syncBrowserSaveDataMode);
+    return () => {
+      connection?.removeEventListener?.("change", syncBrowserSaveDataMode);
+    };
+  }, []);
 
   useEffect(() => {
     if (guestStorageReady || typeof window === "undefined") return;
@@ -593,6 +628,8 @@ export default function MeetsClient({
     adminNotice,
     setAdminNotice,
   } = useMeetState({ initialRoomId });
+  const [serverActiveSpeakerAvailable, setServerActiveSpeakerAvailable] =
+    useState(false);
   const handleVideoAdaptivePauseStateChange = useCallback(
     (change: AdaptiveConsumerVideoPauseStateChange) => {
       dispatchParticipants({
@@ -835,6 +872,8 @@ export default function MeetsClient({
 
   const [browserAudioNeedsGesture, setBrowserAudioNeedsGesture] =
     useState(false);
+  const [browserAudioPlaybackAttempt, setBrowserAudioPlaybackAttempt] =
+    useState(0);
   const [isBrowserServiceAvailable, setIsBrowserServiceAvailable] =
     useState(false);
   const [isVoiceAgentKeyPromptOpen, setIsVoiceAgentKeyPromptOpen] =
@@ -1143,9 +1182,12 @@ export default function MeetsClient({
     setSelectedAudioInputDeviceId,
     selectedAudioOutputDeviceId,
     setSelectedAudioOutputDeviceId,
+    selectedVideoInputDeviceId,
+    setSelectedVideoInputDeviceId,
     meetVolume,
     videoQuality,
     videoQualityRef: refs.videoQualityRef,
+    dataSaverMode: effectiveDataSaverMode,
     activeVideoEffectsCount,
     shouldUsePreferredVideoPublishTrack: shouldPublishProcessedVideo,
     getVideoPublishTrackRef,
@@ -1229,7 +1271,14 @@ export default function MeetsClient({
   const handleRetryMedia = useCallback(async () => {
     const stream = await requestMediaPermissions();
     if (!stream) return;
-    localStream?.getTracks().forEach((track) => stopLocalTrack(track));
+    const refreshedTrackIds = new Set(
+      stream.getTracks().map((track) => track.id),
+    );
+    localStream?.getTracks().forEach((track) => {
+      if (!refreshedTrackIds.has(track.id)) {
+        stopLocalTrack(track);
+      }
+    });
     setLocalStream(stream);
     setMeetError(null);
   }, [
@@ -2143,9 +2192,13 @@ export default function MeetsClient({
     setIsDmEnabled,
     setIsReactionsDisabled,
     setActiveScreenShareId,
+    setActiveSpeakerId,
+    setServerActiveSpeakerAvailable,
     setNetworkManagedVideoQuality,
     videoQualityRef: refs.videoQualityRef,
     connectionQualityRef: connectionQualityDebugRef,
+    dataSaverMode: effectiveDataSaverMode,
+    isDocumentVisible,
     updateVideoQualityRef,
     requestMediaPermissions,
     requestAudioProducerRecovery,
@@ -2179,6 +2232,7 @@ export default function MeetsClient({
   }, [socket.ensureProducerTransport]);
 
   useMeetAudioActivity({
+    enabled: !serverActiveSpeakerAvailable,
     participants,
     localStream,
     isMuted,
@@ -2489,12 +2543,24 @@ export default function MeetsClient({
   }, []);
 
   const toggleBrowserAudio = useCallback(() => {
+    if (browserAudioNeedsGesture) {
+      setBrowserAudioNeedsGesture(false);
+      setIsBrowserAudioMuted(false);
+      setBrowserAudioPlaybackAttempt((attempt) => attempt + 1);
+      return;
+    }
     setBrowserAudioNeedsGesture(false);
+    if (isBrowserAudioMuted) {
+      setBrowserAudioPlaybackAttempt((attempt) => attempt + 1);
+    }
     setIsBrowserAudioMuted((prev) => !prev);
-  }, [setIsBrowserAudioMuted]);
+  }, [browserAudioNeedsGesture, isBrowserAudioMuted, setIsBrowserAudioMuted]);
 
   const handleBrowserAudioAutoplayBlocked = useCallback(() => {
     setBrowserAudioNeedsGesture(true);
+  }, []);
+  const handleBrowserAudioPlaybackStarted = useCallback(() => {
+    setBrowserAudioNeedsGesture(false);
   }, []);
 
   useEffect(() => {
@@ -2534,45 +2600,59 @@ export default function MeetsClient({
     return new MediaStream([screenTrack]);
   }, [screenTrack]);
 
-  const { presentationStream, presenterName } = useMemo(() => {
-    let nextStream: MediaStream | null = null;
-    let nextPresenterName = "";
+  const { presentationStream, presenterName, presentationProducerId } =
+    useMemo(() => {
+      let nextStream: MediaStream | null = null;
+      let nextPresenterName = "";
+      let nextProducerId: string | null = null;
 
-    if (isScreenSharing && localScreenShareStream) {
-      nextStream = localScreenShareStream;
-      nextPresenterName = "You";
-    } else if (activeScreenShareId) {
-      // Prefer the participant whose screen producer matches the ACTIVE id so
-      // the staged stream + "X is presenting" always correspond to the right
-      // sharer; fall back to any present share so the stage is never blank.
-      let matchedStream: MediaStream | null = null;
-      let matchedName = "";
-      let anyStream: MediaStream | null = null;
-      let anyName = "";
-      for (const participant of participants.values()) {
-        if (!participant.screenShareStream) continue;
-        if (!anyStream) {
-          anyStream = participant.screenShareStream;
-          anyName = resolveDisplayName(participant.userId);
+      if (isScreenSharing && localScreenShareStream) {
+        nextStream = localScreenShareStream;
+        nextPresenterName = "You";
+        nextProducerId =
+          refs.screenProducerRef.current?.id ?? activeScreenShareId ?? null;
+      } else if (activeScreenShareId) {
+        // Prefer the participant whose screen producer matches the ACTIVE id so
+        // the staged stream + "X is presenting" always correspond to the right
+        // sharer; fall back to any present share so the stage is never blank.
+        let matchedStream: MediaStream | null = null;
+        let matchedName = "";
+        let matchedProducerId: string | null = null;
+        let anyStream: MediaStream | null = null;
+        let anyName = "";
+        let anyProducerId: string | null = null;
+        for (const participant of participants.values()) {
+          if (!participant.screenShareStream) continue;
+          if (!anyStream) {
+            anyStream = participant.screenShareStream;
+            anyName = resolveDisplayName(participant.userId);
+            anyProducerId = participant.screenShareProducerId;
+          }
+          if (participant.screenShareProducerId === activeScreenShareId) {
+            matchedStream = participant.screenShareStream;
+            matchedName = resolveDisplayName(participant.userId);
+            matchedProducerId = participant.screenShareProducerId;
+            break;
+          }
         }
-        if (participant.screenShareProducerId === activeScreenShareId) {
-          matchedStream = participant.screenShareStream;
-          matchedName = resolveDisplayName(participant.userId);
-          break;
-        }
+        nextStream = matchedStream ?? anyStream;
+        nextPresenterName = matchedStream ? matchedName : anyName;
+        nextProducerId = matchedProducerId ?? anyProducerId;
       }
-      nextStream = matchedStream ?? anyStream;
-      nextPresenterName = matchedStream ? matchedName : anyName;
-    }
 
-    return { presentationStream: nextStream, presenterName: nextPresenterName };
-  }, [
-    activeScreenShareId,
-    isScreenSharing,
-    localScreenShareStream,
-    participants,
-    resolveDisplayName,
-  ]);
+      return {
+        presentationStream: nextStream,
+        presenterName: nextPresenterName,
+        presentationProducerId: nextProducerId,
+      };
+    }, [
+      activeScreenShareId,
+      isScreenSharing,
+      localScreenShareStream,
+      participants,
+      refs.screenProducerRef,
+      resolveDisplayName,
+    ]);
 
   useMeetPictureInPicture({
     isJoined: connectionState === "joined",
@@ -2673,6 +2753,8 @@ export default function MeetsClient({
     emergencyMode: selfReceiveEmergencyMode,
     availableIncomingBitrateBps: selfConnectionStats.availableIncomingBitrate,
     activeSpeakerId: effectiveActiveSpeakerId,
+    dataSaverMode: effectiveDataSaverMode,
+    isDocumentVisible,
     debugStateRef: adaptiveConsumerDebugRef,
     onVideoAdaptivePauseStateChange: handleVideoAdaptivePauseStateChange,
   });
@@ -2682,6 +2764,8 @@ export default function MeetsClient({
     capRecoveryQuality: selfPublishCapRecoveryQuality,
     emergencyMode: selfPublishEmergencyMode,
     availableOutgoingBitrateBps: selfConnectionStats.availableOutgoingBitrate,
+    publishCpuLimited: selfConnectionStats.publishMedia.video.cpuLimited,
+    dataSaverMode: effectiveDataSaverMode,
     isCameraOff,
     participantCount,
     audioProducerRef: refs.audioProducerRef,
@@ -2764,6 +2848,16 @@ export default function MeetsClient({
     }, 20000);
     return () => window.clearTimeout(timeout);
   }, [enterAction, enterErrored]);
+
+  const meetingSurfaceWakeLockEnabled =
+    connectionState === "joined" ||
+    (hasEnteredMeetingSurface &&
+      (connectionState === "reconnecting" ||
+        connectionState === "connecting" ||
+        connectionState === "connected" ||
+        connectionState === "joining" ||
+        connectionState === "disconnected"));
+  useScreenWakeLock({ enabled: meetingSurfaceWakeLockEnabled });
 
   if (!mounted) return null;
 
@@ -3003,6 +3097,8 @@ export default function MeetsClient({
       <MeetsMainContent
         isJoined={isJoined}
         isMobile={isMobile}
+        viewSettings={viewSettings}
+        onViewSettingsChange={setViewSettings}
         connectionState={connectionState}
         isLoading={isLoading}
         roomId={roomId}
@@ -3029,6 +3125,7 @@ export default function MeetsClient({
         setIsGhostMode={setIsGhostMode}
         presentationStream={presentationStream}
         presenterName={presenterName || ""}
+        presentationProducerId={presentationProducerId}
         screenShareControlState={screenShareControlState}
         screenShareCaptureController={refs.screenShareCaptureControllerRef.current}
         localStream={displayLocalStream}
@@ -3136,7 +3233,9 @@ export default function MeetsClient({
         isBrowserAudioMuted={isBrowserAudioMuted}
         onToggleBrowserAudio={toggleBrowserAudio}
         browserAudioNeedsGesture={browserAudioNeedsGesture}
+        browserAudioPlaybackAttemptToken={browserAudioPlaybackAttempt}
         onBrowserAudioAutoplayBlocked={handleBrowserAudioAutoplayBlocked}
+        onBrowserAudioPlaybackStarted={handleBrowserAudioPlaybackStarted}
         meetError={meetError}
         meetingEndedNotice={meetingEndedNotice}
         onDismissMeetingEndedNotice={() => setMeetingEndedNotice(null)}

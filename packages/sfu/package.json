@@ -14,6 +14,7 @@
     "email:dev": "react-email dev --dir server/email --port 3002",
     "new:game": "node ./scripts/new-game.mjs",
     "test:game-ai": "npx tsx scripts/test-game-ai.ts",
+    "test": "vitest run test",
     "typecheck": "tsc --noEmit"
   },
   "keywords": [],
@@ -30,6 +31,7 @@
     "lib0": "^0.2.117",
     "mediasoup": "^3.20.10",
     "opusscript": "0.1.1",
+    "posthog-node": "^5.39.0",
     "puppeteer-core": "^23.11.1",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",

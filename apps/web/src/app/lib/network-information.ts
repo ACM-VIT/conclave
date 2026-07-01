@@ -48,7 +48,7 @@ const browserNetworkQualityRank: Record<BrowserNetworkQuality, number> = {
 const MOBILE_USER_AGENT_PATTERN =
   /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini|Mobile/i;
 
-const isLikelyMobileOrTabletNavigator = (): boolean => {
+export const isLikelyMobileOrTabletNavigator = (): boolean => {
   if (typeof navigator === "undefined") return false;
 
   const networkNavigator = navigator as NavigatorWithNetworkInformation;

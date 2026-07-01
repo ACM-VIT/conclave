@@ -1,4 +1,5 @@
 import { EMOJI_REACTIONS, type ReactionEmoji } from "./constants";
+import { isMediaCaptureTimeoutError } from "./media-capture-timeout";
 import type { MeetError, ReactionOption } from "./types";
 
 export const ROOM_WORDS = [
@@ -164,6 +165,13 @@ export function createMeetError(
     return {
       code: "MEDIA_ERROR",
       message: "Camera or microphone not found",
+      recoverable: true,
+    };
+  }
+  if (isMediaCaptureTimeoutError(error)) {
+    return {
+      code: "MEDIA_ERROR",
+      message: "Camera or microphone did not respond",
       recoverable: true,
     };
   }

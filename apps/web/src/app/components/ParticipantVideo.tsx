@@ -12,6 +12,7 @@ import { truncateDisplayName } from "../lib/utils";
 import ParticipantAudio from "./ParticipantAudio";
 import ParticipantConnectionOverlay from "./ParticipantConnectionOverlay";
 import { GhostParticipantOverlay } from "./GhostParticipantChrome";
+import GameTileOverlay from "./games/GameTileOverlay";
 import { Avatar } from "@conclave/ui-tokens/web";
 
 interface ParticipantVideoProps {
@@ -188,6 +189,7 @@ function ParticipantVideo({
       data-meet-video-adaptively-paused={
         participant.isVideoAdaptivelyPaused ? "true" : "false"
       }
+      data-userid={participant.userId}
       style={{ fontFamily: "'PolySans Trial', sans-serif" }}
     >
       <video
@@ -306,6 +308,7 @@ function ParticipantVideo({
           <Info className="w-4 h-4 text-[#fafafa]/82" />
         </div>
       )}
+      <GameTileOverlay userId={participant.userId} compact={compact} />
     </div>
   );
 }

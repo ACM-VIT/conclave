@@ -23,6 +23,12 @@ import type { Server as SocketIOServer, Socket } from "socket.io";
 import type { ConnectionContext } from "../context.js";
 import { RATE_LIMITS, takeToken } from "../rateLimit.js";
 import { respond } from "./ack.js";
+import { randomUUID } from "crypto";
+import {
+  captureGameEvent,
+  type AnalyticsProperties,
+} from "../../analytics/posthog.js";
+import { analyticsDistinctId } from "../../analytics/identity.js";
 
 const MAX_GAME_ID_LENGTH = 64;
 const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/;
@@ -34,6 +40,79 @@ const normalizeGameId = (value: unknown): string | null => {
     return null;
   }
   return id;
+};
+
+/* -------------------------------------------------------------------------- */
+/* Product analytics (PostHog): server-authoritative game lifecycle.          */
+/*                                                                            */
+/* The SFU owns canonical game state, so it observes each lifecycle           */
+/* transition exactly once (no per-participant double-count, no host-gating   */
+/* hack). We correlate one play's events with a per-play `instanceId`         */
+/* generated at start and threaded through finish/end via a WeakMap keyed by  */
+/* the GameSession (auto-GC'd when the session is dropped). Every event is    */
+/* associated with the meeting/room group (key = room.channelId).             */
+/*                                                                            */
+/* STRICT no-PII: only opaque ids, counts, booleans, durations, phase labels, */
+/* and numeric/enum config are sent, never names, chat, the AI topic, the     */
+/* imposter word, emails, or any free text. The free-text `topic` option is   */
+/* reduced to a `has_topic` boolean.                                          */
+/* -------------------------------------------------------------------------- */
+
+/** Free-text option id whose VALUE must never be sent (AI topic); only its
+ *  presence is captured, as `has_topic`. */
+const TEXT_TOPIC_OPTION_ID = "topic";
+
+type PlayAnalytics = {
+  instanceId: string;
+  gameId: string;
+  startedAtMs: number;
+  playerCount: number;
+  hasLeaderboard: boolean;
+  /** Guards the finished transition so a repeated broadcast can't double-send. */
+  finishedSent: boolean;
+};
+
+// One record per running play, keyed by the session instance. A WeakMap never
+// leaks: when the room drops its session, the entry becomes collectable.
+const playAnalyticsBySession = new WeakMap<GameSession, PlayAnalytics>();
+
+/**
+ * Resolve an opaque, stable identifier for the acting participant to use as the
+ * PostHog distinct_id. The raw stable room key may be an email address, so it
+ * must never leave the SFU. HMAC it with SFU_SECRET to keep reconnects grouped
+ * without making the identifier reversible or dictionary-friendly.
+ */
+const stableDistinctId = (room: Room, clientId: string): string =>
+  analyticsDistinctId(room.userKeysById.get(clientId) ?? clientId);
+
+/**
+ * Build the non-PII config property bag from a resolved game config. Numbers
+ * and enum selects pass through (prefixed `config_`); the free-text topic
+ * option is reduced to a boolean `has_topic`. Any other text option is likewise
+ * reduced to `has_<id>` so no user free text can ever leak.
+ */
+const buildConfigProps = (
+  gameId: string,
+  config: Record<string, number | string> | undefined,
+): AnalyticsProperties => {
+  const module = getGameModule(gameId);
+  const props: AnalyticsProperties = {};
+  if (!config) return props;
+  for (const opt of module?.options ?? []) {
+    const value = config[opt.id];
+    if (opt.type === "number") {
+      if (typeof value === "number") props[`config_${opt.id}`] = value;
+    } else if (opt.type === "select") {
+      // Enum choice: a bounded, non-free-text label. Safe to send.
+      if (typeof value === "string") props[`config_${opt.id}`] = value;
+    } else if (opt.id === TEXT_TOPIC_OPTION_ID) {
+      props.has_topic = typeof value === "string" && value.trim().length > 0;
+    } else {
+      props[`has_${opt.id}`] =
+        typeof value === "string" && value.trim().length > 0;
+    }
+  }
+  return props;
 };
 
 /** Snapshot the current in-meeting participants as game players. */
@@ -147,14 +226,17 @@ export const buildGameStateResponse = (
   room: Room | null | undefined,
   playerId: string | null | undefined,
 ): GameStateResponse => {
+  // The caller's canonical id rides every snapshot so clients never have to
+  // rebuild identity locally (which drifts: lowercased email, token session).
+  const selfId = playerId || undefined;
   if (!room) {
-    return { active: false, vote: null };
+    return { active: false, vote: null, selfId };
   }
 
   const session = syncGameSessionRoomMembership(room);
   const vote = buildVoteState(room);
   if (!session) {
-    return { active: false, vote };
+    return { active: false, vote, selfId };
   }
 
   const now = Date.now();
@@ -162,6 +244,7 @@ export const buildGameStateResponse = (
     active: true,
     public: session.getPublicState(now),
     vote,
+    selfId,
   };
   if (playerId && session.hasPlayer(playerId)) {
     response.view = session.getPlayerView(playerId, now);
@@ -206,7 +289,39 @@ const startGameLoop = (io: SocketIOServer, room: Room): void => {
       Logger.warn("[Games] tick failed", error);
       stopGameLoop(room);
     }
+    // The finished transition can occur inside a tick (timer-driven end), not
+    // just on a player move. Capture it here too; the guard dedupes.
+    maybeCaptureGameFinished(room);
   }, session.tickMs);
+};
+
+/**
+ * Fire `game_finished` exactly once for the current play, at the natural
+ * finished transition. Idempotent: guarded by `finishedSent` so a repeated
+ * broadcast (tick + move both seeing `isFinished()`) cannot double-send. The
+ * finish is server-driven, so we attribute it to the host's stable id.
+ */
+const maybeCaptureGameFinished = (room: Room): void => {
+  const session = room.gameSession;
+  if (!session || !session.isFinished()) return;
+  const play = playAnalyticsBySession.get(session);
+  if (!play || play.finishedSent) return;
+  play.finishedSent = true;
+
+  const now = Date.now();
+  captureGameEvent({
+    event: "game_finished",
+    distinctId: stableDistinctId(room, session.hostId),
+    roomKey: room.channelId,
+    properties: {
+      instance_id: play.instanceId,
+      game_id: play.gameId,
+      player_count: play.playerCount,
+      duration_ms: now - play.startedAtMs,
+      phase: session.getPublicState(now).phase,
+      has_leaderboard: play.hasLeaderboard,
+    },
+  });
 };
 
 export const registerGameHandlers = (context: ConnectionContext): void => {
@@ -236,7 +351,8 @@ export const registerGameHandlers = (context: ConnectionContext): void => {
       }
       const room = context.currentRoom;
       const hostId = context.currentClient.id;
-      if (room.gameSession) {
+      // A finished session may be replaced (rematch); only a live game blocks.
+      if (room.gameSession && !room.gameSession.isFinished()) {
         respond(callback, { success: false, error: "A game is already running" });
         return;
       }
@@ -275,7 +391,9 @@ export const registerGameHandlers = (context: ConnectionContext): void => {
       }
 
       try {
-        if (room.gameSession) {
+        // Re-check after the async content load: a finished session is still
+        // replaceable, but a game that became live in the meantime blocks.
+        if (room.gameSession && !room.gameSession.isFinished()) {
           respond(callback, { success: false, error: "A game is already running" });
           return;
         }
@@ -306,10 +424,57 @@ export const registerGameHandlers = (context: ConnectionContext): void => {
         return;
       }
 
+      // Register per-play analytics BEFORE the tick loop starts, so a timer that
+      // finishes the game immediately still finds the record. `instanceId`
+      // correlates this play's started/finished/ended events.
+      const session = room.gameSession;
+      const startedAtMs = Date.now();
+      const play: PlayAnalytics = {
+        instanceId: randomUUID(),
+        gameId,
+        startedAtMs,
+        playerCount: players.length,
+        hasLeaderboard: Boolean(module.hasLeaderboard),
+        finishedSent: false,
+      };
+      playAnalyticsBySession.set(session, play);
+      captureGameEvent({
+        event: "game_started",
+        distinctId: stableDistinctId(room, hostId),
+        roomKey: room.channelId,
+        properties: {
+          instance_id: play.instanceId,
+          game_id: gameId,
+          player_count: play.playerCount,
+          has_leaderboard: play.hasLeaderboard,
+          ...buildConfigProps(gameId, gameConfig),
+        },
+      });
+
+      // If a vote was open when the host started this game, the vote resolved
+      // into this play. Correlate it with the started play's `instanceId`.
+      const resolvedVote = room.gameVote;
+      if (resolvedVote) {
+        captureGameEvent({
+          event: "game_vote_resolved",
+          distinctId: stableDistinctId(room, hostId),
+          roomKey: room.channelId,
+          properties: {
+            instance_id: play.instanceId,
+            game_id: gameId,
+            candidate_count: resolvedVote.candidates.length,
+            vote_count: Object.keys(resolvedVote.votes).length,
+            player_count: play.playerCount,
+          },
+        });
+      }
+
       room.gameVote = null;
       broadcastVote(io, room);
       startGameLoop(io, room);
       broadcastGame(io, room);
+      // A move-free game could already be finished at setup (rare); capture it.
+      maybeCaptureGameFinished(room);
       respond(callback, { success: true, gameId });
     },
   );
@@ -343,6 +508,20 @@ export const registerGameHandlers = (context: ConnectionContext): void => {
       }
       context.currentRoom.gameVote = { candidates, votes: {} };
       broadcastVote(io, context.currentRoom);
+      captureGameEvent({
+        event: "game_vote_opened",
+        distinctId: stableDistinctId(
+          context.currentRoom,
+          context.currentClient.id,
+        ),
+        roomKey: context.currentRoom.channelId,
+        properties: {
+          candidate_count: candidates.length,
+          player_count: countPlayers(context.currentRoom),
+          // Whether the host restricted the ballot vs. offering the full catalog.
+          is_full_catalog: candidates.length === allIds.length,
+        },
+      });
       respond(callback, { success: true });
     },
   );
@@ -387,8 +566,22 @@ export const registerGameHandlers = (context: ConnectionContext): void => {
       respond(callback, { success: false, error: "Only the host can cancel the vote" });
       return;
     }
-    context.currentRoom.gameVote = null;
-    broadcastVote(io, context.currentRoom);
+    const room = context.currentRoom;
+    const cancelledVote = room.gameVote;
+    if (cancelledVote) {
+      captureGameEvent({
+        event: "game_vote_cancelled",
+        distinctId: stableDistinctId(room, context.currentClient.id),
+        roomKey: room.channelId,
+        properties: {
+          candidate_count: cancelledVote.candidates.length,
+          vote_count: Object.keys(cancelledVote.votes).length,
+          player_count: countPlayers(room),
+        },
+      });
+    }
+    room.gameVote = null;
+    broadcastVote(io, room);
     respond(callback, { success: true });
   });
 
@@ -436,6 +629,9 @@ export const registerGameHandlers = (context: ConnectionContext): void => {
       broadcastGame(io, room);
       if (session.isFinished()) {
         stopGameLoop(room);
+        // Natural finished transition on a player move. Guard dedupes so a
+        // subsequent tick seeing the same finished state can't double-send.
+        maybeCaptureGameFinished(room);
       } else if (!room.gameTickTimer) {
         startGameLoop(io, room);
       }
@@ -453,7 +649,34 @@ export const registerGameHandlers = (context: ConnectionContext): void => {
       return;
     }
     const room = context.currentRoom;
-    const gameId = room.gameSession?.gameId ?? null;
+    const session = room.gameSession;
+    const gameId = session?.gameId ?? null;
+
+    // Capture the drop-off BEFORE clearGame() nulls the session. `game_ended`
+    // fires only when the game had NOT already finished (a host ending a live
+    // game = abandonment); a finished game ending is not a drop-off. If the
+    // game finished, `game_finished` already fired for this instance.
+    if (session && !session.isFinished()) {
+      const play = playAnalyticsBySession.get(session);
+      if (play) {
+        const now = Date.now();
+        captureGameEvent({
+          event: "game_ended",
+          distinctId: stableDistinctId(room, context.currentClient.id),
+          roomKey: room.channelId,
+          properties: {
+            instance_id: play.instanceId,
+            game_id: play.gameId,
+            player_count: play.playerCount,
+            duration_ms: now - play.startedAtMs,
+            // Last phase = the drop-off point.
+            phase: session.getPublicState(now).phase,
+            has_leaderboard: play.hasLeaderboard,
+          },
+        });
+      }
+    }
+
     room.clearGame();
     if (gameId) {
       io.to(room.channelId).emit("game:ended", { gameId });

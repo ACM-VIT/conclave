@@ -10,6 +10,7 @@ export interface MeetViewSettings {
   mode: MeetViewMode;
   maxTiles: number;
   hideTilesWithoutVideo: boolean;
+  dataSaverMode: boolean;
   selfViewMode: MeetSelfViewMode;
   selfViewCorner: MeetSelfViewCorner;
 }
@@ -21,6 +22,7 @@ export const DEFAULT_MEET_VIEW_SETTINGS: MeetViewSettings = {
   mode: "auto",
   maxTiles: 16,
   hideTilesWithoutVideo: false,
+  dataSaverMode: false,
   selfViewMode: "auto",
   selfViewCorner: "bottom-right",
 };
@@ -68,6 +70,29 @@ export const clampMeetViewTiles = (value: number) => {
   );
 };
 
+export const MEET_VIEW_STORAGE_KEY = "conclave:meet-view";
+
+export const readStoredMeetViewSettings = (): MeetViewSettings => {
+  if (typeof window === "undefined") return DEFAULT_MEET_VIEW_SETTINGS;
+  try {
+    const storedValue = window.localStorage.getItem(MEET_VIEW_STORAGE_KEY);
+    if (!storedValue) return DEFAULT_MEET_VIEW_SETTINGS;
+    return normalizeMeetViewSettings(JSON.parse(storedValue));
+  } catch {
+    return DEFAULT_MEET_VIEW_SETTINGS;
+  }
+};
+
+export const writeStoredMeetViewSettings = (settings: MeetViewSettings) => {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(
+      MEET_VIEW_STORAGE_KEY,
+      JSON.stringify(normalizeMeetViewSettings(settings)),
+    );
+  } catch {}
+};
+
 export function normalizeMeetViewSettings(value: unknown): MeetViewSettings {
   if (!isRecord(value)) return DEFAULT_MEET_VIEW_SETTINGS;
 
@@ -83,6 +108,10 @@ export function normalizeMeetViewSettings(value: unknown): MeetViewSettings {
       typeof value.hideTilesWithoutVideo === "boolean"
         ? value.hideTilesWithoutVideo
         : DEFAULT_MEET_VIEW_SETTINGS.hideTilesWithoutVideo,
+    dataSaverMode:
+      typeof value.dataSaverMode === "boolean"
+        ? value.dataSaverMode
+        : DEFAULT_MEET_VIEW_SETTINGS.dataSaverMode,
     selfViewMode: isMeetSelfViewMode(value.selfViewMode)
       ? value.selfViewMode
       : DEFAULT_MEET_VIEW_SETTINGS.selfViewMode,

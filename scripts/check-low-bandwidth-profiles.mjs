@@ -10,10 +10,13 @@ const files = {
   webScreenShareNetworkProfile:
     "apps/web/src/app/lib/screen-share-network-profile.ts",
   webNetworkInformation: "apps/web/src/app/lib/network-information.ts",
+  webMediaCaptureTimeout: "apps/web/src/app/lib/media-capture-timeout.ts",
   webConnectionQuality: "apps/web/src/app/hooks/useConnectionQuality.ts",
+  webUtils: "apps/web/src/app/lib/utils.ts",
   webParticipantMedia: "apps/web/src/app/lib/participant-media.ts",
   webSmartParticipantOrder:
     "apps/web/src/app/hooks/useSmartParticipantOrder.ts",
+  webMeetAudioActivity: "apps/web/src/app/hooks/useMeetAudioActivity.ts",
   webAdaptivePublishQuality:
     "apps/web/src/app/hooks/useAdaptivePublishQuality.ts",
   webAdaptiveConsumerPreferences:
@@ -22,11 +25,14 @@ const files = {
   webParticipantVideo: "apps/web/src/app/components/ParticipantVideo.tsx",
   webScreenShareAudioPlayers:
     "apps/web/src/app/components/ScreenShareAudioPlayers.tsx",
+  webSystemAudioPlayers: "apps/web/src/app/components/SystemAudioPlayers.tsx",
   webMobileParticipantVideo:
     "apps/web/src/app/components/mobile/MobileParticipantVideo.tsx",
   webGridLayout: "apps/web/src/app/components/GridLayout.tsx",
   webMobileGridLayout:
     "apps/web/src/app/components/mobile/MobileGridLayout.tsx",
+  webMeetView: "apps/web/src/app/lib/meet-view.ts",
+  webMeetViewPanel: "apps/web/src/app/components/MeetViewPanel.tsx",
   webPresentationLayout: "apps/web/src/app/components/PresentationLayout.tsx",
   webMobilePresentationLayout:
     "apps/web/src/app/components/mobile/MobilePresentationLayout.tsx",
@@ -37,8 +43,10 @@ const files = {
   webMeetClientPage: "apps/web/src/app/meets-client-page.tsx",
   webMeetMedia: "apps/web/src/app/hooks/useMeetMedia.ts",
   webMeetSocket: "apps/web/src/app/hooks/useMeetSocket.ts",
+  webScreenWakeLock: "apps/web/src/app/hooks/useScreenWakeLock.ts",
   webVideoEffects: "apps/web/src/app/hooks/useVideoEffects.ts",
   meetingParticipantReducer: "packages/meeting-core/src/participant-reducer.ts",
+  meetingCoreTypes: "packages/meeting-core/src/types.ts",
   webJoinScreen: "apps/web/src/app/components/JoinScreen.tsx",
   webMobileJoinScreen: "apps/web/src/app/components/mobile/MobileJoinScreen.tsx",
   webLowBandwidthProbe: "scripts/probe-low-bandwidth-meet.mjs",
@@ -55,7 +63,10 @@ const files = {
   sfuRoom: "packages/sfu/config/classes/Room.ts",
   sfuClient: "packages/sfu/config/classes/Client.ts",
   sfuConfig: "packages/sfu/config/config.ts",
+  sfuTypes: "packages/sfu/types.ts",
+  sfuJoinRoom: "packages/sfu/server/socket/handlers/joinRoom.ts",
   sfuMediaHandlers: "packages/sfu/server/socket/handlers/mediaHandlers.ts",
+  sfuRateLimit: "packages/sfu/server/socket/rateLimit.ts",
   sfuDisconnectHandlers:
     "packages/sfu/server/socket/handlers/disconnectHandlers.ts",
 };
@@ -161,10 +172,75 @@ assertRegex(
   /createPlaybackRecoveryScheduler[\s\S]*audio\.srcObject = null;[\s\S]*audio\.srcObject = stream;[\s\S]*document\.addEventListener\("visibilitychange", handleVisibilityChange\)[\s\S]*window\.addEventListener\("pageshow", handleForegroundReplay\)[\s\S]*window\.addEventListener\("pointerdown", handleUserGesture, true\)/,
   "web screen audio retries playback after foregrounding and autoplay gestures",
 );
+assertIncludes(
+  "meetingCoreTypes",
+  "export interface ActiveSpeakerChangedNotification",
+  "meeting-core exposes the server active-speaker notification type",
+);
+assertIncludes(
+  "sfuTypes",
+  "export interface ActiveSpeakerChangedNotification",
+  "SFU exposes the server active-speaker notification type",
+);
+assertRegex(
+  "sfuRoom",
+  /private meetingActiveSpeakerUserId: string \| null = null;[\s\S]*private webinarAudioLevelObserver: AudioLevelObserver \| null = null;[\s\S]*client\.socket\.emit\("activeSpeakerChanged", notification\)/,
+  "SFU reuses the room audio-level observer for meeting active-speaker events",
+);
+assertRegex(
+  "sfuRoom",
+  /observer\.on\("volumes"[\s\S]*this\.setMeetingActiveSpeakerUserId\(ownerUserId\)[\s\S]*this\.webinarDominantSpeakerUserId = ownerUserId/,
+  "SFU emits meeting active speaker before preserving webinar dominant-speaker behavior",
+);
+assertRegex(
+  "sfuRoom",
+  /observer\.on\("silence"[\s\S]*this\.setMeetingActiveSpeakerUserId\(null\)[\s\S]*this\.webinarDominantSpeakerUserId = null/,
+  "SFU clears meeting active speaker on observer silence without eagerly clearing webinar stage state",
+);
+assertRegex(
+  "sfuRoom",
+  /const clearActiveSpeakerIfPaused = \(\) => \{[\s\S]*this\.meetingActiveSpeakerUserId !== ownerUserId[\s\S]*!this\.clientHasUnpausedWebcamAudio\(ownerClient\)[\s\S]*this\.setMeetingActiveSpeakerUserId\(null\)[\s\S]*producer\.observer\.on\("pause", clearActiveSpeakerIfPaused\)/,
+  "SFU clears meeting active speaker immediately when the active audio producer is paused",
+);
+assertRegex(
+  "sfuJoinRoom",
+  /isMeetingActiveSpeakerSignalAvailable[\s\S]*activeSpeakerId: context\.currentRoom\.activeSpeakerUserId/,
+  "SFU only snapshots active speaker when the server observer is available",
+);
+assertRegex(
+  "webMeetSocket",
+  /setActiveSpeakerId: React\.Dispatch<React\.SetStateAction<string \| null>>;[\s\S]*setServerActiveSpeakerAvailable: \(value: boolean\) => void;[\s\S]*const applyServerActiveSpeaker = useCallback[\s\S]*setServerActiveSpeakerAvailable\(true\)[\s\S]*socket\.on\([\s\S]*"activeSpeakerChanged"[\s\S]*isRoomEvent\(notification\?\.roomId\)[\s\S]*shouldIgnoreDepartedParticipant\(nextSpeakerId\)[\s\S]*applyServerActiveSpeaker\(nextSpeakerId\)/,
+  "web socket applies room-scoped server active-speaker events and gates stale speakers",
+);
+assertRegex(
+  "webMeetClient",
+  /serverActiveSpeakerAvailable[\s\S]*setServerActiveSpeakerAvailable[\s\S]*useMeetSocket\(\{[\s\S]*setActiveSpeakerId,[\s\S]*setServerActiveSpeakerAvailable,[\s\S]*useMeetAudioActivity\(\{[\s\S]*enabled: !serverActiveSpeakerAvailable/,
+  "web meeting client disables local speaker analysis after server active speaker is available",
+);
+assertRegex(
+  "webMeetAudioActivity",
+  /enabled\?: boolean;[\s\S]*enabled = true[\s\S]*if \(!enabled\) \{[\s\S]*analyserMap\.clear\(\);[\s\S]*return;/,
+  "web local active-speaker fallback disconnects analyzers when the SFU signal owns speaker state",
+);
+assertRegex(
+  "webSystemAudioPlayers",
+  /createPlaybackRecoveryScheduler[\s\S]*const attemptPlay = useCallback[\s\S]*onPlaybackStarted\?\.\(\)[\s\S]*audio\.srcObject = null;[\s\S]*audio\.srcObject = stream;[\s\S]*audioTrack\?\.addEventListener\("unmute", scheduleReplay\)[\s\S]*document\.addEventListener\("visibilitychange", handleVisibilityChange\)[\s\S]*window\.addEventListener\("focus", handleForegroundReplay\)[\s\S]*window\.addEventListener\("pageshow", handleForegroundReplay\)[\s\S]*window\.addEventListener\("pointerdown", handleUserGesture, true\)[\s\S]*window\.addEventListener\("keydown", handleUserGesture, true\)[\s\S]*playbackAttemptToken/,
+  "web system audio retries playback after foregrounding, track unmute, manual retry, and autoplay gestures",
+);
 assertRegex(
   "webMeetsMainContent",
   /<ScreenShareAudioPlayers[\s\S]*participants=\{participants\}[\s\S]*currentUserId=\{currentUserId\}[\s\S]*activeScreenShareId=\{activeScreenShareId\}/,
   "web screen audio player receives active screen-share id",
+);
+assertRegex(
+  "webMeetsMainContent",
+  /<SystemAudioPlayers[\s\S]*onAutoplayBlocked=\{onBrowserAudioAutoplayBlocked\}[\s\S]*onPlaybackStarted=\{onBrowserAudioPlaybackStarted\}[\s\S]*playbackAttemptToken=\{browserAudioPlaybackAttemptToken\}/,
+  "web system audio player receives autoplay and manual retry callbacks",
+);
+assertRegex(
+  "webMeetClient",
+  /browserAudioPlaybackAttempt[\s\S]*setBrowserAudioPlaybackAttempt[\s\S]*const toggleBrowserAudio = useCallback\(\(\) => \{[\s\S]*if \(browserAudioNeedsGesture\) \{[\s\S]*setIsBrowserAudioMuted\(false\);[\s\S]*setBrowserAudioPlaybackAttempt\(\(attempt\) => attempt \+ 1\);[\s\S]*if \(isBrowserAudioMuted\) \{[\s\S]*setBrowserAudioPlaybackAttempt\(\(attempt\) => attempt \+ 1\);[\s\S]*handleBrowserAudioPlaybackStarted[\s\S]*browserAudioPlaybackAttemptToken=\{browserAudioPlaybackAttempt\}[\s\S]*onBrowserAudioPlaybackStarted=\{handleBrowserAudioPlaybackStarted\}/,
+  "web shared browser audio control explicitly retries blocked or newly unmuted system audio",
 );
 assertRegex(
   "iosWebrtc",
@@ -180,6 +256,91 @@ assertRegex(
   "webMeetSocket",
   /track: audioTrack,[\s\S]*buildMicrophoneOpusCodecOptions\([\s\S]*stopTracks: false,[\s\S]*type: "webcam" as ProducerType/,
   "web initial microphone producer must preserve capture tracks during producer cleanup",
+);
+assertRegex(
+  "webMeetSocket",
+  /needsAudio: true,[\s\S]*requiredAudio: mediaIntent\.isMicOn,[\s\S]*requestMediaPermissions\(\s*buildRequestMediaPermissionsOptions\(mediaNeeds\),\s*\)[\s\S]*!stream &&[\s\S]*hasRequiredJoinMediaNeed\(mediaNeeds\)/,
+  "web muted joins warm the microphone without making warmup a blocking media requirement",
+);
+assertRegex(
+  "webMeetSocket",
+  /audioTrack\.enabled = !shouldPauseAudio;[\s\S]*appData: \{[\s\S]*type: "webcam" as ProducerType,[\s\S]*paused: shouldPauseAudio,[\s\S]*if \(shouldPauseAudio\) \{[\s\S]*audioProducer\.pause\(\);/,
+  "web muted microphone warmup is disabled before producer creation and published paused",
+);
+assertRegex(
+  "webMeetMedia",
+  /const wantsAudio = options\.audio \?\? true;[\s\S]*const audioRequired = options\.audioRequired \?\? !isMuted;[\s\S]*nextAudioTrack\.enabled = !isMuted;[\s\S]*const canWarmMutedAudio = isMuted && mediaState\.hasAudioPermission;[\s\S]*if \(isMuted && !canWarmMutedAudio && !getReusableAudioTrack\(\)\) return;[\s\S]*isMutedRef\.current &&[\s\S]*!mediaState\.hasAudioPermission[\s\S]*const failedMutedWarmup = isMutedRef\.current;[\s\S]*if \(!failedMutedWarmup\) \{[\s\S]*setMeetError\(meetErr\);/,
+  "web media recovery keeps previously permitted muted microphones warm without surfacing optional warmup failures",
+);
+assertRegex(
+  "webMeetMedia",
+  /LOCAL_AUDIO_MUTED_RECOVERY_DELAY_MS[\s\S]*scheduleLocalAudioMutedRecovery[\s\S]*closeLocalAudioProducerForReplacement\(currentProducer\)[\s\S]*requestAudioProducerRecovery\(\)[\s\S]*track\.addEventListener\("mute"[\s\S]*scheduleLocalAudioMutedRecovery\(track\)[\s\S]*track\.addEventListener\("unmute"[\s\S]*clearLocalAudioMutedRecoveryTimer\(track\.id\)/,
+  "web local microphone no-source tracks recover without waiting for track ended",
+);
+assertRegex(
+  "webJoinScreen",
+  /get_user_media_full_failed[\s\S]*Promise\.allSettled\(\[[\s\S]*getUserMediaWithTimeout\([\s\S]*prejoin microphone fallback permission request[\s\S]*getUserMediaWithTimeout\([\s\S]*prejoin camera fallback permission request[\s\S]*get_user_media_separate_fallback_done/,
+  "web prejoin retries audio and video separately when combined capture fails",
+);
+assertRegex(
+  "webJoinScreen",
+  /prejoinAudioRequestGenerationRef[\s\S]*prejoinVideoRequestGenerationRef[\s\S]*beginPrejoinMediaRequest[\s\S]*PrejoinMediaKind[\s\S]*getCurrentPrejoinMediaGeneration[\s\S]*isCurrentPrejoinMediaRequest[\s\S]*discard_stale_prejoin_media_request[\s\S]*requestMicrophoneAndCamera[\s\S]*beginPrejoinMediaRequest\(\["audio", "video"\]\)[\s\S]*discard_stale_prejoin_camera_toggle[\s\S]*toggle_mic_ignored_in_flight[\s\S]*discard_stale_prejoin_mic_toggle[\s\S]*discard_stale_prejoin_video_device_select[\s\S]*discard_stale_prejoin_audio_device_select/,
+  "web prejoin ignores stale getUserMedia completions",
+);
+assertRegex(
+  "webNetworkInformation",
+  /export const isLikelyMobileOrTabletNavigator = \(\): boolean =>/,
+  "web exposes mobile browser detection for capture lifecycle workarounds",
+);
+assertRegex(
+  "webMeetMedia",
+  /Mobile browsers can stop the old camera capture[\s\S]*const allowProcessedWarmupWait = !isLikelyMobileOrTabletNavigator\(\);[\s\S]*!shouldUsePreferredVideoPublishTrack \|\| !allowProcessedWarmupWait[\s\S]*return rawTrack;/,
+  "web mobile camera replacement publishes raw immediately while effects warm",
+);
+assertRegex(
+  "webMediaCaptureTimeout",
+  /MEDIA_CAPTURE_PERMISSION_TIMEOUT_MS = 60000[\s\S]*MEDIA_CAPTURE_RECOVERY_TIMEOUT_MS = 15000[\s\S]*createMediaCaptureTimeoutError[\s\S]*error\.name = "TimeoutError"[\s\S]*stopMediaStreamTracks[\s\S]*track\.onended = null;[\s\S]*track\.stop\(\);[\s\S]*getUserMediaWithTimeout[\s\S]*navigator\.mediaDevices\.getUserMedia\(constraints\)[\s\S]*if \(!timedOut\) return;[\s\S]*stopMediaStreamTracks\(stream\)[\s\S]*Promise\.race\(\[mediaPromise, timeoutPromise\]\)/,
+  "web media capture has bounded timeout with late-stream cleanup",
+);
+assertRegex(
+  "webUtils",
+  /isMediaCaptureTimeoutError[\s\S]*Camera or microphone did not respond[\s\S]*recoverable: true/,
+  "web media capture timeout surfaces as recoverable media error",
+);
+assertNotIncludes(
+  "webMeetMedia",
+  "navigator.mediaDevices.getUserMedia(",
+  "web meet media must use bounded getUserMedia helper",
+);
+assertNotIncludes(
+  "webJoinScreen",
+  "navigator.mediaDevices.getUserMedia(",
+  "web prejoin must use bounded getUserMedia helper",
+);
+assertRegex(
+  "webMeetMedia",
+  /getUserMediaWithTimeout\([\s\S]*label: "local media permission request"[\s\S]*MEDIA_CAPTURE_PERMISSION_TIMEOUT_MS[\s\S]*label: "microphone unmute"[\s\S]*MEDIA_CAPTURE_RECOVERY_TIMEOUT_MS[\s\S]*label: "camera producer recovery"[\s\S]*MEDIA_CAPTURE_RECOVERY_TIMEOUT_MS/,
+  "web meeting capture uses permission and recovery timeouts",
+);
+assertRegex(
+  "webJoinScreen",
+  /getUserMediaWithTimeout\([\s\S]*label: "prejoin microphone and camera permission request"[\s\S]*MEDIA_CAPTURE_PERMISSION_TIMEOUT_MS[\s\S]*label: "prejoin camera toggle"[\s\S]*MEDIA_CAPTURE_RECOVERY_TIMEOUT_MS[\s\S]*label: "prejoin microphone device switch"[\s\S]*MEDIA_CAPTURE_RECOVERY_TIMEOUT_MS/,
+  "web prejoin capture uses permission and recovery timeouts",
+);
+assertRegex(
+  "webMeetClient",
+  /selectedVideoInputDeviceId,[\s\S]*setSelectedVideoInputDeviceId,[\s\S]*useMeetMedia\([\s\S]*selectedVideoInputDeviceId,[\s\S]*setSelectedVideoInputDeviceId,/,
+  "web selected camera id flows into meeting media recovery",
+);
+assertRegex(
+  "webMeetMedia",
+  /selectedVideoInputDeviceId\?: string;[\s\S]*setSelectedVideoInputDeviceId:[\s\S]*const targetDeviceId = deviceId \?\? selectedVideoInputDeviceId;[\s\S]*buildCameraVideoConstraints\([\s\S]*targetDeviceId,/,
+  "web camera recovery honors selected camera device id",
+);
+assertRegex(
+  "webMeetMedia",
+  /enumerateDevices\(\)[\s\S]*getInputDevices\(devices, "audioinput"\)[\s\S]*selectedAudioMissing[\s\S]*setSelectedAudioInputDeviceId\(nextAudioDeviceId\)[\s\S]*Selected microphone disappeared[\s\S]*handleAudioInputDeviceChange\(nextAudioDeviceId\)[\s\S]*selectedVideoMissing[\s\S]*setSelectedVideoInputDeviceId\(nextVideoDeviceId\)[\s\S]*Selected camera disappeared[\s\S]*handleVideoInputDeviceChange\(nextVideoDeviceId\)[\s\S]*addEventListener\("devicechange"/,
+  "web live media device changes clear stale exact input ids before recovery",
 );
 {
   const mediaAudioProduceMatches =
@@ -246,8 +407,13 @@ assertRegex(
 );
 assertRegex(
   "webCodec",
-  /export const getPreferredScreenShareCodec[\s\S]*for \(const mimeType of SCREEN_SHARE_TEMPORAL_CODEC_MIME_TYPES\)/,
-  "web screen share prefers VP8 temporal layers without changing webcam codec policy",
+  /SCREEN_SHARE_TEMPORAL_CODEC_MIME_TYPES = \[[\s\S]*"video\/VP9"[\s\S]*"video\/VP8"[\s\S]*"video\/H264"[\s\S]*SOFTWARE_SENSITIVE_SCREEN_SHARE_CODEC_MIME_TYPES = \[[\s\S]*"video\/VP8"[\s\S]*"video\/H264"[\s\S]*const preferredMimeTypes = isLikelyHardwareAcceleratedH264Browser\(\)[\s\S]*SOFTWARE_SENSITIVE_SCREEN_SHARE_CODEC_MIME_TYPES[\s\S]*SCREEN_SHARE_TEMPORAL_CODEC_MIME_TYPES[\s\S]*for \(const mimeType of preferredMimeTypes\)/,
+  "web screen share prefers VP9 temporal layers on desktop with VP8 mobile fallback",
+);
+assertRegex(
+  "sfuConfig",
+  /mimeType: "video\/H264"[\s\S]*mimeType: "video\/VP8"[\s\S]*mimeType: "video\/VP9"[\s\S]*parameters: \{ "profile-id": 0 \}[\s\S]*\{ type: "transport-cc" \}/,
+  "SFU advertises VP9 for desktop screen-share codec negotiation without changing webcam preference order",
 );
 assertRegex(
   "webCodec",
@@ -392,14 +558,34 @@ assertRegex(
   "web screen-share frame-rate cap is independent and recovery reapplies profile ideal dimensions",
 );
 assertRegex(
-  "webMeetMedia",
-  /buildScreenShareEncodingForNetworkProfile\([\s\S]*screenNetworkProfile,[\s\S]*track,[\s\S]*\)/,
-  "web screen-share initial publish passes capture size into encoding caps",
+  "webCodec",
+  /produceScreenShareTrack[\s\S]*buildScreenShareEncodingForNetworkProfile\([\s\S]*networkProfile,[\s\S]*track,[\s\S]*\)[\s\S]*preferredCodec[\s\S]*Preferred screen-share codec failed, retrying router default codec[\s\S]*withoutScreenShareScalabilityMode/,
+  "web screen-share publish has preferred-codec and scalability fallback while preserving capture-size encoding caps",
+);
+assertRegex(
+  "webCodec",
+  /type ScreenProducerAppData = \{[\s\S]*networkProfile: WebcamProducerNetworkProfile;[\s\S]*produceScreenShareTrack[\s\S]*appData: \{[\s\S]*type: "screen" as ProducerType,[\s\S]*networkProfile,[\s\S]*\} satisfies ScreenProducerAppData/,
+  "web screen-share video producer records the negotiated network profile across codec fallbacks",
 );
 assertRegex(
   "webMeetMedia",
-  /buildScreenShareVideoConstraintsForNetworkProfile[\s\S]*getScreenSharePublishNetworkProfile[\s\S]*getScreenSharePublishNetworkProfileForAvailableOutgoingBitrate\([\s\S]*stats\?\.availableOutgoingBitrate[\s\S]*getMostConstrainedWebcamProducerNetworkProfile\([\s\S]*const screenNetworkProfile = getScreenSharePublishNetworkProfile\(\);[\s\S]*const constrainedDisplayVideoConstraints[\s\S]*buildScreenShareVideoConstraintsForNetworkProfile\([\s\S]*screenNetworkProfile[\s\S]*const relaxedDisplayVideoConstraints[\s\S]*getDisplayMedia\([\s\S]*constrainedDisplayVideoConstraints,[\s\S]*captureController[\s\S]*catch \(err\) \{[\s\S]*if \(!isDisplayMediaConstraintRetryableError\(err\)\) \{[\s\S]*throw err;[\s\S]*getDisplayMedia\([\s\S]*constrainedDisplayVideoConstraints,[\s\S]*null[\s\S]*getDisplayMedia\(relaxedDisplayVideoConstraints, null\)[\s\S]*applyScreenShareTrackNetworkProfile\(track, screenNetworkProfile\)[\s\S]*buildScreenShareEncodingForNetworkProfile\([\s\S]*screenNetworkProfile,[\s\S]*track,[\s\S]*\)/,
+  /buildScreenShareVideoConstraintsForNetworkProfile[\s\S]*getScreenSharePublishNetworkProfile[\s\S]*selectScreenSharePublishNetworkProfile\(\{[\s\S]*availableOutgoingBitrateBps: stats\?\.availableOutgoingBitrate,[\s\S]*observedPublishQuality: stats\?\.rtcPublishQuality,[\s\S]*const screenNetworkProfile = getScreenSharePublishNetworkProfile\(\);[\s\S]*const constrainedDisplayVideoConstraints[\s\S]*buildScreenShareVideoConstraintsForNetworkProfile\([\s\S]*screenNetworkProfile[\s\S]*const relaxedDisplayVideoConstraints[\s\S]*getDisplayMedia\([\s\S]*constrainedDisplayVideoConstraints,[\s\S]*captureController[\s\S]*catch \(err\) \{[\s\S]*if \(!isDisplayMediaConstraintRetryableError\(err\)\) \{[\s\S]*throw err;[\s\S]*getDisplayMedia\([\s\S]*constrainedDisplayVideoConstraints,[\s\S]*null[\s\S]*getDisplayMedia\(relaxedDisplayVideoConstraints, null\)[\s\S]*applyScreenShareTrackNetworkProfile\(track, screenNetworkProfile\)[\s\S]*produceScreenShareTrack\(\{[\s\S]*networkProfile: screenNetworkProfile,[\s\S]*preferredCodec: preferredScreenShareCodec,/,
   "web screen-share start requests BWE capture constraints before applying RTP caps",
+);
+assertRegex(
+  "webMeetMedia",
+  /let acquiredScreenShareStream: MediaStream \| null = null;[\s\S]*let screenShareStarted = false;[\s\S]*acquiredScreenShareStream = stream;[\s\S]*const producer = await produceScreenShareTrack[\s\S]*screenShareStarted = true;[\s\S]*catch \(err\) \{[\s\S]*if \(acquiredScreenShareStream && !screenShareStarted\) \{[\s\S]*screenShareStreamRef\.current = null;[\s\S]*stopScreenShareStream\(acquiredScreenShareStream\);[\s\S]*resetScreenShareControlState\(\);/,
+  "web failed screen-share publish stops orphaned display capture before surfacing the error",
+);
+assertRegex(
+  "webMeetMedia",
+  /type ExtendedDisplayMediaStreamOptions = DisplayMediaStreamOptions & \{[\s\S]*selfBrowserSurface\?: DisplayMediaIncludePreference;[\s\S]*surfaceSwitching\?: DisplayMediaIncludePreference;[\s\S]*systemAudio\?: DisplayMediaIncludePreference;[\s\S]*selfBrowserSurface: "exclude",[\s\S]*surfaceSwitching: "include",[\s\S]*systemAudio: "include",/,
+  "web screen-share picker requests production browser hints for system audio and surface switching",
+);
+assertRegex(
+  "webMeetMedia",
+  /const constrainedDisplayVideoConstraints: DisplayMediaVideoConstraints = \{[\s\S]*displaySurface: "browser",[\s\S]*const relaxedDisplayVideoConstraints: DisplayMediaVideoConstraints = \{[\s\S]*cursor: "always",[\s\S]*\};/,
+  "web screen-share fallback removes the tab-only display-surface hint",
 );
 assertIncludes(
   "webMeetMedia",
@@ -407,8 +593,13 @@ assertIncludes(
   "web initial screen-share video immediately applies sender priority and maintain-resolution profile",
 );
 assertRegex(
+  "webMeetMedia",
+  /screenProducerRef\.current = producer;[\s\S]*producer\.on\("transportclose"[\s\S]*screenProducerRef\.current\?\.id === producer\.id[\s\S]*screenProducerRef\.current = null;[\s\S]*track\.onended = finishScreenShare;/,
+  "web initial screen-share producer clears stale refs on transport close",
+);
+assertRegex(
   "webMeetSocket",
-  /getScreenSharePublishNetworkProfile[\s\S]*getScreenSharePublishNetworkProfileForAvailableOutgoingBitrate\([\s\S]*stats\?\.availableOutgoingBitrate[\s\S]*getMostConstrainedWebcamProducerNetworkProfile\([\s\S]*const screenNetworkProfile = getScreenSharePublishNetworkProfile\(\);[\s\S]*buildScreenShareEncodingForNetworkProfile\([\s\S]*screenNetworkProfile,[\s\S]*videoTrack,[\s\S]*\)/,
+  /getScreenSharePublishNetworkProfile[\s\S]*selectScreenSharePublishNetworkProfile\(\{[\s\S]*availableOutgoingBitrateBps: stats\?\.availableOutgoingBitrate,[\s\S]*observedPublishQuality: stats\?\.rtcPublishQuality,[\s\S]*const screenNetworkProfile = getScreenSharePublishNetworkProfile\(\);[\s\S]*produceScreenShareTrack\(\{[\s\S]*track: videoTrack,[\s\S]*networkProfile: screenNetworkProfile,[\s\S]*preferredCodec: preferredScreenShareCodec,/,
   "web screen-share reconnect publish starts with BWE capture-size encoding caps",
 );
 assertIncludes(
@@ -423,13 +614,53 @@ assertRegex(
 );
 assertRegex(
   "webMeetMedia",
-  /SCREEN_SHARE_OUTBOUND_STALL_SAMPLES_BEFORE_REFRESH = 2[\s\S]*screenProducerTrackRepairInFlightRef[\s\S]*screenOutboundStallStateRef[\s\S]*void producer[\s\S]*\.getStats\(\)[\s\S]*readOutboundVideoProgressSample\(report\)[\s\S]*stalledSamples <[\s\S]*SCREEN_SHARE_OUTBOUND_STALL_SAMPLES_BEFORE_REFRESH[\s\S]*isEncoderLimitedOutboundSample\(sample\)[\s\S]*refreshStalledScreenProducer\(/,
-  "web screen-share outbound sender watchdog refreshes faster after real stats stalls",
+  /MIN_SCREEN_SHARE_OUTBOUND_BYTE_DELTA_FOR_STALL = 8000[\s\S]*hasOutboundScreenShareStallEvidence[\s\S]*byteDelta < MIN_SCREEN_SHARE_OUTBOUND_BYTE_DELTA_FOR_STALL[\s\S]*Static shared documents\/slides can legitimately produce no new encoded[\s\S]*return false;/,
+  "web screen-share outbound sender watchdog ignores static-share quiet stats",
+);
+assertRegex(
+  "webMeetMedia",
+  /screenOutboundStallStateRef\.current[\s\S]*const sample = readOutboundVideoProgressSample\(report\)[\s\S]*stalledSamples =[\s\S]*hasBaseline && hasOutboundScreenShareStallEvidence\(previous, sample\)[\s\S]*stalledSamples <[\s\S]*SCREEN_SHARE_OUTBOUND_STALL_SAMPLES_BEFORE_REFRESH[\s\S]*isEncoderLimitedOutboundSample\(sample\)[\s\S]*refreshStalledScreenProducer\(/,
+  "web screen-share outbound sender watchdog avoids refreshing static shares without real stall evidence",
+);
+assertRegex(
+  "webMeetMedia",
+  /SCREEN_SHARE_MUTED_WARNING_DELAY_MS = 5000[\s\S]*screenShareTrackHandlersRef[\s\S]*screenShareMutedWarningTimeoutsRef[\s\S]*screenShareMutedWarningErrorTrackIdRef/,
+  "web local screen-share no-data detection has dedicated timers and handler tracking",
+);
+assertRegex(
+  "webMeetMedia",
+  /SCREEN_SHARE_SOURCE_STALLED_MESSAGE[\s\S]*const scheduleScreenShareMutedWarning = useCallback[\s\S]*!isScreenSharingRef\.current[\s\S]*connectionStateRef\.current !== "joined"[\s\S]*track\.readyState !== "live"[\s\S]*!track\.muted[\s\S]*!isCurrentScreenShareTrack\(track\)[\s\S]*message: SCREEN_SHARE_SOURCE_STALLED_MESSAGE/,
+  "web local screen-share source mute surfaces a recoverable warning for active shares only",
+);
+assertRegex(
+  "webMeetMedia",
+  /const clearAllScreenShareMutedWarningTimers = useCallback[\s\S]*screenShareMutedWarningTimeoutsRef\.current\.clear\(\)[\s\S]*const clearScreenShareMutedWarningError = useCallback\(\(trackId\?: string\)[\s\S]*screenShareMutedWarningErrorTrackIdRef\.current !== trackId[\s\S]*currentError\?\.code === "MEDIA_ERROR"[\s\S]*currentError\.message === SCREEN_SHARE_SOURCE_STALLED_MESSAGE[\s\S]*screenShareMutedWarningErrorTrackIdRef\.current = null[\s\S]*clearScreenShareMutedWarningError\(track\.id\)[\s\S]*reapplyScreenShareProfileAfterSourceResumes\(track\)/,
+  "web local screen-share resumed source only clears its own stale warning",
+);
+assertRegex(
+  "webMeetMedia",
+  /const attachLocalScreenShareTrackHandlers = useCallback[\s\S]*track\.addEventListener\("mute"[\s\S]*scheduleScreenShareMutedWarning\(track\)[\s\S]*track\.addEventListener\("unmute"[\s\S]*clearScreenShareMutedWarningTimer\(track\.id\)[\s\S]*reapplyScreenShareProfileAfterSourceResumes\(track\)[\s\S]*track\.addEventListener\("ended"[\s\S]*clearScreenShareMutedWarningTimer\(track\.id\)/,
+  "web local screen-share tracks listen for source mute, unmute, and ended events",
+);
+assertRegex(
+  "webMeetMedia",
+  /const reapplyScreenShareProfileAfterSourceResumes = useCallback[\s\S]*applyScreenShareProducerNetworkProfile\([\s\S]*producer,[\s\S]*getScreenSharePublishNetworkProfile\(\),/,
+  "web local screen-share source unmute restores maintain-resolution sender profile",
+);
+assertRegex(
+  "webMeetMedia",
+  /const attachCurrentScreenShareTracks = \(\) => \{[\s\S]*screenShareStreamRef\.current\?\.getVideoTracks\(\)[\s\S]*screenProducerRef\.current\?\.track[\s\S]*attachLocalScreenShareTrackHandlers\(track\)[\s\S]*document\.addEventListener\("visibilitychange"/,
+  "web active screen-share source health scans raw and producer tracks after foreground return",
 );
 assertIncludes(
   "iosWebrtc",
   "next.degradationPreference = .maintainResolution",
   "iOS screen share maintain-resolution preference",
+);
+assertRegex(
+  "iosWebrtc",
+  /webcamEncodings[\s\S]*encoding\.networkPriority = spec\.rid == "f" \? \.low : \.veryLow[\s\S]*screenShareEncoding[\s\S]*encoding\.networkPriority = \.high/,
+  "iOS screen share sender priority beats webcam under congestion",
 );
 assertIncludes(
   "androidWebrtc",
@@ -437,14 +668,44 @@ assertIncludes(
   "Android screen share temporal layering",
 );
 assertRegex(
-  "webAdaptiveConsumerPreferences",
-  /if \(info\.type === "screen"\) \{[\s\S]*const screenShareQuality = worstQuality\([\s\S]*getConsumerScoreQualityHint\(options\.consumerScoreQuality\)[\s\S]*const screenShareVisible =[\s\S]*options\.layout\?\.visible === true[\s\S]*options\.layout\?\.primary === true[\s\S]*options\.layout\?\.focus === true[\s\S]*screenShareEmergency[\s\S]*\? screenShareVisible[\s\S]*\? 1[\s\S]*: 0[\s\S]*: screenShareQuality === "poor" && !screenShareVisible[\s\S]*\? 1[\s\S]*: bounds\.maxTemporalLayer[\s\S]*priority: 240,[\s\S]*paused: false,/,
-  "web visible emergency screen-share receive adaptation keeps a mid temporal layer",
+  "androidWebrtc",
+  /WEBRTC_NETWORK_PRIORITY_VERY_LOW = 0[\s\S]*WEBRTC_NETWORK_PRIORITY_HIGH = 3[\s\S]*webcamEncodings[\s\S]*encoding\.networkPriority = WEBRTC_NETWORK_PRIORITY_VERY_LOW[\s\S]*screenShareEncodings[\s\S]*encoding\.networkPriority = WEBRTC_NETWORK_PRIORITY_HIGH/,
+  "Android screen share sender priority beats webcam under congestion",
 );
-assertNotIncludes(
+assertRegex(
   "webAdaptiveConsumerPreferences",
-  "!options.layout ||\n      options.layout.visible",
-  "web missing layout hints must not make screen-share consumers visible",
+  /const getScreenShareTargetTemporalLayer =[\s\S]*SCREEN_SHARE_SMALL_RENDERED_HEIGHT[\s\S]*SCREEN_SHARE_FULL_FPS_RENDERED_HEIGHT[\s\S]*if \(options\.emergency\) \{[\s\S]*return 1;[\s\S]*return isLargePresentation \? bounds\.maxTemporalLayer : 1;[\s\S]*if \(info\.type === "screen"\) \{[\s\S]*const screenShareVisible =[\s\S]*options\.layout === null \|\|[\s\S]*options\.layout\.visible === true[\s\S]*const screenSharePrimary =[\s\S]*options\.layout === null \|\|[\s\S]*options\.layout\.primary === true \|\|[\s\S]*options\.layout\.focus === true[\s\S]*const screenSharePriority =[\s\S]*screenSharePrimary[\s\S]*\? 240[\s\S]*: screenShareVisible[\s\S]*\? 220[\s\S]*: HIDDEN_SCREEN_SHARE_KEEPALIVE_PRIORITY[\s\S]*getScreenShareTargetTemporalLayer\(bounds, \{[\s\S]*quality: screenShareQuality,[\s\S]*emergency: screenShareEmergency,[\s\S]*visible: screenShareVisible,[\s\S]*primary: screenSharePrimary,[\s\S]*renderedHeight: options\.layout\?\.renderedHeight \?\? null,[\s\S]*presentationSize: options\.layout\?\.presentationSize \?\? null,[\s\S]*priority: screenSharePriority,[\s\S]*paused: false,/,
+  "web screen-share receive adaptation is rendered-size aware and treats missing layout hints as presentation-visible",
+);
+assertRegex(
+  "webAdaptiveConsumerPreferences",
+  /presentation: \{[\s\S]*producerId: string \| null;[\s\S]*const getLayoutRole =[\s\S]*producerId: string,[\s\S]*hints\.presentation\.producerId === producerId[\s\S]*visible: isScreenShare \? isPresentedScreen : participantVideoVisible[\s\S]*hidden: isScreenShare[\s\S]*hints\.presentation\.visible && !isPresentedScreen/,
+  "web screen-share receive layout is keyed by the rendered presentation producer, not just presenter user id",
+);
+assertIncludes(
+  "webParticipantVideo",
+  "data-userid={participant.userId}",
+  "web participant video exposes tile identity for rendered-size receive constraints",
+);
+assertRegex(
+  "webAdaptiveConsumerPreferences",
+  /WEBCAM_STANDARD_RENDERED_HEIGHT = 260;[\s\S]*WEBCAM_FULL_RENDERED_HEIGHT = 540;[\s\S]*const readParticipantTileMetrics =[\s\S]*querySelectorAll<HTMLElement>\("\[data-userid\]"\)[\s\S]*visibleRemoteIds\.has\(userId\)[\s\S]*width \* height > existing\.width \* existing\.height[\s\S]*participantTileMetrics: readParticipantTileMetrics\(visibleRemoteIds\)[\s\S]*renderedHeight: isPresentedScreen[\s\S]*participantTileMetrics\?\.height/,
+  "web receive adaptation reads actual rendered webcam tile size",
+);
+assertRegex(
+  "webAdaptiveConsumerPreferences",
+  /const getWebcamTargetSpatialLayer =[\s\S]*WEBCAM_STANDARD_RENDERED_HEIGHT[\s\S]*return 0;[\s\S]*WEBCAM_FULL_RENDERED_HEIGHT[\s\S]*return Math\.min\(1, bounds\.maxSpatialLayer\);[\s\S]*const webcamRenderedHeight = layout\?\.renderedHeight \?\? null;[\s\S]*const webcamRenderedSpatialLayer = bounds[\s\S]*getWebcamTargetSpatialLayer\(bounds, webcamRenderedHeight\)[\s\S]*const hasRenderedWebcamTile =[\s\S]*const keepFull =[\s\S]*quality === "good"[\s\S]*webcamRenderedSpatialLayer \?\? bounds\.maxSpatialLayer[\s\S]*isFocus && hasRenderedWebcamTile[\s\S]*options\.screenShareVideoActive[\s\S]*webcamRenderedSpatialLayer \?\? bounds\.maxSpatialLayer[\s\S]*priority: keepFull \? 175 : isFocus \? 130 : isVisible \? 95 : 45/,
+  "web webcam receive layers are capped by rendered tile height before taking full resolution",
+);
+assertRegex(
+  "webAdaptiveConsumerPreferences",
+  /OFFSCREEN_WEBCAM_PARK_PRIORITY = 5[\s\S]*if \(options\.emergencyMode\) \{[\s\S]*if \(isHidden && !isWarm && !isFocus && !options\.emergencyKeepVideo\) \{[\s\S]*priority: OFFSCREEN_WEBCAM_PARK_PRIORITY,[\s\S]*paused: true,[\s\S]*if \(!options\.emergencyKeepVideo\) \{[\s\S]*const shouldParkOffscreenWebcamForScreenShare =[\s\S]*options\.screenShareVideoActive &&[\s\S]*isHidden &&[\s\S]*!isWarm &&[\s\S]*!isFocus &&[\s\S]*screenShareReserveQuality === "poor" \|\| screenShareReceiveEmergency[\s\S]*if \(shouldParkOffscreenWebcamForScreenShare\) \{[\s\S]*priority: OFFSCREEN_WEBCAM_PARK_PRIORITY,[\s\S]*paused: true,/,
+  "web Jitsi-style receiver LastN parks only offscreen webcams without breaking emergency keep-video",
+);
+assertRegex(
+  "webAdaptiveConsumerPreferences",
+  /if \(isHidden && !isWarm && !isFocus\) \{[\s\S]*if \(quality === "poor"\) \{[\s\S]*priority: OFFSCREEN_WEBCAM_PARK_PRIORITY,[\s\S]*paused: true,[\s\S]*priority: 25,[\s\S]*paused: false,/,
+  "web poor receive links park hidden cold webcams instead of forwarding invisible video",
 );
 assertRegex(
   "webMeetSocket",
@@ -536,8 +797,18 @@ assertRegex(
 );
 assertRegex(
   "webMeetsMainContent",
-  /const presentationPresenterId = useMemo\([\s\S]*participant\.screenShareProducerId === activeScreenShareId[\s\S]*presentationPresenterId=\{presentationPresenterId\}/,
-  "web screen-share presenter id flows into grid tiling metadata",
+  /presentationProducerId\?: string \| null[\s\S]*presentationProducerId = null[\s\S]*presentationProducerId=\{presentationProducerId\}/,
+  "web screen-share producer id flows through main content into grid tiling metadata",
+);
+assertRegex(
+  "webMeetClient",
+  /const \{ presentationStream, presenterName, presentationProducerId \} =[\s\S]*refs\.screenProducerRef\.current\?\.id[\s\S]*let matchedProducerId: string \| null = null;[\s\S]*let anyProducerId: string \| null = null;[\s\S]*participant\.screenShareProducerId === activeScreenShareId[\s\S]*presentationProducerId=\{presentationProducerId\}/,
+  "web rendered screen-share stream carries the matching producer id for receiver allocation",
+);
+assertRegex(
+  "webGridLayout",
+  /const presentationRenderedAsPrimary =[\s\S]*hasGridPresentationTile[\s\S]*usesSideBySideLayout[\s\S]*usesStageLayout && stageMainKind === "presentation"[\s\S]*const presentationRenderedInRail =[\s\S]*!usesSpotlightLayout[\s\S]*!usesSideBySideLayout[\s\S]*stageMainKind !== "presentation"[\s\S]*const isPresentationRendered =[\s\S]*hasPresentation &&[\s\S]*presentationRenderedAsPrimary \|\| presentationRenderedInRail[\s\S]*presentation: \{[\s\S]*producerId: presentationProducerId,[\s\S]*visible: isPresentationRendered,[\s\S]*primary: presentationRenderedAsPrimary,[\s\S]*focus: presentationRenderedAsPrimary,/,
+  "web screen-share tiling metadata only advertises rendered presentations and marks side-by-side/stage presentations primary",
 );
 assertIncludes(
   "webMobileParticipantVideo",
@@ -611,7 +882,7 @@ assertRegex(
 );
 assertRegex(
   "webAdaptiveConsumerPreferences",
-  /const effectiveQuality = worstQuality\([\s\S]*options\.quality === "good" \|\| options\.quality === "fair"[\s\S]*\? "unknown"[\s\S]*: getConsumerScoreQualityHint/,
+  /const consumerScoreReceiveQuality =[\s\S]*options\.quality === "good" \|\| options\.quality === "fair"[\s\S]*\? "unknown"[\s\S]*: getConsumerScoreQualityHint[\s\S]*const effectiveQuality = worstQuality\([\s\S]*options\.quality,[\s\S]*consumerScoreReceiveQuality,[\s\S]*const screenShareQuality = worstQuality\([\s\S]*consumerScoreReceiveQuality/,
   "web consumer scores must not lower good/fair receive stats",
 );
 assertIncludes(
@@ -634,15 +905,20 @@ assertIncludes(
   "mediaBitrate >= emergencyBitrate * AVAILABLE_BITRATE_SATURATION_RATIO",
   "web emergency mode must not be sustained by intentional caps",
 );
-assertNotIncludes(
+assertRegex(
   "webConnectionQuality",
-  'reason === "cpu"',
+  /function deriveDirectionalQuality[\s\S]*const bandwidthLimited =[\s\S]*explicitBandwidthLimited === true[\s\S]*hasBandwidthQualityLimitation\(qualityLimitationReason \?\? null\)/,
   "web CPU encoder limitation must not drive network downgrades",
 );
 assertIncludes(
   "webAdaptiveConsumerPreferences",
   "const MAX_WEBCAMS_TO_KEEP_FULL_ON_GOOD_LINKS = 4;",
   "web good-link rooms keep small calls at full webcam layers",
+);
+assertRegex(
+  "webAdaptiveConsumerPreferences",
+  /const fullResolutionWebcamUserIds = new Set<string>\(\);[\s\S]*layoutHints[\s\S]*focus:[\s\S]*info\.userId === activeSpeakerId[\s\S]*primary: layoutHints\.primaryIds\.has\(info\.userId\)[\s\S]*visible: layoutHints\.visibleRemoteIds\.has\(info\.userId\)[\s\S]*left\.rank - right\.rank[\s\S]*fullResolutionWebcamUserIds\.size >=[\s\S]*MAX_WEBCAMS_TO_KEEP_FULL_ON_GOOD_LINKS[\s\S]*fullResolutionWebcamUserIds\.has\(candidate\.userId\)[\s\S]*fullResolutionWebcamUserIds\.add\(candidate\.userId\)/,
+  "web Jitsi-style receive policy caps full-resolution webcam tiles in larger rooms",
 );
 assertIncludes(
   "webAdaptiveConsumerPreferences",
@@ -659,15 +935,85 @@ assertRegex(
   /const fallbackVisible =[\s\S]*options\.fallbackRank !== null[\s\S]*options\.fallbackRank < MAX_WEBCAMS_TO_KEEP_FULL_ON_GOOD_LINKS/,
   "web missing layout hints do not mark every webcam visible",
 );
+assertRegex(
+  "webAdaptiveConsumerPreferences",
+  /fullResolutionEligible:[\s\S]*webcamVideoCount <= MAX_WEBCAMS_TO_KEEP_FULL_ON_GOOD_LINKS[\s\S]*fullResolutionWebcamUserIds\.has\(info\.userId\)[\s\S]*fallbackRank !== null[\s\S]*fallbackRank < MAX_WEBCAMS_TO_KEEP_FULL_ON_GOOD_LINKS/,
+  "web small rooms keep full webcam receive layers while large rooms require rank eligibility",
+);
+assertRegex(
+  "webAdaptiveConsumerPreferences",
+  /const keepFull =[\s\S]*quality === "good"[\s\S]*webcamRenderedSpatialLayer \?\? bounds\.maxSpatialLayer[\s\S]*isFocus && hasRenderedWebcamTile[\s\S]*!options\.screenShareVideoActive[\s\S]*isVisible[\s\S]*options\.fullResolutionEligible/,
+  "web good-link receive does not request full layers for every visible large-room webcam",
+);
 assertIncludes(
   "webAdaptiveConsumerPreferences",
   "const isWarm = layout?.warm === true || (!layout && !fallbackVisible);",
   "web missing layout hints keep non-primary webcams warm instead of full",
 );
 assertRegex(
+  "webMeetView",
+  /dataSaverMode: boolean;[\s\S]*dataSaverMode: false,[\s\S]*dataSaverMode:[\s\S]*typeof value\.dataSaverMode === "boolean"[\s\S]*DEFAULT_MEET_VIEW_SETTINGS\.dataSaverMode/,
+  "web meet view settings persist user-controlled data saver mode",
+);
+assertRegex(
+  "webMeetViewPanel",
+  /const setDataSaverMode = \(dataSaverMode: boolean\)[\s\S]*data-meet-data-saver-setting="true"[\s\S]*label="Data saver"[\s\S]*checked=\{settings\.dataSaverMode\}[\s\S]*onChange=\{setDataSaverMode\}/,
+  "web view panel exposes user-controlled data saver mode",
+);
+assertRegex(
+  "webMeetClient",
+  /useState<MeetViewSettings>\(\s*readStoredMeetViewSettings,[\s\S]*browserSaveDataMode[\s\S]*getBrowserNetworkSnapshot\(\)\.saveData === true[\s\S]*effectiveDataSaverMode =[\s\S]*viewSettings\.dataSaverMode \|\| browserSaveDataMode[\s\S]*writeStoredMeetViewSettings\(viewSettings\)[\s\S]*useMeetMedia\(\{[\s\S]*dataSaverMode: effectiveDataSaverMode,[\s\S]*useMeetSocket\(\{[\s\S]*dataSaverMode: effectiveDataSaverMode,[\s\S]*useAdaptiveConsumerPreferences\(\{[\s\S]*dataSaverMode: effectiveDataSaverMode,[\s\S]*useAdaptivePublishQuality\(\{[\s\S]*dataSaverMode: effectiveDataSaverMode,[\s\S]*<MeetsMainContent[\s\S]*viewSettings=\{viewSettings\}[\s\S]*onViewSettingsChange=\{setViewSettings\}/,
+  "web meeting client honors persisted and browser Save-Data send/receive settings",
+);
+assertRegex(
+  "webMeetClient",
+  /const \[isDocumentVisible, setIsDocumentVisible\] = useState[\s\S]*document\.visibilityState === "visible"[\s\S]*document\.addEventListener\("visibilitychange", syncDocumentVisibility\)[\s\S]*useMeetSocket\(\{[\s\S]*isDocumentVisible,[\s\S]*useAdaptiveConsumerPreferences\(\{[\s\S]*isDocumentVisible,/,
+  "web meeting client feeds document visibility into startup and steady-state receive adaptation",
+);
+assertNotIncludes(
+  "webMeetsMainContent",
+  "const MEET_VIEW_STORAGE_KEY",
+  "web meet main content must not own persisted view settings",
+);
+assertRegex(
+  "webAdaptiveConsumerPreferences",
+  /if \(info\.type === "screen"\) \{[\s\S]*const screenSharePriority =[\s\S]*screenSharePrimary[\s\S]*\? 240[\s\S]*: screenShareVisible[\s\S]*\? 220[\s\S]*: HIDDEN_SCREEN_SHARE_KEEPALIVE_PRIORITY[\s\S]*priority: screenSharePriority,[\s\S]*paused: false,[\s\S]*if \(options\.dataSaverMode\) \{[\s\S]*priority: OFFSCREEN_WEBCAM_PARK_PRIORITY,[\s\S]*paused: true,/,
+  "web data saver parks webcam receive after preserving screen-share video",
+);
+assertRegex(
   "webMeetSocket",
-  /const existingWebcamVideoConsumerCount = Array\.from\([\s\S]*producerMapRef\.current\.values\(\)[\s\S]*info\.kind === "video" && info\.type === "webcam"[\s\S]*knownScreenShareVideoActive[\s\S]*preferHighWebcamLayer:[\s\S]*!knownScreenShareVideoActive[\s\S]*joinMode === "webinar_attendee" \|\|[\s\S]*existingWebcamVideoConsumerCount < 4/,
-  "web initial small-call webcam consumers request high layers immediately",
+  /dataSaverMode\?: boolean[\s\S]*isDocumentVisible\?: boolean[\s\S]*dataSaverMode = false[\s\S]*isDocumentVisible = true[\s\S]*const shouldStartWebcamConsumerPausedForReceiveBudget =[\s\S]*\(dataSaverMode \|\| !isDocumentVisible\) &&[\s\S]*producerInfo\.kind === "video" &&[\s\S]*producerInfo\.type === "webcam"[\s\S]*const startsPausedForAdaptiveReceive =[\s\S]*shouldStartWebcamConsumerPausedForReceiveBudget && isWebcamVideo[\s\S]*adaptivelyPausedConsumerProducerIdsRef\.current\.add\([\s\S]*UPDATE_VIDEO_ADAPTIVE_PAUSED[\s\S]*if \(!startsPausedForAdaptiveReceive\) \{[\s\S]*"resumeConsumer"/,
+  "web data saver and hidden tabs prevent initial webcam consumer resume while preserving screen/audio startup",
+);
+assertRegex(
+  "webAdaptiveConsumerPreferences",
+  /isDocumentVisible\?: boolean[\s\S]*HIDDEN_SCREEN_SHARE_KEEPALIVE_PRIORITY = 60[\s\S]*if \(info\.kind === "audio"\) \{[\s\S]*AUDIO_CONSUMER_PRIORITY[\s\S]*if \(info\.kind !== "video"\) return null;[\s\S]*if \(info\.type === "screen"\) \{[\s\S]*if \(!options\.isDocumentVisible\) \{[\s\S]*buildLayerPreference\(0, 0, bounds\)[\s\S]*priority: HIDDEN_SCREEN_SHARE_KEEPALIVE_PRIORITY,[\s\S]*paused: false,[\s\S]*const screenSharePriority =[\s\S]*priority: screenSharePriority,[\s\S]*paused: false,[\s\S]*if \(!options\.isDocumentVisible\) \{[\s\S]*priority: OFFSCREEN_WEBCAM_PARK_PRIORITY,[\s\S]*paused: true,[\s\S]*isDocumentVisible = true[\s\S]*requestKeyFrame =[\s\S]*wasPaused \|\|/,
+  "web hidden tabs park webcams while keeping active screen share video warm for foreground resume",
+);
+assertRegex(
+  "webMeetMedia",
+  /dataSaverMode\?: boolean[\s\S]*dataSaverMode = false[\s\S]*const getPublishNetworkProfile =[\s\S]*if \(isPublishEmergencyProfile\(stats, browserNetwork\)\) \{[\s\S]*return "emergency";[\s\S]*if \(dataSaverMode\) \{[\s\S]*return "poor";/,
+  "web data saver seeds local publish with a constrained profile before stats settle",
+);
+assertRegex(
+  "webMeetSocket",
+  /dataSaverMode\?: boolean[\s\S]*dataSaverMode = false[\s\S]*const getPublishNetworkProfile = useCallback\(\(\) => \{[\s\S]*const profile = getConnectionStatsNetworkProfile\([\s\S]*"publish",[\s\S]*if \(dataSaverMode && profile !== "emergency"\) \{[\s\S]*return "poor";[\s\S]*const getScreenSharePublishNetworkProfile[\s\S]*const screenNetworkProfile = getScreenSharePublishNetworkProfile\(\);[\s\S]*buildScreenShareAudioOpusCodecOptions\([\s\S]*screenNetworkProfile/,
+  "web data saver constrains socket-side reconnect publish for mic, camera, screen, and screen audio",
+);
+assertRegex(
+  "webAdaptivePublishQuality",
+  /dataSaverMode\?: boolean[\s\S]*dataSaverMode = false[\s\S]*dataSaverMode,[\s\S]*if \(dataSaverMode\) \{[\s\S]*const dataSaverProfile: WebcamProducerNetworkProfile = emergencyMode[\s\S]*\? "emergency"[\s\S]*: "poor";[\s\S]*currentPublishQuality !== "low"[\s\S]*switchQuality\("low", dataSaverProfile\)[\s\S]*applyLiveProducerProfile\(dataSaverProfile\)/,
+  "web data saver holds local audio, webcam, screen, and screen-audio publishing on constrained profiles",
+);
+assertRegex(
+  "webAdaptiveConsumerPreferences",
+  /const wasPaused =[\s\S]*lastPausedRef\.current\.get\(producerId\) === true \|\|[\s\S]*refs\.adaptivelyPausedConsumerProducerIdsRef\.current\.has\(producerId\)[\s\S]*requestKeyFrame =[\s\S]*preferences\.paused === false/,
+  "web data saver resume requests a keyframe after startup-paused consumers",
+);
+assertRegex(
+  "webMeetSocket",
+  /const HIGH_LAYER_STARTUP_WEBCAM_LIMIT = 4;[\s\S]*const buildWebcamVideoStartupRanks = \([\s\S]*ranks\.set\(producer\.producerId, rank\);[\s\S]*webcamVideoStartupRank < HIGH_LAYER_STARTUP_WEBCAM_LIMIT/,
+  "web initial small-call webcam high-layer startup is rank-based, not race-prone consumer-count based",
 );
 assertRegex(
   "webMeetSocket",
@@ -676,18 +1022,18 @@ assertRegex(
 );
 assertRegex(
   "webMeetSocket",
-  /queueProducerConsumeRetry[\s\S]*const pending = Array\.from\(pendingProducersRef\.current\.values\(\)\);[\s\S]*pendingProducersRef\.current\.clear\(\);[\s\S]*const snapshotHasScreenShareVideo = pending\.some\([\s\S]*pendingProducer\.kind === "video" &&[\s\S]*pendingProducer\.type === "screen"[\s\S]*consumeProducerRef\.current\(pendingProducer, \{[\s\S]*knownScreenShareVideoActive: snapshotHasScreenShareVideo/,
+  /const pending = Array\.from\(pendingProducersRef\.current\.values\(\)\);[\s\S]*pendingProducersRef\.current\.clear\(\);[\s\S]*const snapshotHasScreenShareVideo = pending\.some\([\s\S]*producerInfo\.kind === "video" &&[\s\S]*producerInfo\.type === "screen"[\s\S]*const webcamVideoStartupRanks = buildWebcamVideoStartupRanks\([\s\S]*pending,[\s\S]*countWebcamVideoProducerEntries\(producerMapRef\.current\)[\s\S]*webcamVideoStartupRank: webcamVideoStartupRanks\.get\([\s\S]*producerInfo\.producerId/,
   "web pending retry batches preserve screen-share initial receive context",
 );
 assertRegex(
   "webMeetSocket",
-  /snapshotHasScreenShareVideo\s*=\s*producers\.some\([\s\S]*producerInfo\.kind === "video" && producerInfo\.type === "screen"[\s\S]*knownScreenShareVideoActive: snapshotHasScreenShareVideo/,
-  "web producer sync snapshots reserve initial receive bandwidth for active screen shares",
+  /snapshotHasScreenShareVideo\s*=\s*producers\.some\([\s\S]*producerInfo\.kind === "video" && producerInfo\.type === "screen"[\s\S]*const producersToConsume = producers\.filter[\s\S]*const webcamVideoStartupRanks = buildWebcamVideoStartupRanks\([\s\S]*producersToConsume,[\s\S]*countWebcamVideoProducerEntries\(producerMapRef\.current\)[\s\S]*knownScreenShareVideoActive: snapshotHasScreenShareVideo,[\s\S]*webcamVideoStartupRank: webcamVideoStartupRanks\.get\([\s\S]*producerInfo\.producerId/,
+  "web producer sync snapshots reserve screen-share bandwidth and ranks webcam startup layers before parallel consume",
 );
 assertRegex(
   "webMeetSocket",
-  /snapshotHasScreenShareVideo\s*=\s*response\.existingProducers\.some\([\s\S]*producer\.kind === "video" && producer\.type === "screen"[\s\S]*knownScreenShareVideoActive: snapshotHasScreenShareVideo/,
-  "web join snapshots reserve initial receive bandwidth for active screen shares",
+  /snapshotHasScreenShareVideo\s*=\s*response\.existingProducers\.some\([\s\S]*producer\.kind === "video" && producer\.type === "screen"[\s\S]*const webcamVideoStartupRanks = buildWebcamVideoStartupRanks\([\s\S]*response\.existingProducers[\s\S]*knownScreenShareVideoActive: snapshotHasScreenShareVideo,[\s\S]*webcamVideoStartupRank: webcamVideoStartupRanks\.get\([\s\S]*producer\.producerId/,
+  "web join snapshots reserve screen-share bandwidth and rank webcam startup layers before parallel consume",
 );
 assertIncludes(
   "webAdaptiveConsumerPreferences",
@@ -710,9 +1056,29 @@ assertRegex(
   "web screen-share receive adaptation receives measured incoming bitrate",
 );
 assertRegex(
+  "webScreenShareNetworkProfile",
+  /SCREEN_SHARE_RECEIVE_FAIR_BPS = 1500000[\s\S]*SCREEN_SHARE_RECEIVE_POOR_BPS = 550000[\s\S]*SCREEN_SHARE_RECEIVE_EMERGENCY_BPS = 300000[\s\S]*getScreenShareReceiveNetworkProfileForAvailableIncomingBitrate[\s\S]*availableIncomingBitrateBps <= SCREEN_SHARE_RECEIVE_EMERGENCY_BPS[\s\S]*availableIncomingBitrateBps <= SCREEN_SHARE_RECEIVE_POOR_BPS[\s\S]*availableIncomingBitrateBps <= SCREEN_SHARE_RECEIVE_FAIR_BPS/,
+  "web screen-share receive BWE thresholds are shared between startup and adaptive paths",
+);
+assertRegex(
   "webAdaptiveConsumerPreferences",
-  /SCREEN_SHARE_RECEIVE_FAIR_BPS = 1500000[\s\S]*SCREEN_SHARE_RECEIVE_POOR_BPS = 550000[\s\S]*SCREEN_SHARE_RECEIVE_EMERGENCY_BPS = 300000[\s\S]*getScreenShareReceiveQualityForAvailableBitrate[\s\S]*availableIncomingBitrateBps <= SCREEN_SHARE_RECEIVE_POOR_BPS[\s\S]*availableIncomingBitrateBps <= SCREEN_SHARE_RECEIVE_FAIR_BPS[\s\S]*isScreenShareReceiveEmergencyBitrate[\s\S]*screenShareEmergency[\s\S]*screenShareVisible[\s\S]*screenShareVisible[\s\S]*\? 1[\s\S]*screenShareQuality === "poor" && !screenShareVisible[\s\S]*bounds\.maxTemporalLayer/,
-  "web visible screen-share receive layers use incoming bitrate while preserving emergency FPS",
+  /getScreenShareReceiveNetworkProfileForAvailableIncomingBitrate[\s\S]*getScreenShareReceiveQualityForAvailableBitrate[\s\S]*const profile =[\s\S]*getScreenShareReceiveNetworkProfileForAvailableIncomingBitrate\([\s\S]*availableIncomingBitrateBps[\s\S]*if \(profile === "emergency"\) return "poor";[\s\S]*isScreenShareReceiveEmergencyBitrate[\s\S]*SCREEN_SHARE_RECEIVE_EMERGENCY_BPS[\s\S]*getScreenShareTargetTemporalLayer[\s\S]*options\.quality === "poor"[\s\S]*isSmallPresentation[\s\S]*options\.quality === "fair"[\s\S]*return 1;[\s\S]*screenShareEmergency[\s\S]*getScreenShareTargetTemporalLayer\(bounds, \{/,
+  "web screen-share receive layers use incoming bitrate and rendered size while preserving emergency FPS",
+);
+assertIncludes(
+  "webGridLayout",
+  'data-meet-presentation-size={size}',
+  "web presentation tiles expose rendered size class for screen-share receive adaptation",
+);
+assertRegex(
+  "webGridLayout",
+  /const roomTilingRemoteVisibleIds = useMemo\([\s\S]*if \(isOverflowOpen\) \{[\s\S]*overflowParticipants\.forEach\(\(participant\) => ids\.push\(participant\.userId\)\);[\s\S]*const roomTilingHiddenIds = useMemo\([\s\S]*isOverflowOpen[\s\S]*\? \[\][\s\S]*: overflowParticipants\.map\(\(participant\) => participant\.userId\)/,
+  "web open overflow gallery participants are visible, not hidden, for adaptive receive",
+);
+assertRegex(
+  "webAdaptiveConsumerPreferences",
+  /readRoomTilingEventSignature[\s\S]*detail\.signature[\s\S]*lastRoomTilingEventSignatureRef[\s\S]*const handleRoomTilingChange = \(event: Event\) => \{[\s\S]*lastRoomTilingEventSignatureRef\.current === signature[\s\S]*return;[\s\S]*window\.addEventListener\("conclave:meet-room-tiling", handleRoomTilingChange\)[\s\S]*window\.setInterval\(applyPreferences, APPLY_INTERVAL_MS\)/,
+  "web adaptive receive skips duplicate room-tiling heartbeat events while retaining interval fallback",
 );
 assertRegex(
   "webLowBandwidthProbe",
@@ -771,13 +1137,13 @@ assertRegex(
 );
 assertRegex(
   "webAdaptiveConsumerPreferences",
-  /unsupportedLayerPreferencesRef\.current\.set\(producerId,[\s\S]*signature: getLayerPreferenceSignature\(preferredLayers\),[\s\S]*retryAt: Date\.now\(\) \+ UNSUPPORTED_LAYER_RETRY_AFTER_MS/,
+  /unsupportedLayerPreferencesRef\.current\.set\(update\.producerId,[\s\S]*signature: getLayerPreferenceSignature\(update\.preferredLayers\),[\s\S]*retryAt: Date\.now\(\) \+ UNSUPPORTED_LAYER_RETRY_AFTER_MS/,
   "web unsupported receive-layer fallback stores retryable layer signature",
 );
-assertIncludes(
+assertRegex(
   "webAdaptiveConsumerPreferences",
-  "priority: quality === \"poor\" ? 10 : 25,\n      paused: false,",
-  "web hidden consumers degrade layers instead of pausing",
+  /if \(isHidden && !isWarm && !isFocus\) \{[\s\S]*if \(quality === "poor"\) \{[\s\S]*priority: OFFSCREEN_WEBCAM_PARK_PRIORITY,[\s\S]*paused: true,[\s\S]*priority: 25,[\s\S]*paused: false,/,
+  "web hidden consumers stay live outside poor receive links",
 );
 assertIncludes(
   "webAdaptiveConsumerPreferences",
@@ -809,14 +1175,29 @@ assertIncludes(
   "const CONSUMER_PREFERENCE_ACK_TIMEOUT_MS = 3000;",
   "web consumer preference updates have ACK timeout",
 );
+assertRegex(
+  "webAdaptiveConsumerPreferences",
+  /MAX_CONSUMER_PREFERENCE_UPDATES_PER_CYCLE = 8[\s\S]*SCREEN_SHARE_CONSUMER_PREFERENCE_UPDATES_PER_CYCLE = 16[\s\S]*CONSUMER_PREFERENCE_EMIT_SPACING_MS = 75[\s\S]*SCREEN_SHARE_CONSUMER_PREFERENCE_EMIT_SPACING_MS = 50[\s\S]*const maxUpdatesThisCycle = screenShareVideoActive[\s\S]*SCREEN_SHARE_CONSUMER_PREFERENCE_UPDATES_PER_CYCLE[\s\S]*MAX_CONSUMER_PREFERENCE_UPDATES_PER_CYCLE[\s\S]*const emitSpacingMs = screenShareVideoActive[\s\S]*SCREEN_SHARE_CONSUMER_PREFERENCE_EMIT_SPACING_MS[\s\S]*CONSUMER_PREFERENCE_EMIT_SPACING_MS[\s\S]*pendingUpdates\.slice\([\s\S]*maxUpdatesThisCycle[\s\S]*emitBatchPreferenceUpdates[\s\S]*"setConsumerPreferencesBatch"[\s\S]*updates: liveUpdates\.map\(buildPreferencePayload\)[\s\S]*screenShareVideoActive && updatesToSend\.length > 1[\s\S]*emitBatchPreferenceUpdates\(updatesToSend\)[\s\S]*index \* emitSpacingMs/,
+  "web screen-share receiver constraints batch while preserving normal pacing fallback",
+);
+assertRegex(
+  "sfuMediaHandlers",
+  /MAX_CONSUMER_PREFERENCE_BATCH_SIZE = 24[\s\S]*"setConsumerPreferencesBatch"[\s\S]*RATE_LIMITS\.consumerControlBatch[\s\S]*updates\.length === 0[\s\S]*updates\.length > MAX_CONSUMER_PREFERENCE_BATCH_SIZE[\s\S]*applyConsumerPreferencesData\(room, currentClient, update\)[\s\S]*results,/,
+  "SFU batches bounded consumer preference updates with per-consumer results",
+);
+assertIncludes(
+  "sfuRateLimit",
+  "consumerControlBatch: { capacity: 8, refillPerSec: 2 }",
+  "SFU screen-share preference batches have their own rate limit",
+);
 assertIncludes(
   "webAdaptiveConsumerPreferences",
-  'markDeferredForRetry("setConsumerPreferences ack timeout")',
+  'markDeferredForRetry(update, "setConsumerPreferences ack timeout")',
   "web consumer preference ACK timeout retries stale layer updates",
 );
 assertIncludes(
   "webAdaptiveConsumerPreferences",
-  'markDeferredForRetry(\n                    "setConsumerPreferences priority-only ack timeout",',
+  'markDeferredForRetry(\n          update,\n          "setConsumerPreferences priority-only ack timeout",',
   "web consumer preference fallback ACK timeout retries stale layer updates",
 );
 assertRegex(
@@ -851,8 +1232,43 @@ assertRegex(
 );
 assertRegex(
   "webMeetSocket",
+  /intentionallyClosedTransportsRef = useRef<WeakSet<Transport>>[\s\S]*intentionallyClosedTransportsRef\.current\.add\([\s\S]*producerTransportRef\.current,[\s\S]*producerTransportRef\.current\?\.close\(\);[\s\S]*intentionallyClosedTransportsRef\.current\.add\([\s\S]*consumerTransportRef\.current,[\s\S]*consumerTransportRef\.current\?\.close\(\);[\s\S]*intentionallyClosedTransportsRef\.current\.add\(existingTransport\);[\s\S]*existingTransport\.close\(\);/,
+  "web controlled reconnect cleanup marks intentional transport closes",
+);
+assertRegex(
+  "webMeetSocket",
+  /Producer transport state[\s\S]*state === "closed" &&[\s\S]*intentionallyClosedTransportsRef\.current\.delete\(transport\)[\s\S]*message: "Producer transport closed"[\s\S]*handleReconnectRef\.current\?\.\(\);[\s\S]*Consumer transport state[\s\S]*state === "closed" &&[\s\S]*intentionallyClosedTransportsRef\.current\.delete\(transport\)[\s\S]*if \(state === "closed"\) \{[\s\S]*handleReconnectRef\.current\?\.\(\);/,
+  "web unexpected closed producer and consumer transports trigger reconnect",
+);
+assertRegex(
+  "webMeetSocket",
   /RESTART_ICE_ACK_TIMEOUT_MS[\s\S]*const iceRestartPromiseRef = useRef[\s\S]*Promise<boolean> \| null[\s\S]*const existingRestart = iceRestartPromiseRef\.current\[transportKind\];[\s\S]*if \(existingRestart\) return existingRestart;[\s\S]*window\.setTimeout\([\s\S]*restartIce acknowledgement timeout[\s\S]*socket\.emit\([\s\S]*"restartIce"[\s\S]*window\.clearTimeout\(timeoutId\)[\s\S]*iceRestartPromiseRef\.current\[transportKind\] = restartPromise;[\s\S]*return restartPromise;/,
   "web ICE restart recovery waits for in-flight restart result",
+);
+assertRegex(
+  "webMeetSocket",
+  /CRITICAL_SIGNALING_ACK_TIMEOUT_MS = 12000[\s\S]*JOIN_ROOM_ACK_TIMEOUT_MS = 15000[\s\S]*const startSocketAckTimeout =[\s\S]*`\$\{eventName\} acknowledgement timeout`/,
+  "web critical signaling ACKs have bounded timeout errors",
+);
+assertRegex(
+  "webMeetSocket",
+  /const settleCreateTransport = startSocketAckTimeout\([\s\S]*"createProducerTransport"[\s\S]*if \(!settleCreateTransport\(\)\) return;[\s\S]*const settleConnectTransport = startSocketAckTimeout\([\s\S]*"connectProducerTransport"[\s\S]*if \(!settleConnectTransport\(\)\) return;[\s\S]*const settleProduce = startSocketAckTimeout\([\s\S]*"produce"[\s\S]*if \(!settleProduce\(\)\) return;[\s\S]*const settleCreateTransport = startSocketAckTimeout\([\s\S]*"createConsumerTransport"[\s\S]*if \(!settleCreateTransport\(\)\) return;[\s\S]*const settleConnectTransport = startSocketAckTimeout\([\s\S]*"connectConsumerTransport"[\s\S]*if \(!settleConnectTransport\(\)\) return;/,
+  "web room media transport setup ACKs cannot hang join or reconnect indefinitely",
+);
+assertRegex(
+  "webMeetSocket",
+  /const settleConsume = startSocketAckTimeout\("consume"[\s\S]*Consume acknowledgement timed out[\s\S]*queueProducerConsumeRetry\(producerInfo, 450\);[\s\S]*resolve\(\);[\s\S]*if \(!settleConsume\(\)\) return;/,
+  "web consume ACK timeout retries remote media without blocking join",
+);
+assertRegex(
+  "webMeetSocket",
+  /const settleJoinRoom = startSocketAckTimeout\([\s\S]*"joinRoom"[\s\S]*JOIN_ROOM_ACK_TIMEOUT_MS[\s\S]*if \(!settleJoinRoom\(\)\) return;/,
+  "web joinRoom ACK timeout routes stalled joins into reconnect retry handling",
+);
+assertRegex(
+  "webMeetClientPage",
+  /JOIN_INFO_REQUEST_TIMEOUT_MS = 15000[\s\S]*const fetchJoinInfoWithTimeout = async[\s\S]*new AbortController\(\)[\s\S]*controller\.abort\(\)[\s\S]*fetch\("\/api\/sfu\/join"[\s\S]*signal: controller\.signal[\s\S]*throw new Error\("Join info request timeout"\)[\s\S]*fetchJoinInfoWithTimeout\(\{[\s\S]*method: "POST"/,
+  "web join-info fetch timeout reaches reconnect retry handling",
 );
 assertNotIncludes(
   "webMeetSocket",
@@ -896,7 +1312,7 @@ assertRegex(
 );
 assertRegex(
   "webMeetSocket",
-  /connectionQualityRef\?: React\.MutableRefObject<ConnectionQualityStats \| null>[\s\S]*const getPublishNetworkProfile = useCallback\([\s\S]*getConnectionStatsNetworkProfile\(connectionQualityRef\?\.current, "publish"\)[\s\S]*const getReceiveNetworkProfile = useCallback\([\s\S]*getConnectionStatsNetworkProfile\(connectionQualityRef\?\.current, "receive"\)[\s\S]*const getInitialConsumerNetworkProfile = useCallback/,
+  /connectionQualityRef\?: React\.MutableRefObject<ConnectionQualityStats \| null>[\s\S]*const getPublishNetworkProfile = useCallback\(\(\) => \{[\s\S]*getConnectionStatsNetworkProfile\([\s\S]*connectionQualityRef\?\.current,[\s\S]*"publish",[\s\S]*const getReceiveNetworkProfile = useCallback\([\s\S]*getConnectionStatsNetworkProfile\(connectionQualityRef\?\.current, "receive"\)[\s\S]*const getInitialConsumerNetworkProfile = useCallback/,
   "web socket publish and receive setup uses measured directional network profiles",
 );
 assertRegex(
@@ -906,7 +1322,7 @@ assertRegex(
 );
 assertRegex(
   "webMeetSocket",
-  /SCREEN_SHARE_RECEIVE_INITIAL_FAIR_BPS = 1500000[\s\S]*SCREEN_SHARE_RECEIVE_INITIAL_POOR_BPS = 550000[\s\S]*SCREEN_SHARE_RECEIVE_INITIAL_EMERGENCY_BPS = 300000[\s\S]*getScreenShareReceiveNetworkProfileForAvailableBitrate[\s\S]*availableIncomingBitrate <= SCREEN_SHARE_RECEIVE_INITIAL_EMERGENCY_BPS[\s\S]*availableIncomingBitrate <= SCREEN_SHARE_RECEIVE_INITIAL_POOR_BPS[\s\S]*availableIncomingBitrate <= SCREEN_SHARE_RECEIVE_INITIAL_FAIR_BPS[\s\S]*getInitialConsumerNetworkProfile[\s\S]*producerInfo\.kind !== "video" \|\| producerInfo\.type !== "screen"[\s\S]*stats\?\.availableIncomingBitrate[\s\S]*getMostConstrainedNetworkProfile\(\[baseProfile, screenShareProfile\]\)/,
+  /getScreenShareReceiveNetworkProfileForAvailableIncomingBitrate[\s\S]*getInitialConsumerNetworkProfile[\s\S]*producerInfo\.kind !== "video" \|\| producerInfo\.type !== "screen"[\s\S]*const screenShareProfile =[\s\S]*getScreenShareReceiveNetworkProfileForAvailableIncomingBitrate\([\s\S]*stats\?\.availableIncomingBitrate[\s\S]*getMostConstrainedWebcamProducerNetworkProfile\(\[[\s\S]*baseProfile,[\s\S]*screenShareProfile,/,
   "web initial screen-share consume uses incoming BWE profile",
 );
 assertRegex(
@@ -950,9 +1366,29 @@ assertRegex(
   "web screen-share publish adaptation receives measured outgoing bitrate",
 );
 assertRegex(
+  "webScreenWakeLock",
+  /wakeLock\?\.request[\s\S]*request\("screen"\)[\s\S]*visibilitychange[\s\S]*pageshow[\s\S]*focus[\s\S]*release\(\)/,
+  "web meeting surface holds and reacquires a screen wake lock like production video clients",
+);
+assertRegex(
+  "webMeetClient",
+  /meetingSurfaceWakeLockEnabled[\s\S]*connectionState === "joined"[\s\S]*hasEnteredMeetingSurface[\s\S]*connectionState === "reconnecting"[\s\S]*connectionState === "disconnected"[\s\S]*useScreenWakeLock\(\{ enabled: meetingSurfaceWakeLockEnabled \}\)/,
+  "web meet client keeps wake lock through reconnecting meeting surfaces",
+);
+assertRegex(
+  "webMeetClient",
+  /useAdaptivePublishQuality\(\{[\s\S]*publishCpuLimited: selfConnectionStats\.publishMedia\.video\.cpuLimited,/,
+  "web screen-share publish adaptation receives measured CPU limitation",
+);
+assertRegex(
   "webMeetClient",
   /refreshScreenAudioProducerForNetworkProfile,[\s\S]*useAdaptivePublishQuality\(\{[\s\S]*refreshScreenAudioProducerForNetworkProfile,/,
   "web adaptive publish can refresh screen-audio producers after network recovery",
+);
+assertRegex(
+  "webConnectionQuality",
+  /bandwidthLimited: boolean;[\s\S]*cpuLimited: boolean;[\s\S]*normalizeQualityLimitationReason[\s\S]*value === "none"[\s\S]*selectQualityLimitationReason[\s\S]*videoBandwidthLimited[\s\S]*qualityLimitationReason === "bandwidth"[\s\S]*videoCpuLimited[\s\S]*qualityLimitationReason === "cpu"/,
+  "web outbound limitation stats preserve bandwidth and CPU signals across camera plus screen-share senders",
 );
 assertRegex(
   "webAdaptivePublishQuality",
@@ -986,13 +1422,18 @@ assertRegex(
 );
 assertRegex(
   "webScreenShareNetworkProfile",
-  /SCREEN_SHARE_OUTGOING_FAIR_BPS = 1500000[\s\S]*SCREEN_SHARE_OUTGOING_POOR_BPS = 550000[\s\S]*SCREEN_SHARE_OUTGOING_EMERGENCY_BPS = 280000[\s\S]*getScreenSharePublishNetworkProfileForAvailableOutgoingBitrate[\s\S]*availableOutgoingBitrateBps <= SCREEN_SHARE_OUTGOING_EMERGENCY_BPS[\s\S]*availableOutgoingBitrateBps <= SCREEN_SHARE_OUTGOING_POOR_BPS[\s\S]*availableOutgoingBitrateBps <= SCREEN_SHARE_OUTGOING_FAIR_BPS/,
-  "web screen-share publish caps use outgoing bitrate before full-FPS profile",
+  /SCREEN_SHARE_OUTGOING_FAIR_BPS = 1500000[\s\S]*SCREEN_SHARE_OUTGOING_POOR_BPS = 550000[\s\S]*SCREEN_SHARE_OUTGOING_EMERGENCY_BPS = 280000[\s\S]*getScreenSharePublishNetworkProfileForAvailableOutgoingBitrate[\s\S]*availableOutgoingBitrateBps <= SCREEN_SHARE_OUTGOING_EMERGENCY_BPS[\s\S]*availableOutgoingBitrateBps <= SCREEN_SHARE_OUTGOING_POOR_BPS[\s\S]*availableOutgoingBitrateBps <= SCREEN_SHARE_OUTGOING_FAIR_BPS[\s\S]*getScreenShareStartupNetworkProfile[\s\S]*observedPublishQuality && observedPublishQuality !== "unknown"[\s\S]*browserNetwork\.supported \? null : "fair"[\s\S]*selectScreenSharePublishNetworkProfile[\s\S]*hasAvailableOutgoingBitrate\(availableOutgoingBitrateBps\)[\s\S]*getMostConstrainedWebcamProducerNetworkProfile\(\[[\s\S]*baseProfile,[\s\S]*outgoingBitrateProfile,[\s\S]*startupProfile,/,
+  "web screen-share publish caps use outgoing bitrate first and start unsupported unknown links detail-first",
 );
 assertRegex(
   "webAdaptivePublishQuality",
   /screenShareTargetProfile[\s\S]*liveProfile,[\s\S]*getScreenSharePublishNetworkProfileForAvailableOutgoingBitrate\([\s\S]*effectiveLiveProfile[\s\S]*restoreStandardCaptureIfNeeded\(\)[\s\S]*applyLiveProducerProfile\(effectiveLiveProfile \?\? "good"\)/,
   "web adaptive screen-share BWE caps stay active after stable live profile",
+);
+assertRegex(
+  "webAdaptivePublishQuality",
+  /CPU_LIVE_CAP_AFTER_MS = 6000[\s\S]*CPU_SCREEN_SHARE_POOR_CAP_AFTER_MS = 20000[\s\S]*getCpuLimitedLiveProfile[\s\S]*screenShareVideoActive[\s\S]*return "poor";[\s\S]*return "fair";[\s\S]*cpuLimitedWindowRef[\s\S]*publishCpuLimited[\s\S]*getMostConstrainedWebcamProducerNetworkProfile\(\[[\s\S]*connectionLiveProfile,[\s\S]*cpuLimitedProfile/,
+  "web adaptive screen-share publish caps lower FPS under sustained CPU pressure before recovery",
 );
 assertRegex(
   "webMeetClient",
@@ -1128,6 +1569,31 @@ for (const [context, label] of [
     }
   }
 }
+assertRegex(
+  "webMeetMedia",
+  /LOCAL_VIDEO_MUTED_RECOVERY_DELAY_MS = 5000[\s\S]*localVideoTrackHandlersRef[\s\S]*localVideoMutedRecoveryTimeoutsRef[\s\S]*lastLocalVideoMutedRecoveryAtRef/,
+  "web local camera muted-source recovery has dedicated timers and handler tracking",
+);
+assertRegex(
+  "webMeetMedia",
+  /const scheduleLocalVideoMutedRecovery = useCallback[\s\S]*track\.readyState !== "live"[\s\S]*!track\.muted[\s\S]*!isDocumentVisibleForMediaRecovery\(\)[\s\S]*cameraRecoveryInFlightRef\.current[\s\S]*producerUsesTrack[\s\S]*streamUsesTrack[\s\S]*currentProducer && \(producerUsesTrack \|\| streamUsesTrack\)[\s\S]*closeLocalVideoProducerForReplacement\(currentProducer\)[\s\S]*stopLocalTrack\(track\);[\s\S]*requestCameraProducerRecovery\(\);/,
+  "web muted local camera tracks recover through the camera producer recovery path without hidden-tab churn",
+);
+assertRegex(
+  "webMeetMedia",
+  /const attachLocalVideoTrackHandlers = useCallback[\s\S]*track\.addEventListener\("mute"[\s\S]*scheduleLocalVideoMutedRecovery\(track\)[\s\S]*track\.addEventListener\("unmute"[\s\S]*clearLocalVideoMutedRecoveryTimer\(track\.id\)[\s\S]*if \(track\.muted\) \{[\s\S]*scheduleLocalVideoMutedRecovery\(track\);/,
+  "web local camera tracks listen for source mute and clear recovery on unmute",
+);
+assertRegex(
+  "webMeetMedia",
+  /const scheduleCurrentLocalVideoMutedRecovery = useCallback[\s\S]*localStreamRef\.current \?\? localStream[\s\S]*videoProducerRef\.current\?\.track[\s\S]*attachLocalVideoTrackHandlers\(track\)/,
+  "web local camera muted-source recovery scans raw and producer tracks",
+);
+assertRegex(
+  "webMeetMedia",
+  /const handleVisibilityChange = \(\) => \{[\s\S]*document\.visibilityState === "visible"[\s\S]*scheduleCurrentLocalVideoMutedRecovery\(\)[\s\S]*document\.addEventListener\("visibilitychange"/,
+  "web foreground return rechecks muted local camera tracks",
+);
 assertRegex(
   "webMeetMedia",
   /let createdTrack: MediaStreamTrack \| null = null;[\s\S]*const removeCreatedTrackFromLocalStream = \(\) => \{[\s\S]*stopLocalTrack\(createdTrack\);[\s\S]*createdTrack = null;[\s\S]*audioRecoveryInFlightRef\.current = true;[\s\S]*const recoverAudioProducer = async \(\) => \{[\s\S]*if \(cancelled\) \{[\s\S]*audioProducer\.close\(\);[\s\S]*removeCreatedTrackFromLocalStream\(\);[\s\S]*catch \(err\) \{[\s\S]*removeCreatedTrackFromLocalStream\(\);[\s\S]*return \(\) => \{[\s\S]*cancelled = true;[\s\S]*removeCreatedTrackFromLocalStream\(\);/,
@@ -1372,7 +1838,7 @@ assertRegex(
 }
 {
   const text = source.webMeetMedia;
-  const start = text.indexOf("const getReusableAudioTrack =");
+  const start = text.indexOf("const canWarmMutedAudio =");
   const end = text.indexOf("const recoverAudioProducer = async () => {", start);
   if (start < 0 || end < 0) {
     failures.push("web audio producer recovery watchdog missing");
@@ -1390,11 +1856,16 @@ assertRegex(
     }
     if (
       !section.includes("getReusableAudioTrack") ||
-      !section.includes("if (isMuted && !getReusableAudioTrack()) return;") ||
-      !section.includes("if (isMutedRef.current && !liveAudioTrack) return;")
+      !section.includes(
+        "const canWarmMutedAudio = isMuted && mediaState.hasAudioPermission;",
+      ) ||
+      !section.includes(
+        "if (isMuted && !canWarmMutedAudio && !getReusableAudioTrack()) return;",
+      ) ||
+      !section.includes("!mediaState.hasAudioPermission")
     ) {
       failures.push(
-        "web audio producer watchdog must keep muted producers warm without opening cold mic capture",
+        "web audio producer watchdog must only cold-warm muted mics after existing permission",
       );
     }
     if (!section.includes("window.setInterval(")) {
@@ -1495,7 +1966,7 @@ assertRegex(
     );
   }
   if (
-    !/shouldDisableMediaIntentAfterRecoveryFailure[\s\S]*meetError\.code === "PERMISSION_DENIED"[\s\S]*NotFoundError[\s\S]*Audio producer recovery failed[\s\S]*const meetErr = createMeetError\(err, "MEDIA_ERROR"\);[\s\S]*!hadLiveAudioTrackBeforeRecovery &&[\s\S]*shouldDisableMediaIntentAfterRecoveryFailure\(err, meetErr\)[\s\S]*setIsMuted\(true\);[\s\S]*Camera producer recovery failed[\s\S]*const meetErr = createMeetError\(err, "MEDIA_ERROR"\);[\s\S]*!hadLiveCameraTrackBeforeRecovery &&[\s\S]*shouldDisableMediaIntentAfterRecoveryFailure\(err, meetErr\)[\s\S]*setIsCameraOff\(true\);/.test(
+    !/shouldDisableMediaIntentAfterRecoveryFailure[\s\S]*meetError\.code === "PERMISSION_DENIED"[\s\S]*NotFoundError[\s\S]*Audio producer recovery failed[\s\S]*const meetErr = createMeetError\(err, "MEDIA_ERROR"\);[\s\S]*!hadLiveAudioTrackBeforeRecovery &&[\s\S]*shouldDisableMediaIntentAfterRecoveryFailure\(err, meetErr\)[\s\S]*setIsMuted\(true\);[\s\S]*setMediaState\(\(current\) => \(\{[\s\S]*hasAudioPermission: false,[\s\S]*Camera producer recovery failed[\s\S]*const meetErr = createMeetError\(err, "MEDIA_ERROR"\);[\s\S]*!hadLiveCameraTrackBeforeRecovery &&[\s\S]*shouldDisableMediaIntentAfterRecoveryFailure\(err, meetErr\)[\s\S]*setIsCameraOff\(true\);/.test(
       mediaText,
     )
   ) {
@@ -1909,6 +2380,11 @@ assertRegex(
   "webMeetSocket",
   /SCREEN_SHARE_FOREGROUND_KEYFRAME_REQUEST_COOLDOWN_MS = 1200[\s\S]*foregroundScreenShareKeyFrameAtRef[\s\S]*requestForegroundScreenShareKeyFrames[\s\S]*isScreenShareVideoProducer\(info\)[\s\S]*adaptivelyPausedConsumerProducerIdsRef\.current\.has\(producerId\)[\s\S]*consumer\.closed \|\| consumer\.paused[\s\S]*requestKeyFrame: true[\s\S]*lastKeyFrameRequestAt: now[\s\S]*requestForegroundScreenShareKeyFrames\(\);[\s\S]*recoverActiveMeeting\("foreground"\)/,
   "web foreground recovery requests keyframes for active screen-share consumers",
+);
+assertRegex(
+  "webMeetSocket",
+  /SUSPENDED_EVENT_LOOP_CHECK_MS = 5000[\s\S]*SUSPENDED_EVENT_LOOP_GAP_MS = 30000[\s\S]*lastEventLoopHeartbeatAt = Date\.now\(\)[\s\S]*handleEventLoopHeartbeat[\s\S]*gapMs < SUSPENDED_EVENT_LOOP_GAP_MS[\s\S]*document\.visibilityState !== "visible"[\s\S]*Browser event loop was suspended; recovering meeting media[\s\S]*scheduleForegroundRecovery\(\)[\s\S]*window\.setInterval\([\s\S]*handleEventLoopHeartbeat,[\s\S]*SUSPENDED_EVENT_LOOP_CHECK_MS/,
+  "web meeting recovers after browser sleep/resume event-loop suspension",
 );
 {
   const text = source.webMeetSocket;
@@ -2429,6 +2905,11 @@ assertIncludes(
 );
 assertIncludes(
   "nativeMeetingViewModel",
+  "initialReceiveConnectionQuality: receiveConnectionQuality",
+  "native initial remote consume uses receive-side quality",
+);
+assertIncludes(
+  "nativeMeetingViewModel",
   "self.publishConnectionQuality == quality",
   "native publish-side producer refresh guard",
 );
@@ -2451,6 +2932,21 @@ assertIncludes(
   "nativeMeetingViewModel",
   "await webRTCClient.applyRemoteConsumerBandwidthPolicy(",
   "native remote consumer bandwidth policy application",
+);
+assertIncludes(
+  "nativeMeetingViewModel",
+  "receiveVideo: shouldReceiveRemoteVideoConsumers",
+  "native remote consumer policy receives app visibility gate",
+);
+assertRegex(
+  "nativeMeetingViewModel",
+  /func handleAppEnteredBackground\(\)[\s\S]*appForegroundAllowsRemoteVideoReceive = false[\s\S]*scheduleRemoteConsumerBandwidthPolicyUpdate\(\)/,
+  "native backgrounding reapplies remote consumer policy",
+);
+assertRegex(
+  "nativeMeetingViewModel",
+  /private var shouldReceiveRemoteVideoConsumers: Bool[\s\S]*PipController\.inPipMode[\s\S]*return true[\s\S]*return appForegroundAllowsRemoteVideoReceive/,
+  "native PiP keeps remote video receive enabled while backgrounded",
 );
 assertRegex(
   "nativeMeetingViewModel",
@@ -2834,8 +3330,8 @@ assertRegex(
   "SFU same-producer consumer replacement must respond before closing the displaced consumer",
 );
 
-// Native receive adaptation must keep audio crisp, preserve screen shares, and
-// pause extra webcam video only in emergency mode.
+// Native receive adaptation must keep audio crisp, preserve visible screen
+// shares, and park remote video while the app has no visible renderer.
 for (const [key, label] of [
   ["iosWebrtc", "iOS"],
   ["androidWebrtc", "Android"],
@@ -2844,6 +3340,16 @@ for (const [key, label] of [
     key,
     /kind == "audio"[\s\S]*priority\s*[:=]\s*255[\s\S]*paused\s*[:=]\s*false/,
     `${label} remote audio protected from adaptive pausing`,
+  );
+  assertIncludes(
+    key,
+    "remoteVideoReceiveEnabled",
+    `${label} tracks current remote video receive visibility`,
+  );
+  assertRegex(
+    key,
+    /(if !receiveVideo|if \(!receiveVideo\))[\s\S]*spatialLayer\s*[:=]\s*0[\s\S]*temporalLayer\s*[:=]\s*0[\s\S]*priority\s*[:=]\s*8[\s\S]*paused\s*[:=]\s*true[\s\S]*(type == ProducerType\.screen\.rawValue|info\.type == ProducerType\.screen\.rawValue)/,
+    `${label} background receive policy pauses screen-share video before visible-call screen-share handling`,
   );
   assertRegex(
     key,
@@ -2855,6 +3361,19 @@ for (const [key, label] of [
     /initialScreenConsumerPreference[\s\S]*(case \.emergency|ConnectionQuality\.emergency)[\s\S]*(temporalLayer\s*=\s*1|->\s*1)[\s\S]*(case \.poor|ConnectionQuality\.poor)[\s\S]*(temporalLayer\s*=\s*1|->\s*1)[\s\S]*priority\s*[:=]\s*240/,
     `${label} initial screen-share consume starts emergency receivers at mid temporal FPS`,
   );
+  if (key === "iosWebrtc") {
+    assertRegex(
+      key,
+      /private func initialScreenConsumerPreference\(\s*connectionQuality: ConnectionQuality\s*\)[\s\S]*switch connectionQuality[\s\S]*priority:\s*240[\s\S]*initialScreenConsumerPreference\(\s*connectionQuality: initialReceiveConnectionQuality/,
+      `${label} initial screen-share consume is seeded from receive quality`,
+    );
+  } else {
+    assertRegex(
+      key,
+      /private fun initialScreenConsumerPreference\(\s*connectionQuality: ConnectionQuality,\s*\)[\s\S]*when \(connectionQuality\)[\s\S]*priority = 240[\s\S]*initialScreenConsumerPreference\(\s*connectionQuality = initialReceiveConnectionQuality,/,
+      `${label} initial screen-share consume is seeded from receive quality`,
+    );
+  }
   assertRegex(
     key,
     /(if isEmergency && !emergencyKeepVideo|if \(isEmergency && !emergencyKeepVideo\))[\s\S]*spatialLayer\s*[:=]\s*0[\s\S]*temporalLayer\s*[:=]\s*0[\s\S]*priority\s*[:=]\s*8[\s\S]*paused\s*[:=]\s*true/,

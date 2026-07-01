@@ -130,6 +130,86 @@ final class ConclaveTests: XCTestCase {
         XCTAssertFalse(source.contains("category!"))
     }
 
+    func testMeetingEntryOverlayPolicyStopsAtSafetyCap() throws {
+        let startedAt = Date(timeIntervalSince1970: 1_000)
+
+        XCTAssertTrue(MeetingEntryOverlayPolicy.shouldShow(
+            isEnteringMeeting: true,
+            startedAt: startedAt,
+            now: Date(timeInterval: 11.9, since: startedAt),
+            connectionState: ConnectionState.joined
+        ))
+        XCTAssertFalse(MeetingEntryOverlayPolicy.shouldShow(
+            isEnteringMeeting: true,
+            startedAt: startedAt,
+            now: Date(timeInterval: 12.0, since: startedAt),
+            connectionState: ConnectionState.joined
+        ))
+    }
+
+    func testMeetingEntryOverlayPolicyOnlyCoversEntryConnectionStates() throws {
+        let startedAt = Date(timeIntervalSince1970: 1_000)
+
+        XCTAssertTrue(MeetingEntryOverlayPolicy.shouldShow(
+            isEnteringMeeting: true,
+            startedAt: startedAt,
+            now: startedAt,
+            connectionState: ConnectionState.connecting
+        ))
+        XCTAssertTrue(MeetingEntryOverlayPolicy.shouldShow(
+            isEnteringMeeting: true,
+            startedAt: startedAt,
+            now: startedAt,
+            connectionState: ConnectionState.joined
+        ))
+        XCTAssertFalse(MeetingEntryOverlayPolicy.shouldShow(
+            isEnteringMeeting: true,
+            startedAt: startedAt,
+            now: startedAt,
+            connectionState: ConnectionState.waiting
+        ))
+        XCTAssertFalse(MeetingEntryOverlayPolicy.shouldShow(
+            isEnteringMeeting: true,
+            startedAt: startedAt,
+            now: startedAt,
+            connectionState: ConnectionState.error
+        ))
+        XCTAssertTrue(MeetingEntryOverlayPolicy.shouldClearMeetingEntry(on: ConnectionState.waiting))
+        XCTAssertTrue(MeetingEntryOverlayPolicy.shouldClearMeetingEntry(on: ConnectionState.error))
+        XCTAssertTrue(MeetingEntryOverlayPolicy.shouldClearMeetingEntry(on: ConnectionState.disconnected))
+    }
+
+    @MainActor
+    func testWaitingRoomApprovalRestartsMeetingEntryOverlay() async throws {
+        let viewModel = MeetingViewModel()
+        viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
+        viewModel.state.roomId = "room-a"
+        viewModel.state.connectionState = ConnectionState.waiting
+        viewModel.state.waitingMessage = "Waiting for host"
+        viewModel.lastJoinContext = MeetingViewModel.JoinContext(
+            roomId: "room-a",
+            displayName: "Local User",
+            socketDisplayName: nil,
+            isGhost: false,
+            isHost: false,
+            joinMode: JoinMode.meeting,
+            meetingInviteCode: nil,
+            webinarInviteCode: nil,
+            clientId: nil,
+            allowRoomCreation: false,
+            user: nil
+        )
+
+        viewModel.socketManager.onJoinApproved?(JoinDecisionNotification(roomId: "room-a"))
+        await Task.yield()
+
+        XCTAssertEqual(viewModel.state.connectionState, ConnectionState.joining)
+        XCTAssertNil(viewModel.state.waitingMessage)
+        XCTAssertTrue(viewModel.state.isEnteringMeeting)
+        XCTAssertEqual(viewModel.state.meetingEntryAction, MeetingEntryAction.join)
+        XCTAssertNotNil(viewModel.state.meetingEntryStartedAt)
+    }
+
     @MainActor
     func testNativeGamePlayerIdentityAcceptsSfuAndSessionAliases() throws {
         let state = MeetingState(
@@ -5373,11 +5453,14 @@ final class ConclaveTests: XCTestCase {
         )
 
         XCTAssertEqual(focusedBottomPadding, 12)
-        XCTAssertLessThanOrEqual(focusedHeight, 320)
-        XCTAssertGreaterThanOrEqual(focusedHeight, 220)
+        // Full-height docked panel fills the available height.
+        XCTAssertEqual(focusedHeight, 680)
     }
 
-    func testAndroidUnfocusedChatOverlayStillClearsControls() throws {
+    func testAndroidUnfocusedChatDockedPanelUsesSmallBottomInset() throws {
+        // The chat is a full-height docked panel that covers the controls, so the
+        // composer only needs a small bottom inset (home indicator), not 84pt of
+        // clearance for the controls bar.
         XCTAssertEqual(
             MeetingChatOverlayLayout.bottomPadding(
                 inputFocused: false,
@@ -5385,7 +5468,7 @@ final class ConclaveTests: XCTestCase {
                 keyboardInset: 0,
                 isAndroid: true
             ),
-            84
+            12
         )
     }
 
@@ -5527,7 +5610,8 @@ final class ConclaveTests: XCTestCase {
         )
     }
 
-    func testChatOverlayLayoutClampsToAvailableHeight() throws {
+    func testChatOverlayLayoutFillsAvailableHeight() throws {
+        // Docked panel fills the full available height on every platform/state.
         XCTAssertEqual(
             MeetingChatOverlayLayout.maxHeight(for: 180, inputFocused: true, isAndroid: true),
             180
@@ -5538,18 +5622,20 @@ final class ConclaveTests: XCTestCase {
         )
         XCTAssertEqual(
             MeetingChatOverlayLayout.maxHeight(for: 720, inputFocused: false, isAndroid: false),
-            560
+            720
         )
     }
 
-    func testAndroidFocusedChatOverlayUsesShorterKeyboardHeight() throws {
+    func testChatDockedPanelHeightIsIndependentOfFocus() throws {
+        // Height no longer shrinks when the composer is focused — the panel is
+        // full-height and the keyboard is handled via imePadding / keyboardInset.
         XCTAssertEqual(
             MeetingChatOverlayLayout.maxHeight(for: 680, inputFocused: true, isAndroid: true),
-            320
+            680
         )
         XCTAssertEqual(
             MeetingChatOverlayLayout.maxHeight(for: 680, inputFocused: false, isAndroid: true),
-            400
+            680
         )
     }
 
@@ -6916,8 +7002,15 @@ final class ConclaveTests: XCTestCase {
         XCTAssertTrue(viewModelSource.contains("private var screenSharePublishConnectionQuality: ConnectionQuality = .unknown"))
         XCTAssertTrue(viewModelSource.contains("ScreenSharePublishProfilePolicy.mostConstrained("))
         XCTAssertTrue(viewModelSource.contains("self.screenSharePublishConnectionQuality == quality"))
+        XCTAssertTrue(viewModelSource.contains("initialReceiveConnectionQuality: receiveConnectionQuality"))
         XCTAssertTrue(iosWebRTCSource.contains("ScreenCaptureManager.shared.updateMaxFrameRate(\n                screenShareEncodingCap(connectionQuality: connectionQuality).maxFramerate"))
+        XCTAssertTrue(iosWebRTCSource.contains("private func initialScreenConsumerPreference(\n        connectionQuality: ConnectionQuality"))
+        XCTAssertTrue(iosWebRTCSource.contains("initialReceiveConnectionQuality: ConnectionQuality = .unknown"))
+        XCTAssertTrue(iosWebRTCSource.contains("initialScreenConsumerPreference(\n                connectionQuality: initialReceiveConnectionQuality"))
         XCTAssertTrue(androidWebRTCSource.contains("screenShareCaptureProfile(\n                metrics.widthPixels,\n                metrics.heightPixels,\n                connectionQuality,"))
+        XCTAssertTrue(androidWebRTCSource.contains("private fun initialScreenConsumerPreference(\n        connectionQuality: ConnectionQuality,"))
+        XCTAssertTrue(androidWebRTCSource.contains("initialReceiveConnectionQuality: ConnectionQuality = ConnectionQuality.unknown"))
+        XCTAssertTrue(androidWebRTCSource.contains("initialScreenConsumerPreference(\n                connectionQuality = initialReceiveConnectionQuality,"))
     }
 
     func testBrowserStateClearTearsDownSystemMediaConsumers() throws {

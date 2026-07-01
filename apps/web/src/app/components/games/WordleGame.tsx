@@ -9,6 +9,7 @@ import {
   useRemaining,
   type GameViewProps,
 } from "./gameUi";
+import type { WordleMove } from "./moves";
 
 type TileState = "green" | "yellow" | "gray";
 type PlayerOutcome = "win" | "lose" | "timeout";
@@ -227,13 +228,19 @@ export default function WordleGame({
   const remainingMs = useRemaining(pub.deadline, pub.serverNow);
   const wordLengthLabel = `${pub.wordLength}-letter`;
 
-  const runMove = async (type: string, payload?: unknown) => {
+  // Typed dispatch: renderers can only send a valid WordleMove. The discriminant
+  // is split off so the wire payload stays exactly { word } / undefined as before.
+  const runMove = async (typedMove: WordleMove) => {
     if (busyRef.current) return false;
     busyRef.current = true;
     setBusy(true);
     setError(null);
     try {
-      const result = await move(type, payload);
+      const { type, ...payload } = typedMove;
+      const result = await move(
+        type,
+        Object.keys(payload).length > 0 ? payload : undefined,
+      );
       if (!result.success) {
         setError(result.error ?? "Something went wrong");
         return false;
@@ -256,7 +263,7 @@ export default function WordleGame({
       return;
     }
 
-    const ok = await runMove("setWord", { word: normalized.word });
+    const ok = await runMove({ type: "setWord", word: normalized.word });
     if (ok) setSecretDraft("");
   };
 
@@ -268,7 +275,7 @@ export default function WordleGame({
       return;
     }
 
-    const ok = await runMove("guess", { word: normalized.word });
+    const ok = await runMove({ type: "guess", word: normalized.word });
     if (ok) setGuessDraft("");
   };
 
@@ -344,7 +351,7 @@ export default function WordleGame({
         disabledLabel={`Need at least ${minPlayers} player${minPlayers > 1 ? "s" : ""}`}
         startLabel="Start Wordle"
         onStart={() => {
-          void runMove("start");
+          void runMove({ type: "start" });
         }}
       />
     );
@@ -370,7 +377,7 @@ export default function WordleGame({
         <p style={{ fontSize: 13, color: color.textMuted, textAlign: "center", margin: "0 0 16px" }}>
           The word was{" "}
           <span style={{ color: color.text, fontFamily: HEAD_FONT, fontWeight: 600, letterSpacing: "0.12em" }}>
-            {pub.result.targetWord ?? "—"}
+            {pub.result.targetWord ?? "?"}
           </span>
         </p>
 
@@ -436,7 +443,7 @@ export default function WordleGame({
         {!pub.isFinalRound && isAdmin && !readOnly ? (
           <button
             disabled={busy}
-            onClick={() => void runMove("nextRound")}
+            onClick={() => void runMove({ type: "nextRound" })}
             style={{
               width: "100%",
               padding: "10px 0",

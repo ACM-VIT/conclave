@@ -7,6 +7,8 @@ import type {
   ProduceData,
   ProduceResponse,
   ProducerInfo,
+  SetConsumerPreferencesBatchData,
+  SetConsumerPreferencesBatchResponse,
   SetConsumerPreferencesData,
   SetConsumerPreferencesResponse,
   ToggleMediaData,
@@ -25,6 +27,7 @@ const MAX_CONSUMER_LAYER = 10;
 const MIN_CONSUMER_PRIORITY = 0;
 const MAX_CONSUMER_PRIORITY = 255;
 const MAX_MEDIA_ID_LENGTH = 256;
+const MAX_CONSUMER_PREFERENCE_BATCH_SIZE = 24;
 const DISPLACED_CONSUMER_CLOSE_DELAY_MS = 3000;
 const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/;
 
@@ -246,6 +249,58 @@ const applyConsumerPreferences = async (
   }
 
   emitConsumerTelemetry(target, "preferences");
+};
+
+const buildSetConsumerPreferencesResponse = (
+  consumer: Consumer,
+): SetConsumerPreferencesResponse => ({
+  success: true,
+  consumerId: consumer.id,
+  producerId: consumer.producerId,
+  paused: consumer.paused,
+  producerPaused: consumer.producerPaused,
+  priority: consumer.priority,
+  preferredLayers: consumer.preferredLayers,
+  currentLayers: consumer.currentLayers,
+});
+
+const applyConsumerPreferencesData = async (
+  room: Room,
+  currentClient: Client,
+  data: SetConsumerPreferencesData,
+): Promise<SetConsumerPreferencesResponse | { error: string; consumerId?: string }> => {
+  const consumerId = normalizeMediaId(data?.consumerId);
+  if (!consumerId) {
+    return { error: "Consumer ID is required" };
+  }
+
+  const consumer = currentClient.getConsumerById(consumerId);
+  if (!consumer) {
+    return { error: "Consumer not found", consumerId };
+  }
+
+  const requestedLayers = parseConsumerLayers(data.preferredLayers);
+  if (!requestedLayers.ok) {
+    return { error: requestedLayers.error, consumerId };
+  }
+
+  const requestedPriority = parseConsumerPriority(data.priority, {
+    allowNull: true,
+  });
+  if (!requestedPriority.ok) {
+    return { error: requestedPriority.error, consumerId };
+  }
+
+  await applyConsumerPreferences({ room, client: currentClient, consumer }, {
+    preferredLayers: requestedLayers.value,
+    priority: requestedPriority.value,
+    paused:
+      typeof data?.paused === "boolean" ? data.paused : undefined,
+    requestKeyFrame: data?.requestKeyFrame === true,
+    explicitLayers: requestedLayers.value !== undefined,
+  });
+
+  return buildSetConsumerPreferencesResponse(consumer);
 };
 
 export const registerMediaHandlers = (context: ConnectionContext): void => {
@@ -825,50 +880,76 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
           return;
         }
 
-        const consumerId = normalizeMediaId(data?.consumerId);
-        if (!consumerId) {
-          respond(callback, { error: "Consumer ID is required" });
+        respond(
+          callback,
+          await applyConsumerPreferencesData(room, currentClient, data),
+        );
+      } catch (error) {
+        respond(callback, { error: (error as Error).message });
+      }
+    },
+  );
+
+  socket.on(
+    "setConsumerPreferencesBatch",
+    async (
+      data: SetConsumerPreferencesBatchData,
+      callback: (
+        response: SetConsumerPreferencesBatchResponse | { error: string },
+      ) => void,
+    ) => {
+      try {
+        const room = context.currentRoom;
+        const currentClient = context.currentClient;
+        if (!room || !currentClient) {
+          respond(callback, { error: "Not in a room" });
           return;
         }
 
-        const consumer = currentClient.getConsumerById(consumerId);
-        if (!consumer) {
-          respond(callback, { error: "Consumer not found" });
+        if (
+          !takeToken(
+            socket,
+            "setConsumerPreferencesBatch",
+            RATE_LIMITS.consumerControlBatch,
+          )
+        ) {
+          respond(callback, {
+            error: "Too many consumer control requests; please retry shortly",
+          });
           return;
         }
 
-        const requestedLayers = parseConsumerLayers(data.preferredLayers);
-        if (!requestedLayers.ok) {
-          respond(callback, { error: requestedLayers.error });
+        const updates = Array.isArray(data?.updates) ? data.updates : [];
+        if (
+          updates.length === 0 ||
+          updates.length > MAX_CONSUMER_PREFERENCE_BATCH_SIZE
+        ) {
+          respond(callback, {
+            error: `Consumer preference batches must include 1-${MAX_CONSUMER_PREFERENCE_BATCH_SIZE} updates`,
+          });
           return;
         }
 
-        const requestedPriority = parseConsumerPriority(data.priority, {
-          allowNull: true,
-        });
-        if (!requestedPriority.ok) {
-          respond(callback, { error: requestedPriority.error });
-          return;
+        const results: SetConsumerPreferencesBatchResponse["results"] = [];
+        for (const update of updates) {
+          try {
+            results.push(
+              await applyConsumerPreferencesData(room, currentClient, update),
+            );
+          } catch (error) {
+            results.push({
+              error: (error as Error).message,
+              consumerId:
+                typeof update?.consumerId === "string"
+                  ? update.consumerId
+                  : undefined,
+            });
+          }
         }
-
-        await applyConsumerPreferences({ room, client: currentClient, consumer }, {
-          preferredLayers: requestedLayers.value,
-          priority: requestedPriority.value,
-          paused:
-            typeof data?.paused === "boolean" ? data.paused : undefined,
-          requestKeyFrame: data?.requestKeyFrame === true,
-          explicitLayers: requestedLayers.value !== undefined,
-        });
 
         respond(callback, {
           success: true,
-          consumerId: consumer.id,
-          producerId: consumer.producerId,
-          paused: consumer.paused,
-          producerPaused: consumer.producerPaused,
-          priority: consumer.priority,
-          preferredLayers: consumer.preferredLayers,
-          currentLayers: consumer.currentLayers,
+          results,
         });
       } catch (error) {
         respond(callback, { error: (error as Error).message });

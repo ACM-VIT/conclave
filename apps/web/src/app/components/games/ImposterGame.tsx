@@ -2,6 +2,7 @@
 
 import React from "react";
 import { color, radius } from "@conclave/ui-tokens";
+import { createTypedMove } from "@conclave/apps-sdk";
 import {
   Avatar,
   CountdownRing,
@@ -12,6 +13,7 @@ import {
   useRemaining,
   type GameViewProps,
 } from "./gameUi";
+import type { ImposterMove } from "./moves";
 
 type ImposterPlayer = { id: string; name: string };
 
@@ -88,6 +90,7 @@ export default function ImposterGame({
   readOnly = false,
   move,
 }: GameViewProps<ImposterPublic, ImposterMe>) {
+  const send = createTypedMove<ImposterMove>(move);
   const remaining = useRemaining(pub.deadline, pub.serverNow);
 
   if (pub.phase === "lobby") {
@@ -103,7 +106,7 @@ export default function ImposterGame({
         canStart={pub.totalPlayers >= 3}
         startLabel="Deal secret words"
         disabledLabel="Need at least 3 players"
-        onStart={() => move("start")}
+        onStart={() => send({ type: "start" })}
       />
     );
   }
@@ -182,7 +185,7 @@ export default function ImposterGame({
               key={player.id}
               type="button"
               disabled={readOnly || !voting || isMe}
-              onClick={() => move("vote", { target: player.id })}
+              onClick={() => send({ type: "vote", target: player.id })}
               style={{
                 display: "flex",
                 alignItems: "center",
@@ -214,9 +217,9 @@ export default function ImposterGame({
       {isAdmin && !readOnly ? (
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
           {pub.phase === "discuss" ? (
-            <PrimaryButton onClick={() => move("callVote")}>Call vote</PrimaryButton>
+            <PrimaryButton onClick={() => send({ type: "callVote" })}>Call vote</PrimaryButton>
           ) : (
-            <GhostButton onClick={() => move("tally")}>End vote</GhostButton>
+            <GhostButton onClick={() => send({ type: "tally" })}>End vote</GhostButton>
           )}
         </div>
       ) : null}

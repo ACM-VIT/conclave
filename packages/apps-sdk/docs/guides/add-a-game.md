@@ -167,29 +167,57 @@ Do not put secrets in `publicView`. Hidden-role games should put the secret role
 
 ## Moves
 
-The web renderer calls:
+Every game defines a typed move contract: a discriminated union of its legal moves, decoded from the untrusted wire payload at the top of `onMove`. This replaces ad hoc `payload as` casts and centralizes validation.
+
+On the server, export the union and a decoder:
 
 ```ts
-move("answer", { choice: 2 });
+export type MyGameMove =
+  | { type: "start" }
+  | { type: "answer"; choice: number };
+
+const decodeMyGameMove = (move: GameMove): MyGameMove => {
+  switch (move.type) {
+    case "start":
+      return { type: "start" };
+    case "answer":
+      return {
+        type: "answer",
+        choice: requireInt(payloadField(move.payload, "choice"), "Invalid answer"),
+      };
+    default:
+      throw new GameMoveError(`Unknown move: ${move.type}`);
+  }
+};
 ```
 
-The server receives:
+Then `onMove` decodes first and switches on typed fields:
 
 ```ts
-{
-  playerId: "user@example.com#session",
-  type: "answer",
-  payload: { choice: 2 }
+onMove(state, move, ctx) {
+  const m = decodeMyGameMove(move);
+  switch (m.type) {
+    // ...
+  }
 }
 ```
 
-Validate every payload. Do not trust the client to send a valid player id, choice, score, or phase.
-
-For common player-target validation, use helpers from:
+Decoder helpers (`payloadField`, `requireString`, `requireInt`, `requireOneOf`, `requirePlayerTarget`) live in:
 
 ```text
 packages/sfu/server/games/validation.ts
 ```
+
+Validate every payload. Do not trust the client to send a valid player id, choice, score, or phase. Keep `onMove`'s signature on the raw `GameMove` so the engine and tests stay unchanged; the typing is internal.
+
+On the client, mirror the union in `apps/web/src/app/components/games/moves.ts` and dispatch through `createTypedMove`, so a renderer cannot send a misnamed move or a malformed payload without a compile error:
+
+```ts
+const send = createTypedMove<MyGameMove>(move);
+await send({ type: "answer", choice: 2 });
+```
+
+The wire payload is unchanged: the discriminant becomes the move type and the remaining fields become the payload.
 
 ## Host Options
 
@@ -358,7 +386,13 @@ scoreboard: ctx.players
   .sort((a, b) => b.score - a.score),
 ```
 
-The dock can render a compact leaderboard automatically during active phases.
+The dock can render a compact leaderboard automatically during active phases. Any game with a `scoreboard` also gets live rank chips on the video tiles for free.
+
+## Video Tiles
+
+Games can light up the participant video tiles and even make them tappable, so the grid itself becomes part of the game. A tile can show that a player locked in an answer, wash green when they were right, crown a winner, dim an eliminated player, or act as a ballot during a vote.
+
+You plug in with two small resolvers on the web side and, when a fact is server-only, one additive map in `publicView`. The full contract, the semantic state table, and a checklist live in [Tile Adornments](../reference/tile-adornments.md).
 
 ## Web Renderer
 
@@ -432,6 +466,7 @@ Before opening a PR, check:
 ## Related Docs
 
 - [Apps SDK Docs Home](../README.md)
+- [Tile Adornments](../reference/tile-adornments.md)
 - [Runtime APIs and Hooks](../reference/runtime-apis.md)
 - [Core Concepts](../reference/core-concepts.md)
 - [Add a New App Integration](./add-a-new-app-integration.md)
