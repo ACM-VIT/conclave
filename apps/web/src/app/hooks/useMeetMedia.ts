@@ -105,6 +105,13 @@ interface UseMeetMediaOptions {
   mediaRecoveryBlockedRef?: React.MutableRefObject<boolean>;
 }
 
+export type RequestMediaPermissionsOptions = {
+  audio?: boolean;
+  video?: boolean;
+  audioRequired?: boolean;
+  videoRequired?: boolean;
+};
+
 type ScreenAudioProducerAppData = {
   type: ProducerType;
   networkProfile?: WebcamProducerNetworkProfile;
@@ -1098,9 +1105,9 @@ export function useMeetMedia({
     ]
   );
 
-  const requestMediaPermissions = useCallback(async (): Promise<
-    MediaStream | null
-  > => {
+  const requestMediaPermissions = useCallback(async (
+    options: RequestMediaPermissionsOptions = {},
+  ): Promise<MediaStream | null> => {
     if (permissionHintTimeoutRef.current) {
       window.clearTimeout(permissionHintTimeoutRef.current);
     }
@@ -1110,14 +1117,21 @@ export function useMeetMedia({
     }, 450);
 
     try {
-      const audioConstraints = isMuted
-        ? false
-        : buildAudioConstraints(selectedAudioInputDeviceId);
-      const videoConstraintsForRequest = isCameraOff
-        ? false
-        : buildVideoConstraints();
+      const wantsAudio = options.audio ?? true;
+      const wantsVideo = options.video ?? !isCameraOff;
+      const audioRequired = options.audioRequired ?? !isMuted;
+      const videoRequired = options.videoRequired ?? wantsVideo;
+      const currentStream = localStreamRef.current;
+      const reusableAudioTrack = wantsAudio
+        ? getFirstLiveTrack(currentStream?.getAudioTracks() ?? [])
+        : null;
+      const reusableVideoTrack = wantsVideo
+        ? getFirstLiveTrack(currentStream?.getVideoTracks() ?? [])
+        : null;
+      const shouldRequestAudio = wantsAudio && !reusableAudioTrack;
+      const shouldRequestVideo = wantsVideo && !reusableVideoTrack;
 
-      if (!audioConstraints && !videoConstraintsForRequest) {
+      if (!wantsAudio && !wantsVideo) {
         setMediaState({
           hasAudioPermission: false,
           hasVideoPermission: false,
@@ -1125,18 +1139,120 @@ export function useMeetMedia({
         return new MediaStream();
       }
 
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: audioConstraints,
-        video: videoConstraintsForRequest,
-      });
+      const acquiredTracks: MediaStreamTrack[] = [];
+      let firstRequiredError: unknown = null;
+      const rememberRequiredError = (
+        error: unknown,
+        required: boolean,
+      ) => {
+        if (required && !firstRequiredError) {
+          firstRequiredError = error;
+        }
+      };
+      const requestTracks = async (
+        requestAudio: boolean,
+        requestVideo: boolean,
+      ): Promise<MediaStream> => {
+        const audioConstraints = requestAudio
+          ? buildAudioConstraints(selectedAudioInputDeviceId)
+          : false;
+        const videoConstraintsForRequest = requestVideo
+          ? buildVideoConstraints()
+          : false;
+
+        console.debug("[Meets] Requesting local media:", {
+          audio: audioConstraints,
+          video: videoConstraintsForRequest,
+        });
+
+        return navigator.mediaDevices.getUserMedia({
+          audio: audioConstraints,
+          video: videoConstraintsForRequest,
+        });
+      };
+      const appendLiveTracks = (stream: MediaStream) => {
+        acquiredTracks.push(
+          ...stream
+            .getTracks()
+            .filter((track) => track.readyState === "live"),
+        );
+      };
+
+      if (shouldRequestAudio || shouldRequestVideo) {
+        try {
+          appendLiveTracks(
+            await requestTracks(shouldRequestAudio, shouldRequestVideo),
+          );
+        } catch (combinedErr) {
+          if (shouldRequestAudio && shouldRequestVideo) {
+            try {
+              appendLiveTracks(await requestTracks(true, false));
+            } catch (audioErr) {
+              rememberRequiredError(audioErr, audioRequired);
+              if (!audioRequired) {
+                console.info(
+                  "[Meets] Muted microphone warmup skipped:",
+                  audioErr,
+                );
+              }
+            }
+            try {
+              appendLiveTracks(await requestTracks(false, true));
+            } catch (videoErr) {
+              rememberRequiredError(videoErr, videoRequired);
+            }
+          } else {
+            rememberRequiredError(
+              combinedErr,
+              shouldRequestAudio ? audioRequired : videoRequired,
+            );
+            if (shouldRequestAudio && !audioRequired) {
+              console.info(
+                "[Meets] Muted microphone warmup skipped:",
+                combinedErr,
+              );
+            }
+          }
+        }
+      }
+
+      const nextAudioTrack =
+        getFirstLiveTrack(
+          acquiredTracks.filter((track) => track.kind === "audio"),
+        ) ?? reusableAudioTrack;
+      const nextVideoTrack =
+        getFirstLiveTrack(
+          acquiredTracks.filter((track) => track.kind === "video"),
+        ) ?? reusableVideoTrack;
+      const liveTracks = [nextAudioTrack, nextVideoTrack].filter(
+        (track): track is MediaStreamTrack =>
+          Boolean(track && track.readyState === "live"),
+      );
+      const hasAudio = Boolean(nextAudioTrack);
+      const hasVideo = Boolean(nextVideoTrack);
 
       setMediaState({
-        hasAudioPermission: stream.getAudioTracks().length > 0,
-        hasVideoPermission: stream.getVideoTracks().length > 0,
+        hasAudioPermission: hasAudio,
+        hasVideoPermission: hasVideo,
       });
 
-      stream.getAudioTracks().forEach(markAudioTrackForSpeech);
-      stream.getTracks().forEach((track) => {
+      if (audioRequired && !hasAudio) {
+        firstRequiredError ??= new Error("Microphone access was unavailable");
+        setIsMuted(true);
+      }
+      if (videoRequired && !hasVideo) {
+        firstRequiredError ??= new Error("Camera access was unavailable");
+        setIsCameraOff(true);
+      }
+      if (firstRequiredError) {
+        setMeetError(createMeetError(firstRequiredError, "PERMISSION_DENIED"));
+      }
+
+      if (nextAudioTrack) {
+        markAudioTrackForSpeech(nextAudioTrack);
+        nextAudioTrack.enabled = !isMuted;
+      }
+      liveTracks.forEach((track) => {
         track.onended = () => {
           console.log(`[Meets] Track ended: ${track.kind}`);
           if (track.kind === "audio" || track.kind === "video") {
@@ -1144,13 +1260,11 @@ export function useMeetMedia({
           }
         };
       });
-      stream.getVideoTracks().forEach((track) => {
-        if ("contentHint" in track) {
-          track.contentHint = "motion";
-        }
-      });
+      if (nextVideoTrack && "contentHint" in nextVideoTrack) {
+        nextVideoTrack.contentHint = "motion";
+      }
 
-      return stream;
+      return liveTracks.length > 0 ? new MediaStream(liveTracks) : null;
     } catch (err) {
       const meetErr = createMeetError(err, "PERMISSION_DENIED");
       setMeetError(meetErr);
@@ -1208,6 +1322,7 @@ export function useMeetMedia({
     buildAudioConstraints,
     buildVideoConstraints,
     markAudioTrackForSpeech,
+    localStreamRef,
     permissionHintTimeoutRef,
     setMeetError,
     setIsCameraOff,
@@ -1974,12 +2089,6 @@ export function useMeetMedia({
         );
 
         if (!audioTrack || audioTrack.readyState !== "live") {
-          if (shouldStartPaused) {
-            console.info(
-              "[Meets] Skipping muted microphone producer warmup without a reusable audio track.",
-            );
-            return;
-          }
           const stream = await navigator.mediaDevices.getUserMedia({
             audio: buildAudioConstraints(selectedAudioInputDeviceId),
           });
@@ -2057,7 +2166,6 @@ export function useMeetMedia({
           const meetErr = createMeetError(err, "MEDIA_ERROR");
           const failedMutedWarmup =
             isMutedRef.current &&
-            hadLiveAudioTrackBeforeRecovery &&
             !shouldDisableMediaIntentAfterRecoveryFailure(err, meetErr);
           if (
             !hadLiveAudioTrackBeforeRecovery &&

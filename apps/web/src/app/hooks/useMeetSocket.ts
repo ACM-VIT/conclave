@@ -89,6 +89,7 @@ import type {
   ConnectionQuality,
   ConnectionQualityStats,
 } from "./useConnectionQuality";
+import type { RequestMediaPermissionsOptions } from "./useMeetMedia";
 
 type ConsumerTelemetryPayload = Omit<
   ConsumerTelemetrySnapshot,
@@ -601,13 +602,32 @@ const hasLiveTrackOfKind = (
 
 const streamNeedsMediaRefresh = (
   stream: MediaStream | null | undefined,
-  options: { needsAudio: boolean; needsVideo: boolean },
+  options: JoinMediaNeeds,
 ) => {
   if (!stream) return options.needsAudio || options.needsVideo;
   if (options.needsAudio && !hasLiveTrackOfKind(stream, "audio")) return true;
   if (options.needsVideo && !hasLiveTrackOfKind(stream, "video")) return true;
   return false;
 };
+
+type JoinMediaNeeds = {
+  needsAudio: boolean;
+  needsVideo: boolean;
+  requiredAudio: boolean;
+  requiredVideo: boolean;
+};
+
+const hasRequiredJoinMediaNeed = (mediaNeeds: JoinMediaNeeds): boolean =>
+  mediaNeeds.requiredAudio || mediaNeeds.requiredVideo;
+
+const buildRequestMediaPermissionsOptions = (
+  mediaNeeds: JoinMediaNeeds,
+): RequestMediaPermissionsOptions => ({
+  audio: mediaNeeds.needsAudio,
+  video: mediaNeeds.needsVideo,
+  audioRequired: mediaNeeds.requiredAudio,
+  videoRequired: mediaNeeds.requiredVideo,
+});
 
 const isRoomEndedByLocalUser = (
   endedBy: string | null | undefined,
@@ -702,7 +722,9 @@ interface UseMeetSocketOptions {
       networkProfileOverride?: WebcamProducerNetworkProfile,
     ) => Promise<void>
   >;
-  requestMediaPermissions: () => Promise<MediaStream | null>;
+  requestMediaPermissions: (
+    options?: RequestMediaPermissionsOptions,
+  ) => Promise<MediaStream | null>;
   requestAudioProducerRecovery: () => void;
   requestCameraProducerRecovery: () => void;
   stopLocalTrack: (track?: MediaStreamTrack | null) => void;
@@ -1617,8 +1639,12 @@ export function useMeetSocket({
     (stream: MediaStream | null | undefined) => {
       const mediaIntent = resolveMediaPublishIntent(stream);
       return {
-        needsAudio: mediaIntent.isMicOn,
+        // Keep a muted microphone track warm like production meeting clients do:
+        // the producer starts paused, but unmute does not need a fresh gUM call.
+        needsAudio: true,
         needsVideo: mediaIntent.isCameraOn,
+        requiredAudio: mediaIntent.isMicOn,
+        requiredVideo: mediaIntent.isCameraOn,
       };
     },
     [resolveMediaPublishIntent],
@@ -1685,11 +1711,14 @@ export function useMeetSocket({
         stream: summarizeStreamForLog(candidateStream),
       });
 
-      const refreshedStream = await requestMediaPermissions();
+      const refreshedStream = await requestMediaPermissions(
+        buildRequestMediaPermissionsOptions(mediaNeeds),
+      );
       if (!refreshedStream) {
         console.warn("[Meets] Local media refresh failed before join:", {
           reason,
           previousStream: summarizeStreamForLog(candidateStream),
+          mediaNeeds,
         });
         return candidateStream?.getTracks().some(
           (track) => track.readyState === "live",
@@ -2775,6 +2804,7 @@ export function useMeetSocket({
           if ("contentHint" in audioTrack) {
             audioTrack.contentHint = "speech";
           }
+          audioTrack.enabled = !shouldPauseAudio;
           const audioProducer = await transport.produce({
             track: audioTrack,
             codecOptions: buildMicrophoneOpusCodecOptions(
@@ -5472,6 +5502,7 @@ export function useMeetSocket({
               if (
                 currentRoomIdRef.current &&
                 (stream ||
+                  !hasRequiredJoinMediaNeed(mediaNeeds) ||
                   !shouldRequestMedia ||
                   joinOptions.isGhost ||
                   joinOptions.isRecorder ||
@@ -6316,7 +6347,11 @@ export function useMeetSocket({
             : Promise.resolve(candidateStream),
         ]);
 
-        if (shouldRequestMedia && !stream) {
+        if (
+          shouldRequestMedia &&
+          !stream &&
+          hasRequiredJoinMediaNeed(mediaNeeds)
+        ) {
           setConnectionState("error");
           return;
         }

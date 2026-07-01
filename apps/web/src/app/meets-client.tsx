@@ -1241,7 +1241,14 @@ export default function MeetsClient({
   const handleRetryMedia = useCallback(async () => {
     const stream = await requestMediaPermissions();
     if (!stream) return;
-    localStream?.getTracks().forEach((track) => stopLocalTrack(track));
+    const refreshedTrackIds = new Set(
+      stream.getTracks().map((track) => track.id),
+    );
+    localStream?.getTracks().forEach((track) => {
+      if (!refreshedTrackIds.has(track.id)) {
+        stopLocalTrack(track);
+      }
+    });
     setLocalStream(stream);
     setMeetError(null);
   }, [

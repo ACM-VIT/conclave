@@ -183,6 +183,21 @@ assertRegex(
   /track: audioTrack,[\s\S]*buildMicrophoneOpusCodecOptions\([\s\S]*stopTracks: false,[\s\S]*type: "webcam" as ProducerType/,
   "web initial microphone producer must preserve capture tracks during producer cleanup",
 );
+assertRegex(
+  "webMeetSocket",
+  /needsAudio: true,[\s\S]*requiredAudio: mediaIntent\.isMicOn,[\s\S]*requestMediaPermissions\(\s*buildRequestMediaPermissionsOptions\(mediaNeeds\),\s*\)[\s\S]*!stream &&[\s\S]*hasRequiredJoinMediaNeed\(mediaNeeds\)/,
+  "web muted joins warm the microphone without making warmup a blocking media requirement",
+);
+assertRegex(
+  "webMeetSocket",
+  /audioTrack\.enabled = !shouldPauseAudio;[\s\S]*appData: \{[\s\S]*type: "webcam" as ProducerType,[\s\S]*paused: shouldPauseAudio,[\s\S]*if \(shouldPauseAudio\) \{[\s\S]*audioProducer\.pause\(\);/,
+  "web muted microphone warmup is disabled before producer creation and published paused",
+);
+assertRegex(
+  "webMeetMedia",
+  /const wantsAudio = options\.audio \?\? true;[\s\S]*const audioRequired = options\.audioRequired \?\? !isMuted;[\s\S]*nextAudioTrack\.enabled = !isMuted;[\s\S]*failedMutedWarmup =[\s\S]*isMutedRef\.current &&[\s\S]*!shouldDisableMediaIntentAfterRecoveryFailure/,
+  "web media recovery warms muted microphone tracks without surfacing optional warmup failures",
+);
 {
   const mediaAudioProduceMatches =
     source.webMeetMedia.match(
