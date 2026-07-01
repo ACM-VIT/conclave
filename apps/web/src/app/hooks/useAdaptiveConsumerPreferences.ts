@@ -653,7 +653,7 @@ const getDesiredPreferences = (
   const isFocus = isActiveSpeaker || isLayoutFocus;
 
   if (options.emergencyMode) {
-    if (isHidden && !isWarm && !isFocus) {
+    if (isHidden && !isWarm && !isFocus && !options.emergencyKeepVideo) {
       return {
         preferredLayers: bounds ? buildLayerPreference(0, 0, bounds) : undefined,
         priority: OFFSCREEN_WEBCAM_PARK_PRIORITY,

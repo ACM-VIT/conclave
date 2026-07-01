@@ -453,8 +453,8 @@ assertNotIncludes(
 );
 assertRegex(
   "webAdaptiveConsumerPreferences",
-  /OFFSCREEN_WEBCAM_PARK_PRIORITY = 5[\s\S]*if \(options\.emergencyMode\) \{[\s\S]*if \(isHidden && !isWarm && !isFocus\) \{[\s\S]*priority: OFFSCREEN_WEBCAM_PARK_PRIORITY,[\s\S]*paused: true,[\s\S]*const shouldParkOffscreenWebcamForScreenShare =[\s\S]*options\.screenShareVideoActive &&[\s\S]*isHidden &&[\s\S]*!isWarm &&[\s\S]*!isFocus &&[\s\S]*screenShareReserveQuality === "poor" \|\| screenShareReceiveEmergency[\s\S]*if \(shouldParkOffscreenWebcamForScreenShare\) \{[\s\S]*priority: OFFSCREEN_WEBCAM_PARK_PRIORITY,[\s\S]*paused: true,/,
-  "web Jitsi-style receiver LastN parks only offscreen webcams during emergency or screen-share pressure",
+  /OFFSCREEN_WEBCAM_PARK_PRIORITY = 5[\s\S]*if \(options\.emergencyMode\) \{[\s\S]*if \(isHidden && !isWarm && !isFocus && !options\.emergencyKeepVideo\) \{[\s\S]*priority: OFFSCREEN_WEBCAM_PARK_PRIORITY,[\s\S]*paused: true,[\s\S]*if \(!options\.emergencyKeepVideo\) \{[\s\S]*const shouldParkOffscreenWebcamForScreenShare =[\s\S]*options\.screenShareVideoActive &&[\s\S]*isHidden &&[\s\S]*!isWarm &&[\s\S]*!isFocus &&[\s\S]*screenShareReserveQuality === "poor" \|\| screenShareReceiveEmergency[\s\S]*if \(shouldParkOffscreenWebcamForScreenShare\) \{[\s\S]*priority: OFFSCREEN_WEBCAM_PARK_PRIORITY,[\s\S]*paused: true,/,
+  "web Jitsi-style receiver LastN parks only offscreen webcams without breaking emergency keep-video",
 );
 assertRegex(
   "webMeetSocket",
