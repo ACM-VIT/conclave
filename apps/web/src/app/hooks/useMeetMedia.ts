@@ -68,9 +68,17 @@ interface UseMeetMediaOptions {
   setLocalStream: React.Dispatch<React.SetStateAction<MediaStream | null>>;
   setMeetError: (error: MeetError | null) => void;
   selectedAudioInputDeviceId?: string;
-  setSelectedAudioInputDeviceId: (value: string) => void;
+  setSelectedAudioInputDeviceId: React.Dispatch<
+    React.SetStateAction<string | undefined>
+  >;
   selectedAudioOutputDeviceId?: string;
-  setSelectedAudioOutputDeviceId: (value: string) => void;
+  setSelectedAudioOutputDeviceId: React.Dispatch<
+    React.SetStateAction<string | undefined>
+  >;
+  selectedVideoInputDeviceId?: string;
+  setSelectedVideoInputDeviceId: React.Dispatch<
+    React.SetStateAction<string | undefined>
+  >;
   meetVolume?: number;
   videoQuality: VideoQuality;
   videoQualityRef: React.MutableRefObject<VideoQuality>;
@@ -138,6 +146,19 @@ const isPublishEmergencyProfile = (
 const getFirstLiveTrack = <T extends MediaStreamTrack>(
   tracks: readonly T[],
 ): T | null => tracks.find((track) => track.readyState === "live") ?? null;
+
+const getInputDevices = (
+  devices: readonly MediaDeviceInfo[],
+  kind: "audioinput" | "videoinput",
+) => devices.filter((device) => device.kind === kind && device.deviceId);
+
+const hasInputDeviceId = (
+  devices: readonly MediaDeviceInfo[],
+  deviceId: string | undefined,
+) => Boolean(deviceId && devices.some((device) => device.deviceId === deviceId));
+
+const getFallbackInputDeviceId = (devices: readonly MediaDeviceInfo[]) =>
+  devices.find((device) => device.label && device.deviceId)?.deviceId;
 
 const TOGGLE_MUTE_STRICT_ACK_TIMEOUT_MS = 5000;
 const TOGGLE_MUTE_FAST_ACK_TIMEOUT_MS = 1500;
@@ -344,6 +365,8 @@ export function useMeetMedia({
   setSelectedAudioInputDeviceId,
   selectedAudioOutputDeviceId,
   setSelectedAudioOutputDeviceId,
+  selectedVideoInputDeviceId,
+  setSelectedVideoInputDeviceId,
   meetVolume = DEFAULT_MEET_VOLUME,
   videoQuality,
   videoQualityRef,
@@ -515,6 +538,7 @@ export function useMeetMedia({
 
   const buildVideoConstraints = useCallback(
     (deviceId?: string): MediaTrackConstraints => {
+      const targetDeviceId = deviceId ?? selectedVideoInputDeviceId;
       const stats = connectionQualityRef?.current;
       const browserNetwork = stats?.browserNetwork ?? getBrowserNetworkSnapshot();
       const publishQuality = getStartupAwarePublishQuality(
@@ -532,10 +556,10 @@ export function useMeetMedia({
       return buildCameraVideoConstraints(
         videoQualityRef.current,
         networkProfile,
-        deviceId,
+        targetDeviceId,
       );
     },
-    [connectionQualityRef, videoQualityRef]
+    [connectionQualityRef, selectedVideoInputDeviceId, videoQualityRef]
   );
 
   const getAudioContext = useCallback(() => {
@@ -1531,6 +1555,142 @@ export function useMeetMedia({
     },
     [setSelectedAudioOutputDeviceId]
   );
+
+  useEffect(() => {
+    if (ghostEnabled || isObserverMode) return;
+    if (connectionState !== "joined") return;
+    const mediaDevices = navigator.mediaDevices;
+    if (!mediaDevices?.enumerateDevices || !mediaDevices.addEventListener) {
+      return;
+    }
+
+    let disposed = false;
+    let timeoutId: number | null = null;
+    let recoveryInFlight = false;
+
+    const requestRecoveryForChangedDevices = async () => {
+      timeoutId = null;
+      if (disposed || recoveryInFlight || isMediaRecoveryBlocked()) return;
+      recoveryInFlight = true;
+
+      try {
+        const devices = await mediaDevices.enumerateDevices();
+        if (disposed || isMediaRecoveryBlocked()) return;
+
+        const audioInputs = getInputDevices(devices, "audioinput");
+        const videoInputs = getInputDevices(devices, "videoinput");
+        const selectedAudioMissing =
+          Boolean(selectedAudioInputDeviceId) &&
+          !hasInputDeviceId(audioInputs, selectedAudioInputDeviceId);
+        const selectedVideoMissing =
+          Boolean(selectedVideoInputDeviceId) &&
+          !hasInputDeviceId(videoInputs, selectedVideoInputDeviceId);
+        const nextAudioDeviceId = selectedAudioMissing
+          ? getFallbackInputDeviceId(audioInputs)
+          : selectedAudioInputDeviceId;
+        const nextVideoDeviceId = selectedVideoMissing
+          ? getFallbackInputDeviceId(videoInputs)
+          : selectedVideoInputDeviceId;
+        const recoveryTasks: Promise<void>[] = [];
+
+        if (selectedAudioMissing) {
+          setSelectedAudioInputDeviceId(nextAudioDeviceId);
+          console.info("[Meets] Selected microphone disappeared:", {
+            previousDeviceId: selectedAudioInputDeviceId,
+            nextDeviceId: nextAudioDeviceId ?? null,
+          });
+          if (nextAudioDeviceId) {
+            recoveryTasks.push(handleAudioInputDeviceChange(nextAudioDeviceId));
+          } else if (!isMutedRef.current || audioProducerRef.current) {
+            requestAudioProducerRecovery();
+          }
+        } else {
+          const audioProducer = audioProducerRef.current;
+          const shouldRecoverAudio =
+            (!isMutedRef.current ||
+              Boolean(
+                getFirstLiveTrack(
+                  localStreamRef.current?.getAudioTracks() ?? [],
+                ),
+              )) &&
+            (!audioProducer ||
+              audioProducer.closed ||
+              audioProducer.track?.readyState !== "live");
+          if (shouldRecoverAudio) {
+            requestAudioProducerRecovery();
+          }
+        }
+
+        if (selectedVideoMissing) {
+          setSelectedVideoInputDeviceId(nextVideoDeviceId);
+          console.info("[Meets] Selected camera disappeared:", {
+            previousDeviceId: selectedVideoInputDeviceId,
+            nextDeviceId: nextVideoDeviceId ?? null,
+          });
+          if (!isCameraOff) {
+            if (nextVideoDeviceId) {
+              recoveryTasks.push(handleVideoInputDeviceChange(nextVideoDeviceId));
+            } else {
+              requestCameraProducerRecovery();
+            }
+          }
+        } else if (!isCameraOff) {
+          const videoProducer = videoProducerRef.current;
+          if (
+            !videoProducer ||
+            videoProducer.closed ||
+            videoProducer.track?.readyState !== "live"
+          ) {
+            requestCameraProducerRecovery();
+          }
+        }
+
+        await Promise.allSettled(recoveryTasks);
+      } catch (err) {
+        console.warn("[Meets] Failed to handle media device change:", err);
+      } finally {
+        recoveryInFlight = false;
+      }
+    };
+
+    const scheduleDeviceChangeRecovery = () => {
+      if (timeoutId !== null) {
+        window.clearTimeout(timeoutId);
+      }
+      timeoutId = window.setTimeout(() => {
+        void requestRecoveryForChangedDevices();
+      }, 350);
+    };
+
+    mediaDevices.addEventListener("devicechange", scheduleDeviceChangeRecovery);
+    return () => {
+      disposed = true;
+      if (timeoutId !== null) {
+        window.clearTimeout(timeoutId);
+      }
+      mediaDevices.removeEventListener(
+        "devicechange",
+        scheduleDeviceChangeRecovery,
+      );
+    };
+  }, [
+    ghostEnabled,
+    isObserverMode,
+    connectionState,
+    isCameraOff,
+    isMediaRecoveryBlocked,
+    selectedAudioInputDeviceId,
+    selectedVideoInputDeviceId,
+    setSelectedAudioInputDeviceId,
+    setSelectedVideoInputDeviceId,
+    handleAudioInputDeviceChange,
+    handleVideoInputDeviceChange,
+    audioProducerRef,
+    videoProducerRef,
+    localStreamRef,
+    requestAudioProducerRecovery,
+    requestCameraProducerRecovery,
+  ]);
 
   const updateVideoQuality = useCallback(
     async (

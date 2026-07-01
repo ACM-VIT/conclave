@@ -1155,6 +1155,8 @@ export default function MeetsClient({
     setSelectedAudioInputDeviceId,
     selectedAudioOutputDeviceId,
     setSelectedAudioOutputDeviceId,
+    selectedVideoInputDeviceId,
+    setSelectedVideoInputDeviceId,
     meetVolume,
     videoQuality,
     videoQualityRef: refs.videoQualityRef,

@@ -218,6 +218,21 @@ assertRegex(
   /Mobile browsers can stop the old camera capture[\s\S]*const allowProcessedWarmupWait = !isLikelyMobileOrTabletNavigator\(\);[\s\S]*!shouldUsePreferredVideoPublishTrack \|\| !allowProcessedWarmupWait[\s\S]*return rawTrack;/,
   "web mobile camera replacement publishes raw immediately while effects warm",
 );
+assertRegex(
+  "webMeetClient",
+  /selectedVideoInputDeviceId,[\s\S]*setSelectedVideoInputDeviceId,[\s\S]*useMeetMedia\([\s\S]*selectedVideoInputDeviceId,[\s\S]*setSelectedVideoInputDeviceId,/,
+  "web selected camera id flows into meeting media recovery",
+);
+assertRegex(
+  "webMeetMedia",
+  /selectedVideoInputDeviceId\?: string;[\s\S]*setSelectedVideoInputDeviceId:[\s\S]*const targetDeviceId = deviceId \?\? selectedVideoInputDeviceId;[\s\S]*buildCameraVideoConstraints\([\s\S]*targetDeviceId,/,
+  "web camera recovery honors selected camera device id",
+);
+assertRegex(
+  "webMeetMedia",
+  /enumerateDevices\(\)[\s\S]*getInputDevices\(devices, "audioinput"\)[\s\S]*selectedAudioMissing[\s\S]*setSelectedAudioInputDeviceId\(nextAudioDeviceId\)[\s\S]*Selected microphone disappeared[\s\S]*handleAudioInputDeviceChange\(nextAudioDeviceId\)[\s\S]*selectedVideoMissing[\s\S]*setSelectedVideoInputDeviceId\(nextVideoDeviceId\)[\s\S]*Selected camera disappeared[\s\S]*handleVideoInputDeviceChange\(nextVideoDeviceId\)[\s\S]*addEventListener\("devicechange"/,
+  "web live media device changes clear stale exact input ids before recovery",
+);
 {
   const mediaAudioProduceMatches =
     source.webMeetMedia.match(
