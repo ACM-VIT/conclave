@@ -2268,6 +2268,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             .put("opusStereo", false)
             .put("opusFec", true)
             .put("opusDtx", true)
+            .put("opusNack", true)
             .put("opusMaxAverageBitrate", opusMaxAverageBitrate(currentLocalBandwidthQuality))
             .put("opusPtime", 20)
             .toString()

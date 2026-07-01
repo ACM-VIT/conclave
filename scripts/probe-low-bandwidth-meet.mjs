@@ -1078,6 +1078,13 @@ const numberCodecParameter = (value) => {
 const isTruthyCodecParameter = (value) =>
   value === true || value === 1 || value === "1" || value === "true";
 
+const hasPlainNackFeedback = (codec) =>
+  (codec?.rtcpFeedback ?? []).some(
+    (feedback) =>
+      String(feedback?.type ?? "").toLowerCase() === "nack" &&
+      String(feedback?.parameter ?? "").trim() === "",
+  );
+
 const summarizeProducerOpusCodec = (producer) => {
   const opusCodec = findProducerOpusCodec(producer);
   if (!opusCodec) return null;
@@ -1086,6 +1093,7 @@ const summarizeProducerOpusCodec = (producer) => {
     clockRate: opusCodec.clockRate,
     channels: opusCodec.channels ?? null,
     parameters: opusCodec.parameters ?? {},
+    rtcpFeedback: opusCodec.rtcpFeedback ?? [],
   };
 };
 
@@ -1151,7 +1159,7 @@ const getLatestRemoteAnswerOpusAudioCodecs = (snapshot) => {
   return selected?.codecs ?? [];
 };
 
-const assertNegotiatedOpusMaxAverageBitrate = (
+const assertNegotiatedOpusCodecOptions = (
   snapshot,
   errors,
   context,
@@ -1170,12 +1178,18 @@ const assertNegotiatedOpusMaxAverageBitrate = (
   }
 
   const summaries = codecs.map((codec) => {
+    const fec = getSdpCodecParameter(codec, "useinbandfec");
+    const dtx = getSdpCodecParameter(codec, "usedtx");
     const maxAverageBitrate = numberCodecParameter(
       getSdpCodecParameter(codec, "maxaveragebitrate"),
     );
+    const nack = hasPlainNackFeedback(codec);
     return {
       mid: codec.mid ?? null,
       payloadType: codec.payloadType ?? null,
+      fec,
+      dtx,
+      nack,
       maxAverageBitrate,
     };
   });
@@ -1185,6 +1199,33 @@ const assertNegotiatedOpusMaxAverageBitrate = (
   if (missing.length > 0) {
     errors.push(
       `${context} negotiated SDP missing Opus maxaveragebitrate for mids: ${missing
+        .map((summary) => String(summary.mid ?? summary.payloadType ?? "unknown"))
+        .join(", ")}`,
+    );
+  }
+
+  const missingFec = summaries.filter((summary) => !isTruthyCodecParameter(summary.fec));
+  if (missingFec.length > 0) {
+    errors.push(
+      `${context} negotiated SDP missing Opus FEC for mids: ${missingFec
+        .map((summary) => String(summary.mid ?? summary.payloadType ?? "unknown"))
+        .join(", ")}`,
+    );
+  }
+
+  const missingDtx = summaries.filter((summary) => !isTruthyCodecParameter(summary.dtx));
+  if (missingDtx.length > 0) {
+    errors.push(
+      `${context} negotiated SDP missing Opus DTX for mids: ${missingDtx
+        .map((summary) => String(summary.mid ?? summary.payloadType ?? "unknown"))
+        .join(", ")}`,
+    );
+  }
+
+  const missingNack = summaries.filter((summary) => !summary.nack);
+  if (missingNack.length > 0) {
+    errors.push(
+      `${context} negotiated SDP missing Opus NACK for mids: ${missingNack
         .map((summary) => String(summary.mid ?? summary.payloadType ?? "unknown"))
         .join(", ")}`,
     );
@@ -1244,6 +1285,10 @@ const assertLowBandwidthOpusCodecOptions = (
   const dtx = getCodecParameter(opusCodec, "usedtx");
   if (!isTruthyCodecParameter(dtx)) {
     errors.push(`${context} Opus DTX not enabled: ${String(dtx)}`);
+  }
+
+  if (!hasPlainNackFeedback(opusCodec)) {
+    errors.push(`${context} Opus NACK not enabled`);
   }
 
   const ptime = numberCodecParameter(getCodecParameter(opusCodec, "ptime"));
@@ -1865,7 +1910,7 @@ const validateFinalSnapshot = (snapshot, { consoleEvents = [] } = {}) => {
       "microphone",
       expectedPublishMicrophoneOpusMaxAverageBitrate,
     );
-    assertNegotiatedOpusMaxAverageBitrate(
+    assertNegotiatedOpusCodecOptions(
       snapshot,
       errors,
       "microphone",
@@ -1973,6 +2018,7 @@ const buildRoomUrl = (name) => {
   const normalizedBaseUrl = baseUrl.replace(/\/$/, "");
   const url = new URL(`/${encodeURIComponent(roomId)}`, normalizedBaseUrl);
   url.searchParams.set("autojoin", "1");
+  url.searchParams.set("recorder", "1");
   url.searchParams.set("admin", "1");
   url.searchParams.set("name", name);
   if (clientId) url.searchParams.set("clientId", clientId);
@@ -2048,6 +2094,18 @@ const installRtcSdpDebug = (cdp) =>
 	            );
 	            const extmapLines = lines.filter((line) => line.startsWith("a=extmap:"));
 	            const fmtpLines = lines.filter((line) => line.startsWith("a=fmtp:"));
+	            const parseRtcpFeedback = (payloadType) =>
+	              feedbackLines
+	                .map((candidate) => {
+	                  const match = /^a=rtcp-fb:(\\*|\\d+)\\s+([^\\s]+)(?:\\s+(.+))?$/i.exec(candidate);
+	                  if (!match) return null;
+	                  if (match[1] !== "*" && Number(match[1]) !== payloadType) return null;
+	                  return {
+	                    type: match[2].toLowerCase(),
+	                    parameter: match[3]?.trim() || null,
+	                  };
+	                })
+	                .filter(Boolean);
 	            const codecs = lines
 	              .filter((line) => line.startsWith("a=rtpmap:"))
 	              .map((line) => {
@@ -2064,6 +2122,7 @@ const installRtcSdpDebug = (cdp) =>
 	                  clockRate: Number(match[3]),
 	                  channels: match[4] ? Number(match[4]) : null,
 	                  fmtpParameters: fmtpLine ? parseFmtpParameters(fmtpLine) : {},
+	                  rtcpFeedback: parseRtcpFeedback(payloadType),
 	                };
 	              })
 	              .filter(Boolean);
@@ -3243,7 +3302,7 @@ const validateScreenPublishSnapshot = (
   }
 
   if (negotiatedAudioSectionCount > 0) {
-    assertNegotiatedOpusMaxAverageBitrate(
+    assertNegotiatedOpusCodecOptions(
       snapshot,
       errors,
       "screen publish audio",
@@ -4254,6 +4313,7 @@ const run = async () => {
   const normalizedBaseUrl = baseUrl.replace(/\/$/, "");
   const url = new URL(`/${encodeURIComponent(roomId)}`, normalizedBaseUrl);
   url.searchParams.set("autojoin", "1");
+  url.searchParams.set("recorder", "1");
   url.searchParams.set("admin", "1");
   url.searchParams.set("name", displayName);
   if (clientId) url.searchParams.set("clientId", clientId);
