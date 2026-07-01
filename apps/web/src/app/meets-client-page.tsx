@@ -23,10 +23,35 @@ const readError = async (response: Response) => {
 };
 
 const defaultClientId = resolveBrowserSfuClientId();
+const JOIN_INFO_REQUEST_TIMEOUT_MS = 15000;
+
 const normalizeClientId = (value: string | undefined): string | null => {
   const normalized = value?.trim();
   if (!normalized) return null;
   return /^[a-zA-Z0-9._:-]{1,64}$/.test(normalized) ? normalized : null;
+};
+
+const fetchJoinInfoWithTimeout = async (
+  init: RequestInit,
+): Promise<Response> => {
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(
+    () => controller.abort(),
+    JOIN_INFO_REQUEST_TIMEOUT_MS,
+  );
+  try {
+    return await fetch("/api/sfu/join", {
+      ...init,
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw new Error("Join info request timeout");
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
 };
 
 type MeetsClientPageProps = {
@@ -80,7 +105,7 @@ export default function MeetsClientPage({
       const isHost = Boolean(options?.isHost);
       const isGhost = Boolean(options?.isGhost);
       const resolvedJoinMode = options?.joinMode ?? joinMode;
-      const response = await fetch("/api/sfu/join", {
+      const response = await fetchJoinInfoWithTimeout({
         method: "POST",
         headers: {
           "Content-Type": "application/json",

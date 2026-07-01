@@ -1038,6 +1038,11 @@ assertRegex(
   /const settleJoinRoom = startSocketAckTimeout\([\s\S]*"joinRoom"[\s\S]*JOIN_ROOM_ACK_TIMEOUT_MS[\s\S]*if \(!settleJoinRoom\(\)\) return;/,
   "web joinRoom ACK timeout routes stalled joins into reconnect retry handling",
 );
+assertRegex(
+  "webMeetClientPage",
+  /JOIN_INFO_REQUEST_TIMEOUT_MS = 15000[\s\S]*const fetchJoinInfoWithTimeout = async[\s\S]*new AbortController\(\)[\s\S]*controller\.abort\(\)[\s\S]*fetch\("\/api\/sfu\/join"[\s\S]*signal: controller\.signal[\s\S]*throw new Error\("Join info request timeout"\)[\s\S]*fetchJoinInfoWithTimeout\(\{[\s\S]*method: "POST"/,
+  "web join-info fetch timeout reaches reconnect retry handling",
+);
 assertNotIncludes(
   "webMeetSocket",
   "? Promise.resolve(true)\n              : attemptIceRestart(kind)",
