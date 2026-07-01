@@ -412,6 +412,44 @@ function JoinScreen({
     setIsEffectsOpen(true);
   };
 
+  const commitRequestedPrejoinTracks = (
+    tracks: MediaStreamTrack[],
+    event: string,
+  ) => {
+    const liveTracks = tracks.filter((track) => track.readyState === "live");
+    tracks.forEach((track) => {
+      if (!liveTracks.includes(track)) track.stop();
+    });
+    const hasAudio = liveTracks.some((track) => track.kind === "audio");
+    const hasVideo = liveTracks.some((track) => track.kind === "video");
+    const liveTrackIds = new Set(liveTracks.map((track) => track.id));
+
+    liveTracks.forEach((track) => {
+      if (track.kind === "video" && "contentHint" in track) {
+        track.contentHint = "motion";
+      }
+    });
+    localStreamRef.current?.getTracks().forEach((track) => {
+      if (!liveTrackIds.has(track.id)) track.stop();
+    });
+    const nextStream =
+      liveTracks.length > 0 ? new MediaStream(liveTracks) : null;
+    setLocalStream(nextStream);
+    cameraIntentRef.current = hasVideo;
+    micIntentRef.current = hasAudio;
+    setIsMicOn(hasAudio);
+    setIsCameraOn(hasVideo);
+    if (hasVideo) {
+      prewarmLiveCameraEffects("prejoin-full-media-camera-live");
+    }
+    logJoinMedia(event, {
+      stream: getJoinStreamDebugSnapshot(nextStream),
+      hasAudio,
+      hasVideo,
+    });
+    return { hasAudio, hasVideo };
+  };
+
   const requestMicrophoneAndCamera = async () => {
     if (isRequestingPermissions) return;
 
@@ -427,33 +465,10 @@ function JoinScreen({
         audio: DEFAULT_AUDIO_CONSTRAINTS,
         video: videoConstraints,
       });
-      const liveTracks = stream
-        .getTracks()
-        .filter((track) => track.readyState === "live");
-      const hasAudio = liveTracks.some((track) => track.kind === "audio");
-      const hasVideo = liveTracks.some((track) => track.kind === "video");
-
-      stream.getVideoTracks().forEach((track) => {
-        if ("contentHint" in track) track.contentHint = "motion";
-      });
-      localStreamRef.current?.getTracks().forEach((track) => {
-        if (!liveTracks.includes(track)) track.stop();
-      });
-      const nextStream =
-        liveTracks.length > 0 ? new MediaStream(liveTracks) : null;
-      setLocalStream(nextStream);
-      cameraIntentRef.current = hasVideo;
-      micIntentRef.current = hasAudio;
-      setIsMicOn(hasAudio);
-      setIsCameraOn(hasVideo);
-      if (hasVideo) {
-        prewarmLiveCameraEffects("prejoin-full-media-camera-live");
-      }
-      logJoinMedia("get_user_media_full_done", {
-        stream: getJoinStreamDebugSnapshot(nextStream),
-        hasAudio,
-        hasVideo,
-      });
+      commitRequestedPrejoinTracks(
+        stream.getTracks(),
+        "get_user_media_full_done",
+      );
     } catch (err) {
       warnJoinMedia("get_user_media_full_failed", {
         error:
@@ -461,9 +476,58 @@ function JoinScreen({
             ? { name: err.name, message: err.message, stack: err.stack }
             : err,
       });
-      cameraIntentRef.current = false;
-      micIntentRef.current = false;
-      setPermissionRequestError("Permission needed");
+      const fallbackTracks: MediaStreamTrack[] = [];
+      const [audioResult, videoResult] = await Promise.allSettled([
+        navigator.mediaDevices.getUserMedia({
+          audio: DEFAULT_AUDIO_CONSTRAINTS,
+        }),
+        navigator.mediaDevices.getUserMedia({
+          video: getPrejoinVideoConstraints(),
+        }),
+      ]);
+
+      if (audioResult.status === "fulfilled") {
+        fallbackTracks.push(...audioResult.value.getAudioTracks());
+      } else {
+        warnJoinMedia("get_user_media_audio_fallback_failed", {
+          error:
+            audioResult.reason instanceof Error
+              ? {
+                  name: audioResult.reason.name,
+                  message: audioResult.reason.message,
+                }
+              : audioResult.reason,
+        });
+      }
+      if (videoResult.status === "fulfilled") {
+        fallbackTracks.push(...videoResult.value.getVideoTracks());
+      } else {
+        warnJoinMedia("get_user_media_video_fallback_failed", {
+          error:
+            videoResult.reason instanceof Error
+              ? {
+                  name: videoResult.reason.name,
+                  message: videoResult.reason.message,
+                }
+              : videoResult.reason,
+        });
+      }
+
+      const { hasAudio, hasVideo } = commitRequestedPrejoinTracks(
+        fallbackTracks,
+        "get_user_media_separate_fallback_done",
+      );
+      if (!hasAudio && !hasVideo) {
+        cameraIntentRef.current = false;
+        micIntentRef.current = false;
+        setPermissionRequestError("Permission needed");
+      } else if (!hasAudio) {
+        setPermissionRequestError("Microphone unavailable");
+      } else if (!hasVideo) {
+        setPermissionRequestError("Camera unavailable");
+      } else {
+        setPermissionRequestError(null);
+      }
     } finally {
       setIsRequestingPermissions(false);
     }

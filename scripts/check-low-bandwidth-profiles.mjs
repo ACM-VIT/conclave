@@ -198,6 +198,11 @@ assertRegex(
   /const wantsAudio = options\.audio \?\? true;[\s\S]*const audioRequired = options\.audioRequired \?\? !isMuted;[\s\S]*nextAudioTrack\.enabled = !isMuted;[\s\S]*failedMutedWarmup =[\s\S]*isMutedRef\.current &&[\s\S]*!shouldDisableMediaIntentAfterRecoveryFailure/,
   "web media recovery warms muted microphone tracks without surfacing optional warmup failures",
 );
+assertRegex(
+  "webJoinScreen",
+  /get_user_media_full_failed[\s\S]*Promise\.allSettled\(\[[\s\S]*navigator\.mediaDevices\.getUserMedia\(\{[\s\S]*audio: DEFAULT_AUDIO_CONSTRAINTS,[\s\S]*navigator\.mediaDevices\.getUserMedia\(\{[\s\S]*video: getPrejoinVideoConstraints\(\),[\s\S]*get_user_media_separate_fallback_done/,
+  "web prejoin retries audio and video separately when combined capture fails",
+);
 {
   const mediaAudioProduceMatches =
     source.webMeetMedia.match(
