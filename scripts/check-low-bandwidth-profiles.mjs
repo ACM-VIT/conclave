@@ -622,6 +622,36 @@ assertRegex(
   /screenOutboundStallStateRef\.current[\s\S]*const sample = readOutboundVideoProgressSample\(report\)[\s\S]*stalledSamples =[\s\S]*hasBaseline && hasOutboundScreenShareStallEvidence\(previous, sample\)[\s\S]*stalledSamples <[\s\S]*SCREEN_SHARE_OUTBOUND_STALL_SAMPLES_BEFORE_REFRESH[\s\S]*isEncoderLimitedOutboundSample\(sample\)[\s\S]*refreshStalledScreenProducer\(/,
   "web screen-share outbound sender watchdog avoids refreshing static shares without real stall evidence",
 );
+assertRegex(
+  "webMeetMedia",
+  /SCREEN_SHARE_MUTED_WARNING_DELAY_MS = 5000[\s\S]*screenShareTrackHandlersRef[\s\S]*screenShareMutedWarningTimeoutsRef[\s\S]*screenShareMutedWarningErrorTrackIdRef/,
+  "web local screen-share no-data detection has dedicated timers and handler tracking",
+);
+assertRegex(
+  "webMeetMedia",
+  /SCREEN_SHARE_SOURCE_STALLED_MESSAGE[\s\S]*const scheduleScreenShareMutedWarning = useCallback[\s\S]*!isScreenSharingRef\.current[\s\S]*connectionStateRef\.current !== "joined"[\s\S]*track\.readyState !== "live"[\s\S]*!track\.muted[\s\S]*!isCurrentScreenShareTrack\(track\)[\s\S]*message: SCREEN_SHARE_SOURCE_STALLED_MESSAGE/,
+  "web local screen-share source mute surfaces a recoverable warning for active shares only",
+);
+assertRegex(
+  "webMeetMedia",
+  /const clearAllScreenShareMutedWarningTimers = useCallback[\s\S]*screenShareMutedWarningTimeoutsRef\.current\.clear\(\)[\s\S]*const clearScreenShareMutedWarningError = useCallback\(\(trackId\?: string\)[\s\S]*screenShareMutedWarningErrorTrackIdRef\.current !== trackId[\s\S]*currentError\?\.code === "MEDIA_ERROR"[\s\S]*currentError\.message === SCREEN_SHARE_SOURCE_STALLED_MESSAGE[\s\S]*screenShareMutedWarningErrorTrackIdRef\.current = null[\s\S]*clearScreenShareMutedWarningError\(track\.id\)[\s\S]*reapplyScreenShareProfileAfterSourceResumes\(track\)/,
+  "web local screen-share resumed source only clears its own stale warning",
+);
+assertRegex(
+  "webMeetMedia",
+  /const attachLocalScreenShareTrackHandlers = useCallback[\s\S]*track\.addEventListener\("mute"[\s\S]*scheduleScreenShareMutedWarning\(track\)[\s\S]*track\.addEventListener\("unmute"[\s\S]*clearScreenShareMutedWarningTimer\(track\.id\)[\s\S]*reapplyScreenShareProfileAfterSourceResumes\(track\)[\s\S]*track\.addEventListener\("ended"[\s\S]*clearScreenShareMutedWarningTimer\(track\.id\)/,
+  "web local screen-share tracks listen for source mute, unmute, and ended events",
+);
+assertRegex(
+  "webMeetMedia",
+  /const reapplyScreenShareProfileAfterSourceResumes = useCallback[\s\S]*applyScreenShareProducerNetworkProfile\([\s\S]*producer,[\s\S]*getScreenSharePublishNetworkProfile\(\),/,
+  "web local screen-share source unmute restores maintain-resolution sender profile",
+);
+assertRegex(
+  "webMeetMedia",
+  /const attachCurrentScreenShareTracks = \(\) => \{[\s\S]*screenShareStreamRef\.current\?\.getVideoTracks\(\)[\s\S]*screenProducerRef\.current\?\.track[\s\S]*attachLocalScreenShareTrackHandlers\(track\)[\s\S]*document\.addEventListener\("visibilitychange"/,
+  "web active screen-share source health scans raw and producer tracks after foreground return",
+);
 assertIncludes(
   "iosWebrtc",
   "next.degradationPreference = .maintainResolution",

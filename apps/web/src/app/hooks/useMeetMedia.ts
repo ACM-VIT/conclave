@@ -70,7 +70,7 @@ interface UseMeetMediaOptions {
   setActiveScreenShareId: (value: string | null) => void;
   localStream: MediaStream | null;
   setLocalStream: React.Dispatch<React.SetStateAction<MediaStream | null>>;
-  setMeetError: (error: MeetError | null) => void;
+  setMeetError: React.Dispatch<React.SetStateAction<MeetError | null>>;
   selectedAudioInputDeviceId?: string;
   setSelectedAudioInputDeviceId: React.Dispatch<
     React.SetStateAction<string | undefined>
@@ -246,6 +246,9 @@ const LOCAL_AUDIO_MUTED_RECOVERY_DELAY_MS = 4000;
 const LOCAL_AUDIO_MUTED_RECOVERY_COOLDOWN_MS = 15000;
 const LOCAL_VIDEO_MUTED_RECOVERY_DELAY_MS = 5000;
 const LOCAL_VIDEO_MUTED_RECOVERY_COOLDOWN_MS = 15000;
+const SCREEN_SHARE_MUTED_WARNING_DELAY_MS = 5000;
+const SCREEN_SHARE_SOURCE_STALLED_MESSAGE =
+  "Screen sharing is not sending frames. Bring the shared window back into view, or stop sharing and share again.";
 
 const createCameraOutboundStallState = (
   producerId: string | null = null,
@@ -481,12 +484,19 @@ export function useMeetMedia({
   const localVideoTrackHandlersRef = useRef<WeakSet<MediaStreamTrack>>(
     new WeakSet(),
   );
+  const screenShareTrackHandlersRef = useRef<WeakSet<MediaStreamTrack>>(
+    new WeakSet(),
+  );
   const localAudioMutedRecoveryTimeoutsRef = useRef<Map<string, number>>(
     new Map(),
   );
   const localVideoMutedRecoveryTimeoutsRef = useRef<Map<string, number>>(
     new Map(),
   );
+  const screenShareMutedWarningTimeoutsRef = useRef<Map<string, number>>(
+    new Map(),
+  );
+  const screenShareMutedWarningErrorTrackIdRef = useRef<string | null>(null);
   const lastLocalAudioMutedRecoveryAtRef = useRef(0);
   const lastLocalVideoMutedRecoveryAtRef = useRef(0);
   const isMediaRecoveryBlocked = useCallback(
@@ -509,6 +519,8 @@ export function useMeetMedia({
   useEffect(() => {
     const audioRecoveryTimeouts = localAudioMutedRecoveryTimeoutsRef.current;
     const videoRecoveryTimeouts = localVideoMutedRecoveryTimeoutsRef.current;
+    const screenShareWarningTimeouts =
+      screenShareMutedWarningTimeoutsRef.current;
     return () => {
       audioRecoveryTimeouts.forEach((timeoutId) => {
         window.clearTimeout(timeoutId);
@@ -518,6 +530,10 @@ export function useMeetMedia({
         window.clearTimeout(timeoutId);
       });
       videoRecoveryTimeouts.clear();
+      screenShareWarningTimeouts.forEach((timeoutId) => {
+        window.clearTimeout(timeoutId);
+      });
+      screenShareWarningTimeouts.clear();
     };
   }, []);
 
@@ -607,6 +623,10 @@ export function useMeetMedia({
   useEffect(() => {
     isCameraOffRef.current = isCameraOff;
   }, [isCameraOff]);
+  const isScreenSharingRef = useRef(isScreenSharing);
+  useEffect(() => {
+    isScreenSharingRef.current = isScreenSharing;
+  }, [isScreenSharing]);
   const setMutedIntent = useCallback(
     (value: boolean) => {
       isMutedRef.current = value;
@@ -4150,6 +4170,206 @@ export function useMeetMedia({
     ],
   );
 
+  const clearScreenShareMutedWarningTimer = useCallback((trackId: string) => {
+    const timeoutId = screenShareMutedWarningTimeoutsRef.current.get(trackId);
+    if (timeoutId === undefined) return;
+    window.clearTimeout(timeoutId);
+    screenShareMutedWarningTimeoutsRef.current.delete(trackId);
+  }, []);
+
+  const clearAllScreenShareMutedWarningTimers = useCallback(() => {
+    screenShareMutedWarningTimeoutsRef.current.forEach((timeoutId) => {
+      window.clearTimeout(timeoutId);
+    });
+    screenShareMutedWarningTimeoutsRef.current.clear();
+  }, []);
+
+  const clearScreenShareMutedWarningError = useCallback((trackId?: string) => {
+    if (
+      trackId &&
+      screenShareMutedWarningErrorTrackIdRef.current !== trackId
+    ) {
+      return;
+    }
+    setMeetError((currentError) => {
+      const isScreenShareWarning =
+        currentError?.code === "MEDIA_ERROR" &&
+        currentError.message === SCREEN_SHARE_SOURCE_STALLED_MESSAGE;
+      if (isScreenShareWarning) {
+        screenShareMutedWarningErrorTrackIdRef.current = null;
+        return null;
+      }
+      return currentError;
+    });
+  }, [setMeetError]);
+
+  const isCurrentScreenShareTrack = useCallback(
+    (track: MediaStreamTrack): boolean => {
+      const currentProducerTrack = screenProducerRef.current?.track ?? null;
+      const producerUsesTrack =
+        currentProducerTrack === track || currentProducerTrack?.id === track.id;
+      const streamUsesTrack =
+        screenShareStreamRef.current
+          ?.getVideoTracks()
+          .some(
+            (currentTrack) =>
+              currentTrack === track || currentTrack.id === track.id,
+          ) === true;
+      return producerUsesTrack || streamUsesTrack;
+    },
+    [screenProducerRef, screenShareStreamRef],
+  );
+
+  const reapplyScreenShareProfileAfterSourceResumes = useCallback(
+    (track: MediaStreamTrack) => {
+      const producer = screenProducerRef.current;
+      const producerTrack = producer?.track ?? null;
+      if (
+        !producer ||
+        producer.closed ||
+        producerTrack?.readyState !== "live" ||
+        (producerTrack !== track && producerTrack?.id !== track.id)
+      ) {
+        return;
+      }
+
+      if ("contentHint" in track) {
+        track.contentHint = "detail";
+      }
+      void applyScreenShareProducerNetworkProfile(
+        producer,
+        getScreenSharePublishNetworkProfile(),
+      ).catch((error) => {
+        console.warn(
+          "[Meets] Failed to reapply screen-share profile after source resumed:",
+          error,
+        );
+      });
+    },
+    [getScreenSharePublishNetworkProfile, screenProducerRef],
+  );
+
+  const scheduleScreenShareMutedWarning = useCallback(
+    (track: MediaStreamTrack) => {
+      if (
+        !isScreenSharingRef.current ||
+        connectionStateRef.current !== "joined" ||
+        isMediaRecoveryBlocked() ||
+        track.readyState !== "live" ||
+        !track.enabled ||
+        !track.muted ||
+        !isCurrentScreenShareTrack(track) ||
+        screenShareMutedWarningTimeoutsRef.current.has(track.id)
+      ) {
+        return;
+      }
+
+      const timeoutId = window.setTimeout(() => {
+        screenShareMutedWarningTimeoutsRef.current.delete(track.id);
+        if (
+          !isScreenSharingRef.current ||
+          connectionStateRef.current !== "joined" ||
+          isMediaRecoveryBlocked() ||
+          track.readyState !== "live" ||
+          !track.enabled ||
+          !track.muted ||
+          !isCurrentScreenShareTrack(track)
+        ) {
+          return;
+        }
+
+        console.warn(
+          "[Meets] Local screen-share source stopped sending frames.",
+          {
+            producerId: screenProducerRef.current?.id ?? null,
+            trackId: track.id,
+          },
+        );
+        screenShareMutedWarningErrorTrackIdRef.current = track.id;
+        setMeetError({
+          code: "MEDIA_ERROR",
+          message: SCREEN_SHARE_SOURCE_STALLED_MESSAGE,
+          recoverable: true,
+        });
+      }, SCREEN_SHARE_MUTED_WARNING_DELAY_MS);
+
+      screenShareMutedWarningTimeoutsRef.current.set(track.id, timeoutId);
+    },
+    [
+      isCurrentScreenShareTrack,
+      isMediaRecoveryBlocked,
+      screenProducerRef,
+      setMeetError,
+    ],
+  );
+
+  const attachLocalScreenShareTrackHandlers = useCallback(
+    (track: MediaStreamTrack) => {
+      if (!screenShareTrackHandlersRef.current.has(track)) {
+        screenShareTrackHandlersRef.current.add(track);
+        track.addEventListener("mute", () => {
+          scheduleScreenShareMutedWarning(track);
+        });
+        track.addEventListener("unmute", () => {
+          clearScreenShareMutedWarningTimer(track.id);
+          clearScreenShareMutedWarningError(track.id);
+          reapplyScreenShareProfileAfterSourceResumes(track);
+        });
+        track.addEventListener("ended", () => {
+          clearScreenShareMutedWarningTimer(track.id);
+        });
+      }
+
+      if (track.muted) {
+        scheduleScreenShareMutedWarning(track);
+      }
+    },
+    [
+      clearScreenShareMutedWarningTimer,
+      clearScreenShareMutedWarningError,
+      reapplyScreenShareProfileAfterSourceResumes,
+      scheduleScreenShareMutedWarning,
+    ],
+  );
+
+  useEffect(() => {
+    if (ghostEnabled || isObserverMode) return;
+    if (connectionState !== "joined") return;
+    if (!isScreenSharing) return;
+
+    const attachCurrentScreenShareTracks = () => {
+      const seenTrackIds = new Set<string>();
+      const tracks = [
+        ...(screenShareStreamRef.current?.getVideoTracks() ?? []),
+        screenProducerRef.current?.track ?? null,
+      ];
+      for (const track of tracks) {
+        if (!track || seenTrackIds.has(track.id)) continue;
+        seenTrackIds.add(track.id);
+        attachLocalScreenShareTrackHandlers(track);
+      }
+    };
+
+    attachCurrentScreenShareTracks();
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        attachCurrentScreenShareTracks();
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [
+    attachLocalScreenShareTrackHandlers,
+    connectionState,
+    ghostEnabled,
+    isObserverMode,
+    isScreenSharing,
+    screenProducerRef,
+    screenShareStreamRef,
+  ]);
+
   const toggleScreenShare = useCallback(async () => {
     if (ghostEnabled || isObserverMode) return;
     if (isScreenSharing) {
@@ -4184,6 +4404,8 @@ export function useMeetMedia({
         }
       }
       screenAudioProducerRef.current = null;
+      clearAllScreenShareMutedWarningTimers();
+      clearScreenShareMutedWarningError();
       stopScreenShareStream(screenStream);
       screenShareStreamRef.current = null;
       setIsScreenSharing(false);
@@ -4284,6 +4506,7 @@ export function useMeetMedia({
       if (track && "contentHint" in track) {
         track.contentHint = "detail";
       }
+      attachLocalScreenShareTrackHandlers(track);
       await applyScreenShareTrackNetworkProfile(track, screenNetworkProfile);
 
       const preferredScreenShareCodec = getPreferredScreenShareCodec(
@@ -4342,8 +4565,10 @@ export function useMeetMedia({
         if (currentAudioProducer) {
           closeScreenAudioProducer(currentAudioProducer);
         }
+        clearAllScreenShareMutedWarningTimers();
         stopScreenShareStream(screenShareStreamRef.current);
         screenShareStreamRef.current = null;
+        clearScreenShareMutedWarningError();
         setIsScreenSharing(false);
         setActiveScreenShareId(null);
       };
@@ -4450,6 +4675,9 @@ export function useMeetMedia({
     ensureProducerTransportRef,
     getScreenSharePublishNetworkProfile,
     resetScreenShareControlState,
+    attachLocalScreenShareTrackHandlers,
+    clearAllScreenShareMutedWarningTimers,
+    clearScreenShareMutedWarningError,
     stopScreenShareStream,
     stopLocalTrack,
   ]);
