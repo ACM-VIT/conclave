@@ -67,7 +67,7 @@ importers:
         version: 0.1.3(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       better-auth:
         specifier: ^1.6.22
-        version: 1.6.22(@cloudflare/workers-types@4.20260628.1)(next@16.3.0-preview.5(@babel/core@7.29.7)(babel-plugin-react-compiler@1.0.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(vitest@3.2.6(@types/debug@4.1.13)(@types/node@20.19.43)(jiti@2.7.0)(lightningcss@1.32.0)(supports-color@10.2.2)(terser@5.47.1)(tsx@4.22.4)(yaml@2.8.3))
+        version: 1.6.22(@cloudflare/workers-types@4.20260628.1)(next@16.3.0-preview.5(@babel/core@7.29.7)(babel-plugin-react-compiler@1.0.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(vitest@3.2.6(@types/debug@4.1.13)(@types/node@20.19.43)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.47.1)(tsx@4.22.4)(yaml@2.8.3))
       clsx:
         specifier: ^2.1.1
         version: 2.1.1
@@ -238,7 +238,7 @@ importers:
         version: 17.4.2
       express:
         specifier: ^5.2.1
-        version: 5.2.1
+        version: 5.2.1(supports-color@10.2.2)
       jsonwebtoken:
         specifier: ^9.0.3
         version: 9.0.3
@@ -251,6 +251,9 @@ importers:
       opusscript:
         specifier: 0.1.1
         version: 0.1.1
+      posthog-node:
+        specifier: ^5.39.0
+        version: 5.39.0
       puppeteer-core:
         specifier: ^23.11.1
         version: 23.11.1(supports-color@10.2.2)
@@ -268,7 +271,7 @@ importers:
         version: 6.0.1
       socket.io:
         specifier: ^4.8.3
-        version: 4.8.3(supports-color@10.2.2)
+        version: 4.8.3
       y-protocols:
         specifier: ^1.0.7
         version: 1.0.7(yjs@13.6.31)
@@ -314,10 +317,10 @@ importers:
         version: 5.0.0(supports-color@10.2.2)
       express:
         specifier: ^5.2.1
-        version: 5.2.1
+        version: 5.2.1(supports-color@10.2.2)
       socket.io:
         specifier: ^4.8.3
-        version: 4.8.3(supports-color@10.2.2)
+        version: 4.8.3
     devDependencies:
       '@types/cors':
         specifier: ^2.8.19
@@ -1631,8 +1634,14 @@ packages:
   '@posthog/core@1.38.0':
     resolution: {integrity: sha512-QLrJh0hMVpEJXHNyiJR9YhvIO5tzLDedw4UHdvB+ub4fXHMtHCA8H44qgl11HWR3ajpjxtJ8hs3HyOGVF3Zc1w==}
 
+  '@posthog/core@1.39.1':
+    resolution: {integrity: sha512-EaeRd1VoZM84yQSqu4cIDHNR93nCV3ojlW+vQLpOyP9UM7CK0rHWgueiYxxymNDDvn6nxCft5k/Vn+onSBgfug==}
+
   '@posthog/types@1.391.1':
     resolution: {integrity: sha512-ASwd7Nf4pViqdYRYaNRyPYRVKWa1CcHUAUWR0XeQJLGdNnsWACBwe0sSieb/cHnKsRXjRwO/23KIY83lm/Ccpw==}
+
+  '@posthog/types@1.392.0':
+    resolution: {integrity: sha512-nctNujXL3FC1v99FktaTMSugSD9ZOZekEpahUSafkU2TSvW+XGKNkQZbokuJtiWvPBK208dwMJva8UfBkChqpw==}
 
   '@puppeteer/browsers@2.6.1':
     resolution: {integrity: sha512-aBSREisdsGH890S2rQqK82qmQYU3uFpSH8wcZWHgHzl3LfzsxAKbLNiAG9mO8v1Y0UICBeClICxPJvyr0rcuxg==}
@@ -5077,6 +5086,15 @@ packages:
   posthog-js@1.395.0:
     resolution: {integrity: sha512-5iTb00CGt2eQUUiBQysQiX89RAbCN6wK2sDNzvs9zv0alaY8mJ0ZySrUD3LQ+XyLhgM5pCpacBuUwChqiYDLDw==}
 
+  posthog-node@5.39.0:
+    resolution: {integrity: sha512-KFwwDBTvGMnTszhbml/dTm/Pi4z5JCyKyf875C3dvFVMf8DvxuLsydFBYgP/2iAapu4An5swZ6xJf2x2DIk/jw==}
+    engines: {node: ^20.20.0 || >=22.22.0}
+    peerDependencies:
+      rxjs: ^7.0.0
+    peerDependenciesMeta:
+      rxjs:
+        optional: true
+
   preact@10.29.3:
     resolution: {integrity: sha512-D9NL1GAnJZhc3RndVs4gDdxEeU9TcHgywMrhhOsnpdlvFjdbx0gAsLUnH6JEhlJH5giL7Tx5biWPUSEXE/HPzw==}
 
@@ -7437,7 +7455,7 @@ snapshots:
       chalk: 5.6.2
       cookie: 1.1.1
       esbuild: 0.25.4
-      express: 5.2.1
+      express: 5.2.1(supports-color@10.2.2)
       next: 16.3.0-preview.5(@babel/core@7.29.7)(babel-plugin-react-compiler@1.0.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       path-to-regexp: 6.3.0
       urlpattern-polyfill: 10.1.0
@@ -7481,7 +7499,13 @@ snapshots:
     dependencies:
       '@posthog/types': 1.391.1
 
+  '@posthog/core@1.39.1':
+    dependencies:
+      '@posthog/types': 1.392.0
+
   '@posthog/types@1.391.1': {}
+
+  '@posthog/types@1.392.0': {}
 
   '@puppeteer/browsers@2.6.1(supports-color@10.2.2)':
     dependencies:
@@ -8705,7 +8729,7 @@ snapshots:
     dependencies:
       tweetnacl: 0.14.5
 
-  better-auth@1.6.22(@cloudflare/workers-types@4.20260628.1)(next@16.3.0-preview.5(@babel/core@7.29.7)(babel-plugin-react-compiler@1.0.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(vitest@3.2.6(@types/debug@4.1.13)(@types/node@20.19.43)(jiti@2.7.0)(lightningcss@1.32.0)(supports-color@10.2.2)(terser@5.47.1)(tsx@4.22.4)(yaml@2.8.3)):
+  better-auth@1.6.22(@cloudflare/workers-types@4.20260628.1)(next@16.3.0-preview.5(@babel/core@7.29.7)(babel-plugin-react-compiler@1.0.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(vitest@3.2.6(@types/debug@4.1.13)(@types/node@20.19.43)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.47.1)(tsx@4.22.4)(yaml@2.8.3)):
     dependencies:
       '@better-auth/core': 1.6.22(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1)(@cloudflare/workers-types@4.20260628.1)(better-call@1.3.7(zod@4.4.3))(jose@6.2.3)(kysely@0.29.2)(nanostores@1.4.0)
       '@better-auth/drizzle-adapter': 1.6.22(@better-auth/core@1.6.22(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1)(@cloudflare/workers-types@4.20260628.1)(better-call@1.3.7(zod@4.4.3))(jose@6.2.3)(kysely@0.29.2)(nanostores@1.4.0))(@better-auth/utils@0.4.2)
@@ -8750,7 +8774,7 @@ snapshots:
 
   blake3-wasm@2.1.5: {}
 
-  body-parser@2.2.2:
+  body-parser@2.2.2(supports-color@10.2.2):
     dependencies:
       bytes: 3.1.2
       content-type: 1.0.5
@@ -9388,7 +9412,7 @@ snapshots:
 
   engine.io-parser@5.2.3: {}
 
-  engine.io@6.6.9(supports-color@10.2.2):
+  engine.io@6.6.9:
     dependencies:
       '@types/cors': 2.8.19
       '@types/node': 20.19.43
@@ -9632,10 +9656,10 @@ snapshots:
 
   exponential-backoff@3.1.3: {}
 
-  express@5.2.1:
+  express@5.2.1(supports-color@10.2.2):
     dependencies:
       accepts: 2.0.0
-      body-parser: 2.2.2
+      body-parser: 2.2.2(supports-color@10.2.2)
       content-disposition: 1.1.0
       content-type: 1.0.5
       cookie: 0.7.2
@@ -9645,7 +9669,7 @@ snapshots:
       encodeurl: 2.0.0
       escape-html: 1.0.3
       etag: 1.8.1
-      finalhandler: 2.1.1
+      finalhandler: 2.1.1(supports-color@10.2.2)
       fresh: 2.0.0
       http-errors: 2.0.1
       merge-descriptors: 2.0.0
@@ -9656,8 +9680,8 @@ snapshots:
       proxy-addr: 2.0.7
       qs: 6.15.2
       range-parser: 1.2.1
-      router: 2.2.0
-      send: 1.2.1
+      router: 2.2.0(supports-color@10.2.2)
+      send: 1.2.1(supports-color@10.2.2)
       serve-static: 2.2.1
       statuses: 2.0.2
       type-is: 2.1.0
@@ -9750,7 +9774,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  finalhandler@2.1.1:
+  finalhandler@2.1.1(supports-color@10.2.2):
     dependencies:
       debug: 4.4.3(supports-color@10.2.2)
       encodeurl: 2.0.0
@@ -11332,6 +11356,10 @@ snapshots:
       query-selector-shadow-dom: 1.0.1
       web-vitals: 5.3.0
 
+  posthog-node@5.39.0:
+    dependencies:
+      '@posthog/core': 1.39.1
+
   preact@10.29.3: {}
 
   prelude-ls@1.2.1: {}
@@ -11461,7 +11489,7 @@ snapshots:
       prompts: 2.4.2
       react: 19.2.7
       react-dom: 19.2.7(react@19.2.7)
-      socket.io: 4.8.3(supports-color@10.2.2)
+      socket.io: 4.8.3
       tailwindcss: 4.3.1
       tsconfig-paths: 4.2.0
     transitivePeerDependencies:
@@ -11737,7 +11765,7 @@ snapshots:
       points-on-curve: 0.2.0
       points-on-path: 0.2.1
 
-  router@2.2.0:
+  router@2.2.0(supports-color@10.2.2):
     dependencies:
       debug: 4.4.3(supports-color@10.2.2)
       depd: 2.0.0
@@ -11787,7 +11815,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  send@1.2.1:
+  send@1.2.1(supports-color@10.2.2):
     dependencies:
       debug: 4.4.3(supports-color@10.2.2)
       encodeurl: 2.0.0
@@ -11819,7 +11847,7 @@ snapshots:
       encodeurl: 2.0.0
       escape-html: 1.0.3
       parseurl: 1.3.3
-      send: 1.2.1
+      send: 1.2.1(supports-color@10.2.2)
     transitivePeerDependencies:
       - supports-color
 
@@ -11918,28 +11946,28 @@ snapshots:
       '@socket.io/component-emitter': 3.1.2
       debug: 4.4.3(supports-color@10.2.2)
       engine.io-client: 6.6.6(supports-color@10.2.2)
-      socket.io-parser: 4.2.6(supports-color@10.2.2)
+      socket.io-parser: 4.2.6
     transitivePeerDependencies:
       - bufferutil
       - supports-color
       - utf-8-validate
 
-  socket.io-parser@4.2.6(supports-color@10.2.2):
+  socket.io-parser@4.2.6:
     dependencies:
       '@socket.io/component-emitter': 3.1.2
       debug: 4.4.3(supports-color@10.2.2)
     transitivePeerDependencies:
       - supports-color
 
-  socket.io@4.8.3(supports-color@10.2.2):
+  socket.io@4.8.3:
     dependencies:
       accepts: 1.3.8
       base64id: 2.0.0
       cors: 2.8.6
       debug: 4.4.3(supports-color@10.2.2)
-      engine.io: 6.6.9(supports-color@10.2.2)
+      engine.io: 6.6.9
       socket.io-adapter: 2.5.8
-      socket.io-parser: 4.2.6(supports-color@10.2.2)
+      socket.io-parser: 4.2.6
     transitivePeerDependencies:
       - bufferutil
       - supports-color
