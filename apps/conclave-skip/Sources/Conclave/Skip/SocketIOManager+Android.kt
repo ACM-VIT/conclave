@@ -45,6 +45,7 @@ internal object SocketEvent {
     val consume = SfuClientEvent.consume.rawValue
     val resumeConsumer = SfuClientEvent.resumeConsumer.rawValue
     val setConsumerPreferences = SfuClientEvent.setConsumerPreferences.rawValue
+    val setConsumerPreferencesBatch = SfuClientEvent.setConsumerPreferencesBatch.rawValue
     val closeConsumer = SfuClientEvent.closeConsumer.rawValue
     val getRooms = SfuClientEvent.getRooms.rawValue
     val getProducers = SfuClientEvent.getProducers.rawValue

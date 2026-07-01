@@ -129,6 +129,8 @@ export const RATE_LIMITS = {
   iceRestart: { capacity: 6, refillPerSec: 0.5 },
   // Consumer resume/preference/keyframe controls: recovery can be bursty.
   consumerControl: { capacity: 30, refillPerSec: 10 },
+  // Batched preference updates are bounded by item count; keep event bursts modest.
+  consumerControlBatch: { capacity: 8, refillPerSec: 2 },
   // Shared browser controls proxy to a separate service; keep them coalesced.
   sharedBrowserControl: { capacity: 10, refillPerSec: 2 },
   // Game moves (answers, votes): tapping should feel instant, abuse should not.

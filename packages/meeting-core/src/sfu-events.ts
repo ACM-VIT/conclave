@@ -33,6 +33,7 @@ export const SFU_EVENTS = {
     consume: "consume",
     resumeConsumer: "resumeConsumer",
     setConsumerPreferences: "setConsumerPreferences",
+    setConsumerPreferencesBatch: "setConsumerPreferencesBatch",
     closeConsumer: "closeConsumer",
     closeProducer: "closeProducer",
     getProducers: "getProducers",

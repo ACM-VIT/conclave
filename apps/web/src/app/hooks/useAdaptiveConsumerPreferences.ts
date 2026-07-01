@@ -36,6 +36,20 @@ type SetConsumerPreferencesResponse =
     }
   | { error: string };
 
+type SetConsumerPreferencesBatchItemResponse =
+  | SetConsumerPreferencesResponse
+  | {
+      error: string;
+      consumerId?: string;
+    };
+
+type SetConsumerPreferencesBatchResponse =
+  | {
+      success: true;
+      results: SetConsumerPreferencesBatchItemResponse[];
+    }
+  | { error: string };
+
 interface UseAdaptiveConsumerPreferencesOptions {
   refs: Pick<
     MeetRefs,
@@ -1428,249 +1442,338 @@ export function useAdaptiveConsumerPreferences({
       }, RATE_LIMIT_RETRY_DELAY_MS);
     };
 
-    updatesToSend.forEach((update, index) => {
-      const {
-        producerId,
-        consumer,
-        preferences,
-        preferredLayers,
-        signature,
-        debugEntryBase,
-      } = update;
+    const buildPreferencePayload = (update: PendingConsumerPreferenceUpdate) => ({
+      consumerId: update.consumer.id,
+      priority: update.preferences.priority,
+      ...(update.preferredLayers
+        ? { preferredLayers: update.preferredLayers }
+        : {}),
+      ...(typeof update.preferences.paused === "boolean"
+        ? { paused: update.preferences.paused }
+        : {}),
+      requestKeyFrame: update.debugEntryBase.requestKeyFrame,
+    });
 
-      const markDeferredForRetry = (error: string) => {
-        preferenceDebugRef.current.set(producerId, {
-          ...debugEntryBase,
-          status: "deferred",
-          paused: preferences.paused ?? null,
-          producerPaused: null,
-          error,
-          appliedAt: Date.now(),
-        });
-        if (preferences.paused === true) {
-          refs.adaptivelyPausedConsumerProducerIdsRef.current.delete(
-            producerId,
-          );
-        }
-        writeDebugSnapshot(debugContext);
-        scheduleRateLimitRetry();
-      };
-
-      if (preferences.paused === true) {
-        refs.adaptivelyPausedConsumerProducerIdsRef.current.add(producerId);
-      } else if (preferences.paused === false) {
-        refs.adaptivelyPausedConsumerProducerIdsRef.current.delete(producerId);
+    const markDeferredForRetry = (
+      update: PendingConsumerPreferenceUpdate,
+      error: string,
+    ) => {
+      preferenceDebugRef.current.set(update.producerId, {
+        ...update.debugEntryBase,
+        status: "deferred",
+        paused: update.preferences.paused ?? null,
+        producerPaused: null,
+        error,
+        appliedAt: Date.now(),
+      });
+      if (update.preferences.paused === true) {
+        refs.adaptivelyPausedConsumerProducerIdsRef.current.delete(
+          update.producerId,
+        );
       }
+      writeDebugSnapshot(debugContext);
+      scheduleRateLimitRetry();
+    };
 
-      const emitPreferenceUpdate = () => {
-        scheduledPreferenceTimeoutsRef.current.delete(timeoutId);
+    const markError = (
+      update: PendingConsumerPreferenceUpdate,
+      error: string,
+      unsupportedLayers = false,
+    ) => {
+      preferenceDebugRef.current.set(update.producerId, {
+        ...update.debugEntryBase,
+        status: "error",
+        paused: update.preferences.paused ?? null,
+        producerPaused: null,
+        error,
+        appliedAt: Date.now(),
+        unsupportedLayers,
+      });
+      if (update.preferences.paused === true) {
+        refs.adaptivelyPausedConsumerProducerIdsRef.current.delete(
+          update.producerId,
+        );
+      }
+      writeDebugSnapshot(debugContext);
+    };
 
-        const liveConsumer = refs.consumersRef.current.get(producerId);
-        if (
-          !enabled ||
-          !socket.connected ||
-          consumer.closed ||
-          !liveConsumer ||
-          liveConsumer.id !== consumer.id
-        ) {
-          inFlightProducerIdsRef.current.delete(producerId);
-          return;
-        }
+    const markOptimisticPauseState = (
+      update: PendingConsumerPreferenceUpdate,
+    ) => {
+      if (update.preferences.paused === true) {
+        refs.adaptivelyPausedConsumerProducerIdsRef.current.add(
+          update.producerId,
+        );
+      } else if (update.preferences.paused === false) {
+        refs.adaptivelyPausedConsumerProducerIdsRef.current.delete(
+          update.producerId,
+        );
+      }
+    };
 
-        let settled = false;
-        const ackTimeoutId = window.setTimeout(() => {
-          if (settled) return;
-          settled = true;
-          scheduledPreferenceTimeoutsRef.current.delete(ackTimeoutId);
-          inFlightProducerIdsRef.current.delete(producerId);
-          markDeferredForRetry("setConsumerPreferences ack timeout");
-        }, CONSUMER_PREFERENCE_ACK_TIMEOUT_MS);
-        scheduledPreferenceTimeoutsRef.current.add(ackTimeoutId);
+    const isUpdateStillLive = (
+      update: PendingConsumerPreferenceUpdate,
+    ): boolean => {
+      const liveConsumer = refs.consumersRef.current.get(update.producerId);
+      return (
+        enabled &&
+        socket.connected &&
+        !update.consumer.closed &&
+        Boolean(liveConsumer) &&
+        liveConsumer!.id === update.consumer.id
+      );
+    };
 
-        socket.emit(
-          "setConsumerPreferences",
-          {
-            consumerId: consumer.id,
-            priority: preferences.priority,
-            ...(preferredLayers ? { preferredLayers } : {}),
-            ...(typeof preferences.paused === "boolean"
-              ? { paused: preferences.paused }
-              : {}),
-            requestKeyFrame: debugEntryBase.requestKeyFrame,
-          },
-          (response: SetConsumerPreferencesResponse) => {
-            if (settled) return;
-            settled = true;
-            scheduledPreferenceTimeoutsRef.current.delete(ackTimeoutId);
-            window.clearTimeout(ackTimeoutId);
-            if ("error" in response) {
-              if (isConsumerControlRateLimitError(response.error)) {
-                inFlightProducerIdsRef.current.delete(producerId);
-                markDeferredForRetry(response.error);
-                return;
-              }
-
-              preferenceDebugRef.current.set(producerId, {
-                ...debugEntryBase,
-                status: "error",
-                paused: preferences.paused ?? null,
-                producerPaused: null,
-                error: response.error,
-                appliedAt: Date.now(),
-              });
-              if (preferences.paused === true) {
-                refs.adaptivelyPausedConsumerProducerIdsRef.current.delete(
-                  producerId,
-                );
-              }
-              writeDebugSnapshot(debugContext);
-              if (preferredLayers && isUnsupportedLayerError(response.error)) {
-                unsupportedLayerPreferencesRef.current.set(producerId, {
-                  consumerId: consumer.id,
-                  signature: getLayerPreferenceSignature(preferredLayers),
-                  retryAt: Date.now() + UNSUPPORTED_LAYER_RETRY_AFTER_MS,
-                });
-                if (preferences.paused === true) {
-                  refs.adaptivelyPausedConsumerProducerIdsRef.current.add(
-                    producerId,
-                  );
-                }
-                let fallbackSettled = false;
-                const fallbackAckTimeoutId = window.setTimeout(() => {
-                  if (fallbackSettled) return;
-                  fallbackSettled = true;
-                  scheduledPreferenceTimeoutsRef.current.delete(
-                    fallbackAckTimeoutId,
-                  );
-                  inFlightProducerIdsRef.current.delete(producerId);
-                  markDeferredForRetry(
-                    "setConsumerPreferences priority-only ack timeout",
-                  );
-                }, CONSUMER_PREFERENCE_ACK_TIMEOUT_MS);
-                scheduledPreferenceTimeoutsRef.current.add(fallbackAckTimeoutId);
-                socket.emit(
-                  "setConsumerPreferences",
-                  {
-                    consumerId: consumer.id,
-                    priority: preferences.priority,
-                    ...(typeof preferences.paused === "boolean"
-                      ? { paused: preferences.paused }
-                      : {}),
-                  },
-                  (priorityOnlyResponse: SetConsumerPreferencesResponse) => {
-                    if (fallbackSettled) return;
-                    fallbackSettled = true;
-                    scheduledPreferenceTimeoutsRef.current.delete(
-                      fallbackAckTimeoutId,
-                    );
-                    window.clearTimeout(fallbackAckTimeoutId);
-                    if ("error" in priorityOnlyResponse) {
-                      inFlightProducerIdsRef.current.delete(producerId);
-                      if (
-                        isConsumerControlRateLimitError(
-                          priorityOnlyResponse.error,
-                        )
-                      ) {
-                        markDeferredForRetry(priorityOnlyResponse.error);
-                        return;
-                      }
-
-                      if (preferences.paused === true) {
-                        refs.adaptivelyPausedConsumerProducerIdsRef.current.delete(
-                          producerId,
-                        );
-                      }
-                      preferenceDebugRef.current.set(producerId, {
-                        ...debugEntryBase,
-                        status: "error",
-                        paused: preferences.paused ?? null,
-                        producerPaused: null,
-                        error: priorityOnlyResponse.error,
-                        appliedAt: Date.now(),
-                        unsupportedLayers: true,
-                      });
-                      writeDebugSnapshot(debugContext);
-                      return;
-                    }
-                    inFlightProducerIdsRef.current.delete(producerId);
-                    lastAppliedRef.current.set(
-                      producerId,
-                      getPreferenceSignature(consumer.id, {
-                        priority: preferences.priority,
-                        paused: preferences.paused,
-                      }),
-                    );
-                    lastPausedRef.current.set(
-                      producerId,
-                      priorityOnlyResponse.paused,
-                    );
-                    if (
-                      preferences.paused === true &&
-                      priorityOnlyResponse.paused
-                    ) {
-                      refs.adaptivelyPausedConsumerProducerIdsRef.current.add(
-                        producerId,
-                      );
-                    } else {
-                      refs.adaptivelyPausedConsumerProducerIdsRef.current.delete(
-                        producerId,
-                      );
-                    }
-                    preferenceDebugRef.current.set(producerId, {
-                      ...debugEntryBase,
-                      status: "fallback",
-                      paused: priorityOnlyResponse.paused,
-                      producerPaused: priorityOnlyResponse.producerPaused,
-                      currentLayers: priorityOnlyResponse.currentLayers,
-                      error: null,
-                      appliedAt: Date.now(),
-                      unsupportedLayers: true,
-                    });
-                    writeDebugSnapshot(debugContext);
-                  },
-                );
-                return;
-              }
-              inFlightProducerIdsRef.current.delete(producerId);
+    const sendPriorityOnlyFallback = (
+      update: PendingConsumerPreferenceUpdate,
+    ) => {
+      let fallbackSettled = false;
+      const fallbackAckTimeoutId = window.setTimeout(() => {
+        if (fallbackSettled) return;
+        fallbackSettled = true;
+        scheduledPreferenceTimeoutsRef.current.delete(fallbackAckTimeoutId);
+        inFlightProducerIdsRef.current.delete(update.producerId);
+        markDeferredForRetry(
+          update,
+          "setConsumerPreferences priority-only ack timeout",
+        );
+      }, CONSUMER_PREFERENCE_ACK_TIMEOUT_MS);
+      scheduledPreferenceTimeoutsRef.current.add(fallbackAckTimeoutId);
+      socket.emit(
+        "setConsumerPreferences",
+        {
+          consumerId: update.consumer.id,
+          priority: update.preferences.priority,
+          ...(typeof update.preferences.paused === "boolean"
+            ? { paused: update.preferences.paused }
+            : {}),
+        },
+        (priorityOnlyResponse: SetConsumerPreferencesResponse) => {
+          if (fallbackSettled) return;
+          fallbackSettled = true;
+          scheduledPreferenceTimeoutsRef.current.delete(fallbackAckTimeoutId);
+          window.clearTimeout(fallbackAckTimeoutId);
+          if ("error" in priorityOnlyResponse) {
+            inFlightProducerIdsRef.current.delete(update.producerId);
+            if (isConsumerControlRateLimitError(priorityOnlyResponse.error)) {
+              markDeferredForRetry(update, priorityOnlyResponse.error);
               return;
             }
 
-            inFlightProducerIdsRef.current.delete(producerId);
-            lastAppliedRef.current.set(producerId, signature);
-            if (preferredLayers) {
-              lastLayersRef.current.set(producerId, preferredLayers);
-            }
-            lastPausedRef.current.set(producerId, response.paused);
-            if (preferences.paused === true && response.paused) {
-              refs.adaptivelyPausedConsumerProducerIdsRef.current.add(
-                producerId,
-              );
-            } else {
-              refs.adaptivelyPausedConsumerProducerIdsRef.current.delete(
-                producerId,
-              );
-            }
-            preferenceDebugRef.current.set(producerId, {
-              ...debugEntryBase,
-              status: "applied",
-              paused: response.paused,
-              producerPaused: response.producerPaused,
-              preferredLayers: response.preferredLayers,
-              currentLayers: response.currentLayers,
-              error: null,
-              appliedAt: Date.now(),
-            });
-            writeDebugSnapshot(debugContext);
-          },
-        );
-      };
+            markError(update, priorityOnlyResponse.error, true);
+            return;
+          }
 
-      const timeoutId = window.setTimeout(
-        emitPreferenceUpdate,
-        index * emitSpacingMs,
+          inFlightProducerIdsRef.current.delete(update.producerId);
+          lastAppliedRef.current.set(
+            update.producerId,
+            getPreferenceSignature(update.consumer.id, {
+              priority: update.preferences.priority,
+              paused: update.preferences.paused,
+            }),
+          );
+          lastPausedRef.current.set(
+            update.producerId,
+            priorityOnlyResponse.paused,
+          );
+          if (
+            update.preferences.paused === true &&
+            priorityOnlyResponse.paused
+          ) {
+            refs.adaptivelyPausedConsumerProducerIdsRef.current.add(
+              update.producerId,
+            );
+          } else {
+            refs.adaptivelyPausedConsumerProducerIdsRef.current.delete(
+              update.producerId,
+            );
+          }
+          preferenceDebugRef.current.set(update.producerId, {
+            ...update.debugEntryBase,
+            status: "fallback",
+            paused: priorityOnlyResponse.paused,
+            producerPaused: priorityOnlyResponse.producerPaused,
+            currentLayers: priorityOnlyResponse.currentLayers,
+            error: null,
+            appliedAt: Date.now(),
+            unsupportedLayers: true,
+          });
+          writeDebugSnapshot(debugContext);
+        },
       );
-      scheduledPreferenceTimeoutsRef.current.add(timeoutId);
-    });
+    };
+
+    const handlePreferenceResponse = (
+      update: PendingConsumerPreferenceUpdate,
+      response: SetConsumerPreferencesBatchItemResponse,
+    ) => {
+      if (!isUpdateStillLive(update)) {
+        inFlightProducerIdsRef.current.delete(update.producerId);
+        return;
+      }
+
+      if ("error" in response) {
+        if (isConsumerControlRateLimitError(response.error)) {
+          inFlightProducerIdsRef.current.delete(update.producerId);
+          markDeferredForRetry(update, response.error);
+          return;
+        }
+
+        markError(update, response.error);
+        if (
+          update.preferredLayers &&
+          isUnsupportedLayerError(response.error)
+        ) {
+          unsupportedLayerPreferencesRef.current.set(update.producerId, {
+            consumerId: update.consumer.id,
+            signature: getLayerPreferenceSignature(update.preferredLayers),
+            retryAt: Date.now() + UNSUPPORTED_LAYER_RETRY_AFTER_MS,
+          });
+          if (update.preferences.paused === true) {
+            refs.adaptivelyPausedConsumerProducerIdsRef.current.add(
+              update.producerId,
+            );
+          }
+          sendPriorityOnlyFallback(update);
+          return;
+        }
+        inFlightProducerIdsRef.current.delete(update.producerId);
+        return;
+      }
+
+      inFlightProducerIdsRef.current.delete(update.producerId);
+      lastAppliedRef.current.set(update.producerId, update.signature);
+      if (update.preferredLayers) {
+        lastLayersRef.current.set(update.producerId, update.preferredLayers);
+      }
+      lastPausedRef.current.set(update.producerId, response.paused);
+      if (update.preferences.paused === true && response.paused) {
+        refs.adaptivelyPausedConsumerProducerIdsRef.current.add(
+          update.producerId,
+        );
+      } else {
+        refs.adaptivelyPausedConsumerProducerIdsRef.current.delete(
+          update.producerId,
+        );
+      }
+      preferenceDebugRef.current.set(update.producerId, {
+        ...update.debugEntryBase,
+        status: "applied",
+        paused: response.paused,
+        producerPaused: response.producerPaused,
+        preferredLayers: response.preferredLayers,
+        currentLayers: response.currentLayers,
+        error: null,
+        appliedAt: Date.now(),
+      });
+      writeDebugSnapshot(debugContext);
+    };
+
+    const emitSinglePreferenceUpdate = (
+      update: PendingConsumerPreferenceUpdate,
+    ) => {
+      if (!isUpdateStillLive(update)) {
+        inFlightProducerIdsRef.current.delete(update.producerId);
+        return;
+      }
+
+      let settled = false;
+      const ackTimeoutId = window.setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        scheduledPreferenceTimeoutsRef.current.delete(ackTimeoutId);
+        inFlightProducerIdsRef.current.delete(update.producerId);
+        markDeferredForRetry(update, "setConsumerPreferences ack timeout");
+      }, CONSUMER_PREFERENCE_ACK_TIMEOUT_MS);
+      scheduledPreferenceTimeoutsRef.current.add(ackTimeoutId);
+
+      socket.emit(
+        "setConsumerPreferences",
+        buildPreferencePayload(update),
+        (response: SetConsumerPreferencesResponse) => {
+          if (settled) return;
+          settled = true;
+          scheduledPreferenceTimeoutsRef.current.delete(ackTimeoutId);
+          window.clearTimeout(ackTimeoutId);
+          handlePreferenceResponse(update, response);
+        },
+      );
+    };
+
+    const emitBatchPreferenceUpdates = (
+      batchUpdates: PendingConsumerPreferenceUpdate[],
+    ) => {
+      const liveUpdates = batchUpdates.filter((update) => {
+        if (isUpdateStillLive(update)) return true;
+        inFlightProducerIdsRef.current.delete(update.producerId);
+        return false;
+      });
+      if (liveUpdates.length === 0) return;
+
+      let settled = false;
+      const ackTimeoutId = window.setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        scheduledPreferenceTimeoutsRef.current.delete(ackTimeoutId);
+        for (const update of liveUpdates) {
+          emitSinglePreferenceUpdate(update);
+        }
+      }, CONSUMER_PREFERENCE_ACK_TIMEOUT_MS);
+      scheduledPreferenceTimeoutsRef.current.add(ackTimeoutId);
+
+      socket.emit(
+        "setConsumerPreferencesBatch",
+        {
+          updates: liveUpdates.map(buildPreferencePayload),
+        },
+        (response: SetConsumerPreferencesBatchResponse) => {
+          if (settled) return;
+          settled = true;
+          scheduledPreferenceTimeoutsRef.current.delete(ackTimeoutId);
+          window.clearTimeout(ackTimeoutId);
+          if ("error" in response) {
+            if (isConsumerControlRateLimitError(response.error)) {
+              for (const update of liveUpdates) {
+                inFlightProducerIdsRef.current.delete(update.producerId);
+                markDeferredForRetry(update, response.error);
+              }
+              return;
+            }
+
+            for (const update of liveUpdates) {
+              emitSinglePreferenceUpdate(update);
+            }
+            return;
+          }
+
+          liveUpdates.forEach((update, index) => {
+            handlePreferenceResponse(
+              update,
+              response.results[index] ?? {
+                error: "Missing consumer preference batch result",
+                consumerId: update.consumer.id,
+              },
+            );
+          });
+        },
+      );
+    };
+
+    for (const update of updatesToSend) {
+      markOptimisticPauseState(update);
+    }
+
+    if (screenShareVideoActive && updatesToSend.length > 1) {
+      emitBatchPreferenceUpdates(updatesToSend);
+    } else {
+      updatesToSend.forEach((update, index) => {
+        const timeoutId = window.setTimeout(() => {
+          scheduledPreferenceTimeoutsRef.current.delete(timeoutId);
+          emitSinglePreferenceUpdate(update);
+        }, index * emitSpacingMs);
+        scheduledPreferenceTimeoutsRef.current.add(timeoutId);
+      });
+    }
     writeDebugSnapshot(debugContext);
   }, [
     activeSpeakerId,

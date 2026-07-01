@@ -36,6 +36,7 @@ private enum SocketEvent {
     static let consume = SfuClientEvent.consume.rawValue
     static let resumeConsumer = SfuClientEvent.resumeConsumer.rawValue
     static let setConsumerPreferences = SfuClientEvent.setConsumerPreferences.rawValue
+    static let setConsumerPreferencesBatch = SfuClientEvent.setConsumerPreferencesBatch.rawValue
     static let closeConsumer = SfuClientEvent.closeConsumer.rawValue
     static let getRooms = SfuClientEvent.getRooms.rawValue
     static let getProducers = SfuClientEvent.getProducers.rawValue

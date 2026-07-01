@@ -61,6 +61,7 @@ const files = {
   sfuClient: "packages/sfu/config/classes/Client.ts",
   sfuConfig: "packages/sfu/config/config.ts",
   sfuMediaHandlers: "packages/sfu/server/socket/handlers/mediaHandlers.ts",
+  sfuRateLimit: "packages/sfu/server/socket/rateLimit.ts",
   sfuDisconnectHandlers:
     "packages/sfu/server/socket/handlers/disconnectHandlers.ts",
 };
@@ -961,7 +962,7 @@ assertRegex(
 );
 assertRegex(
   "webAdaptiveConsumerPreferences",
-  /unsupportedLayerPreferencesRef\.current\.set\(producerId,[\s\S]*signature: getLayerPreferenceSignature\(preferredLayers\),[\s\S]*retryAt: Date\.now\(\) \+ UNSUPPORTED_LAYER_RETRY_AFTER_MS/,
+  /unsupportedLayerPreferencesRef\.current\.set\(update\.producerId,[\s\S]*signature: getLayerPreferenceSignature\(update\.preferredLayers\),[\s\S]*retryAt: Date\.now\(\) \+ UNSUPPORTED_LAYER_RETRY_AFTER_MS/,
   "web unsupported receive-layer fallback stores retryable layer signature",
 );
 assertRegex(
@@ -1001,17 +1002,27 @@ assertIncludes(
 );
 assertRegex(
   "webAdaptiveConsumerPreferences",
-  /MAX_CONSUMER_PREFERENCE_UPDATES_PER_CYCLE = 8[\s\S]*SCREEN_SHARE_CONSUMER_PREFERENCE_UPDATES_PER_CYCLE = 16[\s\S]*CONSUMER_PREFERENCE_EMIT_SPACING_MS = 75[\s\S]*SCREEN_SHARE_CONSUMER_PREFERENCE_EMIT_SPACING_MS = 50[\s\S]*const maxUpdatesThisCycle = screenShareVideoActive[\s\S]*SCREEN_SHARE_CONSUMER_PREFERENCE_UPDATES_PER_CYCLE[\s\S]*MAX_CONSUMER_PREFERENCE_UPDATES_PER_CYCLE[\s\S]*const emitSpacingMs = screenShareVideoActive[\s\S]*SCREEN_SHARE_CONSUMER_PREFERENCE_EMIT_SPACING_MS[\s\S]*CONSUMER_PREFERENCE_EMIT_SPACING_MS[\s\S]*pendingUpdates\.slice\([\s\S]*maxUpdatesThisCycle[\s\S]*index \* emitSpacingMs/,
-  "web screen-share receiver constraints apply faster while preserving normal pacing",
+  /MAX_CONSUMER_PREFERENCE_UPDATES_PER_CYCLE = 8[\s\S]*SCREEN_SHARE_CONSUMER_PREFERENCE_UPDATES_PER_CYCLE = 16[\s\S]*CONSUMER_PREFERENCE_EMIT_SPACING_MS = 75[\s\S]*SCREEN_SHARE_CONSUMER_PREFERENCE_EMIT_SPACING_MS = 50[\s\S]*const maxUpdatesThisCycle = screenShareVideoActive[\s\S]*SCREEN_SHARE_CONSUMER_PREFERENCE_UPDATES_PER_CYCLE[\s\S]*MAX_CONSUMER_PREFERENCE_UPDATES_PER_CYCLE[\s\S]*const emitSpacingMs = screenShareVideoActive[\s\S]*SCREEN_SHARE_CONSUMER_PREFERENCE_EMIT_SPACING_MS[\s\S]*CONSUMER_PREFERENCE_EMIT_SPACING_MS[\s\S]*pendingUpdates\.slice\([\s\S]*maxUpdatesThisCycle[\s\S]*emitBatchPreferenceUpdates[\s\S]*"setConsumerPreferencesBatch"[\s\S]*updates: liveUpdates\.map\(buildPreferencePayload\)[\s\S]*screenShareVideoActive && updatesToSend\.length > 1[\s\S]*emitBatchPreferenceUpdates\(updatesToSend\)[\s\S]*index \* emitSpacingMs/,
+  "web screen-share receiver constraints batch while preserving normal pacing fallback",
+);
+assertRegex(
+  "sfuMediaHandlers",
+  /MAX_CONSUMER_PREFERENCE_BATCH_SIZE = 24[\s\S]*"setConsumerPreferencesBatch"[\s\S]*RATE_LIMITS\.consumerControlBatch[\s\S]*updates\.length === 0[\s\S]*updates\.length > MAX_CONSUMER_PREFERENCE_BATCH_SIZE[\s\S]*applyConsumerPreferencesData\(room, currentClient, update\)[\s\S]*results,/,
+  "SFU batches bounded consumer preference updates with per-consumer results",
+);
+assertIncludes(
+  "sfuRateLimit",
+  "consumerControlBatch: { capacity: 8, refillPerSec: 2 }",
+  "SFU screen-share preference batches have their own rate limit",
 );
 assertIncludes(
   "webAdaptiveConsumerPreferences",
-  'markDeferredForRetry("setConsumerPreferences ack timeout")',
+  'markDeferredForRetry(update, "setConsumerPreferences ack timeout")',
   "web consumer preference ACK timeout retries stale layer updates",
 );
 assertIncludes(
   "webAdaptiveConsumerPreferences",
-  'markDeferredForRetry(\n                    "setConsumerPreferences priority-only ack timeout",',
+  'markDeferredForRetry(\n          update,\n          "setConsumerPreferences priority-only ack timeout",',
   "web consumer preference fallback ACK timeout retries stale layer updates",
 );
 assertRegex(

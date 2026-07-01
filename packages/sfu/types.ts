@@ -161,6 +161,22 @@ export interface SetConsumerPreferencesResponse {
   currentLayers?: ConsumerLayerPreference;
 }
 
+export interface SetConsumerPreferencesBatchData {
+  updates: SetConsumerPreferencesData[];
+}
+
+export type SetConsumerPreferencesBatchItemResponse =
+  | SetConsumerPreferencesResponse
+  | {
+      error: string;
+      consumerId?: string;
+    };
+
+export interface SetConsumerPreferencesBatchResponse {
+  success: boolean;
+  results: SetConsumerPreferencesBatchItemResponse[];
+}
+
 export interface ProducerInfo {
   producerId: string;
   producerUserId: string;
