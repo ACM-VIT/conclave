@@ -244,6 +244,8 @@ const MIN_OUTBOUND_VIDEO_BYTE_DELTA_FOR_PROGRESS = 1200;
 const MIN_SCREEN_SHARE_OUTBOUND_BYTE_DELTA_FOR_STALL = 8000;
 const LOCAL_AUDIO_MUTED_RECOVERY_DELAY_MS = 4000;
 const LOCAL_AUDIO_MUTED_RECOVERY_COOLDOWN_MS = 15000;
+const LOCAL_VIDEO_MUTED_RECOVERY_DELAY_MS = 5000;
+const LOCAL_VIDEO_MUTED_RECOVERY_COOLDOWN_MS = 15000;
 
 const createCameraOutboundStallState = (
   producerId: string | null = null,
@@ -476,10 +478,17 @@ export function useMeetMedia({
   const localAudioTrackHandlersRef = useRef<WeakSet<MediaStreamTrack>>(
     new WeakSet(),
   );
+  const localVideoTrackHandlersRef = useRef<WeakSet<MediaStreamTrack>>(
+    new WeakSet(),
+  );
   const localAudioMutedRecoveryTimeoutsRef = useRef<Map<string, number>>(
     new Map(),
   );
+  const localVideoMutedRecoveryTimeoutsRef = useRef<Map<string, number>>(
+    new Map(),
+  );
   const lastLocalAudioMutedRecoveryAtRef = useRef(0);
+  const lastLocalVideoMutedRecoveryAtRef = useRef(0);
   const isMediaRecoveryBlocked = useCallback(
     () => mediaRecoveryBlockedRef?.current === true,
     [mediaRecoveryBlockedRef],
@@ -498,12 +507,17 @@ export function useMeetMedia({
   }, [isScreenSharing, resetScreenShareControlState]);
 
   useEffect(() => {
-    const recoveryTimeouts = localAudioMutedRecoveryTimeoutsRef.current;
+    const audioRecoveryTimeouts = localAudioMutedRecoveryTimeoutsRef.current;
+    const videoRecoveryTimeouts = localVideoMutedRecoveryTimeoutsRef.current;
     return () => {
-      recoveryTimeouts.forEach((timeoutId) => {
+      audioRecoveryTimeouts.forEach((timeoutId) => {
         window.clearTimeout(timeoutId);
       });
-      recoveryTimeouts.clear();
+      audioRecoveryTimeouts.clear();
+      videoRecoveryTimeouts.forEach((timeoutId) => {
+        window.clearTimeout(timeoutId);
+      });
+      videoRecoveryTimeouts.clear();
     };
   }, []);
 
@@ -589,6 +603,10 @@ export function useMeetMedia({
   useEffect(() => {
     isMutedRef.current = isMuted;
   }, [isMuted]);
+  const isCameraOffRef = useRef(isCameraOff);
+  useEffect(() => {
+    isCameraOffRef.current = isCameraOff;
+  }, [isCameraOff]);
   const setMutedIntent = useCallback(
     (value: boolean) => {
       isMutedRef.current = value;
@@ -1343,6 +1361,150 @@ export function useMeetMedia({
     ],
   );
 
+  const clearLocalVideoMutedRecoveryTimer = useCallback(
+    (trackId: string) => {
+      const timeoutId = localVideoMutedRecoveryTimeoutsRef.current.get(trackId);
+      if (timeoutId === undefined) return;
+      window.clearTimeout(timeoutId);
+      localVideoMutedRecoveryTimeoutsRef.current.delete(trackId);
+    },
+    [],
+  );
+
+  const scheduleLocalVideoMutedRecovery = useCallback(
+    (track: MediaStreamTrack) => {
+      if (
+        isCameraOffRef.current ||
+        connectionStateRef.current !== "joined" ||
+        track.readyState !== "live" ||
+        !track.enabled ||
+        !track.muted ||
+        localVideoMutedRecoveryTimeoutsRef.current.has(track.id)
+      ) {
+        return;
+      }
+
+      const timeoutId = window.setTimeout(() => {
+        localVideoMutedRecoveryTimeoutsRef.current.delete(track.id);
+        if (
+          isCameraOffRef.current ||
+          connectionStateRef.current !== "joined" ||
+          isMediaRecoveryBlocked() ||
+          !isDocumentVisibleForMediaRecovery() ||
+          cameraRecoveryInFlightRef.current ||
+          track.readyState !== "live" ||
+          !track.enabled ||
+          !track.muted
+        ) {
+          return;
+        }
+
+        const currentProducer = videoProducerRef.current;
+        const producerTrack = currentProducer?.track ?? null;
+        const producerUsesTrack =
+          producerTrack === track || producerTrack?.id === track.id;
+        const currentStream = localStreamRef.current;
+        const streamUsesTrack =
+          currentStream
+            ?.getVideoTracks()
+            .some(
+              (currentTrack) =>
+                currentTrack === track || currentTrack.id === track.id,
+            ) === true;
+
+        if (!producerUsesTrack && !streamUsesTrack) {
+          return;
+        }
+
+        const now = performance.now();
+        if (
+          now - lastLocalVideoMutedRecoveryAtRef.current <
+          LOCAL_VIDEO_MUTED_RECOVERY_COOLDOWN_MS
+        ) {
+          return;
+        }
+        lastLocalVideoMutedRecoveryAtRef.current = now;
+
+        console.warn(
+          "[Meets] Local camera stopped sending data; refreshing camera producer.",
+          {
+            producerId: currentProducer?.id ?? null,
+            trackId: track.id,
+            producerUsesTrack,
+            streamUsesTrack,
+          },
+        );
+
+        if (currentProducer && (producerUsesTrack || streamUsesTrack)) {
+          closeLocalVideoProducerForReplacement(currentProducer);
+        }
+        if (streamUsesTrack && currentStream) {
+          const remainingTracks = currentStream
+            .getTracks()
+            .filter(
+              (currentTrack) =>
+                currentTrack !== track && currentTrack.id !== track.id,
+            );
+          commitLocalStream(new MediaStream(remainingTracks));
+        }
+        stopLocalTrack(track);
+        requestCameraProducerRecovery();
+      }, LOCAL_VIDEO_MUTED_RECOVERY_DELAY_MS);
+
+      localVideoMutedRecoveryTimeoutsRef.current.set(track.id, timeoutId);
+    },
+    [
+      closeLocalVideoProducerForReplacement,
+      commitLocalStream,
+      isMediaRecoveryBlocked,
+      localStreamRef,
+      requestCameraProducerRecovery,
+      stopLocalTrack,
+      videoProducerRef,
+    ],
+  );
+
+  const attachLocalVideoTrackHandlers = useCallback(
+    (track: MediaStreamTrack) => {
+      if (!localVideoTrackHandlersRef.current.has(track)) {
+        localVideoTrackHandlersRef.current.add(track);
+        track.addEventListener("mute", () => {
+          scheduleLocalVideoMutedRecovery(track);
+        });
+        track.addEventListener("unmute", () => {
+          clearLocalVideoMutedRecoveryTimer(track.id);
+        });
+      }
+
+      if (track.muted) {
+        scheduleLocalVideoMutedRecovery(track);
+      }
+    },
+    [
+      clearLocalVideoMutedRecoveryTimer,
+      scheduleLocalVideoMutedRecovery,
+    ],
+  );
+
+  const scheduleCurrentLocalVideoMutedRecovery = useCallback(() => {
+    if (!isDocumentVisibleForMediaRecovery()) return;
+    const seenTrackIds = new Set<string>();
+    const tracks = [
+      ...((localStreamRef.current ?? localStream)?.getVideoTracks() ?? []),
+      videoProducerRef.current?.track ?? null,
+    ];
+    for (const track of tracks) {
+      if (!track || seenTrackIds.has(track.id)) continue;
+      seenTrackIds.add(track.id);
+      attachLocalVideoTrackHandlers(track);
+    }
+  }, [
+    attachLocalVideoTrackHandlers,
+    localStream,
+    localStreamRef,
+    videoProducerRef,
+  ]);
+
   useEffect(() => {
     if (ghostEnabled || isObserverMode) return;
     if (connectionState !== "joined") return;
@@ -1361,6 +1523,29 @@ export function useMeetMedia({
     isObserverMode,
     localStream,
     localStreamRef,
+  ]);
+
+  useEffect(() => {
+    if (ghostEnabled || isObserverMode) return;
+    if (connectionState !== "joined") return;
+    if (isCameraOff) return;
+
+    scheduleCurrentLocalVideoMutedRecovery();
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        scheduleCurrentLocalVideoMutedRecovery();
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [
+    connectionState,
+    ghostEnabled,
+    isCameraOff,
+    isObserverMode,
+    scheduleCurrentLocalVideoMutedRecovery,
   ]);
 
   const requestMediaPermissions = useCallback(async (
@@ -1527,6 +1712,9 @@ export function useMeetMedia({
       if (nextVideoTrack && "contentHint" in nextVideoTrack) {
         nextVideoTrack.contentHint = "motion";
       }
+      if (nextVideoTrack) {
+        attachLocalVideoTrackHandlers(nextVideoTrack);
+      }
 
       return liveTracks.length > 0 ? new MediaStream(liveTracks) : null;
     } catch (err) {
@@ -1584,6 +1772,7 @@ export function useMeetMedia({
     isMuted,
     isCameraOff,
     attachLocalAudioTrackHandlers,
+    attachLocalVideoTrackHandlers,
     buildAudioConstraints,
     buildVideoConstraints,
     localStreamRef,
@@ -1685,6 +1874,7 @@ export function useMeetMedia({
           if ("contentHint" in newVideoTrack) {
             newVideoTrack.contentHint = "motion";
           }
+          attachLocalVideoTrackHandlers(newVideoTrack);
           newVideoTrack.onended = () => {
             handleLocalTrackEnded("video", newVideoTrack);
           };
@@ -1706,6 +1896,7 @@ export function useMeetMedia({
               nextStream,
               newVideoTrack,
             );
+            attachLocalVideoTrackHandlers(publishTrack);
             try {
               await videoProducer.replaceTrack({
                 track: publishTrack,
@@ -1744,6 +1935,7 @@ export function useMeetMedia({
     [
       connectionState,
       isCameraOff,
+      attachLocalVideoTrackHandlers,
       localStream,
       handleLocalTrackEnded,
       videoProducerRef,
@@ -1965,6 +2157,7 @@ export function useMeetMedia({
           currentTrack.readyState === "live" &&
           shouldUpdateCaptureConstraints
         ) {
+          attachLocalVideoTrackHandlers(currentTrack);
           currentTrack.onended = () => {
             handleLocalTrackEnded("video", currentTrack);
           };
@@ -2028,6 +2221,7 @@ export function useMeetMedia({
           if ("contentHint" in newVideoTrack) {
             newVideoTrack.contentHint = "motion";
           }
+          attachLocalVideoTrackHandlers(newVideoTrack);
           newVideoTrack.onended = () => {
             handleLocalTrackEnded("video", newVideoTrack);
           };
@@ -2055,6 +2249,7 @@ export function useMeetMedia({
           publishStream,
           nextVideoTrack,
         );
+        attachLocalVideoTrackHandlers(publishTrack);
         const preferredWebcamCodec = getPreferredWebcamCodec(deviceRef.current);
         const previousEncodingCount =
           previousProducer?.rtpSender?.getParameters().encodings?.length ??
@@ -2160,6 +2355,7 @@ export function useMeetMedia({
     },
     [
       isCameraOff,
+      attachLocalVideoTrackHandlers,
       localStream,
       handleLocalTrackEnded,
       stopLocalTrack,
@@ -2751,6 +2947,7 @@ export function useMeetMedia({
           if ("contentHint" in videoTrack) {
             videoTrack.contentHint = "motion";
           }
+          attachLocalVideoTrackHandlers(videoTrack);
           videoTrack.onended = () => {
             handleLocalTrackEnded("video", videoTrack);
           };
@@ -2770,6 +2967,7 @@ export function useMeetMedia({
             nextStream,
             videoTrack,
           );
+          attachLocalVideoTrackHandlers(publishTrack);
 
           const quality = videoQualityRef.current;
           const networkProfile = getPublishNetworkProfile();
@@ -2819,6 +3017,7 @@ export function useMeetMedia({
     ghostEnabled,
     isObserverMode,
     isCameraOff,
+    attachLocalVideoTrackHandlers,
     handleLocalTrackEnded,
     stopLocalTrack,
     socketRef,
@@ -2884,6 +3083,7 @@ export function useMeetMedia({
             if ("contentHint" in rawCameraTrack) {
               rawCameraTrack.contentHint = "motion";
             }
+            attachLocalVideoTrackHandlers(rawCameraTrack);
             rawCameraTrack.onended = () => {
               handleLocalTrackEnded("video", rawCameraTrack);
             };
@@ -2968,6 +3168,7 @@ export function useMeetMedia({
     onPreferredVideoPublishTrackRejected,
     closeLocalVideoProducerForReplacement,
     requestCameraProducerRecovery,
+    attachLocalVideoTrackHandlers,
   ]);
 
   useEffect(() => {
@@ -3081,6 +3282,8 @@ export function useMeetMedia({
           if ("contentHint" in rawCameraTrack) {
             rawCameraTrack.contentHint = "motion";
           }
+          attachLocalVideoTrackHandlers(rawCameraTrack);
+          attachLocalVideoTrackHandlers(publishTrack);
           rawCameraTrack.onended = () => {
             handleLocalTrackEnded("video", rawCameraTrack);
           };
@@ -3316,6 +3519,7 @@ export function useMeetMedia({
     localStreamRef,
     videoQualityRef,
     handleLocalTrackEnded,
+    attachLocalVideoTrackHandlers,
     getPublishNetworkProfile,
     onPreferredVideoPublishTrackRejected,
     closeLocalVideoProducerForReplacement,
@@ -3657,6 +3861,7 @@ export function useMeetMedia({
         if ("contentHint" in videoTrack) {
           videoTrack.contentHint = "motion";
         }
+        attachLocalVideoTrackHandlers(videoTrack);
         videoTrack.onended = () => {
           handleLocalTrackEnded("video", videoTrack);
         };
@@ -3685,6 +3890,7 @@ export function useMeetMedia({
           publishStream,
           videoTrack,
         );
+        attachLocalVideoTrackHandlers(publishTrack);
         const quality = videoQualityRef.current;
         const networkProfile = getPublishNetworkProfile();
         const forceSingleLayer = cameraRecoveryForceSingleLayerRef.current;
@@ -3757,6 +3963,7 @@ export function useMeetMedia({
     cameraProducerRecoveryPulse,
     isCameraOff,
     isMediaRecoveryBlocked,
+    attachLocalVideoTrackHandlers,
     handleLocalTrackEnded,
     stopLocalTrack,
     setLocalStream,

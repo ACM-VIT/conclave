@@ -1501,6 +1501,31 @@ for (const [context, label] of [
 }
 assertRegex(
   "webMeetMedia",
+  /LOCAL_VIDEO_MUTED_RECOVERY_DELAY_MS = 5000[\s\S]*localVideoTrackHandlersRef[\s\S]*localVideoMutedRecoveryTimeoutsRef[\s\S]*lastLocalVideoMutedRecoveryAtRef/,
+  "web local camera muted-source recovery has dedicated timers and handler tracking",
+);
+assertRegex(
+  "webMeetMedia",
+  /const scheduleLocalVideoMutedRecovery = useCallback[\s\S]*track\.readyState !== "live"[\s\S]*!track\.muted[\s\S]*!isDocumentVisibleForMediaRecovery\(\)[\s\S]*cameraRecoveryInFlightRef\.current[\s\S]*producerUsesTrack[\s\S]*streamUsesTrack[\s\S]*currentProducer && \(producerUsesTrack \|\| streamUsesTrack\)[\s\S]*closeLocalVideoProducerForReplacement\(currentProducer\)[\s\S]*stopLocalTrack\(track\);[\s\S]*requestCameraProducerRecovery\(\);/,
+  "web muted local camera tracks recover through the camera producer recovery path without hidden-tab churn",
+);
+assertRegex(
+  "webMeetMedia",
+  /const attachLocalVideoTrackHandlers = useCallback[\s\S]*track\.addEventListener\("mute"[\s\S]*scheduleLocalVideoMutedRecovery\(track\)[\s\S]*track\.addEventListener\("unmute"[\s\S]*clearLocalVideoMutedRecoveryTimer\(track\.id\)[\s\S]*if \(track\.muted\) \{[\s\S]*scheduleLocalVideoMutedRecovery\(track\);/,
+  "web local camera tracks listen for source mute and clear recovery on unmute",
+);
+assertRegex(
+  "webMeetMedia",
+  /const scheduleCurrentLocalVideoMutedRecovery = useCallback[\s\S]*localStreamRef\.current \?\? localStream[\s\S]*videoProducerRef\.current\?\.track[\s\S]*attachLocalVideoTrackHandlers\(track\)/,
+  "web local camera muted-source recovery scans raw and producer tracks",
+);
+assertRegex(
+  "webMeetMedia",
+  /const handleVisibilityChange = \(\) => \{[\s\S]*document\.visibilityState === "visible"[\s\S]*scheduleCurrentLocalVideoMutedRecovery\(\)[\s\S]*document\.addEventListener\("visibilitychange"/,
+  "web foreground return rechecks muted local camera tracks",
+);
+assertRegex(
+  "webMeetMedia",
   /let createdTrack: MediaStreamTrack \| null = null;[\s\S]*const removeCreatedTrackFromLocalStream = \(\) => \{[\s\S]*stopLocalTrack\(createdTrack\);[\s\S]*createdTrack = null;[\s\S]*audioRecoveryInFlightRef\.current = true;[\s\S]*const recoverAudioProducer = async \(\) => \{[\s\S]*if \(cancelled\) \{[\s\S]*audioProducer\.close\(\);[\s\S]*removeCreatedTrackFromLocalStream\(\);[\s\S]*catch \(err\) \{[\s\S]*removeCreatedTrackFromLocalStream\(\);[\s\S]*return \(\) => \{[\s\S]*cancelled = true;[\s\S]*removeCreatedTrackFromLocalStream\(\);/,
   "web cancelled audio recovery stops recovery-created mic tracks",
 );
