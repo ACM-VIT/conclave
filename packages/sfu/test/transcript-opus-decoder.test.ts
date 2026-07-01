@@ -37,11 +37,26 @@ const expectAudiblePcm = (decoded: Buffer | null): void => {
   expect(decoded).not.toBeNull();
   expect(decoded!.length).toBeGreaterThan(0);
   expect(decoded!.length % 2).toBe(0);
-  expect(
-    Array.from({ length: decoded!.length / 2 }).some(
-      (_, index) => decoded!.readInt16LE(index * 2) !== 0,
-    ),
-  ).toBe(true);
+  let sumSquares = 0;
+  let peak = 0;
+  let zeroCrossings = 0;
+  let previousSign = 0;
+  const sampleCount = decoded!.length / 2;
+  for (let index = 0; index < sampleCount; index += 1) {
+    const sample = decoded!.readInt16LE(index * 2);
+    const normalized = sample / 32768;
+    sumSquares += normalized * normalized;
+    peak = Math.max(peak, Math.abs(normalized));
+    const sign = sample === 0 ? previousSign : sample > 0 ? 1 : -1;
+    if (previousSign !== 0 && sign !== 0 && sign !== previousSign) {
+      zeroCrossings += 1;
+    }
+    previousSign = sign;
+  }
+
+  expect(Math.sqrt(sumSquares / sampleCount)).toBeGreaterThan(0.05);
+  expect(peak).toBeGreaterThan(0.1);
+  expect(zeroCrossings / sampleCount).toBeGreaterThan(0.005);
 };
 
 describe("TranscriptOpusDecoder", () => {

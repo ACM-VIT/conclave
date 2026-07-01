@@ -14,7 +14,6 @@ import {
   type TranscriptTranscriptionProvider,
 } from "@conclave/meeting-core/transcript-models";
 import {
-  TRANSCRIPT_PCM_SAMPLE_RATE,
   DEFAULT_MAX_SEGMENTS,
   DEFAULT_QA_MODEL,
   DEFAULT_TRANSCRIPT_MODEL,
@@ -86,7 +85,6 @@ import {
   parsePositiveInt,
   redactSensitiveText,
   safeJsonParse,
-  analyzePcm16Base64,
   createSilentPcm16Base64,
   estimatePcm16Base64SampleCount,
   trimText,
@@ -105,26 +103,6 @@ const createIdleSession = (roomId: string): TranscriptSessionState => ({
   error: null,
 });
   
-const TRANSCRIPT_AUDIO_DEBUG_INTERVAL_MS = 15_000;
-
-type TranscriptAudioDebugStats = {
-  acceptedChunks: number;
-  acceptedSamples: number;
-  commits: number;
-  providerCommittedItems: number;
-  providerFinals: number;
-  lastAudioLogAt: number;
-};
-
-const createAudioDebugStats = (): TranscriptAudioDebugStats => ({
-  acceptedChunks: 0,
-  acceptedSamples: 0,
-  commits: 0,
-  providerCommittedItems: 0,
-  providerFinals: 0,
-  lastAudioLogAt: 0,
-});
-
 export class TranscriptRoom {
   private readonly state: DurableObjectState;
   private readonly env: Env;
@@ -155,7 +133,6 @@ export class TranscriptRoom {
   private audioPaused = false;
   private suppressSfuRelayDisconnectsUntil = 0;
   private suppressSfuRelayDisconnectCount = 0;
-  private audioDebugStats = createAudioDebugStats();
 
   constructor(state: DurableObjectState, env: Env) {
     this.state = state;
@@ -724,19 +701,6 @@ export class TranscriptRoom {
       this.latestSpeaker = normalizedSpeaker;
       this.hasPendingAudio = true;
       this.pendingAudioSamples += sampleCount;
-      this.audioDebugStats.acceptedChunks += 1;
-      this.audioDebugStats.acceptedSamples += sampleCount;
-      this.logAudioDebug(
-        "accepted audio chunk",
-        () => ({
-          samples: sampleCount,
-          pendingSamples: this.pendingAudioSamples,
-          speakerUserId: normalizedSpeaker.userId,
-          source: normalizedSpeaker.source,
-          pcm: analyzePcm16Base64(audio, TRANSCRIPT_PCM_SAMPLE_RATE),
-        }),
-        this.audioDebugStats.acceptedChunks === 1,
-      );
       if (this.isController(viewer) && this.session?.controller) {
         this.session.controller.lastSeenAt = Date.now();
       }
@@ -792,15 +756,6 @@ export class TranscriptRoom {
       this.speakerAttribution.enqueueCommit(speaker);
       this.hasPendingAudio = false;
       this.pendingAudioSamples = 0;
-      this.audioDebugStats.commits += 1;
-      this.logAudioDebug(
-        "committed audio buffer",
-        {
-          speakerUserId: speaker.userId,
-          source: speaker.source,
-        },
-        this.audioDebugStats.commits === 1,
-      );
       return true;
     } catch {
       void this.handleTranscriptionFailure(failureMessage);
@@ -911,12 +866,6 @@ export class TranscriptRoom {
         onFailure: (message) => this.handleTranscriptionFailure(message),
       },
     });
-    console.info("[TranscriptWorker] transcription provider connected", {
-      roomId: this.session?.roomId,
-      provider: this.transcriptionSession.provider,
-      model: options.transcriptModel,
-      transportMode: this.session?.transportMode,
-    });
   }
 
   private closeTranscriptionProvider(): void {
@@ -935,19 +884,12 @@ export class TranscriptRoom {
     this.latestSpeaker = null;
     this.hasPendingAudio = false;
     this.pendingAudioSamples = 0;
-    this.audioDebugStats = createAudioDebugStats();
     if (hadPartials) {
       this.broadcast({ type: "partials.reset" });
     }
   }
 
   private handleTranscriptItemCommitted(itemId: string): void {
-    this.audioDebugStats.providerCommittedItems += 1;
-    this.logAudioDebug(
-      "provider committed transcript item",
-      { itemId },
-      this.audioDebugStats.providerCommittedItems === 1,
-    );
     const speaker = this.speakerAttribution.bindCommittedItem(itemId);
     if (speaker) {
       this.reassignSegmentSpeaker(itemId, speaker);
@@ -1104,12 +1046,6 @@ export class TranscriptRoom {
     const text = transcript.trim() || segment.text.trim();
     this.partialSegments.delete(itemId);
     if (!text) return;
-    this.audioDebugStats.providerFinals += 1;
-    this.logAudioDebug(
-      "provider finalized transcript item",
-      { itemId, textLength: text.length },
-      this.audioDebugStats.providerFinals === 1,
-    );
 
     const now = Date.now();
     const finalSegment: TranscriptSegment = {
@@ -1161,36 +1097,6 @@ export class TranscriptRoom {
       updatedAt: Date.now(),
       error: redactSensitiveText(error),
     };
-  }
-
-  private logAudioDebug(
-    event: string,
-    details: Record<string, unknown> | (() => Record<string, unknown>) = {},
-    force = false,
-  ): void {
-    const now = Date.now();
-    if (
-      !force &&
-      now - this.audioDebugStats.lastAudioLogAt <
-        TRANSCRIPT_AUDIO_DEBUG_INTERVAL_MS
-    ) {
-      return;
-    }
-    this.audioDebugStats.lastAudioLogAt = now;
-    const resolvedDetails =
-      typeof details === "function" ? details() : details;
-    console.info("[TranscriptWorker] audio", {
-      event,
-      roomId: this.session?.roomId,
-      status: this.session?.status,
-      transportMode: this.session?.transportMode,
-      provider: this.transcriptionSession?.provider ?? null,
-      acceptedChunks: this.audioDebugStats.acceptedChunks,
-      commits: this.audioDebugStats.commits,
-      providerCommittedItems: this.audioDebugStats.providerCommittedItems,
-      providerFinals: this.audioDebugStats.providerFinals,
-      ...resolvedDetails,
-    });
   }
 
   private hasMinutesContent(minutes: TranscriptMinutesSnapshot): boolean {

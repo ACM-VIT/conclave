@@ -2,14 +2,12 @@ import {
   buildRealtimeTranscriptionConfig,
   realtimeEndpoint,
 } from "../openai";
-import { safeJsonParse, trimText } from "../utils";
+import { safeJsonParse } from "../utils";
 import type {
   LiveTranscriptionCallbacks,
   LiveTranscriptionConnectOptions,
   LiveTranscriptionSession,
 } from "./types";
-
-const OPENAI_EVENT_LOG_INTERVAL_MS = 15_000;
 
 type OpenAiRealtimeEvent = {
   type?: string;
@@ -19,41 +17,6 @@ type OpenAiRealtimeEvent = {
   transcript?: string;
   error?: {
     message?: string;
-    code?: string;
-    type?: string;
-  };
-};
-
-const summarizeOpenAiRealtimeEvent = (
-  raw: string,
-): Record<string, unknown> | null => {
-  const parsed = safeJsonParse(raw);
-  if (!parsed || typeof parsed !== "object") {
-    return { validJson: false };
-  }
-  const event = parsed as OpenAiRealtimeEvent;
-  return {
-    validJson: true,
-    eventType: event.type ?? null,
-    hasItemId: typeof event.item_id === "string" && event.item_id.length > 0,
-    hasDelta: typeof event.delta === "string" && event.delta.length > 0,
-    deltaLength: typeof event.delta === "string" ? event.delta.length : 0,
-    hasTranscript:
-      typeof event.transcript === "string" && event.transcript.length > 0,
-    transcriptLength:
-      typeof event.transcript === "string" ? event.transcript.length : 0,
-    errorMessage:
-      typeof event.error?.message === "string"
-        ? trimText(event.error.message, 300)
-        : null,
-    errorCode:
-      typeof event.error?.code === "string"
-        ? trimText(event.error.code, 120)
-        : null,
-    errorType:
-      typeof event.error?.type === "string"
-        ? trimText(event.error.type, 120)
-        : null,
   };
 };
 
@@ -61,9 +24,6 @@ class OpenAiRealtimeTranscriptionSession implements LiveTranscriptionSession {
   readonly provider = "openai" as const;
 
   private closed = false;
-  private receivedEvents = 0;
-  private ignoredEvents = 0;
-  private lastEventLogAt = 0;
 
   constructor(
     private readonly socket: WebSocket,
@@ -108,30 +68,24 @@ class OpenAiRealtimeTranscriptionSession implements LiveTranscriptionSession {
   }
 
   private async handleEvent(raw: string): Promise<void> {
-    this.receivedEvents += 1;
     const parsed = safeJsonParse(raw);
     if (!parsed || typeof parsed !== "object") {
-      this.ignoredEvents += 1;
-      this.logProviderEvent("invalid_json", raw, this.ignoredEvents === 1);
       return;
     }
     const event = parsed as OpenAiRealtimeEvent;
     if (event.type === "error") {
-      this.logProviderEvent("error", raw, true);
       await this.callbacks.onFailure(
         event.error?.message || "Realtime transcription error.",
       );
       return;
     }
     if (event.type === "conversation.item.input_audio_transcription.failed") {
-      this.logProviderEvent("failed", raw, true);
       await this.callbacks.onFailure(
         event.error?.message || "Realtime input audio transcription failed.",
       );
       return;
     }
     if (event.type === "input_audio_buffer.committed" && event.item_id) {
-      this.logProviderEvent("committed", raw, this.receivedEvents === 1);
       this.callbacks.onCommitted(event.item_id);
       return;
     }
@@ -140,7 +94,6 @@ class OpenAiRealtimeTranscriptionSession implements LiveTranscriptionSession {
       event.item_id &&
       event.delta
     ) {
-      this.logProviderEvent("delta", raw, this.receivedEvents === 1);
       this.callbacks.onDelta(event.item_id, event.delta);
       return;
     }
@@ -148,30 +101,8 @@ class OpenAiRealtimeTranscriptionSession implements LiveTranscriptionSession {
       event.type === "conversation.item.input_audio_transcription.completed" &&
       event.item_id
     ) {
-      this.logProviderEvent("completed", raw, this.receivedEvents === 1);
       await this.callbacks.onFinal(event.item_id, event.transcript || "");
-      return;
     }
-    this.ignoredEvents += 1;
-    this.logProviderEvent("ignored", raw, this.ignoredEvents === 1);
-  }
-
-  private logProviderEvent(
-    outcome: string,
-    raw: string,
-    force = false,
-  ): void {
-    const now = Date.now();
-    if (!force && now - this.lastEventLogAt < OPENAI_EVENT_LOG_INTERVAL_MS) {
-      return;
-    }
-    this.lastEventLogAt = now;
-    console.info("[TranscriptWorker] openai realtime event", {
-      outcome,
-      receivedEvents: this.receivedEvents,
-      ignoredEvents: this.ignoredEvents,
-      ...summarizeOpenAiRealtimeEvent(raw),
-    });
   }
 }
 

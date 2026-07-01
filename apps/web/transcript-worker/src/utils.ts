@@ -115,56 +115,6 @@ export const estimatePcm16Base64SampleCount = (value: string): number => {
   return Math.floor(byteLength / 2);
 };
 
-export const analyzePcm16Base64 = (
-  value: string,
-  sampleRate: number,
-): Record<string, number> => {
-  const binary = atob(value.replace(/\s+/g, ""));
-  const samples = Math.floor(binary.length / 2);
-  if (samples === 0) {
-    return {
-      samples: 0,
-      durationMs: 0,
-      rms: 0,
-      peak: 0,
-      meanAbs: 0,
-      zeroCrossingRate: 0,
-    };
-  }
-
-  let sumSquares = 0;
-  let sumAbs = 0;
-  let peak = 0;
-  let zeroCrossings = 0;
-  let previousSign = 0;
-  for (let index = 0; index < samples; index += 1) {
-    const offset = index * 2;
-    const unsigned =
-      (binary.charCodeAt(offset) & 0xff) |
-      ((binary.charCodeAt(offset + 1) & 0xff) << 8);
-    const sample = unsigned >= 0x8000 ? unsigned - 0x10000 : unsigned;
-    const normalized = sample / 32768;
-    const abs = Math.abs(normalized);
-    sumSquares += normalized * normalized;
-    sumAbs += abs;
-    peak = Math.max(peak, abs);
-    const sign = sample === 0 ? previousSign : sample > 0 ? 1 : -1;
-    if (previousSign !== 0 && sign !== 0 && sign !== previousSign) {
-      zeroCrossings += 1;
-    }
-    previousSign = sign;
-  }
-
-  return {
-    samples,
-    durationMs: Math.round((samples / sampleRate) * 1000),
-    rms: Number(Math.sqrt(sumSquares / samples).toFixed(6)),
-    peak: Number(peak.toFixed(6)),
-    meanAbs: Number((sumAbs / samples).toFixed(6)),
-    zeroCrossingRate: Number((zeroCrossings / samples).toFixed(6)),
-  };
-};
-
 export const createSilentPcm16Base64 = (samples: number): string => {
   const sampleCount = Math.max(0, Math.floor(samples));
   if (sampleCount === 0) return "";
