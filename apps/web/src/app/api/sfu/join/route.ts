@@ -81,6 +81,11 @@ type SfuStatusResponse = {
   rooms?: number;
 };
 
+type AvailableSfu = {
+  index: number;
+  url: string;
+};
+
 const splitUrls = (value: string | undefined): string[] =>
   (value ?? "")
     .split(",")
@@ -147,6 +152,19 @@ const fetchWithTimeout = async (
   }
 };
 
+const pickStableSfuUrl = (
+  available: AvailableSfu[],
+  routingKey: string,
+): string | null => {
+  if (available.length === 0) return null;
+  if (available.length === 1) return available[0]?.url ?? null;
+
+  const ordered = [...available].sort((a, b) => a.index - b.index);
+  const digest = createHash("sha256").update(routingKey).digest();
+  const index = digest.readUInt32BE(0) % ordered.length;
+  return ordered[index]?.url ?? null;
+};
+
 const resolveRoomOwnerSfuUrl = async (options: {
   candidateSfuUrls: string[];
   secret: string;
@@ -211,6 +229,7 @@ const resolveRoomOwnerSfuUrl = async (options: {
 const resolveNonDrainingSfuUrl = async (options: {
   candidateSfuUrls: string[];
   secret: string;
+  routingKey: string;
 }): Promise<string | null> => {
   const statuses = await Promise.allSettled(
     options.candidateSfuUrls.map(async (candidateSfuUrl, index) => {
@@ -235,11 +254,7 @@ const resolveNonDrainingSfuUrl = async (options: {
         return null;
       }
 
-      const rooms =
-        typeof status.rooms === "number" && Number.isFinite(status.rooms)
-          ? status.rooms
-          : Number.MAX_SAFE_INTEGER;
-      return { index, rooms, url: candidateSfuUrl };
+      return { index, url: candidateSfuUrl } satisfies AvailableSfu;
     }),
   );
 
@@ -265,8 +280,10 @@ const resolveNonDrainingSfuUrl = async (options: {
     return null;
   }
 
-  available.sort((a, b) => a.rooms - b.rooms || a.index - b.index);
-  return available[0]?.url ?? null;
+  // Before any SFU owns a room, concurrent first joins for the same link must
+  // still land on the same instance. Otherwise a degraded/missing registry can
+  // split one meeting code into parallel rooms.
+  return pickStableSfuUrl(available, options.routingKey);
 };
 
 const resolveRoutedSfuUrl = async (options: {
@@ -293,6 +310,7 @@ const resolveRoutedSfuUrl = async (options: {
   const availableSfuUrl = await resolveNonDrainingSfuUrl({
     candidateSfuUrls,
     secret: options.secret,
+    routingKey: `${options.clientId}:${options.roomId}`,
   });
   return availableSfuUrl ?? fallbackSfuUrl;
 };

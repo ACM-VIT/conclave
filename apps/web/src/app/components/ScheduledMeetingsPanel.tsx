@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import type { ScheduledMeeting } from "@/lib/scheduled-meetings";
+import { buildMeetingPath, buildMeetingUrl } from "@/lib/meeting-links";
 
 type ScheduledMeetingsResponse = {
   scheduledMeetings?: ScheduledMeeting[];
@@ -56,9 +57,6 @@ const formatTime = (timestamp: number): string =>
     hour: "numeric",
     minute: "2-digit",
   });
-
-const getMeetingHref = (meeting: ScheduledMeeting): string =>
-  `/${encodeURIComponent(meeting.roomCode)}`;
 
 function ScheduledMeetingsPanel({ isSignedIn }: ScheduledMeetingsPanelProps) {
   const [meetings, setMeetings] = useState<ScheduledMeeting[]>([]);
@@ -193,7 +191,7 @@ function ScheduledMeetingsPanel({ isSignedIn }: ScheduledMeetingsPanelProps) {
       if (!response.ok) {
         throw new Error(await readError(response));
       }
-      window.location.href = getMeetingHref(meeting);
+      window.location.href = buildMeetingPath(meeting);
     } catch (startError) {
       setError((startError as Error).message || "Could not start meeting");
       setWorkingMeetingId(null);
@@ -235,7 +233,7 @@ function ScheduledMeetingsPanel({ isSignedIn }: ScheduledMeetingsPanelProps) {
     if (typeof window === "undefined") return;
     try {
       await navigator.clipboard.writeText(
-        `${window.location.origin}${getMeetingHref(meeting)}`,
+        buildMeetingUrl(window.location.origin, meeting),
       );
       setCopiedMeetingId(meeting.id);
       setTimeout(() => setCopiedMeetingId(null), 1600);
@@ -371,7 +369,7 @@ function ScheduledMeetingsPanel({ isSignedIn }: ScheduledMeetingsPanelProps) {
                 </div>
                 <div className="mt-3 flex flex-wrap gap-2">
                   {!isCancelled && (
-                    <a href={getMeetingHref(meeting)} className={ACTION}>
+                    <a href={buildMeetingPath(meeting)} className={ACTION}>
                       {isLive ? "Join" : "Open"}
                     </a>
                   )}

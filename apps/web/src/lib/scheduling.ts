@@ -35,6 +35,7 @@ export type SchedulingDashboardResponse = {
 export type SchedulingBookingsResponse = {
   bookings?: Array<{
     id: string;
+    clientId: string;
     roomCode: string;
     title: string;
     hostName: string;

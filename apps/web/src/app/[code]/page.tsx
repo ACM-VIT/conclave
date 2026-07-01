@@ -149,6 +149,7 @@ async function MeetRoomContent({ params, searchParams }: MeetRoomPageProps) {
       return (
         <ScheduledMeetingLanding
           meeting={scheduled}
+          clientId={scheduledClientId}
           viewerIsHost={viewerIsHost}
         />
       );

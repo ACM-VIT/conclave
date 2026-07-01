@@ -22,6 +22,7 @@ import type {
   SchedulingEventType,
   WeeklyAvailability,
 } from "@/lib/scheduling";
+import { buildMeetingPath } from "@/lib/meeting-links";
 
 type Props = {
   user: {
@@ -32,6 +33,7 @@ type Props = {
 
 type Booking = {
   id: string;
+  clientId?: string;
   roomCode: string;
   title: string;
   attendeeName?: string | null;
@@ -627,7 +629,7 @@ export default function ScheduleClient({ user }: Props) {
                   {bookings.slice(0, 8).map((booking) => (
                     <a
                       key={booking.id}
-                      href={`/${encodeURIComponent(booking.roomCode)}`}
+                      href={buildMeetingPath(booking)}
                       className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/[0.02] p-3 transition-colors hover:bg-white/[0.05]"
                     >
                       <div className="min-w-0">

@@ -3,9 +3,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { CalendarClock, Copy, Loader2, PlayCircle } from "lucide-react";
 import type { PublicScheduledMeeting } from "@/lib/scheduled-meetings";
+import { buildMeetingPath, buildMeetingUrl } from "@/lib/meeting-links";
 
 type Props = {
   meeting: PublicScheduledMeeting;
+  clientId: string;
   viewerIsHost: boolean;
 };
 
@@ -40,6 +42,7 @@ const CTA_GHOST =
 
 export default function ScheduledMeetingLanding({
   meeting,
+  clientId,
   viewerIsHost,
 }: Props) {
   const [now, setNow] = useState<number>(() => Date.now());
@@ -61,8 +64,11 @@ export default function ScheduledMeetingLanding({
 
   const shareLink = useMemo(() => {
     if (typeof window === "undefined") return "";
-    return `${window.location.origin}/${meeting.roomCode}`;
-  }, [meeting.roomCode]);
+    return buildMeetingUrl(window.location.origin, {
+      roomCode: meeting.roomCode,
+      clientId,
+    });
+  }, [clientId, meeting.roomCode]);
 
   useEffect(() => {
     if (!isLive) return;
@@ -170,7 +176,10 @@ export default function ScheduledMeetingLanding({
           )}
           {isLive && (
             <a
-              href={`/${encodeURIComponent(meeting.roomCode)}`}
+              href={buildMeetingPath({
+                roomCode: meeting.roomCode,
+                clientId,
+              })}
               className={CTA_PRIMARY}
             >
               Open the meeting
