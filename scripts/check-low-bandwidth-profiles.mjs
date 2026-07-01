@@ -740,6 +740,11 @@ assertRegex(
   "web open overflow gallery participants are visible, not hidden, for adaptive receive",
 );
 assertRegex(
+  "webAdaptiveConsumerPreferences",
+  /readRoomTilingEventSignature[\s\S]*detail\.signature[\s\S]*lastRoomTilingEventSignatureRef[\s\S]*const handleRoomTilingChange = \(event: Event\) => \{[\s\S]*lastRoomTilingEventSignatureRef\.current === signature[\s\S]*return;[\s\S]*window\.addEventListener\("conclave:meet-room-tiling", handleRoomTilingChange\)[\s\S]*window\.setInterval\(applyPreferences, APPLY_INTERVAL_MS\)/,
+  "web adaptive receive skips duplicate room-tiling heartbeat events while retaining interval fallback",
+);
+assertRegex(
   "webLowBandwidthProbe",
   /meetVideoStreamType: video\.dataset\.meetVideoStreamType[\s\S]*screenShareDecodedMinimumByProfile[\s\S]*visibleScreenRenderedVideos = visibleRenderedVideos\.filter[\s\S]*meetVideoStreamType === "screen"[\s\S]*largestRenderedScreenVideo[\s\S]*expected profile-crisp decoded screen-share video/,
   "web screen receive probe verifies profile-crisp rendered screen-share video",

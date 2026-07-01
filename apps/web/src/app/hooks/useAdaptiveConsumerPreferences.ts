@@ -233,6 +233,30 @@ const readBoolean = (
   return typeof raw === "boolean" ? raw : fallback;
 };
 
+const readRoomTilingEventSignature = (event: Event): string | null => {
+  if (!("detail" in event)) return null;
+  const detail = (event as CustomEvent<unknown>).detail;
+  if (!isRecord(detail)) return null;
+  const signature = detail.signature;
+  return typeof signature === "string" && signature.length > 0
+    ? signature
+    : null;
+};
+
+const readRoomTilingCurrentSignature = (): string | null => {
+  if (typeof window === "undefined") return null;
+  const debugWindow = window as RoomTilingDebugWindow;
+  const snapshot =
+    debugWindow.__conclaveGetMeetRoomTilingDebug?.() ??
+    debugWindow.__conclaveMeetRoomTilingDebug;
+  const current = snapshot?.current;
+  if (!isRecord(current)) return null;
+  const signature = current.signature;
+  return typeof signature === "string" && signature.length > 0
+    ? signature
+    : null;
+};
+
 const readPresentationTileSize = (
   value: string | undefined,
 ): PresentationTileSize | null =>
@@ -875,6 +899,7 @@ export function useAdaptiveConsumerPreferences({
   const preferenceDebugRef = useRef<
     Map<string, AdaptiveConsumerPreferenceDebugEntry>
   >(new Map());
+  const lastRoomTilingEventSignatureRef = useRef<string | null>(null);
   const lastPublishedAdaptiveVideoPauseRef = useRef<Map<string, string>>(
     new Map(),
   );
@@ -1635,6 +1660,7 @@ export function useAdaptiveConsumerPreferences({
       lastPausedRef.current.clear();
       unsupportedLayerPreferencesRef.current.clear();
       preferenceDebugRef.current.clear();
+      lastRoomTilingEventSignatureRef.current = null;
       refs.adaptivelyPausedConsumerProducerIdsRef.current.clear();
       writeDebugSnapshot({
         socketConnected: false,
@@ -1645,11 +1671,27 @@ export function useAdaptiveConsumerPreferences({
     }
 
     applyPreferences();
-    window.addEventListener("conclave:meet-room-tiling", applyPreferences);
+    lastRoomTilingEventSignatureRef.current =
+      readRoomTilingCurrentSignature();
+    const handleRoomTilingChange = (event: Event) => {
+      const signature = readRoomTilingEventSignature(event);
+      if (
+        signature &&
+        lastRoomTilingEventSignatureRef.current === signature
+      ) {
+        return;
+      }
+      lastRoomTilingEventSignatureRef.current = signature;
+      applyPreferences();
+    };
+    window.addEventListener("conclave:meet-room-tiling", handleRoomTilingChange);
     const interval = window.setInterval(applyPreferences, APPLY_INTERVAL_MS);
     return () => {
       window.clearInterval(interval);
-      window.removeEventListener("conclave:meet-room-tiling", applyPreferences);
+      window.removeEventListener(
+        "conclave:meet-room-tiling",
+        handleRoomTilingChange,
+      );
       clearScheduledPreferenceWork();
     };
   }, [
