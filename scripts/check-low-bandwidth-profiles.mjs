@@ -569,7 +569,7 @@ assertRegex(
 );
 assertRegex(
   "webMeetMedia",
-  /buildScreenShareVideoConstraintsForNetworkProfile[\s\S]*getScreenSharePublishNetworkProfile[\s\S]*getScreenSharePublishNetworkProfileForAvailableOutgoingBitrate\([\s\S]*stats\?\.availableOutgoingBitrate[\s\S]*getMostConstrainedWebcamProducerNetworkProfile\([\s\S]*const screenNetworkProfile = getScreenSharePublishNetworkProfile\(\);[\s\S]*const constrainedDisplayVideoConstraints[\s\S]*buildScreenShareVideoConstraintsForNetworkProfile\([\s\S]*screenNetworkProfile[\s\S]*const relaxedDisplayVideoConstraints[\s\S]*getDisplayMedia\([\s\S]*constrainedDisplayVideoConstraints,[\s\S]*captureController[\s\S]*catch \(err\) \{[\s\S]*if \(!isDisplayMediaConstraintRetryableError\(err\)\) \{[\s\S]*throw err;[\s\S]*getDisplayMedia\([\s\S]*constrainedDisplayVideoConstraints,[\s\S]*null[\s\S]*getDisplayMedia\(relaxedDisplayVideoConstraints, null\)[\s\S]*applyScreenShareTrackNetworkProfile\(track, screenNetworkProfile\)[\s\S]*produceScreenShareTrack\(\{[\s\S]*networkProfile: screenNetworkProfile,[\s\S]*preferredCodec: preferredScreenShareCodec,/,
+  /buildScreenShareVideoConstraintsForNetworkProfile[\s\S]*getScreenSharePublishNetworkProfile[\s\S]*selectScreenSharePublishNetworkProfile\(\{[\s\S]*availableOutgoingBitrateBps: stats\?\.availableOutgoingBitrate,[\s\S]*observedPublishQuality: stats\?\.rtcPublishQuality,[\s\S]*const screenNetworkProfile = getScreenSharePublishNetworkProfile\(\);[\s\S]*const constrainedDisplayVideoConstraints[\s\S]*buildScreenShareVideoConstraintsForNetworkProfile\([\s\S]*screenNetworkProfile[\s\S]*const relaxedDisplayVideoConstraints[\s\S]*getDisplayMedia\([\s\S]*constrainedDisplayVideoConstraints,[\s\S]*captureController[\s\S]*catch \(err\) \{[\s\S]*if \(!isDisplayMediaConstraintRetryableError\(err\)\) \{[\s\S]*throw err;[\s\S]*getDisplayMedia\([\s\S]*constrainedDisplayVideoConstraints,[\s\S]*null[\s\S]*getDisplayMedia\(relaxedDisplayVideoConstraints, null\)[\s\S]*applyScreenShareTrackNetworkProfile\(track, screenNetworkProfile\)[\s\S]*produceScreenShareTrack\(\{[\s\S]*networkProfile: screenNetworkProfile,[\s\S]*preferredCodec: preferredScreenShareCodec,/,
   "web screen-share start requests BWE capture constraints before applying RTP caps",
 );
 assertRegex(
@@ -599,7 +599,7 @@ assertRegex(
 );
 assertRegex(
   "webMeetSocket",
-  /getScreenSharePublishNetworkProfile[\s\S]*getScreenSharePublishNetworkProfileForAvailableOutgoingBitrate\([\s\S]*stats\?\.availableOutgoingBitrate[\s\S]*getMostConstrainedWebcamProducerNetworkProfile\([\s\S]*const screenNetworkProfile = getScreenSharePublishNetworkProfile\(\);[\s\S]*produceScreenShareTrack\(\{[\s\S]*track: videoTrack,[\s\S]*networkProfile: screenNetworkProfile,[\s\S]*preferredCodec: preferredScreenShareCodec,/,
+  /getScreenSharePublishNetworkProfile[\s\S]*selectScreenSharePublishNetworkProfile\(\{[\s\S]*availableOutgoingBitrateBps: stats\?\.availableOutgoingBitrate,[\s\S]*observedPublishQuality: stats\?\.rtcPublishQuality,[\s\S]*const screenNetworkProfile = getScreenSharePublishNetworkProfile\(\);[\s\S]*produceScreenShareTrack\(\{[\s\S]*track: videoTrack,[\s\S]*networkProfile: screenNetworkProfile,[\s\S]*preferredCodec: preferredScreenShareCodec,/,
   "web screen-share reconnect publish starts with BWE capture-size encoding caps",
 );
 assertIncludes(
@@ -1347,8 +1347,8 @@ assertRegex(
 );
 assertRegex(
   "webScreenShareNetworkProfile",
-  /SCREEN_SHARE_OUTGOING_FAIR_BPS = 1500000[\s\S]*SCREEN_SHARE_OUTGOING_POOR_BPS = 550000[\s\S]*SCREEN_SHARE_OUTGOING_EMERGENCY_BPS = 280000[\s\S]*getScreenSharePublishNetworkProfileForAvailableOutgoingBitrate[\s\S]*availableOutgoingBitrateBps <= SCREEN_SHARE_OUTGOING_EMERGENCY_BPS[\s\S]*availableOutgoingBitrateBps <= SCREEN_SHARE_OUTGOING_POOR_BPS[\s\S]*availableOutgoingBitrateBps <= SCREEN_SHARE_OUTGOING_FAIR_BPS/,
-  "web screen-share publish caps use outgoing bitrate before full-FPS profile",
+  /SCREEN_SHARE_OUTGOING_FAIR_BPS = 1500000[\s\S]*SCREEN_SHARE_OUTGOING_POOR_BPS = 550000[\s\S]*SCREEN_SHARE_OUTGOING_EMERGENCY_BPS = 280000[\s\S]*getScreenSharePublishNetworkProfileForAvailableOutgoingBitrate[\s\S]*availableOutgoingBitrateBps <= SCREEN_SHARE_OUTGOING_EMERGENCY_BPS[\s\S]*availableOutgoingBitrateBps <= SCREEN_SHARE_OUTGOING_POOR_BPS[\s\S]*availableOutgoingBitrateBps <= SCREEN_SHARE_OUTGOING_FAIR_BPS[\s\S]*getScreenShareStartupNetworkProfile[\s\S]*observedPublishQuality && observedPublishQuality !== "unknown"[\s\S]*browserNetwork\.supported \? null : "fair"[\s\S]*selectScreenSharePublishNetworkProfile[\s\S]*hasAvailableOutgoingBitrate\(availableOutgoingBitrateBps\)[\s\S]*getMostConstrainedWebcamProducerNetworkProfile\(\[[\s\S]*baseProfile,[\s\S]*outgoingBitrateProfile,[\s\S]*startupProfile,/,
+  "web screen-share publish caps use outgoing bitrate first and start unsupported unknown links detail-first",
 );
 assertRegex(
   "webAdaptivePublishQuality",

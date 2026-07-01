@@ -52,8 +52,7 @@ import {
   type WebcamProducerNetworkProfile,
 } from "../lib/webcam-codec";
 import {
-  getMostConstrainedWebcamProducerNetworkProfile,
-  getScreenSharePublishNetworkProfileForAvailableOutgoingBitrate,
+  selectScreenSharePublishNetworkProfile,
 } from "../lib/screen-share-network-profile";
 import type { ConnectionQualityStats } from "./useConnectionQuality";
 
@@ -929,17 +928,13 @@ export function useMeetMedia({
       const baseProfile = getPublishNetworkProfile();
       const stats = connectionQualityRef?.current;
       const browserNetwork = stats?.browserNetwork ?? getBrowserNetworkSnapshot();
-      const screenShareProfile =
-        getScreenSharePublishNetworkProfileForAvailableOutgoingBitrate(
-          stats?.availableOutgoingBitrate,
-          isPublishEmergencyProfile(stats, browserNetwork),
-        );
-      return (
-        getMostConstrainedWebcamProducerNetworkProfile([
-          baseProfile,
-          screenShareProfile,
-        ]) ?? baseProfile
-      );
+      return selectScreenSharePublishNetworkProfile({
+        baseProfile,
+        availableOutgoingBitrateBps: stats?.availableOutgoingBitrate,
+        emergencyMode: isPublishEmergencyProfile(stats, browserNetwork),
+        browserNetwork,
+        observedPublishQuality: stats?.rtcPublishQuality,
+      });
     }, [connectionQualityRef, getPublishNetworkProfile]);
 
   const waitForPreferredVideoPublishTrack = useCallback(

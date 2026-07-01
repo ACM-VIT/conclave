@@ -79,8 +79,8 @@ import {
 } from "../lib/webcam-codec";
 import {
   getMostConstrainedWebcamProducerNetworkProfile,
-  getScreenSharePublishNetworkProfileForAvailableOutgoingBitrate,
   getScreenShareReceiveNetworkProfileForAvailableIncomingBitrate,
+  selectScreenSharePublishNetworkProfile,
 } from "../lib/screen-share-network-profile";
 import { getBrowserNetworkSnapshot } from "../lib/network-information";
 import type {
@@ -1018,19 +1018,16 @@ export function useMeetSocket({
       const baseProfile = getPublishNetworkProfile();
       const stats = connectionQualityRef?.current;
       const browserNetwork = stats?.browserNetwork ?? getBrowserNetworkSnapshot();
-      const screenShareProfile =
-        getScreenSharePublishNetworkProfileForAvailableOutgoingBitrate(
-          stats?.availableOutgoingBitrate,
+      return selectScreenSharePublishNetworkProfile({
+        baseProfile,
+        availableOutgoingBitrateBps: stats?.availableOutgoingBitrate,
+        emergencyMode:
           browserNetwork.emergency ||
-            (stats?.publishEmergencyMode === true &&
-              stats.publishQuality !== "good"),
-        );
-      return (
-        getMostConstrainedWebcamProducerNetworkProfile([
-          baseProfile,
-          screenShareProfile,
-        ]) ?? baseProfile
-      );
+          (stats?.publishEmergencyMode === true &&
+            stats.publishQuality !== "good"),
+        browserNetwork,
+        observedPublishQuality: stats?.rtcPublishQuality,
+      });
     }, [connectionQualityRef, getPublishNetworkProfile]);
 
   const getReceiveNetworkProfile = useCallback(
