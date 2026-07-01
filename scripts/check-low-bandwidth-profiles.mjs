@@ -24,6 +24,7 @@ const files = {
   webParticipantVideo: "apps/web/src/app/components/ParticipantVideo.tsx",
   webScreenShareAudioPlayers:
     "apps/web/src/app/components/ScreenShareAudioPlayers.tsx",
+  webSystemAudioPlayers: "apps/web/src/app/components/SystemAudioPlayers.tsx",
   webMobileParticipantVideo:
     "apps/web/src/app/components/mobile/MobileParticipantVideo.tsx",
   webGridLayout: "apps/web/src/app/components/GridLayout.tsx",
@@ -166,9 +167,24 @@ assertRegex(
   "web screen audio retries playback after foregrounding and autoplay gestures",
 );
 assertRegex(
+  "webSystemAudioPlayers",
+  /createPlaybackRecoveryScheduler[\s\S]*const attemptPlay = useCallback[\s\S]*onPlaybackStarted\?\.\(\)[\s\S]*audio\.srcObject = null;[\s\S]*audio\.srcObject = stream;[\s\S]*audioTrack\?\.addEventListener\("unmute", scheduleReplay\)[\s\S]*document\.addEventListener\("visibilitychange", handleVisibilityChange\)[\s\S]*window\.addEventListener\("focus", handleForegroundReplay\)[\s\S]*window\.addEventListener\("pageshow", handleForegroundReplay\)[\s\S]*window\.addEventListener\("pointerdown", handleUserGesture, true\)[\s\S]*window\.addEventListener\("keydown", handleUserGesture, true\)[\s\S]*playbackAttemptToken/,
+  "web system audio retries playback after foregrounding, track unmute, manual retry, and autoplay gestures",
+);
+assertRegex(
   "webMeetsMainContent",
   /<ScreenShareAudioPlayers[\s\S]*participants=\{participants\}[\s\S]*currentUserId=\{currentUserId\}[\s\S]*activeScreenShareId=\{activeScreenShareId\}/,
   "web screen audio player receives active screen-share id",
+);
+assertRegex(
+  "webMeetsMainContent",
+  /<SystemAudioPlayers[\s\S]*onAutoplayBlocked=\{onBrowserAudioAutoplayBlocked\}[\s\S]*onPlaybackStarted=\{onBrowserAudioPlaybackStarted\}[\s\S]*playbackAttemptToken=\{browserAudioPlaybackAttemptToken\}/,
+  "web system audio player receives autoplay and manual retry callbacks",
+);
+assertRegex(
+  "webMeetClient",
+  /browserAudioPlaybackAttempt[\s\S]*setBrowserAudioPlaybackAttempt[\s\S]*const toggleBrowserAudio = useCallback\(\(\) => \{[\s\S]*if \(browserAudioNeedsGesture\) \{[\s\S]*setIsBrowserAudioMuted\(false\);[\s\S]*setBrowserAudioPlaybackAttempt\(\(attempt\) => attempt \+ 1\);[\s\S]*if \(isBrowserAudioMuted\) \{[\s\S]*setBrowserAudioPlaybackAttempt\(\(attempt\) => attempt \+ 1\);[\s\S]*handleBrowserAudioPlaybackStarted[\s\S]*browserAudioPlaybackAttemptToken=\{browserAudioPlaybackAttempt\}[\s\S]*onBrowserAudioPlaybackStarted=\{handleBrowserAudioPlaybackStarted\}/,
+  "web shared browser audio control explicitly retries blocked or newly unmuted system audio",
 );
 assertRegex(
   "iosWebrtc",

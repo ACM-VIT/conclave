@@ -847,6 +847,8 @@ export default function MeetsClient({
 
   const [browserAudioNeedsGesture, setBrowserAudioNeedsGesture] =
     useState(false);
+  const [browserAudioPlaybackAttempt, setBrowserAudioPlaybackAttempt] =
+    useState(0);
   const [isBrowserServiceAvailable, setIsBrowserServiceAvailable] =
     useState(false);
   const [isVoiceAgentKeyPromptOpen, setIsVoiceAgentKeyPromptOpen] =
@@ -2511,12 +2513,24 @@ export default function MeetsClient({
   }, []);
 
   const toggleBrowserAudio = useCallback(() => {
+    if (browserAudioNeedsGesture) {
+      setBrowserAudioNeedsGesture(false);
+      setIsBrowserAudioMuted(false);
+      setBrowserAudioPlaybackAttempt((attempt) => attempt + 1);
+      return;
+    }
     setBrowserAudioNeedsGesture(false);
+    if (isBrowserAudioMuted) {
+      setBrowserAudioPlaybackAttempt((attempt) => attempt + 1);
+    }
     setIsBrowserAudioMuted((prev) => !prev);
-  }, [setIsBrowserAudioMuted]);
+  }, [browserAudioNeedsGesture, isBrowserAudioMuted, setIsBrowserAudioMuted]);
 
   const handleBrowserAudioAutoplayBlocked = useCallback(() => {
     setBrowserAudioNeedsGesture(true);
+  }, []);
+  const handleBrowserAudioPlaybackStarted = useCallback(() => {
+    setBrowserAudioNeedsGesture(false);
   }, []);
 
   useEffect(() => {
@@ -3161,7 +3175,9 @@ export default function MeetsClient({
         isBrowserAudioMuted={isBrowserAudioMuted}
         onToggleBrowserAudio={toggleBrowserAudio}
         browserAudioNeedsGesture={browserAudioNeedsGesture}
+        browserAudioPlaybackAttemptToken={browserAudioPlaybackAttempt}
         onBrowserAudioAutoplayBlocked={handleBrowserAudioAutoplayBlocked}
+        onBrowserAudioPlaybackStarted={handleBrowserAudioPlaybackStarted}
         meetError={meetError}
         meetingEndedNotice={meetingEndedNotice}
         onDismissMeetingEndedNotice={() => setMeetingEndedNotice(null)}

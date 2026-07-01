@@ -220,7 +220,9 @@ interface MeetsMainContentProps {
   meetingEndedNotice?: string | null;
   onDismissMeetingEndedNotice?: () => void;
   browserAudioNeedsGesture: boolean;
+  browserAudioPlaybackAttemptToken?: number;
   onBrowserAudioAutoplayBlocked: () => void;
+  onBrowserAudioPlaybackStarted?: () => void;
   isVoiceAgentRunning?: boolean;
   isVoiceAgentStarting?: boolean;
   voiceAgentError?: string | null;
@@ -443,7 +445,9 @@ export default function MeetsMainContent({
   isBrowserAudioMuted,
   onToggleBrowserAudio,
   browserAudioNeedsGesture,
+  browserAudioPlaybackAttemptToken,
   onBrowserAudioAutoplayBlocked,
+  onBrowserAudioPlaybackStarted,
   isVoiceAgentRunning = false,
   isVoiceAgentStarting = false,
   voiceAgentError = null,
@@ -1428,6 +1432,8 @@ export default function MeetsMainContent({
         audioOutputDeviceId={audioOutputDeviceId}
         muted={isBrowserAudioMuted}
         onAutoplayBlocked={onBrowserAudioAutoplayBlocked}
+        onPlaybackStarted={onBrowserAudioPlaybackStarted}
+        playbackAttemptToken={browserAudioPlaybackAttemptToken}
       />
       <ScreenShareAudioPlayers
         participants={participants}
