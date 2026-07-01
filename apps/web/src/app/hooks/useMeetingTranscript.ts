@@ -1214,6 +1214,9 @@ export function useMeetingTranscript({
         onCommit: (speaker) => {
           send({ type: "audio.commit", speaker });
         },
+        onClear: (speaker) => {
+          send({ type: "audio.clear", speaker });
+        },
       });
     }
     relayRef.current

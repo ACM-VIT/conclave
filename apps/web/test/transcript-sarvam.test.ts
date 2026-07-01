@@ -82,7 +82,7 @@ describe("Sarvam transcription provider helpers", () => {
     expect(JSON.parse(buildSarvamAudioMessage("abc"))).toEqual({
       audio: {
         data: "abc",
-        sample_rate: "16000",
+        sample_rate: 16000,
         encoding: "audio/wav",
       },
     });

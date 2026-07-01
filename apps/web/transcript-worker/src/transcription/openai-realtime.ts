@@ -179,7 +179,7 @@ export const connectOpenAiRealtimeTranscription = async (
   options: LiveTranscriptionConnectOptions,
 ): Promise<LiveTranscriptionSession> => {
   const response = await fetch(
-    realtimeEndpoint(options.env, options.transcriptModel),
+    realtimeEndpoint(options.env),
     {
       headers: {
         Authorization: `Bearer ${options.apiKey}`,

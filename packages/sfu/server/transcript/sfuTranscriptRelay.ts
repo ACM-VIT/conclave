@@ -318,6 +318,7 @@ export class SfuTranscriptRelay implements TranscriptAudioBatchSink {
     this.commitTimer = setInterval(() => {
       for (const active of this.consumers.values()) {
         this.commitIfNeeded(active);
+        active.batcher.clearEndedTurn();
       }
     }, TRANSCRIPT_AUDIO_COMMIT_INTERVAL_MS);
   }
