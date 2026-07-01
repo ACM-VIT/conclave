@@ -751,7 +751,7 @@ assertRegex(
 );
 assertRegex(
   "webAdaptiveConsumerPreferences",
-  /const effectiveQuality = worstQuality\([\s\S]*options\.quality === "good" \|\| options\.quality === "fair"[\s\S]*\? "unknown"[\s\S]*: getConsumerScoreQualityHint/,
+  /const consumerScoreReceiveQuality =[\s\S]*options\.quality === "good" \|\| options\.quality === "fair"[\s\S]*\? "unknown"[\s\S]*: getConsumerScoreQualityHint[\s\S]*const effectiveQuality = worstQuality\([\s\S]*options\.quality,[\s\S]*consumerScoreReceiveQuality,[\s\S]*const screenShareQuality = worstQuality\([\s\S]*consumerScoreReceiveQuality/,
   "web consumer scores must not lower good/fair receive stats",
 );
 assertIncludes(

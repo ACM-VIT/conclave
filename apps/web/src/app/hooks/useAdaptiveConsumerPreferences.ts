@@ -622,11 +622,13 @@ const getDesiredPreferences = (
   const screenShareReceiveEmergency = isScreenShareReceiveEmergencyBitrate(
     options.availableIncomingBitrateBps,
   );
-  const effectiveQuality = worstQuality(
-    options.quality,
+  const consumerScoreReceiveQuality =
     options.quality === "good" || options.quality === "fair"
       ? "unknown"
-      : getConsumerScoreQualityHint(options.consumerScoreQuality),
+      : getConsumerScoreQualityHint(options.consumerScoreQuality);
+  const effectiveQuality = worstQuality(
+    options.quality,
+    consumerScoreReceiveQuality,
   );
   const quality = effectiveQuality === "unknown" ? "good" : effectiveQuality;
 
@@ -636,7 +638,7 @@ const getDesiredPreferences = (
         quality,
         screenShareReceiveQuality,
       ),
-      getConsumerScoreQualityHint(options.consumerScoreQuality),
+      consumerScoreReceiveQuality,
     );
     const screenShareEmergency =
       options.emergencyMode || screenShareReceiveEmergency;
