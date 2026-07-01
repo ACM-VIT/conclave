@@ -70,7 +70,11 @@ const UNSUPPORTED_LAYER_RETRY_AFTER_MS = 30000;
 const SCREEN_SHARE_RECEIVE_FAIR_BPS = 1500000;
 const SCREEN_SHARE_RECEIVE_POOR_BPS = 550000;
 const SCREEN_SHARE_RECEIVE_EMERGENCY_BPS = 300000;
+const SCREEN_SHARE_SMALL_RENDERED_HEIGHT = 220;
+const SCREEN_SHARE_FULL_FPS_RENDERED_HEIGHT = 540;
 const OFFSCREEN_WEBCAM_PARK_PRIORITY = 5;
+
+type PresentationTileSize = "stage" | "grid" | "rail";
 
 type LayoutRole = {
   primary: boolean;
@@ -79,6 +83,9 @@ type LayoutRole = {
   hidden: boolean;
   warm: boolean;
   rank: number | null;
+  renderedWidth: number | null;
+  renderedHeight: number | null;
+  presentationSize: PresentationTileSize | null;
 };
 
 type RoomTilingHints = {
@@ -93,6 +100,9 @@ type RoomTilingHints = {
     visible: boolean;
     primary: boolean;
     focus: boolean;
+    renderedWidth: number | null;
+    renderedHeight: number | null;
+    size: PresentationTileSize | null;
   };
 };
 
@@ -223,6 +233,45 @@ const readBoolean = (
   return typeof raw === "boolean" ? raw : fallback;
 };
 
+const readPresentationTileSize = (
+  value: string | undefined,
+): PresentationTileSize | null =>
+  value === "stage" || value === "grid" || value === "rail" ? value : null;
+
+const readPresentationElementMetrics = (
+  presenterId: string | null,
+): {
+  width: number | null;
+  height: number | null;
+  size: PresentationTileSize | null;
+} => {
+  if (typeof document === "undefined") {
+    return { width: null, height: null, size: null };
+  }
+
+  const tiles = Array.from(
+    document.querySelectorAll<HTMLElement>("[data-meet-presentation-tile]"),
+  );
+  const tile =
+    tiles.find(
+      (candidate) =>
+        !presenterId ||
+        candidate.dataset.meetPresentationPresenterId === presenterId,
+    ) ??
+    tiles[0] ??
+    null;
+  if (!tile) return { width: null, height: null, size: null };
+
+  const rect = tile.getBoundingClientRect();
+  const width = rect.width > 0 ? Math.round(rect.width) : null;
+  const height = rect.height > 0 ? Math.round(rect.height) : null;
+  return {
+    width,
+    height,
+    size: readPresentationTileSize(tile.dataset.meetPresentationSize),
+  };
+};
+
 const readRoomTilingHints = (): RoomTilingHints | null => {
   if (typeof window === "undefined") return null;
 
@@ -235,6 +284,13 @@ const readRoomTilingHints = (): RoomTilingHints | null => {
   const presentation = isRecord(current.presentation)
     ? current.presentation
     : null;
+  const presentationPresenterId = readNullableString(
+    presentation,
+    "presenterId",
+  );
+  const presentationMetrics = readPresentationElementMetrics(
+    presentationPresenterId,
+  );
 
   return {
     primaryIds: new Set(readStringArray(current, "primaryIds")),
@@ -249,10 +305,13 @@ const readRoomTilingHints = (): RoomTilingHints | null => {
       ]),
     ),
     presentation: {
-      presenterId: readNullableString(presentation, "presenterId"),
+      presenterId: presentationPresenterId,
       visible: readBoolean(presentation, "visible"),
       primary: readBoolean(presentation, "primary"),
       focus: readBoolean(presentation, "focus"),
+      renderedWidth: presentationMetrics.width,
+      renderedHeight: presentationMetrics.height,
+      size: presentationMetrics.size,
     },
   };
 };
@@ -278,6 +337,9 @@ const getLayoutRole = (
     hidden: hints.hiddenIds.has(userId) && !isPresentedScreen,
     warm: hints.warmIds.has(userId),
     rank: hints.orderedRemoteRanks.get(userId) ?? null,
+    renderedWidth: isPresentedScreen ? hints.presentation.renderedWidth : null,
+    renderedHeight: isPresentedScreen ? hints.presentation.renderedHeight : null,
+    presentationSize: isPresentedScreen ? hints.presentation.size : null,
   };
 };
 
@@ -458,6 +520,50 @@ const buildLayerPreference = (
   temporalLayer: clampLayer(targetTemporalLayer, bounds.maxTemporalLayer),
 });
 
+const getScreenShareTargetTemporalLayer = (
+  bounds: LayerBounds,
+  options: {
+    quality: ConnectionQuality;
+    emergency: boolean;
+    visible: boolean;
+    primary: boolean;
+    renderedHeight: number | null;
+    presentationSize: PresentationTileSize | null;
+  },
+): number => {
+  const isSmallPresentation =
+    options.presentationSize === "rail" ||
+    (options.renderedHeight !== null &&
+      options.renderedHeight < SCREEN_SHARE_SMALL_RENDERED_HEIGHT);
+  const isLargePresentation =
+    options.primary ||
+    options.presentationSize === "stage" ||
+    (options.renderedHeight !== null &&
+      options.renderedHeight >= SCREEN_SHARE_FULL_FPS_RENDERED_HEIGHT);
+
+  if (!options.visible) {
+    return options.emergency || options.quality === "poor" ? 0 : 1;
+  }
+
+  if (options.emergency) {
+    return 1;
+  }
+
+  if (options.quality === "poor") {
+    return isLargePresentation ? 1 : 0;
+  }
+
+  if (isSmallPresentation) {
+    return 0;
+  }
+
+  if (options.quality === "fair") {
+    return 1;
+  }
+
+  return isLargePresentation ? bounds.maxTemporalLayer : 1;
+};
+
 const getDesiredPreferences = (
   info: ProducerMapEntry,
   bounds: LayerBounds | null,
@@ -511,17 +617,20 @@ const getDesiredPreferences = (
       options.layout?.visible === true ||
       options.layout?.primary === true ||
       options.layout?.focus === true;
+    const screenSharePrimary =
+      options.layout?.primary === true || options.layout?.focus === true;
     return {
       preferredLayers: bounds
         ? buildLayerPreference(
             0,
-            screenShareEmergency
-              ? screenShareVisible
-                ? 1
-                : 0
-              : screenShareQuality === "poor" && !screenShareVisible
-                ? 1
-                : bounds.maxTemporalLayer,
+            getScreenShareTargetTemporalLayer(bounds, {
+              quality: screenShareQuality,
+              emergency: screenShareEmergency,
+              visible: screenShareVisible,
+              primary: screenSharePrimary,
+              renderedHeight: options.layout?.renderedHeight ?? null,
+              presentationSize: options.layout?.presentationSize ?? null,
+            }),
             bounds,
           )
         : undefined,

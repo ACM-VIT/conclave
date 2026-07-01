@@ -3679,6 +3679,7 @@ const PresentationVideoTile = memo(function PresentationVideoTile({
       }`}
       data-meet-presentation-tile
       data-meet-presentation-presenter-id={presenterId ?? undefined}
+      data-meet-presentation-size={size}
       data-meet-captured-surface-control={
         showCaptureControls ? "available" : "unavailable"
       }

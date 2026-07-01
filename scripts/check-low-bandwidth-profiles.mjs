@@ -443,8 +443,8 @@ assertIncludes(
 );
 assertRegex(
   "webAdaptiveConsumerPreferences",
-  /if \(info\.type === "screen"\) \{[\s\S]*const screenShareQuality = worstQuality\([\s\S]*getConsumerScoreQualityHint\(options\.consumerScoreQuality\)[\s\S]*const screenShareVisible =[\s\S]*options\.layout\?\.visible === true[\s\S]*options\.layout\?\.primary === true[\s\S]*options\.layout\?\.focus === true[\s\S]*screenShareEmergency[\s\S]*\? screenShareVisible[\s\S]*\? 1[\s\S]*: 0[\s\S]*: screenShareQuality === "poor" && !screenShareVisible[\s\S]*\? 1[\s\S]*: bounds\.maxTemporalLayer[\s\S]*priority: 240,[\s\S]*paused: false,/,
-  "web visible emergency screen-share receive adaptation keeps a mid temporal layer",
+  /const getScreenShareTargetTemporalLayer =[\s\S]*SCREEN_SHARE_SMALL_RENDERED_HEIGHT[\s\S]*SCREEN_SHARE_FULL_FPS_RENDERED_HEIGHT[\s\S]*if \(options\.emergency\) \{[\s\S]*return 1;[\s\S]*return isLargePresentation \? bounds\.maxTemporalLayer : 1;[\s\S]*if \(info\.type === "screen"\) \{[\s\S]*const screenShareVisible =[\s\S]*options\.layout\?\.visible === true[\s\S]*const screenSharePrimary =[\s\S]*options\.layout\?\.primary === true \|\| options\.layout\?\.focus === true[\s\S]*getScreenShareTargetTemporalLayer\(bounds, \{[\s\S]*quality: screenShareQuality,[\s\S]*emergency: screenShareEmergency,[\s\S]*visible: screenShareVisible,[\s\S]*primary: screenSharePrimary,[\s\S]*renderedHeight: options\.layout\?\.renderedHeight \?\? null,[\s\S]*presentationSize: options\.layout\?\.presentationSize \?\? null,[\s\S]*priority: 240,[\s\S]*paused: false,/,
+  "web screen-share receive adaptation is rendered-size aware and keeps visible emergency shares moving",
 );
 assertNotIncludes(
   "webAdaptiveConsumerPreferences",
@@ -721,8 +721,13 @@ assertRegex(
 );
 assertRegex(
   "webAdaptiveConsumerPreferences",
-  /SCREEN_SHARE_RECEIVE_FAIR_BPS = 1500000[\s\S]*SCREEN_SHARE_RECEIVE_POOR_BPS = 550000[\s\S]*SCREEN_SHARE_RECEIVE_EMERGENCY_BPS = 300000[\s\S]*getScreenShareReceiveQualityForAvailableBitrate[\s\S]*availableIncomingBitrateBps <= SCREEN_SHARE_RECEIVE_POOR_BPS[\s\S]*availableIncomingBitrateBps <= SCREEN_SHARE_RECEIVE_FAIR_BPS[\s\S]*isScreenShareReceiveEmergencyBitrate[\s\S]*screenShareEmergency[\s\S]*screenShareVisible[\s\S]*screenShareVisible[\s\S]*\? 1[\s\S]*screenShareQuality === "poor" && !screenShareVisible[\s\S]*bounds\.maxTemporalLayer/,
-  "web visible screen-share receive layers use incoming bitrate while preserving emergency FPS",
+  /SCREEN_SHARE_RECEIVE_FAIR_BPS = 1500000[\s\S]*SCREEN_SHARE_RECEIVE_POOR_BPS = 550000[\s\S]*SCREEN_SHARE_RECEIVE_EMERGENCY_BPS = 300000[\s\S]*getScreenShareReceiveQualityForAvailableBitrate[\s\S]*availableIncomingBitrateBps <= SCREEN_SHARE_RECEIVE_POOR_BPS[\s\S]*availableIncomingBitrateBps <= SCREEN_SHARE_RECEIVE_FAIR_BPS[\s\S]*isScreenShareReceiveEmergencyBitrate[\s\S]*getScreenShareTargetTemporalLayer[\s\S]*options\.quality === "poor"[\s\S]*isSmallPresentation[\s\S]*options\.quality === "fair"[\s\S]*return 1;[\s\S]*screenShareEmergency[\s\S]*getScreenShareTargetTemporalLayer\(bounds, \{/,
+  "web screen-share receive layers use incoming bitrate and rendered size while preserving emergency FPS",
+);
+assertIncludes(
+  "webGridLayout",
+  'data-meet-presentation-size={size}',
+  "web presentation tiles expose rendered size class for screen-share receive adaptation",
 );
 assertRegex(
   "webLowBandwidthProbe",
