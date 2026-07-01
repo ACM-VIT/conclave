@@ -2719,6 +2719,7 @@ export default function MeetsClient({
     capRecoveryQuality: selfPublishCapRecoveryQuality,
     emergencyMode: selfPublishEmergencyMode,
     availableOutgoingBitrateBps: selfConnectionStats.availableOutgoingBitrate,
+    publishCpuLimited: selfConnectionStats.publishMedia.video.cpuLimited,
     isCameraOff,
     participantCount,
     audioProducerRef: refs.audioProducerRef,

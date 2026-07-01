@@ -775,9 +775,9 @@ assertIncludes(
   "mediaBitrate >= emergencyBitrate * AVAILABLE_BITRATE_SATURATION_RATIO",
   "web emergency mode must not be sustained by intentional caps",
 );
-assertNotIncludes(
+assertRegex(
   "webConnectionQuality",
-  'reason === "cpu"',
+  /function deriveDirectionalQuality[\s\S]*const bandwidthLimited =[\s\S]*explicitBandwidthLimited === true[\s\S]*hasBandwidthQualityLimitation\(qualityLimitationReason \?\? null\)/,
   "web CPU encoder limitation must not drive network downgrades",
 );
 assertIncludes(
@@ -1192,8 +1192,18 @@ assertRegex(
 );
 assertRegex(
   "webMeetClient",
+  /useAdaptivePublishQuality\(\{[\s\S]*publishCpuLimited: selfConnectionStats\.publishMedia\.video\.cpuLimited,/,
+  "web screen-share publish adaptation receives measured CPU limitation",
+);
+assertRegex(
+  "webMeetClient",
   /refreshScreenAudioProducerForNetworkProfile,[\s\S]*useAdaptivePublishQuality\(\{[\s\S]*refreshScreenAudioProducerForNetworkProfile,/,
   "web adaptive publish can refresh screen-audio producers after network recovery",
+);
+assertRegex(
+  "webConnectionQuality",
+  /bandwidthLimited: boolean;[\s\S]*cpuLimited: boolean;[\s\S]*normalizeQualityLimitationReason[\s\S]*value === "none"[\s\S]*selectQualityLimitationReason[\s\S]*videoBandwidthLimited[\s\S]*qualityLimitationReason === "bandwidth"[\s\S]*videoCpuLimited[\s\S]*qualityLimitationReason === "cpu"/,
+  "web outbound limitation stats preserve bandwidth and CPU signals across camera plus screen-share senders",
 );
 assertRegex(
   "webAdaptivePublishQuality",
@@ -1234,6 +1244,11 @@ assertRegex(
   "webAdaptivePublishQuality",
   /screenShareTargetProfile[\s\S]*liveProfile,[\s\S]*getScreenSharePublishNetworkProfileForAvailableOutgoingBitrate\([\s\S]*effectiveLiveProfile[\s\S]*restoreStandardCaptureIfNeeded\(\)[\s\S]*applyLiveProducerProfile\(effectiveLiveProfile \?\? "good"\)/,
   "web adaptive screen-share BWE caps stay active after stable live profile",
+);
+assertRegex(
+  "webAdaptivePublishQuality",
+  /CPU_LIVE_CAP_AFTER_MS = 6000[\s\S]*CPU_SCREEN_SHARE_POOR_CAP_AFTER_MS = 20000[\s\S]*getCpuLimitedLiveProfile[\s\S]*screenShareVideoActive[\s\S]*return "poor";[\s\S]*return "fair";[\s\S]*cpuLimitedWindowRef[\s\S]*publishCpuLimited[\s\S]*getMostConstrainedWebcamProducerNetworkProfile\(\[[\s\S]*connectionLiveProfile,[\s\S]*cpuLimitedProfile/,
+  "web adaptive screen-share publish caps lower FPS under sustained CPU pressure before recovery",
 );
 assertRegex(
   "webMeetClient",

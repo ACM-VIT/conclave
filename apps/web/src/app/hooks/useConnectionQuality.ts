@@ -22,6 +22,10 @@ export interface MediaTrackQualityStats {
   codecMimeType: string | null;
   /** Browser-reported send-side quality limitation reason, if available. */
   qualityLimitationReason: string | null;
+  /** True when at least one send-side video RTP stream is bandwidth-limited. */
+  bandwidthLimited: boolean;
+  /** True when at least one send-side video RTP stream is CPU-limited. */
+  cpuLimited: boolean;
 }
 
 export interface DirectionMediaQualityStats {
@@ -116,6 +120,8 @@ const EMPTY_MEDIA_TRACK_STATS: MediaTrackQualityStats = {
   frameHeight: null,
   codecMimeType: null,
   qualityLimitationReason: null,
+  bandwidthLimited: false,
+  cpuLimited: false,
 };
 
 const EMPTY_DIRECTION_MEDIA_STATS: DirectionMediaQualityStats = {
@@ -197,6 +203,8 @@ type MediaCounterSample = {
   audioCodecMimeType: string | null;
   videoCodecMimeType: string | null;
   videoQualityLimitationReason: string | null;
+  videoBandwidthLimited: boolean;
+  videoCpuLimited: boolean;
 };
 
 /**
@@ -242,6 +250,31 @@ const selectObservedString = (
   return current === next ? current : "mixed";
 };
 
+const normalizeQualityLimitationReason = (value: unknown): string | null => {
+  if (typeof value !== "string" || value.length === 0) return null;
+  return value === "none" ? null : value;
+};
+
+const qualityLimitationReasonRank = (reason: string | null): number => {
+  if (reason === "bandwidth") return 3;
+  if (reason === "cpu") return 2;
+  if (reason) return 1;
+  return 0;
+};
+
+const selectQualityLimitationReason = (
+  current: string | null,
+  next: unknown,
+): string | null => {
+  const normalized = normalizeQualityLimitationReason(next);
+  if (!normalized) return current;
+  if (!current) return normalized;
+  return qualityLimitationReasonRank(normalized) >
+    qualityLimitationReasonRank(current)
+    ? normalized
+    : current;
+};
+
 const getMediaKind = (
   stat: Record<string, unknown>,
 ): "audio" | "video" | null => {
@@ -262,6 +295,8 @@ const createEmptyMediaCounterSample = (
   audioCodecMimeType: null,
   videoCodecMimeType: null,
   videoQualityLimitationReason: null,
+  videoBandwidthLimited: false,
+  videoCpuLimited: false,
 });
 
 const normalizeFractionLost = (value: number | null): number | null => {
@@ -436,10 +471,20 @@ function readReport(report: RTCStatsReport): ReportSignals {
           outboundMedia.videoCodecMimeType,
           codecMimeTypes.get(String(stat.codecId ?? "")),
         );
-        outboundMedia.videoQualityLimitationReason = selectObservedString(
-          outboundMedia.videoQualityLimitationReason,
+        const qualityLimitationReason = normalizeQualityLimitationReason(
           stat.qualityLimitationReason,
         );
+        outboundMedia.videoQualityLimitationReason =
+          selectQualityLimitationReason(
+            outboundMedia.videoQualityLimitationReason,
+            qualityLimitationReason,
+          );
+        outboundMedia.videoBandwidthLimited =
+          outboundMedia.videoBandwidthLimited ||
+          qualityLimitationReason === "bandwidth";
+        outboundMedia.videoCpuLimited =
+          outboundMedia.videoCpuLimited ||
+          qualityLimitationReason === "cpu";
       }
     }
   });
@@ -587,6 +632,8 @@ const buildMediaTrackStats = ({
         : current.videoCodecMimeType,
     qualityLimitationReason:
       kind === "video" ? current.videoQualityLimitationReason : null,
+    bandwidthLimited: kind === "video" ? current.videoBandwidthLimited : false,
+    cpuLimited: kind === "video" ? current.videoCpuLimited : false,
   };
 };
 
@@ -619,6 +666,7 @@ function deriveDirectionalQuality({
   fairBitrate,
   poorBitrate,
   qualityLimitationReason,
+  bandwidthLimited: explicitBandwidthLimited,
 }: {
   rttMs: number | null;
   packetLoss: number | null;
@@ -628,10 +676,11 @@ function deriveDirectionalQuality({
   fairBitrate: number;
   poorBitrate: number;
   qualityLimitationReason?: string | null;
+  bandwidthLimited?: boolean;
 }): ConnectionQuality {
-  const bandwidthLimited = hasBandwidthQualityLimitation(
-    qualityLimitationReason ?? null,
-  );
+  const bandwidthLimited =
+    explicitBandwidthLimited === true ||
+    hasBandwidthQualityLimitation(qualityLimitationReason ?? null);
   if (
     rttMs == null &&
     packetLoss == null &&
@@ -678,6 +727,7 @@ function deriveDirectionalEmergencyMode({
   mediaBitrate,
   emergencyBitrate,
   qualityLimitationReason,
+  bandwidthLimited: explicitBandwidthLimited,
 }: {
   rttMs: number | null;
   packetLoss: number | null;
@@ -686,10 +736,11 @@ function deriveDirectionalEmergencyMode({
   mediaBitrate: number | null;
   emergencyBitrate: number;
   qualityLimitationReason?: string | null;
+  bandwidthLimited?: boolean;
 }): boolean {
-  const bandwidthLimited = hasBandwidthQualityLimitation(
-    qualityLimitationReason ?? null,
-  );
+  const bandwidthLimited =
+    explicitBandwidthLimited === true ||
+    hasBandwidthQualityLimitation(qualityLimitationReason ?? null);
 
   if (rttMs != null && rttMs >= RTT_EMERGENCY_MS) return true;
   if (packetLoss != null && packetLoss >= LOSS_EMERGENCY) return true;
@@ -954,6 +1005,7 @@ export function useConnectionQuality({
         poorBitrate: OUTGOING_BW_POOR_BPS,
         qualityLimitationReason:
           publishMediaStats.video.qualityLimitationReason,
+        bandwidthLimited: publishMediaStats.video.bandwidthLimited,
       });
       const observedReceiveQuality = deriveDirectionalQuality({
         rttMs: receive.rttMs,
@@ -973,6 +1025,7 @@ export function useConnectionQuality({
         emergencyBitrate: OUTGOING_BW_EMERGENCY_BPS,
         qualityLimitationReason:
           publishMediaStats.video.qualityLimitationReason,
+        bandwidthLimited: publishMediaStats.video.bandwidthLimited,
       });
       const observedReceiveEmergencyMode = deriveDirectionalEmergencyMode({
         rttMs: receive.rttMs,

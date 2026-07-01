@@ -20,6 +20,7 @@ interface UseAdaptivePublishQualityOptions {
   capRecoveryQuality: ConnectionQuality;
   emergencyMode: boolean;
   availableOutgoingBitrateBps?: number | null;
+  publishCpuLimited?: boolean;
   isCameraOff: boolean;
   participantCount: number;
   audioProducerRef: React.MutableRefObject<Producer | null>;
@@ -50,6 +51,9 @@ const GOOD_UPGRADE_AFTER_MS = 45000;
 const FAIR_LIVE_CAP_AFTER_MS = 5000;
 const POOR_LIVE_CAP_AFTER_MS = 2500;
 const GOOD_LIVE_RESTORE_AFTER_MS = 15000;
+const CPU_LIVE_CAP_AFTER_MS = 6000;
+const CPU_SCREEN_SHARE_POOR_CAP_AFTER_MS = 20000;
+const CPU_LIVE_RESTORE_AFTER_MS = 15000;
 const MAX_AUTO_UPGRADE_PARTICIPANTS = 4;
 const STANDARD_CAPTURE_RESTORE_RETRY_MS = 1000;
 const STANDARD_CAPTURE_RESTORE_FAILURE_RETRY_MS = 15000;
@@ -68,6 +72,11 @@ const networkProfileRank: Record<WebcamProducerNetworkProfile, number> = {
 
 type QualityWindow = {
   quality: ConnectionQuality;
+  since: number;
+};
+
+type BooleanWindow = {
+  value: boolean;
   since: number;
 };
 
@@ -156,6 +165,7 @@ export type AdaptivePublishQualityDebugSnapshot = {
   capRecoveryQuality: ConnectionQuality;
   emergencyMode: boolean;
   availableOutgoingBitrateBps: number | null;
+  publishCpuLimited: boolean;
   isCameraOff: boolean;
   participantCount: number;
   videoQuality: VideoQuality;
@@ -169,6 +179,11 @@ export type AdaptivePublishQualityDebugSnapshot = {
   };
   capRecoveryWindow: {
     quality: ConnectionQuality;
+    since: number;
+    elapsedMs: number;
+  };
+  cpuLimitedWindow: {
+    value: boolean;
     since: number;
     elapsedMs: number;
   };
@@ -191,6 +206,9 @@ export type AdaptivePublishQualityDebugSnapshot = {
     fairLiveCap: number;
     poorLiveCap: number;
     goodLiveRestore: number;
+    cpuLiveCap: number;
+    cpuScreenSharePoorCap: number;
+    cpuLiveRestore: number;
   };
 };
 
@@ -275,12 +293,31 @@ const getLiveProfileForObservedQuality = (
   return null;
 };
 
+const getCpuLimitedLiveProfile = (
+  cpuLimited: boolean,
+  elapsedMs: number,
+  screenShareVideoActive: boolean,
+): WebcamProducerNetworkProfile | null => {
+  if (!cpuLimited) {
+    return elapsedMs >= CPU_LIVE_RESTORE_AFTER_MS ? "good" : null;
+  }
+  if (elapsedMs < CPU_LIVE_CAP_AFTER_MS) return null;
+  if (
+    screenShareVideoActive &&
+    elapsedMs >= CPU_SCREEN_SHARE_POOR_CAP_AFTER_MS
+  ) {
+    return "poor";
+  }
+  return "fair";
+};
+
 export function useAdaptivePublishQuality({
   enabled,
   connectionQuality,
   capRecoveryQuality,
   emergencyMode,
   availableOutgoingBitrateBps = null,
+  publishCpuLimited = false,
   isCameraOff,
   participantCount,
   audioProducerRef,
@@ -300,6 +337,10 @@ export function useAdaptivePublishQuality({
   });
   const capRecoveryWindowRef = useRef<QualityWindow>({
     quality: "unknown",
+    since: Date.now(),
+  });
+  const cpuLimitedWindowRef = useRef<BooleanWindow>({
+    value: false,
     since: Date.now(),
   });
   const autoDowngradedRef = useRef(false);
@@ -325,6 +366,7 @@ export function useAdaptivePublishQuality({
       if (!debugStateRef) return;
       const qualityWindow = qualityWindowRef.current;
       const capRecoveryWindow = capRecoveryWindowRef.current;
+      const cpuLimitedWindow = cpuLimitedWindowRef.current;
       debugStateRef.current = {
         enabled,
         timestamp: now,
@@ -332,6 +374,7 @@ export function useAdaptivePublishQuality({
         capRecoveryQuality,
         emergencyMode,
         availableOutgoingBitrateBps,
+        publishCpuLimited,
         isCameraOff,
         participantCount,
         videoQuality: videoQualityRef.current,
@@ -346,6 +389,10 @@ export function useAdaptivePublishQuality({
         capRecoveryWindow: {
           ...capRecoveryWindow,
           elapsedMs: Math.max(0, now - capRecoveryWindow.since),
+        },
+        cpuLimitedWindow: {
+          ...cpuLimitedWindow,
+          elapsedMs: Math.max(0, now - cpuLimitedWindow.since),
         },
         lastAppliedProfiles: { ...lastAppliedProfilesRef.current },
         producers: {
@@ -363,6 +410,9 @@ export function useAdaptivePublishQuality({
           fairLiveCap: FAIR_LIVE_CAP_AFTER_MS,
           poorLiveCap: POOR_LIVE_CAP_AFTER_MS,
           goodLiveRestore: GOOD_LIVE_RESTORE_AFTER_MS,
+          cpuLiveCap: CPU_LIVE_CAP_AFTER_MS,
+          cpuScreenSharePoorCap: CPU_SCREEN_SHARE_POOR_CAP_AFTER_MS,
+          cpuLiveRestore: CPU_LIVE_RESTORE_AFTER_MS,
         },
       };
     },
@@ -370,6 +420,7 @@ export function useAdaptivePublishQuality({
       connectionQuality,
       capRecoveryQuality,
       availableOutgoingBitrateBps,
+      publishCpuLimited,
       debugStateRef,
       enabled,
       emergencyMode,
@@ -687,13 +738,18 @@ export function useAdaptivePublishQuality({
 
   useEffect(() => {
     if (!enabled) {
+      const now = Date.now();
       qualityWindowRef.current = {
         quality: connectionQuality,
-        since: Date.now(),
+        since: now,
       };
       capRecoveryWindowRef.current = {
         quality: capRecoveryQuality,
-        since: Date.now(),
+        since: now,
+      };
+      cpuLimitedWindowRef.current = {
+        value: publishCpuLimited,
+        since: now,
       };
       updateInFlightRef.current = false;
       lastAppliedProfilesRef.current = {
@@ -715,9 +771,16 @@ export function useAdaptivePublishQuality({
       const now = Date.now();
       const previous = qualityWindowRef.current;
       const previousRecovery = capRecoveryWindowRef.current;
+      const previousCpuLimited = cpuLimitedWindowRef.current;
       if (previousRecovery.quality !== capRecoveryQuality) {
         capRecoveryWindowRef.current = {
           quality: capRecoveryQuality,
+          since: now,
+        };
+      }
+      if (previousCpuLimited.value !== publishCpuLimited) {
+        cpuLimitedWindowRef.current = {
+          value: publishCpuLimited,
           since: now,
         };
       }
@@ -729,13 +792,23 @@ export function useAdaptivePublishQuality({
 
       const elapsedMs = now - previous.since;
       const capRecoveryElapsedMs = now - capRecoveryWindowRef.current.since;
+      const cpuLimitedElapsedMs = now - cpuLimitedWindowRef.current.since;
       const currentPublishQuality = videoQualityRef.current;
-      const liveProfile =
-        getStableLiveProfile(capRecoveryQuality, capRecoveryElapsedMs) ??
-        getStableLiveProfile(connectionQuality, elapsedMs);
       const screenShareVideoActive = Boolean(
         screenProducerRef.current && !screenProducerRef.current.closed,
       );
+      const connectionLiveProfile =
+        getStableLiveProfile(capRecoveryQuality, capRecoveryElapsedMs) ??
+        getStableLiveProfile(connectionQuality, elapsedMs);
+      const cpuLimitedProfile = getCpuLimitedLiveProfile(
+        publishCpuLimited,
+        cpuLimitedElapsedMs,
+        screenShareVideoActive,
+      );
+      const liveProfile = getMostConstrainedWebcamProducerNetworkProfile([
+        connectionLiveProfile,
+        cpuLimitedProfile,
+      ]);
       const screenShareTargetProfile = screenShareVideoActive
         ? getMostConstrainedWebcamProducerNetworkProfile([
             liveProfile,
@@ -856,6 +929,7 @@ export function useAdaptivePublishQuality({
     isCameraOff,
     networkManagedVideoQualityRef,
     participantCount,
+    publishCpuLimited,
     restoreStandardCaptureIfNeeded,
     switchQuality,
     videoQualityRef,
