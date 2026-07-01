@@ -2344,11 +2344,12 @@ export function useMeetMedia({
   useEffect(() => {
     if (ghostEnabled || isObserverMode) return;
     if (connectionState !== "joined") return;
+    const canWarmMutedAudio = isMuted && mediaState.hasAudioPermission;
     const getReusableAudioTrack = () =>
       getFirstLiveTrack(
         (localStreamRef.current ?? localStream)?.getAudioTracks() ?? [],
       );
-    if (isMuted && !getReusableAudioTrack()) return;
+    if (isMuted && !canWarmMutedAudio && !getReusableAudioTrack()) return;
     if (isMediaRecoveryBlocked()) return;
 
     let disposed = false;
@@ -2356,7 +2357,13 @@ export function useMeetMedia({
       if (disposed || audioRecoveryInFlightRef.current) return;
       if (isMediaRecoveryBlocked()) return;
       const liveAudioTrack = getReusableAudioTrack();
-      if (isMutedRef.current && !liveAudioTrack) return;
+      if (
+        isMutedRef.current &&
+        !liveAudioTrack &&
+        !mediaState.hasAudioPermission
+      ) {
+        return;
+      }
 
       const producer = audioProducerRef.current;
       const producerTrack = producer?.track ?? null;
@@ -2398,6 +2405,7 @@ export function useMeetMedia({
     ghostEnabled,
     isMuted,
     isObserverMode,
+    mediaState.hasAudioPermission,
     isMediaRecoveryBlocked,
     audioProducerRef,
     localStream,
@@ -2412,7 +2420,9 @@ export function useMeetMedia({
     const reusableAudioTrack = getFirstLiveTrack(
       (localStreamRef.current ?? localStream)?.getAudioTracks() ?? [],
     );
-    if (isMuted && !reusableAudioTrack) return;
+    if (isMuted && !mediaState.hasAudioPermission && !reusableAudioTrack) {
+      return;
+    }
     if (isMediaRecoveryBlocked()) return;
     if (audioProducerRef.current) {
       const existingProducer = audioProducerRef.current;
@@ -2550,14 +2560,16 @@ export function useMeetMedia({
         removeCreatedTrackFromLocalStream();
         if (!cancelled) {
           const meetErr = createMeetError(err, "MEDIA_ERROR");
-          const failedMutedWarmup =
-            isMutedRef.current &&
-            !shouldDisableMediaIntentAfterRecoveryFailure(err, meetErr);
+          const failedMutedWarmup = isMutedRef.current;
           if (
             !hadLiveAudioTrackBeforeRecovery &&
             shouldDisableMediaIntentAfterRecoveryFailure(err, meetErr)
           ) {
             setIsMuted(true);
+            setMediaState((current) => ({
+              ...current,
+              hasAudioPermission: false,
+            }));
           }
           if (!failedMutedWarmup) {
             setMeetError(meetErr);
@@ -2580,6 +2592,7 @@ export function useMeetMedia({
     connectionState,
     audioProducerRecoveryPulse,
     isMuted,
+    mediaState.hasAudioPermission,
     localStream,
     isMediaRecoveryBlocked,
     selectedAudioInputDeviceId,

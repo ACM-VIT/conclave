@@ -269,8 +269,8 @@ assertRegex(
 );
 assertRegex(
   "webMeetMedia",
-  /const wantsAudio = options\.audio \?\? true;[\s\S]*const audioRequired = options\.audioRequired \?\? !isMuted;[\s\S]*nextAudioTrack\.enabled = !isMuted;[\s\S]*failedMutedWarmup =[\s\S]*isMutedRef\.current &&[\s\S]*!shouldDisableMediaIntentAfterRecoveryFailure/,
-  "web media recovery warms muted microphone tracks without surfacing optional warmup failures",
+  /const wantsAudio = options\.audio \?\? true;[\s\S]*const audioRequired = options\.audioRequired \?\? !isMuted;[\s\S]*nextAudioTrack\.enabled = !isMuted;[\s\S]*const canWarmMutedAudio = isMuted && mediaState\.hasAudioPermission;[\s\S]*if \(isMuted && !canWarmMutedAudio && !getReusableAudioTrack\(\)\) return;[\s\S]*isMutedRef\.current &&[\s\S]*!mediaState\.hasAudioPermission[\s\S]*const failedMutedWarmup = isMutedRef\.current;[\s\S]*if \(!failedMutedWarmup\) \{[\s\S]*setMeetError\(meetErr\);/,
+  "web media recovery keeps previously permitted muted microphones warm without surfacing optional warmup failures",
 );
 assertRegex(
   "webMeetMedia",
@@ -1738,7 +1738,7 @@ assertRegex(
 }
 {
   const text = source.webMeetMedia;
-  const start = text.indexOf("const getReusableAudioTrack =");
+  const start = text.indexOf("const canWarmMutedAudio =");
   const end = text.indexOf("const recoverAudioProducer = async () => {", start);
   if (start < 0 || end < 0) {
     failures.push("web audio producer recovery watchdog missing");
@@ -1756,11 +1756,16 @@ assertRegex(
     }
     if (
       !section.includes("getReusableAudioTrack") ||
-      !section.includes("if (isMuted && !getReusableAudioTrack()) return;") ||
-      !section.includes("if (isMutedRef.current && !liveAudioTrack) return;")
+      !section.includes(
+        "const canWarmMutedAudio = isMuted && mediaState.hasAudioPermission;",
+      ) ||
+      !section.includes(
+        "if (isMuted && !canWarmMutedAudio && !getReusableAudioTrack()) return;",
+      ) ||
+      !section.includes("!mediaState.hasAudioPermission")
     ) {
       failures.push(
-        "web audio producer watchdog must keep muted producers warm without opening cold mic capture",
+        "web audio producer watchdog must only cold-warm muted mics after existing permission",
       );
     }
     if (!section.includes("window.setInterval(")) {
@@ -1861,7 +1866,7 @@ assertRegex(
     );
   }
   if (
-    !/shouldDisableMediaIntentAfterRecoveryFailure[\s\S]*meetError\.code === "PERMISSION_DENIED"[\s\S]*NotFoundError[\s\S]*Audio producer recovery failed[\s\S]*const meetErr = createMeetError\(err, "MEDIA_ERROR"\);[\s\S]*!hadLiveAudioTrackBeforeRecovery &&[\s\S]*shouldDisableMediaIntentAfterRecoveryFailure\(err, meetErr\)[\s\S]*setIsMuted\(true\);[\s\S]*Camera producer recovery failed[\s\S]*const meetErr = createMeetError\(err, "MEDIA_ERROR"\);[\s\S]*!hadLiveCameraTrackBeforeRecovery &&[\s\S]*shouldDisableMediaIntentAfterRecoveryFailure\(err, meetErr\)[\s\S]*setIsCameraOff\(true\);/.test(
+    !/shouldDisableMediaIntentAfterRecoveryFailure[\s\S]*meetError\.code === "PERMISSION_DENIED"[\s\S]*NotFoundError[\s\S]*Audio producer recovery failed[\s\S]*const meetErr = createMeetError\(err, "MEDIA_ERROR"\);[\s\S]*!hadLiveAudioTrackBeforeRecovery &&[\s\S]*shouldDisableMediaIntentAfterRecoveryFailure\(err, meetErr\)[\s\S]*setIsMuted\(true\);[\s\S]*setMediaState\(\(current\) => \(\{[\s\S]*hasAudioPermission: false,[\s\S]*Camera producer recovery failed[\s\S]*const meetErr = createMeetError\(err, "MEDIA_ERROR"\);[\s\S]*!hadLiveCameraTrackBeforeRecovery &&[\s\S]*shouldDisableMediaIntentAfterRecoveryFailure\(err, meetErr\)[\s\S]*setIsCameraOff\(true\);/.test(
       mediaText,
     )
   ) {
