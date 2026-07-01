@@ -16,6 +16,7 @@ const files = {
   webParticipantMedia: "apps/web/src/app/lib/participant-media.ts",
   webSmartParticipantOrder:
     "apps/web/src/app/hooks/useSmartParticipantOrder.ts",
+  webMeetAudioActivity: "apps/web/src/app/hooks/useMeetAudioActivity.ts",
   webAdaptivePublishQuality:
     "apps/web/src/app/hooks/useAdaptivePublishQuality.ts",
   webAdaptiveConsumerPreferences:
@@ -45,6 +46,7 @@ const files = {
   webScreenWakeLock: "apps/web/src/app/hooks/useScreenWakeLock.ts",
   webVideoEffects: "apps/web/src/app/hooks/useVideoEffects.ts",
   meetingParticipantReducer: "packages/meeting-core/src/participant-reducer.ts",
+  meetingCoreTypes: "packages/meeting-core/src/types.ts",
   webJoinScreen: "apps/web/src/app/components/JoinScreen.tsx",
   webMobileJoinScreen: "apps/web/src/app/components/mobile/MobileJoinScreen.tsx",
   webLowBandwidthProbe: "scripts/probe-low-bandwidth-meet.mjs",
@@ -61,6 +63,8 @@ const files = {
   sfuRoom: "packages/sfu/config/classes/Room.ts",
   sfuClient: "packages/sfu/config/classes/Client.ts",
   sfuConfig: "packages/sfu/config/config.ts",
+  sfuTypes: "packages/sfu/types.ts",
+  sfuJoinRoom: "packages/sfu/server/socket/handlers/joinRoom.ts",
   sfuMediaHandlers: "packages/sfu/server/socket/handlers/mediaHandlers.ts",
   sfuRateLimit: "packages/sfu/server/socket/rateLimit.ts",
   sfuDisconnectHandlers:
@@ -167,6 +171,56 @@ assertRegex(
   "webScreenShareAudioPlayers",
   /createPlaybackRecoveryScheduler[\s\S]*audio\.srcObject = null;[\s\S]*audio\.srcObject = stream;[\s\S]*document\.addEventListener\("visibilitychange", handleVisibilityChange\)[\s\S]*window\.addEventListener\("pageshow", handleForegroundReplay\)[\s\S]*window\.addEventListener\("pointerdown", handleUserGesture, true\)/,
   "web screen audio retries playback after foregrounding and autoplay gestures",
+);
+assertIncludes(
+  "meetingCoreTypes",
+  "export interface ActiveSpeakerChangedNotification",
+  "meeting-core exposes the server active-speaker notification type",
+);
+assertIncludes(
+  "sfuTypes",
+  "export interface ActiveSpeakerChangedNotification",
+  "SFU exposes the server active-speaker notification type",
+);
+assertRegex(
+  "sfuRoom",
+  /private meetingActiveSpeakerUserId: string \| null = null;[\s\S]*private webinarAudioLevelObserver: AudioLevelObserver \| null = null;[\s\S]*client\.socket\.emit\("activeSpeakerChanged", notification\)/,
+  "SFU reuses the room audio-level observer for meeting active-speaker events",
+);
+assertRegex(
+  "sfuRoom",
+  /observer\.on\("volumes"[\s\S]*this\.setMeetingActiveSpeakerUserId\(ownerUserId\)[\s\S]*this\.webinarDominantSpeakerUserId = ownerUserId/,
+  "SFU emits meeting active speaker before preserving webinar dominant-speaker behavior",
+);
+assertRegex(
+  "sfuRoom",
+  /observer\.on\("silence"[\s\S]*this\.setMeetingActiveSpeakerUserId\(null\)[\s\S]*this\.webinarDominantSpeakerUserId = null/,
+  "SFU clears meeting active speaker on observer silence without eagerly clearing webinar stage state",
+);
+assertRegex(
+  "sfuRoom",
+  /const clearActiveSpeakerIfPaused = \(\) => \{[\s\S]*this\.meetingActiveSpeakerUserId !== ownerUserId[\s\S]*!this\.clientHasUnpausedWebcamAudio\(ownerClient\)[\s\S]*this\.setMeetingActiveSpeakerUserId\(null\)[\s\S]*producer\.observer\.on\("pause", clearActiveSpeakerIfPaused\)/,
+  "SFU clears meeting active speaker immediately when the active audio producer is paused",
+);
+assertRegex(
+  "sfuJoinRoom",
+  /isMeetingActiveSpeakerSignalAvailable[\s\S]*activeSpeakerId: context\.currentRoom\.activeSpeakerUserId/,
+  "SFU only snapshots active speaker when the server observer is available",
+);
+assertRegex(
+  "webMeetSocket",
+  /setActiveSpeakerId: React\.Dispatch<React\.SetStateAction<string \| null>>;[\s\S]*setServerActiveSpeakerAvailable: \(value: boolean\) => void;[\s\S]*const applyServerActiveSpeaker = useCallback[\s\S]*setServerActiveSpeakerAvailable\(true\)[\s\S]*socket\.on\([\s\S]*"activeSpeakerChanged"[\s\S]*isRoomEvent\(notification\?\.roomId\)[\s\S]*shouldIgnoreDepartedParticipant\(nextSpeakerId\)[\s\S]*applyServerActiveSpeaker\(nextSpeakerId\)/,
+  "web socket applies room-scoped server active-speaker events and gates stale speakers",
+);
+assertRegex(
+  "webMeetClient",
+  /serverActiveSpeakerAvailable[\s\S]*setServerActiveSpeakerAvailable[\s\S]*useMeetSocket\(\{[\s\S]*setActiveSpeakerId,[\s\S]*setServerActiveSpeakerAvailable,[\s\S]*useMeetAudioActivity\(\{[\s\S]*enabled: !serverActiveSpeakerAvailable/,
+  "web meeting client disables local speaker analysis after server active speaker is available",
+);
+assertRegex(
+  "webMeetAudioActivity",
+  /enabled\?: boolean;[\s\S]*enabled = true[\s\S]*if \(!enabled\) \{[\s\S]*analyserMap\.clear\(\);[\s\S]*return;/,
+  "web local active-speaker fallback disconnects analyzers when the SFU signal owns speaker state",
 );
 assertRegex(
   "webSystemAudioPlayers",

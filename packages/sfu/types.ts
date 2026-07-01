@@ -59,6 +59,7 @@ export interface JoinRoomResponse {
   roomId?: string;
   rtpCapabilities: RtpCapabilities;
   existingProducers: ProducerInfo[];
+  activeSpeakerId?: string | null;
   displayNameSnapshot?: DisplayNameSnapshotEntry[];
   status?: "waiting" | "joined";
   hostUserId?: string | null;
@@ -82,6 +83,11 @@ export interface JoinRoomErrorResponse {
   roomId?: string;
   redirectInstanceId?: string;
   redirectUrl?: string;
+}
+
+export interface ActiveSpeakerChangedNotification {
+  roomId: string;
+  userId: string | null;
 }
 
 export interface CreateTransportResponse {

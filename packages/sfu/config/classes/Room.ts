@@ -16,7 +16,12 @@ import {
   removeAwarenessStates,
 } from "y-protocols/awareness";
 import * as Y from "yjs";
-import type { ChatMessage, ProducerInfo, VideoQuality } from "../../types.js";
+import type {
+  ActiveSpeakerChangedNotification,
+  ChatMessage,
+  ProducerInfo,
+  VideoQuality,
+} from "../../types.js";
 import { Logger } from "../../utilities/loggers.js";
 import { config } from "../config.js";
 import { Admin } from "./Admin.js";
@@ -167,6 +172,8 @@ export class Room {
     { producer: Producer; userId: string; type: ProducerType }
   > = new Map();
   private producerIndex: Map<string, ProducerIndexEntry> = new Map();
+  private meetingActiveSpeakerUserId: string | null = null;
+  private meetingActiveSpeakerSignalAnnounced = false;
   private webinarActiveSpeakerUserId: string | null = null;
   private webinarDominantSpeakerUserId: string | null = null;
   private webinarFeedProducerIds: string[] = [];
@@ -187,6 +194,14 @@ export class Room {
 
   get rtpCapabilities(): RtpCapabilities {
     return this.router.rtpCapabilities;
+  }
+
+  get activeSpeakerUserId(): string | null {
+    return this.meetingActiveSpeakerUserId;
+  }
+
+  get isMeetingActiveSpeakerSignalAvailable(): boolean {
+    return this.meetingActiveSpeakerSignalAnnounced;
   }
 
   private updateClientModeCounts(client: Client, delta: 1 | -1): void {
@@ -384,6 +399,41 @@ export class Room {
     this.webinarFeedRefreshNotifier = notifier;
   }
 
+  private emitMeetingActiveSpeakerChanged(userId: string | null): void {
+    const notification: ActiveSpeakerChangedNotification = {
+      roomId: this.id,
+      userId,
+    };
+
+    for (const client of this.clients.values()) {
+      if (client.isWebinarAttendee) continue;
+      client.socket.emit("activeSpeakerChanged", notification);
+    }
+  }
+
+  private setMeetingActiveSpeakerUserId(
+    userId: string | null,
+    options?: { force?: boolean },
+  ): void {
+    if (!options?.force && this.meetingActiveSpeakerUserId === userId) {
+      return;
+    }
+
+    this.meetingActiveSpeakerUserId = userId;
+    this.emitMeetingActiveSpeakerChanged(userId);
+  }
+
+  private announceMeetingActiveSpeakerSignal(): void {
+    if (this.meetingActiveSpeakerSignalAnnounced) {
+      return;
+    }
+
+    this.meetingActiveSpeakerSignalAnnounced = true;
+    this.setMeetingActiveSpeakerUserId(this.meetingActiveSpeakerUserId, {
+      force: true,
+    });
+  }
+
   private requestWebinarFeedRefresh(): void {
     try {
       this.webinarFeedRefreshNotifier?.(this);
@@ -432,6 +482,8 @@ export class Room {
               return;
             }
 
+            this.setMeetingActiveSpeakerUserId(ownerUserId);
+
             if (this.webinarDominantSpeakerUserId === ownerUserId) {
               return;
             }
@@ -441,6 +493,8 @@ export class Room {
           });
 
           observer.on("silence", () => {
+            this.setMeetingActiveSpeakerUserId(null);
+
             if (!this.webinarDominantSpeakerUserId) {
               return;
             }
@@ -496,6 +550,7 @@ export class Room {
       await this.webinarAudioLevelObserver.addProducer({
         producerId: producer.id,
       });
+      this.announceMeetingActiveSpeakerSignal();
     } catch (error) {
       this.webinarWebcamAudioProducerOwners.delete(producer.id);
       Logger.warn(
@@ -511,8 +566,20 @@ export class Room {
       cleaned = true;
       void this.unregisterWebinarAudioProducer(producer.id);
     };
+    const clearActiveSpeakerIfPaused = () => {
+      const ownerUserId = this.webinarWebcamAudioProducerOwners.get(producer.id);
+      if (!ownerUserId || this.meetingActiveSpeakerUserId !== ownerUserId) {
+        return;
+      }
+
+      const ownerClient = this.clients.get(ownerUserId);
+      if (!ownerClient || !this.clientHasUnpausedWebcamAudio(ownerClient)) {
+        this.setMeetingActiveSpeakerUserId(null);
+      }
+    };
 
     producer.on("transportclose", cleanup);
+    producer.observer.on("pause", clearActiveSpeakerIfPaused);
     producer.observer.on("close", cleanup);
   }
 
@@ -521,6 +588,11 @@ export class Room {
   ): Promise<void> {
     const ownerUserId = this.webinarWebcamAudioProducerOwners.get(producerId);
     this.webinarWebcamAudioProducerOwners.delete(producerId);
+    const ownerHasRemainingProducer =
+      !!ownerUserId &&
+      Array.from(this.webinarWebcamAudioProducerOwners.values()).some(
+        (value) => value === ownerUserId,
+      );
 
     if (this.webinarAudioLevelObserver) {
       try {
@@ -532,10 +604,16 @@ export class Room {
 
     if (
       ownerUserId &&
+      this.meetingActiveSpeakerUserId === ownerUserId &&
+      !ownerHasRemainingProducer
+    ) {
+      this.setMeetingActiveSpeakerUserId(null);
+    }
+
+    if (
+      ownerUserId &&
       this.webinarDominantSpeakerUserId === ownerUserId &&
-      !Array.from(this.webinarWebcamAudioProducerOwners.values()).some(
-        (value) => value === ownerUserId,
-      )
+      !ownerHasRemainingProducer
     ) {
       this.webinarDominantSpeakerUserId = null;
       this.requestWebinarFeedRefresh();
@@ -555,6 +633,9 @@ export class Room {
 
     if (this.webinarDominantSpeakerUserId === userId) {
       this.webinarDominantSpeakerUserId = null;
+    }
+    if (this.meetingActiveSpeakerUserId === userId) {
+      this.setMeetingActiveSpeakerUserId(null);
     }
   }
 
@@ -1360,6 +1441,8 @@ export class Room {
     this.webinarAudioLevelObserverInit = null;
     this.webinarWebcamAudioProducerOwners.clear();
     this.webinarFeedRefreshNotifier = null;
+    this.meetingActiveSpeakerUserId = null;
+    this.meetingActiveSpeakerSignalAnnounced = false;
     if (!this.router.closed) {
       this.router.close();
     }

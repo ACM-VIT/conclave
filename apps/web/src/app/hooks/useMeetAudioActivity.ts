@@ -9,6 +9,7 @@ import {
 import type { AudioAnalyserEntry, Participant } from "../lib/types";
 
 interface UseMeetAudioActivityOptions {
+  enabled?: boolean;
   participants: Map<string, Participant>;
   localStream: MediaStream | null;
   isMuted: boolean;
@@ -24,6 +25,7 @@ interface UseMeetAudioActivityOptions {
 }
 
 export function useMeetAudioActivity({
+  enabled = true,
   participants,
   localStream,
   isMuted,
@@ -34,6 +36,18 @@ export function useMeetAudioActivity({
   lastActiveSpeakerRef,
 }: UseMeetAudioActivityOptions) {
   useEffect(() => {
+    const analyserMap = audioAnalyserMapRef.current;
+
+    if (!enabled) {
+      analyserMap.forEach((entry) => {
+        entry.source.disconnect();
+        entry.analyser.disconnect();
+      });
+      analyserMap.clear();
+      lastActiveSpeakerRef.current = null;
+      return;
+    }
+
     const sources = new Map<string, MediaStream>();
     const localAudioTrack = localStream?.getAudioTracks()[0];
 
@@ -53,8 +67,6 @@ export function useMeetAudioActivity({
       if (!track || !track.enabled || track.readyState !== "live") continue;
       sources.set(participant.userId, participant.audioStream);
     }
-
-    const analyserMap = audioAnalyserMapRef.current;
 
     for (const [id, entry] of analyserMap) {
       if (!sources.has(id)) {
@@ -162,6 +174,7 @@ export function useMeetAudioActivity({
       window.clearInterval(interval);
     };
   }, [
+    enabled,
     participants,
     localStream,
     isMuted,

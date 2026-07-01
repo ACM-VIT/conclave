@@ -16,6 +16,7 @@ import {
   buildScreenShareAudioOpusCodecOptions,
 } from "../lib/constants";
 import type {
+  ActiveSpeakerChangedNotification,
   AdminNoticeNotification,
   ChatHistorySnapshot,
   ChatMessage,
@@ -737,6 +738,8 @@ interface UseMeetSocketOptions {
   setIsDmEnabled: (value: boolean) => void;
   setIsReactionsDisabled: (value: boolean) => void;
   setActiveScreenShareId: (value: string | null) => void;
+  setActiveSpeakerId: React.Dispatch<React.SetStateAction<string | null>>;
+  setServerActiveSpeakerAvailable: (value: boolean) => void;
   setNetworkManagedVideoQuality: (value: VideoQuality) => void;
   videoQualityRef: React.MutableRefObject<VideoQuality>;
   connectionQualityRef?: React.MutableRefObject<ConnectionQualityStats | null>;
@@ -832,6 +835,8 @@ export function useMeetSocket({
   setIsDmEnabled,
   setIsReactionsDisabled,
   setActiveScreenShareId,
+  setActiveSpeakerId,
+  setServerActiveSpeakerAvailable,
   setNetworkManagedVideoQuality,
   videoQualityRef,
   connectionQualityRef,
@@ -941,6 +946,7 @@ export function useMeetSocket({
     screenProducerRef,
     screenAudioProducerRef,
     screenShareStreamRef,
+    lastActiveSpeakerRef,
     intentionalLocalProducerCloseIdsRef,
     consumersRef,
     adaptivelyPausedConsumerProducerIdsRef,
@@ -1505,6 +1511,9 @@ export function useMeetSocket({
       }
       if (!preserveMeetingState) {
         setActiveScreenShareId(null);
+        lastActiveSpeakerRef.current = null;
+        setActiveSpeakerId(null);
+        setServerActiveSpeakerAvailable(false);
         setIsHandRaised(false);
         setIsTtsDisabled(false);
         setIsDmEnabled(true);
@@ -1534,7 +1543,9 @@ export function useMeetSocket({
       screenProducerRef,
       screenShareStreamRef,
       intentionalLocalProducerCloseIdsRef,
+      lastActiveSpeakerRef,
       setActiveScreenShareId,
+      setActiveSpeakerId,
       setDisplayNames,
       setIsHandRaised,
       setIsScreenSharing,
@@ -1546,6 +1557,7 @@ export function useMeetSocket({
       setIsTtsDisabled,
       setIsDmEnabled,
       setMeetingRequiresInviteCode,
+      setServerActiveSpeakerAvailable,
       setWebinarConfig,
       clearReactions,
       videoProducerRef,
@@ -1951,6 +1963,22 @@ export function useMeetSocket({
       );
     },
     [currentRoomIdRef, serverRoomIdRef],
+  );
+
+  const applyServerActiveSpeaker = useCallback(
+    (userId: string | null | undefined) => {
+      const nextSpeakerId =
+        typeof userId === "string" && userId.length > 0 ? userId : null;
+
+      setServerActiveSpeakerAvailable(true);
+      lastActiveSpeakerRef.current = nextSpeakerId
+        ? { id: nextSpeakerId, ts: Date.now() }
+        : null;
+      setActiveSpeakerId((current) =>
+        current === nextSpeakerId ? current : nextSpeakerId,
+      );
+    },
+    [lastActiveSpeakerRef, setActiveSpeakerId, setServerActiveSpeakerAvailable],
   );
 
   const clearStaleConsumerRecoveryTimeout = useCallback((producerId: string) => {
@@ -4230,6 +4258,7 @@ export function useMeetSocket({
 
             if (response.status === "waiting") {
               setConnectionState("waiting");
+              setServerActiveSpeakerAvailable(false);
               setHostUserId(response.hostUserId ?? null);
               setHostUserIds(
                 response.hostUserIds ??
@@ -4287,6 +4316,13 @@ export function useMeetSocket({
               setIsChatLocked(response.isChatLocked ?? false);
               setIsDmEnabled(response.isDmEnabled ?? true);
               setIsReactionsDisabled(response.isReactionsDisabled ?? false);
+              if (
+                Object.prototype.hasOwnProperty.call(response, "activeSpeakerId")
+              ) {
+                applyServerActiveSpeaker(response.activeSpeakerId);
+              } else {
+                setServerActiveSpeakerAvailable(false);
+              }
               setWebinarRole(response.webinarRole ?? null);
               setWebinarSpeakerUserId(
                 response.existingProducers?.[0]?.producerUserId ?? null,
@@ -4709,6 +4745,26 @@ export function useMeetSocket({
               }) => {
                 if (!isRoomEvent(eventRoomId)) return;
                 setHostUserIds(Array.isArray(hostUserIds) ? hostUserIds : []);
+              },
+            );
+
+            socket.on(
+              "activeSpeakerChanged",
+              (notification: ActiveSpeakerChangedNotification) => {
+                if (!isRoomEvent(notification?.roomId)) return;
+                const nextSpeakerId =
+                  typeof notification?.userId === "string" &&
+                  notification.userId.length > 0
+                    ? notification.userId
+                    : null;
+                if (
+                  nextSpeakerId &&
+                  shouldIgnoreDepartedParticipant(nextSpeakerId)
+                ) {
+                  applyServerActiveSpeaker(null);
+                  return;
+                }
+                applyServerActiveSpeaker(nextSpeakerId);
               },
             );
 
@@ -5880,6 +5936,7 @@ export function useMeetSocket({
       handleProducerClosed,
       handleRedirectRef,
       handleReconnectRef,
+      applyServerActiveSpeaker,
       applyDisplayNameSnapshot,
       applyParticipantConnectionStatus,
       ensureLiveLocalMediaForJoin,
@@ -5933,6 +5990,7 @@ export function useMeetSocket({
       setWebinarConfig,
       setServerRestartNotice,
       setAdminNotice,
+      setServerActiveSpeakerAvailable,
       setLocalStream,
       setMeetError,
       setMeetingEndedNotice,

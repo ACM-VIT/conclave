@@ -628,6 +628,8 @@ export default function MeetsClient({
     adminNotice,
     setAdminNotice,
   } = useMeetState({ initialRoomId });
+  const [serverActiveSpeakerAvailable, setServerActiveSpeakerAvailable] =
+    useState(false);
   const handleVideoAdaptivePauseStateChange = useCallback(
     (change: AdaptiveConsumerVideoPauseStateChange) => {
       dispatchParticipants({
@@ -2189,6 +2191,8 @@ export default function MeetsClient({
     setIsDmEnabled,
     setIsReactionsDisabled,
     setActiveScreenShareId,
+    setActiveSpeakerId,
+    setServerActiveSpeakerAvailable,
     setNetworkManagedVideoQuality,
     videoQualityRef: refs.videoQualityRef,
     connectionQualityRef: connectionQualityDebugRef,
@@ -2226,6 +2230,7 @@ export default function MeetsClient({
   }, [socket.ensureProducerTransport]);
 
   useMeetAudioActivity({
+    enabled: !serverActiveSpeakerAvailable,
     participants,
     localStream,
     isMuted,
