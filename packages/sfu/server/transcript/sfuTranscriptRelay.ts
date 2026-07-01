@@ -28,6 +28,7 @@ type ActiveAudioConsumer = {
   decodedFrames: number;
   queuedFrames: number;
   commitsSent: number;
+  turnClearsSent: number;
   decodeFailures: number;
   lastDecodeFailureLogAt: number;
   lastDropLogAt: number;
@@ -231,13 +232,15 @@ export class SfuTranscriptRelay implements TranscriptAudioBatchSink {
       decodedFrames: 0,
       queuedFrames: 0,
       commitsSent: 0,
+      turnClearsSent: 0,
       decodeFailures: 0,
       lastDecodeFailureLogAt: 0,
       lastDropLogAt: 0,
     };
     this.consumers.set(entry.producerId, active);
+    const codec = entry.producer.rtpParameters.codecs[0];
     Logger.info(
-      `Transcript SFU relay attached audio producer ${entry.producerId} for ${entry.displayName} (${entry.userId}) in room ${this.options.room.id}.`,
+      `Transcript SFU relay attached audio producer ${entry.producerId} for ${entry.displayName} (${entry.userId}) in room ${this.options.room.id} codec=${codec?.mimeType ?? "unknown"} clockRate=${codec?.clockRate ?? "unknown"} channels=${codec?.channels ?? "unknown"}.`,
     );
 
     consumer.on("rtp", (packet) => {
@@ -318,7 +321,7 @@ export class SfuTranscriptRelay implements TranscriptAudioBatchSink {
     this.commitTimer = setInterval(() => {
       for (const active of this.consumers.values()) {
         this.commitIfNeeded(active);
-        active.batcher.clearEndedTurn();
+        this.clearEndedTurnIfNeeded(active);
       }
     }, TRANSCRIPT_AUDIO_COMMIT_INTERVAL_MS);
   }
@@ -341,6 +344,17 @@ export class SfuTranscriptRelay implements TranscriptAudioBatchSink {
     if (active.commitsSent === 1) {
       Logger.info(
         `Transcript SFU relay committed first audio batch for producer ${active.consumer.producerId} in room ${this.options.room.id}.`,
+      );
+    }
+  }
+
+  private clearEndedTurnIfNeeded(active: ActiveAudioConsumer): void {
+    const cleared = active.batcher.clearEndedTurn();
+    if (!cleared) return;
+    active.turnClearsSent += 1;
+    if (active.turnClearsSent === 1) {
+      Logger.info(
+        `Transcript SFU relay cleared first ended speech turn for producer ${active.consumer.producerId} in room ${this.options.room.id}.`,
       );
     }
   }
