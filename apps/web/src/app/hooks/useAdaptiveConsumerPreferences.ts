@@ -91,10 +91,17 @@ const CONSUMER_SCORE_STALE_AFTER_MS = 15000;
 const UNSUPPORTED_LAYER_RETRY_AFTER_MS = 30000;
 const SCREEN_SHARE_SMALL_RENDERED_HEIGHT = 220;
 const SCREEN_SHARE_FULL_FPS_RENDERED_HEIGHT = 540;
+const WEBCAM_STANDARD_RENDERED_HEIGHT = 260;
+const WEBCAM_FULL_RENDERED_HEIGHT = 540;
 const OFFSCREEN_WEBCAM_PARK_PRIORITY = 5;
 const HIDDEN_SCREEN_SHARE_KEEPALIVE_PRIORITY = 60;
 
 type PresentationTileSize = "stage" | "grid" | "rail";
+
+type RenderedTileMetrics = {
+  width: number;
+  height: number;
+};
 
 type LayoutRole = {
   primary: boolean;
@@ -115,6 +122,7 @@ type RoomTilingHints = {
   hiddenIds: Set<string>;
   warmIds: Set<string>;
   orderedRemoteRanks: Map<string, number>;
+  participantTileMetrics: Map<string, RenderedTileMetrics>;
   presentation: {
     presenterId: string | null;
     producerId: string | null;
@@ -319,6 +327,36 @@ const readPresentationElementMetrics = (
   };
 };
 
+const readParticipantTileMetrics = (
+  visibleRemoteIds: Set<string>,
+): Map<string, RenderedTileMetrics> => {
+  if (typeof document === "undefined" || visibleRemoteIds.size === 0) {
+    return new Map();
+  }
+
+  const metrics = new Map<string, RenderedTileMetrics>();
+  const tiles = Array.from(
+    document.querySelectorAll<HTMLElement>("[data-userid]"),
+  );
+
+  tiles.forEach((tile) => {
+    const userId = tile.dataset.userid;
+    if (!userId || !visibleRemoteIds.has(userId)) return;
+
+    const rect = tile.getBoundingClientRect();
+    const width = rect.width > 1 ? Math.round(rect.width) : 0;
+    const height = rect.height > 1 ? Math.round(rect.height) : 0;
+    if (width <= 1 || height <= 1) return;
+
+    const existing = metrics.get(userId);
+    if (!existing || width * height > existing.width * existing.height) {
+      metrics.set(userId, { width, height });
+    }
+  });
+
+  return metrics;
+};
+
 const readRoomTilingHints = (): RoomTilingHints | null => {
   if (typeof window === "undefined") return null;
 
@@ -342,11 +380,12 @@ const readRoomTilingHints = (): RoomTilingHints | null => {
   const presentationMetrics = readPresentationElementMetrics(
     presentationPresenterId,
   );
+  const visibleRemoteIds = new Set(readStringArray(current, "visibleRemoteIds"));
 
   return {
     primaryIds: new Set(readStringArray(current, "primaryIds")),
     focusIds: new Set(readStringArray(current, "focusIds")),
-    visibleRemoteIds: new Set(readStringArray(current, "visibleRemoteIds")),
+    visibleRemoteIds,
     hiddenIds: new Set(readStringArray(current, "hiddenIds")),
     warmIds: new Set(readStringArray(current, "warmIds")),
     orderedRemoteRanks: new Map(
@@ -355,6 +394,7 @@ const readRoomTilingHints = (): RoomTilingHints | null => {
         index,
       ]),
     ),
+    participantTileMetrics: readParticipantTileMetrics(visibleRemoteIds),
     presentation: {
       presenterId: presentationPresenterId,
       producerId: presentationProducerId,
@@ -390,6 +430,9 @@ const getLayoutRole = (
     (isPresentedScreenByProducer || isPresentedScreenByPresenter);
   const participantVideoVisible = hints.visibleRemoteIds.has(userId);
   const participantVideoHidden = hints.hiddenIds.has(userId);
+  const participantTileMetrics = isScreenShare
+    ? null
+    : (hints.participantTileMetrics.get(userId) ?? null);
   return {
     primary:
       (!isScreenShare && hints.primaryIds.has(userId)) ||
@@ -405,8 +448,12 @@ const getLayoutRole = (
     rank: isScreenShare
       ? null
       : (hints.orderedRemoteRanks.get(userId) ?? null),
-    renderedWidth: isPresentedScreen ? hints.presentation.renderedWidth : null,
-    renderedHeight: isPresentedScreen ? hints.presentation.renderedHeight : null,
+    renderedWidth: isPresentedScreen
+      ? hints.presentation.renderedWidth
+      : participantTileMetrics?.width ?? null,
+    renderedHeight: isPresentedScreen
+      ? hints.presentation.renderedHeight
+      : participantTileMetrics?.height ?? null,
     presentationSize: isPresentedScreen ? hints.presentation.size : null,
   };
 };
@@ -624,6 +671,18 @@ const getScreenShareTargetTemporalLayer = (
   return isLargePresentation ? bounds.maxTemporalLayer : 1;
 };
 
+const getWebcamTargetSpatialLayer = (
+  bounds: LayerBounds,
+  renderedHeight: number | null,
+): number => {
+  if (renderedHeight === null) return bounds.maxSpatialLayer;
+  if (renderedHeight < WEBCAM_STANDARD_RENDERED_HEIGHT) return 0;
+  if (renderedHeight < WEBCAM_FULL_RENDERED_HEIGHT) {
+    return Math.min(1, bounds.maxSpatialLayer);
+  }
+  return bounds.maxSpatialLayer;
+};
+
 const getDesiredPreferences = (
   info: ProducerMapEntry,
   bounds: LayerBounds | null,
@@ -740,6 +799,12 @@ const getDesiredPreferences = (
   const isWarm = layout?.warm === true || (!layout && !fallbackVisible);
   const isHidden = layout?.hidden === true && !isVisible;
   const isFocus = isActiveSpeaker || isLayoutFocus;
+  const webcamRenderedHeight = layout?.renderedHeight ?? null;
+  const webcamRenderedSpatialLayer = bounds
+    ? getWebcamTargetSpatialLayer(bounds, webcamRenderedHeight)
+    : null;
+  const hasRenderedWebcamTile =
+    isVisible || isPrimary || webcamRenderedHeight !== null;
 
   if (options.dataSaverMode) {
     return {
@@ -858,7 +923,10 @@ const getDesiredPreferences = (
 
   const keepFull =
     quality === "good" &&
-    (isFocus ||
+    (!bounds ||
+      (webcamRenderedSpatialLayer ?? bounds.maxSpatialLayer) >=
+        bounds.maxSpatialLayer) &&
+    ((isFocus && hasRenderedWebcamTile) ||
       (!options.screenShareVideoActive &&
         isVisible &&
         options.fullResolutionEligible));
@@ -896,12 +964,17 @@ const getDesiredPreferences = (
             bounds,
           )
         : buildLayerPreference(
-            isVisible ? 1 : 0,
+            isVisible
+              ? Math.min(
+                  1,
+                  webcamRenderedSpatialLayer ?? bounds.maxSpatialLayer,
+                )
+              : 0,
             isVisible ? bounds.maxTemporalLayer : 0,
             bounds,
           )
       : undefined,
-    priority: keepFull ? 175 : isVisible ? 95 : 45,
+    priority: keepFull ? 175 : isFocus ? 130 : isVisible ? 95 : 45,
     paused: false,
   };
 };

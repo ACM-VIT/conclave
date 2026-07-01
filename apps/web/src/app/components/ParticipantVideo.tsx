@@ -188,6 +188,7 @@ function ParticipantVideo({
       data-meet-video-adaptively-paused={
         participant.isVideoAdaptivelyPaused ? "true" : "false"
       }
+      data-userid={participant.userId}
       style={{ fontFamily: "'PolySans Trial', sans-serif" }}
     >
       <video

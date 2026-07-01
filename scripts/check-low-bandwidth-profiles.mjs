@@ -682,6 +682,21 @@ assertRegex(
   /presentation: \{[\s\S]*producerId: string \| null;[\s\S]*const getLayoutRole =[\s\S]*producerId: string,[\s\S]*hints\.presentation\.producerId === producerId[\s\S]*visible: isScreenShare \? isPresentedScreen : participantVideoVisible[\s\S]*hidden: isScreenShare[\s\S]*hints\.presentation\.visible && !isPresentedScreen/,
   "web screen-share receive layout is keyed by the rendered presentation producer, not just presenter user id",
 );
+assertIncludes(
+  "webParticipantVideo",
+  "data-userid={participant.userId}",
+  "web participant video exposes tile identity for rendered-size receive constraints",
+);
+assertRegex(
+  "webAdaptiveConsumerPreferences",
+  /WEBCAM_STANDARD_RENDERED_HEIGHT = 260;[\s\S]*WEBCAM_FULL_RENDERED_HEIGHT = 540;[\s\S]*const readParticipantTileMetrics =[\s\S]*querySelectorAll<HTMLElement>\("\[data-userid\]"\)[\s\S]*visibleRemoteIds\.has\(userId\)[\s\S]*width \* height > existing\.width \* existing\.height[\s\S]*participantTileMetrics: readParticipantTileMetrics\(visibleRemoteIds\)[\s\S]*renderedHeight: isPresentedScreen[\s\S]*participantTileMetrics\?\.height/,
+  "web receive adaptation reads actual rendered webcam tile size",
+);
+assertRegex(
+  "webAdaptiveConsumerPreferences",
+  /const getWebcamTargetSpatialLayer =[\s\S]*WEBCAM_STANDARD_RENDERED_HEIGHT[\s\S]*return 0;[\s\S]*WEBCAM_FULL_RENDERED_HEIGHT[\s\S]*return Math\.min\(1, bounds\.maxSpatialLayer\);[\s\S]*const webcamRenderedHeight = layout\?\.renderedHeight \?\? null;[\s\S]*const webcamRenderedSpatialLayer = bounds[\s\S]*getWebcamTargetSpatialLayer\(bounds, webcamRenderedHeight\)[\s\S]*const hasRenderedWebcamTile =[\s\S]*const keepFull =[\s\S]*quality === "good"[\s\S]*webcamRenderedSpatialLayer \?\? bounds\.maxSpatialLayer[\s\S]*isFocus && hasRenderedWebcamTile[\s\S]*options\.screenShareVideoActive[\s\S]*webcamRenderedSpatialLayer \?\? bounds\.maxSpatialLayer[\s\S]*priority: keepFull \? 175 : isFocus \? 130 : isVisible \? 95 : 45/,
+  "web webcam receive layers are capped by rendered tile height before taking full resolution",
+);
 assertRegex(
   "webAdaptiveConsumerPreferences",
   /OFFSCREEN_WEBCAM_PARK_PRIORITY = 5[\s\S]*if \(options\.emergencyMode\) \{[\s\S]*if \(isHidden && !isWarm && !isFocus && !options\.emergencyKeepVideo\) \{[\s\S]*priority: OFFSCREEN_WEBCAM_PARK_PRIORITY,[\s\S]*paused: true,[\s\S]*if \(!options\.emergencyKeepVideo\) \{[\s\S]*const shouldParkOffscreenWebcamForScreenShare =[\s\S]*options\.screenShareVideoActive &&[\s\S]*isHidden &&[\s\S]*!isWarm &&[\s\S]*!isFocus &&[\s\S]*screenShareReserveQuality === "poor" \|\| screenShareReceiveEmergency[\s\S]*if \(shouldParkOffscreenWebcamForScreenShare\) \{[\s\S]*priority: OFFSCREEN_WEBCAM_PARK_PRIORITY,[\s\S]*paused: true,/,
@@ -927,7 +942,7 @@ assertRegex(
 );
 assertRegex(
   "webAdaptiveConsumerPreferences",
-  /const keepFull =[\s\S]*quality === "good"[\s\S]*isFocus \|\|[\s\S]*!options\.screenShareVideoActive[\s\S]*isVisible[\s\S]*options\.fullResolutionEligible/,
+  /const keepFull =[\s\S]*quality === "good"[\s\S]*webcamRenderedSpatialLayer \?\? bounds\.maxSpatialLayer[\s\S]*isFocus && hasRenderedWebcamTile[\s\S]*!options\.screenShareVideoActive[\s\S]*isVisible[\s\S]*options\.fullResolutionEligible/,
   "web good-link receive does not request full layers for every visible large-room webcam",
 );
 assertIncludes(
