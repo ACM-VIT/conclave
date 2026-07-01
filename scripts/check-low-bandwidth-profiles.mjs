@@ -976,8 +976,13 @@ assertRegex(
   "web screen-share receive adaptation receives measured incoming bitrate",
 );
 assertRegex(
+  "webScreenShareNetworkProfile",
+  /SCREEN_SHARE_RECEIVE_FAIR_BPS = 1500000[\s\S]*SCREEN_SHARE_RECEIVE_POOR_BPS = 550000[\s\S]*SCREEN_SHARE_RECEIVE_EMERGENCY_BPS = 300000[\s\S]*getScreenShareReceiveNetworkProfileForAvailableIncomingBitrate[\s\S]*availableIncomingBitrateBps <= SCREEN_SHARE_RECEIVE_EMERGENCY_BPS[\s\S]*availableIncomingBitrateBps <= SCREEN_SHARE_RECEIVE_POOR_BPS[\s\S]*availableIncomingBitrateBps <= SCREEN_SHARE_RECEIVE_FAIR_BPS/,
+  "web screen-share receive BWE thresholds are shared between startup and adaptive paths",
+);
+assertRegex(
   "webAdaptiveConsumerPreferences",
-  /SCREEN_SHARE_RECEIVE_FAIR_BPS = 1500000[\s\S]*SCREEN_SHARE_RECEIVE_POOR_BPS = 550000[\s\S]*SCREEN_SHARE_RECEIVE_EMERGENCY_BPS = 300000[\s\S]*getScreenShareReceiveQualityForAvailableBitrate[\s\S]*availableIncomingBitrateBps <= SCREEN_SHARE_RECEIVE_POOR_BPS[\s\S]*availableIncomingBitrateBps <= SCREEN_SHARE_RECEIVE_FAIR_BPS[\s\S]*isScreenShareReceiveEmergencyBitrate[\s\S]*getScreenShareTargetTemporalLayer[\s\S]*options\.quality === "poor"[\s\S]*isSmallPresentation[\s\S]*options\.quality === "fair"[\s\S]*return 1;[\s\S]*screenShareEmergency[\s\S]*getScreenShareTargetTemporalLayer\(bounds, \{/,
+  /getScreenShareReceiveNetworkProfileForAvailableIncomingBitrate[\s\S]*getScreenShareReceiveQualityForAvailableBitrate[\s\S]*const profile =[\s\S]*getScreenShareReceiveNetworkProfileForAvailableIncomingBitrate\([\s\S]*availableIncomingBitrateBps[\s\S]*if \(profile === "emergency"\) return "poor";[\s\S]*isScreenShareReceiveEmergencyBitrate[\s\S]*SCREEN_SHARE_RECEIVE_EMERGENCY_BPS[\s\S]*getScreenShareTargetTemporalLayer[\s\S]*options\.quality === "poor"[\s\S]*isSmallPresentation[\s\S]*options\.quality === "fair"[\s\S]*return 1;[\s\S]*screenShareEmergency[\s\S]*getScreenShareTargetTemporalLayer\(bounds, \{/,
   "web screen-share receive layers use incoming bitrate and rendered size while preserving emergency FPS",
 );
 assertIncludes(
@@ -1237,7 +1242,7 @@ assertRegex(
 );
 assertRegex(
   "webMeetSocket",
-  /SCREEN_SHARE_RECEIVE_INITIAL_FAIR_BPS = 1500000[\s\S]*SCREEN_SHARE_RECEIVE_INITIAL_POOR_BPS = 550000[\s\S]*SCREEN_SHARE_RECEIVE_INITIAL_EMERGENCY_BPS = 300000[\s\S]*getScreenShareReceiveNetworkProfileForAvailableBitrate[\s\S]*availableIncomingBitrate <= SCREEN_SHARE_RECEIVE_INITIAL_EMERGENCY_BPS[\s\S]*availableIncomingBitrate <= SCREEN_SHARE_RECEIVE_INITIAL_POOR_BPS[\s\S]*availableIncomingBitrate <= SCREEN_SHARE_RECEIVE_INITIAL_FAIR_BPS[\s\S]*getInitialConsumerNetworkProfile[\s\S]*producerInfo\.kind !== "video" \|\| producerInfo\.type !== "screen"[\s\S]*stats\?\.availableIncomingBitrate[\s\S]*getMostConstrainedNetworkProfile\(\[baseProfile, screenShareProfile\]\)/,
+  /getScreenShareReceiveNetworkProfileForAvailableIncomingBitrate[\s\S]*getInitialConsumerNetworkProfile[\s\S]*producerInfo\.kind !== "video" \|\| producerInfo\.type !== "screen"[\s\S]*const screenShareProfile =[\s\S]*getScreenShareReceiveNetworkProfileForAvailableIncomingBitrate\([\s\S]*stats\?\.availableIncomingBitrate[\s\S]*getMostConstrainedWebcamProducerNetworkProfile\(\[[\s\S]*baseProfile,[\s\S]*screenShareProfile,/,
   "web initial screen-share consume uses incoming BWE profile",
 );
 assertRegex(

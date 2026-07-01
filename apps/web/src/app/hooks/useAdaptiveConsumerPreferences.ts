@@ -1,6 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useRef } from "react";
+import {
+  getScreenShareReceiveNetworkProfileForAvailableIncomingBitrate,
+  SCREEN_SHARE_RECEIVE_EMERGENCY_BPS,
+} from "../lib/screen-share-network-profile";
 import type { Consumer, ProducerMapEntry } from "../lib/types";
 import type { MeetRefs } from "./useMeetRefs";
 import type { ConnectionQuality } from "./useConnectionQuality";
@@ -85,9 +89,6 @@ const CONSUMER_PREFERENCE_ACK_TIMEOUT_MS = 3000;
 const AUDIO_CONSUMER_PRIORITY = 255;
 const CONSUMER_SCORE_STALE_AFTER_MS = 15000;
 const UNSUPPORTED_LAYER_RETRY_AFTER_MS = 30000;
-const SCREEN_SHARE_RECEIVE_FAIR_BPS = 1500000;
-const SCREEN_SHARE_RECEIVE_POOR_BPS = 550000;
-const SCREEN_SHARE_RECEIVE_EMERGENCY_BPS = 300000;
 const SCREEN_SHARE_SMALL_RENDERED_HEIGHT = 220;
 const SCREEN_SHARE_FULL_FPS_RENDERED_HEIGHT = 540;
 const OFFSCREEN_WEBCAM_PARK_PRIORITY = 5;
@@ -531,20 +532,12 @@ const getConsumerScoreQualityHint = (
 const getScreenShareReceiveQualityForAvailableBitrate = (
   availableIncomingBitrateBps: number | null | undefined,
 ): ConnectionQuality => {
-  if (
-    typeof availableIncomingBitrateBps !== "number" ||
-    !Number.isFinite(availableIncomingBitrateBps) ||
-    availableIncomingBitrateBps <= 0
-  ) {
-    return "unknown";
-  }
-  if (availableIncomingBitrateBps <= SCREEN_SHARE_RECEIVE_POOR_BPS) {
-    return "poor";
-  }
-  if (availableIncomingBitrateBps <= SCREEN_SHARE_RECEIVE_FAIR_BPS) {
-    return "fair";
-  }
-  return "good";
+  const profile =
+    getScreenShareReceiveNetworkProfileForAvailableIncomingBitrate(
+      availableIncomingBitrateBps,
+    );
+  if (profile === "emergency") return "poor";
+  return profile ?? "unknown";
 };
 
 const isScreenShareReceiveEmergencyBitrate = (
