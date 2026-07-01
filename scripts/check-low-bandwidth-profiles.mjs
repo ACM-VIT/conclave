@@ -504,6 +504,11 @@ assertRegex(
   "web screen-share publish has preferred-codec and scalability fallback while preserving capture-size encoding caps",
 );
 assertRegex(
+  "webCodec",
+  /type ScreenProducerAppData = \{[\s\S]*networkProfile: WebcamProducerNetworkProfile;[\s\S]*produceScreenShareTrack[\s\S]*appData: \{[\s\S]*type: "screen" as ProducerType,[\s\S]*networkProfile,[\s\S]*\} satisfies ScreenProducerAppData/,
+  "web screen-share video producer records the negotiated network profile across codec fallbacks",
+);
+assertRegex(
   "webMeetMedia",
   /buildScreenShareVideoConstraintsForNetworkProfile[\s\S]*getScreenSharePublishNetworkProfile[\s\S]*getScreenSharePublishNetworkProfileForAvailableOutgoingBitrate\([\s\S]*stats\?\.availableOutgoingBitrate[\s\S]*getMostConstrainedWebcamProducerNetworkProfile\([\s\S]*const screenNetworkProfile = getScreenSharePublishNetworkProfile\(\);[\s\S]*const constrainedDisplayVideoConstraints[\s\S]*buildScreenShareVideoConstraintsForNetworkProfile\([\s\S]*screenNetworkProfile[\s\S]*const relaxedDisplayVideoConstraints[\s\S]*getDisplayMedia\([\s\S]*constrainedDisplayVideoConstraints,[\s\S]*captureController[\s\S]*catch \(err\) \{[\s\S]*if \(!isDisplayMediaConstraintRetryableError\(err\)\) \{[\s\S]*throw err;[\s\S]*getDisplayMedia\([\s\S]*constrainedDisplayVideoConstraints,[\s\S]*null[\s\S]*getDisplayMedia\(relaxedDisplayVideoConstraints, null\)[\s\S]*applyScreenShareTrackNetworkProfile\(track, screenNetworkProfile\)[\s\S]*produceScreenShareTrack\(\{[\s\S]*networkProfile: screenNetworkProfile,[\s\S]*preferredCodec: preferredScreenShareCodec,/,
   "web screen-share start requests BWE capture constraints before applying RTP caps",

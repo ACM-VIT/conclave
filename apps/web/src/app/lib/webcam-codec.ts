@@ -160,6 +160,11 @@ export type WebcamProducerNetworkProfile =
   | "poor"
   | "emergency";
 
+type ScreenProducerAppData = {
+  type: ProducerType;
+  networkProfile: WebcamProducerNetworkProfile;
+};
+
 type WebcamEncodingCap = {
   maxBitrate: number;
   maxFramerate: number;
@@ -895,7 +900,10 @@ export async function produceScreenShareTrack({
     encodings: [nextEncoding],
     stopTracks: false,
     ...(codec ? { codec } : {}),
-    appData: { type: "screen" as ProducerType },
+    appData: {
+      type: "screen" as ProducerType,
+      networkProfile,
+    } satisfies ScreenProducerAppData,
   });
 
   try {
