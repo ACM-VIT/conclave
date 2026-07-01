@@ -8,6 +8,7 @@ import type {
 
 const SARVAM_STT_WS_URL = "wss://api.sarvam.ai/speech-to-text/ws";
 const SARVAM_SAMPLE_RATE = 16_000;
+const SARVAM_SAMPLE_RATE_PARAM = String(SARVAM_SAMPLE_RATE);
 const SARVAM_AUDIO_ENCODING = "audio/wav";
 const SARVAM_INPUT_AUDIO_CODEC = "pcm_s16le";
 const SARVAM_DEFAULT_LANGUAGE_CODE = "unknown";
@@ -47,8 +48,13 @@ const SARVAM_SUPPORTED_MODES = new Set([
 ]);
 
 type SarvamResponse = {
-  type?: "data" | "error" | "events";
+  type?: string;
   data?: unknown;
+  request_id?: unknown;
+  text?: unknown;
+  transcript?: unknown;
+  error?: unknown;
+  message?: unknown;
 };
 
 type ParsedSarvamEvent =
@@ -95,9 +101,11 @@ export const sarvamEndpoint = (options: {
   );
   url.searchParams.set("model", options.model || "saaras:v3");
   url.searchParams.set("mode", normalizeSarvamMode(options.mode));
-  url.searchParams.set("sample_rate", String(SARVAM_SAMPLE_RATE));
+  url.searchParams.set("sample_rate", SARVAM_SAMPLE_RATE_PARAM);
   url.searchParams.set("input_audio_codec", SARVAM_INPUT_AUDIO_CODEC);
   url.searchParams.set("flush_signal", "true");
+  url.searchParams.set("high_vad_sensitivity", "true");
+  url.searchParams.set("vad_signals", "true");
   return url.toString();
 };
 
@@ -176,7 +184,19 @@ export const buildSarvamAudioMessage = (audioBase64: string): string =>
   JSON.stringify({
     audio: {
       data: audioBase64,
-      sample_rate: String(SARVAM_SAMPLE_RATE),
+      sample_rate: SARVAM_SAMPLE_RATE,
+      encoding: SARVAM_AUDIO_ENCODING,
+    },
+  });
+
+const buildSarvamFlushMessage = (): string => JSON.stringify({ type: "flush" });
+
+const buildSarvamEndOfStreamMessage = (): string =>
+  JSON.stringify({
+    type: "end_of_stream",
+    audio: {
+      data: "",
+      sample_rate: SARVAM_SAMPLE_RATE,
       encoding: SARVAM_AUDIO_ENCODING,
     },
   });
@@ -195,24 +215,49 @@ export const parseSarvamEvent = (raw: string): ParsedSarvamEvent => {
       ? (response.data as Record<string, unknown>)
       : {};
 
-  if (response.type === "error" || typeof data.error === "string") {
+  const errorText =
+    typeof data.error === "string"
+      ? data.error
+      : typeof response.error === "string"
+        ? response.error
+        : typeof response.message === "string"
+          ? response.message
+          : "";
+  if (response.type === "error" || errorText) {
     return {
       type: "error",
       message: trimText(
-        typeof data.error === "string" ? data.error : "Sarvam transcription error.",
+        errorText || "Sarvam transcription error.",
         500,
       ),
     };
   }
 
-  if (response.type !== "data") return { type: "ignore" };
+  const responseType = response.type ?? "";
+  if (
+    responseType !== "data" &&
+    responseType !== "transcript" &&
+    responseType !== "translation"
+  ) {
+    return { type: "ignore" };
+  }
   const transcript =
-    typeof data.transcript === "string" ? data.transcript.trim() : "";
+    typeof data.transcript === "string"
+      ? data.transcript.trim()
+      : typeof data.text === "string"
+        ? data.text.trim()
+        : typeof response.transcript === "string"
+          ? response.transcript.trim()
+          : typeof response.text === "string"
+            ? response.text.trim()
+            : "";
   if (!transcript) return { type: "ignore" };
   const requestId =
     typeof data.request_id === "string" && data.request_id.trim()
       ? data.request_id.trim()
-      : crypto.randomUUID();
+      : typeof response.request_id === "string" && response.request_id.trim()
+        ? response.request_id.trim()
+        : crypto.randomUUID();
   return {
     type: "final",
     itemId: `sarvam-${requestId}`,
@@ -239,16 +284,21 @@ class SarvamTranscriptionSession implements LiveTranscriptionSession {
   }
 
   commitAudio(): void {
-    this.socket.send(JSON.stringify({ type: "flush" }));
+    // Sarvam is a continuous streaming STT socket. The room/SFU sends periodic
+    // commits for OpenAI's input buffer API; treating those as Sarvam flushes
+    // fragments speech before server-side VAD can finalize an utterance.
   }
 
   clearAudio(): void {
+    this.socket.send(buildSarvamFlushMessage());
     this.downsampler.reset();
   }
 
   close(): void {
     this.closed = true;
     try {
+      this.socket.send(buildSarvamFlushMessage());
+      this.socket.send(buildSarvamEndOfStreamMessage());
       this.socket.close();
     } catch {}
   }
@@ -271,7 +321,9 @@ class SarvamTranscriptionSession implements LiveTranscriptionSession {
 
   private async handleEvent(raw: string): Promise<void> {
     const event = parseSarvamEvent(raw);
-    if (event.type === "ignore") return;
+    if (event.type === "ignore") {
+      return;
+    }
     if (event.type === "error") {
       await this.callbacks.onFailure(event.message);
       return;

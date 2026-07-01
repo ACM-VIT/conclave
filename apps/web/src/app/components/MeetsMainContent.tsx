@@ -173,6 +173,7 @@ interface MeetsMainContentProps {
   endRoomForEveryone?: () => Promise<boolean> | boolean;
   onGoHome?: () => void;
   onStartNewMeeting?: () => void;
+  onEnterMeetingStart?: (action: "new" | "join") => void;
   isParticipantsOpen: boolean;
   setIsParticipantsOpen: Dispatch<SetStateAction<boolean>>;
   pendingUsers: Map<string, string>;
@@ -218,7 +219,8 @@ interface MeetsMainContentProps {
   isBrowserAudioMuted: boolean;
   onToggleBrowserAudio: () => void;
   meetError?: MeetError | null;
-  onDismissMeetError?: () => void;
+  meetingEndedNotice?: string | null;
+  onDismissMeetingEndedNotice?: () => void;
   browserAudioNeedsGesture: boolean;
   onBrowserAudioAutoplayBlocked: () => void;
   isVoiceAgentRunning?: boolean;
@@ -227,7 +229,6 @@ interface MeetsMainContentProps {
   onStartVoiceAgent?: () => void;
   onStopVoiceAgent?: () => void;
   onClearVoiceAgentError?: () => void;
-  onRetryMedia?: () => void;
   isPopoutActive?: boolean;
   isPopoutSupported?: boolean;
   onOpenPopout?: () => void;
@@ -424,6 +425,7 @@ export default function MeetsMainContent({
   endRoomForEveryone,
   onGoHome,
   onStartNewMeeting,
+  onEnterMeetingStart,
   isParticipantsOpen,
   setIsParticipantsOpen,
   pendingUsers,
@@ -472,8 +474,8 @@ export default function MeetsMainContent({
   onStopVoiceAgent,
   onClearVoiceAgentError,
   meetError,
-  onDismissMeetError,
-  onRetryMedia,
+  meetingEndedNotice,
+  onDismissMeetingEndedNotice,
   isPopoutActive,
   isPopoutSupported,
   onOpenPopout,
@@ -1241,6 +1243,12 @@ export default function MeetsMainContent({
     },
     [onPendingUserStale, setPendingUsers],
   );
+
+  const handleEndRoomForEveryone = useCallback(() => {
+    if (!endRoomForEveryone) return;
+    void endRoomForEveryone();
+  }, [endRoomForEveryone]);
+
   const hasBrowserAudio = useMemo(
     () =>
       participantsArray.some(
@@ -1560,11 +1568,12 @@ export default function MeetsMainContent({
             onUserChange={onUserChange}
             onIsAdminChange={onIsAdminChange}
             meetError={meetError}
-            onDismissMeetError={onDismissMeetError}
-            onRetryMedia={onRetryMedia}
+            meetingEndedNotice={meetingEndedNotice}
+            onDismissMeetingEndedNotice={onDismissMeetingEndedNotice}
             videoEffects={videoEffects}
             onVideoEffectsChange={onVideoEffectsChange}
             onPrejoinMediaCommit={onPrejoinMediaCommit}
+            onEnterStart={onEnterMeetingStart}
           />
         )
       ) : isWebinarAttendee ? (
@@ -1795,7 +1804,9 @@ export default function MeetsMainContent({
                 onToggleHandRaised={toggleHandRaised}
                 onSendReaction={sendReaction}
                 onLeave={leaveRoom}
-                onEndForEveryone={endRoomForEveryone}
+                onEndForEveryone={
+                  endRoomForEveryone ? handleEndRoomForEveryone : undefined
+                }
                 selectedAudioInputDeviceId={selectedAudioInputDeviceId}
                 selectedAudioOutputDeviceId={selectedAudioOutputDeviceId}
                 selectedVideoInputDeviceId={selectedVideoInputDeviceId}

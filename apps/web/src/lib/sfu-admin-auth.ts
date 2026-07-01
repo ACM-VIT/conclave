@@ -1,4 +1,5 @@
 import { auth } from "@/lib/auth";
+import { resolveServerSfuClientId } from "@/lib/sfu-client-id";
 export { resolveSfuUrl } from "@/lib/sfu-url";
 
 const firstNonEmpty = (...values: Array<string | undefined>): string | undefined => {
@@ -131,11 +132,7 @@ export const resolveSfuClientId = (
 ): string => {
   const fromQuery = new URL(request.url).searchParams.get("clientId")?.trim() || "";
   const fromHeader = request.headers.get("x-sfu-client")?.trim() || "";
-  const fromEnv =
-    process.env.SFU_CLIENT_ID?.trim() ||
-    process.env.NEXT_PUBLIC_SFU_CLIENT_ID?.trim() ||
-    "";
-  return fromQuery || fromHeader || fromEnv || options?.fallback || "";
+  return fromQuery || fromHeader || resolveServerSfuClientId() || options?.fallback || "";
 };
 
 export const requireSfuAdminUser = async (

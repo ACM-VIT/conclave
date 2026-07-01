@@ -3,8 +3,10 @@ import type { ReactNode } from "react";
 import "./globals.css";
 import ConclaveUpdatePill from "./components/ConclaveUpdatePill";
 import TelemetryProvider from "./components/TelemetryProvider";
+import { getConclaveClientVersion } from "./lib/site-version.server";
+import { getPublicSiteUrl } from "@/lib/site-url";
 
-const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
+const siteUrl = getPublicSiteUrl();
 
 export const metadata: Metadata = {
   title: {
@@ -57,12 +59,14 @@ export const viewport: Viewport = {
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {
+  const clientVersion = getConclaveClientVersion();
+
   return (
     <html lang="en">
       <body suppressHydrationWarning>
         <TelemetryProvider>
           {children}
-          <ConclaveUpdatePill />
+          <ConclaveUpdatePill currentVersion={clientVersion} />
         </TelemetryProvider>
       </body>
     </html>

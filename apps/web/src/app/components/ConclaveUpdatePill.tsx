@@ -6,22 +6,21 @@ import {
   type ConclaveSiteVersion,
   formatConclaveSiteVersionLabel,
   isConclaveSiteVersionResponse,
-  isSameConclaveSiteVersion,
+  resolveAvailableConclaveVersion,
 } from "../lib/site-version";
 
 const VERSION_POLL_INTERVAL_MS = 30_000;
-const AUTO_DISMISS_MS = 15_000;
-
-const shouldIgnoreVersion = (version: ConclaveSiteVersion): boolean =>
-  version.id === "local";
 
 const getVersionDismissalKey = (version: ConclaveSiteVersion): string =>
   [version.id, version.tag ?? "", version.timestamp ?? ""].join(":");
 
-export function ConclaveUpdatePill() {
-  // The first real version we observe becomes the baseline; any later
-  // version that differs from it means a deploy happened mid-session.
-  const baselineVersionRef = useRef<ConclaveSiteVersion | null>(null);
+export function ConclaveUpdatePill({
+  currentVersion,
+}: {
+  currentVersion: ConclaveSiteVersion;
+}) {
+  const currentVersionRef = useRef(currentVersion);
+  const fallbackBaselineRef = useRef<ConclaveSiteVersion | null>(null);
   const [availableVersion, setAvailableVersion] =
     useState<ConclaveSiteVersion | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -33,6 +32,10 @@ export function ConclaveUpdatePill() {
     : null;
   const isDismissed =
     availableVersionKey !== null && dismissedVersionKey === availableVersionKey;
+
+  useEffect(() => {
+    currentVersionRef.current = currentVersion;
+  }, [currentVersion]);
 
   const checkVersion = useCallback(async () => {
     try {
@@ -47,16 +50,28 @@ export function ConclaveUpdatePill() {
       const payload: unknown = await response.json();
       if (!isConclaveSiteVersionResponse(payload)) return;
 
-      const nextVersion = payload.serviceVersion;
-      if (shouldIgnoreVersion(nextVersion)) return;
-
-      if (!baselineVersionRef.current) {
-        baselineVersionRef.current = nextVersion;
+      const available = resolveAvailableConclaveVersion(
+        currentVersionRef.current,
+        payload,
+      );
+      if (available) {
+        setAvailableVersion(available);
         return;
       }
 
-      if (!isSameConclaveSiteVersion(baselineVersionRef.current, nextVersion)) {
-        setAvailableVersion(nextVersion);
+      const fallbackVersion = payload.clientVersion ?? payload.serviceVersion;
+      if (fallbackVersion.id === "local") return;
+      if (!fallbackBaselineRef.current) {
+        fallbackBaselineRef.current = fallbackVersion;
+        return;
+      }
+
+      const fallbackAvailable = resolveAvailableConclaveVersion(
+        fallbackBaselineRef.current,
+        payload,
+      );
+      if (fallbackAvailable) {
+        setAvailableVersion(fallbackAvailable);
       }
     } catch {
       // A version check should never interrupt the active page.
@@ -82,17 +97,6 @@ export function ConclaveUpdatePill() {
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
   }, [checkVersion]);
-
-  // Auto-dismiss the pill a short while after it appears.
-  useEffect(() => {
-    if (!availableVersionKey || isDismissed) return;
-
-    const timeoutId = window.setTimeout(
-      () => setDismissedVersionKey(availableVersionKey),
-      AUTO_DISMISS_MS,
-    );
-    return () => window.clearTimeout(timeoutId);
-  }, [availableVersionKey, isDismissed]);
 
   const handleRefresh = useCallback(() => {
     setIsRefreshing(true);

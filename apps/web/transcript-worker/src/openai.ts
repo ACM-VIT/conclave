@@ -159,6 +159,11 @@ export const realtimeEndpoint = (env: Env): string => {
     "",
   );
   const url = new URL(base);
+  if (url.protocol === "wss:") {
+    url.protocol = "https:";
+  } else if (url.protocol === "ws:") {
+    url.protocol = "http:";
+  }
   url.searchParams.set("intent", OPENAI_REALTIME_TRANSCRIPTION_INTENT);
   return url.toString();
 };

@@ -1,13 +1,17 @@
+import { Suspense } from "react";
 import { headers as nextHeaders } from "next/headers";
 import MeetsClientShell from "../meets-client-shell";
+import RouteLoadingState from "../components/RouteLoadingState";
 import { sanitizeRoomCode, sanitizeWebinarLinkCode } from "../lib/utils";
 import ScheduledMeetingLanding from "../components/ScheduledMeetingLanding";
 import {
   isMeetingJoinable,
   lookupPublicScheduledMeetingByRoomCode,
   lookupScheduledMeetingHostEmail,
+  type PublicScheduledMeeting,
 } from "@/lib/scheduled-meetings";
 import { auth } from "@/lib/auth";
+import { resolveSfuClientIdCandidates } from "@/lib/sfu-client-id";
 
 type MeetRoomPageProps = {
   params: Promise<{ code: string }>;
@@ -51,10 +55,42 @@ const resolveSessionEmail = async (): Promise<string | null> => {
   }
 };
 
-export default async function MeetRoomPage({
+const lookupScheduledMeetingCandidate = async (
+  roomCode: string,
+  preferredClientId?: string,
+): Promise<{ clientId: string; meeting: PublicScheduledMeeting } | null> => {
+  for (const clientId of resolveSfuClientIdCandidates(preferredClientId)) {
+    const meeting = await lookupPublicScheduledMeetingByRoomCode(
+      clientId,
+      roomCode,
+    );
+    if (meeting) {
+      return { clientId, meeting };
+    }
+  }
+  return null;
+};
+
+export default function MeetRoomPage({
   params,
   searchParams,
 }: MeetRoomPageProps) {
+  return (
+    <Suspense
+      fallback={
+        <RouteLoadingState
+          eyebrow="Meeting"
+          title="Joining room"
+          detail="Checking room details before the call opens."
+        />
+      }
+    >
+      <MeetRoomContent params={params} searchParams={searchParams} />
+    </Suspense>
+  );
+}
+
+async function MeetRoomContent({ params, searchParams }: MeetRoomPageProps) {
   const { code } = await params;
   const resolvedSearchParams = (await (searchParams ?? Promise.resolve(
     {} as Record<string, string | string[] | undefined>,
@@ -90,18 +126,22 @@ export default async function MeetRoomPage({
     devOverridesEnabled && isTruthyParam(resolvedSearchParams.admin);
 
   if (sanitizedRoomCode && !bypassMediaPermissions) {
-    const clientIdForLookup = sfuClientId || "default";
-    const scheduled = await lookupPublicScheduledMeetingByRoomCode(
-      clientIdForLookup,
+    const scheduledCandidate = await lookupScheduledMeetingCandidate(
       sanitizedRoomCode,
+      sfuClientId,
     );
-    if (scheduled) {
-      resolvedSfuClientId = clientIdForLookup;
+    const scheduled = scheduledCandidate?.meeting ?? null;
+    if (scheduledCandidate) {
+      resolvedSfuClientId = scheduledCandidate.clientId;
     }
-    if (scheduled && !isMeetingJoinable(scheduled)) {
+    if (scheduledCandidate && scheduled && !isMeetingJoinable(scheduled)) {
+      const scheduledClientId = scheduledCandidate.clientId;
       const [sessionEmail, hostEmail] = await Promise.all([
         resolveSessionEmail(),
-        lookupScheduledMeetingHostEmail(clientIdForLookup, sanitizedRoomCode),
+        lookupScheduledMeetingHostEmail(
+          scheduledClientId,
+          sanitizedRoomCode,
+        ),
       ]);
       const viewerIsHost = Boolean(
         sessionEmail && hostEmail && sessionEmail === hostEmail,

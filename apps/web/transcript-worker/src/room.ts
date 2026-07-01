@@ -102,7 +102,7 @@ const createIdleSession = (roomId: string): TranscriptSessionState => ({
   updatedAt: Date.now(),
   error: null,
 });
-
+  
 export class TranscriptRoom {
   private readonly state: DurableObjectState;
   private readonly env: Env;
@@ -595,6 +595,8 @@ export class TranscriptRoom {
       return;
     }
 
+    this.suppressSfuRelayDisconnectsUntil = Date.now() + 5000;
+    this.suppressSfuRelayDisconnectCount += 1;
     this.closeTranscriptionProvider();
     const roomId = this.session?.roomId || "unknown";
     this.responseApiKey = null;
@@ -896,6 +898,13 @@ export class TranscriptRoom {
 
   private async handleTranscriptionFailure(message: string): Promise<void> {
     const redactedMessage = redactSensitiveText(message);
+    console.warn("[TranscriptWorker] transcription provider failure", {
+      roomId: this.session?.roomId,
+      status: this.session?.status,
+      transportMode: this.session?.transportMode,
+      provider: this.transcriptionSession?.provider ?? null,
+      message: redactedMessage,
+    });
     this.broadcast({
       type: "error",
       message: redactedMessage,

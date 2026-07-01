@@ -770,6 +770,33 @@ internal class SocketIOManager {
         return notification.toChatMessage(activeRoomId)
     }
 
+    internal suspend fun requestConclaveAuthorization(
+        answerId: String,
+        questionMessageId: String
+    ): ConclaveAuthorizeResponse {
+        val payload = JSONObject()
+            .put("id", answerId)
+            .put("questionMessageId", questionMessageId)
+        val data = emit(SocketEvent.conclaveAuthorize, payload)
+        return JSONDecoder().decode(ConclaveAuthorizeResponse::class, from = data)
+    }
+
+    internal fun relayConclaveAnswer(packet: ConclaveAssistantRelayPacket) {
+        if (!shouldEmitFireAndForget()) return
+        val payload = JSONObject()
+            .put("id", packet.id)
+            .put("roomId", packet.roomId)
+            .put("channelId", packet.channelId)
+            .put("requesterUserId", packet.requesterUserId)
+            .put("questionMessageId", packet.questionMessageId)
+            .put("content", packet.content)
+            .put("done", packet.done)
+            .put("timestamp", packet.timestamp)
+            .put("expiresAt", packet.expiresAt)
+            .put("signature", packet.signature)
+        socket?.emit(SocketEvent.conclaveAnswer, payload)
+    }
+
     internal suspend fun sendReaction(emoji: String?, kind: String?, value: String?, label: String?) {
         val request = SendReactionRequest(emoji = emoji, kind = kind, value = value, label = label)
         emit(SocketEvent.sendReaction, request)

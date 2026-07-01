@@ -48,6 +48,7 @@ final class MeetingState {
     var connectionState: ConnectionState = .disconnected
     var errorMessage: String?
     var joinFormErrorMessage: String?
+    var meetingEndedNoticeMessage: String?
     var serverRestartNotice: String?
     var adminNoticeMessage: String?
     var adminNoticeLevel: AdminNoticeLevel = .info

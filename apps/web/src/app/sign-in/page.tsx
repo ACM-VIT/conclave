@@ -1,3 +1,5 @@
+import { Suspense } from "react";
+import RouteLoadingState from "../components/RouteLoadingState";
 import SignInClient from "./sign-in-client";
 
 type SignInPageProps = {
@@ -17,7 +19,23 @@ const sanitizeNext = (value: string | undefined): string => {
   return next;
 };
 
-export default async function SignInPage({ searchParams }: SignInPageProps) {
+export default function SignInPage({ searchParams }: SignInPageProps) {
+  return (
+    <Suspense
+      fallback={
+        <RouteLoadingState
+          eyebrow="Authentication"
+          title="Preparing sign-in"
+          detail="Loading the available identity providers."
+        />
+      }
+    >
+      <SignInContent searchParams={searchParams} />
+    </Suspense>
+  );
+}
+
+async function SignInContent({ searchParams }: SignInPageProps) {
   const resolvedSearchParams = await (searchParams ??
     Promise.resolve({} as Record<string, string | string[] | undefined>));
   const next = sanitizeNext(getParamValue(resolvedSearchParams.next));

@@ -105,6 +105,11 @@ interface UseMeetMediaOptions {
   mediaRecoveryBlockedRef?: React.MutableRefObject<boolean>;
 }
 
+type ScreenAudioProducerAppData = {
+  type: ProducerType;
+  networkProfile?: WebcamProducerNetworkProfile;
+};
+
 const getStartupAwarePublishQuality = (
   stats: ConnectionQualityStats | null | undefined,
   browserNetwork: ReturnType<typeof getBrowserNetworkSnapshot>,
@@ -384,6 +389,7 @@ export function useMeetMedia({
   const cameraRecoveryInFlightRef = useRef(false);
   const [cameraProducerRecoveryPulse, setCameraProducerRecoveryPulse] =
     useState(0);
+  const screenAudioProducerRefreshInFlightRef = useRef(false);
 
   useEffect(() => {
     if (!isScreenSharing) {
@@ -3238,6 +3244,162 @@ export function useMeetMedia({
     [stopLocalTrack],
   );
 
+  const refreshScreenAudioProducerForNetworkProfile = useCallback(
+    async (networkProfile: WebcamProducerNetworkProfile): Promise<boolean> => {
+      if (ghostEnabled || isObserverMode) return false;
+      if (screenAudioProducerRefreshInFlightRef.current) return false;
+      if (isMediaRecoveryBlocked()) return false;
+
+      const screenStream = screenShareStreamRef.current;
+      const videoTrack = getFirstLiveTrack(screenStream?.getVideoTracks() ?? []);
+      const audioTrack = getFirstLiveTrack(screenStream?.getAudioTracks() ?? []);
+      const screenProducer = screenProducerRef.current;
+      const previousProducer = screenAudioProducerRef.current;
+      if (
+        !screenStream ||
+        !videoTrack ||
+        !audioTrack ||
+        !screenProducer ||
+        screenProducer.closed ||
+        screenProducer.track?.readyState !== "live" ||
+        !previousProducer ||
+        previousProducer.closed ||
+        previousProducer.track?.readyState !== "live"
+      ) {
+        return false;
+      }
+
+      let transport = getUsableProducerTransport(producerTransportRef.current);
+      if (!transport) {
+        const transportReady =
+          (await ensureProducerTransportRef?.current?.()) ?? false;
+        transport = getUsableProducerTransport(producerTransportRef.current);
+        if (!transportReady || !transport) {
+          return false;
+        }
+      }
+
+      screenAudioProducerRefreshInFlightRef.current = true;
+      intentionalLocalProducerCloseIdsRef.current.add(previousProducer.id);
+      let nextProducer: Producer | null = null;
+
+      try {
+        if ("contentHint" in audioTrack) {
+          audioTrack.contentHint = "music";
+        }
+
+        nextProducer = await transport.produce({
+          track: audioTrack,
+          codecOptions: buildScreenShareAudioOpusCodecOptions(networkProfile),
+          stopTracks: false,
+          appData: {
+            type: "screen" as ProducerType,
+            networkProfile,
+          } satisfies ScreenAudioProducerAppData,
+        });
+
+        try {
+          await applyAudioProducerNetworkProfile(
+            nextProducer,
+            "screen",
+            networkProfile,
+          );
+        } catch (profileErr) {
+          console.warn(
+            "[Meets] Failed to apply refreshed screen audio network profile:",
+            profileErr,
+          );
+        }
+
+        if (
+          screenShareStreamRef.current !== screenStream ||
+          screenProducerRef.current?.id !== screenProducer.id ||
+          screenProducer.closed ||
+          videoTrack.readyState !== "live" ||
+          audioTrack.readyState !== "live"
+        ) {
+          intentionalLocalProducerCloseIdsRef.current.add(nextProducer.id);
+          socketRef.current?.emit(
+            "closeProducer",
+            { producerId: nextProducer.id },
+            () => {},
+          );
+          try {
+            nextProducer.close();
+          } catch {}
+          return false;
+        }
+
+        const previousTrack = previousProducer.track;
+        if (previousTrack) {
+          previousTrack.onended = null;
+        }
+        screenAudioProducerRef.current = nextProducer;
+        const nextProducerId = nextProducer.id;
+        nextProducer.on("transportclose", () => {
+          if (screenAudioProducerRef.current?.id === nextProducerId) {
+            screenAudioProducerRef.current = null;
+          }
+        });
+        audioTrack.onended = () => {
+          socketRef.current?.emit(
+            "closeProducer",
+            { producerId: nextProducerId },
+            () => {},
+          );
+          try {
+            nextProducer?.close();
+          } catch {}
+          if (screenAudioProducerRef.current?.id === nextProducerId) {
+            screenAudioProducerRef.current = null;
+          }
+        };
+
+        if (previousProducer.id !== nextProducerId) {
+          socketRef.current?.emit(
+            "closeProducer",
+            { producerId: previousProducer.id },
+            () => {},
+          );
+          try {
+            previousProducer.close();
+          } catch {}
+        }
+
+        return true;
+      } catch (err) {
+        intentionalLocalProducerCloseIdsRef.current.delete(previousProducer.id);
+        if (nextProducer) {
+          intentionalLocalProducerCloseIdsRef.current.add(nextProducer.id);
+          socketRef.current?.emit(
+            "closeProducer",
+            { producerId: nextProducer.id },
+            () => {},
+          );
+          try {
+            nextProducer.close();
+          } catch {}
+        }
+        console.warn("[Meets] Failed to refresh screen audio producer:", err);
+        return false;
+      } finally {
+        screenAudioProducerRefreshInFlightRef.current = false;
+      }
+    },
+    [
+      ghostEnabled,
+      isObserverMode,
+      isMediaRecoveryBlocked,
+      producerTransportRef,
+      ensureProducerTransportRef,
+      intentionalLocalProducerCloseIdsRef,
+      screenAudioProducerRef,
+      screenProducerRef,
+      screenShareStreamRef,
+      socketRef,
+    ],
+  );
+
   const toggleScreenShare = useCallback(async () => {
     if (ghostEnabled || isObserverMode) return;
     if (isScreenSharing) {
@@ -3464,7 +3626,10 @@ export function useMeetMedia({
               screenNetworkProfile,
             ),
             stopTracks: false,
-            appData: { type: "screen" as ProducerType },
+            appData: {
+              type: "screen" as ProducerType,
+              networkProfile: screenNetworkProfile,
+            } satisfies ScreenAudioProducerAppData,
           });
           try {
             await applyAudioProducerNetworkProfile(
@@ -3558,5 +3723,6 @@ export function useMeetMedia({
     handleLocalTrackEnded,
     primeAudioOutput,
     playNotificationSound,
+    refreshScreenAudioProducerForNetworkProfile,
   };
 }

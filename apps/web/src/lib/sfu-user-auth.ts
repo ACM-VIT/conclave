@@ -90,7 +90,7 @@ export const buildScheduledWebinarHeaders = (
   headers.set("x-sfu-secret", resolveSfuSecret());
   headers.set("accept", "application/json");
   headers.set("content-type", "application/json");
-  const clientId = resolveSfuClientId(request, { fallback: "default" });
+  const clientId = resolveSfuClientId(request);
   if (clientId) {
     headers.set("x-sfu-client", clientId);
   }

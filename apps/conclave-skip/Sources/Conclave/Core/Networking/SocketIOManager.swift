@@ -774,6 +774,23 @@ final class SocketIOManager {
         return message.chatMessage(taggedRoomId: activeRoomId)
     }
 
+    func requestConclaveAuthorization(answerId: String, questionMessageId: String) async throws -> ConclaveAuthorizeResponse {
+        let request = ConclaveAuthorizeRequest(id: answerId, questionMessageId: questionMessageId)
+        let data = try await emit(event: SocketEvent.conclaveAuthorize, payload: request)
+        return try JSONDecoder().decode(ConclaveAuthorizeResponse.self, from: data)
+    }
+
+    func relayConclaveAnswer(_ packet: ConclaveAssistantRelayPacket) {
+        guard SocketFireAndForgetEmitPolicy.shouldEmit(
+            isConnected: isConnected,
+            activeRoomId: activeRoomId,
+            hasSocket: socket != nil
+        ) else { return }
+        if let payload = try? jsonObject(from: packet) {
+            socket?.emit(SocketEvent.conclaveAnswer, payload)
+        }
+    }
+
     // MARK: - Reactions
 
     func sendReaction(emoji: String?, kind: String?, value: String?, label: String?) async throws {

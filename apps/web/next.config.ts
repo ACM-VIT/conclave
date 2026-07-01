@@ -1,9 +1,29 @@
 import type { NextConfig } from "next";
+import { execSync } from "node:child_process";
 import path from "path";
 import { fileURLToPath } from "url";
 
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
 const workspaceRoot = path.resolve(currentDir, "../..");
+const readGitSha = (): string | null => {
+  try {
+    return execSync("git rev-parse HEAD", {
+      cwd: workspaceRoot,
+      stdio: ["ignore", "pipe", "ignore"],
+    })
+      .toString()
+      .trim();
+  } catch {
+    return null;
+  }
+};
+const conclaveClientVersion =
+  process.env.NEXT_PUBLIC_CONCLAVE_CLIENT_VERSION ||
+  process.env.CF_PAGES_COMMIT_SHA ||
+  process.env.VERCEL_GIT_COMMIT_SHA ||
+  process.env.GITHUB_SHA ||
+  readGitSha() ||
+  "local";
 const yjsTurbopackAlias = "./node_modules/yjs/dist/yjs.mjs";
 const yProtocolsTurbopackAlias = "./node_modules/y-protocols";
 const yjsWebpackAlias = path.resolve(
@@ -18,6 +38,11 @@ const yProtocolsWebpackAlias = path.resolve(
 const nextConfig: NextConfig = {
   reactStrictMode: true,
   reactCompiler: true,
+  deploymentId:
+    conclaveClientVersion === "local" ? undefined : conclaveClientVersion,
+  env: {
+    NEXT_PUBLIC_CONCLAVE_CLIENT_VERSION: conclaveClientVersion,
+  },
   images: {
     unoptimized: true,
   },
@@ -34,6 +59,18 @@ const nextConfig: NextConfig = {
       "yjs/dist/yjs.cjs": yjsTurbopackAlias,
       "y-protocols": yProtocolsTurbopackAlias,
     },
+  },
+  experimental: {
+    turbopackFileSystemCacheForBuild: true,
+  },
+  async redirects() {
+    return [
+      {
+        source: "/favicon.ico",
+        destination: "/favicon.svg",
+        permanent: true,
+      },
+    ];
   },
   async headers() {
     return [

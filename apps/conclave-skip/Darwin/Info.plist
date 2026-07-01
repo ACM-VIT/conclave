@@ -140,7 +140,7 @@
 	<key>NSHealthUpdateUsageDescription</key>
 	<string>Conclave updates health data only when you explicitly choose a health-sharing action.</string>
 	<key>SFU_CLIENT_ID</key>
-	<string>public</string>
+	<string>conclave</string>
 	<key>SFU_JOIN_URL</key>
 	<string>$(SFU_JOIN_URL)</string>
 	<key>UIApplicationSceneManifest</key>

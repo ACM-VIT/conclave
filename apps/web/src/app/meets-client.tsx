@@ -21,6 +21,7 @@ import MeetsErrorBanner from "./components/MeetsErrorBanner";
 import MeetsHeader from "./components/MeetsHeader";
 import MeetsMainContent from "./components/MeetsMainContent";
 import MeetsWaitingScreen from "./components/MeetsWaitingScreen";
+import MeetingEnterOverlay from "./components/MeetingEnterOverlay";
 
 import { useMeetAudioActivity } from "./hooks/useMeetAudioActivity";
 import { useMeetChat, type ConclaveAssistantContext } from "./hooks/useMeetChat";
@@ -393,6 +394,9 @@ export default function MeetsClient({
   const [currentCanGhostJoin, setCurrentCanGhostJoin] = useState(canGhostJoin);
   const [pendingNewMeetingRoomId, setPendingNewMeetingRoomId] =
     useState<string | null>(null);
+  const [meetingEndedNotice, setMeetingEndedNotice] = useState<string | null>(
+    null,
+  );
   const [guestStorageReady, setGuestStorageReady] = useState(false);
   const [isSigningOut, setIsSigningOut] = useState(false);
   const [appsSocket, setAppsSocket] = useState<Socket | null>(null);
@@ -1119,6 +1123,7 @@ export default function MeetsClient({
     handleLocalTrackEnded,
     playNotificationSound,
     primeAudioOutput,
+    refreshScreenAudioProducerForNetworkProfile,
   } = useMeetMedia({
     ghostEnabled,
     isObserverMode: isWebinarAttendee,
@@ -2077,6 +2082,19 @@ export default function MeetsClient({
     };
   }, []);
 
+  const handleLocalRoomEnded = useCallback(() => {
+    setMeetingEndedNotice(null);
+    setMeetError(null);
+    setWaitingMessage(null);
+    setPendingNewMeetingRoomId(null);
+    setCurrentIsAdmin(false);
+    setIsGhostMode(false);
+    setRoomId("");
+    if (typeof window !== "undefined") {
+      window.location.assign("/");
+    }
+  }, [setIsGhostMode, setMeetError, setRoomId, setWaitingMessage]);
+
   const socket = useMeetSocket({
     refs,
     roomId,
@@ -2101,6 +2119,7 @@ export default function MeetsClient({
     setPendingUsers,
     setConnectionState,
     setMeetError,
+    setMeetingEndedNotice,
     setWaitingMessage,
     setHostUserId,
     setHostUserIds,
@@ -2146,6 +2165,7 @@ export default function MeetsClient({
     onTtsMessage: handleTtsMessage,
     prewarm,
     onSocketReady: setAppsSocket,
+    onLocalRoomEnded: handleLocalRoomEnded,
     bypassMediaPermissions,
   });
 
@@ -2371,6 +2391,7 @@ export default function MeetsClient({
     handleStopVoiceAgent();
     socket.cleanup();
     setMeetError(null);
+    setMeetingEndedNotice(null);
     setWaitingMessage(null);
     setPendingNewMeetingRoomId(null);
     setCurrentIsAdmin(false);
@@ -2393,6 +2414,7 @@ export default function MeetsClient({
     handleStopVoiceAgent();
     socket.cleanup();
     setMeetError(null);
+    setMeetingEndedNotice(null);
     setWaitingMessage(null);
     setIsGhostMode(false);
     setCurrentIsAdmin(true);
@@ -2670,8 +2692,78 @@ export default function MeetsClient({
     networkManagedVideoQualityRef,
     setVideoQuality: setNetworkManagedVideoQuality,
     updateVideoQualityRef,
+    refreshScreenAudioProducerForNetworkProfile,
     debugStateRef: adaptivePublishDebugRef,
   });
+
+  // Full-screen brand animation that takes over the instant a meeting is
+  // created/joined from the lobby, so navigation feels immediate while the SFU
+  // connection settles underneath. Driven by the lobby's join/new click; on
+  // success it hands off to the meeting/waiting screen, and on failure it
+  // surfaces the error in place instead of bouncing back to the lobby.
+  const [enterAction, setEnterAction] = useState<"new" | "join" | null>(null);
+  const [enterErrored, setEnterErrored] = useState(false);
+
+  const handleEnterMeetingStart = useCallback(
+    (action: "new" | "join") => {
+      setMeetError(null);
+      setMeetingEndedNotice(null);
+      setEnterErrored(false);
+      setEnterAction(action);
+    },
+    [setMeetError],
+  );
+
+  const handleEnterRetry = useCallback(() => {
+    setMeetError(null);
+    setMeetingEndedNotice(null);
+    setEnterErrored(false);
+    setConnectionState("connecting");
+    if (enterAction === "new") {
+      handleStartNewMeeting();
+    } else if (roomId) {
+      void joinRoomById(roomId);
+    }
+  }, [
+    enterAction,
+    handleStartNewMeeting,
+    joinRoomById,
+    roomId,
+    setConnectionState,
+    setMeetError,
+  ]);
+
+  const handleEnterDismiss = useCallback(() => {
+    setEnterAction(null);
+    setEnterErrored(false);
+    setMeetError(null);
+    setMeetingEndedNotice(null);
+    setConnectionState("disconnected");
+  }, [setConnectionState, setMeetError]);
+
+  useEffect(() => {
+    if (!enterAction) return;
+    // Success / waiting-room hand off to their own screens — fade the overlay.
+    if (connectionState === "joined" || connectionState === "waiting") {
+      setEnterAction(null);
+      setEnterErrored(false);
+      return;
+    }
+    // Otherwise reflect whether the attempt has failed; the overlay stays up
+    // and switches to its error presentation.
+    setEnterErrored(connectionState === "error" || Boolean(meetError));
+  }, [enterAction, connectionState, meetError]);
+
+  // Safety net while connecting: if nothing resolves, return to the lobby.
+  // Errored overlays wait for the user instead of auto-dismissing.
+  useEffect(() => {
+    if (!enterAction || enterErrored) return;
+    const timeout = window.setTimeout(() => {
+      setEnterAction(null);
+      setEnterErrored(false);
+    }, 20000);
+    return () => window.clearTimeout(timeout);
+  }, [enterAction, enterErrored]);
 
   if (!mounted) return null;
 
@@ -2723,6 +2815,25 @@ export default function MeetsClient({
           </MeetVolumeProvider>
         </GameProvider>
       </AppsProvider>
+      <MeetingEnterOverlay
+        show={enterAction !== null}
+        action={enterAction}
+        // Some failure paths flip connectionState to "error" without a
+        // meetError (e.g. media unavailable on join). Fall back to a generic
+        // recoverable error so the overlay always shows retry/dismiss controls
+        // instead of stranding the user behind the loading animation.
+        error={
+          enterErrored
+            ? (meetError ?? {
+                code: "UNKNOWN",
+                message: "",
+                recoverable: true,
+              })
+            : null
+        }
+        onRetry={handleEnterRetry}
+        onDismiss={handleEnterDismiss}
+      />
     </>
   );
   const inviteCodePromptTitle =
@@ -2969,6 +3080,7 @@ export default function MeetsClient({
         onStartNewMeeting={
           joinMode === "meeting" ? handleStartNewMeeting : undefined
         }
+        onEnterMeetingStart={handleEnterMeetingStart}
         isParticipantsOpen={isParticipantsOpen}
         setIsParticipantsOpen={setIsParticipantsOpen}
         pendingUsers={pendingUsers}
@@ -3026,8 +3138,8 @@ export default function MeetsClient({
         browserAudioNeedsGesture={browserAudioNeedsGesture}
         onBrowserAudioAutoplayBlocked={handleBrowserAudioAutoplayBlocked}
         meetError={meetError}
-        onDismissMeetError={() => setMeetError(null)}
-        onRetryMedia={handleRetryMedia}
+        meetingEndedNotice={meetingEndedNotice}
+        onDismissMeetingEndedNotice={() => setMeetingEndedNotice(null)}
         isPopoutActive={isPopoutActive}
         isPopoutSupported={isPopoutSupported}
         onOpenPopout={openPopout}

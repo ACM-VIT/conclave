@@ -21,8 +21,6 @@ import {
   type ConclaveAssistantRelayPacket,
 } from "../../../lib/conclave-assistant";
 
-export const runtime = "nodejs";
-export const dynamic = "force-dynamic";
 
 const CONCLAVE_ASSISTANT_WEB_SEARCH_TOOL: WebSearchTool = {
   type: "web_search",

@@ -69,11 +69,19 @@ class OpenAiRealtimeTranscriptionSession implements LiveTranscriptionSession {
 
   private async handleEvent(raw: string): Promise<void> {
     const parsed = safeJsonParse(raw);
-    if (!parsed || typeof parsed !== "object") return;
+    if (!parsed || typeof parsed !== "object") {
+      return;
+    }
     const event = parsed as OpenAiRealtimeEvent;
     if (event.type === "error") {
       await this.callbacks.onFailure(
         event.error?.message || "Realtime transcription error.",
+      );
+      return;
+    }
+    if (event.type === "conversation.item.input_audio_transcription.failed") {
+      await this.callbacks.onFailure(
+        event.error?.message || "Realtime input audio transcription failed.",
       );
       return;
     }
@@ -101,12 +109,15 @@ class OpenAiRealtimeTranscriptionSession implements LiveTranscriptionSession {
 export const connectOpenAiRealtimeTranscription = async (
   options: LiveTranscriptionConnectOptions,
 ): Promise<LiveTranscriptionSession> => {
-  const response = await fetch(realtimeEndpoint(options.env), {
-    headers: {
-      Authorization: `Bearer ${options.apiKey}`,
-      Upgrade: "websocket",
+  const response = await fetch(
+    realtimeEndpoint(options.env),
+    {
+      headers: {
+        Authorization: `Bearer ${options.apiKey}`,
+        Upgrade: "websocket",
+      },
     },
-  });
+  );
   const socket = response.webSocket;
   if (!socket) {
     throw new Error(

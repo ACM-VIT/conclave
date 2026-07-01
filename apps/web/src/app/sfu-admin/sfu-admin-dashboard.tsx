@@ -249,7 +249,7 @@ function Metric({ label, value }: { label: string; value: string | number }) {
 }
 
 export default function SfuAdminDashboard() {
-  const initialClientId = process.env.NEXT_PUBLIC_SFU_CLIENT_ID || "default";
+  const initialClientId = process.env.NEXT_PUBLIC_SFU_CLIENT_ID || "conclave";
 
   const [clientId, setClientId] = useState(initialClientId);
   const [clientIdDraft, setClientIdDraft] = useState(initialClientId);

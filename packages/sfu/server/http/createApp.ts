@@ -475,7 +475,7 @@ export const createSfuApp = ({
       return res.status(400).json({ error: "Room ID is required" });
     }
 
-    const clientId = resolveClientId(req) || "default";
+    const clientId = resolveClientId(req) || "conclave";
     const channelId = getRoomChannelId(clientId, roomId);
     const room = state.rooms.get(channelId);
     res.set("Cache-Control", "no-store");

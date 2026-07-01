@@ -4,6 +4,7 @@ import {
   isConclaveSiteVersionResponse,
   isSameConclaveSiteVersion,
   normalizeConclaveSiteVersion,
+  resolveAvailableConclaveVersion,
 } from "../src/app/lib/site-version";
 
 describe("site version helpers", () => {
@@ -37,12 +38,29 @@ describe("site version helpers", () => {
           tag: null,
           timestamp: null,
         },
+        clientVersion: {
+          id: "build-123",
+          tag: null,
+          timestamp: null,
+        },
       }),
     ).toBe(true);
     expect(
       isConclaveSiteVersionResponse({
         serviceVersion: {
           id: "version-123",
+        },
+      }),
+    ).toBe(false);
+    expect(
+      isConclaveSiteVersionResponse({
+        serviceVersion: {
+          id: "version-123",
+          tag: null,
+          timestamp: null,
+        },
+        clientVersion: {
+          id: "build-123",
         },
       }),
     ).toBe(false);
@@ -64,5 +82,50 @@ describe("site version helpers", () => {
     expect(isSameConclaveSiteVersion(first, second)).toBe(false);
     expect(formatConclaveSiteVersionLabel(first)).toBe("abcdef12");
     expect(formatConclaveSiteVersionLabel(second)).toBe("main");
+  });
+
+  it("detects an available deploy from the rendered client build version", () => {
+    const currentClientVersion = {
+      id: "old-build",
+      tag: null,
+      timestamp: null,
+    };
+    const serviceVersion = {
+      id: "cloudflare-version",
+      tag: null,
+      timestamp: "2026-07-01T01:00:49.864152Z",
+    };
+
+    expect(
+      resolveAvailableConclaveVersion(currentClientVersion, {
+        serviceVersion,
+        clientVersion: {
+          id: "new-build",
+          tag: null,
+          timestamp: null,
+        },
+      }),
+    ).toEqual(serviceVersion);
+    expect(
+      resolveAvailableConclaveVersion(currentClientVersion, {
+        serviceVersion,
+        clientVersion: currentClientVersion,
+      }),
+    ).toBeNull();
+  });
+
+  it("does not prompt for local builds", () => {
+    expect(
+      resolveAvailableConclaveVersion(
+        { id: "local", tag: null, timestamp: null },
+        {
+          serviceVersion: {
+            id: "new-version",
+            tag: null,
+            timestamp: null,
+          },
+        },
+      ),
+    ).toBeNull();
   });
 });

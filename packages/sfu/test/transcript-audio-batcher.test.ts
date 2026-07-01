@@ -121,6 +121,30 @@ describe("TranscriptAudioBatcher", () => {
     ]);
   });
 
+  it("clears the worker buffer when a speech turn ends", () => {
+    const events: AudioEvent[] = [];
+    let now = 1000;
+    const ada = speaker("u1", "Ada");
+    const batcher = new TranscriptAudioBatcher({
+      speaker: ada,
+      sink: createSink(events),
+      now: () => now,
+      batchTargetSamples: 4,
+    });
+
+    expect(batcher.pushPcm(pcm(4, 2200))).toBe(true);
+    expect(batcher.commitIfNeeded()).toBe(true);
+    expect(batcher.clearEndedTurn()).toBe(false);
+    now += 451;
+    expect(batcher.clearEndedTurn()).toBe(true);
+
+    expect(events).toEqual([
+      { type: "chunk", speaker: ada, bytes: 8 },
+      { type: "commit", speaker: ada },
+      { type: "clear", speaker: ada },
+    ]);
+  });
+
   it("keeps quiet but non-silent mic input", () => {
     const events: AudioEvent[] = [];
     const ada = speaker("u1", "Ada");

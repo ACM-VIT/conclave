@@ -6,6 +6,7 @@ export interface ConclaveSiteVersion {
 
 export interface ConclaveSiteVersionResponse {
   serviceVersion: ConclaveSiteVersion;
+  clientVersion?: ConclaveSiteVersion;
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -56,7 +57,10 @@ export const isConclaveSiteVersion = (
 export const isConclaveSiteVersionResponse = (
   value: unknown,
 ): value is ConclaveSiteVersionResponse =>
-  isRecord(value) && isConclaveSiteVersion(value.serviceVersion);
+  isRecord(value) &&
+  isConclaveSiteVersion(value.serviceVersion) &&
+  (value.clientVersion === undefined ||
+    isConclaveSiteVersion(value.clientVersion));
 
 export const isSameConclaveSiteVersion = (
   current: ConclaveSiteVersion,
@@ -82,4 +86,20 @@ export const formatConclaveSiteVersionLabel = (
   }
 
   return version.id === "local" ? "local" : version.id.slice(0, 8);
+};
+
+export const resolveAvailableConclaveVersion = (
+  currentClientVersion: ConclaveSiteVersion,
+  latest: ConclaveSiteVersionResponse,
+): ConclaveSiteVersion | null => {
+  const latestClientVersion = latest.clientVersion ?? latest.serviceVersion;
+  if (
+    currentClientVersion.id === "local" ||
+    latestClientVersion.id === "local"
+  ) {
+    return null;
+  }
+  return isSameConclaveSiteVersion(currentClientVersion, latestClientVersion)
+    ? null
+    : latest.serviceVersion;
 };

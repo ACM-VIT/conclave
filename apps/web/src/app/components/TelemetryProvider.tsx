@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, type ReactNode } from "react";
-import posthog from "posthog-js";
 import { setTelemetrySink } from "../lib/telemetry";
 
 /**
@@ -19,19 +18,25 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
     const key = process.env.NEXT_PUBLIC_POSTHOG_KEY;
     if (!key) return; // opt-in only — no key, no tracking
 
+    let active = true;
     const host =
       process.env.NEXT_PUBLIC_POSTHOG_HOST ?? "https://eu.posthog.com";
-    posthog.init(key, {
-      api_host: host,
-      capture_pageview: false,
-      autocapture: false,
-      person_profiles: "identified_only",
-    });
-    setTelemetrySink((event, props) => {
-      posthog.capture(event, props);
+
+    void import("posthog-js").then(({ default: posthog }) => {
+      if (!active) return;
+      posthog.init(key, {
+        api_host: host,
+        capture_pageview: false,
+        autocapture: false,
+        person_profiles: "identified_only",
+      });
+      setTelemetrySink((event, props) => {
+        posthog.capture(event, props);
+      });
     });
 
     return () => {
+      active = false;
       setTelemetrySink(null);
     };
   }, []);

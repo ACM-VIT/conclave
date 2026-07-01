@@ -8,10 +8,12 @@ import {
   ensureSchedulingProfile,
   generateAvailableSlots,
   getCalendarSummary,
+  getProfileByUser,
   getProfileAvailability,
   getPublicEventType,
   getPublicProfile,
   listEventTypes,
+  moveSchedulingProfileToClient,
   persistScheduling,
   setGoogleCalendarConnection,
   setProfileAvailability,
@@ -22,6 +24,7 @@ import {
 import {
   createScheduledMeeting,
   deleteScheduledMeeting,
+  moveScheduledMeetingToClient,
   persistScheduledMeetingChanges,
   updateScheduledMeeting,
   type BookingSlotLease,
@@ -60,6 +63,25 @@ const GOOGLE_FREEBUSY_URL = "https://www.googleapis.com/calendar/v3/freeBusy";
 const GOOGLE_CALENDAR_API = "https://www.googleapis.com/calendar/v3";
 const localBookingSlotLocks = new Set<string>();
 
+const CONCLAVE_CLIENT_ID = "conclave";
+const LEGACY_WEB_CLIENT_IDS = ["default", "public"];
+
+const resolveDefaultClientId = (): string =>
+  process.env.SFU_CLIENT_ID?.trim() ||
+  process.env.NEXT_PUBLIC_SFU_CLIENT_ID?.trim() ||
+  CONCLAVE_CLIENT_ID;
+
+const clientIdCandidates = (primary: string): string[] => {
+  const seen = new Set<string>();
+  return [primary, resolveDefaultClientId(), CONCLAVE_CLIENT_ID, ...LEGACY_WEB_CLIENT_IDS]
+    .map((clientId) => clientId.trim())
+    .filter((clientId) => {
+      if (!clientId || seen.has(clientId)) return false;
+      seen.add(clientId);
+      return true;
+    });
+};
+
 const hasValidSecret = (req: Request, secret: string): boolean => {
   const provided = req.header("x-sfu-secret");
   return Boolean(provided && secretsMatch(provided, secret));
@@ -91,7 +113,10 @@ const normalizeText = (value: unknown, maxLength = MAX_TEXT_LENGTH): string =>
     ? value.trim().replace(/\s+/g, " ").slice(0, maxLength)
     : "";
 
-const resolveClientId = (req: Request, fallback = "default"): string => {
+const resolveClientId = (
+  req: Request,
+  fallback = resolveDefaultClientId(),
+): string => {
   const fromQuery = normalizeIdentifier(req.query.clientId) || "";
   const fromHeader = normalizeIdentifier(req.header("x-sfu-client")) || "";
   return fromQuery || fromHeader || fallback;
@@ -149,6 +174,54 @@ const profilePayload = (
   calendar: getCalendarSummary(state.scheduling, profile.id),
 });
 
+const migrateProfileNamespace = async (
+  state: SfuState,
+  profile: SchedulingProfile,
+  clientId: string,
+): Promise<void> => {
+  const previousClientId = profile.clientId;
+  if (previousClientId === clientId) return;
+  const eventTypeIds = new Set(
+    Array.from(state.scheduling.eventTypesById.values())
+      .filter((eventType) => eventType.profileId === profile.id)
+      .map((eventType) => eventType.id),
+  );
+
+  moveSchedulingProfileToClient(state.scheduling, profile, clientId);
+
+  const changedMeetings: ScheduledMeeting[] = [];
+  for (const meeting of state.scheduledMeetings.byId.values()) {
+    if (meeting.clientId !== previousClientId) continue;
+    if (meeting.source !== "booking_link") continue;
+    const belongsToProfile =
+      (meeting.eventTypeId && eventTypeIds.has(meeting.eventTypeId)) ||
+      (meeting.hostUserId && meeting.hostUserId === profile.userId) ||
+      meeting.hostEmail.trim().toLowerCase() === profile.email;
+    if (!belongsToProfile) continue;
+    try {
+      const moved = moveScheduledMeetingToClient(
+        state.scheduledMeetings,
+        meeting.id,
+        clientId,
+      );
+      if (moved) changedMeetings.push(moved);
+    } catch (error) {
+      Logger.warn(
+        `Skipped scheduled meeting namespace migration for ${meeting.id}`,
+        error,
+      );
+    }
+  }
+
+  if (changedMeetings.length > 0 && state.scheduledMeetingPersistence) {
+    await persistScheduledMeetingChanges(
+      state.scheduledMeetings,
+      state.scheduledMeetingPersistence,
+      changedMeetings,
+    );
+  }
+};
+
 const requireHostProfile = async (
   req: Request,
   res: Response,
@@ -159,8 +232,26 @@ const requireHostProfile = async (
     res.status(400).json({ error: "User context required" });
     return null;
   }
+  const clientId = resolveClientId(req);
+  const existingProfile = getProfileByUser(
+    state.scheduling,
+    clientId,
+    user.userId,
+  );
+  if (!existingProfile) {
+    for (const legacyClientId of clientIdCandidates(clientId).slice(1)) {
+      const legacyProfile = getProfileByUser(
+        state.scheduling,
+        legacyClientId,
+        user.userId,
+      );
+      if (!legacyProfile) continue;
+      await migrateProfileNamespace(state, legacyProfile, clientId);
+      break;
+    }
+  }
   const profile = ensureSchedulingProfile(state.scheduling, {
-    clientId: resolveClientId(req),
+    clientId,
     userId: user.userId,
     email: user.email,
     name: user.name,
@@ -488,7 +579,9 @@ const createGoogleCalendarEvent = async (
 const meetingMatchesProfile = (
   meeting: ScheduledMeeting,
   profile: SchedulingProfile,
+  eventType?: SchedulingEventType | null,
 ): boolean => {
+  if (eventType?.profileId === profile.id) return true;
   if (meeting.clientId !== profile.clientId) return false;
   if (meeting.hostUserId && profile.userId) {
     return meeting.hostUserId === profile.userId;
@@ -519,7 +612,10 @@ const collectInternalBusy = (
         (eventType?.bufferAfterMinutes ?? 0) * MINUTE_MS,
     }))
     .filter(({ meeting, startAt, endAt }) => {
-      if (!meetingMatchesProfile(meeting, profile)) return false;
+      const eventType = meeting.eventTypeId
+        ? state.scheduling.eventTypesById.get(meeting.eventTypeId) ?? null
+        : null;
+      if (!meetingMatchesProfile(meeting, profile, eventType)) return false;
       if (meeting.status === "cancelled" || meeting.status === "ended") return false;
       return startAt < to && from < endAt;
     })
@@ -545,6 +641,30 @@ const resolvePublicTarget = (
   }
   const calendar = requireConnectedCalendar(state, profile);
   return { profile, eventType, calendar };
+};
+
+const resolvePublicTargetForClients = (
+  state: SfuState,
+  clientId: string,
+  username: string,
+  slug: string,
+): ReturnType<typeof resolvePublicTarget> => {
+  let lastNotFound: ReturnType<typeof resolvePublicTarget> = {
+    error: "Scheduling page not found.",
+    status: 404,
+  };
+  for (const candidateClientId of clientIdCandidates(clientId)) {
+    const target = resolvePublicTarget(
+      state,
+      candidateClientId,
+      username,
+      slug,
+    );
+    if (!("error" in target)) return target;
+    if (target.status !== 404) return target;
+    lastNotFound = target;
+  }
+  return lastNotFound;
 };
 
 const buildConfirmation = (
@@ -761,9 +881,15 @@ export const registerSchedulingRoutes = (
     if (!profile) return;
     const bookings = Array.from(state.scheduledMeetings.byId.values())
       .filter(
-        (meeting) =>
-          meetingMatchesProfile(meeting, profile) &&
-          meeting.source === "booking_link",
+        (meeting) => {
+          const eventType = meeting.eventTypeId
+            ? state.scheduling.eventTypesById.get(meeting.eventTypeId) ?? null
+            : null;
+          return (
+            meetingMatchesProfile(meeting, profile, eventType) &&
+            meeting.source === "booking_link"
+          );
+        },
       )
       .sort((a, b) => b.scheduledStartAt - a.scheduledStartAt);
     res.json({ bookings });
@@ -771,7 +897,7 @@ export const registerSchedulingRoutes = (
 
   app.get("/scheduling/public/:username/:slug", (req, res) => {
     if (!requireSecret(req, res)) return;
-    const target = resolvePublicTarget(
+    const target = resolvePublicTargetForClients(
       state,
       resolveClientId(req),
       req.params.username,
@@ -806,7 +932,7 @@ export const registerSchedulingRoutes = (
 
   app.get("/scheduling/public/:username/:slug/slots", async (req, res) => {
     if (!requireSecret(req, res)) return;
-    const target = resolvePublicTarget(
+    const target = resolvePublicTargetForClients(
       state,
       resolveClientId(req),
       req.params.username,
@@ -877,7 +1003,7 @@ export const registerSchedulingRoutes = (
 
   app.post("/scheduling/public/:username/:slug/book", async (req, res) => {
     if (!requireSecret(req, res)) return;
-    const target = resolvePublicTarget(
+    const target = resolvePublicTargetForClients(
       state,
       resolveClientId(req),
       req.params.username,

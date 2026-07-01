@@ -24,10 +24,8 @@ type ActiveAudioConsumer = {
   consumer: Consumer;
   decoder: TranscriptOpusDecoderLike;
   batcher: TranscriptAudioBatcher;
-  packetsReceived: number;
-  decodedFrames: number;
-  queuedFrames: number;
-  lastDropLogAt: number;
+  decodeFailures: number;
+  lastDecodeFailureLogAt: number;
 };
 
 const WORKER_SEND_WARN_INTERVAL_MS = 5000;
@@ -77,9 +75,6 @@ export class SfuTranscriptRelay implements TranscriptAudioBatchSink {
     if (this.options.room.router.closed) {
       throw new Error("Room media router is closed.");
     }
-    Logger.info(
-      `Transcript SFU relay starting for room ${this.options.room.id} (controller ${this.options.controllerUserId}).`,
-    );
 
     this.workerClient = (
       this.options.createWorkerClient ?? ((clientOptions) =>
@@ -109,9 +104,6 @@ export class SfuTranscriptRelay implements TranscriptAudioBatchSink {
     this.started = true;
     await this.syncProducers();
     this.startCommitTimer();
-    Logger.info(
-      `Transcript SFU relay ready for room ${this.options.room.id} with ${this.consumers.size} audio producer(s).`,
-    );
   }
 
   async syncProducers(): Promise<void> {
@@ -120,11 +112,6 @@ export class SfuTranscriptRelay implements TranscriptAudioBatchSink {
       .getTranscriptAudioProducerEntries()
       .filter((entry) => !entry.paused && !entry.producer.closed);
     const activeProducerIds = new Set(entries.map((entry) => entry.producerId));
-    if (entries.length === 0) {
-      Logger.info(
-        `Transcript SFU relay has no active audio producers in room ${this.options.room.id}.`,
-      );
-    }
 
     for (const [producerId, active] of this.consumers) {
       if (activeProducerIds.has(producerId)) continue;
@@ -224,15 +211,10 @@ export class SfuTranscriptRelay implements TranscriptAudioBatchSink {
         speaker,
         sink: this,
       }),
-      packetsReceived: 0,
-      decodedFrames: 0,
-      queuedFrames: 0,
-      lastDropLogAt: 0,
+      decodeFailures: 0,
+      lastDecodeFailureLogAt: 0,
     };
     this.consumers.set(entry.producerId, active);
-    Logger.info(
-      `Transcript SFU relay attached audio producer ${entry.producerId} for ${entry.displayName} (${entry.userId}) in room ${this.options.room.id}.`,
-    );
 
     consumer.on("rtp", (packet) => {
       this.handleRtpPacket(entry.producerId, packet);
@@ -265,12 +247,6 @@ export class SfuTranscriptRelay implements TranscriptAudioBatchSink {
   private handleRtpPacket(producerId: string, packet: Buffer): void {
     const active = this.consumers.get(producerId);
     if (!active) return;
-    active.packetsReceived += 1;
-    if (active.packetsReceived === 1) {
-      Logger.info(
-        `Transcript SFU relay received first RTP packet from producer ${producerId} in room ${this.options.room.id}.`,
-      );
-    }
     const payload = extractRtpPayload(packet);
     if (!payload) return;
 
@@ -278,35 +254,12 @@ export class SfuTranscriptRelay implements TranscriptAudioBatchSink {
     try {
       pcm = active.decoder.decodeTo24kMono(payload);
     } catch (error) {
-      Logger.warn(
-        `Transcript Opus decode failed for producer ${producerId}`,
-        error,
-      );
+      this.warnDecodeFailure(producerId, active, error);
       return;
     }
     if (!pcm || pcm.length === 0) return;
-    active.decodedFrames += 1;
-    const queued = active.batcher.pushPcm(pcm);
-    if (queued) {
-      active.queuedFrames += 1;
-      if (active.queuedFrames === 1) {
-        Logger.info(
-          `Transcript SFU relay queued first PCM batch from producer ${producerId} in room ${this.options.room.id}.`,
-        );
-      }
-      return;
-    }
-    const now = Date.now();
-    if (
-      active.queuedFrames === 0 &&
-      active.decodedFrames >= 250 &&
-      now - active.lastDropLogAt >= WORKER_SEND_WARN_INTERVAL_MS
-    ) {
-      active.lastDropLogAt = now;
-      Logger.warn(
-        `Transcript SFU relay is receiving and decoding audio from producer ${producerId}, but the speech gate has not queued any audio yet.`,
-      );
-    }
+    active.decodeFailures = 0;
+    active.batcher.pushPcm(pcm);
   }
 
   private startCommitTimer(): void {
@@ -314,6 +267,7 @@ export class SfuTranscriptRelay implements TranscriptAudioBatchSink {
     this.commitTimer = setInterval(() => {
       for (const active of this.consumers.values()) {
         this.commitIfNeeded(active);
+        active.batcher.clearEndedTurn();
       }
     }, TRANSCRIPT_AUDIO_COMMIT_INTERVAL_MS);
   }
@@ -354,6 +308,26 @@ export class SfuTranscriptRelay implements TranscriptAudioBatchSink {
     this.lastWorkerSendWarnAt = now;
     Logger.warn(
       `Transcript SFU relay could not send ${action} to worker for room ${this.options.room.id}; worker socket is not open.`,
+    );
+  }
+
+  private warnDecodeFailure(
+    producerId: string,
+    active: ActiveAudioConsumer,
+    error: unknown,
+  ): void {
+    active.decodeFailures += 1;
+    const now = Date.now();
+    if (
+      active.decodeFailures > 1 &&
+      now - active.lastDecodeFailureLogAt < WORKER_SEND_WARN_INTERVAL_MS
+    ) {
+      return;
+    }
+    active.lastDecodeFailureLogAt = now;
+    Logger.warn(
+      `Transcript Opus decode failed for producer ${producerId} in room ${this.options.room.id}; packet dropped and decoder reset.`,
+      error,
     );
   }
 

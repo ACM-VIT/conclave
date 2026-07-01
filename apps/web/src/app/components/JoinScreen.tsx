@@ -14,9 +14,13 @@ import {
   ChevronDown,
   Check,
   Link2,
+  Info,
+  X,
   type LucideIcon,
 } from "lucide-react";
 import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { prefetchConclaveAnimation } from "../lib/conclaveAnimation";
+import { prefetchConclaveLock } from "../lib/conclaveSound";
 import type {
   Dispatch,
   SetStateAction,
@@ -42,7 +46,6 @@ import {
   sanitizeRoomCodeInput,
   sanitizeRoomCode,
 } from "../lib/utils";
-import MeetsErrorBanner from "./MeetsErrorBanner";
 import RoomPresenceBadge from "./RoomPresenceBadge";
 // import ScheduledMeetingsPanel from "./ScheduledMeetingsPanel";
 import { useCameraPermissionState } from "../hooks/useCameraPermissionState";
@@ -138,11 +141,12 @@ interface JoinScreenProps {
   onUserChange: (user: { id: string; email: string; name: string } | null) => void;
   onIsAdminChange: (isAdmin: boolean) => void;
   meetError?: MeetError | null;
-  onDismissMeetError?: () => void;
-  onRetryMedia?: () => void;
+  meetingEndedNotice?: string | null;
+  onDismissMeetingEndedNotice?: () => void;
   videoEffects: VideoEffectsState;
   onVideoEffectsChange: Dispatch<SetStateAction<VideoEffectsState>>;
   onPrejoinMediaCommit?: (handoff: PrejoinMediaHandoff) => void;
+  onEnterStart?: (action: "new" | "join") => void;
 }
 
 // Flat, Google-Meet-style lobby (dark Carbon, no gradients/marketing): a single
@@ -286,16 +290,24 @@ function JoinScreen({
   onUserChange,
   onIsAdminChange,
   meetError,
-  onDismissMeetError,
-  onRetryMedia,
+  meetingEndedNotice,
+  onDismissMeetingEndedNotice,
   videoEffects,
   onVideoEffectsChange,
   onPrejoinMediaCommit,
+  onEnterStart,
 }: JoinScreenProps) {
   const normalizedRoomId =
     roomId === "undefined" || roomId === "null" ? "" : roomId;
   const isRoutedRoom = forceJoinOnly;
   const enforceShortCode = enableRoomRouting || forceJoinOnly;
+
+  // Warm the (large) brand animation while the lobby is idle so the entry
+  // overlay can paint instantly the moment the user commits to a meeting.
+  useEffect(() => {
+    prefetchConclaveAnimation();
+    prefetchConclaveLock();
+  }, []);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const processedPreviewTrackRef = useRef<MediaStreamTrack | null>(null);
@@ -314,7 +326,6 @@ function JoinScreen({
   const [isEffectsOpen, setIsEffectsOpen] = useState(false);
   const [guestName, setGuestName] = useState("");
   const [isSigningOut, setIsSigningOut] = useState(false);
-  const [activeJoinAction, setActiveJoinAction] = useState<"new" | "join" | null>(null);
   // presenceChecked: a check has started (pill may appear, possibly as "Checking…").
   // presenceSettled: a check has completed at least once, so we show a real count
   // and keep showing it through background polls instead of flickering to "Checking…".
@@ -751,12 +762,6 @@ function JoinScreen({
     onJoinRoom(targetId);
   }, [pending, hasIdentity, isAdmin, enableRoomRouting, onJoinRoom, onRoomIdChange]);
 
-  useEffect(() => {
-    if (!pending && !isLoading) {
-      setActiveJoinAction(null);
-    }
-  }, [pending, isLoading]);
-
   // Ensure a guest user exists (from the name field) before acting; returns
   // false when nothing actionable (no identity and no usable name).
   const ensureGuest = (): boolean => {
@@ -778,7 +783,7 @@ function JoinScreen({
 
   const startMeeting = () => {
     if (!ensureGuest()) return;
-    setActiveJoinAction("new");
+    onEnterStart?.("new");
     commitPrejoinMedia();
     onIsAdminChange(true);
     setPending({ mode: "new", roomId: generateRoomCode() });
@@ -789,7 +794,7 @@ function JoinScreen({
       : normalizedRoomId.trim();
     if (!candidate) return;
     if (!ensureGuest()) return;
-    setActiveJoinAction("join");
+    onEnterStart?.("join");
     commitPrejoinMedia();
     onIsAdminChange(false);
     setPending({ mode: "join", roomId: candidate });
@@ -967,10 +972,6 @@ function JoinScreen({
   const showVideoPicker = isCameraOn && videoInputs.length > 0;
   const showAudioPicker = isMicOn && audioInputs.length > 0;
   const showDevicePickers = showVideoPicker || showAudioPicker;
-  const isStartingMeeting =
-    pending?.mode === "new" || (isLoading && activeJoinAction === "new");
-  const isJoiningMeeting =
-    pending?.mode === "join" || (isLoading && activeJoinAction === "join");
   const handleNameInputChange = (nextName: string) => {
     setGuestName(nextName);
     onDisplayNameInputChange(nextName);
@@ -1087,26 +1088,29 @@ function JoinScreen({
                   : "Create a room, or join one with a code."}
               </p>
             </div>
-              {meetError && (
-                <MeetsErrorBanner
-                  meetError={meetError}
-                  onDismiss={onDismissMeetError ?? (() => {})}
-                  variant="inline"
-                  primaryActionLabel={
-                    onRetryMedia &&
-                    (meetError.code === "PERMISSION_DENIED" ||
-                      meetError.code === "MEDIA_ERROR")
-                      ? "Try again"
-                      : undefined
-                  }
-                  onPrimaryAction={
-                    meetError.code === "PERMISSION_DENIED" ||
-                    meetError.code === "MEDIA_ERROR"
-                      ? onRetryMedia
-                      : undefined
-                  }
+            {meetingEndedNotice ? (
+              <div
+                role="status"
+                className="flex items-start gap-2 rounded-xl border border-[#F95F4A]/25 bg-[#F95F4A]/10 px-3.5 py-3 text-left text-[13px] leading-snug text-[#fafafa]"
+              >
+                <Info
+                  size={16}
+                  className="mt-0.5 shrink-0 text-[#F95F4A]"
+                  aria-hidden="true"
                 />
-              )}
+                <p className="min-w-0 flex-1">{meetingEndedNotice}</p>
+                {onDismissMeetingEndedNotice ? (
+                  <button
+                    type="button"
+                    onClick={onDismissMeetingEndedNotice}
+                    aria-label="Dismiss meeting ended notice"
+                    className="-mr-1 -mt-1 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[#fafafa]/55 transition-colors hover:bg-white/[0.08] hover:text-[#fafafa]"
+                  >
+                    <X size={14} aria-hidden="true" />
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
               {isSignedInUser ? (
                 <div className="flex items-center justify-between rounded-xl border border-white/10 bg-white/[0.04] px-4 py-3">
                   <div className="min-w-0">
@@ -1167,11 +1171,7 @@ function JoinScreen({
                     disabled={isLoading || !nameReady}
                     className={CTA_PRIMARY}
                   >
-                    {isStartingMeeting ? (
-                      <Loader2 size={18} className="animate-spin" />
-                    ) : (
-                      <Plus size={18} />
-                    )}
+                    <Plus size={18} />
                     New meeting
                   </button>
               )}
@@ -1245,7 +1245,6 @@ function JoinScreen({
                   disabled={isLoading || !canJoin || !nameReady}
                   className={CTA_GHOST}
                 >
-                  {isJoiningMeeting ? <Loader2 size={18} className="animate-spin" /> : null}
                   Join
                 </button>
               </div>
