@@ -769,9 +769,17 @@ const getDesiredPreferences = (
   }
 
   if (isHidden && !isWarm && !isFocus) {
+    if (quality === "poor") {
+      return {
+        preferredLayers: bounds ? buildLayerPreference(0, 0, bounds) : undefined,
+        priority: OFFSCREEN_WEBCAM_PARK_PRIORITY,
+        paused: true,
+      };
+    }
+
     return {
       preferredLayers: bounds ? buildLayerPreference(0, 0, bounds) : undefined,
-      priority: quality === "poor" ? 10 : 25,
+      priority: 25,
       paused: false,
     };
   }

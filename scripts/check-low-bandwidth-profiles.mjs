@@ -561,6 +561,11 @@ assertRegex(
   "web Jitsi-style receiver LastN parks only offscreen webcams without breaking emergency keep-video",
 );
 assertRegex(
+  "webAdaptiveConsumerPreferences",
+  /if \(isHidden && !isWarm && !isFocus\) \{[\s\S]*if \(quality === "poor"\) \{[\s\S]*priority: OFFSCREEN_WEBCAM_PARK_PRIORITY,[\s\S]*paused: true,[\s\S]*priority: 25,[\s\S]*paused: false,/,
+  "web poor receive links park hidden cold webcams instead of forwarding invisible video",
+);
+assertRegex(
   "webMeetSocket",
   /producerInfo\.type === "screen"[\s\S]*networkProfile === "emergency"[\s\S]*\? 1[\s\S]*: 2,[\s\S]*priority: 240,/,
   "web initial screen-share consume starts emergency receivers at mid temporal FPS",
@@ -938,10 +943,10 @@ assertRegex(
   /unsupportedLayerPreferencesRef\.current\.set\(producerId,[\s\S]*signature: getLayerPreferenceSignature\(preferredLayers\),[\s\S]*retryAt: Date\.now\(\) \+ UNSUPPORTED_LAYER_RETRY_AFTER_MS/,
   "web unsupported receive-layer fallback stores retryable layer signature",
 );
-assertIncludes(
+assertRegex(
   "webAdaptiveConsumerPreferences",
-  "priority: quality === \"poor\" ? 10 : 25,\n      paused: false,",
-  "web hidden consumers degrade layers instead of pausing",
+  /if \(isHidden && !isWarm && !isFocus\) \{[\s\S]*if \(quality === "poor"\) \{[\s\S]*priority: OFFSCREEN_WEBCAM_PARK_PRIORITY,[\s\S]*paused: true,[\s\S]*priority: 25,[\s\S]*paused: false,/,
+  "web hidden consumers stay live outside poor receive links",
 );
 assertIncludes(
   "webAdaptiveConsumerPreferences",
