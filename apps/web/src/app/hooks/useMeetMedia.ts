@@ -87,6 +87,7 @@ interface UseMeetMediaOptions {
   meetVolume?: number;
   videoQuality: VideoQuality;
   videoQualityRef: React.MutableRefObject<VideoQuality>;
+  dataSaverMode?: boolean;
   activeVideoEffectsCount?: number;
   shouldUsePreferredVideoPublishTrack?: boolean;
   getVideoPublishTrackRef?: React.MutableRefObject<
@@ -397,6 +398,7 @@ export function useMeetMedia({
   meetVolume = DEFAULT_MEET_VOLUME,
   videoQuality,
   videoQualityRef,
+  dataSaverMode = false,
   activeVideoEffectsCount = 0,
   shouldUsePreferredVideoPublishTrack = activeVideoEffectsCount > 0,
   getVideoPublishTrackRef,
@@ -912,12 +914,15 @@ export function useMeetMedia({
       if (isPublishEmergencyProfile(stats, browserNetwork)) {
         return "emergency";
       }
+      if (dataSaverMode) {
+        return "poor";
+      }
 
       const quality = getStartupAwarePublishQuality(stats, browserNetwork);
       if (quality === "poor") return "poor";
       if (quality === "fair") return "fair";
       return "good";
-    }, [connectionQualityRef]);
+    }, [connectionQualityRef, dataSaverMode]);
 
   const getScreenSharePublishNetworkProfile =
     useCallback((): WebcamProducerNetworkProfile => {

@@ -1044,11 +1044,16 @@ export function useMeetSocket({
     });
   }, []);
 
-  const getPublishNetworkProfile = useCallback(
-    () =>
-      getConnectionStatsNetworkProfile(connectionQualityRef?.current, "publish"),
-    [connectionQualityRef],
-  );
+  const getPublishNetworkProfile = useCallback(() => {
+    const profile = getConnectionStatsNetworkProfile(
+      connectionQualityRef?.current,
+      "publish",
+    );
+    if (dataSaverMode && profile !== "emergency") {
+      return "poor";
+    }
+    return profile;
+  }, [connectionQualityRef, dataSaverMode]);
 
   const getScreenSharePublishNetworkProfile =
     useCallback((): WebcamProducerNetworkProfile => {

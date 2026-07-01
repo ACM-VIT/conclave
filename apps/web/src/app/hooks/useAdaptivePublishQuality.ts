@@ -21,6 +21,7 @@ interface UseAdaptivePublishQualityOptions {
   emergencyMode: boolean;
   availableOutgoingBitrateBps?: number | null;
   publishCpuLimited?: boolean;
+  dataSaverMode?: boolean;
   isCameraOff: boolean;
   participantCount: number;
   audioProducerRef: React.MutableRefObject<Producer | null>;
@@ -166,6 +167,7 @@ export type AdaptivePublishQualityDebugSnapshot = {
   emergencyMode: boolean;
   availableOutgoingBitrateBps: number | null;
   publishCpuLimited: boolean;
+  dataSaverMode: boolean;
   isCameraOff: boolean;
   participantCount: number;
   videoQuality: VideoQuality;
@@ -318,6 +320,7 @@ export function useAdaptivePublishQuality({
   emergencyMode,
   availableOutgoingBitrateBps = null,
   publishCpuLimited = false,
+  dataSaverMode = false,
   isCameraOff,
   participantCount,
   audioProducerRef,
@@ -375,6 +378,7 @@ export function useAdaptivePublishQuality({
         emergencyMode,
         availableOutgoingBitrateBps,
         publishCpuLimited,
+        dataSaverMode,
         isCameraOff,
         participantCount,
         videoQuality: videoQualityRef.current,
@@ -420,6 +424,7 @@ export function useAdaptivePublishQuality({
       connectionQuality,
       capRecoveryQuality,
       availableOutgoingBitrateBps,
+      dataSaverMode,
       publishCpuLimited,
       debugStateRef,
       enabled,
@@ -797,6 +802,23 @@ export function useAdaptivePublishQuality({
       const screenShareVideoActive = Boolean(
         screenProducerRef.current && !screenProducerRef.current.closed,
       );
+      if (dataSaverMode) {
+        const dataSaverProfile: WebcamProducerNetworkProfile = emergencyMode
+          ? "emergency"
+          : "poor";
+        autoDowngradedRef.current = true;
+        if (currentPublishQuality !== "low" && !isCameraOff) {
+          void switchQuality("low", dataSaverProfile).then((switched) => {
+            if (switched) {
+              void applyLiveProducerProfile(dataSaverProfile);
+            }
+          });
+        } else {
+          void applyLiveProducerProfile(dataSaverProfile);
+        }
+        writeDebugSnapshot(now);
+        return;
+      }
       const connectionLiveProfile =
         getStableLiveProfile(capRecoveryQuality, capRecoveryElapsedMs) ??
         getStableLiveProfile(connectionQuality, elapsedMs);
@@ -923,6 +945,7 @@ export function useAdaptivePublishQuality({
     availableOutgoingBitrateBps,
     capRecoveryQuality,
     connectionQuality,
+    dataSaverMode,
     enabled,
     emergencyMode,
     getStableLiveProfile,

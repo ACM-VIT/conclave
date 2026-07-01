@@ -882,8 +882,8 @@ assertRegex(
 );
 assertRegex(
   "webMeetClient",
-  /useState<MeetViewSettings>\(\s*readStoredMeetViewSettings,[\s\S]*browserSaveDataMode[\s\S]*getBrowserNetworkSnapshot\(\)\.saveData === true[\s\S]*effectiveDataSaverMode =[\s\S]*viewSettings\.dataSaverMode \|\| browserSaveDataMode[\s\S]*writeStoredMeetViewSettings\(viewSettings\)[\s\S]*useMeetSocket\(\{[\s\S]*dataSaverMode: effectiveDataSaverMode,[\s\S]*useAdaptiveConsumerPreferences\(\{[\s\S]*dataSaverMode: effectiveDataSaverMode,[\s\S]*<MeetsMainContent[\s\S]*viewSettings=\{viewSettings\}[\s\S]*onViewSettingsChange=\{setViewSettings\}/,
-  "web meeting client honors persisted and browser Save-Data receive settings",
+  /useState<MeetViewSettings>\(\s*readStoredMeetViewSettings,[\s\S]*browserSaveDataMode[\s\S]*getBrowserNetworkSnapshot\(\)\.saveData === true[\s\S]*effectiveDataSaverMode =[\s\S]*viewSettings\.dataSaverMode \|\| browserSaveDataMode[\s\S]*writeStoredMeetViewSettings\(viewSettings\)[\s\S]*useMeetMedia\(\{[\s\S]*dataSaverMode: effectiveDataSaverMode,[\s\S]*useMeetSocket\(\{[\s\S]*dataSaverMode: effectiveDataSaverMode,[\s\S]*useAdaptiveConsumerPreferences\(\{[\s\S]*dataSaverMode: effectiveDataSaverMode,[\s\S]*useAdaptivePublishQuality\(\{[\s\S]*dataSaverMode: effectiveDataSaverMode,[\s\S]*<MeetsMainContent[\s\S]*viewSettings=\{viewSettings\}[\s\S]*onViewSettingsChange=\{setViewSettings\}/,
+  "web meeting client honors persisted and browser Save-Data send/receive settings",
 );
 assertNotIncludes(
   "webMeetsMainContent",
@@ -899,6 +899,21 @@ assertRegex(
   "webMeetSocket",
   /dataSaverMode\?: boolean[\s\S]*dataSaverMode = false[\s\S]*const shouldStartConsumerPausedForDataSaver =[\s\S]*dataSaverMode &&[\s\S]*producerInfo\.kind === "video" &&[\s\S]*producerInfo\.type === "webcam"[\s\S]*const startsPausedForDataSaver =[\s\S]*shouldStartConsumerPausedForDataSaver && isWebcamVideo[\s\S]*adaptivelyPausedConsumerProducerIdsRef\.current\.add\([\s\S]*UPDATE_VIDEO_ADAPTIVE_PAUSED[\s\S]*if \(!startsPausedForDataSaver\) \{[\s\S]*"resumeConsumer"/,
   "web data saver prevents initial webcam consumer resume while preserving screen/audio startup",
+);
+assertRegex(
+  "webMeetMedia",
+  /dataSaverMode\?: boolean[\s\S]*dataSaverMode = false[\s\S]*const getPublishNetworkProfile =[\s\S]*if \(isPublishEmergencyProfile\(stats, browserNetwork\)\) \{[\s\S]*return "emergency";[\s\S]*if \(dataSaverMode\) \{[\s\S]*return "poor";/,
+  "web data saver seeds local publish with a constrained profile before stats settle",
+);
+assertRegex(
+  "webMeetSocket",
+  /dataSaverMode\?: boolean[\s\S]*dataSaverMode = false[\s\S]*const getPublishNetworkProfile = useCallback\(\(\) => \{[\s\S]*const profile = getConnectionStatsNetworkProfile\([\s\S]*"publish",[\s\S]*if \(dataSaverMode && profile !== "emergency"\) \{[\s\S]*return "poor";[\s\S]*const getScreenSharePublishNetworkProfile[\s\S]*const screenNetworkProfile = getScreenSharePublishNetworkProfile\(\);[\s\S]*buildScreenShareAudioOpusCodecOptions\([\s\S]*screenNetworkProfile/,
+  "web data saver constrains socket-side reconnect publish for mic, camera, screen, and screen audio",
+);
+assertRegex(
+  "webAdaptivePublishQuality",
+  /dataSaverMode\?: boolean[\s\S]*dataSaverMode = false[\s\S]*dataSaverMode,[\s\S]*if \(dataSaverMode\) \{[\s\S]*const dataSaverProfile: WebcamProducerNetworkProfile = emergencyMode[\s\S]*\? "emergency"[\s\S]*: "poor";[\s\S]*currentPublishQuality !== "low"[\s\S]*switchQuality\("low", dataSaverProfile\)[\s\S]*applyLiveProducerProfile\(dataSaverProfile\)/,
+  "web data saver holds local audio, webcam, screen, and screen-audio publishing on constrained profiles",
 );
 assertRegex(
   "webAdaptiveConsumerPreferences",
@@ -1202,7 +1217,7 @@ assertRegex(
 );
 assertRegex(
   "webMeetSocket",
-  /connectionQualityRef\?: React\.MutableRefObject<ConnectionQualityStats \| null>[\s\S]*const getPublishNetworkProfile = useCallback\([\s\S]*getConnectionStatsNetworkProfile\(connectionQualityRef\?\.current, "publish"\)[\s\S]*const getReceiveNetworkProfile = useCallback\([\s\S]*getConnectionStatsNetworkProfile\(connectionQualityRef\?\.current, "receive"\)[\s\S]*const getInitialConsumerNetworkProfile = useCallback/,
+  /connectionQualityRef\?: React\.MutableRefObject<ConnectionQualityStats \| null>[\s\S]*const getPublishNetworkProfile = useCallback\(\(\) => \{[\s\S]*getConnectionStatsNetworkProfile\([\s\S]*connectionQualityRef\?\.current,[\s\S]*"publish",[\s\S]*const getReceiveNetworkProfile = useCallback\([\s\S]*getConnectionStatsNetworkProfile\(connectionQualityRef\?\.current, "receive"\)[\s\S]*const getInitialConsumerNetworkProfile = useCallback/,
   "web socket publish and receive setup uses measured directional network profiles",
 );
 assertRegex(
