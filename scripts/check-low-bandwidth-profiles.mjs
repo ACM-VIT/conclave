@@ -585,13 +585,8 @@ assertRegex(
 );
 assertRegex(
   "webAdaptiveConsumerPreferences",
-  /const getScreenShareTargetTemporalLayer =[\s\S]*SCREEN_SHARE_SMALL_RENDERED_HEIGHT[\s\S]*SCREEN_SHARE_FULL_FPS_RENDERED_HEIGHT[\s\S]*if \(options\.emergency\) \{[\s\S]*return 1;[\s\S]*return isLargePresentation \? bounds\.maxTemporalLayer : 1;[\s\S]*if \(info\.type === "screen"\) \{[\s\S]*const screenShareVisible =[\s\S]*options\.layout\?\.visible === true[\s\S]*const screenSharePrimary =[\s\S]*options\.layout\?\.primary === true \|\| options\.layout\?\.focus === true[\s\S]*getScreenShareTargetTemporalLayer\(bounds, \{[\s\S]*quality: screenShareQuality,[\s\S]*emergency: screenShareEmergency,[\s\S]*visible: screenShareVisible,[\s\S]*primary: screenSharePrimary,[\s\S]*renderedHeight: options\.layout\?\.renderedHeight \?\? null,[\s\S]*presentationSize: options\.layout\?\.presentationSize \?\? null,[\s\S]*priority: 240,[\s\S]*paused: false,/,
-  "web screen-share receive adaptation is rendered-size aware and keeps visible emergency shares moving",
-);
-assertNotIncludes(
-  "webAdaptiveConsumerPreferences",
-  "!options.layout ||\n      options.layout.visible",
-  "web missing layout hints must not make screen-share consumers visible",
+  /const getScreenShareTargetTemporalLayer =[\s\S]*SCREEN_SHARE_SMALL_RENDERED_HEIGHT[\s\S]*SCREEN_SHARE_FULL_FPS_RENDERED_HEIGHT[\s\S]*if \(options\.emergency\) \{[\s\S]*return 1;[\s\S]*return isLargePresentation \? bounds\.maxTemporalLayer : 1;[\s\S]*if \(info\.type === "screen"\) \{[\s\S]*const screenShareVisible =[\s\S]*options\.layout === null \|\|[\s\S]*options\.layout\.visible === true[\s\S]*const screenSharePrimary =[\s\S]*options\.layout === null \|\|[\s\S]*options\.layout\.primary === true \|\|[\s\S]*options\.layout\.focus === true[\s\S]*getScreenShareTargetTemporalLayer\(bounds, \{[\s\S]*quality: screenShareQuality,[\s\S]*emergency: screenShareEmergency,[\s\S]*visible: screenShareVisible,[\s\S]*primary: screenSharePrimary,[\s\S]*renderedHeight: options\.layout\?\.renderedHeight \?\? null,[\s\S]*presentationSize: options\.layout\?\.presentationSize \?\? null,[\s\S]*priority: 240,[\s\S]*paused: false,/,
+  "web screen-share receive adaptation is rendered-size aware and treats missing layout hints as presentation-visible",
 );
 assertRegex(
   "webAdaptiveConsumerPreferences",
