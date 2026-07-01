@@ -42,11 +42,11 @@ import {
   applyScreenShareProducerNetworkProfile,
   applyWebcamProducerNetworkProfile,
   applyScreenShareTrackNetworkProfile,
-  buildScreenShareEncodingForNetworkProfile,
   buildScreenShareVideoConstraintsForNetworkProfile,
   getFallbackWebcamCodec,
   getPreferredScreenShareCodec,
   getPreferredWebcamCodec,
+  produceScreenShareTrack,
   produceWebcamTrack,
   shouldUseWebcamSimulcast,
   type WebcamProducerNetworkProfile,
@@ -3879,17 +3879,11 @@ export function useMeetMedia({
       const preferredScreenShareCodec = getPreferredScreenShareCodec(
         deviceRef.current,
       );
-      const producer = await transport.produce({
+      const producer = await produceScreenShareTrack({
+        transport,
         track,
-        encodings: [
-          buildScreenShareEncodingForNetworkProfile(
-            screenNetworkProfile,
-            track,
-          ),
-        ],
-        stopTracks: false,
-        ...(preferredScreenShareCodec ? { codec: preferredScreenShareCodec } : {}),
-        appData: { type: "screen" as ProducerType },
+        networkProfile: screenNetworkProfile,
+        preferredCodec: preferredScreenShareCodec,
       });
 
       screenShareStreamRef.current = stream;

@@ -499,13 +499,13 @@ assertRegex(
   "web screen-share frame-rate cap is independent and recovery reapplies profile ideal dimensions",
 );
 assertRegex(
-  "webMeetMedia",
-  /buildScreenShareEncodingForNetworkProfile\([\s\S]*screenNetworkProfile,[\s\S]*track,[\s\S]*\)/,
-  "web screen-share initial publish passes capture size into encoding caps",
+  "webCodec",
+  /produceScreenShareTrack[\s\S]*buildScreenShareEncodingForNetworkProfile\([\s\S]*networkProfile,[\s\S]*track,[\s\S]*\)[\s\S]*preferredCodec[\s\S]*Preferred screen-share codec failed, retrying router default codec[\s\S]*withoutScreenShareScalabilityMode/,
+  "web screen-share publish has preferred-codec and scalability fallback while preserving capture-size encoding caps",
 );
 assertRegex(
   "webMeetMedia",
-  /buildScreenShareVideoConstraintsForNetworkProfile[\s\S]*getScreenSharePublishNetworkProfile[\s\S]*getScreenSharePublishNetworkProfileForAvailableOutgoingBitrate\([\s\S]*stats\?\.availableOutgoingBitrate[\s\S]*getMostConstrainedWebcamProducerNetworkProfile\([\s\S]*const screenNetworkProfile = getScreenSharePublishNetworkProfile\(\);[\s\S]*const constrainedDisplayVideoConstraints[\s\S]*buildScreenShareVideoConstraintsForNetworkProfile\([\s\S]*screenNetworkProfile[\s\S]*const relaxedDisplayVideoConstraints[\s\S]*getDisplayMedia\([\s\S]*constrainedDisplayVideoConstraints,[\s\S]*captureController[\s\S]*catch \(err\) \{[\s\S]*if \(!isDisplayMediaConstraintRetryableError\(err\)\) \{[\s\S]*throw err;[\s\S]*getDisplayMedia\([\s\S]*constrainedDisplayVideoConstraints,[\s\S]*null[\s\S]*getDisplayMedia\(relaxedDisplayVideoConstraints, null\)[\s\S]*applyScreenShareTrackNetworkProfile\(track, screenNetworkProfile\)[\s\S]*buildScreenShareEncodingForNetworkProfile\([\s\S]*screenNetworkProfile,[\s\S]*track,[\s\S]*\)/,
+  /buildScreenShareVideoConstraintsForNetworkProfile[\s\S]*getScreenSharePublishNetworkProfile[\s\S]*getScreenSharePublishNetworkProfileForAvailableOutgoingBitrate\([\s\S]*stats\?\.availableOutgoingBitrate[\s\S]*getMostConstrainedWebcamProducerNetworkProfile\([\s\S]*const screenNetworkProfile = getScreenSharePublishNetworkProfile\(\);[\s\S]*const constrainedDisplayVideoConstraints[\s\S]*buildScreenShareVideoConstraintsForNetworkProfile\([\s\S]*screenNetworkProfile[\s\S]*const relaxedDisplayVideoConstraints[\s\S]*getDisplayMedia\([\s\S]*constrainedDisplayVideoConstraints,[\s\S]*captureController[\s\S]*catch \(err\) \{[\s\S]*if \(!isDisplayMediaConstraintRetryableError\(err\)\) \{[\s\S]*throw err;[\s\S]*getDisplayMedia\([\s\S]*constrainedDisplayVideoConstraints,[\s\S]*null[\s\S]*getDisplayMedia\(relaxedDisplayVideoConstraints, null\)[\s\S]*applyScreenShareTrackNetworkProfile\(track, screenNetworkProfile\)[\s\S]*produceScreenShareTrack\(\{[\s\S]*networkProfile: screenNetworkProfile,[\s\S]*preferredCodec: preferredScreenShareCodec,/,
   "web screen-share start requests BWE capture constraints before applying RTP caps",
 );
 assertRegex(
@@ -530,7 +530,7 @@ assertRegex(
 );
 assertRegex(
   "webMeetSocket",
-  /getScreenSharePublishNetworkProfile[\s\S]*getScreenSharePublishNetworkProfileForAvailableOutgoingBitrate\([\s\S]*stats\?\.availableOutgoingBitrate[\s\S]*getMostConstrainedWebcamProducerNetworkProfile\([\s\S]*const screenNetworkProfile = getScreenSharePublishNetworkProfile\(\);[\s\S]*buildScreenShareEncodingForNetworkProfile\([\s\S]*screenNetworkProfile,[\s\S]*videoTrack,[\s\S]*\)/,
+  /getScreenSharePublishNetworkProfile[\s\S]*getScreenSharePublishNetworkProfileForAvailableOutgoingBitrate\([\s\S]*stats\?\.availableOutgoingBitrate[\s\S]*getMostConstrainedWebcamProducerNetworkProfile\([\s\S]*const screenNetworkProfile = getScreenSharePublishNetworkProfile\(\);[\s\S]*produceScreenShareTrack\(\{[\s\S]*track: videoTrack,[\s\S]*networkProfile: screenNetworkProfile,[\s\S]*preferredCodec: preferredScreenShareCodec,/,
   "web screen-share reconnect publish starts with BWE capture-size encoding caps",
 );
 assertIncludes(

@@ -147,6 +147,13 @@ type ProduceWebcamTrackOptions = {
   forceSingleLayer?: boolean;
 };
 
+type ProduceScreenShareTrackOptions = {
+  transport: Transport;
+  track: MediaStreamTrack;
+  networkProfile: WebcamProducerNetworkProfile;
+  preferredCodec?: RtpCodecCapability;
+};
+
 export type WebcamProducerNetworkProfile =
   | "good"
   | "fair"
@@ -632,6 +639,8 @@ type ScreenShareEncoding = ReturnType<typeof buildScreenShareEncoding> & {
   scaleResolutionDownBy?: number;
 };
 
+type FallbackScreenShareEncoding = Omit<ScreenShareEncoding, "scalabilityMode">;
+
 type ScreenShareCap = WebcamEncodingCap & {
   idealWidth: number;
   idealHeight: number;
@@ -859,6 +868,67 @@ export function buildScreenShareEncodingForNetworkProfile(
     maxFramerate: Math.min(base.maxFramerate, cap.maxFramerate),
     scaleResolutionDownBy,
   };
+}
+
+const withoutScreenShareScalabilityMode = (
+  encoding: ScreenShareEncoding,
+): FallbackScreenShareEncoding => {
+  const { scalabilityMode: _scalabilityMode, ...fallbackEncoding } = encoding;
+  return fallbackEncoding;
+};
+
+export async function produceScreenShareTrack({
+  transport,
+  track,
+  networkProfile,
+  preferredCodec,
+}: ProduceScreenShareTrackOptions): Promise<Producer> {
+  const encoding = buildScreenShareEncodingForNetworkProfile(
+    networkProfile,
+    track,
+  );
+  const buildOptions = (
+    nextEncoding: ScreenShareEncoding | FallbackScreenShareEncoding,
+    codec: RtpCodecCapability | undefined,
+  ) => ({
+    track,
+    encodings: [nextEncoding],
+    stopTracks: false,
+    ...(codec ? { codec } : {}),
+    appData: { type: "screen" as ProducerType },
+  });
+
+  try {
+    return await transport.produce(buildOptions(encoding, preferredCodec));
+  } catch (primaryError) {
+    if (!preferredCodec) {
+      console.warn(
+        "[Meets] Screen-share temporal scalability produce failed, retrying without scalability mode:",
+        primaryError,
+      );
+      return transport.produce(
+        buildOptions(withoutScreenShareScalabilityMode(encoding), undefined),
+      );
+    }
+
+    console.warn(
+      "[Meets] Preferred screen-share codec failed, retrying router default codec:",
+      primaryError,
+    );
+  }
+
+  try {
+    return await transport.produce(buildOptions(encoding, undefined));
+  } catch (defaultCodecError) {
+    console.warn(
+      "[Meets] Screen-share temporal scalability produce failed on router default codec, retrying without scalability mode:",
+      defaultCodecError,
+    );
+  }
+
+  return transport.produce(
+    buildOptions(withoutScreenShareScalabilityMode(encoding), undefined),
+  );
 }
 
 export async function produceWebcamTrack({

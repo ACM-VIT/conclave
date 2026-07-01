@@ -70,9 +70,9 @@ import {
   applyAudioProducerNetworkProfile,
   applyScreenShareProducerNetworkProfile,
   applyScreenShareTrackNetworkProfile,
-  buildScreenShareEncodingForNetworkProfile,
   getPreferredScreenShareCodec,
   getPreferredWebcamCodec,
+  produceScreenShareTrack,
   produceWebcamTrack,
   type WebcamProducerNetworkProfile,
 } from "../lib/webcam-codec";
@@ -1216,17 +1216,11 @@ export function useMeetSocket({
       const preferredScreenShareCodec = getPreferredScreenShareCodec(
         deviceRef.current,
       );
-      const producer = await transport.produce({
+      const producer = await produceScreenShareTrack({
+        transport,
         track: videoTrack,
-        encodings: [
-          buildScreenShareEncodingForNetworkProfile(
-            screenNetworkProfile,
-            videoTrack,
-          ),
-        ],
-        stopTracks: false,
-        ...(preferredScreenShareCodec ? { codec: preferredScreenShareCodec } : {}),
-        appData: { type: "screen" as ProducerType },
+        networkProfile: screenNetworkProfile,
+        preferredCodec: preferredScreenShareCodec,
       });
 
       screenProducerRef.current = producer;
