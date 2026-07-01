@@ -17,13 +17,16 @@ unrevealed answers) possible. A CRDT cannot hide anything from anyone.
 | File | Role |
 | --- | --- |
 | `types.ts` | `GameModule` contract, wire payloads, `GameMoveError` |
-| `validation.ts` | reusable move validators for common server-authoritative rules |
+| `validation.ts` | reusable move decoders/validators (`payloadField`, `requireInt`, `requireString`, `requireOneOf`, `requirePlayerTarget`) |
+| `config.ts` | option schema defaults + `normalizeConfig` for untrusted host config |
 | `rng.ts` | seeded PRNG (server-only randomness for shuffles/deals) |
+| `roundLoop.ts` | shared round/phase driver + `allActivePlayersActed` liveness gate (advance early against connected players, never frozen seats) |
 | `aiContent.ts` | optional Workers AI generated prompt primitive |
 | `engine.ts` | `GameSession` owns authoritative state, applies moves, projects views |
 | `registry.ts` | maps `gameId` to module |
-| `modules/*.ts` | the games themselves (pure reducers) |
-| `../socket/handlers/gameHandlers.ts` | socket wiring: validation, broadcast loop, per-player emit |
+| `modules/*.ts` | the games themselves (pure reducers) with exported typed move unions |
+| `../socket/handlers/gameHandlers.ts` | socket wiring: validation, broadcast loop, per-player emit, game votes, PostHog lifecycle analytics |
+| `../analytics/posthog.ts` | opt-in server-side product analytics (enabled only when `SFU_POSTHOG_KEY` is set) |
 
 The session/tick timer is owned by `Room` (`room.gameSession`, `room.gameTickTimer`)
 and torn down in `Room.close()` via `clearGame()`.
@@ -32,15 +35,21 @@ and torn down in `Room.close()` via `clearGame()`.
 
 | Event | Dir | Ack | Purpose |
 | --- | --- | --- | --- |
-| `game:list` | c->s | yes | available games catalog |
-| `game:start` | c->s | yes | admin starts a game (snapshots current participants as players) |
-| `game:move` | c->s | yes | a player submits a validated move |
+| `game:list` | c->s | yes | available games catalog (options, player bounds, leaderboard flag) |
+| `game:start` | c->s | yes | admin starts a game with validated config (snapshots current participants as players); replaces a finished session, which is the rematch path |
+| `game:move` | c->s | yes | a player submits a move, decoded against the module's typed move union |
 | `game:end` | c->s | yes | admin ends the game |
-| `game:getState` | c->s | yes | public state + your private view (reconnect/late join) |
-| `game:state` | s->room | no | public projection on every change |
+| `game:getState` | c->s | yes | public state + your private view + active vote + `selfId` (reconnect/late join) |
+| `game:state` | s->room | no | public projection on every change (includes host `config` for rematch) |
 | `game:view` | s->player | no | **private** projection (hidden-info boundary) |
-| `game:snapshot` | s->client | no | targeted join/reconnect snapshot: active game, private view, and vote |
+| `game:snapshot` | s->client | no | targeted join/reconnect snapshot: active game, private view, vote, and `selfId` |
 | `game:ended` | s->room | no | game cleared |
+| `game:vote:open` | c->s | yes | host opens a vote on which game to play |
+| `game:vote:cast` | c->s | yes | player votes for a candidate game |
+| `game:vote:cancel` | c->s | yes | host cancels the vote |
+| `game:vote` | s->room | no | live vote state |
+
+`selfId` is the caller's canonical player id. Clients must match themselves against it instead of rebuilding identity locally (email casing and session ids are normalized server-side).
 
 ## Adding a game
 
@@ -71,16 +80,36 @@ Full contributor guide: `packages/apps-sdk/docs/guides/add-a-game.md`.
 
 ## Current games
 
-- `trivia`: Kahoot/Deezer-style timed quiz; speed-weighted scoring.
+- `trivia`: Kahoot/Deezer-style timed quiz; speed-weighted scoring; projects
+  per-player tile status (answered, correct, points) for the video-tile overlay.
 - `bluff`: Fibbage-style fake-answer game.
 - `would-you-rather`: room split prompts with no wrong answer.
-- `most-likely-to`: player-target voting prompts.
+- `most-likely-to`: player-target voting prompts; tiles are tappable ballots.
 - `reaction`: server-timed reflex game.
 - `imposter`: Spyfall-style social deduction; exercises the hidden-info path
-  (imposter and crew receive different `playerView`s).
+  (imposter and crew receive different `playerView`s); tiles are tappable
+  ballots during the accusation vote.
+- `wordle`: turn-based word game with a setter/guesser split.
 
 Trivia, Bluff, Would You Rather, Most Likely To, and Imposter can generate fresh
 content from the host's topic input when Workers AI is configured.
+
+## Beyond the dock
+
+Games are not limited to the docked panel. The web client binds game state to
+the participant video tiles (rank chips, locked-in checks, correct washes,
+winner crowns, eliminated scrims, tap-to-vote). The contract lives in the apps
+SDK; see `packages/apps-sdk/docs/reference/tile-adornments.md`. Server modules
+participate by exposing non-secret per-player facts in `publicView` (see
+trivia's `tiles` map for the pattern).
+
+## Analytics
+
+When `SFU_POSTHOG_KEY` is set, `gameHandlers.ts` captures a server-side
+lifecycle event per transition (`game_started`, `game_finished`, `game_ended`,
+and the vote events), grouped by room, with a per-play instance id. No player
+names or user content are ever sent; the free-text topic reduces to a
+`has_topic` boolean. With no key set, nothing is constructed or sent.
 
 ## Workers AI content
 
@@ -121,8 +150,13 @@ SFU_GAME_AI_CLOUDFLARE_ACCOUNT_ID=... pnpm -C packages/sfu run test:game-ai
 
 ## Known gaps / next
 
-- Players are snapshotted at start; mid-game disconnects leave a stale seat
-  (public view still lists them; their private view simply stops being sent).
+- Seats are still snapshotted at start: a disconnected player keeps their seat,
+  score, and results-board row, and a late joiner can only watch. Round
+  progression no longer stalls on absentees (liveness gates run against
+  `ctx.activePlayers` via `allActivePlayersActed`), but there is no "join next
+  round" path yet.
 - One game per room at a time (mirrors the single-`activeAppId` apps model).
-- Next archetype work: bind game seats to participant **video tiles** (badges,
-  turn rings, eliminated-tile dimming) and drive phase-based mute/spotlight.
+- Authoritative state lives only in memory; an SFU restart kills a live game
+  with no recovery snapshot.
+- Tile binding is visual and vote-input only so far; phase-based mute and
+  spotlight driving is still open.

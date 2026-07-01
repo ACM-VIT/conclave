@@ -197,6 +197,13 @@ export type GameStateResponse = {
   public?: GamePublicState;
   view?: unknown;
   vote?: GameVoteState | null;
+  /**
+   * The caller's canonical player id, as the server knows it. Clients must use
+   * this (never a locally rebuilt identity) to find themselves in `players`,
+   * scoreboards, and tile state, since the server may normalize or reassign
+   * parts of the identity (lowercased email, token session id).
+   */
+  selfId?: string;
 };
 
 /* ---- Game vote (host puts game choice to the room) ---- */

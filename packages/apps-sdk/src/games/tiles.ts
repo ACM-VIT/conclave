@@ -43,6 +43,10 @@ export type PlayerTileState = {
   eliminated?: boolean;
   /** Current turn or spotlight. */
   active?: boolean;
+  /** The local viewer's current pick (their live vote target), shown as a ring. */
+  selected?: boolean;
+  /** Won the round or the game, the reveal beat (crowned, accent washed). */
+  winner?: boolean;
   /** 1-based leaderboard position. */
   rank?: number;
   /** Very short label, e.g. "+950" or "Too soon". */
@@ -69,16 +73,38 @@ export type TileAdornment = {
 };
 
 /**
- * A flat green for the correct outcome. Fixed rather than themed so a right
- * answer always reads as positive, independent of the game accent.
+ * The fixed palette for tile tones. Positive and negative are fixed rather
+ * than themed so a right answer always reads green and an out state always
+ * reads warm red, independent of the game accent. Renderers must use
+ * {@link resolveTileToneColor} instead of hardcoding these.
  */
-const POSITIVE_COLOR = "#2FA96B";
-/** A restrained dark wash for a wrong outcome. We do not punish harshly. */
-const NEGATIVE_FILL_COLOR = "#000000";
+export const TILE_COLORS = {
+  positive: "#22A578",
+  negative: "#E85046",
+  neutralText: "#fafafa",
+} as const;
 
-const CORRECT_FILL_OPACITY = 0.42;
-const WRONG_FILL_OPACITY = 0.4;
-const ACTED_FILL_OPACITY = 0.22;
+/** Resolve a semantic tone to its concrete colour for the given game accent. */
+export function resolveTileToneColor(tone: TileTone, accent: string): string {
+  switch (tone) {
+    case "accent":
+      return accent;
+    case "positive":
+      return TILE_COLORS.positive;
+    case "negative":
+      return TILE_COLORS.negative;
+    default:
+      return TILE_COLORS.neutralText;
+  }
+}
+
+/**
+ * Fill opacities are deliberately low. A tile is live video of a person; a
+ * wash is a hint layered over their face, never a paint job. Anything above
+ * roughly 0.25 starts to read as a broken camera filter.
+ */
+const CORRECT_FILL_OPACITY = 0.18;
+const WINNER_FILL_OPACITY = 0.24;
 
 /**
  * Pure default mapping from semantic state to visual primitives, themed by the
@@ -87,9 +113,9 @@ const ACTED_FILL_OPACITY = 0.22;
  *
  * Composition, so the tile never gets noisy: at most one `fill`, one `mark`,
  * one `badge`, plus optional `ring` and `dim`. Precedence for the full-tile
- * fill and the primary mark is `eliminated` > `outcome` > `acted`. Rank always
- * contributes its badge unless the player is eliminated, so a leader who just
- * answered still keeps the "#1" chip.
+ * fill and the primary mark is `eliminated` > `winner` > `outcome` > `acted`.
+ * Rank always contributes its badge unless the player is eliminated, so a
+ * leader who just answered still keeps the "#1" chip.
  *
  * @param state the game's semantic read of this tile, or null for none
  * @param accent the game accent colour (used for the accent tone)
@@ -109,23 +135,39 @@ export function resolveTileAdornment(
     adornment.dim = true;
     adornment.mark = { icon: "skull", tone: "negative", emphasis: "corner" };
     if (state.note) adornment.badge = { text: state.note, tone: "negative" };
+  } else if (state.winner) {
+    // The reveal beat: a soft accent wash, a matching ring, and a crown.
+    adornment.fill = { color: accent, opacity: WINNER_FILL_OPACITY };
+    adornment.ring = { color: accent };
+    adornment.mark = { icon: "crown", tone: "accent", emphasis: "center" };
+    if (state.note) adornment.badge = { text: state.note, tone: "accent" };
   } else if (state.outcome === "correct") {
-    adornment.fill = { color: POSITIVE_COLOR, opacity: CORRECT_FILL_OPACITY };
+    adornment.fill = {
+      color: TILE_COLORS.positive,
+      opacity: CORRECT_FILL_OPACITY,
+    };
+    adornment.ring = { color: TILE_COLORS.positive };
     adornment.mark = { icon: "check", tone: "positive", emphasis: "center" };
     if (state.note) adornment.badge = { text: state.note, tone: "positive" };
   } else if (state.outcome === "wrong") {
-    adornment.fill = { color: NEGATIVE_FILL_COLOR, opacity: WRONG_FILL_OPACITY };
+    // A wrong answer gets a quiet corner cross and nothing else. Washing or
+    // dimming somebody's face over a missed trivia question punishes too hard.
     adornment.mark = { icon: "cross", tone: "neutral", emphasis: "corner" };
   } else if (state.acted) {
-    // The "locked in" look during a collect phase. Deliberately lighter than
-    // the correct state and accent-tinted, so it reveals that the player acted
-    // without hinting whether they were right.
-    adornment.fill = { color: accent, opacity: ACTED_FILL_OPACITY };
+    // Locked in during a collect phase: a small accent check, no wash. It
+    // reveals that the player acted without hinting whether they were right.
     adornment.mark = { icon: "check", tone: "accent", emphasis: "corner" };
   }
 
-  // The current-turn ring composes on top of any of the above.
-  if (state.active) {
+  // A short note with no branch of its own still earns a quiet neutral badge,
+  // e.g. live vote counts on a tile during a vote phase.
+  if (!adornment.badge && state.note) {
+    adornment.badge = { text: state.note, tone: "neutral" };
+  }
+
+  // The current-turn and selection rings compose on top of any of the above,
+  // but never displace an outcome ring already claimed by a stronger state.
+  if (!adornment.ring && (state.active || state.selected)) {
     adornment.ring = { color: accent };
   }
 
@@ -135,11 +177,12 @@ export function resolveTileAdornment(
   if (!state.eliminated && typeof state.rank === "number" && state.rank >= 1) {
     const isLeader = state.rank === 1;
     if (isLeader) {
-      // The crown only claims the corner if nothing already sits there.
+      // The crown only claims the corner if nothing already sits there, and
+      // the "#1" chip never displaces a richer badge like a "+950" reveal note.
       if (!adornment.mark || adornment.mark.emphasis === "center") {
         adornment.mark = { icon: "crown", tone: "accent", emphasis: "corner" };
       }
-      adornment.badge = { text: "#1", tone: "accent" };
+      if (!adornment.badge) adornment.badge = { text: "#1", tone: "accent" };
     } else if (!adornment.badge) {
       adornment.badge = { text: `#${state.rank}`, tone: "neutral" };
     }
@@ -164,17 +207,47 @@ export function resolveTileAdornment(
  *
  * @param args.gameId the active game id
  * @param args.publicView the game's room-wide public view payload
+ * @param args.privateView the local viewer's private view, for self treatments
+ *   such as marking the tile they voted for; never contains other players'
+ *   secrets by construction
  * @param args.playerId the id of the tile being adorned
  * @param args.viewerId the local viewer's id, for private or self treatments
  */
-export type TileStateResolver = (args: {
+export type TileResolverArgs = {
   gameId: string;
   publicView: unknown;
+  privateView?: unknown;
   playerId: string;
   viewerId: string | null;
-}) => PlayerTileState | null;
+};
+
+export type TileStateResolver = (args: TileResolverArgs) => PlayerTileState | null;
+
+/**
+ * An interactive affordance on a tile: while present, tapping the tile sends
+ * this move. This is how the video grid becomes the controller, e.g. tap a
+ * face to vote in imposter or most likely to. The renderer draws the hover
+ * affordance and dispatches through the game-agnostic `move(type, payload)`.
+ */
+export type TileAction = {
+  /** The move type to send, e.g. "vote". */
+  type: string;
+  /** The move payload, e.g. { target: playerId }. */
+  payload?: unknown;
+  /** Short sentence-case verb shown on hover, e.g. "Vote". */
+  label: string;
+};
+
+/**
+ * How a game decides whether a tile is currently tappable for the viewer.
+ * Return null when the tile is not a valid target (wrong phase, self target
+ * where the game forbids it, viewer not seated). The renderer additionally
+ * gates on read-only mode and game membership.
+ */
+export type TileActionResolver = (args: TileResolverArgs) => TileAction | null;
 
 const tileResolvers = new Map<string, TileStateResolver>();
+const tileActionResolvers = new Map<string, TileActionResolver>();
 
 /**
  * Register how a game maps its views to tile state. A later registration for
@@ -190,4 +263,20 @@ export function registerTileResolver(
 /** Look up the tile resolver a game registered, if any. */
 export function getTileResolver(gameId: string): TileStateResolver | undefined {
   return tileResolvers.get(gameId);
+}
+
+/**
+ * Register how a game turns a tile into a live control for the viewer. A later
+ * registration for the same id replaces the earlier one.
+ */
+export function registerTileAction(
+  gameId: string,
+  resolver: TileActionResolver,
+): void {
+  tileActionResolvers.set(gameId, resolver);
+}
+
+/** Look up the tile action resolver a game registered, if any. */
+export function getTileAction(gameId: string): TileActionResolver | undefined {
+  return tileActionResolvers.get(gameId);
 }

@@ -377,7 +377,7 @@ export default function WordleGame({
         <p style={{ fontSize: 13, color: color.textMuted, textAlign: "center", margin: "0 0 16px" }}>
           The word was{" "}
           <span style={{ color: color.text, fontFamily: HEAD_FONT, fontWeight: 600, letterSpacing: "0.12em" }}>
-            {pub.result.targetWord ?? "—"}
+            {pub.result.targetWord ?? "?"}
           </span>
         </p>
 

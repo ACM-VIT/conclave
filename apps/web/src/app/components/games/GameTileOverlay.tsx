@@ -1,29 +1,35 @@
 "use client";
 
+import { useState } from "react";
 import { Check, Clock, Crown, Skull, X, Zap } from "lucide-react";
 import {
+  getTileAction,
   getTileResolver,
   resolveTileAdornment,
+  resolveTileToneColor,
   useGame,
   type PlayerTileState,
   type TileMarkIcon,
-  type TileTone,
 } from "@conclave/apps-sdk";
 import { accentFor } from "./covers";
 import "./tileResolvers";
 
 /**
- * Game adornments drawn on a participant video tile, so the video grid doubles
- * as the game board. This is a read-only consumer: it reads the game's public
- * view into a semantic PlayerTileState (via the game's registered resolver plus
- * a universal leaderboard rank), maps that to visual primitives through the SDK,
- * and draws them. Outside a game, or for a non-player, it renders nothing.
+ * Game adornments and controls drawn on a participant video tile, so the video
+ * grid doubles as the game board. It reads the game's views into a semantic
+ * PlayerTileState (via the game's registered resolver plus a universal
+ * leaderboard rank), maps that to visual primitives through the SDK, and draws
+ * them. When the game registers a tile action (tap a face to vote), the tile
+ * becomes the controller. Outside a game, or for a non-player, it renders
+ * nothing.
  *
  * ID MAPPING: a web participant.userId and a game player.id are the same
- * server-produced identity string (baseId#sessionId, lowercased). Tiles that
- * render this overlay are always remote peers whose userId comes straight from
- * the SFU snapshot, so exact equality is correct. Any unmatched id renders
- * nothing (fail safe) rather than guessing.
+ * server-produced identity string (baseId#sessionId, lowercased). Remote tiles
+ * pass the participant's userId straight from the SFU snapshot. The local self
+ * tile omits the prop and the overlay falls back to useGame().userId, which is
+ * the SERVER-CANONICAL selfId carried on game snapshots (never an id rebuilt
+ * client-side, which can drift on email casing or session id). Any unmatched
+ * id renders nothing (fail safe) rather than guessing.
  */
 const matchesPlayer = (userId: string, playerId: string): boolean =>
   userId === playerId;
@@ -66,24 +72,9 @@ const MARK_ICON: Record<TileMarkIcon, typeof Check> = {
   skull: Skull,
 };
 
-const POSITIVE_COLOR = "#2FA96B";
-const NEGATIVE_COLOR = "#E0603A";
-
-function toneColor(tone: TileTone, accent: string): string {
-  switch (tone) {
-    case "accent":
-      return accent;
-    case "positive":
-      return POSITIVE_COLOR;
-    case "negative":
-      return NEGATIVE_COLOR;
-    default:
-      return "#fafafa";
-  }
-}
-
 interface GameTileOverlayProps {
-  userId: string;
+  /** The tile's participant id. Omit on the local self tile to use the viewer's id. */
+  userId?: string;
   compact?: boolean;
 }
 
@@ -91,44 +82,68 @@ export default function GameTileOverlay({
   userId,
   compact = false,
 }: GameTileOverlayProps) {
-  const { publicState, userId: viewerId } = useGame();
+  const {
+    publicState,
+    view: privateView,
+    userId: viewerId,
+    isReadOnly,
+    move,
+  } = useGame();
+  const [hovered, setHovered] = useState(false);
+  const [busy, setBusy] = useState(false);
 
   if (!publicState) return null;
+  const tileUserId = userId ?? viewerId ?? null;
+  if (!tileUserId) return null;
+
+  // Only players in the active game get any treatment. Unknown or unmatched
+  // ids render nothing (fail safe) rather than a blank-or-wrong badge.
   const isPlayer = publicState.players.some((player) =>
-    matchesPlayer(userId, player.id),
+    matchesPlayer(tileUserId, player.id),
   );
   if (!isPlayer) return null;
+  const viewerIsPlayer = Boolean(
+    viewerId &&
+      publicState.players.some((player) => matchesPlayer(viewerId, player.id)),
+  );
 
   const accent = accentFor(publicState.gameId);
+  const resolverArgs = {
+    gameId: publicState.gameId,
+    publicView: publicState.view,
+    privateView,
+    playerId: tileUserId,
+    viewerId,
+  };
 
   // Game-specific semantic state from the registered resolver, plus a universal
   // leaderboard rank merged on top.
-  const resolver = getTileResolver(publicState.gameId);
-  const resolved = resolver
-    ? resolver({
-        gameId: publicState.gameId,
-        publicView: publicState.view,
-        playerId: userId,
-        viewerId,
-      })
-    : null;
+  const resolved = getTileResolver(publicState.gameId)?.(resolverArgs) ?? null;
   const rank =
     publicState.hasLeaderboard && publicState.phase !== "lobby"
-      ? rankFromScoreboard(publicState.view, userId)
+      ? rankFromScoreboard(publicState.view, tileUserId)
       : undefined;
 
   const state: PlayerTileState = { ...(resolved ?? {}) };
   if (rank !== undefined) state.rank = rank;
-  if (Object.keys(state).length === 0) return null;
+  const adornment =
+    Object.keys(state).length > 0 ? resolveTileAdornment(state, accent) : null;
 
-  const adornment = resolveTileAdornment(state, accent);
-  if (!adornment) return null;
+  // The interactive layer: while the game says this tile is a valid target for
+  // the viewer, tapping it sends the move (tap a face to vote). Read-only
+  // viewers and non-players never get it.
+  const action =
+    !isReadOnly && viewerIsPlayer && !publicState.finished
+      ? (getTileAction(publicState.gameId)?.(resolverArgs) ?? null)
+      : null;
+
+  if (!adornment && !action) return null;
 
   const centerMark =
-    adornment.mark && adornment.mark.emphasis === "center" ? adornment.mark : null;
+    adornment?.mark && adornment.mark.emphasis === "center" ? adornment.mark : null;
   const cornerMark =
-    adornment.mark && adornment.mark.emphasis !== "center" ? adornment.mark : null;
-  const badge = adornment.badge;
+    adornment?.mark && adornment.mark.emphasis !== "center" ? adornment.mark : null;
+  const badge = adornment?.badge;
 
   const CenterIcon = centerMark ? MARK_ICON[centerMark.icon] : null;
   const CornerIcon = cornerMark ? MARK_ICON[cornerMark.icon] : null;
@@ -142,11 +157,24 @@ export default function GameTileOverlay({
   const badgeTextColor =
     !badge || chipIsAccent || badge.tone === "neutral"
       ? undefined
-      : toneColor(badge.tone, accent);
+      : resolveTileToneColor(badge.tone, accent);
+
+  const tileName =
+    publicState.players.find((player) => matchesPlayer(tileUserId, player.id))
+      ?.name ?? "player";
+
+  const handleAction = () => {
+    if (!action || busy) return;
+    setBusy(true);
+    void move(action.type, action.payload).finally(() => setBusy(false));
+  };
 
   return (
-    <div className="pointer-events-none absolute inset-0 z-[1]">
-      {adornment.fill ? (
+    // rounded-[inherit] here is load bearing: children inherit their radius
+    // from THIS element, so without it every ring and wash renders with square
+    // corners inside the tile's rounded frame.
+    <div className="pointer-events-none absolute inset-0 z-[1] rounded-[inherit]">
+      {adornment?.fill ? (
         <div
           className="absolute inset-0 rounded-[inherit]"
           style={{
@@ -155,10 +183,10 @@ export default function GameTileOverlay({
           }}
         />
       ) : null}
-      {adornment.dim ? (
+      {adornment?.dim ? (
         <div className="absolute inset-0 rounded-[inherit] bg-black/45" />
       ) : null}
-      {adornment.ring ? (
+      {adornment?.ring ? (
         <div
           className="absolute inset-0 rounded-[inherit]"
           style={{ boxShadow: `inset 0 0 0 2px ${adornment.ring.color}` }}
@@ -171,7 +199,7 @@ export default function GameTileOverlay({
             className={`flex items-center justify-center rounded-full ${
               compact ? "h-9 w-9" : "h-12 w-12"
             }`}
-            style={{ backgroundColor: toneColor(centerMark.tone, accent) }}
+            style={{ backgroundColor: resolveTileToneColor(centerMark.tone, accent) }}
           >
             <CenterIcon
               className={compact ? "h-5 w-5" : "h-6 w-6"}
@@ -196,7 +224,7 @@ export default function GameTileOverlay({
           {CornerIcon && cornerMark ? (
             <CornerIcon
               className={compact ? "h-3 w-3" : "h-3.5 w-3.5"}
-              color={chipIsAccent ? "#fff" : toneColor(cornerMark.tone, accent)}
+              color={chipIsAccent ? "#fff" : resolveTileToneColor(cornerMark.tone, accent)}
               aria-hidden
             />
           ) : null}
@@ -206,6 +234,40 @@ export default function GameTileOverlay({
             </span>
           ) : null}
         </div>
+      ) : null}
+
+      {action ? (
+        <button
+          type="button"
+          disabled={busy}
+          aria-label={`${action.label} ${tileName}`}
+          onPointerEnter={() => setHovered(true)}
+          onPointerLeave={() => setHovered(false)}
+          onClick={(event) => {
+            event.stopPropagation();
+            handleAction();
+          }}
+          className="pointer-events-auto absolute inset-0 cursor-pointer rounded-[inherit] border-0 bg-transparent p-0"
+        >
+          {hovered && !busy ? (
+            <>
+              <span
+                className="absolute inset-0 rounded-[inherit]"
+                style={{ boxShadow: `inset 0 0 0 2px ${accent}` }}
+              />
+              <span className="absolute inset-0 flex items-center justify-center">
+                <span
+                  className={`rounded-full font-medium text-white ${
+                    compact ? "px-2.5 py-1 text-[11px]" : "px-3 py-1 text-xs"
+                  }`}
+                  style={{ backgroundColor: accent }}
+                >
+                  {action.label}
+                </span>
+              </span>
+            </>
+          ) : null}
+        </button>
       ) : null}
     </div>
   );

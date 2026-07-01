@@ -1,7 +1,7 @@
 /**
  * Client-side mirror of the SFU game wire contract. The server is authoritative;
  * the client only ever holds projections it was sent. View payloads are typed
- * per game in the renderer that consumes them — here they stay `unknown`.
+ * per game in the renderer that consumes them; here they stay `unknown`.
  */
 
 export type GamePlayer = {

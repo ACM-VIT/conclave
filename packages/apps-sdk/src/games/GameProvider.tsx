@@ -78,9 +78,14 @@ export function GameProvider({
   const [publicState, setPublicState] = useState<GamePublicState | null>(null);
   const [view, setView] = useState<unknown>(null);
   const [vote, setVote] = useState<GameVote | null>(null);
+  const [selfId, setSelfId] = useState<string | null>(null);
   const activeGameIdRef = useRef<string | null>(null);
 
-  const userId = user?.id ?? null;
+  // Prefer the server's canonical id for this socket over the host-provided
+  // user id. The server may normalize identity (lowercased email, token
+  // session id), so a locally rebuilt id can silently fail to match the ids
+  // in players lists, scoreboards, and tile state.
+  const userId = selfId ?? user?.id ?? null;
 
   const applySnapshot = useCallback((state: unknown) => {
     if (!state || typeof state !== "object") return;
@@ -89,7 +94,11 @@ export function GameProvider({
       public?: unknown;
       view?: unknown;
       vote?: unknown;
+      selfId?: unknown;
     };
+    if (typeof record.selfId === "string" && record.selfId) {
+      setSelfId(record.selfId);
+    }
     if (record.active && isPublicState(record.public)) {
       activeGameIdRef.current = record.public.gameId;
       setPublicState(record.public);
@@ -119,6 +128,7 @@ export function GameProvider({
       setPublicState(null);
       setView(null);
       setVote(null);
+      setSelfId(null);
       activeGameIdRef.current = null;
       return;
     }

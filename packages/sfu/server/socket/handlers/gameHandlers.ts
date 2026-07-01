@@ -43,7 +43,7 @@ const normalizeGameId = (value: unknown): string | null => {
 };
 
 /* -------------------------------------------------------------------------- */
-/* Product analytics (PostHog) — server-authoritative game lifecycle.         */
+/* Product analytics (PostHog): server-authoritative game lifecycle.          */
 /*                                                                            */
 /* The SFU owns canonical game state, so it observes each lifecycle           */
 /* transition exactly once (no per-participant double-count, no host-gating   */
@@ -53,7 +53,7 @@ const normalizeGameId = (value: unknown): string | null => {
 /* associated with the meeting/room group (key = room.channelId).             */
 /*                                                                            */
 /* STRICT no-PII: only opaque ids, counts, booleans, durations, phase labels, */
-/* and numeric/enum config are sent — never names, chat, the AI topic, the    */
+/* and numeric/enum config are sent, never names, chat, the AI topic, the     */
 /* imposter word, emails, or any free text. The free-text `topic` option is   */
 /* reduced to a `has_topic` boolean.                                          */
 /* -------------------------------------------------------------------------- */
@@ -103,7 +103,7 @@ const buildConfigProps = (
     if (opt.type === "number") {
       if (typeof value === "number") props[`config_${opt.id}`] = value;
     } else if (opt.type === "select") {
-      // Enum choice — a bounded, non-free-text label. Safe to send.
+      // Enum choice: a bounded, non-free-text label. Safe to send.
       if (typeof value === "string") props[`config_${opt.id}`] = value;
     } else if (opt.id === TEXT_TOPIC_OPTION_ID) {
       props.has_topic = typeof value === "string" && value.trim().length > 0;
@@ -226,14 +226,17 @@ export const buildGameStateResponse = (
   room: Room | null | undefined,
   playerId: string | null | undefined,
 ): GameStateResponse => {
+  // The caller's canonical id rides every snapshot so clients never have to
+  // rebuild identity locally (which drifts: lowercased email, token session).
+  const selfId = playerId || undefined;
   if (!room) {
-    return { active: false, vote: null };
+    return { active: false, vote: null, selfId };
   }
 
   const session = syncGameSessionRoomMembership(room);
   const vote = buildVoteState(room);
   if (!session) {
-    return { active: false, vote };
+    return { active: false, vote, selfId };
   }
 
   const now = Date.now();
@@ -241,6 +244,7 @@ export const buildGameStateResponse = (
     active: true,
     public: session.getPublicState(now),
     vote,
+    selfId,
   };
   if (playerId && session.hasPlayer(playerId)) {
     response.view = session.getPlayerView(playerId, now);

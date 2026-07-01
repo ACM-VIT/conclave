@@ -37,7 +37,7 @@ export type CaptureGameEventArgs = {
   event: string;
   /** Most stable identifier for the acting participant (see gameHandlers). */
   distinctId: string;
-  /** The meeting/room identifier — `room.channelId`. Associates the event with
+  /** The meeting/room identifier, `room.channelId`. Associates the event with
    *  the `room` group so a whole play rolls up under one meeting. */
   roomKey: string;
   /** Non-PII event properties. */
@@ -59,7 +59,7 @@ let constructionAttempted = false;
 const getClient = (): PostHog | null => {
   if (!sfuConfig.analytics.enabled) return null;
   if (client) return client;
-  if (constructionAttempted) return client; // failed before — do not retry
+  if (constructionAttempted) return client; // failed before, do not retry
   constructionAttempted = true;
   try {
     client = new PostHog(sfuConfig.analytics.projectApiKey, {

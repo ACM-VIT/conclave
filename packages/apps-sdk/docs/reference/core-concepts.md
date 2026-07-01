@@ -20,6 +20,14 @@ Conclave supports two in-meeting extension shapes:
 - Games use the server-authoritative game runtime. The SFU owns rules, timers, scoring, and private player views. Use this for hidden roles, trivia answers, timed reactions, scoring, and any rule set that clients should not be able to forge.
 - Prompt-based games can opt into server-side generated content before the game starts. The host sends a normal config value such as a topic, and the SFU validates the generated object before it becomes game state.
 
+The game runtime also provides, out of the box:
+
+- Typed move contracts: each game exports a discriminated union of its legal moves, decoded and validated on the server, with `createTypedMove` giving renderers compile-time safety.
+- Tile adornments: games light up the participant video tiles (locked in, correct, eliminated, winner, rank) and can make tiles tappable during votes, so the grid doubles as the game board. See [Tile Adornments](./tile-adornments.md).
+- Host options and rematch: a game declares its settings schema, the host configures a run, and the chosen config rides the public state so the results screen can restart the same game with one action.
+- Game votes: the host can put the game choice to the room and start the winner.
+- Canonical identity: snapshots carry `selfId`, the server's id for you, so clients never rebuild identity locally.
+
 If you are adding a game, start with [Add a Game to Conclave](../guides/add-a-game.md).
 
 ## Runtime Layers

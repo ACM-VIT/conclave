@@ -47,6 +47,7 @@ import {
 import ParticipantAudio from "./ParticipantAudio";
 import ParticipantConnectionOverlay from "./ParticipantConnectionOverlay";
 import ParticipantVideo from "./ParticipantVideo";
+import GameTileOverlay from "./games/GameTileOverlay";
 import { Avatar } from "@conclave/ui-tokens/web";
 import {
   chooseStageMode,
@@ -4027,6 +4028,7 @@ const LocalVideoTile = memo(function LocalVideoTile({
           />
         ) : null}
       </div>
+      <GameTileOverlay compact={compact} />
     </div>
   );
 });
