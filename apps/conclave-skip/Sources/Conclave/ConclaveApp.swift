@@ -12,12 +12,27 @@ let logger: Logger = Logger(subsystem: "com.acmvit.conclave", category: "Conclav
 
 public struct ConclaveRootView: View {
     @State private var appState = AppState.shared
+    #if !SKIP
+    @Environment(\.scenePhase) private var scenePhase
+    #endif
 
     public init() {
     }
 
     public var body: some View {
         ContentView(appState: appState)
+            #if !SKIP
+            .onChange(of: scenePhase) { _, phase in
+                switch phase {
+                case .active:
+                    ConclaveAppDelegate.shared.onResume()
+                case .background:
+                    ConclaveAppDelegate.shared.onStop()
+                default:
+                    break
+                }
+            }
+            #endif
             #if !SKIP
             .onOpenURL { url in
                 _ = ConclaveAppDelegate.shared.onOpenURL(url)
@@ -97,6 +112,9 @@ public final class ConclaveAppDelegate: Sendable {
     }
 
     public func onStop() {
+        Task { @MainActor in
+            MeetingViewModel.shared.handleAppEnteredBackground()
+        }
     }
 
     public func onDestroy() {

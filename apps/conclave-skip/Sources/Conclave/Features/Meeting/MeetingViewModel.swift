@@ -452,6 +452,7 @@ final class MeetingViewModel {
     private var pendingIceRestartTasks: [String: Task<Void, Never>] = [:]
     private var participantConnectionStatusTasks: [String: Task<Void, Never>] = [:]
     private var remoteConsumerBandwidthPolicyTask: Task<Void, Never>?
+    private var appForegroundAllowsRemoteVideoReceive = true
     private var participantLeaveTokens: [String: UUID] = [:]
     private var departedParticipantUserIds: Set<String> = []
     private var pendingProducers: [String: ProducerInfo] = [:]
@@ -6070,6 +6071,9 @@ final class MeetingViewModel {
     }
 
     func handleAppBecameActive() {
+        let shouldRestoreRemoteVideo = !appForegroundAllowsRemoteVideoReceive
+        appForegroundAllowsRemoteVideoReceive = true
+
         switch state.connectionState {
         case .waiting:
             let context = currentSocketEventContext()
@@ -6077,6 +6081,9 @@ final class MeetingViewModel {
                 guard let self,
                       self.isCurrentSocketEvent(context) else { return }
                 await self.recoverActiveMeetingFromForeground()
+                if shouldRestoreRemoteVideo {
+                    await self.applyRemoteConsumerBandwidthPolicy()
+                }
             }
             return
         case .joined, .reconnecting:
@@ -6094,11 +6101,20 @@ final class MeetingViewModel {
             guard let self,
                   self.isCurrentSocketEvent(context) else { return }
             await self.recoverActiveMeetingFromForeground()
+            if shouldRestoreRemoteVideo {
+                await self.applyRemoteConsumerBandwidthPolicy()
+            }
             await self.reassertLocalAudioPublishingIfNeeded(
                 context: context,
                 confirmServerUnmuted: true
             )
         }
+    }
+
+    func handleAppEnteredBackground() {
+        guard appForegroundAllowsRemoteVideoReceive else { return }
+        appForegroundAllowsRemoteVideoReceive = false
+        scheduleRemoteConsumerBandwidthPolicyUpdate()
     }
 
     /// Tears the OS-level call presence down (left, kicked, host ended, error).
@@ -6275,6 +6291,7 @@ final class MeetingViewModel {
     private func handlePictureInPictureEntered() {
         let context = currentSocketEventContext()
         lastObservedPipMode = true
+        scheduleRemoteConsumerBandwidthPolicyUpdate()
         Task { @MainActor [weak self] in
             guard let self,
                   self.state.connectionState == .joined,
@@ -7130,8 +7147,16 @@ final class MeetingViewModel {
             focusedUserIds: remoteFocusedConsumerUserIds(),
             visibleUserIds: remoteVisibleConsumerUserIds(),
             connectionQuality: receiveConnectionQuality,
-            videoQuality: state.videoQuality
+            videoQuality: state.videoQuality,
+            receiveVideo: shouldReceiveRemoteVideoConsumers
         )
+    }
+
+    private var shouldReceiveRemoteVideoConsumers: Bool {
+        #if SKIP
+        if PipController.inPipMode { return true }
+        #endif
+        return appForegroundAllowsRemoteVideoReceive
     }
 
     // MARK: - Audio Device Routing

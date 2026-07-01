@@ -144,6 +144,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     private val remoteConsumerPreferenceScope = CoroutineScope(Dispatchers.Main.immediate + SupervisorJob())
     private val mainHandler = Handler(Looper.getMainLooper())
     private var remoteConsumerPreferenceRetryJob: Job? = null
+    private var remoteVideoReceiveEnabled = true
     private var serverRtpCapabilities: RtpCapabilities? = null
 
     companion object {
@@ -352,6 +353,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
                 visibleUserIds = visibleUserIds,
                 connectionQuality = connectionQuality,
                 videoQuality = videoQuality,
+                receiveVideo = remoteVideoReceiveEnabled,
             )
         }
     }
@@ -452,9 +454,12 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         visibleUserIds: skip.lib.Set<String>,
         connectionQuality: ConnectionQuality,
         videoQuality: VideoQuality,
+        receiveVideo: Boolean = true,
     ) {
+        remoteVideoReceiveEnabled = receiveVideo
         val socket = socketManager ?: return
 
+        val shouldReceiveVideo = receiveVideo
         val consumerSnapshot = consumers.toList()
         val emergencyKeepWebcamUserId: String? =
             if (connectionQuality == ConnectionQuality.emergency) {
@@ -477,6 +482,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
                 emergencyKeepWebcamUserId = emergencyKeepWebcamUserId,
                 connectionQuality = connectionQuality,
                 videoQuality = videoQuality,
+                receiveVideo = shouldReceiveVideo,
             ) ?: continue
             if (remoteConsumerPreferenceInFlightIds.contains(consumerId)) continue
 
@@ -595,6 +601,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         emergencyKeepWebcamUserId: String?,
         connectionQuality: ConnectionQuality,
         videoQuality: VideoQuality,
+        receiveVideo: Boolean,
     ): RemoteConsumerPreference? {
         if (info.kind == "audio") {
             return RemoteConsumerPreference(
@@ -606,6 +613,15 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         }
 
         if (info.kind != "video") return null
+
+        if (!receiveVideo) {
+            return RemoteConsumerPreference(
+                spatialLayer = 0,
+                temporalLayer = 0,
+                priority = 8,
+                paused = true,
+            )
+        }
 
         if (info.type == ProducerType.screen.rawValue) {
             val temporalLayer = when (connectionQuality) {

@@ -2823,6 +2823,21 @@ assertIncludes(
   "await webRTCClient.applyRemoteConsumerBandwidthPolicy(",
   "native remote consumer bandwidth policy application",
 );
+assertIncludes(
+  "nativeMeetingViewModel",
+  "receiveVideo: shouldReceiveRemoteVideoConsumers",
+  "native remote consumer policy receives app visibility gate",
+);
+assertRegex(
+  "nativeMeetingViewModel",
+  /func handleAppEnteredBackground\(\)[\s\S]*appForegroundAllowsRemoteVideoReceive = false[\s\S]*scheduleRemoteConsumerBandwidthPolicyUpdate\(\)/,
+  "native backgrounding reapplies remote consumer policy",
+);
+assertRegex(
+  "nativeMeetingViewModel",
+  /private var shouldReceiveRemoteVideoConsumers: Bool[\s\S]*PipController\.inPipMode[\s\S]*return true[\s\S]*return appForegroundAllowsRemoteVideoReceive/,
+  "native PiP keeps remote video receive enabled while backgrounded",
+);
 assertRegex(
   "nativeMeetingViewModel",
   /emergencyVideoDowngradeSeconds\s*:\s*TimeInterval\s*=\s*2\.5[\s\S]*goodVideoRestoreSeconds\s*:\s*TimeInterval\s*=\s*45/,
@@ -3205,8 +3220,8 @@ assertRegex(
   "SFU same-producer consumer replacement must respond before closing the displaced consumer",
 );
 
-// Native receive adaptation must keep audio crisp, preserve screen shares, and
-// pause extra webcam video only in emergency mode.
+// Native receive adaptation must keep audio crisp, preserve visible screen
+// shares, and park remote video while the app has no visible renderer.
 for (const [key, label] of [
   ["iosWebrtc", "iOS"],
   ["androidWebrtc", "Android"],
@@ -3215,6 +3230,16 @@ for (const [key, label] of [
     key,
     /kind == "audio"[\s\S]*priority\s*[:=]\s*255[\s\S]*paused\s*[:=]\s*false/,
     `${label} remote audio protected from adaptive pausing`,
+  );
+  assertIncludes(
+    key,
+    "remoteVideoReceiveEnabled",
+    `${label} tracks current remote video receive visibility`,
+  );
+  assertRegex(
+    key,
+    /(if !receiveVideo|if \(!receiveVideo\))[\s\S]*spatialLayer\s*[:=]\s*0[\s\S]*temporalLayer\s*[:=]\s*0[\s\S]*priority\s*[:=]\s*8[\s\S]*paused\s*[:=]\s*true[\s\S]*(type == ProducerType\.screen\.rawValue|info\.type == ProducerType\.screen\.rawValue)/,
+    `${label} background receive policy pauses screen-share video before visible-call screen-share handling`,
   );
   assertRegex(
     key,

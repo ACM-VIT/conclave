@@ -51,7 +51,8 @@ final class WebRTCClient {
         focusedUserIds: Set<String>,
         visibleUserIds: Set<String>,
         connectionQuality: ConnectionQuality,
-        videoQuality: VideoQuality
+        videoQuality: VideoQuality,
+        receiveVideo: Bool
     ) async { }
     func updateVideoQuality(_ quality: VideoQuality) { }
     func applyLocalBandwidthProfile(connectionQuality: ConnectionQuality) { }
