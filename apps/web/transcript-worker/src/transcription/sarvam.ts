@@ -185,7 +185,19 @@ export const buildSarvamAudioMessage = (audioBase64: string): string =>
   JSON.stringify({
     audio: {
       data: audioBase64,
-      sample_rate: SARVAM_SAMPLE_RATE_PARAM,
+      sample_rate: SARVAM_SAMPLE_RATE,
+      encoding: SARVAM_AUDIO_ENCODING,
+    },
+  });
+
+const buildSarvamFlushMessage = (): string => JSON.stringify({ type: "flush" });
+
+const buildSarvamEndOfStreamMessage = (): string =>
+  JSON.stringify({
+    type: "end_of_stream",
+    audio: {
+      data: "",
+      sample_rate: SARVAM_SAMPLE_RATE,
       encoding: SARVAM_AUDIO_ENCODING,
     },
   });
@@ -310,16 +322,21 @@ class SarvamTranscriptionSession implements LiveTranscriptionSession {
   }
 
   commitAudio(): void {
-    this.socket.send(JSON.stringify({ type: "flush" }));
+    // Sarvam is a continuous streaming STT socket. The room/SFU sends periodic
+    // commits for OpenAI's input buffer API; treating those as Sarvam flushes
+    // fragments speech before server-side VAD can finalize an utterance.
   }
 
   clearAudio(): void {
+    this.socket.send(buildSarvamFlushMessage());
     this.downsampler.reset();
   }
 
   close(): void {
     this.closed = true;
     try {
+      this.socket.send(buildSarvamFlushMessage());
+      this.socket.send(buildSarvamEndOfStreamMessage());
       this.socket.close();
     } catch {}
   }

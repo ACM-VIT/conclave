@@ -13,6 +13,7 @@ export interface TranscriptRelaySource {
 export interface TranscriptAudioRelayOptions {
   onAudioChunk: (audioBase64: string, speaker: TranscriptSpeaker) => void;
   onCommit: (speaker: TranscriptSpeaker) => void;
+  onClear: (speaker: TranscriptSpeaker) => void;
 }
 
 type ConnectedSource = {
@@ -24,6 +25,7 @@ type ConnectedSource = {
   speechUntil: number;
   lastChunkAt: number;
   lastCommitAt: number;
+  turnOpen: boolean;
   pendingChunks: Int16Array[];
   pendingSampleCount: number;
   flushResolvers: Array<() => void>;
@@ -216,6 +218,7 @@ export class TranscriptAudioRelay {
       speechUntil: 0,
       lastChunkAt: 0,
       lastCommitAt: 0,
+      turnOpen: false,
       pendingChunks: [],
       pendingSampleCount: 0,
       flushResolvers: [],
@@ -308,6 +311,7 @@ export class TranscriptAudioRelay {
     this.commitTimer = window.setInterval(() => {
       for (const connected of this.connectedSources.values()) {
         this.commitIfNeeded(connected);
+        this.clearEndedTurn(connected);
       }
     }, COMMIT_INTERVAL_MS);
   }
@@ -322,6 +326,23 @@ export class TranscriptAudioRelay {
   private async flushAndCommit(connected: ConnectedSource): Promise<void> {
     await this.flushProcessor(connected);
     this.commitIfNeeded(connected);
+    if (connected.turnOpen) {
+      this.options.onClear(connected.speaker);
+      connected.turnOpen = false;
+    }
+  }
+
+  private clearEndedTurn(connected: ConnectedSource): void {
+    if (
+      !connected.turnOpen ||
+      connected.speechUntil === 0 ||
+      Date.now() <= connected.speechUntil
+    ) {
+      return;
+    }
+    this.commitIfNeeded(connected);
+    this.options.onClear(connected.speaker);
+    connected.turnOpen = false;
   }
 
   private flushProcessor(connected: ConnectedSource): Promise<void> {
@@ -353,6 +374,7 @@ export class TranscriptAudioRelay {
     samples: Int16Array,
   ): void {
     if (samples.length === 0) return;
+    connected.turnOpen = true;
     connected.pendingChunks.push(samples);
     connected.pendingSampleCount += samples.length;
     if (connected.pendingSampleCount >= AUDIO_BATCH_TARGET_SAMPLES) {

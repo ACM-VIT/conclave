@@ -28,18 +28,17 @@ const segment = (
 });
 
 describe("transcript OpenAI request helpers", () => {
-  it("builds realtime transcription endpoint with intent and model", () => {
+  it("builds realtime transcription endpoint without a URL model parameter", () => {
     const endpoint = realtimeEndpoint(
       {
         OPENAI_REALTIME_URL: "wss://api.openai.com/v1/realtime",
       } as Partial<Env> as Env,
-      "gpt-realtime-whisper",
     );
     const url = new URL(endpoint);
 
     expect(url.protocol).toBe("https:");
     expect(url.searchParams.get("intent")).toBe("transcription");
-    expect(url.searchParams.get("model")).toBe("gpt-realtime-whisper");
+    expect(url.searchParams.has("model")).toBe(false);
   });
 
   it("sends delay only for gpt-realtime-whisper", () => {

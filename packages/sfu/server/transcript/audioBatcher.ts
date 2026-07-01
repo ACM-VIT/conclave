@@ -20,6 +20,7 @@ export class TranscriptAudioBatcher {
   private lastChunkAt = 0;
   private lastCommitAt = 0;
   private speechUntil = 0;
+  private turnOpen = false;
 
   constructor(
     private readonly options: {
@@ -34,6 +35,7 @@ export class TranscriptAudioBatcher {
 
   pushPcm(pcm: Buffer): boolean {
     if (pcm.length === 0 || !this.isSpeechPcm(pcm)) return false;
+    this.turnOpen = true;
     this.pendingChunks.push(pcm);
     this.pendingSampleCount += Math.floor(pcm.length / PCM16_BYTES_PER_SAMPLE);
     if (this.pendingSampleCount >= this.batchTargetSamples) {
@@ -51,10 +53,25 @@ export class TranscriptAudioBatcher {
 
   flushAndCommit(): boolean {
     const committed = this.commitIfNeeded();
-    if (committed) {
+    if (committed || this.turnOpen) {
       this.options.sink.clearAudio(this.options.speaker);
+      this.turnOpen = false;
     }
     return committed;
+  }
+
+  clearEndedTurn(): boolean {
+    if (
+      !this.turnOpen ||
+      this.speechUntil === 0 ||
+      this.now() <= this.speechUntil
+    ) {
+      return false;
+    }
+    this.commitIfNeeded();
+    this.options.sink.clearAudio(this.options.speaker);
+    this.turnOpen = false;
+    return true;
   }
 
   private flushQueuedAudio(): void {
