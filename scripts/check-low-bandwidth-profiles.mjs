@@ -1018,6 +1018,26 @@ assertRegex(
   /RESTART_ICE_ACK_TIMEOUT_MS[\s\S]*const iceRestartPromiseRef = useRef[\s\S]*Promise<boolean> \| null[\s\S]*const existingRestart = iceRestartPromiseRef\.current\[transportKind\];[\s\S]*if \(existingRestart\) return existingRestart;[\s\S]*window\.setTimeout\([\s\S]*restartIce acknowledgement timeout[\s\S]*socket\.emit\([\s\S]*"restartIce"[\s\S]*window\.clearTimeout\(timeoutId\)[\s\S]*iceRestartPromiseRef\.current\[transportKind\] = restartPromise;[\s\S]*return restartPromise;/,
   "web ICE restart recovery waits for in-flight restart result",
 );
+assertRegex(
+  "webMeetSocket",
+  /CRITICAL_SIGNALING_ACK_TIMEOUT_MS = 12000[\s\S]*JOIN_ROOM_ACK_TIMEOUT_MS = 15000[\s\S]*const startSocketAckTimeout =[\s\S]*`\$\{eventName\} acknowledgement timeout`/,
+  "web critical signaling ACKs have bounded timeout errors",
+);
+assertRegex(
+  "webMeetSocket",
+  /const settleCreateTransport = startSocketAckTimeout\([\s\S]*"createProducerTransport"[\s\S]*if \(!settleCreateTransport\(\)\) return;[\s\S]*const settleConnectTransport = startSocketAckTimeout\([\s\S]*"connectProducerTransport"[\s\S]*if \(!settleConnectTransport\(\)\) return;[\s\S]*const settleProduce = startSocketAckTimeout\([\s\S]*"produce"[\s\S]*if \(!settleProduce\(\)\) return;[\s\S]*const settleCreateTransport = startSocketAckTimeout\([\s\S]*"createConsumerTransport"[\s\S]*if \(!settleCreateTransport\(\)\) return;[\s\S]*const settleConnectTransport = startSocketAckTimeout\([\s\S]*"connectConsumerTransport"[\s\S]*if \(!settleConnectTransport\(\)\) return;/,
+  "web room media transport setup ACKs cannot hang join or reconnect indefinitely",
+);
+assertRegex(
+  "webMeetSocket",
+  /const settleConsume = startSocketAckTimeout\("consume"[\s\S]*Consume acknowledgement timed out[\s\S]*queueProducerConsumeRetry\(producerInfo, 450\);[\s\S]*resolve\(\);[\s\S]*if \(!settleConsume\(\)\) return;/,
+  "web consume ACK timeout retries remote media without blocking join",
+);
+assertRegex(
+  "webMeetSocket",
+  /const settleJoinRoom = startSocketAckTimeout\([\s\S]*"joinRoom"[\s\S]*JOIN_ROOM_ACK_TIMEOUT_MS[\s\S]*if \(!settleJoinRoom\(\)\) return;/,
+  "web joinRoom ACK timeout routes stalled joins into reconnect retry handling",
+);
 assertNotIncludes(
   "webMeetSocket",
   "? Promise.resolve(true)\n              : attemptIceRestart(kind)",

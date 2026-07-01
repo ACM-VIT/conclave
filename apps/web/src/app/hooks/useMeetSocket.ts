@@ -115,6 +115,8 @@ const VIDEO_STALL_KEYFRAME_REQUEST_DELAY_MS = 2500;
 const SCREEN_SHARE_VIDEO_STALL_KEYFRAME_REQUEST_DELAY_MS = 900;
 const STALE_CONSUMER_RECOVERY_DELAY_MS = 9000;
 const SCREEN_SHARE_STALE_CONSUMER_RECOVERY_DELAY_MS = 4500;
+const CRITICAL_SIGNALING_ACK_TIMEOUT_MS = 12000;
+const JOIN_ROOM_ACK_TIMEOUT_MS = 15000;
 const RESTART_ICE_ACK_TIMEOUT_MS = 5000;
 const PARTICIPANT_RECONNECTING_STATUS_FALLBACK_MS = 30000;
 const PARTICIPANT_RECONNECTING_STATUS_BUFFER_MS = 5000;
@@ -144,6 +146,26 @@ const getStaleConsumerRecoveryDelayMs = (
   producerInfo.type === "screen"
     ? SCREEN_SHARE_STALE_CONSUMER_RECOVERY_DELAY_MS
     : STALE_CONSUMER_RECOVERY_DELAY_MS;
+
+const startSocketAckTimeout = (
+  eventName: string,
+  onTimeout: (error: Error) => void,
+  timeoutMs = CRITICAL_SIGNALING_ACK_TIMEOUT_MS,
+) => {
+  let settled = false;
+  const timeoutId = window.setTimeout(() => {
+    if (settled) return;
+    settled = true;
+    onTimeout(new Error(`${eventName} acknowledgement timeout`));
+  }, timeoutMs);
+
+  return () => {
+    if (settled) return false;
+    settled = true;
+    window.clearTimeout(timeoutId);
+    return true;
+  };
+};
 
 const CLOSE_CONSUMER_RETRY_WINDOW_MS = 30000;
 const TURN_URL_PATTERN = /^turns?:/i;
@@ -2454,9 +2476,14 @@ export function useMeetSocket({
   const createProducerTransport = useCallback(
     async (socket: Socket, device: Device): Promise<void> => {
       return new Promise((resolve, reject) => {
+        const settleCreateTransport = startSocketAckTimeout(
+          "createProducerTransport",
+          reject,
+        );
         socket.emit(
           "createProducerTransport",
           (response: TransportResponse | { error: string }) => {
+            if (!settleCreateTransport()) return;
             if ("error" in response) {
               reject(new Error(response.error));
               return;
@@ -2474,10 +2501,15 @@ export function useMeetSocket({
                 callback: () => void,
                 errback: (error: Error) => void,
               ) => {
+                const settleConnectTransport = startSocketAckTimeout(
+                  "connectProducerTransport",
+                  errback,
+                );
                 socket.emit(
                   "connectProducerTransport",
                   { transportId: transport.id, dtlsParameters },
                   (res: { success: boolean } | { error: string }) => {
+                    if (!settleConnectTransport()) return;
                     if ("error" in res) errback(new Error(res.error));
                     else callback();
                   },
@@ -2500,10 +2532,15 @@ export function useMeetSocket({
                 callback: (data: { id: string }) => void,
                 errback: (error: Error) => void,
               ) => {
+                const settleProduce = startSocketAckTimeout(
+                  "produce",
+                  errback,
+                );
                 socket.emit(
                   "produce",
                   { transportId: transport.id, kind, rtpParameters, appData },
                   (res: { producerId: string } | { error: string }) => {
+                    if (!settleProduce()) return;
                     if ("error" in res) errback(new Error(res.error));
                     else callback({ id: res.producerId });
                   },
@@ -2683,9 +2720,14 @@ export function useMeetSocket({
   const createConsumerTransport = useCallback(
     async (socket: Socket, device: Device): Promise<void> => {
       return new Promise((resolve, reject) => {
+        const settleCreateTransport = startSocketAckTimeout(
+          "createConsumerTransport",
+          reject,
+        );
         socket.emit(
           "createConsumerTransport",
           (response: TransportResponse | { error: string }) => {
+            if (!settleCreateTransport()) return;
             if ("error" in response) {
               reject(new Error(response.error));
               return;
@@ -2703,10 +2745,15 @@ export function useMeetSocket({
                 callback: () => void,
                 errback: (error: Error) => void,
               ) => {
+                const settleConnectTransport = startSocketAckTimeout(
+                  "connectConsumerTransport",
+                  errback,
+                );
                 socket.emit(
                   "connectConsumerTransport",
                   { transportId: transport.id, dtlsParameters },
                   (res: { success: boolean } | { error: string }) => {
+                    if (!settleConnectTransport()) return;
                     if ("error" in res) errback(new Error(res.error));
                     else callback();
                   },
@@ -3099,6 +3146,16 @@ export function useMeetSocket({
       }
 
       return new Promise((resolve) => {
+        const settleConsume = startSocketAckTimeout("consume", (error) => {
+          console.warn("[Meets] Consume acknowledgement timed out:", {
+            producerId: producerInfo.producerId,
+            kind: producerInfo.kind,
+            type: producerInfo.type,
+            error: error.message,
+          });
+          queueProducerConsumeRetry(producerInfo, 450);
+          resolve();
+        });
         const existingWebcamVideoConsumerCount = Array.from(
           producerMapRef.current.values(),
         ).filter((info) => info.kind === "video" && info.type === "webcam")
@@ -3132,6 +3189,7 @@ export function useMeetSocket({
             }),
           },
           async (response: ConsumeResponse | { error: string }) => {
+            if (!settleConsume()) return;
             if (shouldIgnoreDepartedParticipant(producerInfo.producerUserId)) {
               if (!("error" in response)) {
                 closeServerConsumer(response.id);
@@ -4149,6 +4207,11 @@ export function useMeetSocket({
       setConnectionState("joining");
 
       return new Promise<"joined" | "waiting">((resolve, reject) => {
+        const settleJoinRoom = startSocketAckTimeout(
+          "joinRoom",
+          reject,
+          JOIN_ROOM_ACK_TIMEOUT_MS,
+        );
         socket.emit(
           "joinRoom",
           {
@@ -4160,6 +4223,7 @@ export function useMeetSocket({
             meetingInviteCode: joinOptions.meetingInviteCode,
           },
           async (response: JoinRoomResponse | JoinRoomErrorResponse) => {
+            if (!settleJoinRoom()) return;
             if ("error" in response) {
               reject(getJoinRoomRedirectError(response) ?? new Error(response.error));
               return;
