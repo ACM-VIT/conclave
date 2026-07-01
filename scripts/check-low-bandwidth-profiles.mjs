@@ -442,6 +442,11 @@ assertIncludes(
   "Android screen share temporal layering",
 );
 assertRegex(
+  "androidWebrtc",
+  /WEBRTC_NETWORK_PRIORITY_VERY_LOW = 0[\s\S]*WEBRTC_NETWORK_PRIORITY_HIGH = 3[\s\S]*webcamEncodings[\s\S]*encoding\.networkPriority = WEBRTC_NETWORK_PRIORITY_VERY_LOW[\s\S]*screenShareEncodings[\s\S]*encoding\.networkPriority = WEBRTC_NETWORK_PRIORITY_HIGH/,
+  "Android screen share sender priority beats webcam under congestion",
+);
+assertRegex(
   "webAdaptiveConsumerPreferences",
   /const getScreenShareTargetTemporalLayer =[\s\S]*SCREEN_SHARE_SMALL_RENDERED_HEIGHT[\s\S]*SCREEN_SHARE_FULL_FPS_RENDERED_HEIGHT[\s\S]*if \(options\.emergency\) \{[\s\S]*return 1;[\s\S]*return isLargePresentation \? bounds\.maxTemporalLayer : 1;[\s\S]*if \(info\.type === "screen"\) \{[\s\S]*const screenShareVisible =[\s\S]*options\.layout\?\.visible === true[\s\S]*const screenSharePrimary =[\s\S]*options\.layout\?\.primary === true \|\| options\.layout\?\.focus === true[\s\S]*getScreenShareTargetTemporalLayer\(bounds, \{[\s\S]*quality: screenShareQuality,[\s\S]*emergency: screenShareEmergency,[\s\S]*visible: screenShareVisible,[\s\S]*primary: screenSharePrimary,[\s\S]*renderedHeight: options\.layout\?\.renderedHeight \?\? null,[\s\S]*presentationSize: options\.layout\?\.presentationSize \?\? null,[\s\S]*priority: 240,[\s\S]*paused: false,/,
   "web screen-share receive adaptation is rendered-size aware and keeps visible emergency shares moving",
@@ -728,6 +733,11 @@ assertIncludes(
   "webGridLayout",
   'data-meet-presentation-size={size}',
   "web presentation tiles expose rendered size class for screen-share receive adaptation",
+);
+assertRegex(
+  "webGridLayout",
+  /const roomTilingRemoteVisibleIds = useMemo\([\s\S]*if \(isOverflowOpen\) \{[\s\S]*overflowParticipants\.forEach\(\(participant\) => ids\.push\(participant\.userId\)\);[\s\S]*const roomTilingHiddenIds = useMemo\([\s\S]*isOverflowOpen[\s\S]*\? \[\][\s\S]*: overflowParticipants\.map\(\(participant\) => participant\.userId\)/,
+  "web open overflow gallery participants are visible, not hidden, for adaptive receive",
 );
 assertRegex(
   "webLowBandwidthProbe",

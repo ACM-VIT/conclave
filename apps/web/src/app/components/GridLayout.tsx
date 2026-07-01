@@ -1640,8 +1640,13 @@ function GridLayout({
     } else {
       visibleParticipants.forEach((participant) => ids.push(participant.userId));
     }
+    if (isOverflowOpen) {
+      overflowParticipants.forEach((participant) => ids.push(participant.userId));
+    }
     return Array.from(new Set(ids));
   }, [
+    isOverflowOpen,
+    overflowParticipants,
     sideBySideCompanionParticipantId,
     stageMainKind,
     stageMainParticipantId,
@@ -1898,8 +1903,11 @@ function GridLayout({
     usesStageLayout,
   ]);
   const roomTilingHiddenIds = useMemo(
-    () => overflowParticipants.map((participant) => participant.userId),
-    [overflowParticipants],
+    () =>
+      isOverflowOpen
+        ? []
+        : overflowParticipants.map((participant) => participant.userId),
+    [isOverflowOpen, overflowParticipants],
   );
   const roomTilingWarmIds = useMemo(
     () => warmParticipants.map((participant) => participant.userId),

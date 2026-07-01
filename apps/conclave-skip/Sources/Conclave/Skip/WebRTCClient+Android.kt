@@ -151,6 +151,8 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         private const val REMOTE_CONSUMER_PREFERENCE_EMIT_SPACING_MS = 75L
         private const val REMOTE_CONSUMER_PREFERENCE_RETRY_DELAY_MS = 1_000L
         private const val PRE_JOIN_CAMERA_RELEASE_SETTLE_MS = 350L
+        private const val WEBRTC_NETWORK_PRIORITY_VERY_LOW = 0
+        private const val WEBRTC_NETWORK_PRIORITY_HIGH = 3
     }
 
     private data class RemoteConsumerPreference(
@@ -2133,7 +2135,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             ).also { encoding ->
                 encoding.maxBitrateBps = spec.maxBitrateBps
                 encoding.maxFramerate = spec.maxFramerate
-                encoding.networkPriority = 0
+                encoding.networkPriority = WEBRTC_NETWORK_PRIORITY_VERY_LOW
             }
         }
     }
@@ -2233,6 +2235,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
                 encoding.maxBitrateBps = cap.maxBitrateBps
                 encoding.maxFramerate = cap.maxFramerate
                 encoding.numTemporalLayers = screenShareTemporalLayerCount
+                encoding.networkPriority = WEBRTC_NETWORK_PRIORITY_HIGH
             },
         )
     }
