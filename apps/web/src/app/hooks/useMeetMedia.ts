@@ -131,6 +131,26 @@ type ScreenAudioProducerAppData = {
   networkProfile?: WebcamProducerNetworkProfile;
 };
 
+type DisplayMediaSurfaceHint =
+  | "application"
+  | "browser"
+  | "monitor"
+  | "window";
+
+type DisplayMediaVideoConstraints = MediaTrackConstraints & {
+  cursor?: "always" | "motion" | "never";
+  displaySurface?: DisplayMediaSurfaceHint;
+};
+
+type DisplayMediaIncludePreference = "include" | "exclude";
+
+type ExtendedDisplayMediaStreamOptions = DisplayMediaStreamOptions & {
+  controller?: CaptureControllerLike;
+  selfBrowserSurface?: DisplayMediaIncludePreference;
+  surfaceSwitching?: DisplayMediaIncludePreference;
+  systemAudio?: DisplayMediaIncludePreference;
+};
+
 const getStartupAwarePublishQuality = (
   stats: ConnectionQualityStats | null | undefined,
   browserNetwork: ReturnType<typeof getBrowserNetworkSnapshot>,
@@ -3788,33 +3808,26 @@ export function useMeetMedia({
       const screenNetworkProfile = getScreenSharePublishNetworkProfile();
 
       let captureController = createCaptureController();
-      const constrainedDisplayVideoConstraints:
-        MediaTrackConstraints & {
-          cursor?: "always" | "motion" | "never";
-          displaySurface?: "application" | "browser" | "monitor" | "window";
-        } = {
-          ...buildScreenShareVideoConstraintsForNetworkProfile(
-            screenNetworkProfile,
-          ),
-          displaySurface: "browser",
-          cursor: "always",
-        };
-      const relaxedDisplayVideoConstraints: MediaTrackConstraints & {
-        cursor?: "always" | "motion" | "never";
-        displaySurface?: "application" | "browser" | "monitor" | "window";
-      } = {
+      const constrainedDisplayVideoConstraints: DisplayMediaVideoConstraints = {
+        ...buildScreenShareVideoConstraintsForNetworkProfile(
+          screenNetworkProfile,
+        ),
         displaySurface: "browser",
         cursor: "always",
       };
+      const relaxedDisplayVideoConstraints: DisplayMediaVideoConstraints = {
+        cursor: "always",
+      };
       const getDisplayMedia = (
-        video: typeof constrainedDisplayVideoConstraints,
+        video: DisplayMediaVideoConstraints,
         controller: CaptureControllerLike | null,
       ): Promise<MediaStream> => {
-        const options: DisplayMediaStreamOptions & {
-          controller?: CaptureControllerLike;
-        } = {
+        const options: ExtendedDisplayMediaStreamOptions = {
           video,
           audio: true,
+          selfBrowserSurface: "exclude",
+          surfaceSwitching: "include",
+          systemAudio: "include",
           ...(controller ? { controller } : {}),
         };
         return navigator.mediaDevices.getDisplayMedia(options);

@@ -485,6 +485,16 @@ assertRegex(
   /buildScreenShareVideoConstraintsForNetworkProfile[\s\S]*getScreenSharePublishNetworkProfile[\s\S]*getScreenSharePublishNetworkProfileForAvailableOutgoingBitrate\([\s\S]*stats\?\.availableOutgoingBitrate[\s\S]*getMostConstrainedWebcamProducerNetworkProfile\([\s\S]*const screenNetworkProfile = getScreenSharePublishNetworkProfile\(\);[\s\S]*const constrainedDisplayVideoConstraints[\s\S]*buildScreenShareVideoConstraintsForNetworkProfile\([\s\S]*screenNetworkProfile[\s\S]*const relaxedDisplayVideoConstraints[\s\S]*getDisplayMedia\([\s\S]*constrainedDisplayVideoConstraints,[\s\S]*captureController[\s\S]*catch \(err\) \{[\s\S]*if \(!isDisplayMediaConstraintRetryableError\(err\)\) \{[\s\S]*throw err;[\s\S]*getDisplayMedia\([\s\S]*constrainedDisplayVideoConstraints,[\s\S]*null[\s\S]*getDisplayMedia\(relaxedDisplayVideoConstraints, null\)[\s\S]*applyScreenShareTrackNetworkProfile\(track, screenNetworkProfile\)[\s\S]*buildScreenShareEncodingForNetworkProfile\([\s\S]*screenNetworkProfile,[\s\S]*track,[\s\S]*\)/,
   "web screen-share start requests BWE capture constraints before applying RTP caps",
 );
+assertRegex(
+  "webMeetMedia",
+  /type ExtendedDisplayMediaStreamOptions = DisplayMediaStreamOptions & \{[\s\S]*selfBrowserSurface\?: DisplayMediaIncludePreference;[\s\S]*surfaceSwitching\?: DisplayMediaIncludePreference;[\s\S]*systemAudio\?: DisplayMediaIncludePreference;[\s\S]*selfBrowserSurface: "exclude",[\s\S]*surfaceSwitching: "include",[\s\S]*systemAudio: "include",/,
+  "web screen-share picker requests production browser hints for system audio and surface switching",
+);
+assertRegex(
+  "webMeetMedia",
+  /const constrainedDisplayVideoConstraints: DisplayMediaVideoConstraints = \{[\s\S]*displaySurface: "browser",[\s\S]*const relaxedDisplayVideoConstraints: DisplayMediaVideoConstraints = \{[\s\S]*cursor: "always",[\s\S]*\};/,
+  "web screen-share fallback removes the tab-only display-surface hint",
+);
 assertIncludes(
   "webMeetMedia",
   "await applyScreenShareProducerNetworkProfile(\n          producer,\n          screenNetworkProfile,\n        );",
