@@ -65,6 +65,7 @@ interface UseAdaptiveConsumerPreferencesOptions {
   availableIncomingBitrateBps?: number | null;
   activeSpeakerId: string | null;
   dataSaverMode?: boolean;
+  isDocumentVisible?: boolean;
   debugStateRef?: React.MutableRefObject<
     AdaptiveConsumerPreferencesDebugSnapshot | null
   >;
@@ -166,6 +167,7 @@ export type AdaptiveConsumerPreferencesDebugSnapshot = {
   connectionQuality: ConnectionQuality;
   emergencyMode: boolean;
   dataSaverMode: boolean;
+  isDocumentVisible: boolean;
   activeSpeakerId: string | null;
   socketConnected: boolean;
   layoutHintsAvailable: boolean;
@@ -619,6 +621,7 @@ const getDesiredPreferences = (
     emergencyKeepVideo: boolean;
     screenShareVideoActive: boolean;
     dataSaverMode: boolean;
+    isDocumentVisible: boolean;
     availableIncomingBitrateBps: number | null;
     consumerScoreQuality: ConsumerScoreQuality;
   },
@@ -630,6 +633,14 @@ const getDesiredPreferences = (
   }
 
   if (info.kind !== "video") return null;
+
+  if (!options.isDocumentVisible) {
+    return {
+      preferredLayers: bounds ? buildLayerPreference(0, 0, bounds) : undefined,
+      priority: OFFSCREEN_WEBCAM_PARK_PRIORITY,
+      paused: true,
+    };
+  }
 
   const screenShareReceiveQuality =
     getScreenShareReceiveQualityForAvailableBitrate(
@@ -925,6 +936,7 @@ export function useAdaptiveConsumerPreferences({
   availableIncomingBitrateBps = null,
   activeSpeakerId,
   dataSaverMode = false,
+  isDocumentVisible = true,
   debugStateRef,
   onVideoAdaptivePauseStateChange,
 }: UseAdaptiveConsumerPreferencesOptions) {
@@ -1028,6 +1040,7 @@ export function useAdaptiveConsumerPreferences({
         connectionQuality,
         emergencyMode,
         dataSaverMode,
+        isDocumentVisible,
         activeSpeakerId,
         socketConnected: lastDebugContextRef.current.socketConnected,
         layoutHintsAvailable:
@@ -1057,6 +1070,7 @@ export function useAdaptiveConsumerPreferences({
       enabled,
       emergencyMode,
       dataSaverMode,
+      isDocumentVisible,
       publishAdaptiveVideoPauseChanges,
       refs.adaptivelyPausedConsumerProducerIdsRef,
     ],
@@ -1225,6 +1239,7 @@ export function useAdaptiveConsumerPreferences({
         emergencyKeepVideo,
         screenShareVideoActive,
         dataSaverMode,
+        isDocumentVisible,
         availableIncomingBitrateBps,
         consumerScoreQuality,
       });
@@ -1786,6 +1801,7 @@ export function useAdaptiveConsumerPreferences({
     dataSaverMode,
     emergencyMode,
     enabled,
+    isDocumentVisible,
     refs.adaptivelyPausedConsumerProducerIdsRef,
     refs.consumerTelemetryRef,
     refs.consumersRef,

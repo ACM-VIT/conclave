@@ -2739,6 +2739,7 @@ export default function MeetsClient({
     availableIncomingBitrateBps: selfConnectionStats.availableIncomingBitrate,
     activeSpeakerId: effectiveActiveSpeakerId,
     dataSaverMode: effectiveDataSaverMode,
+    isDocumentVisible,
     debugStateRef: adaptiveConsumerDebugRef,
     onVideoAdaptivePauseStateChange: handleVideoAdaptivePauseStateChange,
   });

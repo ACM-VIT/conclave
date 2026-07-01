@@ -885,6 +885,11 @@ assertRegex(
   /useState<MeetViewSettings>\(\s*readStoredMeetViewSettings,[\s\S]*browserSaveDataMode[\s\S]*getBrowserNetworkSnapshot\(\)\.saveData === true[\s\S]*effectiveDataSaverMode =[\s\S]*viewSettings\.dataSaverMode \|\| browserSaveDataMode[\s\S]*writeStoredMeetViewSettings\(viewSettings\)[\s\S]*useMeetMedia\(\{[\s\S]*dataSaverMode: effectiveDataSaverMode,[\s\S]*useMeetSocket\(\{[\s\S]*dataSaverMode: effectiveDataSaverMode,[\s\S]*useAdaptiveConsumerPreferences\(\{[\s\S]*dataSaverMode: effectiveDataSaverMode,[\s\S]*useAdaptivePublishQuality\(\{[\s\S]*dataSaverMode: effectiveDataSaverMode,[\s\S]*<MeetsMainContent[\s\S]*viewSettings=\{viewSettings\}[\s\S]*onViewSettingsChange=\{setViewSettings\}/,
   "web meeting client honors persisted and browser Save-Data send/receive settings",
 );
+assertRegex(
+  "webMeetClient",
+  /const \[isDocumentVisible, setIsDocumentVisible\] = useState[\s\S]*document\.visibilityState === "visible"[\s\S]*document\.addEventListener\("visibilitychange", syncDocumentVisibility\)[\s\S]*useAdaptiveConsumerPreferences\(\{[\s\S]*isDocumentVisible,/,
+  "web meeting client feeds document visibility into receive adaptation",
+);
 assertNotIncludes(
   "webMeetsMainContent",
   "const MEET_VIEW_STORAGE_KEY",
@@ -899,6 +904,11 @@ assertRegex(
   "webMeetSocket",
   /dataSaverMode\?: boolean[\s\S]*dataSaverMode = false[\s\S]*const shouldStartConsumerPausedForDataSaver =[\s\S]*dataSaverMode &&[\s\S]*producerInfo\.kind === "video" &&[\s\S]*producerInfo\.type === "webcam"[\s\S]*const startsPausedForDataSaver =[\s\S]*shouldStartConsumerPausedForDataSaver && isWebcamVideo[\s\S]*adaptivelyPausedConsumerProducerIdsRef\.current\.add\([\s\S]*UPDATE_VIDEO_ADAPTIVE_PAUSED[\s\S]*if \(!startsPausedForDataSaver\) \{[\s\S]*"resumeConsumer"/,
   "web data saver prevents initial webcam consumer resume while preserving screen/audio startup",
+);
+assertRegex(
+  "webAdaptiveConsumerPreferences",
+  /isDocumentVisible\?: boolean[\s\S]*if \(info\.kind === "audio"\) \{[\s\S]*AUDIO_CONSUMER_PRIORITY[\s\S]*if \(info\.kind !== "video"\) return null;[\s\S]*if \(!options\.isDocumentVisible\) \{[\s\S]*buildLayerPreference\(0, 0, bounds\)[\s\S]*priority: OFFSCREEN_WEBCAM_PARK_PRIORITY,[\s\S]*paused: true,[\s\S]*isDocumentVisible = true[\s\S]*requestKeyFrame =[\s\S]*wasPaused \|\|/,
+  "web hidden tabs pause remote video receive while keeping audio and foreground keyframe resume",
 );
 assertRegex(
   "webMeetMedia",
