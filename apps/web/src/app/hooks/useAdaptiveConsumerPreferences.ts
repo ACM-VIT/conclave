@@ -117,6 +117,7 @@ type RoomTilingHints = {
   orderedRemoteRanks: Map<string, number>;
   presentation: {
     presenterId: string | null;
+    producerId: string | null;
     visible: boolean;
     primary: boolean;
     focus: boolean;
@@ -334,6 +335,10 @@ const readRoomTilingHints = (): RoomTilingHints | null => {
     presentation,
     "presenterId",
   );
+  const presentationProducerId = readNullableString(
+    presentation,
+    "producerId",
+  );
   const presentationMetrics = readPresentationElementMetrics(
     presentationPresenterId,
   );
@@ -352,6 +357,7 @@ const readRoomTilingHints = (): RoomTilingHints | null => {
     ),
     presentation: {
       presenterId: presentationPresenterId,
+      producerId: presentationProducerId,
       visible: readBoolean(presentation, "visible"),
       primary: readBoolean(presentation, "primary"),
       focus: readBoolean(presentation, "focus"),
@@ -366,23 +372,39 @@ const getLayoutRole = (
   hints: RoomTilingHints | null,
   userId: string,
   type: ProducerMapEntry["type"],
+  producerId: string,
 ): LayoutRole | null => {
   if (!hints) return null;
+  const isScreenShare = type === "screen";
+  const isPresentedScreenByProducer =
+    isScreenShare &&
+    Boolean(hints.presentation.producerId) &&
+    hints.presentation.producerId === producerId;
+  const isPresentedScreenByPresenter =
+    isScreenShare &&
+    !hints.presentation.producerId &&
+    hints.presentation.presenterId === userId;
   const isPresentedScreen =
     type === "screen" &&
     hints.presentation.visible &&
-    hints.presentation.presenterId === userId;
+    (isPresentedScreenByProducer || isPresentedScreenByPresenter);
+  const participantVideoVisible = hints.visibleRemoteIds.has(userId);
+  const participantVideoHidden = hints.hiddenIds.has(userId);
   return {
     primary:
-      hints.primaryIds.has(userId) ||
+      (!isScreenShare && hints.primaryIds.has(userId)) ||
       (isPresentedScreen && hints.presentation.primary),
     focus:
-      hints.focusIds.has(userId) ||
+      (!isScreenShare && hints.focusIds.has(userId)) ||
       (isPresentedScreen && hints.presentation.focus),
-    visible: hints.visibleRemoteIds.has(userId) || isPresentedScreen,
-    hidden: hints.hiddenIds.has(userId) && !isPresentedScreen,
-    warm: hints.warmIds.has(userId),
-    rank: hints.orderedRemoteRanks.get(userId) ?? null,
+    visible: isScreenShare ? isPresentedScreen : participantVideoVisible,
+    hidden: isScreenShare
+      ? hints.presentation.visible && !isPresentedScreen
+      : participantVideoHidden,
+    warm: isScreenShare ? false : hints.warmIds.has(userId),
+    rank: isScreenShare
+      ? null
+      : (hints.orderedRemoteRanks.get(userId) ?? null),
     renderedWidth: isPresentedScreen ? hints.presentation.renderedWidth : null,
     renderedHeight: isPresentedScreen ? hints.presentation.renderedHeight : null,
     presentationSize: isPresentedScreen ? hints.presentation.size : null,
@@ -673,6 +695,11 @@ const getDesiredPreferences = (
       options.layout === null ||
       options.layout.primary === true ||
       options.layout.focus === true;
+    const screenSharePriority = screenSharePrimary
+      ? 240
+      : screenShareVisible
+        ? 220
+        : HIDDEN_SCREEN_SHARE_KEEPALIVE_PRIORITY;
     return {
       preferredLayers: bounds
         ? buildLayerPreference(
@@ -688,7 +715,7 @@ const getDesiredPreferences = (
             bounds,
           )
         : undefined,
-      priority: 240,
+      priority: screenSharePriority,
       paused: false,
     };
   }
@@ -1191,7 +1218,12 @@ export function useAdaptiveConsumerPreferences({
             return null;
           }
 
-          const layout = getLayoutRole(layoutHints, info.userId, info.type);
+          const layout = getLayoutRole(
+            layoutHints,
+            info.userId,
+            info.type,
+            producerId,
+          );
           return {
             producerId,
             active: info.userId === activeSpeakerId,
@@ -1256,7 +1288,12 @@ export function useAdaptiveConsumerPreferences({
       }
 
       const bounds = inferLayerBounds(consumer, info);
-      const layout = getLayoutRole(layoutHints, info.userId, info.type);
+      const layout = getLayoutRole(
+        layoutHints,
+        info.userId,
+        info.type,
+        producerId,
+      );
       const emergencyKeepVideo =
         emergencyMode &&
         info.kind === "video" &&

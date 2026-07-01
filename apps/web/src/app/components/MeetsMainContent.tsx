@@ -126,6 +126,7 @@ interface MeetsMainContentProps {
   setIsGhostMode: Dispatch<SetStateAction<boolean>>;
   presentationStream: MediaStream | null;
   presenterName: string;
+  presentationProducerId?: string | null;
   screenShareControlState: CapturedSurfaceControlState;
   screenShareCaptureController: CaptureControllerLike | null;
   localStream: MediaStream | null;
@@ -359,6 +360,7 @@ export default function MeetsMainContent({
   setIsGhostMode,
   presentationStream,
   presenterName,
+  presentationProducerId = null,
   screenShareControlState,
   screenShareCaptureController,
   localStream,
@@ -1706,6 +1708,7 @@ export default function MeetsMainContent({
           presentationStream={effectivePresentationStream}
           presenterName={effectivePresenterName}
           presentationPresenterId={presentationPresenterId}
+          presentationProducerId={presentationProducerId}
           isLocalPresenter={isLocalPresenter}
           screenShareControlState={screenShareControlState}
           screenShareCaptureController={screenShareCaptureController}

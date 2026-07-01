@@ -96,6 +96,7 @@ interface GridLayoutProps {
   presentationStream?: MediaStream | null;
   presenterName?: string;
   presentationPresenterId?: string | null;
+  presentationProducerId?: string | null;
   /** True when the presentation stream above is YOUR own screen share —
    *  the stage tile defaults to a chooser instead of mirroring it back. */
   isLocalPresenter?: boolean;
@@ -387,6 +388,7 @@ type MeetRoomTilingMetadataBase = {
   presentation: {
     tileId: string;
     presenterId: string | null;
+    producerId: string | null;
     visible: boolean;
     primary: boolean;
     focus: boolean;
@@ -972,6 +974,7 @@ function GridLayout({
   presentationStream = null,
   presenterName = "Someone",
   presentationPresenterId = null,
+  presentationProducerId = null,
   isLocalPresenter = false,
   screenShareControlState,
   screenShareCaptureController = null,
@@ -2161,6 +2164,7 @@ function GridLayout({
       presentation: {
         tileId: PRESENTATION_TILE_ID,
         presenterId: presentationPresenterId,
+        producerId: presentationProducerId,
         visible: isPresentationRendered,
         primary: presentationRenderedAsPrimary,
         focus: presentationRenderedAsPrimary,
@@ -2280,6 +2284,7 @@ function GridLayout({
       maxGridTiles,
       orderedRemoteParticipants,
       presentationPresenterId,
+      presentationProducerId,
       presentationRenderedAsPrimary,
       pinnedId,
       renderedViewMode,

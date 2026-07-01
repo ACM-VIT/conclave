@@ -674,8 +674,13 @@ assertRegex(
 );
 assertRegex(
   "webAdaptiveConsumerPreferences",
-  /const getScreenShareTargetTemporalLayer =[\s\S]*SCREEN_SHARE_SMALL_RENDERED_HEIGHT[\s\S]*SCREEN_SHARE_FULL_FPS_RENDERED_HEIGHT[\s\S]*if \(options\.emergency\) \{[\s\S]*return 1;[\s\S]*return isLargePresentation \? bounds\.maxTemporalLayer : 1;[\s\S]*if \(info\.type === "screen"\) \{[\s\S]*const screenShareVisible =[\s\S]*options\.layout === null \|\|[\s\S]*options\.layout\.visible === true[\s\S]*const screenSharePrimary =[\s\S]*options\.layout === null \|\|[\s\S]*options\.layout\.primary === true \|\|[\s\S]*options\.layout\.focus === true[\s\S]*getScreenShareTargetTemporalLayer\(bounds, \{[\s\S]*quality: screenShareQuality,[\s\S]*emergency: screenShareEmergency,[\s\S]*visible: screenShareVisible,[\s\S]*primary: screenSharePrimary,[\s\S]*renderedHeight: options\.layout\?\.renderedHeight \?\? null,[\s\S]*presentationSize: options\.layout\?\.presentationSize \?\? null,[\s\S]*priority: 240,[\s\S]*paused: false,/,
+  /const getScreenShareTargetTemporalLayer =[\s\S]*SCREEN_SHARE_SMALL_RENDERED_HEIGHT[\s\S]*SCREEN_SHARE_FULL_FPS_RENDERED_HEIGHT[\s\S]*if \(options\.emergency\) \{[\s\S]*return 1;[\s\S]*return isLargePresentation \? bounds\.maxTemporalLayer : 1;[\s\S]*if \(info\.type === "screen"\) \{[\s\S]*const screenShareVisible =[\s\S]*options\.layout === null \|\|[\s\S]*options\.layout\.visible === true[\s\S]*const screenSharePrimary =[\s\S]*options\.layout === null \|\|[\s\S]*options\.layout\.primary === true \|\|[\s\S]*options\.layout\.focus === true[\s\S]*const screenSharePriority =[\s\S]*screenSharePrimary[\s\S]*\? 240[\s\S]*: screenShareVisible[\s\S]*\? 220[\s\S]*: HIDDEN_SCREEN_SHARE_KEEPALIVE_PRIORITY[\s\S]*getScreenShareTargetTemporalLayer\(bounds, \{[\s\S]*quality: screenShareQuality,[\s\S]*emergency: screenShareEmergency,[\s\S]*visible: screenShareVisible,[\s\S]*primary: screenSharePrimary,[\s\S]*renderedHeight: options\.layout\?\.renderedHeight \?\? null,[\s\S]*presentationSize: options\.layout\?\.presentationSize \?\? null,[\s\S]*priority: screenSharePriority,[\s\S]*paused: false,/,
   "web screen-share receive adaptation is rendered-size aware and treats missing layout hints as presentation-visible",
+);
+assertRegex(
+  "webAdaptiveConsumerPreferences",
+  /presentation: \{[\s\S]*producerId: string \| null;[\s\S]*const getLayoutRole =[\s\S]*producerId: string,[\s\S]*hints\.presentation\.producerId === producerId[\s\S]*visible: isScreenShare \? isPresentedScreen : participantVideoVisible[\s\S]*hidden: isScreenShare[\s\S]*hints\.presentation\.visible && !isPresentedScreen/,
+  "web screen-share receive layout is keyed by the rendered presentation producer, not just presenter user id",
 );
 assertRegex(
   "webAdaptiveConsumerPreferences",
@@ -777,12 +782,17 @@ assertRegex(
 );
 assertRegex(
   "webMeetsMainContent",
-  /const presentationPresenterId = useMemo\([\s\S]*participant\.screenShareProducerId === activeScreenShareId[\s\S]*presentationPresenterId=\{presentationPresenterId\}/,
-  "web screen-share presenter id flows into grid tiling metadata",
+  /presentationProducerId\?: string \| null[\s\S]*presentationProducerId = null[\s\S]*presentationProducerId=\{presentationProducerId\}/,
+  "web screen-share producer id flows through main content into grid tiling metadata",
+);
+assertRegex(
+  "webMeetClient",
+  /const \{ presentationStream, presenterName, presentationProducerId \} =[\s\S]*refs\.screenProducerRef\.current\?\.id[\s\S]*let matchedProducerId: string \| null = null;[\s\S]*let anyProducerId: string \| null = null;[\s\S]*participant\.screenShareProducerId === activeScreenShareId[\s\S]*presentationProducerId=\{presentationProducerId\}/,
+  "web rendered screen-share stream carries the matching producer id for receiver allocation",
 );
 assertRegex(
   "webGridLayout",
-  /const presentationRenderedAsPrimary =[\s\S]*hasGridPresentationTile[\s\S]*usesSideBySideLayout[\s\S]*usesStageLayout && stageMainKind === "presentation"[\s\S]*const presentationRenderedInRail =[\s\S]*!usesSpotlightLayout[\s\S]*!usesSideBySideLayout[\s\S]*stageMainKind !== "presentation"[\s\S]*const isPresentationRendered =[\s\S]*hasPresentation &&[\s\S]*presentationRenderedAsPrimary \|\| presentationRenderedInRail[\s\S]*presentation: \{[\s\S]*visible: isPresentationRendered,[\s\S]*primary: presentationRenderedAsPrimary,[\s\S]*focus: presentationRenderedAsPrimary,/,
+  /const presentationRenderedAsPrimary =[\s\S]*hasGridPresentationTile[\s\S]*usesSideBySideLayout[\s\S]*usesStageLayout && stageMainKind === "presentation"[\s\S]*const presentationRenderedInRail =[\s\S]*!usesSpotlightLayout[\s\S]*!usesSideBySideLayout[\s\S]*stageMainKind !== "presentation"[\s\S]*const isPresentationRendered =[\s\S]*hasPresentation &&[\s\S]*presentationRenderedAsPrimary \|\| presentationRenderedInRail[\s\S]*presentation: \{[\s\S]*producerId: presentationProducerId,[\s\S]*visible: isPresentationRendered,[\s\S]*primary: presentationRenderedAsPrimary,[\s\S]*focus: presentationRenderedAsPrimary,/,
   "web screen-share tiling metadata only advertises rendered presentations and marks side-by-side/stage presentations primary",
 );
 assertIncludes(
@@ -952,7 +962,7 @@ assertNotIncludes(
 );
 assertRegex(
   "webAdaptiveConsumerPreferences",
-  /if \(info\.type === "screen"\) \{[\s\S]*priority: 240,[\s\S]*paused: false,[\s\S]*if \(options\.dataSaverMode\) \{[\s\S]*priority: OFFSCREEN_WEBCAM_PARK_PRIORITY,[\s\S]*paused: true,/,
+  /if \(info\.type === "screen"\) \{[\s\S]*const screenSharePriority =[\s\S]*screenSharePrimary[\s\S]*\? 240[\s\S]*: screenShareVisible[\s\S]*\? 220[\s\S]*: HIDDEN_SCREEN_SHARE_KEEPALIVE_PRIORITY[\s\S]*priority: screenSharePriority,[\s\S]*paused: false,[\s\S]*if \(options\.dataSaverMode\) \{[\s\S]*priority: OFFSCREEN_WEBCAM_PARK_PRIORITY,[\s\S]*paused: true,/,
   "web data saver parks webcam receive after preserving screen-share video",
 );
 assertRegex(
@@ -962,7 +972,7 @@ assertRegex(
 );
 assertRegex(
   "webAdaptiveConsumerPreferences",
-  /isDocumentVisible\?: boolean[\s\S]*HIDDEN_SCREEN_SHARE_KEEPALIVE_PRIORITY = 60[\s\S]*if \(info\.kind === "audio"\) \{[\s\S]*AUDIO_CONSUMER_PRIORITY[\s\S]*if \(info\.kind !== "video"\) return null;[\s\S]*if \(info\.type === "screen"\) \{[\s\S]*if \(!options\.isDocumentVisible\) \{[\s\S]*buildLayerPreference\(0, 0, bounds\)[\s\S]*priority: HIDDEN_SCREEN_SHARE_KEEPALIVE_PRIORITY,[\s\S]*paused: false,[\s\S]*priority: 240,[\s\S]*paused: false,[\s\S]*if \(!options\.isDocumentVisible\) \{[\s\S]*priority: OFFSCREEN_WEBCAM_PARK_PRIORITY,[\s\S]*paused: true,[\s\S]*isDocumentVisible = true[\s\S]*requestKeyFrame =[\s\S]*wasPaused \|\|/,
+  /isDocumentVisible\?: boolean[\s\S]*HIDDEN_SCREEN_SHARE_KEEPALIVE_PRIORITY = 60[\s\S]*if \(info\.kind === "audio"\) \{[\s\S]*AUDIO_CONSUMER_PRIORITY[\s\S]*if \(info\.kind !== "video"\) return null;[\s\S]*if \(info\.type === "screen"\) \{[\s\S]*if \(!options\.isDocumentVisible\) \{[\s\S]*buildLayerPreference\(0, 0, bounds\)[\s\S]*priority: HIDDEN_SCREEN_SHARE_KEEPALIVE_PRIORITY,[\s\S]*paused: false,[\s\S]*const screenSharePriority =[\s\S]*priority: screenSharePriority,[\s\S]*paused: false,[\s\S]*if \(!options\.isDocumentVisible\) \{[\s\S]*priority: OFFSCREEN_WEBCAM_PARK_PRIORITY,[\s\S]*paused: true,[\s\S]*isDocumentVisible = true[\s\S]*requestKeyFrame =[\s\S]*wasPaused \|\|/,
   "web hidden tabs park webcams while keeping active screen share video warm for foreground resume",
 );
 assertRegex(

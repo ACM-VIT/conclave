@@ -2600,45 +2600,59 @@ export default function MeetsClient({
     return new MediaStream([screenTrack]);
   }, [screenTrack]);
 
-  const { presentationStream, presenterName } = useMemo(() => {
-    let nextStream: MediaStream | null = null;
-    let nextPresenterName = "";
+  const { presentationStream, presenterName, presentationProducerId } =
+    useMemo(() => {
+      let nextStream: MediaStream | null = null;
+      let nextPresenterName = "";
+      let nextProducerId: string | null = null;
 
-    if (isScreenSharing && localScreenShareStream) {
-      nextStream = localScreenShareStream;
-      nextPresenterName = "You";
-    } else if (activeScreenShareId) {
-      // Prefer the participant whose screen producer matches the ACTIVE id so
-      // the staged stream + "X is presenting" always correspond to the right
-      // sharer; fall back to any present share so the stage is never blank.
-      let matchedStream: MediaStream | null = null;
-      let matchedName = "";
-      let anyStream: MediaStream | null = null;
-      let anyName = "";
-      for (const participant of participants.values()) {
-        if (!participant.screenShareStream) continue;
-        if (!anyStream) {
-          anyStream = participant.screenShareStream;
-          anyName = resolveDisplayName(participant.userId);
+      if (isScreenSharing && localScreenShareStream) {
+        nextStream = localScreenShareStream;
+        nextPresenterName = "You";
+        nextProducerId =
+          refs.screenProducerRef.current?.id ?? activeScreenShareId ?? null;
+      } else if (activeScreenShareId) {
+        // Prefer the participant whose screen producer matches the ACTIVE id so
+        // the staged stream + "X is presenting" always correspond to the right
+        // sharer; fall back to any present share so the stage is never blank.
+        let matchedStream: MediaStream | null = null;
+        let matchedName = "";
+        let matchedProducerId: string | null = null;
+        let anyStream: MediaStream | null = null;
+        let anyName = "";
+        let anyProducerId: string | null = null;
+        for (const participant of participants.values()) {
+          if (!participant.screenShareStream) continue;
+          if (!anyStream) {
+            anyStream = participant.screenShareStream;
+            anyName = resolveDisplayName(participant.userId);
+            anyProducerId = participant.screenShareProducerId;
+          }
+          if (participant.screenShareProducerId === activeScreenShareId) {
+            matchedStream = participant.screenShareStream;
+            matchedName = resolveDisplayName(participant.userId);
+            matchedProducerId = participant.screenShareProducerId;
+            break;
+          }
         }
-        if (participant.screenShareProducerId === activeScreenShareId) {
-          matchedStream = participant.screenShareStream;
-          matchedName = resolveDisplayName(participant.userId);
-          break;
-        }
+        nextStream = matchedStream ?? anyStream;
+        nextPresenterName = matchedStream ? matchedName : anyName;
+        nextProducerId = matchedProducerId ?? anyProducerId;
       }
-      nextStream = matchedStream ?? anyStream;
-      nextPresenterName = matchedStream ? matchedName : anyName;
-    }
 
-    return { presentationStream: nextStream, presenterName: nextPresenterName };
-  }, [
-    activeScreenShareId,
-    isScreenSharing,
-    localScreenShareStream,
-    participants,
-    resolveDisplayName,
-  ]);
+      return {
+        presentationStream: nextStream,
+        presenterName: nextPresenterName,
+        presentationProducerId: nextProducerId,
+      };
+    }, [
+      activeScreenShareId,
+      isScreenSharing,
+      localScreenShareStream,
+      participants,
+      refs.screenProducerRef,
+      resolveDisplayName,
+    ]);
 
   useMeetPictureInPicture({
     isJoined: connectionState === "joined",
@@ -3111,6 +3125,7 @@ export default function MeetsClient({
         setIsGhostMode={setIsGhostMode}
         presentationStream={presentationStream}
         presenterName={presenterName || ""}
+        presentationProducerId={presentationProducerId}
         screenShareControlState={screenShareControlState}
         screenShareCaptureController={refs.screenShareCaptureControllerRef.current}
         localStream={displayLocalStream}
