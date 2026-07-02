@@ -2,7 +2,6 @@ import type { Express, Request, Response } from "express";
 import { Logger } from "../../utilities/loggers.js";
 import {
   asArray,
-  readBoolean,
   readNumber,
   readString,
   requestBody,
@@ -122,6 +121,22 @@ const normalizeText = (value: unknown, maxLength = MAX_TEXT_LENGTH): string =>
     : "";
 
 /**
+ * Decode a boolean field, tolerating "true"/"false" strings — same API
+ * tolerance as readCoercedNumber. (The old truthy-Boolean coercion mapped
+ * "false" to true; strings now coerce to their actual meaning.)
+ */
+const readCoercedBoolean = (
+  body: UntrustedRecord,
+  key: string,
+): boolean | undefined => {
+  const value = body[key];
+  if (typeof value === "boolean") return value;
+  if (value === "true") return true;
+  if (value === "false") return false;
+  return undefined;
+};
+
+/**
  * Decode a numeric field, tolerating stringified numbers ("60") — callers of
  * this API have historically been allowed to send either.
  */
@@ -154,8 +169,8 @@ const eventTypeInput = (body: UntrustedRecord): Partial<SchedulingEventType> => 
   bookingWindowDays: readCoercedNumber(body, "bookingWindowDays"),
   bufferBeforeMinutes: readCoercedNumber(body, "bufferBeforeMinutes"),
   bufferAfterMinutes: readCoercedNumber(body, "bufferAfterMinutes"),
-  isActive: readBoolean(body, "isActive"),
-  requiresCalendar: readBoolean(body, "requiresCalendar"),
+  isActive: readCoercedBoolean(body, "isActive"),
+  requiresCalendar: readCoercedBoolean(body, "requiresCalendar"),
 });
 
 const resolveClientId = (

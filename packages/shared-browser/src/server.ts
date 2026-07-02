@@ -86,6 +86,27 @@ app.get("/sessions/:roomId", (req, res) => {
     }
 });
 
+/**
+ * RTP targets are optional, but a present-and-malformed one must fail loudly:
+ * silently dropping it would "successfully" launch a browser that forwards no
+ * audio/video.
+ */
+const decodeRtpTargets = (
+    body: Record<string, unknown>,
+):
+    | { ok: true; audioTarget?: AudioTarget; videoTarget?: AudioTarget }
+    | { ok: false; error: string } => {
+    const audioTarget = readRtpTarget(body, "audioTarget");
+    if (body.audioTarget !== undefined && !audioTarget) {
+        return { ok: false, error: "Invalid audioTarget" };
+    }
+    const videoTarget = readRtpTarget(body, "videoTarget");
+    if (body.videoTarget !== undefined && !videoTarget) {
+        return { ok: false, error: "Invalid videoTarget" };
+    }
+    return { ok: true, audioTarget, videoTarget };
+};
+
 app.post("/launch", async (req, res) => {
     const body = requestBody(req);
     const roomId = readString(body, "roomId");
@@ -96,12 +117,18 @@ app.post("/launch", async (req, res) => {
         return;
     }
 
+    const targets = decodeRtpTargets(body);
+    if (!targets.ok) {
+        res.status(400).json({ error: targets.error });
+        return;
+    }
+
     const result = await containerManager.launchBrowser({
         roomId,
         url,
         controllerUserId: readString(body, "controllerUserId"),
-        audioTarget: readRtpTarget(body, "audioTarget"),
-        videoTarget: readRtpTarget(body, "videoTarget"),
+        audioTarget: targets.audioTarget,
+        videoTarget: targets.videoTarget,
     });
 
     if (result.success) {
@@ -121,11 +148,17 @@ app.post("/navigate", async (req, res) => {
         return;
     }
 
+    const targets = decodeRtpTargets(body);
+    if (!targets.ok) {
+        res.status(400).json({ error: targets.error });
+        return;
+    }
+
     const result = await containerManager.navigateTo({
         roomId,
         url,
-        audioTarget: readRtpTarget(body, "audioTarget"),
-        videoTarget: readRtpTarget(body, "videoTarget"),
+        audioTarget: targets.audioTarget,
+        videoTarget: targets.videoTarget,
     });
 
     if (result.success) {
