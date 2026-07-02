@@ -6,6 +6,7 @@ import {
   resolveSchedulingBase,
 } from "@/lib/scheduling";
 import { requireSfuSessionUser } from "@/lib/sfu-user-auth";
+import { canonicalizeSfuClientId } from "@/lib/sfu-client-id";
 
 
 const STATE_COOKIE = "conclave_google_calendar_state";
@@ -105,8 +106,12 @@ export async function GET(request: Request) {
       | { email?: string }
       | null;
     const headers = buildSchedulingHeaders(authResult.user, request);
-    if (typeof payload.clientId === "string" && payload.clientId.trim()) {
-      headers.set("x-sfu-client", payload.clientId.trim());
+    const clientId =
+      typeof payload.clientId === "string"
+        ? canonicalizeSfuClientId(payload.clientId)
+        : null;
+    if (clientId) {
+      headers.set("x-sfu-client", clientId);
     }
     headers.set("x-app-origin", origin);
     const response = await fetch(`${resolveSchedulingBase()}/calendar/google`, {

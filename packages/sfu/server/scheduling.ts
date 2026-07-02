@@ -27,6 +27,10 @@ import {
   shouldUseRedisPersistence,
   type RedisPersistenceClient,
 } from "./redisPersistence.js";
+import {
+  canonicalizeClientId,
+  CONCLAVE_CLIENT_ID,
+} from "./clientIds.js";
 
 type MaybePromise<T> = T | Promise<T>;
 
@@ -325,7 +329,8 @@ export const ensureSchedulingProfile = (
     timeZone?: string;
   },
 ): SchedulingProfile => {
-  const key = userKey(input.clientId, input.userId);
+  const clientId = canonicalizeClientId(input.clientId);
+  const key = userKey(clientId, input.userId);
   const existingId = store.profileIdByUserKey.get(key);
   const existing = existingId ? store.profilesById.get(existingId) : undefined;
   const now = Date.now();
@@ -367,11 +372,11 @@ export const ensureSchedulingProfile = (
   );
   const profile: SchedulingProfile = {
     id: randomUUID(),
-    clientId: input.clientId,
+    clientId,
     userId: input.userId,
     email: input.email.trim().toLowerCase(),
     name: sanitizeText(input.name ?? "", TITLE_MAX_LENGTH) || input.email,
-    username: uniqueUsername(store, input.clientId, baseUsername),
+    username: uniqueUsername(store, clientId, baseUsername),
     timeZone: normalizeTimeZone(input.timeZone),
     createdAt: now,
     updatedAt: now,
@@ -427,7 +432,9 @@ export const getProfileByUser = (
   clientId: string,
   userId: string,
 ): SchedulingProfile | null => {
-  const id = store.profileIdByUserKey.get(userKey(clientId, userId));
+  const id = store.profileIdByUserKey.get(
+    userKey(canonicalizeClientId(clientId), userId),
+  );
   return id ? store.profilesById.get(id) ?? null : null;
 };
 
@@ -436,7 +443,7 @@ export const moveSchedulingProfileToClient = (
   profile: SchedulingProfile,
   clientId: string,
 ): SchedulingProfile => {
-  const nextClientId = clientId.trim();
+  const nextClientId = canonicalizeClientId(clientId);
   if (!nextClientId || profile.clientId === nextClientId) return profile;
 
   store.profileIdByUserKey.delete(userKey(profile.clientId, profile.userId));
@@ -471,7 +478,7 @@ export const getPublicProfile = (
   username: string,
 ): SchedulingProfile | null => {
   const id = store.profileIdByUsername.get(
-    `${clientId}:${username.trim().toLowerCase()}`,
+    `${canonicalizeClientId(clientId)}:${username.trim().toLowerCase()}`,
   );
   return id ? store.profilesById.get(id) ?? null : null;
 };
@@ -1030,12 +1037,35 @@ const deserializeCalendar = (
   refreshToken: decryptToken(calendar.refreshToken),
 });
 
-const normalizeSnapshot = (snapshot: Partial<SchedulingSnapshot>): SchedulingSnapshot => ({
-  profiles: Array.isArray(snapshot.profiles) ? snapshot.profiles : [],
+const normalizeSnapshotClientId = (clientId: unknown): string =>
+  typeof clientId === "string" && clientId.trim()
+    ? canonicalizeClientId(clientId)
+    : CONCLAVE_CLIENT_ID;
+
+const normalizeSnapshot = (
+  snapshot: Partial<SchedulingSnapshot>,
+): SchedulingSnapshot => ({
+  profiles: Array.isArray(snapshot.profiles)
+    ? snapshot.profiles.map((profile) => ({
+        ...profile,
+        clientId: normalizeSnapshotClientId(profile.clientId),
+      }))
+    : [],
   availability: Array.isArray(snapshot.availability) ? snapshot.availability : [],
-  eventTypes: Array.isArray(snapshot.eventTypes) ? snapshot.eventTypes : [],
+  eventTypes: Array.isArray(snapshot.eventTypes)
+    ? snapshot.eventTypes.map((eventType) => ({
+        ...eventType,
+        clientId: normalizeSnapshotClientId(eventType.clientId),
+      }))
+    : [],
   calendars: Array.isArray(snapshot.calendars)
-    ? snapshot.calendars.map(deserializeCalendar)
+    ? snapshot.calendars.map((calendar) => {
+        const deserialized = deserializeCalendar(calendar);
+        return {
+          ...deserialized,
+          clientId: normalizeSnapshotClientId(deserialized.clientId),
+        };
+      })
     : [],
 });
 

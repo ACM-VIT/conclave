@@ -1,4 +1,5 @@
 export const CONCLAVE_SFU_CLIENT_ID = "conclave";
+const LEGACY_CONCLAVE_SFU_CLIENT_IDS = new Set(["default", "public"]);
 
 const normalizeSfuClientId = (value: string | undefined): string | null => {
   const normalized = value?.trim();
@@ -6,12 +7,22 @@ const normalizeSfuClientId = (value: string | undefined): string | null => {
   return /^[a-zA-Z0-9._:-]{1,64}$/.test(normalized) ? normalized : null;
 };
 
+export const canonicalizeSfuClientId = (
+  value: string | null | undefined,
+): string | null => {
+  const normalized = normalizeSfuClientId(value ?? undefined);
+  if (!normalized) return null;
+  return LEGACY_CONCLAVE_SFU_CLIENT_IDS.has(normalized.toLowerCase())
+    ? CONCLAVE_SFU_CLIENT_ID
+    : normalized;
+};
+
 export const resolveBrowserSfuClientId = (): string =>
-  normalizeSfuClientId(process.env.NEXT_PUBLIC_SFU_CLIENT_ID) ||
+  canonicalizeSfuClientId(process.env.NEXT_PUBLIC_SFU_CLIENT_ID) ||
   CONCLAVE_SFU_CLIENT_ID;
 
 export const resolveServerSfuClientId = (): string =>
-  normalizeSfuClientId(process.env.SFU_CLIENT_ID) ||
+  canonicalizeSfuClientId(process.env.SFU_CLIENT_ID) ||
   resolveBrowserSfuClientId();
 
 export const resolveSfuClientIdCandidates = (
@@ -19,7 +30,7 @@ export const resolveSfuClientIdCandidates = (
 ): string[] => {
   const seen = new Set<string>();
   const candidates = [
-    normalizeSfuClientId(preferred ?? undefined),
+    canonicalizeSfuClientId(preferred),
     resolveServerSfuClientId(),
     CONCLAVE_SFU_CLIENT_ID,
     "default",

@@ -23,6 +23,7 @@ import {
   shouldUseRedisPersistence,
   type RedisPersistenceClient,
 } from "./redisPersistence.js";
+import { canonicalizeClientId } from "./clientIds.js";
 
 type MaybePromise<T> = T | Promise<T>;
 
@@ -156,6 +157,7 @@ export const createScheduledMeeting = (
   request: CreateScheduledMeetingRequest,
   options: CreateScheduledMeetingOptions,
 ): ScheduledMeeting => {
+  const clientId = canonicalizeClientId(options.clientId);
   const title = sanitizeTitle(request.title);
   if (!title || title.length < MIN_TITLE_LENGTH) {
     throw new Error("Title is required.");
@@ -192,12 +194,12 @@ export const createScheduledMeeting = (
   if (!roomCode) {
     do {
       roomCode = generateRoomCode();
-    } while (isCodeTaken(store, options.clientId, roomCode));
+    } while (isCodeTaken(store, clientId, roomCode));
   } else {
     if (roomCode.length < ROOM_CODE_MIN_LENGTH) {
       throw new Error("Custom code must be at least 3 characters.");
     }
-    if (isCodeTaken(store, options.clientId, roomCode)) {
+    if (isCodeTaken(store, clientId, roomCode)) {
       throw new Error(
         "That meeting code is already booked for another scheduled meeting.",
       );
@@ -207,7 +209,7 @@ export const createScheduledMeeting = (
   const now = Date.now();
   const meeting: ScheduledMeeting = {
     id: randomUUID(),
-    clientId: options.clientId,
+    clientId,
     roomCode,
     title,
     hostEmail,
@@ -413,7 +415,7 @@ export const moveScheduledMeetingToClient = (
   clientId: string,
 ): ScheduledMeeting | null => {
   const meeting = store.byId.get(meetingId);
-  const nextClientId = clientId.trim();
+  const nextClientId = canonicalizeClientId(clientId);
   if (!meeting || !nextClientId || meeting.clientId === nextClientId) {
     return meeting ?? null;
   }
@@ -553,7 +555,7 @@ const normalizeStoredMeeting = (raw: unknown): ScheduledMeeting | null => {
   const now = Date.now();
   return {
     id: record.id,
-    clientId: record.clientId,
+    clientId: canonicalizeClientId(record.clientId),
     roomCode: record.roomCode,
     title: typeof record.title === "string" ? record.title : "Scheduled meeting",
     hostEmail: record.hostEmail,

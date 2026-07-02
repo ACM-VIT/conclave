@@ -45,6 +45,11 @@ import {
 } from "../schedulingEmails.js";
 import { buildSchedulingMeetingLink } from "../schedulingLinks.js";
 import type { SfuState } from "../state.js";
+import {
+  canonicalizeClientId,
+  clientIdCandidates,
+  resolveDefaultClientId,
+} from "../clientIds.js";
 import type {
   BookingConfirmation,
   CalendarConnectionSummary,
@@ -71,25 +76,6 @@ const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
 const GOOGLE_FREEBUSY_URL = "https://www.googleapis.com/calendar/v3/freeBusy";
 const GOOGLE_CALENDAR_API = "https://www.googleapis.com/calendar/v3";
 const localBookingSlotLocks = new Set<string>();
-
-const CONCLAVE_CLIENT_ID = "conclave";
-const LEGACY_WEB_CLIENT_IDS = ["default", "public"];
-
-const resolveDefaultClientId = (): string =>
-  process.env.SFU_CLIENT_ID?.trim() ||
-  process.env.NEXT_PUBLIC_SFU_CLIENT_ID?.trim() ||
-  CONCLAVE_CLIENT_ID;
-
-const clientIdCandidates = (primary: string): string[] => {
-  const seen = new Set<string>();
-  return [primary, resolveDefaultClientId(), CONCLAVE_CLIENT_ID, ...LEGACY_WEB_CLIENT_IDS]
-    .map((clientId) => clientId.trim())
-    .filter((clientId) => {
-      if (!clientId || seen.has(clientId)) return false;
-      seen.add(clientId);
-      return true;
-    });
-};
 
 const hasValidSecret = (req: Request, secret: string): boolean => {
   const provided = req.header("x-sfu-secret");
@@ -146,7 +132,7 @@ const resolveClientId = (
 ): string => {
   const fromQuery = normalizeIdentifier(req.query.clientId) || "";
   const fromHeader = normalizeIdentifier(req.header("x-sfu-client")) || "";
-  return fromQuery || fromHeader || fallback;
+  return canonicalizeClientId(fromQuery || fromHeader || fallback);
 };
 
 const resolveUserContext = (

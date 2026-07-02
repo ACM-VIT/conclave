@@ -1,6 +1,9 @@
 import { SignJWT } from "jose";
 import { NextResponse } from "next/server";
-import { resolveServerSfuClientId } from "@/lib/sfu-client-id";
+import {
+  canonicalizeSfuClientId,
+  resolveServerSfuClientId,
+} from "@/lib/sfu-client-id";
 import { requireSfuSessionUser } from "@/lib/sfu-user-auth";
 
 
@@ -48,7 +51,7 @@ export async function GET(request: Request) {
   const state = await new SignJWT({
     userId: authResult.user.id,
     clientId:
-      request.headers.get("x-sfu-client") ||
+      canonicalizeSfuClientId(request.headers.get("x-sfu-client")) ||
       resolveServerSfuClientId(),
   })
     .setProtectedHeader({ alg: "HS256" })

@@ -17,6 +17,7 @@ import {
   type AudioProducerNetworkProfile,
 } from "../lib/constants";
 import { getBrowserNetworkSnapshot } from "../lib/network-information";
+import { resolveBrowserSfuClientId } from "@/lib/sfu-client-id";
 
 type VoiceAgentStatus = "idle" | "starting" | "running" | "error";
 
@@ -99,8 +100,7 @@ const getJoinRoomRedirectError = (
   const redirectUrl = normalizeJoinRedirectUrl(response.redirectUrl);
   return redirectUrl ? new JoinRoomRedirectError(response, redirectUrl) : null;
 };
-const SFU_CLIENT_ID =
-  process.env.NEXT_PUBLIC_SFU_CLIENT_ID || "conclave";
+const SFU_CLIENT_ID = resolveBrowserSfuClientId();
 const TURN_URL_PATTERN = /^turns?:/i;
 const ACTIVE_SPEAKER_HOLD_MS = 50;
 

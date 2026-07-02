@@ -6,9 +6,10 @@ import { RoomOwnershipError } from "./roomRegistry.js";
 import { cleanupRoomBrowser } from "./socket/handlers/sharedBrowserHandlers.js";
 import type { EndedRoom, SfuState } from "./state.js";
 import { clearWebinarLinkSlug } from "./webinar.js";
+import { canonicalizeClientId } from "./clientIds.js";
 
 export const getRoomChannelId = (clientId: string, roomId: string): string =>
-  `${clientId}:${roomId}`;
+  `${canonicalizeClientId(clientId)}:${roomId}`;
 
 export const getEndedRoom = (
   state: SfuState,
@@ -66,9 +67,10 @@ export const clearEndedRoom = (state: SfuState, channelId: string): boolean =>
 
 export const getOrCreateRoom = async (
   state: SfuState,
-  clientId: string,
+  requestedClientId: string,
   roomId: string,
 ): Promise<Room> => {
+  const clientId = canonicalizeClientId(requestedClientId);
   const channelId = getRoomChannelId(clientId, roomId);
   let room = state.rooms.get(channelId);
   if (room) {

@@ -33,6 +33,7 @@ import { registerScheduledMeetingRoutes } from "./scheduledMeetingRoutes.js";
 import { registerSchedulingRoutes } from "./schedulingRoutes.js";
 import type { SfuState } from "../state.js";
 import { resolveWebinarLinkTarget } from "../webinar.js";
+import { canonicalizeClientId } from "../clientIds.js";
 
 export type CreateSfuAppOptions = {
   state: SfuState;
@@ -140,7 +141,7 @@ const resolveClientId = (req: Request): string | undefined => {
   const headerValue = normalizeIdentifier(req.header("x-sfu-client")) ?? "";
   const queryValue = normalizeIdentifier(req.query.clientId) ?? "";
   const next = queryValue || headerValue;
-  return next || undefined;
+  return next ? canonicalizeClientId(next) : undefined;
 };
 
 const parseMediaKinds = (value: unknown): MediaKind[] | null | undefined => {
@@ -515,15 +516,16 @@ export const createSfuApp = ({
     }
 
     try {
+      const resolvedClientId = canonicalizeClientId(clientId);
       let roomId = requestedRoomId;
-      let channelId = getRoomChannelId(clientId, roomId);
+      let channelId = getRoomChannelId(resolvedClientId, roomId);
       let owner = await state.roomRegistry.getOwner(channelId);
 
       if (!owner) {
         const webinarTarget = resolveWebinarLinkTarget(
           state.webinarLinks,
           requestedRoomId,
-          clientId,
+          resolvedClientId,
         );
         if (webinarTarget) {
           roomId = webinarTarget.roomId;
@@ -535,7 +537,7 @@ export const createSfuApp = ({
       res.json({
         requestedRoomId,
         roomId,
-        clientId,
+        clientId: resolvedClientId,
         channelId,
         registryMode: state.roomRegistry.mode,
         local: state.roomRegistry.isLocalOwner(owner),

@@ -1,5 +1,6 @@
 import { Admin } from "../../../config/classes/Admin.js";
 import { config } from "../../../config/config.js";
+import { canonicalizeClientId } from "../../clientIds.js";
 import { MAX_DISPLAY_NAME_LENGTH } from "../../constants.js";
 import { normalizeDisplayName } from "../../identity.js";
 import { getSocketAuthUser } from "../auth.js";
@@ -42,8 +43,9 @@ export const registerDisplayNameHandlers = (
         }
 
         const user = getSocketAuthUser(socket);
-        const clientId =
-          typeof user?.clientId === "string" ? user.clientId : "default";
+        const clientId = canonicalizeClientId(
+          typeof user?.clientId === "string" ? user.clientId : "default",
+        );
         const clientPolicy =
           config.clientPolicies[clientId] ?? config.clientPolicies.default;
         const canUpdateDisplayName =

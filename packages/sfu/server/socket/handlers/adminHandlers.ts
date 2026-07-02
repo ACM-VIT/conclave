@@ -3,6 +3,7 @@ import { Admin } from "../../../config/classes/Admin.js";
 import type { ProducerType } from "../../../config/classes/Client.js";
 import type { RedirectData } from "../../../types.js";
 import { Logger } from "../../../utilities/loggers.js";
+import { canonicalizeClientId } from "../../clientIds.js";
 import {
   admitAllPendingUsers,
   applyRoomPolicyUpdate,
@@ -113,7 +114,9 @@ const normalizeProducerId = (value: unknown): string | null => {
 
 const resolveClientId = (context: ConnectionContext): string => {
   const raw = getSocketAuthUser(context.socket)?.clientId;
-  return typeof raw === "string" && raw.trim() ? raw.trim() : "default";
+  return canonicalizeClientId(
+    typeof raw === "string" && raw.trim() ? raw.trim() : "default",
+  );
 };
 
 const ensureAdminRoom = (

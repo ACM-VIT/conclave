@@ -3,7 +3,10 @@ import { createHash } from "node:crypto";
 import { NextResponse } from "next/server";
 import { resolveHostGrant } from "@conclave/meeting-core";
 import { auth } from "@/lib/auth";
-import { resolveServerSfuClientId } from "@/lib/sfu-client-id";
+import {
+  canonicalizeSfuClientId,
+  resolveServerSfuClientId,
+} from "@/lib/sfu-client-id";
 import { lookupScheduledWebinarByRoomId } from "@/lib/sfu-user-auth";
 import {
   normalizeRoutedSfuUrl,
@@ -464,8 +467,10 @@ const resolveIceServers = async (): Promise<IceServer[]> => {
 };
 
 const resolveClientId = (request: Request, body?: JoinRequestBody) => {
-  const headerClientId = request.headers.get("x-sfu-client")?.trim() || "";
-  const bodyClientId = body?.clientId?.trim() || "";
+  const headerClientId = canonicalizeSfuClientId(
+    request.headers.get("x-sfu-client"),
+  );
+  const bodyClientId = canonicalizeSfuClientId(body?.clientId);
   return headerClientId || bodyClientId || resolveServerSfuClientId();
 };
 

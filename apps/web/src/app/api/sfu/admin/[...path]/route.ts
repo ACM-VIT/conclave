@@ -6,6 +6,7 @@ import {
 } from "@/lib/sfu-admin-auth";
 import { normalizeSfuUrl, resolveSfuUrls } from "@/lib/sfu-url";
 import { readResponseError } from "@/app/lib/utils";
+import { canonicalizeSfuClientId } from "@/lib/sfu-client-id";
 
 type RouteContext = {
   params: Promise<{
@@ -70,8 +71,8 @@ const proxyAdminRequest = async (
   // way; injecting the env default here (as join flows do) silently hid every
   // other tenant's rooms from the admin room list.
   const clientId =
-    incomingUrl.searchParams.get("clientId")?.trim() ||
-    request.headers.get("x-sfu-client")?.trim() ||
+    canonicalizeSfuClientId(incomingUrl.searchParams.get("clientId")) ||
+    canonicalizeSfuClientId(request.headers.get("x-sfu-client")) ||
     "";
   if (clientId) {
     targetUrl.searchParams.set("clientId", clientId);

@@ -9,6 +9,7 @@ import type {
   JoinRoomResponse,
 } from "../../../types.js";
 import { Logger } from "../../../utilities/loggers.js";
+import { canonicalizeClientId } from "../../clientIds.js";
 import { MAX_DISPLAY_NAME_LENGTH } from "../../constants.js";
 import {
   buildUserIdentity,
@@ -123,7 +124,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           respond(callback, { error: "Invalid client ID" });
           return;
         }
-        const clientId = tokenClientId;
+        const clientId = canonicalizeClientId(tokenClientId);
         let roomId = requestedRoomId;
         if (isWebinarAttendeeJoin) {
           let webinarTarget = resolveWebinarLinkTarget(

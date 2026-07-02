@@ -1,6 +1,9 @@
 import { createHmac } from "node:crypto";
 import { auth } from "@/lib/auth";
-import { resolveServerSfuClientId } from "@/lib/sfu-client-id";
+import {
+  canonicalizeSfuClientId,
+  resolveServerSfuClientId,
+} from "@/lib/sfu-client-id";
 export { resolveSfuUrl } from "@/lib/sfu-url";
 
 const firstNonEmpty = (...values: Array<string | undefined>): string | undefined => {
@@ -131,9 +134,19 @@ export const resolveSfuClientId = (
   request: Request,
   options?: { fallback?: string },
 ): string => {
-  const fromQuery = new URL(request.url).searchParams.get("clientId")?.trim() || "";
-  const fromHeader = request.headers.get("x-sfu-client")?.trim() || "";
-  return fromQuery || fromHeader || resolveServerSfuClientId() || options?.fallback || "";
+  const fromQuery = canonicalizeSfuClientId(
+    new URL(request.url).searchParams.get("clientId"),
+  );
+  const fromHeader = canonicalizeSfuClientId(
+    request.headers.get("x-sfu-client"),
+  );
+  return (
+    fromQuery ||
+    fromHeader ||
+    resolveServerSfuClientId() ||
+    canonicalizeSfuClientId(options?.fallback) ||
+    ""
+  );
 };
 
 export const requireSfuAdminUser = async (

@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Socket } from "socket.io-client";
 import type { JoinMode } from "../lib/types";
 import { generateSessionId, readResponseError } from "../lib/utils";
+import { resolveBrowserSfuClientId } from "@/lib/sfu-client-id";
 
 const DevVideoEffectsDiagnostic = dynamic(
   () => import("./DevVideoEffectsDiagnostic"),
@@ -25,7 +26,7 @@ const parseNumberInput = (
   return clampNumber(parsed, min, max);
 };
 
-const clientId = process.env.NEXT_PUBLIC_SFU_CLIENT_ID || "conclave";
+const clientId = resolveBrowserSfuClientId();
 
 const readError = readResponseError;
 

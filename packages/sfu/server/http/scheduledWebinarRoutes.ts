@@ -18,12 +18,18 @@ import {
   getScheduledWebinarBySlug,
   getScheduledWebinarForRoom,
   listScheduledWebinars,
+  moveScheduledWebinarToClient,
   persistScheduledWebinarChanges,
   persistScheduledWebinarDeletes,
   updateScheduledWebinar,
 } from "../scheduledWebinars.js";
 import { clearWebinarLinkSlug } from "../webinar.js";
 import type { SfuState } from "../state.js";
+import {
+  canonicalizeClientId,
+  clientIdCandidates,
+  resolveDefaultClientId,
+} from "../clientIds.js";
 import type {
   CreateScheduledWebinarRequest,
   ScheduledWebinar,
@@ -72,14 +78,11 @@ const normalizeEmail = (value: unknown): string | null => {
 
 const resolveClientId = (
   req: Request,
-  fallback =
-    process.env.SFU_CLIENT_ID?.trim() ||
-    process.env.NEXT_PUBLIC_SFU_CLIENT_ID?.trim() ||
-    "conclave",
+  fallback = resolveDefaultClientId(),
 ): string => {
   const fromQuery = normalizeIdentifier(req.query.clientId) || "";
   const fromHeader = normalizeIdentifier(req.header("x-sfu-client")) || "";
-  return fromQuery || fromHeader || fallback;
+  return canonicalizeClientId(fromQuery || fromHeader || fallback);
 };
 
 const resolveUserContext = (
@@ -177,6 +180,78 @@ export const registerScheduledWebinarRoutes = (
     }
   };
 
+  const migrateWebinarNamespace = (
+    webinar: ScheduledWebinar,
+    clientId: string,
+  ): ScheduledWebinar | null => {
+    if (webinar.clientId === clientId) return webinar;
+    try {
+      const migrated = moveScheduledWebinarToClient(
+        state.scheduledWebinars,
+        webinar.id,
+        clientId,
+      );
+      if (migrated) {
+        persistChanged(migrated);
+      }
+      return migrated;
+    } catch (error) {
+      Logger.warn(
+        `Failed to migrate scheduled webinar ${webinar.id} from ${webinar.clientId} to ${clientId}`,
+        error,
+      );
+      return null;
+    }
+  };
+
+  const findWebinarForRoom = (
+    clientId: string,
+    roomId: string,
+  ): ScheduledWebinar | null => {
+    for (const candidateClientId of clientIdCandidates(clientId)) {
+      const webinar = getScheduledWebinarForRoom(
+        state.scheduledWebinars,
+        candidateClientId,
+        roomId,
+      );
+      if (!webinar) continue;
+      if (webinar.clientId === clientId) return webinar;
+      return migrateWebinarNamespace(webinar, clientId) ?? webinar;
+    }
+    return null;
+  };
+
+  const listWebinarsForClient = (options: {
+    clientId: string;
+    ownerEmail?: string;
+    includeAll: boolean;
+    status?: ScheduledWebinarStatus[];
+  }): ScheduledWebinar[] => {
+    const byId = new Map<string, ScheduledWebinar>();
+    const seenRoomIds = new Set<string>();
+    for (const candidateClientId of clientIdCandidates(options.clientId)) {
+      const webinars = listScheduledWebinars(state.scheduledWebinars, {
+        clientId: candidateClientId,
+        ownerEmail: options.ownerEmail,
+        includeAll: options.includeAll,
+        status: options.status,
+      });
+      for (const webinar of webinars) {
+        if (seenRoomIds.has(webinar.roomId)) continue;
+        const normalized =
+          webinar.clientId === options.clientId
+            ? webinar
+            : migrateWebinarNamespace(webinar, options.clientId);
+        if (!normalized) continue;
+        seenRoomIds.add(normalized.roomId);
+        byId.set(normalized.id, normalized);
+      }
+    }
+    return Array.from(byId.values()).sort(
+      (a, b) => a.scheduledStartAt - b.scheduledStartAt,
+    );
+  };
+
   app.get("/scheduled-webinars", (req, res) => {
     if (!requireSecret(req, res)) return;
     const user = resolveUserContext(req);
@@ -184,7 +259,7 @@ export const registerScheduledWebinarRoutes = (
     const includeAll = req.query.scope === "all" && user.isAdmin;
     const statusFilter = parseStatusFilter(req.query.status);
 
-    const list = listScheduledWebinars(state.scheduledWebinars, {
+    const list = listWebinarsForClient({
       clientId,
       ownerEmail: user.email || undefined,
       includeAll,
@@ -230,6 +305,7 @@ export const registerScheduledWebinarRoutes = (
 
   app.get("/scheduled-webinars/by-slug/:slug", (req, res) => {
     if (!requireSecret(req, res)) return;
+    const clientId = resolveClientId(req);
     const slug = normalizeIdentifier(req.params.slug);
     if (!slug) {
       res.status(400).json({ error: "Webinar link code is required" });
@@ -240,7 +316,14 @@ export const registerScheduledWebinarRoutes = (
       res.status(404).json({ error: "Scheduled webinar not found" });
       return;
     }
-    res.json({ scheduledWebinar: serializeScheduledWebinar(webinar) });
+    const normalizedWebinar =
+      webinar.clientId === clientId ||
+      clientIdCandidates(clientId).includes(webinar.clientId)
+        ? migrateWebinarNamespace(webinar, clientId) ?? webinar
+        : webinar;
+    res.json({
+      scheduledWebinar: serializeScheduledWebinar(normalizedWebinar),
+    });
   });
 
   app.get("/scheduled-webinars/by-room/:clientId/:roomId", (req, res) => {
@@ -251,11 +334,7 @@ export const registerScheduledWebinarRoutes = (
       res.status(400).json({ error: "Missing clientId or roomId" });
       return;
     }
-    const webinar = getScheduledWebinarForRoom(
-      state.scheduledWebinars,
-      clientId,
-      roomId,
-    );
+    const webinar = findWebinarForRoom(canonicalizeClientId(clientId), roomId);
     if (!webinar) {
       res.status(404).json({ error: "Scheduled webinar not found" });
       return;

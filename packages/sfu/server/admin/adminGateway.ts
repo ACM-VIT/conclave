@@ -4,6 +4,7 @@ import { Logger } from "../../utilities/loggers.js";
 import { renewRoomOwnerships } from "../rooms.js";
 import { listScheduledMeetings } from "../scheduledMeetings.js";
 import { listScheduledWebinars } from "../scheduledWebinars.js";
+import { canonicalizeClientId } from "../clientIds.js";
 import type { SfuState } from "../state.js";
 import {
   getAdminAuditEntries,
@@ -299,11 +300,27 @@ export const registerAdminGateway = (
   // first, capped so a busy booking-link tenant cannot flood the socket.
   const buildScheduled = (): AdminScheduledItem[] => {
     const items: AdminScheduledItem[] = [];
+    const seen = new Set<string>();
     const now = Date.now();
+    const addItem = (item: AdminScheduledItem): void => {
+      const normalizedItem = {
+        ...item,
+        clientId: canonicalizeClientId(item.clientId),
+      };
+      const key = [
+        normalizedItem.kind,
+        normalizedItem.clientId,
+        normalizedItem.roomId,
+      ].join(":");
+      if (seen.has(key)) return;
+      seen.add(key);
+      items.push(normalizedItem);
+    };
+
     for (const meeting of listScheduledMeetings(state.scheduledMeetings, {
       includeAll: true,
     })) {
-      items.push({
+      addItem({
         kind: "meeting",
         id: meeting.id,
         title: meeting.title,
@@ -319,7 +336,7 @@ export const registerAdminGateway = (
     for (const webinar of listScheduledWebinars(state.scheduledWebinars, {
       includeAll: true,
     })) {
-      items.push({
+      addItem({
         kind: "webinar",
         id: webinar.id,
         title: webinar.title,

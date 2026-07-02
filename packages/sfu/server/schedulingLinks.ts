@@ -1,4 +1,8 @@
 import type { ScheduledMeeting } from "../types.js";
+import {
+  canonicalizeClientId,
+  CONCLAVE_CLIENT_ID,
+} from "./clientIds.js";
 
 type MeetingLinkInput = Pick<ScheduledMeeting, "clientId" | "roomCode">;
 
@@ -10,8 +14,9 @@ export const buildSchedulingMeetingLink = (
     `/${encodeURIComponent(meeting.roomCode)}`,
     `${appOrigin.replace(/\/$/, "")}/`,
   );
-  if (meeting.clientId && meeting.clientId !== "default") {
-    url.searchParams.set("clientId", meeting.clientId);
+  const clientId = canonicalizeClientId(meeting.clientId);
+  if (clientId && clientId !== CONCLAVE_CLIENT_ID) {
+    url.searchParams.set("clientId", clientId);
   }
   return url.toString();
 };

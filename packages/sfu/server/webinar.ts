@@ -6,6 +6,7 @@ import type {
   WebinarFeedMode,
   WebinarUpdateRequest,
 } from "../types.js";
+import { canonicalizeClientId } from "./clientIds.js";
 
 export const DEFAULT_WEBINAR_MAX_ATTENDEES = 500;
 export const MIN_WEBINAR_MAX_ATTENDEES = 1;
@@ -167,7 +168,7 @@ const upsertWebinarLinkTarget = (
   webinarLinks.set(slug, {
     roomChannelId: room.channelId,
     roomId: room.id,
-    clientId: room.clientId,
+    clientId: canonicalizeClientId(room.clientId),
   });
 };
 
@@ -285,7 +286,10 @@ export const resolveWebinarLinkTarget = (
     return null;
   }
   const target = webinarLinks.get(normalizedSlug);
-  if (!target || target.clientId !== clientId) {
+  if (
+    !target ||
+    canonicalizeClientId(target.clientId) !== canonicalizeClientId(clientId)
+  ) {
     return null;
   }
   return target;

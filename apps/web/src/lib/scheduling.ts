@@ -13,7 +13,10 @@ import {
   readScheduledMeetingError,
 } from "@/lib/scheduled-meetings";
 import type { SfuAuthenticatedUser } from "@/lib/sfu-user-auth";
-import { resolveServerSfuClientId } from "@/lib/sfu-client-id";
+import {
+  canonicalizeSfuClientId,
+  resolveServerSfuClientId,
+} from "@/lib/sfu-client-id";
 
 export type {
   AvailableSlot,
@@ -72,7 +75,7 @@ export const buildPublicSchedulingHeaders = (request?: Request): Headers => {
   headers.set("accept", "application/json");
   headers.set("content-type", "application/json");
   const clientId =
-    request?.headers.get("x-sfu-client")?.trim() ||
+    canonicalizeSfuClientId(request?.headers.get("x-sfu-client")) ||
     resolveServerSfuClientId();
   headers.set("x-sfu-client", clientId);
   return headers;

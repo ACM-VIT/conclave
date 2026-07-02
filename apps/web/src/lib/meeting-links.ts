@@ -1,21 +1,20 @@
+import {
+  canonicalizeSfuClientId,
+  CONCLAVE_SFU_CLIENT_ID,
+} from "@/lib/sfu-client-id";
+
 type MeetingLinkInput = {
   roomCode: string;
   clientId?: string | null;
 };
 
-const shouldIncludeClientId = (
-  clientId: string | null | undefined,
-): clientId is string => {
-  const normalized = clientId?.trim();
-  return Boolean(normalized && normalized !== "default");
-};
-
 export const buildMeetingPath = (meeting: MeetingLinkInput): string => {
   const path = `/${encodeURIComponent(meeting.roomCode)}`;
-  if (!shouldIncludeClientId(meeting.clientId)) {
+  const clientId = canonicalizeSfuClientId(meeting.clientId);
+  if (!clientId || clientId === CONCLAVE_SFU_CLIENT_ID) {
     return path;
   }
-  return `${path}?clientId=${encodeURIComponent(meeting.clientId.trim())}`;
+  return `${path}?clientId=${encodeURIComponent(clientId)}`;
 };
 
 export const buildMeetingUrl = (

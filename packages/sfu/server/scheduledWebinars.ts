@@ -19,6 +19,7 @@ import {
   normalizeWebinarLinkSlug,
   normalizeHostEmail,
 } from "./webinar.js";
+import { canonicalizeClientId } from "./clientIds.js";
 
 const DEFAULT_EARLY_ENTRY_MINUTES = 10;
 const MAX_EARLY_ENTRY_MINUTES = 240;
@@ -205,6 +206,28 @@ export const getScheduledWebinarForRoom = (
 ): ScheduledWebinar | null => {
   const id = store.byRoomChannel.get(roomChannelKey(clientId, roomId));
   return id ? store.byId.get(id) ?? null : null;
+};
+
+export const moveScheduledWebinarToClient = (
+  store: ScheduledWebinarStore,
+  webinarId: string,
+  clientId: string,
+): ScheduledWebinar | null => {
+  const webinar = store.byId.get(webinarId);
+  const nextClientId = canonicalizeClientId(clientId);
+  if (!webinar || !nextClientId || webinar.clientId === nextClientId) {
+    return webinar ?? null;
+  }
+  const nextRoomChannel = roomChannelKey(nextClientId, webinar.roomId);
+  const owner = store.byRoomChannel.get(nextRoomChannel);
+  if (owner && owner !== webinar.id) {
+    throw new Error("That webinar room already exists in the target client.");
+  }
+  store.byRoomChannel.delete(roomChannelKey(webinar.clientId, webinar.roomId));
+  webinar.clientId = nextClientId;
+  webinar.updatedAt = Date.now();
+  store.byRoomChannel.set(nextRoomChannel, webinar.id);
+  return webinar;
 };
 
 export const listScheduledWebinars = (
@@ -535,7 +558,7 @@ const normalizeStoredWebinar = (raw: unknown): ScheduledWebinar | null => {
   const linkSlug = String(record.linkSlug);
   return {
     id: record.id,
-    clientId: record.clientId,
+    clientId: canonicalizeClientId(record.clientId),
     roomId: record.roomId,
     linkSlug,
     title: sanitizeString(record.title, { max: MAX_TITLE_LENGTH }) || "Untitled webinar",
@@ -634,6 +657,7 @@ export const createScheduledWebinar = (
   request: CreateScheduledWebinarRequest,
   options: CreateScheduledWebinarOptions,
 ): { webinar: ScheduledWebinar; inviteCodeHash: string | null } => {
+  const clientId = canonicalizeClientId(options.clientId);
   const title = sanitizeString(request.title, { max: MAX_TITLE_LENGTH });
   if (!title || title.length < MIN_TITLE_LENGTH) {
     throw new Error("Title is required.");
@@ -700,7 +724,7 @@ export const createScheduledWebinar = (
   const now = Date.now();
   const webinar: ScheduledWebinar = {
     id: randomUUID(),
-    clientId: options.clientId,
+    clientId,
     roomId: generateRoomId(),
     linkSlug,
     title,

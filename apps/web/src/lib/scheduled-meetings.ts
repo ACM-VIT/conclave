@@ -4,6 +4,10 @@ import {
 } from "@/lib/sfu-user-auth";
 import { resolveSfuSecret, resolveSfuUrl } from "@/lib/sfu-admin-auth";
 import { readResponseError } from "@/app/lib/utils";
+import {
+  canonicalizeSfuClientId,
+  CONCLAVE_SFU_CLIENT_ID,
+} from "@/lib/sfu-client-id";
 
 export type ScheduledMeetingStatus =
   | "scheduled"
@@ -81,8 +85,10 @@ export const lookupPublicScheduledMeetingByRoomCode = async (
   roomCode: string,
 ): Promise<PublicScheduledMeeting | null> => {
   try {
+    const resolvedClientId =
+      canonicalizeSfuClientId(clientId) || CONCLAVE_SFU_CLIENT_ID;
     const base = resolveScheduledMeetingsBase();
-    const url = `${base}/public/by-room/${encodeURIComponent(roomCode)}?clientId=${encodeURIComponent(clientId)}`;
+    const url = `${base}/public/by-room/${encodeURIComponent(roomCode)}?clientId=${encodeURIComponent(resolvedClientId)}`;
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -106,8 +112,10 @@ export const lookupScheduledMeetingHostEmail = async (
   roomCode: string,
 ): Promise<string | null> => {
   try {
+    const resolvedClientId =
+      canonicalizeSfuClientId(clientId) || CONCLAVE_SFU_CLIENT_ID;
     const base = resolveScheduledMeetingsBase();
-    const url = `${base}/by-room/${encodeURIComponent(roomCode)}?clientId=${encodeURIComponent(clientId)}`;
+    const url = `${base}/by-room/${encodeURIComponent(roomCode)}?clientId=${encodeURIComponent(resolvedClientId)}`;
     const response = await fetch(url, {
       method: "GET",
       headers: {

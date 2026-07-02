@@ -7,11 +7,17 @@ import {
   getScheduledMeetingById,
   getScheduledMeetingByRoomCode,
   listScheduledMeetings,
+  moveScheduledMeetingToClient,
   persistScheduledMeetingChanges,
   persistScheduledMeetingDeletes,
   updateScheduledMeeting,
 } from "../scheduledMeetings.js";
 import type { SfuState } from "../state.js";
+import {
+  canonicalizeClientId,
+  clientIdCandidates,
+  resolveDefaultClientId,
+} from "../clientIds.js";
 import type {
   CreateScheduledMeetingRequest,
   ScheduledMeeting,
@@ -30,12 +36,6 @@ const MAX_EMAIL_LENGTH = 320;
 const MAX_NAME_LENGTH = 120;
 const MAX_STATUS_FILTER_LENGTH = 128;
 const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/;
-const CONCLAVE_CLIENT_ID = "conclave";
-
-const resolveDefaultClientId = (): string =>
-  process.env.SFU_CLIENT_ID?.trim() ||
-  process.env.NEXT_PUBLIC_SFU_CLIENT_ID?.trim() ||
-  CONCLAVE_CLIENT_ID;
 
 const hasValidSecret = (req: Request, secret: string): boolean => {
   const provided = req.header("x-sfu-secret");
@@ -69,7 +69,7 @@ const resolveClientId = (
 ): string => {
   const fromQuery = normalizeIdentifier(req.query.clientId) || "";
   const fromHeader = normalizeIdentifier(req.header("x-sfu-client")) || "";
-  return fromQuery || fromHeader || fallback;
+  return canonicalizeClientId(fromQuery || fromHeader || fallback);
 };
 
 const resolveUserContext = (
@@ -165,14 +165,87 @@ export const registerScheduledMeetingRoutes = (
     }
   };
 
-  app.get("/scheduled-meetings", (req, res) => {
+  const migrateMeetingNamespace = async (
+    meeting: ScheduledMeeting,
+    clientId: string,
+  ): Promise<ScheduledMeeting | null> => {
+    if (meeting.clientId === clientId) return meeting;
+    try {
+      const migrated = moveScheduledMeetingToClient(
+        state.scheduledMeetings,
+        meeting.id,
+        clientId,
+      );
+      if (migrated) {
+        await persistChanged(migrated);
+      }
+      return migrated;
+    } catch (error) {
+      Logger.warn(
+        `Failed to migrate scheduled meeting ${meeting.id} from ${meeting.clientId} to ${clientId}`,
+        error,
+      );
+      return null;
+    }
+  };
+
+  const findMeetingByRoomCode = async (
+    clientId: string,
+    roomCode: string,
+  ): Promise<ScheduledMeeting | null> => {
+    for (const candidateClientId of clientIdCandidates(clientId)) {
+      const meeting = getScheduledMeetingByRoomCode(
+        state.scheduledMeetings,
+        candidateClientId,
+        roomCode,
+      );
+      if (!meeting) continue;
+      if (meeting.clientId === clientId) return meeting;
+      const migrated = await migrateMeetingNamespace(meeting, clientId);
+      return migrated ?? meeting;
+    }
+    return null;
+  };
+
+  const listMeetingsForClient = async (options: {
+    clientId: string;
+    ownerEmail?: string;
+    includeAll: boolean;
+    status?: ScheduledMeetingStatus[];
+  }): Promise<ScheduledMeeting[]> => {
+    const byId = new Map<string, ScheduledMeeting>();
+    const seenRoomCodes = new Set<string>();
+    for (const candidateClientId of clientIdCandidates(options.clientId)) {
+      const meetings = listScheduledMeetings(state.scheduledMeetings, {
+        clientId: candidateClientId,
+        ownerEmail: options.ownerEmail,
+        includeAll: options.includeAll,
+        status: options.status,
+      });
+      for (const meeting of meetings) {
+        if (seenRoomCodes.has(meeting.roomCode)) continue;
+        const normalized =
+          meeting.clientId === options.clientId
+            ? meeting
+            : await migrateMeetingNamespace(meeting, options.clientId);
+        if (!normalized) continue;
+        seenRoomCodes.add(normalized.roomCode);
+        byId.set(normalized.id, normalized);
+      }
+    }
+    return Array.from(byId.values()).sort(
+      (a, b) => a.scheduledStartAt - b.scheduledStartAt,
+    );
+  };
+
+  app.get("/scheduled-meetings", async (req, res) => {
     if (!requireSecret(req, res)) return;
     const user = resolveUserContext(req);
     const clientId = resolveClientId(req);
     const includeAll = req.query.scope === "all" && user.isAdmin;
     const statusFilter = parseStatusFilter(req.query.status);
 
-    const list = listScheduledMeetings(state.scheduledMeetings, {
+    const list = await listMeetingsForClient({
       clientId,
       ownerEmail: user.email || undefined,
       includeAll,
@@ -211,7 +284,7 @@ export const registerScheduledMeetingRoutes = (
     }
   });
 
-  app.get("/scheduled-meetings/by-room/:roomCode", (req, res) => {
+  app.get("/scheduled-meetings/by-room/:roomCode", async (req, res) => {
     if (!requireSecret(req, res)) return;
     const clientId = resolveClientId(req);
     const roomCode = normalizeIdentifier(
@@ -222,11 +295,7 @@ export const registerScheduledMeetingRoutes = (
       res.status(400).json({ error: "Room code is required" });
       return;
     }
-    const meeting = getScheduledMeetingByRoomCode(
-      state.scheduledMeetings,
-      clientId,
-      roomCode,
-    );
+    const meeting = await findMeetingByRoomCode(clientId, roomCode);
     if (!meeting) {
       res.status(404).json({ error: "Scheduled meeting not found" });
       return;
@@ -234,7 +303,7 @@ export const registerScheduledMeetingRoutes = (
     res.json({ scheduledMeeting: serializeMeeting(meeting) });
   });
 
-  app.get("/scheduled-meetings/public/by-room/:roomCode", (req, res) => {
+  app.get("/scheduled-meetings/public/by-room/:roomCode", async (req, res) => {
     if (!requireSecret(req, res)) return;
     const clientId = resolveClientId(req);
     const roomCode = normalizeIdentifier(
@@ -245,11 +314,7 @@ export const registerScheduledMeetingRoutes = (
       res.status(400).json({ error: "Room code is required" });
       return;
     }
-    const meeting = getScheduledMeetingByRoomCode(
-      state.scheduledMeetings,
-      clientId,
-      roomCode,
-    );
+    const meeting = await findMeetingByRoomCode(clientId, roomCode);
     if (!meeting) {
       res.status(404).json({ error: "Scheduled meeting not found" });
       return;

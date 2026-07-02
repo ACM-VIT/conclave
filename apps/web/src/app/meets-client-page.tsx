@@ -4,7 +4,10 @@ import { useCallback } from "react";
 import MeetsClient from "./meets-client";
 import type { JoinMode } from "./lib/types";
 import type { RoomInfo } from "@/lib/sfu-types";
-import { resolveBrowserSfuClientId } from "@/lib/sfu-client-id";
+import {
+  canonicalizeSfuClientId,
+  resolveBrowserSfuClientId,
+} from "@/lib/sfu-client-id";
 import { readResponseError } from "./lib/utils";
 
 const reactionAssets = [
@@ -20,12 +23,6 @@ const readError = readResponseError;
 
 const defaultClientId = resolveBrowserSfuClientId();
 const JOIN_INFO_REQUEST_TIMEOUT_MS = 15000;
-
-const normalizeClientId = (value: string | undefined): string | null => {
-  const normalized = value?.trim();
-  if (!normalized) return null;
-  return /^[a-zA-Z0-9._:-]{1,64}$/.test(normalized) ? normalized : null;
-};
 
 const fetchJoinInfoWithTimeout = async (
   init: RequestInit,
@@ -79,9 +76,9 @@ export default function MeetsClientPage({
 }: MeetsClientPageProps) {
   const defaultUser = user;
   const resolvedIsAdmin = isAdmin;
-  const resolvedClientId = normalizeClientId(sfuClientId) || defaultClientId;
-  const usesRoomRouting =
-    resolvedClientId === "conclave" || resolvedClientId === "public";
+  const resolvedClientId =
+    canonicalizeSfuClientId(sfuClientId) || defaultClientId;
+  const usesRoomRouting = resolvedClientId === "conclave";
 
   const getJoinInfo = useCallback(
     async (
