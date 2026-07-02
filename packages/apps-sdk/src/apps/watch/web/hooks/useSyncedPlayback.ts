@@ -111,20 +111,74 @@ export type WatchCaptionTrack = {
 };
 
 /**
- * Best-effort handle on the element's underlying YT player for the captions
- * module options (font size). Internal to youtube-video-element, so it is
- * feature-detected and every call is guarded; if a future version hides it,
- * the size control simply disappears.
+ * Best-effort handle on the element's underlying YT player. Internal to
+ * youtube-video-element, so everything is feature-detected and every call is
+ * guarded; if a future version hides it, the api-backed paths simply vanish.
  */
 type CaptionsApi = {
   setOption?: (module: string, option: string, value: unknown) => void;
+  getOption?: (module: string, option: string) => unknown;
+  loadModule?: (module: string) => void;
 };
 
 const captionsApiOf = (
   element: WatchMediaElement | null,
 ): CaptionsApi | null => {
   const api = (element as unknown as { api?: CaptionsApi } | null)?.api;
-  return api && typeof api.setOption === "function" ? api : null;
+  return api && typeof api === "object" ? api : null;
+};
+
+type ApiCaptionState = {
+  tracks: { language: string; label: string }[];
+  activeLanguage: string | null;
+};
+
+/**
+ * Read caption state straight from the YT player. The element only mirrors
+ * YouTube's tracklist into `textTracks` during PLAYING/BUFFERING state
+ * changes, and the captions module loads lazily, so on plenty of runs the DOM
+ * list stays empty forever while the iframe renders captions anyway. The api
+ * is the ground truth; the DOM mirror is a convenience.
+ */
+const readApiCaptions = (
+  element: WatchMediaElement | null,
+): ApiCaptionState | null => {
+  const api = captionsApiOf(element);
+  if (!api || typeof api.getOption !== "function") return null;
+  try {
+    const rawList = api.getOption("captions", "tracklist");
+    if (!Array.isArray(rawList) || rawList.length === 0) return null;
+    const tracks: ApiCaptionState["tracks"] = [];
+    for (const entry of rawList) {
+      const record = entry as {
+        languageCode?: unknown;
+        displayName?: unknown;
+        languageName?: unknown;
+      } | null;
+      const language =
+        record && typeof record.languageCode === "string"
+          ? record.languageCode
+          : null;
+      if (!language) continue;
+      const label =
+        (record && typeof record.displayName === "string" && record.displayName) ||
+        (record && typeof record.languageName === "string" && record.languageName) ||
+        language;
+      tracks.push({ language, label });
+    }
+    if (tracks.length === 0) return null;
+    const active = api.getOption("captions", "track") as
+      | { languageCode?: unknown }
+      | null
+      | undefined;
+    const activeLanguage =
+      active && typeof active.languageCode === "string"
+        ? active.languageCode
+        : null;
+    return { tracks, activeLanguage };
+  } catch {
+    return null;
+  }
 };
 
 type UseSyncedPlaybackArgs = {
@@ -178,37 +232,92 @@ export function useSyncedPlayback({
   const [captionFontSize, setCaptionFontSizeState] = useState(0);
   const captionFontSizeRef = useRef(0);
   captionFontSizeRef.current = captionFontSize;
-  // The embed must load YouTube's captions module (cc_load_policy 1, the
-  // element's default) or the tracklist never appears and the CC control has
-  // nothing to show. That default also force-displays captions, so each new
+  // The embed loads YouTube's captions module lazily (cc_load_policy 1, the
+  // element's default, force-displays captions once it arrives). Each new
   // video gets one initialization pass applying the user's sticky session
   // preference, which starts as off.
   const captionsPreferredRef = useRef(false);
   const captionsInitializedForRef = useRef<string | null>(null);
+  const captionsNudgedForRef = useRef<string | null>(null);
   // Declared before syncCaptionState (which runs it), assigned after the
   // callback below is created.
   const applyCaptionFontSizeRef = useRef<(() => void) | null>(null);
 
-  // Read caption state straight off the element's textTracks. The element
-  // rebuilds the list on every source change, so this is re-read on the safety
-  // tick rather than holding a subscription to a stale list.
+  // Show one track (or none) through BOTH surfaces: DOM track modes when the
+  // mirror exists, and the player api directly so it also works when the
+  // mirror never materialized. The two are idempotent with each other.
+  const applyCaptionTrack = useCallback((language: string | null) => {
+    const element = elementRef.current;
+    if (!element) return;
+    try {
+      const domList = element.textTracks ? Array.from(element.textTracks) : [];
+      for (const track of domList) {
+        track.mode =
+          language !== null && track.language === language
+            ? "showing"
+            : "disabled";
+      }
+    } catch {
+      /* mirror not ready */
+    }
+    try {
+      captionsApiOf(element)?.setOption?.(
+        "captions",
+        "track",
+        language !== null ? { languageCode: language } : {},
+      );
+    } catch {
+      /* api not ready */
+    }
+  }, []);
+
+  // Read caption state from the DOM mirror AND the player api, preferring the
+  // api for what is actually showing. Re-read on the safety tick, since both
+  // surfaces materialize at their own pace.
   const syncCaptionState = useCallback(() => {
     const element = elementRef.current;
-    const tracks = element?.textTracks;
-    if (!tracks) {
+    if (!element) {
       setCaptionsAvailable(false);
       setCaptionsOn(false);
       setCaptionTracks([]);
       return;
     }
-    const list = Array.from(tracks);
+    let domList: TextTrack[] = [];
+    try {
+      domList = element.textTracks ? Array.from(element.textTracks) : [];
+    } catch {
+      domList = [];
+    }
+    const apiState = readApiCaptions(element);
+    const currentVideo = videoIdRef.current;
+
+    // Neither surface has tracks yet: nudge the captions module once per
+    // video so a lazy load cannot leave the CC control missing forever while
+    // the iframe renders captions on its own.
+    if (
+      domList.length === 0 &&
+      !apiState &&
+      currentVideo &&
+      captionsNudgedForRef.current !== currentVideo
+    ) {
+      captionsNudgedForRef.current = currentVideo;
+      try {
+        captionsApiOf(element)?.loadModule?.("captions");
+      } catch {
+        /* module load is best effort */
+      }
+    }
+
+    const available = domList.length > 0 || apiState !== null;
+    const domShowing =
+      domList.find((track) => track.mode === "showing")?.language ?? null;
+    let activeLanguage = apiState?.activeLanguage ?? domShowing;
 
     // One-time per video: apply the sticky caption preference. The captions
-    // module starts force-displaying (its load policy), so default-off means
-    // disabling every track once the tracklist materializes.
-    const currentVideo = videoIdRef.current;
+    // module force-displays by default, so default-off means actively turning
+    // the track off as soon as EITHER surface shows captions exist.
     if (
-      list.length > 0 &&
+      available &&
       currentVideo &&
       captionsInitializedForRef.current !== currentVideo
     ) {
@@ -218,30 +327,41 @@ export function useSyncedPlayback({
           typeof navigator !== "undefined" && navigator.language
             ? navigator.language.slice(0, 2).toLowerCase()
             : "en";
+        const languages =
+          domList.length > 0
+            ? domList.map((track) => track.language)
+            : (apiState?.tracks ?? []).map((track) => track.language);
         const pick =
-          list.find((track) =>
-            track.language?.toLowerCase().startsWith(preferred),
-          ) ?? list[0];
-        for (const track of list) {
-          track.mode = track === pick ? "showing" : "disabled";
-        }
+          languages.find((language) =>
+            language?.toLowerCase().startsWith(preferred),
+          ) ?? languages[0] ?? null;
+        applyCaptionTrack(pick);
+        activeLanguage = pick;
         applyCaptionFontSizeRef.current?.();
       } else {
-        for (const track of list) {
-          track.mode = "disabled";
-        }
+        applyCaptionTrack(null);
+        activeLanguage = null;
       }
     }
 
-    setCaptionsAvailable(list.length > 0);
-    setCaptionsOn(list.some((track) => track.mode === "showing"));
-    setCaptionSizeAvailable(captionsApiOf(element) !== null);
+    setCaptionsAvailable(available);
+    setCaptionsOn(activeLanguage !== null);
+    setCaptionSizeAvailable(
+      typeof captionsApiOf(element)?.setOption === "function",
+    );
     setCaptionTracks((previous) => {
-      const next: WatchCaptionTrack[] = list.map((track) => ({
-        language: track.language,
-        label: track.label || track.language,
-        active: track.mode === "showing",
-      }));
+      const next: WatchCaptionTrack[] =
+        domList.length > 0
+          ? domList.map((track) => ({
+              language: track.language,
+              label: track.label || track.language,
+              active: track.language === activeLanguage,
+            }))
+          : (apiState?.tracks ?? []).map((track) => ({
+              language: track.language,
+              label: track.label,
+              active: track.language === activeLanguage,
+            }));
       // Keep the reference stable when nothing changed, so consumers do not
       // re-render once a second.
       const same =
@@ -254,7 +374,7 @@ export function useSyncedPlayback({
         );
       return same ? previous : next;
     });
-  }, []);
+  }, [applyCaptionTrack]);
 
   // The captions module forgets styling between videos; reapply the chosen
   // size whenever a track goes live.
@@ -380,9 +500,10 @@ export function useSyncedPlayback({
   }, [correctDrift, doc]);
 
   // A gentle safety tick: keeps the time display fresh when timeupdate is
-  // throttled (hidden tabs) and re-checks drift while paused.
+  // throttled (hidden tabs), re-checks drift while paused, and keeps polling
+  // caption availability. Not gated on `ready`, so caption detection still
+  // runs even if the ready event was missed; every step is element-guarded.
   useEffect(() => {
-    if (!ready) return;
     const interval = setInterval(() => {
       const element = elementRef.current;
       if (!element) return;
@@ -395,7 +516,7 @@ export function useSyncedPlayback({
       syncCaptionState();
     }, 1000);
     return () => clearInterval(interval);
-  }, [correctDrift, ready, syncCaptionState]);
+  }, [correctDrift, syncCaptionState]);
 
   // A new video started: allow it to advance the queue when it ends, clear any
   // stale error from the previous one, and let the fresh element correct
@@ -584,20 +705,25 @@ export function useSyncedPlayback({
     }
   }, []);
 
-  // Toggle closed captions on the local player only (never synced). The
-  // element mirrors YouTube's caption list into standard textTracks: showing a
-  // track turns YT captions on for that language, no showing track turns them
-  // off. Preference order when enabling: the browser language, then the first.
+  // Toggle closed captions on the local player only (never synced). Works
+  // through the DOM mirror and the player api alike, so the control functions
+  // even when the element never mirrored the tracklist. Preference order when
+  // enabling: the browser language, then the first track.
   const toggleCaptions = useCallback(() => {
-    const tracks = elementRef.current?.textTracks;
-    if (!tracks) return;
-    const list = Array.from(tracks);
-    if (list.length === 0) return;
-    const anyShowing = list.some((track) => track.mode === "showing");
-    if (anyShowing) {
-      for (const track of list) {
-        if (track.mode === "showing") track.mode = "disabled";
-      }
+    const element = elementRef.current;
+    if (!element) return;
+    let domList: TextTrack[] = [];
+    try {
+      domList = element.textTracks ? Array.from(element.textTracks) : [];
+    } catch {
+      domList = [];
+    }
+    const apiState = readApiCaptions(element);
+    if (domList.length === 0 && !apiState) return;
+    const domShowing = domList.some((track) => track.mode === "showing");
+    const isOn = (apiState?.activeLanguage ?? null) !== null || domShowing;
+    if (isOn) {
+      applyCaptionTrack(null);
       captionsPreferredRef.current = false;
       setCaptionsOn(false);
       return;
@@ -607,29 +733,29 @@ export function useSyncedPlayback({
       typeof navigator !== "undefined" && navigator.language
         ? navigator.language.slice(0, 2).toLowerCase()
         : "en";
+    const languages =
+      domList.length > 0
+        ? domList.map((track) => track.language)
+        : (apiState?.tracks ?? []).map((track) => track.language);
     const pick =
-      list.find((track) =>
-        track.language?.toLowerCase().startsWith(preferred),
-      ) ?? list[0];
-    pick.mode = "showing";
+      languages.find((language) =>
+        language?.toLowerCase().startsWith(preferred),
+      ) ?? languages[0];
+    if (!pick) return;
+    applyCaptionTrack(pick);
     setCaptionsOn(true);
     applyCaptionFontSize();
-  }, [applyCaptionFontSize]);
+  }, [applyCaptionTrack, applyCaptionFontSize]);
 
   const setCaptionTrack = useCallback(
     (language: string | null) => {
-      const tracks = elementRef.current?.textTracks;
-      if (!tracks) return;
-      for (const track of Array.from(tracks)) {
-        const shouldShow = language !== null && track.language === language;
-        track.mode = shouldShow ? "showing" : "disabled";
-      }
+      applyCaptionTrack(language);
       captionsPreferredRef.current = language !== null;
       setCaptionsOn(language !== null);
       if (language !== null) applyCaptionFontSize();
       syncCaptionState();
     },
-    [applyCaptionFontSize, syncCaptionState],
+    [applyCaptionTrack, applyCaptionFontSize, syncCaptionState],
   );
 
   const setCaptionFontSize = useCallback(
