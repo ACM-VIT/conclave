@@ -1056,9 +1056,6 @@ export const createSfuApp = ({
       if (client instanceof Admin) {
         continue;
       }
-      if (client.isGhost) {
-        continue;
-      }
       if (!includeAttendees && client.isWebinarAttendee) {
         continue;
       }

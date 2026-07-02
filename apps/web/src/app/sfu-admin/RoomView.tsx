@@ -18,7 +18,7 @@ import {
   Tag,
   Toggle,
   btnAccent,
-  btnGhost,
+  btnSecondary,
   btnTiny,
   btnTinyDanger,
   inputClass,
@@ -196,7 +196,7 @@ export function RoomView({
         <div className="flex shrink-0 items-center gap-1.5">
           <button
             type="button"
-            className={btnGhost}
+            className={btnSecondary}
             onClick={() => {
               void navigator.clipboard
                 ?.writeText(`${window.location.origin}/${encodeURIComponent(room.id)}`)
@@ -206,16 +206,6 @@ export function RoomView({
             title="Copy the meeting link"
           >
             {copied ? "Copied" : "Copy link"}
-          </button>
-          <button
-            type="button"
-            className={btnGhost}
-            onClick={() =>
-              window.open(`/${encodeURIComponent(room.id)}?ghost=1`, "_blank", "noopener")
-            }
-            title="Opens the join screen with ghost mode pre-armed"
-          >
-            Open as ghost
           </button>
           <ConfirmButton
             label="End room"

@@ -430,7 +430,6 @@ const joinRoomAsAgent = async (
         roomId,
         sessionId,
         displayName: AGENT_DISPLAY_NAME,
-        ghost: false,
       },
       (response: JoinRoomResponse | JoinRoomErrorResponse) => {
         if (settled) return;

@@ -86,14 +86,12 @@ export function useMeetRefs() {
   const shouldAutoJoinRef = useRef(false);
   const joinOptionsRef = useRef<{
     displayName?: string;
-    isGhost: boolean;
     isRecorder?: boolean;
     joinMode: JoinMode;
     webinarInviteCode?: string;
     meetingInviteCode?: string;
   }>({
     displayName: undefined,
-    isGhost: false,
     joinMode: "meeting",
   });
   const isChatOpenRef = useRef(false);

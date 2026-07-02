@@ -28,7 +28,6 @@ import { useMeetAudioActivity } from "./hooks/useMeetAudioActivity";
 import { useMeetChat, type ConclaveAssistantContext } from "./hooks/useMeetChat";
 import { formatTranscriptForAssistant } from "./lib/conclave-assistant";
 import { useMeetDisplayName } from "./hooks/useMeetDisplayName";
-import { useMeetGhostMode } from "./hooks/useMeetGhostMode";
 import { useMeetHandRaise } from "./hooks/useMeetHandRaise";
 import { useMeetHandRaiseSound } from "./hooks/useMeetHandRaiseSound";
 import { useMeetLifecycle } from "./hooks/useMeetLifecycle";
@@ -357,14 +356,12 @@ export type MeetsClientProps = {
     name?: string | null;
   };
   isAdmin?: boolean;
-  canGhostJoin?: boolean;
   getJoinInfo: (
     roomId: string,
     sessionId: string,
     options?: {
       user?: { id?: string; email?: string | null; name?: string | null };
       isHost?: boolean;
-      isGhost?: boolean;
       joinMode?: JoinMode;
     },
   ) => Promise<{
@@ -387,7 +384,6 @@ export default function MeetsClient({
   bypassMediaPermissions = false,
   user,
   isAdmin = false,
-  canGhostJoin = false,
   getJoinInfo,
   joinMode = "meeting",
   autoJoinOnMount = false,
@@ -400,7 +396,6 @@ export default function MeetsClient({
   const authSessionUser = authSession?.user;
   const [currentUser, setCurrentUser] = useState<MeetUser | undefined>(user);
   const [currentIsAdmin, setCurrentIsAdmin] = useState(isAdmin);
-  const [currentCanGhostJoin, setCurrentCanGhostJoin] = useState(canGhostJoin);
   const [pendingNewMeetingRoomId, setPendingNewMeetingRoomId] =
     useState<string | null>(null);
   const [meetingEndedNotice, setMeetingEndedNotice] = useState<string | null>(
@@ -489,34 +484,6 @@ export default function MeetsClient({
   }, [clearGuestStorage, isAdmin, user]);
 
   useEffect(() => {
-    setCurrentCanGhostJoin(canGhostJoin);
-  }, [canGhostJoin]);
-
-  useEffect(() => {
-    if (isAuthSessionPending) return;
-    if (!authSessionUser?.id) {
-      setCurrentCanGhostJoin(false);
-      return;
-    }
-
-    let cancelled = false;
-    void fetch("/api/sfu/session-capabilities", { cache: "no-store" })
-      .then((response) => response.json())
-      .then((data: { canGhostJoin?: boolean }) => {
-        if (cancelled) return;
-        setCurrentCanGhostJoin(Boolean(data?.canGhostJoin));
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setCurrentCanGhostJoin(false);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [authSessionUser?.id, isAuthSessionPending]);
-
-  useEffect(() => {
     const nextUser = authSessionUser
       ? normalizeSessionUser(authSessionUser)
       : undefined;
@@ -571,8 +538,6 @@ export default function MeetsClient({
     setIsScreenSharing,
     isHandRaised,
     setIsHandRaised,
-    isGhostMode,
-    setIsGhostMode,
     activeScreenShareId,
     setActiveScreenShareId,
     participants,
@@ -626,19 +591,6 @@ export default function MeetsClient({
     adminNotice,
     setAdminNotice,
   } = useMeetState({ initialRoomId });
-
-  // Deep link support: ?ghost=1 pre-arms the ghost toggle on the join screen
-  // (used by the SFU admin dashboard's "open as ghost"). The server-side
-  // capability gate still decides whether ghost join is actually allowed.
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const params = new URLSearchParams(window.location.search);
-    const ghostParam = params.get("ghost");
-    if (ghostParam === "1" || ghostParam === "true") {
-      setIsGhostMode(true);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   const [serverActiveSpeakerAvailable, setServerActiveSpeakerAvailable] =
     useState(false);
@@ -986,11 +938,9 @@ export default function MeetsClient({
   });
 
   const isAdminFlag = Boolean(currentIsAdmin);
-  const canGhostJoinFlag = Boolean(currentCanGhostJoin);
   const isWebinarAttendee =
     joinMode === "webinar_attendee" || webinarRole === "attendee";
-  const ghostEnabled = canGhostJoinFlag && isGhostMode;
-  const isReadOnlyObserver = ghostEnabled || isWebinarAttendee;
+  const isReadOnlyObserver = isWebinarAttendee;
   const canModerateMeeting = isAdminFlag && !isReadOnlyObserver;
   const shouldRunVideoEffects = shouldRunVisualVideoEffects;
   const shouldPublishProcessedVideo = shouldRunVisualVideoEffects;
@@ -1037,7 +987,6 @@ export default function MeetsClient({
     user: currentUser,
     userId,
     isAdmin: isAdminFlag,
-    ghostEnabled,
     socketRef: refs.socketRef,
     joinOptionsRef: refs.joinOptionsRef,
   });
@@ -1070,7 +1019,6 @@ export default function MeetsClient({
   } = useMeetReactions({
     userId,
     socketRef: refs.socketRef,
-    ghostEnabled,
     isObserverMode: isWebinarAttendee,
     reactionAssets,
   });
@@ -1108,7 +1056,6 @@ export default function MeetsClient({
     cancelAssistantApiKeyPrompt,
   } = useMeetChat({
     socketRef: refs.socketRef,
-    ghostEnabled,
     currentUserId: userId,
     currentUserDisplayName:
       displayNameInput ||
@@ -1173,7 +1120,6 @@ export default function MeetsClient({
     primeAudioOutput,
     refreshScreenAudioProducerForNetworkProfile,
   } = useMeetMedia({
-    ghostEnabled,
     isObserverMode: isWebinarAttendee,
     connectionState,
     isMuted,
@@ -2017,7 +1963,6 @@ export default function MeetsClient({
     isHandRaised,
     setIsHandRaised,
     isHandRaisedRef: refs.isHandRaisedRef,
-    ghostEnabled,
     isObserverMode: isWebinarAttendee,
     socketRef: refs.socketRef,
   });
@@ -2146,12 +2091,11 @@ export default function MeetsClient({
     setWaitingMessage(null);
     setPendingNewMeetingRoomId(null);
     setCurrentIsAdmin(false);
-    setIsGhostMode(false);
     setRoomId("");
     if (typeof window !== "undefined") {
       window.location.assign("/");
     }
-  }, [setIsGhostMode, setMeetError, setRoomId, setWaitingMessage]);
+  }, [setMeetError, setRoomId, setWaitingMessage]);
 
   const socket = useMeetSocket({
     refs,
@@ -2165,7 +2109,6 @@ export default function MeetsClient({
     joinMode,
     requestWebinarInviteCode,
     requestMeetingInviteCode,
-    ghostEnabled,
     displayNameInput,
     localStream,
     setLocalStream,
@@ -2266,7 +2209,7 @@ export default function MeetsClient({
     localStream,
     participants,
     activeSpeakerId: effectiveActiveSpeakerId,
-    isViewOnly: ghostEnabled,
+    isViewOnly: false,
     resolveDisplayName,
     getTranscriptToken: socket.getTranscriptToken,
     getTranscriptSfuRelayStatus: socket.getTranscriptSfuRelayStatus,
@@ -2285,17 +2228,6 @@ export default function MeetsClient({
       transcriptActive,
     };
   }, [transcriptActive, transcript.allSegments]);
-
-  useMeetGhostMode({
-    canGhostJoin: canGhostJoinFlag,
-    isGhostMode,
-    setIsGhostMode,
-    ghostEnabled,
-    setIsMuted,
-    setIsCameraOff,
-    setIsScreenSharing,
-    setIsHandRaised,
-  });
 
   const {
     browserState,
@@ -2458,14 +2390,12 @@ export default function MeetsClient({
     setWaitingMessage(null);
     setPendingNewMeetingRoomId(null);
     setCurrentIsAdmin(false);
-    setIsGhostMode(false);
     setRoomId("");
     if (typeof window !== "undefined") {
       window.location.assign("/");
     }
   }, [
     handleStopVoiceAgent,
-    setIsGhostMode,
     setMeetError,
     setRoomId,
     setWaitingMessage,
@@ -2479,7 +2409,6 @@ export default function MeetsClient({
     setMeetError(null);
     setMeetingEndedNotice(null);
     setWaitingMessage(null);
-    setIsGhostMode(false);
     setCurrentIsAdmin(true);
     setRoomId(targetRoomId);
     if (enableRoomRouting && typeof window !== "undefined") {
@@ -2489,7 +2418,6 @@ export default function MeetsClient({
   }, [
     enableRoomRouting,
     handleStopVoiceAgent,
-    setIsGhostMode,
     setMeetError,
     setRoomId,
     setWaitingMessage,
@@ -3103,7 +3031,6 @@ export default function MeetsClient({
         isWebinarAttendee={isWebinarAttendee}
         enableRoomRouting={enableRoomRouting}
         forceJoinOnly={forceJoinOnly}
-        allowGhostMode={canGhostJoinFlag}
         user={currentUser}
         userEmail={userEmail}
         isAdmin={canModerateMeeting}
@@ -3113,9 +3040,6 @@ export default function MeetsClient({
         refreshRooms={refreshRooms}
         displayNameInput={displayNameInput}
         setDisplayNameInput={setDisplayNameInput}
-        ghostEnabled={ghostEnabled}
-        isGhostMode={isGhostMode}
-        setIsGhostMode={setIsGhostMode}
         presentationStream={presentationStream}
         presenterName={presenterName || ""}
         presentationProducerId={presentationProducerId}

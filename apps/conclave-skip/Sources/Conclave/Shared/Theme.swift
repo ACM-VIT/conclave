@@ -135,14 +135,6 @@ enum ACMRadius {
     static let full: CGFloat = 999
 }
 
-// MARK: - Gradients
-
-enum ACMGradients {
-    static let primary: Color = ACMColors.primaryOrange
-    static let avatarBackground: Color = ACMColors.surface
-    static let cardBackground: Color = ACMColors.surface
-}
-
 // MARK: - Typography
 
 enum ACMFont {
@@ -238,7 +230,7 @@ func ACMAndroidSemanticText(_ label: String) -> some View {
 struct ACMControlButtonStyle: ButtonStyle {
     var isActive: Bool = false
     var isMuted: Bool = false
-    var isGhostDisabled: Bool = false
+    var isDisabledDimmed: Bool = false
     var isDanger: Bool = false
     var isHandRaised: Bool = false
 
@@ -251,7 +243,7 @@ struct ACMControlButtonStyle: ButtonStyle {
             .clipShape(Circle())
             .scaleEffect(configuration.isPressed ? 0.96 : 1.0)
             .animation(Animation.easeInOut(duration: 0.1), value: configuration.isPressed)
-            .opacity(isGhostDisabled ? 0.35 : 1.0)
+            .opacity(isDisabledDimmed ? 0.35 : 1.0)
     }
 
     var foregroundColor: Color {
@@ -299,7 +291,7 @@ extension View {
     public func acmControlButtonStyle(
         isActive: Bool = false,
         isMuted: Bool = false,
-        isGhostDisabled: Bool = false,
+        isDisabledDimmed: Bool = false,
         isDanger: Bool = false,
         isHandRaised: Bool = false
     ) -> some View {
@@ -331,13 +323,13 @@ extension View {
             .foregroundStyle(foreground)
             .frame(width: 44, height: 44)
             .background { Circle().fill(background) }
-            .opacity(isGhostDisabled ? 0.35 : 1.0)
+            .opacity(isDisabledDimmed ? 0.35 : 1.0)
         #else
         return self.buttonStyle(
             ACMControlButtonStyle(
                 isActive: isActive,
                 isMuted: isMuted,
-                isGhostDisabled: isGhostDisabled,
+                isDisabledDimmed: isDisabledDimmed,
                 isDanger: isDanger,
                 isHandRaised: isHandRaised
             )

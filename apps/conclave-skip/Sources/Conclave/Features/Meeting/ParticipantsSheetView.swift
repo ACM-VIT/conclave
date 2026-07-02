@@ -114,15 +114,13 @@ struct ParticipantsSheetView: View {
         isHandRaised: Bool,
         isMuted: Bool,
         isCameraOff: Bool,
-        isScreenSharing: Bool,
-        isGhost: Bool = false
+        isScreenSharing: Bool
     ) -> String {
         var parts: [String] = []
         if isHandRaised { parts.append("hand raised") }
         parts.append(isMuted ? "muted" : "microphone on")
         parts.append(isCameraOff ? "camera off" : "camera on")
         if isScreenSharing { parts.append("screen sharing") }
-        if isGhost { parts.append("ghost mode") }
         return parts.joined(separator: ", ")
     }
 
@@ -157,8 +155,7 @@ struct ParticipantsSheetView: View {
         isHandRaised: Bool,
         isMuted: Bool,
         isCameraOff: Bool,
-        isScreenSharing: Bool,
-        isGhost: Bool = false
+        isScreenSharing: Bool
     ) -> some View {
         HStack(spacing: ACMSpacing.xs) {
             if isHandRaised {
@@ -205,16 +202,6 @@ struct ParticipantsSheetView: View {
                 )
             }
 
-            if isGhost {
-                statusBadge(
-                    icon: "theatermasks.fill",
-                    androidIcon: "ghost",
-                    tint: ACMColors.primaryPink,
-                    androidTint: "pink",
-                    background: ACMColors.surfaceRaised,
-                    border: ACMColors.border
-                )
-            }
         }
     }
 
@@ -389,8 +376,7 @@ struct ParticipantsSheetView: View {
             isHandRaised: participant.isHandRaised,
             isMuted: participant.isMuted,
             isCameraOff: participant.isCameraOff,
-            isScreenSharing: isScreenSharing,
-            isGhost: participant.isGhost
+            isScreenSharing: isScreenSharing
         )
 
         HStack(spacing: ACMSpacing.sm) {
@@ -418,8 +404,7 @@ struct ParticipantsSheetView: View {
                 isHandRaised: participant.isHandRaised,
                 isMuted: participant.isMuted,
                 isCameraOff: participant.isCameraOff,
-                isScreenSharing: isScreenSharing,
-                isGhost: participant.isGhost
+                isScreenSharing: isScreenSharing
             )
 
             if canUseHostControls {

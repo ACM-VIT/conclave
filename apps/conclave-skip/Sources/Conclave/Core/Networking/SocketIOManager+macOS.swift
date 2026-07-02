@@ -84,7 +84,6 @@ final class SocketIOManager {
         roomId: String,
         sessionId: String,
         displayName: String?,
-        isGhost: Bool,
         meetingInviteCode: String? = nil,
         webinarInviteCode: String? = nil
     ) async throws -> JoinRoomResponse {

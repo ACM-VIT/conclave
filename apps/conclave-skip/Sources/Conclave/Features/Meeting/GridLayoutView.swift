@@ -292,7 +292,6 @@ struct GridLayoutView: View {
             isMuted: viewModel.state.isMuted,
             isCameraOff: viewModel.state.isCameraOff,
             isHandRaised: viewModel.state.isHandRaised,
-            isGhost: viewModel.state.isGhostMode,
             isSpeaking: viewModel.state.isEffectiveActiveSpeaker(viewModel.state.userId),
             isLocal: true,
             fillStage: fill,
@@ -308,7 +307,6 @@ struct GridLayoutView: View {
             isMuted: participant.isMuted,
             isCameraOff: participant.isCameraOff,
             isHandRaised: participant.isHandRaised,
-            isGhost: participant.isGhost,
             isSpeaking: viewModel.state.isEffectiveActiveSpeaker(participant.id),
             isLocal: false,
             connectionStatus: participant.connectionStatus,
@@ -324,7 +322,6 @@ struct GridLayoutView: View {
             isMuted: true,
             isCameraOff: true,
             isHandRaised: false,
-            isGhost: false,
             isSpeaking: false,
             isLocal: false
         )

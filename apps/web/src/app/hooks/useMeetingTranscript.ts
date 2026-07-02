@@ -356,7 +356,7 @@ export function useMeetingTranscript({
   const setPermissionError = useCallback(() => {
     setError(
       isViewOnly
-        ? "Ghost mode can view transcript and minutes only."
+        ? "View-only participants can view transcript and minutes only."
         : "You do not have permission to control this transcript.",
     );
   }, [isViewOnly]);

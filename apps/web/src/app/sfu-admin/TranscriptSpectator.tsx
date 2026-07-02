@@ -181,7 +181,7 @@ export function TranscriptSpectator({
           style={{ borderColor: color.border, backgroundColor: color.surface }}
         >
           {segments.map((segment) => (
-            <p key={segment.itemId} className="text-[12.5px] leading-relaxed">
+            <p key={segment.itemId} className="text-[12.5px] leading-relaxed [overflow-wrap:anywhere]">
               <span style={{ color: color.textFaint, fontVariantNumeric: "tabular-nums" }}>
                 {formatClock(segment.updatedAt)}
               </span>{" "}

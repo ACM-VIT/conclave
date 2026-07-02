@@ -19,7 +19,7 @@ import {
 import { getSocketContext } from "../socket/context.js";
 import { registerAdminHandlers } from "../socket/handlers/adminHandlers.js";
 
-type ParticipantRole = "host" | "admin" | "participant" | "ghost" | "attendee";
+type ParticipantRole = "host" | "admin" | "participant" | "attendee";
 
 export type ParticipantSnapshot = {
   userId: string;
@@ -82,7 +82,6 @@ export type RoomSnapshot = {
     activeParticipants: number;
     admins: number;
     guests: number;
-    ghosts: number;
     webinarAttendees: number;
     pendingUsers: number;
     blockedUsers: number;
@@ -248,7 +247,6 @@ const handleAdminRemoved = (
 
 const toParticipantRole = (room: Room, client: Client): ParticipantRole => {
   if (client.isWebinarAttendee) return "attendee";
-  if (client.isGhost) return "ghost";
   if (!(client instanceof Admin)) return "participant";
   const hostUserId = room.getHostUserId();
   return hostUserId === client.id ? "host" : "admin";
@@ -305,7 +303,6 @@ export const toPendingUserSnapshots = (room: Room): PendingUserSnapshot[] => {
 
 export const toRoomSnapshot = (room: Room): RoomSnapshot => {
   const participants = Array.from(room.clients.values())
-    .filter((client) => !client.isGhost)
     .map((client) => toParticipantSnapshot(room, client));
   const pendingUsers = toPendingUserSnapshots(room);
   const adminCount = participants.filter(
@@ -319,7 +316,6 @@ export const toRoomSnapshot = (room: Room): RoomSnapshot => {
     (sum, participant) => sum + participant.consumerCount,
     0,
   );
-  const ghosts = 0;
   const attendees = participants.filter(
     (participant) => participant.role === "attendee",
   ).length;
@@ -358,7 +354,6 @@ export const toRoomSnapshot = (room: Room): RoomSnapshot => {
       activeParticipants: room.getMeetingParticipantCount(),
       admins: adminCount,
       guests,
-      ghosts,
       webinarAttendees: attendees,
       pendingUsers: room.pendingClients.size,
       blockedUsers: room.blockedUsers.size,
@@ -405,14 +400,14 @@ export const toClusterSnapshot = (state: SfuState): ClusterSnapshot => {
   );
   const producers = rooms.reduce((sum, room) => {
     const roomProducers = Array.from(room.clients.values()).reduce(
-      (inner, client) => inner + (client.isGhost ? 0 : client.producers.size),
+      (inner, client) => inner + client.producers.size,
       0,
     );
     return sum + roomProducers;
   }, 0);
   const consumers = rooms.reduce((sum, room) => {
     const roomConsumers = Array.from(room.clients.values()).reduce(
-      (inner, client) => inner + (client.isGhost ? 0 : client.consumers.size),
+      (inner, client) => inner + client.consumers.size,
       0,
     );
     return sum + roomConsumers;
@@ -853,7 +848,6 @@ export const forceRemoveClientNow = (options: {
 
   const roomChannelId = room.channelId;
   const wasAdmin = target instanceof Admin && !target.isObserver;
-  const isGhost = target.isGhost;
   const isWebinarAttendee = target.isWebinarAttendee;
 
   // Cancel any in-flight disconnect grace so the timer cannot double-process.
@@ -861,26 +855,22 @@ export const forceRemoveClientNow = (options: {
 
   // Clear awareness before removing the client so peers stop seeing its cursor.
   const awarenessRemovals = room.clearUserAwareness(userId);
-  if (!isGhost) {
-    for (const removal of awarenessRemovals) {
-      io.to(roomChannelId).emit("apps:awareness", {
-        appId: removal.appId,
-        awarenessUpdate: removal.awarenessUpdate,
-      } satisfies AppsAwarenessData);
-    }
+  for (const removal of awarenessRemovals) {
+    io.to(roomChannelId).emit("apps:awareness", {
+      appId: removal.appId,
+      awarenessUpdate: removal.awarenessUpdate,
+    } satisfies AppsAwarenessData);
   }
 
   // removeClient() closes the client's producers + transports => media stops now.
   room.removeClient(userId);
 
-  if (!isGhost && !isWebinarAttendee) {
+  if (!isWebinarAttendee) {
     io.to(roomChannelId).emit("userLeft", { userId, roomId: room.id });
   }
 
-  if (!isGhost) {
-    emitWebinarAttendeeCountChanged(io, state, room);
-    emitWebinarFeedChanged(io, state, room);
-  }
+  emitWebinarAttendeeCountChanged(io, state, room);
+  emitWebinarFeedChanged(io, state, room);
 
   if (wasAdmin) {
     handleAdminRemoved(io, state, room);

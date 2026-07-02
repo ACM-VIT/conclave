@@ -69,6 +69,28 @@ enum ChatTimelineScrollPolicy {
         guard let currentEntryId, !currentEntryId.isEmpty else { return false }
         return currentEntryId != previousEntryId
     }
+
+    static func latestEntryChange(
+        observedEntryId: String?,
+        latestEntryId: String?
+    ) -> ChatLatestEntryChange {
+        ChatLatestEntryChange(
+            previousEntryId: observedEntryId,
+            currentEntryId: latestEntryId,
+            storedEntryId: latestEntryId,
+            shouldScroll: shouldScrollToLatest(
+                previousEntryId: observedEntryId,
+                currentEntryId: latestEntryId
+            )
+        )
+    }
+}
+
+struct ChatLatestEntryChange: Equatable {
+    let previousEntryId: String?
+    let currentEntryId: String?
+    let storedEntryId: String?
+    let shouldScroll: Bool
 }
 
 // MARK: - Chat Overlay
@@ -93,10 +115,6 @@ struct ChatOverlayView: View {
         )
     }
 
-    private var isGhostChatDisabled: Bool {
-        viewModel.state.isGhostMode
-    }
-
     private var isWatchOnlyChatDisabled: Bool {
         viewModel.state.isWebinarAttendee
     }
@@ -110,15 +128,12 @@ struct ChatOverlayView: View {
     }
 
     private var isChatDisabled: Bool {
-        isConnectionChatDisabled || isGhostChatDisabled || isWatchOnlyChatDisabled || isHostChatLocked
+        isConnectionChatDisabled || isWatchOnlyChatDisabled || isHostChatLocked
     }
 
     private var placeholder: String {
         if isConnectionChatDisabled {
             return "Chat unavailable until joined"
-        }
-        if isGhostChatDisabled {
-            return "Ghost mode: chat disabled"
         }
         if isWatchOnlyChatDisabled {
             return "Watch-only: chat disabled"
@@ -506,6 +521,7 @@ private struct ChatTimelineView: View, Equatable {
     let isCurrentUser: (String) -> Bool
     let onReply: (ChatMessage) -> Void
     @State private var delayedScrollTask: Task<Void, Never>?
+    @State private var observedLatestEntryId: String?
 
     private var timeline: [ChatTimelineEntry] {
         (chatMessages.map { ChatTimelineEntry.message($0) }
@@ -547,6 +563,20 @@ private struct ChatTimelineView: View, Equatable {
                     .padding(.vertical, 12)
                 }
             }
+#if SKIP
+            .onChange(of: latestEntryId ?? "") {
+                let change = ChatTimelineScrollPolicy.latestEntryChange(
+                    observedEntryId: observedLatestEntryId,
+                    latestEntryId: latestEntryId
+                )
+                observedLatestEntryId = change.storedEntryId
+                guard change.shouldScroll else {
+                    return
+                }
+                scrollToLatestMessage(in: entries, proxy: proxy)
+                scheduleDelayedScroll(in: entries, proxy: proxy)
+            }
+#else
             .onChange(of: latestEntryId) { previousEntryId, currentEntryId in
                 guard ChatTimelineScrollPolicy.shouldScrollToLatest(
                     previousEntryId: previousEntryId,
@@ -557,7 +587,9 @@ private struct ChatTimelineView: View, Equatable {
                 scrollToLatestMessage(in: entries, proxy: proxy)
                 scheduleDelayedScroll(in: entries, proxy: proxy)
             }
+#endif
             .onAppear {
+                observedLatestEntryId = latestEntryId
                 scrollToLatestMessage(in: entries, proxy: proxy, animated: false)
                 scheduleDelayedScroll(in: entries, proxy: proxy, animated: false)
             }

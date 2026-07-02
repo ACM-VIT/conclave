@@ -8,7 +8,7 @@ export type AdminUser = {
   name: string | null;
 };
 
-export type ParticipantRole = "host" | "admin" | "participant" | "ghost" | "attendee";
+export type ParticipantRole = "host" | "admin" | "participant" | "attendee";
 
 export type ParticipantProducer = {
   producerId: string;
@@ -87,7 +87,6 @@ export type RoomSnapshot = {
     activeParticipants: number;
     admins: number;
     guests: number;
-    ghosts: number;
     webinarAttendees: number;
     pendingUsers: number;
     blockedUsers: number;
@@ -146,6 +145,8 @@ export type AdminScheduledItem = {
   title: string;
   clientId: string;
   roomId: string;
+  /** Webinar link slug; meetings join by room code. */
+  slug: string | null;
   status: string;
   startAt: number;
   endAt: number;

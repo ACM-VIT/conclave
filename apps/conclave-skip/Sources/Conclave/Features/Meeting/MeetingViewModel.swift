@@ -701,7 +701,6 @@ final class MeetingViewModel {
         let roomId: String
         let displayName: String
         let socketDisplayName: String?
-        let isGhost: Bool
         let isHost: Bool
         let joinMode: JoinMode
         let meetingInviteCode: String?
@@ -1035,7 +1034,6 @@ final class MeetingViewModel {
                     roomId: context.roomId,
                     displayName: context.displayName,
                     socketDisplayName: context.socketDisplayName,
-                    isGhost: context.isGhost,
                     user: context.user,
                     isHost: context.isHost,
                     joinMode: context.joinMode,
@@ -2884,10 +2882,6 @@ final class MeetingViewModel {
         markRemoteParticipantPresent(userId)
         clearParticipantConnectionStatus(userId)
         applyDisplayName(notification.displayName, for: userId)
-        let stateId = participantStateId(for: userId)
-        if let isGhost = notification.isGhost {
-            state.participants[stateId]?.isGhost = isGhost
-        }
     }
 
     private func applyUserLeftNotification(
@@ -3065,7 +3059,6 @@ final class MeetingViewModel {
             isMuted: existing.isMuted,
             isCameraOff: existing.isCameraOff,
             isHandRaised: existing.isHandRaised,
-            isGhost: existing.isGhost,
             isWebinarAttendee: existing.isWebinarAttendee,
             isLeaving: existing.isLeaving,
             isScreenSharing: existing.isScreenSharing,
@@ -3646,7 +3639,6 @@ final class MeetingViewModel {
             roomId: context.roomId,
             displayName: context.displayName,
             socketDisplayName: Self.socketDisplayNameOverride(context.displayName, isAdmin: state.isAdmin),
-            isGhost: context.isGhost,
             isHost: state.isAdmin,
             joinMode: context.joinMode,
             meetingInviteCode: context.meetingInviteCode,
@@ -3672,7 +3664,6 @@ final class MeetingViewModel {
             roomId: context.roomId,
             displayName: context.displayName,
             socketDisplayName: nil,
-            isGhost: context.isGhost,
             isHost: false,
             joinMode: context.joinMode,
             meetingInviteCode: context.meetingInviteCode,
@@ -3808,7 +3799,6 @@ final class MeetingViewModel {
                 snapshotUserKeys.insert(key)
             }
             let displayName = NativeDisplayNameNormalizer.normalize(snapshot.displayName)
-            let isGhost = snapshot.role == "ghost" || snapshot.mode == "ghost"
             let isWebinarAttendee = snapshot.role == "attendee" || snapshot.mode == JoinMode.webinarAttendee.rawValue
             let isLeaving = snapshot.pendingDisconnect == true
             let activeScreenProducer = snapshot.producers?.first {
@@ -3851,7 +3841,6 @@ final class MeetingViewModel {
                 if let cameraOff = snapshot.cameraOff {
                     state.participants[stateId]?.isCameraOff = cameraOff
                 }
-                state.participants[stateId]?.isGhost = isGhost
                 state.participants[stateId]?.isWebinarAttendee = isWebinarAttendee
                 state.participants[stateId]?.isLeaving = isLeaving
                 state.participants[stateId]?.isScreenSharing = activeScreenProducer != nil
@@ -5165,7 +5154,6 @@ final class MeetingViewModel {
         roomId: String,
         displayName: String,
         socketDisplayName: String? = nil,
-        isGhost: Bool = false,
         user: SfuJoinUser? = nil,
         isHost: Bool = false,
         joinMode: JoinMode = .meeting,
@@ -5190,7 +5178,6 @@ final class MeetingViewModel {
             || previousConnectionState == .reconnecting
             || previousConnectionState == .joined
             || previousConnectionState == .joining
-        let effectiveGhost = isGhost && isHost && joinMode != .webinarAttendee
         activeJoinAttemptId = joinAttemptId
         clearPendingPreAckRoomEvents()
         if !reuseExistingSocket && (!isRecoveryJoin || socketManager.isConnected) {
@@ -5205,9 +5192,8 @@ final class MeetingViewModel {
         self.state.roomId = roomId
         self.currentRoomAliases = roomAliasSet(requestedRoomId: roomId, resolvedRoomId: nil)
         self.state.displayName = displayName
-        self.state.isGhostMode = effectiveGhost
         self.state.isAdmin = isHost
-        if effectiveGhost || joinMode == .webinarAttendee {
+        if joinMode == .webinarAttendee {
             disableLocalMediaPublishingState()
         }
         self.state.waitingMessage = nil
@@ -5237,7 +5223,6 @@ final class MeetingViewModel {
             roomId: roomId,
             displayName: displayName,
             socketDisplayName: effectiveSocketDisplayName,
-            isGhost: effectiveGhost,
             isHost: isHost,
             joinMode: joinMode,
             meetingInviteCode: meetingInviteCode,
@@ -5304,7 +5289,6 @@ final class MeetingViewModel {
                     roomId: roomId,
                     sessionId: state.sessionId,
                     displayName: effectiveSocketDisplayName,
-                    isGhost: effectiveGhost,
                     meetingInviteCode: meetingInviteCode,
                     webinarInviteCode: webinarInviteCode
                 )
@@ -5359,7 +5343,6 @@ final class MeetingViewModel {
             roomId: context.roomId,
             displayName: context.displayName,
             socketDisplayName: context.socketDisplayName,
-            isGhost: context.isGhost,
             user: context.user,
             isHost: context.isHost,
             joinMode: context.joinMode,
@@ -5430,7 +5413,6 @@ final class MeetingViewModel {
             roomId: state.roomId,
             displayName: state.displayName,
             socketDisplayName: Self.socketDisplayNameOverride(state.displayName, isAdmin: state.isAdmin),
-            isGhost: state.isGhostMode,
             isHost: state.isAdmin,
             joinMode: state.webinarRole == "attendee" ? .webinarAttendee : .meeting,
             meetingInviteCode: nil,
@@ -5453,7 +5435,6 @@ final class MeetingViewModel {
             roomId: targetRoomId,
             displayName: context.displayName,
             socketDisplayName: context.socketDisplayName,
-            isGhost: context.isGhost,
             user: context.user,
             isHost: context.isHost,
             joinMode: context.joinMode,
@@ -6638,7 +6619,6 @@ final class MeetingViewModel {
         clearBrowserState()
         clearAppsState()
         clearGameState(clearCatalog: false)
-        state.isGhostMode = false
         state.isChatOpen = false
         state.isTranscriptOpen = false
         closeTranscriptStream()
@@ -7109,7 +7089,6 @@ final class MeetingViewModel {
 
     func toggleHandRaise() {
         guard state.connectionState == .joined,
-              !state.isGhostMode,
               !state.isWebinarAttendee,
               !isHandRaiseToggleInFlight else { return }
         let newState = !state.isHandRaised
@@ -7130,7 +7109,7 @@ final class MeetingViewModel {
     @discardableResult
     private func setHandRaisedState(_ raised: Bool) async throws -> Bool {
         guard state.connectionState == .joined else { return false }
-        guard !state.isGhostMode && !state.isWebinarAttendee else { return false }
+        guard !state.isWebinarAttendee else { return false }
         guard !isHandRaiseToggleInFlight else { return false }
         guard state.isHandRaised != raised else { return false }
         let actionContext = currentCallActionContext()
@@ -7606,9 +7585,6 @@ final class MeetingViewModel {
         if state.connectionState != .joined {
             return "Reconnect before raising your hand."
         }
-        if state.isGhostMode {
-            return "Hand raise is unavailable in ghost mode."
-        }
         if state.isWebinarAttendee {
             return "Hand raise is unavailable in watch-only mode."
         }
@@ -7802,9 +7778,6 @@ final class MeetingViewModel {
     }
 
     private func validateCanSendChatContent() throws {
-        if state.isGhostMode {
-            throw MeetingActionResponseError(message: "Ghost mode participants cannot send chat messages.")
-        }
         if state.isWebinarAttendee {
             throw MeetingActionResponseError(message: "Watch-only attendees cannot send chat messages.")
         }
@@ -8105,10 +8078,6 @@ final class MeetingViewModel {
             state.errorMessage = "Reconnect before sending chat."
             return
         }
-        guard !state.isGhostMode else {
-            state.errorMessage = "Ghost mode participants cannot send chat messages."
-            return
-        }
         guard !state.isWebinarAttendee else {
             state.errorMessage = "Watch-only attendees cannot send chat messages."
             return
@@ -8382,7 +8351,7 @@ final class MeetingViewModel {
 
     func sendReaction(_ option: MeetingReactionOption) {
         guard state.connectionState == .joined else { return }
-        guard !state.isGhostMode && !state.isWebinarAttendee else { return }
+        guard !state.isWebinarAttendee else { return }
         guard !state.isReactionsDisabled || state.isAdmin else { return }
         guard MeetingReactionConstants.isAllowedOption(option) else { return }
         let now = Date()
@@ -8983,7 +8952,6 @@ final class MeetingViewModel {
         let trimmedType = type.trimmingCharacters(in: .whitespacesAndNewlines)
         guard state.connectionState == .joined,
               !state.isWebinarAttendee,
-              !state.isGhostMode,
               !state.isGameActionInFlight,
               !trimmedGameId.isEmpty,
               !trimmedType.isEmpty,

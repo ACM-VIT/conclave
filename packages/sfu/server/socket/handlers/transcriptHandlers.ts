@@ -91,7 +91,6 @@ const createTranscriptRelayToken = (options: {
       channelId: options.channelId,
       isAdmin: false,
       isHost: false,
-      isGhost: false,
       capabilities,
       relayFor: options.displayName,
     },
@@ -105,8 +104,8 @@ const createTranscriptRelayToken = (options: {
 
 /**
  * Read-only transcript access for the operator dashboard: a viewer token with
- * every capability off, shaped like a ghost's. The dashboard opens the same
- * worker WebSocket meeting clients use and only ever receives.
+ * every capability off. The dashboard opens the same worker WebSocket meeting
+ * clients use and only ever receives.
  */
 export const createTranscriptSpectatorToken = (
   room: { id: string; clientId: string; channelId: string },
@@ -131,7 +130,6 @@ export const createTranscriptSpectatorToken = (
       channelId: room.channelId,
       isAdmin: false,
       isHost: false,
-      isGhost: true,
       capabilities,
     },
     getTranscriptTokenSecret(),
@@ -183,12 +181,11 @@ export const registerTranscriptHandlers = (
       const expiresAt = (nowSeconds + TRANSCRIPT_TOKEN_TTL_SECONDS) * 1000;
       const isAdmin = client instanceof Admin && !client.isObserver;
       const isHost = room.getHostUserId() === client.id;
-      const isGhost = client.isGhost;
       const capabilities: TranscriptTokenCapabilities = {
-        start: !isGhost,
-        takeover: !isGhost,
-        stop: !isGhost && (isAdmin || isHost),
-        ask: !isGhost,
+        start: true,
+        takeover: true,
+        stop: isAdmin || isHost,
+        ask: true,
       };
       const displayName = room.getDisplayNameForUser(client.id) || client.id;
       const payload = {
@@ -202,7 +199,6 @@ export const registerTranscriptHandlers = (
         channelId: room.channelId,
         isAdmin,
         isHost,
-        isGhost,
         capabilities,
       };
 
@@ -261,7 +257,7 @@ export const registerTranscriptHandlers = (
         respond(callback, { error: "Not in a room" });
         return;
       }
-      if (client.isGhost || client.isWebinarAttendee) {
+      if (client.isWebinarAttendee) {
         respond(callback, {
           error: "Transcript relay is available to meeting participants only",
         });
@@ -317,7 +313,7 @@ export const registerTranscriptHandlers = (
         respond(callback, { error: "Not in a room" });
         return;
       }
-      if (client.isGhost || client.isWebinarAttendee) {
+      if (client.isWebinarAttendee) {
         respond(callback, {
           error: "Transcript relay is available to meeting participants only",
         });

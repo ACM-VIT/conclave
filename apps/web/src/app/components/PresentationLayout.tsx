@@ -7,9 +7,7 @@ import { createPlaybackRecoveryScheduler } from "../lib/playback-recovery";
 import { useSmartParticipantOrder } from "../hooks/useSmartParticipantOrder";
 import type { Participant } from "../lib/types";
 import { isSystemUserId } from "../lib/utils";
-import { isRemoteParticipantVisible } from "../lib/participant-visibility";
 import { Avatar } from "@conclave/ui-tokens/web";
-import { GhostParticipantOverlay } from "./GhostParticipantChrome";
 import ParticipantVideo from "./ParticipantVideo";
 
 interface PresentationLayoutProps {
@@ -19,7 +17,6 @@ interface PresentationLayoutProps {
   isCameraOff: boolean;
   isMuted: boolean;
   isHandRaised: boolean;
-  isGhost: boolean;
   participants: Map<string, Participant>;
   userEmail: string;
   isMirrorCamera: boolean;
@@ -38,7 +35,6 @@ function PresentationLayout({
   isCameraOff,
   isMuted,
   isHandRaised,
-  isGhost,
   participants,
   userEmail,
   isMirrorCamera,
@@ -161,8 +157,7 @@ function PresentationLayout({
     Array.from(participants.values()).filter(
       (participant) =>
         participant.userId !== currentUserId &&
-        !isSystemUserId(participant.userId) &&
-        isRemoteParticipantVisible(participant, isGhost, currentUserId),
+        !isSystemUserId(participant.userId),
     ),
     activeSpeakerId
   );
@@ -212,7 +207,6 @@ function PresentationLayout({
               <Avatar id={userEmail} name={localDisplayName || userEmail} size={48} />
             </div>
           )}
-          {isGhost && <GhostParticipantOverlay compact label="Ghost mode" />}
           {isHandRaised && (
             <div
               className="absolute left-3 top-3 flex h-8 w-8 items-center justify-center rounded-full border border-amber-400/40 bg-amber-500/20 text-amber-300"

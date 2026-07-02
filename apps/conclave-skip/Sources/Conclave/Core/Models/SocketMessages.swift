@@ -6,7 +6,6 @@ struct JoinRoomRequest: Codable {
     let roomId: String
     let sessionId: String
     let displayName: String?
-    let ghost: Bool
     let webinarInviteCode: String?
     let meetingInviteCode: String?
 }
@@ -953,7 +952,6 @@ private func decodeFirstString<Key: CodingKey>(
 struct UserJoinedNotification: Codable {
     let userId: String
     let displayName: String?
-    let isGhost: Bool?
     let roomId: String?
 
     enum CodingKeys: String, CodingKey {
@@ -963,14 +961,12 @@ struct UserJoinedNotification: Codable {
         case fullName
         case displayNameSnake = "display_name"
         case username
-        case isGhost
         case roomId
     }
 
-    init(userId: String, displayName: String? = nil, isGhost: Bool? = nil, roomId: String? = nil) {
+    init(userId: String, displayName: String? = nil, roomId: String? = nil) {
         self.userId = userId
         self.displayName = displayName
-        self.isGhost = isGhost
         self.roomId = roomId
     }
 
@@ -981,7 +977,6 @@ struct UserJoinedNotification: Codable {
             from: container,
             keys: [.displayName, .name, .fullName, .displayNameSnake, .username]
         )
-        isGhost = try container.decodeIfPresent(Bool.self, forKey: .isGhost)
         roomId = try container.decodeIfPresent(String.self, forKey: .roomId)
     }
 
@@ -989,7 +984,6 @@ struct UserJoinedNotification: Codable {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(userId, forKey: .userId)
         try container.encodeIfPresent(displayName, forKey: .displayName)
-        try container.encodeIfPresent(isGhost, forKey: .isGhost)
         try container.encodeIfPresent(roomId, forKey: .roomId)
     }
 }

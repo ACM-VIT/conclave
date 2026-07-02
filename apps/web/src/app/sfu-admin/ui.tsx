@@ -17,7 +17,7 @@ export const inputClass =
 export const btnAccent =
   "inline-flex h-8 shrink-0 items-center justify-center rounded-lg bg-[#F95F4A] px-3 text-[12.5px] font-medium text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40";
 
-export const btnGhost =
+export const btnSecondary =
   "inline-flex h-8 shrink-0 items-center justify-center rounded-lg border border-white/10 px-3 text-[12.5px] font-medium text-[#fafafa]/74 transition-colors hover:bg-white/[0.06] hover:text-[#fafafa] disabled:cursor-not-allowed disabled:opacity-40";
 
 export const btnTiny =
@@ -182,7 +182,7 @@ export function Sparkline({
 }
 
 /**
- * Flat popover anchored to a ghost button: opens on click, closes on outside
+ * Flat popover anchored to a secondary button: opens on click, closes on outside
  * click or Escape. No portal needed while headers stay unclipped.
  */
 export function Popover({
@@ -222,7 +222,7 @@ export function Popover({
         type="button"
         onClick={() => setOpen((prev) => !prev)}
         aria-expanded={open}
-        className={btnGhost}
+        className={btnSecondary}
         style={active ? { color: color.warning, borderColor: "rgba(251,191,36,0.4)" } : undefined}
       >
         {label}

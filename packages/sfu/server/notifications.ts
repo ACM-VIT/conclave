@@ -6,9 +6,6 @@ export const emitUserJoined = (
   displayName: string,
   options?: { excludeUserId?: string },
 ): void => {
-  if (room.getClient(userId)?.isGhost) {
-    return;
-  }
   for (const client of room.clients.values()) {
     if (options?.excludeUserId && client.id === options.excludeUserId) {
       continue;
@@ -26,9 +23,6 @@ export const emitUserLeft = (
   userId: string,
   options?: { excludeUserId?: string },
 ): void => {
-  if (room.getClient(userId)?.isGhost) {
-    return;
-  }
   for (const client of room.clients.values()) {
     if (options?.excludeUserId && client.id === options.excludeUserId) {
       continue;

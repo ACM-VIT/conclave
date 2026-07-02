@@ -54,7 +54,6 @@ interface PendingConclaveAssistantRequest {
 
 interface UseMeetChatOptions {
   socketRef: React.MutableRefObject<Socket | null>;
-  ghostEnabled: boolean;
   currentUserId?: string;
   currentUserDisplayName?: string;
   isObserverMode?: boolean;
@@ -79,7 +78,6 @@ interface UseMeetChatOptions {
 
 export function useMeetChat({
   socketRef,
-  ghostEnabled,
   currentUserId = "local-user",
   currentUserDisplayName = "You",
   isObserverMode = false,
@@ -573,7 +571,7 @@ export function useMeetChat({
 
   const sendChat = useCallback(
     (content: string) => {
-      if (ghostEnabled || isObserverMode) return;
+      if (isObserverMode) return;
       if (isChatLocked && !isAdmin) {
         appendLocalMessage("Chat is locked by the host.");
         return;
@@ -684,7 +682,6 @@ export function useMeetChat({
       void sendChatInternal(trimmed, undefined, activeReply);
     },
     [
-      ghostEnabled,
       isObserverMode,
       isChatLocked,
       isAdmin,
@@ -706,7 +703,7 @@ export function useMeetChat({
 
   const sendChatGif = useCallback(
     (gif: ChatGifAttachment) => {
-      if (ghostEnabled || isObserverMode) return;
+      if (isObserverMode) return;
       if (isChatLocked && !isAdmin) {
         appendLocalMessage("Chat is locked by the host.");
         return;
@@ -716,7 +713,6 @@ export function useMeetChat({
       void sendChatInternal(gif.title || "GIF", gif, activeReply);
     },
     [
-      ghostEnabled,
       isObserverMode,
       isChatLocked,
       isAdmin,

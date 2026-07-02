@@ -17,7 +17,7 @@ import {
   Popover,
   Sparkline,
   Toggle,
-  btnGhost,
+  btnSecondary,
   inputClass,
 } from "./ui";
 
@@ -135,7 +135,7 @@ export function DashboardHeader({
 
         <button
           type="button"
-          className={btnGhost}
+          className={btnSecondary}
           onClick={onToggleActivity}
           aria-pressed={activityOpen}
           title="Activity and audit ( a )"

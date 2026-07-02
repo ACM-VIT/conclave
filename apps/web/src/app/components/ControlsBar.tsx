@@ -354,7 +354,6 @@ function ControlsBar(props: ControlsBarProps) {
     onLeave,
     onEndForEveryone,
     isAdmin,
-    isGhostMode = false,
     isBrowserLaunching = false,
     onLaunchBrowser,
     isHostControlsOpen = false,
@@ -549,7 +548,6 @@ function ControlsBar(props: ControlsBarProps) {
               <MediaClusterButton
                 key={d.id}
                 d={d}
-                disabled={isGhostMode}
                 audio={{
                   selectedAudioInputDeviceId,
                   selectedAudioOutputDeviceId,
@@ -564,7 +562,6 @@ function ControlsBar(props: ControlsBarProps) {
               <MediaClusterButton
                 key={d.id}
                 d={d}
-                disabled={isGhostMode}
                 video={{
                   selectedVideoInputDeviceId,
                   onVideoInputDeviceChange,
@@ -586,7 +583,6 @@ function ControlsBar(props: ControlsBarProps) {
                 size={48}
                 iconSize={ICON}
                 label="Reactions"
-                disabled={isGhostMode}
                 onClick={() => setReactionsOpen((v) => !v)}
               />
             </HotkeyTooltip>
@@ -806,7 +802,7 @@ function ControlsBar(props: ControlsBarProps) {
                     style={{ backgroundColor: color.border }}
                   />
                   <div className="overflow-y-auto px-4 pb-[max(1rem,env(safe-area-inset-bottom))] pt-3">
-                    {!isGhostMode && (!isReactionsDisabled || isAdmin) && reactionOptions.length > 0 && (
+                    {(!isReactionsDisabled || isAdmin) && reactionOptions.length > 0 && (
                       <div
                         className="mb-3 flex flex-wrap items-center justify-center gap-1 rounded-2xl p-1.5"
                         style={{ backgroundColor: color.surface }}
@@ -851,7 +847,7 @@ function ControlsBar(props: ControlsBarProps) {
                           }}
                         />
                       ))}
-                      {!isGhostMode && canFlipCamera && (
+                      {canFlipCamera && (
                         <MoreTile
                           row={{
                             id: "flip-camera",
@@ -864,8 +860,7 @@ function ControlsBar(props: ControlsBarProps) {
                           }}
                         />
                       )}
-                      {!isGhostMode &&
-                        (hasAudioDevicePicker || hasVideoDevicePicker) && (
+                      {(hasAudioDevicePicker || hasVideoDevicePicker) && (
                           <MoreTile
                             row={{
                               id: "settings",

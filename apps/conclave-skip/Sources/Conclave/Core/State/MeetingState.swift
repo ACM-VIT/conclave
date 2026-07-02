@@ -164,7 +164,6 @@ final class MeetingState {
     var sessionId: String
     var displayName: String = ""
     var isAdmin: Bool = false
-    var isGhostMode: Bool = false
     var hostUserId: String?
     var hostUserIds: [String] = []
 
@@ -419,7 +418,6 @@ final class MeetingState {
             isMuted: left.isMuted && right.isMuted,
             isCameraOff: left.isCameraOff && right.isCameraOff,
             isHandRaised: left.isHandRaised || right.isHandRaised,
-            isGhost: left.isGhost || right.isGhost,
             isWebinarAttendee: left.isWebinarAttendee || right.isWebinarAttendee,
             isLeaving: left.isLeaving && right.isLeaving,
             isScreenSharing: left.isScreenSharing || right.isScreenSharing,
@@ -737,7 +735,7 @@ final class MeetingState {
     }
 
     var mediaPublishingDisabled: Bool {
-        isGhostMode || isWebinarAttendee
+        isWebinarAttendee
     }
 
     var isWhiteboardActive: Bool {
@@ -1086,6 +1084,6 @@ final class MeetingState {
         guard let participant = participant(for: normalized) else {
             return true
         }
-        return !participant.isGhost && !participant.isWebinarAttendee
+        return !participant.isWebinarAttendee
     }
 }

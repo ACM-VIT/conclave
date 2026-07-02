@@ -290,9 +290,6 @@ const performBulkMediaClosure = (options: {
     if (!options.includeAdmins && client instanceof Admin) {
       continue;
     }
-    if (client.isGhost) {
-      continue;
-    }
     if (!options.includeAttendees && client.isWebinarAttendee) {
       continue;
     }
@@ -693,7 +690,7 @@ export const registerAdminHandlers = (
       respond(cb, { error: "User not found" });
       return;
     }
-    if (targetClient.isGhost || targetClient.isWebinarAttendee) {
+    if (targetClient.isWebinarAttendee) {
       respond(cb, { error: "User cannot be promoted to host." });
       return;
     }
@@ -755,7 +752,7 @@ export const registerAdminHandlers = (
       respond(cb, { error: "User not found" });
       return;
     }
-    if (targetClient.isGhost || targetClient.isWebinarAttendee) {
+    if (targetClient.isWebinarAttendee) {
       respond(cb, { error: "User cannot become host" });
       return;
     }

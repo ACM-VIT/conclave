@@ -57,7 +57,6 @@ import {
 import type { ConnectionQualityStats } from "./useConnectionQuality";
 
 interface UseMeetMediaOptions {
-  ghostEnabled: boolean;
   isObserverMode?: boolean;
   connectionState: string;
   isMuted: boolean;
@@ -411,7 +410,6 @@ const shouldDisableMediaIntentAfterRecoveryFailure = (
 };
 
 export function useMeetMedia({
-  ghostEnabled,
   isObserverMode = false,
   connectionState,
   isMuted,
@@ -1522,7 +1520,7 @@ export function useMeetMedia({
   ]);
 
   useEffect(() => {
-    if (ghostEnabled || isObserverMode) return;
+    if (isObserverMode) return;
     if (connectionState !== "joined") return;
     if (isMuted) return;
 
@@ -1534,7 +1532,6 @@ export function useMeetMedia({
   }, [
     attachLocalAudioTrackHandlers,
     connectionState,
-    ghostEnabled,
     isMuted,
     isObserverMode,
     localStream,
@@ -1542,7 +1539,7 @@ export function useMeetMedia({
   ]);
 
   useEffect(() => {
-    if (ghostEnabled || isObserverMode) return;
+    if (isObserverMode) return;
     if (connectionState !== "joined") return;
     if (isCameraOff) return;
 
@@ -1558,7 +1555,6 @@ export function useMeetMedia({
     };
   }, [
     connectionState,
-    ghostEnabled,
     isCameraOff,
     isObserverMode,
     scheduleCurrentLocalVideoMutedRecovery,
@@ -2002,7 +1998,7 @@ export function useMeetMedia({
   );
 
   useEffect(() => {
-    if (ghostEnabled || isObserverMode) return;
+    if (isObserverMode) return;
     if (connectionState !== "joined") return;
     const mediaDevices = navigator.mediaDevices;
     if (!mediaDevices?.enumerateDevices || !mediaDevices.addEventListener) {
@@ -2119,7 +2115,6 @@ export function useMeetMedia({
       );
     };
   }, [
-    ghostEnabled,
     isObserverMode,
     connectionState,
     isCameraOff,
@@ -2397,7 +2392,7 @@ export function useMeetMedia({
   }, [updateVideoQuality]);
 
   const toggleMute = useCallback(async () => {
-    if (ghostEnabled || isObserverMode) return;
+    if (isObserverMode) return;
     if (toggleMuteInFlightRef.current) return;
     toggleMuteInFlightRef.current = true;
     setIsMuteTogglePending(true);
@@ -2562,7 +2557,6 @@ export function useMeetMedia({
       setIsMuteTogglePending(false);
     }
   }, [
-    ghostEnabled,
     isObserverMode,
     isMuted,
     selectedAudioInputDeviceId,
@@ -2583,7 +2577,7 @@ export function useMeetMedia({
   ]);
 
   useEffect(() => {
-    if (ghostEnabled || isObserverMode) return;
+    if (isObserverMode) return;
     if (connectionState !== "joined") return;
     const canWarmMutedAudio = isMuted && mediaState.hasAudioPermission;
     const getReusableAudioTrack = () =>
@@ -2643,7 +2637,6 @@ export function useMeetMedia({
     };
   }, [
     connectionState,
-    ghostEnabled,
     isMuted,
     isObserverMode,
     mediaState.hasAudioPermission,
@@ -2656,7 +2649,7 @@ export function useMeetMedia({
   ]);
 
   useEffect(() => {
-    if (ghostEnabled || isObserverMode) return;
+    if (isObserverMode) return;
     if (connectionState !== "joined") return;
     const reusableAudioTrack = getFirstLiveTrack(
       (localStreamRef.current ?? localStream)?.getAudioTracks() ?? [],
@@ -2828,7 +2821,6 @@ export function useMeetMedia({
       removeCreatedTrackFromLocalStream();
     };
   }, [
-    ghostEnabled,
     isObserverMode,
     connectionState,
     audioProducerRecoveryPulse,
@@ -2853,7 +2845,7 @@ export function useMeetMedia({
   ]);
 
   const toggleCamera = useCallback(async () => {
-    if (ghostEnabled || isObserverMode) return;
+    if (isObserverMode) return;
     if (toggleCameraInFlightRef.current) return;
     toggleCameraInFlightRef.current = true;
 
@@ -3030,7 +3022,6 @@ export function useMeetMedia({
       toggleCameraInFlightRef.current = false;
     }
   }, [
-    ghostEnabled,
     isObserverMode,
     isCameraOff,
     attachLocalVideoTrackHandlers,
@@ -3055,7 +3046,7 @@ export function useMeetMedia({
   ]);
 
   useEffect(() => {
-    if (ghostEnabled || isObserverMode) return;
+    if (isObserverMode) return;
     if (connectionState !== "joined") return;
     if (isCameraOff) return;
     if (isMediaRecoveryBlocked()) return;
@@ -3171,7 +3162,6 @@ export function useMeetMedia({
     };
   }, [
     connectionState,
-    ghostEnabled,
     isCameraOff,
     isMediaRecoveryBlocked,
     isObserverMode,
@@ -3188,7 +3178,7 @@ export function useMeetMedia({
   ]);
 
   useEffect(() => {
-    if (ghostEnabled || isObserverMode) {
+    if (isObserverMode) {
       cameraOutboundStallStateRef.current = createCameraOutboundStallState();
       return;
     }
@@ -3526,7 +3516,6 @@ export function useMeetMedia({
     };
   }, [
     connectionState,
-    ghostEnabled,
     isCameraOff,
     isObserverMode,
     isMediaRecoveryBlocked,
@@ -3543,7 +3532,7 @@ export function useMeetMedia({
   ]);
 
   useEffect(() => {
-    if (ghostEnabled || isObserverMode) {
+    if (isObserverMode) {
       screenOutboundStallStateRef.current = createCameraOutboundStallState();
       return;
     }
@@ -3782,7 +3771,6 @@ export function useMeetMedia({
     };
   }, [
     connectionState,
-    ghostEnabled,
     isObserverMode,
     isMediaRecoveryBlocked,
     isScreenSharing,
@@ -3792,7 +3780,7 @@ export function useMeetMedia({
   ]);
 
   useEffect(() => {
-    if (ghostEnabled || isObserverMode) return;
+    if (isObserverMode) return;
     if (connectionState !== "joined") return;
     if (isCameraOff) return;
     if (isMediaRecoveryBlocked()) return;
@@ -3973,7 +3961,6 @@ export function useMeetMedia({
       removeCreatedTrackFromLocalStream();
     };
   }, [
-    ghostEnabled,
     isObserverMode,
     connectionState,
     cameraProducerRecoveryPulse,
@@ -4012,7 +3999,7 @@ export function useMeetMedia({
 
   const refreshScreenAudioProducerForNetworkProfile = useCallback(
     async (networkProfile: WebcamProducerNetworkProfile): Promise<boolean> => {
-      if (ghostEnabled || isObserverMode) return false;
+      if (isObserverMode) return false;
       if (screenAudioProducerRefreshInFlightRef.current) return false;
       if (isMediaRecoveryBlocked()) return false;
 
@@ -4153,7 +4140,6 @@ export function useMeetMedia({
       }
     },
     [
-      ghostEnabled,
       isObserverMode,
       isMediaRecoveryBlocked,
       producerTransportRef,
@@ -4329,7 +4315,7 @@ export function useMeetMedia({
   );
 
   useEffect(() => {
-    if (ghostEnabled || isObserverMode) return;
+    if (isObserverMode) return;
     if (connectionState !== "joined") return;
     if (!isScreenSharing) return;
 
@@ -4359,7 +4345,6 @@ export function useMeetMedia({
   }, [
     attachLocalScreenShareTrackHandlers,
     connectionState,
-    ghostEnabled,
     isObserverMode,
     isScreenSharing,
     screenProducerRef,
@@ -4367,7 +4352,7 @@ export function useMeetMedia({
   ]);
 
   const toggleScreenShare = useCallback(async () => {
-    if (ghostEnabled || isObserverMode) return;
+    if (isObserverMode) return;
     if (isScreenSharing) {
       const producer = screenProducerRef.current;
       const audioProducer = screenAudioProducerRef.current;
@@ -4655,7 +4640,6 @@ export function useMeetMedia({
       }
     }
   }, [
-    ghostEnabled,
     isObserverMode,
     isScreenSharing,
     activeScreenShareId,

@@ -49,6 +49,8 @@ export type AdminScheduledItem = {
   title: string;
   clientId: string;
   roomId: string;
+  /** Webinar link slug; meetings join by room code. */
+  slug: string | null;
   status: string;
   startAt: number;
   endAt: number;
@@ -304,6 +306,7 @@ export const registerAdminGateway = (
         title: meeting.title,
         clientId: meeting.clientId,
         roomId: meeting.roomCode,
+        slug: null,
         status: meeting.status,
         startAt: meeting.scheduledStartAt,
         endAt: meeting.scheduledEndAt,
@@ -319,6 +322,7 @@ export const registerAdminGateway = (
         title: webinar.title,
         clientId: webinar.clientId,
         roomId: webinar.roomId,
+        slug: webinar.linkSlug || null,
         status: webinar.status,
         startAt: webinar.scheduledStartAt,
         endAt: webinar.scheduledEndAt,
@@ -334,7 +338,6 @@ export const registerAdminGateway = (
     for (const room of state.rooms.values()) {
       const users = new Map<string, string>();
       for (const client of room.clients.values()) {
-        if (client.isGhost) continue;
         users.set(client.id, room.getDisplayNameForUser(client.id) || client.id);
       }
       occupancy.set(room.channelId, {
@@ -412,7 +415,7 @@ export const registerAdminGateway = (
       producers: rooms.reduce((sum, room) => {
         let count = 0;
         for (const client of room.clients.values()) {
-          if (!client.isGhost) count += client.producers.size;
+          count += client.producers.size;
         }
         return sum + count;
       }, 0),
@@ -594,7 +597,6 @@ export const registerAdminGateway = (
 
         for (const room of state.rooms.values()) {
           for (const client of room.clients.values()) {
-            if (client.isGhost) continue;
             const displayName =
               room.getDisplayNameForUser(client.id) || client.id;
             const userKey = room.userKeysById.get(client.id) ?? null;

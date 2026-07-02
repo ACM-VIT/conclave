@@ -17,8 +17,6 @@ import type { Socket } from "socket.io-client";
 import { Avatar } from "@conclave/ui-tokens/web";
 import type { Participant } from "../lib/types";
 import { formatDisplayName, isSystemUserId } from "../lib/utils";
-import { isRemoteParticipantVisible } from "../lib/participant-visibility";
-import { GhostParticipantBadge } from "./GhostParticipantChrome";
 
 interface ParticipantsPanelProps {
   participants: Map<string, Participant>;
@@ -32,9 +30,7 @@ interface ParticipantsPanelProps {
     isCameraOff: boolean;
     isHandRaised: boolean;
     isScreenSharing: boolean;
-    isGhost?: boolean;
   };
-  viewerIsGhost?: boolean;
   hostUserId?: string | null;
   hostUserIds?: string[];
 }
@@ -68,7 +64,6 @@ function ParticipantsPanel({
   localState,
   hostUserId,
   hostUserIds,
-  viewerIsGhost = false,
 }: ParticipantsPanelProps & {
   socket: Socket | null;
   isAdmin?: boolean | null;
@@ -76,8 +71,7 @@ function ParticipantsPanel({
   const participantsList = Array.from(participants.values()).filter(
     (participant) =>
       participant.userId !== currentUserId &&
-      !isSystemUserId(participant.userId) &&
-      isRemoteParticipantVisible(participant, viewerIsGhost, currentUserId),
+      !isSystemUserId(participant.userId),
   );
   const localParticipant: Participant | null =
     localState
@@ -95,7 +89,6 @@ function ParticipantsPanel({
           isCameraOff: localState.isCameraOff,
           isVideoAdaptivelyPaused: false,
           isHandRaised: localState.isHandRaised,
-          isGhost: Boolean(localState.isGhost),
         }
       : null;
   const displayParticipants = localParticipant
@@ -161,7 +154,6 @@ function ParticipantsPanel({
       !socket ||
       !canManageHost ||
       effectiveHostUserIds.has(targetUserId) ||
-      targetParticipant?.isGhost ||
       isWebinarAttendee
     ) {
       return;
@@ -395,7 +387,7 @@ function ParticipantsPanel({
             ).isWebinarAttendee,
           );
           const canPromoteParticipant =
-            canManageHost && !isHost && !participant.isGhost && !isWebinarAttendee;
+            canManageHost && !isHost && !isWebinarAttendee;
           const isPendingPromotion =
             pendingHostPromotionUserId === participant.userId;
           const displayName = formatDisplayName(
@@ -455,15 +447,7 @@ function ParticipantsPanel({
                         Host
                       </span>
                     )}
-                    {participant.isGhost && (
-                      <GhostParticipantBadge compact label="Ghost" />
-                    )}
                   </div>
-                  {participant.isGhost && viewerIsGhost && (
-                    <p className="truncate text-[12px] text-[#fafafa]/45">
-                      Visible only to other ghosts
-                    </p>
-                  )}
                 </div>
 
                 <div className="flex shrink-0 items-center gap-2.5">

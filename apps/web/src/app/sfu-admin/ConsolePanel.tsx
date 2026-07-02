@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import { color } from "@conclave/ui-tokens";
 import { adminRequest } from "./adminApi";
 import type { RequestMethod } from "./types";
-import { Section, btnAccent, btnGhost, inputClass } from "./ui";
+import { Section, btnAccent, btnSecondary, inputClass } from "./ui";
 
 const pretty = (value: unknown): string => JSON.stringify(value, null, 2);
 
@@ -278,7 +278,7 @@ export function ConsolePanel({
             </button>
             <button
               type="button"
-              className={btnGhost}
+              className={btnSecondary}
               onClick={() => setOutput("")}
             >
               Clear output

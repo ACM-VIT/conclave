@@ -38,7 +38,7 @@ export function ChatSpectator({ messages }: { messages: AdminChatMessage[] | nul
           style={{ borderColor: color.border, backgroundColor: color.surface }}
         >
           {messages.map((message) => (
-            <p key={message.id} className="text-[12.5px] leading-relaxed">
+            <p key={message.id} className="text-[12.5px] leading-relaxed [overflow-wrap:anywhere]">
               <span style={{ color: color.textFaint, fontVariantNumeric: "tabular-nums" }}>
                 {formatClock(message.timestamp)}
               </span>{" "}

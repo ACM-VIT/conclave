@@ -79,7 +79,7 @@ The web `/api/sfu/join` endpoint still routes existing rooms to their recorded o
 | POST | `/admin/rooms/:roomId/users/:userId/mute` | shortcut: close audio producers |
 | POST | `/admin/rooms/:roomId/users/:userId/video-off` | shortcut: close webcam video |
 | POST | `/admin/rooms/:roomId/users/:userId/stop-screen` | shortcut: close screen-share producers |
-| POST | `/admin/rooms/:roomId/users/remove-non-admins` | kick all non-admins (optional ghosts/attendees) |
+| POST | `/admin/rooms/:roomId/users/remove-non-admins` | kick all non-admins (optional attendees) |
 | POST | `/admin/rooms/:roomId/users/:userId/block` | block identity and kick active session |
 | POST | `/admin/rooms/:roomId/users/:userId/unblock` | unblock identity |
 

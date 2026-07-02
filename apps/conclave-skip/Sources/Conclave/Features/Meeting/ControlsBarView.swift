@@ -200,7 +200,6 @@ struct ControlsBarView: View {
         let mediaControlsDisabled = !isJoinedCall || viewModel.state.mediaPublishingDisabled
         let isWebinarAttendee = viewModel.state.isWebinarAttendee
         let canUseParticipantActions = isJoinedCall
-            && !viewModel.state.isGhostMode
             && !isWebinarAttendee
         let isScreenShareDisabled = mediaControlsDisabled ||
             viewModel.state.hasActiveRemoteScreenShare
@@ -229,22 +228,22 @@ struct ControlsBarView: View {
                     }
                 }
 
-                ControlButton(
-                    icon: micIcon,
-                    isMuted: viewModel.state.isMuted,
-                    isGhostDisabled: mediaControlsDisabled,
-                    accessibilityLabel: viewModel.state.isMuted ? "Unmute microphone" : "Mute microphone"
-                ) {
+                    ControlButton(
+                        icon: micIcon,
+                        isMuted: viewModel.state.isMuted,
+                        isDisabledDimmed: mediaControlsDisabled,
+                        accessibilityLabel: viewModel.state.isMuted ? "Unmute microphone" : "Mute microphone"
+                    ) {
                     viewModel.toggleMute()
                 }
                 .disabled(mediaControlsDisabled)
 
-                ControlButton(
-                    icon: cameraIcon,
-                    isMuted: viewModel.state.isCameraOff,
-                    isGhostDisabled: mediaControlsDisabled,
-                    accessibilityLabel: viewModel.state.isCameraOff ? "Turn camera on" : "Turn camera off"
-                ) {
+                    ControlButton(
+                        icon: cameraIcon,
+                        isMuted: viewModel.state.isCameraOff,
+                        isDisabledDimmed: mediaControlsDisabled,
+                        accessibilityLabel: viewModel.state.isCameraOff ? "Turn camera on" : "Turn camera off"
+                    ) {
                     viewModel.toggleCamera()
                 }
                 .disabled(mediaControlsDisabled)
@@ -253,7 +252,7 @@ struct ControlsBarView: View {
                     ControlButton(
                         icon: screenShareIcon,
                         isActive: viewModel.state.isScreenSharing,
-                        isGhostDisabled: isScreenShareDisabled,
+                        isDisabledDimmed: isScreenShareDisabled,
                         accessibilityLabel: viewModel.state.isScreenSharing ? "Stop screen sharing" : "Share screen"
                     ) {
                         viewModel.toggleScreenShare()
@@ -275,7 +274,7 @@ struct ControlsBarView: View {
                         icon: handRaiseIcon,
                         isActive: viewModel.state.isHandRaised,
                         activeColor: ACMColors.handRaised,
-                        isGhostDisabled: !canUseParticipantActions,
+                        isDisabledDimmed: !canUseParticipantActions,
                         accessibilityLabel: viewModel.state.isHandRaised ? "Lower hand" : "Raise hand"
                     ) {
                         viewModel.toggleHandRaise()
@@ -286,7 +285,7 @@ struct ControlsBarView: View {
                         ControlButton(
                             icon: reactionIcon,
                             isActive: showReactionPicker,
-                            isGhostDisabled: !canUseParticipantActions,
+                            isDisabledDimmed: !canUseParticipantActions,
                             accessibilityLabel: "Reactions"
                         ) {
                             showReactionPicker = !showReactionPicker
@@ -382,7 +381,7 @@ struct ControlButton: View {
     var isActive: Bool = false
     var isMuted: Bool = false
     var activeColor: Color = ACMColors.primaryOrange
-    var isGhostDisabled: Bool = false
+    var isDisabledDimmed: Bool = false
     var badge: Int? = nil
     var accessibilityLabel: String? = nil
     var accessibilityHint: String? = nil
@@ -413,7 +412,7 @@ struct ControlButton: View {
         .acmControlButtonStyle(
             isActive: isActive,
             isMuted: isMuted,
-            isGhostDisabled: isGhostDisabled,
+            isDisabledDimmed: isDisabledDimmed,
             isHandRaised: isActive && activeColor == ACMColors.handRaised
         )
         .accessibilityLabel(label)

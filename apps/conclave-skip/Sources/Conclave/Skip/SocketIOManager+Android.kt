@@ -513,7 +513,6 @@ internal class SocketIOManager {
         roomId: String,
         sessionId: String,
         displayName: String?,
-        isGhost: Boolean,
         meetingInviteCode: String? = null,
         webinarInviteCode: String? = null
     ): JoinRoomResponse {
@@ -521,7 +520,6 @@ internal class SocketIOManager {
             roomId = roomId,
             sessionId = sessionId,
             displayName = displayName,
-            ghost = isGhost,
             webinarInviteCode = webinarInviteCode,
             meetingInviteCode = meetingInviteCode
         )
@@ -2153,7 +2151,6 @@ internal class SocketIOManager {
         return UserJoinedNotification(
             userId = userId,
             displayName = displayNameField(obj),
-            isGhost = boolField(obj, "isGhost"),
             roomId = stringField(obj, "roomId")
         )
     }

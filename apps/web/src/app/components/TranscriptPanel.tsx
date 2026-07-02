@@ -7,7 +7,6 @@ import {
   Copy,
   Download,
   FileText,
-  Ghost,
   HelpCircle,
   ListChecks,
   ListTodo,
@@ -74,7 +73,7 @@ interface TranscriptPanelProps {
   initialTab?: TranscriptTab;
   /**
    * Posts a meeting recap into the room chat through the assistant. Omit to
-   * hide the action (ghost mode, webinar attendees).
+   * hide the action for view-only attendees.
    */
   onPostRecap?: () => boolean;
 }
@@ -331,7 +330,7 @@ function StartStage({
         </p>
         <p className="mt-3 max-w-[280px] text-[13.5px] leading-relaxed text-[#a1a1aa]">
           {transcript.isViewOnly
-            ? "Ghost mode can follow live transcript and minutes without controlling the room."
+            ? "View-only participants can follow live transcript and minutes without controlling the room."
             : needsTakeover
               ? isOnTheHouse
                 ? "The last host stepped away. Resume it with Conclave's shared key."
@@ -341,7 +340,7 @@ function StartStage({
 
         {transcript.isViewOnly ? (
           <div className="mt-7 inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3.5 py-2.5 text-[12.5px] font-semibold text-[#d4d4d8]">
-            <Ghost size={15} strokeWidth={1.8} className="text-[#F95F4A]" />
+            <Lock size={15} strokeWidth={1.8} className="text-[#F95F4A]" />
             View only
           </div>
         ) : (
@@ -464,7 +463,7 @@ function StartStage({
   );
 }
 
-// Shared empty/fallback shell, modeled on the chat panel: a faded, ghosted
+// Shared empty/fallback shell, modeled on the chat panel: a faded
 // preview of the real content this tab will produce (hinting at where things
 // land), above a short title and description.
 function FallbackState({
@@ -577,7 +576,7 @@ function AskFallback() {
   );
 }
 
-const MinutesGhostPreview = (
+const MinutesFadedPreview = (
   <div className="space-y-3.5 text-left">
     {[
       { label: "w-16", lines: ["w-full", "w-3/4"] },
@@ -604,7 +603,7 @@ function MinutesFallback() {
     <FallbackState
       title="Minutes build as you talk"
       description="Topics, decisions, action items, and open questions fill in on their own."
-      preview={MinutesGhostPreview}
+      preview={MinutesFadedPreview}
     />
   );
 }
@@ -623,7 +622,7 @@ function MinutesBuilding() {
         </span>
       }
       description="We'll lay out topics, decisions, and action items once there's enough of the conversation to summarize."
-      preview={MinutesGhostPreview}
+      preview={MinutesFadedPreview}
     />
   );
 }
@@ -1040,7 +1039,7 @@ export default function TranscriptPanel({
               </p>
             ) : transcript.isViewOnly ? (
               <p className="mt-0.5 truncate text-[11.5px] text-[#a1a1aa]">
-                Ghost mode · view only
+                View only
               </p>
             ) : null}
           </div>

@@ -11,7 +11,7 @@ import { RoomsRail } from "./RoomsRail";
 import { RoomView } from "./RoomView";
 import { Toasts } from "./Toasts";
 import type { AdminUser, RoomSelection } from "./types";
-import { btnGhost, inputClass } from "./ui";
+import { btnSecondary, inputClass } from "./ui";
 import { useAdminActions } from "./useAdminActions";
 import { useAdminSocket } from "./useAdminSocket";
 
@@ -120,6 +120,10 @@ export default function SfuAdminDashboard() {
       if (event.key === "/") {
         event.preventDefault();
         findInputRef.current?.focus();
+        return;
+      }
+      if (event.key === "Escape") {
+        setActivityOpen(false);
         return;
       }
       if (event.key === "a") {
@@ -244,7 +248,11 @@ export default function SfuAdminDashboard() {
           />
         </aside>
 
-        <main className="max-h-[calc(100vh-48px)] overflow-y-auto px-4 md:px-8">
+        <main
+          className={`max-h-[calc(100vh-48px)] overflow-y-auto px-4 transition-[margin] duration-[120ms] md:px-8 ${
+            activityOpen ? "xl:mr-[360px]" : ""
+          }`}
+        >
           {/* Small screens still need room switching */}
           <div className="py-3 xl:hidden">
             <select
@@ -271,7 +279,7 @@ export default function SfuAdminDashboard() {
               title="Not connected"
               body={bootError || "Can't reach the SFU."}
               action={
-                <button type="button" className={btnGhost} onClick={retry}>
+                <button type="button" className={btnSecondary} onClick={retry}>
                   Try again
                 </button>
               }
@@ -315,6 +323,8 @@ export default function SfuAdminDashboard() {
         events={events}
         audit={audit}
         scheduled={scheduled}
+        rooms={rooms}
+        selected={selected}
         instances={instances}
         onPickRoom={(instanceKey, channelId) => selectRoom({ instanceKey, channelId })}
       />

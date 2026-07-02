@@ -332,7 +332,6 @@ enum JoinCompactPreviewLayoutPolicy {
         showsPrompt: Bool,
         showsTabs: Bool,
         showsGuestFooter: Bool,
-        showsGhostToggle: Bool,
         isJoinTab: Bool
     ) -> CGFloat {
         let hardMinimum: CGFloat = 96.0
@@ -344,7 +343,6 @@ enum JoinCompactPreviewLayoutPolicy {
             showsPrompt: showsPrompt,
             showsTabs: showsTabs,
             showsGuestFooter: showsGuestFooter,
-            showsGhostToggle: showsGhostToggle,
             isJoinTab: isJoinTab
         )
         guard available >= visibleMinimum else { return 0.0 }
@@ -355,7 +353,6 @@ enum JoinCompactPreviewLayoutPolicy {
         showsPrompt: Bool,
         showsTabs: Bool,
         showsGuestFooter: Bool,
-        showsGhostToggle: Bool,
         isJoinTab: Bool
     ) -> CGFloat {
         let outerPadding: CGFloat = 32.0
@@ -376,9 +373,6 @@ enum JoinCompactPreviewLayoutPolicy {
             rows.append(isJoinTab ? 68.0 : 52.0)
         }
         rows.append(48.0)
-        if showsGhostToggle && !isJoinTab {
-            rows.append(58.0)
-        }
         if showsGuestFooter {
             rows.append(108.0)
         }
@@ -408,7 +402,6 @@ struct JoinView: View {
     @State private var inviteCode = ""
     @State private var guestName = ""
     @State private var displayNameInput = ""
-    @State private var isGhostMode = false
     @State private var activeTab: JoinTab = .new
     @State private var isCameraOn = false
     @State private var isMicOn = false
@@ -533,15 +526,6 @@ struct JoinView: View {
         return user
     }
 
-    private var canShowGhostModeToggle: Bool {
-        let target = activeTab == .join ? resolvedJoinTarget(from: roomCode) : nil
-        return JoinAdminIntentPolicy.shouldRequestAdminJoin(
-            resolvedClientId: SfuJoinService.resolveClientId(),
-            targetClientId: target?.clientId,
-            joinMode: target?.joinMode ?? .meeting
-        )
-    }
-    
     var body: some View {
         GeometryReader { geometry in
             ZStack {
@@ -931,7 +915,6 @@ struct JoinView: View {
             showsPrompt: shouldRenderCompactPromptRecovery,
             showsTabs: shouldShowJoinTabs,
             showsGuestFooter: shouldShowGuestSignInFooter,
-            showsGhostToggle: canShowGhostModeToggle,
             isJoinTab: activeTab == .join
         )
     }
@@ -1207,69 +1190,10 @@ struct JoinView: View {
             identityInputSection
             joinFormErrorBanner
             startMeetingButton
-            if canShowGhostModeToggle {
-                ghostModeToggleRow
-            }
             guestSignInFooter
         }
     }
 
-    private var ghostModeToggleRow: some View {
-        Button {
-            isGhostMode = !isGhostMode
-            if isGhostMode {
-                isMicOn = false
-                isCameraOn = false
-                stopPreviewCapture()
-            }
-        } label: {
-            HStack(spacing: 12) {
-                ACMSystemIcon.icon("theatermasks.fill", android: "ghost", size: 18, tint: isGhostMode ? "accent" : "muted")
-                    .foregroundStyle(isGhostMode ? ACMColors.primaryOrange : ACMColors.textMuted)
-                    .frame(width: 28, height: 28)
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Join as ghost")
-                        .font(ACMFont.trial(14, weight: .medium))
-                        .foregroundStyle(ACMColors.text)
-                    Text("Others won't see you join")
-                        .font(ACMFont.trial(12))
-                        .foregroundStyle(ACMColors.textFaint)
-                }
-
-                Spacer()
-
-                ghostModeSwitch
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.horizontal, 14)
-            .frame(height: 58)
-            .acmColorBackground(ACMColors.subtleFill)
-            .overlay {
-                RoundedRectangle(cornerRadius: ACMRadius.md)
-                    .strokeBorder(lineWidth: 1)
-                    .foregroundStyle(isGhostMode ? ACMColors.primaryOrange.opacity(0.55) : ACMColors.borderSubtle)
-            }
-            .clipShape(RoundedRectangle(cornerRadius: ACMRadius.md))
-        }
-        .buttonStyle(.plain)
-    }
-
-    private var ghostModeSwitch: some View {
-        ZStack(alignment: isGhostMode ? .trailing : .leading) {
-            Capsule()
-                .fill(isGhostMode ? ACMColors.primaryOrange : ACMColors.surfaceRaised)
-                .frame(width: 42, height: 24)
-
-            Circle()
-                .fill(Color.white)
-                .frame(width: 18, height: 18)
-                .padding(.horizontal, 3)
-        }
-        .frame(width: 42, height: 24)
-        .animation(.easeInOut(duration: 0.12), value: isGhostMode)
-    }
-    
     private var displayNameInputSection: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Your name")
@@ -2303,7 +2227,6 @@ struct JoinView: View {
         resetInviteCodePrompt()
         stopPreviewCapture()
         isMicOn = false
-        isGhostMode = false
         displayNameInput = ""
         guestName = ""
 
@@ -2328,7 +2251,6 @@ struct JoinView: View {
         resetInviteCodePrompt()
         stopPreviewCapture()
         isMicOn = false
-        isGhostMode = false
         let currentName = NativeDisplayNameNormalizer.normalize(displayNameInput)
         guestName = currentName.isEmpty ? (appState.currentUser?.name ?? "") : currentName
         appState.clearAuthentication(signOutRemote: false)
@@ -2355,7 +2277,6 @@ struct JoinView: View {
         resetInviteCodePrompt()
         stopPreviewCapture()
         isMicOn = false
-        isGhostMode = false
         let deletingUserId = appState.currentUser?.id
 
         Task { @MainActor in
@@ -2537,7 +2458,6 @@ struct JoinView: View {
             roomId: roomId,
             displayName: viewModel.state.displayName,
             socketDisplayName: socketDisplayNameForJoin(joinMode: .meeting, isHost: true),
-            isGhost: isGhostMode,
             user: userPayload,
             isHost: true
         )
@@ -2590,7 +2510,6 @@ struct JoinView: View {
             roomId: joinTarget.roomId,
             displayName: viewModel.state.displayName,
             socketDisplayName: socketDisplayNameForJoin(joinMode: joinTarget.joinMode, isHost: shouldRequestAdminJoin),
-            isGhost: isGhostMode,
             user: userPayload,
             isHost: shouldRequestAdminJoin,
             joinMode: joinTarget.joinMode,

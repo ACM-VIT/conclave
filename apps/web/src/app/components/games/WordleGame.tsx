@@ -45,6 +45,7 @@ type WordlePublic = {
 };
 
 type WordleMe = {
+  currentRound: number;
   isSetter: boolean;
   canSetWord: boolean;
   canGuess: boolean;
@@ -487,6 +488,8 @@ export default function WordleGame({
 
   const isRandomMode = pub.wordSource === "random";
   const minPlayers = isRandomMode ? 1 : 2;
+  const setterBoards =
+    me.currentRound === pub.currentRound ? me.boards : null;
 
   if (pub.phase === "lobby") {
     return (
@@ -847,9 +850,9 @@ export default function WordleGame({
             <span style={{ fontSize: 13, color: color.text }}>You set the word</span>
             <span style={{ fontSize: 13, color: color.textMuted }}>· watching players guess</span>
           </div>
-          {me.boards && me.boards.length > 0 ? (
+          {setterBoards && setterBoards.length > 0 ? (
             <SetterBoards
-              boards={me.boards}
+              boards={setterBoards}
               standings={pub.standings}
               wordLength={pub.wordLength}
               maxTries={pub.maxTries}

@@ -65,6 +65,7 @@ describe("wordle game", () => {
       setterId: "host",
     });
     expect(session.getPlayerView("host", 1_500)).toMatchObject({
+      currentRound: 1,
       canSetWord: true,
       isSetter: true,
     });
@@ -95,6 +96,7 @@ describe("wordle game", () => {
         currentPlayers: remainingPlayers,
       })),
     ).toMatchObject({
+      currentRound: 1,
       canSetWord: true,
       isSetter: true,
     });

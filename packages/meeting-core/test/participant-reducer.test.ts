@@ -51,20 +51,10 @@ describe("participantReducer — ADD_PARTICIPANT (join)", () => {
       isCameraOff: true,
       isVideoAdaptivelyPaused: false,
       isHandRaised: false,
-      isGhost: false,
       videoStream: null,
       audioStream: null,
     });
     expect(p.isLeaving).toBeUndefined();
-  });
-
-  it("honors the isGhost flag on add", () => {
-    const next = participantReducer(empty(), {
-      type: "ADD_PARTICIPANT",
-      userId: "g",
-      isGhost: true,
-    });
-    expect(next.get("g")!.isGhost).toBe(true);
   });
 
   it("returns the SAME map reference for a no-op re-add (server re-sync)", () => {
@@ -144,27 +134,6 @@ describe("participantReducer — ADD_PARTICIPANT (join)", () => {
     expect(next.has("hidden")).toBe(false);
   });
 
-  it("promotes a ghost to a real participant on re-add (ghost flag change)", () => {
-    const state = seed("a", { isGhost: true });
-    const next = participantReducer(state, {
-      type: "ADD_PARTICIPANT",
-      userId: "a",
-      isGhost: false,
-    });
-    expect(next).not.toBe(state);
-    expect(next.get("a")!.isGhost).toBe(false);
-  });
-
-  it("keeps the existing ghost flag when re-add omits isGhost", () => {
-    const state = seed("a", { isGhost: true });
-    const next = participantReducer(state, {
-      type: "ADD_PARTICIPANT",
-      userId: "a",
-    });
-    // existing.isGhost (true) === nextGhost (true) and not leaving → no-op
-    expect(next).toBe(state);
-    expect(next.get("a")!.isGhost).toBe(true);
-  });
 });
 
 describe("participantReducer — REMOVE_PARTICIPANT (leave)", () => {
@@ -219,7 +188,7 @@ describe("participantReducer — MARK_LEAVING", () => {
     const state = seed("a");
     const next = participantReducer(state, {
       type: "MARK_LEAVING",
-      userId: "ghost",
+      userId: "absent",
     });
     expect(next).toBe(state);
   });

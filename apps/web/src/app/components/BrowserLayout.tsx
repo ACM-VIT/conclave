@@ -10,7 +10,6 @@ import {
     normalizeBrowserUrl,
     resolveNoVncUrl,
 } from "../lib/utils";
-import { isRemoteParticipantVisible } from "../lib/participant-visibility";
 import ParticipantVideo from "./ParticipantVideo";
 import { Avatar, NamePlate } from "@conclave/ui-tokens/web";
 import { color } from "@conclave/ui-tokens";
@@ -23,7 +22,6 @@ interface BrowserLayoutProps {
     isCameraOff: boolean;
     isMuted: boolean;
     isHandRaised: boolean;
-    isGhost: boolean;
     participants: Map<string, Participant>;
     userEmail: string;
     isMirrorCamera: boolean;
@@ -45,7 +43,6 @@ function BrowserLayout({
     isCameraOff,
     isMuted,
     isHandRaised,
-    isGhost,
     participants,
     userEmail,
     isMirrorCamera,
@@ -146,8 +143,7 @@ function BrowserLayout({
         Array.from(participants.values()).filter(
             (participant) =>
                 participant.userId !== currentUserId &&
-                !isSystemUserId(participant.userId) &&
-                isRemoteParticipantVisible(participant, isGhost, currentUserId),
+                !isSystemUserId(participant.userId),
         ),
         activeSpeakerId
     );
@@ -254,10 +250,9 @@ function BrowserLayout({
                                 className="absolute inset-0 w-full h-full border-0"
                                 style={{
                                     opacity: 0,
-                                    pointerEvents: isGhost ? "none" : "auto",
+                                    pointerEvents: "auto",
                                 }}
                                 allow="clipboard-read; clipboard-write"
-                                tabIndex={isGhost ? -1 : undefined}
                                 title="Shared Browser Input"
                             />
                         </div>
@@ -269,10 +264,9 @@ function BrowserLayout({
                                 className="h-full w-full border-0 transition-opacity duration-200"
                                 style={{
                                     opacity: isReady ? 1 : 0,
-                                    pointerEvents: isGhost ? "none" : "auto",
+                                    pointerEvents: "auto",
                                 }}
                                 allow="clipboard-read; clipboard-write"
-                                tabIndex={isGhost ? -1 : undefined}
                                 title="Shared Browser"
                             />
                             {!isReady && (
@@ -335,8 +329,7 @@ function BrowserLayout({
             </div>
 
             <div className="flex h-36 w-full shrink-0 flex-row gap-3 overflow-x-auto overflow-y-visible pb-1 sm:h-auto sm:w-64 sm:flex-col sm:overflow-y-auto sm:overflow-x-visible sm:px-1 sm:pb-0">
-                {!isGhost && (
-                    <div className={`acm-video-tile h-36 w-48 shrink-0 sm:w-auto ${isLocalActiveSpeaker ? "speaking" : ""}`}>
+                <div className={`acm-video-tile h-36 w-48 shrink-0 sm:w-auto ${isLocalActiveSpeaker ? "speaking" : ""}`}>
                         <video
                             ref={localVideoRef}
                             autoPlay
@@ -394,8 +387,7 @@ function BrowserLayout({
                                 <Mic size={18} strokeWidth={1.75} className="h-3.5 w-3.5" style={{ color: color.success }} />
                             )}
                         </div>
-                    </div>
-                )}
+                </div>
 
                 {remoteParticipants.map((participant) => (
                         <ParticipantVideo

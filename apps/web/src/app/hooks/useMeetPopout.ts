@@ -237,7 +237,7 @@ const POPOUT_CSS = `
     font-family: 'PolySans Trial', sans-serif;
   }
 
-  /* Flat ghost icon buttons — matches the redesigned in-call control bar. */
+  /* Flat icon buttons — matches the redesigned in-call control bar. */
   .ctrl-btn {
     display: flex;
     align-items: center;

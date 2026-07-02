@@ -66,6 +66,19 @@ export function FindPerson({
         onFocus={() => {
           if (matches) setOpen(true);
         }}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" && matches && matches.length > 0) {
+            event.preventDefault();
+            onPick(matches[0]);
+            setOpen(false);
+            setQuery("");
+            setMatches(null);
+          }
+          if (event.key === "Escape") {
+            setOpen(false);
+            (event.target as HTMLInputElement).blur();
+          }
+        }}
         placeholder="Find a person ( / )"
         className="h-7 w-full rounded-lg border border-white/10 bg-white/[0.03] px-2.5 text-[12px] text-[#fafafa] outline-none transition-colors placeholder:text-[#fafafa]/35 focus:border-[#F95F4A]/60"
       />

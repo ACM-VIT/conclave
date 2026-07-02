@@ -83,7 +83,6 @@ import {
 } from "../lib/video-effects";
 import type { MeetViewSettings } from "../lib/meet-view";
 import { getRenderableParticipantVideoStream } from "../lib/participant-media";
-import { isRemoteParticipantVisible } from "../lib/participant-visibility";
 import { prewarmVideoEffectsAssetsDeferred } from "../lib/video-effects-lazy";
 
 const JoinScreen = dynamic(() => import("./JoinScreen"), {
@@ -113,7 +112,6 @@ interface MeetsMainContentProps {
   isWebinarAttendee?: boolean;
   enableRoomRouting: boolean;
   forceJoinOnly: boolean;
-  allowGhostMode: boolean;
   user?: {
     id?: string;
     email?: string | null;
@@ -127,9 +125,6 @@ interface MeetsMainContentProps {
   refreshRooms: () => void;
   displayNameInput: string;
   setDisplayNameInput: Dispatch<SetStateAction<string>>;
-  ghostEnabled: boolean;
-  isGhostMode: boolean;
-  setIsGhostMode: Dispatch<SetStateAction<boolean>>;
   presentationStream: MediaStream | null;
   presenterName: string;
   presentationProducerId?: string | null;
@@ -351,7 +346,6 @@ export default function MeetsMainContent({
   isWebinarAttendee = false,
   enableRoomRouting,
   forceJoinOnly,
-  allowGhostMode,
   user,
   userEmail,
   isAdmin,
@@ -361,9 +355,6 @@ export default function MeetsMainContent({
   refreshRooms,
   displayNameInput,
   setDisplayNameInput,
-  ghostEnabled,
-  isGhostMode,
-  setIsGhostMode,
   presentationStream,
   presenterName,
   presentationProducerId = null,
@@ -536,14 +527,9 @@ export default function MeetsMainContent({
       participantsArray.filter(
         (participant) =>
           participant.userId !== currentUserId &&
-          !isSystemUserId(participant.userId) &&
-          isRemoteParticipantVisible(
-            participant,
-            ghostEnabled,
-            currentUserId,
-          ),
+          !isSystemUserId(participant.userId),
       ),
-    [currentUserId, ghostEnabled, participantsArray],
+    [currentUserId, participantsArray],
   );
 
   // The cast of the watch-together coachmark vignette: the real room (self
@@ -1164,7 +1150,7 @@ export default function MeetsMainContent({
   // Wrap-up moment: asks Conclave in the room chat for a recap, visible to
   // everyone through the existing assistant relay. Only offered while the
   // opt-in transcript session is running (the button lives in the minutes tab).
-  const canPostRecapToChat = !ghostEnabled && (!isChatLocked || isAdmin);
+  const canPostRecapToChat = !isChatLocked || isAdmin;
   const handlePostRecap = useCallback((): boolean => {
     if (!canPostRecapToChat) return false;
     sendChat(
@@ -1721,7 +1707,6 @@ export default function MeetsMainContent({
             isAdmin={isAdmin}
             enableRoomRouting={enableRoomRouting}
             forceJoinOnly={forceJoinOnly}
-            allowGhostMode={allowGhostMode}
             showPermissionHint={showPermissionHint}
             rooms={availableRooms}
             roomsStatus={roomsStatus}
@@ -1729,8 +1714,6 @@ export default function MeetsMainContent({
             onJoinRoom={joinRoomById}
             displayNameInput={displayNameInput}
             onDisplayNameInputChange={setDisplayNameInput}
-            isGhostMode={isGhostMode}
-            onGhostModeChange={setIsGhostMode}
             onUserChange={onUserChange}
             onIsAdminChange={onIsAdminChange}
             meetError={meetError}
@@ -1825,7 +1808,6 @@ export default function MeetsMainContent({
           isCameraOff={isCameraOff}
           isMuted={isMuted}
           isHandRaised={isHandRaised}
-          isGhost={ghostEnabled}
           participants={participants}
           userEmail={userEmail}
           isMirrorCamera={mirrorLocalPreview}
@@ -1840,7 +1822,6 @@ export default function MeetsMainContent({
           isCameraOff={isCameraOff}
           isMuted={isMuted}
           isHandRaised={isHandRaised}
-          isGhost={ghostEnabled}
           participants={participants}
           userEmail={userEmail}
           isMirrorCamera={mirrorLocalPreview}
@@ -1855,7 +1836,6 @@ export default function MeetsMainContent({
           isCameraOff={isCameraOff}
           isMuted={isMuted}
           isHandRaised={isHandRaised}
-          isGhost={ghostEnabled}
           participants={participants}
           userEmail={userEmail}
           isMirrorCamera={mirrorLocalPreview}
@@ -1875,7 +1855,6 @@ export default function MeetsMainContent({
           isCameraOff={isCameraOff}
           isMuted={isMuted}
           isHandRaised={isHandRaised}
-          isGhost={ghostEnabled}
           participants={participants}
           userEmail={userEmail}
           isMirrorCamera={mirrorLocalPreview}
@@ -1894,7 +1873,6 @@ export default function MeetsMainContent({
           isCameraOff={effectiveIsCameraOff}
           isMuted={isMuted}
           isHandRaised={isHandRaised}
-          isGhost={ghostEnabled}
           participants={participants}
           userEmail={userEmail}
           isMirrorCamera={mirrorLocalPreview}
@@ -2005,7 +1983,6 @@ export default function MeetsMainContent({
                 isViewPanelOpen={isViewPanelOpen}
                 onToggleViewPanel={handleToggleViewPanel}
                 isAdmin={isAdmin}
-                isGhostMode={ghostEnabled}
                 isParticipantsOpen={isParticipantsOpen}
                 onToggleParticipants={handleToggleParticipants}
                 isGamesOpen={isGamesOpen}
@@ -2108,14 +2085,13 @@ export default function MeetsMainContent({
           onSendGif={handleSendChatGif}
           onClose={handleToggleChat}
           currentUserId={currentUserId}
-          isGhostMode={ghostEnabled}
           isChatLocked={isChatLocked}
           isDmEnabled={isDmEnabled}
           isAdmin={isAdmin}
           mentionableParticipants={mentionableParticipants}
-          replyTarget={ghostEnabled ? null : replyTarget}
-          onReply={ghostEnabled ? undefined : onReplyToMessage}
-          onCancelReply={ghostEnabled ? undefined : onCancelReply}
+          replyTarget={replyTarget}
+          onReply={onReplyToMessage}
+          onCancelReply={onCancelReply}
           assistantApiKeyPrompt={assistantApiKeyPrompt}
           onSubmitAssistantApiKey={onSubmitAssistantApiKey}
           onCancelAssistantApiKey={onCancelAssistantApiKey}
@@ -2144,9 +2120,7 @@ export default function MeetsMainContent({
             isCameraOff,
             isHandRaised,
             isScreenSharing,
-            isGhost: ghostEnabled,
           }}
-          viewerIsGhost={ghostEnabled}
           getDisplayName={resolveDisplayName}
           onPendingUserStale={handlePendingUserStale}
           hostUserId={hostUserId}
@@ -2208,7 +2182,7 @@ export default function MeetsMainContent({
         <MeetViewPanel
           settings={viewSettings}
           onSettingsChange={onViewSettingsChange}
-          participantCount={visibleParticipantCount + (ghostEnabled ? 0 : 1)}
+          participantCount={visibleParticipantCount + 1}
           onClose={handleCloseViewPanel}
         />
       )}

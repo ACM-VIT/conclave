@@ -245,7 +245,6 @@ export class Room {
   }): { userId: string; displayName: string }[] {
     const snapshot: { userId: string; displayName: string }[] = [];
     for (const [userId, client] of this.clients.entries()) {
-      if (client.isGhost) continue;
       if (client.isWebinarAttendee && !options?.includeWebinarAttendees) {
         continue;
       }
@@ -474,7 +473,6 @@ export class Room {
             const ownerClient = this.clients.get(ownerUserId);
             if (
               !ownerClient ||
-              ownerClient.isGhost ||
               ownerClient.isWebinarAttendee ||
               !this.clientHasUnpausedWebcamAudio(ownerClient)
             ) {
@@ -503,7 +501,6 @@ export class Room {
             );
             if (
               dominantClient &&
-              !dominantClient.isGhost &&
               !dominantClient.isWebinarAttendee &&
               this.clientHasUnpausedWebcamAudio(dominantClient)
             ) {
@@ -762,10 +759,6 @@ export class Room {
       if (excludeClientId && entry.userId === excludeClientId) {
         continue;
       }
-      const producerClient = this.clients.get(entry.userId);
-      if (producerClient?.isGhost) {
-        continue;
-      }
       producers.push(this.producerInfoFromIndexEntry(entry));
     }
 
@@ -795,7 +788,7 @@ export class Room {
         continue;
       }
       const owner = this.clients.get(entry.userId);
-      if (!owner || owner.isGhost || owner.isWebinarAttendee) {
+      if (!owner || owner.isWebinarAttendee) {
         continue;
       }
       entries.push({
@@ -949,7 +942,7 @@ export class Room {
   getAdmins(): Admin[] {
     const admins: Admin[] = [];
     for (const client of this.clients.values()) {
-      if (client instanceof Admin && !client.isGhost) {
+      if (client instanceof Admin) {
         admins.push(client);
       }
     }
@@ -959,7 +952,7 @@ export class Room {
   getAdminUserIds(): string[] {
     const userIds: string[] = [];
     for (const client of this.clients.values()) {
-      if (client instanceof Admin && !client.isGhost) {
+      if (client instanceof Admin) {
         userIds.push(client.id);
       }
     }
@@ -976,7 +969,7 @@ export class Room {
 
   promoteClientToAdmin(userId: string): Admin | null {
     const client = this.clients.get(userId);
-    if (!client || client.isGhost || client.isWebinarAttendee) {
+    if (!client || client.isWebinarAttendee) {
       return null;
     }
     if (!(client instanceof Admin)) {
@@ -994,7 +987,7 @@ export class Room {
       for (const [userId, userKey] of this.userKeysById.entries()) {
         if (userKey !== this.hostUserKey) continue;
         const client = this.clients.get(userId);
-        if (client instanceof Admin && !client.isGhost) {
+        if (client instanceof Admin) {
           return userId;
         }
       }
@@ -1006,7 +999,7 @@ export class Room {
 
   hasActiveAdmin(): boolean {
     for (const client of this.clients.values()) {
-      if (client instanceof Admin && !client.isGhost) {
+      if (client instanceof Admin) {
         return true;
       }
     }
@@ -1034,7 +1027,7 @@ export class Room {
   private getClientFeedProducers(userId: string | null): ProducerInfo[] {
     if (!userId) return [];
     const client = this.clients.get(userId);
-    if (!client || client.isGhost || client.isWebinarAttendee) {
+    if (!client || client.isWebinarAttendee) {
       return [];
     }
 
