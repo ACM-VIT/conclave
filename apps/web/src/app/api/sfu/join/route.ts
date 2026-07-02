@@ -3,7 +3,6 @@ import { createHash } from "node:crypto";
 import { NextResponse } from "next/server";
 import { resolveHostGrant } from "@conclave/meeting-core";
 import { auth } from "@/lib/auth";
-import { isSfuAllowlistedUser } from "@/lib/sfu-admin-auth";
 import { resolveServerSfuClientId } from "@/lib/sfu-client-id";
 import { lookupScheduledWebinarByRoomId } from "@/lib/sfu-user-auth";
 import {
@@ -40,6 +39,7 @@ type JoinRequestBody = {
   isHost?: boolean;
   isAdmin?: boolean;
   isGhost?: boolean;
+  ghost?: boolean;
   allowRoomCreation?: boolean;
   clientId?: string;
 };
@@ -477,6 +477,13 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
+  if (body?.isGhost === true || body?.ghost === true) {
+    return NextResponse.json(
+      { error: "Ghost mode is not supported." },
+      { status: 410 },
+    );
+  }
+
   const roomId = body?.roomId?.trim();
   const sessionId = body?.sessionId?.trim();
 
@@ -520,20 +527,6 @@ export async function POST(request: Request) {
   const baseUserId = email || providedId || `guest-${sessionId}`;
   const isWebinarAttendeeJoin = joinMode === "webinar_attendee";
   const isScheduledHostRoom = isScheduledRoomId(roomId);
-  const requestedGhost = Boolean(body?.isGhost);
-  const isSuperAdmin =
-    Boolean(sessionUser?.id) &&
-    isSfuAllowlistedUser({
-      id: sessionUser!.id,
-      email: sessionUser!.email,
-    });
-  const canGhostJoin = !isWebinarAttendeeJoin && requestedGhost && isSuperAdmin;
-  if (requestedGhost && !canGhostJoin) {
-    return NextResponse.json(
-      { error: "Ghost mode is not available for this session" },
-      { status: 403 },
-    );
-  }
   const isForcedHost =
     !isWebinarAttendeeJoin &&
     Boolean(
@@ -590,7 +583,6 @@ export async function POST(request: Request) {
       isHost,
       isAdmin: isHost,
       allowRoomCreation,
-      canGhostJoin,
       clientId,
       sessionId,
       joinMode,

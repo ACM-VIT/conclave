@@ -8,7 +8,6 @@ export type ParticipantAction =
   | {
       type: "ADD_PARTICIPANT";
       userId: string;
-      isGhost?: boolean;
       addIfMissing?: boolean;
       reviveIfPresent?: boolean;
     }
@@ -54,8 +53,7 @@ export type ParticipantAction =
 // corrects the flag. Attaching a stream (UPDATE_STREAM) and the producer sync
 // paths flip these to on as soon as media actually flows.
 const createEmptyParticipant = (
-  userId: string,
-  isGhost = false
+  userId: string
 ): Participant => ({
   userId,
   videoStream: null,
@@ -70,7 +68,6 @@ const createEmptyParticipant = (
   isCameraOff: true,
   isVideoAdaptivelyPaused: false,
   isHandRaised: false,
-  isGhost,
 });
 
 // Clone the Map and set the participant in one step. Only ever called once a
@@ -101,25 +98,19 @@ export function participantReducer(
         ) {
           return state;
         }
-        const nextGhost = action.isGhost ?? existing.isGhost;
-        // Re-add of an already-present, non-leaving participant with the same
-        // ghost flag is a no-op (server re-sync) — keep the same reference.
-        if (!existing.isLeaving && existing.isGhost === nextGhost) {
+        // Re-add of an already-present, non-leaving participant is a no-op
+        // (server re-sync) — keep the same reference.
+        if (!existing.isLeaving) {
           return state;
         }
         return withParticipant(state, action.userId, {
           ...existing,
           isLeaving: false,
-          isGhost: nextGhost,
           connectionStatus: undefined,
         });
       }
       if (action.addIfMissing === false) return state;
-      return withParticipant(
-        state,
-        action.userId,
-        createEmptyParticipant(action.userId, action.isGhost ?? false)
-      );
+      return withParticipant(state, action.userId, createEmptyParticipant(action.userId));
     }
     case "REMOVE_PARTICIPANT": {
       if (!state.has(action.userId)) return state;

@@ -54,6 +54,29 @@ final class ConclaveTests: XCTestCase {
         XCTAssertTrue(stop.success)
     }
 
+    func testSocketWireModelsRoundTripNativeShape() throws {
+        let request = JoinRoomRequest(
+            roomId: "room-a",
+            sessionId: "session-a",
+            displayName: "Host",
+            webinarInviteCode: nil,
+            meetingInviteCode: "meet-123"
+        )
+        let encoded = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(request)) as? NSDictionary)
+
+        XCTAssertEqual(encoded["roomId"] as? String, "room-a")
+        XCTAssertEqual(encoded["sessionId"] as? String, "session-a")
+        XCTAssertEqual(encoded["displayName"] as? String, "Host")
+        XCTAssertEqual(encoded["meetingInviteCode"] as? String, "meet-123")
+
+        let notification = try JSONDecoder().decode(UserJoinedNotification.self, from: Data("""
+        { "userId": "u1", "displayName": "Host", "roomId": "room-a" }
+        """.utf8))
+
+        XCTAssertEqual(notification.displayName, "Host")
+        XCTAssertEqual(notification.roomId, "room-a")
+    }
+
     func testTranscriptPresentationPolicyOrdersAndGroupsSegments() throws {
         let unordered = [
             TranscriptSegmentModel(itemId: "b", sequence: 2, speakerUserId: "alex", speakerDisplayName: "Alex", text: "later", startMs: 3_000, isFinal: true),
@@ -329,7 +352,6 @@ final class ConclaveTests: XCTestCase {
             roomId: "room-a",
             displayName: "Local User",
             socketDisplayName: nil,
-            isGhost: false,
             isHost: false,
             joinMode: JoinMode.meeting,
             meetingInviteCode: nil,
@@ -489,6 +511,45 @@ final class ConclaveTests: XCTestCase {
         XCTAssertTrue(nativeWordle.contains("struct WordleGameView"))
     }
 
+    func testNativeGameDetailsPresentationParsesWebProjectionShapes() throws {
+        let view = GameJSONValue.object([
+            "scoreboard": [
+                ["id": "u2", "name": "Bea", "score": 7],
+                ["id": "u1", "name": "Ari", "score": 12]
+            ],
+            "counts": ["u1": 3, "u2": 1],
+            "namesA": ["Ari", " Bea "],
+            "roundPoints": [
+                ["id": "u1", "name": "Ari", "points": 500],
+                ["id": "u2", "name": "Bea", "points": -100],
+                ["id": "u3", "name": "", "points": 300]
+            ],
+            "results": [
+                ["id": "u1", "name": "Ari", "reactionMs": 214, "early": false],
+                ["id": "u2", "name": "Bea", "reactionMs": NSNull(), "early": true]
+            ]
+        ])
+
+        XCTAssertEqual(
+            GameDetailsPresentationPolicy.scoreboardRows(from: view),
+            [
+                GameScoreRow(id: "u1", name: "Ari", score: 12),
+                GameScoreRow(id: "u2", name: "Bea", score: 7)
+            ]
+        )
+        XCTAssertEqual(GameDetailsPresentationPolicy.intMap(from: view, key: "counts"), ["u1": 3, "u2": 1])
+        XCTAssertEqual(GameDetailsPresentationPolicy.namesSummary(view.stringArray("namesA")), "Ari, Bea")
+        XCTAssertEqual(GameDetailsPresentationPolicy.namesSummary([]), "nobody")
+        XCTAssertEqual(GameDetailsPresentationPolicy.roundPointsSummary(from: view), "Ari +500 - Bea -100")
+        XCTAssertEqual(
+            GameDetailsPresentationPolicy.reactionResultRows(from: view),
+            [
+                GameReactionResultRow(id: "u1", rank: 1, name: "Ari", resultText: "214 ms", isEarly: false, isWinner: true),
+                GameReactionResultRow(id: "u2", rank: 2, name: "Bea", resultText: "too soon", isEarly: true, isWinner: false)
+            ]
+        )
+    }
+
     func testNativeGameCatalogPresentationPolicyCoversWebGameIdentities() throws {
         let expected: [String: GameCatalogVisual] = [
             "trivia": GameCatalogVisual(icon: "questionmark.circle.fill", androidIcon: "info"),
@@ -602,7 +663,7 @@ final class ConclaveTests: XCTestCase {
     }
 
     func testMeetingHeaderRoomPillDoesNotStretchAcrossCompactScreens() throws {
-        XCTAssertLessThanOrEqual(MeetingHeaderLayout.roomPillMaxWidth, 180.0)
+        XCTAssertLessThanOrEqual(MeetingHeaderLayout.roomPillMaxWidth, 156.0)
     }
 
 #if !SKIP
@@ -1048,7 +1109,6 @@ final class ConclaveTests: XCTestCase {
             showsPrompt: false,
             showsTabs: true,
             showsGuestFooter: true,
-            showsGhostToggle: false,
             isJoinTab: false
         )
         let shortHeight = JoinCompactPreviewLayoutPolicy.height(
@@ -1056,7 +1116,6 @@ final class ConclaveTests: XCTestCase {
             showsPrompt: false,
             showsTabs: true,
             showsGuestFooter: true,
-            showsGhostToggle: false,
             isJoinTab: false
         )
 
@@ -1071,7 +1130,6 @@ final class ConclaveTests: XCTestCase {
             showsPrompt: true,
             showsTabs: true,
             showsGuestFooter: true,
-            showsGhostToggle: false,
             isJoinTab: true
         )
         let withoutFooter = JoinCompactPreviewLayoutPolicy.height(
@@ -1079,7 +1137,6 @@ final class ConclaveTests: XCTestCase {
             showsPrompt: true,
             showsTabs: true,
             showsGuestFooter: false,
-            showsGhostToggle: false,
             isJoinTab: true
         )
 
@@ -1095,7 +1152,6 @@ final class ConclaveTests: XCTestCase {
                 showsPrompt: true,
                 showsTabs: true,
                 showsGuestFooter: true,
-                showsGhostToggle: false,
                 isJoinTab: true
             ),
             0
@@ -1106,7 +1162,6 @@ final class ConclaveTests: XCTestCase {
             showsPrompt: true,
             showsTabs: true,
             showsGuestFooter: true,
-            showsGhostToggle: false,
             isJoinTab: true
         )
         XCTAssertGreaterThanOrEqual(usablePreviewHeight, 72)
@@ -5888,6 +5943,54 @@ final class ConclaveTests: XCTestCase {
             previousEntryId: nil,
             currentEntryId: "s_notice"
         ))
+    }
+
+    func testChatTimelineLatestEntryChangeTracksAndroidZeroParamTransitions() throws {
+        XCTAssertEqual(
+            ChatTimelineScrollPolicy.latestEntryChange(observedEntryId: nil, latestEntryId: nil),
+            ChatLatestEntryChange(
+                previousEntryId: nil,
+                currentEntryId: nil,
+                storedEntryId: nil,
+                shouldScroll: false
+            )
+        )
+        XCTAssertEqual(
+            ChatTimelineScrollPolicy.latestEntryChange(observedEntryId: nil, latestEntryId: "s_notice"),
+            ChatLatestEntryChange(
+                previousEntryId: nil,
+                currentEntryId: "s_notice",
+                storedEntryId: "s_notice",
+                shouldScroll: true
+            )
+        )
+        XCTAssertEqual(
+            ChatTimelineScrollPolicy.latestEntryChange(observedEntryId: "m_1", latestEntryId: "m_1"),
+            ChatLatestEntryChange(
+                previousEntryId: "m_1",
+                currentEntryId: "m_1",
+                storedEntryId: "m_1",
+                shouldScroll: false
+            )
+        )
+        XCTAssertEqual(
+            ChatTimelineScrollPolicy.latestEntryChange(observedEntryId: "m_1", latestEntryId: "m_2"),
+            ChatLatestEntryChange(
+                previousEntryId: "m_1",
+                currentEntryId: "m_2",
+                storedEntryId: "m_2",
+                shouldScroll: true
+            )
+        )
+        XCTAssertEqual(
+            ChatTimelineScrollPolicy.latestEntryChange(observedEntryId: "m_2", latestEntryId: nil),
+            ChatLatestEntryChange(
+                previousEntryId: "m_2",
+                currentEntryId: nil,
+                storedEntryId: nil,
+                shouldScroll: false
+            )
+        )
     }
 
     func testCompactPresentationLayoutKeepsFilmstripInsideShortViewport() throws {

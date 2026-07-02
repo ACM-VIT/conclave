@@ -4,7 +4,6 @@ import {
   Check,
   ChevronDown,
   ExternalLink,
-  Ghost,
   Image as ImageIcon,
   Lock,
   Reply,
@@ -52,7 +51,6 @@ interface ChatPanelProps {
   onSendGif: (gif: ChatGifAttachment) => void;
   onClose: () => void;
   currentUserId: string;
-  isGhostMode?: boolean;
   isChatLocked?: boolean;
   isDmEnabled?: boolean;
   isAdmin?: boolean;
@@ -221,8 +219,6 @@ const areChatPanelPropsEqual = (
   previousProps: ChatPanelProps,
   nextProps: ChatPanelProps,
 ): boolean => {
-  const previousIsGhostMode = previousProps.isGhostMode ?? false;
-  const nextIsGhostMode = nextProps.isGhostMode ?? false;
   const previousIsChatLocked = previousProps.isChatLocked ?? false;
   const nextIsChatLocked = nextProps.isChatLocked ?? false;
   const previousIsDmEnabled = previousProps.isDmEnabled ?? true;
@@ -245,7 +241,6 @@ const areChatPanelPropsEqual = (
   if (
     previousProps.chatInput !== nextProps.chatInput ||
     previousProps.currentUserId !== nextProps.currentUserId ||
-    previousIsGhostMode !== nextIsGhostMode ||
     previousIsChatLocked !== nextIsChatLocked ||
     previousIsDmEnabled !== nextIsDmEnabled ||
     previousIsAdmin !== nextIsAdmin ||
@@ -291,7 +286,6 @@ function ChatPanel({
   onSendGif,
   onClose,
   currentUserId,
-  isGhostMode = false,
   isChatLocked = false,
   isDmEnabled = true,
   isAdmin = false,
@@ -326,7 +320,7 @@ function ChatPanel({
   const [highlightedMessageId, setHighlightedMessageId] = useState<
     string | null
   >(null);
-  const isChatDisabled = isGhostMode || (isChatLocked && !isAdmin);
+  const isChatDisabled = isChatLocked && !isAdmin;
   const selectedAssistantModel =
     CONCLAVE_ASSISTANT_BYOK_MODELS.find(
       (model) => model.id === assistantModel,
@@ -407,8 +401,8 @@ function ChatPanel({
 
   // The "@Conclave" AI hint is independent of the DM/participant mention system
   // so it shows even when private messages are disabled. It tracks the "@handle"
-  // the user is typing at the caret — anywhere in the message ("Hey @Con…"), not
-  // just at the start — and disappears once the handle is complete with a space.
+  // the user is typing at the caret, anywhere in the message ("Hey @Con..."), not
+  // just at the start, and disappears once the handle is complete with a space.
   const showConclaveSuggestion = useMemo(() => {
     if (!assistantEnabled || isChatDisabled || showCommandSuggestions) {
       return false;
@@ -666,13 +660,7 @@ function ChatPanel({
       {messages.length === 0 ? (
         <div className="web-chat-scroll min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-4 py-4">
           {(() => {
-                  const restricted = isGhostMode
-                    ? {
-                        icon: <Ghost size={20} strokeWidth={1.75} />,
-                        title: "You're in ghost mode",
-                        body: "Messages stay visible here, but sending and replying are disabled while you're invisible.",
-                      }
-                : isChatLocked && !isAdmin
+                  const restricted = isChatLocked && !isAdmin
                   ? {
                       icon: <Lock size={20} strokeWidth={1.75} />,
                       title: "Chat is locked",
@@ -700,7 +688,7 @@ function ChatPanel({
 
               return (
                 <div className="flex h-full flex-col items-center justify-center gap-5 px-8 text-center">
-                  {/* Ghosted preview of a conversation, hinting at where messages land */}
+                  {/* Faded preview of a conversation, hinting at where messages land */}
                   <div
                     aria-hidden="true"
                     className="flex w-full max-w-[14rem] flex-col gap-2 [mask-image:linear-gradient(to_bottom,transparent,#000_55%)]"
@@ -860,7 +848,7 @@ function ChatPanel({
                           className="shrink-0"
                         />
                       ) : null}
-                      <span className="truncate">
+                      <span className="min-w-0 flex-1 truncate">
                         {msg.replyTo.hasGif ? "GIF" : msg.replyTo.content}
                       </span>
                     </span>
@@ -887,7 +875,7 @@ function ChatPanel({
                     if (el) messageNodeRefs.current.set(msg.id, el);
                     else messageNodeRefs.current.delete(msg.id);
                   }}
-                  className={`group flex rounded-xl transition-colors duration-300 ${
+                  className={`group flex min-w-0 max-w-full rounded-xl transition-colors duration-300 ${
                     isOwn ? "justify-end" : "justify-start gap-3"
                   } ${groupedWithPrevious ? "mt-1" : "mt-4 first:mt-0"} ${
                     isNew
@@ -966,7 +954,7 @@ function ChatPanel({
                           <ChatGifAttachmentView gif={msg.gif} />
                         ) : (
                           <div
-                            className={`px-3.5 py-2 text-[13.5px] leading-relaxed break-words whitespace-pre-wrap ${
+                            className={`px-3.5 py-2 text-[13.5px] leading-relaxed [overflow-wrap:anywhere] whitespace-pre-wrap ${
                               isOwn
                                 ? "selection:bg-white/25 selection:text-white"
                                 : "selection:bg-[#F95F4A]/40 selection:text-white"
@@ -1232,7 +1220,7 @@ function ChatPanel({
                   {replyTarget.hasGif ? (
                     <ImageIcon size={12} strokeWidth={1.75} className="shrink-0" />
                   ) : null}
-                  <span className="truncate">
+                  <span className="min-w-0 flex-1 truncate">
                     {replyTarget.hasGif ? "GIF" : replyTarget.content}
                   </span>
                 </p>
@@ -1256,9 +1244,7 @@ function ChatPanel({
               onChange={(e) => onInputChange(e.target.value)}
               onKeyDown={handleKeyDown}
               placeholder={
-                isGhostMode
-                  ? "Ghost mode: watching chat"
-                  : isChatLocked && !isAdmin
+                isChatLocked && !isAdmin
                     ? "Chat locked by host"
                     : "Send a message"
               }

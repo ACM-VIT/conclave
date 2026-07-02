@@ -50,7 +50,7 @@ function ChatOverlay({ messages, onDismiss }: ChatOverlayProps) {
               </div>
               {actionText ? (
                 <p
-                  className="mt-0.5 break-words text-[13px] italic leading-snug"
+                  className="mt-0.5 [overflow-wrap:anywhere] text-[13px] italic leading-snug"
                   style={{ color: color.textMuted }}
                 >
                   {actionText}
@@ -63,7 +63,7 @@ function ChatOverlay({ messages, onDismiss }: ChatOverlayProps) {
                 />
               ) : (
                 <p
-                  className="mt-0.5 break-words text-[13.5px] leading-snug"
+                  className="mt-0.5 [overflow-wrap:anywhere] text-[13.5px] leading-snug"
                   style={{ color: color.text }}
                 >
                   {message.content}

@@ -1,6 +1,5 @@
 import { headers as nextHeaders } from "next/headers";
 import { auth } from "@/lib/auth";
-import { isSfuAllowlistedUser } from "@/lib/sfu-admin-auth";
 import MeetsClientPage from "./meets-client-page";
 import type { JoinMode } from "./lib/types";
 
@@ -18,7 +17,6 @@ type MeetsClientShellProps = {
     name?: string | null;
   };
   isAdmin?: boolean;
-  canGhostJoin?: boolean;
 };
 
 const resolveSessionUser = async (): Promise<
@@ -49,17 +47,8 @@ export default async function MeetsClientShell({
   hideJoinUI,
   user,
   isAdmin,
-  canGhostJoin: canGhostJoinProp,
 }: MeetsClientShellProps) {
   const resolvedUser = user ?? (await resolveSessionUser());
-  const canGhostJoin =
-    canGhostJoinProp ??
-    (resolvedUser?.id
-      ? isSfuAllowlistedUser({
-          id: resolvedUser.id,
-          email: resolvedUser.email,
-        })
-      : false);
 
   return (
     <MeetsClientPage
@@ -72,7 +61,6 @@ export default async function MeetsClientShell({
       hideJoinUI={hideJoinUI}
       user={resolvedUser}
       isAdmin={isAdmin}
-      canGhostJoin={canGhostJoin}
     />
   );
 }

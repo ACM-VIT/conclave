@@ -102,7 +102,6 @@ struct DetachedSelfViewOverlay: View {
                 isMuted: viewModel.state.isMuted,
                 isCameraOff: viewModel.state.isCameraOff,
                 isHandRaised: viewModel.state.isHandRaised,
-                isGhost: viewModel.state.isGhostMode,
                 isSpeaking: viewModel.state.isEffectiveActiveSpeaker(viewModel.state.userId),
                 avatarSize: MeetingDetachedSelfLayout.floatingAvatarSize(isCompact: isCompact),
                 trackId: trackWrapper?.id,
@@ -122,7 +121,6 @@ struct DetachedSelfViewOverlay: View {
                 isMuted: viewModel.state.isMuted,
                 isCameraOff: viewModel.state.isCameraOff,
                 isHandRaised: viewModel.state.isHandRaised,
-                isGhost: viewModel.state.isGhostMode,
                 isSpeaking: viewModel.state.isEffectiveActiveSpeaker(viewModel.state.userId),
                 isLocal: true,
                 isThumbnail: true,
@@ -225,7 +223,6 @@ private struct DetachedSelfVideoTile: View, Equatable {
     let isMuted: Bool
     let isCameraOff: Bool
     let isHandRaised: Bool
-    let isGhost: Bool
     let isSpeaking: Bool
     let avatarSize: CGFloat
     let trackId: String?
@@ -239,7 +236,6 @@ private struct DetachedSelfVideoTile: View, Equatable {
             isMuted: isMuted,
             isCameraOff: isCameraOff,
             isHandRaised: isHandRaised,
-            isGhost: isGhost,
             isSpeaking: isSpeaking,
             isLocal: true,
             isThumbnail: true,
@@ -255,7 +251,6 @@ private struct DetachedSelfVideoTile: View, Equatable {
             lhs.isMuted == rhs.isMuted &&
             lhs.isCameraOff == rhs.isCameraOff &&
             lhs.isHandRaised == rhs.isHandRaised &&
-            lhs.isGhost == rhs.isGhost &&
             lhs.isSpeaking == rhs.isSpeaking &&
             lhs.avatarSize == rhs.avatarSize &&
             lhs.trackId == rhs.trackId &&

@@ -61,17 +61,14 @@ export const registerDisconnectHandlers = (
         }
 
         const wasAdmin = activeClient instanceof Admin && !activeClient.isObserver;
-        const isGhost = activeClient.isGhost;
         const isWebinarAttendee = activeClient.isWebinarAttendee;
         const awarenessRemovals = activeRoom.clearUserAwareness(userId);
 
-        if (!isGhost) {
-          for (const removal of awarenessRemovals) {
-            io.to(roomChannelId).emit("apps:awareness", {
-              appId: removal.appId,
-              awarenessUpdate: removal.awarenessUpdate,
-            } satisfies AppsAwarenessData);
-          }
+        for (const removal of awarenessRemovals) {
+          io.to(roomChannelId).emit("apps:awareness", {
+            appId: removal.appId,
+            awarenessUpdate: removal.awarenessUpdate,
+          } satisfies AppsAwarenessData);
         }
 
         activeRoom.removeClient(userId);
@@ -87,16 +84,14 @@ export const registerDisconnectHandlers = (
             );
           });
         void state.transcriptRelays.syncRoom(activeRoom);
-        if (!isGhost && !isWebinarAttendee) {
+        if (!isWebinarAttendee) {
           io.to(roomChannelId).emit("userLeft", {
             userId,
             roomId: activeRoom.id,
           });
         }
-        if (!isGhost) {
-          emitWebinarAttendeeCountChanged(io, state, activeRoom);
-          emitWebinarFeedChanged(io, state, activeRoom);
-        }
+        emitWebinarAttendeeCountChanged(io, state, activeRoom);
+        emitWebinarFeedChanged(io, state, activeRoom);
 
         if (wasAdmin) {
           if (!activeRoom.hasActiveAdmin()) {

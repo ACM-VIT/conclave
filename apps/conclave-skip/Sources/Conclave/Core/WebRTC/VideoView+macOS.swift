@@ -34,7 +34,6 @@ struct VideoGridItem: View {
     let isMuted: Bool
     let isCameraOff: Bool
     let isHandRaised: Bool
-    let isGhost: Bool
     let isSpeaking: Bool
     let isLocal: Bool
     var connectionStatus: ParticipantConnectionStatus? = nil
@@ -116,9 +115,6 @@ struct VideoGridItem: View {
 
     var overlays: some View {
         ZStack {
-            if isGhost {
-                ghostOverlay
-            }
 
             if isHandRaised {
                 handRaisedBadge
@@ -131,32 +127,6 @@ struct VideoGridItem: View {
             nameLabel
         }
     }
-
-    var ghostOverlay: some View {
-        ZStack {
-            ACMColors.blackOverlay(0.4)
-
-            VStack(spacing: isThumbnail ? 4.0 : 8.0) {
-                Image(systemName: "theatermasks.fill")
-                    .font(.system(size: isThumbnail ? 24.0 : 48.0))
-                    .foregroundStyle(ACMColors.primaryPink)
-
-                Text("Ghost")
-                    .font(ACMFont.trial(isThumbnail ? 10.0 : 11.0, weight: .medium))
-                    .foregroundStyle(ACMColors.primaryPink)
-                    .padding(.horizontal, isThumbnail ? 8.0 : 12.0)
-                    .padding(.vertical, isThumbnail ? 3.0 : 4.0)
-                    .acmColorBackground(ACMColors.blackOverlay(0.6))
-                    .overlay {
-                        Capsule()
-                            .strokeBorder(lineWidth: 1)
-                            .foregroundStyle(ACMColors.primaryPinkFaint)
-                    }
-                    .clipShape(Capsule())
-            }
-        }
-    }
-
     var handRaisedBadge: some View {
         VStack {
             HStack {

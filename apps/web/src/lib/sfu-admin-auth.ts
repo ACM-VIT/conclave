@@ -1,3 +1,4 @@
+import { createHmac } from "node:crypto";
 import { auth } from "@/lib/auth";
 import { resolveServerSfuClientId } from "@/lib/sfu-client-id";
 export { resolveSfuUrl } from "@/lib/sfu-url";
@@ -172,4 +173,24 @@ export const requireSfuAdminUser = async (
   }
 
   return { ok: true, user: normalizedUser };
+};
+
+/**
+ * Mint a short-lived HMAC token for the SFU admin socket namespace. The
+ * browser can never hold the SFU secret, so the server signs a small payload
+ * with it and the SFU gateway verifies the signature on the socket handshake.
+ * Format: base64url(payload).base64url(hmacSha256(payload, secret)).
+ */
+export const mintSfuAdminSocketToken = (
+  subject: string,
+  ttlMs = 5 * 60_000,
+): string => {
+  const payload = Buffer.from(
+    JSON.stringify({ sub: subject, exp: Date.now() + ttlMs }),
+    "utf8",
+  ).toString("base64url");
+  const signature = createHmac("sha256", resolveSfuSecret())
+    .update(payload)
+    .digest("base64url");
+  return `${payload}.${signature}`;
 };

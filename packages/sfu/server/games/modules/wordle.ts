@@ -601,6 +601,7 @@ export const wordleModule: GameModule<WordleState> = {
     const progress = state.players[playerId] ?? null;
 
     return {
+      currentRound: state.currentRound,
       isSetter,
       canSetWord: state.phase === "set-word" && isSetter,
       canGuess: state.phase === "playing" && !isSetter && progress?.outcome == null,

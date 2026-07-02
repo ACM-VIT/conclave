@@ -3,7 +3,6 @@
 import { errorName } from "../lib/utils";
 import {
   Crop,
-  Ghost,
   Hand,
   Link2,
   Maximize2,
@@ -38,13 +37,8 @@ import {
   getRenderableParticipantVideoStream,
   isRenderingParticipantScreenShare,
 } from "../lib/participant-media";
-import { isRemoteParticipantVisible } from "../lib/participant-visibility";
 import type { Participant } from "../lib/types";
 import { isSystemUserId, truncateDisplayName } from "../lib/utils";
-import {
-  GhostParticipantOverlay,
-  GHOST_ACCENT_CLASS,
-} from "./GhostParticipantChrome";
 import ParticipantAudio from "./ParticipantAudio";
 import ParticipantConnectionOverlay from "./ParticipantConnectionOverlay";
 import ParticipantVideo from "./ParticipantVideo";
@@ -79,7 +73,6 @@ interface GridLayoutProps {
   isCameraOff: boolean;
   isMuted: boolean;
   isHandRaised: boolean;
-  isGhost: boolean;
   participants: Map<string, Participant>;
   userEmail: string;
   isMirrorCamera: boolean;
@@ -958,7 +951,6 @@ function GridLayout({
   isCameraOff,
   isMuted,
   isHandRaised,
-  isGhost,
   participants,
   userEmail,
   isMirrorCamera,
@@ -1021,21 +1013,10 @@ function GridLayout({
       return next;
     });
   }, []);
-  const canRenderSelfView = !isGhost;
-  const isLocalActiveSpeaker =
-    canRenderSelfView && activeSpeakerId === currentUserId;
-  const isLocalPinned = canRenderSelfView && pinnedId === LOCAL_STAGE_ID;
+  const canRenderSelfView = true;
+  const isLocalActiveSpeaker = activeSpeakerId === currentUserId;
+  const isLocalPinned = pinnedId === LOCAL_STAGE_ID;
   const hasPresentation = hasLiveVideo(presentationStream);
-  useEffect(() => {
-    if (!isGhost) return;
-    setPinnedId((current) => (current === LOCAL_STAGE_ID ? null : current));
-    setFullVideoTileIds((current) => {
-      if (!current.has("local")) return current;
-      const next = new Set(current);
-      next.delete("local");
-      return next;
-    });
-  }, [isGhost]);
   // Default to the placeholder (not your own mirrored screen) each time a
   // new share session starts; reset happens the moment sharing stops so the
   // NEXT share starts fresh rather than carrying over the last choice.
@@ -1154,7 +1135,6 @@ function GridLayout({
         (participant) =>
           !isSystemUserId(participant.userId) &&
           participant.userId !== currentUserId &&
-          isRemoteParticipantVisible(participant, isGhost, currentUserId) &&
           (!viewSettings.hideTilesWithoutVideo ||
             participantHasLiveVideo(participant) ||
             participant.userId === activeSpeakerId ||
@@ -1163,7 +1143,6 @@ function GridLayout({
     [
       activeSpeakerId,
       currentUserId,
-      isGhost,
       participants,
       pinnedId,
       viewSettings.hideTilesWithoutVideo,
@@ -2737,7 +2716,6 @@ function GridLayout({
                     isCameraOff={isCameraOff}
                     isMuted={isMuted}
                     isHandRaised={isHandRaised}
-                    isGhost={isGhost}
                     isMirrorCamera={isMirrorCamera}
                     displayName={localDisplayName}
                     userEmail={userEmail}
@@ -2781,7 +2759,6 @@ function GridLayout({
                       isCameraOff={isCameraOff}
                       isMuted={isMuted}
                       isHandRaised={isHandRaised}
-                      isGhost={isGhost}
                       isMirrorCamera={isMirrorCamera}
                       displayName={localDisplayName}
                       userEmail={userEmail}
@@ -2876,7 +2853,6 @@ function GridLayout({
                   isCameraOff={isCameraOff}
                   isMuted={isMuted}
                   isHandRaised={isHandRaised}
-                  isGhost={isGhost}
                   isMirrorCamera={isMirrorCamera}
                   displayName={localDisplayName}
                   userEmail={userEmail}
@@ -2919,7 +2895,6 @@ function GridLayout({
                       isCameraOff={isCameraOff}
                       isMuted={isMuted}
                       isHandRaised={isHandRaised}
-                      isGhost={isGhost}
                       isMirrorCamera={isMirrorCamera}
                       displayName={localDisplayName}
                       userEmail={userEmail}
@@ -3067,7 +3042,6 @@ function GridLayout({
                   />
                 </div>
               )}
-              {isGhost && <GhostParticipantOverlay label="Ghost mode" />}
               <button
                 type="button"
                 onClick={(event) => {
@@ -3381,7 +3355,6 @@ function GridLayout({
             isCameraOff={isCameraOff}
             isMuted={isMuted}
             isHandRaised={isHandRaised}
-            isGhost={isGhost}
             isMirrorCamera={isMirrorCamera}
             displayName={localDisplayName}
             userEmail={userEmail}
@@ -3421,7 +3394,6 @@ function GridLayout({
           userEmail={userEmail}
           isMuted={isMuted}
           isHandRaised={isHandRaised}
-          isGhost={isGhost}
           corner={requestedSelfViewCorner}
           cornerClass={selfViewCornerClass}
           dragStyle={selfViewDragStyle}
@@ -3854,7 +3826,6 @@ const LocalVideoTile = memo(function LocalVideoTile({
   isCameraOff,
   isMuted,
   isHandRaised,
-  isGhost,
   isMirrorCamera,
   displayName,
   userEmail,
@@ -3870,7 +3841,6 @@ const LocalVideoTile = memo(function LocalVideoTile({
   isCameraOff: boolean;
   isMuted: boolean;
   isHandRaised: boolean;
-  isGhost: boolean;
   isMirrorCamera: boolean;
   displayName: string;
   userEmail: string;
@@ -3956,7 +3926,6 @@ const LocalVideoTile = memo(function LocalVideoTile({
           />
         </div>
       ) : null}
-      {isGhost ? <GhostParticipantOverlay compact /> : null}
       {isHandRaised ? (
         <div
           className={`absolute flex items-center justify-center rounded-full border border-amber-400/40 bg-amber-500/20 text-amber-300 ${
@@ -4027,7 +3996,6 @@ const MinimizedSelfViewPill = memo(function MinimizedSelfViewPill({
   userEmail,
   isMuted,
   isHandRaised,
-  isGhost,
   corner,
   cornerClass,
   dragStyle,
@@ -4039,7 +4007,6 @@ const MinimizedSelfViewPill = memo(function MinimizedSelfViewPill({
   userEmail: string;
   isMuted: boolean;
   isHandRaised: boolean;
-  isGhost: boolean;
   corner: MeetSelfViewCorner;
   cornerClass: string;
   dragStyle?: CSSProperties;
@@ -4078,9 +4045,6 @@ const MinimizedSelfViewPill = memo(function MinimizedSelfViewPill({
       ) : null}
       {isHandRaised ? (
         <Hand size={14} strokeWidth={1.75} className="shrink-0 text-amber-300" />
-      ) : null}
-      {isGhost ? (
-        <Ghost size={14} strokeWidth={1.75} className={`shrink-0 ${GHOST_ACCENT_CLASS}`} />
       ) : null}
       <button
         type="button"
@@ -4234,7 +4198,6 @@ const OverflowGalleryTile = memo(function OverflowGalleryTile({
           </div>
         )}
         <ParticipantConnectionOverlay status={connectionStatus} compact />
-        {participant.isGhost && <GhostParticipantOverlay compact />}
         {participant.isHandRaised && (
           <div className="absolute left-2 top-2 flex h-7 w-7 items-center justify-center rounded-full border border-amber-400/40 bg-amber-500/20 text-amber-300">
             <Hand size={18} strokeWidth={1.75} />

@@ -5,7 +5,6 @@ import { DevPlaygroundWebApp } from "@conclave/apps-sdk/dev-playground/web";
 import { useSmartParticipantOrder } from "../hooks/useSmartParticipantOrder";
 import type { Participant } from "../lib/types";
 import { isSystemUserId } from "../lib/utils";
-import { isRemoteParticipantVisible } from "../lib/participant-visibility";
 import ParticipantVideo from "./ParticipantVideo";
 import RailLocalTile from "./RailLocalTile";
 
@@ -14,7 +13,6 @@ interface DevPlaygroundLayoutProps {
   isCameraOff: boolean;
   isMuted: boolean;
   isHandRaised: boolean;
-  isGhost: boolean;
   participants: Map<string, Participant>;
   userEmail: string;
   isMirrorCamera: boolean;
@@ -29,7 +27,6 @@ function DevPlaygroundLayout({
   isCameraOff,
   isMuted,
   isHandRaised,
-  isGhost,
   participants,
   userEmail,
   isMirrorCamera,
@@ -44,8 +41,7 @@ function DevPlaygroundLayout({
     Array.from(participants.values()).filter(
       (participant) =>
         !isSystemUserId(participant.userId) &&
-        participant.userId !== currentUserId &&
-        isRemoteParticipantVisible(participant, isGhost, currentUserId),
+        participant.userId !== currentUserId,
     ),
     activeSpeakerId
   );
@@ -56,18 +52,16 @@ function DevPlaygroundLayout({
         <DevPlaygroundWebApp />
       </div>
       <aside className="hidden lg:flex w-64 shrink-0 flex-col gap-3 overflow-y-auto overflow-x-visible px-1">
-        {!isGhost && (
-          <RailLocalTile
-            stream={localStream}
-            isCameraOff={isCameraOff}
-            isMuted={isMuted}
-            isHandRaised={isHandRaised}
-            isMirrorCamera={isMirrorCamera}
-            isActiveSpeaker={isLocalActiveSpeaker}
-            displayName={getDisplayName(currentUserId)}
-            userEmail={userEmail}
-          />
-        )}
+        <RailLocalTile
+          stream={localStream}
+          isCameraOff={isCameraOff}
+          isMuted={isMuted}
+          isHandRaised={isHandRaised}
+          isMirrorCamera={isMirrorCamera}
+          isActiveSpeaker={isLocalActiveSpeaker}
+          displayName={getDisplayName(currentUserId)}
+          userEmail={userEmail}
+        />
 
         {participantsList.map((participant) => (
           <ParticipantVideo

@@ -59,17 +59,15 @@ enum MeetingKeyboardLayout {
 
 struct MeetingView: View {
     @Bindable var viewModel: MeetingViewModel
-    @State private var showMeetingSheet = false
-    @State private var meetingSheetPage: MeetingSheetPage = .more
-    @State private var pendingTranscriptOpen = false
+    @State private var sheetCoordinator = MeetingSheetCoordinator()
     @State private var chatInputFocused = false
     #if canImport(UIKit) && !SKIP
     @State private var keyboardHeight: CGFloat = 0.0
     #endif
 
-    private func updateStageObscured() {
+    private func updateStageObscured(sheetPresented: Bool) {
         viewModel.setStageObscuredByOverlay(
-            showMeetingSheet
+            sheetPresented
                 || viewModel.state.isChatOpen
                 || viewModel.state.isTranscriptOpen
         )
@@ -80,41 +78,14 @@ struct MeetingView: View {
         #if SKIP
         viewModel.setStageObscuredByOverlay(true)
         #endif
-        meetingSheetPage = page
-        showMeetingSheet = true
-    }
-
-    private func resetMeetingSheetStateAfterDismiss() {
-        meetingSheetPage = .more
+        sheetCoordinator.open(page)
     }
 
     private func dismissMeetingSheet() {
-        guard showMeetingSheet else { return }
-        PerformanceDiagnostics.event("meeting_sheet_dismiss", details: "page=\(meetingSheetPage)")
-        showMeetingSheet = false
-        resetMeetingSheetStateAfterDismiss()
-    }
-
-    private func openTranscriptFromMeetingSheet() {
-        #if SKIP
-        pendingTranscriptOpen = false
-        dismissMeetingSheet()
-        if !viewModel.state.isTranscriptOpen {
-            PerformanceDiagnostics.event("transcript_open_from_more_after_close")
-            viewModel.state.isTranscriptOpen = true
-        }
-        #else
-        pendingTranscriptOpen = true
-        dismissMeetingSheet()
-        #endif
-    }
-
-    private func meetingSheetDetentHeight(for availableHeight: CGFloat) -> CGFloat {
-        #if SKIP
-        return availableHeight * MeetingSheetView.androidDetentFraction
-        #else
-        availableHeight * MeetingSheetView.detentFraction
-        #endif
+        guard sheetCoordinator.isPresented else { return }
+        PerformanceDiagnostics.event("meeting_sheet_dismiss", details: "page=\(sheetCoordinator.page)")
+        sheetCoordinator.dismiss()
+        updateStageObscured(sheetPresented: false)
     }
 
     private func chatOverlayWidth(for width: CGFloat) -> CGFloat {
@@ -165,7 +136,7 @@ struct MeetingView: View {
 
     var body: some View {
         let _ = PerformanceDiagnostics.render("MeetingView") {
-            "chat=\(viewModel.state.isChatOpen) transcript=\(viewModel.state.isTranscriptOpen) sheet=\(showMeetingSheet) participants=\(viewModel.state.participantCount)"
+            "chat=\(viewModel.state.isChatOpen) transcript=\(viewModel.state.isTranscriptOpen) participants=\(viewModel.state.participantCount)"
         }
         GeometryReader { geometry in
             ZStack {
@@ -317,46 +288,16 @@ struct MeetingView: View {
                 .padding(.trailing, max(6.0, geometry.safeAreaInsets.trailing))
             }
             .ignoresSafeArea(.container, edges: .bottom)
-            #if SKIP
             .overlay {
-                ComposeView { context in
-                    FlexibleMeetingSheetHost(
-                        context: context,
-                        isPresented: showMeetingSheet,
-                        viewModel: viewModel,
-                        page: $meetingSheetPage,
-                        androidDetentHeight: meetingSheetDetentHeight(for: geometry.size.height),
-                        detentFraction: MeetingSheetView.androidDetentFraction,
-                        onDismiss: {
-                            dismissMeetingSheet()
-                        },
-                        onOpenTranscript: {
-                            openTranscriptFromMeetingSheet()
-                        }
-                    )
-                }
-                .frame(width: 0, height: 0)
-            }
-            #else
-            .sheet(isPresented: $showMeetingSheet, onDismiss: {
-                // Defer opening the transcript until the meeting sheet is fully
-                // gone; presenting a sheet from a dismissing sheet renders empty
-                // on Skip/Android.
-                if pendingTranscriptOpen {
-                    pendingTranscriptOpen = false
-                    viewModel.state.isTranscriptOpen = true
-                }
-            }) {
-                MeetingSheetView(
+                MeetingSheetPresenter(
                     viewModel: viewModel,
-                    page: $meetingSheetPage,
-                    androidDetentHeight: meetingSheetDetentHeight(for: geometry.size.height),
-                    onOpenTranscript: {
-                        openTranscriptFromMeetingSheet()
+                    coordinator: sheetCoordinator,
+                    availableHeight: geometry.size.height,
+                    onDismissed: {
+                        updateStageObscured(sheetPresented: false)
                     }
                 )
             }
-            #endif
             .sheet(isPresented: Binding(
                 get: { viewModel.state.isTranscriptOpen },
                 set: { viewModel.state.isTranscriptOpen = $0 }
@@ -379,16 +320,10 @@ struct MeetingView: View {
             if !viewModel.state.isChatOpen {
                 chatInputFocused = false
             }
-            updateStageObscured()
-        }
-        .onChange(of: showMeetingSheet ? "shown" : "hidden") {
-            if !showMeetingSheet {
-                resetMeetingSheetStateAfterDismiss()
-            }
-            updateStageObscured()
+            updateStageObscured(sheetPresented: sheetCoordinator.isPresented)
         }
         .onChange(of: viewModel.state.isTranscriptOpen ? "open" : "closed") {
-            updateStageObscured()
+            updateStageObscured(sheetPresented: sheetCoordinator.isPresented)
         }
         .onChange(of: viewModel.state.isWebinarAttendee ? "webinar" : "meeting") {
             if viewModel.state.isWebinarAttendee {
@@ -397,17 +332,12 @@ struct MeetingView: View {
             }
         }
         .onChange(of: viewModel.state.connectionState == .joined ? "joined" : "other") {
-            updateStageObscured()
+            updateStageObscured(sheetPresented: sheetCoordinator.isPresented)
         }
         #else
         .onChange(of: viewModel.state.isChatOpen) {
             if !viewModel.state.isChatOpen {
                 chatInputFocused = false
-            }
-        }
-        .onChange(of: showMeetingSheet) {
-            if !showMeetingSheet {
-                resetMeetingSheetStateAfterDismiss()
             }
         }
         .onChange(of: viewModel.state.isWebinarAttendee) {
@@ -517,6 +447,112 @@ struct MeetingView: View {
         } else {
             stageSwapTransition(GridLayoutView(viewModel: viewModel, isCompact: !isRegularSizeClass))
         }
+    }
+}
+
+@Observable
+final class MeetingSheetCoordinator {
+    var isPresented = false
+    var page: MeetingSheetPage = .more
+
+    func open(_ nextPage: MeetingSheetPage) {
+        page = nextPage
+        isPresented = true
+    }
+
+    func dismiss() {
+        guard isPresented else { return }
+        isPresented = false
+    }
+
+    func resetAfterDismiss() {
+        page = .more
+    }
+}
+
+private struct MeetingSheetPresenter: View {
+    @Bindable var viewModel: MeetingViewModel
+    @Bindable var coordinator: MeetingSheetCoordinator
+    let availableHeight: CGFloat
+    let onDismissed: () -> Void
+    @State private var pendingTranscriptOpen = false
+
+    private var detentHeight: CGFloat {
+        #if SKIP
+        return availableHeight * MeetingSheetView.androidDetentFraction
+        #else
+        return availableHeight * MeetingSheetView.detentFraction
+        #endif
+    }
+
+    private func dismissMeetingSheet() {
+        guard coordinator.isPresented else { return }
+        PerformanceDiagnostics.event("meeting_sheet_dismiss", details: "page=\(coordinator.page)")
+        coordinator.dismiss()
+        coordinator.resetAfterDismiss()
+        onDismissed()
+    }
+
+    private func openTranscriptFromMeetingSheet() {
+        #if SKIP
+        pendingTranscriptOpen = false
+        dismissMeetingSheet()
+        if !viewModel.state.isTranscriptOpen {
+            PerformanceDiagnostics.event("transcript_open_from_more_after_close")
+            viewModel.state.isTranscriptOpen = true
+        }
+        #else
+        pendingTranscriptOpen = true
+        dismissMeetingSheet()
+        #endif
+    }
+
+    var body: some View {
+        #if SKIP
+        ComposeView { context in
+            FlexibleMeetingSheetHost(
+                context: context,
+                isPresented: coordinator.isPresented,
+                viewModel: viewModel,
+                page: $coordinator.page,
+                androidDetentHeight: detentHeight,
+                detentFraction: MeetingSheetView.androidDetentFraction,
+                onDismiss: {
+                    dismissMeetingSheet()
+                },
+                onOpenTranscript: {
+                    openTranscriptFromMeetingSheet()
+                }
+            )
+        }
+        .frame(width: 0, height: 0)
+        .onChange(of: coordinator.isPresented ? "shown" : "hidden") {
+            if !coordinator.isPresented {
+                coordinator.resetAfterDismiss()
+                onDismissed()
+            }
+        }
+        #else
+        Color.clear
+            .frame(width: 0, height: 0)
+            .sheet(isPresented: $coordinator.isPresented, onDismiss: {
+                if pendingTranscriptOpen {
+                    pendingTranscriptOpen = false
+                    viewModel.state.isTranscriptOpen = true
+                }
+                coordinator.resetAfterDismiss()
+                onDismissed()
+            }) {
+                MeetingSheetView(
+                    viewModel: viewModel,
+                    page: $coordinator.page,
+                    androidDetentHeight: detentHeight,
+                    onOpenTranscript: {
+                        openTranscriptFromMeetingSheet()
+                    }
+                )
+            }
+        #endif
     }
 }
 

@@ -12,7 +12,6 @@ import type { Participant } from "../lib/types";
 import { truncateDisplayName } from "../lib/utils";
 import ParticipantAudio from "./ParticipantAudio";
 import ParticipantConnectionOverlay from "./ParticipantConnectionOverlay";
-import { GhostParticipantOverlay } from "./GhostParticipantChrome";
 import GameTileOverlay from "./games/GameTileOverlay";
 import { Avatar } from "@conclave/ui-tokens/web";
 
@@ -164,7 +163,6 @@ function ParticipantVideo({
 
   const speakerHighlight = isActiveSpeaker ? "speaking" : "";
   const handRaisedHighlight = participant.isHandRaised ? "!border-amber-400/60" : "";
-  const ghostHighlight = participant.isGhost ? "!ring-1 !ring-inset !ring-[#F95F4A]/25" : "";
   const showFullVideoToggle =
     isDynamicCropEnabled && Boolean(videoStream) && Boolean(onToggleFullVideo);
   const fullVideoToggleLabel = isFullVideoShown
@@ -182,7 +180,7 @@ function ParticipantVideo({
       onClick={handleClick}
       className={`acm-video-tile group ${
         compact ? "h-36 w-48 shrink-0 sm:w-auto" : "w-full h-full"
-      } ${speakerHighlight} ${handRaisedHighlight} ${ghostHighlight} ${
+      } ${speakerHighlight} ${handRaisedHighlight} ${
         isAdmin && onAdminClick ? "cursor-pointer hover:border-[#F95F4A]/40" : ""
       }`}
       data-meet-video-adaptively-paused={
@@ -225,7 +223,6 @@ function ParticipantVideo({
         status={connectionStatus}
         compact={compact}
       />
-      {participant.isGhost && <GhostParticipantOverlay compact={compact} />}
       {!disableAudio && (
         <ParticipantAudio
           participant={participant}

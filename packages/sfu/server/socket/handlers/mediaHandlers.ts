@@ -537,12 +537,8 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
         }
 
         producerAdvertised = true;
-        const producingClient = activeRoom.getClient(clientId);
         for (const [targetClientId, client] of activeRoom.clients) {
           if (targetClientId === clientId || client.isWebinarAttendee) {
-            continue;
-          }
-          if (producingClient?.isGhost && !client.isGhost) {
             continue;
           }
           client.socket.emit("newProducer", {

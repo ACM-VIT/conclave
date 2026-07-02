@@ -217,7 +217,7 @@ select:focus {
   transform: translateY(0);
 }
 
-.acm-btn-ghost {
+.acm-btn-secondary {
   background: transparent;
   color: #fafafa;
   font-family: "PolySans Trial", sans-serif;
@@ -231,7 +231,7 @@ select:focus {
   cursor: pointer;
 }
 
-.acm-btn-ghost:hover {
+.acm-btn-secondary:hover {
   background: rgba(250, 250, 250, 0.1);
   border-color: #fafafa;
 }

@@ -174,7 +174,6 @@ struct Participant: Identifiable, Equatable {
     var isMuted: Bool = true
     var isCameraOff: Bool = true
     var isHandRaised: Bool = false
-    var isGhost: Bool = false
     var isWebinarAttendee: Bool = false
     var isLeaving: Bool = false
     var isScreenSharing: Bool = false

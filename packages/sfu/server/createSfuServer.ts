@@ -16,6 +16,7 @@ import {
 } from "./scheduledMeetings.js";
 import { sendDueSchedulingEmailReminders } from "./schedulingEmailReminders.js";
 import { createSfuApp } from "./http/createApp.js";
+import { registerAdminGateway, type AdminGateway } from "./admin/adminGateway.js";
 import {
   startScheduledWebinarTimer,
   stopScheduledWebinarTimer,
@@ -65,6 +66,13 @@ export const createSfuServer = (
   });
   const httpServer = createHttpServer(app);
   io = createSfuSocketServer(httpServer, { state, config });
+  const adminGateway: AdminGateway = registerAdminGateway({
+    io,
+    state,
+    secret: config.sfuSecret,
+    instanceId: config.instanceId,
+    version: config.version,
+  });
 
   let scheduledMeetingTickTimer: NodeJS.Timeout | null = null;
   let roomOwnershipRenewTimer: NodeJS.Timeout | null = null;
@@ -115,6 +123,7 @@ export const createSfuServer = (
   };
 
   const stop = async (): Promise<void> => {
+    adminGateway.dispose();
     stopScheduledWebinarTimer(state);
     if (scheduledMeetingTickTimer) {
       clearInterval(scheduledMeetingTickTimer);

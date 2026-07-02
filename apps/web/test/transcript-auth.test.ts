@@ -69,10 +69,9 @@ describe("verifyTranscriptToken", () => {
     });
   });
 
-  it("preserves ghost view-only capabilities", async () => {
+  it("preserves view-only capabilities", async () => {
     const token = await signToken(
       validPayload({
-        isGhost: true,
         capabilities: {
           start: false,
           takeover: false,
@@ -83,7 +82,6 @@ describe("verifyTranscriptToken", () => {
     );
 
     await expect(verifyTranscriptToken(token, "secret")).resolves.toMatchObject({
-      isGhost: true,
       capabilities: {
         start: false,
         takeover: false,

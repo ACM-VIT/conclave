@@ -91,7 +91,6 @@ const createTranscriptRelayToken = (options: {
       channelId: options.channelId,
       isAdmin: false,
       isHost: false,
-      isGhost: false,
       capabilities,
       relayFor: options.displayName,
     },
@@ -101,6 +100,50 @@ const createTranscriptRelayToken = (options: {
       expiresIn: TRANSCRIPT_TOKEN_TTL_SECONDS,
     },
   );
+};
+
+/**
+ * Read-only transcript access for the operator dashboard: a viewer token with
+ * every capability off. The dashboard opens the same worker WebSocket meeting
+ * clients use and only ever receives.
+ */
+export const createTranscriptSpectatorToken = (
+  room: { id: string; clientId: string; channelId: string },
+  operator: string,
+): { workerUrl: string; token: string; expiresAt: number; roomId: string } => {
+  const capabilities: TranscriptTokenCapabilities = {
+    start: false,
+    takeover: false,
+    stop: false,
+    ask: false,
+  };
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  const token = jwt.sign(
+    {
+      iss: "conclave-sfu",
+      aud: "conclave-transcript-worker",
+      sub: `operator:${operator}`,
+      userId: `operator:${operator}`,
+      displayName: `Operator (${operator})`,
+      roomId: room.id,
+      clientId: room.clientId,
+      channelId: room.channelId,
+      isAdmin: false,
+      isHost: false,
+      capabilities,
+    },
+    getTranscriptTokenSecret(),
+    {
+      algorithm: "HS256",
+      expiresIn: TRANSCRIPT_TOKEN_TTL_SECONDS,
+    },
+  );
+  return {
+    workerUrl: getTranscriptWorkerUrl(),
+    token,
+    expiresAt: (nowSeconds + TRANSCRIPT_TOKEN_TTL_SECONDS) * 1000,
+    roomId: room.id,
+  };
 };
 
 export const registerTranscriptHandlers = (
@@ -138,12 +181,11 @@ export const registerTranscriptHandlers = (
       const expiresAt = (nowSeconds + TRANSCRIPT_TOKEN_TTL_SECONDS) * 1000;
       const isAdmin = client instanceof Admin && !client.isObserver;
       const isHost = room.getHostUserId() === client.id;
-      const isGhost = client.isGhost;
       const capabilities: TranscriptTokenCapabilities = {
-        start: !isGhost,
-        takeover: !isGhost,
-        stop: !isGhost && (isAdmin || isHost),
-        ask: !isGhost,
+        start: true,
+        takeover: true,
+        stop: isAdmin || isHost,
+        ask: true,
       };
       const displayName = room.getDisplayNameForUser(client.id) || client.id;
       const payload = {
@@ -157,7 +199,6 @@ export const registerTranscriptHandlers = (
         channelId: room.channelId,
         isAdmin,
         isHost,
-        isGhost,
         capabilities,
       };
 
@@ -216,7 +257,7 @@ export const registerTranscriptHandlers = (
         respond(callback, { error: "Not in a room" });
         return;
       }
-      if (client.isGhost || client.isWebinarAttendee) {
+      if (client.isWebinarAttendee) {
         respond(callback, {
           error: "Transcript relay is available to meeting participants only",
         });
@@ -272,7 +313,7 @@ export const registerTranscriptHandlers = (
         respond(callback, { error: "Not in a room" });
         return;
       }
-      if (client.isGhost || client.isWebinarAttendee) {
+      if (client.isWebinarAttendee) {
         respond(callback, {
           error: "Transcript relay is available to meeting participants only",
         });

@@ -14,7 +14,7 @@ export type ConversationProps = ComponentProps<typeof StickToBottom>;
 
 export const Conversation = ({ className, ...props }: ConversationProps) => (
   <StickToBottom
-    className={cn("relative flex-1 overflow-y-auto", className)}
+    className={cn("relative flex-1 overflow-y-auto overflow-x-hidden", className)}
     initial="smooth"
     resize="smooth"
     role="log"
@@ -31,7 +31,10 @@ export const ConversationContent = ({
   ...props
 }: ConversationContentProps) => (
   <StickToBottom.Content
-    className={cn("flex flex-col gap-4 px-4 py-4", className)}
+    // The library renders its own scroll element around this content; long
+    // unbreakable strings must never widen it, only wrap or clip.
+    scrollClassName="overflow-x-hidden"
+    className={cn("flex min-w-0 max-w-full flex-col gap-4 px-4 py-4", className)}
     {...props}
   />
 );

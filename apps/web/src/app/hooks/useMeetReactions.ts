@@ -13,7 +13,6 @@ import { buildAssetReaction, isReactionEmoji, isValidAssetPath } from "../lib/ut
 interface UseMeetReactionsOptions {
   userId: string;
   socketRef: React.MutableRefObject<Socket | null>;
-  ghostEnabled: boolean;
   isObserverMode?: boolean;
   reactionAssets?: string[];
 }
@@ -21,7 +20,6 @@ interface UseMeetReactionsOptions {
 export function useMeetReactions({
   userId,
   socketRef,
-  ghostEnabled,
   isObserverMode = false,
   reactionAssets,
 }: UseMeetReactionsOptions) {
@@ -82,7 +80,7 @@ export function useMeetReactions({
 
   const sendReaction = useCallback(
     (reaction: ReactionOption) => {
-      if (ghostEnabled || isObserverMode) return;
+      if (isObserverMode) return;
       const now = Date.now();
       if (now - lastReactionSentRef.current < 100) {
         return;
@@ -127,7 +125,7 @@ export function useMeetReactions({
         }
       );
     },
-    [addReaction, userId, ghostEnabled, isObserverMode, socketRef]
+    [addReaction, userId, isObserverMode, socketRef]
   );
 
   useEffect(() => {

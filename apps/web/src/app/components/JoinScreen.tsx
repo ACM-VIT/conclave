@@ -9,7 +9,6 @@ import {
   Mic,
   MicOff,
   Plus,
-  Ghost,
   ChevronDown,
   Check,
   Link2,
@@ -129,15 +128,12 @@ interface JoinScreenProps {
   isAdmin: boolean;
   enableRoomRouting: boolean;
   forceJoinOnly: boolean;
-  allowGhostMode: boolean;
   showPermissionHint: boolean;
   rooms: RoomInfo[];
   roomsStatus: "idle" | "loading" | "error";
   onRefreshRooms: () => void;
   displayNameInput: string;
   onDisplayNameInputChange: (value: string) => void;
-  isGhostMode: boolean;
-  onGhostModeChange: (value: boolean) => void;
   onUserChange: (user: { id: string; email: string; name: string } | null) => void;
   onIsAdminChange: (isAdmin: boolean) => void;
   meetError?: MeetError | null;
@@ -279,14 +275,11 @@ function JoinScreen({
   userEmail,
   forceJoinOnly,
   enableRoomRouting,
-  allowGhostMode,
   showPermissionHint,
   rooms,
   roomsStatus,
   displayNameInput,
   onDisplayNameInputChange,
-  isGhostMode,
-  onGhostModeChange,
   onUserChange,
   onIsAdminChange,
   meetError,
@@ -1478,42 +1471,6 @@ function JoinScreen({
               {/* ScheduledMeetingsPanel disabled for now
               <ScheduledMeetingsPanel isSignedIn={isSignedInUser} />
               */}
-
-              {allowGhostMode && (
-                <button
-                  type="button"
-                  onClick={() => onGhostModeChange(!isGhostMode)}
-                  aria-pressed={isGhostMode}
-                  className="flex w-full items-center gap-3 rounded-xl border border-white/10 bg-white/[0.04] px-4 py-3 text-left transition-colors duration-150 hover:bg-white/[0.08]"
-                >
-                  <Ghost
-                    size={18}
-                    className={`shrink-0 transition-colors duration-[120ms] ${
-                      isGhostMode ? "text-[#F95F4A]" : "text-[#fafafa]/60"
-                    }`}
-                  />
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-[14px] text-[#fafafa]">
-                      Join as ghost
-                    </span>
-                    <span className="block truncate text-[12.5px] text-[#fafafa]/60">
-                      Others won&apos;t see you join
-                    </span>
-                  </span>
-                  <span
-                    aria-hidden
-                    className={`relative inline-flex h-[22px] w-[38px] shrink-0 items-center rounded-full transition-colors duration-[120ms] ${
-                      isGhostMode ? "bg-[#F95F4A]" : "bg-[#fafafa]/[0.14]"
-                    }`}
-                  >
-                    <span
-                      className={`absolute h-[16px] w-[16px] rounded-full bg-white transition-transform duration-[120ms] ${
-                        isGhostMode ? "translate-x-[19px]" : "translate-x-[3px]"
-                      }`}
-                    />
-                  </span>
-                </button>
-              )}
 
               <div className="space-y-1.5">
                 <div className="flex min-h-[16px] items-center justify-between gap-3">

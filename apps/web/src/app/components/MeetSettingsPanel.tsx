@@ -307,14 +307,14 @@ function ActionBtn({
   children,
   onClick,
   disabled,
-  variant = "ghost",
+  variant = "secondary",
   working = false,
   className = "",
 }: {
   children: ReactNode;
   onClick?: () => void;
   disabled?: boolean;
-  variant?: "ghost" | "primary";
+  variant?: "secondary" | "primary";
   working?: boolean;
   className?: string;
 }) {
@@ -948,7 +948,7 @@ export default function MeetSettingsPanel({
 
                         <div className="mt-2 flex items-center gap-2">
                           <ActionBtn
-                            variant="ghost"
+                            variant="secondary"
                             working={isWebinarWorking}
                             disabled={isWebinarWorking || !isCustomLinkCodeValid}
                             onClick={() =>
@@ -996,7 +996,7 @@ export default function MeetSettingsPanel({
                             </span>
                           ) : (
                             <ActionBtn
-                              variant="ghost"
+                              variant="secondary"
                               disabled={isWebinarWorking}
                               onClick={() => setRotateConfirming(true)}
                             >
@@ -1006,7 +1006,7 @@ export default function MeetSettingsPanel({
                           )}
 
                           <ActionBtn
-                            variant="ghost"
+                            variant="secondary"
                             disabled={isWebinarWorking || !currentLink}
                             onClick={() =>
                               void withWebinarTask(async () => {

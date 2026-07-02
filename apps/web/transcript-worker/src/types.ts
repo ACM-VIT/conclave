@@ -47,7 +47,6 @@ export type TranscriptTokenPayload = {
   transportMode?: TranscriptTransportMode;
   isAdmin?: boolean;
   isHost?: boolean;
-  isGhost?: boolean;
   capabilities?: Partial<TranscriptTokenCapabilities>;
 };
 

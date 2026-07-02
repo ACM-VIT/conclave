@@ -7,7 +7,6 @@ interface UseMeetHandRaiseOptions {
   isHandRaised: boolean;
   setIsHandRaised: (value: boolean) => void;
   isHandRaisedRef: React.MutableRefObject<boolean>;
-  ghostEnabled: boolean;
   isObserverMode?: boolean;
   socketRef: React.MutableRefObject<Socket | null>;
 }
@@ -16,7 +15,6 @@ export function useMeetHandRaise({
   isHandRaised,
   setIsHandRaised,
   isHandRaisedRef,
-  ghostEnabled,
   isObserverMode = false,
   socketRef,
 }: UseMeetHandRaiseOptions) {
@@ -26,7 +24,7 @@ export function useMeetHandRaise({
 
   const setHandRaisedState = useCallback(
     (raised: boolean) => {
-      if (ghostEnabled || isObserverMode) return;
+      if (isObserverMode) return;
       const socket = socketRef.current;
       setIsHandRaised(raised);
 
@@ -43,7 +41,7 @@ export function useMeetHandRaise({
         }
       );
     },
-    [ghostEnabled, isObserverMode, socketRef, setIsHandRaised]
+    [isObserverMode, socketRef, setIsHandRaised]
   );
 
   const toggleHandRaised = useCallback(() => {

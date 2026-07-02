@@ -50,7 +50,6 @@ export interface JoinRoomData {
   roomId: string;
   sessionId?: string;
   displayName?: string;
-  ghost?: boolean;
   webinarInviteCode?: string;
   meetingInviteCode?: string;
 }
@@ -604,7 +603,6 @@ export interface ProducerClosedNotification {
 export interface UserJoinedNotification {
   userId: string;
   displayName?: string;
-  isGhost?: boolean;
   roomId?: string;
 }
 

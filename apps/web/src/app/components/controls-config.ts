@@ -78,7 +78,6 @@ export interface ControlsBarProps {
   isViewPanelOpen?: boolean;
   onToggleViewPanel?: () => void;
   isAdmin?: boolean | null;
-  isGhostMode?: boolean;
   isParticipantsOpen?: boolean;
   onToggleParticipants?: () => void;
   isGamesOpen?: boolean;
@@ -201,9 +200,8 @@ export function canManageDevPlayground(p: ControlsBarProps): boolean {
 }
 
 export function buildControlsConfig(p: ControlsBarProps): ControlsConfig {
-  const ghost = Boolean(p.isGhostMode);
   const canStartScreenShare = !p.activeScreenShareId || p.isScreenSharing;
-  const screenShareDisabled = ghost || !canStartScreenShare;
+  const screenShareDisabled = !canStartScreenShare;
 
   const sideControls: ControlDescriptor[] = [];
   if (p.onToggleParticipants) {
@@ -253,9 +251,7 @@ export function buildControlsConfig(p: ControlsBarProps): ControlsConfig {
     {
       id: "mic",
       icon: p.isMuted ? MicOff : Mic,
-      label: ghost
-        ? "Ghost mode: mic locked"
-        : p.isMuteTogglePending
+      label: p.isMuteTogglePending
           ? p.isMuted
             ? "Unmuting"
             : "Muting"
@@ -263,18 +259,16 @@ export function buildControlsConfig(p: ControlsBarProps): ControlsConfig {
             ? "Unmute"
             : "Mute",
       hotkey: HOTKEYS.toggleMute.keys,
-      variant: ghost ? "default" : p.isMuted ? "muted" : "default",
-      disabled: ghost,
-      loading: Boolean(p.isMuteTogglePending && !ghost),
+      variant: p.isMuted ? "muted" : "default",
+      loading: Boolean(p.isMuteTogglePending),
       onPress: p.onToggleMute,
     },
     {
       id: "camera",
       icon: p.isCameraOff ? VideoOff : Video,
-      label: ghost ? "Ghost mode: camera locked" : p.isCameraOff ? "Turn on camera" : "Turn off camera",
+      label: p.isCameraOff ? "Turn on camera" : "Turn off camera",
       hotkey: HOTKEYS.toggleCamera.keys,
-      variant: ghost ? "default" : p.isCameraOff ? "muted" : "default",
-      disabled: ghost,
+      variant: p.isCameraOff ? "muted" : "default",
       onPress: p.onToggleCamera,
     },
   ];
@@ -285,7 +279,6 @@ export function buildControlsConfig(p: ControlsBarProps): ControlsConfig {
     label: p.isHandRaised ? "Lower hand" : "Raise hand",
     hotkey: HOTKEYS.toggleHandRaise.keys,
     variant: p.isHandRaised ? "active" : "default",
-    disabled: ghost,
     onPress: p.onToggleHandRaised,
   };
 
@@ -361,7 +354,7 @@ export function buildControlsConfig(p: ControlsBarProps): ControlsConfig {
         ? "Permission needed"
         : "Backgrounds and effects",
       active: p.isVideoEffectsOpen || (p.activeVideoEffectsCount ?? 0) > 0,
-      disabled: ghost || effectsPermissionBlocked,
+      disabled: effectsPermissionBlocked,
       onPress: p.onToggleVideoEffects,
     });
   }

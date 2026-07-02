@@ -193,7 +193,6 @@ export interface Participant {
   isCameraOff: boolean;
   isVideoAdaptivelyPaused: boolean;
   isHandRaised: boolean;
-  isGhost: boolean;
   isLeaving?: boolean;
   connectionStatus?: ParticipantConnectionStatus;
 }
