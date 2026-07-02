@@ -450,7 +450,7 @@ export const registerAdminGateway = (
     const json = JSON.stringify(snapshot);
     if (!opts?.force && lastRoomDetailJson.get(channelId) === json) return;
     lastRoomDetailJson.set(channelId, json);
-    nsp.to(`${WATCH_PREFIX}${channelId}`).emit("admin:room", {
+    nsp.local.to(`${WATCH_PREFIX}${channelId}`).emit("admin:room", {
       channelId,
       room: snapshot,
     });
@@ -464,7 +464,7 @@ export const registerAdminGateway = (
     const json = JSON.stringify(messages);
     if (!opts?.force && lastRoomChatJson.get(channelId) === json) return;
     lastRoomChatJson.set(channelId, json);
-    nsp.to(`${WATCH_PREFIX}${channelId}`).emit("admin:chat", {
+    nsp.local.to(`${WATCH_PREFIX}${channelId}`).emit("admin:chat", {
       channelId,
       messages,
     });
@@ -495,7 +495,7 @@ export const registerAdminGateway = (
       history.splice(0, history.length - HISTORY_MAX_POINTS);
     }
     if (nsp.sockets.size > 0) {
-      nsp.emit("admin:historyPoint", point);
+      nsp.local.emit("admin:historyPoint", point);
     }
   };
 
@@ -523,7 +523,7 @@ export const registerAdminGateway = (
             eventLog.splice(0, eventLog.length - EVENTS_MAX);
           }
           if (nsp.sockets.size > 0) {
-            nsp.emit("admin:events", { events });
+            nsp.local.emit("admin:events", { events });
           }
         }
       }
@@ -542,14 +542,14 @@ export const registerAdminGateway = (
       const overviewHash = JSON.stringify({ ...overview, uptime: 0, timestamp: "" });
       if (overviewHash !== lastOverviewJson) {
         lastOverviewJson = overviewHash;
-        nsp.emit("admin:overview", overview);
+        nsp.local.emit("admin:overview", overview);
       }
 
       const rooms = buildRoomSummaries();
       const roomsJson = JSON.stringify(rooms);
       if (roomsJson !== lastRoomsJson) {
         lastRoomsJson = roomsJson;
-        nsp.emit("admin:rooms", { rooms });
+        nsp.local.emit("admin:rooms", { rooms });
       }
 
       // The calendar changes rarely; check it on a slow cadence.
@@ -559,7 +559,7 @@ export const registerAdminGateway = (
         const scheduledJson = JSON.stringify(scheduled);
         if (scheduledJson !== lastScheduledJson) {
           lastScheduledJson = scheduledJson;
-          nsp.emit("admin:scheduled", { items: scheduled });
+          nsp.local.emit("admin:scheduled", { items: scheduled });
         }
       }
 
@@ -592,7 +592,7 @@ export const registerAdminGateway = (
 
   const unsubscribeAudit = subscribeAdminAudit((entry) => {
     if (nsp.sockets.size === 0) return;
-    nsp.emit("admin:auditEntry", entry);
+    nsp.local.emit("admin:auditEntry", entry);
   });
 
   nsp.on("connection", (socket) => {
