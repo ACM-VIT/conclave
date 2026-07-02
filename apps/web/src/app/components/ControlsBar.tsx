@@ -189,18 +189,25 @@ function PanelCluster({
   forceOpen?: boolean;
 }) {
   const [hovered, setHovered] = useState(false);
+  const [anchorIndex, setAnchorIndex] = useState<number | null>(null);
   const open = hovered || forceOpen;
+  const spreadPx = 9;
+  const resolvedAnchorIndex =
+    anchorIndex == null ? Math.max(0, items.length - 1) : anchorIndex;
 
   return (
     <div
-      className="relative flex items-center rounded-full transition-colors duration-150"
-      style={{ backgroundColor: open ? "rgba(255,255,255,0.04)" : "transparent" }}
+      className="relative flex items-center"
       onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
+      onMouseLeave={() => {
+        setHovered(false);
+        setAnchorIndex(null);
+      }}
       onFocusCapture={() => setHovered(true)}
       onBlurCapture={(event) => {
         if (!event.currentTarget.contains(event.relatedTarget)) {
           setHovered(false);
+          setAnchorIndex(null);
         }
       }}
     >
@@ -208,14 +215,18 @@ function PanelCluster({
         const status = d.id === "transcript" ? (transcriptStatus ?? null) : null;
         const raised =
           d.variant === "active" || Boolean(status) || (d.badge ?? 0) > 0;
+        const translateX = open ? spreadPx * (index - resolvedAnchorIndex) : 0;
         return (
           <div
             key={d.id}
-            className="transition-[margin] duration-200 ease-out"
+            className="transition-transform duration-200 ease-out"
             style={{
-              marginLeft: index === 0 ? 0 : open ? 2 : -12,
+              marginLeft: index === 0 ? 0 : -12,
+              transform: `translateX(${translateX}px)`,
               zIndex: raised ? 20 : 10 - index,
             }}
+            onMouseEnter={() => setAnchorIndex(index)}
+            onFocus={() => setAnchorIndex(index)}
           >
             <PanelClusterItem d={d} status={status} />
           </div>
