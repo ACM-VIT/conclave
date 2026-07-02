@@ -273,22 +273,24 @@ export function useAdminSocket() {
             "admin:room",
             (data: { channelId?: string; room?: RoomSnapshot | null }) => {
               const watched = watchedRef.current;
+              const channelId = data?.channelId;
               if (
                 !watched ||
-                data?.channelId !== watched.channelId
+                !channelId ||
+                channelId !== watched.channelId
               ) {
                 return;
               }
               setDetail((prev) => {
                 if (data.room) {
                   return {
-                    selection: { instanceKey: key, channelId: data.channelId },
+                    selection: { instanceKey: key, channelId },
                     room: data.room,
                   };
                 }
                 if (
                   prev?.selection.instanceKey === key &&
-                  prev.selection.channelId === data.channelId
+                  prev.selection.channelId === channelId
                 ) {
                   return null;
                 }
