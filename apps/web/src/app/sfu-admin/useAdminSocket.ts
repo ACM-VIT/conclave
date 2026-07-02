@@ -122,6 +122,7 @@ export function useAdminSocket() {
 
         for (const { url, token } of minted) {
           const key = url;
+          let hasConnected = false;
           const socket = io(`${url}/admin`, {
             transports: ["websocket"],
             // A fresh token per attempt; fall back to the boot token if the
@@ -138,6 +139,7 @@ export function useAdminSocket() {
           sockets.set(key, socket);
 
           socket.on("connect", () => {
+            hasConnected = true;
             patchInstance(key, { connection: "live" });
             const watched = watchedRef.current;
             if (watched && watched.instanceKey === key) {
@@ -145,22 +147,14 @@ export function useAdminSocket() {
             }
           });
           socket.on("disconnect", () => {
-            patchInstance(key, { connection: "reconnecting" });
+            patchInstance(key, {
+              connection: hasConnected ? "reconnecting" : "offline",
+            });
           });
           socket.on("connect_error", () => {
-            setInstances((prev) =>
-              prev.map((instance) =>
-                instance.key === key
-                  ? {
-                      ...instance,
-                      connection:
-                        instance.connection === "live"
-                          ? "reconnecting"
-                          : instance.connection,
-                    }
-                  : instance,
-              ),
-            );
+            patchInstance(key, {
+              connection: hasConnected ? "reconnecting" : "offline",
+            });
           });
 
           socket.on("admin:hello", (data: { instanceId?: string }) => {
@@ -211,12 +205,19 @@ export function useAdminSocket() {
           });
           socket.on(
             "admin:events",
-            (data: { events?: Array<Omit<TaggedAdminEvent, "instanceKey">> }) => {
+            (data: {
+              events?: Array<Omit<TaggedAdminEvent, "instanceKey">>;
+              snapshot?: boolean;
+            }) => {
               const incoming = Array.isArray(data?.events) ? data.events : [];
-              if (incoming.length === 0) return;
+              const isSnapshot = data?.snapshot === true;
+              if (incoming.length === 0 && !isSnapshot) return;
               setEvents((prev) => {
+                const base = isSnapshot
+                  ? prev.filter((event) => event.instanceKey !== key)
+                  : prev;
                 const next = [
-                  ...prev,
+                  ...base,
                   ...incoming.map((event) => ({ ...event, instanceKey: key })),
                 ];
                 next.sort((a, b) => a.at - b.at);
@@ -387,6 +388,9 @@ export function useAdminSocket() {
     if (instances.some((instance) => instance.connection === "live")) return "live";
     if (instances.some((instance) => instance.connection === "reconnecting")) {
       return "reconnecting";
+    }
+    if (instances.every((instance) => instance.connection === "offline")) {
+      return "offline";
     }
     return "connecting";
   }, [bootError, instances]);

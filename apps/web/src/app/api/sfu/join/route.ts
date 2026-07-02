@@ -38,6 +38,8 @@ type JoinRequestBody = {
   };
   isHost?: boolean;
   isAdmin?: boolean;
+  isGhost?: boolean;
+  ghost?: boolean;
   allowRoomCreation?: boolean;
   clientId?: string;
 };
@@ -473,6 +475,13 @@ export async function POST(request: Request) {
     body = (await request.json()) as JoinRequestBody;
   } catch (_error) {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+  }
+
+  if (body?.isGhost === true || body?.ghost === true) {
+    return NextResponse.json(
+      { error: "Ghost mode is not supported." },
+      { status: 410 },
+    );
   }
 
   const roomId = body?.roomId?.trim();

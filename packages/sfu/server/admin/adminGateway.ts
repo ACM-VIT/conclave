@@ -297,6 +297,7 @@ export const registerAdminGateway = (
   // first, capped so a busy booking-link tenant cannot flood the socket.
   const buildScheduled = (): AdminScheduledItem[] => {
     const items: AdminScheduledItem[] = [];
+    const now = Date.now();
     for (const meeting of listScheduledMeetings(state.scheduledMeetings, {
       includeAll: true,
     })) {
@@ -329,7 +330,24 @@ export const registerAdminGateway = (
         host: webinar.hostName || webinar.hostEmail,
       });
     }
-    items.sort((a, b) => a.startAt - b.startAt);
+    const relevance = (item: AdminScheduledItem): number => {
+      if (item.status === "live" || (item.startAt <= now && item.endAt >= now)) {
+        return 0;
+      }
+      if (item.endAt >= now) {
+        return 1;
+      }
+      return 2;
+    };
+    items.sort((a, b) => {
+      const aRelevance = relevance(a);
+      const bRelevance = relevance(b);
+      if (aRelevance !== bRelevance) return aRelevance - bRelevance;
+      if (aRelevance === 2) {
+        return b.endAt - a.endAt || b.startAt - a.startAt;
+      }
+      return a.startAt - b.startAt || a.endAt - b.endAt;
+    });
     return items.slice(0, 100);
   };
 
@@ -528,13 +546,13 @@ export const registerAdminGateway = (
     socket.emit("admin:overview", buildOverview());
     socket.emit("admin:rooms", { rooms: buildRoomSummaries() });
     socket.emit("admin:history", { points: [...history] });
-    socket.emit("admin:events", { events: [...eventLog] });
+    socket.emit("admin:events", { events: [...eventLog], snapshot: true });
     socket.emit("admin:audit", { entries: getAdminAuditEntries() });
     socket.emit("admin:scheduled", { items: buildScheduled() });
 
     socket.on(
       "admin:watchRoom",
-      (
+      async (
         payload: { channelId?: unknown } | undefined,
         ack?: (response: { ok: boolean }) => void,
       ) => {
@@ -543,21 +561,28 @@ export const registerAdminGateway = (
             ? payload.channelId
             : null;
 
-        for (const key of socket.rooms) {
-          if (typeof key === "string" && key.startsWith(WATCH_PREFIX)) {
-            void socket.leave(key);
+        try {
+          const leaveTasks: Array<Promise<void> | void> = [];
+          for (const key of socket.rooms) {
+            if (typeof key === "string" && key.startsWith(WATCH_PREFIX)) {
+              leaveTasks.push(socket.leave(key));
+            }
           }
-        }
+          await Promise.all(leaveTasks);
 
-        if (!channelId) {
+          if (!channelId) {
+            ack?.({ ok: true });
+            return;
+          }
+
+          await socket.join(`${WATCH_PREFIX}${channelId}`);
           ack?.({ ok: true });
-          return;
+          emitRoomDetail(channelId, { force: true });
+          emitRoomChat(channelId, { force: true });
+        } catch (error) {
+          Logger.warn("[AdminGateway] watch room subscription failed", error);
+          ack?.({ ok: false });
         }
-
-        void socket.join(`${WATCH_PREFIX}${channelId}`);
-        ack?.({ ok: true });
-        emitRoomDetail(channelId, { force: true });
-        emitRoomChat(channelId, { force: true });
       },
     );
 

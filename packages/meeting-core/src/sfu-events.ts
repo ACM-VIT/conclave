@@ -95,6 +95,7 @@ export const SFU_EVENTS = {
     gameMove: "game:move",
     gameEnd: "game:end",
     gameGetState: "game:getState",
+    gameJoin: "game:join",
     gameVoteOpen: "game:vote:open",
     gameVoteCast: "game:vote:cast",
     gameVoteCancel: "game:vote:cancel",

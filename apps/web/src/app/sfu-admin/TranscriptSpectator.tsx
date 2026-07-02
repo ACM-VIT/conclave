@@ -71,10 +71,10 @@ export function TranscriptSpectator({
   }, []);
 
   useEffect(() => stop, [stop]);
-  // A different room means a different session; never show stale lines.
+  // A different scoped room means a different session; never show stale lines.
   useEffect(() => {
     stop();
-  }, [roomId, stop]);
+  }, [roomId, clientId, instanceUrl, stop]);
 
   useEffect(() => {
     const container = scrollRef.current;
