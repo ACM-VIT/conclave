@@ -364,7 +364,7 @@ export function CountdownRing({
   const circ = 2 * Math.PI * r;
   const urgent = remainingMs <= 5000;
   return (
-    <div style={{ position: "relative", width: 84, height: 84 }}>
+    <div style={{ position: "relative", width: 84, height: 84, flexShrink: 0 }}>
       <svg width={84} height={84} viewBox="0 0 84 84">
         <circle cx={42} cy={42} r={r} fill="none" stroke={color.border} strokeWidth={6} />
         <circle
