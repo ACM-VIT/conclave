@@ -103,6 +103,51 @@ const createTranscriptRelayToken = (options: {
   );
 };
 
+/**
+ * Read-only transcript access for the operator dashboard: a viewer token with
+ * every capability off, shaped like a ghost's. The dashboard opens the same
+ * worker WebSocket meeting clients use and only ever receives.
+ */
+export const createTranscriptSpectatorToken = (
+  room: { id: string; clientId: string; channelId: string },
+  operator: string,
+): { workerUrl: string; token: string; expiresAt: number; roomId: string } => {
+  const capabilities: TranscriptTokenCapabilities = {
+    start: false,
+    takeover: false,
+    stop: false,
+    ask: false,
+  };
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  const token = jwt.sign(
+    {
+      iss: "conclave-sfu",
+      aud: "conclave-transcript-worker",
+      sub: `operator:${operator}`,
+      userId: `operator:${operator}`,
+      displayName: `Operator (${operator})`,
+      roomId: room.id,
+      clientId: room.clientId,
+      channelId: room.channelId,
+      isAdmin: false,
+      isHost: false,
+      isGhost: true,
+      capabilities,
+    },
+    getTranscriptTokenSecret(),
+    {
+      algorithm: "HS256",
+      expiresIn: TRANSCRIPT_TOKEN_TTL_SECONDS,
+    },
+  );
+  return {
+    workerUrl: getTranscriptWorkerUrl(),
+    token,
+    expiresAt: (nowSeconds + TRANSCRIPT_TOKEN_TTL_SECONDS) * 1000,
+    roomId: room.id,
+  };
+};
+
 export const registerTranscriptHandlers = (
   context: ConnectionContext,
 ): void => {

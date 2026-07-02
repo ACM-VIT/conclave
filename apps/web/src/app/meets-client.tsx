@@ -626,6 +626,20 @@ export default function MeetsClient({
     adminNotice,
     setAdminNotice,
   } = useMeetState({ initialRoomId });
+
+  // Deep link support: ?ghost=1 pre-arms the ghost toggle on the join screen
+  // (used by the SFU admin dashboard's "open as ghost"). The server-side
+  // capability gate still decides whether ghost join is actually allowed.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const ghostParam = params.get("ghost");
+    if (ghostParam === "1" || ghostParam === "true") {
+      setIsGhostMode(true);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const [serverActiveSpeakerAvailable, setServerActiveSpeakerAvailable] =
     useState(false);
   const handleVideoAdaptivePauseStateChange = useCallback(

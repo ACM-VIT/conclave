@@ -264,6 +264,17 @@ export const toParticipantSnapshot = (
 ): ParticipantSnapshot => {
   const producers = client.getProducerInfos();
   const consumers = client.getConsumerTelemetrySnapshot();
+  // Media state is derived from producers, not the client flags: the flags
+  // default to "on" and a participant who never produced would read as live.
+  // No unpaused webcam producer of a kind means that kind is off.
+  const hasLiveAudio = producers.some(
+    (producer) =>
+      producer.kind === "audio" && producer.type === "webcam" && !producer.paused,
+  );
+  const hasLiveVideo = producers.some(
+    (producer) =>
+      producer.kind === "video" && producer.type === "webcam" && !producer.paused,
+  );
   return {
     userId: client.id,
     userKey: room.userKeysById.get(client.id) ?? null,
@@ -271,8 +282,8 @@ export const toParticipantSnapshot = (
     role: toParticipantRole(room, client),
     mode: client.mode,
     socketId: client.socket.id,
-    muted: client.isMuted,
-    cameraOff: client.isCameraOff,
+    muted: !hasLiveAudio,
+    cameraOff: !hasLiveVideo,
     producerTransportConnected: Boolean(client.producerTransport),
     consumerTransportConnected: Boolean(client.consumerTransport),
     pendingDisconnect: room.hasPendingDisconnect(client.id),
@@ -789,9 +800,17 @@ export const clearAllRaisedHands = (io: SocketIOServer, room: Room): number => {
   if (count === 0) {
     return 0;
   }
+  // Clients treat this snapshot as a list of per-user updates (the join-time
+  // snapshot sends raised: true entries the same way), so the clear must send
+  // an explicit lower for every raised hand. An empty list updates nobody:
+  // hands, including admins' own, stayed visibly up.
+  const loweredUsers = Array.from(room.handRaisedByUserId).map((userId) => ({
+    userId,
+    raised: false,
+  }));
   room.handRaisedByUserId.clear();
   io.to(room.channelId).emit("handRaisedSnapshot", {
-    users: [],
+    users: loweredUsers,
     roomId: room.id,
   });
   io.to(room.channelId).emit("admin:handsCleared", {

@@ -22,6 +22,8 @@ import {
   toRoomSnapshot,
   toWorkerSnapshots,
 } from "../admin/controlPlane.js";
+import { recordAdminAudit } from "../admin/adminAudit.js";
+import { createTranscriptSpectatorToken } from "../socket/handlers/transcriptHandlers.js";
 import { forceCloseRoom, getRoomChannelId, markRoomEnded } from "../rooms.js";
 import { resolveCorsOrigins } from "../cors.js";
 import { secretsMatch } from "../secret.js";
@@ -565,6 +567,27 @@ export const createSfuApp = ({
     }
 
     await handleDrain(req, res);
+  });
+
+  // Every successful admin mutation lands in the audit trail with the
+  // operator identity the web proxy forwards; the admin gateway streams the
+  // trail to dashboards.
+  app.use("/admin", (req, res, next) => {
+    if (req.method === "GET" || req.method === "HEAD") {
+      next();
+      return;
+    }
+    res.on("finish", () => {
+      if (res.statusCode < 200 || res.statusCode >= 300) return;
+      recordAdminAudit({
+        at: Date.now(),
+        operator: req.header("x-sfu-operator")?.trim() || "unknown",
+        method: req.method,
+        path: (req.originalUrl || req.url).split("?")[0] || req.path,
+        ok: true,
+      });
+    });
+    next();
   });
 
   app.get("/admin/overview", (req, res) => {
@@ -1268,6 +1291,30 @@ export const createSfuApp = ({
       success: true,
       rejectedCount: rejected.length,
       users: rejected,
+    });
+  });
+
+  app.get("/admin/rooms/:roomId/transcript-token", (req, res) => {
+    if (!requireSecret(req, res)) {
+      return;
+    }
+
+    const lookup = resolveRoomForAdmin(req, res);
+    if (!lookup || "error" in lookup) {
+      return;
+    }
+
+    const operator = req.header("x-sfu-operator")?.trim() || "operator";
+    res.json({
+      success: true,
+      ...createTranscriptSpectatorToken(
+        {
+          id: lookup.room.id,
+          clientId: lookup.room.clientId,
+          channelId: lookup.room.channelId,
+        },
+        operator,
+      ),
     });
   });
 
