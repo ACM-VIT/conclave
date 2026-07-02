@@ -608,6 +608,16 @@ export const wordleModule: GameModule<WordleState> = {
       myGuesses: progress?.guesses ?? [],
       myOutcome: progress?.outcome ?? null,
       mySolvedAt: progress?.solvedAt ?? null,
+      // The setter already knows the word, so their private view carries every
+      // contestant's live board (letters included) to spectate while waiting.
+      // Contestants never receive each other's boards; letters would leak.
+      boards: isSetter
+        ? Object.entries(state.players).map(([contestantId, contestant]) => ({
+            playerId: contestantId,
+            guesses: contestant.guesses,
+            outcome: contestant.outcome,
+          }))
+        : null,
     };
   },
 
