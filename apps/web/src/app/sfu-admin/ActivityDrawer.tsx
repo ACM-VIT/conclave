@@ -64,11 +64,22 @@ const LIVE_STATUSES = new Set(["live", "started", "in_progress"]);
 
 const eventIdentity = (event: TaggedAdminEvent): string =>
   [
-    Math.floor(event.at / 1000),
+    event.at,
     event.channelId,
     event.type,
     event.message,
   ].join(":");
+
+const findScheduledRoom = (
+  item: TaggedScheduledItem,
+  rooms: TaggedRoomSummary[],
+): TaggedRoomSummary | null =>
+  rooms.find(
+    (room) =>
+      room.instanceKey === item.instanceKey &&
+      room.roomId === item.roomId &&
+      room.clientId === item.clientId,
+  ) ?? null;
 
 function CopyLinkButton({ path }: { path: string }) {
   const [copied, setCopied] = useState(false);
@@ -135,11 +146,12 @@ export function ActivityDrawer({
       onlySelectedRoom && selected
         ? events.filter((event) => event.channelId === selected.channelId)
         : events;
-    const seen = new Set<string>();
+    const seen = new Map<string, string>();
     return scoped.filter((event) => {
       const key = eventIdentity(event);
-      if (seen.has(key)) return false;
-      seen.add(key);
+      const instanceKey = seen.get(key);
+      if (instanceKey && instanceKey !== event.instanceKey) return false;
+      seen.set(key, event.instanceKey);
       return true;
     });
   }, [events, onlySelectedRoom, selected]);
@@ -151,11 +163,7 @@ export function ActivityDrawer({
     const past: TaggedScheduledItem[] = [];
     for (const item of scheduled) {
       const status = item.status.toLowerCase();
-      const activeRoom = rooms.find(
-        (room) =>
-          room.roomId === item.roomId &&
-          room.clientId === item.clientId,
-      );
+      const activeRoom = findScheduledRoom(item, rooms);
       if (LIVE_STATUSES.has(status) || activeRoom) {
         live.push(item);
       } else if (PAST_STATUSES.has(status) || item.endAt < now) {
@@ -173,11 +181,7 @@ export function ActivityDrawer({
 
   const renderScheduledItem = (item: TaggedScheduledItem, now: number) => {
     const status = item.status.toLowerCase();
-    const activeRoom = rooms.find(
-      (room) =>
-        room.roomId === item.roomId &&
-        room.clientId === item.clientId,
-    );
+    const activeRoom = findScheduledRoom(item, rooms);
     const tone = activeRoom || LIVE_STATUSES.has(status)
       ? color.success
       : PAST_STATUSES.has(status)
@@ -313,15 +317,7 @@ export function ActivityDrawer({
                 <li key={`${event.at}-${index}`}>
                   <button
                     type="button"
-                    onClick={() => {
-                      const activeRoom = rooms.find(
-                        (room) => room.channelId === event.channelId,
-                      );
-                      onPickRoom(
-                        activeRoom?.instanceKey ?? event.instanceKey,
-                        event.channelId,
-                      );
-                    }}
+                    onClick={() => onPickRoom(event.instanceKey, event.channelId)}
                     className="flex w-full items-start gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-white/[0.04]"
                   >
                     <span className="mt-[5px]">

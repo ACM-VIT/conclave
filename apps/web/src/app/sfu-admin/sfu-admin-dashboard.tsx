@@ -93,6 +93,16 @@ export default function SfuAdminDashboard() {
     watchRoom(next);
   }, [rooms, selected, watchRoom]);
 
+  useEffect(() => {
+    if (
+      detailSelection &&
+      selected?.channelId === detailSelection.channelId &&
+      selected.instanceKey !== detailSelection.instanceKey
+    ) {
+      setSelected(detailSelection);
+    }
+  }, [detailSelection, selected]);
+
   const selectRoom = useCallback(
     (selection: RoomSelection) => {
       setSelected(selection);

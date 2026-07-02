@@ -75,38 +75,26 @@ const scheduleStatusRank = (item: AdminScheduledItem): number => {
   return 2;
 };
 
-const instanceOrder = (instances: InstanceStatus[]): Map<string, number> => {
-  const order = new Map<string, number>();
-  instances.forEach((instance, index) => order.set(instance.key, index));
-  return order;
-};
-
-const prefersInstance = (
-  nextKey: string,
-  currentKey: string,
-  order: Map<string, number>,
-): boolean => {
-  const nextRank = order.get(nextKey) ?? Number.MAX_SAFE_INTEGER;
-  const currentRank = order.get(currentKey) ?? Number.MAX_SAFE_INTEGER;
-  return nextRank < currentRank;
-};
-
 const prefersRoom = (
   next: TaggedRoomSummary,
   current: TaggedRoomSummary,
-  order: Map<string, number>,
+  connectionByInstance: Map<string, ConnectionState>,
 ): boolean => {
+  const nextConnection = CONNECTION_RANK[connectionByInstance.get(next.instanceKey) ?? "offline"];
+  const currentConnection =
+    CONNECTION_RANK[connectionByInstance.get(current.instanceKey) ?? "offline"];
+  if (nextConnection !== currentConnection) return nextConnection > currentConnection;
   const nextScore = roomScore(next);
   const currentScore = roomScore(current);
   if (nextScore !== currentScore) return nextScore > currentScore;
-  return prefersInstance(next.instanceKey, current.instanceKey, order);
+  return next.instanceKey.localeCompare(current.instanceKey) < 0;
 };
 
 const prefersScheduledItem = (
   next: TaggedScheduledItem,
   current: TaggedScheduledItem,
   activeRoomByIdentity: Map<string, TaggedRoomSummary>,
-  order: Map<string, number>,
+  connectionByInstance: Map<string, ConnectionState>,
 ): boolean => {
   const activeRoom = activeRoomByIdentity.get(scheduleRoomIdentity(next));
   if (activeRoom) {
@@ -117,7 +105,11 @@ const prefersScheduledItem = (
   const nextRank = scheduleStatusRank(next);
   const currentRank = scheduleStatusRank(current);
   if (nextRank !== currentRank) return nextRank > currentRank;
-  return prefersInstance(next.instanceKey, current.instanceKey, order);
+  const nextConnection = CONNECTION_RANK[connectionByInstance.get(next.instanceKey) ?? "offline"];
+  const currentConnection =
+    CONNECTION_RANK[connectionByInstance.get(current.instanceKey) ?? "offline"];
+  if (nextConnection !== currentConnection) return nextConnection > currentConnection;
+  return next.instanceKey.localeCompare(current.instanceKey) < 0;
 };
 
 /**
@@ -188,6 +180,11 @@ export function useAdminSocket() {
     };
 
     const clearInstanceLiveState = (key: string) => {
+      setInstances((prev) =>
+        prev.map((instance) =>
+          instance.key === key ? { ...instance, overview: null } : instance,
+        ),
+      );
       setRoomsByInstance((prev) =>
         prev[key]?.length ? { ...prev, [key]: [] } : prev,
       );
@@ -243,7 +240,7 @@ export function useAdminSocket() {
             hasConnected = true;
             patchInstance(key, { connection: "live" });
             const watched = watchedRef.current;
-            if (watched && watched.instanceKey === key) {
+            if (watched) {
               socket.emit("admin:watchRoom", { channelId: watched.channelId });
             }
           });
@@ -278,19 +275,25 @@ export function useAdminSocket() {
               const watched = watchedRef.current;
               if (
                 !watched ||
-                watched.instanceKey !== key ||
                 data?.channelId !== watched.channelId
               ) {
                 return;
               }
-              setDetail(
-                data.room
-                  ? {
-                      selection: { instanceKey: key, channelId: data.channelId },
-                      room: data.room,
-                    }
-                  : null,
-              );
+              setDetail((prev) => {
+                if (data.room) {
+                  return {
+                    selection: { instanceKey: key, channelId: data.channelId },
+                    room: data.room,
+                  };
+                }
+                if (
+                  prev?.selection.instanceKey === key &&
+                  prev.selection.channelId === data.channelId
+                ) {
+                  return null;
+                }
+                return prev;
+              });
             },
           );
           socket.on("admin:history", (data: { points?: AdminHistoryPoint[] }) => {
@@ -355,7 +358,6 @@ export function useAdminSocket() {
               const watched = watchedRef.current;
               if (
                 !watched ||
-                watched.instanceKey !== key ||
                 data?.channelId !== watched.channelId
               ) {
                 return;
@@ -417,13 +419,17 @@ export function useAdminSocket() {
       setRoomChat(null);
     }
 
-    if (previous && (!selection || previous.instanceKey !== selection.instanceKey)) {
-      socketsRef.current.get(previous.instanceKey)?.emit("admin:watchRoom", {});
+    if (previous && (!selection || previous.channelId !== selection.channelId)) {
+      for (const socket of socketsRef.current.values()) {
+        socket.emit("admin:watchRoom", {});
+      }
     }
     if (selection) {
-      socketsRef.current
-        .get(selection.instanceKey)
-        ?.emit("admin:watchRoom", { channelId: selection.channelId });
+      for (const socket of socketsRef.current.values()) {
+        if (socket.connected) {
+          socket.emit("admin:watchRoom", { channelId: selection.channelId });
+        }
+      }
     }
   }, []);
 
@@ -431,9 +437,11 @@ export function useAdminSocket() {
   const resyncRoom = useCallback(() => {
     const watched = watchedRef.current;
     if (!watched) return;
-    socketsRef.current
-      .get(watched.instanceKey)
-      ?.emit("admin:watchRoom", { channelId: watched.channelId });
+    for (const socket of socketsRef.current.values()) {
+      if (socket.connected) {
+        socket.emit("admin:watchRoom", { channelId: watched.channelId });
+      }
+    }
   }, []);
 
   /** Search every connected instance for a person, merged and tagged. */
@@ -464,27 +472,17 @@ export function useAdminSocket() {
 
   const retry = useCallback(() => setRetryNonce((nonce) => nonce + 1), []);
 
-  const visibleInstances = useMemo(() => {
-    const byIdentity = new Map<string, InstanceStatus>();
+  const connectionByInstance = useMemo(() => {
+    const map = new Map<string, ConnectionState>();
     for (const instance of instances) {
-      const identity = instance.instanceId
-        ? `instance:${instance.instanceId}`
-        : `url:${instance.url}`;
-      const existing = byIdentity.get(identity);
-      if (
-        !existing ||
-        CONNECTION_RANK[instance.connection] > CONNECTION_RANK[existing.connection]
-      ) {
-        byIdentity.set(identity, instance);
-      }
+      map.set(instance.key, instance.connection);
     }
-    return Array.from(byIdentity.values());
+    return map;
   }, [instances]);
 
   const rooms: TaggedRoomSummary[] = useMemo(() => {
-    const order = instanceOrder(visibleInstances);
     const byRoom = new Map<string, TaggedRoomSummary>();
-    for (const instance of visibleInstances) {
+    for (const instance of instances) {
       for (const room of roomsByInstance[instance.key] ?? []) {
         const tagged = {
           ...room,
@@ -493,30 +491,34 @@ export function useAdminSocket() {
         };
         const key = roomIdentity(tagged);
         const existing = byRoom.get(key);
-        if (!existing || prefersRoom(tagged, existing, order)) {
+        if (!existing || prefersRoom(tagged, existing, connectionByInstance)) {
           byRoom.set(key, tagged);
         }
       }
     }
     return Array.from(byRoom.values());
-  }, [roomsByInstance, visibleInstances]);
+  }, [connectionByInstance, instances, roomsByInstance]);
 
   const scheduled: TaggedScheduledItem[] = useMemo(() => {
-    const order = instanceOrder(visibleInstances);
     const activeRoomByIdentity = new Map<string, TaggedRoomSummary>();
     for (const room of rooms) {
       activeRoomByIdentity.set(`${room.clientId}:${room.roomId}`, room);
     }
 
     const byItem = new Map<string, TaggedScheduledItem>();
-    for (const instance of visibleInstances) {
+    for (const instance of instances) {
       for (const item of scheduledByInstance[instance.key] ?? []) {
         const tagged = { ...item, instanceKey: instance.key };
         const key = scheduledIdentity(tagged);
         const existing = byItem.get(key);
         if (
           !existing ||
-          prefersScheduledItem(tagged, existing, activeRoomByIdentity, order)
+          prefersScheduledItem(
+            tagged,
+            existing,
+            activeRoomByIdentity,
+            connectionByInstance,
+          )
         ) {
           byItem.set(key, tagged);
         }
@@ -525,26 +527,26 @@ export function useAdminSocket() {
     const merged = Array.from(byItem.values());
     merged.sort((a, b) => a.startAt - b.startAt);
     return merged;
-  }, [rooms, scheduledByInstance, visibleInstances]);
+  }, [connectionByInstance, instances, rooms, scheduledByInstance]);
 
   const connection: ConnectionState = useMemo(() => {
     if (bootError) return "offline";
-    if (visibleInstances.length === 0) return "connecting";
-    if (visibleInstances.some((instance) => instance.connection === "live")) {
+    if (instances.length === 0) return "connecting";
+    if (instances.some((instance) => instance.connection === "live")) {
       return "live";
     }
-    if (visibleInstances.some((instance) => instance.connection === "reconnecting")) {
+    if (instances.some((instance) => instance.connection === "reconnecting")) {
       return "reconnecting";
     }
-    if (visibleInstances.every((instance) => instance.connection === "offline")) {
+    if (instances.every((instance) => instance.connection === "offline")) {
       return "offline";
     }
     return "connecting";
-  }, [bootError, visibleInstances]);
+  }, [bootError, instances]);
 
   /** Cross-pool participant history, index-aligned from the newest sample. */
   const participantsHistory: number[] = useMemo(() => {
-    const series = visibleInstances
+    const series = instances
       .map((instance) => historyByInstance[instance.key] ?? [])
       .filter((points) => points.length > 0);
     if (series.length === 0) return [];
@@ -559,12 +561,12 @@ export function useAdminSocket() {
       summed.push(total);
     }
     return summed;
-  }, [historyByInstance, visibleInstances]);
+  }, [historyByInstance, instances]);
 
   return {
     connection,
     bootError,
-    instances: visibleInstances,
+    instances,
     rooms,
     roomDetail: detail?.room ?? null,
     detailSelection: detail?.selection ?? null,

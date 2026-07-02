@@ -487,7 +487,9 @@ export const registerAdminGateway = (
     tickInFlight = true;
     const now = Date.now();
     try {
-      await reconcileRoomOwnerships(now);
+      if (nsp.sockets.size > 0) {
+        await reconcileRoomOwnerships(now);
+      }
       // History and the activity log keep recording while nobody watches, so
       // a fresh session opens with context instead of a blank hour.
       sampleHistory(now);
@@ -625,6 +627,7 @@ export const registerAdminGateway = (
             return;
           }
 
+          await reconcileRoomOwnerships(Date.now(), { force: true });
           await socket.join(`${WATCH_PREFIX}${channelId}`);
           ack?.({ ok: true });
           emitRoomDetail(channelId, { force: true });
