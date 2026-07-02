@@ -260,6 +260,9 @@ final class SocketIOManager {
     func endGame() async throws -> GameActionResponse {
         GameActionResponse(success: true, gameId: nil, error: nil)
     }
+    func joinGame() async throws -> GameActionResponse {
+        GameActionResponse(success: true, gameId: nil, error: nil)
+    }
     func sendGameMove(gameId: String, type: String, payload: GameJSONValue? = nil) async throws -> GameMoveResponse {
         GameMoveResponse(success: true, error: nil)
     }

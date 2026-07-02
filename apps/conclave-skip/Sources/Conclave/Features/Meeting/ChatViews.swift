@@ -311,7 +311,7 @@ struct ChatOverlayView: View {
                     )
                 }
 
-                HStack(spacing: 10) {
+                HStack(alignment: .bottom, spacing: 10) {
                     Button {
                         isInputFocused = false
                         showGifPicker = true
@@ -330,18 +330,15 @@ struct ChatOverlayView: View {
                     .disabled(isChatDisabled)
                     .accessibilityLabel("Add a GIF")
 
+                    #if SKIP
                     TextField(placeholder, text: messageTextBinding)
                         .textFieldStyle(.plain)
                         .font(ACMFont.trial(14))
                         .foregroundStyle(ACMColors.text)
                         .tint(ACMColors.primaryOrange)
                         .padding(.horizontal, inputHorizontalPadding)
-                        #if SKIP
                         .padding(.vertical, inputVerticalPadding)
                         .frame(height: inputHeight, alignment: .center)
-                        #else
-                        .frame(height: inputHeight)
-                        #endif
                         .acmColorBackground(ACMColors.bgAlt)
                         .overlay {
                             Capsule().strokeBorder(lineWidth: 1).foregroundStyle(ACMColors.border)
@@ -357,6 +354,32 @@ struct ChatOverlayView: View {
                             sendMessage()
                         }
                         .disabled(isChatDisabled)
+                    #else
+                    // Grows to a few lines on iOS; SkipUI has no vertical-axis
+                    // TextField, so Android stays single line above.
+                    TextField(placeholder, text: messageTextBinding, axis: .vertical)
+                        .textFieldStyle(.plain)
+                        .font(ACMFont.trial(14))
+                        .foregroundStyle(ACMColors.text)
+                        .tint(ACMColors.primaryOrange)
+                        .padding(.horizontal, inputHorizontalPadding)
+                        .padding(.vertical, 10)
+                        .frame(minHeight: inputHeight)
+                        .acmColorBackground(ACMColors.bgAlt)
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                                .strokeBorder(lineWidth: 1)
+                                .foregroundStyle(ACMColors.border)
+                        }
+                        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+                        .focused($isInputFocused)
+                        .lineLimit(1...4)
+                        .submitLabel(SubmitLabel.send)
+                        .onSubmit {
+                            sendMessage()
+                        }
+                        .disabled(isChatDisabled)
+                    #endif
 
                     Button {
                         sendMessage()
@@ -374,7 +397,9 @@ struct ChatOverlayView: View {
                         #endif
                         .disabled(!canSendMessage)
                 }
+                #if SKIP
                 .frame(height: inputHeight)
+                #endif
                 .onTapGesture {
                     markComposerActive()
                 }
@@ -420,6 +445,7 @@ struct ChatOverlayView: View {
         guard !isChatDisabled else { return }
         let activeReply = replyTarget
         replyTarget = nil
+        HapticManager.shared.trigger(.light)
         viewModel.sendChatGif(gif, replyTo: activeReply)
     }
 
@@ -431,6 +457,7 @@ struct ChatOverlayView: View {
         if ChatSubmitReplyPolicy.shouldClearReplyAfterSubmit(trimmed, isDmEnabled: viewModel.state.isDmEnabled) {
             replyTarget = nil
         }
+        HapticManager.shared.trigger(.light)
         viewModel.sendChatMessage(trimmed, replyTo: activeReply)
         if shouldClearDraft {
             messageText = ""
@@ -510,6 +537,19 @@ struct ChatOverlayView: View {
     }
 }
 
+/// Only pull the list down for a new entry when the reader is already at the
+/// bottom or the entry is their own; otherwise they are reading history and
+/// yanking the scroll position is hostile.
+enum ChatAutoScrollPolicy {
+    static func shouldAutoScroll(isAtBottom: Bool, latestIsFromLocalUser: Bool) -> Bool {
+        isAtBottom || latestIsFromLocalUser
+    }
+
+    static func unseenCount(previous: Int, appending: Bool) -> Int {
+        appending ? previous + 1 : 0
+    }
+}
+
 private struct ChatTimelineView: View, Equatable {
     let chatMessages: [ChatMessage]
     let systemMessages: [SystemMessage]
@@ -522,6 +562,9 @@ private struct ChatTimelineView: View, Equatable {
     let onReply: (ChatMessage) -> Void
     @State private var delayedScrollTask: Task<Void, Never>?
     @State private var observedLatestEntryId: String?
+    @State private var isAtBottom = true
+    @State private var unseenCount = 0
+    @State private var actionMessageId: String?
 
     private var timeline: [ChatTimelineEntry] {
         (chatMessages.map { ChatTimelineEntry.message($0) }
@@ -539,9 +582,20 @@ private struct ChatTimelineView: View, Equatable {
             lhs.commandSuggestionsCount == rhs.commandSuggestionsCount
     }
 
+    private func latestEntryIsFromLocalUser(_ entries: [ChatTimelineEntry]) -> Bool {
+        guard let last = entries.last else { return false }
+        switch last {
+        case .message(let message):
+            return isCurrentUser(message.userId)
+        case .system:
+            // System rows are feedback for something this user just did.
+            return true
+        }
+    }
+
     var body: some View {
         let _ = PerformanceDiagnostics.render("ChatTimelineView") {
-            "chat=\(chatMessages.count) system=\(systemMessages.count) focused=\(isInputFocused)"
+            "chat=\(chatMessages.count) system=\(systemMessages.count) focused=\(isInputFocused) atBottom=\(isAtBottom)"
         }
         let entries = timeline
         let latestEntryId = entries.last?.id
@@ -558,9 +612,31 @@ private struct ChatTimelineView: View, Equatable {
                             )
                             .id(entry.id)
                         }
+
+                        // Bottom sentinel: while it is composed the reader is
+                        // effectively at the end of the timeline.
+                        Color.clear
+                            .frame(height: 1)
+                            .onAppear {
+                                isAtBottom = true
+                                unseenCount = 0
+                            }
+                            .onDisappear {
+                                isAtBottom = false
+                            }
                     }
                     .padding(.horizontal, 14)
                     .padding(.vertical, 12)
+                }
+            }
+            .overlay(alignment: .bottom) {
+                if unseenCount > 0 && !isAtBottom {
+                    ChatNewMessagesPill(count: unseenCount) {
+                        unseenCount = 0
+                        scrollToLatestMessage(in: entries, proxy: proxy)
+                        scheduleDelayedScroll(in: entries, proxy: proxy)
+                    }
+                    .padding(.bottom, 10)
                 }
             }
 #if SKIP
@@ -573,8 +649,7 @@ private struct ChatTimelineView: View, Equatable {
                 guard change.shouldScroll else {
                     return
                 }
-                scrollToLatestMessage(in: entries, proxy: proxy)
-                scheduleDelayedScroll(in: entries, proxy: proxy)
+                handleNewLatestEntry(entries: entries, proxy: proxy)
             }
 #else
             .onChange(of: latestEntryId) { previousEntryId, currentEntryId in
@@ -584,8 +659,7 @@ private struct ChatTimelineView: View, Equatable {
                 ) else {
                     return
                 }
-                scrollToLatestMessage(in: entries, proxy: proxy)
-                scheduleDelayedScroll(in: entries, proxy: proxy)
+                handleNewLatestEntry(entries: entries, proxy: proxy)
             }
 #endif
             .onAppear {
@@ -620,6 +694,19 @@ private struct ChatTimelineView: View, Equatable {
         }
     }
 
+    private func handleNewLatestEntry(entries: [ChatTimelineEntry], proxy: ScrollViewProxy) {
+        if ChatAutoScrollPolicy.shouldAutoScroll(
+            isAtBottom: isAtBottom,
+            latestIsFromLocalUser: latestEntryIsFromLocalUser(entries)
+        ) {
+            unseenCount = 0
+            scrollToLatestMessage(in: entries, proxy: proxy)
+            scheduleDelayedScroll(in: entries, proxy: proxy)
+        } else {
+            unseenCount = ChatAutoScrollPolicy.unseenCount(previous: unseenCount, appending: true)
+        }
+    }
+
     private func messageValue(_ entry: ChatTimelineEntry) -> ChatMessage? {
         switch entry {
         case .message(let message):
@@ -628,6 +715,15 @@ private struct ChatTimelineView: View, Equatable {
             return ChatMessagePresentation.actionText(from: message.content) == nil ? message : nil
         case .system:
             return nil
+        }
+    }
+
+    private func toggleActions(for message: ChatMessage) {
+        if actionMessageId == message.id {
+            actionMessageId = nil
+        } else {
+            HapticManager.shared.trigger(.light)
+            actionMessageId = message.id
         }
     }
 
@@ -645,7 +741,14 @@ private struct ChatTimelineView: View, Equatable {
                     message: message,
                     isFromCurrentUser: isFromCurrentUser,
                     isReplyFromCurrentUser: isReplyFromCurrentUser,
-                    onReply: onReply,
+                    isActionActive: actionMessageId == message.id,
+                    onReply: { replyTarget in
+                        actionMessageId = nil
+                        onReply(replyTarget)
+                    },
+                    onToggleActions: { target in
+                        toggleActions(for: target)
+                    },
                     actionText: actionText
                 )
                 .padding(.top, grouped ? 2.0 : 10.0)
@@ -655,7 +758,14 @@ private struct ChatTimelineView: View, Equatable {
                     isFromCurrentUser: isFromCurrentUser,
                     isReplyFromCurrentUser: isReplyFromCurrentUser,
                     isGroupedWithPrevious: grouped,
-                    onReply: onReply
+                    isActionActive: actionMessageId == message.id,
+                    onReply: { replyTarget in
+                        actionMessageId = nil
+                        onReply(replyTarget)
+                    },
+                    onToggleActions: { target in
+                        toggleActions(for: target)
+                    }
                 )
                 .padding(.top, grouped ? 2.0 : 10.0)
             }
@@ -698,6 +808,31 @@ private struct ChatTimelineView: View, Equatable {
         withAnimation(Animation.easeOut(duration: 0.12)) {
             proxy.scrollTo(last.id, anchor: .bottom)
         }
+    }
+}
+
+/// Floating jump-to-latest chip shown while the reader is scrolled up and new
+/// messages arrive underneath.
+private struct ChatNewMessagesPill: View {
+    let count: Int
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                ACMSystemIcon.icon("arrow.down", android: "arrow.down", size: 11)
+                    .foregroundStyle(Color.white)
+                Text(count == 1 ? "1 new message" : "\(count) new messages")
+                    .font(ACMFont.trial(12, weight: .semibold))
+                    .foregroundStyle(Color.white)
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 14)
+            .frame(height: 32)
+            .background(ACMColors.primaryOrange, in: Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Jump to newest messages")
     }
 }
 
@@ -1092,7 +1227,9 @@ struct ChatActionMessageRow: View {
     let message: ChatMessage
     let isFromCurrentUser: Bool
     let isReplyFromCurrentUser: Bool
+    let isActionActive: Bool
     let onReply: (ChatMessage) -> Void
+    let onToggleActions: (ChatMessage) -> Void
     let actionText: String
 
     private var directMessageLabel: String? {
@@ -1115,19 +1252,43 @@ struct ChatActionMessageRow: View {
                 )
             }
 
-            HStack(spacing: 6) {
-                Text(actionLine)
-                    .font(ACMFont.trial(12))
-                    .foregroundStyle(ACMColors.textMuted)
-                    .multilineTextAlignment(.center)
+            Text(actionLine)
+                .font(ACMFont.trial(12))
+                .foregroundStyle(ACMColors.textMuted)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity, alignment: .center)
 
-                ChatReplyButton {
-                    onReply(message)
-                }
+            #if SKIP
+            if isActionActive {
+                ChatMessageActionStrip(
+                    onReply: { onReply(message) },
+                    onCopy: { copyChatMessageText(message) },
+                    onDismiss: { onToggleActions(message) }
+                )
+                .padding(.top, 2)
             }
-            .frame(maxWidth: .infinity, alignment: .center)
+            #endif
         }
         .padding(.vertical, 2)
+        #if SKIP
+        .onLongPressGesture {
+            onToggleActions(message)
+        }
+        #else
+        .contentShape(Rectangle())
+        .contextMenu {
+            Button {
+                onReply(message)
+            } label: {
+                Label("Reply", systemImage: "arrowshape.turn.up.left")
+            }
+            Button {
+                copyChatMessageText(message)
+            } label: {
+                Label("Copy", systemImage: "doc.on.doc")
+            }
+        }
+        #endif
     }
 
     private var actionLine: String {
@@ -1153,13 +1314,16 @@ enum ChatGroupingPolicy {
 
 /// Flat, left-aligned message row (Meet / Discord / web-chat style): avatar +
 /// name + time header on the first message of a sender run, plain-text body,
-/// no bubbles or right/left split.
+/// no bubbles or right/left split. Actions live behind a long press (context
+/// menu on iOS, an inline strip on Android) so rows stay clean.
 struct ChatMessageRow: View {
     let message: ChatMessage
     let isFromCurrentUser: Bool
     let isReplyFromCurrentUser: Bool
     let isGroupedWithPrevious: Bool
+    let isActionActive: Bool
     let onReply: (ChatMessage) -> Void
+    let onToggleActions: (ChatMessage) -> Void
 
     private var senderName: String {
         ChatMessagePresentation.displayName(for: message, isFromCurrentUser: false)
@@ -1189,14 +1353,40 @@ struct ChatMessageRow: View {
                 }
 
                 messageContent
+
+                #if SKIP
+                if isActionActive {
+                    ChatMessageActionStrip(
+                        onReply: { onReply(message) },
+                        onCopy: { copyChatMessageText(message) },
+                        onDismiss: { onToggleActions(message) }
+                    )
+                    .padding(.top, 2)
+                }
+                #endif
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-
-            ChatReplyButton {
-                onReply(message)
-            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        #if SKIP
+        .onLongPressGesture {
+            onToggleActions(message)
+        }
+        #else
+        .contentShape(Rectangle())
+        .contextMenu {
+            Button {
+                onReply(message)
+            } label: {
+                Label("Reply", systemImage: "arrowshape.turn.up.left")
+            }
+            Button {
+                copyChatMessageText(message)
+            } label: {
+                Label("Copy", systemImage: "doc.on.doc")
+            }
+        }
+        #endif
     }
 
     @ViewBuilder
@@ -1557,20 +1747,78 @@ enum ChatGifAttachmentPresentation {
     }
 }
 
-struct ChatReplyButton: View {
-    let action: () -> Void
+/// Copies the readable text of a message (GIF title when there is no text).
+func copyChatMessageText(_ message: ChatMessage) {
+    let content = message.content.trimmingCharacters(in: .whitespacesAndNewlines)
+    let text: String
+    if !content.isEmpty {
+        text = content
+    } else if let gif = message.gif {
+        text = ChatGifAttachmentPresentation.title(for: gif)
+    } else {
+        return
+    }
+    #if SKIP
+    ClipboardHelper.copyToClipboard(text: text, label: "Chat message")
+    #elseif canImport(UIKit)
+    UIPasteboard.general.string = text
+    #endif
+}
+
+#if SKIP
+/// Android stand-in for the iOS context menu: a compact action strip revealed
+/// by a long press, inline under the message.
+struct ChatMessageActionStrip: View {
+    let onReply: () -> Void
+    let onCopy: () -> Void
+    let onDismiss: () -> Void
 
     var body: some View {
+        HStack(spacing: 8) {
+            stripButton(title: "Reply", icon: "arrowshape.turn.up.left", androidIcon: "reply") {
+                onDismiss()
+                onReply()
+            }
+            stripButton(title: "Copy", icon: "doc.on.doc", androidIcon: "copy") {
+                onCopy()
+                onDismiss()
+            }
+
+            Button(action: onDismiss) {
+                ACMSystemIcon.icon("xmark", android: "close", size: 10)
+                    .foregroundStyle(ACMColors.textFaint)
+                    .frame(width: 28, height: 28)
+                    .acmColorBackground(ACMColors.surfaceRaised)
+                    .clipShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Hide message actions")
+
+            Spacer(minLength: 0)
+        }
+    }
+
+    private func stripButton(title: String, icon: String, androidIcon: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            ACMSystemIcon.icon("arrowshape.turn.up.left", android: "reply", size: 12)
-                .foregroundStyle(ACMColors.textMuted)
-                .frame(width: 26, height: 26)
-                .acmColorBackground(ACMColors.surfaceRaised)
-                .clipShape(Circle())
+            HStack(spacing: 5) {
+                ACMSystemIcon.icon(icon, android: androidIcon, size: 11, tint: "text")
+                    .foregroundStyle(ACMColors.text)
+                Text(title)
+                    .font(ACMFont.trial(12, weight: .medium))
+                    .foregroundStyle(ACMColors.text)
+            }
+            .padding(.horizontal, 12)
+            .frame(height: 28)
+            .acmColorBackground(ACMColors.surfaceRaised)
+            .clipShape(Capsule())
+            .overlay {
+                Capsule().strokeBorder(lineWidth: 1).foregroundStyle(ACMColors.border)
+            }
         }
         .buttonStyle(.plain)
     }
 }
+#endif
 
 struct ChatReplyComposerView: View {
     let replyTo: ChatReplyPreview
