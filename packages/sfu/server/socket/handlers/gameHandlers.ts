@@ -7,6 +7,7 @@ import { getGameCatalog, getGameModule } from "../../games/registry.js";
 import type {
   GameCatalogEntry,
   GameEndResponse,
+  GameJoinResponse,
   GameMoveData,
   GameMoveResponse,
   GamePlayer,
@@ -185,6 +186,18 @@ const broadcastGame = (io: SocketIOServer, room: Room): void => {
       view: session.getPlayerView(player.id, now),
     });
   }
+  // Spectators (room members without a seat) get a read-only projection so
+  // they can watch the round while waiting to join. Gated per module: games
+  // whose per-player view would leak a secret opt out via `spectatable`.
+  if (session.spectatable) {
+    for (const client of room.clients.values()) {
+      if (session.hasPlayer(client.id)) continue;
+      client.socket.emit("game:view", {
+        gameId: session.gameId,
+        view: session.getPlayerView(client.id, now),
+      });
+    }
+  }
 };
 
 const buildVoteState = (room: Room): GameVoteState | null => {
@@ -246,7 +259,7 @@ export const buildGameStateResponse = (
     vote,
     selfId,
   };
-  if (playerId && session.hasPlayer(playerId)) {
+  if (playerId && (session.hasPlayer(playerId) || session.spectatable)) {
     response.view = session.getPlayerView(playerId, now);
   }
   return response;
@@ -638,6 +651,40 @@ export const registerGameHandlers = (context: ConnectionContext): void => {
       respond(callback, { success: true });
     },
   );
+
+  // A spectator asks for a seat. The seat is granted at the next round
+  // boundary (the module's `lateJoinPhases`), never mid-round.
+  socket.on("game:join", (callback: (response: GameJoinResponse) => void) => {
+    if (!context.currentRoom || !context.currentClient) {
+      respond(callback, { success: false, error: "Not in a room" });
+      return;
+    }
+    if (context.currentClient.isObserver) {
+      respond(callback, { success: false, error: "Observers cannot join games" });
+      return;
+    }
+    if (!takeToken(socket, "game:join", RATE_LIMITS.gameControl)) {
+      respond(callback, { success: false, error: "Slow down" });
+      return;
+    }
+    const room = context.currentRoom;
+    const session = room.gameSession;
+    if (!session || session.isFinished()) {
+      respond(callback, { success: false, error: "No game to join" });
+      return;
+    }
+    const playerId = context.currentClient.id;
+    const result = session.requestSeat({
+      id: playerId,
+      name: room.getDisplayNameForUser(playerId) ?? "Guest",
+    });
+    if (!result.ok) {
+      respond(callback, { success: false, error: result.error });
+      return;
+    }
+    broadcastGame(io, room);
+    respond(callback, { success: true });
+  });
 
   socket.on("game:end", (callback: (response: GameEndResponse) => void) => {
     if (!context.currentRoom || !context.currentClient) {
