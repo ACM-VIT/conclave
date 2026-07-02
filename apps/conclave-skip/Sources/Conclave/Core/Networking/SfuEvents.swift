@@ -80,6 +80,7 @@ enum SfuClientEvent: String {
     case gameMove = "game:move"
     case gameEnd = "game:end"
     case gameGetState = "game:getState"
+    case gameJoin = "game:join"
     case gameVoteOpen = "game:vote:open"
     case gameVoteCast = "game:vote:cast"
     case gameVoteCancel = "game:vote:cancel"

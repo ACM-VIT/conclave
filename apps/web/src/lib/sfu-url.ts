@@ -51,16 +51,22 @@ const productionSafeSfuUrl = (value: string): string => {
 };
 
 export const resolveSfuUrls = (): string[] => {
-  const configuredUrls = [
+  const poolUrls = [
     ...splitUrlList(process.env.SFU_URLS),
     ...splitUrlList(process.env.SFU_POOL_URLS),
     ...splitUrlList(process.env.SFU_POOL),
     ...splitUrlList(process.env.NEXT_PUBLIC_SFU_URLS),
+  ];
+  if (poolUrls.length > 0) {
+    return uniqueUrls(poolUrls);
+  }
+
+  const singletonUrls = [
     envValue(process.env.SFU_URL),
     envValue(process.env.NEXT_PUBLIC_SFU_URL),
   ].filter((value): value is string => Boolean(value));
 
-  return uniqueUrls(configuredUrls.length > 0 ? configuredUrls : [PUBLIC_SFU_URL]);
+  return uniqueUrls(singletonUrls.length > 0 ? singletonUrls : [PUBLIC_SFU_URL]);
 };
 
 export const resolveSfuUrl = (): string =>

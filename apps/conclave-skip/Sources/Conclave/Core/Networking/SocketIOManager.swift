@@ -114,6 +114,7 @@ private enum SocketEvent {
     static let gameMove = SfuClientEvent.gameMove.rawValue
     static let gameEnd = SfuClientEvent.gameEnd.rawValue
     static let gameGetState = SfuClientEvent.gameGetState.rawValue
+    static let gameJoin = SfuClientEvent.gameJoin.rawValue
     static let gameVoteOpen = SfuClientEvent.gameVoteOpen.rawValue
     static let gameVoteCast = SfuClientEvent.gameVoteCast.rawValue
     static let gameVoteCancel = SfuClientEvent.gameVoteCancel.rawValue
@@ -1071,6 +1072,11 @@ final class SocketIOManager {
 
     func endGame() async throws -> GameActionResponse {
         let data = try await emitAckOnly(event: SocketEvent.gameEnd)
+        return try JSONDecoder().decode(GameActionResponse.self, from: data)
+    }
+
+    func joinGame() async throws -> GameActionResponse {
+        let data = try await emitAckOnly(event: SocketEvent.gameJoin)
         return try JSONDecoder().decode(GameActionResponse.self, from: data)
     }
 

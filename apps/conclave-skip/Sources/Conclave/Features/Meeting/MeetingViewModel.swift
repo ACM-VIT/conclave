@@ -8893,6 +8893,25 @@ final class MeetingViewModel {
         }
     }
 
+    /// Ask for a seat in the running game; the server grants it at the next
+    /// round boundary.
+    func joinActiveGame() {
+        performGameAction(requiresAdmin: false) {
+            try await self.socketManager.joinGame()
+        }
+    }
+
+    /// Start the same game again with the config the server reported for the
+    /// finished session (falls back to defaults when absent).
+    func rematchActiveGame() {
+        guard let publicState = state.gamePublicState, publicState.finished else { return }
+        let gameId = publicState.gameId
+        let options = publicState.config
+        performGameAction(requiresAdmin: true) {
+            try await self.socketManager.startGame(gameId: gameId, options: options)
+        }
+    }
+
     func openGameVote(candidateIds: [String]? = nil) {
         performGameAction(requiresAdmin: true) {
             try await self.socketManager.openGameVote(candidateIds: candidateIds)

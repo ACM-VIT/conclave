@@ -485,9 +485,10 @@ final class ConclaveTests: XCTestCase {
         XCTAssertEqual(resolved["topic"]?.stringValue, "production")
     }
 
-    func testNativeGamesSheetCoversEveryWebGameRenderer() throws {
+    func testNativeGameStageCoversEveryWebGameRenderer() throws {
         let webRegistry = try repoFileContents("apps/web/src/app/components/games/registry.tsx")
-        let nativeSheet = try sourceFileContents("Sources/Conclave/Features/Meeting/MoreSheetView.swift")
+        let nativeStage = try sourceFileContents("Sources/Conclave/Features/Meeting/Games/GameStageView.swift")
+        let nativeStageGames = try sourceFileContents("Sources/Conclave/Features/Meeting/Games/GameStageGames.swift")
         let nativeWordle = try sourceFileContents("Sources/Conclave/Features/Meeting/WordleGameView.swift")
 
         let expectedGameIds = [
@@ -503,11 +504,11 @@ final class ConclaveTests: XCTestCase {
         for gameId in expectedGameIds {
             XCTAssertTrue(webRegistry.contains("\(gameId):") || webRegistry.contains("\"\(gameId)\":"))
             XCTAssertTrue(
-                nativeSheet.contains("case \"\(gameId)\""),
-                "Native games sheet is missing renderer branch for \(gameId)."
+                nativeStage.contains("case \"\(gameId)\""),
+                "Native game stage is missing renderer branch for \(gameId)."
             )
         }
-        XCTAssertTrue(nativeSheet.contains("WordleGameView("))
+        XCTAssertTrue(nativeStageGames.contains("WordleGameView("))
         XCTAssertTrue(nativeWordle.contains("struct WordleGameView"))
     }
 

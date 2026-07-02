@@ -123,6 +123,7 @@ internal object SocketEvent {
     val gameMove = SfuClientEvent.gameMove.rawValue
     val gameEnd = SfuClientEvent.gameEnd.rawValue
     val gameGetState = SfuClientEvent.gameGetState.rawValue
+    val gameJoin = SfuClientEvent.gameJoin.rawValue
     val gameVoteOpen = SfuClientEvent.gameVoteOpen.rawValue
     val gameVoteCast = SfuClientEvent.gameVoteCast.rawValue
     val gameVoteCancel = SfuClientEvent.gameVoteCancel.rawValue
@@ -1036,6 +1037,11 @@ internal class SocketIOManager {
         return decodeGameActionResponse(data)
     }
 
+    internal suspend fun joinGame(): GameActionResponse {
+        val data = emitAckOnly(SocketEvent.gameJoin)
+        return decodeGameActionResponse(data)
+    }
+
     internal suspend fun openGameVote(candidateIds: skip.lib.Array<String>? = null): GameActionResponse {
         val payload = JSONObject()
         if (candidateIds != null) {
@@ -1939,6 +1945,16 @@ internal class SocketIOManager {
             val player = rawPlayers.optJSONObject(index)?.let { decodeGamePlayerObject(it) } ?: continue
             players.add(player)
         }
+        val rawPendingJoiners = obj.optJSONArray("pendingJoiners")
+        var pendingJoiners: skip.lib.Array<GamePlayer>? = null
+        if (rawPendingJoiners != null) {
+            val pending = mutableListOf<GamePlayer>()
+            for (index in 0 until rawPendingJoiners.length()) {
+                val player = rawPendingJoiners.optJSONObject(index)?.let { decodeGamePlayerObject(it) } ?: continue
+                pending.add(player)
+            }
+            pendingJoiners = skip.lib.Array(pending)
+        }
         return GamePublicState(
             gameId = stringField(obj, "gameId") ?: return null,
             name = stringField(obj, "name") ?: stringField(obj, "gameId") ?: return null,
@@ -1948,8 +1964,29 @@ internal class SocketIOManager {
             view = rawJsonField(obj, "view"),
             finished = boolField(obj, "finished") ?: false,
             hasLeaderboard = boolField(obj, "hasLeaderboard") ?: false,
-            roomId = stringField(obj, "roomId")
+            roomId = stringField(obj, "roomId"),
+            config = gameConfigMapField(obj, "config"),
+            pendingJoiners = pendingJoiners,
+            canJoinLate = boolField(obj, "canJoinLate")
         )
+    }
+
+    private fun gameConfigMapField(obj: JSONObject, field: String): Dictionary<String, GameConfigValue>? {
+        val raw = obj.optJSONObject(field) ?: return null
+        var values: Dictionary<String, GameConfigValue> = dictionaryOf()
+        val keys = raw.keys()
+        while (keys.hasNext()) {
+            val key = keys.next()
+            val value = when (val rawValue = raw.opt(key)) {
+                is Number -> GameConfigValue(numberValue = rawValue.toDouble(), stringValue = null)
+                is String -> GameConfigValue(numberValue = null, stringValue = rawValue)
+                else -> null
+            }
+            if (value != null) {
+                values[key] = value
+            }
+        }
+        return values
     }
 
     private fun decodeGamePlayerViewNotificationObject(obj: JSONObject): GamePlayerViewNotification? {

@@ -485,6 +485,12 @@ struct GamePublicState: Codable {
     let finished: Bool
     let hasLeaderboard: Bool
     let roomId: String?
+    // Server also sends the sanitized start config (for rematch), players who
+    // asked for a seat at the next round boundary, and whether late join is
+    // currently possible. Optional so older SFU payloads still decode.
+    let config: [String: GameConfigValue]?
+    let pendingJoiners: [GamePlayer]?
+    let canJoinLate: Bool?
 }
 
 struct GamePlayerViewNotification: Codable {

@@ -265,7 +265,15 @@ struct MoreSheetView: View {
                 }
 
                 if canShowGamesSection {
-                    MoreRow(icon: "gamecontroller.fill", androidIcon: "sports_esports", title: "Games", showsChevron: true) {
+                    let liveGameName = viewModel.state.gamePublicState?.name
+                    MoreRow(
+                        icon: "gamecontroller.fill",
+                        androidIcon: "sports_esports",
+                        title: liveGameName.map { "Games · \($0) live" } ?? "Games",
+                        tint: liveGameName == nil ? ACMColors.text : ACMColors.primaryOrange,
+                        androidTint: liveGameName == nil ? "text" : "accent",
+                        showsChevron: true
+                    ) {
                         onOpenGames()
                     }
                 }
@@ -1509,87 +1517,15 @@ enum SharedBrowserURLDraftSyncPolicy {
     }
 }
 
-struct GameCatalogVisual: Equatable {
-    let icon: String
-    let androidIcon: String
-}
-
-enum GameCatalogPresentationPolicy {
-    static func visual(for gameId: String) -> GameCatalogVisual {
-        switch gameId {
-        case "trivia":
-            return GameCatalogVisual(icon: "questionmark.circle.fill", androidIcon: "info")
-        case "bluff":
-            return GameCatalogVisual(icon: "theatermasks.fill", androidIcon: "forum")
-        case "would-you-rather":
-            return GameCatalogVisual(icon: "arrow.left.arrow.right", androidIcon: "arrow.forward")
-        case "most-likely-to":
-            return GameCatalogVisual(icon: "person.2.fill", androidIcon: "participants")
-        case "reaction":
-            return GameCatalogVisual(icon: "bolt.fill", androidIcon: "warning")
-        case "imposter":
-            return GameCatalogVisual(icon: "eye.slash.fill", androidIcon: "ghost")
-        case "wordle":
-            return GameCatalogVisual(icon: "square.grid.3x3.fill", androidIcon: "grid")
-        default:
-            return GameCatalogVisual(icon: "gamecontroller.fill", androidIcon: "sports_esports")
-        }
-    }
-
-    static func catalogSubtitle(_ game: GameCatalogEntry) -> String {
-        let description = game.description.trimmingCharacters(in: .whitespacesAndNewlines)
-        return description.isEmpty ? playerRange(game) : description
-    }
-
-    static func playerRange(_ game: GameCatalogEntry) -> String {
-        if game.minPlayers == game.maxPlayers {
-            return "\(game.minPlayers)"
-        }
-        return "\(game.minPlayers)-\(game.maxPlayers)"
-    }
-
-    static func canOpenVote(catalogCount: Int, isActionInFlight: Bool) -> Bool {
-        !isActionInFlight && catalogCount >= 2
-    }
-
-    static func shouldShowDivider(after index: Int, total: Int, hasFooter: Bool) -> Bool {
-        index < total - 1 || hasFooter
-    }
-}
-
-enum GameVotePresentationPolicy {
-    static func leader(in vote: GameVoteState) -> GameCatalogEntry? {
-        var leader: GameCatalogEntry?
-        var leaderVotes = -1
-        for entry in vote.candidates {
-            let count = vote.tally[entry.id] ?? 0
-            if count > leaderVotes {
-                leader = entry
-                leaderVotes = count
-            }
-        }
-        return leader
-    }
-
-    static func startLeaderTitle(_ vote: GameVoteState) -> String {
-        guard let leader = leader(in: vote) else { return "Start leader" }
-        let votes = vote.tally[leader.id] ?? 0
-        return votes > 0 ? "Start \(leader.name)" : "Start leader"
-    }
-
-    static func shouldShowCandidateDivider(after index: Int, total: Int, hasHostActions: Bool) -> Bool {
-        index < total - 1 || hasHostActions
-    }
-}
-
 struct GamesSheetView: View {
     @Bindable var viewModel: MeetingViewModel
     var bodyReady: Bool = true
     var onBack: (() -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.meetingSheetCloseAction) private var meetingSheetCloseAction
     @State private var configuringGame: GameCatalogEntry?
     @State private var gameConfigDrafts: [String: GameConfigValue] = [:]
-    @State private var bluffAnswerInput = ""
+    @State private var observedActiveGameId = ""
 
     var body: some View {
         VStack(spacing: 0) {
@@ -1606,28 +1542,20 @@ struct GamesSheetView: View {
                             errorSection(message)
                         }
 
-                        if let configuringGame,
-                           canManageGames,
-                           viewModel.state.gamePublicState == nil,
-                           viewModel.state.gameVote == nil {
+                        if let activeGame = viewModel.state.gamePublicState {
+                            liveGameSection(activeGame)
+                        } else if let configuringGame, canManageGames, viewModel.state.gameVote == nil {
                             configSection(configuringGame)
-                        } else if let activeGame = viewModel.state.gamePublicState {
-                            activeGameSection(activeGame)
-                        }
+                        } else {
+                            if let vote = viewModel.state.gameVote {
+                                voteSection(vote)
+                            }
 
-                        if configuringGame == nil,
-                           let vote = viewModel.state.gameVote {
-                            voteSection(vote)
-                        }
-
-                        if configuringGame == nil &&
-                            canManageGames &&
-                            viewModel.state.gamePublicState == nil {
-                            catalogSection
-                        } else if configuringGame == nil &&
-                                    viewModel.state.gamePublicState == nil &&
-                                    viewModel.state.gameVote == nil {
-                            idleSection
+                            if canManageGames {
+                                catalogSection
+                            } else if viewModel.state.gameVote == nil {
+                                idleSection
+                            }
                         }
                     }
                     .padding(.horizontal, ACMSpacing.lg)
@@ -1646,18 +1574,33 @@ struct GamesSheetView: View {
         #endif
         .onAppear {
             viewModel.refreshGameState()
+            observedActiveGameId = viewModel.state.gamePublicState?.gameId ?? ""
         }
         .onChange(of: viewModel.state.gamePublicState?.gameId ?? "") {
             let gameId = viewModel.state.gamePublicState?.gameId ?? ""
+            let wasActive = !observedActiveGameId.isEmpty
+            observedActiveGameId = gameId
             if !gameId.isEmpty {
                 cancelConfiguringGame()
+                // A game just went live while this sheet was open: get out of
+                // the way so the stage can show it.
+                if !wasActive {
+                    closeSheet()
+                }
             }
-            bluffAnswerInput = ""
         }
         .onChange(of: viewModel.state.gameVote?.totalPlayers ?? -1) {
             if viewModel.state.gameVote != nil {
                 cancelConfiguringGame()
             }
+        }
+    }
+
+    private func closeSheet() {
+        if let close = meetingSheetCloseAction.close {
+            close()
+        } else {
+            dismiss()
         }
     }
 
@@ -1674,7 +1617,9 @@ struct GamesSheetView: View {
         }
     }
 
-    private func activeGameSection(_ activeGame: GamePublicState) -> some View {
+    /// The game itself lives on the meeting stage now; the sheet only offers
+    /// a pointer back to it plus host controls.
+    private func liveGameSection(_ activeGame: GamePublicState) -> some View {
         let visual = GameCatalogPresentationPolicy.visual(for: activeGame.gameId)
         return VStack(alignment: .leading, spacing: ACMSpacing.xs) {
             acmListSectionHeader("Active game")
@@ -1684,15 +1629,21 @@ struct GamesSheetView: View {
                     icon: visual.icon,
                     androidIcon: visual.androidIcon,
                     title: activeGame.name,
-                    subtitle: activeGameSubtitle(activeGame),
-                    trailing: activeGame.phase,
+                    subtitle: "On stage · \(GameStageTextPolicy.playersLine(count: activeGame.players.count))",
+                    trailing: GameStageTextPolicy.phaseLabel(activeGame.phase),
                     tint: ACMColors.primaryOrange,
                     androidTint: "accent",
                     isDisabled: true
                 ) {}
 
                 MoreRowDivider()
-                activeGameDetails(activeGame)
+                MoreRow(
+                    icon: "arrow.up.forward.app",
+                    androidIcon: "grid",
+                    title: "Show game"
+                ) {
+                    closeSheet()
+                }
 
                 if canManageGames {
                     MoreRowDivider()
@@ -1709,999 +1660,6 @@ struct GamesSheetView: View {
                 }
             }
         }
-    }
-
-    @ViewBuilder
-    private func activeGameDetails(_ activeGame: GamePublicState) -> some View {
-        if !isLocalGamePlayer(activeGame) &&
-            activeGame.phase != "lobby" &&
-            activeGame.view == nil {
-            gameStatusBlock(
-                title: "Game in progress",
-                subtitle: "You can watch this round and join the next one."
-            )
-        } else if activeGame.phase == "lobby" {
-            lobbyGameDetails(activeGame)
-        } else {
-            switch activeGame.gameId {
-            case "trivia":
-                triviaGameDetails(activeGame)
-            case "reaction":
-                reactionGameDetails(activeGame)
-            case "most-likely-to":
-                mostLikelyGameDetails(activeGame)
-            case "would-you-rather":
-                wouldYouRatherGameDetails(activeGame)
-            case "bluff":
-                bluffGameDetails(activeGame)
-            case "imposter":
-                imposterGameDetails(activeGame)
-            case "wordle":
-                WordleGameView(
-                    viewModel: viewModel,
-                    activeGame: activeGame,
-                    publicView: activeGame.view,
-                    playerView: playerGameView(for: activeGame),
-                    canPlay: canPlayActiveGame(activeGame),
-                    canManage: canManageGames
-                )
-            default:
-                genericGameDetails(activeGame)
-            }
-        }
-    }
-
-    private func lobbyGameDetails(_ activeGame: GamePublicState) -> some View {
-        VStack(alignment: .leading, spacing: ACMSpacing.sm) {
-            gameStatusBlock(
-                title: "Waiting to start",
-                subtitle: activeGame.players.map(\.name).filter { !$0.isEmpty }.joined(separator: ", ")
-            )
-
-            if canManageGames {
-                gameActionButton(
-                    title: "Start",
-                    tint: ACMColors.primaryOrange,
-                    isDisabled: viewModel.state.isGameActionInFlight
-                ) {
-                    viewModel.sendGameMove(type: "start")
-                }
-            }
-        }
-        .padding(.horizontal, ACMSpacing.sm)
-        .padding(.vertical, ACMSpacing.sm)
-    }
-
-    private func triviaGameDetails(_ activeGame: GamePublicState) -> some View {
-        let publicView = activeGame.view
-        let playerView = playerGameView(for: activeGame)
-        let phase = publicView?.string("phase") ?? activeGame.phase
-        let options = publicView?.stringArray("options") ?? []
-        let reveal = phase == "reveal"
-        let results = phase == "results"
-        let answered = playerView?.bool("answered") ?? false
-        let selectedChoice = playerView?.int("choice")
-        let correctChoice = publicView?.int("correctIndex")
-        let counts = publicView?.intArray("optionCounts") ?? []
-        let canAnswer = canPlayActiveGame(activeGame) && phase == "question" && !answered && !viewModel.state.isGameActionInFlight
-
-        return VStack(alignment: .leading, spacing: ACMSpacing.sm) {
-            gameStatusBlock(
-                title: results ? "Final scores" : gameProgressTitle(publicView, fallback: "Question"),
-                subtitle: results ? triviaWinnerText(publicView) : publicView?.string("prompt") ?? "Waiting for the question."
-            )
-
-            if results {
-                scoreboardBlock(publicView)
-            } else {
-                ForEach(Array(options.enumerated()), id: \.offset) { index, option in
-                    gameChoiceButton(
-                        title: option,
-                        subtitle: reveal && index < counts.count ? "\(counts[index]) picked" : nil,
-                        isSelected: selectedChoice == index,
-                        isCorrect: reveal ? correctChoice == index : nil,
-                        isDisabled: !canAnswer
-                    ) {
-                        viewModel.sendGameMove(
-                            type: "answer",
-                            payload: GameJSONValue.object(["choice": index])
-                        )
-                    }
-                }
-            }
-
-            if let playerView {
-                gameMetaLine(triviaPlayerStatus(playerView, phase: phase))
-            }
-
-            hostRoundControls(phase: phase)
-        }
-        .padding(.horizontal, ACMSpacing.sm)
-        .padding(.vertical, ACMSpacing.sm)
-    }
-
-    private func reactionGameDetails(_ activeGame: GamePublicState) -> some View {
-        let publicView = activeGame.view
-        let playerView = playerGameView(for: activeGame)
-        let phase = publicView?.string("phase") ?? activeGame.phase
-        let tapped = playerView?.bool("tapped") ?? false
-        let early = playerView?.bool("early") ?? false
-        let reactionMs = playerView?.int("reactionMs")
-        let canTap = canPlayActiveGame(activeGame)
-            && (phase == "arming" || phase == "go")
-            && !tapped
-            && !viewModel.state.isGameActionInFlight
-
-        return VStack(alignment: .leading, spacing: ACMSpacing.sm) {
-            gameStatusBlock(
-                title: reactionTitle(phase: phase, tapped: tapped, early: early, reactionMs: reactionMs),
-                subtitle: reactionSubtitle(publicView, phase: phase)
-            )
-
-            if phase == "arming" || phase == "go" {
-                reactionTapPad(phase: phase, tapped: tapped, early: early, reactionMs: reactionMs, canTap: canTap)
-            } else if phase == "reveal" {
-                reactionResultsBlock(publicView)
-            } else if phase == "results" {
-                scoreboardBlock(publicView)
-            }
-
-            hostRoundControls(phase: phase)
-        }
-        .padding(.horizontal, ACMSpacing.sm)
-        .padding(.vertical, ACMSpacing.sm)
-    }
-
-    private func mostLikelyGameDetails(_ activeGame: GamePublicState) -> some View {
-        let publicView = activeGame.view
-        let playerView = playerGameView(for: activeGame)
-        let phase = publicView?.string("phase") ?? activeGame.phase
-        let players = publicView?.objectArray("players") ?? []
-        let votedFor = playerView?.string("yourVote")
-        let voteCounts = GameDetailsPresentationPolicy.intMap(from: publicView, key: "counts")
-        let maxVoteCount = max(1, voteCounts.values.max() ?? 0)
-        let reveal = phase == "reveal"
-        let canVote = canPlayActiveGame(activeGame)
-            && phase == "vote"
-            && !viewModel.state.isGameActionInFlight
-
-        return VStack(alignment: .leading, spacing: ACMSpacing.sm) {
-            gameStatusBlock(
-                title: gameProgressTitle(publicView, fallback: "Vote"),
-                subtitle: publicView?.string("prompt") ?? "Waiting for the prompt."
-            )
-
-            if reveal, let winner = publicView?.string("winnerName"), !winner.isEmpty {
-                gameMetaLine("Most votes: \(winner)")
-            }
-
-            if phase == "vote" || reveal {
-                ForEach(players.compactMap(gamePlayerOption), id: \.id) { player in
-                    let voteCount = voteCounts[player.id] ?? 0
-                    gameChoiceButton(
-                        title: player.name,
-                        subtitle: reveal ? voteCountText(voteCount) : nil,
-                        trailing: reveal && voteCount > 0 ? "\(voteCount)" : nil,
-                        isSelected: votedFor == player.id,
-                        isCorrect: reveal ? player.id == publicView?.string("winnerId") : nil,
-                        fillRatio: reveal ? Double(voteCount) / Double(maxVoteCount) : nil,
-                        isDisabled: !canVote || reveal
-                    ) {
-                        viewModel.sendGameMove(
-                            type: "vote",
-                            payload: GameJSONValue.object(["target": player.id])
-                        )
-                    }
-                }
-            } else if phase == "results" {
-                gameStatusBlock(title: "That is a wrap", subtitle: "No hard feelings.")
-            }
-
-            hostRoundControls(phase: phase)
-        }
-        .padding(.horizontal, ACMSpacing.sm)
-        .padding(.vertical, ACMSpacing.sm)
-    }
-
-    private func wouldYouRatherGameDetails(_ activeGame: GamePublicState) -> some View {
-        let publicView = activeGame.view
-        let playerView = playerGameView(for: activeGame)
-        let phase = publicView?.string("phase") ?? activeGame.phase
-        let selected = playerView?.int("choice")
-        let canChoose = canPlayActiveGame(activeGame)
-            && phase == "choose"
-            && !viewModel.state.isGameActionInFlight
-        let counts = publicView?.intArray("counts") ?? []
-        let reveal = phase == "reveal"
-
-        return VStack(alignment: .leading, spacing: ACMSpacing.sm) {
-            gameStatusBlock(
-                title: gameProgressTitle(publicView, fallback: "Choose"),
-                subtitle: reveal ? "The room split." : "Pick a side."
-            )
-
-            gameChoiceButton(
-                title: publicView?.string("optionA") ?? "Option A",
-                subtitle: reveal && !counts.isEmpty ? "\(counts[0]) picked" : nil,
-                isSelected: selected == 0,
-                isDisabled: !canChoose || reveal
-            ) {
-                viewModel.sendGameMove(
-                    type: "choose",
-                    payload: GameJSONValue.object(["option": 0])
-                )
-            }
-
-            gameChoiceButton(
-                title: publicView?.string("optionB") ?? "Option B",
-                subtitle: reveal && counts.count > 1 ? "\(counts[1]) picked" : nil,
-                isSelected: selected == 1,
-                isDisabled: !canChoose || reveal
-            ) {
-                viewModel.sendGameMove(
-                    type: "choose",
-                    payload: GameJSONValue.object(["option": 1])
-                )
-            }
-
-            if reveal {
-                wouldYouRatherRevealSummary(publicView)
-            }
-
-            hostRoundControls(phase: phase)
-        }
-        .padding(.horizontal, ACMSpacing.sm)
-        .padding(.vertical, ACMSpacing.sm)
-    }
-
-    private func bluffGameDetails(_ activeGame: GamePublicState) -> some View {
-        let publicView = activeGame.view
-        let playerView = playerGameView(for: activeGame)
-        let phase = publicView?.string("phase") ?? activeGame.phase
-        let question = publicView?.string("question") ?? "Waiting for the prompt."
-        let submitted = playerView?.bool("submitted") ?? false
-        let yourFake = playerView?.string("yourFake")
-        let yourPick = playerView?.string("yourPick")
-        let ownOptionId = playerView?.string("ownOptionId")
-        let score = playerView?.int("score")
-        let optionRows = publicView?.objectArray("options") ?? []
-        let options = optionRows.compactMap(bluffOption)
-        let canSubmit = canPlayActiveGame(activeGame)
-            && phase == "write"
-            && !submitted
-            && !trimmedBluffAnswer.isEmpty
-            && !viewModel.state.isGameActionInFlight
-        let canChoose = canPlayActiveGame(activeGame)
-            && phase == "choose"
-            && !viewModel.state.isGameActionInFlight
-
-        return VStack(alignment: .leading, spacing: ACMSpacing.sm) {
-            gameStatusBlock(
-                title: bluffTitle(publicView, phase: phase),
-                subtitle: question
-            )
-
-            if phase == "write" {
-                if submitted {
-                    gameMetaLine(bluffSubmittedText(yourFake))
-                } else {
-                    TextField("", text: bluffAnswerBinding, prompt: Text("Your bluff").foregroundStyle(ACMColors.textFaint))
-                        .font(ACMFont.trial(14))
-                        .foregroundStyle(ACMColors.text)
-                        #if !SKIP
-                        .autocorrectionDisabled(false)
-                        #endif
-                        .padding(.horizontal, ACMSpacing.sm)
-                        .frame(minHeight: 44)
-                        .background {
-                            RoundedRectangle(cornerRadius: ACMRadius.md, style: .continuous)
-                                .fill(ACMColors.surfaceRaised)
-                        }
-                        .overlay {
-                            RoundedRectangle(cornerRadius: ACMRadius.md, style: .continuous)
-                                .strokeBorder(lineWidth: 1)
-                                .foregroundStyle(ACMColors.border)
-                        }
-
-                    gameActionButton(
-                        title: "Submit bluff",
-                        tint: ACMColors.primaryOrange,
-                        isDisabled: !canSubmit
-                    ) {
-                        submitBluffAnswer()
-                    }
-                }
-            } else if phase == "choose" {
-                ForEach(options) { option in
-                    let isOwnOption = option.id == ownOptionId
-                    gameChoiceButton(
-                        title: option.text,
-                        subtitle: isOwnOption ? "Your bluff" : nil,
-                        isSelected: yourPick == option.id,
-                        isDisabled: !canChoose || isOwnOption
-                    ) {
-                        viewModel.sendGameMove(
-                            type: "choose",
-                            payload: GameJSONValue.object(["optionId": option.id])
-                        )
-                    }
-                }
-            } else if phase == "reveal" {
-                ForEach(options) { option in
-                    gameChoiceButton(
-                        title: option.text,
-                        subtitle: option.subtitle,
-                        isSelected: yourPick == option.id,
-                        isCorrect: option.isReal,
-                        isDisabled: true
-                    ) {}
-                }
-                if let roundPoints = GameDetailsPresentationPolicy.roundPointsSummary(from: publicView) {
-                    gameMetaLine(roundPoints)
-                }
-            } else if phase == "results" {
-                scoreboardBlock(publicView)
-            }
-
-            if let score {
-                gameMetaLine("\(score) points")
-            }
-
-            hostBluffControls(phase: phase)
-        }
-        .padding(.horizontal, ACMSpacing.sm)
-        .padding(.vertical, ACMSpacing.sm)
-    }
-
-    private func imposterGameDetails(_ activeGame: GamePublicState) -> some View {
-        let publicView = activeGame.view
-        let playerView = playerGameView(for: activeGame)
-        let phase = publicView?.string("phase") ?? activeGame.phase
-        let playerRows = publicView?.objectArray("players") ?? []
-        let players = playerRows.compactMap(gamePlayerOption)
-        let yourVote = playerView?.string("yourVote")
-        let canVote = canPlayActiveGame(activeGame)
-            && phase == "vote"
-            && !viewModel.state.isGameActionInFlight
-
-        return VStack(alignment: .leading, spacing: ACMSpacing.sm) {
-            gameStatusBlock(
-                title: imposterTitle(publicView: publicView, playerView: playerView, phase: phase),
-                subtitle: imposterSubtitle(publicView: publicView, playerView: playerView, phase: phase)
-            )
-
-            if phase == "vote" {
-                ForEach(players) { player in
-                    let isSelf = viewModel.state.isLocalIdentityUserId(player.id)
-                    gameChoiceButton(
-                        title: player.name,
-                        subtitle: imposterVoteSubtitle(publicView, playerId: player.id, isSelf: isSelf),
-                        isSelected: yourVote == player.id,
-                        isDisabled: !canVote || isSelf
-                    ) {
-                        viewModel.sendGameMove(
-                            type: "vote",
-                            payload: GameJSONValue.object(["target": player.id])
-                        )
-                    }
-                }
-            } else if phase == "result" {
-                imposterResultBlock(publicView)
-            }
-
-            hostImposterControls(phase: phase)
-        }
-        .padding(.horizontal, ACMSpacing.sm)
-        .padding(.vertical, ACMSpacing.sm)
-    }
-
-    private func genericGameDetails(_ activeGame: GamePublicState) -> some View {
-        VStack(alignment: .leading, spacing: ACMSpacing.sm) {
-            gameStatusBlock(
-                title: activeGame.phase.capitalized,
-                subtitle: activeGameSubtitle(activeGame)
-            )
-            hostRoundControls(phase: activeGame.phase)
-        }
-        .padding(.horizontal, ACMSpacing.sm)
-        .padding(.vertical, ACMSpacing.sm)
-    }
-
-    private func gameStatusBlock(title: String, subtitle: String?) -> some View {
-        HStack(alignment: .top, spacing: ACMSpacing.sm) {
-            RoundedRectangle(cornerRadius: 2, style: .continuous)
-                .fill(ACMColors.primaryOrange)
-                .frame(width: 3)
-                .frame(maxHeight: .infinity)
-
-            VStack(alignment: .leading, spacing: 5) {
-                Text(title)
-                    .font(ACMFont.trial(16, weight: .semibold))
-                    .foregroundStyle(ACMColors.text)
-                    .lineLimit(2)
-
-                if let subtitle = subtitle?.trimmingCharacters(in: .whitespacesAndNewlines),
-                   !subtitle.isEmpty {
-                    Text(subtitle)
-                        .font(ACMFont.trial(13))
-                        .foregroundStyle(ACMColors.textMuted)
-                        .lineLimit(4)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private func gameMetaLine(_ text: String) -> some View {
-        Text(text)
-            .font(ACMFont.trial(12, weight: .medium))
-            .foregroundStyle(ACMColors.textFaint)
-            .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private func gameChoiceButton(
-        title: String,
-        subtitle: String? = nil,
-        trailing: String? = nil,
-        isSelected: Bool = false,
-        isCorrect: Bool? = nil,
-        fillRatio: Double? = nil,
-        isDisabled: Bool = false,
-        action: @escaping () -> Void
-    ) -> some View {
-        let resolvedTint: Color = {
-            if isCorrect == true { return ACMColors.success }
-            if isCorrect == false && isSelected { return ACMColors.error }
-            if isSelected { return ACMColors.primaryOrange }
-            return ACMColors.text
-        }()
-
-        return Button(action: action) {
-            HStack(spacing: ACMSpacing.sm) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title)
-                        .font(ACMFont.trial(14, weight: .medium))
-                        .foregroundStyle(resolvedTint)
-                        .lineLimit(3)
-                    if let subtitle = subtitle?.trimmingCharacters(in: .whitespacesAndNewlines),
-                       !subtitle.isEmpty {
-                        Text(subtitle)
-                            .font(ACMFont.trial(12))
-                            .foregroundStyle(ACMColors.textFaint)
-                            .lineLimit(1)
-                    }
-                }
-
-                Spacer(minLength: ACMSpacing.sm)
-
-                if let trailing = trailing?.trimmingCharacters(in: .whitespacesAndNewlines),
-                   !trailing.isEmpty {
-                    Text(trailing)
-                        .font(ACMFont.trial(12, weight: .semibold))
-                        .foregroundStyle(resolvedTint)
-                        .lineLimit(1)
-                }
-
-                if isSelected {
-                    Image(systemName: "checkmark")
-                        .font(.system(size: 12, weight: .bold))
-                        .foregroundStyle(resolvedTint)
-                }
-            }
-            .padding(.horizontal, ACMSpacing.sm)
-            .padding(.vertical, 10)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background { gameChoiceBackground(isSelected: isSelected, tint: resolvedTint, fillRatio: fillRatio) }
-            .overlay {
-                RoundedRectangle(cornerRadius: ACMRadius.md, style: .continuous)
-                    .strokeBorder(isSelected ? resolvedTint.opacity(0.44) : ACMColors.border, lineWidth: 1)
-            }
-        }
-        .buttonStyle(.plain)
-        .disabled(isDisabled)
-        .opacity(isDisabled && !isSelected ? 0.56 : 1.0)
-    }
-
-    private func gameChoiceBackground(isSelected: Bool, tint: Color, fillRatio: Double?) -> some View {
-        ZStack(alignment: .leading) {
-            RoundedRectangle(cornerRadius: ACMRadius.md, style: .continuous)
-                .fill(isSelected ? tint.opacity(0.12) : ACMColors.surfaceRaised)
-            if let fillRatio {
-                GeometryReader { geometry in
-                    RoundedRectangle(cornerRadius: ACMRadius.md, style: .continuous)
-                        .fill(tint.opacity(0.10))
-                        .frame(width: geometry.size.width * min(1.0, max(0.0, fillRatio)))
-                }
-            }
-        }
-    }
-
-    private func reactionTapPad(
-        phase: String,
-        tapped: Bool,
-        early: Bool,
-        reactionMs: Int?,
-        canTap: Bool
-    ) -> some View {
-        let isGo = phase == "go"
-        let tint: Color = early ? ACMColors.error : (isGo ? ACMColors.success : ACMColors.errorDim)
-        let title: String = {
-            if early { return "Too soon" }
-            if let reactionMs { return "\(reactionMs) ms" }
-            if tapped { return "Locked in" }
-            return isGo ? "TAP" : "Wait for green"
-        }()
-        let subtitle = isGo && !tapped ? "Tap anywhere on this panel." : "Round in progress."
-
-        return Button {
-            viewModel.sendGameMove(type: "tap")
-        } label: {
-            VStack(spacing: 6) {
-                Text(title)
-                    .font(ACMFont.trial(isGo && !tapped ? 30.0 : 22.0, weight: .bold))
-                    .foregroundStyle(Color.white)
-                    .lineLimit(1)
-                Text(subtitle)
-                    .font(ACMFont.trial(12, weight: .medium))
-                    .foregroundStyle(Color.white.opacity(0.78))
-                    .lineLimit(1)
-            }
-            .frame(maxWidth: .infinity)
-            .frame(minHeight: 132)
-            .background(tint, in: RoundedRectangle(cornerRadius: ACMRadius.md, style: .continuous))
-        }
-        .buttonStyle(.plain)
-        .disabled(!canTap)
-        .opacity(canTap ? 1.0 : 0.82)
-    }
-
-    private func reactionResultsBlock(_ view: GameJSONValue?) -> some View {
-        let rows = GameDetailsPresentationPolicy.reactionResultRows(from: view)
-        return VStack(spacing: 6) {
-            if rows.isEmpty {
-                gameMetaLine("Results are not available yet.")
-            } else {
-                ForEach(rows) { row in
-                    HStack(spacing: ACMSpacing.sm) {
-                        Text("\(row.rank)")
-                            .font(ACMFont.trial(13, weight: .bold))
-                            .foregroundStyle(row.isWinner ? ACMColors.primaryOrange : ACMColors.textFaint)
-                            .frame(width: 22, alignment: .center)
-                        Text(row.name)
-                            .font(ACMFont.trial(14, weight: .medium))
-                            .foregroundStyle(ACMColors.text)
-                            .lineLimit(1)
-                        Spacer(minLength: ACMSpacing.xs)
-                        Text(row.resultText)
-                            .font(ACMFont.trial(13, weight: .semibold))
-                            .foregroundStyle(row.isEarly ? ACMColors.error : ACMColors.textMuted)
-                    }
-                    .padding(.horizontal, ACMSpacing.sm)
-                    .frame(minHeight: 40)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background {
-                        RoundedRectangle(cornerRadius: ACMRadius.md, style: .continuous)
-                            .fill(row.isWinner ? ACMColors.primaryOrange.opacity(0.10) : ACMColors.surfaceRaised)
-                    }
-                    .overlay {
-                        RoundedRectangle(cornerRadius: ACMRadius.md, style: .continuous)
-                            .strokeBorder(row.isWinner ? ACMColors.primaryOrange.opacity(0.34) : ACMColors.border, lineWidth: 1)
-                    }
-                }
-            }
-        }
-    }
-
-    private func wouldYouRatherRevealSummary(_ view: GameJSONValue?) -> some View {
-        let counts = view?.intArray("counts") ?? []
-        let first = counts.count > 0 ? counts[0] : 0
-        let second = counts.count > 1 ? counts[1] : 0
-        let total = max(1, first + second)
-        let firstNames = GameDetailsPresentationPolicy.namesSummary(view?.stringArray("namesA") ?? [])
-        let secondNames = GameDetailsPresentationPolicy.namesSummary(view?.stringArray("namesB") ?? [])
-
-        return VStack(alignment: .leading, spacing: ACMSpacing.xs) {
-            GeometryReader { geometry in
-                HStack(spacing: 0) {
-                    Rectangle()
-                        .fill(ACMColors.primaryOrange)
-                        .frame(width: geometry.size.width * Double(first) / Double(total))
-                    Rectangle()
-                        .fill(ACMColors.accentSecondary)
-                }
-            }
-            .frame(height: 10)
-            .clipShape(Capsule())
-
-            HStack(alignment: .top, spacing: ACMSpacing.sm) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("\(first) picked")
-                        .font(ACMFont.trial(12, weight: .semibold))
-                        .foregroundStyle(ACMColors.primaryOrange)
-                    Text(firstNames)
-                        .font(ACMFont.trial(12))
-                        .foregroundStyle(ACMColors.textFaint)
-                        .lineLimit(3)
-                }
-                Spacer(minLength: ACMSpacing.sm)
-                VStack(alignment: .trailing, spacing: 2) {
-                    Text("\(second) picked")
-                        .font(ACMFont.trial(12, weight: .semibold))
-                        .foregroundStyle(ACMColors.accentSecondary)
-                    Text(secondNames)
-                        .font(ACMFont.trial(12))
-                        .foregroundStyle(ACMColors.textFaint)
-                        .lineLimit(3)
-                }
-            }
-        }
-    }
-
-    private func gameActionButton(
-        title: String,
-        tint: Color,
-        isDisabled: Bool,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            Text(title)
-                .font(ACMFont.trial(14, weight: .semibold))
-                .foregroundStyle(Color.white)
-                .lineLimit(1)
-                .frame(maxWidth: .infinity)
-                .frame(minHeight: 42)
-                .background(
-                    isDisabled ? ACMColors.surfaceRaised : tint,
-                    in: RoundedRectangle(cornerRadius: ACMRadius.md, style: .continuous)
-                )
-        }
-        .buttonStyle(.plain)
-        .disabled(isDisabled)
-        .opacity(isDisabled ? 0.62 : 1.0)
-    }
-
-    @ViewBuilder
-    private func hostRoundControls(phase: String) -> some View {
-        if canManageGames {
-            if phase == "question" || phase == "vote" || phase == "choose" {
-                gameActionButton(
-                    title: phase == "question" ? "Skip" : "Reveal",
-                    tint: ACMColors.primaryOrange,
-                    isDisabled: viewModel.state.isGameActionInFlight
-                ) {
-                    viewModel.sendGameMove(type: "skip")
-                }
-            } else if phase == "reveal" {
-                gameActionButton(
-                    title: "Next",
-                    tint: ACMColors.primaryOrange,
-                    isDisabled: viewModel.state.isGameActionInFlight
-                ) {
-                    viewModel.sendGameMove(type: "next")
-                }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func hostBluffControls(phase: String) -> some View {
-        if canManageGames {
-            if phase == "write" || phase == "choose" {
-                gameActionButton(
-                    title: phase == "write" ? "Skip writing" : "Reveal",
-                    tint: ACMColors.primaryOrange,
-                    isDisabled: viewModel.state.isGameActionInFlight
-                ) {
-                    viewModel.sendGameMove(type: "skip")
-                }
-            } else if phase == "reveal" {
-                gameActionButton(
-                    title: "Next",
-                    tint: ACMColors.primaryOrange,
-                    isDisabled: viewModel.state.isGameActionInFlight
-                ) {
-                    viewModel.sendGameMove(type: "next")
-                }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func hostImposterControls(phase: String) -> some View {
-        if canManageGames {
-            if phase == "discuss" {
-                gameActionButton(
-                    title: "Call vote",
-                    tint: ACMColors.primaryOrange,
-                    isDisabled: viewModel.state.isGameActionInFlight
-                ) {
-                    viewModel.sendGameMove(type: "callVote")
-                }
-            } else if phase == "vote" {
-                gameActionButton(
-                    title: "End vote",
-                    tint: ACMColors.primaryOrange,
-                    isDisabled: viewModel.state.isGameActionInFlight
-                ) {
-                    viewModel.sendGameMove(type: "tally")
-                }
-            }
-        }
-    }
-
-    private func playerGameView(for activeGame: GamePublicState) -> GameJSONValue? {
-        guard viewModel.state.gamePlayerView?.gameId == activeGame.gameId else { return nil }
-        return viewModel.state.gamePlayerView?.view
-    }
-
-    private func canPlayActiveGame(_ activeGame: GamePublicState) -> Bool {
-        viewModel.state.connectionState == .joined
-            && !viewModel.state.isWebinarAttendee
-            && isLocalGamePlayer(activeGame)
-    }
-
-    private func isLocalGamePlayer(_ activeGame: GamePublicState) -> Bool {
-        viewModel.state.hasLocalGamePlayer(in: activeGame.players)
-    }
-
-    private func gameProgressTitle(_ view: GameJSONValue?, fallback: String) -> String {
-        let index = view?.int("questionIndex") ?? view?.int("index")
-        let total = view?.int("totalQuestions") ?? view?.int("total")
-        let category = view?.string("category")
-        if let index, let total, total > 0 {
-            let prefix = category.flatMap { $0.isEmpty ? nil : "\($0) - " } ?? ""
-            return "\(prefix)\(index + 1)/\(total)"
-        }
-        if let category, !category.isEmpty {
-            return category
-        }
-        return fallback
-    }
-
-    private func reactionTitle(phase: String, tapped: Bool, early: Bool, reactionMs: Int?) -> String {
-        if early { return "Too early" }
-        if let reactionMs { return "\(reactionMs) ms" }
-        if tapped { return "Locked in" }
-        if phase == "go" { return "TAP" }
-        if phase == "reveal" { return "Round result" }
-        return "Wait"
-    }
-
-    private func reactionSubtitle(_ view: GameJSONValue?, phase: String) -> String {
-        if let winner = view?.string("winnerName"), !winner.isEmpty {
-            return "Fastest: \(winner)"
-        }
-        let tapped = view?.int("tappedCount") ?? 0
-        let total = view?.int("totalPlayers") ?? 0
-        if total > 0 {
-            return "\(tapped)/\(total) tapped"
-        }
-        return phase.capitalized
-    }
-
-    private func triviaWinnerText(_ view: GameJSONValue?) -> String {
-        let rows = GameDetailsPresentationPolicy.scoreboardRows(from: view)
-        guard let winner = rows.first else { return "Scores are not available yet." }
-        return "\(winner.name) wins with \(winner.score)"
-    }
-
-    private func triviaPlayerStatus(_ playerView: GameJSONValue, phase: String) -> String {
-        if phase == "reveal" {
-            if playerView.bool("correct") == true {
-                let points = playerView.int("lastRoundPoints") ?? 0
-                return points > 0 ? "Correct +\(points)" : "Correct"
-            }
-            if playerView.bool("answered") == true {
-                return "Not quite"
-            }
-            return "Time's up"
-        }
-        let score = playerView.int("score") ?? 0
-        let rank = playerView.int("rank")
-        let rankSuffix = rank.map { " - #\($0)" } ?? ""
-        return "\(score) points\(rankSuffix)"
-    }
-
-    private var trimmedBluffAnswer: String {
-        bluffAnswerInput.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private var bluffAnswerBinding: Binding<String> {
-        Binding(
-            get: { bluffAnswerInput },
-            set: { value in
-                bluffAnswerInput = String(value.prefix(60))
-            }
-        )
-    }
-
-    private func submitBluffAnswer() {
-        let answer = trimmedBluffAnswer
-        guard !answer.isEmpty else { return }
-        viewModel.sendGameMove(
-            type: "submit",
-            payload: GameJSONValue.object(["text": answer])
-        )
-        bluffAnswerInput = ""
-    }
-
-    private func bluffTitle(_ view: GameJSONValue?, phase: String) -> String {
-        let round = view?.int("round")
-        let total = view?.int("totalRounds")
-        let prefix: String
-        if let round, let total, total > 0 {
-            prefix = "\(round + 1)/\(total) - "
-        } else {
-            prefix = ""
-        }
-        switch phase {
-        case "write":
-            return "\(prefix)Write a bluff"
-        case "choose":
-            return "\(prefix)Find the truth"
-        case "reveal":
-            return "\(prefix)Reveal"
-        case "results":
-            return "Final scores"
-        default:
-            return phase.capitalized
-        }
-    }
-
-    private func bluffSubmittedText(_ value: String?) -> String {
-        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return trimmed.isEmpty ? "Bluff submitted" : "Submitted: \(trimmed)"
-    }
-
-    private func bluffOption(_ row: [String: Any]) -> GameChoiceOption? {
-        guard let id = row["id"] as? String else { return nil }
-        let text = (row["text"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let text, !text.isEmpty else { return nil }
-        let kind = row["kind"] as? String
-        let votes = intValue(row["votes"])
-        let ownerName = (row["ownerName"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let subtitleParts = [
-            kind == "real" ? "Truth" : (ownerName?.isEmpty == false ? ownerName : nil),
-            votes.map { count in count == 1 ? "1 vote" : "\(count) votes" }
-        ].compactMap { $0 }
-        return GameChoiceOption(
-            id: id,
-            text: text,
-            subtitle: subtitleParts.isEmpty ? nil : subtitleParts.joined(separator: " - "),
-            isReal: kind == nil ? nil : kind == "real"
-        )
-    }
-
-    @ViewBuilder
-    private func scoreboardBlock(_ view: GameJSONValue?) -> some View {
-        let rows = GameDetailsPresentationPolicy.scoreboardRows(from: view)
-        if rows.isEmpty {
-            gameMetaLine("Scores are not available yet.")
-        } else {
-            VStack(spacing: 6) {
-                ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
-                    scoreboardLeaderRow(rank: index + 1, name: row.name, score: row.score)
-                }
-            }
-        }
-    }
-
-    private func scoreboardLeaderRow(rank: Int, name: String, score: Int) -> some View {
-        let rankColor: Color = {
-            switch rank {
-            case 1: return ACMColors.primaryOrange
-            case 2, 3: return ACMColors.textMuted
-            default: return ACMColors.textFaint
-            }
-        }()
-        let isLeader = rank == 1
-        return HStack(spacing: ACMSpacing.sm) {
-            Text("\(rank)")
-                .font(ACMFont.trial(14, weight: .bold))
-                .foregroundStyle(rankColor)
-                .frame(width: 22, alignment: .center)
-
-            Text(name)
-                .font(ACMFont.trial(14, weight: .medium))
-                .foregroundStyle(ACMColors.text)
-                .lineLimit(1)
-
-            Spacer(minLength: ACMSpacing.xs)
-
-            Text("\(score)")
-                .font(ACMFont.trial(14, weight: .semibold))
-                .foregroundStyle(rankColor)
-        }
-        .padding(.horizontal, ACMSpacing.sm)
-        .frame(minHeight: 40)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background {
-            RoundedRectangle(cornerRadius: ACMRadius.md, style: .continuous)
-                .fill(isLeader ? ACMColors.primaryOrange.opacity(0.10) : ACMColors.surfaceRaised)
-        }
-        .overlay {
-            RoundedRectangle(cornerRadius: ACMRadius.md, style: .continuous)
-                .strokeBorder(isLeader ? ACMColors.primaryOrange.opacity(0.34) : ACMColors.border, lineWidth: 1)
-        }
-    }
-
-    private func imposterTitle(publicView: GameJSONValue?, playerView: GameJSONValue?, phase: String) -> String {
-        switch phase {
-        case "reveal", "discuss":
-            if playerView?.string("role") == "imposter" {
-                return "You are the imposter"
-            }
-            let word = playerView?.string("word")?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            return word.isEmpty ? "Secret word" : "Secret word: \(word)"
-        case "vote":
-            return "Vote out the imposter"
-        case "result":
-            return imposterResultTitle(publicView)
-        default:
-            return phase.capitalized
-        }
-    }
-
-    private func imposterSubtitle(publicView: GameJSONValue?, playerView: GameJSONValue?, phase: String) -> String? {
-        if phase == "vote" {
-            let voted = publicView?.stringArray("votedPlayerIds").count ?? 0
-            let total = publicView?.int("totalPlayers") ?? 0
-            return total > 0 ? "\(voted)/\(total) voted" : nil
-        }
-
-        let category = playerView?.string("category") ?? publicView?.string("category")
-        let starter = publicView?.string("starterName")
-        if phase == "discuss",
-           let starter,
-           !starter.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            let prefix = category.flatMap { $0.isEmpty ? nil : "\($0) - " } ?? ""
-            return "\(prefix)\(starter) starts"
-        }
-        return category?.isEmpty == false ? category : nil
-    }
-
-    private func imposterVoteSubtitle(_ view: GameJSONValue?, playerId: String, isSelf: Bool) -> String? {
-        if isSelf { return "You" }
-        let counts = view?.dictionaryValue?["voteCounts"] as? [String: Any]
-        guard let count = intValue(counts?[playerId]), count > 0 else { return nil }
-        return count == 1 ? "1 vote" : "\(count) votes"
-    }
-
-    @ViewBuilder
-    private func imposterResultBlock(_ view: GameJSONValue?) -> some View {
-        if let result = view?.dictionaryValue?["result"] as? [String: Any] {
-            let word = (result["word"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let imposter = (result["imposterName"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let votedOut = (result["votedOutName"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            if !word.isEmpty {
-                gameMetaLine("Word: \(word)")
-            }
-            if !imposter.isEmpty {
-                gameMetaLine("Imposter: \(imposter)")
-            }
-            if !votedOut.isEmpty {
-                gameMetaLine("Voted out: \(votedOut)")
-            }
-        } else {
-            gameMetaLine("Result pending")
-        }
-    }
-
-    private func imposterResultTitle(_ view: GameJSONValue?) -> String {
-        guard let result = view?.dictionaryValue?["result"] as? [String: Any] else {
-            return "Result"
-        }
-        if boolValue(result["tie"]) == true {
-            return "Vote tied"
-        }
-        return boolValue(result["crewWon"]) == true ? "Crew wins" : "Imposter wins"
-    }
-
-    private func gamePlayerOption(_ row: [String: Any]) -> GamePlayer? {
-        guard let id = row["id"] as? String else { return nil }
-        let name = (row["name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return GamePlayer(id: id, name: name?.isEmpty == false ? name! : id)
     }
 
     private func voteSection(_ vote: GameVoteState) -> some View {
@@ -2767,10 +1725,6 @@ struct GamesSheetView: View {
                 }
             }
         }
-    }
-
-    private func voteCountText(_ count: Int) -> String {
-        count == 1 ? "1 vote" : "\(count) votes"
     }
 
     private func configSection(_ game: GameCatalogEntry) -> some View {
@@ -2967,6 +1921,7 @@ struct GamesSheetView: View {
                 icon: "gamecontroller",
                 androidIcon: "sports_esports",
                 title: "No active game",
+                subtitle: "The host can start one from here",
                 isDisabled: true
             ) {}
         }
@@ -3053,12 +2008,6 @@ struct GamesSheetView: View {
             && !viewModel.state.isWebinarAttendee
     }
 
-    private func activeGameSubtitle(_ game: GamePublicState) -> String {
-        let count = game.players.count
-        let noun = count == 1 ? "player" : "players"
-        return "\(count) \(noun)"
-    }
-
     private func beginConfiguringGame(_ game: GameCatalogEntry) {
         configuringGame = game
         gameConfigDrafts = GameConfigDraftPolicy.initialDrafts(for: game)
@@ -3103,235 +2052,6 @@ struct GamesSheetView: View {
 
     private func defaultOptions(for game: GameCatalogEntry) -> [String: GameConfigValue] {
         GameConfigDraftPolicy.initialDrafts(for: game)
-    }
-
-    private func intValue(_ value: Any?) -> Int? {
-        if let intValue = value as? Int { return intValue }
-        if let doubleValue = value as? Double { return Int(doubleValue) }
-        if let numberValue = value as? NSNumber { return numberValue.intValue }
-        return nil
-    }
-
-    private func boolValue(_ value: Any?) -> Bool? {
-        if let boolValue = value as? Bool { return boolValue }
-        if let intValue = value as? Int { return intValue != 0 }
-        if let doubleValue = value as? Double { return doubleValue != 0.0 }
-        if let numberValue = value as? NSNumber { return numberValue.intValue != 0 }
-        return nil
-    }
-}
-
-struct GameChoiceOption: Identifiable, Equatable {
-    let id: String
-    let text: String
-    let subtitle: String?
-    let isReal: Bool?
-}
-
-struct GameScoreRow: Identifiable, Equatable {
-    let id: String
-    let name: String
-    let score: Int
-}
-
-struct GameReactionResultRow: Identifiable, Equatable {
-    let id: String
-    let rank: Int
-    let name: String
-    let resultText: String
-    let isEarly: Bool
-    let isWinner: Bool
-}
-
-enum GameDetailsPresentationPolicy {
-    static func scoreboardRows(from view: GameJSONValue?) -> [GameScoreRow] {
-        let rows = view?.objectArray("scoreboard") ?? []
-        return rows.compactMap(scoreboardRow).sorted { $0.score > $1.score }
-    }
-
-    static func intMap(from view: GameJSONValue?, key: String) -> [String: Int] {
-        guard let values = view?.dictionaryValue?[key] as? [String: Any] else {
-            return [:]
-        }
-        var result: [String: Int] = [:]
-        for (id, value) in values {
-            if let count = intValue(value) {
-                result[id] = count
-            }
-        }
-        return result
-    }
-
-    static func namesSummary(_ names: [String]) -> String {
-        let cleaned = names
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-        return cleaned.isEmpty ? "nobody" : cleaned.joined(separator: ", ")
-    }
-
-    static func roundPointsSummary(from view: GameJSONValue?) -> String? {
-        let rows = view?.objectArray("roundPoints") ?? []
-        var parts: [String] = []
-        for row in rows {
-            let name = (row["name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            guard !name.isEmpty, let points = intValue(row["points"]), points != 0 else {
-                continue
-            }
-            let prefix = points > 0 ? "+" : ""
-            parts.append("\(name) \(prefix)\(points)")
-        }
-        return parts.isEmpty ? nil : parts.joined(separator: " - ")
-    }
-
-    static func reactionResultRows(from view: GameJSONValue?) -> [GameReactionResultRow] {
-        let rows = view?.objectArray("results") ?? []
-        return rows.enumerated().compactMap { index, row in
-            let id = (row["id"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-            let resolvedId = id?.isEmpty == false ? id! : "reaction-\(index)"
-            let rawName = (row["name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-            let name = rawName?.isEmpty == false ? rawName! : resolvedId
-            let isEarly = boolValue(row["early"]) ?? false
-            let resultText: String
-            if isEarly {
-                resultText = "too soon"
-            } else if let reactionMs = intValue(row["reactionMs"]) {
-                resultText = "\(reactionMs) ms"
-            } else {
-                resultText = "no tap"
-            }
-            return GameReactionResultRow(
-                id: resolvedId,
-                rank: index + 1,
-                name: name,
-                resultText: resultText,
-                isEarly: isEarly,
-                isWinner: index == 0 && !isEarly
-            )
-        }
-    }
-
-    private static func scoreboardRow(_ row: [String: Any]) -> GameScoreRow? {
-        guard let id = row["id"] as? String else { return nil }
-        let name = (row["name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return GameScoreRow(
-            id: id,
-            name: name?.isEmpty == false ? name! : id,
-            score: intValue(row["score"]) ?? 0
-        )
-    }
-
-    private static func intValue(_ value: Any?) -> Int? {
-        if let intValue = value as? Int { return intValue }
-        if let doubleValue = value as? Double { return Int(doubleValue) }
-        if let numberValue = value as? NSNumber { return numberValue.intValue }
-        return nil
-    }
-
-    private static func boolValue(_ value: Any?) -> Bool? {
-        if let boolValue = value as? Bool { return boolValue }
-        if let intValue = value as? Int { return intValue != 0 }
-        if let doubleValue = value as? Double { return doubleValue != 0.0 }
-        if let numberValue = value as? NSNumber { return numberValue.intValue != 0 }
-        return nil
-    }
-}
-
-struct GameNumberPreset: Identifiable {
-    let value: Double
-    let label: String
-
-    var id: String { label }
-}
-
-enum GameConfigDraftPolicy {
-    static func initialDrafts(for game: GameCatalogEntry) -> [String: GameConfigValue] {
-        var options: [String: GameConfigValue] = [:]
-        for option in game.options {
-            let id = option.id.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !id.isEmpty else { continue }
-            options[id] = resolvedValue(for: option, draft: option.defaultConfigValue)
-        }
-        return options
-    }
-
-    static func resolvedOptions(
-        for game: GameCatalogEntry,
-        drafts: [String: GameConfigValue]
-    ) -> [String: GameConfigValue] {
-        var options: [String: GameConfigValue] = [:]
-        for option in game.options {
-            let id = option.id.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !id.isEmpty else { continue }
-            options[id] = resolvedValue(for: option, draft: drafts[option.id])
-        }
-        return options
-    }
-
-    static func resolvedValue(for option: GameOptionSpec, draft: GameConfigValue?) -> GameConfigValue {
-        switch option.type {
-        case "number":
-            let raw = draft?.numberValue ?? option.defaultConfigValue.numberValue ?? option.min ?? 0.0
-            return .number(clamp(raw, min: option.min, max: option.max))
-        case "select":
-            let choices = option.choices ?? []
-            let defaultValue = option.defaultConfigValue.stringValue ?? choices.first?.value ?? ""
-            let raw = draft?.stringValue ?? defaultValue
-            if choices.contains(where: { $0.value == raw }) {
-                return .string(raw)
-            }
-            return .string(defaultValue)
-        default:
-            let maxLength = max(0, option.maxLength ?? Int.max)
-            let raw = draft?.stringValue ?? option.defaultConfigValue.stringValue ?? ""
-            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-            if trimmed.count <= maxLength {
-                return .string(trimmed)
-            }
-            return .string(String(trimmed.prefix(maxLength)))
-        }
-    }
-
-    static func numberPresets(for option: GameOptionSpec) -> [GameNumberPreset] {
-        let source = option.presets ?? [
-            option.min ?? option.defaultConfigValue.numberValue ?? 0.0,
-            option.defaultConfigValue.numberValue ?? option.min ?? 0.0,
-            option.max ?? option.defaultConfigValue.numberValue ?? 0.0
-        ]
-        var seen: [Double] = []
-        var presets: [GameNumberPreset] = []
-        for raw in source {
-            let value = clamp(raw, min: option.min, max: option.max)
-            if seen.contains(where: { numbersMatch($0, value) }) { continue }
-            seen.append(value)
-            presets.append(GameNumberPreset(
-                value: value,
-                label: formattedNumber(value, suffix: option.suffix)
-            ))
-        }
-        return presets
-    }
-
-    static func numbersMatch(_ lhs: Double, _ rhs: Double) -> Bool {
-        abs(lhs - rhs) < 0.0001
-    }
-
-    private static func clamp(_ value: Double, min: Double?, max: Double?) -> Double {
-        var next = value
-        if let min {
-            next = Swift.max(min, next)
-        }
-        if let max {
-            next = Swift.min(max, next)
-        }
-        return next
-    }
-
-    private static func formattedNumber(_ value: Double, suffix: String?) -> String {
-        let rounded = value.rounded()
-        let base = numbersMatch(value, rounded) ? "\(Int(rounded))" : "\(value)"
-        guard let suffix = suffix?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !suffix.isEmpty else { return base }
-        return "\(base) \(suffix)"
     }
 }
 

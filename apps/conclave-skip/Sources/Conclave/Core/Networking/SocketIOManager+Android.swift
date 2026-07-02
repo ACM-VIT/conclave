@@ -176,6 +176,7 @@ final class SocketIOManager {
     func getGameState() async throws -> GameStateResponse { fatalError() }
     func startGame(gameId: String, options: [String: GameConfigValue]? = nil) async throws -> GameActionResponse { fatalError() }
     func endGame() async throws -> GameActionResponse { fatalError() }
+    func joinGame() async throws -> GameActionResponse { fatalError() }
     func sendGameMove(gameId: String, type: String, payload: GameJSONValue? = nil) async throws -> GameMoveResponse { fatalError() }
     func openGameVote(candidateIds: [String]? = nil) async throws -> GameActionResponse { fatalError() }
     func castGameVote(gameId: String) async throws -> GameActionResponse { fatalError() }

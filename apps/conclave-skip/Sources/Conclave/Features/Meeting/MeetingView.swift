@@ -428,6 +428,15 @@ struct MeetingView: View {
                     isCompact: !isRegularSizeClass
                 )
             )
+        } else if viewModel.state.gamePublicState != nil {
+            // A running game owns the stage; play is interactive and timed,
+            // so it outranks a passive screen share on a phone.
+            stageSwapTransition(
+                GameStageLayoutView(
+                    viewModel: viewModel,
+                    isCompact: !isRegularSizeClass
+                )
+            )
         } else if viewModel.state.hasActiveScreenShare {
             stageSwapTransition(
                 PresentationLayoutView(
