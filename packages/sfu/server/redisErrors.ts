@@ -14,9 +14,15 @@ const REDIS_TRANSIENT_ERROR_NAMES = new Set([
 
 const REDIS_TRANSIENT_ERROR_CODES = new Set([
   "EAI_AGAIN",
+  "EAI_FAIL",
+  // Local interface changed/went away mid-connection (sleep, VPN, Wi-Fi hop):
+  // surfaces as `read EADDRNOTAVAIL` from the TLS socket with a node-internal
+  // stack, so the code is the only reliable signal.
+  "EADDRNOTAVAIL",
   "ECONNRESET",
   "ECONNREFUSED",
   "ECONNABORTED",
+  "ENETDOWN",
   "EPIPE",
   "EHOSTUNREACH",
   "ENOTFOUND",
@@ -65,7 +71,10 @@ export const isRedisTransientError = (error: unknown): boolean => {
     return true;
   }
 
-  if (redisStack && /timeout|closed|offline|connect/i.test(message)) {
+  if (
+    redisStack &&
+    /timeout|closed|offline|connect|queue is full|commands queue/i.test(message)
+  ) {
     return true;
   }
 
