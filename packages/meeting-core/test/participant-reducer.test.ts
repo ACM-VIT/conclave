@@ -37,16 +37,18 @@ const videoAction = (
 });
 
 describe("participantReducer — ADD_PARTICIPANT (join)", () => {
-  it("adds a brand-new participant with default flags", () => {
+  it("adds a brand-new participant as muted and camera-off until media flows", () => {
     const next = participantReducer(empty(), {
       type: "ADD_PARTICIPANT",
       userId: "a",
     });
     const p = next.get("a")!;
+    // No producers means no media: a joiner who never turns their camera on
+    // never produces, so nothing would ever correct an optimistic "on" flag.
     expect(p).toMatchObject({
       userId: "a",
-      isMuted: false,
-      isCameraOff: false,
+      isMuted: true,
+      isCameraOff: true,
       isVideoAdaptivelyPaused: false,
       isHandRaised: false,
       isGhost: false,

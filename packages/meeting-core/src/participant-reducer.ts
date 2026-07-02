@@ -48,6 +48,11 @@ export type ParticipantAction =
     }
   | { type: "CLEAR_ALL" };
 
+// A brand-new entry has no producers, so it cannot be sending media: it starts
+// muted and camera-off. Anything else lies in the UI for participants who
+// joined with media off, since they never produce and so no later event
+// corrects the flag. Attaching a stream (UPDATE_STREAM) and the producer sync
+// paths flip these to on as soon as media actually flows.
 const createEmptyParticipant = (
   userId: string,
   isGhost = false
@@ -61,8 +66,8 @@ const createEmptyParticipant = (
   videoProducerId: null,
   screenShareProducerId: null,
   screenShareAudioProducerId: null,
-  isMuted: false,
-  isCameraOff: false,
+  isMuted: true,
+  isCameraOff: true,
   isVideoAdaptivelyPaused: false,
   isHandRaised: false,
   isGhost,

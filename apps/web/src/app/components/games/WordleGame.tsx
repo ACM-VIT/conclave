@@ -52,6 +52,12 @@ type WordleMe = {
   myGuesses: Array<{ word: string; feedback: TileState[]; at: number }>;
   myOutcome: PlayerOutcome | null;
   mySolvedAt: number | null;
+  /** Setter only: every contestant's live board, letters included. */
+  boards: Array<{
+    playerId: string;
+    guesses: Array<{ word: string; feedback: TileState[]; at: number }>;
+    outcome: PlayerOutcome | null;
+  }> | null;
 };
 
 const WORDLE_GREEN = "#538d4e";
@@ -203,6 +209,134 @@ function Tile({
   );
 }
 
+function SetterBoards({
+  boards,
+  standings,
+  wordLength,
+  maxTries,
+}: {
+  boards: NonNullable<WordleMe["boards"]>;
+  standings: WordlePublic["standings"];
+  wordLength: number;
+  maxTries: number;
+}) {
+  const nameById = new Map(
+    standings.map((entry) => [entry.playerId, entry.playerName]),
+  );
+  const rankById = new Map(
+    standings.map((entry, index) => [entry.playerId, index]),
+  );
+  const ordered = [...boards].sort(
+    (a, b) =>
+      (rankById.get(a.playerId) ?? Number.MAX_SAFE_INTEGER) -
+      (rankById.get(b.playerId) ?? Number.MAX_SAFE_INTEGER),
+  );
+
+  return (
+    <div>
+      <p style={{ fontSize: 11, color: color.textFaint, fontFamily: HEAD_FONT, margin: "0 0 8px" }}>
+        Live boards
+      </p>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fill, minmax(118px, 1fr))",
+          gap: 10,
+        }}
+      >
+        {ordered.map((board) => {
+          const solved = board.outcome === "win";
+          return (
+            <div
+              key={board.playerId}
+              style={{
+                padding: 8,
+                borderRadius: radius.md,
+                border: `1px solid ${solved ? `${WORDLE_GREEN}66` : color.border}`,
+                background: solved ? `${WORDLE_GREEN}14` : color.surfaceRaised,
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
+                <span
+                  style={{
+                    flex: 1,
+                    minWidth: 0,
+                    fontSize: 11.5,
+                    color: color.text,
+                    fontFamily: HEAD_FONT,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {nameById.get(board.playerId) ?? "Player"}
+                </span>
+                <span
+                  style={{
+                    fontSize: 10,
+                    fontFamily: HEAD_FONT,
+                    color:
+                      board.outcome === "win"
+                        ? WORDLE_GREEN
+                        : board.outcome
+                          ? color.textMuted
+                          : color.textFaint,
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {board.outcome
+                    ? statusText(board.outcome)
+                    : `${board.guesses.length}/${maxTries}`}
+                </span>
+              </div>
+              <div style={{ display: "grid", gap: 2 }}>
+                {Array.from({ length: maxTries }, (_, rowIndex) => {
+                  const guess = board.guesses[rowIndex];
+                  return (
+                    <div
+                      key={rowIndex}
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: `repeat(${wordLength}, 1fr)`,
+                        gap: 2,
+                      }}
+                    >
+                      {Array.from({ length: wordLength }, (_, colIndex) => (
+                        <div
+                          key={colIndex}
+                          style={{
+                            aspectRatio: "1",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            fontFamily: HEAD_FONT,
+                            fontSize: 9,
+                            fontWeight: 700,
+                            color: "#ffffff",
+                            borderRadius: 2,
+                            border: guess
+                              ? "1px solid transparent"
+                              : `1px solid ${color.border}`,
+                            background: guess
+                              ? letterBg(guess.feedback[colIndex])
+                              : "transparent",
+                          }}
+                        >
+                          {guess ? guess.word[colIndex] : ""}
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 export default function WordleGame({
   pub,
   me,
@@ -219,10 +353,30 @@ export default function WordleGame({
   const prevGuessCountRef = useRef(me.myGuesses.length);
   const animateRow = useRef(-1);
 
+  // A new round resets the server-side board but not this component, so clear
+  // every piece of local round state here (render-phase reset, per React's
+  // derived-state pattern). Without this, a half-typed draft pre-fills the new
+  // board and the stale animateRow leaves a row stuck on the flip animation's
+  // transparent back face, which reads as a missing row.
+  const [lastRoundKey, setLastRoundKey] = useState(pub.currentRound);
+  if (lastRoundKey !== pub.currentRound) {
+    setLastRoundKey(pub.currentRound);
+    setSecretDraft("");
+    setGuessDraft("");
+    setError(null);
+    prevGuessCountRef.current = 0;
+    animateRow.current = -1;
+  }
+
   const currentCount = me.myGuesses.length;
   if (currentCount > prevGuessCountRef.current) {
     animateRow.current = currentCount - 1;
     prevGuessCountRef.current = currentCount;
+  } else if (currentCount < prevGuessCountRef.current) {
+    // The board shrank outside a round change (view re-projection); never
+    // leave the reveal animation pointing at a row that no longer exists.
+    prevGuessCountRef.current = currentCount;
+    animateRow.current = -1;
   }
 
   const remainingMs = useRemaining(pub.deadline, pub.serverNow);
@@ -676,22 +830,32 @@ export default function WordleGame({
           ) : null}
         </>
       ) : pub.phase !== "set-word" ? (
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            gap: 9,
-            padding: "13px 16px",
-            borderRadius: radius.pill,
-            background: color.surfaceRaised,
-            border: `1px solid ${color.border}`,
-          }}
-        >
-          <span style={{ width: 7, height: 7, borderRadius: radius.pill, background: wordleAccent }} />
-          <span style={{ fontSize: 13, color: color.text }}>You set the word</span>
-          <span style={{ fontSize: 13, color: color.textMuted }}>· watching players guess</span>
-        </div>
+        <>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 9,
+              padding: "13px 16px",
+              borderRadius: radius.pill,
+              background: color.surfaceRaised,
+              border: `1px solid ${color.border}`,
+            }}
+          >
+            <span style={{ width: 7, height: 7, borderRadius: radius.pill, background: wordleAccent }} />
+            <span style={{ fontSize: 13, color: color.text }}>You set the word</span>
+            <span style={{ fontSize: 13, color: color.textMuted }}>· watching players guess</span>
+          </div>
+          {me.boards && me.boards.length > 0 ? (
+            <SetterBoards
+              boards={me.boards}
+              standings={pub.standings}
+              wordLength={pub.wordLength}
+              maxTries={pub.maxTries}
+            />
+          ) : null}
+        </>
       ) : null}
 
       {pub.standings.length > 0 && pub.phase === "playing" ? (
