@@ -1315,7 +1315,7 @@ struct SharedBrowserSheetView: View {
             syncBrowserURLInput()
         }
 #else
-        .onChange(of: viewModel.state.isBrowserActive) { _, _ in
+        .onChange(of: viewModel.state.isBrowserActive) {
             syncBrowserURLInput()
         }
         #endif
@@ -1511,6 +1511,79 @@ enum SharedBrowserURLDraftSyncPolicy {
     }
 }
 
+struct GameCatalogVisual: Equatable {
+    let icon: String
+    let androidIcon: String
+}
+
+enum GameCatalogPresentationPolicy {
+    static func visual(for gameId: String) -> GameCatalogVisual {
+        switch gameId {
+        case "trivia":
+            return GameCatalogVisual(icon: "questionmark.circle.fill", androidIcon: "info")
+        case "bluff":
+            return GameCatalogVisual(icon: "theatermasks.fill", androidIcon: "forum")
+        case "would-you-rather":
+            return GameCatalogVisual(icon: "arrow.left.arrow.right", androidIcon: "arrow.forward")
+        case "most-likely-to":
+            return GameCatalogVisual(icon: "person.2.fill", androidIcon: "participants")
+        case "reaction":
+            return GameCatalogVisual(icon: "bolt.fill", androidIcon: "warning")
+        case "imposter":
+            return GameCatalogVisual(icon: "eye.slash.fill", androidIcon: "ghost")
+        case "wordle":
+            return GameCatalogVisual(icon: "square.grid.3x3.fill", androidIcon: "grid")
+        default:
+            return GameCatalogVisual(icon: "gamecontroller.fill", androidIcon: "sports_esports")
+        }
+    }
+
+    static func catalogSubtitle(_ game: GameCatalogEntry) -> String {
+        let description = game.description.trimmingCharacters(in: .whitespacesAndNewlines)
+        return description.isEmpty ? playerRange(game) : description
+    }
+
+    static func playerRange(_ game: GameCatalogEntry) -> String {
+        if game.minPlayers == game.maxPlayers {
+            return "\(game.minPlayers)"
+        }
+        return "\(game.minPlayers)-\(game.maxPlayers)"
+    }
+
+    static func canOpenVote(catalogCount: Int, isActionInFlight: Bool) -> Bool {
+        !isActionInFlight && catalogCount >= 2
+    }
+
+    static func shouldShowDivider(after index: Int, total: Int, hasFooter: Bool) -> Bool {
+        index < total - 1 || hasFooter
+    }
+}
+
+enum GameVotePresentationPolicy {
+    static func leader(in vote: GameVoteState) -> GameCatalogEntry? {
+        var leader: GameCatalogEntry?
+        var leaderVotes = -1
+        for entry in vote.candidates {
+            let count = vote.tally[entry.id] ?? 0
+            if count > leaderVotes {
+                leader = entry
+                leaderVotes = count
+            }
+        }
+        return leader
+    }
+
+    static func startLeaderTitle(_ vote: GameVoteState) -> String {
+        guard let leader = leader(in: vote) else { return "Start leader" }
+        let votes = vote.tally[leader.id] ?? 0
+        return votes > 0 ? "Start \(leader.name)" : "Start leader"
+    }
+
+    static func shouldShowCandidateDivider(after index: Int, total: Int, hasHostActions: Bool) -> Bool {
+        index < total - 1 || hasHostActions
+    }
+}
+
 struct GamesSheetView: View {
     @Bindable var viewModel: MeetingViewModel
     var bodyReady: Bool = true
@@ -1604,13 +1677,14 @@ struct GamesSheetView: View {
     }
 
     private func activeGameSection(_ activeGame: GamePublicState) -> some View {
-        VStack(alignment: .leading, spacing: ACMSpacing.xs) {
+        let visual = GameCatalogPresentationPolicy.visual(for: activeGame.gameId)
+        return VStack(alignment: .leading, spacing: ACMSpacing.xs) {
             acmListSectionHeader("Active game")
 
             MeetingSheetSectionCard {
                 gameRow(
-                    icon: "gamecontroller.fill",
-                    androidIcon: "sports_esports",
+                    icon: visual.icon,
+                    androidIcon: visual.androidIcon,
                     title: activeGame.name,
                     subtitle: activeGameSubtitle(activeGame),
                     trailing: activeGame.phase,
@@ -2462,12 +2536,15 @@ struct GamesSheetView: View {
             acmListSectionHeader("Vote")
 
             MeetingSheetSectionCard {
+                let candidates = vote.candidates
                 let localVoteGameId = viewModel.state.localGameVoteId(in: vote)
-                ForEach(vote.candidates) { entry in
+                let hasHostActions = canManageGames
+                ForEach(Array(candidates.enumerated()), id: \.element.id) { index, entry in
                     let isSelected = localVoteGameId == entry.id
+                    let visual = GameCatalogPresentationPolicy.visual(for: entry.id)
                     gameRow(
-                        icon: "gamecontroller",
-                        androidIcon: "sports_esports",
+                        icon: visual.icon,
+                        androidIcon: visual.androidIcon,
                         title: entry.name,
                         subtitle: entry.description,
                         trailing: "\(vote.tally[entry.id] ?? 0)",
@@ -2479,19 +2556,26 @@ struct GamesSheetView: View {
                         viewModel.castGameVote(gameId: entry.id)
                     }
 
-                    MoreRowDivider()
+                    if GameVotePresentationPolicy.shouldShowCandidateDivider(
+                        after: index,
+                        total: candidates.count,
+                        hasHostActions: hasHostActions
+                    ) {
+                        MoreRowDivider()
+                    }
                 }
 
                 if canManageGames {
+                    let leader = GameVotePresentationPolicy.leader(in: vote)
                     MoreRow(
                         icon: "play.fill",
                         androidIcon: "play",
-                        title: startLeaderTitle(vote),
+                        title: GameVotePresentationPolicy.startLeaderTitle(vote),
                         tint: ACMColors.primaryOrange,
                         androidTint: "accent",
-                        isDisabled: viewModel.state.isGameActionInFlight || voteLeader(in: vote) == nil
+                        isDisabled: viewModel.state.isGameActionInFlight || leader == nil
                     ) {
-                        if let leader = voteLeader(in: vote) {
+                        if let leader {
                             viewModel.startGame(leader, options: defaultOptions(for: leader))
                         }
                     }
@@ -2652,19 +2736,20 @@ struct GamesSheetView: View {
                 let catalog = Array(viewModel.state.gameCatalog)
                 if catalog.isEmpty {
                     gameRow(
-                        icon: "gamecontroller",
+                        icon: "gamecontroller.fill",
                         androidIcon: "sports_esports",
                         title: "No games available",
                         isDisabled: true
                     ) {}
                 } else {
-                    ForEach(viewModel.state.gameCatalog) { entry in
+                    ForEach(Array(catalog.enumerated()), id: \.element.id) { index, entry in
+                        let visual = GameCatalogPresentationPolicy.visual(for: entry.id)
                         gameRow(
-                            icon: "play.fill",
-                            androidIcon: "play",
+                            icon: visual.icon,
+                            androidIcon: visual.androidIcon,
                             title: entry.name,
-                            subtitle: catalogSubtitle(entry),
-                            trailing: playerRange(entry),
+                            subtitle: GameCatalogPresentationPolicy.catalogSubtitle(entry),
+                            trailing: GameCatalogPresentationPolicy.playerRange(entry),
                             isDisabled: viewModel.state.isGameActionInFlight
                         ) {
                             if entry.options.isEmpty {
@@ -2674,14 +2759,23 @@ struct GamesSheetView: View {
                             }
                         }
 
-                        MoreRowDivider()
+                        if GameCatalogPresentationPolicy.shouldShowDivider(
+                            after: index,
+                            total: catalog.count,
+                            hasFooter: true
+                        ) {
+                            MoreRowDivider()
+                        }
                     }
 
                     MoreRow(
                         icon: "person.3.fill",
                         androidIcon: "participants",
                         title: viewModel.state.gameVote == nil ? "Open vote" : "Restart vote",
-                        isDisabled: viewModel.state.isGameActionInFlight || catalog.count < 2
+                        isDisabled: !GameCatalogPresentationPolicy.canOpenVote(
+                            catalogCount: catalog.count,
+                            isActionInFlight: viewModel.state.isGameActionInFlight
+                        )
                     ) {
                         viewModel.openGameVote(candidateIds: nil)
                     }
@@ -2783,41 +2877,10 @@ struct GamesSheetView: View {
             && !viewModel.state.isWebinarAttendee
     }
 
-    private func voteLeader(in vote: GameVoteState) -> GameCatalogEntry? {
-        var leader: GameCatalogEntry?
-        var leaderVotes = -1
-        for entry in vote.candidates {
-            let count = vote.tally[entry.id] ?? 0
-            if count > leaderVotes {
-                leader = entry
-                leaderVotes = count
-            }
-        }
-        return leader
-    }
-
-    private func startLeaderTitle(_ vote: GameVoteState) -> String {
-        guard let leader = voteLeader(in: vote) else { return "Start leader" }
-        let votes = vote.tally[leader.id] ?? 0
-        return votes > 0 ? "Start \(leader.name)" : "Start leader"
-    }
-
     private func activeGameSubtitle(_ game: GamePublicState) -> String {
         let count = game.players.count
         let noun = count == 1 ? "player" : "players"
         return "\(count) \(noun)"
-    }
-
-    private func catalogSubtitle(_ game: GameCatalogEntry) -> String {
-        let description = game.description.trimmingCharacters(in: .whitespacesAndNewlines)
-        return description.isEmpty ? playerRange(game) : description
-    }
-
-    private func playerRange(_ game: GameCatalogEntry) -> String {
-        if game.minPlayers == game.maxPlayers {
-            return "\(game.minPlayers)"
-        }
-        return "\(game.minPlayers)-\(game.maxPlayers)"
     }
 
     private func beginConfiguringGame(_ game: GameCatalogEntry) {

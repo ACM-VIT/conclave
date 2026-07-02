@@ -22,6 +22,7 @@ import type {
   WeeklyAvailability,
 } from "@/lib/scheduling";
 import { buildMeetingPath } from "@/lib/meeting-links";
+import { readResponseError } from "../lib/utils";
 
 type Props = {
   user: {
@@ -141,12 +142,7 @@ const emailStatusClass = (status: string | undefined): string => {
   }
 };
 
-const readError = async (response: Response): Promise<string> => {
-  const data: unknown = await response.json().catch(() => null);
-  return data && typeof data === "object" && "error" in data
-    ? String((data as { error?: string }).error || "Request failed")
-    : response.statusText || "Request failed";
-};
+const readError = readResponseError;
 
 const fetchJson = async <T,>(path: string, init?: RequestInit): Promise<T> => {
   const response = await fetch(path, {

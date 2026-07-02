@@ -5,6 +5,7 @@ import {
   resolveSfuSecret,
   resolveSfuUrl,
 } from "@/lib/sfu-admin-auth";
+import { readResponseError } from "@/app/lib/utils";
 
 type RouteContext = {
   params: Promise<{
@@ -12,13 +13,7 @@ type RouteContext = {
   }>;
 };
 
-const readError = async (response: Response): Promise<string> => {
-  const payload: unknown = await response.json().catch(() => null);
-  if (payload && typeof payload === "object" && "error" in payload) {
-    return String((payload as { error?: string }).error || "Request failed");
-  }
-  return response.statusText || "Request failed";
-};
+const readError = readResponseError;
 
 const proxyAdminRequest = async (
   request: Request,

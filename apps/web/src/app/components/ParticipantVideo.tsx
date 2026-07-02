@@ -23,7 +23,6 @@ interface ParticipantVideoProps {
   isActiveSpeaker?: boolean;
   audioOutputDeviceId?: string;
   isAdmin?: boolean;
-  isSelected?: boolean;
   onAdminClick?: (userId: string) => void;
   videoObjectFit?: "cover" | "contain";
   onAudioAutoplayBlocked?: () => void;

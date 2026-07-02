@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { readResponseError } from "../lib/utils";
 
 type RequestMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 type TabId = "overview" | "moderation" | "access" | "lifecycle" | "advanced";
@@ -113,14 +114,6 @@ type ClusterOverview = {
   }>;
 };
 
-type WorkerSnapshot = {
-  index: number;
-  pid: number | null;
-  closed: boolean;
-  usage: Record<string, number> | null;
-  error?: string;
-};
-
 type PolicyDraft = {
   locked: boolean;
   chatLocked: boolean;
@@ -185,13 +178,8 @@ const formatUptime = (seconds: number): string => {
 
 const pretty = (value: unknown): string => JSON.stringify(value, null, 2);
 
-const readError = async (response: Response): Promise<string> => {
-  const data: unknown = await response.json().catch(() => null);
-  if (data && typeof data === "object" && "error" in data) {
-    return String((data as { error?: string }).error || "Request failed");
-  }
-  return response.statusText || `Request failed (${response.status})`;
-};
+const readError = (response: Response): Promise<string> =>
+  readResponseError(response, `Request failed (${response.status})`);
 
 const buildAdminApiPath = (path: string, clientId: string): string => {
   const normalizedPath = path.replace(/^\/+/, "");
@@ -256,7 +244,6 @@ export default function SfuAdminDashboard() {
 
   const [adminUser, setAdminUser] = useState<AdminUser | null>(null);
   const [overview, setOverview] = useState<ClusterOverview | null>(null);
-  const [, setWorkers] = useState<WorkerSnapshot[]>([]);
   const [rooms, setRooms] = useState<RoomSnapshot[]>([]);
   const [selectedRoomId, setSelectedRoomId] = useState("");
   const [selectedRoomClientId, setSelectedRoomClientId] = useState("");
@@ -330,16 +317,14 @@ export default function SfuAdminDashboard() {
     setErrorMessage(null);
 
     try {
-      const [user, overviewData, workersData, roomsData] = await Promise.all([
+      const [user, overviewData, roomsData] = await Promise.all([
         fetchAdminAuth(),
         fetchAdminJson<ClusterOverview>("overview", { clientId }),
-        fetchAdminJson<{ workers: WorkerSnapshot[] }>("workers", { clientId }),
         fetchAdminJson<{ rooms: RoomSnapshot[] }>("rooms", { clientId }),
       ]);
 
       setAdminUser(user);
       setOverview(overviewData);
-      setWorkers(Array.isArray(workersData.workers) ? workersData.workers : []);
       setRooms(Array.isArray(roomsData.rooms) ? roomsData.rooms : []);
       setDrainEnabled(Boolean(overviewData.draining));
     } catch (error) {

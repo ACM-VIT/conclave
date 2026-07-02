@@ -78,6 +78,28 @@ struct MeetingSpotlightSnapshot {
     }
 }
 
+struct PendingUserRow: Identifiable, Equatable {
+    let id: String
+    let displayName: String
+}
+
+enum PendingUserRowsPolicy {
+    static func sortedRows(from users: [String: String]) -> [PendingUserRow] {
+        users
+            .map { PendingUserRow(id: $0.key, displayName: $0.value) }
+            .sorted { lhs, rhs in
+                let leftName = lhs.displayName.lowercased()
+                let rightName = rhs.displayName.lowercased()
+
+                if leftName == rightName {
+                    return lhs.id < rhs.id
+                }
+
+                return leftName < rightName
+            }
+    }
+}
+
 @MainActor
 @Observable
 final class MeetingState {
@@ -155,7 +177,12 @@ final class MeetingState {
         }
     }
     var displayNames: [String: String] = [:]
-    var pendingUsers: [String: String] = [:]
+    var pendingUsers: [String: String] = [:] {
+        didSet {
+            pendingUserRows = PendingUserRowsPolicy.sortedRows(from: pendingUsers)
+        }
+    }
+    private(set) var pendingUserRows: [PendingUserRow] = []
     var hasInitialPresenceSnapshot: Bool = false
 
     // Media State

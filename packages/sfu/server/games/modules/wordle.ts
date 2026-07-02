@@ -45,8 +45,7 @@ type WordleState = {
 const WORD_LENGTH = 5;
 const MAX_TRIES = 6;
 
-const ALL_WORDS: readonly string[] = WORDLE_WORDS;
-const WORD_SET = new Set<string>(ALL_WORDS);
+const WORD_SET = new Set<string>(WORDLE_WORDS);
 
 const setterName = (ctx: GameContext, setterId: string | null): string | null => {
   if (!setterId) return null;
@@ -313,7 +312,7 @@ export const wordleModule: GameModule<WordleState> = {
         }
 
         if (state.wordSource === "random") {
-          const word = ctx.rng.pick(ALL_WORDS);
+          const word = ctx.rng.pick(WORDLE_WORDS);
           const players: Record<string, PlayerRoundState> = {};
           for (const player of ctx.activePlayers) {
             players[player.id] = { guesses: [], outcome: null, solvedAt: null };
@@ -444,8 +443,8 @@ export const wordleModule: GameModule<WordleState> = {
         const nextRound = state.currentRound + 1;
 
         if (state.wordSource === "random") {
-          const candidates = ALL_WORDS.filter((w) => !state.usedWords.includes(w));
-          const word = ctx.rng.pick(candidates.length > 0 ? candidates : ALL_WORDS);
+          const candidates = WORDLE_WORDS.filter((w) => !state.usedWords.includes(w));
+          const word = ctx.rng.pick(candidates.length > 0 ? candidates : WORDLE_WORDS);
           const players: Record<string, PlayerRoundState> = {};
           for (const player of ctx.activePlayers) {
             players[player.id] = { guesses: [], outcome: null, solvedAt: null };

@@ -431,6 +431,81 @@ enum ConnectionQuality: String, Codable {
     case unknown
 }
 
+enum ConnectionQualityHintPolicy {
+    static func combined(
+        sampledQuality: ConnectionQuality,
+        networkHint: ConnectionQuality
+    ) -> ConnectionQuality {
+        guard networkHint != .unknown else { return sampledQuality }
+        guard sampledQuality != .unknown else { return networkHint }
+
+        // Match the web client: reachability/browser hints seed startup and
+        // unknown states, but measured RTC stats win once the call is live.
+        // Emergency is the only hint severe enough to keep constraining media.
+        guard networkHint == .emergency else { return sampledQuality }
+        return mostConstrained(sampledQuality, networkHint)
+    }
+
+    static func screenSharePublishQuality(
+        publishQuality: ConnectionQuality,
+        screenShareSampledQuality: ConnectionQuality,
+        networkHint: ConnectionQuality
+    ) -> ConnectionQuality {
+        guard screenShareSampledQuality != .unknown else {
+            return publishQuality
+        }
+        return mostConstrained(
+            publishQuality,
+            combined(sampledQuality: screenShareSampledQuality, networkHint: networkHint)
+        )
+    }
+
+    private static func mostConstrained(
+        _ first: ConnectionQuality,
+        _ second: ConnectionQuality
+    ) -> ConnectionQuality {
+        rank(first) >= rank(second) ? first : second
+    }
+
+    private static func rank(_ quality: ConnectionQuality) -> Int {
+        switch quality {
+        case .unknown: return 0
+        case .good: return 1
+        case .fair: return 2
+        case .poor: return 3
+        case .emergency: return 4
+        }
+    }
+}
+
+enum AndroidNetworkReachabilityQualityPolicy {
+    static func bandwidthQuality(upstreamKbps: Int, downstreamKbps: Int) -> ConnectionQuality {
+        let hasUpstream = upstreamKbps > 0
+        let hasDownstream = downstreamKbps > 0
+        guard hasUpstream || hasDownstream else { return .unknown }
+
+        if (hasUpstream && upstreamKbps <= 120) || (hasDownstream && downstreamKbps <= 300) {
+            return .emergency
+        }
+        if (hasUpstream && upstreamKbps <= 240) || (hasDownstream && downstreamKbps <= 800) {
+            return .poor
+        }
+        if (hasUpstream && upstreamKbps <= 500) || (hasDownstream && downstreamKbps <= 1_500) {
+            return .fair
+        }
+        return .unknown
+    }
+
+    static func validatedQuality(upstreamKbps: Int, downstreamKbps: Int) -> ConnectionQuality {
+        let bandwidthQuality = bandwidthQuality(
+            upstreamKbps: upstreamKbps,
+            downstreamKbps: downstreamKbps
+        )
+        guard bandwidthQuality == .unknown else { return bandwidthQuality }
+        return .good
+    }
+}
+
 enum ScreenSharePublishProfilePolicy {
     static let fairBitrateBps = 1_500_000.0
     static let poorBitrateBps = 550_000.0

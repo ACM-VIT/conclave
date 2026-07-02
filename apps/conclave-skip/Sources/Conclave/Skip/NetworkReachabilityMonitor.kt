@@ -107,44 +107,16 @@ internal class NetworkReachabilityMonitor {
                 capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
         if (!validated) return QualityHint(ConnectionQuality.unknown, "not_validated")
 
-        val metered = !capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
-        val congested = !capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_CONGESTED)
-        val suspended = !capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_SUSPENDED)
-        val cellular = capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)
-        val bandwidthQuality = bandwidthQualityHint(
+        val bandwidthQuality = AndroidNetworkReachabilityQualityPolicy.bandwidthQuality(
             upstreamKbps = capabilities.linkUpstreamBandwidthKbps,
             downstreamKbps = capabilities.linkDownstreamBandwidthKbps,
         )
-        val details = "metered=$metered cellular=$cellular congested=$congested suspended=$suspended upKbps=${capabilities.linkUpstreamBandwidthKbps} downKbps=${capabilities.linkDownstreamBandwidthKbps}"
+        val details = "metered=${!capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)} cellular=${capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)} upKbps=${capabilities.linkUpstreamBandwidthKbps} downKbps=${capabilities.linkDownstreamBandwidthKbps}"
 
-        if ((congested || suspended) && (metered || cellular)) {
-            return QualityHint(ConnectionQuality.emergency, "blocked_or_congested $details")
-        }
-        if (congested || suspended) {
-            return QualityHint(ConnectionQuality.poor, "blocked_or_congested $details")
-        }
         if (bandwidthQuality != ConnectionQuality.unknown) {
             return QualityHint(bandwidthQuality, "bandwidth_hint $details")
         }
         return QualityHint(ConnectionQuality.good, "validated $details")
-    }
-
-    private fun bandwidthQualityHint(upstreamKbps: Int, downstreamKbps: Int): ConnectionQuality {
-        val upstream = upstreamKbps.takeIf { it > 0 }
-        val downstream = downstreamKbps.takeIf { it > 0 }
-        if (upstream == null && downstream == null) return ConnectionQuality.unknown
-
-        if ((upstream != null && upstream <= 120) || (downstream != null && downstream <= 300)) {
-            return ConnectionQuality.emergency
-        }
-        if ((upstream != null && upstream <= 240) || (downstream != null && downstream <= 800)) {
-            return ConnectionQuality.poor
-        }
-        if ((upstream != null && upstream <= 500) || (downstream != null && downstream <= 1_500)) {
-            return ConnectionQuality.fair
-        }
-
-        return ConnectionQuality.unknown
     }
 
     private fun logQualityHintIfNeeded(qualityHint: QualityHint, isOffline: Boolean) {

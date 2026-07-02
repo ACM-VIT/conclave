@@ -1,5 +1,6 @@
 "use client";
 
+import { readResponseError } from "@/app/lib/utils";
 import {
   ArrowLeft,
   CalendarPlus,
@@ -65,12 +66,7 @@ const listTimeZones = (): string[] => {
   return FALLBACK_TIME_ZONES;
 };
 
-const readError = async (response: Response): Promise<string> => {
-  const data: unknown = await response.json().catch(() => null);
-  return data && typeof data === "object" && "error" in data
-    ? String((data as { error?: string }).error || "Request failed")
-    : response.statusText || "Request failed";
-};
+const readError = readResponseError;
 
 const fetchJson = async <T,>(url: string, init?: RequestInit): Promise<T> => {
   const response = await fetch(url, {

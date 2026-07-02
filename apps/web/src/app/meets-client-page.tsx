@@ -5,6 +5,7 @@ import MeetsClient from "./meets-client";
 import type { JoinMode } from "./lib/types";
 import type { RoomInfo } from "@/lib/sfu-types";
 import { resolveBrowserSfuClientId } from "@/lib/sfu-client-id";
+import { readResponseError } from "./lib/utils";
 
 const reactionAssets = [
   "aura.gif",
@@ -15,13 +16,7 @@ const reactionAssets = [
   "yawn.gif",
 ];
 
-const readError = async (response: Response) => {
-  const data: unknown = await response.json().catch(() => null);
-  if (data && typeof data === "object" && "error" in data) {
-    return String((data as { error?: string }).error || "Request failed");
-  }
-  return response.statusText || "Request failed";
-};
+const readError = readResponseError;
 
 const defaultClientId = resolveBrowserSfuClientId();
 const JOIN_INFO_REQUEST_TIMEOUT_MS = 15000;
@@ -190,7 +185,6 @@ export default function MeetsClientPage({
         initialRoomId={resolvedInitialRoomId}
         enableRoomRouting={usesRoomRouting}
         forceJoinOnly={forceJoinOnly}
-        allowGhostMode={true}
         bypassMediaPermissions={bypassMediaPermissions}
         joinMode={joinMode}
         autoJoinOnMount={autoJoinOnMount}

@@ -14,6 +14,21 @@ export const toError = (value: unknown): Error =>
 export const errorName = (value: unknown): string =>
   value instanceof Error ? value.name : "";
 
+/**
+ * The error message from a failed fetch Response: the JSON body's `error`
+ * field when present, else statusText, else the fallback.
+ */
+export const readResponseError = async (
+  response: Response,
+  fallback = "Request failed",
+): Promise<string> => {
+  const data: unknown = await response.json().catch(() => null);
+  if (data && typeof data === "object" && "error" in data) {
+    return String((data as { error?: unknown }).error || "") || fallback;
+  }
+  return response.statusText || fallback;
+};
+
 export const ROOM_WORDS = [
   "aloe",
   "aster",

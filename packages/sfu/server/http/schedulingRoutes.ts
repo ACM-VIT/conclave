@@ -2,6 +2,8 @@ import type { Express, Request, Response } from "express";
 import { Logger } from "../../utilities/loggers.js";
 import {
   asArray,
+  readCoercedBoolean,
+  readCoercedNumber,
   readNumber,
   readString,
   requestBody,
@@ -119,41 +121,6 @@ const normalizeText = (value: unknown, maxLength = MAX_TEXT_LENGTH): string =>
   typeof value === "string"
     ? value.trim().replace(/\s+/g, " ").slice(0, maxLength)
     : "";
-
-/**
- * Decode a boolean field, tolerating "true"/"false" strings — same API
- * tolerance as readCoercedNumber. (The old truthy-Boolean coercion mapped
- * "false" to true; strings now coerce to their actual meaning.)
- */
-const readCoercedBoolean = (
-  body: UntrustedRecord,
-  key: string,
-): boolean | undefined => {
-  const value = body[key];
-  if (typeof value === "boolean") return value;
-  if (value === "true") return true;
-  if (value === "false") return false;
-  return undefined;
-};
-
-/**
- * Decode a numeric field, tolerating stringified numbers ("60") — callers of
- * this API have historically been allowed to send either.
- */
-const readCoercedNumber = (
-  body: UntrustedRecord,
-  key: string,
-): number | undefined => {
-  const value = body[key];
-  if (typeof value === "number") {
-    return Number.isFinite(value) ? value : undefined;
-  }
-  if (typeof value === "string" && value.trim()) {
-    const parsed = Number(value);
-    return Number.isFinite(parsed) ? parsed : undefined;
-  }
-  return undefined;
-};
 
 /**
  * Decode the client-editable event-type fields from an untrusted body.

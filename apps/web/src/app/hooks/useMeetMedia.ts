@@ -75,7 +75,6 @@ interface UseMeetMediaOptions {
   setSelectedAudioInputDeviceId: React.Dispatch<
     React.SetStateAction<string | undefined>
   >;
-  selectedAudioOutputDeviceId?: string;
   setSelectedAudioOutputDeviceId: React.Dispatch<
     React.SetStateAction<string | undefined>
   >;
@@ -84,7 +83,6 @@ interface UseMeetMediaOptions {
     React.SetStateAction<string | undefined>
   >;
   meetVolume?: number;
-  videoQuality: VideoQuality;
   videoQualityRef: React.MutableRefObject<VideoQuality>;
   dataSaverMode?: boolean;
   activeVideoEffectsCount?: number;

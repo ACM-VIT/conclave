@@ -7,7 +7,7 @@ import UIKit
 // MARK: - Meeting Header
 
 enum MeetingHeaderLayout {
-    static let roomPillMaxWidth: CGFloat = 224.0
+    static let roomPillMaxWidth: CGFloat = 176.0
 }
 
 struct MeetingHeaderView: View {

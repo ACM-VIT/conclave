@@ -87,7 +87,6 @@ interface GridLayoutProps {
   currentUserId: string;
   audioOutputDeviceId?: string;
   isAdmin?: boolean;
-  selectedParticipantId?: string | null;
   onParticipantClick?: (userId: string) => void;
   onOpenParticipantsPanel?: () => void;
   activeVideoEffectsCount?: number;
@@ -967,7 +966,6 @@ function GridLayout({
   currentUserId,
   audioOutputDeviceId,
   isAdmin = false,
-  selectedParticipantId,
   onParticipantClick,
   onOpenParticipantsPanel,
   activeVideoEffectsCount = 0,
@@ -2763,10 +2761,6 @@ function GridLayout({
                     audioOutputDeviceId={audioOutputDeviceId}
                     disableAudio
                     isAdmin={isAdmin}
-                    isSelected={
-                      selectedParticipantId ===
-                      sideBySideCompanionParticipant.userId
-                    }
                     onAdminClick={onParticipantClick}
                     isPinned={
                       pinnedId === sideBySideCompanionParticipant.userId
@@ -2814,7 +2808,6 @@ function GridLayout({
                       audioOutputDeviceId={audioOutputDeviceId}
                       disableAudio
                       isAdmin={isAdmin}
-                      isSelected={selectedParticipantId === participant.userId}
                       onAdminClick={onParticipantClick}
                       isPinned={pinnedId === participant.userId}
                       onTogglePin={togglePin}
@@ -2906,9 +2899,6 @@ function GridLayout({
                   disableAudio
                   videoObjectFit="contain"
                   isAdmin={isAdmin}
-                  isSelected={
-                    selectedParticipantId === stageMainParticipant.userId
-                  }
                   onAdminClick={onParticipantClick}
                   isPinned={pinnedId === stageMainParticipant.userId}
                   onTogglePin={togglePin}
@@ -2972,7 +2962,6 @@ function GridLayout({
                       audioOutputDeviceId={audioOutputDeviceId}
                       disableAudio
                       isAdmin={isAdmin}
-                      isSelected={selectedParticipantId === participant.userId}
                       onAdminClick={onParticipantClick}
                       isPinned={pinnedId === participant.userId}
                       onTogglePin={togglePin}
@@ -3226,7 +3215,6 @@ function GridLayout({
               audioOutputDeviceId={audioOutputDeviceId}
               disableAudio
               isAdmin={isAdmin}
-              isSelected={selectedParticipantId === participant.userId}
               onAdminClick={onParticipantClick}
               isPinned={pinnedId === participant.userId}
               onTogglePin={togglePin}

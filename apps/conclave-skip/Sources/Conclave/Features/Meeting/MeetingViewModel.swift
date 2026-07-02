@@ -568,34 +568,20 @@ final class MeetingViewModel {
     private var adaptiveConnectionQualitySince = Date()
     private var adaptiveVideoQualityDowngraded = false
 
-    private func connectionQualityRank(_ quality: ConnectionQuality) -> Int {
-        switch quality {
-        case .unknown:
-            return 0
-        case .good:
-            return 1
-        case .fair:
-            return 2
-        case .poor:
-            return 3
-        case .emergency:
-            return 4
-        }
-    }
-
     private func combinedConnectionQuality(_ sampledQuality: ConnectionQuality) -> ConnectionQuality {
-        if connectionQualityRank(networkQualityHint) > connectionQualityRank(sampledQuality) {
-            return networkQualityHint
-        }
-        return sampledQuality
+        ConnectionQualityHintPolicy.combined(
+            sampledQuality: sampledQuality,
+            networkHint: networkQualityHint
+        )
     }
 
     @discardableResult
     private func applyConnectionQualitySample(_ sample: ConnectionQualitySample) -> ConnectionQuality {
         publishConnectionQuality = combinedConnectionQuality(sample.publishQuality)
-        screenSharePublishConnectionQuality = ScreenSharePublishProfilePolicy.mostConstrained(
-            publishConnectionQuality,
-            combinedConnectionQuality(sample.screenSharePublishQuality)
+        screenSharePublishConnectionQuality = ConnectionQualityHintPolicy.screenSharePublishQuality(
+            publishQuality: publishConnectionQuality,
+            screenShareSampledQuality: sample.screenSharePublishQuality,
+            networkHint: networkQualityHint
         )
         receiveConnectionQuality = combinedConnectionQuality(sample.receiveQuality)
         let overallQuality = combinedConnectionQuality(sample.overallQuality)

@@ -60,3 +60,37 @@ export const readNumber = (
     ? value
     : undefined;
 };
+
+/**
+ * A numeric field tolerating stringified numbers ("60") — for endpoints whose
+ * callers have historically been allowed to send either.
+ */
+export const readCoercedNumber = (
+  record: UntrustedRecord,
+  key: string,
+): number | undefined => {
+  const value = record[key];
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : undefined;
+  }
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  return undefined;
+};
+
+/**
+ * A boolean field tolerating "true"/"false" strings — same API tolerance as
+ * readCoercedNumber. (Unlike truthy coercion, "false" means false.)
+ */
+export const readCoercedBoolean = (
+  record: UntrustedRecord,
+  key: string,
+): boolean | undefined => {
+  const value = record[key];
+  if (typeof value === "boolean") return value;
+  if (value === "true") return true;
+  if (value === "false") return false;
+  return undefined;
+};

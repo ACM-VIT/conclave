@@ -4,7 +4,7 @@ import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Socket } from "socket.io-client";
 import type { JoinMode } from "../lib/types";
-import { generateSessionId } from "../lib/utils";
+import { generateSessionId, readResponseError } from "../lib/utils";
 
 const DevVideoEffectsDiagnostic = dynamic(
   () => import("./DevVideoEffectsDiagnostic"),
@@ -27,13 +27,7 @@ const parseNumberInput = (
 
 const clientId = process.env.NEXT_PUBLIC_SFU_CLIENT_ID || "conclave";
 
-const readError = async (response: Response) => {
-  const data: unknown = await response.json().catch(() => null);
-  if (data && typeof data === "object" && "error" in data) {
-    return String((data as { error?: string }).error || "Request failed");
-  }
-  return response.statusText || "Request failed";
-};
+const readError = readResponseError;
 
 interface DevMeetToolsPanelProps {
   roomId: string;

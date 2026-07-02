@@ -36,7 +36,6 @@ export interface UseMeetPopoutOptions {
   isCameraOff: boolean;
   isMuted: boolean;
   mirrorLocalPreview: boolean;
-  userEmail: string;
   getDisplayName: (userId: string) => string;
   onToggleMute: () => void;
   onToggleCamera: () => void;

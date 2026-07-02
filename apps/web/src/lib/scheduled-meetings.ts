@@ -3,6 +3,7 @@ import {
   type SfuAuthenticatedUser,
 } from "@/lib/sfu-user-auth";
 import { resolveSfuSecret, resolveSfuUrl } from "@/lib/sfu-admin-auth";
+import { readResponseError } from "@/app/lib/utils";
 
 export type ScheduledMeetingStatus =
   | "scheduled"
@@ -71,15 +72,9 @@ export const buildScheduledMeetingHeaders = (
   request: Request,
 ): Headers => buildScheduledWebinarHeaders(user, request);
 
-export const readScheduledMeetingError = async (
+export const readScheduledMeetingError = (
   response: Response,
-): Promise<string> => {
-  const data: unknown = await response.json().catch(() => null);
-  if (data && typeof data === "object" && "error" in data) {
-    return String((data as { error?: string }).error || "Request failed");
-  }
-  return response.statusText || "Request failed";
-};
+): Promise<string> => readResponseError(response);
 
 export const lookupPublicScheduledMeetingByRoomCode = async (
   clientId: string,

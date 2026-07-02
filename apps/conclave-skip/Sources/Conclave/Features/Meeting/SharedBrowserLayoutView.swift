@@ -30,7 +30,7 @@ struct SharedBrowserLayoutView: View {
             syncNavInput()
         }
 #else
-        .onChange(of: viewModel.state.isBrowserActive) { _, _ in
+        .onChange(of: viewModel.state.isBrowserActive) {
             syncNavInput()
         }
         #endif

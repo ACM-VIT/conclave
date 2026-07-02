@@ -40,7 +40,12 @@ const useReasoning = () => {
   return context;
 };
 
-export type ReasoningProps = ComponentProps<typeof Collapsible> & {
+// Omit Radix's method-style onOpenChange declaration and re-declare it as a
+// plain function type so destructuring it doesn't trip unbound-method.
+export type ReasoningProps = Omit<
+  ComponentProps<typeof Collapsible>,
+  "onOpenChange"
+> & {
   isStreaming?: boolean;
   open?: boolean;
   defaultOpen?: boolean;
@@ -54,9 +59,6 @@ export const Reasoning = memo(
     isStreaming = false,
     open,
     defaultOpen = true,
-    // React callback prop; Radix's ComponentProps declares it method-style,
-    // but it is never `this`-bound.
-    // eslint-disable-next-line @typescript-eslint/unbound-method
     onOpenChange,
     duration: durationProp,
     children,

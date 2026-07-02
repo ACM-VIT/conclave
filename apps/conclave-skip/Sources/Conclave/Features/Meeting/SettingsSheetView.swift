@@ -2099,7 +2099,7 @@ struct SettingsSheetView: View {
             scheduleSettingsRefreshIfReady()
         }
 #else
-        .onChange(of: bodyReady) { _, _ in
+        .onChange(of: bodyReady) {
             scheduleSettingsRefreshIfReady()
         }
         #endif

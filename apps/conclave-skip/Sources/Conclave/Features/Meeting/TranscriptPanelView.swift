@@ -169,7 +169,7 @@ struct TranscriptPanelView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: ACMSpacing.md) {
-                    ForEach(groupedSegments) { group in
+                    ForEach(state.groupedSegments) { group in
                         transcriptGroupView(group)
                     }
                     Color.clear
@@ -179,7 +179,7 @@ struct TranscriptPanelView: View {
                 .padding(.horizontal, ACMSpacing.lg)
                 .padding(.top, ACMSpacing.md)
             }
-            .onChange(of: scrollTrigger) {
+            .onChange(of: state.scrollTrigger) {
                 proxy.scrollTo("transcript-bottom", anchor: .bottom)
             }
         }
@@ -191,13 +191,6 @@ struct TranscriptPanelView: View {
         #else
         return ACMSpacing.md
         #endif
-    }
-
-    // Any new/updated caption changes this key, nudging the scroll to the bottom.
-    private var scrollTrigger: String {
-        let segments = state.orderedSegments
-        guard let last = segments.last else { return "\(segments.count)" }
-        return "\(segments.count)-\(last.itemId)-\(last.text.count)"
     }
 
     private func transcriptGroupView(_ group: TranscriptGroup) -> some View {
@@ -228,50 +221,5 @@ struct TranscriptPanelView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(.horizontal, ACMSpacing.lg)
-    }
-
-    // MARK: - Grouping
-
-    private var groupedSegments: [TranscriptGroup] {
-        var groups: [TranscriptGroup] = []
-        for segment in state.orderedSegments {
-            if var last = groups.last,
-               last.speakerUserId == segment.speakerUserId,
-               segment.startMs - last.lastStartMs < 90_000 {
-                last.append(segment)
-                groups[groups.count - 1] = last
-            } else {
-                groups.append(TranscriptGroup(segment: segment))
-            }
-        }
-        return groups
-    }
-}
-
-/// A run of consecutive captions from the same speaker, rendered as one block.
-struct TranscriptGroup: Identifiable {
-    let id: String
-    let speakerUserId: String
-    let speakerDisplayName: String
-    private(set) var text: String
-    private(set) var isFinal: Bool
-    private(set) var lastStartMs: Double
-
-    init(segment: TranscriptSegmentModel) {
-        self.id = "\(segment.speakerUserId)-\(segment.sequence)-\(segment.itemId)"
-        self.speakerUserId = segment.speakerUserId
-        self.speakerDisplayName = segment.speakerDisplayName
-        self.text = segment.text
-        self.isFinal = segment.isFinal
-        self.lastStartMs = segment.startMs
-    }
-
-    mutating func append(_ segment: TranscriptSegmentModel) {
-        let trimmed = segment.text.trimmingCharacters(in: .whitespaces)
-        if !trimmed.isEmpty {
-            text = text.isEmpty ? trimmed : "\(text) \(trimmed)"
-        }
-        isFinal = isFinal && segment.isFinal
-        lastStartMs = segment.startMs
     }
 }

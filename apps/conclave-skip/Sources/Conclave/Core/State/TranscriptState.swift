@@ -24,6 +24,69 @@ struct TranscriptSegmentModel: Identifiable, Equatable {
     var id: String { itemId }
 }
 
+/// A run of consecutive captions from the same speaker, rendered as one block.
+struct TranscriptGroup: Identifiable, Equatable {
+    let id: String
+    let speakerUserId: String
+    let speakerDisplayName: String
+    private(set) var text: String
+    private(set) var isFinal: Bool
+    private(set) var lastStartMs: Double
+
+    init(segment: TranscriptSegmentModel) {
+        self.id = "\(segment.speakerUserId)-\(segment.sequence)-\(segment.itemId)"
+        self.speakerUserId = segment.speakerUserId
+        self.speakerDisplayName = segment.speakerDisplayName
+        self.text = segment.text
+        self.isFinal = segment.isFinal
+        self.lastStartMs = segment.startMs
+    }
+
+    mutating func append(_ segment: TranscriptSegmentModel) {
+        let trimmed = segment.text.trimmingCharacters(in: .whitespaces)
+        if !trimmed.isEmpty {
+            text = text.isEmpty ? trimmed : "\(text) \(trimmed)"
+        }
+        isFinal = isFinal && segment.isFinal
+        lastStartMs = segment.startMs
+    }
+}
+
+enum TranscriptPresentationPolicy {
+    static func orderedSegments(
+        finals: [TranscriptSegmentModel],
+        partials: [String: TranscriptSegmentModel]
+    ) -> [TranscriptSegmentModel] {
+        var combined = finals
+        combined.append(contentsOf: partials.values)
+        return combined.sorted { left, right in
+            if left.sequence != right.sequence { return left.sequence < right.sequence }
+            if left.startMs != right.startMs { return left.startMs < right.startMs }
+            return left.itemId < right.itemId
+        }
+    }
+
+    static func groupedSegments(from segments: [TranscriptSegmentModel]) -> [TranscriptGroup] {
+        var groups: [TranscriptGroup] = []
+        for segment in segments {
+            if var last = groups.last,
+               last.speakerUserId == segment.speakerUserId,
+               segment.startMs - last.lastStartMs < 90_000 {
+                last.append(segment)
+                groups[groups.count - 1] = last
+            } else {
+                groups.append(TranscriptGroup(segment: segment))
+            }
+        }
+        return groups
+    }
+
+    static func scrollTrigger(for segments: [TranscriptSegmentModel]) -> String {
+        guard let last = segments.last else { return "\(segments.count)" }
+        return "\(segments.count)-\(last.itemId)-\(last.text.count)"
+    }
+}
+
 /// Observable transcript view state. Holds finalized segments plus the in-flight
 /// partials map so the panel can render live captions as they stream in.
 @MainActor
@@ -38,37 +101,39 @@ final class TranscriptState {
 
     private(set) var finals: [TranscriptSegmentModel] = []
     private(set) var partials: [String: TranscriptSegmentModel] = [:]
+    private(set) var orderedSegments: [TranscriptSegmentModel] = []
+    private(set) var groupedSegments: [TranscriptGroup] = []
+    private(set) var scrollTrigger: String = "0"
 
     var isLive: Bool { sessionStatus == "live" }
     var isBusy: Bool { sessionStatus == "starting" || sessionStatus == "stopping" }
 
-    /// Finals + partials, ordered the same way the web orders them
-    /// (sequence, then startMs, then itemId).
-    var orderedSegments: [TranscriptSegmentModel] {
-        var combined = finals
-        combined.append(contentsOf: partials.values)
-        return combined.sorted { left, right in
-            if left.sequence != right.sequence { return left.sequence < right.sequence }
-            if left.startMs != right.startMs { return left.startMs < right.startMs }
-            return left.itemId < right.itemId
-        }
-    }
-
     func applyPartial(_ segment: TranscriptSegmentModel) {
+        if partials[segment.itemId] == segment { return }
         partials[segment.itemId] = segment
+        rebuildPresentation()
     }
 
     func applyFinal(_ segment: TranscriptSegmentModel) {
-        partials.removeValue(forKey: segment.itemId)
+        let removedPartial = partials.removeValue(forKey: segment.itemId) != nil
+        var changedFinal = false
         if let index = finals.firstIndex(where: { $0.itemId == segment.itemId }) {
-            finals[index] = segment
+            if finals[index] != segment {
+                finals[index] = segment
+                changedFinal = true
+            }
         } else {
             finals.append(segment)
+            changedFinal = true
         }
+        guard removedPartial || changedFinal else { return }
+        rebuildPresentation()
     }
 
     func resetPartials() {
+        guard !partials.isEmpty else { return }
         partials = [:]
+        rebuildPresentation()
     }
 
     func replaceSnapshot(finals: [TranscriptSegmentModel], partials: [TranscriptSegmentModel]) {
@@ -78,11 +143,14 @@ final class TranscriptState {
             map[segment.itemId] = segment
         }
         self.partials = map
+        rebuildPresentation()
     }
 
     func clearSegments() {
+        guard !finals.isEmpty || !partials.isEmpty || !orderedSegments.isEmpty || !groupedSegments.isEmpty else { return }
         finals = []
         partials = [:]
+        rebuildPresentation()
     }
 
     func resetAll() {
@@ -93,5 +161,15 @@ final class TranscriptState {
         controllerName = nil
         canStart = false
         canStop = false
+    }
+
+    private func rebuildPresentation() {
+        let nextOrderedSegments = TranscriptPresentationPolicy.orderedSegments(
+            finals: finals,
+            partials: partials
+        )
+        orderedSegments = nextOrderedSegments
+        groupedSegments = TranscriptPresentationPolicy.groupedSegments(from: nextOrderedSegments)
+        scrollTrigger = TranscriptPresentationPolicy.scrollTrigger(for: nextOrderedSegments)
     }
 }

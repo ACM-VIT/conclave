@@ -400,17 +400,17 @@ struct MeetingView: View {
             updateStageObscured()
         }
         #else
-        .onChange(of: viewModel.state.isChatOpen) { _, _ in
+        .onChange(of: viewModel.state.isChatOpen) {
             if !viewModel.state.isChatOpen {
                 chatInputFocused = false
             }
         }
-        .onChange(of: showMeetingSheet) { _, _ in
+        .onChange(of: showMeetingSheet) {
             if !showMeetingSheet {
                 resetMeetingSheetStateAfterDismiss()
             }
         }
-        .onChange(of: viewModel.state.isWebinarAttendee) { _, _ in
+        .onChange(of: viewModel.state.isWebinarAttendee) {
             if viewModel.state.isWebinarAttendee {
                 dismissMeetingSheet()
                 chatInputFocused = false

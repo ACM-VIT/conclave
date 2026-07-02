@@ -54,6 +54,58 @@ final class ConclaveTests: XCTestCase {
         XCTAssertTrue(stop.success)
     }
 
+    func testTranscriptPresentationPolicyOrdersAndGroupsSegments() throws {
+        let unordered = [
+            TranscriptSegmentModel(itemId: "b", sequence: 2, speakerUserId: "alex", speakerDisplayName: "Alex", text: "later", startMs: 3_000, isFinal: true),
+            TranscriptSegmentModel(itemId: "a", sequence: 1, speakerUserId: "alex", speakerDisplayName: "Alex", text: "hello", startMs: 1_000, isFinal: true),
+            TranscriptSegmentModel(itemId: "c", sequence: 1, speakerUserId: "alex", speakerDisplayName: "Alex", text: "world", startMs: 2_000, isFinal: false),
+            TranscriptSegmentModel(itemId: "d", sequence: 3, speakerUserId: "bea", speakerDisplayName: "Bea", text: "reply", startMs: 4_000, isFinal: true)
+        ]
+
+        let ordered = TranscriptPresentationPolicy.orderedSegments(finals: [unordered[0], unordered[1]], partials: [
+            unordered[2].itemId: unordered[2],
+            unordered[3].itemId: unordered[3]
+        ])
+        XCTAssertEqual(ordered.map(\.itemId), ["a", "c", "b", "d"])
+
+        let groups = TranscriptPresentationPolicy.groupedSegments(from: ordered)
+        XCTAssertEqual(groups.count, 2)
+        XCTAssertEqual(groups[0].speakerDisplayName, "Alex")
+        XCTAssertEqual(groups[0].text, "hello world later")
+        XCTAssertFalse(groups[0].isFinal)
+        XCTAssertEqual(groups[1].speakerDisplayName, "Bea")
+        XCTAssertEqual(groups[1].text, "reply")
+    }
+
+    @MainActor
+    func testTranscriptStateCachesPresentationOnSegmentMutations() throws {
+        let state = TranscriptState()
+        let partial = TranscriptSegmentModel(itemId: "p", sequence: 2, speakerUserId: "alex", speakerDisplayName: "Alex", text: "live", startMs: 2_000, isFinal: false)
+        let final = TranscriptSegmentModel(itemId: "f", sequence: 1, speakerUserId: "alex", speakerDisplayName: "Alex", text: "ready", startMs: 1_000, isFinal: true)
+
+        state.applyPartial(partial)
+        XCTAssertEqual(state.orderedSegments.map(\.itemId), ["p"])
+        XCTAssertEqual(state.groupedSegments.map(\.text), ["live"])
+        XCTAssertEqual(state.scrollTrigger, "1-p-4")
+
+        state.applyFinal(final)
+        XCTAssertEqual(state.orderedSegments.map(\.itemId), ["f", "p"])
+        XCTAssertEqual(state.groupedSegments.map(\.text), ["ready live"])
+
+        state.resetPartials()
+        XCTAssertEqual(state.orderedSegments.map(\.itemId), ["f"])
+        XCTAssertEqual(state.groupedSegments.map(\.text), ["ready"])
+    }
+
+    func testTranscriptPanelUsesCachedPresentationState() throws {
+        let source = try sourceFileContents("Sources/Conclave/Features/Meeting/TranscriptPanelView.swift")
+
+        XCTAssertTrue(source.contains("ForEach(state.groupedSegments)"))
+        XCTAssertTrue(source.contains(".onChange(of: state.scrollTrigger)"))
+        XCTAssertFalse(source.contains("private var groupedSegments"))
+        XCTAssertFalse(source.contains("for segment in state.orderedSegments"))
+    }
+
     func testNativeGameWireModelsDecodeServerShapes() throws {
         let json = """
         {
@@ -130,6 +182,14 @@ final class ConclaveTests: XCTestCase {
         XCTAssertFalse(source.contains("category!"))
     }
 
+    func testParticipantsSheetUsesCachedPendingUserRows() throws {
+        let source = try sourceFileContents("Sources/Conclave/Features/Meeting/ParticipantsSheetView.swift")
+
+        XCTAssertTrue(source.contains("viewModel.state.pendingUserRows"))
+        XCTAssertFalse(source.contains("pendingUsers.sorted"))
+        XCTAssertFalse(source.contains("state.pendingUsers.sorted"))
+    }
+
     func testMeetingEntryOverlayPolicyStopsAtSafetyCap() throws {
         let startedAt = Date(timeIntervalSince1970: 1_000)
 
@@ -177,6 +237,85 @@ final class ConclaveTests: XCTestCase {
         XCTAssertTrue(MeetingEntryOverlayPolicy.shouldClearMeetingEntry(on: ConnectionState.waiting))
         XCTAssertTrue(MeetingEntryOverlayPolicy.shouldClearMeetingEntry(on: ConnectionState.error))
         XCTAssertTrue(MeetingEntryOverlayPolicy.shouldClearMeetingEntry(on: ConnectionState.disconnected))
+    }
+
+    func testConnectionQualityHintPolicyDoesNotKeepReducedQualityLatchedAfterGoodRtcStats() throws {
+        XCTAssertEqual(
+            ConnectionQualityHintPolicy.combined(sampledQuality: ConnectionQuality.good, networkHint: ConnectionQuality.fair),
+            ConnectionQuality.good
+        )
+        XCTAssertEqual(
+            ConnectionQualityHintPolicy.combined(sampledQuality: ConnectionQuality.good, networkHint: ConnectionQuality.poor),
+            ConnectionQuality.good
+        )
+        XCTAssertEqual(
+            ConnectionQualityHintPolicy.combined(sampledQuality: ConnectionQuality.unknown, networkHint: ConnectionQuality.fair),
+            ConnectionQuality.fair
+        )
+        XCTAssertEqual(
+            ConnectionQualityHintPolicy.combined(sampledQuality: ConnectionQuality.poor, networkHint: ConnectionQuality.emergency),
+            ConnectionQuality.emergency
+        )
+        XCTAssertEqual(
+            ConnectionQualityHintPolicy.screenSharePublishQuality(
+                publishQuality: ConnectionQuality.good,
+                screenShareSampledQuality: ConnectionQuality.unknown,
+                networkHint: ConnectionQuality.poor
+            ),
+            ConnectionQuality.good
+        )
+        XCTAssertEqual(
+            ConnectionQualityHintPolicy.screenSharePublishQuality(
+                publishQuality: ConnectionQuality.fair,
+                screenShareSampledQuality: ConnectionQuality.poor,
+                networkHint: ConnectionQuality.good
+            ),
+            ConnectionQuality.poor
+        )
+        XCTAssertEqual(
+            ConnectionQualityHintPolicy.screenSharePublishQuality(
+                publishQuality: ConnectionQuality.emergency,
+                screenShareSampledQuality: ConnectionQuality.unknown,
+                networkHint: ConnectionQuality.poor
+            ),
+            ConnectionQuality.emergency
+        )
+    }
+
+    func testAndroidNetworkReachabilityQualityPolicyUsesBandwidthOnlyForValidatedQuality() throws {
+        XCTAssertEqual(
+            AndroidNetworkReachabilityQualityPolicy.bandwidthQuality(upstreamKbps: 0, downstreamKbps: 0),
+            ConnectionQuality.unknown
+        )
+        XCTAssertEqual(
+            AndroidNetworkReachabilityQualityPolicy.validatedQuality(upstreamKbps: 0, downstreamKbps: 0),
+            ConnectionQuality.good
+        )
+        XCTAssertEqual(
+            AndroidNetworkReachabilityQualityPolicy.validatedQuality(upstreamKbps: 10_000, downstreamKbps: 10_000),
+            ConnectionQuality.good
+        )
+        XCTAssertEqual(
+            AndroidNetworkReachabilityQualityPolicy.validatedQuality(upstreamKbps: 500, downstreamKbps: 1_500),
+            ConnectionQuality.fair
+        )
+        XCTAssertEqual(
+            AndroidNetworkReachabilityQualityPolicy.validatedQuality(upstreamKbps: 240, downstreamKbps: 800),
+            ConnectionQuality.poor
+        )
+        XCTAssertEqual(
+            AndroidNetworkReachabilityQualityPolicy.validatedQuality(upstreamKbps: 120, downstreamKbps: 300),
+            ConnectionQuality.emergency
+        )
+    }
+
+    func testAndroidNetworkReachabilityBridgeUsesSharedBandwidthPolicy() throws {
+        let source = try sourceFileContents("Sources/Conclave/Skip/NetworkReachabilityMonitor.kt")
+
+        XCTAssertTrue(source.contains("AndroidNetworkReachabilityQualityPolicy.bandwidthQuality"))
+        XCTAssertFalse(source.contains("NET_CAPABILITY_NOT_CONGESTED"))
+        XCTAssertFalse(source.contains("NET_CAPABILITY_NOT_SUSPENDED"))
+        XCTAssertFalse(source.contains("blocked_or_congested"))
     }
 
     @MainActor
@@ -350,6 +489,101 @@ final class ConclaveTests: XCTestCase {
         XCTAssertTrue(nativeWordle.contains("struct WordleGameView"))
     }
 
+    func testNativeGameCatalogPresentationPolicyCoversWebGameIdentities() throws {
+        let expected: [String: GameCatalogVisual] = [
+            "trivia": GameCatalogVisual(icon: "questionmark.circle.fill", androidIcon: "info"),
+            "bluff": GameCatalogVisual(icon: "theatermasks.fill", androidIcon: "forum"),
+            "would-you-rather": GameCatalogVisual(icon: "arrow.left.arrow.right", androidIcon: "arrow.forward"),
+            "most-likely-to": GameCatalogVisual(icon: "person.2.fill", androidIcon: "participants"),
+            "reaction": GameCatalogVisual(icon: "bolt.fill", androidIcon: "warning"),
+            "imposter": GameCatalogVisual(icon: "eye.slash.fill", androidIcon: "ghost"),
+            "wordle": GameCatalogVisual(icon: "square.grid.3x3.fill", androidIcon: "grid")
+        ]
+
+        for (gameId, visual) in expected {
+            XCTAssertEqual(GameCatalogPresentationPolicy.visual(for: gameId), visual)
+        }
+
+        XCTAssertEqual(
+            GameCatalogPresentationPolicy.visual(for: "future-game"),
+            GameCatalogVisual(icon: "gamecontroller.fill", androidIcon: "sports_esports")
+        )
+    }
+
+    func testGameCatalogPresentationPolicyFormatsRowsAndDividers() throws {
+        let described = GameCatalogEntry(
+            id: "trivia",
+            name: "Trivia",
+            description: "  Quick quiz  ",
+            minPlayers: 1,
+            maxPlayers: 24,
+            options: [],
+            hasLeaderboard: true
+        )
+        let fallback = GameCatalogEntry(
+            id: "wordle",
+            name: "Wordle",
+            description: "   ",
+            minPlayers: 2,
+            maxPlayers: 2,
+            options: [],
+            hasLeaderboard: true
+        )
+
+        XCTAssertEqual(GameCatalogPresentationPolicy.catalogSubtitle(described), "Quick quiz")
+        XCTAssertEqual(GameCatalogPresentationPolicy.catalogSubtitle(fallback), "2")
+        XCTAssertEqual(GameCatalogPresentationPolicy.playerRange(described), "1-24")
+        XCTAssertEqual(GameCatalogPresentationPolicy.playerRange(fallback), "2")
+        XCTAssertTrue(GameCatalogPresentationPolicy.canOpenVote(catalogCount: 2, isActionInFlight: false))
+        XCTAssertFalse(GameCatalogPresentationPolicy.canOpenVote(catalogCount: 1, isActionInFlight: false))
+        XCTAssertFalse(GameCatalogPresentationPolicy.canOpenVote(catalogCount: 2, isActionInFlight: true))
+        XCTAssertTrue(GameCatalogPresentationPolicy.shouldShowDivider(after: 0, total: 2, hasFooter: false))
+        XCTAssertFalse(GameCatalogPresentationPolicy.shouldShowDivider(after: 1, total: 2, hasFooter: false))
+        XCTAssertTrue(GameCatalogPresentationPolicy.shouldShowDivider(after: 1, total: 2, hasFooter: true))
+    }
+
+    func testGameVotePresentationPolicySelectsLeaderAndDividers() throws {
+        let trivia = GameCatalogEntry(
+            id: "trivia",
+            name: "Trivia",
+            description: "Quick quiz",
+            minPlayers: 1,
+            maxPlayers: 24,
+            options: [],
+            hasLeaderboard: true
+        )
+        let wordle = GameCatalogEntry(
+            id: "wordle",
+            name: "Wordle",
+            description: "Word puzzle",
+            minPlayers: 2,
+            maxPlayers: 8,
+            options: [],
+            hasLeaderboard: true
+        )
+        let vote = GameVoteState(
+            candidates: [trivia, wordle],
+            tally: ["trivia": 1, "wordle": 3],
+            votes: [:],
+            totalPlayers: 4,
+            roomId: nil
+        )
+        let noVotes = GameVoteState(
+            candidates: [trivia],
+            tally: [:],
+            votes: [:],
+            totalPlayers: 0,
+            roomId: nil
+        )
+
+        XCTAssertEqual(GameVotePresentationPolicy.leader(in: vote)?.id, "wordle")
+        XCTAssertEqual(GameVotePresentationPolicy.startLeaderTitle(vote), "Start Wordle")
+        XCTAssertEqual(GameVotePresentationPolicy.startLeaderTitle(noVotes), "Start leader")
+        XCTAssertTrue(GameVotePresentationPolicy.shouldShowCandidateDivider(after: 0, total: 2, hasHostActions: false))
+        XCTAssertFalse(GameVotePresentationPolicy.shouldShowCandidateDivider(after: 1, total: 2, hasHostActions: false))
+        XCTAssertTrue(GameVotePresentationPolicy.shouldShowCandidateDivider(after: 1, total: 2, hasHostActions: true))
+    }
+
     func testMoreSheetShowsToolsWhenOnlyTranscriptToolIsAvailable() throws {
         XCTAssertTrue(MoreSheetVisibilityPolicy.canShowToolsSection(
             canShowAdminControls: false,
@@ -368,7 +602,7 @@ final class ConclaveTests: XCTestCase {
     }
 
     func testMeetingHeaderRoomPillDoesNotStretchAcrossCompactScreens() throws {
-        XCTAssertLessThanOrEqual(MeetingHeaderLayout.roomPillMaxWidth, 224.0)
+        XCTAssertLessThanOrEqual(MeetingHeaderLayout.roomPillMaxWidth, 180.0)
     }
 
 #if !SKIP
@@ -3140,6 +3374,26 @@ final class ConclaveTests: XCTestCase {
             "bea@example.com": "bea@example.com",
             "chris@example.com": "Chris"
         ])
+        XCTAssertEqual(viewModel.state.pendingUserRows, [
+            PendingUserRow(id: "bea@example.com", displayName: "bea@example.com"),
+            PendingUserRow(id: "chris@example.com", displayName: "Chris")
+        ])
+    }
+
+    func testPendingUserRowsPolicySortsByDisplayNameThenId() throws {
+        let rows = PendingUserRowsPolicy.sortedRows(from: [
+            "zara@example.com": "Taylor",
+            "alex@example.com": "sam",
+            "bea@example.com": "Sam",
+            "casey@example.com": "Alex"
+        ])
+
+        XCTAssertEqual(rows, [
+            PendingUserRow(id: "casey@example.com", displayName: "Alex"),
+            PendingUserRow(id: "alex@example.com", displayName: "sam"),
+            PendingUserRow(id: "bea@example.com", displayName: "Sam"),
+            PendingUserRow(id: "zara@example.com", displayName: "Taylor")
+        ])
     }
 
     func testPendingWaitingRoomBufferSnapshotSupersedesEarlierEvents() throws {
@@ -3242,6 +3496,9 @@ final class ConclaveTests: XCTestCase {
 
         XCTAssertEqual(viewModel.state.pendingUsers, [
             "bea@example.com": "Bea"
+        ])
+        XCTAssertEqual(viewModel.state.pendingUserRows, [
+            PendingUserRow(id: "bea@example.com", displayName: "Bea")
         ])
     }
 
@@ -7062,7 +7319,8 @@ final class ConclaveTests: XCTestCase {
         XCTAssertTrue(modelsSource.contains("let screenSharePublishQuality: ConnectionQuality"))
         XCTAssertTrue(iosWebRTCSource.contains("ScreenSharePublishProfilePolicy.quality("))
         XCTAssertTrue(viewModelSource.contains("private var screenSharePublishConnectionQuality: ConnectionQuality = .unknown"))
-        XCTAssertTrue(viewModelSource.contains("ScreenSharePublishProfilePolicy.mostConstrained("))
+        XCTAssertTrue(viewModelSource.contains("ConnectionQualityHintPolicy.screenSharePublishQuality("))
+        XCTAssertTrue(viewModelSource.contains("screenShareSampledQuality: sample.screenSharePublishQuality"))
         XCTAssertTrue(viewModelSource.contains("self.screenSharePublishConnectionQuality == quality"))
         XCTAssertTrue(viewModelSource.contains("initialReceiveConnectionQuality: receiveConnectionQuality"))
         XCTAssertTrue(iosWebRTCSource.contains("ScreenCaptureManager.shared.updateMaxFrameRate(\n                screenShareEncodingCap(connectionQuality: connectionQuality).maxFramerate"))

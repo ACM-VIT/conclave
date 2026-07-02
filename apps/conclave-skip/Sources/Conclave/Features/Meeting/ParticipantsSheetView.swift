@@ -575,7 +575,7 @@ struct ParticipantsSheetView: View {
 
     var body: some View {
         let participants = viewModel.state.presentParticipants
-        let pendingUsers = viewModel.state.pendingUsers.sorted(by: { $0.value < $1.value })
+        let pendingUsers = viewModel.state.pendingUserRows
         let dividerInset = ACMSpacing.sm + 40 + ACMSpacing.sm
 
         VStack(spacing: 0) {
@@ -643,11 +643,11 @@ struct ParticipantsSheetView: View {
 
                                 MeetingSheetRowDivider(inset: ACMSpacing.sm)
 
-                                ForEach(pendingUsers, id: \.key) { userId, name in
-                                    pendingUserRow(userId: userId, name: name)
+                                ForEach(pendingUsers) { pendingUser in
+                                    pendingUserRow(userId: pendingUser.id, name: pendingUser.displayName)
 
                                     if let last = pendingUsers.last {
-                                        if userId != last.key {
+                                        if pendingUser.id != last.id {
                                             MeetingSheetRowDivider(inset: ACMSpacing.sm + 36 + ACMSpacing.sm)
                                         }
                                     }

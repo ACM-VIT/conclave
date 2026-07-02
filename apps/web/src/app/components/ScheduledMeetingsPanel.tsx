@@ -10,6 +10,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
+import { readResponseError } from "../lib/utils";
 import type { ScheduledMeeting } from "@/lib/scheduled-meetings";
 import { buildMeetingPath, buildMeetingUrl } from "@/lib/meeting-links";
 
@@ -36,12 +37,7 @@ const getDefaultStartInput = (): string => {
   return local.toISOString().slice(0, 16);
 };
 
-const readError = async (response: Response): Promise<string> => {
-  const data = (await response.json().catch(() => null)) as
-    | ScheduledMeetingsResponse
-    | null;
-  return data?.error || response.statusText || "Request failed";
-};
+const readError = readResponseError;
 
 const STATUS_LABELS: Record<string, string> = {
   scheduled: "Scheduled",

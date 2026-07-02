@@ -350,7 +350,6 @@ export type MeetsClientProps = {
   initialRoomId?: string;
   enableRoomRouting?: boolean;
   forceJoinOnly?: boolean;
-  allowGhostMode?: boolean;
   bypassMediaPermissions?: boolean;
   user?: {
     id?: string;
@@ -956,7 +955,6 @@ export default function MeetsClient({
   ]);
 
   const {
-    videoQuality,
     setNetworkManagedVideoQuality,
     isMirrorCamera,
     setIsMirrorCamera,
@@ -1177,12 +1175,10 @@ export default function MeetsClient({
     setMeetError,
     selectedAudioInputDeviceId,
     setSelectedAudioInputDeviceId,
-    selectedAudioOutputDeviceId,
     setSelectedAudioOutputDeviceId,
     selectedVideoInputDeviceId,
     setSelectedVideoInputDeviceId,
     meetVolume,
-    videoQuality,
     videoQualityRef: refs.videoQualityRef,
     dataSaverMode: effectiveDataSaverMode,
     activeVideoEffectsCount,
@@ -2655,7 +2651,6 @@ export default function MeetsClient({
       isCameraOff,
       isMuted,
       mirrorLocalPreview,
-      userEmail,
       getDisplayName: resolveDisplayName,
       onToggleMute: () => {
         void toggleMute();
