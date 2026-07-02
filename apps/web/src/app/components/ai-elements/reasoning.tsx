@@ -54,6 +54,9 @@ export const Reasoning = memo(
     isStreaming = false,
     open,
     defaultOpen = true,
+    // React callback prop; Radix's ComponentProps declares it method-style,
+    // but it is never `this`-bound.
+    // eslint-disable-next-line @typescript-eslint/unbound-method
     onOpenChange,
     duration: durationProp,
     children,
@@ -61,7 +64,7 @@ export const Reasoning = memo(
   }: ReasoningProps) => {
     const isControlled = open !== undefined;
     const [internalOpen, setInternalOpen] = useState(open ?? defaultOpen);
-    const isOpen = isControlled ? (open as boolean) : internalOpen;
+    const isOpen = isControlled ? (open) : internalOpen;
     const [duration, setDuration] = useState(durationProp ?? 0);
     const [hasAutoClosed, setHasAutoClosed] = useState(false);
     const startedAtRef = useRef<number | null>(null);

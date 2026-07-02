@@ -23,7 +23,7 @@ export function useCameraPermissionState(): CameraPermissionState {
     };
 
     navigator.permissions
-      .query({ name: "camera" as PermissionName })
+      .query({ name: "camera" })
       .then((status) => {
         if (cancelled) return;
         permissionStatus = status;

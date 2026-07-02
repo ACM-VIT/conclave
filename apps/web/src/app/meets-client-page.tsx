@@ -3,6 +3,7 @@
 import { useCallback } from "react";
 import MeetsClient from "./meets-client";
 import type { JoinMode } from "./lib/types";
+import type { RoomInfo } from "@/lib/sfu-types";
 import { resolveBrowserSfuClientId } from "@/lib/sfu-client-id";
 
 const reactionAssets = [
@@ -15,7 +16,7 @@ const reactionAssets = [
 ];
 
 const readError = async (response: Response) => {
-  const data = await response.json().catch(() => null);
+  const data: unknown = await response.json().catch(() => null);
   if (data && typeof data === "object" && "error" in data) {
     return String((data as { error?: string }).error || "Request failed");
   }
@@ -131,7 +132,12 @@ export default function MeetsClientPage({
         throw error;
       }
 
-      return response.json();
+      // Our own join API; the SFU socket layer re-validates on connect.
+      return (await response.json()) as {
+        token: string;
+        sfuUrl: string;
+        iceServers?: RTCIceServer[];
+      };
     },
     [forceJoinOnly, joinMode, defaultUser, resolvedClientId]
   );
@@ -145,7 +151,8 @@ export default function MeetsClientPage({
       throw new Error(await readError(response));
     }
     const data = (await response.json()) as { rooms?: unknown };
-    return Array.isArray(data?.rooms) ? data.rooms : [];
+    // Our own rooms API; shape is owned by the SFU admin routes.
+    return (Array.isArray(data.rooms) ? data.rooms : []) as RoomInfo[];
   }, [resolvedClientId]);
 
   const getRoom = useCallback(async (roomId: string) => {

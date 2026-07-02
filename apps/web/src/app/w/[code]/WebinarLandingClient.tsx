@@ -117,7 +117,7 @@ export default function WebinarLandingClient({
   useEffect(() => {
     if (!webinar) return;
     if (webinar.status === "ended" || webinar.status === "cancelled") return;
-    const interval = window.setInterval(async () => {
+    const refreshWebinar = async () => {
       try {
         const response = await fetch(
           `/api/webinars/by-slug/${encodeURIComponent(webinar.linkSlug)}`,
@@ -131,6 +131,9 @@ export default function WebinarLandingClient({
       } catch {
         // The countdown can continue from the server-rendered snapshot.
       }
+    };
+    const interval = window.setInterval(() => {
+      void refreshWebinar();
     }, 20_000);
     return () => window.clearInterval(interval);
   }, [webinar]);

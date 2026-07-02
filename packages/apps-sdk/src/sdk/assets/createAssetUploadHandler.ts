@@ -28,7 +28,7 @@ const isNativeRuntime =
 const DEFAULT_ENDPOINT = "/api/apps";
 
 const defaultErrorMapper = async (response: Response): Promise<string> => {
-  const payload = await response.json().catch(() => null);
+  const payload: unknown = await response.json().catch(() => null);
   if (payload && typeof payload === "object" && "error" in payload) {
     const error = (payload as { error?: unknown }).error;
     if (typeof error === "string" && error.trim().length > 0) {
@@ -113,7 +113,7 @@ export const createAssetUploadHandler = (
       throw new Error(await mapError(response));
     }
 
-    const payload = await response.json().catch(() => null);
+    const payload: unknown = await response.json().catch(() => null);
     if (!isAssetUploadResult(payload)) {
       throw new Error("Asset upload returned an invalid response");
     }

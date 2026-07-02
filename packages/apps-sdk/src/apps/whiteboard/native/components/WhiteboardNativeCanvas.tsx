@@ -433,7 +433,11 @@ const renderElement = (element: WhiteboardElement) => {
 
       return null;
     }
-    default:
+    case "text":
+    case "image":
+    case "sticky":
+      // The native whiteboard renders strokes and shapes only for now;
+      // text, images, and stickies are web-rendered.
       return null;
   }
 };

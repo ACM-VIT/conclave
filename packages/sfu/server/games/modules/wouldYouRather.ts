@@ -170,13 +170,13 @@ const loop = createRoundLoop<WyrState>({
  * `onMove`. The side pick is validated here to 0 or 1 (throwing "Invalid pick"),
  * replacing the inline payload cast.
  */
-export type WyrMove =
+export type WouldYouRatherMove =
   | { type: "start" }
   | { type: "choose"; option: 0 | 1 }
   | { type: "next" }
   | { type: "skip" };
 
-const decodeWyrMove = (move: GameMove): WyrMove => {
+const decodeWouldYouRatherMove = (move: GameMove): WouldYouRatherMove => {
   switch (move.type) {
     case "start":
     case "next":
@@ -261,7 +261,7 @@ export const wouldYouRatherModule: GameModule<WyrState> = {
   },
 
   onMove(state, move: GameMove, ctx): WyrState {
-    const m = decodeWyrMove(move);
+    const m = decodeWouldYouRatherMove(move);
     switch (m.type) {
       case "start": {
         if (!ctx.isAdmin(move.playerId)) throw new GameMoveError("Only the host can start");

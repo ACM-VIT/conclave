@@ -150,7 +150,8 @@ const calendarSyncLabel = (meeting: ScheduledMeeting): string => {
       return `Google Calendar sync failed${
         meeting.calendarSyncError ? `: ${meeting.calendarSyncError}` : ""
       }`;
-    default:
+    case "not_required":
+    case undefined:
       return "Google Calendar sync not required";
   }
 };
@@ -480,7 +481,7 @@ const sendSchedulingEmailMessages = async (
       body,
       signal: controller.signal,
     });
-    const data = await response.json().catch(() => null);
+    const data: unknown = await response.json().catch(() => null);
     if (!response.ok) {
       const message =
         data && typeof data === "object" && "error" in data

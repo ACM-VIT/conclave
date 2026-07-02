@@ -13,7 +13,7 @@ type RouteContext = {
 };
 
 const readError = async (response: Response): Promise<string> => {
-  const payload = await response.json().catch(() => null);
+  const payload: unknown = await response.json().catch(() => null);
   if (payload && typeof payload === "object" && "error" in payload) {
     return String((payload as { error?: string }).error || "Request failed");
   }
@@ -95,7 +95,7 @@ const proxyAdminRequest = async (
     }
 
     if (contentType.includes("application/json")) {
-      const data = await response.json().catch(() => ({}));
+      const data: unknown = await response.json().catch(() => ({}));
       return NextResponse.json(data, {
         status: response.status,
         headers: {

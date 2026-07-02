@@ -39,14 +39,35 @@ jobs:
       - name: Typecheck apps/web
         run: pnpm -C apps/web exec tsc --noEmit
 
-      - name: Lint apps/web (react-hooks guard)
-        # Minimal ESLint config — only `react-hooks/rules-of-hooks` (error).
-        # Catches app-crashing conditional/early-return hook placement that
-        # `tsc` cannot see (Next 16 removed `next lint`, so this is the gate).
+      - name: Lint apps/web
+        # Cherry-picked ESLint config: the react-hooks crash guard (error)
+        # plus typed TypeScript bug-class rules. Error tier gates regressions;
+        # warn tier is the documented burn-down list and does not fail CI.
         run: pnpm -C apps/web run lint
+
+      - name: Lint packages
+        # Same philosophy for the workspace packages (sfu, meeting-core,
+        # apps-sdk, shared-browser, ui-tokens): async bug classes (floating/
+        # misused promises) are errors — a dropped rejection in the SFU is a
+        # prod crash class.
+        run: pnpm run lint:packages
+
+      - name: Structural conventions (konsistent)
+        # Enforces repo-level shape: game modules export <id>Module, hooks are
+        # named after their file, every package has a manifest, etc.
+        run: pnpm run konsistent
 
       - name: Typecheck packages/sfu
         run: pnpm -C packages/sfu exec tsc --noEmit
+
+      - name: Typecheck packages/meeting-core
+        # meeting-core is source-consumed by web and sfu; its own tsconfig
+        # keeps it honest standalone (and powers typed lint). It has no
+        # typescript devDep, so borrow sfu's compiler.
+        run: pnpm -C packages/sfu exec tsc -p ../meeting-core/tsconfig.json --noEmit
+
+      - name: Unit tests (packages/sfu)
+        run: pnpm -C packages/sfu test
 
       - name: Unit tests (packages/meeting-core)
         run: pnpm -C packages/meeting-core test

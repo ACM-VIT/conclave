@@ -89,7 +89,7 @@ const toUint8Array = (value: unknown): Uint8Array | null => {
   if (Array.isArray(value)) {
     const allNumbers = value.every((item) => typeof item === "number");
     if (!allNumbers) return null;
-    return Uint8Array.from(value as number[]);
+    return Uint8Array.from(value);
   }
 
   if (typeof value === "object") {
@@ -153,7 +153,7 @@ export function AppsProvider({
     for (const [appId, awareness] of awarenessRef.current.entries()) {
       const handler = awarenessHandlersRef.current.get(appId);
       if (handler) {
-        awareness.off("update", handler as unknown as (...args: unknown[]) => void);
+        awareness.off("update", handler);
       }
       try {
         awareness.destroy();
@@ -238,7 +238,7 @@ export function AppsProvider({
       currentSocket.emit("apps:awareness", payload);
     };
 
-    awareness.on("update", handler as unknown as (...args: unknown[]) => void);
+    awareness.on("update", handler);
     awarenessHandlersRef.current.set(appId, handler);
   }, []);
 

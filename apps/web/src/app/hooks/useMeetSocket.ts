@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { toError } from "../lib/utils";
 import type { Socket } from "socket.io-client";
 import type { Device } from "mediasoup-client";
 import {
@@ -223,7 +224,7 @@ const getConnectionStatsNetworkProfile = (
       ? statsQuality
       : ((snapshot.quality === "unknown"
           ? snapshot.startupQuality
-          : snapshot.quality) as ConnectionQuality);
+          : snapshot.quality));
 
   if (snapshot.emergency || (statsEmergency === true && quality !== "good")) {
     return "emergency";
@@ -1227,7 +1228,7 @@ export function useMeetSocket({
       screenProducerRef.current = producer;
       setIsScreenSharing(true);
       setActiveScreenShareId(producer.id);
-      console.log(`[Meets] Republished screen share after ${reason}`);
+      console.info(`[Meets] Republished screen share after ${reason}`);
 
       producer.on("transportclose", () => {
         if (screenProducerRef.current?.id === producer.id) {
@@ -1355,7 +1356,7 @@ export function useMeetSocket({
     (options?: { resetRoomId?: boolean; preserveMeetingState?: boolean }) => {
       const resetRoomId = options?.resetRoomId !== false;
       const preserveMeetingState = options?.preserveMeetingState === true;
-      console.log("[Meets] Cleaning up room resources...");
+      console.info("[Meets] Cleaning up room resources...");
       if (producerSyncIntervalRef.current) {
         window.clearInterval(producerSyncIntervalRef.current);
         producerSyncIntervalRef.current = null;
@@ -1577,7 +1578,7 @@ export function useMeetSocket({
   );
 
   const cleanup = useCallback(() => {
-    console.log("[Meets] Running full cleanup...");
+    console.info("[Meets] Running full cleanup...");
 
     intentionalDisconnectRef.current = true;
     cleanupRoomResources();
@@ -1778,7 +1779,7 @@ export function useMeetSocket({
         }
       });
 
-      console.log("[Meets] Refreshed local media before join:", {
+      console.info("[Meets] Refreshed local media before join:", {
         reason,
         previousStream: summarizeStreamForLog(candidateStream),
         refreshedStream: summarizeStreamForLog(refreshedStream),
@@ -2437,8 +2438,7 @@ export function useMeetSocket({
       if (inFlight[transportKind]) return false;
       inFlight[transportKind] = true;
 
-      let restartPromise: Promise<boolean>;
-      restartPromise = (async () => {
+      const restartPromise: Promise<boolean> = (async () => {
         try {
           const response = await new Promise<RestartIceResponse>(
             (resolve, reject) => {
@@ -2466,7 +2466,7 @@ export function useMeetSocket({
           );
 
           await transport.restartIce({ iceParameters: response.iceParameters });
-          console.log(
+          console.info(
             `[Meets] ${transportKind} transport ICE restart succeeded.`,
           );
           return true;
@@ -2569,7 +2569,7 @@ export function useMeetSocket({
             );
 
             transport.on("connectionstatechange", (state: string) => {
-              console.log("[Meets] Producer transport state:", state);
+              console.info("[Meets] Producer transport state:", state);
               if (
                 state === "closed" &&
                 intentionallyClosedTransportsRef.current.delete(transport)
@@ -2604,13 +2604,13 @@ export function useMeetSocket({
                           );
                           return;
                         }
-                        attemptIceRestart("producer").then((restarted) => {
+                        void attemptIceRestart("producer").then((restarted) => {
                           if (!restarted) {
                             const enabledTurnFallback = enableTurnFallback(
                               "Producer transport could not recover with STUN-only ICE",
                             );
                             if (enabledTurnFallback) {
-                              handleReconnectRef.current?.();
+                              void handleReconnectRef.current?.();
                               return;
                             }
                             setMeetError({
@@ -2618,7 +2618,7 @@ export function useMeetSocket({
                               message: "Producer transport interrupted",
                               recoverable: true,
                             });
-                            handleReconnectRef.current?.();
+                            void handleReconnectRef.current?.();
                           }
                         });
                       }
@@ -2642,13 +2642,13 @@ export function useMeetSocket({
                     );
                     return;
                   }
-                  attemptIceRestart("producer").then((restarted) => {
+                  void attemptIceRestart("producer").then((restarted) => {
                     if (!restarted) {
                       const enabledTurnFallback = enableTurnFallback(
                         "Producer transport failed with STUN-only ICE",
                       );
                       if (enabledTurnFallback) {
-                        handleReconnectRef.current?.();
+                        void handleReconnectRef.current?.();
                         return;
                       }
                       setMeetError({
@@ -2656,7 +2656,7 @@ export function useMeetSocket({
                         message: "Producer transport failed",
                         recoverable: true,
                       });
-                      handleReconnectRef.current?.();
+                      void handleReconnectRef.current?.();
                     }
                   });
                 }
@@ -2667,7 +2667,7 @@ export function useMeetSocket({
                     message: "Producer transport closed",
                     recoverable: true,
                   });
-                  handleReconnectRef.current?.();
+                  void handleReconnectRef.current?.();
                 }
               }
             });
@@ -2782,7 +2782,7 @@ export function useMeetSocket({
             );
 
             transport.on("connectionstatechange", (state: string) => {
-              console.log("[Meets] Consumer transport state:", state);
+              console.info("[Meets] Consumer transport state:", state);
               if (
                 state === "closed" &&
                 intentionallyClosedTransportsRef.current.delete(transport)
@@ -2817,16 +2817,16 @@ export function useMeetSocket({
                           );
                           return;
                         }
-                        attemptIceRestart("consumer").then((restarted) => {
+                        void attemptIceRestart("consumer").then((restarted) => {
                           if (!restarted) {
                             const enabledTurnFallback = enableTurnFallback(
                               "Consumer transport could not recover with STUN-only ICE",
                             );
                             if (enabledTurnFallback) {
-                              handleReconnectRef.current?.();
+                              void handleReconnectRef.current?.();
                               return;
                             }
-                            handleReconnectRef.current?.();
+                            void handleReconnectRef.current?.();
                           }
                         });
                       }
@@ -2850,23 +2850,23 @@ export function useMeetSocket({
                     );
                     return;
                   }
-                  attemptIceRestart("consumer").then((restarted) => {
+                  void attemptIceRestart("consumer").then((restarted) => {
                     if (!restarted) {
                       const enabledTurnFallback = enableTurnFallback(
                         "Consumer transport failed with STUN-only ICE",
                       );
                       if (enabledTurnFallback) {
-                        handleReconnectRef.current?.();
+                        void handleReconnectRef.current?.();
                         return;
                       }
-                      handleReconnectRef.current?.();
+                      void handleReconnectRef.current?.();
                     }
                   });
                 }
               }
               if (state === "closed") {
                 if (!intentionalDisconnectRef.current) {
-                  handleReconnectRef.current?.();
+                  void handleReconnectRef.current?.();
                 }
               }
             });
@@ -4130,8 +4130,8 @@ export function useMeetSocket({
       );
 
       if (!socket?.connected || hasTerminalTransportFailure) {
-        console.log(`[Meets] ${reason} recovery triggered reconnect.`);
-        handleReconnectRef.current?.();
+        console.info(`[Meets] ${reason} recovery triggered reconnect.`);
+        void handleReconnectRef.current?.();
         return;
       }
 
@@ -4144,7 +4144,7 @@ export function useMeetSocket({
       }
 
       if (disconnectedTransportKinds.length > 0) {
-        console.log(`[Meets] ${reason} recovery restarting ICE.`, {
+        console.info(`[Meets] ${reason} recovery restarting ICE.`, {
           transports: disconnectedTransportKinds,
         });
         void Promise.all(
@@ -4162,7 +4162,7 @@ export function useMeetSocket({
               });
             return;
           }
-          handleReconnectRef.current?.();
+          void handleReconnectRef.current?.();
         });
         return;
       }
@@ -4329,7 +4329,7 @@ export function useMeetSocket({
 
             try {
               const joinedTime = performance.now();
-              console.log(
+              console.info(
                 "[Meets] Joined room, existing producers:",
                 response.existingProducers,
               );
@@ -4387,7 +4387,7 @@ export function useMeetSocket({
                 routerRtpCapabilities: response.rtpCapabilities,
               });
               deviceRef.current = device;
-              console.log(
+              console.info(
                 `[Meets] Device loaded in ${(performance.now() - joinedTime).toFixed(0)}ms`,
               );
 
@@ -4457,7 +4457,7 @@ export function useMeetSocket({
               playNotificationSound("join");
               resolve("joined");
             } catch (err) {
-              reject(err);
+              reject(toError(err));
             }
           },
         );
@@ -4503,7 +4503,7 @@ export function useMeetSocket({
       options?: { sfuUrlOverride?: string },
     ): Promise<Socket> => {
       return new Promise((resolve, reject) => {
-        (async () => {
+        void (async () => {
           try {
             const sfuUrlOverride = normalizeJoinRedirectUrl(
               options?.sfuUrlOverride,
@@ -4574,7 +4574,7 @@ export function useMeetSocket({
 
             socket.on("connect", () => {
               clearTimeout(connectionTimeout);
-              console.log(
+              console.info(
                 `[Meets] Connected to SFU in ${(performance.now() - joinStartTime).toFixed(0)}ms`,
               );
               setConnectionState("connected");
@@ -4587,7 +4587,7 @@ export function useMeetSocket({
             });
 
             socket.on("disconnect", (reason) => {
-              console.log("[Meets] Disconnected:", reason);
+              console.info("[Meets] Disconnected:", reason);
               if (intentionalDisconnectRef.current) {
                 setConnectionState("disconnected");
                 return;
@@ -4600,7 +4600,7 @@ export function useMeetSocket({
               if (reason === "io server disconnect") {
                 if (serverRestartNoticeRef.current) {
                   if (currentRoomIdRef.current) {
-                    handleReconnectRef.current();
+                    void handleReconnectRef.current();
                   } else {
                     setConnectionState("disconnected");
                   }
@@ -4611,14 +4611,14 @@ export function useMeetSocket({
               }
 
               if (currentRoomIdRef.current) {
-                handleReconnectRef.current();
+                void handleReconnectRef.current();
               } else {
                 setConnectionState("disconnected");
               }
             });
 
             socket.on("roomClosed", ({ reason }: { reason: string }) => {
-              console.log("[Meets] Room closed:", reason);
+              console.info("[Meets] Room closed:", reason);
               setMeetError({
                 code: "UNKNOWN",
                 message: `Room closed: ${reason}`,
@@ -4639,7 +4639,7 @@ export function useMeetSocket({
                 message?: string;
                 endedBy?: string;
               }) => {
-                console.log("[Meets] Room ended", { endedBy });
+                console.info("[Meets] Room ended", { endedBy });
                 if (isRoomEndedByLocalUser(endedBy, userId)) {
                   finishLocalRoomEnded();
                   return;
@@ -4802,7 +4802,7 @@ export function useMeetSocket({
             );
 
             socket.on("newProducer", async (data: ProducerInfo) => {
-              console.log("[Meets] New producer:", data);
+              console.info("[Meets] New producer:", data);
               if (shouldIgnoreDepartedParticipant(data.producerUserId)) {
                 dropDepartedProducer(data);
                 return;
@@ -4828,7 +4828,7 @@ export function useMeetSocket({
                 producerId: string;
                 producerUserId?: string;
               }) => {
-                console.log("[Meets] Producer closed:", producerId);
+                console.info("[Meets] Producer closed:", producerId);
                 const localAudioProducer = audioProducerRef.current;
                 const localVideoProducer = videoProducerRef.current;
                 const localScreenProducer = screenProducerRef.current;
@@ -5005,7 +5005,7 @@ export function useMeetSocket({
                 displayName?: string;
                 isGhost?: boolean;
               }) => {
-                console.log("[Meets] User joined:", joinedUserId);
+                console.info("[Meets] User joined:", joinedUserId);
                 if (joinedUserId === userId) {
                   return;
                 }
@@ -5044,7 +5044,7 @@ export function useMeetSocket({
             socket.on(
               "userLeft",
               ({ userId: leftUserId }: { userId: string }) => {
-                console.log("[Meets] User left:", leftUserId);
+                console.info("[Meets] User left:", leftUserId);
                 markRemoteParticipantDeparted(leftUserId);
                 if (
                   leftUserId !== userId &&
@@ -5408,7 +5408,7 @@ export function useMeetSocket({
             socket.on(
               "setVideoQuality",
               async ({ quality }: { quality: VideoQuality }) => {
-                console.log(`[Meets] Setting video quality to: ${quality}`);
+                console.info(`[Meets] Setting video quality to: ${quality}`);
                 const previousQuality = videoQualityRef.current;
                 videoQualityRef.current = quality;
                 setNetworkManagedVideoQuality(quality);
@@ -5423,7 +5423,7 @@ export function useMeetSocket({
             );
 
             socket.on("chatMessage", (message: ChatMessage) => {
-              console.log("[Meets] Chat message received:", message);
+              console.info("[Meets] Chat message received:", message);
               const { message: normalized, ttsText } =
                 normalizeChatMessage(message);
               chat.setChatMessages((prev) => [...prev, normalized]);
@@ -5559,10 +5559,10 @@ export function useMeetSocket({
             socket.on(
               "redirect",
               async ({ newRoomId }: { newRoomId: string }) => {
-                console.log(
+                console.info(
                   `[Meets] Redirect received. Initiating full switch to ${newRoomId}`,
                 );
-                handleRedirectRef.current(newRoomId);
+                void handleRedirectRef.current(newRoomId);
               },
             );
 
@@ -5578,7 +5578,7 @@ export function useMeetSocket({
                 roomId?: string;
               }) => {
                 if (!isRoomEvent(eventRoomId)) return;
-                console.log("[Meets] User requesting to join:", userId);
+                console.info("[Meets] User requesting to join:", userId);
                 playNotificationSound("waiting");
                 setPendingUsers((prev) => {
                   const newMap = new Map(prev);
@@ -5663,7 +5663,7 @@ export function useMeetSocket({
             );
 
             socket.on("joinApproved", async () => {
-              console.log("[Meets] Join approved! Re-attempting join...");
+              console.info("[Meets] Join approved! Re-attempting join...");
               const joinOptions = joinOptionsRef.current;
               let stream = localStreamRef.current;
               const mediaNeeds = getJoinMediaNeeds(stream);
@@ -5716,7 +5716,7 @@ export function useMeetSocket({
             });
 
             socket.on("joinRejected", () => {
-              console.log("[Meets] Join rejected.");
+              console.info("[Meets] Join rejected.");
               setMeetError({
                 code: "PERMISSION_DENIED",
                 message: "The host has denied your request to join.",
@@ -5751,7 +5751,7 @@ export function useMeetSocket({
                 roomId?: string;
               }) => {
                 if (!isRoomEvent(eventRoomId)) return;
-                console.log("[Meets] Room lock changed:", locked);
+                console.info("[Meets] Room lock changed:", locked);
                 setIsRoomLocked(locked);
               },
             );
@@ -5766,7 +5766,7 @@ export function useMeetSocket({
                 roomId?: string;
               }) => {
                 if (!isRoomEvent(eventRoomId)) return;
-                console.log("[Meets] Room TTS disabled changed:", disabled);
+                console.info("[Meets] Room TTS disabled changed:", disabled);
                 setIsTtsDisabled(disabled);
               },
             );
@@ -5781,7 +5781,7 @@ export function useMeetSocket({
                 roomId?: string;
               }) => {
                 if (!isRoomEvent(eventRoomId)) return;
-                console.log("[Meets] Room DM state changed:", enabled);
+                console.info("[Meets] Room DM state changed:", enabled);
                 setIsDmEnabled(enabled);
               },
             );
@@ -5796,7 +5796,7 @@ export function useMeetSocket({
                 roomId?: string;
               }) => {
                 if (!isRoomEvent(eventRoomId)) return;
-                console.log("[Meets] Room reactions disabled changed:", disabled);
+                console.info("[Meets] Room reactions disabled changed:", disabled);
                 setIsReactionsDisabled(disabled);
               },
             );
@@ -5811,7 +5811,7 @@ export function useMeetSocket({
                 roomId?: string;
               }) => {
                 if (!isRoomEvent(eventRoomId)) return;
-                console.log("[Meets] No-guests changed:", noGuests);
+                console.info("[Meets] No-guests changed:", noGuests);
                 setIsNoGuests(noGuests);
               }
             );
@@ -5826,7 +5826,7 @@ export function useMeetSocket({
                 roomId?: string;
               }) => {
                 if (!isRoomEvent(eventRoomId)) return;
-                console.log("[Meets] Chat lock changed:", locked);
+                console.info("[Meets] Chat lock changed:", locked);
                 setIsChatLocked(locked);
               }
             );
@@ -5951,7 +5951,7 @@ export function useMeetSocket({
               recoverable: isRecoverable,
             });
             setConnectionState("error");
-            reject(err);
+            reject(toError(err));
           }
         })();
       });
@@ -6129,7 +6129,7 @@ export function useMeetSocket({
           );
         }
 
-        console.log(
+        console.info(
           `[Meets] Reconnecting in ${delay}ms (attempt ${attempt})`,
         );
         telemetry.capture("meet_reconnect_attempt", {
@@ -6479,7 +6479,7 @@ export function useMeetSocket({
 
   const handleRedirectCallback = useCallback(
     async (newRoomId: string) => {
-      console.log(`[Meets] Executing hard redirect to ${newRoomId}`);
+      console.info(`[Meets] Executing hard redirect to ${newRoomId}`);
 
       cleanup();
       setRoomId(newRoomId);
@@ -6595,7 +6595,7 @@ export function useMeetSocket({
               joinRedirectCount < MAX_JOIN_ROOM_REDIRECTS
             ) {
               joinRedirectCount += 1;
-              console.log(
+              console.info(
                 `[Meets] Reconnecting to routed SFU ${joinError.redirectUrl}`,
                 {
                   roomId: targetRoomId,
@@ -6637,7 +6637,7 @@ export function useMeetSocket({
             }
 
             const inviteCode = shouldPromptMeetingInviteCode
-              ? await requestMeetingInviteCode!()
+              ? await requestMeetingInviteCode()
               : await requestWebinarInviteCode!();
             if (!inviteCode || !inviteCode.trim()) {
               throw joinError;
@@ -6776,9 +6776,9 @@ export function useMeetSocket({
 
   useEffect(() => {
     if (shouldAutoJoinRef.current) {
-      console.log("[Meets] Auto-joining new room...");
+      console.info("[Meets] Auto-joining new room...");
       shouldAutoJoinRef.current = false;
-      joinRoom();
+      void joinRoom();
     }
   }, [joinRoom, shouldAutoJoinRef]);
 

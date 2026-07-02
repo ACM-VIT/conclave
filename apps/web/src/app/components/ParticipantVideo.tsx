@@ -1,5 +1,6 @@
 "use client";
 
+import { errorName } from "../lib/utils";
 import { Crop, Hand, Info, Maximize2, MicOff, Pin, PinOff } from "lucide-react";
 import { memo, useEffect, useRef } from "react";
 import { createPlaybackRecoveryScheduler } from "../lib/playback-recovery";
@@ -43,7 +44,6 @@ function ParticipantVideo({
   isActiveSpeaker = false,
   audioOutputDeviceId,
   isAdmin = false,
-  isSelected = false,
   onAdminClick,
   videoObjectFit = "cover",
   onAudioAutoplayBlocked,
@@ -88,8 +88,8 @@ function ParticipantVideo({
     const playVideo = () => {
       if (cancelled) return;
       video.play().catch((err) => {
-        if (err.name !== "AbortError") {
-          if (err.name === "NotAllowedError") {
+        if (errorName(err) !== "AbortError") {
+          if (errorName(err) === "NotAllowedError") {
             video.muted = true;
             video.play().catch(() => {});
             return;

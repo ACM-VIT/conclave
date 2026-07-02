@@ -76,7 +76,7 @@ registerTileResolver(
       const state: PlayerTileState = {};
       if (stringArray(view.votedPlayerIds).includes(playerId)) state.acted = true;
       const counts = asRecord(view.voteCounts);
-      const count = counts && typeof counts[playerId] === "number" ? (counts[playerId] as number) : 0;
+      const count = counts && typeof counts[playerId] === "number" ? (counts[playerId]) : 0;
       if (count > 0) state.note = voteLabel(count);
       if (yourVoteOf(privateView) === playerId) state.selected = true;
       return Object.keys(state).length > 0 ? state : null;
@@ -131,7 +131,7 @@ registerTileResolver(
       const winnerId = typeof view.winnerId === "string" ? view.winnerId : null;
       if (winnerId !== playerId) return null;
       const counts = asRecord(view.counts);
-      const count = counts && typeof counts[playerId] === "number" ? (counts[playerId] as number) : 0;
+      const count = counts && typeof counts[playerId] === "number" ? (counts[playerId]) : 0;
       return { winner: true, note: count > 0 ? voteLabel(count) : undefined };
     }
 

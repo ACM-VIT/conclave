@@ -347,7 +347,7 @@ export const imposterModule: GameModule<ImposterState> = {
     };
   },
 
-  playerView(state, playerId, ctx) {
+  playerView(state, playerId) {
     const isImposter = playerId === state.imposterId;
     const revealed = state.phase !== "lobby";
     return {

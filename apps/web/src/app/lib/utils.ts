@@ -2,6 +2,18 @@ import { EMOJI_REACTIONS, type ReactionEmoji } from "./constants";
 import { isMediaCaptureTimeoutError } from "./media-capture-timeout";
 import type { MeetError, ReactionOption } from "./types";
 
+/** Normalize an unknown thrown value into an Error for promise rejections. */
+export const toError = (value: unknown): Error =>
+  value instanceof Error ? value : new Error(String(value));
+
+/**
+ * The DOMException/Error name of an unknown caught value ("" when it isn't
+ * an Error). Promise `.catch` callbacks receive `any`; route them through
+ * this instead of touching `.name` directly.
+ */
+export const errorName = (value: unknown): string =>
+  value instanceof Error ? value.name : "";
+
 export const ROOM_WORDS = [
   "aloe",
   "aster",
@@ -64,10 +76,6 @@ export const ROOM_WORDS = [
 ];
 
 const ROOM_WORDS_PER_CODE = 3;
-const ROOM_WORD_MAX_LENGTH = ROOM_WORDS.reduce(
-  (max, word) => Math.max(max, word.length),
-  0
-);
 const ROOM_WORD_SEPARATOR = "-";
 export const ROOM_CODE_MAX_LENGTH = 64;
 export const ROOM_CODE_MIN_LENGTH = 3;

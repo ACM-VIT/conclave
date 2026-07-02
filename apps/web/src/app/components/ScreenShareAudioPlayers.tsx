@@ -1,5 +1,6 @@
 "use client";
 
+import { errorName } from "../lib/utils";
 import { memo, useCallback, useEffect, useRef } from "react";
 import { useMeetVolume } from "../hooks/useMeetVolume";
 import { createPlaybackRecoveryScheduler } from "../lib/playback-recovery";
@@ -84,14 +85,14 @@ function ScreenShareAudioPlayer({
         onPlaybackStarted?.();
       })
       .catch((err) => {
-        if (err.name === "NotAllowedError") {
+        if (errorName(err) === "NotAllowedError") {
           if (!autoplayBlockedRef.current) {
             autoplayBlockedRef.current = true;
             onAutoplayBlocked?.();
           }
           return;
         }
-        if (err.name !== "AbortError") {
+        if (errorName(err) !== "AbortError") {
           console.error("[Meets] Screen share audio play error:", err);
         }
       });

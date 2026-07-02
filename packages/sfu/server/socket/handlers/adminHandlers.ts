@@ -17,7 +17,8 @@ import {
   toRoomSnapshot,
 } from "../../admin/controlPlane.js";
 import { forceCloseRoom, markRoomEnded } from "../../rooms.js";
-import type { ConnectionContext } from "../context.js";
+import { getSocketAuthUser } from "../auth.js";
+import { getSocketContext, type ConnectionContext } from "../context.js";
 import { RATE_LIMITS, takeToken } from "../rateLimit.js";
 import { respond } from "./ack.js";
 import { emitChatHistorySnapshot } from "./chatHistory.js";
@@ -58,7 +59,17 @@ const normalizeRoomId = (value: unknown): string | null => {
   return roomId;
 };
 
-const normalizeUserKey = (value: string): string | null => {
+type EndRoomAck = (payload: {
+  success: boolean;
+  roomId?: string;
+  delayMs?: number;
+  error?: string;
+}) => void;
+
+const normalizeUserKey = (value: unknown): string | null => {
+  if (typeof value !== "string") {
+    return null;
+  }
   const userKey = value.trim();
   if (
     !userKey ||
@@ -101,7 +112,7 @@ const normalizeProducerId = (value: unknown): string | null => {
 };
 
 const resolveClientId = (context: ConnectionContext): string => {
-  const raw = context.socket.data.user?.clientId;
+  const raw = getSocketAuthUser(context.socket)?.clientId;
   return typeof raw === "string" && raw.trim() ? raw.trim() : "default";
 };
 
@@ -171,8 +182,9 @@ const parseKinds = (value: unknown): MediaKind[] | null | undefined => {
     return undefined;
   }
 
+  const entries: readonly unknown[] = value;
   const next: MediaKind[] = [];
-  for (const entry of value) {
+  for (const entry of entries) {
     if (entry === "audio" || entry === "video") {
       next.push(entry);
       continue;
@@ -194,8 +206,9 @@ const parseTypes = (value: unknown): ProducerType[] | null | undefined => {
     return undefined;
   }
 
+  const entries: readonly unknown[] = value;
   const next: ProducerType[] = [];
-  for (const entry of value) {
+  for (const entry of entries) {
     if (entry === "webcam" || entry === "screen") {
       next.push(entry);
       continue;
@@ -318,9 +331,7 @@ const activatePromotedAdmin = (
   promoted: Admin,
   roomId: string,
 ): void => {
-  const promotedContext = promoted.socket.data?.context as
-    | ConnectionContext
-    | undefined;
+  const promotedContext = getSocketContext(promoted.socket);
 
   if (!promotedContext || !context.currentRoom) {
     return;
@@ -1495,7 +1506,7 @@ export const registerAdminHandlers = (
       message?: string;
       delayMs?: number;
     },
-    cb: (payload: { success: boolean; roomId?: string; delayMs?: number; error?: string }) => void,
+    cb: EndRoomAck,
   ): void => {
     const guard = ensureAdminRoom(context, { bulk: true });
     if ("error" in guard) {
@@ -1558,7 +1569,7 @@ export const registerAdminHandlers = (
         message?: string;
         delayMs?: number;
       },
-      cb,
+      cb: EndRoomAck,
     ) => {
       endRoom(data, cb);
     },
@@ -1571,7 +1582,7 @@ export const registerAdminHandlers = (
         message?: string;
         delayMs?: number;
       },
-      cb,
+      cb: EndRoomAck,
     ) => {
       endRoom(data, cb);
     },

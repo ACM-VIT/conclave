@@ -22,7 +22,7 @@ const cases: {
   assertStarted: (view: unknown) => void;
 }[] = [
   {
-    module: triviaModule as GameModule,
+    module: triviaModule,
     options: { topic: "space exploration", questions: 3, pace: "fast" },
     assertStarted(view) {
       assertView(view, "prompt");
@@ -30,14 +30,14 @@ const cases: {
     },
   },
   {
-    module: bluffModule as GameModule,
+    module: bluffModule,
     options: { topic: "computer history", rounds: 2 },
     assertStarted(view) {
       assertView(view, "question");
     },
   },
   {
-    module: wouldYouRatherModule as GameModule,
+    module: wouldYouRatherModule,
     options: { topic: "startup life", rounds: 3 },
     assertStarted(view) {
       assertView(view, "optionA");
@@ -45,14 +45,14 @@ const cases: {
     },
   },
   {
-    module: mostLikelyToModule as GameModule,
+    module: mostLikelyToModule,
     options: { topic: "hackathon teams", rounds: 3 },
     assertStarted(view) {
       assertView(view, "prompt");
     },
   },
   {
-    module: imposterModule as GameModule,
+    module: imposterModule,
     options: { topic: "campus festivals", category: "surprise" },
     assertStarted(view) {
       assertView(view, "category");
@@ -62,7 +62,7 @@ const cases: {
 
 for (const testCase of cases) {
   const config = normalizeConfig(testCase.module.options, testCase.options);
-  const generateContent = testCase.module.generateContent;
+  const generateContent = testCase.module.generateContent?.bind(testCase.module);
   if (!generateContent) {
     throw new Error(`${testCase.module.id} does not have generateContent`);
   }

@@ -43,6 +43,7 @@ final class WebRTCClient {
 
     func configure(socketManager: SocketIOManager, rtpCapabilities: RtpCapabilities, iceServersJSON: String?) { }
     func createTransports() async throws { }
+    func createReceiveTransport() async throws { }
     func restartIce() async -> Bool { false }
     func restartIce(transportKind: String) async -> Bool { false }
     func consumeProducer(producerId: String, producerUserId: String, producerKind: String? = nil, producerType: String = "webcam", preferHighWebcamLayer: Bool = false, initialReceiveConnectionQuality: ConnectionQuality = .unknown) async throws { }

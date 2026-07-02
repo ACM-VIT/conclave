@@ -316,7 +316,6 @@ export function useMeetPopout({
   isCameraOff,
   isMuted,
   mirrorLocalPreview,
-  userEmail,
   getDisplayName,
   onToggleMute,
   onToggleCamera,
@@ -442,9 +441,9 @@ export function useMeetPopout({
     }
 
     for (const participant of showParticipants) {
-      let tile = doc.querySelector(
+      let tile = doc.querySelector<HTMLElement>(
         `[data-user-id="${participant.userId}"]`
-      ) as HTMLElement | null;
+      );
 
       if (!tile) {
         tile = doc.createElement("div");

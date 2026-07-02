@@ -615,6 +615,70 @@ select:focus {
   }
 }
 
+@keyframes acm-pop-in {
+  0% {
+    opacity: 0;
+    transform: scale(0.4);
+  }
+
+  70% {
+    opacity: 1;
+    transform: scale(1.12);
+  }
+
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes acm-orbit {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes acm-orbit-rev {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(-360deg);
+  }
+}
+
+@keyframes acm-watch-reel {
+  0% {
+    width: 6%;
+    opacity: 1;
+  }
+
+  76% {
+    width: 97%;
+    opacity: 1;
+  }
+
+  84% {
+    width: 100%;
+    opacity: 0;
+  }
+
+  90% {
+    width: 6%;
+    opacity: 0;
+  }
+
+  100% {
+    width: 6%;
+    opacity: 1;
+  }
+}
+
 @keyframes acm-scale-in {
   from {
     opacity: 0;

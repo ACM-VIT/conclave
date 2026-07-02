@@ -545,6 +545,28 @@ export default function MeetsMainContent({
       ),
     [currentUserId, ghostEnabled, participantsArray],
   );
+
+  // The cast of the watch-together coachmark vignette: the real room (self
+  // first), padded with a couple of fictional friends when the room is small
+  // so the animation still tells its story.
+  const coachAvatars = useMemo(() => {
+    const cast: { id: string; name: string }[] = [
+      { id: currentUserId || "you", name: "You" },
+    ];
+    for (const participant of nonSystemParticipants) {
+      if (cast.length >= 4) break;
+      cast.push({
+        id: participant.userId,
+        name: resolveDisplayName(participant.userId),
+      });
+    }
+    let filler = 0;
+    while (cast.length < 3) {
+      filler += 1;
+      cast.push({ id: `watch-friend-${filler}`, name: `Friend ${filler}` });
+    }
+    return cast;
+  }, [currentUserId, nonSystemParticipants, resolveDisplayName]);
   const webinarParticipantIds = useMemo(
     () => nonSystemParticipants.map((participant) => participant.userId),
     [nonSystemParticipants],
@@ -679,7 +701,6 @@ export default function MeetsMainContent({
   const effectiveLocalStream = shouldUseDevCameraStream
     ? devCameraStream
     : localStream;
-  const hasRenderedLocalVideo = Boolean(getLiveVideoStream(effectiveLocalStream));
   const effectiveIsCameraOff =
     shouldUseDevCameraStream && hasLiveDevCamera ? false : isCameraOff;
   const effectiveActiveSpeakerId =
@@ -1091,24 +1112,6 @@ export default function MeetsMainContent({
     () => setIsVideoEffectsOpen(false),
     [],
   );
-  const handleOpenVideoEffects = useCallback(() => {
-    if (isCameraPermissionBlocked) return;
-    prewarmEffectsPanelOpen();
-    if (isChatOpenRef.current) {
-      toggleChat();
-    }
-    setIsParticipantsOpen(false);
-    setIsHostControlsOpen(false);
-    setIsViewPanelOpen(false);
-    setIsTranscriptOpen(false);
-    setIsVideoEffectsOpen(true);
-  }, [
-    isCameraPermissionBlocked,
-    prewarmEffectsPanelOpen,
-    setIsParticipantsOpen,
-    toggleChat,
-  ]);
-
   const handleToggleViewPanel = useCallback(() => {
     const opening = !isViewPanelOpen;
     if (opening && isChatOpenRef.current) {
@@ -1962,6 +1965,7 @@ export default function MeetsMainContent({
           <div className="safe-area-pb flex w-full flex-col items-center gap-2">
             <ControlsBar
                 compact={useCompactControls}
+                coachAvatars={coachAvatars}
                 roomId={roomId}
                 isMuted={isMuted}
                 isMuteTogglePending={isMuteTogglePending}

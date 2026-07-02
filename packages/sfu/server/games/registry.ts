@@ -9,13 +9,13 @@ import type { GameCatalogEntry, GameModule } from "./types.js";
 
 // Register a game here (one line). The order is the order shown in the launcher.
 const MODULES: GameModule[] = [
-  triviaModule as GameModule,
-  bluffModule as GameModule,
-  wouldYouRatherModule as GameModule,
-  mostLikelyToModule as GameModule,
-  reactionModule as GameModule,
-  imposterModule as GameModule,
-  wordleModule as GameModule,
+  triviaModule,
+  bluffModule,
+  wouldYouRatherModule,
+  mostLikelyToModule,
+  reactionModule,
+  imposterModule,
+  wordleModule,
 ];
 
 const REGISTRY = new Map<string, GameModule>(

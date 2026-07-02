@@ -57,7 +57,7 @@ export async function GET(request: Request) {
   let payload: Record<string, unknown>;
   try {
     const verified = await jwtVerify(state, signingKey());
-    payload = verified.payload as Record<string, unknown>;
+    payload = verified.payload;
   } catch {
     return redirectWithStatus(request, "invalid-state");
   }

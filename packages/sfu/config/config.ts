@@ -371,7 +371,7 @@ export const config = {
       max: 500,
     }),
     webSearchEnabled: !gameAiWebSearchDisabled,
-    webSearchContextSize: gameAiWebSearchContextSize as "low" | "medium" | "high",
+    webSearchContextSize: gameAiWebSearchContextSize,
   },
   analytics: {
     // Enabled ONLY when a project key is present (and not explicitly disabled).

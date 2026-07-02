@@ -4,9 +4,24 @@
 import SwiftUI
 import Observation
 
+struct QualityBannerInfo {
+    let iosIcon: String
+    let androidIcon: String
+    let iconTint: String
+    let iconColor: Color
+    let text: String
+    let background: Color
+    let border: Color
+}
+
 struct MeetingBannerOverlay: View {
     @Bindable var viewModel: MeetingViewModel
     let onShowParticipants: () -> Void
+
+    // Highest quality-degradation severity the user has dismissed. The banner
+    // only re-appears if the connection worsens beyond this, and it resets once
+    // the connection recovers to good/unknown.
+    @State private var dismissedQualitySeverity: Int = 0
 
     private var isReconnecting: Bool {
         viewModel.state.connectionState == ConnectionState.reconnecting
@@ -28,8 +43,51 @@ struct MeetingBannerOverlay: View {
         return n == 1 ? "1 person waiting to join" : "\(n) people waiting to join"
     }
 
+    private func qualitySeverity(_ quality: ConnectionQuality) -> Int {
+        switch quality {
+        case .fair: return 0
+        case .poor: return 2
+        case .emergency: return 3
+        case .good, .unknown: return 0
+        }
+    }
+
+    private var currentQualitySeverity: Int {
+        qualitySeverity(viewModel.state.connectionQuality)
+    }
+
+    // Offline/reconnecting banners take priority and already explain the outage,
+    // so quality warnings stay suppressed while either is showing.
+    private var shouldShowQualityBanner: Bool {
+        guard !isOffline, !isReconnecting else { return false }
+        guard viewModel.state.connectionState == .joined else { return false }
+        return currentQualitySeverity > 0 && currentQualitySeverity > dismissedQualitySeverity
+    }
+
+    private var qualityBannerInfo: QualityBannerInfo? {
+        switch viewModel.state.connectionQuality {
+        case .emergency:
+            return QualityBannerInfo(
+                iosIcon: "wifi.exclamationmark", androidIcon: "warning", iconTint: "danger",
+                iconColor: ACMColors.error,
+                text: "Very poor connection. Audio may cut out.",
+                background: ACMColors.error.opacity(0.14), border: ACMColors.error.opacity(0.34)
+            )
+        case .poor:
+            return QualityBannerInfo(
+                iosIcon: "wifi.exclamationmark", androidIcon: "warning", iconTint: "accent",
+                iconColor: ACMColors.primaryOrange,
+                text: "Poor connection quality. Video may be limited.",
+                background: ACMColors.primaryOrange.opacity(0.14), border: ACMColors.primaryOrange.opacity(0.34)
+            )
+        case .fair, .good, .unknown:
+            return nil
+        }
+    }
+
     var body: some View {
-        if isOffline || isReconnecting || hasServerRestartNotice || hasAdminNotice || hasPending || viewModel.state.errorMessage != nil {
+        Group {
+        if isOffline || isReconnecting || hasServerRestartNotice || hasAdminNotice || hasPending || shouldShowQualityBanner || viewModel.state.errorMessage != nil {
             VStack(spacing: ACMSpacing.xs) {
                 if isOffline {
                     MeetingBanner(
@@ -51,6 +109,19 @@ struct MeetingBannerOverlay: View {
                         background: ACMColors.surfaceRaised,
                         border: ACMColors.border,
                         showSpinner: true
+                    )
+                }
+
+                if shouldShowQualityBanner, let info = qualityBannerInfo {
+                    MeetingBanner(
+                        iosIcon: info.iosIcon,
+                        androidIcon: info.androidIcon,
+                        iconTint: info.iconTint,
+                        iconColor: info.iconColor,
+                        text: info.text,
+                        background: info.background,
+                        border: info.border,
+                        onClose: { dismissedQualitySeverity = currentQualitySeverity }
                     )
                 }
 
@@ -113,6 +184,20 @@ struct MeetingBannerOverlay: View {
             .padding(.horizontal, ACMSpacing.sm)
             .padding(.top, ACMSpacing.xs)
         }
+        }
+        #if SKIP
+        .onChange(of: "\(currentQualitySeverity)") {
+            if currentQualitySeverity == 0 {
+                dismissedQualitySeverity = 0
+            }
+        }
+        #else
+        .onChange(of: viewModel.state.connectionQuality) { _, newValue in
+            if qualitySeverity(newValue) == 0 {
+                dismissedQualitySeverity = 0
+            }
+        }
+        #endif
     }
 
     private var adminNoticeIOSIcon: String {

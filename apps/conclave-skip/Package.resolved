@@ -64,6 +64,15 @@
       }
     },
     {
+      "identity" : "lottie-ios",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/airbnb/lottie-ios",
+      "state" : {
+        "revision" : "f4db77d7feacba0c2360b84a40c38a6ce8ff399d",
+        "version" : "4.6.1"
+      }
+    },
+    {
       "identity" : "mediasoup-client-swift",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/VLprojects/mediasoup-client-swift",

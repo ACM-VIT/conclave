@@ -1,6 +1,3 @@
-import { readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import {
   GameMoveError,
   type GameContext,
@@ -9,6 +6,7 @@ import {
 } from "../types.js";
 import { payloadField } from "../validation.js";
 import { numberOption, selectOption } from "../config.js";
+import { WORDLE_WORDS } from "../wordleWordList.js";
 
 type WordleTile = "green" | "yellow" | "gray";
 
@@ -47,31 +45,7 @@ type WordleState = {
 const WORD_LENGTH = 5;
 const MAX_TRIES = 6;
 
-const moduleDir = dirname(fileURLToPath(import.meta.url));
-const wordsPath = resolve(moduleDir, "wordleWords.txt");
-
-const loadWordList = (): string[] => {
-  let fileContents: string;
-  try {
-    fileContents = readFileSync(wordsPath, "utf8");
-  } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
-    throw new Error(`Failed to load Wordle word list at ${wordsPath}: ${reason}`);
-  }
-
-  const words = fileContents
-    .split("\n")
-    .map((word) => word.trim().toUpperCase())
-    .filter((word) => /^[A-Z]{5}$/.test(word));
-
-  if (words.length === 0) {
-    throw new Error(`Wordle word list at ${wordsPath} did not contain any 5-letter words`);
-  }
-
-  return words;
-};
-
-const ALL_WORDS: string[] = loadWordList();
+const ALL_WORDS: readonly string[] = WORDLE_WORDS;
 const WORD_SET = new Set<string>(ALL_WORDS);
 
 const setterName = (ctx: GameContext, setterId: string | null): string | null => {

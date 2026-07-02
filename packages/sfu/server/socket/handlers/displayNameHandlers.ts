@@ -2,6 +2,7 @@ import { Admin } from "../../../config/classes/Admin.js";
 import { config } from "../../../config/config.js";
 import { MAX_DISPLAY_NAME_LENGTH } from "../../constants.js";
 import { normalizeDisplayName } from "../../identity.js";
+import { getSocketAuthUser } from "../auth.js";
 import type { ConnectionContext } from "../context.js";
 import { RATE_LIMITS, takeToken } from "../rateLimit.js";
 import { respond } from "./ack.js";
@@ -40,7 +41,7 @@ export const registerDisplayNameHandlers = (
           return;
         }
 
-        const user = socket.data.user;
+        const user = getSocketAuthUser(socket);
         const clientId =
           typeof user?.clientId === "string" ? user.clientId : "default";
         const clientPolicy =

@@ -324,6 +324,53 @@ final class ConclaveTests: XCTestCase {
         XCTAssertEqual(resolved["topic"]?.stringValue, "production")
     }
 
+    func testNativeGamesSheetCoversEveryWebGameRenderer() throws {
+        let webRegistry = try repoFileContents("apps/web/src/app/components/games/registry.tsx")
+        let nativeSheet = try sourceFileContents("Sources/Conclave/Features/Meeting/MoreSheetView.swift")
+        let nativeWordle = try sourceFileContents("Sources/Conclave/Features/Meeting/WordleGameView.swift")
+
+        let expectedGameIds = [
+            "trivia",
+            "bluff",
+            "would-you-rather",
+            "most-likely-to",
+            "reaction",
+            "imposter",
+            "wordle"
+        ]
+
+        for gameId in expectedGameIds {
+            XCTAssertTrue(webRegistry.contains("\(gameId):") || webRegistry.contains("\"\(gameId)\":"))
+            XCTAssertTrue(
+                nativeSheet.contains("case \"\(gameId)\""),
+                "Native games sheet is missing renderer branch for \(gameId)."
+            )
+        }
+        XCTAssertTrue(nativeSheet.contains("WordleGameView("))
+        XCTAssertTrue(nativeWordle.contains("struct WordleGameView"))
+    }
+
+    func testMoreSheetShowsToolsWhenOnlyTranscriptToolIsAvailable() throws {
+        XCTAssertTrue(MoreSheetVisibilityPolicy.canShowToolsSection(
+            canShowAdminControls: false,
+            canShowSharedBrowser: false,
+            canShowGamesSection: false,
+            canShowAppsSection: false,
+            canShowTranscriptTool: true
+        ))
+        XCTAssertFalse(MoreSheetVisibilityPolicy.canShowToolsSection(
+            canShowAdminControls: false,
+            canShowSharedBrowser: false,
+            canShowGamesSection: false,
+            canShowAppsSection: false,
+            canShowTranscriptTool: false
+        ))
+    }
+
+    func testMeetingHeaderRoomPillDoesNotStretchAcrossCompactScreens() throws {
+        XCTAssertLessThanOrEqual(MeetingHeaderLayout.roomPillMaxWidth, 224.0)
+    }
+
 #if !SKIP
     func testNativeSfuEventsStayGeneratedFromMeetingCoreRegistry() throws {
         let expectedSystemEvents = try parseMeetingCoreSfuEventRawValues(groupName: "system")
@@ -554,27 +601,39 @@ final class ConclaveTests: XCTestCase {
         ))
     }
 
-    func testJoinPrejoinActionsRequireNameOrIdentityLikeWebLobby() throws {
-        XCTAssertFalse(JoinPrejoinActionPolicy.canStartOrJoin(
+    func testNewMeetingPrejoinActionAllowsAnonymousGuestFallback() throws {
+        XCTAssertTrue(JoinPrejoinActionPolicy.canCreateRoom(isBlocked: false))
+        XCTAssertFalse(JoinPrejoinActionPolicy.canCreateRoom(isBlocked: true))
+    }
+
+    func testJoinRoomPrejoinActionRequiresNameOrIdentityLikeWebLobby() throws {
+        XCTAssertFalse(JoinPrejoinActionPolicy.canJoinRoom(
             displayName: "   ",
             currentUserId: nil,
             isBlocked: false
         ))
-        XCTAssertTrue(JoinPrejoinActionPolicy.canStartOrJoin(
+        XCTAssertTrue(JoinPrejoinActionPolicy.canJoinRoom(
             displayName: "  Native Guest  ",
             currentUserId: nil,
             isBlocked: false
         ))
-        XCTAssertTrue(JoinPrejoinActionPolicy.canStartOrJoin(
+        XCTAssertTrue(JoinPrejoinActionPolicy.canJoinRoom(
             displayName: "   ",
             currentUserId: "auth-user-123",
             isBlocked: false
         ))
-        XCTAssertFalse(JoinPrejoinActionPolicy.canStartOrJoin(
+        XCTAssertFalse(JoinPrejoinActionPolicy.canJoinRoom(
             displayName: "Native Guest",
             currentUserId: nil,
             isBlocked: true
         ))
+    }
+
+    func testNewMeetingPrimaryActionSurfacesDisabledState() throws {
+        let source = try sourceFileContents("Sources/Conclave/Features/Join/JoinView.swift")
+
+        XCTAssertTrue(source.contains(".foregroundStyle(isCreateMeetingEnabled ? Color.white : ACMColors.textFaint)"))
+        XCTAssertTrue(source.contains(".acmColorBackground(isCreateMeetingEnabled ? ACMColors.primaryOrange : ACMColors.subtleFill)"))
     }
 
     func testNativeJoinScreenStartsOnFlatLobbyLikeWeb() throws {
@@ -5639,7 +5698,10 @@ final class ConclaveTests: XCTestCase {
         )
     }
 
-    func testAndroidMeetingSheetKeepsBodyReadyAcrossInitialRevealAndNavigation() throws {
+    func testAndroidMeetingSheetRevealsBodyImmediately() throws {
+        XCTAssertEqual(MeetingSheetView.detentFraction, 0.62)
+        XCTAssertEqual(MeetingSheetView.androidDetentFraction, 0.88)
+        XCTAssertGreaterThan(MeetingSheetView.androidDetentFraction, MeetingSheetView.detentFraction)
         XCTAssertEqual(MeetingSheetView.androidInitialBodyRevealDelayNanoseconds, 0)
         XCTAssertTrue(MeetingSheetRevealPolicy.shouldRevealImmediately(
             after: MeetingSheetView.androidInitialBodyRevealDelayNanoseconds

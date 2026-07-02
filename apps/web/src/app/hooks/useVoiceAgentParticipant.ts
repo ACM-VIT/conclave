@@ -223,7 +223,7 @@ const REALTIME_TOOLS: RealtimeToolDefinition[] = [
 const parseToolArguments = (raw: string) => {
   if (!raw.trim()) return {};
   try {
-    const parsed = JSON.parse(raw);
+    const parsed: unknown = JSON.parse(raw);
     if (parsed && typeof parsed === "object") {
       return parsed as Record<string, unknown>;
     }

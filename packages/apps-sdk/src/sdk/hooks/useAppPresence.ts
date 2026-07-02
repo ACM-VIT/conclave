@@ -77,7 +77,7 @@ export const useAppPresence = (appId: string) => {
   const setLocalState = useMemo(
     () =>
       isReadOnly
-        ? ((() => {}) as (state: unknown) => void)
+        ? ((() => {}))
         : (awareness.setLocalState.bind(awareness) as (state: unknown) => void),
     [awareness, isReadOnly]
   );

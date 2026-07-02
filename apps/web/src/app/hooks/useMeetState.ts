@@ -29,7 +29,7 @@ export function useMeetState({ initialRoomId }: UseMeetStateOptions) {
   );
   const [participants, dispatchParticipants] = useReducer(
     participantReducer,
-    new Map(),
+    new Map<string, Participant>(),
   );
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [activeSpeakerId, setActiveSpeakerId] = useState<string | null>(null);

@@ -1,4 +1,4 @@
-// Curated flat palette — one row of 20 colours shown in the compact picker
+// Curated flat palette, one row of 20 colours shown in the compact picker
 export const TOOL_COLORS = [
   // Neutrals
   "#ffffff",
@@ -27,11 +27,21 @@ export const TOOL_COLORS = [
   "#c084fc",
 ];
 
+// Flat sticky note palette, dark ink stays readable on every one of these
+export const STICKY_COLORS = [
+  "#fbbf24",
+  "#fda4af",
+  "#86efac",
+  "#7dd3fc",
+  "#d8b4fe",
+  "#e3e3e8",
+];
+
 export const DEFAULT_TOOL_SETTINGS = {
   strokeColor: "#e3e3e8",
   fillColor: "transparent",
-  strokeWidth: 2,
+  strokeWidth: 3,
   textColor: "#e3e3e8",
   fontSize: 20,
-  stickyColor: "#FBBF24",
+  stickyColor: "#fbbf24",
 };

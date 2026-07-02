@@ -36,6 +36,8 @@ export type WhiteboardCanvasProps = {
   onPanMove?: (screenX: number, screenY: number) => void;
   onPanEnd?: () => void;
   onWheel?: (event: React.WheelEvent<HTMLCanvasElement>) => void;
+  /** Per-user undo manager; the canvas marks a capture boundary on each gesture. */
+  undoManager?: Y.UndoManager | null;
 };
 
 export type WhiteboardStressResult = {
@@ -65,6 +67,32 @@ const RESIZE_HANDLE_HIT_RADIUS = 8;
 const ROTATE_HANDLE_OFFSET = 26;
 const ROTATE_HANDLE_HIT_RADIUS = 10;
 const ROTATION_EPSILON = 0.0001;
+const SELECTION_COLOR = "#F95F4A";
+const ERASER_HIT_RADIUS = 12;
+
+// Laser trails live in awareness only and fade out after this long. Points travel
+// as [x, y, ageMs] relative to send time so receiver clocks never need to agree.
+const LASER_TTL_MS = 1000;
+const LASER_MAX_POINTS = 48;
+const LASER_GAP_RESET_MS = 300;
+
+type LaserPoint = { x: number; y: number; t: number };
+type LaserTrail = { points: LaserPoint[]; color: string };
+
+const parseLaserField = (value: unknown, receivedAt: number): LaserPoint[] | null => {
+  const record = value as { pts?: unknown } | null;
+  if (!record || !Array.isArray(record.pts)) return null;
+  const points: LaserPoint[] = [];
+  const rawPoints: readonly unknown[] = record.pts;
+  for (const entry of rawPoints) {
+    if (!Array.isArray(entry) || entry.length < 3) continue;
+    const tuple: readonly unknown[] = entry;
+    const [x, y, age] = tuple;
+    if (typeof x !== "number" || typeof y !== "number" || typeof age !== "number") continue;
+    points.push({ x, y, t: receivedAt - age });
+  }
+  return points.length > 0 ? points : null;
+};
 
 const measureTextBounds = (text: string, fontSize: number) => {
   const lines = text.split("\n");
@@ -363,6 +391,7 @@ export function WhiteboardCanvas({
   onPanMove,
   onPanEnd,
   onWheel: onViewportWheel,
+  undoManager,
 }: WhiteboardCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const internalCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -393,6 +422,195 @@ export function WhiteboardCanvas({
   const [editingElementId, setEditingElementId] = useState<string | null>(null);
   const [editingText, setEditingText] = useState("");
   const [stickyScrollOffsets, setStickyScrollOffsets] = useState<Record<string, number>>({});
+  const laserOverlayRef = useRef<HTMLCanvasElement>(null);
+  const laserTrailsRef = useRef<Map<number | "self", LaserTrail>>(new Map());
+  const laserFrameRef = useRef<number | null>(null);
+  const laserSyncRafRef = useRef<number | null>(null);
+  const eraserRingRef = useRef<HTMLDivElement>(null);
+  const viewportRef = useRef(viewport);
+
+  useEffect(() => {
+    viewportRef.current = viewport;
+  }, [viewport]);
+
+  const paintLaserFrame = useCallback(() => {
+    laserFrameRef.current = null;
+    const overlay = laserOverlayRef.current;
+    const container = containerRef.current;
+    if (!overlay || !container) return;
+
+    const now = Date.now();
+    const trails = laserTrailsRef.current;
+    for (const [key, trail] of trails) {
+      trail.points = trail.points.filter((point) => now - point.t < LASER_TTL_MS);
+      if (trail.points.length === 0) {
+        trails.delete(key);
+        if (key === "self") {
+          awareness.setLocalStateField("laser", null);
+        }
+      }
+    }
+
+    const rect = container.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    const pixelWidth = Math.max(1, Math.round(rect.width * dpr));
+    const pixelHeight = Math.max(1, Math.round(rect.height * dpr));
+    if (overlay.width !== pixelWidth || overlay.height !== pixelHeight) {
+      overlay.width = pixelWidth;
+      overlay.height = pixelHeight;
+      overlay.style.width = `${rect.width}px`;
+      overlay.style.height = `${rect.height}px`;
+    }
+    const ctx = overlay.getContext("2d");
+    if (!ctx) return;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, overlay.width, overlay.height);
+    if (trails.size === 0) return;
+
+    const vp = viewportRef.current;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.translate(vp.translateX, vp.translateY);
+    ctx.scale(vp.scale, vp.scale);
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+
+    for (const trail of trails.values()) {
+      const points = trail.points;
+      for (let i = 1; i < points.length; i += 1) {
+        const from = points[i - 1];
+        const to = points[i];
+        const life = 1 - (now - to.t) / LASER_TTL_MS;
+        if (life <= 0) continue;
+        ctx.strokeStyle = trail.color;
+        ctx.globalAlpha = Math.min(0.9, life);
+        ctx.lineWidth = (1 + 2.6 * life) / vp.scale;
+        ctx.beginPath();
+        ctx.moveTo(from.x, from.y);
+        ctx.lineTo(to.x, to.y);
+        ctx.stroke();
+      }
+      const head = points[points.length - 1];
+      if (head) {
+        const life = 1 - (now - head.t) / LASER_TTL_MS;
+        if (life > 0) {
+          ctx.globalAlpha = Math.min(1, life + 0.1);
+          ctx.fillStyle = trail.color;
+          ctx.beginPath();
+          ctx.arc(head.x, head.y, 3.4 / vp.scale, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+    }
+    ctx.globalAlpha = 1;
+
+    if (trails.size > 0 && laserFrameRef.current === null) {
+      laserFrameRef.current = requestAnimationFrame(paintLaserFrame);
+    }
+  }, [awareness]);
+
+  const kickLaserLoop = useCallback(() => {
+    if (laserFrameRef.current !== null) return;
+    laserFrameRef.current = requestAnimationFrame(paintLaserFrame);
+  }, [paintLaserFrame]);
+
+  const syncOwnLaser = useCallback(() => {
+    if (laserSyncRafRef.current !== null) return;
+    laserSyncRafRef.current = requestAnimationFrame(() => {
+      laserSyncRafRef.current = null;
+      const trail = laserTrailsRef.current.get("self");
+      if (!trail || trail.points.length === 0) return;
+      const now = Date.now();
+      awareness.setLocalStateField("laser", {
+        pts: trail.points.map((point) => [point.x, point.y, now - point.t]),
+      });
+    });
+  }, [awareness]);
+
+  const appendOwnLaserPoint = useCallback(
+    (point: { x: number; y: number }) => {
+      const now = Date.now();
+      const trails = laserTrailsRef.current;
+      let trail = trails.get("self");
+      const color = getColorForUser(user?.id ?? "guest");
+      // A pause breaks the trail instead of drawing a catch-up streak
+      if (trail && trail.points.length > 0) {
+        const last = trail.points[trail.points.length - 1];
+        if (now - last.t > LASER_GAP_RESET_MS) {
+          trail.points = [];
+        }
+      }
+      if (!trail) {
+        trail = { points: [], color };
+        trails.set("self", trail);
+      }
+      trail.color = color;
+      trail.points.push({ x: point.x, y: point.y, t: now });
+      if (trail.points.length > LASER_MAX_POINTS) {
+        trail.points.splice(0, trail.points.length - LASER_MAX_POINTS);
+      }
+      syncOwnLaser();
+      kickLaserLoop();
+    },
+    [kickLaserLoop, syncOwnLaser, user]
+  );
+
+  // Collect remote laser trails straight from awareness; they never touch React state
+  useEffect(() => {
+    const collect = () => {
+      const receivedAt = Date.now();
+      let changed = false;
+      awareness.getStates().forEach((state, clientId) => {
+        if (clientId === awareness.clientID) return;
+        const record = state as { laser?: unknown; user?: { color?: string } } | null;
+        const points = parseLaserField(record?.laser, receivedAt);
+        if (!points) return;
+        laserTrailsRef.current.set(clientId, {
+          points,
+          color: record?.user?.color ?? "#a1a1aa",
+        });
+        changed = true;
+      });
+      if (changed) kickLaserLoop();
+    };
+    awareness.on("update", collect);
+    return () => {
+      awareness.off("update", collect);
+    };
+  }, [awareness, kickLaserLoop]);
+
+  useEffect(() => {
+    return () => {
+      if (laserFrameRef.current !== null) {
+        cancelAnimationFrame(laserFrameRef.current);
+        laserFrameRef.current = null;
+      }
+      if (laserSyncRafRef.current !== null) {
+        cancelAnimationFrame(laserSyncRafRef.current);
+        laserSyncRafRef.current = null;
+      }
+    };
+  }, []);
+
+  const moveEraserRing = useCallback(
+    (event: React.PointerEvent<HTMLCanvasElement>) => {
+      const ring = eraserRingRef.current;
+      if (!ring) return;
+      const rect = event.currentTarget.getBoundingClientRect();
+      const size = ERASER_HIT_RADIUS * 2 * viewportRef.current.scale;
+      ring.style.width = `${size}px`;
+      ring.style.height = `${size}px`;
+      ring.style.transform = `translate(${event.clientX - rect.left - size / 2}px, ${
+        event.clientY - rect.top - size / 2
+      }px)`;
+      ring.style.opacity = "1";
+    },
+    []
+  );
+
+  const hideEraserRing = useCallback(() => {
+    const ring = eraserRingRef.current;
+    if (ring) ring.style.opacity = "0";
+  }, []);
 
   const scheduleDeferredTask = useCallback((callback: () => void, delayMs: number) => {
     const timer = setTimeout(() => {
@@ -560,7 +778,7 @@ export function WhiteboardCanvas({
   const startEditingById = useCallback(
     (elementId: string | null) => {
       if (locked || !elementId) return;
-      // Read fresh elements from doc — the element may have just been created
+      // Read fresh elements from doc, the element may have just been created
       const freshElements = getPageElements(doc, pageId);
       const element = freshElements.find(
         (item): item is EditableElement =>
@@ -855,8 +1073,13 @@ export function WhiteboardCanvas({
         return;
       }
       const rect = event.currentTarget.getBoundingClientRect();
-      const canvasPoint = toCanvasPoint(event.clientX, event.clientY, event.currentTarget.getBoundingClientRect());
+      const canvasPoint = toCanvasPoint(event.clientX, event.clientY, rect);
       const point = { x: canvasPoint.x, y: canvasPoint.y, pressure: event.pressure };
+      if (tool === "laser") {
+        appendOwnLaserPoint(point);
+        scheduleCursorSync(point.x, point.y);
+        return;
+      }
       event.currentTarget.setPointerCapture(event.pointerId);
       pendingMoveRef.current = null;
       if (moveRafRef.current !== null) {
@@ -864,6 +1087,8 @@ export function WhiteboardCanvas({
         moveRafRef.current = null;
       }
       if (!locked) {
+        // Each pointer gesture is one undo step
+        undoManager?.stopCapturing();
         if (tool === "select" && selectedId) {
           const selectedElement = elements.find((element) => element.id === selectedId) ?? null;
           if (selectedElement) {
@@ -916,6 +1141,7 @@ export function WhiteboardCanvas({
       scheduleCursorSync(point.x, point.y);
     },
     [
+      appendOwnLaserPoint,
       commitEditing,
       clearCursor,
       editingElementId,
@@ -929,6 +1155,7 @@ export function WhiteboardCanvas({
       startEditingById,
       toCanvasPoint,
       tool,
+      undoManager,
     ]
   );
 
@@ -939,6 +1166,15 @@ export function WhiteboardCanvas({
       if (tool === "pan") {
         if (event.buttons) onPanMove?.(event.clientX, event.clientY);
         return;
+      }
+      if (tool === "laser") {
+        // No click needed: pointing is the whole gesture
+        appendOwnLaserPoint(point);
+        scheduleCursorSync(point.x, point.y);
+        return;
+      }
+      if (tool === "eraser") {
+        moveEraserRing(event);
       }
       if (!locked && event.buttons) {
         const rotateSession = rotateSessionRef.current;
@@ -987,7 +1223,18 @@ export function WhiteboardCanvas({
       }
       scheduleCursorSync(point.x, point.y);
     },
-    [doc, locked, onPanMove, pageId, queuePointerMove, scheduleCursorSync, toCanvasPoint, tool]
+    [
+      appendOwnLaserPoint,
+      doc,
+      locked,
+      moveEraserRing,
+      onPanMove,
+      pageId,
+      queuePointerMove,
+      scheduleCursorSync,
+      toCanvasPoint,
+      tool,
+    ]
   );
 
   const handlePointerUp = useCallback((event: React.PointerEvent<HTMLCanvasElement>) => {
@@ -997,6 +1244,9 @@ export function WhiteboardCanvas({
     if (tool === "pan") {
       clearCursor();
       onPanEnd?.();
+      return;
+    }
+    if (tool === "laser") {
       return;
     }
     const rotateSession = rotateSessionRef.current;
@@ -1023,20 +1273,25 @@ export function WhiteboardCanvas({
 
   const handlePointerLeave = useCallback(
     (event: React.PointerEvent<HTMLCanvasElement>) => {
+      hideEraserRing();
       if (tool === "pan") {
         clearCursor();
         onPanEnd?.();
         return;
       }
+      if (tool === "laser") {
+        clearCursor();
+        return;
+      }
       handlePointerUp(event);
     },
-    [clearCursor, handlePointerUp, tool, onPanEnd]
+    [clearCursor, handlePointerUp, hideEraserRing, tool, onPanEnd]
   );
 
   const handleWheel = useCallback(
     (event: React.WheelEvent<HTMLCanvasElement>) => {
       if (editingElementId) return;
-      // Check if we're over a scrollable sticky note first — that takes priority
+      // Check if we're over a scrollable sticky note first, that takes priority
       const rect = event.currentTarget.getBoundingClientRect();
       const canvasPoint = toCanvasPoint(event.clientX, event.clientY, rect);
       const sticky = [...elements]
@@ -1059,7 +1314,7 @@ export function WhiteboardCanvas({
           return;
         }
       }
-      // All other scroll/pinch — zoom the viewport
+      // All other scroll/pinch, zoom the viewport
       event.preventDefault();
       onViewportWheel?.(event);
     },
@@ -1210,6 +1465,17 @@ export function WhiteboardCanvas({
   const rotationDegrees = (selectedRotation * 180) / Math.PI;
   const rotationLabel = `${Math.round(rotationDegrees)}deg`;
 
+  const toolCursor =
+    tool === "pan"
+      ? "grab"
+      : tool === "select"
+        ? "default"
+        : tool === "text"
+          ? "text"
+          : tool === "eraser"
+            ? "none"
+            : "crosshair";
+
   return (
     <div ref={containerRef} className="w-full h-full relative">
       <canvas
@@ -1217,7 +1483,7 @@ export function WhiteboardCanvas({
         className="w-full h-full"
         style={{
           touchAction: "manipulation",
-          cursor: tool === "pan" ? "grab" : undefined,
+          cursor: toolCursor,
         }}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
@@ -1226,6 +1492,23 @@ export function WhiteboardCanvas({
         onWheel={handleWheel}
         onDoubleClick={handleDoubleClick}
       />
+      <canvas
+        ref={laserOverlayRef}
+        className="absolute inset-0 pointer-events-none"
+        aria-hidden
+      />
+      {tool === "eraser" ? (
+        <div
+          ref={eraserRingRef}
+          className="absolute left-0 top-0 pointer-events-none rounded-full"
+          style={{
+            border: "1.5px solid rgba(255,255,255,0.65)",
+            backgroundColor: "rgba(255,255,255,0.08)",
+            opacity: 0,
+          }}
+          aria-hidden
+        />
+      ) : null}
       <div
         style={{
           position: "absolute",
@@ -1243,7 +1526,7 @@ export function WhiteboardCanvas({
               top: selectionBounds.y - 4,
               width: Math.max(1, selectionBounds.width) + 8,
               height: Math.max(1, selectionBounds.height) + 8,
-              border: "1.5px solid #6965db",
+              border: `1.5px solid ${SELECTION_COLOR}`,
               borderRadius: 4,
             }}
           >
@@ -1263,7 +1546,7 @@ export function WhiteboardCanvas({
                       height: 7,
                       borderRadius: 1,
                       backgroundColor: "#fff",
-                      border: "1.5px solid #6965db",
+                      border: `1.5px solid ${SELECTION_COLOR}`,
                     }}
                   />
                 ))
@@ -1277,7 +1560,7 @@ export function WhiteboardCanvas({
                     top: rotateHandleConnectorTop,
                     width: 2,
                     height: rotateHandleConnectorHeight,
-                    backgroundColor: "#6965db",
+                    backgroundColor: SELECTION_COLOR,
                   }}
                 />
                 <div
@@ -1289,7 +1572,7 @@ export function WhiteboardCanvas({
                     height: 12,
                     borderRadius: 999,
                     backgroundColor: "#fff",
-                    border: "1.5px solid #6965db",
+                    border: `1.5px solid ${SELECTION_COLOR}`,
                   }}
                   title={`Rotation: ${rotationLabel}`}
                 />
@@ -1309,7 +1592,7 @@ export function WhiteboardCanvas({
                     top: b.y - 4,
                     width: Math.max(1, b.width) + 8,
                     height: Math.max(1, Math.max(b.height, editingElement.fontSize * 1.4)) + 8,
-                    border: "1px dashed rgba(105, 101, 219, 0.5)",
+                    border: "1px dashed rgba(249, 95, 74, 0.55)",
                     borderRadius: 4,
                     zIndex: 99,
                   }}
@@ -1346,6 +1629,7 @@ export function WhiteboardCanvas({
                 }
               }}
               spellCheck={false}
+              placeholder={editingElement.type === "sticky" ? "Type something" : undefined}
               style={{ ...editorStyle, position: "absolute", pointerEvents: "auto" }}
             />
           </>

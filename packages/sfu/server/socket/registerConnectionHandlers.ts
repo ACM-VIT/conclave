@@ -1,7 +1,7 @@
 import type { Server as SocketIOServer } from "socket.io";
 import { Logger } from "../../utilities/loggers.js";
 import type { SfuState } from "../state.js";
-import { createConnectionContext } from "./context.js";
+import { createConnectionContext, setSocketContext } from "./context.js";
 import { registerChatHandlers } from "./handlers/chatHandlers.js";
 import { registerDisconnectHandlers } from "./handlers/disconnectHandlers.js";
 import { registerDisplayNameHandlers } from "./handlers/displayNameHandlers.js";
@@ -26,7 +26,7 @@ export const registerConnectionHandlers = (
     Logger.info(`Client connected: ${socket.id}`);
 
     const context = createConnectionContext(io, socket, state);
-    socket.data.context = context;
+    setSocketContext(socket, context);
 
     registerJoinRoomHandler(context);
     registerRouterHandlers(context);

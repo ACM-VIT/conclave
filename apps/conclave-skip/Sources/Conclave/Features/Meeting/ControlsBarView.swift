@@ -359,8 +359,8 @@ struct ControlsBarView: View {
         .padding(.horizontal, layout.horizontalPadding)
         .padding(.vertical, layout.verticalPadding)
         .acmGlassCapsule()
-        #if SKIP
-        .onChange(of: canUseParticipantActions ? "enabled" : "disabled") { _, _ in
+#if SKIP
+        .onChange(of: canUseParticipantActions ? "enabled" : "disabled") {
             if !canUseParticipantActions {
                 showReactionPicker = false
             }

@@ -22,6 +22,15 @@
     "test": "pnpm -C packages/meeting-core test",
     "typecheck:web": "pnpm -C apps/web exec tsc --noEmit",
     "typecheck:sfu": "pnpm -C packages/sfu exec tsc --noEmit",
-    "typecheck": "pnpm run typecheck:web && pnpm run typecheck:sfu"
+    "typecheck": "pnpm run typecheck:web && pnpm run typecheck:sfu",
+    "konsistent": "konsistent",
+    "lint:packages": "eslint packages",
+    "lint:web": "pnpm -C apps/web run lint",
+    "lint": "pnpm run lint:packages && pnpm run lint:web && pnpm run konsistent"
+  },
+  "devDependencies": {
+    "eslint": "^10.6.0",
+    "konsistent": "1.0.0-beta.1",
+    "typescript-eslint": "^8.62.1"
   }
 }

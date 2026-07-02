@@ -97,7 +97,7 @@ export const initMediaSoup = async (
         label,
       );
     },
-  })) as Worker[];
+  }));
   Logger.info(`Created ${state.workers.length} mediasoup workers`);
 };
 

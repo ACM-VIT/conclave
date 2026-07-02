@@ -781,13 +781,8 @@ function ChatPanel({
 
               const actionText = getActionText(msg.content);
               const previousMessage = index > 0 ? messages[index - 1] : null;
-              const nextMessage =
-                index < messages.length - 1 ? messages[index + 1] : null;
               const previousActionText = previousMessage
                 ? getActionText(previousMessage.content)
-                : null;
-              const nextActionText = nextMessage
-                ? getActionText(nextMessage.content)
                 : null;
               const groupedWithPrevious = Boolean(
                 previousMessage &&
@@ -797,14 +792,6 @@ function ChatPanel({
                   (previousMessage.isDirect ?? false) ===
                     (msg.isDirect ?? false) &&
                   Math.abs(msg.timestamp - previousMessage.timestamp) < 120000
-              );
-              const groupedWithNext = Boolean(
-                nextMessage &&
-                  !nextActionText &&
-                  !nextMessage.replyTo &&
-                  nextMessage.userId === msg.userId &&
-                  (nextMessage.isDirect ?? false) === (msg.isDirect ?? false) &&
-                  Math.abs(nextMessage.timestamp - msg.timestamp) < 120000
               );
               const directMessageLabel = msg.isDirect
                 ? isOwn

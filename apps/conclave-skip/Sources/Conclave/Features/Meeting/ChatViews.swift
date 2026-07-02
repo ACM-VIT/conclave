@@ -79,6 +79,7 @@ struct ChatOverlayView: View {
     @State private var messageText = ""
     @State private var replyTarget: ChatReplyPreview?
     @State private var lastReportedFocus = false
+    @State private var showGifPicker = false
     @FocusState private var isInputFocused: Bool
     private let maxChatInputLength = 1000
 
@@ -223,6 +224,9 @@ struct ChatOverlayView: View {
     }
 
     var body: some View {
+        let _ = PerformanceDiagnostics.render("ChatOverlayView") {
+            "messages=\(viewModel.state.chatMessages.count) systems=\(viewModel.state.systemMessages.count) text=\(messageText.count) focused=\(isInputFocused)"
+        }
         let canSendMessage = !messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isChatDisabled
 
         VStack(spacing: 0) {
@@ -293,6 +297,24 @@ struct ChatOverlayView: View {
                 }
 
                 HStack(spacing: 10) {
+                    Button {
+                        isInputFocused = false
+                        showGifPicker = true
+                    } label: {
+                        ACMSystemIcon.icon("photo.stack", android: "gif", size: 18)
+                            .foregroundStyle(isChatDisabled ? ACMColors.textFaint : ACMColors.textMuted)
+                            .frame(width: inputHeight, height: inputHeight)
+                            .acmColorBackground(ACMColors.surfaceRaised)
+                            .clipShape(Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .frame(width: inputHeight, height: inputHeight)
+                    #if !SKIP
+                    .contentShape(Circle())
+                    #endif
+                    .disabled(isChatDisabled)
+                    .accessibilityLabel("Add a GIF")
+
                     TextField(placeholder, text: messageTextBinding)
                         .textFieldStyle(.plain)
                         .font(ACMFont.trial(14))
@@ -351,28 +373,39 @@ struct ChatOverlayView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .acmColorBackground(ACMColors.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 16))
-        .overlay {
-            RoundedRectangle(cornerRadius: 16)
-                .strokeBorder(lineWidth: 1)
-                .foregroundStyle(ACMColors.border)
+        .overlay(alignment: .leading) {
+            // Left divider so the panel reads as a dock against the stage
+            // (matches the web chat's `border-l`); at the screen edge on phones.
+            Rectangle().fill(ACMColors.border).frame(width: 1)
         }
-        #if SKIP
-        .onChange(of: isInputFocused ? "focused" : "blurred") { _, _ in
+#if SKIP
+        .onChange(of: isInputFocused ? "focused" : "blurred") {
             reportFocus(isInputFocused)
         }
-        #else
+#else
         .onChange(of: isInputFocused) { _, focused in
             reportFocus(focused)
         }
         #endif
-        .onChange(of: messageText) { _, newValue in
-            guard !newValue.isEmpty else { return }
+        .onChange(of: messageText) {
+            guard !messageText.isEmpty else { return }
             markComposerActive()
+        }
+        .sheet(isPresented: $showGifPicker) {
+            GifPickerView(onSelect: { gif in
+                sendGif(gif)
+            })
         }
         .onDisappear {
             reportFocus(false)
         }
+    }
+
+    private func sendGif(_ gif: ChatGifAttachment) {
+        guard !isChatDisabled else { return }
+        let activeReply = replyTarget
+        replyTarget = nil
+        viewModel.sendChatGif(gif, replyTo: activeReply)
     }
 
     func sendMessage() {
@@ -394,9 +427,14 @@ struct ChatOverlayView: View {
     private func closeChat() {
         isInputFocused = false
         reportFocus(false)
+        PerformanceDiagnostics.event("chat_close")
+        #if SKIP
+        viewModel.toggleChat()
+        #else
         withAnimation(.easeInOut(duration: 0.12)) {
             viewModel.toggleChat()
         }
+        #endif
     }
 
     private func markComposerActive() {
@@ -486,6 +524,9 @@ private struct ChatTimelineView: View, Equatable {
     }
 
     var body: some View {
+        let _ = PerformanceDiagnostics.render("ChatTimelineView") {
+            "chat=\(chatMessages.count) system=\(systemMessages.count) focused=\(isInputFocused)"
+        }
         let entries = timeline
         let latestEntryId = entries.last?.id
         ScrollViewReader { proxy in
@@ -493,39 +534,17 @@ private struct ChatTimelineView: View, Equatable {
                 if entries.isEmpty {
                     ChatEmptyStateView()
                 } else {
-                    LazyVStack(alignment: .leading, spacing: 12) {
-                        ForEach(entries) { entry in
-                            switch entry {
-                            case .message(let message):
-                                let isFromCurrentUser = isCurrentUser(message.userId)
-                                let isReplyFromCurrentUser = message.replyTo.map { reply in
-                                    isCurrentUser(reply.userId)
-                                } == true
-                                if let actionText = ChatMessagePresentation.actionText(from: message.content) {
-                                    ChatActionMessageRow(
-                                        message: message,
-                                        isFromCurrentUser: isFromCurrentUser,
-                                        isReplyFromCurrentUser: isReplyFromCurrentUser,
-                                        onReply: onReply,
-                                        actionText: actionText
-                                    )
-                                    .id(entry.id)
-                                } else {
-                                    ChatBubbleView(
-                                        message: message,
-                                        isFromCurrentUser: isFromCurrentUser,
-                                        isReplyFromCurrentUser: isReplyFromCurrentUser,
-                                        onReply: onReply
-                                    )
-                                    .id(entry.id)
-                                }
-                            case .system(let system):
-                                SystemMessageRow(message: system)
-                                    .id(entry.id)
-                            }
+                    LazyVStack(alignment: .leading, spacing: 2) {
+                        ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
+                            timelineRow(
+                                entry,
+                                previousMessage: index > 0 ? messageValue(entries[index - 1]) : nil
+                            )
+                            .id(entry.id)
                         }
                     }
-                    .padding()
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 12)
                 }
             }
             .onChange(of: latestEntryId) { previousEntryId, currentEntryId in
@@ -545,8 +564,8 @@ private struct ChatTimelineView: View, Equatable {
             .onDisappear {
                 cancelDelayedScroll()
             }
-            #if SKIP
-            .onChange(of: isInputFocused ? "focused" : "blurred") { _, _ in
+#if SKIP
+            .onChange(of: isInputFocused ? "focused" : "blurred") {
                 guard isInputFocused else { return }
                 scrollToLatestMessage(in: entries, proxy: proxy)
                 scheduleDelayedScroll(in: entries, proxy: proxy)
@@ -558,14 +577,59 @@ private struct ChatTimelineView: View, Equatable {
                 scheduleDelayedScroll(in: entries, proxy: proxy)
             }
             #endif
-            .onChange(of: mentionSuggestionsCount) { _, _ in
+            .onChange(of: mentionSuggestionsCount) {
                 guard isInputFocused else { return }
                 scrollToLatestMessage(in: entries, proxy: proxy)
             }
-            .onChange(of: commandSuggestionsCount) { _, _ in
+            .onChange(of: commandSuggestionsCount) {
                 guard isInputFocused else { return }
                 scrollToLatestMessage(in: entries, proxy: proxy)
             }
+        }
+    }
+
+    private func messageValue(_ entry: ChatTimelineEntry) -> ChatMessage? {
+        switch entry {
+        case .message(let message):
+            // Action messages ("/me …") render in their own row style and should
+            // not group with plain messages.
+            return ChatMessagePresentation.actionText(from: message.content) == nil ? message : nil
+        case .system:
+            return nil
+        }
+    }
+
+    @ViewBuilder
+    private func timelineRow(_ entry: ChatTimelineEntry, previousMessage: ChatMessage?) -> some View {
+        switch entry {
+        case .message(let message):
+            let isFromCurrentUser = isCurrentUser(message.userId)
+            let isReplyFromCurrentUser = message.replyTo.map { reply in
+                isCurrentUser(reply.userId)
+            } == true
+            let grouped = ChatGroupingPolicy.grouped(message: message, previous: previousMessage)
+            if let actionText = ChatMessagePresentation.actionText(from: message.content) {
+                ChatActionMessageRow(
+                    message: message,
+                    isFromCurrentUser: isFromCurrentUser,
+                    isReplyFromCurrentUser: isReplyFromCurrentUser,
+                    onReply: onReply,
+                    actionText: actionText
+                )
+                .padding(.top, grouped ? 2.0 : 10.0)
+            } else {
+                ChatMessageRow(
+                    message: message,
+                    isFromCurrentUser: isFromCurrentUser,
+                    isReplyFromCurrentUser: isReplyFromCurrentUser,
+                    isGroupedWithPrevious: grouped,
+                    onReply: onReply
+                )
+                .padding(.top, grouped ? 2.0 : 10.0)
+            }
+        case .system(let system):
+            SystemMessageRow(message: system)
+                .padding(.top, 10.0)
         }
     }
 
@@ -1041,67 +1105,152 @@ struct ChatActionMessageRow: View {
 
 // MARK: - Chat Bubble
 
-struct ChatBubbleView: View {
+/// Groups consecutive messages from the same sender (like the web chat) so the
+/// avatar + name/time header only shows once per run.
+enum ChatGroupingPolicy {
+    static let groupWindowSeconds: TimeInterval = 300
+
+    static func grouped(message: ChatMessage, previous: ChatMessage?) -> Bool {
+        guard let previous else { return false }
+        return previous.userId == message.userId
+            && previous.isDirect == message.isDirect
+            && previous.dmTargetUserId == message.dmTargetUserId
+            && message.timestamp.timeIntervalSince(previous.timestamp) < groupWindowSeconds
+    }
+}
+
+/// Flat, left-aligned message row (Meet / Discord / web-chat style): avatar +
+/// name + time header on the first message of a sender run, plain-text body,
+/// no bubbles or right/left split.
+struct ChatMessageRow: View {
     let message: ChatMessage
     let isFromCurrentUser: Bool
     let isReplyFromCurrentUser: Bool
+    let isGroupedWithPrevious: Bool
     let onReply: (ChatMessage) -> Void
 
+    private var senderName: String {
+        ChatMessagePresentation.displayName(for: message, isFromCurrentUser: false)
+    }
+    private var headerName: String {
+        isFromCurrentUser ? "You" : senderName
+    }
     private var directMessageLabel: String? {
         ChatMessagePresentation.directMessageLabel(for: message, isFromCurrentUser: isFromCurrentUser)
     }
 
     var body: some View {
-        VStack(alignment: isFromCurrentUser ? .trailing : .leading, spacing: 4) {
-            HStack(spacing: 6) {
-                if !isFromCurrentUser {
-                    Text(ChatMessagePresentation.displayName(for: message, isFromCurrentUser: false))
-                        .font(ACMFont.trial(12, weight: .medium))
-                        .foregroundStyle(ACMColors.textMuted)
-                }
-                Text(message.timestamp, style: .time)
-                    .font(ACMFont.trial(11))
-                    .foregroundStyle(ACMColors.textFaint)
+        HStack(alignment: .top, spacing: 10) {
+            avatarColumn
 
-                ChatReplyButton {
-                    onReply(message)
+            VStack(alignment: .leading, spacing: 3) {
+                if !isGroupedWithPrevious {
+                    headerRow
                 }
+
+                if let replyTo = message.replyTo {
+                    ChatReplyQuoteView(
+                        replyTo: replyTo,
+                        isFromCurrentUser: false,
+                        isReplyFromCurrentUser: isReplyFromCurrentUser
+                    )
+                }
+
+                messageContent
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            ChatReplyButton {
+                onReply(message)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private var avatarColumn: some View {
+        if isGroupedWithPrevious {
+            Color.clear.frame(width: 32, height: 1)
+        } else {
+            Circle()
+                .fill(ACMColors.avatarColor(for: message.userId))
+                .frame(width: 32, height: 32)
+                .overlay {
+                    Text(String(senderName.prefix(1)).uppercased())
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(Color.white)
+                }
+        }
+    }
+
+    private var headerRow: some View {
+        HStack(spacing: 6) {
+            Text(headerName)
+                .font(ACMFont.trial(13, weight: .semibold))
+                .foregroundStyle(ACMColors.text)
+                .lineLimit(1)
+
+            Text(message.timestamp, style: .time)
+                .font(ACMFont.trial(11))
+                .foregroundStyle(ACMColors.textFaint)
 
             if let directMessageLabel {
                 Text(directMessageLabel)
                     .font(ACMFont.trial(11, weight: .medium))
                     .foregroundStyle(ACMColors.handRaised)
+                    .lineLimit(1)
             }
 
-            if let replyTo = message.replyTo {
-                ChatReplyQuoteView(
-                    replyTo: replyTo,
-                    isFromCurrentUser: isFromCurrentUser,
-                    isReplyFromCurrentUser: isReplyFromCurrentUser
-                )
-            }
+            Spacer(minLength: 0)
+        }
+    }
 
-            if let gif = message.gif {
-                ChatGifAttachmentView(gif: gif)
-                    .overlay {
-                        if message.isDirect {
-                            RoundedRectangle(cornerRadius: ACMRadius.md)
-                                .strokeBorder(lineWidth: 1)
-                                .foregroundStyle(ACMColors.handRaisedBorder)
-                        }
+    @ViewBuilder
+    private var messageContent: some View {
+        if let gif = message.gif {
+            ChatGifAttachmentView(gif: gif)
+                .overlay {
+                    if message.isDirect {
+                        RoundedRectangle(cornerRadius: ACMRadius.md)
+                            .strokeBorder(lineWidth: 1)
+                            .foregroundStyle(ACMColors.handRaisedBorder)
                     }
-                    .frame(maxWidth: 260, alignment: isFromCurrentUser ? .trailing : .leading)
-            } else {
-                ChatMessageTextBubble(
-                    content: ChatMessagePresentation.content(for: message),
-                    isFromCurrentUser: isFromCurrentUser,
-                    isDirect: message.isDirect
-                )
-                .frame(maxWidth: 260, alignment: isFromCurrentUser ? .trailing : .leading)
+                }
+                .frame(maxWidth: 220, alignment: .leading)
+        } else {
+            ChatMessageFlatText(
+                content: ChatMessagePresentation.content(for: message),
+                isDirect: message.isDirect
+            )
+        }
+    }
+}
+
+/// Plain message text (no bubble) with inline link chips, for the flat row.
+struct ChatMessageFlatText: View {
+    let content: String
+    let isDirect: Bool
+
+    private var links: [ChatMessageLink] {
+        Array(ChatMessageLinkParser.links(in: content).prefix(3))
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: links.isEmpty ? 0.0 : 8.0) {
+            Text(content)
+                .font(ACMFont.trial(14))
+                .foregroundStyle(ACMColors.text)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            if !links.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(links) { link in
+                        ChatMessageLinkChip(link: link, isFromCurrentUser: false)
+                    }
+                }
             }
         }
-        .frame(maxWidth: .infinity, alignment: isFromCurrentUser ? .trailing : .leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

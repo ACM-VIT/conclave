@@ -94,8 +94,7 @@ export const createTranscriptRelayRegistry = (options: {
         };
       }
 
-      let relay: TranscriptRelayInstance;
-      relay = (options.createRelay ?? ((relayOptions) =>
+      const relay: TranscriptRelayInstance = (options.createRelay ?? ((relayOptions) =>
         new SfuTranscriptRelay(relayOptions)))({
         room: startOptions.room,
         workerUrl: startOptions.workerUrl,

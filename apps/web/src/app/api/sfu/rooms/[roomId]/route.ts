@@ -20,7 +20,7 @@ type RoomOccupancyResponse = {
 };
 
 const readError = async (response: Response): Promise<string> => {
-  const payload = await response.json().catch(() => null);
+  const payload: unknown = await response.json().catch(() => null);
   if (payload && typeof payload === "object" && "error" in payload) {
     return String((payload as { error?: string }).error || "Request failed");
   }

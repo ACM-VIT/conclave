@@ -124,7 +124,7 @@ export const createSfuServer = (
       clearInterval(roomOwnershipRenewTimer);
       roomOwnershipRenewTimer = null;
     }
-    await state.scheduledWebinarPersistence?.close?.();
+    state.scheduledWebinarPersistence?.close?.();
     state.scheduledWebinarPersistence = null;
     await state.scheduledMeetingPersistence?.close?.();
     state.scheduledMeetingPersistence = null;
@@ -135,7 +135,9 @@ export const createSfuServer = (
     socketAdapterLifecycle = null;
     await state.roomRegistry.close();
     state.transcriptRelays.closeAll();
-    io.close();
+    // Fire-and-forget: io.close() also initiates closing the attached HTTP
+    // server; the explicit httpServer.close below is what we await on.
+    void io.close();
 
     await new Promise<void>((resolve, reject) => {
       httpServer.close((error) => {

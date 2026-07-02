@@ -1,5 +1,6 @@
 "use client";
 
+import { errorName } from "../lib/utils";
 import { ArrowRight, Globe, Hand, Loader2, Mic, MicOff } from "lucide-react";
 import { memo, useEffect, useRef, useState, type FormEvent } from "react";
 import { useSmartParticipantOrder } from "../hooks/useSmartParticipantOrder";
@@ -90,7 +91,7 @@ function BrowserLayout({
 
         video.srcObject = localStream;
         video.play().catch((err) => {
-            if (err.name !== "AbortError") {
+            if (errorName(err) !== "AbortError") {
                 console.error("[Meets] Browser layout local video play error:", err);
             }
         });
@@ -115,7 +116,7 @@ function BrowserLayout({
 
         video.srcObject = browserVideoStream;
         video.play().catch((err) => {
-            if (err.name !== "AbortError") {
+            if (errorName(err) !== "AbortError") {
                 console.error("[Meets] Browser video play error:", err);
             }
         });

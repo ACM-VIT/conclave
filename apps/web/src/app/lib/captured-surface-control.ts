@@ -37,8 +37,9 @@ export const getCaptureControllerConstructor =
 export const supportsCapturedSurfaceControl = (
   controller?: CaptureControllerLike | null,
 ) => {
-  const prototype =
-    getCaptureControllerConstructor()?.prototype ?? controller ?? null;
+  const prototype = (getCaptureControllerConstructor()?.prototype ??
+    controller ??
+    null) as Record<string, unknown> | null;
   return Boolean(
     prototype &&
       typeof prototype.forwardWheel === "function" &&

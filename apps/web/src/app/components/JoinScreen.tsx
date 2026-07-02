@@ -2,7 +2,6 @@
 
 import dynamic from "next/dynamic";
 import {
-  CalendarClock,
   Loader2,
   WandSparkles,
   Video,
@@ -21,11 +20,7 @@ import {
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { prefetchConclaveAnimation } from "../lib/conclaveAnimation";
 import { prefetchConclaveLock } from "../lib/conclaveSound";
-import type {
-  Dispatch,
-  SetStateAction,
-  PointerEvent as ReactPointerEvent,
-} from "react";
+import type { Dispatch, SetStateAction } from "react";
 import { Avatar } from "@conclave/ui-tokens/web";
 import { signOut, useSession } from "@/lib/auth-client";
 import type { RoomInfo } from "@/lib/sfu-types";
@@ -636,7 +631,7 @@ function JoinScreen({
                   name: audioResult.reason.name,
                   message: audioResult.reason.message,
                 }
-              : audioResult.reason,
+              : (audioResult.reason as unknown),
         });
       }
       if (videoResult.status === "fulfilled") {
@@ -649,7 +644,7 @@ function JoinScreen({
                   name: videoResult.reason.name,
                   message: videoResult.reason.message,
                 }
-              : videoResult.reason,
+              : (videoResult.reason as unknown),
         });
       }
 
@@ -742,7 +737,7 @@ function JoinScreen({
         processedTrack: getJoinTrackDebugSnapshot(processedPreviewTrackRef.current),
       });
       videoRef.current.srcObject = previewStream;
-      videoRef.current.play().catch((err) => {
+      videoRef.current.play().catch((err: unknown) => {
         warnJoinMedia("preview_video_play_failed", {
           error:
             err instanceof Error
@@ -1141,9 +1136,12 @@ function JoinScreen({
   useEffect(() => {
     void refreshDevices();
     if (!navigator.mediaDevices?.addEventListener) return;
-    navigator.mediaDevices.addEventListener("devicechange", refreshDevices);
+    const onDeviceChange = () => {
+      void refreshDevices();
+    };
+    navigator.mediaDevices.addEventListener("devicechange", onDeviceChange);
     return () =>
-      navigator.mediaDevices.removeEventListener("devicechange", refreshDevices);
+      navigator.mediaDevices.removeEventListener("devicechange", onDeviceChange);
   }, [refreshDevices]);
 
   // Once a stream is live the OS exposes device labels + the active deviceId,

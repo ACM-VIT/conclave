@@ -750,7 +750,7 @@ export const createSqliteScheduledMeetingPersistence = (
           .map((row) => {
             const payload =
               row && typeof row === "object" && "payload_json" in row
-                ? String((row as { payload_json: unknown }).payload_json)
+                ? String((row).payload_json)
                 : "";
             if (!payload) return null;
             return normalizeStoredMeeting(JSON.parse(payload));
@@ -781,7 +781,7 @@ export const createFileScheduledMeetingPersistence = (
     try {
       if (!existsSync(path)) return [];
       const raw = readFileSync(path, "utf8");
-      const data = JSON.parse(raw);
+      const data: unknown = JSON.parse(raw);
       if (!Array.isArray(data)) return [];
       return data
         .map((entry) => normalizeStoredMeeting(entry))

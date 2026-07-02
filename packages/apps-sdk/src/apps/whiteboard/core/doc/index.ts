@@ -157,7 +157,7 @@ export const getPage = (doc: Y.Doc, pageId: string): PageMap | null => {
   const pages = getPagesMap(doc);
   const page = pages.get(pageId);
   if (!(page instanceof Y.Map)) return null;
-  return page as PageMap;
+  return page;
 };
 
 export const getPageElementsArray = (

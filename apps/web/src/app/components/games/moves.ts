@@ -26,14 +26,14 @@ export type BluffMove =
   | { type: "next" }
   | { type: "skip" };
 
-/** Mirrors WyrMove in modules/wouldYouRather.ts. */
+/** Mirrors WouldYouRatherMove in modules/wouldYouRather.ts. */
 export type WouldYouRatherMove =
   | { type: "start" }
   | { type: "choose"; option: 0 | 1 }
   | { type: "next" }
   | { type: "skip" };
 
-/** Mirrors MltMove in modules/mostLikelyTo.ts. */
+/** Mirrors MostLikelyToMove in modules/mostLikelyTo.ts. */
 export type MostLikelyToMove =
   | { type: "start" }
   | { type: "vote"; target: string }

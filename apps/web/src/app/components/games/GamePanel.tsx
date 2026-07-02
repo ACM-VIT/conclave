@@ -18,10 +18,16 @@ type ScoreRow = { id: string; name: string; score: number };
 const readScoreboard = (view: unknown): ScoreRow[] | null => {
   const board = (view as { scoreboard?: unknown } | null)?.scoreboard;
   if (!Array.isArray(board)) return null;
-  return board.filter(
-    (r): r is ScoreRow =>
-      Boolean(r) && typeof r.id === "string" && typeof r.name === "string" && typeof r.score === "number",
-  );
+  const rows: readonly unknown[] = board;
+  return rows.filter((r): r is ScoreRow => {
+    if (!r || typeof r !== "object") return false;
+    const record = r as Record<string, unknown>;
+    return (
+      typeof record.id === "string" &&
+      typeof record.name === "string" &&
+      typeof record.score === "number"
+    );
+  });
 };
 
 /**
@@ -181,8 +187,8 @@ export function GamePanel({
               </div>
             ) : null}
             <Game
-              pub={publicState.view as never}
-              me={view as never}
+              pub={publicState.view}
+              me={view}
               players={publicState.players}
               isAdmin={isAdmin}
               readOnly={isReadOnly || !isPlayer}

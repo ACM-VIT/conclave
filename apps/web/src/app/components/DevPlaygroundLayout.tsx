@@ -1,5 +1,6 @@
 "use client";
 
+import { errorName } from "../lib/utils";
 import { Hand } from "lucide-react";
 import { memo, useEffect, useRef } from "react";
 import { DevPlaygroundWebApp } from "@conclave/apps-sdk/dev-playground/web";
@@ -55,7 +56,7 @@ function DevPlaygroundLayout({
 
     video.srcObject = localStream;
     video.play().catch((err) => {
-      if (err.name !== "AbortError") {
+      if (errorName(err) !== "AbortError") {
         console.error("[Meets] Dev playground local video play error:", err);
       }
     });

@@ -302,12 +302,12 @@ export default function WordleGame({
           .split("");
         rows.push({
           letters,
-          states: Array(pub.wordLength).fill("empty"),
+          states: Array.from({ length: pub.wordLength }, () => "empty" as const),
         });
       } else {
         rows.push({
-          letters: Array(pub.wordLength).fill(""),
-          states: Array(pub.wordLength).fill("empty"),
+          letters: Array.from({ length: pub.wordLength }, () => ""),
+          states: Array.from({ length: pub.wordLength }, () => "empty" as const),
         });
       }
     }

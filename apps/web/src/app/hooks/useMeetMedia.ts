@@ -429,12 +429,10 @@ export function useMeetMedia({
   setMeetError,
   selectedAudioInputDeviceId,
   setSelectedAudioInputDeviceId,
-  selectedAudioOutputDeviceId,
   setSelectedAudioOutputDeviceId,
   selectedVideoInputDeviceId,
   setSelectedVideoInputDeviceId,
   meetVolume = DEFAULT_MEET_VOLUME,
-  videoQuality,
   videoQualityRef,
   dataSaverMode = false,
   activeVideoEffectsCount = 0,
@@ -1723,9 +1721,9 @@ export function useMeetMedia({
       }
       liveTracks.forEach((track) => {
         track.onended = () => {
-          console.log(`[Meets] Track ended: ${track.kind}`);
+          console.info(`[Meets] Track ended: ${track.kind}`);
           if (track.kind === "audio" || track.kind === "video") {
-            handleLocalTrackEnded(track.kind as "audio" | "video", track);
+            handleLocalTrackEnded(track.kind, track);
           }
         };
       });
@@ -2161,7 +2159,7 @@ export function useMeetMedia({
           publishNetworkProfile,
         );
 
-        console.log(
+        console.info(
           `[Meets] Switching to ${quality} quality`,
           JSON.stringify(constraints)
         );
@@ -2234,7 +2232,7 @@ export function useMeetMedia({
               },
             );
           }
-          let newVideoTrack = newStream.getVideoTracks()[0] ?? null;
+          const newVideoTrack = newStream.getVideoTracks()[0] ?? null;
           if (!newVideoTrack) {
             throw new Error("No video track obtained");
           }
@@ -4652,7 +4650,7 @@ export function useMeetMedia({
         resetScreenShareControlState();
       }
       if ((err as Error).name === "NotAllowedError") {
-        console.log("[Meets] Screen share cancelled by user");
+        console.info("[Meets] Screen share cancelled by user");
       } else {
         console.error("[Meets] Error starting screen share:", err);
         setMeetError(createMeetError(err, "MEDIA_ERROR"));

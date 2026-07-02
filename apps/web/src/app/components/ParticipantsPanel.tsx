@@ -153,11 +153,9 @@ function ParticipantsPanel({
   const handlePromoteHost = (targetUserId: string) => {
     const targetParticipant = participants.get(targetUserId);
     const isWebinarAttendee = Boolean(
-      (
-        targetParticipant as
-          | (Participant & { isWebinarAttendee?: boolean })
-          | undefined
-      )?.isWebinarAttendee,
+      targetParticipant &&
+        "isWebinarAttendee" in targetParticipant &&
+        targetParticipant.isWebinarAttendee,
     );
     if (
       !socket ||

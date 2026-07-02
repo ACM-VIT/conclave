@@ -19,6 +19,14 @@ internal class NetworkReachabilityMonitor {
             .getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
     private var callback: ConnectivityManager.NetworkCallback? = null
     private val mainHandler = Handler(Looper.getMainLooper())
+    private var lastLoggedQualityHint: ConnectionQuality? = null
+    private var lastLoggedOffline: Boolean? = null
+    private var lastLoggedQualityReason: String? = null
+
+    private data class QualityHint(
+        val quality: ConnectionQuality,
+        val reason: String,
+    )
 
     @SuppressLint("MissingPermission")
     internal fun start() {
@@ -63,8 +71,9 @@ internal class NetworkReachabilityMonitor {
         val isOffline = !hasValidatedNetwork()
         mainHandler.post {
             if (callback !== activeCallback) return@post
+            logQualityHintIfNeeded(qualityHint, isOffline)
             onStatusChanged?.invoke(isOffline)
-            onQualityHintChanged?.invoke(qualityHint)
+            onQualityHintChanged?.invoke(qualityHint.quality)
         }
     }
 
@@ -72,8 +81,9 @@ internal class NetworkReachabilityMonitor {
         val qualityHint = currentQualityHint()
         val isOffline = !hasValidatedNetwork()
         mainHandler.post {
+            logQualityHintIfNeeded(qualityHint, isOffline)
             onStatusChanged?.invoke(isOffline)
-            onQualityHintChanged?.invoke(qualityHint)
+            onQualityHintChanged?.invoke(qualityHint.quality)
         }
     }
 
@@ -86,14 +96,16 @@ internal class NetworkReachabilityMonitor {
     }
 
     @SuppressLint("MissingPermission")
-    private fun currentQualityHint(): ConnectionQuality {
-        val network = connectivityManager.activeNetwork ?: return ConnectionQuality.unknown
+    private fun currentQualityHint(): QualityHint {
+        val network = connectivityManager.activeNetwork
+            ?: return QualityHint(ConnectionQuality.unknown, "no_active_network")
         val capabilities =
-            connectivityManager.getNetworkCapabilities(network) ?: return ConnectionQuality.unknown
+            connectivityManager.getNetworkCapabilities(network)
+                ?: return QualityHint(ConnectionQuality.unknown, "no_capabilities")
         val validated =
             capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
                 capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
-        if (!validated) return ConnectionQuality.unknown
+        if (!validated) return QualityHint(ConnectionQuality.unknown, "not_validated")
 
         val metered = !capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
         val congested = !capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_CONGESTED)
@@ -103,12 +115,18 @@ internal class NetworkReachabilityMonitor {
             upstreamKbps = capabilities.linkUpstreamBandwidthKbps,
             downstreamKbps = capabilities.linkDownstreamBandwidthKbps,
         )
+        val details = "metered=$metered cellular=$cellular congested=$congested suspended=$suspended upKbps=${capabilities.linkUpstreamBandwidthKbps} downKbps=${capabilities.linkDownstreamBandwidthKbps}"
 
-        if ((congested || suspended) && (metered || cellular)) return ConnectionQuality.emergency
-        if (congested || suspended) return ConnectionQuality.poor
-        if (bandwidthQuality != ConnectionQuality.unknown) return bandwidthQuality
-        if (metered || cellular) return ConnectionQuality.fair
-        return ConnectionQuality.good
+        if ((congested || suspended) && (metered || cellular)) {
+            return QualityHint(ConnectionQuality.emergency, "blocked_or_congested $details")
+        }
+        if (congested || suspended) {
+            return QualityHint(ConnectionQuality.poor, "blocked_or_congested $details")
+        }
+        if (bandwidthQuality != ConnectionQuality.unknown) {
+            return QualityHint(bandwidthQuality, "bandwidth_hint $details")
+        }
+        return QualityHint(ConnectionQuality.good, "validated $details")
     }
 
     private fun bandwidthQualityHint(upstreamKbps: Int, downstreamKbps: Int): ConnectionQuality {
@@ -127,5 +145,22 @@ internal class NetworkReachabilityMonitor {
         }
 
         return ConnectionQuality.unknown
+    }
+
+    private fun logQualityHintIfNeeded(qualityHint: QualityHint, isOffline: Boolean) {
+        if (
+            lastLoggedQualityHint == qualityHint.quality &&
+            lastLoggedOffline == isOffline &&
+            lastLoggedQualityReason == qualityHint.reason
+        ) {
+            return
+        }
+        lastLoggedQualityHint = qualityHint.quality
+        lastLoggedOffline = isOffline
+        lastLoggedQualityReason = qualityHint.reason
+        NativePerformanceDiagnostics.event(
+            "network_quality_hint",
+            details = "quality=${qualityHint.quality} offline=$isOffline reason=${qualityHint.reason}"
+        )
     }
 }

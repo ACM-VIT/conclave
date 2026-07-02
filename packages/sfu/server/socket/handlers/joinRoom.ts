@@ -46,6 +46,7 @@ import {
   recordWebinarJoin,
 } from "../../scheduledWebinars.js";
 import { ensureWebinarRoomConfig } from "../../scheduledWebinarScheduler.js";
+import { getSocketAuthUser } from "../auth.js";
 import type { ConnectionContext } from "../context.js";
 import { registerAdminHandlers } from "./adminHandlers.js";
 import { respond } from "./ack.js";
@@ -93,7 +94,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           MAX_ROOM_ID_LENGTH,
         );
         let sessionId: string | undefined;
-        const user = socket.data.user;
+        const user = getSocketAuthUser(socket);
         if (!requestedRoomId) {
           respond(callback, { error: "Missing room ID" });
           return;
@@ -231,7 +232,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           return;
         }
 
-        const identity = buildUserIdentity(user, sessionId, socket.id);
+        const identity = buildUserIdentity(user ?? {}, sessionId, socket.id);
         if (!identity) {
           respond(callback, {
             error: "Authentication error: Invalid token payload",
@@ -726,7 +727,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             emitWebinarFeedChanged(io, state, previousRoom);
           }
 
-          socket.leave(previousChannelId);
+          await socket.leave(previousChannelId);
           cleanupRoom(state, previousChannelId);
 
           context.currentRoom = null;
@@ -766,7 +767,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         });
         context.currentRoom.addClient(context.currentClient);
 
-        socket.join(roomChannelId);
+        await socket.join(roomChannelId);
 
         if (!context.currentClient.isGhost) {
           io.to(roomChannelId).emit("hostChanged", {

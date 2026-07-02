@@ -165,8 +165,17 @@ android {
     buildTypes {
         release {
             signingConfig = signingConfigs.findByName("release")
-            isMinifyEnabled = true
-            isShrinkResources = true
+            // R8 minification miscompiles SkipUI's presentation/preferences code:
+            // it produces a null skip.ui.Preference that crashes PresentationRoot →
+            // PreferenceValues.collectPreferences on sheet / share-chooser
+            // presentation transitions (NPE, sometimes surfacing earlier as a
+            // checkNotNullParameter). Not reproducible in debug (no R8), and
+            // -dontoptimize / keep rules don't contain it. Disabled until Skip
+            // ships an R8-compatible SkipUI. isDebuggable=false still delivers the
+            // release runtime perf win (ART optimization, no debug overhead); the
+            // only cost is a larger APK — use an App Bundle (AAB) to split it.
+            isMinifyEnabled = false
+            isShrinkResources = false
             isDebuggable = false
             manifestPlaceholders["CONCLAVE_AUTH_BASE_URL"] = productionConclaveBaseUrl
             manifestPlaceholders["SFU_JOIN_URL"] = productionSfuJoinUrl

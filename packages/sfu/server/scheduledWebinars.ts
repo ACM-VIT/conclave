@@ -73,14 +73,16 @@ const sanitizeCoHosts = (
   value: unknown,
 ): ScheduledWebinarCoHost[] => {
   if (!Array.isArray(value)) return [];
+  const entries: readonly unknown[] = value;
   const seen = new Set<string>();
   const result: ScheduledWebinarCoHost[] = [];
-  for (const entry of value) {
+  for (const entry of entries) {
     if (!entry || typeof entry !== "object") continue;
-    const email = normalizeHostEmail(String(entry.email ?? ""));
+    const record = entry as Record<string, unknown>;
+    const email = normalizeHostEmail(String(record.email ?? ""));
     if (!email || !email.includes("@") || seen.has(email)) continue;
     seen.add(email);
-    const name = sanitizeString(entry.name, { max: 120, allowEmpty: true });
+    const name = sanitizeString(record.name, { max: 120, allowEmpty: true });
     result.push({ email, name: name || undefined });
     if (result.length >= MAX_CO_HOSTS) break;
   }
@@ -288,7 +290,7 @@ export const createFileScheduledWebinarPersistence = (
     try {
       if (!existsSync(path)) return [];
       const raw = readFileSync(path, "utf8");
-      const data = JSON.parse(raw);
+      const data: unknown = JSON.parse(raw);
       if (!Array.isArray(data)) return [];
       return data
         .map((entry) => normalizeStoredWebinar(entry))
@@ -456,7 +458,7 @@ export const createSqliteScheduledWebinarPersistence = (
           .map((row) => {
             const payload =
               row && typeof row === "object" && "payload_json" in row
-                ? String((row as { payload_json: unknown }).payload_json)
+                ? String((row).payload_json)
                 : "";
             if (!payload) return null;
             return normalizeStoredWebinar(JSON.parse(payload));

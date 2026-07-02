@@ -20,7 +20,19 @@ struct ContentView: View {
     @State private var pendingJoinPromptRequestID: Int?
     @State private var acceptedPendingJoinURLString: String?
 
+    private var shouldShowMeetingEntryOverlay: Bool {
+        MeetingEntryOverlayPolicy.shouldShow(
+            isEnteringMeeting: meetingViewModel.state.isEnteringMeeting,
+            startedAt: meetingViewModel.state.meetingEntryStartedAt,
+            now: Date(),
+            connectionState: meetingViewModel.state.connectionState
+        )
+    }
+
     var body: some View {
+        let _ = PerformanceDiagnostics.render("ContentView") {
+            "state=\(meetingViewModel.state.connectionState) entering=\(meetingViewModel.state.isEnteringMeeting)"
+        }
         Group {
             switch meetingViewModel.state.connectionState {
             case .disconnected, .connecting, .connected:
@@ -46,18 +58,46 @@ struct ContentView: View {
         .overlay {
             pendingJoinPromptOverlay
         }
+        .overlay {
+            // Branded entry takeover — above everything, gated on an entering
+            // connection state plus an observable hard ceiling so error /
+            // waiting / disconnected / stale entries auto-hide even if the
+            // view-model timing tasks are cancelled.
+            Group {
+                if shouldShowMeetingEntryOverlay {
+                    MeetingEntryOverlayView(
+                        action: meetingViewModel.state.meetingEntryAction,
+                        showsAnimation: shouldAnimateMeetingEntryOverlay
+                    )
+                        .transition(.opacity)
+                }
+            }
+            #if SKIP
+            .animation(nil, value: shouldShowMeetingEntryOverlay)
+            #else
+            .animation(.easeInOut(duration: 0.42), value: shouldShowMeetingEntryOverlay)
+            #endif
+        }
         .onAppear {
+            clearMeetingEntryIfCurrentStateCannotShowOverlay()
             continueAcceptedPendingJoinIfReady()
             handlePendingJoinURLIfNeeded()
         }
-        .onChange(of: appState.pendingJoinRequestID) { _, _ in
+        .task(id: meetingViewModel.state.meetingEntryGeneration) {
+            await runMeetingEntryDeadline()
+        }
+        // Zero-parameter onChange (no non-null lambda param) — these fire during
+        // the entry sequence, where SkipUI's rememberSaveable can restore a null
+        // oldValue and crash the two-parameter form on Android. Both handlers
+        // ignore their values anyway.
+        .onChange(of: appState.pendingJoinRequestID) {
             handlePendingJoinURLIfNeeded()
         }
-        .onChange(of: meetingViewModel.state.connectionState) { _, _ in
+        .onChange(of: meetingViewModel.state.connectionState) {
+            clearMeetingEntryIfCurrentStateCannotShowOverlay()
             continueAcceptedPendingJoinIfReady()
             handlePendingJoinURLIfNeeded()
         }
-        .animation(.easeInOut(duration: 0.3), value: meetingViewModel.state.connectionState)
         .preferredColorScheme(.dark)
         .tint(ACMColors.primaryOrange)
         #if SKIP
@@ -88,6 +128,37 @@ struct ContentView: View {
             )
         }
         #endif
+    }
+
+    private var shouldAnimateMeetingEntryOverlay: Bool {
+        switch meetingViewModel.state.connectionState {
+        case .disconnected, .connecting, .connected, .joining, .joined:
+            true
+        case .reconnecting, .waiting, .error:
+            false
+        }
+    }
+
+    private func runMeetingEntryDeadline() async {
+        guard meetingViewModel.state.isEnteringMeeting,
+              let startedAt = meetingViewModel.state.meetingEntryStartedAt else { return }
+        let elapsed = Date().timeIntervalSince(startedAt)
+        let remaining = max(0.0, MeetingEntryOverlayPolicy.safetyTimeoutSeconds - elapsed)
+        if remaining > 0.0 {
+            try? await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000.0))
+        }
+        guard !Task.isCancelled,
+              meetingViewModel.state.isEnteringMeeting,
+              !shouldShowMeetingEntryOverlay else { return }
+        meetingViewModel.clearMeetingEntry()
+    }
+
+    private func clearMeetingEntryIfCurrentStateCannotShowOverlay() {
+        guard meetingViewModel.state.isEnteringMeeting,
+              MeetingEntryOverlayPolicy.shouldClearMeetingEntry(on: meetingViewModel.state.connectionState) else {
+            return
+        }
+        meetingViewModel.clearMeetingEntry()
     }
 
     @ViewBuilder

@@ -21,7 +21,7 @@ import {
   type FormEvent,
 } from "react";
 import { Drawer } from "vaul";
-import { ControlButton } from "@conclave/ui-tokens/web";
+import { Avatar, ControlButton } from "@conclave/ui-tokens/web";
 import { color } from "@conclave/ui-tokens";
 import {
   DeviceSettingsSection,
@@ -199,7 +199,7 @@ function PanelCluster({
       onMouseLeave={() => setHovered(false)}
       onFocusCapture={() => setHovered(true)}
       onBlurCapture={(event) => {
-        if (!event.currentTarget.contains(event.relatedTarget as Node)) {
+        if (!event.currentTarget.contains(event.relatedTarget)) {
           setHovered(false);
         }
       }}
@@ -298,7 +298,7 @@ function LeaveControl({
     >
       {menuOpen && (
         // pb-2 bridges the visual gap so the hover area stays continuous
-        // between the button and the pill — no dead zone to cross.
+        // between the button and the pill; no dead zone to cross.
         <div className="absolute bottom-full left-1/2 z-20 -translate-x-1/2 pb-2">
           <button
             type="button"
@@ -413,7 +413,7 @@ function ControlsBar(props: ControlsBarProps) {
   useClickOutside(moreOpen && !compact, moreRef, () => setMoreOpen(false));
   useClickOutside(browserOpen, browserRef, () => setBrowserOpen(false));
 
-  // One-time nudge toward the backgrounds/filters tucked inside More — only
+  // One-time nudge toward the backgrounds/filters tucked inside More, only
   // surfaced if that option is actually available to this participant.
   const hasEffects = config.overflow.some(
     (row) => row.id === "effects" && !row.disabled,
@@ -439,6 +439,15 @@ function ControlsBar(props: ControlsBarProps) {
   const gifsTip = useOneTimeHint("chat-gifs", {
     enabled: !compact && hasChatControl && !props.isChatOpen,
     delay: 2400,
+  });
+  // One-time nudge for Watch together, only for people who can actually open
+  // it (it lives in the More menu). Takes precedence over the older More tip.
+  const hasWatchControl = config.overflow.some(
+    (row) => row.id === "watch" && !row.disabled,
+  );
+  const watchTip = useOneTimeHint("watch-together", {
+    enabled: hasWatchControl,
+    delay: 2200,
   });
 
   const lastReactionRef = useRef(0);
@@ -485,6 +494,7 @@ function ControlsBar(props: ControlsBarProps) {
     !reactionsOpen &&
     !browserOpen &&
     !filtersTip.visible &&
+    !watchTip.visible &&
     ((gamesTip.visible && !props.isGamesOpen && !props.hasActiveGame) ||
       (gifsTip.visible && !props.isChatOpen));
 
@@ -629,10 +639,100 @@ function ControlsBar(props: ControlsBarProps) {
             label="More options"
             onClick={() => {
               if (filtersTip.visible) filtersTip.dismiss();
+              if (watchTip.visible) watchTip.dismiss();
               setMoreOpen((v) => !v);
             }}
           />
-          {filtersTip.visible && !moreOpen && !reactionsOpen && !browserOpen ? (
+          {watchTip.visible && !moreOpen && !reactionsOpen && !browserOpen ? (
+            <Coachmark
+              title="Watch together"
+              description={"You can now watch YouTube together on Conclave."}
+              width="w-[16.5rem]"
+              onDismiss={watchTip.dismiss}
+              visual={
+                /* A living watch party: the room's real avatars orbit the
+                   play button (counter-rotated so faces stay upright) while
+                   the playhead below plays a video through, fades, and starts
+                   the next one, a seamless nod to the queue. Continuous by
+                   design; stilled for reduced-motion users. */
+                <div
+                  className="relative h-[4.75rem] w-full overflow-hidden rounded-lg border"
+                  style={{
+                    borderColor: color.border,
+                    backgroundColor: "#101014",
+                  }}
+                  aria-hidden="true"
+                >
+                  <span className="absolute inset-0 flex items-center justify-center pb-1">
+                    <span
+                      className="flex h-7 w-7 items-center justify-center rounded-full animate-[acm-pop-in_340ms_cubic-bezier(0.22,1,0.36,1)_both]"
+                      style={{ backgroundColor: "#F95F4A" }}
+                    >
+                      <svg
+                        width="10"
+                        height="10"
+                        viewBox="0 0 24 24"
+                        fill="#ffffff"
+                        style={{ marginLeft: 1.5 }}
+                      >
+                        <polygon points="6 4 20 12 6 20 6 4" />
+                      </svg>
+                    </span>
+                  </span>
+                  <span className="absolute left-1/2 top-1/2 h-0 w-0 -translate-y-[2px] animate-[acm-orbit_11s_linear_infinite] motion-reduce:animate-none">
+                    {(props.coachAvatars ?? [])
+                      .slice(0, 4)
+                      .map((member, index, cast) => (
+                        <span
+                          key={member.id}
+                          className="absolute"
+                          style={{
+                            transform: `rotate(${(360 / cast.length) * index}deg) translateX(26px)`,
+                          }}
+                        >
+                          <span
+                            className="block"
+                            style={{
+                              transform: `rotate(${(-360 / cast.length) * index}deg)`,
+                            }}
+                          >
+                            {/* Centered via margins, not translate: the spin
+                                animation owns this element's transform. */}
+                            <span
+                              className="block h-[18px] w-[18px] overflow-hidden rounded-full animate-[acm-orbit-rev_11s_linear_infinite] motion-reduce:animate-none"
+                              style={{
+                                boxShadow: "0 0 0 2px #101014",
+                                margin: "-9px 0 0 -9px",
+                              }}
+                            >
+                              <Avatar
+                                id={member.id}
+                                name={member.name}
+                                size={18}
+                              />
+                            </span>
+                          </span>
+                        </span>
+                      ))}
+                  </span>
+                  <span
+                    className="absolute inset-x-0 bottom-0 h-[3px]"
+                    style={{ backgroundColor: "#26262d" }}
+                  >
+                    <span
+                      className="block h-full animate-[acm-watch-reel_6400ms_cubic-bezier(0.4,0.1,0.4,0.9)_infinite] motion-reduce:animate-none"
+                      style={{ backgroundColor: "#F95F4A", width: "6%" }}
+                    />
+                  </span>
+                </div>
+              }
+            />
+          ) : null}
+          {filtersTip.visible &&
+          !watchTip.visible &&
+          !moreOpen &&
+          !reactionsOpen &&
+          !browserOpen ? (
             <Coachmark
               title="New filters to check out!"
               description="We added some more"
@@ -801,7 +901,7 @@ function ControlsBar(props: ControlsBarProps) {
               </Drawer.Portal>
             </Drawer.Root>
           )}
-          {/* Settings drawer — opened from the More drawer's Settings tile. */}
+          {/* Settings drawer, opened from the More drawer's Settings tile. */}
           {compact && (
             <Drawer.Root open={settingsOpen} onOpenChange={setSettingsOpen}>
               <Drawer.Portal>

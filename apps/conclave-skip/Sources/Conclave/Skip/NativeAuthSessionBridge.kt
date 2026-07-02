@@ -12,6 +12,7 @@ object NativeAuthSessionBridge {
     private val javaCookieManager = JavaCookieManager(null, CookiePolicy.ACCEPT_ALL)
 
     fun install() {
+        val startedAt = System.nanoTime()
         synchronized(lock) {
             if (CookieHandler.getDefault() !== javaCookieManager) {
                 CookieHandler.setDefault(javaCookieManager)
@@ -21,9 +22,11 @@ object NativeAuthSessionBridge {
             } catch (_: Throwable) {
             }
         }
+        NativePerformanceDiagnostics.timing("cookie_bridge_install", startedAt)
     }
 
     fun cookieHeader(forURL: String): String? {
+        val startedAt = System.nanoTime()
         install()
         val headers = mutableListOf<String>()
 
@@ -46,10 +49,17 @@ object NativeAuthSessionBridge {
             }
         }
 
-        return normalizedCookieHeader(headers)
+        val result = normalizedCookieHeader(headers)
+        NativePerformanceDiagnostics.timing(
+            "cookie_header",
+            startedAt,
+            "url=${redactedURLForLog(forURL)} hasCookies=${!result.isNullOrBlank()}"
+        )
+        return result
     }
 
     fun storeSetCookieHeader(setCookieHeader: String, forURL: String) {
+        val startedAt = System.nanoTime()
         install()
         val cookies = splitSetCookieHeader(setCookieHeader)
         if (cookies.isEmpty()) return
@@ -84,6 +94,11 @@ object NativeAuthSessionBridge {
             androidCookieManager?.flush()
         } catch (_: Throwable) {
         }
+        NativePerformanceDiagnostics.timing(
+            "cookie_store",
+            startedAt,
+            "url=${redactedURLForLog(forURL)} count=${cookies.size}"
+        )
     }
 
     fun clearCookies() {
@@ -306,6 +321,11 @@ object NativeAuthSessionBridge {
                 }
         }
         return pairs.values.joinToString("; ").takeIf { it.isNotBlank() }
+    }
+
+    private fun redactedURLForLog(url: String): String {
+        val queryIndex = url.indexOf('?')
+        return if (queryIndex == -1) url else url.substring(0, queryIndex) + "?..."
     }
 
     private fun splitSetCookieHeader(header: String): List<String> {

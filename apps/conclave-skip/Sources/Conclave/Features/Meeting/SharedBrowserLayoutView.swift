@@ -25,17 +25,17 @@ struct SharedBrowserLayoutView: View {
         .onAppear {
             syncNavInput()
         }
-        #if SKIP
-        .onChange(of: viewModel.state.isBrowserActive ? "active" : "inactive") { _, _ in
+#if SKIP
+        .onChange(of: viewModel.state.isBrowserActive ? "active" : "inactive") {
             syncNavInput()
         }
-        #else
+#else
         .onChange(of: viewModel.state.isBrowserActive) { _, _ in
             syncNavInput()
         }
         #endif
-        .onChange(of: viewModel.state.browserURL) { _, newValue in
-            syncNavInput(browserURL: newValue)
+        .onChange(of: viewModel.state.browserURL) {
+            syncNavInput(browserURL: viewModel.state.browserURL)
         }
     }
 

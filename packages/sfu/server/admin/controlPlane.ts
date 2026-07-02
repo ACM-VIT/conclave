@@ -16,7 +16,7 @@ import {
   emitWebinarAttendeeCountChanged,
   emitWebinarFeedChanged,
 } from "../webinarNotifications.js";
-import type { ConnectionContext } from "../socket/context.js";
+import { getSocketContext } from "../socket/context.js";
 import { registerAdminHandlers } from "../socket/handlers/adminHandlers.js";
 
 type ParticipantRole = "host" | "admin" | "participant" | "ghost" | "attendee";
@@ -173,8 +173,7 @@ const handleAdminRemoved = (
   if (!room.hasActiveAdmin()) {
     const promoted = promoteNextAdmin(room);
     if (promoted) {
-      const promotedContext = promoted.socket.data
-        ?.context as ConnectionContext | undefined;
+      const promotedContext = getSocketContext(promoted.socket);
       if (promotedContext) {
         promotedContext.currentClient = promoted;
         promotedContext.currentRoom = room;

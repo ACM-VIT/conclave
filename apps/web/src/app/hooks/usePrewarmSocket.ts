@@ -65,7 +65,7 @@ export function usePrewarmSocket(): PrewarmModules {
       ]);
 
       const duration = performance.now() - startTime;
-      console.log(`[Meets] Pre-warmed libraries in ${duration.toFixed(0)}ms`);
+      console.info(`[Meets] Pre-warmed libraries in ${duration.toFixed(0)}ms`);
 
       setState({
         mediasoupDevice: mediasoupModule.Device,
@@ -109,7 +109,7 @@ export function usePrewarmSocket(): PrewarmModules {
       getJoinInfo(roomId, sessionId, options)
         .then(({ token, sfuUrl, iceServers }) => {
           const duration = performance.now() - startTime;
-          console.log(`[Meets] Pre-fetched token in ${duration.toFixed(0)}ms`);
+          console.info(`[Meets] Pre-fetched token in ${duration.toFixed(0)}ms`);
 
           tokenCacheRef.current = {
             roomId,
@@ -140,7 +140,7 @@ export function usePrewarmSocket(): PrewarmModules {
         tokenCacheRef.current = null;
         return null;
       }
-      console.log("[Meets] Using cached token");
+      console.info("[Meets] Using cached token");
       return {
         token: cached.token,
         sfuUrl: cached.sfuUrl,

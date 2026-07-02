@@ -14,7 +14,8 @@ export type ToolKind =
   | "arrow"
   | "text"
   | "sticky"
-  | "pan";
+  | "pan"
+  | "laser";
 
 export type ToolSettings = {
   strokeColor: string;
@@ -179,7 +180,7 @@ export class ToolEngine {
         y: point.y,
         width: 180,
         height: 140,
-        text: "Sticky note",
+        text: "",
         color: this.settings.stickyColor,
         textColor: "#111",
         fontSize: this.settings.fontSize,
@@ -194,7 +195,8 @@ export class ToolEngine {
       return;
     }
 
-    if (this.tool === "pan") {
+    // The laser never writes to the doc; trails live in awareness only.
+    if (this.tool === "pan" || this.tool === "laser") {
       return;
     }
 
@@ -213,7 +215,7 @@ export class ToolEngine {
   onPointerMove(point: Point) {
     if (!this.dragStart || !this.lastPoint) return;
 
-    if (this.tool === "pan") return;
+    if (this.tool === "pan" || this.tool === "laser") return;
 
     if (this.tool === "pen" || this.tool === "highlighter") {
       if (!this.activeElementId) return;

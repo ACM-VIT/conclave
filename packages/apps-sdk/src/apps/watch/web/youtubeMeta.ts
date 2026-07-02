@@ -67,49 +67,64 @@ export const formatAge = (publishedAt: string | null): string | null => {
 const parseSearchItems = (payload: unknown): WatchSearchResult[] => {
   const items = (payload as { items?: unknown })?.items;
   if (!Array.isArray(items)) return [];
-  return items.filter(
-    (item): item is WatchSearchResult =>
-      Boolean(item) &&
-      typeof item.videoId === "string" &&
-      typeof item.title === "string",
-  );
+  const entries: readonly unknown[] = items;
+  return entries.filter((item): item is WatchSearchResult => {
+    if (!item || typeof item !== "object") return false;
+    const record = item as Record<string, unknown>;
+    return typeof record.videoId === "string" && typeof record.title === "string";
+  });
+};
+
+export type WatchSearchOutcome = {
+  items: WatchSearchResult[];
+  /** True when the server has no YouTube key (503), so search is a feature
+   * that is off rather than a query with no hits. */
+  unavailable: boolean;
 };
 
 /**
  * Search YouTube through the host's server proxy (the API key stays server
- * side). Fails soft to an empty list; callers show their own empty copy.
+ * side). Fails soft to an empty list; a 503 marks the feature as off so the
+ * UI can explain instead of showing "nothing found".
  */
 export const searchVideos = async (
   query: string,
-): Promise<WatchSearchResult[]> => {
-  if (typeof fetch !== "function" || !query.trim()) return [];
+): Promise<WatchSearchOutcome> => {
+  if (typeof fetch !== "function" || !query.trim()) {
+    return { items: [], unavailable: false };
+  }
   try {
     const response = await fetch(
       `/api/youtube/search?q=${encodeURIComponent(query.trim())}`,
     );
-    if (!response.ok) return [];
-    return parseSearchItems(await response.json());
+    if (response.status === 503) return { items: [], unavailable: true };
+    if (!response.ok) return { items: [], unavailable: false };
+    return { items: parseSearchItems(await response.json()), unavailable: false };
   } catch {
-    return [];
+    return { items: [], unavailable: false };
   }
 };
 
 export type TrendingPage = {
   items: WatchSearchResult[];
   nextPageToken: string | null;
+  /** True when the server has no YouTube key configured (503). */
+  unavailable: boolean;
 };
 
 /** A page of trending videos for the browse surface. Fails soft to empty. */
 export const fetchTrending = async (
   pageToken?: string | null,
 ): Promise<TrendingPage> => {
-  if (typeof fetch !== "function") return { items: [], nextPageToken: null };
+  const empty: TrendingPage = { items: [], nextPageToken: null, unavailable: false };
+  if (typeof fetch !== "function") return empty;
   try {
     const url = pageToken
       ? `/api/youtube/trending?pageToken=${encodeURIComponent(pageToken)}`
       : "/api/youtube/trending";
     const response = await fetch(url);
-    if (!response.ok) return { items: [], nextPageToken: null };
+    if (response.status === 503) return { ...empty, unavailable: true };
+    if (!response.ok) return empty;
     const payload = (await response.json()) as { nextPageToken?: unknown };
     return {
       items: parseSearchItems(payload),
@@ -117,9 +132,10 @@ export const fetchTrending = async (
         typeof payload.nextPageToken === "string"
           ? payload.nextPageToken
           : null,
+      unavailable: false,
     };
   } catch {
-    return { items: [], nextPageToken: null };
+    return empty;
   }
 };
 

@@ -17,7 +17,8 @@ let package = Package(
         .package(url: "https://source.skip.tools/skip-kit.git", from: "0.6.0"),
         .package(url: "https://github.com/google/GoogleSignIn-iOS", from: "9.0.0"),
         .package(url: "https://github.com/socketio/socket.io-client-swift.git", from: "16.1.1"),
-        .package(url: "https://github.com/VLprojects/mediasoup-client-swift", from: "0.9.0")
+        .package(url: "https://github.com/VLprojects/mediasoup-client-swift", from: "0.9.0"),
+        .package(url: "https://github.com/airbnb/lottie-ios", from: "4.5.0")
     ],
     targets: [
         .target(name: "Conclave", dependencies: [
@@ -28,7 +29,8 @@ let package = Package(
             .product(name: "SkipKit", package: "skip-kit"),
             .product(name: "GoogleSignIn", package: "GoogleSignIn-iOS", condition: .when(platforms: [.iOS])),
             .product(name: "SocketIO", package: "socket.io-client-swift", condition: .when(platforms: [.iOS])),
-            .product(name: "Mediasoup", package: "mediasoup-client-swift", condition: .when(platforms: [.iOS]))
+            .product(name: "Mediasoup", package: "mediasoup-client-swift", condition: .when(platforms: [.iOS])),
+            .product(name: "Lottie", package: "lottie-ios", condition: .when(platforms: [.iOS]))
         ], resources: [.process("Resources")], plugins: [.plugin(name: "skipstone", package: "skip")]),
         .testTarget(name: "ConclaveTests", dependencies: [
             "Conclave",

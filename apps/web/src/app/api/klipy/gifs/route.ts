@@ -262,7 +262,7 @@ export async function GET(request: Request) {
     );
   }
 
-  const body = await response.json();
+  const body: unknown = await response.json();
   const data = asRecord(asRecord(body)?.data);
   const rawItems = Array.isArray(data?.data) ? data.data : [];
   const items = rawItems

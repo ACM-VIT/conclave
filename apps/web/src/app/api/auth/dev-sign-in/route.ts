@@ -90,7 +90,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
-  const body = await request.json().catch(() => ({}));
+  const body: unknown = await request.json().catch(() => ({}));
   const email = readEmail((body as { email?: unknown }).email);
   const name = readString(
     (body as { name?: unknown }).name,

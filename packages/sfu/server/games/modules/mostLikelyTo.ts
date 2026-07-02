@@ -136,13 +136,13 @@ const loop = createRoundLoop<MltState>({
  * validated against the live roster by `requirePlayerTarget` (which needs ctx)
  * inside the case, preserving the "Invalid vote" message.
  */
-export type MltMove =
+export type MostLikelyToMove =
   | { type: "start" }
   | { type: "vote"; target: unknown }
   | { type: "next" }
   | { type: "skip" };
 
-const decodeMltMove = (move: GameMove): MltMove => {
+const decodeMostLikelyToMove = (move: GameMove): MostLikelyToMove => {
   switch (move.type) {
     case "start":
     case "next":
@@ -217,7 +217,7 @@ export const mostLikelyToModule: GameModule<MltState> = {
   },
 
   onMove(state, move: GameMove, ctx): MltState {
-    const m = decodeMltMove(move);
+    const m = decodeMostLikelyToMove(move);
     switch (m.type) {
       case "start": {
         if (!ctx.isAdmin(move.playerId)) throw new GameMoveError("Only the host can start");

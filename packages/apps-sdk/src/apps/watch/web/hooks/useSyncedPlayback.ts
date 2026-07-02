@@ -10,9 +10,18 @@ import {
 import type { PlaybackRecord, PlaybackState } from "../../core/model/types";
 
 // If the local player drifts more than this from the extrapolated doc position,
-// we seek. 1.5s comfortably absorbs author clock skew and buffering jitter while
-// still keeping everyone visibly in sync.
+// we seek. 1.5s absorbs buffering jitter while keeping everyone visibly in sync.
 const DRIFT_THRESHOLD_SECONDS = 1.5;
+
+// While the doc record has not changed, never hard-seek more often than this.
+// A genuinely stuck player still converges (the anchored expected position is
+// monotonic), but a pathological source can no longer thrash seek after seek.
+const CORRECTION_COOLDOWN_MS = 2_500;
+
+// Never seek into the last moments of a finite video: the YouTube embed treats
+// past-the-end seeks unpredictably (sometimes restarting at 0), and the ENDED
+// event should be the thing that closes a video out.
+const END_GUARD_SECONDS = 0.75;
 
 // How long after asking for playback we wait before deciding the browser
 // blocked autoplay and a user gesture is required.
@@ -28,7 +37,14 @@ export type GestureNeed = "none" | "sound" | "sync";
  */
 export type WatchMediaElement = Pick<
   HTMLVideoElement,
-  "currentTime" | "duration" | "paused" | "muted" | "play" | "pause" | "textTracks"
+  | "currentTime"
+  | "duration"
+  | "paused"
+  | "muted"
+  | "play"
+  | "pause"
+  | "seeking"
+  | "textTracks"
 >;
 
 type MediaEvent = React.SyntheticEvent<HTMLVideoElement>;
@@ -257,26 +273,96 @@ export function useSyncedPlayback({
   }, []);
   applyCaptionFontSizeRef.current = applyCaptionFontSize;
 
+  /* ---- Drift correction, hardened against restart loops. ----
+     The doc's `updatedAt` is the WRITER'S wall clock. Extrapolating from it on
+     every check means a writer whose clock runs ahead freezes everyone else's
+     expected position at `positionSeconds` (elapsed clamps to zero), so each
+     client plays a second, gets yanked back, and loops. Instead, each distinct
+     record is anchored ONCE to local receipt time; from then on the expected
+     position advances on the local clock only, which makes it monotonic no
+     matter whose clock wrote the record. */
+
+  type PlaybackAnchor = {
+    key: string;
+    state: PlaybackState;
+    rate: number;
+    position: number;
+    at: number;
+  };
+
+  const anchorRef = useRef<PlaybackAnchor | null>(null);
+  const lastCorrectionRef = useRef<{ key: string; at: number } | null>(null);
+
+  const anchorFor = useCallback((target: PlaybackRecord): PlaybackAnchor => {
+    const key = `${target.state}|${target.positionSeconds}|${target.rate}|${target.updatedAt}`;
+    const existing = anchorRef.current;
+    if (existing && existing.key === key) return existing;
+    const now = Date.now();
+    // Sender-clock extrapolation exactly once, as a best effort for records
+    // that were written before we loaded (late join). For a live write the
+    // elapsed term is just network latency, and a future-skewed writer clock
+    // contributes nothing because expectedPosition clamps negative elapsed.
+    const anchor: PlaybackAnchor = {
+      key,
+      state: target.state,
+      rate: target.rate,
+      position: Math.max(0, expectedPosition(target, now)),
+      at: now,
+    };
+    anchorRef.current = anchor;
+    return anchor;
+  }, []);
+
   // Seek the local player toward the doc when it has drifted too far.
-  const correctDrift = useCallback((target: PlaybackRecord) => {
-    const element = elementRef.current;
-    if (!element) return;
-    const expected = expectedPosition(target);
-    if (!Number.isFinite(expected)) return;
-    let current = 0;
-    try {
-      current = element.currentTime ?? 0;
-    } catch {
-      return;
-    }
-    if (Math.abs(current - expected) > DRIFT_THRESHOLD_SECONDS) {
+  const correctDrift = useCallback(
+    (target: PlaybackRecord) => {
+      const element = elementRef.current;
+      if (!element) return;
+      const anchor = anchorFor(target);
+      const now = Date.now();
+      const expected =
+        anchor.state === "playing"
+          ? anchor.position + ((now - anchor.at) / 1000) * anchor.rate
+          : anchor.position;
+      if (!Number.isFinite(expected)) return;
+
+      let current = 0;
+      let elementDuration = Number.NaN;
       try {
-        element.currentTime = Math.max(0, expected);
+        current = element.currentTime ?? 0;
+        // A seek already in flight makes currentTime unreliable; check again
+        // on the next tick instead of stacking seeks.
+        if (element.seeking === true) return;
+        elementDuration = element.duration;
+      } catch {
+        return;
+      }
+
+      // Live streams have no shared timeline to converge on; play/pause still
+      // follows the doc, but position is the stream's business.
+      if (elementDuration === Number.POSITIVE_INFINITY) return;
+
+      let seekTarget = Math.max(0, expected);
+      if (Number.isFinite(elementDuration) && elementDuration > END_GUARD_SECONDS * 2) {
+        seekTarget = Math.min(seekTarget, elementDuration - END_GUARD_SECONDS);
+      }
+      if (Math.abs(current - seekTarget) <= DRIFT_THRESHOLD_SECONDS) return;
+
+      // Fresh intent (a new record) seeks immediately; repeat corrections for
+      // the SAME record are rate-limited so no failure mode can seek-loop.
+      const last = lastCorrectionRef.current;
+      if (last && last.key === anchor.key && now - last.at < CORRECTION_COOLDOWN_MS) {
+        return;
+      }
+      lastCorrectionRef.current = { key: anchor.key, at: now };
+      try {
+        element.currentTime = seekTarget;
       } catch {
         /* element not ready to seek yet */
       }
-    }
-  }, []);
+    },
+    [anchorFor],
+  );
 
   // Follow the doc: mirror the record into state (which drives the `playing`
   // prop) and correct position drift on every remote change.
@@ -311,13 +397,15 @@ export function useSyncedPlayback({
     return () => clearInterval(interval);
   }, [correctDrift, ready, syncCaptionState]);
 
-  // A new video started: allow it to advance the queue when it ends, and clear
-  // any stale error from the previous one.
+  // A new video started: allow it to advance the queue when it ends, clear any
+  // stale error from the previous one, and let the fresh element correct
+  // immediately instead of inheriting the previous video's seek cooldown.
   useEffect(() => {
     if (!videoId) return;
     if (advancedFromRef.current !== videoId) {
       advancedFromRef.current = null;
     }
+    lastCorrectionRef.current = null;
     setError(null);
   }, [videoId]);
 

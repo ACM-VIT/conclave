@@ -55,7 +55,7 @@ export const getUserMediaWithTimeout = async (
         })),
       });
     },
-    (error) => {
+    (error: unknown) => {
       if (!timedOut) return;
       console.warn("[Meets] Late media capture failed after timeout:", {
         label: options.label,

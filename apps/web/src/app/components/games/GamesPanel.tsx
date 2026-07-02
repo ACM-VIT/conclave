@@ -137,7 +137,7 @@ export function GamesPanel({
   const pick = (entry: CatalogEntry) => {
     setError(null);
     if (entry.options.length > 0) setConfiguring(entry);
-    else run(() => startGame(entry.id));
+    else void run(() => startGame(entry.id));
   };
 
   const title = vote ? "Vote for a game" : configuring ? configuring.name : "Play a game";

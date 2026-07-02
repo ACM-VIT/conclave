@@ -177,6 +177,7 @@ struct SettingsSheetView: View {
     var onOpenMicrophoneSettings: (() -> Void)? = nil
     var onOpenCameraSettings: (() -> Void)? = nil
     var onOpenSpeakerSettings: (() -> Void)? = nil
+    var onOpenPrivacyPolicy: (() -> Void)? = nil
     @State private var displayNameInput = ""
     @State private var meetingInviteCodeInput = ""
     @State private var webinarInviteCodeInput = ""
@@ -1762,6 +1763,20 @@ struct SettingsSheetView: View {
                 }
             }
         }
+
+        VStack(alignment: .leading, spacing: ACMSpacing.xs) {
+            acmListSectionHeader("About")
+
+            MeetingSheetSectionCard {
+                settingsNavigationRow(
+                    "Privacy Policy",
+                    icon: "hand.raised.fill",
+                    androidIcon: "shield"
+                ) {
+                    onOpenPrivacyPolicy?()
+                }
+            }
+        }
     }
 
     @ViewBuilder
@@ -2079,40 +2094,40 @@ struct SettingsSheetView: View {
             hasEditedWebinarLinkCodeInput = false
             resetInviteCodeDrafts()
         }
-        #if SKIP
-        .onChange(of: bodyReady ? "ready" : "pending") { _, _ in
+#if SKIP
+        .onChange(of: bodyReady ? "ready" : "pending") {
             scheduleSettingsRefreshIfReady()
         }
-        #else
+#else
         .onChange(of: bodyReady) { _, _ in
             scheduleSettingsRefreshIfReady()
         }
         #endif
-        .onChange(of: viewModel.state.webinarMaxAttendees) { _, _ in
+        .onChange(of: viewModel.state.webinarMaxAttendees) {
             syncWebinarCapacityDraftFromState()
         }
-        .onChange(of: viewModel.state.webinarLinkSlug) { _, _ in
+        .onChange(of: viewModel.state.webinarLinkSlug) {
             syncWebinarLinkDraftFromState()
             isConfirmingWebinarLinkRotation = false
         }
-        .onChange(of: viewModel.state.roomId) { _, _ in
+        .onChange(of: viewModel.state.roomId) {
             resetDisplayNameAutoSaveForRoomChange()
             resetSignOutAction()
             scheduleSettingsRefreshIfReady()
         }
-        .onChange(of: displayNameInput) { _, _ in
+        .onChange(of: displayNameInput) {
             scheduleDisplayNameAutoSave()
         }
-        .onChange(of: viewModel.state.displayName) { _, name in
-            syncDisplayNameInputFromServerIfIdle(name)
+        .onChange(of: viewModel.state.displayName) {
+            syncDisplayNameInputFromServerIfIdle(viewModel.state.displayName)
         }
-        #if SKIP
-        .onChange(of: viewModel.state.meetingRequiresInviteCode ? "required" : "not-required") { _, _ in
+#if SKIP
+        .onChange(of: viewModel.state.meetingRequiresInviteCode ? "required" : "not-required") {
             if !viewModel.state.meetingRequiresInviteCode {
                 meetingInviteCodeInput = ""
             }
         }
-        .onChange(of: viewModel.state.webinarRequiresInviteCode ? "required" : "not-required") { _, _ in
+        .onChange(of: viewModel.state.webinarRequiresInviteCode ? "required" : "not-required") {
             if !viewModel.state.webinarRequiresInviteCode {
                 webinarInviteCodeInput = ""
             }

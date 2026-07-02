@@ -616,12 +616,12 @@ export function useMeetChat({
             appendLocalMessage("Usage: /tts <text>");
             return;
           }
-          sendChatInternal(`/tts ${args}`);
+          void sendChatInternal(`/tts ${args}`);
           return;
         }
         if (command.id === "me" || command.id === "action") {
           if (!args) return;
-          sendChatInternal(formatActionContent(args));
+          void sendChatInternal(formatActionContent(args));
           return;
         }
         if (command.id === "raise") {
@@ -681,7 +681,7 @@ export function useMeetChat({
 
       const activeReply = replyTarget ?? undefined;
       if (activeReply) setReplyTarget(null);
-      sendChatInternal(trimmed, undefined, activeReply);
+      void sendChatInternal(trimmed, undefined, activeReply);
     },
     [
       ghostEnabled,
@@ -713,7 +713,7 @@ export function useMeetChat({
       }
       const activeReply = replyTarget ?? undefined;
       if (activeReply) setReplyTarget(null);
-      sendChatInternal(gif.title || "GIF", gif, activeReply);
+      void sendChatInternal(gif.title || "GIF", gif, activeReply);
     },
     [
       ghostEnabled,

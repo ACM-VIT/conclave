@@ -7,6 +7,43 @@ import SkipFuse
 import ReplayKit
 #endif
 
+enum MeetingEntryAction: Equatable {
+    case new
+    case join
+}
+
+enum MeetingEntryOverlayPolicy {
+    static let safetyTimeoutSeconds: TimeInterval = 12.0
+    static let safetyTimeoutNanoseconds = UInt64(12_000_000_000)
+
+    static func canCover(connectionState: ConnectionState) -> Bool {
+        switch connectionState {
+        case .connecting, .connected, .joining, .joined:
+            return true
+        case .disconnected, .reconnecting, .waiting, .error:
+            return false
+        }
+    }
+
+    static func shouldClearMeetingEntry(on connectionState: ConnectionState) -> Bool {
+        !canCover(connectionState: connectionState)
+    }
+
+    static func shouldShow(
+        isEnteringMeeting: Bool,
+        startedAt: Date?,
+        now: Date,
+        connectionState: ConnectionState
+    ) -> Bool {
+        guard isEnteringMeeting,
+              canCover(connectionState: connectionState),
+              let startedAt else {
+            return false
+        }
+        return now.timeIntervalSince(startedAt) < safetyTimeoutSeconds
+    }
+}
+
 struct ActiveAppBinaryMessage: Identifiable {
     let id = UUID()
     let appId: String
@@ -45,7 +82,11 @@ struct MeetingSpotlightSnapshot {
 @Observable
 final class MeetingState {
     // Connection State
-    var connectionState: ConnectionState = .disconnected
+    var connectionState: ConnectionState = .disconnected {
+        didSet {
+            PerformanceDiagnostics.state("connectionState", old: "\(oldValue)", new: "\(connectionState)")
+        }
+    }
     var errorMessage: String?
     var joinFormErrorMessage: String?
     var meetingEndedNoticeMessage: String?
@@ -54,6 +95,19 @@ final class MeetingState {
     var adminNoticeLevel: AdminNoticeLevel = .info
     var isNetworkOffline: Bool = false
     var waitingMessage: String?
+
+    // Meeting-entry takeover: a branded Lottie overlay that covers connect →
+    // join → media-settle so the user never sees the raw join spinner or the
+    // post-join device-init hiccups. Set true on New/Join, cleared only once the
+    // meeting is fully ready (see MeetingViewModel.scheduleMeetingEntryReveal).
+    var isEnteringMeeting: Bool = false {
+        didSet {
+            PerformanceDiagnostics.state("isEnteringMeeting", old: "\(oldValue)", new: "\(isEnteringMeeting)")
+        }
+    }
+    var meetingEntryAction: MeetingEntryAction?
+    var meetingEntryStartedAt: Date?
+    var meetingEntryGeneration: Int = 0
 
     // Room State
     var roomId: String = ""
@@ -93,7 +147,13 @@ final class MeetingState {
     var hostUserIds: [String] = []
 
     // Participants
-    var participants: [String: Participant] = [:]
+    var participants: [String: Participant] = [:] {
+        didSet {
+            if oldValue.count != participants.count {
+                PerformanceDiagnostics.state("participants.count", old: "\(oldValue.count)", new: "\(participants.count)")
+            }
+        }
+    }
     var displayNames: [String: String] = [:]
     var pendingUsers: [String: String] = [:]
     var hasInitialPresenceSnapshot: Bool = false
@@ -139,7 +199,11 @@ final class MeetingState {
 
     // Active States
     var activeScreenShareUserId: String?
-    var activeSpeakerId: String?
+    var activeSpeakerId: String? {
+        didSet {
+            PerformanceDiagnostics.state("activeSpeakerId", old: oldValue ?? "nil", new: activeSpeakerId ?? "nil")
+        }
+    }
     var ttsSpeakerId: String?
     // Locally-pinned participant → spotlight stage (not synced; mirrors web's
     // per-tile pin). nil = grid.
@@ -151,14 +215,47 @@ final class MeetingState {
     var selfViewCorner: MeetingSelfViewCorner = .bottomRight
 
     // Chat
-    var chatMessages: [ChatMessage] = []
-    var chatOverlayMessages: [ChatMessage] = []
-    var systemMessages: [SystemMessage] = []
+    var chatMessages: [ChatMessage] = [] {
+        didSet {
+            if oldValue.count != chatMessages.count {
+                PerformanceDiagnostics.state("chatMessages.count", old: "\(oldValue.count)", new: "\(chatMessages.count)")
+            }
+        }
+    }
+    var chatOverlayMessages: [ChatMessage] = [] {
+        didSet {
+            if oldValue.count != chatOverlayMessages.count {
+                PerformanceDiagnostics.state("chatOverlayMessages.count", old: "\(oldValue.count)", new: "\(chatOverlayMessages.count)")
+            }
+        }
+    }
+    var systemMessages: [SystemMessage] = [] {
+        didSet {
+            if oldValue.count != systemMessages.count {
+                PerformanceDiagnostics.state("systemMessages.count", old: "\(oldValue.count)", new: "\(systemMessages.count)")
+            }
+        }
+    }
     var unreadChatCount: Int = 0
-    var isChatOpen: Bool = false
+    var isChatOpen: Bool = false {
+        didSet {
+            PerformanceDiagnostics.state("isChatOpen", old: "\(oldValue)", new: "\(isChatOpen)")
+        }
+    }
+    var isTranscriptOpen: Bool = false {
+        didSet {
+            PerformanceDiagnostics.state("isTranscriptOpen", old: "\(oldValue)", new: "\(isTranscriptOpen)")
+        }
+    }
 
     // Reactions
-    var activeReactions: [Reaction] = []
+    var activeReactions: [Reaction] = [] {
+        didSet {
+            if oldValue.count != activeReactions.count {
+                PerformanceDiagnostics.state("activeReactions.count", old: "\(oldValue.count)", new: "\(activeReactions.count)")
+            }
+        }
+    }
 
     init(userId: String = UUID().uuidString, sessionId: String = UUID().uuidString) {
         self.userId = userId

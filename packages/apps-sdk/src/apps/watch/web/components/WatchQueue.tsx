@@ -45,12 +45,14 @@ function QueueAddBox({
   const [value, setValue] = useState("");
   const [results, setResults] = useState<WatchSearchResult[] | null>(null);
   const [searching, setSearching] = useState(false);
+  const [searchUnavailable, setSearchUnavailable] = useState(false);
   const requestRef = useRef(0);
 
   const reset = () => {
     setValue("");
     setResults(null);
     setSearching(false);
+    setSearchUnavailable(false);
     requestRef.current += 1;
   };
 
@@ -66,9 +68,10 @@ function QueueAddBox({
     }
     const requestId = ++requestRef.current;
     setSearching(true);
-    void searchVideos(raw).then((items) => {
+    void searchVideos(raw).then((outcome) => {
       if (requestRef.current !== requestId) return;
-      setResults(items.slice(0, 5));
+      setResults(outcome.items.slice(0, 5));
+      setSearchUnavailable(outcome.unavailable);
       setSearching(false);
     });
   };
@@ -105,7 +108,9 @@ function QueueAddBox({
       {results !== null && !searching ? (
         results.length === 0 ? (
           <p className="mt-2 text-[11.5px] text-[#71717a]">
-            Nothing found. Try a different search.
+            {searchUnavailable
+              ? "Search is off on this server. Paste a YouTube link instead."
+              : "Nothing found. Try a different search."}
           </p>
         ) : (
           <ul className="mt-2 flex flex-col gap-0.5 rounded-lg border border-white/[0.06] p-1" style={{ backgroundColor: "#0c0c10" }}>

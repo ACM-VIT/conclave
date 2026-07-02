@@ -25,6 +25,7 @@ import {
 import { forceCloseRoom, getRoomChannelId, markRoomEnded } from "../rooms.js";
 import { resolveCorsOrigins } from "../cors.js";
 import { secretsMatch } from "../secret.js";
+import { readBoolean, requestBody } from "../../utilities/untrusted.js";
 import { registerScheduledWebinarRoutes } from "./scheduledWebinarRoutes.js";
 import { registerScheduledMeetingRoutes } from "./scheduledMeetingRoutes.js";
 import { registerSchedulingRoutes } from "./schedulingRoutes.js";
@@ -151,8 +152,9 @@ const parseMediaKinds = (value: unknown): MediaKind[] | null | undefined => {
     return undefined;
   }
 
+  const entries: readonly unknown[] = value;
   const kinds: MediaKind[] = [];
-  for (const entry of value) {
+  for (const entry of entries) {
     if (entry === "audio" || entry === "video") {
       kinds.push(entry);
       continue;
@@ -173,8 +175,9 @@ const parseMediaTypes = (value: unknown): ProducerType[] | null | undefined => {
     return undefined;
   }
 
+  const entries: readonly unknown[] = value;
   const types: ProducerType[] = [];
-  for (const entry of value) {
+  for (const entry of entries) {
     if (entry === "webcam" || entry === "screen") {
       types.push(entry);
       continue;
@@ -317,20 +320,21 @@ export const createSfuApp = ({
       return;
     }
 
-    const requestedKinds = overrides?.kinds ?? parseMediaKinds(req.body?.kinds);
+    const body = requestBody(req);
+    const requestedKinds = overrides?.kinds ?? parseMediaKinds(body.kinds);
     if (requestedKinds === null) {
       res.status(400).json({ error: "Invalid media kinds" });
       return;
     }
 
-    const requestedTypes = overrides?.types ?? parseMediaTypes(req.body?.types);
+    const requestedTypes = overrides?.types ?? parseMediaTypes(body.types);
     if (requestedTypes === null) {
       res.status(400).json({ error: "Invalid media types" });
       return;
     }
 
     const reason = normalizeOperatorReason(
-      req.body?.reason,
+      body.reason,
       overrides?.defaultReason || "Operator moderation action",
     );
 
@@ -355,7 +359,7 @@ export const createSfuApp = ({
   };
 
   const handleDrain = async (req: Request, res: Response): Promise<void> => {
-    const { draining, force, notice, noticeMs } = req.body ?? {};
+    const { draining, force, notice, noticeMs } = requestBody(req);
     if (typeof draining !== "boolean") {
       res.status(400).json({ error: "Invalid draining flag" });
       return;
@@ -631,27 +635,14 @@ export const createSfuApp = ({
       return;
     }
 
+    const body = requestBody(req);
     const update = {
-      locked:
-        typeof req.body?.locked === "boolean" ? req.body.locked : undefined,
-      chatLocked:
-        typeof req.body?.chatLocked === "boolean"
-          ? req.body.chatLocked
-          : undefined,
-      noGuests:
-        typeof req.body?.noGuests === "boolean" ? req.body.noGuests : undefined,
-      ttsDisabled:
-        typeof req.body?.ttsDisabled === "boolean"
-          ? req.body.ttsDisabled
-          : undefined,
-      dmEnabled:
-        typeof req.body?.dmEnabled === "boolean"
-          ? req.body.dmEnabled
-          : undefined,
-      reactionsDisabled:
-        typeof req.body?.reactionsDisabled === "boolean"
-          ? req.body.reactionsDisabled
-          : undefined,
+      locked: readBoolean(body, "locked"),
+      chatLocked: readBoolean(body, "chatLocked"),
+      noGuests: readBoolean(body, "noGuests"),
+      ttsDisabled: readBoolean(body, "ttsDisabled"),
+      dmEnabled: readBoolean(body, "dmEnabled"),
+      reactionsDisabled: readBoolean(body, "reactionsDisabled"),
     };
 
     const hasUpdates = Object.values(update).some((value) => value !== undefined);
@@ -683,7 +674,8 @@ export const createSfuApp = ({
       return;
     }
 
-    const message = normalizePlainText(req.body?.message, {
+    const body = requestBody(req);
+    const message = normalizePlainText(body.message, {
       maxLength: MAX_OPERATOR_NOTICE_LENGTH,
     });
     if (!message) {
@@ -692,9 +684,7 @@ export const createSfuApp = ({
     }
 
     const level =
-      req.body?.level === "warning" || req.body?.level === "error"
-        ? req.body.level
-        : "info";
+      body.level === "warning" || body.level === "error" ? body.level : "info";
 
     io.to(lookup.room.channelId).emit("adminNotice", {
       roomId: lookup.room.id,
@@ -758,7 +748,10 @@ export const createSfuApp = ({
       return;
     }
 
-    const reason = normalizeOperatorReason(req.body?.reason, "Removed by host");
+    const reason = normalizeOperatorReason(
+      requestBody(req).reason,
+      "Removed by host",
+    );
     const kicked = kickClient(lookup.room, userId, reason, { io, state });
 
     if (!kicked) {
@@ -829,7 +822,8 @@ export const createSfuApp = ({
       return;
     }
 
-    const userKeys = parseUserKeys(req.body?.userKeys ?? req.body?.userKey);
+    const body = requestBody(req);
+    const userKeys = parseUserKeys(body.userKeys ?? body.userKey);
     if (userKeys === null) {
       res.status(400).json({ error: "Invalid user key list" });
       return;
@@ -839,7 +833,7 @@ export const createSfuApp = ({
       return;
     }
 
-    const allowWhenLocked = req.body?.allowWhenLocked !== false;
+    const allowWhenLocked = body.allowWhenLocked !== false;
     const admitted: string[] = [];
 
     for (const userKey of userKeys) {
@@ -883,7 +877,8 @@ export const createSfuApp = ({
       return;
     }
 
-    const userKeys = parseUserKeys(req.body?.userKeys ?? req.body?.userKey);
+    const body = requestBody(req);
+    const userKeys = parseUserKeys(body.userKeys ?? body.userKey);
     if (userKeys === null) {
       res.status(400).json({ error: "Invalid user key list" });
       return;
@@ -893,7 +888,7 @@ export const createSfuApp = ({
       return;
     }
 
-    const revokeLocked = req.body?.revokeLocked !== false;
+    const revokeLocked = body.revokeLocked !== false;
     for (const userKey of userKeys) {
       lookup.room.revokeAllowedUser(userKey);
       if (revokeLocked) {
@@ -924,7 +919,8 @@ export const createSfuApp = ({
       return;
     }
 
-    const userKeys = parseUserKeys(req.body?.userKeys ?? req.body?.userKey);
+    const body = requestBody(req);
+    const userKeys = parseUserKeys(body.userKeys ?? body.userKey);
     if (userKeys === null) {
       res.status(400).json({ error: "Invalid user key list" });
       return;
@@ -934,11 +930,8 @@ export const createSfuApp = ({
       return;
     }
 
-    const kickPresent = req.body?.kickPresent !== false;
-    const reason = normalizeOperatorReason(
-      req.body?.reason,
-      "Blocked by operator",
-    );
+    const kickPresent = body.kickPresent !== false;
+    const reason = normalizeOperatorReason(body.reason, "Blocked by operator");
     const kickedUserIds = new Set<string>();
     const rejectedPending: string[] = [];
 
@@ -989,7 +982,8 @@ export const createSfuApp = ({
       return;
     }
 
-    const userKeys = parseUserKeys(req.body?.userKeys ?? req.body?.userKey);
+    const body = requestBody(req);
+    const userKeys = parseUserKeys(body.userKeys ?? body.userKey);
     if (userKeys === null) {
       res.status(400).json({ error: "Invalid user key list" });
       return;
@@ -1026,9 +1020,10 @@ export const createSfuApp = ({
       return;
     }
 
-    const includeAttendees = req.body?.includeAttendees === true;
+    const body = requestBody(req);
+    const includeAttendees = body.includeAttendees === true;
     const reason = normalizeOperatorReason(
-      req.body?.reason,
+      body.reason,
       "Meeting reset by operator",
     );
     const kickedUserIds: string[] = [];
@@ -1087,7 +1082,7 @@ export const createSfuApp = ({
     }
 
     const reason = normalizeOperatorReason(
-      req.body?.reason,
+      requestBody(req).reason,
       "Blocked by operator",
     );
     lookup.room.blockUser(userKey);
@@ -1124,7 +1119,7 @@ export const createSfuApp = ({
       return;
     }
 
-    const bodyUserKey = normalizeUserKey(req.body?.userKey) ?? "";
+    const bodyUserKey = normalizeUserKey(requestBody(req).userKey) ?? "";
     const userKey = lookup.room.userKeysById.get(userId) || bodyUserKey;
     if (!userKey) {
       res.status(404).json({ error: "User identity not found" });
@@ -1312,8 +1307,9 @@ export const createSfuApp = ({
 
     const room = lookup.room;
     const roomChannelId = room.channelId;
-    const delayMs = parseEndRoomDelay(req.body?.delayMs);
-    const message = parseEndRoomMessage(req.body?.message);
+    const body = requestBody(req);
+    const delayMs = parseEndRoomDelay(body.delayMs);
+    const message = parseEndRoomMessage(body.message);
 
     const pendingSockets = Array.from(
       room.pendingClients.values(),

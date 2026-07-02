@@ -1443,7 +1443,7 @@ export function useAdaptiveConsumerPreferences({
         Boolean(preferredLayers) &&
         (wasPaused ||
           (isScreenShareVideo
-            ? !sameConsumerLayers(previousLayers, preferredLayers!)
+            ? !sameConsumerLayers(previousLayers, preferredLayers)
             : isConsumerLayerUpgrade(previousLayers, preferredLayers!)));
       const debugEntryBase = {
         producerId,

@@ -48,7 +48,7 @@ const proxyScheduledMeetingRequest = async (
         { status: response.status },
       );
     }
-    const data = await response.json().catch(() => ({}));
+    const data: unknown = await response.json().catch(() => ({}));
     return NextResponse.json(data, {
       status: response.status,
       headers: { "Cache-Control": "no-store" },

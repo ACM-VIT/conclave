@@ -19,6 +19,7 @@ import type {
   WeeklyAvailability,
 } from "../types.js";
 import { Logger } from "../utilities/loggers.js";
+import { asArray, asRecord } from "../utilities/untrusted.js";
 import {
   createRedisPersistenceClient,
   resolveRedisPersistenceKeyPrefix,
@@ -188,12 +189,13 @@ export const defaultWeeklyAvailability = (
 });
 
 const normalizeAvailabilityWindow = (
-  window: Partial<AvailabilityWindow>,
+  window: unknown,
 ): AvailabilityWindow | null => {
-  const day = Number(window.day);
+  const record = asRecord(window);
+  const day = Number(record.day);
   if (!Number.isInteger(day) || day < 0 || day > 6) return null;
-  const startMinutes = clampInteger(window.startMinutes, 9 * 60, 0, 24 * 60);
-  const endMinutes = clampInteger(window.endMinutes, 17 * 60, 0, 24 * 60);
+  const startMinutes = clampInteger(record.startMinutes, 9 * 60, 0, 24 * 60);
+  const endMinutes = clampInteger(record.endMinutes, 17 * 60, 0, 24 * 60);
   if (endMinutes <= startMinutes) return null;
   return {
     day: day as AvailabilityWindow["day"],
@@ -203,14 +205,15 @@ const normalizeAvailabilityWindow = (
 };
 
 const normalizeAvailabilityOverride = (
-  override: Partial<AvailabilityOverride>,
+  override: unknown,
 ): AvailabilityOverride | null => {
-  const date = sanitizeText(override.date, 10);
+  const record = asRecord(override);
+  const date = sanitizeText(record.date, 10);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
-  const unavailable = Boolean(override.unavailable);
-  const windows = Array.isArray(override.windows)
-    ? override.windows
-        .map((window) => {
+  const unavailable = Boolean(record.unavailable);
+  const windows = (asArray(record.windows) ?? [])
+        .map((entry) => {
+          const window = asRecord(entry);
           const normalized = normalizeAvailabilityWindow({
             day: 1,
             startMinutes: window.startMinutes,
@@ -226,32 +229,28 @@ const normalizeAvailabilityOverride = (
         .filter(
           (window): window is { startMinutes: number; endMinutes: number } =>
             Boolean(window),
-        )
-    : [];
+        );
   return { date, windows, unavailable };
 };
 
 export const normalizeWeeklyAvailability = (
-  value: Partial<WeeklyAvailability> | undefined,
+  value: unknown,
   fallbackTimeZone = getDefaultTimeZone(),
 ): WeeklyAvailability => {
-  const timeZone = normalizeTimeZone(value?.timeZone, fallbackTimeZone);
-  const windows = Array.isArray(value?.windows)
-    ? value.windows
-        .map((window) => normalizeAvailabilityWindow(window))
-        .filter((window): window is AvailabilityWindow => Boolean(window))
-    : [];
-  const overrides = Array.isArray(value?.overrides)
-    ? value.overrides
-        .map((override) => normalizeAvailabilityOverride(override))
-        .filter((override): override is AvailabilityOverride => Boolean(override))
-    : [];
+  const record = asRecord(value);
+  const timeZone = normalizeTimeZone(record.timeZone, fallbackTimeZone);
+  const windows = (asArray(record.windows) ?? [])
+    .map((window) => normalizeAvailabilityWindow(window))
+    .filter((window): window is AvailabilityWindow => Boolean(window));
+  const overrides = (asArray(record.overrides) ?? [])
+    .map((override) => normalizeAvailabilityOverride(override))
+    .filter((override): override is AvailabilityOverride => Boolean(override));
   return {
     timeZone,
     windows: windows.length ? windows : defaultWeeklyAvailability(timeZone).windows,
     overrides,
-    updatedAt: Number.isFinite(Number(value?.updatedAt))
-      ? Number(value?.updatedAt)
+    updatedAt: Number.isFinite(Number(record.updatedAt))
+      ? Number(record.updatedAt)
       : Date.now(),
   };
 };
@@ -487,7 +486,7 @@ export const getProfileAvailability = (
 export const setProfileAvailability = (
   store: SchedulingStore,
   profile: SchedulingProfile,
-  availability: Partial<WeeklyAvailability>,
+  availability: unknown,
 ): WeeklyAvailability => {
   const normalized = normalizeWeeklyAvailability(
     availability,
@@ -1140,18 +1139,33 @@ export const createSqliteSchedulingPersistence = (
         for (const row of loadRows.all()) {
           const kind =
             row && typeof row === "object" && "kind" in row
-              ? String((row as { kind: unknown }).kind)
+              ? String((row).kind)
               : "";
           const payload =
             row && typeof row === "object" && "payload_json" in row
-              ? String((row as { payload_json: unknown }).payload_json)
+              ? String((row).payload_json)
               : "";
           if (!payload) continue;
-          const parsed = JSON.parse(payload);
-          if (kind === "profile") snapshot.profiles.push(parsed);
-          if (kind === "availability") snapshot.availability.push(parsed);
-          if (kind === "event_type") snapshot.eventTypes.push(parsed);
-          if (kind === "calendar") snapshot.calendars.push(deserializeCalendar(parsed));
+          // Persistence payloads are this module's own serialized writes, so
+          // the element shape is trusted here; JSON.parse stays `unknown` and
+          // the snapshot-level checks in normalizeSnapshot still apply.
+          const parsed: unknown = JSON.parse(payload);
+          if (kind === "profile") {
+            snapshot.profiles.push(parsed as SchedulingProfile);
+          }
+          if (kind === "availability") {
+            snapshot.availability.push(
+              parsed as SchedulingSnapshot["availability"][number],
+            );
+          }
+          if (kind === "event_type") {
+            snapshot.eventTypes.push(parsed as SchedulingEventType);
+          }
+          if (kind === "calendar") {
+            snapshot.calendars.push(
+              deserializeCalendar(parsed as SchedulingCalendarConnection),
+            );
+          }
         }
       } catch (error) {
         Logger.error("Failed to load scheduling records", error);
@@ -1185,7 +1199,10 @@ export const createFileSchedulingPersistence = (
   load: () => {
     try {
       if (!existsSync(path)) return normalizeSnapshot({});
-      return normalizeSnapshot(JSON.parse(readFileSync(path, "utf8")));
+      // Own serialized writes; normalizeSnapshot re-checks the array shape.
+      return normalizeSnapshot(
+        JSON.parse(readFileSync(path, "utf8")) as Partial<SchedulingSnapshot>,
+      );
     } catch (error) {
       Logger.error("Failed to load scheduling records from JSON", error);
       return normalizeSnapshot({});
@@ -1512,7 +1529,8 @@ class RedisSchedulingPersistence implements SchedulingPersistence {
   private async loadLegacySnapshot(): Promise<SchedulingSnapshot> {
     const value = await this.client.get(this.snapshotKey);
     if (!value) return normalizeSnapshot({});
-    return normalizeSnapshot(JSON.parse(value));
+    // Own serialized writes; normalizeSnapshot re-checks the array shape.
+    return normalizeSnapshot(JSON.parse(value) as Partial<SchedulingSnapshot>);
   }
 
   private rememberKnownIds(snapshot: SchedulingSnapshot): void {

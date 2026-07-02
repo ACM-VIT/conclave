@@ -1,5 +1,5 @@
 import React from "react";
-import { View, Text, StyleSheet } from "react-native";
+import { View, Text, StyleSheet, type StyleProp, type ViewStyle } from "react-native";
 import { MicOff } from "lucide-react-native";
 import { avatarColor, initials } from "../core";
 import { color, font, radius } from "../tokens";
@@ -10,7 +10,7 @@ import { color, font, radius } from "../tokens";
 export interface TileProps {
   speaking?: boolean;
   children?: React.ReactNode;
-  style?: any;
+  style?: StyleProp<ViewStyle>;
 }
 
 export function Tile({ speaking = false, children, style }: TileProps) {
@@ -72,7 +72,7 @@ export function NamePlate({ name, isLocal, isMuted, size = 13 }: NamePlateProps)
 /* -------------------------------------------------------------------- Pill ---*/
 export interface PillProps {
   children: React.ReactNode;
-  style?: any;
+  style?: StyleProp<ViewStyle>;
 }
 
 export function Pill({ children, style }: PillProps) {

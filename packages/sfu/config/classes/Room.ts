@@ -1,6 +1,5 @@
 import type {
   AudioLevelObserver,
-  MediaKind,
   PlainTransport,
   Producer,
   Router,

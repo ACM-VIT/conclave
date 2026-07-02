@@ -96,7 +96,7 @@ export default function ScheduledMeetingLanding({
         { method: "POST" },
       );
       if (!response.ok) {
-        const data = await response.json().catch(() => null);
+        const data: unknown = await response.json().catch(() => null);
         throw new Error(
           (data && typeof data === "object" && "error" in data
             ? String((data as { error?: string }).error || "")

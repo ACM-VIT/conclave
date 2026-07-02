@@ -280,7 +280,7 @@ export function participantReducer(
       });
     }
     case "CLEAR_ALL": {
-      return state.size === 0 ? state : new Map();
+      return state.size === 0 ? state : new Map<string, Participant>();
     }
     default:
       return state;

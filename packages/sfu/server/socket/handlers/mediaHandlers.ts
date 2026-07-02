@@ -447,7 +447,7 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
           }
 
           if (producerAdvertised) {
-            for (const [targetClientId, targetClient] of activeRoom.clients) {
+            for (const [, targetClient] of activeRoom.clients) {
               if (targetClient.isWebinarAttendee) {
                 continue;
               }

@@ -6,6 +6,10 @@ import UIKit
 
 // MARK: - Meeting Header
 
+enum MeetingHeaderLayout {
+    static let roomPillMaxWidth: CGFloat = 224.0
+}
+
 struct MeetingHeaderView: View {
     let roomId: String
     let isRoomLocked: Bool
@@ -31,8 +35,10 @@ struct MeetingHeaderView: View {
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
-                .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+                .frame(maxWidth: MeetingHeaderLayout.roomPillMaxWidth, alignment: .leading)
                 .acmGlassCapsule()
+
+                Spacer(minLength: 0)
 
                 if showsParticipantsButton {
                     Button(action: onParticipantsPressed) {

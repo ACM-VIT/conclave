@@ -4,6 +4,22 @@ import Observation
 import UIKit
 #endif
 
+enum MoreSheetVisibilityPolicy {
+    static func canShowToolsSection(
+        canShowAdminControls: Bool,
+        canShowSharedBrowser: Bool,
+        canShowGamesSection: Bool,
+        canShowAppsSection: Bool,
+        canShowTranscriptTool: Bool
+    ) -> Bool {
+        canShowAdminControls ||
+            canShowSharedBrowser ||
+            canShowGamesSection ||
+            canShowAppsSection ||
+            canShowTranscriptTool
+    }
+}
+
 struct MoreSheetView: View {
     @Bindable var viewModel: MeetingViewModel
     var bodyReady: Bool = true
@@ -14,127 +30,39 @@ struct MoreSheetView: View {
     let onOpenSharedBrowser: () -> Void
     let onOpenApps: () -> Void
     let onOpenGames: () -> Void
+    var onOpenTranscript: (() -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.meetingSheetCloseAction) private var meetingSheetCloseAction
 
     private let emojiReactions = MeetingReactionConstants.emojiReactionOptions
     private let assetReactions = MeetingReactionConstants.assetOptions
 
     var body: some View {
-        let canUseParticipantActions = viewModel.state.connectionState == .joined
-            && !viewModel.state.isGhostMode
-            && !viewModel.state.isWebinarAttendee
+        let _ = PerformanceDiagnostics.render("MoreSheetView") {
+            renderDetails
+        }
 
         VStack(spacing: 0) {
-            MeetingSheetHeader(title: "More", onDone: { dismiss() })
+            MeetingSheetHeader(title: "More", onDone: { closeSheet() })
 
             if bodyReady {
+                let canUseParticipantActions = viewModel.state.connectionState == .joined
+                    && !viewModel.state.isGhostMode
+                    && !viewModel.state.isWebinarAttendee
+
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: ACMSpacing.md) {
                         if canShowQuickReactions {
-                            VStack(alignment: .leading, spacing: ACMSpacing.xs) {
-                                acmListSectionHeader("Quick reactions")
-
-                                HStack(spacing: 0) {
-                                    ForEach(emojiReactions) { option in
-                                        Button {
-                                            viewModel.sendReaction(option)
-                                            dismiss()
-                                        } label: {
-                                            Text(option.value)
-                                                .font(.system(size: 26))
-                                                .frame(maxWidth: .infinity)
-                                                .frame(height: 48)
-                                            #if !SKIP
-                                                .contentShape(Rectangle())
-                                            #endif
-                                        }
-                                        .buttonStyle(.plain)
-                                    }
-                                }
-
-                                HStack(spacing: ACMSpacing.xs) {
-                                    ForEach(assetReactions) { option in
-                                        Button {
-                                            viewModel.sendReaction(option)
-                                            dismiss()
-                                        } label: {
-                                            ReactionAssetThumbnailView(
-                                                value: option.value,
-                                                label: option.label,
-                                                size: 26
-                                            )
-                                                .frame(maxWidth: .infinity)
-                                                .frame(height: 38)
-                                                .acmColorBackground(ACMColors.surfaceRaised)
-                                                .clipShape(Capsule())
-                                            #if !SKIP
-                                                .contentShape(Rectangle())
-                                            #endif
-                                        }
-                                        .buttonStyle(.plain)
-                                    }
-                                }
-                            }
+                            quickReactionsSection
                         }
 
-                        VStack(alignment: .leading, spacing: ACMSpacing.xs) {
-                            acmListSectionHeader("Meeting actions")
-
-                            MeetingSheetSectionCard {
-                                MoreRow(
-                                    icon: viewModel.state.isHandRaised ? "hand.raised.fill" : "hand.raised",
-                                    androidIcon: viewModel.state.isHandRaised ? "raise.hand" : "raise.hand.off",
-                                    title: viewModel.state.isHandRaised ? "Lower hand" : "Raise hand",
-                                    tint: canUseParticipantActions
-                                        ? (viewModel.state.isHandRaised ? ACMColors.handRaised : ACMColors.text)
-                                        : ACMColors.textFaint,
-                                    androidTint: canUseParticipantActions
-                                        ? (viewModel.state.isHandRaised ? "amber" : "text")
-                                        : "faint",
-                                    isDisabled: !canUseParticipantActions
-                                ) {
-                                    viewModel.toggleHandRaise()
-                                    dismiss()
-                                }
-                                MoreRowDivider()
-                                MoreRow(icon: "message.fill", androidIcon: "chat", title: "Chat") {
-                                    withAnimation(.easeInOut(duration: 0.12)) {
-                                        viewModel.toggleChat()
-                                    }
-                                    dismiss()
-                                }
-                                MoreRowDivider()
-                                MoreRow(icon: "person.2.fill", androidIcon: "participants", title: "Participants", showsChevron: true) {
-                                    onOpenParticipants()
-                                }
-                                MoreRowDivider()
-                                MoreRow(icon: "rectangle.grid.2x2", androidIcon: "grid", title: "Layout", showsChevron: true) {
-                                    onOpenViewSettings()
-                                }
-                                MoreRowDivider()
-                                MoreRow(icon: "person.badge.plus", androidIcon: "link", title: "Invite people") {
-                                    if MeetingShare.shareMeetingLink(
-                                        viewModel.state.meetingLink,
-                                        roomId: viewModel.state.roomId
-                                    ) {
-                                        dismiss()
-                                    }
-                                }
-                                MoreRowDivider()
-                                MoreRow(icon: "doc.on.doc", androidIcon: "copy", title: "Copy meeting link") {
-                                    MeetingShare.copyMeetingLink(viewModel.state.meetingLink)
-                                    dismiss()
-                                }
-                                MoreRowDivider()
-                                MoreRow(icon: "gearshape.fill", androidIcon: "settings", title: "Settings", showsChevron: true) {
-                                    onOpenSettings()
-                                }
-                            }
-                        }
+                        meetingActionsSection(canUseParticipantActions: canUseParticipantActions)
 
                         if canShowToolsSection {
                             toolsSection
                         }
+
+                        scrollEndSpacer
                     }
                     .padding(.horizontal, ACMSpacing.lg)
                     .padding(.top, ACMSpacing.md)
@@ -150,6 +78,165 @@ struct MoreSheetView: View {
         #else
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         #endif
+    }
+
+    private var bottomScrollPadding: CGFloat {
+        #if SKIP
+        return ACMSpacing.xxxl * 3
+        #else
+        return ACMSpacing.lg
+        #endif
+    }
+
+    @ViewBuilder
+    private var scrollEndSpacer: some View {
+        #if SKIP
+        Color.clear
+            .frame(height: bottomScrollPadding)
+        #else
+        Color.clear
+            .frame(height: 0)
+        #endif
+    }
+
+    private var renderDetails: String {
+        guard bodyReady else {
+            return "ready=false"
+        }
+        return "ready=true participants=\(viewModel.state.participantCount) tools=\(canShowToolsSection)"
+    }
+
+    private func closeSheet() {
+        if let close = meetingSheetCloseAction.close {
+            close()
+        } else {
+            dismiss()
+        }
+    }
+
+    @ViewBuilder
+    private func meetingActionsSection(canUseParticipantActions: Bool) -> some View {
+        VStack(alignment: .leading, spacing: ACMSpacing.xs) {
+            acmListSectionHeader("Meeting actions")
+
+            MeetingSheetSectionCard {
+                MoreRow(
+                    icon: viewModel.state.isHandRaised ? "hand.raised.fill" : "hand.raised",
+                    androidIcon: viewModel.state.isHandRaised ? "raise.hand" : "raise.hand.off",
+                    title: viewModel.state.isHandRaised ? "Lower hand" : "Raise hand",
+                    tint: canUseParticipantActions
+                        ? (viewModel.state.isHandRaised ? ACMColors.handRaised : ACMColors.text)
+                        : ACMColors.textFaint,
+                    androidTint: canUseParticipantActions
+                        ? (viewModel.state.isHandRaised ? "amber" : "text")
+                        : "faint",
+                    isDisabled: !canUseParticipantActions
+                ) {
+                    viewModel.toggleHandRaise()
+                    closeSheet()
+                }
+                MoreRowDivider()
+                MoreRow(icon: "message.fill", androidIcon: "chat", title: "Chat") {
+                    PerformanceDiagnostics.event("chat_toggle_from_more")
+                    #if SKIP
+                    closeSheet()
+                    if !viewModel.state.isChatOpen {
+                        PerformanceDiagnostics.event("chat_toggle_from_more_after_close")
+                        viewModel.toggleChat()
+                    }
+                    #else
+                    withAnimation(.easeInOut(duration: 0.12)) {
+                        viewModel.toggleChat()
+                    }
+                    closeSheet()
+                    #endif
+                }
+                MoreRowDivider()
+                MoreRow(icon: "person.2.fill", androidIcon: "participants", title: "Participants", showsChevron: true) {
+                    onOpenParticipants()
+                }
+                MoreRowDivider()
+                MoreRow(icon: "rectangle.grid.2x2", androidIcon: "grid", title: "Layout", showsChevron: true) {
+                    onOpenViewSettings()
+                }
+                MoreRowDivider()
+                MoreRow(icon: "person.badge.plus", androidIcon: "link", title: "Invite people") {
+                    if MeetingShare.shareMeetingLink(
+                        viewModel.state.meetingLink,
+                        roomId: viewModel.state.roomId
+                    ) {
+                        closeSheet()
+                    }
+                }
+                MoreRowDivider()
+                MoreRow(icon: "doc.on.doc", androidIcon: "copy", title: "Copy meeting link") {
+                    MeetingShare.copyMeetingLink(viewModel.state.meetingLink)
+                    closeSheet()
+                }
+                MoreRowDivider()
+                MoreRow(icon: "gearshape.fill", androidIcon: "settings", title: "Settings", showsChevron: true) {
+                    onOpenSettings()
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var quickReactionsSection: some View {
+        VStack(alignment: .leading, spacing: ACMSpacing.xs) {
+            acmListSectionHeader("Quick reactions")
+
+            HStack(spacing: 0) {
+                ForEach(emojiReactions) { option in
+                    Button {
+                        viewModel.sendReaction(option)
+                        closeSheet()
+                    } label: {
+                        Text(option.value)
+                            .font(.system(size: 26))
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 48)
+                            #if !SKIP
+                            .contentShape(Rectangle())
+                            #endif
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+
+            HStack(spacing: ACMSpacing.xs) {
+                ForEach(assetReactions) { option in
+                    Button {
+                        viewModel.sendReaction(option)
+                        closeSheet()
+                    } label: {
+                        #if SKIP
+                        Text(option.label)
+                            .font(ACMFont.trial(11, weight: .medium))
+                            .foregroundStyle(ACMColors.text)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.72)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 38)
+                            .acmColorBackground(ACMColors.surfaceRaised)
+                            .clipShape(Capsule())
+                        #else
+                        ReactionAssetThumbnailView(
+                            value: option.value,
+                            label: option.label,
+                            size: 26
+                        )
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 38)
+                            .acmColorBackground(ACMColors.surfaceRaised)
+                            .clipShape(Capsule())
+                            .contentShape(Rectangle())
+                        #endif
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
     }
 
     @ViewBuilder
@@ -193,8 +280,21 @@ struct MoreSheetView: View {
                         onOpenApps()
                     }
                 }
+
+                if let onOpenTranscript, canShowTranscript {
+                    if canShowAdminControls || canShowSharedBrowser || canShowGamesSection || canShowAppsSection {
+                        MoreRowDivider()
+                    }
+                    MoreRow(icon: "captions.bubble.fill", androidIcon: "closed_caption", title: "Transcript", showsChevron: true) {
+                        onOpenTranscript()
+                    }
+                }
             }
         }
+    }
+
+    private var canShowTranscript: Bool {
+        viewModel.state.connectionState == .joined && !viewModel.state.isWebinarAttendee
     }
 
     private var canManageSharedBrowser: Bool {
@@ -210,7 +310,17 @@ struct MoreSheetView: View {
     }
 
     private var canShowToolsSection: Bool {
-        canShowAdminControls || canShowSharedBrowser || canShowGamesSection || canShowAppsSection
+        MoreSheetVisibilityPolicy.canShowToolsSection(
+            canShowAdminControls: canShowAdminControls,
+            canShowSharedBrowser: canShowSharedBrowser,
+            canShowGamesSection: canShowGamesSection,
+            canShowAppsSection: canShowAppsSection,
+            canShowTranscriptTool: canShowTranscriptTool
+        )
+    }
+
+    private var canShowTranscriptTool: Bool {
+        onOpenTranscript != nil && canShowTranscript
     }
 
     private var canShowQuickReactions: Bool {
@@ -383,21 +493,21 @@ struct AdminControlsSheetView: View {
                 viewModel.refreshAdminAccessLists()
             }
         }
-        .onChange(of: viewModel.state.roomId) { _, _ in
+        .onChange(of: viewModel.state.roomId) {
             resetTransientAdminActions()
         }
-        .onChange(of: viewModel.state.connectionState) { _, state in
-            if state != .joined {
+        .onChange(of: viewModel.state.connectionState) {
+            if viewModel.state.connectionState != .joined {
                 resetTransientAdminActions()
             }
         }
-        .onChange(of: viewModel.state.isAdmin) { _, isAdmin in
-            if !isAdmin {
+        .onChange(of: viewModel.state.isAdmin) {
+            if !viewModel.state.isAdmin {
                 resetTransientAdminActions()
             }
         }
-        .onChange(of: viewModel.state.isWebinarAttendee) { _, isWebinarAttendee in
-            if isWebinarAttendee {
+        .onChange(of: viewModel.state.isWebinarAttendee) {
+            if viewModel.state.isWebinarAttendee {
                 resetTransientAdminActions()
             }
         }
@@ -1200,16 +1310,16 @@ struct SharedBrowserSheetView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         #endif
         .onAppear(perform: syncBrowserURLInput)
-        #if SKIP
-        .onChange(of: viewModel.state.isBrowserActive ? "active" : "inactive") { _, _ in
+#if SKIP
+        .onChange(of: viewModel.state.isBrowserActive ? "active" : "inactive") {
             syncBrowserURLInput()
         }
-        #else
+#else
         .onChange(of: viewModel.state.isBrowserActive) { _, _ in
             syncBrowserURLInput()
         }
         #endif
-        .onChange(of: viewModel.state.browserURL) { _, _ in
+        .onChange(of: viewModel.state.browserURL) {
             syncBrowserURLInput()
         }
     }
@@ -1466,13 +1576,14 @@ struct GamesSheetView: View {
         .onAppear {
             viewModel.refreshGameState()
         }
-        .onChange(of: viewModel.state.gamePublicState?.gameId ?? "") { _, gameId in
+        .onChange(of: viewModel.state.gamePublicState?.gameId ?? "") {
+            let gameId = viewModel.state.gamePublicState?.gameId ?? ""
             if !gameId.isEmpty {
                 cancelConfiguringGame()
             }
             bluffAnswerInput = ""
         }
-        .onChange(of: viewModel.state.gameVote?.totalPlayers ?? -1) { _, _ in
+        .onChange(of: viewModel.state.gameVote?.totalPlayers ?? -1) {
             if viewModel.state.gameVote != nil {
                 cancelConfiguringGame()
             }
@@ -1551,6 +1662,15 @@ struct GamesSheetView: View {
                 bluffGameDetails(activeGame)
             case "imposter":
                 imposterGameDetails(activeGame)
+            case "wordle":
+                WordleGameView(
+                    viewModel: viewModel,
+                    activeGame: activeGame,
+                    publicView: activeGame.view,
+                    playerView: playerGameView(for: activeGame),
+                    canPlay: canPlayActiveGame(activeGame),
+                    canManage: canManageGames
+                )
             default:
                 genericGameDetails(activeGame)
             }
@@ -1894,19 +2014,27 @@ struct GamesSheetView: View {
     }
 
     private func gameStatusBlock(title: String, subtitle: String?) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Text(title)
-                .font(ACMFont.trial(16, weight: .semibold))
-                .foregroundStyle(ACMColors.text)
-                .lineLimit(2)
+        HStack(alignment: .top, spacing: ACMSpacing.sm) {
+            RoundedRectangle(cornerRadius: 2, style: .continuous)
+                .fill(ACMColors.primaryOrange)
+                .frame(width: 3)
+                .frame(maxHeight: .infinity)
 
-            if let subtitle = subtitle?.trimmingCharacters(in: .whitespacesAndNewlines),
-               !subtitle.isEmpty {
-                Text(subtitle)
-                    .font(ACMFont.trial(13))
-                    .foregroundStyle(ACMColors.textMuted)
-                    .lineLimit(4)
+            VStack(alignment: .leading, spacing: 5) {
+                Text(title)
+                    .font(ACMFont.trial(16, weight: .semibold))
+                    .foregroundStyle(ACMColors.text)
+                    .lineLimit(2)
+
+                if let subtitle = subtitle?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   !subtitle.isEmpty {
+                    Text(subtitle)
+                        .font(ACMFont.trial(13))
+                        .foregroundStyle(ACMColors.textMuted)
+                        .lineLimit(4)
+                }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -2189,17 +2317,55 @@ struct GamesSheetView: View {
 
     @ViewBuilder
     private func scoreboardBlock(_ view: GameJSONValue?) -> some View {
-        let rows = view?.objectArray("scoreboard").compactMap(scoreboardRow) ?? []
+        let rows = (view?.objectArray("scoreboard").compactMap(scoreboardRow) ?? [])
+            .sorted { $0.score > $1.score }
         if rows.isEmpty {
             gameMetaLine("Scores are not available yet.")
         } else {
-            ForEach(rows) { row in
-                gameChoiceButton(
-                    title: row.name,
-                    subtitle: "\(row.score) points",
-                    isDisabled: true
-                ) {}
+            VStack(spacing: 6) {
+                ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
+                    scoreboardLeaderRow(rank: index + 1, name: row.name, score: row.score)
+                }
             }
+        }
+    }
+
+    private func scoreboardLeaderRow(rank: Int, name: String, score: Int) -> some View {
+        let rankColor: Color = {
+            switch rank {
+            case 1: return ACMColors.primaryOrange
+            case 2, 3: return ACMColors.textMuted
+            default: return ACMColors.textFaint
+            }
+        }()
+        let isLeader = rank == 1
+        return HStack(spacing: ACMSpacing.sm) {
+            Text("\(rank)")
+                .font(ACMFont.trial(14, weight: .bold))
+                .foregroundStyle(rankColor)
+                .frame(width: 22, alignment: .center)
+
+            Text(name)
+                .font(ACMFont.trial(14, weight: .medium))
+                .foregroundStyle(ACMColors.text)
+                .lineLimit(1)
+
+            Spacer(minLength: ACMSpacing.xs)
+
+            Text("\(score)")
+                .font(ACMFont.trial(14, weight: .semibold))
+                .foregroundStyle(rankColor)
+        }
+        .padding(.horizontal, ACMSpacing.sm)
+        .frame(minHeight: 40)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background {
+            RoundedRectangle(cornerRadius: ACMRadius.md, style: .continuous)
+                .fill(isLeader ? ACMColors.primaryOrange.opacity(0.10) : ACMColors.surfaceRaised)
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: ACMRadius.md, style: .continuous)
+                .strokeBorder(isLeader ? ACMColors.primaryOrange.opacity(0.34) : ACMColors.border, lineWidth: 1)
         }
     }
 

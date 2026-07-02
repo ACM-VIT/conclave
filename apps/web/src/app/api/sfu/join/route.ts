@@ -23,7 +23,7 @@ const logSecretFingerprint = (secret: string): void => {
   const source = process.env.SFU_SECRET
     ? "process.env (loaded by Next.js)"
     : "fallback literal";
-  console.log(
+  console.info(
     `[SFU join] signing JWTs with secret source: ${source}; fingerprint: ${fp}`,
   );
 };

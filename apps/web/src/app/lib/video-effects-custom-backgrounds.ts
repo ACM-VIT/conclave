@@ -115,7 +115,8 @@ const sortRecentFirst = <T extends { updatedAt: number; createdAt: number }>(
 export const listCustomVideoBackgrounds = async () => {
   if (!canUseIndexedDb()) return [];
   const backgrounds = await withStore("readonly", (store) =>
-    requestToPromise<CustomVideoBackground[]>(store.getAll()),
+    // Own IndexedDB store; every write goes through this module.
+    requestToPromise(store.getAll() as IDBRequest<CustomVideoBackground[]>),
   );
   return sortRecentFirst(backgrounds).map(toSummary);
 };
@@ -123,7 +124,9 @@ export const listCustomVideoBackgrounds = async () => {
 export const getCustomVideoBackground = async (id: string) => {
   if (!canUseIndexedDb()) return null;
   const background = await withStore("readonly", (store) =>
-    requestToPromise<CustomVideoBackground | undefined>(store.get(id)),
+    requestToPromise(
+      store.get(id) as IDBRequest<CustomVideoBackground | undefined>,
+    ),
   );
   return background ?? null;
 };

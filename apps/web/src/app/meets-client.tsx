@@ -7,7 +7,7 @@ import type { RegisterableHotkey } from "@tanstack/hotkeys";
 import { HOTKEYS } from "./lib/hotkeys";
 import type { Socket } from "socket.io-client";
 import type { RoomInfo } from "@/lib/sfu-types";
-import { signOut, useSession } from "@/lib/auth-client";
+import { useSession } from "@/lib/auth-client";
 import type { AssetUploadHandler } from "@conclave/apps-sdk";
 import {
   AppsProvider,
@@ -385,7 +385,6 @@ export default function MeetsClient({
   initialRoomId,
   enableRoomRouting = false,
   forceJoinOnly = false,
-  allowGhostMode = true,
   bypassMediaPermissions = false,
   user,
   isAdmin = false,
@@ -409,7 +408,6 @@ export default function MeetsClient({
     null,
   );
   const [guestStorageReady, setGuestStorageReady] = useState(false);
-  const [isSigningOut, setIsSigningOut] = useState(false);
   const [appsSocket, setAppsSocket] = useState<Socket | null>(null);
   const [viewSettings, setViewSettings] = useState<MeetViewSettings>(
     readStoredMeetViewSettings,
@@ -883,8 +881,10 @@ export default function MeetsClient({
   const [voiceAgentKeyPromptError, setVoiceAgentKeyPromptError] =
     useState<string | null>(null);
   const voiceAgentApiKeyRef = useRef("");
-  const toggleMuteCommandRef = useRef<(() => void) | null>(null);
-  const toggleCameraCommandRef = useRef<(() => void) | null>(null);
+  const toggleMuteCommandRef = useRef<(() => void | Promise<void>) | null>(null);
+  const toggleCameraCommandRef = useRef<(() => void | Promise<void>) | null>(
+    null,
+  );
   const ensureProducerTransportRef = useRef<(() => Promise<boolean>) | null>(
     null,
   );
@@ -894,7 +894,7 @@ export default function MeetsClient({
   const leaveRoomCommandRef = useRef<(() => void) | null>(null);
 
   const handleToggleMuteCommand = useCallback(() => {
-    toggleMuteCommandRef.current?.();
+    void toggleMuteCommandRef.current?.();
   }, []);
 
   useHotkey(
@@ -908,7 +908,7 @@ export default function MeetsClient({
   );
 
   const handleToggleCameraCommand = useCallback(() => {
-    toggleCameraCommandRef.current?.();
+    void toggleCameraCommandRef.current?.();
   }, []);
 
   const handleSetHandRaisedCommand = useCallback((raised: boolean) => {
@@ -957,7 +957,6 @@ export default function MeetsClient({
 
   const {
     videoQuality,
-    setVideoQuality,
     setNetworkManagedVideoQuality,
     isMirrorCamera,
     setIsMirrorCamera,
@@ -983,9 +982,6 @@ export default function MeetsClient({
   const canModerateMeeting = isAdminFlag && !isReadOnlyObserver;
   const shouldRunVideoEffects = shouldRunVisualVideoEffects;
   const shouldPublishProcessedVideo = shouldRunVisualVideoEffects;
-  const canSignOut = Boolean(
-    currentUser && !currentUser.id?.startsWith("guest-"),
-  );
   const normalizedCurrentUserName =
     typeof currentUser?.name === "string"
       ? sanitizeInstitutionDisplayName(currentUser.name, currentUser.email)
@@ -2064,7 +2060,9 @@ export default function MeetsClient({
     },
   );
 
-  useHotkey(HOTKEYS.toggleScreenShare.keys as RegisterableHotkey, toggleScreenShare, {
+  useHotkey(HOTKEYS.toggleScreenShare.keys as RegisterableHotkey, () => {
+    void toggleScreenShare();
+  }, {
     enabled: connectionState === "joined",
     requireReset: true,
     ignoreInputs: true,
@@ -2418,7 +2416,7 @@ export default function MeetsClient({
     if (!hasRoom && !isAdminFlag) return;
 
     const refresh = () => {
-      refreshRooms(isAdminFlag ? undefined : normalizedRoomId);
+      void refreshRooms(isAdminFlag ? undefined : normalizedRoomId);
     };
 
     refresh();
@@ -2495,29 +2493,6 @@ export default function MeetsClient({
     void joinRoomById(targetRoomId);
   }, [isAdminFlag, joinRoomById, pendingNewMeetingRoomId]);
 
-  const handleSignOut = useCallback(async () => {
-    if (isSigningOut) return;
-    setIsSigningOut(true);
-    if (isGuestUser(currentUser)) {
-      clearGuestStorage();
-      setCurrentUser(undefined);
-      setCurrentIsAdmin(false);
-      setIsSigningOut(false);
-      return;
-    }
-
-    try {
-      await signOut();
-      clearGuestStorage();
-      setCurrentUser(undefined);
-      setCurrentIsAdmin(false);
-    } catch (error) {
-      console.error("Sign out error:", error);
-    } finally {
-      setIsSigningOut(false);
-    }
-  }, [clearGuestStorage, currentUser, isSigningOut]);
-
   const leaveRoom = useCallback(() => {
     handleStopVoiceAgent();
     playNotificationSoundForEvents("leave");
@@ -2587,8 +2562,10 @@ export default function MeetsClient({
       }
     };
 
-    checkBrowserService();
-    const interval = setInterval(checkBrowserService, 30000);
+    void checkBrowserService();
+    const interval = setInterval(() => {
+      void checkBrowserService();
+    }, 30000);
     return () => {
       isMounted = false;
       clearInterval(interval);
@@ -2680,14 +2657,20 @@ export default function MeetsClient({
       mirrorLocalPreview,
       userEmail,
       getDisplayName: resolveDisplayName,
-      onToggleMute: toggleMute,
-      onToggleCamera: toggleCamera,
-      onLeave: leaveRoom,
+      onToggleMute: () => {
+        void toggleMute();
+      },
+      onToggleCamera: () => {
+        void toggleCamera();
+      },
+      onLeave: () => {
+        leaveRoom();
+      },
     });
 
   useHotkey(HOTKEYS.toggleLockMeeting.keys as RegisterableHotkey, () => {
     if (canModerateMeeting) {
-      socket.toggleRoomLock(!isRoomLocked);
+      void socket.toggleRoomLock(!isRoomLocked);
     }
   }, {
     enabled: connectionState === "joined",
@@ -2699,7 +2682,7 @@ export default function MeetsClient({
     if (isPopoutActive) {
       closePopout();
     } else if (isPopoutSupported) {
-      openPopout();
+      void openPopout();
     }
   }, {
     enabled: connectionState === "joined",
@@ -2737,7 +2720,7 @@ export default function MeetsClient({
     selfConnectionStats.browserNetwork.quality === "unknown"
       ? selfConnectionStats.browserNetwork.startupQuality
       : selfConnectionStats.browserNetwork.quality
-  ) as ConnectionQuality;
+  );
   const browserAllowsPublishCapRecovery =
     !hasBrowserEmergencySignal &&
     selfConnectionStats.browserNetwork.saveData !== true &&
@@ -3213,15 +3196,15 @@ export default function MeetsClient({
         isDmEnabled={isDmEnabled}
         isReactionsDisabled={isReactionsDisabled}
         onToggleLock={() => {
-          if (canModerateMeeting) socket.toggleRoomLock(!isRoomLocked);
+          if (canModerateMeeting) void socket.toggleRoomLock(!isRoomLocked);
         }}
         isNoGuests={isNoGuests}
         onToggleNoGuests={() => {
-          if (canModerateMeeting) socket.toggleNoGuests(!isNoGuests);
+          if (canModerateMeeting) void socket.toggleNoGuests(!isNoGuests);
         }}
         isChatLocked={isChatLocked}
         onToggleChatLock={() => {
-          if (canModerateMeeting) socket.toggleChatLock(!isChatLocked);
+          if (canModerateMeeting) void socket.toggleChatLock(!isChatLocked);
         }}
         browserState={browserState}
         isBrowserLaunching={isBrowserLaunching}

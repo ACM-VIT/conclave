@@ -42,8 +42,10 @@ final class WebRTCClient {
     var isConfigured: Bool { fatalError() }
     func hasBrokenTransport() -> Bool { fatalError() }
 
+    func prewarmMediaStack() { fatalError() }
     func configure(socketManager: SocketIOManager, rtpCapabilities: RtpCapabilities, iceServersJSON: String?) { fatalError() }
     func createTransports() async throws { fatalError() }
+    func createReceiveTransport() async throws { fatalError() }
     func restartIce() async -> Bool { fatalError() }
     func restartIce(transportKind: String) async -> Bool { fatalError() }
     func consumeProducer(producerId: String, producerUserId: String, producerKind: String? = nil, producerType: String = "webcam", preferHighWebcamLayer: Bool = false, initialReceiveConnectionQuality: ConnectionQuality = .unknown) async throws { fatalError() }

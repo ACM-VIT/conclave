@@ -74,7 +74,7 @@ export const buildScheduledMeetingHeaders = (
 export const readScheduledMeetingError = async (
   response: Response,
 ): Promise<string> => {
-  const data = await response.json().catch(() => null);
+  const data: unknown = await response.json().catch(() => null);
   if (data && typeof data === "object" && "error" in data) {
     return String((data as { error?: string }).error || "Request failed");
   }

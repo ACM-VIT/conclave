@@ -93,7 +93,7 @@ export function resolveTileToneColor(tone: TileTone, accent: string): string {
       return TILE_COLORS.positive;
     case "negative":
       return TILE_COLORS.negative;
-    default:
+    case "neutral":
       return TILE_COLORS.neutralText;
   }
 }

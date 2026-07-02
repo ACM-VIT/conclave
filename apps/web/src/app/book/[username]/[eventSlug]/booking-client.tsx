@@ -66,7 +66,7 @@ const listTimeZones = (): string[] => {
 };
 
 const readError = async (response: Response): Promise<string> => {
-  const data = await response.json().catch(() => null);
+  const data: unknown = await response.json().catch(() => null);
   return data && typeof data === "object" && "error" in data
     ? String((data as { error?: string }).error || "Request failed")
     : response.statusText || "Request failed";

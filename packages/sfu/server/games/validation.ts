@@ -1,4 +1,4 @@
-import { GameMoveError, type GameContext, type GameMove } from "./types.js";
+import { GameMoveError, type GameContext } from "./types.js";
 
 export type PlayerTargetOptions = {
   allowSelf?: boolean;

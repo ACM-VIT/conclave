@@ -788,7 +788,7 @@ const applyBrowserQualityHint = (
   observed: ConnectionQuality,
   browserNetwork: BrowserNetworkSnapshot,
 ): ConnectionQuality => {
-  const browserHint = browserNetwork.quality as ConnectionQuality;
+  const browserHint = browserNetwork.quality;
   if (browserHint === "unknown") return observed;
   if (observed === "unknown") return browserHint;
   if (browserNetwork.emergency || browserNetwork.saveData === true) {

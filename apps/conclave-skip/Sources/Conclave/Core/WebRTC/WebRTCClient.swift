@@ -810,15 +810,28 @@ final class WebRTCClient: NSObject, ObservableObject {
     // MARK: - Transport Creation
 
     func createTransports() async throws {
+        try await createSendTransportIfNeeded()
+        try await createReceiveTransportIfNeeded()
+        debugLog("[WebRTC] Transports ready: send=\(sendTransportId ?? "nil"), recv=\(receiveTransportId ?? "nil")")
+    }
+
+    func createReceiveTransport() async throws {
+        try await createReceiveTransportIfNeeded()
+    }
+
+    private func createSendTransportIfNeeded() async throws {
         guard let socket = socketManager,
               let device = device else {
             throw WebRTCError.notConfigured
         }
+        if let sendTransport,
+           sendTransport.closed == false,
+           sendTransportId != nil {
+            return
+        }
 
         let generation = configurationGeneration
         let producerTransportParams = try await socket.createProducerTransport()
-        guard generation == configurationGeneration else { throw WebRTCError.staleConfiguration }
-        let consumerTransportParams = try await socket.createConsumerTransport()
         guard generation == configurationGeneration else { throw WebRTCError.staleConfiguration }
 
         let nextSendTransport = try device.createSendTransport(
@@ -832,6 +845,33 @@ final class WebRTCClient: NSObject, ObservableObject {
         )
         nextSendTransport.delegate = self
 
+        guard generation == configurationGeneration else {
+            nextSendTransport.close()
+            throw WebRTCError.staleConfiguration
+        }
+
+        sendTransport?.close()
+        sendTransportId = producerTransportParams.id
+        sendTransport = nextSendTransport
+
+        debugLog("[WebRTC] Send transport ready: \(producerTransportParams.id)")
+    }
+
+    private func createReceiveTransportIfNeeded() async throws {
+        guard let socket = socketManager,
+              let device = device else {
+            throw WebRTCError.notConfigured
+        }
+        if let receiveTransport,
+           receiveTransport.closed == false,
+           receiveTransportId != nil {
+            return
+        }
+
+        let generation = configurationGeneration
+        let consumerTransportParams = try await socket.createConsumerTransport()
+        guard generation == configurationGeneration else { throw WebRTCError.staleConfiguration }
+
         let nextReceiveTransport = try device.createReceiveTransport(
             id: consumerTransportParams.id,
             iceParameters: try encodeJSONString(consumerTransportParams.iceParameters),
@@ -844,19 +884,15 @@ final class WebRTCClient: NSObject, ObservableObject {
         nextReceiveTransport.delegate = self
 
         guard generation == configurationGeneration else {
-            nextSendTransport.close()
             nextReceiveTransport.close()
             throw WebRTCError.staleConfiguration
         }
 
-        sendTransport?.close()
         receiveTransport?.close()
-        sendTransportId = producerTransportParams.id
         receiveTransportId = consumerTransportParams.id
-        sendTransport = nextSendTransport
         receiveTransport = nextReceiveTransport
 
-        debugLog("[WebRTC] Transports created: send=\(producerTransportParams.id), recv=\(consumerTransportParams.id)")
+        debugLog("[WebRTC] Receive transport ready: \(consumerTransportParams.id)")
     }
 
     func restartIce() async -> Bool {
@@ -898,6 +934,7 @@ final class WebRTCClient: NSObject, ObservableObject {
     // MARK: - Produce Local Media
 
     func startProducingAudio() async throws {
+        try await createSendTransportIfNeeded()
         guard let sendTransport = sendTransport else {
             throw WebRTCError.noTransport
         }
@@ -1054,6 +1091,7 @@ final class WebRTCClient: NSObject, ObservableObject {
     }
 
     func startProducingVideo() async throws {
+        try await createSendTransportIfNeeded()
         guard let sendTransport = sendTransport else {
             throw WebRTCError.noTransport
         }
@@ -1404,6 +1442,7 @@ final class WebRTCClient: NSObject, ObservableObject {
         preferHighWebcamLayer: Bool = false,
         initialReceiveConnectionQuality: ConnectionQuality = .unknown
     ) async throws {
+        try await createReceiveTransportIfNeeded()
         guard let socket = socketManager,
               let rtpCaps = serverRtpCapabilities,
               let receiveTransport = receiveTransport,
@@ -3447,6 +3486,7 @@ extension WebRTCClient {
     }
     
     func startScreenSharing() async throws {
+        try await createSendTransportIfNeeded()
         guard let sendTransport = sendTransport else {
             throw WebRTCError.noTransport
         }

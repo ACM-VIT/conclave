@@ -129,16 +129,37 @@ object AndroidNativeHttpClient {
             requestBuilder.header("x-sfu-client", normalizedClientId)
         }
 
-        val normalizedCookieHeader = cookieHeader?.trim().orEmpty()
-        if (normalizedCookieHeader.isNotEmpty()) {
-            requestBuilder.header("Cookie", normalizedCookieHeader)
+        val cookieStartedAt = System.nanoTime()
+        val storedCookieHeader = try {
+            NativeAuthSessionBridge.cookieHeader(url).orEmpty()
+        } catch (_: Throwable) {
+            ""
+        }
+        NativePerformanceDiagnostics.timing(
+            "http_cookie_header",
+            cookieStartedAt,
+            "url=${redactedURLForLog(url)} stored=${storedCookieHeader.isNotBlank()} provided=${!cookieHeader.isNullOrBlank()}"
+        )
+
+        val mergedCookieHeader = mergeCookieHeaders(
+            listOf(cookieHeader?.trim().orEmpty(), storedCookieHeader)
+        )
+        if (mergedCookieHeader.isNotEmpty()) {
+            requestBuilder.header("Cookie", mergedCookieHeader)
         }
 
+        val requestStartedAt = System.nanoTime()
         httpClient.newCall(requestBuilder.build()).execute().use { response ->
             val setCookieHeaders = JSONArray()
             for (header in response.headers("Set-Cookie")) {
                 setCookieHeaders.put(header)
             }
+
+            NativePerformanceDiagnostics.timing(
+                "http_request",
+                requestStartedAt,
+                "method=$normalizedMethod url=${redactedURLForLog(url)} status=${response.code}"
+            )
 
             return JSONObject()
                 .put("statusCode", response.code)
@@ -146,6 +167,26 @@ object AndroidNativeHttpClient {
                 .put("setCookieHeaders", setCookieHeaders)
                 .toString()
         }
+    }
+
+    private fun mergeCookieHeaders(headers: List<String>): String {
+        val pairs = LinkedHashMap<String, String>()
+        for (header in headers) {
+            header
+                .split(";")
+                .map { it.trim() }
+                .filter { it.isNotEmpty() && it.contains("=") }
+                .forEach { pair ->
+                    val name = pair.substringBefore("=").trim()
+                    if (name.isNotEmpty()) pairs[name] = pair
+                }
+        }
+        return pairs.values.joinToString("; ")
+    }
+
+    private fun redactedURLForLog(url: String): String {
+        val queryIndex = url.indexOf('?')
+        return if (queryIndex == -1) url else url.substring(0, queryIndex) + "?..."
     }
 
     private fun requestBodyFor(method: String, body: String?, contentType: String?): okhttp3.RequestBody? {

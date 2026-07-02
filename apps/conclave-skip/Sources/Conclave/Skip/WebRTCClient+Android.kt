@@ -12,6 +12,7 @@ import android.media.projection.MediaProjection
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import org.mediasoup.droid.Consumer
 import org.mediasoup.droid.Device
 import org.mediasoup.droid.MediasoupClient
@@ -105,6 +106,9 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     private var receiveTransportId: String? = null
     private var runtimeIceServersJSON: String? = null
     private val transportConnectionStates: MutableMap<String, String> = mutableMapOf()
+    private val mediaStackLock = Any()
+    @Volatile private var mediaStackPrewarmStarted = false
+    @Volatile private var mediasoupInitialized = false
 
     private var audioProducer: Producer? = null
     private var videoProducer: Producer? = null
@@ -727,13 +731,14 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     private var audioDeviceModule: JavaAudioDeviceModule? = null
     private var audioFocusRequest: AudioFocusRequest? = null
     private var isCallAudioModeActive = false
+    private var hasCallAudioFocus = false
     private var localAudioTargetEnabled = false
     private var bluetoothConnectAutoRequestAttempted = false
     private var bluetoothConnectPermissionRequestToken: PermissionHelper.PermissionRequestToken? = null
     private var audioStartOrEnableInFlight = false
     private var audioRouteReapplyScheduled = false
-    private var audioRouteReapplyNeedsCaptureRestart = false
     private var delayedAudioRouteReapplyRunnable: Runnable? = null
+    private var lastAudioRouteReapplyAtMs = 0L
     private var audioRouteChangeNotificationScheduled = false
     private var audioCaptureRestartScheduled = false
     private var audioCaptureReassertionGeneration = 0
@@ -741,8 +746,18 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     private var audioRouteMismatchSignature: String? = null
     private var audioRouteMismatchReapplyAttempts = 0
     private val audioFocusChangeListener = AudioManager.OnAudioFocusChangeListener { change ->
-        if (change == AudioManager.AUDIOFOCUS_GAIN && isCallAudioModeActive) {
-            scheduleCallAudioRouteReapply(forceCaptureRestart = true)
+        when (change) {
+            AudioManager.AUDIOFOCUS_GAIN -> {
+                hasCallAudioFocus = true
+                if (isCallAudioModeActive) {
+                    scheduleCallAudioRouteReapply()
+                }
+            }
+            AudioManager.AUDIOFOCUS_LOSS,
+            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT,
+            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
+                hasCallAudioFocus = false
+            }
         }
     }
     private var audioBandwidthRefreshInFlight = false
@@ -752,6 +767,29 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     private var lastAppliedLocalBandwidthSignature: String? = null
     private val screenShareTemporalLayerCount = 3
     private val audioRouteRecoveryScope = CoroutineScope(Dispatchers.Main.immediate + SupervisorJob())
+
+    internal fun prewarmMediaStack() {
+        if (mediaStackPrewarmStarted || peerConnectionFactory != null) return
+        mediaStackPrewarmStarted = true
+        Thread {
+            val startedAt = System.nanoTime()
+            try {
+                ensureAndroidMediaStack(ProcessInfo.processInfo.androidContext)
+                NativePerformanceDiagnostics.timingAlways(
+                    "webrtc_media_stack_prewarm",
+                    startedAt,
+                    "configured=${peerConnectionFactory != null}"
+                )
+                NativePerformanceDiagnostics.memory("after_webrtc_prewarm")
+            } catch (error: Throwable) {
+                debugLog("[WebRTC] Media stack prewarm failed: ${error}")
+            }
+        }.apply {
+            name = "ConclaveWebRTCPrewarm"
+            isDaemon = true
+            start()
+        }
+    }
 
     private data class WebcamCaptureProfile(
         val width: Int,
@@ -786,6 +824,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     private var screenVideoTrack: VideoTrack? = null
 
     internal fun configure(socketManager: SocketIOManager, rtpCapabilities: RtpCapabilities, iceServersJSON: String?) {
+        val startedAt = System.nanoTime()
         configurationGeneration += 1
         this.socketManager = socketManager
         this.serverRtpCapabilities = rtpCapabilities
@@ -793,13 +832,13 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
 
         val context = ProcessInfo.processInfo.androidContext
         try {
-            MediasoupClient.initialize(context)
-            ensurePeerConnectionFactory(context)
+            ensureAndroidMediaStack(context)
         } catch (error: Throwable) {
             debugLog("[WebRTC] Failed to initialize Android media stack: ${error}")
             this.device = null
             return
         }
+        NativePerformanceDiagnostics.timingAlways("webrtc_configure_media_stack", startedAt)
 
         this.device = null
         // mediasoup Device.load() takes the router rtpCapabilities as a JSON
@@ -817,8 +856,10 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
 
         val device = Device()
         try {
+            val loadStartedAt = System.nanoTime()
             device.load(capabilities, null)
             this.device = device
+            NativePerformanceDiagnostics.timingAlways("webrtc_device_load", loadStartedAt)
         } catch (error: Throwable) {
             debugLog("[WebRTC] Failed to load device capabilities: ${error}")
             this.device = null
@@ -826,19 +867,35 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     }
 
     internal suspend fun createTransports() {
+        val startedAt = System.nanoTime()
+        createSendTransportIfNeeded()
+        createReceiveTransport()
+        NativePerformanceDiagnostics.timingAlways("webrtc_create_transports_total", startedAt)
+    }
+
+    internal suspend fun createReceiveTransport() {
+        createReceiveTransportIfNeeded()
+    }
+
+    private suspend fun createSendTransportIfNeeded() {
+        val existing = sendTransport
+        if (existing != null && !existing.isClosed && sendTransportId != null) {
+            return
+        }
+
+        val startedAt = System.nanoTime()
         val socket = socketManager ?: throw ErrorException("Socket not configured")
         val device = device ?: throw ErrorException("Device not configured")
         val generation = configurationGeneration
 
+        val producerRequestStartedAt = System.nanoTime()
         val producerTransportParams = socket.createProducerTransport()
-        if (generation != configurationGeneration) {
-            throw ErrorException("WebRTC session was replaced")
-        }
-        val consumerTransportParams = socket.createConsumerTransport()
+        NativePerformanceDiagnostics.timingAlways("webrtc_create_producer_transport_ack", producerRequestStartedAt)
         if (generation != configurationGeneration) {
             throw ErrorException("WebRTC session was replaced")
         }
 
+        val localCreateStartedAt = System.nanoTime()
         val peerConnectionOptions = resolvePeerConnectionOptions()
         val producerIceParameters = encodeJSONString(producerTransportParams.iceParameters)
         val producerIceCandidates = encodeJSONString(producerTransportParams.iceCandidates)
@@ -865,6 +922,38 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             )
         }
 
+        if (generation != configurationGeneration) {
+            nextSendTransport.close()
+            throw ErrorException("WebRTC session was replaced")
+        }
+
+        sendTransport?.close()
+        sendTransportId = producerTransportParams.id
+        sendTransport = nextSendTransport
+        NativePerformanceDiagnostics.timingAlways("webrtc_create_send_transport_local", localCreateStartedAt)
+        NativePerformanceDiagnostics.timingAlways("webrtc_create_send_transport_total", startedAt)
+    }
+
+    private suspend fun createReceiveTransportIfNeeded() {
+        val existing = receiveTransport
+        if (existing != null && !existing.isClosed && receiveTransportId != null) {
+            return
+        }
+
+        val startedAt = System.nanoTime()
+        val socket = socketManager ?: throw ErrorException("Socket not configured")
+        val device = device ?: throw ErrorException("Device not configured")
+        val generation = configurationGeneration
+
+        val consumerRequestStartedAt = System.nanoTime()
+        val consumerTransportParams = socket.createConsumerTransport()
+        NativePerformanceDiagnostics.timingAlways("webrtc_create_consumer_transport_ack", consumerRequestStartedAt)
+        if (generation != configurationGeneration) {
+            throw ErrorException("WebRTC session was replaced")
+        }
+
+        val localCreateStartedAt = System.nanoTime()
+        val peerConnectionOptions = resolvePeerConnectionOptions()
         val consumerIceParameters = encodeJSONString(consumerTransportParams.iceParameters)
         val consumerIceCandidates = encodeJSONString(consumerTransportParams.iceCandidates)
         val consumerDtlsParameters = encodeJSONString(consumerTransportParams.dtlsParameters)
@@ -891,17 +980,16 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         }
 
         if (generation != configurationGeneration) {
-            nextSendTransport.close()
             nextReceiveTransport.close()
             throw ErrorException("WebRTC session was replaced")
         }
 
-        sendTransport?.close()
         receiveTransport?.close()
-        sendTransportId = producerTransportParams.id
         receiveTransportId = consumerTransportParams.id
-        sendTransport = nextSendTransport
         receiveTransport = nextReceiveTransport
+        NativePerformanceDiagnostics.timingAlways("webrtc_create_receive_transport_local", localCreateStartedAt)
+        NativePerformanceDiagnostics.timingAlways("webrtc_create_receive_transport_total", startedAt)
+        NativePerformanceDiagnostics.memory("after_webrtc_create_transports")
     }
 
     internal suspend fun restartIce(): Boolean {
@@ -941,6 +1029,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     }
 
     internal suspend fun startProducingAudio() {
+        createSendTransportIfNeeded()
         val sendTransport = sendTransport ?: throw ErrorException("Send transport not ready")
         val generation = configurationGeneration
         if (hasLocalAudioProducer) {
@@ -988,7 +1077,10 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             localAudioEnabled = true
             localAudioTargetEnabled = true
             forceUnmuteMicrophoneCapture()
-            configureCallAudioMode(unmuted = true)
+            audioManager()?.let { manager ->
+                applyLocalAudioCaptureState(manager, true)
+                scheduleLocalAudioCaptureReassertion(true)
+            }
             markMicrophoneProducerUnmuted(producer.id, "audio start")
             onLocalAudioEnabledChanged?.invoke(true)
         } catch (t: Throwable) {
@@ -1008,6 +1100,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     }
 
     internal suspend fun startProducingVideo() {
+        createSendTransportIfNeeded()
         val sendTransport = sendTransport ?: throw ErrorException("Send transport not ready")
         val generation = configurationGeneration
         if (hasLocalVideoProducer) {
@@ -1095,6 +1188,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     /// its own MediaProjection from it (the foreground service must already be
     /// live with type mediaProjection — the VM awaits requestCapture() first).
     internal suspend fun startScreenSharing() {
+        createSendTransportIfNeeded()
         val sendTransport = sendTransport ?: throw ErrorException("Send transport not ready")
         val context = ProcessInfo.processInfo.androidContext
         ensurePeerConnectionFactory(context)
@@ -1215,6 +1309,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         preferHighWebcamLayer: Boolean = false,
         initialReceiveConnectionQuality: ConnectionQuality = ConnectionQuality.unknown,
     ) {
+        createReceiveTransportIfNeeded()
         val socket = socketManager ?: throw ErrorException("Socket not configured")
         val rtpCapsJson = socket.routerRtpCapabilitiesJson ?: throw ErrorException("RTP caps missing")
         val receiveTransport = receiveTransport ?: throw ErrorException("Receive transport missing")
@@ -1387,7 +1482,10 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             localAudioEnabled = enabled
             localAudioTargetEnabled = enabled
             if (enabled) {
-                configureCallAudioMode(unmuted = true)
+                audioManager()?.let { manager ->
+                    applyLocalAudioCaptureState(manager, true)
+                    scheduleLocalAudioCaptureReassertion(true)
+                }
             }
             onLocalAudioEnabledChanged?.invoke(enabled)
         } catch (error: Throwable) {
@@ -1429,7 +1527,10 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         localAudioTrack?.setEnabled(true)
         producer.resume()
         socket.toggleMute(producer.id, paused = false)
-        configureCallAudioMode(unmuted = true)
+        audioManager()?.let { manager ->
+            applyLocalAudioCaptureState(manager, true)
+            scheduleLocalAudioCaptureReassertion(true)
+        }
     }
 
     internal suspend fun setVideoEnabled(enabled: Boolean) {
@@ -2426,17 +2527,44 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     private fun configureCallAudioMode(unmuted: Boolean = false) {
         val manager = audioManager() ?: return
         try {
+            val startedAt = System.nanoTime()
+            val wasActive = isCallAudioModeActive
+            val shouldRecord = unmuted || localAudioTargetEnabled || localAudioEnabled || audioStartOrEnableInFlight
+            if (
+                wasActive &&
+                !shouldRecord &&
+                manager.mode == AudioManager.MODE_IN_COMMUNICATION &&
+                lastAppliedAudioRouteSignature != null
+            ) {
+                return
+            }
+            NativePerformanceDiagnostics.event(
+                "audio_mode_configure",
+                "unmuted=$unmuted wasActive=$wasActive focusHeld=$hasCallAudioFocus"
+            )
             audioCaptureReassertionGeneration += 1
             isCallAudioModeActive = true
             requestCallAudioFocus(manager)
-            manager.mode = AudioManager.MODE_IN_COMMUNICATION
-            val shouldRecord = unmuted || localAudioTargetEnabled || localAudioEnabled || audioStartOrEnableInFlight
             startAudioDeviceRouteMonitor(manager)
             requestBluetoothRoutingPermissionIfNeeded(manager)
-            val routeChanged = applyPreferredCommunicationRoute(manager)
+            val preselectedRouteChanged = if (Build.VERSION.SDK_INT >= 31) {
+                val changed = applyPreferredCommunicationRoute(manager)
+                NativePerformanceDiagnostics.event("audio_route_preselect", "changed=$changed")
+                changed
+            } else {
+                false
+            }
+            ensureCommunicationMode(manager)
+            val routeChanged = if (Build.VERSION.SDK_INT >= 31) {
+                val postselectedRouteChanged = applyPreferredCommunicationRoute(manager)
+                preselectedRouteChanged || postselectedRouteChanged
+            } else {
+                applyPreferredCommunicationRoute(manager)
+            }
             applyLocalAudioCaptureState(manager, shouldLocalAudioCaptureStayActive(shouldRecord))
             restartLocalAudioTrackAfterRouteChange(routeChanged, "call audio mode configure")
             scheduleLocalAudioCaptureReassertion(shouldRecord)
+            NativePerformanceDiagnostics.timingAlways("audio_mode_configure", startedAt, "record=$shouldRecord routeChanged=$routeChanged")
         } catch (error: Throwable) {
             debugLog("[WebRTC] Failed to configure call audio mode: ${error}")
         }
@@ -2445,7 +2573,6 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     private fun releaseCallAudioMode() {
         isCallAudioModeActive = false
         audioRouteReapplyScheduled = false
-        audioRouteReapplyNeedsCaptureRestart = false
         delayedAudioRouteReapplyRunnable?.let { mainHandler.removeCallbacks(it) }
         delayedAudioRouteReapplyRunnable = null
         audioCaptureRestartScheduled = false
@@ -2479,9 +2606,20 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         }
     }
 
-    private fun requestCallAudioFocus(manager: AudioManager) {
+    private fun ensureCommunicationMode(manager: AudioManager) {
         try {
-            if (Build.VERSION.SDK_INT >= 26) {
+            if (manager.mode == AudioManager.MODE_IN_COMMUNICATION) return
+            manager.mode = AudioManager.MODE_IN_COMMUNICATION
+            NativePerformanceDiagnostics.event("audio_mode_set", "mode=in_communication")
+        } catch (error: Throwable) {
+            debugLog("[WebRTC] Failed to set communication audio mode: ${error}")
+        }
+    }
+
+    private fun requestCallAudioFocus(manager: AudioManager) {
+        if (hasCallAudioFocus) return
+        try {
+            val result = if (Build.VERSION.SDK_INT >= 26) {
                 val request = audioFocusRequest ?: AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
                     .setAudioAttributes(
                         AudioAttributes.Builder()
@@ -2502,12 +2640,15 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
                     AudioManager.AUDIOFOCUS_GAIN
                 )
             }
+            hasCallAudioFocus = result != AudioManager.AUDIOFOCUS_REQUEST_FAILED
+            NativePerformanceDiagnostics.event("audio_focus_request", "result=$result held=$hasCallAudioFocus")
         } catch (error: Throwable) {
             debugLog("[WebRTC] Failed to request call audio focus: ${error}")
         }
     }
 
     private fun releaseCallAudioFocus(manager: AudioManager) {
+        if (!hasCallAudioFocus && audioFocusRequest == null) return
         try {
             if (Build.VERSION.SDK_INT >= 26) {
                 audioFocusRequest?.let { manager.abandonAudioFocusRequest(it) }
@@ -2518,6 +2659,8 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             }
         } catch (error: Throwable) {
             debugLog("[WebRTC] Failed to release call audio focus: ${error}")
+        } finally {
+            hasCallAudioFocus = false
         }
     }
 
@@ -2525,11 +2668,11 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         if (audioDeviceCallback == null) {
             val callback = object : AudioDeviceCallback() {
                 override fun onAudioDevicesAdded(addedDevices: kotlin.Array<out AudioDeviceInfo>?) {
-                    scheduleCallAudioRouteReapply(forceCaptureRestart = true)
+                    scheduleCallAudioRouteReapply(forceCaptureRestart = shouldLocalAudioCaptureStayActive())
                 }
 
                 override fun onAudioDevicesRemoved(removedDevices: kotlin.Array<out AudioDeviceInfo>?) {
-                    scheduleCallAudioRouteReapply(forceCaptureRestart = true)
+                    scheduleCallAudioRouteReapply(forceCaptureRestart = shouldLocalAudioCaptureStayActive())
                 }
             }
             audioDeviceCallback = callback
@@ -2543,7 +2686,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
 
         if (Build.VERSION.SDK_INT >= 31 && communicationDeviceChangedListener == null) {
             val listener = AudioManager.OnCommunicationDeviceChangedListener {
-                scheduleCallAudioRouteReapply(forceCaptureRestart = true)
+                scheduleCallAudioRouteReapply(forceCaptureRestart = shouldLocalAudioCaptureStayActive())
             }
             communicationDeviceChangedListener = listener
             try {
@@ -2584,17 +2727,27 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
 
     private fun scheduleCallAudioRouteReapply(forceCaptureRestart: Boolean = false) {
         if (!isCallAudioModeActive) return
+        if (!shouldLocalAudioCaptureStayActive() && lastAppliedAudioRouteSignature != null) {
+            NativePerformanceDiagnostics.event(
+                "audio_route_reapply_skip",
+                "reason=muted forceCaptureRestart=$forceCaptureRestart"
+            )
+            notifyCallAudioRouteChanged()
+            return
+        }
         if (forceCaptureRestart) {
-            audioRouteReapplyNeedsCaptureRestart = true
             scheduleDelayedCallAudioRouteReapply()
         }
         if (audioRouteReapplyScheduled) return
         audioRouteReapplyScheduled = true
         mainHandler.post {
-            val needsCaptureRestart = audioRouteReapplyNeedsCaptureRestart
             audioRouteReapplyScheduled = false
-            audioRouteReapplyNeedsCaptureRestart = false
-            reapplyCallAudioRoute(forceCaptureRestart = needsCaptureRestart)
+            val now = SystemClock.uptimeMillis()
+            if (now - lastAudioRouteReapplyAtMs < 700L) {
+                scheduleDelayedCallAudioRouteReapply()
+                return@post
+            }
+            reapplyCallAudioRoute(forceCaptureRestart = false)
         }
     }
 
@@ -2604,7 +2757,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             override fun run() {
                 if (delayedAudioRouteReapplyRunnable !== this) return
                 delayedAudioRouteReapplyRunnable = null
-                reapplyCallAudioRoute(forceCaptureRestart = true)
+                reapplyCallAudioRoute(forceCaptureRestart = false)
             }
         }
         delayedAudioRouteReapplyRunnable = reapply
@@ -2615,18 +2768,30 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         val manager = audioManager() ?: return
         if (!isCallAudioModeActive) return
         try {
-            requestCallAudioFocus(manager)
-            manager.mode = AudioManager.MODE_IN_COMMUNICATION
+            val startedAt = System.nanoTime()
             val shouldRecord = shouldLocalAudioCaptureStayActive()
+            if (!shouldRecord && lastAppliedAudioRouteSignature != null) {
+                NativePerformanceDiagnostics.event(
+                    "audio_route_reapply_skip",
+                    "reason=muted_in_reapply forceCaptureRestart=$forceCaptureRestart"
+                )
+                notifyCallAudioRouteChanged()
+                return
+            }
+            lastAudioRouteReapplyAtMs = SystemClock.uptimeMillis()
+            NativePerformanceDiagnostics.event("audio_route_reapply", "forceCaptureRestart=$forceCaptureRestart")
+            requestCallAudioFocus(manager)
+            ensureCommunicationMode(manager)
             requestBluetoothRoutingPermissionIfNeeded(manager)
             val routeChanged = applyPreferredCommunicationRoute(manager)
             applyLocalAudioCaptureState(manager, shouldRecord)
             restartLocalAudioTrackAfterRouteChange(
-                (routeChanged || forceCaptureRestart) && shouldRecord,
+                routeChanged && shouldRecord,
                 "audio route change"
             )
             scheduleLocalAudioCaptureReassertion(shouldRecord)
             notifyCallAudioRouteChanged()
+            NativePerformanceDiagnostics.timingAlways("audio_route_reapply", startedAt, "record=$shouldRecord routeChanged=$routeChanged")
         } catch (error: Throwable) {
             debugLog("[WebRTC] Failed to re-apply communication route: ${error}")
         }
@@ -2697,12 +2862,11 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     }
 
     private fun scheduleLocalAudioCaptureReassertion(shouldRecord: Boolean) {
+        if (!shouldRecord) return
         scheduleLocalAudioCaptureReassertion(250L)
-        if (shouldRecord) {
-            scheduleLocalAudioCaptureReassertion(1_000L)
-            scheduleLocalAudioCaptureReassertion(2_500L)
-            scheduleLocalAudioCaptureReassertion(5_000L)
-        }
+        scheduleLocalAudioCaptureReassertion(1_000L)
+        scheduleLocalAudioCaptureReassertion(2_500L)
+        scheduleLocalAudioCaptureReassertion(5_000L)
     }
 
     private fun scheduleLocalAudioCaptureReassertion(delayMs: Long) {
@@ -2727,10 +2891,6 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     private fun restartLocalAudioTrackAfterRouteChange(routeChanged: Boolean, reason: String) {
         if (!routeChanged) return
         restartLocalAudioTrack(reason)
-    }
-
-    private fun restartLocalAudioTrackAfterUserRouteSelection(reason: String) {
-        restartLocalAudioTrackAfterRouteChange(shouldLocalAudioCaptureStayActive(), reason)
     }
 
     private fun restartLocalAudioTrack(reason: String) {
@@ -3292,6 +3452,10 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         return lhs != null && rhs != null && lhs.id == rhs.id && lhs.type == rhs.type
     }
 
+    private fun isSameNullableAudioDevice(lhs: AudioDeviceInfo?, rhs: AudioDeviceInfo?): Boolean {
+        return (lhs == null && rhs == null) || isSameAudioDevice(lhs, rhs)
+    }
+
     private fun defaultCommunicationTarget(
         devices: List<AudioDeviceInfo>,
         shouldRecord: Boolean,
@@ -3410,7 +3574,10 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
                 ?: selectedInputForCommunication
                 ?: defaultCommunicationTarget(outputCandidates, shouldRecord, hasCaptureInput = hasCaptureInput)
             try {
-                val appliedTarget = if (applyCommunicationDevice(manager, target)) {
+                val currentTarget = currentCommunicationDevice(manager)
+                val appliedTarget = if (isSameNullableAudioDevice(currentTarget, target)) {
+                    target
+                } else if (applyCommunicationDevice(manager, target)) {
                     target
                 } else {
                     val fallbackTarget = defaultCommunicationTarget(
@@ -3433,7 +3600,11 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
                     preferredOutput = appliedTarget
                 )
                 applyAudioModuleInputDevice(preferredInput)
-                val reportedTarget = reportedCommunicationRouteAfterApply(manager, appliedTarget)
+                val reportedTarget = if (isSameNullableAudioDevice(currentTarget, appliedTarget)) {
+                    currentTarget
+                } else {
+                    reportedCommunicationRouteAfterApply(manager, appliedTarget)
+                }
                 return rememberAppliedAudioRoute(reportedTarget, preferredInput)
             } catch (error: Throwable) {
                 debugLog("[WebRTC] Failed to apply communication route: ${error}")
@@ -3455,7 +3626,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             val target = outputDevices(manager)
                 .firstOrNull { audioDeviceIdMatches(selectedOutput, it, AudioDeviceSelectionDirection.output) }
             if (target != null) {
-                manager.isSpeakerphoneOn = target.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER
+                setSpeakerphoneEnabled(manager, target.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER)
                 setBluetoothScoEnabled(manager, target.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO)
                 if (isInputCapableCallRoute(target)) {
                     preferredInput = target
@@ -3487,7 +3658,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
                     shouldRecord = shouldRecord,
                     hasCaptureInput = true
                 )
-                manager.isSpeakerphoneOn = externalOutput == null
+                setSpeakerphoneEnabled(manager, externalOutput == null)
                 setBluetoothScoEnabled(manager, externalOutput?.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO)
                 val appliedInput = bestCaptureInput(
                     manager = manager,
@@ -3510,7 +3681,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             hasCaptureInput = !shouldRecord || inputDevices(manager).isNotEmpty()
         )
         @Suppress("DEPRECATION")
-        manager.isSpeakerphoneOn = external == null
+        setSpeakerphoneEnabled(manager, external == null)
         setBluetoothScoEnabled(manager, external?.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO)
         val appliedInput = bestCaptureInput(
             manager = manager,
@@ -3548,9 +3719,19 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         configureCallAudioMode(unmuted = shouldLocalAudioCaptureStayActive())
     }
 
+    @Suppress("DEPRECATION")
+    private fun setSpeakerphoneEnabled(manager: AudioManager, enabled: Boolean) {
+        try {
+            if (manager.isSpeakerphoneOn == enabled) return
+            manager.isSpeakerphoneOn = enabled
+        } catch (_: Throwable) {
+        }
+    }
+
     private fun setBluetoothScoEnabled(manager: AudioManager, enabled: Boolean) {
         @Suppress("DEPRECATION")
         try {
+            if (manager.isBluetoothScoOn == enabled) return
             manager.isBluetoothScoOn = enabled
             if (enabled) {
                 manager.startBluetoothSco()
@@ -3674,18 +3855,18 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             }
             trimmed
         }
-        manager.mode = AudioManager.MODE_IN_COMMUNICATION
+        ensureCommunicationMode(manager)
         if (selectedRouteNeedsBluetoothConnectPermission(manager)) {
-            applyPreferredCommunicationRoute(manager)
+            val routeChanged = applyPreferredCommunicationRoute(manager)
             reassertCallAudioCaptureIfActive(manager)
-            restartLocalAudioTrackAfterUserRouteSelection("audio input selection")
+            restartLocalAudioTrackAfterRouteChange(routeChanged && shouldLocalAudioCaptureStayActive(), "audio input selection")
             notifyCallAudioRouteChanged()
             requestBluetoothConnectPermissionThenReapplyRoute()
             return
         }
-        applyPreferredCommunicationRoute(manager)
+        val routeChanged = applyPreferredCommunicationRoute(manager)
         reassertCallAudioCaptureIfActive(manager)
-        restartLocalAudioTrackAfterUserRouteSelection("audio input selection")
+        restartLocalAudioTrackAfterRouteChange(routeChanged && shouldLocalAudioCaptureStayActive(), "audio input selection")
         notifyCallAudioRouteChanged()
     }
 
@@ -3706,30 +3887,30 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         }
         // Audio routing only takes effect while the session is in communication
         // mode (the call mode). Set it defensively; the WebRTC ADM also uses it.
-        manager.mode = AudioManager.MODE_IN_COMMUNICATION
+        ensureCommunicationMode(manager)
 
         if (selectedRouteNeedsBluetoothConnectPermission(manager)) {
-            applyPreferredCommunicationRoute(manager)
+            val routeChanged = applyPreferredCommunicationRoute(manager)
             reassertCallAudioCaptureIfActive(manager)
-            restartLocalAudioTrackAfterUserRouteSelection("audio output selection")
+            restartLocalAudioTrackAfterRouteChange(routeChanged && shouldLocalAudioCaptureStayActive(), "audio output selection")
             notifyCallAudioRouteChanged()
             requestBluetoothConnectPermissionThenReapplyRoute()
             return
         }
 
         if (trimmed.isBlank()) {
-            applyPreferredCommunicationRoute(manager)
+            val routeChanged = applyPreferredCommunicationRoute(manager)
             reassertCallAudioCaptureIfActive(manager)
-            restartLocalAudioTrackAfterUserRouteSelection("audio output selection")
+            restartLocalAudioTrackAfterRouteChange(routeChanged && shouldLocalAudioCaptureStayActive(), "audio output selection")
             notifyCallAudioRouteChanged()
             return
         }
 
         // API 31+ and legacy devices both go through the unified path so output
         // changes also re-apply the preferred microphone input.
-        applyPreferredCommunicationRoute(manager)
+        val routeChanged = applyPreferredCommunicationRoute(manager)
         reassertCallAudioCaptureIfActive(manager)
-        restartLocalAudioTrackAfterUserRouteSelection("audio output selection")
+        restartLocalAudioTrackAfterRouteChange(routeChanged && shouldLocalAudioCaptureStayActive(), "audio output selection")
         notifyCallAudioRouteChanged()
     }
 
@@ -3741,7 +3922,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         val token = PermissionHelper.requestBluetoothConnectPermission { granted ->
             completedSynchronously = true
             bluetoothConnectPermissionRequestToken = null
-            reapplyCallAudioRoute(forceCaptureRestart = granted)
+            reapplyCallAudioRoute(forceCaptureRestart = false)
         }
         bluetoothConnectPermissionRequestToken = if (completedSynchronously) null else token
     }
@@ -4612,9 +4793,25 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         }
     }
 
+    private fun ensureAndroidMediaStack(context: Context) {
+        synchronized(mediaStackLock) {
+            if (!mediasoupInitialized) {
+                MediasoupClient.initialize(context)
+                mediasoupInitialized = true
+            }
+            ensurePeerConnectionFactoryLocked(context)
+        }
+    }
+
     private fun ensurePeerConnectionFactory(context: Context) {
         if (peerConnectionFactory != null) return
+        synchronized(mediaStackLock) {
+            ensurePeerConnectionFactoryLocked(context)
+        }
+    }
 
+    private fun ensurePeerConnectionFactoryLocked(context: Context) {
+        if (peerConnectionFactory != null) return
         val options = PeerConnectionFactory.InitializationOptions.builder(context).createInitializationOptions()
         PeerConnectionFactory.initialize(options)
 

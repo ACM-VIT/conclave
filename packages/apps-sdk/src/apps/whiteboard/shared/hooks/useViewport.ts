@@ -22,6 +22,11 @@ export type ViewportControls = {
   zoomAt: (screenX: number, screenY: number, factor: number) => void;
   /** Reset to 1:1 with no pan */
   resetViewport: () => void;
+  /** Pan and zoom so the given canvas-space bounds fill the viewport */
+  fitBounds: (
+    bounds: { x: number; y: number; width: number; height: number },
+    size: { width: number; height: number }
+  ) => void;
   /** Ref used to track pan drag state (internal) */
   panStartRef: MutableRefObject<{ x: number; y: number; tx: number; ty: number } | null>;
 };
@@ -63,5 +68,31 @@ export function useViewport(): ViewportControls {
     setViewport({ ...DEFAULT_VIEWPORT });
   }, []);
 
-  return { viewport, screenToCanvas, panBy, zoomAt, resetViewport, panStartRef };
+  const fitBounds = useCallback(
+    (
+      bounds: { x: number; y: number; width: number; height: number },
+      size: { width: number; height: number }
+    ) => {
+      if (size.width <= 0 || size.height <= 0) return;
+      const padding = 48;
+      const availableWidth = Math.max(1, size.width - padding * 2);
+      const availableHeight = Math.max(1, size.height - padding * 2);
+      const rawScale = Math.min(
+        availableWidth / Math.max(1, bounds.width),
+        availableHeight / Math.max(1, bounds.height)
+      );
+      // Never zoom past 1:1 on fit; tiny sketches should not become billboards
+      const scale = Math.min(1, Math.max(MIN_SCALE, rawScale));
+      const centerX = bounds.x + bounds.width / 2;
+      const centerY = bounds.y + bounds.height / 2;
+      setViewport({
+        scale,
+        translateX: size.width / 2 - centerX * scale,
+        translateY: size.height / 2 - centerY * scale,
+      });
+    },
+    []
+  );
+
+  return { viewport, screenToCanvas, panBy, zoomAt, resetViewport, fitBounds, panStartRef };
 }

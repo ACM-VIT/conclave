@@ -1,5 +1,9 @@
 import { FilesetResolver, ImageSegmenter } from "@mediapipe/tasks-vision";
 
+/** Normalize an unknown thrown value into an Error for promise rejections. */
+const toError = (value: unknown): Error =>
+  value instanceof Error ? value : new Error(String(value));
+
 type MediaPipeDelegate = "GPU" | "CPU";
 type ModelWorkerInputSource = "video-frame" | "image-bitmap";
 type WorkerVideoFrame = CanvasImageSource & {
@@ -120,9 +124,11 @@ const ensureImageSegmenter = async () => {
     return imageSegmenter;
   })();
 
-  imageSegmenterPromise.finally(() => {
-    imageSegmenterPromise = null;
-  });
+  void imageSegmenterPromise
+    .catch(() => undefined)
+    .finally(() => {
+      imageSegmenterPromise = null;
+    });
   return imageSegmenterPromise;
 };
 
@@ -239,12 +245,12 @@ workerScope.onmessage = (event) => {
                       try {
                         result.close();
                       } catch {}
-                      reject(err);
+                      reject(toError(err));
                     }
                   },
                 );
               } catch (err) {
-                reject(err);
+                reject(toError(err));
               }
             });
           } finally {

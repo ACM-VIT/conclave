@@ -637,7 +637,7 @@ const applyWebcamEncodingCaps = async (
     ...(typeof fallbackScaleResolutionDownBy === "number"
       ? { scaleResolutionDownBy: fallbackScaleResolutionDownBy }
       : {}),
-  } as RTCRtpEncodingParameters);
+  });
 };
 
 type ScreenShareEncoding = ReturnType<typeof buildScreenShareEncoding> & {
@@ -769,7 +769,7 @@ export async function applyAudioProducerNetworkProfile(
 
   await producer.setRtpEncodingParameters({
     maxBitrate,
-  } as RTCRtpEncodingParameters);
+  });
 }
 
 export async function applyScreenShareProducerNetworkProfile(
@@ -813,7 +813,7 @@ export async function applyScreenShareProducerNetworkProfile(
     maxBitrate: cap.maxBitrate,
     maxFramerate: cap.maxFramerate,
     scaleResolutionDownBy,
-  } as RTCRtpEncodingParameters);
+  });
 }
 
 export async function applyScreenShareTrackNetworkProfile(

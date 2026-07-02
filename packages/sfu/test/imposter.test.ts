@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import { imposterModule } from "../server/games/modules/imposter.js";
-import { GameMoveError } from "../server/games/types.js";
 import type { GameContext, GamePlayer, GameRng } from "../server/games/types.js";
 
 const players: GamePlayer[] = [

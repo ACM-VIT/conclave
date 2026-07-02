@@ -67,7 +67,7 @@ export function useMeetMediaSettings({
       setVideoQualityState((previous) => {
         const next =
           typeof action === "function"
-            ? (action as (value: VideoQuality) => VideoQuality)(previous)
+            ? (action)(previous)
             : action;
         setNetworkManagedQuality(false);
         return next;
@@ -83,7 +83,7 @@ export function useMeetMediaSettings({
       setVideoQualityState((previous) => {
         const next =
           typeof action === "function"
-            ? (action as (value: VideoQuality) => VideoQuality)(previous)
+            ? (action)(previous)
             : action;
         setNetworkManagedQuality(next === "low");
         return next;

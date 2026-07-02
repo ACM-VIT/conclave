@@ -1,0 +1,81 @@
+{
+  "$schema": "node_modules/konsistent/konsistent.schema.json",
+  "version": "v1",
+  "conventions": [
+    {
+      "name": "game-modules",
+      "description": "Every server game module exports a <id>Module GameModule and wires into ../types.js",
+      "paths": "packages/sfu/server/games/modules/{gameId}.ts",
+      "must": {
+        "haveType": "file",
+        "exportConstants": ["${gameId}Module"],
+        "importFrom": "../types.js"
+      }
+    },
+    {
+      "name": "game-module-move-union",
+      "description": "Every game module exports a typed move union named <Id>Move",
+      "paths": "packages/sfu/server/games/modules/{gameId}.ts",
+      "must": {
+        "exportTypes": ["${gameId.toPascalCase()}Move"]
+      }
+    },
+    {
+      "name": "game-modules-are-pure",
+      "description": "Game modules are pure reducers: no runtime imports outside the games runtime",
+      "paths": "packages/sfu/server/games/modules/{gameId}.ts",
+      "must": {
+        "importFromExternals": false
+      }
+    },
+    {
+      "name": "game-renderers",
+      "description": "Every web game renderer default-exports its component",
+      "paths": "apps/web/src/app/components/games/{gameName}Game.tsx",
+      "must": {
+        "export": ["default"]
+      }
+    },
+    {
+      "name": "hooks-named-after-file",
+      "description": "Every hook file exports a hook named after the file",
+      "paths": [
+        "apps/web/src/app/hooks/{hookName}.ts",
+        "apps/web/src/app/hooks/{hookName}.tsx"
+      ],
+      "must": {
+        "export": ["${hookName}"]
+      }
+    },
+    {
+      "name": "components-default-export",
+      "description": "Single-component files default-export their component; multi-component kits are negated exceptions",
+      "paths": [
+        "apps/web/src/app/components/{componentName}.tsx",
+        "!apps/web/src/app/components/DeviceCaretMenu.tsx",
+        "!apps/web/src/app/components/GhostParticipantChrome.tsx"
+      ],
+      "must": {
+        "export": ["default"]
+      }
+    },
+    {
+      "name": "package-manifest",
+      "description": "Every workspace package has a package.json",
+      "paths": "packages/{pkgName}",
+      "must": {
+        "haveType": "directory",
+        "haveFiles": ["package.json"]
+      }
+    },
+    {
+      "name": "package-readme",
+      "description": "Every workspace package has a README.md",
+      "paths": "packages/{pkgName}",
+      "must": {
+        "haveType": "directory",
+        "haveFiles": ["README.md"]
+      }
+    }
+  ]
+}

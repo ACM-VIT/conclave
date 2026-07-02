@@ -1,5 +1,12 @@
 import type { Express, Request, Response } from "express";
 import { Logger } from "../../utilities/loggers.js";
+import {
+  asArray,
+  readNumber,
+  readString,
+  requestBody,
+  type UntrustedRecord,
+} from "../../utilities/untrusted.js";
 import { secretsMatch } from "../secret.js";
 import {
   clearGoogleCalendarConnection,
@@ -112,6 +119,59 @@ const normalizeText = (value: unknown, maxLength = MAX_TEXT_LENGTH): string =>
   typeof value === "string"
     ? value.trim().replace(/\s+/g, " ").slice(0, maxLength)
     : "";
+
+/**
+ * Decode a boolean field, tolerating "true"/"false" strings — same API
+ * tolerance as readCoercedNumber. (The old truthy-Boolean coercion mapped
+ * "false" to true; strings now coerce to their actual meaning.)
+ */
+const readCoercedBoolean = (
+  body: UntrustedRecord,
+  key: string,
+): boolean | undefined => {
+  const value = body[key];
+  if (typeof value === "boolean") return value;
+  if (value === "true") return true;
+  if (value === "false") return false;
+  return undefined;
+};
+
+/**
+ * Decode a numeric field, tolerating stringified numbers ("60") — callers of
+ * this API have historically been allowed to send either.
+ */
+const readCoercedNumber = (
+  body: UntrustedRecord,
+  key: string,
+): number | undefined => {
+  const value = body[key];
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : undefined;
+  }
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  return undefined;
+};
+
+/**
+ * Decode the client-editable event-type fields from an untrusted body.
+ * Type-invalid fields decode to undefined ("not provided"); scheduling.ts
+ * sanitizes and clamps every value again before storing it.
+ */
+const eventTypeInput = (body: UntrustedRecord): Partial<SchedulingEventType> => ({
+  title: readString(body, "title"),
+  slug: readString(body, "slug"),
+  description: readString(body, "description"),
+  durationMinutes: readCoercedNumber(body, "durationMinutes"),
+  minimumNoticeMinutes: readCoercedNumber(body, "minimumNoticeMinutes"),
+  bookingWindowDays: readCoercedNumber(body, "bookingWindowDays"),
+  bufferBeforeMinutes: readCoercedNumber(body, "bufferBeforeMinutes"),
+  bufferAfterMinutes: readCoercedNumber(body, "bufferAfterMinutes"),
+  isActive: readCoercedBoolean(body, "isActive"),
+  requiresCalendar: readCoercedBoolean(body, "requiresCalendar"),
+});
 
 const resolveClientId = (
   req: Request,
@@ -255,8 +315,7 @@ const requireHostProfile = async (
     userId: user.userId,
     email: user.email,
     name: user.name,
-    timeZone:
-      typeof req.body?.timeZone === "string" ? req.body.timeZone : undefined,
+    timeZone: readString(requestBody(req), "timeZone"),
   });
   await persistScheduling(state.scheduling, state.schedulingPersistence);
   return profile;
@@ -374,7 +433,7 @@ const googleFetchJson = async <T>(
   init: RequestInit,
 ): Promise<T> => {
   const response = await fetch(url, init);
-  const data = await response.json().catch(() => undefined);
+  const data: unknown = await response.json().catch(() => undefined);
   if (!response.ok) {
     const code = googleErrorCode(data);
     const message = code
@@ -735,13 +794,14 @@ export const registerSchedulingRoutes = (
     if (!requireSecret(req, res)) return;
     const profile = await requireHostProfile(req, res, state);
     if (!profile) return;
+    const body = requestBody(req);
     try {
       const updated = updateSchedulingProfile(state.scheduling, profile.id, {
-        name: req.body?.name,
-        username: req.body?.username,
-        timeZone: req.body?.timeZone,
+        name: readString(body, "name"),
+        username: readString(body, "username"),
+        timeZone: readString(body, "timeZone"),
       });
-      if (typeof req.body?.timeZone === "string") {
+      if (typeof body.timeZone === "string") {
         setProfileAvailability(state.scheduling, updated, {
           ...getProfileAvailability(state.scheduling, updated),
           timeZone: updated.timeZone,
@@ -768,7 +828,7 @@ export const registerSchedulingRoutes = (
     const availability = setProfileAvailability(
       state.scheduling,
       profile,
-      req.body ?? {},
+      requestBody(req),
     );
     await persistScheduling(state.scheduling, state.schedulingPersistence);
     res.json({ availability, profile });
@@ -786,7 +846,11 @@ export const registerSchedulingRoutes = (
     const profile = await requireHostProfile(req, res, state);
     if (!profile) return;
     try {
-      const eventType = createEventType(state.scheduling, profile, req.body ?? {});
+      const eventType = createEventType(
+        state.scheduling,
+        profile,
+        eventTypeInput(requestBody(req)),
+      );
       await persistScheduling(state.scheduling, state.schedulingPersistence);
       res.status(201).json({ eventType });
     } catch (error) {
@@ -803,7 +867,7 @@ export const registerSchedulingRoutes = (
         state.scheduling,
         profile,
         req.params.id,
-        req.body ?? {},
+        eventTypeInput(requestBody(req)),
       );
       await persistScheduling(state.scheduling, state.schedulingPersistence);
       res.json({ eventType });
@@ -836,8 +900,9 @@ export const registerSchedulingRoutes = (
     if (!requireSecret(req, res)) return;
     const profile = await requireHostProfile(req, res, state);
     if (!profile) return;
+    const body = requestBody(req);
     const existing = state.scheduling.calendarByProfileId.get(profile.id);
-    const refreshToken = normalizeIdentifier(req.body?.refreshToken, 4096);
+    const refreshToken = normalizeIdentifier(body.refreshToken, 4096);
     if (!refreshToken && !existing?.refreshToken) {
       res.status(400).json({
         error:
@@ -846,16 +911,13 @@ export const registerSchedulingRoutes = (
       return;
     }
     const connection = setGoogleCalendarConnection(state.scheduling, profile, {
-      email: normalizeEmail(req.body?.email) || profile.email,
-      accessToken: normalizeIdentifier(req.body?.accessToken, 4096),
+      email: normalizeEmail(body.email) || profile.email,
+      accessToken: normalizeIdentifier(body.accessToken, 4096),
       refreshToken,
-      accessTokenExpiresAt:
-        typeof req.body?.accessTokenExpiresAt === "number"
-          ? req.body.accessTokenExpiresAt
-          : null,
-      scopes: Array.isArray(req.body?.scopes)
-        ? req.body.scopes.map((scope: unknown) => normalizeText(scope, 200)).filter(Boolean)
-        : [],
+      accessTokenExpiresAt: readNumber(body, "accessTokenExpiresAt") ?? null,
+      scopes: (asArray(body.scopes) ?? [])
+        .map((scope) => normalizeText(scope, 200))
+        .filter(Boolean),
       status: "connected",
       error: null,
     });

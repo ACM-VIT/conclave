@@ -233,7 +233,11 @@ enum JoinGuestSignInFooterPolicy {
 }
 
 enum JoinPrejoinActionPolicy {
-    static func canStartOrJoin(
+    static func canCreateRoom(isBlocked: Bool) -> Bool {
+        !isBlocked
+    }
+
+    static func canJoinRoom(
         displayName: String,
         currentUserId: String?,
         isBlocked: Bool
@@ -414,6 +418,7 @@ struct JoinView: View {
     @State private var isDeletingAccount = false
     @State private var isContinuingAsGuest = false
     @State private var showDeleteAccountConfirmation = false
+    @State private var showPrivacyPolicySheet = false
     @State private var signingInProvider: AppState.AuthProvider = .none
     @State private var isRefreshingStoredAuth = false
     @State private var enabledAuthProviders: Set<NativeAuthProvider> = []
@@ -562,36 +567,40 @@ struct JoinView: View {
                 .composeModifier { $0.imePadding() }
                 #endif
                 
-                if isJoinInProgress {
+                if shouldShowLocalLoadingOverlay {
                     loadingOverlay
                 }
             }
         }
         .animation(.easeOut(duration: 0.4), value: phase)
         .onAppear {
+            PerformanceDiagnostics.event(
+                "join_view_appear",
+                details: "phase=\(phase) hasUser=\(appState.currentUser != nil)"
+            )
             restoreExistingIdentity()
             restoreJoinDraft()
             restoreJoinFormAfterRecoverableError()
             refreshRestoredAuthentication()
-            refreshAuthProviders()
             applyPendingJoinLinkIfPossible()
         }
-        .onChange(of: appState.pendingJoinRequestID) { _, _ in
+        .onChange(of: appState.pendingJoinRequestID) {
             applyPendingJoinLinkIfPossible()
         }
         #if SKIP
-        .onChange(of: appState.isAuthenticated ? "authenticated" : "guest") { _, _ in
+        .onChange(of: appState.isAuthenticated ? "authenticated" : "guest") {
             applyPendingJoinLinkIfPossible()
         }
         #else
-        .onChange(of: appState.isAuthenticated) { _, _ in
+        .onChange(of: appState.isAuthenticated) {
             applyPendingJoinLinkIfPossible()
         }
         #endif
-        .onChange(of: appState.currentUser?.id ?? "") { _, _ in
+        .onChange(of: appState.currentUser?.id ?? "") {
             applyPendingJoinLinkIfPossible()
         }
-        .onChange(of: viewModel.state.joinFormErrorMessage) { _, message in
+        .onChange(of: viewModel.state.joinFormErrorMessage) {
+            let message = viewModel.state.joinFormErrorMessage
             applyJoinFormErrorPrompt(for: message)
             restartCameraPreviewIfNeeded(afterJoinFormError: message)
         }
@@ -607,6 +616,10 @@ struct JoinView: View {
             }
         } message: {
             Text("This permanently deletes the signed-in account and signs you out on this device.")
+        }
+        .sheet(isPresented: $showPrivacyPolicySheet) {
+            PrivacyPolicyPageView(onDone: { showPrivacyPolicySheet = false })
+                .acmColorBackground(ACMColors.bg)
         }
         .onDisappear {
             cancelTransientAuthActions()
@@ -813,12 +826,27 @@ struct JoinView: View {
                         .foregroundStyle(ACMColors.textFaint)
                 }
                 .padding(EdgeInsets(top: 12, leading: 0, bottom: 0, trailing: 0))
+
+                privacyPolicyLink
             }
             .frame(maxWidth: contentWidth)
             .padding(.horizontal, horizontalPadding)
-            
+
             Spacer()
         }
+    }
+
+    private var privacyPolicyLink: some View {
+        Button {
+            showPrivacyPolicySheet = true
+        } label: {
+            Text("Privacy Policy")
+                .font(ACMFont.trial(12, weight: .medium))
+                .foregroundStyle(ACMColors.textFaint)
+                .underline()
+        }
+        .buttonStyle(.plain)
+        .padding(.top, 4)
     }
 
     private func authStatusRow(
@@ -1278,7 +1306,7 @@ struct JoinView: View {
     private var startMeetingButton: some View {
         joinActionSurface(
             accessibilityLabel: "Start meeting",
-            isEnabled: isPrejoinActionEnabled,
+            isEnabled: isCreateMeetingEnabled,
             action: triggerCreateRoom
         ) {
             HStack(spacing: 8) {
@@ -1289,16 +1317,26 @@ struct JoinView: View {
 #endif
                         .scaleEffect(0.8)
                 } else {
-                    ACMSystemIcon.icon("plus", android: "add", size: 14, tint: "white")
+                    ACMSystemIcon.icon(
+                        "plus",
+                        android: "add",
+                        size: 14,
+                        tint: isCreateMeetingEnabled ? "white" : "faint"
+                    )
                 }
 
                 Text("New meeting")
                     .font(ACMFont.trial(15, weight: .medium))
             }
-            .foregroundStyle(Color.white)
+            .foregroundStyle(isCreateMeetingEnabled ? Color.white : ACMColors.textFaint)
             .frame(maxWidth: .infinity)
             .frame(height: 48)
-            .acmColorBackground(ACMColors.primaryOrange)
+            .acmColorBackground(isCreateMeetingEnabled ? ACMColors.primaryOrange : ACMColors.subtleFill)
+            .overlay {
+                RoundedRectangle(cornerRadius: ACMRadius.md)
+                    .strokeBorder(lineWidth: 1)
+                    .foregroundStyle(isCreateMeetingEnabled ? Color.clear : ACMColors.borderSubtle)
+            }
             .clipShape(RoundedRectangle(cornerRadius: ACMRadius.md))
         }
     }
@@ -1636,11 +1674,15 @@ struct JoinView: View {
         if shouldRenderInviteCodeInput && trimWhitespaceAndNewlines(inviteCode).isEmpty {
             return false
         }
-        return isPrejoinActionEnabled
+        return isJoinPrejoinActionEnabled
     }
 
-    private var isPrejoinActionEnabled: Bool {
-        JoinPrejoinActionPolicy.canStartOrJoin(
+    private var isCreateMeetingEnabled: Bool {
+        JoinPrejoinActionPolicy.canCreateRoom(isBlocked: isPrejoinActionBlocked)
+    }
+
+    private var isJoinPrejoinActionEnabled: Bool {
+        JoinPrejoinActionPolicy.canJoinRoom(
             displayName: displayNameInput,
             currentUserId: appState.currentUser?.id,
             isBlocked: isPrejoinActionBlocked
@@ -1678,6 +1720,16 @@ struct JoinView: View {
         case .disconnected, .joined, .error:
             return false
         }
+    }
+
+    private var shouldShowLocalLoadingOverlay: Bool {
+        guard isJoinInProgress else { return false }
+        return !MeetingEntryOverlayPolicy.shouldShow(
+            isEnteringMeeting: viewModel.state.isEnteringMeeting,
+            startedAt: viewModel.state.meetingEntryStartedAt,
+            now: Date(),
+            connectionState: viewModel.state.connectionState
+        )
     }
 
     private var inviteCodeInputSection: some View {
@@ -1958,6 +2010,7 @@ struct JoinView: View {
     // MARK: - Actions
 
     private func enterAuthPhase() {
+        PerformanceDiagnostics.event("auth_phase_enter")
         phase = .auth
         refreshAuthProviders()
     }
@@ -1968,6 +2021,8 @@ struct JoinView: View {
         let generation = authProviderRefreshGeneration
         authProviderStatusMessage = nil
         isLoadingAuthProviders = true
+        let startedAt = Date()
+        PerformanceDiagnostics.event("auth_providers_refresh_start", details: "generation=\(generation)")
         Task { @MainActor in
             do {
                 let providers = try await NativeAuthService.fetchEnabledProviders()
@@ -1981,6 +2036,10 @@ struct JoinView: View {
             }
             didLoadAuthProviders = true
             isLoadingAuthProviders = false
+            PerformanceDiagnostics.event(
+                "auth_providers_refresh_end",
+                details: "generation=\(generation) ms=\(Int(Date().timeIntervalSince(startedAt) * 1000.0))"
+            )
         }
     }
 
@@ -2353,13 +2412,13 @@ struct JoinView: View {
     }
 
     private func triggerCreateRoom() {
-        guard isPrejoinActionEnabled else { return }
+        guard isCreateMeetingEnabled else { return }
         clearInputFocus()
         let generation = nextPrejoinAuthRefreshGeneration()
         Task { @MainActor in
             guard await refreshAuthenticationBeforeJoinIfNeeded(generation: generation) else { return }
             guard shouldApplyPrejoinAuthRefresh(generation),
-                  isPrejoinActionEnabled else { return }
+                  isCreateMeetingEnabled else { return }
             handleCreateRoom()
         }
     }
@@ -2472,6 +2531,7 @@ struct JoinView: View {
         viewModel.state.displayName = resolvedDisplayName(fallback: "Host")
         viewModel.state.isMuted = !isMicOn
         viewModel.state.isCameraOff = !shouldJoinWithCameraOn
+        viewModel.beginMeetingEntry(action: .new)
         let userPayload = sfuJoinUserPayload(displayName: viewModel.state.displayName)
         viewModel.joinRoom(
             roomId: roomId,
@@ -2524,6 +2584,7 @@ struct JoinView: View {
             viewModel.state.isMuted = !isMicOn
             viewModel.state.isCameraOff = !shouldJoinWithCameraOn
         }
+        viewModel.beginMeetingEntry(action: .join)
         let userPayload = sfuJoinUserPayload(displayName: viewModel.state.displayName)
         viewModel.joinRoom(
             roomId: joinTarget.roomId,
@@ -2859,12 +2920,18 @@ struct JoinView: View {
         let storedProvider = storedUser.provider
         let generation = nextRestoredAuthRefreshGeneration()
         isRefreshingStoredAuth = true
+        let startedAt = Date()
+        PerformanceDiagnostics.event("auth_session_refresh_start", details: "generation=\(generation)")
 
         Task { @MainActor in
             defer {
                 if shouldFinishRestoredAuthRefresh(generation) {
                     isRefreshingStoredAuth = false
                     applyPendingJoinLinkIfPossible()
+                    PerformanceDiagnostics.event(
+                        "auth_session_refresh_end",
+                        details: "generation=\(generation) ms=\(Int(Date().timeIntervalSince(startedAt) * 1000.0))"
+                    )
                 }
             }
 

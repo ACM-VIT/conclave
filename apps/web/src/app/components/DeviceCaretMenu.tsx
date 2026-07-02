@@ -69,9 +69,12 @@ export function useEnumeratedDevices(active: boolean) {
 
   useEffect(() => {
     if (!navigator.mediaDevices?.addEventListener) return;
-    navigator.mediaDevices.addEventListener("devicechange", fetchDevices);
+    const onDeviceChange = () => {
+      void fetchDevices();
+    };
+    navigator.mediaDevices.addEventListener("devicechange", onDeviceChange);
     return () =>
-      navigator.mediaDevices.removeEventListener("devicechange", fetchDevices);
+      navigator.mediaDevices.removeEventListener("devicechange", onDeviceChange);
   }, [fetchDevices]);
 
   return { audioInput, audioOutput, videoInput };

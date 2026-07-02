@@ -1,17 +1,42 @@
 import jwt, { type JwtPayload, type VerifyErrors } from "jsonwebtoken";
-import type { Server as SocketIOServer } from "socket.io";
+import type { Server as SocketIOServer, Socket } from "socket.io";
 import { config as defaultConfig } from "../../config/config.js";
 
-type SfuAuthPayload = JwtPayload & {
+/**
+ * Claims minted by the web join route (apps/web api/sfu/join) when it signs
+ * the SFU token. All optional: older tokens and other clients may omit any of
+ * them, so consumers must handle absence.
+ */
+export type SfuAuthPayload = JwtPayload & {
   clientId?: string;
   joinMode?: string;
   canGhostJoin?: boolean;
+  email?: string;
+  userId?: string;
+  name?: string;
+  sessionId?: string;
+  isHost?: boolean;
+  isAdmin?: boolean;
+  isForcedHost?: boolean;
+  allowRoomCreation?: boolean;
 };
 
 const isSfuAuthPayload = (
   decoded: string | JwtPayload | undefined,
 ): decoded is SfuAuthPayload =>
   Boolean(decoded && typeof decoded === "object");
+
+// socket.io types `socket.data` as `any`; this pair is the single asserted
+// view of the auth slot. The middleware below is the only writer.
+type SocketAuthData = { user?: SfuAuthPayload };
+
+export const getSocketAuthUser = (
+  socket: Socket,
+): SfuAuthPayload | undefined => (socket.data as SocketAuthData).user;
+
+const setSocketAuthUser = (socket: Socket, user: SfuAuthPayload): void => {
+  (socket.data as SocketAuthData).user = user;
+};
 
 export const attachSocketAuth = (
   io: SocketIOServer,
@@ -40,7 +65,7 @@ export const attachSocketAuth = (
           return next(new Error("Authentication error: Invalid token payload"));
         }
 
-        socket.data.user = decoded;
+        setSocketAuthUser(socket, decoded);
         next();
       },
     );

@@ -264,8 +264,8 @@ describe("SfuTranscriptRelay realistic audio flow", () => {
     });
 
     for (let index = 0; index < adaPackets.length; index += 1) {
-      adaConsumer.emitRtp(adaPackets[index]!);
-      graceConsumer.emitRtp(gracePackets[index]!);
+      adaConsumer.emitRtp(adaPackets[index]);
+      graceConsumer.emitRtp(gracePackets[index]);
     }
 
     const chunkEvents = workerEvents.filter((event) => event.type === "chunk");
@@ -334,7 +334,7 @@ describe("SfuTranscriptRelay realistic audio flow", () => {
         frequencyHz: 440,
         amplitude: 9000,
         ssrc: 101,
-      })[0]!,
+      })[0],
     );
 
     expect(workerEvents.filter((event) => event.type === "chunk")).toHaveLength(1);

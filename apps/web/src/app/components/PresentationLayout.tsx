@@ -1,5 +1,6 @@
 "use client";
 
+import { errorName } from "../lib/utils";
 import { Hand, Mic, MicOff, MonitorUp } from "lucide-react";
 import { memo, useEffect, useRef } from "react";
 import { createPlaybackRecoveryScheduler } from "../lib/playback-recovery";
@@ -58,7 +59,7 @@ function PresentationLayout({
         video.srcObject = localStream;
       }
       video.play().catch((err) => {
-        if (err.name !== "AbortError") {
+        if (errorName(err) !== "AbortError") {
           console.error("[Meets] Presentation local video play error:", err);
         }
       });
@@ -85,12 +86,12 @@ function PresentationLayout({
     const playVideo = () => {
       if (cancelled) return;
       video.play().catch((err) => {
-        if (err.name === "NotAllowedError") {
+        if (errorName(err) === "NotAllowedError") {
           video.muted = true;
           video.play().catch(() => {});
           return;
         }
-        if (err.name !== "AbortError") {
+        if (errorName(err) !== "AbortError") {
           console.error("[Meets] Presentation video play error:", err);
         }
       });

@@ -45,7 +45,6 @@ final class NetworkReachabilityMonitor {
         guard path.status == .satisfied else { return .unknown }
         if path.isConstrained && path.isExpensive { return .emergency }
         if path.isConstrained { return .poor }
-        if path.isExpensive { return .fair }
         return .good
     }
     #endif

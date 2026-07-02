@@ -20,6 +20,22 @@ export type ConnectionContext = {
   adminHandlersRegistered: boolean;
 };
 
+// socket.io types `socket.data` as `any`; this pair is the single asserted
+// view of the context slot. registerConnectionHandlers is the only writer,
+// once per connection.
+type SocketContextData = { context?: ConnectionContext };
+
+export const getSocketContext = (
+  socket: Socket,
+): ConnectionContext | undefined => (socket.data as SocketContextData).context;
+
+export const setSocketContext = (
+  socket: Socket,
+  context: ConnectionContext,
+): void => {
+  (socket.data as SocketContextData).context = context;
+};
+
 export const createConnectionContext = (
   io: SocketIOServer,
   socket: Socket,

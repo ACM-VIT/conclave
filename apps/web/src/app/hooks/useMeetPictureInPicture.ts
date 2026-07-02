@@ -397,9 +397,9 @@ export function useMeetPictureInPicture({
 
         const handleVisibilityChange = () => {
             if (document.hidden && !isPiPActive && !manualExitRef.current) {
-                enterPiP();
+                void enterPiP();
             } else if (!document.hidden && isPiPActive) {
-                exitPiP();
+                void exitPiP();
             }
         };
 
@@ -420,7 +420,7 @@ export function useMeetPictureInPicture({
 
     useEffect(() => {
         if (!isJoined && isPiPActive) {
-            exitPiP();
+            void exitPiP();
         }
     }, [isJoined, isPiPActive, exitPiP]);
 

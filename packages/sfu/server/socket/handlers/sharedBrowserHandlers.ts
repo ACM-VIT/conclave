@@ -504,7 +504,7 @@ export const registerSharedBrowserHandlers = (context: ConnectionContext): void 
                     noVncUrl: result.session?.noVncUrl,
                     controllerUserId: userId,
                     roomId: context.currentRoom.id,
-                } as BrowserStateNotification);
+                });
 
                 Logger.success(`Browser launched in room ${context.currentRoom.id}: ${url}`);
                 respond(callback, { success: true, noVncUrl: result.session?.noVncUrl });
@@ -595,7 +595,7 @@ export const registerSharedBrowserHandlers = (context: ConnectionContext): void 
                     noVncUrl: result.session?.noVncUrl,
                     controllerUserId: currentState.controllerUserId,
                     roomId: context.currentRoom.id,
-                } as BrowserStateNotification);
+                });
 
                 Logger.info(`Browser navigated in room ${context.currentRoom.id}: ${url}`);
                 respond(callback, { success: true, noVncUrl: result.session?.noVncUrl });

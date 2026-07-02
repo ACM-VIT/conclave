@@ -38,7 +38,7 @@ export async function GET(request: Request) {
         { status: response.status },
       );
     }
-    const data = await response.json().catch(() => ({}));
+    const data: unknown = await response.json().catch(() => ({}));
     return NextResponse.json(data, {
       headers: { "Cache-Control": "no-store" },
     });
@@ -79,7 +79,7 @@ export async function POST(request: Request) {
         { status: response.status },
       );
     }
-    const data = await response.json().catch(() => ({}));
+    const data: unknown = await response.json().catch(() => ({}));
     return NextResponse.json(data, {
       status: response.status,
       headers: { "Cache-Control": "no-store" },

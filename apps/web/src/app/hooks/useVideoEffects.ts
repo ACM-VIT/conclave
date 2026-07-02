@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { toError } from "../lib/utils";
 import type {
   FaceMesh,
   NormalizedLandmark,
@@ -4040,7 +4041,7 @@ const prewarmProcessorWorker = (
     let timeoutId: number | null = null;
     const closePostedPrewarmFrameSource = () => {
       closeTransferredFrameResource(
-        postedPrewarmFrameSource?.source as ClosableMediaPipeResource | null,
+        postedPrewarmFrameSource?.source,
       );
       postedPrewarmFrameSource = null;
     };
@@ -4066,7 +4067,7 @@ const prewarmProcessorWorker = (
         window.clearTimeout(timeoutId);
       }
       if (err) {
-        reject(err);
+        reject(toError(err));
       } else {
         resolve();
       }
@@ -4339,7 +4340,7 @@ const prewarmOutputWriterWorker = (
         window.clearTimeout(timeoutId);
       }
       if (err) {
-        reject(err);
+        reject(toError(err));
       } else {
         resolve();
       }
@@ -4452,10 +4453,10 @@ const prewarmOutputWriterWorker = (
         rendererCanvas = new OffscreenCanvas(1, 1);
       } catch {}
       const transferables: Transferable[] = [
-        track.writable as unknown as Transferable,
+        track.writable,
       ];
       if (rendererCanvas) {
-        transferables.push(rendererCanvas as unknown as Transferable);
+        transferables.push(rendererCanvas);
       }
       worker.postMessage(
         {
@@ -4589,8 +4590,7 @@ export const prewarmVideoEffectsAssets = async ({
     return existingPrewarm;
   }
 
-  let prewarmPromise: Promise<void>;
-  prewarmPromise = (async () => {
+  const prewarmPromise: Promise<void> = (async () => {
     logVideoEffects(instanceId, "prewarm_requested", {
       segmentation: effectiveSegmentation,
       face: effectiveFace,
@@ -10798,9 +10798,7 @@ export function useVideoEffects({
           error: errorSnapshot,
         });
         setMeetVideoPipeTrackReady(false);
-        setMeetVideoPipeTrack((current) => {
-          return null;
-        });
+        setMeetVideoPipeTrack(() => null);
         if (finalTrackOwnerRef.current === "meet-videopipe") {
           finalTrackOwnerRef.current = "none";
           processedVideoTrackRef.current = null;
@@ -11650,7 +11648,7 @@ export function useVideoEffects({
               capturedFrameCanvas.height = height;
             }
             capturedFrameCtx.drawImage(
-              frame as unknown as CanvasImageSource,
+              frame,
               0,
               0,
               width,
@@ -12492,7 +12490,7 @@ export function useVideoEffects({
             segmentationProcessorWorkerReady = false;
             segmentationProcessorFallbackReason = "worker setup failed";
             segmentationProcessorLastError = getErrorDebugSnapshot(err);
-            reject(err);
+            reject(toError(err));
           }
         },
       )
@@ -12727,7 +12725,7 @@ export function useVideoEffects({
           faceProcessorWorkerReady = false;
           faceProcessorFallbackReason = "worker setup failed";
           faceProcessorLastError = getErrorDebugSnapshot(err);
-          reject(err);
+          reject(toError(err));
         }
       })
         .then((ready) => {
@@ -12847,10 +12845,10 @@ export function useVideoEffects({
         };
         worker.onerror = handleOutputWriterWorkerUncaughtError;
         const transferables: Transferable[] = [
-          generatorTrack.writable as unknown as Transferable,
+          generatorTrack.writable,
         ];
         if (rendererCanvas) {
-          transferables.push(rendererCanvas as unknown as Transferable);
+          transferables.push(rendererCanvas);
         }
         worker.postMessage(
           {
@@ -13349,7 +13347,7 @@ export function useVideoEffects({
             sentAt,
             closeResource: () =>
               closeTransferredFrameResource(
-                resource as unknown as ClosableMediaPipeResource,
+                resource,
               ),
           });
           try {
@@ -13365,7 +13363,7 @@ export function useVideoEffects({
                 duration: frameInit.duration,
                 timestamp: frameInit.timestamp,
               },
-              [resource as unknown as Transferable],
+              [resource],
             );
           } catch (err) {
             window.clearTimeout(timeoutId);
@@ -14320,7 +14318,7 @@ export function useVideoEffects({
             logVideoEffects(debugId, "legacy_segmentation_mask", {
               hasMask: Boolean(results.segmentationMask),
             });
-            latestSegmentationMask = results.segmentationMask as CanvasImageSource;
+            latestSegmentationMask = results.segmentationMask;
             latestSegmentationMaskAt = performance.now();
           });
           await instance.initialize();
@@ -14957,7 +14955,7 @@ export function useVideoEffects({
                 processingConfigId: frameProcessingConfigId,
                 closeSource: () =>
                   closeTransferredFrameResource(
-                    sourceForWorker.source as ClosableMediaPipeResource,
+                    sourceForWorker.source,
                   ),
               });
               try {
@@ -14979,7 +14977,7 @@ export function useVideoEffects({
                 window.clearTimeout(timeoutId);
                 segmentationProcessorPendingFrames.delete(sequence);
                 segmentationProcessorLastError = getErrorDebugSnapshot(err);
-                reject(err);
+                reject(toError(err));
               }
             },
           );
@@ -15255,7 +15253,7 @@ export function useVideoEffects({
               processingConfigId: frameProcessingConfigId,
               closeSource: () =>
                 closeTransferredFrameResource(
-                  sourceForWorker.source as ClosableMediaPipeResource,
+                  sourceForWorker.source,
                 ),
             });
             try {
@@ -15277,7 +15275,7 @@ export function useVideoEffects({
               window.clearTimeout(timeoutId);
               faceProcessorPendingFrames.delete(sequence);
               faceProcessorLastError = getErrorDebugSnapshot(err);
-              reject(err);
+              reject(toError(err));
             }
           },
         );

@@ -147,7 +147,6 @@ const defaultPolicyDraft: PolicyDraft = {
 
 const shellClass =
   "rounded-2xl border border-[#E9E4C8]/12 bg-[#11130f] shadow-[0_12px_24px_rgba(0,0,0,0.18)]";
-const panelClass = "rounded-xl border border-[#E9E4C8]/12 bg-[#0B0D0A]";
 const inputClass =
   "w-full rounded-lg border border-[#E9E4C8]/18 bg-[#090A08] px-3 py-2 text-sm text-[#E9E4C8] outline-none transition focus:border-[#F95F4A]";
 const buttonClass =
@@ -187,7 +186,7 @@ const formatUptime = (seconds: number): string => {
 const pretty = (value: unknown): string => JSON.stringify(value, null, 2);
 
 const readError = async (response: Response): Promise<string> => {
-  const data = await response.json().catch(() => null);
+  const data: unknown = await response.json().catch(() => null);
   if (data && typeof data === "object" && "error" in data) {
     return String((data as { error?: string }).error || "Request failed");
   }
@@ -257,7 +256,7 @@ export default function SfuAdminDashboard() {
 
   const [adminUser, setAdminUser] = useState<AdminUser | null>(null);
   const [overview, setOverview] = useState<ClusterOverview | null>(null);
-  const [workers, setWorkers] = useState<WorkerSnapshot[]>([]);
+  const [, setWorkers] = useState<WorkerSnapshot[]>([]);
   const [rooms, setRooms] = useState<RoomSnapshot[]>([]);
   const [selectedRoomId, setSelectedRoomId] = useState("");
   const [selectedRoomClientId, setSelectedRoomClientId] = useState("");

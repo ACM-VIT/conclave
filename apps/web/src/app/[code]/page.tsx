@@ -94,7 +94,7 @@ async function MeetRoomContent({ params, searchParams }: MeetRoomPageProps) {
   const { code } = await params;
   const resolvedSearchParams = (await (searchParams ?? Promise.resolve(
     {} as Record<string, string | string[] | undefined>,
-  ))) as Record<string, string | string[] | undefined>;
+  )));
   const rawCode = typeof code === "string" ? code : "";
   const roomCode = decodeURIComponent(rawCode);
   const resolvedRoomCode =

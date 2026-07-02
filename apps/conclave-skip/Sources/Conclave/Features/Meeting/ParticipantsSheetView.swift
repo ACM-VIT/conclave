@@ -692,11 +692,11 @@ struct ParticipantsSheetView: View {
         #else
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         #endif
-        .onChange(of: viewModel.state.roomId) { _, _ in
+        .onChange(of: viewModel.state.roomId) {
             resetTransientAdminActionState()
         }
-        .onChange(of: viewModel.state.connectionState) { _, state in
-            if state != .joined {
+        .onChange(of: viewModel.state.connectionState) {
+            if viewModel.state.connectionState != .joined {
                 resetTransientAdminActionState()
             }
         }

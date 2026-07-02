@@ -13,10 +13,9 @@ enum MeetingChatOverlayLayout {
         isAndroid: Bool,
         isRegularSizeClass: Bool
     ) -> CGFloat {
-        if isAndroid {
-            return max(0.0, containerWidth - 20.0)
-        }
-        return isRegularSizeClass ? 380.0 : min(340.0, containerWidth * 0.85)
+        // Docked panel: a fixed right dock on iPad/desktop, a full-width sheet on
+        // phones (matches the web chat: `w-full sm:w-[360px]`).
+        return isRegularSizeClass ? 380.0 : containerWidth
     }
 
     static func bottomPadding(
@@ -25,9 +24,9 @@ enum MeetingChatOverlayLayout {
         keyboardInset: CGFloat,
         isAndroid: Bool
     ) -> CGFloat {
-        let focusedPadding = isAndroid ? 12.0 : 20.0
-        let unfocusedPadding = isAndroid ? 84.0 : 12.0
-        let basePadding = max(inputFocused ? focusedPadding : unfocusedPadding, safeAreaBottom)
+        // The composer sits at the very bottom of the panel; only inset for the
+        // home indicator / keyboard, not for the (now-covered) controls bar.
+        let basePadding = max(inputFocused ? (isAndroid ? 12.0 : 20.0) : 12.0, safeAreaBottom)
         return basePadding + keyboardInset
     }
 
@@ -36,16 +35,8 @@ enum MeetingChatOverlayLayout {
         inputFocused: Bool,
         isAndroid: Bool
     ) -> CGFloat {
-        let available = max(availableHeight, 0.0)
-        guard isAndroid else {
-            return min(available, 560.0)
-        }
-
-        let minimumUsefulHeight = min(available, inputFocused ? 220.0 : 240.0)
-        let proportionalHeight = available * (inputFocused ? 0.50 : 0.64)
-        let desiredHeight = max(proportionalHeight, minimumUsefulHeight)
-        let heightCap = inputFocused ? 320.0 : 400.0
-        return min(min(desiredHeight, heightCap), available)
+        // Full-height docked panel (top to bottom), not a floating card.
+        return max(availableHeight, 0.0)
     }
 }
 
@@ -70,12 +61,25 @@ struct MeetingView: View {
     @Bindable var viewModel: MeetingViewModel
     @State private var showMeetingSheet = false
     @State private var meetingSheetPage: MeetingSheetPage = .more
+    @State private var pendingTranscriptOpen = false
     @State private var chatInputFocused = false
     #if canImport(UIKit) && !SKIP
     @State private var keyboardHeight: CGFloat = 0.0
     #endif
 
+    private func updateStageObscured() {
+        viewModel.setStageObscuredByOverlay(
+            showMeetingSheet
+                || viewModel.state.isChatOpen
+                || viewModel.state.isTranscriptOpen
+        )
+    }
+
     private func openMeetingSheet(_ page: MeetingSheetPage) {
+        PerformanceDiagnostics.event("meeting_sheet_open", details: "page=\(page)")
+        #if SKIP
+        viewModel.setStageObscuredByOverlay(true)
+        #endif
         meetingSheetPage = page
         showMeetingSheet = true
     }
@@ -86,12 +90,31 @@ struct MeetingView: View {
 
     private func dismissMeetingSheet() {
         guard showMeetingSheet else { return }
+        PerformanceDiagnostics.event("meeting_sheet_dismiss", details: "page=\(meetingSheetPage)")
         showMeetingSheet = false
         resetMeetingSheetStateAfterDismiss()
     }
 
+    private func openTranscriptFromMeetingSheet() {
+        #if SKIP
+        pendingTranscriptOpen = false
+        dismissMeetingSheet()
+        if !viewModel.state.isTranscriptOpen {
+            PerformanceDiagnostics.event("transcript_open_from_more_after_close")
+            viewModel.state.isTranscriptOpen = true
+        }
+        #else
+        pendingTranscriptOpen = true
+        dismissMeetingSheet()
+        #endif
+    }
+
     private func meetingSheetDetentHeight(for availableHeight: CGFloat) -> CGFloat {
+        #if SKIP
+        return availableHeight * MeetingSheetView.androidDetentFraction
+        #else
         availableHeight * MeetingSheetView.detentFraction
+        #endif
     }
 
     private func chatOverlayWidth(for width: CGFloat) -> CGFloat {
@@ -141,6 +164,9 @@ struct MeetingView: View {
     }
 
     var body: some View {
+        let _ = PerformanceDiagnostics.render("MeetingView") {
+            "chat=\(viewModel.state.isChatOpen) transcript=\(viewModel.state.isTranscriptOpen) sheet=\(showMeetingSheet) participants=\(viewModel.state.participantCount)"
+        }
         GeometryReader { geometry in
             ZStack {
                 ACMColors.dark
@@ -291,31 +317,87 @@ struct MeetingView: View {
                 .padding(.trailing, max(6.0, geometry.safeAreaInsets.trailing))
             }
             .ignoresSafeArea(.container, edges: .bottom)
-            .sheet(isPresented: $showMeetingSheet) {
+            #if SKIP
+            .overlay {
+                ComposeView { context in
+                    FlexibleMeetingSheetHost(
+                        context: context,
+                        isPresented: showMeetingSheet,
+                        viewModel: viewModel,
+                        page: $meetingSheetPage,
+                        androidDetentHeight: meetingSheetDetentHeight(for: geometry.size.height),
+                        detentFraction: MeetingSheetView.androidDetentFraction,
+                        onDismiss: {
+                            dismissMeetingSheet()
+                        },
+                        onOpenTranscript: {
+                            openTranscriptFromMeetingSheet()
+                        }
+                    )
+                }
+                .frame(width: 0, height: 0)
+            }
+            #else
+            .sheet(isPresented: $showMeetingSheet, onDismiss: {
+                // Defer opening the transcript until the meeting sheet is fully
+                // gone; presenting a sheet from a dismissing sheet renders empty
+                // on Skip/Android.
+                if pendingTranscriptOpen {
+                    pendingTranscriptOpen = false
+                    viewModel.state.isTranscriptOpen = true
+                }
+            }) {
                 MeetingSheetView(
                     viewModel: viewModel,
                     page: $meetingSheetPage,
-                    androidDetentHeight: meetingSheetDetentHeight(for: geometry.size.height)
+                    androidDetentHeight: meetingSheetDetentHeight(for: geometry.size.height),
+                    onOpenTranscript: {
+                        openTranscriptFromMeetingSheet()
+                    }
                 )
+            }
+            #endif
+            .sheet(isPresented: Binding(
+                get: { viewModel.state.isTranscriptOpen },
+                set: { viewModel.state.isTranscriptOpen = $0 }
+            )) {
+                // The transcript stream is meeting-scoped, not sheet-scoped: closing
+                // the panel must not tear down a session this user may be controlling.
+                // It's opened on first appear and closed on meeting teardown.
+                TranscriptPanelView(viewModel: viewModel)
             }
         }
         .preferredColorScheme(.dark)
         #if SKIP
-        .onChange(of: viewModel.state.isChatOpen ? "open" : "closed") { _, _ in
+        // Use the zero-parameter onChange overload on Android. SkipUI backs
+        // onChange with rememberSaveable; under the recomposition churn the
+        // entry-overlay fade induces, the two-parameter form can restore a
+        // null `oldValue` and crash on Kotlin's non-null param check
+        // (checkNotNullParameter). The no-arg closure never receives that
+        // value, so it is immune — and these handlers ignore both params.
+        .onChange(of: viewModel.state.isChatOpen ? "open" : "closed") {
             if !viewModel.state.isChatOpen {
                 chatInputFocused = false
             }
+            updateStageObscured()
         }
-        .onChange(of: showMeetingSheet ? "shown" : "hidden") { _, _ in
+        .onChange(of: showMeetingSheet ? "shown" : "hidden") {
             if !showMeetingSheet {
                 resetMeetingSheetStateAfterDismiss()
             }
+            updateStageObscured()
         }
-        .onChange(of: viewModel.state.isWebinarAttendee ? "webinar" : "meeting") { _, _ in
+        .onChange(of: viewModel.state.isTranscriptOpen ? "open" : "closed") {
+            updateStageObscured()
+        }
+        .onChange(of: viewModel.state.isWebinarAttendee ? "webinar" : "meeting") {
             if viewModel.state.isWebinarAttendee {
                 dismissMeetingSheet()
                 chatInputFocused = false
             }
+        }
+        .onChange(of: viewModel.state.connectionState == .joined ? "joined" : "other") {
+            updateStageObscured()
         }
         #else
         .onChange(of: viewModel.state.isChatOpen) { _, _ in

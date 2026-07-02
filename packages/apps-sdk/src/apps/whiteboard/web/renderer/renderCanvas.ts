@@ -255,7 +255,7 @@ const renderRect = (
 };
 
 /**
- * Renders a hand-drawn ellipse — Excalidraw-style.
+ * Renders a hand-drawn ellipse, Excalidraw-style.
  */
 const renderEllipse = (
   ctx: CanvasRenderingContext2D,
@@ -351,7 +351,7 @@ const renderGrid = (
   const majorStartX = Math.floor(canvasLeft / major) * major;
   const majorStartY = Math.floor(canvasTop / major) * major;
 
-  ctx.fillStyle = "rgba(169, 165, 255, 0.05)";
+  ctx.fillStyle = "rgba(255, 255, 255, 0.09)";
   for (let x = majorStartX; x < canvasRight; x += major) {
     for (let y = majorStartY; y < canvasBottom; y += major) {
       ctx.beginPath();
@@ -432,7 +432,7 @@ export const renderCanvas = (
   imageCache?: Map<string, HTMLImageElement>,
   viewport?: { translateX: number; translateY: number; scale: number },
 ) => {
-  // clearRect must operate in screen space — reset to identity (ignoring any
+  // clearRect must operate in screen space, reset to identity (ignoring any
   // pre-applied DPR or viewport transform) then restore after clearing.
   ctx.save();
   ctx.setTransform(1, 0, 0, 1, 0, 0);

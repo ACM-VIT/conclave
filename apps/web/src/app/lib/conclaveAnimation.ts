@@ -49,7 +49,7 @@ async function buildAnimation(): Promise<Record<string, unknown>> {
     asset.e = 1;
   }
 
-  return anim as Record<string, unknown>;
+  return anim;
 }
 
 export function loadConclaveAnimation(): Promise<Record<string, unknown>> {

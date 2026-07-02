@@ -260,8 +260,10 @@ const extractStructuredPayload = (value: unknown): unknown | null => {
     return parseStrictJson(record.response);
   }
 
-  const choices = record.choices;
-  if (Array.isArray(choices) && choices.length > 0) {
+  const choices: readonly unknown[] | null = Array.isArray(record.choices)
+    ? record.choices
+    : null;
+  if (choices && choices.length > 0) {
     const first = choices[0];
     if (first && typeof first === "object" && !Array.isArray(first)) {
       const choice = first as Record<string, unknown>;

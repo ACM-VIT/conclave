@@ -32,6 +32,22 @@ enum MeetingSheetPage: Equatable {
     case microphoneSettings
     case cameraSettings
     case speakerSettings
+    case privacyPolicy
+}
+
+struct MeetingSheetCloseAction {
+    var close: (() -> Void)? = nil
+}
+
+private struct MeetingSheetCloseActionKey: EnvironmentKey {
+    static let defaultValue = MeetingSheetCloseAction()
+}
+
+extension EnvironmentValues {
+    var meetingSheetCloseAction: MeetingSheetCloseAction {
+        get { self[MeetingSheetCloseActionKey.self] }
+        set { self[MeetingSheetCloseActionKey.self] = newValue }
+    }
 }
 
 private extension MeetingSheetPage {
@@ -43,7 +59,7 @@ private extension MeetingSheetPage {
             return 1
         case .viewModeSettings, .gridSettings, .selfViewSettings, .selfViewPositionSettings,
              .adminAccessControls, .adminMediaControls, .adminNoticeControls, .adminDangerControls,
-             .roomSettings, .webinarSettings, .profileSettings, .audioVideoSettings:
+             .roomSettings, .webinarSettings, .profileSettings, .audioVideoSettings, .privacyPolicy:
             return 2
         case .roomAccessSettings, .roomCommunicationSettings, .meetingInviteCodeSettings,
              .webinarAccessSettings, .webinarCapacitySettings, .webinarInviteCodeSettings, .webinarLinkSettings,
@@ -62,7 +78,7 @@ private extension MeetingSheetPage {
             return .viewSettings
         case .adminAccessControls, .adminMediaControls, .adminNoticeControls, .adminDangerControls:
             return .adminControls
-        case .roomSettings, .webinarSettings, .profileSettings, .audioVideoSettings:
+        case .roomSettings, .webinarSettings, .profileSettings, .audioVideoSettings, .privacyPolicy:
             return .settings
         case .roomAccessSettings, .roomCommunicationSettings, .meetingInviteCodeSettings:
             return .roomSettings
@@ -112,13 +128,19 @@ struct MeetingSheetView: View {
     @Bindable var viewModel: MeetingViewModel
     @Binding var page: MeetingSheetPage
     var androidDetentHeight: CGFloat? = nil
+    var onOpenTranscript: (() -> Void)? = nil
     @State private var navigationDirection: MeetingSheetNavigationDirection = .push
     @State private var pageTransitionsEnabled = false
-    @State private var bodyReady = false
+    #if SKIP
+    @State private var bodyReady = true
+    #else
+    @State private var bodyReady = true
+    #endif
     @State private var bodyRevealGeneration = 0
     @State private var bodyRevealTask: Task<Void, Never>?
 
     static let detentFraction: CGFloat = 0.62
+    static let androidDetentFraction: CGFloat = 0.88
     static let androidInitialBodyRevealDelayNanoseconds = UInt64(0)
     static let androidNavigationBodyRevealDelayNanoseconds = UInt64(0)
     private static let fallbackAndroidDetentHeight: CGFloat = 420.0
@@ -131,11 +153,12 @@ struct MeetingSheetView: View {
     private func navigate(to nextPage: MeetingSheetPage) {
         guard page != nextPage else { return }
 
+        PerformanceDiagnostics.event("meeting_sheet_navigate", details: "\(page)->\(nextPage)")
         navigationDirection = nextPage.depth <= page.depth ? .pop : .push
         #if SKIP
-        scheduleAndroidBodyReveal(after: Self.androidNavigationBodyRevealDelayNanoseconds)
-        #endif
-
+        page = nextPage
+        return
+        #else
         guard pageTransitionsEnabled else {
             page = nextPage
             return
@@ -144,6 +167,7 @@ struct MeetingSheetView: View {
         withAnimation(Self.pageAnimation) {
             page = nextPage
         }
+        #endif
     }
 
     #if SKIP
@@ -152,19 +176,19 @@ struct MeetingSheetView: View {
         enableTransitionsAfterReveal: Bool = false,
         animated: Bool = true
     ) {
+        if MeetingSheetRevealPolicy.shouldRevealImmediately(after: delayNanoseconds) {
+            bodyRevealTask?.cancel()
+            bodyRevealTask = nil
+            if !bodyReady {
+                bodyReady = true
+            }
+            return
+        }
+
         bodyRevealTask?.cancel()
         bodyRevealTask = nil
         bodyRevealGeneration += 1
         let generation = bodyRevealGeneration
-        if MeetingSheetRevealPolicy.shouldRevealImmediately(after: delayNanoseconds) {
-            if !bodyReady {
-                bodyReady = true
-            }
-            if enableTransitionsAfterReveal {
-                pageTransitionsEnabled = true
-            }
-            return
-        }
         bodyReady = false
         bodyRevealTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: delayNanoseconds)
@@ -173,6 +197,10 @@ struct MeetingSheetView: View {
                     generation: generation,
                     currentGeneration: bodyRevealGeneration
                   ) else { return }
+            PerformanceDiagnostics.event(
+                "meeting_sheet_body_reveal",
+                details: "delayNs=\(delayNanoseconds)"
+            )
             guard animated else {
                 bodyReady = true
                 if enableTransitionsAfterReveal {
@@ -194,21 +222,29 @@ struct MeetingSheetView: View {
     private func resetAndroidBodyReveal() {
         bodyRevealTask?.cancel()
         bodyRevealTask = nil
-        bodyRevealGeneration += 1
-        bodyReady = false
+        if !bodyReady {
+            bodyReady = true
+        }
     }
     #endif
 
     @ViewBuilder
     private func pageView<Content: View>(_ content: Content) -> some View {
+        #if SKIP
+        content
+        #else
         if pageTransitionsEnabled {
             content.transition(navigationDirection.transition)
         } else {
             content
         }
+        #endif
     }
 
     var body: some View {
+        let _ = PerformanceDiagnostics.render("MeetingSheetView") {
+            "page=\(page) ready=\(bodyReady) transitions=\(pageTransitionsEnabled)"
+        }
         ACMGlassGroup(spacing: ACMSpacing.md) {
             ZStack(alignment: .top) {
                 switch page {
@@ -223,7 +259,8 @@ struct MeetingSheetView: View {
                             onOpenAdminControls: { navigate(to: .adminControls) },
                             onOpenSharedBrowser: { navigate(to: .sharedBrowser) },
                             onOpenApps: { navigate(to: .apps) },
-                            onOpenGames: { navigate(to: .games) }
+                            onOpenGames: { navigate(to: .games) },
+                            onOpenTranscript: onOpenTranscript
                         )
                     )
                 case .participants:
@@ -237,7 +274,8 @@ struct MeetingSheetView: View {
                         onOpenRoomSettings: { navigate(to: .roomSettings) },
                         onOpenWebinarSettings: { navigate(to: .webinarSettings) },
                         onOpenProfileSettings: { navigate(to: .profileSettings) },
-                        onOpenAudioVideoSettings: { navigate(to: .audioVideoSettings) }
+                        onOpenAudioVideoSettings: { navigate(to: .audioVideoSettings) },
+                        onOpenPrivacyPolicy: { navigate(to: .privacyPolicy) }
                     ))
                 case .viewSettings:
                     pageView(ViewSettingsSheetView(
@@ -336,19 +374,28 @@ struct MeetingSheetView: View {
                     pageView(SettingsSheetView(viewModel: viewModel, bodyReady: bodyReady, page: SettingsSheetPage.camera, onBack: { navigate(to: .audioVideoSettings) }))
                 case .speakerSettings:
                     pageView(SettingsSheetView(viewModel: viewModel, bodyReady: bodyReady, page: SettingsSheetPage.speaker, onBack: { navigate(to: .audioVideoSettings) }))
+                case .privacyPolicy:
+                    pageView(
+                        PrivacyPolicyPageView(
+                            onBack: { navigate(to: .settings) },
+                            androidBodyHeight: max(260.0, resolvedAndroidDetentHeight - 64.0)
+                        )
+                    )
                 }
             }
         }
         #if SKIP
         .overlay(alignment: .top) {
-            ComposeView { _ in
-                MeetingSheetBackHandler(enabled: page.parent != nil) {
-                    if let parent = page.parent {
-                        navigate(to: parent)
+            if page.parent != nil {
+                ComposeView { _ in
+                    MeetingSheetBackHandler(enabled: true) {
+                        if let parent = page.parent {
+                            navigate(to: parent)
+                        }
                     }
                 }
+                .frame(width: 0, height: 0)
             }
-            .frame(width: 0, height: 0)
         }
         #endif
         .clipped()
@@ -361,17 +408,17 @@ struct MeetingSheetView: View {
         .acmColorBackground(ACMColors.bg)
         .preferredColorScheme(.dark)
         .tint(ACMColors.primaryOrange)
-        #if SKIP
-        .presentationDetents([.height(resolvedAndroidDetentHeight)])
-        #else
+        #if !SKIP
         .presentationDetents([.fraction(Self.detentFraction)])
         #endif
         .onAppear {
             #if SKIP
-            pageTransitionsEnabled = false
+            PerformanceDiagnostics.event("meeting_sheet_appear", details: "page=\(page)")
+            if pageTransitionsEnabled {
+                pageTransitionsEnabled = false
+            }
             scheduleAndroidBodyReveal(
                 after: Self.androidInitialBodyRevealDelayNanoseconds,
-                enableTransitionsAfterReveal: true,
                 animated: false
             )
             #else
@@ -400,6 +447,15 @@ struct MeetingSheetHeader: View {
     let title: String
     var onBack: (() -> Void)? = nil
     let onDone: () -> Void
+    @Environment(\.meetingSheetCloseAction) private var meetingSheetCloseAction
+
+    private func close() {
+        if let close = meetingSheetCloseAction.close {
+            close()
+        } else {
+            onDone()
+        }
+    }
 
     var body: some View {
         HStack(spacing: ACMSpacing.xs) {
@@ -423,7 +479,7 @@ struct MeetingSheetHeader: View {
 
             Spacer()
 
-            Button(action: onDone) {
+            Button(action: close) {
                 Text("Done")
                     .font(ACMFont.trial(16, weight: .medium))
                     .foregroundStyle(ACMColors.primaryOrange)

@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import { bluffModule } from "../server/games/modules/bluff.js";
-import { GameMoveError } from "../server/games/types.js";
 import type { GameContext, GamePlayer, GameRng } from "../server/games/types.js";
 
 const players: GamePlayer[] = [

@@ -20,6 +20,10 @@ import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Block
 import androidx.compose.material.icons.rounded.CallEnd
+import androidx.compose.material.icons.rounded.ClosedCaption
+import androidx.compose.material.icons.rounded.Gif
+import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.Shield
 import androidx.compose.material.icons.rounded.Cameraswitch
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.CloseFullscreen
@@ -67,6 +71,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
+
+private val meetingIconsWarmLock = Any()
+@Volatile private var meetingIconsWarmStarted = false
 
 /// Maps stable icon keys to material-icons-extended vectors for Android.
 /// SkipUI's `Image(systemName:)` only resolves a small core glyph set.
@@ -122,6 +129,10 @@ internal fun meetingIconVector(name: String): ImageVector = when (name) {
     "remove"          -> Icons.Rounded.Remove
     "minus"           -> Icons.Rounded.Remove
     "info"            -> Icons.Rounded.Info
+    "shield"          -> Icons.Rounded.Shield
+    "gif"             -> Icons.Rounded.Gif
+    "search"          -> Icons.Rounded.Search
+    "closed_caption"  -> Icons.Rounded.ClosedCaption
     "warning"         -> Icons.Rounded.Warning
     "open.in.full"    -> Icons.Rounded.OpenInFull
     "north.east"      -> Icons.Rounded.NorthEast
@@ -150,7 +161,13 @@ internal fun meetingIconTint(key: String): Color = when (key) {
 
 /// Warms lazily-built ImageVectors off the UI thread before the first sheet opens.
 fun warmMeetingIcons() {
+    synchronized(meetingIconsWarmLock) {
+        if (meetingIconsWarmStarted) return
+        meetingIconsWarmStarted = true
+    }
+
     val warm = Thread {
+        val startedAt = System.nanoTime()
         val keys = listOf(
             "mic", "mic.off", "video", "video.off", "screen.share", "screen.share.off",
             "hangup", "more", "chat", "chat.outline", "participants", "grid", "sidebar", "spotlight", "pip",
@@ -159,13 +176,18 @@ fun warmMeetingIcons() {
             "close", "copy", "delete", "pin.off", "ghost", "host", "person.add", "remove.person",
             "key", "link", "public", "arrow.forward", "back", "account", "block", "forum", "play",
             "sports_esports", "group", "volume",
-            "volume.off", "add", "remove", "minus", "info", "warning", "check", "open.in.full",
+            "volume.off", "add", "remove", "minus", "info", "shield", "gif", "search", "closed_caption", "warning", "check", "open.in.full",
             "north.east", "north.west", "south.east", "south.west"
         )
         for (k in keys) {
             // Touch the vector so its backing field initializes; result unused.
             meetingIconVector(k)
         }
+        NativePerformanceDiagnostics.timingAlways(
+            "meeting_icon_prewarm",
+            startedAt,
+            "count=${keys.size}"
+        )
     }
     warm.isDaemon = true
     warm.name = "meeting-icon-warm"

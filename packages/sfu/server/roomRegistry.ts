@@ -130,8 +130,9 @@ const parseClaimResult = (value: unknown): RoomOwnershipClaim => {
     throw new Error("Invalid room registry response");
   }
 
-  const okValue = value[0];
-  const owner = parseOwnerRecord(value[1]);
+  const entries: readonly unknown[] = value;
+  const okValue = entries[0];
+  const owner = parseOwnerRecord(entries[1]);
   if (!owner) {
     throw new Error("Invalid room owner record");
   }

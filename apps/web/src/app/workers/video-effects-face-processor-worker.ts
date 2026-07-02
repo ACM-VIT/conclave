@@ -196,9 +196,11 @@ const ensureFaceLandmarker = async () => {
     return faceLandmarker;
   })();
 
-  faceLandmarkerPromise.finally(() => {
-    faceLandmarkerPromise = null;
-  });
+  void faceLandmarkerPromise
+    .catch(() => undefined)
+    .finally(() => {
+      faceLandmarkerPromise = null;
+    });
   return faceLandmarkerPromise;
 };
 

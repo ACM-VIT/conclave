@@ -436,6 +436,8 @@ final class MeetingViewModel {
 
     let socketManager = SocketIOManager()
     let webRTCClient = WebRTCClient()
+    let transcriptState = TranscriptState()
+    private var transcriptService: TranscriptService?
     private let ttsSpeaker = TtsSpeaker()
     private let networkMonitor = NetworkReachabilityMonitor()
     var lastJoinContext: JoinContext?
@@ -545,6 +547,17 @@ final class MeetingViewModel {
     private let activeSpeakerHoldSeconds: Double = 1.5
     private let freezeWatchdogTickInterval = 8
     private let producerSyncTickInterval = 40
+    // When a sheet or the chat panel covers the video stage, the per-tick
+    // active-speaker audio sampling (main-thread work) is relaxed so it doesn't
+    // compete with sheet rendering/scrolling. Plain property (never read in a view
+    // body) so toggling it never triggers recomposition.
+    private var isStageObscuredByOverlay = false
+    private let activeSpeakerObscuredTickInterval = 3
+    // Meeting-entry takeover timing (see beginMeetingEntry).
+    private var meetingEntryRevealTask: Task<Void, Never>?
+    private var meetingEntrySafetyTask: Task<Void, Never>?
+    private let meetingEntryMinDisplaySeconds: Double = 1.3
+    private let meetingEntrySettleNanoseconds = UInt64(700_000_000)
     private let emergencyVideoDowngradeSeconds: TimeInterval = 2.5
     private let poorVideoDowngradeSeconds: TimeInterval = 4.5
     private let fairVideoDowngradeSeconds: TimeInterval = 12
@@ -587,6 +600,16 @@ final class MeetingViewModel {
         receiveConnectionQuality = combinedConnectionQuality(sample.receiveQuality)
         let overallQuality = combinedConnectionQuality(sample.overallQuality)
         if state.connectionQuality != overallQuality {
+            let oldQuality = state.connectionQuality
+            PerformanceDiagnostics.state(
+                "connection_quality",
+                old: oldQuality.rawValue,
+                new: overallQuality.rawValue
+            )
+            PerformanceDiagnostics.event(
+                "connection_quality_details",
+                details: "hint=\(networkQualityHint.rawValue) publish=\(publishConnectionQuality.rawValue) receive=\(receiveConnectionQuality.rawValue) sampleOverall=\(sample.overallQuality.rawValue) screen=\(screenSharePublishConnectionQuality.rawValue)"
+            )
             state.connectionQuality = overallQuality
         }
         return overallQuality
@@ -598,8 +621,17 @@ final class MeetingViewModel {
         screenSharePublishConnectionQuality = startupQuality
         receiveConnectionQuality = startupQuality
         if state.connectionQuality != startupQuality {
+            PerformanceDiagnostics.state(
+                "connection_quality",
+                old: state.connectionQuality.rawValue,
+                new: startupQuality.rawValue
+            )
             state.connectionQuality = startupQuality
         }
+        PerformanceDiagnostics.event(
+            "startup_bandwidth_profile",
+            details: "quality=\(startupQuality.rawValue) hint=\(networkQualityHint.rawValue)"
+        )
         webRTCClient.applyLocalBandwidthProfile(connectionQuality: startupQuality)
     }
 
@@ -808,9 +840,35 @@ final class MeetingViewModel {
 
     init() {
         MeetingViewPreferences.apply(to: state)
+        #if SKIP
+        webRTCClient.prewarmMediaStack()
+        #endif
+        transcriptService = TranscriptService(state: transcriptState, socketManager: socketManager)
         setupNetworkBindings()
         setupSocketBindings()
         setupWebRTCBindings()
+    }
+
+    // MARK: - Transcription
+
+    func toggleTranscript() {
+        state.isTranscriptOpen = !state.isTranscriptOpen
+    }
+
+    func openTranscriptStream() {
+        Task { await transcriptService?.open() }
+    }
+
+    func closeTranscriptStream() {
+        transcriptService?.close()
+    }
+
+    func startTranscription() {
+        transcriptService?.startTranscription()
+    }
+
+    func stopTranscription() {
+        transcriptService?.stopTranscription()
     }
 
     private func setupNetworkBindings() {
@@ -828,6 +886,13 @@ final class MeetingViewModel {
         networkMonitor.onQualityHintChanged = { [weak self] quality in
             Task { @MainActor in
                 guard let self else { return }
+                if self.networkQualityHint != quality {
+                    PerformanceDiagnostics.state(
+                        "network_quality_hint",
+                        old: self.networkQualityHint.rawValue,
+                        new: quality.rawValue
+                    )
+                }
                 self.networkQualityHint = quality
                 guard self.state.connectionState == .joined else { return }
                 let sample = self.webRTCClient.sampleConnectionQualitySample()
@@ -979,6 +1044,7 @@ final class MeetingViewModel {
                 guard let context = self.lastJoinContext else { return }
                 self.state.connectionState = ConnectionState.joining
                 self.state.waitingMessage = nil
+                self.beginMeetingEntry(action: .join)
                 self.joinRoom(
                     roomId: context.roomId,
                     displayName: context.displayName,
@@ -1743,63 +1809,54 @@ final class MeetingViewModel {
     // MARK: - Helper Methods
 
     private func applyLocalMutedStateFromServer(_ muted: Bool, context: SocketEventContext? = nil) {
-        state.isMuted = muted
-        if muted {
-            for localId in currentLocalParticipantIds() {
-                clearHeldActiveSpeakerIfNeeded(localId)
-            }
+        // Local mic state is client-authoritative (prejoin choice + explicit
+        // toggles). The server may force us to MUTE (e.g. an admin mute), but must
+        // NEVER force us to unmute: the participant-muted broadcast echoes our own
+        // producer state on join and would otherwise flip the mic live against the
+        // user's intent ("joining turns my mic on"). Matches the web, where local
+        // mute is driven by mediaIntent, not server notifications.
+        guard muted else { return }
+        state.isMuted = true
+        for localId in currentLocalParticipantIds() {
+            clearHeldActiveSpeakerIfNeeded(localId)
         }
         syncCallPresenceState()
 
         let eventContext = context ?? currentSocketEventContext()
-        if muted {
-            guard !isMuteToggleInFlight else { return }
-            Task { @MainActor [weak self] in
-                guard let self,
-                      self.isCurrentSocketEvent(eventContext) else { return }
-                do {
-                    try await self.disableLocalAudioIfNeeded()
-                    guard self.isCurrentSocketEvent(eventContext) else { return }
-                    self.state.isMuted = true
-                    self.syncCallPresenceState()
-                } catch {
-                    guard self.isCurrentSocketEvent(eventContext) else { return }
-                    debugLog("[Meeting] Failed to apply server mute locally: \(error)")
-                }
-            }
-            return
-        }
-
+        guard !isMuteToggleInFlight else { return }
         Task { @MainActor [weak self] in
             guard let self,
                   self.isCurrentSocketEvent(eventContext) else { return }
-            await self.reassertLocalAudioPublishingIfNeeded(
-                context: eventContext,
-                confirmServerUnmuted: true
-            )
+            do {
+                try await self.disableLocalAudioIfNeeded()
+                guard self.isCurrentSocketEvent(eventContext) else { return }
+                self.state.isMuted = true
+                self.syncCallPresenceState()
+            } catch {
+                guard self.isCurrentSocketEvent(eventContext) else { return }
+                debugLog("[Meeting] Failed to apply server mute locally: \(error)")
+            }
         }
     }
 
     private func applyLocalCameraOffStateFromServer(_ cameraOff: Bool, context: SocketEventContext? = nil) {
+        // Server may force the local camera OFF (admin), never ON — see
+        // applyLocalMutedStateFromServer for why turning it on would fight intent.
+        guard cameraOff else { return }
         let eventContext = context ?? currentSocketEventContext()
-        if cameraOff {
-            setLocalCameraOffState(true)
-            guard !isCameraToggleInFlight else { return }
-            Task { @MainActor [weak self] in
-                guard let self,
-                      self.isCurrentSocketEvent(eventContext) else { return }
-                _ = await self.webRTCClient.closeLocalMedia(
-                    kind: "video",
-                    type: ProducerType.webcam.rawValue,
-                    producerId: nil
-                )
-                guard self.isCurrentSocketEvent(eventContext) else { return }
-                self.setLocalCameraOffState(true)
-            }
-            return
+        setLocalCameraOffState(true)
+        guard !isCameraToggleInFlight else { return }
+        Task { @MainActor [weak self] in
+            guard let self,
+                  self.isCurrentSocketEvent(eventContext) else { return }
+            _ = await self.webRTCClient.closeLocalMedia(
+                kind: "video",
+                type: ProducerType.webcam.rawValue,
+                producerId: nil
+            )
+            guard self.isCurrentSocketEvent(eventContext) else { return }
+            self.setLocalCameraOffState(true)
         }
-
-        setLocalCameraOffState(false)
     }
 
     private func resetReconnectRetryState() {
@@ -1930,7 +1987,92 @@ final class MeetingViewModel {
         }
     }
 
+    /// Starts the branded meeting-entry takeover on a New/Join tap. The overlay
+    /// (gated on `isEnteringMeeting` + an entering connection state) then covers
+    /// connect → join → media-settle so the user never sees the raw spinner or the
+    /// post-join device-init hiccups. A safety timeout guarantees the overlay is
+    /// never a dead end if the join stalls.
+    func beginMeetingEntry(action: MeetingEntryAction) {
+        PerformanceDiagnostics.event("meeting_entry_begin", details: "action=\(action)")
+        meetingEntryRevealTask?.cancel()
+        meetingEntryRevealTask = nil
+        meetingEntrySafetyTask?.cancel()
+        let startedAt = Date()
+        state.meetingEntryGeneration += 1
+        let generation = state.meetingEntryGeneration
+        state.meetingEntryStartedAt = startedAt
+        state.meetingEntryAction = action
+        state.isEnteringMeeting = true
+        let safetyTimeout = MeetingEntryOverlayPolicy.safetyTimeoutNanoseconds
+        meetingEntrySafetyTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: safetyTimeout)
+            guard let self,
+                  !Task.isCancelled,
+                  self.state.isEnteringMeeting,
+                  self.state.meetingEntryGeneration == generation else { return }
+            PerformanceDiagnostics.event("meeting_entry_safety_clear", details: "generation=\(generation)")
+            self.clearMeetingEntry()
+        }
+    }
+
+    /// Reveals the meeting once it's fully ready: a settle window after `.joined`
+    /// for media/transports, plus a minimum overlay display so the Lottie reads as
+    /// intentional rather than a flash.
+    private func scheduleMeetingEntryReveal() {
+        guard state.isEnteringMeeting else { return }
+        meetingEntryRevealTask?.cancel()
+        let started = state.meetingEntryStartedAt ?? Date()
+        let generation = state.meetingEntryGeneration
+        PerformanceDiagnostics.event(
+            "meeting_entry_reveal_scheduled",
+            details: "generation=\(generation) state=\(state.connectionState)"
+        )
+        meetingEntryRevealTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            try? await Task.sleep(nanoseconds: self.meetingEntrySettleNanoseconds)
+            guard !Task.isCancelled,
+                  self.state.connectionState == .joined,
+                  self.state.meetingEntryGeneration == generation else { return }
+            // Enforce a minimum total takeover so the Lottie reads as intentional
+            // rather than a flash. Work in Double seconds; cast once for the sleep.
+            let remainingSeconds = self.meetingEntryMinDisplaySeconds - Date().timeIntervalSince(started)
+            if remainingSeconds > 0.0 {
+                try? await Task.sleep(nanoseconds: UInt64(remainingSeconds * 1_000_000_000.0))
+            }
+            guard !Task.isCancelled,
+                  self.state.connectionState == .joined,
+                  self.state.meetingEntryGeneration == generation else { return }
+            PerformanceDiagnostics.event(
+                "meeting_entry_ready_clear",
+                details: "generation=\(generation)"
+            )
+            self.clearMeetingEntry()
+        }
+    }
+
+    func clearMeetingEntry() {
+        let hasMeetingEntryWork = state.isEnteringMeeting ||
+            state.meetingEntryAction != nil ||
+            state.meetingEntryStartedAt != nil ||
+            meetingEntryRevealTask != nil ||
+            meetingEntrySafetyTask != nil
+        guard hasMeetingEntryWork else { return }
+
+        PerformanceDiagnostics.event(
+            "meeting_entry_clear",
+            details: "state=\(state.connectionState) entering=\(state.isEnteringMeeting)"
+        )
+        meetingEntryRevealTask?.cancel()
+        meetingEntryRevealTask = nil
+        meetingEntrySafetyTask?.cancel()
+        meetingEntrySafetyTask = nil
+        state.meetingEntryStartedAt = nil
+        state.isEnteringMeeting = false
+        state.meetingEntryAction = nil
+    }
+
     private func handleJoinedRoomResponse(_ response: JoinRoomResponse, joinAttemptId: UUID) async {
+        let startedAt = Date()
         guard isCurrentJoinAttempt(joinAttemptId) else { return }
         let isRecoveryJoin = isRejoinInFlight
         state.waitingMessage = nil
@@ -1955,14 +2097,42 @@ final class MeetingViewModel {
         await replayPendingPreAckRoomEvents(includeDeferredRoomState: false)
 
         webRTCJoinAttemptId = joinAttemptId
+        let configureStartedAt = Date()
         webRTCClient.configure(
             socketManager: socketManager,
             rtpCapabilities: response.rtpCapabilities,
             iceServersJSON: currentJoinInfo?.iceServersJSONString()
         )
+        PerformanceDiagnostics.timing("join_webrtc_configure", startedAt: configureStartedAt)
 
         do {
-            try await webRTCClient.createTransports()
+            let shouldPublishLocalMediaOnJoin = !state.mediaPublishingDisabled &&
+                (!state.isMuted || !state.isCameraOff)
+            let hasInitialRemoteProducers = response.existingProducers.contains { producer in
+                !state.isLocalIdentityUserId(producer.producerUserId)
+            }
+            if shouldPublishLocalMediaOnJoin {
+                let transportsStartedAt = Date()
+                try await webRTCClient.createTransports()
+                PerformanceDiagnostics.timing(
+                    "join_webrtc_create_transports",
+                    startedAt: transportsStartedAt,
+                    details: "mode=send-receive"
+                )
+            } else if hasInitialRemoteProducers {
+                let receiveTransportStartedAt = Date()
+                try await webRTCClient.createReceiveTransport()
+                PerformanceDiagnostics.timing(
+                    "join_webrtc_create_transports",
+                    startedAt: receiveTransportStartedAt,
+                    details: "mode=receive-only"
+                )
+            } else {
+                PerformanceDiagnostics.event(
+                    "join_webrtc_create_transports_skipped",
+                    details: "muted=\(state.isMuted) cameraOff=\(state.isCameraOff)"
+                )
+            }
             guard isCurrentJoinAttempt(joinAttemptId) else {
                 await cleanupAbandonedJoinAttempt(cleanupMedia: true, joinAttemptId: joinAttemptId)
                 return
@@ -1971,8 +2141,10 @@ final class MeetingViewModel {
 
             if state.mediaPublishingDisabled {
                 disableLocalMediaPublishingState()
-            } else {
+            } else if shouldPublishLocalMediaOnJoin {
+                let producingStartedAt = Date()
                 let didStayCurrent = await startProducing(joinAttemptId: joinAttemptId)
+                PerformanceDiagnostics.timing("join_start_producing", startedAt: producingStartedAt, details: "muted=\(state.isMuted) cameraOff=\(state.isCameraOff)")
                 guard didStayCurrent else {
                     await cleanupAbandonedJoinAttempt(cleanupMedia: true, joinAttemptId: joinAttemptId)
                     return
@@ -1994,6 +2166,11 @@ final class MeetingViewModel {
                 return
             }
             state.connectionState = ConnectionState.joined
+            PerformanceDiagnostics.timing("join_handle_joined_response", startedAt: startedAt)
+            // Reveal scheduling must happen as soon as the meeting is usable. The
+            // post-join sync/refresh work below can take long enough to hit the
+            // hard deadline, which makes the entry overlay feel stuck.
+            scheduleMeetingEntryReveal()
             await replayPendingPreAckRoomEvents(includeDeferredRoomState: true)
             await syncProducers(context: currentSocketEventContext())
             await flushPendingProducers()
@@ -4827,16 +5004,18 @@ final class MeetingViewModel {
         }
         guard !MeetingState.isSystemUserId(producerUserId) else { return }
         if state.isLocalIdentityUserId(producerUserId) {
-            if producer.kind == "audio", producer.type == ProducerType.webcam.rawValue {
-                state.isMuted = producer.paused ?? state.isMuted
-                syncCallPresenceState()
-            } else if producer.kind == "video" {
-                if producer.type == "screen" {
-                    state.isScreenSharing = !(producer.paused ?? false)
-                    state.activeScreenShareUserId = state.isScreenSharing ? state.userId : nil
-                } else {
-                    setLocalCameraOffState(producer.paused ?? state.isCameraOff)
-                }
+            // The local mic/camera state is authoritative from the user's own
+            // intent (prejoin choice + explicit toggles + admin-enforced actions),
+            // NOT from the SFU echoing back our own producer. Syncing
+            // isMuted/isCameraOff from a possibly-stale server producer here would
+            // flip the user unmuted / camera-on against their intent shortly after
+            // join (once syncProducers reconciles). The web client ignores the
+            // local user's own producer entirely (consumeProducer returns early for
+            // producerUserId === userId); mirror that. Screen-share is still synced
+            // because it has no local "off intent" the echo could fight.
+            if producer.kind == "video", producer.type == "screen" {
+                state.isScreenSharing = !(producer.paused ?? false)
+                state.activeScreenShareUserId = state.isScreenSharing ? state.userId : nil
             }
             return
         }
@@ -5010,6 +5189,12 @@ final class MeetingViewModel {
         allowRoomCreation: Bool = false,
         reuseExistingSocket: Bool = false
     ) {
+        let joinStartedAt = Date()
+        PerformanceDiagnostics.event(
+            "join_room_start",
+            details: "room=\(roomId) host=\(isHost) mode=\(joinMode) reuseSocket=\(reuseExistingSocket)"
+        )
+        PerformanceDiagnostics.memory("join_room_start")
         let isRecoveryJoin = isRejoinInFlight
         meetingLifecycleGeneration += 1
         let joinAttemptId = UUID()
@@ -5094,6 +5279,7 @@ final class MeetingViewModel {
 
                 if !canReuseConnectedSocket {
                     let clientId = clientId ?? SfuJoinService.resolveClientId()
+                    let fetchStartedAt = Date()
                     let joinInfo = try await SfuJoinService.fetchJoinInfo(
                         roomId: roomId,
                         sessionId: state.sessionId,
@@ -5105,6 +5291,7 @@ final class MeetingViewModel {
                         meetingInviteCode: meetingInviteCode,
                         webinarInviteCode: webinarInviteCode
                     )
+                    PerformanceDiagnostics.timing("join_fetch_info", startedAt: fetchStartedAt, details: "room=\(roomId)")
                     guard self.activeJoinAttemptId == joinAttemptId else {
                         await self.cleanupAbandonedJoinAttempt()
                         return
@@ -5116,7 +5303,9 @@ final class MeetingViewModel {
                         self.applyLocalJoinIdentity(identity, isHostHint: isHost)
                     }
 
+                    let connectStartedAt = Date()
                     try await socketManager.connect(sfuURL: sfuUrl, token: token)
+                    PerformanceDiagnostics.timing("join_socket_connect", startedAt: connectStartedAt)
                     guard self.activeJoinAttemptId == joinAttemptId else {
                         await self.cleanupAbandonedJoinAttempt()
                         return
@@ -5124,6 +5313,7 @@ final class MeetingViewModel {
                 }
 
                 state.connectionState = .joining
+                let socketJoinStartedAt = Date()
                 let response = try await socketManager.joinRoom(
                     roomId: roomId,
                     sessionId: state.sessionId,
@@ -5132,6 +5322,7 @@ final class MeetingViewModel {
                     meetingInviteCode: meetingInviteCode,
                     webinarInviteCode: webinarInviteCode
                 )
+                PerformanceDiagnostics.timing("join_socket_join_room", startedAt: socketJoinStartedAt, details: "status=\(response.status ?? "nil")")
                 guard self.activeJoinAttemptId == joinAttemptId else {
                     await self.cleanupAbandonedJoinAttempt()
                     return
@@ -5141,10 +5332,13 @@ final class MeetingViewModel {
                     resetLiveRoomSnapshotStateForJoin()
                     applyJoinSnapshot(response)
                     state.connectionState = ConnectionState.waiting
+                    clearMeetingEntry()
                     isRejoinInFlight = false
                     resetReconnectRetryState()
                 } else {
                     await handleJoinedRoomResponse(response, joinAttemptId: joinAttemptId)
+                    PerformanceDiagnostics.timing("join_room_total", startedAt: joinStartedAt, details: "state=\(state.connectionState)")
+                    PerformanceDiagnostics.memory("join_room_after_handle_response")
                 }
 
             } catch {
@@ -5288,6 +5482,14 @@ final class MeetingViewModel {
 
     /// Starts the active-speaker poll that reads remote audio levels and updates
     /// `state.activeSpeakerId`. Idempotent — a running poll is cancelled first.
+    /// Called by the view when a sheet or the chat panel covers the video stage,
+    /// so the active-speaker poll can relax its main-thread sampling.
+    func setStageObscuredByOverlay(_ obscured: Bool) {
+        guard isStageObscuredByOverlay != obscured else { return }
+        PerformanceDiagnostics.event("stage_obscured", details: "next=\(obscured)")
+        isStageObscuredByOverlay = obscured
+    }
+
     func startActiveSpeakerPoll() {
         activeSpeakerTask?.cancel()
         let freezeInterval = freezeWatchdogTickInterval
@@ -5301,6 +5503,7 @@ final class MeetingViewModel {
             var freezeTick = 0
             var qualityTick = freezeInterval
             var syncTick = 0
+            var activeSpeakerTick = 0
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 250_000_000)
                 if Task.isCancelled { return }
@@ -5308,10 +5511,23 @@ final class MeetingViewModel {
                 guard self.isCurrentSocketEvent(pollContext) else { return }
                 #if SKIP
                 let wasInPip = self.lastObservedPipMode
-                #endif
-                self.updateActiveSpeaker()
-                #if SKIP
                 let isInPip = PipController.inPipMode
+                #else
+                let isInPip = false
+                #endif
+                // Active-speaker sampling is main-thread work. When a sheet/chat
+                // covers the stage (and we're not in PiP, where it's still shown),
+                // relax it to ~every 3rd tick so it doesn't compete with sheet
+                // rendering. The freeze/quality/sync safety-nets below keep their
+                // normal wall-clock cadence.
+                activeSpeakerTick += 1
+                if !self.isStageObscuredByOverlay
+                    || isInPip
+                    || activeSpeakerTick >= self.activeSpeakerObscuredTickInterval {
+                    activeSpeakerTick = 0
+                    self.updateActiveSpeaker()
+                }
+                #if SKIP
                 if isInPip && !wasInPip {
                     await self.refreshPipVideoAfterEntry()
                 }
@@ -5904,6 +6120,7 @@ final class MeetingViewModel {
         isRejoinInFlight = false
         resetReconnectRetryState()
         state.meetingEndedNoticeMessage = nil
+        clearMeetingEntry()
         socketManager.disconnect()
         Task {
             await cleanup(lifecycleGeneration: leavingGeneration)
@@ -5918,6 +6135,7 @@ final class MeetingViewModel {
         shouldRejoinAfterReconnect = false
         isRejoinInFlight = false
         resetReconnectRetryState()
+        clearMeetingEntry()
         state.connectionState = ConnectionState.error
         state.errorMessage = message
         state.waitingMessage = nil
@@ -5947,6 +6165,7 @@ final class MeetingViewModel {
         shouldRejoinAfterReconnect = false
         isRejoinInFlight = false
         resetReconnectRetryState()
+        clearMeetingEntry()
         state.connectionState = ConnectionState.disconnected
         state.errorMessage = nil
         state.waitingMessage = nil
@@ -5991,6 +6210,7 @@ final class MeetingViewModel {
         shouldRejoinAfterReconnect = false
         isRejoinInFlight = false
         resetReconnectRetryState()
+        clearMeetingEntry()
         socketManager.disconnect()
         await cleanup(lifecycleGeneration: failureGeneration, notifyLocalState: false)
         guard meetingLifecycleGeneration == failureGeneration else { return }
@@ -6013,6 +6233,7 @@ final class MeetingViewModel {
         shouldRejoinAfterReconnect = false
         isRejoinInFlight = false
         resetReconnectRetryState()
+        clearMeetingEntry()
         socketManager.disconnect()
         clearPendingPreAckRoomEvents()
         state.connectionState = ConnectionState.disconnected
@@ -6062,7 +6283,9 @@ final class MeetingViewModel {
             pipEntered: { self.handlePictureInPictureEntered() },
             pipRefresh: { self.handlePictureInPictureRefresh() }
         )
-        PermissionHelper.requestNotificationsPermissionIfNeeded()
+        // Do not launch the Android notification-permission Activity while
+        // SkipUI is settling the meeting-entry transition. The foreground
+        // service can still run; notification access is optional call chrome.
         CallNotificationBridge.startCall(muted: state.isMuted, cameraOff: state.isCameraOff)
         PipController.setInCall(active: true)
         PipController.setMuted(value: state.isMuted)
@@ -6431,6 +6654,9 @@ final class MeetingViewModel {
         clearGameState(clearCatalog: false)
         state.isGhostMode = false
         state.isChatOpen = false
+        state.isTranscriptOpen = false
+        closeTranscriptStream()
+        transcriptState.resetAll()
         state.roomId = ""
         // Reset adaptive video quality: the SFU only pushes setVideoQuality when
         // a room's quality CHANGES (or is already low), so a new standard-quality
@@ -6454,6 +6680,7 @@ final class MeetingViewModel {
         state.serverRestartNotice = nil
         clearAdminNotice()
         state.waitingMessage = nil
+        clearMeetingEntry()
     }
 
     /// Clears a transient, recoverable error shown in the in-call banner WITHOUT
@@ -8093,6 +8320,7 @@ final class MeetingViewModel {
     }
 
     func toggleChat() {
+        PerformanceDiagnostics.event("chat_toggle", details: "next=\(!state.isChatOpen)")
         state.isChatOpen = !state.isChatOpen
         if state.isChatOpen {
             state.unreadChatCount = 0

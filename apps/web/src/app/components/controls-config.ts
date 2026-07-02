@@ -39,6 +39,8 @@ export interface ControlsBarProps {
   /** Phone-width layout: fold screen-share/reactions into the More menu so the
    * core mic/camera/More/leave row fits without wrapping. */
   compact?: boolean;
+  /** Room members (self first) for the watch-together coachmark vignette. */
+  coachAvatars?: { id: string; name: string }[];
   roomId?: string;
   isMuted: boolean;
   isMuteTogglePending?: boolean;

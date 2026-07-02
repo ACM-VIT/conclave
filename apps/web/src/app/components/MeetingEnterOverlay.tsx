@@ -57,7 +57,7 @@ function describeError(
           "The media connection didn't go through. Another try usually does it.",
         canRetry: true,
       };
-    default: {
+    case "UNKNOWN": {
       // Surface a clean server message (e.g. "Room not found") but hide raw
       // transport noise (e.g. "xhr poll error", "Failed to fetch").
       const raw = (error.message || "").trim();

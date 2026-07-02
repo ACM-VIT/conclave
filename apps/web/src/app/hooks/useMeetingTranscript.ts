@@ -478,8 +478,7 @@ export function useMeetingTranscript({
           return;
         }
 
-        let waiter: TranscriptSessionWaiter;
-        waiter = {
+        const waiter: TranscriptSessionWaiter = {
           predicate,
           resolve,
           timeoutId: window.setTimeout(() => {
@@ -521,8 +520,7 @@ export function useMeetingTranscript({
           return;
         }
 
-        let waiter: SfuRelayStartTokenWaiter;
-        waiter = {
+        const waiter: SfuRelayStartTokenWaiter = {
           resolve,
           timeoutId: window.setTimeout(() => {
             sfuRelayStartTokenWaitersRef.current.delete(waiter);
@@ -833,7 +831,9 @@ export function useMeetingTranscript({
     };
 
     void checkVersion();
-    const interval = window.setInterval(checkVersion, VERSION_POLL_INTERVAL_MS);
+    const interval = window.setInterval(() => {
+      void checkVersion();
+    }, VERSION_POLL_INTERVAL_MS);
     document.addEventListener("visibilitychange", handleVisibilityChange);
     return () => {
       cancelled = true;

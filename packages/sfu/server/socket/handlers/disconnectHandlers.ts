@@ -8,7 +8,7 @@ import {
   emitWebinarAttendeeCountChanged,
   emitWebinarFeedChanged,
 } from "../../webinarNotifications.js";
-import type { ConnectionContext } from "../context.js";
+import { getSocketContext, type ConnectionContext } from "../context.js";
 import { emitChatHistorySnapshot } from "./chatHistory.js";
 import { registerAdminHandlers } from "./adminHandlers.js";
 
@@ -75,11 +75,17 @@ export const registerDisconnectHandlers = (
         }
 
         activeRoom.removeClient(userId);
-        state.transcriptRelays.stopRoomForUser({
-          roomKey: activeRoom.channelId,
-          userId,
-          canStopAnyRelay: false,
-        });
+        state.transcriptRelays
+          .stopRoomForUser({
+            roomKey: activeRoom.channelId,
+            userId,
+            canStopAnyRelay: false,
+          })
+          .catch((error) => {
+            Logger.warn(
+              `Transcript SFU relay stop on disconnect failed for room ${activeRoom.channelId}: ${error}`,
+            );
+          });
         void state.transcriptRelays.syncRoom(activeRoom);
         if (!isGhost && !isWebinarAttendee) {
           io.to(roomChannelId).emit("userLeft", {
@@ -99,8 +105,7 @@ export const registerDisconnectHandlers = (
               Logger.info(
                 `Promoted ${promoted.id} to admin in room ${roomId} after host disconnect.`,
               );
-              const promotedContext = promoted.socket.data
-                ?.context as ConnectionContext | undefined;
+              const promotedContext = getSocketContext(promoted.socket);
               if (promotedContext) {
                 promotedContext.currentClient = promoted;
                 promotedContext.currentRoom = activeRoom;

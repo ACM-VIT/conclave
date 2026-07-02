@@ -1,5 +1,6 @@
 "use client";
 
+import { errorName } from "../lib/utils";
 import {
   Crop,
   Ghost,
@@ -1441,12 +1442,12 @@ function GridLayout({
     const playVideo = () => {
       if (cancelled) return;
       video.play().catch((err) => {
-        if (err.name === "NotAllowedError") {
+        if (errorName(err) === "NotAllowedError") {
           video.muted = true;
           video.play().catch(() => {});
           return;
         }
-        if (err.name !== "AbortError") {
+        if (errorName(err) !== "AbortError") {
           console.error("[Meets] Grid local video play error:", err);
         }
       });
@@ -2555,7 +2556,7 @@ function GridLayout({
         await copyToClipboard(meetingLink);
         setInviteStatus("copied");
       }
-    } catch (error) {
+    } catch {
       return;
     }
     inviteTimeoutRef.current = window.setTimeout(() => {
@@ -3622,12 +3623,12 @@ const PresentationVideoTile = memo(function PresentationVideoTile({
     const playVideo = () => {
       if (cancelled) return;
       video.play().catch((err) => {
-        if (err.name === "NotAllowedError") {
+        if (errorName(err) === "NotAllowedError") {
           video.muted = true;
           video.play().catch(() => {});
           return;
         }
-        if (err.name !== "AbortError") {
+        if (errorName(err) !== "AbortError") {
           console.error("[Meets] Presentation video play error:", err);
         }
       });

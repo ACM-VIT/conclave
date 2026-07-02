@@ -11,7 +11,6 @@ import {
   Pencil,
   Plus,
   Trash2,
-  Unplug,
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -124,6 +123,7 @@ const emailStatusLabel = (status: string | undefined): string => {
       return "Email failed";
     case "pending":
       return "Email pending";
+    case undefined:
     default:
       return "Email off";
   }
@@ -135,13 +135,14 @@ const emailStatusClass = (status: string | undefined): string => {
       return "border-[#2BA84A]/25 bg-[#2BA84A]/10 text-[#7BE495]";
     case "failed":
       return "border-[#F95F4A]/25 bg-[#F95F4A]/10 text-[#ffb2a8]";
+    case undefined:
     default:
       return "border-white/10 bg-white/[0.04] text-[#fafafa]/55";
   }
 };
 
 const readError = async (response: Response): Promise<string> => {
-  const data = await response.json().catch(() => null);
+  const data: unknown = await response.json().catch(() => null);
   return data && typeof data === "object" && "error" in data
     ? String((data as { error?: string }).error || "Request failed")
     : response.statusText || "Request failed";
@@ -199,7 +200,7 @@ const listTimeZones = (): string[] => {
   return FALLBACK_TIME_ZONES;
 };
 
-export default function ScheduleClient({ user }: Props) {
+export default function ScheduleClient({ user: _user }: Props) {
   const [dashboard, setDashboard] = useState<SchedulingDashboardResponse | null>(
     null,
   );

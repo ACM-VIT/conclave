@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { parseVideoId } from "../../core/youtube/id";
+import { CROWD_PICKS } from "../crowdPicks";
 import {
   fetchTrending,
   fetchVideoTitle,
@@ -48,9 +49,12 @@ export function WatchEmptyState({
   const [previewTitle, setPreviewTitle] = useState<string | null>(null);
   const [trending, setTrending] = useState<WatchSearchResult[]>([]);
   const [trendingToken, setTrendingToken] = useState<string | null>(null);
+  const [trendingLoaded, setTrendingLoaded] = useState(false);
+  const [browseUnavailable, setBrowseUnavailable] = useState(false);
   const [results, setResults] = useState<WatchSearchResult[] | null>(null);
   const [searching, setSearching] = useState(false);
   const [searchedFor, setSearchedFor] = useState<string | null>(null);
+  const [searchUnavailable, setSearchUnavailable] = useState(false);
   const requestRef = useRef(0);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
@@ -65,6 +69,8 @@ export function WatchEmptyState({
       if (cancelled) return;
       setTrending(page.items);
       setTrendingToken(page.nextPageToken);
+      setBrowseUnavailable(page.unavailable);
+      setTrendingLoaded(true);
     });
     return () => {
       cancelled = true;
@@ -135,9 +141,10 @@ export function WatchEmptyState({
     const requestId = ++requestRef.current;
     setSearching(true);
     setSearchedFor(query);
-    void searchVideos(query).then((items) => {
+    void searchVideos(query).then((outcome) => {
       if (requestRef.current !== requestId) return;
-      setResults(items);
+      setResults(outcome.items);
+      setSearchUnavailable(outcome.unavailable);
       setSearching(false);
     });
   };
@@ -168,7 +175,16 @@ export function WatchEmptyState({
   }
 
   const showResults = results !== null || searching;
-  const gridItems = showResults ? (results ?? []) : trending;
+  // No key or no data: keep the surface alive with keyless evergreen picks.
+  const fallbackMode = !showResults && trendingLoaded && trending.length === 0;
+  const showSkeletons = searching || (!showResults && !trendingLoaded);
+  const gridItems = showResults
+    ? (results ?? [])
+    : trending.length > 0
+      ? trending
+      : fallbackMode
+        ? CROWD_PICKS
+        : [];
 
   return (
     <div ref={scrollRef} className="h-full w-full overflow-y-auto">
@@ -248,6 +264,19 @@ export function WatchEmptyState({
           </button>
         ) : (
           <>
+            {fallbackMode ? (
+              <div className="mx-auto mt-12 max-w-sm text-center">
+                <h3 className="text-[15px] font-medium text-[#fafafa]">
+                  Paste a link, press play
+                </h3>
+                <p className="mt-2 text-[12.5px] leading-relaxed text-[#a1a1aa]">
+                  {browseUnavailable
+                    ? "Search and trending are switched off on this server, but any YouTube link dropped above plays in sync for the whole room."
+                    : "Trending is quiet right now. Paste any YouTube link above and it plays in sync for the whole room."}
+                </p>
+              </div>
+            ) : null}
+
             <div className="mt-8 flex items-center gap-2">
               {showResults ? (
                 <>
@@ -266,6 +295,7 @@ export function WatchEmptyState({
                       onClick={() => {
                         setResults(null);
                         setSearchedFor(null);
+                        setSearchUnavailable(false);
                         setValue("");
                       }}
                       className="ml-1 cursor-pointer text-[11.5px] text-[#71717a] transition-colors hover:text-[#fafafa]"
@@ -283,17 +313,28 @@ export function WatchEmptyState({
                     Trending
                   </h3>
                 </>
+              ) : fallbackMode ? (
+                <>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#F95F4A" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M12 3l1.9 5.8a2 2 0 001.3 1.3L21 12l-5.8 1.9a2 2 0 00-1.3 1.3L12 21l-1.9-5.8a2 2 0 00-1.3-1.3L3 12l5.8-1.9a2 2 0 001.3-1.3L12 3z" />
+                  </svg>
+                  <h3 className="text-[13px] font-medium text-[#fafafa]">
+                    Or start with a classic
+                  </h3>
+                </>
               ) : null}
             </div>
 
             {showResults && !searching && gridItems.length === 0 ? (
               <p className="mt-3 text-[12.5px] text-[#71717a]">
-                Nothing found. Try a different search or paste a link.
+                {searchUnavailable
+                  ? "Search is switched off on this server. Paste a YouTube link instead."
+                  : "Nothing found. Try a different search or paste a link."}
               </p>
             ) : null}
 
             <div className="mt-4 grid grid-cols-2 gap-x-4 gap-y-6 md:grid-cols-3 xl:grid-cols-4">
-              {searching
+              {showSkeletons
                 ? Array.from({ length: 8 }).map((_, index) => (
                     <div key={index} aria-hidden="true">
                       <div
