@@ -629,9 +629,9 @@ export default function WordleGame({
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
       <style>{FLIP_STYLE}</style>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <div>
-          <p style={{ margin: 0, color: wordleAccent, fontFamily: HEAD_FONT, fontSize: 12 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <p style={{ margin: 0, color: wordleAccent, fontFamily: HEAD_FONT, fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
             {isRandomMode ? "Wordle" : pub.setterName ? `Set by ${pub.setterName}` : "Wordle"}
             {pub.totalRounds > 1 ? ` · Round ${pub.currentRound}/${pub.totalRounds}` : ""}
           </p>

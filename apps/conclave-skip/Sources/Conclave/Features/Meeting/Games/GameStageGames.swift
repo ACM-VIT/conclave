@@ -773,6 +773,310 @@ struct ImposterStageView: View {
     }
 }
 
+// MARK: - Chess
+
+struct ChessStageSquare: Identifiable {
+    let square: String
+    let piece: String?
+    let isDark: Bool
+
+    var id: String { square }
+}
+
+struct ChessStageView: View {
+    @Bindable var viewModel: MeetingViewModel
+    let activeGame: GamePublicState
+    let playerView: GameJSONValue?
+    let canPlay: Bool
+    let canManage: Bool
+
+    @State private var selectedSquare: String? = nil
+
+    private var side: String? {
+        playerView?.string("side")
+    }
+
+    private var canMove: Bool {
+        canPlay
+            && playerView?.bool("canMove") == true
+            && !viewModel.state.isGameActionInFlight
+    }
+
+    var body: some View {
+        let publicView = activeGame.view
+        let phase = publicView?.string("phase") ?? activeGame.phase
+        let fen = publicView?.string("fen") ?? ""
+        let squares = ChessStageView.boardSquares(from: fen, side: side)
+        let targets = selectedSquare.flatMap { legalTargets(for: $0, in: publicView) } ?? []
+
+        VStack(spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: ACMSpacing.md) {
+                    GameStagePrompt(
+                        kicker: phase == "results" ? "Result" : "Chess",
+                        title: statusTitle(publicView: publicView, phase: phase),
+                        subtitle: roleSubtitle(publicView: publicView)
+                    )
+
+                    LazyVGrid(
+                        columns: Array(repeating: GridItem(.flexible(), spacing: 0), count: 8),
+                        spacing: 0
+                    ) {
+                        ForEach(squares) { item in
+                            chessSquare(item, isSelected: selectedSquare == item.square, isTarget: targets.contains(item.square))
+                        }
+                    }
+                    .aspectRatio(1.0, contentMode: .fit)
+                    .clipShape(RoundedRectangle(cornerRadius: ACMRadius.md, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: ACMRadius.md, style: .continuous)
+                            .strokeBorder(lineWidth: 1)
+                            .foregroundStyle(ACMColors.border)
+                    }
+
+                    teamSummary(publicView)
+
+                    if let drawOffer = publicView?.dictionaryValue?["drawOffer"] as? [String: Any],
+                       let name = drawOffer["byName"] as? String {
+                        GameStageMetaLine(text: "\(name) offered a draw.")
+                    }
+                }
+                .padding(ACMSpacing.md)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            bottomBar(publicView: publicView, phase: phase)
+        }
+    }
+
+    private func chessSquare(_ item: ChessStageSquare, isSelected: Bool, isTarget: Bool) -> some View {
+        Button {
+            handleSquare(item)
+        } label: {
+            ZStack {
+                Rectangle()
+                    .fill(squareColor(isDark: item.isDark, isSelected: isSelected, isTarget: isTarget))
+                if let piece = item.piece {
+                    Text(piece)
+                        .font(.system(size: 30, weight: .regular, design: .serif))
+                        .foregroundStyle(ChessStageView.isWhitePiece(piece) ? Color.white : Color.black)
+                        .shadow(color: Color.black.opacity(0.18), radius: 1, x: 0, y: 1)
+                }
+                if isTarget && item.piece == nil {
+                    Circle()
+                        .fill(Color.black.opacity(0.32))
+                        .frame(width: 12, height: 12)
+                }
+            }
+            .aspectRatio(1.0, contentMode: .fit)
+        }
+        .buttonStyle(.plain)
+        .disabled(!canMove)
+    }
+
+    private func squareColor(isDark: Bool, isSelected: Bool, isTarget: Bool) -> Color {
+        if isSelected { return ACMColors.primaryOrange }
+        if isTarget { return ACMColors.primaryOrange.opacity(0.42) }
+        return isDark ? Color(red: 0.38, green: 0.45, blue: 0.37) : Color(red: 0.83, green: 0.76, blue: 0.62)
+    }
+
+    private func handleSquare(_ item: ChessStageSquare) {
+        guard canMove else { return }
+        let pieceIsOwn = ChessStageView.side(forPiece: item.piece) == side
+        if selectedSquare == nil {
+            if pieceIsOwn { selectedSquare = item.square }
+            return
+        }
+        guard let selected = selectedSquare else { return }
+        let targets = legalTargets(for: selected, in: activeGame.view)
+        if selected == item.square {
+            selectedSquare = nil
+            return
+        }
+        if pieceIsOwn && !targets.contains(item.square) {
+            selectedSquare = item.square
+            return
+        }
+        guard targets.contains(item.square) else { return }
+        let movingPiece = ChessStageView.piece(at: selected, in: activeGame.view?.string("fen") ?? "")
+        let promotion = ChessStageView.shouldPromote(piece: movingPiece, to: item.square) ? "q" : ""
+        selectedSquare = nil
+        viewModel.sendGameMove(
+            type: "move",
+            payload: GameJSONValue.object([
+                "from": selected,
+                "to": item.square,
+                "promotion": promotion
+            ])
+        )
+    }
+
+    @ViewBuilder
+    private func bottomBar(publicView: GameJSONValue?, phase: String) -> some View {
+        if phase == "results" {
+            GameStageResultsBar(viewModel: viewModel, canManage: canManage)
+        } else if playerView?.bool("canRespondToDraw") == true {
+            GameStageBottomBar {
+                GameStageActionButton(
+                    title: "Accept draw",
+                    isDisabled: viewModel.state.isGameActionInFlight
+                ) {
+                    viewModel.sendGameMove(type: "acceptDraw")
+                }
+                GameStageActionButton(
+                    title: "Decline",
+                    isPrimary: false,
+                    tint: ACMColors.text,
+                    isDisabled: viewModel.state.isGameActionInFlight
+                ) {
+                    viewModel.sendGameMove(type: "declineDraw")
+                }
+            }
+        } else if playerView?.bool("canOfferDraw") == true || playerView?.bool("canResign") == true {
+            GameStageBottomBar {
+                GameStageActionButton(
+                    title: "Offer draw",
+                    isPrimary: false,
+                    tint: ACMColors.text,
+                    isDisabled: viewModel.state.isGameActionInFlight || publicView?.dictionaryValue?["drawOffer"] != nil
+                ) {
+                    viewModel.sendGameMove(type: "offerDraw")
+                }
+                GameStageActionButton(
+                    title: "Resign",
+                    isPrimary: false,
+                    tint: ACMColors.error,
+                    isDisabled: viewModel.state.isGameActionInFlight
+                ) {
+                    viewModel.sendGameMove(type: "resign")
+                }
+            }
+        }
+    }
+
+    private func statusTitle(publicView: GameJSONValue?, phase: String) -> String {
+        if let result = publicView?.dictionaryValue?["result"] as? [String: Any] {
+            let winner = (result["winner"] as? String) ?? "draw"
+            let reason = (result["reason"] as? String) ?? "result"
+            if winner == "draw" { return "Draw by \(reason)" }
+            return "\(winner.capitalized) wins by \(reason)"
+        }
+        if canMove { return "Your move" }
+        let turnSide = publicView?.string("turnSide") ?? "white"
+        return "\(turnSide.capitalized) to move"
+    }
+
+    private func roleSubtitle(publicView: GameJSONValue?) -> String? {
+        let role = playerView?.string("role") ?? "spectator"
+        if role == "spectator" { return "Watching" }
+        if publicView?.bool("inCheck") == true {
+            return "\(role.replacingOccurrences(of: "-", with: " ")). Check."
+        }
+        return role.replacingOccurrences(of: "-", with: " ")
+    }
+
+    private func legalTargets(for square: String, in view: GameJSONValue?) -> [String] {
+        guard let legal = view?.dictionaryValue?["legalMoves"] as? [String: Any] else { return [] }
+        return legal[square] as? [String] ?? []
+    }
+
+    private func teamSummary(_ view: GameJSONValue?) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            chessTeamLine(title: "White", rows: teamRows("white", in: view))
+            chessTeamLine(title: "Black", rows: teamRows("black", in: view))
+        }
+    }
+
+    private func chessTeamLine(title: String, rows: [[String: Any]]) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(ACMFont.trial(12, weight: .semibold))
+                .foregroundStyle(ACMColors.textFaint)
+            Text(rows.map { row in
+                let name = (row["name"] as? String) ?? "Player"
+                let captain = GameDetailsPresentationPolicy.boolValue(row["captain"]) == true
+                return captain ? "\(name) lead" : name
+            }.joined(separator: ", "))
+            .font(ACMFont.trial(13))
+            .foregroundStyle(ACMColors.textMuted)
+            .lineLimit(2)
+        }
+    }
+
+    private func teamRows(_ side: String, in view: GameJSONValue?) -> [[String: Any]] {
+        guard let teams = view?.dictionaryValue?["teams"] as? [String: Any] else { return [] }
+        return teams[side] as? [[String: Any]] ?? []
+    }
+
+    static func boardSquares(from fen: String, side: String?) -> [ChessStageSquare] {
+        let placement = fen.split(separator: " ").first.map(String.init) ?? ""
+        let rows = placement.split(separator: "/").map(String.init)
+        let files = ["a", "b", "c", "d", "e", "f", "g", "h"]
+        let ranks = ["8", "7", "6", "5", "4", "3", "2", "1"]
+        var squares: [ChessStageSquare] = []
+        for (rankIndex, row) in rows.enumerated() {
+            var fileIndex = 0
+            for token in row {
+                if let count = Int(String(token)) {
+                    for _ in 0..<count {
+                        squares.append(ChessStageSquare(
+                            square: "\(files[fileIndex])\(ranks[rankIndex])",
+                            piece: nil,
+                            isDark: (fileIndex + rankIndex) % 2 == 1
+                        ))
+                        fileIndex += 1
+                    }
+                } else {
+                    squares.append(ChessStageSquare(
+                        square: "\(files[fileIndex])\(ranks[rankIndex])",
+                        piece: pieceSymbol(String(token)),
+                        isDark: (fileIndex + rankIndex) % 2 == 1
+                    ))
+                    fileIndex += 1
+                }
+            }
+        }
+        return side == "black" ? Array(squares.reversed()) : squares
+    }
+
+    static func pieceSymbol(_ code: String) -> String {
+        switch code {
+        case "P": return "♙"
+        case "N": return "♘"
+        case "B": return "♗"
+        case "R": return "♖"
+        case "Q": return "♕"
+        case "K": return "♔"
+        case "p": return "♟"
+        case "n": return "♞"
+        case "b": return "♝"
+        case "r": return "♜"
+        case "q": return "♛"
+        case "k": return "♚"
+        default: return ""
+        }
+    }
+
+    static func isWhitePiece(_ piece: String) -> Bool {
+        ["♙", "♘", "♗", "♖", "♕", "♔"].contains(piece)
+    }
+
+    static func side(forPiece piece: String?) -> String? {
+        guard let piece else { return nil }
+        return isWhitePiece(piece) ? "white" : "black"
+    }
+
+    static func piece(at square: String, in fen: String) -> String? {
+        boardSquares(from: fen, side: nil).first { $0.square == square }?.piece
+    }
+
+    static func shouldPromote(piece: String?, to square: String) -> Bool {
+        if piece == "♙" { return square.hasSuffix("8") }
+        if piece == "♟" { return square.hasSuffix("1") }
+        return false
+    }
+}
+
 // MARK: - Wordle
 
 /// Wordle already has a full native round UI; the stage wraps it in the
