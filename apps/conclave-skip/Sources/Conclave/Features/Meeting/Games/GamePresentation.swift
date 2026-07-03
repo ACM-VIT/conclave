@@ -25,6 +25,8 @@ enum GameCatalogPresentationPolicy {
             return GameCatalogVisual(icon: "eye.slash.fill", androidIcon: "ghost")
         case "wordle":
             return GameCatalogVisual(icon: "square.grid.3x3.fill", androidIcon: "grid")
+        case "chess":
+            return GameCatalogVisual(icon: "checkerboard.rectangle", androidIcon: "grid")
         default:
             return GameCatalogVisual(icon: "gamecontroller.fill", androidIcon: "sports_esports")
         }

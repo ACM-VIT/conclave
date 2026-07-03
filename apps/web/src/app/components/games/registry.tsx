@@ -9,6 +9,7 @@ import MostLikelyToGame from "./MostLikelyToGame";
 import ReactionGame from "./ReactionGame";
 import ImposterGame from "./ImposterGame";
 import WordleGame from "./WordleGame";
+import ChessGame from "./ChessGame";
 
 // Add a web renderer here (one line). The key is the game id from the SFU
 // module. Everything else (launcher, stage routing) reads from this map.
@@ -20,6 +21,7 @@ export const GAME_RENDERERS: Record<string, React.ComponentType<GameViewProps>> 
   reaction: ReactionGame as React.ComponentType<GameViewProps>,
   imposter: ImposterGame as React.ComponentType<GameViewProps>,
   wordle: WordleGame as React.ComponentType<GameViewProps>,
+  chess: ChessGame as React.ComponentType<GameViewProps>,
 };
 
 export const getGameRenderer = (

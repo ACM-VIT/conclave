@@ -368,6 +368,8 @@ struct GameStageBodyView: View {
                 ImposterStageView(viewModel: viewModel, activeGame: activeGame, playerView: playerView, canPlay: canPlay, canManage: canManage)
             case "wordle":
                 WordleStageView(viewModel: viewModel, activeGame: activeGame, playerView: playerView, canPlay: canPlay, canManage: canManage)
+            case "chess":
+                ChessStageView(viewModel: viewModel, activeGame: activeGame, playerView: playerView, canPlay: canPlay, canManage: canManage)
             default:
                 GenericGameStageView(viewModel: viewModel, activeGame: activeGame, canManage: canManage)
             }
