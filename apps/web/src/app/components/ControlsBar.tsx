@@ -173,54 +173,29 @@ function PanelClusterItem({
 }
 
 /**
- * The side-panel toggles (participants, games, transcript, chat) collapse into
- * one overlapping "squabble" of icons to keep the bar uncrowded. Hover (or
- * keyboard focus) fans them out so any one can be picked. Badges and the
- * transcript live/paused dot stay visible even while collapsed, so the cluster
- * still surfaces unread chat and transcript state at a glance.
+ * The side-panel toggles (participants, games, transcript, chat) sit in a
+ * static pill with fixed positions. They used to collapse into an overlapping
+ * stack that fanned out on hover, but buttons sliding out from under the
+ * cursor caused misclicks, so nothing moves anymore. Badges and the
+ * transcript live/paused dot keep surfacing unread chat and transcript state
+ * at a glance.
  */
 function PanelCluster({
   items,
   transcriptStatus,
-  forceOpen = false,
 }: {
   items: ControlDescriptor[];
   transcriptStatus?: PanelStatus;
-  forceOpen?: boolean;
 }) {
-  const [hovered, setHovered] = useState(false);
-  const open = hovered || forceOpen;
-
   return (
-    <div
-      className="relative flex items-center rounded-full transition-colors duration-150"
-      style={{ backgroundColor: open ? "rgba(255,255,255,0.04)" : "transparent" }}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-      onFocusCapture={() => setHovered(true)}
-      onBlurCapture={(event) => {
-        if (!event.currentTarget.contains(event.relatedTarget)) {
-          setHovered(false);
-        }
-      }}
-    >
-      {items.map((d, index) => {
-        const status = d.id === "transcript" ? (transcriptStatus ?? null) : null;
-        const raised =
-          d.variant === "active" || Boolean(status) || (d.badge ?? 0) > 0;
-        return (
-          <div
-            key={d.id}
-            className="transition-[margin] duration-200 ease-out"
-            style={{
-              marginLeft: index === 0 ? 0 : open ? 2 : -12,
-              zIndex: raised ? 20 : 10 - index,
-            }}
-          >
-            <PanelClusterItem d={d} status={status} />
-          </div>
-        );
-      })}
+    <div className="flex items-center gap-0.5">
+      {items.map((d) => (
+        <PanelClusterItem
+          key={d.id}
+          d={d}
+          status={d.id === "transcript" ? (transcriptStatus ?? null) : null}
+        />
+      ))}
     </div>
   );
 }
@@ -967,7 +942,6 @@ function ControlsBar(props: ControlsBarProps) {
               <PanelCluster
                 items={panelItems}
                 transcriptStatus={transcriptClusterStatus}
-                forceOpen={panelCoachmarkVisible}
               />
             </div>
             {panelCoachmarkVisible && gamesTip.visible ? (
