@@ -1,4 +1,5 @@
 import { bluffModule } from "./modules/bluff.js";
+import { chessModule } from "./modules/chess.js";
 import { imposterModule } from "./modules/imposter.js";
 import { mostLikelyToModule } from "./modules/mostLikelyTo.js";
 import { reactionModule } from "./modules/reaction.js";
@@ -16,6 +17,7 @@ const MODULES: GameModule[] = [
   reactionModule,
   imposterModule,
   wordleModule,
+  chessModule,
 ];
 
 const REGISTRY = new Map<string, GameModule>(
