@@ -15,7 +15,8 @@ export type HotkeyAction =
   | "toggleScreenShare"
   | "toggleApps"
   | "toggleMiniView"
-  | "toggleParticipants";
+  | "toggleParticipants"
+  | "commandPalette";
 
 export const HOTKEYS: Record<HotkeyAction, HotkeyDefinition> = {
   toggleMute: {
@@ -67,6 +68,11 @@ export const HOTKEYS: Record<HotkeyAction, HotkeyDefinition> = {
     keys: "Mod+M",
     label: "Pop out Mini-view",
     description: "Pops out a mini view panel.",
+  },
+  commandPalette: {
+    keys: "Mod+K",
+    label: "Quick actions",
+    description: "Search for and run any meeting action.",
   },
 } as const;
 

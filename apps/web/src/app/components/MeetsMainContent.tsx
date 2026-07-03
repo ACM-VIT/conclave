@@ -8,7 +8,8 @@ import type { Socket } from "socket.io-client";
 import type { RoomInfo } from "@/lib/sfu-types";
 import ChatOverlay from "./ChatOverlay";
 import ChatPanel from "./ChatPanel";
-import ControlsBar from "./ControlsBar";
+import ControlsBar, { type ControlsBarProps } from "./ControlsBar";
+import CommandPalette from "./CommandPalette";
 import GridLayout from "./GridLayout";
 import ConnectionBanner from "./ConnectionBanner";
 import AdminNoticePill from "./AdminNoticePill";
@@ -1415,6 +1416,133 @@ export default function MeetsMainContent({
       : canRetryRecovery
         ? (meetError?.message ?? "We could not restore the connection yet.")
         : "Keeping your meeting open while the connection is restored.";
+  // The whiteboard/watch/playground/apps-lock handlers are async, but the bar
+  // and palette fire them without awaiting; adapt them once as void-returning
+  // callbacks so their identity stays stable for ControlsBar's memo.
+  const openWhiteboard = useCallback(() => {
+    void handleOpenWhiteboard();
+  }, [handleOpenWhiteboard]);
+  const closeWhiteboard = useCallback(() => {
+    void handleCloseWhiteboard();
+  }, [handleCloseWhiteboard]);
+  const openWatch = useCallback(() => {
+    void handleOpenWatch();
+  }, [handleOpenWatch]);
+  const closeWatch = useCallback(() => {
+    void handleCloseWatch();
+  }, [handleCloseWatch]);
+  const openDevPlayground = useCallback(() => {
+    void handleOpenDevPlayground();
+  }, [handleOpenDevPlayground]);
+  const closeDevPlayground = useCallback(() => {
+    void handleCloseDevPlayground();
+  }, [handleCloseDevPlayground]);
+  const toggleAppsLock = useCallback(() => {
+    void handleToggleAppsLock();
+  }, [handleToggleAppsLock]);
+  // Assembled once so the bar and the Mod+K quick-actions palette stay in
+  // lockstep: every control the bar offers is exactly what the palette can
+  // search and run.
+  const controlsBarProps: ControlsBarProps = {
+    compact: useCompactControls,
+    coachAvatars,
+    roomId,
+    isMuted,
+    isMuteTogglePending,
+    isCameraOff,
+    isScreenSharing,
+    activeScreenShareId,
+    isChatOpen,
+    isTranscriptOpen,
+    isTranscriptLive: transcript.isLive,
+    transcriptStatus: transcript.session.status,
+    unreadCount,
+    isHandRaised,
+    reactionOptions,
+    onToggleMute: toggleMute,
+    onToggleCamera: toggleCamera,
+    onToggleScreenShare: toggleScreenShare,
+    onToggleChat: handleToggleChat,
+    onToggleTranscript: handleToggleTranscript,
+    onToggleHandRaised: toggleHandRaised,
+    onSendReaction: sendReaction,
+    onLeave: leaveRoom,
+    onEndForEveryone: endRoomForEveryone ? handleEndRoomForEveryone : undefined,
+    selectedAudioInputDeviceId,
+    selectedAudioOutputDeviceId,
+    selectedVideoInputDeviceId,
+    onAudioInputDeviceChange,
+    onAudioOutputDeviceChange,
+    onVideoInputDeviceChange,
+    isMirrorCamera,
+    onToggleMirror,
+    isVideoEffectsOpen,
+    activeVideoEffectsCount,
+    isVideoEffectsPermissionBlocked: isCameraPermissionBlocked,
+    onToggleVideoEffects: handleToggleVideoEffects,
+    isViewPanelOpen,
+    onToggleViewPanel: handleToggleViewPanel,
+    isAdmin,
+    isParticipantsOpen,
+    onToggleParticipants: handleToggleParticipants,
+    isGamesOpen,
+    onToggleGames: handleToggleGames,
+    hasActiveGame: isGameActive,
+    isHostControlsOpen,
+    onToggleHostControls: isAdmin ? handleToggleHostControls : undefined,
+    pendingUsersCount: isAdmin ? pendingUsers.size : 0,
+    isRoomLocked,
+    onToggleLock,
+    isNoGuests,
+    onToggleNoGuests,
+    isChatLocked,
+    onToggleChatLock,
+    isTtsDisabled,
+    onToggleTtsDisabled: handleToggleTtsDisabled,
+    isDmEnabled,
+    onToggleDmEnabled: handleToggleDmEnabled,
+    isReactionsDisabled,
+    onToggleReactionsDisabled: handleToggleReactionsDisabled,
+    isBrowserActive: browserState?.active ?? false,
+    isBrowserLaunching,
+    showBrowserControls,
+    onLaunchBrowser,
+    onCloseBrowser,
+    hasBrowserAudio,
+    isBrowserAudioMuted,
+    onToggleBrowserAudio,
+    isWhiteboardActive,
+    onOpenWhiteboard: isAdmin ? openWhiteboard : undefined,
+    onCloseWhiteboard: isAdmin ? closeWhiteboard : undefined,
+    isWatchActive,
+    onOpenWatch: isAdmin ? openWatch : undefined,
+    onCloseWatch: isAdmin ? closeWatch : undefined,
+    isDevPlaygroundEnabled,
+    isDevPlaygroundActive,
+    onOpenDevPlayground: isAdmin ? openDevPlayground : undefined,
+    onCloseDevPlayground: isAdmin ? closeDevPlayground : undefined,
+    isAppsLocked: appsState.locked,
+    onToggleAppsLock: isAdmin ? toggleAppsLock : undefined,
+    isVoiceAgentRunning,
+    isVoiceAgentStarting,
+    onStartVoiceAgent: isAdmin ? onStartVoiceAgent : undefined,
+    onStopVoiceAgent: isAdmin ? onStopVoiceAgent : undefined,
+    isPopoutActive,
+    isPopoutSupported,
+    onOpenPopout,
+    onClosePopout,
+    meetingRequiresInviteCode,
+    webinarConfig,
+    webinarRole,
+    webinarLink,
+    onSetWebinarLink,
+    onGetMeetingConfig,
+    onUpdateMeetingConfig,
+    onGetWebinarConfig,
+    onUpdateWebinarConfig,
+    onGenerateWebinarLink,
+    onRotateWebinarLink,
+  };
   return (
     <div
       className={`flex-1 flex flex-col relative ${
@@ -1941,114 +2069,8 @@ export default function MeetsMainContent({
           </div>
         ) : (
           <div className="safe-area-pb flex w-full flex-col items-center gap-2">
-            <ControlsBar
-                compact={useCompactControls}
-                coachAvatars={coachAvatars}
-                roomId={roomId}
-                isMuted={isMuted}
-                isMuteTogglePending={isMuteTogglePending}
-                isCameraOff={isCameraOff}
-                isScreenSharing={isScreenSharing}
-                activeScreenShareId={activeScreenShareId}
-                isChatOpen={isChatOpen}
-                isTranscriptOpen={isTranscriptOpen}
-                isTranscriptLive={transcript.isLive}
-                transcriptStatus={transcript.session.status}
-                unreadCount={unreadCount}
-                isHandRaised={isHandRaised}
-                reactionOptions={reactionOptions}
-                onToggleMute={toggleMute}
-                onToggleCamera={toggleCamera}
-                onToggleScreenShare={toggleScreenShare}
-                onToggleChat={handleToggleChat}
-                onToggleTranscript={handleToggleTranscript}
-                onToggleHandRaised={toggleHandRaised}
-                onSendReaction={sendReaction}
-                onLeave={leaveRoom}
-                onEndForEveryone={
-                  endRoomForEveryone ? handleEndRoomForEveryone : undefined
-                }
-                selectedAudioInputDeviceId={selectedAudioInputDeviceId}
-                selectedAudioOutputDeviceId={selectedAudioOutputDeviceId}
-                selectedVideoInputDeviceId={selectedVideoInputDeviceId}
-                onAudioInputDeviceChange={onAudioInputDeviceChange}
-                onAudioOutputDeviceChange={onAudioOutputDeviceChange}
-                onVideoInputDeviceChange={onVideoInputDeviceChange}
-                isMirrorCamera={isMirrorCamera}
-                onToggleMirror={onToggleMirror}
-                isVideoEffectsOpen={isVideoEffectsOpen}
-                activeVideoEffectsCount={activeVideoEffectsCount}
-                isVideoEffectsPermissionBlocked={isCameraPermissionBlocked}
-                onToggleVideoEffects={handleToggleVideoEffects}
-                isViewPanelOpen={isViewPanelOpen}
-                onToggleViewPanel={handleToggleViewPanel}
-                isAdmin={isAdmin}
-                isParticipantsOpen={isParticipantsOpen}
-                onToggleParticipants={handleToggleParticipants}
-                isGamesOpen={isGamesOpen}
-                onToggleGames={handleToggleGames}
-                hasActiveGame={isGameActive}
-                isHostControlsOpen={isHostControlsOpen}
-                onToggleHostControls={
-                  isAdmin ? handleToggleHostControls : undefined
-                }
-                pendingUsersCount={isAdmin ? pendingUsers.size : 0}
-                isRoomLocked={isRoomLocked}
-                onToggleLock={onToggleLock}
-                isNoGuests={isNoGuests}
-                onToggleNoGuests={onToggleNoGuests}
-                isChatLocked={isChatLocked}
-                onToggleChatLock={onToggleChatLock}
-                isTtsDisabled={isTtsDisabled}
-                onToggleTtsDisabled={handleToggleTtsDisabled}
-                isDmEnabled={isDmEnabled}
-                onToggleDmEnabled={handleToggleDmEnabled}
-                isReactionsDisabled={isReactionsDisabled}
-                onToggleReactionsDisabled={handleToggleReactionsDisabled}
-                isBrowserActive={browserState?.active ?? false}
-                isBrowserLaunching={isBrowserLaunching}
-                showBrowserControls={showBrowserControls}
-                onLaunchBrowser={onLaunchBrowser}
-                onCloseBrowser={onCloseBrowser}
-                hasBrowserAudio={hasBrowserAudio}
-                isBrowserAudioMuted={isBrowserAudioMuted}
-                onToggleBrowserAudio={onToggleBrowserAudio}
-                isWhiteboardActive={isWhiteboardActive}
-                onOpenWhiteboard={isAdmin ? handleOpenWhiteboard : undefined}
-                onCloseWhiteboard={isAdmin ? handleCloseWhiteboard : undefined}
-                isWatchActive={isWatchActive}
-                onOpenWatch={isAdmin ? handleOpenWatch : undefined}
-                onCloseWatch={isAdmin ? handleCloseWatch : undefined}
-                isDevPlaygroundEnabled={isDevPlaygroundEnabled}
-                isDevPlaygroundActive={isDevPlaygroundActive}
-                onOpenDevPlayground={
-                  isAdmin ? handleOpenDevPlayground : undefined
-                }
-                onCloseDevPlayground={
-                  isAdmin ? handleCloseDevPlayground : undefined
-                }
-                isAppsLocked={appsState.locked}
-                onToggleAppsLock={isAdmin ? handleToggleAppsLock : undefined}
-                isVoiceAgentRunning={isVoiceAgentRunning}
-                isVoiceAgentStarting={isVoiceAgentStarting}
-                onStartVoiceAgent={isAdmin ? onStartVoiceAgent : undefined}
-                onStopVoiceAgent={isAdmin ? onStopVoiceAgent : undefined}
-                isPopoutActive={isPopoutActive}
-                isPopoutSupported={isPopoutSupported}
-                onOpenPopout={onOpenPopout}
-                onClosePopout={onClosePopout}
-                meetingRequiresInviteCode={meetingRequiresInviteCode}
-                webinarConfig={webinarConfig}
-                webinarRole={webinarRole}
-                webinarLink={webinarLink}
-                onSetWebinarLink={onSetWebinarLink}
-                onGetMeetingConfig={onGetMeetingConfig}
-                onUpdateMeetingConfig={onUpdateMeetingConfig}
-                onGetWebinarConfig={onGetWebinarConfig}
-                onUpdateWebinarConfig={onUpdateWebinarConfig}
-                onGenerateWebinarLink={onGenerateWebinarLink}
-                onRotateWebinarLink={onRotateWebinarLink}
-              />
+            <ControlsBar {...controlsBarProps} />
+            <CommandPalette controls={controlsBarProps} />
             {browserAudioNeedsGesture && (
               <div className="w-full mt-2 text-center text-[11px] text-[#F95F4A]/70 uppercase tracking-[0.3em]">
                 Click “Shared browser audio” to unlock the system sound.
