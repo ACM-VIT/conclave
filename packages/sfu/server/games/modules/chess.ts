@@ -14,6 +14,7 @@ type ChessMode = "duel" | "teams";
 type ChessSide = "white" | "black";
 type ChessTurn = "w" | "b";
 type ChessRole = "white-captain" | "black-captain" | "white-team" | "black-team" | "spectator";
+type TimeControl = "infinite" | "120" | "300" | "600";
 type Promotion = "q" | "r" | "b" | "n";
 
 type ChessTeam = {
@@ -34,7 +35,7 @@ type ChessMoveRecord = {
 
 type ChessResult = {
   winner: ChessSide | "draw";
-  reason: "checkmate" | "stalemate" | "threefold" | "insufficient" | "draw" | "resignation";
+  reason: "checkmate" | "stalemate" | "threefold" | "insufficient" | "draw" | "resignation" | "timeout";
   byPlayerId?: string;
   byName?: string;
 };
@@ -48,9 +49,12 @@ type DrawOffer = {
 type ChessState = {
   phase: ChessPhase;
   mode: ChessMode;
+  timeControlMs: number | null;
+  clocks: Record<ChessSide, number | null>;
   fen: string;
   pgn: string;
   turn: ChessTurn;
+  turnStartedAt: number | null;
   teams: {
     white: ChessTeam;
     black: ChessTeam;
@@ -72,6 +76,12 @@ export type ChessMove =
 
 const PROMOTIONS = ["q", "r", "b", "n"] as const;
 const SQUARE_RE = /^[a-h][1-8]$/;
+const TIME_CONTROLS: Record<TimeControl, number | null> = {
+  infinite: null,
+  "120": 120_000,
+  "300": 300_000,
+  "600": 600_000,
+};
 
 const decodeChessMove = (move: GameMove): ChessMove => {
   switch (move.type) {
@@ -101,7 +111,6 @@ const decodeChessMove = (move: GameMove): ChessMove => {
 
 const sideForTurn = (turn: ChessTurn): ChessSide => (turn === "w" ? "white" : "black");
 const otherSide = (side: ChessSide): ChessSide => (side === "white" ? "black" : "white");
-const turnForSide = (side: ChessSide): ChessTurn => (side === "white" ? "w" : "b");
 
 const playerName = (ctx: GameContext, playerId: string): string =>
   ctx.players.find((player) => player.id === playerId)?.name ?? playerId;
@@ -179,6 +188,37 @@ const teamView = (team: ChessTeam, ctx: GameContext) =>
     captain: id === team.captainId,
   }));
 
+const resolveClocks = (state: ChessState, now: number): Record<ChessSide, number | null> => {
+  if (state.timeControlMs == null || state.phase !== "playing" || state.turnStartedAt == null) {
+    return { ...state.clocks };
+  }
+  const side = sideForTurn(state.turn);
+  const elapsed = Math.max(0, now - state.turnStartedAt);
+  return {
+    ...state.clocks,
+    [side]: Math.max(0, (state.clocks[side] ?? state.timeControlMs) - elapsed),
+  };
+};
+
+const timeoutResult = (timedOutSide: ChessSide): ChessResult => ({
+  winner: otherSide(timedOutSide),
+  reason: "timeout",
+});
+
+const timeoutState = (state: ChessState, ctx: GameContext): ChessState | null => {
+  if (state.phase !== "playing" || state.timeControlMs == null) return null;
+  const side = sideForTurn(state.turn);
+  const clocks = resolveClocks(state, ctx.now);
+  if ((clocks[side] ?? 0) > 0) return null;
+  return {
+    ...state,
+    phase: "results",
+    clocks,
+    result: timeoutResult(side),
+    finishedAt: ctx.now,
+  };
+};
+
 export const chessModule: GameModule<ChessState> = {
   id: "chess",
   name: "Chess",
@@ -186,6 +226,7 @@ export const chessModule: GameModule<ChessState> = {
   minPlayers: 2,
   maxPlayers: 32,
   spectatable: true,
+  tickMs: 500,
   options: [
     {
       id: "mode",
@@ -197,17 +238,34 @@ export const chessModule: GameModule<ChessState> = {
         { value: "teams", label: "Team chess" },
       ],
     },
+    {
+      id: "timeControl",
+      type: "select",
+      label: "Timer",
+      default: "infinite",
+      choices: [
+        { value: "120", label: "2 min" },
+        { value: "300", label: "5 min" },
+        { value: "600", label: "10 min" },
+        { value: "infinite", label: "Infinite" },
+      ],
+    },
   ],
 
   setup(ctx): ChessState {
     const game = new Chess();
     const mode = selectOption(ctx.config, "mode", "duel") === "teams" ? "teams" : "duel";
+    const timeControl = selectOption(ctx.config, "timeControl", "infinite") as TimeControl;
+    const timeControlMs = TIME_CONTROLS[timeControl] ?? null;
     return {
       phase: "lobby",
       mode,
+      timeControlMs,
+      clocks: { white: timeControlMs, black: timeControlMs },
       fen: game.fen(),
       pgn: game.pgn(),
       turn: game.turn(),
+      turnStartedAt: null,
       teams: {
         white: { captainId: null, playerIds: [] },
         black: { captainId: null, playerIds: [] },
@@ -227,10 +285,12 @@ export const chessModule: GameModule<ChessState> = {
         if (!ctx.isAdmin(move.playerId)) throw new GameMoveError("Only the host can start");
         if (state.phase !== "lobby") throw new GameMoveError("Already running");
         const teams = seatedTeams(ctx, state.mode);
-        return { ...state, phase: "playing", teams, startedAt: ctx.now };
+        return { ...state, phase: "playing", teams, startedAt: ctx.now, turnStartedAt: ctx.now };
       }
       case "move": {
         if (state.phase !== "playing") throw new GameMoveError("Game is not running");
+        const timedOut = timeoutState(state, ctx);
+        if (timedOut) return timedOut;
         const side = sideForTurn(state.turn);
         requireCaptain(state, move.playerId, side);
 
@@ -244,12 +304,15 @@ export const chessModule: GameModule<ChessState> = {
         if (!played) throw new GameMoveError("Illegal move");
 
         const result = resultForGame(game);
+        const clocks = resolveClocks(state, ctx.now);
         return {
           ...state,
           phase: result ? "results" : "playing",
+          clocks,
           fen: game.fen(),
           pgn: game.pgn(),
           turn: game.turn(),
+          turnStartedAt: result ? null : ctx.now,
           drawOffer: null,
           result,
           finishedAt: result ? ctx.now : null,
@@ -270,12 +333,15 @@ export const chessModule: GameModule<ChessState> = {
       }
       case "resign": {
         if (state.phase !== "playing") throw new GameMoveError("Game is not running");
+        const timedOut = timeoutState(state, ctx);
+        if (timedOut) return timedOut;
         const side = sideForPlayer(state, move.playerId);
         if (!side) throw new GameMoveError("You are not on a side");
         requireCaptain(state, move.playerId, side);
         return {
           ...state,
           phase: "results",
+          clocks: resolveClocks(state, ctx.now),
           drawOffer: null,
           result: {
             winner: otherSide(side),
@@ -288,6 +354,8 @@ export const chessModule: GameModule<ChessState> = {
       }
       case "offerDraw": {
         if (state.phase !== "playing") throw new GameMoveError("Game is not running");
+        const timedOut = timeoutState(state, ctx);
+        if (timedOut) return timedOut;
         const side = sideForPlayer(state, move.playerId);
         if (!side) throw new GameMoveError("You are not on a side");
         requireCaptain(state, move.playerId, side);
@@ -298,6 +366,8 @@ export const chessModule: GameModule<ChessState> = {
       }
       case "acceptDraw": {
         if (state.phase !== "playing") throw new GameMoveError("Game is not running");
+        const timedOut = timeoutState(state, ctx);
+        if (timedOut) return timedOut;
         if (!state.drawOffer) throw new GameMoveError("No draw offer to accept");
         const side = sideForPlayer(state, move.playerId);
         if (!side || side === state.drawOffer.side) {
@@ -307,6 +377,7 @@ export const chessModule: GameModule<ChessState> = {
         return {
           ...state,
           phase: "results",
+          clocks: resolveClocks(state, ctx.now),
           drawOffer: null,
           result: { winner: "draw", reason: "draw", byPlayerId: move.playerId, byName: playerName(ctx, move.playerId) },
           finishedAt: ctx.now,
@@ -314,6 +385,8 @@ export const chessModule: GameModule<ChessState> = {
       }
       case "declineDraw": {
         if (state.phase !== "playing") throw new GameMoveError("Game is not running");
+        const timedOut = timeoutState(state, ctx);
+        if (timedOut) return timedOut;
         if (!state.drawOffer) return state;
         const side = sideForPlayer(state, move.playerId);
         if (!side || side === state.drawOffer.side) {
@@ -329,13 +402,21 @@ export const chessModule: GameModule<ChessState> = {
     }
   },
 
+  onTick(state, ctx): ChessState {
+    return timeoutState(state, ctx) ?? state;
+  },
+
   getPhase: (state) => state.phase,
 
   publicView(state, ctx) {
     const game = new Chess(state.fen);
+    const clocks = resolveClocks(state, ctx.now);
     return {
       phase: state.phase,
       mode: state.mode,
+      serverNow: ctx.now,
+      timeControlMs: state.timeControlMs,
+      clocks,
       fen: state.fen,
       pgn: state.pgn,
       turn: state.turn,
