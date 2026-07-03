@@ -30,6 +30,16 @@ export type GameRng = {
   pick<T>(items: readonly T[]): T;
 };
 
+/**
+ * Show this option only while another select option holds one of the given
+ * values (e.g. chess's "Computer level" only when mode is "computer").
+ * Clients that predate the field simply always show the option.
+ */
+export type GameOptionCondition = {
+  id: string;
+  equals: string[];
+};
+
 /** Host-configurable option specs, declared by a module and rendered by the UI. */
 export type GameOptionSpec =
   | {
@@ -42,6 +52,7 @@ export type GameOptionSpec =
       /** Quick presets surfaced as a segmented control. */
       presets?: number[];
       suffix?: string;
+      showWhen?: GameOptionCondition;
     }
   | {
       id: string;
@@ -49,6 +60,7 @@ export type GameOptionSpec =
       label: string;
       default: string;
       choices: { value: string; label: string }[];
+      showWhen?: GameOptionCondition;
     }
   | {
       id: string;
@@ -57,6 +69,7 @@ export type GameOptionSpec =
       default: string;
       placeholder?: string;
       maxLength?: number;
+      showWhen?: GameOptionCondition;
     };
 
 /** Resolved, validated config values keyed by option id. */

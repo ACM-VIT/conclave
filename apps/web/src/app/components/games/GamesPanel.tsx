@@ -394,7 +394,11 @@ function GameConfigView({
         {entry.description}.
       </p>
 
-      {entry.options.map((opt) => (
+      {entry.options.map((opt) => {
+        if (opt.showWhen && !opt.showWhen.equals.includes(String(config[opt.showWhen.id]))) {
+          return null;
+        }
+        return (
         <div key={opt.id} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           <span style={{ fontSize: 13, color: color.text, fontFamily: HEAD_FONT }}>{opt.label}</span>
           {opt.type === "number" ? (
@@ -433,7 +437,8 @@ function GameConfigView({
             />
           )}
         </div>
-      ))}
+        );
+      })}
 
       <PrimaryButton full disabled={readOnly || busy} onClick={() => onStart(config)}>
         {busy ? (

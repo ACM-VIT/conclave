@@ -67,4 +67,7 @@ export type ChessMove =
   | { type: "resign" }
   | { type: "offerDraw" }
   | { type: "acceptDraw" }
-  | { type: "declineDraw" };
+  | { type: "declineDraw" }
+  | { type: "requestTakeback" }
+  | { type: "acceptTakeback" }
+  | { type: "declineTakeback" };
