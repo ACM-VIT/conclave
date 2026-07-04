@@ -969,14 +969,7 @@ struct JoinView: View {
 #endif
             } else {
                 VStack(spacing: 14) {
-                    Circle()
-                        .fill(ACMColors.avatarColor(for: previewDisplayName))
-                        .frame(width: 86, height: 86)
-                        .overlay {
-                            Text(userInitial)
-                                .font(ACMFont.trial(34, weight: .bold))
-                                .foregroundStyle(Color.white)
-                        }
+                    FacehashAvatarView(name: previewDisplayName, size: 86)
 
                     Text("Camera is off")
                         .font(ACMFont.trial(13.5))

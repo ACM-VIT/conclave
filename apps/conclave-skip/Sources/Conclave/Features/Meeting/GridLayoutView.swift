@@ -82,19 +82,21 @@ func computeOptimalTileLayout(
         )
     }
 
-    // Phone portrait: match web's fixed two-column mobile gallery. Do not shrink
-    // tiles to cram everyone into the viewport, and do not stack two-person calls
-    // into a tall single column.
-    let cols = min(count, 2)
+    // Phone portrait: fill the stage like Meet/Zoom instead of floating small
+    // cards in black. Two-person calls stack full-width; everything else packs
+    // two columns and stretches rows to consume the available height (capped so
+    // tiles never become degenerate towers). Overflowing counts fall back to
+    // square tiles and the scrolling path.
+    let cols = count == 2 ? 1 : min(count, 2)
     let rows = Int(ceil(Double(count) / Double(cols)))
     let tileWidth = floor((availW - CGFloat(cols - 1) * spacing) / CGFloat(cols))
     var tileHeight = tileWidth
-    let squareContentHeight = CGFloat(rows) * tileHeight + CGFloat(max(0, rows - 1)) * spacing
-    if squareContentHeight < availH {
-        let fitHeight = floor((availH - CGFloat(max(0, rows - 1)) * spacing) / CGFloat(rows))
-        let maxHeightRatio = count == 1 ? 1.0 : 1.5
-        let maxHeight = floor(tileWidth * maxHeightRatio)
-        tileHeight = max(tileWidth, min(fitHeight, maxHeight))
+    let fitHeight = floor((availH - CGFloat(max(0, rows - 1)) * spacing) / CGFloat(rows))
+    if fitHeight >= tileWidth {
+        tileHeight = min(fitHeight, floor(tileWidth * 2.1))
+    } else if cols == 1 {
+        // Stacked pair: wide cinematic tiles are correct, never overflow.
+        tileHeight = max(120.0, fitHeight)
     }
     return TileLayout(
         columns: cols,
@@ -102,6 +104,32 @@ func computeOptimalTileLayout(
         tileWidth: max(1.0, tileWidth),
         tileHeight: max(1.0, tileHeight)
     )
+}
+
+/// Where a tile sits inside the packed grid canvas. Short rows (the last row
+/// of an odd count) are centered, matching the old HStack behavior and the web
+/// grid packer.
+enum GridTileFramePolicy {
+    static func origin(
+        index: Int,
+        count: Int,
+        columns: Int,
+        tileWidth: CGFloat,
+        tileHeight: CGFloat,
+        contentWidth: CGFloat,
+        spacing: CGFloat
+    ) -> CGPoint {
+        let cols = max(1, columns)
+        let row = index / cols
+        let column = index % cols
+        let itemsInRow = min(cols, max(1, count - row * cols))
+        let rowWidth = CGFloat(itemsInRow) * tileWidth +
+            CGFloat(max(0, itemsInRow - 1)) * spacing
+        let x = (contentWidth - rowWidth) / 2.0 +
+            CGFloat(column) * (tileWidth + spacing)
+        let y = CGFloat(row) * (tileHeight + spacing)
+        return CGPoint(x: max(0.0, x), y: max(0.0, y))
+    }
 }
 
 // MARK: - Grid Layout
@@ -148,6 +176,11 @@ struct GridLayoutView: View {
             let shouldScrollGrid = count > scrollThreshold ||
                 (isCompact && packedContentHeight > visibleHeight)
 
+            // Fade between the grid's own display modes (solo full-stage,
+            // packed grid, scrolling grid) — these are branch swaps that
+            // otherwise cut with a blank frame between them.
+            let gridMode = count <= 1 ? "solo" : (shouldScrollGrid ? "scroll" : "packed")
+
             Group {
                 if count <= 1 {
                     Group {
@@ -178,6 +211,7 @@ struct GridLayoutView: View {
                     .padding(.horizontal, padding)
                     .padding(.top, padding)
                     .padding(.bottom, controlsOverlap)
+                    .transition(.opacity)
                 } else if !shouldScrollGrid {
                     nonScrollingGrid(
                         layout: layout,
@@ -185,6 +219,7 @@ struct GridLayoutView: View {
                         hiddenParticipantCount: gridSnapshot.hiddenParticipantCount
                     )
                         .frame(width: geo.size.width, height: visibleHeight, alignment: .center)
+                        .transition(.opacity)
                 } else {
                     scrollingGrid(
                         containerWidth: geo.size.width,
@@ -192,8 +227,10 @@ struct GridLayoutView: View {
                         hiddenParticipantCount: gridSnapshot.hiddenParticipantCount,
                         preferredTileHeight: isCompact ? layout.tileHeight : nil
                     )
+                    .transition(.opacity)
                 }
             }
+            .animation(ACMMotion.stageSwap, value: gridMode)
             .frame(width: geo.size.width, height: geo.size.height, alignment: .top)
             .overlay {
                 if gridSnapshot.shouldShowDetachedSelfView &&
@@ -209,29 +246,45 @@ struct GridLayoutView: View {
 
     @ViewBuilder
     func nonScrollingGrid(layout: TileLayout, ids: [String], hiddenParticipantCount: Int) -> some View {
-        VStack(spacing: spacing) {
-            ForEach(0..<layout.rows, id: \.self) { row in
-                HStack(spacing: spacing) {
-                    let startIndex = row * layout.columns
-                    let endIndex = min(startIndex + layout.columns, ids.count)
+        // Absolute placement in a fixed canvas, keyed by userId: when the grid
+        // reflows (join, leave, reorder, stage resize) every tile GLIDES to its
+        // new frame like the web app's FLIP system, instead of rows rebuilding
+        // and tiles teleporting. The signature only changes on layout-affecting
+        // facts, so speaking/mute churn never re-triggers the animation.
+        let contentWidth = CGFloat(layout.columns) * layout.tileWidth +
+            CGFloat(max(0, layout.columns - 1)) * spacing
+        let contentHeight = CGFloat(layout.rows) * layout.tileHeight +
+            CGFloat(max(0, layout.rows - 1)) * spacing
+        let layoutSignature = ids.joined(separator: "~") +
+            "|\(Int(layout.tileWidth))x\(Int(layout.tileHeight))"
 
-                    if startIndex < endIndex {
-                        ForEach(startIndex..<endIndex, id: \.self) { index in
-                            let userId = ids[index]
-                            Button {
-                                if userId != MeetingState.overflowTileId {
-                                    viewModel.togglePin(userId)
-                                }
-                            } label: {
-                                tileFor(userId: userId, hiddenParticipantCount: hiddenParticipantCount)
-                                    .frame(width: layout.tileWidth, height: layout.tileHeight)
-                            }
-                            .buttonStyle(.plain)
-                        }
+        ZStack(alignment: .topLeading) {
+            ForEach(ids, id: \.self) { userId in
+                let index = ids.firstIndex(of: userId) ?? 0
+                let origin = GridTileFramePolicy.origin(
+                    index: index,
+                    count: ids.count,
+                    columns: layout.columns,
+                    tileWidth: layout.tileWidth,
+                    tileHeight: layout.tileHeight,
+                    contentWidth: contentWidth,
+                    spacing: spacing
+                )
+
+                Button {
+                    if userId != MeetingState.overflowTileId {
+                        viewModel.togglePin(userId)
                     }
+                } label: {
+                    tileFor(userId: userId, hiddenParticipantCount: hiddenParticipantCount)
+                        .frame(width: layout.tileWidth, height: layout.tileHeight)
                 }
+                .buttonStyle(.plain)
+                .offset(x: origin.x, y: origin.y)
+                .animation(ACMMotion.tileGlide, value: layoutSignature)
             }
         }
+        .frame(width: contentWidth, height: contentHeight, alignment: .topLeading)
         .padding(padding)
     }
 
@@ -294,6 +347,7 @@ struct GridLayoutView: View {
             isHandRaised: viewModel.state.isHandRaised,
             isSpeaking: viewModel.state.isEffectiveActiveSpeaker(viewModel.state.userId),
             isLocal: true,
+            identityId: viewModel.state.userId,
             fillStage: fill,
             localCameraFacing: viewModel.localCameraFacing,
             captureSession: captureSession,
@@ -309,6 +363,7 @@ struct GridLayoutView: View {
             isHandRaised: participant.isHandRaised,
             isSpeaking: viewModel.state.isEffectiveActiveSpeaker(participant.id),
             isLocal: false,
+            identityId: participant.id,
             connectionStatus: participant.connectionStatus,
             trackWrapper: viewModel.webRTCClient.remoteVideoTrack(forUserId: participant.id)
         )

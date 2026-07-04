@@ -126,14 +126,7 @@ struct ParticipantsSheetView: View {
 
     @ViewBuilder
     private func avatarView(_ name: String, size: CGFloat = 40.0) -> some View {
-        Circle()
-            .fill(ACMColors.avatarColor(for: name))
-            .frame(width: size, height: size)
-            .overlay {
-                Text(String(name.prefix(1)).uppercased())
-                    .font(.system(size: size == 40.0 ? 16.0 : 14.0, weight: .semibold))
-                    .foregroundStyle(Color.white)
-            }
+        FacehashAvatarView(name: name, size: size)
     }
 
     @ViewBuilder

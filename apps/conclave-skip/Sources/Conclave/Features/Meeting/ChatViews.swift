@@ -28,7 +28,10 @@ enum ChatSubmitReplyPolicy {
 
 enum ChatComposerLayout {
     static func inputHeight(isAndroid: Bool) -> CGFloat {
-        isAndroid ? 36.0 : 40.0
+        // Android: sized to sit beside the Material text field, which
+        // enforces its own 56dp minimum height and must NOT be frame-clamped
+        // (a smaller frame clips the text instead of shrinking the field).
+        isAndroid ? 44.0 : 40.0
     }
 
     static func inputHorizontalPadding(isAndroid: Bool) -> CGFloat {
@@ -44,7 +47,7 @@ enum ChatComposerLayout {
     }
 
     static func composerVerticalPadding(isAndroid: Bool) -> CGFloat {
-        isAndroid ? 4.0 : 14.0
+        isAndroid ? 6.0 : 14.0
     }
 
     static func composerMinHeight(isAndroid: Bool) -> CGFloat {
@@ -245,6 +248,16 @@ struct ChatOverlayView: View {
         let canSendMessage = !messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isChatDisabled
 
         VStack(spacing: 0) {
+            #if SKIP
+            // System BACK closes the chat panel instead of backgrounding the
+            // whole activity mid-call (zero-size host, emits no UI).
+            ComposeView { _ in
+                MeetingSheetBackHandler(enabled: true) {
+                    closeChat()
+                }
+            }
+            .frame(width: 0, height: 0)
+            #endif
             HStack {
                 Text("Chat")
                     .font(ACMFont.trial(16, weight: .semibold))
@@ -331,14 +344,15 @@ struct ChatOverlayView: View {
                     .accessibilityLabel("Add a GIF")
 
                     #if SKIP
+                    // SkipUI's TextField is a Material3 OutlinedTextField with
+                    // a 56dp minimum height. Give it its natural size — any
+                    // hard frame smaller than that clips the text vertically.
                     TextField(placeholder, text: messageTextBinding)
                         .textFieldStyle(.plain)
                         .font(ACMFont.trial(14))
                         .foregroundStyle(ACMColors.text)
                         .tint(ACMColors.primaryOrange)
                         .padding(.horizontal, inputHorizontalPadding)
-                        .padding(.vertical, inputVerticalPadding)
-                        .frame(height: inputHeight, alignment: .center)
                         .acmColorBackground(ACMColors.bgAlt)
                         .overlay {
                             Capsule().strokeBorder(lineWidth: 1).foregroundStyle(ACMColors.border)
@@ -397,9 +411,6 @@ struct ChatOverlayView: View {
                         #endif
                         .disabled(!canSendMessage)
                 }
-                #if SKIP
-                .frame(height: inputHeight)
-                #endif
                 .onTapGesture {
                     markComposerActive()
                 }
@@ -1061,12 +1072,7 @@ private struct ChatMentionSuggestionsView: View {
                     onSelect(suggestion)
                 } label: {
                     HStack(spacing: 10) {
-                        Text(String(suggestion.displayName.prefix(1)).uppercased())
-                            .font(ACMFont.trial(11, weight: .bold))
-                            .foregroundStyle(Color.white)
-                            .frame(width: 24, height: 24)
-                            .acmColorBackground(ACMColors.avatarColor(for: suggestion.userId))
-                            .clipShape(Circle())
+                        FacehashAvatarView(name: suggestion.displayName, id: suggestion.userId, size: 24)
 
                         VStack(alignment: .leading, spacing: 2) {
                             Text(suggestion.displayName)
@@ -1369,6 +1375,11 @@ struct ChatMessageRow: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         #if SKIP
+        // Long-press reveals the action strip; a faint surface confirms the hit.
+        .padding(.horizontal, isActionActive ? 8.0 : 0.0)
+        .padding(.vertical, isActionActive ? 6.0 : 0.0)
+        .acmColorBackground(isActionActive ? ACMColors.surfaceRaised : Color.clear)
+        .clipShape(RoundedRectangle(cornerRadius: ACMRadius.md))
         .onLongPressGesture {
             onToggleActions(message)
         }
@@ -1394,14 +1405,7 @@ struct ChatMessageRow: View {
         if isGroupedWithPrevious {
             Color.clear.frame(width: 32, height: 1)
         } else {
-            Circle()
-                .fill(ACMColors.avatarColor(for: message.userId))
-                .frame(width: 32, height: 32)
-                .overlay {
-                    Text(String(senderName.prefix(1)).uppercased())
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(Color.white)
-                }
+            FacehashAvatarView(name: senderName, id: message.userId, size: 32)
         }
     }
 
@@ -1830,12 +1834,10 @@ struct ChatReplyComposerView: View {
     }
 
     var body: some View {
+        // The accent bar is an overlay so the card's height stays driven by
+        // the two text lines; a freestanding Rectangle would greedily expand
+        // this strip to fill the whole panel.
         HStack(spacing: 10) {
-            Rectangle()
-                .fill(ACMColors.primaryOrange)
-                .frame(width: 3)
-                .clipShape(Capsule())
-
             VStack(alignment: .leading, spacing: 2) {
                 Text(ChatMessagePresentation.replyDisplayName(for: replyTo, isFromCurrentUser: isReplyFromCurrentUser))
                     .font(ACMFont.trial(11, weight: .semibold))
@@ -1857,10 +1859,17 @@ struct ChatReplyComposerView: View {
                     .clipShape(Circle())
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("Cancel reply")
         }
-        .padding(.horizontal, 12)
+        .padding(.leading, 15)
+        .padding(.trailing, 12)
         .padding(.vertical, 9)
         .acmColorBackground(ACMColors.bgAlt)
+        .overlay(alignment: .leading) {
+            Rectangle()
+                .fill(ACMColors.primaryOrange)
+                .frame(width: 3)
+        }
         .clipShape(RoundedRectangle(cornerRadius: ACMRadius.md))
         .overlay {
             RoundedRectangle(cornerRadius: ACMRadius.md)

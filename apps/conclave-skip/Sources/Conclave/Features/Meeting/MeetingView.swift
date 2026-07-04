@@ -36,7 +36,10 @@ enum MeetingChatOverlayLayout {
         isAndroid: Bool
     ) -> CGFloat {
         // Full-height docked panel (top to bottom), not a floating card.
-        return max(availableHeight, 0.0)
+        // While typing on iOS, guarantee enough height for the header, a few
+        // messages, and the composer even if the keyboard inset misreports.
+        let floor = inputFocused && !isAndroid ? 220.0 : 0.0
+        return max(availableHeight, floor)
     }
 }
 
@@ -158,12 +161,13 @@ struct MeetingView: View {
                             onShowParticipants: { openMeetingSheet(.participants) }
                         )
 
+                        // Cross-fade when the stage changes KIND (grid to
+                        // spotlight, game takeover, share start/stop). The
+                        // value scoping keeps ambient withAnimation calls and
+                        // state churn from animating stage internals; tiles
+                        // own their glide via ACMMotion.tileGlide.
                         meetingStage(containerSize: geometry.size)
-                        #if !SKIP
-                            .transaction { transaction in
-                                transaction.animation = nil
-                            }
-                        #endif
+                            .animation(ACMMotion.stageSwap, value: stageKind)
 
                         // Keep this in-flow. On Android, a bottom overlay can
                         // duplicate Skip's Compose-backed icons at the stage top.
@@ -191,11 +195,11 @@ struct MeetingView: View {
                     }
 
                     if viewModel.state.isChatOpen && !viewModel.state.isWebinarAttendee {
-                        #if SKIP
-                        let chatTopPadding = max(12.0, geometry.safeAreaInsets.top + 8.0)
-                        #else
-                        let chatTopPadding = max(78.0, geometry.safeAreaInsets.top + 48.0)
-                        #endif
+                        // This container already sits inside the top safe area
+                        // on both platforms, so only clear the in-flow meeting
+                        // header (~58pt); adding the inset doubled the gap and
+                        // on Android the inset read 0 and buried the header.
+                        let chatTopPadding = 60.0
                         #if SKIP
                         let chatAlignment = Alignment.bottomTrailing
                         #else
@@ -204,7 +208,11 @@ struct MeetingView: View {
                         #if SKIP
                         let chatKeyboardInset = 0.0
                         #elseif canImport(UIKit)
-                        let chatKeyboardInset = chatInputFocused ? max(0.0, keyboardHeight - geometry.safeAreaInsets.bottom) : 0.0
+                        // Clamp the tracked keyboard height: a corrupted frame
+                        // (foreign overlay windows, stage manager, split view)
+                        // must never crush the panel into a sliver.
+                        let rawChatKeyboardInset = chatInputFocused ? max(0.0, keyboardHeight - geometry.safeAreaInsets.bottom) : 0.0
+                        let chatKeyboardInset = min(rawChatKeyboardInset, geometry.size.height * 0.5)
                         #else
                         let chatKeyboardInset = 0.0
                         #endif
@@ -219,6 +227,12 @@ struct MeetingView: View {
                             inputFocused: chatInputFocused
                         )
 
+                        // The overlay lives inside the horizontally padded
+                        // container; sizing it to the raw geometry width made
+                        // it overflow and clip at the screen edge.
+                        let chatHorizontalInset = max(6.0, geometry.safeAreaInsets.leading)
+                            + max(6.0, geometry.safeAreaInsets.trailing)
+
                         HStack {
                             Spacer()
 
@@ -228,9 +242,13 @@ struct MeetingView: View {
                                     chatInputFocused = focused
                                 }
                             )
-                                .frame(width: chatOverlayWidth(for: geometry.size.width))
+                                .frame(width: chatOverlayWidth(for: geometry.size.width - chatHorizontalInset))
                                 #if SKIP
-                                .frame(height: chatMaxHeight, alignment: .bottom)
+                                // No computed height on Android: the panel
+                                // fills whatever the Compose insets leave, so
+                                // the keyboard resizes it instead of clipping
+                                // the composer (Jetchat inset pattern).
+                                .frame(maxHeight: .infinity)
                                 #else
                                 .frame(height: chatMaxHeight)
                                 #endif
@@ -246,9 +264,13 @@ struct MeetingView: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: chatAlignment)
                         #endif
                         .padding(.top, chatTopPadding)
-                        .padding(.bottom, effectiveChatBottomPadding)
                         #if SKIP
-                        .composeModifier { $0.imePadding().navigationBarsPadding() }
+                        // navigationBars BEFORE ime: the reverse order re-adds
+                        // the nav inset on top of the keyboard (the classic
+                        // Compose double-padding bug).
+                        .composeModifier { $0.navigationBarsPadding().imePadding() }
+                        #else
+                        .padding(.bottom, effectiveChatBottomPadding)
                         #endif
                     }
 
@@ -391,6 +413,23 @@ struct MeetingView: View {
             ?? windows.first(where: { !$0.isHidden })?.frame.maxY
     }
     #endif
+
+    /// Discrete stage surface identity — mirrors the meetingStage branch
+    /// order. The cross-fade animation is keyed to this so it fires only on
+    /// surface swaps, never on state churn inside a surface.
+    private var stageKind: String {
+        if viewModel.state.isWebinarAttendee {
+            if viewModel.state.hasActiveScreenShare { return "webinar-present" }
+            if viewModel.state.usesSpotlightLayout { return "webinar-spotlight" }
+            return "webinar-waiting"
+        }
+        if viewModel.state.activeAppId != nil { return "app" }
+        if viewModel.state.isBrowserActive { return "browser" }
+        if viewModel.state.gamePublicState != nil { return "game" }
+        if viewModel.state.hasActiveScreenShare { return "presentation" }
+        if viewModel.state.usesSpotlightLayout { return "spotlight" }
+        return "grid"
+    }
 
     @ViewBuilder
     private func meetingStage(containerSize: CGSize) -> some View {
@@ -567,11 +606,9 @@ private struct MeetingSheetPresenter: View {
 
 @ViewBuilder
 private func stageSwapTransition<Content: View>(_ content: Content) -> some View {
-    #if SKIP
-    content
-    #else
+    // SkipUI maps this to Compose fadeIn/fadeOut, so both platforms get the
+    // same cross-fade, driven by the stageKind-scoped animation upstream.
     content.transition(.opacity)
-    #endif
 }
 
 private struct WebinarWaitingView: View {

@@ -123,6 +123,7 @@ struct DetachedSelfViewOverlay: View {
                 isHandRaised: viewModel.state.isHandRaised,
                 isSpeaking: viewModel.state.isEffectiveActiveSpeaker(viewModel.state.userId),
                 isLocal: true,
+                identityId: viewModel.state.userId,
                 isThumbnail: true,
                 avatarSizeOverride: MeetingDetachedSelfLayout.floatingAvatarSize(isCompact: isCompact),
                 usePlatformOverlaySurface: true,

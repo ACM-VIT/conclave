@@ -123,7 +123,7 @@ struct ReactionStageView: View {
             && !viewModel.state.isGameActionInFlight
 
         VStack(spacing: 0) {
-            if phase == "arming" || phase == "go" {
+            if (phase == "arming" || phase == "go") && canPlay {
                 // The pad is the whole stage: nothing to read, one thing to do.
                 reactionTapPad(
                     phase: phase,
@@ -133,6 +133,15 @@ struct ReactionStageView: View {
                     canTap: canTap
                 )
                 .padding(ACMSpacing.md)
+            } else if (phase == "arming" || phase == "go") && !canPlay {
+                // Spectators do not get a tap pad; just show what is happening.
+                GameStageNotice(
+                    icon: "bolt.fill",
+                    androidIcon: "warning",
+                    title: phase == "go" ? "Players are tapping" : "Get ready",
+                    subtitle: GameStageTextPolicy.reactionSubtitle(publicView, phase: phase)
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: ACMSpacing.md) {
@@ -259,6 +268,9 @@ struct MostLikelyStageView: View {
         let reveal = phase == "reveal"
         let results = phase == "results"
         let winnerId = publicView?.string("winnerId")
+        let deadline = publicView?.double("deadline")
+        let serverNow = publicView?.double("serverNow") ?? 0.0
+        let voteDurationMs = publicView?.double("voteDurationMs")
         let canVote = canPlay && phase == "vote" && !viewModel.state.isGameActionInFlight
 
         VStack(spacing: 0) {
@@ -268,9 +280,13 @@ struct MostLikelyStageView: View {
                         kicker: results ? "Results" : GameStageTextPolicy.progressKicker(publicView, fallback: "Vote"),
                         title: results
                             ? "That is a wrap"
-                            : (publicView?.string("prompt") ?? "Waiting for the prompt."),
+                            : GameStageTextPolicy.mostLikelyHeadline(publicView?.string("prompt")),
                         subtitle: mostLikelySupportLine(publicView, phase: phase)
                     )
+
+                    if phase == "vote", let deadline, deadline > 0 {
+                        GameStageCountdown(deadline: deadline, serverNow: serverNow, durationMs: voteDurationMs)
+                    }
 
                     if phase == "vote" || reveal {
                         VStack(spacing: 8) {
@@ -339,6 +355,9 @@ struct WouldYouRatherStageView: View {
         let counts = publicView?.intArray("counts") ?? []
         let reveal = phase == "reveal"
         let results = phase == "results"
+        let deadline = publicView?.double("deadline")
+        let serverNow = publicView?.double("serverNow") ?? 0.0
+        let chooseDurationMs = publicView?.double("chooseDurationMs")
         let canChoose = canPlay && phase == "choose" && !viewModel.state.isGameActionInFlight
 
         VStack(spacing: 0) {
@@ -348,6 +367,10 @@ struct WouldYouRatherStageView: View {
                         kicker: results ? "Results" : GameStageTextPolicy.progressKicker(publicView, fallback: "Would you rather"),
                         title: reveal ? "The room split" : "Pick a side"
                     )
+
+                    if phase == "choose", let deadline, deadline > 0 {
+                        GameStageCountdown(deadline: deadline, serverNow: serverNow, durationMs: chooseDurationMs)
+                    }
 
                     VStack(spacing: 10) {
                         GameStageChoiceCard(
@@ -478,6 +501,8 @@ struct BluffStageView: View {
         let optionRows = publicView?.objectArray("options") ?? []
         let options = optionRows.compactMap { GameStageTextPolicy.bluffOption($0) }
         let results = phase == "results"
+        let deadline = publicView?.double("deadline")
+        let serverNow = publicView?.double("serverNow") ?? 0.0
         let canSubmit = canPlay
             && phase == "write"
             && !submitted
@@ -492,6 +517,10 @@ struct BluffStageView: View {
                         kicker: GameStageTextPolicy.bluffTitle(publicView, phase: phase),
                         title: results ? GameStageTextPolicy.triviaWinnerText(publicView) : question
                     )
+
+                    if phase == "write" || phase == "choose", let deadline, deadline > 0 {
+                        GameStageCountdown(deadline: deadline, serverNow: serverNow)
+                    }
 
                     if phase == "write" {
                         if submitted {
@@ -549,15 +578,11 @@ struct BluffStageView: View {
                 bluffHostBar(phase: phase)
             }
         }
-        #if SKIP
+        // New round means the previous bluff is stale; drop the draft. The
+        // zero-parameter onChange is Android-safe.
         .onChange(of: phase) {
             bluffAnswerInput = ""
         }
-        #else
-        .onChange(of: phase) {
-            bluffAnswerInput = ""
-        }
-        #endif
     }
 
     private func bluffComposer(canSubmit: Bool) -> some View {
@@ -648,6 +673,8 @@ struct ImposterStageView: View {
         let players = playerRows.compactMap { GameDetailsPresentationPolicy.gamePlayerOption($0) }
         let yourVote = playerView?.string("yourVote")
         let isImposter = playerView?.string("role") == "imposter"
+        let deadline = publicView?.double("deadline")
+        let serverNow = publicView?.double("serverNow") ?? 0.0
         let canVote = canPlay && phase == "vote" && !viewModel.state.isGameActionInFlight
 
         VStack(spacing: 0) {
@@ -662,6 +689,10 @@ struct ImposterStageView: View {
                         title: GameStageTextPolicy.imposterTitle(publicView: publicView, playerView: playerView, phase: phase),
                         subtitle: GameStageTextPolicy.imposterSubtitle(publicView: publicView, playerView: playerView, phase: phase)
                     )
+
+                    if phase == "reveal", let deadline, deadline > 0 {
+                        GameStageCountdown(deadline: deadline, serverNow: serverNow)
+                    }
 
                     if phase == "vote" {
                         VStack(spacing: 8) {

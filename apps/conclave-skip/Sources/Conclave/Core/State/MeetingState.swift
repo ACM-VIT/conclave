@@ -222,6 +222,10 @@ final class MeetingState {
     var gameVote: GameVoteState?
     var isGameActionInFlight: Bool = false
     var gameErrorMessage: String?
+    // End-game arming lives in meeting state, not view @State: the stage
+    // chrome can be rebuilt by game pushes mid-arm, which would silently
+    // swallow the confirmation tap.
+    var isGameEndArmed: Bool = false
 
     // Active States
     var activeScreenShareUserId: String?

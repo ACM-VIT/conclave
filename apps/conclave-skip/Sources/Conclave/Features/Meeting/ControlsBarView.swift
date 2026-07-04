@@ -261,10 +261,23 @@ struct ControlsBarView: View {
                 }
 
                 if isCompact {
+                    // Chat is a first-class action on the phone bar; burying it
+                    // in More made the most-used surface two taps away.
+                    ControlButton(
+                        icon: chatIcon,
+                        isActive: viewModel.state.isChatOpen,
+                        badge: viewModel.state.unreadChatCount > 0 ? viewModel.state.unreadChatCount : nil,
+                        accessibilityLabel: "Chat"
+                    ) {
+                        withAnimation(.easeInOut(duration: 0.12)) {
+                            viewModel.toggleChat()
+                        }
+                    }
+
                     ControlButton(
                         icon: moreIcon,
                         isActive: false,
-                        badge: viewModel.state.unreadChatCount > 0 ? viewModel.state.unreadChatCount : nil,
+                        badge: viewModel.state.pendingUsersCount > 0 ? viewModel.state.pendingUsersCount : nil,
                         accessibilityLabel: "More controls"
                     ) {
                         onMorePressed()

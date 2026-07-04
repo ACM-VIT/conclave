@@ -12,70 +12,50 @@ struct GameStageLayoutView: View {
     private let controlsOverlap: CGFloat = 8
 
     var body: some View {
-        let _ = PerformanceDiagnostics.render("GameStageLayoutView") {
-            "game=\(viewModel.state.gamePublicState?.gameId ?? "none") phase=\(viewModel.state.gamePublicState?.phase ?? "-")"
-        }
+        // This body intentionally reads no high-frequency state: the game card
+        // and the tile strip each observe their own slice, so a game move does
+        // not recompute the strip and an active-speaker tick does not rebuild
+        // the game body.
         GeometryReader { geo in
             if isCompact {
-                compactLayout(size: geo.size)
-            } else {
-                regularLayout
-            }
-        }
-    }
-
-    private func compactLayout(size: CGSize) -> some View {
-        let availableHeight = MeetingStageLayout.visibleHeight(
-            containerHeight: size.height,
-            controlsOverlap: controlsOverlap
-        )
-        let strip = viewModel.state.tileStripSnapshot()
-        return VStack(spacing: 8) {
-            gameStage
-                .frame(maxWidth: .infinity)
-                .frame(maxHeight: .infinity)
-
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    if strip.shouldShowSelfTile {
-                        localThumbnail
-                    }
-                    ForEach(strip.participants) { participant in
-                        remoteThumbnail(participant: participant)
-                    }
-                }
-                .padding(.horizontal, 8)
-            }
-            .frame(height: 64)
-        }
-        .frame(width: size.width, height: availableHeight, alignment: .top)
-        .padding(8)
-    }
-
-    private var regularLayout: some View {
-        let strip = viewModel.state.tileStripSnapshot()
-        return HStack(spacing: 8) {
-            gameStage
-
-            ScrollView(.vertical, showsIndicators: false) {
+                let availableHeight = MeetingStageLayout.visibleHeight(
+                    containerHeight: geo.size.height,
+                    controlsOverlap: controlsOverlap
+                )
                 VStack(spacing: 8) {
-                    if strip.shouldShowSelfTile {
-                        localThumbnail
-                    }
-                    ForEach(strip.participants) { participant in
-                        remoteThumbnail(participant: participant)
-                    }
+                    GameStageCardView(viewModel: viewModel, isCompact: isCompact)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                    GameStageTileStrip(viewModel: viewModel, axis: .horizontal, isCompact: isCompact)
+                        .frame(height: 64)
+                }
+                .padding(8)
+                .frame(width: geo.size.width, height: availableHeight, alignment: .top)
+            } else {
+                HStack(spacing: 8) {
+                    GameStageCardView(viewModel: viewModel, isCompact: isCompact)
+
+                    GameStageTileStrip(viewModel: viewModel, axis: .vertical, isCompact: isCompact)
+                        .frame(width: 148)
+                        .acmColorBackground(ACMColors.bgAlt)
+                        .clipShape(RoundedRectangle(cornerRadius: ACMRadius.lg))
                 }
                 .padding(8)
             }
-            .frame(width: 148)
-            .acmColorBackground(ACMColors.bgAlt)
-            .clipShape(RoundedRectangle(cornerRadius: ACMRadius.lg))
         }
-        .padding(8)
     }
+}
 
-    private var gameStage: some View {
+/// The framed game surface. Observes only game state (+ the detached-self flag),
+/// so it rebuilds on moves and phase changes, not on tile churn.
+struct GameStageCardView: View {
+    @Bindable var viewModel: MeetingViewModel
+    let isCompact: Bool
+
+    var body: some View {
+        let _ = PerformanceDiagnostics.render("GameStageCardView") {
+            "game=\(viewModel.state.gamePublicState?.gameId ?? "none") phase=\(viewModel.state.gamePublicState?.phase ?? "-")"
+        }
         VStack(spacing: 0) {
             if let activeGame = viewModel.state.gamePublicState {
                 GameStageChromeView(viewModel: viewModel, activeGame: activeGame)
@@ -109,9 +89,46 @@ struct GameStageLayoutView: View {
             }
         }
     }
+}
+
+/// The room-presence strip beside/under the game. Observes only tile state, so
+/// speaking/mute changes never touch the game body.
+struct GameStageTileStrip: View {
+    @Bindable var viewModel: MeetingViewModel
+    let axis: Axis
+    let isCompact: Bool
 
     private var thumbnailWidth: CGFloat { isCompact ? 100.0 : 124.0 }
     private var thumbnailHeight: CGFloat { isCompact ? 56.0 : 70.0 }
+
+    var body: some View {
+        let strip = viewModel.state.tileStripSnapshot()
+        if axis == .horizontal {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    tiles(strip)
+                }
+                .padding(.horizontal, 8)
+            }
+        } else {
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(spacing: 8) {
+                    tiles(strip)
+                }
+                .padding(8)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func tiles(_ strip: MeetingTileStripSnapshot) -> some View {
+        if strip.shouldShowSelfTile {
+            localThumbnail
+        }
+        ForEach(strip.participants) { participant in
+            remoteThumbnail(participant: participant)
+        }
+    }
 
     private var localThumbnail: some View {
         let localVideoTrack = viewModel.webRTCClient.getLocalVideoTrack()
@@ -123,6 +140,7 @@ struct GameStageLayoutView: View {
             isHandRaised: viewModel.state.isHandRaised,
             isSpeaking: viewModel.state.isEffectiveActiveSpeaker(viewModel.state.userId),
             isLocal: true,
+            identityId: viewModel.state.userId,
             isThumbnail: true,
             avatarSizeOverride: 30.0,
             localCameraFacing: viewModel.localCameraFacing,
@@ -140,6 +158,7 @@ struct GameStageLayoutView: View {
             isHandRaised: participant.isHandRaised,
             isSpeaking: viewModel.state.isEffectiveActiveSpeaker(participant.id),
             isLocal: false,
+            identityId: participant.id,
             connectionStatus: participant.connectionStatus,
             isThumbnail: true,
             avatarSizeOverride: 30.0,
@@ -156,8 +175,10 @@ struct GameStageLayoutView: View {
 struct GameStageChromeView: View {
     @Bindable var viewModel: MeetingViewModel
     let activeGame: GamePublicState
-    @State private var endArmed = false
-    @State private var endArmTask: Task<Void, Never>?
+
+    private var endArmed: Bool {
+        viewModel.state.isGameEndArmed
+    }
 
     private var canManage: Bool {
         viewModel.state.isAdmin
@@ -217,10 +238,6 @@ struct GameStageChromeView: View {
         }
         .padding(.horizontal, ACMSpacing.sm)
         .padding(.vertical, ACMSpacing.xs)
-        .onDisappear {
-            endArmTask?.cancel()
-            endArmTask = nil
-        }
     }
 
     @ViewBuilder
@@ -254,21 +271,8 @@ struct GameStageChromeView: View {
 
     private var endButton: some View {
         Button {
-            if endArmed {
-                endArmTask?.cancel()
-                endArmTask = nil
-                endArmed = false
-                viewModel.endActiveGame()
-            } else {
-                endArmed = true
-                endArmTask?.cancel()
-                endArmTask = Task { @MainActor in
-                    try? await Task.sleep(nanoseconds: 3_000_000_000)
-                    guard !Task.isCancelled else { return }
-                    endArmed = false
-                    endArmTask = nil
-                }
-            }
+            debugLog("[GameStage] end tapped armed=\(endArmed)")
+            viewModel.armOrConfirmEndGame()
         } label: {
             HStack(spacing: 5) {
                 ACMSystemIcon.icon("xmark", android: "close", size: 11, tint: "error")
@@ -279,12 +283,10 @@ struct GameStageChromeView: View {
             }
             .padding(.horizontal, 12)
             .frame(height: 32)
-            .background {
-                Capsule().fill(endArmed ? ACMColors.error.opacity(0.16) : ACMColors.surfaceRaised)
-            }
-            .overlay {
-                Capsule().strokeBorder(lineWidth: 1).foregroundStyle(endArmed ? ACMColors.error.opacity(0.5) : ACMColors.border)
-            }
+            .acmGlassCapsule(
+                tint: endArmed ? ACMColors.error.opacity(0.28) : nil,
+                interactive: true
+            )
         }
         .buttonStyle(.plain)
         .disabled(viewModel.state.isGameActionInFlight)

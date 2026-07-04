@@ -510,6 +510,7 @@ final class MeetingViewModel {
     private var reactionRemovalTasks: [String: Task<Void, Never>] = [:]
     private var chatOverlayRemovalTasks: [String: Task<Void, Never>] = [:]
     private var chatOverlayRemovalTokens: [String: UUID] = [:]
+    private var gameEndArmTask: Task<Void, Never>?
     private var browserActivityTask: Task<Void, Never>?
     private var browserActivityContext: CallActionContext?
     private var activeAppSyncTask: Task<Void, Never>?
@@ -4272,17 +4273,18 @@ final class MeetingViewModel {
 
     private func applyGamePublicState(_ notification: GamePublicState) {
         guard isCurrentRoomEvent(notification.roomId) else { return }
-        if notification.finished {
-            state.gamePublicState = nil
+        // A finished round is a real, persistent state: it carries the final
+        // scoreboard and drives the rematch affordance. Keep it (like the web
+        // client) until an explicit `game:ended` clears it or a new game
+        // replaces it. Nulling here would flash the results away and bounce the
+        // stage back to the grid the instant a game ends.
+        state.gamePublicState = notification
+        if state.gamePlayerView?.gameId != notification.gameId {
             state.gamePlayerView = nil
-        } else {
-            state.gamePublicState = notification
-            if state.gamePlayerView?.gameId != notification.gameId {
-                state.gamePlayerView = nil
-            }
         }
         state.isGameActionInFlight = false
-        state.gameErrorMessage = nil
+        // Server pushes arrive constantly during a game; they must not wipe a
+        // just-surfaced action error before the player can read it.
     }
 
     private func applyGamePlayerView(_ notification: GamePlayerViewNotification) {
@@ -4290,16 +4292,12 @@ final class MeetingViewModel {
               state.gamePublicState?.gameId == notification.gameId else { return }
         state.gamePlayerView = notification
         state.isGameActionInFlight = false
-        state.gameErrorMessage = nil
     }
 
     private func applyGameVote(_ vote: GameVoteState?) {
         guard isCurrentRoomEvent(vote?.roomId) else { return }
         state.gameVote = vote
         state.isGameActionInFlight = false
-        if vote != nil {
-            state.gameErrorMessage = nil
-        }
     }
 
     private func applyGameEnded(_ notification: GameEndedNotification) {
@@ -4320,6 +4318,9 @@ final class MeetingViewModel {
         state.gameVote = nil
         state.isGameActionInFlight = false
         state.gameErrorMessage = nil
+        gameEndArmTask?.cancel()
+        gameEndArmTask = nil
+        state.isGameEndArmed = false
     }
 
     private func clearAppSyncState() {
@@ -8893,6 +8894,29 @@ final class MeetingViewModel {
         }
     }
 
+    /// Two-step end: first call arms for a few seconds, second call confirms.
+    func armOrConfirmEndGame() {
+        debugLog("[Game] armOrConfirmEndGame entry armed=\(state.isGameEndArmed)")
+        if state.isGameEndArmed {
+            gameEndArmTask?.cancel()
+            gameEndArmTask = nil
+            state.isGameEndArmed = false
+            debugLog("[Game] end confirmed")
+            endActiveGame()
+        } else {
+            state.isGameEndArmed = true
+            debugLog("[Game] end armed")
+            gameEndArmTask?.cancel()
+            gameEndArmTask = Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                guard let self, !Task.isCancelled else { return }
+                debugLog("[Game] end disarmed by timeout")
+                self.state.isGameEndArmed = false
+                self.gameEndArmTask = nil
+            }
+        }
+    }
+
     /// Ask for a seat in the running game; the server grants it at the next
     /// round boundary.
     func joinActiveGame() {
@@ -8942,7 +8966,10 @@ final class MeetingViewModel {
         guard state.connectionState == .joined,
               !state.isWebinarAttendee,
               !state.isGameActionInFlight,
-              !requiresAdmin || state.isAdmin else { return }
+              !requiresAdmin || state.isAdmin else {
+            debugLog("[Game] action dropped: joined=\(state.connectionState == .joined) webinar=\(state.isWebinarAttendee) inFlight=\(state.isGameActionInFlight) requiresAdmin=\(requiresAdmin) isAdmin=\(state.isAdmin)")
+            return
+        }
         let actionContext = currentCallActionContext()
         state.isGameActionInFlight = true
         state.gameErrorMessage = nil
@@ -8953,14 +8980,19 @@ final class MeetingViewModel {
                     state.isGameActionInFlight = false
                 }
             }
-            guard isCurrentJoinedCall(actionContext) else { return }
+            guard isCurrentJoinedCall(actionContext) else {
+                debugLog("[Game] action abandoned: call context changed")
+                return
+            }
             do {
                 let response = try await operation()
                 guard isCurrentJoinedCall(actionContext) else { return }
                 try validateGameActionResponse(response)
+                debugLog("[Game] action ok")
                 refreshGameState()
             } catch {
                 guard isSameCallContext(actionContext) else { return }
+                debugLog("[Game] action failed: \(error)")
                 state.gameErrorMessage = gameActionErrorMessage(error)
             }
         }

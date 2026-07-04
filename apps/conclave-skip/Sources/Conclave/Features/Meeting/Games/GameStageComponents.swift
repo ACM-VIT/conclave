@@ -369,14 +369,7 @@ struct GameStagePlayerChip: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            Circle()
-                .fill(ACMColors.avatarColor(for: id))
-                .frame(width: 22, height: 22)
-                .overlay {
-                    Text(String(name.prefix(1)).uppercased())
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(Color.white)
-                }
+            FacehashAvatarView(name: name, id: id, size: 22)
 
             Text(name)
                 .font(ACMFont.trial(13, weight: .medium))
