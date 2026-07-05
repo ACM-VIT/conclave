@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   buildPaletteActions,
+  buildQueryFallbackActions,
+  FALLBACK_SECTION,
   filterPaletteActions,
   type PaletteDevices,
 } from "../src/app/components/command-palette-actions";
@@ -223,5 +225,70 @@ describe("filterPaletteActions", () => {
     expect(filterPaletteActions(actions, "share screen")).toHaveLength(1);
     expect(filterPaletteActions(actions, "zzz-no-match")).toHaveLength(0);
     expect(filterPaletteActions(actions, "  ")).toHaveLength(actions.length);
+  });
+});
+
+describe("buildQueryFallbackActions", () => {
+  it("returns nothing for blank queries or when no handler exists", () => {
+    expect(
+      buildQueryFallbackActions("   ", baseProps(), {
+        onSendChatMessage: vi.fn(),
+      }),
+    ).toHaveLength(0);
+    expect(buildQueryFallbackActions("hello", baseProps())).toHaveLength(0);
+  });
+
+  it("offers send-to-chat and ask-AI, opening the chat panel when closed", () => {
+    const send = vi.fn();
+    const toggleChat = vi.fn();
+    const actions = buildQueryFallbackActions(
+      "hello there",
+      baseProps({ isChatOpen: false, onToggleChat: toggleChat }),
+      { onSendChatMessage: send },
+    );
+    expect(actions.map((a) => a.id)).toEqual([
+      "fallback-send-chat",
+      "fallback-ask-ai",
+    ]);
+    expect(actions.every((a) => a.section === FALLBACK_SECTION)).toBe(true);
+
+    actions[0]?.run();
+    expect(send).toHaveBeenLastCalledWith("hello there");
+    actions[1]?.run();
+    expect(send).toHaveBeenLastCalledWith("@Conclave hello there");
+    expect(toggleChat).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not toggle the chat panel when it is already open", () => {
+    const toggleChat = vi.fn();
+    const actions = buildQueryFallbackActions(
+      "hi",
+      baseProps({ isChatOpen: true, onToggleChat: toggleChat }),
+      { onSendChatMessage: vi.fn() },
+    );
+    actions[0]?.run();
+    expect(toggleChat).not.toHaveBeenCalled();
+  });
+
+  it("offers search-together only for hosts with the shared browser free", () => {
+    const launch = vi.fn().mockResolvedValue(true);
+    const hostProps = baseProps({
+      isAdmin: true,
+      showBrowserControls: true,
+      onLaunchBrowser: launch,
+    });
+    const actions = buildQueryFallbackActions("rust borrow checker", hostProps);
+    expect(actions.map((a) => a.id)).toEqual(["fallback-search-together"]);
+    actions[0]?.run();
+    expect(launch).toHaveBeenCalledWith(
+      "https://www.google.com/search?q=rust%20borrow%20checker",
+    );
+
+    expect(
+      buildQueryFallbackActions("x", { ...hostProps, isBrowserActive: true }),
+    ).toHaveLength(0);
+    expect(
+      buildQueryFallbackActions("x", { ...hostProps, isAdmin: false }),
+    ).toHaveLength(0);
   });
 });
