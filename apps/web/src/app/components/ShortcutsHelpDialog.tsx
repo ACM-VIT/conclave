@@ -5,6 +5,10 @@ import { useEffect, useState } from "react";
 import { formatForDisplay } from "@tanstack/react-hotkeys";
 import { color } from "@conclave/ui-tokens";
 import { getDisplayableHotkeys } from "../lib/hotkeys";
+import {
+  announceOverlayOpen,
+  subscribeOtherOverlayOpen,
+} from "./meet-overlay-bus";
 
 const SHOW_SHORTCUTS_EVENT = "conclave:show-shortcuts";
 
@@ -46,6 +50,17 @@ export default function ShortcutsHelpDialog() {
       window.removeEventListener(SHOW_SHORTCUTS_EVENT, onShowRequest);
     };
   }, []);
+
+  // Overlays are mutually exclusive: opening this sheet closes the Mod+K
+  // palette, and the palette opening closes this sheet.
+  useEffect(() => {
+    if (open) announceOverlayOpen("shortcuts-help");
+  }, [open]);
+
+  useEffect(
+    () => subscribeOtherOverlayOpen("shortcuts-help", () => setOpen(false)),
+    [],
+  );
 
   if (!open) return null;
 

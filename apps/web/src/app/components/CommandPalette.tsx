@@ -13,6 +13,10 @@ import { formatForDisplay } from "@tanstack/react-hotkeys";
 import { color } from "@conclave/ui-tokens";
 import { HOTKEYS } from "../lib/hotkeys";
 import { requestShortcutsHelp } from "./ShortcutsHelpDialog";
+import {
+  announceOverlayOpen,
+  subscribeOtherOverlayOpen,
+} from "./meet-overlay-bus";
 import { useEnumeratedDevices } from "./DeviceCaretMenu";
 import type { ControlsBarProps } from "./controls-config";
 import {
@@ -75,12 +79,20 @@ export default function CommandPalette({
 
   useEffect(() => {
     if (!open) return;
+    // Overlays are mutually exclusive: opening this one closes the others
+    // (e.g. the Mod+/ shortcuts sheet), and vice versa.
+    announceOverlayOpen("command-palette");
     setQuery("");
     setSelectedIndex(0);
     // The input mounts in the same commit; focus once it exists.
     const id = window.requestAnimationFrame(() => inputRef.current?.focus());
     return () => window.cancelAnimationFrame(id);
   }, [open]);
+
+  useEffect(
+    () => subscribeOtherOverlayOpen("command-palette", () => setOpen(false)),
+    [],
+  );
 
   const close = useCallback(() => setOpen(false), []);
 
