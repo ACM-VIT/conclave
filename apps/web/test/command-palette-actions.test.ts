@@ -243,6 +243,36 @@ describe("filterPaletteActions", () => {
   });
 });
 
+describe("reaction emoji name search", () => {
+  it("finds reactions by emoji name, e.g. 'thumbsup' → 👍", () => {
+    // Mirrors EMOJI_REACTIONS: real reaction options label with the glyph.
+    const emojiOptions = ["👍", "👏", "😂", "❤️", "🎉", "😮"].map((emoji) => ({
+      id: `emoji-${emoji}`,
+      kind: "emoji" as const,
+      value: emoji,
+      label: emoji,
+    }));
+    const actions = buildPaletteActions(
+      baseProps({ reactionOptions: emojiOptions }),
+      noDevices,
+    );
+
+    const expectHit = (query: string, emoji: string) => {
+      const hits = filterPaletteActions(actions, query);
+      expect(hits.map((a) => a.id), `query "${query}"`).toContain(
+        `reaction-emoji-${emoji}`,
+      );
+    };
+    expectHit("thumbsup", "👍");
+    expectHit("thumbs up", "👍");
+    expectHit("clap", "👏");
+    expectHit("lol", "😂");
+    expectHit("heart", "❤️"); // variation selector on the glyph is ignored
+    expectHit("tada", "🎉");
+    expectHit("wow", "😮");
+  });
+});
+
 describe("buildQueryFallbackActions", () => {
   it("returns nothing for blank queries or when no handler exists", () => {
     expect(

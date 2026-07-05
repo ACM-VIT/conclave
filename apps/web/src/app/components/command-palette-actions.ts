@@ -94,6 +94,67 @@ const ROW_KEYWORDS: Record<string, string> = {
 };
 
 /**
+ * Searchable names for reaction emoji, which are otherwise only findable by
+ * pasting the glyph (their ReactionOption label is the glyph itself). Keys
+ * are stored with variation selectors stripped; look up via stripEmojiVariants.
+ * Covers EMOJI_REACTIONS plus common additions so new reactions keep working.
+ */
+const EMOJI_KEYWORDS: Record<string, string> = {
+  "👍": "thumbsup thumbs up like +1 approve yes agree",
+  "👎": "thumbsdown thumbs down dislike -1 no disagree",
+  "👏": "clap clapping applause bravo",
+  "😂": "joy laugh lol funny haha tears crying laughing",
+  "🤣": "rofl laughing rolling lol funny",
+  "❤": "heart love red like",
+  "🎉": "tada party popper celebrate confetti congrats hooray",
+  "😮": "wow surprised shocked omg open mouth",
+  "😢": "cry sad tear upset",
+  "🙏": "pray thanks thank you please folded hands namaste",
+  "🔥": "fire lit hot flame",
+  "💯": "hundred 100 percent perfect",
+  "✋": "hand raised highfive high five stop",
+  "🙌": "raised hands hooray praise celebration",
+  "😍": "heart eyes love adore",
+  "🤔": "thinking hmm hm consider",
+  "👌": "ok okay perfect fine",
+  "💪": "muscle strong flex biceps",
+  "😎": "cool sunglasses",
+  "🥳": "party face celebrate birthday",
+  "✨": "sparkles magic shiny",
+  "😀": "grin grinning smile happy",
+  "😊": "smile blush happy",
+};
+
+/** FE0E/FE0F presentation selectors make "❤️" ≠ "❤"; compare without them. */
+const EMOJI_VARIANT_SELECTORS = new RegExp(
+  `[${String.fromCharCode(0xfe0e)}${String.fromCharCode(0xfe0f)}]`,
+  "g",
+);
+const stripEmojiVariants = (value: string): string =>
+  value.replace(EMOJI_VARIANT_SELECTORS, "");
+
+// Normalize the table's own keys too — emoji pasted into source can carry
+// the selector invisibly, which would silently break every lookup.
+const NORMALIZED_EMOJI_KEYWORDS: Record<string, string> = Object.fromEntries(
+  Object.entries(EMOJI_KEYWORDS).map(([emoji, names]) => [
+    stripEmojiVariants(emoji),
+    names,
+  ]),
+);
+
+function reactionKeywords(reaction: {
+  kind: "emoji" | "asset";
+  value: string;
+  label: string;
+}): string {
+  const names =
+    reaction.kind === "emoji"
+      ? (NORMALIZED_EMOJI_KEYWORDS[stripEmojiVariants(reaction.value)] ?? "")
+      : "";
+  return `reaction emoji send react ${names}`.trim();
+}
+
+/**
  * Flattens everything a participant can do in the meeting into searchable
  * palette actions. Reuses buildControlsConfig so any control added to the bar
  * or the More menu shows up here automatically; actions the bar has no row
@@ -219,7 +280,7 @@ export function buildPaletteActions(
         id: `reaction-${reaction.id}`,
         section: "Reactions",
         label: `React with ${reaction.label}`,
-        keywords: "reaction emoji send react",
+        keywords: reactionKeywords(reaction),
         reaction: { kind: reaction.kind, value: reaction.value },
         run: () => p.onSendReaction(reaction),
       });
