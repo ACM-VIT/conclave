@@ -17,6 +17,7 @@ import { useEnumeratedDevices } from "./DeviceCaretMenu";
 import type { ControlsBarProps } from "./controls-config";
 import {
   buildPaletteActions,
+  buildQueryFallbackActions,
   filterPaletteActions,
   PALETTE_SECTIONS,
   type PaletteAction,
@@ -39,8 +40,11 @@ async function copyText(value: string): Promise<void> {
  */
 export default function CommandPalette({
   controls,
+  onSendChatMessage,
 }: {
   controls: ControlsBarProps;
+  /** Chat send handler; enables the send-to-chat / ask-AI query fallbacks. */
+  onSendChatMessage?: (content: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -116,11 +120,20 @@ export default function CommandPalette({
     () => filterPaletteActions(actions, query),
     [actions, query],
   );
+  // A query that matches nothing becomes input for chat / the assistant /
+  // shared-browser search instead of a dead end.
+  const visible = useMemo(
+    () =>
+      filtered.length > 0
+        ? filtered
+        : buildQueryFallbackActions(query, controls, { onSendChatMessage }),
+    [filtered, query, controls, onSendChatMessage],
+  );
   // Arrow keys walk only the runnable rows; disabled rows stay visible but
   // are skipped so Enter can never fire a dead action.
   const selectable = useMemo(
-    () => filtered.filter((action) => !action.disabled),
-    [filtered],
+    () => visible.filter((action) => !action.disabled),
+    [visible],
   );
   const selected = selectable[selectedIndex] ?? null;
 
@@ -166,7 +179,7 @@ export default function CommandPalette({
 
   const sections = PALETTE_SECTIONS.map((section) => ({
     section,
-    items: filtered.filter((action) => action.section === section),
+    items: visible.filter((action) => action.section === section),
   })).filter(({ items }) => items.length > 0);
 
   return (

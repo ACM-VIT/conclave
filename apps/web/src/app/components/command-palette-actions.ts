@@ -2,6 +2,7 @@ import {
   Bot,
   Copy,
   FlipHorizontal2,
+  Globe,
   Keyboard,
   Link2,
   Lock,
@@ -20,6 +21,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { HOTKEYS } from "../lib/hotkeys";
+import { CONCLAVE_MENTION_TOKEN } from "../lib/conclave-assistant";
 import {
   BROWSER_APPS,
   buildControlsConfig,
@@ -64,7 +66,11 @@ export const PALETTE_SECTIONS = [
   "Host",
   "Meeting",
   "Help",
+  "Use what you typed",
 ] as const;
+
+/** Section shown when a query matches nothing and becomes input instead. */
+export const FALLBACK_SECTION = "Use what you typed";
 
 /** Search terms that users reach for but that don't appear in the labels. */
 const ROW_KEYWORDS: Record<string, string> = {
@@ -415,4 +421,67 @@ export function filterPaletteActions(
       `${action.label} ${action.section} ${action.keywords}`.toLowerCase();
     return tokens.every((token) => haystack.includes(token));
   });
+}
+
+/**
+ * When a query matches no action, the typed text becomes the input instead:
+ * send it to chat, ask the Conclave assistant (an @-mention in chat), or —
+ * for hosts with the shared browser available — search it together. Rows are
+ * only offered when their handler exists, like everything else here.
+ */
+export function buildQueryFallbackActions(
+  query: string,
+  p: ControlsBarProps,
+  extras: { onSendChatMessage?: (content: string) => void } = {},
+): PaletteAction[] {
+  const text = query.trim();
+  if (!text) return [];
+  const actions: PaletteAction[] = [];
+
+  if (extras.onSendChatMessage) {
+    const sendToChat = (content: string) => {
+      extras.onSendChatMessage?.(content);
+      // Surface the result: without the panel open there is no feedback
+      // that the message went out.
+      if (!p.isChatOpen) p.onToggleChat();
+    };
+    actions.push({
+      id: "fallback-send-chat",
+      section: FALLBACK_SECTION,
+      label: `Send to chat: “${text}”`,
+      keywords: "",
+      icon: MessageSquare,
+      run: () => sendToChat(text),
+    });
+    actions.push({
+      id: "fallback-ask-ai",
+      section: FALLBACK_SECTION,
+      label: `Ask Conclave AI: “${text}”`,
+      keywords: "",
+      icon: Bot,
+      run: () => sendToChat(`@${CONCLAVE_MENTION_TOKEN} ${text}`),
+    });
+  }
+
+  if (
+    p.showBrowserControls &&
+    p.isAdmin &&
+    p.onLaunchBrowser &&
+    !p.isBrowserActive
+  ) {
+    actions.push({
+      id: "fallback-search-together",
+      section: FALLBACK_SECTION,
+      label: `Search together: “${text}”`,
+      keywords: "",
+      icon: Globe,
+      disabled: p.isBrowserLaunching,
+      run: () =>
+        void p.onLaunchBrowser?.(
+          `https://www.google.com/search?q=${encodeURIComponent(text)}`,
+        ),
+    });
+  }
+
+  return actions;
 }

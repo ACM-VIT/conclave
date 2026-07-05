@@ -2071,7 +2071,10 @@ export default function MeetsMainContent({
         ) : (
           <div className="safe-area-pb flex w-full flex-col items-center gap-2">
             <ControlsBar {...controlsBarProps} />
-            <CommandPalette controls={controlsBarProps} />
+            <CommandPalette
+              controls={controlsBarProps}
+              onSendChatMessage={handleSendChat}
+            />
             <ShortcutsHelpDialog />
             {browserAudioNeedsGesture && (
               <div className="w-full mt-2 text-center text-[11px] text-[#F95F4A]/70 uppercase tracking-[0.3em]">
