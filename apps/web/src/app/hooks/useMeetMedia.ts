@@ -38,6 +38,13 @@ import {
 } from "../lib/captured-surface-control";
 import { prewarmVideoEffectsAssetsDeferred } from "../lib/video-effects-lazy";
 import {
+  createNoiseCancellationPipeline,
+  getNoiseCancellationSourceTrack,
+  isNoiseCancellationProcessedTrack,
+  setNoiseCancellationTrackEnabled,
+  stopNoiseCancellationForTrack,
+} from "../lib/noise-cancellation";
+import {
   applyAudioProducerNetworkProfile,
   applyScreenShareProducerNetworkProfile,
   applyWebcamProducerNetworkProfile,
@@ -81,6 +88,7 @@ interface UseMeetMediaOptions {
   setSelectedVideoInputDeviceId: React.Dispatch<
     React.SetStateAction<string | undefined>
   >;
+  isNoiseCancellationEnabled?: boolean;
   meetVolume?: number;
   videoQualityRef: React.MutableRefObject<VideoQuality>;
   dataSaverMode?: boolean;
@@ -428,6 +436,7 @@ export function useMeetMedia({
   setSelectedAudioOutputDeviceId,
   selectedVideoInputDeviceId,
   setSelectedVideoInputDeviceId,
+  isNoiseCancellationEnabled = true,
   meetVolume = DEFAULT_MEET_VOLUME,
   videoQualityRef,
   dataSaverMode = false,
@@ -475,6 +484,15 @@ export function useMeetMedia({
   const localAudioTrackHandlersRef = useRef<WeakSet<MediaStreamTrack>>(
     new WeakSet(),
   );
+  const noiseCancellationSourceHandlersRef = useRef<
+    WeakMap<
+      MediaStreamTrack,
+      {
+        processedTrack: MediaStreamTrack;
+        onEnded: () => void;
+      }
+    >
+  >(new WeakMap());
   const localVideoTrackHandlersRef = useRef<WeakSet<MediaStreamTrack>>(
     new WeakSet(),
   );
@@ -1097,15 +1115,34 @@ export function useMeetMedia({
     [onPreferredVideoPublishTrackRejected],
   );
 
+  const detachNoiseCancellationSourceHandler = useCallback(
+    (track?: MediaStreamTrack | null) => {
+      if (!track) return;
+      const sourceTrack = getNoiseCancellationSourceTrack(track) ?? track;
+      const entry = noiseCancellationSourceHandlersRef.current.get(sourceTrack);
+      if (!entry) return;
+      if (sourceTrack !== track && entry.processedTrack.id !== track.id) return;
+
+      sourceTrack.removeEventListener("ended", entry.onEnded);
+      noiseCancellationSourceHandlersRef.current.delete(sourceTrack);
+    },
+    [],
+  );
+
   const stopLocalTrack = useCallback(
     (track?: MediaStreamTrack | null) => {
       if (!track) return;
       intentionalTrackStopsRef.current.add(track);
+      detachNoiseCancellationSourceHandler(track);
+      stopNoiseCancellationForTrack(track, {
+        stopOutput: true,
+        stopSource: true,
+      });
       try {
         track.stop();
       } catch {}
     },
-    [intentionalTrackStopsRef]
+    [detachNoiseCancellationSourceHandler, intentionalTrackStopsRef]
   );
 
   const commitLocalStream = useCallback(
@@ -1114,6 +1151,37 @@ export function useMeetMedia({
       setLocalStream(nextStream);
     },
     [localStreamRef, setLocalStream],
+  );
+
+  const commitAudioTrackToLocalStream = useCallback(
+    (
+      audioTrack: MediaStreamTrack,
+      previousStream: MediaStream | null | undefined = localStreamRef.current,
+      options: { stopReplacedTracks?: boolean } = {},
+    ) => {
+      const sourceTrack = getNoiseCancellationSourceTrack(audioTrack);
+      const keepTrackIds = new Set(
+        [audioTrack.id, sourceTrack?.id].filter(
+          (trackId): trackId is string => Boolean(trackId),
+        ),
+      );
+      const remainingTracks =
+        previousStream?.getTracks().filter((track) => track.kind !== "audio") ??
+        [];
+      const nextStream = new MediaStream([...remainingTracks, audioTrack]);
+      commitLocalStream(nextStream);
+
+      if (options.stopReplacedTracks !== false) {
+        previousStream?.getAudioTracks().forEach((track) => {
+          if (!keepTrackIds.has(track.id)) {
+            stopLocalTrack(track);
+          }
+        });
+      }
+
+      return nextStream;
+    },
+    [commitLocalStream, localStreamRef, stopLocalTrack],
   );
 
   const stopTracksExcept = useCallback(
@@ -1372,6 +1440,80 @@ export function useMeetMedia({
       handleLocalTrackEnded,
       markAudioTrackForSpeech,
       scheduleLocalAudioMutedRecovery,
+    ],
+  );
+
+  const attachNoiseCancellationSourceHandlers = useCallback(
+    (processedTrack: MediaStreamTrack) => {
+      const sourceTrack = getNoiseCancellationSourceTrack(processedTrack);
+      if (!sourceTrack) {
+        return;
+      }
+
+      const existing =
+        noiseCancellationSourceHandlersRef.current.get(sourceTrack);
+      if (existing?.processedTrack.id === processedTrack.id) {
+        return;
+      }
+      if (existing) {
+        sourceTrack.removeEventListener("ended", existing.onEnded);
+      }
+
+      const onEnded = () => {
+        noiseCancellationSourceHandlersRef.current.delete(sourceTrack);
+        clearLocalAudioMutedRecoveryTimer(processedTrack.id);
+        handleLocalTrackEnded("audio", processedTrack);
+      };
+
+      noiseCancellationSourceHandlersRef.current.set(sourceTrack, {
+        processedTrack,
+        onEnded,
+      });
+      sourceTrack.addEventListener("ended", onEnded, { once: true });
+    },
+    [clearLocalAudioMutedRecoveryTimer, handleLocalTrackEnded],
+  );
+
+  const prepareAudioPublishTrack = useCallback(
+    async (track: MediaStreamTrack): Promise<MediaStreamTrack> => {
+      markAudioTrackForSpeech(track);
+      if (
+        !isNoiseCancellationEnabled ||
+        track.kind !== "audio" ||
+        track.readyState !== "live" ||
+        isNoiseCancellationProcessedTrack(track)
+      ) {
+        attachLocalAudioTrackHandlers(track);
+        return track;
+      }
+
+      try {
+        const pipeline = await createNoiseCancellationPipeline(track);
+        const processedTrack = pipeline.outputTrack;
+        setNoiseCancellationTrackEnabled(processedTrack, track.enabled);
+        markAudioTrackForSpeech(processedTrack);
+        attachLocalAudioTrackHandlers(processedTrack);
+        attachNoiseCancellationSourceHandlers(processedTrack);
+        console.info("[Meets] Noise cancellation enabled for microphone:", {
+          sourceTrackId: track.id,
+          outputTrackId: processedTrack.id,
+          worklet: pipeline.usedWorklet,
+        });
+        return processedTrack;
+      } catch (error) {
+        console.warn(
+          "[Meets] Noise cancellation unavailable; publishing raw microphone:",
+          error,
+        );
+        attachLocalAudioTrackHandlers(track);
+        return track;
+      }
+    },
+    [
+      attachLocalAudioTrackHandlers,
+      attachNoiseCancellationSourceHandlers,
+      isNoiseCancellationEnabled,
+      markAudioTrackForSpeech,
     ],
   );
 
@@ -1677,7 +1819,7 @@ export function useMeetMedia({
         }
       }
 
-      const nextAudioTrack =
+      let nextAudioTrack =
         getFirstLiveTrack(
           acquiredTracks.filter((track) => track.kind === "audio"),
         ) ?? reusableAudioTrack;
@@ -1685,6 +1827,9 @@ export function useMeetMedia({
         getFirstLiveTrack(
           acquiredTracks.filter((track) => track.kind === "video"),
         ) ?? reusableVideoTrack;
+      if (nextAudioTrack) {
+        nextAudioTrack = await prepareAudioPublishTrack(nextAudioTrack);
+      }
       const liveTracks = [nextAudioTrack, nextVideoTrack].filter(
         (track): track is MediaStreamTrack =>
           Boolean(track && track.readyState === "live"),
@@ -1710,8 +1855,7 @@ export function useMeetMedia({
       }
 
       if (nextAudioTrack) {
-        attachLocalAudioTrackHandlers(nextAudioTrack);
-        nextAudioTrack.enabled = !isMuted;
+        setNoiseCancellationTrackEnabled(nextAudioTrack, !isMuted);
       }
       liveTracks.forEach((track) => {
         track.onended = () => {
@@ -1758,15 +1902,17 @@ export function useMeetMedia({
             },
           );
           const audioTrack = audioStream.getAudioTracks()[0];
-          if (audioTrack) {
-            attachLocalAudioTrackHandlers(audioTrack);
-          }
+          const publishAudioTrack = audioTrack
+            ? await prepareAudioPublishTrack(audioTrack)
+            : null;
           setMediaState({
             hasAudioPermission: true,
             hasVideoPermission: false,
           });
           setIsCameraOff(true);
-          return audioStream;
+          return publishAudioTrack
+            ? new MediaStream([publishAudioTrack])
+            : audioStream;
         } catch {
           return null;
         }
@@ -1787,6 +1933,7 @@ export function useMeetMedia({
     attachLocalVideoTrackHandlers,
     buildAudioConstraints,
     buildVideoConstraints,
+    prepareAudioPublishTrack,
     localStreamRef,
     permissionHintTimeoutRef,
     setMeetError,
@@ -1811,10 +1958,10 @@ export function useMeetMedia({
           );
 
           acquiredAudioTracks = newStream.getAudioTracks();
-          const newAudioTrack = newStream.getAudioTracks()[0];
-          if (newAudioTrack) {
-            attachLocalAudioTrackHandlers(newAudioTrack);
-            newAudioTrack.enabled = !isMuted;
+          const rawAudioTrack = newStream.getAudioTracks()[0];
+          if (rawAudioTrack) {
+            const newAudioTrack = await prepareAudioPublishTrack(rawAudioTrack);
+            setNoiseCancellationTrackEnabled(newAudioTrack, !isMuted);
             const previousStream = localStreamRef.current;
             const previousAudioTracks = previousStream?.getAudioTracks() ?? [];
 
@@ -1831,15 +1978,9 @@ export function useMeetMedia({
               requestAudioProducerRecovery();
             }
 
-            const remainingTracks =
-              previousStream
-                ?.getTracks()
-                .filter((track) => track.kind !== "audio") ?? [];
-            const nextStream = new MediaStream([
-              ...remainingTracks,
-              newAudioTrack,
-            ]);
-            commitLocalStream(nextStream);
+            commitAudioTrackToLocalStream(newAudioTrack, previousStream, {
+              stopReplacedTracks: false,
+            });
             committedNewAudioTrack = newAudioTrack;
             stopTracksExcept(previousAudioTracks, [newAudioTrack]);
           }
@@ -1852,11 +1993,11 @@ export function useMeetMedia({
     [
       connectionState,
       isMuted,
-      attachLocalAudioTrackHandlers,
+      prepareAudioPublishTrack,
       setSelectedAudioInputDeviceId,
       audioProducerRef,
       localStreamRef,
-      commitLocalStream,
+      commitAudioTrackToLocalStream,
       buildAudioConstraints,
       closeLocalAudioProducerForReplacement,
       stopTracksExcept,
@@ -2416,7 +2557,7 @@ export function useMeetMedia({
           (track) => track.readyState === "live",
         );
         liveAudioTracks.forEach((track) => {
-          track.enabled = false;
+          setNoiseCancellationTrackEnabled(track, false);
         });
 
         if (producer) {
@@ -2433,7 +2574,7 @@ export function useMeetMedia({
             );
             liveAudioTracks.forEach((track) => {
               if (track.readyState === "live") {
-                track.enabled = true;
+                setNoiseCancellationTrackEnabled(track, true);
               }
             });
             try {
@@ -2469,33 +2610,29 @@ export function useMeetMedia({
             timeoutMs: MEDIA_CAPTURE_RECOVERY_TIMEOUT_MS,
           },
         );
-        const nextAudioTrack = stream.getAudioTracks()[0];
-        createdTrack = nextAudioTrack ?? null;
+        const rawAudioTrack = stream.getAudioTracks()[0];
 
-        if (!nextAudioTrack) throw new Error("No audio track obtained");
-        attachLocalAudioTrackHandlers(nextAudioTrack);
+        if (!rawAudioTrack) throw new Error("No audio track obtained");
+        const nextAudioTrack = await prepareAudioPublishTrack(rawAudioTrack);
+        createdTrack = nextAudioTrack;
 
         const previousStream = localStreamRef.current;
         previousStream?.getAudioTracks().forEach((track) => {
-          if (track.id !== nextAudioTrack.id) {
+          if (
+            track.id !== nextAudioTrack.id &&
+            track.id !== getNoiseCancellationSourceTrack(nextAudioTrack)?.id
+          ) {
             stopLocalTrack(track);
           }
         });
-        const remainingTracks =
-          previousStream
-            ?.getTracks()
-            .filter((track) => track.kind !== "audio") ?? [];
-        const nextStream = new MediaStream([
-          ...remainingTracks,
-          nextAudioTrack,
-        ]);
-        localStreamRef.current = nextStream;
-        setLocalStream(nextStream);
+        commitAudioTrackToLocalStream(nextAudioTrack, previousStream, {
+          stopReplacedTracks: false,
+        });
 
         audioTrack = nextAudioTrack;
       }
 
-      audioTrack.enabled = true;
+      setNoiseCancellationTrackEnabled(audioTrack, true);
 
       if (producer) {
         if (!producer.track || producer.track.id !== audioTrack.id) {
@@ -2526,7 +2663,7 @@ export function useMeetMedia({
         !shouldDisableMediaIntentAfterRecoveryFailure(err, meetErr);
 
       if (shouldRetryAudioUnmute) {
-        liveAudioTrackAfterFailure.enabled = true;
+        setNoiseCancellationTrackEnabled(liveAudioTrackAfterFailure, true);
         if (
           producer &&
           !producer.closed &&
@@ -2560,7 +2697,7 @@ export function useMeetMedia({
     isObserverMode,
     isMuted,
     selectedAudioInputDeviceId,
-    attachLocalAudioTrackHandlers,
+    prepareAudioPublishTrack,
     stopLocalTrack,
     buildAudioConstraints,
     socketRef,
@@ -2568,6 +2705,7 @@ export function useMeetMedia({
     audioProducerRef,
     localStreamRef,
     commitLocalStream,
+    commitAudioTrackToLocalStream,
     setMeetError,
     closeLocalAudioProducerForReplacement,
     confirmAudioProducerUnmuted,
@@ -2675,12 +2813,22 @@ export function useMeetMedia({
     let createdTrack: MediaStreamTrack | null = null;
     const removeCreatedTrackFromLocalStream = () => {
       if (!createdTrack) return;
+      const sourceTrack = getNoiseCancellationSourceTrack(createdTrack);
       stopLocalTrack(createdTrack);
       const currentStream = localStreamRef.current;
-      if (currentStream?.getTracks().includes(createdTrack)) {
+      const tracksToRemove = new Set(
+        [createdTrack.id, sourceTrack?.id].filter(
+          (trackId): trackId is string => Boolean(trackId),
+        ),
+      );
+      if (
+        currentStream
+          ?.getTracks()
+          .some((track) => tracksToRemove.has(track.id))
+      ) {
         const remaining = currentStream
           .getTracks()
-          .filter((track) => track !== createdTrack);
+          .filter((track) => !tracksToRemove.has(track.id));
         const nextStream = new MediaStream(remaining);
         localStreamRef.current = nextStream;
         setLocalStream(nextStream);
@@ -2716,6 +2864,7 @@ export function useMeetMedia({
         let audioTrack = getFirstLiveTrack(
           (localStreamRef.current ?? localStream)?.getAudioTracks() ?? [],
         );
+        const originalAudioTrack = audioTrack;
 
         if (!audioTrack || audioTrack.readyState !== "live") {
           const stream = await getUserMediaWithTimeout(
@@ -2726,32 +2875,25 @@ export function useMeetMedia({
             },
           );
           audioTrack = stream.getAudioTracks()[0] ?? null;
-          createdTrack = audioTrack;
         }
 
         if (!audioTrack) {
           throw new Error("No audio track available for recovery");
+        }
+        audioTrack = await prepareAudioPublishTrack(audioTrack);
+        if (!originalAudioTrack || audioTrack.id !== originalAudioTrack.id) {
+          createdTrack = audioTrack;
         }
         if (isMediaRecoveryBlocked()) {
           removeCreatedTrackFromLocalStream();
           return;
         }
 
-        attachLocalAudioTrackHandlers(audioTrack);
-        audioTrack.enabled = !shouldStartPaused;
+        setNoiseCancellationTrackEnabled(audioTrack, !shouldStartPaused);
 
         if (createdTrack) {
           const previousStream = localStreamRef.current;
-          previousStream?.getAudioTracks().forEach((track) => {
-            stopLocalTrack(track);
-          });
-          const remainingTracks =
-            previousStream
-              ?.getTracks()
-              .filter((track) => track.kind !== "audio") ?? [];
-          const nextStream = new MediaStream([...remainingTracks, audioTrack]);
-          localStreamRef.current = nextStream;
-          setLocalStream(nextStream);
+          commitAudioTrackToLocalStream(audioTrack, previousStream);
         }
         if (isMediaRecoveryBlocked()) {
           removeCreatedTrackFromLocalStream();
@@ -2829,18 +2971,118 @@ export function useMeetMedia({
     localStream,
     isMediaRecoveryBlocked,
     selectedAudioInputDeviceId,
-    attachLocalAudioTrackHandlers,
+    prepareAudioPublishTrack,
     stopLocalTrack,
     buildAudioConstraints,
     producerTransportRef,
     ensureProducerTransportRef,
     audioProducerRef,
     localStreamRef,
+    commitAudioTrackToLocalStream,
     setLocalStream,
     setIsMuted,
     setMeetError,
     closeLocalAudioProducerForReplacement,
     getPublishNetworkProfile,
+    requestAudioProducerRecovery,
+  ]);
+
+  useEffect(() => {
+    if (isObserverMode) return;
+    if (connectionState !== "joined") return;
+    if (isMediaRecoveryBlocked()) return;
+    if (audioRecoveryInFlightRef.current) return;
+
+    const currentStream = localStreamRef.current ?? localStream;
+    const currentAudioTrack = getFirstLiveTrack(
+      currentStream?.getAudioTracks() ?? [],
+    );
+    if (!currentAudioTrack) return;
+
+    const isProcessed = isNoiseCancellationProcessedTrack(currentAudioTrack);
+    if (isNoiseCancellationEnabled === isProcessed) return;
+
+    let cancelled = false;
+
+    const switchAudioProcessing = async () => {
+      audioRecoveryInFlightRef.current = true;
+      try {
+        const producer = audioProducerRef.current;
+        const nextTrack = isNoiseCancellationEnabled
+          ? await prepareAudioPublishTrack(currentAudioTrack)
+          : getNoiseCancellationSourceTrack(currentAudioTrack);
+
+        if (cancelled) {
+          if (
+            nextTrack &&
+            nextTrack.id !== currentAudioTrack.id &&
+            isNoiseCancellationProcessedTrack(nextTrack)
+          ) {
+            detachNoiseCancellationSourceHandler(nextTrack);
+            stopNoiseCancellationForTrack(nextTrack, {
+              stopOutput: true,
+              stopSource: false,
+            });
+          }
+          return;
+        }
+
+        if (
+          !nextTrack ||
+          nextTrack.readyState !== "live" ||
+          nextTrack.id === currentAudioTrack.id
+        ) {
+          return;
+        }
+
+        setNoiseCancellationTrackEnabled(nextTrack, currentAudioTrack.enabled);
+        if (producer && !producer.closed) {
+          await producer.replaceTrack({ track: nextTrack });
+        }
+
+        if (!isNoiseCancellationEnabled) {
+          detachNoiseCancellationSourceHandler(currentAudioTrack);
+          stopNoiseCancellationForTrack(currentAudioTrack, {
+            stopOutput: true,
+            stopSource: false,
+          });
+          attachLocalAudioTrackHandlers(nextTrack);
+        }
+
+        commitAudioTrackToLocalStream(nextTrack, currentStream, {
+          stopReplacedTracks: isNoiseCancellationEnabled,
+        });
+
+        if (!producer || producer.closed) {
+          requestAudioProducerRecovery();
+        }
+      } catch (error) {
+        console.warn("[Meets] Failed to switch microphone processing:", error);
+        if (!isMutedRef.current) {
+          requestAudioProducerRecovery();
+        }
+      } finally {
+        audioRecoveryInFlightRef.current = false;
+      }
+    };
+
+    void switchAudioProcessing();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    attachLocalAudioTrackHandlers,
+    audioProducerRef,
+    commitAudioTrackToLocalStream,
+    connectionState,
+    detachNoiseCancellationSourceHandler,
+    isMediaRecoveryBlocked,
+    isNoiseCancellationEnabled,
+    isObserverMode,
+    localStream,
+    localStreamRef,
+    prepareAudioPublishTrack,
     requestAudioProducerRecovery,
   ]);
 
@@ -4679,6 +4921,7 @@ export function useMeetMedia({
     updateVideoQualityRef,
     requestAudioProducerRecovery,
     requestCameraProducerRecovery,
+    prepareAudioPublishTrack,
     toggleMute,
     toggleCamera,
     toggleScreenShare,

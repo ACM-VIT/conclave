@@ -930,6 +930,8 @@ export default function MeetsClient({
     setSelectedAudioOutputDeviceId,
     selectedVideoInputDeviceId,
     setSelectedVideoInputDeviceId,
+    isNoiseCancellationEnabled,
+    setIsNoiseCancellationEnabled,
   } = useMeetMediaSettings({
     videoQualityRef: refs.videoQualityRef,
     networkManagedVideoQualityRef,
@@ -1110,6 +1112,7 @@ export default function MeetsClient({
     updateVideoQualityRef,
     requestAudioProducerRecovery,
     requestCameraProducerRecovery,
+    prepareAudioPublishTrack,
     toggleMute,
     isMuteTogglePending,
     toggleCamera,
@@ -1138,6 +1141,7 @@ export default function MeetsClient({
     setSelectedAudioOutputDeviceId,
     selectedVideoInputDeviceId,
     setSelectedVideoInputDeviceId,
+    isNoiseCancellationEnabled,
     meetVolume,
     videoQualityRef: refs.videoQualityRef,
     dataSaverMode: effectiveDataSaverMode,
@@ -2155,6 +2159,7 @@ export default function MeetsClient({
     requestMediaPermissions,
     requestAudioProducerRecovery,
     requestCameraProducerRecovery,
+    prepareAudioPublishTrack,
     stopLocalTrack,
     handleLocalTrackEnded,
     playNotificationSound: playNotificationSoundForEvents,
@@ -3072,6 +3077,10 @@ export default function MeetsClient({
         onAudioInputDeviceChange={handleAudioInputDeviceChange}
         onAudioOutputDeviceChange={handleAudioOutputDeviceChange}
         onVideoInputDeviceChange={handleVideoInputDeviceSelect}
+        isNoiseCancellationEnabled={isNoiseCancellationEnabled}
+        onToggleNoiseCancellation={() =>
+          setIsNoiseCancellationEnabled((value) => !value)
+        }
         activeSpeakerId={effectiveActiveSpeakerId}
         currentUserId={userId}
         audioOutputDeviceId={selectedAudioOutputDeviceId}

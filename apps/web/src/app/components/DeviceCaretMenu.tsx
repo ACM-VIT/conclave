@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  AudioLines,
   Check,
   ChevronUp,
   FlipHorizontal2,
@@ -145,6 +146,8 @@ export type DeviceSettingsProps = Pick<
   | "onVideoInputDeviceChange"
   | "isMirrorCamera"
   | "onToggleMirror"
+  | "isNoiseCancellationEnabled"
+  | "onToggleNoiseCancellation"
 >;
 
 /**
@@ -164,10 +167,15 @@ export function DeviceSettingsSection({
   onVideoInputDeviceChange,
   isMirrorCamera,
   onToggleMirror,
+  isNoiseCancellationEnabled,
+  onToggleNoiseCancellation,
 }: DeviceSettingsProps & { active: boolean; bare?: boolean }) {
   const { audioInput, audioOutput, videoInput } = useEnumeratedDevices(active);
   const hasDevices =
-    audioInput.length > 0 || audioOutput.length > 0 || videoInput.length > 0;
+    audioInput.length > 0 ||
+    audioOutput.length > 0 ||
+    videoInput.length > 0 ||
+    Boolean(onToggleNoiseCancellation);
   if (!hasDevices && !onToggleMirror) return null;
   return (
     <div
@@ -188,6 +196,15 @@ export function DeviceSettingsSection({
             selectedId={selectedAudioOutputDeviceId}
             onSelect={onAudioOutputDeviceChange}
           />
+          {onToggleNoiseCancellation ? (
+            <SwitchRow
+              icon={AudioLines}
+              label="Noise cancellation"
+              checked={isNoiseCancellationEnabled ?? true}
+              onChange={() => onToggleNoiseCancellation?.()}
+              className="rounded-lg"
+            />
+          ) : null}
           <DeviceList
             heading="Camera"
             devices={videoInput}
@@ -231,6 +248,8 @@ export interface MediaControlClusterProps {
   onVideoInputDeviceChange?: (deviceId: string) => void;
   isMirrorCamera?: boolean;
   onToggleMirror?: () => void;
+  isNoiseCancellationEnabled?: boolean;
+  onToggleNoiseCancellation?: () => void;
 }
 
 /** Mic/camera toggle + device caret as one unified pill control. */
@@ -253,6 +272,8 @@ export function MediaControlCluster(props: MediaControlClusterProps) {
     onVideoInputDeviceChange,
     isMirrorCamera,
     onToggleMirror,
+    isNoiseCancellationEnabled,
+    onToggleNoiseCancellation,
   } = props;
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -385,7 +406,9 @@ export function MediaControlCluster(props: MediaControlClusterProps) {
             }}
           >
             {kind === "mic" ? (
-              audioInput.length === 0 && audioOutput.length === 0 ? (
+              audioInput.length === 0 &&
+              audioOutput.length === 0 &&
+              !onToggleNoiseCancellation ? (
                 <EmptyDevices kind="mic" />
               ) : (
                 <>
@@ -401,6 +424,15 @@ export function MediaControlCluster(props: MediaControlClusterProps) {
                     selectedId={selectedAudioOutputDeviceId}
                     onSelect={handleSelect(onAudioOutputDeviceChange)}
                   />
+                  {onToggleNoiseCancellation ? (
+                    <SwitchRow
+                      icon={AudioLines}
+                      label="Noise cancellation"
+                      checked={isNoiseCancellationEnabled ?? true}
+                      onChange={() => onToggleNoiseCancellation?.()}
+                      className="rounded-lg"
+                    />
+                  ) : null}
                 </>
               )
             ) : (

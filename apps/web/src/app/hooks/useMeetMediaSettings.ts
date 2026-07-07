@@ -24,6 +24,17 @@ const getInitialVideoQuality = (): VideoQuality => {
   return shouldStartLowBandwidthVideo() ? "low" : "standard";
 };
 
+const NOISE_CANCELLATION_STORAGE_KEY = "conclave:noise-cancellation";
+
+const getInitialNoiseCancellationEnabled = (): boolean => {
+  if (typeof window === "undefined") return true;
+  try {
+    return window.localStorage.getItem(NOISE_CANCELLATION_STORAGE_KEY) !== "off";
+  } catch {
+    return true;
+  }
+};
+
 export function useMeetMediaSettings({
   videoQualityRef,
   networkManagedVideoQualityRef,
@@ -35,6 +46,9 @@ export function useMeetMediaSettings({
     useState<VideoQuality>(initialVideoQuality);
   const [isMirrorCamera, setIsMirrorCamera] = useState(true);
   const [isVideoSettingsOpen, setIsVideoSettingsOpen] = useState(false);
+  const [isNoiseCancellationEnabled, setIsNoiseCancellationEnabled] = useState(
+    getInitialNoiseCancellationEnabled,
+  );
   const [selectedAudioInputDeviceId, setSelectedAudioInputDeviceId] =
     useState<string>();
   const [selectedAudioOutputDeviceId, setSelectedAudioOutputDeviceId] =
@@ -128,6 +142,15 @@ export function useMeetMediaSettings({
     videoQualityRef,
   ]);
 
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        NOISE_CANCELLATION_STORAGE_KEY,
+        isNoiseCancellationEnabled ? "on" : "off",
+      );
+    } catch {}
+  }, [isNoiseCancellationEnabled]);
+
   return {
     videoQuality,
     setVideoQuality,
@@ -136,6 +159,8 @@ export function useMeetMediaSettings({
     setIsMirrorCamera,
     isVideoSettingsOpen,
     setIsVideoSettingsOpen,
+    isNoiseCancellationEnabled,
+    setIsNoiseCancellationEnabled,
     selectedAudioInputDeviceId,
     setSelectedAudioInputDeviceId,
     selectedAudioOutputDeviceId,
