@@ -78,6 +78,7 @@ import {
   produceWebcamTrack,
   type WebcamProducerNetworkProfile,
 } from "../lib/webcam-codec";
+import { setNoiseCancellationTrackEnabled } from "../lib/noise-cancellation";
 import {
   getMostConstrainedWebcamProducerNetworkProfile,
   getScreenShareReceiveNetworkProfileForAvailableIncomingBitrate,
@@ -744,6 +745,9 @@ interface UseMeetSocketOptions {
   ) => Promise<MediaStream | null>;
   requestAudioProducerRecovery: () => void;
   requestCameraProducerRecovery: () => void;
+  prepareAudioPublishTrack?: (
+    track: MediaStreamTrack,
+  ) => Promise<MediaStreamTrack>;
   stopLocalTrack: (track?: MediaStreamTrack | null) => void;
   handleLocalTrackEnded: (
     kind: "audio" | "video",
@@ -834,6 +838,7 @@ export function useMeetSocket({
   requestMediaPermissions,
   requestAudioProducerRecovery,
   requestCameraProducerRecovery,
+  prepareAudioPublishTrack,
   stopLocalTrack,
   handleLocalTrackEnded,
   playNotificationSound,
@@ -2893,13 +2898,33 @@ export function useMeetSocket({
       const shouldPauseAudio = !mediaIntent.isMicOn;
       const shouldPauseVideo = !mediaIntent.isCameraOn;
 
-      const audioTrack = getFirstLiveTrack(stream.getAudioTracks());
+      let audioTrack = getFirstLiveTrack(stream.getAudioTracks());
       if (audioTrack) {
         try {
+          const rawAudioTrack = audioTrack;
+          audioTrack =
+            (await prepareAudioPublishTrack?.(audioTrack)) ?? audioTrack;
+          if (audioTrack.id !== rawAudioTrack.id) {
+            const nextStream = new MediaStream([
+              ...stream.getTracks().filter((track) => track.kind !== "audio"),
+              audioTrack,
+            ]);
+            if (
+              localStreamRef.current === stream ||
+              localStreamRef.current?.id === stream.id
+            ) {
+              localStreamRef.current = nextStream;
+            }
+            setLocalStream((current) =>
+              current === stream || current?.id === stream.id
+                ? nextStream
+                : current,
+            );
+          }
           if ("contentHint" in audioTrack) {
             audioTrack.contentHint = "speech";
           }
-          audioTrack.enabled = !shouldPauseAudio;
+          setNoiseCancellationTrackEnabled(audioTrack, !shouldPauseAudio);
           const audioProducer = await transport.produce({
             track: audioTrack,
             codecOptions: buildMicrophoneOpusCodecOptions(
@@ -2932,7 +2957,7 @@ export function useMeetSocket({
           if (mediaIntent.isMicOn) {
             if (audioTrack.readyState === "live") {
               publicationWarnings.push("microphone publish retry scheduled");
-              audioTrack.enabled = true;
+              setNoiseCancellationTrackEnabled(audioTrack, true);
               isMutedRef.current = false;
               setIsMuted(false);
               requestAudioProducerRecovery();
@@ -3117,6 +3142,8 @@ export function useMeetSocket({
       producerTransportRef,
       audioProducerRef,
       videoProducerRef,
+      localStreamRef,
+      setLocalStream,
       isMuted,
       isCameraOff,
       setIsMuted,
@@ -3124,6 +3151,7 @@ export function useMeetSocket({
       videoQualityRef,
       deviceRef,
       getVideoPublishTrack,
+      prepareAudioPublishTrack,
       getPublishNetworkProfile,
       onPreferredVideoPublishTrackRejected,
       dropVideoTracksForCameraOff,
@@ -4895,7 +4923,7 @@ export function useMeetSocket({
                     const shouldRecoverAudio = !isMutedRef.current;
                     if (shouldRecoverAudio) {
                       if (liveAudioTrack) {
-                        liveAudioTrack.enabled = true;
+                        setNoiseCancellationTrackEnabled(liveAudioTrack, true);
                       }
                       isMutedRef.current = false;
                       setIsMuted(false);
@@ -4903,7 +4931,7 @@ export function useMeetSocket({
                       return;
                     }
                     localStreamRef.current?.getAudioTracks().forEach((track) => {
-                      track.enabled = false;
+                      setNoiseCancellationTrackEnabled(track, false);
                     });
                     isMutedRef.current = true;
                     setIsMuted(true);
@@ -5304,7 +5332,7 @@ export function useMeetSocket({
                       }
                     }
                     localStreamRef.current?.getAudioTracks().forEach((track) => {
-                      track.enabled = false;
+                      setNoiseCancellationTrackEnabled(track, false);
                     });
                     setIsMuted(true);
                   } else if (entry.kind === "video" && entry.type === "webcam") {
