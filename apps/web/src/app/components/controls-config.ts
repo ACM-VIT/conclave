@@ -69,6 +69,8 @@ export interface ControlsBarProps {
   onAudioInputDeviceChange?: (deviceId: string) => void;
   onAudioOutputDeviceChange?: (deviceId: string) => void;
   onVideoInputDeviceChange?: (deviceId: string) => void;
+  isNoiseCancellationEnabled?: boolean;
+  onToggleNoiseCancellation?: () => void;
   isMirrorCamera?: boolean;
   onToggleMirror?: () => void;
   isVideoEffectsOpen?: boolean;
