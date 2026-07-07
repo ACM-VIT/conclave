@@ -53,6 +53,12 @@ const longLivedSameOriginAssetHeaders = [
     value: "nosniff",
   },
 ];
+const noStoreResponseHeaders = [
+  {
+    key: "Cache-Control",
+    value: "private, no-store, max-age=0, must-revalidate",
+  },
+];
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
@@ -94,6 +100,10 @@ const nextConfig: NextConfig = {
   async headers() {
     return [
       {
+        source: "/:path*",
+        headers: noStoreResponseHeaders,
+      },
+      {
         source: "/transcript-pcm-processor.js",
         headers: [
           {
@@ -109,6 +119,10 @@ const nextConfig: NextConfig = {
             value: "same-origin",
           },
         ],
+      },
+      {
+        source: "/_next/static/:path*",
+        headers: longLivedPublicCacheHeaders,
       },
       {
         source: "/mediapipe/:path*",
