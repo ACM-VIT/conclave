@@ -1,7 +1,7 @@
 "use client";
 
 import { Keyboard } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { formatForDisplay } from "@tanstack/react-hotkeys";
 import { color } from "@conclave/ui-tokens";
 import { getDisplayableHotkeys } from "../lib/hotkeys";
@@ -27,6 +27,7 @@ export function requestShortcutsHelp(): void {
  */
 export default function ShortcutsHelpDialog() {
   const [open, setOpen] = useState(false);
+  const dialogRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -40,7 +41,11 @@ export default function ShortcutsHelpDialog() {
         setOpen((v) => !v);
         return;
       }
-      if (event.key === "Escape") setOpen(false);
+      // Only act on Escape while open (callback form) so this window-level
+      // listener never disturbs other overlays' own Escape handling.
+      if (event.key === "Escape") {
+        setOpen((wasOpen) => (wasOpen ? false : wasOpen));
+      }
     };
     const onShowRequest = () => setOpen(true);
     window.addEventListener("keydown", onKeyDown);
@@ -62,6 +67,17 @@ export default function ShortcutsHelpDialog() {
     [],
   );
 
+  // Accessible-modal focus: move focus into the dialog on open and return it to
+  // the trigger on close. The app has no focus-trap dependency, so this is the
+  // minimal correct behavior for an aria-modal element (matches how the palette
+  // focuses its input on open).
+  useEffect(() => {
+    if (!open) return;
+    const previouslyFocused = document.activeElement as HTMLElement | null;
+    dialogRef.current?.focus();
+    return () => previouslyFocused?.focus?.();
+  }, [open]);
+
   if (!open) return null;
 
   const hotkeys = getDisplayableHotkeys();
@@ -76,10 +92,12 @@ export default function ShortcutsHelpDialog() {
     >
       <div aria-hidden className="absolute inset-0 -z-10 bg-black/50" />
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-label="Keyboard shortcuts"
-        className="flex w-full max-w-[480px] flex-col overflow-hidden rounded-2xl border shadow-[0_24px_80px_rgba(0,0,0,0.55)] origin-top will-change-transform animate-[meet-popover-in_150ms_cubic-bezier(0.22,1,0.36,1)]"
+        tabIndex={-1}
+        className="flex w-full max-w-[480px] flex-col overflow-hidden rounded-2xl border shadow-[0_24px_80px_rgba(0,0,0,0.55)] origin-top outline-none will-change-transform animate-[meet-popover-in_150ms_cubic-bezier(0.22,1,0.36,1)]"
         style={{
           backgroundColor: color.surfaceRaised,
           borderColor: color.border,

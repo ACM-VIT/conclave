@@ -37,19 +37,40 @@ async function copyText(value: string): Promise<void> {
 }
 
 /**
+ * Returns a referentially stable copy of `value` that only changes identity
+ * when one of its own values changes (shallow compare). MeetsMainContent
+ * rebuilds the `controls` object on every render; without this gate the action
+ * list would be rebuilt on every meeting re-render (audio ticks, socket events)
+ * while the palette is open.
+ */
+function useShallowStable<T extends object>(value: T): T {
+  const ref = useRef(value);
+  const previous = ref.current;
+  const keys = Object.keys(value) as (keyof T)[];
+  const unchanged =
+    keys.length === Object.keys(previous).length &&
+    keys.every((key) => Object.is(previous[key], value[key]));
+  if (!unchanged) ref.current = value;
+  return ref.current;
+}
+
+/**
  * Figma-style quick-actions palette for the meeting: Mod+K opens a searchable
  * list of everything the participant can do (bar controls, More-menu tools,
  * device switching, host toggles, reactions, leaving). Every meeting control
  * stays reachable from the keyboard without memorizing where it lives.
  */
 export default function CommandPalette({
-  controls,
+  controls: controlsProp,
   onSendChatMessage,
 }: {
   controls: ControlsBarProps;
   /** Chat send handler; enables the send-to-chat / ask-AI query fallbacks. */
   onSendChatMessage?: (content: string) => void;
 }) {
+  // The parent recreates `controls` every render; stabilize its identity so the
+  // action list only rebuilds when a control value actually changes.
+  const controls = useShallowStable(controlsProp);
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -71,6 +92,11 @@ export default function CommandPalette({
         // fires, even when the palette is closing.
         event.preventDefault();
         setOpen((v) => !v);
+      } else if (event.key === "Escape") {
+        // Close from anywhere while open (callback form = no-op when closed).
+        // Window-level so Escape still works if focus has left the input, e.g.
+        // after Tab moves it to a control behind the overlay.
+        setOpen((wasOpen) => (wasOpen ? false : wasOpen));
       }
     };
     window.addEventListener("keydown", onKeyDown);
@@ -280,6 +306,10 @@ export default function CommandPalette({
                       key={action.id}
                       id={`palette-option-${action.id}`}
                       type="button"
+                      // aria-activedescendant keeps real focus on the input, so
+                      // options stay out of the tab order — otherwise Tab moves
+                      // focus off the input and Esc (handled there) stops working.
+                      tabIndex={-1}
                       role="option"
                       aria-selected={isSelected}
                       data-selected={isSelected || undefined}
