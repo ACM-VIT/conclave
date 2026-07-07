@@ -292,11 +292,11 @@ export default function CommandPalette({
                           setSelectedIndex(index);
                         }
                       }}
-                      className="flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left text-[13.5px] disabled:opacity-40"
+                      className={
+                        "flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left text-[13.5px] disabled:opacity-40 " +
+                        (isSelected ? "bg-white/[0.08]" : "")
+                      }
                       style={{
-                        backgroundColor: isSelected
-                          ? "rgba(255,255,255,0.08)"
-                          : "transparent",
                         color: action.danger
                           ? "#ff7a6e"
                           : action.active
