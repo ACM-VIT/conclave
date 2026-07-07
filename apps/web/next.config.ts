@@ -121,10 +121,6 @@ const nextConfig: NextConfig = {
         ],
       },
       {
-        source: "/_next/static/:path*",
-        headers: longLivedPublicCacheHeaders,
-      },
-      {
         source: "/mediapipe/:path*",
         headers: longLivedSameOriginAssetHeaders,
       },
