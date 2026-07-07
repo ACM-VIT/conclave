@@ -34,6 +34,25 @@ const yProtocolsWebpackAlias = path.resolve(
   workspaceRoot,
   "node_modules/y-protocols",
 );
+const longLivedPublicAssetCacheControl =
+  "public, max-age=31536000, immutable";
+const longLivedPublicCacheHeaders = [
+  {
+    key: "Cache-Control",
+    value: longLivedPublicAssetCacheControl,
+  },
+];
+const longLivedSameOriginAssetHeaders = [
+  ...longLivedPublicCacheHeaders,
+  {
+    key: "Cross-Origin-Resource-Policy",
+    value: "same-origin",
+  },
+  {
+    key: "X-Content-Type-Options",
+    value: "nosniff",
+  },
+];
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
@@ -79,7 +98,7 @@ const nextConfig: NextConfig = {
         headers: [
           {
             key: "Cache-Control",
-            value: "public, max-age=31536000, immutable",
+            value: longLivedPublicAssetCacheControl,
           },
           {
             key: "Content-Type",
@@ -93,54 +112,36 @@ const nextConfig: NextConfig = {
       },
       {
         source: "/mediapipe/:path*",
-        headers: [
-          {
-            key: "Cache-Control",
-            value: "public, max-age=31536000, immutable",
-          },
-          {
-            key: "Cross-Origin-Resource-Policy",
-            value: "same-origin",
-          },
-          {
-            key: "X-Content-Type-Options",
-            value: "nosniff",
-          },
-        ],
+        headers: longLivedSameOriginAssetHeaders,
       },
       {
         source: "/effects/:path*",
-        headers: [
-          {
-            key: "Cache-Control",
-            value: "public, max-age=31536000, immutable",
-          },
-          {
-            key: "Cross-Origin-Resource-Policy",
-            value: "same-origin",
-          },
-          {
-            key: "X-Content-Type-Options",
-            value: "nosniff",
-          },
-        ],
+        headers: longLivedSameOriginAssetHeaders,
+      },
+      {
+        source: "/assets/:path*",
+        headers: longLivedSameOriginAssetHeaders,
+      },
+      {
+        source: "/reactions/:path*",
+        headers: longLivedSameOriginAssetHeaders,
       },
       {
         source: "/_/rtcvidproc/release/:path*",
-        headers: [
-          {
-            key: "Cache-Control",
-            value: "public, max-age=31536000, immutable",
-          },
-          {
-            key: "Cross-Origin-Resource-Policy",
-            value: "same-origin",
-          },
-          {
-            key: "X-Content-Type-Options",
-            value: "nosniff",
-          },
-        ],
+        headers: longLivedSameOriginAssetHeaders,
+      },
+      {
+        source:
+          "/:asset(apple-touch-icon|favicon|klipy|logo|og|pow-by-klipy|roblox-logo).:extension(svg|png)",
+        headers: longLivedPublicCacheHeaders,
+      },
+      {
+        source: "/conclave-animation.lottie",
+        headers: longLivedPublicCacheHeaders,
+      },
+      {
+        source: "/conclave-lock.mp3",
+        headers: longLivedPublicCacheHeaders,
       },
     ];
   },

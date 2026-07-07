@@ -51,6 +51,7 @@ const json = (
     ...init,
     headers: {
       "content-type": "application/json; charset=utf-8",
+      "cache-control": "no-store",
       ...(init.headers ?? {}),
     },
   });
@@ -267,6 +268,7 @@ export default {
         headers: {
           "access-control-allow-methods": "POST, OPTIONS",
           "access-control-allow-headers": "authorization, content-type",
+          "cache-control": "no-store",
         },
       });
     }

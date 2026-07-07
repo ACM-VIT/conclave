@@ -13,6 +13,7 @@ export default {
         "access-control-allow-origin": "*",
         "access-control-allow-methods": "GET, OPTIONS",
         "access-control-allow-headers": "content-type",
+        "cache-control": "public, max-age=60, stale-while-revalidate=300",
       };
       if (request.method === "OPTIONS") {
         return new Response(null, { status: 204, headers });

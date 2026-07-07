@@ -14,6 +14,7 @@ export const json = (data: unknown, init: ResponseInit = {}): Response =>
     ...init,
     headers: {
       "content-type": "application/json; charset=utf-8",
+      "cache-control": "no-store",
       ...(init.headers ?? {}),
     },
   });
