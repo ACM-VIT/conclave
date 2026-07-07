@@ -2,9 +2,10 @@
 
 import { Keyboard } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { formatForDisplay } from "@tanstack/react-hotkeys";
+import { formatForDisplay, useHotkey } from "@tanstack/react-hotkeys";
+import type { RegisterableHotkey } from "@tanstack/hotkeys";
 import { color } from "@conclave/ui-tokens";
-import { getDisplayableHotkeys } from "../lib/hotkeys";
+import { HOTKEYS, getDisplayableHotkeys } from "../lib/hotkeys";
 import {
   announceOverlayOpen,
   subscribeOtherOverlayOpen,
@@ -29,24 +30,22 @@ export default function ShortcutsHelpDialog() {
   const [open, setOpen] = useState(false);
   const dialogRef = useRef<HTMLDivElement>(null);
 
+  // Register Mod+/ through the app's hotkey system, like every other meeting
+  // shortcut (the library preventDefaults Ctrl/Meta shortcuts by default).
+  useHotkey(HOTKEYS.shortcutsHelp.keys as RegisterableHotkey, () =>
+    setOpen((v) => !v),
+  );
+
   useEffect(() => {
+    // Escape closes while open (callback form = no-op when closed). Kept as a
+    // window listener rather than a second useHotkey("Escape") so it does not
+    // collide with the palette's own Escape registration.
     const onKeyDown = (event: KeyboardEvent) => {
-      if (
-        (event.ctrlKey || event.metaKey) &&
-        !event.shiftKey &&
-        !event.altKey &&
-        event.key === "/"
-      ) {
-        event.preventDefault();
-        setOpen((v) => !v);
-        return;
-      }
-      // Only act on Escape while open (callback form) so this window-level
-      // listener never disturbs other overlays' own Escape handling.
       if (event.key === "Escape") {
         setOpen((wasOpen) => (wasOpen ? false : wasOpen));
       }
     };
+    // Let other surfaces (the palette's "View keyboard shortcuts" row) open it.
     const onShowRequest = () => setOpen(true);
     window.addEventListener("keydown", onKeyDown);
     window.addEventListener(SHOW_SHORTCUTS_EVENT, onShowRequest);

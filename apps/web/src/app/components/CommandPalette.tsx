@@ -9,7 +9,8 @@ import {
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
-import { formatForDisplay } from "@tanstack/react-hotkeys";
+import { formatForDisplay, useHotkey } from "@tanstack/react-hotkeys";
+import type { RegisterableHotkey } from "@tanstack/hotkeys";
 import { color } from "@conclave/ui-tokens";
 import { HOTKEYS } from "../lib/hotkeys";
 import { requestShortcutsHelp } from "./ShortcutsHelpDialog";
@@ -80,22 +81,21 @@ export default function CommandPalette({
   // caret menus and drawers avoid idle permission/device churn.
   const { audioInput, audioOutput, videoInput } = useEnumeratedDevices(open);
 
+  // Register Mod+K through the app's hotkey system, like every other meeting
+  // shortcut. The library's defaults for a Ctrl/Meta shortcut are exactly what
+  // this needs: preventDefault so the browser's own binding never fires, and
+  // ignoreInputs off so it still toggles while the search box (or chat) is
+  // focused.
+  useHotkey(HOTKEYS.commandPalette.keys as RegisterableHotkey, () =>
+    setOpen((v) => !v),
+  );
+
   useEffect(() => {
+    // Escape closes from anywhere while open (callback form = no-op when
+    // closed). Window-level so it still works after Tab moves focus off the
+    // input to a control behind the overlay.
     const onKeyDown = (event: KeyboardEvent) => {
-      if (
-        (event.ctrlKey || event.metaKey) &&
-        !event.shiftKey &&
-        !event.altKey &&
-        event.key.toLowerCase() === "k"
-      ) {
-        // Always claim Mod+K so the browser's own search-bar binding never
-        // fires, even when the palette is closing.
-        event.preventDefault();
-        setOpen((v) => !v);
-      } else if (event.key === "Escape") {
-        // Close from anywhere while open (callback form = no-op when closed).
-        // Window-level so Escape still works if focus has left the input, e.g.
-        // after Tab moves it to a control behind the overlay.
+      if (event.key === "Escape") {
         setOpen((wasOpen) => (wasOpen ? false : wasOpen));
       }
     };
