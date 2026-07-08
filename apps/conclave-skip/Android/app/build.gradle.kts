@@ -173,7 +173,7 @@ android {
             // -dontoptimize / keep rules don't contain it. Disabled until Skip
             // ships an R8-compatible SkipUI. isDebuggable=false still delivers the
             // release runtime perf win (ART optimization, no debug overhead); the
-            // only cost is a larger APK — use an App Bundle (AAB) to split it.
+            // only cost is a larger APK - use an App Bundle (AAB) to split it.
             isMinifyEnabled = false
             isShrinkResources = false
             isDebuggable = false

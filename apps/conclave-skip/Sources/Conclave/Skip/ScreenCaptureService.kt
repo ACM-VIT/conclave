@@ -12,7 +12,7 @@ import android.os.IBinder
 import androidx.core.app.NotificationCompat
 
 /// Foreground service of type `mediaProjection`. Its ONLY job is to be
-/// foregrounded with that type before the projection is minted — it does NOT
+/// foregrounded with that type before the projection is minted - it does NOT
 /// create a MediaProjection itself. The permission result Intent can mint a
 /// projection exactly once, and WebRTCClient's ScreenCapturerAndroid mints it,
 /// so the service must not consume the token. On Android 14+ a mediaProjection
@@ -60,7 +60,7 @@ class ScreenCaptureService : Service() {
                     }
                 } catch (t: Throwable) {
                     debugLog("[ScreenShare] Failed to foreground media projection service: ${t}")
-                    // Typed FGS failed to come up — do NOT proceed into the
+                    // Typed FGS failed to come up - do NOT proceed into the
                     // projection mint. Resume the waiter with false so the VM
                     // skips startScreenSharing() instead of crashing into a
                     // SecurityException it then has to revert.
@@ -68,7 +68,7 @@ class ScreenCaptureService : Service() {
                     stopSelf()
                     return START_NOT_STICKY
                 }
-                // The FGS is live with the mediaProjection type — now the
+                // The FGS is live with the mediaProjection type - now the
                 // capturer is allowed to mint the projection. Resume the VM.
                 if (!ScreenCaptureManager.onServiceForegrounded()) {
                     stopForegroundCompat()

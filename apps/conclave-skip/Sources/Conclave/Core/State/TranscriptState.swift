@@ -29,6 +29,9 @@ struct TranscriptGroup: Identifiable, Equatable {
     let id: String
     let speakerUserId: String
     let speakerDisplayName: String
+    /// Wall-clock of the group's first caption - the header timestamp,
+    /// matching the web panel's per-group time.
+    let firstStartMs: Double
     private(set) var text: String
     private(set) var isFinal: Bool
     private(set) var lastStartMs: Double
@@ -37,6 +40,7 @@ struct TranscriptGroup: Identifiable, Equatable {
         self.id = "\(segment.speakerUserId)-\(segment.sequence)-\(segment.itemId)"
         self.speakerUserId = segment.speakerUserId
         self.speakerDisplayName = segment.speakerDisplayName
+        self.firstStartMs = segment.startMs
         self.text = segment.text
         self.isFinal = segment.isFinal
         self.lastStartMs = segment.startMs
@@ -85,6 +89,55 @@ enum TranscriptPresentationPolicy {
         guard let last = segments.last else { return "\(segments.count)" }
         return "\(segments.count)-\(last.itemId)-\(last.text.count)"
     }
+
+    /// A lull long enough that a quiet time marker helps you scan back later
+    /// (mirrors the web's TRANSCRIPT_PAUSE_MARKER_MS).
+    static let pauseMarkerMs: Double = 180_000
+
+    static func showsPauseMarker(previous: TranscriptGroup?, next: TranscriptGroup) -> Bool {
+        guard let previous else { return false }
+        return next.firstStartMs - previous.lastStartMs >= pauseMarkerMs
+    }
+
+    /// Ids of groups that follow a long lull - cached alongside the groups so
+    /// the panel's ForEach stays a plain pass over presentation state.
+    static func pauseMarkerGroupIds(for groups: [TranscriptGroup]) -> Set<String> {
+        var ids = Set<String>()
+        var previous: TranscriptGroup?
+        for group in groups {
+            if showsPauseMarker(previous: previous, next: group) {
+                ids.insert(group.id)
+            }
+            previous = group
+        }
+        return ids
+    }
+
+    /// Shared formatter: allocating one per timestamp measurably hurts the
+    /// live-update render path.
+    private static let clockFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm:ss"
+        return formatter
+    }()
+
+    /// Clock-style timestamp for group headers and exports, matching the web's
+    /// `formatTranscriptTimestamp` (hour:minute:second).
+    static func clockTimestamp(fromMs ms: Double) -> String {
+        clockFormatter.string(from: Date(timeIntervalSince1970: ms / 1000.0))
+    }
+
+    /// Markdown export of everything currently on screen, matching the web's
+    /// `exportTranscriptMarkdown` line shape.
+    static func exportMarkdown(roomId: String, segments: [TranscriptSegmentModel]) -> String {
+        var lines: [String] = ["# Conclave transcript - \(roomId)", ""]
+        for segment in segments {
+            let text = segment.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            if text.isEmpty { continue }
+            lines.append("- \(clockTimestamp(fromMs: segment.startMs)) \(segment.speakerDisplayName): \(text)")
+        }
+        return lines.joined(separator: "\n")
+    }
 }
 
 /// Observable transcript view state. Holds finalized segments plus the in-flight
@@ -103,6 +156,7 @@ final class TranscriptState {
     private(set) var partials: [String: TranscriptSegmentModel] = [:]
     private(set) var orderedSegments: [TranscriptSegmentModel] = []
     private(set) var groupedSegments: [TranscriptGroup] = []
+    private(set) var pauseMarkerIds: Set<String> = []
     private(set) var scrollTrigger: String = "0"
 
     var isLive: Bool { sessionStatus == "live" }
@@ -170,6 +224,7 @@ final class TranscriptState {
         )
         orderedSegments = nextOrderedSegments
         groupedSegments = TranscriptPresentationPolicy.groupedSegments(from: nextOrderedSegments)
+        pauseMarkerIds = TranscriptPresentationPolicy.pauseMarkerGroupIds(for: groupedSegments)
         scrollTrigger = TranscriptPresentationPolicy.scrollTrigger(for: nextOrderedSegments)
     }
 }

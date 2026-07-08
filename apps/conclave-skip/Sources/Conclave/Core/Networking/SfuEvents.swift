@@ -2,7 +2,7 @@
 //  SfuEvents.swift
 //  Conclave
 //
-//  GENERATED — do not edit by hand.
+//  GENERATED - do not edit by hand.
 //  Source of truth: packages/meeting-core/src/sfu-events.ts
 //  Regenerate:      node packages/meeting-core/scripts/gen-swift-events.mjs
 //

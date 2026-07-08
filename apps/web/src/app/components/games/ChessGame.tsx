@@ -203,6 +203,7 @@ const roleLabel = (role: ChessRole, mode: ChessPublic["mode"]): string => {
     case "black-captain": return mode === "duel" || mode === "computer" ? "You play Black" : "Black captain — you move";
     case "white-team": return "White team — call the moves together";
     case "black-team": return "Black team — call the moves together";
+    case "spectator": return "Watching";
     default: return "Watching";
   }
 };

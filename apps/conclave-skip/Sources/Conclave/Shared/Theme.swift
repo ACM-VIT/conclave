@@ -92,7 +92,7 @@ enum ACMColors {
     static let handRaised = acmColor(red: 251.0, green: 191.0, blue: 36.0, opacity: 0.95)        // amber-400
     static let handRaisedBackground = acmColor(red: 251.0, green: 191.0, blue: 36.0, opacity: 0.2)
     static let handRaisedBorder = acmColor(red: 251.0, green: 191.0, blue: 36.0, opacity: 0.4)
-    static let handRaisedShadow = Color.clear // neutralised — no glow
+    static let handRaisedShadow = Color.clear // neutralised - no glow
 }
 
 // MARK: - Spacing Scale (4pt grid system)
@@ -215,7 +215,7 @@ func ACMAndroidSemanticText(_ label: String) -> some View {
 }
 #endif
 
-// MARK: - Control Button Styles (Carbon — filled circles, Meet semantics)
+// MARK: - Control Button Styles (Carbon - filled circles, Meet semantics)
 //  default = white@10% fill · active = solid accent · muted = solid danger
 //  (Meet's red mic-off) · danger = solid danger. No borders, no shadows.
 
@@ -364,7 +364,7 @@ extension View {
     }
 }
 
-// MARK: - Video Tile Style (flat — speaking = 2px solid accent, NO glow)
+// MARK: - Video Tile Style (flat - speaking = 2px solid accent, NO glow)
 
 extension View {
     public func acmVideoTile(isSpeaking: Bool = false) -> some View {
@@ -378,7 +378,7 @@ extension View {
     }
 }
 
-// MARK: - Label Style (sans — no monospace, no uppercase tracking gimmick)
+// MARK: - Label Style (sans - no monospace, no uppercase tracking gimmick)
 
 extension View {
     public func acmLabel() -> some View {

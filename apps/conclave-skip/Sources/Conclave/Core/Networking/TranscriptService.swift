@@ -1,8 +1,8 @@
 import Foundation
 
 /// Drives the transcript worker connection and mirrors the web client's SFU
-/// flow: fetch a worker token over socket.io, open the worker WebSocket, and —
-/// for controllers — send `session.start`, then hand the relay start token to
+/// flow: fetch a worker token over socket.io, open the worker WebSocket, and -
+/// for controllers - send `session.start`, then hand the relay start token to
 /// the SFU so the server streams room audio to the transcription worker.
 /// Everyone else simply receives snapshot + delta/final segments to display.
 @MainActor
@@ -13,6 +13,9 @@ final class TranscriptService {
     private var webSocket: TranscriptWebSocket?
     private var roomId = ""
     private var startAfterConnect = false
+    // Whether the queued start should be sent as a takeover (captured before
+    // sessionStatus flips to "starting").
+    private var pendingStartIsTakeover = false
     private var pendingRelayStart = false
     private var didRequestClose = false
     // Bumped by close()/open() so an in-flight open() that resumes after a close
@@ -84,6 +87,9 @@ final class TranscriptService {
     func startTranscription() {
         guard state.canStart else { return }
         state.errorMessage = nil
+        // Capture before overwriting the status: the send may be deferred
+        // until the socket opens, and "starting" would mask the takeover.
+        pendingStartIsTakeover = state.sessionStatus == "takeover_needed"
         state.sessionStatus = "starting"
         switch state.connectionStatus {
         case .connected:
@@ -130,12 +136,15 @@ final class TranscriptService {
 
     private func sendSessionStart() {
         pendingRelayStart = true
+        // When the previous controller stepped away the worker expects a
+        // takeover, not a fresh start (mirrors the web client).
         sendJSON([
-            "type": "session.start",
+            "type": pendingStartIsTakeover ? "session.takeover" : "session.start",
             "transportMode": "sfu",
             "transcriptModel": Self.transcriptModel,
             "qaModel": Self.qaModel
         ])
+        pendingStartIsTakeover = false
     }
 
     // MARK: - Incoming messages
@@ -193,7 +202,7 @@ final class TranscriptService {
         Task { @MainActor [weak self] in
             guard let self else { return }
             let response = try? await self.socketManager.startTranscriptSfuRelay(relayStartToken: token)
-            // If the SFU rejects the relay, the worker never receives room audio —
+            // If the SFU rejects the relay, the worker never receives room audio -
             // surface it and stop rather than showing a silent "live" session.
             if response == nil || response?.success == false {
                 self.state.errorMessage = response?.reason ?? "Transcription audio relay could not start."

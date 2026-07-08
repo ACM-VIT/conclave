@@ -52,6 +52,15 @@ struct GameStageCardView: View {
     @Bindable var viewModel: MeetingViewModel
     let isCompact: Bool
 
+#if !SKIP
+#if canImport(UIKit)
+    // The meeting column ignores the keyboard (a call never compresses); the
+    // card instead pads its scrollable body by the actual keyboard overlap so
+    // game inputs (Wordle guess, bluff answers) stay reachable while typing.
+    @StateObject private var keyboardObserver = KeyboardFrameObserver()
+#endif
+#endif
+
     var body: some View {
         let _ = PerformanceDiagnostics.render("GameStageCardView") {
             "game=\(viewModel.state.gamePublicState?.gameId ?? "none") phase=\(viewModel.state.gamePublicState?.phase ?? "-")"
@@ -70,6 +79,11 @@ struct GameStageCardView: View {
 
                 GameStageBodyView(viewModel: viewModel, activeGame: activeGame)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+#if !SKIP
+#if canImport(UIKit)
+                    .modifier(KeyboardOverlapAvoidance(keyboardTopY: keyboardObserver.keyboardTopY))
+#endif
+#endif
             }
         }
         .acmColorBackground(ACMColors.surface)
@@ -79,15 +93,9 @@ struct GameStageCardView: View {
                 .strokeBorder(lineWidth: 1)
                 .foregroundStyle(ACMColors.border)
         }
-        .overlay {
-            if viewModel.state.shouldShowDetachedSelfView && !viewModel.state.shouldShowSelfTile {
-                DetachedSelfViewOverlay(
-                    viewModel: viewModel,
-                    isCompact: isCompact,
-                    edgeInsets: MeetingDetachedSelfLayout.edgeInsets(isCompact: isCompact)
-                )
-            }
-        }
+        // No floating self view over a game: the tile strip force-includes the
+        // local user (see tileStripSnapshot(forceSelfTile:)), so game controls
+        // are never obscured and self-presence has a stable, predictable home.
     }
 }
 
@@ -102,7 +110,7 @@ struct GameStageTileStrip: View {
     private var thumbnailHeight: CGFloat { isCompact ? 56.0 : 70.0 }
 
     var body: some View {
-        let strip = viewModel.state.tileStripSnapshot()
+        let strip = viewModel.state.tileStripSnapshot(forceSelfTile: true)
         if axis == .horizontal {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {

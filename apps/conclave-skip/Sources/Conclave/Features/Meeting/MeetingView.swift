@@ -193,6 +193,12 @@ struct MeetingView: View {
                         .padding(.top, 8)
                         .padding(.bottom, max(12.0, geometry.safeAreaInsets.bottom))
                     }
+                    // Side insets belong to the meeting column only. When they
+                    // sat on the shared ZStack, the chat dock inherited a left
+                    // margin while its width math pushed the right rounded
+                    // corner off-screen - the panel read as clipped.
+                    .padding(.leading, max(6.0, geometry.safeAreaInsets.leading))
+                    .padding(.trailing, max(6.0, geometry.safeAreaInsets.trailing))
 
                     if viewModel.state.isChatOpen && !viewModel.state.isWebinarAttendee {
                         // This container already sits inside the top safe area
@@ -227,12 +233,6 @@ struct MeetingView: View {
                             inputFocused: chatInputFocused
                         )
 
-                        // The overlay lives inside the horizontally padded
-                        // container; sizing it to the raw geometry width made
-                        // it overflow and clip at the screen edge.
-                        let chatHorizontalInset = max(6.0, geometry.safeAreaInsets.leading)
-                            + max(6.0, geometry.safeAreaInsets.trailing)
-
                         HStack {
                             Spacer()
 
@@ -242,7 +242,7 @@ struct MeetingView: View {
                                     chatInputFocused = focused
                                 }
                             )
-                                .frame(width: chatOverlayWidth(for: geometry.size.width - chatHorizontalInset))
+                                .frame(width: chatOverlayWidth(for: geometry.size.width))
                                 #if SKIP
                                 // No computed height on Android: the panel
                                 // fills whatever the Compose insets leave, so
@@ -306,10 +306,17 @@ struct MeetingView: View {
                         )
                     }
                 }
-                .padding(.leading, max(6.0, geometry.safeAreaInsets.leading))
-                .padding(.trailing, max(6.0, geometry.safeAreaInsets.trailing))
             }
             .ignoresSafeArea(.container, edges: .bottom)
+#if !SKIP
+            // A call UI never compresses for the keyboard. With this on the
+            // whole meeting container, geometry.size stays full-height; the
+            // two text-input hosts lift themselves instead - the chat overlay
+            // via its tracked keyboardHeight inset (chatKeyboardInset above),
+            // the game card via KeyboardOverlapAvoidance. Before this, typing
+            // collapsed the stage and floated the controls bar over the game.
+            .ignoresSafeArea(.keyboard)
+#endif
             .overlay {
                 MeetingSheetPresenter(
                     viewModel: viewModel,
@@ -337,7 +344,7 @@ struct MeetingView: View {
         // entry-overlay fade induces, the two-parameter form can restore a
         // null `oldValue` and crash on Kotlin's non-null param check
         // (checkNotNullParameter). The no-arg closure never receives that
-        // value, so it is immune — and these handlers ignore both params.
+        // value, so it is immune - and these handlers ignore both params.
         .onChange(of: viewModel.state.isChatOpen ? "open" : "closed") {
             if !viewModel.state.isChatOpen {
                 chatInputFocused = false
@@ -414,7 +421,7 @@ struct MeetingView: View {
     }
     #endif
 
-    /// Discrete stage surface identity — mirrors the meetingStage branch
+    /// Discrete stage surface identity - mirrors the meetingStage branch
     /// order. The cross-fade animation is keyed to this so it fires only on
     /// surface swaps, never on state churn inside a surface.
     private var stageKind: String {

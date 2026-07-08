@@ -177,7 +177,7 @@ struct GridLayoutView: View {
                 (isCompact && packedContentHeight > visibleHeight)
 
             // Fade between the grid's own display modes (solo full-stage,
-            // packed grid, scrolling grid) — these are branch swaps that
+            // packed grid, scrolling grid) - these are branch swaps that
             // otherwise cut with a blank frame between them.
             let gridMode = count <= 1 ? "solo" : (shouldScrollGrid ? "scroll" : "packed")
 

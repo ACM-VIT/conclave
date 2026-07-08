@@ -641,12 +641,17 @@ final class MeetingState {
         visibleGridSnapshot().hiddenParticipantCount
     }
 
-    func tileStripSnapshot() -> MeetingTileStripSnapshot {
+    /// `forceSelfTile` folds the local user into the strip regardless of the
+    /// self-view mode. The game stage uses it so the self view never floats
+    /// over a game's controls - during a game you're a player in the strip
+    /// like everyone else.
+    func tileStripSnapshot(forceSelfTile: Bool = false) -> MeetingTileStripSnapshot {
         let context = visibilityContext()
+        let showSelfTile = context.shouldShowSelfTile || forceSelfTile
         let capacity = MeetingViewConstants.clampTiles(viewMaxTiles)
-        let remoteLimit = max(0, capacity - (context.shouldShowSelfTile ? 1 : 0))
+        let remoteLimit = max(0, capacity - (showSelfTile ? 1 : 0))
         return MeetingTileStripSnapshot(
-            shouldShowSelfTile: context.shouldShowSelfTile,
+            shouldShowSelfTile: showSelfTile,
             participants: Array(context.visibleTileParticipants.prefix(remoteLimit))
         )
     }

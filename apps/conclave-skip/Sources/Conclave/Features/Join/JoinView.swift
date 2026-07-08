@@ -332,7 +332,8 @@ enum JoinCompactPreviewLayoutPolicy {
         showsPrompt: Bool,
         showsTabs: Bool,
         showsGuestFooter: Bool,
-        isJoinTab: Bool
+        isJoinTab: Bool,
+        showsNameHint: Bool = false
     ) -> CGFloat {
         let hardMinimum: CGFloat = 96.0
         let visibleMinimum: CGFloat = 72.0
@@ -343,7 +344,8 @@ enum JoinCompactPreviewLayoutPolicy {
             showsPrompt: showsPrompt,
             showsTabs: showsTabs,
             showsGuestFooter: showsGuestFooter,
-            isJoinTab: isJoinTab
+            isJoinTab: isJoinTab,
+            showsNameHint: showsNameHint
         )
         guard available >= visibleMinimum else { return 0.0 }
         return max(min(hardMinimum, available), min(desired, available))
@@ -353,7 +355,8 @@ enum JoinCompactPreviewLayoutPolicy {
         showsPrompt: Bool,
         showsTabs: Bool,
         showsGuestFooter: Bool,
-        isJoinTab: Bool
+        isJoinTab: Bool,
+        showsNameHint: Bool
     ) -> CGFloat {
         let outerPadding: CGFloat = 32.0
         let headerHeight: CGFloat = 42.0
@@ -373,6 +376,9 @@ enum JoinCompactPreviewLayoutPolicy {
             rows.append(isJoinTab ? 68.0 : 52.0)
         }
         rows.append(48.0)
+        if showsNameHint {
+            rows.append(18.0)
+        }
         if showsGuestFooter {
             rows.append(108.0)
         }
@@ -915,7 +921,8 @@ struct JoinView: View {
             showsPrompt: shouldRenderCompactPromptRecovery,
             showsTabs: shouldShowJoinTabs,
             showsGuestFooter: shouldShowGuestSignInFooter,
-            isJoinTab: activeTab == .join
+            isJoinTab: activeTab == .join,
+            showsNameHint: activeTab == .join && shouldShowJoinNameHint
         )
     }
 
@@ -1285,6 +1292,7 @@ struct JoinView: View {
             scheduledWebinarStatusBanner
             joinFormErrorBanner
             joinMeetingButton
+            joinNameHint
             guestSignInFooter
         }
     }
@@ -1606,6 +1614,19 @@ struct JoinView: View {
         )
     }
 
+    /// True when the ONLY thing between the user and Join is an empty name:
+    /// room resolved, invite code (if required) supplied, not busy, and no
+    /// signed-in identity supplying a name.
+    private var shouldShowJoinNameHint: Bool {
+        guard appState.currentUser == nil,
+              !isPrejoinActionBlocked,
+              !parseJoinTarget(from: roomCode).roomId.isEmpty else { return false }
+        if shouldRenderInviteCodeInput && trimWhitespaceAndNewlines(inviteCode).isEmpty {
+            return false
+        }
+        return NativeDisplayNameNormalizer.normalize(displayNameInput).isEmpty
+    }
+
     private var isPrejoinActionBlocked: Bool {
         isJoinInProgress || isRefreshingStoredAuth || isSigningOut || isDeletingAccount || isContinuingAsGuest
     }
@@ -1710,6 +1731,23 @@ struct JoinView: View {
                     .foregroundStyle(ACMColors.borderSubtle)
             }
             .clipShape(RoundedRectangle(cornerRadius: ACMRadius.md))
+            // Match the web's disabled affordance (opacity-50): text color alone
+            // is too subtle on the dark surface, and a silent no-op Join reads
+            // as broken (seen with deep-link arrivals that land with no name).
+            .opacity(isJoinEnabled || isJoinInProgress ? 1.0 : 0.55)
+        }
+    }
+
+    /// Deep links land with the room filled but no name; the Join button is
+    /// disabled and, without this, nothing explains why.
+    @ViewBuilder
+    private var joinNameHint: some View {
+        if shouldShowJoinNameHint {
+            Text("Add your name above to join")
+                .font(ACMFont.trial(12, weight: .regular))
+                .foregroundStyle(ACMColors.textFaint)
+                .frame(maxWidth: .infinity)
+                .multilineTextAlignment(.center)
         }
     }
 
@@ -2943,6 +2981,7 @@ struct JoinView: View {
         if joinTarget.joinMode == .meeting {
             inviteCode = joinTarget.meetingInviteCode ?? ""
             resetInviteCodePrompt(clearCode: false)
+            focusNameFieldForLinkArrivalIfNeeded()
         } else {
             inviteCode = joinTarget.webinarInviteCode ?? ""
             resetInviteCodePrompt(clearCode: false)
@@ -2951,6 +2990,26 @@ struct JoinView: View {
             stopPreviewCapture()
             autoJoinWebinarLinkIfReady(for: joinTarget)
         }
+    }
+
+    /// A link arrival lands on the prejoin with the room already filled; when
+    /// no identity or remembered name supplies a display name, put the caret
+    /// in the name field so the one remaining step is obvious. iOS only -
+    /// programmatic focus pops the keyboard over the form on Android, where
+    /// the hint text carries the affordance instead.
+    private func focusNameFieldForLinkArrivalIfNeeded() {
+#if !SKIP
+        guard appState.currentUser == nil,
+              NativeDisplayNameNormalizer.normalize(displayNameInput).isEmpty else { return }
+        Task { @MainActor in
+            // Outlast the join phase's clearInputFocusAfterLayout (500ms), and
+            // bump its generation so a pending clear can't steal focus back.
+            try? await Task.sleep(nanoseconds: 650_000_000)
+            guard NativeDisplayNameNormalizer.normalize(displayNameInput).isEmpty else { return }
+            inputFocusClearGeneration += 1
+            focusedInput = .displayName
+        }
+#endif
     }
 
     private func autoJoinWebinarLinkIfReady(for joinTarget: ParsedJoinTarget) {

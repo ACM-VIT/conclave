@@ -2,8 +2,8 @@
 <!--
   Material 3 colour tokens = the CARBON palette (mirrors @conclave/ui-tokens +
   Shared/Theme.swift). This is what every NATIVE Material component Skip renders
-  on Android reads from — ripples, switches, ModalBottomSheet, DropdownMenu
-  (Menu), TextField, Picker — so Android's native Material chrome is on-brand
+  on Android reads from - ripples, switches, ModalBottomSheet, DropdownMenu
+  (Menu), TextField, Picker - so Android's native Material chrome is on-brand
   Carbon, not the default purple or the old cream palette.
 -->
 <resources>

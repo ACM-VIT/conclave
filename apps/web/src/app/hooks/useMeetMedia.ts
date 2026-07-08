@@ -151,6 +151,7 @@ type DisplayMediaIncludePreference = "include" | "exclude";
 
 type ExtendedDisplayMediaStreamOptions = DisplayMediaStreamOptions & {
   controller?: CaptureControllerLike;
+  monitorTypeSurfaces?: DisplayMediaIncludePreference;
   selfBrowserSurface?: DisplayMediaIncludePreference;
   surfaceSwitching?: DisplayMediaIncludePreference;
   systemAudio?: DisplayMediaIncludePreference;
@@ -1498,6 +1499,7 @@ export function useMeetMedia({
           sourceTrackId: track.id,
           outputTrackId: processedTrack.id,
           worklet: pipeline.usedWorklet,
+          engine: pipeline.engine,
         });
         return processedTrack;
       } catch (error) {
@@ -4662,11 +4664,14 @@ export function useMeetMedia({
       const screenNetworkProfile = getScreenSharePublishNetworkProfile();
 
       let captureController = createCaptureController();
-      const constrainedDisplayVideoConstraints: DisplayMediaVideoConstraints = {
-        ...buildScreenShareVideoConstraintsForNetworkProfile(
+      const screenVideoConstraints =
+        buildScreenShareVideoConstraintsForNetworkProfile(
           screenNetworkProfile,
-        ),
-        displaySurface: "browser",
+        );
+      const constrainedDisplayVideoConstraints: DisplayMediaVideoConstraints = {
+        frameRate: screenVideoConstraints.frameRate,
+        width: screenVideoConstraints.width,
+        height: screenVideoConstraints.height,
         cursor: "always",
       };
       const relaxedDisplayVideoConstraints: DisplayMediaVideoConstraints = {
@@ -4679,6 +4684,7 @@ export function useMeetMedia({
         const options: ExtendedDisplayMediaStreamOptions = {
           video,
           audio: true,
+          monitorTypeSurfaces: "include",
           selfBrowserSurface: "exclude",
           surfaceSwitching: "include",
           systemAudio: "include",

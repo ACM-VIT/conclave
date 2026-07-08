@@ -79,7 +79,15 @@ interface VideoEffectsPanelProps {
   activeCount: number;
   cameraPermissionBlocked?: boolean;
   onRecenterFraming?: () => void;
+  /** Turns the REAL meeting camera on/off (visible to everyone). */
   onToggleCamera?: () => void;
+  /** True while `localStream` is a private preview no one else can see. */
+  isCameraPreviewActive?: boolean;
+  isCameraPreviewStarting?: boolean;
+  cameraPreviewError?: string | null;
+  /** Starts a local-only camera preview (never broadcast to the meeting). */
+  onStartCameraPreview?: () => void;
+  onStopCameraPreview?: () => void;
   onClose: () => void;
   variant?: "dock" | "dialog";
   initialTab?: EffectsTab;
@@ -405,6 +413,10 @@ function VideoEffectsPreview({
   preparingLabel,
   onToggleCamera,
   cameraToggleDisabled = false,
+  isPreviewOnly = false,
+  isPreviewStarting = false,
+  onStartPreview,
+  onStopPreview,
 }: {
   stream: MediaStream | null;
   isCameraOff: boolean;
@@ -413,6 +425,10 @@ function VideoEffectsPreview({
   preparingLabel: string;
   onToggleCamera?: () => void;
   cameraToggleDisabled?: boolean;
+  isPreviewOnly?: boolean;
+  isPreviewStarting?: boolean;
+  onStartPreview?: () => void;
+  onStopPreview?: () => void;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const shouldShowVideo = hasLiveVideo;
@@ -454,7 +470,32 @@ function VideoEffectsPreview({
           <span className="text-[15px] font-medium text-[#fafafa]">
             {isCameraOff ? "Camera is off" : "Camera unavailable"}
           </span>
-          {onToggleCamera ? (
+          {onStartPreview ? (
+            <>
+              <button
+                type="button"
+                data-testid="video-effects-start-preview"
+                onClick={onStartPreview}
+                disabled={cameraToggleDisabled || isPreviewStarting}
+                aria-busy={isPreviewStarting || undefined}
+                className="inline-flex items-center gap-2 rounded-full bg-[#F95F4A] px-4 py-2 text-[13px] font-medium text-white transition-[filter] duration-[120ms] hover:brightness-105 disabled:cursor-not-allowed disabled:bg-[#232327] disabled:text-[#fafafa]/40"
+              >
+                {isPreviewStarting ? (
+                  <LoaderCircle
+                    size={16}
+                    strokeWidth={ICON_STROKE}
+                    className="animate-spin"
+                  />
+                ) : (
+                  <Video size={16} strokeWidth={ICON_STROKE} />
+                )}
+                Preview my camera
+              </button>
+              <span className="text-[11.5px] leading-snug text-[#a1a1aa]">
+                Your camera stays off for the meeting.
+              </span>
+            </>
+          ) : onToggleCamera ? (
             <button
               type="button"
               onClick={onToggleCamera}
@@ -467,7 +508,27 @@ function VideoEffectsPreview({
           ) : null}
         </div>
       ) : null}
-      {shouldShowVideo && onToggleCamera ? (
+      {shouldShowVideo && isPreviewOnly ? (
+        <span
+          data-testid="video-effects-preview-only-badge"
+          className="absolute left-3 top-3 rounded-full bg-black/60 px-2.5 py-1 text-[11px] font-medium text-[#fafafa] backdrop-blur-sm"
+        >
+          Only visible to you
+        </span>
+      ) : null}
+      {shouldShowVideo && isPreviewOnly && onStopPreview ? (
+        <button
+          type="button"
+          data-testid="video-effects-stop-preview"
+          onClick={onStopPreview}
+          aria-label="Stop camera preview"
+          title="Stop camera preview"
+          className="absolute right-3 top-3 inline-flex h-9 w-9 items-center justify-center rounded-full bg-black/55 text-white backdrop-blur-sm transition-colors duration-[120ms] hover:bg-black/70"
+        >
+          <VideoOff size={16} strokeWidth={ICON_STROKE} />
+        </button>
+      ) : null}
+      {shouldShowVideo && !isPreviewOnly && onToggleCamera ? (
         <button
           type="button"
           onClick={onToggleCamera}
@@ -506,6 +567,11 @@ export default function VideoEffectsPanel({
   cameraPermissionBlocked = false,
   onRecenterFraming,
   onToggleCamera,
+  isCameraPreviewActive = false,
+  isCameraPreviewStarting = false,
+  cameraPreviewError = null,
+  onStartCameraPreview,
+  onStopCameraPreview,
   onClose,
   variant = "dock",
   initialTab = "backgrounds",
@@ -1131,12 +1197,36 @@ export default function VideoEffectsPanel({
           preparingLabel={preparingLabel}
           onToggleCamera={onToggleCamera}
           cameraToggleDisabled={cameraPermissionBlocked}
+          isPreviewOnly={isCameraPreviewActive}
+          isPreviewStarting={isCameraPreviewStarting}
+          onStartPreview={onStartCameraPreview}
+          onStopPreview={onStopCameraPreview}
         />
         {cameraUnavailable ? (
           <div className="mt-3 rounded-xl border border-white/[0.14] bg-[#131316] px-3 py-2 text-[12px] leading-snug text-[#fafafa]/74">
             {cameraPermissionBlocked
               ? "Camera blocked"
-              : "Your camera is off. Effects apply once you turn it on."}
+              : "Effects apply once your camera is on."}
+          </div>
+        ) : null}
+        {isCameraPreviewActive && hasLiveVideo && onToggleCamera ? (
+          <div className="mt-3 flex items-center justify-between gap-3 rounded-xl border border-white/[0.14] bg-[#131316] px-3 py-2">
+            <span className="text-[12px] leading-snug text-[#fafafa]/74">
+              Camera is off for the meeting.
+            </span>
+            <button
+              type="button"
+              data-testid="video-effects-turn-on-for-everyone"
+              onClick={onToggleCamera}
+              className="shrink-0 rounded-full border border-[#F95F4A]/40 bg-[#F95F4A]/[0.14] px-3 py-1.5 text-[12px] font-medium text-[#F95F4A] transition-colors duration-[120ms] hover:bg-[#F95F4A] hover:text-white"
+            >
+              Turn on for everyone
+            </button>
+          </div>
+        ) : null}
+        {cameraPreviewError ? (
+          <div className="mt-2 rounded-xl border border-[#F95F4A]/30 bg-[#F95F4A]/[0.14] px-3 py-2 text-[12px] leading-snug text-[#fafafa]">
+            {cameraPreviewError}
           </div>
         ) : null}
         {error ? (

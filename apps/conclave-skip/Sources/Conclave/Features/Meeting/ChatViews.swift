@@ -345,7 +345,7 @@ struct ChatOverlayView: View {
 
                     #if SKIP
                     // SkipUI's TextField is a Material3 OutlinedTextField with
-                    // a 56dp minimum height. Give it its natural size — any
+                    // a 56dp minimum height. Give it its natural size - any
                     // hard frame smaller than that clips the text vertically.
                     TextField(placeholder, text: messageTextBinding)
                         .textFieldStyle(.plain)
@@ -410,6 +410,9 @@ struct ChatOverlayView: View {
                         .contentShape(Circle())
                         #endif
                         .disabled(!canSendMessage)
+                        // Icon-only control: without a label it is invisible
+                        // to VoiceOver/TalkBack and UI automation entirely.
+                        .accessibilityLabel("Send message")
                 }
                 .onTapGesture {
                     markComposerActive()
@@ -428,6 +431,11 @@ struct ChatOverlayView: View {
             // Left divider so the panel reads as a dock against the stage
             // (matches the web chat's `border-l`); at the screen edge on phones.
             Rectangle().fill(ACMColors.border).frame(width: 1)
+        }
+        .overlay(alignment: .top) {
+            // Top hairline: the dock starts mid-screen below the header, and
+            // without a bounded top edge it reads as a clipped rectangle.
+            Rectangle().fill(ACMColors.border).frame(height: 1)
         }
 #if SKIP
         .onChange(of: isInputFocused ? "focused" : "blurred") {
@@ -1342,10 +1350,17 @@ struct ChatMessageRow: View {
     }
 
     var body: some View {
+        // Mirrors the web panel: own messages sit on the right in coral
+        // bubbles with no avatar; peers sit on the left with an avatar and a
+        // raised bubble. The empty spacer keeps own bubbles off the far edge.
         HStack(alignment: .top, spacing: 10) {
-            avatarColumn
+            if isFromCurrentUser {
+                Spacer(minLength: 44)
+            } else {
+                avatarColumn
+            }
 
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: isFromCurrentUser ? .trailing : .leading, spacing: 3) {
                 if !isGroupedWithPrevious {
                     headerRow
                 }
@@ -1353,7 +1368,7 @@ struct ChatMessageRow: View {
                 if let replyTo = message.replyTo {
                     ChatReplyQuoteView(
                         replyTo: replyTo,
-                        isFromCurrentUser: false,
+                        isFromCurrentUser: isFromCurrentUser,
                         isReplyFromCurrentUser: isReplyFromCurrentUser
                     )
                 }
@@ -1371,7 +1386,7 @@ struct ChatMessageRow: View {
                 }
                 #endif
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: isFromCurrentUser ? .trailing : .leading)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         #if SKIP
@@ -1411,6 +1426,10 @@ struct ChatMessageRow: View {
 
     private var headerRow: some View {
         HStack(spacing: 6) {
+            if isFromCurrentUser {
+                Spacer(minLength: 0)
+            }
+
             Text(headerName)
                 .font(ACMFont.trial(13, weight: .semibold))
                 .foregroundStyle(ACMColors.text)
@@ -1427,7 +1446,9 @@ struct ChatMessageRow: View {
                     .lineLimit(1)
             }
 
-            Spacer(minLength: 0)
+            if !isFromCurrentUser {
+                Spacer(minLength: 0)
+            }
         }
     }
 
@@ -1442,12 +1463,14 @@ struct ChatMessageRow: View {
                             .foregroundStyle(ACMColors.handRaisedBorder)
                     }
                 }
-                .frame(maxWidth: 220, alignment: .leading)
+                .frame(maxWidth: 220, alignment: isFromCurrentUser ? .trailing : .leading)
         } else {
-            ChatMessageFlatText(
+            ChatMessageTextBubble(
                 content: ChatMessagePresentation.content(for: message),
+                isFromCurrentUser: isFromCurrentUser,
                 isDirect: message.isDirect
             )
+            .frame(maxWidth: 320, alignment: isFromCurrentUser ? .trailing : .leading)
         }
     }
 }

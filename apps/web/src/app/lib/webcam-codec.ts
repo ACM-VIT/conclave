@@ -23,14 +23,14 @@ const SIMULCAST_FRIENDLY_CODEC_MIME_TYPES = [
   "video/VP8",
   "video/H264",
 ] as const;
-const SCREEN_SHARE_TEMPORAL_CODEC_MIME_TYPES = [
+// Keep screen share on the same reliable codec order as the native app.
+// Desktop VP9 screen capture can look good when it works, but monitor/full
+// screen captures have been observed to publish decodable black frames on some
+// GPU/browser combinations. Keep VP9 only as a last-resort fallback.
+const SCREEN_SHARE_CODEC_MIME_TYPES = [
+  "video/VP8",
+  "video/H264",
   "video/VP9",
-  "video/VP8",
-  "video/H264",
-] as const;
-const SOFTWARE_SENSITIVE_SCREEN_SHARE_CODEC_MIME_TYPES = [
-  "video/VP8",
-  "video/H264",
 ] as const;
 
 const isLikelyHardwareAcceleratedH264Browser = (): boolean => {
@@ -121,11 +121,8 @@ export const getPreferredScreenShareCodec = (
   device: Pick<Device, "rtpCapabilities"> | null | undefined,
 ): RtpCodecCapability | undefined => {
   const codecs = device?.rtpCapabilities?.codecs ?? [];
-  const preferredMimeTypes = isLikelyHardwareAcceleratedH264Browser()
-    ? SOFTWARE_SENSITIVE_SCREEN_SHARE_CODEC_MIME_TYPES
-    : SCREEN_SHARE_TEMPORAL_CODEC_MIME_TYPES;
 
-  for (const mimeType of preferredMimeTypes) {
+  for (const mimeType of SCREEN_SHARE_CODEC_MIME_TYPES) {
     const codec = codecs.find((candidate) =>
       isPreferredVideoCodec(candidate, mimeType),
     );

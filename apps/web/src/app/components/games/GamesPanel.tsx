@@ -418,7 +418,7 @@ function GameConfigView({
             />
           ) : (
             <input
-              value={(config[opt.id] as string) ?? ""}
+              value={config[opt.id] ?? ""}
               maxLength={opt.maxLength}
               placeholder={opt.placeholder}
               onChange={(event) => setValue(opt.id, event.currentTarget.value)}

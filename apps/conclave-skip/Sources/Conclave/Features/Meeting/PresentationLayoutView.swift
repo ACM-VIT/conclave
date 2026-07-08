@@ -127,7 +127,7 @@ struct PresentationLayoutView: View {
                     )
                         .overlay {
                             // Persistent presenter attribution (always know who's
-                            // sharing) — same flat name-plate tokens as the tiles.
+                            // sharing) - same flat name-plate tokens as the tiles.
                             VStack {
                                 Spacer()
                                 HStack {

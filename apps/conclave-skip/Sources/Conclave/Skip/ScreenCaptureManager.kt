@@ -58,7 +58,7 @@ object ScreenCaptureManager {
                 synchronized(stateLock) {
                     resultIntent = result.data
                 }
-                // Start the FGS now, but DON'T resume the waiter yet — wait for
+                // Start the FGS now, but DON'T resume the waiter yet - wait for
                 // the service to confirm it foregrounded (onServiceForegrounded),
                 // because on API 34+ the projection may only be minted after a
                 // mediaProjection-type FGS is running. This closes the race.

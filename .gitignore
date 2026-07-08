@@ -65,3 +65,7 @@ apps/conclave-skip/.deps
 apps/mobile/config/GoogleOAuth.plist
 .open-next
 .wrangler
+apps/conclave-skip/MISSION.md
+apps/conclave-skip/STORE-READINESS.md
+.gitignore
+apps/conclave-skip/Android/fastlane/metadata/android/data-safety-form.md

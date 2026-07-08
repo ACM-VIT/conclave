@@ -10,8 +10,14 @@ import type {
   JoinRoomResponse,
   Participant,
   RtpParameters,
+  TranscriptMinutesSnapshot,
+  TranscriptSegment,
   TransportResponse,
 } from "../lib/types";
+import {
+  isVoiceAgentUserId,
+  VOICE_AGENT_DISPLAY_NAME,
+} from "../lib/voice-agent";
 import {
   buildMicrophoneOpusCodecOptions,
   type AudioProducerNetworkProfile,
@@ -20,6 +26,12 @@ import { getBrowserNetworkSnapshot } from "../lib/network-information";
 import { resolveBrowserSfuClientId } from "@/lib/sfu-client-id";
 
 type VoiceAgentStatus = "idle" | "starting" | "running" | "error";
+
+/**
+ * Machine-readable failure class so the UI can route errors without string
+ * matching: an invalid key reopens the key dialog; anything else is a toast.
+ */
+export type VoiceAgentErrorCode = "invalid-key" | "generic";
 
 type JoinInfo = {
   token?: string;
@@ -50,6 +62,11 @@ type UseVoiceAgentParticipantOptions = {
   localStream: MediaStream | null;
   participants: Map<string, Participant>;
   recentMessages?: ChatMessage[];
+  /** Live transcription feed; lets the agent quote what was actually said. */
+  transcriptSegments?: TranscriptSegment[];
+  isTranscriptActive?: boolean;
+  /** Meeting minutes maintained by the live-notes feature. */
+  meetingMinutes?: TranscriptMinutesSnapshot | null;
   resolveDisplayName?: (userId: string) => string;
   instructions?: string;
   model?: string;
@@ -59,8 +76,8 @@ type UseVoiceAgentParticipantOptions = {
 const DEFAULT_MODEL = "gpt-realtime-1.5";
 const DEFAULT_VOICE = "marin";
 const DEFAULT_INSTRUCTIONS =
-  "You are a concise, helpful voice assistant in a live meeting. Keep responses short and practical.";
-const AGENT_DISPLAY_NAME = "Voice Agent";
+  "You are Conclave's in-meeting voice assistant. Answer in one or two short sentences unless asked for detail. Ground answers in the meeting: check the transcript, notes, chat, or participant tools before answering questions about what was said or decided. Never invent meeting content.";
+const AGENT_DISPLAY_NAME = VOICE_AGENT_DISPLAY_NAME;
 const SOCKET_CONNECT_TIMEOUT_MS = 8000;
 const SOCKET_ACK_TIMEOUT_MS = 10000;
 const MAX_JOIN_ROOM_REDIRECTS = 1;
@@ -102,7 +119,18 @@ const getJoinRoomRedirectError = (
 };
 const SFU_CLIENT_ID = resolveBrowserSfuClientId();
 const TURN_URL_PATTERN = /^turns?:/i;
-const ACTIVE_SPEAKER_HOLD_MS = 50;
+// The agent only hears the active speaker; hold the last speaker through
+// brief VAD dropouts (breaths, mid-sentence pauses) so it hears complete
+// sentences instead of clipped fragments.
+const ACTIVE_SPEAKER_HOLD_MS = 1500;
+
+/** Thrown when OpenAI rejects the API key so the UI can re-prompt for it. */
+class VoiceAgentAuthError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "VoiceAgentAuthError";
+  }
+}
 
 const normalizeIceServerUrls = (
   urls: RTCIceServer["urls"] | undefined,
@@ -218,6 +246,35 @@ const REALTIME_TOOLS: RealtimeToolDefinition[] = [
       additionalProperties: false,
     },
   },
+  {
+    type: "function",
+    name: "get_meeting_transcript",
+    description:
+      "Get the latest lines of the live meeting transcript. Use this to answer questions about what was said, by whom, or to recap the discussion.",
+    parameters: {
+      type: "object",
+      properties: {
+        limit: {
+          type: "integer",
+          minimum: 1,
+          maximum: 60,
+          description: "How many latest transcript lines to return.",
+        },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    type: "function",
+    name: "get_meeting_notes",
+    description:
+      "Get the running meeting notes: summary, topics, decisions, action items, open questions, and follow-ups. Use this for recaps and to answer what was decided or assigned.",
+    parameters: {
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    },
+  },
 ];
 
 const parseToolArguments = (raw: string) => {
@@ -236,9 +293,9 @@ const parseToolArguments = (raw: string) => {
 const normalizeBoolean = (value: unknown, fallback: boolean) =>
   typeof value === "boolean" ? value : fallback;
 
-const normalizeLimit = (value: unknown, fallback = 8) => {
+const normalizeLimit = (value: unknown, fallback = 8, max = 30) => {
   if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
-  return Math.max(1, Math.min(30, Math.floor(value)));
+  return Math.max(1, Math.min(max, Math.floor(value)));
 };
 
 const extractToolCall = (event: unknown): ToolCallPayload | null => {
@@ -362,14 +419,6 @@ const hasLiveAudioTrack = (stream: MediaStream | null): boolean =>
   Boolean(
     stream?.getAudioTracks().some((track) => track.readyState !== "ended"),
   );
-
-const isVoiceAgentUserId = (userId: string): boolean => {
-  const normalized = userId.toLowerCase();
-  return (
-    normalized.includes("@agent.conclave") ||
-    normalized.startsWith("voice-agent-")
-  );
-};
 
 const createSocketConnection = async (
   sfuUrl: string,
@@ -595,6 +644,9 @@ export function useVoiceAgentParticipant({
   localStream,
   participants,
   recentMessages = [],
+  transcriptSegments = [],
+  isTranscriptActive = false,
+  meetingMinutes = null,
   resolveDisplayName,
   instructions = DEFAULT_INSTRUCTIONS,
   model = DEFAULT_MODEL,
@@ -609,21 +661,33 @@ export function useVoiceAgentParticipant({
   const localUserIdRef = useRef(localUserId);
   const participantsRef = useRef(participants);
   const recentMessagesRef = useRef(recentMessages);
+  const transcriptSegmentsRef = useRef(transcriptSegments);
+  const isTranscriptActiveRef = useRef(isTranscriptActive);
+  const meetingMinutesRef = useRef(meetingMinutes);
   const resolveDisplayNameRef = useRef(resolveDisplayName);
   const lastHeldSpeakerRef = useRef<{ id: string; ts: number } | null>(null);
+  // The active-speaker hold keeps the last speaker in the mix through brief VAD
+  // gaps. Nothing re-renders once the room falls silent, so this timer fires
+  // the one rebuild that lets the hold expire and drops the stale stream.
+  const holdExpiryTimeoutRef = useRef<number | null>(null);
 
   const [status, setStatus] = useState<VoiceAgentStatus>("idle");
   const [error, setError] = useState<string | null>(null);
+  const [errorCode, setErrorCode] = useState<VoiceAgentErrorCode | null>(null);
 
   const setSafeStatus = useCallback((next: VoiceAgentStatus) => {
     if (!mountedRef.current) return;
     setStatus(next);
   }, []);
 
-  const setSafeError = useCallback((next: string | null) => {
-    if (!mountedRef.current) return;
-    setError(next);
-  }, []);
+  const setSafeError = useCallback(
+    (next: string | null, code: VoiceAgentErrorCode | null = null) => {
+      if (!mountedRef.current) return;
+      setError(next);
+      setErrorCode(next === null ? null : code ?? "generic");
+    },
+    [],
+  );
 
   useEffect(() => {
     roomIdRef.current = roomId;
@@ -650,12 +714,28 @@ export function useVoiceAgentParticipant({
   }, [recentMessages]);
 
   useEffect(() => {
+    transcriptSegmentsRef.current = transcriptSegments;
+  }, [transcriptSegments]);
+
+  useEffect(() => {
+    isTranscriptActiveRef.current = isTranscriptActive;
+  }, [isTranscriptActive]);
+
+  useEffect(() => {
+    meetingMinutesRef.current = meetingMinutes;
+  }, [meetingMinutes]);
+
+  useEffect(() => {
     resolveDisplayNameRef.current = resolveDisplayName;
   }, [resolveDisplayName]);
 
   const stop = useCallback(() => {
     pendingRemoteTrackRef.current = null;
     lastHeldSpeakerRef.current = null;
+    if (holdExpiryTimeoutRef.current !== null) {
+      window.clearTimeout(holdExpiryTimeoutRef.current);
+      holdExpiryTimeoutRef.current = null;
+    }
     const runtime = runtimeRef.current;
     runtimeRef.current = createRuntimeState();
     closeRuntimeState(runtime);
@@ -694,6 +774,11 @@ export function useVoiceAgentParticipant({
       disconnectMixSources(runtime);
       const connectedStreamIds = new Set<string>();
 
+      if (holdExpiryTimeoutRef.current !== null) {
+        window.clearTimeout(holdExpiryTimeoutRef.current);
+        holdExpiryTimeoutRef.current = null;
+      }
+
       const connectStream = (stream: MediaStream | null) => {
         if (!stream || !hasLiveAudioTrack(stream)) {
           return;
@@ -718,6 +803,17 @@ export function useVoiceAgentParticipant({
         now - lastHeldSpeakerRef.current.ts <= ACTIVE_SPEAKER_HOLD_MS
       ) {
         speakerId = lastHeldSpeakerRef.current.id;
+        // Nothing else will re-run the mix while the room stays silent; wake
+        // once when the hold lapses so the held stream is released.
+        const remainingMs =
+          ACTIVE_SPEAKER_HOLD_MS - (now - lastHeldSpeakerRef.current.ts) + 20;
+        holdExpiryTimeoutRef.current = window.setTimeout(() => {
+          holdExpiryTimeoutRef.current = null;
+          const current = runtimeRef.current;
+          if (current === runtime && current.openAiMixContext) {
+            void rebuildOpenAiMixRef.current(current);
+          }
+        }, Math.max(remainingMs, 0));
       } else {
         lastHeldSpeakerRef.current = null;
       }
@@ -747,6 +843,13 @@ export function useVoiceAgentParticipant({
     },
     [activeSpeakerId, isMuted, localStream, localUserId, participants],
   );
+
+  // The hold-expiry timer is scheduled from inside rebuildOpenAiMix; route it
+  // through a ref so it always fires the latest closure (current speaker set).
+  const rebuildOpenAiMixRef = useRef(rebuildOpenAiMix);
+  useEffect(() => {
+    rebuildOpenAiMixRef.current = rebuildOpenAiMix;
+  }, [rebuildOpenAiMix]);
 
   const buildParticipantSnapshot = useCallback(
     (options?: { includeMuted?: boolean }) => {
@@ -812,6 +915,59 @@ export function useVoiceAgentParticipant({
             messages,
           };
         }
+        case "get_meeting_transcript": {
+          const limit = normalizeLimit(args.limit, 20, 60);
+          const lines = transcriptSegmentsRef.current
+            .filter((segment) => segment.isFinal && segment.text.trim())
+            .slice(-limit)
+            .map((segment) => ({
+              speaker: segment.speakerDisplayName,
+              text: segment.text,
+              atMs: segment.startMs,
+            }));
+          return {
+            roomId: roomIdRef.current,
+            transcriptionActive: isTranscriptActiveRef.current,
+            count: lines.length,
+            lines,
+            note:
+              lines.length === 0
+                ? isTranscriptActiveRef.current
+                  ? "Transcription is running but nothing has been said yet."
+                  : "Live transcription is off. Suggest turning it on from the Transcript panel if the user wants meeting recall."
+                : undefined,
+          };
+        }
+        case "get_meeting_notes": {
+          const minutes = meetingMinutesRef.current;
+          const hasContent = Boolean(
+            minutes &&
+              (minutes.summary.trim() ||
+                minutes.topics.length > 0 ||
+                minutes.decisions.length > 0 ||
+                minutes.actionItems.length > 0 ||
+                minutes.openQuestions.length > 0 ||
+                minutes.followUps.length > 0),
+          );
+          if (!minutes || !hasContent) {
+            return {
+              roomId: roomIdRef.current,
+              available: false,
+              note: "No meeting notes yet. Notes build up while live transcription runs.",
+            };
+          }
+          return {
+            roomId: roomIdRef.current,
+            available: true,
+            summary: minutes.summary,
+            topics: minutes.topics,
+            decisions: minutes.decisions,
+            actionItems: minutes.actionItems,
+            openQuestions: minutes.openQuestions,
+            followUps: minutes.followUps,
+            updatedAt: minutes.updatedAt,
+          };
+        }
         default:
           return {
             error: `Unknown tool: ${name}`,
@@ -869,6 +1025,9 @@ export function useVoiceAgentParticipant({
       recentChatPreview
         ? `Recent chat: ${recentChatPreview}`
         : "Recent chat: none.",
+      isTranscriptActiveRef.current
+        ? "Live transcription is ON. For questions about what was said or decided, call get_meeting_transcript or get_meeting_notes first and quote the meeting rather than guessing."
+        : "Live transcription is OFF, so no transcript or notes exist yet. If asked to recall or summarize the meeting, say transcription needs to be turned on from the Transcript panel.",
       "Use available tools when you need up-to-date meeting details before answering.",
       "Keep responses concise and practical for a live meeting.",
       "Respond only when addressed or when there is a clear request in the current speech.",
@@ -963,10 +1122,18 @@ export function useVoiceAgentParticipant({
         clientSecretBody?.value?.trim() ||
         "";
       if (!clientSecretResponse.ok || !clientSecret) {
-        throw new Error(
+        const reason =
           clientSecretBody?.error?.message ??
-            "Failed to create voice agent session secret.",
-        );
+          "Failed to create voice agent session secret.";
+        // 401/403 from the client_secrets endpoint means the key itself was
+        // rejected — signal it as such so the UI re-prompts for the key.
+        if (
+          clientSecretResponse.status === 401 ||
+          clientSecretResponse.status === 403
+        ) {
+          throw new VoiceAgentAuthError(reason);
+        }
+        throw new Error(reason);
       }
 
       runtime.openAiPc = new RTCPeerConnection();
@@ -1177,14 +1344,23 @@ export function useVoiceAgentParticipant({
       setSafeStatus("running");
       setSafeError(null);
     } catch (startError) {
+      // Always release this attempt's own resources...
+      closeRuntimeState(runtime);
+      // ...but if stop() ran or a newer start() superseded this one,
+      // runtimeRef no longer points at us: don't touch shared status/error,
+      // or a cancelled/stale attempt would surface a late error and clobber
+      // the newer state.
+      if (runtimeRef.current !== runtime) return;
       const message =
         startError instanceof Error
           ? startError.message
           : "Failed to start voice agent.";
       pendingRemoteTrackRef.current = null;
-      closeRuntimeState(runtime);
       runtimeRef.current = createRuntimeState();
-      setSafeError(message);
+      setSafeError(
+        message,
+        startError instanceof VoiceAgentAuthError ? "invalid-key" : "generic",
+      );
       setSafeStatus("error");
     }
   }, [
@@ -1215,6 +1391,10 @@ export function useVoiceAgentParticipant({
       mountedRef.current = false;
       pendingRemoteTrackRef.current = null;
       lastHeldSpeakerRef.current = null;
+      if (holdExpiryTimeoutRef.current !== null) {
+        window.clearTimeout(holdExpiryTimeoutRef.current);
+        holdExpiryTimeoutRef.current = null;
+      }
       const runtime = runtimeRef.current;
       runtimeRef.current = createRuntimeState();
       closeRuntimeState(runtime);
@@ -1247,6 +1427,7 @@ export function useVoiceAgentParticipant({
     isStarting: status === "starting",
     isRunning: status === "running",
     error,
+    errorCode,
     start,
     stop,
     clearError,

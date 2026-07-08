@@ -1040,8 +1040,11 @@ struct ChessStageView: View {
     }
 
     static func boardSquares(from fen: String, side: String?) -> [ChessStageSquare] {
-        let placement = fen.split(separator: " ").first.map(String.init) ?? ""
-        let rows = placement.split(separator: "/").map(String.init)
+        // Explicit closures, not String.init references: Skip transpiles a
+        // function reference here to Kotlin's `String.Companion`, which fails
+        // to compile (see CLAUDE.md transpile gotchas).
+        let placement = fen.split(separator: " ").first.map { String($0) } ?? ""
+        let rows = placement.split(separator: "/").map { String($0) }
         let files = ["a", "b", "c", "d", "e", "f", "g", "h"]
         let ranks = ["8", "7", "6", "5", "4", "3", "2", "1"]
         var squares: [ChessStageSquare] = []

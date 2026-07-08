@@ -50,10 +50,18 @@ struct DetachedSelfViewOverlay: View {
                     .scaleEffect(dragScale)
                     .offset(offset)
                     .zIndex(20.0)
+                    #if SKIP
                     .gesture(dragGesture(in: geometry.size))
+                    #else
+                    // High priority so a drag starting on the camera-flip
+                    // button still moves the tile; plain taps keep working.
+                    .highPriorityGesture(dragGesture(in: geometry.size))
+                    #endif
             }
             .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
-            #if !SKIP
+            #if SKIP
+            .animation(.spring(response: 0.3, dampingFraction: 0.85), value: viewModel.state.selfViewCorner)
+            #else
             .animation(.interactiveSpring(response: 0.24, dampingFraction: 0.86), value: viewModel.state.selfViewCorner)
             .animation(.interactiveSpring(response: 0.18, dampingFraction: 0.82), value: isDragging)
             #endif
@@ -177,9 +185,13 @@ struct DetachedSelfViewOverlay: View {
                     edgeInsets: edgeInsets
                 )
                 #if SKIP
-                viewModel.setSelfViewCorner(targetCorner)
-                dragTranslation = .zero
-                isDragging = false
+                // Animate the corner snap on Android too - a hard teleport to
+                // the corner is what made the drag feel broken.
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
+                    viewModel.setSelfViewCorner(targetCorner)
+                    dragTranslation = .zero
+                    isDragging = false
+                }
                 #else
                 withAnimation(.interactiveSpring(response: 0.24, dampingFraction: 0.86)) {
                     viewModel.setSelfViewCorner(targetCorner)

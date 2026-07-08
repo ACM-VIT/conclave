@@ -144,8 +144,8 @@ internal fun meetingIconVector(name: String): ImageVector = when (name) {
 
 /// Resolves a semantic tint key to an explicit Carbon color. Relying on
 /// Compose's inherited `LocalContentColor` is unreliable across SkipUI bridge
-/// contexts — e.g. a `.plain` Button drives the Icon dark while coloring the
-/// sibling Text correctly — so meeting icons always set an explicit `tint`.
+/// contexts - e.g. a `.plain` Button drives the Icon dark while coloring the
+/// sibling Text correctly - so meeting icons always set an explicit `tint`.
 internal fun meetingIconTint(key: String): Color = when (key) {
     "text", "white" -> Color(0xFFFAFAFA)
     "muted"         -> Color(0xBDFAFAFA)   // 74%
