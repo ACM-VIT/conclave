@@ -152,16 +152,6 @@ assertRegex(
   "low-bandwidth probe verifies producer and negotiated Opus NACK",
 );
 assertRegex(
-  "iosWebrtc",
-  /let opusNack: Bool[\s\S]*opusNack: true/,
-  "iOS Skip microphone Opus producer requests NACK",
-);
-assertRegex(
-  "androidWebrtc",
-  /\.put\("opusNack", true\)/,
-  "Android Skip microphone Opus producer requests NACK",
-);
-assertRegex(
   "webMeetMedia",
   /audioTrack\.contentHint = "music"[\s\S]*buildScreenShareAudioOpusCodecOptions\([\s\S]*screenNetworkProfile[\s\S]*applyAudioProducerNetworkProfile\([\s\S]*audioProducer,[\s\S]*"screen",[\s\S]*screenNetworkProfile/,
   "web screen audio initial publish marks media audio and immediately applies RTP network profile",

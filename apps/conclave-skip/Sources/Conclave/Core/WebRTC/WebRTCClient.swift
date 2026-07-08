@@ -749,7 +749,6 @@ final class WebRTCClient: NSObject, ObservableObject {
         let opusStereo: Bool
         let opusFec: Bool
         let opusDtx: Bool
-        let opusNack: Bool
         let opusMaxAverageBitrate: Int
         let opusPtime: Int
     }
@@ -978,7 +977,6 @@ final class WebRTCClient: NSObject, ObservableObject {
                 opusStereo: false,
                 opusFec: true,
                 opusDtx: true,
-                opusNack: true,
                 opusMaxAverageBitrate: opusMaxAverageBitrate(connectionQuality: currentLocalBandwidthQuality),
                 opusPtime: 20
             )
