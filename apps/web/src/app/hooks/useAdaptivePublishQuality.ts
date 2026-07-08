@@ -99,6 +99,7 @@ type PublishProducerCodecDebugSnapshot = {
   clockRate: number;
   channels: number | null;
   parameters: Record<string, unknown>;
+  rtcpFeedback: { type: string; parameter: string | null }[];
 };
 
 type PublishProducerEncodingDebugSnapshot = {
@@ -242,6 +243,11 @@ const getPublishProducerDebugSnapshot = (
         clockRate: codec.clockRate,
         channels: codec.channels ?? null,
         parameters: { ...(codec.parameters ?? {}) },
+        rtcpFeedback:
+          codec.rtcpFeedback?.map((feedback) => ({
+            type: feedback.type,
+            parameter: feedback.parameter ?? null,
+          })) ?? [],
       })) ?? [],
     encodings:
       parameters?.encodings?.map((encoding) => ({
